@@ -7,7 +7,10 @@
 use skep_address::Nat;
 use skep_arrangement::{trunk_of, Caller, Deposit, PublishError, Run, Shot, ShotRun, Vstream};
 use skep_febe::Op;
-use skep_identity::{IdentityState, PublicKey, SigAlgRow};
+use skep_identity::{
+    parse_record_value, CredentialKind, Enrollment, Fingerprint, IdentityState, PublicKey,
+    SigAlgRow,
+};
 use skep_kernel::{Attestation, TxnError};
 use skep_namespace::{system_account, HasM3, PrincipalId};
 
@@ -172,6 +175,51 @@ pub(super) fn attestation_check(
         Ok(Some(presented))
     } else {
         Err(invalid(AttestFault::Signature))
+    }
+}
+
+/// THE RECORD DEPOSIT'S ATOM CARRIES ITS OWN `sig` (signed ops, 2a; D26;
+/// D12 as l6-E2 re-cut it — "a row whose entry carries a signature, in its
+/// marker slot or in its record's `sig` member"): on a CLAIMED board, the
+/// `insert` is a DECLARED deposit under a kind of the record-deposit set
+/// (step 2's exemption above, the atom the check demands no `attest` for),
+/// its one value parses as a record of that kind, and the record's `sig`
+/// member is PRESENT. What the change feed's row records as the entry's
+/// signedness for that `insert` (the write path's `Signed::Record`), so its
+/// `key` is absent as its `make_link`'s is: the two carriers are one
+/// signature at the record grade.
+///
+/// PRESENCE, not verification: the record grade's trial needs the link's
+/// type and target and the grade the act needs, which the atom's `insert`
+/// does not yet name — its `make_link`, one position later, verifies the
+/// `sig` under the set that opens the home (`credential.rs`'s
+/// `record_grade_check`) or is refused, leaving the atom an orphan no link
+/// names, which a reader renders UNDETERMINABLE HERE (the design record
+/// §7.3 (i)). The daemon serves and never judges; this is its statement of
+/// WHERE the entry's signature is. At or below the claim nothing is signed
+/// (A5) and this answers `false`: the ceremony's own record, `sig` or not,
+/// keeps its row's `key`. A claim carries no record and answers `false`.
+pub(crate) fn record_deposit_carries_sig(identity: &IdentityState, op: &Op) -> bool {
+    if identity.claimant().is_none() {
+        return false;
+    }
+    let Op::Insert { deposit: Deposit::Declared(ty), values, .. } = op else {
+        return false;
+    };
+    let Some(kind) = record_deposit_kind(&addr_spans(std::slice::from_ref(ty))) else {
+        return false;
+    };
+    let [atom] = values.as_slice() else {
+        return false;
+    };
+    match kind {
+        CredentialKind::Enroll => {
+            parse_record_value::<Enrollment>(atom.as_bytes()).is_ok_and(|v| v.sig.is_some())
+        }
+        CredentialKind::Retire => {
+            parse_record_value::<Fingerprint>(atom.as_bytes()).is_ok_and(|v| v.sig.is_some())
+        }
+        CredentialKind::Claim => false,
     }
 }
 

@@ -13,13 +13,24 @@
 //! over it here is the OWNER's (principal 1's session), and the guest's
 //! masked page stands beside it as its own cell; the class oracle itself is
 //! `tests/it/feed_class.rs`.
+//!
+//! Since wire v7.11 (signed ops; the design record §7.3 (i), D12, D25,
+//! r6-2a) the feed carries THE MIRROR'S INPUTS: the entry's `attest` off the
+//! marker-mirroring attest store, `key` only on unsigned rows, a
+//! `delegate`'s minted pair, a `make_link`'s minted link address, a
+//! `publish`'s placed count and base extent — the end-to-end walk, Π and the
+//! claim boundary read off the feed alone, the store's crash honesty and its
+//! keep below the reclaim floor, and D12 on a record deposit's two rows.
 
 use crate::common;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use common::*;
 use serde_json::Value;
+use skep_identity::Fingerprint;
+use skepd::Seq;
 
 /// The claim link's committed position on a fresh board — the ceremony's
 /// fifth commit (`common::claim_board`): delegate (2 records), the home mint
@@ -513,20 +524,97 @@ fn head(port: u16) -> u64 {
 /// One write, its ack, and exactly the one feed entry it produced — the
 /// page is taken from the head as it stood before the write, so nothing
 /// earlier can be mistaken for this write's entry. Read as the WRITER
-/// (`token`), whose own drafts the entry may name.
+/// (`token`), whose own drafts the entry may name. Posted through [`op`],
+/// which attaches the suite's `attest` where the token names a signer.
 fn feed_entry(port: u16, token: &str, what: &str, frame: &str) -> (Value, Value) {
     let before = head(port);
     let ack = op(port, Some(token), frame);
     assert!(ack["at"].is_u64(), "{what} must commit: {ack}");
+    (ack, one_entry_since(port, token, what, before))
+}
+
+/// [`feed_entry`] with the frame posted AS WRITTEN — no `attest` attached
+/// beyond what the caller composed — so a cell can hold the request's own
+/// `attest` bytes beside the row, or present none on purpose.
+fn feed_entry_as_written(port: u16, token: &str, what: &str, frame: &str) -> (Value, Value) {
+    let before = head(port);
+    let ack = op_unattested(port, Some(token), frame);
+    assert!(ack["at"].is_u64(), "{what} must commit: {ack}");
+    (ack, one_entry_since(port, token, what, before))
+}
+
+fn one_entry_since(port: u16, token: &str, what: &str, before: u64) -> Value {
     let page = changes_ok(port, Some(token), &format!("since={before}"));
     let entries = page["changes"].as_array().expect("changes");
     assert_eq!(entries.len(), 1, "{what}: one write, one entry: {page}");
-    (ack, entries[0].clone())
+    entries[0].clone()
+}
+
+/// The whole feed from the floor as `token` (`None` = the guest), one page
+/// — the boards here are far under the page cap.
+fn all_entries(port: u16, token: Option<&str>) -> Vec<Value> {
+    let v = changes_ok(port, token, "since=0&limit=4096");
+    assert_eq!(v["more"], Value::Bool(false), "one page holds the whole feed: {v}");
+    v["changes"].as_array().expect("changes").clone()
+}
+
+/// The entry at `at` among `entries`.
+fn entry_at(entries: &[Value], at: u64) -> &Value {
+    entries
+        .iter()
+        .find(|e| e["at"].as_u64() == Some(at))
+        .unwrap_or_else(|| panic!("no entry at {at} in {entries:?}"))
+}
+
+/// The five op terms a row may carry, by name.
+const TERMS: [&str; 5] = ["new_prefix", "new_id", "link", "placed", "base_extent"];
+
+/// The terms an op's row carries (wire.md §The change feed); every other
+/// is ABSENT on its row — `emit` and `edit_link` mint links too and carry
+/// none (r6-2a names `make_link` alone).
+fn terms_of(op: &str) -> &'static [&'static str] {
+    match op {
+        "delegate" => &["new_prefix", "new_id"],
+        "make_link" => &["link"],
+        "publish" => &["placed", "base_extent"],
+        _ => &[],
+    }
+}
+
+/// Every member named is ABSENT from the entry — not null, not anything.
+fn assert_absent(entry: &Value, members: &[&str], what: &str) {
+    for m in members {
+        assert!(entry.get(m).is_none(), "{what}: `{m}` must be absent: {entry}");
+    }
+}
+
+/// The row carries exactly the terms its op carries, and none other.
+fn assert_terms_by_op(entry: &Value, what: &str) {
+    let op = entry["op"].as_str().unwrap_or_else(|| panic!("{what}: a recorded op: {entry}"));
+    for m in TERMS {
+        let carried = terms_of(op).contains(&m);
+        assert_eq!(
+            entry.get(m).is_some(),
+            carried,
+            "{what}: a {op} row {} `{m}`: {entry}",
+            if carried { "carries" } else { "does not carry" }
+        );
+    }
+}
+
+/// The fingerprint hex a seed carrier's hybrid key enrols under — what a
+/// signed session's unsigned writes testify as their `key`.
+fn fingerprint_of(sk: &ed25519_dalek::SigningKey) -> String {
+    Fingerprint::of(&public_key_of(sk)).to_hex()
 }
 
 /// The write's TESTIMONY (AUTH-4.48, wire v7) — the wire's `key` field —
-/// names the key that established the committing session, so both of its
-/// answers are pinned here and pinned apart.
+/// names the key that established the committing session, and since
+/// wire v7.11 (D12) is served ONLY where the entry carries no signature:
+/// a row whose entry FILLED ITS MARKER carries `attest` — the request's
+/// own member, byte for byte — and no `key`; a signed-session write that
+/// presented no `attest` (an op outside the checked set) still carries the
+/// key; a bare write carries `"bare"`. All three pinned here, and apart.
 ///
 /// `"bare"` is the load-bearing one: it is a positive claim that nobody
 /// signed, not a null a reader can distrust, and the sidecar never
@@ -553,22 +641,45 @@ fn the_testimony_names_the_key_that_signed_the_session() {
         .to_string();
 
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
-    // A declared deposit at the home's fresh position — the one insert a
-    // published document admits (PUB-2.59). The byte is prose, PUB-2.60's
-    // residue, declared under a MEMBER type — ENROLL's.
-    let (_, entry) = feed_entry(
+    // A write that FILLS ITS MARKER: a grant link into the published home
+    // — publish class, the checked set — composed and signed by the suite's
+    // signer, posted as composed so the request's `attest` is in hand.
+    let frame = typed_link_frame(CLAIMANT_DOC1, &[CLAIMANT_ACCOUNT], &[], T_GRANT);
+    let sent = attach_attest(port, &signed, &frame);
+    let sent: Value = serde_json::from_str(&sent).expect("the composed frame is JSON");
+    assert!(sent["attest"].is_object(), "the suite's signer attached an attest: {sent}");
+    let (ack, entry) = feed_entry_as_written(port, &signed, "a marker-signed write", &sent.to_string());
+    assert!(
+        entry.get("key").is_none(),
+        "a signed entry has one authority for its hand, its own signature — no `key`: {entry}"
+    );
+    assert_eq!(
+        entry["attest"], sent["attest"],
+        "the row's attest is the request's own — alg token and sig hex, byte-equal: {entry}"
+    );
+    assert_eq!(entry["link"].as_str(), Some(acked_addr(&ack).as_str()), "the minted link: {entry}");
+    let slot = sd.daemon().attestation_at(Seq(acked_at(&ack))).expect("a boundary").expect("filled");
+    assert_eq!(
+        entry["attest"]["sig"].as_str().map(str::to_string),
+        Some(hex(slot.sig())),
+        "…and the marker's own bytes, which the store mirrors"
+    );
+
+    // A signed-session write that PRESENTED NO `attest` — a draft mint,
+    // outside the checked set, so no signature exists for it: the key is
+    // served, the fingerprint of the session's establishing key.
+    let (_, entry) = feed_entry_as_written(
         port,
         &signed,
-        "a signed write",
-        &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["s"],"deposit":"{T_ENROLL}"}}"#
-        ),
+        "a signed-session write with no attest",
+        &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#),
     );
     assert_eq!(
         entry["key"].as_str(),
         Some(device_fp.as_str()),
-        "a signed write testifies the establishing key's fingerprint: {entry}"
+        "an unsigned entry from a signed session testifies the establishing key's fingerprint: {entry}"
     );
+    assert_absent(&entry, &["attest"], "no marker, no attest");
 
     // The bare arm beside it, from the SAME principal on the same account
     // — so the two entries differ in their testimony and nothing else a
@@ -583,6 +694,7 @@ fn the_testimony_names_the_key_that_signed_the_session() {
         &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#),
     );
     assert_eq!(entry["key"].as_str(), Some("bare"), "a bare bind testifies bare: {entry}");
+    assert_absent(&entry, &["attest"], "a bare write");
 
     sd.shutdown();
 }
@@ -595,6 +707,12 @@ fn the_testimony_names_the_key_that_signed_the_session() {
 /// not: `docs` is the field a client dispatches on to decide what to
 /// refresh, so a wrong or missing address is a pane that never updates,
 /// with a well-formed feed and no error anywhere.
+///
+/// And since wire v7.11 the OP'S OWN TERMS, per kind: a `delegate` row's
+/// minted pair, a `make_link` row's minted link address, and NOTHING on any
+/// other row — `emit`'s among them, which mints a link too and carries no
+/// `link` (r6-2a names `make_link` alone). Every write here is a bare
+/// session's, so every row carries `key: "bare"` and no `attest`.
 #[test]
 fn the_affected_docs_convention_holds_for_every_write_kind() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -607,12 +725,22 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
     let boot = open_session(port, 0);
     let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
     let prefix = expect_resp(&v, "maybe_addr")["addr"].as_str().expect("prefix").to_string();
-    let v = op(
+    let (ack, entry) = feed_entry(
         port,
-        Some(&boot),
+        &boot,
+        "delegate",
         &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":1}}"#),
     );
-    let account = acked_addr(&v);
+    let account = acked_addr(&ack);
+    assert_eq!(entry["docs"], serde_json::json!([]), "delegate names no doc");
+    assert_eq!(
+        entry["new_prefix"].as_str(),
+        Some(account.as_str()),
+        "the minted account address, the ack's: {entry}"
+    );
+    assert_eq!(entry["new_id"].as_u64(), Some(1), "the principal seated: {entry}");
+    assert_terms_by_op(&entry, "delegate");
+    assert_absent(&entry, &["attest"], "delegate");
     let s1 = open_session(port, 1);
     let create = || {
         let v = op(
@@ -648,6 +776,18 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
         acked_addr(&v)
     };
     let (l1, l2, l3) = (mint_link(1), mint_link(2), mint_link(3));
+    // A fourth, watched: the `make_link` row carries the minted link's
+    // address, the ack's.
+    let (ack, entry) = feed_entry(
+        port,
+        &s1,
+        "make_link",
+        &format!(
+            r#"{{"op":"make_link","home":"{doc_a}","from":{{"addrs":[]}},"to":{{"addrs":[]}},"ty":{{"addrs":["{doc_a}.0.3.6.4"]}}}}"#
+        ),
+    );
+    assert_eq!(entry["link"].as_str(), Some(acked_addr(&ack).as_str()), "the minted link: {entry}");
+    assert_terms_by_op(&entry, "make_link");
 
     // (what, frame, expected docs) — one row per convention. Each row's
     // `docs` is stated here, not read from the daemon.
@@ -733,6 +873,12 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
         let (_, entry) = feed_entry(port, &s1, what, &frame);
         assert_eq!(entry["op"].as_str(), Some(op_of(what)), "{what}: the entry's op kind");
         assert_eq!(entry["docs"], docs, "{what}: the affected-docs convention");
+        // The terms: none on any of these rows — `emit` mints a link and
+        // carries no `link`, `assert_sup` and `nullify` deposit records and
+        // carry none either.
+        assert_terms_by_op(&entry, what);
+        assert_eq!(entry["key"].as_str(), Some("bare"), "{what}: a bare session's write");
+        assert_absent(&entry, &["attest"], what);
     }
     for (what, frame) in minting {
         let (ack, entry) = feed_entry(port, &s1, what, &frame);
@@ -743,6 +889,7 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
             serde_json::json!([minted]),
             "{what}: names the document it minted, which is knowable only from the ack"
         );
+        assert_terms_by_op(&entry, what);
     }
 
     sd.shutdown();
@@ -829,6 +976,16 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
              null is RESERVED for lost testimony, and `\"bare\"` is a positive claim \
              that this write was unsigned — one nobody made about it: {tail}"
         );
+        // …the op's own terms included: the lost record was a `make_link`,
+        // whose minted link address is now lost with it — every term reads
+        // `null`, since a bare row's op is unknown, and none is invented.
+        for term in TERMS {
+            assert!(
+                tail.get(term).is_some_and(Value::is_null),
+                "a bare row's `{term}` is the reserved null: {tail}"
+            );
+        }
+        assert_absent(tail, &["attest"], "a bare row whose marker was empty");
         let old: Value = serde_json::from_slice(&before).expect("json");
         assert_eq!(
             kept,
@@ -1213,6 +1370,81 @@ fn pre_feature_positions_answer_bare_entries() {
     sd.shutdown();
 }
 
+/// Reclaim everything below the head WITHOUT committing anything: one
+/// checkpoint at the current head, retaining one, drops the segments wholly
+/// below it. No new position appears, so the sidecar's coverage stays
+/// complete, and the retention floor lands AT the head.
+fn reclaim_below_the_head(dir: &Path, head: u64) {
+    use skep_engine::{Engine, KernelConfig};
+    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, SaltSource};
+
+    let cfg = KernelConfig {
+        durability: Durability::Fsync {
+            journal_path: dir.to_path_buf(),
+            retain_checkpoints: 1,
+            burned_seq: BurnedSeqPolicy::Rollback,
+        },
+        checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
+    };
+    let engine = Engine::open(cfg).expect("engine recover");
+    engine.kernel().checkpoint().expect("checkpoint reclaims below itself");
+    assert_eq!(engine.kernel().current_seq().0, head, "no new commit was made");
+    assert!(
+        engine.world_at(Seq(0)).is_err(),
+        "the journal must actually have reclaimed for this test to mean anything"
+    );
+    drop(engine);
+}
+
+/// Six bulk prepends into `doc` from `session` — reclamation is at SEGMENT
+/// granularity, and a segment has to rotate before anything below it can
+/// be reclaimed at all.
+fn rotate_a_segment(port: u16, session: &str, doc: &str) {
+    let bulk = "z".repeat(8192);
+    for _ in 0..6 {
+        // Prepends, so every ordinal is in bounds whatever the doc holds.
+        let v = op(
+            port,
+            Some(session),
+            &format!(
+                r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["{bulk}"]}}"#
+            ),
+        );
+        expect_resp(&v, "ack_addr");
+    }
+}
+
+/// A marker-signed write: a ghost-typed link into the claimant's published
+/// doc 1 from `signed`, the device session — publish class, the checked set,
+/// its `attest` composed by the suite's signer and admitted. Answers its
+/// position and its row's `attest` as the feed serves it.
+fn signed_ghost_link(port: u16, signed: &str, n: u64) -> (u64, Value) {
+    let before = head(port);
+    let v = op(
+        port,
+        Some(signed),
+        &link_frame(CLAIMANT_DOC1, r#"{"addrs":[]}"#, r#"{"addrs":[]}"#, &ghost_ty(CLAIMANT_DOC1, n)),
+    );
+    let at = acked_at(&v);
+    let entry = one_entry_since(port, signed, "a signed ghost link", before);
+    assert!(entry["attest"].is_object(), "the row carries the marker: {entry}");
+    (at, entry["attest"].clone())
+}
+
+/// The attest store's lines, `position → (alg tag, sig hex)`, read off the
+/// file as an operator would.
+fn attest_store_lines(dir: &Path) -> BTreeMap<u64, (u64, String)> {
+    let text = std::fs::read_to_string(dir.join("feed-attest.log")).expect("feed-attest.log");
+    text.lines()
+        .filter_map(|line| {
+            let v: Value = serde_json::from_str(line).expect("a store line is JSON");
+            let at = v.get("at")?.as_u64()?;
+            Some((at, (v["alg"].as_u64().expect("alg"), v["sig"].as_str().expect("sig").to_string())))
+        })
+        .collect()
+}
+
 /// Compaction: the feed's memory is bounded by the journal's retention,
 /// not by the world's age. Positions the journal has reclaimed are refused
 /// by `/op-at` and `/dump?at`, so an entry naming one describes a commit no
@@ -1225,18 +1457,21 @@ fn pre_feature_positions_answer_bare_entries() {
 /// reopens: the reconstruction walk has nothing to do and cannot be what
 /// advances the fence. Only the retention probe can, which is what makes
 /// this a test of compaction rather than of the walk.
+///
+/// THE ATTEST STORE IS THE EXCEPTION (BW-01; the design record §7.3 (i)): a
+/// marker-signed write landed early keeps its line in `feed-attest.log`
+/// after the reclamation puts its position under the floor — the file is
+/// primary state there, the entry signature's only copy at the origin —
+/// where `commits.log` drops the position's entry.
 #[test]
 fn the_sidecar_compacts_to_the_journals_retention() {
-    use skep_engine::{Engine, KernelConfig};
-    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, SaltSource, Seq};
-
     let dir = tempfile::tempdir().expect("tempdir");
 
     // Phase 1 — the daemon writes everything, so every position it will
     // later serve is one it recorded. Bulk inserts, because reclamation is
     // at SEGMENT granularity and a segment has to rotate before anything
     // below it can be reclaimed at all.
-    let (early, head) = {
+    let (early, head, signed_at, signed_attest) = {
         let sd = spawn(dir.path());
         let port = sd.port();
         let doc = seed_flow(port);
@@ -1244,49 +1479,21 @@ fn the_sidecar_compacts_to_the_journals_retention() {
         let v = changes_ok(port, Some(&s1), "since=0");
         assert_eq!(entry_ats(&v), all_ats(), "the feed starts with every position");
         assert!(v["changes"][0]["op"].is_string(), "and with real metadata");
-        let bulk = "z".repeat(8192);
-        for _ in 0..6 {
-            // Prepends, so every ordinal is in bounds whatever the doc holds.
-            let v = op(
-                port,
-                Some(&s1),
-                &format!(
-                    r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["{bulk}"]}}"#
-                ),
-            );
-            expect_resp(&v, "ack_addr");
-        }
+        // The signed write the reclamation will bury.
+        let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+        let (signed_at, signed_attest) = signed_ghost_link(port, &signed, 1);
+        rotate_a_segment(port, &s1, &doc);
         let (st, body) = get(port, "/health");
         assert_eq!(st, 200);
         let head = json(&body)["log_position"].as_u64().expect("log_position");
         let ats = entry_ats(&changes_ok(port, Some(&s1), "since=0"));
         assert_eq!(ats.last(), Some(&head), "the feed covers every position through the head");
         sd.shutdown();
-        (ats, head)
+        (ats, head, signed_at, signed_attest)
     };
 
-    // Phase 2 — reclaim WITHOUT committing anything: one checkpoint at the
-    // current head, retaining one, drops the segments wholly below it. No
-    // new position appears, so the sidecar's coverage stays complete.
-    {
-        let cfg = KernelConfig {
-            durability: Durability::Fsync {
-                journal_path: dir.path().to_path_buf(),
-                retain_checkpoints: 1,
-                burned_seq: BurnedSeqPolicy::Rollback,
-            },
-            checkpoint: CheckpointPolicy::Manual,
-            salt: SaltSource::Seeded(0),
-        };
-        let engine = Engine::open(cfg).expect("engine recover");
-        engine.kernel().checkpoint().expect("checkpoint reclaims below itself");
-        assert_eq!(engine.kernel().current_seq().0, head, "no new commit was made");
-        assert!(
-            engine.world_at(Seq(0)).is_err(),
-            "the journal must actually have reclaimed for this test to mean anything"
-        );
-        drop(engine);
-    }
+    // Phase 2 — reclaim WITHOUT committing anything.
+    reclaim_below_the_head(dir.path(), head);
 
     // Phase 3 — reopening compacts. The oldest entries are gone from the
     // file and from the feed, and the feed refuses below its new fence.
@@ -1310,6 +1517,21 @@ fn the_sidecar_compacts_to_the_journals_retention() {
     assert_eq!(v["error"].as_str(), Some("history_reclaimed"));
     let floor = v["floor"].as_u64().expect("the refusal names the oldest surviving position");
     assert!(floor > early[0], "the fence advanced past the oldest recorded position");
+
+    // THE ATTEST STORE KEEPS ITS LINE BELOW THE FLOOR, where `commits.log`
+    // dropped the position's entry: the file is read as an operator reads
+    // it, since no route serves a position below the floor.
+    assert!(signed_at < floor, "the signed write lies below the floor: {signed_at} < {floor}");
+    assert!(
+        !contents.contains(&format!("{{\"at\":{signed_at},")),
+        "commits.log compacted the signed write's entry away: {contents}"
+    );
+    let lines = attest_store_lines(dir.path());
+    let (alg, sig) = lines.get(&signed_at).unwrap_or_else(|| {
+        panic!("feed-attest.log KEEPS its line for position {signed_at} below the floor: {lines:?}")
+    });
+    assert_eq!(*alg, u64::from(FIXTURE_TAG), "the line carries the marker's tag");
+    assert_eq!(sig, signed_attest["sig"].as_str().expect("sig"), "…and the blob's hex");
     // The fence is class-invariant — positions are (PUB-6.52): the guest
     // meets the same refusal with the same floor.
     let (st, guest) = changes_raw(port, None, "since=0");
@@ -1360,4 +1582,493 @@ fn the_sidecar_compacts_to_the_journals_retention() {
 
 fn text(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
+}
+
+// ── the mirror's inputs (wire v7.11) ─────────────────────────────────────
+
+/// THE FEED IS THE MIRROR'S WHOLE INPUT (wire v7.11; the design record
+/// §7.3 (i), D12, D25, r6-2a): one end-to-end walk over the wire on a
+/// claimed board, every kind of row the fence names —
+///
+/// * a signed-session `publish` presenting `attest`: its row carries
+///   `attest` byte-equal to the request's (the `alg` token, the `sig` hex),
+///   `placed` and `base_extent` exactly as `doc_metadata` serves them for
+///   the member, and NO `key`;
+/// * a signed-session `insert` presenting none: `key` the fingerprint, no
+///   `attest`;
+/// * a bare draft mint: `key: "bare"`; the head writer's rows: `key:
+///   "system"`, the publish with its terms;
+/// * a `delegate`: `new_prefix` and `new_id` equal to the ack's and to
+///   `effective_owner`'s answer; a `make_link`: `link` equal to its
+///   `ack_addr`;
+/// * a credential record deposit above the claim (lane D's signed form):
+///   BOTH rows without `key` and without `attest`; the ceremony's rows
+///   below the claim: `key` served, no `attest` —
+///
+/// and the same page byte-identical across a restart (PUB-8.26) with every
+/// new member.
+#[test]
+fn the_feed_is_the_mirrors_whole_input() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let before_restart: Vec<u8>;
+    {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+        let device_fp = fingerprint_of(&device_key());
+        let at = |e: &Value| e["at"].as_u64().expect("at");
+
+        // A `delegate` from the bootstrap principal: the minted pair.
+        let boot = open_session(port, 0);
+        let prefix = next_prefix_under(port, Some(&boot), "1");
+        let v = op(
+            port,
+            Some(&boot),
+            &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":1}}"#),
+        );
+        let (delegate_at, delegate_addr) = (acked_at(&v), acked_addr(&v));
+
+        // A credential record deposit ABOVE the claim, lane D's signed form:
+        // the hire of principal 1 — the record's atom, signed at the record
+        // grade, then the enroll link the daemon verifies the `sig` at.
+        let hire_from = head(port);
+        let _agent = hire(port, &signed, CLAIMANT_DOC1, &prefix, 1, &distinct_key(1));
+        let hire_rows = changes_ok(port, Some(&signed), &format!("since={hire_from}"))["changes"]
+            .as_array()
+            .expect("changes")
+            .clone();
+        assert_eq!(hire_rows.len(), 2, "the hire is two writes: {hire_rows:?}");
+
+        // A signed `publish` presenting `attest` over doc 1's whole extent,
+        // posted AS COMPOSED so the request's own member is in hand.
+        let extent = content_extent(port, None, CLAIMANT_DOC1);
+        let runs = shot_runs(port, Some(&signed), CLAIMANT_DOC1, 1, extent);
+        let frame = publish_frame(CLAIMANT_DOC1, Some((CLAIMANT_DOC1, extent)), None, &runs);
+        let sent: Value =
+            serde_json::from_str(&attach_attest(port, &signed, &frame)).expect("a JSON frame");
+        assert!(sent["attest"].is_object(), "the suite's signer signed the shot: {sent}");
+        let v = op_unattested(port, Some(&signed), &sent.to_string());
+        let (publish_at, member) = (acked_at(&v), acked_addr(&v));
+
+        // A signed-session `insert` presenting none — a private draft's own
+        // edit, and the draft's mint before it, both outside the checked set.
+        let v = op_unattested(port, Some(&signed), &create_frame(CLAIMANT_ACCOUNT, None));
+        let (draft_at, draft) = (acked_at(&v), acked_addr(&v));
+        let v = op_unattested(port, Some(&signed), &insert_frame(&draft, 1, "x", false));
+        let insert_at = acked_at(&v);
+
+        // A bare draft mint, and a bare `make_link` into it.
+        let bare = open_session(port, CLAIMANT_PRINCIPAL);
+        let v = op(port, Some(&bare), &create_frame(CLAIMANT_ACCOUNT, None));
+        let (bare_mint_at, bare_doc) = (acked_at(&v), acked_addr(&v));
+        let v = op(
+            port,
+            Some(&bare),
+            &link_frame(&bare_doc, r#"{"addrs":[]}"#, r#"{"addrs":[]}"#, &ghost_ty(&bare_doc, 1)),
+        );
+        let (link_at, link_addr) = (acked_at(&v), acked_addr(&v));
+
+        // THE WALK, as the claimant — whose class sees every row above but
+        // the system account's two private draft writes.
+        let entries = all_entries(port, Some(&signed));
+        let mut want_ats: Vec<u64> = CEREMONY_ATS.to_vec();
+        want_ats.push(H1_PUBLISH_AT);
+        want_ats.push(delegate_at);
+        want_ats.extend(hire_rows.iter().map(at));
+        want_ats.extend([publish_at, draft_at, insert_at, bare_mint_at, link_at]);
+        assert_eq!(entries.iter().map(at).collect::<Vec<_>>(), want_ats);
+        for e in &entries {
+            assert_terms_by_op(e, "the walk");
+        }
+        // `attest` rides exactly one row, the shot's; `key` is absent on
+        // exactly the signed rows — the shot's and the deposit's two.
+        let attested: Vec<u64> =
+            entries.iter().filter(|e| e.get("attest").is_some()).map(at).collect();
+        assert_eq!(attested, vec![publish_at], "attest rides the marker-signed row alone");
+        let mut signed_rows: Vec<u64> = hire_rows.iter().map(at).collect();
+        signed_rows.push(publish_at);
+        let keyless: Vec<u64> = entries.iter().filter(|e| e.get("key").is_none()).map(at).collect();
+        assert_eq!(keyless, signed_rows, "key is absent on the signed rows and served on every other");
+
+        // The signed publish.
+        let e = entry_at(&entries, publish_at);
+        assert_eq!(e["op"].as_str(), Some("publish"));
+        assert_eq!(e["docs"], serde_json::json!([member]));
+        assert_eq!(e["attest"], sent["attest"], "byte-equal to the request's: {e}");
+        let md = doc_metadata(port, None, &member);
+        assert_eq!(e["placed"], md["placed"], "the count, as the member read serves it: {e}");
+        assert_eq!(e["base_extent"], md["base_extent"], "the base extent, as the member read serves it: {e}");
+        assert_eq!(e["placed"].as_str(), Some(extent.to_string().as_str()), "Σ width of the runs");
+        assert_eq!(e["base_extent"].as_str(), Some(extent.to_string().as_str()), "the extent the shot named");
+
+        // The signed-session writes that presented none: the fingerprint.
+        for (what, at_) in [("the draft's mint", draft_at), ("the draft's insert", insert_at)] {
+            let e = entry_at(&entries, at_);
+            assert_eq!(e["key"].as_str(), Some(device_fp.as_str()), "{what}: {e}");
+            assert_absent(e, &["attest"], what);
+        }
+
+        // The bare session's writes.
+        assert_eq!(entry_at(&entries, bare_mint_at)["key"].as_str(), Some("bare"));
+        let e = entry_at(&entries, link_at);
+        assert_eq!(e["key"].as_str(), Some("bare"));
+        assert_eq!(e["link"].as_str(), Some(link_addr.as_str()), "the minted link, the ack's: {e}");
+
+        // The head writer's row every class sees: `H.1`'s publish, with the
+        // shot's terms as `doc_metadata` serves them for the member.
+        let e = entry_at(&entries, H1_PUBLISH_AT);
+        assert_eq!((e["key"].as_str(), e["op"].as_str()), (Some("system"), Some("publish")));
+        let md = doc_metadata(port, None, HEAD_MEMBER_1);
+        assert_eq!(e["placed"], md["placed"], "H.1's count: {e}");
+        assert_eq!(e["base_extent"], md["base_extent"], "H.1's base extent: {e}");
+        assert_absent(e, &["attest"], "the head writer's row");
+
+        // The delegate: the pair is the ack's, and ω's.
+        let e = entry_at(&entries, delegate_at);
+        assert_eq!(e["new_prefix"].as_str(), Some(delegate_addr.as_str()));
+        assert_eq!(delegate_addr, prefix, "the ack names the prefix the request asked");
+        assert_eq!(e["new_id"].as_u64(), Some(1));
+        assert_eq!(
+            effective_owner(port, None, &prefix),
+            Some((prefix.clone(), 1)),
+            "ω at the head agrees with the row"
+        );
+        assert_eq!(e["key"].as_str(), Some("bare"));
+
+        // The record deposit's two rows (D26; e-Q2): the atom's insert and
+        // its credential link — one signature at the record grade, so
+        // neither carries `key` nor `attest`; the link row names its link.
+        let (atom_row, link_row) = (&hire_rows[0], &hire_rows[1]);
+        assert_eq!(atom_row["op"].as_str(), Some("insert"), "{atom_row}");
+        assert_eq!(atom_row["docs"], serde_json::json!([CLAIMANT_DOC1]));
+        assert_eq!(link_row["op"].as_str(), Some("make_link"), "{link_row}");
+        for (what, row) in [("the record's atom", atom_row), ("the record's link", link_row)] {
+            assert_absent(row, &["key", "attest"], what);
+            assert_terms_by_op(row, what);
+        }
+        assert!(
+            link_row["link"].as_str().is_some_and(|l| l.starts_with(&format!("{CLAIMANT_DOC1}.0.2."))),
+            "the enroll link, minted in the registry's link subspace: {link_row}"
+        );
+
+        // The ceremony's rows below the claim: `key` served, no `attest`.
+        for at_ in CEREMONY_ATS {
+            let e = entry_at(&entries, at_);
+            assert!(e["key"].is_string(), "a ceremony row serves its key: {e}");
+            assert_absent(e, &["attest"], "a ceremony row");
+        }
+        let e = entry_at(&entries, CEREMONY_ATS[0]);
+        assert_eq!(
+            (e["new_prefix"].as_str(), e["new_id"].as_u64()),
+            (Some(CLAIMANT_ACCOUNT), Some(CLAIMANT_PRINCIPAL)),
+            "the ceremony's delegate: {e}"
+        );
+        assert_eq!(
+            entry_at(&entries, CEREMONY_ATS[2])["key"].as_str(),
+            Some("bare"),
+            "the genesis record's atom, unsigned below the claim, from a bare session"
+        );
+        assert!(entry_at(&entries, CEREMONY_ATS[3])["link"].is_string(), "the genesis link");
+        let claim = entry_at(&entries, CLAIM_POSITION);
+        assert_eq!(
+            claim["key"].as_str(),
+            Some(device_fp.as_str()),
+            "the claim, from the signed device session, unjudged at the record grade: {claim}"
+        );
+        assert!(claim["link"].is_string(), "the claim link's address rides its row: {claim}");
+
+        before_restart = changes_raw(port, Some(&bare), "since=0&limit=4096").1;
+        sd.shutdown();
+    }
+
+    // DETERMINISM PER CLASS across a restart (PUB-8.26), every member included.
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    assert_eq!(
+        changes_raw(port, Some(&bare), "since=0&limit=4096").1,
+        before_restart,
+        "the same query answers byte-identically across a restart"
+    );
+    sd.shutdown();
+}
+
+/// Π FROM THE FEED ALONE (AUTH-6.36 consumer (1); r6-2a, m3): a walk of
+/// `/changes` from the floor, paging, taking every `delegate` row's pair,
+/// equals `effective_owner`'s answer for every minted prefix at the head —
+/// the mirror recipe's ω derivation from the board's own records, never the
+/// node registry.
+#[test]
+fn pi_from_the_feed_alone_is_effective_owners_answer_for_every_minted_prefix() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let boot = open_session(port, 0);
+    let (a, s_a) = delegate_under(port, &boot, "1", 1);
+    let (b, _) = delegate_under(port, &boot, "1", 2);
+    let (a1, _) = delegate_under(port, &s_a, &a, 3);
+
+    // THE MIRROR RECIPE: page from the floor, `delegate` rows alone.
+    let mut pi: BTreeMap<String, u64> = BTreeMap::new();
+    let mut since = 0;
+    loop {
+        let page = changes_ok(port, None, &format!("since={since}&limit=3"));
+        for e in page["changes"].as_array().expect("changes") {
+            if e["op"].as_str() == Some("delegate") {
+                let prefix = e["new_prefix"].as_str().expect("a delegate row names its prefix");
+                let id = e["new_id"].as_u64().expect("…and the principal it seated");
+                assert!(pi.insert(prefix.to_string(), id).is_none(), "one row per mint: {e}");
+            }
+        }
+        if !page["more"].as_bool().expect("more") {
+            break;
+        }
+        since = page["last"].as_u64().expect("last");
+    }
+    let want: BTreeMap<String, u64> =
+        [(CLAIMANT_ACCOUNT.to_string(), CLAIMANT_PRINCIPAL), (a.clone(), 1), (b.clone(), 2), (a1.clone(), 3)]
+            .into_iter()
+            .collect();
+    assert_eq!(pi, want, "Π off the feed is every account the board minted, with its principal");
+    for (prefix, id) in &pi {
+        assert_eq!(
+            effective_owner(port, None, prefix),
+            Some((prefix.clone(), *id)),
+            "ω at the head agrees with the feed's pair for {prefix}"
+        );
+    }
+    // ω over an address BENEATH a prefix is the longest of Π's prefixes —
+    // the derivation a mirror makes from these rows, checked against the
+    // board's own: a document under A.1 is A.1's, not A's.
+    assert_eq!(effective_owner(port, None, &format!("{a1}.0.1")), Some((a1.clone(), 3)));
+    assert_eq!(effective_owner(port, None, &format!("{a}.0.9")), Some((a.clone(), 1)));
+    sd.shutdown();
+}
+
+/// THE BOUNDARY FROM THE FEED ALONE (the design record §5.2's owed read):
+/// the claim link's address, as `find_links` answers it, equals the `link`
+/// of exactly one `make_link` row, whose `at` is the claim's position —
+/// `H.1`'s own — so a reader maps the link to its commit position off the
+/// feed, with no `H.1` to name it.
+#[test]
+fn the_claim_boundary_is_read_off_the_feed_alone() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let claim_at = board_term(port).expect("H.1").log_position;
+    assert_eq!(claim_at, CLAIM_POSITION);
+
+    let claims = addrs_of(&op(port, None, &class_scan_frame("find_links_ftt", T_CLAIM)));
+    assert_eq!(claims.len(), 1, "one claim link on the board: {claims:?}");
+    let entries = all_entries(port, None);
+    let rows: Vec<&Value> = entries
+        .iter()
+        .filter(|e| e["op"].as_str() == Some("make_link"))
+        .filter(|e| e["link"].as_str() == Some(claims[0].as_str()))
+        .collect();
+    assert_eq!(rows.len(), 1, "exactly one make_link row names the claim link: {entries:?}");
+    assert_eq!(rows[0]["at"].as_u64(), Some(claim_at), "…at the claim's position: {}", rows[0]);
+    sd.shutdown();
+}
+
+/// ABSENCE IS A VERDICT, SO THE STORE IS HONEST — above the floor: a lost or
+/// torn `feed-attest.log` is rebuilt at open from the journal's markers
+/// (`Kernel::attestation_at`) and the feed serves the SAME `attest` bytes;
+/// with `commits.log` lost beside it, the rows come back bare and the slot
+/// rides the bare row — the journal's own fact beside the lost testimony.
+#[test]
+fn a_lost_or_torn_attest_store_is_rebuilt_from_the_journal_and_serves_the_same_bytes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = dir.path().join("feed-attest.log");
+    let (before, signed_ats, attests) = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+        let (a1, attest1) = signed_ghost_link(port, &signed, 1);
+        let (a2, attest2) = signed_ghost_link(port, &signed, 2);
+        let bare = open_session(port, CLAIMANT_PRINCIPAL);
+        expect_resp(&op(port, Some(&bare), &create_frame(CLAIMANT_ACCOUNT, None)), "ack_addr");
+        let before = changes_raw(port, Some(&bare), "since=0&limit=4096").1;
+        // The store's own lines: `{"alg":T,"at":N,"sig":"<hex>"}`, one per
+        // attested position, the tag and the blob as the marker holds them.
+        let lines = attest_store_lines(dir.path());
+        assert_eq!(lines.keys().copied().collect::<Vec<_>>(), vec![a1, a2]);
+        for (at, attest) in [(a1, &attest1), (a2, &attest2)] {
+            let (alg, sig) = &lines[&at];
+            assert_eq!(*alg, u64::from(FIXTURE_TAG));
+            assert_eq!(sig, attest["sig"].as_str().expect("sig"));
+            let slot = sd.daemon().attestation_at(Seq(at)).expect("a boundary").expect("filled");
+            assert_eq!(*sig, hex(slot.sig()), "the line mirrors the marker");
+        }
+        sd.shutdown();
+        (before, vec![a1, a2], vec![attest1, attest2])
+    };
+    let judge = |ctx: &str| {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let bare = open_session(port, CLAIMANT_PRINCIPAL);
+        assert_eq!(
+            changes_raw(port, Some(&bare), "since=0&limit=4096").1,
+            before,
+            "{ctx}: the feed serves the same bytes, attest included"
+        );
+        assert_eq!(
+            attest_store_lines(dir.path()).keys().copied().collect::<Vec<_>>(),
+            signed_ats,
+            "{ctx}: the store is rebuilt whole"
+        );
+        sd.shutdown();
+    };
+    // Deleted after commit: rebuilt from the journal.
+    std::fs::remove_file(&store).expect("lose the store");
+    judge("the store deleted");
+    // Torn: the last line cut into, truncated at open, its position re-derived.
+    let len = std::fs::metadata(&store).expect("metadata").len();
+    let fh = std::fs::OpenOptions::new().write(true).open(&store).expect("open");
+    fh.set_len(len.saturating_sub(37)).expect("tear the tail");
+    drop(fh);
+    judge("the store torn");
+    // The testimony gone too: bare rows, the slot riding them.
+    std::fs::remove_file(dir.path().join("commits.log")).expect("lose the testimony");
+    std::fs::remove_file(&store).expect("lose the store");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let entries = all_entries(port, Some(&bare));
+    for (at, attest) in signed_ats.iter().zip(&attests) {
+        let e = entry_at(&entries, *at);
+        assert!(e["op"].is_null() && e["key"].is_null(), "a bare row: {e}");
+        assert_eq!(e["attest"], *attest, "the slot is the journal's fact, served on the bare row: {e}");
+    }
+    for e in entries.iter().filter(|e| !signed_ats.contains(&e["at"].as_u64().expect("at"))) {
+        assert_absent(e, &["attest"], "a bare row whose marker is empty");
+    }
+    sd.shutdown();
+}
+
+/// ABSENCE IS A VERDICT — at and below the floor (BW-01): after a
+/// reclamation drops `commits.log`'s entries below the floor,
+/// `feed-attest.log` still holds its line there (the file read directly:
+/// no route serves a below-floor position, e-Q1), and the row AT the floor
+/// — whose marker the journal refuses `Reclaimed`, the segment holding it
+/// gone — serves its slot off the kept line; with the line lost, that row
+/// renders `attest: null`, LOST, never absent, and still no `key`.
+#[test]
+fn the_attest_store_keeps_below_the_floor_and_serves_a_lost_slot_at_the_floor_as_null() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = dir.path().join("feed-attest.log");
+    let (early_at, last_at, last_attest) = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let doc = seed_flow(port);
+        let s1 = open_session(port, 1);
+        let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+        let (early_at, _) = signed_ghost_link(port, &signed, 1);
+        rotate_a_segment(port, &s1, &doc);
+        let (last_at, last_attest) = signed_ghost_link(port, &signed, 2);
+        assert_eq!(last_at, head(port), "the signed write is the head");
+        sd.shutdown();
+        (early_at, last_at, last_attest)
+    };
+    reclaim_below_the_head(dir.path(), last_at);
+
+    // The store kept: the line below the floor survives in the file, and
+    // the row at the floor serves its slot off the kept line.
+    {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let bare = open_session(port, CLAIMANT_PRINCIPAL);
+        let (st, body) = changes_raw(port, Some(&bare), "since=0");
+        assert_eq!(st, 410, "{}", text(&body));
+        let floor = json(&body)["floor"].as_u64().expect("floor");
+        assert_eq!(floor, last_at, "the floor is the checkpoint's own position, the head");
+        assert!(early_at < floor);
+        let commits = std::fs::read_to_string(dir.path().join("commits.log")).expect("commits.log");
+        assert!(
+            !commits.contains(&format!("{{\"at\":{early_at},")),
+            "commits.log dropped the early signed write's entry: {commits}"
+        );
+        let lines = attest_store_lines(dir.path());
+        assert!(lines.contains_key(&early_at), "the store KEEPS its line below the floor: {lines:?}");
+        assert!(lines.contains_key(&last_at), "…and the line at the floor: {lines:?}");
+        assert!(
+            matches!(sd.daemon().attestation_at(Seq(last_at)), Err(skepd::HistoryError::Reclaimed { .. })),
+            "the journal refuses the marker at the floor: its segment is reclaimed"
+        );
+        let page = changes_ok(port, Some(&bare), &format!("since={}", floor - 1));
+        let e = entry_at(page["changes"].as_array().expect("changes"), last_at);
+        assert_eq!(e["attest"], last_attest, "the row at the floor serves its slot off the kept line: {e}");
+        assert_absent(e, &["key"], "a signed row");
+        sd.shutdown();
+    }
+    // The store lost: the journal refuses the slot, nothing is rebuilt, and
+    // the row — recorded signed — renders LOST.
+    {
+        std::fs::remove_file(&store).expect("lose the store");
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let bare = open_session(port, CLAIMANT_PRINCIPAL);
+        let page = changes_ok(port, Some(&bare), &format!("since={}", last_at - 1));
+        let e = entry_at(page["changes"].as_array().expect("changes"), last_at);
+        assert!(
+            e.get("attest").is_some_and(Value::is_null),
+            "recorded signed, the store silent, the journal refusing: attest is null — LOST, never absent: {e}"
+        );
+        assert_absent(e, &["key"], "the entry IS signed; only its hand is out of reach");
+        assert!(attest_store_lines(dir.path()).is_empty(), "nothing was rebuilt: the journal refused the slot");
+        sd.shutdown();
+    }
+}
+
+/// D12 ON A RECORD DEPOSIT'S TWO ROWS (e-Q2): the atom's `insert` and the
+/// credential `make_link` that names it — one signature at the record
+/// grade, the record's own `sig` — carry neither `key` nor `attest`; and a
+/// record deposited ABOVE the claim carrying NO `sig` keeps its atom's
+/// `key` (the entry carries no signature anywhere) while its link is refused
+/// `attestation_required` (lane D), the atom an orphan no link names.
+#[test]
+fn a_record_deposits_two_rows_carry_neither_key_nor_attest_and_a_sig_less_atom_keeps_its_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let device_fp = fingerprint_of(&device_key());
+    let boot = open_session(port, 0);
+    let (a, _) = delegate_under(port, &boot, "1", 1);
+
+    let from = head(port);
+    hire(port, &signed, CLAIMANT_DOC1, &a, 1, &distinct_key(1));
+    let rows = changes_ok(port, Some(&signed), &format!("since={from}"))["changes"]
+        .as_array()
+        .expect("changes")
+        .clone();
+    assert_eq!(rows.len(), 2, "the atom's insert and its link: {rows:?}");
+    assert_eq!((rows[0]["op"].as_str(), rows[1]["op"].as_str()), (Some("insert"), Some("make_link")));
+    for row in &rows {
+        assert_absent(row, &["key", "attest"], "a record deposit's row");
+        assert_terms_by_op(row, "a record deposit's row");
+    }
+
+    // The sig-less record: its atom lands (the insert's check demands no
+    // `attest` of a record deposit, D26), testifying the session's key.
+    let (b, _) = delegate_under(port, &boot, "1", 2);
+    let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
+    let atom = enroll_atom(&[&distinct_key(2)]);
+    let (ack, e) = feed_entry(
+        port,
+        &signed,
+        "a sig-less record's atom",
+        &format!(
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":"{T_ENROLL}"}}"#
+        ),
+    );
+    assert_eq!(
+        e["key"].as_str(),
+        Some(device_fp.as_str()),
+        "a record carrying no sig is an unsigned entry: its key is served: {e}"
+    );
+    assert_absent(&e, &["attest"], "a record deposit's atom");
+    let v = typed_link(port, &signed, CLAIMANT_DOC1, &[&acked_addr(&ack)], &[&b], T_ENROLL);
+    assert_eq!(verdict(&v), "credential_refused:attestation_required", "{v}");
+    sd.shutdown();
 }

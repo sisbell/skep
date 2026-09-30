@@ -34,7 +34,9 @@
 //! checkpoints — genesis on a fresh store, recovery on an existing one, both
 //! inside `Engine::open`. The only files this crate writes itself are the
 //! change feed's: the commit-metadata sidecar `commits.log`, its four
-//! derived sidecars (`feed-*.log`), and, transiently while any is
+//! derived sidecars (`feed-*.log`), the attest store `feed-attest.log` — the
+//! marker slot mirrored per attested commit, the one daemon file that is
+//! primary state below the reclaim floor — and, transiently while any is
 //! compacted, its `.compact` twin — all opened here through
 //! `WritePath::open` and owned by `write_path/sidecar.rs` and `write_path/feed/`; nothing here
 //! writes any file of the WORLD's, which is why two daemons replaying one
@@ -127,8 +129,8 @@
 //! re-walking the world on every SSE tick. `sidecar.rs` owns
 //! `commits.log`: its crash honesty, its retention, and what a position
 //! whose record was lost answers; `feed/` owns the mask, the four derived
-//! sidecars, the supplement merge and the two narrowings (`under=`,
-//! `drafts=true`); `write_path/` owns the ordering that makes the
+//! sidecars, the attest store, the supplement merge and the two narrowings
+//! (`under=`, `drafts=true`); `write_path/` owns the ordering that makes the
 //! sidecar's invariants true. What `server` adds is the query's parse,
 //! the requester's FEED CLASS — resolved once per request off ONE head
 //! snapshot and threaded down (PUB-6.40) — the marshal, and `/health`'s
@@ -243,10 +245,10 @@ pub enum DaemonError {
     /// it through this enum's `source`, or by destructuring
     /// `Engine(EngineError::Open(…))`.
     Engine(EngineError),
-    /// `commits.log` (the commit-metadata sidecar) or one of the change
-    /// feed's four derived sidecars could not be opened, replayed, or
-    /// extended. A torn tail is NOT an error (it truncates); this is the
-    /// data dir refusing I/O the kernel just performed.
+    /// `commits.log` (the commit-metadata sidecar), one of the change
+    /// feed's four derived sidecars or its attest store could not be opened,
+    /// replayed, or extended. A torn tail is NOT an error (it truncates);
+    /// this is the data dir refusing I/O the kernel just performed.
     Sidecar(std::io::Error),
     /// The blocked-prefix list's START-UP SUPPLY
     /// ([`AuthOptions::blocked_supply_path`]) could not be read, is not a

@@ -17,8 +17,8 @@ use super::scan::ScanBusy;
 use super::{Daemon, Moment};
 use crate::auth::fold::key_set_of;
 use crate::auth::policy::{
-    deposits_credential_link, op_shape_refusal, plain_admission, CredentialRefusal,
-    DepositSpans,
+    deposits_credential_link, op_shape_refusal, plain_admission, record_deposit_carries_sig,
+    CredentialRefusal, DepositSpans, RecordSig,
 };
 use crate::auth::session::Actor;
 use crate::auth::LockWrite;
@@ -26,7 +26,7 @@ use crate::codec::{key_set_reply, DaemonOp};
 #[cfg(any(test, feature = "test-hooks"))]
 use crate::notice;
 use crate::serial::SerialGuard;
-use crate::write_path::{write_meta, FrameMeta};
+use crate::write_path::{write_meta, FrameMeta, Signed};
 
 impl Daemon {
     /// THE CLAIM FLIP's consequences, whole and under the two guards the
@@ -258,10 +258,20 @@ impl Daemon {
             Ok(admitted) => admitted,
             Err(r) => return with_signal(credential_refused(meta.kind, &r), closed),
         };
+        // THE ENTRY'S SIGNEDNESS, for the change feed's row (D12): the marker
+        // the admission filled — the admitted value itself, which the attest
+        // store appends beside `commits.log` at the record — or, at a record
+        // deposit's atom, the record's own `sig`; nothing for an unsigned
+        // entry, whose row serves its `key`.
+        let signed = match &admitted {
+            Some(a) => Some(Signed::Marker(a.clone())),
+            None => record_deposit_carries_sig(&identity, &frame.op).then_some(Signed::Record),
+        };
         frame.attest = admitted;
-        let resp = self.writes.commit_under(&serial, meta.attributed(binding.testimony()), || {
-            self.febe.execute(binding.sid, frame)
-        });
+        let resp =
+            self.writes.commit_under(&serial, meta.attributed(binding.testimony(), signed), || {
+                self.febe.execute(binding.sid, frame)
+            });
         with_signal(self.op_reply(&resp), closed)
     }
 
@@ -342,7 +352,7 @@ impl Daemon {
         // (AUTH-1.44; RES-206), handed over the same way. The list is stable
         // under the write guard held here: its install takes the same one.
         let list = self.auth.cfg.blocked_prefixes();
-        if let Err(r) = crate::auth::policy::precheck(
+        let record_sig = match crate::auth::policy::precheck(
             &credential_lock,
             snap.world(),
             &identity,
@@ -352,8 +362,9 @@ impl Daemon {
             list.header().binding_writer.as_ref(),
             self.auth.cfg.allow_preview_keys,
         ) {
-            return with_signal(credential_refused(meta.kind, &r), closed);
-        }
+            Ok(record_sig) => record_sig,
+            Err(r) => return with_signal(credential_refused(meta.kind, &r), closed),
+        };
         // 7 — execute (commit-record-announce under the held serial lock,
         // then the head writer's turn, which may land the head's own commits
         // before `commit_under` returns — the `post` snapshot at 8 then holds
@@ -369,11 +380,20 @@ impl Daemon {
         // `presented` to the plain path alone) and `Request::attest` arrives
         // empty from the codec: never verified, never written. This is how
         // the check tells D26's case by ROUTE — a credential-typed link write
-        // never reaches the plain sequence's producers at all.
+        // never reaches the plain sequence's producers at all. What the row
+        // records instead (D12) is the precheck's own answer: the record's
+        // `sig` VERIFIED — the entry signed by its record, its `key` absent —
+        // or unjudged at or below the claim, the ceremony's rows serving
+        // their `key`.
+        let signed = match record_sig {
+            RecordSig::Verified => Some(Signed::Record),
+            RecordSig::Unjudged => None,
+        };
         let req_id = frame.id.clone();
-        let resp = self.writes.commit_under(&serial, meta.attributed(binding.testimony()), || {
-            self.febe.execute(binding.sid, frame)
-        });
+        let resp =
+            self.writes.commit_under(&serial, meta.attributed(binding.testimony(), signed), || {
+                self.febe.execute(binding.sid, frame)
+            });
         let ack = self.codec.marshal(&resp);
         if matches!(resp, Response::AckAddr { .. }) {
             // 8 — the committed tail (AUTH-3.43): the fold step from the

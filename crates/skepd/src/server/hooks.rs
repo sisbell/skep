@@ -119,8 +119,12 @@ impl Daemon {
     /// `Kernel::attestation_at` on the daemon's own kernel, and a [`Seq`] as
     /// that read and [`Daemon::world_at`] take one — so a suite can pin WHICH
     /// commits' marker slots the write-path check filled and which stayed
-    /// empty (signed ops), `/changes` carrying no `attest` member yet (the
-    /// design record §7.3 (i), owed).
+    /// empty (signed ops), against the journal itself rather than the feed:
+    /// `/changes` serves the slot as the row's `attest` member off the
+    /// attest store (`feed-attest.log`), which mirrors the marker at commit
+    /// and is rebuilt from this very read above the reclaim floor (the
+    /// design record §7.3 (i)) — so the two are one value where both answer,
+    /// and this read is what a suite compares the served member against.
     #[doc(hidden)]
     pub fn attestation_at(&self, at: Seq) -> Result<Option<Attestation>, HistoryError> {
         self.engine.kernel().attestation_at(at)

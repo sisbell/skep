@@ -621,7 +621,7 @@ impl HeadWriter {
         }
         let account = system_account();
         let op = Op::CreateNewDocument { account: account.clone(), published: Some(false) };
-        let meta = write_meta(&op)?.attributed(SYSTEM_TESTIMONY.to_string());
+        let meta = write_meta(&op)?.attributed(SYSTEM_TESTIMONY.to_string(), None);
         let draft = self.run_commit(wp, serial, meta, move || {
             self.stores
                 .namespace()
@@ -656,7 +656,7 @@ impl HeadWriter {
             values: vec![Val::new(bytes)],
             deposit: Deposit::Undeclared,
         };
-        let meta = write_meta(&op)?.attributed(SYSTEM_TESTIMONY.to_string());
+        let meta = write_meta(&op)?.attributed(SYSTEM_TESTIMONY.to_string(), None);
         let Op::Insert { doc, at, values, deposit } = op else {
             return None;
         };
@@ -676,7 +676,7 @@ impl HeadWriter {
         shot: Shot,
     ) -> Option<Address> {
         let op = Op::Publish { doc: h, shot };
-        let meta = write_meta(&op)?.attributed(SYSTEM_TESTIMONY.to_string());
+        let meta = write_meta(&op)?.attributed(SYSTEM_TESTIMONY.to_string(), None);
         let Op::Publish { doc, shot } = op else {
             return None;
         };
@@ -918,6 +918,8 @@ mod tests {
             docs: Vec::new(),
             time,
             key: Some(key.to_string()),
+            signed: None,
+            terms: None,
         };
         let system = |time| recorded(SYSTEM_TESTIMONY, time);
         let session = |time| recorded("bare", time);

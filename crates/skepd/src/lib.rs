@@ -63,13 +63,18 @@
 //! itself are the change feed's: `commits.log` — the wire-v6
 //! commit-metadata sidecar — its four derived sidecars (`feed-index.log`,
 //! `feed-offsets.log`, `feed-masked.log`, `feed-streams.log`; wire v7.8,
-//! PUB-7.19), and, transiently while any of them is compacted, its
-//! `.compact` twin. None persists anything about the WORLD (two daemons
-//! replaying one journal still converge byte-identically): the sidecar is
-//! the daemon's own testimony about when and for whom it committed, the
-//! same standing as the kernel's lock file, and the four beside it are
-//! projections of that testimony and the journal, rebuilt from them on
-//! loss.
+//! PUB-7.19), the attest store `feed-attest.log` (wire v7.11; signed ops),
+//! and, transiently while any of them is compacted, its `.compact` twin.
+//! None persists anything about the WORLD (two daemons replaying one
+//! journal still converge byte-identically): the sidecar is the daemon's
+//! own testimony about when and for whom it committed, the same standing
+//! as the kernel's lock file, and the four beside it are projections of
+//! that testimony and the journal, rebuilt from them on loss. The attest
+//! store is the one exception in class: it mirrors each attested commit's
+//! marker slot — the entry signature the feed serves as `attest` — and
+//! below the journal's reclaim floor, where the checkpoint holds no marker,
+//! it is that signature's only copy at the origin, kept and never compacted
+//! (`write_path/feed/derived.rs` states the class).
 
 #![forbid(unsafe_code)]
 

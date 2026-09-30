@@ -150,8 +150,11 @@ pub(crate) fn credential_refused_reply(
     })
 }
 
-/// [`p_attest`](super::p_attest)'s inverse: the tag back to its token, the blob to hex.
-pub(super) fn j_attest(a: &Attestation) -> Value {
+/// [`p_attest`](super::p_attest)'s inverse: the tag back to its token, the
+/// blob to hex — the request's `attest` member, and (wire v7.11) the change
+/// feed's, rendered from the marker slot the attest store mirrors, so the
+/// two are one spelling.
+pub(crate) fn j_attest(a: &Attestation) -> Value {
     let alg = SigAlgRow::of_tag(a.sig_alg())
         .map_or_else(|| format!("<unknown tag {}>", a.sig_alg()), |row| row.token.to_string());
     obj(vec![("alg", Value::String(alg)), ("sig", Value::String(hex_string(a.sig())))])

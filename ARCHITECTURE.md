@@ -150,6 +150,7 @@ write passes down through them in this order:
 │ 5 WRITE PATH       write_path.rs  (one write at a time) │
 │                    ├── head.rs      the head writer     │
 │                    ├── feed.rs      change feed, indexes│
+│                    │                 the attest store    │
 │                    ├── sidecar.rs   commits.log         │
 │                    └── classify.rs  a commit's documents│
 ├─────────────────────────────────────────────────────────┤
@@ -192,9 +193,10 @@ nothing of it.
    (`write_path/head.rs`, which commits through the write path's own
    door). Beneath it, and reachable only from it:
    - `write_path/feed.rs` — the change feed; `write_path/feed/derived.rs`
-     beneath it keeps the feed's derived index files;
+     beneath it keeps the feed's derived index files and the attest
+     store, the marker slot mirrored per attested commit;
    - `write_path/sidecar.rs` — `commits.log`, the daemon's record of what
-     it committed and for whom;
+     it committed, for whom, and whether the entry was signed;
    - `write_path/classify.rs` — which documents a commit touched, the one
      question the feed asks the world.
 6. **The leaves** — `codec.rs` with `codec/marshal.rs` (the JSON wire
@@ -238,10 +240,16 @@ imports it.
   to `commits.log`.
 - **The daemon writes only its own files.** The journal and checkpoints
   are the kernel's. The daemon's own files are `commits.log` — its
-  testimony about what it committed and for whom — and the feed's derived
-  index files, projections of that testimony and the journal, rebuilt from
-  them on loss. It never writes anything about the world outside the
-  kernel.
+  testimony about what it committed, for whom, and whether the entry was
+  signed — the feed's derived index files, projections of that testimony
+  and the journal, rebuilt from them on loss, and `feed-attest.log`, the
+  attest store: each attested commit's marker slot, mirrored at commit
+  from the value the write path admitted, rebuilt from the journal above
+  the reclaim floor, and the one daemon file that is not a projection —
+  below the floor the checkpoint holds no marker, so its line there is
+  the entry signature's only copy at the origin, kept and never compacted,
+  backed up with the board directory as the kernel's own files are. It
+  never writes anything about the world outside the kernel.
 - **Nothing is overwritten.** Content, links and journal entries are
   append-only. A removal is a new record, not a deletion.
 - **The wire is a contract.** `docs/wire.md` is what clients build

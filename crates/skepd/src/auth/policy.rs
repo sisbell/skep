@@ -25,7 +25,8 @@ mod attestation;
 mod credential;
 mod plain;
 
-pub(crate) use credential::{op_shape_refusal, precheck, DepositSpans};
+pub(crate) use attestation::record_deposit_carries_sig;
+pub(crate) use credential::{op_shape_refusal, precheck, DepositSpans, RecordSig};
 pub(crate) use plain::plain_admission;
 
 use skep_address::{Address, Span};

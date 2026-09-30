@@ -1,20 +1,38 @@
 //! The commit-metadata sidecar (wire v6): `commits.log` in the data dir —
 //! one JSON line per committed write `(position, op kind, affected docs,
-//! unix millis, testimony)`, appended by the write path at ack time and
-//! replayed on reopen. This is daemon-owned TRANSPORT METADATA, never
-//! substrate state (wire.md §The change feed) — exempt from the
-//! no-second-persistence-layer rule for the same reason as the kernel's
-//! journal-lock file: it persists nothing about the WORLD, since two
-//! daemons replaying one journal still converge on byte-identical worlds.
-//! The sidecar is the daemon's testimony about its own service, and it
-//! feeds `GET /changes` and `/health`'s `head_time`.
+//! unix millis, testimony, signedness, the op's own terms)`, appended by the
+//! write path at ack time and replayed on reopen. This is daemon-owned
+//! TRANSPORT METADATA, never substrate state (wire.md §The change feed) —
+//! exempt from the no-second-persistence-layer rule for the same reason as
+//! the kernel's journal-lock file: it persists nothing about the WORLD,
+//! since two daemons replaying one journal still converge on byte-identical
+//! worlds. The sidecar is the daemon's testimony about its own service, and
+//! it feeds `GET /changes` and `/health`'s `head_time`.
 //!
 //! This file is the feed's AUTHORITY file: what a position's entry SAYS —
-//! its op, its docs, its time, its key — is recorded here and nowhere else.
-//! The feed's four DERIVED sidecars (`feed/derived.rs`: the per-document
-//! position index, the offset array, the masked-position bitmap and the
-//! per-owner draft streams; PUB-7.19) are projections of this file and the
-//! journal, rebuilt from them on loss; `feed.rs` composes the five.
+//! its op, its docs, its time, its key, WHETHER and HOW its entry is signed
+//! (`signed`, the daemon's own assertion at commit of why the wire's `key` is
+//! absent: the marker slot filled, or the record's own `sig` — never on the
+//! wire itself), and the op's own terms (a `delegate`'s minted pair, a
+//! `make_link`'s minted link address, a `publish`'s placed count and base
+//! extent — AUTH-6.36, the design record's D25 and r6-2a) — is recorded here
+//! and nowhere else. The feed's four DERIVED sidecars (`feed/derived.rs`:
+//! the per-document position index, the offset array, the masked-position
+//! bitmap and the per-owner draft streams; PUB-7.19) are projections of this
+//! file and the journal, rebuilt from them on loss; the fifth file beside
+//! them, the ATTEST STORE (`feed-attest.log`), mirrors the marker slot's
+//! signature per attested position and is NOT a projection below the
+//! reclaim floor (`feed/derived.rs` states its class); `feed.rs` composes the
+//! six. THE SIGNATURE ITSELF IS NEVER A MEMBER OF THIS FILE: here it would be
+//! a rewritable sidecar assertion of the very class the marker exists to be
+//! told apart from; this file records only that the marker was filled, which
+//! is what lets the feed render a lost store line as `attest: null` (LOST)
+//! rather than absent (a verdict).
+//!
+//! A LINE WRITTEN BEFORE THE SIGNEDNESS AND THE TERMS (no `signed`, no
+//! terms) parses as it did: its row renders `key` as recorded and the op's
+//! terms absent — dev boards regenerate (no-versioning); `attest` is the
+//! store's to answer for such a row, as for every row.
 //!
 //! Crash honesty is the contract:
 //!
@@ -75,10 +93,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 use skep_address::Address;
 use skep_engine::{Engine, HistoryError, World};
-use skep_kernel::Seq;
+use skep_kernel::{Attestation, Seq};
 
 use super::classify::{derived_docs, parse_dotted};
-use crate::codec::{obj, to_bytes};
+use crate::codec::{j_attest, obj, to_bytes};
 use crate::serial::SerialGuard;
 
 /// The sidecar's file name inside the data dir (beside the kernel's own
@@ -99,6 +117,73 @@ pub(super) fn wall_clock_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// THE CARRIER of an entry's signature — what the file's `signed` field
+/// records and the wire never carries: the daemon's own assertion at commit
+/// of WHY the row's `key` is absent (D12; AUTH-6.15: "a signed entry has one
+/// authority for its hand, its own signature, and the daemon asserts no
+/// second beside it"). Two spellings, `"marker"` and `"record"`, and the
+/// absence of the field on every unsigned line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Carrier {
+    /// The entry's marker slot is filled — the value the plain sequence's
+    /// check admitted and handed the kernel, mirrored by the attest store.
+    /// A row recorded so whose slot the store cannot answer renders
+    /// `attest: null`, LOST.
+    Marker,
+    /// The entry's signature is its record's own `sig` member (a credential
+    /// record deposit, D26): at the atom's `insert` the record CARRIES one,
+    /// verified at its `make_link` one position later under the set that
+    /// opens its home (the record grade, 2a) — or refused there, the atom
+    /// then an orphan no link names, the reader's UNDETERMINABLE HERE; at
+    /// the `make_link` the `sig` VERIFIED. Neither row carries `attest`: the
+    /// two carriers are one signature at the record grade.
+    Record,
+}
+
+impl Carrier {
+    /// The file's spelling.
+    fn token(self) -> &'static str {
+        match self {
+            Carrier::Marker => "marker",
+            Carrier::Record => "record",
+        }
+    }
+
+    fn of_token(token: &str) -> Option<Carrier> {
+        match token {
+            "marker" => Some(Carrier::Marker),
+            "record" => Some(Carrier::Record),
+            _ => None,
+        }
+    }
+}
+
+/// THE OP'S OWN TERMS on a row — what a feed-only mirror needs from the row
+/// alone (r6-2a; AUTH-6.36; the design record's D25 and §5.2), recorded at
+/// commit as `docs` is, the daemon's testimony of what it committed. One
+/// variant per op kind that carries any; every other kind carries none, and
+/// its row renders none. A BARE row renders every one of them `null`: its
+/// op is unknown, so which terms it would have carried is unknown too, and
+/// lost testimony is never invented.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum OpTerms {
+    /// `delegate`: the minted account address in the board's local form (the
+    /// `ack_addr` the op answers) and the principal id it seated —
+    /// AUTH-6.36's members by name. `new_id` is a JSON number: it was held to
+    /// 2^53 − 1 at the parse, the wire's exactly-representable range.
+    Delegate { new_prefix: String, new_id: u64 },
+    /// `make_link`: the minted link's address, the `ack_addr` the op answers.
+    /// For a replacing grant this is THE RECORD's address; its `replaces`
+    /// link sits at the next address, read by adjacency.
+    MakeLink { link: String },
+    /// `publish`: D25's two client terms exactly as `doc_metadata` serves
+    /// them for the minted member — the count the client placed, and the
+    /// extent of the base the staged copy took, `None` in the birth shape
+    /// (the absence IS the birth bit). Both decimal strings, `Nat`'s wire
+    /// form.
+    Publish { placed: String, base_extent: Option<String> },
 }
 
 /// One committed position's metadata — and this file's crash-honesty rule
@@ -125,14 +210,29 @@ pub(super) enum CommitMeta {
     /// from the ones its count bound counts. `None` only for a line written
     /// before the feature — served as the reserved null (AUTH-1.52's
     /// lost-metadata meaning), never for a commit this daemon served since.
-    Recorded { op: String, docs: Vec<String>, time: u64, key: Option<String> },
+    /// Recorded on every line, a signed entry's included: the file is the
+    /// daemon's own, and the resume above reads it; what D12 keeps off the
+    /// WIRE is decided at [`CommitMeta::entry`] by `signed`, the carrier of
+    /// the entry's signature where it has one. `terms` are the op's own
+    /// ([`OpTerms`]); `None` on an op that carries none, and on a line
+    /// written before they were recorded.
+    Recorded {
+        op: String,
+        docs: Vec<String>,
+        time: u64,
+        key: Option<String>,
+        signed: Option<Carrier>,
+        terms: Option<OpTerms>,
+    },
 }
 
 impl CommitMeta {
-    /// One `GET /changes` entry: the position and all four fields, a bare
-    /// position's rendering as explicit `null`s — the crash-honesty rule of
-    /// this file, expressed where the rule is stated rather than at the
-    /// handler. `reduced` is the record's own docs REDUCED to the requester's
+    /// One `GET /changes` entry: the position, the four fields, and —
+    /// wire v7.11 — the members a reader needs to judge and to place the
+    /// entry from the feed alone. A bare position renders as explicit
+    /// `null`s, the op's terms included — the crash-honesty rule of this
+    /// file, expressed where the rule is stated rather than at the handler.
+    /// `reduced` is the record's own docs REDUCED to the requester's
     /// readable ones (PUB-6.45), which is what a recorded entry renders —
     /// never `Recorded.docs`, which is the WHOLE list and which rendering
     /// here would hand a requester the home of a draft-homed record they may
@@ -143,23 +243,77 @@ impl CommitMeta {
     /// [`parse_line`] reads absent and null alike, so the shorter line costs
     /// nothing there, while a client reading the wire is owed the field it
     /// asked about.
-    pub fn entry(&self, at: u64, reduced: Vec<String>) -> Value {
-        let (docs, op, time, key) = match self {
-            CommitMeta::Bare => (Value::Null, Value::Null, Value::Null, Value::Null),
-            CommitMeta::Recorded { op, time, key, .. } => (
-                Value::Array(reduced.into_iter().map(Value::String).collect()),
-                Value::String(op.clone()),
-                Value::Number((*time).into()),
-                key.clone().map(Value::String).unwrap_or(Value::Null),
-            ),
+    ///
+    /// THE MEMBERS THAT ARE ABSENT RATHER THAN NULL, and why:
+    ///
+    /// * `key` (D12; AUTH-6.15): PRESENT IFF the entry carries no signature —
+    ///   absent on a row whose `signed` names a carrier, served as recorded on
+    ///   every other row, a bare row's reserved `null` included (lost
+    ///   testimony stays lost; the store's slot is a fact of the journal, not
+    ///   testimony this file can restore).
+    /// * `attest` (the design record §7.3 (i)): the marker slot as the store
+    ///   holds it, `{"alg", "sig"}`, on any row the store answers; `null` —
+    ///   LOST — where the line records the marker filled and the store cannot
+    ///   answer; ABSENT on every other row: an unsigned entry, a record
+    ///   deposit's two rows (the deposit's slot is empty; its signature is
+    ///   the record's own `sig`), the ceremony's rows, the head writer's.
+    ///   Absence on the origin's own feed is A6's verdict, so a store line
+    ///   is served wherever one is held and never dropped.
+    /// * the op's terms ([`OpTerms`]): present on the row of the op that
+    ///   carries them, `null` on a bare row, absent on every other op's.
+    ///
+    /// `attest` is the store's answer for this position, looked up by the
+    /// feed beside the line: the signature is never a member of this file.
+    pub fn entry(&self, at: u64, reduced: Vec<String>, attest: Option<&Attestation>) -> Value {
+        let mut pairs = vec![("at", Value::Number(at.into()))];
+        let carrier = match self {
+            CommitMeta::Bare => {
+                pairs.extend([
+                    ("docs", Value::Null),
+                    ("key", Value::Null),
+                    ("op", Value::Null),
+                    ("time", Value::Null),
+                    ("new_prefix", Value::Null),
+                    ("new_id", Value::Null),
+                    ("link", Value::Null),
+                    ("placed", Value::Null),
+                    ("base_extent", Value::Null),
+                ]);
+                None
+            }
+            CommitMeta::Recorded { op, time, key, signed, terms, .. } => {
+                pairs.push(("docs", Value::Array(reduced.into_iter().map(Value::String).collect())));
+                pairs.push(("op", Value::String(op.clone())));
+                pairs.push(("time", Value::Number((*time).into())));
+                if signed.is_none() {
+                    pairs.push(("key", key.clone().map(Value::String).unwrap_or(Value::Null)));
+                }
+                match terms {
+                    Some(OpTerms::Delegate { new_prefix, new_id }) => {
+                        pairs.push(("new_prefix", Value::String(new_prefix.clone())));
+                        pairs.push(("new_id", Value::Number((*new_id).into())));
+                    }
+                    Some(OpTerms::MakeLink { link }) => {
+                        pairs.push(("link", Value::String(link.clone())));
+                    }
+                    Some(OpTerms::Publish { placed, base_extent }) => {
+                        pairs.push(("placed", Value::String(placed.clone())));
+                        pairs.push((
+                            "base_extent",
+                            base_extent.clone().map(Value::String).unwrap_or(Value::Null),
+                        ));
+                    }
+                    None => {}
+                }
+                *signed
+            }
         };
-        obj(vec![
-            ("at", Value::Number(at.into())),
-            ("docs", docs),
-            ("key", key),
-            ("op", op),
-            ("time", time),
-        ])
+        match (attest, carrier) {
+            (Some(a), _) => pairs.push(("attest", j_attest(a))),
+            (None, Some(Carrier::Marker)) => pairs.push(("attest", Value::Null)),
+            (None, Some(Carrier::Record) | None) => {}
+        }
+        obj(pairs)
     }
 
     /// The recorded wall-clock time, or `None` for a bare position — the one
@@ -483,6 +637,10 @@ impl CommitsLog {
     /// `feed-offsets.log` fails its agreement test and is rewritten whole —
     /// the wrong offsets are latent for the uptime and self-healing after
     /// it.
+    // Seven fields of one line beside the guard, each the write path's own
+    // reading — bundling them would put a struct between the door and the
+    // line it records.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn record(
         &mut self,
         _serial: &SerialGuard<'_>,
@@ -490,6 +648,8 @@ impl CommitsLog {
         op: &'static str,
         docs: Vec<String>,
         testimony: String,
+        signed: Option<Carrier>,
+        terms: Option<OpTerms>,
     ) -> Option<LineOffset> {
         if at <= self.open_head || self.entries.contains_key(&at) {
             return None;
@@ -499,7 +659,14 @@ impl CommitsLog {
         self.last_time = time;
         // The one line where the concept meets the wire field it rides in
         // (`CommitMeta::Recorded.key`, wire.md's `key`).
-        let meta = CommitMeta::Recorded { op: op.to_string(), docs, time, key: Some(testimony) };
+        let meta = CommitMeta::Recorded {
+            op: op.to_string(),
+            docs,
+            time,
+            key: Some(testimony),
+            signed,
+            terms,
+        };
         let offset = LineOffset(self.len);
         // Testimony must not fail the op: the write is committed and the
         // ack is owed regardless; a lost append answers BARE after restart,
@@ -855,6 +1022,16 @@ fn parse_records(bytes: &[u8]) -> (Vec<(usize, Record)>, usize) {
 /// `null`) is a bare one, and a line carrying some of them is not a line
 /// this daemon wrote — so trust ends there exactly as at an unparseable
 /// one, and the reopen walk re-covers the position as bare.
+///
+/// THE ABSENT-VS-NULL DISCIPLINE of the newer fields: `signed` is absent on
+/// an unsigned line and one of its two tokens otherwise (any other value is
+/// torn); the op's terms are read BY THE LINE'S OP — a `delegate` line's
+/// `new_prefix` and `new_id` together (one without the other is torn), a
+/// `make_link` line's `link`, a `publish` line's `placed` with `base_extent`
+/// beside it, `null` there being the birth shape and not an absence — and
+/// absent altogether on a line written before they were recorded, which
+/// reads as an op carrying none. A term on a line of another op is an
+/// unknown key, ignored.
 fn parse_line(line: &[u8]) -> Option<Record> {
     let v: Value = serde_json::from_slice(line).ok()?;
     let m = v.as_object()?;
@@ -873,21 +1050,56 @@ fn parse_line(line: &[u8]) -> Option<Record> {
     };
     let meta = match (field("op"), field("docs"), field("time")) {
         (None, None, None) => CommitMeta::Bare,
-        (Some(op), Some(docs), Some(time)) => CommitMeta::Recorded {
-            op: op.as_str()?.to_string(),
-            docs: docs
-                .as_array()?
-                .iter()
-                .map(|d| d.as_str().map(str::to_string))
-                .collect::<Option<Vec<String>>>()?,
-            time: time.as_u64()?,
-            // Absent on a pre-feature line — the reserved null, never
-            // invented (AUTH-1.52); present-but-not-a-string is torn.
-            key: match field("key") {
-                None => None,
-                Some(k) => Some(k.as_str()?.to_string()),
-            },
-        },
+        (Some(op), Some(docs), Some(time)) => {
+            let op = op.as_str()?.to_string();
+            let terms = match op.as_str() {
+                "delegate" => match (field("new_prefix"), field("new_id")) {
+                    (None, None) => None,
+                    (Some(p), Some(i)) => Some(OpTerms::Delegate {
+                        new_prefix: p.as_str()?.to_string(),
+                        new_id: i.as_u64()?,
+                    }),
+                    _ => return None,
+                },
+                "make_link" => match field("link") {
+                    None => None,
+                    Some(l) => Some(OpTerms::MakeLink { link: l.as_str()?.to_string() }),
+                },
+                "publish" => match field("placed") {
+                    None => None,
+                    Some(p) => Some(OpTerms::Publish {
+                        placed: p.as_str()?.to_string(),
+                        base_extent: match field("base_extent") {
+                            None => None,
+                            Some(e) => Some(e.as_str()?.to_string()),
+                        },
+                    }),
+                },
+                _ => None,
+            };
+            CommitMeta::Recorded {
+                op,
+                docs: docs
+                    .as_array()?
+                    .iter()
+                    .map(|d| d.as_str().map(str::to_string))
+                    .collect::<Option<Vec<String>>>()?,
+                time: time.as_u64()?,
+                // Absent on a pre-feature line — the reserved null, never
+                // invented (AUTH-1.52); present-but-not-a-string is torn.
+                key: match field("key") {
+                    None => None,
+                    Some(k) => Some(k.as_str()?.to_string()),
+                },
+                // Absent on an unsigned line; a token no carrier spells is
+                // torn.
+                signed: match field("signed") {
+                    None => None,
+                    Some(s) => Some(Carrier::of_token(s.as_str()?)?),
+                },
+                terms,
+            }
+        }
         _ => return None,
     };
     Some(Record::Entry(at, meta))
@@ -895,12 +1107,16 @@ fn parse_line(line: &[u8]) -> Option<Record> {
 
 /// `{"at":N}` for a bare position; `{"at":N,"docs":[…],"key":"…","op":"…","time":T}`
 /// for a recorded one, `key` omitted only where the record carries none (a
-/// pre-feature line). Built through the codec's key-sorting device, so a
-/// line is the same bytes whatever backs serde_json's map — which is what
-/// lets `GET /changes` answer byte-identically across a restart.
+/// pre-feature line), `"signed":"marker"|"record"` where the entry carries a
+/// signature, and the op's own terms where it has any (`new_id`,
+/// `new_prefix` on a `delegate`; `link` on a `make_link`; `placed` and
+/// `base_extent` — `null` in the birth shape — on a `publish`). Built through
+/// the codec's key-sorting device, so a line is the same bytes whatever
+/// backs serde_json's map — which is what lets `GET /changes` answer
+/// byte-identically across a restart.
 fn entry_line(at: u64, meta: &CommitMeta) -> Vec<u8> {
     let mut pairs = vec![("at", Value::Number(at.into()))];
-    if let CommitMeta::Recorded { op, docs, time, key } = meta {
+    if let CommitMeta::Recorded { op, docs, time, key, signed, terms } = meta {
         pairs.push(("op", Value::String(op.clone())));
         pairs.push((
             "docs",
@@ -909,6 +1125,26 @@ fn entry_line(at: u64, meta: &CommitMeta) -> Vec<u8> {
         pairs.push(("time", Value::Number((*time).into())));
         if let Some(k) = key {
             pairs.push(("key", Value::String(k.clone())));
+        }
+        if let Some(carrier) = signed {
+            pairs.push(("signed", Value::String(carrier.token().into())));
+        }
+        match terms {
+            Some(OpTerms::Delegate { new_prefix, new_id }) => {
+                pairs.push(("new_prefix", Value::String(new_prefix.clone())));
+                pairs.push(("new_id", Value::Number((*new_id).into())));
+            }
+            Some(OpTerms::MakeLink { link }) => {
+                pairs.push(("link", Value::String(link.clone())));
+            }
+            Some(OpTerms::Publish { placed, base_extent }) => {
+                pairs.push(("placed", Value::String(placed.clone())));
+                pairs.push((
+                    "base_extent",
+                    base_extent.clone().map(Value::String).unwrap_or(Value::Null),
+                ));
+            }
+            None => {}
         }
     }
     line_bytes(obj(pairs))

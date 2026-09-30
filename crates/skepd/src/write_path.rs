@@ -55,9 +55,10 @@ use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex};
 use skep_address::{document_of, Address};
-use skep_engine::{Engine, EngineStores};
+use skep_arrangement::HasM5;
+use skep_engine::{Engine, EngineStores, World};
 use skep_febe::{Op, OpKind, Response, Stores};
-use skep_kernel::Seq;
+use skep_kernel::{Attestation, Seq};
 
 // The change feed behind `GET /changes`: its authority file, and the one
 // question it asks the world.
@@ -75,6 +76,7 @@ use crate::codec::op_name;
 use crate::serial::{Serial, SerialGuard};
 use feed::Feed;
 use self::head::HeadWriter;
+use self::sidecar::OpTerms;
 
 /// The commit stream's wait bound: a subscriber that has heard nothing for
 /// this long is answered [`StreamStep::Keepalive`], which `server.rs` frames
@@ -368,7 +370,7 @@ impl WritePath {
         meta: WriteMeta,
         resp: &Response,
     ) -> Option<Seq> {
-        let WriteMeta { kind, docs, testimony } = meta;
+        let WriteMeta { kind, docs, testimony, signed, new_id } = meta;
         let (at, minted) = match resp {
             Response::Ack { at } => (*at, None),
             Response::AckAddr { addr, at } => (*at, Some(addr)),
@@ -423,42 +425,118 @@ impl WritePath {
             }
         };
         let post = self.stores.kernel().snapshot();
-        self.feed.record(serial, at.0, op_name(kind), docs, testimony, post.world());
+        let terms = op_terms(kind, minted, new_id, post.world());
+        self.feed.record(serial, at.0, op_name(kind), docs, testimony, signed, terms, post.world());
         Some(at)
     }
 }
 
+/// THE OP'S OWN TERMS for the row (wire.md §The change feed; r6-2a,
+/// AUTH-6.36, D25's d25-S1), resolved at record time from the three places
+/// they live: a `delegate`'s pair from the ack's minted account address and
+/// the request's `new_id`; a `make_link`'s minted link address from its
+/// `AckAddr` (the RECORD's address for a replacing grant — the `replaces`
+/// link sits at the next address); a `publish`'s placed count and base
+/// extent from the POST-COMMIT world's shot terms of the minted member —
+/// the very value `doc_metadata` serves for it (M5's `ShotPlace`, folded per
+/// member), so the row and the member read cannot disagree. `None` for
+/// every other kind, whose row renders none.
+///
+/// A `delegate` or `make_link` that answered no `AckAddr`, or a `publish`
+/// whose member the fold holds no terms for, records none — the same
+/// fallback [`WritePath::record`]'s `Minted` arm takes for `docs`, and as
+/// unreachable: each of the three answers `AckAddr`, and M5 journals a
+/// `ShotPlace` for every shot (lanes B+C). Asserted in debug for the same
+/// reason that arm asserts.
+fn op_terms(
+    kind: OpKind,
+    minted: Option<&Address>,
+    new_id: Option<u64>,
+    post: &World,
+) -> Option<OpTerms> {
+    let terms = match kind {
+        OpKind::Delegate => minted.zip(new_id).map(|(prefix, new_id)| OpTerms::Delegate {
+            new_prefix: prefix.to_string(),
+            new_id,
+        }),
+        OpKind::MakeLink => minted.map(|link| OpTerms::MakeLink { link: link.to_string() }),
+        OpKind::Publish => minted.and_then(|member| post.m5().shot_terms(member)).map(|t| {
+            OpTerms::Publish {
+                placed: t.placed.to_string(),
+                base_extent: t.base_extent.as_ref().map(ToString::to_string),
+            }
+        }),
+        _ => return None,
+    };
+    debug_assert!(
+        terms.is_some(),
+        "a {kind:?} answers AckAddr and (a publish) folds its shot terms, so its row's terms resolve"
+    );
+    terms
+}
+
 // ── the read/write partition, and what a write records ───────────────────
 
+/// HOW a write's entry is SIGNED, as the sequence that admitted it knows
+/// (signed ops; D12): the daemon's own assertion, recorded at commit, of
+/// why the row's `key` is absent — and, for the marker, the value itself,
+/// which the attest store appends beside `commits.log` in the same record.
+/// `None` is an unsigned entry, whose row serves `key`. Reaches the feed by
+/// the one door [`FrameMeta::attributed`] guards.
+#[derive(Debug)]
+pub(crate) enum Signed {
+    /// The marker slot is filled with this — the attestation the plain
+    /// sequence's check ADMITTED and handed the kernel
+    /// (`transact_attested`); the store mirrors it, the wire renders it as
+    /// the row's `attest`.
+    Marker(Attestation),
+    /// The entry's signature is its record's own `sig` member (a credential
+    /// record deposit, D26; "the two carriers are one signature at the
+    /// record grade"): at the atom's `insert` the record CARRIES a `sig`,
+    /// verified one position later at its `make_link` under the set that
+    /// opens its home (lane D's `record_grade_check`); at that `make_link`
+    /// the `sig` VERIFIED. Neither row carries `attest`.
+    Record,
+}
+
 /// What the change feed will say about one write as far as the FRAME can
-/// tell: the op kind and the affected documents. Not yet a [`WriteMeta`]:
-/// the AUTH testimony (AUTH-4.48) is the committer's — a session's, or the
-/// head writer's own — which no frame carries, so [`FrameMeta::attributed`]
-/// is the only way to reach a value either of the write path's doors
-/// accepts. A placeholder testimony would be a wrong answer that looks
-/// right — `"bare"` is what a genuine bare-session write records, and the
-/// feed never re-derives an entry it holds.
+/// tell: the op kind, the affected documents, and — for a `delegate` — the
+/// principal it seats. Not yet a [`WriteMeta`]: the AUTH testimony
+/// (AUTH-4.48) is the committer's — a session's, or the head writer's own —
+/// which no frame carries, and the entry's signedness is the admitting
+/// sequence's, so [`FrameMeta::attributed`] is the only way to reach a value
+/// either of the write path's doors accepts. A placeholder testimony would
+/// be a wrong answer that looks right — `"bare"` is what a genuine
+/// bare-session write records, and the feed never re-derives an entry it
+/// holds.
 #[derive(Debug)]
 pub(crate) struct FrameMeta {
     pub kind: OpKind,
     docs: AffectedDocs,
+    /// A `delegate`'s `new_id` — the one term the row takes from the REQUEST
+    /// (its prefix is the ack's); `None` on every other op.
+    new_id: Option<u64>,
 }
 
 impl FrameMeta {
-    /// Attribute this write to its committer: a session's testimony
+    /// Attribute this write to its committer — a session's testimony
     /// ([`crate::auth::session::SessionBinding::testimony`] — the
     /// establishing key's fingerprint, or `"bare"`), or the head writer's own
-    /// ([`head::SYSTEM_TESTIMONY`]), which commits with no session at all.
-    pub fn attributed(self, testimony: String) -> WriteMeta {
-        WriteMeta { kind: self.kind, docs: self.docs, testimony }
+    /// ([`head::SYSTEM_TESTIMONY`]), which commits with no session at all —
+    /// and to its SIGNATURE where it has one ([`Signed`]): the marker the
+    /// plain sequence admitted, or the record's own `sig`; `None` for an
+    /// unsigned entry, the head writer's own included.
+    pub fn attributed(self, testimony: String, signed: Option<Signed>) -> WriteMeta {
+        WriteMeta { kind: self.kind, docs: self.docs, testimony, signed, new_id: self.new_id }
     }
 }
 
 /// What the change feed will say about one write: the op kind, the
-/// affected documents, and the committer's testimony. The
-/// frame-derived stage of a `commits.log` entry — [`sidecar::CommitMeta`]
-/// is the next one, completed at record time with the committed position
-/// and the wall-clock time.
+/// affected documents, the committer's testimony, the entry's signedness
+/// and the one term the request supplies. The frame-derived stage of a
+/// `commits.log` entry — [`sidecar::CommitMeta`] is the next one, completed
+/// at record time with the committed position, the wall-clock time and the
+/// terms the ack and the post-commit world supply.
 ///
 /// Reachable only through [`FrameMeta::attributed`] — a fact of the FIELDS
 /// and not of the call sites: they are private, so `server.rs`, which is
@@ -473,8 +551,13 @@ pub(crate) struct WriteMeta {
     /// the establishing key's fingerprint hex, `"bare"` for a bare bind, or
     /// [`head::SYSTEM_TESTIMONY`] for the published head's own writes —
     /// never an absence, which the wire's `key` field reserves for testimony
-    /// that was LOST.
+    /// that was LOST. Recorded on every line; served on the wire only where
+    /// `signed` is `None` (D12).
     testimony: String,
+    /// The entry's signature, where it has one — see [`Signed`].
+    signed: Option<Signed>,
+    /// A `delegate`'s seated principal, from the request.
+    new_id: Option<u64>,
 }
 
 /// A write's affected document(s) for the feed (wire.md §The change feed):
@@ -537,11 +620,17 @@ enum AffectedDocs {
 /// worlds on the write path even in a debug build — so the pair of inclusions
 /// above is what a test at the wire asserts instead.
 pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
-    let meta = |kind, docs| Some(FrameMeta { kind, docs });
+    let meta = |kind, docs| Some(FrameMeta { kind, docs, new_id: None });
     let one = |a: &Address| AffectedDocs::Named(vec![a.clone()]);
     let answer = match op {
         Op::CreateNewDocument { .. } => meta(OpKind::CreateNewDocument, AffectedDocs::Minted),
-        Op::Delegate { .. } => meta(OpKind::Delegate, AffectedDocs::Named(Vec::new())),
+        // The seated principal rides from the request; the minted prefix is
+        // the ack's (`op_terms`).
+        Op::Delegate { new_id, .. } => Some(FrameMeta {
+            kind: OpKind::Delegate,
+            docs: AffectedDocs::Named(Vec::new()),
+            new_id: Some(new_id.0),
+        }),
         Op::RegisterNode { .. } => meta(OpKind::RegisterNode, AffectedDocs::Named(Vec::new())),
         Op::Fork { .. } => meta(OpKind::Fork, AffectedDocs::Minted),
         Op::Insert { doc, .. } => meta(OpKind::Insert, one(doc)),

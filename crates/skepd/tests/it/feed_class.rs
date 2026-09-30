@@ -28,11 +28,17 @@
 //! next page after a revocation, no restart (PUB-7.23); `under=` equal to
 //! the oracle's filtered walk and EMPTY for a guest at a draft; the
 //! sidecars' recovery (PUB-7.21 — each derived file deleted or torn in
-//! turn, every page byte-equal after reopen; every file deleted at once,
-//! every class's visible positions unchanged, the bare entries classified
-//! from the journal); two daemons over one journal answering byte-equal
-//! pages per class (PUB-8.26); and `/events` unchanged across classes on a
-//! board with masked commits (PUB-8.14, PUB-6.58's H1 row).
+//! turn, the attest store among them, every page byte-equal after reopen;
+//! every file deleted at once, every class's visible positions unchanged,
+//! the bare entries classified from the journal); two daemons over one
+//! journal answering byte-equal pages per class (PUB-8.26); and `/events`
+//! unchanged across classes on a board with masked commits (PUB-8.14,
+//! PUB-6.58's H1 row).
+//!
+//! Since wire v7.11 the oracle's equality is over the WHOLE entry: the
+//! fixture states, per write, the hand its row shows (`key`, or `attest`,
+//! or neither — D12) and the op's own terms, from the request and the ack
+//! it holds, and every rendered entry equals that statement, `time` aside.
 
 use crate::common;
 
@@ -40,14 +46,42 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 use common::*;
-use serde_json::Value;
+use ed25519_dalek::SigningKey;
+use serde_json::{Map, Value};
+use skep_identity::Fingerprint;
 
-/// One write the fixture made, as the `docs` convention states it.
+/// One write the fixture made, as the `docs` convention states it — and the
+/// members beyond `at`/`op`/`docs`/`time` its row carries, as the fixture
+/// knows them from the request and the ack: the hand ([`Hand`]) and the op's
+/// own terms (wire.md §The change feed).
 #[derive(Clone, Debug)]
 struct Entry {
     at: u64,
     op: &'static str,
     docs: Vec<String>,
+    rest: Map<String, Value>,
+}
+
+/// THE HAND a write's row shows, stated by the fixture (D12; AUTH-6.15): a
+/// bare session's `"bare"`; a signed session's fingerprint where the write
+/// carries no signature (an op outside the checked set, or one the check
+/// stands aside for — a declared deposit of a credential kind whose atom is
+/// no record); the request's own `attest` where the marker was filled;
+/// neither where the entry's signature is its record's own `sig` (a
+/// credential record deposit's two rows).
+#[derive(Clone, Copy, Debug)]
+enum Hand {
+    Bare,
+    Key,
+    Attest,
+    Record,
+}
+
+/// The fingerprint hex a signed session's key enrols under — the `key` its
+/// unsigned writes testify.
+fn fingerprint_of_token(token: &str) -> String {
+    let (_, seed) = signer_of(token).expect("a session a seed carrier opened");
+    Fingerprint::of(&public_key_of(&SigningKey::from_bytes(&seed))).to_hex()
 }
 
 /// One reader class: its label, and the token it reads with (`None` = the
@@ -91,7 +125,13 @@ fn next_prefix(port: u16, token: &str, parent: &str) -> String {
 }
 
 /// One write, its ack, and the fixture's entry for it: `docs` as named, or
-/// the minted address off the ack.
+/// the minted address off the ack; the hand as stated; the op's own terms
+/// from the request (a `delegate`'s `new_id`), the ack (the minted prefix,
+/// the minted link) or the member read (a `publish`'s `placed` and
+/// `base_extent`, as `doc_metadata` serves them). The frame is posted as
+/// [`op`] posts it — the suite's `attest` attached where the token names a
+/// signer — but composed here first, so the request's own member is the
+/// fixture's statement of the row's `attest`.
 fn write(
     log: &mut Vec<Entry>,
     port: u16,
@@ -99,12 +139,45 @@ fn write(
     op_name: &'static str,
     frame: &str,
     docs: Option<Vec<String>>,
+    hand: Hand,
 ) -> String {
-    let v = op(port, Some(token), frame);
+    let sent = attach_attest(port, token, frame);
+    let v = op_unattested(port, Some(token), &sent);
     let at = v["at"].as_u64().unwrap_or_else(|| panic!("{op_name} must commit: {v}"));
     let addr = v["addr"].as_str().map(str::to_string).unwrap_or_default();
     let docs = docs.unwrap_or_else(|| vec![addr.clone()]);
-    log.push(Entry { at, op: op_name, docs });
+    let mut rest = Map::new();
+    match hand {
+        Hand::Bare => {
+            rest.insert("key".into(), Value::String("bare".into()));
+        }
+        Hand::Key => {
+            rest.insert("key".into(), Value::String(fingerprint_of_token(token)));
+        }
+        Hand::Attest => {
+            let sent: Value = serde_json::from_str(&sent).expect("the composed frame is JSON");
+            assert!(sent["attest"].is_object(), "the fixture signed this write: {sent}");
+            rest.insert("attest".into(), sent["attest"].clone());
+        }
+        Hand::Record => {}
+    }
+    match op_name {
+        "delegate" => {
+            let f: Value = serde_json::from_str(frame).expect("a JSON frame");
+            rest.insert("new_prefix".into(), Value::String(addr.clone()));
+            rest.insert("new_id".into(), f["new_id"].clone());
+        }
+        "make_link" => {
+            rest.insert("link".into(), Value::String(addr.clone()));
+        }
+        "publish" => {
+            let md = doc_metadata(port, Some(token), &addr);
+            rest.insert("placed".into(), md["placed"].clone());
+            rest.insert("base_extent".into(), md["base_extent"].clone());
+        }
+        _ => {}
+    }
+    log.push(Entry { at, op: op_name, docs, rest });
     addr
 }
 
@@ -117,11 +190,12 @@ fn mint(log: &mut Vec<Entry>, port: u16, token: &str, account: &str) -> String {
         "create_new_document",
         &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#),
         None,
+        Hand::Bare,
     )
 }
 
 /// A one-byte insert at content ordinal 1 of `doc` (a prepend, so every
-/// ordinal is in bounds whatever the draft holds).
+/// ordinal is in bounds whatever the draft holds) from a bare session.
 fn insert(log: &mut Vec<Entry>, port: u16, token: &str, doc: &str, text: &str) {
     write(
         log,
@@ -132,10 +206,13 @@ fn insert(log: &mut Vec<Entry>, port: u16, token: &str, doc: &str, text: &str) {
             r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["{text}"]}}"#
         ),
         Some(vec![doc.to_string()]),
+        Hand::Bare,
     );
 }
 
-/// A ghost-typed link in `home` (address-form slots, no resolution).
+/// A ghost-typed link in `home` (address-form slots, no resolution) from a
+/// SIGNED session into a PUBLISHED home — publish class, the checked set,
+/// so its marker is filled.
 fn ghost_link(log: &mut Vec<Entry>, port: u16, token: &str, home: &str, n: u64) -> String {
     write(
         log,
@@ -146,6 +223,7 @@ fn ghost_link(log: &mut Vec<Entry>, port: u16, token: &str, home: &str, n: u64) 
             r#"{{"op":"make_link","home":"{home}","from":{{"addrs":[]}},"to":{{"addrs":[]}},"ty":{{"addrs":["{home}.0.3.6.{n}"]}}}}"#
         ),
         Some(vec![home.to_string()]),
+        Hand::Attest,
     )
 }
 
@@ -173,6 +251,7 @@ fn grant(
             r#"{{"op":"make_link","home":"{home_doc1}","from":{{"addrs":["{from}"]}},"to":{to},"ty":{{"addrs":["{T_GRANT}"]}}}}"#
         ),
         Some(vec![home_doc1.to_string()]),
+        Hand::Attest,
     )
 }
 
@@ -189,7 +268,8 @@ fn hire_logged(
     key: &ed25519_dalek::SigningKey,
 ) -> String {
     let ordinal = next_content_ordinal(port, Some(claimant_signed), CLAIMANT_DOC1);
-    // The record signed for its deposit (2a), as `common::hire` signs it.
+    // The record signed for its deposit (2a), as `common::hire` signs it —
+    // the two rows' one signature, so neither shows a hand (D12, D26).
     let record =
         signed_atom(port, claimant_signed, CLAIMANT_DOC1, T_ENROLL, &[agent_account], &enroll_atom(&[key]));
     let atom = write(
@@ -201,6 +281,7 @@ fn hire_logged(
             r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{record}}}],"deposit":"{T_ENROLL}"}}"#
         ),
         Some(vec![CLAIMANT_DOC1.to_string()]),
+        Hand::Record,
     );
     write(
         log,
@@ -211,6 +292,7 @@ fn hire_logged(
             r#"{{"op":"make_link","home":"{CLAIMANT_DOC1}","from":{{"addrs":["{atom}"]}},"to":{{"addrs":["{agent_account}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
         ),
         Some(vec![CLAIMANT_DOC1.to_string()]),
+        Hand::Record,
     );
     open_signed_session(port, agent_id, key)
 }
@@ -234,6 +316,7 @@ fn build(port: u16) -> Board {
         "delegate",
         &format!(r#"{{"op":"delegate","new_prefix":"{a_acct}","new_id":1}}"#),
         Some(vec![]),
+        Hand::Bare,
     );
     let a = open_session(port, 1);
     let a_doc1 = mint(&mut log, port, &a, &a_acct);
@@ -254,6 +337,7 @@ fn build(port: u16) -> Board {
         "delegate",
         &format!(r#"{{"op":"delegate","new_prefix":"{a1_acct}","new_id":2}}"#),
         Some(vec![]),
+        Hand::Bare,
     );
     let a1 = open_session(port, 2);
     let _a1_doc1 = mint(&mut log, port, &a1, &a1_acct);
@@ -270,6 +354,7 @@ fn build(port: u16) -> Board {
         "delegate",
         &format!(r#"{{"op":"delegate","new_prefix":"{a11_acct}","new_id":3}}"#),
         Some(vec![]),
+        Hand::Bare,
     );
     let a11 = open_session(port, 3);
     let _a11_doc1 = mint(&mut log, port, &a11, &a11_acct);
@@ -286,6 +371,7 @@ fn build(port: u16) -> Board {
         "delegate",
         &format!(r#"{{"op":"delegate","new_prefix":"{b_acct}","new_id":4}}"#),
         Some(vec![]),
+        Hand::Bare,
     );
     let b = open_session(port, 4);
     let _b_doc1 = mint(&mut log, port, &b, &b_acct);
@@ -302,6 +388,7 @@ fn build(port: u16) -> Board {
         "delegate",
         &format!(r#"{{"op":"delegate","new_prefix":"{c_acct}","new_id":5}}"#),
         Some(vec![]),
+        Hand::Bare,
     );
     let c = open_session(port, 5);
     let _c_doc1 = mint(&mut log, port, &c, &c_acct);
@@ -339,6 +426,7 @@ fn build(port: u16) -> Board {
         "nullify",
         &format!(r#"{{"op":"nullify","home":"{d1}","target":"{l1}"}}"#),
         Some(vec![d1.clone(), a_doc1.clone()]),
+        Hand::Key,
     );
     write(
         &mut log,
@@ -347,6 +435,7 @@ fn build(port: u16) -> Board {
         "nullify",
         &format!(r#"{{"op":"nullify","home":"{a_doc1}","target":"{l2}"}}"#),
         Some(vec![a_doc1.clone()]),
+        Hand::Key,
     );
     write(
         &mut log,
@@ -357,11 +446,14 @@ fn build(port: u16) -> Board {
             r#"{{"op":"edit_link","original":"{l3}","d_s":"{a_doc1}","d_a":"{d1}","successor":{{"from":[],"to":[],"ty":{{"addrs":["{a_doc1}.0.3.6.9"]}}}}}}"#
         ),
         Some(vec![a_doc1.clone(), d1.clone()]),
+        Hand::Key,
     );
 
     // A tail past the straddles: one more draft write, and a declared
     // deposit into A's published doc 1 (visible to all) — prose under a
-    // MEMBER type, ENROLL's (PUB-2.60's residue).
+    // MEMBER type, ENROLL's (PUB-2.60's residue): the check stands aside
+    // for a declared deposit of a credential kind (D26, by type), and the
+    // byte is no record carrying a `sig`, so the row serves the key.
     insert(&mut log, port, &a, &d1, "s");
     let ordinal = next_content_ordinal(port, Some(&a_signed), &a_doc1);
     write(
@@ -373,6 +465,7 @@ fn build(port: u16) -> Board {
             r#"{{"op":"insert","doc":"{a_doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":["z"],"deposit":"{T_ENROLL}"}}"#
         ),
         Some(vec![a_doc1.clone()]),
+        Hand::Key,
     );
 
     assert!(log.windows(2).all(|w| w[0].at < w[1].at), "the log is position-ordered");
@@ -452,7 +545,10 @@ fn under_prefix(prefix: &str, doc: &str) -> bool {
 /// THE ORACLE (PUB-6.59): the position walk over `(since, head]` with
 /// `readable()` per entry and `docs` reduced, masked entries omitted, the
 /// narrowings' predicates applied to the walk, then `limit`/`last`/`more`
-/// over the visible stream. Returns `(entries as (at, op, docs), last, more)`.
+/// over the visible stream. Returns `(entries, last, more)`, each entry the
+/// WHOLE object the page is owed — `at`, `docs` reduced, `op`, and the
+/// members the fixture stated for the write (its hand, its terms) —
+/// everything but `time`, the one field a live daemon cannot reproduce.
 fn expected(
     log: &[Entry],
     drafts: &BTreeSet<String>,
@@ -460,7 +556,7 @@ fn expected(
     since: u64,
     limit: usize,
     n: Narrowing<'_>,
-) -> (Vec<(u64, String, Vec<String>)>, u64, bool) {
+) -> (Vec<Value>, u64, bool) {
     let mut visible = Vec::new();
     for e in log.iter().filter(|e| e.at > since) {
         let reduced: Vec<String> = e.docs.iter().filter(|d| readable.ask(d)).cloned().collect();
@@ -475,11 +571,18 @@ fn expected(
         if n.drafts && !reduced.iter().any(|d| drafts.contains(d)) {
             continue;
         }
-        visible.push((e.at, e.op.to_string(), reduced));
+        let mut entry = Map::new();
+        entry.insert("at".into(), Value::Number(e.at.into()));
+        entry.insert("docs".into(), Value::Array(reduced.into_iter().map(Value::String).collect()));
+        entry.insert("op".into(), Value::String(e.op.into()));
+        for (k, v) in &e.rest {
+            entry.insert(k.clone(), v.clone());
+        }
+        visible.push(Value::Object(entry));
     }
     let more = visible.len() > limit;
     visible.truncate(limit);
-    let last = visible.last().map(|v| v.0).unwrap_or(since);
+    let last = visible.last().map(at_of).unwrap_or(since);
     (visible, last, more)
 }
 
@@ -494,8 +597,10 @@ fn query(since: u64, limit: usize, n: Narrowing<'_>) -> String {
     q
 }
 
-/// The live page, parsed to the oracle's shape.
-fn actual(port: u16, token: Option<&str>, q: &str) -> (Vec<(u64, String, Vec<String>)>, u64, bool, Vec<u8>) {
+/// The live page, parsed to the oracle's shape: every entry WHOLE, `time`
+/// removed — every other member is compared, the hand and the terms among
+/// them.
+fn actual(port: u16, token: Option<&str>, q: &str) -> (Vec<Value>, u64, bool, Vec<u8>) {
     let (st, body) = http(port, "GET", &format!("/changes?{q}"), token, b"");
     assert_eq!(st, 200, "/changes?{q}: {}", String::from_utf8_lossy(&body));
     let v = json(&body);
@@ -504,11 +609,9 @@ fn actual(port: u16, token: Option<&str>, q: &str) -> (Vec<(u64, String, Vec<Str
         .expect("changes")
         .iter()
         .map(|e| {
-            let docs = e["docs"]
-                .as_array()
-                .map(|a| a.iter().map(|d| d.as_str().expect("doc").to_string()).collect())
-                .unwrap_or_default();
-            (e["at"].as_u64().expect("at"), e["op"].as_str().unwrap_or("").to_string(), docs)
+            let mut e = e.clone();
+            e.as_object_mut().expect("entry").remove("time");
+            e
         })
         .collect();
     (entries, v["last"].as_u64().expect("last"), v["more"].as_bool().expect("more"), body)
@@ -564,9 +667,28 @@ fn narrowings(board: &Board) -> Vec<Narrowing<'_>> {
     ]
 }
 
-/// The fixture's every entry, so a walk's claims are visible in a failure.
-fn ats(entries: &[(u64, String, Vec<String>)]) -> Vec<u64> {
-    entries.iter().map(|e| e.0).collect()
+/// The positions of a page's entries, so a walk's claims are visible in a
+/// failure.
+fn ats(entries: &[Value]) -> Vec<u64> {
+    entries.iter().map(at_of).collect()
+}
+
+fn at_of(e: &Value) -> u64 {
+    e["at"].as_u64().expect("at")
+}
+
+/// An entry's `docs`, empty where null.
+fn docs_of(e: &Value) -> Vec<String> {
+    e["docs"]
+        .as_array()
+        .map(|a| a.iter().map(|d| d.as_str().expect("doc").to_string()).collect())
+        .unwrap_or_default()
+}
+
+/// An entry's `(at, op, docs)` — the shape the cells that state a page by
+/// hand compare on.
+fn shape(e: &Value) -> (u64, String, Vec<String>) {
+    (at_of(e), e["op"].as_str().unwrap_or("").to_string(), docs_of(e))
 }
 
 /// §7 items 1–5: the oracle over five classes, the guest's paging over a
@@ -616,8 +738,8 @@ fn every_page_of_every_class_is_the_oracle_s_walk() {
     let run_start = board.log.iter().find(|e| e.op == "insert" && e.docs == [board.d1.clone()]).expect("the D1 run").at;
     let (page, last, more, _) = actual(port, None, &query(run_start - 1, 2, Narrowing { under: None, drafts: false }));
     assert_eq!(page.len(), 2, "a guest page of two over the masked run holds two visible entries: {:?}", ats(&page));
-    assert!(page.iter().all(|e| e.0 > run_start), "…each past the run's start");
-    assert_eq!(last, page[1].0, "and `last` is the second visible position");
+    assert!(page.iter().all(|e| at_of(e) > run_start), "…each past the run's start");
+    assert_eq!(last, at_of(&page[1]), "and `last` is the second visible position");
     assert!(more, "with more visible entries past it");
 
     // ── 3. PUB-6.46: the straddles as the guest sees them — three
@@ -628,7 +750,7 @@ fn every_page_of_every_class_is_the_oracle_s_walk() {
     assert_eq!((board.log[i + 1].op, board.log[i + 2].op), ("nullify", "edit_link"));
     let (page, ..) = actual(port, None, &query(n1 - 1, 3, Narrowing { under: None, drafts: false }));
     assert_eq!(
-        page,
+        page.iter().map(shape).collect::<Vec<_>>(),
         vec![
             (n1, "nullify".to_string(), vec![board.a_doc1.clone()]),
             (n2, "nullify".to_string(), vec![board.a_doc1.clone()]),
@@ -638,7 +760,7 @@ fn every_page_of_every_class_is_the_oracle_s_walk() {
     );
     // …and as the owner: whole.
     let (page, ..) = actual(port, Some(&board.a), &query(n1 - 1, 1, Narrowing { under: None, drafts: false }));
-    assert_eq!(page[0].2, vec![board.d1.clone(), board.a_doc1.clone()], "the owner sees [D, T], home first");
+    assert_eq!(docs_of(&page[0]), vec![board.d1.clone(), board.a_doc1.clone()], "the owner sees [D, T], home first");
 
     // ── 5. `under=`: a guest's page under a draft is EMPTY; B's drafts-only
     //    page under D1 is the oracle's walk over D1 — its run, AND the two
@@ -661,12 +783,12 @@ fn every_page_of_every_class_is_the_oracle_s_walk() {
             "B's drafts-only page under D1 is the oracle's walk"
         );
         assert!(
-            !page.is_empty() && page.iter().all(|e| e.2.contains(&board.d1)),
+            !page.is_empty() && page.iter().all(|e| docs_of(e).contains(&board.d1)),
             "…every entry of it names D1: {page:?}"
         );
         assert!(
-            page.iter().any(|e| e.2 == [board.d1.clone(), board.a_doc1.clone()])
-                && page.iter().any(|e| e.2 == [board.a_doc1.clone(), board.d1.clone()]),
+            page.iter().any(|e| docs_of(e) == [board.d1.clone(), board.a_doc1.clone()])
+                && page.iter().any(|e| docs_of(e) == [board.a_doc1.clone(), board.d1.clone()]),
             "…the two straddles among them, each naming D1 beside A's public doc 1 in the record's own order: {page:?}"
         );
     }
@@ -753,6 +875,17 @@ fn pages_per_class(port: u16, since0: u64, prefixes: &[&str]) -> Vec<(String, Ve
 
 const DERIVED_FILES: [&str; 4] = ["feed-index.log", "feed-offsets.log", "feed-masked.log", "feed-streams.log"];
 
+/// The attest store — the fifth file in the four's shape, rebuilt from the
+/// journal's markers above the reclaim floor as the four are from
+/// `commits.log` and the journal (its class below the floor is
+/// `changes.rs`'s to pin).
+const ATTEST_STORE: &str = "feed-attest.log";
+
+/// The four derived files and the attest store.
+fn feed_files() -> Vec<&'static str> {
+    DERIVED_FILES.iter().copied().chain([ATTEST_STORE]).collect()
+}
+
 fn copy_dir(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).expect("case dir");
     for e in std::fs::read_dir(src).expect("fixture dir lists") {
@@ -764,10 +897,11 @@ fn copy_dir(src: &Path, dst: &Path) {
 }
 
 /// §7 items 6 and 7: the sidecars' recovery — each derived file deleted,
-/// then torn, then all four deleted, then every feed file deleted; every
+/// then torn, then all five deleted, then every feed file deleted; every
 /// page of every class byte-equal (or, with the testimony gone, the same
-/// visible POSITIONS per class, classified from the journal) — and two
-/// daemons over one journal answering byte-equal pages per class.
+/// visible POSITIONS per class, classified from the journal, each signed
+/// row's `attest` still served off the store rebuilt from the journal) —
+/// and two daemons over one journal answering byte-equal pages per class.
 #[test]
 fn the_sidecars_recover_and_two_daemons_agree_per_class() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -778,7 +912,7 @@ fn the_sidecars_recover_and_two_daemons_agree_per_class() {
         let prefixes = vec![board.a_acct.clone(), board.d1.clone(), board.a1_acct.clone()];
         let ps: Vec<&str> = prefixes.iter().map(String::as_str).collect();
         let before = pages_per_class(port, board.since0, &ps);
-        for f in DERIVED_FILES {
+        for f in feed_files() {
             assert!(dir.path().join(f).exists(), "{f} is written beside commits.log");
         }
         sd.shutdown();
@@ -802,8 +936,9 @@ fn the_sidecars_recover_and_two_daemons_agree_per_class() {
         judge(sd.port(), "clean reopen");
         sd.shutdown();
     }
-    // Each derived file deleted in turn — rebuilt whole (PUB-7.21).
-    for f in DERIVED_FILES {
+    // Each derived file deleted in turn — rebuilt whole (PUB-7.21); the
+    // attest store from the journal's markers.
+    for f in feed_files() {
         std::fs::remove_file(dir.path().join(f)).expect("delete");
         let sd = spawn(dir.path());
         judge(sd.port(), &format!("{f} deleted"));
@@ -811,7 +946,7 @@ fn the_sidecars_recover_and_two_daemons_agree_per_class() {
         sd.shutdown();
     }
     // Each derived file's tail torn — re-derived at O(tail).
-    for f in DERIVED_FILES {
+    for f in feed_files() {
         let path = dir.path().join(f);
         let len = std::fs::metadata(&path).expect("metadata").len();
         let fh = std::fs::OpenOptions::new().write(true).open(&path).expect("open");
@@ -821,13 +956,13 @@ fn the_sidecars_recover_and_two_daemons_agree_per_class() {
         judge(sd.port(), &format!("{f} torn"));
         sd.shutdown();
     }
-    // All four at once.
-    for f in DERIVED_FILES {
+    // All five at once.
+    for f in feed_files() {
         std::fs::remove_file(dir.path().join(f)).expect("delete");
     }
     {
         let sd = spawn(dir.path());
-        judge(sd.port(), "all four derived files deleted");
+        judge(sd.port(), "all five feed files deleted");
         sd.shutdown();
     }
     // Two daemons over one journal (PUB-8.26): a copy of the whole data
@@ -848,13 +983,17 @@ fn the_sidecars_recover_and_two_daemons_agree_per_class() {
     // the journal (no read enumerates them), so such an entry classifies
     // empty and is placed under no prefix — the silent incompleteness of
     // lost testimony (PUB-7.21), never a wrong answer. Drafts and link homes
-    // ARE derived, so the drafts-only forms compare exactly.
-    for f in DERIVED_FILES.iter().chain(["commits.log"].iter()) {
+    // ARE derived, so the drafts-only forms compare exactly. The attest
+    // store is rebuilt from the journal's markers, so a signed row's
+    // `attest` is served on its bare entry — the slot is the journal's own
+    // fact — where every other member reads null.
+    for f in feed_files().iter().chain(["commits.log"].iter()) {
         std::fs::remove_file(dir.path().join(f)).expect("delete");
     }
     {
         let sd = spawn(dir.path());
         let after = pages_per_class(sd.port(), since0, &ps);
+        let mut attested_rows = 0;
         for ((label, want), (_, got)) in before.iter().zip(after.iter()) {
             if label.contains("under=") && !label.contains("drafts=true") {
                 continue;
@@ -866,7 +1005,7 @@ fn the_sidecars_recover_and_two_daemons_agree_per_class() {
             };
             assert_eq!(positions(&got), positions(&want), "{label}: the visible positions, bare");
             assert_eq!((got["last"].as_u64(), got["more"].as_bool()), (want["last"].as_u64(), want["more"].as_bool()), "{label}: last/more");
-            for e in got["changes"].as_array().expect("changes") {
+            for (e, w) in got["changes"].as_array().expect("changes").iter().zip(want["changes"].as_array().expect("changes")) {
                 assert!(
                     e["op"].is_null()
                         && e["docs"].is_null()
@@ -876,8 +1015,17 @@ fn the_sidecars_recover_and_two_daemons_agree_per_class() {
                      included — the null is reserved for LOST testimony, where \
                      `\"bare\"` would claim this write was unsigned: {e}"
                 );
+                assert_eq!(
+                    e.get("attest"),
+                    w.get("attest"),
+                    "{label}: the slot rides the bare row exactly as the recorded row served it, rebuilt from the journal: {e}"
+                );
+                if e.get("attest").is_some() {
+                    attested_rows += 1;
+                }
             }
         }
+        assert!(attested_rows > 0, "the fixture's signed writes serve their slots on bare rows");
         sd.shutdown();
     }
 }

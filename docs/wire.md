@@ -3010,23 +3010,72 @@ Each entry:
   publish shot and head-float) — a client refreshing the head re-reads
   the bare address, which floats. The list you see is REDUCED to the
   documents you may read (below).
-* `key` — the write's AUTH testimony: the 64-hex fingerprint of the
-  enrolled key whose signed session committed it; `"bare"` for a
-  bare-session write; `"system"` for a write the board's own daemon makes
-  in-process with no session, as the system account's principal — the
-  published head document `H` and its staging draft, and no other write
-  (§The other endpoints, PUB-6.65); `null` ONLY for lost metadata (a bare
-  entry, or a record written before testimony existed) — never for a bare
-  write, and never invented. Forward rule, pinned now: on a feed served by a daemon
-  that did not itself commit the entry (a future mirror), the field is
-  ABSENT rather than null — a consumer written to the three values must
-  not treat absence as a protocol violation.
+* `key` — the write's AUTH testimony (AUTH-6.15), PRESENT IFF THE ENTRY IS
+  UNSIGNED, with four values: the 64-hex fingerprint of the enrolled key
+  whose signed session committed it; `"bare"` for a bare-session write;
+  `"system"` for a write the board's own daemon makes in-process with no
+  session, as the system account's principal — the published head
+  document `H` and its staging draft, and no other write (§The other
+  endpoints, PUB-6.65); `null` ONLY for lost metadata (a bare entry, or a
+  record written before testimony existed) — never for a bare write, and
+  never invented. ABSENT, never null, on a row whose entry carries a
+  signature — in its marker slot (the row then carries `attest`, below) or
+  in its record's own `sig` member (a credential record deposit's two rows,
+  the atom's `insert` and the `make_link` naming it; §The claim ceremony
+  and credentials) — on every feed, the origin's own included: a signed
+  entry has one authority for its hand, its own signature, and the daemon
+  asserts no second beside it. Served on every other row — draft writes,
+  `delegate`, `register_node`, the claim ceremony's own rows and the
+  published head document's. Forward rule, pinned now: on a feed served by
+  a daemon that did not itself commit the entry (a future mirror), the
+  field is ABSENT on unsigned rows too — a consumer written to the four
+  values must not treat absence as a protocol violation (AUTH-6.16).
 * `time` — the commit's wall-clock unix milliseconds, or `null` (below).
+* `attest` — the entry's signature as its commit marker holds it (signed
+  ops): `{"alg": <an ALGS token>, "sig": <hex>}`, byte-equal to the `attest`
+  the request presented (§Operations) — `alg` the token the request took,
+  `sig` the blob as hex — on a row whose entry's marker slot is filled;
+  `null` ONLY where the daemon recorded the marker filled and its store of
+  slots (`feed-attest.log`, below) cannot answer — LOST, which a reader
+  renders undeterminable and never as unsigned; ABSENT on every other row:
+  an unsigned entry, a credential record deposit's two rows (the deposit's
+  slot is empty; its signature is the record's own `sig`, fetched with the
+  atom), the ceremony's rows, the head writer's `system` rows. On the
+  origin's own feed an absent `attest` above the claim is a verdict — the
+  entry is unsigned — so a party re-serving this feed carries the member
+  as it received it and never drops it. On a bare entry the member is
+  served wherever the store holds the slot: the slot is the journal's own
+  fact, and the null testimony beside it stays lost.
+* `new_prefix`, `new_id` — on a `delegate` row (AUTH-6.36): the minted
+  account address in the board's local form — the `ack_addr` the op
+  answered — and the principal id it seated, a JSON number in the wire's
+  exactly-representable range (at most 2^53 − 1, held at the parse). A
+  feed-only mirror builds the board's principal list Π from these rows
+  alone, never from the node registry; `effective_owner` (§Operations)
+  stays the board's own authority for ω. `null` (both) on a bare row;
+  absent on every other op's row.
+* `link` — on a `make_link` row: the minted link's address, the `ack_addr`
+  the op answered. For a replacing grant (§Links (writes), `replaces`) this
+  is the RECORD's address; its `replaces` link sits at the next address in
+  the same home, read by adjacency. The claim link's row therefore names
+  the claim link's address, which is how a reader maps the link
+  `find_links` answers to its commit position. `null` on a bare row; absent
+  on every other op's row.
+* `placed`, `base_extent` — on a `publish` row: the shot's two client terms
+  exactly as `doc_metadata` serves them for the minted member (§Operations)
+  — `placed` the count of positions the client placed (the sum of the
+  shot's runs' widths, the count its signed body leads with), a decimal
+  string; `base_extent` the extent of the base the staged copy took, a
+  decimal string, or `null` in the birth shape (the shot carried no `base`;
+  the absence is the birth bit). The base itself is derived from the
+  member's own address, so these two are what a verifier composing the
+  entry frame from the feed alone still needs. `null` (both) on a bare row;
+  absent on every other op's row.
 
 A client MUST ignore an entry member it does not know, and a member of
-the page object likewise: an entry gains members by later deltas (the
-reserved `new_prefix`/`new_id`, below), and a consumer written to today's
-five must not treat a sixth as a protocol violation.
+the page object likewise: an entry gains members by later deltas (the six
+above joined the original five under this rule), and a consumer written to
+today's eleven must not treat a twelfth as a protocol violation.
 
 Only writes appear: reads are not in the journal and never enter the feed.
 Rejected operations committed nothing and never appear. An idempotent
@@ -3130,24 +3179,26 @@ publish into `H` at 20 — the publish a public entry with `key: "system"`,
 the two before it writes into the system account's private draft, masked
 at every class but the system's. The flow behind the examples then runs
 on that base, from bare sessions (CLAIMED-PERMISSIVE, so every `key`
-reads `"bare"`): `delegate` commits at position 22, the home mint at 23,
-a second — private — document at 24 (the account's doc 1 is born
-published, where bare writes are gated by design, so the flow's content
-goes to a draft document), a two-byte `insert` at 29, `make_link` at 32.
-The feed past the ceremony and its head, `GET /changes?since=20`, read AS
+reads `"bare"`, and no entry is signed, so no row carries `attest`):
+`delegate` commits at position 22 — its row carrying the minted pair —,
+the home mint at 23, a second — private — document at 24 (the account's
+doc 1 is born published, where bare writes are gated by design, so the
+flow's content goes to a draft document), a two-byte `insert` at 29,
+`make_link` at 32 — its row carrying the minted link's address. The feed
+past the ceremony and its head, `GET /changes?since=20`, read AS
 PRINCIPAL 1 — the owner of the private document, whose class sees every
 one of these:
 
 <!-- wire: changes feed -->
 ```json
-{"changes":[{"at":22,"docs":[],"key":"bare","op":"delegate","time":1786838400000},{"at":23,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":24,"docs":["1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":29,"docs":["1.0.2.0.2"],"key":"bare","op":"insert","time":1786838400033},{"at":32,"docs":["1.0.2.0.2"],"key":"bare","op":"make_link","time":1786838400047}],"last":32,"more":false}
+{"changes":[{"at":22,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":23,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":24,"docs":["1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":29,"docs":["1.0.2.0.2"],"key":"bare","op":"insert","time":1786838400033},{"at":32,"docs":["1.0.2.0.2"],"key":"bare","link":"1.0.2.0.2.0.2.1","op":"make_link","time":1786838400047}],"last":32,"more":false}
 ```
 
 The first page of the same feed, `GET /changes?since=20&limit=2`:
 
 <!-- wire: changes feed_page -->
 ```json
-{"changes":[{"at":22,"docs":[],"key":"bare","op":"delegate","time":1786838400000},{"at":23,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":23,"more":true}
+{"changes":[{"at":22,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":23,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":23,"more":true}
 ```
 
 The same feed read as the GUEST (no token): the private document's
@@ -3156,31 +3207,34 @@ position and `more` false, since nothing visible remains:
 
 <!-- wire: changes feed_guest -->
 ```json
-{"changes":[{"at":22,"docs":[],"key":"bare","op":"delegate","time":1786838400000},{"at":23,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":23,"more":false}
+{"changes":[{"at":22,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":23,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":23,"more":false}
+```
+
+A SIGNED entry's row, for contrast — a grant link deposited into the
+claimant's published doc 1 from a signed session on a claimed board, its
+`attest` the request's own, byte for byte, and no `key` (illustrative:
+the blob is 6,746 hex characters under `mldsa65-ed25519`, elided here,
+and the position and time are a board's own; the change-feed suite
+asserts the row's members against live daemon bytes):
+
+```json
+{"at":21,"attest":{"alg":"mldsa65-ed25519","sig":"<6746 hex>"},"docs":["1.0.1.0.1"],"link":"1.0.1.0.1.0.2.3","op":"make_link","time":1786838400052}
 ```
 
 **Bare entries.** A position whose metadata the daemon never observed — a
 data dir written before this feature existed, or a record lost to a crash
 — still appears, reconstructed from the journal itself, with every
-metadata field `null` (and masked at your class from what the journal
-shows it touched). A pre-feature data dir holding three writes (a
-delegate at 2, a mint at 3, an insert at 8 — written by the engine
-directly, before any daemon; all in the published world, so every class
-sees them), byte-exact:
+metadata field `null` — the op's own terms included, its op being unknown
+— (and masked at your class from what the journal shows it touched); its
+`attest` is served where the store still holds the slot, and is otherwise
+absent. A pre-feature data dir holding three writes (a delegate at 2, a
+mint at 3, an insert at 8 — written by the engine directly, before any
+daemon; all in the published world, so every class sees them), byte-exact:
 
 <!-- wire: changes bare -->
 ```json
-{"changes":[{"at":2,"docs":null,"key":null,"op":null,"time":null},{"at":3,"docs":null,"key":null,"op":null,"time":null},{"at":8,"docs":null,"key":null,"op":null,"time":null}],"last":8,"more":false}
+{"changes":[{"at":2,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null},{"at":3,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null},{"at":8,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null}],"last":8,"more":false}
 ```
-
-Routed, not yet in the protocol: `delegate` entries carrying the minted
-`new_prefix` and `new_id` (equivalently serving, a
-principal-enumeration read as of a position). Today a `delegate` entry
-carries `docs: []` and names neither; the board-side read that ties a
-new account to its principal id is `effective_owner` (§Operations), so
-what still waits on the feed item is ATTRIBUTION alone — WHICH KEY wrote
-a given `delegate` (AUTH-5.73 as AUTH RES-197 re-cut it; AUTH-6.36).
-Reserved as a later delta.
 
 **Retention.** The feed's memory is the daemon's `commits.log` sidecar
 plus what the journal can still reconstruct. When `since` reaches below
@@ -3201,7 +3255,18 @@ sidecars in the data dir — `feed-index.log` (document → positions),
 commit outside the journal transaction, tail-checked against the head at
 open and rebuilt from `commits.log` and the journal on loss. They persist
 nothing about the world and decide nothing about what you may see: an
-entry's class is the read predicate's, re-applied per rendered entry.
+entry's class is the read predicate's, re-applied per rendered entry. A
+fifth file in their shape has a class of its own: `feed-attest.log`, THE
+ATTEST STORE (position → the marker slot's `alg` tag and `sig` hex, one
+line per attested commit), appended at commit from the very value the
+write-path check admitted and rebuilt from the journal's markers above
+the reclaim floor. Below the floor — where `commits.log` and the four
+drop their entries at open (Retention, above) — it KEEPS its lines: the
+checkpoint holds no marker, so a line there is an entry signature's only
+copy at the origin, primary state and not a projection, backed up with
+the board directory as `blobs/` is; a line lost there is served as
+`attest: null`. `commits.log` records only THAT an entry was signed and
+by which carrier, never the signature itself.
 
 **Residues, named** (PUB-6.52): `/events` and `/health`'s `head_time`
 move on masked commits too — board-wide draft-write cardinality and
@@ -3238,9 +3303,9 @@ lock, so either may straddle one in-flight commit against the pair — a
 the other — and every such reading corrects itself on the next probe.
 The forward rule the change feed states for its own members (§The change
 feed: "a client MUST ignore an entry member it does not know … a consumer
-written to today's five must not treat a sixth as a protocol violation")
-holds here too: a consumer written to these five members must not
-treat a sixth as a violation. A claimed board configured with one
+written to today's members must not treat a later one as a protocol
+violation") holds here too: a consumer written to these five members must
+not treat a sixth as a violation. A claimed board configured with one
 origin answers, illustratively:
 
 ```json

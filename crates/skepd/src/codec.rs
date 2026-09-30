@@ -67,8 +67,8 @@ use skep_links::{Endset, View, MAX_SLOT_SPANS};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{RegionSpec, Spec};
 
-use marshal::{j_attest, j_response, req_pairs};
-pub(crate) use marshal::{credential_refused_reply, key_set_reply, op_name};
+use marshal::{j_response, req_pairs};
+pub(crate) use marshal::{credential_refused_reply, j_attest, key_set_reply, op_name};
 
 /// The most elements one wire array may carry, applied at [`p_list`] — so
 /// every attacker-sized list on the request surface (span regions, spec and
@@ -1230,6 +1230,22 @@ pub(crate) fn parse_lower_hex<const N: usize>(s: &str) -> Option<[u8; N]> {
         raw[i] = (hex_nibble(chunk[0])? << 4) | hex_nibble(chunk[1])?;
     }
     Some(raw)
+}
+
+/// Any whole number of bytes of LOWERCASE hex, or `None` —
+/// [`parse_lower_hex`]'s variable-width twin under the same case policy:
+/// the parse of the attest store's `sig` (`feed-attest.log`), which this
+/// crate reads back only as [`hex_string`] wrote it. An odd length is
+/// refused ahead of the pairing, so no trailing half-byte is dropped in
+/// silence.
+pub(crate) fn parse_lower_hex_bytes(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    s.as_bytes()
+        .chunks_exact(2)
+        .map(|pair| Some((hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?))
+        .collect()
 }
 
 /// Lowercase hex — the encoding behind `{"hex"}`, `{"atom_hex"}`, and the

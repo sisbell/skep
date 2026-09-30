@@ -1,28 +1,30 @@
 use super::*;
 
+/// A recorded line as every unsigned, termless write records one.
+fn recorded(op: &str, docs: &[&str], time: u64, key: Option<&str>) -> CommitMeta {
+    CommitMeta::Recorded {
+        op: op.into(),
+        docs: docs.iter().map(|d| d.to_string()).collect(),
+        time,
+        key: key.map(str::to_string),
+        signed: None,
+        terms: None,
+    }
+}
+
 /// A line's bytes are fixed, key order included — the determinism
 /// `/changes` inherits — and every line round-trips through the reader
 /// that will replay it, each at the offset the replay reports.
 #[test]
 fn lines_are_key_sorted_and_replay_as_written() {
-    let meta = CommitMeta::Recorded {
-        op: "insert".into(),
-        docs: vec!["1.0.1.0.1".into()],
-        time: 1_700_000_000_000,
-        key: Some("bare".into()),
-    };
+    let meta = recorded("insert", &["1.0.1.0.1"], 1_700_000_000_000, Some("bare"));
     assert_eq!(
         entry_line(8, &meta),
         b"{\"at\":8,\"docs\":[\"1.0.1.0.1\"],\"key\":\"bare\",\"op\":\"insert\",\"time\":1700000000000}\n"
     );
     // A pre-feature recorded line carries no `key` field at all —
     // omitted in the file, replayed as `None` below.
-    let pre_feature = CommitMeta::Recorded {
-        op: "insert".into(),
-        docs: vec!["1.0.1.0.1".into()],
-        time: 1_700_000_000_001,
-        key: None,
-    };
+    let pre_feature = recorded("insert", &["1.0.1.0.1"], 1_700_000_000_001, None);
     assert_eq!(
         entry_line(9, &pre_feature),
         b"{\"at\":9,\"docs\":[\"1.0.1.0.1\"],\"op\":\"insert\",\"time\":1700000000001}\n"
@@ -40,10 +42,11 @@ fn lines_are_key_sorted_and_replay_as_written() {
     assert_eq!(valid_end, file.len(), "every whole line is trusted");
     assert_eq!(records.len(), 4);
     match &records[0] {
-        (0, Record::Entry(at, CommitMeta::Recorded { op, docs, time, key })) => {
+        (0, Record::Entry(at, CommitMeta::Recorded { op, docs, time, key, signed, terms })) => {
             assert_eq!((*at, op.as_str(), *time), (8, "insert", 1_700_000_000_000));
             assert_eq!(docs.as_slice(), ["1.0.1.0.1".to_string()]);
             assert_eq!(key.as_deref(), Some("bare"), "testimony replays as written");
+            assert_eq!((*signed, terms), (None, &None), "unsigned, and an op carrying no terms");
         }
         other => panic!("first line is a recorded entry at offset 0: {other:?}"),
     }
@@ -61,6 +64,144 @@ fn lines_are_key_sorted_and_replay_as_written() {
         matches!(records[3], (_, Record::MinSince(2048))),
         "fourth line names the smallest admissible since: {:?}",
         records[3]
+    );
+}
+
+/// The signedness and the op's own terms ride the line beside the five,
+/// key-sorted, and replay as written: `signed` one of its two tokens, a
+/// `delegate`'s pair, a `make_link`'s link, a `publish`'s count with its
+/// extent or the birth shape's `null`. A `null` extent is the birth bit and
+/// not an absence — it replays as `None` under a present `placed`.
+#[test]
+fn the_signedness_and_the_terms_replay_as_written() {
+    let marker = CommitMeta::Recorded {
+        op: "make_link".into(),
+        docs: vec!["1.0.1.0.1".into()],
+        time: 1_700_000_000_000,
+        key: Some("ab".repeat(32)),
+        signed: Some(Carrier::Marker),
+        terms: Some(OpTerms::MakeLink { link: "1.0.1.0.1.0.2.3".into() }),
+    };
+    assert_eq!(
+        String::from_utf8(entry_line(8, &marker)).expect("utf-8"),
+        format!(
+            "{{\"at\":8,\"docs\":[\"1.0.1.0.1\"],\"key\":\"{}\",\"link\":\"1.0.1.0.1.0.2.3\",\
+             \"op\":\"make_link\",\"signed\":\"marker\",\"time\":1700000000000}}\n",
+            "ab".repeat(32)
+        )
+    );
+    let record = CommitMeta::Recorded {
+        op: "insert".into(),
+        docs: vec!["1.0.1.0.1".into()],
+        time: 1_700_000_000_001,
+        key: Some("ab".repeat(32)),
+        signed: Some(Carrier::Record),
+        terms: None,
+    };
+    let delegate = CommitMeta::Recorded {
+        op: "delegate".into(),
+        docs: vec![],
+        time: 1_700_000_000_002,
+        key: Some("bare".into()),
+        signed: None,
+        terms: Some(OpTerms::Delegate { new_prefix: "1.0.2".into(), new_id: 1 }),
+    };
+    assert_eq!(
+        entry_line(9, &delegate),
+        b"{\"at\":9,\"docs\":[],\"key\":\"bare\",\"new_id\":1,\"new_prefix\":\"1.0.2\",\"op\":\"delegate\",\"time\":1700000000002}\n"
+    );
+    let birth = CommitMeta::Recorded {
+        op: "publish".into(),
+        docs: vec!["1.0.1.0.1.1".into()],
+        time: 1_700_000_000_003,
+        key: Some("system".into()),
+        signed: None,
+        terms: Some(OpTerms::Publish { placed: "1".into(), base_extent: None }),
+    };
+    assert_eq!(
+        entry_line(10, &birth),
+        b"{\"at\":10,\"base_extent\":null,\"docs\":[\"1.0.1.0.1.1\"],\"key\":\"system\",\"op\":\"publish\",\"placed\":\"1\",\"time\":1700000000003}\n"
+    );
+    let based = CommitMeta::Recorded {
+        op: "publish".into(),
+        docs: vec!["1.0.1.0.1.2".into()],
+        time: 1_700_000_000_004,
+        key: Some("system".into()),
+        signed: Some(Carrier::Marker),
+        terms: Some(OpTerms::Publish { placed: "5".into(), base_extent: Some("3".into()) }),
+    };
+
+    let mut file: Vec<u8> = Vec::new();
+    for (at, meta) in [(8, &marker), (9, &record), (10, &delegate), (11, &birth), (12, &based)] {
+        file.extend_from_slice(&entry_line(at, meta));
+    }
+    let (records, valid_end) = parse_records(&file);
+    assert_eq!(valid_end, file.len(), "every whole line is trusted");
+    let replayed = |i: usize| match &records[i] {
+        (_, Record::Entry(_, CommitMeta::Recorded { signed, terms, .. })) => (*signed, terms.clone()),
+        other => panic!("a recorded entry: {other:?}"),
+    };
+    assert_eq!(
+        replayed(0),
+        (Some(Carrier::Marker), Some(OpTerms::MakeLink { link: "1.0.1.0.1.0.2.3".into() }))
+    );
+    assert_eq!(replayed(1), (Some(Carrier::Record), None));
+    assert_eq!(
+        replayed(2),
+        (None, Some(OpTerms::Delegate { new_prefix: "1.0.2".into(), new_id: 1 }))
+    );
+    assert_eq!(
+        replayed(3),
+        (None, Some(OpTerms::Publish { placed: "1".into(), base_extent: None })),
+        "the birth shape's null extent replays as None under a present count"
+    );
+    assert_eq!(
+        replayed(4),
+        (
+            Some(Carrier::Marker),
+            Some(OpTerms::Publish { placed: "5".into(), base_extent: Some("3".into()) })
+        )
+    );
+}
+
+/// A `signed` token no carrier spells, and a `delegate` line carrying one
+/// of its pair without the other, are not lines this daemon wrote: trust
+/// ends there. A term on a line of another op is an unknown key, ignored,
+/// and a line written before the terms were recorded replays as an op
+/// carrying none.
+#[test]
+fn a_torn_signedness_or_a_half_pair_ends_trust_and_foreign_terms_are_ignored() {
+    let bare = entry_line(1, &CommitMeta::Bare);
+    let torn_signed =
+        b"{\"at\":2,\"docs\":[],\"op\":\"insert\",\"signed\":\"maybe\",\"time\":1}\n".to_vec();
+    let mut file = bare.clone();
+    file.extend_from_slice(&torn_signed);
+    let (records, valid_end) = parse_records(&file);
+    assert_eq!((records.len(), valid_end), (1, bare.len()), "an unknown carrier is torn");
+
+    let half_pair =
+        b"{\"at\":2,\"docs\":[],\"new_prefix\":\"1.0.2\",\"op\":\"delegate\",\"time\":1}\n".to_vec();
+    let mut file = bare.clone();
+    file.extend_from_slice(&half_pair);
+    let (records, valid_end) = parse_records(&file);
+    assert_eq!((records.len(), valid_end), (1, bare.len()), "half a pair is torn");
+
+    let foreign_term = b"{\"at\":2,\"docs\":[],\"link\":\"1.0.2.0.1.0.2.1\",\"op\":\"insert\",\"time\":1}\n";
+    let pre_terms = b"{\"at\":3,\"docs\":[],\"key\":\"bare\",\"op\":\"delegate\",\"time\":2}\n";
+    let mut file = bare.clone();
+    file.extend_from_slice(foreign_term);
+    file.extend_from_slice(pre_terms);
+    let (records, valid_end) = parse_records(&file);
+    assert_eq!((records.len(), valid_end), (3, file.len()));
+    assert!(
+        matches!(&records[1], (_, Record::Entry(2, CommitMeta::Recorded { terms: None, .. }))),
+        "a `link` on an insert line is ignored: {:?}",
+        records[1]
+    );
+    assert!(
+        matches!(&records[2], (_, Record::Entry(3, CommitMeta::Recorded { terms: None, signed: None, .. }))),
+        "a delegate line from before the terms replays as an op carrying none: {:?}",
+        records[2]
     );
 }
 
@@ -106,54 +247,125 @@ fn a_half_recorded_line_ends_trust() {
 
 /// The wire entry names every field, a bare position's as explicit
 /// `null` — never invented, and never merely absent, which a client
-/// could not tell from a field this daemon does not know about. The
-/// file line omits what the wire nulls; both are deliberate. `key`'s
-/// null is AUTH-1.52's reserved lost-metadata meaning: a pre-feature
-/// record reads it exactly as a bare position does. The docs rendered
-/// are the REDUCED list the feed hands in — here the whole record's.
+/// could not tell from a field this daemon does not know about; the op's
+/// terms included, since a bare row's op is unknown. The file line omits
+/// what the wire nulls; both are deliberate. `key`'s null is AUTH-1.52's
+/// reserved lost-metadata meaning: a pre-feature record reads it exactly
+/// as a bare position does. The docs rendered are the REDUCED list the
+/// feed hands in — here the whole record's.
 #[test]
 fn wire_entries_null_what_the_file_line_omits() {
-    let meta = CommitMeta::Recorded {
-        op: "insert".into(),
-        docs: vec!["1.0.1.0.1".into()],
-        time: 1_700_000_000_000,
-        key: Some("bare".into()),
+    let render = |meta: &CommitMeta, at: u64, reduced: &[&str]| -> String {
+        serde_json::to_string(&meta.entry(
+            at,
+            reduced.iter().map(|d| d.to_string()).collect(),
+            None,
+        ))
+        .expect("json")
     };
+    let meta = recorded("insert", &["1.0.1.0.1"], 1_700_000_000_000, Some("bare"));
     assert_eq!(
-        serde_json::to_string(&meta.entry(8, vec!["1.0.1.0.1".into()])).expect("json"),
+        render(&meta, 8, &["1.0.1.0.1"]),
         r#"{"at":8,"docs":["1.0.1.0.1"],"key":"bare","op":"insert","time":1700000000000}"#
     );
-    let pre_feature = CommitMeta::Recorded {
-        op: "insert".into(),
-        docs: vec!["1.0.1.0.1".into()],
-        time: 1_700_000_000_000,
-        key: None,
-    };
+    let pre_feature = recorded("insert", &["1.0.1.0.1"], 1_700_000_000_000, None);
     assert_eq!(
-        serde_json::to_string(&pre_feature.entry(8, vec!["1.0.1.0.1".into()])).expect("json"),
+        render(&pre_feature, 8, &["1.0.1.0.1"]),
         r#"{"at":8,"docs":["1.0.1.0.1"],"key":null,"op":"insert","time":1700000000000}"#
     );
     assert_eq!(
-        serde_json::to_string(&CommitMeta::Bare.entry(3, vec!["1.0.1.0.1".into()]))
-            .expect("json"),
-        r#"{"at":3,"docs":null,"key":null,"op":null,"time":null}"#,
-        "a bare entry's docs are the reserved null whatever the feed hands in"
+        render(&CommitMeta::Bare, 3, &["1.0.1.0.1"]),
+        r#"{"at":3,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null}"#,
+        "a bare entry's docs and terms are the reserved null whatever the feed hands in"
     );
     // What renders is the REDUCED list, never `Recorded.docs`: a
     // two-document record shown to a requester who may read one of them
     // carries that one. The rows above cannot see the difference — their
     // two lists are equal — so it is pinned here, on the field wire.md
     // tells clients to dispatch on.
-    let straddle = CommitMeta::Recorded {
-        op: "nullify".into(),
-        docs: vec!["1.0.1.0.1".into(), "1.0.2.0.1".into()],
-        time: 1_700_000_000_000,
-        key: Some("bare".into()),
-    };
+    let straddle =
+        recorded("nullify", &["1.0.1.0.1", "1.0.2.0.1"], 1_700_000_000_000, Some("bare"));
     assert_eq!(
-        serde_json::to_string(&straddle.entry(9, vec!["1.0.2.0.1".into()])).expect("json"),
+        render(&straddle, 9, &["1.0.2.0.1"]),
         r#"{"at":9,"docs":["1.0.2.0.1"],"key":"bare","op":"nullify","time":1700000000000}"#,
         "the record's own second document is not rendered to a class that cannot read it"
+    );
+}
+
+/// THE MEMBERS THAT ARE ABSENT RATHER THAN NULL (D12; the design record
+/// §7.3 (i)): `key` is served iff the line records no carrier; `attest` is
+/// the store's slot wherever one is held, `null` — LOST — where the line
+/// records the marker filled and the store cannot answer, and absent
+/// otherwise, a record deposit's row included; the op's terms are present on
+/// the op that carries them and absent on every other op's row, a
+/// `publish`'s birth extent rendering `null`.
+#[test]
+fn key_attest_and_the_terms_are_present_absent_or_null_by_the_rule() {
+    let slot = Attestation::new(1, vec![0xab; 4]).expect("a slot");
+    let fp = "cd".repeat(32);
+    let marker = CommitMeta::Recorded {
+        op: "make_link".into(),
+        docs: vec!["1.0.1.0.1".into()],
+        time: 1,
+        key: Some(fp.clone()),
+        signed: Some(Carrier::Marker),
+        terms: Some(OpTerms::MakeLink { link: "1.0.1.0.1.0.2.3".into() }),
+    };
+    let text = |v: Value| serde_json::to_string(&v).expect("json");
+    assert_eq!(
+        text(marker.entry(8, vec!["1.0.1.0.1".into()], Some(&slot))),
+        r#"{"at":8,"attest":{"alg":"mldsa65-ed25519","sig":"abababab"},"docs":["1.0.1.0.1"],"link":"1.0.1.0.1.0.2.3","op":"make_link","time":1}"#,
+        "a marker-signed row: attest from the store, no key, the minted link"
+    );
+    assert_eq!(
+        text(marker.entry(8, vec!["1.0.1.0.1".into()], None)),
+        r#"{"at":8,"attest":null,"docs":["1.0.1.0.1"],"link":"1.0.1.0.1.0.2.3","op":"make_link","time":1}"#,
+        "the marker recorded filled and the store silent: LOST, never absent"
+    );
+    let record = CommitMeta::Recorded {
+        op: "insert".into(),
+        docs: vec!["1.0.1.0.1".into()],
+        time: 2,
+        key: Some(fp.clone()),
+        signed: Some(Carrier::Record),
+        terms: None,
+    };
+    assert_eq!(
+        text(record.entry(9, vec!["1.0.1.0.1".into()], None)),
+        r#"{"at":9,"docs":["1.0.1.0.1"],"op":"insert","time":2}"#,
+        "a record-signed row: neither key nor attest"
+    );
+    let unsigned = CommitMeta::Recorded {
+        op: "delegate".into(),
+        docs: vec![],
+        time: 3,
+        key: Some("bare".into()),
+        signed: None,
+        terms: Some(OpTerms::Delegate { new_prefix: "1.0.2".into(), new_id: 1 }),
+    };
+    assert_eq!(
+        text(unsigned.entry(10, vec![], None)),
+        r#"{"at":10,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":3}"#,
+        "an unsigned row: key served, the pair by name, no attest"
+    );
+    let birth = CommitMeta::Recorded {
+        op: "publish".into(),
+        docs: vec!["1.1.0.1.0.2.1".into()],
+        time: 4,
+        key: Some("system".into()),
+        signed: None,
+        terms: Some(OpTerms::Publish { placed: "1".into(), base_extent: None }),
+    };
+    assert_eq!(
+        text(birth.entry(11, vec!["1.1.0.1.0.2.1".into()], None)),
+        r#"{"at":11,"base_extent":null,"docs":["1.1.0.1.0.2.1"],"key":"system","op":"publish","placed":"1","time":4}"#,
+        "the head writer's birth-shape publish: system, the count, a null extent"
+    );
+    // A bare row the store answers: the slot is the journal's fact and is
+    // served; the testimony stays lost.
+    assert_eq!(
+        text(CommitMeta::Bare.entry(12, vec![], Some(&slot))),
+        r#"{"at":12,"attest":{"alg":"mldsa65-ed25519","sig":"abababab"},"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null}"#
     );
 }
 
@@ -185,7 +397,8 @@ fn a_failed_append_stops_the_log_so_the_reopen_walk_starts_below_the_gap() {
     let mut log = CommitsLog::over_unwritable(dir.path(), 9);
 
     // The lost position: recorded in memory, refused by the file.
-    let offset = log.record(&serial, 10, "insert", vec!["1.0.1.0.1".into()], "bare".into());
+    let offset =
+        log.record(&serial, 10, "insert", vec!["1.0.1.0.1".into()], "bare".into(), None, None);
     assert!(offset.is_some(), "the position is recorded whatever the file does");
     assert!(log.entries.contains_key(&10), "and this uptime answers it in full");
 
@@ -194,7 +407,7 @@ fn a_failed_append_stops_the_log_so_the_reopen_walk_starts_below_the_gap() {
 
     // The position after the gap — the one whose line would raise the
     // walk's floor over it. Accepted as an outcome, written nowhere.
-    log.record(&serial, 11, "insert", vec!["1.0.1.0.2".into()], "bare".into())
+    log.record(&serial, 11, "insert", vec!["1.0.1.0.2".into()], "bare".into(), None, None)
         .expect("a stopped log still records: the ack is owed either way");
     assert_eq!(
         std::fs::read(&path).expect("read"),

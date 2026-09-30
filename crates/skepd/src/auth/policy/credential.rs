@@ -300,12 +300,27 @@ impl DepositSpans {
     }
 }
 
-/// The precheck's answer: the refusal, or nothing. The previewed effect is
-/// deliberately NOT returned — the committed tail re-derives from the same
-/// deposit under the same guard
-/// ([`crate::auth::fold::IdentityFold::step_committed`]), so handing it
-/// forward would be a second path to one state change, and a signature
-/// that offers it invites exactly that.
+/// What the precheck established about the RECORD'S OWN `sig` (signed ops,
+/// 2a) — the one thing it hands forward, for the change feed's row: whether
+/// the record grade's check ran and VERIFIED the `sig` (the claimed arm's
+/// slot (7)), so the deposit's row testifies its entry signed by its
+/// record and serves no `key` (D12); or whether the record went unjudged
+/// (the pre-claim arm, A5: the ceremony's own records are bare, and so are
+/// their rows). Never the previewed effect (below).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RecordSig {
+    /// The record's `sig` verified at [`record_grade_check`].
+    Verified,
+    /// No record grade ran: at or below the claim.
+    Unjudged,
+}
+
+/// The precheck's answer: the refusal, or what it established about the
+/// record's `sig` ([`RecordSig`]). The previewed effect is deliberately NOT
+/// returned — the committed tail re-derives from the same deposit under the
+/// same guard ([`crate::auth::fold::IdentityFold::step_committed`]), so
+/// handing it forward would be a second path to one state change, and a
+/// signature that offers it invites exactly that.
 ///
 /// The `Ok` taken at the classify line is AUTH-3.19's defect arm —
 /// `NotCredential` there is unreachable by construction (the classifier
@@ -348,14 +363,14 @@ pub(crate) fn precheck(
     scope: Scope,
     seat: Option<&Address>,
     allow_preview_keys: bool,
-) -> Result<(), CredentialRefusal> {
+) -> Result<RecordSig, CredentialRefusal> {
     // (3) — the classify preview's verdict (AUTH-2.57): the fold's own
     // order — kind, home account, publication, the per-kind arm.
     let verdict = identity.classify(identity_types(), &WorldCtx(world), &dep.deposit());
     let effect = match verdict {
         Verdict::NotCredential => {
             debug_assert!(false, "classify answered NotCredential on a classified deposit");
-            return Ok(());
+            return Ok(RecordSig::Unjudged);
         }
         Verdict::Inert(i) => return Err(CredentialRefusal::Inert(i)),
         Verdict::Honored(e) => e,
@@ -494,6 +509,7 @@ pub(crate) fn precheck(
             Effect::Claim { .. } => CredentialKind::Claim,
         };
         record_grade_check(world, identity, dep, kind, anchor_grade)?;
+        Ok(RecordSig::Verified)
     } else {
         // (8) — the pre-claim admission gate's deposit cell, evaluated on
         // the slot-(3) preview: only the ceremony's own deposits pass — and
@@ -510,8 +526,8 @@ pub(crate) fn precheck(
             }
             _ => return Err(CredentialRefusal::ClaimFirst),
         }
+        Ok(RecordSig::Unjudged)
     }
-    Ok(())
 }
 
 /// THE RECORD GRADE'S CHECK (signed ops, 2a; the design record §4.5 (4) and

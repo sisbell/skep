@@ -148,8 +148,10 @@ fn an_attestation_holds_the_one_spelling_of_empty_at_construction() {
 
 /// A FILLED marker's bytes are the empty layout with the tag and the blob
 /// in the slot's own place — the tag at byte 88, the length prefix at
-/// 89..97, the blob after — and no other marker byte moves: the layout
-/// doc's claim, pinned against the encoder's own output.
+/// 89..97, the blob after — and no other marker byte but the CHAIN moves:
+/// the layout doc's claim, pinned against the encoder's own output. The
+/// chain moves because the slot is a chain input (r6-2c): the filled
+/// marker's link is not the empty one's.
 #[test]
 fn a_filled_marker_appends_the_blob_after_the_tag_and_moves_no_other_byte() {
     let blob = vec![0xC3u8; 5];
@@ -159,7 +161,7 @@ fn a_filled_marker_appends_the_blob_after_the_tag_and_moves_no_other_byte() {
         encode_txn(2, records.clone(), &CHAIN_GENESIS, FIXED_SALT, None).unwrap();
     let (filled, chain_f) =
         encode_txn(2, records, &CHAIN_GENESIS, FIXED_SALT, Some(&attestation)).unwrap();
-    assert_eq!(chain_e, chain_f, "the slot is no chain input");
+    assert_ne!(chain_e, chain_f, "the slot is a chain input: a filled slot is another link");
     let marker_of = |buf: &[u8]| -> Vec<u8> {
         let Parsed::Intact { payload: first } = parse_frame(buf, 0) else {
             panic!("record frame")
@@ -172,7 +174,9 @@ fn a_filled_marker_appends_the_blob_after_the_tag_and_moves_no_other_byte() {
     let (e, f) = (marker_of(&empty), marker_of(&filled));
     assert_eq!(e.len(), 97);
     assert_eq!(f.len(), 97 + blob.len());
-    assert_eq!(&f[..88], &e[..88], "every byte before the slot is unmoved");
+    assert_eq!(&f[..56], &e[..56], "every byte before the chain is unmoved");
+    assert_ne!(&f[56..88], &e[56..88], "the chain field moved with the slot");
+    assert_eq!(&f[56..88], &chain_f[..], "…to the filled link");
     assert_eq!(f[88], 1, "the tag");
     assert_eq!(&f[89..97], &(blob.len() as u64).to_le_bytes(), "the blob's length prefix");
     assert_eq!(&f[97..], &blob[..], "the blob, whole");
@@ -182,6 +186,46 @@ fn a_filled_marker_appends_the_blob_after_the_tag_and_moves_no_other_byte() {
     let decoded = codec().deserialize::<FramePayload>(&f).unwrap();
     let FramePayload::Marker(m) = decoded else { panic!("a marker") };
     assert_eq!((m.sig_alg, m.sig), (1, blob));
+}
+
+/// THE SLOT DIGEST's SPELLING (the slot investigation's STOP-3, pinned once):
+/// SHA-256 over the slot exactly as the marker frame encodes its two fields —
+/// the tag byte, the blob's LE64 length prefix, the blob — nine zero bytes
+/// for the one spelling of empty; and the link closes over it after the
+/// salt, so a filled slot and the empty one close two links from one group.
+#[test]
+fn the_slot_digest_is_sha256_over_the_slot_as_the_marker_frame_carries_it() {
+    let empty: [u8; 32] = Sha256::digest([0u8; 9]).into();
+    assert_eq!(slot_digest(SIG_ALG_UNSIGNED, &[]), empty, "the empty slot: tag 0, length 0");
+    let filled: [u8; 32] =
+        Sha256::digest([&[1u8][..], &2u64.to_le_bytes()[..], &[0xAA, 0xBB][..]].concat()).into();
+    assert_eq!(slot_digest(1, &[0xAA, 0xBB]), filled, "tag 1, length 2, the blob");
+    // The length prefix is inside the hashed bytes, so the tag and the blob
+    // are read back from what was hashed — no two slots share a digest by
+    // a byte moving between them.
+    assert_ne!(slot_digest(1, &[0xAA, 0xBB]), slot_digest(0x01, &[0x02, 0, 0, 0, 0, 0, 0, 0, 0xAA, 0xBB]));
+    // The link: one group closed over the two digests is two links, and the
+    // digest is the LAST input — a link closed over the empty digest equals
+    // one closed by hand over the same bytes then the nine zero bytes' hash.
+    let open = || {
+        let mut link = ChainLink::open(&CHAIN_GENESIS);
+        link.add_payload(&[7, 7, 7]);
+        link
+    };
+    let over_empty = open().close(Txn(2), 2, 0x1234, &FIXED_SALT, &empty);
+    let over_filled = open().close(Txn(2), 2, 0x1234, &FIXED_SALT, &filled);
+    assert_ne!(over_empty, over_filled);
+    let by_hand: [u8; 32] = Sha256::new()
+        .chain_update(CHAIN_GENESIS)
+        .chain_update([7u8, 7, 7])
+        .chain_update(2u64.to_le_bytes())
+        .chain_update(2u64.to_le_bytes())
+        .chain_update(0x1234u32.to_le_bytes())
+        .chain_update(FIXED_SALT)
+        .chain_update(empty)
+        .finalize()
+        .into();
+    assert_eq!(over_empty, by_hand);
 }
 
 #[test]
@@ -212,7 +256,9 @@ fn frame_payloads_spend_a_bare_u64_on_the_txn_and_carry_the_documented_chain() {
     let records_checksum = crc32c::crc32c_append(0, &expected_record);
     // The chain: SHA-256 over the chain's genesis value, the record
     // payload as framed, the marker's own pre-chain fields in their wire
-    // form, then the salt — the last bytes before finalize.
+    // form, the salt, then the digest of the empty slot — the last bytes
+    // before finalize.
+    let empty_slot: [u8; 32] = Sha256::digest([0u8; 9]).into();
     let expected_chain: [u8; 32] = Sha256::new()
         .chain_update(CHAIN_GENESIS)
         .chain_update(&expected_record)
@@ -220,6 +266,7 @@ fn frame_payloads_spend_a_bare_u64_on_the_txn_and_carry_the_documented_chain() {
         .chain_update(2u64.to_le_bytes()) // last_seq
         .chain_update(records_checksum.to_le_bytes())
         .chain_update(FIXED_SALT) // salt
+        .chain_update(empty_slot) // the slot's digest
         .finalize()
         .into();
     assert_eq!(chain, expected_chain, "the writer answers the chain it framed");
@@ -231,9 +278,21 @@ fn frame_payloads_spend_a_bare_u64_on_the_txn_and_carry_the_documented_chain() {
         .chain_update(2u64.to_le_bytes())
         .chain_update(2u64.to_le_bytes())
         .chain_update(records_checksum.to_le_bytes())
+        .chain_update(empty_slot)
         .finalize()
         .into();
     assert_ne!(chain, unsalted, "the salt is a chain input");
+    // …nor is one closed without the slot's digest: the slot is hashed too.
+    let undigested: [u8; 32] = Sha256::new()
+        .chain_update(CHAIN_GENESIS)
+        .chain_update(&expected_record)
+        .chain_update(2u64.to_le_bytes())
+        .chain_update(2u64.to_le_bytes())
+        .chain_update(records_checksum.to_le_bytes())
+        .chain_update(FIXED_SALT)
+        .finalize()
+        .into();
+    assert_ne!(chain, undigested, "the slot's digest is a chain input");
 
     let mut expected_marker = Vec::new();
     expected_marker.extend_from_slice(&1u32.to_le_bytes()); // FramePayload::Marker

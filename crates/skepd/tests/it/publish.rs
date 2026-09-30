@@ -713,10 +713,14 @@ fn the_pointwise_pair_floats_to_the_trunk_head_and_delete_orphans_reads_the_addr
 /// DOCUMENT in `site.addr` and nothing else, BEHIND ownership (a stranger's
 /// shot answers `not_owner` whatever its runs) and AHEAD of existence (a
 /// dangling run onto an unreadable origin is withheld, not dangling) —
-/// whatever the shot carries: signed over the true bytes, over a wrong
-/// guess, or not at all, the answer is the same, the write-path check
-/// reading no value the caller may not read. A readable origin is placed as
-/// a window that answers its origin.
+/// whatever bytes the shot's signature was made over: the true ones or a
+/// wrong guess, the answer is the same, the write-path check reading no
+/// value the caller may not read. Since the address form (l6-A4,
+/// 2026-09-29) such a run is a WINDOW the check composes by address, unread,
+/// so an UNATTESTED shot naming one meets the check's own
+/// `attestation_required` ahead of the store's gate — the one cell that
+/// moved; the signed cells answer the store's `withheld` as before. A
+/// readable origin is placed as a window that answers its origin.
 #[test]
 fn the_source_gate_answers_behind_ownership_and_ahead_of_existence() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -810,16 +814,24 @@ fn the_source_gate_answers_behind_ownership_and_ahead_of_existence() {
         ),
         &s_draft,
     );
-    // (2′) An EXISTING run onto it, unattested: the dangling run's answer —
-    //      existence is not told through the check either.
-    assert_withheld(
-        &op_unattested(
+    // (2′) An EXISTING run onto it, UNATTESTED: the check's own answer, the
+    //      window composed by address and unread — existence is not told
+    //      through the check either, nor is readability: a dangling run and
+    //      an existing one onto the same origin answer alike here.
+    for existing in [true, false] {
+        let start = if existing { s_text.clone() } else { format!("{s_draft}.0.1.9") };
+        let v = op_unattested(
             port,
             Some(&signed),
-            &publish(CLAIMANT_DOC1, Some((CLAIMANT_DOC1, 1)), None, &[run(&s_draft, &s_text, 2)]),
-        ),
-        &s_draft,
-    );
+            &publish(CLAIMANT_DOC1, Some((CLAIMANT_DOC1, 1)), None, &[run(&s_draft, &start, 2)]),
+        );
+        let rej = expect_resp(&v, "rejected");
+        assert_eq!(
+            (rej["code"].as_str(), rej["detail"].as_str(), rej["disposition"].as_str()),
+            (Some("credential_refused"), Some("attestation_required"), Some("reorder")),
+            "unattested, existing = {existing}: {v}"
+        );
+    }
     // (3) The stranger shooting doc 1, with a run onto the claimant's own
     //     draft it may not read: ownership answers first (slot 1).
     assert_not_owner(

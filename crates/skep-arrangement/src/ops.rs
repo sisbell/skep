@@ -614,15 +614,21 @@ where
     /// obligation) — are exactly the deposits the render post-dates, asked of
     /// the base's arrangement, which knows its own extent, and carried
     /// unchanged (PUB-2.45, PUB-2.67). What the shot un-arranges is what the
-    /// stager un-arranged and nothing else. One `ContentPlace` at
-    /// ordinal 1 journals the whole arrangement — the fold appends every
-    /// placed run's I-extent to R (J1★), the by-reference runs as COPY's are and
-    /// the fresh ones as INSERT's; an empty placement pushes no record, the
-    /// member then reading as the lazy empty arrangement. The member's LINK
-    /// subspace starts empty either way: the shot places content alone, and a
-    /// link seated in the base stays the base's — a link is arranged only in
-    /// its home document (CL-OWN, PUB-2.12), and the member is a home no link
-    /// has yet.
+    /// stager un-arranged and nothing else. One [`M5Rec::ShotPlace`] journals
+    /// the whole arrangement at ordinal 1 — the fold appends every placed
+    /// run's I-extent to R (J1★), the by-reference runs as COPY's are and the
+    /// fresh ones as INSERT's — AND THE SHOT's TWO CLIENT TERMS (the
+    /// signed-ops design record's D25, arm (c′)): `placed`, Σ width of the
+    /// client's runs — where its runs end and the carried tail begins, which
+    /// the run-list erases whenever the two are I-adjacent — and
+    /// `base_extent`, `None` in the birth shape. The record is pushed for
+    /// EVERY member the shot mints, an empty placement included, since the
+    /// terms exist whatever the placement holds; an empty one leaves the
+    /// member reading as the lazy empty arrangement, its birth extent noted
+    /// at zero. The member's LINK subspace starts empty either way: the shot
+    /// places content alone, and a link seated in the base stays the base's
+    /// — a link is arranged only in its home document (CL-OWN, PUB-2.12),
+    /// and the member is a home no link has yet.
     ///
     /// Check order (which error wins), PUB-6.36's slots: `DocNotRegistered`
     /// → `NotOwner` (slot 1, ω on the address named — the only question the
@@ -870,6 +876,11 @@ where
                     return Err(PublishError::DanglingSource);
                 }
             }
+            // THE SHOT's FIRST TERM (D25 (c′)): the positions the client
+            // placed — Σ width of its runs, whatever family each is — read off
+            // the request before the placement erases the boundary between
+            // the last of them and the carried tail.
+            let placed_count = supplied.iter().map(|settled| settled.run.width()).sum::<Nat>();
             // The member's arrangement: the client's runs in order — the
             // draft-native ones re-inserted as fresh identity under the
             // document's own I-space — then the base's post-render deposits.
@@ -908,16 +919,18 @@ where
             // anchor decided above.
             let (member, m3rec) = stg.working().m3().mint_version(anchor, true)?;
             stg.push(m3rec.into());
-            if !placed.is_empty() {
-                stg.push(
-                    M5Rec::ContentPlace {
-                        doc: member.clone(),
-                        at: Nat::one(),
-                        runs: placed,
-                    }
-                    .into(),
-                );
-            }
+            // Its placing record, pushed whatever the placement holds: the
+            // whole arrangement and the shot's two client terms, the second
+            // absent in the birth shape (D25 (c′)).
+            stg.push(
+                M5Rec::ShotPlace {
+                    doc: member.clone(),
+                    runs: placed,
+                    placed: placed_count,
+                    base_extent: shot.base.as_ref().map(|base| base.extent.clone()),
+                }
+                .into(),
+            );
             Ok(member)
         })
     }
@@ -927,9 +940,11 @@ where
 /// its addresses were minted under, `document_of` of its start and then
 /// `trunk_of` — provided the start is a CONTENT element; `None` for a link
 /// element or an address with no document. What the source gate asks about
-/// and `Withheld` names (PUB-8.4's `site.addr`), and what a shot's stated
-/// `origin` must project to. Pure address arithmetic: it reads nothing.
-fn run_origin_document(run: &Run) -> Option<Address> {
+/// and `Withheld` names (PUB-8.4's `site.addr`), what a shot's stated
+/// `origin` must project to, and what classes a run in the ADDRESS FORM on
+/// both of its sides ([`Shot::address_form`], `M5State::address_form_of`).
+/// Pure address arithmetic: it reads nothing.
+pub(crate) fn run_origin_document(run: &Run) -> Option<Address> {
     if run.i_start().subspace() != Some(&content_subspace()) {
         return None;
     }

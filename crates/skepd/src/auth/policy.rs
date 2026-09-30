@@ -282,13 +282,16 @@ pub(crate) enum AttestFault {
     /// client's next act is a DIFFERENT request, the frame re-composed and
     /// re-signed, never a reissue of this one.
     Signature,
-    /// A `publish` places a value its author may not READ, and the store
-    /// would admit it — the base CARRIES the run (PUB-6.24). No entry frame
-    /// is composed over such a value, since a verdict over it would answer
-    /// by its bytes, so no signature can be verified over one: the shot is
-    /// refused whatever it carries, the value unread. REORDER, as `withheld`
-    /// is: the client re-composes without the run, or re-sends once a grant
-    /// lets it read the run's origin.
+    /// A `publish` COPIES IN a value its author may not READ — a staging
+    /// draft's run onto a draft the read predicate withholds from it — and
+    /// the store would admit it, the base CARRYING the run (PUB-6.24). No
+    /// entry frame is composed over such a value, since a verdict over it
+    /// would answer by its bytes, so no signature can be verified over one:
+    /// the shot is refused whatever it carries, the value unread. A WINDOW is
+    /// no such case since the address form (l6-A4): signed by its address,
+    /// it is composed unread and the store's gate decides it. REORDER, as
+    /// `withheld` is: the client re-composes without the run, or re-sends
+    /// once a grant lets it read the run's origin.
     Withheld,
     /// A `publish`'s entry-frame body would pass
     /// `entry::MAX_SHOT_BODY_BYTES` — the runs name more value bytes than

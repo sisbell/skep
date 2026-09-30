@@ -102,7 +102,11 @@ Rules that hold across its files:
   kernel refuses what a journaled one refuses.
 - **The formats are pinned.** `tests/golden/` holds the bytes the
   fixture's ops must reproduce; a moved byte is a format event and bumps
-  the `SKJ` and `SKC` stamps.
+  the `SKJ` and `SKC` stamps — with one dev-time exception on record: on
+  2026-09-29 the chain's preimage gained the signature slot's digest and
+  M5's slice its shot terms, and the goldens were regenerated once under
+  the unchanged `SKJ4`/`SKC4` by the owner's no-stamp ruling (no served
+  board exists; dev boards regenerate).
 
 Its integration suites are one binary, `tests/it/`: `kernel` (the public
 surface's claims), `hazard` (dirty crashes, built through the engine),

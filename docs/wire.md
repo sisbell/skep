@@ -1119,7 +1119,8 @@ in that document (a preview; nothing is written).
 ```
 
 **`doc_metadata`** — doc_metadata (§Namespace): the publication state a
-client's own admission tests need. `doc` is the trunk document the
+client's own admission tests need, and the shot terms a verifier of a
+member's entry signature needs. `doc` is the trunk document the
 argument projects to (a version member answers its document's state);
 `published` its publication bit; `owner` its owner account (always
 present for a registered document); `birth` its birth version `D.1` and
@@ -1131,19 +1132,39 @@ mint (PUB-3.19): while `D.1` is still the chain's head a declared
 deposit appends to its arrangement (`insert`, §Arrangement), so its
 arranged content count grows and this value does not — the same at every
 later position, on `/op-at` as on `/op` — and a client subtracts
-nothing. One residue, as built: a `publish` with NO runs journals no
-arrangement for the member it mints, so a birth version born EMPTY that
-way answers `0` until it takes a deposit and that deposit's width after;
-no conforming mint is empty.
+nothing. A `publish` with NO runs journals its placing record all the
+same, so a birth version born EMPTY that way answers `0` for good; no
+conforming mint is empty.
+
+`placed` and `base_extent` are THE SHOT TERMS OF THE ADDRESS NAMED
+(signed ops; the design record's D25, arm (c′)): asked of a version
+member the `publish` shot minted, `placed` is the number of content
+positions the shot's client runs covered — positions `1` through
+`placed` of the member are the client's runs, the base's carried tail
+follows them — and `base_extent` is the shot's own `base_extent`, the
+positions of its base the staged copy took; `base_extent` is `null` for
+a member the birth shape minted (no base — the `null` IS the birth bit,
+and there `placed` is the birth extent). Both are `null` where the
+address named carries no terms: the trunk document itself, a birth
+version an owned `version` minted, a member minted before the record
+carried them. Journaled in the shot's own placing record, so they ride
+the commit chain, every checkpoint and every replica. With the member's
+runs and its address they are everything a reader needs to re-compose
+the `publish` signature's frame (§Arrangement, `publish`): `base` is
+derived from the member's address — a trunk member `D.k+1` was minted
+against `D.k`, a daughter `X.m` against `X`, `D.1` against the memberless
+document or, with `base_extent` `null`, against nothing. This example is
+asked of the birth version `1.0.1.0.1.1`, which a shot placing five
+positions minted from the memberless document taken at three:
 
 <!-- wire: response doc_metadata -->
 ```json
-{"as_of":9,"birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","owner":"1.0.1","published":true,"resp":"doc_metadata"}
+{"as_of":9,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata"}
 ```
 
 <!-- wire: response doc_metadata_unborn -->
 ```json
-{"as_of":9,"birth":null,"birth_extent":null,"doc":"1.0.1.0.2","owner":"1.0.1","published":false,"resp":"doc_metadata"}
+{"as_of":9,"base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.2","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata"}
 ```
 
 **`edition_claims`** — edition_claims (§Link discovery reads): the
@@ -2127,12 +2148,33 @@ identity under `doc`'s own I-space; each run is `origin`, `i_start`,
 On a CLAIMED board the shot carries the optional top-level `attest`
 member (signed ops; the object `insert` describes): the entry signature
 over the frame whose `doc` is the trunk document, `op` `publish` and
-`body` THE RUNS THE CLIENT PLACED — their values in V-order,
-length-delimited, with their count — a PREFIX of the member the commit
-mints, never the member: the base's carried tail past `base_extent` and
-every later deposit into the head member fall outside the signed bytes.
-The daemon composes the same body off its snapshot and verifies before
-the transaction.
+`body` THE COUNT, THE RUNS THE CLIENT PLACED IN THE ADDRESS FORM, AND
+THE BASE EXTENT (the design record's V, l6-A4 and D25 — the publish
+signature binds its base extent, and the runs are signed as the MEMBER
+holds them): first `be64(placed)`, the number of positions the runs
+cover; then the runs in V-order as SEGMENTS, each opening with one class
+byte — `0x02` a VALUE STRETCH, the maximal run of consecutive positions
+the commit COPIES IN (a run of `doc`'s own I-space placed by reference,
+and a run of the staging `draft` re-inserted as fresh identity — at the
+member, one origin, the document's own), spelled `be64(count)` then each
+value `be32(len) ‖ bytes`; `0x01` a WINDOW, one run onto ANOTHER
+document's I-space, which the commit keeps as a reference, spelled
+`be32(len) ‖ its i_start's dotted decimal ‖ be64(width)` — two I-adjacent
+windows in a row being ONE segment, as the member's arrangement merges
+them; then one length-delimited group holding `be64(base_extent)`, or
+EMPTY (`be32(0)`) where the shot has no base. `base` itself is no member:
+a verifier derives it from the minted member's address. A window is
+signed by WHERE it quotes from and never by its bytes, so the author
+attests a window it may no longer read; the origin's own entry binds the
+bytes. The daemon composes the same body off its snapshot — the values
+of the copied runs read there, the windows spelled from the request —
+and verifies before the transaction; a reader holding the member later
+composes it again from the member's runs over its first `placed`
+positions, its `doc_metadata` terms and its address, with no request in
+hand (§Namespace, `doc_metadata`). A REPLAYED shot verifies as it did and
+names a `base` its own commit left no longer the head, so the store's
+rule mints that base's DAUGHTER, never the trunk's next: the document's
+current text does not move.
 → `ack_addr` (the member's address). This example publishes a draft
 staged off the second member: the edition's own three positions by
 reference and the draft's two as fresh identity:
@@ -2763,23 +2805,31 @@ carries a per-transaction SALT — thirty-two random bytes stored in the
 commit marker (`SKJ4`) and served by no route — so a served chain value
 confirms no guess at a transaction's bytes, even to a reader holding the
 value before it and able to enumerate the transaction's candidates, and
-`/health` already serves the head's value to everyone. At the current
-head it equals `chain_head` beside `log_position`, at a
-retained checkpoint's own position it is that checkpoint's header value,
-and at `0` it is the genesis seed. Position errors are `/op-at`'s —
-`beyond_head`, `not_a_position`, `history_reclaimed`, the reconstruction
-bound `503 history_busy` (it rides the same permit pool, conservatively:
-the scan reads what a reconstruction reads), `history_io` /
-`history_corrupt` — and a malformed or ABSENT query is `400 {"error":
-"malformed_at", "detail": …}`. What it is for: any `(position, chain)`
-pair a client holds — a `/health` reading it saved, a published head's
-own members, a pair another peer relayed — is checkable against the
-board's recomputation while the position is above the retention floor.
-A journal re-chained after the fact answers the forged value here, which
-the saved pair contradicts, where a stored head record the forger left
-untouched still re-reads byte-equal; a tail cut answers `beyond_head`
-or a different value. Below the floor nothing answers, and the answer is
-the serving daemon's word, as every answer here is.
+`/health` already serves the head's value to everyone. Every link's
+preimage also carries, last, a SHA-256 digest of the marker's SIGNATURE
+SLOT exactly as the marker holds it — the tag, the blob's length prefix,
+the blob; the empty slot's nine bytes at an unsigned transaction — so an
+entry signature stripped from a committed marker, or altered in it, is a
+chain break at that transaction: the board does not open, its history
+reads refuse, and any saved pair contradicts it (signed ops; the design
+record's r6-2c). At the current head it equals `chain_head` beside
+`log_position`, at a retained checkpoint's own position it is that
+checkpoint's header value, and at `0` it is the genesis seed. Position
+errors are `/op-at`'s — `beyond_head`, `not_a_position`,
+`history_reclaimed`, the reconstruction bound `503 history_busy` (it
+rides the same permit pool, conservatively: the scan reads what a
+reconstruction reads), `history_io` / `history_corrupt` — and a malformed
+or ABSENT query is `400 {"error": "malformed_at", "detail": …}`. What it
+is for: any `(position, chain)` pair a client holds — a `/health` reading
+it saved, a published head's own members, a pair another peer relayed —
+is checkable against the board's recomputation while the position is
+above the retention floor. A journal re-chained after the fact — a
+signature stripped and every later link re-chained included — answers
+the forged value here, which the saved pair contradicts, where a stored
+head record the forger left untouched still re-reads byte-equal; a tail
+cut answers `beyond_head` or a different value. Below the floor nothing
+answers, and the answer is the serving daemon's word, as every answer
+here is.
 
 Routed, not yet in the protocol: an I-ADDRESSED value read as of a
 position — the home's mint frontier at N plus the values under it, a
@@ -3093,7 +3143,8 @@ position's record is bare. `chain_head` is the commit chain's value at
 the COMMITTED HEAD: a string of 64 lowercase hex characters, the 32-byte
 SHA-256 link
 the kernel's journal computes at every commit over the previous link and
-that transaction's canonical record frames and marker fields, from a
+that transaction's canonical record frames and marker fields — its salt,
+and a digest of its signature slot (§Reading history, `/chain`) — from a
 genesis seed of thirty-two zero bytes. It is the kernel's value, served
 as the journal holds it and never recomputed by the daemon; and it is
 the chain OF THE `log_position` BESIDE IT — the two are read off ONE

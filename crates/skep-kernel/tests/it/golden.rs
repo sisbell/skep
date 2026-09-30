@@ -30,7 +30,14 @@
 //! ```
 //!
 //! rewrites the three artifacts from the ops; the stamp gate then holds the
-//! new files to the new stamp, and the bump's commit carries them.
+//! new files to the new stamp, and the bump's commit carries them. ONE
+//! regeneration moved the bytes under an UNCHANGED stamp: 2026-09-29, when
+//! the chain's preimage gained the signature slot's digest (the board's
+//! r6-2c) and M5's slice its shot terms (D25's (c′)) — a format event by the
+//! marker doc's own rule, landed as `SKJ4`/`SKC4` by the owner's no-stamp
+//! ruling (no served board exists; dev boards regenerate). Every marker's
+//! chain, `checkpoint.37`'s header and every dump moved; the fixture's ops
+//! did not.
 
 use std::collections::BTreeMap;
 use std::fs;

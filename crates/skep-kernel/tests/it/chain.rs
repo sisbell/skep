@@ -24,7 +24,10 @@
 //!   `last_seq` rewritten — a shape no writer leaves) — the cause
 //!   travelling, every file byte for byte as found (a halt cuts nothing),
 //!   and the refusal repeating; since `SKJ4` the marker's SALT is a chain
-//!   input too, and a salt edited is a link that fails (case 16);
+//!   input too, and a salt edited is a link that fails (case 16); and since
+//!   the slot's digest joined the chain (the board's r6-2c, 2026-09-29,
+//!   under the same stamp) so is the SIGNATURE SLOT — a slot filled,
+//!   stripped or altered after its commit is a link that fails (case 4);
 //! * REFUSED — the checkpoint's own refusal (`body_hash`), the fallback
 //!   chain then reaching genesis, which re-verifies the journal;
 //! * NOT CAUGHT BY DESIGN — a history the chain alone accepts, which the
@@ -361,22 +364,53 @@ fn chain_at_is(engine: &Engine, at: u64, expected: &[u8; 32], ctx: &str) {
 /// `txn`, `last_seq` and `records_checksum` in their wire form, then the
 /// marker's SALT as the segment holds it NOW (read off `data`, not off the
 /// `Txn` mapped before any edit, so a forger who re-salts a marker chains
-/// over the salt it wrote). Restated here so the forger of case 11 is held
-/// to the writer's own formula: were the two to drift, the forgery would be
-/// CAUGHT and that case would fail loudly rather than pass. The sanity check
-/// at its head pins them equal over the untouched golden.
+/// over the salt it wrote), then the DIGEST of the marker's signature slot
+/// as the segment holds it now — SHA-256 over the marker payload's tail from
+/// `sig_alg` on: the tag, the blob's length prefix and the blob, the one
+/// spelling `ChainLink` pins (nine zero bytes hashed for an empty slot).
+/// Restated here so the forger of case 11 is held to the writer's own
+/// formula: were the two to drift, the forgery would be CAUGHT and that case
+/// would fail loudly rather than pass. The sanity check at its head pins
+/// them equal over the untouched golden.
 fn chain_over(prev: &[u8; 32], data: &[u8], txn: &Txn) -> [u8; 32] {
     let mut link = Sha256::new().chain_update(prev);
     for record in &txn.records {
         link.update(&data[record.payload.clone()]);
     }
     let salt_at = txn.marker.payload.start + MARKER_SALT_AT;
+    let slot_at = txn.marker.payload.start + MARKER_SIG_ALG_AT;
+    let slot: [u8; 32] = Sha256::digest(&data[slot_at..txn.marker.payload.end]).into();
     link.chain_update(txn.txn.to_le_bytes())
         .chain_update(txn.last_seq.to_le_bytes())
         .chain_update(records_checksum(data, txn).to_le_bytes())
         .chain_update(&data[salt_at..salt_at + 32])
+        .chain_update(slot)
         .finalize()
         .into()
+}
+
+/// Re-chain every link from op `from` to the end over the segment AS IT
+/// STANDS — salts and slots as found — seeded with op `from − 1`'s chain as
+/// the golden wrote it (the chain's genesis value for the first): what a
+/// forger holding the journal does after any in-place edit, and what a
+/// writer would have written had the edited bytes been its own. Answers the
+/// re-chained links by boundary. The checkpoint is left as it is.
+fn rechain_from(golden: &Golden, case: &Path, from: usize) -> Vec<(u64, [u8; 32])> {
+    let seg = seg_file(case, 1);
+    let mut data = fs::read(&seg).expect("segment");
+    let txns = transactions(&data);
+    let mut prev = if from == 1 { CHAIN_GENESIS } else { golden.txn(from - 1).chain };
+    let mut chains = Vec::new();
+    for txn in &txns[from - 1..] {
+        let chain = chain_over(&prev, &data, txn);
+        let at = txn.marker.payload.start + MARKER_CHAIN_AT;
+        data[at..at + 32].copy_from_slice(&chain);
+        reseal_frame(&mut data, &txn.marker);
+        chains.push((txn.last_seq, chain));
+        prev = chain;
+    }
+    fs::write(&seg, data).expect("write the re-chained segment");
+    chains
 }
 
 /// The seeded salt source's formula, restated: `SHA-256(seed LE64 ‖ txn
@@ -683,12 +717,26 @@ fn c03_a_markers_chain_field_edited_breaks_at_that_transaction_and_the_next_does
     );
 }
 
-/// CASE 4 — THE SIGNATURE SLOT IS NOT A CHAIN INPUT, by design — a signature over
-/// the chain must sit outside it. A FILLED slot (tag 1, the ruled default
-/// pair; two bytes the kernel never interprets; the marker frame two bytes
-/// longer, its `len` and CRC re-sealed) opens: the chain does not break, the
-/// head and every boundary answer the golden's world, nothing is cut. So the
-/// slot stays free for signed ops.
+/// CASE 4 — THE SIGNATURE SLOT IS A CHAIN INPUT (the board's r6-2c,
+/// owner-ruled 2026-09-29, option (b) of the slot investigation; until then
+/// "no chain input, by design" — a build choice under X2's layout, which
+/// stands): the link closes over a digest of the slot exactly as the marker
+/// carries it, at every transaction. So a slot FILLED after its commit (tag
+/// 1, the ruled default pair; two bytes the kernel never interprets; the
+/// marker frame two bytes longer, its `len` and CRC re-sealed) is CAUGHT at
+/// that transaction — mid-history from genesis and above a standing base,
+/// where before the rule it opened. On a journal that HOLDS a filled slot
+/// honestly — the slot filled and every link from there re-chained over it,
+/// as a writer handed the attestation would have chained, the golden holding
+/// no attested transaction of its own — the open answers the golden's world
+/// at every boundary, the slot opaque to the fold; and there a slot STRIPPED
+/// (restored to the one spelling of empty) or ALTERED (one blob byte
+/// flipped), everything else as found, is CAUGHT at that transaction: the
+/// stripped or altered signature is a detected rewrite, which is what the
+/// ruling bought. The strip WITH every later link re-chained is NOT CAUGHT
+/// BY DESIGN — case 11's shape for the slot, the published head's saved
+/// pairs to contradict — and reproduces the golden's own chain, the golden
+/// being that journal with the slot empty.
 ///
 /// An INCONSISTENT slot — the tag set with no bytes — is not a marker at
 /// all: the decoder holds the slot's one-spelling-of-empty rule, the frame
@@ -697,39 +745,97 @@ fn c03_a_markers_chain_field_edited_breaks_at_that_transaction_and_the_next_does
 /// cause — never admitted as a commit under a pair that signed nothing. The
 /// marker's decode rule, not the chain's.
 #[test]
-fn c04_the_signature_slot_is_not_a_chain_input_a_filled_slot_opens() {
+fn c04_the_signature_slot_is_a_chain_input_a_slot_filled_stripped_or_altered_breaks_at_that_transaction(
+) {
     let golden = Golden::build();
     const OP: usize = 9;
+    const BLOB: [u8; 2] = [0xAA, 0xBB];
     let fill = |seg: &Path, txn: &Txn| {
         let data = fs::read(seg).expect("segment");
         let mut payload = data[txn.marker.payload.clone()].to_vec();
         assert_eq!(payload.len(), MARKER_EMPTY_LEN, "an unattested marker");
         payload[MARKER_SIG_ALG_AT] = 1;
         payload[MARKER_SIG_LEN_AT..MARKER_EMPTY_LEN].copy_from_slice(&2u64.to_le_bytes());
-        payload.extend_from_slice(&[0xAA, 0xBB]);
+        payload.extend_from_slice(&BLOB);
         replace_frame_payload(seg, txn.marker.start, &payload);
     };
+    // The one spelling of empty put back over a filled slot: the tag zero,
+    // the length zero, the blob gone — the marker two bytes shorter again.
+    let strip = |seg: &Path, marker_start: usize| {
+        let data = fs::read(seg).expect("segment");
+        let frames = transactions(&data);
+        let txn = frames.iter().find(|t| t.marker.start == marker_start).expect("the marker");
+        let mut payload = data[txn.marker.payload.clone()].to_vec();
+        assert_eq!(payload.len(), MARKER_EMPTY_LEN + BLOB.len(), "a filled marker");
+        payload.truncate(MARKER_EMPTY_LEN);
+        payload[MARKER_SIG_ALG_AT] = 0;
+        payload[MARKER_SIG_LEN_AT..MARKER_EMPTY_LEN].copy_from_slice(&0u64.to_le_bytes());
+        replace_frame_payload(seg, marker_start, &payload);
+    };
 
+    // FILLED after the commit, nothing re-chained: CAUGHT, from genesis and
+    // above the standing base alike.
     let case = golden.case_from_genesis("c04-filled");
     fill(&seg_file(&case, 1), golden.txn(OP));
-    let engine =
-        open_recovers(&case, &golden, golden.head(), "case 4: a filled signature slot mid-history");
-    every_boundary_answers(&engine, &golden, "case 4");
-    assert_eq!(
-        engine.kernel().chain_head(),
-        golden.txn(GOLDEN_OPS).chain,
-        "the head's chain is the golden's: the slot is outside every link"
-    );
-    drop(engine);
-    assert_eq!(
-        fs::metadata(seg_file(&case, 1)).expect("segment").len(),
-        golden.fixture.full_len + 2,
-        "the open kept the filled slot: nothing cut"
+    open_halts_with_chain_break(&case, golden.seq(OP), "case 4: a slot filled after its commit");
+    let case = golden.case("c04-filled-above-base");
+    let above = CHECKPOINT_AFTER_OP + 1;
+    fill(&seg_file(&case, 1), golden.txn(above));
+    open_halts_with_chain_break(
+        &case,
+        golden.seq(above),
+        "case 4: a slot filled above a standing base, one transaction after it",
     );
 
-    let case = golden.case("c04-filled-above-base");
-    fill(&seg_file(&case, 1), golden.txn(CHECKPOINT_AFTER_OP + 1));
-    open_recovers(&case, &golden, golden.head(), "case 4: a filled slot above a standing base");
+    // A journal holding the filled slot HONESTLY: filled, then every link
+    // from op 9 re-chained over it — the writer's own formula, the slot's
+    // digest included. It opens at the golden's head with the golden's world
+    // at every boundary, its chain its own from op 9 on.
+    let signed = golden.case_from_genesis("c04-signed");
+    fill(&seg_file(&signed, 1), golden.txn(OP));
+    let rechained = rechain_from(&golden, &signed, OP);
+    let signed_marker = transactions(&fs::read(seg_file(&signed, 1)).expect("segment"))[OP - 1]
+        .marker
+        .start;
+    {
+        let engine = open_recovers(&signed, &golden, golden.head(), "case 4: a filled slot, chained");
+        every_boundary_answers(&engine, &golden, "case 4, signed");
+        assert_ne!(rechained[0].1, golden.txn(OP).chain, "the filled slot is another link");
+        assert_eq!(engine.kernel().chain_head(), rechained.last().expect("links").1);
+        drop(engine);
+        assert_eq!(
+            fs::metadata(seg_file(&signed, 1)).expect("segment").len(),
+            golden.fixture.full_len + BLOB.len() as u64,
+            "the open kept the filled slot: nothing cut"
+        );
+    }
+    // …STRIPPED there, nothing else touched: CAUGHT at that transaction —
+    // the link over the empty digest is not the one the marker carries.
+    let case = golden.tmp.path().join("c04-stripped");
+    copy_dir(&signed, &case);
+    strip(&seg_file(&case, 1), signed_marker);
+    open_halts_with_chain_break(&case, golden.seq(OP), "case 4: a signature stripped");
+    // …ALTERED there, one blob byte flipped, its CRC re-sealed: CAUGHT.
+    let case = golden.tmp.path().join("c04-altered");
+    copy_dir(&signed, &case);
+    rewrite_frame(&seg_file(&case, 1), signed_marker, |payload| payload[MARKER_EMPTY_LEN] ^= 0xFF);
+    open_halts_with_chain_break(&case, golden.seq(OP), "case 4: a signature altered");
+    // …and STRIPPED WITH EVERY LATER LINK RE-CHAINED — NOT CAUGHT BY DESIGN:
+    // the forger holding the journal writes a consistent history, which is
+    // the golden's own to the byte, chain and all.
+    let case = golden.tmp.path().join("c04-stripped-rechained");
+    copy_dir(&signed, &case);
+    strip(&seg_file(&case, 1), signed_marker);
+    let restored = rechain_from(&golden, &case, OP);
+    assert_eq!(restored.last().expect("links").1, golden.txn(GOLDEN_OPS).chain);
+    assert_eq!(
+        fs::read(seg_file(&case, 1)).expect("segment"),
+        fs::read(golden_segment()).expect("the golden"),
+        "stripped and re-chained, the journal is the golden again"
+    );
+    let engine = open_recovers(&case, &golden, golden.head(), "case 4: stripped and re-chained");
+    every_boundary_answers(&engine, &golden, "case 4, stripped and re-chained");
+    drop(engine);
 
     let case = golden.case_from_genesis("c04-tag-without-bytes");
     rewrite_frame(&seg_file(&case, 1), golden.txn(OP).marker.start, |payload| {
@@ -1368,7 +1474,8 @@ fn c14_the_bases_link_edited_on_both_sides_passes_at_open_and_fails_from_below()
 /// value, which the edit left alone). Mid-history from genesis, above a
 /// standing base, and on the last transaction, as case 3 for the chain
 /// field; the edit is a single byte, so nothing but the salt moved. Case 4
-/// (the slot) is unchanged: the slot stays outside every link.
+/// (the slot) is its twin since the slot's digest joined the chain: a slot
+/// filled, stripped or altered in place is a link that fails the same way.
 ///
 /// What the salt is NOT: an anchor. The same edit with the chain recomputed
 /// over the new salt and every link above re-chained — a consistent rewrite

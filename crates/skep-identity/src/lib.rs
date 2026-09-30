@@ -39,8 +39,8 @@
 //! Signed ops' declarations are consumed in skepd as well: it composes the
 //! ENTRY frame it verifies through [`entry_frame`], over the locked
 //! snapshot's [`BoardTerm`], the principal's account, and the op's document
-//! and [`EntryBody`] — a `publish`'s built value by value within its budget
-//! through [`PublishBody`]; its write-path check reads a presented
+//! and [`EntryBody`] — a `publish`'s built segment by segment within its
+//! budget through [`PublishBody`]; its write-path check reads a presented
 //! attestation's row off the marker tag, and its codec lifts a request's
 //! `attest.alg` token to that tag and back, through [`SigAlgRow::of_token`]
 //! and [`SigAlgRow::of_tag`]; each marker tag's arithmetic over
@@ -95,12 +95,16 @@
 //! * `entry`: THE ENTRY FRAME under [`ENTRY_TAG`] — [`entry_frame`], which
 //!   spells every member from the values a signer or verifier holds: the
 //!   [`BoardTerm`], the account and document addresses, and an [`EntryBody`]
-//!   — an op's token paired with its body, built by [`entry_body_insert`],
+//!   — a grammar's token paired with its body, built by [`entry_body_insert`],
 //!   [`entry_body_make_link`] and [`entry_body_make_link_replacing`] (over a
 //!   [`LinkSlots`] naming three [`EntrySlot`]s, the second with the op's
-//!   `replaces` member) and [`entry_body_publish`], or value by value under a
-//!   byte budget by [`PublishBody`] — the bytes a publish-class entry's
-//!   signature is made over (signed ops; the design record §2.5);
+//!   `replaces` member), [`entry_body_publish`] (over [`ShotSegment`]s — the
+//!   address form: the runs the commit copies in by value, the windows by
+//!   address — and the shot's base extent), or segment by segment under a
+//!   byte budget by [`PublishBody`], and [`entry_body_record`], the record
+//!   grade's five rows under the `record` token — the bytes a publish-class
+//!   entry's signature, or a record's `sig`, is made over (signed ops; the
+//!   design record §2.5; the frame merge);
 //! * `payload`: the credential-record constants and payload types —
 //!   [`ENROLL_TYPE`], [`RETIRE_TYPE`], [`MAX_RECORD_BYTES`], [`Enrollment`]
 //!   with its refusal [`LabelError`], [`PayloadError`] (AUTH-1.18–1.28) —
@@ -182,7 +186,8 @@ mod write_types;
 
 pub use entry::{
     entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_publish,
-    entry_frame, BoardTerm, EntryBody, EntrySlot, LinkSlots, PublishBody,
+    entry_body_record, entry_frame, BoardTerm, EntryBody, EntrySlot, LinkSlots, PublishBody,
+    ShotSegment,
 };
 pub use framing::{
     framed, Tag, ENTRY_TAG, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, TAGS,

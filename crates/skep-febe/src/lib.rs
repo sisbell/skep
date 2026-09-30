@@ -194,7 +194,7 @@ pub use skep_address::{
 // unbuildable without them, and `Run::new`/`RunError` is the one constructor
 // of the runs a shot carries. `Deposit` is the two-state DEPOSIT DECLARATION
 // `Op::Insert` carries, so an insert is unbuildable without it.
-pub use skep_arrangement::{Base, Deposit, Run, RunError, Shot, ShotRun, VPos, VSpec};
+pub use skep_arrangement::{Base, Deposit, Run, RunError, Shot, ShotRun, ShotTerms, VPos, VSpec};
 pub use skep_content::Val; // M4
 // M8, `SlotSpec` included: every field of a `FourSet` is one, so the three
 // descriptor ops are unbuildable without it.

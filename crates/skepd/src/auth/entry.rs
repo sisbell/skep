@@ -20,21 +20,26 @@
 //!   holds it to the codec's own `op_name`);
 //! * `body` — per op cell: the declared type and the values for `insert`,
 //!   the three slots as the client sent them and its `replaces` member —
-//!   absent, or the address it names — for `make_link`, and for
-//!   `publish` THE RUNS THE CLIENT PLACED, their values read off the
-//!   snapshot by M4's `value_at` in run order (the record §2.5; the
-//!   investigation §3.3: the count is Σ width of the supplied runs), within
-//!   [`MAX_SHOT_BODY_BYTES`].
+//!   absent, or the address it names — for `make_link`, and for `publish`
+//!   THE COUNT, THE RUNS THE CLIENT PLACED IN THE ADDRESS FORM AND THE BASE
+//!   EXTENT (the record §2.5's cell as ruled — V, l6-A4, D25): the runs as
+//!   the commit will place them, M5's own classing
+//!   (`Shot::address_form`) — a run the commit COPIES IN (the trunk's own
+//!   I-space, the staging draft's) by its values, read off the snapshot by
+//!   M4's `value_at` in run order; a WINDOW onto another document by its
+//!   address and width, read from nowhere — within [`MAX_SHOT_BODY_BYTES`];
+//!   `base_extent` the shot's own, EMPTY in the birth shape.
 //!
-//! Three `publish` bodies the daemon does not compose:
+//! Four `publish` bodies the daemon does not compose:
 //!
-//! * a body whose values it does not hold — a run naming an address M4 has
-//!   no value at. That write cannot commit: the store's own existence walk
-//!   refuses it `dangling_source`, so the check passes it through
-//!   UNATTESTED and lets the store answer.
-//! * a body over a value the principal may NOT READ — a run onto an origin
-//!   document the read predicate withholds from it. Those values are never
-//!   read here: a verdict composed over them answers BY them —
+//! * a body whose values it does not hold — a copied run naming an address
+//!   M4 has no value at. That write cannot commit: the store's own existence
+//!   walk refuses it `dangling_source`, so the check passes it through
+//!   UNATTESTED and lets the store answer. (A window's addresses are never
+//!   walked here: the body spells them, and the store's walk answers.)
+//! * a body over a value the principal may NOT READ — a COPIED run onto a
+//!   staging draft the read predicate withholds from it. Those values are
+//!   never read here: a verdict composed over them answers BY them —
 //!   `attestation_required` telling that an address holds a value,
 //!   `signature` whether a guessed value is the one it holds — where the
 //!   store's source gate promises `withheld` before any existence answer
@@ -43,14 +48,23 @@
 //!   the store's own gates (`policy/attestation.rs`): their own refusal,
 //!   passed through UNATTESTED, where they refuse it; and
 //!   `attestation_invalid:withheld` where the base CARRIES every such run
-//!   (PUB-6.24), a value no signature of its author's can attest — as a
-//!   cross-owner `version` of a published member hands a principal runs whose
-//!   origin it never could read.
+//!   (PUB-6.24), a value no signature of its author's can attest. A WINDOW is
+//!   no such case since the address form (l6-A4): it is signed by its
+//!   address, which its author holds whatever it may read, and the store's
+//!   gate alone decides it — admitted where the base carries it (PUB-6.24),
+//!   `withheld` where it does not — so an author whose grant lapsed re-signs
+//!   a re-shoot that keeps a window (fam2-Q's (c), closed by arm A).
 //! * a body past [`MAX_SHOT_BODY_BYTES`], refused
 //!   `attestation_invalid:frame_too_large` before it is built past the budget.
+//! * a body with a term the frame's fixed-width rows cannot spell — a width,
+//!   an extent or a placed count past 2^64 − 1 ([`ComposeFault::Unspellable`]).
+//!   Such a shot names positions or a base extent no store holds and cannot
+//!   commit — `base_extent_too_large`, `too_many_values` or
+//!   `dangling_source` is its answer — so the check passes it through
+//!   UNATTESTED, as it passes a run naming an address with no value.
 
-use skep_address::{document_of, Address, Span};
-use skep_arrangement::{trunk_of, Deposit, Shot};
+use skep_address::{document_of, Address, Nat, Span};
+use skep_arrangement::{trunk_of, Deposit, PlacedSegment, Shot};
 use skep_content::HasContent;
 use skep_febe::Op;
 use skep_identity::{
@@ -68,17 +82,19 @@ use crate::World;
 /// of the checked set compose their bodies out of the request itself —
 /// `insert`'s values and `make_link`'s slots ride in the frame — so the
 /// transport's cap bounds them already. A shot's body is read off the
-/// STORE, one value per position its runs name, and a run may name one
-/// stored value as often as the wire's run list admits, at a width no codec
-/// cap sees. Parity makes the largest body the check reads, frames and
-/// verifies — against every candidate key of the attestation's row — the
-/// largest an `insert` could already hand it.
+/// STORE, one value per position its COPIED runs name (a window costs its
+/// address row alone, whatever its width), and a run may name one stored
+/// value as often as the wire's run list admits, at a width no codec cap
+/// sees. Parity makes the largest body the check reads, frames and verifies
+/// — against every candidate key of the attestation's row — the largest an
+/// `insert` could already hand it.
 ///
 /// Measured by [`PublishBody`], in the body's own layout, as the walk reads
 /// each value, so an over-budget shot is refused before its body is built
-/// past the budget, and the walk over the runs' Σ width stops at it: every
-/// value costs at least its four-byte length prefix, so the walk visits at
-/// most a quarter of the budget in positions, whatever the values hold.
+/// past the budget, and the walk over the copied runs' Σ width stops at it:
+/// every value costs at least its four-byte length prefix, so the walk
+/// visits at most a quarter of the budget in positions, whatever the values
+/// hold.
 const MAX_SHOT_BODY_BYTES: usize = crate::limits::MAX_REQUEST_BODY;
 
 /// Why the daemon could not compose the entry frame for a write — the reason
@@ -92,19 +108,27 @@ pub(super) enum ComposeFault {
     NoBoardTerm,
     /// The principal has no account prefix — no `account` term.
     NoAccount,
-    /// A `publish` run names an address the snapshot holds no value at — a
-    /// shot the store's own existence walk refuses `dangling_source`.
+    /// A `publish`'s COPIED run names an address the snapshot holds no value
+    /// at — a shot the store's own existence walk refuses `dangling_source`.
     MissingValue,
-    /// A `publish` run names an origin document the principal may not read,
-    /// so no value of the shot is read: a verdict composed over such a value
-    /// would answer BY it. What the write is OWED — the store's own refusal,
-    /// or `attestation_invalid:withheld` where the base CARRIES every such
-    /// run (PUB-6.24) — is not the composer's to know: the check asks the
-    /// store's own gates (`policy/attestation.rs`'s
-    /// `refused_at_or_before_the_source_gate`).
+    /// A `publish`'s COPIED run — a staging draft's, re-inserted by value —
+    /// names an origin document the principal may not read, so no value of
+    /// the shot is read: a verdict composed over such a value would answer BY
+    /// it. What the write is OWED — the store's own refusal, or
+    /// `attestation_invalid:withheld` where the base CARRIES every such run
+    /// (PUB-6.24) — is not the composer's to know: the check asks the store's
+    /// own gates (`policy/attestation.rs`'s
+    /// `refused_at_or_before_the_source_gate`). A window raises this never:
+    /// it is spelled by address and read from nowhere.
     UnreadableRunOrigin,
     /// A `publish`'s body would pass [`MAX_SHOT_BODY_BYTES`].
     OverBudget,
+    /// A `publish` term the frame's fixed-width rows cannot spell — a run's
+    /// width, the base extent or the placed count past 2^64 − 1 — naming
+    /// positions or a base extent no store holds: a shot the store refuses
+    /// (`base_extent_too_large`, `too_many_values`, `dangling_source`), so
+    /// the check passes it through UNATTESTED to that answer.
+    Unspellable,
 }
 
 /// A link slot as the entry frame's slot row takes it — the resolve form's
@@ -182,11 +206,16 @@ pub(super) fn compose(
         }
         Op::Publish { doc, shot } => {
             let trunk = trunk_of(doc);
-            // No value the principal may not read is ever read here.
-            if !every_run_origin_readable(world, &trunk, shot, principal) {
+            // The runs as the commit will place them — M5's classing, the
+            // one place a run's family is decided (l6-A4).
+            let segments = shot.address_form(&trunk);
+            // No value the principal may not read is ever read here: a
+            // copied run's origin must be readable to it; a window is spelled
+            // by address and read from nowhere.
+            if !every_copied_origin_readable(world, &trunk, &segments, principal) {
                 return Err(ComposeFault::UnreadableRunOrigin);
             }
-            (trunk, publish_body(world, shot)?)
+            (trunk, publish_body(world, shot, &segments)?)
         }
         _ => unreachable!(
             "compose's precondition: {:?} is outside the checked set, or the set was \
@@ -197,45 +226,71 @@ pub(super) fn compose(
     Ok(EntryFrame { board, account, doc, body })
 }
 
-/// Whether the principal may read every value `shot` places — each run's
-/// ORIGIN DOCUMENT, the trunk of the document its start was minted under
-/// (`document_of`, then `trunk_of`: the derivation M5's source gate asks
-/// about, PUB-2.15), being `trunk`, the shot document's own I-space, which
-/// the gate never consults, or one the read predicate admits at the
-/// principal's class, which is what M10 lends the gate, on the premise
-/// `policy/attestation.rs`'s `refused_at_or_before_the_source_gate` states.
-/// A run whose start names no document counts as unreadable: the store
-/// refuses it `bad_run`, and nothing is read to learn so.
-fn every_run_origin_readable(
+/// Whether the principal may read every value the shot COPIES IN — each
+/// copied segment's ORIGIN DOCUMENT, the trunk of the document its start was
+/// minted under (`document_of`, then `trunk_of`: the derivation M5's source
+/// gate asks about, PUB-2.15), being `trunk`, the shot document's own
+/// I-space, which the gate never consults, or one the read predicate admits
+/// at the principal's class, which is what M10 lends the gate, on the
+/// premise `policy/attestation.rs`'s `refused_at_or_before_the_source_gate`
+/// states. A window's origin is not asked about: no value of it is read.
+fn every_copied_origin_readable(
     world: &World,
     trunk: &Address,
-    shot: &Shot,
+    segments: &[PlacedSegment],
     principal: PrincipalId,
 ) -> bool {
     let reader = world.reader_class(Some(principal));
-    shot.runs.iter().all(|placed| {
-        document_of(placed.run.i_start())
+    segments.iter().all(|segment| match segment {
+        PlacedSegment::Copied(run) => document_of(run.i_start())
             .map(|d| trunk_of(&d))
-            .is_some_and(|origin| origin == *trunk || reader.readable(&origin))
+            .is_some_and(|origin| origin == *trunk || reader.readable(&origin)),
+        PlacedSegment::Window(_) => true,
     })
 }
 
-/// A shot's body — its runs' values in run order, pushed one by one onto a
-/// [`PublishBody`] held to [`MAX_SHOT_BODY_BYTES`] — or why it cannot be
-/// built: an address M4 holds no value at, or a value that would carry the
-/// body past the budget. The budget is measured in the body's own layout as
-/// each value is read, so nothing is collected ahead of the build and no body
-/// is held past it; a refused push takes the builder with it, so the shot is
-/// refused whole and no body is finished over the values before the refusal
-/// — the preimage of a shorter publish. PRECONDITION: the principal may read
-/// every value the shot places ([`every_run_origin_readable`]).
-fn publish_body(world: &World, shot: &Shot) -> Result<EntryBody, ComposeFault> {
+/// A shot's body — its segments in placement order, a copied run's values
+/// pushed one by one and a window pushed as its address and width, onto a
+/// [`PublishBody`] held to [`MAX_SHOT_BODY_BYTES`] over the shot's base
+/// extent — or why it cannot be built: an address M4 holds no value at, a
+/// segment that would carry the body past the budget, or a term the frame's
+/// fixed-width rows cannot spell. The budget is measured in the body's own
+/// layout as each value is read, so nothing is collected ahead of the build
+/// and no body is held past it; a refused push takes the builder with it, so
+/// the shot is refused whole and no body is finished over the segments before
+/// the refusal — the preimage of a shorter publish. PRECONDITION: the
+/// principal may read every value the shot copies in
+/// ([`every_copied_origin_readable`]).
+fn publish_body(
+    world: &World,
+    shot: &Shot,
+    segments: &[PlacedSegment],
+) -> Result<EntryBody, ComposeFault> {
     let content = world.content();
-    let mut body = PublishBody::within(MAX_SHOT_BODY_BYTES);
-    for placed in &shot.runs {
-        for a in placed.run.addrs() {
-            let v = content.value_at(a.tumbler()).ok_or(ComposeFault::MissingValue)?;
-            body = body.push(v.as_bytes()).ok_or(ComposeFault::OverBudget)?;
+    let spelled = |n: &Nat| u64::try_from(n).map_err(|_| ComposeFault::Unspellable);
+    let base_extent = shot.base.as_ref().map(|base| spelled(&base.extent)).transpose()?;
+    // The count must fit its eight bytes for the body to exist at all —
+    // summed first, so the builder's refusals below are the budget's alone.
+    segments.iter().try_fold(0u64, |placed, segment| {
+        let run = match segment {
+            PlacedSegment::Copied(run) | PlacedSegment::Window(run) => run,
+        };
+        placed.checked_add(spelled(run.width())?).ok_or(ComposeFault::Unspellable)
+    })?;
+    let mut body = PublishBody::within(MAX_SHOT_BODY_BYTES, base_extent);
+    for segment in segments {
+        match segment {
+            PlacedSegment::Copied(run) => {
+                for a in run.addrs() {
+                    let v = content.value_at(a.tumbler()).ok_or(ComposeFault::MissingValue)?;
+                    body = body.push(v.as_bytes()).ok_or(ComposeFault::OverBudget)?;
+                }
+            }
+            PlacedSegment::Window(run) => {
+                body = body
+                    .window(run.i_start(), spelled(run.width())?)
+                    .ok_or(ComposeFault::OverBudget)?;
+            }
         }
     }
     Ok(body.finish())
@@ -266,23 +321,38 @@ impl EntryFrame {
 
 #[cfg(test)]
 mod tests {
-    use skep_febe::OpKind;
-    use skep_identity::entry_body_publish;
+    use skep_febe::{Codec, OpKind};
+    use skep_identity::{entry_body_publish, entry_body_record};
 
     use super::*;
     use crate::codec::op_name;
+    use crate::JsonCodec;
 
     /// The frame's `op` member is the op-kind token AS THE WIRE SPELLS IT
-    /// (the design record §2.5): each body `skep_identity` builds carries the
-    /// codec's own name for its op, so a wire rename meets this test before it
-    /// can move a signed preimage.
+    /// (the design record §2.5): each entry-grade body `skep_identity` builds
+    /// carries the codec's own name for its op, so a wire rename meets this
+    /// test before it can move a signed preimage. ONE EXCEPTION, the frame
+    /// merge's (fm-I, 2026-09-29): `record` names the record grade's body
+    /// and no wire op — the codec parses no such op, and the body's token
+    /// says which grammar a `sig` was made over.
     #[test]
     fn each_body_carries_the_wire_name_of_its_op() {
         let empty = EntrySlot::Addrs(&[]);
         let slots = LinkSlots { from: empty, to: empty, ty: empty };
         assert_eq!(entry_body_insert(None, std::iter::empty()).op(), op_name(OpKind::Insert));
         assert_eq!(entry_body_make_link(slots).op(), op_name(OpKind::MakeLink));
-        assert_eq!(entry_body_publish(std::iter::empty()).op(), op_name(OpKind::Publish));
+        assert_eq!(entry_body_publish(std::iter::empty(), None).op(), op_name(OpKind::Publish));
+        let ty = skep_address::validate(
+            skep_address::Tumbler::new([1u32, 1, 0, 1, 0, 1, 0, 3, 1].map(skep_address::Nat::from))
+                .expect("a tumbler"),
+        )
+        .expect("an address");
+        let record = entry_body_record(&ty, &[], None, None, b"");
+        assert_eq!(record.op(), "record", "the record grade's grammar token");
+        assert!(
+            JsonCodec.parse(br#"{"op":"record"}"#).is_err(),
+            "`record` is a grammar token with no wire op: the codec parses none by that name"
+        );
     }
 
     /// COMPOSE'S PRECONDITION IS NEVER ANSWERED AS A FAULT: on a board whose

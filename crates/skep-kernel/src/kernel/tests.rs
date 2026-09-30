@@ -40,8 +40,9 @@ fn fresh_writer(dir: &std::path::Path) -> JournalWriter {
 /// transaction it is handed with, `attestation_at` reads it back at that
 /// boundary and `None` at every other, genesis is no transaction, a
 /// zero-step call writes no marker, and a boundary that IS a checkpoint's
-/// seq is still answered from the marker below it. The chain is unmoved
-/// by the slot: the same ops under a plain `transact` chain identically.
+/// seq is still answered from the marker below it. The chain MOVES with
+/// the slot (r6-2c): the same ops under a plain `transact` chain identically
+/// up to the first filled slot and part there.
 #[test]
 fn transact_attested_fills_the_slot_of_that_transaction_alone_and_reads_it_back() {
     let dir = tempfile::tempdir().unwrap();
@@ -81,15 +82,17 @@ fn transact_attested_fills_the_slot_of_that_transaction_alone_and_reads_it_back(
     assert_eq!(kernel.attestation_at(s4).unwrap(), Some(tag3));
     assert_eq!(kernel.chain_at(s4).unwrap(), kernel.chain_head());
 
-    // The chain is the same chain the plain arm writes: the slot is no
-    // chain input.
+    // The chain the plain arm writes is this one's up to the first filled
+    // slot, and another from there: the slot's digest is a chain input.
     let twin = tempfile::tempdir().unwrap();
     let plain =
         Kernel::<Vec<u64>>::open(cfg(twin.path(), BurnedSeqPolicy::Rollback), Vec::new()).unwrap();
     for n in 1..=4u64 {
         plain.transact(&[], push(n)).unwrap();
     }
-    assert_eq!(plain.chain_head(), kernel.chain_head());
+    assert_eq!(plain.chain_at(s1).unwrap(), kernel.chain_at(s1).unwrap(), "unsigned alike");
+    assert_ne!(plain.chain_at(s2).unwrap(), kernel.chain_at(s2).unwrap(), "the filled slot parts them");
+    assert_ne!(plain.chain_head(), kernel.chain_head());
     assert_eq!(plain.attestation_at(Seq(2)).unwrap(), None);
 }
 

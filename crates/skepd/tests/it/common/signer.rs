@@ -2,9 +2,11 @@
 //! investigation §4.3): a token → (principal, seed) registry the two
 //! session-opening helpers fill, and the composition of the ENTRY frame from
 //! the frame a suite is about to post — `board` read off `H.1`, `account` off
-//! `principal_prefix`, `doc` and `body` per op, a `publish`'s values read
-//! back over the wire from the runs' origins — signed by the seed's hybrid
-//! key and attached as the frame's top-level `attest`.
+//! `principal_prefix`, `doc` and `body` per op, a `publish`'s body in the
+//! ADDRESS FORM (l6-A4): the runs the commit copies in by their values, read
+//! back over the wire from their origins, its windows by address, and its
+//! base extent — signed by the seed's hybrid key and attached as the frame's
+//! top-level `attest`.
 
 use std::sync::{LazyLock, PoisonError};
 
@@ -216,76 +218,156 @@ impl SignerSlot {
     }
 }
 
-/// The values of a `publish` shot's runs, in run order: for each origin, the
-/// document's V→I image and its delivery are read once as `token`, the
-/// image inverted to place each I-address of the run; `None` where an origin
+/// One segment of a `publish` body as the signer composes it (the address
+/// form, l6-A4), owned: a copied position's value, or a window's start and
+/// width.
+pub enum SignerSegment {
+    Value(Vec<u8>),
+    Window(Address, u64),
+}
+
+impl SignerSegment {
+    pub fn as_shot(&self) -> ShotSegment<'_> {
+        match self {
+            SignerSegment::Value(v) => ShotSegment::Value(v),
+            SignerSegment::Window(start, width) => ShotSegment::Window { start, width: *width },
+        }
+    }
+}
+
+/// The values at every content I-address of `origin`, keyed by address, as
+/// `token` reads them: the document's V→I image and its delivery read once,
+/// the image inverted to place each I-address; `None` where the origin
 /// cannot be read (a withheld source: the client cannot compose that body,
-/// which is the design's own point).
-fn publish_values(port: u16, token: &str, runs: &Value) -> Option<Vec<Vec<u8>>> {
+/// which is the design's own point). Every read here is UNJUDGED: a refusal
+/// (an unregistered or a withheld origin) means the client cannot compose
+/// this body, and the frame goes out as written.
+fn origin_values(port: u16, token: &str, origin: &str) -> Option<HashMap<String, Vec<u8>>> {
+    let set = op_unattested(port, Some(token), &spanset_frame(origin));
+    if set["resp"].as_str() != Some("span_set") {
+        return None;
+    }
+    let extent: u64 = set["set"]
+        .as_array()?
+        .iter()
+        .find(|s| s["start"].as_str() == Some("1.1"))
+        .and_then(|s| s["width"].as_str()?.strip_prefix("0.")?.parse().ok())
+        .unwrap_or(0);
+    let mut map = HashMap::new();
+    if extent > 0 {
+        let image = op_unattested(port, Some(token), &image_frame(origin, 1, extent));
+        if image["resp"].as_str() != Some("runs") {
+            return None;
+        }
+        let addrs = expand_runs(&runs_in(&image));
+        let delivery = op_unattested(port, Some(token), &retrieve_frame(origin, 1, extent));
+        if delivery["resp"].as_str() != Some("delivery") {
+            return None;
+        }
+        let mut values = Vec::new();
+        for item in delivery["items"].as_array()? {
+            delivery_item_values(item, &mut values)?;
+        }
+        if values.len() != addrs.len() {
+            return None;
+        }
+        for (a, v) in addrs.into_iter().zip(values) {
+            map.insert(a, v);
+        }
+    }
+    Some(map)
+}
+
+/// THE ADDRESS FORM of a `publish` frame's runs, as the commit will place
+/// them (l6-A4; M5's `Shot::address_form`, restated over the wire's own
+/// spellings): a run of the shot document's own I-space, or of the staging
+/// draft's, is COPIED IN — its values in V-order, read back over the wire
+/// from the document that MINTED the addresses (the I-address's own, as an
+/// honest client that placed them knows it, never the stated `origin`, which
+/// the store judges) or taken from `supplied`, in V-order, where the caller
+/// holds them; any other run is a WINDOW by its address and width, two
+/// I-adjacent windows in a row merged into one as the placement merges them.
+/// `None` where a copied origin cannot be read.
+pub fn publish_segments(
+    port: u16,
+    token: &str,
+    frame: &Value,
+    supplied: Option<&[&[u8]]>,
+) -> Option<Vec<SignerSegment>> {
+    let trunk = trunk_of_str(frame["doc"].as_str()?);
+    let draft = frame.get("draft").and_then(Value::as_str).map(trunk_of_str);
     let mut per_origin: HashMap<String, HashMap<String, Vec<u8>>> = HashMap::new();
-    let mut out = Vec::new();
-    for run in runs.as_array()? {
+    let mut supplied = supplied.map(|values| values.iter());
+    let mut out: Vec<SignerSegment> = Vec::new();
+    for run in frame["runs"].as_array()? {
         let i_start = run["i_start"].as_str()?;
         let width: u64 = run["width"].as_str()?.parse().ok()?;
-        // The bytes are read from the document that MINTED the addresses —
-        // the I-address's own document, as an honest client that placed
-        // them knows it — and not from the run's stated `origin`, which the
-        // store judges (`bad_run`) and the frame does not carry.
         if !i_start.contains(".0.1.") {
             return None;
         }
         let origin = origin_of(i_start);
-        if !per_origin.contains_key(&origin) {
-            // Every read here is UNJUDGED: a refusal (an unregistered or a
-            // withheld origin) means the client cannot compose this body,
-            // and the frame goes out as written.
-            let set = op_unattested(port, Some(token), &spanset_frame(&origin));
-            if set["resp"].as_str() != Some("span_set") {
-                return None;
-            }
-            let extent: u64 = set["set"]
-                .as_array()?
-                .iter()
-                .find(|s| s["start"].as_str() == Some("1.1"))
-                .and_then(|s| s["width"].as_str()?.strip_prefix("0.")?.parse().ok())
-                .unwrap_or(0);
-            let mut map = HashMap::new();
-            if extent > 0 {
-                let image = op_unattested(port, Some(token), &image_frame(&origin, 1, extent));
-                if image["resp"].as_str() != Some("runs") {
-                    return None;
+        let origin_doc = trunk_of_str(&origin);
+        let copied = origin_doc == trunk || draft.as_deref() == Some(origin_doc.as_str());
+        if copied {
+            let addrs = expand_runs(&[(i_start.to_string(), width)]);
+            match supplied.as_mut() {
+                Some(values) => {
+                    for _ in addrs {
+                        out.push(SignerSegment::Value(values.next()?.to_vec()));
+                    }
                 }
-                let addrs = expand_runs(&runs_in(&image));
-                let delivery = op_unattested(port, Some(token), &retrieve_frame(&origin, 1, extent));
-                if delivery["resp"].as_str() != Some("delivery") {
-                    return None;
-                }
-                let mut values = Vec::new();
-                for item in delivery["items"].as_array()? {
-                    delivery_item_values(item, &mut values)?;
-                }
-                if values.len() != addrs.len() {
-                    return None;
-                }
-                for (a, v) in addrs.into_iter().zip(values) {
-                    map.insert(a, v);
+                None => {
+                    if !per_origin.contains_key(&origin) {
+                        per_origin.insert(origin.clone(), origin_values(port, token, &origin)?);
+                    }
+                    let map = &per_origin[&origin];
+                    for a in addrs {
+                        out.push(SignerSegment::Value(map.get(&a)?.clone()));
+                    }
                 }
             }
-            per_origin.insert(origin.clone(), map);
-        }
-        let map = &per_origin[&origin];
-        for a in expand_runs(&[(i_start.to_string(), width)]) {
-            out.push(map.get(&a)?.clone());
+        } else {
+            // A window — one with the window before it when I-adjacent: the
+            // same content I-space, starting where the last one reaches.
+            let (prefix, ordinal) = i_start.rsplit_once('.')?;
+            let ordinal: u64 = ordinal.parse().ok()?;
+            let merged = match out.last_mut() {
+                Some(SignerSegment::Window(start, held)) => {
+                    let spelled = start.to_string();
+                    let (held_prefix, held_ordinal) = spelled.rsplit_once('.')?;
+                    let held_ordinal: u64 = held_ordinal.parse().ok()?;
+                    if held_prefix == prefix && held_ordinal + *held == ordinal {
+                        *held += width;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            };
+            if !merged {
+                out.push(SignerSegment::Window(parse_addr(i_start)?, width));
+            }
         }
     }
     Some(out)
 }
 
+/// A `publish` frame's `base_extent` as the body spells it: `Some(None)`
+/// where the frame carries none (the birth shape), `None` where the member
+/// is not a count.
+fn base_extent_of(frame: &Value) -> Option<Option<u64>> {
+    match frame.get("base_extent") {
+        None => Some(None),
+        Some(v) => Some(Some(v.as_str()?.parse().ok()?)),
+    }
+}
+
 /// The ENTRY frame for `frame` as `principal` would sign it on this board,
 /// or `None` where a member cannot be composed (no `H.1` yet, an
-/// unreadable run origin, an op outside the three). Every address the frame
-/// names is PARSED before it is framed, so `entry_frame` spells the address
-/// and not the string the frame happened to carry.
+/// unreadable copied origin, an op outside the three). Every address the
+/// frame names is PARSED before it is framed, so `entry_frame` spells the
+/// address and not the string the frame happened to carry.
 pub fn entry_frame_for(port: u16, token: &str, principal: u64, frame: &Value) -> Option<Vec<u8>> {
     let op = frame["op"].as_str()?;
     let board = board_term(port)?;
@@ -314,10 +396,11 @@ pub fn entry_frame_for(port: u16, token: &str, principal: u64, frame: &Value) ->
             (parse_addr(frame["home"].as_str()?)?, entry_body_make_link(slots))
         }
         "publish" => {
-            let values = publish_values(port, token, &frame["runs"])?;
+            let segments = publish_segments(port, token, frame, None)?;
+            let base_extent = base_extent_of(frame)?;
             (
                 parse_addr(&trunk_of_str(frame["doc"].as_str()?))?,
-                entry_body_publish(values.iter().map(Vec::as_slice)),
+                entry_body_publish(segments.iter().map(SignerSegment::as_shot), base_extent),
             )
         }
         _ => return None,
@@ -341,13 +424,15 @@ pub fn values_of(port: u16, token: Option<&str>, doc: &str, from: u64, width: u6
     out
 }
 
-/// [`op`] for a `publish` whose runs' VALUES the caller supplies — the
-/// bytes it places, in V-order — signed over the body those values make:
-/// for a shot whose values the caller knows without reading them back over
-/// the wire, and for the cells showing that a signature over values the
-/// caller may NOT read decides nothing — the daemon composes no body over
-/// them, so whatever is attached, the store's own refusal answers, or the
-/// check's value-blind `attestation_invalid:withheld`.
+/// [`op`] for a `publish` whose COPIED runs' VALUES the caller supplies — the
+/// bytes it places, in V-order — signed over the body those values, the
+/// frame's windows by address and its base extent make: for a shot whose
+/// values the caller knows without reading them back over the wire, and for
+/// the cells showing that a signature over values the caller may NOT read
+/// decides nothing — a window is signed by address and never read, and a
+/// copied run the daemon cannot read composes no body, so whatever is
+/// attached, the store's own refusal answers, or the check's value-blind
+/// `attestation_invalid:withheld`.
 pub fn op_with_publish_values(port: u16, token: &str, frame: &str, values: &[&[u8]]) -> Value {
     let Some((principal, seed)) = signer_of(token) else {
         return op_unattested(port, Some(token), frame);
@@ -359,7 +444,10 @@ pub fn op_with_publish_values(port: u16, token: &str, frame: &str, values: &[&[u
     let account = parse_addr(&account).expect("the daemon's own account prefix is an address");
     let alg = SigAlgRow::of_tag(FIXTURE_TAG).expect("tag 1").token;
     let doc = parse_addr(&trunk_of_str(v["doc"].as_str().expect("doc"))).expect("a document address");
-    let body = entry_body_publish(values.iter().copied());
+    let segments = publish_segments(port, token, &v, Some(values))
+        .expect("the frame's runs are content runs and the values supplied cover the copied ones");
+    let base_extent = base_extent_of(&v).expect("a count, or no base");
+    let body = entry_body_publish(segments.iter().map(SignerSegment::as_shot), base_extent);
     let bytes = entry_frame(alg, board, &account, &doc, &body);
     let signer = HybridSigner::from_seed(FIXTURE_TAG, &seed).expect("tag 1");
     v["attest"] = attest_member(&signer.sign(&bytes));

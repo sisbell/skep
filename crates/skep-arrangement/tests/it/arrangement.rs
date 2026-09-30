@@ -26,8 +26,8 @@ use skep_address::{subtree_of, validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{
     as_ordinal_vspan, deposit_class_types, is_ordinal_vspan, ordinal_vspan, reading_surface,
     seat_link, stage_seat_link, trunk_head, Base, Caller, CopyError, DeleteError, Deposit, HasM5,
-    InsertError, M5State, PublishError, RearrangeError, Run, RunError, Runs, SeatError, Shot,
-    ShotRun, VPos, VSpec, VersionError, Vstream, MAX_REINSERTED_VALUES,
+    InsertError, M5State, PlacedSegment, PublishError, RearrangeError, Run, RunError, Runs,
+    SeatError, Shot, ShotRun, ShotTerms, VPos, VSpec, VersionError, Vstream, MAX_REINSERTED_VALUES,
 };
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{
@@ -2031,14 +2031,15 @@ fn the_birth_extent_of_a_shot_born_version_counts_its_whole_placement_and_no_lat
 }
 
 #[test]
-fn a_birth_version_the_shot_minted_empty_answers_its_first_deposit_as_its_birth() {
-    // BIRTH★'s one residue, pinned through the ops as `birth_extent` states
-    // it: a shot with no runs journals no placement at its mint, so the
-    // first placement the fold sees for the birth version is its first
-    // DEPOSIT, noted as the birth — zero, exactly, until then; the count that
-    // deposit left after. Whoever closes the residue (a mint that notes its
-    // own empty birth) turns this red and rewrites `birth_extent`'s card with
-    // it.
+fn a_birth_version_the_shot_minted_empty_is_noted_at_zero_and_carries_its_terms() {
+    // BIRTH★'s one residue, CLOSED through the ops by D25's (c′): the shot
+    // journals its placing record for every member it mints, an empty
+    // placement included — the record carries the shot's terms, which exist
+    // whatever the placement holds — so a birth version born empty is noted
+    // at zero by its own mint, and its first deposit grows the count alone.
+    // The terms are read off the member: the count zero, and no base extent
+    // — the birth bit. (Until the record carried the terms, an empty shot
+    // journaled no placement and that deposit was read as the birth.)
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     let (member, _) = vs
@@ -2050,20 +2051,104 @@ fn a_birth_version_the_shot_minted_empty_answers_its_first_deposit_as_its_birth(
         )
         .expect("an empty birth version, in the birth shape");
     assert_eq!(member, vdoc(), "the chain's first member");
-    assert_eq!(
-        k.snapshot().world().m5().birth_extent(&member),
-        n(0),
-        "exact until a deposit lands"
-    );
+    {
+        let s = k.snapshot();
+        assert_eq!(s.world().m5().birth_extent(&member), n(0), "noted at zero by the mint");
+        assert_eq!(
+            s.world().m5().shot_terms(&member),
+            Some(&ShotTerms { placed: n(0), base_extent: None }),
+            "the terms: nothing placed, no base — the birth bit"
+        );
+    }
     vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"z")], declared())
         .expect("a deposit landing in the head the shot minted");
     let s = k.snapshot();
     assert_eq!(s.world().m5().content_count(&member), n(1), "the head took the deposit");
-    assert_eq!(
-        s.world().m5().birth_extent(&member),
-        n(1),
-        "the first deposit, read as the birth"
+    assert_eq!(s.world().m5().birth_extent(&member), n(0), "born empty, whatever it took since");
+}
+
+#[test]
+fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
+    // l6-A4 = r6-4 on both sides of the commit: `Shot::address_form` for the
+    // request and `M5State::address_form_of` for the member it minted agree
+    // run for run — the same classes, the same widths, every window the
+    // same run, every copied run the same VALUES — over a shot holding all
+    // three families with the two seams the member's run-list erases: two
+    // I-ADJACENT WINDOWS the placement merges into one, and the base's
+    // CARRIED TAIL merged into the client's last own-origin run, which the
+    // member side CLIPS back at `placed`. And the terms the member carries
+    // are the request's: `placed` the runs' Σ width, `base_extent` the base's.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
+    insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"d"), val(b"e")], Deposit::Undeclared)
+        .expect("doc2, the window's source: d e at its first two addresses");
+    let d2 = |k: u32| a(&[1, 0, 1, 0, 2, 0, 1, k]);
+    // Two windows onto doc2, adjacent; the draft's `a` re-inserted; the
+    // edition's own `a b` by reference — with the base taken at two, so `c`
+    // is the carried tail, I-adjacent to that last run.
+    let shot = Shot {
+        base: Some(base(&pdoc(), 2)),
+        draft: Some(doc1()),
+        runs: vec![
+            shot_run(&doc2(), &d2(1), 1),
+            shot_run(&doc2(), &d2(2), 1),
+            shot_run(&doc1(), &ca(1), 1),
+            shot_run(&pdoc(), &pca(1), 2),
+        ],
+    };
+    let requested = shot.address_form(&pdoc());
+    let (member, _) = vs
+        .publish(P1, &pdoc(), shot, &readable_by(PrincipalId(1)))
+        .expect("the shot commits");
+    assert_eq!(member, vdoc());
+    let s = k.snapshot();
+    let (m5, content) = (s.world().m5(), s.world().content());
+    let terms = m5.shot_terms(&member).expect("the shot's member carries its terms");
+    assert_eq!(*terms, ShotTerms { placed: n(5), base_extent: Some(n(2)) });
+    // The member: [doc2 d e][pdoc a′ (fresh)][pdoc a b c] — the tail merged
+    // into the last own run, so three runs where the client named four.
+    assert_eq!(m5.content_run_count(&member), 3);
+    assert_eq!(m5.content_count(&member), n(6));
+    let at_member = m5.address_form_of(&member, &terms.placed);
+    let values_of = |seg: &PlacedSegment| -> Vec<Vec<u8>> {
+        let run = match seg {
+            PlacedSegment::Copied(run) | PlacedSegment::Window(run) => run,
+        };
+        run.addrs()
+            .map(|a| content.value_at(a.tumbler()).expect("a placed value").as_bytes().to_vec())
+            .collect()
+    };
+    assert_eq!(requested.len(), 3, "the two windows merged, then two copied runs");
+    assert_eq!(at_member.len(), 3, "read back the same, the last clipped at `placed`");
+    for (r, m) in requested.iter().zip(&at_member) {
+        match (r, m) {
+            (PlacedSegment::Window(x), PlacedSegment::Window(y)) => {
+                assert_eq!(x, y, "a window is the same run on both sides")
+            }
+            (PlacedSegment::Copied(x), PlacedSegment::Copied(y)) => {
+                assert_eq!(x.width(), y.width(), "a copied run keeps its width");
+                assert_eq!(values_of(r), values_of(m), "…and spells the same values");
+            }
+            other => panic!("the classes differ: {other:?}"),
+        }
+    }
+    assert!(
+        matches!(&at_member[0], PlacedSegment::Window(w) if *w.i_start() == d2(1) && *w.width() == n(2)),
+        "the merged window: {at_member:?}"
     );
+    assert!(
+        matches!(&at_member[2], PlacedSegment::Copied(c) if *c.i_start() == pca(1) && *c.width() == n(2)),
+        "the last own run clipped from three to the two the client placed: {at_member:?}"
+    );
+    // Asked past the client's positions, the member answers what it has —
+    // the whole run, the tail included; asked of nothing, nothing.
+    assert!(
+        matches!(&m5.address_form_of(&member, &n(9))[2], PlacedSegment::Copied(c) if *c.width() == n(3))
+    );
+    assert!(m5.address_form_of(&member, &n(0)).is_empty());
+    assert!(m5.address_form_of(&doc2(), &n(2)).iter().all(|s| matches!(s, PlacedSegment::Copied(_))),
+        "a document's own runs are copied, read at the address named");
 }
 
 #[test]
@@ -3763,7 +3848,8 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
         .expect("a third deposit commits");
     assert_eq!(k.attestation_at(s_none).unwrap(), None);
 
-    // The unattested twin chains identically: the slot is no chain input.
+    // The unattested twin chains identically up to the first filled slot and
+    // parts there: the slot's digest is a chain input (r6-2c).
     let twin_dir = tempdir().expect("tempdir");
     let twin = Kernel::<World>::open(cfg_fsync(twin_dir.path()), genesis()).expect("open");
     let vs = Vstream::new(&twin);
@@ -3779,5 +3865,7 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
     vs.publish(P1, &pdoc(), shot, &readable_by(PrincipalId(1))).unwrap();
     vs.insert(P1, &pdoc(), vp(1, 3), vec![val(b"d")], declared()).unwrap();
     vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"e")], declared()).unwrap();
-    assert_eq!(twin.chain_head(), k.chain_head(), "the slot is outside every link");
+    assert_eq!(twin.chain_at(s_plain).unwrap(), k.chain_at(s_plain).unwrap(), "unsigned alike");
+    assert_ne!(twin.chain_at(s_att).unwrap(), k.chain_at(s_att).unwrap(), "the first filled slot parts them");
+    assert_ne!(twin.chain_head(), k.chain_head(), "the slot is inside its link");
 }

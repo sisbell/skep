@@ -59,7 +59,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use attest::SIG_ALG_UNSIGNED;
-use chain::ChainLink;
+use chain::{slot_digest, ChainLink};
 
 /// Per-frame sync word anchoring recovery resynchronization (§1/§7) — and
 /// the journal's FORMAT stamp: the trailing numeral names the format that
@@ -218,7 +218,11 @@ pub(crate) struct CommittedRecord {
 /// after `sig_alg` and moves no other marker byte (its frame's `len` and
 /// `crc` differ, as any payload's must). The salt's place, before the chain,
 /// is the preimage's own order: the chain is computed OVER the salt, so the
-/// bytes it is computed over precede it, as `records_checksum` does.
+/// bytes it is computed over precede it, as `records_checksum` does. The
+/// slot is the one input stored AFTER the field it feeds — its DIGEST closes
+/// the link after the salt ([`ChainLink`]; the board's r6-2c, 2026-09-29) —
+/// and it stays last for layout A's own reason: a filled slot moves no other
+/// marker byte.
 ///
 /// Decoded through [`MarkerShadow`], the one door that holds the slot's
 /// one-spelling-of-empty rule; the bytes are the struct's own.
@@ -252,13 +256,17 @@ struct Marker {
     /// `SKJ4` are the bytes it holds forever.
     pub chain: [u8; 32],
     /// The signature slot's tag (X2): which hybrid pair `sig` was made under.
-    /// [`SIG_ALG_UNSIGNED`] (`0`) is the one value this build writes; the
-    /// kernel reads the tag only to hold the one-spelling-of-empty rule at
-    /// [`MarkerShadow`]'s door and never interprets the blob — an attested
+    /// [`SIG_ALG_UNSIGNED`] (`0`) is what every unattested transaction writes;
+    /// the kernel reads the tag to hold the one-spelling-of-empty rule at
+    /// [`MarkerShadow`]'s door and to hash the slot's bytes into `chain`
+    /// ([`chain::slot_digest`]), and never interprets the blob — an attested
     /// marker's verification is the verifier's, beside the table, fold-inert.
     pub sig_alg: u8,
     /// The signature under the pair `sig_alg` names — EMPTY under tag `0`,
-    /// which costs eight bytes (the length prefix) per commit.
+    /// which costs eight bytes (the length prefix) per commit. With the tag,
+    /// a CHAIN INPUT by digest (the board's r6-2c): a slot stripped or altered
+    /// in a committed marker is a chain break at that transaction (the tamper
+    /// matrix's case 4).
     pub sig: Vec<u8>,
 }
 
@@ -401,14 +409,17 @@ fn push_frame(buf: &mut Vec<u8>, payload: &[u8]) -> io::Result<()> {
 /// its terminal commit marker, ready for a single `write_all` + one barrier
 /// fsync (§1/§3), and answer the chain value the marker carries — this
 /// transaction's link, computed from `prev_chain`, the frames as they are
-/// built and `salt` ([`ChainLink`]), which the writer adopts once the barrier
-/// passes. `salt` is the transaction's own, drawn by
-/// [`JournalWriter::commit_txn`] from the kernel's [`crate::SaltSource`] before
-/// this is called, and it goes two places from here: into the marker, where
-/// every replay reads it back, and into the link, closed with it after the
-/// marker's other pre-chain fields. The bytes are consumed into their frames:
-/// the caller has no use for them past this call, and a commit is no place
-/// to copy every record a second time.
+/// built, `salt` and the digest of the slot `attestation` fills
+/// ([`ChainLink`]), which the writer adopts once the barrier passes. `salt`
+/// is the transaction's own, drawn by [`JournalWriter::commit_txn`] from the
+/// kernel's [`crate::SaltSource`] before this is called, and it goes two
+/// places from here: into the marker, where every replay reads it back, and
+/// into the link, closed with it after the marker's other pre-chain fields.
+/// The slot goes the same two places — spelled into the marker's last two
+/// fields, and hashed into the link after the salt — so it is an INPUT to
+/// this function's link and nothing is ordered around it. The bytes are
+/// consumed into their frames: the caller has no use for them past this
+/// call, and a commit is no place to copy every record a second time.
 ///
 /// The `Seq` arithmetic here stays in range because the coordinates were
 /// already minted: [`crate::Kernel::transact`] draws the whole range
@@ -453,15 +464,18 @@ fn encode_txn(
         push_frame(&mut buf, &payload)?;
     }
     let last_seq = first_seq + (n - 1);
-    let chain = link.close(txn, last_seq, checksum, &salt);
     // THE SLOT (signed ops): the attestation's pair, where the transaction
-    // carries one, else the one spelling of empty. Written AFTER the chain is
-    // closed, so the slot is no chain input by construction — a signature
-    // over the entry's content must sit outside the chain that covers it.
+    // carries one, else the one spelling of empty — and A CHAIN INPUT (the
+    // board's r6-2c, 2026-09-29): its digest closes the link after the salt,
+    // at every transaction, so a slot stripped or altered after this commit
+    // is a chain break at it. A signature over the ENTRY's content, made
+    // before the commit, sits outside the chain that covers it all the same:
+    // the chain covers the signature, not the other way round.
     let (sig_alg, sig) = match attestation {
         Some(a) => (a.sig_alg(), a.sig().to_vec()),
         None => (SIG_ALG_UNSIGNED, Vec::new()),
     };
+    let chain = link.close(txn, last_seq, checksum, &salt, &slot_digest(sig_alg, &sig));
     let payload = codec()
         .serialize(&FramePayload::Marker(Marker {
             txn,

@@ -38,8 +38,14 @@ use crate::Seq;
 // gained `chain_head` and `body_hash`, and the body went canonical; and 3 → 4
 // on 2026-09-24 with the journal's `SKJ4` (the chain's salt): nothing in the
 // layout moved, but `chain_head` is a value under the salted preimage, which
-// no `SKC3` header's is. A checkpoint under another stamp is refused at
-// `load` naming the stamp found.
+// no `SKC3` header's is. NOT bumped on 2026-09-29, when the chain's preimage
+// gained the signature slot's digest and M5's slice a fourth field (the
+// shot terms): a format event by the marker doc's own definition, landed
+// under the same stamps by the owner's no-stamp ruling — no served board
+// exists, dev boards regenerate, and the golden fixture was regenerated once
+// (`tests/golden/`). A checkpoint under another stamp is refused at `load`
+// naming the stamp found; one written under this stamp before that day
+// fails at the body's decode or at the chain, as corruption.
 const MAGIC: [u8; 4] = *b"SKC4";
 /// The header's fields, at the offsets `write` lays them down and
 /// [`parse_header`] reads them at — one spelling of each, so the two cannot

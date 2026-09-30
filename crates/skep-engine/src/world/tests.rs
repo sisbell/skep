@@ -71,7 +71,7 @@ fn each_slice_serializes_the_fields_the_format_count_names() {
         (
             "arrangement",
             field_names(&world.arrangement),
-            &["arrangements", "provenance", "birth_extents"],
+            &["arrangements", "provenance", "birth_extents", "shot_terms"],
         ),
         ("links", field_names(&world.links), &["links"]),
     ] {
@@ -255,24 +255,27 @@ fn links_in_a_draft(shapes: &[(bool, bool)]) -> World {
 }
 
 /// `world`'s bytes as a build from before M5's birth memo wrote them: the
-/// stamp, then each slice's, with M5's cut short of the memo — its LAST
-/// field (`each_slice_serializes_the_fields_the_format_count_names`) and,
-/// in every world handed here, EMPTY, so the eight-byte zero length that
-/// ends M5's bytes. Checked rather than assumed: the memo is read off the
+/// stamp, then each slice's, with M5's cut short of its two trailing maps —
+/// the memo and, after it, the shot terms that joined the slice with D25's
+/// (c′) (`each_slice_serializes_the_fields_the_format_count_names`), both
+/// EMPTY in every world handed here, so the two eight-byte zero lengths
+/// that end M5's bytes. Checked rather than assumed: both are read off the
 /// slice's serde form, and the same parts kept whole must be this build's
 /// own bytes.
 fn written_before_the_birth_memo(world: &World) -> Vec<u8> {
     let SerdeTree::Map(fields) = to_tree(&world.arrangement) else {
         panic!("M5State serializes as a struct — a map of its fields")
     };
-    let memo = fields.iter().find_map(|(name, value)| match name {
-        SerdeTree::Str(s) if s.as_str() == "birth_extents" => Some(value),
-        _ => None,
-    });
-    assert!(
-        matches!(memo, Some(SerdeTree::Map(entries)) if entries.is_empty()),
-        "the fixture must leave M5's birth memo empty, or cutting its length misreads M5"
-    );
+    for trailing in ["birth_extents", "shot_terms"] {
+        let field = fields.iter().find_map(|(name, value)| match name {
+            SerdeTree::Str(s) if s.as_str() == trailing => Some(value),
+            _ => None,
+        });
+        assert!(
+            matches!(field, Some(SerdeTree::Map(entries)) if entries.is_empty()),
+            "the fixture must leave M5's {trailing} empty, or cutting its length misreads M5"
+        );
+    }
     let stamp = bincode::serialize(&FormatStamp).expect("the stamp serializes");
     let namespace_bytes = bincode::serialize(&world.namespace).expect("M3 serializes");
     let content_bytes = bincode::serialize(&world.content).expect("M4 serializes");
@@ -291,14 +294,14 @@ fn written_before_the_birth_memo(world: &World) -> Vec<u8> {
         "a World's bytes are the stamp, then each slice's"
     );
     assert!(
-        arrangement_bytes.ends_with(&0u64.to_le_bytes()),
-        "the empty memo's zero length ends M5's bytes"
+        arrangement_bytes.ends_with(&[0u8; 16]),
+        "the empty memo's and the empty shot terms' zero lengths end M5's bytes"
     );
     [
         stamp.as_slice(),
         namespace_bytes.as_slice(),
         content_bytes.as_slice(),
-        &arrangement_bytes[..arrangement_bytes.len() - 8],
+        &arrangement_bytes[..arrangement_bytes.len() - 16],
         links_bytes.as_slice(),
     ]
     .concat()

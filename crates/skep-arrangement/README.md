@@ -33,7 +33,13 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   arrangement reads and `version`'s snapshot — while `copy`'s sources
   and the arrangement's own reads take the address named; a version
   address reads as itself forever, and a declared deposit into a chain
-  lands in the head member alone.
+  lands in the head member alone. The shot's placing record
+  (`ShotPlace`) journals the member's whole arrangement and the shot's
+  two client terms — the count it placed and the base extent its copy
+  took — for every member it mints, so a verifier of the member's entry
+  signature reads them off the state beside the member's runs, in the
+  address form the signature covers (the document's own runs by value,
+  windows by address).
 - **Write-surface gates** — the four edit ops and `publish` take a
   `Caller` and admit only the document's effective owner (ω, exact
   account match; `Caller::System` is the in-process automation path,
@@ -54,8 +60,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   and "who has ever contained this" answerable at all.
 - **Birth extents** — per trunk, the content count its birth version
   was minted with (PUB-3.19), unmoved by the deposits that grow the
-  head; noted by the fold (a shot that mints it empty excepted —
-  `birth_extent` states that case) and carried by checkpoints, since
+  head; noted by the fold off the mint's own placing record (a shot
+  that mints it empty notes zero) and carried by checkpoints, since
   the arrangement cannot say afterwards where the birth ended.
 - **`resolve` / `project`** — the I-runs a V-region maps onto, and the
   V-footprint an I-address cover leaves in a document; the reads every

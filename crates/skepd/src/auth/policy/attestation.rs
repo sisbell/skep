@@ -50,20 +50,25 @@ use crate::World;
 ///    (`crate::auth::entry`) — every member but `alg`, which only the
 ///    presented member names — BEFORE the member is asked for, so a write
 ///    no entry frame can be composed for is told what it is whatever it
-///    carries: a `publish` run naming an address with no value passes
-///    UNATTESTED to the store's own `dangling_source`; a `publish` run onto
-///    an origin document the principal may not read is never composed, and
-///    what the shot is owed is decided here by asking the store's own gates
-///    on a detached kernel ([`refused_at_or_before_the_source_gate`]) —
-///    UNATTESTED to the store's own refusal where they refuse it (`withheld`,
-///    or an answer ahead of the source gate), `attestation_invalid:withheld`
-///    where they would admit it, the base carrying the run; a body past
+///    carries: a `publish` COPYING IN an address with no value passes
+///    UNATTESTED to the store's own `dangling_source`; a `publish` copying
+///    in a staging draft's run whose document the principal may not read is
+///    never composed, and what the shot is owed is decided here by asking
+///    the store's own gates on a detached kernel
+///    ([`refused_at_or_before_the_source_gate`]) — UNATTESTED to the store's
+///    own refusal where they refuse it (`withheld`, or an answer ahead of the
+///    source gate), `attestation_invalid:withheld` where they would admit it,
+///    the base carrying the run (a WINDOW is signed by address since the
+///    address form, l6-A4, and never raises this: the store's gate alone
+///    decides it, after the signature); a body past
 ///    `entry::MAX_SHOT_BODY_BYTES` answers
 ///    `attestation_invalid:frame_too_large` before it is built past the
-///    budget; a board with no `H.1` — the states
-///    [`crate::write_path::board_term`] names — answers
-///    `attestation_invalid:board_unavailable`, never "carry an attest"; a
-///    principal with no account answers
+///    budget; a term the frame cannot spell — a width, an extent or a count
+///    past 2^64 − 1 — passes UNATTESTED to the store's refusal of the shot
+///    (`base_extent_too_large`, `too_many_values`, `dangling_source`); a
+///    board with no `H.1` — the states [`crate::write_path::board_term`]
+///    names — answers `attestation_invalid:board_unavailable`, never "carry
+///    an attest"; a principal with no account answers
 ///    `attestation_invalid:not_enrolled_at_position`.
 /// 5. (1): no `attest` → `attestation_required`.
 /// 6. (2): the member's marker tag names its row (a tag no row names is
@@ -76,17 +81,18 @@ use crate::World;
 ///    any candidate verifying BOTH halves over the entry frame admits the
 ///    presented `attest`, else `signature`.
 ///
-/// The entry frame the daemon composes for a `publish` reads the runs'
-/// values off the snapshot by `value_at` — a second Σ-width walk per
+/// The entry frame the daemon composes for a `publish` reads the COPIED
+/// runs' values off the snapshot by `value_at` — a second Σ-width walk per
 /// attested shot, off the snapshot and not under the applier lock (the
-/// investigation §3.3's price), stopped at the body's budget. It reads a
-/// value only where the principal may read it: this check's verdict is
-/// answered to the principal, so a value read on its behalf is a value
-/// disclosed to it, and every refusal it gives a shot with an unreadable run
-/// is the same whatever that run's bytes are. A run naming an address with
-/// no value cannot commit; the store's `dangling_source` is that write's
-/// answer, so the check passes it through unattested rather than refusing a
-/// signature over bytes nobody holds.
+/// investigation §3.3's price), stopped at the body's budget; a window is
+/// spelled by address and read from nowhere (l6-A4). It reads a value only
+/// where the principal may read it: this check's verdict is answered to the
+/// principal, so a value read on its behalf is a value disclosed to it, and
+/// every refusal it gives a shot with an unreadable copied run is the same
+/// whatever that run's bytes are. A run naming an address with no value
+/// cannot commit; the store's `dangling_source` is that write's answer, so
+/// the check passes it through unattested rather than refusing a signature
+/// over bytes nobody holds.
 pub(super) fn attestation_check(
     world: &World,
     identity: &IdentityState,
@@ -126,7 +132,10 @@ pub(super) fn attestation_check(
             };
         }
         Err(ComposeFault::OverBudget) => return Err(invalid(AttestFault::FrameTooLarge)),
-        Err(ComposeFault::MissingValue) => return Ok(None),
+        // A shot the store refuses whatever it carries: the walk finds no
+        // value, or a term names what no store holds. The store's own answer
+        // is owed, so the write passes through UNATTESTED to it.
+        Err(ComposeFault::MissingValue | ComposeFault::Unspellable) => return Ok(None),
     };
     // 5 — (1).
     let Some(presented) = presented else {
@@ -175,7 +184,8 @@ fn system_owned(world: &World, op: &Op) -> bool {
     world.m3().effective_owner_prefix(target) == Some(&system_account())
 }
 
-/// THE CHECK'S QUESTION about a shot the composer could not read
+/// THE CHECK'S QUESTION about a shot the composer could not read — a copied
+/// run onto a draft the principal may not read
 /// ([`ComposeFault::UnreadableRunOrigin`]): whether the STORE refuses it at or
 /// before its source gate (M5 `publish`'s slots 1–6, PUB-6.36) — asked of the
 /// store ITSELF, on a detached kernel over this snapshot ([`detached_kernel`]),

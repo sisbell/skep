@@ -17,7 +17,7 @@ use skep_content::Val;
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_febe::{
     BirthVersion, Codec, Disposition, EditionClaim, FaultSite, OpKind, ParseError, RejectCode,
-    Rejection, Response, UniversalGrant,
+    Rejection, Response, ShotTerms, UniversalGrant,
 };
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link};
@@ -280,20 +280,27 @@ fn fixture(name: &str) -> Response {
             }],
             as_of: Seq(9),
         },
-        // A born document with a birth version and its base extent (PUB-8.12).
+        // A born document with a birth version and its base extent
+        // (PUB-8.12), asked of the birth version `D.1` itself, which the shot
+        // minted from the memberless document taken at three positions,
+        // placing five: its shot terms beside the document's state (D25's
+        // (c′)).
         "doc_metadata" => Response::DocMetadata {
             doc: a(&[1, 0, 1, 0, 1]),
             published: true,
             owner: Some(a(&[1, 0, 1])),
             birth: Some(BirthVersion { addr: a(&[1, 0, 1, 0, 1, 1]), extent: n(5) }),
+            terms: Some(ShotTerms { placed: n(5), base_extent: Some(n(3)) }),
             as_of: Seq(9),
         },
-        // A private draft with no chain member yet: birth/birth_extent null.
+        // A private draft with no chain member yet: birth/birth_extent null,
+        // and no shot terms either.
         "doc_metadata_unborn" => Response::DocMetadata {
             doc: a(&[1, 0, 1, 0, 2]),
             published: false,
             owner: Some(a(&[1, 0, 1])),
             birth: None,
+            terms: None,
             as_of: Seq(9),
         },
         "edition_claims" => Response::EditionClaims {

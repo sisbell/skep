@@ -20,7 +20,7 @@ use skep_namespace::M3State;
 
 use super::*;
 use crate::shot::{Base, ShotRun};
-use crate::state::M5State;
+use crate::state::{M5State, ShotTerms};
 use crate::testutil::{a, ca, doc1, doc2, n, pca, pdoc, run, seeded_m3, vp, vspan};
 
 /// Unwrap an op's typed rejection (`TxnError::Rejected(E)` — surfaced
@@ -754,21 +754,38 @@ fn the_shot_refuses_a_reinsert_past_the_value_budget_before_probing_an_address()
 }
 
 #[test]
-fn an_empty_shot_mints_its_member_and_leaves_the_arrangement_slice_as_it_found_it() {
-    // An empty placement pushes no record. The member's mint is M3's
-    // record; with nothing to place, M5's slice comes out exactly as it
-    // went in — no arrangement entry and nothing in R for the member, which
-    // reads as the lazy empty arrangement, as an empty fork's does.
+fn an_empty_shot_mints_its_member_places_nothing_and_journals_its_terms() {
+    // An empty placement still pushes the shot's record (D25's (c′)): the
+    // member's mint is M3's record, and M5's record carries the shot's
+    // terms whatever the placement holds. With nothing to place, the
+    // arrangement and R come out exactly as they went in — no arrangement
+    // entry and nothing in R for the member, which reads as the lazy empty
+    // arrangement, as an empty fork's does — while the member's terms are
+    // noted (nothing placed, the base's extent as the shot named it) and
+    // its birth extent at zero. (Until the record carried the terms an empty
+    // placement pushed no record and the slice was untouched.)
     let p1 = Caller::Principal(PrincipalId(1));
     let k = shot_kernel(vec![], &[]);
-    let untouched = k.snapshot().world().m5().clone();
+    let before = k.snapshot().world().m5().clone();
     let anyone = |_: &ShotWorld, _: &Address| true;
+    let shot = shot_off_the_head(0, vec![]);
+    let extent = shot.base.as_ref().map(|base| base.extent.clone());
     let (member, _) = Vstream::new(&k)
-        .publish(p1, &pdoc(), shot_off_the_head(0, vec![]), &anyone)
+        .publish(p1, &pdoc(), shot, &anyone)
         .expect("an empty shot commits");
     let s = k.snapshot();
+    let m5 = s.world().m5();
     assert!(s.world().m3().is_registered_document(&member), "the member is minted");
-    assert_eq!(*s.world().m5(), untouched, "and nothing is placed for it");
+    assert_eq!(m5.content_runs(&member).len(), 0, "nothing is placed for it");
+    assert_eq!(m5.content_count(&member), n(0));
+    assert_eq!(m5.provenance, before.provenance, "nothing in R for it");
+    assert_eq!(m5.arrangements, before.arrangements, "no arrangement entry: the lazy empty one");
+    assert_eq!(
+        m5.shot_terms(&member),
+        Some(&ShotTerms { placed: n(0), base_extent: extent }),
+        "the terms are journaled all the same"
+    );
+    assert_eq!(m5.birth_extent(&member), n(0), "a birth version born empty, noted at zero");
 }
 
 #[test]

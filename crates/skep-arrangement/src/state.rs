@@ -1,14 +1,17 @@
 //! §A / §3–§8 folds — M5's `WorldState` slice ([`M5State`]), its sole journal
 //! delta ([`M5Rec`]), and the pure fold ([`M5State::apply_m5`]).
 
+use num_traits::{One, Zero};
 use serde::{Deserialize, Serialize};
 use skep_address::{content_subspace, link_subspace, Address, Nat};
 use skep_namespace::first_version_address;
 
 use crate::chain::trunk_of;
+use crate::ops::run_origin_document;
 use crate::provenance::Provenance;
 use crate::run::Run;
 use crate::runlist::RunList;
+use crate::shot::PlacedSegment;
 
 /// One document's POOM: the content and link run-lists (§Core data model).
 /// Exactly these two subspaces exist, which is a fact about the arrangement
@@ -62,6 +65,27 @@ impl DocArrangement {
 /// the arrangement holds afterwards says where the birth content ended.
 /// Nothing reads them to decide a write.
 ///
+/// THE SHOT TERMS (`shot_terms`; the signed-ops design record's D25, arm
+/// (c′), owner-ruled 2026-09-29 — l6-A2) are the fourth field, and the one
+/// that is JOURNALED per member: for every version member the SHOT minted,
+/// the two CLIENT terms of that shot which nothing else the fold keeps
+/// answers — the COUNT the client placed (Σ width of its runs, `placed`) and
+/// the base's EXTENT the staged copy took (`base_extent`), an option whose
+/// absence IS the birth bit (a first shot with `base` absent, where the count
+/// is `birth_extent(D.1)`). They ride the shot's own placing record
+/// ([`ShotPlace`](M5Rec::ShotPlace)), so they are hashed into the commit
+/// chain, folded here, carried by every checkpoint, replayed on every replica
+/// and read off the live snapshot by anyone holding the member's address
+/// ([`shot_terms`](M5State::shot_terms)) — which is what a verifier of the
+/// shot's entry signature needs beyond the member's own runs: the signature
+/// binds the runs the client placed in the address form, `placed` says where
+/// they end and the base's carried tail begins, `base_extent` is in the
+/// signed bytes, and `base` itself is derived from the member's address. The
+/// run-list erases the boundary between the client's last run and the
+/// carried tail whenever the two are I-adjacent, so nothing the arrangement
+/// holds afterwards could re-derive `placed`. Nothing reads them to decide a
+/// write.
+///
 /// CLASS INVARIANTS, relating the fields. The reads state what they
 /// answer; these are what makes those answers mean it.
 ///
@@ -96,25 +120,38 @@ impl DocArrangement {
 ///   a gap because there is nothing in which to open one.
 /// * **BIRTH★ — a birth version's extent is noted ONCE and never moved.**
 ///   `birth_extents` gains `m`'s entry at the first placing record that
-///   names `m` — [`ContentPlace`](M5Rec::ContentPlace) or
+///   names `m` — [`ShotPlace`](M5Rec::ShotPlace), which the shot journals
+///   for every member it mints, an EMPTY placement included, or
 ///   [`VersionSnapshot`](M5Rec::VersionSnapshot), a snapshot of an EMPTY
 ///   source noting zero — and no later record touches it, so a deposit that
 ///   grows the head grows `content_count(m)` and not `birth_extent(m)`. On
 ///   the op path `birth_extent(m) ≤ content_count(m)`, and positions
 ///   `[1, birth_extent(m)]` of `m` are the arrangement it was minted with: a
 ///   published member admits no removal and no re-arrangement (PUB-2.11), and
-///   a deposit lands past the arranged extent. ONE STATE ESCAPES IT — a birth
-///   version the SHOT minted with no runs, whose first deposit is noted as
-///   its birth: [`birth_extent`](M5State::birth_extent) states what it
-///   answers there, and the fold's `ContentPlace` arm why no record separates
-///   that deposit from a mint. On the DECODE path BIRTH★ is M2's integrity,
-///   as P4★ is: a checkpoint carries `birth_extents` whole, and no door
+///   a deposit lands past the arranged extent. The one state that escaped it
+///   — a birth version the shot minted with no runs, whose first deposit was
+///   read as its birth — closed when the shot's record began to carry its
+///   terms and so to be journaled whatever the placement holds
+///   (`ShotPlace`'s arm). On the DECODE path BIRTH★ is M2's integrity, as
+///   P4★ is: a checkpoint carries `birth_extents` whole, and no door
 ///   re-establishes that each key is a birth version or each count its
 ///   mint's. A decoded state violating it faults nothing — no read does
 ///   arithmetic on an extent, and [`birth_extent`](M5State::birth_extent)
 ///   answers the count carried — but a consumer that takes the key set for
 ///   version members, as the engine's dump filter does, trusts the checkpoint
 ///   for it.
+/// * **TERMS★ — a member's shot terms are the terms of the shot that minted
+///   it.** `shot_terms` gains `m`'s entry at `m`'s own
+///   [`ShotPlace`](M5Rec::ShotPlace), the record the commit that minted `m`
+///   pushed, and no other record on the op path names `m` there: a member is
+///   minted once, and the shot is the one op that mints a member with a
+///   placement of its own. So `placed(m)` is a PREFIX of the arrangement `m`
+///   was minted with — positions `[1, placed(m)]` are the client's runs and
+///   `(placed(m), birth_extent(m)]` (or the count at the mint, for a later
+///   member) the base's carried tail — and
+///   [`address_form_of`](M5State::address_form_of) reads that prefix back.
+///   On the DECODE path, as BIRTH★: carried whole, re-established by no
+///   door.
 ///
 /// Two public reads mean what they say only under P4★:
 /// [`deletions`](M5State::deletions) is the deleted set rather than an
@@ -148,7 +185,7 @@ impl DocArrangement {
 /// answers the address named as well: asked of a bare document it answers
 /// zero — the document is no birth version — and never its `D.1`'s extent.
 ///
-/// Both fields key by the document `Address`, which is what every caller
+/// Every field keys by the document `Address`, which is what every caller
 /// holds and what every insertion site already had. Three consequences, and
 /// the key form was chosen for the third: an `Address` orders by its tumbler
 /// (M1's `Ord` delegates), so the map's iteration order — and with it the
@@ -167,6 +204,27 @@ pub struct M5State {
     pub(crate) arrangements: im::OrdMap<Address, DocArrangement>,
     pub(crate) provenance: Provenance,
     pub(crate) birth_extents: im::OrdMap<Address, Nat>,
+    pub(crate) shot_terms: im::OrdMap<Address, ShotTerms>,
+}
+
+/// THE SHOT'S TWO CLIENT TERMS, per member the shot minted (the signed-ops
+/// design record's D25, arm (c′)): what a verifier of the member's entry
+/// signature needs beside the member's own runs and address, and what
+/// nothing the arrangement holds afterwards re-derives. Journaled in the
+/// shot's placing record ([`M5Rec::ShotPlace`]), folded into
+/// [`M5State`]'s `shot_terms`, read by [`M5State::shot_terms`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShotTerms {
+    /// The positions the client PLACED — Σ width of the shot's runs, the
+    /// count its signed body leads with: positions `[1, placed]` of the
+    /// member are the client's runs, and what follows is the base's carried
+    /// tail.
+    pub placed: Nat,
+    /// The extent of the base the staged copy TOOK — the shot's
+    /// `base_extent`, in its signed body — or `None` in the BIRTH SHAPE, the
+    /// base absent (PUB-2.34): the absence IS the birth bit, and there the
+    /// count is `birth_extent(D.1)`, no tail being carried.
+    pub base_extent: Option<Nat>,
 }
 
 /// Is `doc` a BIRTH VERSION — the opening member `D.1` of its trunk's version
@@ -205,8 +263,12 @@ fn is_birth_version(doc: &Address) -> bool {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum M5Rec {
-    /// INSERT, COPY and the publish shot: splice `runs` at content ordinal
-    /// `at` + R-append each placed run's iextent (J1★).
+    /// INSERT and COPY: splice `runs` at content ordinal `at` + R-append each
+    /// placed run's iextent (J1★). The publish shot's placement was this
+    /// record until D25's (c′) gave it terms of its own
+    /// ([`ShotPlace`](M5Rec::ShotPlace)); this variant's bytes did not move
+    /// for that — the new one was appended to the set, so an `insert`'s or a
+    /// `copy`'s record encodes as it always did.
     #[non_exhaustive]
     ContentPlace { doc: Address, at: Nat, runs: Vec<Run> },
     /// DELETE: contract + reseat (no C, no R — ASN-0117 P0/P2).
@@ -237,11 +299,34 @@ pub enum M5Rec {
     /// first (or move to the explicit-runs form, Open decision #4).
     #[non_exhaustive]
     VersionSnapshot { source: Address, new: Address },
+    /// THE PUBLISH SHOT's placing record (PUB-2.33; the signed-ops design
+    /// record's D25, arm (c′), owner-ruled 2026-09-29): the member's WHOLE
+    /// arrangement `runs` — the client's runs in order, the draft-native ones
+    /// re-inserted, then the base's carried tail — spliced at content
+    /// ordinal 1 + R-append (J1★), as `ContentPlace` at ordinal 1 would; AND
+    /// the shot's two CLIENT terms, `placed` — Σ width of the client's runs,
+    /// the count its signed body leads with — and `base_extent`, the base's
+    /// extent the staged copy took, `None` in the birth shape. Pushed for
+    /// EVERY member the shot mints, an empty placement included: the terms
+    /// exist whatever the placement holds, and a member born empty is noted
+    /// at its true birth (zero) rather than read off its first deposit — the
+    /// residue BIRTH★ carried until this record.
+    ///
+    /// The LAST variant, appended (2026-09-29) so the five before it keep
+    /// their indices — bincode encodes a variant as its index — and every
+    /// `insert`, `copy`, `delete`, `rearrange`, `make_link` and `version`
+    /// record on disk decodes as before. What moved is only what the fixture
+    /// under `tests/golden/` (skep-kernel) pins: regenerated once under the
+    /// unchanged stamps, by the owner's no-stamp ruling (dev boards
+    /// regenerate).
+    #[non_exhaustive]
+    ShotPlace { doc: Address, runs: Vec<Run>, placed: Nat, base_extent: Option<Nat> },
 }
 
 impl M5State {
-    /// Σ₀ for M5: `{}` arrangements, `{}` provenance, `{}` birth extents.
-    /// Deterministic, per M2's byte-identical-genesis caller contract.
+    /// Σ₀ for M5: `{}` arrangements, `{}` provenance, `{}` birth extents,
+    /// `{}` shot terms. Deterministic, per M2's byte-identical-genesis caller
+    /// contract.
     pub fn genesis() -> M5State {
         M5State::default()
     }
@@ -305,25 +390,75 @@ impl M5State {
     /// written over (PUB-3.10), and this extent answers the same as of every
     /// later `Seq`.
     ///
-    /// ONE STATE ANSWERS OTHERWISE, and it is BIRTH★'s residue
-    /// ([`M5State`]): a birth version the SHOT minted with NO runs journals no
-    /// placement at its mint — [`Vstream::publish`](crate::Vstream::publish)
-    /// pushes none for an empty placement — so the first placement this slice
-    /// folds for it is its first DEPOSIT, and the count that deposit leaves is
-    /// noted as its birth. Such a version answers zero, exactly, until a
-    /// deposit lands, and the count its first deposit left ever after; no
-    /// record this slice folds tells that deposit from a mint's placement. A
-    /// conforming mint is never empty (PUB-3.11), and a birth version an owned
-    /// VERSION mints empty is noted at zero by its own snapshot and answers
-    /// zero exactly.
+    /// EXACT for a birth version born EMPTY too: the shot journals its
+    /// placing record for every member it mints, an empty placement included
+    /// ([`M5Rec::ShotPlace`] carries the shot's terms whatever the placement
+    /// holds), so an empty birth is noted at zero by its own mint — as a
+    /// birth version an owned VERSION mints empty is by its own snapshot —
+    /// and its first deposit grows `content_count` alone. (Until the record
+    /// carried the terms, an empty shot pushed no placement and that first
+    /// deposit was read as the birth — BIRTH★'s one residue, closed.) No
+    /// conforming mint is empty (PUB-3.11).
     ///
-    /// Zero for an address with no extent noted: a birth version born with
-    /// no content that has taken none since, and every address that is no
+    /// Zero for an address with no extent noted: every address that is no
     /// birth version — it answers the address named, as every read here does,
     /// and a caller asks M3 first whether the member exists at all. One map
     /// lookup, reading no run.
     pub fn birth_extent(&self, member: &Address) -> Nat {
         self.birth_extents.get(member).cloned().unwrap_or_default()
+    }
+
+    /// THE SHOT TERMS of `member` — the two client terms of the shot that
+    /// minted it ([`ShotTerms`]: `placed`, `base_extent`), which the
+    /// doc-metadata read serves beside the birth version and a verifier of
+    /// the member's entry signature composes its body from — or `None` for a
+    /// member no shot's record names: a birth version an owned `version`
+    /// minted, a member minted before the record carried the terms, and every
+    /// address that is no version member. Answers the address named — a
+    /// trunk document answers `None`, never its head's — and reads no run.
+    /// One map lookup.
+    pub fn shot_terms(&self, member: &Address) -> Option<&ShotTerms> {
+        self.shot_terms.get(member)
+    }
+
+    /// THE ADDRESS FORM READ AT THE MEMBER (l6-A4 = r6-4, owner-ruled
+    /// 2026-09-29): `member`'s first `placed` content positions — the runs
+    /// the client placed, which its entry signature covers, ahead of the
+    /// base's carried tail — as [`PlacedSegment`]s in V-order, each run
+    /// classed by its ORIGIN DOCUMENT as the commit left it: a run of the
+    /// member's own trunk is [`Copied`](PlacedSegment::Copied) — the shot
+    /// document's own I-space placed by reference, and the staging draft's
+    /// text the commit re-inserted under that trunk, told apart by nothing
+    /// here and signed alike, BY VALUE — and a run of any other document is a
+    /// [`Window`](PlacedSegment::Window), signed BY ADDRESS. The runs are the
+    /// arrangement's own, maximally merged, the last one CLIPPED where the
+    /// client's positions end; so what this answers for a committed member is
+    /// what [`Shot::address_form`](crate::Shot::address_form) answered for the
+    /// request that minted it, and a verifier holding the member composes the
+    /// shot's signed body with no request in hand. `placed` is the caller's —
+    /// the member's own [`shot_terms`](M5State::shot_terms), or a count a
+    /// checker chooses. A member with fewer positions than `placed` answers
+    /// what it has; an absent arrangement answers nothing.
+    pub fn address_form_of(&self, member: &Address, placed: &Nat) -> Vec<PlacedSegment> {
+        let trunk = trunk_of(member);
+        let mut left = placed.clone();
+        let mut out = Vec::new();
+        for run in self.content_runs(member) {
+            if left.is_zero() {
+                break;
+            }
+            // A propagating site: the start is a resident run's own, and a
+            // width clipped to the positions left is at least one.
+            let taken = if *run.width() > left {
+                Run { i_start: run.i_start.clone(), width: left.clone() }
+            } else {
+                run.clone()
+            };
+            left = &left - taken.width();
+            let copied = run_origin_document(&taken).as_ref() == Some(&trunk);
+            out.push(if copied { PlacedSegment::Copied(taken) } else { PlacedSegment::Window(taken) });
+        }
+        out
     }
 
     /// The pure/deterministic M2 fold (§3–§8 folds; M2's `apply` obligation),
@@ -351,26 +486,13 @@ impl M5State {
             // root install, so a reader never observes M-updated-without-R
             // (J1★ ⇒ P4★/P4a; with INSERT's composite, J0 ⇒ P7a).
             //
-            // THE BIRTH EXTENT is noted on this arm (BIRTH★; PUB-3.19,
-            // RES-276): the shot journals a member's WHOLE arrangement as one
-            // placement at ordinal 1, in the commit that mints it (PUB-3.11),
-            // so the first placement naming a birth version IS its mint and
-            // the count it leaves is the birth extent; every later placement
-            // naming it is a deposit the head took, and finds its extent
-            // already noted. The count is read off the spliced list itself,
-            // built once and then installed — the list this record leaves the
-            // member holding, as the snapshot arm below counts the list it
-            // shares.
-            //
-            // THE ONE STATE THE FOLD CANNOT TELL: a shot with NO runs pushes
-            // no placement, so a member born EMPTY by the shot leaves nothing
-            // here at its mint, and the first placement the fold then sees for
-            // it is its first DEPOSIT — noted as though it were the birth. No
-            // record this fold reads separates the two, M3's `Allocate` being
-            // another slice's. No conforming mint is empty (PUB-3.11's content
-            // phase is the confirmed selection) and an owned VERSION of an
-            // empty surface is exact (the snapshot arm below notes its zero),
-            // so the state is a client's own empty shot into its own home.
+            // THE BIRTH EXTENT is noted on this arm too (BIRTH★; PUB-3.19,
+            // RES-276), though on the op path no placement here is a mint's:
+            // the shot's placement is `ShotPlace`'s below, and an INSERT or
+            // COPY naming a birth version is a deposit the head took, which
+            // finds its extent already noted by the mint's own record. The
+            // arm keeps the note all the same, as the fold's totality asks —
+            // a record outside the op path's order is folded, not judged.
             M5Rec::ContentPlace { doc, at, runs } => {
                 let content = self.content_list(doc).splice_in(at, runs.iter().cloned());
                 let birth_extents = self.birth_extents_noting(doc, || content.total_width());
@@ -378,6 +500,44 @@ impl M5State {
                     arrangements: self.arrangements_with_content(doc, |_| content),
                     provenance: self.provenance.append(doc, runs),
                     birth_extents,
+                    shot_terms: self.shot_terms.clone(),
+                }
+            }
+            // THE SHOT's placement (D25 (c′)): `ContentPlace` at ordinal 1 —
+            // the same splice, the same R-append — and the member's TERMS
+            // noted beside its birth extent. THE BIRTH EXTENT is noted here
+            // for a birth version (BIRTH★): the shot journals a member's WHOLE
+            // arrangement as one placement, in the commit that mints it
+            // (PUB-3.11), so this record naming a birth version IS its mint
+            // and the count it leaves is the birth extent — zero for a member
+            // born EMPTY, since the record is pushed whatever the placement
+            // holds. The count is read off the spliced list itself, built
+            // once and then installed — the list this record leaves the
+            // member holding, as the snapshot arm below counts the list it
+            // shares. An empty placement leaves the arrangement ABSENT under
+            // the lazy convention (≡ empty), as the snapshot arm leaves an
+            // empty source's `new`, and appends no provenance.
+            M5Rec::ShotPlace { doc, runs, placed, base_extent } => {
+                let content = self.content_list(doc).splice_in(&Nat::one(), runs.iter().cloned());
+                let birth_extents = self.birth_extents_noting(doc, || content.total_width());
+                let shot_terms = self.shot_terms.update(
+                    doc.clone(),
+                    ShotTerms { placed: placed.clone(), base_extent: base_extent.clone() },
+                );
+                if runs.is_empty() {
+                    M5State {
+                        arrangements: self.arrangements.clone(),
+                        provenance: self.provenance.clone(),
+                        birth_extents,
+                        shot_terms,
+                    }
+                } else {
+                    M5State {
+                        arrangements: self.arrangements_with_content(doc, |_| content),
+                        provenance: self.provenance.append(doc, runs),
+                        birth_extents,
+                        shot_terms,
+                    }
                 }
             }
             // §4 fold: split at `from` and `from + width`, drop the middle,
@@ -388,6 +548,7 @@ impl M5State {
                 arrangements: self.arrangements_with_content(doc, |c| c.remove_range(from, width)),
                 provenance: self.provenance.clone(),
                 birth_extents: self.birth_extents.clone(),
+                shot_terms: self.shot_terms.clone(),
             },
             // §6 fold: split at cut ordinals, tile by placement. Pure
             // permutation — C, L, R untouched (ASN-0119 RA1/RA6).
@@ -395,6 +556,7 @@ impl M5State {
                 arrangements: self.arrangements_with_content(doc, |c| c.reorder(cut_ordinals)),
                 provenance: self.provenance.clone(),
                 birth_extents: self.birth_extents.clone(),
+                shot_terms: self.shot_terms.clone(),
             },
             // §8 fold: append `link` after the link subspace's arranged
             // positions, coalescing with the prior link run if I-adjacent
@@ -418,6 +580,7 @@ impl M5State {
                 },
                 provenance: self.provenance.clone(),
                 birth_extents: self.birth_extents.clone(),
+                shot_terms: self.shot_terms.clone(),
             },
             // §7 fold: share `source`'s then-current content run-list into
             // `new` (structural im share — O(1)) and append each shared run
@@ -464,6 +627,7 @@ impl M5State {
                         arrangements: self.arrangements.clone(),
                         provenance: self.provenance.clone(),
                         birth_extents,
+                        shot_terms: self.shot_terms.clone(),
                     }
                 } else {
                     let provenance = self.provenance.append(new, content.iter());
@@ -475,6 +639,7 @@ impl M5State {
                         arrangements: self.arrangements.update(new.clone(), arr),
                         provenance,
                         birth_extents,
+                        shot_terms: self.shot_terms.clone(),
                     }
                 }
             }

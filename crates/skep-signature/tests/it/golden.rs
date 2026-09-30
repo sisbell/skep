@@ -8,8 +8,8 @@
 
 use sha2::{Digest, Sha256};
 use skep_identity::{
-    entry_body_insert, entry_body_make_link, entry_body_publish, entry_frame, BoardTerm, EntrySlot,
-    Fingerprint, LinkSlots, SigAlgRow, ALG_MLDSA65_ED25519,
+    entry_body_insert, entry_body_make_link, entry_body_publish, entry_body_record, entry_frame,
+    BoardTerm, EntrySlot, Fingerprint, LinkSlots, ShotSegment, SigAlgRow, ALG_MLDSA65_ED25519,
 };
 use skep_signature::{derive_seeds, pq_widths, verify, HybridSigner, PqWidths, SeededRng06};
 
@@ -34,11 +34,14 @@ fn addr(s: &str) -> skep_address::Address {
     skep_address::validate(skep_address::Tumbler::new(comps).unwrap()).unwrap()
 }
 
-/// The three fixed instances every golden signs: the frames of an
-/// `insert` (undeclared, two values), a `make_link` (three address-form
-/// slots) and a `publish` (three values) on a board whose `H.1` pair is
-/// `(12, 0xAB…)`, by account `1.0.1`.
-fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 3] {
+/// The four fixed instances every golden signs: the frames of an `insert`
+/// (undeclared, two values), a `make_link` (three address-form slots), a
+/// `publish` (three values copied in, one window of two positions onto
+/// another document, the base taken at three — the address form, l6-A4)
+/// and a `record` (an enrol's kind: its type slot, one subject, neither
+/// optional row named, a short canonical body — the frame merge, fm-I) on a
+/// board whose `H.1` pair is `(12, 0xAB…)`, by account `1.0.1`.
+fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 4] {
     let (account, doc) = (addr("1.0.1"), addr("1.0.1.0.1"));
     let insert = entry_body_insert(None, [&b"a"[..], &b"b"[..]]);
     let ty = [addr("1.1.0.1.0.1.0.3.90")];
@@ -49,9 +52,27 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 3] {
         to: EntrySlot::Addrs(&to),
         ty: EntrySlot::Addrs(&ty),
     });
-    let publish = entry_body_publish([&b"x"[..], &b"y"[..], &b"z"[..]]);
+    let window = addr("1.0.1.0.2.0.1.1");
+    let publish = entry_body_publish(
+        [
+            ShotSegment::Value(b"x"),
+            ShotSegment::Value(b"y"),
+            ShotSegment::Value(b"z"),
+            ShotSegment::Window { start: &window, width: 2 },
+        ],
+        Some(3),
+    );
+    let subject = [addr("1.0.2")];
+    let record = entry_body_record(
+        &addr("1.1.0.1.0.1.0.3.1"),
+        &subject,
+        None,
+        None,
+        br#"{"type":"skep-enroll"}"#,
+    );
     let board = BoardTerm { log_position: 12, chain: [0xAB; 32] };
-    [insert, link, publish].map(|body| (body.op(), entry_frame(alg, board, &account, &doc, &body)))
+    [insert, link, publish, record]
+        .map(|body| (body.op(), entry_frame(alg, board, &account, &doc, &body)))
 }
 
 // ── the goldens ─────────────────────────────────────────────────────────────
@@ -64,19 +85,24 @@ const GOLDEN_SEED: [u8; 32] = [
 
 /// One tag's golden, in the documented form: the SHA-256 of the PQ public
 /// half, of the Ed25519 public half, of the whole raw key; the fingerprint;
-/// and per op the SHA-256 of the signature blob — the frames themselves
+/// and per grammar the SHA-256 of the signature blob — the frames themselves
 /// pinned byte for byte by skepd's `the_entry_frames_bytes_per_op_are_pinned`.
 /// The `make_link` signatures moved with the replay fix (PUB-5.15): the body
 /// gained its `replaces` row, an EMPTY group in this member-less frame, in
-/// place under `skep-entry-v1` (l6-A3); the keys, the fingerprints and the
-/// `insert` and `publish` signatures did not.
+/// place under `skep-entry-v1` (l6-A3). The `publish` signatures moved with
+/// the publish re-pin of 2026-09-29 (V, l6-A4, D25's (c′)): the body became
+/// the count, the runs in the address form and the base-extent group, in
+/// place under the same tag, and the fixed instance gained a window and a
+/// base; and the `record` signatures were minted then, the frame merge's
+/// fourth grammar (fm-I). The keys, the fingerprints and the `insert`
+/// signatures have not moved since the tag was pinned.
 struct TagGolden {
     tag: u8,
     pq_pk: &'static str,
     ed_pk: &'static str,
     raw_key: &'static str,
     fingerprint: &'static str,
-    sigs: [&'static str; 3],
+    sigs: [&'static str; 4],
 }
 
 /// Per op: its name, its frame's bytes, its signature blob.
@@ -106,8 +132,8 @@ fn check_golden(g: &TagGolden) {
     let fp = Fingerprint::of(key).to_hex();
     let sigs: Vec<String> = signed.iter().map(|(_, _, sig)| sha_hex(sig)).collect();
     let report = format!(
-        "tag {}: pq_pk {pq}\n ed_pk {ed}\n raw_key {raw}\n fingerprint {fp}\n sigs {} {} {}",
-        g.tag, sigs[0], sigs[1], sigs[2]
+        "tag {}: pq_pk {pq}\n ed_pk {ed}\n raw_key {raw}\n fingerprint {fp}\n sigs {} {} {} {}",
+        g.tag, sigs[0], sigs[1], sigs[2], sigs[3]
     );
     assert_eq!(pq, g.pq_pk, "the PQ public half moved — a keygen change is a NEW tag\n{report}");
     assert_eq!(ed, g.ed_pk, "the Ed25519 half moved — the KDF is a frozen pin\n{report}");
@@ -119,7 +145,7 @@ fn check_golden(g: &TagGolden) {
 }
 
 /// TAG 1's GOLDEN: the KEY-DERIVATION golden (seed → KDF → both public
-/// keys → fingerprint) and the three ops' signatures, byte-stable under
+/// keys → fingerprint) and the four grammars' signatures, byte-stable under
 /// FIPS 204's deterministic variant and Ed25519's own determinism.
 #[test]
 fn golden_tag_1_mldsa65_ed25519() {
@@ -132,14 +158,15 @@ fn golden_tag_1_mldsa65_ed25519() {
         sigs: [
             "2892943416a13f80eeb95f4c8bd55f115d7248324c433bffbeaf7f0501828148",
             "9d47fea8f8cc6077222b89060ebcc69b93d7d9b228c1a9196f324ee3a80119d0",
-            "50d83bfcc18792e51073852113df636c4d6f3aa86391f7fd970b5738b5737879",
+            "e36e6e421c3a4ed0826144f6cb2d578cc18eb72e7d84fbc483fd5ac000d7cf16",
+            "28c70f669d44919062bf99a79cec75a973c7f6acaf315991a53daea054b7f508",
         ],
     });
 }
 
 /// TAG 3's GOLDEN (the PREVIEW): the KEY-DERIVATION golden — `fn-dsa`
 /// 0.4.0's keygen from the KDF's seed IS the tag's frozen keygen rule — and
-/// the three signatures under the fixtures' seeded RNG (FN-DSA signing is
+/// the four signatures under the fixtures' seeded RNG (FN-DSA signing is
 /// randomized by the draft's own rule; what the tag freezes is the key, the
 /// frame and the verify, and the fixture's RNG makes the bytes reproducible
 /// here).
@@ -154,7 +181,8 @@ fn golden_tag_3_fndsa512_preview_ed25519() {
         sigs: [
             "da92e3fc0247d5f39ed149f574a6c18cc1bf959a4f167ba33d381a955ed95779",
             "a7bc27e514b92dd4bc23f1c69ec46ad010cca17a22eada4f944e0f31edfd7d75",
-            "4a5bc2ebd6345adf18bbe073e21f5d02815d4ca5625d1ba2751461e6a1fe9c64",
+            "0af99ce8edd4c6f9230fe381a22b2dfb3eb59febf497d5bb9a76a0e6ca105434",
+            "38b456b9f4413a0f6164aad2e0cc3e9e8b35b8534c915f465992391cf71b03ad",
         ],
     });
 }

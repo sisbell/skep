@@ -227,9 +227,9 @@ fn every_entry_at_each_level_of_the_tree_is_reduced_or_kept_by_name() {
         // statement — listed so a fifth is a decision and not a default.
         ("namespace", &["frontiers", "nodes", "principals", "publication"][..]),
         ("content", &["map"]),
-        // M5's two keyed fields reduced, and its birth memo kept WHOLE
-        // with the reason in `filter_tree`'s statement.
-        ("arrangement", &["arrangements", "birth_extents", "provenance"]),
+        // M5's two keyed fields reduced, and its birth memo and shot terms
+        // kept WHOLE with the reason in `filter_tree`'s statement.
+        ("arrangement", &["arrangements", "birth_extents", "provenance", "shot_terms"]),
         // M7's skip-serialized hints occupy no bytes and so no key.
         ("links", &["links"]),
     ] {
@@ -373,41 +373,54 @@ fn every_birth_memo_key_is_a_version_member_whose_state_the_guest_reads() {
         .publish(caller, &edition, shot, &World::visible_to(caller))
         .expect("the birth shot from the draft into the edition");
     let world = engine.kernel().snapshot().world().clone();
-    let path = ["authoritative", "arrangement", "birth_extents"];
     let full = dump_tree(&world);
-    let keys: Vec<Address> = match at_path(&full, &path) {
-        Some(SerdeTree::Map(entries)) => entries
-            .iter()
-            .map(|(k, _)| {
-                serde_form_address(k).expect("a memo key is an address in M5's serde form")
-            })
-            .collect(),
-        other => panic!("M5's birth memo renders as a map, got {other:?}"),
+    let keys_of = |field: &str| -> Vec<Address> {
+        let path = ["authoritative", "arrangement", field];
+        match at_path(&full, &path) {
+            Some(SerdeTree::Map(entries)) => entries
+                .iter()
+                .map(|(k, _)| {
+                    serde_form_address(k).expect("a memo key is an address in M5's serde form")
+                })
+                .collect(),
+            other => panic!("M5's {field} renders as a map, got {other:?}"),
+        }
     };
+    let keys = keys_of("birth_extents");
     for member in [&birth_member, &shot_member] {
         assert!(
             keys.contains(member),
             "the fixture must give the memo its birth member {member}: {keys:?}"
         );
     }
-    for key in &keys {
-        assert_ne!(
-            trunk_of(key),
-            *key,
-            "birth memo key {key} is no version member: the whole disposition owes a reduction"
-        );
-        assert!(
-            world.readable(None, key),
-            "birth memo key {key} names a state the guest cannot read, and the guest's dump \
-             carries it"
-        );
+    // The shot terms, kept whole on the same ground: keyed by the member the
+    // SHOT minted — and by no version an owned `version` minted, whose birth
+    // the memo notes and no shot record names.
+    let terms = keys_of("shot_terms");
+    assert_eq!(terms, vec![shot_member.clone()], "the shot's member alone carries terms");
+    for (field, keys) in [("birth memo", keys), ("shot terms", terms)] {
+        for key in &keys {
+            assert_ne!(
+                trunk_of(key),
+                *key,
+                "{field} key {key} is no version member: the whole disposition owes a reduction"
+            );
+            assert!(
+                world.readable(None, key),
+                "{field} key {key} names a state the guest cannot read, and the guest's dump \
+                 carries it"
+            );
+        }
     }
     let guest = tree_visible_to(&world, None);
-    assert_eq!(
-        render_of(at_path(&guest, &path).expect("present")),
-        render_of(at_path(&full, &path).expect("present")),
-        "the guest's dump carries the memo whole"
-    );
+    for field in ["birth_extents", "shot_terms"] {
+        let path = ["authoritative", "arrangement", field];
+        assert_eq!(
+            render_of(at_path(&guest, &path).expect("present")),
+            render_of(at_path(&full, &path).expect("present")),
+            "the guest's dump carries {field} whole"
+        );
+    }
     assert_eq!(dump_visible(&world, &|_: &Address| true), dump(&world));
 }
 

@@ -10,7 +10,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   reseeds skip-serialized hints at load.
 - **Append-only journal** — CRC-framed records, committed by marker;
   recovery is replay: checkpoint (or genesis) plus every committed
-  record reproduces the exact world.
+  record reproduces the exact world. Every marker carries a commit-chain
+  link over its transaction's records, its per-transaction salt and a
+  digest of its signature slot, so a rewrite — a signature stripped or
+  altered included — is a chain break at its transaction.
 - **Single applier** — one writer critical section (`transact`)
   serializes all mutation; readers take lock-free snapshots
   (atomically installed immutable worlds).

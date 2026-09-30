@@ -457,8 +457,10 @@ impl<W: WorldState> Kernel<W> {
     /// un-committing it would otherwise have been the torn tail recovery
     /// cuts; and at any height in a segment the scan reads, below a standing
     /// base as well, since that verdict compares a marker with its own
-    /// records and needs no chain link from the base. The signature slot is
-    /// NOT a chain input, by design: a filled slot opens. The SALT IS one
+    /// records and needs no chain link from the base. The SIGNATURE SLOT is
+    /// a chain input by digest (the board's r6-2c, 2026-09-29; the matrix's
+    /// case 4): a slot filled, stripped or altered after its commit, its CRC
+    /// re-fixed, is caught at that transaction. The SALT IS one too
     /// (`SKJ4`, the matrix's case 16): a marker's salt edited, its CRC
     /// re-fixed, is caught at that transaction — and being drawn at random
     /// per transaction and served by no route, it is what keeps a served
@@ -837,11 +839,13 @@ impl<W: WorldState> Kernel<W> {
     /// commit marker filled (signed ops; the design record §2.4's inbound
     /// route): where `attestation` is `Some`, the marker `encode_txn` writes for
     /// THIS transaction carries its tag and blob in the slot X2 reserved, and
-    /// nothing else about the commit moves — the records, their frames, the
-    /// salt, the chain (the slot is no chain input) and the accounting the
-    /// TRANSACTION BUDGET names are as `transact` leaves them, the blob's
-    /// bytes sitting OUTSIDE that budget (the design record §4.4 (b); the
-    /// marker's own frame stays far under the frame cap at any tag's width).
+    /// nothing else about the commit moves but its CHAIN — the records, their
+    /// frames, the salt and the accounting the TRANSACTION BUDGET names are
+    /// as `transact` leaves them, the blob's bytes sitting OUTSIDE that budget
+    /// (the design record §4.4 (b); the marker's own frame stays far under
+    /// the frame cap at any tag's width), while the link closes over the
+    /// slot's digest (the board's r6-2c), so an attested transaction's chain
+    /// value is not its unattested twin's.
     /// `None` is `transact` exactly: the slot written EMPTY, in its one
     /// spelling. A zero-step transaction writes no marker and so no slot, and
     /// under [`Durability::InMemory`] no marker exists at all — the value is

@@ -21,8 +21,9 @@
 //!   root sections, the hint family names, [`super::shipped_label`]'s
 //!   strings. A TRAILING component inside an authoritative slice is that
 //!   STORE's own serde field, and a private one: `map` is M4's,
-//!   `arrangements` and `provenance` are M5's (its third, `birth_extents`, is
-//!   kept whole by name and ends no path), `links` is M7's. So a store
+//!   `arrangements` and `provenance` are M5's (its third and fourth,
+//!   `birth_extents` and `shot_terms`, are kept whole by name and end no
+//!   path), `links` is M7's. So a store
 //!   author renaming a field it never published has no reason to look here,
 //!   and the rename would leave the filter silently filtering nothing — which
 //!   is why every path is asserted to name a place in the tree.
@@ -120,6 +121,13 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 ///   version member owes a reduction here, and
 ///   `every_birth_memo_key_is_a_version_member_whose_state_the_guest_reads`
 ///   holds the key set against a world whose memo has an entry.
+/// * `authoritative.arrangement.shot_terms` — KEPT whole, on the birth
+///   memo's ground: every key M5's fold writes there is a VERSION MEMBER the
+///   shot minted (the signed-ops design record's D25, arm (c′)), so a
+///   published state every reader class reads; and what an entry holds — the
+///   count the client placed and the base extent its copy took — is what the
+///   member's `doc_metadata` serves to every reader who may read the member.
+///   The same test holds this key set beside the memo's.
 /// * `authoritative.links.links` — a LINK homed in an unreadable document
 ///   leaves.
 /// * `publication` — the SECTION reduced per entry to the readable drafts:

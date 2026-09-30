@@ -3,7 +3,7 @@
 //! (ASN-0134 A1/A2/V1), while a rejection carries neither.
 
 use skep_address::{Address, Nat, SpanSet};
-use skep_arrangement::Run;
+use skep_arrangement::{Run, ShotTerms};
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link};
@@ -181,18 +181,26 @@ pub enum Response {
     /// in_claims / out_claims.
     Claims { claims: Vec<SupClaim>, as_of: Seq },
     /// doc_metadata (PUB-8.12): the publication state a client's own
-    /// admission tests need, and nothing else. `doc` is the trunk document
-    /// the argument projects to (a version member names its document's
-    /// state); `owner` is M3's effective owner account, CARRIED rather than
-    /// recomputed client-side because ω is the store's word (`None` is
-    /// unreachable for a registered document and stands only so the shape
-    /// never invents an account); `birth` is the [`BirthVersion`] of a
-    /// document whose chain has a member, absent for one with none.
+    /// admission tests need, and — since the signed-ops design record's D25,
+    /// arm (c′) — the shot terms a verifier of a member's entry signature
+    /// needs. `doc` is the trunk document the argument projects to (a
+    /// version member names its document's state); `owner` is M3's effective
+    /// owner account, CARRIED rather than recomputed client-side because ω is
+    /// the store's word (`None` is unreachable for a registered document and
+    /// stands only so the shape never invents an account); `birth` is the
+    /// [`BirthVersion`] of a document whose chain has a member, absent for
+    /// one with none; `terms` are the [`ShotTerms`] of THE ADDRESS NAMED —
+    /// the count the shot that minted that member placed and the base extent
+    /// its copy took — answered for a version member the shot minted, and
+    /// absent otherwise: for the trunk document itself, for a birth version an
+    /// owned `version` minted, and for a member minted before the record
+    /// carried them.
     DocMetadata {
         doc: Address,
         published: bool,
         owner: Option<Address>,
         birth: Option<BirthVersion>,
+        terms: Option<ShotTerms>,
         as_of: Seq,
     },
     /// edition_claims (PUB-8.46): the audit-view lookup of the edition-claim

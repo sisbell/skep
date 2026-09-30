@@ -18,7 +18,9 @@ pub(super) const SIG_ALG_UNSIGNED: u8 = 0;
 /// [`crate::Kernel::attestation_at`]. OPAQUE to this kernel: no byte of the
 /// blob is interpreted here (an attested marker's verification is the
 /// verifier's, beside the table, fold-inert — the fold reads no signature),
-/// the slot is no chain input (the tamper matrix's case 4), and its bytes sit
+/// though the slot's bytes are HASHED into the commit chain by digest (the
+/// board's r6-2c; the tamper matrix's case 4: a slot stripped or altered
+/// after its commit is a chain break at that transaction), and they sit
 /// OUTSIDE [`super::MAX_TXN_BYTES`]'s accounting (the design record §4.4 (b): the
 /// budget bounds the RECORDS a staging holds; the slot is the marker's own).
 ///

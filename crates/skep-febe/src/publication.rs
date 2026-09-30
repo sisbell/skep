@@ -4,7 +4,9 @@
 //!
 //! * [`Op::DocMetadata`] assembles M3's publication bit, owner and version
 //!   chain with M5's frozen birth extent — [`require_registered_document`] is
-//!   its refusal and [`birth_version`] its chain read;
+//!   its refusal and [`birth_version`] its chain read — and, for a version
+//!   member the shot minted, M5's shot terms for the address named
+//!   (`M5State::shot_terms`; the signed-ops design record's D25, arm (c′));
 //! * [`Op::EditionClaims`] takes the world's edition-claim class and keeps
 //!   the rows whose home the caller reads — [`require_registered_document`]
 //!   is the refusal that bounds it;

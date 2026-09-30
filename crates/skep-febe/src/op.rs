@@ -331,7 +331,11 @@ pub enum Op {
     /// unregistered, or any other tier, ⟹ `DocNotRegistered` — M10's own
     /// refusal, like [`Op::EditionClaims`]'s, since this read composes its
     /// answer from more than one store and so reaches none that could raise
-    /// one. A version member answers its DOCUMENT's state (PUB-2.15).
+    /// one. A version member answers its DOCUMENT's state (PUB-2.15) — and,
+    /// beside it, its OWN shot terms where the shot minted it (the
+    /// signed-ops design record's D25, arm (c′): the count the client placed
+    /// and the base extent its copy took, what a verifier of the member's
+    /// entry signature reads off the member).
     DocMetadata { doc: Address },
     /// The audit-view edition-claim lookup (PUB-8.46): every UNSUPERSEDED
     /// claim of the edition-claim class whose `to` slot OVERLAPS `target`'s

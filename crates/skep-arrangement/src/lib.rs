@@ -2,16 +2,21 @@
 //!
 //! M5 owns every document's **mutable V→I arrangement** (the POOM — a content
 //! subspace and a link subspace per document), the **append-only
-//! content-provenance relation R**, and each trunk's **birth extent** — the
-//! content count its birth version `D.1` was minted with (PUB-3.19) — and it
-//! is the *only* place in the system where destructive change lives
-//! (ASN-0047 P3). It provides the editing/versioning operations (INSERT
+//! content-provenance relation R**, each trunk's **birth extent** — the
+//! content count its birth version `D.1` was minted with (PUB-3.19) — and
+//! each shot-minted member's **shot terms** — the count the client placed and
+//! the base extent its copy took (the signed-ops design record's D25, arm
+//! (c′)) — and it is the *only* place in the system where destructive change
+//! lives (ASN-0047 P3). It provides the editing/versioning operations (INSERT
 //! [ASN-0116], DELETE [ASN-0117], COPY [ASN-0118], REARRANGE [ASN-0119/0084],
 //! CREATENEWVERSION [ASN-0123], and the publish SHOT [PUB-2.33]), a
 //! semantics-blind link-seating step for M7 (CL-OWN/CL-UNIQ), forward V→I
 //! resolution and reverse I→V projection for readers, the R read surface for
-//! provenance queries, and the birth-extent read the doc-metadata read serves
-//! ([`M5State::birth_extent`]). Every mutation funnels through one M2
+//! provenance queries, the birth-extent and shot-terms reads the doc-metadata
+//! read serves ([`M5State::birth_extent`], [`M5State::shot_terms`]), and the
+//! ADDRESS FORM a shot's entry signature is made over, on both of its sides
+//! ([`Shot::address_form`] for the request, [`M5State::address_form_of`] for
+//! the member it minted). Every mutation funnels through one M2
 //! composite, where the J-couplings (J0: content-allocation ⇒ placement;
 //! J1★: placement ⇒ provenance; J-LV: link placements uncoupled from R) are
 //! enforced and each content placement's R-append is co-located with its
@@ -25,10 +30,10 @@
 //! non-recomputable from the current arrangement (a deleted address keeps its
 //! R pair — P2) but, like the POOM, is recovered by replay. v1 has no
 //! skip-serialized hints, so [`M5State::rebuild_derived`] is the identity.
-//! The birth extents are derived by the fold from the placing records — a
-//! birth version the shot mints empty excepted, as
-//! [`M5State::birth_extent`] states — and carried by the checkpoint, never
-//! rebuilt; [`M5State`] states why.
+//! The birth extents are derived by the fold from the placing records — the
+//! shot's for every member it mints, an empty placement included — and the
+//! shot terms are journaled in the shot's own record; both are carried by
+//! the checkpoint, never rebuilt, and [`M5State`] states why.
 //!
 //! ## Failure channels
 //!
@@ -194,8 +199,8 @@ pub use ownership::Caller;
 pub use run::{Run, RunError};
 pub use runlist::Runs;
 pub use seat::{seat_link, stage_seat_link};
-pub use shot::{Base, Shot, ShotRun};
-pub use state::{M5Rec, M5State};
+pub use shot::{Base, PlacedSegment, Shot, ShotRun};
+pub use state::{M5Rec, M5State, ShotTerms};
 pub use vspace::{as_ordinal_vspan, is_ordinal_vspan, ordinal_vspan, OrdinalVSpan, VPos, VSpec};
 
 /// The engine's **read accessor** for M5's slice (Engine Composition

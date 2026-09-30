@@ -11,7 +11,10 @@
 
 use skep_address::{Address, Nat};
 
+use crate::chain::trunk_of;
+use crate::ops::run_origin_document;
 use crate::run::Run;
+use crate::runlist::extend_or_push_run;
 
 /// One client-supplied run of a publish shot (PUB-2.33 as amended,
 /// PUB-8.1): the arrangement the shooting client rendered and the person
@@ -111,4 +114,74 @@ pub struct Shot {
     pub draft: Option<Address>,
     /// The client-rendered arrangement, in order.
     pub runs: Vec<ShotRun>,
+}
+
+impl Shot {
+    /// THE ADDRESS FORM of this shot's runs AS THE COMMIT WILL PLACE THEM
+    /// into `trunk`'s next member (l6-A4 = r6-4, owner-ruled 2026-09-29;
+    /// fam2-Q's arm A): the segments the shot's entry signature is made over,
+    /// each run classed by the family the commit gives it — a run the commit
+    /// COPIES IN is [`Copied`](PlacedSegment::Copied), signed BY VALUE: the
+    /// shot document's own I-space (its origin document `trunk`), placed by
+    /// reference, and the staging draft's text (its origin document the
+    /// draft's trunk), re-inserted as fresh identity under `trunk` — at the
+    /// member, both are the trunk's own; every other run is a
+    /// [`Window`](PlacedSegment::Window), a reference the commit keeps to
+    /// another document's I-space, signed BY ADDRESS. Consecutive windows
+    /// that are I-adjacent become ONE, through the placement's own
+    /// accumulator, exactly as the member's run-list will hold them; the
+    /// copied runs keep their boundaries, which the value form never spells.
+    /// So what this answers for a request is what
+    /// [`M5State::address_form_of`](crate::M5State::address_form_of) answers
+    /// for the member it mints, read back with the shot's `placed` count.
+    ///
+    /// Pure address arithmetic over the request, as the family test at the
+    /// commit is: the origin document is derived from each run's own start
+    /// (`document_of`, then `trunk_of`, PUB-2.15) and never from the stated
+    /// `origin`, so a run the commit will refuse `BadRun` — a start that is
+    /// no content element — classes as a window here, spelled and never
+    /// read; the store's refusal answers it. Reads no world.
+    pub fn address_form(&self, trunk: &Address) -> Vec<PlacedSegment> {
+        let draft_doc: Option<Address> = self.draft.as_ref().map(trunk_of);
+        let mut out: Vec<PlacedSegment> = Vec::new();
+        // The consecutive windows in hand, accumulated through the ONE run
+        // accumulator (`extend_or_push_run`), so the merge condition is the
+        // placement's own; a copied run closes the group.
+        let mut windows: Vec<Run> = Vec::new();
+        for ShotRun { run, .. } in &self.runs {
+            let copied = run_origin_document(run)
+                .is_some_and(|origin| origin == *trunk || draft_doc.as_ref() == Some(&origin));
+            if copied {
+                out.extend(windows.drain(..).map(PlacedSegment::Window));
+                out.push(PlacedSegment::Copied(run.clone()));
+            } else {
+                extend_or_push_run(&mut windows, run.clone());
+            }
+        }
+        out.extend(windows.into_iter().map(PlacedSegment::Window));
+        out
+    }
+}
+
+/// One segment of a shot's ADDRESS FORM (l6-A4): a run of the member the
+/// shot mints, classed by the family the commit gives it — the two classes
+/// the signed body spells apart. Answered for the REQUEST by
+/// [`Shot::address_form`] and for the committed MEMBER by
+/// [`M5State::address_form_of`](crate::M5State::address_form_of), which agree
+/// run for run: that agreement is what lets a verifier holding the member,
+/// and no request, compose the body the client signed.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum PlacedSegment {
+    /// A run the commit COPIES IN — the shot document's own I-space by
+    /// reference, or the staging draft's text re-inserted as fresh identity
+    /// under it: signed BY VALUE, each position's value in V-order. At the
+    /// member every such run is of the member's own trunk; the request's run
+    /// boundaries within a stretch of them are not the member's and are
+    /// spelled by nothing.
+    Copied(Run),
+    /// A WINDOW onto another document's I-space, which the commit keeps as a
+    /// reference: signed BY ADDRESS, its I-start and its width — as the
+    /// member's arrangement holds the run, maximally merged, and clipped to
+    /// the client's placed positions.
+    Window(Run),
 }

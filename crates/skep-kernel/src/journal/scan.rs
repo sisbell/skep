@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use bincode::Options;
 
 use super::attest::{Attestation, SIG_ALG_UNSIGNED};
-use super::chain::ChainLink;
+use super::chain::{slot_digest, ChainLink};
 use super::segment::{fsync_dir, scanned_above, SegmentMeta};
 use super::{
     codec, find_magic, frame_len, parse_frame, CommittedRecord, FramePayload, LogRecord, Marker,
@@ -577,17 +577,20 @@ impl PendingTxn {
 
     /// The chain value `marker` MUST carry to be this group's honest close:
     /// the link opened on the running value, streamed with this group's
-    /// payloads, closed with the marker's own pre-chain fields and the SALT
-    /// the marker carries — the writer's computation ([`super::encode_txn`]) re-run
-    /// from the bytes the CRC verified. The salt is READ here, never drawn:
-    /// a replay under any [`crate::SaltSource`] recomputes the link the writer
-    /// closed, and an edited salt is a link that fails.
+    /// payloads, closed with the marker's own pre-chain fields, the SALT the
+    /// marker carries and the digest of the SLOT it carries — the writer's
+    /// computation ([`super::encode_txn`]) re-run from the bytes the CRC
+    /// verified. The salt and the slot are READ here, never drawn: a replay
+    /// under any [`crate::SaltSource`] recomputes the link the writer closed,
+    /// and an edited salt, or a slot stripped or altered since the commit,
+    /// is a link that fails.
     fn recomputed_chain(&self, marker: &Marker) -> [u8; 32] {
         self.link.clone().close(
             marker.txn,
             marker.last_seq,
             marker.records_checksum,
             &marker.salt,
+            &slot_digest(marker.sig_alg, &marker.sig),
         )
     }
 

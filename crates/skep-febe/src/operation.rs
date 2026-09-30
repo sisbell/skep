@@ -1263,17 +1263,21 @@ where
             // PUB-8.12: `doc` passed the consult above, so an unreadable one
             // was answered `withheld` before the registration refusal below
             // could describe it. The argument projects to its trunk (PUB-2.15)
-            // and every field is read off that one address: M5's own
+            // and every document field is read off that one address: M5's own
             // `published_target` (the bit every gate keys on), M3's ω, and the
-            // birth version.
+            // birth version. The SHOT TERMS alone are read off the address
+            // NAMED (D25's (c′), served as a member read): a version member
+            // the shot minted answers its own, and everything else — the trunk
+            // included — answers none.
             Op::DocMetadata { doc } => {
                 let m3 = world.m3();
                 require_registered_document(m3, kind, &doc)?;
+                let terms = world.m5().shot_terms(&doc).cloned();
                 let trunk = trunk_of(&doc);
                 let published = published_target(m3, &trunk);
                 let owner = m3.effective_owner_prefix(&trunk).cloned();
                 let birth = birth_version(m3, world.m5(), &trunk);
-                Ok(Response::DocMetadata { doc: trunk, published, owner, birth, as_of })
+                Ok(Response::DocMetadata { doc: trunk, published, owner, birth, terms, as_of })
             }
             // PUB-8.46: the world answers the class unfiltered, in
             // link-address order; the home rule (PUB-6.13) keeps each row whose

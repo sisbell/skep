@@ -78,27 +78,35 @@ fn no_two_distinct_slot_triples_spell_one_make_link_body() {
     assert_eq!(spelled.len(), family.len().pow(3), "every triple spelled a body of its own");
 }
 
-/// `PublishBody`'s budget bounds the FINISHED body, its leading count
-/// included, so the least budget a builder can keep is the body of no values:
-/// exactly there it finishes to that body and admits no value — an empty one
-/// costs its length prefix.
+/// `PublishBody`'s budget bounds the FINISHED body, its leading count and its
+/// base-extent group included, so the least budget a builder can keep is the
+/// body of no segments — in either shape of the group: exactly there it
+/// finishes to that body and admits no value (an empty one costs its length
+/// prefix, and the first of a stretch its class byte and count besides) and
+/// no window.
 #[test]
 fn a_publish_budget_of_the_empty_body_finishes_to_it_and_admits_nothing() {
-    let empty = entry_body_publish([]);
-    let floor = empty.as_bytes().len();
-    assert_eq!(PublishBody::within(floor).finish(), empty);
-    assert!(
-        PublishBody::within(floor).push(b"").is_none(),
-        "an empty value costs its length prefix"
-    );
+    for base_extent in [None, Some(3)] {
+        let empty = entry_body_publish([], base_extent);
+        let floor = empty.as_bytes().len();
+        assert_eq!(PublishBody::within(floor, base_extent).finish(), empty);
+        assert!(
+            PublishBody::within(floor, base_extent).push(b"").is_none(),
+            "an empty value costs its length prefix"
+        );
+        assert!(
+            PublishBody::within(floor, base_extent).window(&addr(&[1, 0, 2, 0, 1, 1]), 1).is_none(),
+            "a window costs its start and its width"
+        );
+    }
 }
 
 /// …and below it `within` stops, naming the obligation: a builder minted past
 /// its own budget would finish to the over-budget body the type exists to
 /// refuse rather than build, with no push to refuse it.
 #[test]
-#[should_panic(expected = "cannot hold the body of no values")]
+#[should_panic(expected = "cannot hold the body of no segments")]
 fn a_publish_budget_below_the_empty_body_is_refused_at_within() {
-    let floor = entry_body_publish([]).as_bytes().len();
-    let _ = PublishBody::within(floor - 1);
+    let floor = entry_body_publish([], None).as_bytes().len();
+    let _ = PublishBody::within(floor - 1, None);
 }

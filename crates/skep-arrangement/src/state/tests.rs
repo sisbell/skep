@@ -1,7 +1,7 @@
 use num_traits::Zero;
 
 use super::*;
-use crate::testutil::{a, ca, doc1, doc2, la, n, run, vca, vdoc};
+use crate::testutil::{a, ca, doc1, doc2, la, n, pca, run, vca, vdoc};
 use crate::vspace::VPos;
 
 fn place(s: &M5State, doc: &Address, at: u32, runs: Vec<Run>) -> M5State {
@@ -447,18 +447,82 @@ fn a_snapshot_born_version_is_noted_at_what_it_shares_and_an_empty_birth_at_zero
 }
 
 #[test]
-fn a_member_the_shot_minted_empty_is_the_one_state_the_fold_cannot_tell() {
-    // THE RESIDUE BIRTH★ names, pinned so that whoever closes it meets
-    // this test: a shot with no runs pushes NO placement, so an empty
-    // shot-born member leaves nothing in this slice at its mint, and its
-    // first DEPOSIT is the first placement the fold sees for it — the
-    // same record, at the same ordinal, into the same absent arrangement
-    // as a mint. It is noted as the birth. No conforming mint is empty
-    // (PUB-3.11), and the snapshot arm's empty birth is exact (above).
-    let minted_empty = M5State::genesis();
-    assert_eq!(minted_empty.birth_extent(&vdoc()), n(0), "exact until a deposit lands");
+fn a_member_the_shot_minted_empty_is_noted_at_zero_by_its_own_record() {
+    // THE RESIDUE BIRTH★ carried, CLOSED by D25's (c′): the shot's record is
+    // pushed whatever the placement holds, since it carries the shot's
+    // terms, so an empty shot-born member is noted at zero by its own mint
+    // — the arrangement and R gaining no entry, as the snapshot arm's empty
+    // birth leaves them — and its first DEPOSIT, a `ContentPlace` at the
+    // same ordinal into the same absent arrangement, finds the extent noted
+    // and grows the count alone. (Until the record carried the terms an
+    // empty shot pushed no placement, and that deposit was read as the
+    // birth.) No conforming mint is empty (PUB-3.11).
+    let minted_empty = M5State::genesis().apply_m5(&M5Rec::ShotPlace {
+        doc: vdoc(),
+        runs: vec![],
+        placed: n(0),
+        base_extent: None,
+    });
+    assert_eq!(minted_empty.birth_extent(&vdoc()), n(0), "noted at zero by the mint");
+    assert!(minted_empty.arrangements.get(&vdoc()).is_none(), "the lazy empty arrangement");
+    assert!(!minted_empty.provenance.is_recorded(&vdoc()), "no R entry");
+    assert_eq!(
+        minted_empty.shot_terms(&vdoc()),
+        Some(&ShotTerms { placed: n(0), base_extent: None }),
+        "the terms are noted all the same: the count zero, the birth bit"
+    );
     let deposited = place(&minted_empty, &vdoc(), 1, vec![run(&ca(1), 1)]);
-    assert_eq!(deposited.birth_extent(&vdoc()), n(1), "the deposit, read as the birth");
+    assert_eq!(deposited.content_count(&vdoc()), n(1), "the head took the deposit");
+    assert_eq!(deposited.birth_extent(&vdoc()), n(0), "born empty, whatever it took since");
+}
+
+#[test]
+fn shot_place_folds_as_a_placement_at_one_notes_the_terms_and_is_the_last_variant() {
+    // D25's (c′): the shot's record splices at ordinal 1 and appends to R
+    // exactly as `ContentPlace` at ordinal 1 does, notes the birth extent
+    // off the same spliced list, and notes the member's TERMS beside it —
+    // which no insert's or copy's placement does. The terms ride the
+    // checkpoint with the rest of the slice. And the record is the LAST
+    // variant, so the five before it kept their indices: an `insert`'s or
+    // `copy`'s `ContentPlace` encodes as it did before the variant joined
+    // (its index 0), and every older journal's records decode as they did.
+    let runs = vec![run(&ca(1), 3), run(&pca(1), 2)];
+    let by_place = place(&M5State::genesis(), &vdoc(), 1, runs.clone());
+    let shot = M5Rec::ShotPlace {
+        doc: vdoc(),
+        runs: runs.clone(),
+        placed: n(4),
+        base_extent: Some(n(2)),
+    };
+    let by_shot = M5State::genesis().apply_m5(&shot);
+    assert_eq!(
+        by_shot.content_runs(&vdoc()).collect::<Vec<_>>(),
+        by_place.content_runs(&vdoc()).collect::<Vec<_>>(),
+        "the same splice"
+    );
+    assert_eq!(by_shot.provenance, by_place.provenance, "the same R-append");
+    assert_eq!(by_shot.birth_extent(&vdoc()), n(5), "the whole placement is the birth");
+    assert_eq!(
+        by_shot.shot_terms(&vdoc()),
+        Some(&ShotTerms { placed: n(4), base_extent: Some(n(2)) }),
+        "the shot's two client terms, as the record carried them"
+    );
+    assert_eq!(by_place.shot_terms(&vdoc()), None, "a `ContentPlace` notes no terms");
+    assert_eq!(by_shot.shot_terms(&doc1()), None, "answers the address named");
+    let bytes = bincode::serialize(&by_shot).expect("state serializes");
+    let back: M5State = bincode::deserialize(&bytes).expect("state deserializes");
+    assert_eq!(back, by_shot, "the terms ride the checkpoint");
+    assert_eq!(
+        &bincode::serialize(&M5Rec::ContentPlace { doc: vdoc(), at: n(1), runs: runs.clone() })
+            .expect("encodes")[..4],
+        &0u32.to_le_bytes(),
+        "`ContentPlace` keeps index 0: an insert's or copy's bytes did not move"
+    );
+    assert_eq!(
+        &bincode::serialize(&shot).expect("encodes")[..4],
+        &5u32.to_le_bytes(),
+        "`ShotPlace` is the sixth variant, index 5, appended after the five"
+    );
 }
 
 #[test]
@@ -638,6 +702,18 @@ fn m5rec_survives_a_bincode_round_trip() {
         M5Rec::VersionSnapshot {
             source: doc1(),
             new: vdoc(),
+        },
+        M5Rec::ShotPlace {
+            doc: vdoc(),
+            runs: vec![run(&ca(1), 2), run(&pca(1), 1)],
+            placed: n(3),
+            base_extent: Some(n(1)),
+        },
+        M5Rec::ShotPlace {
+            doc: a(&[1, 0, 1, 0, 2, 1]),
+            runs: vec![],
+            placed: n(0),
+            base_extent: None,
         },
     ] {
         let bytes = bincode::serialize(&rec).expect("record serializes");

@@ -10,8 +10,9 @@ asserted structurally — its framing, not its illustrative position — and
 the change-feed examples are asserted against live daemon bytes in
 `tests/it/changes.rs` with the `time` values normalized, the one field a live
 daemon cannot reproduce; the bare-entry example is byte-exact.) The
-keygen-from-seed rule's two vectors (§The claim ceremony and credentials)
-are asserted against the KDF and each half's keygen by
+keygen-from-seed rule (§The claim ceremony and credentials) — its formula,
+recomputed from RFC 5869, and its two vectors — is asserted against the
+KDF and each half's keygen by
 `skep/crates/skep-signature/tests/it/golden.rs`.
 
 The wire is in DEVELOPMENT: this document is the contract as it stands at

@@ -11,35 +11,58 @@ fn both_tags_sign_verify_and_refuse_a_broken_half() {
     for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
         let signer = HybridSigner::from_seed(tag, &seed).unwrap();
         let twin = HybridSigner::from_seed(tag, &seed).unwrap();
-        assert_eq!(signer.public_key(), twin.public_key(), "keygen from seed is deterministic");
+        assert_eq!(
+            signer.public_key(),
+            twin.public_key(),
+            "tag {tag}: keygen from seed is deterministic"
+        );
         let row = SigAlgRow::of_tag(tag).unwrap();
-        assert_eq!(signer.public_key().raw().len(), row.key_len());
+        assert_eq!(
+            signer.public_key().raw().len(),
+            row.key_len(),
+            "tag {tag}: the key is the row's width"
+        );
         let msg = b"the entry frame";
         let mut rng = SeededRng06::new([7; 32]);
         let sig = signer.sign_with_rng(&mut rng, msg);
-        assert_eq!(sig.len(), row.sig_len());
-        assert_eq!(verify(tag, signer.public_key(), msg, &sig), Ok(()));
+        assert_eq!(sig.len(), row.sig_len(), "tag {tag}: the blob is the row's width");
+        assert_eq!(
+            verify(tag, signer.public_key(), msg, &sig),
+            Ok(()),
+            "tag {tag}: its own blob verifies"
+        );
         assert_eq!(
             verify(tag, signer.public_key(), b"other", &sig),
-            Err(HybridFault::Signature)
+            Err(HybridFault::Signature),
+            "tag {tag}: another message"
         );
         // The Ed25519 half broken.
         let mut broken = sig.clone();
         broken[row.pq_sig_len] ^= 1;
-        assert_eq!(verify(tag, signer.public_key(), msg, &broken), Err(HybridFault::Signature));
+        assert_eq!(
+            verify(tag, signer.public_key(), msg, &broken),
+            Err(HybridFault::Signature),
+            "tag {tag}: the Ed25519 half broken"
+        );
         // The PQ half broken.
         let mut broken = sig.clone();
         broken[3] ^= 1;
-        assert_eq!(verify(tag, signer.public_key(), msg, &broken), Err(HybridFault::Signature));
+        assert_eq!(
+            verify(tag, signer.public_key(), msg, &broken),
+            Err(HybridFault::Signature),
+            "tag {tag}: the post-quantum half broken"
+        );
         // The wrong width.
         assert_eq!(
             verify(tag, signer.public_key(), msg, &sig[1..]),
-            Err(HybridFault::Malformed)
+            Err(HybridFault::Malformed),
+            "tag {tag}: one byte short"
         );
         // Shorter than the Ed25519 field alone.
         assert_eq!(
             verify(tag, signer.public_key(), msg, &sig[..63]),
-            Err(HybridFault::Malformed)
+            Err(HybridFault::Malformed),
+            "tag {tag}: shorter than the Ed25519 field"
         );
         // The other tag's key.
         let other_tag = if tag == TAG_MLDSA65_ED25519 {
@@ -50,7 +73,8 @@ fn both_tags_sign_verify_and_refuse_a_broken_half() {
         let other_signer = HybridSigner::from_seed(other_tag, &seed).unwrap();
         assert_eq!(
             verify(tag, other_signer.public_key(), msg, &sig),
-            Err(HybridFault::WrongRow)
+            Err(HybridFault::WrongRow),
+            "tag {tag}: the other tag's key"
         );
         assert_ne!(
             signer.ed25519_signing_key().to_bytes(),

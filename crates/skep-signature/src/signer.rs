@@ -337,6 +337,41 @@ mod tests {
         }
     }
 
+    /// `sign`'S DRAWS, AS ITS DOC STATES THEM: tag 1 draws nothing — a stream
+    /// handed to it is where it began, and two `sign`s over one message are
+    /// byte-equal — while tag 3 draws a fresh per-signature seed from the OS at
+    /// every `sign`: two blobs' post-quantum fields differ (two 40-byte OS draws
+    /// agree once in 2^320), their Ed25519 fields agree (Ed25519 signs
+    /// deterministically), and both verify. A signer that drew tag 3's seed from
+    /// anything fixed would make the two equal.
+    #[test]
+    fn sign_draws_nothing_under_tag_1_and_a_fresh_os_seed_under_tag_3() {
+        let msg = b"the entry frame";
+        for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
+            let signer = HybridSigner::from_seed(tag, &[0x42; 32]).unwrap();
+            let mut stream = SeededRng06::new([7; 32]);
+            let _ = signer.sign_with_rng(&mut stream, msg);
+            let untouched = rand_core_06::RngCore::next_u64(&mut stream)
+                == rand_core_06::RngCore::next_u64(&mut SeededRng06::new([7; 32]));
+            assert_eq!(untouched, tag == TAG_MLDSA65_ED25519, "tag {tag}: what its signing drew");
+            let (first, second) = (signer.sign(msg), signer.sign(msg));
+            for blob in [&first, &second] {
+                assert_eq!(crate::verify(tag, signer.public_key(), msg, blob), Ok(()), "tag {tag}");
+            }
+            let pq_len = signer.public_key().sig_alg_row().pq_sig_len;
+            assert_eq!(
+                first[pq_len..],
+                second[pq_len..],
+                "tag {tag}: Ed25519 signs deterministically"
+            );
+            assert_eq!(
+                first[..pq_len] == second[..pq_len],
+                tag == TAG_MLDSA65_ED25519,
+                "tag {tag}: the post-quantum field repeats under tag 1 alone"
+            );
+        }
+    }
+
     /// WHAT A DROPPED SIGNER WIPES, as [`HybridSigner`]'s doc states it, read
     /// off each type's `ZeroizeOnDrop` in this very build: the Ed25519 signing
     /// key wipes itself, as does the FN-DSA key each tag-3 signature decodes;

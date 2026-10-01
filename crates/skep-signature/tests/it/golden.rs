@@ -7,8 +7,9 @@
 //! crate — keys-from-seed and signatures byte-equal; the widths each pinned
 //! crate fixes, pinned by hand beside the sizes and timings the report takes
 //! back; which FN-DSA backend signed them on this target; and the
-//! keygen-from-seed rule's two vectors as `docs/wire.md` publishes them,
-//! checked against the keys themselves.
+//! keygen-from-seed rule as `docs/wire.md` publishes it: its formula,
+//! recomputed from RFC 5869 against the KDF, and its two vectors, checked
+//! against the keys themselves.
 
 use sha2::{Digest, Sha256};
 use skep_identity::{
@@ -16,7 +17,9 @@ use skep_identity::{
     BoardTerm, EntrySlot, Fingerprint, LinkSlots, RecordRows, ShotSegmentPiece, SigAlgRow,
     ALG_MLDSA65_ED25519,
 };
-use skep_signature::{derive_half_seeds, pq_widths, verify, HybridSigner, PqWidths, SeededRng06};
+use skep_signature::{
+    derive_half_seeds, pq_widths, verify, HybridFault, HybridSigner, PqWidths, SeededRng06,
+};
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -24,6 +27,15 @@ fn hex(bytes: &[u8]) -> String {
 
 fn sha_hex(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
+}
+
+/// `docs/wire.md` as prose, rewrapped at will: every run of whitespace reads
+/// as one space.
+fn wire_md_prose() -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/wire.md");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 // ── the frames ──────────────────────────────────────────────────────────────
@@ -160,7 +172,11 @@ fn golden_of(tag: u8) -> (HybridSigner, Vec<SignedFrame>) {
         // is a function of its frame alone.
         let mut rng = SeededRng06::new(GOLDEN_STREAM_SEED);
         let sig = signer.sign_with_rng(&mut rng, &frame);
-        assert_eq!(verify(tag, signer.public_key(), &frame, &sig), Ok(()));
+        assert_eq!(
+            verify(tag, signer.public_key(), &frame, &sig),
+            Ok(()),
+            "tag {tag}: the {op} frame's blob verifies"
+        );
         out.push(SignedFrame { op, frame, sig });
     }
     (signer, out)
@@ -242,11 +258,7 @@ fn golden_tag_3_fndsa512_preview_ed25519() {
 /// that drifts in the prose fails as a drifted key does.
 #[test]
 fn wire_md_publishes_the_keygen_from_seed_vectors() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/wire.md");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-    // Prose, rewrapped at will: every run of whitespace reads as one space.
-    let prose = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let prose = wire_md_prose();
     let seed = format!("the seed `{}` derives", hex(&GOLDEN_SEED));
     assert!(prose.contains(&seed), "wire.md's vectors do not say: {seed}");
     for tag in [1u8, 3] {
@@ -260,8 +272,87 @@ fn wire_md_publishes_the_keygen_from_seed_vectors() {
     }
 }
 
+// ── the KDF, recomputed ─────────────────────────────────────────────────────
+
+/// HMAC-SHA-256 (RFC 2104) from `sha2` alone, so the oracle below shares no
+/// code with the `hkdf` crate the KDF calls. Every key here is at most one
+/// SHA-256 output, inside the 64-byte block.
+fn hmac_sha256(key: &[u8], message: &[&[u8]]) -> [u8; 32] {
+    let mut block = [0u8; 64];
+    block[..key.len()].copy_from_slice(key);
+    let mut inner = Sha256::new().chain_update(block.map(|b| b ^ 0x36));
+    for part in message {
+        inner.update(part);
+    }
+    Sha256::new()
+        .chain_update(block.map(|b| b ^ 0x5c))
+        .chain_update(inner.finalize())
+        .finalize()
+        .into()
+}
+
+/// HKDF-SHA-256 (RFC 5869) at `L = 32`: `PRK = HMAC(salt, IKM)`, then the one
+/// Expand block `T(1) = HMAC(PRK, info ‖ 0x01)`, `info` given as its parts.
+fn hkdf_sha256_32(salt: &[u8], ikm: &[u8], info: &[&[u8]]) -> [u8; 32] {
+    let prk = hmac_sha256(salt, &[ikm]);
+    let mut expand = info.to_vec();
+    expand.push(&[1u8]);
+    hmac_sha256(&prk, &expand)
+}
+
+/// THE KDF IS THE FORMULA `docs/wire.md` PUBLISHES: the formula and its half
+/// labels as wire.md states them, recomputed by RFC 5869 from `sha2` alone —
+/// the oracle first held to RFC 5869's own Test Case 1 — for both tags, both
+/// halves and three seeds; and the signer's Ed25519 key IS its half seed, the
+/// key's Ed25519 half that key's public half. The published vectors are the
+/// code's own output; this holds the code to the formula a client implements.
+#[test]
+fn the_kdf_is_the_hkdf_formula_wire_md_publishes() {
+    let rfc_salt: Vec<u8> = (0x00..=0x0c).collect();
+    let rfc_info: Vec<u8> = (0xf0..=0xf9).collect();
+    assert_eq!(
+        hex(&hkdf_sha256_32(&rfc_salt, &[0x0b; 22], &[&rfc_info[..]])),
+        "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf",
+        "the oracle is not RFC 5869's HKDF-SHA-256 (Appendix A.1, the OKM's first 32 bytes)"
+    );
+    let prose = wire_md_prose();
+    for stated in [
+        "half_seed = HKDF-SHA-256(salt = \"skep-kdf-v1\", IKM = seed, \
+         info = <alg token> ‖ 0x00 ‖ <half label>, L = 32)",
+        "with the half labels `ed25519` for the Ed25519 half and, for the post-quantum half, \
+         `ml-dsa-65` under tag `1` and `fn-dsa-512` under tag `3`",
+    ] {
+        assert!(prose.contains(stated), "wire.md's keygen-from-seed rule does not say: {stated}");
+    }
+    for (tag, token, pq_label) in
+        [(1u8, "mldsa65-ed25519", "ml-dsa-65"), (3, "fndsa512-preview-ed25519", "fn-dsa-512")]
+    {
+        let formula = |seed: &[u8; 32], label: &str| {
+            hkdf_sha256_32(b"skep-kdf-v1", seed, &[token.as_bytes(), &[0u8], label.as_bytes()])
+        };
+        for seed in [GOLDEN_SEED, [0x00; 32], [0xff; 32]] {
+            let halves = derive_half_seeds(tag, &seed).unwrap();
+            assert!(
+                halves.ed25519 == formula(&seed, "ed25519"),
+                "tag {tag}: the Ed25519 half seed"
+            );
+            assert!(halves.pq == formula(&seed, pq_label), "tag {tag}: the post-quantum half seed");
+        }
+        let signer = HybridSigner::from_seed(tag, &GOLDEN_SEED).unwrap();
+        let ed = signer.ed25519_signing_key();
+        assert!(ed.to_bytes() == formula(&GOLDEN_SEED, "ed25519"), "tag {tag}: the Ed25519 key");
+        assert_eq!(
+            signer.public_key().ed25519_half(),
+            ed.verifying_key().as_bytes(),
+            "tag {tag}: the key's Ed25519 half is that key's public half"
+        );
+    }
+}
+
 /// THE HYBRID CROSS-CHECK at the frame: each half alone fails — a valid PQ
-/// half with a foreign Ed25519 half, and the reverse — under both tags.
+/// half with a foreign Ed25519 half, and the reverse — answering `Signature`
+/// under both tags: the spliced blob is the row's width under the row's own
+/// tag, so the signature is all that can be at fault.
 #[test]
 fn each_half_alone_fails_under_both_tags() {
     for tag in [1u8, 3] {
@@ -274,12 +365,24 @@ fn each_half_alone_fails_under_both_tags() {
         // The PQ half ours, the Ed25519 half theirs.
         let mut mixed = sig[..row.pq_sig_len].to_vec();
         mixed.extend_from_slice(&foreign[row.pq_sig_len..]);
-        assert!(verify(tag, signer.public_key(), frame, &mixed).is_err(), "tag {tag}: ed half");
+        assert_eq!(
+            verify(tag, signer.public_key(), frame, &mixed),
+            Err(HybridFault::Signature),
+            "tag {tag}: our post-quantum half beside a foreign Ed25519 half"
+        );
         // The Ed25519 half ours, the PQ half theirs.
         let mut mixed = foreign[..row.pq_sig_len].to_vec();
         mixed.extend_from_slice(&sig[row.pq_sig_len..]);
-        assert!(verify(tag, signer.public_key(), frame, &mixed).is_err(), "tag {tag}: pq half");
-        assert_eq!(verify(tag, signer.public_key(), frame, sig), Ok(()));
+        assert_eq!(
+            verify(tag, signer.public_key(), frame, &mixed),
+            Err(HybridFault::Signature),
+            "tag {tag}: a foreign post-quantum half beside our Ed25519 half"
+        );
+        assert_eq!(
+            verify(tag, signer.public_key(), frame, sig),
+            Ok(()),
+            "tag {tag}: our blob, unmixed"
+        );
     }
 }
 
@@ -324,8 +427,8 @@ fn sizes_and_timings_per_tag() {
         let (signer, signed) = golden_of(tag);
         let key_len = signer.public_key().raw().len();
         let sig_len = signed[0].sig.len();
-        assert_eq!(key_len, row.key_len());
-        assert_eq!(sig_len, row.sig_len());
+        assert_eq!(key_len, row.key_len(), "tag {tag}: the key is the row's width");
+        assert_eq!(sig_len, row.sig_len(), "tag {tag}: the blob is the row's width");
         let PqWidths { key: pq_key, sig: pq_sig, signing_key: pq_sk } =
             pq_widths(tag).unwrap();
         let frame = &signed[0].frame;
@@ -341,7 +444,11 @@ fn sizes_and_timings_per_tag() {
             let sig = s.sign(frame);
             sign_us.push(t.elapsed().as_micros());
             let t = Instant::now();
-            assert_eq!(verify(tag, s.public_key(), frame, &sig), Ok(()));
+            assert_eq!(
+                verify(tag, s.public_key(), frame, &sig),
+                Ok(()),
+                "tag {tag}, seed {k}: a blob `sign` made verifies"
+            );
             verify_us.push(t.elapsed().as_micros());
         }
         let median = |v: &mut Vec<u128>| {
@@ -400,6 +507,6 @@ fn the_fn_dsa_preview_signs_and_verifies_on_this_target() {
     let (signer, signed) = golden_of(3);
     for SignedFrame { op, frame, sig } in &signed {
         assert_eq!(verify(3, signer.public_key(), frame, sig), Ok(()), "{op}");
-        assert_eq!(sig.len(), 730);
+        assert_eq!(sig.len(), 730, "{op}");
     }
 }

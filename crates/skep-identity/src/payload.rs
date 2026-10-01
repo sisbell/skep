@@ -559,10 +559,13 @@ pub fn parse_record_value<T: RecordEntry>(bytes: &[u8]) -> Result<RecordValue<T>
         .and_then(Value::as_array)
         .ok_or(PayloadError::BadRecord)?;
     // `sig` — STRING, OPTIONAL, canonically LAST, IGNORED by the fold whatever
-    // it holds (AUTH-2.13, AUTH-2.94); admitted with the body and absent from
-    // the answer (AUTH-2.18). BORROWED from `value`, never copied: the body is
-    // a depositor-chosen string the read's cap bounds only at 128 KiB
-    // (AUTH-2.43), and `canonical_record` wants a `&str`.
+    // it holds (AUTH-2.13, AUTH-2.94): the fold's parsers drop it from their
+    // answer (`parse_record`, AUTH-2.18), and the record grade's verifier
+    // reads it. BORROWED from `value` through the admission compare —
+    // `canonical_record` wants a `&str` — and copied into the answer only once
+    // the body is admitted, so a refused body — a depositor-chosen string the
+    // read's cap bounds only at 128 KiB (AUTH-2.43) — never pays for a copy of
+    // its `sig`.
     let sig = match obj.get("sig") {
         None => None,
         Some(Value::String(s)) => Some(s.as_str()),

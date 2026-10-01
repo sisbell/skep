@@ -16,8 +16,8 @@ use sha2::{Digest, Sha256};
 use skep_identity::{
     canonical_record, framed, parse_enroll, parse_record_value, parse_retire, record_bytes,
     single_address, AlgRow, CredentialKind, Enrollment, Fingerprint, FoldCtx, HasIdentity,
-    IdentityState, Inert, LabelError, ParseKeyError, PayloadError, PublicKey, RecordValue,
-    SigAlgRow, Values, ALGS,
+    IdentityState, Inert, LabelError, ParseKeyError, PayloadError, PublicKey, PublishBody,
+    PublishRefusal, RecordValue, SigAlgRow, Values, ALGS,
     ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, ED25519_KEY_LEN, ENROLL_TYPE, ENTRY_TAG,
     FNDSA512_PREVIEW_ED25519_KEY_LEN, FNDSA512_PREVIEW_KEY_LEN, KEY_TAG, MAX_RECORD_BYTES,
     MLDSA65_ED25519_KEY_LEN, MLDSA65_KEY_LEN, NODE_HELLO_TAG, RETIRE_TYPE, SESSION_TAG,
@@ -574,7 +574,7 @@ fn payload_error_display_is_the_token() {
     }
 }
 
-/// The three types this crate returns in `Err` compose with `?` into
+/// The four types this crate returns in `Err` compose with `?` into
 /// `Box<dyn Error>`, so a consumer plumbs them rather than defining a local
 /// wrapper enum to re-implement `Display` behind.
 #[test]
@@ -589,6 +589,9 @@ fn error_types_lift_into_dyn_error() {
     assert_eq!(boxed.to_string(), LabelError::Newline.to_string());
     let boxed = lift(PayloadError::DuplicateKey(4));
     assert_eq!(boxed.to_string(), "duplicate_key:4");
+    let empty_window = PublishBody::within(usize::MAX, None).window(&addr(ACCT_A), 0);
+    let boxed = lift(empty_window.expect_err("a window of no positions"));
+    assert_eq!(boxed.to_string(), PublishRefusal::EmptyWindow.to_string());
 }
 
 /// The fold's seam forwards through `&T` and `Box<T>`, as std's own traits
@@ -658,7 +661,7 @@ fn vocabulary_types_are_usable_as_map_keys() {
     assert_eq!(tally.len(), 2);
     assert_eq!(tally[&Inert::NotDocOne], 2);
 
-    // The other four, in the shape a conformance list takes.
+    // The other five, in the shape a conformance list takes.
     let faults: HashSet<PayloadError> = [
         PayloadError::BadRecord,
         PayloadError::BadRecord,
@@ -677,6 +680,12 @@ fn vocabulary_types_are_usable_as_map_keys() {
         HashSet::from([LabelError::Newline, LabelError::TooLong, LabelError::Newline]).len(),
         2
     );
+    let refusals = HashSet::from([
+        PublishRefusal::PastBudget,
+        PublishRefusal::Unspellable,
+        PublishRefusal::PastBudget,
+    ]);
+    assert_eq!(refusals.len(), 2);
 }
 
 /// AUTH-1.9/AUTH-1.7 — the hand-written renderings: a key's `{:?}` is its

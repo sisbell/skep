@@ -40,8 +40,9 @@
 //! composes the ENTRY frame it verifies through [`entry_frame`], over the
 //! locked snapshot's [`BoardTerm`], the principal's account, and the op's
 //! document and [`EntryBody`] — a `publish`'s built segment by segment within
-//! its budget through [`PublishBody`]. At a credential deposit above the
-//! claim it checks the RECORD grade: it reads the record's atom through
+//! its budget through [`PublishBody`], whose [`PublishRefusal`] tells it which
+//! answer a refused shot is owed. At a credential deposit above the claim it
+//! checks the RECORD grade: it reads the record's atom through
 //! [`record_bytes`], its entries and `sig` through [`parse_record_value`] and
 //! the link's type and target through [`single_address`], and frames the
 //! sig-less projection ([`canonical_record`] with no `sig`) as the
@@ -62,10 +63,10 @@
 //!
 //! Some public items are public for a reason a grep for callers cannot see,
 //! so finding no caller is no reason to narrow one. [`Tag`],
-//! [`ParseKeyError`], [`LabelError`], [`PayloadError`] and [`RecordEntry`]
-//! are public because a public signature names them. The rest the spec or the
-//! design record declares for a reader OUTSIDE the workspace:
-//! [`canonical_record`], [`parse_enroll`], [`parse_retire`] and
+//! [`ParseKeyError`], [`LabelError`], [`PayloadError`], [`PublishRefusal`]
+//! and [`RecordEntry`] are public because a public signature names them. The
+//! rest the spec or the design record declares for a reader OUTSIDE the
+//! workspace: [`canonical_record`], [`parse_enroll`], [`parse_retire`] and
 //! [`parse_record_value`] with its [`RecordValue`] for the signing client and
 //! the verifier beside the table, which parses a committed record, reads its
 //! `sig` and composes its sig-less projection (the design record §4.2 (C));
@@ -109,10 +110,11 @@
 //!   `replaces` member), [`entry_body_publish`] (over [`ShotSegment`]s — the
 //!   address form: the runs the commit copies in by value, the windows by
 //!   address — and the shot's base extent), or segment by segment under a
-//!   byte budget by [`PublishBody`], and [`entry_body_record`], the record
-//!   grade's five rows under the `record` token — the bytes a publish-class
-//!   entry's signature, or a record's `sig`, is made over (signed ops; the
-//!   design record §2.5; the frame merge);
+//!   byte budget by [`PublishBody`], with its refusal [`PublishRefusal`], and
+//!   [`entry_body_record`], the record grade's five rows under the `record`
+//!   token — the bytes a publish-class entry's signature, or a record's
+//!   `sig`, is made over (signed ops; the design record §2.5; the frame
+//!   merge);
 //! * `payload`: the credential-record constants and payload types —
 //!   [`ENROLL_TYPE`], [`RETIRE_TYPE`], [`MAX_RECORD_BYTES`], [`Enrollment`]
 //!   with its refusal [`LabelError`], [`PayloadError`] (AUTH-1.18–1.28) —
@@ -197,7 +199,7 @@ mod write_types;
 pub use entry::{
     entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_publish,
     entry_body_record, entry_frame, BoardTerm, EntryBody, EntrySlot, LinkSlots, PublishBody,
-    ShotSegment,
+    PublishRefusal, ShotSegment,
 };
 pub use framing::{
     framed, Tag, ENTRY_TAG, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, TAGS,

@@ -111,6 +111,7 @@
 //!     * then the BASE-EXTENT GROUP, one length-delimited group: EMPTY
 //!       (`be32(0)`) where the shot has no base — the birth bit — else
 //!       `be32(8) ‖ be64(base_extent)` — [`push_base_extent`].
+//!
 //!   `base` itself is NO member (fam1-L1): a verifier derives it from the
 //!   minted member's address — a trunk member `D.k+1` was minted against
 //!   `D.k`, a daughter `X.m` against `X`, a birth version against the
@@ -122,11 +123,12 @@
 //!   member's own run. A replayed shot names a base its own commit left no
 //!   longer the head, and so mints that base's daughter, never the trunk's
 //!   next. [`PublishBody`] builds the body one value and one window at a
-//!   time under a byte budget, and refuses it WHOLE at the first segment past
-//!   that budget, for a verifier re-composing it off a store. Every segment
-//!   is self-delimiting behind its class byte and the group opens with a
-//!   zero byte, which no class byte is, so the body is uniquely decodable
-//!   from its front.
+//!   time under a byte budget, for a verifier re-composing it off a store,
+//!   and refuses it WHOLE at the first segment it cannot take — past that
+//!   budget, past the count's `be64`, or a window of no positions — naming
+//!   which ([`PublishRefusal`]). Every segment is self-delimiting behind its
+//!   class byte and the group opens with a zero byte, which no class byte
+//!   is, so the body is uniquely decodable from its front.
 //! * `record` — [`entry_body_record`]: THE RECORD GRADE's body (the frame
 //!   merge, fm-I, RULED 2026-09-29; its record §3), under the `record`
 //!   token. A record deposit's `sig` rides the atom, canonically last, and
@@ -147,11 +149,9 @@
 //!   frame's `account` at a registry deposit or a targetless kind. This crate
 //!   pins the grammar; the frame's `account` is the HOME's account and its
 //!   `doc` the home — a credential record's own doc 1 (AUTH-2.127), so both
-//!   are read off the link's address — and the daemon composes it at every
-//!   credential deposit above the claim (the record grade, 2a: the signer
-//!   embeds the `sig` the frame's signature makes, the write path verifies it
-//!   at the link under the set that opens the home, and a record carrying
-//!   none is refused `attestation_required`).
+//!   are read off the link's address. Who signs and verifies over it, and
+//!   what a record carrying no `sig` is answered, is the record grade's (2a)
+//!   and the host's: the crate-level composition note says where skepd does.
 //!
 //! Every length-delimited element is written by [`push_delimited`], the one
 //! function [`framed`] delimits its own fields with, and every row is written
@@ -159,6 +159,8 @@
 //! [`push_slot`], [`push_window`]), never built apart and copied in — so the
 //! composition is injective at every level: two distinct inputs never spell
 //! one preimage.
+
+use core::fmt;
 
 use skep_address::{Address, Span};
 
@@ -530,9 +532,8 @@ pub fn entry_body_publish<'a>(
             ShotSegment::Window { start, width } => body.window(start, width),
         })
         .expect(
-            "a budget of usize::MAX refuses no segment: a saturated length never passes it, so \
-             the refusal is the count's — the positions placed pass 2^64 − 1, or a window has no \
-             width — a caller's broken precondition",
+            "a budget of usize::MAX refuses no segment past it — a saturated length never passes \
+             it — so the refusal named here is a caller's broken precondition",
         )
         .finish()
 }
@@ -569,9 +570,11 @@ pub fn entry_body_record(
 /// the verifier that re-composes a shot's body off its own store, where each
 /// value arrives by a read that can fail and a body past the budget must be
 /// REFUSED rather than built. [`PublishBody::push`] and
-/// [`PublishBody::window`] measure the budget in the body's own layout, so no
-/// caller restates that layout; the caller keeps its walk, and its own answer
-/// for a value it could not read, and collects nothing ahead of the build.
+/// [`PublishBody::window`] measure the budget in the body's own layout and
+/// NAME what they refuse ([`PublishRefusal`]), so no caller restates that
+/// layout, or the count's arithmetic, to learn which refusal it met; the
+/// caller keeps its walk, its own answer for a value it could not read and
+/// for each refusal, and collects nothing ahead of the build.
 ///
 /// Its standing INVARIANT is the one the budget exists for: the body built so
 /// far, its leading count and the base-extent group [`PublishBody::finish`]
@@ -640,25 +643,27 @@ impl PublishBody {
 
     /// Append `value` as the body's next position — joining the open value
     /// stretch, or opening one after a window or at the body's start — and
-    /// hand the builder back; unless the finished body would then pass its
-    /// budget, where the answer is `None` and the builder is GONE: a body that
-    /// refused a segment can be neither continued nor finished. No value is
-    /// free — an empty one costs its length prefix, and the first of a
-    /// stretch its class byte and count besides — so a budget admits at most
-    /// a quarter as many values as it has bytes, whatever the values hold.
+    /// hand the builder back; else the cause ([`PublishRefusal`]) and the
+    /// builder GONE: a body that refused a segment can be neither continued
+    /// nor finished. [`PublishRefusal::Unspellable`] where the positions
+    /// placed would pass 2^64 − 1, the count's width; else
+    /// [`PublishRefusal::PastBudget`] where the finished body would pass its
+    /// budget. No value is free — an empty one costs its length prefix, and
+    /// the first of a stretch its class byte and count besides — so a budget
+    /// admits at most a quarter as many values as it has bytes, whatever the
+    /// values hold.
     ///
     /// PRECONDITION — as [`entry_body_publish`]'s: `value` is shorter than
     /// 2^32 bytes, else PANICS; under any budget below that bound, this
-    /// refuses such a value first. `None` is also the answer where the
-    /// positions placed would pass 2^64 − 1, the count's width.
+    /// refuses such a value first.
     #[must_use = "push takes the builder: the body goes on in the one it returns"]
-    pub fn push(mut self, value: &[u8]) -> Option<PublishBody> {
+    pub fn push(mut self, value: &[u8]) -> Result<PublishBody, PublishRefusal> {
+        let placed = self.placed.checked_add(1).ok_or(PublishRefusal::Unspellable)?;
         let opening: usize = if self.stretch.is_some() { 0 } else { 1 + 8 };
         let cost = opening.saturating_add(delimited_len(value.len()));
         if self.finished_len().saturating_add(cost) > self.budget {
-            return None;
+            return Err(PublishRefusal::PastBudget);
         }
-        let placed = self.placed.checked_add(1)?;
         let mut stretch = match self.stretch.take() {
             Some(open) => open,
             None => {
@@ -669,35 +674,39 @@ impl PublishBody {
         stretch.push(&mut self.bytes, value);
         self.stretch = Some(stretch);
         self.placed = placed;
-        Some(self)
+        Ok(self)
     }
 
     /// Append a WINDOW — the run from `start` of `width` positions, held by
     /// address — closing any open value stretch first, and hand the builder
-    /// back; unless the finished body would then pass its budget, where the
-    /// answer is `None` and the builder is GONE, as after a refused push. A
-    /// window costs its class byte, its start's delimited spelling and eight
-    /// bytes of width, whatever its width.
+    /// back; else the cause and the builder GONE, as after a refused push:
+    /// [`PublishRefusal::EmptyWindow`] where `width` is zero — a run holds at
+    /// least one position — then [`PublishRefusal::Unspellable`] where the
+    /// positions placed would pass 2^64 − 1, then
+    /// [`PublishRefusal::PastBudget`]. A window costs its class byte, its
+    /// start's delimited spelling and eight bytes of width, whatever its
+    /// width.
     ///
     /// PRECONDITION — `start`'s spelling is shorter than 2^32 bytes, else
-    /// PANICS. `None` is also the answer where `width` is zero — a run holds
-    /// at least one position — or where the positions placed would pass
-    /// 2^64 − 1.
+    /// PANICS.
     #[must_use = "window takes the builder: the body goes on in the one it returns"]
-    pub fn window(mut self, start: &Address, width: u64) -> Option<PublishBody> {
+    pub fn window(mut self, start: &Address, width: u64) -> Result<PublishBody, PublishRefusal> {
+        if width == 0 {
+            return Err(PublishRefusal::EmptyWindow);
+        }
+        let placed = self.placed.checked_add(width).ok_or(PublishRefusal::Unspellable)?;
         let start = address_bytes(start);
         let cost = 1usize.saturating_add(delimited_len(start.len())).saturating_add(8);
-        if self.finished_len().saturating_add(cost) > self.budget || width == 0 {
-            return None;
+        if self.finished_len().saturating_add(cost) > self.budget {
+            return Err(PublishRefusal::PastBudget);
         }
-        let placed = self.placed.checked_add(width)?;
         if let Some(open) = self.stretch.take() {
             open.close(&mut self.bytes);
         }
         self.bytes.push(SEGMENT_WINDOW);
         push_window(&mut self.bytes, &start, width);
         self.placed = placed;
-        Some(self)
+        Ok(self)
     }
 
     /// The body, under the `publish` token: the count of positions the
@@ -730,6 +739,43 @@ const _: fn() = || {
     impl<T: Clone> AmbiguousIfClone<IsClone> for T {}
     let _ = <PublishBody as AmbiguousIfClone<_>>::check;
 };
+
+/// Why [`PublishBody`] refused a segment — the builder GONE with it, as every
+/// refusal leaves it — NAMED, because a caller answers the three differently:
+/// a body PAST ITS BUDGET is the one the builder exists to refuse rather than
+/// build; a count past the body's leading `be64` names positions no store
+/// holds; a window of no positions is a run no arrangement holds. What each
+/// is answered is the caller's: a refusal reaches no wire from here.
+///
+/// The causes are tested in ONE order, the segment's own first — an empty
+/// window, then the count, then the budget — so a segment the body could not
+/// spell at any budget is never answered as past this one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PublishRefusal {
+    /// The FINISHED body — its leading count and its base-extent group
+    /// included — would pass the builder's budget.
+    PastBudget,
+    /// The positions placed would pass 2^64 − 1, the most the body's leading
+    /// `be64(placed)` spells.
+    Unspellable,
+    /// A window of width zero: a run holds at least one position
+    /// ([`ShotSegment::Window`]'s obligation).
+    EmptyWindow,
+}
+
+/// Prose, never a wire vocabulary: each caller answers a refusal in its own
+/// terms.
+impl fmt::Display for PublishRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            PublishRefusal::PastBudget => "the finished body would pass its budget",
+            PublishRefusal::Unspellable => "the positions placed would pass 2^64 - 1",
+            PublishRefusal::EmptyWindow => "a window holds no position",
+        })
+    }
+}
+
+impl std::error::Error for PublishRefusal {}
 
 #[cfg(test)]
 mod tests;

@@ -316,49 +316,59 @@ fn a_publish_body_built_within_its_budget_is_the_whole_sequences_body() {
         })
     };
     let window = ShotSegment::Window { start: &start, width: 2 };
-    assert!(
-        fed(&[ShotSegment::Value(b"ab"), window, ShotSegment::Value(b"cd")]).is_none(),
+    let past = Some(PublishRefusal::PastBudget);
+    assert_eq!(
+        fed(&[ShotSegment::Value(b"ab"), window, ShotSegment::Value(b"cd")]).err(),
+        past,
         "one byte past the budget"
     );
-    assert!(
+    assert_eq!(
         fed(&[
             ShotSegment::Value(b"ab"),
             window,
             ShotSegment::Value(b"c"),
             ShotSegment::Value(b"")
         ])
-        .is_none(),
+        .err(),
+        past,
         "an empty value costs its length prefix"
     );
-    assert!(
+    assert_eq!(
         fed(&[
             ShotSegment::Value(b"ab"),
             window,
             ShotSegment::Value(b"cd"),
             ShotSegment::Value(b"c")
         ])
-        .is_none(),
+        .err(),
+        past,
         "a refusal ends the body: nothing finishes over the segments around it"
     );
-    assert!(
-        fed(&[ShotSegment::Value(b"ab"), window, ShotSegment::Value(b"c"), window]).is_none(),
+    assert_eq!(
+        fed(&[ShotSegment::Value(b"ab"), window, ShotSegment::Value(b"c"), window]).err(),
+        past,
         "a window is measured by the same budget"
     );
     assert_eq!(
         fed(&[ShotSegment::Value(b"ab"), window, ShotSegment::Value(b"c")])
             .map(PublishBody::finish),
-        Some(whole),
+        Ok(whole),
         "exactly on it"
     );
     // The base-extent group is counted from the start: the same segments
     // under a budget one byte short of the group's present spelling are
     // refused at the first segment, not at `finish`.
     let birth = entry_body_publish([ShotSegment::Value(b"ab")], None).as_bytes().len();
-    assert!(
-        PublishBody::within(birth, Some(7)).push(b"ab").is_none(),
+    assert_eq!(
+        PublishBody::within(birth, Some(7)).push(b"ab").err(),
+        past,
         "a present group costs eight bytes more than the EMPTY one"
     );
-    assert!(PublishBody::within(budget, Some(7)).window(&start, 0).is_none(), "no run is empty");
+    assert_eq!(
+        PublishBody::within(budget, Some(7)).window(&start, 0).err(),
+        Some(PublishRefusal::EmptyWindow),
+        "no run is empty"
+    );
 }
 
 /// `PublishBody`'s budget bounds the FINISHED body, its leading count and its
@@ -373,12 +383,14 @@ fn a_publish_budget_of_the_empty_body_finishes_to_it_and_admits_nothing() {
         let empty = entry_body_publish([], base_extent);
         let floor = empty.as_bytes().len();
         assert_eq!(PublishBody::within(floor, base_extent).finish(), empty);
-        assert!(
-            PublishBody::within(floor, base_extent).push(b"").is_none(),
+        assert_eq!(
+            PublishBody::within(floor, base_extent).push(b"").err(),
+            Some(PublishRefusal::PastBudget),
             "an empty value costs its length prefix"
         );
-        assert!(
-            PublishBody::within(floor, base_extent).window(&addr(&[1, 0, 2, 0, 1, 1]), 1).is_none(),
+        assert_eq!(
+            PublishBody::within(floor, base_extent).window(&addr(&[1, 0, 2, 0, 1, 1]), 1).err(),
+            Some(PublishRefusal::PastBudget),
             "a window costs its start and its width"
         );
     }
@@ -392,6 +404,45 @@ fn a_publish_budget_of_the_empty_body_finishes_to_it_and_admits_nothing() {
 fn a_publish_budget_below_the_empty_body_is_refused_at_within() {
     let floor = entry_body_publish([], None).as_bytes().len();
     let _ = PublishBody::within(floor - 1, None);
+}
+
+/// [`PublishBody`] NAMES what it refuses, because a caller answers the causes
+/// differently: a body past its budget is the one the builder exists to
+/// refuse, a count past 2^64 − 1 names positions no store holds, and a window
+/// of no positions is a run no arrangement holds. Where a segment meets more
+/// than one, the answer is the segment's own first — an empty window, then
+/// the count, then the budget. A body holding a full count and standing
+/// exactly on its budget is passed by its next segment on BOTH the count and
+/// the budget, and is told the count; one byte short of that budget, the
+/// full count's own window is told the budget alone; and an empty window
+/// under a budget it would pass too is told it is empty.
+#[test]
+fn each_refusal_names_its_cause() {
+    let start = addr(&[1, 0, 2, 0, 1, 4]);
+    let full = [ShotSegment::Window { start: &start, width: u64::MAX }];
+    let budget = entry_body_publish(full, None).as_bytes().len();
+    let at_full = || PublishBody::within(budget, None).window(&start, u64::MAX);
+    assert_eq!(
+        at_full().and_then(|body| body.window(&start, 1)).err(),
+        Some(PublishRefusal::Unspellable),
+        "a window past the count and the budget is told the count"
+    );
+    assert_eq!(
+        at_full().and_then(|body| body.push(b"x")).err(),
+        Some(PublishRefusal::Unspellable),
+        "a value past the count and the budget is told the count"
+    );
+    assert_eq!(
+        PublishBody::within(budget - 1, None).window(&start, u64::MAX).err(),
+        Some(PublishRefusal::PastBudget),
+        "a spellable count past the budget is told the budget"
+    );
+    let floor = entry_body_publish([], None).as_bytes().len();
+    assert_eq!(
+        PublishBody::within(floor, None).window(&start, 0).err(),
+        Some(PublishRefusal::EmptyWindow),
+        "an empty window past the budget is told it is empty"
+    );
 }
 
 /// The frame is `framed(ENTRY_TAG, …)` over the six members in order and

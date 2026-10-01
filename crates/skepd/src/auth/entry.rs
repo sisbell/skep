@@ -70,7 +70,7 @@ use skep_content::HasContent;
 use skep_febe::Op;
 use skep_identity::{
     entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_record,
-    entry_frame, BoardTerm, EntryBody, EntrySlot, LinkSlots, PublishBody,
+    entry_frame, BoardTerm, EntryBody, EntrySlot, LinkSlots, PublishBody, PublishRefusal,
 };
 use skep_links::SlotArg;
 use skep_namespace::{HasM3, PrincipalId};
@@ -276,7 +276,9 @@ fn publish_body(
     let spelled = |n: &Nat| u64::try_from(n).map_err(|_| ComposeFault::Unspellable);
     let base_extent = shot.base.as_ref().map(|base| spelled(&base.extent)).transpose()?;
     // The count must fit its eight bytes for the body to exist at all —
-    // summed first, so the builder's refusals below are the budget's alone.
+    // summed off the runs' widths before a value is read, so a shot naming
+    // positions no count can spell is told so whatever its values would cost;
+    // past this, the builder names each refusal itself (`refused`).
     segments.iter().try_fold(0u64, |placed, segment| {
         let run = match segment {
             PlacedSegment::Copied(run) | PlacedSegment::Window(run) => run,
@@ -315,17 +317,32 @@ fn publish_body(
             PlacedSegment::Copied(run) => {
                 for a in run.addrs() {
                     let v = content.value_at(a.tumbler()).ok_or(ComposeFault::MissingValue)?;
-                    body = body.push(v.as_bytes()).ok_or(ComposeFault::PastBodyBudget)?;
+                    body = body.push(v.as_bytes()).map_err(refused)?;
                 }
             }
             PlacedSegment::Window(run) => {
-                body = body
-                    .window(run.i_start(), spelled(run.width())?)
-                    .ok_or(ComposeFault::PastBodyBudget)?;
+                body = body.window(run.i_start(), spelled(run.width())?).map_err(refused)?;
             }
         }
     }
     Ok(body.finish())
+}
+
+/// The composer's answer for a segment [`PublishBody`] refused, by the cause
+/// the builder names: past its budget, [`ComposeFault::PastBodyBudget`]; a
+/// count past `be64`, [`ComposeFault::Unspellable`] (which the up-front sum
+/// has already answered for every shot that reaches the walk). A window here
+/// is a `Run`, whose width is at least one (`RunError::ZeroWidth`), so an
+/// empty one is a broken premise and STOPS LOUDLY, as [`compose`]'s
+/// precondition does.
+fn refused(refusal: PublishRefusal) -> ComposeFault {
+    match refusal {
+        PublishRefusal::PastBudget => ComposeFault::PastBodyBudget,
+        PublishRefusal::Unspellable => ComposeFault::Unspellable,
+        PublishRefusal::EmptyWindow => unreachable!(
+            "publish_body's premise: a window here is a Run, whose width is at least one"
+        ),
+    }
 }
 
 /// THE RECORD FRAME for a credential deposit's `make_link` (signed ops, the

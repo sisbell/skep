@@ -842,10 +842,13 @@ impl<W: WorldState> Kernel<W> {
     /// nothing else about the commit moves but its CHAIN — the records, their
     /// frames, the salt and the accounting the TRANSACTION BUDGET names are
     /// as `transact` leaves them, the blob's bytes sitting OUTSIDE that budget
-    /// (the design record §4.4 (b); the marker's own frame stays far under
-    /// the frame cap at any tag's width), while the link closes over the
-    /// slot's digest (the board's r6-2c), so an attested transaction's chain
-    /// value is not its unattested twin's.
+    /// (the design record §4.4 (b)) and bounded instead by
+    /// [`crate::MAX_SIG_BYTES`], which [`Attestation::new`] holds every value
+    /// to — so the marker's own frame stays inside the frame cap at any width
+    /// an attestation can have, and an attested commit meets no refusal its
+    /// unattested twin would not — while the link closes over the slot's
+    /// digest (the board's r6-2c), so an attested transaction's chain value is
+    /// not its unattested twin's.
     /// `None` is `transact` exactly: the slot written EMPTY, in its one
     /// spelling. A zero-step transaction writes no marker and so no slot, and
     /// under [`Durability::InMemory`] no marker exists at all — the value is
@@ -1104,11 +1107,22 @@ impl<W: WorldState> Kernel<W> {
             }
         })?;
         // Retention policy — how many bases to keep — applied to the
-        // checkpoint set, which answers with the oldest survivor. There is
-        // always one: `retain_checkpoints ≥ 1` is validated at `open`, and
-        // this call has just added to the set the retention is applied to.
+        // checkpoint set, which answers with the oldest survivor. This kernel
+        // leaves one: `retain_checkpoints ≥ 1` is validated at `open`, and this
+        // call has just added to the set the retention is applied to. Another
+        // process can still take it between the rename and the listing — the
+        // flock excludes other kernels and nothing else (the `journal_path`
+        // contract) — and an auto-triggered call runs after its commit is
+        // acknowledged, so that is answered as the I/O failure it is, which
+        // `transact` discards, never as a panic in place of the commit's `Ok`.
         let s_old = checkpoint::retain(&journaled.dir, journaled.retain_checkpoints)?
-            .expect("retention keeps N ≥ 1 of a set this call just added to");
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "the checkpoint this call wrote was gone before retention listed it: \
+                     something other than this kernel removed it from the journal directory",
+                )
+            })?;
         // Reclaim the journal below the OLDEST retained checkpoint — that
         // floor, not the newest, is what keeps the BadCheckpoint fallback
         // real (§6).

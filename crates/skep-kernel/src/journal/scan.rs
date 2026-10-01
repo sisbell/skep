@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use bincode::Options;
 
-use super::attest::{Attestation, SIG_ALG_UNSIGNED};
+use super::attest::{self, Attestation};
 use super::chain::{slot_digest, ChainLink};
 use super::segment::{fsync_dir, scanned_above, SegmentMeta};
 use super::{
@@ -318,7 +318,9 @@ impl ScanOutcome {
     ///
     /// Both are TAKEN: the walk is done with a marker and its group once they
     /// commit, so the slot's blob moves whole into the captured
-    /// [`ClosingMarker`].
+    /// [`ClosingMarker`], converted by the slot rule ([`attest::slot`]) — the
+    /// rule the marker decoder asked of these very bytes, so the conversion
+    /// answers as the decode did.
     fn collect_commit(&mut self, marker: Marker, group: PendingTxn) {
         if marker.last_seq > self.s_load {
             if group.recomputed_chain(&marker) != marker.chain {
@@ -328,13 +330,12 @@ impl ScanOutcome {
             if self.bound == Some(marker.last_seq) {
                 self.closing_at_bound = Some(ClosingMarker {
                     chain: marker.chain,
-                    // The slot, interpreted not at all: the decoder admitted
-                    // it under the one-spelling-of-empty rule, so a non-zero
-                    // tag here has bytes.
-                    attestation: (marker.sig_alg != SIG_ALG_UNSIGNED).then(|| {
-                        Attestation::new(marker.sig_alg, marker.sig)
-                            .expect("the decoder admits a non-zero tag only with a non-empty blob")
-                    }),
+                    // The slot, interpreted not at all. Every marker reaches
+                    // here through `MarkerShadow`'s door, which admitted
+                    // these bytes by this same pure rule, so asking it again
+                    // gives the decode's own answer.
+                    attestation: attest::slot(marker.sig_alg, marker.sig)
+                        .expect("the marker decoder admitted this slot through this very rule"),
                 });
             }
         } else if marker.last_seq == self.s_load && marker.chain != self.chain_at_base {

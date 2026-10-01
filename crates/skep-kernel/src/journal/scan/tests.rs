@@ -5,7 +5,7 @@ use crate::journal::tests::{
 };
 use crate::journal::{
     encode_txn, list_segments, push_frame, segment_path, txn_encoded_len, JournalWriter,
-    UnwindRepair, CHAIN_GENESIS, RECORD_PAYLOAD_OVERHEAD, SEGMENT_ROTATE_BYTES,
+    UnwindRepair, CHAIN_GENESIS, MAX_SIG_BYTES, RECORD_PAYLOAD_OVERHEAD, SEGMENT_ROTATE_BYTES,
 };
 use tempfile::tempdir;
 
@@ -1172,6 +1172,53 @@ fn the_closing_marker_carries_its_slot_as_the_attestation_it_committed_under() {
     assert_eq!(slot_at(1), Ok(None));
     assert_eq!(slot_at(2), Ok(Some(attestation)));
     assert_eq!(slot_at(3), Ok(None));
+}
+
+#[test]
+fn a_slot_past_the_cap_at_rest_closes_no_boundary_and_panics_nothing() {
+    // The capture converts the slot of the marker closing a history read's
+    // bound, under an `expect` that holds only because the decoder asked the
+    // same rule: a marker whose blob `Attestation::new` refuses must be an
+    // undecodable frame here, never a commit whose conversion panics under
+    // `GET /chain?at=N`.
+    let dir = tempdir().unwrap();
+    let mut writer = fresh_writer(dir.path());
+    write_txn(&mut writer, 1, vec![rec(10)]);
+    drop(writer);
+    // T2 by hand: its record, then a marker whose slot is one byte past the
+    // cap — checksum and CRCs honest, so only the slot refuses.
+    let record = codec()
+        .serialize(&FramePayload::Record(LogRecord {
+            seq: 2,
+            txn: Txn(2),
+            bytes: rec(20),
+        }))
+        .unwrap();
+    let wide = Marker {
+        sig_alg: 1,
+        sig: vec![0xA5; MAX_SIG_BYTES + 1],
+        ..marker(Txn(2), 2, crc32c::crc32c_append(0, &record))
+    };
+    let mut buf = Vec::new();
+    push_frame(&mut buf, &record).unwrap();
+    push_frame(&mut buf, &codec().serialize(&FramePayload::Marker(wide)).unwrap()).unwrap();
+    {
+        use std::io::Write as _;
+        let mut f = OpenOptions::new()
+            .append(true)
+            .open(segment_path(dir.path(), 1))
+            .unwrap();
+        f.write_all(&buf).unwrap();
+    }
+    let segs = list_segments(dir.path()).unwrap();
+    let out = scan(&segs, 0, Some(2), CHAIN_GENESIS).unwrap();
+    assert_eq!(
+        out.runs,
+        vec![RunEnd::Eof],
+        "the wide slot is a frame no writer of this stamp emits"
+    );
+    assert_eq!(out.committed_head, 1, "…which commits nothing");
+    assert_eq!(out.closing_marker(2).map(|_| ()), Err(1), "…and closes no boundary");
 }
 
 #[test]

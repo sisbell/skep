@@ -123,14 +123,24 @@ fn push_frame_refuses_a_payload_past_the_frame_cap() {
     assert!(matches!(parse_frame(&buf, 0), Parsed::Intact { .. }));
 }
 
-/// The attestation's two refused spellings, held at construction: tag 0
-/// (the empty slot's own) and an empty blob — so no transaction can write
-/// the marker the decoder refuses, and "unattested" is spelled only by the
-/// absent value.
+/// The attestation's refused spellings, held at construction: tag 0 (the
+/// empty slot's own, with bytes or without), an empty blob, and a blob past
+/// the slot's width — so no transaction can write the marker the decoder
+/// refuses, and "unattested" is spelled only by the absent value.
 #[test]
 fn an_attestation_holds_the_one_spelling_of_empty_at_construction() {
     assert_eq!(Attestation::new(0, vec![1]), Err(AttestationError::UnsignedTag));
+    assert_eq!(
+        Attestation::new(0, Vec::new()),
+        Err(AttestationError::UnsignedTag),
+        "the empty slot itself is no attestation: the absent value spells it"
+    );
     assert_eq!(Attestation::new(1, Vec::new()), Err(AttestationError::EmptyBlob));
+    assert_eq!(
+        Attestation::new(1, vec![0; MAX_SIG_BYTES + 1]),
+        Err(AttestationError::TooWide { len: MAX_SIG_BYTES + 1 })
+    );
+    assert!(Attestation::new(1, vec![0; MAX_SIG_BYTES]).is_ok(), "the cap itself is admitted");
     let a = Attestation::new(3, vec![7, 7]).unwrap();
     assert_eq!((a.sig_alg(), a.sig()), (3, &[7u8, 7][..]));
     assert_eq!(format!("{a:?}"), "Attestation { sig_alg: 3, sig_len: 2 }");
@@ -143,6 +153,10 @@ fn an_attestation_holds_the_one_spelling_of_empty_at_construction() {
     assert_eq!(
         AttestationError::EmptyBlob.to_string(),
         "an attestation must carry a non-empty signature blob"
+    );
+    assert_eq!(
+        AttestationError::TooWide { len: 70_000 }.to_string(),
+        "an attestation's signature blob must be at most 65536 bytes; this one is 70000"
     );
 }
 
@@ -314,11 +328,13 @@ fn frame_payloads_spend_a_bare_u64_on_the_txn_and_carry_the_documented_chain() {
 fn the_marker_decoder_admits_one_spelling_of_empty() {
     // The slot's rule, held at the decode door: tag 0 with no bytes is
     // EMPTY, the one spelling; tag 0 with bytes (a signature under no
-    // pair) and a non-zero tag with none (a pair that signed nothing) are
-    // refused, so no two readers can disagree about whether a marker is
-    // attested. A filled slot under a non-zero tag DECODES — the kernel
-    // never interprets the blob — and rejecting trailing bytes is what
-    // keeps the length prefix the whole of the slot's extent.
+    // pair), a non-zero tag with none (a pair that signed nothing) and a
+    // blob past the slot's width are refused, so no two readers can
+    // disagree about whether a marker is attested, and no marker decodes
+    // that no `Attestation` could hold. A filled slot under a non-zero tag
+    // DECODES — the kernel never interprets the blob — and rejecting
+    // trailing bytes is what keeps the length prefix the whole of the
+    // slot's extent.
     let honest = codec()
         .serialize(&FramePayload::Marker(marker(Txn(3), 3, 0)))
         .unwrap();
@@ -341,6 +357,11 @@ fn the_marker_decoder_admits_one_spelling_of_empty() {
     assert!(refused(&with(0, &[0xAA])).contains("one spelling of empty"));
     assert!(refused(&with(1, &[])).contains("one spelling of empty"));
     assert!(codec().deserialize::<FramePayload>(&with(1, &[0xAA, 0xBB])).is_ok());
+    // …and the width is THE rule's: the decoder refuses where
+    // `Attestation::new` does, and admits the cap itself.
+    let past_cap = with(1, &vec![0xAA; MAX_SIG_BYTES + 1]);
+    assert!(refused(&past_cap).contains("wider than any attestation"));
+    assert!(codec().deserialize::<FramePayload>(&with(1, &vec![0xAA; MAX_SIG_BYTES])).is_ok());
     // Trailing bytes past the slot are not a longer slot: refused.
     let mut trailing = with(0, &[]);
     trailing.push(0);

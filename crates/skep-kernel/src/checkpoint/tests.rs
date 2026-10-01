@@ -116,6 +116,49 @@ fn a_body_carrying_bytes_past_its_world_is_not_a_base() {
 }
 
 #[test]
+fn a_file_and_its_header_disagreeing_on_its_length_are_refused_before_the_body_is_read() {
+    // The file's length and the header's `body_len` are two claims, and the
+    // body's read is sized only once they agree — so neither side of a
+    // disagreement sizes anything. A file extended past its body (a hole:
+    // the length costs no disk) would otherwise be read whole before its
+    // refusal, every time a history read selects it; a header claiming every
+    // byte a `u64` counts would otherwise overflow the sum the agreement is
+    // checked by.
+    let dir = tempdir().unwrap();
+    write(dir.path(), 3, &world(), &CHAIN_HEAD).expect("fixture checkpoint");
+    let path = checkpoint_path(dir.path(), 3);
+    let honest = fs::read(&path).unwrap();
+    let load = || {
+        list(dir.path()).unwrap()[0]
+            .load::<Vec<u64>>()
+            .expect_err("a length the file and its header disagree on is not a base")
+            .to_string()
+    };
+
+    let extended = 1u64 << 27;
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(extended)
+        .unwrap();
+    let refused = load();
+    assert!(
+        refused.contains(&format!("checkpoint file is {extended} bytes")),
+        "got {refused}"
+    );
+
+    let mut overclaimed = honest;
+    overclaimed[BODY_LEN_AT..BODY_LEN_AT + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+    fs::write(&path, &overclaimed).unwrap();
+    let refused = load();
+    assert!(
+        refused.contains(&format!("its header claims {HEADER_LEN} + {}", u64::MAX)),
+        "got {refused}"
+    );
+}
+
+#[test]
 fn a_foreign_stamp_is_refused_by_name_with_the_remedy() {
     // A checkpoint under another format names the stamp it found, the
     // stamp this build writes, and the ruled remedy — the sentence the

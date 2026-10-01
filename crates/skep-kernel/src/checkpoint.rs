@@ -177,14 +177,37 @@ pub(crate) struct CheckpointMeta {
     path: PathBuf,
 }
 
+/// Read the [`HEADER_LEN`] bytes a checkpoint file opens with, and nothing
+/// after them — the one read of a header, for [`CheckpointMeta::load`] and
+/// [`CheckpointMeta::header`] alike, so a file too short to hold one answers
+/// [`SHORT_OF_HEADER`] whichever reader met it.
+fn read_header(file: &mut File) -> Result<[u8; HEADER_LEN], LoadRefused> {
+    let mut bytes = [0u8; HEADER_LEN];
+    file.read_exact(&mut bytes).map_err(|e| -> LoadRefused {
+        if e.kind() == io::ErrorKind::UnexpectedEof {
+            SHORT_OF_HEADER.into()
+        } else {
+            e.into()
+        }
+    })?;
+    Ok(bytes)
+}
+
 impl CheckpointMeta {
     /// Load and validate this checkpoint, or say why it cannot stand in as a
     /// base: unreadable, short of its own header, a foreign format stamp, a
-    /// header seq disagreeing with the name, a body failing its checksum or
-    /// its hash, or a body that will not decode as `W`. The caller falls back
-    /// to the next-older retained checkpoint, then genesis-while-reachable
-    /// (§6/§7) — every refusal alike, which is why the account travels as one
-    /// type rather than as a taxonomy nobody branches on.
+    /// header seq disagreeing with the name, a file whose length disagrees
+    /// with its header's `body_len`, a body failing its checksum or its hash,
+    /// or a body that will not decode as `W`. The caller falls back to the
+    /// next-older retained checkpoint, then genesis-while-reachable (§6/§7) —
+    /// every refusal alike, which is why the account travels as one type
+    /// rather than as a taxonomy nobody branches on.
+    ///
+    /// The body is read only once the file's length and the header's
+    /// `body_len` — two claims, from the directory and from the bytes — agree,
+    /// and the read is sized by that agreed figure and held to it: a file
+    /// extended past its body, or a header claiming more than the file holds,
+    /// sizes nothing, so the cost of a refused base is its header.
     ///
     /// Two of those an operator most needs named. A foreign stamp is a
     /// checkpoint written under another format, and the account names the
@@ -203,11 +226,29 @@ impl CheckpointMeta {
     /// see [`fn@write`] for what a drifted half costs, which is every retained
     /// base at once and no signal that it happened.
     pub(crate) fn load<W: DeserializeOwned>(&self) -> Result<Loaded<W>, LoadRefused> {
-        let data = fs::read(&self.path)?;
-        let Some((header, body)) = data.split_first_chunk::<HEADER_LEN>() else {
-            return Err(SHORT_OF_HEADER.into());
-        };
-        let header = parse_header(self.seq, header)?;
+        let mut file = File::open(&self.path)?;
+        let header = parse_header(self.seq, &read_header(&mut file)?)?;
+        // The file's length and the header's `body_len` are both claims; the
+        // read is sized only once they agree, so a file extended past its body
+        // sizes nothing. Checked, since a header claiming near `u64::MAX`
+        // would otherwise overflow the sum: a panic in a checked build, and in
+        // a release one a wrap back onto a length that matches.
+        let claimed = file.metadata()?.len();
+        if (HEADER_LEN as u64).checked_add(header.body_len) != Some(claimed) {
+            return Err(format!(
+                "checkpoint file is {claimed} bytes, its header claims {HEADER_LEN} + {}",
+                header.body_len
+            )
+            .into());
+        }
+        // Reserved fallibly: a header and a length that agree on more than this
+        // process can hold refuse as the base they cannot be, rather than abort
+        // the process the way an infallible reservation would.
+        let mut body = Vec::new();
+        body.try_reserve_exact(usize::try_from(header.body_len)?)?;
+        // `take` holds the read to the agreed figure even if the file grows
+        // beneath it; a file that shrank beneath it reads short, refused below.
+        file.take(header.body_len).read_to_end(&mut body)?;
         if body.len() as u64 != header.body_len {
             return Err(format!(
                 "checkpoint body is {} bytes, its header claims {}",
@@ -216,12 +257,12 @@ impl CheckpointMeta {
             )
             .into());
         }
-        if crc32c::crc32c(body) != header.crc {
+        if crc32c::crc32c(&body) != header.crc {
             return Err(
                 "checkpoint body failed its header checksum (bit-rot or a torn write)".into(),
             );
         }
-        if body_hash(body) != header.body_hash {
+        if body_hash(&body) != header.body_hash {
             return Err("checkpoint body failed its header hash (bit-rot or a torn write)".into());
         }
         // The serializer's refusal becomes the account in place: `bincode::Error`
@@ -229,7 +270,7 @@ impl CheckpointMeta {
         // `?` alone would compile and box that box again, leaving a cause no
         // caller could downcast to the serializer's `ErrorKind`.
         let world = codec()
-            .deserialize(body)
+            .deserialize(&body)
             .map_err(|skew| -> LoadRefused { skew })?;
         Ok(Loaded {
             world,
@@ -246,17 +287,7 @@ impl CheckpointMeta {
     /// its checksum and hash need the body, and `body_hash` is what a party
     /// holding the file verifies it by.
     pub(crate) fn header(&self) -> Result<CheckpointHeader, LoadRefused> {
-        let mut bytes = [0u8; HEADER_LEN];
-        File::open(&self.path)?
-            .read_exact(&mut bytes)
-            .map_err(|e| -> LoadRefused {
-                if e.kind() == io::ErrorKind::UnexpectedEof {
-                    SHORT_OF_HEADER.into()
-                } else {
-                    e.into()
-                }
-            })?;
-        let header = parse_header(self.seq, &bytes)?;
+        let header = parse_header(self.seq, &read_header(&mut File::open(&self.path)?)?)?;
         Ok(CheckpointHeader {
             seq: Seq(self.seq),
             chain_head: header.chain_head,

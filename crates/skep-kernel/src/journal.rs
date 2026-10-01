@@ -33,6 +33,7 @@ mod writer;
 
 pub use attest::Attestation;
 pub use attest::AttestationError;
+pub use attest::MAX_SIG_BYTES;
 pub(crate) use chain::CHAIN_GENESIS;
 pub(crate) use scan::damaged_sync_word_cause;
 pub(crate) use scan::first_sync_word;
@@ -92,22 +93,24 @@ pub(crate) const FRAME_HEADER_LEN: usize = 12;
 /// `len` as corrupt.
 pub(crate) const MAX_FRAME_LEN: u32 = 64 * 1024 * 1024;
 /// The most bytes one TRANSACTION may occupy in the journal — its record
-/// frames, commit marker and headers together. A transaction past it is
-/// REFUSED with [`crate::TxnError::OverBudget`], in both durability modes,
-/// before anything is appended or installed, so this is the figure a caller
-/// splitting an over-budget transaction must get under.
+/// frames, commit marker and headers together, the signature slot's blob
+/// excepted: that is the marker's own, at most [`MAX_SIG_BYTES`] more. A
+/// transaction past it is REFUSED with [`crate::TxnError::OverBudget`], in
+/// both durability modes, before anything is appended or installed, so this
+/// is the figure a caller splitting an over-budget transaction must get under.
 ///
-/// Equal to the journal's FRAME CAP as a RELATIONSHIP, not a free
-/// knob: a transaction is at most one frame's worth, so a segment — which
-/// rotates only at a transaction boundary — is at most one rotation
-/// threshold plus one frame, and recovery, which reads a segment WHOLE, has
-/// a memory floor that is bounded and IDENTICAL ON EVERY REPLICA. Untie the
-/// two and the second clause fails where it hurts: a transaction never spans
-/// a segment, so one oversized transaction permanently raises the floor of
-/// every later [`crate::Kernel::open`] and every [`crate::Kernel::world_at`]
-/// above that base — a journal that opens on the machine that wrote it and not
-/// on the replica. The reader holds the floor as well as the writer: a segment
-/// longer than twice this figure is refused before a byte of it is read.
+/// Equal to the journal's FRAME CAP as a RELATIONSHIP, not a free knob: a
+/// transaction is at most one frame's worth and a slot's, so a segment —
+/// which rotates only at a transaction boundary — is at most one rotation
+/// threshold plus one frame and one slot, and recovery, which reads a segment
+/// WHOLE, has a memory floor that is bounded and IDENTICAL ON EVERY REPLICA.
+/// Untie the two and the second clause fails where it hurts: a transaction
+/// never spans a segment, so one oversized transaction permanently raises the
+/// floor of every later [`crate::Kernel::open`] and every
+/// [`crate::Kernel::world_at`] above that base — a journal that opens on the
+/// machine that wrote it and not on the replica. The reader holds the floor
+/// as well as the writer: a segment longer than twice this figure is refused
+/// before a byte of it is read.
 ///
 /// Being EQUAL rather than nested, the two limits do not stack: a transaction
 /// carries its records' frames and a commit marker, so the largest record this
@@ -128,18 +131,22 @@ pub const MAX_TXN_BYTES: u64 = MAX_FRAME_LEN as u64;
 const SEGMENT_ROTATE_BYTES: u64 = 1024 * 1024;
 /// The longest segment this module READS: twice the transaction budget. The
 /// writer appends only to a segment under [`SEGMENT_ROTATE_BYTES`], and a
-/// transaction is at most [`MAX_TXN_BYTES`], so no segment this journal's
-/// writer produces reaches it; a file past it is damage, or not this writer's,
-/// and reading it whole would size an allocation by the file's own claim. It
-/// is what makes the memory floor [`MAX_TXN_BYTES`] promises a fact about the
+/// transaction is at most [`MAX_TXN_BYTES`] plus its slot's blob, at most
+/// [`MAX_SIG_BYTES`], so no segment this journal's writer produces reaches it
+/// (asserted below); a file past it is damage, or not this writer's, and
+/// reading it whole would size an allocation by the file's own claim. It is
+/// what makes the memory floor [`MAX_TXN_BYTES`] promises a fact about the
 /// reader as well as the writer. Twice the budget rather than the writer's
 /// exact maximum, so a later build that lowers the rotation threshold never
 /// refuses a segment an earlier one wrote: this moves only with the format.
 const MAX_SEGMENT_LEN: u64 = 2 * MAX_TXN_BYTES;
-// …which holds only while the threshold is at or below the budget: a threshold
-// moved above it would let an honest segment pass the ceiling, so it moves the
-// ceiling with it.
-const _: () = assert!(SEGMENT_ROTATE_BYTES <= MAX_TXN_BYTES);
+// …which holds only while a segment under the threshold, plus one whole
+// transaction at the budget, plus its slot at the cap, fits under it: the
+// writer appends to a segment under SEGMENT_ROTATE_BYTES, and the slot sits
+// outside the budget. A threshold or a cap moved past this lets an honest
+// segment pass the ceiling — a commit acknowledged that the next open refuses.
+const _: () =
+    assert!(SEGMENT_ROTATE_BYTES - 1 + MAX_TXN_BYTES + MAX_SIG_BYTES as u64 <= MAX_SEGMENT_LEN);
 /// Resynchronization budget, as a multiple of a segment's own size: how many
 /// bytes of CRC a scan will spend on rejected frame candidates before it gives
 /// up on enumerating that segment's frame stream (§7). A WORK allowance on
@@ -224,8 +231,9 @@ pub(crate) struct CommittedRecord {
 /// and it stays last for layout A's own reason: a filled slot moves no other
 /// marker byte.
 ///
-/// Decoded through [`MarkerShadow`], the one door that holds the slot's
-/// one-spelling-of-empty rule; the bytes are the struct's own.
+/// Decoded through [`MarkerShadow`], the one door a marker re-enters memory
+/// through, which asks the slot rule ([`attest::slot`]); the bytes are the
+/// struct's own.
 #[derive(Serialize, Deserialize)]
 #[serde(try_from = "MarkerShadow")]
 struct Marker {
@@ -272,12 +280,14 @@ struct Marker {
 
 /// The at-rest shadow of [`Marker`] — same fields, same order, so the frame
 /// bytes are the struct's own — and the ONE door a marker re-enters memory
-/// through. It holds the slot's rule: EMPTY has one spelling, tag `0` with no
-/// bytes. Tag `0` with bytes (a signature under no pair) and a non-zero tag
-/// with none (a pair that signed nothing) are refused at decode, so a marker
-/// that spells them is an undecodable frame to the scan — treated as corrupt,
-/// classified by run — rather than a second empty a later reader could
-/// disagree about.
+/// through. It asks the slot rule ([`attest::slot`]), the very rule
+/// [`Attestation::new`] asks: EMPTY has one spelling, tag `0` with no bytes,
+/// and tag `0` with bytes (a signature under no pair), a non-zero tag with
+/// none (a pair that signed nothing) and a blob wider than [`MAX_SIG_BYTES`]
+/// are refused at decode, so a marker that spells them is an undecodable
+/// frame to the scan — treated as corrupt, classified by run — rather than a
+/// second empty a later reader could disagree about, or a slot no
+/// [`Attestation`] could hold.
 #[derive(Deserialize)]
 struct MarkerShadow {
     txn: Txn,
@@ -292,19 +302,32 @@ struct MarkerShadow {
 impl TryFrom<MarkerShadow> for Marker {
     type Error = &'static str;
     fn try_from(shadow: MarkerShadow) -> Result<Marker, &'static str> {
-        if (shadow.sig_alg == SIG_ALG_UNSIGNED) != shadow.sig.is_empty() {
-            return Err(
-                "a commit marker's signature slot has one spelling of empty: tag 0 with no bytes",
-            );
-        }
+        let (sig_alg, sig) = match attest::slot(shadow.sig_alg, shadow.sig) {
+            Ok(None) => (SIG_ALG_UNSIGNED, Vec::new()),
+            Ok(Some(attestation)) => attestation.into_parts(),
+            // One arm per refusal, no wildcard: a rule the slot gains must
+            // name its account here before this compiles.
+            Err(AttestationError::UnsignedTag | AttestationError::EmptyBlob) => {
+                return Err(
+                    "a commit marker's signature slot has one spelling of empty: tag 0 with no \
+                     bytes",
+                )
+            }
+            Err(AttestationError::TooWide { .. }) => {
+                return Err(
+                    "a commit marker's signature slot is wider than any attestation this kernel \
+                     commits",
+                )
+            }
+        };
         Ok(Marker {
             txn: shadow.txn,
             last_seq: shadow.last_seq,
             records_checksum: shadow.records_checksum,
             salt: shadow.salt,
             chain: shadow.chain,
-            sig_alg: shadow.sig_alg,
-            sig: shadow.sig,
+            sig_alg,
+            sig,
         })
     }
 }
@@ -512,10 +535,17 @@ pub(crate) const RECORD_PAYLOAD_OVERHEAD: u64 = 28;
 /// budget bounds the RECORDS a staging holds, and an attested transaction
 /// answers no refusal an unattested one would not, a `publish` shot being
 /// unsplittable. What a filled slot moves is the marker frame's own size
-/// (its `len` and CRC), far under [`MAX_FRAME_LEN`] at any tag's width, and
-/// the memory floor M2 promises a replica by the blob's width — the price
-/// the design record states and takes.
+/// (its `len` and CRC), at most [`MAX_SIG_BYTES`] past this figure and so
+/// inside [`MAX_FRAME_LEN`] at any width an [`Attestation`] holds (asserted
+/// below), and the memory floor M2 promises a replica by the blob's width,
+/// [`MAX_SIG_BYTES`] at most — the price the design record states and takes.
 const MARKER_FRAME_LEN: u64 = frame_len(97);
+// …and the widest slot frames: the marker's payload with a blob at the cap is
+// inside the frame cap, so `encode_txn` frames every marker an `Attestation`
+// fills, and the durable journal refuses no slot the in-memory one drops.
+const _: () = assert!(
+    MARKER_FRAME_LEN - FRAME_HEADER_LEN as u64 + MAX_SIG_BYTES as u64 <= MAX_FRAME_LEN as u64
+);
 
 /// What one framed payload occupies in a segment: the header [`push_frame`]
 /// writes, plus the payload it wraps. The outer of the two levels every

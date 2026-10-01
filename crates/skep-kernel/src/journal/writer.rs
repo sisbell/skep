@@ -330,10 +330,14 @@ impl Journal {
     /// file can refuse — [`JournalWriter::commit_txn`] for the durable one,
     /// and for the in-memory one no bytes appended, no failure available, and
     /// an install where the durable journal installs, after a barrier it has
-    /// no need of. The in-memory arm hands `install` [`CHAIN_GENESIS`]: the
-    /// chain is over journal frames, of which that arm builds none, and
-    /// nothing reads a chain off an in-memory kernel — it writes no
-    /// checkpoint.
+    /// no need of. The slot rides past this judgment and is no exception to
+    /// it: every [`Attestation`] is at most [`super::MAX_SIG_BYTES`] wide,
+    /// which the frame cap admits beside the marker's own fields (asserted
+    /// where `MARKER_FRAME_LEN` is defined), so the durable arm frames every
+    /// slot the in-memory arm drops. The in-memory arm hands `install`
+    /// [`CHAIN_GENESIS`]: the chain is over journal frames, of which that arm
+    /// builds none, and nothing reads a chain off an in-memory kernel — it
+    /// writes no checkpoint.
     ///
     /// The two limits are judged AS THE LOOP GOES, and a record past the
     /// budget is dropped rather than kept, which is what makes enforcing

@@ -202,7 +202,8 @@ pub use skep_discovery::{Cursor, FourSet, OrphanReport, SlotSpec, SupClaim, Wind
 // M2, `AttestationError` included: `Attestation::new` is the one constructor
 // of the value `Request::attest` carries, and its refusal travels with it —
 // the rule above — so a caller assembling a signed request spells one crate
-// for the tag, the blob, and the two spellings of "no signature" it refuses.
+// for the tag, the blob, and what it refuses: the two spellings of "no
+// signature", and a blob wider than M2's slot holds.
 pub use skep_kernel::{Attestation, AttestationError, Seq}; // M2
 pub use skep_namespace::PrincipalId; // M3
 // M6, the two enclosed shapes included: `Delivery` and `CompareReport` are

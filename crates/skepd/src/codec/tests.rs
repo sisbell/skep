@@ -360,6 +360,41 @@ fn an_attest_round_trips_on_the_checked_set_and_is_refused_off_it() {
     assert!(e.0.contains("unknown field 'attest'"), "{e}");
 }
 
+/// The kernel caps every signature slot (`skep_kernel::MAX_SIG_BYTES`), and
+/// the grammar meets the cap through the one constructor it lifts a blob
+/// with: every width a `SIG_ALGS` row names parses — the cap refuses no
+/// signature the table can name — and a blob one byte past the cap is the
+/// grammar's refusal, carrying the kernel's own account, before the check
+/// ever sees the member.
+#[test]
+fn every_width_the_table_names_fits_the_kernels_slot_and_one_past_its_cap_is_unparseable() {
+    let frame = |token: &str, width: usize| {
+        format!(
+            r#"{{"op":"insert","doc":"1.0.1.0.1","at":{{"subspace":"1","ordinal":"1"}},"values":["x"],"attest":{{"alg":"{token}","sig":"{}"}}}}"#,
+            "ab".repeat(width)
+        )
+    };
+    for row in skep_identity::SIG_ALGS {
+        let request = parse_request(frame(row.token, row.sig_len()).as_bytes())
+            .unwrap_or_else(|e| panic!("a {} blob of its row's width parses: {e}", row.token));
+        assert_eq!(
+            request.attest.map(|a| a.sig().len()),
+            Some(row.sig_len()),
+            "{}",
+            row.token
+        );
+    }
+    let past = skep_kernel::MAX_SIG_BYTES + 1;
+    let e = match parse_request(frame(skep_identity::ALG_MLDSA65_ED25519, past).as_bytes()) {
+        Err(e) => e,
+        Ok(_) => panic!("a blob past the kernel's slot must not parse"),
+    };
+    assert!(
+        e.0.contains(&format!("must be at most {} bytes", skep_kernel::MAX_SIG_BYTES)),
+        "{e}"
+    );
+}
+
 /// `"attest": null` is the member's ABSENCE on the checked set (`p_attest`'s
 /// card: "missing, or `null`, which [`Fields::attest`] reads alike — never an
 /// empty blob"): an `insert` carrying it parses with no attestation at either

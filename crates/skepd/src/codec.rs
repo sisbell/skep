@@ -461,7 +461,9 @@ fn parse_value(v: Value) -> PResult<Request> {
 /// unknown one is refused as an unknown op is), the hex to the blob (empty
 /// is refused: absence is the member's own — missing, or `null`, which
 /// [`Fields::attest`] reads alike — never an empty blob). The blob's WIDTH
-/// under the tag is the check's to judge, not the grammar's.
+/// under the tag is the check's to judge, not the grammar's — save the one
+/// width no tag admits: past [`skep_kernel::MAX_SIG_BYTES`] the kernel's own
+/// constructor refuses the blob, and that refusal is the grammar's.
 fn p_attest(v: &Value) -> PResult<Attestation> {
     let m = p_obj(v, &["alg", "sig"])?;
     let alg = field(m, "alg", p_string)?;

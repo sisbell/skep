@@ -1,6 +1,7 @@
 //! THE MODULE ORDER, CHECKED: `src/lib.rs` declares this crate's modules in
 //! dependency order, each naming in code only the modules above it, and this
-//! is that sentence as a test.
+//! is that sentence as a test — together with two of ARCHITECTURE.md's
+//! cross-file rules, the halves of them no compiler error reports.
 //!
 //! Every `crate::…` path a module's files name in code — its tests included,
 //! comments and doc links not — resolves to that module or to one declared
@@ -9,6 +10,12 @@
 //! re-export of an upstream crate (`crate::FROM`) names no module here. A
 //! module's children name their parent through `super::`, which is the tree
 //! itself and not an edge between modules.
+//!
+//! The two rules are held over every code line under `src/`, tests included:
+//! only `operation/door.rs` asks the world's own read predicate, and only
+//! `lower` and `operation.rs` name `lower_txn`. Each scan also asserts that it
+//! found the site its rule allows, so a scan that matches nothing fails
+//! rather than passing a clean tree.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -50,6 +57,53 @@ fn every_module_names_only_itself_and_modules_declared_above_it() {
     );
 }
 
+/// ARCHITECTURE.md's first rule, the half the compiler does not keep.
+/// `OperationSurface::readable`, where a supplied `ReadPredicate` overrides
+/// the world's own predicate, is private to `operation/door.rs`, so no other
+/// file can call it by name. The world's own predicate cannot be fenced the
+/// same way: `ReadableWorld::readable` is a supertrait method of `FebeWorld`,
+/// which bounds every `W` in this crate, so code holding a world asks it with
+/// no import — and a read arm that did would answer through the world where a
+/// supplied predicate, the historical door's, was meant to answer. So no file
+/// but the door asks a `readable` by method call or by path.
+#[test]
+fn only_the_door_asks_the_worlds_own_predicate() {
+    let (door, elsewhere): (Vec<_>, Vec<_>) = code_naming(asks_readable)
+        .into_iter()
+        .partition(|(file, _)| file == Path::new("operation/door.rs"));
+    assert!(
+        elsewhere.is_empty(),
+        "only `operation/door.rs` asks the world's own predicate; a read arm answers through \
+         its request's, `readable_by`:\n{}",
+        render(&elsewhere)
+    );
+    assert!(!door.is_empty(), "the door asks it, so a scan that finds nothing there is broken");
+}
+
+/// ARCHITECTURE.md's fourth rule, likewise. Every write arm lowers its
+/// store's refusal through `OperationSurface::lower_write`, which latches the
+/// poison mirror on the way past. `lower_txn` builds the same rejection
+/// without the latch and is `pub(crate)`, so an arm that called it would
+/// compile and answer correctly while leaving its operation outside the
+/// latch's cover. So it is named only where it is defined and tested, and in
+/// the one method that latches.
+#[test]
+fn only_lower_and_the_lifecycle_name_lower_txn() {
+    const ALLOWED: [&str; 3] = ["lower.rs", "lower/tests.rs", "operation.rs"];
+    let (allowed, stray): (Vec<_>, Vec<_>) = code_naming(|code| code.contains("lower_txn"))
+        .into_iter()
+        .partition(|(file, _)| ALLOWED.iter().any(|ok| file == Path::new(ok)));
+    assert!(
+        stray.is_empty(),
+        "a write arm lowers through `lower_write`, never `lower_txn`:\n{}",
+        render(&stray)
+    );
+    assert!(
+        allowed.iter().any(|(file, _)| file == Path::new("operation.rs")),
+        "`lower_write` names it, so a scan that finds nothing there is broken"
+    );
+}
+
 /// The root's `pub use <module>::…;` lines, as re-exported name → the rank
 /// of the module it comes from. Upstream re-exports are not modules of this
 /// crate and are left out.
@@ -68,26 +122,64 @@ fn root_reexports(lib: &str, rank: &HashMap<&str, usize>) -> HashMap<String, usi
     reexport_rank
 }
 
-/// The first segment of every `crate::…` path in code. Comment lines are not
-/// code, and neither is a line's trailing comment. A brace group directly
-/// after `crate::` is refused rather than half-read: this crate names one
-/// module per path.
+/// The first segment of every `crate::…` path in code ([`code_lines`]). A
+/// brace group directly after `crate::` is refused rather than half-read:
+/// this crate names one module per path.
 fn crate_paths(text: &str) -> Vec<String> {
     let mut named = Vec::new();
-    for line in text.lines() {
-        if line.trim_start().starts_with("//") {
-            continue;
-        }
-        let code = line.split(" //").next().expect("split yields a first piece");
+    for code in code_lines(text) {
         for (i, _) in code.match_indices("crate::") {
             let after = &code[i + "crate::".len()..];
-            assert!(!after.starts_with('{'), "a `crate::{{…}}` group: {line}");
+            assert!(!after.starts_with('{'), "a `crate::{{…}}` group: {code}");
             let segment: String =
                 after.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
             named.push(segment);
         }
     }
     named
+}
+
+/// Every code line under `src/` that `pred` holds of, with its file's path
+/// relative to `src/`.
+fn code_naming(pred: impl Fn(&str) -> bool) -> Vec<(PathBuf, String)> {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    let mut hits = Vec::new();
+    for file in files {
+        let text = std::fs::read_to_string(&file).expect("a source file is readable");
+        let path = file.strip_prefix(&src).expect("under src").to_path_buf();
+        for code in code_lines(&text).filter(|code| pred(code)) {
+            hits.push((path.clone(), code.trim().to_string()));
+        }
+    }
+    hits
+}
+
+/// Whether `code` asks something named exactly `readable` by method call or
+/// by path — `.readable(`, `W::readable`, `ReadableWorld::readable` — and not
+/// `readable_by`, a local closure called `readable`, or a definition.
+fn asks_readable(code: &str) -> bool {
+    code.match_indices("readable").any(|(i, word)| {
+        let (before, after) = (&code[..i], &code[i + word.len()..]);
+        let by_method_or_path = before.ends_with('.') || before.ends_with("::");
+        by_method_or_path && !after.starts_with(|c: char| c.is_alphanumeric() || c == '_')
+    })
+}
+
+/// The code of `text`, line by line: a comment line is not code, and neither
+/// is a line's trailing comment.
+fn code_lines(text: &str) -> impl Iterator<Item = &str> {
+    text.lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .map(|line| line.split(" //").next().expect("split yields a first piece"))
+}
+
+/// Scan hits, one line each, for an assertion message.
+fn render(hits: &[(PathBuf, String)]) -> String {
+    let lines: Vec<String> =
+        hits.iter().map(|(file, code)| format!("{}: {code}", file.display())).collect();
+    lines.join("\n")
 }
 
 /// Every `.rs` file under `dir`, recursively; nothing when `dir` is absent.

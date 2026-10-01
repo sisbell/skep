@@ -2,14 +2,21 @@
 //! — its world's own or a supplied [`ReadPredicate`], bound once per request
 //! by [`OperationSurface::readable_by`] — the two consults it drives
 //! ([`consult_read`], [`consult_write`]), the link-address absence rule
-//! ([`home_readable`]), and the visibility class lent to a store for one
-//! write ([`OperationSurface::visible_to`]).
+//! ([`home_readable`]), the visibility class lent to a store for one write
+//! ([`OperationSurface::visible_to`]), and the two per-variant tables only
+//! the write consult asks, [`Op::write_consult`] and
+//! [`Op::in_place_destination`], defined here so nothing else can ask them.
 //!
-//! `OperationSurface::readable`, where a supplied predicate and the world's
-//! own meet, is private to this module. Everything else — the two dispatch
-//! tables, and through them every masking reader in M6 and M8 — reaches the
-//! predicate through `readable_by` or `visible_to`, so a front door answers
-//! ONE predicate by construction rather than by review.
+//! `OperationSurface::readable`, where a supplied predicate overrides the
+//! world's own, is private to this module, so the compiler keeps every other
+//! file from calling it by name. Everything else — the two dispatch tables,
+//! and through them every masking reader in M6 and M8 — reaches the
+//! predicate through `readable_by` or `visible_to`. The world's own predicate
+//! cannot be fenced the same way: `ReadableWorld::readable` is a supertrait
+//! method of `FebeWorld`, callable on any `W` with no import, so a read arm
+//! that asked it would compile and answer through the world where a supplied
+//! predicate should have answered. `tests/it/tidy.rs` checks that no file but
+//! this one asks it.
 //!
 //! The door is a child of the lifecycle rather than a card beside it because
 //! the two share the proven-bound principal: `consult_write` rides the
@@ -22,7 +29,7 @@ use skep_arrangement::published_target;
 use skep_namespace::{M3State, PrincipalId};
 
 use super::{OperationSurface, WriteCtx};
-use crate::op::{Op, WriteConsult};
+use crate::op::Op;
 use crate::reject::{rejection, FaultSite, RejectCode, Rejection};
 use crate::world::FebeWorld;
 
@@ -247,6 +254,175 @@ pub fn consult_read(op: &Op, readable: &dyn Fn(&Address) -> bool) -> Result<(), 
     Ok(())
 }
 
+/// Whether the write door consults an op, and what its consult stands behind
+/// — PUB-6.36's slot 1 ahead of slot 6, as a value ([`Op::write_consult`]).
+/// The two answers instruct the door differently, so they are two variants
+/// rather than an `Option` whose emptiness a reader must interpret.
+///
+/// Private to the door, with its producer: nothing outside it re-runs the
+/// deferral.
+#[derive(Debug, PartialEq, Eq)]
+enum WriteConsult<'a> {
+    /// The door consults NOTHING for this op: it returns before
+    /// [`Op::source_arguments`] is ever read. A write that reads a source
+    /// must never answer this — its sources would reach the store with no
+    /// readability gate.
+    NotTaken,
+    /// Consulted, and DEFERRED: the consult runs only where these
+    /// destinations' own ownership gate would pass, so a session that may not
+    /// write here is never told whether it may read there. EMPTY for
+    /// `version`, which is consulted with no destination to defer on.
+    AfterOwnershipOf(Vec<&'a Address>),
+}
+
+impl Op {
+    /// Whether the write door consults this op at all and — PUB-6.36 slot 1
+    /// ahead of slot 6, PUB-6.38 — whose ownership gate it stands behind (see
+    /// `consult_write`). [`WriteConsult::AfterOwnershipOf`] for exactly the
+    /// writes the consult reaches — a source-reading write or one
+    /// validating a link by address — listing the documents the store's own
+    /// `not_owner` is judged on, EMPTY for `version`, whose mint lands in the
+    /// caller's own account and which no destination gate precedes
+    /// (MINT-FIRST is the daemon's, slot 2).
+    /// [`WriteConsult::NotTaken`] for a write with nothing to consult and for
+    /// every read. `nullify` is `NotTaken` on purpose: its target takes
+    /// PUB-6.9's ω-first order and the slot-5 nullify-class refusals (lane
+    /// 3.5), not this consult. `emit`'s endpoints are address-form (PUB-6.11)
+    /// and `publish`'s source gate is the composite's own, threaded per origin
+    /// (PUB-8.1). EXHAUSTIVE with no `_` arm: a new `Op` decides its row here.
+    ///
+    /// A write that reads a source must never answer `NotTaken` — that
+    /// pairing would hand the source to the store with no readability gate,
+    /// PUB-6.23 silently unapplied — and the two lists are pinned against each
+    /// other over the whole `Op` domain in this module's tests rather than
+    /// left to agree by hand.
+    ///
+    /// Defined here, private to the door, where its two siblings in `op` are
+    /// public, and deliberately: a historical door re-runs
+    /// [`Op::doc_arguments`] over the head (PUB-6.49) and a transport may read
+    /// [`Op::source_arguments`] before dispatch, but nothing outside this door
+    /// re-runs the DEFERRAL, which exists to decide when M10's own door stays
+    /// silent so the store speaks first. Publishing it would invite a
+    /// transport to rebuild the slot-1-before-slot-6 ordering M10 holds.
+    fn write_consult(&self) -> WriteConsult<'_> {
+        match self {
+            Op::Copy { doc, .. } => WriteConsult::AfterOwnershipOf(vec![doc]),
+            Op::Version { .. } => WriteConsult::AfterOwnershipOf(Vec::new()),
+            Op::MakeLink { home, .. } => WriteConsult::AfterOwnershipOf(vec![home]),
+            Op::AssertSup { home, .. } => WriteConsult::AfterOwnershipOf(vec![home]),
+            Op::EditLink { d_s, d_a, .. } => WriteConsult::AfterOwnershipOf(vec![d_s, d_a]),
+            Op::CreateNewDocument { .. }
+            | Op::Delegate { .. }
+            | Op::RegisterNode { .. }
+            | Op::Fork { .. }
+            | Op::Insert { .. }
+            | Op::Delete { .. }
+            | Op::Rearrange { .. }
+            | Op::Publish { .. }
+            | Op::Emit { .. }
+            | Op::Nullify { .. }
+            | Op::NextAccountPrefix { .. }
+            | Op::PrincipalPrefix { .. }
+            | Op::EffectiveOwner { .. }
+            | Op::ReadLink { .. }
+            | Op::FollowLink { .. }
+            | Op::RetrieveV { .. }
+            | Op::RetrieveDocVSpan { .. }
+            | Op::RetrieveDocVSpanSet { .. }
+            | Op::ShowOrigin { .. }
+            | Op::ShowDeletions { .. }
+            | Op::Compare { .. }
+            | Op::FindDocsContaining { .. }
+            | Op::Image { .. }
+            | Op::FindLinksV { .. }
+            | Op::FindLinksFtt { .. }
+            | Op::CountV { .. }
+            | Op::CountFtt { .. }
+            | Op::WindowV { .. }
+            | Op::WindowFtt { .. }
+            | Op::RetrieveEndsets { .. }
+            | Op::Project { .. }
+            | Op::DiscoverableFrom { .. }
+            | Op::DeleteOrphans { .. }
+            | Op::InClaims { .. }
+            | Op::OutClaims { .. }
+            | Op::DocMetadata { .. }
+            | Op::EditionClaims { .. }
+            | Op::UniversalGrants => WriteConsult::NotTaken,
+        }
+    }
+
+    /// The destination whose arrangement this write EDITS IN PLACE, if it is
+    /// one of that class (PUB-2.11): `insert`, `delete`, `copy`-into and
+    /// `rearrange`, the four writes that advance an existing document's
+    /// arrangement. `None` for everything else, and each exclusion is the
+    /// rule's own: the link writes are outside it (PUB-2.12), `version` and
+    /// `create`/`fork` MINT a document rather than advancing one,
+    /// `publish` appends a chain member whose destination M5's composite
+    /// decides (PUB-2.39), and no read edits anything. EXHAUSTIVE with no
+    /// `_` arm: a new `Op` decides its row here.
+    ///
+    /// This names the CLASS; what restricts the door's pre-evaluation to
+    /// `copy` is the ORDER in which the door asks. `consult_write` asks only
+    /// after the deferral, so only CONSULTED writes reach it —
+    /// `insert`, `delete` and `rearrange` read no source, answer
+    /// [`WriteConsult::NotTaken`] from [`Op::write_consult`], and meet the
+    /// store's own `published_target` unchanged, one layer later. The two
+    /// lists are therefore read together, and the pairing is pinned in this
+    /// module's tests rather than left to agree by hand.
+    ///
+    /// Private to the door for [`Op::write_consult`]'s reason: nothing outside
+    /// it re-runs the door's pre-evaluation, which exists to order one refusal
+    /// ahead of another inside this surface.
+    fn in_place_destination(&self) -> Option<&Address> {
+        match self {
+            Op::Insert { doc, .. }
+            | Op::Delete { doc, .. }
+            | Op::Copy { doc, .. }
+            | Op::Rearrange { doc, .. } => Some(doc),
+            Op::CreateNewDocument { .. }
+            | Op::Delegate { .. }
+            | Op::RegisterNode { .. }
+            | Op::Fork { .. }
+            | Op::Version { .. }
+            | Op::Publish { .. }
+            | Op::MakeLink { .. }
+            | Op::Emit { .. }
+            | Op::Nullify { .. }
+            | Op::AssertSup { .. }
+            | Op::EditLink { .. }
+            | Op::NextAccountPrefix { .. }
+            | Op::PrincipalPrefix { .. }
+            | Op::EffectiveOwner { .. }
+            | Op::ReadLink { .. }
+            | Op::FollowLink { .. }
+            | Op::RetrieveV { .. }
+            | Op::RetrieveDocVSpan { .. }
+            | Op::RetrieveDocVSpanSet { .. }
+            | Op::ShowOrigin { .. }
+            | Op::ShowDeletions { .. }
+            | Op::Compare { .. }
+            | Op::FindDocsContaining { .. }
+            | Op::Image { .. }
+            | Op::FindLinksV { .. }
+            | Op::FindLinksFtt { .. }
+            | Op::CountV { .. }
+            | Op::CountFtt { .. }
+            | Op::WindowV { .. }
+            | Op::WindowFtt { .. }
+            | Op::RetrieveEndsets { .. }
+            | Op::Project { .. }
+            | Op::DiscoverableFrom { .. }
+            | Op::DeleteOrphans { .. }
+            | Op::InClaims { .. }
+            | Op::OutClaims { .. }
+            | Op::DocMetadata { .. }
+            | Op::EditionClaims { .. }
+            | Op::UniversalGrants => None,
+        }
+    }
+}
+
 /// THE WRITE SIDE'S CONSULT (PUB round 2, lane 3.3c; PUB-6.23, PUB-6.24,
 /// PUB-6.36 slot 6, PUB-6.38): the door's pre-dispatch check on a write
 /// that READS a document before it writes — `copy`'s sources, `version`'s
@@ -417,4 +593,147 @@ pub(super) fn consult_write(
         }
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use skep_address::{validate, Nat, Span, Tumbler};
+    use skep_arrangement::{Deposit, VPos, VSpec};
+    use skep_content::Val;
+    use skep_links::SlotArg;
+
+    use super::*;
+    use crate::op::tests::all_ops;
+    use crate::op::SuccessorSpec;
+
+    fn tum(comps: &[u32]) -> Tumbler {
+        Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty")
+    }
+    fn addr(comps: &[u32]) -> Address {
+        validate(tum(comps)).unwrap_or_else(|_| panic!("T4-valid test address"))
+    }
+    fn sp() -> Span {
+        Span::new(tum(&[1, 1]), tum(&[0, 1])).unwrap_or_else(|_| panic!("well-formed test span"))
+    }
+    fn vpos() -> VPos {
+        VPos { subspace: Nat::from(1u32), ordinal: Nat::from(1u32) }
+    }
+    fn doc() -> Address {
+        addr(&[1, 0, 1, 0, 1])
+    }
+
+    /// PUB-6.23 at the pairing of the two lists, which is where it can
+    /// silently fail. The door reads `write_consult` FIRST and returns on
+    /// [`WriteConsult::NotTaken`] without ever reading `source_arguments`, so
+    /// the two are jointly load-bearing: a write that reads a source and
+    /// answers `NotTaken` hands that source to its store with no readability
+    /// gate, and both matches being exhaustive means the compiler forces two
+    /// independent decisions and accepts the wrong pairing. The law is that
+    /// pairing — reading a source implies a consult — plus the two arms of
+    /// [`WriteConsult`] itself, which differ in what they let the door do and
+    /// are likewise both well-typed.
+    #[test]
+    fn a_write_that_reads_a_source_is_always_consulted() {
+        for (op, is_read) in all_ops() {
+            let reads_a_source = !op.source_arguments().is_empty();
+            let consulted = matches!(op.write_consult(), WriteConsult::AfterOwnershipOf(_));
+            assert!(
+                !reads_a_source || consulted,
+                "{:?} reads a source and is NotTaken: its sources reach the store ungated",
+                op.kind()
+            );
+            assert!(
+                !is_read || !consulted,
+                "{:?} is a read: the write door's consult is not its",
+                op.kind()
+            );
+        }
+
+        // Consulted with an EMPTY destination list: no destination to defer
+        // on — the mint lands in the caller's own account (MINT-FIRST is the
+        // daemon's).
+        let version = Op::Version { d_src: doc(), published: None };
+        match version.write_consult() {
+            WriteConsult::AfterOwnershipOf(destinations) => assert!(
+                destinations.is_empty(),
+                "an empty destination list is not the same answer as `NotTaken`"
+            ),
+            WriteConsult::NotTaken => panic!("version is consulted"),
+        }
+        // Consulted with destinations: the documents the store's own
+        // `not_owner` is judged on, which is what the door defers to.
+        let d1 = addr(&[1, 0, 1, 0, 1]);
+        let d2 = addr(&[1, 0, 1, 0, 2]);
+        let edit = Op::EditLink {
+            original: d1.clone(),
+            successor: SuccessorSpec {
+                from: vec![],
+                to: vec![],
+                ty: SlotArg::Addrs(vec![d1.clone()]),
+            },
+            d_s: d1.clone(),
+            d_a: d2.clone(),
+        };
+        assert_eq!(
+            edit.write_consult(),
+            WriteConsult::AfterOwnershipOf(vec![&d1, &d2]),
+            "both written homes"
+        );
+        // NotTaken: a write with nothing to consult — no source, no
+        // link-address argument.
+        let insert = Op::Insert {
+            doc: doc(),
+            at: vpos(),
+            values: vec![Val::new(vec![1u8])],
+            deposit: Deposit::Undeclared,
+        };
+        assert_eq!(insert.write_consult(), WriteConsult::NotTaken);
+    }
+
+    /// PUB-2.11 / PUB-6.36 slot 5, at the OTHER pairing the door depends on
+    /// (`consult_write`). `in_place_destination` names the class
+    /// — the four writes that advance an existing document's arrangement —
+    /// and the door's ORDER is what narrows the pre-evaluation to `copy`:
+    /// the check runs past the deferral, so only a CONSULTED member reaches
+    /// it, and the three that are not consulted meet the store's own
+    /// `published_target` unchanged. Both halves are stated here, because a
+    /// member that quietly stopped being consulted, or a consulted write that
+    /// quietly left the class, would reorder a refusal with nothing to say so.
+    #[test]
+    fn the_in_place_class_is_the_four_arrangement_edits_and_only_copy_is_consulted() {
+        for (op, is_read) in all_ops() {
+            let in_place = op.in_place_destination().is_some();
+            let expects = !is_read
+                && matches!(
+                    op,
+                    Op::Insert { .. } | Op::Delete { .. } | Op::Copy { .. } | Op::Rearrange { .. }
+                );
+            assert_eq!(in_place, expects, "{:?}: the in-place arrangement-edit row", op.kind());
+            assert!(
+                !in_place || !is_read,
+                "{:?} is a read: no read edits an arrangement",
+                op.kind()
+            );
+            // The door's reach: a member the deferral admits is one whose
+            // refusal the door orders ahead of the source consult.
+            let pre_evaluated =
+                in_place && matches!(op.write_consult(), WriteConsult::AfterOwnershipOf(_));
+            assert_eq!(
+                pre_evaluated,
+                matches!(op, Op::Copy { .. }),
+                "{:?}: `copy` is the one member the door's pre-evaluation reaches",
+                op.kind()
+            );
+        }
+
+        // The destination named is the document EDITED, not a source read.
+        let d = addr(&[1, 0, 1, 0, 1]);
+        let src = addr(&[1, 0, 1, 0, 2]);
+        let copy = Op::Copy {
+            doc: d.clone(),
+            at: vpos(),
+            specs: vec![VSpec { source: src, span: sp() }],
+        };
+        assert_eq!(copy.in_place_destination(), Some(&d));
+    }
 }

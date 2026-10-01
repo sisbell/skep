@@ -269,6 +269,10 @@ fn is_content_vspan(span: &Span) -> bool {
     as_ordinal_vspan(span).is_some_and(|v| v.is_content())
 }
 
+// These run over genesis M3 and M5 state, with no kernel. The two that walk a
+// real fragmented draft are in `operation/tests.rs`; the budgets as a client
+// meets them, through the surface, are in `tests/it/successor.rs` and
+// `tests/it/write_door.rs`.
 #[cfg(test)]
 mod tests {
     use skep_address::{validate, Address, Nat, Tumbler};

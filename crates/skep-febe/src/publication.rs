@@ -27,6 +27,11 @@
 //! ([`PublicationWorld::universal_grant_index`]), so the narrowing a client's
 //! answer needs falls to the front door.
 //!
+//! This module has no test of its own. `birth_version` is tested directly in
+//! `operation/tests.rs`, which builds a version chain through the surface,
+//! and all three of its functions are exercised through the three reads, at
+//! the surface, in `tests/it/publication.rs`.
+//!
 //! [`Op::DocMetadata`]: crate::Op::DocMetadata
 //! [`Op::EditionClaims`]: crate::Op::EditionClaims
 //! [`Op::UniversalGrants`]: crate::Op::UniversalGrants

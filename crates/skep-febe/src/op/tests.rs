@@ -27,7 +27,8 @@ fn doc() -> Address {
 /// Every variant, paired with its documented partition side (§1's
 /// `is_read` grouping): `(op, is_read)`. Crate-visible: the dispatch
 /// tables' agreement with this partition is checked against the same
-/// fixture, in `operation/tests.rs`.
+/// fixture, in `operation/tests.rs`, and the write door's two pairing laws
+/// in `operation/door.rs`.
 pub(crate) fn all_ops() -> Vec<(Op, bool)> {
     vec![
         (Op::CreateNewDocument { account: addr(&[1, 0, 1]), published: None }, false),
@@ -285,119 +286,4 @@ fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
             );
         assert_eq!(reads_a_source, expects, "{:?}: the source-reading-writes row", op.kind());
     }
-}
-
-/// PUB-6.23 at the pairing of the two lists, which is where it can
-/// silently fail. The door reads `write_consult` FIRST and returns on
-/// [`WriteConsult::NotTaken`] without ever reading `source_arguments`, so
-/// the two are jointly load-bearing: a write that reads a source and
-/// answers `NotTaken` hands that source to its store with no readability
-/// gate, and both matches being exhaustive means the compiler forces two
-/// independent decisions and accepts the wrong pairing. The law is that
-/// pairing — reading a source implies a consult — plus the two arms of
-/// [`WriteConsult`] itself, which differ in what they let the door do and
-/// are likewise both well-typed.
-#[test]
-fn a_write_that_reads_a_source_is_always_consulted() {
-    for (op, is_read) in all_ops() {
-        let reads_a_source = !op.source_arguments().is_empty();
-        let consulted = matches!(op.write_consult(), WriteConsult::AfterOwnershipOf(_));
-        assert!(
-            !reads_a_source || consulted,
-            "{:?} reads a source and is NotTaken: its sources reach the store ungated",
-            op.kind()
-        );
-        assert!(
-            !is_read || !consulted,
-            "{:?} is a read: the write door's consult is not its",
-            op.kind()
-        );
-    }
-
-    // Consulted with an EMPTY destination list: no destination to defer
-    // on — the mint lands in the caller's own account (MINT-FIRST is the
-    // daemon's).
-    let version = Op::Version { d_src: doc(), published: None };
-    match version.write_consult() {
-        WriteConsult::AfterOwnershipOf(destinations) => assert!(
-            destinations.is_empty(),
-            "an empty destination list is not the same answer as `NotTaken`"
-        ),
-        WriteConsult::NotTaken => panic!("version is consulted"),
-    }
-    // Consulted with destinations: the documents the store's own
-    // `not_owner` is judged on, which is what the door defers to.
-    let d1 = addr(&[1, 0, 1, 0, 1]);
-    let d2 = addr(&[1, 0, 1, 0, 2]);
-    let edit = Op::EditLink {
-        original: d1.clone(),
-        successor: SuccessorSpec {
-            from: vec![],
-            to: vec![],
-            ty: SlotArg::Addrs(vec![d1.clone()]),
-        },
-        d_s: d1.clone(),
-        d_a: d2.clone(),
-    };
-    assert_eq!(
-        edit.write_consult(),
-        WriteConsult::AfterOwnershipOf(vec![&d1, &d2]),
-        "both written homes"
-    );
-    // NotTaken: a write with nothing to consult — no source, no
-    // link-address argument.
-    let insert = Op::Insert {
-        doc: doc(),
-        at: vpos(),
-        values: vec![Val::new(vec![1u8])],
-        deposit: Deposit::Undeclared,
-    };
-    assert_eq!(insert.write_consult(), WriteConsult::NotTaken);
-}
-
-/// PUB-2.11 / PUB-6.36 slot 5, at the OTHER pairing the door depends on
-/// (`consult_write`). `in_place_destination` names the class
-/// — the four writes that advance an existing document's arrangement —
-/// and the door's ORDER is what narrows the pre-evaluation to `copy`:
-/// the check runs past the deferral, so only a CONSULTED member reaches
-/// it, and the three that are not consulted meet the store's own
-/// `published_target` unchanged. Both halves are stated here, because a
-/// member that quietly stopped being consulted, or a consulted write that
-/// quietly left the class, would reorder a refusal with nothing to say so.
-#[test]
-fn the_in_place_class_is_the_four_arrangement_edits_and_only_copy_is_consulted() {
-    for (op, is_read) in all_ops() {
-        let in_place = op.in_place_destination().is_some();
-        let expects = !is_read
-            && matches!(
-                op,
-                Op::Insert { .. } | Op::Delete { .. } | Op::Copy { .. } | Op::Rearrange { .. }
-            );
-        assert_eq!(in_place, expects, "{:?}: the in-place arrangement-edit row", op.kind());
-        assert!(
-            !in_place || !is_read,
-            "{:?} is a read: no read edits an arrangement",
-            op.kind()
-        );
-        // The door's reach: a member the deferral admits is one whose
-        // refusal the door orders ahead of the source consult.
-        let pre_evaluated =
-            in_place && matches!(op.write_consult(), WriteConsult::AfterOwnershipOf(_));
-        assert_eq!(
-            pre_evaluated,
-            matches!(op, Op::Copy { .. }),
-            "{:?}: `copy` is the one member the door's pre-evaluation reaches",
-            op.kind()
-        );
-    }
-
-    // The destination named is the document EDITED, not a source read.
-    let d = addr(&[1, 0, 1, 0, 1]);
-    let src = addr(&[1, 0, 1, 0, 2]);
-    let copy = Op::Copy {
-        doc: d.clone(),
-        at: vpos(),
-        specs: vec![VSpec { source: src, span: sp() }],
-    };
-    assert_eq!(copy.in_place_destination(), Some(&d));
 }

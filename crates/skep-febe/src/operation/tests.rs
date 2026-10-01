@@ -570,6 +570,13 @@ fn an_attestation_reaches_a_store_driver_on_insert_publish_and_make_link_alone()
     }
 }
 
+// ── the store-backed tests of `successor` and `publication` ──
+//
+// They sit here rather than beside the code they test: each builds its
+// fixture through `OperationSurface::execute`, which the module order lets
+// only `operation`, the last module, name, and each reads the surface's
+// private `stores` for the snapshot it hands the function under test.
+
 /// The principal [`fragmented_draft`]'s account is delegated to.
 const DRAFT_OWNER: PrincipalId = PrincipalId(7);
 

@@ -47,7 +47,10 @@ pub(crate) fn lower_read<E: Lower>(kind: OpKind, e: E) -> Rejection {
 /// The dispatch arms reach this through `OperationSurface::lower_write`, which
 /// latches the poison hint on the way past — so a write arm that called this
 /// directly would build the right rejection and leave its operation outside
-/// the latch's cover.
+/// the latch's cover. No visibility fences that — `operation.rs`, which must
+/// call this, is the parent of `dispatch`, where the arms are — so
+/// `tests/it/tidy.rs` checks that nothing but this module and `operation.rs`
+/// names it.
 ///
 /// Each of those four says something different about reissuing, and says it
 /// in the disposition, with the cause threaded where an operator needs it.

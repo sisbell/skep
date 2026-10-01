@@ -13,15 +13,19 @@
 //! a child does, so nothing here is widened for them:
 //!
 //! * [`door`] — the READABILITY DOOR: the one read predicate a request
-//!   answers through, the two consults it drives, and the link-address
-//!   absence rule. `OperationSurface::readable`, where a supplied predicate
-//!   and the world's own meet, is private to it.
+//!   answers through, the two consults it drives, the two per-variant tables
+//!   only the write consult asks, and the link-address absence rule.
+//!   `OperationSurface::readable`, where a supplied predicate overrides the
+//!   world's own, is private to it; the world's own is a supertrait method
+//!   callable on any `W`, so `tests/it/tidy.rs` checks that no other file
+//!   asks it.
 //! * [`dispatch`] — the two static tables that hand every `Op` to the store or
 //!   query module that owns it: the write half under the proven-bound
 //!   [`WriteCtx`], the read half over one pinned snapshot.
 
 // The readability door: the one predicate of a request, the two consults
-// it drives, and the link-address absence rule.
+// it drives with the two tables only the write consult asks, and the
+// link-address absence rule.
 mod door;
 // The two static tables: every `Op` to the store or query module that owns it.
 mod dispatch;
@@ -474,8 +478,10 @@ where
     /// That latch is why this is a METHOD where `lower_read` is a free
     /// function: every write arm comes through HERE and none reaches
     /// [`lower_txn`] directly. It is imported beside this method and not into
-    /// `dispatch`, where the arms are; called from an arm it would build the
-    /// same rejection while leaving its operation outside the latch's cover.
+    /// `dispatch`, where the arms are, and `tests/it/tidy.rs` checks that no
+    /// file but `lower` and this one names it; called from an arm it would
+    /// build the same rejection while leaving its operation outside the
+    /// latch's cover.
     /// And the latch exists only because the gate reads M10's MIRROR of M2's
     /// poison state rather than asking M2, so this method's whole reason is
     /// the mirror's ([`OperationSurface`]). `Relaxed` suffices: the flag is a

@@ -10,17 +10,21 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **`OperationSurface::execute`** — total by contract: every input yields a
   `Response`, never a panic; failures are typed rejections with
   fault-site localization.
-- **Sessions** — open / close / bootstrap handles and a per-session
-  idempotency memo (byte-identical ack replay for retried requests).
+- **Sessions** — open / close / bootstrap handles, the guest
+  (`SessionId::GUEST`), and a per-session retry memo that answers a
+  retried write with the acknowledgment it committed.
 - **The codec seam** — marshal/unmarshal is a trait boundary, so
   transports choose their encoding; the operation layer never sees
   bytes.
 - **Generic over the world** — reaches stores only through a
-  `Stores<W>` factory; only the engine and the daemon ever name a
-  concrete world.
+  `Stores<W>` factory and names no concrete world: the engine defines
+  `World`, and the programs that run the surface — the daemon and the
+  conformance harness — name it.
 
 The daemon ([skepd](../skepd)) transports this surface over HTTP;
-other transports compose the same crate.
+other transports compose the same crate. How its modules are laid out,
+and the rules that hold across them, is in
+[ARCHITECTURE.md](../../ARCHITECTURE.md), §The operation surface.
 
 ## License
 

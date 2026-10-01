@@ -153,7 +153,7 @@
 
 // The parsed request — `Request`, the `Op` enum and its `OpKind` echo — and
 // the questions a request answers about its own shape.
-mod op;
+mod request;
 // The refusal vocabulary — `RejectCode`, `Disposition`, `FaultSite`,
 // `Rejection` — and its two per-code policies.
 mod reject;
@@ -181,9 +181,9 @@ mod publication;
 mod operation;
 
 pub use codec::{Codec, ParseError};
-pub use op::{Op, OpKind, ReqId, Request, SuccessorSpec, MAX_REQ_ID_BYTES};
 pub use operation::{consult_read, OperationSurface, ReadPredicate};
 pub use reject::{Disposition, FaultSite, RejectCode, Rejection};
+pub use request::{Op, OpKind, ReqId, Request, SuccessorSpec, MAX_REQ_ID_BYTES};
 pub use response::{BirthVersion, EditionClaim, Response, UniversalGrant};
 pub use session::SessionId;
 pub use world::{FebeWorld, PublicationWorld, ReadableWorld, Stores, UniversalIndexRow};

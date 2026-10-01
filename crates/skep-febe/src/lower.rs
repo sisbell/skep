@@ -20,8 +20,8 @@ use skep_links::{AssertSupError, EditLinkError, EmitError, MakeLinkError, Nullif
 use skep_namespace::{CreateDocumentError, DelegateError, MintError, NodeError};
 use skep_retrieval::{CompareError, DeletionsError, ExtentError, FindError, OriginError, RetrieveError};
 
-use crate::op::OpKind;
 use crate::reject::{FaultSite, RejectCode, Rejection};
+use crate::request::OpKind;
 
 /// One impl per store error enum (mechanical; §5).
 pub(crate) trait Lower {

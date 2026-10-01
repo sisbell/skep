@@ -20,49 +20,49 @@ use skep_febe::{Deposit, Disposition, Op, RejectCode, SlotArg, SuccessorSpec, MA
 fn a_sequential_retry_replays_its_ack_and_a_fresh_session_re_executes() {
     let fx = setup();
     let d = create_doc(&fx);
-    let ins = || Op::Insert {
+    let insert = || Op::Insert {
         doc: d.clone(),
         at: vp(1, 1),
         values: vec![skep_content::Val::new(vec![b'x'])],
         deposit: Deposit::Undeclared,
     };
 
-    let (addr1, at1) = ack_addr(ex_id(&fx.febe, fx.user, b"ins-1", ins()));
-    let log0 = fx.febe.log_position();
+    let (addr1, at1) = ack_addr(ex_id(&fx.febe, fx.user, b"ins-1", insert()));
+    let before = fx.febe.log_position();
 
     // Sequential retry: the rebuilt memoized ack, no re-execution.
-    let (addr2, at2) = ack_addr(ex_id(&fx.febe, fx.user, b"ins-1", ins()));
+    let (addr2, at2) = ack_addr(ex_id(&fx.febe, fx.user, b"ins-1", insert()));
     assert_eq!(addr2, addr1);
     assert_eq!(at2, at1);
-    assert_eq!(fx.febe.log_position(), log0);
+    assert_eq!(fx.febe.log_position(), before);
 
     // A READ under the same ReqId reads no memo at all — the memo holds
     // committed-write acks alone — so it executes, is itself never memoized,
     // and leaves the write's entry untouched.
     let (set, _) = spanset(ex_id(&fx.febe, fx.user, b"ins-1", Op::RetrieveDocVSpan { doc: d.clone() }));
     assert_ne!(set, SpanSet::empty());
-    let (addr3, at3) = ack_addr(ex_id(&fx.febe, fx.user, b"ins-1", ins()));
+    let (addr3, at3) = ack_addr(ex_id(&fx.febe, fx.user, b"ins-1", insert()));
     assert_eq!(addr3, addr1);
     assert_eq!(at3, at1);
-    assert_eq!(fx.febe.log_position(), log0);
+    assert_eq!(fx.febe.log_position(), before);
 
     // A replay under a fresh session misses and re-executes (per-session
     // confinement): new address, advanced log.
     let s2 = fx.febe.open_session(USER);
-    let (addr4, at4) = ack_addr(ex_id(&fx.febe, s2, b"ins-1", ins()));
+    let (addr4, at4) = ack_addr(ex_id(&fx.febe, s2, b"ins-1", insert()));
     assert_ne!(addr4, addr1);
     assert!(at4 > at1);
-    assert!(fx.febe.log_position() > log0);
+    assert!(fx.febe.log_position() > before);
 
     // The original session's memo is still confined and intact…
-    let (addr5, at5) = ack_addr(ex_id(&fx.febe, fx.user, b"ins-1", ins()));
+    let (addr5, at5) = ack_addr(ex_id(&fx.febe, fx.user, b"ins-1", insert()));
     assert_eq!(addr5, addr1);
     assert_eq!(at5, at1);
 
     // …until close_session retires the binding (a later write on the retired
     // id is Unauthenticated — and its memo entries are purged, §6).
     fx.febe.close_session(fx.user);
-    let rej = rejected(ex_id(&fx.febe, fx.user, b"ins-1", ins()));
+    let rej = rejected(ex_id(&fx.febe, fx.user, b"ins-1", insert()));
     assert_eq!(rej.code, RejectCode::Unauthenticated);
     assert_eq!(rej.disposition, Disposition::Permanent);
 }
@@ -97,9 +97,9 @@ fn a_write_reusing_a_req_id_under_another_kind_executes_rather_than_replaying() 
     let at_del = ack(ex_id(&fx.febe, fx.user, b"same", del()));
     assert!(at_del > at_ins, "the cross-kind write executed and committed on its own account");
 
-    let log = fx.febe.log_position();
+    let before = fx.febe.log_position();
     assert_eq!(ack(ex_id(&fx.febe, fx.user, b"same", del())), at_del, "its own retry replays");
-    assert_eq!(fx.febe.log_position(), log, "…and a replayed ack commits nothing");
+    assert_eq!(fx.febe.log_position(), before, "…and a replayed ack commits nothing");
 }
 
 /// §7, the caller's half of the key: an id names ONE request. The memo
@@ -119,10 +119,10 @@ fn an_id_reused_for_a_different_write_of_the_same_kind_answers_the_first_ack_and
         deposit: Deposit::Undeclared,
     };
     let first = ack_addr(ex_id(&fx.febe, fx.user, b"reused", insert(b'x')));
-    let log = fx.febe.log_position();
+    let before = fx.febe.log_position();
     let second = ack_addr(ex_id(&fx.febe, fx.user, b"reused", insert(b'y')));
     assert_eq!(second, first, "the first write's acknowledgment answers the second");
-    assert_eq!(fx.febe.log_position(), log, "…and the second write is not executed");
+    assert_eq!(fx.febe.log_position(), before, "…and the second write is not executed");
 }
 
 /// §7/[`MAX_REQ_ID_BYTES`]: the memo's SECOND check, through `execute`. An id
@@ -134,7 +134,7 @@ fn an_id_reused_for_a_different_write_of_the_same_kind_answers_the_first_ack_and
 fn an_oversized_request_id_is_answered_and_its_retry_re_executes() {
     let fx = setup();
     let d = create_doc(&fx);
-    let ins = || Op::Insert {
+    let insert = || Op::Insert {
         doc: d.clone(),
         at: vp(1, 1),
         values: vec![skep_content::Val::new(vec![b'y'])],
@@ -142,19 +142,19 @@ fn an_oversized_request_id_is_answered_and_its_retry_re_executes() {
     };
 
     let over = vec![b'k'; MAX_REQ_ID_BYTES + 1];
-    let (first, at1) = ack_addr(ex_id(&fx.febe, fx.user, &over, ins()));
-    let log0 = fx.febe.log_position();
-    let (second, at2) = ack_addr(ex_id(&fx.febe, fx.user, &over, ins()));
+    let (first, at1) = ack_addr(ex_id(&fx.febe, fx.user, &over, insert()));
+    let before = fx.febe.log_position();
+    let (second, at2) = ack_addr(ex_id(&fx.febe, fx.user, &over, insert()));
     assert_ne!(second, first, "an unmemoized retry re-executes");
     assert!(at2 > at1);
-    assert!(fx.febe.log_position() > log0, "…and commits");
+    assert!(fx.febe.log_position() > before, "…and commits");
 
     let at_cap = vec![b'k'; MAX_REQ_ID_BYTES];
-    let (a, _) = ack_addr(ex_id(&fx.febe, fx.user, &at_cap, ins()));
-    let log1 = fx.febe.log_position();
-    let (b, _) = ack_addr(ex_id(&fx.febe, fx.user, &at_cap, ins()));
-    assert_eq!(b, a, "a key at the bound is an ordinary key");
-    assert_eq!(fx.febe.log_position(), log1, "so its retry commits nothing");
+    let (first, _) = ack_addr(ex_id(&fx.febe, fx.user, &at_cap, insert()));
+    let before = fx.febe.log_position();
+    let (second, _) = ack_addr(ex_id(&fx.febe, fx.user, &at_cap, insert()));
+    assert_eq!(second, first, "a key at the bound is an ordinary key");
+    assert_eq!(fx.febe.log_position(), before, "so its retry commits nothing");
 }
 
 /// §7/§1(d): the memo replays the acknowledgment SHAPE the write produced,
@@ -179,13 +179,13 @@ fn a_retried_editlink_replays_both_addresses_unswapped() {
 
     let (succ, claim, at) = ack_edit(ex_id(&fx.febe, fx.user, b"edit-1", edit()));
     assert_ne!(succ, claim, "the successor and its supersession claim are two distinct links");
-    let log0 = fx.febe.log_position();
+    let before = fx.febe.log_position();
 
     let (succ2, claim2, at2) = ack_edit(ex_id(&fx.febe, fx.user, b"edit-1", edit()));
     assert_eq!(succ2, succ, "the replayed successor is the successor that committed");
     assert_eq!(claim2, claim, "the replayed claim is the claim, not the successor again");
     assert_eq!(at2, at, "the replayed coordinate is the one the edit committed at");
-    assert_eq!(fx.febe.log_position(), log0, "a replayed ack commits nothing");
+    assert_eq!(fx.febe.log_position(), before, "a replayed ack commits nothing");
 }
 
 /// §7: the bare-`Seq` acknowledgment round-trips too. [`Response::Ack`] is the
@@ -199,12 +199,19 @@ fn a_retried_delete_replays_its_bare_ack() {
     let del = || Op::Delete { doc: d.clone(), p: vp(1, 1), width: nat(1) };
 
     let at = ack(ex_id(&fx.febe, fx.user, b"del-1", del()));
-    let log0 = fx.febe.log_position();
-    let (before, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpanSet { doc: d.clone() }));
+    let before = fx.febe.log_position();
+    let (spans_before, _) = spanset(ex(
+        &fx.febe,
+        fx.user,
+        Op::RetrieveDocVSpanSet { doc: d.clone() },
+    ));
 
     let at2 = ack(ex_id(&fx.febe, fx.user, b"del-1", del()));
     assert_eq!(at2, at, "the replayed ack carries the coordinate the delete committed at");
-    assert_eq!(fx.febe.log_position(), log0, "a replayed ack commits nothing");
-    let (after, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpanSet { doc: d }));
-    assert_eq!(after, before, "the remaining elements survive: the delete did not re-execute");
+    assert_eq!(fx.febe.log_position(), before, "a replayed ack commits nothing");
+    let (spans_after, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpanSet { doc: d }));
+    assert_eq!(
+        spans_after, spans_before,
+        "the remaining elements survive: the delete did not re-execute"
+    );
 }

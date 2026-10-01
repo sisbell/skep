@@ -17,9 +17,9 @@ use skep_links::{
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
 use super::*;
-use crate::op::{Op, ReqId, SuccessorSpec};
 use crate::publication::birth_version;
 use crate::reject::{Disposition, Rejection};
+use crate::request::{Op, ReqId, SuccessorSpec};
 use crate::response::{BirthVersion, CommittedAck};
 use crate::successor::{successor_link, Judgment};
 
@@ -302,7 +302,7 @@ fn every_write_on_an_unbound_session_is_unauthenticated_before_any_transaction()
     febe.close_session(retired);
     let before = febe.log_position();
     for session in [retired, SessionId::GUEST] {
-        for (op, is_read) in crate::op::tests::all_ops() {
+        for (op, is_read) in crate::request::tests::all_ops() {
             if is_read {
                 continue;
             }
@@ -335,7 +335,7 @@ fn every_write_on_an_unbound_session_is_unauthenticated_before_any_transaction()
 fn no_read_is_ever_rejected_for_an_unbound_session() {
     let febe = surface();
     let never_opened = SessionId::unminted(9999);
-    for (op, is_read) in crate::op::tests::all_ops() {
+    for (op, is_read) in crate::request::tests::all_ops() {
         if !is_read {
             continue;
         }
@@ -534,7 +534,7 @@ fn a_memoized_ack_outliving_its_binding_is_replayed_not_refused() {
 #[test]
 fn each_dispatch_table_rejects_exactly_the_other_half() {
     let febe = surface();
-    for (op, is_read) in crate::op::tests::all_ops() {
+    for (op, is_read) in crate::request::tests::all_ops() {
         let kind = op.kind();
         let wrong_table = if is_read {
             febe.dispatch_write(WriteCtx { principal: PrincipalId(1) }, op, None)
@@ -561,7 +561,7 @@ fn each_dispatch_table_rejects_exactly_the_other_half() {
 fn every_write_under_a_bound_session_is_answered_and_its_refusals_name_it() {
     let febe = surface();
     let s = febe.bootstrap_session();
-    for (op, is_read) in crate::op::tests::all_ops() {
+    for (op, is_read) in crate::request::tests::all_ops() {
         if is_read {
             continue;
         }
@@ -601,7 +601,7 @@ fn an_attestation_reaches_every_store_driver_a_write_acquires() {
         d_s: doc.clone(),
         d_a: doc,
     };
-    let writes = crate::op::tests::all_ops()
+    let writes = crate::request::tests::all_ops()
         .into_iter()
         .filter_map(|(op, is_read)| (!is_read).then_some(op))
         .filter(|op| !matches!(op, Op::EditLink { .. }))
@@ -656,9 +656,9 @@ fn fragmented_draft(febe: &OperationSurface<World>, doublings: u32) -> Address {
     else {
         panic!("the bootstrap session delegates the prefix");
     };
-    let session = febe.open_session(DRAFT_OWNER);
+    let owner = febe.open_session(DRAFT_OWNER);
     let Response::AckAddr { addr: doc, .. } =
-        issue(session, Op::CreateNewDocument { account, published: Some(false) })
+        issue(owner, Op::CreateNewDocument { account, published: Some(false) })
     else {
         panic!("the owner mints a draft");
     };
@@ -668,9 +668,9 @@ fn fragmented_draft(febe: &OperationSurface<World>, doublings: u32) -> Address {
         values: [b'a', b'b', b'c'].map(|b| Val::new(vec![b])).to_vec(),
         deposit: Deposit::Undeclared,
     };
-    assert!(matches!(issue(session, insert), Response::AckAddr { .. }), "the owner fills its draft");
+    assert!(matches!(issue(owner, insert), Response::AckAddr { .. }), "the owner fills its draft");
     let p = VPos::content(Nat::from(2u32));
-    let deleted = issue(session, Op::Delete { doc: doc.clone(), p, width: Nat::from(1u32) });
+    let deleted = issue(owner, Op::Delete { doc: doc.clone(), p, width: Nat::from(1u32) });
     assert!(matches!(deleted, Response::Ack { .. }), "the owner deletes the middle element");
     for k in 0..doublings {
         let extent = 2u32 << k;
@@ -681,7 +681,7 @@ fn fragmented_draft(febe: &OperationSurface<World>, doublings: u32) -> Address {
             at: VPos::content(Nat::from(extent + 1)),
             specs: vec![VSpec { source: doc.clone(), span: whole }],
         };
-        assert!(matches!(issue(session, copy), Response::Ack { .. }), "the owner doubles its draft");
+        assert!(matches!(issue(owner, copy), Response::Ack { .. }), "the owner doubles its draft");
     }
     doc
 }

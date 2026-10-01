@@ -451,9 +451,9 @@ fn the_universal_index_is_enumerated_once_for_a_principal_and_never_for_the_gues
 
     let r = ex(&fx.febe, SessionId::GUEST, Op::UniversalGrants);
     assert!(universal_grants(r).is_empty(), "the guest is answered empty");
-    assert_eq!(universal_grant_index_reads(), 0, "the guest's empty answer walked no index");
+    assert_eq!(universal_grant_index_enumerations(), 0, "the guest's empty answer walked no index");
 
     let served = universal_grants(ex(&fx.febe, fx.user, Op::UniversalGrants));
     assert_eq!(served.len(), 1, "premise: a principal is served the seeded row");
-    assert_eq!(universal_grant_index_reads(), 1, "one enumeration per request");
+    assert_eq!(universal_grant_index_enumerations(), 1, "one enumeration per request");
 }

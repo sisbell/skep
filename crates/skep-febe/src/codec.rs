@@ -5,8 +5,8 @@
 
 use std::fmt;
 
-use crate::op::{OpKind, Request};
 use crate::reject::{RejectCode, Rejection};
+use crate::request::{OpKind, Request};
 use crate::response::Response;
 
 /// The transport's codec (builder supplies one concrete impl).

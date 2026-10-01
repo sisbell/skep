@@ -32,8 +32,8 @@ use skep_links::LinkRec;
 use skep_namespace::{M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL};
 
 use crate::memo::RetryMemo;
-use crate::op::{OpKind, Request};
 use crate::reject::{rejection, RejectCode};
+use crate::request::{OpKind, Request};
 use crate::response::Response;
 use crate::session::{SessionId, Sessions};
 use crate::world::{FebeWorld, Stores};

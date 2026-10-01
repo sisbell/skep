@@ -43,8 +43,8 @@ use skep_address::Address;
 use skep_arrangement::{trunk_head, trunk_of, M5State};
 use skep_namespace::{first_version_address, prefix_contains, M3State};
 
-use crate::op::OpKind;
 use crate::reject::{rejection, RejectCode, Rejection};
+use crate::request::OpKind;
 use crate::response::{BirthVersion, UniversalGrant};
 use crate::world::UniversalIndexRow;
 

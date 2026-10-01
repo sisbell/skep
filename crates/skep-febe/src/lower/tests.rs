@@ -221,23 +221,16 @@ fn variant_name<E: std::fmt::Debug>(e: &E) -> String {
     rendered.split(['(', ' ', '{']).next().unwrap_or_default().to_string()
 }
 
-/// The §5 rule against a name the caller supplies: the variant lowers to
-/// the leaf of that name. [`same_name`] and [`deviates`] are the two ways
-/// that name is obtained — off the variant's own `Debug`, or from the
-/// deviation list.
-fn same_name_spelled<E: Lower>(name: &str, e: E) {
+/// The §5 rule for one flat variant: it lowers to the leaf of its own name,
+/// read off its `Debug` ([`variant_name`]).
+fn same_name<E: Lower + std::fmt::Debug>(e: E) {
+    let name = variant_name(&e);
     let (code, _) = e.lower();
     assert_eq!(
         name,
         format!("{code:?}"),
         "a flat variant lowers to the same-named leaf (§5); {name} lowered to {code:?}"
     );
-}
-
-/// The same rule, for a variant that spells its own name through `Debug`.
-fn same_name<E: Lower + std::fmt::Debug>(e: E) {
-    let name = variant_name(&e);
-    same_name_spelled(&name, e);
 }
 
 /// The exceptions, and the whole list of them: a flat variant whose

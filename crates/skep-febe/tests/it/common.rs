@@ -160,13 +160,13 @@ thread_local! {
     /// unit the any-principal read's cost is paid in (PUB-8.47: "enumerated
     /// once per request", and never for the guest). Reset by
     /// [`surface_over`], as [`UNIVERSAL_GRANT_INDEX`] is.
-    static UNIVERSAL_GRANT_INDEX_READS: Cell<usize> = const { Cell::new(0) };
+    static UNIVERSAL_GRANT_INDEX_ENUMERATIONS: Cell<usize> = const { Cell::new(0) };
 }
 
 /// How many times M10 has enumerated the universal index since the surface
 /// was built.
-pub fn universal_grant_index_reads() -> usize {
-    UNIVERSAL_GRANT_INDEX_READS.with(Cell::get)
+pub fn universal_grant_index_enumerations() -> usize {
+    UNIVERSAL_GRANT_INDEX_ENUMERATIONS.with(Cell::get)
 }
 
 impl skep_febe::PublicationWorld for World {
@@ -186,9 +186,9 @@ impl skep_febe::PublicationWorld for World {
         EDITION_CLAIMS.with(|c| c.borrow().clone())
     }
     /// The seeded index, each call counted as one ENUMERATION
-    /// ([`universal_grant_index_reads`]).
+    /// ([`universal_grant_index_enumerations`]).
     fn universal_grant_index(&self) -> Vec<UniversalIndexRow> {
-        UNIVERSAL_GRANT_INDEX_READS.with(|n| n.set(n.get() + 1));
+        UNIVERSAL_GRANT_INDEX_ENUMERATIONS.with(|n| n.set(n.get() + 1));
         UNIVERSAL_GRANT_INDEX.with(|g| g.borrow().clone())
     }
 }
@@ -252,15 +252,15 @@ pub fn vp(subspace: u32, ordinal: u32) -> VPos {
     VPos { subspace: nat(subspace), ordinal: nat(ordinal) }
 }
 
-/// An ordinal-level depth-2 V-span `[subspace, ord] w [0, width]`.
-pub fn vspan(subspace: u32, ord: u32, width: u32) -> Span {
-    Span::new(tum(&[subspace, ord]), tum(&[0, width]))
+/// An ordinal-level depth-2 V-span `[subspace, ordinal] w [0, width]`.
+pub fn vspan(subspace: u32, ordinal: u32, width: u32) -> Span {
+    Span::new(tum(&[subspace, ordinal]), tum(&[0, width]))
         .unwrap_or_else(|_| panic!("well-formed test span"))
 }
 
 /// A content V-spec over `doc`.
-pub fn vspec(doc: &Address, ord: u32, width: u32) -> VSpec {
-    VSpec { source: doc.clone(), span: vspan(1, ord, width) }
+pub fn vspec(doc: &Address, ordinal: u32, width: u32) -> VSpec {
+    VSpec { source: doc.clone(), span: vspan(1, ordinal, width) }
 }
 
 /// A document-tier address under `account` that no mint ever produced — the
@@ -324,7 +324,7 @@ impl Stores<World> for KernelStores {
 pub fn surface_over(kernel: Arc<Kernel<World>>) -> OperationSurface<World> {
     seed_edition_claims(Vec::new()); // the empty class, until a test seeds it
     seed_universal_grant_index(Vec::new()); // …the empty universal index, likewise
-    UNIVERSAL_GRANT_INDEX_READS.with(|n| n.set(0)); // …no enumeration of it counted yet
+    UNIVERSAL_GRANT_INDEX_ENUMERATIONS.with(|n| n.set(0)); // …no enumeration of it counted yet
     seed_unreadable_world(Vec::new()); // …and a world that admits every read
     OperationSurface::new(Box::new(KernelStores { kernel }))
 }

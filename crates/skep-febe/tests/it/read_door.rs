@@ -178,8 +178,8 @@ fn a_transport_running_the_consult_itself_gets_the_verdict_execute_gives() {
     let other = fx.febe.open_session(OTHER);
     // The predicate the front door answers the stranger through, spelled for
     // a caller that holds no front door.
-    let refused_to_other = unreadable.lock().expect("no poisoning").clone();
-    let readable = |doc: &Address| !refused_to_other.contains(doc);
+    let unreadable_to_other = unreadable.lock().expect("no poisoning").clone();
+    let readable = |doc: &Address| !unreadable_to_other.contains(doc);
 
     let refused = Op::ShowDeletions { d_a: readable_doc.clone(), d_b: unreadable_doc.clone() };
     let direct = consult_read(&refused, &readable).expect_err("`d_b` is unreadable");

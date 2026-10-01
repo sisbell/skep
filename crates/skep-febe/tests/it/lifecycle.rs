@@ -493,11 +493,11 @@ fn the_link_family_answers_end_to_end() {
     // base_seq) with no commit — marshaled identically to the miss.
     let emit = || Op::Emit { home: d.clone(), ty: pred_def_ty(), from: start.clone(), to: vec![] };
     let (e1, at1) = ack_addr(ex(&fx.febe, fx.user, emit()));
-    let log0 = fx.febe.log_position();
+    let before = fx.febe.log_position();
     let (e2, at2) = ack_addr(ex(&fx.febe, fx.user, emit()));
     assert_eq!(e2, e1);
     assert_eq!(at2, at1);
-    assert_eq!(fx.febe.log_position(), log0);
+    assert_eq!(fx.febe.log_position(), before);
 
     // Pre-edit survival preview (the last-witness condition over the active
     // view): l1/l2/succ keep witnesses at ordinals 2–3, but the pred-def

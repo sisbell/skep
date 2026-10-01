@@ -9,7 +9,7 @@ use std::fmt;
 use skep_address::Address;
 use skep_retrieval::{Operand, SpanFault};
 
-use crate::op::OpKind;
+use crate::request::OpKind;
 
 /// A typed, classified rejection. `code` is authoritative; `disposition` is
 /// an advisory Lampson hint (recomputable); `site` localizes span/operand/

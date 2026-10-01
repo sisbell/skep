@@ -36,7 +36,7 @@ use std::num::NonZeroUsize;
 use lru::LruCache;
 use parking_lot::Mutex;
 
-use crate::op::{OpKind, ReqId, MAX_REQ_ID_BYTES};
+use crate::request::{OpKind, ReqId, MAX_REQ_ID_BYTES};
 use crate::response::CommittedAck;
 use crate::session::SessionId;
 
@@ -140,11 +140,11 @@ impl RetryMemo {
     /// retired id again, and authorizing nothing, since `close_session`
     /// retires the binding before calling this.
     pub(crate) fn purge_session(&self, session: SessionId) {
-        let mut g = self.entries.lock();
+        let mut entries = self.entries.lock();
         let dead: Vec<MemoKey> =
-            g.iter().filter(|(k, _)| k.session == session).map(|(k, _)| k.clone()).collect();
+            entries.iter().filter(|(k, _)| k.session == session).map(|(k, _)| k.clone()).collect();
         for k in dead {
-            g.pop(&k);
+            entries.pop(&k);
         }
     }
 }

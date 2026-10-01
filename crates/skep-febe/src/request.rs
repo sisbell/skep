@@ -114,7 +114,7 @@ pub const MAX_REQ_ID_BYTES: usize = 256;
 ///
 /// [`OperationSurface::execute`]: crate::OperationSurface::execute
 ///
-/// `Debug` by hand, in `op/debug.rs`: M4's `Val` withholds `Debug` so that
+/// `Debug` by hand, in `request/debug.rs`: M4's `Val` withholds `Debug` so that
 /// content bytes never render into a log, and a derive cannot reach past it —
 /// so an `Insert`'s values render as their count, never a byte (M6's
 /// `DeliveryItem` and M2's `Attestation` redact theirs the same way), and every

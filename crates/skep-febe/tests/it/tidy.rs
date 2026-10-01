@@ -67,7 +67,7 @@ fn every_module_names_only_itself_and_modules_declared_above_it() {
 /// but the door asks a `readable` by method call or by path.
 #[test]
 fn only_the_door_asks_the_worlds_own_predicate() {
-    let (door, elsewhere): (Vec<_>, Vec<_>) = code_naming(asks_readable)
+    let (door, elsewhere): (Vec<_>, Vec<_>) = scan(asks_readable)
         .into_iter()
         .partition(|(file, _)| file == Path::new("operation/door.rs"));
     assert!(
@@ -116,7 +116,7 @@ fn crate_paths(text: &str) -> Vec<String> {
 
 /// Every code line under `src/` that `pred` holds of, with its file's path
 /// relative to `src/`.
-fn code_naming(pred: impl Fn(&str) -> bool) -> Vec<(PathBuf, String)> {
+fn scan(pred: impl Fn(&str) -> bool) -> Vec<(PathBuf, String)> {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = Vec::new();
     rust_files(&src, &mut files);

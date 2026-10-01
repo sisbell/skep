@@ -7,7 +7,8 @@
 //!
 //! Every arm names every field of its variant, with no `..`, so a field added
 //! to a variant fails to compile here until it is rendered. The variant names
-//! are written by hand, and `op/tests.rs` pins each against [`Op::kind`]'s.
+//! are written by hand, and `request/tests.rs` pins each against
+//! [`Op::kind`]'s.
 
 use std::fmt;
 

@@ -158,7 +158,7 @@ fn two_concurrent_first_mints_below_the_daemon_bear_exactly_one_published_home()
         let account = seat_empty_account(&febe, boot, id);
         let sessions = [febe.open_session(id), febe.open_session(id)];
         assert_ne!(sessions[0], sessions[1], "two live sessions of the one principal");
-        // The chain's first two slots — ghosts until this round's mints land.
+        // The chain's first two addresses — ghosts until this round mints them.
         let (home, draft) = (ghost_doc(&account, 1), ghost_doc(&account, 2));
 
         // The start line: each thread counts itself in and spins on `go`,
@@ -189,7 +189,7 @@ fn two_concurrent_first_mints_below_the_daemon_bear_exactly_one_published_home()
             handles.into_iter().map(|h| h.join().expect("no mint panics")).collect()
         });
 
-        // One slot each, and the account's doc 1 went to the mint that
+        // One address each, and the account's doc 1 went to the mint that
         // committed first: the chain's order is the log's.
         let winner = minted.iter().position(|(doc, _)| *doc == home).unwrap_or_else(|| {
             panic!("round {rounds}: neither mint is {home}: {minted:?}")

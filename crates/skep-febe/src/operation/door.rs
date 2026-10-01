@@ -29,8 +29,8 @@ use skep_arrangement::published_target;
 use skep_namespace::PrincipalId;
 
 use super::{OperationSurface, WriteCtx};
-use crate::op::Op;
 use crate::reject::{rejection, FaultSite, RejectCode, Rejection};
+use crate::request::Op;
 use crate::successor::Judgment;
 use crate::world::FebeWorld;
 
@@ -240,12 +240,12 @@ pub(super) fn home_readable(a: &Address, readable: &dyn Fn(&Address) -> bool) ->
 ///
 /// [`OperationSurface::execute`]: crate::OperationSurface::execute
 pub fn consult_read(op: &Op, readable: &dyn Fn(&Address) -> bool) -> Result<(), Rejection> {
-    for arg in op.doc_arguments() {
-        if !readable(arg) {
+    for doc in op.doc_arguments() {
+        if !readable(doc) {
             return Err(Rejection::classified(
                 op.kind(),
                 RejectCode::Withheld,
-                Some(FaultSite { addr: Some(arg.clone()), ..FaultSite::default() }),
+                Some(FaultSite { addr: Some(doc.clone()), ..FaultSite::default() }),
             ));
         }
     }
@@ -300,8 +300,8 @@ impl Op {
     /// pinned over the whole `Op` domain in this module's tests rather than
     /// left to agree by hand.
     ///
-    /// Defined here, private to the door, where its two siblings in `op` are
-    /// public, and deliberately: a historical door re-runs
+    /// Defined here, private to the door, where its two siblings in `request`
+    /// are public, and deliberately: a historical door re-runs
     /// [`Op::doc_arguments`] over the head (PUB-6.49) and a transport may read
     /// [`Op::source_arguments`] before dispatch, but nothing outside this door
     /// re-runs the DEFERRAL, which exists to decide when M10's own door stays
@@ -670,8 +670,8 @@ mod tests {
     use skep_links::SlotArg;
 
     use super::*;
-    use crate::op::tests::all_ops;
-    use crate::op::SuccessorSpec;
+    use crate::request::tests::all_ops;
+    use crate::request::SuccessorSpec;
 
     fn tum(comps: &[u32]) -> Tumbler {
         Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty")
@@ -679,7 +679,7 @@ mod tests {
     fn addr(comps: &[u32]) -> Address {
         validate(tum(comps)).unwrap_or_else(|_| panic!("T4-valid test address"))
     }
-    fn sp() -> Span {
+    fn vspan() -> Span {
         Span::new(tum(&[1, 1]), tum(&[0, 1])).unwrap_or_else(|_| panic!("well-formed test span"))
     }
     fn vpos() -> VPos {
@@ -799,7 +799,7 @@ mod tests {
         let copy = Op::Copy {
             doc: d.clone(),
             at: vpos(),
-            specs: vec![VSpec { source: src, span: sp() }],
+            specs: vec![VSpec { source: src, span: vspan() }],
         };
         assert_eq!(copy.in_place_destination(), Some(&d));
     }

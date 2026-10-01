@@ -8,14 +8,14 @@ fn tum(comps: &[u32]) -> Tumbler {
 fn addr(comps: &[u32]) -> Address {
     validate(tum(comps)).unwrap_or_else(|_| panic!("T4-valid test address"))
 }
-fn sp() -> Span {
+fn vspan() -> Span {
     Span::new(tum(&[1, 1]), tum(&[0, 1])).unwrap_or_else(|_| panic!("well-formed test span"))
 }
 fn vpos() -> VPos {
     VPos { subspace: Nat::from(1u32), ordinal: Nat::from(1u32) }
 }
-fn vs() -> VSpec {
-    VSpec { source: addr(&[1, 0, 1, 0, 1]), span: sp() }
+fn vspec() -> VSpec {
+    VSpec { source: addr(&[1, 0, 1, 0, 1]), span: vspan() }
 }
 fn q() -> FourSet {
     FourSet { home: SlotSpec::Any, from: SlotSpec::Any, to: SlotSpec::Any, ty: SlotSpec::Any }
@@ -49,7 +49,7 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
             false,
         ),
         (Op::Delete { doc: doc(), p: vpos(), width: Nat::from(1u32) }, false),
-        (Op::Copy { doc: doc(), at: vpos(), specs: vec![vs()] }, false),
+        (Op::Copy { doc: doc(), at: vpos(), specs: vec![vspec()] }, false),
         (Op::Rearrange { doc: doc(), cuts: vec![vpos()] }, false),
         (Op::Version { d_src: doc(), published: None }, false),
         (
@@ -59,9 +59,9 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
         (
             Op::MakeLink {
                 home: doc(),
-                from: SlotArg::Resolve(vec![vs()]),
+                from: SlotArg::Resolve(vec![vspec()]),
                 to: SlotArg::Addrs(vec![doc()]),
-                ty: SlotArg::Resolve(vec![vs()]),
+                ty: SlotArg::Resolve(vec![vspec()]),
                 replaces: None,
             },
             false,
@@ -72,7 +72,7 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
         (
             Op::EditLink {
                 original: doc(),
-                successor: SuccessorSpec { from: vec![vs()], to: vec![vs()], ty: SlotArg::Addrs(vec![doc()]) },
+                successor: SuccessorSpec { from: vec![vspec()], to: vec![vspec()], ty: SlotArg::Addrs(vec![doc()]) },
                 d_s: doc(),
                 d_a: doc(),
             },
@@ -80,27 +80,27 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
         ),
         (Op::ReadLink { a: doc() }, true),
         (Op::FollowLink { a: doc(), slot: 1 }, true),
-        (Op::RetrieveV { specs: vec![Spec { doc: doc(), span: sp() }] }, true),
+        (Op::RetrieveV { specs: vec![Spec { doc: doc(), span: vspan() }] }, true),
         (Op::RetrieveDocVSpan { doc: doc() }, true),
         (Op::RetrieveDocVSpanSet { doc: doc() }, true),
-        (Op::ShowOrigin { doc: doc(), span: sp() }, true),
+        (Op::ShowOrigin { doc: doc(), span: vspan() }, true),
         (Op::ShowDeletions { d_a: doc(), d_b: doc() }, true),
         (
             Op::Compare {
-                rho1: vec![RegionSpec { doc: doc(), spans: vec![sp()] }],
+                rho1: vec![RegionSpec { doc: doc(), spans: vec![vspan()] }],
                 rho2: vec![],
             },
             true,
         ),
-        (Op::FindDocsContaining { regions: vec![RegionSpec { doc: doc(), spans: vec![sp()] }] }, true),
-        (Op::Image { d: doc(), region: vec![sp()] }, true),
-        (Op::FindLinksV { d: doc(), region: vec![sp()] }, true),
+        (Op::FindDocsContaining { regions: vec![RegionSpec { doc: doc(), spans: vec![vspan()] }] }, true),
+        (Op::Image { d: doc(), region: vec![vspan()] }, true),
+        (Op::FindLinksV { d: doc(), region: vec![vspan()] }, true),
         (Op::FindLinksFtt { q: q() }, true),
-        (Op::CountV { d: doc(), region: vec![sp()] }, true),
+        (Op::CountV { d: doc(), region: vec![vspan()] }, true),
         (Op::CountFtt { q: q() }, true),
-        (Op::WindowV { d: doc(), region: vec![sp()], cur: None, n: 1 }, true),
+        (Op::WindowV { d: doc(), region: vec![vspan()], cur: None, n: 1 }, true),
         (Op::WindowFtt { q: q(), cur: None, n: 1 }, true),
-        (Op::RetrieveEndsets { d: doc(), region: vec![sp()] }, true),
+        (Op::RetrieveEndsets { d: doc(), region: vec![vspan()] }, true),
         (Op::Project { a: doc(), slot: 1, d: doc() }, true),
         (Op::DiscoverableFrom { a: doc(), d: doc() }, true),
         (Op::DeleteOrphans { d: doc(), p: vpos(), width: Nat::from(1u32) }, true),
@@ -156,7 +156,7 @@ fn kind_is_injective_and_never_unparseable() {
 #[test]
 fn a_successor_spec_is_a_value_the_comparison_macros_accept() {
     let spec = |ordinal: u32| SuccessorSpec {
-        from: vec![vs()],
+        from: vec![vspec()],
         to: vec![],
         ty: SlotArg::Addrs(vec![addr(&[1, 0, 1, 0, ordinal])]),
     };
@@ -219,7 +219,7 @@ fn doc_arguments_run_in_declaration_order() {
     let op = Op::ShowDeletions { d_a: d1.clone(), d_b: d2.clone() };
     assert_eq!(op.doc_arguments(), vec![&d1, &d2]);
     let op = Op::Compare {
-        rho1: vec![RegionSpec { doc: d2.clone(), spans: vec![sp()] }],
+        rho1: vec![RegionSpec { doc: d2.clone(), spans: vec![vspan()] }],
         rho2: vec![
             RegionSpec { doc: d3.clone(), spans: vec![] },
             RegionSpec { doc: d1.clone(), spans: vec![] },
@@ -282,7 +282,7 @@ fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
     let d1 = addr(&[1, 0, 1, 0, 1]);
     let d2 = addr(&[1, 0, 1, 0, 2]);
     let d3 = addr(&[1, 0, 1, 0, 3]);
-    let spec = |d: &Address| VSpec { source: d.clone(), span: sp() };
+    let spec = |d: &Address| VSpec { source: d.clone(), span: vspan() };
 
     let op = Op::Copy { doc: d1.clone(), at: vpos(), specs: vec![spec(&d2), spec(&d3)] };
     assert_eq!(op.source_arguments(), vec![&d2, &d3], "copy: each spec's source, by index");

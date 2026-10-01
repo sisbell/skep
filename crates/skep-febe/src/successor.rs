@@ -23,8 +23,8 @@ use skep_links::{
 };
 use skep_namespace::M3State;
 
-use crate::op::{OpKind, SuccessorSpec};
 use crate::reject::{FaultSite, RejectCode, Rejection};
+use crate::request::{OpKind, SuccessorSpec};
 
 /// What the write door decided about a write's sources — `consult_write`'s
 /// answer — and so what may speak before the store does. Defined here, where
@@ -85,13 +85,13 @@ pub(crate) fn successor_link(
     let from = successor_slot(m3, m5, FROM, &successor.from, judgment)?;
     let to = successor_slot(m3, m5, TO, &successor.to, judgment)?;
     let ty = match &successor.ty {
-        SlotArg::Addrs(a) => {
-            if a.len() > MAX_SLOT_SPANS {
+        SlotArg::Addrs(addrs) => {
+            if addrs.len() > MAX_SLOT_SPANS {
                 return Err(slot_too_large(TYPE));
             }
-            enc(a)
+            enc(addrs)
         }
-        SlotArg::Resolve(v) => successor_slot(m3, m5, TYPE, v, judgment)?,
+        SlotArg::Resolve(specs) => successor_slot(m3, m5, TYPE, specs, judgment)?,
     };
     Ok(Link::triple(from, to, ty))
 }

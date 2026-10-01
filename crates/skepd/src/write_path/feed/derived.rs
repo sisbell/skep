@@ -21,7 +21,9 @@
 //!
 //! * a line is a JSON object built through the codec's key-sorting device,
 //!   newline-terminated; trust ends at the first line that is torn or does
-//!   not parse, and the file is truncated there at open;
+//!   not parse, and the file is truncated there at open — a [`LineFile`]'s
+//!   cut named on the operator stream, since in the attest store it can take
+//!   primary state with it;
 //! * a record above the journal's head, or a fence above it, describes a
 //!   different journal (an operator swapped files under the sidecar) and is
 //!   dropped — and the file rewritten without it, so a journal that later
@@ -144,7 +146,8 @@ pub(super) struct LineFile {
 pub(super) type Entries = Vec<(u64, Map<String, Value>)>;
 
 impl LineFile {
-    /// Replay `name` in `dir` a line at a time: truncate a torn tail, drop
+    /// Replay `name` in `dir` a line at a time: truncate at the first line
+    /// that is torn or does not parse, saying so on the operator stream, drop
     /// what describes another journal (rewriting the file without it), and
     /// hand back the entries at or below `head` that `keep` admits, with the
     /// file's coverage — which counts every trusted line, kept or not.
@@ -187,7 +190,14 @@ impl LineFile {
             }
         }
         drop(reader);
-        if valid_end < file.metadata()?.len() {
+        let len = file.metadata()?.len();
+        if valid_end < len {
+            // Said, never silent: in the attest store the cut can take
+            // primary state with it, below the floor.
+            crate::notice::line(format_args!(
+                "{name}: trust ends at byte {valid_end} of {len}; the {} bytes after it are cut",
+                len - valid_end
+            ));
             file.set_len(valid_end)?;
         }
         let mut this =

@@ -68,6 +68,35 @@ fn tumbler_digit_and_depth_caps_admit_their_maximum() {
     assert!(e.0.contains("component"), "the refusal names the depth cap: {e}");
 }
 
+/// The digit cap is a DECIMAL NATURAL's, not a tumbler component's alone: a
+/// natural field — a `delete`'s `width`, a V-position's `ordinal`, a shot
+/// run's `width`, a `base_extent` — is parsed through the same
+/// [`p_nat_str`], so it meets [`MAX_NAT_DIGITS`] at both ends, and the
+/// refusal names a natural, never a component the field is not. What
+/// [`JsonCodec::marshal_request`]'s precondition names per decimal natural is
+/// this, at the frame.
+#[test]
+fn a_natural_field_meets_the_digit_cap_at_both_ends() {
+    let at_cap = "9".repeat(MAX_NAT_DIGITS);
+    let n = p_nat(&Value::String(at_cap.clone())).expect("a natural at the digit cap parses");
+    assert_eq!(n.to_string(), at_cap, "and survives whole");
+    let e = p_nat(&Value::String("9".repeat(MAX_NAT_DIGITS + 1)))
+        .expect_err("one digit past the cap must not parse");
+    assert!(e.0.contains("natural has") && e.0.contains("digit wire cap"), "{e}");
+    let frame = |width: &str| {
+        format!(
+            r#"{{"op":"delete","doc":"1.0.1.0.1","p":{{"subspace":"1","ordinal":"1"}},"width":"{width}"}}"#
+        )
+    };
+    assert!(parse_request(frame(&at_cap).as_bytes()).is_ok(), "a width at the cap is a frame");
+    // `Request` derives no Debug upstream, so unwrap the failure by hand.
+    let e = match parse_request(frame(&"9".repeat(MAX_NAT_DIGITS + 1)).as_bytes()) {
+        Err(e) => e,
+        Ok(_) => panic!("a width one digit past the cap must not parse"),
+    };
+    assert!(e.0.contains("field 'width'") && e.0.contains("digit wire cap"), "{e}");
+}
+
 /// [`wire_address`] is BOTH steps that make a wire address: the capped
 /// tumbler parse and M1's T4 refinement. Composing them once is the
 /// point, so this pins that each step is present and that neither face

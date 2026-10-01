@@ -398,10 +398,15 @@ impl Daemon {
     /// one world diff, for the position's class) each, up to the retained
     /// window (`CHECKPOINT_EVERY_COMMITS` × `RETAINED_CHECKPOINTS`).
     /// `CommitsLog::open` states that bound; `Feed::open` the derived
-    /// sidecars' own, O(their files) plus O(any missing tail). The
-    /// identity fold is the other: [`Daemon::open_with`] rebuilds it from
-    /// the recovered world, which reads every link in it —
-    /// [`crate::auth::fold::canonical_identity`] states that bound.
+    /// sidecars' own, O(their files) plus O(any missing tail); and the attest
+    /// store's open inside it (`write_path/feed/attest.rs`'s
+    /// `AttestStore::open`) is O(its file) — the one feed file the journal's
+    /// retention does not bound, a line for every attested commit the board
+    /// has ever made, never compacted — plus one bounded journal scan per
+    /// uncovered retained position. The identity fold is the other:
+    /// [`Daemon::open_with`] rebuilds it from the recovered world, which
+    /// reads every link in it — [`crate::auth::fold::canonical_identity`]
+    /// states that bound.
     pub fn open(data_dir: impl AsRef<Path>) -> Result<Daemon, DaemonError> {
         Daemon::open_with(data_dir, AuthOptions::default())
     }

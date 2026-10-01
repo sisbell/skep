@@ -414,6 +414,19 @@ pub fn attest_member(sig: &[u8]) -> Value {
     json!({"alg": SigAlgRow::of_tag(FIXTURE_TAG).expect("tag 1").token, "sig": hex(sig)})
 }
 
+/// `frame` with an `attest` member attached that verifies over no frame —
+/// the fixtures' row at its width exactly, every byte zero: what a cell sends
+/// where the check must reach its composition — (1) stands ahead of it, so
+/// an unattested frame never does — and the answer must not turn on a
+/// signature: the store's own refusal, which the check passes such a write
+/// through to whatever it carries.
+pub fn with_unverifiable_attest(frame: &str) -> String {
+    let mut v: Value = serde_json::from_str(frame).expect("a JSON frame");
+    let width = SigAlgRow::of_tag(FIXTURE_TAG).expect("tag 1").sig_len();
+    v["attest"] = attest_member(&vec![0u8; width]);
+    v.to_string()
+}
+
 // ── the record grade (signed ops, 2a) ───────────────────────────────────────
 //
 // A credential record's `sig` rides INSIDE its atom, made over the entry

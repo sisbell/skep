@@ -717,10 +717,10 @@ fn the_pointwise_pair_floats_to_the_trunk_head_and_delete_orphans_reads_the_addr
 /// wrong guess, the answer is the same, the write-path check reading no
 /// value the caller may not read. Since the address form (l6-A4,
 /// 2026-09-29) such a run is a WINDOW the check composes by address, unread,
-/// so an UNATTESTED shot naming one meets the check's own
-/// `attestation_required` ahead of the store's gate — the one cell that
-/// moved; the signed cells answer the store's `withheld` as before. A
-/// readable origin is placed as a window that answers its origin.
+/// and an UNATTESTED shot naming one — as every unattested shot, (1) standing
+/// ahead of the composition — meets the check's own `attestation_required`
+/// ahead of the store's gate; the signed cells answer the store's `withheld`.
+/// A readable origin is placed as a window that answers its origin.
 #[test]
 fn the_source_gate_answers_behind_ownership_and_ahead_of_existence() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -963,12 +963,17 @@ fn the_birth_version_is_one_commit_and_a_refused_shot_leaves_no_residue() {
     let member = format!("{e}.1");
 
     let before = head(port);
+    let refused =
+        publish(&e, None, Some(&d), &[run(&d, &d_text, 3), run(&d, &format!("{d}.0.1.9"), 1)]);
+    // Unattested, the check's (1) answers ahead of the composition, and so
+    // ahead of the existence walk (the design record §4.5, ratified m1:
+    // `attestation_required` BEFORE `dangling_source`).
+    let v = op_as_written(port, Some(&signed), &refused);
+    assert_eq!(verdict(&v), "credential_refused:attestation_required", "{v}");
+    // Attested — by a member no frame verifies, since none composes over a
+    // value M4 does not hold — the store's own existence walk refuses it.
     assert_refused(
-        &op(
-            port,
-            Some(&signed),
-            &publish(&e, None, Some(&d), &[run(&d, &d_text, 3), run(&d, &format!("{d}.0.1.9"), 1)]),
-        ),
+        &op_as_written(port, Some(&signed), &with_unverifiable_attest(&refused)),
         "dangling_source",
     );
     assert_eq!(head(port), before, "no commit");

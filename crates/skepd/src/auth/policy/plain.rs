@@ -345,11 +345,16 @@ fn published(world: &World, doc: &Address) -> bool {
 ///
 /// THE ANSWER IS WHAT REACHES THE STORE: `Ok(Some(a))` is an attestation
 /// the check VERIFIED, to be written into this write's marker slot;
-/// `Ok(None)` is a write that commits with the marker slot EMPTY — no
-/// `attest` demanded, or one DROPPED, never verified and never written: off
-/// the publish class (D1's third arm) or on the UNCLAIMED board (A5: the
+/// `Ok(None)` is a write that reaches the store with the marker slot EMPTY —
+/// no `attest` demanded, or one DROPPED, never verified and never written:
+/// off the publish class (D1's third arm); on the UNCLAIMED board (A5: the
 /// ceremony's own span, where an `attest` a cautious client attached could
-/// verify under no key). The marker slot's producer set is stated here in
+/// verify under no key); on the claimed board where the check stands aside
+/// — outside the checked set, at a credential record deposit's atom (D26:
+/// the record's own `sig` is its carrier), at a system-owned home (A3); and
+/// where the check passes an ATTESTED write through to a store refusal no
+/// signature changes (`attestation_check`'s doc item 6), where nothing
+/// commits. The marker slot's producer set is stated here in
 /// code: a dispatched publish-class write above the claim whose PRESENTED
 /// `attest` this admission verified, and nothing else — which holds because
 /// the codec hands the member over BESIDE the request and not inside it

@@ -232,10 +232,10 @@ impl Daemon {
         // op, and what reaches the store is what they ADMITTED — the value
         // the check verified against the fold's key set at this base, or
         // nothing. `Request::attest` held nothing until the assignment below
-        // — the codec split the member out at parse — so a member the check
-        // DROPPED (off the publish class; at or below the claim, A5) never
-        // reaches a handle, and no later layer can fill the marker slot of a
-        // write the producer set excludes.
+        // — the codec split the member out at parse — so a member the
+        // admission DROPPED (`board_state_admission`'s card lists every arm
+        // that drops one) never reaches a handle, and no later layer can fill
+        // the marker slot of a write the producer set excludes.
         let admitted = match plain_admission(
             &credential_lock,
             snap.world(),

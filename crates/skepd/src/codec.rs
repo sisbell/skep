@@ -136,7 +136,12 @@ const MAX_WIRE_LIST: usize = MAX_SLOT_SPANS;
 /// before either.
 const MAX_INSERT_VALUES: usize = 1 << 18;
 
-/// The most decimal digits one tumbler component may carry on the wire.
+/// The most decimal digits one decimal NATURAL may carry on the wire — a
+/// tumbler component, and every natural field alike (a `width`, a
+/// V-position's `subspace` and `ordinal`, a shot run's `width`, a
+/// `base_extent`): both doors, [`wire_tumbler`] and [`p_nat`], parse a
+/// decimal through [`p_nat_str`], which spends this.
+///
 /// M1 leaves component magnitude unbounded (T0(a)) and this does not narrow
 /// that: the carrier stays a `BigUint`, and M3 — which owns the one door by
 /// which caller-chosen component values enter the permanent name space —
@@ -149,6 +154,9 @@ const MAX_INSERT_VALUES: usize = 1 << 18;
 /// copies the start tumbler and computes its reach — so one span carrying a
 /// D-digit component costs order D bytes of allocator traffic per link in
 /// the store, per query span. That is the amplification a digit cap closes.
+/// A natural FIELD meets the same cap through [`p_nat`]: the per-comparison
+/// argument above is a tumbler's, and what bounds every decimal alike is the
+/// radix conversion, which [`p_nat_str`] refuses before it runs.
 ///
 /// 4096 digits is far above anything the substrate can mint: every ordinal
 /// M3 allocates is bounded by the commit count, and every address under a
@@ -158,8 +166,9 @@ const MAX_INSERT_VALUES: usize = 1 << 18;
 /// a component that would take 10^4000 commits to reach cannot be one a
 /// caller needs to name.
 ///
-/// PRIVATE, and that is the point: it is spent at [`wire_tumbler`] and
-/// nowhere else, so a route that admits a tumbler goes through that door
+/// PRIVATE, and that is the point: it is spent at [`p_nat_str`] and nowhere
+/// else — the one decimal parse [`wire_tumbler`] and [`p_nat`] both call —
+/// so a route that admits a tumbler or a natural goes through those doors
 /// rather than reassembling this budget beside another module's grammar.
 const MAX_NAT_DIGITS: usize = 4096;
 
@@ -242,8 +251,9 @@ impl JsonCodec {
     ///
     /// PRECONDITION: `req` is within the wire caps this codec enforces on
     /// parse — [`MAX_WIRE_LIST`] elements per array, [`MAX_INSERT_VALUES`]
-    /// minted values per `insert`, [`MAX_NAT_DIGITS`] per tumbler
-    /// component, [`MAX_TUMBLER_COMPONENTS`] per tumbler,
+    /// minted values per `insert`, [`MAX_NAT_DIGITS`] per decimal natural (a
+    /// tumbler component or a natural field), [`MAX_TUMBLER_COMPONENTS`] per
+    /// tumbler,
     /// [`MAX_REQ_ID_BYTES`] per idempotency id,
     /// [`MAX_MINTED_PRINCIPAL_ID`] for a `delegate`'s `new_id` — carries no
     /// zero-byte `Val`, which `marshal::j_atom` renders as `{"atom": ""}` and
@@ -261,7 +271,8 @@ impl JsonCodec {
     /// this is the parse side's trust-boundary obligation and this direction
     /// does not re-check it (one check, one owner). The upstream value types
     /// admit every violation — `Endset::from_spans` takes any span count,
-    /// T0(a) leaves a component's magnitude unbounded by design, `Val::new`
+    /// T0(a) leaves a component's magnitude unbounded by design and a `Nat`
+    /// field is unbounded by its type, `Val::new`
     /// takes any bytes, `PrincipalId` is any `u64`, `ReqId`'s field is
     /// public, and `Request::attest` rides any op under any tag
     /// `Attestation::new` admits — so a caller assembling a `Request` by hand
@@ -917,17 +928,18 @@ fn p_nat(v: &Value) -> PResult<Nat> {
     }
 }
 
-/// One decimal component. The [`MAX_NAT_DIGITS`] refusal comes BEFORE the
-/// radix conversion, so a hostile digit run is never converted — the
-/// conversion is the expensive half, and refusing after it would pay
-/// exactly the cost the cap exists to avoid.
+/// One decimal natural — a tumbler component or a natural field. The
+/// [`MAX_NAT_DIGITS`] refusal comes BEFORE the radix conversion, so a
+/// hostile digit run is never converted — the conversion is the expensive
+/// half, and refusing after it would pay exactly the cost the cap exists to
+/// avoid.
 fn p_nat_str(s: &str) -> PResult<Nat> {
     if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
         return Err(PErr(format!("'{}' is not a decimal natural", bounded(s))));
     }
     if s.len() > MAX_NAT_DIGITS {
         return Err(PErr(format!(
-            "component has {} digits, past the {MAX_NAT_DIGITS}-digit wire cap",
+            "natural has {} digits, past the {MAX_NAT_DIGITS}-digit wire cap",
             s.len()
         )));
     }

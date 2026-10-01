@@ -17,7 +17,7 @@ use skep_identity::{
 use skep_links::SlotArg;
 use skep_namespace::HasM3;
 
-use super::{addr_spans, AttestFault, CredentialRefusal};
+use super::{addr_spans, deposits_credential_link, AttestFault, CredentialRefusal};
 use crate::auth::entry;
 use crate::auth::fold::{identity_types, WorldCtx};
 use crate::auth::session::{keyed_above, opening_account, HybridSig, Scope};
@@ -87,7 +87,19 @@ const MAX_DECODED_KEYS: usize = MAX_GENESIS_KEYS + 1;
 /// KIND, so the member names a state no credential record replaces and the
 /// record's `sig`, made over the empty row, could cover no link it would
 /// deposit. A shape fact of the frame, so it sits here with the other two.
+///
+/// PRECONDITION: `deposits_credential_link(op)` holds — the credential
+/// sequence's route, this function's one caller (`server/op.rs`'s
+/// `credential_sequence`). The arms read no type slot: every `emit` and
+/// every `edit_link` is refused unconditionally, which is true of a
+/// CREDENTIAL-typed one alone, so on any other op this answers a refusal no
+/// rule gives it. The debug assert is what makes the premise loud where a
+/// test can see it; the route is the one place it is discharged.
 pub(crate) fn op_shape_refusal(op: &Op) -> Option<CredentialRefusal> {
+    debug_assert!(
+        deposits_credential_link(op),
+        "op_shape_refusal's precondition: a credential-typed deposit, the credential route's"
+    );
     match op {
         // (1) — every credential-typed emit, unconditionally: M7's dedup
         // could hand a phantom ack for an act key_set never shows.
@@ -506,7 +518,11 @@ pub(crate) fn precheck(
 ///    own H) and the home, the link's type and target addresses read off the
 ///    deposit's slots as a mirror reads them off the stored link, the
 ///    `replaces` and lineage rows EMPTY, and the sig-less projection
-///    `canonical_record(entries, None)`.
+///    `canonical_record(entries, None)`. The home's account and the type
+///    address are both read off what slot (3) established — the fold's
+///    classify found the home an owner, and its `kind_of` read the type slot
+///    as the one span `single_address` reads — so an absence is a premise
+///    broken, answered fail-closed and asserted.
 /// 5. THE CANDIDATES (clause (a), AT WHICH STATE clause (b)): the enrolled
 ///    keys of THE SET THAT OPENS THE HOME'S ACCOUNT — [`opening_account`]'s
 ///    walk, the one `key_subject` takes: the home's own set where it is not
@@ -571,11 +587,16 @@ fn record_grade_check(
     // answer, the fold's own H (slot (3) found one, so this is `Some`),
     // borrowed off the snapshot as every read here is; the slots are read as
     // a mirror reads a stored link's: one address each, the `to` slot empty
-    // at a targetless kind.
+    // at a targetless kind. The type slot is the one `kind_of` read at
+    // slot (3) — one span, a type's own subtree — so it reads as an address:
+    // both premises of slot (3)'s verdict, answered fail-closed and asserted,
+    // as step 1's is.
     let Some(home_account) = world.m3().effective_owner_prefix(&dep.home) else {
+        debug_assert!(false, "slot (3) honored a deposit whose home has no owner");
         return Err(invalid(AttestFault::NotEnrolledAtPosition));
     };
     let Some(ty) = single_address(&dep.ty) else {
+        debug_assert!(false, "slot (3) classified a type slot single_address cannot read");
         return Err(invalid(AttestFault::Signature));
     };
     let to = single_address(&dep.to);
@@ -739,6 +760,26 @@ mod tests {
             None,
             "no claimant for the field to differ from"
         );
+    }
+
+    /// `op_shape_refusal`'s PRECONDITION IS MONITORED: its arms read no type
+    /// slot, so on an op the credential route never sends it — a GRANT-typed
+    /// `emit`, which its arm would refuse unconditionally — it would answer a
+    /// refusal no rule gives, and a debug build stops instead. The route is
+    /// the one place the premise is discharged; this pins that it is loud.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "op_shape_refusal's precondition")]
+    fn op_shape_refusal_stops_on_an_op_the_credential_route_never_sends() {
+        let doc = addr_of(&[1, 0, 1, 0, 1]);
+        let grant_type = addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 90]);
+        let grant_emit = Op::Emit {
+            home: doc.clone(),
+            ty: skep_links::enc([&grant_type]),
+            from: doc,
+            to: Vec::new(),
+        };
+        let _ = op_shape_refusal(&grant_emit);
     }
 
     /// A CLAIMED BOARD WITH NO `H.1` ANSWERS A JUDGED RECORD

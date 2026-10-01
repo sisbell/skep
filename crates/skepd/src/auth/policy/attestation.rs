@@ -18,6 +18,7 @@ use super::{addr_spans, record_deposit_kind, AttestFault, CredentialRefusal};
 use crate::auth::entry::{self, ComposeFault};
 use crate::auth::session::key_subject;
 use crate::history::detached_kernel;
+use crate::write_path::board_term;
 use crate::World;
 
 /// THE WRITE-PATH CHECK (signed ops; the design record §4.5 (1)–(2) made
@@ -50,21 +51,31 @@ use crate::World;
 ///    round 5 rulings 2026-09-26) — and never by the `"system"` testimony.
 ///    The head writer never passes dispatch, so this arm is stated for a
 ///    dispatched write that names one and is met by none today.
-/// 4. THE ENTRY FRAME, composed from the op and the snapshot
-///    (`crate::auth::entry`) — every member but `alg`, which only the
-///    presented member names — BEFORE the member is asked for, so a write
-///    no entry frame can be composed for is told what it is whatever it
-///    carries: a `publish` COPYING IN an address with no value passes
-///    UNATTESTED to the store's own `dangling_source`; a `publish` copying
-///    in a staging draft's run whose document the principal may not read is
-///    never composed, and what the shot is owed is decided here by asking
-///    the store's own gates on a detached kernel
-///    ([`refused_at_or_before_the_source_gate`]) — UNATTESTED to the store's
-///    own refusal where they refuse it (`withheld`, or an answer ahead of the
-///    source gate), `attestation_invalid:withheld` where they would admit it,
-///    the base carrying the run (a WINDOW is signed by address since the
-///    address form, l6-A4, and never raises this: the store's gate alone
-///    decides it, after the signature); a body past
+/// 4. THE BOARD TERM, `H.1`'s pair ([`crate::write_path::board_term`]), read
+///    BEFORE the member is asked for: a board with no `H.1` — the states
+///    `board_term` names — answers `attestation_invalid:board_unavailable`,
+///    never "carry an attest", since no client can sign over a term the board
+///    lacks.
+/// 5. (1): no `attest` → `attestation_required`, AHEAD OF THE COMPOSITION
+///    (the design record §4.5's head, ratified round 5 rulings 2026-09-26,
+///    owner "keep", m1 — "an unsigned publish that also names a missing
+///    source answers `attestation_required` BEFORE `dangling_source`";
+///    SO-I7 (f), SO-I9 (a)): every unsigned write of the checked set above
+///    the claim is told this one thing whatever its body names, and pays no
+///    walk of a shot's values to be told it.
+/// 6. THE ENTRY FRAME, composed for an ATTESTED write alone, from the op, the
+///    snapshot and the board term (`crate::auth::entry`) — every member but
+///    `alg`, which only the presented member names: a `publish` COPYING IN
+///    an address with no value passes UNATTESTED to the store's own
+///    `dangling_source`; a `publish` copying in a staging draft's run whose
+///    document the principal may not read is never composed, and what the
+///    shot is owed is decided here by asking the store's own gates on a
+///    detached kernel ([`refused_at_or_before_the_source_gate`]) — UNATTESTED
+///    to the store's own refusal where they refuse it (`withheld`, or an
+///    answer ahead of the source gate), `attestation_invalid:withheld` where
+///    they would admit it, the base carrying the run (a WINDOW is signed by
+///    address since the address form, l6-A4, and never raises this: the
+///    store's gate alone decides it, after the signature); a body past
 ///    `entry::MAX_SHOT_BODY_BYTES` answers
 ///    `attestation_invalid:frame_too_large` before it is built past the
 ///    budget; a term the frame cannot spell — a width, an extent or a count
@@ -72,13 +83,12 @@ use crate::World;
 ///    (`base_extent_too_large`, `too_many_values`, `dangling_source`); a shot
 ///    whose staging-draft runs re-insert more values than M5's
 ///    `MAX_REINSERTED_VALUES` passes UNATTESTED to the store's
-///    `too_many_values`, its values never walked; a
-///    board with no `H.1` — the states [`crate::write_path::board_term`]
-///    names — answers `attestation_invalid:board_unavailable`, never "carry
-///    an attest"; a principal with no account answers
-///    `attestation_invalid:not_enrolled_at_position`.
-/// 5. (1): no `attest` → `attestation_required`.
-/// 6. (2): the member's marker tag names its row (a tag no row names is
+///    `too_many_values`, its values never walked; a principal with no
+///    account answers `attestation_invalid:not_enrolled_at_position`. A write
+///    passed through UNATTESTED here DROPS the member it presented — never
+///    verified, never written — and is one the store refuses, each passing
+///    arm's premise, so nothing commits unattested.
+/// 7. (2): the member's marker tag names its row (a tag no row names is
 ///    `malformed`), whose token is the entry frame's `alg`; the blob's width
 ///    under it; the KEY SET that OPENS the act's principal AS OF this base
 ///    (AUTH-4.30 (i)'s walk, `key_subject`) — the fold's own set at this
@@ -128,13 +138,22 @@ pub(super) fn attestation_check(
     if system_owned(world, op) {
         return Ok(None);
     }
-    // 4 — THE ENTRY FRAME, every member but `alg`, composed BEFORE the
-    // member is asked for; what each fault is answered is doc item 4's.
-    // `alg` is the member's own, so it waits for step 6.
     let invalid = CredentialRefusal::AttestationInvalid;
-    let entry_frame = match entry::compose(world, op, principal) {
+    // 4 — THE BOARD TERM, ahead of the member: with none, no client can sign.
+    let Some(board) = board_term(world) else {
+        return Err(invalid(AttestFault::BoardUnavailable));
+    };
+    // 5 — (1), AHEAD OF THE COMPOSITION (the design record §4.5's ratified
+    // order): an unsigned write is told this whatever its body names, and
+    // pays no walk of a shot's values to be told it.
+    let Some(presented) = presented else {
+        return Err(CredentialRefusal::AttestationRequired);
+    };
+    // 6 — THE ENTRY FRAME, every member but `alg`, for an attested write
+    // alone; what each fault is answered is doc item 6's. `alg` is the
+    // member's own, so it waits for step 7.
+    let entry_frame = match entry::compose(world, op, principal, board) {
         Ok(entry_frame) => entry_frame,
-        Err(ComposeFault::NoBoardTerm) => return Err(invalid(AttestFault::BoardUnavailable)),
         Err(ComposeFault::NoAccount) => return Err(invalid(AttestFault::NotEnrolledAtPosition)),
         Err(ComposeFault::UnreadableCopiedRunOrigin) => {
             return if refused_at_or_before_the_source_gate(world, op, principal) {
@@ -154,11 +173,7 @@ pub(super) fn attestation_check(
             | ComposeFault::PastReinsertBudget,
         ) => return Ok(None),
     };
-    // 5 — (1).
-    let Some(presented) = presented else {
-        return Err(CredentialRefusal::AttestationRequired);
-    };
-    // 6 — (2): the member's marker tag names its row, whose token is the
+    // 7 — (2): the member's marker tag names its row, whose token is the
     // entry frame's `alg`.
     let row = SigAlgRow::of_tag(presented.sig_alg()).ok_or(invalid(AttestFault::Malformed))?;
     if presented.sig().len() != row.sig_len() {
@@ -347,10 +362,11 @@ mod tests {
     /// dispatch, so no wire write meets A3). D26 and the checked set stand
     /// aside ahead of the entry frame too. Every other checked write answers
     /// `attestation_invalid:board_unavailable` with NO attest presented — the
-    /// entry frame is composed before the member is asked for, so the absent
-    /// term is told as its own cause, never as `attestation_required` — a
-    /// declared deposit of NO credential kind included. And the token and its
-    /// class are the wire's.
+    /// board term is read before the member is asked for (the design record
+    /// §4.5's order: `board_unavailable` and (1) ahead of the composition), so
+    /// the absent term is told as its own cause, never as
+    /// `attestation_required` — a declared deposit of NO credential kind
+    /// included. And the token and its class are the wire's.
     #[test]
     fn a_board_with_no_h1_answers_board_unavailable_except_where_the_check_stands_aside() {
         use skep_arrangement::VPos;

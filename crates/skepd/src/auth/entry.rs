@@ -9,7 +9,9 @@
 //!   member the snapshot does not supply, so it is applied last
 //!   ([`EntryFrame::to_bytes`]);
 //! * `board` — the BOARD TERM ([`BoardTerm`]), `H.1`'s committed pair (D13,
-//!   RULED), read off the snapshot by [`crate::write_path::board_term`];
+//!   RULED), read off the snapshot by [`crate::write_path::board_term`] — by
+//!   the check, ahead of the member, and handed to [`compose`]; by
+//!   [`compose_record`] itself;
 //! * `account` — the act's principal's account in the board's local form,
 //!   M3's `principal_prefix`;
 //! * `doc` — per op cell: the TRUNK of the op's `doc` for `insert` and
@@ -37,7 +39,7 @@
 //! [`ComposeFault`] that names its reason, and no more: what the write is
 //! then OWED — passed through to the store's own refusal, or refused as its
 //! own cause — is the check's to decide, and is stated there alone
-//! (`policy/attestation.rs`'s `attestation_check`, its doc item 4).
+//! (`policy/attestation.rs`'s `attestation_check`, its doc item 6).
 //!
 //! * a body whose values it does not hold — a copied run naming an address
 //!   M4 has no value at ([`ComposeFault::MissingValue`]). (A window's
@@ -104,10 +106,6 @@ const MAX_SHOT_BODY_BYTES: usize = crate::limits::MAX_REQUEST_BODY;
 /// answer (`policy/attestation.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ComposeFault {
-    /// The entry frame's `board` term (D13) has no value: the board has no
-    /// `H.1` — on a claimed board, one of the two states [`board_term`]
-    /// names.
-    NoBoardTerm,
     /// The principal has no account prefix — no `account` term.
     NoAccount,
     /// A `publish`'s COPIED run names an address the snapshot holds no value
@@ -162,12 +160,14 @@ impl<'a> Slot<'a> {
     }
 }
 
-/// THE ENTRY FRAME for `op` by `principal` on `world` — every member the op
-/// and the snapshot supply, composed once — or why it cannot be composed.
-/// `alg` is not among them: it is the presented attestation's own, applied
-/// last ([`EntryFrame::to_bytes`]), so the check learns whether an entry frame
-/// CAN be composed before it asks for the member, and names no token for a
-/// write that presents none.
+/// THE ENTRY FRAME for `op` by `principal` on `world`, over the board term
+/// `board` the check read — every member the op and the snapshot supply,
+/// composed once — or why it cannot be composed. `alg` is not among them: it
+/// is the presented attestation's own, applied last ([`EntryFrame::to_bytes`]).
+/// The check asks this for a write that PRESENTS a member alone — the board
+/// term and (1)'s missing-member refusal stand ahead of the composition (the
+/// design record §4.5's ratified order) — so no unsigned write pays the walk
+/// a shot's body costs.
 ///
 /// PRECONDITION: `op` is of the checked set ([`crate::codec::in_checked_set`]),
 /// and every op of that set has an arm below. The first half is
@@ -175,19 +175,18 @@ impl<'a> Slot<'a> {
 /// the one membership check, which this function does not repeat; the
 /// second half is this function's own. Either broken — an op outside the
 /// set, or the set widened without its arm — is never answered as a fault:
-/// once the board term and the account are read it STOPS LOUDLY in every
-/// build, because no refusal the check can give is true of a build whose two
-/// tables disagree, and passing the write through would commit it with its
-/// marker slot empty — the silent drop the checked set's card rules out. The
-/// check runs before the transaction, under locks that do not poison, so
-/// under [`crate::serve`] the stop is a `500 internal_panic` that commits
-/// nothing.
+/// once the account is read it STOPS LOUDLY in every build, because no
+/// refusal the check can give is true of a build whose two tables disagree,
+/// and passing the write through would commit it with its marker slot empty
+/// — the silent drop the checked set's card rules out. The check runs before
+/// the transaction, under locks that do not poison, so under [`crate::serve`]
+/// the stop is a `500 internal_panic` that commits nothing.
 pub(super) fn compose(
     world: &World,
     op: &Op,
     principal: PrincipalId,
+    board: BoardTerm,
 ) -> Result<EntryFrame, ComposeFault> {
-    let board = board_term(world).ok_or(ComposeFault::NoBoardTerm)?;
     let account = world.m3().principal_prefix(principal).ok_or(ComposeFault::NoAccount)?.clone();
     let (doc, body) = match op {
         Op::Insert { doc, values, deposit, .. } => {
@@ -429,22 +428,18 @@ mod tests {
         );
     }
 
-    /// COMPOSE'S PRECONDITION IS NEVER ANSWERED AS A FAULT: on a board whose
-    /// `H.1` stands, for a principal with a prefix — the two terms read ahead
-    /// of the op — an op outside the checked set STOPS LOUDLY. A fault here
-    /// would be one the check passes through, committing the write with its
-    /// marker slot empty — the silent drop the checked set's card rules out —
-    /// and no refusal the check could give is true of a build whose two tables
-    /// disagree.
+    /// COMPOSE'S PRECONDITION IS NEVER ANSWERED AS A FAULT: for a principal
+    /// with a prefix — the account term read ahead of the op — an op outside
+    /// the checked set STOPS LOUDLY. A fault here would be one the check
+    /// passes through, committing the write with its marker slot empty — the
+    /// silent drop the checked set's card rules out — and no refusal the check
+    /// could give is true of a build whose two tables disagree.
     #[test]
     #[should_panic(expected = "compose's precondition")]
     fn an_op_outside_the_checked_set_stops_compose_loudly() {
-        use skep_address::{Nat, Tumbler};
         use skep_arrangement::VPos;
         use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
         use skep_namespace::{head_document, BOOTSTRAP_PRINCIPAL};
-
-        use crate::write_path::WritePath;
 
         let engine = skep_engine::Engine::open(KernelConfig {
             durability: Durability::InMemory,
@@ -452,20 +447,18 @@ mod tests {
             salt: SaltSource::Seeded(0),
         })
         .expect("in-memory genesis cannot fail");
-        let dir = tempfile::tempdir().expect("tempdir");
-        let writes = WritePath::open(dir.path(), &engine).expect("the change feed opens");
-        // One commit, so the first head has a position to name; then `H.1`.
-        let node = Tumbler::new([1u32, 9001].map(Nat::from)).expect("a two-component tumbler");
-        engine.namespace().register_node(node).expect("a fresh node registers");
-        assert!(writes.write_first_head(&writes.serial_lock()), "H.1 lands");
         let snap = engine.kernel().snapshot();
         let world = snap.world();
-        assert!(board_term(world).is_some(), "the board term stands");
+        assert!(
+            world.m3().principal_prefix(BOOTSTRAP_PRINCIPAL).is_some(),
+            "the premise: genesis seats principal 0, so its account term is read"
+        );
+        let board = BoardTerm { log_position: 1, chain: [0; 32] };
         let delete = Op::Delete {
             doc: head_document(),
             p: VPos::content(Nat::from(1u32)),
             width: Nat::from(1u32),
         };
-        let _ = compose(world, &delete, BOOTSTRAP_PRINCIPAL);
+        let _ = compose(world, &delete, BOOTSTRAP_PRINCIPAL, board);
     }
 }

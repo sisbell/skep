@@ -19,12 +19,18 @@
 //! derived sidecars drop their entries below the floor at open, this file
 //! KEEPS them), neither prunable nor rebuildable, backed up by location with
 //! the board directory as `blobs/` is, its loss served as `null`. The
-//! coverage fence, the torn-tail truncation, the foreign-line purge and the
-//! stop on a failed append apply above the floor as in the four. At HEAD no
-//! read serves a below-floor slot (`/changes` answers `410
-//! history_reclaimed` below the feed's floor): the lines below it are kept
-//! for a read that does not yet exist, the class being the design record's
-//! and not this build's to narrow.
+//! coverage fence, the foreign-line purge and the stop on a failed append
+//! apply as in the four, and so does the TRUNCATION, which does not stop at
+//! the floor: trust ends at the first line that is torn or does not parse
+//! ([`LineFile::open`]), and every line after it is cut — below the floor
+//! too, where each was an entry signature's only copy. A crash tears the
+//! file's newest lines, at the head's end, which the journal still answers and
+//! the open rebuilds; a cut that reaches below the floor is damage to the
+//! file, and the open names every cut on the operator stream so the board
+//! directory's backup can be restored. At HEAD no read serves a below-floor
+//! slot (`/changes` answers `410 history_reclaimed` below the feed's floor):
+//! the lines below it are kept for a read that does not yet exist, the class
+//! being the design record's and not this build's to narrow.
 //!
 //! What keeps the class is this card's privacy: [`AttestStore`]'s file is its
 //! own, and nothing rewrites it but [`LineFile::open`]'s purge of the lines
@@ -152,11 +158,13 @@ fn attest_fields(a: &Attestation) -> Vec<(&'static str, Value)> {
 }
 
 /// The marker slot one replayed attest-store record holds — [`attest_fields`]'s
-/// inverse — or `None` where the record is not one this daemon wrote: a tag
+/// inverse — or `None` where its spelling is not [`attest_fields`]'s: a tag
 /// past a byte or of no signature (`0`), a blob of no bytes, hex not in
-/// `hex_string`'s own lowercase. `Attestation::new` holds the
-/// one-spelling-of-empty rule, so a value read here is one the kernel could
-/// have written.
+/// `hex_string`'s own lowercase. It admits EVERY slot `Attestation::new`
+/// admits — a tag no `SIG_ALGS` row names included, as a slot rebuilt from a
+/// marker another build wrote may carry one — so a consumer asks the slot's
+/// row of the table and owns the answer for a tag with none, as the codec's
+/// `j_attest` does.
 fn attest_of_record(m: &Map<String, Value>) -> Option<Attestation> {
     let tag = u8::try_from(m.get(ATTEST_ALG)?.as_u64()?).ok()?;
     let sig = parse_lower_hex_bytes(m.get(ATTEST_SIG)?.as_str()?)?;
@@ -169,9 +177,10 @@ mod tests {
 
     /// A slot the store records is served at once and replays from its line
     /// as the same slot — [`attest_fields`] and [`attest_of_record`] one
-    /// spelling in both directions — and a line this daemon did not write
-    /// replays as no slot: an uppercase blob, a tag of no signature, a tag
-    /// past a byte, an empty blob.
+    /// spelling in both directions — and a line [`attest_fields`] could not
+    /// have spelled replays as no slot: an uppercase blob, a tag of no
+    /// signature, a tag past a byte, an empty blob. A tag no `SIG_ALGS` row
+    /// names is a slot all the same: the table is its consumer's to ask.
     #[test]
     fn a_recorded_slot_is_served_and_replays_from_its_line_as_itself() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -205,5 +214,10 @@ mod tests {
         ] {
             assert_eq!(attest_of_record(&record(alg, sig)), None, "{why}");
         }
+        assert_eq!(
+            attest_of_record(&record(Value::from(200u64), "ab01")),
+            Attestation::new(200, vec![0xab, 0x01]).ok(),
+            "a tag no row names replays as the slot it spells"
+        );
     }
 }

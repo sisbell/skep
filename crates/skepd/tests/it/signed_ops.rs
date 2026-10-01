@@ -731,7 +731,7 @@ fn a_carried_run_its_principal_never_could_read_is_re_shot_by_address_unread() {
 }
 
 /// A STAGING DRAFT ITS PRINCIPAL MAY NOT READ IS NEVER COPIED IN (the check's
-/// own `attestation_invalid:withheld`; `policy/attestation.rs`'s doc item 4;
+/// own `attestation_invalid:withheld`; `policy/attestation.rs`'s doc item 6;
 /// PUB-2.40, PUB-6.24). Naming a draft as a shot's STAGING DRAFT makes every
 /// run onto it a run the commit COPIES IN — re-inserted BY VALUE as fresh
 /// identity under the shot document's own I-space — and M5's source gate
@@ -741,12 +741,14 @@ fn a_carried_run_its_principal_never_could_read_is_re_shot_by_address_unread() {
 /// the store would admit, D's bytes becoming F's published text. The check
 /// composes no body over a value B may not read: it asks the store's own
 /// gates, and where they would admit the shot it refuses
-/// `attestation_invalid:withheld`, REORDER — unattested, signed over D's true
-/// bytes, or over a wrong guess, alike — and nothing commits. Where the gates
-/// refuse it — a run onto D's sixth address, which F does not carry — the
+/// `attestation_invalid:withheld`, REORDER — signed over D's true bytes or
+/// over a wrong guess, alike — and nothing commits. Where the gates refuse
+/// it — a run onto D's sixth address, which F does not carry — the signed
 /// shot passes through UNATTESTED to the store's own `withheld`, naming D.
-/// Every other shot in the suite names no staging draft, or its author's
-/// own, so this cell alone reaches the check's own refusal.
+/// Unattested, either shot meets (1) first, `attestation_required`, ahead of
+/// any composition (the design record §4.5's ratified order). Every other
+/// shot in the suite names no staging draft, or its author's own, so this
+/// cell alone reaches the check's own refusal.
 #[test]
 fn a_staging_draft_its_principal_may_not_read_is_refused_unread_and_never_copied_in() {
     let dir = tempdir().unwrap();
@@ -773,15 +775,17 @@ fn a_staging_draft_its_principal_may_not_read_is_refused_unread_and_never_copied
     let carried = publish_frame(&f, Some((&f, 5)), Some(&d), &[run(&d, &d_addr(1), 5)]);
     let withheld =
         ("credential_refused:attestation_invalid:withheld".to_string(), "reorder".to_string());
+    let required = ("credential_refused:attestation_required".to_string(), "reorder".to_string());
     let v = op_as_written(port, Some(&b_signed), &carried);
-    assert_eq!(refusal(&v), withheld, "unattested: {v}");
+    assert_eq!(refusal(&v), required, "unattested: (1), ahead of the composition: {v}");
     let v = op_with_publish_values(port, &b_signed, &carried, &per_byte("abcde"));
     assert_eq!(refusal(&v), withheld, "signed over D's true bytes: {v}");
     let v = op_with_publish_values(port, &b_signed, &carried, &per_byte("abcdz"));
     assert_eq!(refusal(&v), withheld, "signed over a wrong guess: {v}");
     // NOT CARRIED: D's sixth address — the store's own gate answers.
     let uncarried = publish_frame(&f, Some((&f, 5)), Some(&d), &[run(&d, &d_addr(6), 1)]);
-    assert_withheld(&op_as_written(port, Some(&b_signed), &uncarried), &d);
+    let v = op_as_written(port, Some(&b_signed), &uncarried);
+    assert_eq!(refusal(&v), required, "unattested: {v}");
     assert_withheld(&op_with_publish_values(port, &b_signed, &uncarried, &per_byte("f")), &d);
     assert_eq!(head_position(port), before, "nothing committed: D's bytes reached no member of F");
 }
@@ -791,8 +795,9 @@ fn a_staging_draft_its_principal_may_not_read_is_refused_unread_and_never_copied
 /// each value (`PublishBody`, in the layout `entry_body_publish` spells), and
 /// a shot whose runs name one byte more is refused
 /// `attestation_invalid:frame_too_large`, PERMANENT, before the body is built
-/// past the budget — attested or not, since a body never built whole
-/// verifies nothing. At the budget exactly the shot is admitted and commits
+/// past the budget — whatever its signature was made over, since a body never
+/// built whole verifies nothing; unattested, (1) answers first and no value
+/// is walked. At the budget exactly the shot is admitted and commits
 /// attested. A run names one stored value as often as the wire's run list
 /// admits, so no cap on the request bounds the body the check reads: four
 /// runs over one two-megabyte atom fill it here.
@@ -829,19 +834,21 @@ fn a_shot_body_is_refused_before_it_is_built_past_its_budget() {
     // One byte past the budget: refused before the body is built past it.
     let over = publish_frame(CLAIMANT_DOC1, base, Some(&d), &[x_run.clone(), x_run.clone(), x_run.clone(), y_run]);
     let over_values = [xs.as_bytes(), xs.as_bytes(), xs.as_bytes(), ys.as_bytes()];
-    for v in [
-        op_as_written(port, Some(&signed), &over),
-        op_with_publish_values(port, &signed, &over, &over_values),
-    ] {
-        assert_eq!(
-            refusal(&v),
-            (
-                "credential_refused:attestation_invalid:frame_too_large".to_string(),
-                "permanent".to_string()
-            ),
-            "one byte past the shot-body budget: {v}"
-        );
-    }
+    let v = op_as_written(port, Some(&signed), &over);
+    assert_eq!(
+        refusal(&v),
+        ("credential_refused:attestation_required".to_string(), "reorder".to_string()),
+        "unattested: (1), ahead of the composition: {v}"
+    );
+    let v = op_with_publish_values(port, &signed, &over, &over_values);
+    assert_eq!(
+        refusal(&v),
+        (
+            "credential_refused:attestation_invalid:frame_too_large".to_string(),
+            "permanent".to_string()
+        ),
+        "one byte past the shot-body budget: {v}"
+    );
     assert_eq!(head_position(port), before, "a refused shot commits nothing");
 
     // At the budget exactly: the body is built, the check admits, the shot
@@ -853,14 +860,17 @@ fn a_shot_body_is_refused_before_it_is_built_past_its_budget() {
 }
 
 /// A TERM PAST THE FRAME'S EIGHT BYTES PASSES UNATTESTED TO THE STORE'S OWN
-/// REFUSAL (the check's doc item 4; `ComposeFault::Unspellable`): a base
+/// REFUSAL (the check's doc item 6; `ComposeFault::Unspellable`): a base
 /// extent, a window's width or the count a shot places past 2^64 − 1 names
 /// positions no store holds, so no frame is composed and the store refuses the
-/// shot as its own — `base_extent_too_large`, `dangling_source`, PERMANENT.
-/// At 2^64 − 1 the term is spellable and the check stands: unattested,
-/// `attestation_required` (REORDER); attested, the store's same refusal. Two
-/// windows of 2^63 — each spellable, their count not — are the pre-sum's own
-/// cell: without it the builder's overflow reads as the budget's.
+/// shot as its own — `base_extent_too_large`, `dangling_source`, PERMANENT —
+/// whatever `attest` it carries, one no frame verifies included. Unattested,
+/// every such shot meets (1) first, `attestation_required` (REORDER), ahead of
+/// the composition (the design record §4.5's ratified order). At 2^64 − 1 the
+/// term is spellable: attested, the check verifies and the store's same
+/// refusal answers. Two windows of 2^63 — each spellable, their count not —
+/// are the pre-sum's own cell: without it the builder's overflow reads as the
+/// budget's.
 #[test]
 fn a_term_past_the_frames_eight_bytes_passes_unattested_to_the_stores_refusal() {
     let dir = tempdir().unwrap();
@@ -879,44 +889,57 @@ fn a_term_past_the_frames_eight_bytes_passes_unattested_to_the_stores_refusal() 
     let store = |code: &str| (code.to_string(), "permanent".to_string());
     let before = head_position(port);
 
+    let required = ("credential_refused:attestation_required".to_string(), "reorder".to_string());
     let top_frame = shot_frame(&top, &[]);
     assert_eq!(
         refusal(&op_as_written(port, Some(&signed), &top_frame)),
-        ("credential_refused:attestation_required".to_string(), "reorder".to_string()),
-        "2^64 − 1 is a term the frame spells"
+        required,
+        "unattested: (1) first"
     );
-    assert_eq!(refusal(&op(port, Some(&signed), &top_frame)), store("base_extent_too_large"), "attested");
     assert_eq!(
-        refusal(&op_as_written(port, Some(&signed), &shot_frame(past, &[]))),
+        refusal(&op(port, Some(&signed), &top_frame)),
         store("base_extent_too_large"),
-        "an extent past the row passes through"
+        "attested: 2^64 − 1 is a term the frame spells"
     );
-    assert_eq!(
-        refusal(&op_as_written(port, Some(&signed), &shot_frame("1", &[window(past)]))),
-        store("dangling_source"),
-        "a window past the row"
-    );
-    assert_eq!(
-        refusal(&op_as_written(port, Some(&signed), &shot_frame("1", &[window(half), window(half)]))),
-        store("dangling_source"),
-        "two windows whose count passes the row"
-    );
+    for (frame, code, why) in [
+        (shot_frame(past, &[]), "base_extent_too_large", "an extent past the row"),
+        (shot_frame("1", &[window(past)]), "dangling_source", "a window past the row"),
+        (
+            shot_frame("1", &[window(half), window(half)]),
+            "dangling_source",
+            "two windows whose count passes the row",
+        ),
+    ] {
+        assert_eq!(
+            refusal(&op_as_written(port, Some(&signed), &frame)),
+            required,
+            "{why}, unattested"
+        );
+        assert_eq!(
+            refusal(&op_as_written(port, Some(&signed), &with_unverifiable_attest(&frame))),
+            store(code),
+            "{why}: passed through to the store, whatever is attached"
+        );
+    }
     assert_eq!(head_position(port), before, "nothing committed");
 }
 
 /// A SHOT PAST THE STORE'S RE-INSERT BUDGET IS NEVER WALKED (the check's doc
-/// item 4; `ComposeFault::PastReinsertBudget`): M5 refuses a shot whose
+/// item 6; `ComposeFault::PastReinsertBudget`): M5 refuses a shot whose
 /// staging-draft runs re-insert more than `MAX_REINSERTED_VALUES` values by
 /// request arithmetic before it probes an address, so the check reads none
-/// of them and the shot passes UNATTESTED to the store's own
-/// `too_many_values` — attached or not, nothing committed. Every value the
-/// runs name exists, so a check walking past the budget would compose the
-/// body and answer `attestation_required` instead. AT the budget the shot is
-/// one the store admits: its values are walked and its attest demanded — a
-/// check that refused it here would pass it through UNATTESTED, and the store
-/// would commit it with its marker slot empty. The runs repeat one stretch of
-/// the draft, as a run list may, so a draft of a thousand values carries a
-/// shot of a hundred and thirty thousand.
+/// of them and an ATTESTED shot passes UNATTESTED to the store's own
+/// `too_many_values`, whatever its signature was made over, nothing
+/// committed; unattested, it meets (1) first. Every value the runs name
+/// exists, so a check walking past the budget would compose the body and
+/// answer an unverifiable signature `attestation_invalid:signature` instead.
+/// AT the budget the shot is one the store admits: its values are walked and
+/// its attest judged — refused `attestation_invalid:signature` over a
+/// signature no frame verifies; a check that refused it at the budget would
+/// pass it through UNATTESTED, and the store would commit it with its marker
+/// slot empty. The runs repeat one stretch of the draft, as a run list may,
+/// so a draft of a thousand values carries a shot of a hundred and thirty
+/// thousand.
 #[test]
 fn a_shot_past_the_stores_re_insert_budget_passes_unattested_to_its_refusal() {
     let budget = skep_arrangement::MAX_REINSERTED_VALUES as u64;
@@ -939,18 +962,29 @@ fn a_shot_past_the_stores_re_insert_budget_passes_unattested_to_its_refusal() {
     let store = ("too_many_values".to_string(), "permanent".to_string());
     let before = head_position(port);
 
+    let required = ("credential_refused:attestation_required".to_string(), "reorder".to_string());
     let past = shot_frame(budget + 1);
-    assert_eq!(refusal(&op_as_written(port, Some(&signed), &past)), store, "unattested");
+    assert_eq!(
+        refusal(&op_as_written(port, Some(&signed), &past)),
+        required,
+        "unattested: (1) first"
+    );
+    assert_eq!(
+        refusal(&op_as_written(port, Some(&signed), &with_unverifiable_attest(&past))),
+        store,
+        "never walked: passed through to the store, whatever is attached"
+    );
     let values = vec![&b"x"[..]; budget as usize + 1];
     assert_eq!(
         refusal(&op_with_publish_values(port, &signed, &past, &values)),
         store,
-        "attested: no signature changes the store's answer"
+        "attested over the true bytes: no signature changes the store's answer"
     );
+    let at_budget = with_unverifiable_attest(&shot_frame(budget));
     assert_eq!(
-        refusal(&op_as_written(port, Some(&signed), &shot_frame(budget))),
-        ("credential_refused:attestation_required".to_string(), "reorder".to_string()),
-        "at the budget the values are walked and the attest demanded"
+        refusal(&op_as_written(port, Some(&signed), &at_budget)),
+        ("credential_refused:attestation_invalid:signature".to_string(), "permanent".to_string()),
+        "at the budget the values are walked and the attest judged"
     );
     assert_eq!(head_position(port), before, "nothing committed");
 }

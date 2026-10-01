@@ -1,10 +1,11 @@
 //! §C ownership: containment is not authorization, ω is the longest covering
-//! prefix, the principal registry answers in both directions, ω's work follows
-//! the registry and not the probe, and the seats ω refuses or names.
+//! prefix, a registered document is owned at its own account, the principal
+//! registry answers in both directions, ω's work follows the registry and not
+//! the probe, and the seats ω refuses or names.
 
 use crate::common::*;
 
-use skep_address::{validate, Address, Level, Tumbler};
+use skep_address::{same_account, validate, Address, Level, Tumbler};
 use skep_namespace::{
     prefix_contains, CreateDocumentError, HasM3, M3Rec, M3State, Namespace, PrincipalId,
     BOOTSTRAP_PRINCIPAL,
@@ -182,6 +183,63 @@ fn omega_is_the_longest_covering_prefix_at_every_depth() {
                 "is_effective_owner({id:?}, {probe:?}) disagrees with ω"
             );
         }
+    }
+}
+
+#[test]
+fn every_registered_document_is_owned_at_its_own_account() {
+    // §5: a registered document is owned at its OWN account, `acct(d)` —
+    // never `None`, never the node above it, never an ancestor account — on
+    // every state M3's ops produce. ASN-0042's O6 promises only containment,
+    // `pfx(ω(d)) ≼ acct(d)`; M3 makes it equality because every document is
+    // minted under a registered account (P8; a version under a registered
+    // document) and every registered account holds its own seat (`delegate`).
+    // Readers take this answer as the document's owner account (the engine's
+    // exception set, PUB-7.5; the doc-metadata read, PUB-8.12), so it is
+    // walked over EVERY document `documents` enumerates — on a fold-produced
+    // slice, every registered document: genesis's two under the system
+    // account, and under one account a document, a fork, a version and a
+    // version of that version, beside a document under the account's
+    // sub-account — the one shape where an ancestor account's seat covers the
+    // document too.
+    let (k, _acct, doc) = kernel_with_account_and_doc();
+    let ns = Namespace::new(&k);
+    let (sub_acct, _) = ns
+        .delegate(ID1, t(&[1, 0, 1, 1]), ID2)
+        .expect("sub-delegate");
+    // The sub-account's document comes off the mint itself — as M5's
+    // cross-owner VERSION mints one — so a wrong ω is reported by the walk
+    // below, not refused by an ω gate in the fixture.
+    let sub_doc = commit_mint(&k, M3State::document_lock_key(&sub_acct), |m3| {
+        m3.mint_document(&sub_acct, false)
+    });
+    let (forked, _) = ns.fork(ID1, None).expect("a fork into the account");
+    let v1 = commit_mint(&k, M3State::version_lock_key(&doc), |m3| {
+        m3.mint_version(&doc, true)
+    });
+    let v2 = commit_mint(&k, M3State::version_lock_key(&v1), |m3| {
+        m3.mint_version(&v1, true)
+    });
+    let m3 = k.snapshot().world().m3().clone();
+
+    let mut walked = Vec::new();
+    for (d, _) in m3.documents() {
+        let owner = m3
+            .effective_owner_prefix(d)
+            .unwrap_or_else(|| panic!("{d:?} is registered and owned by no seat"));
+        // `same_account` (T6(b)) holds of an account-tier owner exactly when
+        // the owner IS `acct(d)`.
+        assert_eq!(owner.level(), Level::Account, "{d:?} is owned at {owner:?}");
+        assert!(
+            same_account(owner, d),
+            "{d:?} is owned at {owner:?}, not at its own account"
+        );
+        walked.push(d.clone());
+    }
+    // The walk reached every shape built above; genesis's two are the seed's,
+    // pinned in `genesis.rs`.
+    for built in [&doc, &sub_doc, &forked, &v1, &v2] {
+        assert!(walked.contains(built), "the walk missed {built:?}");
     }
 }
 

@@ -147,7 +147,9 @@ where
     /// account's allocation test (AUTH-5.87), so the one-transaction pairing
     /// is a guarantee and not only a safety: a path that allocated an account
     /// without seating it would have that read call an allocated account
-    /// free.
+    /// free, and would hand every document in that account to an owner above
+    /// it, since a document is owned at its own account only while that
+    /// account holds its seat ([`M3State::effective_owner_prefix`]).
     ///
     /// Pure pre-work runs first: the validate-lift (`NotValid`), the
     /// HOISTED tier check (`NotAccountTier`) — hoisted because the lift

@@ -331,6 +331,23 @@ impl M3State {
     /// PRODUCER invariant (`delegate`'s `DuplicateId` gate) that
     /// [`M3State::apply_m3`] does not re-check. Here the prefix IS the entry ω
     /// matched, so the two cannot come apart.
+    ///
+    /// FOR A REGISTERED DOCUMENT, ITS OWN ACCOUNT. ASN-0042's O6 promises only
+    /// containment — every owner sits at or above an address's account field,
+    /// `pfx(ω(a)) ≼ acct(a)` — and its own worked example owns a document
+    /// element from ABOVE its account field, under a sub-account baptized as a
+    /// bare namespace with no principal of its own. M3 makes the containment
+    /// an EQUALITY wherever `acct(a)` is a registered account, on any state
+    /// its own ops produce, because M3 baptizes no bare namespace: every
+    /// registered account holds its own seat ([`crate::Namespace::delegate`]
+    /// — an account's seat is its allocation). Every registered document, a
+    /// version included, is such an address: [`M3State::mint_document`] mints
+    /// only under a registered account (P8) and [`M3State::mint_version`]
+    /// only under a registered document. So for a registered document this
+    /// answers the account it lies in — never `None`, never the node above
+    /// it, never an ancestor account — and that is what readers take as the
+    /// document's OWNER ACCOUNT: the engine's exception set, which memoizes it
+    /// per draft (PUB-7.5), and the doc-metadata read (PUB-8.12).
     pub fn effective_owner_prefix(&self, a: &Address) -> Option<&Address> {
         self.omega(a).map(|(prefix, _)| prefix)
     }
@@ -347,14 +364,15 @@ impl M3State {
     /// seated AT that prefix. For an account the test is sound because its
     /// seat is its allocation ([`crate::Namespace::delegate`]); at every other
     /// tier it is no allocation test, since a node `register_node` admitted
-    /// and every minted document are seated nowhere. Composing
-    /// [`M3State::effective_owner_prefix`] with [`M3State::effective_owner`]
-    /// answers the same pair off one snapshot, but walks Π TWICE, and that
-    /// read's cost promise is the walk every ownership check already makes —
-    /// one. No caller is REQUIRED to use it; it adds no state, no index and no
-    /// fold fact, and `None` is exactly the projections' `None`: no node- or
-    /// account-tier seat contains `a`, so the two halves are absent TOGETHER by
-    /// construction.
+    /// and every minted document are seated nowhere — a registered document
+    /// answers its own account's seat ([`M3State::effective_owner_prefix`]).
+    /// Composing [`M3State::effective_owner_prefix`] with
+    /// [`M3State::effective_owner`] answers the same pair off one snapshot,
+    /// but walks Π TWICE, and that read's cost promise is the walk every
+    /// ownership check already makes — one. No caller is REQUIRED to use it;
+    /// it adds no state, no index and no fold fact, and `None` is exactly the
+    /// projections' `None`: no node- or account-tier seat contains `a`, so the
+    /// two halves are absent TOGETHER by construction.
     pub fn effective_owner_pair(&self, a: &Address) -> Option<(&Address, PrincipalId)> {
         self.omega(a)
     }

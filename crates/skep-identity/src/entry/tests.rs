@@ -328,10 +328,10 @@ fn the_rows_spell_as_the_module_doc_states() {
 /// even an empty value fits (its length prefix costs four bytes), and a
 /// window is refused by the same measure. A refusal CONSUMES the builder,
 /// so no body is finished over a sequence that skipped a piece or stopped
-/// short of one: the third row offers `cd` between `ab` and `c`,
-/// and a builder that let the walk go on past its refusal would finish to
-/// `[ab, c]`'s body — the preimage of another publish, whose signature
-/// verifies over it.
+/// short of one: the third row offers `cd` between the window and `c`, and a
+/// builder that let the walk go on past its refusal would finish to
+/// `[ab, window, c]`'s body — `whole` itself, the preimage of another publish,
+/// whose signature verifies over it.
 #[test]
 fn a_publish_body_within_its_budget_finishes_to_the_body_of_all_its_pieces() {
     let start = addr(&[1, 0, 2, 0, 1, 4]);

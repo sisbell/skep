@@ -480,8 +480,11 @@ pub fn entry_body_make_link(slots: LinkSlots<'_>) -> EntryBody {
 /// element, the whole group length-delimited. So the member is inside the
 /// signed bytes, and a hand that edits it breaks the signature.
 ///
-/// PRECONDITION — as [`entry_body_make_link`]'s, the member's spelling
-/// included.
+/// PRECONDITION — as [`entry_body_make_link`]'s, and the `replaces` row's
+/// group shorter than 2^32 bytes as well: the member's spelling and the
+/// thirteen bytes its one-element slot row puts around it (a form byte, a
+/// `be64` count, a `be32` length) together. A longer one PANICS, naming the
+/// obligation.
 pub fn entry_body_make_link_replacing(slots: LinkSlots<'_>, replaces: &Address) -> EntryBody {
     make_link_body(slots, Some(replaces))
 }
@@ -603,8 +606,10 @@ pub struct RecordRows<'a> {
 /// element. `from` is no row.
 ///
 /// PRECONDITION — every address's spelling, and the sig-less canonical
-/// record, is shorter than 2^32 bytes; a longer one PANICS, naming the
-/// obligation.
+/// record, is shorter than 2^32 bytes, and so is each optional row's group:
+/// a named address's spelling and the thirteen bytes its one-element slot
+/// row puts around it (a form byte, a `be64` count, a `be32` length). A
+/// longer one PANICS, naming the obligation.
 pub fn entry_body_record(rows: RecordRows<'_>) -> EntryBody {
     let RecordRows { ty, to, replaces, lineage_fork_point, sigless_canonical_record } = rows;
     let mut out = Vec::new();
@@ -629,18 +634,19 @@ pub fn entry_body_record(rows: RecordRows<'_>) -> EntryBody {
 /// Its standing INVARIANT is the one the budget exists for: the body built so
 /// far, its leading count and the base-extent group [`PublishBody::finish`]
 /// appends included, never passes `budget` bytes — [`PublishBody::within`]'s
-/// PRECONDITION establishes it at the type's one mint site, and every push
-/// keeps it or refuses, so `finish` never answers a body past its budget.
+/// PRECONDITION establishes it at the type's one mint site, and each of its
+/// two growth sites, [`PublishBody::push`] and [`PublishBody::window`], keeps
+/// it or refuses, so `finish` never answers a body past its budget.
 ///
-/// A refused push CONSUMES the builder, and the type is not `Clone` — the
-/// compile-time check beside it holds that — so the only body that can be
-/// finished is one that took EVERY piece it was offered, in order. A body
-/// that skipped a piece, or stopped short of one, would be the preimage of a
-/// different, shorter publish: every other member of the frame is fixed for
-/// one principal's publishes into one trunk under one key, so a signature
-/// made for that publish would verify over it. [`entry_body_publish`] is this
-/// builder under a budget no body reaches, so over pieces the budget admits
-/// the two build one body.
+/// A refusal CONSUMES the builder, at a push and at a window alike, and the
+/// type is not `Clone` — the compile-time check beside it holds that — so the
+/// only body that can be finished is one that took EVERY piece it was
+/// offered, in order. A body that skipped a piece, or stopped short of one,
+/// would be the preimage of a different, shorter publish: every other member
+/// of the frame is fixed for one principal's publishes into one trunk under
+/// one key, so a signature made for that publish would verify over it.
+/// [`entry_body_publish`] is this builder under a budget no body reaches, so
+/// over pieces the budget admits the two build one body.
 ///
 /// Consecutive values join ONE stretch — the row opened by the first of them
 /// and closed by the next window or by `finish` — so a stretch is always
@@ -664,15 +670,16 @@ pub struct PublishBody {
 
 impl PublishBody {
     /// A body of no segments yet — the leading count's eight bytes, and the
-    /// base-extent group held for `finish` — whose pushes admit no piece that
-    /// would carry the FINISHED body past `budget` bytes. `base_extent` is the
-    /// shot's: `None` in the birth shape, the EMPTY group.
+    /// base-extent group held for `finish` — whose [`PublishBody::push`] and
+    /// [`PublishBody::window`] admit no piece that would carry the FINISHED
+    /// body past `budget` bytes. `base_extent` is the shot's: `None` in the
+    /// birth shape, the EMPTY group.
     ///
     /// PRECONDITION — `budget` holds those bytes. The body of no segments is
     /// the least a builder can finish to, so below it the builder would
     /// start past its own budget and [`PublishBody::finish`] would answer an
-    /// over-budget body no push had refused. A caller's bug and never an
-    /// outcome: it PANICS, naming the obligation.
+    /// over-budget body no push or window had refused. A caller's bug and
+    /// never an outcome: it PANICS, naming the obligation.
     pub fn within(budget: usize, base_extent: Option<u64>) -> PublishBody {
         let bytes = 0u64.to_be_bytes().to_vec();
         let mut base_extent_group = Vec::new();
@@ -739,7 +746,8 @@ impl PublishBody {
     /// its width.
     ///
     /// PRECONDITION — `start`'s spelling is shorter than 2^32 bytes, else
-    /// PANICS.
+    /// PANICS; under any budget below that bound, this refuses such a start
+    /// first.
     #[must_use = "window takes the builder: the body goes on in the one it returns"]
     pub fn window(
         mut self,

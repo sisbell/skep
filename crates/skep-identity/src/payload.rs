@@ -8,8 +8,10 @@
 //! byte string a JSON value, and which — parsing to a GENERIC
 //! [`serde_json::Value`], with every schema, profile and domain check written
 //! IN THIS CRATE, in the spec's own order: no `serde` derive, no
-//! `deny_unknown_fields`, no verdict delegated to the dependency. The bytes
-//! themselves arrive from `crate::read`.
+//! `deny_unknown_fields`, no verdict delegated to the dependency. The fold's
+//! bytes arrive from `crate::read`; another caller's — an atom it fetched for
+//! itself, an `insert`'s own value — need not have, and the parse holds them
+//! to the read's own cap at its head ([`parse_record_value`]).
 //!
 //! The two kinds share one record envelope and one fault precedence
 //! (AUTH-2.19): [`parse_record_value`] holds the precedence and the parse side
@@ -123,11 +125,13 @@ impl fmt::Display for LabelError {
 
 impl std::error::Error for LabelError {}
 
-/// AUTH-1.27 — a payload fault. `TooLarge`, `ForeignContent` and
-/// `MissingValue` report that a record's payload could not be READ; the
-/// remaining variants that it could not be PARSED. The `usize` is a 1-BASED
-/// INDEX INTO THE KIND'S ENTRY ARRAY — `keys` on an enrollment, `fingerprints`
-/// on a retirement — and `DuplicateKey` names the REPEATING ENTRY (AUTH-2.15).
+/// AUTH-1.27 — a payload fault. `ForeignContent` and `MissingValue` report
+/// that a record's payload could not be READ; `TooLarge` that it is past the
+/// record cap — at the read, or at the parse's own head for bytes the read
+/// never capped ([`parse_record_value`]); the remaining variants that it
+/// could not be PARSED. The `usize` is a 1-BASED INDEX INTO THE KIND'S ENTRY
+/// ARRAY — `keys` on an enrollment, `fingerprints` on a retirement — and
+/// `DuplicateKey` names the REPEATING ENTRY (AUTH-2.15).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PayloadError {
     /// The record's bytes exceed [`MAX_RECORD_BYTES`]: the concatenated
@@ -391,8 +395,9 @@ const RETIRE_SCHEMA: Schema<Fingerprint> = Schema {
 };
 
 /// The entry type of ONE record kind, naming its `Schema` — the one index
-/// from a kind to its table, read by [`canonical_record`] and by the parsers
-/// ([`parse_enroll`], [`parse_retire`]) alike: [`Enrollment`] for the
+/// from a kind to its table, read alike by [`canonical_record`] and by the
+/// parse, [`parse_record_value`] — and so by [`parse_enroll`] and
+/// [`parse_retire`], which take its entries: [`Enrollment`] for the
 /// enrollment kind, [`Fingerprint`] for the retirement kind. Sealed: a kind
 /// is added by filling a schema table in this module, never by a foreign
 /// impl.
@@ -493,7 +498,8 @@ pub fn canonical_record<T: RecordEntry>(entries: &[T], sig: Option<&str>) -> Str
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordValue<T> {
     /// The kind's entries, in the record's own ENTRY ORDER, non-empty and
-    /// duplicate-free ([`parse_enroll`]'s POSTCONDITION).
+    /// duplicate-free — what [`parse_record_value`] answers: [`parse_enroll`]'s
+    /// or [`parse_retire`]'s POSTCONDITION, by kind.
     pub entries: Vec<T>,
     /// The `sig` member's string, where the body carried one — the empty
     /// string included, which is a `sig` and never `None`. It is the STRING
@@ -561,7 +567,8 @@ pub struct RecordValue<T> {
 /// a body this refuses is one the fold refuses, `bad_record` and the rest,
 /// carrying no `sig` a verifier could weigh.
 ///
-/// POSTCONDITION — as [`parse_enroll`]'s over `entries`; and
+/// POSTCONDITION — over `entries`, the kind's own: [`parse_enroll`]'s for the
+/// enrollment kind, [`parse_retire`]'s for the retirement kind; and
 /// `canonical_record(&value.entries, value.sig.as_deref()) == bytes`, the
 /// admission sentence read from the other side.
 pub fn parse_record_value<T: RecordEntry>(bytes: &[u8]) -> Result<RecordValue<T>, PayloadError> {
@@ -654,23 +661,22 @@ fn parse_record<T: RecordEntry>(bytes: &[u8]) -> Result<Vec<T>, PayloadError> {
     parse_record_value(bytes).map(|value| value.entries)
 }
 
-/// AUTH-2.128, AUTH-2.130 — parse an enrollment record. The bytes decode as
-/// UTF-8 (else `NotUtf8`, AUTH-2.19 item 1), parse to a GENERIC
-/// [`serde_json::Value`] and validate the enrollment schema and its canonical
-/// encoding (else `BadRecord`, item 2), then the entries are scanned in order
-/// for a duplicate (`DuplicateKey(n)`, item 3), and `Empty` is answered only
-/// after a clean scan (item 4). No verdict is delegated to `serde_json`: it
-/// answers only "is this a JSON value, and which" (AUTH-2.1).
+/// AUTH-2.128, AUTH-2.130 — parse an enrollment record. The bytes are at
+/// most [`MAX_RECORD_BYTES`] (else `TooLarge` at the head — the read's own
+/// cap, AUTH-2.43, which every body the fold parses has already passed,
+/// [`parse_record_value`]'s card), decode as UTF-8 (else `NotUtf8`, AUTH-2.19
+/// item 1), parse to a GENERIC [`serde_json::Value`] and validate the
+/// enrollment schema and its canonical encoding (else `BadRecord`, item 2);
+/// then the entries are scanned in order for a duplicate (`DuplicateKey(n)`,
+/// item 3), and `Empty` is answered only after a clean scan (item 4). No
+/// verdict is delegated to `serde_json`: it answers only "is this a JSON
+/// value, and which" (AUTH-2.1).
 ///
 /// POSTCONDITION — on `Ok`, the vector is NON-EMPTY (AUTH-2.16), in the
 /// record's own ENTRY ORDER (which is the order `Effect::Genesis`/`Enroll`
 /// carry to `apply`), and no two entries carry the same key (AUTH-2.15) — the
 /// promise that fixes a fingerprint's anchor flag within one record (I9,
 /// AUTH-2.104).
-///
-/// A body past [`MAX_RECORD_BYTES`] is `TooLarge` at the head, ahead of item
-/// 1 — the read's own cap (AUTH-2.43), which every body the fold parses has
-/// already passed ([`parse_record_value`]'s card).
 pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
     parse_record::<Enrollment>(bytes)
 }

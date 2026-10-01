@@ -108,9 +108,10 @@ pub const TAG_FNDSA512_PREVIEW_ED25519: u8 = 3;
 /// The rules this crate holds, one per marker tag — the ONE statement of
 /// which tags this build can derive, keygen, decode and verify under.
 /// Every per-tag step matches on it exhaustively — the PQ half's KDF label,
-/// its keygen, its decode, its widths, a file each (the code map above) —
-/// beside the signer and verifier enums that already carry one variant per
-/// rule (`PqSigner` in [`signer`], `PqHalf` in [`verifier`]), so a new tag
+/// its keygen (`PqSigner::keygen`), its decode (`PqHalf::decode`), its
+/// widths, a file each (the code map above) — and those two per-tag enums,
+/// `PqSigner` in [`signer`] and `PqHalf` in [`verifier`], carry each tag's
+/// signing and verifying arithmetic, one variant per rule, so a new tag
 /// (tag 2 is free for the final FIPS 206 — whose variant takes the
 /// unqualified token name, `FnDsa512Ed25519`; the preview carries `Preview`
 /// in every name, as its token does, so the final standard's arms never

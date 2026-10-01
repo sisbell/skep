@@ -6,7 +6,9 @@
 //! hybrid cross-check; tag 1 DIFFERENTIAL against a second pure-Rust FIPS 204
 //! crate — keys-from-seed and signatures byte-equal; the widths each pinned
 //! crate fixes, pinned by hand beside the sizes and timings the report takes
-//! back; and which FN-DSA backend signed them on this target.
+//! back; which FN-DSA backend signed them on this target; and the KDF's two
+//! vectors as `docs/wire.md` publishes them, checked against the keys
+//! themselves.
 
 use sha2::{Digest, Sha256};
 use skep_identity::{
@@ -100,7 +102,9 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 6] {
 
 // ── the goldens ─────────────────────────────────────────────────────────────
 
-/// The golden's seed: one 32-byte seed, the paper backup's one 64-hex line.
+/// The golden's seed: one 32-byte seed, the paper backup's one 64-hex line —
+/// and the seed of the KDF's vectors `docs/wire.md` publishes, so the
+/// fingerprints below are the ones a client author checks against.
 const GOLDEN_SEED: [u8; 32] = [
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
     0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
@@ -215,6 +219,31 @@ fn golden_tag_3_fndsa512_preview_ed25519() {
             "7807cbba98e2e04fa7647c50baeacdaefb44fbf477fd9ee3f71095f47d1fe37d",
         ],
     });
+}
+
+/// THE PUBLISHED VECTORS: `docs/wire.md`'s keygen-from-seed rule (§The
+/// claim ceremony and credentials) hands a client author `GOLDEN_SEED` and
+/// each tag's fingerprint as the KDF's vectors — the keys the two goldens
+/// above derive. Checked against the KDF and keygen themselves, so a vector
+/// that drifts in the prose fails as a drifted key does.
+#[test]
+fn wire_md_publishes_the_vectors_the_kdf_derives() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/wire.md");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    // Prose, rewrapped at will: every run of whitespace reads as one space.
+    let prose = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let seed = format!("the seed `{}` derives", hex(&GOLDEN_SEED));
+    assert!(prose.contains(&seed), "wire.md's vectors do not say: {seed}");
+    for tag in [1u8, 3] {
+        let token = SigAlgRow::of_tag(tag).unwrap().token;
+        let signer = HybridSigner::from_seed(tag, &GOLDEN_SEED).unwrap();
+        let vector = format!(
+            "under tag `{tag}` (`{token}`), the key whose fingerprint is `{}`",
+            Fingerprint::of(signer.public_key()).to_hex()
+        );
+        assert!(prose.contains(&vector), "wire.md's vectors do not say: {vector}");
+    }
 }
 
 /// THE HYBRID CROSS-CHECK at the frame: each half alone fails — a valid PQ

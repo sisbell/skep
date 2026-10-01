@@ -9,7 +9,10 @@ daemon fails the build. (Two exceptions: the commit-stream event example is
 asserted structurally — its framing, not its illustrative position — and
 the change-feed examples are asserted against live daemon bytes in
 `tests/it/changes.rs` with the `time` values normalized, the one field a live
-daemon cannot reproduce; the bare-entry example is byte-exact.)
+daemon cannot reproduce; the bare-entry example is byte-exact.) The
+keygen-from-seed rule's two vectors (§The claim ceremony and credentials)
+are asserted against the KDF itself by
+`skep/crates/skep-signature/tests/it/golden.rs`.
 
 The wire is in DEVELOPMENT: this document is the contract as it stands at
 HEAD, and no compatibility with an earlier reading is promised.

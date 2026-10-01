@@ -1,5 +1,5 @@
 use super::*;
-use skep_identity::SigAlgRow;
+use skep_identity::{SigAlgRow, SIG_ALGS};
 
 /// Both tags: keygen from one seed is deterministic, the halves differ
 /// per tag (the token is in the KDF's `info`), the widths are the ruled
@@ -61,7 +61,9 @@ fn both_tags_sign_verify_and_refuse_a_broken_half() {
 /// THE TAG SET is stated once ([`Rule::of`]): the KDF, keygen and the
 /// widths answer for exactly the tags it names, over every value a marker
 /// tag can take, so no step serves a tag another refuses — and the set is
-/// the two rules the module card names.
+/// the two rules the module card names, and exactly the tags skep-identity's
+/// `SIG_ALGS` names: every key's row has a rule here, so a post-quantum half
+/// that does not decode is its key's fault, never its row's.
 #[test]
 fn every_per_tag_step_answers_for_exactly_the_tags_rule_names() {
     let seed = [0x42u8; 32];
@@ -71,9 +73,13 @@ fn every_per_tag_step_answers_for_exactly_the_tags_rule_names() {
         assert_eq!(HybridSigner::from_seed(tag, &seed).is_some(), ruled, "keygen, tag {tag}");
         assert_eq!(pq_widths(tag).is_some(), ruled, "the widths, tag {tag}");
     }
+    let rule_tags: Vec<u8> = (0..=u8::MAX).filter(|&t| Rule::of(t).is_some()).collect();
     assert_eq!(
-        (0..=u8::MAX).filter(|&t| Rule::of(t).is_some()).collect::<Vec<_>>(),
+        rule_tags,
         [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519],
         "this build holds exactly the two rules the module card names"
     );
+    let mut rows: Vec<u8> = SIG_ALGS.iter().map(|row| row.tag).collect();
+    rows.sort_unstable();
+    assert_eq!(rule_tags, rows, "a rule here for exactly the tags SIG_ALGS names");
 }

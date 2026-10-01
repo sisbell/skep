@@ -19,8 +19,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **`test-hooks`** — implies `sign`, and adds the fixtures' seeded
   RNG and the other test-only doors. No shipped signer enables it.
 - **Goldens** — per tag, one seed to both public keys, the
-  fingerprint and the signatures over fixed entry frames, and tag 1
-  checked byte for byte against a second FIPS 204 implementation.
+  fingerprint and the signatures over fixed entry frames; tag 1
+  checked byte for byte against a second FIPS 204 implementation; and
+  the KDF's two vectors in `docs/wire.md` checked against the keys
+  themselves.
 
 The syntax — the tag table, the key layout, the fingerprint, the entry
 frame — is [skep-identity](../skep-identity)'s; this crate holds the

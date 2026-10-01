@@ -1,9 +1,11 @@
-//! KEYGEN FROM A SEED AND SIGNING, per tag — [`HybridSigner`], and the two
-//! RNGs the FN-DSA preview draws through: the exact bytes its keygen is fed
-//! (the KDF's half seed) and the OS draw a signature's seed comes from.
-//! Compiled under `sign`, which skepd leaves off, so the daemon's build holds
-//! none of it. The signer's own two test hooks sit here, beside the private
-//! fields they read, each gated on `test-hooks`.
+//! KEYGEN FROM A SEED AND SIGNING, per tag — [`HybridSigner`], which composes
+//! both halves into one key and one blob, and `PqSigner`, which holds each
+//! tag's post-quantum keygen and signature; and the two RNGs the FN-DSA
+//! preview draws through: the exact bytes its keygen is fed (the KDF's half
+//! seed) and the OS draw a signature's seed comes from. Compiled under
+//! `sign`, which skepd leaves off, so the daemon's build holds none of it.
+//! The signer's own two test hooks sit here, beside the private fields they
+//! read, each gated on `test-hooks`.
 
 use std::fmt;
 
@@ -82,7 +84,9 @@ impl rand_core_06::RngCore for OsEntropy {
 
 impl rand_core_06::CryptoRng for OsEntropy {}
 
-/// The post-quantum half of a signer, per tag.
+/// The post-quantum half of a signer, per tag — and on this one card both
+/// things its rule asks of it: keygen from the KDF's PQ half seed
+/// (`PqSigner::keygen`) and the PQ signature (`PqSigner::sign`).
 enum PqSigner {
     /// Tag 1: the expanded ML-DSA-65 signing key, from ξ.
     MlDsa65(ml_dsa::SigningKey<MlDsa65>),
@@ -92,6 +96,61 @@ enum PqSigner {
     /// `sizes_and_timings_per_tag` pins), decoded per signature — the crate's
     /// `sign` takes `&mut self` and its key type zeroizes on drop.
     FnDsa512Preview(Vec<u8>),
+}
+
+impl PqSigner {
+    /// KEYGEN of the post-quantum half under `rule`, from the KDF's PQ half
+    /// seed by the pinned crate's own keygen: the signing half, and its
+    /// verifying key's encoding — the half the KEY PIN puts first.
+    /// ML-DSA-65's is `SigningKey::from_seed(ξ)`; the FN-DSA-512 preview's is
+    /// `fn-dsa` 0.4.0's keygen fed `seed` through `ExactBytes`, and checked to
+    /// have drawn all 32 bytes.
+    fn keygen(rule: Rule, seed: &[u8; 32]) -> (PqSigner, Vec<u8>) {
+        match rule {
+            Rule::MlDsa65Ed25519 => {
+                let sk = ml_dsa::SigningKey::<MlDsa65>::from_seed(&(*seed).into());
+                let pk = sk.verifying_key().encode();
+                (PqSigner::MlDsa65(sk), pk.as_slice().to_vec())
+            }
+            Rule::FnDsa512PreviewEd25519 => {
+                let mut rng = ExactBytes { bytes: seed, taken: 0 };
+                let mut sk = vec![0u8; sign_key_size(FN_DSA_LOGN_512)];
+                let mut pk = vec![0u8; vrfy_key_size(FN_DSA_LOGN_512)];
+                KeyPairGeneratorStandard::default().keygen(
+                    FN_DSA_LOGN_512,
+                    &mut rng,
+                    &mut sk,
+                    &mut pk,
+                );
+                assert_eq!(rng.taken, 32, "fn-dsa 0.4.0's keygen draws its one 32-byte seed");
+                (PqSigner::FnDsa512Preview(sk), pk)
+            }
+        }
+    }
+
+    /// THE POST-QUANTUM SIGNATURE over `msg` under this half's rule:
+    /// ML-DSA-65's deterministic variant with the empty `ctx`, drawing
+    /// nothing; the FN-DSA-512 preview's randomized signing with
+    /// `DOMAIN_NONE` and `HASH_ID_RAW`, its per-signature seed drawn from
+    /// `rng` and its key decoded from the stored bytes for this one signature
+    /// (`fn-dsa`'s `sign` takes `&mut self`).
+    fn sign<R: rand_core_06::CryptoRng + rand_core_06::RngCore>(
+        &self,
+        msg: &[u8],
+        rng: &mut R,
+    ) -> Vec<u8> {
+        match self {
+            PqSigner::MlDsa65(sk) => sk.sign(msg).encode().as_slice().to_vec(),
+            PqSigner::FnDsa512Preview(sk_bytes) => {
+                let mut sk = SigningKeyStandard::decode(sk_bytes)
+                    .expect("this signer's own encoded key decodes");
+                let mut sig = vec![0u8; signature_size(FN_DSA_LOGN_512)];
+                sk.sign(rng, &DOMAIN_NONE, &HASH_ID_RAW, msg, &mut sig)
+                    .expect("a valid signing key signs");
+                sig
+            }
+        }
+    }
 }
 
 /// ONE HYBRID SIGNER: both halves derived from one seed under one tag, its
@@ -114,33 +173,15 @@ impl fmt::Debug for HybridSigner {
 impl HybridSigner {
     /// KEYGEN FROM SEED under `tag`'s frozen rule: the KDF's two half seeds,
     /// the Ed25519 key from its half, the PQ key from its half by the pinned
-    /// crate's own keygen. `None` for a tag no row names or this build holds
-    /// no rule for.
+    /// crate's own keygen (`PqSigner::keygen`), and the two public halves
+    /// composed into one key by the KEY PIN. `None` for a tag no row names or
+    /// this build holds no rule for.
     pub fn from_seed(tag: u8, seed: &[u8; 32]) -> Option<HybridSigner> {
         let row = SigAlgRow::of_tag(tag)?;
         let halves = derive_seeds(tag, seed)?;
         let ed = EdSigningKey::from_bytes(&halves.ed25519);
         let ed_pk = ed.verifying_key().to_bytes();
-        let (pq, pq_pk): (PqSigner, Vec<u8>) = match Rule::of(tag)? {
-            Rule::MlDsa65Ed25519 => {
-                let sk = ml_dsa::SigningKey::<MlDsa65>::from_seed(&halves.pq.into());
-                let pk = sk.verifying_key().encode();
-                (PqSigner::MlDsa65(sk), pk.as_slice().to_vec())
-            }
-            Rule::FnDsa512PreviewEd25519 => {
-                let mut rng = ExactBytes { bytes: &halves.pq, taken: 0 };
-                let mut sk = vec![0u8; sign_key_size(FN_DSA_LOGN_512)];
-                let mut pk = vec![0u8; vrfy_key_size(FN_DSA_LOGN_512)];
-                KeyPairGeneratorStandard::default().keygen(
-                    FN_DSA_LOGN_512,
-                    &mut rng,
-                    &mut sk,
-                    &mut pk,
-                );
-                assert_eq!(rng.taken, 32, "fn-dsa 0.4.0's keygen draws its one 32-byte seed");
-                (PqSigner::FnDsa512Preview(sk), pk)
-            }
-        };
+        let (pq, pq_pk) = PqSigner::keygen(Rule::of(tag)?, &halves.pq);
         let public = PublicKey::from_halves(row.token, &pq_pk, &ed_pk)
             .expect("the pinned crate's post-quantum key is the row's width");
         Some(HybridSigner { row, ed, pq, public })
@@ -160,11 +201,13 @@ impl HybridSigner {
     /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a stable
     /// API) — the Ed25519 half's signing key, ONE of the two halves every blob
     /// this signer makes carries, a session's and an entry's alike; alone it
-    /// opens nothing (no half opens a session alone). The goldens read it, and
-    /// the suites' negative vector — a 64-byte Ed25519-only `sig`, the
-    /// classical layout no served board admits — is made with it. Hidden
-    /// because its type is `ed25519-dalek`'s: a caller holding one names that
-    /// crate at this crate's version.
+    /// opens nothing (no half opens a session alone). This crate's own tests
+    /// read it (the Ed25519 half differs per tag), skepd's fixtures check
+    /// that it differs from the raw seed and matches the enrolled key's
+    /// Ed25519 half, and the suites' negative vector — a 64-byte Ed25519-only
+    /// `sig`, the classical layout no served board admits — is made with it.
+    /// Hidden because its type is `ed25519-dalek`'s: a caller holding one
+    /// names that crate at this crate's version.
     #[cfg(feature = "test-hooks")]
     #[doc(hidden)]
     pub fn ed25519_signing_key(&self) -> &EdSigningKey {
@@ -204,23 +247,14 @@ impl HybridSigner {
     /// The one signing body, over the RNG tag 3's per-signature seed is drawn
     /// from — the OS's for [`HybridSigner::sign`], a fixture's stream for the
     /// test hook `sign_with_rng` — private, so no shipped caller picks the
-    /// draw.
+    /// draw. It composes THE BLOB: the PQ half's signature
+    /// (`PqSigner::sign`) THEN the Ed25519 signature, over the same `msg`.
     fn sign_drawing<R: rand_core_06::CryptoRng + rand_core_06::RngCore>(
         &self,
         msg: &[u8],
         rng: &mut R,
     ) -> Vec<u8> {
-        let mut blob = match &self.pq {
-            PqSigner::MlDsa65(sk) => sk.sign(msg).encode().as_slice().to_vec(),
-            PqSigner::FnDsa512Preview(sk_bytes) => {
-                let mut sk = SigningKeyStandard::decode(sk_bytes)
-                    .expect("this signer's own encoded key decodes");
-                let mut sig = vec![0u8; signature_size(FN_DSA_LOGN_512)];
-                sk.sign(rng, &DOMAIN_NONE, &HASH_ID_RAW, msg, &mut sig)
-                    .expect("a valid signing key signs");
-                sig
-            }
-        };
+        let mut blob = self.pq.sign(msg, rng);
         blob.extend_from_slice(&self.ed.sign(msg).to_bytes());
         debug_assert_eq!(blob.len(), self.row.sig_len());
         blob
@@ -275,5 +309,28 @@ mod tests {
         }
         let printed = format!("{:?}", SeededRng06::new(seed));
         assert!(!leaks(&printed, &seed[..]), "the fixture stream prints its seed: {printed}");
+    }
+
+    /// THE PQ HALF ON ITS OWN CARD: `PqSigner::keygen` makes the public key's
+    /// first half and `PqSigner::sign` the blob's first field — the KEY PIN
+    /// and THE BLOB, the PQ half THEN the Ed25519 one — so `HybridSigner`
+    /// composes the two halves and holds no tag's arithmetic itself.
+    #[test]
+    fn the_pq_half_makes_the_keys_first_half_and_the_blobs_first_field() {
+        let seed = [0x42u8; 32];
+        let msg = b"the entry frame";
+        for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
+            let signer = HybridSigner::from_seed(tag, &seed).unwrap();
+            let halves = derive_seeds(tag, &seed).unwrap();
+            let (pq, pq_pk) = PqSigner::keygen(Rule::of(tag).unwrap(), &halves.pq);
+            assert_eq!(
+                &pq_pk[..],
+                signer.public_key().pq_half(),
+                "tag {tag}: the key's first half"
+            );
+            let blob = signer.sign_with_rng(msg, &mut SeededRng06::new([7; 32]));
+            let pq_sig = pq.sign(msg, &mut SeededRng06::new([7; 32]));
+            assert_eq!(&blob[..pq_sig.len()], &pq_sig[..], "tag {tag}: the blob's first field");
+        }
     }
 }

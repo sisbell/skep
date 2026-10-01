@@ -35,7 +35,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use skep_address::Address;
-use skep_arrangement::{trunk_head, M5State};
+use skep_arrangement::{trunk_head, trunk_of, M5State};
 use skep_namespace::{first_version_address, prefix_contains, M3State};
 
 use crate::op::OpKind;
@@ -76,11 +76,12 @@ pub(crate) fn require_registered_document(
     }
 }
 
-/// The BIRTH VERSION of a trunk document — `D.1`, the slot its version chain
-/// opens at, with the BIRTH CONTENT of what occupies it (PUB-8.12; PUB-3.19 as
-/// RES-276 reads it). `None` while the chain has no member, which is why the
-/// two halves travel as one [`BirthVersion`]: no extent is read for a
-/// document with no member, so the field is absent rather than zero.
+/// The BIRTH VERSION of the document `doc` projects to (PUB-2.15) — `D.1`, the
+/// slot its version chain opens at, with the BIRTH CONTENT of what occupies it
+/// (PUB-8.12; PUB-3.19 as RES-276 reads it). A version member answers its
+/// trunk's. `None` while the chain has no member, which is why the two halves
+/// travel as one [`BirthVersion`]: no extent is read for a document with no
+/// member, so the field is absent rather than zero.
 ///
 /// The extent is the content `D.1` was BORN with — the leading runs of its
 /// arrangement at its mint — and NOT its arranged content count: while `D.1`
@@ -98,24 +99,28 @@ pub(crate) fn require_registered_document(
 /// [`birth_extent`](M5State::birth_extent) for the frozen extent, which M5's
 /// fold notes at the mint; that fold states the one state it cannot tell.
 ///
-/// PRECONDITION: `trunk` is DOCUMENT-tier. The one call site discharges it in
-/// two steps: [`require_registered_document`] establishes the tier, and
-/// [`trunk_of`](skep_arrangement::trunk_of) preserves it — it never makes a
-/// document of anything else. It is stated on the parameter because that is
-/// where a caller can see what it owes, and the `expect` is what ENFORCES it:
-/// [`first_version_address`] is registry-free and answers `None` for every
-/// tier but a document's, so a violation panics rather than fabricating the
-/// address of a chain no tier but a document's anchors.
+/// The PROJECTION is taken here, before either chain read is asked, because
+/// the two disagree about a version member: [`trunk_head`] projects it to its
+/// trunk and finds that chain's head, while [`first_version_address`] opens
+/// the namespace of whatever it is handed, so `D.3` handed through
+/// unprojected would answer `D.3.1` — a well-formed address no mint produced,
+/// served as `D`'s birth version with no error. Projecting through
+/// [`trunk_of`] first leaves no argument that answers that, so a caller owes
+/// nothing here: the trunk and each of its members answer alike
+/// (`a_version_member_answers_its_trunks_birth_version`).
 ///
-/// The guard above stands in front of that panic, so no call reaches it:
-/// [`trunk_head`] delegates to M3's `latest_version`, which returns `None`
-/// for any tier but a document's BEFORE it consults a frontier — so an
-/// ACCOUNT, whose same namespace key is the sub-account chain, returns at
-/// the `?` rather than reaching the mint.
-pub(crate) fn birth_version(m3: &M3State, m5: &M5State, trunk: &Address) -> Option<BirthVersion> {
-    trunk_head(m3, trunk)?;
-    let addr = first_version_address(trunk)
-        .expect("`trunk` is document-tier, the one tier that anchors a version chain");
+/// Every TIER is answered, and truthfully: no tier but a document's anchors a
+/// version chain, [`trunk_of`] leaves every other tier as it is, and
+/// [`trunk_head`] delegates to M3's `latest_version`, which answers `None` for
+/// any other tier before it reads a frontier — so an account, an element or a
+/// node returns `None` at the `?`. No input reaches the `expect` below, so it
+/// guards no caller's obligation: it asserts M3's invariant that a trunk with
+/// a version head is document-tier, and so has an opening address.
+pub(crate) fn birth_version(m3: &M3State, m5: &M5State, doc: &Address) -> Option<BirthVersion> {
+    let trunk = trunk_of(doc);
+    trunk_head(m3, &trunk)?;
+    let addr = first_version_address(&trunk)
+        .expect("a trunk with a version head is document-tier, and so has an opening address");
     let extent = m5.birth_extent(&addr);
     Some(BirthVersion { addr, extent })
 }

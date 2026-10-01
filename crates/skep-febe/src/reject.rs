@@ -69,31 +69,25 @@ pub enum Disposition {
     Halt,
 }
 
-/// Where in a multi-part request a fault landed — threaded from M6's
-/// variant-carried localization (`RetrieveError::MalformedSpec{index, fault}`,
-/// COMPARE's `{operand, region, index}`, and the offending document `Address`
-/// of the multi-document `DocNotRegistered(Address)` variants), from M5's and
-/// M7's `NotOwner(Address)` — the ownership ruling (2026-08-16) — whose `addr`
-/// names the document (or target link) that failed the ω check, from M5's
-/// publish shot's `Withheld(Address)`, whose `addr` names the withheld
-/// document (PUB-8.4's pinned `site.addr`, the first unreadable origin), and
-/// from M10's own EDITLINK successor guard, which fills `slot` and `index`.
-/// Every other M5/M8 variant still lowers with `site = None` (§5; M8's
-/// `DocNotRegistered` is fieldless, unlike M6's), and so does M10's own
-/// registration refusal for the two publication reads that take a document —
-/// each names exactly one, so the client already knows which address was
-/// refused.
+/// Where in a multi-part request a fault landed, or which document a code is
+/// about. Each field below names every producer that fills it; a refusal none
+/// of them names carries `site = None` (§5) — among them every fieldless
+/// `DocNotRegistered` (M5's, M8's, and M6's single-document ones), M10's own
+/// registration refusal for the two publication reads that take a document
+/// (each names exactly one, so the client already knows which address was
+/// refused), and the link-address absence answers (`OriginalNotResident`,
+/// `EndpointNotResident`), which match a never-deposited address's exactly.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub struct FaultSite {
-    /// Which COMPARE spec-set (ρ₁/ρ₂) the fault came from.
+    /// Which COMPARE spec-set (ρ₁/ρ₂) the fault came from. M6's alone.
     pub operand: Option<Operand>,
-    /// The offending region index (COMPARE / FINDDOCSCONTAINING).
+    /// The offending region index (COMPARE / FINDDOCSCONTAINING). M6's alone.
     pub region: Option<usize>,
     /// The offending link slot of an EDITLINK successor, in M7's slot
     /// numbering — [`FROM`]/[`TO`]/[`TYPE`], re-exported by this crate — so
     /// the `index` beside it is read as a position WITHIN that slot. Filled
     /// by M10's successor guard, which is the only place M10 builds a slot
-    /// for itself (§4).
+    /// for itself (§4). Every refusal that guard raises names its slot.
     ///
     /// [`FROM`]: crate::FROM
     /// [`TO`]: crate::TO
@@ -104,12 +98,21 @@ pub struct FaultSite {
     /// within the region `region` (and, for COMPARE, `operand`) names, else
     /// within the request's own top-level list — RETRIEVEV's `specs`. So the
     /// fields are read together, and an `index` alone always has exactly one
-    /// container.
+    /// container. Filled by M6's per-spec and per-span refusals, and by M10's
+    /// successor guard for a per-spec refusal; the guard's `SlotTooLarge`
+    /// names its slot and no index, the slot rather than one spec being at
+    /// fault.
     pub index: Option<usize>,
-    /// The span well-formedness fault.
+    /// The span well-formedness fault. M6's alone.
     pub fault: Option<SpanFault>,
-    /// Offending document of the multi-document `DocNotRegistered(Address)`
-    /// variants (RetrieveError/DeletionsError/CompareError/FindError).
+    /// The document — or link — the code is about, from three families: M6's
+    /// multi-document `DocNotRegistered(Address)`
+    /// (RetrieveError/DeletionsError/CompareError/FindError); every ω-gated
+    /// write's `NotOwner(Address)`, M5's and M7's (the ownership ruling,
+    /// 2026-08-16), naming the document or target link that failed the ω
+    /// check; and every `Withheld` — M10's doc-argument consult and source
+    /// consult, and M5's publish shot — naming the first unreadable document
+    /// in declaration order (PUB-8.4's pinned `site.addr`).
     pub addr: Option<Address>,
 }
 

@@ -46,6 +46,14 @@ pub trait ReadableWorld {
     /// that refuses defensively for an address it cannot resolve inverts
     /// that guarantee and tells a prober that a nonexistent address
     /// exists-but-is-hidden.
+    ///
+    /// The engine's `World` meets this for every unregistered address but one
+    /// shape, a departure it records on its impl of this trait: an address
+    /// shaped as a VERSION MEMBER of a registered draft reads as that draft
+    /// (PUB-2.15) and is withheld wherever the draft is, though no mint
+    /// produced it. Which of PUB-2.15 and PUB-6.12 governs that shape is
+    /// PUB's to rule; until it does, a `Withheld` naming such an address names
+    /// one no store registered.
     fn readable(&self, principal: Option<PrincipalId>, doc: &Address) -> bool;
 }
 

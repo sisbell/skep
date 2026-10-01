@@ -1,11 +1,11 @@
 //! EDITLINK's successor, the one request M10 assembles itself (§4), over the
 //! public surface: both forms of the type slot, a slot built from every spec,
 //! the per-slot span budget charged as the slot is built — refused before any
-//! transaction where the door judges the write, and a slot at the budget
-//! still accepted — the per-slot work budget charged before each walk, at the
-//! boundary MAKELINK's slots are held to on both of its sides, the first
-//! offending slot the one that speaks, and an unarranged source committing an
-//! empty slot exactly as MAKELINK's would.
+//! transaction where the door judges the write, ahead of any spec behind the
+//! crossing, and a slot at the budget still accepted — the per-slot work
+//! budget charged before each walk, at the boundary MAKELINK's slots are held
+//! to on both of its sides, the first offending slot the one that speaks, and
+//! an unarranged source committing an empty slot exactly as MAKELINK's would.
 
 use crate::common;
 
@@ -77,9 +77,11 @@ fn a_multi_spec_successor_slot_accumulates_every_spec() {
 /// names spans without bound. The slot is counted as it is built, so the
 /// owner's request past [`MAX_SLOT_SPANS`] — a write the door judges — is
 /// refused by M10 itself, naming the slot, having held one slot's worth of
-/// spans rather than every spec's, and with no transaction opened. (A caller
-/// the store's own gate refuses is answered that refusal instead:
-/// `write_door.rs`.)
+/// spans rather than every spec's, and with no transaction opened. The
+/// refusal is raised as the slot crosses, so a spec after the crossing is
+/// never reached: one the request gets wrong there changes nothing about the
+/// answer. (A caller the store's own gate refuses is answered that refusal
+/// instead: `write_door.rs`.)
 #[test]
 fn a_successor_slot_over_the_span_budget_is_refused_before_any_transaction() {
     let fx = setup();
@@ -94,27 +96,40 @@ fn a_successor_slot_over_the_span_budget_is_refused_before_any_transaction() {
         "the fixture is fragmented: one spec over this region resolves to two spans"
     );
     let two_spans = || skep_arrangement::VSpec { source: d.clone(), span: region() };
+    // One spec past the halfway mark crosses the budget; `after` is appended
+    // behind the crossing.
+    let edit = |after: Option<skep_arrangement::VSpec>| {
+        let mut from = vec![two_spans(); MAX_SLOT_SPANS / 2 + 1];
+        from.extend(after);
+        Op::EditLink {
+            original: original.clone(),
+            successor: SuccessorSpec { from, to: vec![], ty: SlotArg::Addrs(vec![d.clone()]) },
+            d_s: d.clone(),
+            d_a: d.clone(),
+        }
+    };
 
     let before = fx.febe.log_position();
-    let rej = rejected(ex(
-        &fx.febe,
-        fx.user,
-        Op::EditLink {
-            original,
-            successor: SuccessorSpec {
-                from: vec![two_spans(); MAX_SLOT_SPANS / 2 + 1],
-                to: vec![],
-                ty: SlotArg::Addrs(vec![d.clone()]),
-            },
-            d_s: d.clone(),
-            d_a: d,
-        },
-    ));
+    let rej = rejected(ex(&fx.febe, fx.user, edit(None)));
     assert_eq!(rej.op, OpKind::EditLink);
     assert_eq!(rej.code, RejectCode::SlotTooLarge);
     assert_eq!(rej.disposition, Disposition::Permanent, "no retry shrinks the slot");
-    assert_eq!(rej.site.and_then(|s| s.slot), Some(FROM), "M10's own refusal names the slot");
+    assert_eq!(
+        rej.site.as_ref().and_then(|s| s.slot),
+        Some(FROM),
+        "M10's own refusal names the slot"
+    );
     assert_eq!(fx.febe.log_position(), before, "the refusal opened no transaction");
+
+    // A link-subspace span is the request's own fault, and behind the
+    // crossing it is never reached: the same refusal comes back.
+    let ill_formed = skep_arrangement::VSpec { source: d.clone(), span: vspan(2, 1, 1) };
+    assert_eq!(
+        rejected(ex(&fx.febe, fx.user, edit(Some(ill_formed)))),
+        rej,
+        "the crossing answers ahead of a later spec's fault"
+    );
+    assert_eq!(fx.febe.log_position(), before, "and that refusal opened no transaction either");
 }
 
 /// §4, the other side of that boundary: a slot of exactly [`MAX_SLOT_SPANS`]

@@ -245,17 +245,22 @@ where
     }
 
     /// THE lifecycle entry (§1). Total: always yields a `Response` to send
-    /// (rejections are a `Response` variant). Totality rests on three things,
-    /// and only two of them are M10's — the non-poisoning locks its two state
-    /// collaborators hold (§7), and the step-(b) read/write split, which hands
-    /// each write arm a PROVEN-bound principal so no dispatch arm unwraps an
-    /// `Option`. Between them M10's own code holds no panic path. The third is
-    /// upstream: this call unwinds if a store panics beneath it, so totality
-    /// rests equally on M5's, M6's, M7's and M8's read and write paths not
-    /// panicking on honest input. What panic sites they hold guard their own
-    /// internal invariants, so no honest request reaches one. M5 states that
-    /// obligation in its own contract (skep-arrangement, §Failure channels),
-    /// and it is written here for the rest.
+    /// (rejections are a `Response` variant). Totality rests on what M10 holds
+    /// and on what it calls. M10's own code panics on no input: its locks are
+    /// non-poisoning (§7), the step-(b) read/write split hands each write arm
+    /// a PROVEN-bound principal so no dispatch arm unwraps an `Option`, and
+    /// its one runtime `expect` — `birth_version`'s — asserts an invariant of
+    /// M3's that no input reaches (the idem capacity's is evaluated at compile
+    /// time). The rest is upstream: this call unwinds if anything it calls
+    /// panics, so totality rests equally on M3's, M5's, M6's, M7's and M8's
+    /// read and write paths and M2's kernel not panicking on honest input,
+    /// and on the world it is assembled over — the read predicate, the
+    /// world's or a supplied [`ReadPredicate`], each stated TOTAL, and the two
+    /// publication lookups, whose one precondition M10 discharges. What panic
+    /// sites those modules hold guard their own internal invariants, so no
+    /// honest request reaches one. M5 states that obligation in its own
+    /// contract (skep-arrangement, §Failure channels), and it is written here
+    /// for the rest.
     ///
     /// Reentrant & `Sync` — the transport may call it concurrently for
     /// pipelined requests (§8), and that concurrency is the caller's to use.
@@ -321,7 +326,10 @@ where
     /// mean a REGISTERED PRIVATE document, which is exactly why the
     /// predicate must answer readable for an address the store has not
     /// registered ([`ReadableWorld::readable`]), so that no refusal can turn
-    /// a nonexistent address into a hidden one.
+    /// a nonexistent address into a hidden one. One shape departs, pending
+    /// PUB's ruling, and that trait method names it: an address shaped as a
+    /// version member of a registered draft is withheld as the draft, though
+    /// no store registered it.
     ///
     /// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
     /// [`Op::doc_arguments`]: crate::Op::doc_arguments
@@ -331,22 +339,35 @@ where
     /// [`Op::DiscoverableFrom`]: crate::Op::DiscoverableFrom
     /// [`Op::RetrieveV`]: crate::Op::RetrieveV
     ///
-    /// Two caller preconditions, neither of which this module can check for
+    /// The caller's preconditions, none of which this module can check for
     /// itself:
     ///
     /// * NON-FORGEABILITY (§6): `session` MUST originate in the transport's
     ///   connection state, never a wire-supplied value.
-    /// * SIZE: M10 measures no field of the [`Op`] it is handed — the one list
-    ///   it measures is the EDITLINK successor slot it builds for itself,
-    ///   against M7's two per-slot budgets — so every list, tumbler and
-    ///   magnitude in `req` reaches the owning store as presented. A transport
+    /// * SIZE: M10 measures one field of the [`Op`] it is handed — EDITLINK's
+    ///   address-form type slot, held to M7's span budget before it is
+    ///   encoded — and the successor slots it resolves for itself, against
+    ///   M7's two per-slot budgets; every other list, tumbler and magnitude
+    ///   in `req` reaches the owning store as presented. A transport
     ///   discharges this in [`Codec::parse`], which also names and prices the
     ///   operations whose work their size does not bound; a caller that
     ///   assembles an [`Op`] and calls HERE has no parser in between and owns
     ///   the same obligation.
+    /// * IDEMPOTENCY KEY (§7): an `id`, when present, names ONE request. Step
+    ///   (a) matches a memoized acknowledgment by session, id and op-KIND
+    ///   alone, so a different write of the same kind under an id this session
+    ///   already committed under is answered with the earlier write's
+    ///   acknowledgment and does not execute ([`ReqId`]).
+    /// * ATTESTATION (signed ops, the design record §5.5): `attest` is set only
+    ///   where the transport's write-path check ADMITTED that signature for
+    ///   this write. M10 verifies nothing and the kernel writes the value
+    ///   opaquely into the commit marker of an `insert`, `make_link` or
+    ///   `publish`, so an unchecked value reaches the journal as though
+    ///   admitted ([`Request::attest`]).
     ///
     /// [`Op`]: crate::Op
     /// [`Codec::parse`]: crate::Codec::parse
+    /// [`ReqId`]: crate::ReqId
     ///
     /// Two refusals can hold at once on a write, and the contract names which
     /// speaks: the poison gate (c) is consulted BEFORE the session gate (b),

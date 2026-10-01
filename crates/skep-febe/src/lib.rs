@@ -101,9 +101,10 @@
 //! * the wire codec byte format, and the request-SIZE limits that travel with
 //!   it — [`Codec`] is a seam the transport fills, and its parser is the only
 //!   bound on how large a request may be, since M10 measures no field of the
-//!   `Op` it is handed ([`Codec::parse`]); the request↔response correlation
-//!   — no frame M10 marshals carries a correlation id, and the optional
-//!   `ReqId` is an idempotency key, never one (§8); the `SessionId`
+//!   `Op` it is handed but EDITLINK's address-form type slot
+//!   ([`Codec::parse`]); the request↔response correlation — no frame M10
+//!   marshals carries a correlation id, and the optional `ReqId` is an
+//!   idempotency key, never one (§8); the `SessionId`
 //!   non-forgeability precondition and the authentication mechanism (§6), the
 //!   concurrency policy, and reorder/retry buffering (M10 *surfaces*
 //!   `Reorder`, it does not reorder);
@@ -144,7 +145,8 @@
 //! function (design, Conflicts resolved #4): `HasContent` is a [`FebeWorld`]
 //! supertrait and `ContentWrite` the record lift `Vstream::insert`'s bound
 //! requires, `Val` rides in `Op::Insert`'s payload, and `ContentError` is
-//! lowered when M5's insert refuses through `InsertError::Content`.
+//! lowered when M5's insert or publish refuses through `InsertError::Content`
+//! or `PublishError::Content`.
 
 #![forbid(unsafe_code)]
 

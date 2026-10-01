@@ -2,8 +2,10 @@
 //! acknowledgment its write committed — every acknowledging shape, the bare
 //! `Ack` and EDITLINK's two addresses unswapped among them — and commits
 //! nothing; the key is confined to its session and matched on op-kind, so a
-//! fresh session or another kind executes afresh; and a key past
-//! `MAX_REQ_ID_BYTES` is answered and not memoized.
+//! fresh session or another kind executes afresh; since only the kind is
+//! matched, a different write of the same kind under a reused id is answered
+//! from the memo and runs nothing; and a key past `MAX_REQ_ID_BYTES` is
+//! answered and not memoized.
 
 use crate::common;
 
@@ -98,6 +100,29 @@ fn a_write_reusing_a_req_id_under_another_kind_executes_rather_than_replaying() 
     let log = fx.febe.log_position();
     assert_eq!(ack(ex_id(&fx.febe, fx.user, b"same", del())), at_del, "its own retry replays");
     assert_eq!(fx.febe.log_position(), log, "…and a replayed ack commits nothing");
+}
+
+/// §7, the caller's half of the key: an id names ONE request. The memo
+/// matches by session, id and op-KIND and compares nothing else of the op, so
+/// a second write of the SAME kind under an id this session already committed
+/// under is answered with the FIRST write's acknowledgment and does not run —
+/// the obligation `ReqId` states, pinned so that a change to what the memo
+/// compares is a change to that contract and goes red.
+#[test]
+fn an_id_reused_for_a_different_write_of_the_same_kind_answers_the_first_ack_and_runs_nothing() {
+    let fx = setup();
+    let d = create_doc(&fx);
+    let insert = |byte: u8| Op::Insert {
+        doc: d.clone(),
+        at: vp(1, 1),
+        values: vec![skep_content::Val::new(vec![byte])],
+        deposit: Deposit::Undeclared,
+    };
+    let first = ack_addr(ex_id(&fx.febe, fx.user, b"reused", insert(b'x')));
+    let log = fx.febe.log_position();
+    let second = ack_addr(ex_id(&fx.febe, fx.user, b"reused", insert(b'y')));
+    assert_eq!(second, first, "the first write's acknowledgment answers the second");
+    assert_eq!(fx.febe.log_position(), log, "…and the second write is not executed");
 }
 
 /// §7/[`MAX_REQ_ID_BYTES`]: the memo's SECOND door, through `execute`. An id

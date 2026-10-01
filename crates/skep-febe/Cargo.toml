@@ -16,27 +16,35 @@ readme = "README.md"
 parking_lot.workspace = true
 lru.workspace = true
 # M1 — Address/Tumbler/Span/SpanSet/Nat for request/response payloads;
-# Tumbler::{len, get} in the editlink helper's content-V guard (§4).
+# `document_of` for the link-address absence rule and `subtree_of` for the
+# unjudged successor's padding.
 skep-address = { path = "../skep-address" }
-# M2 — snapshot()/current_seq() on every read path, TxnError consumption on
-# every write path; the kernel is reached only through the Stores factory.
+# M2 — one snapshot per read and per write door (`seq`/`world`/`chain` off
+# it), `current_seq` for `log_position`, `TxnError` on every write path,
+# `Attestation` on the three attested writes; the kernel is reached only
+# through the Stores factory.
 skep-kernel = { path = "../skep-kernel" }
-# M3 — the four entity ops via the Namespace driver, plus the two pure
-# namespace reads (next_account_prefix / principal_prefix) off a snapshot.
+# M3 — the four entity writes via the Namespace driver; off a snapshot, the
+# registry and ω reads asked by the namespace reads, the door's deferral, the
+# successor guard and the publication reads (`next_account_prefix`,
+# `principal_prefix`, `effective_owner_pair`/`_prefix`,
+# `is_registered_document`, `first_version_address`, `prefix_contains`).
 skep-namespace = { path = "../skep-namespace" }
 # M4 — four names, no call (design, Conflicts resolved #4): HasContent is a
 # FebeWorld supertrait and ContentWrite the record lift Vstream::insert's bound
 # requires; Val rides in Op::Insert's payload; ContentError is lowered when M5's
-# insert refuses through InsertError::Content. M10 calls no M4 function.
+# insert or publish refuses through InsertError::Content or
+# PublishError::Content. M10 calls no M4 function.
 skep-content = { path = "../skep-content" }
-# M5 — the five editing/versioning ops via the Vstream driver; M5State::resolve
-# + Run::iextent assemble editlink's successor (§4).
+# M5 — the six arrangement/versioning writes via the Vstream driver, plain and
+# attested; `iter_resolve` + `content_run_count` + `Run::iextent` behind
+# `as_ordinal_vspan` assemble editlink's successor (§4); `trunk_of`/
+# `trunk_head`/`published_target`, `birth_extent`/`shot_terms` and `Caller`
+# for the door and the publication reads.
 skep-arrangement = { path = "../skep-arrangement" }
-# M6 — the seven content/provenance queries over M10's snapshot; the sole
-# source of the multi-field FaultSite localization (operand/region/index/
-# fault, §5). The site's other two fields come from elsewhere: `addr` from
-# every ω-gated write enum's NotOwner(Address), and `slot` from M10's own
-# successor guard.
+# M6 — the seven content/provenance queries over M10's snapshot, and the one
+# producer of FaultSite's `operand`, `region` and `fault` (§5); the site's
+# other producers are listed on FaultSite.
 skep-retrieval = { path = "../skep-retrieval" }
 # M7 — the five link writes via the LinkWriter driver; readlink/followlink off a
 # snapshot; Endset/enc/Link/View for argument construction.

@@ -46,7 +46,7 @@ fn assert_committed(fx: &Fixture, kind: OpKind, r: &Response, seen: &mut Vec<OpK
 }
 
 /// A1/A7/V1: `committed_at` on EVERY write is the operation's own
-/// linearization point. A sequential chain over all fourteen writes, each
+/// linearization point. A sequential chain over all fifteen writes, each
 /// checked against the committed head the moment it returns — the coordinate
 /// is what a client waits at, so a stale or invented one breaks
 /// read-your-writes while every answer still looks right.

@@ -13,14 +13,17 @@
 //! inexpressible here rather than merely unwelcome.
 //!
 //! What it deduplicates is a SEQUENTIAL client's reissue — a retry sent after
-//! the original completed and its acknowledgment was lost. Between concurrent
-//! requests it offers nothing: `execute` reads the memo at step (a) and writes
-//! it at step (d) with the whole dispatch in between, so two requests in
-//! flight at once under one `(session, id, kind)` both miss and both execute,
-//! and `execute` invites exactly that concurrency (§8). Nothing here reserves
-//! a key for an operation still running. Nor can the absence be pinned by a
-//! test: the interleaving is nondeterministic, so an assertion that both
-//! commit would be flaky and one that either may is vacuous.
+//! the original completed and its acknowledgment was lost. It recognizes a
+//! reissue by session, id and op-kind alone; that the reissue is the same
+//! request is the client's word, which nothing here checks ([`ReqId`] states
+//! the obligation). Between concurrent requests it offers nothing: `execute`
+//! reads the memo at step (a) and writes it at step (d) with the whole
+//! dispatch in between, so two requests in flight at once under one
+//! `(session, id, kind)` both miss and both execute, and `execute` invites
+//! exactly that concurrency (§8). Nothing here reserves a key for an operation
+//! still running. Nor can the absence be pinned by a test: the interleaving is
+//! nondeterministic, so an assertion that both commit would be flaky and one
+//! that either may is vacuous.
 //!
 //! That admissibility rule is the memo's whole shape, so this is not a
 //! general per-session key/value store and offers no opaque `recall`/`store`

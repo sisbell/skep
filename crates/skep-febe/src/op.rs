@@ -22,7 +22,9 @@ use skep_retrieval::{RegionSpec, Spec};
 #[derive(Clone, PartialEq, Eq)]
 pub struct Request {
     /// The client's idempotency key (optional): a token the CLIENT chooses,
-    /// unique only within its own session.
+    /// naming one request within its own session — reused, after a write
+    /// committed under it, for a different write of the same kind, it is
+    /// answered from the memo and that write does not run ([`ReqId`]).
     pub id: Option<ReqId>,
     /// The parsed operation.
     pub op: Op,
@@ -43,9 +45,9 @@ pub struct Request {
     pub attest: Option<Attestation>,
 }
 
-/// The client's idempotency key — chosen by the client, unique only within
-/// its session (§7), and half of the memo's key, which pairs it with the
-/// session that committed under it.
+/// The client's idempotency key — chosen by the client, scoped to its own
+/// session (§7), and half of the memo's key, which pairs it with the session
+/// that committed under it.
 ///
 /// What the key buys is the answer to a retry sent AFTER the original's
 /// acknowledgment was lost. Two requests carrying one id concurrently are two
@@ -53,10 +55,17 @@ pub struct Request {
 /// it, and a restart empties it — so this is a hint that saves a duplicate
 /// commit, never a guarantee against one.
 ///
-/// The one limit the CALLER governs: a key longer than [`MAX_REQ_ID_BYTES`]
-/// is accepted and simply not memoized, so a retry under it re-executes and
-/// is never told. A caller choosing a structured key — a URL, a serialized
-/// blob — should measure it against that bound.
+/// THE CALLER'S TWO OBLIGATIONS. An id names ONE request: a retry re-presents
+/// the request it was first sent with. The memo compares the op's KIND and
+/// nothing else of it — not its arguments, not its `attest` — so a write
+/// reusing an id under which this session already committed a write of the
+/// same kind is answered with THAT write's acknowledgment, its address and
+/// its `at`, and is NOT executed, for as long as the entry lives (until
+/// eviction, the session's close, or a restart). Nothing reports the reuse,
+/// so the obligation is the caller's alone. And a key longer than
+/// [`MAX_REQ_ID_BYTES`] is accepted and simply not memoized, so a retry under
+/// it re-executes and is never told; a caller choosing a structured key — a
+/// URL, a serialized blob — should measure it against that bound.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ReqId(pub Vec<u8>);
 
@@ -236,6 +245,16 @@ pub enum Op {
     /// assert_sup: "old is superseded by new".
     AssertSup { home: Address, old: Address, new: Address },
     /// editlink: successor + supersession claim, one composite (§4).
+    ///
+    /// REFUSAL ORDER across the three layers that may answer it. Where both
+    /// `d_s` and `d_a` are registered documents the caller owns, the door
+    /// speaks first — `original` homed where the caller cannot read answers
+    /// `OriginalNotResident`, exactly as a never-deposited link, and an
+    /// unreadable successor source `Withheld` — then the successor's own
+    /// refusals ([`SuccessorSpec`]), then M7's. Where they are not, the door
+    /// judges nothing: the successor's request-shape and registration
+    /// refusals still speak, ahead of M7's home gate, which then answers
+    /// `HomeNotRegistered`, or `NotOwner` naming the home that failed.
     EditLink { original: Address, successor: SuccessorSpec, d_s: Address, d_a: Address },
     // ── raw link reads (→ M7) ──
     /// Σ.L(a) verbatim. A link whose HOME DOCUMENT this caller may not read
@@ -424,9 +443,25 @@ pub enum Op {
 /// the numbering [`Op::FollowLink`]'s `slot` is already in), and `index` the
 /// offending spec's position within it.
 ///
+/// A slot is also held to M7's two per-slot budgets — the spans it keeps
+/// ([`MAX_SLOT_SPANS`]) and the run-list steps its resolution walks — and
+/// over either answers `SlotTooLarge`, naming the slot and no index, the slot
+/// rather than one spec being at fault. Where both homes are registered
+/// documents the caller owns — the write the door judges — the refusal is
+/// M10's, raised as the slot crosses, once every spec reached so far has
+/// passed its two checks, so a spec after the crossing is never reached.
+/// Where they are not, the budget is M7's, answered after M7's home gate, so
+/// the store's `HomeNotRegistered`/`NotOwner` speaks first and the answer
+/// never turns on what a source the caller may not read holds; should that
+/// gate pass after all — a home registered in the window between M10's
+/// snapshot and the commit — it is M7 that answers `SlotTooLarge`, with no
+/// site. The type slot's address form is the exception: its count is the
+/// request's own, so it is held to the span budget whoever asks.
+///
 /// [`FROM`]: crate::FROM
 /// [`TO`]: crate::TO
 /// [`TYPE`]: crate::TYPE
+/// [`MAX_SLOT_SPANS`]: crate::MAX_SLOT_SPANS
 ///
 /// `Debug`, unlike the [`Op`] that carries it: the absence there is `Val`'s,
 /// and no `Val` reaches this payload. So a client that meets an
@@ -469,9 +504,10 @@ pub(crate) enum WriteConsult<'a> {
 /// `OpKind::Unparseable` (§Public interface/Codec). [`Op::kind`] produces
 /// every variant EXCEPT `Unparseable`. `Copy + PartialEq` so `execute`
 /// captures it once and threads it to both idempotency steps and every
-/// rejection, and `idem_get` can match it (§7); `Hash` so a caller may key
-/// by it — per-operation counters and sets are what a transport instruments
-/// this surface with, and only this crate can supply the impl.
+/// rejection, and the retry memo's lookup can match it (§7); `Hash` so a
+/// caller may key by it — per-operation counters and sets are what a
+/// transport instruments this surface with, and only this crate can supply
+/// the impl.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum OpKind {
     CreateNewDocument,

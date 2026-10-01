@@ -81,11 +81,10 @@ fn content_error_collapses_wholesale() {
     assert_eq!(code.disposition(), Disposition::Permanent);
 }
 
-/// §5: M6 is the sole producer of the multi-field localization
-/// (operand/region/index/fault); the variant-carried localization survives
-/// into the site, and the two fields M6 never fills — `addr`, which
-/// `not_owner` threads, and `slot`, which M10's successor guard fills —
-/// stay empty.
+/// §5: M6's variant-carried localization survives into the site — `index`
+/// and `fault` from RETRIEVEV's spec fault, `operand`/`region`/`index` from
+/// COMPARE's, and `addr` from a multi-document `DocNotRegistered(Address)` —
+/// and `slot`, which only M10's successor guard fills, stays empty.
 #[test]
 fn m6_faults_thread_their_site() {
     let (code, site) =

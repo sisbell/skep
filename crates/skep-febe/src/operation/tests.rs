@@ -3,7 +3,9 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
-use skep_arrangement::{Deposit, HasM5, InsertError, M5Rec, M5State, VPos, VSpec, Vstream};
+use skep_arrangement::{
+    deposit_class_types, Deposit, HasM5, InsertError, M5Rec, M5State, VPos, VSpec, Vstream,
+};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{
     Attestation, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, TxnError,
@@ -17,8 +19,9 @@ use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
 use super::*;
 use crate::op::{Op, ReqId, SuccessorSpec};
+use crate::publication::birth_version;
 use crate::reject::Disposition;
-use crate::response::CommittedAck;
+use crate::response::{BirthVersion, CommittedAck};
 use crate::successor::successor_link;
 
 // ── a minimal assembled world (the composition contract in miniature) ──
@@ -746,4 +749,66 @@ fn an_unjudged_successor_slot_over_the_work_budget_is_built_for_the_store_to_ref
         let link = successor_link(m3, m5, &successor(at_budget), judged).expect("a walk at the budget");
         assert!(link.from_slot().is_empty(), "judged: {judged}");
     }
+}
+
+/// PUB-8.12 / PUB-2.15, at `publication::birth_version`: the birth version is
+/// the DOCUMENT's, whatever address of it is asked. A version member answers
+/// its trunk's — the address the first `version` minted, with the content it
+/// was born with — and never the opening slot of its own namespace, which no
+/// mint produced. A document whose chain has no member answers none, and so
+/// does an address of another tier, which anchors no chain.
+#[test]
+fn a_version_member_answers_its_trunks_birth_version() {
+    let febe = surface();
+    let issue = |session: SessionId, op: Op| {
+        match febe.execute(session, Request { id: None, op, attest: None }) {
+            Response::Rejected(rej) => panic!("the fixture's requests are answered: {rej}"),
+            answered => answered,
+        }
+    };
+    let boot = febe.bootstrap_session();
+    let Response::MaybeAddr { addr: Some(prefix), .. } =
+        issue(boot, Op::NextAccountPrefix { parent: addr(&[1]) })
+    else {
+        panic!("the genesis node has a delegable next-form prefix");
+    };
+    let Response::AckAddr { addr: account, .. } =
+        issue(boot, Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: DRAFT_OWNER })
+    else {
+        panic!("the bootstrap session delegates the prefix");
+    };
+    let owner = febe.open_session(DRAFT_OWNER);
+    let mint = |published: bool| {
+        let op = Op::CreateNewDocument { account: account.clone(), published: Some(published) };
+        match issue(owner, op) {
+            Response::AckAddr { addr, .. } => addr,
+            other => panic!("the owner mints a document: {other:?}"),
+        }
+    };
+    let edition = mint(true);
+    let draft = mint(false);
+    let deposit = Op::Insert {
+        doc: edition.clone(),
+        at: VPos::content(Nat::from(1u32)),
+        values: [b'a', b'b', b'c'].map(|b| Val::new(vec![b])).to_vec(),
+        deposit: Deposit::Declared(deposit_class_types()[0].clone()),
+    };
+    assert!(matches!(issue(owner, deposit), Response::AckAddr { .. }), "the owner deposits");
+    let Response::AckAddr { addr: member, .. } =
+        issue(owner, Op::Version { d_src: edition.clone(), published: None })
+    else {
+        panic!("the owner versions its edition");
+    };
+
+    let snap = febe.stores.kernel().snapshot();
+    let (m3, m5) = (snap.world().m3(), snap.world().m5());
+    let born = Some(BirthVersion { addr: member.clone(), extent: Nat::from(3u32) });
+    assert_eq!(birth_version(m3, m5, &edition), born, "the trunk answers its chain's opening");
+    assert_eq!(
+        birth_version(m3, m5, &member),
+        born,
+        "a member answers its trunk's birth version, never its own namespace's opening slot"
+    );
+    assert_eq!(birth_version(m3, m5, &draft), None, "a chain with no member has no birth version");
+    assert_eq!(birth_version(m3, m5, &account), None, "no tier but a document's anchors a chain");
 }

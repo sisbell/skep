@@ -150,9 +150,10 @@ impl Lower for ContentError {
     /// `Permanent` — a transient content fault is thereby misclassified,
     /// documented, to revisit if the M4 edge is ratified).
     ///
-    /// The arm is LIVE: it is reached through `InsertError::Content` when M5's
-    /// `insert` refuses, so the structure the collapse discards is a fault a
-    /// client can meet, not a dead branch.
+    /// The arm is LIVE: it is reached through `InsertError::Content` and
+    /// `PublishError::Content` when M5's `insert` or `publish` refuses, so the
+    /// structure the collapse discards is a fault a client can meet, not a
+    /// dead branch.
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
         (RejectCode::Content, None)
     }
@@ -398,12 +399,11 @@ impl Lower for EditLinkError {
     }
 }
 
-// ────────── M6 (retrieval — the sole multi-field FaultSite producer) ───────
+// ─────────── M6 (retrieval — variant-carried localization) ────────────
 //
-// operand/region/index/fault come from here and nowhere else. The site's
-// other two fields are filled elsewhere: `addr` by `not_owner` above, for
-// every ω-gated write enum, and `slot` by M10's own successor guard
-// (`crate::successor`).
+// M6 is the one producer of `operand`, `region` and `fault`, and shares
+// `index` with M10's successor guard and `addr` with every `NotOwner` and
+// `Withheld`; `FaultSite`'s fields name every producer.
 
 impl Lower for RetrieveError {
     fn lower(self) -> (RejectCode, Option<FaultSite>) {

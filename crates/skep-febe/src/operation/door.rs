@@ -198,13 +198,24 @@ pub(super) fn home_readable(a: &Address, readable: &dyn Fn(&Address) -> bool) ->
 /// answers through, so the verdict and the answer it guards stand on one
 /// committed state.
 ///
-/// It runs AFTER registration — an unregistered document is fail-open
-/// readable (PUB-7.5) and defers to its store's own `*NotRegistered` —
-/// and BEFORE any other validation, so a published document never answers
-/// withheld and a private one never reaches a refusal that would describe
-/// it. The complementary rules of the read door live with the answers
-/// they shape rather than here: the link-ADDRESS absence rule at the two
-/// arms it governs, and the result-set filter inside each reader that
+/// PRECONDITION on `readable`: it is the predicate the request is answered
+/// through — the one `execute` binds off the snapshot it pins, or the HEAD's
+/// for a historical read — and it meets [`ReadPredicate`]'s obligations:
+/// total over every tier, and READABLE for any address the store has not
+/// registered (the world's own predicate departs for one shape, which
+/// [`ReadableWorld::readable`] names). This consult checks no registration of
+/// its own; it runs AFTER registration only because that obligation lets an
+/// unregistered document pass here and reach its store's own
+/// `*NotRegistered` (PUB-6.37, PUB-7.5). A `readable` that refuses an
+/// unregistered address turns that store's refusal into a `Withheld` naming
+/// it — telling a prober a nonexistent address is hidden (PUB-6.12) — and
+/// nothing here can tell.
+///
+/// It runs BEFORE any other validation, so a published document never
+/// answers withheld and a private one never reaches a refusal that would
+/// describe it. The complementary rules of the read door live with the
+/// answers they shape rather than here: the link-ADDRESS absence rule at the
+/// two arms it governs, and the result-set filter inside each reader that
 /// applies it.
 ///
 /// PUBLIC, because two callers must give one request one verdict.
@@ -222,6 +233,7 @@ pub(super) fn home_readable(a: &Address, readable: &dyn Fn(&Address) -> bool) ->
 /// predicate other than the one its request was built with.
 ///
 /// [`OperationSurface::execute`]: crate::OperationSurface::execute
+/// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
 pub fn consult_read(op: &Op, readable: &dyn Fn(&Address) -> bool) -> Result<(), Rejection> {
     for arg in op.doc_arguments() {
         if !readable(arg) {
@@ -280,7 +292,8 @@ pub fn consult_read(op: &Op, readable: &dyn Fn(&Address) -> bool) -> Result<(), 
 /// by the predicate's own construction: an unregistered address is
 /// fail-open readable (PUB-7.5), so it passes here and takes the store's
 /// `source_not_registered` — a withheld answer is only ever a REGISTERED
-/// private document.
+/// private document, save the one shape the world's own predicate departs
+/// on ([`ReadableWorld::readable`]).
 ///
 /// SLOT 5 AHEAD OF SLOT 6, and how this door reaches it (PUB round 2,
 /// lane 4.2, F3; PUB-6.36, PUB-2.11, PUB-6.38): the model's refusals are
@@ -346,6 +359,7 @@ pub fn consult_read(op: &Op, readable: &dyn Fn(&Address) -> bool) -> Result<(), 
 /// change, not this door's.
 ///
 /// [`OperationSurface::readable_by`]: OperationSurface::readable_by
+/// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
 pub(super) fn consult_write(
     wc: &WriteCtx,
     op: &Op,

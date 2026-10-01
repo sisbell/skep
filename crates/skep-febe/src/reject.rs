@@ -39,9 +39,7 @@ use crate::op::OpKind;
 /// [`RejectCode`].
 ///
 /// `#[must_use]`: a rejection is an answer owed to a client, so building one
-/// and dropping it is the silence this module exists to prevent. A site that
-/// raises one for its side effect alone — latching the poison hint on the
-/// write path — says so with `let _ =`.
+/// and dropping it is the silence this module exists to prevent.
 #[must_use]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Rejection {

@@ -1,7 +1,7 @@
 //! THE MODULE ORDER, CHECKED: `src/lib.rs` declares this crate's modules in
 //! dependency order, each naming in code only the modules above it, and this
-//! is that sentence as a test — together with two of ARCHITECTURE.md's
-//! cross-file rules, the halves of them no compiler error reports.
+//! is that sentence as a test — together with one of ARCHITECTURE.md's
+//! cross-file rules, the half of it no compiler error reports.
 //!
 //! Every `crate::…` path a module's files name in code — its tests included,
 //! comments and doc links not — resolves to that module or to one declared
@@ -11,11 +11,10 @@
 //! module's children name their parent through `super::`, which is the tree
 //! itself and not an edge between modules.
 //!
-//! The two rules are held over every code line under `src/`, tests included:
-//! only `operation/door.rs` asks the world's own read predicate, and only
-//! `lower` and `operation.rs` name `lower_txn`. Each scan also asserts that it
-//! found the site its rule allows, so a scan that matches nothing fails
-//! rather than passing a clean tree.
+//! The rule is held over every code line under `src/`, tests included: only
+//! `operation/door.rs` asks the world's own read predicate. The scan also
+//! asserts that it found the site the rule allows, so a scan that matches
+//! nothing fails rather than passing a clean tree.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -78,30 +77,6 @@ fn only_the_door_asks_the_worlds_own_predicate() {
         render(&elsewhere)
     );
     assert!(!door.is_empty(), "the door asks it, so a scan that finds nothing there is broken");
-}
-
-/// ARCHITECTURE.md's fourth rule, likewise. Every write arm lowers its
-/// store's refusal through `OperationSurface::lower_write`, which latches the
-/// poison mirror on the way past. `lower_txn` builds the same rejection
-/// without the latch and is `pub(crate)`, so an arm that called it would
-/// compile and answer correctly while leaving its operation outside the
-/// latch's cover. So it is named only where it is defined and tested, and in
-/// the one method that latches.
-#[test]
-fn only_lower_and_the_lifecycle_name_lower_txn() {
-    const ALLOWED: [&str; 3] = ["lower.rs", "lower/tests.rs", "operation.rs"];
-    let (allowed, stray): (Vec<_>, Vec<_>) = code_naming(|code| code.contains("lower_txn"))
-        .into_iter()
-        .partition(|(file, _)| ALLOWED.iter().any(|ok| file == Path::new(ok)));
-    assert!(
-        stray.is_empty(),
-        "a write arm lowers through `lower_write`, never `lower_txn`:\n{}",
-        render(&stray)
-    );
-    assert!(
-        allowed.iter().any(|(file, _)| file == Path::new("operation.rs")),
-        "`lower_write` names it, so a scan that finds nothing there is broken"
-    );
 }
 
 /// The root's `pub use <module>::…;` lines, as re-exported name → the rank

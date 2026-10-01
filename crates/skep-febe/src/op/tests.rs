@@ -27,7 +27,7 @@ fn doc() -> Address {
 /// Every variant, paired with its documented partition side (§1's
 /// `is_read` grouping): `(op, is_read)`. Crate-visible: the dispatch
 /// tables' agreement with this partition is checked against the same
-/// fixture, in `operation/tests.rs`, and the write door's two pairing laws
+/// fixture, in `operation/tests.rs`, and the write door's three pairing laws
 /// in `operation/door.rs`.
 pub(crate) fn all_ops() -> Vec<(Op, bool)> {
     vec![

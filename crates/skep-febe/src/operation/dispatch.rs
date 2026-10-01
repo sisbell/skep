@@ -1,10 +1,10 @@
 //! The two static dispatch tables (§1–§4): every [`Op`] handed to the store
 //! or query module that owns it. The write half runs under the proven-bound
-//! [`WriteCtx`] and lowers every store refusal through
-//! [`OperationSurface::lower_write`]; the read half answers off the one
-//! snapshot it pins, through the request's one read predicate. Each table's
-//! complement arm rejects the other half's operations `Malformed`, so a new
-//! `Op` variant is classified at both before it compiles.
+//! [`WriteCtx`] and lowers every store refusal through the `lower` table; the
+//! read half answers off the one snapshot it pins, through the request's one
+//! read predicate. Each table's complement arm rejects the other half's
+//! operations `Malformed`, so a new `Op` variant is classified at both before
+//! it compiles.
 
 // `FebeWorld` names the accessor bound set, and its supertraits carry the
 // `m3()`/`m5()`/`links()` methods the read arms call, so no accessor trait
@@ -23,7 +23,7 @@ use skep_retrieval::Query;
 
 use super::door::{consult_read, consult_write, home_readable};
 use super::{OperationSurface, WriteCtx};
-use crate::lower::lower_read;
+use crate::lower::{lower_read, lower_txn};
 use crate::op::Op;
 use crate::publication::{birth_version, covered_universal_grants, require_registered_document};
 use crate::reject::{rejection, RejectCode, Rejection};
@@ -42,12 +42,11 @@ where
     /// per-op from the factory, returns only its post-commit value (A7 is
     /// upheld structurally — M10 has nothing to put on the wire until the
     /// driver returns at/after `lin(op)`), classifies `TxnError<E>` through
-    /// [`OperationSurface::lower_write`] so the poison hint latches on the way
-    /// past, and stamps the committed `Seq`. Exhaustive over `Op` with NO `_`
-    /// wildcard: the complementary (read) half is one explicit `|`-list arm
-    /// rejecting `Malformed` — never a panic — so a newly added `Op` variant
-    /// is a compile-time non-exhaustiveness error here, at `is_read`, and at
-    /// `dispatch_read`.
+    /// the `lower` table, and stamps the committed `Seq`. Exhaustive over `Op`
+    /// with NO `_` wildcard: the complementary (read) half is one explicit
+    /// `|`-list arm rejecting `Malformed` — never a panic — so a newly added
+    /// `Op` variant is a compile-time non-exhaustiveness error here, at
+    /// `is_read`, and at `dispatch_read`.
     ///
     /// The coordinate a driver hands back is `at` in every arm, and
     /// `committed_at` — the design's own word for it — in the two arms whose
@@ -104,7 +103,7 @@ where
                     .stores
                     .namespace()
                     .create_new_document(wc.principal, &account, published)
-                    .map_err(|e| self.lower_write(kind, e))?;
+                    .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             Op::Delegate { new_prefix, new_id } => {
@@ -112,7 +111,7 @@ where
                     .stores
                     .namespace()
                     .delegate(wc.principal, new_prefix, new_id)
-                    .map_err(|e| self.lower_write(kind, e))?;
+                    .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             // No principal: the node addr is supplied by provisioning, and
@@ -124,7 +123,7 @@ where
                     .stores
                     .namespace()
                     .register_node(addr)
-                    .map_err(|e| self.lower_write(kind, e))?;
+                    .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             // Fork ≠ Version (§3): mints an EMPTY account-tier document,
@@ -139,7 +138,7 @@ where
                     .stores
                     .namespace()
                     .fork(wc.principal, published)
-                    .map_err(|e| self.lower_write(kind, e))?;
+                    .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             // ── arrangement writes (→ M5; ω-gated in-store under the
@@ -154,7 +153,7 @@ where
                     .stores
                     .vstream_attested(attest)
                     .insert(wc.caller(), &doc, at, values, deposit)
-                    .map_err(|e| self.lower_write(kind, e))?; // returns post-commit
+                    .map_err(|e| lower_txn(kind, e))?; // returns post-commit
                 Ok(Response::AckAddr { addr: start, at: committed_at }) // the exact V1 coordinate
             }
             Op::Delete { doc, p, width } => {
@@ -162,7 +161,7 @@ where
                     .stores
                     .vstream()
                     .delete(wc.caller(), &doc, p, width)
-                    .map_err(|e| self.lower_write(kind, e))?;
+                    .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::Ack { at })
             }
             Op::Copy { doc, at, specs } => {
@@ -170,7 +169,7 @@ where
                     .stores
                     .vstream()
                     .copy(wc.caller(), &doc, at, &specs)
-                    .map_err(|e| self.lower_write(kind, e))?;
+                    .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::Ack { at: committed_at })
             }
             Op::Rearrange { doc, cuts } => {
@@ -178,7 +177,7 @@ where
                     .stores
                     .vstream()
                     .rearrange(wc.caller(), &doc, &cuts)
-                    .map_err(|e| self.lower_write(kind, e))?;
+                    .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::Ack { at })
             }
             Op::Version { d_src, published } => {
@@ -189,7 +188,7 @@ where
                     // three-valued flag: None ⇒ INHERIT published(d_src),
                     // off its own working state (PUB-8.17/8.18).
                     .version(wc.principal, &d_src, published)
-                    .map_err(|e| self.lower_write(kind, e))?;
+                    .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             // The SHOT (PUB-2.33, PUB-8.1): M5's composite decides the
@@ -205,7 +204,7 @@ where
                     .stores
                     .vstream_attested(attest)
                     .publish(wc.caller(), &doc, shot, &visibility)
-                    .map_err(|e| self.lower_write(kind, e))?;
+                    .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             // ── link writes (→ M7; ω-gated in-store on each written home —
@@ -226,7 +225,7 @@ where
                         writer.makelink_replacing(wc.caller(), &home, from, to, ty, &replaces)
                     }
                 }
-                .map_err(|e| self.lower_write(kind, e))?;
+                .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             // Idempotent zero-step ops need no special case (§3): a dedup hit
@@ -238,7 +237,7 @@ where
                     .stores
                     .linkstore(&visibility)
                     .emit(wc.caller(), &home, &ty, &from, &to)
-                    .map_err(|e| self.lower_write(kind, e))?;
+                    .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             Op::Nullify { home, target } => {
@@ -246,7 +245,7 @@ where
                     .stores
                     .linkstore(&visibility)
                     .nullify(wc.caller(), &home, &target)
-                    .map_err(|e| self.lower_write(kind, e))?;
+                    .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             Op::AssertSup { home, old, new } => {
@@ -254,7 +253,7 @@ where
                     .stores
                     .linkstore(&visibility)
                     .assert_sup(wc.caller(), &home, &old, &new)
-                    .map_err(|e| self.lower_write(kind, e))?;
+                    .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             // The one read-assembled request (§4): the successor's content
@@ -277,7 +276,7 @@ where
                     .stores
                     .linkstore(&visibility)
                     .editlink(wc.caller(), &original, link, &d_s, &d_a)
-                    .map_err(|e| self.lower_write(kind, e))?;
+                    .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckEdit { successor: edit.successor, claim: edit.claim, at })
             }
             // Complementary half — unreachable under the is_write partition

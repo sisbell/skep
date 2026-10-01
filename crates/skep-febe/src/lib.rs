@@ -17,7 +17,7 @@
 //! It holds exactly one piece of *authoritative* state, and authoritative
 //! only for the uptime: which principal a session speaks for (§6).
 //! Everything else it holds is a **hint** that may be lost with no loss of
-//! correctness — the best-effort retry memo (§7) and the poison latch (§9).
+//! correctness — the best-effort retry memo (§7).
 //! It is, concretely, a lifecycle wrapper +
 //! dispatch table + readability door + client-model adapter. The door is the
 //! largest of the four: ONE read predicate per request, the two consults it

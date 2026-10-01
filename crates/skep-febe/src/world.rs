@@ -199,7 +199,9 @@ impl<
 /// handles (§Public interface). The binary/engine builds the one production
 /// impl; M10 names only this trait and the published handle *types*, acquiring
 /// a driver per-op. Reads, snapshots, `current_seq`, and the latent composite
-/// go through [`Stores::kernel`].
+/// go through [`Stores::kernel`]. The one question a write asks before it
+/// acquires a driver — whether the kernel still accepts writes — is
+/// [`Stores::is_poisoned`].
 ///
 /// **An implementer supplies the kernel, and nothing else.** All three
 /// drivers follow from it: `Namespace::new`, `Vstream::new` and
@@ -207,7 +209,8 @@ impl<
 /// trait's bound — and each handle holds the borrows it is handed and no
 /// state, M7's taking the caller's VISIBILITY class beside the kernel, which
 /// is already this method's parameter. So all three are given here rather
-/// than transcribed identically into every impl.
+/// than transcribed identically into every impl, and so is the halt report,
+/// which is the kernel's own answer.
 ///
 /// PRECONDITION on the implementer: **[`Stores::kernel`] answers with the
 /// same `Kernel<W>` on every call.** The signature does not force it — it is
@@ -217,12 +220,12 @@ impl<
 /// `kernel()`, while the link writes commit through `linkstore()`. Two kernels
 /// leave those coordinates describing different logs, each store still
 /// committing before it acknowledges and the reported positions no longer
-/// meaning what this module promises. The three provided bodies are each
-/// built over `kernel()`, so an implementer that supplies only the kernel
-/// cannot violate that half — which is why the precondition is stated on the
-/// one method such an implementer writes. An implementer that OVERRIDES one
-/// of the three takes the obligation back on, and owes the same single-kernel
-/// guarantee for whatever driver it returns.
+/// meaning what this module promises. The provided bodies, the drivers and
+/// the halt report alike, are each built over `kernel()`, so an implementer
+/// that supplies only the kernel cannot violate that half — which is why the
+/// precondition is stated on the one method such an implementer writes. An
+/// implementer that OVERRIDES one of them takes the obligation back on, and
+/// owes the same single-kernel guarantee for whatever it returns.
 ///
 /// The design flagged the engine-facing store-driver constructors as a
 /// required upstream interface amendment (Conflicts resolved #6); the as-built
@@ -236,6 +239,22 @@ impl<
 pub trait Stores<W: WorldState>: Send + Sync {
     /// M2 — reads/snapshots/`current_seq`/the latent composite `transact`.
     fn kernel(&self) -> &Kernel<W>;
+    /// Whether the kernel behind these drivers has halted its write paths:
+    /// M2's [`Kernel::is_poisoned`] for that kernel. `OperationSurface::execute`
+    /// asks this at step (c), before any write reaches a driver. M2's word for
+    /// the answer holds here: a `true` is actionable without a race, and a
+    /// `false` may age, the refusal `transact` returns staying authoritative.
+    /// The answer being the kernel's, the gate it serves holds whichever
+    /// writer halted the kernel — M10's own, M9's rule fires, or a
+    /// transport's writer of its own.
+    ///
+    /// Provided over `kernel()`, as the drivers are, and an implementer that
+    /// overrides it owes M2's answer for that same kernel. The one exception
+    /// is a test's: M2 offers no way to poison an in-memory kernel, so a test
+    /// overrides this to stand a write in front of a halted one.
+    fn is_poisoned(&self) -> bool {
+        self.kernel().is_poisoned()
+    }
     /// M3 driver — borrows the held kernel for the call.
     fn namespace(&self) -> Namespace<'_, W> {
         Namespace::new(self.kernel())

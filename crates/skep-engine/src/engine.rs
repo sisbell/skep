@@ -356,16 +356,17 @@ impl EngineStores {
 }
 
 /// The one kernel every driver M10 acquires is built over — the one method
-/// this impl writes, the three drivers being `Stores`' provided bodies over it
-/// (M7's writer among them, at the class M10 hands in per write, lane 3.3b).
+/// this impl writes, the drivers and the halt report being `Stores`' provided
+/// bodies over it (M7's writer among the drivers, at the class M10 hands in
+/// per write, lane 3.3b).
 ///
 /// M10 places one PRECONDITION on an implementer: this answers the SAME
 /// kernel on every call, since every coordinate M10 reports rests on it. It is
 /// discharged by construction — one `Arc`, fixed at [`EngineStores::new`] and
 /// never replaced, shared by every clone of the handle
 /// (`every_stores_clone_answers_the_engine_s_one_kernel` holds it). Overriding
-/// one of the provided bodies here would take that obligation back on for the
-/// driver it returned.
+/// one of the provided bodies here would take that obligation back on for
+/// what it returned.
 impl Stores<World> for EngineStores {
     fn kernel(&self) -> &Kernel<World> {
         &self.kernel

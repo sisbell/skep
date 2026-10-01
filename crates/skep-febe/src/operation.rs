@@ -1,10 +1,10 @@
 //! The LIFECYCLE: [`OperationSurface`], the state it holds for one uptime,
 //! and its entry ([`OperationSurface::execute`]) — parse → authorize →
 //! linearize → commit-gate → marshal → surface (§1–§4). The lifecycle's order
-//! lives here, with what its gates read: the session table, the retry memo,
-//! and the poison mirror beside the one method that latches it
-//! ([`OperationSurface::lower_write`]). The pieces it consults belong to their
-//! own cards — [`crate::session::Sessions`] for the ephemeral binding (§6),
+//! lives here, with what its gates read: the retry memo, the factory's report
+//! of whether the kernel still accepts writes ([`Stores::is_poisoned`]), and
+//! the session table. The pieces it consults belong to their own cards —
+//! [`crate::session::Sessions`] for the ephemeral binding (§6),
 //! [`crate::idem::IdemCache`] for the committed-write retry memo (§7), and
 //! [`crate::publication`] for what the publication reads need that no store
 //! computes.
@@ -13,8 +13,8 @@
 //! a child does, so nothing here is widened for them:
 //!
 //! * [`door`] — the READABILITY DOOR: the one read predicate a request
-//!   answers through, the two consults it drives, the two per-variant tables
-//!   only the write consult asks, and the link-address absence rule.
+//!   answers through, the two consults it drives, the three per-variant
+//!   tables only the write consult asks, and the link-address absence rule.
 //!   `OperationSurface::readable`, where a supplied predicate overrides the
 //!   world's own, is private to it; the world's own is a supertrait method
 //!   callable on any `W`, so `tests/it/tidy.rs` checks that no other file
@@ -24,7 +24,7 @@
 //!   [`WriteCtx`], the read half over one pinned snapshot.
 
 // The readability door: the one predicate of a request, the two consults
-// it drives with the two tables only the write consult asks, and the
+// it drives with the three tables only the write consult asks, and the
 // link-address absence rule.
 mod door;
 // The two static tables: every `Op` to the store or query module that owns it.
@@ -33,28 +33,26 @@ mod dispatch;
 pub use door::{consult_read, ReadPredicate};
 
 use std::fmt;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use skep_address::Address;
 use skep_arrangement::{Caller, M5Rec};
 use skep_content::ContentWrite;
-use skep_kernel::{Seq, TxnError, WorldState};
+use skep_kernel::{Seq, WorldState};
 use skep_links::LinkRec;
 use skep_namespace::{M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL};
 
 use crate::idem::IdemCache;
-use crate::lower::{lower_txn, Lower};
 use crate::op::{OpKind, Request};
-use crate::reject::{rejection, RejectCode, Rejection};
+use crate::reject::{rejection, RejectCode};
 use crate::response::Response;
 use crate::session::{SessionId, Sessions};
 use crate::world::{FebeWorld, Stores};
 
 /// M10's front-door handle (§Public interface). Owns **no** authoritative
-/// substrate state and **no** `im` structure — its fields are the ephemeral
-/// connection state ([`Sessions`]), a best-effort committed-write retry memo
-/// ([`IdemCache`]), and a mirror of M2's poison state; none is ever snapshotted
-/// or replayed, which is why this is the one module that legitimately departs
+/// substrate state and **no** `im` structure — what it holds for the uptime
+/// is the ephemeral connection state ([`Sessions`]) and a best-effort
+/// committed-write retry memo ([`IdemCache`]); neither is ever snapshotted or
+/// replayed, which is why this is the one module that legitimately departs
 /// from the `im`-everywhere convention (§Core data model).
 pub struct OperationSurface<W: WorldState> {
     /// Borrowed authority: the binary's factory (M2/M3/M5/M7 own real state).
@@ -67,25 +65,10 @@ pub struct OperationSurface<W: WorldState> {
     /// sweep runs (§6) — and the whole memo is lost on restart, so a
     /// post-restart retry re-executes (duplicate, by design — ASN-0134 §A7).
     idem: IdemCache,
-    /// Hint: a MIRROR of M2's own poison state, which is the fact's owner and
-    /// publishes it as `Kernel::is_poisoned` — lock-free, infallible, and
-    /// terminal in the one direction that matters, so a `true` there is
-    /// actionable without a race. This copy is kept only so `execute`'s step
-    /// (c) can fail a write fast without opening a doomed transaction, and it
-    /// is raised by the first `TxnError::Poisoned` M10 itself meets
-    /// ([`OperationSurface::lower_write`], §5/§9).
-    ///
-    /// It therefore LAGS exactly the writes M10 did not issue — M9's rule
-    /// fires reach M7's gated write path directly rather than through this
-    /// surface — so a kernel poisoned by one of those is mirrored `false`
-    /// until an M10 write fails. Nothing rests on the lag: poison is
-    /// terminal, so the mirror is never falsely `true`, and M2's own refusal
-    /// is the authoritative answer either way.
-    poisoned: AtomicBool,
-    /// The supplied [`ReadPredicate`], or none — in which case every read arm
-    /// answers the world's own predicate off the one snapshot the request
-    /// pins, and the publish arm over the working world M5 hands its source
-    /// gate.
+    /// The supplied [`ReadPredicate`], or none — in which case every read that
+    /// masks answers the world's own predicate off the one snapshot the
+    /// request pins, and every write's visibility class over the working
+    /// world its store hands the gate.
     read_predicate: Option<Box<ReadPredicate>>,
 }
 
@@ -95,10 +78,10 @@ pub struct OperationSurface<W: WorldState> {
 /// [`ReadPredicate`] answers in place of the world's, the one fact about a
 /// front door that decides every masked answer and that nothing else shows.
 /// Nothing more: the session table and the retry memo sit behind locks, and
-/// the poison MIRROR lags the bit the kernel field prints. Written out rather
-/// than derived, as M5's `Vstream` and M7's `LinkWriter` are: a derive would
-/// bound the impl on `W: Debug`, and the factory and the predicate are trait
-/// objects that carry none.
+/// the halt state the write gate asks is M2's, which the kernel field already
+/// prints. Written out rather than derived, as M5's `Vstream` and M7's
+/// `LinkWriter` are: a derive would bound the impl on `W: Debug`, and the
+/// factory and the predicate are trait objects that carry none.
 impl<W: WorldState> fmt::Debug for OperationSurface<W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("OperationSurface")
@@ -152,7 +135,6 @@ where
             stores,
             sessions: Sessions::new(),
             idem: IdemCache::new(),
-            poisoned: AtomicBool::new(false),
             read_predicate: None,
         }
     }
@@ -160,10 +142,11 @@ where
     /// Supply the [`ReadPredicate`] this front door answers through instead of
     /// its own world's — the transport's HEAD predicate for a historical read
     /// (PUB-6.48), closed over one head snapshot per request (PUB-6.39).
-    /// Without it every read arm answers [`ReadableWorld::readable`] off the
-    /// one snapshot the request pins, and the publish shot's source gate over
-    /// the working world of its own transaction, which is what a live front
-    /// door wants.
+    /// Without it every read that masks answers [`ReadableWorld::readable`]
+    /// off the one snapshot the request pins, and every write's visibility
+    /// class — M5's source gate on the shot, M7's gates on the link writes —
+    /// over the working world of its own transaction, which is what a live
+    /// front door wants.
     ///
     /// It is the WHOLE predicate that is supplied, not merely what the two
     /// consults ask: the same value answers every result-set filter, every
@@ -374,14 +357,16 @@ where
     /// [`ReqId`]: crate::ReqId
     ///
     /// Two refusals can hold at once on a write, and the contract names which
-    /// speaks: the poison gate (c) is consulted BEFORE the session gate (b),
-    /// so a write from an unbound session against a halted kernel answers
-    /// `Poisoned`/`Halt` and never `Unauthenticated`. A client is told the
-    /// engine has stopped even where its own defect is that it must
-    /// re-authenticate. The retry memo (a) precedes both, so a retry of a
-    /// write that already committed is answered from the memo whatever either
-    /// gate would have said. A READ takes none of the three: no gate, and no
-    /// memo either, the memo holding committed-write acknowledgments alone.
+    /// speaks: the poison gate (c) — M2's own report, asked through the
+    /// factory ([`Stores::is_poisoned`]), so it holds whichever writer halted
+    /// the kernel — is consulted BEFORE the session gate (b), so a write from
+    /// an unbound session against a halted kernel answers `Poisoned`/`Halt`
+    /// and never `Unauthenticated`. A client is told the engine has stopped
+    /// even where its own defect is that it must re-authenticate. The retry
+    /// memo (a) precedes both, so a retry of a write that already committed is
+    /// answered from the memo whatever either gate would have said. A READ
+    /// takes none of the three: no gate, and no memo either, the memo holding
+    /// committed-write acknowledgments alone.
     pub fn execute(&self, session: SessionId, req: Request) -> Response {
         let Request { id, op, attest } = req;
         let kind = op.kind(); // Copy; captured before dispatch moves the op
@@ -404,9 +389,11 @@ where
                     return ack.into();
                 }
             }
-            // (c) refuse writes on a poisoned kernel; reads are still served
-            //     through the else-branch (§9).
-            if self.poisoned.load(Ordering::Relaxed) {
+            // (c) refuse writes on a kernel that has halted its write paths —
+            //     asked of the factory, whose answer is M2's own report, so it
+            //     holds whichever writer halted the kernel; reads are still
+            //     served through the else-branch (§9).
+            if self.stores.is_poisoned() {
                 return reject(kind, RejectCode::Poisoned); // ⇒ Halt
             }
             match self.sessions.principal_of(session) {
@@ -465,35 +452,6 @@ where
     pub fn head_coordinate(&self) -> (Seq, [u8; 32]) {
         let snap = self.stores.kernel().snapshot();
         (snap.seq(), snap.chain())
-    }
-
-    // ── rejection surfacing (§5) ──
-
-    /// Lower a write path's `TxnError` — the write half of the lowering
-    /// family, beside the read arms' [`lower_read`]. It runs the [`lower_txn`]
-    /// table and latches the poison hint on the way past `Poisoned`, so
-    /// `execute` step (c) can fail the next write fast rather than opening a
-    /// doomed transaction.
-    ///
-    /// That latch is why this is a METHOD where `lower_read` is a free
-    /// function: every write arm comes through HERE and none reaches
-    /// [`lower_txn`] directly. It is imported beside this method and not into
-    /// `dispatch`, where the arms are, and `tests/it/tidy.rs` checks that no
-    /// file but `lower` and this one names it; called from an arm it would
-    /// build the same rejection while leaving its operation outside the
-    /// latch's cover.
-    /// And the latch exists only because the gate reads M10's MIRROR of M2's
-    /// poison state rather than asking M2, so this method's whole reason is
-    /// the mirror's ([`OperationSurface`]). `Relaxed` suffices: the flag is a
-    /// hint, and M2 independently returns `Poisoned` to every later write
-    /// whether or not this one is seen.
-    ///
-    /// [`lower_read`]: crate::lower::lower_read
-    fn lower_write<E: Lower>(&self, kind: OpKind, e: TxnError<E>) -> Rejection {
-        if matches!(e, TxnError::Poisoned) {
-            self.poisoned.store(true, Ordering::Relaxed); // LATCH (§1(c)/§9)
-        }
-        lower_txn(kind, e)
     }
 }
 

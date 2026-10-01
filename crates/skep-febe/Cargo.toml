@@ -20,9 +20,9 @@ lru.workspace = true
 # unjudged successor's padding.
 skep-address = { path = "../skep-address" }
 # M2 — one snapshot per read and per write door (`seq`/`world`/`chain` off
-# it), `current_seq` for `log_position`, `TxnError` on every write path,
-# `Attestation` on the three attested writes; the kernel is reached only
-# through the Stores factory.
+# it), `current_seq` for `log_position`, `is_poisoned` behind the factory's
+# halt report, `TxnError` on every write path, `Attestation` on the three
+# attested writes; the kernel is reached only through the Stores factory.
 skep-kernel = { path = "../skep-kernel" }
 # M3 — the four entity writes via the Namespace driver; off a snapshot, the
 # registry and ω reads asked by the namespace reads, the door's deferral, the

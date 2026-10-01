@@ -3,9 +3,10 @@
 //! by [`OperationSurface::readable_by`] — the two consults it drives
 //! ([`consult_read`], [`consult_write`]), the link-address absence rule
 //! ([`home_readable`]), the visibility class lent to a store for one write
-//! ([`OperationSurface::visible_to`]), and the two per-variant tables only
-//! the write consult asks, [`Op::write_consult`] and
-//! [`Op::in_place_destination`], defined here so nothing else can ask them.
+//! ([`OperationSurface::visible_to`]), and the three per-variant tables only
+//! the write consult asks, [`Op::write_consult`],
+//! [`Op::in_place_destination`] and [`Op::link_address_arguments`], defined
+//! here so nothing else can ask them.
 //!
 //! `OperationSurface::readable`, where a supplied predicate overrides the
 //! world's own, is private to this module, so the compiler keeps every other
@@ -36,10 +37,13 @@ use crate::world::FebeWorld;
 /// THE read predicate, as the transport may SUPPLY it (PUB-1.31; PUB-6.39's
 /// one-per-request shape; PUB round 2, lane 3.3 — the predicate widened from
 /// the publish shot's source gate to the whole read surface): may `principal`
-/// (`None` = the GUEST) read the document `doc`? Consulted by every read arm
-/// — the doc-argument consult, the per-run withheld arm, the result-set
-/// filter — and by the publish composite's source gate (PUB-6.23, PUB-8.1's
-/// second constraint).
+/// (`None` = the GUEST) read the document `doc`? Asked by the door's two
+/// consults and its link-address rule; by every reader that masks below it,
+/// at the per-run withheld arm and the result-set filters; and, lent as a
+/// write's VISIBILITY CLASS, by every gate a store runs inside its own
+/// transaction — M5's per-origin source gate on the shot (PUB-6.23, PUB-8.1's
+/// second constraint) and M7's value-keyed gates on the five link writes
+/// (PUB-6.25).
 ///
 /// OBLIGATIONS ON THE ANSWER. It is asked about addresses of any tier,
 /// REGISTERED OR NOT: the doc-argument consult walks the request's NAMED
@@ -57,17 +61,18 @@ use crate::world::FebeWorld;
 /// their own behaviour and not as a guarantee from here.
 ///
 /// Absent ([`OperationSurface::new`] alone), M10 answers the world's own
-/// [`ReadableWorld::readable`], which is the live daemon's case: a read arm
-/// off the ONE snapshot it pins per request, so the answer and the `as_of` it
-/// is stamped with stand on one committed state, and the publish composite's
-/// source gate over the working world of the shot's own transaction, which M5
-/// hands it. Supplied ([`OperationSurface::with_read_predicate`]), it
-/// OVERRIDES the world the predicate is evaluated over — what a HISTORICAL
-/// read needs: `/op-at N` answers the N-world's content through the HEAD's
-/// exception set and grant set (PUB-6.48), so the daemon's throwaway front
-/// door over the reconstructed world answers through a predicate closed over
-/// one head snapshot. `Send + Sync + 'static`, since the front door is shared
-/// across a transport's worker pool.
+/// [`ReadableWorld::readable`], which is the live daemon's case: a read off
+/// the ONE snapshot it pins per request, so the answer and the `as_of` it is
+/// stamped with stand on one committed state, and every write's visibility
+/// class over the working world of that write's own transaction, which its
+/// store — M5 on the shot, M7 on the link writes — hands it. Supplied
+/// ([`OperationSurface::with_read_predicate`]), it OVERRIDES the world the
+/// predicate is evaluated over — what a HISTORICAL read needs: `/op-at N`
+/// answers the N-world's content through the HEAD's exception set and grant
+/// set (PUB-6.48), so the daemon's throwaway front door over the
+/// reconstructed world answers through a predicate closed over one head
+/// snapshot. `Send + Sync + 'static`, since the front door is shared across a
+/// transport's worker pool.
 ///
 /// WHERE IT IS EVALUATED, and what that position costs the supplier. On a
 /// READ it answers off the snapshot the request pinned, and the caller waits
@@ -99,7 +104,7 @@ impl<W: FebeWorld> OperationSurface<W> {
     /// [`ReadableWorld::readable`] off `world` — the snapshot a read arm
     /// pinned, or the working world a store hands the predicate of a write.
     /// `None` is the guest. Every consult of the predicate, read path and
-    /// publish shot alike, goes through here, so a front door answers ONE
+    /// visibility class alike, goes through here, so a front door answers ONE
     /// predicate.
     ///
     /// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
@@ -264,9 +269,11 @@ pub fn consult_read(op: &Op, readable: &dyn Fn(&Address) -> bool) -> Result<(), 
 #[derive(Debug, PartialEq, Eq)]
 enum WriteConsult<'a> {
     /// The door consults NOTHING for this op: it returns before
-    /// [`Op::source_arguments`] is ever read. A write that reads a source
-    /// must never answer this — its sources would reach the store with no
-    /// readability gate.
+    /// [`Op::source_arguments`] or [`Op::link_address_arguments`] is ever
+    /// read. Neither a write that reads a source nor one that validates a link
+    /// by address may answer this — its sources would reach the store with no
+    /// readability gate, or its store's own answer would confirm a link homed
+    /// where the caller cannot read.
     NotTaken,
     /// Consulted, and DEFERRED: the consult runs only where these
     /// destinations' own ownership gate would pass, so a session that may not
@@ -279,11 +286,11 @@ impl Op {
     /// Whether the write door consults this op at all and — PUB-6.36 slot 1
     /// ahead of slot 6, PUB-6.38 — whose ownership gate it stands behind (see
     /// `consult_write`). [`WriteConsult::AfterOwnershipOf`] for exactly the
-    /// writes the consult reaches — a source-reading write or one
-    /// validating a link by address — listing the documents the store's own
-    /// `not_owner` is judged on, EMPTY for `version`, whose mint lands in the
-    /// caller's own account and which no destination gate precedes
-    /// (MINT-FIRST is the daemon's, slot 2).
+    /// writes the consult reaches — a source-reading write or one validating
+    /// a link by address ([`Op::link_address_arguments`]) — listing the
+    /// documents the store's own `not_owner` is judged on, EMPTY for
+    /// `version`, whose mint lands in the caller's own account and which no
+    /// destination gate precedes (MINT-FIRST is the daemon's, slot 2).
     /// [`WriteConsult::NotTaken`] for a write with nothing to consult and for
     /// every read. `nullify` is `NotTaken` on purpose: its target takes
     /// PUB-6.9's ω-first order and the slot-5 nullify-class refusals (lane
@@ -293,8 +300,9 @@ impl Op {
     ///
     /// A write that reads a source must never answer `NotTaken` — that
     /// pairing would hand the source to the store with no readability gate,
-    /// PUB-6.23 silently unapplied — and the two lists are pinned against each
-    /// other over the whole `Op` domain in this module's tests rather than
+    /// PUB-6.23 silently unapplied — nor may one that validates a link by
+    /// address, whose PUB-6.6 rule would then never run. Each pairing is
+    /// pinned over the whole `Op` domain in this module's tests rather than
     /// left to agree by hand.
     ///
     /// Defined here, private to the door, where its two siblings in `op` are
@@ -421,6 +429,78 @@ impl Op {
             | Op::UniversalGrants => None,
         }
     }
+
+    /// The link ADDRESSES this write validates for existence (PUB-6.6), in
+    /// declaration order, with the op's own code for an address no link
+    /// occupies — the code a link homed where the caller cannot read answers
+    /// too, so the answer never confirms a link the caller may not see:
+    /// `edit_link`'s `original` answers `OriginalNotResident`, and
+    /// `assert_sup`'s `old` and `new` answer `EndpointNotResident`. `None`
+    /// for everything else. `nullify` is `None` on purpose: its target takes
+    /// PUB-6.9's ω-first order and the slot-5 nullify-class refusals (lane
+    /// 3.5), not this rule. No read is in the table: a read applies PUB-6.6
+    /// at its own arm, where absence is the shape of an answer rather than a
+    /// code. EXHAUSTIVE with no `_` arm: a new `Op` decides its row here.
+    ///
+    /// The rule runs past the deferral, so a write in this table must also be
+    /// consulted ([`Op::write_consult`]): one answering `NotTaken` would
+    /// never meet the rule, and its store's own answer would confirm a link
+    /// homed where the caller cannot read. The pairing is pinned in this
+    /// module's tests rather than left to agree by hand.
+    ///
+    /// Private to the door for [`Op::write_consult`]'s reason: nothing outside
+    /// it re-runs the door's ordering of one refusal ahead of another.
+    fn link_address_arguments(&self) -> Option<(Vec<&Address>, RejectCode)> {
+        match self {
+            Op::EditLink { original, .. } => {
+                Some((vec![original], RejectCode::OriginalNotResident))
+            }
+            Op::AssertSup { old, new, .. } => {
+                Some((vec![old, new], RejectCode::EndpointNotResident))
+            }
+            Op::CreateNewDocument { .. }
+            | Op::Delegate { .. }
+            | Op::RegisterNode { .. }
+            | Op::Fork { .. }
+            | Op::Insert { .. }
+            | Op::Delete { .. }
+            | Op::Copy { .. }
+            | Op::Rearrange { .. }
+            | Op::Version { .. }
+            | Op::Publish { .. }
+            | Op::MakeLink { .. }
+            | Op::Emit { .. }
+            | Op::Nullify { .. }
+            | Op::NextAccountPrefix { .. }
+            | Op::PrincipalPrefix { .. }
+            | Op::EffectiveOwner { .. }
+            | Op::ReadLink { .. }
+            | Op::FollowLink { .. }
+            | Op::RetrieveV { .. }
+            | Op::RetrieveDocVSpan { .. }
+            | Op::RetrieveDocVSpanSet { .. }
+            | Op::ShowOrigin { .. }
+            | Op::ShowDeletions { .. }
+            | Op::Compare { .. }
+            | Op::FindDocsContaining { .. }
+            | Op::Image { .. }
+            | Op::FindLinksV { .. }
+            | Op::FindLinksFtt { .. }
+            | Op::CountV { .. }
+            | Op::CountFtt { .. }
+            | Op::WindowV { .. }
+            | Op::WindowFtt { .. }
+            | Op::RetrieveEndsets { .. }
+            | Op::Project { .. }
+            | Op::DiscoverableFrom { .. }
+            | Op::DeleteOrphans { .. }
+            | Op::InClaims { .. }
+            | Op::OutClaims { .. }
+            | Op::DocMetadata { .. }
+            | Op::EditionClaims { .. }
+            | Op::UniversalGrants => None,
+        }
+    }
 }
 
 /// THE WRITE SIDE'S CONSULT (PUB round 2, lane 3.3c; PUB-6.23, PUB-6.24,
@@ -428,8 +508,9 @@ impl Op {
 /// that READS a document before it writes — `copy`'s sources, `version`'s
 /// `d_src`, the RESOLVE-form slots of `make_link` and `edit_link` — and
 /// the LINK-ADDRESS rule on the links a write validates by address
-/// (PUB-6.6: `edit_link.original`, `assert_sup.old`/`new`). Consulted
-/// through `readable`, the ONE predicate this request was built with
+/// (PUB-6.6: `edit_link.original`, `assert_sup.old`/`new`, the table
+/// [`Op::link_address_arguments`] keeps). Consulted through `readable`, the
+/// ONE predicate this request was built with
 /// ([`OperationSurface::readable_by`]) — the same binding every read arm
 /// answers, so one front door answers one predicate — and, wherever the door
 /// judges the write at all, BEFORE the store call (or the EDITLINK successor
@@ -503,13 +584,14 @@ impl Op {
 /// [`Op::source_arguments`]), no `detail` (PUB-8.5) — and, for a link
 /// homed in a document the caller may not read, the op's OWN
 /// never-deposited answer (`original_not_resident`,
-/// `endpoint_not_resident`), never a withheld that confirms a
-/// draft-homed link exists (PUB-6.6). `document_of(a)` is address
-/// arithmetic — no read (PUB-6.38). Within `edit_link` the link-address
-/// argument speaks first: `original` is declared ahead of `successor`,
-/// and the store's own residence check precedes its slot checks.
-/// `nullify.target` takes no rule here — PUB-6.9's ω-first order and the
-/// slot-5 nullify-class refusals govern it (lane 3.5).
+/// `endpoint_not_resident`, the code [`Op::link_address_arguments`] pairs
+/// with each link), never a withheld that confirms a draft-homed link
+/// exists (PUB-6.6). `document_of(a)` is address arithmetic — no read
+/// (PUB-6.38). Within `edit_link` the link-address argument speaks first:
+/// `original` is declared ahead of `successor`, and the store's own
+/// residence check precedes its slot checks. `nullify.target` takes no rule
+/// here — PUB-6.9's ω-first order and the slot-5 nullify-class refusals
+/// govern it (lane 3.5).
 ///
 /// STALENESS, since `readable` and `m3` are read off a PRIOR snapshot and
 /// not the base the write commits on. For four of the five source-reading
@@ -565,21 +647,13 @@ pub(super) fn consult_write(
             return Err(rejection(kind, RejectCode::PublishedTarget));
         }
     }
-    // §2 — the link-address rule on writes (PUB-6.6): the op's own absence
-    // answer, exactly as for an address no link occupies. Two arms, and
-    // they stay HERE rather than joining the request-shape lists on `Op`:
-    // what they decide is not an address list but WHICH never-deposited
-    // code answers, which is this door's lifecycle vocabulary.
-    match op {
-        Op::EditLink { original, .. } if !home_readable(original, readable) => {
-            return Err(rejection(kind, RejectCode::OriginalNotResident));
+    // §2 — the link-address rule on writes (PUB-6.6): a link homed where the
+    // caller cannot read answers the op's own never-deposited code, exactly
+    // as an address no link occupies (`Op::link_address_arguments`).
+    if let Some((links, absent)) = op.link_address_arguments() {
+        if !links.iter().all(|link| home_readable(link, readable)) {
+            return Err(rejection(kind, absent));
         }
-        Op::AssertSup { old, new, .. }
-            if !home_readable(old, readable) || !home_readable(new, readable) =>
-        {
-            return Err(rejection(kind, RejectCode::EndpointNotResident));
-        }
-        _ => {}
     }
     // §1 — the source consult: the first unreadable source, in
     // declaration order, answers WITHHELD naming itself.
@@ -735,5 +809,48 @@ mod tests {
             specs: vec![VSpec { source: src, span: sp() }],
         };
         assert_eq!(copy.in_place_destination(), Some(&d));
+    }
+
+    /// PUB-6.6 at the THIRD pairing the door depends on (`consult_write`).
+    /// The link-address rule runs past the deferral, so a write that
+    /// validates a link by address and answers `NotTaken` never meets it, and
+    /// its store's own answer confirms a link homed where the caller cannot
+    /// read. The class is `edit_link` and `assert_sup`, each with its own
+    /// never-deposited code, and no read is in it.
+    #[test]
+    fn a_write_that_validates_a_link_by_address_is_always_consulted() {
+        for (op, is_read) in all_ops() {
+            let validates = op.link_address_arguments().is_some();
+            let expects = matches!(op, Op::EditLink { .. } | Op::AssertSup { .. });
+            assert_eq!(validates, expects, "{:?}: the link-address row", op.kind());
+            assert!(
+                !validates || matches!(op.write_consult(), WriteConsult::AfterOwnershipOf(_)),
+                "{:?} validates a link by address and is NotTaken: the rule never runs",
+                op.kind()
+            );
+            assert!(
+                !is_read || !validates,
+                "{:?} is a read: it answers absence at its own arm",
+                op.kind()
+            );
+        }
+
+        // The links named, in declaration order, each op with its own code.
+        let (old, new) = (addr(&[1, 0, 1, 0, 2]), addr(&[1, 0, 1, 0, 3]));
+        let sup = Op::AssertSup { home: doc(), old: old.clone(), new: new.clone() };
+        assert_eq!(
+            sup.link_address_arguments(),
+            Some((vec![&old, &new], RejectCode::EndpointNotResident))
+        );
+        let edit = Op::EditLink {
+            original: old.clone(),
+            successor: SuccessorSpec { from: vec![], to: vec![], ty: SlotArg::Addrs(vec![]) },
+            d_s: doc(),
+            d_a: doc(),
+        };
+        assert_eq!(
+            edit.link_address_arguments(),
+            Some((vec![&old], RejectCode::OriginalNotResident))
+        );
     }
 }

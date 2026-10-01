@@ -173,11 +173,12 @@ pub use state::{
 /// The engine's **read accessor** for M3's slice (Engine Composition
 /// Contract; §Public interface): the engine implements this for its
 /// concrete world (`W: WorldState + HasM3`), and M3 — built before `W`
-/// exists — codes against it, reaching its slice as `stg.base().m3()` /
-/// `stg.working().m3()` inside a composite and `snapshot.world().m3()` for
-/// a read. READ side only; its write-side mirror is the engine's
-/// `impl From<M3Rec> for W::Record` lift, through which the transact-driving
-/// ops stage deltas via `stg.push(rec.into())`.
+/// exists — codes against it, reaching its slice inside a composite as
+/// `stg.base().m3()` for a gate and `stg.working().m3()` for a mint — the
+/// state that mint's record is staged against ([`M3Rec::Allocate`]) — and as
+/// `snapshot.world().m3()` for a read. READ side only; its write-side mirror
+/// is the engine's `impl From<M3Rec> for W::Record` lift, through which the
+/// transact-driving ops stage deltas via `stg.push(rec.into())`.
 pub trait HasM3 {
     /// M3's slice of the world state.
     fn m3(&self) -> &M3State;

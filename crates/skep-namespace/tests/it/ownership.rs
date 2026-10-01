@@ -539,11 +539,10 @@ fn omega_names_the_seat_it_matched_when_two_principals_carry_one_id() {
     // §5: `effective_owner_prefix` exists because the composition a caller
     // would otherwise write — `principal_prefix(effective_owner(a))` — is the
     // same answer ONLY while Π is id-injective, a PRODUCER invariant
-    // (`delegate`'s DuplicateId gate) that `apply_m3` neither re-checks nor
-    // could. Two carriers of one id is unreachable through the ops and
-    // representable in a corrupted checkpoint, so the fold is how a test
-    // reaches it — and it is the one input at which the two projections can
-    // come apart.
+    // (`delegate`'s DuplicateId gate) that `apply_m3` does not re-check. Two
+    // carriers of one id is unreachable through the ops and representable in
+    // a corrupted checkpoint, so the fold is how a test reaches it — and it is
+    // the one input at which the two projections can come apart.
     let deep_seat = a(&[1, 0, 1, 1]);
     let seeded = World {
         m3: M3State::genesis()

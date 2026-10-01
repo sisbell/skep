@@ -24,8 +24,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `1.1.0.1`, which genesis seeds) are never issued at all: their
   chain's frontier is floored past them as compiled format.
 - **Allocation and entity reads** — is-this-allocated over every
-  chain, and node/account/document classification over the entity
-  registry: the universal gates other stores consult.
+  chain, M3's own allocation oracle, and node/account/document
+  classification over the entity registry, the registration check
+  other stores and readers consult.
 - **The publication bit** — one bit per document, resolved by the
   minting op and journaled on the document's own allocation record
   at mint; immutable thereafter, there being no publish op.

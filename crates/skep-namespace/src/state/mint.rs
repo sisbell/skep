@@ -103,8 +103,8 @@ impl M3State {
     /// its id-freshness read against concurrent same-id delegations — the id
     /// race is CROSS-namespace (same `new_id`, different `new_prefix`), which
     /// no per-namespace key can serialize. Held DEFENSIVELY by
-    /// `create_new_document` (its ω read is stale-safe — ω of an *existing*
-    /// account is stable, §6/§8). Redundant under M2 v1's global applier lock.
+    /// `create_new_document`, whose ω read is stale-safe for the reason that
+    /// op's doc gives (§6/§8). Redundant under M2 v1's global applier lock.
     /// `pub(crate)` because only this crate's ops take it: a store that took
     /// it as well would, under a per-key M2, serialize itself against every
     /// delegation in the docuverse.
@@ -136,22 +136,19 @@ impl M3State {
 // (M2 contract 3); the fifth, `mint_account`, is `pub(crate)` because
 // `delegate` is its only caller and lives in this crate.
 //
-// Each is a query: it reads WORKING state, checks one structural
-// precondition, and hands back the next address on its chain together with
-// the single `M3Rec` that realizes it. Advancing the frontier is the
-// CALLER's half — hold the paired `*_lock_key` across the transaction and
-// stage the returned record in it — and it is an obligation nothing here can
-// enforce, because the record is delivered inside a tuple the caller has
-// already destructured.
+// Each is a query: called on a transaction's WORKING state, it checks one
+// structural precondition and hands back the next address on its chain
+// together with the single `M3Rec` that realizes it. Advancing the frontier
+// is the CALLER's half — hold the paired `*_lock_key` across the
+// transaction, call the mint on its working state, and stage the returned
+// record in it before the next mint on that chain — and it is an obligation
+// nothing here can enforce, because the record is delivered inside a tuple
+// the caller has already destructured. "An address is never reused" is M3's
+// to keep GIVEN the caller's half; what dropping the record, or staging it
+// anywhere else, costs is stated on `M3Rec::Allocate`, the record the
+// caller stages.
 //
-// The cost of dropping it is stated rather than guarded: a mint whose record
-// is never staged leaves the frontier where it stood, so the next mint on
-// that chain hands out the SAME address, and the fold's contiguity check
-// cannot see it — the second `Allocate` is legitimately `m + 1`. So "an
-// address is never reused" is M3's to keep GIVEN the caller's half; unmet,
-// nothing in the system says so.
-//
-// So a mint is also the chain's PEEK: called without staging it answers the
+// A mint is also the chain's PEEK: called without staging it answers the
 // next address and moves nothing, which is what `next_account_prefix`
 // publishes for the account chain and what the determinism assertions here
 // ask of the other four.
@@ -170,10 +167,13 @@ impl M3State {
     }
 
     /// Next content address under `home`: namespace `(b_C(home), 1)`, element
-    /// field `[s_C, m+1]` (§3). [M5: INSERT] Reads the caller's WORKING state
-    /// (successive mints in one composite each see the prior mint); checks
-    /// only the structural precondition P6/C2; to realize it, the caller holds
-    /// [`M3State::content_lock_key`] and stages the returned [`M3Rec`].
+    /// field `[s_C, m+1]` (§3). [M5: INSERT] Checks only the structural
+    /// precondition P6/C2. To realize it, the caller holds
+    /// [`M3State::content_lock_key`]`(home)`, calls this on that
+    /// transaction's WORKING state and stages the returned [`M3Rec`] there,
+    /// before its next mint on the chain — so successive mints in one
+    /// composite each see the prior one ([`M3Rec::Allocate`] states the rule
+    /// and what breaking it costs).
     pub fn mint_content(&self, home: &Address) -> Result<(Address, M3Rec), MintError> {
         if !self.is_registered_document(home) {
             return Err(MintError::HomeNotRegistered); // P6/C2
@@ -184,7 +184,9 @@ impl M3State {
 
     /// Next link address under `home`: namespace `(b_L(home), 1)`, element
     /// field `[s_L, m+1]` (§3). [M7: MAKELINK] To realize it, the caller holds
-    /// [`M3State::link_lock_key`]`(home)` and stages the returned [`M3Rec`].
+    /// [`M3State::link_lock_key`]`(home)`, calls this on that transaction's
+    /// WORKING state and stages the returned [`M3Rec`] there, before its next
+    /// mint on the chain ([`M3Rec::Allocate`]).
     pub fn mint_link(&self, home: &Address) -> Result<(Address, M3Rec), MintError> {
         if !self.is_registered_document(home) {
             return Err(MintError::HomeNotRegistered); // L1a
@@ -196,8 +198,9 @@ impl M3State {
     /// Next version identity: namespace `(source, 1)` — the version chain,
     /// kept SEPARATE from the document chain (ASN-0123). [M5: owned
     /// CREATENEWVERSION] To realize it, the caller holds
-    /// [`M3State::version_lock_key`]`(source)` and stages the returned
-    /// [`M3Rec`].
+    /// [`M3State::version_lock_key`]`(source)`, calls this on that
+    /// transaction's WORKING state and stages the returned [`M3Rec`] there,
+    /// before its next mint on the chain ([`M3Rec::Allocate`]).
     ///
     /// `published` is the RESOLVED bit the version is born with, stamped on
     /// the `Allocate` exactly as passed (PUB-8.18): the three-valued flag and
@@ -223,8 +226,9 @@ impl M3State {
 
     /// Next document identity under an account: namespace `(account, 2)`.
     /// [CREATENEWDOCUMENT; cross-owner VERSION; fork] To realize it, the
-    /// caller holds [`M3State::document_lock_key`]`(account)` and stages the
-    /// returned [`M3Rec`].
+    /// caller holds [`M3State::document_lock_key`]`(account)`, calls this on
+    /// that transaction's WORKING state and stages the returned [`M3Rec`]
+    /// there, before its next mint on the chain ([`M3Rec::Allocate`]).
     ///
     /// `published` is the RESOLVED bit the document is born with, stamped on
     /// the `Allocate` exactly as passed (PUB-8.18) — never the caller's
@@ -260,12 +264,13 @@ impl M3State {
     /// M10's vocabularies for a mint none of them can reach.
     ///
     /// To realize it, the caller holds
-    /// [`M3State::account_lock_key`]`(parent)` and stages the returned
-    /// [`M3Rec`]; [`M3State::next_account_prefix`] is this without the record,
-    /// which is the peek. Its one caller also seats every prefix this mints,
-    /// in the same transaction, which is what makes an account's seat its
-    /// allocation ([`crate::Namespace::delegate`]); a second caller owes the
-    /// same seat.
+    /// [`M3State::account_lock_key`]`(parent)`, calls this on that
+    /// transaction's WORKING state and stages the returned [`M3Rec`] there,
+    /// before its next mint on the chain ([`M3Rec::Allocate`]);
+    /// [`M3State::next_account_prefix`] is this without the record, which is
+    /// the peek. Its one caller also seats every prefix this mints, in the
+    /// same transaction, which is what makes an account's seat its allocation
+    /// ([`crate::Namespace::delegate`]); a second caller owes the same seat.
     pub(crate) fn mint_account(&self, parent: &Address) -> Option<(Address, M3Rec)> {
         if !matches!(self.entity_level(parent)?, Level::Node | Level::Account) {
             return None;

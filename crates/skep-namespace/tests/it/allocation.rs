@@ -190,6 +190,39 @@ fn a_mint_whose_record_is_never_staged_re_hands_its_address() {
 }
 
 #[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "Allocate ordinal must equal its namespace's effective frontier + 1")]
+fn a_peeked_record_staged_in_a_later_transaction_fail_stops_the_fold() {
+    // §A: the caller's half has a second clause the drop above does not
+    // reach — a mint's record is staged in the transaction whose working
+    // state the mint was called on, and nowhere else (`M3Rec::Allocate`). A
+    // peek names the address the chain issues next; once another mint has
+    // landed there, the peek's record names an address already issued, and
+    // nothing in the record says which state it was read from. Only the
+    // fold's contiguity check refuses it, in a debug build — this is that
+    // refusal made executable; a release build folds it and issues the
+    // address twice.
+    let (k, _acct, doc) = kernel_with_account_and_doc();
+    let (peeked, rec) = k
+        .snapshot()
+        .world()
+        .m3()
+        .mint_content(&doc)
+        .expect("a peek off a snapshot");
+    let landed = commit_mint(&k, M3State::content_lock_key(&doc), |m3| {
+        m3.mint_content(&doc)
+    });
+    assert_eq!(
+        landed, peeked,
+        "the landed mint took the address the peek named"
+    );
+    let _ = k.transact::<_, MintError>(&[M3State::content_lock_key(&doc)], |stg| {
+        stg.push(rec.into());
+        Ok(())
+    });
+}
+
+#[test]
 fn the_allocator_never_repeats_an_address_across_an_interleaved_schedule() {
     // B1/B2 as laws, not examples: over a mechanical round-robin across the
     // four chains, every minted address is distinct and allocated, the next

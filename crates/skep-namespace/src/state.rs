@@ -94,6 +94,26 @@ pub enum M3Rec {
     /// of an `Allocate` is exactly the `NsKey` of the `LockKey` the minting op
     /// held — frontier key and lock key are the same key.
     ///
+    /// WHERE IT MAY BE STAGED — the caller's half of every mint, and the one
+    /// obligation M3 cannot check, since the record carries an address and
+    /// not the state its mint read: in the transaction whose WORKING state
+    /// the mint was called on, under the mint's paired `*_lock_key`, before
+    /// any other record advances the same chain. Its address is `c_{m+1}` of
+    /// THAT state, and only there is the record inside
+    /// [`M3State::apply_m3`]'s totality domain. Dropped, it leaves the
+    /// frontier where it stood, and the next mint on the chain hands out the
+    /// SAME address with nothing to say so — that mint's record is
+    /// legitimately `m + 1`. Staged anywhere else, it is STALE: a peek's
+    /// record staged in a later transaction, a mint called on `stg.base()`
+    /// after another on its chain was staged, or two mints on one chain
+    /// before either record is pushed. Once another mint has landed on the
+    /// chain, a stale record issues that address a second time, and once two
+    /// have, it also sets the frontier back to its own ordinal, so the later
+    /// addresses read unallocated and are minted again. Only the fold's
+    /// contiguity `debug_assert` refuses a stale record; a release build
+    /// folds it, and [`M3State::is_allocated`]'s permanent `true` no longer
+    /// holds on its chain.
+    ///
     /// `published` is the RESOLVED publication state of a minted DOCUMENT
     /// (PUB-7.8, PUB-7.10, PUB-8.18): every document-minting record journals
     /// the bit its caller resolved — never the caller's three-valued flag, so
@@ -578,12 +598,14 @@ impl M3State {
     /// address BOTH extends a parent AND carries its namespace's effective
     /// frontier + 1 as its ordinal (effective = `max(frontier, floor)`; the
     /// floor is nonzero only for the ghost content namespace —
-    /// `ghost_floor`). Every mint's does: a mint extends a REGISTERED
-    /// parent and emits exactly `c_{m+1}` past the floor. That the parent is
-    /// REGISTERED (P8) is the mints' gate and no part of this domain: an
-    /// `Allocate` under an unregistered parent folds like any other, and
-    /// that is the state [`M3State::has_documents`] and
-    /// [`M3State::latest_version`] answer by their chains.
+    /// `ghost_floor`). A mint's record is such a record wherever it is
+    /// staged as [`M3Rec::Allocate`] requires — against the working state the
+    /// mint read: a mint extends a REGISTERED parent and emits exactly
+    /// `c_{m+1}` of that state, past the floor. That the parent is REGISTERED
+    /// (P8) is the mints' gate and no part of this domain: an `Allocate` under
+    /// an unregistered parent folds like any other, and that is the state
+    /// [`M3State::has_documents`] and [`M3State::latest_version`] answer by
+    /// their chains.
     ///
     /// The two conditions differ in kind, and only the first is owed to the
     /// journal. Extending a parent is a fact about one field, so it is carried
@@ -594,10 +616,12 @@ impl M3State {
     /// from one record — it is a claim about the frontier the record is about
     /// to advance — so no door can carry it, and it stays a stated condition
     /// of the caller: an `Allocate` that regresses or jumps a frontier is
-    /// outside the domain and fail-stops on the contiguity `debug_assert`,
-    /// which is corruption rather than a live error path. What the fold
-    /// trusts for both is an IN-PROCESS producer, which builds the variant
-    /// directly.
+    /// outside the domain — corruption, or a caller's bug, a mint's record
+    /// staged where [`M3Rec::Allocate`] forbids, rather than a live error
+    /// path. A debug build fail-stops on the contiguity `debug_assert`; a
+    /// release build folds the record as written, moving the frontier to its
+    /// ordinal. What the fold trusts for both conditions is an IN-PROCESS
+    /// producer, which builds the variant directly.
     ///
     /// `Allocate`'s publication bit is folded for a DOCUMENT-tier address and
     /// read for no other (PUB-7.7's fold half, at M3's own allocation record:

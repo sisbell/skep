@@ -88,12 +88,19 @@ where
     /// Authorization is by EFFECTIVE owner ω, never bare containment (O5 —
     /// the ownership-divergence trap): `CreateDocumentError::NotOwner` if
     /// ω(`account`) is absent or names another principal. The ω read is
-    /// evaluated first, in-closure against `stg.base().m3()`; it is
-    /// stale-safe (ω of an *existing* account is stable — §6/§8), so the held
-    /// `M3State::principals_lock_key` is defensive, not load-bearing. With
-    /// auth passed, the structural mint gate surfaces as
-    /// `CreateDocumentError::Mint` (`NotAnAccount` covers unregistered and
-    /// non-account alike — P8).
+    /// evaluated first, in-closure against `stg.base().m3()` — the state the
+    /// mint's account gate then reads too, since the closure stages nothing
+    /// before the mint — and that pairing is what makes it stale-safe: ω of
+    /// an account registered in that state is the account's own seat, which
+    /// is permanent (§6/§8), and an account not registered there is refused
+    /// by the mint whatever ω answered. So the held
+    /// `M3State::principals_lock_key` is defensive, not load-bearing — but
+    /// the read cannot leave this closure: taken off a snapshot before it, ω
+    /// of a then-unregistered account names the principal above it, and a
+    /// delegation committing in between lets that principal mint into the
+    /// account it has just delegated away. With auth passed, the structural
+    /// mint gate surfaces as `CreateDocumentError::Mint` (`NotAnAccount`
+    /// covers unregistered and non-account alike — P8).
     ///
     /// Registers d only — no M5 arrangement write (lazy — Conflicts §3). No
     /// idempotency key (identity is the address; a retried lost-ack yields a
@@ -367,8 +374,10 @@ where
     /// uncompressed node registry, and the op takes no `caller`, so ω cannot
     /// gate it here — the component COUNT of an entry is what M3 can bound,
     /// and it does; magnitude is M1-unbounded and carries no amplification
-    /// (see [`MAX_NODE_COMPONENTS`]). How MANY admissions a session may make
-    /// is the daemon's.
+    /// (see [`MAX_NODE_COMPONENTS`]). How MANY admissions one key holder may
+    /// make is the daemon's to bound — per opening key set, as `delegate`'s
+    /// count is, and not per session, since one holder opens sessions at
+    /// will.
     pub fn register_node(
         &self,
         addr: Tumbler,

@@ -64,7 +64,11 @@ impl M3State {
     /// byte-presence — a registered-empty document is a valid, addressable
     /// ghost; content existence is M4's separate axis, and a check that
     /// content exists asks M4, never this read. E is append-only, so a `true`
-    /// answer is permanent (B0/P1).
+    /// answer is permanent (B0/P1) on any slice whose every record fell
+    /// inside [`M3State::apply_m3`]'s totality domain — as each mint's record
+    /// does when staged where [`M3Rec::Allocate`] says.
+    ///
+    /// [`M3Rec::Allocate`]: crate::M3Rec::Allocate
     pub fn is_allocated(&self, a: &Address) -> bool {
         match a.level() {
             Level::Node => self.nodes.contains(a),
@@ -424,10 +428,14 @@ impl M3State {
         // field, its separator, then `U`.
         let len = a.node_field().len() + 1 + user.len();
         // That prefix of a T4-valid address is a T4-valid account — one
-        // separator, both fields nonempty and zero-free, no trailing zero — so
-        // neither `?` below is taken; were one ever taken, the answer is
-        // `None`, never a panic.
-        let account = validate(Tumbler::new(a.tumbler().iter().take(len).cloned()).ok()?).ok()?;
+        // separator, both fields nonempty and zero-free, no trailing zero —
+        // so the `Address` invariant discharges both `expect`s below. One
+        // firing is a defect in this derivation and is reported as one: it is
+        // never answered `None`, which here means no seat.
+        let prefix = Tumbler::new(a.tumbler().iter().take(len).cloned())
+            .expect("acct(a) is nonempty: a node field, its separator, then a user field");
+        let account =
+            validate(prefix).expect("acct(a) of a T4-valid address is a T4-valid account");
         self.principals
             .get_key_value(&account)
             .map(|(seat, id)| (seat, *id))

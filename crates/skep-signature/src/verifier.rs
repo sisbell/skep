@@ -47,10 +47,9 @@ impl fmt::Display for HybridFault {
     }
 }
 
-/// The ecosystem door, as `skepd::NotCanonical` and
-/// `skepd::PortAlreadyBound` keep it: only a type carrying `Display` and
-/// `std::error::Error` composes with `?` into a caller's own error type, and
-/// a caller cannot add either impl.
+/// The ecosystem door: only a type carrying `Display` and `std::error::Error`
+/// composes with `?` into a caller's own error type, and a caller cannot add
+/// either impl.
 impl std::error::Error for HybridFault {}
 
 /// A hybrid key's Ed25519 half as a verifier — `ed25519-dalek`'s
@@ -99,30 +98,26 @@ impl PqHalf {
         }
     }
 
-    /// The post-quantum signature `pq_sig` over `msg` under this half's rule
-    /// — ML-DSA-65's `verify_with_context` with the empty context string, the
+    /// Whether `pq_sig` is this half's signature over `msg` under its rule —
+    /// ML-DSA-65's `verify_with_context` with the empty context string, the
     /// FN-DSA-512 preview's `verify` with `DOMAIN_NONE` and `HASH_ID_RAW`
-    /// (the CTX PIN at both). `Rejected` where the signature does not decode
-    /// or does not verify; `Malformed` where `pq_sig` is not ML-DSA-65's
-    /// encoded width.
-    fn verify(&self, msg: &[u8], pq_sig: &[u8]) -> Result<(), HybridFault> {
-        let ok = match self {
+    /// (the CTX PIN at both). A signature that does not decode verifies
+    /// nothing. A yes or a no: [`verify`] has already parted the blob at the
+    /// row's widths, and naming a fault is the hybrid's business, not a half's.
+    fn verify(&self, msg: &[u8], pq_sig: &[u8]) -> bool {
+        match self {
             PqHalf::MlDsa65(enc) => {
                 let vk = ml_dsa::VerifyingKey::<MlDsa65>::decode(enc);
-                let enc_sig = EncodedSignature::<MlDsa65>::try_from(pq_sig)
-                    .map_err(|_| HybridFault::Malformed)?;
-                let Some(sigma) = ml_dsa::Signature::<MlDsa65>::decode(&enc_sig) else {
-                    return Err(HybridFault::Rejected);
+                let Some(sigma) = EncodedSignature::<MlDsa65>::try_from(pq_sig)
+                    .ok()
+                    .and_then(|enc_sig| ml_dsa::Signature::<MlDsa65>::decode(&enc_sig))
+                else {
+                    return false;
                 };
                 // The CTX PIN: the empty context string.
                 vk.verify_with_context(msg, &[], &sigma)
             }
             PqHalf::FnDsa512Preview(vk) => vk.verify(pq_sig, &DOMAIN_NONE, &HASH_ID_RAW, msg),
-        };
-        if ok {
-            Ok(())
-        } else {
-            Err(HybridFault::Rejected)
         }
     }
 }
@@ -130,14 +125,12 @@ impl PqHalf {
 /// THE ALL-HALVES DECODE — the precheck's `undecodable_key` courtesy
 /// (AUTH-3.56 as RES-206 landed it; the hybrid-only launch's Q9, owner
 /// 2026-09-26): `true` iff EVERY half the key's row names decodes, by the
-/// very two decodes [`verify`] runs before its arithmetic
-/// (`decode_ed25519_half`, `PqHalf::decode`) — so the courtesy and the verify
-/// cannot disagree about what decodes, and a new tag's decode is one arm both
-/// read. Both directions of a disagreement cost: a stricter courtesy refuses
-/// an enrollment whose key decodes for every verify; a laxer one seats a key
-/// that occupies a slot against the precheck's `MAX_ENROLLED_KEYS` and is
-/// walked by the handshake's `find_signer` on every attempt, permanently,
-/// since retiring it needs an anchor session of that account.
+/// very two decodes [`verify`] runs before its arithmetic, so the two cannot
+/// disagree and a new tag's decode is one arm both read. On a key this
+/// answers `false` for, every [`verify`] that gets past the row and the
+/// width answers [`HybridFault::Rejected`]; on a key it answers `true` for,
+/// the signature alone decides. A courtesy stricter than the verify would
+/// refuse a key that can sign; a laxer one would admit a key that never can.
 pub fn key_decodes(key: &PublicKey) -> bool {
     decode_ed25519_half(key).is_some() && PqHalf::decode(key).is_some()
 }
@@ -146,39 +139,49 @@ pub fn key_decodes(key: &PublicKey) -> bool {
 /// `key`: the key's row must be the tag's, the blob the tag's width, and
 /// BOTH halves — the PQ signature under the PQ half, the Ed25519 signature
 /// under the Ed25519 half (`verify_strict`) — must verify over the SAME
-/// `msg`. Either failing fails. Each half is decoded by
-/// `decode_ed25519_half` and `PqHalf::decode`, the decodes [`key_decodes`]
-/// runs alone, and a half that does not DECODE answers `Rejected`, as a half
-/// that does not verify does, whichever half it is; [`HybridFault::WrongRow`]
-/// is the row's answer alone — a tag no row names, or a key of another row.
+/// `msg`. Either failing fails. Each half is decoded exactly as
+/// [`key_decodes`] decodes it, and a half that does not DECODE answers
+/// `Rejected`, as a half that does not verify does, whichever half it is;
+/// [`HybridFault::WrongRow`] is the row's answer alone — a tag no row names,
+/// or a key of another row.
 ///
 /// `tag` is the marker's claim and nothing more: the row it names must be
 /// the key's, and gives the blob's width and where its halves part; both
 /// decodes and all the arithmetic read the key.
 ///
 /// `msg` comes before `sig`, the order RustCrypto's
-/// `signature::Verifier::verify`, `ed25519-dalek`'s `verify_strict` and
-/// skepd's own `session::verify` take them: the two are `&[u8]` the compiler
-/// cannot tell apart, so the order a Rust caller already knows is the one
-/// that holds.
+/// `signature::Verifier::verify` and `ed25519-dalek`'s `verify_strict` take
+/// them: the two are `&[u8]` the compiler cannot tell apart, so the order a
+/// Rust caller already knows is the one that holds.
 pub fn verify(tag: u8, key: &PublicKey, msg: &[u8], sig: &[u8]) -> Result<(), HybridFault> {
     let row = SigAlgRow::of_tag(tag).ok_or(HybridFault::WrongRow)?;
     if key.alg() != row.token {
         return Err(HybridFault::WrongRow);
     }
-    if sig.len() != row.sig_len() {
+    // THE BLOB, parted where the row parts it: the PQ signature, then the
+    // Ed25519 signature's 64 bytes, typed as such. A blob of any length but
+    // the row's (`SigAlgRow::sig_len`, `pq_sig_len` + 64) is `Malformed`
+    // here — the one place a width is judged — so neither field below can
+    // be the wrong width.
+    let Some((pq_sig, ed_sig)) = sig
+        .split_last_chunk::<{ ed25519_dalek::SIGNATURE_LENGTH }>()
+        .filter(|(pq, _)| pq.len() == row.pq_sig_len)
+    else {
         return Err(HybridFault::Malformed);
-    }
-    let (pq_sig, ed_sig) = sig.split_at(row.pq_sig_len);
+    };
     // The Ed25519 half FIRST: cheap, and a failure here refuses before the
     // lattice arithmetic runs. Both are required, and a half that does not
     // DECODE answers as a half that does not verify — `Rejected`, the
     // Ed25519 point and the post-quantum key alike — so the order moves no
     // verdict, the fault's variant included.
     let ed_key = decode_ed25519_half(key).ok_or(HybridFault::Rejected)?;
-    let ed_sig = ed25519_dalek::Signature::from_slice(ed_sig).map_err(|_| HybridFault::Malformed)?;
-    ed_key.verify_strict(msg, &ed_sig).map_err(|_| HybridFault::Rejected)?;
-    PqHalf::decode(key).ok_or(HybridFault::Rejected)?.verify(msg, pq_sig)
+    ed_key
+        .verify_strict(msg, &ed25519_dalek::Signature::from_bytes(ed_sig))
+        .map_err(|_| HybridFault::Rejected)?;
+    match PqHalf::decode(key) {
+        Some(half) if half.verify(msg, pq_sig) => Ok(()),
+        _ => Err(HybridFault::Rejected),
+    }
 }
 
 #[cfg(test)]
@@ -255,6 +258,35 @@ mod tests {
         }
     }
 
+    /// THE COURTESY'S PROMISE ON THE OTHER HALF: a key of either tag whose
+    /// Ed25519 half is no curve point — the one decode fault a tag-1 key can
+    /// carry — answers `false` from [`key_decodes`], and [`verify`] answers
+    /// `Rejected` past the row and the width, over a blob its own signer made.
+    #[test]
+    fn a_key_whose_ed25519_half_is_no_point_decodes_and_verifies_nothing() {
+        let seed = [0x42u8; 32];
+        let msg = b"the entry frame";
+        // The first encoding `[y, 0, …, 0]` that decompresses to no point.
+        let no_point = (0..=u8::MAX)
+            .map(|y| {
+                let mut half = [0u8; 32];
+                half[0] = y;
+                half
+            })
+            .find(|half| EdVerifyingKey::from_bytes(half).is_err())
+            .expect("about half of all encodings name no point");
+        for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
+            let s = HybridSigner::from_seed(tag, &seed).unwrap();
+            let sig = s.sign_with_rng(msg, &mut SeededRng06::new([7; 32]));
+            let key = s.public_key();
+            let bad = PublicKey::from_halves(key.alg(), key.pq_half(), &no_point)
+                .expect("the row's widths");
+            assert!(PqHalf::decode(&bad).is_some(), "tag {tag}: the premise, its PQ half decodes");
+            assert!(!key_decodes(&bad), "tag {tag}: the courtesy refuses it");
+            assert_eq!(verify(tag, &bad, msg, &sig), Err(HybridFault::Rejected), "tag {tag}");
+        }
+    }
+
     /// EACH HALF ANSWERS ON ITS OWN CARD: `PqHalf::verify` judges the blob's
     /// post-quantum field alone — it passes that field over the signed
     /// message, with the Ed25519 field broken beside it, and refuses it over
@@ -271,8 +303,8 @@ mod tests {
             let pq_len = s.public_key().sig_alg_row().pq_sig_len;
             sig[pq_len] ^= 1;
             let (pq_sig, _) = sig.split_at(pq_len);
-            assert_eq!(half.verify(msg, pq_sig), Ok(()), "tag {tag}: its own field");
-            assert_eq!(half.verify(b"other", pq_sig), Err(HybridFault::Rejected), "tag {tag}");
+            assert!(half.verify(msg, pq_sig), "tag {tag}: its own field");
+            assert!(!half.verify(b"other", pq_sig), "tag {tag}: another message");
             assert_eq!(
                 verify(tag, s.public_key(), msg, &sig),
                 Err(HybridFault::Rejected),
@@ -282,8 +314,7 @@ mod tests {
     }
 
     /// The verify's refusal is an ERROR a caller propagates with `?` into
-    /// its own error type — the door the crate's other public errors keep —
-    /// and its text does not guess which half failed.
+    /// its own error type, and its text does not guess which half failed.
     #[test]
     fn a_verify_refusal_propagates_as_an_error() {
         fn propagate(

@@ -50,7 +50,10 @@ ed25519-dalek = "2"
 # §1's algorithm row; the frozen-tag rule), so a version bump is a rule
 # change that ships as a NEW tag, never as an edit to an old one.
 # Tag 1 (PRODUCTION): ML-DSA-65 + Ed25519 — RustCrypto `ml-dsa`, pure Rust,
-# final FIPS 204 with the seed entry point `SigningKey::from_seed`.
+# final FIPS 204 with the seed entry point `SigningKey::from_seed`. Built
+# without its `zeroize` feature: `HybridSigner`'s doc states which key
+# material a dropped signer wipes, and the signer's
+# `a_dropped_signer_wipes_the_ed25519_key_alone` holds that doc to this line.
 ml-dsa = { version = "=0.1.1", default-features = false, features = ["alloc"] }
 # Tag 3 (PREVIEW): FN-DSA-512 + Ed25519 — Thomas Pornin's pure-Rust `fn-dsa`,
 # a "best guess" at the FN-DSA draft; its 0.4.0 keygen and format ARE tag 3's
@@ -82,6 +85,9 @@ skep-signature = { path = ".", features = ["test-hooks"] }
 skep-address = { path = "../skep-address" }
 # The goldens' digests (`sha_hex`): each pin is a key's or a blob's SHA-256.
 sha2.workspace = true
+# `ZeroizeOnDrop`, the trait the signer's wiping test asks each key type
+# about: which key material a dropped `HybridSigner` wipes.
+zeroize = "1"
 # THE DIFFERENTIAL ORACLE for tag 1 (the PQ investigation §8.4 (4), §8.5 (ii)):
 # a second pure-Rust FIPS 204 implementation the golden checks `ml-dsa`'s
 # keys-from-seed and signatures byte-equal against — the gate every future

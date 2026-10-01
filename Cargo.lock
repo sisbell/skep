@@ -1146,6 +1146,7 @@ dependencies = [
  "skep-address",
  "skep-identity",
  "skep-signature",
+ "zeroize",
 ]
 
 [[package]]

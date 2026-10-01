@@ -93,8 +93,9 @@ enum PqSigner {
     /// Tag 3: the FN-DSA-512 PREVIEW signing key in `fn-dsa` 0.4.0's
     /// encoding (`sign_key_size(FN_DSA_LOGN_512)` bytes — 1,345 at degree 9,
     /// its `f`, `g`, `F` and the hashed verifying key, which
-    /// `sizes_and_timings_per_tag` pins), decoded per signature — the crate's
-    /// `sign` takes `&mut self` and its key type zeroizes on drop.
+    /// `sizes_and_timings_per_tag` pins), decoded afresh for each signature
+    /// because the crate's `sign` takes `&mut self`. The decoded key wipes
+    /// itself on drop; these stored bytes do not (see [`HybridSigner`]).
     FnDsa512Preview(Vec<u8>),
 }
 
@@ -157,6 +158,12 @@ impl PqSigner {
 /// public key the `alg` and `key` of ONE key entry — one `ALGS` token over
 /// one concatenated raw value (wire.md). Holds private-key material and
 /// prints none of it.
+///
+/// Of the key material it holds, dropping it wipes the Ed25519 key alone
+/// (`ed25519-dalek`'s default `zeroize` feature). The ML-DSA-65 key
+/// (`ml-dsa` is built without its `zeroize` feature) and the stored
+/// FN-DSA-512 encoding are released without being overwritten, as are the
+/// two half seeds [`HybridSigner::from_seed`] derives and drops.
 pub struct HybridSigner {
     row: &'static SigAlgRow,
     ed: EdSigningKey,
@@ -332,5 +339,38 @@ mod tests {
             let pq_sig = pq.sign(msg, &mut SeededRng06::new([7; 32]));
             assert_eq!(&blob[..pq_sig.len()], &pq_sig[..], "tag {tag}: the blob's first field");
         }
+    }
+
+    /// WHAT A DROPPED SIGNER WIPES, as [`HybridSigner`]'s doc states it, read
+    /// off each type's `ZeroizeOnDrop` in this very build: the Ed25519 signing
+    /// key wipes itself, as does the FN-DSA key each tag-3 signature decodes;
+    /// the ML-DSA-65 key and the KDF's half seeds do not. A feature line or a
+    /// derive that moves any of the four fails here, so the doc moves with it.
+    #[test]
+    fn a_dropped_signer_wipes_the_ed25519_key_alone() {
+        use std::marker::PhantomData;
+        use zeroize::ZeroizeOnDrop;
+        /// `Probe::<T>::WIPES` is `true` exactly where `T: ZeroizeOnDrop`: the
+        /// inherent const, which path resolution prefers, exists only then,
+        /// and the trait's `false` answers everywhere else.
+        struct Probe<T>(PhantomData<T>);
+        trait Unwiped {
+            const WIPES: bool = false;
+        }
+        impl<T> Unwiped for Probe<T> {}
+        impl<T: ZeroizeOnDrop> Probe<T> {
+            const WIPES: bool = true;
+        }
+        assert_eq!(
+            [
+                Probe::<EdSigningKey>::WIPES,
+                Probe::<SigningKeyStandard>::WIPES,
+                Probe::<ml_dsa::SigningKey<MlDsa65>>::WIPES,
+                Probe::<crate::kdf::HalfSeeds>::WIPES,
+            ],
+            [true, true, false, false],
+            "wiped on drop: the Ed25519 key and the decoded FN-DSA key; not the ML-DSA-65 key \
+             (`ml-dsa` is built without `zeroize`), nor the half seeds — `HybridSigner`'s doc"
+        );
     }
 }

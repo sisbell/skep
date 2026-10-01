@@ -36,6 +36,11 @@ fn both_tags_sign_verify_and_refuse_a_broken_half() {
             verify(tag, signer.public_key(), msg, &sig[1..]),
             Err(HybridFault::Malformed)
         );
+        // Shorter than the Ed25519 field alone.
+        assert_eq!(
+            verify(tag, signer.public_key(), msg, &sig[..63]),
+            Err(HybridFault::Malformed)
+        );
         // The other tag's key.
         let other_tag = if tag == TAG_MLDSA65_ED25519 {
             TAG_FNDSA512_PREVIEW_ED25519

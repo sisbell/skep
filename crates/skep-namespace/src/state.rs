@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use skep_address::{ordinal, validate, Address, GateViolation, Level, Nat, Tumbler};
 
 use crate::ghost::{ghost_floor, ghost_home_doc};
-use crate::ns::{account_ns, document_ns, namespace_of, nth_in, NsKey};
+use crate::ns::{namespace_of, nth_in, NsKey};
 
 /// Opaque external identity, supplied by M10/session. `delegate` enforces
 /// id-injectivity ([`crate::DelegateError::DuplicateId`]) ⇒ one id ↦ one
@@ -55,10 +55,10 @@ pub const BOOTSTRAP_PRINCIPAL: PrincipalId = PrincipalId(0);
 /// board's own daemon writes the published head document into. Never `0` (that
 /// is [`BOOTSTRAP_PRINCIPAL`]) and a reserved sentinel no client can seat: the
 /// account holds no key and can never enrol one (AUTH-6.19's cell — a keyless
-/// account answers empty lists), and [`Namespace::delegate`]'s id-freshness
-/// gate refuses this id `DuplicateId` because genesis has already registered it
-/// (§6/§7). So no principal but the one genesis seats ever bears it, and it can
-/// act only in-process, never over a session.
+/// account answers empty lists), and [`crate::Namespace::delegate`]'s
+/// id-freshness gate refuses this id `DuplicateId` because genesis has already
+/// registered it (§6/§7). So no principal but the one genesis seats ever bears
+/// it, and it can act only in-process, never over a session.
 ///
 /// The VALUE is a conspicuous reserved sentinel — `9 × 10^15`, well below the
 /// wire's `2^53 − 1` exact-integer cap (AUTH-5.20) yet far above any ordinary
@@ -119,6 +119,16 @@ pub enum M3Rec {
     RegisterPrincipal { prefix: Address, id: PrincipalId },
 }
 
+/// The `published` an `Allocate` carries OUTSIDE the document tier — an
+/// account, a content or link element — where publication is not a property
+/// of the address at all (PUB-1.68: one bit per DOCUMENT, and nothing else
+/// carries one). [`M3State::apply_m3`] reads the bit only for a Document-tier
+/// address, so this value is never consulted; it is named so the three
+/// non-document mints, and genesis's account record, say what they stamp and
+/// why, and so a reader of a journal frame knows the `false` on an account or
+/// element `Allocate` is an absence and not a verdict.
+const NO_PUBLICATION_STATE: bool = false;
+
 /// The at-rest shadow of [`M3Rec`] — same variants in the same order, same
 /// fields in the same order, so the journal and checkpoint encoding is the
 /// enum's own — and the ONE door a record re-enters memory through.
@@ -134,17 +144,18 @@ pub enum M3Rec {
 ///
 /// It carries the other per-record fact a seat needs, and the one whose
 /// absence fails OPEN: a `RegisterPrincipal` prefix is account-tier.
-/// `delegate` is the sole producer and its hoisted `NotAccountTier` gate
-/// stages nothing else, so the door refuses nothing M3 has ever journaled —
-/// genesis's node-tier π₀ seat is world state, passed to `Kernel::open`, not
-/// a record. The tier matters because ω's O1a filter ADMITS node tier (it
-/// must, for π₀): a node-tier seat arriving on the journal would make its
-/// carrier the effective owner of everything under that node no deeper
-/// account principal covers — including the unallocated subtree, so it could
-/// seat that node's first account, the operator seat `register_node`'s
-/// postcondition leaves to whoever owns the covering prefix. A below-tier
-/// seat is refused by every reader of Π already; this is the shape that is
-/// not.
+/// `delegate` is its sole producer on the journal and its hoisted
+/// `NotAccountTier` gate stages nothing else, so the door refuses nothing M3
+/// has ever journaled — genesis's node-tier π₀ seat is world state, passed to
+/// `Kernel::open`, not a record, and the one seat genesis folds,
+/// `SYSTEM_PRINCIPAL`'s, is account-tier. The tier matters because ω's O1a
+/// filter ADMITS node tier (it must, for π₀): a node-tier seat arriving on
+/// the journal would make its carrier the effective owner of everything under
+/// that node no deeper account principal covers — including the unallocated
+/// subtree, so it could seat that node's first account, the operator seat
+/// `register_node`'s postcondition leaves to whoever owns the covering
+/// prefix. A below-tier seat is refused by every reader of Π already; this is
+/// the shape that is not.
 ///
 /// The door is therefore tighter than O1a, and deliberately: a STATE-level
 /// door could not be, since genesis's seat is node-tier, so [`M3State`]'s
@@ -269,7 +280,8 @@ pub struct M3State {
     /// frontier-encoded. M3 SUPPRESSES ASN-0040's `baptize(node, 1)`
     /// child-node capability (Conflicts §7): internal minting never yields a
     /// zeros = 0 address; ongoing admission is `register_node`, never
-    /// ASN-0040 baptism. Seeded `{[1]}`.
+    /// ASN-0040 baptism. Σ₀ seeds `{[1]}`, and genesis's system-account seed
+    /// admits the system sub-node `[1.1]` beside it (PUB-6.65).
     ///
     /// What its members satisfy is `register_node`'s ADMISSION conditions, not
     /// an invariant this field carries: [`M3State::apply_m3`] states which
@@ -306,9 +318,9 @@ pub struct M3State {
     /// recomputable (NestingByDelegation) and never stored. An `OrdMap`
     /// because the top-down check needs a descendant *range* probe (§6 (iv))
     /// and ordering leaves the ω range-walk upgrade open — a change the one
-    /// private `omega` walk absorbs once, serving all three of its projections
-    /// (the id, the seat, and the authorization predicate stated in terms of
-    /// the id).
+    /// private `omega` walk absorbs once, serving all four of its readers
+    /// (the id, the seat, the whole entry, and the authorization predicate
+    /// stated in terms of the id).
     principals: im::OrdMap<Address, PrincipalId>,
 
     /// The publication map: the publication state of every registered
@@ -489,57 +501,67 @@ impl M3State {
     /// byte-identical ACROSS PROCESSES because every field is ordered (since
     /// option (i) the frontier map too).
     ///
-    /// WHAT THE SEED CREATES, and what it deliberately does not. It registers
-    /// SUB-NODE [`system_node`] `1.1`, seats [`SYSTEM_PRINCIPAL`] at
-    /// [`system_account`] `1.1.0.1` under it, and registers that account's doc
-    /// 1 ([`ghost_home_doc`], the commons registry's future home) and doc 2
-    /// ([`head_document`] `H`), both PUBLISHED. It touches node `[1]`'s own
-    /// account allocator NOWHERE — the seeded account chain is `([1.1], 2)`, not
-    /// `([1], 2)` — so `next_account_prefix([1])` still answers `1.0.1` and the
-    /// claim floor (PUB-6.35, `policy::claim_residue_refusal`) stays zero. It
-    /// mints no CONTENT: both documents are born empty, so the ghost content
-    /// namespace's frontier is untouched and its floor ([`ghost_floor`],
-    /// [`GHOST_POSITIONS`]) stands — nothing exists at a ghost tumbler. Two
-    /// PUBLISHED documents add nothing to the exception set (PUB-7.5 stores the
-    /// UNPUBLISHED side) and no link exists, so every derived structure over
-    /// this state is still empty and `Engine::check_hints` holds by
-    /// construction — the corollary the engine's `genesis.rs` states, undisturbed.
+    /// TWO PARTS, built two ways. The ROOTS — node `[1]` and π₀ seated at it —
+    /// are written directly: they are the state every record folds onto, and
+    /// π₀'s node-tier seat is a shape no op stages and the record door
+    /// (`M3RecShadow`) refuses. The SEED is folded: it is the five records
+    /// M3's own ops stage for the same work —
+    /// [`crate::Namespace::register_node`]'s admission of [`system_node`]
+    /// `1.1`, [`crate::Namespace::delegate`]'s baptism and seat of
+    /// [`system_account`] `1.1.0.1` for [`SYSTEM_PRINCIPAL`], and the
+    /// allocations of the two documents
+    /// [`crate::Namespace::create_new_document`] mints there, doc 1
+    /// ([`ghost_home_doc`], the commons registry's future home) and doc 2
+    /// ([`head_document`] `H`), born PUBLISHED (PUB-1.25's
+    /// genesis/commons-seeded row) — handed to [`M3State::apply_m3`] in that
+    /// order. So the fold is the one writer of the frontier and publication
+    /// maps: each chain reaches its count by the fold's own `+1`, each
+    /// document's bit lands in the step that registers it, and the fold's
+    /// contiguity check confirms, on every debug build, that the account and
+    /// each document is the next member of its own chain. A document added to
+    /// the seed is one more record.
+    ///
+    /// What the seed leaves alone: node `[1]`'s own account chain — the
+    /// seeded account chain is `([1.1], 2)`, not `([1], 2)` — so
+    /// `next_account_prefix([1])` answers `1.0.1`; and CONTENT — both
+    /// documents are born empty, so the ghost content namespace has no
+    /// frontier and its floor ([`ghost_floor`], [`GHOST_POSITIONS`]) stands.
+    /// It seeds no unpublished document and no link.
     ///
     /// [`GHOST_POSITIONS`]: crate::GHOST_POSITIONS
     pub fn genesis() -> M3State {
         let root = bootstrap_root();
-        let node = system_node(); // 1.1
-        let account = system_account(); // 1.1.0.1
-        let doc1 = ghost_home_doc(); // 1.1.0.1.0.1 — the commons registry's home
-        let doc2 = head_document(); // 1.1.0.1.0.2 — the head document H
-
-        // The two frontiers the seed advances, each the key its own mint would
-        // have read (§1/§A): the account chain (1.1, 2) to c₁ = 1.1.0.1, and
-        // the document chain (1.1.0.1, 2) to c₂ = 1.1.0.1.0.2 (doc 1 then doc 2,
-        // M3's document chain being sequential).
-        let mut frontiers = im::OrdMap::new();
-        frontiers.insert(account_ns(&node), Nat::from(1u32));
-        frontiers.insert(document_ns(&account), Nat::from(2u32));
-
-        let mut nodes = im::OrdSet::unit(root.clone());
-        nodes.insert(node);
-
-        let mut principals = im::OrdMap::unit(root.clone(), BOOTSTRAP_PRINCIPAL);
-        principals.insert(account, SYSTEM_PRINCIPAL);
-
-        // The two documents' RESOLVED publication bits, exactly as their
-        // minting Allocates would have journaled them (PUB-7.10): born
-        // published (PUB-1.25's genesis/commons-seeded row).
-        let mut publication = im::OrdMap::new();
-        publication.insert(doc1, true);
-        publication.insert(doc2, true);
-
-        M3State {
-            frontiers,
-            nodes,
-            principals,
-            publication,
-        }
+        let roots = M3State {
+            frontiers: im::OrdMap::new(),
+            nodes: im::OrdSet::unit(root.clone()),
+            principals: im::OrdMap::unit(root.clone(), BOOTSTRAP_PRINCIPAL),
+            publication: im::OrdMap::new(),
+        };
+        let seed = [
+            // `register_node`: the system sub-node 1.1.
+            M3Rec::RegisterNode {
+                addr: system_node(),
+            },
+            // `delegate`: the system account 1.1.0.1, baptized and seated.
+            M3Rec::Allocate {
+                addr: system_account(),
+                published: NO_PUBLICATION_STATE,
+            },
+            M3Rec::RegisterPrincipal {
+                prefix: system_account(),
+                id: SYSTEM_PRINCIPAL,
+            },
+            // Two creates under it, both born published: doc 1, then doc 2 (H).
+            M3Rec::Allocate {
+                addr: ghost_home_doc(),
+                published: true,
+            },
+            M3Rec::Allocate {
+                addr: head_document(),
+                published: true,
+            },
+        ];
+        seed.iter().fold(roots, |s, r| s.apply_m3(r))
     }
 
     /// M3's fold — `pub`: the engine crate wires `World::apply`'s `Record::M3`
@@ -605,8 +627,11 @@ impl M3State {
     /// `fork`'s account and M5's cross-owner VERSION target: a
     /// `RegisterPrincipal` from any producer but `delegate` would seat a
     /// second principal on a live id and make all three arbitrary. `delegate`
-    /// is that sole producer, and M2's journal is the boundary that keeps it
-    /// so.
+    /// is its sole producer on the journal; genesis folds one more —
+    /// `SYSTEM_PRINCIPAL`'s seat, onto roots where only π₀'s id is live —
+    /// before any delegation can run, and from then on `delegate`'s
+    /// `DuplicateId` gate refuses that id. M2's journal is the boundary that
+    /// keeps it so.
     pub fn apply_m3(&self, r: &M3Rec) -> M3State {
         let mut s = self.clone();
         // Adding a variant? `M3RecShadow` needs it as well — see `M3Rec`.
@@ -715,6 +740,8 @@ impl M3State {
     /// two owe is [`ns_lock_key`]'s injectivity, which holds for any anchor.
     ///
     /// [`version_ns`]: crate::ns::version_ns
+    /// [`document_ns`]: crate::ns::document_ns
+    /// [`account_ns`]: crate::ns::account_ns
     /// [`content_ns`]: crate::ns::content_ns
     /// [`link_ns`]: crate::ns::link_ns
     /// [`ns_lock_key`]: crate::ns::ns_lock_key

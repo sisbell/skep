@@ -316,15 +316,19 @@ impl M3State {
     /// answer, where the two projections beside it each keep half.
     ///
     /// OPTIONAL, and published for the one reader that needs both halves of
-    /// ONE entry: the owner-of-address read (AUTH-6.37), whose allocation
-    /// test is `prefix == a` and whose principal must be the one seated AT
-    /// that prefix. Composing [`M3State::effective_owner_prefix`] with
-    /// [`M3State::effective_owner`] answers the same pair off one snapshot,
-    /// but walks Π TWICE, and that read's cost promise is the walk every
-    /// ownership check already makes — one. No caller is REQUIRED to use it;
-    /// it adds no state, no index and no fold fact, and `None` is exactly
-    /// the projections' `None`: no registered node- or account-tier prefix
-    /// contains `a`, so the two halves are absent TOGETHER by construction.
+    /// ONE entry: the owner-of-address read (AUTH-6.37), which reads
+    /// `prefix == a` as an ACCOUNT's allocation test and needs the principal
+    /// seated AT that prefix. For an account the test is sound because its
+    /// seat is its allocation ([`crate::Namespace::delegate`]); at every other
+    /// tier it is no allocation test, since a node `register_node` admitted
+    /// and every minted document are seated nowhere. Composing
+    /// [`M3State::effective_owner_prefix`] with [`M3State::effective_owner`]
+    /// answers the same pair off one snapshot, but walks Π TWICE, and that
+    /// read's cost promise is the walk every ownership check already makes —
+    /// one. No caller is REQUIRED to use it; it adds no state, no index and no
+    /// fold fact, and `None` is exactly the projections' `None`: no registered
+    /// node- or account-tier prefix contains `a`, so the two halves are absent
+    /// TOGETHER by construction.
     pub fn effective_owner_pair(&self, a: &Address) -> Option<(&Address, PrincipalId)> {
         self.omega(a)
     }

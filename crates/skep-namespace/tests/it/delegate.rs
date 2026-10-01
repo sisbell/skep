@@ -1,12 +1,14 @@
 //! §B delegate: the account mint and its principal seat in one transaction,
-//! the peek that is not a reservation, the pinned rejection order, the depth
-//! refusal and the peek's bound, and ordinal one under every node.
+//! and so an account's seat as its allocation; the peek that is not a
+//! reservation, the pinned rejection order, the depth refusal and the peek's
+//! bound, and ordinal one under every node.
 
 use crate::common::*;
 
 use skep_address::Level;
 use skep_namespace::{
-    DelegateError, HasM3, M3Rec, M3State, Namespace, BOOTSTRAP_PRINCIPAL, MAX_PRINCIPAL_COMPONENTS,
+    system_account, DelegateError, HasM3, M3Rec, M3State, Namespace, BOOTSTRAP_PRINCIPAL,
+    MAX_PRINCIPAL_COMPONENTS,
 };
 
 #[test]
@@ -72,6 +74,40 @@ fn delegate_mints_the_account_and_registers_its_principal_atomically() {
         .m3()
         .next_account_prefix(&doc)
         .is_none());
+}
+
+/// An account's seat is its allocation (§6, O17b): `delegate` seats every
+/// prefix it mints in the transaction that mints it, and genesis seeds its one
+/// account seated, so on any state M3's ops produce an account-tier address is
+/// registered iff a principal is seated exactly at it — the equality the
+/// owner-of-address read (AUTH-6.37) answers as its allocation test
+/// (AUTH-5.87). Probed at every account-tier shape the ops produce, seated
+/// and free alike.
+#[test]
+fn an_account_is_allocated_iff_a_principal_is_seated_at_it() {
+    let (k, acct, _doc) = kernel_with_account_and_doc();
+    let (sub, _) = Namespace::new(&k)
+        .delegate(ID1, t(&[1, 0, 1, 1]), ID2)
+        .expect("sub-delegate");
+    let m3 = k.snapshot().world().m3().clone();
+    for probe in [
+        acct.clone(),
+        sub.clone(),
+        system_account(),
+        a(&[1, 0, 2]),       // the bootstrap node's next slot
+        a(&[1, 0, 1, 2]),    // the account's next sub-account slot
+        a(&[1, 0, 1, 1, 1]), // the sub-account's first slot
+        a(&[1, 1, 0, 2]),    // the system node's next slot
+    ] {
+        assert_eq!(
+            m3.is_registered_account(&probe),
+            m3.effective_owner_prefix(&probe) == Some(&probe),
+            "allocation and seat disagree at {probe:?}"
+        );
+    }
+    // Both answers occur, so the equality is not vacuous.
+    assert!(m3.is_registered_account(&sub));
+    assert!(!m3.is_registered_account(&a(&[1, 0, 2])));
 }
 
 #[test]

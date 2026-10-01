@@ -115,6 +115,18 @@ where
     /// Callers peek that same value through
     /// [`M3State::next_account_prefix`].
     ///
+    /// Because it is the sole allocator and seats every prefix it mints, an
+    /// account's SEAT is its allocation: on any state M3's own ops produce —
+    /// genesis seeds its one account seated too — an account-tier address is
+    /// registered iff a principal is seated exactly at it,
+    /// [`M3State::is_registered_account`]`(a)` iff
+    /// [`M3State::effective_owner_prefix`]`(a) == Some(a)`. The
+    /// owner-of-address read (AUTH-6.37) answers that equality as an
+    /// account's allocation test (AUTH-5.87), so the one-transaction pairing
+    /// is a guarantee and not only a safety: a path that allocated an account
+    /// without seating it would have that read call an allocated account
+    /// free.
+    ///
     /// Pure pre-work runs first: the validate-lift (`NotValid`), the
     /// HOISTED tier check (`NotAccountTier`) — hoisted because the lift
     /// alone does not make `parent()`/lock-key construction safe (a

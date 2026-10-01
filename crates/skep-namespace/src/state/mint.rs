@@ -2,27 +2,16 @@
 //! that read their frontiers, and the account chain's peek
 //! ([`M3State::next_account_prefix`]), which is the account mint without its
 //! record. An `impl M3State` child of `state`: it reaches the frontier
-//! arithmetic (`next_in`) the way a child does, and keeps two things private
-//! to itself — `mint_on`, the mint behind the five, and the stamp the
-//! non-document mints carry — so no other module reaches that mint except
-//! through one of the five gates.
+//! arithmetic (`next_in`) the way a child does, and keeps `mint_on`, the mint
+//! behind the five, private to itself, so no other module reaches that mint
+//! except through one of the five gates.
 
 use skep_address::{Address, GateViolation, Level};
 use skep_kernel::{LockKey, Space};
 
-use super::{M3Rec, M3State, MAX_PRINCIPAL_COMPONENTS};
+use super::{M3Rec, M3State, MAX_PRINCIPAL_COMPONENTS, NO_PUBLICATION_STATE};
 use crate::error::MintError;
 use crate::ns::{account_ns, content_ns, document_ns, link_ns, ns_lock_key, version_ns, NsKey};
-
-/// The `published` an `Allocate` carries OUTSIDE the document tier — an
-/// account, a content or link element — where publication is not a property
-/// of the address at all (PUB-1.68: one bit per DOCUMENT, and nothing else
-/// carries one). [`M3State::apply_m3`] reads the bit only for a Document-tier
-/// address, so this value is never consulted; it is named so the three
-/// non-document mints say what they stamp and why, and so a reader of a
-/// journal frame knows the `false` on an account or element `Allocate` is an
-/// absence and not a verdict.
-const NO_PUBLICATION_STATE: bool = false;
 
 // ---------------------------------------------------------------------------
 // §A The lock-key constructors: one per chain, and the two registry keys.
@@ -267,7 +256,10 @@ impl M3State {
     /// To realize it, the caller holds
     /// [`M3State::account_lock_key`]`(parent)` and stages the returned
     /// [`M3Rec`]; [`M3State::next_account_prefix`] is this without the record,
-    /// which is the peek.
+    /// which is the peek. Its one caller also seats every prefix this mints,
+    /// in the same transaction, which is what makes an account's seat its
+    /// allocation ([`crate::Namespace::delegate`]); a second caller owes the
+    /// same seat.
     pub(crate) fn mint_account(&self, parent: &Address) -> Option<(Address, M3Rec)> {
         if !matches!(self.entity_level(parent)?, Level::Node | Level::Account) {
             return None;

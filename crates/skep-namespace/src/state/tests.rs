@@ -1,7 +1,7 @@
 use super::*;
 
 use crate::ghost::{ghost_position, GHOST_POSITIONS};
-use crate::ns::{content_ns, link_ns, ns_lock_key, version_ns};
+use crate::ns::{account_ns, content_ns, document_ns, link_ns, ns_lock_key, version_ns};
 use skep_address::parent;
 
 fn t(comps: &[u32]) -> Tumbler {
@@ -165,10 +165,10 @@ fn the_ghost_floor_holds_against_a_regressed_frontier() {
 /// §1: a stored ZERO is an empty chain at both frontier-end reads — the
 /// reading [`M3State::has_documents`] and [`M3State::latest_version`] each
 /// state, and which neither can reach through M3's own ops, since
-/// [`M3State::apply_m3`] inserts only `effective_frontier + 1` and genesis
-/// seeds none. A checkpoint is bytes and `NsKeyShadow` screens the KEY,
-/// not the count, so this is the shape those two guards exist for; it is
-/// built by hand for the reason the ghost test above is.
+/// [`M3State::apply_m3`] inserts only `effective_frontier + 1`, and genesis's
+/// seed is itself folded through it. A checkpoint is bytes and `NsKeyShadow`
+/// screens the KEY, not the count, so this is the shape those two guards exist
+/// for; it is built by hand for the reason the ghost test above is.
 ///
 /// The guards fail in opposite ways. Without [`M3State::latest_version`]'s,
 /// [`nth_in`] computes `0 − 1` on a `Nat` and the read PANICS — on the
@@ -280,9 +280,13 @@ fn latest_version_reads_the_chain_not_the_registry() {
 /// STRICTLY under `p`?" — checked over the shape family one probe can
 /// meet, because only ONE key is ever examined, so a wrong range bound or
 /// a dropped containment test still answers correctly at a chosen point.
-/// Π holds only the seats each row names, plus genesis's `[1]`, which is
-/// an ANCESTOR of `p` in every row and sorts before it — so no row's
-/// answer may come from it.
+/// Π holds the seats each row names plus genesis's two: `[1]`, an ANCESTOR
+/// of `p` that sorts before it, so no row's answer may come from it; and the
+/// system account `1.1.0.1`, which sorts AFTER `p` — so in the
+/// empty-subtree row the probe meets that seat, a successor that is no
+/// descendant, and no row ever hands it an empty block. The assertion after
+/// the loop is that block: a `p` past every seat, where the probe finds no
+/// key at all.
 ///
 /// The last two rows are the PRECONDITION `p ∉ Π` made executable: once
 /// `p` is itself a principal the block of keys ≥ `p` opens with `p`, so
@@ -329,6 +333,13 @@ fn the_top_down_probe_sees_strict_descendants_and_nothing_else() {
             "{shape}: the top-down probe disagrees"
         );
     }
+    // The probe's other arm: no key ≥ `p` at all. Both of genesis's seats
+    // sort before `[1, 2, 0, 1]`, so the block is empty and nothing sits
+    // under it.
+    assert!(
+        !M3State::genesis().has_principal_strictly_under(&a(&[1, 2, 0, 1])),
+        "past every seat the block is empty"
+    );
 }
 
 /// The [`M3RecShadow`] door tests `#a ≥ 2`; [`M3State::apply_m3`]'s
@@ -372,7 +383,10 @@ fn the_allocate_door_admits_exactly_what_the_fold_can_key() {
 /// AUTH-6.37's optional accessor: [`M3State::effective_owner_pair`] is ω
 /// UNPROJECTED — the two projections' answers, as ONE entry, at every
 /// probe — and its `None` is theirs. The probes are the read's own cells:
-/// a seat answers ITSELF (`prefix == a`, the allocation test); an
+/// a seat answers ITSELF (`prefix == a`; these seats are folded without
+/// their allocations, so this pins ω's walk, and the account-tier
+/// equivalence of seat and allocation is
+/// `an_account_is_allocated_iff_a_principal_is_seated_at_it`'s); an
 /// unallocated first child `inc(X, 1)` answers the seat ABOVE it, never
 /// none under the node; a sub-account outranks its parent by length; and
 /// an address no registered prefix contains has neither half.

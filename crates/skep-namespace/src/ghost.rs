@@ -105,10 +105,10 @@ fn is_ghost_ns(key: &NsKey) -> bool {
 /// nothing exists at a ghost tumbler on any board, and M5's
 /// referential-integrity oracle refuses a COPY of one.
 ///
-/// The floor is a compiled constant, not genesis state: Σ₀ still creates
-/// exactly the namespace roots and the empty docuverse, every board agrees
-/// because the floor IS the format, and a checkpoint has nothing extra to
-/// carry.
+/// The floor is a compiled constant, not genesis state: genesis seeds the
+/// ghost home document EMPTY, so its content chain has no frontier until a
+/// first mint lands past the floor; every board agrees because the floor IS
+/// the format, and a checkpoint has nothing extra to carry.
 ///
 /// [`M3State::apply_m3`]: crate::M3State::apply_m3
 pub(crate) fn ghost_floor(key: &NsKey) -> Nat {

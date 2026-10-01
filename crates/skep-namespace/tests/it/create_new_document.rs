@@ -5,8 +5,8 @@
 use crate::common::*;
 
 use skep_namespace::{
-    first_document_address, ghost_home_doc, prefix_contains, CreateDocumentError, HasM3, MintError,
-    Namespace, BOOTSTRAP_PRINCIPAL,
+    first_document_address, ghost_home_doc, prefix_contains, system_account, CreateDocumentError,
+    HasM3, MintError, Namespace, BOOTSTRAP_PRINCIPAL,
 };
 
 #[test]
@@ -88,10 +88,10 @@ fn the_first_document_address_is_the_slot_the_document_chain_opens_at() {
     assert!(m3.has_documents(&acct));
     let (d2, _) = ns.create_new_document(ID1, &acct, None).expect("create 2");
     assert_ne!(d2, slot);
-    // The ghost home document is that rule applied to the registry node's
-    // operator account — so the compiled literal and the chain rule agree.
+    // The ghost home document is that rule applied to the system account
+    // genesis seeds — so the compiled literal and the chain rule agree.
     assert_eq!(
-        first_document_address(&a(&[1, 1, 0, 1])),
+        first_document_address(&system_account()),
         Some(ghost_home_doc())
     );
     // Only an account anchors a document chain, so off the account tier

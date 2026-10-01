@@ -19,9 +19,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   Over-allocation is harmless, and an address is never reused given
   the caller's half — the mint reads the frontier, the record it
   hands back advances it. The five reserved type addresses (the ghost
-  tumblers — content positions 1–5 of doc-1 of the registry node's
-  operator) are never issued at all: their chain's frontier is
-  floored past them as compiled format.
+  tumblers — content positions 1–5 of doc 1 of the system account
+  `1.1.0.1`, which genesis seeds) are never issued at all: their
+  chain's frontier is floored past them as compiled format.
 - **Allocation and entity reads** — is-this-allocated over every
   chain, and node/account/document classification over the entity
   registry: the universal gates other stores consult.

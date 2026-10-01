@@ -55,9 +55,10 @@
 //!   [`Namespace::fork`] \[ASN-0042 O10, account-tier case\].
 //! * **Queries** (§C) — pure reads off any M2 snapshot: allocation and
 //!   entity membership (exact chain membership, §2), the ω authorization
-//!   predicate [`M3State::is_effective_owner`] beside the two projections of
+//!   predicate [`M3State::is_effective_owner`] beside the three readers of
 //!   the owner it names ([`M3State::effective_owner`] for the id,
-//!   [`M3State::effective_owner_prefix`] for the address it is seated at)
+//!   [`M3State::effective_owner_prefix`] for the address it is seated at,
+//!   [`M3State::effective_owner_pair`] for the whole entry, AUTH-6.37)
 //!   \[ASN-0042 O1–O9\], id→prefix resolution, the three chain-end reads —
 //!   the next-form peek [`M3State::next_account_prefix`], the version
 //!   chain's latest member [`M3State::latest_version`], and the emptiness

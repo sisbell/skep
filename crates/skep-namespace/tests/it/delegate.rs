@@ -6,13 +6,15 @@
 use crate::common::*;
 
 use skep_address::Level;
+use skep_kernel::{HistoryError, Kernel, Seq};
 use skep_namespace::{
     system_account, DelegateError, HasM3, M3Rec, M3State, Namespace, BOOTSTRAP_PRINCIPAL,
-    MAX_PRINCIPAL_COMPONENTS,
+    MAX_PRINCIPAL_COMPONENTS, SYSTEM_PRINCIPAL,
 };
+use tempfile::tempdir;
 
 #[test]
-fn delegate_mints_the_account_and_registers_its_principal_atomically() {
+fn delegate_mints_the_account_and_registers_its_principal() {
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
 
@@ -34,8 +36,10 @@ fn delegate_mints_the_account_and_registers_its_principal_atomically() {
     assert!(seq > before);
     assert_eq!(k.current_seq(), seq); // the committed last_seq
 
-    // Both halves landed in ONE transaction (O17b): the allocation and the
-    // principal.
+    // Both halves landed (O17b): the allocation and the principal. That they
+    // landed as ONE transaction is invisible here — the returned Seq and the
+    // final state are alike for one or two — and is
+    // `delegate_commits_the_baptism_and_the_seat_as_one_transaction`'s.
     let snap = k.snapshot();
     let m3 = snap.world().m3();
     assert!(m3.is_allocated(&acct));
@@ -74,6 +78,59 @@ fn delegate_mints_the_account_and_registers_its_principal_atomically() {
         .m3()
         .next_account_prefix(&doc)
         .is_none());
+}
+
+/// O17b: `delegate` baptizes the account and seats its principal in ONE
+/// transaction — "a two-phase baptize-then-register could half-fail". An
+/// account's seat is its allocation, so the coordinate between two phases
+/// would be a COMMITTED world holding an allocated account no one is seated
+/// at: every history read answers at committed coordinates, the
+/// owner-of-address read (AUTH-6.37) would call that account free, and a
+/// crash there would make it permanent, since freshness then refuses the seat
+/// forever. The `Seq` the op returns and the state it leaves are alike for one
+/// transaction or two, so this walks every coordinate the call drew, on a
+/// journaled kernel, and holds the seat-is-allocation law at each one
+/// `world_at` answers. M2 refuses a composite's interior `Seq` as never
+/// observable; a second transaction would make it a boundary.
+#[test]
+fn delegate_commits_the_baptism_and_the_seat_as_one_transaction() {
+    let dir = tempdir().expect("tempdir");
+    let k = Kernel::open(fsync_config(dir.path()), genesis_world()).expect("open");
+    let before = k.current_seq();
+    let (acct, seq) = Namespace::new(&k)
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+        .expect("delegate");
+    // Two records, so the call drew a coordinate strictly inside it — the one
+    // a second transaction would have made a boundary.
+    assert!(
+        seq.0 >= before.0 + 2,
+        "delegate drew only {before:?}..{seq:?}"
+    );
+
+    let mut answered = Vec::new();
+    for at in before.0..=seq.0 {
+        let world = match k.world_at(Seq(at)) {
+            Ok(world) => world,
+            // A composite's interior coordinate: no world was ever committed
+            // there, so there is nothing to hold.
+            Err(HistoryError::NotABoundary { .. }) => continue,
+            Err(e) => panic!("world_at(Seq({at})) refused for another reason: {e}"),
+        };
+        let m3 = world.m3();
+        assert_eq!(
+            m3.is_registered_account(&acct),
+            m3.effective_owner_prefix(&acct) == Some(&acct),
+            "Seq({at}) is a committed world holding one half of {acct:?}'s delegation"
+        );
+        answered.push((at, m3.is_registered_account(&acct)));
+    }
+    // Exactly two worlds were committed across the call: the one before it,
+    // holding neither half, and the one it returned, holding both.
+    assert_eq!(
+        answered,
+        vec![(before.0, false), (seq.0, true)],
+        "the committed coordinates across the call"
+    );
 }
 
 /// An account's seat is its allocation (§6, O17b; ASN-0042's
@@ -292,6 +349,13 @@ fn delegate_rejection_order_is_pinned() {
         rejected(fresh_ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), BOOTSTRAP_PRINCIPAL)),
         DelegateError::DuplicateId
     );
+    // …and so does the system id genesis seats (PUB-6.65): a client's attempt
+    // to re-seat it is refused `DuplicateId`, so no principal but the seed's
+    // ever bears it.
+    assert_eq!(
+        rejected(fresh_ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), SYSTEM_PRINCIPAL)),
+        DelegateError::DuplicateId
+    );
     // DuplicateId precedes ParentNotRegistered: the id is taken AND [1,0,1]
     // — the parent of [1,0,1,1] — was never registered.
     assert_eq!(
@@ -352,7 +416,8 @@ fn delegate_refuses_a_wire_deep_prefix_structurally() {
     // pins a constant — a wall-clock bound is a flake; the depth is chosen so
     // a regression to superlinear work stops the suite instead of reddening a
     // line. Corpus seeds for the fuzzing tier.
-    let (k, acct, _doc) = kernel_with_account_and_doc(); // Π = { [1]→π₀, [1,0,1]→ID1 }
+    // Π = { [1]→π₀, [1,0,1]→ID1, [1,1,0,1]→SYSTEM_PRINCIPAL }
+    let (k, acct, _doc) = kernel_with_account_and_doc();
     let ns = Namespace::new(&k);
     let before = k.current_seq();
 

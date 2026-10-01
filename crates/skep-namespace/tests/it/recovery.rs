@@ -1,5 +1,5 @@
-//! The fold's totality domain, the journaled types' serde round trips and
-//! decode doors, and durable recovery by checkpoint and replay.
+//! The fold's totality domain, the journaled types' serde round trips, decode
+//! doors and canonical bytes, and durable recovery by checkpoint and replay.
 
 use crate::common::*;
 
@@ -7,7 +7,7 @@ use serde::Serialize;
 use skep_address::{Level, Tumbler};
 use skep_kernel::Kernel;
 use skep_namespace::{
-    HasM3, M3Rec, M3State, MintError, Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL,
+    ghost_position, HasM3, M3Rec, M3State, MintError, Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL,
 };
 use tempfile::tempdir;
 
@@ -34,7 +34,62 @@ fn a_regressed_allocate_ordinal_fail_stops_the_fold() {
     let _ = s.apply_m3(&alloc(&[1, 0, 1]));
 }
 
+/// A `RegisterNode` naming an address BELOW the node tier: inside the fold's
+/// totality domain, outside `register_node`'s admission conditions, and past
+/// the record door, which deliberately carries no tier check. `apply_m3`
+/// states what that costs — "a non-node-level entry is unreachable, since
+/// `is_allocated` consults `nodes` only on the `Node` arm" — and that sentence
+/// is the door's whole justification. An `is_allocated` spelled
+/// `nodes.contains(a) || is_chain_member(a)` passes every other test, and then
+/// one frame registers an account no one is seated at, a document with no
+/// publication entry (which a by-miss index reads as PUBLISHED), or a ghost
+/// tumbler, which must answer unallocated on every board forever.
+#[test]
+fn a_non_node_entry_in_the_node_registry_is_unreachable() {
+    let acct = a(&[1, 0, 9]);
+    let doc = a(&[1, 0, 1, 0, 9]);
+    let ghost = ghost_position(1);
+    let s = [&acct, &doc, &ghost]
+        .into_iter()
+        .fold(M3State::genesis(), |s, addr| {
+            s.apply_m3(&M3Rec::RegisterNode { addr: addr.clone() })
+        });
+    for addr in [&acct, &doc, &ghost] {
+        assert!(
+            !s.is_allocated(addr),
+            "{addr:?} reads allocated off the node registry"
+        );
+        assert_eq!(
+            s.entity_level(addr),
+            None,
+            "{addr:?} reads as an entity off the node registry"
+        );
+    }
+    // …so every gate that reads them refuses exactly as if the record were
+    // absent.
+    assert_eq!(
+        s.mint_document(&acct, false).unwrap_err(),
+        MintError::NotAnAccount
+    );
+    assert!(s.next_account_prefix(&acct).is_none());
+    assert_eq!(
+        s.mint_content(&doc).unwrap_err(),
+        MintError::HomeNotRegistered
+    );
+}
+
 // ---- serde / recovery ----
+
+/// `M3Rec`'s journal shape with each `Address` payload written as the bare
+/// tumbler it journals as — the data model's form, not the in-memory type's —
+/// so a test can pin the encoding byte for byte and hand the decoder frames
+/// the in-memory type could never build.
+#[derive(Serialize)]
+enum RawM3Rec {
+    Allocate { addr: Tumbler, published: bool },
+    RegisterNode { addr: Tumbler },
+    RegisterPrincipal { prefix: Tumbler, id: PrincipalId },
+}
 
 #[test]
 fn journaled_types_survive_serde_round_trips() {
@@ -65,12 +120,6 @@ fn journaled_types_survive_serde_round_trips() {
     // The Address payloads journal as bare, flat tumblers — the data model's
     // form, not the in-memory type's. A raw record carrying Tumblers encodes
     // byte-identically, variant for variant.
-    #[derive(Serialize)]
-    enum RawM3Rec {
-        Allocate { addr: Tumbler, published: bool },
-        RegisterNode { addr: Tumbler },
-        RegisterPrincipal { prefix: Tumbler, id: PrincipalId },
-    }
     let raw_recs = [
         RawM3Rec::Allocate {
             addr: t(&[1, 0, 1]),
@@ -93,6 +142,48 @@ fn journaled_types_survive_serde_round_trips() {
         );
     }
 
+    // M3State — the checkpointed slice: every field is ordinary serde (none
+    // skip-serialized; default rebuild_derived), so a round-tripped state
+    // answers identically.
+    let (k, acct, doc) = kernel_with_account_and_doc();
+    let keys = [M3State::content_lock_key(&doc)];
+    k.transact::<_, MintError>(&keys, |stg| {
+        let (_, r) = stg.working().m3().mint_content(&doc)?;
+        stg.push(r.into());
+        Ok(())
+    })
+    .expect("content commit");
+    let state = k.snapshot().world().m3().clone();
+    let bytes = bincode::serialize(&state).expect("serialize M3State");
+    let back: M3State = bincode::deserialize(&bytes).expect("deserialize M3State");
+    // Whole-value: the decoded slice IS the encoded one, entry for entry
+    // across the three registries and the publication map — which the
+    // per-question probes below then name, so a failure says which claim
+    // broke.
+    assert_eq!(back, state);
+    assert!(back.is_allocated(&a(&[1, 0, 1, 0, 1, 0, 1, 1])));
+    assert!(back.is_registered_document(&doc));
+    // The publication map rides inside the slice too: the fixture's doc is
+    // the account's doc 1, born published by the flagless create.
+    assert!(back.published(&doc));
+    assert_eq!(back.entity_level(&acct), Some(Level::Account));
+    assert_eq!(back.next_account_prefix(&a(&[1])), Some(a(&[1, 0, 2])));
+    // The whole principal registry rides inside the slice — both its
+    // entries, both directions (id → prefix, address → ω).
+    assert_eq!(back.principal_prefix(ID1), Some(&acct));
+    assert_eq!(back.effective_owner(&doc), Some(ID1));
+    assert_eq!(back.principal_prefix(BOOTSTRAP_PRINCIPAL), Some(&a(&[1])));
+    assert_eq!(back.effective_owner(&a(&[1])), Some(BOOTSTRAP_PRINCIPAL));
+}
+
+/// A record comes back off the journal through its fields' doors and no other
+/// way: M1's validating decode refuses a non-T4 address in any payload,
+/// `Allocate`'s address door refuses a parentless one, and
+/// `RegisterPrincipal`'s prefix door refuses every seat off the account tier —
+/// each a decode failure, never a value the fold could be handed — while the
+/// shapes just inside each door still decode.
+#[test]
+fn a_journal_frame_re_enters_only_through_its_field_doors() {
     // A tumbler that is not T4-valid cannot arrive as a record: the payload
     // re-validates on the way off the journal (M1's validating Deserialize),
     // so the fold is never handed a malformed address.
@@ -177,39 +268,71 @@ fn journaled_types_survive_serde_round_trips() {
             id: ID2
         }
     );
+}
 
-    // M3State — the checkpointed slice: every field is ordinary serde (none
-    // skip-serialized; default rebuild_derived), so a round-tripped state
-    // answers identically.
-    let (k, acct, doc) = kernel_with_account_and_doc();
-    let keys = [M3State::content_lock_key(&doc)];
-    k.transact::<_, MintError>(&keys, |stg| {
-        let (_, r) = stg.working().m3().mint_content(&doc)?;
-        stg.push(r.into());
-        Ok(())
-    })
-    .expect("content commit");
-    let state = k.snapshot().world().m3().clone();
-    let bytes = bincode::serialize(&state).expect("serialize M3State");
-    let back: M3State = bincode::deserialize(&bytes).expect("deserialize M3State");
-    // Whole-value: the decoded slice IS the encoded one, entry for entry
-    // across the three registries and the publication map — which the
-    // per-question probes below then name, so a failure says which claim
-    // broke.
-    assert_eq!(back, state);
-    assert!(back.is_allocated(&a(&[1, 0, 1, 0, 1, 0, 1, 1])));
-    assert!(back.is_registered_document(&doc));
-    // The publication map rides inside the slice too: the fixture's doc is
-    // the account's doc 1, born published by the flagless create.
-    assert!(back.published(&doc));
-    assert_eq!(back.entity_level(&acct), Some(Level::Account));
-    assert_eq!(back.next_account_prefix(&a(&[1])), Some(a(&[1, 0, 2])));
-    // The whole principal registry rides inside the slice — both its
-    // entries, both directions (id → prefix, address → ω).
-    assert_eq!(back.principal_prefix(ID1), Some(&acct));
-    assert_eq!(back.effective_owner(&doc), Some(ID1));
-    assert_eq!(back.principal_prefix(BOOTSTRAP_PRINCIPAL), Some(&a(&[1])));
-    assert_eq!(back.effective_owner(&a(&[1])), Some(BOOTSTRAP_PRINCIPAL));
+/// `M3State`'s bytes are CANONICAL — "two slices holding the same entries
+/// encode to one byte string on any process and any machine" — which is what
+/// lets M2's checkpoint header commit to its body by hash, and a published
+/// head name a checkpoint by hash. The crate's only other pin on the slice's
+/// bytes is genesis's, at two entries per field, where a hash-ordered field
+/// would still match half the time, and it does not reach the frontier map,
+/// the field whose order its own doc calls WRITTEN. So: eight or more entries
+/// in EVERY field, reached along two different histories off two SEPARATELY
+/// built geneses — not one cloned, so a hash-ordered field would carry two
+/// hashers — and the bytes compared whole.
+#[test]
+fn two_slices_holding_the_same_entries_encode_to_one_byte_string() {
+    let accounts: Vec<Vec<u32>> = (1..=6).map(|i| vec![1, 0, i]).collect();
+    let docs: Vec<Vec<u32>> = (1..=6).map(|i| vec![1, 0, i, 0, 1]).collect();
+    let seat = |i: usize| M3Rec::RegisterPrincipal {
+        prefix: a(&accounts[i]),
+        id: PrincipalId(10 + i as u64),
+    };
+    let document = |i: usize| M3Rec::Allocate {
+        addr: a(&docs[i]),
+        published: i % 2 == 0,
+    };
+    let node = |n: u32| M3Rec::RegisterNode { addr: a(&[1, n]) };
+
+    // History X: account by account — its baptism, its seat, its document —
+    // then the nodes 1.2..1.7 ascending.
+    let mut x = M3State::genesis();
+    for (i, acct) in accounts.iter().enumerate() {
+        x = x
+            .apply_m3(&alloc(acct))
+            .apply_m3(&seat(i))
+            .apply_m3(&document(i));
+    }
+    for n in 2..=7 {
+        x = x.apply_m3(&node(n));
+    }
+    // History Y, off a SECOND genesis: the nodes first and descending, the
+    // accounts (one chain, so in order), the documents in reverse — each is c₁
+    // of its own chain — and the seats in reverse.
+    let mut y = M3State::genesis();
+    for n in (2..=7).rev() {
+        y = y.apply_m3(&node(n));
+    }
+    for acct in &accounts {
+        y = y.apply_m3(&alloc(acct));
+    }
+    for i in (0..accounts.len()).rev() {
+        y = y.apply_m3(&document(i));
+    }
+    for i in (0..accounts.len()).rev() {
+        y = y.apply_m3(&seat(i));
+    }
+
+    // One set of entries — nine frontiers, eight nodes, eight seats, eight
+    // documents — reached two ways…
+    assert_eq!(x, y);
+    assert_eq!(x.documents().len(), 8);
+    // …is one byte string.
+    assert_eq!(
+        bincode::serialize(&x).expect("serialize history X"),
+        bincode::serialize(&y).expect("serialize history Y"),
+        "two slices holding the same entries encode differently"
+    );
 }
 
 #[test]

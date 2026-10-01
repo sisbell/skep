@@ -39,8 +39,8 @@ fn create_new_document_authorizes_by_omega() {
         CreateDocumentError::NotOwner
     );
     // ω-auth is evaluated FIRST (§7): a non-owner of an unregistered
-    // account gets NotOwner, while the owner (π₀ covers all unregistered
-    // prefixes under [1]) reaches the structural mint gate — NotAnAccount
+    // account gets NotOwner, while the owner (π₀ is ω of [1,0,2], which no
+    // deeper seat covers) reaches the structural mint gate — NotAnAccount
     // covers unregistered and node-tier targets alike.
     assert_eq!(
         rejected(ns.create_new_document(ID1, &a(&[1, 0, 2]), None)),

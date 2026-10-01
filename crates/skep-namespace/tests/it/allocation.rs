@@ -329,9 +329,13 @@ fn mint_preconditions_reject_structurally() {
         m3.mint_link(&node).unwrap_err(),
         MintError::HomeNotRegistered
     );
-    // A NODE source: version_ns([1])'s c₁ is [1,1], a NODE address, which
-    // `is_allocated` answers from the node registry — so an ungated version
-    // mint would return an address that reads unallocated.
+    // A NODE source: version_ns([1])'s c₁ is [1,1] — the SYSTEM NODE genesis
+    // admits (PUB-6.65) — so an ungated version mint would re-hand a live
+    // address as a fresh "version", the one fatal error.
+    assert!(
+        m3.is_allocated(&a(&[1, 1])),
+        "[1,1] is the seeded system node"
+    );
     assert_eq!(
         m3.mint_version(&node, false).unwrap_err(),
         MintError::SourceNotRegistered
@@ -361,7 +365,7 @@ fn mint_preconditions_reject_structurally() {
     );
     // The fifth mint's gate through its published face (the document and
     // unregistered cases are pinned in
-    // `delegate_mints_the_account_and_registers_its_principal_atomically`).
+    // `delegate_mints_the_account_and_registers_its_principal`).
     assert!(m3.next_account_prefix(&element).is_none());
 }
 

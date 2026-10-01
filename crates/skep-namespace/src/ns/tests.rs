@@ -1,6 +1,7 @@
 use super::*;
 
 use crate::M3State;
+use skep_address::ordinal;
 
 fn t(comps: &[u32]) -> Tumbler {
     Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty")
@@ -8,6 +9,26 @@ fn t(comps: &[u32]) -> Tumbler {
 
 fn a(comps: &[u32]) -> Address {
     validate(t(comps)).expect("T4-valid")
+}
+
+/// Every T4-valid address of `1..=max_len` components drawn from {0, 1, 2}:
+/// every tier, every field length the total allows, both subspaces, every
+/// separator position — enumerated, so no shape is one a human chose.
+fn every_address_up_to(max_len: u32) -> Vec<Address> {
+    (1..=max_len)
+        .flat_map(|len| {
+            (0..3u32.pow(len)).filter_map(move |mut code| {
+                let comps: Vec<u32> = (0..len)
+                    .map(|_| {
+                        let digit = code % 3;
+                        code /= 3;
+                        digit
+                    })
+                    .collect();
+                validate(t(&comps)).ok()
+            })
+        })
+        .collect()
 }
 
 /// §1: a frontier key re-enters memory through its own door. `first_in`
@@ -57,6 +78,36 @@ fn a_frontier_key_re_enters_through_its_t4_door() {
             "{bogus:?} decoded as a namespace anchor"
         );
     }
+}
+
+/// The half of `first_in`'s anchor precondition the key's at-rest door
+/// (`t4_anchor`) does not carry — a next-field generator over an
+/// Element-level anchor — is left out because it FAILS SOFT, the door's doc
+/// says: M1's TA5a gate refuses `k = 2` at that tier, `first_in` answers
+/// `GateViolation`, and a mint would surface it as `MintError::Gate`. That is
+/// the door's reason for its scope and the `Gate` arm's reason to exist, and
+/// no live input reaches it — every mint's gate refuses the one argument that
+/// could (`mint_preconditions_reject_structurally`) — so it is reached here,
+/// on a key the door admits.
+#[test]
+fn a_next_field_key_over_an_element_anchor_fails_soft() {
+    let key = NsKey {
+        parent: t(&[1, 0, 1, 0, 1, 0, 1, 1]),
+        g: Generator::NextField,
+    };
+    assert!(
+        is_t4_valid(&key.parent),
+        "the T4 half holds: only the pair is wrong"
+    );
+    // The door admits the pair: refusing it is not the door's work.
+    let bytes = bincode::serialize(&key).expect("serialize the key");
+    assert_eq!(
+        bincode::deserialize::<NsKey>(&bytes).expect("the door admits the pair"),
+        key
+    );
+    // …and both chain-member reads answer the refusal as a value.
+    assert_eq!(first_in(&key), Err(GateViolation));
+    assert_eq!(nth_in(&key, &Nat::from(3u32)), Err(GateViolation));
 }
 
 /// The generator IS ASN-0040's baptismal depth `d ∈ {1, 2}`: it is the
@@ -124,6 +175,79 @@ fn the_chain_family_rule_separates_document_from_version() {
     let node = validate(Tumbler::new([Nat::from(1u32)]).expect("nonempty")).expect("T4-valid");
     assert_eq!(account_ns(&node).g, Generator::NextField);
     assert_eq!(namespace_of(&acct), Some(account_ns(&node)));
+}
+
+/// §2's membership-correctness invariant, stated as a law — "for T4-valid
+/// `a`, `a` is exactly `c_{ordinal(a)}` of its decomposed `(parent, g)`
+/// namespace" — held over every address `every_address_up_to(8)` yields, with
+/// the fact `Allocate`'s door rests on beside it:
+///
+/// * a namespace exists iff the address has two or more components — the
+///   door's `#a ≥ 2`, M1's `parent` and `namespace_of` agree everywhere;
+/// * address → key → address: `a` is the member its own key names at its own
+///   ordinal — what makes membership exact, since a key naming another member
+///   at `a`'s ordinal would make `a` read allocated once that member was
+///   minted;
+/// * key → address → key: every member of that chain, at small ordinals and
+///   past a machine word, derives the same key and carries its ordinal —
+///   "every member of a chain must derive the same key or the frontier forks"
+///   (§1/§8).
+///
+/// `each_chains_minted_addresses_advance_the_key_their_mint_read` pins six
+/// mint families at ordinals 1 and 2; this reaches what it does not — a node
+/// under a node; a subspace base under its document, whose key would be the
+/// document's VERSION chain if the chain-family rule ever read
+/// `(Document, Element)` as same-field; multi-component fields at every tier.
+#[test]
+fn every_address_is_the_member_its_own_key_names() {
+    let family = every_address_up_to(8);
+    assert!(
+        family.len() > 2_000,
+        "the generated family is the point of this test"
+    );
+    let ordinals = [
+        Nat::from(1u32),
+        Nat::from(2u32),
+        Nat::from(255u32),
+        Nat::from(256u32),
+        Nat::from(1u64 << 32),
+        Nat::from(u64::MAX) + 2u32,
+    ];
+    for addr in &family {
+        let extends_a_parent = addr.tumbler().len() >= 2;
+        assert_eq!(
+            parent(addr).is_some(),
+            extends_a_parent,
+            "{addr:?}: M1's `parent`"
+        );
+        assert_eq!(
+            namespace_of(addr).is_some(),
+            extends_a_parent,
+            "{addr:?}: `namespace_of`"
+        );
+        let Some(key) = namespace_of(addr) else {
+            continue;
+        };
+        assert_eq!(
+            nth_in(&key, ordinal(addr.tumbler())),
+            Ok(addr.clone()),
+            "{addr:?} is not the member its own key names"
+        );
+        for n in &ordinals {
+            let member = nth_in(&key, n)
+                .expect("a NextField key comes of a peeled separator: its anchor is not Element");
+            assert_eq!(
+                namespace_of(&member),
+                Some(key.clone()),
+                "{member:?} forks {key:?}"
+            );
+            assert_eq!(
+                ordinal(member.tumbler()),
+                n,
+                "{member:?} is not member {n} of {key:?}"
+            );
+        }
+    }
 }
 
 /// The `NsKey → LockKey` map is INJECTIVE (§1) — distinct namespaces,

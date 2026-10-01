@@ -24,8 +24,8 @@ fn containment_is_not_authorization() {
     assert!(prefix_contains(&acct, &acct)); // ≼ admits equality
     assert!(!prefix_contains(&acct, &a(&[1])));
     // …so only ω (longest-prefix match) arbitrates: the delegate owns its
-    // subtree, π₀ keeps the rest (O2/O3, the ownership-divergence
-    // discipline).
+    // subtree, π₀ keeps what no deeper seat covers (O2/O3, the
+    // ownership-divergence discipline).
     assert_eq!(m3.effective_owner(&doc), Some(ID1));
     assert_eq!(m3.effective_owner(&acct), Some(ID1));
     assert_eq!(m3.effective_owner(&a(&[1])), Some(BOOTSTRAP_PRINCIPAL));
@@ -241,7 +241,8 @@ fn omega_resolves_by_the_registry_not_by_the_probes_depth() {
     // No assertion pins the constant, because a wall-clock bound is a flake;
     // the depth is chosen so a regression to the per-candidate walk stops the
     // suite instead of reddening a line.
-    let (k, _acct, _doc) = kernel_with_account_and_doc(); // Π = { [1]→π₀, [1,0,1]→ID1 }
+    // Π = { [1]→π₀, [1,0,1]→ID1, [1,1,0,1]→SYSTEM_PRINCIPAL }
+    let (k, _acct, _doc) = kernel_with_account_and_doc();
     let snap = k.snapshot();
     let m3 = snap.world().m3();
 

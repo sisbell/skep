@@ -261,6 +261,23 @@ fn the_test_module_reader_counts_as_agents_md_counts() {
     );
 }
 
+/// The two test-module checks take the module from one reader,
+/// [`inline_test_module`]: the size check counts to its close and the
+/// last-item check looks past it, so the two cannot part about which line
+/// closes the module. Held here at the layout where a reader of each check's
+/// own would part from the other — a `}` carrying a trailing comment, which
+/// rustfmt keeps: the size check measures that module, and the last-item check
+/// finds nothing after its close until a line is there.
+#[test]
+fn the_test_module_checks_close_the_module_on_one_line() {
+    let body = "    fn t() {}\n".repeat(TEST_MODULE_BOUND - 3);
+    let module = format!("fn a() {{}}\n#[cfg(test)]\nmod tests {{\n{body}}} // tests\n");
+    assert_eq!(oversized_test_module(&module), Some(TEST_MODULE_BOUND), "measured to its close");
+    assert_eq!(after_test_module(&module), None, "nothing after its close");
+    let stray = format!("{module}fn stray() {{}}\n");
+    assert_eq!(after_test_module(&stray), Some(TEST_MODULE_BOUND + 2), "a line after its close");
+}
+
 /// `lib.rs`'s "Traceability" cites the signed-ops design record as "the
 /// design record" with its section or ruling, and never as "the record"
 /// alone: in this crate a record is a credential record (AUTH-1.18), so a
@@ -374,17 +391,17 @@ fn bare_record_citation(prose: &str) -> Option<&str> {
 
 /// A file's code as one text, so a brace group may span lines — comment
 /// lines dropped (a doc link is no import), a trailing ` //` comment cut,
-/// nothing from an inline `mod tests {` on — and, per byte, the line it sits
-/// on and how many inline modules enclose it.
+/// nothing from the inline test module's `mod tests {` on
+/// ([`inline_test_module`]) — and, per byte, the line it sits on and how many
+/// inline modules enclose it.
 fn code_of(text: &str) -> (String, Vec<(usize, usize)>) {
+    let lines: Vec<&str> = text.lines().collect();
+    let end = inline_test_module(&lines).map_or(lines.len(), |tests| tests.open);
     let (mut code, mut at) = (String::new(), Vec::new());
     // The indentation of each inline module open around the current line.
     let mut open: Vec<usize> = Vec::new();
-    for (i, line) in text.lines().enumerate() {
+    for (i, &line) in lines[..end].iter().enumerate() {
         let trimmed = line.trim();
-        if trimmed == "mod tests {" {
-            break;
-        }
         if trimmed.starts_with("//") {
             continue;
         }
@@ -498,35 +515,64 @@ fn expand_member(member: &str) -> Vec<String> {
     }
 }
 
-/// The line, numbered from 1, of the first top-level line that follows a
-/// file's inline `mod tests {` — `None` where the module's own closing `}`,
-/// its first line back at column 0, is the last, and `None` for a file with
-/// no inline test module.
-fn after_test_module(text: &str) -> Option<usize> {
-    let lines: Vec<&str> = text.lines().collect();
-    let start = lines.iter().position(|line| line.trim() == "mod tests {")?;
-    let mut top_level =
-        (start + 1..lines.len()).filter(|&i| lines[i].starts_with(|c: char| !c.is_whitespace()));
-    let first = top_level.next()?;
-    let stray = if lines[first] == "}" { top_level.next()? } else { first };
-    Some(stray + 1)
+/// Where a file's inline unit-test module stands, as line indices from 0, read
+/// off rustfmt's layout: `open`, its `mod tests {` line; `first`, the topmost
+/// of the attribute lines stacked directly above that — its `#[cfg(…)]` — or
+/// `open` where none is; and `close`, the first line after `open` back at
+/// column 0 — in a file rustfmt laid out, the module's own `}`, whatever
+/// comment trails it — or `None` where the file ends first.
+struct InlineTestModule {
+    first: usize,
+    open: usize,
+    close: Option<usize>,
 }
 
-/// The lines a file's inline test module spans where they reach
-/// [`TEST_MODULE_BOUND`] — counted as `AGENTS.md` counts them, from the
-/// module's `#[cfg(…)]`, its first attribute line, to its closing `}`, both
-/// included, the `}` its first line back at column 0 — and `None` for a module
-/// under the bound and for a file with no inline `mod tests {`.
-fn oversized_test_module(text: &str) -> Option<usize> {
-    let lines: Vec<&str> = text.lines().collect();
+/// The file's inline unit-test module, read once for every check that needs
+/// it — [`code_of`]'s cut, [`after_test_module`] and [`oversized_test_module`]
+/// — so no two of them can part about where it opens or closes. `None` for a
+/// file with no inline `mod tests {`: a `mod tests;` declaration is none.
+fn inline_test_module(lines: &[&str]) -> Option<InlineTestModule> {
     let open = lines.iter().position(|line| line.trim() == "mod tests {")?;
     let first = (0..open)
         .rev()
         .take_while(|&i| lines[i].trim_start().starts_with("#["))
         .last()
         .unwrap_or(open);
-    let close = (open + 1..lines.len()).find(|&i| lines[i] == "}")?;
-    Some(close - first + 1).filter(|&len| len >= TEST_MODULE_BOUND)
+    let close = (open + 1..lines.len()).find(|&i| at_column_zero(lines[i]));
+    Some(InlineTestModule { first, open, close })
+}
+
+/// Whether a line starts at column 0 — a top-level line, in a file rustfmt
+/// laid out; a blank line is none.
+fn at_column_zero(line: &str) -> bool {
+    line.starts_with(|c: char| !c.is_whitespace())
+}
+
+/// The line, numbered from 1, that stands out of place after a file's inline
+/// test module ([`inline_test_module`]): the first line back at column 0 after
+/// the module's closing `}`, or the module's close itself where that line is
+/// no `}` — `None` where nothing follows the module, and for a file with no
+/// inline test module.
+fn after_test_module(text: &str) -> Option<usize> {
+    let lines: Vec<&str> = text.lines().collect();
+    let close = inline_test_module(&lines)?.close?;
+    let stray = if lines[close].starts_with('}') {
+        (close + 1..lines.len()).find(|&i| at_column_zero(lines[i]))?
+    } else {
+        close
+    };
+    Some(stray + 1)
+}
+
+/// The lines a file's inline test module spans where they reach
+/// [`TEST_MODULE_BOUND`] — counted as `AGENTS.md` counts them, from its
+/// `#[cfg(…)]` to its closing `}`, both included ([`inline_test_module`]'s
+/// `first` and `close`) — and `None` for a module under the bound, for one the
+/// file never closes, and for a file with no inline test module.
+fn oversized_test_module(text: &str) -> Option<usize> {
+    let lines: Vec<&str> = text.lines().collect();
+    let module = inline_test_module(&lines)?;
+    Some(module.close? - module.first + 1).filter(|&len| len >= TEST_MODULE_BOUND)
 }
 
 /// The top-level module a `src/` file belongs to — `src/entry.rs`,

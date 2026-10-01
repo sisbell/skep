@@ -96,7 +96,8 @@
 //!   terms a verifier needs beyond the member's runs, `placed` and
 //!   `base_extent`, in M5's placing record). In order:
 //!     * `be64(placed)` — the positions the client placed, Σ width of its
-//!       runs: the count the row has always led with;
+//!       runs, and so how many of the member's positions the segments below
+//!       spell;
 //!     * then the member's first `placed` positions as SEGMENTS, in V-order,
 //!       each opening with ONE CLASS BYTE: `0x02` a VALUE STRETCH — the
 //!       maximal run of consecutive positions the commit COPIES IN (the shot
@@ -154,11 +155,15 @@
 //!   and the host's: the crate-level composition note says where skepd does.
 //!
 //! Every length-delimited element is written by [`push_delimited`], the one
-//! function [`framed`] delimits its own fields with, and every row is written
-//! the same way — onto the one buffer its body builds ([`ValueSequence`],
-//! [`push_slot`], [`push_window`]), never built apart and copied in — so the
-//! composition is injective at every level: two distinct inputs never spell
-//! one preimage.
+//! function [`framed`] delimits its own fields with, and a bare spelling — a
+//! token, an address, a value — is written only as such an element. Every
+//! other row is self-delimiting — fixed-width fields and delimited elements,
+//! with a count ahead of any element that repeats — and stands where its
+//! grammar puts it. The one run with no count ahead is a `publish` body's
+//! segments: each opens with its class byte, and the run ends at the
+//! base-extent group, whose opening zero byte is no class byte. So every body
+//! is uniquely decodable from its front, and the composition is injective at
+//! every level: two distinct inputs never spell one preimage.
 
 use core::fmt;
 

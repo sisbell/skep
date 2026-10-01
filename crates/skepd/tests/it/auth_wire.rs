@@ -84,7 +84,7 @@ fn retire_atom(fps: &[&str]) -> String {
 /// A malformed atom is landed as given — the fold refuses it ahead of any
 /// signature — and so is one a cell deposits elsewhere than [`deposit`]
 /// does, whose refusal stands ahead of the check too.
-fn record_atom(port: u16, signed_token: &str, ordinal: u64, atom: &str, ty: &str) -> String {
+fn land_claimant_record(port: u16, signed_token: &str, ordinal: u64, atom: &str, ty: &str) -> String {
     let atom = signed_atom(port, signed_token, CLAIMANT_DOC1, ty, &[CLAIMANT_ACCOUNT], atom);
     let v = op(
         port,
@@ -233,7 +233,7 @@ fn by_reference_accounts(port: u16) -> ByReference {
 const ANCHOR_SESSION_REQUIRED: &str = "credential_refused:anchor_session_required";
 
 /// Land one credential record atom at the next free position of `doc1` and
-/// answer its address — [`record_atom`] for a registry that is not the
+/// answer its address — [`land_claimant_record`] for a registry that is not the
 /// claimant's, declared under the record's class type `ty` as that one is,
 /// and SIGNED (signed ops, 2a) for the deposit naming `subject` that
 /// [`enroll_for`] then makes of it, under the key that opened `session`
@@ -268,6 +268,6 @@ fn enrolled_count(port: u16, account: &str) -> usize {
 }
 
 /// One enroll record of a single fresh DEVICE-flagged key, by seed.
-fn fresh_member(seed: u8) -> String {
+fn fresh_key_atom(seed: u8) -> String {
     enroll_atom(&[&distinct_key(seed)])
 }

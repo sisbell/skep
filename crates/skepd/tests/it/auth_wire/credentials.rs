@@ -97,7 +97,7 @@ fn genesis_of(
 /// position, then the deposit naming it — the answer UNJUDGED.
 fn enroll_into_claimant(port: u16, signed: &str, entries: &[Enrollment]) -> Value {
     let ordinal = next_content_ordinal(port, Some(signed), CLAIMANT_DOC1);
-    let record = record_atom(port, signed, ordinal, &json_atom(&encode_enroll(entries)), T_ENROLL);
+    let record = land_claimant_record(port, signed, ordinal, &json_atom(&encode_enroll(entries)), T_ENROLL);
     deposit(port, signed, &record, T_ENROLL)
 }
 
@@ -465,7 +465,7 @@ fn a_credential_retry_replays_the_original_ack_kind_blind_and_per_session() {
     let sd = spawn(dir.path());
     let port = sd.port();
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
-    let record = record_atom(port, &signed, 2, &enroll_atom(&[&distinct_key(5)]), T_ENROLL);
+    let record = land_claimant_record(port, &signed, 2, &enroll_atom(&[&distinct_key(5)]), T_ENROLL);
     let frame = deposit_frame(Some("k1"), &record, T_ENROLL);
 
     let (st, first) = http(port, "POST", "/op", Some(&signed), frame.as_bytes());
@@ -506,10 +506,10 @@ fn a_credential_retry_replays_the_original_ack_kind_blind_and_per_session() {
 
     // (d) A refusal is never memoized: after one under `kr`, the same id
     // carries the next frame through.
-    let bad = record_atom(port, &signed, 3, &json_atom("nonsense"), T_ENROLL);
+    let bad = land_claimant_record(port, &signed, 3, &json_atom("nonsense"), T_ENROLL);
     let v = op(port, Some(&signed), &deposit_frame(Some("kr"), &bad, T_ENROLL));
     assert_eq!(rejected_detail(&v), "credential_refused:malformed_payload:bad_record");
-    let good = record_atom(port, &signed, 4, &enroll_atom(&[&distinct_key(6)]), T_ENROLL);
+    let good = land_claimant_record(port, &signed, 4, &enroll_atom(&[&distinct_key(6)]), T_ENROLL);
     expect_resp(&op(port, Some(&signed), &deposit_frame(Some("kr"), &good, T_ENROLL)), "ack_addr");
 
     sd.shutdown();
@@ -528,14 +528,14 @@ fn a_malformed_record_names_its_payload_fault_after_the_join() {
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
 
     // A body that is not the canonical schema dies as `bad_record`.
-    let bad_record = record_atom(port, &signed, 2, &json_atom("nonsense"), T_ENROLL);
+    let bad_record = land_claimant_record(port, &signed, 2, &json_atom("nonsense"), T_ENROLL);
     assert_eq!(
         rejected_detail(&deposit(port, &signed, &bad_record, T_ENROLL)),
         "credential_refused:malformed_payload:bad_record"
     );
     // A PARAMETERIZED sub survives the join — a duplicate entry names its
     // 1-based ENTRY index (AUTH-2.15, AUTH-1.28), two colons and all.
-    let dup = record_atom(port, &signed, 3, &enroll_atom(&[&distinct_key(5), &distinct_key(5)]), T_ENROLL);
+    let dup = land_claimant_record(port, &signed, 3, &enroll_atom(&[&distinct_key(5), &distinct_key(5)]), T_ENROLL);
     assert_eq!(
         rejected_detail(&deposit(port, &signed, &dup, T_ENROLL)),
         "credential_refused:malformed_payload:duplicate_key:2"
@@ -574,7 +574,7 @@ fn a_valid_hex_non_point_key_is_refused_at_enrollment() {
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
 
     let text = encode_enroll(&[Enrollment::new(non_point_hybrid_key(), false, None).expect("no label")]);
-    let record = record_atom(port, &signed, 2, &json_atom(&text), T_ENROLL);
+    let record = land_claimant_record(port, &signed, 2, &json_atom(&text), T_ENROLL);
     assert_eq!(
         rejected_detail(&deposit(port, &signed, &record, T_ENROLL)),
         "credential_refused:undecodable_key"
@@ -1043,7 +1043,7 @@ fn retiring_a_key_needs_an_anchor_session_and_kills_that_keys_sessions() {
     let anchor_token = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
 
     // Trigger 1 — an ANCHOR retirement from a non-anchor session refuses.
-    let anchor_retire = record_atom(port, &device_token, 2, &retire_atom(&[&anchor_fp]), T_RETIRE);
+    let anchor_retire = land_claimant_record(port, &device_token, 2, &retire_atom(&[&anchor_fp]), T_RETIRE);
     let v = deposit(port, &device_token, &anchor_retire, T_RETIRE);
     assert_eq!(rejected_detail(&v), "credential_refused:anchor_session_required");
     // …and a BARE session never satisfies it either (§Credential refusals),
@@ -1063,17 +1063,17 @@ fn retiring_a_key_needs_an_anchor_session_and_kills_that_keys_sessions() {
     // Trigger 2 — a post-genesis ANCHOR-FLAGGED enrollment, same gate.
     let fresh = distinct_key(9);
     let flagged_enroll =
-        record_atom(port, &device_token, 3, &enroll_atom_flagged(&[(&fresh, true)]), T_ENROLL);
+        land_claimant_record(port, &device_token, 3, &enroll_atom_flagged(&[(&fresh, true)]), T_ENROLL);
     let v = deposit(port, &device_token, &flagged_enroll, T_ENROLL);
     assert_eq!(rejected_detail(&v), "credential_refused:anchor_session_required");
     // The same enrollment UNFLAGGED passes, so the gate is the FLAG and not
     // the act.
     let plain_enroll =
-        record_atom(port, &device_token, 4, &enroll_atom_flagged(&[(&fresh, false)]), T_ENROLL);
+        land_claimant_record(port, &device_token, 4, &enroll_atom_flagged(&[(&fresh, false)]), T_ENROLL);
     expect_resp(&deposit(port, &device_token, &plain_enroll, T_ENROLL), "ack_addr");
 
     // The anchor's own session retires the device key.
-    let device_retire = record_atom(port, &anchor_token, 5, &retire_atom(&[&device_fp]), T_RETIRE);
+    let device_retire = land_claimant_record(port, &anchor_token, 5, &retire_atom(&[&device_fp]), T_RETIRE);
     expect_resp(&deposit(port, &anchor_token, &device_retire, T_RETIRE), "ack_addr");
 
     // key_set moves the fingerprint from enrolled to retired.
@@ -1174,7 +1174,7 @@ fn retiring_the_last_anchor_commits_kills_the_retiring_session_and_leaves_the_ac
     let second_fp = fingerprint_hex(&second);
     let ordinal = next_content_ordinal(port, Some(&anchor), CLAIMANT_DOC1);
     let flagged =
-        record_atom(port, &anchor, ordinal, &enroll_atom_flagged(&[(&second, true)]), T_ENROLL);
+        land_claimant_record(port, &anchor, ordinal, &enroll_atom_flagged(&[(&second, true)]), T_ENROLL);
     expect_resp(&deposit(port, &anchor, &flagged, T_ENROLL), "ack_addr");
     let second_session = open_signed_session(port, CLAIMANT_PRINCIPAL, &second);
 
@@ -1186,7 +1186,7 @@ fn retiring_the_last_anchor_commits_kills_the_retiring_session_and_leaves_the_ac
     // The record is signed by the DEVICE key at its landing: refused now at
     // slot (6), it is the same record the downgrade below commits from the
     // same session — device-grade then, and the device's `sig` verifies.
-    let handoff = land_record(port, &device, CLAIMANT_DOC1, &fresh_member(65), T_ENROLL, &x2);
+    let handoff = land_record(port, &device, CLAIMANT_DOC1, &fresh_key_atom(65), T_ENROLL, &x2);
     let v = enroll_for(port, &device, CLAIMANT_DOC1, &handoff, &x2);
     assert_eq!(verdict(&v), ANCHOR_SESSION_REQUIRED, "an anchor enrolled: X's handoff is anchor-grade: {v}");
     assert_eq!(enrolled_count(port, &x2), 0, "a refused handoff commits nothing");
@@ -1195,7 +1195,7 @@ fn retiring_the_last_anchor_commits_kills_the_retiring_session_and_leaves_the_ac
     // anchor's own session, the device key remaining — it COMMITS.
     let ordinal = next_content_ordinal(port, Some(&anchor), CLAIMANT_DOC1);
     let last_anchors =
-        record_atom(port, &anchor, ordinal, &retire_atom(&[&anchor_fp, &second_fp]), T_RETIRE);
+        land_claimant_record(port, &anchor, ordinal, &retire_atom(&[&anchor_fp, &second_fp]), T_RETIRE);
     expect_resp(&deposit(port, &anchor, &last_anchors, T_RETIRE), "ack_addr");
 
     // `key_set`: the device key alone enrolled, no anchor flag left; both
@@ -1231,7 +1231,7 @@ fn retiring_the_last_anchor_commits_kills_the_retiring_session_and_leaves_the_ac
     let fresh = distinct_key(66);
     let ordinal = next_content_ordinal(port, Some(&device), CLAIMANT_DOC1);
     let flagged =
-        record_atom(port, &device, ordinal, &enroll_atom_flagged(&[(&fresh, true)]), T_ENROLL);
+        land_claimant_record(port, &device, ordinal, &enroll_atom_flagged(&[(&fresh, true)]), T_ENROLL);
     for (hand, token) in [("the device session", &device), ("a bare session", &bare)] {
         let v = deposit(port, token, &flagged, T_ENROLL);
         assert_eq!(rejected_detail(&v), "credential_refused:anchor_session_required", "{hand}: {v}");
@@ -1240,7 +1240,7 @@ fn retiring_the_last_anchor_commits_kills_the_retiring_session_and_leaves_the_ac
     // unflagged, enrols from the device session.
     let ordinal = next_content_ordinal(port, Some(&device), CLAIMANT_DOC1);
     let plain =
-        record_atom(port, &device, ordinal, &enroll_atom_flagged(&[(&fresh, false)]), T_ENROLL);
+        land_claimant_record(port, &device, ordinal, &enroll_atom_flagged(&[(&fresh, false)]), T_ENROLL);
     expect_resp(&deposit(port, &device, &plain, T_ENROLL), "ack_addr");
 
     // THE DOWNGRADE beside the permanence: X's set holds no anchor, so X's
@@ -1300,7 +1300,7 @@ fn the_fold_s_three_retirement_refusals_are_answered_over_the_wire_and_move_no_k
     assert_eq!(fingerprints(&before, "enrolled").len(), 2, "the ceremony's two keys: {before}");
     let ordinal = next_content_ordinal(port, Some(&anchor), CLAIMANT_DOC1);
     let whole_set =
-        record_atom(port, &anchor, ordinal, &retire_atom(&[&anchor_fp, &device_fp]), T_RETIRE);
+        land_claimant_record(port, &anchor, ordinal, &retire_atom(&[&anchor_fp, &device_fp]), T_RETIRE);
     let v = deposit(port, &anchor, &whole_set, T_RETIRE);
     assert_eq!(rejected_detail(&v), "credential_refused:would_empty", "{v}");
     assert_eq!(v["disposition"].as_str(), Some("permanent"), "{v}");
@@ -1315,7 +1315,7 @@ fn the_fold_s_three_retirement_refusals_are_answered_over_the_wire_and_move_no_k
     let member_before = key_set(&member);
     assert_eq!(fingerprints(&member_before, "enrolled"), vec![member_fp.clone()], "{member_before}");
     let ordinal = next_content_ordinal(port, Some(&anchor), CLAIMANT_DOC1);
-    let from_the_registry = record_atom(port, &anchor, ordinal, &retire_atom(&[&member_fp]), T_RETIRE);
+    let from_the_registry = land_claimant_record(port, &anchor, ordinal, &retire_atom(&[&member_fp]), T_RETIRE);
     let v = typed_link(port, &anchor, CLAIMANT_DOC1, &[from_the_registry.as_str()], &[member.as_str()], T_RETIRE);
     assert_eq!(rejected_detail(&v), "credential_refused:not_holder_retirement", "{v}");
     assert_eq!(v["disposition"].as_str(), Some("permanent"), "{v}");

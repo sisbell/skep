@@ -871,7 +871,7 @@ fn a_key_of_the_holder_opens_its_unseeded_accounts_and_a_retirement_at_the_holde
     // The retirement at X, from X's anchor session.
     let anchor = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
     let ordinal = next_content_ordinal(port, Some(&anchor), CLAIMANT_DOC1);
-    let retire = record_atom(port, &anchor, ordinal, &retire_atom(&[&device_fp]), T_RETIRE);
+    let retire = land_claimant_record(port, &anchor, ordinal, &retire_atom(&[&device_fp]), T_RETIRE);
     expect_resp(&deposit(port, &anchor, &retire, T_RETIRE), "ack_addr");
     for (what, token) in [("X.1", &as_x1), ("X.2", &as_x2), ("X.2.7", &as_x2_7)] {
         assert!(presented_dead(port, token), "a retirement at X kills the session as {what}");
@@ -1030,7 +1030,7 @@ fn the_thirteen_401_arms_stay_byte_identical_and_the_403_stands_outside_them() {
     let anchor = open_signed_session(port, p, &anchor_key());
     let device_fp = fingerprint_hex(&device_key());
     let ordinal = next_content_ordinal(port, Some(&anchor), CLAIMANT_DOC1);
-    let retire = record_atom(port, &anchor, ordinal, &retire_atom(&[&device_fp]), T_RETIRE);
+    let retire = land_claimant_record(port, &anchor, ordinal, &retire_atom(&[&device_fp]), T_RETIRE);
     expect_resp(&deposit(port, &anchor, &retire, T_RETIRE), "ack_addr");
     rejected("a retired key", signed_handshake(port, p, &device_key()));
 

@@ -234,7 +234,7 @@ fn m2_6_the_replaces_fence_stands_behind_the_destination_s_owner_and_ahead_of_th
         ("the fence on edit_link: the owner's successor typed replaces", sg, edited, fence),
     ];
     walk(port, "2.6, the replaces fence's place", &cells);
-    let v = op_unattested(port, Some(sg), &standalone(CLAIMANT_DOC1));
+    let v = op_as_written(port, Some(sg), &standalone(CLAIMANT_DOC1));
     assert_eq!(
         verdict(&v),
         fence,
@@ -245,13 +245,13 @@ fn m2_6_the_replaces_fence_stands_behind_the_destination_s_owner_and_ahead_of_th
     // The one writer: a grant carrying the member, its type the grant's.
     let grant = deposit_grant(port, sg, CLAIMANT_DOC1, &d, None);
     let revocation = deposit_grant(port, sg, CLAIMANT_DOC1, &grant, None);
-    let again = deposit_re_share(port, sg, CLAIMANT_DOC1, &d, None, &revocation);
-    let pair = read_link(port, Some(sg), &next_link_address(&again));
-    let start = |slot: usize| pair["slots"][slot][0]["start"].as_str().map(str::to_string);
+    let re_share_addr = deposit_re_share(port, sg, CLAIMANT_DOC1, &d, None, &revocation);
+    let replaces_link = read_link(port, Some(sg), &next_link_address(&re_share_addr));
+    let start = |slot: usize| replaces_link["slots"][slot][0]["start"].as_str().map(str::to_string);
     assert_eq!(
         (start(0), start(1), start(2)),
-        (Some(again.clone()), Some(revocation.clone()), Some(T_REPLACES.to_string())),
-        "the member's link beside the grant: {pair}"
+        (Some(re_share_addr.clone()), Some(revocation.clone()), Some(T_REPLACES.to_string())),
+        "the member's link beside the grant: {replaces_link}"
     );
     sd.shutdown();
 }

@@ -88,7 +88,7 @@ fn claimant_grant_attested(alg: &str, sig: &[u8]) -> String {
 /// A head member's recorded `(position, chain)`, read as a guest reads it —
 /// `retrieve_v` on the member, the `skep-head` record's own members.
 fn recorded_pair(port: u16, member: &str) -> (u64, [u8; 32]) {
-    let v = op_unattested(port, None, &retrieve_frame(member, 1, 1));
+    let v = op_as_written(port, None, &retrieve_frame(member, 1, 1));
     let rec: Value = serde_json::from_str(v["items"][0]["atom"].as_str().expect("a head record"))
         .expect("the record is JSON");
     let chain: [u8; 32] =
@@ -119,7 +119,7 @@ fn at_or_below_the_claim_an_attest_is_dropped_unverified_and_unwritten() {
         "values": [{"atom": "a second atom, pre-claim"}],
         "deposit": T_ENROLL, "attest": garbage,
     });
-    let v = op_unattested(port, Some(&claimant), &frame.to_string());
+    let v = op_as_written(port, Some(&claimant), &frame.to_string());
     let at = acked_at(&v);
     assert_eq!(sd.daemon().attestation_at(Seq(at)).unwrap(), None, "dropped, never written");
     // The claim itself — the last unchecked write, from the device's signed
@@ -202,7 +202,7 @@ fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
     let grant = || typed_link_frame(CLAIMANT_DOC1, &[CLAIMANT_ACCOUNT], &["1.0.2"], T_GRANT);
 
     // Absent: refused, reorder.
-    let v = op_unattested(port, Some(&signed), &grant());
+    let v = op_as_written(port, Some(&signed), &grant());
     assert_eq!(
         refusal(&v),
         ("credential_refused:attestation_required".to_string(), "reorder".to_string()),
@@ -216,7 +216,7 @@ fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
     let attached: Value = serde_json::from_str(&attach_attest(port, &signed, &grant())).unwrap();
     let sig_hex = attached["attest"]["sig"].as_str().unwrap().to_string();
     assert_eq!(sig_hex.len(), 2 * 3373, "tag 1's blob: 3,309 ‖ 64");
-    let v = op_unattested(port, Some(&signed), &attached.to_string());
+    let v = op_as_written(port, Some(&signed), &attached.to_string());
     let at = acked_at(&v);
     let slot = sd.daemon().attestation_at(Seq(at)).unwrap().expect("the slot is filled");
     assert_eq!(slot.sig_alg(), skep_signature::TAG_MLDSA65_ED25519);
@@ -229,7 +229,7 @@ fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
     let mut bytes = hex_to_bytes(&sig_hex);
     bytes[3309] ^= 1;
     tampered["attest"]["sig"] = Value::String(hex(&bytes));
-    let v = op_unattested(port, Some(&signed), &tampered.to_string());
+    let v = op_as_written(port, Some(&signed), &tampered.to_string());
     assert_eq!(
         refusal(&v),
         ("credential_refused:attestation_invalid:signature".to_string(), "permanent".to_string()),
@@ -240,12 +240,12 @@ fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
     let mut bytes = hex_to_bytes(&sig_hex);
     bytes[7] ^= 1;
     tampered["attest"]["sig"] = Value::String(hex(&bytes));
-    let v = op_unattested(port, Some(&signed), &tampered.to_string());
+    let v = op_as_written(port, Some(&signed), &tampered.to_string());
     assert_eq!(verdict(&v), "credential_refused:attestation_invalid:signature");
     // The wrong width: malformed, permanent.
     let mut short = attached.clone();
     short["attest"]["sig"] = Value::String(sig_hex[2..].to_string());
-    let v = op_unattested(port, Some(&signed), &short.to_string());
+    let v = op_as_written(port, Some(&signed), &short.to_string());
     assert_eq!(
         refusal(&v),
         ("credential_refused:attestation_invalid:malformed".to_string(), "permanent".to_string()),
@@ -257,21 +257,21 @@ fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
         entry_frame_for(port, &signed, CLAIMANT_PRINCIPAL, &attached).expect("composable");
     let mut foreign = attached.clone();
     foreign["attest"] = attest_member(&stranger.sign(&frame_bytes));
-    let v = op_unattested(port, Some(&signed), &foreign.to_string());
+    let v = op_as_written(port, Some(&signed), &foreign.to_string());
     assert_eq!(verdict(&v), "credential_refused:attestation_invalid:signature");
     // An unknown token: the grammar refuses it.
     let mut unknown = attached.clone();
     unknown["attest"]["alg"] = Value::String("rsa".into());
-    let v = op_unattested(port, Some(&signed), &unknown.to_string());
+    let v = op_as_written(port, Some(&signed), &unknown.to_string());
     assert_eq!(v["op"].as_str(), Some("unparseable"), "{v}");
     assert!(v["detail"].as_str().unwrap().contains("unknown algorithm token"), "{v}");
     // An empty blob: one spelling of absent.
     let mut empty = attached.clone();
     empty["attest"]["sig"] = Value::String(String::new());
-    let v = op_unattested(port, Some(&signed), &empty.to_string());
+    let v = op_as_written(port, Some(&signed), &empty.to_string());
     assert_eq!(v["op"].as_str(), Some("unparseable"), "{v}");
     // The member on an op outside the three: unknown field.
-    let v = op_unattested(
+    let v = op_as_written(
         port,
         Some(&signed),
         &json!({"op": "delete", "doc": CLAIMANT_DOC1, "p": {"subspace": "1", "ordinal": "1"},
@@ -285,7 +285,7 @@ fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
     let draft = owner_draft(port, &signed);
     let mut frame: Value = serde_json::from_str(&insert_frame(&draft, 1, "x", false)).unwrap();
     frame["attest"] = attached["attest"].clone();
-    let v = op_unattested(port, Some(&signed), &frame.to_string());
+    let v = op_as_written(port, Some(&signed), &frame.to_string());
     let at = acked_at(&v);
     assert_eq!(sd.daemon().attestation_at(Seq(at)).unwrap(), None, "off-class: dropped");
 }
@@ -344,7 +344,7 @@ fn an_account_with_no_key_of_the_tag_is_refused_not_enrolled_at_position() {
         "{v}"
     );
     // The same grant with no attest at all: required, reorder.
-    let v = op_unattested(port, Some(&agent_signed), &typed_link_frame(&home, &[&agent], &["1.0.2"], T_GRANT));
+    let v = op_as_written(port, Some(&agent_signed), &typed_link_frame(&home, &[&agent], &["1.0.2"], T_GRANT));
     assert_eq!(verdict(&v), "credential_refused:attestation_required");
 }
 
@@ -475,7 +475,7 @@ fn a_tag_3_key_attests_a_write_as_a_tag_1_key_does() {
     let h1 = board_term(port).expect("H.1");
     let sig = tag3.sign(&claimant_grant_entry_frame(ALG_FNDSA512_PREVIEW_ED25519, h1));
     assert_eq!(sig.len(), 730, "tag 3's blob: 666 ‖ 64");
-    let v = op_unattested(port, Some(&as_tag3), &claimant_grant_attested(ALG_FNDSA512_PREVIEW_ED25519, &sig));
+    let v = op_as_written(port, Some(&as_tag3), &claimant_grant_attested(ALG_FNDSA512_PREVIEW_ED25519, &sig));
     assert_eq!(v["resp"].as_str(), Some("ack_addr"), "a tag-3 attestation is admitted: {v}");
     let slot = sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().expect("the slot is filled");
     assert_eq!(slot.sig_alg(), skep_signature::TAG_FNDSA512_PREVIEW_ED25519, "the slot carries tag 3");
@@ -518,13 +518,13 @@ fn the_three_ops_commit_attested_where_the_check_demands_it() {
     assert_eq!(slot.sig_alg(), 1);
     assert_eq!(text_of(port, None, &acked_addr(&v), 1, 5), "abcde");
     // The same shot unattested: required.
-    let v = op_unattested(port, Some(&signed), &frame);
+    let v = op_as_written(port, Some(&signed), &frame);
     assert_eq!(verdict(&v), "credential_refused:attestation_required");
 
     // insert: the declared deposit is exempt — no attest demanded, the slot
     // empty whether or not one is attached.
     let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
-    let v = op_unattested(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "r", true));
+    let v = op_as_written(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "r", true));
     let dep_at = acked_at(&v);
     assert_eq!(sd.daemon().attestation_at(Seq(dep_at)).unwrap(), None, "exempt: the record's sig is its carrier");
     let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
@@ -533,7 +533,7 @@ fn the_three_ops_commit_attested_where_the_check_demands_it() {
     assert_eq!(sd.daemon().attestation_at(Seq(dep_at)).unwrap(), None, "attached, dropped: exempt");
     // An UNDECLARED insert into the published home: the check demands and
     // verifies, then the store refuses — the check's order.
-    let v = op_unattested(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "t", false));
+    let v = op_as_written(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "t", false));
     assert_eq!(verdict(&v), "credential_refused:attestation_required");
     let v = op(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "t", false));
     assert_eq!(verdict(&v), "published_target", "the check passed; the store's own refusal");
@@ -629,7 +629,7 @@ fn a_run_its_principal_may_not_read_is_answered_value_blind_and_a_carried_window
     // unattested send is refused by the check, the member absent; the signed
     // ones by the store, the same whatever the guess.
     let answers = |frame: &str, guesses: [&str; 2]| -> (Value, Vec<Value>) {
-        let unattested = op_unattested(port, Some(&b_signed), frame);
+        let unattested = op_as_written(port, Some(&b_signed), frame);
         let signed: Vec<Value> = guesses
             .iter()
             .map(|guess| op_with_publish_values(port, &b_signed, frame, &per_byte(guess)))
@@ -664,7 +664,7 @@ fn a_run_its_principal_may_not_read_is_answered_value_blind_and_a_carried_window
     //     frame, the window's address is — and attested; the member windows
     //     D, masked to B as F's own positions were.
     let carried = into_f(&f, &[run(&d, &d_addr(1), 5)]);
-    let v = op_unattested(port, Some(&b_signed), &carried);
+    let v = op_as_written(port, Some(&b_signed), &carried);
     assert_eq!(refusal(&v), required, "{v}");
     let v = op_with_publish_values(port, &b_signed, &carried, &per_byte("abcdz"));
     assert_eq!(v["resp"].as_str(), Some("ack_addr"), "the carried window, re-shot by address: {v}");
@@ -714,7 +714,7 @@ fn a_carried_run_its_principal_never_could_read_is_re_shot_by_address_unread() {
     assert_eq!(delivery(port, Some(&c_signed), &f, 1, 6), masked, "and F carries D's runs, masked");
     let carried = publish_frame(&f, Some((&f, 6)), None, &[d_run]);
     let before = head_position(port);
-    let v = op_unattested(port, Some(&c_signed), &carried);
+    let v = op_as_written(port, Some(&c_signed), &carried);
     assert_eq!(
         refusal(&v),
         ("credential_refused:attestation_required".to_string(), "reorder".to_string()),
@@ -773,7 +773,7 @@ fn a_staging_draft_its_principal_may_not_read_is_refused_unread_and_never_copied
     let carried = publish_frame(&f, Some((&f, 5)), Some(&d), &[run(&d, &d_addr(1), 5)]);
     let withheld =
         ("credential_refused:attestation_invalid:withheld".to_string(), "reorder".to_string());
-    let v = op_unattested(port, Some(&b_signed), &carried);
+    let v = op_as_written(port, Some(&b_signed), &carried);
     assert_eq!(refusal(&v), withheld, "unattested: {v}");
     let v = op_with_publish_values(port, &b_signed, &carried, &per_byte("abcde"));
     assert_eq!(refusal(&v), withheld, "signed over D's true bytes: {v}");
@@ -781,7 +781,7 @@ fn a_staging_draft_its_principal_may_not_read_is_refused_unread_and_never_copied
     assert_eq!(refusal(&v), withheld, "signed over a wrong guess: {v}");
     // NOT CARRIED: D's sixth address — the store's own gate answers.
     let uncarried = publish_frame(&f, Some((&f, 5)), Some(&d), &[run(&d, &d_addr(6), 1)]);
-    assert_withheld(&op_unattested(port, Some(&b_signed), &uncarried), &d);
+    assert_withheld(&op_as_written(port, Some(&b_signed), &uncarried), &d);
     assert_withheld(&op_with_publish_values(port, &b_signed, &uncarried, &per_byte("f")), &d);
     assert_eq!(head_position(port), before, "nothing committed: D's bytes reached no member of F");
 }
@@ -819,9 +819,9 @@ fn a_shot_body_is_refused_before_it_is_built_past_its_budget() {
             r#"{{"op":"insert","doc":"{d}","at":{{"subspace":"1","ordinal":"{at}"}},"values":[{{"atom":"{text}"}}]}}"#
         )
     };
-    let x = acked_addr(&op_unattested(port, Some(&signed), &insert_atom(1, &xs)));
-    let y = acked_addr(&op_unattested(port, Some(&signed), &insert_atom(2, &ys)));
-    let z = acked_addr(&op_unattested(port, Some(&signed), &insert_atom(3, &zs)));
+    let x = acked_addr(&op_as_written(port, Some(&signed), &insert_atom(1, &xs)));
+    let y = acked_addr(&op_as_written(port, Some(&signed), &insert_atom(2, &ys)));
+    let z = acked_addr(&op_as_written(port, Some(&signed), &insert_atom(3, &zs)));
     let (x_run, y_run, z_run) = (run(&d, &x, 1), run(&d, &y, 1), run(&d, &z, 1));
     let base = Some((CLAIMANT_DOC1, 1));
     let before = head_position(port);
@@ -830,7 +830,7 @@ fn a_shot_body_is_refused_before_it_is_built_past_its_budget() {
     let over = publish_frame(CLAIMANT_DOC1, base, Some(&d), &[x_run.clone(), x_run.clone(), x_run.clone(), y_run]);
     let over_values = [xs.as_bytes(), xs.as_bytes(), xs.as_bytes(), ys.as_bytes()];
     for v in [
-        op_unattested(port, Some(&signed), &over),
+        op_as_written(port, Some(&signed), &over),
         op_with_publish_values(port, &signed, &over, &over_values),
     ] {
         assert_eq!(
@@ -868,7 +868,7 @@ fn a_term_past_the_frames_eight_bytes_passes_unattested_to_the_stores_refusal() 
     let port = sd.port();
     let signed = open_owner_session(port);
     let d = draft_with(port, &signed, "pq");
-    let shot = |extent: &str, runs: &[String]| {
+    let shot_frame = |extent: &str, runs: &[String]| {
         format!(
             r#"{{"op":"publish","doc":"{CLAIMANT_DOC1}","base":"{CLAIMANT_DOC1}","base_extent":"{extent}","runs":[{}]}}"#,
             runs.join(",")
@@ -879,25 +879,25 @@ fn a_term_past_the_frames_eight_bytes_passes_unattested_to_the_stores_refusal() 
     let store = |code: &str| (code.to_string(), "permanent".to_string());
     let before = head_position(port);
 
-    let at_top = shot(&top, &[]);
+    let top_frame = shot_frame(&top, &[]);
     assert_eq!(
-        refusal(&op_unattested(port, Some(&signed), &at_top)),
+        refusal(&op_as_written(port, Some(&signed), &top_frame)),
         ("credential_refused:attestation_required".to_string(), "reorder".to_string()),
         "2^64 − 1 is a term the frame spells"
     );
-    assert_eq!(refusal(&op(port, Some(&signed), &at_top)), store("base_extent_too_large"), "attested");
+    assert_eq!(refusal(&op(port, Some(&signed), &top_frame)), store("base_extent_too_large"), "attested");
     assert_eq!(
-        refusal(&op_unattested(port, Some(&signed), &shot(past, &[]))),
+        refusal(&op_as_written(port, Some(&signed), &shot_frame(past, &[]))),
         store("base_extent_too_large"),
         "an extent past the row passes through"
     );
     assert_eq!(
-        refusal(&op_unattested(port, Some(&signed), &shot("1", &[window(past)]))),
+        refusal(&op_as_written(port, Some(&signed), &shot_frame("1", &[window(past)]))),
         store("dangling_source"),
         "a window past the row"
     );
     assert_eq!(
-        refusal(&op_unattested(port, Some(&signed), &shot("1", &[window(half), window(half)]))),
+        refusal(&op_as_written(port, Some(&signed), &shot_frame("1", &[window(half), window(half)]))),
         store("dangling_source"),
         "two windows whose count passes the row"
     );
@@ -929,7 +929,7 @@ fn a_shot_past_the_stores_re_insert_budget_passes_unattested_to_its_refusal() {
     let d = draft_with(port, &signed, &"x".repeat(stretch as usize));
     let first = format!("{d}.0.1.1");
     // `count` draft-native values: the stretch, again and again, then a tail.
-    let shot = |count: u64| {
+    let shot_frame = |count: u64| {
         let mut runs = vec![run(&d, &first, stretch); (count / stretch) as usize];
         if count % stretch > 0 {
             runs.push(run(&d, &first, count % stretch));
@@ -939,8 +939,8 @@ fn a_shot_past_the_stores_re_insert_budget_passes_unattested_to_its_refusal() {
     let store = ("too_many_values".to_string(), "permanent".to_string());
     let before = head_position(port);
 
-    let past = shot(budget + 1);
-    assert_eq!(refusal(&op_unattested(port, Some(&signed), &past)), store, "unattested");
+    let past = shot_frame(budget + 1);
+    assert_eq!(refusal(&op_as_written(port, Some(&signed), &past)), store, "unattested");
     let values = vec![&b"x"[..]; budget as usize + 1];
     assert_eq!(
         refusal(&op_with_publish_values(port, &signed, &past, &values)),
@@ -948,7 +948,7 @@ fn a_shot_past_the_stores_re_insert_budget_passes_unattested_to_its_refusal() {
         "attested: no signature changes the store's answer"
     );
     assert_eq!(
-        refusal(&op_unattested(port, Some(&signed), &shot(budget))),
+        refusal(&op_as_written(port, Some(&signed), &shot_frame(budget))),
         ("credential_refused:attestation_required".to_string(), "reorder".to_string()),
         "at the budget the values are walked and the attest demanded"
     );
@@ -986,7 +986,7 @@ fn the_head_writers_own_commits_land_unsigned_beside_an_attested_write() {
     let head = head_position(port);
     assert!(head > link_at, "a second head landed in the head writer's turn after the write");
     assert_eq!(filled_slots(&sd, 1, head), vec![link_at], "the one signed write's slot alone");
-    let rec = op_unattested(port, None, &retrieve_frame("1.1.0.1.0.2.2", 1, 1));
+    let rec = op_as_written(port, None, &retrieve_frame("1.1.0.1.0.2.2", 1, 1));
     assert_eq!(rec["resp"].as_str(), Some("delivery"), "H.2 exists: {rec}");
 }
 
@@ -1034,7 +1034,7 @@ fn the_board_term_stays_h1s_pair_after_a_second_head_lands() {
     // Over the LATEST head's pair, posed as the board term: refused.
     let h2_as_term = BoardTerm { log_position: h2.0, chain: h2.1 };
     let over_h2 = signer.sign(&claimant_grant_entry_frame(ALG_MLDSA65_ED25519, h2_as_term));
-    let v = op_unattested(port, Some(&signed), &claimant_grant_attested(ALG_MLDSA65_ED25519, &over_h2));
+    let v = op_as_written(port, Some(&signed), &claimant_grant_attested(ALG_MLDSA65_ED25519, &over_h2));
     assert_eq!(
         refusal(&v),
         ("credential_refused:attestation_invalid:signature".to_string(), "permanent".to_string()),
@@ -1049,11 +1049,11 @@ fn the_board_term_stays_h1s_pair_after_a_second_head_lands() {
         chain: live_chain,
     };
     let over_live = signer.sign(&claimant_grant_entry_frame(ALG_MLDSA65_ED25519, live));
-    let v = op_unattested(port, Some(&signed), &claimant_grant_attested(ALG_MLDSA65_ED25519, &over_live));
+    let v = op_as_written(port, Some(&signed), &claimant_grant_attested(ALG_MLDSA65_ED25519, &over_live));
     assert_eq!(verdict(&v), "credential_refused:attestation_invalid:signature", "the live pair: {v}");
     // Over H.1's: admitted, the slot that very blob.
     let over_h1 = signer.sign(&claimant_grant_entry_frame(ALG_MLDSA65_ED25519, h1));
-    let v = op_unattested(port, Some(&signed), &claimant_grant_attested(ALG_MLDSA65_ED25519, &over_h1));
+    let v = op_as_written(port, Some(&signed), &claimant_grant_attested(ALG_MLDSA65_ED25519, &over_h1));
     assert_eq!(v["resp"].as_str(), Some("ack_addr"), "H.1's pair is the board term after H.2: {v}");
     let slot = sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().expect("the slot is filled");
     assert_eq!(slot.sig(), &over_h1[..], "H.1's pair, after the second head as before it");
@@ -1095,11 +1095,11 @@ fn d26_a_credential_deposits_two_positions_take_no_entry_signature() {
             r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom2}}}],"deposit":"{T_ENROLL}"}}"#
         ),
     );
-    let atom = acked_addr(&v);
+    let atom2_addr = acked_addr(&v);
     let mut link: Value =
-        serde_json::from_str(&typed_link_frame(CLAIMANT_DOC1, &[&atom], &[&agent2], T_ENROLL)).unwrap();
+        serde_json::from_str(&typed_link_frame(CLAIMANT_DOC1, &[&atom2_addr], &[&agent2], T_ENROLL)).unwrap();
     link["attest"] = json!({"alg": ALG_MLDSA65_ED25519, "sig": hex(&[0xAB; 3373])});
-    let v = op_unattested(port, Some(&registrar), &link.to_string());
+    let v = op_as_written(port, Some(&registrar), &link.to_string());
     let link_at = acked_at(&v);
     assert_eq!(sd.daemon().attestation_at(Seq(link_at)).unwrap(), None, "dropped by route");
     // The agent, keyed, attests its own publish-class write.
@@ -1173,11 +1173,11 @@ fn stored_record(port: u16, link: &str) -> StoredRecord {
     };
     let (from, to, ty) = (starts(0), starts(1), starts(2));
     let ty = ty.into_iter().next().expect("the type slot");
-    let atom = from.into_iter().next().expect("the record's atom");
+    let atom_addr = from.into_iter().next().expect("the record's atom");
     // The link is `<home>.0.2.<n>`, the atom `<home>.0.1.<ordinal>`.
     let parts: Vec<&str> = link.split('.').collect();
     let home = parts[..parts.len() - 3].join(".");
-    let ordinal: u64 = atom.rsplit('.').next().expect("an ordinal").parse().expect("a count");
+    let ordinal: u64 = atom_addr.rsplit('.').next().expect("an ordinal").parse().expect("a count");
     let items = delivery(port, None, &home, ordinal, 1);
     let text = items[0]["atom"].as_str().expect("the record atom").to_string();
     let (canonical, sig) = match ty.as_str() {
@@ -1251,7 +1251,7 @@ fn above_the_claim_every_honored_credential_record_carries_a_sig_the_opening_set
     // The filtered table's other half: every honored record, verified at its
     // base by the mirror's own read.
     let mut honored: Vec<(u64, String)> = Vec::new();
-    let table_is_filtered = |expected: &Vec<String>, honored: &[(u64, String)]| {
+    let assert_table_is_filtered = |expected: &Vec<String>, honored: &[(u64, String)]| {
         let mut live = enrolled(None);
         live.sort();
         assert_eq!(&live, expected, "the fold's table");
@@ -1273,7 +1273,7 @@ fn above_the_claim_every_honored_credential_record_carries_a_sig_the_opening_set
     honored.push((base, acked_addr(&v)));
     expected.push(fp(&k2));
     expected.sort();
-    table_is_filtered(&expected, &honored);
+    assert_table_is_filtered(&expected, &honored);
 
     // 2 — RETIRE K2, signed by the device key: honored.
     let retire = json_atom(&encode_retire(&[Fingerprint::of(&public_key_of(&k2))]));
@@ -1283,7 +1283,7 @@ fn above_the_claim_every_honored_credential_record_carries_a_sig_the_opening_set
     honored.push((base, acked_addr(&v)));
     expected.retain(|f| *f != fp(&k2));
     assert!(fingerprints(port, CLAIMANT_ACCOUNT, "retired", None).contains(&fp(&k2)));
-    table_is_filtered(&expected, &honored);
+    assert_table_is_filtered(&expected, &honored);
 
     // 3 — UNSIGNED: the atom lands (its insert takes no check), the link is
     // refused, REORDER, and commits nothing.
@@ -1296,7 +1296,7 @@ fn above_the_claim_every_honored_credential_record_carries_a_sig_the_opening_set
         "an unsigned enrolment above the claim: {v}"
     );
     assert!(head_position(port) < head + 4, "the atom alone committed, the link did not");
-    table_is_filtered(&expected, &honored);
+    assert_table_is_filtered(&expected, &honored);
 
     // 4 — signed by a key NOT in the opening set: a stranger's tag-1 key.
     let entries = [Enrollment::new(public_key_of(&k3), false, None).unwrap()];
@@ -1325,7 +1325,7 @@ fn above_the_claim_every_honored_credential_record_carries_a_sig_the_opening_set
         ("credential_refused:attestation_invalid:malformed".to_string(), "permanent".to_string()),
         "a sig of no row's width: {v}"
     );
-    table_is_filtered(&expected, &honored);
+    assert_table_is_filtered(&expected, &honored);
 
     // 5 — THE GRADE: an anchor-flagged enrolment is anchor-grade, so it
     // admits an anchor's `sig` alone — the device key's, deposited from the
@@ -1336,14 +1336,14 @@ fn above_the_claim_every_honored_credential_record_carries_a_sig_the_opening_set
     let by_device = signed_record_text(port, &hybrid_signer(&device_key()), CLAIMANT_DOC1, T_ENROLL, &[CLAIMANT_ACCOUNT], &flagged).unwrap();
     let (_, _, v) = deposit_record(port, &anchor, CLAIMANT_DOC1, CLAIMANT_ACCOUNT, T_ENROLL, &json_atom(&by_device));
     assert_eq!(verdict(&v), "credential_refused:attestation_invalid:signature", "an anchor-grade record, a device's sig: {v}");
-    table_is_filtered(&expected, &honored);
+    assert_table_is_filtered(&expected, &honored);
     let by_anchor = signed_record_text(port, &hybrid_signer(&anchor_key()), CLAIMANT_DOC1, T_ENROLL, &[CLAIMANT_ACCOUNT], &flagged).unwrap();
     let (base, _, v) = deposit_record(port, &anchor, CLAIMANT_DOC1, CLAIMANT_ACCOUNT, T_ENROLL, &json_atom(&by_anchor));
     assert_eq!(v["resp"].as_str(), Some("ack_addr"), "the anchor's sig: {v}");
     honored.push((base, acked_addr(&v)));
     expected.push(fp(&k4));
     expected.sort();
-    table_is_filtered(&expected, &honored);
+    assert_table_is_filtered(&expected, &honored);
     // The new anchor opens a session and signs an anchor act of its own.
     let as_k4 = open_signed_session(port, CLAIMANT_PRINCIPAL, &k4);
     let k5 = distinct_key(24);
@@ -1454,7 +1454,7 @@ fn a_record_frame_composed_from_the_stored_atom_and_link_is_the_frame_the_signer
     let signed = open_owner_session(port);
     let k = distinct_key(73);
     let entries = [Enrollment::new(public_key_of(&k), false, Some("mirror".into())).unwrap()];
-    let at_request = record_frame_for(
+    let frame_from_request = record_frame_for(
         port,
         ALG_MLDSA65_ED25519,
         CLAIMANT_DOC1,
@@ -1483,19 +1483,22 @@ fn a_record_frame_composed_from_the_stored_atom_and_link_is_the_frame_the_signer
     assert_eq!((record.home.as_str(), record.ty.as_str()), (CLAIMANT_DOC1, T_ENROLL));
     assert_eq!(record.to, vec![CLAIMANT_ACCOUNT.to_string()]);
     assert_eq!(record.canonical, canonical_record(&entries, None), "the sig-less projection");
-    let at_store = record.frame(port, ALG_MLDSA65_ED25519);
-    assert_eq!(at_store, at_request, "one preimage, composed from the request and from the store");
+    let frame_from_store = record.frame(port, ALG_MLDSA65_ED25519);
+    assert_eq!(
+        frame_from_store, frame_from_request,
+        "one preimage, composed from the request and from the store"
+    );
     // …and the sig verifies under the fold's set as served.
     let set = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
     assert!(record.verifies_under(port, &set), "the record's sig verifies under the served key set");
     let blob = hex_to_bytes(record.sig.as_deref().expect("the sig"));
     assert_eq!(
-        skep_signature::verify(FIXTURE_TAG, &public_key_of(&device_key()), &at_store, &blob),
+        skep_signature::verify(FIXTURE_TAG, &public_key_of(&device_key()), &frame_from_store, &blob),
         Ok(()),
         "under the device key that signed it"
     );
     assert_ne!(
-        skep_signature::verify(FIXTURE_TAG, &public_key_of(&anchor_key()), &at_store, &blob),
+        skep_signature::verify(FIXTURE_TAG, &public_key_of(&anchor_key()), &frame_from_store, &blob),
         Ok(()),
         "and under no other"
     );
@@ -1581,7 +1584,7 @@ fn a_replayed_signed_share_grants_nothing_and_a_re_share_naming_the_standing_rev
     // The share — ANY-PRINCIPAL over the draft — signed, and kept verbatim.
     let share =
         attach_attest(port, &signed, &typed_link_frame(CLAIMANT_DOC1, &[&draft], &[], T_GRANT));
-    let v = op_unattested(port, Some(&signed), &share);
+    let v = op_as_written(port, Some(&signed), &share);
     let grant = acked_addr(&v);
     assert!(attested(&v), "the share is attested");
     assert!(reads(), "shared");
@@ -1592,7 +1595,7 @@ fn a_replayed_signed_share_grants_nothing_and_a_re_share_naming_the_standing_rev
     assert!(!reads(), "revoked");
 
     // THE REPLAY: the byte-identical signed share.
-    let v = op_unattested(port, Some(&signed), &share);
+    let v = op_as_written(port, Some(&signed), &share);
     assert_ne!(acked_addr(&v), grant, "a replay lands at a fresh address");
     assert!(attested(&v), "the replayed signature verifies — the frame names no position");
     assert!(!reads(), "a replayed share grants nothing");
@@ -1606,23 +1609,23 @@ fn a_replayed_signed_share_grants_nothing_and_a_re_share_naming_the_standing_rev
         &typed_link_frame(CLAIMANT_DOC1, &[&draft], &[], T_GRANT),
         &revocation,
     );
-    let v = op_unattested(port, Some(&signed), &re_share);
-    let again = acked_addr(&v);
+    let v = op_as_written(port, Some(&signed), &re_share);
+    let re_share_addr = acked_addr(&v);
     assert!(attested(&v), "the re-share is attested");
     assert!(reads(), "a re-share naming the standing revocation is honored");
-    let pair = read_link(port, Some(&signed), &next_link_address(&again));
-    let start = |slot: usize| pair["slots"][slot][0]["start"].as_str().map(str::to_string);
+    let replaces_link = read_link(port, Some(&signed), &next_link_address(&re_share_addr));
+    let start = |slot: usize| replaces_link["slots"][slot][0]["start"].as_str().map(str::to_string);
     assert_eq!(
         (start(0), start(1), start(2)),
-        (Some(again.clone()), Some(revocation.clone()), Some(T_REPLACES.to_string())),
-        "the replaces link beside the re-share: from it, to the revocation, typed the class: {pair}"
+        (Some(re_share_addr.clone()), Some(revocation.clone()), Some(T_REPLACES.to_string())),
+        "the replaces link beside the re-share: from it, to the revocation, typed the class: {replaces_link}"
     );
 
     // Revoked again; the re-share's own request, replayed, names a stale
     // state.
-    op(port, Some(&signed), &typed_link_frame(CLAIMANT_DOC1, &[&again], &[], T_GRANT));
+    op(port, Some(&signed), &typed_link_frame(CLAIMANT_DOC1, &[&re_share_addr], &[], T_GRANT));
     assert!(!reads(), "the re-share revoked");
-    let v = op_unattested(port, Some(&signed), &re_share);
+    let v = op_as_written(port, Some(&signed), &re_share);
     assert_eq!(verdict(&v), "ok", "the replayed re-share lands: {v}");
     assert!(attested(&v), "…signed as it was");
     assert!(!reads(), "a replayed re-share names a revocation the key has passed");
@@ -1660,7 +1663,7 @@ fn a_replayed_shot_mints_its_bases_daughter_and_the_current_version_stands() {
     let d2_request =
         attach_attest(port, &signed, &publish_frame(&edition, Some((&d1, 3)), Some(&draft), &runs2));
     assert!(d2_request.contains("\"attest\""), "the request carries its signature");
-    let v = op_unattested(port, Some(&signed), &d2_request);
+    let v = op_as_written(port, Some(&signed), &d2_request);
     let d2 = acked_addr(&v);
     assert_eq!(d2, format!("{edition}.2"), "the trunk's next: {v}");
     assert!(sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().is_some(), "attested");
@@ -1672,7 +1675,7 @@ fn a_replayed_shot_mints_its_bases_daughter_and_the_current_version_stands() {
     let head_image = image_runs(port, None, &edition, 1, 5);
     assert_eq!(head_image, image_runs(port, None, &d3, 1, 5), "the head is D.3");
     // THE REPLAY: D.2's request again, byte for byte.
-    let v = op_unattested(port, Some(&signed), &d2_request);
+    let v = op_as_written(port, Some(&signed), &d2_request);
     assert_eq!(v["resp"].as_str(), Some("ack_addr"), "the replay commits: {v}");
     let replayed = acked_addr(&v);
     assert_eq!(replayed, format!("{d1}.1"), "D.1's daughter, never D.4");
@@ -1719,7 +1722,7 @@ fn a_publish_frame_composed_from_the_member_is_the_frame_composed_from_the_reque
     runs.extend(shot_runs(port, Some(&signed), &draft, 1, 2));
     let frame = publish_frame(&edition, Some((&edition, 3)), Some(&draft), &runs);
     let parsed: Value = serde_json::from_str(&frame).unwrap();
-    let at_request = entry_frame_for(port, &signed, CLAIMANT_PRINCIPAL, &parsed).expect("composable");
+    let frame_from_request = entry_frame_for(port, &signed, CLAIMANT_PRINCIPAL, &parsed).expect("composable");
     let v = op(port, Some(&signed), &frame);
     let member = acked_addr(&v);
     assert_eq!(member, format!("{edition}.1"));
@@ -1748,12 +1751,15 @@ fn a_publish_frame_composed_from_the_member_is_the_frame_composed_from_the_reque
     let body = entry_body_publish(segments.iter().map(SignerSegment::as_shot), base_extent);
     let board = board_term(port).expect("H.1");
     let account = addr(&account_of(port, &signed, CLAIMANT_PRINCIPAL).expect("the account"));
-    let at_member = entry_frame(ALG_MLDSA65_ED25519, board, &account, &addr(&trunk), &body);
-    assert_eq!(at_member, at_request, "one preimage, composed from the request and from the member");
+    let frame_from_member = entry_frame(ALG_MLDSA65_ED25519, board, &account, &addr(&trunk), &body);
+    assert_eq!(
+        frame_from_member, frame_from_request,
+        "one preimage, composed from the request and from the member"
+    );
     let (_, seed) = signer_of(&signed).expect("a signed session");
     let key = HybridSigner::from_seed(FIXTURE_TAG, &seed).unwrap();
     assert_eq!(
-        skep_signature::verify(slot.sig_alg(), key.public_key(), &at_member, slot.sig()),
+        skep_signature::verify(slot.sig_alg(), key.public_key(), &frame_from_member, slot.sig()),
         Ok(()),
         "the marker's attestation verifies over the member-composed frame"
     );

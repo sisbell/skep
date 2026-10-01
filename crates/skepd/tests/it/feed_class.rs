@@ -67,14 +67,14 @@ struct Entry {
 /// carries no signature (an op outside the checked set, or one the check
 /// stands aside for — a declared deposit of a credential kind whose atom is
 /// no record); the request's own `attest` where the marker was filled;
-/// neither where the entry's signature is its record's own `sig` (a
-/// credential record deposit's two rows).
+/// neither where the entry's signature is its credential record's own `sig`
+/// (a credential record deposit's two rows).
 #[derive(Clone, Copy, Debug)]
 enum Hand {
     Bare,
     Key,
     Attest,
-    Record,
+    RecordSig,
 }
 
 /// The fingerprint hex a signed session's key enrols under — the `key` its
@@ -142,7 +142,7 @@ fn write(
     hand: Hand,
 ) -> String {
     let sent = attach_attest(port, token, frame);
-    let v = op_unattested(port, Some(token), &sent);
+    let v = op_as_written(port, Some(token), &sent);
     let at = v["at"].as_u64().unwrap_or_else(|| panic!("{op_name} must commit: {v}"));
     let addr = v["addr"].as_str().map(str::to_string).unwrap_or_default();
     let docs = docs.unwrap_or_else(|| vec![addr.clone()]);
@@ -159,7 +159,7 @@ fn write(
             assert!(sent["attest"].is_object(), "the fixture signed this write: {sent}");
             rest.insert("attest".into(), sent["attest"].clone());
         }
-        Hand::Record => {}
+        Hand::RecordSig => {}
     }
     match op_name {
         "delegate" => {
@@ -281,7 +281,7 @@ fn hire_logged(
             r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{record}}}],"deposit":"{T_ENROLL}"}}"#
         ),
         Some(vec![CLAIMANT_DOC1.to_string()]),
-        Hand::Record,
+        Hand::RecordSig,
     );
     write(
         log,
@@ -292,7 +292,7 @@ fn hire_logged(
             r#"{{"op":"make_link","home":"{CLAIMANT_DOC1}","from":{{"addrs":["{atom}"]}},"to":{{"addrs":["{agent_account}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
         ),
         Some(vec![CLAIMANT_DOC1.to_string()]),
-        Hand::Record,
+        Hand::RecordSig,
     );
     open_signed_session(port, agent_id, key)
 }

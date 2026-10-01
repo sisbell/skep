@@ -591,9 +591,9 @@ fn record_grade_check(
     };
     // 5 — the candidates: the set that opens the home's account, at the
     // grade the act needs, of the blob's row.
-    let opens = opening_account(identity, home_account);
+    let opening = opening_account(identity, home_account);
     let candidates: Vec<&PublicKey> = identity
-        .key_set(&opens)
+        .key_set(&opening)
         .enrolled()
         .filter(|(_, e)| !anchor_grade || e.anchor)
         .map(|(_, e)| &e.key)
@@ -789,8 +789,8 @@ mod tests {
         // THE CEREMONY, through M10: the account, its doc 1, the genesis, the claim.
         let delegate = json!({"op": "delegate", "new_prefix": "1.0.1", "new_id": 900});
         exec(febe.bootstrap_session(), delegate);
-        let s = febe.open_session(PrincipalId(900));
-        let doc1 = exec(s, json!({"op": "create_new_document", "account": "1.0.1"}));
+        let sid = febe.open_session(PrincipalId(900));
+        let doc1 = exec(sid, json!({"op": "create_new_document", "account": "1.0.1"}));
         let atom = |ordinal: u64, text: String, t: &[u32; 9]| {
             json!({"op": "insert", "doc": doc1,
                    "at": {"subspace": "1", "ordinal": ordinal.to_string()},
@@ -804,12 +804,12 @@ mod tests {
             Enrollment::new(anchor, true, None).expect("no label"),
             Enrollment::new(device.clone(), false, None).expect("no label"),
         ]);
-        let genesis_atom = exec(s, atom(1, genesis, &T_ENROLL));
-        exec(s, link(&genesis_atom, &["1.0.1"], &T_ENROLL));
-        exec(s, link("1.0.1", &[], &T_CLAIM));
+        let genesis_atom = exec(sid, atom(1, genesis, &T_ENROLL));
+        exec(sid, link(&genesis_atom, &["1.0.1"], &T_ENROLL));
+        exec(sid, link("1.0.1", &[], &T_CLAIM));
         // A retirement of the device key, its record carrying a tag-1-width `sig`.
         let retire = canonical_record(&[Fingerprint::of(&device)], Some(&"ab".repeat(3373)));
-        let retire_atom = exec(s, atom(2, retire, &T_RETIRE));
+        let retire_atom = exec(sid, atom(2, retire, &T_RETIRE));
         let op = JsonCodec
             .parse(link(&retire_atom, &["1.0.1"], &T_RETIRE).to_string().as_bytes())
             .unwrap_or_else(|e| panic!("{:?}", e.detail))

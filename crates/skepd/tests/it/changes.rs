@@ -541,7 +541,7 @@ fn feed_entry(port: u16, token: &str, what: &str, frame: &str) -> (Value, Value)
 /// `attest` bytes beside the row, or present none on purpose.
 fn feed_entry_as_written(port: u16, token: &str, what: &str, frame: &str) -> (Value, Value) {
     let before = head(port);
-    let ack = op_unattested(port, Some(token), frame);
+    let ack = op_as_written(port, Some(token), frame);
     assert!(ack["at"].is_u64(), "{what} must commit: {ack}");
     (ack, one_entry_since(port, token, what, before))
 }

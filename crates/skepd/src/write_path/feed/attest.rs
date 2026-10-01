@@ -99,9 +99,9 @@ impl AttestStore {
     pub(super) fn open(dir: &Path, engine: &Engine, log: &CommitsLog) -> io::Result<AttestStore> {
         let head = log.open_head();
         let served_only = |at: u64| log.entries().contains_key(&at);
-        let (mut file, lines) = LineFile::open(dir, ATTEST_FILE, head, served_only)?;
+        let (mut file, entries) = LineFile::open(dir, ATTEST_FILE, head, served_only)?;
         let mut served = BTreeMap::new();
-        for (at, m) in &lines {
+        for (at, m) in &entries {
             match attest_of_record(m) {
                 Some(slot) => {
                     served.insert(*at, Arc::new(slot));
@@ -177,18 +177,18 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let slot = Attestation::new(1, vec![0xab, 0x01]).expect("tag 1 and a non-empty blob");
         {
-            let (file, lines) =
+            let (file, entries) =
                 LineFile::open(dir.path(), ATTEST_FILE, 9, |_| true).expect("a fresh store opens");
-            assert!(lines.is_empty());
+            assert!(entries.is_empty());
             let mut store = AttestStore { file, served: BTreeMap::new() };
             store.record(5, slot.clone());
             assert_eq!(store.slot(5).as_deref(), Some(&slot), "served at once");
             assert_eq!(store.slot(4).as_deref(), None, "and only where recorded");
         }
-        let (_file, lines) =
+        let (_file, entries) =
             LineFile::open(dir.path(), ATTEST_FILE, 9, |_| true).expect("reopen");
         let replayed: Vec<(u64, Option<Attestation>)> =
-            lines.iter().map(|(at, m)| (*at, attest_of_record(m))).collect();
+            entries.iter().map(|(at, m)| (*at, attest_of_record(m))).collect();
         assert_eq!(replayed, [(5, Some(slot))], "the line replays as the slot it mirrors");
 
         let record = |alg: Value, sig: &str| {

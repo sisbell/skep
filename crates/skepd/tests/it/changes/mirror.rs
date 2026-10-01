@@ -62,7 +62,7 @@ fn the_feed_is_the_mirrors_whole_input() {
         let port = sd.port();
         let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
         let device_fp = fingerprint_of(&device_key());
-        let at = |e: &Value| e["at"].as_u64().expect("at");
+        let at_of = |e: &Value| e["at"].as_u64().expect("at");
 
         // A `delegate` from the bootstrap principal: the minted pair.
         let boot = open_session(port, 0);
@@ -93,14 +93,14 @@ fn the_feed_is_the_mirrors_whole_input() {
         let sent: Value =
             serde_json::from_str(&attach_attest(port, &signed, &frame)).expect("a JSON frame");
         assert!(sent["attest"].is_object(), "the suite's signer signed the shot: {sent}");
-        let v = op_unattested(port, Some(&signed), &sent.to_string());
+        let v = op_as_written(port, Some(&signed), &sent.to_string());
         let (publish_at, member) = (acked_at(&v), acked_addr(&v));
 
         // A signed-session `insert` presenting none — a private draft's own
         // edit, and the draft's mint before it, both outside the checked set.
-        let v = op_unattested(port, Some(&signed), &create_frame(CLAIMANT_ACCOUNT, None));
+        let v = op_as_written(port, Some(&signed), &create_frame(CLAIMANT_ACCOUNT, None));
         let (draft_at, draft) = (acked_at(&v), acked_addr(&v));
-        let v = op_unattested(port, Some(&signed), &insert_frame(&draft, 1, "x", false));
+        let v = op_as_written(port, Some(&signed), &insert_frame(&draft, 1, "x", false));
         let insert_at = acked_at(&v);
 
         // A bare draft mint, and a bare `make_link` into it.
@@ -120,21 +120,22 @@ fn the_feed_is_the_mirrors_whole_input() {
         let mut want_ats: Vec<u64> = CEREMONY_ATS.to_vec();
         want_ats.push(H1_PUBLISH_AT);
         want_ats.push(delegate_at);
-        want_ats.extend(hire_rows.iter().map(at));
+        want_ats.extend(hire_rows.iter().map(at_of));
         want_ats.extend([publish_at, draft_at, insert_at, bare_mint_at, link_at]);
-        assert_eq!(entries.iter().map(at).collect::<Vec<_>>(), want_ats);
+        assert_eq!(entries.iter().map(at_of).collect::<Vec<_>>(), want_ats);
         for e in &entries {
             assert_terms_by_op(e, "the walk");
         }
         // `attest` rides exactly one row, the shot's; `key` is absent on
         // exactly the signed rows — the shot's and the deposit's two.
         let attested: Vec<u64> =
-            entries.iter().filter(|e| e.get("attest").is_some()).map(at).collect();
+            entries.iter().filter(|e| e.get("attest").is_some()).map(at_of).collect();
         assert_eq!(attested, vec![publish_at], "attest rides the marker-signed row alone");
-        let mut signed_rows: Vec<u64> = hire_rows.iter().map(at).collect();
-        signed_rows.push(publish_at);
-        let keyless: Vec<u64> = entries.iter().filter(|e| e.get("key").is_none()).map(at).collect();
-        assert_eq!(keyless, signed_rows, "key is absent on the signed rows and served on every other");
+        let mut signed_ats: Vec<u64> = hire_rows.iter().map(at_of).collect();
+        signed_ats.push(publish_at);
+        let keyless: Vec<u64> =
+            entries.iter().filter(|e| e.get("key").is_none()).map(at_of).collect();
+        assert_eq!(keyless, signed_ats, "key is absent on the signed rows and served on every other");
 
         // The signed publish.
         let e = entry_at(&entries, publish_at);
@@ -148,8 +149,8 @@ fn the_feed_is_the_mirrors_whole_input() {
         assert_eq!(e["base_extent"].as_str(), Some(extent.to_string().as_str()), "the extent the shot named");
 
         // The signed-session writes that presented none: the fingerprint.
-        for (what, at_) in [("the draft's mint", draft_at), ("the draft's insert", insert_at)] {
-            let e = entry_at(&entries, at_);
+        for (what, at) in [("the draft's mint", draft_at), ("the draft's insert", insert_at)] {
+            let e = entry_at(&entries, at);
             assert_eq!(e["key"].as_str(), Some(device_fp.as_str()), "{what}: {e}");
             assert_absent(e, &["attest"], what);
         }
@@ -198,8 +199,8 @@ fn the_feed_is_the_mirrors_whole_input() {
         );
 
         // The ceremony's rows below the claim: `key` served, no `attest`.
-        for at_ in CEREMONY_ATS {
-            let e = entry_at(&entries, at_);
+        for at in CEREMONY_ATS {
+            let e = entry_at(&entries, at);
             assert!(e["key"].is_string(), "a ceremony row serves its key: {e}");
             assert_absent(e, &["attest"], "a ceremony row");
         }
@@ -473,7 +474,7 @@ fn the_attest_store_keeps_below_the_floor_and_serves_a_lost_slot_at_the_floor_as
 /// `key` (the entry carries no signature anywhere) while its link is refused
 /// `attestation_required` (lane D), the atom an orphan no link names.
 #[test]
-fn a_record_deposits_two_rows_carry_neither_key_nor_attest_and_a_sig_less_atom_keeps_its_key() {
+fn both_rows_of_a_record_deposit_carry_neither_key_nor_attest_and_a_sig_less_atom_keeps_its_key() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
@@ -526,7 +527,7 @@ fn a_record_deposits_two_rows_carry_neither_key_nor_attest_and_a_sig_less_atom_k
 /// the session's `key` with no `attest`. The ceremony's own records carry no
 /// `sig`, so every other row below the claim keeps its `key` whatever this arm
 /// says; above the claim the same shape drops it
-/// (`a_record_deposits_two_rows_carry_neither_key_nor_attest_and_a_sig_less_atom_keeps_its_key`).
+/// (`both_rows_of_a_record_deposit_carry_neither_key_nor_attest_and_a_sig_less_atom_keeps_its_key`).
 #[test]
 fn below_the_claim_a_record_carrying_a_sig_keeps_its_rows_key() {
     let dir = tempfile::tempdir().expect("tempdir");

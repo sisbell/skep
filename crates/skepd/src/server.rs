@@ -34,13 +34,14 @@
 //! checkpoints — genesis on a fresh store, recovery on an existing one, both
 //! inside `Engine::open`. The only files this crate writes itself are the
 //! change feed's: the commit-metadata sidecar `commits.log`, its four
-//! derived sidecars (`feed-*.log`), the attest store `feed-attest.log` — the
-//! marker slot mirrored per attested commit, the one daemon file that is
-//! primary state below the reclaim floor — and, transiently while any is
-//! compacted, its `.compact` twin — all opened here through
-//! `WritePath::open` and owned by `write_path/sidecar.rs` and `write_path/feed/`; nothing here
-//! writes any file of the WORLD's, which is why two daemons replaying one
-//! journal still converge byte-identically.
+//! derived sidecars (`feed-index.log`, `feed-offsets.log`, `feed-masked.log`,
+//! `feed-streams.log`), the attest store `feed-attest.log` — the marker slot
+//! mirrored per attested commit, the one daemon file that is primary state
+//! below the reclaim floor — and, transiently while any is compacted, its
+//! `.compact` twin — all opened here through `WritePath::open` and owned by
+//! `write_path/sidecar.rs` and `write_path/feed/`; nothing here writes any
+//! file of the WORLD's, which is why two daemons replaying one journal still
+//! converge byte-identically.
 //!
 //! **Identity is the AUTH session layer** (`auth/`): `GET /challenge` and
 //! `POST /session` mint a session by one of two arms — a BARE bind (v1's

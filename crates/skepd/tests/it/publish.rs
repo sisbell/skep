@@ -820,7 +820,7 @@ fn the_source_gate_answers_behind_ownership_and_ahead_of_existence() {
     //      an existing one onto the same origin answer alike here.
     for existing in [true, false] {
         let start = if existing { s_text.clone() } else { format!("{s_draft}.0.1.9") };
-        let v = op_unattested(
+        let v = op_as_written(
             port,
             Some(&signed),
             &publish(CLAIMANT_DOC1, Some((CLAIMANT_DOC1, 1)), None, &[run(&s_draft, &start, 2)]),

@@ -546,7 +546,7 @@ pub fn deposit_re_share(
 ) -> String {
     let to: Vec<&str> = grantee.into_iter().collect();
     let frame = typed_link_frame(home_doc1, &[content_prefix], &to, T_GRANT);
-    acked_addr(&op_unattested(
+    acked_addr(&op_as_written(
         port,
         Some(signed),
         &signed_with_replaces(port, signed, &frame, revocation),
@@ -965,19 +965,22 @@ pub fn open_session(port: u16, principal: u64) -> String {
 /// `make_link`, `publish` — the frame is sent with its `attest` member
 /// composed and signed by that seed's hybrid key ([`attach_attest`]);
 /// every other frame, and every frame under a bare or foreign token, is
-/// sent as written. A cell that must send a WRONG or ABSENT `attest` posts
-/// through [`op_unattested`] or [`http`] directly, as the refusal cells do.
+/// sent as written. A cell that must send a WRONG or ABSENT `attest`, or one
+/// it signed itself, posts through [`op_as_written`] or [`http`] directly, as
+/// the refusal cells do.
 pub fn op(port: u16, token: Option<&str>, frame: &str) -> Value {
     let frame = match token {
         Some(t) => attach_attest(port, t, frame),
         None => frame.to_string(),
     };
-    op_unattested(port, token, &frame)
+    op_as_written(port, token, &frame)
 }
 
-/// [`op`] with the frame sent AS WRITTEN — no `attest` attached whatever the
-/// token, so a write goes UNATTESTED: the refusal cells' door.
-pub fn op_unattested(port: u16, token: Option<&str>, frame: &str) -> Value {
+/// [`op`] with the frame sent AS WRITTEN — no `attest` attached beyond what
+/// the caller composed, whatever the token: a member it signed by hand, a
+/// broken one, or none at all. The refusal cells' door, and every cell that
+/// signs its own frame.
+pub fn op_as_written(port: u16, token: Option<&str>, frame: &str) -> Value {
     let (st, body) = http(port, "POST", "/op", token, frame.as_bytes());
     assert_eq!(st, 200, "op transport failed: {}", String::from_utf8_lossy(&body));
     json(&body)

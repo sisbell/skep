@@ -143,7 +143,7 @@ pub(super) fn attestation_check(
                 Err(invalid(AttestFault::Withheld))
             };
         }
-        Err(ComposeFault::OverBudget) => return Err(invalid(AttestFault::FrameTooLarge)),
+        Err(ComposeFault::PastBodyBudget) => return Err(invalid(AttestFault::FrameTooLarge)),
         // A shot the store refuses whatever it carries: the walk finds no
         // value, a term names what no store holds, or the staging draft's runs
         // pass the store's re-insert budget. The store's own answer is owed,

@@ -53,7 +53,7 @@
 //!   is signed by its address, which its author holds whatever it may read,
 //!   so it is composed unread — and an author whose grant lapsed re-signs a
 //!   re-shoot that keeps a window (fam2-Q's (c), closed by arm A).
-//! * a body past [`MAX_SHOT_BODY_BYTES`] ([`ComposeFault::OverBudget`]),
+//! * a body past [`MAX_SHOT_BODY_BYTES`] ([`ComposeFault::PastBodyBudget`]),
 //!   answered before it is built past the budget.
 //! * a body with a term the frame's fixed-width rows cannot spell — a width,
 //!   an extent or a placed count past 2^64 − 1 ([`ComposeFault::Unspellable`]):
@@ -122,7 +122,7 @@ pub(super) enum ComposeFault {
     /// it is spelled by address and read from nowhere.
     UnreadableCopiedRunOrigin,
     /// A `publish`'s body would pass [`MAX_SHOT_BODY_BYTES`].
-    OverBudget,
+    PastBodyBudget,
     /// A `publish` term the frame's fixed-width rows cannot spell — a run's
     /// width, the base extent or the placed count past 2^64 − 1 — naming
     /// positions or a base extent no store holds: a shot the store refuses
@@ -316,13 +316,13 @@ fn publish_body(
             PlacedSegment::Copied(run) => {
                 for a in run.addrs() {
                     let v = content.value_at(a.tumbler()).ok_or(ComposeFault::MissingValue)?;
-                    body = body.push(v.as_bytes()).ok_or(ComposeFault::OverBudget)?;
+                    body = body.push(v.as_bytes()).ok_or(ComposeFault::PastBodyBudget)?;
                 }
             }
             PlacedSegment::Window(run) => {
                 body = body
                     .window(run.i_start(), spelled(run.width())?)
-                    .ok_or(ComposeFault::OverBudget)?;
+                    .ok_or(ComposeFault::PastBodyBudget)?;
             }
         }
     }

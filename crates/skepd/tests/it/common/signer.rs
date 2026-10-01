@@ -72,7 +72,7 @@ pub fn board_term(port: u16) -> Option<BoardTerm> {
     if let Some(term) = with_map(&BOARD_TERMS, |m| m.get(&port).copied()) {
         return Some(term);
     }
-    let v = op_unattested(port, None, &retrieve_frame(HEAD_MEMBER_1, 1, 1));
+    let v = op_as_written(port, None, &retrieve_frame(HEAD_MEMBER_1, 1, 1));
     if v["resp"].as_str() != Some("delivery") {
         return None;
     }
@@ -96,7 +96,7 @@ pub fn account_of(port: u16, token: &str, principal: u64) -> Option<String> {
     if let Some(a) = with_map(&ACCOUNTS, |m| m.get(&(port, principal)).cloned()) {
         return Some(a);
     }
-    let v = op_unattested(
+    let v = op_as_written(
         port,
         Some(token),
         &format!(r#"{{"op":"principal_prefix","principal":{principal}}}"#),
@@ -243,7 +243,7 @@ impl SignerSegment {
 /// (an unregistered or a withheld origin) means the client cannot compose
 /// this body, and the frame goes out as written.
 fn origin_values(port: u16, token: &str, origin: &str) -> Option<HashMap<String, Vec<u8>>> {
-    let set = op_unattested(port, Some(token), &spanset_frame(origin));
+    let set = op_as_written(port, Some(token), &spanset_frame(origin));
     if set["resp"].as_str() != Some("span_set") {
         return None;
     }
@@ -255,12 +255,12 @@ fn origin_values(port: u16, token: &str, origin: &str) -> Option<HashMap<String,
         .unwrap_or(0);
     let mut map = HashMap::new();
     if extent > 0 {
-        let image = op_unattested(port, Some(token), &image_frame(origin, 1, extent));
+        let image = op_as_written(port, Some(token), &image_frame(origin, 1, extent));
         if image["resp"].as_str() != Some("runs") {
             return None;
         }
         let addrs = expand_runs(&runs_in(&image));
-        let delivery = op_unattested(port, Some(token), &retrieve_frame(origin, 1, extent));
+        let delivery = op_as_written(port, Some(token), &retrieve_frame(origin, 1, extent));
         if delivery["resp"].as_str() != Some("delivery") {
             return None;
         }
@@ -531,11 +531,11 @@ pub fn values_of(port: u16, token: Option<&str>, doc: &str, from: u64, width: u6
 /// `attestation_invalid:withheld`.
 pub fn op_with_publish_values(port: u16, token: &str, frame: &str, values: &[&[u8]]) -> Value {
     let Some((principal, seed)) = signer_of(token) else {
-        return op_unattested(port, Some(token), frame);
+        return op_as_written(port, Some(token), frame);
     };
     let mut v: Value = serde_json::from_str(frame).expect("a JSON frame");
     let (Some(board), Some(account)) = (board_term(port), account_of(port, token, principal)) else {
-        return op_unattested(port, Some(token), frame);
+        return op_as_written(port, Some(token), frame);
     };
     let account = parse_addr(&account).expect("the daemon's own account prefix is an address");
     let alg = SigAlgRow::of_tag(FIXTURE_TAG).expect("tag 1").token;
@@ -547,7 +547,7 @@ pub fn op_with_publish_values(port: u16, token: &str, frame: &str, values: &[&[u
     let bytes = entry_frame(alg, board, &account, &doc, &body);
     let signer = HybridSigner::from_seed(FIXTURE_TAG, &seed).expect("tag 1");
     v["attest"] = attest_member(&signer.sign(&bytes));
-    op_unattested(port, Some(token), &v.to_string())
+    op_as_written(port, Some(token), &v.to_string())
 }
 
 /// [`op`]'s composition: the frame with its `attest` attached where the

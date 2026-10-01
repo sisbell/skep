@@ -1,9 +1,10 @@
 //! M3's slice (§Core data model, §1): the identity type and its two fixed
 //! ids; the journal delta [`M3Rec`] and its two field doors; [`M3State`]
-//! itself; the two registry caps; Σ₀ — the fixed addresses genesis seeds —
-//! with genesis and the fold (§D); and the frontier arithmetic the fold
-//! checks and the mints draw on (§1). Namespace keys are `crate::ns`'s, and
-//! the ghost floor is `crate::ghost`'s.
+//! itself; the two registry caps; the fixed addresses genesis builds — Σ₀'s
+//! bootstrap root and the system-account seed (PUB-6.65) — with genesis and
+//! the fold (§D); and the frontier arithmetic the fold checks and the mints
+//! draw on (§1). Namespace keys are `crate::ns`'s, and the ghost floor is
+//! `crate::ghost`'s.
 //!
 //! Beneath it, two children, each an `impl M3State` that sees this module's
 //! private items the way a child does, so nothing here is widened for them:
@@ -295,7 +296,7 @@ pub struct M3State {
     ///   invariant, established at that one gate and never re-established by
     ///   [`M3State::apply_m3`] — it is what makes the by-id scan
     ///   single-valued;
-    /// * the account-tier floor (O1a) is a PRODUCER invariant too, owned by
+    /// * the account-tier bound (O1a) is a PRODUCER invariant too, owned by
     ///   genesis (which seats π₀ at the node prefix `[1]`) and by `delegate`'s
     ///   hoisted `NotAccountTier` gate. On the journal path
     ///   `RegisterPrincipal`'s prefix door re-establishes it — stricter than
@@ -392,7 +393,7 @@ pub struct M3State {
 /// (T0(b)): `[1, 2^100000]` is two components and megabytes of entry. That is
 /// permanent and replicated like any entry, but it is not an amplification —
 /// a K-byte magnitude costs ~2.4K bytes to supply, so wire bytes exceed
-/// resident bytes. It is worth knowing that `register_node` is the ONLY door
+/// resident bytes. It is worth knowing that `register_node` is the ONLY path
 /// by which a caller's chosen component VALUES enter the permanent name space
 /// at all: every other address M3 mints is a registered parent extended by
 /// separators, the subspace identifiers 1/2, and frontier ordinals bounded by
@@ -435,7 +436,7 @@ pub const MAX_NODE_COMPONENTS: usize = 32;
 pub const MAX_PRINCIPAL_COMPONENTS: usize = 64;
 
 // ---------------------------------------------------------------------------
-// §D Σ₀ — the fixed addresses genesis seeds — and the fold.
+// §D Genesis: Σ₀'s bootstrap root, the system-account seed, and the fold.
 // ---------------------------------------------------------------------------
 
 /// The bootstrap node root `[1]` (Σ₀) — the single definition genesis seeds

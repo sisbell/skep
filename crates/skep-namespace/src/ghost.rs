@@ -22,7 +22,7 @@ use crate::ns::{content_ns, NsKey};
 /// landing on the `retraction` value would be catastrophic. The old 9-space
 /// bought non-collision by sitting outside every admissible subtree; the
 /// ghost region sits INSIDE the docuverse, at the first five content
-/// positions of doc-1 of the system account `1.1.0.1`, a REAL document
+/// positions of doc 1 of the system account `1.1.0.1`, a REAL document
 /// seeded at genesis (`M3State::genesis`, PUB-6.65) whose content chain any
 /// INSERT by its principal would extend — so unreachability cannot be proven
 /// and an explicit allocator skip is required. The skip is [`ghost_floor`];
@@ -31,8 +31,9 @@ pub const GHOST_POSITIONS: u32 = 5;
 
 /// The ghost region's home document — doc 1 of the SYSTEM ACCOUNT `1.1.0.1`:
 /// `[1,1,0,1,0,1]` (owner numbering, FINAL 2026-08-27: registry = node 1.1,
-/// host = 1.2, root `[1]` abstract). Account ordinal 1 under the registry
-/// node `1.1` is seated at genesis by `M3State::genesis` for
+/// host = 1.2, root `[1]` abstract — the ruling's registry node is this
+/// crate's [`crate::system_node`]). Account ordinal 1 under the system node
+/// `1.1` is seated at genesis by `M3State::genesis` for
 /// `SYSTEM_PRINCIPAL` (PUB-6.65), keyless and no operator's — at every other
 /// node the first delegate receives ordinal 1 by the claim-ceremony
 /// convention, which `delegate`'s next-form gate enforces — and doc 1 is

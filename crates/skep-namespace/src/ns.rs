@@ -1,14 +1,15 @@
-//! Namespaces — ASN-0040's `(anchor, g)`: one chain, one frontier, one lock
-//! (§1/§3). [`NsKey`] is the frontier-map key and, through the injective
-//! [`ns_lock_key`], the lock key. It is built only here: by the five
-//! anchor-side constructors ([`content_ns`], [`link_ns`], [`version_ns`],
-//! [`document_ns`], [`account_ns`]), by [`namespace_of`] from a member, or by
-//! its decode, whose anchor passes the at-rest door [`t4_anchor`]. Its fields
-//! are private to this module, so the key a mint reads, the key its
-//! `Allocate` advances and the lock its caller holds cannot be spelled two
-//! ways. Also here: the chain-family rule that picks every generator, a
-//! chain's members by ordinal, and the two opening slots published to callers
-//! outside M3 ([`first_document_address`], [`first_version_address`]).
+//! Namespaces — ASN-0040's `(p, d)`, spelled `(anchor, g)` here: one chain,
+//! one frontier, one lock (§1/§3). [`NsKey`] is the frontier-map key and,
+//! through the injective [`ns_lock_key`], the lock key. It is built only
+//! here: by the five anchor-side constructors ([`content_ns`], [`link_ns`],
+//! [`version_ns`], [`document_ns`], [`account_ns`]), by [`namespace_of`] from
+//! a member, or by its decode, whose anchor passes the at-rest door
+//! [`t4_anchor`]. Its fields are private to this module, so the key a mint
+//! reads, the key its `Allocate` advances and the lock its caller holds
+//! cannot be spelled two ways. Also here: the chain-family rule that picks
+//! every generator, a chain's members by ordinal, and the two opening slots
+//! published to callers outside M3 ([`first_document_address`],
+//! [`first_version_address`]).
 
 use serde::{Deserialize, Deserializer, Serialize};
 use skep_address::{
@@ -86,18 +87,22 @@ fn t4_anchor<'de, D: Deserializer<'de>>(d: D) -> Result<Tumbler, D::Error> {
     Ok(parent)
 }
 
-/// The chain generator — ASN-0040's `d`: [`Generator::SameField`] extends the
-/// anchor's own field, [`Generator::NextField`] opens the next one. An enum
-/// because `g ∈ {1, 2}` exhausts it: no third generator is representable, in
-/// memory or off a checkpoint, so [`first_in`] can only hand M1's
-/// `checked_inc` a `k` its TA5a gate admits by shape (`k ≥ 3` is refused
-/// there, and is what M1 asks a minting producer never to derive from input).
-/// What survives is the one refusal a precondition owns rather than the type:
-/// `NextField` off an Element anchor, which every mint's registered-entity
-/// gate already excludes. Encodes as its numeral, so the checkpointed
-/// frontier key and [`ns_lock_key`]'s trailing byte read the same either way.
-/// Orders by declaration, which is numeral order (`SameField` = 1 before
-/// `NextField` = 2): the second component of [`NsKey`]'s key order.
+/// The chain generator — ASN-0040's baptismal depth `d` (B6, Valid Depth),
+/// which ASN-0123 writes `g`: [`Generator::SameField`] extends the anchor's
+/// own field and [`Generator::NextField`] opens the next one (B5, Field
+/// Advancement). This crate does not say depth for it: here an address's
+/// depth is its component COUNT, the measure `TooDeep` and the two caps
+/// bound. An enum because `g ∈ {1, 2}` exhausts it: no third generator is
+/// representable, in memory or off a checkpoint, so [`first_in`] can only
+/// hand M1's `checked_inc` a `k` its TA5a gate admits by shape (`k ≥ 3` is
+/// refused there, and is what M1 asks a minting producer never to derive from
+/// input). What survives is the one refusal a precondition owns rather than
+/// the type: `NextField` off an Element anchor, which every mint's
+/// registered-entity gate already excludes. Encodes as its numeral, so the
+/// checkpointed frontier key and [`ns_lock_key`]'s trailing byte read the
+/// same either way. Orders by declaration, which is numeral order
+/// (`SameField` = 1 before `NextField` = 2): the second component of
+/// [`NsKey`]'s key order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(into = "u8", try_from = "u8")]
 enum Generator {

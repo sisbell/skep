@@ -31,13 +31,13 @@ fn ghost_position_refuses_the_ordinal_below_the_region() {
 /// The non-reissue guarantee, driven through the real ops — the load-bearing
 /// clause of the ghost-tumbler ruling: dispatch is by number, so the
 /// allocator must provably never issue any of the five reserved values. The
-/// ghost region IS reachable territory — the ghost home document is REAL, and
-/// since PUB-6.65 it is genesis's own: sub-node 1.1, the system account
-/// 1.1.0.1 and its doc 1 are seeded at exactly the ordinals the registry node,
-/// the operator's delegate and the ceremony's doc-1 used to land on here —
-/// which is exactly why the floor exists; this drives the one chain that could
-/// issue a ghost tumbler from genesis to well past the region and watches
-/// every answer.
+/// ghost region IS reachable territory — the ghost home document is REAL:
+/// genesis seeds the system node 1.1, the system account 1.1.0.1 and its
+/// doc 1 (PUB-6.65) at exactly the addresses a claim ceremony at that node
+/// would reach — admitting the node, delegating its operator's account,
+/// minting that account's doc 1 — which is exactly why the floor exists; this
+/// drives the one chain that could issue a ghost tumbler from genesis to well
+/// past the region and watches every answer.
 #[test]
 fn the_content_chain_of_the_ghost_home_doc_never_issues_a_ghost_tumbler() {
     let k = mem_kernel(genesis_world());

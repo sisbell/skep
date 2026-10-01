@@ -1,4 +1,5 @@
-//! §D genesis: what Σ₀ seeds, and the seeded slice as a reader prints it.
+//! §D genesis: Σ₀'s roots, the system-account seed folded onto them
+//! (PUB-6.65), and the seeded slice as a reader prints it.
 
 use crate::common::*;
 
@@ -13,9 +14,9 @@ fn genesis_seeds_the_bootstrap_roots_and_the_system_account() {
     // Σ₀ + O14 — the roots: node [1] and π₀ seated at it. Then the
     // system-account seed (PUB-6.65), five records folded onto them: the
     // sub-node 1.1 admitted, the account 1.1.0.1 baptized and seated for
-    // SYSTEM_PRINCIPAL, and its doc 1 (the commons home) and doc 2 (the head
-    // document H), both born PUBLISHED. Each record has an assertion below
-    // that fails without it.
+    // SYSTEM_PRINCIPAL, and its doc 1 (the commons registry's future home)
+    // and doc 2 (the head document H), both born PUBLISHED. Each record has
+    // an assertion below that fails without it.
     let s = M3State::genesis();
     assert_eq!(s.entity_level(&a(&[1])), Some(Level::Node));
     assert!(s.is_allocated(&a(&[1])));

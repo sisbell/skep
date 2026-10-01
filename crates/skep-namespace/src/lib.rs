@@ -9,10 +9,11 @@
 //!
 //! Two senses, kept apart throughout: the **name space** M3 owns (this
 //! module; the [`Namespace`] handle), and a **namespace** — ASN-0040's
-//! `(anchor, g)`: one chain, one frontier, one lock (the `ns` module and its
-//! `Ns`-named items, and the five **chain** `*_lock_key` constructors; the
-//! two crate-private registry keys — `M3State::principals_lock_key` and
-//! `M3State::nodes_lock_key` — name registries, not namespaces).
+//! `(p, d)`, spelled `(anchor, g)` here: one chain, one frontier, one lock
+//! (the `ns` module and its `Ns`-named items, and the five **chain**
+//! `*_lock_key` constructors; the two crate-private registry keys —
+//! `M3State::principals_lock_key` and `M3State::nodes_lock_key` — name
+//! registries, not namespaces).
 //!
 //! Two senses of **ghost**, kept apart the same way: B3's *ghost* is an
 //! address that IS allocated and has no bytes behind it — a registered-empty
@@ -29,6 +30,16 @@
 //! for the second and `home` only for the first: [`first_document_address`]
 //! names the slot doc 1 occupies, and [`M3State::has_documents`] whether it
 //! is occupied.
+//!
+//! Two senses of **operator**, kept apart the same way: ASN-0042's *node
+//! operator* is the principal seated at a node prefix `[N]` (O14's π_N),
+//! whose prefix contains every account under the node — and since
+//! [`Namespace::delegate`] seats account-tier prefixes only (Conflicts §7),
+//! the one such seat is π₀'s at `[1]`, which this module calls π₀ — while a
+//! node's *operator*, by the claim-ceremony convention, is its first
+//! delegate, seated at the node's first account `N·0·1`, whose prefix
+//! contains its own sub-accounts and none of its siblings. This module says
+//! *operator* only for the second.
 //!
 //! Four surfaces (§Public interface):
 //!
@@ -130,14 +141,15 @@
 
 // The typed rejections of the public surface, each enum in its op's pinned order.
 mod error;
-// Namespaces — ASN-0040's `(anchor, g)`: the frontier and lock key, built only
-// here; the chain-family rule; a chain's members by ordinal; its opening slots.
+// Namespaces — ASN-0040's `(p, d)`, spelled `(anchor, g)` here: the frontier
+// and lock key, built only here; the chain-family rule; a chain's members by
+// ordinal; its opening slots.
 mod ns;
 // The ghost region: the five reserved type addresses M7 reads, and the floor
 // that keeps the allocator past them.
 mod ghost;
 // M3's slice: the identity type, the journal delta and its two field doors,
-// `M3State`, Σ₀ and the fold, the frontier arithmetic; beneath it
+// `M3State`, genesis and the fold, the frontier arithmetic; beneath it
 // `state/mint.rs` (§A: the lock keys and the five mints) and `state/query.rs`
 // (§C: the queries).
 mod state;

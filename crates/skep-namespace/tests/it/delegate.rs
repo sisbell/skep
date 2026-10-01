@@ -76,13 +76,14 @@ fn delegate_mints_the_account_and_registers_its_principal_atomically() {
         .is_none());
 }
 
-/// An account's seat is its allocation (§6, O17b): `delegate` seats every
-/// prefix it mints in the transaction that mints it, and genesis seeds its one
-/// account seated, so on any state M3's ops produce an account-tier address is
-/// registered iff a principal is seated exactly at it — the equality the
-/// owner-of-address read (AUTH-6.37) answers as its allocation test
-/// (AUTH-5.87). Probed at every account-tier shape the ops produce, seated
-/// and free alike.
+/// An account's seat is its allocation (§6, O17b; ASN-0042's
+/// PrefixBaptismCoupling is the seat-⇒-allocation half): `delegate` seats
+/// every prefix it mints in the transaction that mints it, and genesis seeds
+/// its one account seated, so on any state M3's ops produce an account-tier
+/// address is registered iff a principal is seated exactly at it — the
+/// equality the owner-of-address read (AUTH-6.37) answers as its allocation
+/// test (AUTH-5.87). Probed at every account-tier shape the ops produce,
+/// seated and free alike.
 #[test]
 fn an_account_is_allocated_iff_a_principal_is_seated_at_it() {
     let (k, acct, _doc) = kernel_with_account_and_doc();
@@ -442,17 +443,18 @@ fn the_peek_and_the_delegate_gate_stop_at_the_same_nesting_depth() {
 /// can: the first delegate under ANY node receives account ordinal 1 — the
 /// frontier's `c₁ = N·0·1`, which `delegate`'s next-form gate demands
 /// verbatim — and once seated it is never re-delegated, because prefix
-/// freshness refuses the seat a second time. Pinned at the bootstrap node and
-/// at the host node 1.2 (the numbering ruling's other named node); at the
-/// registry node 1.1 the seat is genesis's own — PUB-6.65 seeds the system
-/// account at 1.1.0.1 — so there the test pins the seed holding ordinal 1 and
-/// the next arrival landing at 2.
+/// freshness refuses the seat a second time (ASN-0042's
+/// PrefixBaptismCoupling, then NamespacePrincipalExclusivity). Pinned at the
+/// bootstrap node and at the host node 1.2 (the numbering ruling's other
+/// named node); at the system node 1.1 (the ruling's registry node) the seat
+/// is genesis's own — PUB-6.65 seeds the system account at 1.1.0.1 — so there
+/// the test pins the seed holding ordinal 1 and the next arrival landing at 2.
 #[test]
 fn the_first_delegate_under_a_node_receives_account_ordinal_one() {
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
 
-    // Under the abstract root [1], the peek and the gate agree on 1.0.1…
+    // Under the bootstrap node [1], the peek and the gate agree on 1.0.1…
     let snap = k.snapshot();
     assert_eq!(
         snap.world().m3().next_account_prefix(&a(&[1])),
@@ -470,14 +472,14 @@ fn the_first_delegate_under_a_node_receives_account_ordinal_one() {
         .expect("the first delegate under [1]");
     assert_eq!(first, a(&[1, 0, 1]));
 
-    // The registry node 1.1 is seeded, and ordinal 1 under it is the system
+    // The system node 1.1 is seeded, and ordinal 1 under it is the system
     // account's seat (PUB-6.65): the seed took the first ordinal the way a
     // first delegate does, so the peek there already answers ordinal 2.
     let snap = k.snapshot();
     assert_eq!(
         snap.world().m3().next_account_prefix(&a(&[1, 1])),
         Some(a(&[1, 1, 0, 2])),
-        "the seeded system account holds ordinal 1 under the registry node"
+        "the seeded system account holds ordinal 1 under the system node"
     );
     drop(snap);
 

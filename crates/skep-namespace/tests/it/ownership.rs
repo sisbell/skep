@@ -16,17 +16,16 @@ fn containment_is_not_authorization() {
     let snap = k.snapshot();
     let m3 = snap.world().m3();
 
-    // O1: bare containment is true for SEVERAL principals at once — the
-    // node operator's prefix contains the delegated account and its
-    // documents…
+    // O1: bare containment is true for SEVERAL principals at once — π₀'s
+    // prefix [1] contains the delegated account and its documents…
     assert!(prefix_contains(&a(&[1]), &acct));
     assert!(prefix_contains(&a(&[1]), &doc));
     assert!(prefix_contains(&acct, &doc));
     assert!(prefix_contains(&acct, &acct)); // ≼ admits equality
     assert!(!prefix_contains(&acct, &a(&[1])));
     // …so only ω (longest-prefix match) arbitrates: the delegate owns its
-    // subtree, the node operator keeps the rest (O2/O3, the
-    // ownership-divergence discipline).
+    // subtree, π₀ keeps the rest (O2/O3, the ownership-divergence
+    // discipline).
     assert_eq!(m3.effective_owner(&doc), Some(ID1));
     assert_eq!(m3.effective_owner(&acct), Some(ID1));
     assert_eq!(m3.effective_owner(&a(&[1])), Some(BOOTSTRAP_PRINCIPAL));
@@ -282,7 +281,7 @@ fn omega_refuses_a_principal_seated_below_the_account_tier() {
                 id: ID1,
             })
             .apply_m3(&alloc(&[1, 0, 1, 0, 1]))
-            // A DOCUMENT-tier seat — below O1a's floor.
+            // A DOCUMENT-tier seat — below O1a's bound.
             .apply_m3(&M3Rec::RegisterPrincipal {
                 prefix: doc.clone(),
                 id: ID2,

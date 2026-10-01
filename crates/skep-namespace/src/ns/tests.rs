@@ -59,10 +59,10 @@ fn a_frontier_key_re_enters_through_its_t4_door() {
     }
 }
 
-/// The generator IS ASN-0040's `d ∈ {1, 2}`: it is the numeral wherever
-/// bytes are written — the checkpointed frontier key and `ns_lock_key`'s
-/// trailing byte — and no third value survives the way back in, so the
-/// `k` `first_in` hands M1 is one its TA5a gate admits by shape.
+/// The generator IS ASN-0040's baptismal depth `d ∈ {1, 2}`: it is the
+/// numeral wherever bytes are written — the checkpointed frontier key and
+/// `ns_lock_key`'s trailing byte — and no third value survives the way back
+/// in, so the `k` `first_in` hands M1 is one its TA5a gate admits by shape.
 #[test]
 fn generator_is_its_numeral_and_admits_no_third_value() {
     for (g, n) in [(Generator::SameField, 1u8), (Generator::NextField, 2u8)] {

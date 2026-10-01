@@ -8,10 +8,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **Principal registry** — principals seated at node or account
   prefixes, delegated top-down; registration is permanent and a
   prefix is never re-seated.
-- **ω (effective owner)** — the LONGEST registered prefix covering an
-  address, never bare containment: a node operator's prefix contains
-  every account delegated beneath it, so several principals contain
-  one address and only the longest match owns it.
+- **ω (effective owner)** — the principal seated at the LONGEST prefix
+  covering an address, never bare containment: the bootstrap
+  principal's prefix `[1]` contains every account delegated beneath it,
+  so several principals' prefixes contain one address and only the
+  longest match owns it.
 - **The frontier allocator** — one frontier per chain, keyed by
   `(anchor, generator)`: account, document, version, content and link
   addresses are minted as the next ordinal on the chain their anchor

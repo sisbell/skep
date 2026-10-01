@@ -259,9 +259,9 @@ impl M3State {
     /// delegations, one journal record per principal. So a deep probe costs no
     /// more than a shallow one, and neither costs O(#allocated). The shape is
     /// per CALL, though, so a caller that takes one ω per entry of a walk pays
-    /// the PRODUCT — a seed over [`M3State::documents`] costs Θ(entries · |Π|)
-    /// at every load — and the `principals` range-walk upgrade is where that
-    /// lands.
+    /// the PRODUCT — an index built that way over [`M3State::documents`] costs
+    /// Θ(entries · |Π|) each time it is built — and the `principals`
+    /// range-walk upgrade is where that lands.
     ///
     /// The tier filter is O1a, and it is a refusal rather than an
     /// optimisation. O1a is a producer invariant (genesis plus `delegate`'s
@@ -336,9 +336,9 @@ impl M3State {
     /// answers the same pair off one snapshot, but walks Π TWICE, and that
     /// read's cost promise is the walk every ownership check already makes —
     /// one. No caller is REQUIRED to use it; it adds no state, no index and no
-    /// fold fact, and `None` is exactly the projections' `None`: no registered
-    /// node- or account-tier prefix contains `a`, so the two halves are absent
-    /// TOGETHER by construction.
+    /// fold fact, and `None` is exactly the projections' `None`: no node- or
+    /// account-tier seat contains `a`, so the two halves are absent TOGETHER by
+    /// construction.
     pub fn effective_owner_pair(&self, a: &Address) -> Option<(&Address, PrincipalId)> {
         self.omega(a)
     }
@@ -348,13 +348,13 @@ impl M3State {
     ///
     /// Every ω-gated op asks this rather than reassembling it from
     /// [`M3State::effective_owner`], and NEVER
-    /// [`prefix_contains`] — the ownership-divergence trap: a node
-    /// operator's prefix contains every delegated account, so containment is
-    /// true for several principals at once, and only the longest match
-    /// arbitrates. O2 exclusivity is then a theorem given prefix-injectivity,
-    /// which delegation's freshness gate enforces; id-injectivity
-    /// (`DuplicateId`) makes the id comparison equivalent to comparing the
-    /// principals themselves.
+    /// [`prefix_contains`] — the ownership-divergence trap: π₀'s prefix `[1]`
+    /// contains every account delegated under it, so containment is true for
+    /// several principals at once, and only the longest match arbitrates. O2
+    /// exclusivity is then a theorem given prefix-injectivity, which
+    /// delegation's freshness gate enforces; id-injectivity (`DuplicateId`)
+    /// makes the id comparison equivalent to comparing the principals
+    /// themselves.
     pub fn is_effective_owner(&self, id: PrincipalId, a: &Address) -> bool {
         self.effective_owner(a) == Some(id)
     }

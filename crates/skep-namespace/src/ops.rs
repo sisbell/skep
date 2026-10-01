@@ -120,8 +120,12 @@ where
     /// genesis seeds its one account seated too — an account-tier address is
     /// registered iff a principal is seated exactly at it,
     /// [`M3State::is_registered_account`]`(a)` iff
-    /// [`M3State::effective_owner_prefix`]`(a) == Some(a)`. The
-    /// owner-of-address read (AUTH-6.37) answers that equality as an
+    /// [`M3State::effective_owner_prefix`]`(a) == Some(a)`. One half —
+    /// seated ⇒ allocated — is ASN-0042's PrefixBaptismCoupling (every
+    /// principal's prefix is baptized), kept by staging each seat in the
+    /// transaction that baptizes it (O17b); the other — allocated ⇒ seated —
+    /// is this op's own, because it is the account chain's sole allocator.
+    /// The owner-of-address read (AUTH-6.37) answers that equality as an
     /// account's allocation test (AUTH-5.87), so the one-transaction pairing
     /// is a guarantee and not only a safety: a path that allocated an account
     /// without seating it would have that read call an allocated account
@@ -140,7 +144,7 @@ where
     /// `M3State::principals_lock_key` serializes (§8).
     ///
     /// The depth guard is a resource refusal, not a shape one, and it is the
-    /// twin of [`Namespace::register_node`]'s: this is the other door by
+    /// twin of [`Namespace::register_node`]'s: this is the other path by
     /// which a caller's chosen component count enters a permanent,
     /// uncompressed registry — one Π walks on every ω query besides — and
     /// `new_prefix` arrives unvalidated off the wire, so the count is bounded
@@ -282,9 +286,11 @@ where
     ///
     /// Admission grants NO ownership: only a `RegisterNode` is staged, so no
     /// principal is seated at `addr` and ω(`addr`) stays whoever owns the
-    /// covering prefix — π₀ for everything under `[1]` (O14). An operator for
-    /// the new node is a subsequent [`Namespace::delegate`] by that owner, at
-    /// the prefix [`M3State::next_account_prefix`]`(addr)` names.
+    /// covering prefix — π₀ for every node under `[1]`, since no account-tier
+    /// seat contains a node address and π₀'s is the one node-tier seat (O14;
+    /// `delegate` seats account-tier prefixes only). An operator for the new
+    /// node is a subsequent [`Namespace::delegate`] by that owner, at the
+    /// prefix [`M3State::next_account_prefix`]`(addr)` names.
     ///
     /// The first three guards are pure pre-work — validity, level and depth
     /// are decidable from the address alone — so a malformed or oversized

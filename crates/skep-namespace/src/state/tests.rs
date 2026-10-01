@@ -390,7 +390,7 @@ fn the_allocate_door_admits_exactly_what_the_fold_can_key() {
 /// `an_account_is_allocated_iff_a_principal_is_seated_at_it`'s); an
 /// unallocated first child `inc(X, 1)` answers the seat ABOVE it, never
 /// none under the node; a sub-account outranks its parent by length; and
-/// an address no registered prefix contains has neither half.
+/// an address no seat contains has neither half.
 #[test]
 fn the_pair_accessor_is_omega_unprojected() {
     let (x, x_id) = (a(&[1, 0, 1]), PrincipalId(7));
@@ -413,7 +413,7 @@ fn the_pair_accessor_is_omega_unprojected() {
         // the node alone.
         (a(&[1, 0, 1, 0, 3]), Some((&x, x_id))),
         (a(&[1, 0, 2]), Some((&node, BOOTSTRAP_PRINCIPAL))),
-        // Under no registered prefix: both halves absent, TOGETHER.
+        // Under no seat: both halves absent, TOGETHER.
         (a(&[2]), None),
         (a(&[2, 0, 7]), None),
     ] {

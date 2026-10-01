@@ -11,11 +11,11 @@ use skep_address::{parent, validate, Address, Level, Tumbler};
 use skep_kernel::{Kernel, Seq, TxnError, WorldState};
 
 use crate::error::{CreateDocumentError, DelegateError, NodeError};
-use crate::state::bootstrap_root;
-use crate::{
-    prefix_contains, HasM3, M3Rec, M3State, PrincipalId, MAX_NODE_COMPONENTS,
+use crate::state::{
+    bootstrap_root, prefix_contains, M3Rec, M3State, PrincipalId, MAX_NODE_COMPONENTS,
     MAX_PRINCIPAL_COMPONENTS,
 };
+use crate::HasM3;
 
 /// M3's transact-driving op handle over M2 (§B): a thin borrow of the
 /// engine's kernel. The pure mints and queries live on [`M3State`] (reached
@@ -44,7 +44,7 @@ where
     /// ω(`account`) is absent or names another principal. The ω read is
     /// evaluated first, in-closure against `stg.base().m3()`; it is
     /// stale-safe (ω of an *existing* account is stable — §6/§8), so the held
-    /// [`M3State::principals_lock_key`] is defensive, not load-bearing. With
+    /// `M3State::principals_lock_key` is defensive, not load-bearing. With
     /// auth passed, the structural mint gate surfaces as
     /// `CreateDocumentError::Mint` (`NotAnAccount` covers unregistered and
     /// non-account alike — P8).
@@ -125,7 +125,7 @@ where
     /// `stg.base().m3()` under the held namespace + global-principals locks;
     /// the id-freshness race is CROSS-namespace (same `new_id`, different
     /// `new_prefix`), which only the single global
-    /// [`M3State::principals_lock_key`] serializes (§8).
+    /// `M3State::principals_lock_key` serializes (§8).
     ///
     /// The depth guard is a resource refusal, not a shape one, and it is the
     /// twin of [`Namespace::register_node`]'s: this is the other door by
@@ -250,7 +250,7 @@ where
     /// validate-not-mint path (Conflicts §1). Guards, in order: T4-validity
     /// (`NotValid`), node level (`NotNode`), depth
     /// ([`MAX_NODE_COMPONENTS`] — `TooDeep`), freshness (`NotFresh` — the
-    /// held coarse [`M3State::nodes_lock_key`] makes a concurrent duplicate
+    /// held coarse `M3State::nodes_lock_key` makes a concurrent duplicate
     /// surface typed rather than silently coalesce, §7/§8), and bootstrap
     /// lineage `[1] ≼ addr` (`NotDescendantOfBootstrap`). There is NO
     /// parent-exists check: P8 gates the creation of docuverse entities
@@ -281,7 +281,7 @@ where
     /// is inside the closure anyway: the PINNED order puts `NotFresh` first,
     /// and `NotFresh` is the one guard that must read the registry. So an
     /// off-lineage address does open a transaction and take
-    /// [`M3State::nodes_lock_key`] before it is refused — the price of the
+    /// `M3State::nodes_lock_key` before it is refused — the price of the
     /// precedence contract, and the reason this guard must NOT be hoisted to
     /// pre-work the way the first three were.
     ///

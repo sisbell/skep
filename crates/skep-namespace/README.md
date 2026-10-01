@@ -32,8 +32,7 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   publication state; a checkpoint or journal written before the bit
   existed fails to decode rather than defaulting.
 - **Lock-key constructors** — the workspace's one source of
-  namespace-keyed critical-section bytes, plus the two registry-wide
-  keys.
+  namespace-keyed critical-section bytes.
 
 State rides the kernel ([skep-kernel](../skep-kernel)) for atomicity,
 durability, and recovery; address arithmetic comes from

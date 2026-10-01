@@ -48,10 +48,11 @@
 //! crate depends on every store and would cycle). The tags are all M2 can hold:
 //! a `key(home, …) -> LockKey` constructor names M1's `Address`, and M2 carries
 //! no edge to M1. So each store builds its own keys in these spaces through
-//! [`LockKey::new`] — M3's `skep-namespace` constructors (`content_lock_key`,
-//! `link_lock_key`, `version_lock_key`, `document_lock_key`,
-//! `principals_lock_key`, `nodes_lock_key`) are the ones every other store's
-//! writes go through.
+//! [`LockKey::new`] — M3's `skep-namespace` chain constructors
+//! (`content_lock_key`, `link_lock_key`, `version_lock_key`,
+//! `document_lock_key`) are the ones every other store's writes go through;
+//! its two registry keys (`principals_lock_key`, `nodes_lock_key`) are
+//! private to M3, whose own ops are the only ones that take them.
 //!
 //! ## Example
 //!

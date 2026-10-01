@@ -9,10 +9,10 @@
 //!
 //! Two senses, kept apart throughout: the **name space** M3 owns (this
 //! module; the [`Namespace`] handle), and a **namespace** — ASN-0040's
-//! `(anchor, g)`: one chain, one frontier, one lock (the `Ns`-named
-//! internals and the five **chain** `*_lock_key` constructors; the two
-//! registry keys — [`M3State::principals_lock_key`] and
-//! [`M3State::nodes_lock_key`] — name registries, not namespaces).
+//! `(anchor, g)`: one chain, one frontier, one lock (the `ns` module and its
+//! `Ns`-named items, and the five **chain** `*_lock_key` constructors; the
+//! two crate-private registry keys — `M3State::principals_lock_key` and
+//! `M3State::nodes_lock_key` — name registries, not namespaces).
 //!
 //! Two senses of **ghost**, kept apart the same way: B3's *ghost* is an
 //! address that IS allocated and has no bytes behind it — a registered-empty
@@ -127,17 +127,27 @@
 
 #![forbid(unsafe_code)]
 
+// The typed rejections of the public surface, each enum in its op's pinned order.
 mod error;
-mod ops;
+// Namespaces — ASN-0040's `(anchor, g)`: the frontier and lock key, built only
+// here; the chain-family rule; a chain's members by ordinal; its opening slots.
+mod ns;
+// The ghost region: the five reserved type addresses M7 reads, and the floor
+// that keeps the allocator past them.
+mod ghost;
+// M3's slice: the identity type, the journal delta and its door, `M3State`,
+// Σ₀ and the fold, the allocator and its lock keys, the five mints, the reads.
 mod state;
+// The `Namespace` handle: the four entity operations, each one transaction.
+mod ops;
 
 pub use error::{CreateDocumentError, DelegateError, MintError, NodeError};
+pub use ghost::{ghost_home_doc, ghost_position, GHOST_POSITIONS};
+pub use ns::{first_document_address, first_version_address};
 pub use ops::Namespace;
 pub use state::{
-    first_document_address, first_version_address, ghost_home_doc, ghost_position, head_document,
-    prefix_contains, system_account, system_node, M3Rec, M3State, PrincipalId,
-    BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS, MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS,
-    SYSTEM_PRINCIPAL,
+    head_document, prefix_contains, system_account, system_node, M3Rec, M3State, PrincipalId,
+    BOOTSTRAP_PRINCIPAL, MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS, SYSTEM_PRINCIPAL,
 };
 
 /// The engine's **read accessor** for M3's slice (Engine Composition

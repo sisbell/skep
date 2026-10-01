@@ -333,13 +333,13 @@ pub fn first_version_address(source: &Address) -> Option<Address> {
         .then(|| first_in(&version_ns(source)).expect("k = 1 passes TA5a on every anchor"))
 }
 
-// The three key domains M3 serializes on — namespace frontiers, THE principal
-// registry, THE node registry — must occupy disjoint byte spaces (§1/§8: an
-// alias would under-serialize a namespace and REUSE an address, the one fatal
-// error). Each takes its own tag from M2's central `Space` enum
-// (`Space::Namespace` / `Space::Principals` / `Space::Nodes`), where every
-// tag in the system is assigned, so the disjointness holds against the other
-// stores' key spaces too and not merely against M3's own.
+// The three key spaces M3 serializes on — namespace frontiers, THE principal
+// registry, THE node registry — must be disjoint (§1/§8: an alias would
+// under-serialize a namespace and REUSE an address, the one fatal error).
+// Each takes its own tag from M2's central `Space` enum (`Space::Namespace` /
+// `Space::Principals` / `Space::Nodes`), where every tag in the system is
+// assigned, so the disjointness holds against the other stores' key spaces
+// too and not merely against M3's own.
 
 /// The injective, space-tagged `NsKey → LockKey` encoding (§1): tag byte,
 /// 8-byte BE component count, each component length-delimited (8-byte BE

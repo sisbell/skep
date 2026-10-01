@@ -440,7 +440,7 @@ fn a_record_or_checkpoint_without_the_bit_fails_to_decode() {
 
     // The checkpointed slice: the frontier map, the node set, the principal
     // map, and then the publication map — the field the bit appended. Genesis
-    // is no longer empty (PUB-6.65's seed: sub-node 1.1, the system account
+    // is no longer empty (PUB-6.65's seed: system node 1.1, the system account
     // 1.1.0.1, its doc 1 and `H` born published), so the three trailing fields
     // are hand-built from the seed's public pins — a `Vec` of pairs encodes
     // exactly as the maps do — and pinned as the slice's suffix; the frontier

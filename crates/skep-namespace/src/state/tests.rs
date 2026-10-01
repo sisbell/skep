@@ -96,7 +96,7 @@ fn each_chains_minted_addresses_advance_the_key_their_mint_read() {
 }
 
 #[test]
-fn lock_keys_distinguish_every_chain_and_key_domain() {
+fn lock_keys_distinguish_every_chain_and_key_space() {
     let acct = a(&[1, 0, 1]);
     let doc = a(&[1, 0, 1, 0, 1]);
     // The three g=1 chains under ONE document — content (b_C(d),1), link

@@ -9,21 +9,21 @@ use skep_namespace::{
 };
 
 /// The region has exactly [`GHOST_POSITIONS`] names, and this assert is what
-/// says so: one ordinal past it is an ORDINARILY MINTABLE content position of
+/// says so: one ordinal past it is an ORDINARILY MINTABLE content address of
 /// a real document — the allocator floors five and no more — so a caller
 /// holding a sixth "reserved" address would dispatch on a number the mint can
 /// also issue. The `# Panics` clause, made executable.
 #[test]
-#[should_panic(expected = "the ghost region is content positions")]
+#[should_panic(expected = "the ghost region is content addresses")]
 fn ghost_position_refuses_the_ordinal_past_the_region() {
     let _ = ghost_position(GHOST_POSITIONS + 1);
 }
 
-/// The other end: a chain opens at ordinal 1, so there is no position 0 to
+/// The other end: a chain opens at ordinal 1, so there is no ordinal 0 to
 /// reserve. Without the assert this still panics — but inside M1's element
 /// lift, naming the wrong contract to the crate that reads these five.
 #[test]
-#[should_panic(expected = "the ghost region is content positions")]
+#[should_panic(expected = "the ghost region is content addresses")]
 fn ghost_position_refuses_the_ordinal_below_the_region() {
     let _ = ghost_position(0);
 }
@@ -80,7 +80,7 @@ fn the_content_chain_of_the_ghost_home_document_never_issues_a_ghost_tumbler() {
 
     // The exclusion is permanent, not merely initial: with the stored
     // frontier far past the region, the five still answer unallocated, while
-    // position GHOST_POSITIONS + 1 is an ordinary member.
+    // the content address at GHOST_POSITIONS + 1 is an ordinary member.
     let snap = k.snapshot();
     let m3 = snap.world().m3();
     for ordinal in 1..=GHOST_POSITIONS {
@@ -103,9 +103,9 @@ fn the_content_chain_of_the_ghost_home_document_never_issues_a_ghost_tumbler() {
     assert_eq!(version, a(&[1, 1, 0, 1, 0, 1, 1]));
 
     // ANOTHER document under the account carries no floor: its content chain
-    // starts at 1 like any other — the region is five positions of one
-    // document, not a rule about the prefix. Doc 2 is the seeded `H`, so the
-    // account's next mint (as its own principal, the system's) is doc 3.
+    // starts at 1 like any other — the region is five content addresses of
+    // one document, not a rule about the prefix. Doc 2 is the seeded `H`, so
+    // the account's next mint (as its own principal, the system's) is doc 3.
     let (d3, _) = ns
         .create_new_document(SYSTEM_PRINCIPAL, &system_account(), None)
         .expect("doc 3");

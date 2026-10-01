@@ -10,19 +10,22 @@ use skep_address::{content_subspace, elem_addr, validate, Address, ElemPos, Nat,
 
 use crate::ns::{content_ns, NsKey};
 
-/// How many content positions of [`ghost_home_document`] are the GHOST
+/// How many content addresses of [`ghost_home_document`] are the GHOST
 /// REGION: the realm-global reserved type addresses M7 compiles as its format
 /// constants (`ReservedAddrs::format` builds them from [`ghost_position`], so
-/// the two crates cannot drift). A ghost tumbler is a reserved type address
-/// and nothing else — a fixed, well-known, T4-valid name at which nothing
-/// exists and nothing may ever be minted.
+/// the two crates cannot drift). The ruling's "positions 1–5" are ordinals on
+/// the document's content CHAIN, never positions in its arrangement: once the
+/// document is written, the first five positions of its arrangement hold
+/// ordinary content, as any document's do. A ghost tumbler is a reserved type
+/// address and nothing else — a fixed, well-known, T4-valid name at which
+/// nothing exists and nothing may ever be minted.
 ///
 /// M3 owes the allocation half of that sentence, and it is the load-bearing
 /// clause of the whole ruling: dispatch is by number, so a fresh content mint
 /// landing on the `retraction` value would be catastrophic. The old 9-space
 /// bought non-collision by sitting outside every admissible subtree; the
 /// ghost region sits INSIDE the docuverse, at the first five content
-/// positions of doc 1 of the system account `1.1.0.1`, a REAL document
+/// addresses of doc 1 of the system account `1.1.0.1`, a REAL document
 /// seeded at genesis (`M3State::genesis`, PUB-6.65) whose content chain any
 /// INSERT by its principal would extend — so unreachability cannot be proven
 /// and an explicit allocator skip is required. The skip is `ghost_floor`;
@@ -38,9 +41,9 @@ pub const GHOST_POSITIONS: u32 = 5;
 /// node the first delegate receives ordinal 1 by the claim-ceremony
 /// convention, which `delegate`'s next-form gate enforces — and doc 1 is
 /// born at genesis beside doc 2, the head document, not minted by a ceremony.
-/// Both land at their ordinary ordinals: the document is REAL, only content
-/// positions 1..=[`GHOST_POSITIONS`] inside it are ghost, and its first
-/// content mint lands at position [`GHOST_POSITIONS`] + 1.
+/// Both land at their ordinary ordinals: the document is REAL, only the
+/// content addresses 1..=[`GHOST_POSITIONS`] under it are ghost, and its first
+/// content mint lands at ordinal [`GHOST_POSITIONS`] + 1.
 pub fn ghost_home_document() -> Address {
     let comps = [1u32, 1, 0, 1, 0, 1].into_iter().map(Nat::from);
     let t = Tumbler::new(comps).expect("a six-component sequence is nonempty");
@@ -59,11 +62,11 @@ pub fn ghost_home_document() -> Address {
 /// # Panics
 ///
 /// Outside `1..=GHOST_POSITIONS` — the region has exactly five names, and a
-/// sixth would be an ordinarily mintable content position.
+/// sixth would be an ordinarily mintable content address.
 pub fn ghost_position(ordinal: u32) -> Address {
     assert!(
         (1..=GHOST_POSITIONS).contains(&ordinal),
-        "the ghost region is content positions 1..={GHOST_POSITIONS} of doc 1.1.0.1.0.1"
+        "the ghost region is content addresses 1..={GHOST_POSITIONS} of doc 1.1.0.1.0.1"
     );
     elem_addr(ElemPos {
         doc: ghost_home_document(),
@@ -77,7 +80,7 @@ pub fn ghost_position(ordinal: u32) -> Address {
 /// the one namespace whose chain contains the five ghost tumblers? Decided by
 /// key equality against a lazily-built constant, so the compare on every
 /// other namespace fails at the first differing component and the hot paths
-/// pay a short slice comparison.
+/// pay a short comparison.
 fn is_ghost_ns(key: &NsKey) -> bool {
     static GHOST_NS: LazyLock<NsKey> = LazyLock::new(|| content_ns(&ghost_home_document()));
     *key == *GHOST_NS
@@ -165,8 +168,8 @@ mod tests {
             assert_eq!(position.level(), Level::Element);
             assert_eq!(position.subspace(), Some(&content_subspace()));
         }
-        // The floor is exactly five positions of ONE document: a sibling doc's
-        // content chain carries none.
+        // The floor is exactly five content addresses of ONE document: a
+        // sibling doc's content chain carries none.
         assert_eq!(
             ghost_floor(&content_ns(&a(&[1, 1, 0, 1, 0, 2]))),
             Nat::zero()

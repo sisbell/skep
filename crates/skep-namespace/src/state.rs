@@ -52,9 +52,9 @@ pub struct PrincipalId(pub u64);
 pub const BOOTSTRAP_PRINCIPAL: PrincipalId = PrincipalId(0);
 
 /// The SYSTEM ACCOUNT's fixed principal (PUB-6.65, RES-304): the id genesis
-/// seats at [`system_account`] `1.1.0.1`, the commons/system account the
-/// board's own daemon writes the published head document into. Never `0` (that
-/// is [`BOOTSTRAP_PRINCIPAL`]) and a reserved sentinel no client can seat: the
+/// seats at [`system_account`] `1.1.0.1`, the account the board's own daemon
+/// writes the published head document into. Never `0` (that is
+/// [`BOOTSTRAP_PRINCIPAL`]) and a reserved sentinel no client can seat: the
 /// account holds no key and can never enrol one (AUTH-6.19's cell — a keyless
 /// account answers empty lists), and [`crate::Namespace::delegate`]'s
 /// id-freshness gate refuses this id `DuplicateId` because genesis has already
@@ -275,7 +275,7 @@ pub struct M3State {
     /// child-node capability (Conflicts §7): internal minting never yields a
     /// zeros = 0 address; ongoing admission is `register_node`, never
     /// ASN-0040 baptism. Σ₀ seeds `{[1]}`, and genesis's system-account seed
-    /// admits the system sub-node `[1.1]` beside it (PUB-6.65).
+    /// admits the system node `[1.1]` beside it (PUB-6.65).
     ///
     /// What its members satisfy is `register_node`'s ADMISSION conditions, not
     /// an invariant this field carries: [`M3State::apply_m3`] states which
@@ -424,8 +424,9 @@ pub const MAX_NODE_COMPONENTS: usize = 32;
 /// decimal to supply it is the same ~16× permanent, replicated charge
 /// [`MAX_NODE_COMPONENTS`] bounds for `nodes`.
 ///
-/// The number: a prefix is `node_field ++ [0] ++ account_field`, the node
-/// field already bounded by [`MAX_NODE_COMPONENTS`], and the account field
+/// The number: a prefix is `node_field ++ [0] ++ account_field` in M1's
+/// accessors — its node field, then its user field (T4b's `U`) — the node
+/// field already bounded by [`MAX_NODE_COMPONENTS`], and the user field
 /// grows one component per delegation. 64 leaves 31 levels of nesting under
 /// the deepest admissible node — an order of magnitude over any authority
 /// hierarchy (operator → org → division → team → project is five) — and holds
@@ -461,12 +462,12 @@ pub(crate) fn bootstrap_root() -> &'static Address {
     &ROOT
 }
 
-/// The SYSTEM SUB-NODE `1.1` (PUB-6.65, RES-304) — the node the system
-/// account is delegated under, registered by [`M3State::genesis`]. The seed
-/// lives under THIS sub-node's allocator, never under node `[1]`'s, so node
-/// `[1]`'s own account frontier — the input the claim floor reads
-/// (`next_account_prefix([1])`, PUB-6.52) — stays exactly what it was, and the
-/// honest claim admits as before.
+/// The SYSTEM NODE `1.1` (PUB-6.65, RES-304) — a node under the bootstrap
+/// node `[1]`, the one the system account is delegated under, registered by
+/// [`M3State::genesis`]. The seed lives under THIS node's allocator, never
+/// under node `[1]`'s, so node `[1]`'s own account frontier — the input the
+/// claim floor reads (`next_account_prefix([1])`, PUB-6.52) — stays exactly
+/// what it was, and the honest claim admits as before.
 pub fn system_node() -> Address {
     let t = Tumbler::new([1u32, 1].into_iter().map(Nat::from))
         .expect("a two-component sequence is nonempty");
@@ -543,7 +544,7 @@ impl M3State {
             publication: im::OrdMap::new(),
         };
         let seed = [
-            // `register_node`: the system sub-node 1.1.
+            // `register_node`: the system node 1.1.
             M3Rec::RegisterNode {
                 addr: system_node(),
             },

@@ -335,21 +335,21 @@ impl M3State {
     /// both off this one walk.
     ///
     /// FOR A REGISTERED DOCUMENT, ITS OWN ACCOUNT. ASN-0042's O6 promises only
-    /// containment — every owner sits at or above an address's account field,
+    /// containment — every owner sits at or above an address's account,
     /// `pfx(ω(a)) ≼ acct(a)` — and its own worked example owns a document
-    /// element from ABOVE its account field, under a sub-account baptized as a
-    /// bare namespace with no principal of its own. M3 makes the containment
-    /// an EQUALITY wherever `acct(a)` is a registered account, on any state
-    /// its own ops produce, because M3 baptizes no bare namespace: every
-    /// registered account holds its own seat ([`crate::Namespace::delegate`]
-    /// — an account's seat is its allocation). Every registered document, a
-    /// version included, is such an address: [`M3State::mint_document`] mints
-    /// only under a registered account (P8) and [`M3State::mint_version`]
-    /// only under a registered document. So for a registered document this
+    /// element from ABOVE its account, under a sub-account baptized with no
+    /// principal of its own (ASN-0042's "organizational namespace"). M3 makes
+    /// the containment an EQUALITY wherever `acct(a)` is a registered account,
+    /// on any state its own ops produce, because M3 allocates no account
+    /// without its seat — an account's seat is its allocation
+    /// ([`crate::Namespace::delegate`]). Every registered document, a version
+    /// included, is such an address: [`M3State::mint_document`] mints only
+    /// under a registered account (P8) and [`M3State::mint_version`] only
+    /// under a registered document. So for a registered document this
     /// answers the account it lies in — never `None`, never the node above
     /// it, never an ancestor account — and that is what readers take as the
-    /// document's OWNER ACCOUNT: the engine's exception set, which memoizes it
-    /// per draft (PUB-7.5), and the doc-metadata read (PUB-8.12).
+    /// document's OWNER ACCOUNT: the engine's exception set, which memoizes
+    /// it per draft (PUB-7.5), and the doc-metadata read (PUB-8.12).
     pub fn effective_owner_prefix(&self, a: &Address) -> Option<&Address> {
         self.omega(a).map(|(prefix, _)| prefix)
     }

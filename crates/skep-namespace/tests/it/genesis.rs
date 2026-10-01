@@ -13,7 +13,7 @@ use skep_namespace::{
 fn genesis_seeds_the_bootstrap_roots_and_the_system_account() {
     // Σ₀ + O14 — the roots: node [1] and π₀ seated at it. Then the
     // system-account seed (PUB-6.65), five records folded onto them: the
-    // sub-node 1.1 admitted, the account 1.1.0.1 baptized and seated for
+    // system node 1.1 admitted, the account 1.1.0.1 baptized and seated for
     // SYSTEM_PRINCIPAL, and its doc 1 (the commons registry's future home)
     // and doc 2 (the head document H), both born PUBLISHED. Each record has
     // an assertion below that fails without it.
@@ -29,7 +29,7 @@ fn genesis_seeds_the_bootstrap_roots_and_the_system_account() {
     assert!(!s.is_allocated(&a(&[1, 0, 1])));
     assert_eq!(s.entity_level(&a(&[1, 0, 1])), None);
     assert_eq!(s.next_account_prefix(&a(&[1])), Some(a(&[1, 0, 1])));
-    // The seed, in M3's own reads: the sub-node admitted; the account
+    // The seed, in M3's own reads: the system node admitted; the account
     // allocated AND seated — the two halves `delegate` stages; its two
     // documents registered and born published, and nothing else in the map.
     assert_eq!(s.entity_level(&system_node()), Some(Level::Node));

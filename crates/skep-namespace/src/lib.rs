@@ -13,7 +13,10 @@
 //! (the `ns` module and its `Ns`-named items, and the five **chain**
 //! `*_lock_key` constructors; the two crate-private registry keys —
 //! `M3State::principals_lock_key` and `M3State::nodes_lock_key` — name
-//! registries, not namespaces).
+//! registries, not namespaces). ASN-0042 says *namespace* a third way, and
+//! this module only cites it: a principal's subtree is its namespace, and an
+//! account baptized with no principal of its own is an "organizational
+//! namespace" — an account allocated without its seat, which M3 never makes.
 //!
 //! Two senses of **ghost**, kept apart the same way: B3's *ghost* is an
 //! address that IS allocated and has no bytes behind it — a registered-empty
@@ -83,7 +86,7 @@
 //!   chain opens at, [`first_document_address`] for an account's document
 //!   chain and [`first_version_address`] for a document's version chain.
 //! * **The ghost region** (owner ruling, 2026-08-26) — the first
-//!   [`GHOST_POSITIONS`] content positions of [`ghost_home_document`],
+//!   [`GHOST_POSITIONS`] content addresses of [`ghost_home_document`],
 //!   spelled by [`ghost_position`]: five ghost tumblers that are compiled
 //!   format constants, which M7's `ReservedAddrs::format` reads to build its
 //!   reserved type addresses.

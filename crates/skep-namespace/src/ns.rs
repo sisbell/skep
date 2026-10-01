@@ -65,8 +65,8 @@ pub(crate) struct NsKey {
 /// The other half — [`Generator::NextField`] paired with an Element-level
 /// anchor — is not this door's, and needs no door: it is a property of the
 /// PAIR, and it fails soft. `checked_inc` refuses `k = 2` at that tier, so
-/// `first_in` answers `GateViolation` and the mint surfaces
-/// [`MintError::Gate`]; there is no panic to prevent.
+/// `first_in` answers `GateViolation`, a value its reader handles; there is
+/// no panic to prevent.
 ///
 /// No key read out of `frontiers` reaches `first_in`: all five mints build a
 /// fresh key from a `*_ns` constructor, and loaded keys are only compared for
@@ -75,8 +75,6 @@ pub(crate) struct NsKey {
 /// it is here: M3 publishes no enumeration over its frontier map, which is
 /// why the engine's observation surface reads this slice through its serde
 /// bytes instead.
-///
-/// [`MintError::Gate`]: crate::MintError::Gate
 fn t4_anchor<'de, D: Deserializer<'de>>(d: D) -> Result<Tumbler, D::Error> {
     let parent = Tumbler::deserialize(d)?;
     if !is_t4_valid(&parent) {

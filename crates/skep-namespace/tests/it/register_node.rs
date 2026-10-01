@@ -1,5 +1,6 @@
 //! §B register_node: validate-not-mint admission in its pinned guard order,
-//! and the pre-work refusals that open no transaction.
+//! the pre-work refusals that open no transaction, and the transaction every
+//! op opens past them.
 
 use crate::common::*;
 
@@ -177,4 +178,22 @@ fn pre_work_rejections_open_no_transaction() {
         Ok(())
     })
     .expect("the outer transaction is a zero-step commit");
+}
+
+/// The other half of `Namespace`'s inherited PRECONDITION: past its pre-work an
+/// op opens a transaction of its own, so a call from inside a `transact`
+/// closure on the same kernel is a caller's bug, and M2 answers it as one —
+/// a panic naming the broken obligation, never a refusal the caller could
+/// mistake for the op's own. `[1, 7]` passes all three of `register_node`'s
+/// pre-work guards — T4, node level, depth — so nothing stops the call before
+/// it opens its transaction.
+#[test]
+#[should_panic(expected = "transact is not reentrant")]
+fn an_op_past_its_pre_work_opens_a_transaction_of_its_own() {
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+    let _ = k.transact::<_, ()>(&[], |_stg| {
+        let _ = ns.register_node(t(&[1, 7]));
+        Ok(())
+    });
 }

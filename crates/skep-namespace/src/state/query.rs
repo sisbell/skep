@@ -116,8 +116,14 @@ impl M3State {
     /// [`M3State::latest_version`] reads it. `false` off the account tier,
     /// where no document chain is anchored — the tier gate is what makes the
     /// key the DOCUMENT chain's, since `(N, 2)` under a node is the account
-    /// chain — and for an unregistered account, whose chain is empty. Asked
-    /// by [`crate::Namespace::create_new_document`] under the held
+    /// chain — and, on every state M3's own ops produce, for an unregistered
+    /// account, whose chain is empty because `mint_document` refuses one
+    /// (P8). It reads the CHAIN and not the registry, like `latest_version`:
+    /// P8 is a producer invariant the fold does not re-check, so off it — a
+    /// document folded under an account no op registered — this answers the
+    /// chain, and whether the account is registered stays the caller's
+    /// question ([`M3State::is_registered_account`]). Asked by
+    /// [`crate::Namespace::create_new_document`] under the held
     /// document-chain key and by the daemon's mint doors off a snapshot;
     /// answered here so that neither reassembles it.
     pub fn has_documents(&self, account: &Address) -> bool {

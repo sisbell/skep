@@ -277,6 +277,29 @@ fn latest_version_reads_the_chain_not_the_registry() {
     assert_eq!(s.latest_version(&orphan), Some(member));
 }
 
+/// [`M3State::has_documents`] reads the CHAIN and not the registry, like
+/// [`M3State::latest_version`] above: on every state M3's own ops produce an
+/// unregistered account's chain is empty — `mint_document` refuses an
+/// unregistered account (P8) — so the answer there is `false`, but the read
+/// asks the chain, and registration stays the caller's question. The
+/// discriminating shape is a document chain holding a member under an
+/// account that was never minted, which only the fold can build; every other
+/// fixture hands this read a registered account or an empty chain, so a
+/// registration gate added here would pass them all.
+#[test]
+fn has_documents_reads_the_chain_not_the_registry() {
+    let orphan = a(&[1, 0, 9]);
+    let s = M3State::genesis().apply_m3(&M3Rec::Allocate {
+        addr: a(&[1, 0, 9, 0, 1]),
+        published: false,
+    });
+    assert!(
+        !s.is_registered_account(&orphan),
+        "the account was never minted"
+    );
+    assert!(s.has_documents(&orphan));
+}
+
 /// §6 (iv): the single probe answers "does a registered principal sit
 /// STRICTLY under `p`?" — checked over the shape family one probe can
 /// meet, because only ONE key is ever examined, so a wrong range bound or

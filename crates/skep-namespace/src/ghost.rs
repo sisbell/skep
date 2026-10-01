@@ -99,12 +99,15 @@ fn is_ghost_ns(key: &NsKey) -> bool {
 /// the ghost content namespace (a `g = 2` member would carry a separator
 /// before its ordinal; every other `g = 1` family differs in subspace, tier
 /// gate, or anchor) — so the ghost content chain is the ONLY chain that
-/// could issue one. Its effective frontier starts at the floor and frontiers
-/// never regress (`Allocate` is the sole advance, by +1), so every mint it
-/// serves has ordinal > [`GHOST_POSITIONS`]. Membership excludes the floored
-/// ordinals besides, so `is_allocated` answers false at all five, forever:
-/// nothing exists at a ghost tumbler on any board, and M5's
-/// referential-integrity oracle refuses a COPY of one.
+/// could issue one. Every mint it serves carries the ordinal one past the
+/// effective frontier, and the effective frontier is `max(stored, floor)`:
+/// never below the floor whatever the stored count reads, a count regressed
+/// off a corrupted checkpoint or journal included. So every such mint has an
+/// ordinal above [`GHOST_POSITIONS`] on every build, resting on that MAX and
+/// not on the fold's contiguity check, which is a `debug_assert`. Membership
+/// excludes the floored ordinals besides, so `is_allocated` answers false at
+/// all five, forever: nothing exists at a ghost tumbler on any board, and
+/// M5's referential-integrity oracle refuses a COPY of one.
 ///
 /// The floor is a compiled constant, not genesis state: genesis seeds the
 /// ghost home document EMPTY, so its content chain has no frontier until a

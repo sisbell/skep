@@ -14,13 +14,16 @@ use skep_address::GateViolation;
 /// can produce exactly one of the structural variants:
 /// `mint_content`/`mint_link` ⇒ `HomeNotRegistered`, `mint_version` ⇒
 /// `SourceNotRegistered`, `mint_document` ⇒ `NotAnAccount`. Those
-/// preconditions are the only active gates (§4); `Gate` is the M1 inc-gate
-/// (B6/TA5a) routed defensively: no live path reaches it, and a corrupted
-/// frontier COUNT cannot either, since the gate sees only the chain's anchor.
-/// What can is a corrupted frontier KEY — a next-field generator over an
-/// Element-level anchor — which is the soft failure `NsKey`'s anchor door
-/// names as its reason for not carrying that half of `first_in`'s anchor
-/// precondition.
+/// preconditions are the only active gates (§4). `Gate` is the M1 inc-gate
+/// (B6/TA5a) routed defensively, and NO state reaches it, corrupted or not.
+/// The gate sees only the anchor of the key a mint builds, and a mint never
+/// reads a key out of storage: it builds its key fresh from its argument, so
+/// neither a frontier count nor a stored frontier key is ever what the gate
+/// is asked about. Of the four public mints only `mint_document` builds a
+/// next-field key, and it would be the refused one — a next-field generator
+/// over an Element-level anchor — only for an element `account`, which its
+/// `NotAnAccount` gate refuses first. So `Gate` fires only if a mint's own
+/// structural gate regresses: an M3 defect, never a store condition.
 ///
 /// The fifth mint, the account chain's, is crate-private and answers `Option`
 /// rather than adding a leaf here: `delegate` is its only caller and already
@@ -36,8 +39,9 @@ pub enum MintError {
     /// `mint_document`: target is not a registered Account (P8/CND.pre) —
     /// covers both unregistered AND non-account.
     NotAnAccount,
-    /// M1's TA5a inc gate refused (B6) — defensive: a corrupted frontier KEY,
-    /// never a count and never a live path.
+    /// M1's TA5a inc gate refused (B6) — defensive: reachable by no input and
+    /// no state, corrupted or not; it would mean a mint's own structural gate
+    /// admitted an element (an M3 defect — see [`MintError`]).
     Gate(GateViolation),
 }
 
@@ -89,9 +93,10 @@ pub enum CreateDocumentError {
     /// permission.
     NotOwner,
     /// The op's mint failed structurally. Both ops mint through
-    /// `mint_document`, so only two [`MintError`] leaves are reachable here —
-    /// `NotAnAccount` and the defensive `Gate`. A caller matching on this owes
-    /// no arm for `HomeNotRegistered` or `SourceNotRegistered`.
+    /// `mint_document`, so only two [`MintError`] leaves can come out of it:
+    /// `NotAnAccount`, and `Gate`, which no state reaches (see [`MintError`])
+    /// yet the type still carries. A caller matching on this owes no arm for
+    /// `HomeNotRegistered` or `SourceNotRegistered`.
     Mint(MintError),
 }
 

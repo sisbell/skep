@@ -577,7 +577,11 @@ impl M3State {
     /// frontier + 1 as its ordinal (effective = `max(frontier, floor)`; the
     /// floor is nonzero only for the ghost content namespace —
     /// `ghost_floor`). Every mint's does: a mint extends a REGISTERED
-    /// parent and emits exactly `c_{m+1}` past the floor.
+    /// parent and emits exactly `c_{m+1}` past the floor. That the parent is
+    /// REGISTERED (P8) is the mints' gate and no part of this domain: an
+    /// `Allocate` under an unregistered parent folds like any other, and
+    /// that is the state [`M3State::has_documents`] and
+    /// [`M3State::latest_version`] answer by their chains.
     ///
     /// The two conditions differ in kind, and only the first is owed to the
     /// journal. Extending a parent is a fact about one field, so it is carried

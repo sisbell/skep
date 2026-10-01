@@ -21,6 +21,24 @@ use crate::HasM3;
 /// engine's kernel. The pure mints and queries live on [`M3State`] (reached
 /// through [`HasM3`]); this type owns only the four entity operations M10
 /// dispatches.
+///
+/// Two facts each op inherits from M2's `transact`, written here because they
+/// bind its callers.
+///
+/// PRECONDITION — an op is not called from inside a `transact` closure on the
+/// same kernel: it opens a transaction of its own, and M2 answers the nested
+/// one with a panic naming that obligation. The calls exempt are those
+/// refused before any transaction opens: an op's pre-work, and `fork`'s
+/// unknown id.
+///
+/// PRECEDENCE — every `TxnError` other than `Rejected` is M2's, passed
+/// through unchanged, and it speaks in M2's stated order around this
+/// module's own refusals: an op's pre-work refusals first, since they open
+/// no transaction; then M2's `Poisoned`, which `transact` answers before
+/// running the closure; then the op's in-closure refusals, in its error
+/// enum's declared order; then what M2 judges only of a closure that staged
+/// its records, in M2's order — `Poisoned` on an exhausted `Seq` order, then
+/// `Unencodable`, `OverBudget` and `Durability`.
 pub struct Namespace<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
 }

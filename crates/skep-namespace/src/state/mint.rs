@@ -27,10 +27,15 @@ impl M3State {
     /// (B7/B8).
     ///
     /// Total on every [`Address`], and the caller's one obligation is to pass
-    /// the SAME `home` the paired mint receives. A `home` below the document
-    /// tier yields a key whose anchor is outside T4 — harmless, since a lock
-    /// key is only ever compared, and the paired mint refuses that `home`
-    /// `HomeNotRegistered` a moment later.
+    /// the SAME `home` the paired mint receives. A wrong-tier `home` costs the
+    /// key its T4-validity or its IDENTITY. Below the document tier the anchor
+    /// leaves T4 — an element's content base carries four separators. Above
+    /// it `b_C(home)` is a real address and the key is another chain's:
+    /// `b_C(A)` for an account `A` is `A·0·1`, so the key is the version chain
+    /// of its doc 1, and `b_C([1])` is `1.0.1`, so the key is that account's
+    /// sub-account chain. Harmless either way, since a lock key is only ever
+    /// compared, and the paired mint refuses that `home` `HomeNotRegistered`
+    /// a moment later.
     pub fn content_lock_key(home: &Address) -> LockKey {
         ns_lock_key(&content_ns(home))
     }
@@ -39,9 +44,10 @@ impl M3State {
     /// [`M3State::mint_link`]`(home)` — take it BEFORE the closure; the mint
     /// inside READS this key's frontier, and the [`M3Rec`] you stage ADVANCES
     /// it. Same obligation and same latitude as
-    /// [`M3State::content_lock_key`]: pass the mint's own `home`, and a
-    /// wrong-tier one costs only the key's own T4-validity, which nothing
-    /// reads.
+    /// [`M3State::content_lock_key`]: pass the mint's own `home`; a wrong-tier
+    /// one costs the key its T4-validity or its identity, as there — `b_L(A)`
+    /// for an account `A` is `A·0·2`, so the key is the version chain of its
+    /// doc 2 — harmlessly for the same reason.
     pub fn link_lock_key(home: &Address) -> LockKey {
         ns_lock_key(&link_ns(home))
     }

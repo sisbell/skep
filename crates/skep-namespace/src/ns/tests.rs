@@ -83,12 +83,12 @@ fn a_frontier_key_re_enters_through_its_t4_door() {
 /// The half of `first_in`'s anchor precondition the key's at-rest door
 /// (`t4_anchor`) does not carry — a next-field generator over an
 /// Element-level anchor — is left out because it FAILS SOFT, the door's doc
-/// says: M1's TA5a gate refuses `k = 2` at that tier, `first_in` answers
-/// `GateViolation`, and a mint would surface it as `MintError::Gate`. That is
-/// the door's reason for its scope and the `Gate` arm's reason to exist, and
-/// no live input reaches it — every mint's gate refuses the one argument that
-/// could (`mint_preconditions_reject_structurally`) — so it is reached here,
-/// on a key the door admits.
+/// says: M1's TA5a gate refuses `k = 2` at that tier and `first_in` answers
+/// `GateViolation` as a value. That is the door's reason for its scope. No
+/// mint ever asks: each builds its key fresh, and each mint's gate refuses
+/// the one argument that could build this one
+/// (`mint_preconditions_reject_structurally`) — so it is reached here, on a
+/// key the door admits.
 #[test]
 fn a_next_field_key_over_an_element_anchor_fails_soft() {
     let key = NsKey {

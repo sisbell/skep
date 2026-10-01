@@ -114,12 +114,16 @@ fn the_rows_spell_as_the_module_doc_states() {
     );
     // THE PUBLISH BODY. One value in the birth shape: the count, one
     // stretch — its class byte and a value-sequence row of one — and the
-    // EMPTY base-extent group.
+    // EMPTY base-extent group. The class bytes are spelled as the bytes they
+    // are — `0x02` a value stretch, `0x01` a window — never as the constants
+    // that spell them: a pin composed from those agrees with whatever value
+    // they hold, even the zero that opens the base-extent group, which no
+    // class byte may be if the body is to read back from its front.
     assert_eq!(
         entry_body_publish([ShotSegmentPiece::Value(b"q")], None).as_bytes(),
         [
             &[0u8, 0, 0, 0, 0, 0, 0, 1][..],
-            &[SEGMENT_VALUE_STRETCH][..],
+            &[0x02][..],
             &value_sequence([&b"q"[..]])[..],
             &[0, 0, 0, 0][..],
         ]
@@ -150,11 +154,11 @@ fn the_rows_spell_as_the_module_doc_states() {
         mixed.as_bytes(),
         [
             &[0u8, 0, 0, 0, 0, 0, 0, 6][..],
-            &[SEGMENT_VALUE_STRETCH][..],
+            &[0x02][..],
             &value_sequence([&b"a"[..], &b"b"[..]])[..],
-            &[SEGMENT_WINDOW][..],
+            &[0x01][..],
             &window_bytes(&window_start, 3)[..],
-            &[SEGMENT_VALUE_STRETCH][..],
+            &[0x02][..],
             &value_sequence([&b"c"[..]])[..],
             &[0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 5][..],
         ]
@@ -175,9 +179,9 @@ fn the_rows_spell_as_the_module_doc_states() {
         .as_bytes(),
         [
             &[0u8, 0, 0, 0, 0, 0, 0, 4][..],
-            &[SEGMENT_WINDOW][..],
+            &[0x01][..],
             &window_bytes(&window_start, 3)[..],
-            &[SEGMENT_WINDOW][..],
+            &[0x01][..],
             &window_bytes(&second, 1)[..],
             &[0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0][..],
         ]

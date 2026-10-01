@@ -7,8 +7,8 @@ use crate::common;
 
 use common::{fp, key};
 use skep_identity::{
-    encode_enroll, encode_retire, parse_enroll, parse_retire, Enrollment, Fingerprint, LabelError,
-    PayloadError, MAX_RECORD_BYTES,
+    canonical_record, encode_enroll, encode_retire, parse_enroll, parse_record_value, parse_retire,
+    Enrollment, Fingerprint, LabelError, PayloadError, RecordValue, MAX_RECORD_BYTES,
 };
 
 fn key_hex(i: u8) -> String {
@@ -311,6 +311,13 @@ fn a_sig_member_is_skipped_and_the_table_is_identical() {
 /// fallback instead inverts both `\n` rows below — the canonical body refused,
 /// the non-canonical one admitted — turning over a frozen protocol pin (I2,
 /// AUTH-2.90) in silence.
+///
+/// The fold's parsers drop the `sig`; the verifier's parse answers it, and
+/// answers the STRING the escapes spell. A parse that handed back the body's
+/// spelling instead — a slice of the text, saving the copy — would give the
+/// verifier a `sig` its signer never composed whenever the signer's string
+/// held an escaped character, and every other `sig` the suite reads back is
+/// escape-free.
 #[test]
 fn a_sig_is_admitted_only_in_its_canonical_escaping() {
     let base = canonical_enroll_record();
@@ -326,6 +333,17 @@ fn a_sig_is_admitted_only_in_its_canonical_escaping() {
         ok_enroll(splice(&canonical_sig).as_bytes()),
         ok_enroll(base.as_bytes()),
         "a canonically escaped sig is admitted, and ignored"
+    );
+    // …and READ BACK decoded, by the verifier's parse — the one call that
+    // answers the `sig` at all, the fold's above dropping it unread: the
+    // string the escapes spell, which is the `sig` its signer composed, never
+    // the body's spelling of it.
+    let value: RecordValue<Enrollment> =
+        parse_record_value(splice(&canonical_sig).as_bytes()).expect("admitted");
+    assert_eq!(
+        value.sig.as_deref(),
+        Some("\u{0}\u{8}\t\n\u{c}\r\u{1f} \"\\/é~"),
+        "the sig, decoded"
     );
 
     // The near-misses, each one backslash away from a canonical spelling: a
@@ -800,16 +818,16 @@ fn every_payload_error_variant_has_its_pinned_token() {
 /// THE VERIFIER'S PARSE (signed ops; the design record §4.2 (C), §7.5 step
 /// 3): `parse_record_value` answers a body's entries AND its `sig` under the
 /// one admission the fold applies — the same body, with and without the
-/// member, folds to identical entries, the `sig` read verbatim where it
-/// stands and `None` where it does not — and the value round-trips through
-/// `canonical_record` on both sides: with the `sig`, the bytes admitted; with
-/// `None`, the SIG-LESS PROJECTION the record grade signs. A body the fold
-/// refuses is refused here with the same fault, so no `sig` is ever read off
-/// one: the `sig` is canonically LAST, and a body carrying it elsewhere is
-/// `bad_record` to both.
+/// member, folds to identical entries, the `sig` read where it stands, the
+/// empty member included, and `None` where it does not — and the value
+/// round-trips through `canonical_record` on both sides: with the `sig`, the
+/// bytes admitted; with `None`, the SIG-LESS PROJECTION the record grade
+/// signs. A body the fold refuses is refused here with the same fault, so no
+/// `sig` is ever read off one: the `sig` is canonically LAST, and a body
+/// carrying it elsewhere is `bad_record` to both. A `sig` spelled with escapes
+/// is read back decoded by `a_sig_is_admitted_only_in_its_canonical_escaping`.
 #[test]
 fn parse_record_value_answers_the_entries_and_the_sig_under_the_folds_own_admission() {
-    use skep_identity::{canonical_record, parse_record_value, RecordValue};
     let h = key_hex(1);
     let bare = canonical_enroll_record();
     let signed = format!(
@@ -824,6 +842,13 @@ fn parse_record_value_answers_the_entries_and_the_sig_under_the_folds_own_admiss
     // The round trip on both sides of the projection.
     assert_eq!(canonical_record(&with_sig.entries, with_sig.sig.as_deref()), signed);
     assert_eq!(canonical_record(&with_sig.entries, None), bare, "the sig-less projection");
+    // The EMPTY member is a member: `"sig":""` carries a sig, the empty string —
+    // never `None`, which says the body carried no `sig` at all.
+    let blank = format!("{},\"sig\":\"\"}}", &bare[..bare.len() - 1]);
+    let with_blank: RecordValue<Enrollment> =
+        parse_record_value(blank.as_bytes()).expect("admitted");
+    assert_eq!(with_blank.sig.as_deref(), Some(""), "an empty sig member is a sig");
+    assert_eq!(canonical_record(&with_blank.entries, with_blank.sig.as_deref()), blank);
     // The retirement kind alike.
     let retire = format!(r#"{{"type":"skep-retire","fingerprints":["{}"],"sig":"ab"}}"#, fp_hex(1));
     let value: RecordValue<Fingerprint> = parse_record_value(retire.as_bytes()).expect("admitted");

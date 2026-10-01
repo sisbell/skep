@@ -4,8 +4,9 @@
 //! refusal order, the row deciding a key's variant, the two token lookups'
 //! one token set, the KEY PIN's halves, the key's width, the fingerprint's
 //! formula, hex and rendering), the framing byte pins, the fold token
-//! authority, the standard trait surface every consumer dispatches through,
-//! and the items published for readers outside the workspace.
+//! authority, the standard trait surface every consumer dispatches through
+//! and the two traits it withholds, and the items published for readers
+//! outside the workspace.
 
 use crate::common;
 
@@ -594,6 +595,39 @@ fn error_types_lift_into_dyn_error() {
     let boxed = lift(past_budget.expect_err("an empty value costs its length prefix"));
     assert_eq!(boxed.to_string(), PublishRefusal::PastBudget.to_string());
 }
+
+/// Two of this crate's promises are kept by a trait it does NOT implement,
+/// which no call can test and a derive added for symmetry breaks — so they
+/// are held here at compile time, as `PublishBody`'s not-`Clone` is beside its
+/// type: the `_` below is inferred while the blanket impl is the only one that
+/// applies, and a type meeting the second makes the path ambiguous. `Inert`
+/// is deliberately not `Display`, and so no `std::error::Error`: its wire
+/// detail is [`Inert::detail`]'s join on the payload arm, and the `{}` a
+/// consumer reaches for first would answer the token alone —
+/// `malformed_payload` where the detail is `malformed_payload:bad_record`. And
+/// `Enrollment::new` is the ONLY constructor (AUTH-1.25): a derived
+/// `Deserialize` — `PublicKey`, `Fingerprint` and `Enrolled` each carry one —
+/// would be a second, building a label outside AUTH-1.24's domain that no
+/// record admits and that I1's round trip, drawing through `new`, never meets.
+const _: fn() = || {
+    trait AmbiguousIfDisplay<A> {
+        fn check() {}
+    }
+    impl<T: ?Sized> AmbiguousIfDisplay<()> for T {}
+    #[allow(dead_code)]
+    struct IsDisplay;
+    impl<T: ?Sized + std::fmt::Display> AmbiguousIfDisplay<IsDisplay> for T {}
+    let _ = <Inert as AmbiguousIfDisplay<_>>::check;
+
+    trait AmbiguousIfDeserialize<A> {
+        fn check() {}
+    }
+    impl<T: ?Sized> AmbiguousIfDeserialize<()> for T {}
+    #[allow(dead_code)]
+    struct IsDeserialize;
+    impl<T: for<'de> serde::Deserialize<'de>> AmbiguousIfDeserialize<IsDeserialize> for T {}
+    let _ = <Enrollment as AmbiguousIfDeserialize<_>>::check;
+};
 
 /// The fold's seam forwards through `&T` and `Box<T>`, as std's own traits
 /// do, so a host holding its world behind a trait object reaches the fold

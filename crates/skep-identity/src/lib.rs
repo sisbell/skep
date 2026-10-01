@@ -181,7 +181,10 @@
 //! The one `std::sync` item in the crate is a `LazyLock` holding the
 //! crate-constant empty [`KeySet`] behind `IdentityState::key_set`'s
 //! `&KeySet` return (AUTH-2.58): once-only initialization of a `Default`
-//! value — no observable state, no effect on fold determinism (I2).
+//! value — no observable state, no effect on fold determinism (I2). The
+//! suite's `tidy.rs` holds the crate to this note and to the first
+//! paragraph: it reads the dependency set off the manifest, and every
+//! `std::` and `core::` path `src/`'s code names.
 
 #![forbid(unsafe_code)]
 

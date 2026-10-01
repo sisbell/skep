@@ -24,12 +24,19 @@
 //! test module is under 200 lines, counted from its `#[cfg(…)]` line to its
 //! closing `}`; at 200 or more it lives in its module's own `tests.rs`.
 //!
-//! The module-map, citation and test-module checks look for violations a
-//! clean tree does not hold, and on such a tree each passes whether its
-//! readers can see or not; so each is held, beside it, to the input those
-//! readers exist for, where a reader gone blind fails. The bullet check needs
-//! no such control: on a clean tree its reading is live, every module a bullet
-//! it must find.
+//! And the crate's outer boundary, which `lib.rs`'s first paragraph states and
+//! the compiler holds none of: its dependencies are AUTH-2.1's five, read off
+//! the manifest; and `src/`'s code reaches no world but its ctx — no
+//! filesystem, network, environment, operating system, process, thread or
+//! clock, no `std::sync` item but the one `LazyLock`, no print macro.
+//!
+//! The module-map, citation, test-module and purity checks look for
+//! violations a clean tree does not hold, and on such a tree each passes
+//! whether its readers can see or not; so each is held, beside it, to the
+//! input those readers exist for, where a reader gone blind fails. The bullet
+//! and dependency checks need no such control: on a clean tree their reading
+//! is live, every module a bullet and every pinned crate a line they must
+//! find.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -342,6 +349,156 @@ fn the_citation_readers_find_a_bare_citation() {
     }
 }
 
+/// AUTH-2.1 PINS THE DEPENDENCY SET — `skep-address`, `sha2`, `im`, `serde`
+/// and `serde_json`, exactly, as `Cargo.toml`'s card and `lib.rs`'s first
+/// paragraph state it — so the crate stays light enough for the engine, M10,
+/// checkpoint/replay and any mirror tool to carry, and no signature library
+/// reaches the fold (AUTH-2.2: `skep-signature` is the one crate that links
+/// them). The compiler holds none of it: a dependency added to the manifest
+/// builds, and every other test of the workspace stays green. Read off the
+/// manifest's own text: the tables whose headers name dependencies are
+/// `[dependencies]` and `[dev-dependencies]` and no other, so none arrives
+/// under a target or build table, and `[dependencies]` names the five. Live
+/// on a clean tree, as the bullet check is: a reader that found nothing fails.
+#[test]
+fn the_dependencies_are_auth_2_1s_five() {
+    let manifest =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")).unwrap();
+    let (mut table, mut tables, mut dependencies) = ("", BTreeSet::new(), BTreeSet::new());
+    for line in manifest.lines() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        if line.starts_with('[') {
+            table = line;
+            if line.contains("dependencies") {
+                tables.insert(line);
+            }
+        } else if table == "[dependencies]" {
+            dependencies.extend(dependency_named(line));
+        }
+    }
+    assert_eq!(
+        tables,
+        BTreeSet::from(["[dependencies]", "[dev-dependencies]"]),
+        "Cargo.toml's dependency tables"
+    );
+    assert_eq!(
+        dependencies,
+        BTreeSet::from(["im", "serde", "serde_json", "sha2", "skep-address"]),
+        "AUTH-2.1's dependency set"
+    );
+}
+
+/// THE CRATE READS NO WORLD BUT ITS CTX (AUTH-2.1; `lib.rs`'s first paragraph
+/// and its purity note): no I/O, no clock, no config, the one `std::sync` item
+/// the `LazyLock` behind `key_set`'s empty answer — so the fold answers from
+/// the record stream, the ctx and its frozen constants alone (I2, AUTH-2.90).
+/// The manifest check cannot see this half: std is no dependency, and
+/// `std::time`, `std::fs` and `std::env` compile into any crate. Every path
+/// `src/`'s code names under `std::` or `core::` is read, a brace group's
+/// members joined to it, and refused where it reaches the world
+/// ([`reaches_the_world`]); so is every print macro. The I2 property cannot
+/// stand in for this: it re-folds one stream within one run, where a verdict
+/// gated on the clock agrees with itself.
+#[test]
+fn src_reads_no_world_but_its_ctx() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    files.sort();
+    let mut faults = Vec::new();
+    for file in &files {
+        if file.file_name().is_some_and(|name| name == "tests.rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(file).unwrap();
+        let path = file.strip_prefix(&src).unwrap().display().to_string();
+        let (code, at) = code_of(&text);
+        for (start, named) in paths_from(&code, &["std::", "core::"]) {
+            if reaches_the_world(&named) {
+                faults.push(format!("src/{path}:{}: `{named}`", at[start].0));
+            }
+        }
+        for call in printing(&code) {
+            faults.push(format!("src/{path}: `{call}…)` prints"));
+        }
+    }
+    assert!(faults.is_empty(), "the crate reaches past its ctx:\n{}", faults.join("\n"));
+}
+
+/// The purity check above looks for paths the tree does not name, so on a
+/// clean tree it passes whether its readers can see or not; held here to the
+/// forms the world arrives in — a brace group at `std::` with a member's own
+/// path, a path spelled in an expression, one spelled from the extern root
+/// (`::std::…`), a `std::sync` group holding the `LazyLock` the crate keeps
+/// beside an item it does not, and a print macro, read once and never again
+/// as the shorter macro its name contains.
+#[test]
+fn the_purity_readers_see_the_world_in_every_form() {
+    let code = "use std::{fs, time::Instant};\nlet home = std::env::var(\"HOME\");\n\
+                ::std::process::exit(1);\nuse std::sync::{LazyLock, Mutex};\n\
+                eprintln!(\"{home:?}\");\n";
+    let named: Vec<String> =
+        paths_from(code, &["std::", "core::"]).into_iter().map(|(_, path)| path).collect();
+    assert_eq!(
+        named,
+        [
+            "std::fs",
+            "std::time::Instant",
+            "std::env::var",
+            "std::process::exit",
+            "std::sync::LazyLock",
+            "std::sync::Mutex",
+        ]
+    );
+    let refused: Vec<&str> =
+        named.iter().map(String::as_str).filter(|path| reaches_the_world(path)).collect();
+    assert_eq!(
+        refused,
+        [
+            "std::fs",
+            "std::time::Instant",
+            "std::env::var",
+            "std::process::exit",
+            "std::sync::Mutex",
+        ]
+    );
+    assert_eq!(printing(code), ["eprintln!("], "a print macro, read once");
+}
+
+/// The crate a line of a dependency table names — the key ahead of its `=`,
+/// to its first `.` (`serde_json.workspace = true` names `serde_json`) — or
+/// `None` for a line that names none: a blank, or the continuation of an
+/// array a key opened above it.
+fn dependency_named(line: &str) -> Option<&str> {
+    let (key, _) = line.split_once('=')?;
+    let name = key.split('.').next()?.trim().trim_matches('"');
+    let is_name = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+    (!name.is_empty() && name.chars().all(is_name)).then_some(name)
+}
+
+/// Whether a path `src/` names under `std::` or `core::` reaches past the
+/// crate's inputs — the filesystem, the network, the environment, the
+/// operating system, a process, a thread or the clock — or holds `std::sync`
+/// state beyond the one `LazyLock` the purity note names.
+fn reaches_the_world(path: &str) -> bool {
+    const WORLD: &[&str] = &["env", "fs", "io", "net", "os", "process", "thread", "time"];
+    let module = path.split("::").nth(1).unwrap_or("");
+    WORLD.contains(&module) || (module == "sync" && path != "std::sync::LazyLock")
+}
+
+/// The print macros `code` calls — writes to the process's own streams —
+/// each where its name opens a word, so an `eprintln!` is never read as the
+/// `println!` its name contains.
+fn printing(code: &str) -> Vec<&'static str> {
+    let opens_a_word = |at: usize| {
+        code[..at].chars().next_back().is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+    };
+    ["print!(", "println!(", "eprint!(", "eprintln!(", "dbg!("]
+        .into_iter()
+        .filter(|call| code.match_indices(call).any(|(at, _)| opens_a_word(at)))
+        .collect()
+}
+
 /// The module a line of `lib.rs` declares — `mod key;`, with or without a
 /// visibility — or `None` for any other line.
 fn declared_module(line: &str) -> Option<&str> {
@@ -437,11 +594,18 @@ fn opens_inline_module(trimmed: &str) -> bool {
     item.starts_with("mod ") && item.ends_with('{')
 }
 
-/// Every path the code names from `crate::` or `super::`, with the byte it
-/// starts at: each token — a maximal run of identifier characters and `:` —
-/// and, where one ends at a brace group (`use crate::{key::Fingerprint,
-/// keyset::KeySet};`), each member of the group joined to it.
+/// Every path the code names from `crate::` or `super::` — [`paths_from`] as
+/// the module map reads it.
 fn named_paths(code: &str) -> Vec<(usize, String)> {
+    paths_from(code, &["crate::", "super::"])
+}
+
+/// Every path the code names from one of `roots`, with the byte it starts at:
+/// each token — a maximal run of identifier characters and `:`, read past a
+/// leading `::` — and, where one ends at a brace group (`use
+/// crate::{key::Fingerprint, keyset::KeySet};`), each member of the group
+/// joined to it.
+fn paths_from(code: &str, roots: &[&str]) -> Vec<(usize, String)> {
     let is_path = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b':';
     let bytes = code.as_bytes();
     let (mut paths, mut i) = (Vec::new(), 0);
@@ -454,8 +618,8 @@ fn named_paths(code: &str) -> Vec<(usize, String)> {
         while i < bytes.len() && is_path(bytes[i]) {
             i += 1;
         }
-        let token = &code[start..i];
-        if !(token.starts_with("crate::") || token.starts_with("super::")) {
+        let token = code[start..i].trim_start_matches(':');
+        if !roots.iter().any(|root| token.starts_with(root)) {
             continue;
         }
         let after = code[i..].trim_start();

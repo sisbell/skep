@@ -490,9 +490,12 @@ pub struct RecordValue<T> {
     /// The kind's entries, in the record's own ENTRY ORDER, non-empty and
     /// duplicate-free ([`parse_enroll`]'s POSTCONDITION).
     pub entries: Vec<T>,
-    /// The `sig` member's string, where the body carried one — as it stood,
-    /// nothing decoded: what it holds is the verifier's to read (the record
-    /// grade's rule: the hybrid blob in hex).
+    /// The `sig` member's string, where the body carried one — the empty
+    /// string included, which is a `sig` and never `None`. It is the STRING
+    /// the member spells, its JSON escapes read back: the string its signer
+    /// composed, so [`canonical_record`] over the value re-spells the body.
+    /// Nothing past that is decoded: what it holds is the verifier's to read
+    /// (the record grade's rule: the hybrid blob in hex).
     pub sig: Option<String>,
 }
 

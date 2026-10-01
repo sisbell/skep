@@ -18,8 +18,8 @@ use proptest::prelude::*;
 use proptest::test_runner::FileFailurePersistence;
 use skep_address::Address;
 use skep_identity::{
-    encode_enroll, encode_retire, parse_enroll, parse_retire, Effect, Enrollment, Fingerprint,
-    IdentityState, Verdict,
+    canonical_record, encode_enroll, encode_retire, parse_enroll, parse_record_value, parse_retire,
+    Effect, Enrollment, Fingerprint, IdentityState, RecordValue, Verdict,
 };
 
 // ------------------------------------------------------------- I1 grammar
@@ -131,7 +131,11 @@ proptest! {
     /// WITHOUT a `sig` member: a no-sig admitted body re-encodes to itself, and
     /// a sig-bearing admitted body is ADMITTED (the admission ranges over the
     /// value, `sig` included) and answers the same entries, `encode_*` emitting
-    /// the sig-STRIPPED body (AUTH-2.13, AUTH-2.94, AUTH-2.130).
+    /// the sig-STRIPPED body (AUTH-2.13, AUTH-2.94, AUTH-2.130). The fold's
+    /// parsers drop the `sig`, so the value's own round trip is read through
+    /// the verifier's: `parse_record_value` answers the entries and the `sig`
+    /// the body carried — the empty one, which the generator draws, included —
+    /// and `canonical_record` over that value is the body again, `sig` and all.
     #[test]
     fn i1_encode_parse_bijection_over_the_record_value(
         entries in enrollments(),
@@ -147,6 +151,16 @@ proptest! {
             let admitted = parse_enroll(with_sig.as_bytes());
             prop_assert_eq!(&admitted, &Ok(entries.clone()), "the sig-bearing body is admitted, sig skipped");
             prop_assert_eq!(encode_enroll(&admitted.unwrap()), base.clone(), "encode emits no sig");
+            prop_assert_eq!(
+                parse_record_value::<Enrollment>(with_sig.as_bytes()),
+                Ok(RecordValue { entries: entries.clone(), sig: Some(sig.clone()) }),
+                "the verifier reads the sig the body carried"
+            );
+            prop_assert_eq!(
+                &canonical_record(&entries, Some(sig.as_str())),
+                &with_sig,
+                "the value is the body again"
+            );
         }
         // Retirement: the same, both ways.
         let base = encode_retire(&fps);
@@ -156,6 +170,16 @@ proptest! {
             let admitted = parse_retire(with_sig.as_bytes());
             prop_assert_eq!(&admitted, &Ok(fps.clone()), "the sig-bearing body is admitted, sig skipped");
             prop_assert_eq!(encode_retire(&admitted.unwrap()), base.clone(), "encode emits no sig");
+            prop_assert_eq!(
+                parse_record_value::<Fingerprint>(with_sig.as_bytes()),
+                Ok(RecordValue { entries: fps.clone(), sig: Some(sig.clone()) }),
+                "the verifier reads the sig the body carried"
+            );
+            prop_assert_eq!(
+                &canonical_record(&fps, Some(sig.as_str())),
+                &with_sig,
+                "the value is the body again"
+            );
         }
     }
 }

@@ -6,10 +6,14 @@
 use crate::common;
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 
 use common::{addr, tum};
 use skep_address::{Address, Span};
-use skep_identity::{entry_body_make_link, EntrySlot, LinkSlots};
+use skep_identity::{
+    entry_body_make_link, entry_body_publish, EntrySlot, LinkSlots, PublishBody, PublishRefusal,
+    ShotSegmentPiece,
+};
 
 /// Every sequence of at most two elements drawn from `elements` — the empty
 /// sequence, each element alone, and every ordered pair, repeats included:
@@ -74,4 +78,61 @@ fn no_two_distinct_slot_triples_spell_one_make_link_body() {
         }
     }
     assert_eq!(spelled.len(), family.len().pow(3), "every triple spelled a body of its own");
+}
+
+/// [`PublishBody`]'s budget is TIGHT, whatever piece crosses it — the
+/// builder's card: the budget bounds the FINISHED body, and a push or window
+/// refuses `PastBudget` exactly where that body would pass it. A piece's cost
+/// depends on its shape: a value OPENING a stretch pays the class byte and the
+/// count besides its length prefix, a value JOINING one its prefix and bytes
+/// alone, and a window its class byte, start and width whether or not it
+/// CLOSES a stretch, the stretch's count being written back in place. Every
+/// sequence of one or two pieces over an empty value, a value and two windows
+/// ends in each of those shapes, so the family is every crossing there is;
+/// for each, under either shape of the base-extent group, a budget of the
+/// finished body's own length takes every piece and finishes to
+/// [`entry_body_publish`]'s body, and one byte less refuses it.
+///
+/// Why a law and not a pin: the budget pins in `src/entry/tests.rs` cross
+/// their budgets with a value that opens a stretch and a window that opens
+/// the body, and skepd's wire cell with values that join a stretch. A builder
+/// that over-charged a joining value kept every pin here green, and one that
+/// over-charged a window closing a stretch kept skepd's cell green too —
+/// refusing, PERMANENT, `frame_too_large`, an honest attested publish whose
+/// body sat within its budget.
+#[test]
+fn every_publish_body_lands_exactly_on_a_budget_of_its_own_length() {
+    let (start, other) = (addr(&[1, 0, 2, 0, 1, 4]), addr(&[1, 0, 30, 0, 1, 1]));
+    let nonzero = |n: u64| NonZeroU64::new(n).expect("a window holds at least one position");
+    let alphabet = [
+        ShotSegmentPiece::Value(b""),
+        ShotSegmentPiece::Value(b"ab"),
+        ShotSegmentPiece::Window { start: &start, width: nonzero(1) },
+        ShotSegmentPiece::Window { start: &other, width: nonzero(2) },
+    ];
+    let fed = |budget: usize, base_extent: Option<u64>, pieces: &[ShotSegmentPiece<'_>]| {
+        let empty = PublishBody::within(budget, base_extent);
+        pieces.iter().try_fold(empty, |body, piece| match *piece {
+            ShotSegmentPiece::Value(value) => body.push(value),
+            ShotSegmentPiece::Window { start, width } => body.window(start, width),
+        })
+    };
+    let sequences = sequences_of(&alphabet);
+    assert_eq!(sequences.len(), 21, "the empty sequence, four alone, sixteen pairs");
+    for base_extent in [None, Some(5)] {
+        for pieces in sequences.iter().filter(|pieces| !pieces.is_empty()) {
+            let whole = entry_body_publish(pieces.iter().copied(), base_extent);
+            let budget = whole.as_bytes().len();
+            assert_eq!(
+                fed(budget, base_extent, pieces).map(PublishBody::finish),
+                Ok(whole),
+                "{pieces:?} under {base_extent:?}: exactly on its budget"
+            );
+            assert_eq!(
+                fed(budget - 1, base_extent, pieces).err(),
+                Some(PublishRefusal::PastBudget),
+                "{pieces:?} under {base_extent:?}: one byte short"
+            );
+        }
+    }
 }

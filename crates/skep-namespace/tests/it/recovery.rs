@@ -7,7 +7,8 @@ use serde::Serialize;
 use skep_address::{Level, Tumbler};
 use skep_kernel::Kernel;
 use skep_namespace::{
-    ghost_position, HasM3, M3Rec, M3State, MintError, Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL,
+    ghost_position, head_document, system_account, HasM3, M3Rec, M3State, MintError, Namespace,
+    PrincipalId, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL,
 };
 use tempfile::tempdir;
 
@@ -76,6 +77,49 @@ fn a_non_node_entry_in_the_node_registry_is_unreachable() {
         s.mint_content(&doc).unwrap_err(),
         MintError::HomeNotRegistered
     );
+}
+
+/// O12/O13: a seat is written ONCE. A second `RegisterPrincipal` naming a
+/// seated prefix is a transition no op makes — `delegate` seats only a fresh
+/// prefix — and no record door can refuse it, since whether a prefix is
+/// seated is a claim about the registry and not about the frame. So the fold
+/// answers it: the first seat stands, and `principal_prefix` stays the
+/// value-stable read its doc promises. The system account is the case worth
+/// naming: its seat makes `SYSTEM_PRINCIPAL` ω of the head document `H`, so a
+/// frame that replaced it would hand every published head to another
+/// principal. There is no `debug_assert` in this arm, so the fold reaches the
+/// guard on both build profiles.
+#[test]
+fn a_replayed_seat_never_replaces_a_seated_principal() {
+    let s = M3State::genesis().apply_m3(&M3Rec::RegisterPrincipal {
+        prefix: system_account(),
+        id: ID1,
+    });
+    assert_eq!(s.effective_owner(&head_document()), Some(SYSTEM_PRINCIPAL));
+    assert_eq!(
+        s.principal_prefix(SYSTEM_PRINCIPAL),
+        Some(&system_account())
+    );
+    assert!(
+        s.principal_prefix(ID1).is_none(),
+        "the replacing id is seated nowhere"
+    );
+    assert_eq!(s, M3State::genesis(), "the frame changed nothing");
+
+    // …and an account `delegate` seated, the same.
+    let acct = a(&[1, 0, 1]);
+    let seat = |id| M3Rec::RegisterPrincipal {
+        prefix: acct.clone(),
+        id,
+    };
+    let seated = M3State::genesis()
+        .apply_m3(&alloc(&[1, 0, 1]))
+        .apply_m3(&seat(ID1));
+    let replayed = seated.apply_m3(&seat(ID2));
+    assert_eq!(replayed.effective_owner(&acct), Some(ID1));
+    assert_eq!(replayed.principal_prefix(ID1), Some(&acct));
+    assert!(replayed.principal_prefix(ID2).is_none());
+    assert_eq!(replayed, seated);
 }
 
 // ---- serde / recovery ----

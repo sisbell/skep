@@ -120,7 +120,9 @@ pub enum M3Rec {
     },
     /// External node admission (ASN-0047 NodeBaptism; §7).
     RegisterNode { addr: Address },
-    /// Delegation's principal half (§6).
+    /// Delegation's principal half (§6). Written once: the fold leaves an
+    /// already-seated prefix's principal alone (O12/O13), so no later record
+    /// replaces a seat.
     RegisterPrincipal {
         #[serde(deserialize_with = "account_tier_prefix")]
         prefix: Address,
@@ -285,8 +287,16 @@ pub struct M3State {
     /// KEY and is filed nowhere else, so a principal cannot be seated at one
     /// prefix and claim another — [`M3State::effective_owner`] arbitrates by
     /// the key and [`M3State::principal_prefix`] answers with it, and the two
-    /// read one value. Small (node/account tier only, O1a). Append-only with
-    /// immutable prefixes (O12/O13).
+    /// read one value. Append-only with immutable prefixes (O12/O13), which
+    /// the fold makes structural: it writes a seat only where none is held
+    /// ([`M3State::apply_m3`]).
+    ///
+    /// Nothing in M3 bounds its SIZE. O1a bounds a seat's tier, not how many
+    /// seats there are: every account holder is ω of its own sub-account
+    /// chain, so one holder can seat principals without limit, one durable
+    /// delegation each, and every ω call and every by-id scan walks them all
+    /// (the private walk `omega` states the cost;
+    /// [`crate::Namespace::delegate`] names whose bound the count is).
     ///
     /// Three standing properties, and they hold by three different means:
     ///
@@ -614,12 +624,20 @@ impl M3State {
     /// (`account_tier_prefix`) admits an account-tier prefix and nothing
     /// else, which is what `delegate` stages and what ω's
     /// O1a filter cannot refuse on its own (node tier is a pass there, for
-    /// π₀'s sake). Id-injectivity is the fact that arm has no gate for, and
-    /// that is deliberate rather than missing: one id ↦ at most one
-    /// principal is a PRODUCER invariant, owned by `delegate`'s
-    /// `DuplicateId` gate alone; the fold neither re-checks nor re-establishes
-    /// it, and could not, since the property is about the whole principal
-    /// registry and a fold arm sees one record. What rests on it is
+    /// π₀'s sake). A seat is WRITTEN ONCE, like a document's bit: a
+    /// `RegisterPrincipal` naming a prefix already seated leaves the seated
+    /// principal alone (O12/O13 — principals persist and prefixes are
+    /// immutable; no op re-seats, since `delegate` seats only a fresh
+    /// prefix). Whether a prefix is seated is a claim about the registry,
+    /// which no door holding one frame can settle, so the fold answers it at
+    /// one lookup, on every build. Id-injectivity is the fact that arm does
+    /// NOT check, and that is deliberate rather than missing: one id ↦ at
+    /// most one principal is a PRODUCER invariant, owned by `delegate`'s
+    /// `DuplicateId` gate alone. The fold could check it — an arm sees the
+    /// whole slice — but Π is keyed by prefix, so the check is a Θ(|Π|) scan
+    /// per replayed seat, making replay of N delegations Θ(N²); and it has no
+    /// fail-safe direction, since skipping the seat would leave the account
+    /// its transaction allocated unseated. What rests on it is
     /// [`M3State::principal_prefix`]'s single-valuedness, and through it
     /// `fork`'s account and M5's cross-owner VERSION target: a
     /// `RegisterPrincipal` from any producer but `delegate` would seat a
@@ -673,7 +691,14 @@ impl M3State {
                 s.nodes.insert(addr.clone());
             }
             M3Rec::RegisterPrincipal { prefix, id } => {
-                s.principals.insert(prefix.clone(), *id);
+                // WRITTEN ONCE, like a document's bit: a seat is never
+                // replaced (O12/O13), and no op re-seats one — `delegate`
+                // seats only a fresh prefix. Whether a prefix is seated is a
+                // claim about the registry, which no record door can settle,
+                // so it is answered here, at one lookup: the first seat stands.
+                if !s.principals.contains_key(prefix) {
+                    s.principals.insert(prefix.clone(), *id);
+                }
             }
         }
         s

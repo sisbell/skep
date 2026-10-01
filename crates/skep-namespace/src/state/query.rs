@@ -254,14 +254,23 @@ impl M3State {
     /// at every length, and rebuilding each one clones its components), while
     /// `create_new_document` and `delegate` both evaluate ω in-closure under
     /// the held global `M3State::principals_lock_key`. Here the work is
-    /// `Σ_{p ∈ Π} |p|` component comparisons and no allocation: to enlarge it
-    /// an attacker must first commit durable, ω-gated, next-form-gated
-    /// delegations, one journal record per principal. So a deep probe costs no
-    /// more than a shallow one, and neither costs O(#allocated). The shape is
-    /// per CALL, though, so a caller that takes one ω per entry of a walk pays
-    /// the PRODUCT — an index built that way over [`M3State::documents`] costs
+    /// `Σ_{p ∈ Π} |p|` component comparisons and no allocation, so a deep
+    /// probe costs no more than a shallow one and neither costs O(#allocated).
+    ///
+    /// But the walk visits EVERY seat, and the gates that admit a seat do not
+    /// bound how many there are. Every account holder is ω of its own
+    /// sub-account chain, and a session as an account that holds no keys of
+    /// its own opens with the keys of the nearest keyed account above it
+    /// (AUTH-4.30 (i)), so ONE key holder can seat principals in breadth and
+    /// in depth — one durable delegation each, with no other party's consent,
+    /// and permanently (O12). The walk is therefore Θ(|Π|) per call, with |Π|
+    /// a number any key holder can raise, and a reader that takes ω per
+    /// request pays it per request; nothing in M3 bounds |Π|
+    /// ([`crate::Namespace::delegate`] names whose bound it is). And the cost
+    /// is per CALL, so a caller that takes one ω per entry of a walk pays the
+    /// PRODUCT — an index built that way over [`M3State::documents`] costs
     /// Θ(entries · |Π|) each time it is built — and the `principals`
-    /// range-walk upgrade is where that lands.
+    /// range-walk upgrade is where both land.
     ///
     /// The tier filter is O1a, and it is a refusal rather than an
     /// optimisation. O1a is a producer invariant (genesis plus `delegate`'s
@@ -294,10 +303,11 @@ impl M3State {
     ///
     /// COST — one walk of Π: `Σ_{p ∈ Π} |p|` component comparisons and no
     /// allocation, however deep `a` is, so a probe a caller made deep costs
-    /// no more than a shallow one; the bound is per CALL, so one ω per entry
-    /// of a walk pays the product. A seat below the account tier —
-    /// representable only off a corrupted checkpoint — is never the answer
-    /// (O1a).
+    /// no more than a shallow one — but every call is Θ(|Π|), and |Π| is a
+    /// number any account holder can raise (`omega` says how); the bound is
+    /// per CALL, so one ω per entry of a walk pays the product. A seat below
+    /// the account tier — representable only off a corrupted checkpoint — is
+    /// never the answer (O1a).
     ///
     /// For WHETHER a given id owns `a` — the authorization question — ask
     /// [`M3State::is_effective_owner`], which settles it without naming the
@@ -313,8 +323,8 @@ impl M3State {
     /// would otherwise write, `principal_prefix(effective_owner(a))`, is two
     /// scans and is the same answer only while Π is id-injective, which is a
     /// PRODUCER invariant (`delegate`'s `DuplicateId` gate) that
-    /// [`M3State::apply_m3`] neither re-checks nor could. Here the prefix IS
-    /// the entry ω matched, so the two cannot come apart.
+    /// [`M3State::apply_m3`] does not re-check. Here the prefix IS the entry ω
+    /// matched, so the two cannot come apart.
     pub fn effective_owner_prefix(&self, a: &Address) -> Option<&Address> {
         self.omega(a).map(|(prefix, _)| prefix)
     }
@@ -361,15 +371,16 @@ impl M3State {
 
     /// `pfx(id)` — the projection the id-centric ops (`fork`, `delegate`) and
     /// the M5→M3 cross-owner-VERSION seam need, since `principals` is keyed by
-    /// PREFIX, not id: an O(|Π|) scan, not a point lookup (the §5 scan). The
-    /// answer is the registry's own key, so the prefix a principal is seated
-    /// at and the prefix it is reported at are one value. Π is account/node-
-    /// tier only (O1a), hence small per node. SINGLE-VALUED because `delegate`
-    /// enforces id-freshness (`DuplicateId`), so at most one principal carries
-    /// any id (§5/§6). Value-stable across snapshots: prefixes are immutable
-    /// (O13) and principals persist (O12) — so a caller that needs the prefix
-    /// as a value says `.cloned()`, and one that only probes or forwards it
-    /// pays nothing.
+    /// PREFIX, not id: an O(|Π|) scan, not a point lookup (the §5 scan) — and
+    /// |Π| is unbounded, since O1a bounds a seat's tier and not how many seats
+    /// one holder can create (`omega`). The answer is the registry's own key,
+    /// so the prefix a principal is seated at and the prefix it is reported
+    /// at are one value. SINGLE-VALUED because `delegate` enforces
+    /// id-freshness (`DuplicateId`), so at most one principal carries any id
+    /// (§5/§6). Value-stable across snapshots: prefixes are immutable (O13)
+    /// and principals persist (O12), and the fold writes a seat only where
+    /// none is held — so a caller that needs the prefix as a value says
+    /// `.cloned()`, and one that only probes or forwards it pays nothing.
     pub fn principal_prefix(&self, id: PrincipalId) -> Option<&Address> {
         self.principals
             .iter()

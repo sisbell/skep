@@ -151,7 +151,17 @@ where
     /// here or nowhere (see [`MAX_PRINCIPAL_COMPONENTS`]). It is placed ahead
     /// of `parent()` and the lock key deliberately: an oversized prefix must
     /// cost neither the full-depth clone nor the encoding nor the
-    /// transaction. How MANY delegations a session may make is the daemon's.
+    /// transaction.
+    ///
+    /// The COUNT is bounded nowhere in M3: the gate admits every fresh,
+    /// next-form prefix its delegator is ω of, and every account holder is ω
+    /// of its own sub-account chain, so one holder seats principals without
+    /// limit — and every ω call walks all of them
+    /// ([`M3State::effective_owner`] states the cost). How many delegations
+    /// one key holder may make is the daemon's to bound, and the unit is the
+    /// opening key set rather than the session, since one holder opens
+    /// sessions at will — as itself and, by AUTH-4.30 (i), as every keyless
+    /// account it seats.
     ///
     /// Rejection order is PINNED (§6) and is [`DelegateError`]'s declaration
     /// order, which states it. Obtain the required next-form `new_prefix`

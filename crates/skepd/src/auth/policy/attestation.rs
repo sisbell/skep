@@ -69,7 +69,10 @@ use crate::World;
 ///    `attestation_invalid:frame_too_large` before it is built past the
 ///    budget; a term the frame cannot spell — a width, an extent or a count
 ///    past 2^64 − 1 — passes UNATTESTED to the store's refusal of the shot
-///    (`base_extent_too_large`, `too_many_values`, `dangling_source`); a
+///    (`base_extent_too_large`, `too_many_values`, `dangling_source`); a shot
+///    whose staging-draft runs re-insert more values than M5's
+///    `MAX_REINSERTED_VALUES` passes UNATTESTED to the store's
+///    `too_many_values`, its values never walked; a
 ///    board with no `H.1` — the states [`crate::write_path::board_term`]
 ///    names — answers `attestation_invalid:board_unavailable`, never "carry
 ///    an attest"; a principal with no account answers
@@ -90,9 +93,11 @@ use crate::World;
 ///
 /// The entry frame the daemon composes for a `publish` reads the COPIED
 /// runs' values off the snapshot by `value_at` — a second Σ-width walk per
-/// attested shot, off the snapshot and not under the applier lock (the
-/// investigation §3.3's price), stopped at the body's budget; a window is
-/// spelled by address and read from nowhere (l6-A4). It reads a value only
+/// attested shot, off the snapshot and not under M2's applier lock but under
+/// the daemon's serialization lock (the investigation §3.3's price), stopped
+/// at the body's budget — and over the staging draft's runs, before it
+/// starts, at the store's own re-insert budget; a window is spelled by
+/// address and read from nowhere (l6-A4). It reads a value only
 /// where the principal may read it: this check's verdict is answered to the
 /// principal, so a value read on its behalf is a value disclosed to it, and
 /// every refusal it gives a shot with an unreadable copied run is the same
@@ -140,9 +145,14 @@ pub(super) fn attestation_check(
         }
         Err(ComposeFault::OverBudget) => return Err(invalid(AttestFault::FrameTooLarge)),
         // A shot the store refuses whatever it carries: the walk finds no
-        // value, or a term names what no store holds. The store's own answer
-        // is owed, so the write passes through UNATTESTED to it.
-        Err(ComposeFault::MissingValue | ComposeFault::Unspellable) => return Ok(None),
+        // value, a term names what no store holds, or the staging draft's runs
+        // pass the store's re-insert budget. The store's own answer is owed,
+        // so the write passes through UNATTESTED to it.
+        Err(
+            ComposeFault::MissingValue
+            | ComposeFault::Unspellable
+            | ComposeFault::PastReinsertBudget,
+        ) => return Ok(None),
     };
     // 5 — (1).
     let Some(presented) = presented else {

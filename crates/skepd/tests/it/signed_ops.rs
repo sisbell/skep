@@ -904,6 +904,57 @@ fn a_term_past_the_frames_eight_bytes_passes_unattested_to_the_stores_refusal() 
     assert_eq!(head_position(port), before, "nothing committed");
 }
 
+/// A SHOT PAST THE STORE'S RE-INSERT BUDGET IS NEVER WALKED (the check's doc
+/// item 4; `ComposeFault::PastReinsertBudget`): M5 refuses a shot whose
+/// staging-draft runs re-insert more than `MAX_REINSERTED_VALUES` values by
+/// request arithmetic before it probes an address, so the check reads none
+/// of them and the shot passes UNATTESTED to the store's own
+/// `too_many_values` — attached or not, nothing committed. Every value the
+/// runs name exists, so a check walking past the budget would compose the
+/// body and answer `attestation_required` instead. AT the budget the shot is
+/// one the store admits: its values are walked and its attest demanded — a
+/// check that refused it here would pass it through UNATTESTED, and the store
+/// would commit it with its marker slot empty. The runs repeat one stretch of
+/// the draft, as a run list may, so a draft of a thousand values carries a
+/// shot of a hundred and thirty thousand.
+#[test]
+fn a_shot_past_the_stores_re_insert_budget_passes_unattested_to_its_refusal() {
+    let budget = skep_arrangement::MAX_REINSERTED_VALUES as u64;
+    let stretch = 1024u64;
+    assert_eq!(budget % stretch, 0, "the stretch divides the budget");
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_owner_session(port);
+    let d = draft_with(port, &signed, &"x".repeat(stretch as usize));
+    let first = format!("{d}.0.1.1");
+    // `count` draft-native values: the stretch, again and again, then a tail.
+    let shot = |count: u64| {
+        let mut runs = vec![run(&d, &first, stretch); (count / stretch) as usize];
+        if count % stretch > 0 {
+            runs.push(run(&d, &first, count % stretch));
+        }
+        publish_frame(CLAIMANT_DOC1, Some((CLAIMANT_DOC1, 1)), Some(&d), &runs)
+    };
+    let store = ("too_many_values".to_string(), "permanent".to_string());
+    let before = head_position(port);
+
+    let past = shot(budget + 1);
+    assert_eq!(refusal(&op_unattested(port, Some(&signed), &past)), store, "unattested");
+    let values = vec![&b"x"[..]; budget as usize + 1];
+    assert_eq!(
+        refusal(&op_with_publish_values(port, &signed, &past, &values)),
+        store,
+        "attested: no signature changes the store's answer"
+    );
+    assert_eq!(
+        refusal(&op_unattested(port, Some(&signed), &shot(budget))),
+        ("credential_refused:attestation_required".to_string(), "reorder".to_string()),
+        "at the budget the values are walked and the attest demanded"
+    );
+    assert_eq!(head_position(port), before, "nothing committed");
+}
+
 /// A3 as the wire sees it: the head writer's own commits — the system
 /// account's — never pass dispatch, so they never reach the check: they land
 /// UNSIGNED, their slots empty, before and after an attested write whose slot

@@ -57,7 +57,7 @@
 //! omitted whatever put it forward.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
@@ -137,48 +137,64 @@ pub(super) struct LineFile {
     stopped: bool,
 }
 
-/// The ENTRIES a line file replays — its position-carrying records,
-/// `(position, the record's object)`, in file order. A fence carries no
-/// position and so is not one of these; it is folded into the coverage.
+/// The ENTRIES a line file replays — the position-carrying records its
+/// caller KEEPS, `(position, the record's object)`, in file order. A fence
+/// carries no position and so is not one of these; it is folded into the
+/// coverage.
 pub(super) type Entries = Vec<(u64, Map<String, Value>)>;
 
 impl LineFile {
-    /// Replay `name` in `dir`: truncate a torn tail, drop what describes
-    /// another journal (rewriting the file without it), and hand back the
-    /// entries at or below `head` with the file's coverage.
-    pub fn open(dir: &Path, name: &'static str, head: u64) -> io::Result<(LineFile, Entries)> {
+    /// Replay `name` in `dir` a line at a time: truncate a torn tail, drop
+    /// what describes another journal (rewriting the file without it), and
+    /// hand back the entries at or below `head` that `keep` admits, with the
+    /// file's coverage — which counts every trusted line, kept or not.
+    ///
+    /// The scan holds one line and the kept entries, never the file. The
+    /// attest store's file is NEVER COMPACTED (`attest.rs`), so a replay that
+    /// held every line would hold the store's whole history at every open —
+    /// order twice the file, a line for every attested commit the board ever
+    /// made — and the open that cannot afford it is the restart a crash leaves.
+    pub fn open(
+        dir: &Path,
+        name: &'static str,
+        head: u64,
+        keep: impl Fn(u64) -> bool,
+    ) -> io::Result<(LineFile, Entries)> {
         let path = dir.join(name);
-        let mut file = OpenOptions::new().create(true).read(true).append(true).open(&path)?;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
-        let (records, valid_end) = parse_records(&bytes);
-        if valid_end < bytes.len() {
-            file.set_len(valid_end as u64)?;
-        }
+        let file = OpenOptions::new().create(true).read(true).append(true).open(&path)?;
         let mut coverage = 0u64;
         let mut entries = Vec::new();
         let mut foreign = false;
-        for record in records {
+        let mut valid_end = 0u64;
+        let mut reader = BufReader::new(&file);
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            let read = reader.read_until(b'\n', &mut line)?;
+            // Trust ends at the first line that is torn — no newline, the end
+            // of the file included — or does not parse.
+            let Some(record) = line.strip_suffix(b"\n").and_then(parse_line) else { break };
+            valid_end += read as u64;
             match record {
                 Record::Fence(n) if n <= head => coverage = coverage.max(n),
                 Record::Entry(at, m) if at <= head => {
                     coverage = coverage.max(at);
-                    entries.push((at, m));
+                    if keep(at) {
+                        entries.push((at, m));
+                    }
                 }
                 Record::Fence(_) | Record::Entry(..) => foreign = true,
             }
+        }
+        drop(reader);
+        if valid_end < file.metadata()?.len() {
+            file.set_len(valid_end)?;
         }
         let mut this =
             LineFile { file, dir: dir.to_path_buf(), name, coverage, stopped: false };
         if foreign {
             // Purge what is not this journal's, once, so it cannot come back.
-            let kept = entries
-                .iter()
-                .map(|(at, m)| {
-                    replayed_record_object(*at, m.iter().map(|(k, v)| (k.clone(), v.clone())))
-                })
-                .collect();
-            this.rewrite(kept, coverage)?;
+            this.purge_foreign(head)?;
         }
         Ok((this, entries))
     }
@@ -257,10 +273,10 @@ impl LineFile {
     }
 
     /// Rewrite the whole file as `records` behind a fence at `covered`,
-    /// through a temp file renamed over the original (compaction, and the
-    /// purge of a foreign fence). `records` are whole record objects already
-    /// carrying their `at`; [`super::super::sidecar::line_bytes`] is what makes each
-    /// a line.
+    /// through a temp file renamed over the original (the open's compaction
+    /// from the twins). `records` are whole record objects already carrying
+    /// their `at`; [`super::super::sidecar::line_bytes`] is what makes each a
+    /// line.
     pub fn rewrite(&mut self, records: Vec<Value>, covered: u64) -> io::Result<()> {
         let path = self.dir.join(self.name);
         let tmp = self.dir.join(format!("{}.compact", self.name));
@@ -278,6 +294,37 @@ impl LineFile {
         self.coverage = covered;
         Ok(())
     }
+
+    /// Rewrite the file without another journal's lines — every ENTRY line
+    /// at or below `head` copied VERBATIM, in file order, then one fence at
+    /// the coverage — through `<file>.compact` renamed over the original, a
+    /// line at a time as [`LineFile::open`]'s scan is. A line is copied
+    /// whether or not a caller kept it: in the attest store a line no caller
+    /// keeps lies below the floor and is an entry signature's only copy, so
+    /// its bytes are moved and never re-rendered. The file is already cut at
+    /// its trusted end, so every line read here is whole.
+    fn purge_foreign(&mut self, head: u64) -> io::Result<()> {
+        let path = self.dir.join(self.name);
+        let tmp = self.dir.join(format!("{}.compact", self.name));
+        let mut out = BufWriter::new(File::create(&tmp)?);
+        let mut reader = BufReader::new(File::open(&path)?);
+        let mut line = Vec::new();
+        while reader.read_until(b'\n', &mut line)? > 0 {
+            if let Some(Record::Entry(at, _)) = line.strip_suffix(b"\n").and_then(parse_line) {
+                if at <= head {
+                    out.write_all(&line)?;
+                }
+            }
+            line.clear();
+        }
+        out.write_all(&fence_line(self.coverage))?;
+        let f = out.into_inner().map_err(io::IntoInnerError::into_error)?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, &path)?;
+        self.file = OpenOptions::new().create(true).read(true).append(true).open(&path)?;
+        Ok(())
+    }
 }
 
 /// One record object for `at` from its fields — THE shape every line of a
@@ -291,46 +338,12 @@ pub(super) fn record_object(at: u64, fields: Vec<(&'static str, Value)>) -> Valu
     obj(pairs)
 }
 
-/// The record object of one REPLAYED record, re-sorted —
-/// [`LineFile::open`]'s purge alone, whose keys are owned because they
-/// came off disk. Every other caller holds `&'static str` keys and goes
-/// through [`record_object`], of which this is the owned-key twin.
-fn replayed_record_object(at: u64, fields: impl IntoIterator<Item = (String, Value)>) -> Value {
-    // Sorted by key — the codec's own device for `&'static str` keys, done
-    // here for owned ones — so a rewritten line is byte-identical to an
-    // appended one whatever backs serde_json's map.
-    let mut sorted: std::collections::BTreeMap<String, Value> = fields.into_iter().collect();
-    sorted.insert("at".to_string(), Value::Number(at.into()));
-    let mut m = Map::new();
-    for (k, v) in sorted {
-        m.insert(k, v);
-    }
-    Value::Object(m)
-}
-
 fn fence_line(covered: u64) -> Vec<u8> {
     line_bytes(obj(vec![("covered", Value::Number(covered.into()))]))
 }
 
-/// The records of every whole newline-terminated line; trust ends at the
-/// first line that is torn or does not parse. Returns those records and the
-/// byte offset after the last whole line.
-fn parse_records(bytes: &[u8]) -> (Vec<Record>, usize) {
-    let mut out = Vec::new();
-    let mut pos = 0;
-    while pos < bytes.len() {
-        let Some(nl) = bytes[pos..].iter().position(|&b| b == b'\n') else { break };
-        match parse_line(&bytes[pos..pos + nl]) {
-            Some(record) => out.push(record),
-            None => break,
-        }
-        pos += nl + 1;
-    }
-    (out, pos)
-}
-
-/// One line's record: a fence, or an entry with a position. Anything else is
-/// torn.
+/// One line's record — the line without its newline: a fence, or an entry
+/// with a position. Anything else is torn.
 fn parse_line(line: &[u8]) -> Option<Record> {
     let v: Value = serde_json::from_slice(line).ok()?;
     let Value::Object(m) = v else { return None };
@@ -370,7 +383,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let head = 20;
         {
-            let (mut f, replayed) = LineFile::open(dir.path(), MASKED_FILE, head).expect("open");
+            let (mut f, replayed) =
+                LineFile::open(dir.path(), MASKED_FILE, head, |_| true).expect("open");
             assert!(replayed.is_empty());
             assert_eq!(f.coverage(), 0);
             f.append(3, vec![]).expect("append");
@@ -390,7 +404,8 @@ mod tests {
         );
         // A torn tail: truncated at open, coverage unaffected by it.
         std::fs::write(&path, format!("{contents}{{\"at\":11,\"do")).expect("tear");
-        let (f, replayed) = LineFile::open(dir.path(), MASKED_FILE, head).expect("reopen");
+        let (f, replayed) =
+            LineFile::open(dir.path(), MASKED_FILE, head, |_| true).expect("reopen");
         assert_eq!(replayed.iter().map(|(at, _)| *at).collect::<Vec<_>>(), vec![3, 7]);
         assert_eq!(f.coverage(), 9);
         assert_eq!(std::fs::read_to_string(&path).expect("read"), contents, "the tail is cut");
@@ -399,19 +414,53 @@ mod tests {
         // and purged from the file.
         std::fs::write(&path, format!("{contents}{{\"at\":99}}\n{{\"covered\":999}}\n"))
             .expect("foreign lines");
-        let (f, replayed) = LineFile::open(dir.path(), MASKED_FILE, head).expect("reopen");
+        let (f, replayed) =
+            LineFile::open(dir.path(), MASKED_FILE, head, |_| true).expect("reopen");
         assert_eq!(replayed.iter().map(|(at, _)| *at).collect::<Vec<_>>(), vec![3, 7]);
         assert_eq!(f.coverage(), 9, "a foreign fence does not raise coverage");
         let purged = std::fs::read_to_string(&path).expect("read");
         assert!(!purged.contains("99"), "the foreign lines are gone: {purged}");
-        // Byte-identical to the file the APPENDS wrote: the rewrite fences at
-        // the coverage, and a rewritten record line reproduces the appended
-        // one exactly. That equality is the whole coupling between the two
-        // directions — [`record_object`] makes it structural for every
-        // rewrite holding its own field names, and this purge is the one
-        // rewrite that cannot (its keys came off disk), so the two spellings
-        // are held together here or nowhere.
-        assert_eq!(purged, contents, "a rewritten line is the appended line");
+        // Byte-identical to the file the APPENDS wrote: the purge copies this
+        // journal's entry lines verbatim, drops every fence, and fences once
+        // at the coverage.
+        assert_eq!(purged, contents, "a purged file keeps this journal's lines as written");
+    }
+
+    /// A replay HOLDS only the entries its caller keeps — the attest store's
+    /// file is never compacted, so a replay holding every line would hold its
+    /// whole history at every open — while coverage still counts every
+    /// trusted line; and a foreign purge keeps every entry line of THIS
+    /// journal, verbatim, kept or not: in the attest store a line no caller
+    /// keeps lies below the floor and is an entry signature's only copy.
+    #[test]
+    fn a_replay_holds_only_what_its_caller_keeps_and_a_purge_drops_only_the_foreign() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        {
+            let (mut f, _) =
+                LineFile::open(dir.path(), MASKED_FILE, 20, |_| true).expect("open");
+            for at in [3, 7, 9] {
+                f.append(at, vec![]).expect("append");
+            }
+        }
+        let path = dir.path().join(MASKED_FILE);
+        let ours = std::fs::read_to_string(&path).expect("read");
+        let held = |entries: &Entries| entries.iter().map(|(at, _)| *at).collect::<Vec<_>>();
+        let (f, entries) =
+            LineFile::open(dir.path(), MASKED_FILE, 20, |at| at == 7).expect("reopen");
+        assert_eq!(held(&entries), [7], "only the kept entry is held");
+        assert_eq!(f.coverage(), 9, "coverage counts the lines no caller kept");
+        drop(f);
+        let unmoved = std::fs::read_to_string(&path).expect("read");
+        assert_eq!(unmoved, ours, "a replay with nothing to purge writes nothing");
+        std::fs::write(&path, format!("{ours}{{\"at\":99}}\n")).expect("a foreign line");
+        let (f, entries) =
+            LineFile::open(dir.path(), MASKED_FILE, 20, |at| at == 7).expect("purge");
+        assert_eq!((held(&entries), f.coverage()), (vec![7], 9));
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            format!("{ours}{{\"covered\":9}}\n"),
+            "the foreign line is gone, and 3 and 9, which no caller kept, survive verbatim"
+        );
     }
 
     /// A file whose append FAILS takes nothing further, so its on-disk
@@ -449,7 +498,8 @@ mod tests {
         // What the next open therefore sees: coverage 9, so its tail
         // derivation re-covers 10 and everything above it.
         drop(f);
-        let (reopened, entries) = LineFile::open(dir.path(), INDEX_FILE, 20).expect("reopen");
+        let (reopened, entries) =
+            LineFile::open(dir.path(), INDEX_FILE, 20, |_| true).expect("reopen");
         assert!(entries.is_empty());
         assert_eq!(reopened.coverage(), 0, "an empty file claims nothing");
     }

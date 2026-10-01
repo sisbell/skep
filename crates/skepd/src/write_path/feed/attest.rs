@@ -28,11 +28,13 @@
 //!
 //! What keeps the class is this card's privacy: [`AttestStore`]'s file is its
 //! own, and nothing rewrites it but [`LineFile::open`]'s purge of the lines
-//! above the head — another journal's — so no other card can compact it.
+//! above the head — another journal's — which copies every line of this
+//! journal verbatim, so no other card can compact it.
 
 use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
+use std::sync::Arc;
 
 use serde_json::{Map, Value};
 use skep_engine::Engine;
@@ -55,21 +57,26 @@ const ATTEST_ALG: &str = "alg";
 const ATTEST_SIG: &str = "sig";
 
 /// THE ATTEST STORE: its file, and the slots of the positions `commits.log`
-/// serves — resident at one blob (~3.4 KB under tag 1) per attested retained
-/// commit. The FILE holds more: every line ever appended, the positions the
-/// log compacted away included, where the store is primary state.
+/// serves — resident at one blob (~3.4 KB under tag 1) per attested position
+/// it serves: the retained window at open, then every attested commit this
+/// uptime records — nothing prunes it before the next open. The FILE holds
+/// more: every line ever appended, the positions the log compacted away
+/// included, where the store is primary state.
 pub(super) struct AttestStore {
     /// `feed-attest.log`: appended, replayed and fenced, and never compacted.
     file: LineFile,
-    /// Position → the marker slot, for the served positions.
-    served: BTreeMap<u64, Attestation>,
+    /// Position → the marker slot, for the served positions — behind an
+    /// `Arc`, so a page rendered after the feed's lock is released
+    /// ([`super::Feed::page`]) clones a pointer, never a signature.
+    served: BTreeMap<u64, Arc<Attestation>>,
 }
 
 impl AttestStore {
     /// Open the store beside the replayed `log`: replay every line at or
-    /// below the head and hold resident the SERVED window alone — the lines
-    /// below the log's fence stay in the FILE, untouched — then rebuild the
-    /// missing tail from the journal's markers, then fence at the head.
+    /// below the head, a line at a time, holding resident the SERVED window
+    /// alone — the lines below the log's fence are read past and stay in the
+    /// FILE, untouched — then rebuild the missing tail from the journal's
+    /// markers, then fence at the head.
     ///
     /// A line this daemon cannot read (a tag of no signature, a blob of none,
     /// hex it did not write) is reported and not held: the row then renders
@@ -82,22 +89,22 @@ impl AttestStore {
     /// nothing, and the fence still closes over it: the journal will not
     /// answer it on a later open either, and the row's own line says LOST.
     ///
-    /// COST: O(the file) to replay it, and one `Kernel::attestation_at` — a
-    /// bounded journal scan from the base below the position — per uncovered
-    /// retained position, so a lost store is O(retained window × scan) at the
-    /// open that rebuilds it. Never a compaction: the store keeps what the log
-    /// drops.
+    /// COST: O(the file) to READ it, a line at a time — holding one line and
+    /// the served window, never the file, which keeps a line for every
+    /// attested commit the board ever made — and one `Kernel::attestation_at`
+    /// — a bounded journal scan from the base below the position — per
+    /// uncovered retained position, so a lost store is O(retained window ×
+    /// scan) at the open that rebuilds it. Never a compaction: the store keeps
+    /// what the log drops.
     pub(super) fn open(dir: &Path, engine: &Engine, log: &CommitsLog) -> io::Result<AttestStore> {
         let head = log.open_head();
-        let (mut file, lines) = LineFile::open(dir, ATTEST_FILE, head)?;
+        let served_only = |at: u64| log.entries().contains_key(&at);
+        let (mut file, lines) = LineFile::open(dir, ATTEST_FILE, head, served_only)?;
         let mut served = BTreeMap::new();
         for (at, m) in &lines {
-            if !log.entries().contains_key(at) {
-                continue;
-            }
             match attest_of_record(m) {
                 Some(slot) => {
-                    served.insert(*at, slot);
+                    served.insert(*at, Arc::new(slot));
                 }
                 None => crate::notice::line(format_args!(
                     "{ATTEST_FILE} position {at} carries a slot this daemon cannot read"
@@ -107,7 +114,7 @@ impl AttestStore {
         for (&at, _) in log.entries().range(file.first_uncovered()..) {
             if let Ok(Some(slot)) = engine.kernel().attestation_at(Seq(at)) {
                 file.append(at, attest_fields(&slot))?;
-                served.insert(at, slot);
+                served.insert(at, Arc::new(slot));
             }
         }
         file.fence(head)?;
@@ -121,14 +128,15 @@ impl AttestStore {
     /// serves the slot, and the next open rebuilds it from the journal.
     pub(super) fn record(&mut self, at: u64, slot: Attestation) {
         self.file.append_or_report(at, attest_fields(&slot));
-        self.served.insert(at, slot);
+        self.served.insert(at, Arc::new(slot));
     }
 
     /// The slot the store holds for a served position — `None` where it holds
     /// none, which `CommitMeta::entry` renders `null` where the position's
-    /// line records the marker filled (LOST) and absent otherwise.
-    pub(super) fn slot(&self, at: u64) -> Option<&Attestation> {
-        self.served.get(&at)
+    /// line records the marker filled (LOST) and absent otherwise. A pointer,
+    /// cloned: the page that asks renders it after the feed's lock is gone.
+    pub(super) fn slot(&self, at: u64) -> Option<Arc<Attestation>> {
+        self.served.get(&at).cloned()
     }
 }
 
@@ -170,14 +178,15 @@ mod tests {
         let slot = Attestation::new(1, vec![0xab, 0x01]).expect("tag 1 and a non-empty blob");
         {
             let (file, lines) =
-                LineFile::open(dir.path(), ATTEST_FILE, 9).expect("a fresh store opens");
+                LineFile::open(dir.path(), ATTEST_FILE, 9, |_| true).expect("a fresh store opens");
             assert!(lines.is_empty());
             let mut store = AttestStore { file, served: BTreeMap::new() };
             store.record(5, slot.clone());
-            assert_eq!(store.slot(5), Some(&slot), "served at once");
-            assert_eq!(store.slot(4), None, "and only where recorded");
+            assert_eq!(store.slot(5).as_deref(), Some(&slot), "served at once");
+            assert_eq!(store.slot(4).as_deref(), None, "and only where recorded");
         }
-        let (_file, lines) = LineFile::open(dir.path(), ATTEST_FILE, 9).expect("reopen");
+        let (_file, lines) =
+            LineFile::open(dir.path(), ATTEST_FILE, 9, |_| true).expect("reopen");
         let replayed: Vec<(u64, Option<Attestation>)> =
             lines.iter().map(|(at, m)| (*at, attest_of_record(m))).collect();
         assert_eq!(replayed, [(5, Some(slot))], "the line replays as the slot it mirrors");

@@ -396,10 +396,14 @@ impl Feed {
         let snap = engine.kernel().snapshot();
         let world = snap.world();
 
-        let (mut f_index, index_entries) = LineFile::open(dir, INDEX_FILE, head)?;
-        let (mut f_offsets, offset_entries) = LineFile::open(dir, OFFSETS_FILE, head)?;
-        let (mut f_masked, masked_entries) = LineFile::open(dir, MASKED_FILE, head)?;
-        let (mut f_streams, stream_entries) = LineFile::open(dir, STREAMS_FILE, head)?;
+        // Every line of the four is held: each is bounded by the journal's
+        // retention, compacted below when the log was, and the offset array's
+        // agreement test reads every entry, the ones the log no longer holds
+        // included.
+        let (mut f_index, index_entries) = LineFile::open(dir, INDEX_FILE, head, |_| true)?;
+        let (mut f_offsets, offset_entries) = LineFile::open(dir, OFFSETS_FILE, head, |_| true)?;
+        let (mut f_masked, masked_entries) = LineFile::open(dir, MASKED_FILE, head, |_| true)?;
+        let (mut f_streams, stream_entries) = LineFile::open(dir, STREAMS_FILE, head, |_| true)?;
 
         // ── the classification map: the index file's entries for positions
         //    the log holds, then this open's walk, then the index's tail ──
@@ -681,31 +685,40 @@ impl Feed {
     }
 
     /// The data behind `GET /changes` at `class`.
+    ///
+    /// The rows are COLLECTED under the feed's lock and RENDERED after it is
+    /// released: [`Feed::record`], the write path's step under the
+    /// serialization lock, waits on that lock, and an attested row's render —
+    /// its `attest` member, 6,746 hex characters under tag 1 — is the dearest
+    /// part of a page. Under the lock: the merge, the mask, and a clone per
+    /// row, the slot an `Arc`.
     pub fn page(&self, class: &FeedClass<'_>, query: &ChangesQuery) -> ChangesAnswer {
-        let inner = self.inner.lock();
-        if !inner.log.admits_since(query.since) {
-            return ChangesAnswer::Reclaimed { floor: inner.log.floor() };
-        }
-        let Some(start) = query.since.checked_add(1) else {
-            return ChangesAnswer::Page { entries: Vec::new(), last: query.since, more: false };
-        };
-        let merge = Merge::new(inner.sources(class, query, start));
-        let mut entries = Vec::new();
-        let mut last = query.since;
-        let mut more = false;
-        for at in merge {
-            let Some((meta, reduced)) = inner.visible(class, query, at) else { continue };
-            if entries.len() == query.limit.get() {
-                more = true;
-                break;
+        let (rows, more) = {
+            let inner = self.inner.lock();
+            if !inner.log.admits_since(query.since) {
+                return ChangesAnswer::Reclaimed { floor: inner.log.floor() };
             }
-            entries.push(meta.entry(
-                at,
-                reduced.iter().map(|d| d.addr.to_string()).collect(),
-                inner.attest.slot(at),
-            ));
-            last = at;
-        }
+            let Some(start) = query.since.checked_add(1) else {
+                return ChangesAnswer::Page { entries: Vec::new(), last: query.since, more: false };
+            };
+            let mut rows = Vec::new();
+            let mut more = false;
+            for at in Merge::new(inner.sources(class, query, start)) {
+                let Some((meta, reduced)) = inner.visible(class, query, at) else { continue };
+                if rows.len() == query.limit.get() {
+                    more = true;
+                    break;
+                }
+                let reduced: Vec<String> = reduced.iter().map(|d| d.addr.to_string()).collect();
+                rows.push((at, meta.clone(), reduced, inner.attest.slot(at)));
+            }
+            (rows, more)
+        };
+        let last = rows.last().map_or(query.since, |(at, ..)| *at);
+        let entries = rows
+            .into_iter()
+            .map(|(at, meta, reduced, slot)| meta.entry(at, reduced, slot.as_deref()))
+            .collect();
         ChangesAnswer::Page { entries, last, more }
     }
 

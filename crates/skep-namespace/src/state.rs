@@ -1,9 +1,9 @@
 //! M3's slice (§Core data model, §1): the identity type and its two fixed
-//! ids; the journal delta [`M3Rec`] and its at-rest door; [`M3State`] itself;
-//! the two registry caps; Σ₀ — the fixed addresses genesis seeds — with
-//! genesis and the fold (§D); and the frontier arithmetic the fold checks and
-//! the mints draw on (§1). Namespace keys are `crate::ns`'s, and the ghost
-//! floor is `crate::ghost`'s.
+//! ids; the journal delta [`M3Rec`] and its two field doors; [`M3State`]
+//! itself; the two registry caps; Σ₀ — the fixed addresses genesis seeds —
+//! with genesis and the fold (§D); and the frontier arithmetic the fold
+//! checks and the mints draw on (§1). Namespace keys are `crate::ns`'s, and
+//! the ghost floor is `crate::ghost`'s.
 //!
 //! Beneath it, two children, each an `impl M3State` that sees this module's
 //! private items the way a child does, so nothing here is widened for them:
@@ -25,7 +25,7 @@ pub use query::prefix_contains;
 use std::sync::LazyLock;
 
 use num_traits::Zero;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use skep_address::{ordinal, validate, Address, GateViolation, Level, Nat, Tumbler};
 
 use crate::ghost::{ghost_floor, ghost_home_doc};
@@ -78,18 +78,15 @@ pub const SYSTEM_PRINCIPAL: PrincipalId = PrincipalId(9_000_000_000_000_000);
 /// level distinction is recovered at *query* time from the address's own
 /// level.
 ///
-/// Off the journal a record arrives through [`M3RecShadow`], which re-checks
-/// the two standing facts T4-validity does not carry: an `Allocate` address
-/// extends a parent, and a `RegisterPrincipal` prefix is account-tier — and
-/// which carries the publication bit as a REQUIRED field (PUB-7.8).
-///
-/// A variant or field added HERE must be added to [`M3RecShadow`] too:
-/// `Serialize` is derived from this enum and `Deserialize` runs through the
-/// shadow, so a shadow missing the variant yields records that journal and
-/// then never decode — a recovery failure that survives restart, from an edit
-/// that looked local.
+/// Two fields owe a fact T4-validity does not carry, and each checks it in a
+/// decoder on the field itself, after M1's: an `Allocate` address extends a
+/// parent (`parented_address`), and a `RegisterPrincipal` prefix is
+/// account-tier (`account_tier_prefix`). A record lacking either is refused
+/// at decode, as M2's ordinary decode failure. Both are facts about one
+/// field, so they ride on the field and `Deserialize` is derived from this
+/// enum itself: a variant added here decodes with no second edit, and the
+/// journal and checkpoint encoding is the enum's own.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "M3RecShadow")]
 pub enum M3Rec {
     /// A mint's COMMIT HALF: advance `frontiers[namespace_of(addr)]` (§1) —
     /// this record is the only thing that moves a frontier. The `(parent, g)`
@@ -109,14 +106,25 @@ pub enum M3Rec {
     /// document tier — an account, a content or link element — publication is
     /// not a property of the address at all (PUB-1.68: one bit per DOCUMENT);
     /// those mints stamp `NO_PUBLICATION_STATE` (`false`) and the fold does
-    /// not read it. NON-OPTIONAL by design: a record written without the
-    /// field fails to decode at [`M3RecShadow`] rather than defaulting
-    /// (PUB-7.8).
-    Allocate { addr: Address, published: bool },
+    /// not read it. NON-OPTIONAL by design (PUB-7.8) — no `Option`, no
+    /// `#[serde(default)]`: a frame written before the bit existed ends where
+    /// the bit should begin, and that end-of-input is the refusal. M2 then
+    /// replays from an older start point or refuses to serve (PUB-7.9); the
+    /// frame is never read as private or as published by a default it never
+    /// carried (PUB-1.2: no grandfather clause).
+    Allocate {
+        #[serde(deserialize_with = "parented_address")]
+        addr: Address,
+        published: bool,
+    },
     /// External node admission (ASN-0047 NodeBaptism; §7).
     RegisterNode { addr: Address },
     /// Delegation's principal half (§6).
-    RegisterPrincipal { prefix: Address, id: PrincipalId },
+    RegisterPrincipal {
+        #[serde(deserialize_with = "account_tier_prefix")]
+        prefix: Address,
+        id: PrincipalId,
+    },
 }
 
 /// The `published` an `Allocate` carries OUTSIDE the document tier — an
@@ -129,21 +137,29 @@ pub enum M3Rec {
 /// element `Allocate` is an absence and not a verdict.
 const NO_PUBLICATION_STATE: bool = false;
 
-/// The at-rest shadow of [`M3Rec`] — same variants in the same order, same
-/// fields in the same order, so the journal and checkpoint encoding is the
-/// enum's own — and the ONE door a record re-enters memory through.
+/// `Allocate.addr`'s at-rest door: M1's validating decode, then the standing
+/// fact [`M3State::apply_m3`]'s `namespace_of` `expect` rests on, and which
+/// T4-validity does NOT carry: a minted address extends a parent. `[7]` is
+/// T4-valid, so M1's door passes it, and a parentless `Allocate` reaching the
+/// fold would panic the applier — at replay too, on every subsequent open.
+/// For a T4-valid address `parent(a).is_some()` ⟺ `#a ≥ 2` (M1's `parent` is
+/// `None` only for a single-component node), so the check is one length
+/// compare, and it turns a permanent applier panic into M2's ordinary decode
+/// failure.
+fn parented_address<'de, D: Deserializer<'de>>(d: D) -> Result<Address, D::Error> {
+    let addr = Address::deserialize(d)?;
+    if addr.tumbler().len() < 2 {
+        return Err(serde::de::Error::custom(
+            "an Allocate address extends a parent (≥ 2 components)",
+        ));
+    }
+    Ok(addr)
+}
+
+/// `RegisterPrincipal.prefix`'s at-rest door: M1's validating decode, then
+/// the fact a seat needs whose absence fails OPEN — the prefix is
+/// account-tier.
 ///
-/// It carries the standing fact [`M3State::apply_m3`]'s `namespace_of`
-/// `expect` rests on, and which the [`Address`] type does NOT: a minted
-/// address extends a parent. `[7]` is T4-valid, so M1's door passes it, and a
-/// parentless `Allocate` reaching the fold would panic the applier — at
-/// replay too, on every subsequent open. For a T4-valid address
-/// `parent(a).is_some()` ⟺ `#a ≥ 2` (M1's `parent` is `None` only for a
-/// single-component node), so the check is one length compare, and it turns a
-/// permanent applier panic into M2's ordinary decode failure.
-///
-/// It carries the other per-record fact a seat needs, and the one whose
-/// absence fails OPEN: a `RegisterPrincipal` prefix is account-tier.
 /// `delegate` is its sole producer on the journal and its hoisted
 /// `NotAccountTier` gate stages nothing else, so the door refuses nothing M3
 /// has ever journaled — genesis's node-tier π₀ seat is world state, passed to
@@ -159,49 +175,24 @@ const NO_PUBLICATION_STATE: bool = false;
 ///
 /// The door is therefore tighter than O1a, and deliberately: a STATE-level
 /// door could not be, since genesis's seat is node-tier, so [`M3State`]'s
-/// bare-derive checkpoint path keeps that exposure and
-/// [`M3State::effective_owner`]'s tier filter is not removable. An op that
-/// ever seats a principal at a node prefix changes this door first.
+/// bare-derive checkpoint path keeps that exposure and ω's tier filter
+/// (`omega`) is not removable. An op that ever seats a principal at a node
+/// prefix changes this door first.
 ///
-/// A per-record door carries per-record facts and no others. The standing
+/// A field door carries facts about its own field and no others. The standing
 /// property `RegisterPrincipal` would want besides — id-injectivity across Π
 /// — is not one: it is a claim about the principal registry the record is
 /// about to enter, which no decoder holding a single frame can settle. That
 /// invariant has one owner, `delegate`'s `DuplicateId` gate, and this door
 /// does not share it.
-///
-/// The publication bit is a REQUIRED field here, exactly as on [`M3Rec`] —
-/// no `Option`, no `#[serde(default)]` (PUB-7.8): a journal frame or a
-/// checkpoint written before the bit existed ends where the bit should
-/// begin, and the decoder's end-of-input there is the refusal. M2 treats a
-/// decode failure as "replay from an older start point, else refuse to
-/// serve" (PUB-7.9); what this door owes is that the failure HAPPENS, and
-/// that no pre-publication record is ever read as private or as published
-/// by a default it never carried (PUB-1.2: no grandfather clause).
-#[derive(Deserialize)]
-enum M3RecShadow {
-    Allocate { addr: Address, published: bool },
-    RegisterNode { addr: Address },
-    RegisterPrincipal { prefix: Address, id: PrincipalId },
-}
-
-impl TryFrom<M3RecShadow> for M3Rec {
-    type Error = &'static str;
-    fn try_from(shadow: M3RecShadow) -> Result<M3Rec, &'static str> {
-        match shadow {
-            M3RecShadow::Allocate { addr, .. } if addr.tumbler().len() < 2 => {
-                Err("an Allocate address extends a parent (≥ 2 components)")
-            }
-            M3RecShadow::Allocate { addr, published } => Ok(M3Rec::Allocate { addr, published }),
-            M3RecShadow::RegisterNode { addr } => Ok(M3Rec::RegisterNode { addr }),
-            M3RecShadow::RegisterPrincipal { prefix, .. } if prefix.level() != Level::Account => {
-                Err("a RegisterPrincipal prefix is account-tier (delegate's O15(iii) gate)")
-            }
-            M3RecShadow::RegisterPrincipal { prefix, id } => {
-                Ok(M3Rec::RegisterPrincipal { prefix, id })
-            }
-        }
+fn account_tier_prefix<'de, D: Deserializer<'de>>(d: D) -> Result<Address, D::Error> {
+    let prefix = Address::deserialize(d)?;
+    if prefix.level() != Level::Account {
+        return Err(serde::de::Error::custom(
+            "a RegisterPrincipal prefix is account-tier (delegate's O15(iii) gate)",
+        ));
     }
+    Ok(prefix)
 }
 
 /// M3's slice of the engine's `WorldState`, reached via [`crate::HasM3::m3`].
@@ -306,13 +297,13 @@ pub struct M3State {
     ///   single-valued;
     /// * the account-tier floor (O1a) is a PRODUCER invariant too, owned by
     ///   genesis (which seats π₀ at the node prefix `[1]`) and by `delegate`'s
-    ///   hoisted `NotAccountTier` gate. On the journal path [`M3RecShadow`]
-    ///   re-establishes it — stricter than O1a, since every seat `delegate`
-    ///   stages is account-tier exactly — but a seat can also arrive inside a
-    ///   whole [`M3State`], which decodes by bare derive because genesis's own
-    ///   seat is node-tier. So [`M3State::effective_owner`] re-checks it as
-    ///   well, ω being the one reader whose answer to a below-tier entry would
-    ///   be a PASS; see the tier filter there.
+    ///   hoisted `NotAccountTier` gate. On the journal path
+    ///   `RegisterPrincipal`'s prefix door re-establishes it — stricter than
+    ///   O1a, since every seat `delegate` stages is account-tier exactly — but
+    ///   a seat can also arrive inside a whole [`M3State`], which decodes by
+    ///   bare derive because genesis's own seat is node-tier. So ω re-checks
+    ///   it as well — the private walk `omega` filters by tier — ω being the
+    ///   one reader whose answer to a below-tier entry would be a PASS.
     ///
     /// The ONLY authoritative ownership state — the delegation forest is
     /// recomputable (NestingByDelegation) and never stored. An `OrdMap`
@@ -503,8 +494,8 @@ impl M3State {
     ///
     /// TWO PARTS, built two ways. The ROOTS — node `[1]` and π₀ seated at it —
     /// are written directly: they are the state every record folds onto, and
-    /// π₀'s node-tier seat is a shape no op stages and the record door
-    /// (`M3RecShadow`) refuses. The SEED is folded: it is the five records
+    /// π₀'s node-tier seat is a shape no op stages and `RegisterPrincipal`'s
+    /// prefix door refuses. The SEED is folded: it is the five records
     /// M3's own ops stage for the same work —
     /// [`crate::Namespace::register_node`]'s admission of [`system_node`]
     /// `1.1`, [`crate::Namespace::delegate`]'s baptism and seat of
@@ -575,11 +566,11 @@ impl M3State {
     /// parent and emits exactly `c_{m+1}` past the floor.
     ///
     /// The two conditions differ in kind, and only the first is owed to the
-    /// journal. Extending a parent is a per-record fact, so it is carried at
-    /// the door: the [`Address`] payloads carry T4-validity and
-    /// [`M3RecShadow`] carries the parent, and a record arriving from disk or
-    /// a peer that lacks either is refused at decode rather than folded into a
-    /// panic. Contiguity is NOT decidable from one record — it is a claim
+    /// journal. Extending a parent is a fact about one field, so it is carried
+    /// at that field's door: the [`Address`] payloads carry T4-validity and
+    /// `Allocate`'s address door (`parented_address`) carries the parent, and
+    /// a record arriving from disk or a peer that lacks either is refused at
+    /// decode rather than folded into a panic. Contiguity is NOT decidable from one record — it is a claim
     /// about the frontier the record is about to advance — so no door can
     /// carry it, and it stays a stated condition of the caller: an `Allocate`
     /// that regresses or jumps a frontier is outside the domain and fail-stops
@@ -613,9 +604,10 @@ impl M3State {
     /// it and so `delegate` beneath it is refused `NotAncestor` at (i); and an
     /// over-cap entry is a permanent resource charge and nothing more.
     ///
-    /// `RegisterPrincipal`'s tier is a per-record fact, so it rides at the
-    /// door like `Allocate`'s parent: the record door admits an account-tier
-    /// prefix and nothing else, which is what `delegate` stages and what ω's
+    /// `RegisterPrincipal`'s tier is a fact about one field, so it rides at
+    /// that field's door like `Allocate`'s parent: the prefix door
+    /// (`account_tier_prefix`) admits an account-tier prefix and nothing
+    /// else, which is what `delegate` stages and what ω's
     /// O1a filter cannot refuse on its own (node tier is a pass there, for
     /// π₀'s sake). Id-injectivity is the fact that arm has no gate for, and
     /// that is deliberate rather than missing: one id ↦ at most one
@@ -634,7 +626,6 @@ impl M3State {
     /// keeps it so.
     pub fn apply_m3(&self, r: &M3Rec) -> M3State {
         let mut s = self.clone();
-        // Adding a variant? `M3RecShadow` needs it as well — see `M3Rec`.
         match r {
             M3Rec::Allocate { addr, published } => {
                 let key = namespace_of(addr)
@@ -717,34 +708,22 @@ impl M3State {
     /// `checked_inc` is the TA5a gate ⇒ B6(ii)/(iii); routing every emission
     /// through it, via `first_in`, is the defensive guard: it cannot fire on
     /// a live path, nor on any frontier COUNT, since `first_in` sees only the
-    /// anchor — only on a key whose anchor the pairing below refuses.
+    /// anchor — only on a key that fails `first_in`'s anchor precondition.
     ///
-    /// PRECONDITION — `key.parent` is T4-valid, and under
-    /// `Generator::NextField` it is not Element-level (M1's TA5a admits
-    /// `k = 2` only below that tier). The five mints are the only callers,
-    /// one per chain, and each discharges it by a gate that has
-    /// already run: [`version_ns`] and [`document_ns`] clone their anchor
-    /// from an [`Address`], as does [`account_ns`] behind
+    /// That precondition is `first_in`'s, stated in `crate::ns` beside the
+    /// `validate` that consumes it, and the five mints — this function's only
+    /// callers, one per chain — each meet it by a gate that has already run:
+    /// [`version_ns`] and [`document_ns`] clone their anchor from an
+    /// [`Address`], as does [`account_ns`] behind
     /// [`M3State::mint_account`]'s registered-entity gate; and
     /// [`content_ns`]/[`link_ns`] sit behind `is_registered_document`, which
-    /// makes `home` a Document, so `inc(home, 2)` lands inside T4. Off a
-    /// checkpoint the anchor arrives through `NsKeyShadow`, which
-    /// re-establishes its T4 half where no caller can; the
-    /// `Generator::NextField`/Element half is a pairing that no per-key door
-    /// settles and none need, since it fails as a `GateViolation` here rather
-    /// than a panic.
-    ///
-    /// [`M3State::content_lock_key`] and [`M3State::link_lock_key`] do NOT
-    /// discharge it: handed an element they build an anchor outside T4. That
-    /// costs nothing, because a lock key is never dereferenced — what those
-    /// two owe is [`ns_lock_key`]'s injectivity, which holds for any anchor.
+    /// makes `home` a Document, so `inc(home, 2)` lands inside T4.
     ///
     /// [`version_ns`]: crate::ns::version_ns
     /// [`document_ns`]: crate::ns::document_ns
     /// [`account_ns`]: crate::ns::account_ns
     /// [`content_ns`]: crate::ns::content_ns
     /// [`link_ns`]: crate::ns::link_ns
-    /// [`ns_lock_key`]: crate::ns::ns_lock_key
     fn next_in(&self, key: &NsKey) -> Result<Address, GateViolation> {
         nth_in(key, &(self.effective_frontier(key) + 1u32))
     }

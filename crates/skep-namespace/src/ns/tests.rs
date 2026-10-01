@@ -10,8 +10,8 @@ fn a(comps: &[u32]) -> Address {
     validate(t(comps)).expect("T4-valid")
 }
 
-/// §1: a frontier key re-enters memory through its own door. `next_in`
-/// re-`validate`s a loaded key's anchor with an `expect`, and `Tumbler`
+/// §1: a frontier key re-enters memory through its own door. `first_in`
+/// re-`validate`s a key's anchor with an `expect`, and `Tumbler`
 /// admits any nonempty component sequence — `[1, 0]` decodes and is not
 /// T4-valid — so without the door a checkpoint could seat a key that is
 /// a panic waiting for the first reader to dereference it. Refused while
@@ -62,7 +62,7 @@ fn a_frontier_key_re_enters_through_its_t4_door() {
 /// The generator IS ASN-0040's `d ∈ {1, 2}`: it is the numeral wherever
 /// bytes are written — the checkpointed frontier key and `ns_lock_key`'s
 /// trailing byte — and no third value survives the way back in, so the
-/// `k` `next_in` hands M1 is one its TA5a gate admits by shape.
+/// `k` `first_in` hands M1 is one its TA5a gate admits by shape.
 #[test]
 fn generator_is_its_numeral_and_admits_no_third_value() {
     for (g, n) in [(Generator::SameField, 1u8), (Generator::NextField, 2u8)] {
@@ -178,7 +178,7 @@ fn the_lock_key_encoding_is_injective_over_a_generated_family() {
 /// What a key owes is injectivity, and it owes it on every anchor — a
 /// lock key is compared, never dereferenced. `content_ns`/`link_ns` on an
 /// element build `e ++ [0, 1]` and `e ++ [0, 2]`, four separators apiece
-/// and so outside T4, which is exactly the shape `next_in`'s precondition
+/// and so outside T4, which is exactly the shape `first_in`'s precondition
 /// excludes and no mint can reach: both go through
 /// `is_registered_document`, which admits only a Document. The keys are
 /// still deterministic and still distinct, which is the whole of what

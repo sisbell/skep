@@ -136,9 +136,10 @@ mod ns;
 // The ghost region: the five reserved type addresses M7 reads, and the floor
 // that keeps the allocator past them.
 mod ghost;
-// M3's slice: the identity type, the journal delta and its door, `M3State`,
-// Σ₀ and the fold, the frontier arithmetic; beneath it `state/mint.rs` (§A:
-// the lock keys and the five mints) and `state/query.rs` (§C: the queries).
+// M3's slice: the identity type, the journal delta and its two field doors,
+// `M3State`, Σ₀ and the fold, the frontier arithmetic; beneath it
+// `state/mint.rs` (§A: the lock keys and the five mints) and `state/query.rs`
+// (§C: the queries).
 mod state;
 // The `Namespace` handle: the four entity operations, each one transaction.
 mod ops;

@@ -118,7 +118,7 @@ fn the_content_chain_of_the_ghost_home_doc_never_issues_a_ghost_tumbler() {
 /// past the ghost region round-trips M2's checkpoint encoding, and the
 /// recovered slice keeps both halves — members stay members, ghosts stay
 /// excluded. The frontier key's anchor is the ghost home doc's content base,
-/// which must pass the NsKeyShadow T4 door like any other key.
+/// which must pass `NsKey`'s T4 anchor door like any other key.
 #[test]
 fn a_floored_frontier_survives_the_checkpoint_round_trip() {
     let k = mem_kernel(genesis_world());

@@ -3,14 +3,14 @@
 //! [`ns_lock_key`], the lock key. It is built only here: by the five
 //! anchor-side constructors ([`content_ns`], [`link_ns`], [`version_ns`],
 //! [`document_ns`], [`account_ns`]), by [`namespace_of`] from a member, or by
-//! its at-rest door. Its fields are private to this module, so the key a mint
-//! reads, the key its `Allocate` advances and the lock its caller holds cannot
-//! be spelled two ways. Also here: the chain-family rule that picks every
-//! generator, a chain's members by ordinal, and the two opening slots
-//! published to callers outside M3 ([`first_document_address`],
-//! [`first_version_address`]).
+//! its decode, whose anchor passes the at-rest door [`t4_anchor`]. Its fields
+//! are private to this module, so the key a mint reads, the key its
+//! `Allocate` advances and the lock its caller holds cannot be spelled two
+//! ways. Also here: the chain-family rule that picks every generator, a
+//! chain's members by ordinal, and the two opening slots published to callers
+//! outside M3 ([`first_document_address`], [`first_version_address`]).
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use skep_address::{
     checked_inc, inc, is_t4_valid, parent, shift, validate, Address, GateViolation, Level, Nat,
     Tumbler,
@@ -28,7 +28,7 @@ use skep_kernel::{LockKey, Space};
 /// `parent` is a bare `Tumbler` rather than an `Address` because the content
 /// and link anchors are `inc(d, 2)` and `inc(b_C(d), 0)`, which M1 returns as
 /// tumblers — so the anchor constructors carry no `validate` of their own and
-/// `M3State::next_in` re-lifts the anchor at the one place it needs an
+/// [`first_in`] re-lifts the anchor at the one place it needs an
 /// [`Address`].
 ///
 /// What this type owes, and owes on EVERY `(Tumbler, Generator)` pair it can
@@ -36,74 +36,60 @@ use skep_kernel::{LockKey, Space};
 /// distinct locks. That holds for any nonempty anchor whatever its shape, so
 /// it is stated without a proviso and needs none.
 ///
-/// A T4-valid anchor is NOT this type's invariant. It is a precondition of
-/// `M3State::next_in`, discharged there by the caller's own gate and stated
-/// beside the `validate` that consumes it — which is why a key may exist that
-/// no `next_in` path can reach, and why that costs nothing.
+/// A T4-valid anchor is NOT this type's invariant. It is [`first_in`]'s
+/// precondition, stated beside the `validate` that consumes it and met by
+/// each caller's own gate — which is why a key no mint can reach (a lock key
+/// built from an element, say) may exist, and why that costs nothing.
 ///
 /// `Ord` is the frontier map's key order (2026-09-23, QUEUE item 10 option
 /// (i)): the anchor's tumbler order, then the generator's numeral. It is what
-/// makes the checkpoint's `frontiers` bytes a function of the contents — no
-/// read consults it.
+/// makes the checkpoint's `frontiers` bytes a function of the contents; every
+/// lookup compares by it, but no read depends on which order it is.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(try_from = "NsKeyShadow")]
 pub(crate) struct NsKey {
+    #[serde(deserialize_with = "t4_anchor")]
     parent: Tumbler,
     g: Generator,
 }
 
-/// The at-rest shadow of [`NsKey`] — same fields, same order, so the
-/// checkpoint encoding is the struct's own — and the ONE door a frontier key
-/// re-enters memory through.
-///
-/// It re-establishes the T4 HALF of `M3State::next_in`'s anchor
-/// precondition — the half a decoder holding one key can settle — for keys
-/// that arrive with no caller to establish it. In process, a `next_in` caller
-/// establishes T4-validity through its own gate before it calls; a checkpoint
-/// is bytes, and `Tumbler` admits any nonempty component sequence — `[1, 0]`
-/// decodes and is not T4-valid — so a loaded key would otherwise be a panic
-/// waiting for the first reader to dereference it. One T4 scan per key at
-/// load, no allocation.
+/// `NsKey.parent`'s at-rest door — the ONE way a frontier key's anchor
+/// re-enters memory; the key's encoding is the struct's own. It
+/// re-establishes the T4 half of [`first_in`]'s anchor precondition — the
+/// half a decoder holding one key can settle — for keys that arrive with no
+/// caller to establish it: a checkpoint is bytes, and `Tumbler` admits any
+/// nonempty component sequence — `[1, 0]` decodes and is not T4-valid — so a
+/// loaded key would otherwise be a panic waiting for the first reader to
+/// dereference it. One T4 scan per key at load, no allocation.
 ///
 /// The other half — [`Generator::NextField`] paired with an Element-level
 /// anchor — is not this door's, and needs no door: it is a property of the
-/// PAIR, which a per-key check could settle but need not, because it fails
-/// soft. `checked_inc` refuses `k = 2` at that tier, so `next_in` answers
-/// `GateViolation` and the mint surfaces [`MintError::Gate`]; there is no
-/// panic to prevent.
+/// PAIR, and it fails soft. `checked_inc` refuses `k = 2` at that tier, so
+/// `first_in` answers `GateViolation` and the mint surfaces
+/// [`MintError::Gate`]; there is no panic to prevent.
 ///
-/// No key read out of `frontiers` reaches `next_in` today — all five mints
-/// build a fresh key from a `*_ns` constructor, and loaded keys are only ever
-/// hashed for lookup. So this door is defence for the first frontier-
-/// enumerating or re-keying reader to appear, and that reader is why it is
-/// here: M3 publishes no enumeration over its frontier map, which is why the
-/// engine's observation surface reads this slice through its serde bytes
-/// instead.
+/// No key read out of `frontiers` reaches `first_in`: all five mints build a
+/// fresh key from a `*_ns` constructor, and loaded keys are only compared for
+/// lookup and written back out. So this door is defence for the first
+/// frontier-enumerating or re-keying reader to appear, and that reader is why
+/// it is here: M3 publishes no enumeration over its frontier map, which is
+/// why the engine's observation surface reads this slice through its serde
+/// bytes instead.
 ///
 /// [`MintError::Gate`]: crate::MintError::Gate
-#[derive(Deserialize)]
-struct NsKeyShadow {
-    parent: Tumbler,
-    g: Generator,
-}
-
-impl TryFrom<NsKeyShadow> for NsKey {
-    type Error = &'static str;
-    fn try_from(shadow: NsKeyShadow) -> Result<NsKey, &'static str> {
-        if !is_t4_valid(&shadow.parent) {
-            return Err("a namespace anchor is T4-valid (ASN-0040 (p, d))");
-        }
-        Ok(NsKey {
-            parent: shadow.parent,
-            g: shadow.g,
-        })
+fn t4_anchor<'de, D: Deserializer<'de>>(d: D) -> Result<Tumbler, D::Error> {
+    let parent = Tumbler::deserialize(d)?;
+    if !is_t4_valid(&parent) {
+        return Err(serde::de::Error::custom(
+            "a namespace anchor is T4-valid (ASN-0040 (p, d))",
+        ));
     }
+    Ok(parent)
 }
 
 /// The chain generator — ASN-0040's `d`: [`Generator::SameField`] extends the
 /// anchor's own field, [`Generator::NextField`] opens the next one. An enum
 /// because `g ∈ {1, 2}` exhausts it: no third generator is representable, in
-/// memory or off a checkpoint, so `M3State::next_in` can only hand M1's
+/// memory or off a checkpoint, so [`first_in`] can only hand M1's
 /// `checked_inc` a `k` its TA5a gate admits by shape (`k ≥ 3` is refused
 /// there, and is what M1 asks a minting producer never to derive from input).
 /// What survives is the one refusal a precondition owns rather than the type:
@@ -257,15 +243,20 @@ pub(crate) fn account_ns(parent: &Address) -> NsKey {
 /// [`first_document_address`] and [`first_version_address`] publish it for
 /// the two chains a caller outside M3 has to name.
 ///
-/// PRECONDITION — the anchor precondition `M3State::next_in` states, and
-/// which the five mints discharge by their own gates; the two published
-/// slots discharge it by cloning their anchor from an [`Address`]. The
-/// [`Generator::NextField`]/Element half is not a panic here either:
-/// `checked_inc` refuses `k = 2` at that tier and this answers
-/// [`GateViolation`].
+/// PRECONDITION — the anchor precondition, stated here because this is the
+/// one place an anchor is lifted back to an [`Address`]: `key.parent` is
+/// T4-valid, and under [`Generator::NextField`] it is not Element-level
+/// (M1's TA5a admits `k = 2` only below that tier). The first half is the
+/// `expect` below. The second fails soft: `checked_inc` refuses `k = 2` at
+/// that tier and this answers [`GateViolation`], which a mint surfaces as
+/// `MintError::Gate`. Who meets it: the five mints, each by its own gate
+/// (`M3State::next_in` lists them); `M3State::latest_version` and the two
+/// published slots, by their tier tests and an anchor cloned from an
+/// [`Address`]; and a key decoded off a checkpoint, whose T4 half
+/// [`t4_anchor`] re-establishes.
 fn first_in(key: &NsKey) -> Result<Address, GateViolation> {
     let anchor = validate(key.parent.clone()).expect(
-        "first_in precondition: a T4-valid anchor — the caller's gate, or NsKeyShadow, established it",
+        "first_in precondition: a T4-valid anchor — the caller's gate, or the anchor's at-rest door, established it",
     );
     checked_inc(&anchor, key.g.inc_k())
 }

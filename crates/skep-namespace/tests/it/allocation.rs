@@ -337,8 +337,8 @@ fn mint_preconditions_reject_structurally() {
         MintError::SourceNotRegistered
     );
     // An ELEMENT home: b_C(e) = e ++ [0, s_C] carries four separators and is
-    // outside T4 — `next_in`'s stated precondition. Ungated, the anchor lift
-    // `expect`s and the mint PANICS instead of refusing.
+    // outside T4 — the anchor precondition `first_in` states. Ungated, the
+    // anchor lift `expect`s and the mint PANICS instead of refusing.
     assert_eq!(
         m3.mint_content(&element).unwrap_err(),
         MintError::HomeNotRegistered

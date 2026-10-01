@@ -18,8 +18,9 @@ use skep_address::GateViolation;
 /// (B6/TA5a) routed defensively: no live path reaches it, and a corrupted
 /// frontier COUNT cannot either, since the gate sees only the chain's anchor.
 /// What can is a corrupted frontier KEY — a next-field generator over an
-/// Element-level anchor — which is the soft failure `NsKeyShadow` names as its
-/// reason for not carrying that half of `next_in`'s precondition.
+/// Element-level anchor — which is the soft failure `NsKey`'s anchor door
+/// names as its reason for not carrying that half of `first_in`'s anchor
+/// precondition.
 ///
 /// The fifth mint, the account chain's, is crate-private and answers `Option`
 /// rather than adding a leaf here: `delegate` is its only caller and already

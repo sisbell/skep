@@ -166,9 +166,10 @@ fn the_ghost_floor_holds_against_a_regressed_frontier() {
 /// reading [`M3State::has_documents`] and [`M3State::latest_version`] each
 /// state, and which neither can reach through M3's own ops, since
 /// [`M3State::apply_m3`] inserts only `effective_frontier + 1`, and genesis's
-/// seed is itself folded through it. A checkpoint is bytes and `NsKeyShadow`
-/// screens the KEY, not the count, so this is the shape those two guards exist
-/// for; it is built by hand for the reason the ghost test above is.
+/// seed is itself folded through it. A checkpoint is bytes and `NsKey`'s
+/// anchor door screens the KEY, not the count, so this is the shape those two
+/// guards exist for; it is built by hand for the reason the ghost test above
+/// is.
 ///
 /// The guards fail in opposite ways. Without [`M3State::latest_version`]'s,
 /// [`nth_in`] computes `0 − 1` on a `Nat` and the read PANICS — on the
@@ -288,12 +289,12 @@ fn latest_version_reads_the_chain_not_the_registry() {
 /// the loop is that block: a `p` past every seat, where the probe finds no
 /// key at all.
 ///
-/// The last two rows are the PRECONDITION `p ∉ Π` made executable: once
-/// `p` is itself a principal the block of keys ≥ `p` opens with `p`, so
-/// the probe answers false whether or not a principal sits beneath. That
-/// is why [`crate::Namespace::delegate`] PINS (i) and (ii) ahead of (iv),
-/// and a probe made correct for `p ∈ Π` makes the last row wrong and that
-/// pinning revisable — one edit, both consequences.
+/// The last two rows seat `p` itself, and the answer does not move: nothing
+/// beneath reads false, a child beneath reads true. A probe that started AT
+/// `p` would meet the seated `p` first — so it reads the nothing-beneath row
+/// true if it counts `p` as under itself, and the child-beneath row false if
+/// it skips `p` and stops. Between them, those two rows keep the bound
+/// exclusive.
 #[test]
 fn the_top_down_probe_sees_strict_descendants_and_nothing_else() {
     let p = a(&[1, 0, 1]);
@@ -312,9 +313,9 @@ fn the_top_down_probe_sees_strict_descendants_and_nothing_else() {
         ),
         ("p itself, with nothing beneath", vec![vec![1, 0, 1]], false),
         (
-            "p itself, with a child beneath — the precondition's blind spot",
+            "p itself, with a child beneath",
             vec![vec![1, 0, 1], vec![1, 0, 1, 1]],
-            false,
+            true,
         ),
     ] {
         let state =
@@ -333,7 +334,7 @@ fn the_top_down_probe_sees_strict_descendants_and_nothing_else() {
             "{shape}: the top-down probe disagrees"
         );
     }
-    // The probe's other arm: no key ≥ `p` at all. Both of genesis's seats
+    // The probe's other arm: no key after `p` at all. Both of genesis's seats
     // sort before `[1, 2, 0, 1]`, so the block is empty and nothing sits
     // under it.
     assert!(
@@ -342,12 +343,12 @@ fn the_top_down_probe_sees_strict_descendants_and_nothing_else() {
     );
 }
 
-/// The [`M3RecShadow`] door tests `#a ≥ 2`; [`M3State::apply_m3`]'s
-/// `expect` needs `parent(a).is_some()`. Two spellings of one fact, sound
-/// only while M1's `parent` is `None` at exactly one component — a
-/// property M3 asserts in prose and cannot enforce. Pinned here so a
-/// change in M1 reddens this suite instead of panicking the applier at
-/// every replay from then on.
+/// `Allocate`'s address door (`parented_address`) tests `#a ≥ 2`;
+/// [`M3State::apply_m3`]'s `expect` needs `parent(a).is_some()`. Two
+/// spellings of one fact, sound only while M1's `parent` is `None` at
+/// exactly one component — a property M3 asserts in prose and cannot
+/// enforce. Pinned here so a change in M1 reddens this suite instead of
+/// panicking the applier at every replay from then on.
 #[test]
 fn the_allocate_door_admits_exactly_what_the_fold_can_key() {
     for comps in [

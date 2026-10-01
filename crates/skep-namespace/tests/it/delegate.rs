@@ -114,12 +114,9 @@ fn an_account_is_allocated_iff_a_principal_is_seated_at_it() {
 fn a_stale_peek_loses_and_never_re_seats_a_live_prefix() {
     // §6 / O17c: `next_account_prefix` is a peek, NOT a reservation — "two
     // racing peeks of the same value leave exactly one winner". The loser's
-    // retry is refused by (i) or (ii), which is exactly what discharges
-    // `has_principal_strictly_under`'s `p ∉ Π` precondition: once `p` IS a
-    // principal the (iv) probe answers false, so the two gates PINNED ahead of
-    // it are the ones doing the work here. (The probe's own contract, that
-    // blind spot included, is pinned in `state.rs`'s unit tests; what this
-    // test holds is the workflow and the state it leaves.)
+    // retry is refused by (i) or (ii), the two gates PINNED ahead of (iv).
+    // (The probe's own contract is pinned in `state/tests.rs`; what this test
+    // holds is the workflow and the state it leaves.)
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
     let peek = k
@@ -133,8 +130,7 @@ fn a_stale_peek_loses_and_never_re_seats_a_live_prefix() {
         .expect("the first delegation of a peeked prefix wins");
     let before = k.current_seq();
 
-    // The ancestor's stale retry: ω moved to ID1 (O7), so (ii) refuses — NOT
-    // (iv), which sees `p` itself as the first key ≥ p and answers false.
+    // The ancestor's stale retry: ω moved to ID1 (O7), so (ii) refuses.
     assert_eq!(
         rejected(ns.delegate(BOOTSTRAP_PRINCIPAL, peek.tumbler().clone(), ID2)),
         DelegateError::NotAuthorized
@@ -230,8 +226,8 @@ fn delegate_rejection_order_is_pinned() {
     );
     // (ii) precedes (iv): with ID1 above [1,0,1,1] and ID2 strictly under
     // it, a non-ω delegator earns NotAuthorized though top-down also
-    // fails… ([1,0,1,1] is deliberately NOT itself a principal, since the
-    // §6 (iv) single probe answers false when it is.)
+    // fails… ([1,0,1,1] is deliberately NOT itself a principal: ID1 must stay
+    // its ω for the call below to reach (iv).)
     let seeded = World {
         m3: M3State::genesis()
             .apply_m3(&alloc(&[1, 0, 1]))

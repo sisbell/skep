@@ -8,6 +8,8 @@
 //! private to itself, so every other reader goes through a method that
 //! states its contract.
 
+use std::ops::Bound::{Excluded, Unbounded};
+
 use num_traits::Zero;
 use skep_address::{is_prefix, ordinal, Address, Level};
 
@@ -238,25 +240,10 @@ impl M3State {
     /// prefix of `a` (§5) — THE one walk. [`M3State::effective_owner`]
     /// projects the id, [`M3State::effective_owner_prefix`] the prefix,
     /// [`M3State::effective_owner_pair`] hands the entry back whole, and
-    /// [`M3State::is_effective_owner`] compares; the cost promise and the O1a
-    /// tier filter are stated on `effective_owner`, and the `principals`
-    /// range-walk upgrade lands here once, serving all four.
-    fn omega(&self, a: &Address) -> Option<(&Address, PrincipalId)> {
-        self.principals
-            .iter()
-            .filter(|(p, _)| {
-                matches!(p.level(), Level::Node | Level::Account) && prefix_contains(p, a)
-            })
-            .max_by_key(|(p, _)| p.tumbler().len())
-            .map(|(p, id)| (p, *id))
-    }
-
-    /// ω(a): WHO owns `a` — the longest-prefix match over Π, answered as the
-    /// owning id (§5; ASN-0042 O2/O3/O5). A pure prefix query — valid even
-    /// when `a` is not (yet) allocated. One projection of the single Π walk
-    /// [`M3State::effective_owner_prefix`] shares, and the authorization
-    /// predicate [`M3State::is_effective_owner`] is stated in terms of this
-    /// one.
+    /// [`M3State::is_effective_owner`] compares. `effective_owner` states the
+    /// walk's cost and filter as a guarantee and the other three inherit
+    /// them; the `principals` range-walk upgrade lands here once, serving all
+    /// four, and the reasons for the walk's shape are below.
     ///
     /// The walk is over Π, keeping the longest covering prefix — the reference
     /// form the design names — and NEVER over `a`'s own reconstructed
@@ -288,6 +275,29 @@ impl M3State {
     /// receive such a prefix then refuses on its own tier gate. No tie is
     /// possible here: two prefixes of one address have different lengths, and
     /// Π is prefix-injective.
+    fn omega(&self, a: &Address) -> Option<(&Address, PrincipalId)> {
+        self.principals
+            .iter()
+            .filter(|(p, _)| {
+                matches!(p.level(), Level::Node | Level::Account) && prefix_contains(p, a)
+            })
+            .max_by_key(|(p, _)| p.tumbler().len())
+            .map(|(p, id)| (p, *id))
+    }
+
+    /// ω(a): WHO owns `a` — the longest-prefix match over Π, answered as the
+    /// owning id (§5; ASN-0042 O2/O3/O5). A pure prefix query — valid even
+    /// when `a` is not (yet) allocated. One projection of the single Π walk
+    /// [`M3State::effective_owner_prefix`] shares, and the authorization
+    /// predicate [`M3State::is_effective_owner`] is stated in terms of this
+    /// one.
+    ///
+    /// COST — one walk of Π: `Σ_{p ∈ Π} |p|` component comparisons and no
+    /// allocation, however deep `a` is, so a probe a caller made deep costs
+    /// no more than a shallow one; the bound is per CALL, so one ω per entry
+    /// of a walk pays the product. A seat below the account tier —
+    /// representable only off a corrupted checkpoint — is never the answer
+    /// (O1a).
     ///
     /// For WHETHER a given id owns `a` — the authorization question — ask
     /// [`M3State::is_effective_owner`], which settles it without naming the
@@ -367,33 +377,15 @@ impl M3State {
             .map(|(prefix, _)| prefix)
     }
 
-    /// §6 (iv), concretely: because `principals` is an `OrdMap` under tumbler
-    /// order and the extensions of `p` form a contiguous block (T5), a SINGLE
-    /// probe settles top-down — take the first key ≥ `p`; a registered
-    /// principal sits strictly under `p` iff that key is a strict extension.
-    /// If it is not, none is (the block is empty). No full scan.
-    ///
-    /// PRECONDITION — `p ∉ Π`. The block of keys ≥ `p` opens with `p` itself
-    /// when `p` is a principal, so the probe would answer `false` while a
-    /// principal genuinely sits beneath it. `delegate` is the only caller and
-    /// discharges this by the two gates PINNED ahead of (iv): if `p ∈ Π` then
-    /// ω(`p`) is `p`'s own principal, so every strict-ancestor delegator is
-    /// already refused `NotAuthorized` at (ii), and `p`'s own principal is
-    /// already refused `NotAncestor` at (i). Reordering (i) or (ii) behind
-    /// (iv) would not fail loudly, and what it costs is a wrong rejection CODE
-    /// rather than the nesting invariant. A principal strictly under `p` — or
-    /// `p` itself in Π — implies `p` is allocated: every account-tier address
-    /// is minted by [`M3State::mint_account`], which refuses an unregistered
-    /// anchor, and that chain of refusals runs back up to `p`. So (v)
-    /// freshness independently refuses every input this probe's blind spot
-    /// admits, and answers `NotFresh` where [`crate::DelegateError`]'s
-    /// declaration promises `NotTopDown` — which M10's `RejectCode` mapping
-    /// and the conformance allowlist read. On the live path the invariant has
-    /// two gates; only the published precedence has one.
+    /// §6 (iv): does a registered principal sit STRICTLY under `p`? The
+    /// extensions of `p` sort as one block immediately after `p` (T5), so
+    /// ONE probe settles it: the first key after `p` is a strict extension
+    /// iff any key is. No full scan, and no precondition: whether `p` is
+    /// itself seated does not move the answer.
     pub(crate) fn has_principal_strictly_under(&self, p: &Address) -> bool {
         self.principals
-            .range(p.clone()..)
+            .range((Excluded(p.clone()), Unbounded))
             .next()
-            .is_some_and(|(first, _)| prefix_contains(p, first) && first != p)
+            .is_some_and(|(first, _)| prefix_contains(p, first))
     }
 }

@@ -10,7 +10,8 @@
 use sha2::{Digest, Sha256};
 use skep_identity::{
     entry_body_insert, entry_body_make_link, entry_body_publish, entry_body_record, entry_frame,
-    BoardTerm, EntrySlot, Fingerprint, LinkSlots, ShotSegmentPiece, SigAlgRow, ALG_MLDSA65_ED25519,
+    BoardTerm, EntrySlot, Fingerprint, LinkSlots, RecordRows, ShotSegmentPiece, SigAlgRow,
+    ALG_MLDSA65_ED25519,
 };
 use skep_signature::{derive_seeds, pq_widths, verify, HybridSigner, PqWidths, SeededRng06};
 
@@ -62,26 +63,35 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 6] {
             ShotSegmentPiece::Value(b"x"),
             ShotSegmentPiece::Value(b"y"),
             ShotSegmentPiece::Value(b"z"),
-            ShotSegmentPiece::Window { start: &window, width: 2 },
+            ShotSegmentPiece::Window {
+                start: &window,
+                width: std::num::NonZeroU64::new(2).expect("2 is not zero"),
+            },
         ],
         Some(3),
     );
     let subject = [addr("1.0.2")];
-    let enrol = entry_body_record(
-        &addr("1.1.0.1.0.1.0.3.1"),
-        &subject,
-        None,
-        None,
-        br#"{"type":"skep-enroll"}"#,
-    );
-    let retire = entry_body_record(
-        &addr("1.1.0.1.0.1.0.3.2"),
-        &subject,
-        None,
-        None,
-        br#"{"type":"skep-retire"}"#,
-    );
-    let claim = entry_body_record(&addr("1.1.0.1.0.1.0.3.3"), &[], None, None, b"");
+    let enrol = entry_body_record(RecordRows {
+        ty: &addr("1.1.0.1.0.1.0.3.1"),
+        to: &subject,
+        replaces: None,
+        lineage_fork_point: None,
+        sigless_canonical_record: br#"{"type":"skep-enroll"}"#,
+    });
+    let retire = entry_body_record(RecordRows {
+        ty: &addr("1.1.0.1.0.1.0.3.2"),
+        to: &subject,
+        replaces: None,
+        lineage_fork_point: None,
+        sigless_canonical_record: br#"{"type":"skep-retire"}"#,
+    });
+    let claim = entry_body_record(RecordRows {
+        ty: &addr("1.1.0.1.0.1.0.3.3"),
+        to: &[],
+        replaces: None,
+        lineage_fork_point: None,
+        sigless_canonical_record: b"",
+    });
     let board = BoardTerm { log_position: 12, chain: [0xAB; 32] };
     [insert, link, publish, enrol, retire, claim]
         .map(|body| (body.op(), entry_frame(alg, board, &account, &doc, &body)))

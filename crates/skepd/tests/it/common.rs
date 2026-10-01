@@ -25,7 +25,7 @@ use skep_identity::{
     canonical_record, encode_enroll, entry_body_insert, entry_body_make_link,
     entry_body_make_link_replacing, entry_body_publish, entry_body_record, entry_frame, framed,
     parse_record_value, BoardTerm, Enrollment, EntrySlot, Fingerprint, LinkSlots, PublicKey,
-    RecordEntry, ShotSegmentPiece, SigAlgRow, SESSION_TAG, SESSION_TAG_V2,
+    RecordEntry, RecordRows, ShotSegmentPiece, SigAlgRow, SESSION_TAG, SESSION_TAG_V2,
 };
 use skep_signature::HybridSigner;
 use skepd::{serve, AuthOptions, Daemon, NodePrefix, Origin, Skepd, DEFAULT_WORKERS};

@@ -129,16 +129,19 @@
 //!   never the trunk's next. [`PublishBody`] builds the body one value and
 //!   one window at a time under a byte budget, for a verifier re-composing it
 //!   off a store, and refuses it WHOLE at the first piece it cannot take —
-//!   past that budget, past the count's `be64`, or a window of no positions —
-//!   naming which ([`PublishRefusal`]). Every segment is self-delimiting
-//!   behind its class byte and the group opens with a zero byte, which no
-//!   class byte is, so the body is uniquely decodable from its front.
-//! * `record` — [`entry_body_record`]: THE RECORD GRADE's body (the frame
-//!   merge, fm-I, RULED 2026-09-29; its design record §3), under the
-//!   `record` token. A record deposit's `sig` rides the atom, canonically
-//!   last, and the marker slot stays EMPTY at both of its commits; this body
-//!   is the preimage that `sig` is made over — what the design record called
-//!   "the record frame". FIVE rows in this order: (1) the TYPE slot row — the
+//!   past that budget or past the count's `be64` — naming which
+//!   ([`PublishRefusal`]). A window of no positions is no piece at all: a
+//!   window's width is a `NonZeroU64`, as a run's width is at least one.
+//!   Every segment is self-delimiting behind its class byte and the group
+//!   opens with a zero byte, which no class byte is, so the body is uniquely
+//!   decodable from its front.
+//! * `record` — [`entry_body_record`] over a [`RecordRows`]: THE RECORD
+//!   GRADE's body (the frame merge, fm-I, RULED 2026-09-29; its design record
+//!   §3), under the `record` token. A record deposit's `sig` rides the atom,
+//!   canonically last, and the marker slot stays EMPTY at both of its
+//!   commits; this body is the preimage that `sig` is made over — what the
+//!   design record called "the record frame". FIVE rows, taken by name as
+//!   `make_link`'s slots are, in this order: (1) the TYPE slot row — the
 //!   link's type address as an address-form slot row of one element; (2) the
 //!   `to` slot row — the link's target slot, address-form, EMPTY
 //!   (`0x01 ‖ be64(0)`) at a targetless kind; (3) the `replaces` row, an
@@ -170,6 +173,7 @@
 //! one preimage.
 
 use core::fmt;
+use core::num::NonZeroU64;
 
 use skep_address::{Address, Span};
 
@@ -520,8 +524,9 @@ pub enum ShotSegmentPiece<'a> {
     Window {
         /// The run's first I-address.
         start: &'a Address,
-        /// The run's width, at least one.
-        width: u64,
+        /// The run's width — at least one position, as every run's is, which
+        /// its type, `NonZeroU64`, holds.
+        width: NonZeroU64,
     },
 }
 
@@ -533,10 +538,9 @@ pub enum ShotSegmentPiece<'a> {
 /// budget admits, the two build one body.
 ///
 /// PRECONDITIONS — every value and every window's start spelling is shorter
-/// than 2^32 bytes, as [`entry_body_insert`]'s values are; every window's
-/// width is at least one, a run's own invariant; and the positions the
-/// pieces cover sum below 2^64 — the count's width. A caller breaking one
-/// PANICS, naming the obligation.
+/// than 2^32 bytes, as [`entry_body_insert`]'s values are, and the positions
+/// the pieces cover sum below 2^64 — the count's width. A caller breaking
+/// one PANICS, naming the obligation.
 pub fn entry_body_publish<'a>(
     pieces: impl IntoIterator<Item = ShotSegmentPiece<'a>>,
     base_extent: Option<u64>,
@@ -554,28 +558,55 @@ pub fn entry_body_publish<'a>(
         .finish()
 }
 
-/// THE `record` BODY, under the `record` token — the record grade's preimage
-/// (the frame merge, fm-I; its design record §3): the TYPE slot row (`ty` as
-/// an address-form slot row of one element), the `to` slot row (`to` as an
-/// address-form slot row — EMPTY, `0x01 ‖ be64(0)`, at a targetless kind),
-/// the `replaces` row and the LINEAGE row (each an optional-address row: the
-/// EMPTY group where nothing is named, else the address as an address-form
-/// slot row of one element, delimited; the lineage row names
-/// `lineage_fork_point`, the address the lineage forked at, and is EMPTY on a
-/// lineage that has not forked, D2), then `sigless_canonical_record` — the
-/// SIG-LESS CANONICAL RECORD, the record with its `sig` member removed
-/// ([`canonical_record`](crate::canonical_record) over its entries with no
-/// `sig`) — as one length-delimited element. `from` is no row.
+/// A `record` body's FIVE ROWS, BY NAME — the one argument
+/// [`entry_body_record`] takes. Two of them share a type: the `replaces` row
+/// and the LINEAGE row are each an optional address, the first EMPTY by kind
+/// at a credential deposit (l6-A1), the second EMPTY on a lineage that has
+/// not forked (D2). Taken positionally, the two would stand side by side as
+/// two unlabelled `None`s at every call, and the first caller to name one —
+/// a forked lineage's fork point — would choose between two adjacent
+/// positions no call site labels: the wrong one compiles, frames the address
+/// in the other row, and has every record so signed refused
+/// `attestation_invalid:signature`, with nothing naming the order. By field,
+/// as [`LinkSlots`] takes a link's slots, the call site says which row is
+/// which, and names the body-bytes row the SIG-LESS record at every call —
+/// never the atom its `sig` rides.
 ///
-/// PRECONDITION — every address's spelling, and `sigless_canonical_record`,
-/// is shorter than 2^32 bytes; a longer one PANICS, naming the obligation.
-pub fn entry_body_record(
-    ty: &Address,
-    to: &[Address],
-    replaces: Option<&Address>,
-    lineage_fork_point: Option<&Address>,
-    sigless_canonical_record: &[u8],
-) -> EntryBody {
+/// Not `#[non_exhaustive]`: every composer builds one, and a row the grammar
+/// gains is one every composer — signer and verifier alike — must name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecordRows<'a> {
+    /// Row (1): the link's type address — an address-form slot row of one
+    /// element.
+    pub ty: &'a Address,
+    /// Row (2): the link's target slot — an address-form slot row, EMPTY at a
+    /// targetless kind.
+    pub to: &'a [Address],
+    /// Row (3): the state the record replaces — the EMPTY group where `None`.
+    pub replaces: Option<&'a Address>,
+    /// Row (4): the address the lineage forked at — the EMPTY group on a
+    /// lineage that has not forked (D2).
+    pub lineage_fork_point: Option<&'a Address>,
+    /// Row (5): the SIG-LESS CANONICAL RECORD, the record with its `sig`
+    /// member removed ([`canonical_record`](crate::canonical_record) over its
+    /// entries with no `sig`) — one length-delimited element.
+    pub sigless_canonical_record: &'a [u8],
+}
+
+/// THE `record` BODY, under the `record` token — the record grade's preimage
+/// (the frame merge, fm-I; its design record §3): the [`RecordRows`] in the
+/// body's order — the TYPE slot row, the `to` slot row (EMPTY,
+/// `0x01 ‖ be64(0)`, at a targetless kind), the `replaces` row and the
+/// LINEAGE row (each an optional-address row: the EMPTY group where nothing
+/// is named, else the address as an address-form slot row of one element,
+/// delimited), then the sig-less canonical record as one length-delimited
+/// element. `from` is no row.
+///
+/// PRECONDITION — every address's spelling, and the sig-less canonical
+/// record, is shorter than 2^32 bytes; a longer one PANICS, naming the
+/// obligation.
+pub fn entry_body_record(rows: RecordRows<'_>) -> EntryBody {
+    let RecordRows { ty, to, replaces, lineage_fork_point, sigless_canonical_record } = rows;
     let mut out = Vec::new();
     push_slot(&mut out, EntrySlot::Addrs(std::slice::from_ref(ty)));
     push_slot(&mut out, EntrySlot::Addrs(to));
@@ -700,21 +731,22 @@ impl PublishBody {
     /// Append a WINDOW — the run from `start` of `width` positions, held by
     /// address — closing any open value stretch first, and hand the builder
     /// back; else the cause and the builder GONE, as after a refused push:
-    /// [`PublishRefusal::EmptyWindow`] where `width` is zero — a run holds at
-    /// least one position — then [`PublishRefusal::Unspellable`] where the
-    /// positions placed would pass 2^64 − 1, then
-    /// [`PublishRefusal::PastBudget`]. A window costs its class byte, its
-    /// start's delimited spelling and eight bytes of width, whatever its
-    /// width.
+    /// [`PublishRefusal::Unspellable`] where the positions placed would pass
+    /// 2^64 − 1, then [`PublishRefusal::PastBudget`]. `width` is a
+    /// [`NonZeroU64`] because a run holds at least one position: a window of
+    /// none is no call this method can be given. A window costs its class
+    /// byte, its start's delimited spelling and eight bytes of width, whatever
+    /// its width.
     ///
     /// PRECONDITION — `start`'s spelling is shorter than 2^32 bytes, else
     /// PANICS.
     #[must_use = "window takes the builder: the body goes on in the one it returns"]
-    pub fn window(mut self, start: &Address, width: u64) -> Result<PublishBody, PublishRefusal> {
-        if width == 0 {
-            return Err(PublishRefusal::EmptyWindow);
-        }
-        let placed = self.placed.checked_add(width).ok_or(PublishRefusal::Unspellable)?;
+    pub fn window(
+        mut self,
+        start: &Address,
+        width: NonZeroU64,
+    ) -> Result<PublishBody, PublishRefusal> {
+        let placed = self.placed.checked_add(width.get()).ok_or(PublishRefusal::Unspellable)?;
         let start = address_bytes(start);
         let cost = 1usize.saturating_add(delimited_len(start.len())).saturating_add(8);
         if self.finished_len().saturating_add(cost) > self.budget {
@@ -724,7 +756,7 @@ impl PublishBody {
             open.close(&mut self.bytes);
         }
         self.bytes.push(SEGMENT_WINDOW);
-        push_window(&mut self.bytes, &start, width);
+        push_window(&mut self.bytes, &start, width.get());
         self.placed = placed;
         Ok(self)
     }
@@ -761,15 +793,16 @@ const _: fn() = || {
 };
 
 /// Why [`PublishBody`] refused a piece — the builder GONE with it, as every
-/// refusal leaves it — NAMED, because a caller answers the three differently:
-/// a body PAST ITS BUDGET is the one the builder exists to refuse rather than
+/// refusal leaves it — NAMED, because a caller answers the two differently: a
+/// body PAST ITS BUDGET is the one the builder exists to refuse rather than
 /// build; a count past the body's leading `be64` names positions no store
-/// holds; a window of no positions is a run no arrangement holds. What each
-/// is answered is the caller's: a refusal reaches no wire from here.
+/// holds. What each is answered is the caller's: a refusal reaches no wire
+/// from here. A window of no positions is no cause here: a window's width is
+/// a [`NonZeroU64`], so no such piece can be offered.
 ///
-/// The causes are tested in ONE order, the piece's own first — an empty
-/// window, then the count, then the budget — so a piece the body could not
-/// spell at any budget is never answered as past this one.
+/// The causes are tested in ONE order, the count first, then the budget — so
+/// a piece the body could not spell at any budget is never answered as past
+/// this one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PublishRefusal {
     /// The FINISHED body — its leading count and its base-extent group
@@ -778,9 +811,6 @@ pub enum PublishRefusal {
     /// The positions placed would pass 2^64 − 1, the most the body's leading
     /// `be64(placed)` spells.
     Unspellable,
-    /// A window of width zero: a run holds at least one position
-    /// ([`ShotSegmentPiece::Window`]'s obligation).
-    EmptyWindow,
 }
 
 /// Prose, never a wire vocabulary: each caller answers a refusal in its own
@@ -790,7 +820,6 @@ impl fmt::Display for PublishRefusal {
         f.write_str(match self {
             PublishRefusal::PastBudget => "the finished body would pass its budget",
             PublishRefusal::Unspellable => "the positions placed would pass 2^64 - 1",
-            PublishRefusal::EmptyWindow => "a window holds no position",
         })
     }
 }

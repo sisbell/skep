@@ -111,8 +111,8 @@
 //!   — the shot's address form, one copied position's value or one window
 //!   at a time, the pieces its segments are built from — and the shot's base
 //!   extent), or piece by piece under a byte budget by [`PublishBody`], with
-//!   its refusal [`PublishRefusal`], and
-//!   [`entry_body_record`], the record grade's five rows under the `record`
+//!   its refusal [`PublishRefusal`], and [`entry_body_record`], over a
+//!   [`RecordRows`] naming the record grade's five rows, under the `record`
 //!   token — the bytes a publish-class entry's signature, or a record's
 //!   `sig`, is made over (signed ops; the design record §2.5; the frame
 //!   merge);
@@ -200,7 +200,7 @@ mod write_types;
 pub use entry::{
     entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_publish,
     entry_body_record, entry_frame, BoardTerm, EntryBody, EntrySlot, LinkSlots, PublishBody,
-    PublishRefusal, ShotSegmentPiece,
+    PublishRefusal, RecordRows, ShotSegmentPiece,
 };
 pub use framing::{
     framed, Tag, ENTRY_TAG, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, TAGS,

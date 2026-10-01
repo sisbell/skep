@@ -8,6 +8,7 @@
 //! base extent — signed by the seed's hybrid key and attached as the frame's
 //! top-level `attest`.
 
+use std::num::NonZeroU64;
 use std::sync::{LazyLock, PoisonError};
 
 use super::*;
@@ -230,9 +231,11 @@ impl SignerSegment {
     pub fn as_shot(&self) -> ShotSegmentPiece<'_> {
         match self {
             SignerSegment::Value(v) => ShotSegmentPiece::Value(v),
-            SignerSegment::Window(start, width) => {
-                ShotSegmentPiece::Window { start, width: *width }
-            }
+            SignerSegment::Window(start, width) => ShotSegmentPiece::Window {
+                start,
+                width: NonZeroU64::new(*width)
+                    .expect("a window the signer composes holds at least one position"),
+            },
         }
     }
 }
@@ -468,7 +471,13 @@ pub fn record_frame_for(
     let home = parse_addr(home)?;
     let ty = parse_addr(ty)?;
     let to: Vec<Address> = to.iter().map(|a| parse_addr(a)).collect::<Option<_>>()?;
-    let body = entry_body_record(&ty, &to, None, None, canonical);
+    let body = entry_body_record(RecordRows {
+        ty: &ty,
+        to: &to,
+        replaces: None,
+        lineage_fork_point: None,
+        sigless_canonical_record: canonical,
+    });
     Some(entry_frame(alg, board, &account, &home, &body))
 }
 

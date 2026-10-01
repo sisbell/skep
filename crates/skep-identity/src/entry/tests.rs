@@ -34,6 +34,11 @@ fn window_bytes(start: &Address, width: u64) -> Vec<u8> {
     out
 }
 
+/// A window's width as a pin spells it — at least one, as every run's is.
+fn nonzero(width: u64) -> NonZeroU64 {
+    NonZeroU64::new(width).expect("a pinned window's width is at least one")
+}
+
 /// The rows, byte for byte, at one small instance each — the pins a
 /// second implementation composes against — and the token each body
 /// carries into the frame's `op` member. The two insert pins put the
@@ -136,7 +141,7 @@ fn the_rows_spell_as_the_module_doc_states() {
         [
             ShotSegmentPiece::Value(b"a"),
             ShotSegmentPiece::Value(b"b"),
-            ShotSegmentPiece::Window { start: &window_start, width: 3 },
+            ShotSegmentPiece::Window { start: &window_start, width: nonzero(3) },
             ShotSegmentPiece::Value(b"c"),
         ],
         Some(5),
@@ -162,8 +167,8 @@ fn the_rows_spell_as_the_module_doc_states() {
     assert_eq!(
         entry_body_publish(
             [
-                ShotSegmentPiece::Window { start: &window_start, width: 3 },
-                ShotSegmentPiece::Window { start: &second, width: 1 },
+                ShotSegmentPiece::Window { start: &window_start, width: nonzero(3) },
+                ShotSegmentPiece::Window { start: &second, width: nonzero(1) },
             ],
             Some(0),
         )
@@ -236,7 +241,14 @@ fn the_rows_spell_as_the_module_doc_states() {
     // targeted kind with neither optional row named…
     let (record_ty, subject) = (addr(&[1, 1, 0, 1, 0, 1, 0, 3, 1]), [addr(&[1, 0, 2])]);
     assert_eq!(
-        entry_body_record(&record_ty, &subject, None, None, b"{}").as_bytes(),
+        entry_body_record(RecordRows {
+            ty: &record_ty,
+            to: &subject,
+            replaces: None,
+            lineage_fork_point: None,
+            sigless_canonical_record: b"{}",
+        })
+        .as_bytes(),
         [
             slot_bytes(EntrySlot::Addrs(std::slice::from_ref(&record_ty))),
             slot_bytes(EntrySlot::Addrs(&subject)),
@@ -259,7 +271,14 @@ fn the_rows_spell_as_the_module_doc_states() {
     ]
     .concat();
     assert_eq!(
-        entry_body_record(&record_ty, &[], Some(&revocation), Some(&fork_point), b"r").as_bytes(),
+        entry_body_record(RecordRows {
+            ty: &record_ty,
+            to: &[],
+            replaces: Some(&revocation),
+            lineage_fork_point: Some(&fork_point),
+            sigless_canonical_record: b"r",
+        })
+        .as_bytes(),
         [
             slot_bytes(EntrySlot::Addrs(std::slice::from_ref(&record_ty))),
             slot_bytes(empty),
@@ -279,7 +298,14 @@ fn the_rows_spell_as_the_module_doc_states() {
             )
             .op(),
             entry_body_publish([], None).op(),
-            entry_body_record(&record_ty, &[], None, None, b"").op(),
+            entry_body_record(RecordRows {
+                ty: &record_ty,
+                to: &[],
+                replaces: None,
+                lineage_fork_point: None,
+                sigless_canonical_record: b"",
+            })
+            .op(),
         ],
         ["insert", "make_link", "make_link", "publish", "record"],
         "each body carries its own grammar's token"
@@ -303,7 +329,7 @@ fn a_publish_body_built_within_its_budget_is_the_whole_sequences_body() {
     let whole = entry_body_publish(
         [
             ShotSegmentPiece::Value(b"ab"),
-            ShotSegmentPiece::Window { start: &start, width: 2 },
+            ShotSegmentPiece::Window { start: &start, width: nonzero(2) },
             ShotSegmentPiece::Value(b"c"),
         ],
         Some(7),
@@ -315,7 +341,7 @@ fn a_publish_body_built_within_its_budget_is_the_whole_sequences_body() {
             ShotSegmentPiece::Window { start, width } => body.window(start, width),
         })
     };
-    let window = ShotSegmentPiece::Window { start: &start, width: 2 };
+    let window = ShotSegmentPiece::Window { start: &start, width: nonzero(2) };
     let past = Some(PublishRefusal::PastBudget);
     assert_eq!(
         fed(&[ShotSegmentPiece::Value(b"ab"), window, ShotSegmentPiece::Value(b"cd")]).err(),
@@ -364,11 +390,6 @@ fn a_publish_body_built_within_its_budget_is_the_whole_sequences_body() {
         past,
         "a present group costs eight bytes more than the EMPTY one"
     );
-    assert_eq!(
-        PublishBody::within(budget, Some(7)).window(&start, 0).err(),
-        Some(PublishRefusal::EmptyWindow),
-        "no run is empty"
-    );
 }
 
 /// `PublishBody`'s budget bounds the FINISHED body, its leading count and its
@@ -389,7 +410,9 @@ fn a_publish_budget_of_the_empty_body_finishes_to_it_and_admits_nothing() {
             "an empty value costs its length prefix"
         );
         assert_eq!(
-            PublishBody::within(floor, base_extent).window(&addr(&[1, 0, 2, 0, 1, 1]), 1).err(),
+            PublishBody::within(floor, base_extent)
+                .window(&addr(&[1, 0, 2, 0, 1, 1]), nonzero(1))
+                .err(),
             Some(PublishRefusal::PastBudget),
             "a window costs its start and its width"
         );
@@ -408,22 +431,19 @@ fn a_publish_budget_below_the_empty_body_is_refused_at_within() {
 
 /// [`PublishBody`] NAMES what it refuses, because a caller answers the causes
 /// differently: a body past its budget is the one the builder exists to
-/// refuse, a count past 2^64 − 1 names positions no store holds, and a window
-/// of no positions is a run no arrangement holds. Where a piece meets more
-/// than one, the answer is the piece's own first — an empty window, then the
-/// count, then the budget. A body holding a full count and standing exactly
-/// on its budget is passed by its next piece on BOTH the count and the
-/// budget, and is told the count; one byte short of that budget, the
-/// full count's own window is told the budget alone; and an empty window
-/// under a budget it would pass too is told it is empty.
+/// refuse, and a count past 2^64 − 1 names positions no store holds. Where a
+/// piece meets both, the answer is the count. A body holding a full count and
+/// standing exactly on its budget is passed by its next piece on BOTH the
+/// count and the budget, and is told the count; one byte short of that
+/// budget, the full count's own window is told the budget alone.
 #[test]
 fn each_refusal_names_its_cause() {
     let start = addr(&[1, 0, 2, 0, 1, 4]);
-    let full = [ShotSegmentPiece::Window { start: &start, width: u64::MAX }];
+    let full = [ShotSegmentPiece::Window { start: &start, width: NonZeroU64::MAX }];
     let budget = entry_body_publish(full, None).as_bytes().len();
-    let at_full = || PublishBody::within(budget, None).window(&start, u64::MAX);
+    let at_full = || PublishBody::within(budget, None).window(&start, NonZeroU64::MAX);
     assert_eq!(
-        at_full().and_then(|body| body.window(&start, 1)).err(),
+        at_full().and_then(|body| body.window(&start, nonzero(1))).err(),
         Some(PublishRefusal::Unspellable),
         "a window past the count and the budget is told the count"
     );
@@ -433,15 +453,9 @@ fn each_refusal_names_its_cause() {
         "a value past the count and the budget is told the count"
     );
     assert_eq!(
-        PublishBody::within(budget - 1, None).window(&start, u64::MAX).err(),
+        PublishBody::within(budget - 1, None).window(&start, NonZeroU64::MAX).err(),
         Some(PublishRefusal::PastBudget),
         "a spellable count past the budget is told the budget"
-    );
-    let floor = entry_body_publish([], None).as_bytes().len();
-    assert_eq!(
-        PublishBody::within(floor, None).window(&start, 0).err(),
-        Some(PublishRefusal::EmptyWindow),
-        "an empty window past the budget is told it is empty"
     );
 }
 

@@ -64,6 +64,8 @@
 //!   own re-insert budget ([`ComposeFault::PastReinsertBudget`]), answered off
 //!   the runs' widths before a value is read.
 
+use std::num::NonZeroU64;
+
 use skep_address::{document_of, Address, Nat, Span};
 use skep_arrangement::{trunk_of, Deposit, PlacedSegment, Shot, MAX_REINSERTED_VALUES};
 use skep_content::HasContent;
@@ -71,6 +73,7 @@ use skep_febe::Op;
 use skep_identity::{
     entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_record,
     entry_frame, BoardTerm, EntryBody, EntrySlot, LinkSlots, PublishBody, PublishRefusal,
+    RecordRows,
 };
 use skep_links::SlotArg;
 use skep_namespace::{HasM3, PrincipalId};
@@ -321,7 +324,13 @@ fn publish_body(
                 }
             }
             PlacedSegment::Window(run) => {
-                body = body.window(run.i_start(), spelled(run.width())?).map_err(refused)?;
+                // A window here is a `Run`, whose width is at least one
+                // (`RunError::ZeroWidth`): a zero is a broken premise, and
+                // STOPS LOUDLY, as `compose`'s precondition does.
+                let width = NonZeroU64::new(spelled(run.width())?).expect(
+                    "publish_body's premise: a window here is a Run, whose width is at least one",
+                );
+                body = body.window(run.i_start(), width).map_err(refused)?;
             }
         }
     }
@@ -331,17 +340,11 @@ fn publish_body(
 /// The composer's answer for a segment [`PublishBody`] refused, by the cause
 /// the builder names: past its budget, [`ComposeFault::PastBodyBudget`]; a
 /// count past `be64`, [`ComposeFault::Unspellable`] (which the up-front sum
-/// has already answered for every shot that reaches the walk). A window here
-/// is a `Run`, whose width is at least one (`RunError::ZeroWidth`), so an
-/// empty one is a broken premise and STOPS LOUDLY, as [`compose`]'s
-/// precondition does.
+/// has already answered for every shot that reaches the walk).
 fn refused(refusal: PublishRefusal) -> ComposeFault {
     match refusal {
         PublishRefusal::PastBudget => ComposeFault::PastBodyBudget,
         PublishRefusal::Unspellable => ComposeFault::Unspellable,
-        PublishRefusal::EmptyWindow => unreachable!(
-            "publish_body's premise: a window here is a Run, whose width is at least one"
-        ),
     }
 }
 
@@ -382,7 +385,13 @@ pub(super) fn compose_record(
     canonical: &[u8],
 ) -> Option<EntryFrame> {
     let board = board_term(world)?;
-    let body = entry_body_record(ty, to, None, None, canonical);
+    let body = entry_body_record(RecordRows {
+        ty,
+        to,
+        replaces: None,
+        lineage_fork_point: None,
+        sigless_canonical_record: canonical,
+    });
     Some(EntryFrame { board, account: home_account.clone(), doc: home.clone(), body })
 }
 
@@ -437,7 +446,13 @@ mod tests {
                 .expect("a tumbler"),
         )
         .expect("an address");
-        let record = entry_body_record(&ty, &[], None, None, b"");
+        let record = entry_body_record(RecordRows {
+            ty: &ty,
+            to: &[],
+            replaces: None,
+            lineage_fork_point: None,
+            sigless_canonical_record: b"",
+        });
         assert_eq!(record.op(), "record", "the record grade's grammar token");
         assert!(
             JsonCodec.parse(br#"{"op":"record"}"#).is_err(),

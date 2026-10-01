@@ -14,10 +14,10 @@ use common::{
 };
 use sha2::{Digest, Sha256};
 use skep_identity::{
-    canonical_record, framed, parse_enroll, parse_record_value, parse_retire, record_bytes,
-    single_address, AlgRow, CredentialKind, Enrollment, Fingerprint, FoldCtx, HasIdentity,
-    IdentityState, Inert, LabelError, ParseKeyError, PayloadError, PublicKey, PublishBody,
-    PublishRefusal, RecordValue, SigAlgRow, Values, ALGS,
+    canonical_record, entry_body_publish, framed, parse_enroll, parse_record_value, parse_retire,
+    record_bytes, single_address, AlgRow, CredentialKind, Enrollment, Fingerprint, FoldCtx,
+    HasIdentity, IdentityState, Inert, LabelError, ParseKeyError, PayloadError, PublicKey,
+    PublishBody, PublishRefusal, RecordValue, SigAlgRow, Values, ALGS,
     ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, ED25519_KEY_LEN, ENROLL_TYPE, ENTRY_TAG,
     FNDSA512_PREVIEW_ED25519_KEY_LEN, FNDSA512_PREVIEW_KEY_LEN, KEY_TAG, MAX_RECORD_BYTES,
     MLDSA65_ED25519_KEY_LEN, MLDSA65_KEY_LEN, NODE_HELLO_TAG, RETIRE_TYPE, SESSION_TAG,
@@ -589,9 +589,10 @@ fn error_types_lift_into_dyn_error() {
     assert_eq!(boxed.to_string(), LabelError::Newline.to_string());
     let boxed = lift(PayloadError::DuplicateKey(4));
     assert_eq!(boxed.to_string(), "duplicate_key:4");
-    let empty_window = PublishBody::within(usize::MAX, None).window(&addr(ACCT_A), 0);
-    let boxed = lift(empty_window.expect_err("a window of no positions"));
-    assert_eq!(boxed.to_string(), PublishRefusal::EmptyWindow.to_string());
+    let floor = entry_body_publish([], None).as_bytes().len();
+    let past_budget = PublishBody::within(floor, None).push(b"");
+    let boxed = lift(past_budget.expect_err("an empty value costs its length prefix"));
+    assert_eq!(boxed.to_string(), PublishRefusal::PastBudget.to_string());
 }
 
 /// The fold's seam forwards through `&T` and `Box<T>`, as std's own traits

@@ -113,7 +113,7 @@ fn every_per_tag_step_answers_for_exactly_the_tags_rule_names() {
         [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519],
         "this build holds exactly the two rules the module card names"
     );
-    let mut rows: Vec<u8> = SIG_ALGS.iter().map(|row| row.tag).collect();
-    rows.sort_unstable();
-    assert_eq!(rule_tags, rows, "a rule here for exactly the tags SIG_ALGS names");
+    let mut row_tags: Vec<u8> = SIG_ALGS.iter().map(|row| row.tag).collect();
+    row_tags.sort_unstable();
+    assert_eq!(rule_tags, row_tags, "a rule here for exactly the tags SIG_ALGS names");
 }

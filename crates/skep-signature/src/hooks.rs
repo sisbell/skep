@@ -23,16 +23,16 @@ use crate::Rule;
 pub struct SeededRng06 {
     seed: [u8; 32],
     counter: u64,
-    /// The current SHA-256 block, handed out front to back; `used ==
+    /// The current SHA-256 block, handed out front to back; `drawn ==
     /// block.len()` when the next byte needs a fresh one.
     block: [u8; 32],
-    used: usize,
+    drawn: usize,
 }
 
 impl SeededRng06 {
     pub fn new(seed: [u8; 32]) -> SeededRng06 {
         let block = [0; 32];
-        SeededRng06 { seed, counter: 0, used: block.len(), block }
+        SeededRng06 { seed, counter: 0, drawn: block.len(), block }
     }
 }
 
@@ -53,17 +53,17 @@ impl rand_core_06::RngCore for SeededRng06 {
     fn fill_bytes(&mut self, dest: &mut [u8]) {
         use sha2::Digest;
         for out in dest {
-            if self.used == self.block.len() {
+            if self.drawn == self.block.len() {
                 self.block = Sha256::new()
                     .chain_update(self.seed)
                     .chain_update(self.counter.to_be_bytes())
                     .finalize()
                     .into();
                 self.counter += 1;
-                self.used = 0;
+                self.drawn = 0;
             }
-            *out = self.block[self.used];
-            self.used += 1;
+            *out = self.block[self.drawn];
+            self.drawn += 1;
         }
     }
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core_06::Error> {

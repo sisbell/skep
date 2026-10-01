@@ -28,7 +28,7 @@ use crate::Rule;
 /// copied onto the heap.
 struct ExactBytes<'a> {
     bytes: &'a [u8],
-    taken: usize,
+    drawn: usize,
 }
 
 impl rand_core_06::RngCore for ExactBytes<'_> {
@@ -39,7 +39,7 @@ impl rand_core_06::RngCore for ExactBytes<'_> {
         rand_core_06::impls::next_u64_via_fill(self)
     }
     fn fill_bytes(&mut self, dest: &mut [u8]) {
-        let end = self.taken + dest.len();
+        let end = self.drawn + dest.len();
         assert!(
             end <= self.bytes.len(),
             "fn-dsa 0.4.0's keygen draws exactly {} bytes; a longer draw ({} so far) is a keygen \
@@ -47,8 +47,8 @@ impl rand_core_06::RngCore for ExactBytes<'_> {
             self.bytes.len(),
             end
         );
-        dest.copy_from_slice(&self.bytes[self.taken..end]);
-        self.taken = end;
+        dest.copy_from_slice(&self.bytes[self.drawn..end]);
+        self.drawn = end;
     }
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core_06::Error> {
         self.fill_bytes(dest);
@@ -102,24 +102,24 @@ enum PqSigner {
 }
 
 impl PqSigner {
-    /// KEYGEN of the post-quantum half under `rule`, from the KDF's PQ half
-    /// seed by the pinned crate's own keygen: the signing half, and its
-    /// verifying key's encoding — the half the KEY PIN puts first.
+    /// KEYGEN of the post-quantum half under `rule`, from `half_seed`, the
+    /// KDF's PQ half seed, by the pinned crate's own keygen: the signing half,
+    /// and its verifying key's encoding — the half the KEY PIN puts first.
     /// ML-DSA-65's is `SigningKey::from_seed(ξ)`; the FN-DSA-512 preview's is
-    /// `fn-dsa` 0.4.0's keygen fed `seed` through `ExactBytes`, and checked to
-    /// have drawn all 32 bytes.
-    fn keygen(rule: Rule, seed: &[u8; 32]) -> (PqSigner, Vec<u8>) {
+    /// `fn-dsa` 0.4.0's keygen fed `half_seed` through `ExactBytes`, and
+    /// checked to have drawn all 32 bytes.
+    fn keygen(rule: Rule, half_seed: &[u8; 32]) -> (PqSigner, Vec<u8>) {
         match rule {
             Rule::MlDsa65Ed25519 => {
                 // ξ lent as `ml-dsa`'s `&Seed` (`hybrid-array` borrows a
                 // `&[u8; 32]` as a `&Array<u8, U32>`), so no second copy of it
                 // is made here; `ml-dsa` keeps its own inside the key.
-                let sk = ml_dsa::SigningKey::<MlDsa65>::from_seed(seed.into());
+                let sk = ml_dsa::SigningKey::<MlDsa65>::from_seed(half_seed.into());
                 let pk = sk.verifying_key().encode();
                 (PqSigner::MlDsa65(sk), pk.as_slice().to_vec())
             }
             Rule::FnDsa512PreviewEd25519 => {
-                let mut rng = ExactBytes { bytes: seed, taken: 0 };
+                let mut rng = ExactBytes { bytes: half_seed, drawn: 0 };
                 let mut sk = vec![0u8; sign_key_size(FN_DSA_LOGN_512)];
                 let mut pk = vec![0u8; vrfy_key_size(FN_DSA_LOGN_512)];
                 KeyPairGeneratorStandard::default().keygen(
@@ -128,7 +128,7 @@ impl PqSigner {
                     &mut sk,
                     &mut pk,
                 );
-                assert_eq!(rng.taken, 32, "fn-dsa 0.4.0's keygen draws its one 32-byte seed");
+                assert_eq!(rng.drawn, 32, "fn-dsa 0.4.0's keygen draws its one 32-byte seed");
                 (PqSigner::FnDsa512Preview(sk), pk)
             }
         }
@@ -358,14 +358,14 @@ mod tests {
             for blob in [&first, &second] {
                 assert_eq!(crate::verify(tag, signer.public_key(), msg, blob), Ok(()), "tag {tag}");
             }
-            let pq_len = signer.public_key().sig_alg_row().pq_sig_len;
+            let pq_sig_len = signer.public_key().sig_alg_row().pq_sig_len;
             assert_eq!(
-                first[pq_len..],
-                second[pq_len..],
+                first[pq_sig_len..],
+                second[pq_sig_len..],
                 "tag {tag}: Ed25519 signs deterministically"
             );
             assert_eq!(
-                first[..pq_len] == second[..pq_len],
+                first[..pq_sig_len] == second[..pq_sig_len],
                 tag == TAG_MLDSA65_ED25519,
                 "tag {tag}: the post-quantum field repeats under tag 1 alone"
             );

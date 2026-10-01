@@ -18,9 +18,9 @@ use crate::Rule;
 /// another KDF version derives other keys.
 const KDF_SALT: &[u8] = b"skep-kdf-v1";
 /// The half labels.
-const HALF_ED25519: &[u8] = b"ed25519";
-const HALF_MLDSA65: &[u8] = b"ml-dsa-65";
-const HALF_FNDSA512: &[u8] = b"fn-dsa-512";
+const HALF_LABEL_ED25519: &[u8] = b"ed25519";
+const HALF_LABEL_MLDSA65: &[u8] = b"ml-dsa-65";
+const HALF_LABEL_FNDSA512: &[u8] = b"fn-dsa-512";
 
 /// The two half seeds one 32-byte seed derives under one tag —
 /// private-key material, so `Clone` and nothing more: not `Copy`, which
@@ -63,11 +63,11 @@ fn derive_half_seed(seed: &[u8; 32], token: &str, half_label: &[u8]) -> [u8; 32]
 pub fn derive_half_seeds(tag: u8, seed: &[u8; 32]) -> Option<HalfSeeds> {
     let row = SigAlgRow::of_tag(tag)?;
     let pq_label = match Rule::of(tag)? {
-        Rule::MlDsa65Ed25519 => HALF_MLDSA65,
-        Rule::FnDsa512PreviewEd25519 => HALF_FNDSA512,
+        Rule::MlDsa65Ed25519 => HALF_LABEL_MLDSA65,
+        Rule::FnDsa512PreviewEd25519 => HALF_LABEL_FNDSA512,
     };
     Some(HalfSeeds {
-        ed25519: derive_half_seed(seed, row.token, HALF_ED25519),
+        ed25519: derive_half_seed(seed, row.token, HALF_LABEL_ED25519),
         pq: derive_half_seed(seed, row.token, pq_label),
     })
 }

@@ -162,7 +162,7 @@ struct SignedFrame {
     sig: Vec<u8>,
 }
 
-fn golden_of(tag: u8) -> (HybridSigner, Vec<SignedFrame>) {
+fn sign_fixed_frames(tag: u8) -> (HybridSigner, Vec<SignedFrame>) {
     let signer = HybridSigner::from_seed(tag, &GOLDEN_SEED).unwrap();
     let alg = SigAlgRow::of_tag(tag).unwrap().token;
     let mut out = Vec::new();
@@ -183,7 +183,7 @@ fn golden_of(tag: u8) -> (HybridSigner, Vec<SignedFrame>) {
 }
 
 fn check_golden(g: &TagGolden) {
-    let (signer, signed) = golden_of(g.tag);
+    let (signer, signed) = sign_fixed_frames(g.tag);
     let key = signer.public_key();
     let pq = sha_hex(key.pq_half());
     let ed = sha_hex(key.ed25519_half());
@@ -356,7 +356,7 @@ fn the_kdf_is_the_hkdf_formula_wire_md_publishes() {
 #[test]
 fn each_half_alone_fails_under_both_tags() {
     for tag in [1u8, 3] {
-        let (signer, signed) = golden_of(tag);
+        let (signer, signed) = sign_fixed_frames(tag);
         let row = SigAlgRow::of_tag(tag).unwrap();
         let other = HybridSigner::from_seed(tag, &[0x99; 32]).unwrap();
         let SignedFrame { frame, sig, .. } = &signed[0];
@@ -424,12 +424,12 @@ fn sizes_and_timings_per_tag() {
     use std::time::Instant;
     for tag in [1u8, 3] {
         let row = SigAlgRow::of_tag(tag).unwrap();
-        let (signer, signed) = golden_of(tag);
+        let (signer, signed) = sign_fixed_frames(tag);
         let key_len = signer.public_key().raw().len();
         let sig_len = signed[0].sig.len();
         assert_eq!(key_len, row.key_len(), "tag {tag}: the key is the row's width");
         assert_eq!(sig_len, row.sig_len(), "tag {tag}: the blob is the row's width");
-        let PqWidths { key: pq_key, sig: pq_sig, signing_key: pq_sk } =
+        let PqWidths { key: pq_key_len, sig: pq_sig_len, signing_key: pq_signing_key_len } =
             pq_widths(tag).unwrap();
         let frame = &signed[0].frame;
         let n = 40;
@@ -456,10 +456,10 @@ fn sizes_and_timings_per_tag() {
             v[v.len() / 2]
         };
         eprintln!(
-            "SIGNED-OPS SIZES tag {tag} ({}): public key {key_len} B (pq {pq_key} + ed 32), \
-             signature {sig_len} B (pq {pq_sig} + ed 64), filled marker payload {} B \
-             (97 + {sig_len}), pq signing key {pq_sk} B; medians over {n}: keygen {} µs, \
-             sign {} µs, verify {} µs",
+            "SIGNED-OPS SIZES tag {tag} ({}): public key {key_len} B (pq {pq_key_len} + ed 32), \
+             signature {sig_len} B (pq {pq_sig_len} + ed 64), filled marker payload {} B \
+             (97 + {sig_len}), pq signing key {pq_signing_key_len} B; medians over {n}: \
+             keygen {} µs, sign {} µs, verify {} µs",
             row.token,
             97 + sig_len,
             median(&mut keygen_us),
@@ -504,7 +504,7 @@ fn the_fn_dsa_preview_signs_and_verifies_on_this_target() {
         std::env::consts::ARCH,
         if native { "native f64 (fn-dsa 0.4.0 flr_native)" } else { "integer-emulated IEEE-754 (flr_emu)" }
     );
-    let (signer, signed) = golden_of(3);
+    let (signer, signed) = sign_fixed_frames(3);
     for SignedFrame { op, frame, sig } in &signed {
         assert_eq!(verify(3, signer.public_key(), frame, sig), Ok(()), "{op}");
         assert_eq!(sig.len(), 730, "{op}");

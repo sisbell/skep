@@ -47,34 +47,39 @@ fn bytes32(hex: &str) -> [u8; 32] {
 fn the_pq_half_decode_refuses_every_fn_dsa_header_byte_but_0x09() {
     let seed = [0x42u8; 32];
     for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
-        let s = HybridSigner::from_seed(tag, &seed).unwrap();
+        let signer = HybridSigner::from_seed(tag, &seed).unwrap();
         assert!(
-            PqVerifier::decode(s.public_key()).is_some(),
+            PqVerifier::decode(signer.public_key()).is_some(),
             "tag {tag}: a derived key decodes"
         );
     }
-    let s3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &seed).unwrap();
-    let mut pq = s3.public_key().pq_half().to_vec();
+    let signer3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &seed).unwrap();
+    let mut pq = signer3.public_key().pq_half().to_vec();
     assert_eq!(pq[0], 0x09, "fn-dsa 0.4.0's degree-512 header byte");
     pq[0] = 0x0a;
-    let bad = PublicKey::from_halves(s3.public_key().alg(), &pq, s3.public_key().ed25519_half())
-        .expect("the row's widths");
+    let bad =
+        PublicKey::from_halves(signer3.public_key().alg(), &pq, signer3.public_key().ed25519_half())
+            .expect("the row's widths");
     assert!(PqVerifier::decode(&bad).is_none(), "a bad header byte does not decode");
     // Every header byte: `0x09` alone decodes, and the courtesy agrees.
     for header in 0..=u8::MAX {
-        let mut with = s3.public_key().pq_half().to_vec();
-        with[0] = header;
-        let key =
-            PublicKey::from_halves(s3.public_key().alg(), &with, s3.public_key().ed25519_half())
-                .expect("the row's widths");
+        let mut pq = signer3.public_key().pq_half().to_vec();
+        pq[0] = header;
+        let key = PublicKey::from_halves(
+            signer3.public_key().alg(),
+            &pq,
+            signer3.public_key().ed25519_half(),
+        )
+        .expect("the row's widths");
         assert_eq!(PqVerifier::decode(&key).is_some(), header == 0x09, "header {header:#04x}");
         assert_eq!(key_decodes(&key), header == 0x09, "the courtesy, header {header:#04x}");
     }
-    let s1 = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &seed).unwrap();
-    let mut pq = s1.public_key().pq_half().to_vec();
+    let signer1 = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &seed).unwrap();
+    let mut pq = signer1.public_key().pq_half().to_vec();
     pq[0] ^= 0xff;
-    let still = PublicKey::from_halves(s1.public_key().alg(), &pq, s1.public_key().ed25519_half())
-        .expect("the row's widths");
+    let still =
+        PublicKey::from_halves(signer1.public_key().alg(), &pq, signer1.public_key().ed25519_half())
+            .expect("the row's widths");
     assert!(PqVerifier::decode(&still).is_some(), "ML-DSA-65's encoding decodes at its length");
     assert!(!key_decodes(&bad) && key_decodes(&still), "the courtesy reads the same two decodes");
 }
@@ -96,8 +101,8 @@ fn the_pq_half_decode_refuses_an_fn_dsa_coefficient_of_q() {
         pq[at..at + 7].copy_from_slice(&x.to_le_bytes()[..7]);
         pq
     }
-    let s3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &[0x42; 32]).unwrap();
-    let key = s3.public_key();
+    let signer3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &[0x42; 32]).unwrap();
+    let key = signer3.public_key();
     for i in [0, 511] {
         for (value, decodes) in [(12_288, true), (12_289, false)] {
             let pq = with_coefficient(key.pq_half(), i, value);
@@ -121,13 +126,14 @@ fn the_pq_half_decode_refuses_an_fn_dsa_coefficient_of_q() {
 #[test]
 fn a_key_that_does_not_decode_answers_signature_whichever_half_fails_first() {
     let seed = [0x42u8; 32];
-    let s3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &seed).unwrap();
+    let signer3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &seed).unwrap();
     let msg = b"the entry frame";
-    let sig = s3.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
-    let mut pq = s3.public_key().pq_half().to_vec();
+    let sig = signer3.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
+    let mut pq = signer3.public_key().pq_half().to_vec();
     pq[0] = 0x0a;
-    let bad = PublicKey::from_halves(s3.public_key().alg(), &pq, s3.public_key().ed25519_half())
-        .expect("the row's widths");
+    let bad =
+        PublicKey::from_halves(signer3.public_key().alg(), &pq, signer3.public_key().ed25519_half())
+            .expect("the row's widths");
     assert!(
         decode_ed25519_half(&bad).is_some() && PqVerifier::decode(&bad).is_none(),
         "the premise: its Ed25519 half decodes and its post-quantum half does not"
@@ -148,14 +154,14 @@ fn a_key_that_does_not_decode_answers_signature_whichever_half_fails_first() {
 /// `Signature` past the row and the width, over a blob its own signer
 /// made.
 #[test]
-fn a_key_whose_ed25519_half_is_no_point_decodes_and_verifies_nothing() {
+fn a_key_whose_ed25519_half_is_no_point_does_not_decode_and_verifies_nothing() {
     let seed = [0x42u8; 32];
     let msg = b"the entry frame";
     let no_point = no_point();
     for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
-        let s = HybridSigner::from_seed(tag, &seed).unwrap();
-        let sig = s.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
-        let key = s.public_key();
+        let signer = HybridSigner::from_seed(tag, &seed).unwrap();
+        let sig = signer.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
+        let key = signer.public_key();
         let bad =
             PublicKey::from_halves(key.alg(), key.pq_half(), &no_point).expect("the row's widths");
         assert!(PqVerifier::decode(&bad).is_some(), "tag {tag}: the premise, its PQ half decodes");
@@ -179,14 +185,16 @@ fn an_undecodable_key_answers_as_its_source_key_save_that_nothing_passes() {
         .into_iter()
         .map(|tag| HybridSigner::from_seed(tag, &[0x42; 32]).unwrap())
         .collect();
-    let blobs: Vec<Vec<u8>> =
-        signers.iter().map(|s| s.sign_with_rng(&mut SeededRng06::new([7; 32]), msg)).collect();
-    for (i, s) in signers.iter().enumerate() {
-        let key = s.public_key();
+    let blobs: Vec<Vec<u8>> = signers
+        .iter()
+        .map(|signer| signer.sign_with_rng(&mut SeededRng06::new([7; 32]), msg))
+        .collect();
+    for (i, signer) in signers.iter().enumerate() {
+        let key = signer.public_key();
         let own = &blobs[i];
         let mut broken = vec![PublicKey::from_halves(key.alg(), key.pq_half(), &no_point())
             .expect("the row's widths")];
-        if s.tag() == TAG_FNDSA512_PREVIEW_ED25519 {
+        if signer.tag() == TAG_FNDSA512_PREVIEW_ED25519 {
             let mut pq = key.pq_half().to_vec();
             pq[0] = 0x0a;
             broken.push(
@@ -216,7 +224,7 @@ fn an_undecodable_key_answers_as_its_source_key_save_that_nothing_passes() {
                         verify(tag, bad, msg, blob),
                         expected,
                         "tag {tag} against a broken tag-{} key, a {}-byte blob",
-                        s.tag(),
+                        signer.tag(),
                         blob.len()
                     );
                 }
@@ -235,16 +243,16 @@ fn the_pq_half_verifies_its_own_field_and_the_hybrid_needs_both() {
     let seed = [0x42u8; 32];
     let msg = b"the entry frame";
     for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
-        let s = HybridSigner::from_seed(tag, &seed).unwrap();
-        let half = PqVerifier::decode(s.public_key()).expect("a derived key decodes");
-        let mut sig = s.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
-        let pq_len = s.public_key().sig_alg_row().pq_sig_len;
-        sig[pq_len] ^= 1;
-        let (pq_sig, _) = sig.split_at(pq_len);
+        let signer = HybridSigner::from_seed(tag, &seed).unwrap();
+        let half = PqVerifier::decode(signer.public_key()).expect("a derived key decodes");
+        let mut sig = signer.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
+        let pq_sig_len = signer.public_key().sig_alg_row().pq_sig_len;
+        sig[pq_sig_len] ^= 1;
+        let (pq_sig, _) = sig.split_at(pq_sig_len);
         assert!(half.verify(msg, pq_sig), "tag {tag}: its own field");
         assert!(!half.verify(b"other", pq_sig), "tag {tag}: another message");
         assert_eq!(
-            verify(tag, s.public_key(), msg, &sig),
+            verify(tag, signer.public_key(), msg, &sig),
             Err(HybridFault::Signature),
             "tag {tag}: the hybrid refuses a broken Ed25519 field"
         );
@@ -261,22 +269,22 @@ fn the_pq_half_verifies_its_own_field_and_the_hybrid_needs_both() {
 /// unused index slots, the padding after `s2` — so a bump of a pinned crate
 /// that stopped checking them fails here rather than widening a frozen tag.
 #[test]
-fn the_pq_half_refuses_every_one_bit_near_miss_where_a_decoder_decides() {
+fn the_pq_half_refuses_each_low_bit_near_miss_where_a_decoder_decides() {
     let msg = b"the entry frame";
     for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
-        let s = HybridSigner::from_seed(tag, &[0x42; 32]).unwrap();
-        let half = PqVerifier::decode(s.public_key()).expect("a derived key decodes");
-        let pq_len = s.public_key().sig_alg_row().pq_sig_len;
-        let blob = s.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
-        let field = &blob[..pq_len];
+        let signer = HybridSigner::from_seed(tag, &[0x42; 32]).unwrap();
+        let half = PqVerifier::decode(signer.public_key()).expect("a derived key decodes");
+        let pq_sig_len = signer.public_key().sig_alg_row().pq_sig_len;
+        let blob = signer.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
+        let field = &blob[..pq_sig_len];
         assert!(half.verify(msg, field), "tag {tag}: the premise, the field verifies");
         let decided: Vec<usize> = if tag == TAG_MLDSA65_ED25519 {
             // The hint's last byte counts its ones; fewer than ω leaves slots.
-            assert!(field[pq_len - 1] < 55, "the premise: the hint leaves index slots unused");
-            (pq_len - (55 + 6)..pq_len).collect()
+            assert!(field[pq_sig_len - 1] < 55, "the premise: the hint leaves index slots unused");
+            (pq_sig_len - (55 + 6)..pq_sig_len).collect()
         } else {
-            assert_eq!(field[pq_len - 1], 0, "the premise: `s2` leaves zero padding");
-            std::iter::once(0).chain(1 + 40..pq_len).collect()
+            assert_eq!(field[pq_sig_len - 1], 0, "the premise: `s2` leaves zero padding");
+            std::iter::once(0).chain(1 + 40..pq_sig_len).collect()
         };
         for at in decided {
             let mut near = field.to_vec();
@@ -316,19 +324,19 @@ fn s2_of(magnitudes: &[usize], len: usize) -> Vec<u8> {
 fn a_hostile_post_quantum_field_behind_a_genuine_ed25519_half_answers_signature() {
     let msg = b"the entry frame";
     for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
-        let s = HybridSigner::from_seed(tag, &[0x42; 32]).unwrap();
-        let key = s.public_key();
-        let pq_len = key.sig_alg_row().pq_sig_len;
-        let genuine = s.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
+        let signer = HybridSigner::from_seed(tag, &[0x42; 32]).unwrap();
+        let key = signer.public_key();
+        let pq_sig_len = key.sig_alg_row().pq_sig_len;
+        let genuine = signer.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
         assert_eq!(verify(tag, key, msg, &genuine), Ok(()), "tag {tag}: the premise");
         let fields: Vec<(&str, Vec<u8>)> = if tag == TAG_MLDSA65_ED25519 {
             // The genuine `c̃` and `z`; the hint — the last ω + k = 55 + 6
             // bytes, its cuts the last 6 — replaced whole.
             let with_hint = |indices: &[u8], cuts: [u8; 6]| {
-                let mut field = genuine[..pq_len].to_vec();
-                field[pq_len - 61..].fill(0);
-                field[pq_len - 61..][..indices.len()].copy_from_slice(indices);
-                field[pq_len - 6..].copy_from_slice(&cuts);
+                let mut field = genuine[..pq_sig_len].to_vec();
+                field[pq_sig_len - 61..].fill(0);
+                field[pq_sig_len - 61..][..indices.len()].copy_from_slice(indices);
+                field[pq_sig_len - 6..].copy_from_slice(&cuts);
                 field
             };
             vec![
@@ -345,7 +353,7 @@ fn a_hostile_post_quantum_field_behind_a_genuine_ed25519_half_answers_signature(
             let with_s2 = |magnitudes: &[usize]| {
                 let mut field = vec![0x39_u8];
                 field.extend([0u8; 40]);
-                field.extend(s2_of(magnitudes, pq_len - 41));
+                field.extend(s2_of(magnitudes, pq_sig_len - 41));
                 field
             };
             vec![
@@ -357,7 +365,7 @@ fn a_hostile_post_quantum_field_behind_a_genuine_ed25519_half_answers_signature(
             ]
         };
         for (what, field) in fields {
-            let blob = [&field[..], &genuine[pq_len..]].concat();
+            let blob = [&field[..], &genuine[pq_sig_len..]].concat();
             assert_eq!(
                 verify(tag, key, msg, &blob),
                 Err(HybridFault::Signature),
@@ -400,7 +408,7 @@ fn s2_walk(s2: &[u8]) -> Option<(Vec<(usize, usize)>, usize)> {
 /// increasing); the FN-DSA-512 preview's `s2` with a zero coefficient's sign
 /// bit set (`comp_decode`'s "-0") and with the first bit past its last
 /// coefficient set (its unused bits). `PqVerifier::verify` refuses each.
-/// `the_pq_half_refuses_every_one_bit_near_miss_where_a_decoder_decides`
+/// `the_pq_half_refuses_each_low_bit_near_miss_where_a_decoder_decides`
 /// flips bit 0 alone, which reaches none of the four: a flipped hint index
 /// moves the hint, which the arithmetic refuses under any decoder, and
 /// `comp_decode` reads low bit first, so the unused bits are the last data
@@ -412,24 +420,24 @@ fn the_pq_half_refuses_a_second_encoding_of_a_genuine_field() {
 
     // Tag 1: the hint is the field's last ω + k = 55 + 6 bytes, its cuts the
     // last 6.
-    let s1 = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[0x42; 32]).unwrap();
-    let half = PqVerifier::decode(s1.public_key()).expect("a derived key decodes");
-    let pq_len = s1.public_key().sig_alg_row().pq_sig_len;
-    let field = s1.sign_with_rng(&mut SeededRng06::new([7; 32]), msg)[..pq_len].to_vec();
+    let signer1 = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[0x42; 32]).unwrap();
+    let half = PqVerifier::decode(signer1.public_key()).expect("a derived key decodes");
+    let pq_sig_len = signer1.public_key().sig_alg_row().pq_sig_len;
+    let field = signer1.sign_with_rng(&mut SeededRng06::new([7; 32]), msg)[..pq_sig_len].to_vec();
     assert!(half.verify(msg, &field), "the premise: tag 1's field verifies");
-    let (indices, cuts) = (pq_len - 61, pq_len - 6);
-    let used = usize::from(field[pq_len - 1]);
+    let (indices_at, cuts_at) = (pq_sig_len - 61, pq_sig_len - 6);
+    let used = usize::from(field[pq_sig_len - 1]);
     assert!(used < 55, "the premise: the hint leaves an index slot unused");
     let (poly, first) = (0..6)
-        .map(|i| (i, if i == 0 { 0 } else { usize::from(field[cuts + i - 1]) }))
-        .find(|&(i, first)| usize::from(field[cuts + i]) >= first + 2)
+        .map(|i| (i, if i == 0 { 0 } else { usize::from(field[cuts_at + i - 1]) }))
+        .find(|&(i, first)| usize::from(field[cuts_at + i]) >= first + 2)
         .expect("the premise: some polynomial's hint holds two indices");
     let mut swapped = field.clone();
-    swapped.swap(indices + first, indices + first + 1);
+    swapped.swap(indices_at + first, indices_at + first + 1);
     let mut repeated = field.clone();
-    repeated.copy_within(indices + first + 1..indices + used, indices + first + 2);
-    repeated[indices + first + 1] = repeated[indices + first];
-    for cut in &mut repeated[cuts + poly..] {
+    repeated.copy_within(indices_at + first + 1..indices_at + used, indices_at + first + 2);
+    repeated[indices_at + first + 1] = repeated[indices_at + first];
+    for cut in &mut repeated[cuts_at + poly..] {
         *cut += 1;
     }
     assert!(!half.verify(msg, &swapped), "tag 1: two of a polynomial's hint indices swapped");
@@ -437,20 +445,21 @@ fn the_pq_half_refuses_a_second_encoding_of_a_genuine_field() {
 
     // Tag 3: the first stream that signs with a zero coefficient and ends
     // mid-byte.
-    let s3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &[0x42; 32]).unwrap();
-    let half = PqVerifier::decode(s3.public_key()).expect("a derived key decodes");
-    let pq_len = s3.public_key().sig_alg_row().pq_sig_len;
-    let (field, zero, end) = (0..=u8::MAX)
+    let signer3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &[0x42; 32]).unwrap();
+    let half = PqVerifier::decode(signer3.public_key()).expect("a derived key decodes");
+    let pq_sig_len = signer3.public_key().sig_alg_row().pq_sig_len;
+    let (field, zero_at, end) = (0..=u8::MAX)
         .find_map(|n| {
-            let field = s3.sign_with_rng(&mut SeededRng06::new([n; 32]), msg)[..pq_len].to_vec();
+            let field =
+                signer3.sign_with_rng(&mut SeededRng06::new([n; 32]), msg)[..pq_sig_len].to_vec();
             let (coefficients, end) = s2_walk(&field[41..])?;
-            let &(zero, _) = coefficients.iter().find(|&&(_, magnitude)| magnitude == 0)?;
-            (end % 8 != 0).then_some((field, zero, end))
+            let &(zero_at, _) = coefficients.iter().find(|&&(_, magnitude)| magnitude == 0)?;
+            (end % 8 != 0).then_some((field, zero_at, end))
         })
         .expect("the premise: a stream signs with a zero coefficient, ending mid-byte");
     assert!(half.verify(msg, &field), "the premise: tag 3's field verifies");
     for (at, what) in [
-        (zero, "a zero coefficient's sign bit set"),
+        (zero_at, "a zero coefficient's sign bit set"),
         (end, "the first unused bit set"),
     ] {
         let mut near = field.clone();
@@ -482,9 +491,9 @@ fn a_low_order_ed25519_half_verifies_no_forgery() {
         );
     }
     for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
-        let s = HybridSigner::from_seed(tag, &[0x42; 32]).unwrap();
-        let key = s.public_key();
-        let pq_len = key.sig_alg_row().pq_sig_len;
+        let signer = HybridSigner::from_seed(tag, &[0x42; 32]).unwrap();
+        let key = signer.public_key();
+        let pq_sig_len = key.sig_alg_row().pq_sig_len;
         for (a, point) in low_order.iter().zip(&points) {
             let weak =
                 PublicKey::from_halves(key.alg(), key.pq_half(), a).expect("the row's widths");
@@ -504,8 +513,8 @@ fn a_low_order_ed25519_half_verifies_no_forgery() {
                     Some((msg, forged))
                 })
                 .expect("the premise: the cofactorless check passes a forgery");
-            let mut blob = s.sign_with_rng(&mut SeededRng06::new([7; 32]), &msg);
-            blob[pq_len..].copy_from_slice(&forged);
+            let mut blob = signer.sign_with_rng(&mut SeededRng06::new([7; 32]), &msg);
+            blob[pq_sig_len..].copy_from_slice(&forged);
             assert_eq!(
                 verify(tag, &weak, &msg, &blob),
                 Err(HybridFault::Signature),
@@ -530,8 +539,8 @@ fn an_ed25519_s_raised_by_the_group_order_is_refused() {
     ];
     let msg = b"the entry frame";
     for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
-        let s = HybridSigner::from_seed(tag, &[0x42; 32]).unwrap();
-        let mut blob = s.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
+        let signer = HybridSigner::from_seed(tag, &[0x42; 32]).unwrap();
+        let mut blob = signer.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
         let s_at = blob.len() - 32;
         let mut carry = 0u16;
         for (byte, ell) in blob[s_at..].iter_mut().zip(ELL) {
@@ -545,7 +554,7 @@ fn an_ed25519_s_raised_by_the_group_order_is_refused() {
              clear, which the legacy check admits"
         );
         assert_eq!(
-            verify(tag, s.public_key(), msg, &blob),
+            verify(tag, signer.public_key(), msg, &blob),
             Err(HybridFault::Signature),
             "tag {tag}"
         );
@@ -564,8 +573,8 @@ fn every_tag_but_the_keys_own_answers_wrong_row() {
     let seed = [0x42u8; 32];
     let msg = b"the entry frame";
     for own in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
-        let s = HybridSigner::from_seed(own, &seed).unwrap();
-        let sig = s.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
+        let signer = HybridSigner::from_seed(own, &seed).unwrap();
+        let sig = signer.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
         let long = [&sig[..], &[0u8]].concat();
         let blobs: [(&[u8], Result<(), HybridFault>); 6] = [
             (&sig[..], Ok(())),
@@ -579,7 +588,7 @@ fn every_tag_but_the_keys_own_answers_wrong_row() {
             for (blob, under_own) in blobs {
                 let expected = if tag == own { under_own } else { Err(HybridFault::WrongRow) };
                 assert_eq!(
-                    verify(tag, s.public_key(), msg, blob),
+                    verify(tag, signer.public_key(), msg, blob),
                     expected,
                     "tag {tag} against a tag-{own} key, a {}-byte blob",
                     blob.len()

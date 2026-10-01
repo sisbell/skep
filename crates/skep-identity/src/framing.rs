@@ -110,9 +110,9 @@ pub fn framed(tag: Tag, fields: &[&[u8]]) -> Vec<u8> {
 
 /// ONE length-delimited element — `be32(len) ‖ bytes`: AUTH-1.12's FIELD
 /// rule, and the rule every length-delimited element NESTED inside a field
-/// follows too (the entry frame's rows — its members, in the design record's
-/// word, are [`framed`]'s fields). One function at every level is what makes
-/// the injectivity [`framed`] states hold at every level.
+/// follows too (the entry frame's members, in the design record's word, are
+/// [`framed`]'s fields). One function at every level is what makes the
+/// injectivity [`framed`] states hold at every level.
 ///
 /// PRECONDITION — as [`framed`]'s: the element is shorter than 2^32 bytes,
 /// enforced by a panic rather than a truncated length.

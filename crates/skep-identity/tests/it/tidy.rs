@@ -17,7 +17,8 @@
 //!
 //! Beside the map, the one rule of `lib.rs`'s "Traceability" a test can
 //! hold: the signed-ops design record is cited as "the design record", never
-//! as "the record" alone — read over every comment, not the code.
+//! as "the record" or "its record" alone — read over every comment, not the
+//! code.
 //!
 //! And the bound `AGENTS.md` sets on the tests the map exempts: an inline
 //! test module is under 200 lines, counted from its `#[cfg(…)]` line to its
@@ -279,14 +280,14 @@ fn the_test_module_checks_close_the_module_on_one_line() {
 }
 
 /// `lib.rs`'s "Traceability" cites the signed-ops design record as "the
-/// design record" with its section or ruling, and never as "the record"
-/// alone: in this crate a record is a credential record (AUTH-1.18), so a
-/// bare citation beside an entry, a fingerprint and a label reads as a place
-/// inside one. Held over every comment under `src/` and `tests/`, each run
-/// of comment lines read as one text, so a citation a reflow splits across
-/// two lines is read whole: "the record", or "the record's", before a section
-/// sign or a ruling's `D` number is a design-record citation missing its
-/// "design".
+/// design record" with its section or ruling, and never as "the record" or
+/// "its record" alone: in this crate a record is a credential record
+/// (AUTH-1.18), so a bare citation beside an entry, a fingerprint and a label
+/// reads as a place inside one. Held over every comment under `src/` and
+/// `tests/`, each run of comment lines read as one text, so a citation a
+/// reflow splits across two lines is read whole: "the record" or "its
+/// record", or either's possessive, before a section sign or a ruling's `D`
+/// number is a design-record citation missing its "design".
 #[test]
 fn the_design_record_is_never_cited_as_the_record_alone() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -300,7 +301,9 @@ fn the_design_record_is_never_cited_as_the_record_alone() {
         let path = file.strip_prefix(crate_dir).unwrap().display();
         for (line, prose) in comment_runs(&text) {
             if let Some(cited) = bare_record_citation(&prose) {
-                faults.push(format!("{path}:{line}: \"{cited}\" — cite \"the design record\""));
+                faults.push(format!(
+                    "{path}:{line}: \"{cited}\" — cite a design document as a \"design record\""
+                ));
             }
         }
     }
@@ -311,11 +314,11 @@ fn the_design_record_is_never_cited_as_the_record_alone() {
 /// clean tree it passes whether its two readers can see or not; held here to
 /// the input they exist for. `comment_runs` joins a run of comment lines into
 /// one text, so a bare citation a reflow split across two lines reads whole,
-/// and `bare_record_citation` finds it in either capitalization and with the
-/// possessive, while passing the design record's full citation, the phrase in
-/// quotes, a phrase whose next word cites nothing, and the phrase inside a
-/// longer word. The comment marker is built at runtime, so this file's own
-/// scan finds no comment in these lines.
+/// and `bare_record_citation` finds it, after "the" or "its", in either
+/// capitalization and with the possessive, while passing the design record's
+/// full citation, the phrase in quotes, a phrase whose next word cites
+/// nothing, and the phrase inside a longer word. The comment marker is built
+/// at runtime, so this file's own scan finds no comment in these lines.
 #[test]
 fn the_citation_readers_find_a_bare_citation() {
     let marker = "/".repeat(3);
@@ -324,12 +327,16 @@ fn the_citation_readers_find_a_bare_citation() {
     assert_eq!(runs, [(2, "per the record §4.2 (C)".to_owned())]);
     assert_eq!(bare_record_citation(&runs[0].1), Some("the record §4.2"));
     assert_eq!(bare_record_citation("as The record's D13 rules"), Some("The record's D13"));
+    assert_eq!(bare_record_citation("per its record §3 as ruled"), Some("its record §3"));
     for prose in [
         "the design record §4.2",
+        "its design record §3",
         "\"the record\", or",
         "the record value §2",
         "the record's entries",
+        "its record's own sig member",
         "breathe record §2",
+        "visits record §2",
     ] {
         assert_eq!(bare_record_citation(prose), None, "{prose:?}");
     }
@@ -372,11 +379,12 @@ fn comment_runs(text: &str) -> Vec<(usize, String)> {
     runs
 }
 
-/// The first citation in `prose` that names the design record as "the
-/// record" alone — "the record", or "the record's", whose next word opens
-/// with a section sign or is a ruling's `D` number — or `None`.
+/// The first citation in `prose` that names a design record as a bare
+/// "record" — "the record" or "its record", either capitalization, or the
+/// possessive, whose next word opens with a section sign or is a ruling's `D`
+/// number — or `None`.
 fn bare_record_citation(prose: &str) -> Option<&str> {
-    ["the record", "The record"].into_iter().find_map(|phrase| {
+    ["the record", "The record", "its record", "Its record"].into_iter().find_map(|phrase| {
         prose.match_indices(phrase).find_map(|(at, _)| {
             let opens_a_word = prose[..at].chars().next_back().is_none_or(|c| !c.is_alphanumeric());
             let rest = &prose[at + phrase.len()..];

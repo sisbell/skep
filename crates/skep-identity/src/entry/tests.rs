@@ -111,10 +111,10 @@ fn the_rows_spell_as_the_module_doc_states() {
     // stretch — its class byte and a value-sequence row of one — and the
     // EMPTY base-extent group.
     assert_eq!(
-        entry_body_publish([ShotSegment::Value(b"q")], None).as_bytes(),
+        entry_body_publish([ShotSegmentPiece::Value(b"q")], None).as_bytes(),
         [
             &[0u8, 0, 0, 0, 0, 0, 0, 1][..],
-            &[SEGMENT_VALUES][..],
+            &[SEGMENT_VALUE_STRETCH][..],
             &value_sequence([&b"q"[..]])[..],
             &[0, 0, 0, 0][..],
         ]
@@ -134,10 +134,10 @@ fn the_rows_spell_as_the_module_doc_states() {
     // each segment; the group closes the body.
     let mixed = entry_body_publish(
         [
-            ShotSegment::Value(b"a"),
-            ShotSegment::Value(b"b"),
-            ShotSegment::Window { start: &window_start, width: 3 },
-            ShotSegment::Value(b"c"),
+            ShotSegmentPiece::Value(b"a"),
+            ShotSegmentPiece::Value(b"b"),
+            ShotSegmentPiece::Window { start: &window_start, width: 3 },
+            ShotSegmentPiece::Value(b"c"),
         ],
         Some(5),
     );
@@ -145,11 +145,11 @@ fn the_rows_spell_as_the_module_doc_states() {
         mixed.as_bytes(),
         [
             &[0u8, 0, 0, 0, 0, 0, 0, 6][..],
-            &[SEGMENT_VALUES][..],
+            &[SEGMENT_VALUE_STRETCH][..],
             &value_sequence([&b"a"[..], &b"b"[..]])[..],
             &[SEGMENT_WINDOW][..],
             &window_bytes(&window_start, 3)[..],
-            &[SEGMENT_VALUES][..],
+            &[SEGMENT_VALUE_STRETCH][..],
             &value_sequence([&b"c"[..]])[..],
             &[0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 5][..],
         ]
@@ -157,13 +157,13 @@ fn the_rows_spell_as_the_module_doc_states() {
         "values, a window, a value, then the base-extent group"
     );
     // Two windows in a row stay two segments: the builder merges no
-    // addresses — the member's arrangement did, before they got here.
+    // addresses — the minted member's arrangement did, before they got here.
     let second = addr(&[1, 0, 3, 0, 1, 1]);
     assert_eq!(
         entry_body_publish(
             [
-                ShotSegment::Window { start: &window_start, width: 3 },
-                ShotSegment::Window { start: &second, width: 1 },
+                ShotSegmentPiece::Window { start: &window_start, width: 3 },
+                ShotSegmentPiece::Window { start: &second, width: 1 },
             ],
             Some(0),
         )
@@ -185,7 +185,7 @@ fn the_rows_spell_as_the_module_doc_states() {
     // the body lays out the type slot first whatever order they are named
     // in, and a builder that wrote them in any other order spells other
     // bytes here. Then the `replaces` row: EMPTY where the op carries no
-    // member, so a member-less body is never the three slots alone.
+    // `replaces` member, so such a body is never the three slots alone.
     let (ty, from) = ([element], [addr(&[1, 0, 1])]);
     let empty = EntrySlot::Addrs(&[]);
     let slots = LinkSlots { from: EntrySlot::Addrs(&from), to: empty, ty: EntrySlot::Addrs(&ty) };
@@ -199,10 +199,10 @@ fn the_rows_spell_as_the_module_doc_states() {
             optional_address_bytes(None)
         ]
         .concat(),
-        "the type slot, then from, then to, then the member's EMPTY group"
+        "the type slot, then from, then to, then the `replaces` row's EMPTY group"
     );
-    // …and a member PRESENT: the one address as an address-form slot row,
-    // the whole row one group, length-delimited.
+    // …and a `replaces` member PRESENT: the one address as an address-form
+    // slot row, the whole row one group, length-delimited.
     let revocation = addr(&[1, 0, 1, 0, 1, 0, 2, 9]);
     // Group length 28: the form byte, `be64(1)`, then `be32(15)` and the
     // fifteen bytes of the address's spelling.
@@ -218,11 +218,11 @@ fn the_rows_spell_as_the_module_doc_states() {
         entry_body_make_link_replacing(slots, &revocation).as_bytes(),
         [slot_bytes(slots.ty), slot_bytes(slots.from), slot_bytes(slots.to), present.clone()]
             .concat(),
-        "the three slots, then the member's group"
+        "the three slots, then the `replaces` row's group"
     );
     // A PRESENT group holding an EMPTY slot row — a spelling no op makes,
-    // the wire's member being one address — is still not the absent bytes:
-    // the group's length tells the two apart.
+    // the wire's `replaces` member being one address — is still not the
+    // absent bytes: the group's length tells the two apart.
     let mut present_and_empty = Vec::new();
     push_delimited(&mut present_and_empty, &slot_bytes(empty));
     assert_eq!(present_and_empty, [&[0u8, 0, 0, 9][..], &slot_bytes(empty)[..]].concat());
@@ -232,7 +232,7 @@ fn the_rows_spell_as_the_module_doc_states() {
         "present-and-empty is never absent"
     );
     // THE RECORD BODY: the type slot row, the `to` slot row, the
-    // `replaces` row, the lineage row, the canonical bytes — here a
+    // `replaces` row, the lineage row, the sig-less record's bytes — here a
     // targeted kind with neither optional row named…
     let (record_ty, subject) = (addr(&[1, 1, 0, 1, 0, 1, 0, 3, 1]), [addr(&[1, 0, 2])]);
     assert_eq!(
@@ -287,13 +287,13 @@ fn the_rows_spell_as_the_module_doc_states() {
 }
 
 /// [`PublishBody`] under its budget: it finishes to [`entry_body_publish`]'s
-/// body over the segments it took, and the budget is the FINISHED body's
+/// body over the pieces it took, and the budget is the FINISHED body's
 /// length, the base-extent group included — a value landing the body
 /// exactly on it is taken, one byte more is refused, at the budget not
 /// even an empty value fits (its length prefix costs four bytes), and a
 /// window is refused by the same measure. A refusal CONSUMES the builder,
-/// so no body is finished over a sequence that skipped a segment or
-/// stopped short of one: the third row offers `cd` between `ab` and `c`,
+/// so no body is finished over a sequence that skipped a piece or stopped
+/// short of one: the third row offers `cd` between `ab` and `c`,
 /// and a builder that let the walk go on past its refusal would finish to
 /// `[ab, c]`'s body — the preimage of another publish, whose signature
 /// verifies over it.
@@ -302,32 +302,32 @@ fn a_publish_body_built_within_its_budget_is_the_whole_sequences_body() {
     let start = addr(&[1, 0, 2, 0, 1, 4]);
     let whole = entry_body_publish(
         [
-            ShotSegment::Value(b"ab"),
-            ShotSegment::Window { start: &start, width: 2 },
-            ShotSegment::Value(b"c"),
+            ShotSegmentPiece::Value(b"ab"),
+            ShotSegmentPiece::Window { start: &start, width: 2 },
+            ShotSegmentPiece::Value(b"c"),
         ],
         Some(7),
     );
     let budget = whole.as_bytes().len();
-    let fed = |segments: &[ShotSegment<'_>]| {
-        segments.iter().try_fold(PublishBody::within(budget, Some(7)), |body, s| match *s {
-            ShotSegment::Value(v) => body.push(v),
-            ShotSegment::Window { start, width } => body.window(start, width),
+    let fed = |pieces: &[ShotSegmentPiece<'_>]| {
+        pieces.iter().try_fold(PublishBody::within(budget, Some(7)), |body, p| match *p {
+            ShotSegmentPiece::Value(v) => body.push(v),
+            ShotSegmentPiece::Window { start, width } => body.window(start, width),
         })
     };
-    let window = ShotSegment::Window { start: &start, width: 2 };
+    let window = ShotSegmentPiece::Window { start: &start, width: 2 };
     let past = Some(PublishRefusal::PastBudget);
     assert_eq!(
-        fed(&[ShotSegment::Value(b"ab"), window, ShotSegment::Value(b"cd")]).err(),
+        fed(&[ShotSegmentPiece::Value(b"ab"), window, ShotSegmentPiece::Value(b"cd")]).err(),
         past,
         "one byte past the budget"
     );
     assert_eq!(
         fed(&[
-            ShotSegment::Value(b"ab"),
+            ShotSegmentPiece::Value(b"ab"),
             window,
-            ShotSegment::Value(b"c"),
-            ShotSegment::Value(b"")
+            ShotSegmentPiece::Value(b"c"),
+            ShotSegmentPiece::Value(b"")
         ])
         .err(),
         past,
@@ -335,30 +335,30 @@ fn a_publish_body_built_within_its_budget_is_the_whole_sequences_body() {
     );
     assert_eq!(
         fed(&[
-            ShotSegment::Value(b"ab"),
+            ShotSegmentPiece::Value(b"ab"),
             window,
-            ShotSegment::Value(b"cd"),
-            ShotSegment::Value(b"c")
+            ShotSegmentPiece::Value(b"cd"),
+            ShotSegmentPiece::Value(b"c")
         ])
         .err(),
         past,
-        "a refusal ends the body: nothing finishes over the segments around it"
+        "a refusal ends the body: nothing finishes over the pieces around it"
     );
     assert_eq!(
-        fed(&[ShotSegment::Value(b"ab"), window, ShotSegment::Value(b"c"), window]).err(),
+        fed(&[ShotSegmentPiece::Value(b"ab"), window, ShotSegmentPiece::Value(b"c"), window]).err(),
         past,
         "a window is measured by the same budget"
     );
     assert_eq!(
-        fed(&[ShotSegment::Value(b"ab"), window, ShotSegment::Value(b"c")])
+        fed(&[ShotSegmentPiece::Value(b"ab"), window, ShotSegmentPiece::Value(b"c")])
             .map(PublishBody::finish),
         Ok(whole),
         "exactly on it"
     );
-    // The base-extent group is counted from the start: the same segments
+    // The base-extent group is counted from the start: the same pieces
     // under a budget one byte short of the group's present spelling are
-    // refused at the first segment, not at `finish`.
-    let birth = entry_body_publish([ShotSegment::Value(b"ab")], None).as_bytes().len();
+    // refused at the first piece, not at `finish`.
+    let birth = entry_body_publish([ShotSegmentPiece::Value(b"ab")], None).as_bytes().len();
     assert_eq!(
         PublishBody::within(birth, Some(7)).push(b"ab").err(),
         past,
@@ -409,17 +409,17 @@ fn a_publish_budget_below_the_empty_body_is_refused_at_within() {
 /// [`PublishBody`] NAMES what it refuses, because a caller answers the causes
 /// differently: a body past its budget is the one the builder exists to
 /// refuse, a count past 2^64 − 1 names positions no store holds, and a window
-/// of no positions is a run no arrangement holds. Where a segment meets more
-/// than one, the answer is the segment's own first — an empty window, then
-/// the count, then the budget. A body holding a full count and standing
-/// exactly on its budget is passed by its next segment on BOTH the count and
-/// the budget, and is told the count; one byte short of that budget, the
+/// of no positions is a run no arrangement holds. Where a piece meets more
+/// than one, the answer is the piece's own first — an empty window, then the
+/// count, then the budget. A body holding a full count and standing exactly
+/// on its budget is passed by its next piece on BOTH the count and the
+/// budget, and is told the count; one byte short of that budget, the
 /// full count's own window is told the budget alone; and an empty window
 /// under a budget it would pass too is told it is empty.
 #[test]
 fn each_refusal_names_its_cause() {
     let start = addr(&[1, 0, 2, 0, 1, 4]);
-    let full = [ShotSegment::Window { start: &start, width: u64::MAX }];
+    let full = [ShotSegmentPiece::Window { start: &start, width: u64::MAX }];
     let budget = entry_body_publish(full, None).as_bytes().len();
     let at_full = || PublishBody::within(budget, None).window(&start, u64::MAX);
     assert_eq!(

@@ -227,10 +227,12 @@ pub enum SignerSegment {
 }
 
 impl SignerSegment {
-    pub fn as_shot(&self) -> ShotSegment<'_> {
+    pub fn as_shot(&self) -> ShotSegmentPiece<'_> {
         match self {
-            SignerSegment::Value(v) => ShotSegment::Value(v),
-            SignerSegment::Window(start, width) => ShotSegment::Window { start, width: *width },
+            SignerSegment::Value(v) => ShotSegmentPiece::Value(v),
+            SignerSegment::Window(start, width) => {
+                ShotSegmentPiece::Window { start, width: *width }
+            }
         }
     }
 }

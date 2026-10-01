@@ -10,7 +10,7 @@
 use sha2::{Digest, Sha256};
 use skep_identity::{
     entry_body_insert, entry_body_make_link, entry_body_publish, entry_body_record, entry_frame,
-    BoardTerm, EntrySlot, Fingerprint, LinkSlots, ShotSegment, SigAlgRow, ALG_MLDSA65_ED25519,
+    BoardTerm, EntrySlot, Fingerprint, LinkSlots, ShotSegmentPiece, SigAlgRow, ALG_MLDSA65_ED25519,
 };
 use skep_signature::{derive_seeds, pq_widths, verify, HybridSigner, PqWidths, SeededRng06};
 
@@ -59,10 +59,10 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 6] {
     let window = addr("1.0.1.0.2.0.1.1");
     let publish = entry_body_publish(
         [
-            ShotSegment::Value(b"x"),
-            ShotSegment::Value(b"y"),
-            ShotSegment::Value(b"z"),
-            ShotSegment::Window { start: &window, width: 2 },
+            ShotSegmentPiece::Value(b"x"),
+            ShotSegmentPiece::Value(b"y"),
+            ShotSegmentPiece::Value(b"z"),
+            ShotSegmentPiece::Window { start: &window, width: 2 },
         ],
         Some(3),
     );

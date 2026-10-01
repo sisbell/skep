@@ -38,7 +38,7 @@ use skep_identity::{
     canonical_record, encode_enroll, encode_retire, entry_body_insert, entry_body_make_link,
     entry_body_make_link_replacing, entry_body_publish, entry_body_record, entry_frame,
     parse_record_value, BoardTerm, Enrollment, EntrySlot, Fingerprint, LinkSlots, PublicKey,
-    RecordValue, ShotSegment, SigAlgRow, ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519,
+    RecordValue, ShotSegmentPiece, SigAlgRow, ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519,
 };
 use skep_signature::HybridSigner;
 use skepd::{JsonCodec, Seq};
@@ -1880,10 +1880,10 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 6] {
     let window = addr("1.0.1.0.2.0.1.1");
     let publish = entry_body_publish(
         [
-            ShotSegment::Value(b"x"),
-            ShotSegment::Value(b"y"),
-            ShotSegment::Value(b"z"),
-            ShotSegment::Window { start: &window, width: 2 },
+            ShotSegmentPiece::Value(b"x"),
+            ShotSegmentPiece::Value(b"y"),
+            ShotSegmentPiece::Value(b"z"),
+            ShotSegmentPiece::Window { start: &window, width: 2 },
         ],
         Some(3),
     );

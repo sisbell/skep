@@ -439,9 +439,9 @@ proptest! {
         // I2 — `fold(s ++ t) == fold_from(fold(s), t)`, and re-folding the
         // whole stream reproduces the same table (determinism over a fixed
         // ctx and stream).
-        let fold_over = |start: &IdentityState, segment: &[Case]| -> IdentityState {
+        let fold_over = |start: &IdentityState, stream: &[Case]| -> IdentityState {
             let mut folded = start.clone();
-            for case in segment {
+            for case in stream {
                 folded = fx.step(&folded, &case.dep).0;
             }
             folded

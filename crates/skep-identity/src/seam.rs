@@ -101,14 +101,14 @@ pub trait FoldCtx: Values {
     fn is_account(&self, a: &Address) -> bool;
 
     /// AUTH-2.34 — the document's BIRTH state: publication is at birth and no
-    /// document ever transitions (PUB-1.9, the bit a document is born with),
-    /// so the answer is CONSTANT over every record's life. The origin answers
-    /// it off the EXCEPTION SET — `doc ∉ exception_set`, the engine's derived
-    /// membership index over M3's per-document publication bit, journaled on
-    /// the minting record (PUB-7.5; owner ruling D1, 2026-09-05: one
-    /// publication definition) — where v1 wired it constant `true`
-    /// (AUTH-2.117); the fold asks it either way (AUTH-2.102, I7), and a
-    /// mirror derives it as the guest visibility class (AUTH-2.123). NOT an
+    /// document ever transitions (PUB-1.9, the PUBLICATION bit a document is
+    /// born with), so the answer is CONSTANT over every record's life. The
+    /// origin answers it off the EXCEPTION SET — `doc ∉ exception_set`, the
+    /// engine's derived membership index over M3's per-document publication
+    /// bit, journaled on the minting record (PUB-7.5; owner ruling D1,
+    /// 2026-09-05: one publication definition) — where v1 wired it constant
+    /// `true` (AUTH-2.117); the fold asks it either way (AUTH-2.102, I7), and
+    /// a mirror derives it as the guest visibility class (AUTH-2.123). NOT an
     /// I2 frozen constant (AUTH-2.90).
     ///
     /// Its domain is REGISTERED documents — a birth state is a fact about a

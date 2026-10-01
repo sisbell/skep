@@ -39,7 +39,7 @@
 //! Signed ops' declarations are consumed in skepd as well, at both grades. It
 //! composes the ENTRY frame it verifies through [`entry_frame`], over the
 //! locked snapshot's [`BoardTerm`], the principal's account, and the op's
-//! document and [`EntryBody`] — a `publish`'s built segment by segment within
+//! document and [`EntryBody`] — a `publish`'s built piece by piece within
 //! its budget through [`PublishBody`], whose [`PublishRefusal`] tells it which
 //! answer a refused shot is owed. At a credential deposit above the claim it
 //! checks the RECORD grade: it reads the record's atom through
@@ -107,10 +107,11 @@
 //!   — a grammar's token paired with its body, built by [`entry_body_insert`],
 //!   [`entry_body_make_link`] and [`entry_body_make_link_replacing`] (over a
 //!   [`LinkSlots`] naming three [`EntrySlot`]s, the second with the op's
-//!   `replaces` member), [`entry_body_publish`] (over [`ShotSegment`]s — the
-//!   address form: the runs the commit copies in by value, the windows by
-//!   address — and the shot's base extent), or segment by segment under a
-//!   byte budget by [`PublishBody`], with its refusal [`PublishRefusal`], and
+//!   `replaces` member), [`entry_body_publish`] (over [`ShotSegmentPiece`]s
+//!   — the shot's address form, one copied position's value or one window
+//!   at a time, the pieces its segments are built from — and the shot's base
+//!   extent), or piece by piece under a byte budget by [`PublishBody`], with
+//!   its refusal [`PublishRefusal`], and
 //!   [`entry_body_record`], the record grade's five rows under the `record`
 //!   token — the bytes a publish-class entry's signature, or a record's
 //!   `sig`, is made over (signed ops; the design record §2.5; the frame
@@ -170,10 +171,10 @@
 //! length constants, the entry frame and the record projection, which the
 //! AUTH spec declares in no rule and whose authority AUTH-1.5 assigns, by
 //! cite, to the signed-ops design record — that record, cited as "the design
-//! record" with its section or ruling, and never as "the record" alone: in
-//! this crate a record is a credential record (AUTH-1.18), and the suite's
-//! `tidy.rs` holds every comment to that rule. So a reviewer can walk from
-//! code to its authority without the documents open.
+//! record" with its section or ruling, and never as "the record" or "its
+//! record" alone: in this crate a record is a credential record (AUTH-1.18),
+//! and the suite's `tidy.rs` holds every comment to that rule. So a reviewer
+//! can walk from code to its authority without the documents open.
 //!
 //! ## Purity note
 //!
@@ -199,7 +200,7 @@ mod write_types;
 pub use entry::{
     entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_publish,
     entry_body_record, entry_frame, BoardTerm, EntryBody, EntrySlot, LinkSlots, PublishBody,
-    PublishRefusal, ShotSegment,
+    PublishRefusal, ShotSegmentPiece,
 };
 pub use framing::{
     framed, Tag, ENTRY_TAG, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, TAGS,

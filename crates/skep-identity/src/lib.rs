@@ -36,17 +36,23 @@
 //! card below that names the World, a checkpoint or the engine cites the
 //! SPEC's cast; this section keeps the build's.
 //!
-//! Signed ops' declarations are consumed in skepd as well: it composes the
-//! ENTRY frame it verifies through [`entry_frame`], over the locked
-//! snapshot's [`BoardTerm`], the principal's account, and the op's document
-//! and [`EntryBody`] — a `publish`'s built segment by segment within its
-//! budget through [`PublishBody`]; its write-path check reads a presented
-//! attestation's row off the marker tag, and its codec lifts a request's
-//! `attest.alg` token to that tag and back, through [`SigAlgRow::of_token`]
-//! and [`SigAlgRow::of_tag`]; each marker tag's arithmetic over
-//! [`SIG_ALGS`]' rows and a key's two halves — composing them at keygen
-//! ([`PublicKey::from_halves`]) and reading them to verify
-//! ([`PublicKey::pq_half`], [`PublicKey::ed25519_half`]) — is
+//! Signed ops' declarations are consumed in skepd as well, at both grades. It
+//! composes the ENTRY frame it verifies through [`entry_frame`], over the
+//! locked snapshot's [`BoardTerm`], the principal's account, and the op's
+//! document and [`EntryBody`] — a `publish`'s built segment by segment within
+//! its budget through [`PublishBody`]. At a credential deposit above the
+//! claim it checks the RECORD grade: it reads the record's atom through
+//! [`record_bytes`], its entries and `sig` through [`parse_record_value`] and
+//! the link's type and target through [`single_address`], and frames the
+//! sig-less projection ([`canonical_record`] with no `sig`) as the
+//! [`entry_body_record`] body under the home's account and the home; at the
+//! atom's own `insert`, the same parse tells it whether the record carries a
+//! `sig` at all. Its write-path check reads a presented attestation's row off
+//! the marker tag, and its codec lifts a request's `attest.alg` token to that
+//! tag and back, through [`SigAlgRow::of_token`] and [`SigAlgRow::of_tag`];
+//! each marker tag's arithmetic over [`SIG_ALGS`]' rows and a key's two
+//! halves — composing them at keygen ([`PublicKey::from_halves`]) and reading
+//! them to verify ([`PublicKey::pq_half`], [`PublicKey::ed25519_half`]) — is
 //! `skep-signature`'s, whose verify it calls; and it sizes the handshake's
 //! hybrid blob by the rows' widths.
 //!
@@ -54,17 +60,17 @@
 //! skepd's arrangement, and `grep -rn skep_identity crates/skepd/src` answers
 //! it however skepd is cut.
 //!
-//! The public items no other crate of this workspace names are of two kinds.
-//! [`Tag`], [`ParseKeyError`], [`LabelError`], [`PayloadError`] and
-//! [`RecordEntry`] are public because a public signature names them. Every
-//! other one is public because the spec or the design record declares it for
-//! a reader OUTSIDE the workspace, so a grep that finds no caller is no reason
-//! to narrow it: [`canonical_record`], [`parse_enroll`], [`parse_retire`] and
+//! Some public items are public for a reason a grep for callers cannot see,
+//! so finding no caller is no reason to narrow one. [`Tag`],
+//! [`ParseKeyError`], [`LabelError`], [`PayloadError`] and [`RecordEntry`]
+//! are public because a public signature names them. The rest the spec or the
+//! design record declares for a reader OUTSIDE the workspace:
+//! [`canonical_record`], [`parse_enroll`], [`parse_retire`] and
 //! [`parse_record_value`] with its [`RecordValue`] for the signing client and
 //! the verifier beside the table, which parses a committed record, reads its
 //! `sig` and composes its sig-less projection (the design record §4.2 (C));
-//! [`record_bytes`] for a non-folding reader, which LINKS the read
-//! rather than re-implementing it (AUTH-2.37); [`single_address`] for every
+//! [`record_bytes`] for a non-folding reader, which LINKS the read rather
+//! than re-implementing it (AUTH-2.37); [`single_address`] for every
 //! discovery caller, beside [`TypeAddrs::kind_of`] (AUTH-2.28);
 //! [`HasIdentity`] for a host that seats the slice (AUTH-2.60);
 //! [`NODE_HELLO_TAG`] for bebe (AUTH-2.118); the tables and constants the
@@ -72,8 +78,9 @@
 //! (AUTH-1.5), [`TAGS`], [`KEY_TAG`] and [`ENTRY_TAG`] (AUTH-1.11, AUTH-1.17),
 //! [`ENROLL_TYPE`] and [`RETIRE_TYPE`] (AUTH-1.18); and the five `*_KEY_LEN`
 //! constants the design record declares beside them (AUTH-1.5's cite). The
-//! suite's `surface.rs` names every one of them from outside the crate, so
-//! narrowing one fails the build there.
+//! outside reader is why each of these is public, whether or not a crate of
+//! this workspace also calls it, and the suite's `surface.rs` names each of
+//! them from outside the crate, so narrowing one fails the build there.
 //!
 //! ## What lives here
 //!

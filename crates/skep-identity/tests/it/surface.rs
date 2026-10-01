@@ -715,11 +715,12 @@ fn tag_is_copy_and_debugs_as_its_bytes() {
 
 /// The items this crate publishes for readers OUTSIDE the workspace — the ones
 /// `lib.rs`'s "Composition, as built" lists with the rule that declares each —
-/// named here, from outside the crate. No other crate of the workspace names
-/// any of them, so a visibility audit that looks for callers finds none, and
-/// narrowing one to `pub(crate)` leaves every other build green; this one
-/// stops compiling, at the item. An item published for such a reader joins
-/// this list and that paragraph together.
+/// named here, from outside the crate. A caller elsewhere in the workspace is
+/// no part of why one is public, and where there is none, a visibility audit
+/// that looks for callers finds nothing and narrowing the item to `pub(crate)`
+/// leaves every other build green; this one stops compiling, at the item. An
+/// item published for such a reader joins this list and that paragraph
+/// together.
 #[test]
 fn the_items_published_for_readers_outside_the_workspace_are_public() {
     // The signing client and the verifier beside the table (the design

@@ -19,11 +19,16 @@
 //! hold: the signed-ops design record is cited as "the design record", never
 //! as "the record" alone — read over every comment, not the code.
 //!
-//! The module-map and citation checks look for violations a clean tree does
-//! not hold, and on such a tree each passes whether its readers can see or
-//! not; so each is held, beside it, to the input those readers exist for,
-//! where a reader gone blind fails. The bullet check needs no such control:
-//! on a clean tree its reading is live, every module a bullet it must find.
+//! And the bound `AGENTS.md` sets on the tests the map exempts: an inline
+//! test module is under 200 lines, counted from its `#[cfg(…)]` line to its
+//! closing `}`; at 200 or more it lives in its module's own `tests.rs`.
+//!
+//! The module-map, citation and test-module checks look for violations a
+//! clean tree does not hold, and on such a tree each passes whether its
+//! readers can see or not; so each is held, beside it, to the input those
+//! readers exist for, where a reader gone blind fails. The bullet check needs
+//! no such control: on a clean tree its reading is live, every module a bullet
+//! it must find.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -33,6 +38,11 @@ const ON_TOP: &str = "state";
 
 /// Each leaf, and the only siblings it names.
 const LEAVES: &[(&str, &[&str])] = &[("entry", &["framing"]), ("write_types", &["shape"])];
+
+/// The size, in lines, at which `AGENTS.md` moves an inline unit-test module
+/// to its module's own `tests.rs` — counted from the module's `#[cfg(…)]` line
+/// to its closing `}`, both included.
+const TEST_MODULE_BOUND: usize = 200;
 
 #[test]
 fn the_fold_sits_on_top_and_entry_and_write_types_are_leaves() {
@@ -197,6 +207,57 @@ fn every_module_is_declared_and_has_one_bullet_in_the_root_map() {
         faults.is_empty(),
         "lib.rs's \"What lives here\" does not hold:\n{}",
         faults.join("\n")
+    );
+}
+
+/// `AGENTS.md`'s bound on an inline unit-test module: under 200 lines —
+/// counted from its `#[cfg(…)]` line to its closing `}` — it may stay at its
+/// file's end; at 200 or more it lives in the module's own `tests.rs`,
+/// declared `#[cfg(test)] mod tests;`. The module-map check holds an inline
+/// module to its file's END; this holds it to its SIZE, so a module grown past
+/// the bound is named here rather than met by a reader paging through it.
+#[test]
+fn every_inline_test_module_is_under_200_lines() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    files.sort();
+    let mut faults = Vec::new();
+    for file in &files {
+        let text = std::fs::read_to_string(file).unwrap();
+        if let Some(len) = oversized_test_module(&text) {
+            let path = file.strip_prefix(&src).unwrap().display();
+            faults.push(format!(
+                "src/{path}: an inline test module of {len} lines — at {TEST_MODULE_BOUND} or \
+                 more it lives in the module's own `tests.rs`, declared `#[cfg(test)] mod tests;`"
+            ));
+        }
+    }
+    assert!(
+        faults.is_empty(),
+        "AGENTS.md's test-module bound does not hold:\n{}",
+        faults.join("\n")
+    );
+}
+
+/// The check above looks for a module the tree does not hold, so on a clean
+/// tree it passes whether its reader counts or not; held here to a module of
+/// each length either side of the bound, and to the declaration of a module
+/// that lives in its own file, which is no inline module at all. A reader that
+/// counted a line short — from the `mod tests {` line, say — or a line long,
+/// or took the bound as `>`, misjudges one of the two lengths.
+#[test]
+fn the_test_module_reader_counts_as_agents_md_counts() {
+    let module = |len: usize| {
+        let body = "    fn t() {}\n".repeat(len - 3);
+        format!("fn a() {{}}\n#[cfg(test)]\nmod tests {{\n{body}}}\n")
+    };
+    assert_eq!(oversized_test_module(&module(199)), None, "199 lines stay inline");
+    assert_eq!(oversized_test_module(&module(200)), Some(200), "200 lines move out");
+    assert_eq!(
+        oversized_test_module("fn a() {}\n#[cfg(test)]\nmod tests;\n"),
+        None,
+        "a module declared into its own file"
     );
 }
 
@@ -449,6 +510,23 @@ fn after_test_module(text: &str) -> Option<usize> {
     let first = top_level.next()?;
     let stray = if lines[first] == "}" { top_level.next()? } else { first };
     Some(stray + 1)
+}
+
+/// The lines a file's inline test module spans where they reach
+/// [`TEST_MODULE_BOUND`] — counted as `AGENTS.md` counts them, from the
+/// module's `#[cfg(…)]`, its first attribute line, to its closing `}`, both
+/// included, the `}` its first line back at column 0 — and `None` for a module
+/// under the bound and for a file with no inline `mod tests {`.
+fn oversized_test_module(text: &str) -> Option<usize> {
+    let lines: Vec<&str> = text.lines().collect();
+    let open = lines.iter().position(|line| line.trim() == "mod tests {")?;
+    let first = (0..open)
+        .rev()
+        .take_while(|&i| lines[i].trim_start().starts_with("#["))
+        .last()
+        .unwrap_or(open);
+    let close = (open + 1..lines.len()).find(|&i| lines[i] == "}")?;
+    Some(close - first + 1).filter(|&len| len >= TEST_MODULE_BOUND)
 }
 
 /// The top-level module a `src/` file belongs to — `src/entry.rs`,

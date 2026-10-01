@@ -1,9 +1,7 @@
 //! The entry frame's LAWS, stated through the public surface a signer and a
 //! verifier both call (signed ops; the design record §2.5). The byte pins
-//! beside the rows (`src/entry.rs`) fix each row at a chosen instance; what
-//! is stated here holds over a whole family no pin enumerates. Beside those
-//! laws, [`PublishBody::within`]'s PRECONDITION — its budget floor — is
-//! pinned on both sides of its boundary.
+//! beside the rows (`src/entry/tests.rs`) fix each row at a chosen instance;
+//! what is stated here holds over a whole family no pin enumerates.
 
 use crate::common;
 
@@ -11,7 +9,7 @@ use std::collections::BTreeMap;
 
 use common::{addr, tum};
 use skep_address::{Address, Span};
-use skep_identity::{entry_body_make_link, entry_body_publish, EntrySlot, LinkSlots, PublishBody};
+use skep_identity::{entry_body_make_link, EntrySlot, LinkSlots};
 
 /// Every sequence of at most two elements drawn from `elements` — the empty
 /// sequence, each element alone, and every ordered pair, repeats included:
@@ -76,37 +74,4 @@ fn no_two_distinct_slot_triples_spell_one_make_link_body() {
         }
     }
     assert_eq!(spelled.len(), family.len().pow(3), "every triple spelled a body of its own");
-}
-
-/// `PublishBody`'s budget bounds the FINISHED body, its leading count and its
-/// base-extent group included, so the least budget a builder can keep is the
-/// body of no segments — in either shape of the group: exactly there it
-/// finishes to that body and admits no value (an empty one costs its length
-/// prefix, and the first of a stretch its class byte and count besides) and
-/// no window.
-#[test]
-fn a_publish_budget_of_the_empty_body_finishes_to_it_and_admits_nothing() {
-    for base_extent in [None, Some(3)] {
-        let empty = entry_body_publish([], base_extent);
-        let floor = empty.as_bytes().len();
-        assert_eq!(PublishBody::within(floor, base_extent).finish(), empty);
-        assert!(
-            PublishBody::within(floor, base_extent).push(b"").is_none(),
-            "an empty value costs its length prefix"
-        );
-        assert!(
-            PublishBody::within(floor, base_extent).window(&addr(&[1, 0, 2, 0, 1, 1]), 1).is_none(),
-            "a window costs its start and its width"
-        );
-    }
-}
-
-/// …and below it `within` stops, naming the obligation: a builder minted past
-/// its own budget would finish to the over-budget body the type exists to
-/// refuse rather than build, with no push to refuse it.
-#[test]
-#[should_panic(expected = "cannot hold the body of no segments")]
-fn a_publish_budget_below_the_empty_body_is_refused_at_within() {
-    let floor = entry_body_publish([], None).as_bytes().len();
-    let _ = PublishBody::within(floor - 1, None);
 }

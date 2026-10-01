@@ -270,11 +270,11 @@ fn flat_variants_lower_to_the_same_named_code() {
     same_name(DelegateError::DuplicateId);
     same_name(DelegateError::ParentNotRegistered);
     same_name(DelegateError::NotNextForm);
-    same_name(NodeError::NotValid);
-    same_name(NodeError::NotNode);
-    same_name(NodeError::TooDeep);
-    same_name(NodeError::NotFresh);
-    same_name(NodeError::NotDescendantOfBootstrap);
+    same_name(RegisterNodeError::NotValid);
+    same_name(RegisterNodeError::NotNode);
+    same_name(RegisterNodeError::TooDeep);
+    same_name(RegisterNodeError::NotFresh);
+    same_name(RegisterNodeError::NotDescendantOfBootstrap);
 
     // ── M4 (content) — the wholesale collapse, Open build decision 8.
     //    M4's variant set is feature-dependent and `#[non_exhaustive]`,

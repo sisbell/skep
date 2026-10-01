@@ -1,8 +1,8 @@
 //! The typed rejections of M3's public surface (§Public interface). Where an
 //! op pins the order its guards run in, the variants are declared in that
 //! order — [`CreateDocumentError`] (§7), [`DelegateError`] (§6) and
-//! [`NodeError`] (§7) all do, so the declaration reads as the contract and a
-//! multiply-defective input earns the FIRST applicable rejection.
+//! [`RegisterNodeError`] (§7) all do, so the declaration reads as the contract
+//! and a multiply-defective input earns the FIRST applicable rejection.
 
 use std::error::Error;
 use std::fmt;
@@ -222,7 +222,7 @@ impl Error for DelegateError {}
 /// order puts it after the first (it reads no state; see
 /// [`crate::Namespace::register_node`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NodeError {
+pub enum RegisterNodeError {
     /// The supplied address is not T4-valid.
     NotValid,
     /// The supplied address is not node-level (zeros ≠ 0).
@@ -239,20 +239,20 @@ pub enum NodeError {
     NotDescendantOfBootstrap,
 }
 
-impl fmt::Display for NodeError {
+impl fmt::Display for RegisterNodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            NodeError::NotValid => "register_node: addr is not T4-valid",
-            NodeError::NotNode => "register_node: addr is not node-level",
-            NodeError::TooDeep => {
+            RegisterNodeError::NotValid => "register_node: addr is not T4-valid",
+            RegisterNodeError::NotNode => "register_node: addr is not node-level",
+            RegisterNodeError::TooDeep => {
                 "register_node: addr has more components than the node registry admits"
             }
-            NodeError::NotFresh => "register_node: node is already registered",
-            NodeError::NotDescendantOfBootstrap => {
+            RegisterNodeError::NotFresh => "register_node: node is already registered",
+            RegisterNodeError::NotDescendantOfBootstrap => {
                 "register_node: addr is not a descendant of the bootstrap node [1]"
             }
         })
     }
 }
 
-impl Error for NodeError {}
+impl Error for RegisterNodeError {}

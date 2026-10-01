@@ -138,11 +138,12 @@ fn the_owner_of_address_read_answers_omega_unprojected() {
 }
 
 /// §6/`Op::RegisterNode`: a bound session is the ONLY gate on node admission
-/// — `Namespace::register_node` takes no principal and `NodeError` carries no
-/// authority variant — so an ordinary delegated principal registers a node,
-/// and confining this to provisioning is policy nobody enforces. Pinned so
-/// the claim is executable rather than a paragraph: a check added anywhere on
-/// this path turns this red, which is the conversation such a check owes.
+/// — `Namespace::register_node` takes no principal and `RegisterNodeError`
+/// carries no authority variant — so an ordinary delegated principal
+/// registers a node, and confining this to provisioning is policy nobody
+/// enforces. Pinned so the claim is executable rather than a paragraph: a
+/// check added anywhere on this path turns this red, which is the
+/// conversation such a check owes.
 #[test]
 fn a_node_registers_under_any_bound_session_not_only_bootstrap() {
     let fx = setup();

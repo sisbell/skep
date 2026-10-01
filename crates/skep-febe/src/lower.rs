@@ -17,7 +17,7 @@ use skep_content::ContentError;
 use skep_discovery::{OrphanError, QueryError};
 use skep_kernel::TxnError;
 use skep_links::{AssertSupError, EditLinkError, EmitError, MakeLinkError, NullifyError};
-use skep_namespace::{CreateDocumentError, DelegateError, MintError, NodeError};
+use skep_namespace::{CreateDocumentError, DelegateError, MintError, RegisterNodeError};
 use skep_retrieval::{CompareError, DeletionsError, ExtentError, FindError, OriginError, RetrieveError};
 
 use crate::reject::{FaultSite, RejectCode, Rejection};
@@ -123,14 +123,14 @@ impl Lower for DelegateError {
     }
 }
 
-impl Lower for NodeError {
+impl Lower for RegisterNodeError {
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
         let code = match self {
-            NodeError::NotValid => RejectCode::NotValid,
-            NodeError::NotNode => RejectCode::NotNode,
-            NodeError::TooDeep => RejectCode::TooDeep,
-            NodeError::NotFresh => RejectCode::NotFresh,
-            NodeError::NotDescendantOfBootstrap => RejectCode::NotDescendantOfBootstrap,
+            RegisterNodeError::NotValid => RejectCode::NotValid,
+            RegisterNodeError::NotNode => RejectCode::NotNode,
+            RegisterNodeError::TooDeep => RejectCode::TooDeep,
+            RegisterNodeError::NotFresh => RejectCode::NotFresh,
+            RegisterNodeError::NotDescendantOfBootstrap => RejectCode::NotDescendantOfBootstrap,
         };
         (code, None)
     }

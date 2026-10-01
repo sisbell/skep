@@ -381,7 +381,8 @@ pub struct M3State {
 // ---------------------------------------------------------------------------
 
 /// The cap on a registered node address's component COUNT, enforced by
-/// [`crate::Namespace::register_node`] ([`crate::NodeError::TooDeep`]; §7).
+/// [`crate::Namespace::register_node`]
+/// ([`crate::RegisterNodeError::TooDeep`]; §7).
 ///
 /// `nodes` is one of the two registries M3 cannot keep in frontier form (the
 /// other is `principals` — [`MAX_PRINCIPAL_COMPONENTS`]): a namespace's

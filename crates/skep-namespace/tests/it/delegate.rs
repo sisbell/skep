@@ -501,29 +501,29 @@ fn the_peek_and_the_delegate_gate_stop_at_the_same_nesting_depth() {
     // because reaching the cap through the op is sixty durable delegations of
     // no additional interest — each `Allocate` here is `c₁` of a fresh chain,
     // so the contiguity domain holds.
-    let mut deep = vec![1u32, 0];
-    deep.extend(std::iter::repeat_n(1u32, MAX_PRINCIPAL_COMPONENTS - 2));
-    let under = deep[..MAX_PRINCIPAL_COMPONENTS - 1].to_vec();
+    let mut at_cap = vec![1u32, 0];
+    at_cap.extend(std::iter::repeat_n(1u32, MAX_PRINCIPAL_COMPONENTS - 2));
+    let below_cap = at_cap[..MAX_PRINCIPAL_COMPONENTS - 1].to_vec();
     let m3 = M3State::genesis()
-        .apply_m3(&alloc(&under))
-        .apply_m3(&alloc(&deep));
-    assert_eq!(a(&deep).tumbler().len(), MAX_PRINCIPAL_COMPONENTS);
+        .apply_m3(&alloc(&below_cap))
+        .apply_m3(&alloc(&at_cap));
+    assert_eq!(a(&at_cap).tumbler().len(), MAX_PRINCIPAL_COMPONENTS);
 
     // One below the cap the chain still has a delegable slot…
-    assert!(m3.next_account_prefix(&a(&under)).is_some());
+    assert!(m3.next_account_prefix(&a(&below_cap)).is_some());
     // …at the cap it has none, because the slot would be over-cap — and the
     // parent is a registered account either way, so this `None` is the depth
     // refusal and not the ineligible-parent one.
-    assert_eq!(m3.entity_level(&a(&deep)), Some(Level::Account));
-    assert!(m3.next_account_prefix(&a(&deep)).is_none());
+    assert_eq!(m3.entity_level(&a(&at_cap)), Some(Level::Account));
+    assert!(m3.next_account_prefix(&a(&at_cap)).is_none());
 
     // …and the gate refuses that very prefix, as pre-work: neither id below
     // names a principal here, so only a pre-work guard can be answering.
-    let mut over = deep.clone();
-    over.push(1);
+    let mut over_cap = at_cap.clone();
+    over_cap.push(1);
     let k = mem_kernel(World { m3 });
     assert_eq!(
-        rejected(Namespace::new(&k).delegate(ID1, t(&over), UNKNOWN_ID)),
+        rejected(Namespace::new(&k).delegate(ID1, t(&over_cap), UNKNOWN_ID)),
         DelegateError::TooDeep
     );
 }

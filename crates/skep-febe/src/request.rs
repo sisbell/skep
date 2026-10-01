@@ -153,10 +153,10 @@ pub enum Op {
     /// A bound session is the ONLY gate on this path, and no module holds a
     /// stronger one. Step (b) proves that some session is bound and nothing
     /// further; `Namespace::register_node` takes no principal, so this arm
-    /// passes none, and `NodeError` carries no authority variant, so M3 makes
-    /// no ownership or tier check either. Any bound session, speaking for any
-    /// principal, may therefore register a node-tier entity — confining this
-    /// to provisioning is policy nobody enforces.
+    /// passes none, and `RegisterNodeError` carries no authority variant, so
+    /// M3 makes no ownership or tier check either. Any bound session,
+    /// speaking for any principal, may therefore register a node-tier entity
+    /// — confining this to provisioning is policy nobody enforces.
     RegisterNode { addr: Tumbler },
     /// Denial-as-fork (O10, account tier): a fresh EMPTY document in the
     /// caller's own account — shares NO content (the content-sharing fork is

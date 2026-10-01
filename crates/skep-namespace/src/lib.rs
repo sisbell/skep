@@ -161,7 +161,7 @@ mod state;
 // The `Namespace` handle: the four entity operations, each one transaction.
 mod ops;
 
-pub use error::{CreateDocumentError, DelegateError, MintError, NodeError};
+pub use error::{CreateDocumentError, DelegateError, MintError, RegisterNodeError};
 pub use ghost::{ghost_home_document, ghost_position, GHOST_POSITIONS};
 pub use ns::{first_document_address, first_version_address};
 pub use ops::Namespace;

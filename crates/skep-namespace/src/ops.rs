@@ -12,7 +12,7 @@ use std::fmt;
 use skep_address::{parent, validate, Address, Level, Tumbler};
 use skep_kernel::{Kernel, Seq, TxnError, WorldState};
 
-use crate::error::{CreateDocumentError, DelegateError, NodeError};
+use crate::error::{CreateDocumentError, DelegateError, RegisterNodeError};
 use crate::state::{
     bootstrap_root, prefix_contains, M3Rec, M3State, PrincipalId, MAX_NODE_COMPONENTS,
     MAX_PRINCIPAL_COMPONENTS,
@@ -369,22 +369,25 @@ where
     /// and it does; magnitude is M1-unbounded and carries no amplification
     /// (see [`MAX_NODE_COMPONENTS`]). How MANY admissions a session may make
     /// is the daemon's.
-    pub fn register_node(&self, addr: Tumbler) -> Result<(Address, Seq), TxnError<NodeError>> {
+    pub fn register_node(
+        &self,
+        addr: Tumbler,
+    ) -> Result<(Address, Seq), TxnError<RegisterNodeError>> {
         // Pre-work (§7): the state-free half of the guard order.
-        let addr = validate(addr).map_err(|_| TxnError::Rejected(NodeError::NotValid))?;
+        let addr = validate(addr).map_err(|_| TxnError::Rejected(RegisterNodeError::NotValid))?;
         if addr.level() != Level::Node {
-            return Err(TxnError::Rejected(NodeError::NotNode));
+            return Err(TxnError::Rejected(RegisterNodeError::NotNode));
         }
         if addr.tumbler().len() > MAX_NODE_COMPONENTS {
-            return Err(TxnError::Rejected(NodeError::TooDeep));
+            return Err(TxnError::Rejected(RegisterNodeError::TooDeep));
         }
         let keys = [M3State::nodes_lock_key()];
         self.kernel.transact(&keys, move |stg| {
             if stg.base().m3().entity_level(&addr).is_some() {
-                return Err(NodeError::NotFresh);
+                return Err(RegisterNodeError::NotFresh);
             }
             if !prefix_contains(bootstrap_root(), &addr) {
-                return Err(NodeError::NotDescendantOfBootstrap);
+                return Err(RegisterNodeError::NotDescendantOfBootstrap);
             }
             stg.push(M3Rec::RegisterNode { addr: addr.clone() }.into());
             Ok(addr)

@@ -266,22 +266,22 @@ fn the_account_seat_is_omega_by_one_lookup_and_never_climbs() {
     let ns = Namespace::new(&k);
     // Seventy sub-accounts, each seated for its own principal: with genesis's
     // two seats and the account's own, Π holds 73 and spans two B-tree levels.
-    let mut subs = Vec::new();
+    let mut sub_accts = Vec::new();
     for i in 0..70u64 {
-        let next = k
+        let sub_peek = k
             .snapshot()
             .world()
             .m3()
             .next_account_prefix(&acct)
             .expect("the account has a delegable slot");
-        let (sub, _) = ns
-            .delegate(ID1, next.into(), PrincipalId(100 + i))
+        let (sub_acct, _) = ns
+            .delegate(ID1, sub_peek.into(), PrincipalId(100 + i))
             .expect("sub-delegate");
-        subs.push(sub);
+        sub_accts.push(sub_acct);
     }
-    let last = subs.last().expect("seventy sub-accounts").clone();
+    let last_sub_acct = sub_accts.last().expect("seventy sub-accounts").clone();
     let (last_doc, _) = ns
-        .create_new_document(PrincipalId(169), &last, None)
+        .create_new_document(PrincipalId(169), &last_sub_acct, None)
         .expect("the last sub-account's doc 1");
     let v1 = commit_mint(&k, M3State::version_lock_key(&doc), |m3| {
         m3.mint_version(&doc, true)
@@ -298,7 +298,7 @@ fn the_account_seat_is_omega_by_one_lookup_and_never_climbs() {
         assert!(probes.contains(built), "the walk reaches {built:?}");
     }
     let mut accounts = vec![acct.clone(), system_account()];
-    accounts.extend(subs);
+    accounts.extend(sub_accts);
     for account in &accounts {
         probes.push(first_document_address(account).expect("an account anchors a document chain"));
     }
@@ -322,24 +322,24 @@ fn the_account_seat_is_omega_by_one_lookup_and_never_climbs() {
         })
         .apply_m3(&alloc(&[1, 0, 1, 1]))
         .apply_m3(&alloc(&[1, 0, 1, 1, 0, 1]));
-    let orphan = a(&[1, 0, 1, 1, 0, 1]);
-    assert!(to_an_account.is_registered_document(&orphan));
+    let sub_doc = a(&[1, 0, 1, 1, 0, 1]);
+    assert!(to_an_account.is_registered_document(&sub_doc));
     assert_eq!(
-        to_an_account.effective_owner_prefix(&orphan),
+        to_an_account.effective_owner_prefix(&sub_doc),
         Some(&a(&[1, 0, 1]))
     );
-    assert_eq!(to_an_account.account_seat(&orphan), None);
+    assert_eq!(to_an_account.account_seat(&sub_doc), None);
     // …and to the NODE.
     let to_the_node = M3State::genesis()
         .apply_m3(&alloc(&[1, 0, 1]))
         .apply_m3(&alloc(&[1, 0, 1, 0, 1]));
-    let unseated = a(&[1, 0, 1, 0, 1]);
-    assert!(to_the_node.is_registered_document(&unseated));
+    let acct_doc = a(&[1, 0, 1, 0, 1]);
+    assert!(to_the_node.is_registered_document(&acct_doc));
     assert_eq!(
-        to_the_node.effective_owner_prefix(&unseated),
+        to_the_node.effective_owner_prefix(&acct_doc),
         Some(&a(&[1]))
     );
-    assert_eq!(to_the_node.account_seat(&unseated), None);
+    assert_eq!(to_the_node.account_seat(&acct_doc), None);
     // A node address has no account to look up, seated or not.
     assert_eq!(m3.effective_owner(&a(&[1])), Some(BOOTSTRAP_PRINCIPAL));
     assert_eq!(m3.account_seat(&a(&[1])), None);
@@ -353,14 +353,14 @@ fn the_account_seat_is_omega_by_one_lookup_and_never_climbs() {
         a(&comps)
     };
     let shallow = under(1);
-    let (seat, bytes) = heap_bytes(|| m3.account_seat(&shallow));
+    let (seat, shallow_bytes) = heap_bytes(|| m3.account_seat(&shallow));
     assert_eq!(seat, Some((&acct, ID1)));
     for depth in [10, 1_000, 50_000] {
         let deep = under(depth);
-        let (seat, deep_bytes) = heap_bytes(|| m3.account_seat(&deep));
+        let (seat, bytes) = heap_bytes(|| m3.account_seat(&deep));
         assert_eq!(seat, Some((&acct, ID1)), "{depth} element-field components");
         assert_eq!(
-            deep_bytes, bytes,
+            bytes, shallow_bytes,
             "a copy past the account at {depth} components"
         );
     }
@@ -441,17 +441,20 @@ fn omega_resolves_by_the_registry_not_by_the_probes_depth() {
         a(&comps)
     };
     let shallow = probe(3);
-    let (owner, walk) = heap_bytes(|| m3.effective_owner(&shallow));
+    let (owner, shallow_bytes) = heap_bytes(|| m3.effective_owner(&shallow));
     assert_eq!(owner, Some(ID1));
     for len in [4, 10, 100, 1_000] {
         let deeper = probe(len);
         let (owner, bytes) = heap_bytes(|| m3.effective_owner(&deeper));
         assert_eq!(owner, Some(ID1), "ω at {len} components");
-        assert_eq!(bytes, walk, "ω's heap bytes at {len} components against 3");
+        assert_eq!(
+            bytes, shallow_bytes,
+            "ω's heap bytes at {len} components against 3"
+        );
         let (owns, bytes) = heap_bytes(|| m3.is_effective_owner(ID1, &deeper));
         assert!(owns, "the authorization predicate at {len} components");
         assert_eq!(
-            bytes, walk,
+            bytes, shallow_bytes,
             "the authorization predicate's heap bytes at {len} components against 3"
         );
     }
@@ -463,7 +466,7 @@ fn omega_resolves_by_the_registry_not_by_the_probes_depth() {
     let (owner, bytes) = heap_bytes(|| m3.effective_owner(&deep));
     assert_eq!(owner, Some(ID1));
     assert_eq!(
-        bytes, walk,
+        bytes, shallow_bytes,
         "ω's heap bytes at fifty thousand components against 3"
     );
     assert!(m3.is_effective_owner(ID1, &deep));

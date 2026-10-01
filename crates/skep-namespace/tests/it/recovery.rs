@@ -198,14 +198,14 @@ fn journaled_types_survive_serde_round_trips() {
         Ok(())
     })
     .expect("content commit");
-    let state = k.snapshot().world().m3().clone();
-    let bytes = bincode::serialize(&state).expect("serialize M3State");
+    let live = k.snapshot().world().m3().clone();
+    let bytes = bincode::serialize(&live).expect("serialize M3State");
     let restored: M3State = bincode::deserialize(&bytes).expect("deserialize M3State");
     // Whole-value: the decoded slice IS the encoded one, entry for entry
     // across the three registries and the publication map — which the
     // per-question probes below then name, so a failure says which claim
     // broke.
-    assert_eq!(restored, state);
+    assert_eq!(restored, live);
     assert!(restored.is_allocated(&a(&[1, 0, 1, 0, 1, 0, 1, 1])));
     assert!(restored.is_registered_document(&doc));
     // The publication map rides inside the slice too: the fixture's doc is

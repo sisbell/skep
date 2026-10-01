@@ -10,8 +10,8 @@ use crate::common::*;
 use skep_address::Level;
 use skep_kernel::Kernel;
 use skep_namespace::{
-    CreateDocumentError, DelegateError, HasM3, M3Rec, M3State, MintError, Namespace, NodeError,
-    PrincipalId, BOOTSTRAP_PRINCIPAL, MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS,
+    CreateDocumentError, DelegateError, HasM3, M3Rec, M3State, MintError, Namespace, PrincipalId,
+    RegisterNodeError, BOOTSTRAP_PRINCIPAL, MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS,
 };
 
 #[test]
@@ -63,18 +63,21 @@ fn register_node_validates_and_admits_supplied_addresses() {
     // reads none, following it because the order is the contract.
     let before = k.current_seq();
     // NotValid — not T4 ([1,0] has a trailing zero).
-    assert_eq!(rejected(ns.register_node(t(&[1, 0]))), NodeError::NotValid);
+    assert_eq!(
+        rejected(ns.register_node(t(&[1, 0]))),
+        RegisterNodeError::NotValid
+    );
     // NotNode — account-level input; checked before lineage ([2,0,1] is
     // also not bootstrap-descended).
     assert_eq!(
         rejected(ns.register_node(t(&[2, 0, 1]))),
-        NodeError::NotNode
+        RegisterNodeError::NotNode
     );
     // NotNode precedes NotFresh: [1,7,0,1] is account-level AND registered
     // (the delegation above allocated it).
     assert_eq!(
         rejected(ns.register_node(t(&[1, 7, 0, 1]))),
-        NodeError::NotNode
+        RegisterNodeError::NotNode
     );
     // TooDeep — `nodes` is the one registry M3 cannot keep in frontier form,
     // so an entry's component COUNT is refused rather than stored (magnitude
@@ -83,23 +86,32 @@ fn register_node_validates_and_admits_supplied_addresses() {
     // only guard that can be refusing it.
     let too_deep: Vec<u32> = std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1).collect();
     assert_eq!(a(&too_deep).level(), Level::Node);
-    assert_eq!(rejected(ns.register_node(t(&too_deep))), NodeError::TooDeep);
+    assert_eq!(
+        rejected(ns.register_node(t(&too_deep))),
+        RegisterNodeError::TooDeep
+    );
     // NotNode precedes TooDeep: an equally over-long ACCOUNT-tier address is
     // refused for its tier, since depth bounds the node registry alone.
     let mut deep_acct = vec![1u32, 0];
     deep_acct.extend(std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1));
     assert_eq!(
         rejected(ns.register_node(t(&deep_acct))),
-        NodeError::NotNode
+        RegisterNodeError::NotNode
     );
     // NotFresh — duplicates surface typed, never a silent coalesce; the
     // seeded [1] and the just-registered [1,7] alike.
-    assert_eq!(rejected(ns.register_node(t(&[1]))), NodeError::NotFresh);
-    assert_eq!(rejected(ns.register_node(t(&[1, 7]))), NodeError::NotFresh);
+    assert_eq!(
+        rejected(ns.register_node(t(&[1]))),
+        RegisterNodeError::NotFresh
+    );
+    assert_eq!(
+        rejected(ns.register_node(t(&[1, 7]))),
+        RegisterNodeError::NotFresh
+    );
     // NotDescendantOfBootstrap — [1] ≼ addr fails.
     assert_eq!(
         rejected(ns.register_node(t(&[2]))),
-        NodeError::NotDescendantOfBootstrap
+        RegisterNodeError::NotDescendantOfBootstrap
     );
     // A rejected admission commits nothing, whichever guard refused it.
     assert_eq!(k.current_seq(), before);
@@ -128,7 +140,7 @@ fn register_node_validates_and_admits_supplied_addresses() {
     let over_cap_k = mem_kernel(seeded);
     assert_eq!(
         rejected(Namespace::new(&over_cap_k).register_node(t(&too_deep))),
-        NodeError::TooDeep
+        RegisterNodeError::TooDeep
     );
 
     // NotFresh precedes NotDescendantOfBootstrap: [2] is registered AND off
@@ -140,7 +152,7 @@ fn register_node_validates_and_admits_supplied_addresses() {
     let off_lineage_k = mem_kernel(seeded);
     assert_eq!(
         rejected(Namespace::new(&off_lineage_k).register_node(t(&[2]))),
-        NodeError::NotFresh
+        RegisterNodeError::NotFresh
     );
 }
 
@@ -173,12 +185,18 @@ fn pre_work_rejections_open_no_transaction() {
             rejected(ns.delegate(ID1, t(&deep_prefix), ID2)),
             DelegateError::TooDeep
         );
-        assert_eq!(rejected(ns.register_node(t(&[1, 0]))), NodeError::NotValid);
+        assert_eq!(
+            rejected(ns.register_node(t(&[1, 0]))),
+            RegisterNodeError::NotValid
+        );
         assert_eq!(
             rejected(ns.register_node(t(&[2, 0, 1]))),
-            NodeError::NotNode
+            RegisterNodeError::NotNode
         );
-        assert_eq!(rejected(ns.register_node(t(&too_deep))), NodeError::TooDeep);
+        assert_eq!(
+            rejected(ns.register_node(t(&too_deep))),
+            RegisterNodeError::TooDeep
+        );
         assert_eq!(
             rejected(ns.fork(UNKNOWN_ID, None)),
             CreateDocumentError::NotOwner
@@ -368,11 +386,15 @@ fn in_closure_rejections_open_the_ops_own_transaction() {
 
     // `register_node`: freshness, then the lineage guard its doc keeps inside.
     for (case, addr, refusal) in [
-        ("a node already admitted", vec![1u32], NodeError::NotFresh),
+        (
+            "a node already admitted",
+            vec![1u32],
+            RegisterNodeError::NotFresh,
+        ),
         (
             "a node off the bootstrap lineage",
             vec![2],
-            NodeError::NotDescendantOfBootstrap,
+            RegisterNodeError::NotDescendantOfBootstrap,
         ),
     ] {
         assert_eq!(
@@ -441,5 +463,8 @@ fn the_handle_is_a_kernel_borrow_that_copies_and_prints() {
     );
     copy.register_node(t(&[1, 7]))
         .expect("admitted through the copy");
-    assert_eq!(rejected(ns.register_node(t(&[1, 7]))), NodeError::NotFresh);
+    assert_eq!(
+        rejected(ns.register_node(t(&[1, 7]))),
+        RegisterNodeError::NotFresh
+    );
 }

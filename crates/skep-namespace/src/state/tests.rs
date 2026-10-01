@@ -264,17 +264,17 @@ fn a_replayed_allocate_never_moves_a_documents_bit() {
 /// so a registration gate added here would pass them all.
 #[test]
 fn latest_version_reads_the_chain_not_the_registry() {
-    let orphan = a(&[1, 0, 1, 0, 9]);
+    let unregistered_doc = a(&[1, 0, 1, 0, 9]);
     let member = a(&[1, 0, 1, 0, 9, 1]);
     let s = M3State::genesis().apply_m3(&M3Rec::Allocate {
         addr: member.clone(),
         published: false,
     });
     assert!(
-        !s.is_registered_document(&orphan),
+        !s.is_registered_document(&unregistered_doc),
         "the source was never minted"
     );
-    assert_eq!(s.latest_version(&orphan), Some(member));
+    assert_eq!(s.latest_version(&unregistered_doc), Some(member));
 }
 
 /// [`M3State::has_documents`] reads the CHAIN and not the registry, like
@@ -288,16 +288,16 @@ fn latest_version_reads_the_chain_not_the_registry() {
 /// registration gate added here would pass them all.
 #[test]
 fn has_documents_reads_the_chain_not_the_registry() {
-    let orphan = a(&[1, 0, 9]);
+    let unregistered_acct = a(&[1, 0, 9]);
     let s = M3State::genesis().apply_m3(&M3Rec::Allocate {
         addr: a(&[1, 0, 9, 0, 1]),
         published: false,
     });
     assert!(
-        !s.is_registered_account(&orphan),
+        !s.is_registered_account(&unregistered_acct),
         "the account was never minted"
     );
-    assert!(s.has_documents(&orphan));
+    assert!(s.has_documents(&unregistered_acct));
 }
 
 /// §6 (iv): the single probe answers "does a registered principal sit

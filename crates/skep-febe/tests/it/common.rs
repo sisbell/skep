@@ -20,7 +20,7 @@ use skep_febe::{
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, WorldState};
 use skep_links::{enc, Endset, HasLinks, Invalid, Link, LinkRec, LinkState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
-use skep_retrieval::{CompareReport, Deletions, Delivery};
+use skep_retrieval::{CompareReport, Deletions, Delivery, DeliveryItem, Spec};
 
 // ───────────────────────── the assembled test world ─────────────────────────
 
@@ -599,6 +599,43 @@ pub fn linked_doc(fx: &Fixture) -> (Address, Address) {
         },
     ));
     (d, l)
+}
+
+/// A draft of `run_count` content runs of one position each, `run_count` a
+/// power of two from 2: three elements with the middle one deleted — `a` and
+/// `c`, at I-addresses no run joins — and then its whole extent copied onto
+/// its own tail until it holds `run_count` positions, each copy doubling the
+/// runs. Checked rather than trusted: the image is `a`'s and `c`'s two
+/// one-position I-runs and the delivery alternates them, so no two
+/// neighbouring positions are I-adjacent and every position is its own run.
+pub fn fragmented_doc(fx: &Fixture, run_count: u32) -> Address {
+    assert!(run_count >= 2 && run_count.is_power_of_two(), "a power of two from 2: {run_count}");
+    let d = create_doc(fx);
+    insert3(fx, &d);
+    ack(ex(&fx.febe, fx.user, Op::Delete { doc: d.clone(), p: vp(1, 2), width: nat(1) }));
+    let mut extent = 2;
+    while extent < run_count {
+        ack(ex(
+            &fx.febe,
+            fx.user,
+            Op::Copy { doc: d.clone(), at: vp(1, extent + 1), specs: vec![vspec(&d, 1, extent)] },
+        ));
+        extent *= 2;
+    }
+    let whole = || vspan(1, 1, extent);
+    let image = runs(ex(&fx.febe, fx.user, Op::Image { d: d.clone(), region: vec![whole()] }));
+    assert!(image.len() == 2 && image.iter().all(|r| *r.width() == nat(1)), "{image:?}");
+    let retrieve = Op::RetrieveV { specs: vec![Spec { doc: d.clone(), span: whole() }] };
+    let (items, _) = delivery(ex(&fx.febe, fx.user, retrieve));
+    let text: Vec<u8> = items
+        .iter()
+        .flat_map(|item| match item {
+            DeliveryItem::Content(v) => v.as_bytes().to_vec(),
+            other => panic!("every position is arranged content: {other:?}"),
+        })
+        .collect();
+    assert_eq!(text, b"ac".repeat(run_count as usize / 2), "the delivery alternates a and c");
+    d
 }
 
 // ───────────────── the readability fixture (the door's two sides) ───────────

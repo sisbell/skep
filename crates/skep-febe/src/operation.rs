@@ -338,8 +338,8 @@ where
     ///   connection state, never a wire-supplied value.
     /// * SIZE: M10 measures no field of the [`Op`] it is handed — the one list
     ///   it measures is the EDITLINK successor slot it builds for itself,
-    ///   against M7's per-slot budget — so every list, tumbler and magnitude
-    ///   in `req` reaches the owning store as presented. A transport
+    ///   against M7's two per-slot budgets — so every list, tumbler and
+    ///   magnitude in `req` reaches the owning store as presented. A transport
     ///   discharges this in [`Codec::parse`], which also names and prices the
     ///   operations whose work their size does not bound; a caller that
     ///   assembles an [`Op`] and calls HERE has no parser in between and owns

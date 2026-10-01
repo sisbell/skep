@@ -2,15 +2,16 @@
 //! public surface: both forms of the type slot, a slot built from every spec,
 //! the per-slot span budget charged as the slot is built — refused before any
 //! transaction where the door judges the write, and a slot at the budget
-//! still accepted — the first offending
-//! slot the one that speaks, and an unarranged source committing an empty
-//! slot exactly as MAKELINK's would.
+//! still accepted — the per-slot work budget charged before each walk, at the
+//! boundary MAKELINK's slots are held to on both of its sides, the first
+//! offending slot the one that speaks, and an unarranged source committing an
+//! empty slot exactly as MAKELINK's would.
 
 use crate::common;
 
 use common::*;
 use skep_febe::{Disposition, Op, OpKind, RejectCode, SlotArg, SuccessorSpec, FROM};
-use skep_links::{enc, MAX_SLOT_SPANS};
+use skep_links::{enc, MAX_SLOT_RESOLVE_STEPS, MAX_SLOT_SPANS};
 
 /// §4: `SuccessorSpec.ty`'s other form. `SlotArg::Addrs` builds an
 /// address-denoting (managed-relation) type slot through `enc`, and it is the
@@ -143,6 +144,68 @@ fn a_successor_slot_at_the_budget_is_still_accepted() {
     let link =
         link_value(ex(&fx.febe, fx.user, Op::ReadLink { a: succ })).expect("the successor is resident");
     assert_eq!(link.from_slot().len(), MAX_SLOT_SPANS, "every span at the budget was deposited");
+}
+
+/// §4: the successor slot's WORK budget, beside its span budget, at the
+/// boundary MAKELINK's `Resolve` slots are held to. A spec's walk to its
+/// opening ordinal passes every run of its source before it, whatever the spec
+/// keeps — all of them for a span opening past the arranged end, which keeps
+/// nothing — so no span count sees such a slot, and each walk is charged
+/// before it is taken, at its source's whole run count, against
+/// [`MAX_SLOT_RESOLVE_STEPS`]. The owner's request one walk past it — a write
+/// the door judges — is refused by M10, naming the slot, with no transaction
+/// opened, as MAKELINK refuses the same slot; one walk fewer is the budget
+/// exactly, and commits the empty slot MAKELINK deposits too. (A caller the
+/// store's own gate refuses is answered that refusal instead:
+/// `write_door.rs`.)
+#[test]
+fn a_successor_slot_is_held_to_the_work_budget_makelink_is() {
+    let fx = setup();
+    let (d, original) = linked_doc(&fx);
+    let walk = 2048;
+    let source = fragmented_doc(&fx, walk);
+    let at_budget = MAX_SLOT_RESOLVE_STEPS / walk as usize;
+    // Opening past the source's arranged end: it keeps nothing, walking every
+    // run to find so.
+    let past_the_end =
+        || skep_arrangement::VSpec { source: source.clone(), span: vspan(1, walk + 1, 1) };
+    let edit = |specs: usize| Op::EditLink {
+        original: original.clone(),
+        successor: SuccessorSpec {
+            from: vec![past_the_end(); specs],
+            to: vec![],
+            ty: SlotArg::Addrs(vec![d.clone()]),
+        },
+        d_s: d.clone(),
+        d_a: d.clone(),
+    };
+    let make = |specs: usize| Op::MakeLink {
+        home: d.clone(),
+        from: SlotArg::Resolve(vec![past_the_end(); specs]),
+        to: SlotArg::Addrs(vec![]),
+        ty: SlotArg::Addrs(vec![d.clone()]),
+        replaces: None,
+    };
+
+    let before = fx.febe.log_position();
+    let rej = rejected(ex(&fx.febe, fx.user, edit(at_budget + 1)));
+    assert_eq!(rej.op, OpKind::EditLink);
+    assert_eq!(rej.code, RejectCode::SlotTooLarge);
+    assert_eq!(rej.disposition, Disposition::Permanent, "no retry shortens the walk");
+    let site = rej.site.expect("M10's own refusal names the slot");
+    assert_eq!(site.slot, Some(FROM));
+    assert!(site.index.is_none(), "the slot is at fault, not one spec in it");
+    assert_eq!(fx.febe.log_position(), before, "the refusal opened no transaction");
+    let make_rej = rejected(ex(&fx.febe, fx.user, make(at_budget + 1)));
+    assert_eq!(make_rej.code, RejectCode::SlotTooLarge, "MAKELINK refuses the same slot");
+
+    let (succ, _, _) = ack_edit(ex(&fx.febe, fx.user, edit(at_budget)));
+    let link =
+        link_value(ex(&fx.febe, fx.user, Op::ReadLink { a: succ })).expect("the successor is resident");
+    assert!(link.from_slot().is_empty(), "the budget exactly: an empty slot, its specs keeping nothing");
+    let (made, _) = ack_addr(ex(&fx.febe, fx.user, make(at_budget)));
+    let made = link_value(ex(&fx.febe, fx.user, Op::ReadLink { a: made })).expect("the link is resident");
+    assert!(made.from_slot().is_empty(), "the same empty slot MAKELINK deposits");
 }
 
 /// §4: the request-level refusal precedence, and what makes a successor's

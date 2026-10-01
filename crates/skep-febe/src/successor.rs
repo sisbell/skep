@@ -5,17 +5,22 @@
 //! and the operation is still one M2 transaction.
 //!
 //! The whole successor is assembled here — all three slots, in the order the
-//! client is promised, each bounded by M7's per-slot span budget as it is
-//! built ([`successor_link`]). Building the slots here rather than in M7 is
-//! what makes that budget M10's to count for this one request, and counting
-//! it means stopping as the spans are produced. Whether M10 also ANSWERS the
-//! budget is the write door's to say: where the door judged the write, a slot
-//! is refused as it crosses; where the door deferred to the store's own gate,
-//! the verdict is M7's, after that gate.
+//! client is promised, each held as it is built to M7's two per-slot budgets
+//! ([`successor_link`]): the spans a slot keeps, [`MAX_SLOT_SPANS`], and the
+//! run-list steps its resolution walks, [`MAX_SLOT_RESOLVE_STEPS`]. Building
+//! the slots here rather than in M7 is what makes both M10's to charge for
+//! this one request — M7's `editlink` receives a built `Link`, by which time
+//! the walk has been paid — and charging them means stopping as the spans are
+//! produced and before each walk is taken. Whether M10 also ANSWERS a budget
+//! is the write door's to say: where the door judged the write, a slot is
+//! refused as it crosses either; where the door deferred to the store's own
+//! gate, the verdict is M7's, after that gate.
 
-use skep_address::Span;
+use skep_address::{subtree_of, Span};
 use skep_arrangement::{as_ordinal_vspan, M5State, VSpec};
-use skep_links::{enc, Endset, Link, SlotArg, FROM, MAX_SLOT_SPANS, TO, TYPE};
+use skep_links::{
+    enc, Endset, Link, SlotArg, FROM, MAX_SLOT_RESOLVE_STEPS, MAX_SLOT_SPANS, TO, TYPE,
+};
 use skep_namespace::M3State;
 
 use crate::op::{OpKind, SuccessorSpec};
@@ -26,11 +31,12 @@ use crate::reject::{FaultSite, RejectCode, Rejection};
 /// `judged` is the write door's answer (`consult_write`): whether it judged
 /// this write's sources. Where it did not — the destination's own gate would
 /// refuse, so the store speaks first — the sources went unconsulted, and the
-/// build issues no verdict their arrangements decide: a resolved slot's span
-/// budget, which only a source's fragmentation can exceed, is left to M7's
-/// `editlink`, which holds the finished slots to it after its home gate
-/// ([`successor_slot`]). Every other refusal here is the request's own or the
-/// registry's, and answers alike whatever a source holds.
+/// build issues no verdict their arrangements decide: a resolved slot's two
+/// budgets, whose crossing turns on what a source holds, are left to M7's
+/// `editlink`, a slot over either being left one span past the span budget,
+/// which that call refuses after its home gate ([`successor_slot`]). Every
+/// other refusal here is the request's own or the registry's, and answers
+/// alike whatever a source holds.
 ///
 /// PRECEDENCE, since a successor may be wrong in several slots at once and
 /// exactly one answer goes back: the slots are built `from`, then `to`, then
@@ -111,56 +117,73 @@ pub(crate) fn successor_link(
 /// an EDITLINK successor stricter than the MAKELINK it supersedes would be a
 /// different operation.
 ///
-/// The slot is BOUNDED at [`MAX_SLOT_SPANS`] — M7's per-slot budget, named
-/// rather than respelled — and the count is taken AS THE SPANS ARE PRODUCED,
-/// so an over-budget slot stops accumulating instead of being built and then
-/// measured. A spec's expansion is not the request's size but the SOURCE
-/// document's fragmentation (one run per contiguous I-segment), so a short
-/// list of specs over a fragmented document names spans without bound, and
-/// each is two multi-component tumblers — order half a kilobyte live. M7's
-/// `editlink` holds the finished slots to the same number, but inside its
-/// transaction; counting here is what keeps the build's own peak to one
-/// slot's worth of spans instead of every spec's.
+/// The slot's SPANS are bounded at [`MAX_SLOT_SPANS`] — M7's per-slot budget,
+/// named rather than respelled — and the count is taken AS THE SPANS ARE
+/// PRODUCED, so an over-budget slot stops accumulating instead of being built
+/// and then measured. A spec's expansion is not the request's size but the
+/// SOURCE document's fragmentation (one run per contiguous I-segment), so a
+/// short list of specs over a fragmented document names spans without bound,
+/// and each is two multi-component tumblers — order half a kilobyte live.
+/// M7's `editlink` holds the finished slots to the same number, but inside
+/// its transaction; counting here is what keeps the build's own peak to one
+/// slot's worth of spans instead of every spec's, each spec's runs being
+/// pulled one at a time off M5's lazy `iter_resolve` so the cap ends a spec's
+/// walk where the slot crosses it — as M7 builds MAKELINK's `Resolve` slots.
 ///
-/// WHO ANSWERS THE BUDGET is `judged`'s to say. Where the door judged the
+/// The slot's WORK is bounded at [`MAX_SLOT_RESOLVE_STEPS`] — M7's budget for
+/// those same `Resolve` slots, named rather than respelled — because the span
+/// count cannot bound it. A spec's walk to its opening ordinal passes every
+/// run of its source that ends before it, whatever the spec keeps: all of them
+/// for a span opening past the arranged end, which keeps nothing, so a slot of
+/// such specs is empty to the span budget while its steps are the sources'
+/// fragmentation times the caller's list length. Each walk is charged BEFORE
+/// it is taken, at its source's whole run count — M5's `content_run_count`,
+/// the walk's ceiling, read in one lookup without walking — so the charge errs
+/// in the safe direction and a refusal precedes the work it refuses. Where the
+/// build runs is why it is bounded: ahead of the write's transaction, so
+/// outside M2's applier lock, but inside any serialization a transport holds
+/// around `execute` — skepd holds its write lock there — which every other
+/// writer waits through. What a spec costs once the slot is over either budget
+/// is its two guards, a shape test and a registry lookup, so the list length
+/// multiplies nothing a source decides.
+///
+/// WHO ANSWERS A BUDGET is `judged`'s to say. Where the door judged the
 /// write, the caller may read every source, so the third fault is typed here:
-/// `SlotTooLarge` as the slot crosses the budget, which costs the client
+/// `SlotTooLarge` as the slot crosses either budget, which costs the client
 /// nothing against M7's refusal of the same slot (the same code, the same
-/// `Permanent` disposition) and names the slot besides. Where the door
-/// deferred, a refusal here would be decided by the fragmentation of a source
-/// the caller was never shown, ahead of the store's `not_owner` — two private
-/// drafts differing in arrangement alone would draw two answers. So the slot
-/// stops ONE span past the budget, which M7 refuses after its home gate, and
-/// the walk resolves no further spec while still judging each one's shape and
-/// registration. Those faults are the request's own and the registry's, so
-/// they must speak alike wherever an unconsulted source crossed the budget
-/// ahead of them; a walk that ended at the crossing would let a later spec's
-/// fault speak or not by where that happened.
-///
-/// That budget bounds the slot's spans and, each spec's runs being pulled one
-/// at a time off M5's lazy `iter_resolve` so the cap ends a spec's walk where
-/// the slot crosses it — as M7 builds MAKELINK's `Resolve` slots — the live
-/// peak of building them. What sits outside it is WORK, in two shapes. Each
-/// spec's walk to its opening ordinal passes the source's runs before it
-/// whatever the spec yields, so its cost is the SOURCE's fragmentation and not
-/// the request's size. And the count is of SPANS, not of specs: a spec that
-/// resolves to nothing pushes nothing, so the cap never sees it and the walk
-/// runs to the end of the list at one arrangement lookup per spec — which is
-/// the shape both surviving ⟨⟩ sources produce. Neither is bounded here; the
-/// caller's list length is the multiplier of both.
+/// `Permanent` disposition — MAKELINK's `Resolve` slots answer both budgets
+/// with it) and names the slot besides. Where the door deferred, a refusal
+/// here would be decided by a source the caller was never shown — its
+/// fragmentation, through either budget — ahead of the store's `not_owner`:
+/// two private drafts differing in arrangement alone would draw two answers.
+/// So an unjudged slot over either budget is left ONE span past the span
+/// budget, which M7 refuses after its home gate: by the run that crosses the
+/// span budget, or, crossing the work budget, by a fill of the crossing
+/// source's subtree span. The fill is never read — M7 counts a slot's spans
+/// before any verdict reads one — and is sized by an address the registry
+/// minted rather than by the request. The store's gate therefore speaks first;
+/// and where that gate passes after all — the window between the snapshot this
+/// build reads and the write's commit — the slot is refused for the budget it
+/// crossed rather than deposited short of what the client asked. Past the
+/// crossing the walk resolves no further spec while still judging each one's
+/// shape and registration. Those faults are the request's own and the
+/// registry's, so they must speak alike wherever an unconsulted source crossed
+/// a budget ahead of them; a walk that ended at the crossing would let a later
+/// spec's fault speak or not by where that happened.
 ///
 /// PRECEDENCE within the slot, since several specs may be wrong and exactly
 /// one answer goes back: the specs are walked in order and the FIRST offending
 /// one speaks, with `IllFormedSpec` ahead of `SourceNotRegistered` on that
 /// spec. `SlotTooLarge`, raised only where the door judged the write, can
-/// arise only after every spec walked so far has passed both. Every refusal
-/// names the slot it is about in `site.slot`; the two per-spec refusals also
-/// localize the offender in `site.index`, while `SlotTooLarge` leaves `index`
-/// empty, being the slot's fault rather than one spec's.
+/// arise only after every spec reached so far has passed both, a spec's work
+/// being charged after its guards and before its walk. Every refusal names the
+/// slot it is about in `site.slot`; the two per-spec refusals also localize
+/// the offender in `site.index`, while `SlotTooLarge` leaves `index` empty,
+/// being the slot's fault rather than one spec's.
 ///
-/// Past the guard and under the budget the tail is infallible: `Run::iextent`
-/// is total (every `Run` has `width ≥ 1` and an element-level `i_start`). An
-/// empty from/to is structurally fine; M7 gates the type slot.
+/// Past the guard and under the budgets the tail is infallible:
+/// `Run::iextent` is total (every `Run` has `width ≥ 1` and an element-level
+/// `i_start`). An empty from/to is structurally fine; M7 gates the type slot.
 fn successor_slot(
     m3: &M3State,
     m5: &M5State,
@@ -169,6 +192,7 @@ fn successor_slot(
     judged: bool,
 ) -> Result<Endset, Rejection> {
     let mut spans = Vec::new();
+    let mut steps: usize = 0;
     for (index, spec) in specs.iter().enumerate() {
         if !is_content_vspan(&spec.span) {
             return Err(at_spec(slot, index, RejectCode::IllFormedSpec));
@@ -176,9 +200,21 @@ fn successor_slot(
         if !m3.is_registered_document(&spec.source) {
             return Err(at_spec(slot, index, RejectCode::SourceNotRegistered));
         }
-        // Past the budget only an unjudged build is still walking, and it
+        // Past a budget only an unjudged build is still walking, and it
         // resolves nothing more.
         if spans.len() > MAX_SLOT_SPANS {
+            continue;
+        }
+        // The WORK charge, ahead of the work: the walk's ceiling, read without
+        // walking.
+        steps = steps.saturating_add(m5.content_run_count(&spec.source));
+        if steps > MAX_SLOT_RESOLVE_STEPS {
+            if judged {
+                return Err(slot_too_large(slot));
+            }
+            // One span past the span budget, which M7 refuses after its home
+            // gate, counting before it reads.
+            spans.resize(MAX_SLOT_SPANS + 1, subtree_of(spec.source.tumbler()));
             continue;
         }
         for run in m5.iter_resolve(&spec.source, &spec.span) {

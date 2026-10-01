@@ -10,7 +10,8 @@ use skep_kernel::{
     WorldState,
 };
 use skep_links::{
-    HasLinks, LinkRec, LinkState, LinkWriter, SlotArg, Visibility, FROM, MAX_SLOT_SPANS,
+    EditLinkError, HasLinks, LinkRec, LinkState, LinkWriter, SlotArg, Visibility, FROM,
+    MAX_SLOT_RESOLVE_STEPS, MAX_SLOT_SPANS,
 };
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
@@ -558,10 +559,16 @@ fn an_attestation_reaches_a_store_driver_on_insert_publish_and_make_link_alone()
     }
 }
 
+/// The principal [`fragmented_draft`]'s account is delegated to.
+const DRAFT_OWNER: PrincipalId = PrincipalId(7);
+
 /// A draft in a delegated account, driven through `execute`: three elements
 /// with the middle one deleted, so one spec over its first two positions
-/// resolves to TWO spans.
-fn fragmented_draft(febe: &OperationSurface<World>) -> Address {
+/// resolves to TWO spans — and then its whole extent copied onto its own tail
+/// `doublings` times. Each copy doubles the runs, the seam between one copy
+/// and the next joining two I-addresses no run coalesces across, so the draft
+/// ends at `2^(doublings + 1)` runs of one position each.
+fn fragmented_draft(febe: &OperationSurface<World>, doublings: u32) -> Address {
     let run = |session: SessionId, op: Op| {
         match febe.execute(session, Request { id: None, op, attest: None }) {
             Response::Rejected(rej) => panic!("the fixture's requests are answered: {rej}"),
@@ -574,13 +581,12 @@ fn fragmented_draft(febe: &OperationSurface<World>) -> Address {
     else {
         panic!("the genesis node has a delegable next-form prefix");
     };
-    let owner = PrincipalId(7);
     let Response::AckAddr { addr: account, .. } =
-        run(boot, Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: owner })
+        run(boot, Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: DRAFT_OWNER })
     else {
         panic!("the bootstrap session delegates the prefix");
     };
-    let session = febe.open_session(owner);
+    let session = febe.open_session(DRAFT_OWNER);
     let Response::AckAddr { addr: doc, .. } =
         run(session, Op::CreateNewDocument { account, published: Some(false) })
     else {
@@ -596,6 +602,17 @@ fn fragmented_draft(febe: &OperationSurface<World>) -> Address {
     let p = VPos::content(Nat::from(2u32));
     let deleted = run(session, Op::Delete { doc: doc.clone(), p, width: Nat::from(1u32) });
     assert!(matches!(deleted, Response::Ack { .. }), "the owner deletes the middle element");
+    for k in 0..doublings {
+        let extent = 2u32 << k;
+        let whole = Span::new(tum(&[1, 1]), tum(&[0, extent]))
+            .unwrap_or_else(|_| panic!("well-formed test span"));
+        let copy = Op::Copy {
+            doc: doc.clone(),
+            at: VPos::content(Nat::from(extent + 1)),
+            specs: vec![VSpec { source: doc.clone(), span: whole }],
+        };
+        assert!(matches!(run(session, copy), Response::Ack { .. }), "the owner doubles its draft");
+    }
     doc
 }
 
@@ -609,7 +626,7 @@ fn fragmented_draft(febe: &OperationSurface<World>) -> Address {
 #[test]
 fn an_unjudged_successor_slot_stops_one_span_past_the_budget() {
     let febe = surface();
-    let doc = fragmented_draft(&febe);
+    let doc = fragmented_draft(&febe, 0);
     let snap = febe.stores.kernel().snapshot();
     let (m3, m5) = (snap.world().m3(), snap.world().m5());
     let two_spans = || VSpec {
@@ -640,5 +657,85 @@ fn an_unjudged_successor_slot_stops_one_span_past_the_budget() {
     for judged in [true, false] {
         let link = successor_link(m3, m5, &at_cap, judged).expect("a slot at the budget");
         assert_eq!(link.from_slot().len(), MAX_SLOT_SPANS, "judged: {judged}");
+    }
+}
+
+/// §4, the successor slot's WORK budget, and what an unjudged slot over it is
+/// built to be. A spec opening past its source's arranged end keeps no span
+/// while walking every run, so no span count sees the slot; only the charge
+/// taken before each walk bounds it. Where the door judged, the slot is
+/// refused as the charge crosses, naming the slot. Where it deferred, nothing
+/// here refuses it and the slot is left one span past the span budget — so
+/// where the store's own gate passes after all, in the window the deferral
+/// leaves between the door's snapshot and the commit, M7 refuses the slot
+/// rather than deposit a successor short of what was asked. One walk fewer is
+/// the budget exactly, an ordinary slot under both.
+#[test]
+fn an_unjudged_slot_over_the_work_budget_is_built_for_the_store_to_refuse() {
+    let febe = surface();
+    let doc = fragmented_draft(&febe, 10);
+    let owner = febe.open_session(DRAFT_OWNER);
+    let link_op = Op::MakeLink {
+        home: doc.clone(),
+        from: SlotArg::Addrs(vec![]),
+        to: SlotArg::Addrs(vec![]),
+        ty: SlotArg::Addrs(vec![doc.clone()]),
+        replaces: None,
+    };
+    let original = match febe.execute(owner, Request { id: None, op: link_op, attest: None }) {
+        Response::AckAddr { addr, .. } => addr,
+        other => panic!("the owner links its draft: {other:?}"),
+    };
+    let snap = febe.stores.kernel().snapshot();
+    let (m3, m5) = (snap.world().m3(), snap.world().m5());
+    let walk = m5.content_run_count(&doc);
+    assert_eq!(walk, 2048, "premise: one walk over this source passes 2048 runs");
+    let past_the_end = || VSpec {
+        source: doc.clone(),
+        span: Span::new(tum(&[1, 2049]), tum(&[0, 1]))
+            .unwrap_or_else(|_| panic!("well-formed test span")),
+    };
+    assert!(m5.resolve(&doc, &past_the_end().span).is_empty(), "premise: each spec keeps nothing");
+    let at_budget = MAX_SLOT_RESOLVE_STEPS / walk;
+    assert_eq!(at_budget * walk, MAX_SLOT_RESOLVE_STEPS, "premise: the budget is whole walks");
+    let successor = |specs: usize| SuccessorSpec {
+        from: vec![past_the_end(); specs],
+        to: vec![],
+        ty: SlotArg::Addrs(vec![doc.clone()]),
+    };
+
+    // One walk past the budget.
+    let over = successor(at_budget + 1);
+    let refused = successor_link(m3, m5, &over, true)
+        .expect_err("a judged build refuses as the charge crosses");
+    assert_eq!(refused.code, RejectCode::SlotTooLarge);
+    let site = refused.site.expect("the slot is named");
+    assert_eq!(site.slot, Some(FROM));
+    assert!(site.index.is_none(), "the slot is at fault, not one spec in it");
+    let built_to_fail = successor_link(m3, m5, &over, false)
+        .expect("an unjudged build refuses nothing a source decides");
+    assert_eq!(built_to_fail.from_slot().len(), MAX_SLOT_SPANS + 1, "one span past the span budget");
+
+    // The window the deferral leaves: the store's own gate passes after all.
+    // M7 refuses the slot there, and nothing is deposited.
+    let before = febe.log_position();
+    let visibility = |_: &World, _: &Address| true;
+    let deposited = febe.stores.linkstore(&visibility).editlink(
+        Caller::Principal(DRAFT_OWNER),
+        &original,
+        built_to_fail,
+        &doc,
+        &doc,
+    );
+    assert!(
+        matches!(deposited, Err(TxnError::Rejected(EditLinkError::SlotTooLarge))),
+        "{deposited:?}"
+    );
+    assert_eq!(febe.log_position(), before, "a successor short of what was asked is never deposited");
+
+    // The budget exactly: an ordinary slot, whoever answers the budget.
+    for judged in [true, false] {
+        let link = successor_link(m3, m5, &successor(at_budget), judged).expect("a walk at the budget");
+        assert!(link.from_slot().is_empty(), "judged: {judged}");
     }
 }

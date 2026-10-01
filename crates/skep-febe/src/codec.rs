@@ -39,9 +39,10 @@ pub trait Codec {
     /// `i_start` and `width` — and its `base`'s `extent`, and every tumbler's
     /// components and magnitudes reach the owning store as presented. The one
     /// list M10 measures is the EDITLINK successor slot it builds for itself,
-    /// against M7's per-slot budget; nothing it RECEIVES is measured. So this
-    /// parser is the only bound on how large a request may be, and a costed
-    /// frame — a maximal COMPARE, an `insert` whose values outrun the
+    /// against M7's two per-slot budgets — the spans a slot keeps and the
+    /// run-list steps its resolution walks; nothing it RECEIVES is measured.
+    /// So this parser is the only bound on how large a request may be, and a
+    /// costed frame — a maximal COMPARE, an `insert` whose values outrun the
     /// transaction budget — reaches the store exactly as it arrives.
     ///
     /// AND FOR SOME OPERATIONS, BOUNDING THE REQUEST'S SIZE DOES NOT BOUND

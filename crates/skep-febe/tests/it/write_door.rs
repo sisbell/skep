@@ -21,6 +21,7 @@ use skep_febe::{
     Deposit, Disposition, Op, OpKind, PrincipalId, RejectCode, Run, SessionId, Shot, ShotRun,
     SlotArg, SuccessorSpec, VSpec, MAX_SLOT_SPANS,
 };
+use skep_links::MAX_SLOT_RESOLVE_STEPS;
 
 /// The stranger's account and session, plus one DRAFT of its own — the
 /// destination every cross-owner write below lands in.
@@ -254,6 +255,76 @@ fn an_edit_refused_its_destination_answers_alike_whatever_its_unreadable_source_
 
     // A link-subspace span is the request's own fault, and it sits AFTER
     // the specs over which the fragmented source crosses the budget.
+    let ill_formed = || Some(VSpec { source: user_draft.clone(), span: vspan(2, 1, 1) });
+    let at_fault = rejected(ex(&fx.febe, other, edit(&fragmented, ill_formed())));
+    assert_eq!(at_fault.code, RejectCode::IllFormedSpec, "the request's own fault: {at_fault}");
+    assert_eq!(
+        at_fault,
+        rejected(ex(&fx.febe, other, edit(&contiguous, ill_formed()))),
+        "a later spec's fault answers alike, wherever an unread source crossed the budget"
+    );
+    assert_eq!(fx.febe.log_position(), before, "a refused edit commits nothing");
+}
+
+/// The same deferral on the successor slot's WORK budget: an edit into a
+/// destination the caller may not write is answered alike however long an
+/// unconsulted source is to WALK. A spec opening past a source's arranged end
+/// keeps nothing and walks every run, so a slot of such specs over a heavily
+/// fragmented private draft crosses M10's work budget where the same specs
+/// over a contiguous one never do. Where the door deferred, the crossing must
+/// not speak ahead of the store's `not_owner`, or the answer counts the runs
+/// of a document the caller may not read — nor silence a later spec's own
+/// fault, which speaks alike wherever an unread source crossed the budget.
+#[test]
+fn an_edit_refused_its_destination_answers_alike_however_long_its_unreadable_source_is_to_walk() {
+    let (fx, unreadable) = setup_with_unreadable();
+    // USER's: readable to the stranger, and not the stranger's to write.
+    let (user_draft, original) = linked_doc(&fx);
+    let walk = 2048;
+    let fragmented = fragmented_doc(&fx, walk);
+    let contiguous = create_doc(&fx);
+    insert3(&fx, &contiguous);
+    unreadable.lock().expect("no poisoning").extend([fragmented.clone(), contiguous.clone()]);
+    let (other, _their_draft) = stranger(&fx);
+    // One walk past the budget over the fragmented source, one run a spec over
+    // the contiguous one; each spec opens past both arranged ends, so it keeps
+    // nothing either way. `fault` appends a spec the request itself gets
+    // wrong.
+    let edit = |source: &Address, fault: Option<VSpec>| {
+        let past_the_end = VSpec { source: source.clone(), span: vspan(1, walk + 1, 1) };
+        let mut from = vec![past_the_end; MAX_SLOT_RESOLVE_STEPS / walk as usize + 1];
+        from.extend(fault);
+        Op::EditLink {
+            original: original.clone(),
+            successor: SuccessorSpec {
+                from,
+                to: vec![],
+                ty: SlotArg::Addrs(vec![ghost_type(&user_draft, 1)]),
+            },
+            d_s: user_draft.clone(),
+            d_a: user_draft.clone(),
+        }
+    };
+    assert_eq!(
+        rejected(ex(&fx.febe, fx.user, edit(&fragmented, None))).code,
+        RejectCode::SlotTooLarge,
+        "premise: the owner, whose edit the door judges, is refused the fragmented walk"
+    );
+
+    let before = fx.febe.log_position();
+    let over_fragmented = rejected(ex(&fx.febe, other, edit(&fragmented, None)));
+    assert_eq!(
+        over_fragmented.code,
+        RejectCode::NotOwner,
+        "slot 1 speaks first: {over_fragmented}"
+    );
+    assert_eq!(over_fragmented.site.as_ref().and_then(|s| s.addr.as_ref()), Some(&user_draft));
+    assert_eq!(
+        over_fragmented,
+        rejected(ex(&fx.febe, other, edit(&contiguous, None))),
+        "one answer, however long an unreadable source is to walk"
+    );
+
     let ill_formed = || Some(VSpec { source: user_draft.clone(), span: vspan(2, 1, 1) });
     let at_fault = rejected(ex(&fx.febe, other, edit(&fragmented, ill_formed())));
     assert_eq!(at_fault.code, RejectCode::IllFormedSpec, "the request's own fault: {at_fault}");

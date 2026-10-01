@@ -56,7 +56,7 @@ fn the_publication_reads_answer_the_metadata_a_client_admits_an_edition_by() {
         "the reported `D.1` is the address the first `version` minted — the one check that \
          catches a reconstruction which has fallen out of step with M3's encoding"
     );
-    assert_eq!(birth.extent, nat(3), "the base extent PUB-3.19's edition test images over");
+    assert_eq!(birth.extent, nat(3), "the birth extent PUB-3.19's edition test images over");
 
     // A VERSION MEMBER answers its DOCUMENT's state (PUB-2.15), birth included.
     let (doc, published, _, birth) =
@@ -332,7 +332,7 @@ fn the_any_principal_discovery_read_hands_a_client_the_answer_set_never_the_inde
 /// the empty answer and RED at `(Z, [Z])` the moment the clause goes. THE
 /// CONTROL: seated by a `delegate`, `Z` answers itself and the SAME stored
 /// row is served unchanged, by the exact arm — so what dropped it was the
-/// missing seat, and the seeded row did reach the door.
+/// missing seat, and the seeded row did reach the narrowing.
 ///
 /// The seeded row's issuer is no seat, so it lies outside the obligation
 /// [`UniversalIndexRow`] states for every row the world hands over —

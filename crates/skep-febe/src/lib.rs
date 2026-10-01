@@ -106,7 +106,7 @@
 //!   concurrency policy, and reorder/retry buffering (M10 *surfaces*
 //!   `Reorder`, it does not reorder);
 //! * exactly-once, in both of the ways a client can fail to get it — the
-//!   idempotency cache is an in-memory, per-`(SessionId, ReqId)` hint holding
+//!   retry memo is an in-memory, per-`(SessionId, ReqId)` hint holding
 //!   committed-write acks only (§7). It answers a SEQUENTIAL client's reissue
 //!   of a write whose acknowledgment was lost; it is empty after a restart,
 //!   and it offers nothing between concurrent requests, a retry issued while
@@ -166,7 +166,7 @@ mod codec;
 // Which principal each session speaks for, for one uptime.
 mod session;
 // The retry memo of committed-write acknowledgments.
-mod idem;
+mod memo;
 // Every upstream store error lowered into a classified `Rejection`.
 mod lower;
 // EDITLINK's successor, the one request M10 assembles itself.

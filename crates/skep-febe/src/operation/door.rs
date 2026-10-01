@@ -233,9 +233,9 @@ pub(super) fn home_readable(a: &Address, readable: &dyn Fn(&Address) -> bool) ->
 /// Its sibling is the write side's consult, `consult_write`: one obligation
 /// split by path, the two deciding who may read what, so a reader looking
 /// for either should find both. This one is a function OVER the predicate
-/// because two doors run it and the historical one builds its predicate
-/// itself; the write side has one door, so `consult_write` binds its own and
-/// cannot be handed another.
+/// because two front doors run it and the historical one builds its
+/// predicate itself; the write side has one front door, so `consult_write`
+/// binds its own and cannot be handed another.
 ///
 /// [`OperationSurface::execute`]: crate::OperationSurface::execute
 pub fn consult_read(op: &Op, readable: &dyn Fn(&Address) -> bool) -> Result<(), Rejection> {
@@ -267,10 +267,11 @@ enum WriteConsult<'a> {
     /// readability gate, or its store's own answer would confirm a link homed
     /// where the caller cannot read.
     NotTaken,
-    /// Consulted, and DEFERRED: the consult runs only where these
-    /// destinations' own ownership gate would pass, so a session that may not
-    /// write here is never told whether it may read there. EMPTY for
-    /// `version`, which is consulted with no destination to defer on.
+    /// Consulted BEHIND THE DEFERRAL: the consult runs only where these
+    /// destinations' own ownership gate would pass — where it would not, the
+    /// door defers and judges nothing — so a session that may not write here
+    /// is never told whether it may read there. EMPTY for `version`, which is
+    /// consulted with no destination to defer on.
     AfterOwnershipOf(Vec<&'a Address>),
 }
 
@@ -282,13 +283,14 @@ impl Op {
     /// a link by address ([`Op::link_address_arguments`]) — listing the
     /// documents the store's own `not_owner` is judged on, EMPTY for
     /// `version`, whose mint lands in the caller's own account and which no
-    /// destination gate precedes (MINT-FIRST is the daemon's, slot 2).
-    /// [`WriteConsult::NotTaken`] for a write with nothing to consult and for
-    /// every read. `nullify` is `NotTaken` on purpose: its target takes
-    /// PUB-6.9's ω-first order and the slot-5 nullify-class refusals (lane
-    /// 3.5), not this consult. `emit`'s endpoints are address-form (PUB-6.11)
-    /// and `publish`'s source gate is the composite's own, threaded per origin
-    /// (PUB-8.1). EXHAUSTIVE with no `_` arm: a new `Op` decides its row here.
+    /// destination gate precedes (MINT-FIRST is the daemon's, PUB-6.36's
+    /// slot 2). [`WriteConsult::NotTaken`] for a write with nothing to consult
+    /// and for every read. `nullify` is `NotTaken` on purpose: its target
+    /// takes PUB-6.9's ω-first order and PUB-6.36's slot-5 nullify-class
+    /// refusals (lane 3.5), not this consult. `emit`'s endpoints are
+    /// address-form (PUB-6.11) and `publish`'s source gate is the composite's
+    /// own, threaded per origin (PUB-8.1). EXHAUSTIVE with no `_` arm: a new
+    /// `Op` decides its row here.
     ///
     /// A write that reads a source must never answer `NotTaken` — that
     /// pairing would hand the source to the store with no readability gate,
@@ -303,7 +305,8 @@ impl Op {
     /// [`Op::source_arguments`] before dispatch, but nothing outside this door
     /// re-runs the DEFERRAL, which exists to decide when M10's own door stays
     /// silent so the store speaks first. Publishing it would invite a
-    /// transport to rebuild the slot-1-before-slot-6 ordering M10 holds.
+    /// transport to rebuild PUB-6.36's slot-1-before-slot-6 ordering M10
+    /// holds.
     fn write_consult(&self) -> WriteConsult<'_> {
         match self {
             Op::Copy { doc, .. } => WriteConsult::AfterOwnershipOf(vec![doc]),
@@ -429,10 +432,11 @@ impl Op {
     /// `edit_link`'s `original` answers `OriginalNotResident`, and
     /// `assert_sup`'s `old` and `new` answer `EndpointNotResident`. `None`
     /// for everything else. `nullify` is `None` on purpose: its target takes
-    /// PUB-6.9's ω-first order and the slot-5 nullify-class refusals (lane
-    /// 3.5), not this rule. No read is in the table: a read applies PUB-6.6
-    /// at its own arm, where absence is the shape of an answer rather than a
-    /// code. EXHAUSTIVE with no `_` arm: a new `Op` decides its row here.
+    /// PUB-6.9's ω-first order and PUB-6.36's slot-5 nullify-class refusals
+    /// (lane 3.5), not this rule. No read is in the table: a read applies
+    /// PUB-6.6 at its own arm, where absence is the shape of an answer rather
+    /// than a code. EXHAUSTIVE with no `_` arm: a new `Op` decides its row
+    /// here.
     ///
     /// The rule runs past the deferral, so a write in this table must also be
     /// consulted ([`Op::write_consult`]): one answering `NotTaken` would
@@ -536,12 +540,12 @@ impl<W: FebeWorld> OperationSurface<W> {
     /// [`ReadPredicate`]'s contract: an unregistered source passes here and
     /// takes the store's `source_not_registered`.
     ///
-    /// SLOT 5 AHEAD OF SLOT 6, and how this door reaches it (PUB round 2, lane
-    /// 4.2, F3; PUB-6.36, PUB-2.11, PUB-6.38): the model's refusals are
-    /// evaluated INSIDE the store transaction (owner ruling D2b), which once
-    /// left one cell the door could not order — a source the caller may not
-    /// read, copied into a PUBLISHED destination the caller owns — answered
-    /// `withheld` where PUB-6.36 has slot 5 speak first. The door now
+    /// PUB-6.36'S SLOT 5 AHEAD OF ITS SLOT 6, and how this door reaches it
+    /// (PUB round 2, lane 4.2, F3; PUB-2.11, PUB-6.38): the model's refusals
+    /// are evaluated INSIDE the store transaction (owner ruling D2b), which
+    /// once left one cell the door could not order — a source the caller may
+    /// not read, copied into a PUBLISHED destination the caller owns —
+    /// answered `withheld` where PUB-6.36 has slot 5 speak first. The door now
     /// PRE-EVALUATES the in-place advance refusal itself, between the deferral
     /// and the consult, over the class [`Op::in_place_destination`] names, by
     /// ASKING M5's own rule, [`published_target`], on a destination the
@@ -573,7 +577,7 @@ impl<W: FebeWorld> OperationSurface<W> {
     /// link-address argument speaks first: `original` is declared ahead of
     /// `successor`, and the store's own residence check precedes its slot
     /// checks. `nullify.target` takes no rule here — PUB-6.9's ω-first order
-    /// and the slot-5 nullify-class refusals govern it (lane 3.5).
+    /// and PUB-6.36's slot-5 nullify-class refusals govern it (lane 3.5).
     ///
     /// STALENESS, since the predicate and the registry are read off `world` — a
     /// PRIOR snapshot, not the base the write commits on. For four of the five
@@ -611,20 +615,21 @@ impl<W: FebeWorld> OperationSurface<W> {
         let WriteConsult::AfterOwnershipOf(destinations) = op.write_consult() else {
             return Ok(false); // no source and no link-address argument (see the table)
         };
-        // Slot 1 ahead of slot 6: defer to the store wherever the
-        // destination's own gate would refuse.
+        // PUB-6.36's slot 1 ahead of its slot 6: defer to the store wherever
+        // the destination's own gate would refuse.
         let caller = wc.caller();
         if !destinations.iter().all(|d| m3.is_registered_document(d) && caller.is_owner(m3, d)) {
             return Ok(false);
         }
-        // Slot 5 ahead of slot 6 (lane 4.2, F3): the model's in-place advance
-        // refusal on this write's destination — PUB-2.11, asked of M5's own
-        // `published_target` on a destination the deferral has just found
-        // registered (PUB-6.37), so the door runs the rule the store enforces
-        // rather than a copy of it — BEFORE any source is consulted, so the
-        // one cell where both apply answers `published_target`, never
-        // `withheld`. `copy` is the only member of the class that is also
-        // consulted; the others never reach here (`in_place_destination`).
+        // PUB-6.36's slot 5 ahead of its slot 6 (lane 4.2, F3): the model's
+        // in-place advance refusal on this write's destination — PUB-2.11,
+        // asked of M5's own `published_target` on a destination the deferral
+        // has just found registered (PUB-6.37), so the door runs the rule the
+        // store enforces rather than a copy of it — BEFORE any source is
+        // consulted, so the one cell where both apply answers
+        // `published_target`, never `withheld`. `copy` is the only member of
+        // the class that is also consulted; the others never reach here
+        // (`in_place_destination`).
         if let Some(in_place) = op.in_place_destination() {
             if published_target(m3, in_place) {
                 return Err(rejection(kind, RejectCode::PublishedTarget));

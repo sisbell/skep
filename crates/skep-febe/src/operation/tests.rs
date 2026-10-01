@@ -187,31 +187,32 @@ impl crate::Stores<World> for RecordingStores {
     }
 }
 
-/// A `Stores` whose halt report a test sets. The factory answers step (c)
+/// A `Stores` whose poison report a test sets. The factory answers step (c)
 /// with M2's `Kernel::is_poisoned` by default, and M2 offers no way to
 /// poison an in-memory kernel, so this is how a test stands a write in front
-/// of a halted one. The drivers are the provided ones over a healthy kernel,
-/// so a write the gate wrongly passed would reach it and commit.
-struct HaltingStores {
+/// of a poisoned one. The drivers are the provided ones over a healthy
+/// kernel, so a write the poison gate wrongly passed would reach it and
+/// commit.
+struct PoisonableStores {
     kernel: Arc<Kernel<World>>,
-    halted: Arc<AtomicBool>,
+    poisoned: Arc<AtomicBool>,
 }
 
-impl crate::Stores<World> for HaltingStores {
+impl crate::Stores<World> for PoisonableStores {
     fn kernel(&self) -> &Kernel<World> {
         &self.kernel
     }
     fn is_poisoned(&self) -> bool {
-        self.halted.load(Ordering::Relaxed)
+        self.poisoned.load(Ordering::Relaxed)
     }
 }
 
-/// A surface over [`HaltingStores`], and the switch that halts its kernel
-/// from outside the surface, as a writer the surface never sees would.
-fn halting_surface() -> (OperationSurface<World>, Arc<AtomicBool>) {
-    let halted = Arc::new(AtomicBool::new(false));
-    let stores = HaltingStores { kernel: kernel(), halted: Arc::clone(&halted) };
-    (OperationSurface::new(Box::new(stores)), halted)
+/// A surface over [`PoisonableStores`], and the switch that poisons its
+/// kernel from outside the surface, as a writer the surface never sees would.
+fn poisonable_surface() -> (OperationSurface<World>, Arc<AtomicBool>) {
+    let poisoned = Arc::new(AtomicBool::new(false));
+    let stores = PoisonableStores { kernel: kernel(), poisoned: Arc::clone(&poisoned) };
+    (OperationSurface::new(Box::new(stores)), poisoned)
 }
 
 fn insert_op() -> Op {
@@ -343,22 +344,22 @@ fn no_read_is_ever_rejected_for_an_unbound_session() {
     }
 }
 
-/// §9: a kernel that has halted its write paths fails every write fast with
-/// `Halt` at step (c), before any transaction, while reads keep being served
-/// off the last root. The write would commit on a kernel still accepting
-/// writes — the control — so the unmoved log position says the gate held it,
-/// not that its store refused it. That M2's own `Poisoned` refusal lowers to
-/// the same code and disposition is pinned beside the `lower` table
-/// (`txn_errors_carry_their_remedy`).
+/// §9: a poisoned kernel — one that has halted its write paths — fails every
+/// write fast with `Halt` at step (c), before any transaction, while reads
+/// keep being served off the last root. The write would commit on a kernel
+/// still accepting writes — the control — so the unmoved log position says
+/// the poison gate held it, not that its store refused it. That M2's own
+/// `Poisoned` refusal lowers to the same code and disposition is pinned
+/// beside the `lower` table (`txn_errors_carry_their_remedy`).
 #[test]
-fn a_halted_kernel_halts_writes_but_reads_continue() {
-    let (febe, halted) = halting_surface();
+fn a_poisoned_kernel_halts_writes_but_reads_continue() {
+    let (febe, poisoned) = poisonable_surface();
     let s = febe.bootstrap_session();
     let node = |n: u32| Op::RegisterNode { addr: tum(&[1, n]) };
     let control = febe.execute(s, Request { id: None, op: node(5), attest: None });
     assert!(matches!(control, Response::AckAddr { .. }), "the control commits");
 
-    halted.store(true, Ordering::Relaxed);
+    poisoned.store(true, Ordering::Relaxed);
     let before = febe.log_position();
     // Write: fails fast pre-dispatch.
     let rej = rejected(febe.execute(s, Request { id: None, op: node(6), attest: None }));
@@ -373,22 +374,23 @@ fn a_halted_kernel_halts_writes_but_reads_continue() {
     }
 }
 
-/// §1: the precedence when both write gates would refuse. Gate (c) is
-/// consulted before gate (b), so a write on an unbound session — one
-/// retired by `close_session`, and [`SessionId::GUEST`], the id a transport
-/// hands every unauthenticated request — against a halted kernel answers
+/// §1: the precedence when both write gates would refuse. Gate (c) runs
+/// before gate (b), so a write on an unbound session — one retired by
+/// `close_session`, and [`SessionId::GUEST`], the id a transport hands every
+/// unauthenticated request — against a poisoned kernel answers
 /// `Poisoned`/`Halt`: the client is told the engine stopped, not that it must
-/// re-authenticate. The kernel is halted from outside the surface, as a
-/// writer the surface never sees halts it — M9's rule fires, or a
+/// re-authenticate. The kernel is poisoned from outside the surface, as a
+/// writer the surface never sees poisons it — M9's rule fires, or a
 /// transport's own writer — and the surface has met no refusal of its own,
-/// so the gate answers from the kernel's report. Without the order this
-/// request has two defensible answers and nothing choosing between them.
+/// so the poison gate answers from the kernel's report. Without the order
+/// this request has two defensible answers and nothing choosing between
+/// them.
 #[test]
-fn a_halted_kernel_outranks_an_unbound_session() {
-    let (febe, halted) = halting_surface();
+fn a_poisoned_kernel_outranks_an_unbound_session() {
+    let (febe, poisoned) = poisonable_surface();
     let retired = febe.open_session(PrincipalId(1));
     febe.close_session(retired);
-    halted.store(true, Ordering::Relaxed);
+    poisoned.store(true, Ordering::Relaxed);
     for session in [retired, SessionId::GUEST] {
         let rej =
             rejected(febe.execute(session, Request { id: None, op: insert_op(), attest: None }));
@@ -423,7 +425,7 @@ fn only_committed_writes_are_memoized() {
         Request { id: Some(write_id.clone()), op: insert_op(), attest: None },
     );
     assert!(matches!(r, Response::Rejected(_)));
-    assert!(febe.idem.get(retired, &write_id, OpKind::Insert).is_none());
+    assert!(febe.memo.get(retired, &write_id, OpKind::Insert).is_none());
     // Nor does a read carrying one.
     let read_id = ReqId(b"req-3".to_vec());
     let resp = febe.execute(
@@ -435,18 +437,18 @@ fn only_committed_writes_are_memoized() {
         },
     );
     assert!(matches!(resp, Response::MaybeAddr { .. }));
-    assert!(febe.idem.get(s, &read_id, OpKind::NextAccountPrefix).is_none());
+    assert!(febe.memo.get(s, &read_id, OpKind::NextAccountPrefix).is_none());
 }
 
 /// §1: step (a) runs AHEAD of the step-(c) poison gate, and that order is
 /// what a client retrying a write it already committed depends on — it
 /// receives the acknowledgment it lost, not the news that the kernel has
-/// since halted. A write it has NOT committed is halted, which is what
-/// makes the replay above a statement about the order rather than about
-/// the kernel still accepting writes.
+/// since been poisoned. A write it has NOT committed is halted, which is
+/// what makes the replay above a statement about the order rather than
+/// about the kernel still accepting writes.
 #[test]
 fn a_memoized_ack_is_replayed_on_a_poisoned_kernel() {
-    let (febe, halted) = halting_surface();
+    let (febe, poisoned) = poisonable_surface();
     let s = febe.bootstrap_session();
     let id = ReqId(b"node-5".to_vec());
     let node = || Op::RegisterNode { addr: tum(&[1, 5]) };
@@ -456,10 +458,10 @@ fn a_memoized_ack_is_replayed_on_a_poisoned_kernel() {
             _ => panic!("RegisterNode under the bootstrap session commits"),
         };
 
-    // The kernel halts AFTER that write committed.
-    halted.store(true, Ordering::Relaxed);
+    // The kernel is poisoned AFTER that write committed.
+    poisoned.store(true, Ordering::Relaxed);
 
-    // A fresh keyed write is halted at step (c) — the gate is live.
+    // A fresh keyed write is halted at step (c) — the poison gate is live.
     let rej = rejected(febe.execute(
         s,
         Request { id: Some(ReqId(b"node-6".to_vec())), op: Op::RegisterNode { addr: tum(&[1, 6]) }, attest: None },
@@ -491,7 +493,7 @@ fn a_memoized_ack_outliving_its_binding_is_replayed_not_refused() {
     let id = ReqId(b"in-flight".to_vec());
     // The deposit a request already past step (a) makes after the sweep.
     febe.close_session(s);
-    febe.idem.put(
+    febe.memo.put(
         s,
         id.clone(),
         OpKind::Insert,
@@ -805,7 +807,7 @@ fn an_unjudged_successor_slot_over_the_work_budget_is_built_for_the_store_to_ref
 /// PUB-8.12 / PUB-2.15, at `publication::birth_version`: the birth version is
 /// the DOCUMENT's, whatever address of it is asked. A version member answers
 /// its trunk's — the address the first `version` minted, with the content it
-/// was born with — and never the opening slot of its own namespace, which no
+/// was born with — and never the opening address of its own namespace, which no
 /// mint produced. A document whose chain has no member answers none, and so
 /// does an address of another tier, which anchors no chain.
 #[test]
@@ -858,7 +860,7 @@ fn a_version_member_answers_its_trunks_birth_version() {
     assert_eq!(
         birth_version(m3, m5, &member),
         born,
-        "a member answers its trunk's birth version, never its own namespace's opening slot"
+        "a member answers its trunk's birth version, never its own namespace's opening address"
     );
     assert_eq!(birth_version(m3, m5, &draft), None, "a chain with no member has no birth version");
     assert_eq!(birth_version(m3, m5, &account), None, "no tier but a document's anchors a chain");

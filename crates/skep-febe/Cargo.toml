@@ -10,8 +10,9 @@ readme = "README.md"
 
 [dependencies]
 # The design's mandated shapes (§Core data model): non-poisoning locks for the
-# sessions/idem maps (a panic while a lock is held must not break `execute`'s
-# Total contract) and the bounded LRU for the committed-write-ack memo.
+# session table and the retry memo (a panic while a lock is held must not
+# break `execute`'s Total contract) and the bounded LRU the memo's entries
+# live in.
 # Pointedly NOT `im`: no M10 field is ever snapshotted or replayed.
 parking_lot.workspace = true
 lru.workspace = true
@@ -21,9 +22,9 @@ lru.workspace = true
 skep-address = { path = "../skep-address" }
 # M2 — one snapshot per read and per write door (`seq`/`world`/`chain` off
 # it), `current_seq` for `log_position`, `is_poisoned` behind the factory's
-# halt report, `TxnError` on every write path, `Attestation` forwarded to every
-# M5 and M7 driver a write acquires; the kernel is reached only through the
-# Stores factory.
+# poison report, `TxnError` on every write path, `Attestation` forwarded to
+# every M5 and M7 driver a write acquires; the kernel is reached only through
+# the Stores factory.
 skep-kernel = { path = "../skep-kernel" }
 # M3 — the four entity writes via the Namespace driver; off a snapshot, the
 # registry and ω reads asked by the namespace reads, the door's deferral, the

@@ -30,13 +30,13 @@ fn a_sequential_retry_replays_its_ack_and_a_fresh_session_re_executes() {
     let (addr1, at1) = ack_addr(ex_id(&fx.febe, fx.user, b"ins-1", ins()));
     let log0 = fx.febe.log_position();
 
-    // Sequential retry: the rebuilt cached ack, no re-execution.
+    // Sequential retry: the rebuilt memoized ack, no re-execution.
     let (addr2, at2) = ack_addr(ex_id(&fx.febe, fx.user, b"ins-1", ins()));
     assert_eq!(addr2, addr1);
     assert_eq!(at2, at1);
     assert_eq!(fx.febe.log_position(), log0);
 
-    // A READ under the same ReqId consults no memo at all — the memo holds
+    // A READ under the same ReqId reads no memo at all — the memo holds
     // committed-write acks alone — so it executes, is itself never memoized,
     // and leaves the write's entry untouched.
     let (set, _) = spanset(ex_id(&fx.febe, fx.user, b"ins-1", Op::RetrieveDocVSpan { doc: d.clone() }));
@@ -60,7 +60,7 @@ fn a_sequential_retry_replays_its_ack_and_a_fresh_session_re_executes() {
     assert_eq!(at5, at1);
 
     // …until close_session retires the binding (a later write on the retired
-    // id is Unauthenticated — and its idem entries are purged, §6).
+    // id is Unauthenticated — and its memo entries are purged, §6).
     fx.febe.close_session(fx.user);
     let rej = rejected(ex_id(&fx.febe, fx.user, b"ins-1", ins()));
     assert_eq!(rej.code, RejectCode::Unauthenticated);
@@ -125,7 +125,7 @@ fn an_id_reused_for_a_different_write_of_the_same_kind_answers_the_first_ack_and
     assert_eq!(fx.febe.log_position(), log, "…and the second write is not executed");
 }
 
-/// §7/[`MAX_REQ_ID_BYTES`]: the memo's SECOND door, through `execute`. An id
+/// §7/[`MAX_REQ_ID_BYTES`]: the memo's SECOND check, through `execute`. An id
 /// past the bound is answered like any other — the never-silent contract is
 /// about the operation, and the operation is answered — and simply not
 /// memoized, so the retry re-executes and the client is never told. An id

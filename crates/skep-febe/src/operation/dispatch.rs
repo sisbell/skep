@@ -57,12 +57,14 @@ where
     /// acquires — [`Stores::vstream_attested`] and
     /// [`Stores::linkstore_attested`] — and which of a store's transactions it
     /// signs is that store's alone, stated on its handle's `attest` field: a
-    /// handle built with a value fills no slot outside the store's slice. So
-    /// this table holds no copy of the signed set, and widening it is the
+    /// handle built with a value fills no signature slot outside the
+    /// transactions its store signs. So this table holds no copy of the
+    /// checked set — skepd's name for the writes an attestation is admitted
+    /// on, `insert`, `make_link` and `publish` — and widening it is the
     /// stores' and the transport's work. The namespace writes acquire a driver
-    /// that takes none, so there it is dropped. Nothing is classified, verified
-    /// or filtered here: the value arrives ADMITTED by the dispatched write
-    /// path's check, or not at all.
+    /// that takes none, so there it is dropped. Nothing is classified,
+    /// verified or filtered here: the value arrives ADMITTED by the dispatched
+    /// write path's check, or not at all.
     ///
     /// [`Stores::vstream_attested`]: crate::Stores::vstream_attested
     /// [`Stores::linkstore_attested`]: crate::Stores::linkstore_attested
@@ -530,7 +532,7 @@ where
                 let claims = out_claims_on(&snap, &x, view, &readable); // total
                 Ok(Response::Claims { claims, as_of })
             }
-            // ── publication reads (lane 3.4, PUB-8.47): answers this door
+            // ── publication reads (lane 3.4, PUB-8.47): answers M10
             //    COMPOSES; what they need that no store computes is
             //    `crate::publication`'s ──
             // PUB-8.12: `doc` passed the consult above, so an unreadable one

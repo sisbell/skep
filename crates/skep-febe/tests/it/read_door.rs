@@ -160,13 +160,13 @@ fn a_read_is_withheld_naming_its_first_unreadable_document() {
     assert_ne!(set, SpanSet::empty());
 }
 
-/// PUB-6.49's second door: a transport answering a HISTORICAL read runs the
-/// consult itself, over the head's predicate, before any reconstruction — and
-/// what it runs is `consult_read`, the function `execute` runs. Called
+/// PUB-6.49's second front door: a transport answering a HISTORICAL read runs
+/// the consult itself, over the head's predicate, before any reconstruction —
+/// and what it runs is `consult_read`, the function `execute` runs. Called
 /// directly with the predicate this front door answers the stranger through,
 /// it refuses exactly as `execute` does, every field of the rejection alike,
 /// and admits exactly what `execute` answers — so one request has one verdict
-/// at either door.
+/// at either front door.
 #[test]
 fn a_transport_running_the_consult_itself_gets_the_verdict_execute_gives() {
     let (fx, unreadable) = setup_with_unreadable();
@@ -186,7 +186,7 @@ fn a_transport_running_the_consult_itself_gets_the_verdict_execute_gives() {
     assert_eq!(
         direct,
         rejected(ex(&fx.febe, other, refused)),
-        "one request, one verdict — whichever door runs the consult"
+        "one request, one verdict — whichever front door runs the consult"
     );
     assert_withheld(Response::Rejected(direct), OpKind::ShowDeletions, &unreadable_doc);
 

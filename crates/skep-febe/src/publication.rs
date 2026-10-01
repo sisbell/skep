@@ -52,8 +52,8 @@ use crate::world::UniversalIndexRow;
 /// take a document ([`Op::DocMetadata`], [`Op::EditionClaims`]; the third,
 /// [`Op::UniversalGrants`], takes no argument at all). Every other read's
 /// `*NotRegistered` is its store's, raised where the store meets the address;
-/// these two reach no single store that could raise one, so the check is this
-/// door's and is named as such.
+/// these two reach no single store that could raise one, so the check is
+/// M10's own and is named as such.
 ///
 /// It is not bookkeeping — each of the two would answer something worse
 /// without it. It is what BOUNDS the edition-claim seam: the world narrows
@@ -82,11 +82,11 @@ pub(crate) fn require_registered_document(
 }
 
 /// The BIRTH VERSION of the document `doc` projects to (PUB-2.15) — `D.1`, the
-/// slot its version chain opens at, with the BIRTH CONTENT of what occupies it
-/// (PUB-8.12; PUB-3.19 as RES-276 reads it). A version member answers its
-/// trunk's. `None` while the chain has no member, which is why the two halves
-/// travel as one [`BirthVersion`]: no extent is read for a document with no
-/// member, so the field is absent rather than zero.
+/// address its version chain opens at, with the BIRTH CONTENT of what
+/// occupies it (PUB-8.12; PUB-3.19 as RES-276 reads it). A version member
+/// answers its trunk's. `None` while the chain has no member, which is why
+/// the two halves travel as one [`BirthVersion`]: no extent is read for a
+/// document with no member, so the field is absent rather than zero.
 ///
 /// The extent is the content `D.1` was BORN with — the leading runs of its
 /// arrangement at its mint — and NOT its arranged content count: while `D.1`

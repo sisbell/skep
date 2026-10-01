@@ -397,7 +397,7 @@ fn the_link_family_answers_end_to_end() {
         "an address no MAKELINK minted reads back as ⊥"
     );
     let cov = follow(ex(&fx.febe, fx.user, Op::FollowLink { a: l1.clone(), slot: FROM }));
-    assert_ne!(cov.expect("slot 1 exists"), SpanSet::empty());
+    assert_ne!(cov.expect("the FROM slot exists"), SpanSet::empty());
     assert!(
         follow(ex(&fx.febe, fx.user, Op::FollowLink { a: ghost_link(&d, 99), slot: FROM })).is_err(),
         "following a non-link answers Invalid in band"
@@ -682,7 +682,7 @@ fn refusals_arrive_typed_classified_and_localized() {
 
     // Re-delegating an already-delegated prefix: ω(new_prefix) now names the
     // delegated principal, so M3's pinned gate order rejects NotAuthorized
-    // (Permanent) before freshness is even consulted.
+    // (Permanent) before freshness is even checked.
     let rej = rejected(ex(
         &fx.febe,
         fx.boot,

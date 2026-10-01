@@ -94,7 +94,7 @@ pub(crate) fn successor_link(
 ///   itself is what is wrong.
 /// * `SourceNotRegistered` — M3 does not know the source. This is M10's own
 ///   precondition, not a restatement of anything `resolve` checks: `resolve`
-///   consults M5's arrangement map and never M3's registry. It is here
+///   reads M5's arrangement map and never M3's registry. It is here
 ///   because it is the fault with a remedy — `Reorder`, telling a client that
 ///   arrived ahead of its own CREATENEWDOCUMENT to try again.
 ///
@@ -107,7 +107,7 @@ pub(crate) fn successor_link(
 /// inside the window is refused `SourceNotRegistered`/`Reorder`, which is
 /// exactly the advice that race deserves. M7 cannot make the check itself —
 /// `editlink` receives a built `Link`, by which point the source documents
-/// are gone — so this is the door, and it is the right one.
+/// are gone — so the check is M10's, and this is the right place for it.
 ///
 /// The other two ⟨⟩ sources survive the guard and are deposited as an empty
 /// slot: M5 arranges a document lazily, so a freshly created one is

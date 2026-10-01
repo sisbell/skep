@@ -116,7 +116,7 @@ fn m6_faults_thread_their_site() {
 
 /// PUB-8.4/PUB-8.5, at the lowering: the shot's `withheld` carries the
 /// withheld document in `site.addr` and NOTHING else — the code, the
-/// `reorder` disposition, and the site; the detail slot stays empty. The
+/// `reorder` disposition, and the site; `detail` stays empty. The
 /// shape is what `wire.md` pins and `tests/publish.rs` reads back over
 /// the wire; this is where it is decided.
 #[test]

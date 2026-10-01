@@ -97,8 +97,8 @@ thread_local! {
 
 /// Seed the documents the WORLD's own predicate refuses. A test that is about
 /// the SUPPLIED predicate takes [`setup_with_unreadable`] instead; the two
-/// spell the same rule, so which door answers is the whole of what a test
-/// using one and not the other exercises.
+/// spell the same rule, so which predicate answers is the whole of what a
+/// test using one and not the other exercises.
 pub fn seed_unreadable_world(docs: Vec<Address>) {
     UNREADABLE_WORLD.with(|u| *u.borrow_mut() = docs);
 }
@@ -596,7 +596,7 @@ pub fn insert3(fx: &Fixture, doc: &Address) -> (Address, Seq) {
 /// The deposit declaration this suite's declared fixtures carry: ENROLL's
 /// type, the first member of M5's set (PUB-2.11, RES-261). What they deposit
 /// is prose — PUB-2.60's residue, bytes of the depositor's choosing under a
-/// declared class type — which the door admits on the type alone.
+/// declared class type — which M5 admits on the type alone.
 pub fn declared() -> Deposit {
     Deposit::Declared(deposit_class_types()[0].clone())
 }
@@ -796,8 +796,9 @@ pub fn commit_every_write(
 // derived.
 //
 // [`setup_with_unreadable`] supplies that predicate; the WORLD spells the same
-// rule through [`seed_unreadable_world`], for the arm a door that supplies none
-// answers through. Which of the two a test takes is which arm it exercises.
+// rule through [`seed_unreadable_world`], for the arm a front door that
+// supplies none answers through. Which of the two a test takes is which arm
+// it exercises.
 //
 // Three words, three concepts, each the corpus's: a DOCUMENT is unreadable
 // (PUB-6.1), a REQUEST is refused, an ANSWER is withheld.

@@ -54,7 +54,7 @@ pub struct EditionClaim {
 /// content count — a birth version is the head until a second member exists,
 /// and a head's arrangement takes every declared deposit (PUB-2.66) — so it
 /// is served frozen at the mint, the same at every later position, and is
-/// the base extent a client measures an edition against with nothing to
+/// the birth extent a client measures an edition against, with nothing to
 /// subtract.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BirthVersion {
@@ -187,7 +187,8 @@ pub enum Response {
     Compare { rep: CompareReport, as_of: Seq },
     /// delete_orphans preview.
     Orphans { report: OrphanReport, as_of: Seq },
-    /// in_claims / out_claims.
+    /// in_claims / out_claims: SUPERSESSION claims (M8's [`SupClaim`]) on one
+    /// link's lineage — the EDITION claims are [`Response::EditionClaims`]'s.
     Claims { claims: Vec<SupClaim>, as_of: Seq },
     /// doc_metadata (PUB-8.12): the publication state a client's own
     /// admission tests need, and — since the signed-ops design record's D25,
@@ -233,8 +234,8 @@ pub enum Response {
 
 /// What a committed write acknowledges — ANY of the three acknowledging
 /// shapes, of which [`Response::Ack`] is only the barest — and the ONLY thing
-/// a lost acknowledgment can duplicate, so the only thing the idempotency
-/// cache holds (§1 step (d), §7). Small — a `Seq` and at most two addresses
+/// a lost acknowledgment can duplicate, so the only thing the retry memo
+/// holds (§1 step (d), §7). Small — a `Seq` and at most two addresses
 /// — which is what lets the memo hold and replay it in place of a whole
 /// `Response`. Small is not free: cloning an `Address` allocates, which is
 /// the cost `to_ack`'s prefix names.
@@ -343,7 +344,7 @@ impl Response {
 
     /// The committed-write acknowledgment this response carries, if it is
     /// one — `None` for every read answer and every rejection, neither of
-    /// which may be replayed from the memo (a cached read replays a stale
+    /// which may be replayed from the memo (a memoized read replays a stale
     /// snapshot; a Reorder/Retry reissue MUST re-execute). It builds an
     /// OWNED ack, cloning the acknowledged addresses, which is the work its
     /// `to_` prefix names (C-CONV).

@@ -2,8 +2,9 @@
 //! modules decide it together — the transport sets the value, M10 hands it
 //! to every M5 and M7 driver a write acquires, and each store signs the
 //! transactions its handle states — and this is the one place all three are
-//! observed at once. M10 holds no copy of the signed set, so the set is
-//! pinned here, over all fifteen writes.
+//! observed at once. M10 holds no copy of the checked set — skepd's name for
+//! the writes an attestation is admitted on — so the set is pinned here, over
+//! all fifteen writes.
 
 use std::sync::Arc;
 
@@ -13,12 +14,12 @@ use common::*;
 use skep_febe::{Attestation, OpKind};
 use tempfile::tempdir;
 
-/// THE SIGNED SET, at the seam where it is observable: every one of the
+/// THE CHECKED SET, at the seam where it is observable: every one of the
 /// fifteen writes carries one attestation, and it lands in the commit marker
 /// of `insert`, `publish` and `make_link` alone, every other write committing
-/// an empty slot. Over a journaled kernel, since an in-memory one keeps no
-/// marker; and each write must commit a transaction of its own, or the marker
-/// read at its `at` would be another write's.
+/// an empty signature slot. Over a journaled kernel, since an in-memory one
+/// keeps no marker; and each write must commit a transaction of its own, or
+/// the marker read at its `at` would be another write's.
 #[test]
 fn an_attestation_lands_in_the_marker_of_insert_publish_and_make_link_alone() {
     let dir = tempdir().expect("a temporary directory");

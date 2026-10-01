@@ -66,7 +66,7 @@ pub trait Codec {
     /// numbers a route that carries this op owes". It is spent INSIDE the
     /// write transaction, under M2's applier lock, so it is paid by every
     /// other writer in the engine and not by the caller alone. A parser that
-    /// means to bound it caps that sum here; nothing downstream of this door
+    /// means to bound it caps that sum here; nothing downstream of this parser
     /// does.
     ///
     /// [`Op::RetrieveV`] delivers one heap item per active V-POSITION of
@@ -138,8 +138,8 @@ pub trait Codec {
 }
 
 /// A frame that failed to parse — unknown op / bad arg encoding. Constructed
-/// by the transport's `Codec` impl; `detail` feeds the `Unparseable`
-/// rejection's message slot.
+/// by the transport's `Codec` impl; `detail` becomes the `Unparseable`
+/// rejection's own `detail`.
 ///
 /// A std error like every other failure in this workspace, so the transport
 /// author writing the one required [`Codec`] impl can `unwrap`, `expect`,

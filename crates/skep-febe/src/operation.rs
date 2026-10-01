@@ -3,9 +3,9 @@
 //! linearize → commit-gate → marshal → surface (§1–§4). The lifecycle's order
 //! lives here, with what its gates read: the retry memo, the factory's report
 //! of whether the kernel still accepts writes ([`Stores::is_poisoned`]), and
-//! the session table. The pieces it consults belong to their own cards —
+//! the session table. The pieces it reads belong to their own cards —
 //! [`crate::session::Sessions`] for the ephemeral binding (§6),
-//! [`crate::idem::IdemCache`] for the committed-write retry memo (§7), and
+//! [`crate::memo::RetryMemo`] for the committed-write retry memo (§7), and
 //! [`crate::publication`] for what the publication reads need that no store
 //! computes.
 //!
@@ -31,7 +31,7 @@ use skep_kernel::{Seq, WorldState};
 use skep_links::LinkRec;
 use skep_namespace::{M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL};
 
-use crate::idem::IdemCache;
+use crate::memo::RetryMemo;
 use crate::op::{OpKind, Request};
 use crate::reject::{rejection, RejectCode};
 use crate::response::Response;
@@ -41,7 +41,7 @@ use crate::world::{FebeWorld, Stores};
 /// M10's front-door handle (§Public interface). Owns **no** authoritative
 /// substrate state and **no** `im` structure — what it holds for the uptime
 /// is the ephemeral connection state ([`Sessions`]) and a best-effort
-/// committed-write retry memo ([`IdemCache`]); neither is ever snapshotted or
+/// committed-write retry memo ([`RetryMemo`]); neither is ever snapshotted or
 /// replayed, which is why this is the one module that legitimately departs
 /// from the `im`-everywhere convention (§Core data model).
 pub struct OperationSurface<W: WorldState> {
@@ -54,7 +54,7 @@ pub struct OperationSurface<W: WorldState> {
     /// swept by [`OperationSurface::close_session`] — those present when the
     /// sweep runs (§6) — and the whole memo is lost on restart, so a
     /// post-restart retry re-executes (duplicate, by design — ASN-0134 §A7).
-    idem: IdemCache,
+    memo: RetryMemo,
     /// The supplied [`ReadPredicate`], or `None`: the world's own answers.
     read_predicate: Option<Box<ReadPredicate>>,
 }
@@ -65,8 +65,8 @@ pub struct OperationSurface<W: WorldState> {
 /// [`ReadPredicate`] answers in place of the world's, the one fact about a
 /// front door that decides every masked answer and that nothing else shows.
 /// Nothing more: the session table and the retry memo sit behind locks, and
-/// the halt state the write gate asks is M2's, which the kernel field already
-/// prints. Written out rather than derived, as M5's `Vstream` and M7's
+/// the poison state the poison gate (c) asks is M2's, which the kernel field
+/// already prints. Written out rather than derived, as M5's `Vstream` and M7's
 /// `LinkWriter` are: a derive would bound the impl on `W: Debug`, and the
 /// factory and the predicate are trait objects that carry none.
 impl<W: WorldState> fmt::Debug for OperationSurface<W> {
@@ -113,15 +113,15 @@ where
     /// holds neither the kernel nor the registry directly (§9). We reach the
     /// kernel via `stores.kernel()` and acquire each store driver per-op.
     ///
-    /// The idempotency memo is bounded at a crate-fixed default capacity: the
+    /// The retry memo is bounded at a crate-fixed default capacity: the
     /// design's explicit `idem_capacity` construction knob conflicts with the
     /// interface's one-argument `new`, and the interface wins (see
-    /// [`IdemCache`]).
+    /// [`RetryMemo`]).
     pub fn new(stores: Box<dyn Stores<W>>) -> Self {
         OperationSurface {
             stores,
             sessions: Sessions::new(),
-            idem: IdemCache::new(),
+            memo: RetryMemo::new(),
             read_predicate: None,
         }
     }
@@ -134,7 +134,7 @@ where
     /// front door wants. Its obligations are [`ReadPredicate`]'s, and M10
     /// checks none of them.
     ///
-    /// Takes the closure and boxes it here, since the box is this door's
+    /// Takes the closure and boxes it here, since the box is this front door's
     /// storage rather than the caller's concern — [`ReadPredicate`] names the
     /// shape the bound spells out, and an already-boxed predicate satisfies
     /// that bound too.
@@ -189,7 +189,7 @@ where
     /// retires a binding.
     pub fn close_session(&self, session: SessionId) {
         self.sessions.close(session);
-        self.idem.purge_session(session);
+        self.memo.purge_session(session);
     }
 
     /// A session bound to `BOOTSTRAP_PRINCIPAL`, so the first
@@ -217,7 +217,7 @@ where
     /// the retry memo is read at step (a) and written at step (d), with the
     /// whole dispatch in between, so both miss and both execute (§7).
     ///
-    /// AUTHORIZATION: `session` is consulted on BOTH paths, for two different
+    /// AUTHORIZATION: `session` is resolved on BOTH paths, for two different
     /// purposes, and the difference is the one a transport author needs.
     ///
     /// * On the WRITE path, at step (b), it resolves a PROVEN-bound principal,
@@ -309,9 +309,9 @@ where
     ///
     /// Two refusals can hold at once on a write, and the contract names which
     /// speaks: the poison gate (c) — M2's own report, asked through the
-    /// factory ([`Stores::is_poisoned`]), so it holds whichever writer halted
-    /// the kernel — is consulted BEFORE the session gate (b), so a write from
-    /// an unbound session against a halted kernel answers `Poisoned`/`Halt`
+    /// factory ([`Stores::is_poisoned`]), so it holds whichever writer
+    /// poisoned the kernel — runs BEFORE the session gate (b), so a write from
+    /// an unbound session against a poisoned kernel answers `Poisoned`/`Halt`
     /// and never `Unauthenticated`. A client is told the engine has stopped
     /// even where its own defect is that it must re-authenticate. The retry
     /// memo (a) precedes both, so a retry of a write that already committed is
@@ -323,7 +323,7 @@ where
         // step-(b) read/write split hands each write arm a PROVEN-bound
         // principal, so no dispatch arm unwraps an `Option`; and the one
         // runtime `expect` — `birth_version`'s — asserts an M3 invariant no
-        // input reaches (the idem capacity's is evaluated at compile time).
+        // input reaches (the memo capacity's is evaluated at compile time).
         let Request { id, op, attest } = req;
         let kind = op.kind(); // Copy; captured before dispatch moves the op
         // (a), then (c), then (b) — that order being the stated precedence
@@ -331,7 +331,7 @@ where
         //     only, since the is_write/is_read split gives each path exactly
         //     the authority it needs (§1). The write path resolves a
         //     PROVEN-bound principal HERE (the one place it can fail); the
-        //     read path takes no gate and consults no memo.
+        //     read path takes no gate and reads no memo.
         let resp = if op.is_write() {
             // (a) idempotency: a repeated (session, id) whose op-kind matches
             //     returns the memoized committed-write ack, never
@@ -341,13 +341,13 @@ where
             //     so a read's `kind` can never be a key and its lookup could
             //     only take the memo's lock to be told so.
             if let Some(id) = &id {
-                if let Some(ack) = self.idem.get(session, id, kind) {
+                if let Some(ack) = self.memo.get(session, id, kind) {
                     return ack.into();
                 }
             }
             // (c) refuse writes on a kernel that has halted its write paths —
             //     asked of the factory, whose answer is M2's own report, so it
-            //     holds whichever writer halted the kernel; reads are still
+            //     holds whichever writer poisoned the kernel; reads are still
             //     served through the else-branch (§9).
             if self.stores.is_poisoned() {
                 return reject(kind, RejectCode::Poisoned); // ⇒ Halt
@@ -369,13 +369,13 @@ where
         .unwrap_or_else(Response::Rejected);
         // (d) memoize ONLY a committed-write ack. `to_ack` is what decides —
         //     a Rejected and a read answer both yield None, so neither can
-        //     be replayed (a Reorder/Retry reissue MUST re-execute; a cached
+        //     be replayed (a Reorder/Retry reissue MUST re-execute; a memoized
         //     read would replay a stale snapshot). The memo holds that small
         //     ack, not the Response (§7). Nested on the id, so a request that
         //     carried none never builds an ack it would then drop.
         if let Some(id) = id {
             if let Some(ack) = resp.to_ack() {
-                self.idem.put(session, id, kind, ack);
+                self.memo.put(session, id, kind, ack);
             }
         }
         resp

@@ -41,8 +41,8 @@ pub trait ReadableWorld {
 /// round 2, lane 3.4 §2): classes whose membership is decided by a pinned
 /// type address, which is the engine's knowledge and not this module's. Its
 /// own seam, beside [`ReadableWorld`] rather than inside it, because the two
-/// answer unrelated questions — one is a predicate consulted by the whole
-/// operation surface, these are class lookups each consulted by one
+/// answer unrelated questions — one is the predicate the whole operation
+/// surface answers through, these are class lookups each asked by one
 /// operation — and each should be nameable by a consumer that wants only it.
 /// Two lookups: the edition-claim class over a target, [`Op::EditionClaims`]'s
 /// input, and the grant fold's live ANY-PRINCIPAL index (PUB-8.47),
@@ -99,7 +99,7 @@ pub trait PublicationWorld {
     /// caller and never rewrites, while these are index rows it TRANSFORMS,
     /// alike for every caller. Each row keeps the one obligation
     /// [`UniversalIndexRow`] states. No index is added and no read class:
-    /// this is the fold's own slot, enumerated once per request, and its
+    /// this is the fold's own index, enumerated once per request, and its
     /// bound is that index's own size (PUB-7.45). Principal-blind — the
     /// guest's empty answer is the front door's.
     ///
@@ -189,19 +189,19 @@ impl<
 /// trait's bound — and each handle holds the borrows it is handed and no
 /// state, M7's taking the caller's VISIBILITY class beside the kernel, which
 /// is already this method's parameter. So all three are given here rather
-/// than transcribed identically into every impl, and so is the halt report,
+/// than transcribed identically into every impl, and so is the poison report,
 /// which is the kernel's own answer.
 ///
 /// PRECONDITION on the implementer: **[`Stores::kernel`] answers with the same
 /// `Kernel<W>` on every call.** The signature does not force it — it is
-/// consulted afresh per request, so an impl that opened a kernel per call
+/// called afresh per request, so an impl that opened a kernel per call
 /// would compile — and every coordinate M10 reports rests on it:
 /// `OperationSurface::log_position` and every read's `as_of` come from
 /// `kernel()`, while the writes commit through the drivers this trait hands
 /// out. Two kernels leave those coordinates describing different logs, each
 /// store still committing before it acknowledges and the reported positions no
 /// longer meaning what this module promises. The provided bodies, the drivers
-/// and the halt report alike, are each built over `kernel()`, so an
+/// and the poison report alike, are each built over `kernel()`, so an
 /// implementer that supplies only the kernel cannot violate that half — which
 /// is why the precondition is stated on the one method such an implementer
 /// writes. An implementer that OVERRIDES one of them takes the obligation back
@@ -224,14 +224,14 @@ pub trait Stores<W: WorldState>: Send + Sync {
     /// asks this at step (c), before any write reaches a driver. M2's word for
     /// the answer holds here: a `true` is actionable without a race, and a
     /// `false` may age, the refusal `transact` returns staying authoritative.
-    /// The answer being the kernel's, the gate it serves holds whichever
-    /// writer halted the kernel — M10's own, M9's rule fires, or a
-    /// transport's writer of its own.
+    /// The answer being the kernel's, the poison gate it serves holds
+    /// whichever writer poisoned the kernel — M10's own, M9's rule fires, or
+    /// a transport's writer of its own.
     ///
     /// Provided over `kernel()`, as the drivers are, and an implementer that
     /// overrides it owes M2's answer for that same kernel. The one exception
     /// is a test's: M2 offers no way to poison an in-memory kernel, so a test
-    /// overrides this to stand a write in front of a halted one.
+    /// overrides this to stand a write in front of a poisoned one.
     fn is_poisoned(&self) -> bool {
         self.kernel().is_poisoned()
     }
@@ -255,14 +255,14 @@ pub trait Stores<W: WorldState>: Send + Sync {
     /// THE ATTESTED M5 DRIVER (signed ops; the placement the owner confirmed
     /// 2026-09-25: the attestation rides the DRIVER HANDLE): a `Vstream` built
     /// by `Vstream::attested` — the transactions it signs are M5's to state
-    /// there, and it fills no slot outside them. A handle serves exactly one
-    /// call, which is exactly one transaction, so the value can neither
-    /// outlive the arm (a borrow) nor reach a second commit. `None` is
-    /// [`Stores::vstream`] exactly. WHO CALLS THIS is the slot's producer set
-    /// (the design record §5.5): M10's `dispatch_write`, with a value the
-    /// daemon's check admitted, and no other writer — the head writer, M9 and
-    /// every plain handle build through `vstream`, and pass `None` by
-    /// construction.
+    /// there, and it fills no signature slot outside them. A handle serves
+    /// exactly one call, which is exactly one transaction, so the value can
+    /// neither outlive the arm (a borrow) nor reach a second commit. `None` is
+    /// [`Stores::vstream`] exactly. WHO CALLS THIS is the signature slot's
+    /// producer set (the design record §5.5): M10's `dispatch_write`, with a
+    /// value the daemon's check admitted, and no other writer — the head
+    /// writer, M9 and every plain handle build through `vstream`, and pass
+    /// `None` by construction.
     fn vstream_attested<'a>(&'a self, attest: Option<&'a Attestation>) -> Vstream<'a, W> {
         Vstream::attested(self.kernel(), attest)
     }

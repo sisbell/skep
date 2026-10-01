@@ -35,13 +35,14 @@ pub struct Request {
     /// the object `execute` already takes, so no `Op` variant and neither
     /// exhaustive classifier is asked about it. M10 hands it to every M5 and
     /// M7 driver the write acquires; the store fills the commit marker's
-    /// signature slot on the transactions it signs — each store states its
-    /// slice on its handle — and on every other write, a namespace write's
+    /// signature slot on the transactions it signs — each store states which
+    /// on its handle — and on every other write, a namespace write's
     /// included, the value is dropped, unwritten. WHO SETS IT is the
     /// dispatched write path alone, after its check: a transport that lifts
     /// the member sets it only where the check admitted the signature, which
-    /// is what bounds the slot's producer set (§5.5) — M10 classifies
-    /// nothing about it and verifies nothing, the kernel writes it opaquely.
+    /// is what bounds the signature slot's producer set (§5.5) — M10
+    /// classifies nothing about it and verifies nothing, the kernel writes it
+    /// opaquely.
     pub attest: Option<Attestation>,
 }
 
@@ -51,7 +52,7 @@ pub struct Request {
 ///
 /// What the key buys is the answer to a retry sent AFTER the original's
 /// acknowledgment was lost. Two requests carrying one id concurrently are two
-/// operations, since the memo is consulted before dispatch and written after
+/// operations, since the memo is read before dispatch and written after
 /// it, and a restart empties it — so this is a hint that saves a duplicate
 /// commit, never a guarantee against one.
 ///
@@ -72,9 +73,9 @@ pub struct ReqId(pub Vec<u8>);
 /// The most bytes one idempotency key may carry into the memo.
 ///
 /// The bill this bounds is M10's, so the number is M10's. A committed write's
-/// key stays RESIDENT for the life of its cache entry — until eviction, or
+/// key stays RESIDENT for the life of its memo entry — until eviction, or
 /// until [`OperationSurface::close_session`] purges the session — so the
-/// memo's retention is (cache capacity) × (this cap), and both factors have
+/// memo's retention is (memo capacity) × (this cap), and both factors have
 /// to be finite for the product to be. With this one uncapped the other
 /// factor would be whatever body size the transport admits: one session's
 /// worth of committed writes retaining gigabytes that do not clear when the
@@ -84,7 +85,7 @@ pub struct ReqId(pub Vec<u8>);
 /// a hex-encoded 256-bit value 64 — and puts the retained bill at a quarter
 /// megabyte against the memo's 1024 entries.
 ///
-/// A transport refuses an over-long id at parse, which is the first door and
+/// A transport refuses an over-long id at parse, which is the first check and
 /// the one that tells the client. [`crate::OperationSurface`] holds the
 /// second: a key past this bound is simply not memoized, so a hand-assembled
 /// [`Request`] cannot enlarge the bill by skipping the parser.
@@ -145,7 +146,7 @@ pub enum Op {
     /// exactly as [`Op::CreateNewDocument`]'s is (fork reduces to a create in
     /// the caller's own account — one rule, one place, owner 2026-09-05). A
     /// first fork into an empty account is refused `mint_home_first` at the
-    /// daemon (PUB-8.22) before the flag is consulted.
+    /// daemon (PUB-8.22) before the flag is read.
     Fork { published: Option<bool> },
     // ── namespace reads (→ M3) ──
     /// M3's next-form delegable prefix — what [`Op::Delegate`] demands (§2).
@@ -343,7 +344,7 @@ pub enum Op {
     //    is the `publication` card's ──
     /// The doc-metadata read (PUB-8.12; PUB round 2, lane 3.4 §1): a
     /// document's publication state, its owner account, and its birth
-    /// version with that version's base extent — what a client's own
+    /// version with that version's birth extent — what a client's own
     /// PUB-3.19 admission test needs, and nothing else. `doc` is a
     /// DOC-ARGUMENT (PUB-6.1): unreadable ⟹ `withheld` (fail-open at the
     /// consult, PUB-6.12). It must also be a REGISTERED DOCUMENT:
@@ -415,8 +416,8 @@ pub enum Op {
     ///
     /// The compare is M3's own walk, ONE per stored row off the read's
     /// snapshot: no read class and no index is added (PUB-3.48), the fold's
-    /// universal index is the slot, and the bound is that index's own size
-    /// (PUB-7.45) times that walk.
+    /// own universal index is what is read, and the bound is that index's own
+    /// size (PUB-7.45) times that walk.
     ///
     /// What it serves is the client's — the arrival face, the any-principal
     /// arm, the back-fill — and never what the daemon SERVES: the feed applies
@@ -680,7 +681,7 @@ impl Op {
     ///
     /// Public as a fact about the request: it is what a caller reads to know
     /// which documents a `Withheld` may name. The consult over it is
-    /// [`consult_read`], shared by both doors that run it —
+    /// [`consult_read`], shared by both front doors that run it —
     /// [`OperationSurface::execute`] over the snapshot it pins, and a
     /// transport answering a HISTORICAL read over the HEAD before any
     /// reconstruction (PUB-6.49) — so the list, its order and the verdict

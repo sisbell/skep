@@ -145,7 +145,11 @@ fn the_destinations_own_gate_stands_ahead_of_the_consult() {
     let assert_not_owner = |r: skep_febe::Response, kind: OpKind| {
         let rej = rejected(r);
         assert_eq!(rej.op, kind);
-        assert_eq!(rej.code, RejectCode::NotOwner, "slot 1 speaks first: {rej}");
+        assert_eq!(
+            rej.code,
+            RejectCode::NotOwner,
+            "PUB-6.36's slot 1 speaks first: {rej}"
+        );
         assert_eq!(rej.site.expect("the failing home").addr.as_ref(), Some(&unreadable_doc));
     };
     assert_not_owner(
@@ -244,7 +248,7 @@ fn an_edit_refused_its_destination_answers_alike_whatever_its_unreadable_source_
     assert_eq!(
         over_fragmented.code,
         RejectCode::NotOwner,
-        "slot 1 speaks first: {over_fragmented}"
+        "PUB-6.36's slot 1 speaks first: {over_fragmented}"
     );
     assert_eq!(over_fragmented.site.as_ref().and_then(|s| s.addr.as_ref()), Some(&user_draft));
     assert_eq!(
@@ -316,7 +320,7 @@ fn an_edit_refused_its_destination_answers_alike_however_long_its_unreadable_sou
     assert_eq!(
         over_fragmented.code,
         RejectCode::NotOwner,
-        "slot 1 speaks first: {over_fragmented}"
+        "PUB-6.36's slot 1 speaks first: {over_fragmented}"
     );
     assert_eq!(over_fragmented.site.as_ref().and_then(|s| s.addr.as_ref()), Some(&user_draft));
     assert_eq!(
@@ -605,7 +609,11 @@ fn an_in_place_edit_of_a_published_destination_outranks_the_source_consult() {
         Op::Copy { doc: their_edition.clone(), at: vp(1, 1), specs: vec![vspec(&unreadable_doc, 1, 1)] },
     ));
     assert_eq!(rej.op, OpKind::Copy);
-    assert_eq!(rej.code, RejectCode::PublishedTarget, "slot 5 speaks before slot 6: {rej}");
+    assert_eq!(
+        rej.code,
+        RejectCode::PublishedTarget,
+        "PUB-6.36's slot 5 speaks before its slot 6: {rej}"
+    );
     assert_eq!(rej.disposition, Disposition::Permanent);
     assert!(rej.site.is_none() && rej.detail.is_none(), "byte-identical to the store's refusal");
     assert_eq!(fx.febe.log_position(), before, "a refused copy commits nothing");

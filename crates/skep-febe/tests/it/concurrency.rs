@@ -86,12 +86,13 @@ fn seat_empty_account(febe: &OperationSurface<World>, boot: SessionId, id: Princ
     ack_addr(ex(febe, boot, Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: id })).0
 }
 
-/// The engine's read predicate in miniature, for a door whose world derives
-/// none (`common`'s `World` admits every read until a test seeds a refusal):
-/// published ∨ the owner's own, off the kernel's head. Under it the guest
-/// reads the published documents alone, so what it is served and what it is
-/// withheld is a read of the bit the mint journaled. Total, and READABLE for
-/// an address M3 never registered, as `with_read_predicate` demands.
+/// The engine's read predicate in miniature, for a front door whose world
+/// derives none (`common`'s `World` admits every read until a test seeds a
+/// refusal): published ∨ the owner's own, off the kernel's head. Under it the
+/// guest reads the published documents alone, so what it is served and what
+/// it is withheld is a read of the bit the mint journaled. Total, and
+/// READABLE for an address M3 never registered, as `with_read_predicate`
+/// demands.
 fn published_or_own(
     kernel: Arc<Kernel<World>>,
 ) -> impl Fn(Option<PrincipalId>, &Address) -> bool + Send + Sync + 'static {

@@ -88,7 +88,9 @@ impl rand_core_06::CryptoRng for OsEntropy {}
 /// things its rule asks of it: keygen from the KDF's PQ half seed
 /// (`PqSigner::keygen`) and the PQ signature (`PqSigner::sign`).
 enum PqSigner {
-    /// Tag 1: the expanded ML-DSA-65 signing key, from ξ.
+    /// Tag 1: `ml-dsa`'s ML-DSA-65 signing key from ξ — the expanded key that
+    /// signs, beside the verifying key and ξ itself, which `ml-dsa` keeps in
+    /// it.
     MlDsa65(ml_dsa::SigningKey<MlDsa65>),
     /// Tag 3: the FN-DSA-512 PREVIEW signing key in `fn-dsa` 0.4.0's
     /// encoding (`sign_key_size(FN_DSA_LOGN_512)` bytes — 1,345 at degree 9,
@@ -109,7 +111,10 @@ impl PqSigner {
     fn keygen(rule: Rule, seed: &[u8; 32]) -> (PqSigner, Vec<u8>) {
         match rule {
             Rule::MlDsa65Ed25519 => {
-                let sk = ml_dsa::SigningKey::<MlDsa65>::from_seed(&(*seed).into());
+                // ξ lent as `ml-dsa`'s `&Seed` (`hybrid-array` borrows a
+                // `&[u8; 32]` as a `&Array<u8, U32>`), so no second copy of it
+                // is made here; `ml-dsa` keeps its own inside the key.
+                let sk = ml_dsa::SigningKey::<MlDsa65>::from_seed(seed.into());
                 let pk = sk.verifying_key().encode();
                 (PqSigner::MlDsa65(sk), pk.as_slice().to_vec())
             }
@@ -135,11 +140,7 @@ impl PqSigner {
     /// `DOMAIN_NONE` and `HASH_ID_RAW`, its per-signature seed drawn from
     /// `rng` and its key decoded from the stored bytes for this one signature
     /// (`fn-dsa`'s `sign` takes `&mut self`).
-    fn sign<R: rand_core_06::CryptoRng + rand_core_06::RngCore>(
-        &self,
-        msg: &[u8],
-        rng: &mut R,
-    ) -> Vec<u8> {
+    fn sign(&self, rng: &mut impl rand_core_06::CryptoRngCore, msg: &[u8]) -> Vec<u8> {
         match self {
             PqSigner::MlDsa65(sk) => sk.sign(msg).encode().as_slice().to_vec(),
             PqSigner::FnDsa512Preview(sk_bytes) => {
@@ -165,7 +166,6 @@ impl PqSigner {
 /// FN-DSA-512 encoding are released without being overwritten, as are the
 /// two half seeds [`HybridSigner::from_seed`] derives and drops.
 pub struct HybridSigner {
-    row: &'static SigAlgRow,
     ed: EdSigningKey,
     pq: PqSigner,
     public: PublicKey,
@@ -173,7 +173,7 @@ pub struct HybridSigner {
 
 impl fmt::Debug for HybridSigner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "HybridSigner(tag {}, {:?})", self.row.tag, self.public)
+        write!(f, "HybridSigner(tag {}, {:?})", self.tag(), self.public)
     }
 }
 
@@ -191,7 +191,7 @@ impl HybridSigner {
         let (pq, pq_pk) = PqSigner::keygen(Rule::of(tag)?, &halves.pq);
         let public = PublicKey::from_halves(row.token, &pq_pk, &ed_pk)
             .expect("the pinned crate's post-quantum key is the row's width");
-        Some(HybridSigner { row, ed, pq, public })
+        Some(HybridSigner { ed, pq, public })
     }
 
     /// This signer's public key — the `alg` and `key` of ONE key entry, one
@@ -200,9 +200,10 @@ impl HybridSigner {
         &self.public
     }
 
-    /// The marker tag this signer signs under.
+    /// The marker tag this signer signs under — its public key's row's, so
+    /// the tag and the key never disagree.
     pub fn tag(&self) -> u8 {
-        self.row.tag
+        self.public.sig_alg_row().tag
     }
 
     /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a stable
@@ -223,21 +224,18 @@ impl HybridSigner {
     }
 
     /// TEST HOOK (the same standing) — [`HybridSigner::sign`] with tag 3's
-    /// per-signature seed drawn from `rng`: the fixtures' door, handed a
-    /// `SeededRng06` so a tag-3 golden is byte-stable (tag 1 draws nothing).
-    /// Hidden because its bound is `rand_core` 0.6's — the version `fn-dsa`
-    /// 0.4.0 draws through, which a caller's own RNG would have to match —
-    /// and compiled only under `test-hooks`, as every fixture hook here is:
-    /// a shipped build signs through [`HybridSigner::sign`] alone, over the
-    /// OS's draw.
+    /// per-signature seed drawn from `rng`, the fixtures' seeded stream, so a
+    /// tag-3 golden is byte-stable (tag 1 draws nothing). The RNG comes first,
+    /// as in every `sign_with_rng` a Rust caller already knows (`signature`'s
+    /// `RandomizedSigner`, `fips204`'s `try_sign_with_rng`), and it is the
+    /// fixtures' own stream rather than any `rand_core` 0.6 RNG, so the hook
+    /// names no `rand_core` version. Compiled only under `test-hooks`, as
+    /// every fixture hook here is: a shipped build signs through
+    /// [`HybridSigner::sign`] alone, over the OS's draw.
     #[cfg(feature = "test-hooks")]
     #[doc(hidden)]
-    pub fn sign_with_rng<R: rand_core_06::CryptoRng + rand_core_06::RngCore>(
-        &self,
-        msg: &[u8],
-        rng: &mut R,
-    ) -> Vec<u8> {
-        self.sign_drawing(msg, rng)
+    pub fn sign_with_rng(&self, rng: &mut crate::hooks::SeededRng06, msg: &[u8]) -> Vec<u8> {
+        self.sign_drawing(rng, msg)
     }
 
     /// SIGN `msg` under the tag's rule: the PQ signature THEN the Ed25519
@@ -248,8 +246,9 @@ impl HybridSigner {
     /// where the OS refuses it: the draw is the crate's fail-stop OS source
     /// (`OsEntropy`), so a tag-3 signature is never made over a seed from
     /// anything weaker. Tag 1 draws nothing, so this panic is tag 3's alone.
+    #[must_use = "sign returns the blob; the signer keeps no copy of it"]
     pub fn sign(&self, msg: &[u8]) -> Vec<u8> {
-        self.sign_drawing(msg, &mut OsEntropy)
+        self.sign_drawing(&mut OsEntropy, msg)
     }
 
     /// The one signing body, over the RNG tag 3's per-signature seed is drawn
@@ -257,14 +256,10 @@ impl HybridSigner {
     /// test hook `sign_with_rng` — private, so no shipped caller picks the
     /// draw. It composes THE BLOB: the PQ half's signature
     /// (`PqSigner::sign`) THEN the Ed25519 signature, over the same `msg`.
-    fn sign_drawing<R: rand_core_06::CryptoRng + rand_core_06::RngCore>(
-        &self,
-        msg: &[u8],
-        rng: &mut R,
-    ) -> Vec<u8> {
-        let mut blob = self.pq.sign(msg, rng);
+    fn sign_drawing(&self, rng: &mut impl rand_core_06::CryptoRngCore, msg: &[u8]) -> Vec<u8> {
+        let mut blob = self.pq.sign(rng, msg);
         blob.extend_from_slice(&self.ed.sign(msg).to_bytes());
-        debug_assert_eq!(blob.len(), self.row.sig_len());
+        debug_assert_eq!(blob.len(), self.public.sig_alg_row().sig_len());
         blob
     }
 }
@@ -336,8 +331,8 @@ mod tests {
                 signer.public_key().pq_half(),
                 "tag {tag}: the key's first half"
             );
-            let blob = signer.sign_with_rng(msg, &mut SeededRng06::new([7; 32]));
-            let pq_sig = pq.sign(msg, &mut SeededRng06::new([7; 32]));
+            let blob = signer.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
+            let pq_sig = pq.sign(&mut SeededRng06::new([7; 32]), msg);
             assert_eq!(&blob[..pq_sig.len()], &pq_sig[..], "tag {tag}: the blob's first field");
         }
     }

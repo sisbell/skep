@@ -431,7 +431,7 @@ fn verify_is_both_halves_under_the_keys_own_row() {
     let s1 = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &seed).expect("tag 1");
     let s3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &seed).expect("tag 3");
     let blob1 = s1.sign(&payload);
-    let blob3 = s3.sign_with_rng(&payload, &mut SeededRng06::new([9; 32]));
+    let blob3 = s3.sign_with_rng(&mut SeededRng06::new([9; 32]), &payload);
     assert_eq!((blob1.len(), blob3.len()), (TAG1_SIG_LEN, TAG3_SIG_LEN));
 
     assert!(verify(s1.public_key(), &payload, &blob1), "tag 1: both halves over the payload");

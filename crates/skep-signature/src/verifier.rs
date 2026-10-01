@@ -10,7 +10,7 @@ use std::fmt;
 use ed25519_dalek::VerifyingKey as EdVerifyingKey;
 use fn_dsa::{VerifyingKey as _, VerifyingKeyStandard, DOMAIN_NONE, HASH_ID_RAW};
 use ml_dsa::{EncodedSignature, EncodedVerifyingKey, MlDsa65};
-use skep_identity::{PublicKey, SigAlgRow};
+use skep_identity::PublicKey;
 
 use crate::Rule;
 
@@ -114,9 +114,9 @@ impl PqVerifier {
         match self {
             PqVerifier::MlDsa65(enc) => {
                 let vk = ml_dsa::VerifyingKey::<MlDsa65>::decode(enc);
-                let Some(sigma) = EncodedSignature::<MlDsa65>::try_from(pq_sig)
+                let Some(sigma) = <&EncodedSignature<MlDsa65>>::try_from(pq_sig)
                     .ok()
-                    .and_then(|enc_sig| ml_dsa::Signature::<MlDsa65>::decode(&enc_sig))
+                    .and_then(ml_dsa::Signature::<MlDsa65>::decode)
                 else {
                     return false;
                 };
@@ -137,6 +137,7 @@ impl PqVerifier {
 /// width answers [`HybridFault::Signature`]; on a key it answers `true` for,
 /// the signature alone decides. A courtesy stricter than the verify would
 /// refuse a key that can sign; a laxer one would admit a key that never can.
+#[must_use = "key_decodes answers whether every half decodes; it refuses no key itself"]
 pub fn key_decodes(key: &PublicKey) -> bool {
     decode_ed25519_half(key).is_some() && PqVerifier::decode(key).is_some()
 }
@@ -153,17 +154,21 @@ pub fn key_decodes(key: &PublicKey) -> bool {
 ///
 /// `tag` is the marker tag the blob is presented under, and nothing more —
 /// an entry's marker names one; a session's or a credential record's `sig`
-/// names none, and each candidate key is tried under its own. The row it
-/// names must be the key's, and gives the blob's width and where its halves
-/// part; both decodes and all the arithmetic read the key.
+/// names none, and each candidate key is tried under its own. It must name
+/// the key's own row, which `verify` reads off the key — a tag is never
+/// looked up in the table — and that row gives the blob's width and where
+/// its halves part; both decodes and all the arithmetic read the key.
 ///
 /// `msg` comes before `sig`, the order RustCrypto's
 /// `signature::Verifier::verify` and `ed25519-dalek`'s `verify_strict` take
 /// them: the two are `&[u8]` the compiler cannot tell apart, so the order a
 /// Rust caller already knows is the one that holds.
 pub fn verify(tag: u8, key: &PublicKey, msg: &[u8], sig: &[u8]) -> Result<(), HybridFault> {
-    let row = SigAlgRow::of_tag(tag).ok_or(HybridFault::WrongRow)?;
-    if key.alg() != row.token {
+    // The key's own row, which `tag` must name. One comparison answers both
+    // of `WrongRow`'s cases, since a tag that names no row is no key's row's
+    // tag either.
+    let row = key.sig_alg_row();
+    if row.tag != tag {
         return Err(HybridFault::WrongRow);
     }
     // THE BLOB, parted where the row parts it: the PQ signature, then the
@@ -253,7 +258,7 @@ mod tests {
         let seed = [0x42u8; 32];
         let s3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &seed).unwrap();
         let msg = b"the entry frame";
-        let sig = s3.sign_with_rng(msg, &mut SeededRng06::new([7; 32]));
+        let sig = s3.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
         let mut pq = s3.public_key().pq_half().to_vec();
         pq[0] = 0x0a;
         let bad = PublicKey::from_halves(s3.public_key().alg(), &pq, s3.public_key().ed25519_half())
@@ -292,7 +297,7 @@ mod tests {
             .expect("about half of all encodings name no point");
         for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
             let s = HybridSigner::from_seed(tag, &seed).unwrap();
-            let sig = s.sign_with_rng(msg, &mut SeededRng06::new([7; 32]));
+            let sig = s.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
             let key = s.public_key();
             let bad = PublicKey::from_halves(key.alg(), key.pq_half(), &no_point)
                 .expect("the row's widths");
@@ -317,7 +322,7 @@ mod tests {
         for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
             let s = HybridSigner::from_seed(tag, &seed).unwrap();
             let half = PqVerifier::decode(s.public_key()).expect("a derived key decodes");
-            let mut sig = s.sign_with_rng(msg, &mut SeededRng06::new([7; 32]));
+            let mut sig = s.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
             let pq_len = s.public_key().sig_alg_row().pq_sig_len;
             sig[pq_len] ^= 1;
             let (pq_sig, _) = sig.split_at(pq_len);
@@ -328,6 +333,28 @@ mod tests {
                 Err(HybridFault::Signature),
                 "tag {tag}: the hybrid refuses a broken Ed25519 field"
             );
+        }
+    }
+
+    /// THE ROW CHECK, over every value a marker tag can take: a blob its own
+    /// signer made verifies under the key's own row's tag alone, and every
+    /// other tag — another row's, or one no row names — answers `WrongRow`,
+    /// ahead of any judgement of the blob's width.
+    #[test]
+    fn every_tag_but_the_keys_own_answers_wrong_row() {
+        let seed = [0x42u8; 32];
+        let msg = b"the entry frame";
+        for own in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
+            let s = HybridSigner::from_seed(own, &seed).unwrap();
+            let sig = s.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
+            for tag in 0..=u8::MAX {
+                let expected = if tag == own { Ok(()) } else { Err(HybridFault::WrongRow) };
+                assert_eq!(
+                    verify(tag, s.public_key(), msg, &sig),
+                    expected,
+                    "tag {tag} against a tag-{own} key"
+                );
+            }
         }
     }
 

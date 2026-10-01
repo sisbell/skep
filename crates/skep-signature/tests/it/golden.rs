@@ -140,10 +140,17 @@ struct TagGolden {
     sigs: [&'static str; 6],
 }
 
-/// Per op: its name, its frame's bytes, its signature blob.
-type SignedFrames = Vec<(String, Vec<u8>, Vec<u8>)>;
+/// One fixed frame, signed: its op's name, the frame's bytes and the
+/// signature blob over them — named, not a triple, as `PqWidths` is: the
+/// frame and the blob are both `Vec<u8>`, and a position would let them
+/// trade places.
+struct SignedFrame {
+    op: &'static str,
+    frame: Vec<u8>,
+    sig: Vec<u8>,
+}
 
-fn golden_of(tag: u8) -> (HybridSigner, SignedFrames) {
+fn golden_of(tag: u8) -> (HybridSigner, Vec<SignedFrame>) {
     let signer = HybridSigner::from_seed(tag, &GOLDEN_SEED).unwrap();
     let alg = SigAlgRow::of_tag(tag).unwrap().token;
     let mut out = Vec::new();
@@ -152,9 +159,9 @@ fn golden_of(tag: u8) -> (HybridSigner, SignedFrames) {
         // stream, reseeded per op from `GOLDEN_STREAM_SEED` so each signature
         // is a function of its frame alone.
         let mut rng = SeededRng06::new(GOLDEN_STREAM_SEED);
-        let sig = signer.sign_with_rng(&frame, &mut rng);
+        let sig = signer.sign_with_rng(&mut rng, &frame);
         assert_eq!(verify(tag, signer.public_key(), &frame, &sig), Ok(()));
-        out.push((op.to_string(), frame, sig));
+        out.push(SignedFrame { op, frame, sig });
     }
     (signer, out)
 }
@@ -166,7 +173,7 @@ fn check_golden(g: &TagGolden) {
     let ed = sha_hex(key.ed25519_half());
     let raw = sha_hex(key.raw());
     let fp = Fingerprint::of(key).to_hex();
-    let sigs: Vec<String> = signed.iter().map(|(_, _, sig)| sha_hex(sig)).collect();
+    let sigs: Vec<String> = signed.iter().map(|s| sha_hex(&s.sig)).collect();
     let report = format!(
         "tag {}: pq_pk {pq}\n ed_pk {ed}\n raw_key {raw}\n fingerprint {fp}\n sigs {}",
         g.tag,
@@ -176,7 +183,7 @@ fn check_golden(g: &TagGolden) {
     assert_eq!(ed, g.ed_pk, "the Ed25519 half moved — the KDF is a frozen pin\n{report}");
     assert_eq!(raw, g.raw_key, "{report}");
     assert_eq!(fp, g.fingerprint, "{report}");
-    for (i, (op, _, _)) in signed.iter().enumerate() {
+    for (i, SignedFrame { op, .. }) in signed.iter().enumerate() {
         assert_eq!(sigs[i], g.sigs[i], "the {op} signature moved under tag {}\n{report}", g.tag);
     }
 }
@@ -261,9 +268,9 @@ fn each_half_alone_fails_under_both_tags() {
         let (signer, signed) = golden_of(tag);
         let row = SigAlgRow::of_tag(tag).unwrap();
         let other = HybridSigner::from_seed(tag, &[0x99; 32]).unwrap();
-        let (_, frame, sig) = &signed[0];
+        let SignedFrame { frame, sig, .. } = &signed[0];
         let mut rng = SeededRng06::new([1; 32]);
-        let foreign = other.sign_with_rng(frame, &mut rng);
+        let foreign = other.sign_with_rng(&mut rng, frame);
         // The PQ half ours, the Ed25519 half theirs.
         let mut mixed = sig[..row.pq_sig_len].to_vec();
         mixed.extend_from_slice(&foreign[row.pq_sig_len..]);
@@ -296,11 +303,11 @@ fn tag_1_is_byte_equal_to_a_second_fips_204_implementation() {
         assert_eq!(our_pk, their_pk.clone().into_bytes().to_vec(), "seed {i}: the public key");
         for (op, frame) in fixed_frames(ALG_MLDSA65_ED25519) {
             let our_sig = ours.sign(&frame);
-            let our_pq = &our_sig[..3309];
+            let our_pq = &our_sig[..ours.public_key().sig_alg_row().pq_sig_len];
             let their_sig = their_sk.try_sign_with_seed(&[0u8; 32], &frame, &[]).unwrap();
             assert_eq!(our_pq, &their_sig[..], "seed {i}, {op}: the deterministic signature");
             assert!(their_pk.verify(&frame, &their_sig, &[]), "their verify of their own");
-            let as_theirs: [u8; 3309] = our_pq.try_into().unwrap();
+            let as_theirs: [u8; fips204::ml_dsa_65::SIG_LEN] = our_pq.try_into().unwrap();
             assert!(their_pk.verify(&frame, &as_theirs, &[]), "their verify of ours");
         }
     }
@@ -316,12 +323,12 @@ fn sizes_and_timings_per_tag() {
         let row = SigAlgRow::of_tag(tag).unwrap();
         let (signer, signed) = golden_of(tag);
         let key_len = signer.public_key().raw().len();
-        let sig_len = signed[0].2.len();
+        let sig_len = signed[0].sig.len();
         assert_eq!(key_len, row.key_len());
         assert_eq!(sig_len, row.sig_len());
         let PqWidths { key: pq_key, sig: pq_sig, signing_key: pq_sk } =
             pq_widths(tag).unwrap();
-        let frame = &signed[0].1;
+        let frame = &signed[0].frame;
         let n = 40;
         let mut sign_us = Vec::new();
         let mut verify_us = Vec::new();
@@ -391,7 +398,7 @@ fn the_fn_dsa_preview_signs_and_verifies_on_this_target() {
         if native { "native f64 (fn-dsa 0.4.0 flr_native)" } else { "integer-emulated IEEE-754 (flr_emu)" }
     );
     let (signer, signed) = golden_of(3);
-    for (op, frame, sig) in &signed {
+    for SignedFrame { op, frame, sig } in &signed {
         assert_eq!(verify(3, signer.public_key(), frame, sig), Ok(()), "{op}");
         assert_eq!(sig.len(), 730);
     }

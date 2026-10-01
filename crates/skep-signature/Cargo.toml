@@ -63,8 +63,10 @@ fn-dsa = "=0.4.0"
 # verify links none of them.
 #
 # fn-dsa's signer and keygen draw from a `rand_core` 0.6 RNG (the test signer
-# and the key-derivation golden feed them a seeded stream).
-rand_core_06 = { package = "rand_core", version = "0.6", optional = true }
+# and the key-derivation golden feed them a seeded stream) — 0.6.4 at least,
+# the first to name the pair `CryptoRngCore`, the bound the signer's draws
+# take.
+rand_core_06 = { package = "rand_core", version = "0.6.4", optional = true }
 # THE KDF (the design record §5.2 (ii); the KDF PIN): one 32-byte seed to
 # both halves by HKDF-SHA-256 with the algorithm token and the half as the
 # domain-separation labels, never the raw seed. `sha2` is the KDF's hash, and

@@ -16,7 +16,7 @@ fn both_tags_sign_verify_and_refuse_a_broken_half() {
         assert_eq!(signer.public_key().raw().len(), row.key_len());
         let msg = b"the entry frame";
         let mut rng = SeededRng06::new([7; 32]);
-        let sig = signer.sign_with_rng(msg, &mut rng);
+        let sig = signer.sign_with_rng(&mut rng, msg);
         assert_eq!(sig.len(), row.sig_len());
         assert_eq!(verify(tag, signer.public_key(), msg, &sig), Ok(()));
         assert_eq!(
@@ -65,7 +65,8 @@ fn both_tags_sign_verify_and_refuse_a_broken_half() {
 
 /// THE TAG SET is stated once ([`Rule::of`]): the KDF, keygen and the
 /// widths answer for exactly the tags it names, over every value a marker
-/// tag can take, so no step serves a tag another refuses — and the set is
+/// tag can take, so no step serves a tag another refuses and each signer
+/// signs under the tag it was made under — and the set is
 /// the two rules the module card names, and exactly the tags skep-identity's
 /// `SIG_ALGS` names: every key's row has a rule here, so a post-quantum half
 /// that does not decode is its key's fault, never its row's.
@@ -75,7 +76,11 @@ fn every_per_tag_step_answers_for_exactly_the_tags_rule_names() {
     for tag in 0..=u8::MAX {
         let ruled = Rule::of(tag).is_some();
         assert_eq!(derive_half_seeds(tag, &seed).is_some(), ruled, "the KDF, tag {tag}");
-        assert_eq!(HybridSigner::from_seed(tag, &seed).is_some(), ruled, "keygen, tag {tag}");
+        assert_eq!(
+            HybridSigner::from_seed(tag, &seed).map(|signer| signer.tag()),
+            ruled.then_some(tag),
+            "keygen, and the tag the signer signs under, tag {tag}"
+        );
         assert_eq!(pq_widths(tag).is_some(), ruled, "the widths, tag {tag}");
     }
     let rule_tags: Vec<u8> = (0..=u8::MAX).filter(|&t| Rule::of(t).is_some()).collect();

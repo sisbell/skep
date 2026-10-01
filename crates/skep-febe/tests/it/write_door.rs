@@ -7,9 +7,12 @@
 //! answers, and — load-bearing — that it stands BEHIND the destination's own
 //! gate and never speaks ahead of the store's `published_target` or
 //! `not_owner`, nor lets anything built from a source it did not consult
-//! speak there. Beside it, the gates the door is silent for, which run on
-//! nothing but the visibility class M10 lends a store for one write: the
-//! publish shot's source gate in M5, and the link writes' dedup in M7.
+//! speak there; and where it does answer in the store's place, it answers in
+//! the store's own bytes, checked against the store's answer to the same
+//! request rather than against a constant. Beside it, the gates the door is
+//! silent for, which run on nothing but the visibility class M10 lends a
+//! store for one write: the publish shot's source gate in M5, and the link
+//! writes' dedup in M7.
 //!
 //! The read path's use of the same predicate is `read_door.rs`.
 
@@ -18,8 +21,8 @@ use crate::common;
 use common::*;
 use skep_address::{document_of, elem_addr, Address, ElemPos};
 use skep_febe::{
-    Deposit, Disposition, Op, OpKind, PrincipalId, RejectCode, Run, SessionId, Shot, ShotRun,
-    SlotArg, SuccessorSpec, VSpec, MAX_SLOT_SPANS,
+    Deposit, Disposition, Op, OpKind, PrincipalId, RejectCode, Rejection, Run, SessionId, Shot,
+    ShotRun, SlotArg, SuccessorSpec, VSpec, MAX_SLOT_SPANS,
 };
 use skep_links::MAX_SLOT_RESOLVE_STEPS;
 
@@ -587,12 +590,81 @@ fn a_link_homed_in_an_unreadable_document_answers_absence_to_a_write() {
     ack_addr(ex(&fx.febe, fx.user, Op::AssertSup { home: unreadable_doc.clone(), old: unreadable_l1, new: unreadable_l2 }));
 }
 
+/// PUB-6.6 on writes, as the RELATION `consult_write` states: the door's
+/// absence answer for a link homed where the writer cannot read is
+/// "wire-identical to what the store would say of the same address in a world
+/// without the draft". The door's two codes are its own copy of M7's
+/// residence refusals (`Op::link_address_arguments`), so the copy is checked
+/// against its source: the same request, once over links homed in a draft the
+/// stranger cannot read (the door answers), once over unoccupied addresses in
+/// a document it can (M7 answers, past the door).
+#[test]
+fn a_link_homed_where_the_writer_cannot_read_is_refused_in_the_stores_own_absence_bytes() {
+    let (fx, unreadable) = setup_with_unreadable();
+    let unreadable_doc = create_doc(&fx);
+    let readable_home = create_doc(&fx);
+    let in_unreadable = |ordinal: u32| {
+        ack_addr(ex(
+            &fx.febe,
+            fx.user,
+            Op::MakeLink {
+                home: unreadable_doc.clone(),
+                from: SlotArg::Addrs(vec![]),
+                to: SlotArg::Addrs(vec![]),
+                ty: SlotArg::Addrs(vec![ghost_type(&unreadable_doc, ordinal)]),
+                replaces: None,
+            },
+        ))
+        .0
+    };
+    let (unreadable_l1, unreadable_l2) = (in_unreadable(1), in_unreadable(2));
+    let unoccupied = |ordinal: u32| {
+        elem_addr(ElemPos { doc: readable_home.clone(), subspace: nat(2), ordinal: nat(ordinal) })
+            .unwrap_or_else(|_| panic!("valid element position"))
+    };
+    unreadable.lock().expect("no poisoning").push(unreadable_doc.clone());
+    let (other, their_draft) = stranger(&fx);
+    let edit = |original: &Address| Op::EditLink {
+        original: original.clone(),
+        successor: SuccessorSpec {
+            from: vec![],
+            to: vec![],
+            ty: SlotArg::Addrs(vec![ghost_type(&their_draft, 1)]),
+        },
+        d_s: their_draft.clone(),
+        d_a: their_draft.clone(),
+    };
+    let sup = |old: &Address, new: &Address| Op::AssertSup {
+        home: their_draft.clone(),
+        old: old.clone(),
+        new: new.clone(),
+    };
+    let before = fx.febe.log_position();
+
+    let stores_own = rejected(ex(&fx.febe, other, edit(&unoccupied(98))));
+    assert_eq!(stores_own.code, RejectCode::OriginalNotResident, "premise: M7's own refusal");
+    assert_eq!(
+        rejected(ex(&fx.febe, other, edit(&unreadable_l1))),
+        stores_own,
+        "edit_link: the door answers in the store's bytes"
+    );
+    let stores_own = rejected(ex(&fx.febe, other, sup(&unoccupied(98), &unoccupied(99))));
+    assert_eq!(stores_own.code, RejectCode::EndpointNotResident, "premise: M7's own refusal");
+    assert_eq!(
+        rejected(ex(&fx.febe, other, sup(&unreadable_l1, &unreadable_l2))),
+        stores_own,
+        "assert_sup: the door answers in the store's bytes"
+    );
+    assert_eq!(fx.febe.log_position(), before, "no refusal commits");
+}
+
 /// PUB-6.36 slot 5 ahead of slot 6: the ONE cell where both apply — a source
 /// the caller may not read, copied into a PUBLISHED destination the caller
-/// OWNS — answers `published_target`, never `withheld`, and answers it
-/// byte-identically to the store's own refusal (same code, disposition, no
-/// site, no detail). Both neighbouring cells are unchanged, which is what
-/// makes this a statement about ORDER rather than about either refusal.
+/// OWNS — answers `published_target`, never `withheld`, and answers it in the
+/// bytes the STORE gives the in-place edits it orders itself — compared below
+/// with M5's own refusal of an `insert` there, which takes no consult. Both
+/// neighbouring cells are unchanged, which is what makes this a statement
+/// about ORDER rather than about either refusal.
 #[test]
 fn an_in_place_edit_of_a_published_destination_outranks_the_source_consult() {
     let (fx, unreadable) = setup_with_unreadable();
@@ -601,6 +673,17 @@ fn an_in_place_edit_of_a_published_destination_outranks_the_source_consult() {
     unreadable.lock().expect("no poisoning").push(unreadable_doc.clone());
     let (other, their_draft) = stranger(&fx);
     let their_edition = stranger_edition(&fx, other);
+    let stores_own = rejected(ex(
+        &fx.febe,
+        other,
+        Op::Insert {
+            doc: their_edition.clone(),
+            at: vp(1, 1),
+            values: vec![skep_content::Val::new(vec![b'x'])],
+            deposit: Deposit::Undeclared,
+        },
+    ));
+    assert_eq!(stores_own.code, RejectCode::PublishedTarget, "premise: M5's own refusal");
 
     let before = fx.febe.log_position();
     let rej = rejected(ex(
@@ -616,6 +699,11 @@ fn an_in_place_edit_of_a_published_destination_outranks_the_source_consult() {
     );
     assert_eq!(rej.disposition, Disposition::Permanent);
     assert!(rej.site.is_none() && rej.detail.is_none(), "byte-identical to the store's refusal");
+    assert_eq!(
+        rej,
+        Rejection { op: OpKind::Copy, ..stores_own.clone() },
+        "in the store's own bytes"
+    );
     assert_eq!(fx.febe.log_position(), before, "a refused copy commits nothing");
 
     // A DRAFT destination still meets the source consult…
@@ -624,8 +712,10 @@ fn an_in_place_edit_of_a_published_destination_outranks_the_source_consult() {
         OpKind::Copy,
         &unreadable_doc,
     );
-    // …and a READABLE source into the same published destination still meets
-    // `published_target`, one layer later and in the same bytes.
+    // …and a READABLE source into the same published destination meets the
+    // same refusal: the door pre-evaluates it for every copy it judges,
+    // whatever the source, so this is the door's answer again — in the
+    // store's bytes.
     let readable_doc = create_doc(&fx);
     insert3(&fx, &readable_doc);
     let rej = rejected(ex(
@@ -635,6 +725,61 @@ fn an_in_place_edit_of_a_published_destination_outranks_the_source_consult() {
     ));
     assert_eq!(rej.code, RejectCode::PublishedTarget);
     assert!(rej.site.is_none() && rej.detail.is_none());
+    assert_eq!(rej, Rejection { op: OpKind::Copy, ..stores_own }, "in the store's own bytes");
+}
+
+/// PUB-6.36's slot 1 ahead of its slot 5, at the one place M10 orders the two
+/// itself: the door pre-evaluates the in-place refusal for `copy` (lane 4.2,
+/// F3) only BEHIND the destination's own gate — registration, then ownership
+/// — so `published_target` is asked only of a destination the deferral has
+/// found registered and the caller may write (M5's CONTRACT on it, PUB-6.37).
+/// Two cells, each against a PUBLISHED trunk, each answered exactly as an
+/// `insert` there is, which M5 orders itself:
+///
+/// * a stranger's copy into ANOTHER principal's published edition is the
+///   store's `not_owner` naming it — its source one the stranger may not
+///   read, so neither the door's in-place refusal nor its consult speaks for
+///   a write the caller may not make;
+/// * the owner's copy into an unminted MEMBER address of its own published
+///   edition is the store's `doc_not_registered`, though the address projects
+///   to a published trunk.
+#[test]
+fn the_destinations_own_gate_stands_ahead_of_the_doors_published_target() {
+    let (fx, unreadable) = setup_with_unreadable();
+    let edition = create_edition(&fx);
+    let ghost_member = skep_namespace::first_version_address(&edition)
+        .expect("a document's chain has an opening address");
+    let unreadable_doc = create_doc(&fx);
+    insert3(&fx, &unreadable_doc);
+    unreadable.lock().expect("no poisoning").push(unreadable_doc.clone());
+    let (other, _their_draft) = stranger(&fx);
+    let copy = |doc: &Address| Op::Copy {
+        doc: doc.clone(),
+        at: vp(1, 1),
+        specs: vec![vspec(&unreadable_doc, 1, 1)],
+    };
+    let insert = |doc: &Address| Op::Insert {
+        doc: doc.clone(),
+        at: vp(1, 1),
+        values: vec![skep_content::Val::new(vec![b'x'])],
+        deposit: Deposit::Undeclared,
+    };
+
+    let before = fx.febe.log_position();
+    for (session, destination, expected) in [
+        (other, &edition, RejectCode::NotOwner),
+        (fx.user, &ghost_member, RejectCode::DocNotRegistered),
+    ] {
+        let rej = rejected(ex(&fx.febe, session, copy(destination)));
+        assert_eq!(rej.code, expected, "the destination's own gate speaks first: {rej}");
+        let stores_own = rejected(ex(&fx.febe, session, insert(destination)));
+        assert_eq!(
+            rej,
+            Rejection { op: OpKind::Copy, ..stores_own },
+            "a copy into {destination} is ordered exactly as M5 orders an insert there"
+        );
+    }
+    assert_eq!(fx.febe.log_position(), before, "no refusal commits");
 }
 
 /// PUB-6.38, the deferral's OTHER half: the destination's own gate is

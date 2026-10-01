@@ -89,8 +89,15 @@ impl crate::ReadableWorld for World {
 impl crate::PublicationWorld for World {
     // The edition-claim class is the engine's composition (the pinned
     // type address lives there); this world carries none, so the lookup
-    // answers the empty class and the arm's shape is what is exercised.
-    fn edition_claims(&self, _target: &Address) -> Vec<crate::EditionClaim> {
+    // answers the empty class and the arm's shape is what is exercised —
+    // once the seam's one precondition holds, which M10 owes it: `target` is
+    // a registered document.
+    fn edition_claims(&self, target: &Address) -> Vec<crate::EditionClaim> {
+        assert!(
+            self.m3.is_registered_document(target),
+            "M10 asked the edition-claim lookup about {target}, which is not a registered \
+             document: the seam's precondition was not discharged"
+        );
         Vec::new()
     }
     // The grant fold is the engine's too; this world carries none, so the

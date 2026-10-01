@@ -91,6 +91,8 @@ impl Sessions {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicBool;
+
     use super::*;
 
     /// §6: distinct ids per open, the binding readable while open and gone
@@ -107,6 +109,57 @@ mod tests {
         assert_eq!(sessions.principal_of(s1), None);
         assert_eq!(sessions.principal_of(s2), Some(PrincipalId(2)));
         assert_eq!(sessions.principal_of(SessionId(9999)), None);
+    }
+
+    /// §6 under the concurrency the surface is shared across (§8): a transport
+    /// opens sessions from every worker at once, and each id is still minted
+    /// once and bound to the principal it was opened for. A counter read and
+    /// written in two steps would hand two connections one id, the second
+    /// binding overwriting the first — one connection then speaking for
+    /// another's principal. The openers are released off one start line they
+    /// are all already spinning on, so they open together rather than one
+    /// after another as they are spawned; how often a racy counter collides
+    /// is still the scheduler's to say, but correct code never fails here.
+    #[test]
+    fn sessions_opened_concurrently_are_distinct_and_each_keeps_its_principal() {
+        const THREADS: u64 = 8;
+        const OPENS: u64 = 10_000;
+        let sessions = Sessions::new();
+        let (ready, go) = (AtomicU64::new(0), AtomicBool::new(false));
+        let opened: Vec<(SessionId, PrincipalId)> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..THREADS)
+                .map(|t| {
+                    let (sessions, ready, go) = (&sessions, &ready, &go);
+                    scope.spawn(move || {
+                        ready.fetch_add(1, Ordering::Release);
+                        while !go.load(Ordering::Acquire) {
+                            std::hint::spin_loop();
+                        }
+                        (0..OPENS)
+                            .map(|i| {
+                                let principal = PrincipalId(t * OPENS + i);
+                                (sessions.open(principal), principal)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            while ready.load(Ordering::Acquire) < THREADS {
+                std::hint::spin_loop();
+            }
+            go.store(true, Ordering::Release);
+            handles.into_iter().flat_map(|h| h.join().expect("no opener panics")).collect()
+        });
+        let ids: std::collections::HashSet<SessionId> = opened.iter().map(|(s, _)| *s).collect();
+        assert_eq!(ids.len(), opened.len(), "two opens were handed one id");
+        assert!(!ids.contains(&SessionId::GUEST), "no open mints the guest");
+        for (session, principal) in opened {
+            assert_eq!(
+                sessions.principal_of(session),
+                Some(principal),
+                "{session:?} speaks for another principal"
+            );
+        }
     }
 
     /// A retired id is never reissued: the counter only moves forward.

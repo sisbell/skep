@@ -6,7 +6,7 @@
 //! driven through the FEBE surface itself (bootstrap → delegate → create →
 //! …), exercising the real request lifecycle end-to-end.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -155,11 +155,40 @@ pub fn seed_universal_grant_index(rows: Vec<UniversalIndexRow>) {
     UNIVERSAL_GRANT_INDEX.with(|g| *g.borrow_mut() = rows);
 }
 
+thread_local! {
+    /// How many times this world's universal index has been ENUMERATED — the
+    /// unit the any-principal read's cost is paid in (PUB-8.47: "enumerated
+    /// once per request", and never for the guest). Reset by
+    /// [`surface_over`], as [`UNIVERSAL_GRANT_INDEX`] is.
+    static UNIVERSAL_GRANT_INDEX_READS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// How many times M10 has enumerated the universal index since the surface
+/// was built.
+pub fn universal_grant_index_reads() -> usize {
+    UNIVERSAL_GRANT_INDEX_READS.with(Cell::get)
+}
+
 impl skep_febe::PublicationWorld for World {
-    fn edition_claims(&self, _target: &Address) -> Vec<EditionClaim> {
+    /// The seeded rows, for ANY target — once the one precondition the seam
+    /// states holds: `target` is a REGISTERED DOCUMENT, which M10 owes the
+    /// lookup and discharges with its own registration refusal ahead of it
+    /// (`PublicationWorld::edition_claims`). The engine's lookup ranges over
+    /// `target`'s whole subtree, so asked about an account or a node it walks
+    /// every claim beneath; a double that answered anyway would let a front
+    /// door that asked first and refused after pass every test.
+    fn edition_claims(&self, target: &Address) -> Vec<EditionClaim> {
+        assert!(
+            self.m3.is_registered_document(target),
+            "M10 asked the edition-claim lookup about {target}, which is not a registered \
+             document: the seam's precondition was not discharged"
+        );
         EDITION_CLAIMS.with(|c| c.borrow().clone())
     }
+    /// The seeded index, each call counted as one ENUMERATION
+    /// ([`universal_grant_index_reads`]).
     fn universal_grant_index(&self) -> Vec<UniversalIndexRow> {
+        UNIVERSAL_GRANT_INDEX_READS.with(|n| n.set(n.get() + 1));
         UNIVERSAL_GRANT_INDEX.with(|g| g.borrow().clone())
     }
 }
@@ -289,11 +318,13 @@ impl Stores<World> for KernelStores {
     }
 }
 
-/// A front door over `kernel`, the miniature world's seeded tables cleared
-/// first, so a test sees only what it seeds itself.
+/// A front door over `kernel`, the miniature world's seeded tables and its
+/// enumeration count cleared first, so a test sees only what it seeds itself
+/// and counts only what it asks.
 pub fn surface_over(kernel: Arc<Kernel<World>>) -> OperationSurface<World> {
     seed_edition_claims(Vec::new()); // the empty class, until a test seeds it
     seed_universal_grant_index(Vec::new()); // …the empty universal index, likewise
+    UNIVERSAL_GRANT_INDEX_READS.with(|n| n.set(0)); // …no enumeration of it counted yet
     seed_unreadable_world(Vec::new()); // …and a world that admits every read
     OperationSurface::new(Box::new(KernelStores { kernel }))
 }

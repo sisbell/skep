@@ -2,12 +2,12 @@
 //! (PUB-8.12, PUB-8.46, PUB-8.47) — over the public surface: the doc-metadata
 //! read answers what a client admits an edition by, its birth version checked
 //! against the address `Op::Version` minted; the two reads that take a
-//! document demand a registered DOCUMENT and refuse every other tier; the
-//! three-valued publication flag reaches the store unresolved, each explicit
-//! arm as sent; and the
-//! any-principal read hands a client the answer set and never the index —
-//! every served row carrying the one issuer ω answers for its prefix, the
-//! guest answered empty.
+//! document demand a registered DOCUMENT and refuse every other tier, ahead of
+//! the edition-claim lookup; the three-valued publication flag reaches the
+//! store unresolved, each explicit arm as sent; and the any-principal read
+//! hands a client the answer set and never the index — every served row
+//! carrying the one issuer ω answers for its prefix, the guest answered empty
+//! without the index being walked, which a principal's answer walks once.
 
 use std::collections::BTreeSet;
 
@@ -87,7 +87,10 @@ fn the_publication_reads_answer_the_metadata_a_client_admits_an_edition_by() {
 /// document under it and a node-tier one after the whole store. A registered
 /// account, the genesis node and a content element are refused exactly as an
 /// unregistered document is, and the registered document beside them is
-/// answered.
+/// answered. And the refusal comes BEFORE the lookup: the test world's
+/// `edition_claims` refuses to answer a target that is not a registered
+/// document — the precondition the seam lets an implementer assume — so a
+/// front door that asked first and refused after fails here, in the double.
 #[test]
 fn doc_metadata_and_edition_claims_demand_a_registered_document_not_merely_an_entity() {
     let fx = setup();
@@ -430,4 +433,27 @@ fn an_unseated_sub_prefix_is_served_until_a_delegation_seats_it() {
     ));
     assert_eq!(seat_of(&child), Some(child.clone()), "seated, the child answers itself");
     assert!(read().is_empty(), "the row drops at the first read after the delegation");
+}
+
+/// PUB-8.47 / PUB-5.109, at the seam's cost: the GUEST is answered before the
+/// index is enumerated — grants reach principals alone, so a requester no
+/// grant reaches never pays for the store-sized walk, and an unauthenticated
+/// request cannot drive it — while a bound principal's answer is ONE
+/// enumeration off its snapshot (`PublicationWorld::universal_grant_index`:
+/// "enumerated once per request").
+#[test]
+fn the_universal_index_is_enumerated_once_for_a_principal_and_never_for_the_guest() {
+    let fx = setup();
+    seed_universal_grant_index(vec![UniversalIndexRow {
+        content_prefix: fx.account.clone(),
+        issuers: vec![fx.account.clone()],
+    }]);
+
+    let r = ex(&fx.febe, SessionId::GUEST, Op::UniversalGrants);
+    assert!(universal_grants(r).is_empty(), "the guest is answered empty");
+    assert_eq!(universal_grant_index_reads(), 0, "the guest's empty answer walked no index");
+
+    let served = universal_grants(ex(&fx.febe, fx.user, Op::UniversalGrants));
+    assert_eq!(served.len(), 1, "premise: a principal is served the seeded row");
+    assert_eq!(universal_grant_index_reads(), 1, "one enumeration per request");
 }

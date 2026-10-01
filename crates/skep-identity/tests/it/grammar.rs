@@ -539,6 +539,49 @@ fn not_utf8_precedes_the_schema_check() {
     assert_eq!(err_retire(&[0xc3, 0x28]), PayloadError::NotUtf8);
 }
 
+/// THE RECORD CAP AT THE PARSE'S OWN HEAD (AUTH-1.18: the cap bounds ONE
+/// record; AUTH-2.43), ahead of item 1 as the read's refusal stands ahead of
+/// every parse: a body past `MAX_RECORD_BYTES` is `too_large` from every
+/// parse — a canonical record, object-dense JSON, bytes that are not even
+/// text — on both kinds, and never reaches `serde_json`, which builds its
+/// whole tree before the first schema check. A record under the cap parses.
+/// The read refuses every such body first, so no fold verdict moves; what the
+/// head check bounds is a caller holding bytes the read never capped — a
+/// record atom's own `insert` value, judged before any link names it — where
+/// each single-member object, seven bytes, costs a whole B-tree leaf of over
+/// six hundred bytes beside the `Value` that holds it: close to a hundred
+/// times the body, over half a gigabyte at 8 MiB. The exact boundary — a
+/// record of exactly `MAX_RECORD_BYTES` parses, through the read and this
+/// head alike — is `read.rs`'s
+/// `record_at_exactly_the_cap_folds_and_one_more_byte_inerts`. A corpus seed
+/// worth promoting to the fuzzing tier: an `insert` whose one atom is such a
+/// body, under a memory oracle.
+#[test]
+fn a_body_past_the_record_cap_is_too_large_at_the_parse_as_at_the_read() {
+    let entries = |n: u8| -> Vec<Enrollment> {
+        (0..n).map(|i| Enrollment::new(key(i), false, None).expect("label-free")).collect()
+    };
+    // Thirty-two label-free tag-1 entries spell 128,607 bytes, thirty-three
+    // 132,625 (`read.rs`'s `CAP_SIZED_ENTRIES` card).
+    let under = encode_enroll(&entries(32));
+    assert!(under.len() <= MAX_RECORD_BYTES, "fixture: under the cap");
+    assert_eq!(ok_enroll(under.as_bytes()).len(), 32);
+    let past = encode_enroll(&entries(33));
+    assert!(past.len() > MAX_RECORD_BYTES, "fixture: past the cap");
+    assert_eq!(parse_enroll(past.as_bytes()), Err(PayloadError::TooLarge), "a canonical record");
+    assert_eq!(
+        parse_record_value::<Enrollment>(past.as_bytes()).err(),
+        Some(PayloadError::TooLarge),
+        "the verifier's parse alike"
+    );
+    let dense = format!("[{}0]", "{\"\":0},".repeat(MAX_RECORD_BYTES / 7 + 1));
+    assert!(dense.len() > MAX_RECORD_BYTES, "fixture: past the cap");
+    assert_eq!(err_enroll(dense.as_bytes()), PayloadError::TooLarge, "object-dense JSON");
+    assert_eq!(err_retire(dense.as_bytes()), PayloadError::TooLarge, "object-dense JSON");
+    let not_text = vec![0xffu8; MAX_RECORD_BYTES + 1];
+    assert_eq!(err_enroll(&not_text), PayloadError::TooLarge, "the cap ahead of item 1");
+}
+
 /// AUTH-2.130 — a body that is not JSON at all is `bad_record`, the retired
 /// LINE FORM included (RES-98: the line grammar is retired).
 #[test]

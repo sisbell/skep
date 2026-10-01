@@ -224,6 +224,14 @@ pub(super) fn attestation_check(
 /// WHERE the entry's signature is. At or below the claim nothing is signed
 /// (A5) and this answers `false`: the ceremony's own record, `sig` or not,
 /// keeps its row's `key`. A claim carries no record and answers `false`.
+///
+/// An atom past [`skep_identity::MAX_RECORD_BYTES`] parses as no record —
+/// `too_large` at the parse's own head, as at the read — so this answers
+/// `false` and its row serves its `key`: its `make_link` is refused
+/// `malformed_payload:too_large` at the credential precheck's slot (3), the
+/// fold's own read, and no `sig` it carries covers any position. That cap is
+/// also what bounds this parse, of a value no read has capped, under the
+/// serialization lock.
 pub(crate) fn record_deposit_carries_sig(identity: &IdentityState, op: &Op) -> bool {
     if identity.claimant().is_none() {
         return false;

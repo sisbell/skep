@@ -48,7 +48,10 @@ pub const RETIRE_TYPE: &str = "skep-retire";
 /// carries ≥ 1 byte (AUTH-1.22); the second bound that rule demands wherever
 /// a zero-byte value can reach the read is
 /// [`record_bytes`](crate::record_bytes)' per-record POSITION budget, over
-/// this same constant, so the work is bounded whatever a ctx answers.
+/// this same constant, so the work is bounded whatever a ctx answers. The
+/// parse applies the same constant at its own head
+/// ([`parse_record_value`]), so a caller holding bytes the read never capped
+/// builds no JSON tree past it.
 pub const MAX_RECORD_BYTES: usize = 128 * 1024;
 
 /// AUTH-1.24 — the label's byte bound: at most 128 BYTES of UTF-8, counted
@@ -127,8 +130,10 @@ impl std::error::Error for LabelError {}
 /// on a retirement — and `DuplicateKey` names the REPEATING ENTRY (AUTH-2.15).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PayloadError {
-    /// The concatenated FROM-span bytes exceed [`MAX_RECORD_BYTES`]
-    /// (AUTH-2.43).
+    /// The record's bytes exceed [`MAX_RECORD_BYTES`]: the concatenated
+    /// FROM-span bytes at the read (AUTH-2.43), or a body handed to the
+    /// parse, which applies the same cap at its head
+    /// ([`parse_record_value`]).
     TooLarge,
     /// The span's START failed one of the three per-span checks that run
     /// before a byte of it is read (AUTH-2.38 items 1–3): it does not
@@ -431,15 +436,15 @@ impl RecordEntry for Fingerprint {
 ///
 /// PRECONDITION, for an answer a parser admits — `entries` is NON-EMPTY and
 /// DUPLICATE-FREE, the parsers' POSTCONDITION read from the other side, as
-/// [`encode_enroll`] and [`encode_retire`] state it; `sig` may be any string,
-/// clause 3 escaping it. Outside that domain the function still answers a
-/// record value — it emits what it is given and re-checks nothing — and NO
-/// parser admits it: a signer composing over a repeated entry, or none,
-/// deposits a record the fold refuses `malformed_payload`
-/// (`duplicate_key:<n>`, `empty`). The record cap is the READ's and never
-/// this function's: within the domain a record past [`MAX_RECORD_BYTES`]
-/// still parses, and the fold refuses its deposit `malformed_payload`
-/// (`too_large`) at the read, before any parse (AUTH-2.43).
+/// [`encode_enroll`] and [`encode_retire`] state it, and the record spelled
+/// is at most [`MAX_RECORD_BYTES`] (AUTH-1.18: the cap bounds ONE record);
+/// `sig` may be any string, clause 3 escaping it. Outside that domain the
+/// function still answers a record value — it emits what it is given and
+/// re-checks nothing — and NO parser admits it: a signer composing over a
+/// repeated entry, or none, deposits a record the fold refuses
+/// `malformed_payload` (`duplicate_key:<n>`, `empty`), and one spelled past
+/// the cap a record refused `too_large` — at the read before any parse
+/// (AUTH-2.43), and by the parse itself at its head.
 ///
 /// POSTCONDITION — within it, the value ROUND-TRIPS, `sig` included: the
 /// kind's parser admits `canonical_record(entries, sig)` and answers
@@ -500,20 +505,39 @@ pub struct RecordValue<T> {
 }
 
 /// AUTH-2.19 — the fault precedence BOTH kinds keep, and the record envelope
-/// both schemas state alike, in ONE place: the bytes decode as UTF-8 (else
-/// `NotUtf8`, item 1); the body is a JSON object of exactly `type`, the kind's
-/// entry array, and an OPTIONAL `sig` — a STRING the fold IGNORES whatever it
-/// holds (AUTH-2.13, AUTH-2.94), and no other member (AUTH-2.128, AUTH-2.129)
-/// — whose entries each parse and whose bytes ARE the canonical re-encoding of
-/// the value they spell (else `BadRecord`, AUTH-2.130 and item 2); then the
-/// entries are scanned in order for a duplicate (`DuplicateKey(n)` naming the
-/// 1-based REPEATING entry, item 3); and `Empty` is answered ONLY after a
-/// clean scan (item 4).
+/// both schemas state alike, in ONE place: the bytes are at most
+/// [`MAX_RECORD_BYTES`] (else `TooLarge` — the read's own cap, AUTH-1.18 and
+/// AUTH-2.43, ahead of item 1 as the read's refusal stands ahead of every
+/// parse); the bytes decode as UTF-8 (else `NotUtf8`, item 1); the body is a
+/// JSON object of exactly `type`, the kind's entry array, and an OPTIONAL
+/// `sig` — a STRING the fold IGNORES whatever it holds (AUTH-2.13,
+/// AUTH-2.94), and no other member (AUTH-2.128, AUTH-2.129) — whose entries
+/// each parse and whose bytes ARE the canonical re-encoding of the value they
+/// spell (else `BadRecord`, AUTH-2.130 and item 2); then the entries are
+/// scanned in order for a duplicate (`DuplicateKey(n)` naming the 1-based
+/// REPEATING entry, item 3); and `Empty` is answered ONLY after a clean scan
+/// (item 4).
 ///
 /// Item 2 precedes item 3 BY CONSTRUCTION: the duplicate test runs only on
 /// entries the canonical compare has already admitted. It is one ordered-set
 /// insert per entry, never a search of the entries before it, so no record
 /// length makes the scan quadratic.
+///
+/// THE CAP AT THIS DOOR. Every body the fold parses has come through
+/// [`record_bytes`](crate::record_bytes), which refuses past
+/// [`MAX_RECORD_BYTES`] first, so the head check refuses nothing a fold can
+/// honor and moves no fold verdict. What it bounds is a caller holding bytes
+/// the read never capped — a record atom's own `insert` value, judged before
+/// any link names it, or an atom a reader fetched for itself — because
+/// `serde_json` builds its WHOLE tree before the first schema check, at close
+/// to a hundred times the body: a single-member object, seven bytes, is a
+/// whole B-tree leaf — room for eleven keys and eleven values, over six
+/// hundred bytes — beside the 32-byte `Value` that holds it. Under the cap
+/// that tree is about 12 MB; past it the tree grows with whatever the caller
+/// was handed — over half a gigabyte for an 8 MiB body — for a body refused at
+/// its first entry. The same cap is what makes "admitted by one rule whoever
+/// asks", below, hold at its edge: a body past it is one the fold refuses
+/// `too_large`.
 ///
 /// No verdict is delegated to `serde_json`: it answers only "is this a JSON
 /// value, and which" (AUTH-2.1). Everything a kind decides for itself is its
@@ -542,7 +566,14 @@ pub struct RecordValue<T> {
 /// admission sentence read from the other side.
 pub fn parse_record_value<T: RecordEntry>(bytes: &[u8]) -> Result<RecordValue<T>, PayloadError> {
     let schema = T::schema();
-    // AUTH-2.19 item 1 — UTF-8 before everything.
+    // THE RECORD CAP AT THIS DOOR (AUTH-1.18, AUTH-2.43), ahead of item 1 as
+    // the read's refusal stands ahead of every parse: no body the read
+    // delivers is past it, and `serde_json` below builds its whole tree
+    // before the first schema check.
+    if bytes.len() > MAX_RECORD_BYTES {
+        return Err(PayloadError::TooLarge);
+    }
+    // AUTH-2.19 item 1 — UTF-8 before every schema check.
     let text = core::str::from_utf8(bytes).map_err(|_| PayloadError::NotUtf8)?;
     // AUTH-2.1/AUTH-2.19 item 2 — parse to a GENERIC value; a non-JSON body,
     // a leading BOM, a lone surrogate, a trailing non-whitespace byte each
@@ -567,8 +598,8 @@ pub fn parse_record_value<T: RecordEntry>(bytes: &[u8]) -> Result<RecordValue<T>
     // reads it. BORROWED from `value` through the admission compare —
     // `canonical_record` wants a `&str` — and copied into the answer only once
     // the body is admitted, so a refused body — a depositor-chosen string the
-    // read's cap bounds only at 128 KiB (AUTH-2.43) — never pays for a copy of
-    // its `sig`.
+    // record cap above bounds only at 128 KiB — never pays for a copy of its
+    // `sig`.
     let sig = match obj.get("sig") {
         None => None,
         Some(Value::String(s)) => Some(s.as_str()),
@@ -585,14 +616,10 @@ pub fn parse_record_value<T: RecordEntry>(bytes: &[u8]) -> Result<RecordValue<T>
     // The vector is sized by what the entries PARSE to, never by what the
     // array CLAIMS: `entries_val.len()` is the depositor's count, and a body
     // whose every element is `1` refuses at entry 1 — a capacity taken from
-    // that count is reserved for entries never pushed. Under the READ's cap
-    // (AUTH-2.43) that costs at most a doubling of what `serde_json` already
-    // holds; but the cap is the read's and not this parser's, so a caller
-    // reaching here without `record_bytes` (AUTH-2.37's non-folding reader)
-    // sizes the allocation from the body alone, where a large enough count
-    // ABORTS rather than answering `BadRecord`. The growth given up is eleven
-    // reallocations under 128 KiB: no record this parser admits carries more
-    // than ~1,955 entries, the canonical spelling's smallest entry being the
+    // that count is reserved for entries never pushed, up to a doubling of
+    // what `serde_json` already holds under the cap above. The growth given up
+    // is eleven reallocations: no record this parser admits carries more than
+    // ~1,955 entries, the canonical spelling's smallest entry being the
     // retirement's 67 bytes.
     let mut entries: Vec<T> = Vec::new();
     for entry in entries_val {
@@ -641,7 +668,9 @@ fn parse_record<T: RecordEntry>(bytes: &[u8]) -> Result<Vec<T>, PayloadError> {
 /// promise that fixes a fingerprint's anchor flag within one record (I9,
 /// AUTH-2.104).
 ///
-/// The record cap is the READ's, never this parser's (AUTH-2.43).
+/// A body past [`MAX_RECORD_BYTES`] is `TooLarge` at the head, ahead of item
+/// 1 — the read's own cap (AUTH-2.43), which every body the fold parses has
+/// already passed ([`parse_record_value`]'s card).
 pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
     parse_record::<Enrollment>(bytes)
 }
@@ -670,10 +699,11 @@ pub fn parse_retire(bytes: &[u8]) -> Result<Vec<Fingerprint>, PayloadError> {
 /// bytes that need not be text (`NotUtf8`); nothing an encoder emits is ever
 /// one of those.
 ///
-/// PRECONDITION — `enrollments` is NON-EMPTY and no two entries carry the same
-/// key: [`parse_enroll`]'s POSTCONDITION read from the other side. Outside that
-/// domain this function still answers a record — it emits what it is given and
-/// re-checks nothing — but NO parser admits it.
+/// PRECONDITION — `enrollments` is NON-EMPTY, no two entries carry the same
+/// key, and the record spelled is at most [`MAX_RECORD_BYTES`]:
+/// [`parse_enroll`]'s POSTCONDITION read from the other side, and its head.
+/// Outside that domain this function still answers a record — it emits what
+/// it is given and re-checks nothing — but NO parser admits it.
 ///
 /// POSTCONDITION — within it, `parse_enroll(encode_enroll(x).as_bytes())` is
 /// `Ok(x)` over the whole [`Enrollment`] domain per entry, and
@@ -686,8 +716,9 @@ pub fn encode_enroll(enrollments: &[Enrollment]) -> String {
 /// AUTH-2.18/AUTH-2.130 — encode a retirement record, as TEXT like
 /// [`encode_enroll`]; lowercase hex (AUTH-2.17), no `sig` member.
 ///
-/// PRECONDITION — `fps` is NON-EMPTY and DUPLICATE-FREE, [`parse_retire`]'s
-/// POSTCONDITION read from the other side.
+/// PRECONDITION — `fps` is NON-EMPTY and DUPLICATE-FREE, and the record
+/// spelled is at most [`MAX_RECORD_BYTES`]: [`parse_retire`]'s POSTCONDITION
+/// read from the other side, and its head.
 ///
 /// POSTCONDITION — within it, `parse_retire(encode_retire(x).as_bytes())` is
 /// `Ok(x)` (I1, AUTH-2.89).

@@ -2,11 +2,12 @@
 //! the design record §7.3 (i), D12, D25, r6-2a): one end-to-end walk over
 //! every kind of row, Π and the claim boundary read off the feed alone, the
 //! attest store's crash honesty and its keep below the reclaim floor, and
-//! D12 on a record deposit's rows — its two above the claim, and its atom
-//! below it, where nothing is signed. The seeded flow, the feed readers,
-//! the per-kind term checks and the reclaim helpers are the parent's.
+//! D12 on a record deposit's rows — its two above the claim, its atom below
+//! it, where nothing is signed, and an atom past the record cap, which is no
+//! record. The seeded flow, the feed readers, the per-kind term checks and
+//! the reclaim helpers are the parent's.
 
-use skep_identity::{canonical_record, Enrollment, Fingerprint};
+use skep_identity::{canonical_record, Enrollment, Fingerprint, MAX_RECORD_BYTES};
 
 use super::*;
 
@@ -552,5 +553,46 @@ fn below_the_claim_a_record_carrying_a_sig_keeps_its_rows_key() {
         "nothing is signed below the claim: {e}"
     );
     assert_absent(&e, &["attest"], "a row below the claim");
+    sd.shutdown();
+}
+
+/// A RECORD ATOM PAST THE RECORD CAP IS NO RECORD (AUTH-1.18;
+/// `record_deposit_carries_sig`): above the claim, a declared enrolment atom
+/// spelling a canonical record WITH a `sig` but past `MAX_RECORD_BYTES`
+/// lands — the check stands aside for a declared deposit of a credential
+/// kind (D26) — and its row serves the session's `key`, as an atom that is
+/// no record does: the record parse refuses it `too_large` at its own head,
+/// as the read refuses its link, so its `sig` covers no position. The same
+/// shape under the cap drops the `key`
+/// (`both_rows_of_a_record_deposit_carry_neither_key_nor_attest_and_a_sig_less_atom_keeps_its_key`).
+#[test]
+fn above_the_claim_a_record_atom_past_the_cap_keeps_its_rows_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    // Thirty-one label-free tag-1 entries and a tag-1 `sig` member spell
+    // 124,589 + 6,755 = 131,344 bytes, past the 131,072 the cap admits.
+    let entries: Vec<Enrollment> = (100u8..131)
+        .map(|n| Enrollment::new(public_key_of(&distinct_key(n)), false, None).expect("no label"))
+        .collect();
+    let record = canonical_record(&entries, Some(&hex(&[0xab; 3373])));
+    assert!(record.len() > MAX_RECORD_BYTES, "fixture: past the cap");
+    let past = json_atom(&record);
+    let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
+    let (_, e) = feed_entry(
+        port,
+        &signed,
+        "a record atom past the cap",
+        &format!(
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{past}}}],"deposit":"{T_ENROLL}"}}"#
+        ),
+    );
+    assert_eq!(
+        e["key"].as_str(),
+        Some(fingerprint_of(&device_key()).as_str()),
+        "an atom past the cap is no record: its row serves the session's key: {e}"
+    );
+    assert_absent(&e, &["attest"], "a record deposit's atom");
     sd.shutdown();
 }

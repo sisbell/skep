@@ -184,12 +184,13 @@ pub(crate) fn successor_link(
 /// therefore speaks first; and where that gate passes after all — the window
 /// between the snapshot this build reads and the write's commit — the slot is
 /// refused for the budget it crossed rather than deposited short of what the
-/// client asked. Past the crossing the walk resolves no further spec while
-/// still judging each one's shape and registration. Those faults are the
-/// request's own and the registry's, so they must speak alike wherever an
-/// unconsulted source crossed a budget ahead of them; a walk that ended at the
-/// crossing would let a later spec's fault speak or not by where that
-/// happened.
+/// client asked, while a slot under both budgets is deposited there as built,
+/// from sources the door never consulted (`consult_write`'s STALENESS). Past
+/// the crossing the walk resolves no further spec while still judging each
+/// one's shape and registration. Those faults are the request's own and the
+/// registry's, so they must speak alike wherever an unconsulted source crossed
+/// a budget ahead of them; a walk that ended at the crossing would let a later
+/// spec's fault speak or not by where that happened.
 ///
 /// PRECEDENCE within the slot, since several specs may be wrong and exactly
 /// one answer goes back: the specs are walked in order and the FIRST offending

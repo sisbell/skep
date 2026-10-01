@@ -1,5 +1,6 @@
-//! The ephemeral session→principal binding (§6): [`SessionId`] and the
-//! [`Sessions`] table that mints, holds and retires them. M10's only
+//! The ephemeral session→principal binding (§6): [`SessionId`], the
+//! [`Sessions`] table that binds, holds and retires them, and the one counter
+//! every table in the process mints them from. The bindings are M10's only
 //! authoritative state, and authoritative only for the uptime — nothing here
 //! is journaled, snapshotted or replayed.
 
@@ -14,6 +15,14 @@ use skep_namespace::PrincipalId;
 /// no `open` mints, and the transport injects them from the connection's
 /// authenticated binding — a `SessionId` is never read off the wire (the §6
 /// non-forgeability precondition), so nothing outside M10 constructs one.
+///
+/// An id names a binding on the surface that minted it and on no other. Every
+/// surface in the process mints from ONE counter, so no two surfaces ever
+/// mint the same id, and an id presented to a surface that did not mint it is
+/// one that surface never opened: it resolves to no principal there — a read
+/// under it is answered as the guest, a write refused `Unauthenticated` — and
+/// closing it there retires nothing. [`SessionId::GUEST`] alone means the
+/// same on every surface.
 ///
 /// `#[must_use]`: an id is the only handle on the binding it names, and
 /// `OperationSurface::close_session` needs it, so dropping one leaves a
@@ -43,36 +52,44 @@ impl SessionId {
 impl SessionId {
     /// An id a TEST picks rather than one `open` minted — for a test that
     /// needs a never-opened session no caller could name. The test picks a
-    /// value past every id its surface has opened; `0` is refused, being
-    /// [`SessionId::GUEST`], the one never-opened id a caller CAN name.
+    /// value its own surface has not opened: a table holds only the ids it
+    /// minted, so no other table's minting can bind it there. `0` is refused,
+    /// being [`SessionId::GUEST`], the one never-opened id a caller CAN name.
     pub(crate) fn unminted(n: u64) -> SessionId {
         assert_ne!(n, 0, "0 is `SessionId::GUEST`, which a caller names without a test hook");
         SessionId(n)
     }
 }
 
-/// Which principal each open session speaks for, and the counter that mints
-/// the handles (§6). Ids are unique within one M10 uptime (reset on restart;
-/// clients re-authenticate) and retired permanently by [`Sessions::close`] —
-/// never reissued within the uptime.
+/// The one counter every [`Sessions`] table in the process mints from (§6).
+/// A static and not a field of the table: a counter per table would hand two
+/// tables the same numbers, and each would then answer for the other's ids
+/// with bindings of its own. It starts past 0, which is [`SessionId::GUEST`]
+/// and no `open` mints, and only moves forward, so no id is minted twice in
+/// the uptime and no table ever binds an id another minted.
+static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
+
+/// Which principal each open session speaks for (§6). Its ids come from
+/// [`NEXT_SESSION`], so they are unique across every table in the process for
+/// the uptime (reset on restart; clients re-authenticate), the table holds
+/// only the ids it minted itself, and each is retired permanently by
+/// [`Sessions::close`] — never reissued within the uptime.
 ///
 /// Non-poisoning lock (§7): a panic while the map is held must not break
 /// `execute`'s Total contract.
 pub(crate) struct Sessions {
     bindings: Mutex<HashMap<SessionId, PrincipalId>>,
-    next_id: AtomicU64,
 }
 
 impl Sessions {
     pub(crate) fn new() -> Sessions {
-        // 0 is `SessionId::GUEST`, which no `open` mints: the counter starts
-        // past it.
-        Sessions { bindings: Mutex::new(HashMap::new()), next_id: AtomicU64::new(1) }
+        Sessions { bindings: Mutex::new(HashMap::new()) }
     }
 
-    /// Record the binding and hand back a fresh id.
+    /// Record the binding under a fresh id from the process's one counter,
+    /// and hand the id back.
     pub(crate) fn open(&self, principal: PrincipalId) -> SessionId {
-        let session = SessionId(self.next_id.fetch_add(1, Ordering::Relaxed));
+        let session = SessionId(NEXT_SESSION.fetch_add(1, Ordering::Relaxed));
         self.bindings.lock().insert(session, principal);
         session
     }
@@ -96,7 +113,8 @@ mod tests {
     use super::*;
 
     /// §6: distinct ids per open, the binding readable while open and gone
-    /// after close, and a never-opened id unbound.
+    /// after close, and a never-opened id unbound — one the process's counter
+    /// is nowhere near, since every table in the test process draws from it.
     #[test]
     fn ids_are_distinct_and_bindings_retire() {
         let sessions = Sessions::new();
@@ -108,7 +126,25 @@ mod tests {
         sessions.close(s1);
         assert_eq!(sessions.principal_of(s1), None);
         assert_eq!(sessions.principal_of(s2), Some(PrincipalId(2)));
-        assert_eq!(sessions.principal_of(SessionId(9999)), None);
+        assert_eq!(sessions.principal_of(SessionId(u64::MAX)), None);
+    }
+
+    /// §6: an id names a binding on the table that minted it and on no
+    /// other. Every table draws from the process's one counter, so an id
+    /// another table minted is one this table never opened: it resolves to no
+    /// principal here, and closing it here retires nothing. Two fresh tables
+    /// are the case that matters — each one's FIRST id — since a counter per
+    /// table would hand both the same number, and each would then answer for
+    /// the other's id with its own binding.
+    #[test]
+    fn an_id_another_table_minted_is_unbound_here() {
+        let (here, elsewhere) = (Sessions::new(), Sessions::new());
+        let mine = here.open(PrincipalId(1));
+        let theirs = elsewhere.open(PrincipalId(2));
+        assert_ne!(mine, theirs, "two tables never mint one id");
+        assert_eq!(here.principal_of(theirs), None, "another table's id is bound to no one here");
+        here.close(theirs);
+        assert_eq!(here.principal_of(mine), Some(PrincipalId(1)), "closing it retired nothing");
     }
 
     /// §6 under the concurrency the surface is shared across (§8): a transport

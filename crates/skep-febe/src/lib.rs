@@ -67,7 +67,10 @@
 //! directly:
 //!
 //! * a write's `at` is the coordinate it COMMITTED at (A1/A7) — the operation
-//!   is in the log at that position and at every later one;
+//!   is in the log at that position and at every later one; a write answered
+//!   with an incumbent it deduplicated against commits nothing, and its `at`
+//!   is the coordinate of the base it found that incumbent in, where the
+//!   incumbent already stands ([`Response::AckAddr`]);
 //! * a read's `as_of` is the coordinate of the snapshot it ANSWERED from
 //!   (A2/V1) — the answer reflects every write committed at or before that
 //!   position, and none after it.

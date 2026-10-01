@@ -540,7 +540,9 @@ impl<W: FebeWorld> OperationSurface<W> {
     /// no ownership verdict of its own; it only declines to judge a source
     /// ahead of one. Registration of the SOURCE stands ahead too (PUB-6.37), by
     /// [`ReadPredicate`]'s contract: an unregistered source passes here and
-    /// takes the store's `source_not_registered`.
+    /// takes the store's `source_not_registered`. Each store answer named here
+    /// is its commit base's, which a write landing after this door's snapshot
+    /// can change (STALENESS, below).
     ///
     /// PUB-6.36'S SLOT 5 AHEAD OF ITS SLOT 6, and how this door reaches it
     /// (PUB round 2, lane 4.2, F3; PUB-2.11, PUB-6.38): the model's refusals
@@ -585,24 +587,41 @@ impl<W: FebeWorld> OperationSurface<W> {
     /// PRIOR snapshot, not the base the write commits on. For four of the five
     /// source-reading writes — `copy`, `version`, `make_link`, `edit_link` —
     /// this door is the SOLE enforcement of PUB-6.23: their stores carry no
-    /// `withheld` verdict, so what is decided here is what is enforced, and it
-    /// is decided at that snapshot rather than at the operation's linearization
-    /// point. Most of what the door reads survives the gap because its state is
-    /// MONOTONE, and can therefore only produce a false REFUSAL and never a
-    /// wrong admission: the registry only grows (every `M3Rec` variant is an
-    /// insert), publication never transitions (PUB-1.9), so `published_target`
-    /// cannot go stale at all, and ω is stable because a fresh delegation
-    /// cannot reassign an allocated prefix. A GRANT is the clause that is not
-    /// monotone — it is revocable — so a source readable here may be unreadable
-    /// when the write commits, and the gap is REQUEST-SIZED: the consult
-    /// itself, up to three full slots of specs, and for `edit_link` the whole
-    /// successor build besides. What bounds the consequence is not this door:
-    /// the arrangement a late `copy` or `version` produces reads back masked
-    /// per run by origin (PUB-6.41), and the I-extents a late `make_link`
-    /// deposits are not secret (PUB-6.24). Closing the gap means the shape
-    /// `publish` already has — the visibility class evaluated inside the
-    /// store's own transaction (`Vstream::publish`) — which is those four
-    /// stores' signatures to change, not this door's.
+    /// `withheld` verdict (M5 states the gate as COPY's and VERSION's REQUIRES,
+    /// which this consult discharges), so what is decided here is what is
+    /// enforced, and it is decided at that snapshot rather than at the
+    /// operation's linearization point. The gap opens only where a write
+    /// commits between the two — another `execute` in flight, which §8
+    /// invites, or a writer outside the surface — and three of the door's
+    /// readings can then ADMIT what the commit base would refuse. REGISTRATION
+    /// grows, and the door reads it permissively twice: the deferral judges
+    /// NOTHING where a destination is not yet registered, so a destination
+    /// registered in the window — the caller's own pipelined `create` is
+    /// enough — turns a write the door left to the store's gate into one that
+    /// store admits with its sources never consulted and its link-address
+    /// arguments never judged, COPY's REQUIRES undischarged; and the
+    /// predicate's fail-open reads a document not yet registered as readable,
+    /// though a write in the window may register it private and fill it. A
+    /// GRANT is revocable, so a source readable here may be unreadable when the
+    /// write commits. What cannot go stale: publication never transitions
+    /// (PUB-1.9), so `published_target` cannot, and ω over a registered
+    /// document is stable, no delegation seating a prefix between an account
+    /// and its documents. The window spans the consult itself — up to three
+    /// full slots of specs, and for `edit_link` the whole successor build,
+    /// which the caller sizes — and the write's wait for M2's applier lock,
+    /// where any other write may commit. What bounds the consequence is not
+    /// this door: the arrangement a late `copy` or `version` produces reads
+    /// back masked per run by origin (PUB-6.41), and the I-extents a late
+    /// `make_link` or `edit_link` deposits are not secret (PUB-6.24); a late
+    /// link-address argument is bounded by nothing, the store's residence
+    /// check then confirming a link homed where the caller cannot read
+    /// (PUB-6.6). Closing the gap means the shape `publish` already has — the
+    /// visibility class evaluated inside the store's own transaction
+    /// (`Vstream::publish`), over the sources these writes read and the links
+    /// `edit_link` and `assert_sup` name — which is M5's and M7's to change,
+    /// not this door's; until then the door holds exactly only where nothing
+    /// commits in the window, which [`OperationSurface::execute`] states as
+    /// concurrency's price.
     ///
     /// [`OperationSurface::readable_by`]: OperationSurface::readable_by
     pub(super) fn consult_write(

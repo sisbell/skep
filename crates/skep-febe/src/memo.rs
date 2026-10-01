@@ -75,10 +75,12 @@ struct TaggedAck {
     ack: CommittedAck,
 }
 
-/// The memo itself (§7). Bounded on BOTH axes that make up its resident
-/// size: [`DEFAULT_MEMO_CAPACITY`] entries, each holding at most
-/// [`MAX_REQ_ID_BYTES`] of client-chosen key. Eviction is LRU and costs only
-/// a re-execution, which is what "best effort" means here.
+/// The memo itself (§7). Bounded on both axes a CLIENT chooses:
+/// [`DEFAULT_MEMO_CAPACITY`] entries, each keyed by at most
+/// [`MAX_REQ_ID_BYTES`] of client-chosen key, beside one acknowledgment of at
+/// most two store-minted addresses, sized by what they acknowledge. Eviction
+/// is LRU and costs only a re-execution, which is what "best effort" means
+/// here.
 ///
 /// Non-poisoning lock (§7): a panic while the memo is held must not break
 /// `execute`'s Total contract.
@@ -94,7 +96,7 @@ impl RetryMemo {
     /// Memoize one committed-write acknowledgment under this session's key.
     /// Takes the `ReqId` because the key keeps it — which is why an id past
     /// [`MAX_REQ_ID_BYTES`] is declined here rather than truncated or
-    /// admitted: the key's bytes are the second factor of the memo's
+    /// admitted: the key's bytes are the second factor of the memo's key
     /// retention bill, and this is the check that bounds them for every
     /// caller, transport-parsed or hand-assembled.
     ///
@@ -207,7 +209,7 @@ mod tests {
     }
 
     /// §7: the memo's OTHER bound. A key is retained for the life of its
-    /// entry, so the bill is (capacity × key bytes) and both factors are
+    /// entry, so the key bill is (capacity × key bytes) and both factors are
     /// bounded here: a key past [`MAX_REQ_ID_BYTES`] is declined, one exactly
     /// at the bound is memoized, and declining costs a re-execution — the
     /// same thing eviction costs.

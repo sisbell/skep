@@ -148,12 +148,15 @@ where
 
     // ── session binding (M10-owned, ephemeral — §6) ──
 
-    /// Record the binding and return a fresh `SessionId`, unique within one
-    /// M10 uptime (reset on restart; clients re-authenticate). The caller
-    /// (transport) supplies the authenticated `PrincipalId`; unforgeability
-    /// of the id is the transport's precondition (§6): it must hold the
-    /// returned `SessionId` in the connection's authenticated state and inject
-    /// it into [`OperationSurface::execute`], never read one off the wire.
+    /// Record the binding and return a fresh `SessionId`, unique among the ids
+    /// every surface in this process mints for the uptime (reset on restart;
+    /// clients re-authenticate) — so it names this binding on THIS surface
+    /// alone, and any other surface, never having opened it, resolves it to no
+    /// principal ([`SessionId`]). The caller (transport) supplies the
+    /// authenticated `PrincipalId`; unforgeability of the id is the
+    /// transport's precondition (§6): it must hold the returned `SessionId` in
+    /// the connection's authenticated state and inject it into
+    /// [`OperationSurface::execute`], never read one off the wire.
     pub fn open_session(&self, principal: PrincipalId) -> SessionId {
         self.sessions.open(principal)
     }
@@ -185,6 +188,10 @@ where
     /// principals, because the memo's key confines a `ReqId` to the session
     /// that committed under it.
     ///
+    /// An id this surface did not mint — another surface's, or
+    /// [`SessionId::GUEST`] — names no binding here, so closing it retires
+    /// nothing and sweeps nothing ([`SessionId`]).
+    ///
     /// Calling this on connection drop is a transport obligation: nothing else
     /// retires a binding.
     pub fn close_session(&self, session: SessionId) {
@@ -212,10 +219,23 @@ where
     /// and it is written here for the rest.
     ///
     /// Reentrant & `Sync` — the transport may call it concurrently for
-    /// pipelined requests (§8), and that concurrency is the caller's to use.
-    /// Two requests in flight at once under one `ReqId` are two operations:
-    /// the retry memo is read at step (a) and written at step (d), with the
-    /// whole dispatch in between, so both miss and both execute (§7).
+    /// pipelined requests (§8), and that concurrency is the caller's to use,
+    /// at two costs. Two requests in flight at once under one `ReqId` are two
+    /// operations: the retry memo is read at step (a) and written at step
+    /// (d), with the whole dispatch in between, so both miss and both execute
+    /// (§7). And a write's door — PUB-6.23's source gate over
+    /// [`Op::source_arguments`], PUB-6.6's absence rule over the links
+    /// `edit_link` and `assert_sup` name — is judged off a snapshot pinned
+    /// AHEAD of the write's own transaction, so another write that commits
+    /// between the two can let this one through on a stale judgment or on
+    /// none: one that registers the destination of a write the door left to
+    /// the store's own gate (whose sources and link arguments the door then
+    /// never judged), registers a document the door read as fail-open
+    /// readable, or revokes a grant the door read as standing. The door holds
+    /// exactly where nothing commits in that window — a transport that needs
+    /// it so serializes its writes around this call, as skepd does, and lets
+    /// no writer outside the surface register a document or revoke a grant
+    /// meanwhile.
     ///
     /// AUTHORIZATION: `session` is resolved on BOTH paths, for two different
     /// purposes, and the difference is the one a transport author needs.
@@ -275,6 +295,7 @@ where
     /// save the one shape [`ReadPredicate`] records.
     ///
     /// [`Op::doc_arguments`]: crate::Op::doc_arguments
+    /// [`Op::source_arguments`]: crate::Op::source_arguments
     /// [`Op::ReadLink`]: crate::Op::ReadLink
     /// [`Op::FollowLink`]: crate::Op::FollowLink
     /// [`Op::Project`]: crate::Op::Project
@@ -285,7 +306,9 @@ where
     /// itself:
     ///
     /// * NON-FORGEABILITY (§6): `session` MUST originate in the transport's
-    ///   connection state, never a wire-supplied value.
+    ///   connection state, never a wire-supplied value. An id another surface
+    ///   minted forges nothing here: this surface never opened it, so it
+    ///   resolves to no principal ([`SessionId`]).
     /// * SIZE: M10 bounds almost nothing it is handed. [`Codec::parse`]
     ///   states exactly what it measures, which operations' work their
     ///   request's size does not bound, and what a route owes; a transport

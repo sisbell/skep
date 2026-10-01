@@ -161,10 +161,10 @@ pub struct UniversalIndexRow {
 ///
 /// Named for the reason M6 names `RetrievalWorld` and M7 `LinkWorld`: one word for
 /// the seam, so a consumer generic over the same world writes one bound
-/// rather than six. Blanket-implemented, so an engine that implements the
-/// accessors gets this for free; the record lift each write path needs
-/// (`W::Record: From<M3Rec>` and its three siblings) stays on the impl that
-/// requires it.
+/// rather than every trait beneath it. Blanket-implemented, so an engine that
+/// implements the accessors gets this for free; the record lift each write
+/// path needs (`W::Record: From<M3Rec>` and its three siblings) stays on the
+/// impl that requires it.
 pub trait FebeWorld:
     WorldState + HasM3 + HasM5 + HasLinks + HasContent + ReadableWorld + PublicationWorld
 {

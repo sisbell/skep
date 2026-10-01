@@ -84,15 +84,17 @@ pub struct ReqId(pub Vec<u8>);
 /// The bill this bounds is M10's, so the number is M10's. A committed write's
 /// key stays RESIDENT for the life of its memo entry — until eviction, or
 /// until [`OperationSurface::close_session`] purges the session — so the
-/// memo's retention is (memo capacity) × (this cap), and both factors have
-/// to be finite for the product to be. With this one uncapped the other
+/// memo's KEY retention is (memo capacity) × (this cap), and both factors
+/// have to be finite for the product to be. With this one uncapped the other
 /// factor would be whatever body size the transport admits: one session's
 /// worth of committed writes retaining gigabytes that do not clear when the
 /// caller stops, unlike every CPU cost on this surface.
 ///
 /// 256 bytes is far above any key a client needs — a UUID is 36 characters,
-/// a hex-encoded 256-bit value 64 — and puts the retained bill at a quarter
-/// megabyte against the memo's 1024 entries.
+/// a hex-encoded 256-bit value 64 — and puts the retained key bill at a
+/// quarter megabyte against the memo's 1024 entries; the acknowledgment beside
+/// each key is the store's, sized by the addresses it carries, and no part of
+/// this cap's bill.
 ///
 /// A transport refuses an over-long id at parse, which is the first check and
 /// the one that tells the client. [`crate::OperationSurface`] holds the
@@ -274,7 +276,11 @@ pub enum Op {
     /// refusals ([`SuccessorSpec`]), then M7's. Where they are not, the door
     /// judges nothing: the successor's request-shape and registration
     /// refusals still speak, ahead of M7's home gate, which then answers
-    /// `HomeNotRegistered`, or `NotOwner` naming the home that failed.
+    /// `HomeNotRegistered`, or `NotOwner` naming the home that failed — at
+    /// the commit base, so a home registered after the door's snapshot passes
+    /// it ([`OperationSurface::execute`]).
+    ///
+    /// [`OperationSurface::execute`]: crate::OperationSurface::execute
     EditLink { original: Address, successor: SuccessorSpec, d_s: Address, d_a: Address },
     // ── raw link reads (→ M7) ──
     /// Σ.L(a) verbatim. A link whose HOME DOCUMENT this caller may not read
@@ -288,6 +294,14 @@ pub enum Op {
     /// `⊥` side of that very distinction: `Err(Invalid)`, exactly as an
     /// address no link occupies (PUB-6.6), never `Ok(⟨⟩)`, which stays a
     /// PRESENT link's empty slot.
+    ///
+    /// `slot` is M7's 1-based numbering — [`FROM`], [`TO`], [`TYPE`] on a
+    /// triple — and a slot outside the link's arity, `0` and `usize::MAX`
+    /// among them, is `⊥` too: `Err(Invalid)`, an answer and never a fault.
+    ///
+    /// [`FROM`]: crate::FROM
+    /// [`TO`]: crate::TO
+    /// [`TYPE`]: crate::TYPE
     FollowLink { a: Address, slot: usize },
     // ── content/provenance reads (→ M6) ──
     /// RETRIEVEV (ASN-0115). Each spec's NAMED `doc` is consulted, so an
@@ -336,6 +350,10 @@ pub enum Op {
     /// the caller cannot read takes the reader's own absence answer instead.
     /// A `Withheld` here is therefore always about `d`, and never a statement
     /// about `a`.
+    ///
+    /// `slot` is numbered as [`Op::FollowLink`]'s, and a slot outside the
+    /// link's arity answers `NotALink`, as an absent link does — M8 answers
+    /// the two alike.
     Project { a: Address, slot: usize, d: Address },
     /// Compound "arrangement-reachable AND active". The DUAL ROW, as
     /// [`Op::Project`]'s: `d` is the doc-argument and an unreadable one
@@ -475,13 +493,16 @@ pub enum Op {
 /// never turns on what a source the caller may not read holds; should that
 /// gate pass after all — a home registered in the window between M10's
 /// snapshot and the commit — it is M7 that answers `SlotTooLarge`, with no
-/// site. The type slot's address form is the exception: its count is the
-/// request's own, so it is held to the span budget whoever asks.
+/// site, and a successor under both budgets commits as built, its sources
+/// never consulted ([`OperationSurface::execute`] states that window). The
+/// type slot's address form is the exception: its count is the request's own,
+/// so it is held to the span budget whoever asks.
 ///
 /// [`FROM`]: crate::FROM
 /// [`TO`]: crate::TO
 /// [`TYPE`]: crate::TYPE
 /// [`MAX_SLOT_SPANS`]: crate::MAX_SLOT_SPANS
+/// [`OperationSurface::execute`]: crate::OperationSurface::execute
 ///
 /// `Debug` by derive, where the [`Op`] that carries it writes its own: no
 /// `Val` reaches this payload. So a client that meets an [`IllFormedSpec`] at

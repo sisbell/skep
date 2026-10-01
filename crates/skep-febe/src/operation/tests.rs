@@ -287,6 +287,32 @@ fn closed_session_write_is_unauthenticated() {
     assert_eq!(rej.disposition, Disposition::Permanent);
 }
 
+/// §6: an id names a binding on the surface that minted it and on no other.
+/// Every surface in the process mints from one counter, so an id another
+/// surface minted is one this surface never opened: a write under it is
+/// refused `Unauthenticated` before any transaction, and closing it here
+/// retires nothing. Two fresh surfaces are the case that matters — each
+/// one's FIRST id, both bootstrap sessions — since a counter per surface
+/// would hand both the same number, and this surface would then commit the
+/// write under its own bootstrap binding.
+#[test]
+fn an_id_another_surface_minted_is_unbound_here() {
+    let minted_elsewhere = surface().bootstrap_session();
+    let febe = surface();
+    let own = febe.bootstrap_session();
+    assert_ne!(own, minted_elsewhere, "two surfaces never mint one id");
+    let node = |n: u32| Op::RegisterNode { addr: tum(&[1, n]) };
+    let before = febe.log_position();
+    let rej = rejected(febe.execute(minted_elsewhere, Request::from(node(5))));
+    assert_eq!(rej.code, RejectCode::Unauthenticated, "the foreign id is bound to no one here");
+    assert_eq!(febe.log_position(), before, "and reaches no transaction");
+    febe.close_session(minted_elsewhere);
+    assert!(
+        matches!(febe.execute(own, Request::from(node(6))), Response::AckAddr { .. }),
+        "closing the foreign id retired nothing here"
+    );
+}
+
 /// §6/§Invariants: the step-(b) gate is ONE uniform rule — a write
 /// requires a bound session, full stop — so it holds for every write,
 /// `RegisterNode` (whose principal M3 ignores) included, and for every

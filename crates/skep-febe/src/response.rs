@@ -139,7 +139,21 @@ pub struct UniversalGrant {
 pub enum Response {
     /// delete/copy/rearrange — committed at `at` (A7).
     Ack { at: Seq },
-    /// create/insert/version/makelink/emit/nullify/sup/fork/delegate/node.
+    /// A write acknowledged with one ADDRESS (A7). What `addr` names is the
+    /// op's: the document minted (create_new_document, fork); the document
+    /// `version` minted — the next member of the source's chain where the
+    /// caller owns the source, a fresh document in the caller's own account
+    /// where it does not (PUB-2.14); the chain member `publish` appended
+    /// (PUB-2.37); the account delegated (delegate); the node admitted
+    /// (register_node); the I-address of the first value placed (insert, whose
+    /// values M5 places as ONE run from there); the record (make_link, with or
+    /// without its `replaces` link); the tuple (emit), the retraction
+    /// (nullify) or the claim (assert_sup) deposited. `at` is the coordinate
+    /// the write committed at — save that those last three may instead answer,
+    /// on a DEDUP HIT, the incumbent this principal can read (PUB-6.25,
+    /// PUB-6.26): nothing commits, and `at` is then the coordinate of the base
+    /// the incumbent was found in ([the two
+    /// coordinates](crate#the-two-coordinates)).
     AckAddr { addr: Address, at: Seq },
     /// editlink: the successor link and its supersession claim.
     AckEdit { successor: Address, claim: Address, at: Seq },

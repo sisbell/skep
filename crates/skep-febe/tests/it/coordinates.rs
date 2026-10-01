@@ -3,7 +3,9 @@
 //! reports the snapshot it answered from (A2/V1). One test per side, each a
 //! law over its half of the partition rather than a sample of it — a wrong
 //! coordinate is the failure a correct answer hides, because a client's
-//! read-your-writes and its pagination both key off nothing else.
+//! read-your-writes and its pagination both key off nothing else — and one
+//! for the write that commits nothing: answered with an incumbent it
+//! deduplicated against, it acknowledges at the base it found it in.
 
 use crate::common;
 
@@ -42,6 +44,28 @@ fn every_write_acks_at_the_coordinate_it_committed() {
     let mut seen: Vec<OpKind> = Vec::new();
     commit_every_write(&fx, None, |kind, _, r| assert_committed(&fx, kind, r, &mut seen));
     assert_eq!(seen.len(), 15, "the write half of the partition is 15 operations: {seen:?}");
+}
+
+/// A1 on the zero-step write (`Response::AckAddr`): one answered with an
+/// incumbent it deduplicated against commits nothing, and acknowledges at the
+/// coordinate of the base it found that incumbent in — the committed head when
+/// it ran, NOT the incumbent's own commit — so a read at or past `at` reflects
+/// it. A write lands between the two emits, which is what tells those two
+/// coordinates apart.
+#[test]
+fn a_deduplicated_write_acknowledges_at_the_base_it_found_its_incumbent_in() {
+    let fx = setup();
+    let d = create_doc(&fx);
+    let (start, _) = insert3(&fx, &d);
+    let emit = || Op::Emit { home: d.clone(), ty: pred_def_ty(), from: start.clone(), to: vec![] };
+    let (incumbent, committed_at) = ack_addr(ex(&fx.febe, fx.user, emit()));
+    let _ = create_doc(&fx); // a later write moves the head past the incumbent's commit
+    let head = fx.febe.log_position();
+    assert!(head > committed_at, "premise: the head has moved past the incumbent");
+    let (again, at) = ack_addr(ex(&fx.febe, fx.user, emit()));
+    assert_eq!(again, incumbent, "the incumbent answers");
+    assert_eq!(at, head, "at the base it was found in, not the incumbent's commit");
+    assert_eq!(fx.febe.log_position(), head, "and nothing committed");
 }
 
 /// A2/V1: `as_of` on EVERY read is the coordinate of the snapshot the answer

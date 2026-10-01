@@ -138,11 +138,7 @@ fn the_idempotency_id_meets_its_cap_at_both_ends() {
     let req = parse_request(&frame(&at_cap)).expect("an id at the cap parses");
     assert_eq!(req.id.map(|ReqId(b)| b.len()), Some(MAX_REQ_ID_BYTES));
     let over = "k".repeat(MAX_REQ_ID_BYTES + 1);
-    // `Request` derives no Debug upstream, so unwrap the failure by hand.
-    let e = match parse_request(&frame(&over)) {
-        Err(e) => e,
-        Ok(_) => panic!("one byte past the cap must not parse"),
-    };
+    let e = parse_request(&frame(&over)).expect_err("one byte past the cap must not parse");
     assert!(e.0.contains("wire cap"), "the refusal names the cap: {e}");
 }
 
@@ -346,17 +342,14 @@ fn an_attest_round_trips_on_the_checked_set_and_is_refused_off_it() {
     };
     let back = parse_request(&JsonCodec.marshal_request(&insert))
         .unwrap_or_else(|e| panic!("an attest on the checked set parses back: {e}"));
-    // `Request` derives no Debug upstream, so the equality is asserted bare.
-    assert!(back == insert, "and reproduces the request, the member included");
+    assert_eq!(back, insert, "and reproduces the request, the member included");
     let delete = Request {
         id: None,
         op: Op::Delete { doc, p: VPos::content(Nat::from(1u32)), width: Nat::from(1u32) },
         attest: Some(attest),
     };
-    let e = match parse_request(&JsonCodec.marshal_request(&delete)) {
-        Err(e) => e,
-        Ok(_) => panic!("an attest off the checked set must not parse"),
-    };
+    let e = parse_request(&JsonCodec.marshal_request(&delete))
+        .expect_err("an attest off the checked set must not parse");
     assert!(e.0.contains("unknown field 'attest'"), "{e}");
 }
 

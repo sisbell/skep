@@ -351,10 +351,9 @@ impl JsonCodec {
 }
 
 /// One parsed daemon-level frame: an M10 request, or the `key_set` read the
-/// daemon serves itself (AUTH-6.18–6.20). No `Debug`: M10's `Request`
-/// carries none, and both consumers match rather than print. The request
-/// rides boxed — it is an order of magnitude wider than the other arm, and
-/// this enum sits on every dispatch path.
+/// daemon serves itself (AUTH-6.18–6.20). No `Debug`: both consumers match
+/// rather than print. The request rides boxed — it is an order of magnitude
+/// wider than the other arm, and this enum sits on every dispatch path.
 pub(crate) enum DaemonOp {
     /// An M10 request whose `attest` is EMPTY whatever the frame carried,
     /// and beside it the `attest` member the frame PRESENTED — unverified,

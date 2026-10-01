@@ -21,7 +21,7 @@ use crate::op::{Op, ReqId, SuccessorSpec};
 use crate::publication::birth_version;
 use crate::reject::{Disposition, Rejection};
 use crate::response::{BirthVersion, CommittedAck};
-use crate::successor::successor_link;
+use crate::successor::{successor_link, Judgment};
 
 // ── a minimal assembled world (the composition contract in miniature) ──
 
@@ -274,7 +274,7 @@ fn closed_session_write_is_unauthenticated() {
     let s2 = febe.open_session(PrincipalId(2));
     assert_ne!(s1, s2);
     febe.close_session(s1);
-    let rej = rejected(febe.execute(s1, Request { id: None, op: insert_op(), attest: None }));
+    let rej = rejected(febe.execute(s1, Request::from(insert_op())));
     assert_eq!(rej.op, OpKind::Insert);
     assert_eq!(rej.code, RejectCode::Unauthenticated);
     assert_eq!(rej.disposition, Disposition::Permanent);
@@ -300,7 +300,7 @@ fn every_write_on_an_unbound_session_is_unauthenticated_before_any_transaction()
                 continue;
             }
             let kind = op.kind();
-            match febe.execute(session, Request { id: None, op, attest: None }) {
+            match febe.execute(session, Request::from(op)) {
                 Response::Rejected(rej) => {
                     assert_eq!(rej.op, kind, "the rejection names the op it refused");
                     assert_eq!(rej.code, RejectCode::Unauthenticated, "{kind:?} under {session:?}");
@@ -333,7 +333,7 @@ fn no_read_is_ever_rejected_for_an_unbound_session() {
             continue;
         }
         let kind = op.kind();
-        if let Response::Rejected(rej) = febe.execute(never_opened, Request { id: None, op, attest: None }) {
+        if let Response::Rejected(rej) = febe.execute(never_opened, Request::from(op)) {
             assert_eq!(rej.op, kind, "a refusal names the op it refused");
             assert_ne!(
                 rej.code,
@@ -356,19 +356,19 @@ fn a_poisoned_kernel_halts_writes_but_reads_continue() {
     let (febe, poisoned) = poisonable_surface();
     let s = febe.bootstrap_session();
     let node = |n: u32| Op::RegisterNode { addr: tum(&[1, n]) };
-    let control = febe.execute(s, Request { id: None, op: node(5), attest: None });
+    let control = febe.execute(s, Request::from(node(5)));
     assert!(matches!(control, Response::AckAddr { .. }), "the control commits");
 
     poisoned.store(true, Ordering::Relaxed);
     let before = febe.log_position();
     // Write: fails fast pre-dispatch.
-    let rej = rejected(febe.execute(s, Request { id: None, op: node(6), attest: None }));
+    let rej = rejected(febe.execute(s, Request::from(node(6))));
     assert_eq!(rej.code, RejectCode::Poisoned);
     assert_eq!(rej.disposition, Disposition::Halt);
     assert_eq!(febe.log_position(), before, "a halted write reaches no transaction");
     // Read: still served (M2 snapshots survive a poisoned kernel).
     let read = Op::NextAccountPrefix { parent: addr(&[1]) };
-    match febe.execute(s, Request { id: None, op: read, attest: None }) {
+    match febe.execute(s, Request::from(read)) {
         Response::MaybeAddr { addr, .. } => assert!(addr.is_some()),
         _ => panic!("read must still be served on a poisoned kernel"),
     }
@@ -392,8 +392,7 @@ fn a_poisoned_kernel_outranks_an_unbound_session() {
     febe.close_session(retired);
     poisoned.store(true, Ordering::Relaxed);
     for session in [retired, SessionId::GUEST] {
-        let rej =
-            rejected(febe.execute(session, Request { id: None, op: insert_op(), attest: None }));
+        let rej = rejected(febe.execute(session, Request::from(insert_op())));
         assert_eq!(
             rej.code,
             RejectCode::Poisoned,
@@ -420,10 +419,8 @@ fn only_committed_writes_are_memoized() {
     let write_id = ReqId(b"req-2".to_vec());
     let retired = febe.open_session(PrincipalId(3));
     febe.close_session(retired);
-    let r = febe.execute(
-        retired,
-        Request { id: Some(write_id.clone()), op: insert_op(), attest: None },
-    );
+    let r =
+        febe.execute(retired, Request { id: Some(write_id.clone()), ..Request::from(insert_op()) });
     assert!(matches!(r, Response::Rejected(_)));
     assert!(febe.memo.get(retired, &write_id, OpKind::Insert).is_none());
     // Nor does a read carrying one.
@@ -432,8 +429,7 @@ fn only_committed_writes_are_memoized() {
         s,
         Request {
             id: Some(read_id.clone()),
-            op: Op::NextAccountPrefix { parent: addr(&[1]) },
-            attest: None,
+            ..Request::from(Op::NextAccountPrefix { parent: addr(&[1]) })
         },
     );
     assert!(matches!(resp, Response::MaybeAddr { .. }));
@@ -453,7 +449,7 @@ fn a_memoized_ack_is_replayed_on_a_poisoned_kernel() {
     let id = ReqId(b"node-5".to_vec());
     let node = || Op::RegisterNode { addr: tum(&[1, 5]) };
     let (committed, committed_at) =
-        match febe.execute(s, Request { id: Some(id.clone()), op: node(), attest: None }) {
+        match febe.execute(s, Request { id: Some(id.clone()), ..Request::from(node()) }) {
             Response::AckAddr { addr, at } => (addr, at),
             _ => panic!("RegisterNode under the bootstrap session commits"),
         };
@@ -464,13 +460,16 @@ fn a_memoized_ack_is_replayed_on_a_poisoned_kernel() {
     // A fresh keyed write is halted at step (c) — the poison gate is live.
     let rej = rejected(febe.execute(
         s,
-        Request { id: Some(ReqId(b"node-6".to_vec())), op: Op::RegisterNode { addr: tum(&[1, 6]) }, attest: None },
+        Request {
+            id: Some(ReqId(b"node-6".to_vec())),
+            ..Request::from(Op::RegisterNode { addr: tum(&[1, 6]) })
+        },
     ));
     assert_eq!(rej.code, RejectCode::Poisoned);
     assert_eq!(rej.disposition, Disposition::Halt);
 
     // The retry of the committed one is answered from the memo instead.
-    match febe.execute(s, Request { id: Some(id), op: node(), attest: None }) {
+    match febe.execute(s, Request { id: Some(id), ..Request::from(node()) }) {
         Response::AckAddr { addr: replayed, at: replayed_at } => {
             assert_eq!(replayed, committed, "the replayed ack is the committed one");
             assert_eq!(replayed_at, committed_at, "…at the coordinate it committed");
@@ -501,7 +500,7 @@ fn a_memoized_ack_outliving_its_binding_is_replayed_not_refused() {
     );
     let before = febe.log_position();
 
-    match febe.execute(s, Request { id: Some(id), op: insert_op(), attest: None }) {
+    match febe.execute(s, Request { id: Some(id), ..Request::from(insert_op()) }) {
         Response::AckAddr { addr: replayed, at } => {
             assert_eq!(replayed, addr(&[1, 0, 1, 0, 1]), "the memo answers ahead of the gate");
             assert_eq!(at, Seq(3), "…at the coordinate it committed");
@@ -513,7 +512,7 @@ fn a_memoized_ack_outliving_its_binding_is_replayed_not_refused() {
     // The binding really is gone: an unkeyed write on the same id is
     // refused, so the replay above says something about the ORDER of the
     // two steps and not about the session still being bound.
-    let rej = rejected(febe.execute(s, Request { id: None, op: insert_op(), attest: None }));
+    let rej = rejected(febe.execute(s, Request::from(insert_op())));
     assert_eq!(rej.code, RejectCode::Unauthenticated);
 }
 
@@ -560,7 +559,7 @@ fn every_write_under_a_bound_session_is_answered_and_its_refusals_name_it() {
             continue;
         }
         let kind = op.kind();
-        if let Response::Rejected(rej) = febe.execute(s, Request { id: None, op, attest: None }) {
+        if let Response::Rejected(rej) = febe.execute(s, Request::from(op)) {
             assert_eq!(rej.op, kind, "a refusal names the op it refused");
             assert_ne!(rej.code, RejectCode::Unauthenticated, "{kind:?}: the session is bound");
         }
@@ -603,7 +602,7 @@ fn an_attestation_reaches_every_store_driver_a_write_acquires() {
     let mut seen = 0;
     for op in writes {
         let kind = op.kind();
-        let _ = febe.execute(s, Request { id: None, op, attest: Some(attestation.clone()) });
+        let _ = febe.execute(s, Request { attest: Some(attestation.clone()), ..Request::from(op) });
         let reached = std::mem::take(&mut *carried.lock());
         let namespace_write = matches!(
             kind,
@@ -634,7 +633,7 @@ const DRAFT_OWNER: PrincipalId = PrincipalId(7);
 /// ends at `2^(doublings + 1)` runs of one position each.
 fn fragmented_draft(febe: &OperationSurface<World>, doublings: u32) -> Address {
     let issue = |session: SessionId, op: Op| {
-        match febe.execute(session, Request { id: None, op, attest: None }) {
+        match febe.execute(session, Request::from(op)) {
             Response::Rejected(rej) => panic!("the fixture's requests are answered: {rej}"),
             answered => answered,
         }
@@ -708,19 +707,19 @@ fn an_unjudged_successor_slot_stops_one_span_past_the_budget() {
     // Twice the budget's worth of specs: the slot crosses at the halfway
     // spec, and every spec after it resolves nothing more.
     let over = successor(MAX_SLOT_SPANS);
-    let unjudged = successor_link(m3, m5, &over, false)
+    let unjudged = successor_link(m3, m5, &over, Judgment::Unjudged)
         .expect("an unjudged build leaves the budget to the store");
     assert_eq!(unjudged.from_slot().len(), MAX_SLOT_SPANS + 1, "one span past, and no further");
-    let refused = successor_link(m3, m5, &over, true)
+    let refused = successor_link(m3, m5, &over, Judgment::Judged)
         .expect_err("a judged build refuses as the slot crosses");
     assert_eq!(refused.code, RejectCode::SlotTooLarge);
     assert_eq!(refused.site.and_then(|s| s.slot), Some(FROM), "the slot is named");
 
     // Exactly at the budget: an ordinary slot, whoever answers the budget.
     let at_cap = successor(MAX_SLOT_SPANS / 2);
-    for judged in [true, false] {
-        let link = successor_link(m3, m5, &at_cap, judged).expect("a slot at the budget");
-        assert_eq!(link.from_slot().len(), MAX_SLOT_SPANS, "judged: {judged}");
+    for judgment in [Judgment::Judged, Judgment::Unjudged] {
+        let link = successor_link(m3, m5, &at_cap, judgment).expect("a slot at the budget");
+        assert_eq!(link.from_slot().len(), MAX_SLOT_SPANS, "{judgment:?}");
     }
 }
 
@@ -746,7 +745,7 @@ fn an_unjudged_successor_slot_over_the_work_budget_is_built_for_the_store_to_ref
         ty: SlotArg::Addrs(vec![doc.clone()]),
         replaces: None,
     };
-    let original = match febe.execute(owner, Request { id: None, op: link_op, attest: None }) {
+    let original = match febe.execute(owner, Request::from(link_op)) {
         Response::AckAddr { addr, .. } => addr,
         other => panic!("the owner links its draft: {other:?}"),
     };
@@ -770,13 +769,13 @@ fn an_unjudged_successor_slot_over_the_work_budget_is_built_for_the_store_to_ref
 
     // One walk past the budget.
     let over = successor(at_budget + 1);
-    let refused = successor_link(m3, m5, &over, true)
+    let refused = successor_link(m3, m5, &over, Judgment::Judged)
         .expect_err("a judged build refuses as the charge crosses");
     assert_eq!(refused.code, RejectCode::SlotTooLarge);
     let site = refused.site.expect("the slot is named");
     assert_eq!(site.slot, Some(FROM));
     assert!(site.index.is_none(), "the slot is at fault, not one spec in it");
-    let built_to_fail = successor_link(m3, m5, &over, false)
+    let built_to_fail = successor_link(m3, m5, &over, Judgment::Unjudged)
         .expect("an unjudged build refuses nothing a source decides");
     assert_eq!(built_to_fail.from_slot().len(), MAX_SLOT_SPANS + 1, "one span past the span budget");
 
@@ -798,9 +797,10 @@ fn an_unjudged_successor_slot_over_the_work_budget_is_built_for_the_store_to_ref
     assert_eq!(febe.log_position(), before, "a successor short of what was asked is never deposited");
 
     // The budget exactly: an ordinary slot, whoever answers the budget.
-    for judged in [true, false] {
-        let link = successor_link(m3, m5, &successor(at_budget), judged).expect("a walk at the budget");
-        assert!(link.from_slot().is_empty(), "judged: {judged}");
+    for judgment in [Judgment::Judged, Judgment::Unjudged] {
+        let link =
+            successor_link(m3, m5, &successor(at_budget), judgment).expect("a walk at the budget");
+        assert!(link.from_slot().is_empty(), "{judgment:?}");
     }
 }
 
@@ -814,7 +814,7 @@ fn an_unjudged_successor_slot_over_the_work_budget_is_built_for_the_store_to_ref
 fn a_version_member_answers_its_trunks_birth_version() {
     let febe = surface();
     let issue = |session: SessionId, op: Op| {
-        match febe.execute(session, Request { id: None, op, attest: None }) {
+        match febe.execute(session, Request::from(op)) {
             Response::Rejected(rej) => panic!("the fixture's requests are answered: {rej}"),
             answered => answered,
         }

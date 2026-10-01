@@ -80,10 +80,10 @@ where
         // snapshot, deliberately not the write transaction's base (§4); the
         // store's own gates re-run against the base they commit on.
         let snap = self.stores.kernel().snapshot();
-        // `judged` is whether the door judged this write's sources, off that
+        // `judgment` is whether the door judged this write's sources, off that
         // snapshot; where it did not, nothing built from them below may speak
         // ahead of the store.
-        let judged = self.consult_write(&wc, &op, snap.world())?;
+        let judgment = self.consult_write(&wc, &op, snap.world())?;
         // THE VISIBILITY CLASS of this write (PUB-6.25), the read predicate's
         // sibling: one value per request, from the same proven-bound
         // principal, lent to whichever store gates this write inside its own
@@ -266,11 +266,11 @@ where
             // door judged the write, the successor's sources were consulted
             // above, BEFORE this build reads their arrangements (PUB-6.38);
             // where it deferred to the store's own gate they were not, and the
-            // build, told so by `judged`, issues no verdict their arrangements
-            // decide — the store's `not_owner` speaks first.
+            // build, told so by `judgment`, issues no verdict their
+            // arrangements decide — the store's `not_owner` speaks first.
             Op::EditLink { original, successor, d_s, d_a } => {
                 let link =
-                    successor_link(snap.world().m3(), snap.world().m5(), &successor, judged)?;
+                    successor_link(snap.world().m3(), snap.world().m5(), &successor, judgment)?;
                 let (edit, at) = self
                     .stores
                     .linkstore_attested(&visibility, attest)

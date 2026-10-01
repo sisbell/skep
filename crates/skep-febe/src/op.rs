@@ -16,10 +16,10 @@ use skep_retrieval::{RegionSpec, Spec};
 /// carries. `id` is used ONLY to key the retry memo (§1(a)/§7); it is never
 /// echoed on the response path (§8).
 ///
-/// A value, with [`Op`]'s derives and for [`Op`]'s reason: `execute` consumes
+/// A value, with [`Op`]'s traits and for [`Op`]'s reason: `execute` consumes
 /// a request, so a transport that records, reorders or reissues what it
 /// dispatched keeps a clone of one.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Request {
     /// The client's idempotency key (optional): a token the CLIENT chooses,
     /// naming one request within its own session — reused, after a write
@@ -44,6 +44,15 @@ pub struct Request {
     /// classifies nothing about it and verifies nothing, the kernel writes it
     /// opaquely.
     pub attest: Option<Attestation>,
+}
+
+/// A request of `op` alone: no idempotency key and no attestation — what an
+/// in-process caller with neither builds, and the base a caller with one
+/// writes over (`Request { id: Some(id), ..Request::from(op) }`).
+impl From<Op> for Request {
+    fn from(op: Op) -> Request {
+        Request { id: None, op, attest: None }
+    }
 }
 
 /// The client's idempotency key — chosen by the client, scoped to its own
@@ -105,11 +114,21 @@ pub const MAX_REQ_ID_BYTES: usize = 256;
 ///
 /// [`OperationSurface::execute`]: crate::OperationSurface::execute
 ///
-/// NOT `Debug`, on one leaf: M4's `Val`, which withholds it so that content
-/// bytes never render into a log. NOT `Hash` either, on that same one leaf.
-/// Deliberately not `#[non_exhaustive]` either: a consumer's exhaustive match
-/// over this enum is what forces a new operation to be given a wire name and a
-/// marshaling, where a `_` arm would silently drop it.
+/// `Debug` by hand, in `op/debug.rs`: M4's `Val` withholds `Debug` so that
+/// content bytes never render into a log, and a derive cannot reach past it —
+/// so an `Insert`'s values render as their count, never a byte (M6's
+/// `DeliveryItem` and M2's `Attestation` redact theirs the same way), and every
+/// other field by its own `Debug`. NOT `Hash`, on that same one leaf.
+///
+/// Deliberately not `#[non_exhaustive]`, and nor are [`OpKind`],
+/// [`RejectCode`] and [`Response`]: a consumer's exhaustive match over each is
+/// what forces a new variant to be given a wire name and a marshaling, where
+/// the `_` arm `#[non_exhaustive]` demands of an outside crate would silently
+/// absorb it. Every variant of the four is therefore semver surface, and adding
+/// one breaks such a match on purpose.
+///
+/// [`RejectCode`]: crate::RejectCode
+/// [`Response`]: crate::Response
 #[derive(Clone, PartialEq, Eq)]
 pub enum Op {
     // ── namespace writes (→ M3) ──
@@ -464,11 +483,11 @@ pub enum Op {
 /// [`TYPE`]: crate::TYPE
 /// [`MAX_SLOT_SPANS`]: crate::MAX_SLOT_SPANS
 ///
-/// `Debug`, unlike the [`Op`] that carries it: the absence there is `Val`'s,
-/// and no `Val` reaches this payload. So a client that meets an
-/// [`IllFormedSpec`] at some `slot`/`index` can render the successor it sent,
-/// and a harness comparing a built successor against a parsed one can write
-/// the `assert_eq!` its [`PartialEq`] is for.
+/// `Debug` by derive, where the [`Op`] that carries it writes its own: no
+/// `Val` reaches this payload. So a client that meets an [`IllFormedSpec`] at
+/// some `slot`/`index` can render the successor it sent, and a harness
+/// comparing a built successor against a parsed one can write the
+/// `assert_eq!` its [`PartialEq`] is for.
 ///
 /// [`IllFormedSpec`]: crate::RejectCode::IllFormedSpec
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -488,7 +507,7 @@ pub struct SuccessorSpec {
 /// rejection, and the retry memo's lookup can match it (§7); `Hash` so a
 /// caller may key by it — per-operation counters and sets are what a
 /// transport instruments this surface with, and only this crate can supply
-/// the impl.
+/// the impl. Not `#[non_exhaustive]`, for [`Op`]'s reason.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum OpKind {
     CreateNewDocument,
@@ -836,6 +855,10 @@ impl Op {
         }
     }
 }
+
+// `Op`'s hand-written `Debug`, the one standard trait it carries that a
+// derive cannot supply.
+mod debug;
 
 #[cfg(test)]
 pub(crate) mod tests;

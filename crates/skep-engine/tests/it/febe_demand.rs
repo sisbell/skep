@@ -34,7 +34,7 @@ fn engine_world_satisfies_the_febe_demand() {
     let boot_session = febe.bootstrap_session();
     let prefix = match febe.execute(
         boot_session,
-        Request { id: None, op: Op::NextAccountPrefix { parent: node1() }, attest: None },
+        Request::from(Op::NextAccountPrefix { parent: node1() }),
     ) {
         Response::MaybeAddr { addr: Some(a), .. } => a,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
@@ -43,11 +43,7 @@ fn engine_world_satisfies_the_febe_demand() {
 
     let acct = ack_addr(febe.execute(
         boot_session,
-        Request {
-            id: None,
-            attest: None,
-            op: Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: USER },
-        },
+        Request::from(Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: USER }),
     ));
 
     let session = febe.open_session(USER);
@@ -55,34 +51,24 @@ fn engine_world_satisfies_the_febe_demand() {
     // be its published home, which takes no in-place edit (PUB-2.11).
     let doc = ack_addr(febe.execute(
         session,
-        Request {
-            id: None,
-            attest: None,
-            op: Op::CreateNewDocument { account: acct.clone(), published: Some(false) },
-        },
+        Request::from(Op::CreateNewDocument { account: acct.clone(), published: Some(false) }),
     ));
 
     ack_addr(febe.execute(
         session,
-        Request {
-            id: None,
-            attest: None,
-            op: Op::Insert {
-                doc: doc.clone(),
-                at: vp(1, 1),
-                values: vec![Val::new(vec![b'w'])],
-                deposit: Deposit::Undeclared,
-            },
-        },
+        Request::from(Op::Insert {
+            doc: doc.clone(),
+            at: vp(1, 1),
+            values: vec![Val::new(vec![b'w'])],
+            deposit: Deposit::Undeclared,
+        }),
     ));
 
     match febe.execute(
         session,
-        Request {
-            id: None,
-            attest: None,
-            op: Op::RetrieveV { specs: vec![Spec { doc: doc.clone(), span: vspan(1, 1, 1) }] },
-        },
+        Request::from(Op::RetrieveV {
+            specs: vec![Spec { doc: doc.clone(), span: vspan(1, 1, 1) }],
+        }),
     ) {
         Response::Delivery { items, .. } => {
             assert_eq!(delivered_bytes(&items), vec![b"w".to_vec()]);
@@ -109,7 +95,7 @@ fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
     let boot_session = febe.bootstrap_session();
     let prefix = match febe.execute(
         boot_session,
-        Request { id: None, op: Op::NextAccountPrefix { parent: node1() }, attest: None },
+        Request::from(Op::NextAccountPrefix { parent: node1() }),
     ) {
         Response::MaybeAddr { addr: Some(a), .. } => a,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
@@ -117,45 +103,35 @@ fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
     };
     let acct = ack_addr(febe.execute(
         boot_session,
-        Request {
-            id: None,
-            attest: None,
-            op: Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: USER },
-        },
+        Request::from(Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: USER }),
     ));
     let owner = febe.open_session(USER);
     // The flagless first mint is the account's HOME, born published
     // (PUB-8.21); the second is a private draft.
     let home = ack_addr(febe.execute(
         owner,
-        Request { id: None, op: Op::CreateNewDocument { account: acct.clone(), published: None }, attest: None },
+        Request::from(Op::CreateNewDocument { account: acct.clone(), published: None }),
     ));
     let draft = ack_addr(febe.execute(
         owner,
-        Request { id: None, op: Op::CreateNewDocument { account: acct.clone(), published: None }, attest: None },
+        Request::from(Op::CreateNewDocument { account: acct.clone(), published: None }),
     ));
     ack_addr(febe.execute(
         owner,
-        Request {
-            id: None,
-            attest: None,
-            op: Op::Insert {
-                doc: draft.clone(),
-                at: vp(1, 1),
-                values: vec![Val::new(vec![b'w'])],
-                deposit: Deposit::Undeclared,
-            },
-        },
+        Request::from(Op::Insert {
+            doc: draft.clone(),
+            at: vp(1, 1),
+            values: vec![Val::new(vec![b'w'])],
+            deposit: Deposit::Undeclared,
+        }),
     ));
 
     let read = |session, doc: &Address| {
         febe.execute(
             session,
-            Request {
-                id: None,
-                attest: None,
-                op: Op::RetrieveV { specs: vec![Spec { doc: doc.clone(), span: vspan(1, 1, 1) }] },
-            },
+            Request::from(Op::RetrieveV {
+                specs: vec![Spec { doc: doc.clone(), span: vspan(1, 1, 1) }],
+            }),
         )
     };
     let assert_withheld = |resp: Response, doc: &Address| match resp {
@@ -188,8 +164,7 @@ fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
     // deposited), never a withheld answer: a published document never
     // answers withheld (PUB-6.3).
     for session in [guest, stranger] {
-        match febe.execute(session, Request { id: None, op: Op::RetrieveDocVSpanSet { doc: home.clone() }, attest: None })
-        {
+        match febe.execute(session, Request::from(Op::RetrieveDocVSpanSet { doc: home.clone() })) {
             Response::SpanSet { .. } => {}
             Response::Rejected(rej) => panic!("the published home was refused: {rej:?}"),
             _ => panic!("expected SpanSet"),
@@ -227,11 +202,9 @@ fn engine_stores_serves_a_kernel_rooted_at_a_reconstructed_world() {
 
     match febe.execute(
         session,
-        Request {
-            id: None,
-            attest: None,
-            op: Op::RetrieveV { specs: vec![Spec { doc: doc.clone(), span: vspan(1, 1, 1) }] },
-        },
+        Request::from(Op::RetrieveV {
+            specs: vec![Spec { doc: doc.clone(), span: vspan(1, 1, 1) }],
+        }),
     ) {
         Response::Delivery { items, .. } => {
             assert_eq!(delivered_bytes(&items), vec![b"x".to_vec()]);
@@ -244,11 +217,9 @@ fn engine_stores_serves_a_kernel_rooted_at_a_reconstructed_world() {
     // reconstruction that came back holding it would read as the head.
     if let Response::Delivery { items, .. } = febe.execute(
         session,
-        Request {
-            id: None,
-            attest: None,
-            op: Op::RetrieveV { specs: vec![Spec { doc: doc.clone(), span: vspan(1, 1, 2) }] },
-        },
+        Request::from(Op::RetrieveV {
+            specs: vec![Spec { doc: doc.clone(), span: vspan(1, 1, 2) }],
+        }),
     ) {
         assert_ne!(
             delivered_bytes(&items).len(),

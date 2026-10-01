@@ -165,6 +165,46 @@ fn a_successor_spec_is_a_value_the_comparison_macros_accept() {
     assert_eq!(spec(1).clone(), spec(1), "a clone is the same successor too");
 }
 
+/// C-DEBUG on the request model. `Op` writes its `Debug` by hand, since M4's
+/// `Val` withholds one: an `Insert`'s values render as their COUNT and never
+/// a byte, and every variant under the name [`Op::kind`] echoes — the two
+/// tables are kept by hand, and this pins them to each other. A [`Request`]
+/// derives `Debug` over it, so the comparison macros a harness writes over a
+/// parsed request compile, which this test's own `assert_eq!` witnesses.
+#[test]
+fn an_op_renders_its_values_by_count_and_every_variant_by_its_kind() {
+    let insert = Op::Insert {
+        doc: doc(),
+        at: vpos(),
+        values: vec![Val::new(b"secret".to_vec()), Val::new(vec![0xA5])],
+        deposit: Deposit::Undeclared,
+    };
+    let rendered = format!("{insert:?}");
+    assert!(rendered.contains("values: 2 values"), "the values render as their count: {rendered}");
+    assert!(!rendered.contains("secret"), "no content byte renders: {rendered}");
+    assert!(!rendered.contains("115, 101, 99"), "nor the bytes as a list: {rendered}");
+
+    for (op, _) in all_ops() {
+        let rendered = format!("{op:?}");
+        let name = rendered.split(' ').next().unwrap_or_default();
+        assert_eq!(name, format!("{:?}", op.kind()), "{rendered}");
+    }
+
+    let request = Request { id: Some(ReqId(b"r".to_vec())), op: insert, attest: None };
+    assert_eq!(request.clone(), request, "a request is a value the comparison macros accept");
+}
+
+/// `From<Op>`: an op alone is a request carrying neither companion — no
+/// idempotency key and no attestation — which is what an in-process caller
+/// with neither builds, and the base a caller with one writes over.
+#[test]
+fn a_request_of_an_op_alone_carries_neither_companion() {
+    let op = Op::RetrieveDocVSpan { doc: doc() };
+    assert_eq!(Request::from(op.clone()), Request { id: None, op: op.clone(), attest: None });
+    let keyed = Request { id: Some(ReqId(b"r".to_vec())), ..Request::from(op.clone()) };
+    assert_eq!(keyed, Request { id: Some(ReqId(b"r".to_vec())), op, attest: None });
+}
+
 /// PUB-6.4: the doc-argument list runs in DECLARATION order across an
 /// op's lists and by index within each — `d_a` before `d_b`, ρ₁'s regions
 /// before ρ₂'s, the dual row's `d` alone (PUB-6.8) — and a read that

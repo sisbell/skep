@@ -89,7 +89,7 @@ fn q_all() -> FourSet {
 }
 
 fn rq(id: Option<&str>, op: Op) -> Request {
-    Request { id: id.map(|s| ReqId(s.as_bytes().to_vec())), op, attest: None }
+    Request { id: id.map(|s| ReqId(s.as_bytes().to_vec())), ..Request::from(op) }
 }
 
 /// Unwrap a parse, naming the frame as well as the fault — which
@@ -433,7 +433,7 @@ fn a_shot_base_travels_with_its_extent_and_a_run_is_a_run() {
     }
     // The refusal names the clause the run broke — M5's own verdict — so a
     // zero width and a start that is not an element position read apart.
-    let refusal = |body: &str| codec.parse(&run(body)).err().expect("no run").to_string();
+    let refusal = |body: &str| codec.parse(&run(body)).expect_err("no run").to_string();
     let zero = refusal(r#"{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"0"}"#);
     assert!(zero.contains(&RunError::ZeroWidth.to_string()), "{zero}");
     let document = refusal(r#"{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1","width":"1"}"#);
@@ -589,7 +589,7 @@ fn delegate_refuses_a_new_id_past_the_exactly_representable_range_at_the_parse()
             _ => panic!("delegate expected"),
         }
         let again = parse_ok(&codec, &codec.marshal_request(&req));
-        assert!(again == req, "new_id {id} survives the canonical round trip");
+        assert_eq!(again, req, "new_id {id} survives the canonical round trip");
     }
 
     // One past it, and everything above, is a parse fault naming the field.
@@ -672,10 +672,11 @@ fn the_deposit_declaration_reads_absent_or_a_class_type_address_and_nothing_else
         r#","deposit":["1.1.0.1.0.1.0.3.1"]"#,
         r#","deposit":{"addrs":["1.1.0.1.0.1.0.3.1"]}"#,
     ] {
-        // `Request` derives no Debug, so `expect_err` cannot apply; match.
         let err = match codec.parse(&frame(bad)) {
             Err(e) => e,
-            Ok(_) => panic!("{bad} is not a declaration, and is never coerced"),
+            Ok(req) => {
+                panic!("{bad} is not a declaration, and is never coerced: parsed to {req:?}")
+            }
         };
         let detail = err.detail.clone().expect("a parse failure names what failed");
         assert!(detail.contains("field 'deposit'"), "{bad}: the detail names the field: {detail}");
@@ -1430,12 +1431,12 @@ fn a_zero_width_span_is_refused_at_parse() {
         br#"{"op":"emit","home":"1.0.1.0.1","from":"1.0.1.0.1","to":[],"ty":[{"start":"1.1","width":"0.0"}]}"#,
     ];
     for frame in frames {
-        // `Request` derives no Debug, so `expect_err` cannot apply; match.
         let err = match codec.parse(frame) {
             Err(e) => e,
-            Ok(_) => {
-                panic!("a zero-width span must not parse: {}", String::from_utf8_lossy(frame))
-            }
+            Ok(req) => panic!(
+                "a zero-width span must not parse: {} parsed to {req:?}",
+                String::from_utf8_lossy(frame)
+            ),
         };
         let detail = err.detail.expect("a parse failure names what failed");
         assert!(

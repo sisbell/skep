@@ -306,11 +306,11 @@ pub fn surface() -> OperationSurface<World> {
 // ───────────────────────────── request helpers ──────────────────────────────
 
 pub fn ex(febe: &OperationSurface<World>, session: SessionId, op: Op) -> Response {
-    febe.execute(session, Request { id: None, op, attest: None })
+    febe.execute(session, Request::from(op))
 }
 
 pub fn ex_id(febe: &OperationSurface<World>, session: SessionId, id: &[u8], op: Op) -> Response {
-    febe.execute(session, Request { id: Some(ReqId(id.to_vec())), op, attest: None })
+    febe.execute(session, Request { id: Some(ReqId(id.to_vec())), ..Request::from(op) })
 }
 
 // ─────────────────────────── response extractors ────────────────────────────
@@ -698,7 +698,7 @@ pub fn commit_every_write(
     let mut write = |session: SessionId, op: Op| {
         let kind = op.kind();
         let before = fx.febe.log_position();
-        let r = fx.febe.execute(session, Request { id: None, op, attest: attest.cloned() });
+        let r = fx.febe.execute(session, Request { attest: attest.cloned(), ..Request::from(op) });
         each(kind, before, &r);
         r
     };

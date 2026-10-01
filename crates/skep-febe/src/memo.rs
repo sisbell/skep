@@ -114,9 +114,18 @@ impl RetryMemo {
     /// this op-kind. A foreign session misses on the key ([`MemoKey`]); a
     /// `ReqId` reused across op-kinds misses on the tag. Either way the
     /// request re-executes.
+    ///
+    /// The lookup builds an owned key, so it clones `id` — outside the lock,
+    /// which every write's steps (a) and (d) take — and an id past
+    /// [`MAX_REQ_ID_BYTES`] misses without being cloned at all, since
+    /// [`RetryMemo::put`] never admits one.
     pub(crate) fn get(&self, session: SessionId, id: &ReqId, kind: OpKind) -> Option<CommittedAck> {
-        let mut g = self.entries.lock();
-        let tagged = g.get(&MemoKey { session, id: id.clone() })?; // bumps LRU recency
+        if id.0.len() > MAX_REQ_ID_BYTES {
+            return None;
+        }
+        let key = MemoKey { session, id: id.clone() };
+        let mut entries = self.entries.lock();
+        let tagged = entries.get(&key)?; // bumps LRU recency
         (tagged.kind == kind).then(|| tagged.ack.clone())
     }
 
@@ -220,6 +229,27 @@ mod tests {
         assert!(
             memo.get(s, &over, OpKind::Delete).is_none(),
             "a key past the bound is never retained, so a retry re-executes"
+        );
+    }
+
+    /// §7: the lookup holds the same bound. An id past [`MAX_REQ_ID_BYTES`]
+    /// misses before its key is built — so no lookup clones more than the
+    /// bound — and it misses even against an entry planted past `put`'s own
+    /// check, which is what shows the refusal is the lookup's and not merely
+    /// the absence `put` leaves.
+    #[test]
+    fn an_oversized_lookup_misses_before_its_key_is_built() {
+        let sessions = crate::session::Sessions::new();
+        let memo = RetryMemo::new();
+        let s = sessions.open(skep_namespace::PrincipalId(1));
+        let over = ReqId(vec![b'k'; MAX_REQ_ID_BYTES + 1]);
+        memo.entries.lock().put(
+            MemoKey { session: s, id: over.clone() },
+            TaggedAck { kind: OpKind::Delete, ack: CommittedAck::At { at: Seq(1) } },
+        );
+        assert!(
+            memo.get(s, &over, OpKind::Delete).is_none(),
+            "a key the memo never admits is never looked up"
         );
     }
 

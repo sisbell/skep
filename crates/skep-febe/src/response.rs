@@ -130,7 +130,10 @@ pub struct UniversalGrant {
 /// `#[must_use]` on the type rather than on `execute`, so it holds for every
 /// producer: a `Response` that is built and dropped is a request that was
 /// executed — possibly committed — and never answered, which is exactly the
-/// silence the never-silent contract forbids.
+/// silence the never-silent contract forbids. Not `#[non_exhaustive]`, for
+/// [`Op`]'s reason.
+///
+/// [`Op`]: crate::Op
 #[must_use]
 #[derive(Debug, PartialEq, Eq)]
 pub enum Response {

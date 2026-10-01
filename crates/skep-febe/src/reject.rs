@@ -121,7 +121,9 @@ pub struct FaultSite {
 ///
 /// `Hash`, so a caller may key by it: per-code counters are the first thing
 /// a transport instruments this surface with, and only this crate can supply
-/// the impl.
+/// the impl. Not `#[non_exhaustive]`, for [`Op`]'s reason.
+///
+/// [`Op`]: crate::Op
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum RejectCode {
     // ── M10-originated ──

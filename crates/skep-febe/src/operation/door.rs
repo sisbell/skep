@@ -31,6 +31,7 @@ use skep_namespace::PrincipalId;
 use super::{OperationSurface, WriteCtx};
 use crate::op::Op;
 use crate::reject::{rejection, FaultSite, RejectCode, Rejection};
+use crate::successor::Judgment;
 use crate::world::FebeWorld;
 
 /// THE READ PREDICATE (PUB-1.31; PUB-6.39's one-per-request shape; PUB round
@@ -514,15 +515,16 @@ impl<W: FebeWorld> OperationSurface<W> {
     /// (or the EDITLINK successor build) that would read the source's
     /// arrangement.
     ///
-    /// RETURNS whether the door JUDGED the write: `true` where it ran past the
-    /// deferral below and every rule it owns passed; `false` where it judged
-    /// nothing — an op it does not consult ([`WriteConsult::NotTaken`]), or one
-    /// whose destination's own gate would refuse, so the store speaks first. A
-    /// `false` binds the dispatch that follows: the write's sources went
-    /// unconsulted, so nothing built from their arrangements before the store
-    /// call may speak — no verdict whose answer a source the caller may not
-    /// read could decide. That is why the EDITLINK successor build takes it
-    /// (`successor_link`'s `judged`).
+    /// RETURNS whether the door JUDGED the write: [`Judgment::Judged`] where it
+    /// ran past the deferral below and every rule it owns passed;
+    /// [`Judgment::Unjudged`] where it judged nothing — an op it does not
+    /// consult ([`WriteConsult::NotTaken`]), or one whose destination's own
+    /// gate would refuse, so the store speaks first. An `Unjudged` binds the
+    /// dispatch that follows: the write's sources went unconsulted, so nothing
+    /// built from their arrangements before the store call may speak — no
+    /// verdict whose answer a source the caller may not read could decide.
+    /// That is why the EDITLINK successor build takes it (`successor_link`'s
+    /// `judgment`).
     ///
     /// ORDER, as PUB-6.36 pins it and PUB-6.38 places it: slot 1, the
     /// DESTINATION's `not_owner`, stands AHEAD of this consult. The store words
@@ -531,7 +533,7 @@ impl<W: FebeWorld> OperationSurface<W> {
     /// would pass — registered, and ω-owned by the caller, asked through the
     /// store's one spelling of ω (`Caller::is_owner`, M5's, which is M3's
     /// `is_effective_owner`) — and where it would not, nothing here speaks, nor
-    /// anything built from the sources it left unconsulted (the `false` it
+    /// anything built from the sources it left unconsulted (the `Unjudged` it
     /// returns), and the store answers its own `doc_not_registered` /
     /// `home_not_registered` / `not_owner`. A session that may not write here
     /// is never told whether it may read there (PUB-6.43's ground). M10 words
@@ -608,18 +610,19 @@ impl<W: FebeWorld> OperationSurface<W> {
         wc: &WriteCtx,
         op: &Op,
         world: &W,
-    ) -> Result<bool, Rejection> {
+    ) -> Result<Judgment, Rejection> {
         let kind = op.kind();
         let m3 = world.m3();
         let readable = self.readable_by(world, Some(wc.principal));
         let WriteConsult::AfterOwnershipOf(destinations) = op.write_consult() else {
-            return Ok(false); // no source and no link-address argument (see the table)
+            // No source and no link-address argument (see the table).
+            return Ok(Judgment::Unjudged);
         };
         // PUB-6.36's slot 1 ahead of its slot 6: defer to the store wherever
         // the destination's own gate would refuse.
         let caller = wc.caller();
         if !destinations.iter().all(|d| m3.is_registered_document(d) && caller.is_owner(m3, d)) {
-            return Ok(false);
+            return Ok(Judgment::Unjudged);
         }
         // PUB-6.36's slot 5 ahead of its slot 6 (lane 4.2, F3): the model's
         // in-place advance refusal on this write's destination — PUB-2.11,
@@ -655,7 +658,7 @@ impl<W: FebeWorld> OperationSurface<W> {
                 ));
             }
         }
-        Ok(true)
+        Ok(Judgment::Judged)
     }
 }
 

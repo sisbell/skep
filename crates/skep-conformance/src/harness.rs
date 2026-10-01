@@ -98,24 +98,20 @@ impl Rig {
     ) -> Result<Address, RigError> {
         let home = match febe.execute(
             session,
-            Request { id: None, op: Op::CreateNewDocument { account: account.clone(), published: None }, attest: None },
+            Request::from(Op::CreateNewDocument { account: account.clone(), published: None }),
         ) {
             Response::AckAddr { addr, .. } => addr,
             other => return Err(format!("home mint failed: {}", brief(&other))),
         };
         match febe.execute(
             session,
-            Request {
-                id: None,
-                attest: None,
-                op: Op::MakeLink {
-                    home: home.clone(),
-                    from: SlotArg::Addrs(vec![account.clone()]),
-                    to: SlotArg::Addrs(vec![]),
-                    ty: SlotArg::Addrs(vec![t_grant()]),
-                    replaces: None,
-                },
-            },
+            Request::from(Op::MakeLink {
+                home: home.clone(),
+                from: SlotArg::Addrs(vec![account.clone()]),
+                to: SlotArg::Addrs(vec![]),
+                ty: SlotArg::Addrs(vec![t_grant()]),
+                replaces: None,
+            }),
         ) {
             Response::AckAddr { .. } => Ok(home),
             other => Err(format!("setup grant failed: {}", brief(&other))),
@@ -140,21 +136,17 @@ impl Rig {
         let node = addr(&[1]).ok_or("node [1] must validate")?;
         let prefix = match febe.execute(
             boot,
-            Request { id: None, op: Op::NextAccountPrefix { parent: node }, attest: None },
+            Request::from(Op::NextAccountPrefix { parent: node }),
         ) {
             Response::MaybeAddr { addr: Some(a), .. } => a,
             other => return Err(format!("next-account-prefix failed: {}", brief(&other))),
         };
         let account = match febe.execute(
             boot,
-            Request {
-                id: None,
-                attest: None,
-                op: Op::Delegate {
-                    new_prefix: prefix.tumbler().clone(),
-                    new_id: PrincipalId(1),
-                },
-            },
+            Request::from(Op::Delegate {
+                new_prefix: prefix.tumbler().clone(),
+                new_id: PrincipalId(1),
+            }),
         ) {
             Response::AckAddr { addr, .. } => addr,
             other => return Err(format!("bootstrap delegate failed: {}", brief(&other))),
@@ -212,7 +204,7 @@ impl Rig {
     /// Execute one request under the current session. No idempotency key —
     /// the harness replays a linear script.
     pub fn exec(&self, o: Op) -> Response {
-        self.febe.execute(self.current_session, Request { id: None, op: o, attest: None })
+        self.febe.execute(self.current_session, Request::from(o))
     }
 
     /// The initially delegated account (α seed target).
@@ -292,7 +284,7 @@ impl Rig {
             .unwrap_or(self.boot);
         let prefix = match self.febe.execute(
             owner_session,
-            Request { id: None, op: Op::NextAccountPrefix { parent: parent.clone() }, attest: None },
+            Request::from(Op::NextAccountPrefix { parent: parent.clone() }),
         ) {
             Response::MaybeAddr { addr: Some(a), .. } => a,
             other => return Err(format!("next-account-prefix: {}", brief(&other))),
@@ -301,11 +293,7 @@ impl Rig {
         self.next_principal += 1;
         let account = match self.febe.execute(
             owner_session,
-            Request {
-                id: None,
-                attest: None,
-                op: Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: id },
-            },
+            Request::from(Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: id }),
         ) {
             Response::AckAddr { addr, .. } => addr,
             other => return Err(format!("delegate: {}", brief(&other))),

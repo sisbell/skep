@@ -352,13 +352,11 @@ where
             if self.stores.is_poisoned() {
                 return reject(kind, RejectCode::Poisoned); // ⇒ Halt
             }
-            match self.sessions.principal_of(session) {
-                // (b) the one place authority can fail
-                Some(principal) => {
-                    self.dispatch_write(WriteCtx { principal }, op, attest.as_ref())
-                }
-                None => return reject(kind, RejectCode::Unauthenticated), // ⇒ Permanent
-            }
+            // (b) the one place authority can fail
+            let Some(principal) = self.sessions.principal_of(session) else {
+                return reject(kind, RejectCode::Unauthenticated); // ⇒ Permanent
+            };
+            self.dispatch_write(WriteCtx { principal }, op, attest.as_ref())
         } else {
             // Reads tolerate an unbound session (§2): the principal is
             // resolved for the READ PREDICATE — the doc-argument consult, the

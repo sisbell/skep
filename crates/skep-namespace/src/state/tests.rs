@@ -1,6 +1,7 @@
 use super::*;
 
 use crate::ghost::{ghost_position, GHOST_POSITIONS};
+use crate::ns::{content_ns, link_ns, ns_lock_key, version_ns};
 use skep_address::parent;
 
 fn t(comps: &[u32]) -> Tumbler {

@@ -735,11 +735,13 @@ fn an_unjudged_successor_slot_stops_one_span_past_the_budget() {
 /// while walking every run, so no span count sees the slot; only the charge
 /// taken before each walk bounds it. Where the door judged, the slot is
 /// refused as the charge crosses, naming the slot. Where it deferred, nothing
-/// here refuses it and the slot is left one span past the span budget — so
-/// where the store's own gate passes after all, in the window the deferral
-/// leaves between the door's snapshot and the commit, M7 refuses the slot
-/// rather than deposit a successor short of what was asked. One walk fewer is
-/// the budget exactly, an ordinary slot under both.
+/// here refuses it and the slot is left one span past the span budget, padded
+/// with a fill one component deep however deep the crossing source — M7
+/// refuses on the count and never reads it. So where the store's own gate
+/// passes after all, in the window the deferral leaves between the door's
+/// snapshot and the commit, M7 refuses the slot rather than deposit a
+/// successor short of what was asked. One walk fewer is the budget exactly,
+/// an ordinary slot under both.
 #[test]
 fn an_unjudged_successor_slot_over_the_work_budget_is_built_for_the_store_to_refuse() {
     let febe = surface();
@@ -785,6 +787,11 @@ fn an_unjudged_successor_slot_over_the_work_budget_is_built_for_the_store_to_ref
     let built_to_fail = successor_link(m3, m5, &over, Judgment::Unjudged)
         .expect("an unjudged build refuses nothing a source decides");
     assert_eq!(built_to_fail.from_slot().len(), MAX_SLOT_SPANS + 1, "one span past the span budget");
+    assert!(doc.tumbler().len() > 1, "premise: the crossing source is deeper than one component");
+    assert!(
+        built_to_fail.from_slot().spans().all(|s| s.start().len() == 1 && s.width().len() == 1),
+        "the fill is one component deep, whatever the crossing source's depth"
+    );
 
     // The window the deferral leaves: the store's own gate passes after all.
     // M7 refuses the slot there, and nothing is deposited.

@@ -16,7 +16,7 @@
 //! refused as it crosses either; where the door deferred to the store's own
 //! gate, the verdict is M7's, after that gate.
 
-use skep_address::{subtree_of, Span};
+use skep_address::{subtree_of, Nat, Span, Tumbler};
 use skep_arrangement::{as_ordinal_vspan, M5State, VSpec};
 use skep_links::{
     enc, Endset, Link, SlotArg, FROM, MAX_SLOT_RESOLVE_STEPS, MAX_SLOT_SPANS, TO, TYPE,
@@ -69,8 +69,9 @@ pub(crate) enum Judgment {
 /// built — the `Resolve` form as [`successor_slot`] says, and the `Addrs`
 /// form HERE, whatever `judgment` says, and BEFORE the encoding is: its count
 /// is the request's own, so refusing it discloses nothing, and [`enc`] turns
-/// each ~19-byte name into a subtree span of two multi-component tumblers, a
-/// ~26× amplification into memory M7 would then refuse anyway.
+/// each name into a subtree span of two tumblers as deep as the name — ~26–40×
+/// the bytes the name arrived in, ~16–20 KB a span at the 256 components
+/// skepd's codec admits a tumbler — memory M7 would then refuse anyway.
 ///
 /// `from` and `to` are content-resolved only. An address-denoting successor
 /// endpoint is not constructible through this surface — [`SuccessorSpec`]'s
@@ -139,7 +140,9 @@ pub(crate) fn successor_link(
 /// and then measured. A spec's expansion is not the request's size but the
 /// SOURCE document's fragmentation (one run per contiguous I-segment), so a
 /// short list of specs over a fragmented document names spans without bound,
-/// and each is two multi-component tumblers — order half a kilobyte live.
+/// and each is two tumblers as deep as the I-address it covers — order half a
+/// kilobyte live at eight components, ~16–20 KB at the 256 components skepd's
+/// codec admits, which M5's daughter chains let a registered member reach.
 /// M7's `editlink` holds the finished slots to the same number, but inside
 /// its transaction; counting here is what keeps the build's own peak to one
 /// slot's worth of spans instead of every spec's, each spec's runs being
@@ -174,18 +177,19 @@ pub(crate) fn successor_link(
 /// two private drafts differing in arrangement alone would draw two answers.
 /// So an unjudged slot over either budget is left ONE span past the span
 /// budget, which M7 refuses after its home gate: by the run that crosses the
-/// span budget, or, crossing the work budget, by a fill of the crossing
-/// source's subtree span. The fill is never read — M7 counts a slot's spans
-/// before any verdict reads one — and is sized by an address the registry
-/// minted rather than by the request. The store's gate therefore speaks first;
-/// and where that gate passes after all — the window between the snapshot this
-/// build reads and the write's commit — the slot is refused for the budget it
-/// crossed rather than deposited short of what the client asked. Past the
-/// crossing the walk resolves no further spec while still judging each one's
-/// shape and registration. Those faults are the request's own and the
-/// registry's, so they must speak alike wherever an unconsulted source crossed
-/// a budget ahead of them; a walk that ended at the crossing would let a later
-/// spec's fault speak or not by where that happened.
+/// span budget, or, crossing the work budget, by a constant fill
+/// ([`unjudged_fill`]). The fill is never read — M7 counts a slot's spans
+/// before any verdict reads one — so its size is pure cost, and it is the
+/// smallest span there is whatever the crossing source. The store's gate
+/// therefore speaks first; and where that gate passes after all — the window
+/// between the snapshot this build reads and the write's commit — the slot is
+/// refused for the budget it crossed rather than deposited short of what the
+/// client asked. Past the crossing the walk resolves no further spec while
+/// still judging each one's shape and registration. Those faults are the
+/// request's own and the registry's, so they must speak alike wherever an
+/// unconsulted source crossed a budget ahead of them; a walk that ended at the
+/// crossing would let a later spec's fault speak or not by where that
+/// happened.
 ///
 /// PRECEDENCE within the slot, since several specs may be wrong and exactly
 /// one answer goes back: the specs are walked in order and the FIRST offending
@@ -227,10 +231,11 @@ fn successor_slot(
         if steps > MAX_SLOT_RESOLVE_STEPS {
             match judgment {
                 Judgment::Judged => return Err(slot_too_large(slot)),
-                // One span past the span budget, which M7 refuses after its
-                // home gate, counting before it reads.
+                // One span past the span budget, in the constant fill M7 never
+                // reads: it refuses the slot after its home gate, counting
+                // before it reads.
                 Judgment::Unjudged => {
-                    spans.resize(MAX_SLOT_SPANS + 1, subtree_of(spec.source.tumbler()));
+                    spans.resize(MAX_SLOT_SPANS + 1, unjudged_fill());
                     continue;
                 }
             }
@@ -273,6 +278,20 @@ fn slot_too_large(slot: usize) -> Rejection {
         RejectCode::SlotTooLarge,
         Some(FaultSite { slot: Some(slot), ..FaultSite::default() }),
     )
+}
+
+/// The span an unjudged slot over the WORK budget is padded with, to one past
+/// the span budget: the smallest span there is — one component in each
+/// tumbler, the subtree of `[1]` — whatever the crossing source. M7 counts a
+/// slot's spans before any verdict reads one, so the fill is never read and
+/// its size is pure cost, paid once for every span it pads. It takes no
+/// argument because no address in hand bounds a span's depth: M5 mints a
+/// daughter chain one component per shot, as deep as a transport's codec lets
+/// a base be named, so a span derived from the crossing source would be as
+/// deep as that.
+fn unjudged_fill() -> Span {
+    // `Tumbler::new` refuses only the empty sequence.
+    subtree_of(&Tumbler::new([Nat::from(1u32)]).expect("[1] is nonempty"))
 }
 
 /// The content-V well-formedness predicate makelink applies to its own
@@ -425,10 +444,10 @@ mod tests {
     }
 
     /// §4: the type slot's `Addrs` form is held to the same budget its
-    /// `Resolve` sibling is, and held to it BEFORE `enc` expands each ~19-byte
-    /// name into a subtree span — whether or not the door judged the write,
-    /// since the count is the request's own. The site names the slot and no
-    /// index: the slot is at fault, not one address in it.
+    /// `Resolve` sibling is, and held to it BEFORE `enc` expands each name
+    /// into a subtree span as deep as the name — whether or not the door
+    /// judged the write, since the count is the request's own. The site names
+    /// the slot and no index: the slot is at fault, not one address in it.
     #[test]
     fn an_over_budget_address_denoting_type_slot_is_refused_before_encoding() {
         let m3 = M3State::genesis();

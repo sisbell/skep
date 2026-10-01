@@ -122,7 +122,21 @@ pub trait Codec {
     /// its own request-body cap — not M10 policy: a transport with a different
     /// frame budget owes its own.
     ///
+    /// AND THE COMPONENT CAP PRICES WHAT M7 STORES. M7's per-slot budgets are
+    /// COUNTS — spans kept, steps walked — while a span's live size is set by
+    /// its two tumblers' component counts: order half a kilobyte at eight
+    /// components, ~16–20 KB at 256. A slot M7 accepts is stored, so this
+    /// parser's cap on one tumbler's components multiplies the permanent cost
+    /// of every link: at 256 components a slot at budget is ~70 MB live and
+    /// ~21 MB journaled, and an [`Op::MakeLink`] of three address-form slots —
+    /// names the frame carries itself — stores up to ~200 MB from a ~6 MB
+    /// frame, inside M2's per-transaction budget. A resolved slot reaches that
+    /// depth without naming it: M5 mints a daughter chain one component per
+    /// [`Op::Publish`], bounded only by how deep a base this parser lets a
+    /// request name.
+    ///
     /// [`Op`]: crate::Op
+    /// [`Op::MakeLink`]: crate::Op::MakeLink
     /// [`Op::Publish`]: crate::Op::Publish
     /// [`Op::RetrieveV`]: crate::Op::RetrieveV
     /// [`Op::FindLinksFtt`]: crate::Op::FindLinksFtt

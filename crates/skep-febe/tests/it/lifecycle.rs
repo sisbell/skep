@@ -3,9 +3,10 @@
 //! `OperationSurface::execute`. What they pin: the namespace reads and the
 //! owner-of-address read, node admission under any bound session, the
 //! document and link families end to end with the response shape each `Op`
-//! answers, the version-chain refusals, and the typed, classified, localized
-//! rejections (§5). The publication reads, the retry memo and EDITLINK's
-//! successor each have a file of their own.
+//! answers, a link slot index answered at either extreme, the version-chain
+//! refusals, and the typed, classified, localized rejections (§5). The
+//! publication reads, the retry memo and EDITLINK's successor each have a file
+//! of their own.
 
 use crate::common;
 
@@ -526,6 +527,31 @@ fn the_link_family_answers_end_to_end() {
     assert!(found.contains(&retraction), "the retraction tuple is itself an active link over d");
     assert!(!found.contains(&l2), "the nullified link is filtered out of the active view");
     assert_eq!(count(ex(&fx.febe, fx.user, Op::CountV { d: d.clone(), region })), 4);
+}
+
+/// The wire's slot index is a client-chosen `usize` that M10 hands straight to
+/// a 1-based lookup — `Op::FollowLink` to M7's `followlink`, `Op::Project`
+/// through M8's `project_on` to the same — and both are a GUEST's reads. At
+/// either extreme, 0 and `usize::MAX`, each is ANSWERED exactly as a slot past
+/// the arity is: FOLLOWLINK's in-band `Err(Invalid)`, PROJECT's `NotALink`. A
+/// lookup rewritten to subtract before it range-checks makes slot 0 a remote
+/// panic, and this is what turns red.
+#[test]
+fn a_slot_index_at_either_extreme_is_answered_never_faulted() {
+    let fx = setup();
+    let (d, l) = linked_doc(&fx);
+    for slot in [0, usize::MAX] {
+        assert!(
+            follow(ex(&fx.febe, SessionId::GUEST, Op::FollowLink { a: l.clone(), slot })).is_err(),
+            "slot {slot}: Invalid, in band"
+        );
+        let rej = rejected(ex(
+            &fx.febe,
+            SessionId::GUEST,
+            Op::Project { a: l.clone(), slot, d: d.clone() },
+        ));
+        assert_eq!(rej.code, RejectCode::NotALink, "slot {slot}");
+    }
 }
 
 /// §5/§6: every failure arrives as a typed, classified, localized rejection —

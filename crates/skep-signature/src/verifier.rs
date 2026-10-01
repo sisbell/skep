@@ -138,6 +138,7 @@ impl PqVerifier {
 /// width answers [`HybridFault::Signature`]; on a key it answers `true` for,
 /// the signature alone decides. A courtesy stricter than the verify would
 /// refuse a key that can sign; a laxer one would admit a key that never can.
+/// It never panics, on any key.
 #[must_use = "key_decodes answers whether every half decodes; it refuses no key itself"]
 pub fn key_decodes(key: &PublicKey) -> bool {
     decode_ed25519_half(key).is_some() && PqVerifier::decode(key).is_some()
@@ -159,6 +160,14 @@ pub fn key_decodes(key: &PublicKey) -> bool {
 /// the key's own row, which `verify` reads off the key — a tag is never
 /// looked up in the table — and that row gives the blob's width and where
 /// its halves part; both decodes and all the arithmetic read the key.
+///
+/// It NEVER PANICS, whatever `tag`, `key`, `msg` and `sig` hold: every fault
+/// a stranger's bytes can carry is a [`HybridFault`]. A key holder chooses
+/// the post-quantum field behind their own passing Ed25519 half, so this is a
+/// promise about the two pinned decoders as much as about this function; the
+/// suite hands each decoder, behind a genuine Ed25519 half, the fields that
+/// would trip its bounds checks
+/// (`a_hostile_post_quantum_field_behind_a_genuine_ed25519_half_answers_signature`).
 ///
 /// `msg` comes before `sig`, the order RustCrypto's
 /// `signature::Verifier::verify` and `ed25519-dalek`'s `verify_strict` take

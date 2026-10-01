@@ -286,6 +286,179 @@ fn the_pq_half_refuses_every_one_bit_near_miss_where_a_decoder_decides() {
     }
 }
 
+/// An FN-DSA-512 `s2` field of `len` bytes laid out as `fn-dsa` 0.4.0's
+/// `comp_encode` lays it, low bit first: per magnitude (a multiple of 128,
+/// sign 0) eight zero bits, `m / 128` zeros and a stop bit; zero bits after
+/// the last.
+fn s2_of(magnitudes: &[usize], len: usize) -> Vec<u8> {
+    let mut field = vec![0u8; len];
+    let mut at = 0;
+    for m in magnitudes {
+        at += 8 + m / 128;
+        field[at / 8] |= 1 << (at % 8);
+        at += 1;
+    }
+    field
+}
+
+/// THE DECODERS' PANIC GUARDS, AT THE INPUTS THAT WOULD TRIP THEM: behind a
+/// genuine Ed25519 half — which any account holder makes with their own
+/// enrolled key, so the post-quantum field beside it is theirs to choose —
+/// [`verify`] hands a post-quantum decoder a field that stands on one guard
+/// alone: ML-DSA-65's genuine `c̃` and `z` with a hint whose cuts decrease
+/// (`HintBitUnpack` would slice `indices[2..1]`) or whose last cut is one
+/// past ω (it would slice `indices[56..]`); the FN-DSA-512 preview's `s2`
+/// running out of bytes at a coefficient's first byte or inside its run of
+/// zeros (`comp_decode` would read `d[625]`). Each answers `Signature`. A
+/// bump of either pinned crate that indexed before it checked panics here
+/// rather than in a hostile session request.
+#[test]
+fn a_hostile_post_quantum_field_behind_a_genuine_ed25519_half_answers_signature() {
+    let msg = b"the entry frame";
+    for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
+        let s = HybridSigner::from_seed(tag, &[0x42; 32]).unwrap();
+        let key = s.public_key();
+        let pq_len = key.sig_alg_row().pq_sig_len;
+        let genuine = s.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
+        assert_eq!(verify(tag, key, msg, &genuine), Ok(()), "tag {tag}: the premise");
+        let fields: Vec<(&str, Vec<u8>)> = if tag == TAG_MLDSA65_ED25519 {
+            // The genuine `c̃` and `z`; the hint — the last ω + k = 55 + 6
+            // bytes, its cuts the last 6 — replaced whole.
+            let with_hint = |indices: &[u8], cuts: [u8; 6]| {
+                let mut field = genuine[..pq_len].to_vec();
+                field[pq_len - 61..].fill(0);
+                field[pq_len - 61..][..indices.len()].copy_from_slice(indices);
+                field[pq_len - 6..].copy_from_slice(&cuts);
+                field
+            };
+            vec![
+                ("cuts decreasing", with_hint(&[0, 1], [2, 1, 1, 1, 1, 1])),
+                ("a cut one past ω", with_hint(&[], [0, 0, 0, 0, 0, 56])),
+            ]
+        } else {
+            // The degree-512 header byte, a zero nonce, then `s2`. 333
+            // coefficients of 15 bits fill it to bit 4,995, three bits into
+            // its last byte, so the 334th coefficient's first byte lies past
+            // its 625; 8 of 15 bits and 348 of 14 fill it to bit 4,992, so
+            // the 357th coefficient's first byte is that last byte, zero, and
+            // its run of zeros runs past it.
+            let with_s2 = |magnitudes: &[usize]| {
+                let mut field = vec![0x39_u8];
+                field.extend([0u8; 40]);
+                field.extend(s2_of(magnitudes, pq_len - 41));
+                field
+            };
+            vec![
+                ("s2 runs out at a coefficient's first byte", with_s2(&[768_usize; 333])),
+                (
+                    "s2 runs out inside a run of zeros",
+                    with_s2(&[vec![768_usize; 8], vec![640_usize; 348]].concat()),
+                ),
+            ]
+        };
+        for (what, field) in fields {
+            let blob = [&field[..], &genuine[pq_len..]].concat();
+            assert_eq!(
+                verify(tag, key, msg, &blob),
+                Err(HybridFault::Signature),
+                "tag {tag}: {what}"
+            );
+        }
+    }
+}
+
+/// `comp_decode`'s walk of an FN-DSA-512 `s2` field, by position (`fn-dsa`
+/// 0.4.0, low bit first): each of the 512 coefficients' start — its sign
+/// bit — with its magnitude (seven low bits, then 128 per zero before the
+/// stop bit), and the bit just past the last; `None` where the field runs
+/// out first.
+fn s2_walk(s2: &[u8]) -> Option<(Vec<(usize, usize)>, usize)> {
+    let bit = |at: usize| s2.get(at / 8).map(|&byte| usize::from((byte >> (at % 8)) & 1));
+    let mut coefficients = Vec::with_capacity(512);
+    let mut at = 0;
+    for _ in 0..512 {
+        let start = at;
+        let mut magnitude =
+            (1..8).map(|b| Some(bit(start + b)? << (b - 1))).sum::<Option<usize>>()?;
+        at += 8;
+        while bit(at)? == 0 {
+            magnitude += 128;
+            at += 1;
+        }
+        coefficients.push((start, magnitude));
+        at += 1;
+    }
+    Some((coefficients, at))
+}
+
+/// THE ONE-ENCODING DOORS THE BIT-0 SWEEP CANNOT REACH: four second
+/// encodings of a genuine post-quantum field, each of which a decoder lax in
+/// exactly one check would read as the very values the genuine field holds —
+/// so that tag would verify two blobs for one signature with every golden
+/// green: ML-DSA-65's hint with two of one polynomial's indices swapped and
+/// with its first index repeated (FIPS 204's HintBitUnpack: strictly
+/// increasing); the FN-DSA-512 preview's `s2` with a zero coefficient's sign
+/// bit set (`comp_decode`'s "-0") and with the first bit past its last
+/// coefficient set (its unused bits). `PqVerifier::verify` refuses each.
+/// `the_pq_half_refuses_every_one_bit_near_miss_where_a_decoder_decides`
+/// flips bit 0 alone, which reaches none of the four: a flipped hint index
+/// moves the hint, which the arithmetic refuses under any decoder, and
+/// `comp_decode` reads low bit first, so the unused bits are the last data
+/// byte's HIGH bits and a sign bit sits at bit 0 only where a coefficient
+/// starts on a byte.
+#[test]
+fn the_pq_half_refuses_a_second_encoding_of_a_genuine_field() {
+    let msg = b"the entry frame";
+
+    // Tag 1: the hint is the field's last ω + k = 55 + 6 bytes, its cuts the
+    // last 6.
+    let s1 = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[0x42; 32]).unwrap();
+    let half = PqVerifier::decode(s1.public_key()).expect("a derived key decodes");
+    let pq_len = s1.public_key().sig_alg_row().pq_sig_len;
+    let field = s1.sign_with_rng(&mut SeededRng06::new([7; 32]), msg)[..pq_len].to_vec();
+    assert!(half.verify(msg, &field), "the premise: tag 1's field verifies");
+    let (indices, cuts) = (pq_len - 61, pq_len - 6);
+    let used = usize::from(field[pq_len - 1]);
+    assert!(used < 55, "the premise: the hint leaves an index slot unused");
+    let (poly, first) = (0..6)
+        .map(|i| (i, if i == 0 { 0 } else { usize::from(field[cuts + i - 1]) }))
+        .find(|&(i, first)| usize::from(field[cuts + i]) >= first + 2)
+        .expect("the premise: some polynomial's hint holds two indices");
+    let mut swapped = field.clone();
+    swapped.swap(indices + first, indices + first + 1);
+    let mut repeated = field.clone();
+    repeated.copy_within(indices + first + 1..indices + used, indices + first + 2);
+    repeated[indices + first + 1] = repeated[indices + first];
+    for cut in &mut repeated[cuts + poly..] {
+        *cut += 1;
+    }
+    assert!(!half.verify(msg, &swapped), "tag 1: two of a polynomial's hint indices swapped");
+    assert!(!half.verify(msg, &repeated), "tag 1: a polynomial's first hint index repeated");
+
+    // Tag 3: the first stream that signs with a zero coefficient and ends
+    // mid-byte.
+    let s3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &[0x42; 32]).unwrap();
+    let half = PqVerifier::decode(s3.public_key()).expect("a derived key decodes");
+    let pq_len = s3.public_key().sig_alg_row().pq_sig_len;
+    let (field, zero, end) = (0..=u8::MAX)
+        .find_map(|n| {
+            let field = s3.sign_with_rng(&mut SeededRng06::new([n; 32]), msg)[..pq_len].to_vec();
+            let (coefficients, end) = s2_walk(&field[41..])?;
+            let &(zero, _) = coefficients.iter().find(|&&(_, magnitude)| magnitude == 0)?;
+            (end % 8 != 0).then_some((field, zero, end))
+        })
+        .expect("the premise: a stream signs with a zero coefficient, ending mid-byte");
+    assert!(half.verify(msg, &field), "the premise: tag 3's field verifies");
+    for (at, what) in [
+        (zero, "a zero coefficient's sign bit set"),
+        (end, "the first unused bit set"),
+    ] {
+        let mut near = field.clone();
+        near[41 + at / 8] |= 1 << (at % 8);
+        assert!(!half.verify(msg, &near), "tag 3: {what}");
+    }
+}
+
 /// THE ED25519 HALF IS `verify_strict`'s (AUTH-4.32), AGAINST A LOW-ORDER
 /// KEY: under each of the eight low-order Ed25519 halves, beside either tag's
 /// genuine post-quantum half, a blob whose post-quantum field the signer made

@@ -33,11 +33,11 @@ pub struct Request {
     /// write-path check ADMITTED for this write, lifted from the op frame's
     /// top-level `attest` member by the codec and carried here, one field on
     /// the object `execute` already takes, so no `Op` variant and neither
-    /// exhaustive classifier is asked about it. `dispatch_write` hands it to
-    /// the store driver's ATTESTED handle for the three ops of the seam
-    /// build's slice — `insert`, `make_link`, `publish` — which fill the
-    /// commit marker's signature slot for that one transaction; on every
-    /// other op the value is DROPPED here, unwritten. WHO SETS IT is the
+    /// exhaustive classifier is asked about it. M10 hands it to every M5 and
+    /// M7 driver the write acquires; the store fills the commit marker's
+    /// signature slot on the transactions it signs — each store states its
+    /// slice on its handle — and on every other write, a namespace write's
+    /// included, the value is dropped, unwritten. WHO SETS IT is the
     /// dispatched write path alone, after its check: a transport that lifts
     /// the member sets it only where the check admitted the signature, which
     /// is what bounds the slot's producer set (§5.5) — M10 classifies

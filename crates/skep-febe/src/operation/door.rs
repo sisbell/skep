@@ -1,10 +1,10 @@
 //! The READABILITY DOOR: the one read predicate a front door answers through
 //! — its world's own or a supplied [`ReadPredicate`], bound once per request
 //! by [`OperationSurface::readable_by`] — the two consults it drives
-//! ([`consult_read`], [`consult_write`]), the link-address absence rule
-//! ([`home_readable`]), the visibility class lent to a store for one write
-//! ([`OperationSurface::visible_to`]), and the three per-variant tables only
-//! the write consult asks, [`Op::write_consult`],
+//! ([`consult_read`], [`OperationSurface::consult_write`]), the link-address
+//! absence rule ([`home_readable`]), the visibility class lent to a store for
+//! one write ([`OperationSurface::visible_to`]), and the three per-variant
+//! tables only the write consult asks, [`Op::write_consult`],
 //! [`Op::in_place_destination`] and [`Op::link_address_arguments`], defined
 //! here so nothing else can ask them.
 //!
@@ -21,29 +21,39 @@
 //!
 //! The door is a child of the lifecycle rather than a card beside it because
 //! the two share the proven-bound principal: `consult_write` rides the
-//! lifecycle's [`WriteCtx`], which a child sees without widening, and its
-//! precondition — the predicate built from that principal and from nothing
-//! else — is stated against it.
+//! lifecycle's [`WriteCtx`], which a child sees without widening, and binds
+//! its predicate from that principal and from nothing else.
 
 use skep_address::{document_of, Address};
 use skep_arrangement::published_target;
-use skep_namespace::{M3State, PrincipalId};
+use skep_namespace::PrincipalId;
 
 use super::{OperationSurface, WriteCtx};
 use crate::op::Op;
 use crate::reject::{rejection, FaultSite, RejectCode, Rejection};
 use crate::world::FebeWorld;
 
-/// THE read predicate, as the transport may SUPPLY it (PUB-1.31; PUB-6.39's
-/// one-per-request shape; PUB round 2, lane 3.3 — the predicate widened from
-/// the publish shot's source gate to the whole read surface): may `principal`
-/// (`None` = the GUEST) read the document `doc`? Asked by the door's two
-/// consults and its link-address rule; by every reader that masks below it,
-/// at the per-run withheld arm and the result-set filters; and, lent as a
-/// write's VISIBILITY CLASS, by every gate a store runs inside its own
-/// transaction — M5's per-origin source gate on the shot (PUB-6.23, PUB-8.1's
-/// second constraint) and M7's value-keyed gates on the five link writes
-/// (PUB-6.25).
+/// THE READ PREDICATE (PUB-1.31; PUB-6.39's one-per-request shape; PUB round
+/// 2, lane 3.3): may `principal` (`None` = the GUEST) read the document `doc`?
+/// A front door answers the world's own, [`ReadableWorld::readable`], unless
+/// the transport supplies this closure in its place
+/// ([`OperationSurface::with_read_predicate`]). Whichever answers owes
+/// everything below, and this is the one place it is stated.
+///
+/// WHO ASKS IT, AND HOW OFTEN. The door's two consults and its link-address
+/// rule ask once per NAMED argument of the request, a count the transport's
+/// parser caps. The readers that mask below the door — M6's per-run withheld
+/// arm and container filter, M8's result-set filters, the edition-claim home
+/// rule — ask once per RESULT ROW: a count set by stored state, capped by
+/// nothing, and reached by an unauthenticated guest through the FTT descriptor
+/// family, which names no document at all and whose unconstrained form matches
+/// every active link in the store. M10 creates that second class, by threading
+/// this one predicate down into the readers, so a supplier sizing its own work
+/// against a per-argument figure has priced only the first. And lent as a
+/// write's VISIBILITY CLASS it is asked by every gate a store runs inside its
+/// own transaction: M5's per-origin source gate on the shot (PUB-6.23,
+/// PUB-8.1's second constraint) and M7's value-keyed gates on the five link
+/// writes (PUB-6.25).
 ///
 /// OBLIGATIONS ON THE ANSWER. It is asked about addresses of any tier,
 /// REGISTERED OR NOT: the doc-argument consult walks the request's NAMED
@@ -60,19 +70,26 @@ use crate::world::FebeWorld;
 /// per-run arm and M5's publish gate check registration before asking, as
 /// their own behaviour and not as a guarantee from here.
 ///
-/// Absent ([`OperationSurface::new`] alone), M10 answers the world's own
-/// [`ReadableWorld::readable`], which is the live daemon's case: a read off
-/// the ONE snapshot it pins per request, so the answer and the `as_of` it is
-/// stamped with stand on one committed state, and every write's visibility
-/// class over the working world of that write's own transaction, which its
-/// store — M5 on the shot, M7 on the link writes — hands it. Supplied
-/// ([`OperationSurface::with_read_predicate`]), it OVERRIDES the world the
-/// predicate is evaluated over — what a HISTORICAL read needs: `/op-at N`
-/// answers the N-world's content through the HEAD's exception set and grant
-/// set (PUB-6.48), so the daemon's throwaway front door over the
-/// reconstructed world answers through a predicate closed over one head
-/// snapshot. `Send + Sync + 'static`, since the front door is shared across a
-/// transport's worker pool.
+/// ONE DEPARTURE IS ON RECORD. The engine's predicate meets those obligations
+/// for every unregistered address but one shape, and so does any supplied
+/// closure built over the engine's world, the daemon's historical door's among
+/// them: an address shaped as a VERSION MEMBER of a registered draft reads as
+/// that draft (PUB-2.15) and is withheld wherever the draft is, though no mint
+/// produced it. The engine records it on its impl of [`ReadableWorld`]. Which
+/// of PUB-2.15 and PUB-6.12 governs that shape is PUB's to rule; until it
+/// does, a `Withheld` naming such an address names one no store registered.
+///
+/// ABSENT ([`OperationSurface::new`] alone), the world's own answers, which is
+/// the live daemon's case: off the ONE snapshot a read pins, so the answer and
+/// the `as_of` it is stamped with stand on one committed state, and, as a
+/// write's visibility class, off the working world of that write's own
+/// transaction, which its store — M5 on the shot, M7 on the link writes —
+/// hands it. SUPPLIED, this closure OVERRIDES the world it would be evaluated
+/// over — what a HISTORICAL read needs: `/op-at N` answers the N-world's
+/// content through the HEAD's exception set and grant set (PUB-6.48), so the
+/// daemon's throwaway front door over the reconstructed world answers through
+/// a predicate closed over one head snapshot. `Send + Sync + 'static`, since
+/// the front door is shared across a transport's worker pool.
 ///
 /// WHERE IT IS EVALUATED, and what that position costs the supplier. On a
 /// READ it answers off the snapshot the request pinned, and the caller waits
@@ -93,6 +110,7 @@ use crate::world::FebeWorld;
 /// sense, and both answer through the per-request binding
 /// [`OperationSurface::readable_by`] makes of this.
 ///
+/// [`ReadableWorld`]: crate::ReadableWorld
 /// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
 /// [`OperationSurface::readable_by`]: crate::OperationSurface
 /// [`OperationSurface::visible_to`]: crate::OperationSurface
@@ -118,32 +136,14 @@ impl<W: FebeWorld> OperationSurface<W> {
     /// THE ONE READ PREDICATE OF ONE REQUEST (PUB-6.39): `readable(doc)` for
     /// this request's principal, bound ONCE off the ONE world the request
     /// answers from — the snapshot a read pinned, or the snapshot the write
-    /// door pinned — and threaded to everything that asks.
-    ///
-    /// Its consumers are the whole of the door and of the masking below it:
-    /// the two consults ([`consult_read`], [`consult_write`]), the
-    /// link-ADDRESS absence rule ([`home_readable`]), M6's per-run withheld
-    /// arm and container filter, M8's result-set filters, and the
-    /// edition-claim home rule. Each receives an opaque
-    /// `Fn(&Address) -> bool` and never the principal behind it (the STRUCK
-    /// second form), so the answer and the `as_of` it is stamped with stand
-    /// on one committed state and no consumer can ask a second question.
+    /// door pinned — and threaded to every asker [`ReadPredicate`] lists.
+    /// Each receives an opaque `Fn(&Address) -> bool` and never the principal
+    /// behind it (the STRUCK second form), so the answer and the `as_of` it is
+    /// stamped with stand on one committed state and no consumer can ask a
+    /// second question.
     ///
     /// `None` is the GUEST — a session that resolves to no principal, which
     /// on the read path is a mask and never a refusal.
-    ///
-    /// HOW OFTEN IT IS ASKED falls into two classes, and only one of them is
-    /// request-sized. The two consults and the link-address rule ask once per
-    /// NAMED argument of the request, a count the transport's parser caps.
-    /// M6's per-run mask and M8's result-set filters ask once per RESULT ROW
-    /// — a count set by stored state, capped by nothing, and reached by an
-    /// unauthenticated guest through the FTT descriptor family, which names
-    /// no document at all and whose unconstrained form matches every active
-    /// link in the store. Each call projects its address to the document
-    /// that owns it, one allocation per component. M10 is what creates the
-    /// second class, by threading this one predicate down into the readers,
-    /// so it is where the class is named: a supplier sizing its own work
-    /// against a per-argument figure has priced only the first.
     ///
     /// The write path's [`OperationSurface::visible_to`] is the sibling
     /// shape and not this one: a visibility class is lent to a STORE, which
@@ -168,18 +168,16 @@ impl<W: FebeWorld> OperationSurface<W> {
     /// THE VISIBILITY CLASS OF A WRITE (PUB round 2, lane 3.3b; PUB-6.25,
     /// PUB-6.28): the predicate a store runs a write's in-transaction gates
     /// under for this session — `readable(doc, principal)` for the session's
-    /// PRINCIPAL, closed here and lent to the store driver for the one write.
-    /// The ONE closure every such gate is handed: M7's value-keyed dedup and
-    /// idempotency gates on the five link writes, and M5's per-ORIGIN source
-    /// gate on the publish shot (PUB-6.23). Each evaluates it INSIDE the
-    /// write transaction, over the WORKING world it hands the closure —
-    /// never over the snapshot a read pins. Where this front door carries a
-    /// supplied
-    /// [`ReadPredicate`] (the historical door), that is what answers here too
-    /// — one front door, one predicate — and the world M7 hands in is then not
-    /// read, the head snapshot the predicate closed over being the world it
-    /// reads; such a door dispatches no write today, and the case is the
-    /// round's escalated one.
+    /// PRINCIPAL, closed here and lent to the store driver for the one write:
+    /// the one closure every in-transaction asker [`ReadPredicate`] lists is
+    /// handed. Each evaluates it INSIDE the write transaction, over the
+    /// WORKING world it hands the closure — never over the snapshot a read
+    /// pins. Where this front door carries a supplied [`ReadPredicate`] (the
+    /// historical door), that is what answers here too — one front door, one
+    /// predicate — and the world the store hands in is then not read, the head
+    /// snapshot the predicate closed over being the world it reads; such a
+    /// door dispatches no write today, and the case is the round's escalated
+    /// one.
     ///
     /// `Send + Sync` are stated because M7's `Visibility` names them, which
     /// moves an error to this definition rather than the store's call.
@@ -212,16 +210,10 @@ pub(super) fn home_readable(a: &Address, readable: &dyn Fn(&Address) -> bool) ->
 ///
 /// PRECONDITION on `readable`: it is the predicate the request is answered
 /// through — the one `execute` binds off the snapshot it pins, or the HEAD's
-/// for a historical read — and it meets [`ReadPredicate`]'s obligations:
-/// total over every tier, and READABLE for any address the store has not
-/// registered (the world's own predicate departs for one shape, which
-/// [`ReadableWorld::readable`] names). This consult checks no registration of
-/// its own; it runs AFTER registration only because that obligation lets an
-/// unregistered document pass here and reach its store's own
-/// `*NotRegistered` (PUB-6.37, PUB-7.5). A `readable` that refuses an
-/// unregistered address turns that store's refusal into a `Withheld` naming
-/// it — telling a prober a nonexistent address is hidden (PUB-6.12) — and
-/// nothing here can tell.
+/// for a historical read — and so owes [`ReadPredicate`]'s contract. This
+/// consult checks no registration of its own: that contract is what sends an
+/// unregistered document past it to its store's own `*NotRegistered`
+/// (PUB-6.37, PUB-7.5), and nothing here can tell a predicate that breaks it.
 ///
 /// It runs BEFORE any other validation, so a published document never
 /// answers withheld and a private one never reaches a refusal that would
@@ -240,12 +232,12 @@ pub(super) fn home_readable(a: &Address, readable: &dyn Fn(&Address) -> bool) ->
 ///
 /// Its sibling is the write side's consult, `consult_write`: one obligation
 /// split by path, the two deciding who may read what, so a reader looking
-/// for either should find both. Both are functions OVER the predicate rather
-/// than methods that fetch it, so a door's policy cannot come to answer a
-/// predicate other than the one its request was built with.
+/// for either should find both. This one is a function OVER the predicate
+/// because two doors run it and the historical one builds its predicate
+/// itself; the write side has one door, so `consult_write` binds its own and
+/// cannot be handed another.
 ///
 /// [`OperationSurface::execute`]: crate::OperationSurface::execute
-/// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
 pub fn consult_read(op: &Op, readable: &dyn Fn(&Address) -> bool) -> Result<(), Rejection> {
     for arg in op.doc_arguments() {
         if !readable(arg) {
@@ -503,170 +495,163 @@ impl Op {
     }
 }
 
-/// THE WRITE SIDE'S CONSULT (PUB round 2, lane 3.3c; PUB-6.23, PUB-6.24,
-/// PUB-6.36 slot 6, PUB-6.38): the door's pre-dispatch check on a write
-/// that READS a document before it writes — `copy`'s sources, `version`'s
-/// `d_src`, the RESOLVE-form slots of `make_link` and `edit_link` — and
-/// the LINK-ADDRESS rule on the links a write validates by address
-/// (PUB-6.6: `edit_link.original`, `assert_sup.old`/`new`, the table
-/// [`Op::link_address_arguments`] keeps). Consulted through `readable`, the
-/// ONE predicate this request was built with
-/// ([`OperationSurface::readable_by`]) — the same binding every read arm
-/// answers, so one front door answers one predicate — and, wherever the door
-/// judges the write at all, BEFORE the store call (or the EDITLINK successor
-/// build) that would read the source's arrangement.
-///
-/// RETURNS whether the door JUDGED the write: `true` where it ran past the
-/// deferral below and every rule it owns passed; `false` where it judged
-/// nothing — an op it does not consult ([`WriteConsult::NotTaken`]), or one
-/// whose destination's own gate would refuse, so the store speaks first. A
-/// `false` binds the dispatch that follows: the write's sources went
-/// unconsulted, so nothing built from their arrangements before the store
-/// call may speak — no verdict whose answer a source the caller may not read
-/// could decide. That is why the EDITLINK successor build takes it
-/// (`successor_link`'s `judged`).
-///
-/// PRECONDITION: `readable` is built from `wc.principal`, off the same
-/// snapshot `m3` is read from, and from nothing else. The door DERIVES no
-/// principal of its own — `wc` is the proven-bound one — so a predicate
-/// built from some other principal would judge this write's sources for a
-/// caller who is not making it. The one call site builds it on the line
-/// above, which is why the two travel together.
-///
-/// ORDER, as PUB-6.36 pins it and PUB-6.38 places it: slot 1, the
-/// DESTINATION's `not_owner`, stands AHEAD of this consult. The store
-/// words that verdict inside its own transaction, so the door realizes
-/// the order by DEFERRING: the consult runs only where the destination's
-/// own gate would pass — registered, and ω-owned by the caller, asked
-/// through the store's one spelling of ω (`Caller::is_owner`, M5's, which
-/// is M3's `is_effective_owner`) — and where it would not, nothing here
-/// speaks, nor anything built from the sources it left unconsulted (the
-/// `false` it returns), and the store answers its own `doc_not_registered` /
-/// `home_not_registered` / `not_owner`. A session that may not write here
-/// is never told whether it may read there (PUB-6.43's ground). M10 words
-/// no ownership verdict of its own; it only declines to judge a source
-/// ahead of one. Registration of the SOURCE stands ahead too (PUB-6.37),
-/// by the predicate's own construction: an unregistered address is
-/// fail-open readable (PUB-7.5), so it passes here and takes the store's
-/// `source_not_registered` — a withheld answer is only ever a REGISTERED
-/// private document, save the one shape the world's own predicate departs
-/// on ([`ReadableWorld::readable`]).
-///
-/// SLOT 5 AHEAD OF SLOT 6, and how this door reaches it (PUB round 2,
-/// lane 4.2, F3; PUB-6.36, PUB-2.11, PUB-6.38): the model's refusals are
-/// evaluated INSIDE the store transaction (owner ruling D2b), which once
-/// left one cell the door could not order — a source the caller may not
-/// read, copied into a PUBLISHED destination the caller owns — answered
-/// `withheld` where PUB-6.36 has slot 5 speak first. The door now
-/// PRE-EVALUATES the in-place advance refusal itself, between the
-/// deferral and the consult, over the class [`Op::in_place_destination`]
-/// names, by ASKING M5's own rule, [`published_target`], on a destination
-/// the deferral has just found registered (PUB-6.37): M5 publishes that
-/// read so a door pre-evaluating the refusal runs the predicate the store
-/// enforces instead of restating it, and only the ORDERING is M10's. So
-/// the answer is `published_target` byte-identically to the store's (same
-/// code, disposition, no site, no detail), and it stays so through any
-/// later revision of the rule. A session refused the write is never told
-/// whether it may
-/// read the source (PUB-6.43's ground), the store's own refusal is
-/// simply unreached on that cell, and every other cell answers as before:
-/// where the destination is a draft the check is silent, and where the
-/// store would have refused `published_target` it still does, one layer
-/// earlier and in the same bytes. The versionless sibling never meets the
-/// consult: `private_source_versionless` fires only on a source the
-/// caller OWNS, which the subtree clause makes readable, so no source is
-/// both unreadable and versionless. M5's own refusal stands untouched.
-///
-/// The two verdicts this consult can speak are the read side's own,
-/// wire-identical to what the store would say of the same address in a
-/// world without the draft: `withheld` — `reorder`, `site.addr` the
-/// FIRST unreadable source in declaration order (PUB-6.4,
-/// [`Op::source_arguments`]), no `detail` (PUB-8.5) — and, for a link
-/// homed in a document the caller may not read, the op's OWN
-/// never-deposited answer (`original_not_resident`,
-/// `endpoint_not_resident`, the code [`Op::link_address_arguments`] pairs
-/// with each link), never a withheld that confirms a draft-homed link
-/// exists (PUB-6.6). `document_of(a)` is address arithmetic — no read
-/// (PUB-6.38). Within `edit_link` the link-address argument speaks first:
-/// `original` is declared ahead of `successor`, and the store's own
-/// residence check precedes its slot checks. `nullify.target` takes no rule
-/// here — PUB-6.9's ω-first order and the slot-5 nullify-class refusals
-/// govern it (lane 3.5).
-///
-/// STALENESS, since `readable` and `m3` are read off a PRIOR snapshot and
-/// not the base the write commits on. For four of the five source-reading
-/// writes — `copy`, `version`, `make_link`, `edit_link` — this door is the
-/// SOLE enforcement of PUB-6.23: their stores carry no `withheld` verdict,
-/// so what is decided here is what is enforced, and it is decided at that
-/// snapshot rather than at the operation's linearization point. Most of
-/// what the door reads survives the gap because its state is MONOTONE, and
-/// can therefore only produce a false REFUSAL and never a wrong admission:
-/// the registry only grows (every `M3Rec` variant is an insert),
-/// publication never transitions (PUB-1.9), so `published_target` cannot go
-/// stale at all, and ω is stable because a fresh delegation cannot reassign
-/// an allocated prefix. A GRANT is the clause that is not monotone — it is
-/// revocable — so a source readable here may be unreadable when the write
-/// commits, and the gap is REQUEST-SIZED: the consult itself, up to three
-/// full slots of specs, and for `edit_link` the whole successor build
-/// besides. What bounds the consequence is not this door: the arrangement
-/// a late `copy` or `version` produces reads back masked per run by origin
-/// (PUB-6.41), and the I-extents a late `make_link` deposits are not
-/// secret (PUB-6.24). Closing the gap means the shape `publish` already
-/// has — the visibility class evaluated inside the store's own transaction
-/// (`Vstream::publish`) — which is those four stores' signatures to
-/// change, not this door's.
-///
-/// [`OperationSurface::readable_by`]: OperationSurface::readable_by
-/// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
-pub(super) fn consult_write(
-    wc: &WriteCtx,
-    op: &Op,
-    m3: &M3State,
-    readable: &dyn Fn(&Address) -> bool,
-) -> Result<bool, Rejection> {
-    let kind = op.kind();
-    let WriteConsult::AfterOwnershipOf(destinations) = op.write_consult() else {
-        return Ok(false); // no source and no link-address argument (see the table)
-    };
-    // Slot 1 ahead of slot 6: defer to the store wherever the
-    // destination's own gate would refuse.
-    let caller = wc.caller();
-    if !destinations.iter().all(|d| m3.is_registered_document(d) && caller.is_owner(m3, d)) {
-        return Ok(false);
-    }
-    // Slot 5 ahead of slot 6 (lane 4.2, F3): the model's in-place advance
-    // refusal on this write's destination — PUB-2.11, asked of M5's own
-    // `published_target` on a destination the deferral has just found
-    // registered (PUB-6.37), so the door runs the rule the store enforces
-    // rather than a copy of it — BEFORE any source is consulted, so the
-    // one cell where both apply answers `published_target`, never
-    // `withheld`. `copy` is the only member of the class that is also
-    // consulted; the others never reach here (`in_place_destination`).
-    if let Some(in_place) = op.in_place_destination() {
-        if published_target(m3, in_place) {
-            return Err(rejection(kind, RejectCode::PublishedTarget));
+impl<W: FebeWorld> OperationSurface<W> {
+    /// THE WRITE SIDE'S CONSULT (PUB round 2, lane 3.3c; PUB-6.23, PUB-6.24,
+    /// PUB-6.36 slot 6, PUB-6.38): the door's pre-dispatch check on a write
+    /// that READS a document before it writes — `copy`'s sources, `version`'s
+    /// `d_src`, the RESOLVE-form slots of `make_link` and `edit_link` — and the
+    /// LINK-ADDRESS rule on the links a write validates by address (PUB-6.6:
+    /// `edit_link.original`, `assert_sup.old`/`new`, the table
+    /// [`Op::link_address_arguments`] keeps). It binds its own predicate —
+    /// [`OperationSurface::readable_by`] for `wc`'s PROVEN-bound principal, off
+    /// the `world` it reads the registry from — so the predicate and the
+    /// registry stand on one snapshot and no caller can hand it another; and
+    /// wherever the door judges the write at all, it runs BEFORE the store call
+    /// (or the EDITLINK successor build) that would read the source's
+    /// arrangement.
+    ///
+    /// RETURNS whether the door JUDGED the write: `true` where it ran past the
+    /// deferral below and every rule it owns passed; `false` where it judged
+    /// nothing — an op it does not consult ([`WriteConsult::NotTaken`]), or one
+    /// whose destination's own gate would refuse, so the store speaks first. A
+    /// `false` binds the dispatch that follows: the write's sources went
+    /// unconsulted, so nothing built from their arrangements before the store
+    /// call may speak — no verdict whose answer a source the caller may not
+    /// read could decide. That is why the EDITLINK successor build takes it
+    /// (`successor_link`'s `judged`).
+    ///
+    /// ORDER, as PUB-6.36 pins it and PUB-6.38 places it: slot 1, the
+    /// DESTINATION's `not_owner`, stands AHEAD of this consult. The store words
+    /// that verdict inside its own transaction, so the door realizes the order
+    /// by DEFERRING: the consult runs only where the destination's own gate
+    /// would pass — registered, and ω-owned by the caller, asked through the
+    /// store's one spelling of ω (`Caller::is_owner`, M5's, which is M3's
+    /// `is_effective_owner`) — and where it would not, nothing here speaks, nor
+    /// anything built from the sources it left unconsulted (the `false` it
+    /// returns), and the store answers its own `doc_not_registered` /
+    /// `home_not_registered` / `not_owner`. A session that may not write here
+    /// is never told whether it may read there (PUB-6.43's ground). M10 words
+    /// no ownership verdict of its own; it only declines to judge a source
+    /// ahead of one. Registration of the SOURCE stands ahead too (PUB-6.37), by
+    /// [`ReadPredicate`]'s contract: an unregistered source passes here and
+    /// takes the store's `source_not_registered`.
+    ///
+    /// SLOT 5 AHEAD OF SLOT 6, and how this door reaches it (PUB round 2, lane
+    /// 4.2, F3; PUB-6.36, PUB-2.11, PUB-6.38): the model's refusals are
+    /// evaluated INSIDE the store transaction (owner ruling D2b), which once
+    /// left one cell the door could not order — a source the caller may not
+    /// read, copied into a PUBLISHED destination the caller owns — answered
+    /// `withheld` where PUB-6.36 has slot 5 speak first. The door now
+    /// PRE-EVALUATES the in-place advance refusal itself, between the deferral
+    /// and the consult, over the class [`Op::in_place_destination`] names, by
+    /// ASKING M5's own rule, [`published_target`], on a destination the
+    /// deferral has just found registered (PUB-6.37): M5 publishes that read so
+    /// a door pre-evaluating the refusal runs the predicate the store enforces
+    /// instead of restating it, and only the ORDERING is M10's. So the answer
+    /// is `published_target` byte-identically to the store's (same code,
+    /// disposition, no site, no detail), and it stays so through any later
+    /// revision of the rule. A session refused the write is never told whether
+    /// it may read the source (PUB-6.43's ground), the store's own refusal is
+    /// simply unreached on that cell, and every other cell answers as before:
+    /// where the destination is a draft the check is silent, and where the
+    /// store would have refused `published_target` it still does, one layer
+    /// earlier and in the same bytes. The versionless sibling never meets the
+    /// consult: `private_source_versionless` fires only on a source the caller
+    /// OWNS, which the subtree clause makes readable, so no source is both
+    /// unreadable and versionless. M5's own refusal stands untouched.
+    ///
+    /// The two verdicts this consult can speak are the read side's own,
+    /// wire-identical to what the store would say of the same address in a
+    /// world without the draft: `withheld` — `reorder`, `site.addr` the FIRST
+    /// unreadable source in declaration order (PUB-6.4,
+    /// [`Op::source_arguments`]), no `detail` (PUB-8.5) — and, for a link homed
+    /// in a document the caller may not read, the op's OWN never-deposited
+    /// answer (`original_not_resident`, `endpoint_not_resident`, the code
+    /// [`Op::link_address_arguments`] pairs with each link), never a withheld
+    /// that confirms a draft-homed link exists (PUB-6.6). `document_of(a)` is
+    /// address arithmetic — no read (PUB-6.38). Within `edit_link` the
+    /// link-address argument speaks first: `original` is declared ahead of
+    /// `successor`, and the store's own residence check precedes its slot
+    /// checks. `nullify.target` takes no rule here — PUB-6.9's ω-first order
+    /// and the slot-5 nullify-class refusals govern it (lane 3.5).
+    ///
+    /// STALENESS, since the predicate and the registry are read off `world` — a
+    /// PRIOR snapshot, not the base the write commits on. For four of the five
+    /// source-reading writes — `copy`, `version`, `make_link`, `edit_link` —
+    /// this door is the SOLE enforcement of PUB-6.23: their stores carry no
+    /// `withheld` verdict, so what is decided here is what is enforced, and it
+    /// is decided at that snapshot rather than at the operation's linearization
+    /// point. Most of what the door reads survives the gap because its state is
+    /// MONOTONE, and can therefore only produce a false REFUSAL and never a
+    /// wrong admission: the registry only grows (every `M3Rec` variant is an
+    /// insert), publication never transitions (PUB-1.9), so `published_target`
+    /// cannot go stale at all, and ω is stable because a fresh delegation
+    /// cannot reassign an allocated prefix. A GRANT is the clause that is not
+    /// monotone — it is revocable — so a source readable here may be unreadable
+    /// when the write commits, and the gap is REQUEST-SIZED: the consult
+    /// itself, up to three full slots of specs, and for `edit_link` the whole
+    /// successor build besides. What bounds the consequence is not this door:
+    /// the arrangement a late `copy` or `version` produces reads back masked
+    /// per run by origin (PUB-6.41), and the I-extents a late `make_link`
+    /// deposits are not secret (PUB-6.24). Closing the gap means the shape
+    /// `publish` already has — the visibility class evaluated inside the
+    /// store's own transaction (`Vstream::publish`) — which is those four
+    /// stores' signatures to change, not this door's.
+    ///
+    /// [`OperationSurface::readable_by`]: OperationSurface::readable_by
+    pub(super) fn consult_write(
+        &self,
+        wc: &WriteCtx,
+        op: &Op,
+        world: &W,
+    ) -> Result<bool, Rejection> {
+        let kind = op.kind();
+        let m3 = world.m3();
+        let readable = self.readable_by(world, Some(wc.principal));
+        let WriteConsult::AfterOwnershipOf(destinations) = op.write_consult() else {
+            return Ok(false); // no source and no link-address argument (see the table)
+        };
+        // Slot 1 ahead of slot 6: defer to the store wherever the
+        // destination's own gate would refuse.
+        let caller = wc.caller();
+        if !destinations.iter().all(|d| m3.is_registered_document(d) && caller.is_owner(m3, d)) {
+            return Ok(false);
         }
-    }
-    // §2 — the link-address rule on writes (PUB-6.6): a link homed where the
-    // caller cannot read answers the op's own never-deposited code, exactly
-    // as an address no link occupies (`Op::link_address_arguments`).
-    if let Some((links, absent)) = op.link_address_arguments() {
-        if !links.iter().all(|link| home_readable(link, readable)) {
-            return Err(rejection(kind, absent));
+        // Slot 5 ahead of slot 6 (lane 4.2, F3): the model's in-place advance
+        // refusal on this write's destination — PUB-2.11, asked of M5's own
+        // `published_target` on a destination the deferral has just found
+        // registered (PUB-6.37), so the door runs the rule the store enforces
+        // rather than a copy of it — BEFORE any source is consulted, so the
+        // one cell where both apply answers `published_target`, never
+        // `withheld`. `copy` is the only member of the class that is also
+        // consulted; the others never reach here (`in_place_destination`).
+        if let Some(in_place) = op.in_place_destination() {
+            if published_target(m3, in_place) {
+                return Err(rejection(kind, RejectCode::PublishedTarget));
+            }
         }
-    }
-    // §1 — the source consult: the first unreadable source, in
-    // declaration order, answers WITHHELD naming itself.
-    for source in op.source_arguments() {
-        if !readable(source) {
-            return Err(Rejection::classified(
-                kind,
-                RejectCode::Withheld,
-                Some(FaultSite { addr: Some(source.clone()), ..FaultSite::default() }),
-            ));
+        // §2 — the link-address rule on writes (PUB-6.6): a link homed where
+        // the caller cannot read answers the op's own never-deposited code,
+        // exactly as an address no link occupies
+        // (`Op::link_address_arguments`).
+        if let Some((links, absent)) = op.link_address_arguments() {
+            if !links.iter().all(|link| home_readable(link, &readable)) {
+                return Err(rejection(kind, absent));
+            }
         }
+        // §1 — the source consult: the first unreadable source, in
+        // declaration order, answers WITHHELD naming itself.
+        for source in op.source_arguments() {
+            if !readable(source) {
+                return Err(Rejection::classified(
+                    kind,
+                    RejectCode::Withheld,
+                    Some(FaultSite { addr: Some(source.clone()), ..FaultSite::default() }),
+                ));
+            }
+        }
+        Ok(true)
     }
-    Ok(true)
 }
 
 #[cfg(test)]

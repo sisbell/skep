@@ -21,7 +21,7 @@ use skep_links::{Invalid, LinkRec};
 use skep_namespace::{M3Rec, PrincipalId};
 use skep_retrieval::Query;
 
-use super::door::{consult_read, consult_write, home_readable};
+use super::door::{consult_read, home_readable};
 use super::{OperationSurface, WriteCtx};
 use crate::lower::{lower_read, lower_txn};
 use crate::op::Op;
@@ -53,14 +53,16 @@ where
     /// operation carries an `at` of its own (a `VPos`). Those are the only
     /// two spellings; a third would make one concept read as two.
     ///
-    /// THE ATTESTATION (signed ops) reaches exactly three arms — `insert`,
-    /// `publish`, `make_link`, the seam build's slice — through the ATTESTED
-    /// handles [`Stores::vstream_attested`] and [`Stores::linkstore_attested`],
-    /// which hand it to the kernel at the one transaction each opens; every
-    /// other arm builds a plain handle and the value, if a caller set one, is
-    /// dropped here unwritten. Nothing is classified or verified in this
-    /// module: the value arrives ADMITTED by the dispatched write path's
-    /// check, or not at all.
+    /// THE ATTESTATION (signed ops) rides EVERY M5 and M7 driver a write
+    /// acquires — [`Stores::vstream_attested`] and
+    /// [`Stores::linkstore_attested`] — and which of a store's transactions it
+    /// signs is that store's alone, stated on its handle's `attest` field: a
+    /// handle built with a value fills no slot outside the store's slice. So
+    /// this table holds no copy of the signed set, and widening it is the
+    /// stores' and the transport's work. The namespace writes acquire a driver
+    /// that takes none, so there it is dropped. Nothing is classified, verified
+    /// or filtered here: the value arrives ADMITTED by the dispatched write
+    /// path's check, or not at all.
     ///
     /// [`Stores::vstream_attested`]: crate::Stores::vstream_attested
     /// [`Stores::linkstore_attested`]: crate::Stores::linkstore_attested
@@ -76,20 +78,15 @@ where
         // snapshot, deliberately not the write transaction's base (§4); the
         // store's own gates re-run against the base they commit on.
         let snap = self.stores.kernel().snapshot();
-        // THE read predicate of this write (PUB-6.39), bound off that snapshot
-        // for the PROVEN-bound principal and from nothing else — the consult's
-        // stated precondition, which is why the two sit on adjacent lines.
-        // `judged` is whether the door judged this write's sources; where it
-        // did not, nothing built from them below may speak ahead of the store.
-        let readable = self.readable_by(snap.world(), Some(wc.principal));
-        let judged = consult_write(&wc, &op, snap.world().m3(), &readable)?;
+        // `judged` is whether the door judged this write's sources, off that
+        // snapshot; where it did not, nothing built from them below may speak
+        // ahead of the store.
+        let judged = self.consult_write(&wc, &op, snap.world())?;
         // THE VISIBILITY CLASS of this write (PUB-6.25), the read predicate's
-        // sibling: one value per request, derived from the same proven-bound
-        // principal, lent to whichever store gates this write INSIDE its own
-        // transaction — M5's per-origin source gate on the shot, M7's
-        // value-keyed gates on the five link writes. Bound once here, so
-        // "the ONE closure every such gate is handed" is a fact of the code
-        // rather than six arms agreeing.
+        // sibling: one value per request, from the same proven-bound
+        // principal, lent to whichever store gates this write inside its own
+        // transaction. Bound once here, so every such gate is handed the one
+        // closure.
         let visibility = self.visible_to(wc.principal);
         match op {
             // ── namespace writes (→ M3) ──
@@ -159,7 +156,7 @@ where
             Op::Delete { doc, p, width } => {
                 let at = self
                     .stores
-                    .vstream()
+                    .vstream_attested(attest)
                     .delete(wc.caller(), &doc, p, width)
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::Ack { at })
@@ -167,7 +164,7 @@ where
             Op::Copy { doc, at, specs } => {
                 let committed_at = self
                     .stores
-                    .vstream()
+                    .vstream_attested(attest)
                     .copy(wc.caller(), &doc, at, &specs)
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::Ack { at: committed_at })
@@ -175,7 +172,7 @@ where
             Op::Rearrange { doc, cuts } => {
                 let at = self
                     .stores
-                    .vstream()
+                    .vstream_attested(attest)
                     .rearrange(wc.caller(), &doc, &cuts)
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::Ack { at })
@@ -183,7 +180,7 @@ where
             Op::Version { d_src, published } => {
                 let (addr, at) = self
                     .stores
-                    .vstream()
+                    .vstream_attested(attest)
                     // M5 does the owned/cross-owner branch AND resolves the
                     // three-valued flag: None ⇒ INHERIT published(d_src),
                     // off its own working state (PUB-8.17/8.18).
@@ -235,7 +232,7 @@ where
             Op::Emit { home, ty, from, to } => {
                 let (addr, at) = self
                     .stores
-                    .linkstore(&visibility)
+                    .linkstore_attested(&visibility, attest)
                     .emit(wc.caller(), &home, &ty, &from, &to)
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
@@ -243,7 +240,7 @@ where
             Op::Nullify { home, target } => {
                 let (addr, at) = self
                     .stores
-                    .linkstore(&visibility)
+                    .linkstore_attested(&visibility, attest)
                     .nullify(wc.caller(), &home, &target)
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
@@ -251,7 +248,7 @@ where
             Op::AssertSup { home, old, new } => {
                 let (addr, at) = self
                     .stores
-                    .linkstore(&visibility)
+                    .linkstore_attested(&visibility, attest)
                     .assert_sup(wc.caller(), &home, &old, &new)
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
@@ -274,7 +271,7 @@ where
                     successor_link(snap.world().m3(), snap.world().m5(), &successor, judged)?;
                 let (edit, at) = self
                     .stores
-                    .linkstore(&visibility)
+                    .linkstore_attested(&visibility, attest)
                     .editlink(wc.caller(), &original, link, &d_s, &d_a)
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckEdit { successor: edit.successor, claim: edit.claim, at })

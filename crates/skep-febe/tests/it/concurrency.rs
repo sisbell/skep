@@ -142,11 +142,9 @@ fn two_concurrent_first_mints_below_the_daemon_bear_exactly_one_published_home()
     const MIN_ROUNDS: usize = 16;
     const MAX_ROUNDS: usize = 256;
 
-    // Built here rather than by `surface`, which keeps its kernel to itself:
-    // the supplied predicate reads this one.
+    // The supplied predicate reads the head of the kernel the surface writes.
     let kernel = kernel();
-    let febe = OperationSurface::new(Box::new(KernelStores { kernel: Arc::clone(&kernel) }))
-        .with_read_predicate(published_or_own(kernel));
+    let febe = surface_over(Arc::clone(&kernel)).with_read_predicate(published_or_own(kernel));
     let boot = febe.bootstrap_session();
     // The GUEST: the one id no `open` mints, bound to no principal (§6).
     let guest = SessionId::GUEST;

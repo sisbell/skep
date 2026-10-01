@@ -21,8 +21,9 @@ lru.workspace = true
 skep-address = { path = "../skep-address" }
 # M2 — one snapshot per read and per write door (`seq`/`world`/`chain` off
 # it), `current_seq` for `log_position`, `is_poisoned` behind the factory's
-# halt report, `TxnError` on every write path, `Attestation` on the three
-# attested writes; the kernel is reached only through the Stores factory.
+# halt report, `TxnError` on every write path, `Attestation` forwarded to every
+# M5 and M7 driver a write acquires; the kernel is reached only through the
+# Stores factory.
 skep-kernel = { path = "../skep-kernel" }
 # M3 — the four entity writes via the Namespace driver; off a snapshot, the
 # registry and ω reads asked by the namespace reads, the door's deferral, the
@@ -36,11 +37,12 @@ skep-namespace = { path = "../skep-namespace" }
 # insert or publish refuses through InsertError::Content or
 # PublishError::Content. M10 calls no M4 function.
 skep-content = { path = "../skep-content" }
-# M5 — the six arrangement/versioning writes via the Vstream driver, plain and
-# attested; `iter_resolve` + `content_run_count` + `Run::iextent` behind
-# `as_ordinal_vspan` assemble editlink's successor (§4); `trunk_of`/
-# `trunk_head`/`published_target`, `birth_extent`/`shot_terms` and `Caller`
-# for the door and the publication reads.
+# M5 — the six arrangement/versioning writes via the Vstream driver, each
+# built carrying the request's attestation; `iter_resolve` +
+# `content_run_count` + `Run::iextent` behind `as_ordinal_vspan` assemble
+# editlink's successor (§4); `trunk_of`/`trunk_head`/`published_target`,
+# `birth_extent`/`shot_terms` and `Caller` for the door and the publication
+# reads.
 skep-arrangement = { path = "../skep-arrangement" }
 # M6 — the seven content/provenance queries over M10's snapshot, and the one
 # producer of FaultSite's `operand`, `region` and `fault` (§5); the site's
@@ -57,3 +59,7 @@ skep-discovery = { path = "../skep-discovery" }
 # The test world (the composition contract's assembler role, in miniature)
 # derives Serialize/Deserialize for M2's WorldState bound.
 serde.workspace = true
+# A journaled kernel for the attestation test: the in-memory kernel keeps no
+# commit marker, so which commits carry a signature is observable only on
+# disk.
+tempfile.workspace = true

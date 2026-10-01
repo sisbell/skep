@@ -8,25 +8,10 @@
 use crate::common;
 
 use common::*;
-use skep_content::Val;
 use skep_discovery::{FourSet, SlotSpec};
-use skep_febe::{
-    Base, Deposit, Op, OpKind, Response, Run, Shot, ShotRun, SlotArg, SuccessorSpec, FROM,
-};
-use skep_kernel::Seq;
+use skep_febe::{Op, OpKind, Response, SlotArg, FROM};
 use skep_links::{enc, View};
-use skep_namespace::PrincipalId;
 use skep_retrieval::{RegionSpec, Spec};
-
-/// The committed coordinate an acknowledgment carries, whichever of the
-/// three acknowledging shapes it is.
-fn at_of(kind: OpKind, r: &Response) -> Seq {
-    match r {
-        Response::Ack { at } | Response::AckAddr { at, .. } | Response::AckEdit { at, .. } => *at,
-        Response::Rejected(rej) => panic!("{kind:?} was rejected: {rej}"),
-        _ => panic!("{kind:?} did not acknowledge a committed write"),
-    }
-}
 
 /// One write's promise: the `at` it reported IS the committed head it just
 /// moved to. Exact, and safe to state exactly — M2 mints one `Seq` per record
@@ -46,134 +31,16 @@ fn assert_committed(fx: &Fixture, kind: OpKind, r: &Response, seen: &mut Vec<OpK
 }
 
 /// A1/A7/V1: `committed_at` on EVERY write is the operation's own
-/// linearization point. A sequential chain over all fifteen writes, each
-/// checked against the committed head the moment it returns — the coordinate
-/// is what a client waits at, so a stale or invented one breaks
-/// read-your-writes while every answer still looks right.
+/// linearization point. A sequential chain over all fifteen writes
+/// ([`commit_every_write`]), each checked against the committed head the
+/// moment it returns — the coordinate is what a client waits at, so a stale
+/// or invented one breaks read-your-writes while every answer still looks
+/// right.
 #[test]
 fn every_write_acks_at_the_coordinate_it_committed() {
     let fx = setup();
     let mut seen: Vec<OpKind> = Vec::new();
-
-    // ── the document family — the working document is a DRAFT (an explicit
-    //    `false`: the account's flagless first mint would be its published
-    //    home, which takes no in-place edit, PUB-2.11) ──
-    let r = ex(
-        &fx.febe,
-        fx.user,
-        Op::CreateNewDocument { account: fx.account.clone(), published: Some(false) },
-    );
-    assert_committed(&fx, OpKind::CreateNewDocument, &r, &mut seen);
-    let (draft, _) = ack_addr(r);
-
-    let r = ex(
-        &fx.febe,
-        fx.user,
-        Op::Insert {
-            doc: draft.clone(),
-            at: vp(1, 1),
-            values: vec![Val::new(vec![b'a']), Val::new(vec![b'b']), Val::new(vec![b'c'])],
-            deposit: Deposit::Undeclared,
-        },
-    );
-    assert_committed(&fx, OpKind::Insert, &r, &mut seen);
-
-    let r = ex(&fx.febe, fx.user, Op::Fork { published: None });
-    assert_committed(&fx, OpKind::Fork, &r, &mut seen);
-    let (fork, _) = ack_addr(r);
-
-    // A version needs a PUBLISHED owned source (PUB-2.9): the edition.
-    let edition = create_edition(&fx);
-    let (edition_start, _) = deposit3(&fx, &edition);
-    let r = ex(&fx.febe, fx.user, Op::Version { d_src: edition.clone(), published: None });
-    assert_committed(&fx, OpKind::Version, &r, &mut seen);
-    let (member, _) = ack_addr(r);
-
-    // The shot (lane 3.2): the next member off the head just minted, the
-    // edition's own three positions supplied by reference.
-    let shot = Shot {
-        base: Some(Base { member, extent: nat(3) }),
-        draft: None,
-        runs: vec![ShotRun {
-            origin: edition.clone(),
-            run: Run::new(edition_start, nat(3)).expect("a content run"),
-        }],
-    };
-    let r = ex(&fx.febe, fx.user, Op::Publish { doc: edition, shot });
-    assert_committed(&fx, OpKind::Publish, &r, &mut seen);
-
-    let r = ex(&fx.febe, fx.user, Op::Copy { doc: fork, at: vp(1, 1), specs: vec![vspec(&draft, 1, 1)] });
-    assert_committed(&fx, OpKind::Copy, &r, &mut seen);
-
-    let r = ex(&fx.febe, fx.user, Op::Delete { doc: draft.clone(), p: vp(1, 3), width: nat(1) });
-    assert_committed(&fx, OpKind::Delete, &r, &mut seen);
-
-    let r = ex(
-        &fx.febe,
-        fx.user,
-        Op::Rearrange { doc: draft.clone(), cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)] },
-    );
-    assert_committed(&fx, OpKind::Rearrange, &r, &mut seen);
-
-    // ── the link family, on a document whose three ordinals are intact ──
-    let home = create_doc(&fx);
-    let (home_start, _) = insert3(&fx, &home);
-    let make = || Op::MakeLink {
-        home: home.clone(),
-        from: SlotArg::Resolve(vec![vspec(&home, 1, 1)]),
-        to: SlotArg::Resolve(vec![vspec(&home, 2, 1)]),
-        ty: SlotArg::Resolve(vec![vspec(&home, 3, 1)]),
-        replaces: None,
-    };
-
-    let r = ex(&fx.febe, fx.user, make());
-    assert_committed(&fx, OpKind::MakeLink, &r, &mut seen);
-    let (l1, _) = ack_addr(r);
-    let (l2, _) = ack_addr(ex(&fx.febe, fx.user, make()));
-
-    let r = ex(
-        &fx.febe,
-        fx.user,
-        Op::EditLink {
-            original: l1.clone(),
-            successor: SuccessorSpec {
-                from: vec![vspec(&home, 1, 1)],
-                to: vec![vspec(&home, 2, 1)],
-                ty: SlotArg::Resolve(vec![vspec(&home, 3, 1)]),
-            },
-            d_s: home.clone(),
-            d_a: home.clone(),
-        },
-    );
-    assert_committed(&fx, OpKind::EditLink, &r, &mut seen);
-
-    let r =
-        ex(&fx.febe, fx.user, Op::AssertSup { home: home.clone(), old: l1, new: l2.clone() });
-    assert_committed(&fx, OpKind::AssertSup, &r, &mut seen);
-
-    let r = ex(
-        &fx.febe,
-        fx.user,
-        Op::Emit { home: home.clone(), ty: pred_def_ty(), from: home_start, to: vec![] },
-    );
-    assert_committed(&fx, OpKind::Emit, &r, &mut seen);
-
-    let r = ex(&fx.febe, fx.user, Op::Nullify { home, target: l2 });
-    assert_committed(&fx, OpKind::Nullify, &r, &mut seen);
-
-    // ── provisioning, under the bootstrap session ──
-    let (prefix, _) = maybe_addr(ex(&fx.febe, fx.boot, Op::NextAccountPrefix { parent: node1() }));
-    let prefix = prefix.expect("the genesis node is still delegable");
-    let r = ex(
-        &fx.febe,
-        fx.boot,
-        Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: PrincipalId(11) },
-    );
-    assert_committed(&fx, OpKind::Delegate, &r, &mut seen);
-
-    let r = ex(&fx.febe, fx.boot, Op::RegisterNode { addr: tum(&[1, 4]) });
-    assert_committed(&fx, OpKind::RegisterNode, &r, &mut seen);
-
+    commit_every_write(&fx, None, |kind, _, r| assert_committed(&fx, kind, r, &mut seen));
     assert_eq!(seen.len(), 15, "the write half of the partition is 15 operations: {seen:?}");
 }
 

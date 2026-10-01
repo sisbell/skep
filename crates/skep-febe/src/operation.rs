@@ -9,23 +9,13 @@
 //! [`crate::publication`] for what the publication reads need that no store
 //! computes.
 //!
-//! Beneath it, two children, each seeing this module's private items the way
-//! a child does, so nothing here is widened for them:
-//!
-//! * [`door`] — the READABILITY DOOR: the one read predicate a request
-//!   answers through, the two consults it drives, the three per-variant
-//!   tables only the write consult asks, and the link-address absence rule.
-//!   `OperationSurface::readable`, where a supplied predicate overrides the
-//!   world's own, is private to it; the world's own is a supertrait method
-//!   callable on any `W`, so `tests/it/tidy.rs` checks that no other file
-//!   asks it.
-//! * [`dispatch`] — the two static tables that hand every `Op` to the store or
-//!   query module that owns it: the write half under the proven-bound
-//!   [`WriteCtx`], the read half over one pinned snapshot.
+//! Beneath it, two children — [`door`], the readability door, and
+//! [`dispatch`], the two static dispatch tables — each seeing this module's
+//! private items the way a child does, so nothing here is widened for them.
+//! What each holds is its own module doc's to say.
 
-// The readability door: the one predicate of a request, the two consults
-// it drives with the three tables only the write consult asks, and the
-// link-address absence rule.
+// The readability door: the one read predicate of a request, and the rules
+// it decides.
 mod door;
 // The two static tables: every `Op` to the store or query module that owns it.
 mod dispatch;
@@ -65,10 +55,7 @@ pub struct OperationSurface<W: WorldState> {
     /// sweep runs (§6) — and the whole memo is lost on restart, so a
     /// post-restart retry re-executes (duplicate, by design — ASN-0134 §A7).
     idem: IdemCache,
-    /// The supplied [`ReadPredicate`], or none — in which case every read that
-    /// masks answers the world's own predicate off the one snapshot the
-    /// request pins, and every write's visibility class over the working
-    /// world its store hands the gate.
+    /// The supplied [`ReadPredicate`], or `None`: the world's own answers.
     read_predicate: Option<Box<ReadPredicate>>,
 }
 
@@ -141,34 +128,16 @@ where
 
     /// Supply the [`ReadPredicate`] this front door answers through instead of
     /// its own world's — the transport's HEAD predicate for a historical read
-    /// (PUB-6.48), closed over one head snapshot per request (PUB-6.39).
-    /// Without it every read that masks answers [`ReadableWorld::readable`]
-    /// off the one snapshot the request pins, and every write's visibility
-    /// class — M5's source gate on the shot, M7's gates on the link writes —
-    /// over the working world of its own transaction, which is what a live
-    /// front door wants.
-    ///
-    /// It is the WHOLE predicate that is supplied, not merely what the two
-    /// consults ask: the same value answers every result-set filter, every
-    /// per-run mask, the link-address absence rule, and the visibility class
-    /// lent to M5 and M7 on a write.
-    ///
-    /// TWO OBLIGATIONS ride with it that M10 cannot check for the supplier,
-    /// both stated in full on [`ReadPredicate`]. Lent as a visibility class,
-    /// the predicate is evaluated inside the store's write transaction under
-    /// M2's applier lock, so it must not call `transact` on that kernel, and
-    /// its cost is paid by every waiting writer. And it is asked about
-    /// addresses of any tier, registered or not, so it must be total and must
-    /// answer READABLE for an address the store has not registered: refusing
-    /// there turns each arm's own `*NotRegistered` into a `withheld` and
-    /// tells a prober that a nonexistent address is merely hidden.
+    /// (PUB-6.48), closed over one head snapshot per request (PUB-6.39). It
+    /// answers everywhere the world's own would, read path and visibility
+    /// class alike; without it the world's own answers, which is what a live
+    /// front door wants. Its obligations are [`ReadPredicate`]'s, and M10
+    /// checks none of them.
     ///
     /// Takes the closure and boxes it here, since the box is this door's
     /// storage rather than the caller's concern — [`ReadPredicate`] names the
     /// shape the bound spells out, and an already-boxed predicate satisfies
     /// that bound too.
-    ///
-    /// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
     pub fn with_read_predicate<F>(mut self, predicate: F) -> Self
     where
         F: Fn(Option<PrincipalId>, &Address) -> bool + Send + Sync + 'static,
@@ -232,22 +201,15 @@ where
     }
 
     /// THE lifecycle entry (§1). Total: always yields a `Response` to send
-    /// (rejections are a `Response` variant). Totality rests on what M10 holds
-    /// and on what it calls. M10's own code panics on no input: its locks are
-    /// non-poisoning (§7), the step-(b) read/write split hands each write arm
-    /// a PROVEN-bound principal so no dispatch arm unwraps an `Option`, and
-    /// its one runtime `expect` — `birth_version`'s — asserts an invariant of
-    /// M3's that no input reaches (the idem capacity's is evaluated at compile
-    /// time). The rest is upstream: this call unwinds if anything it calls
-    /// panics, so totality rests equally on M3's, M5's, M6's, M7's and M8's
-    /// read and write paths and M2's kernel not panicking on honest input,
-    /// and on the world it is assembled over — the read predicate, the
-    /// world's or a supplied [`ReadPredicate`], each stated TOTAL, and the two
-    /// publication lookups, whose one precondition M10 discharges. What panic
-    /// sites those modules hold guard their own internal invariants, so no
-    /// honest request reaches one. M5 states that obligation in its own
-    /// contract (skep-arrangement, §Failure channels), and it is written here
-    /// for the rest.
+    /// (rejections are a `Response` variant). It unwinds only if something it
+    /// calls panics on honest input: M2's kernel; M3's, M5's, M6's, M7's or
+    /// M8's read and write paths; or the world it is assembled over — the read
+    /// predicate, the world's or a supplied [`ReadPredicate`], stated total,
+    /// and the two publication lookups, whose one precondition M10
+    /// discharges. What panic sites those modules hold guard their own
+    /// internal invariants, so no honest request reaches one; M5 states that
+    /// obligation in its own contract (skep-arrangement, §Failure channels),
+    /// and it is written here for the rest.
     ///
     /// Reentrant & `Sync` — the transport may call it concurrently for
     /// pipelined requests (§8), and that concurrency is the caller's to use.
@@ -276,9 +238,8 @@ where
     /// So reads are masked, not gated, and the masking is M6's and M8's,
     /// driven by the one predicate this surface answers (PUB-6.39). A
     /// transport that adds its own read gate is adding a SECOND predicate to
-    /// a surface that answers one, and two predicates that disagree about a
-    /// private draft is the failure `OperationSurface::readable` is a
-    /// chokepoint to prevent.
+    /// a surface that answers one — two predicates that can disagree about a
+    /// private draft, which is the failure answering ONE exists to prevent.
     ///
     /// WHAT A MASKED ANSWER LOOKS LIKE, since "masked" does not by itself
     /// tell a client what it will receive. Four forms, numbered below in the
@@ -309,16 +270,10 @@ where
     /// distinction above, and it is why any `SessionId` is served. Forms (2),
     /// (3) and (4) disclose nothing further: no field reports a drop, and
     /// absence does not distinguish "no link" from "not yours to see". Form
-    /// (1) is the informative one, BY DESIGN — PUB-6.12 makes a `Withheld`
-    /// mean a REGISTERED PRIVATE document, which is exactly why the
-    /// predicate must answer readable for an address the store has not
-    /// registered ([`ReadableWorld::readable`]), so that no refusal can turn
-    /// a nonexistent address into a hidden one. One shape departs, pending
-    /// PUB's ruling, and that trait method names it: an address shaped as a
-    /// version member of a registered draft is withheld as the draft, though
-    /// no store registered it.
+    /// (1) is the informative one, BY DESIGN: a `Withheld` names a REGISTERED
+    /// PRIVATE document (PUB-6.12), never an address no store registered —
+    /// save the one shape [`ReadPredicate`] records.
     ///
-    /// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
     /// [`Op::doc_arguments`]: crate::Op::doc_arguments
     /// [`Op::ReadLink`]: crate::Op::ReadLink
     /// [`Op::FollowLink`]: crate::Op::FollowLink
@@ -331,15 +286,11 @@ where
     ///
     /// * NON-FORGEABILITY (§6): `session` MUST originate in the transport's
     ///   connection state, never a wire-supplied value.
-    /// * SIZE: M10 measures one field of the [`Op`] it is handed — EDITLINK's
-    ///   address-form type slot, held to M7's span budget before it is
-    ///   encoded — and the successor slots it resolves for itself, against
-    ///   M7's two per-slot budgets; every other list, tumbler and magnitude
-    ///   in `req` reaches the owning store as presented. A transport
-    ///   discharges this in [`Codec::parse`], which also names and prices the
-    ///   operations whose work their size does not bound; a caller that
-    ///   assembles an [`Op`] and calls HERE has no parser in between and owns
-    ///   the same obligation.
+    /// * SIZE: M10 bounds almost nothing it is handed. [`Codec::parse`]
+    ///   states exactly what it measures, which operations' work their
+    ///   request's size does not bound, and what a route owes; a transport
+    ///   discharges this there, and a caller that assembles an [`Op`] and
+    ///   calls HERE has no parser in between and owns the same obligation.
     /// * IDEMPOTENCY KEY (§7): an `id`, when present, names ONE request. Step
     ///   (a) matches a memoized acknowledgment by session, id and op-KIND
     ///   alone, so a different write of the same kind under an id this session
@@ -348,9 +299,9 @@ where
     /// * ATTESTATION (signed ops, the design record §5.5): `attest` is set only
     ///   where the transport's write-path check ADMITTED that signature for
     ///   this write. M10 verifies nothing and the kernel writes the value
-    ///   opaquely into the commit marker of an `insert`, `make_link` or
-    ///   `publish`, so an unchecked value reaches the journal as though
-    ///   admitted ([`Request::attest`]).
+    ///   opaquely into the commit marker of every transaction its store
+    ///   signs, so an unchecked value reaches the journal as though admitted
+    ///   ([`Request::attest`]).
     ///
     /// [`Op`]: crate::Op
     /// [`Codec::parse`]: crate::Codec::parse
@@ -368,6 +319,11 @@ where
     /// takes none of the three: no gate, and no memo either, the memo holding
     /// committed-write acknowledgments alone.
     pub fn execute(&self, session: SessionId, req: Request) -> Response {
+        // TOTALITY, M10's own half: the locks are non-poisoning (§7); the
+        // step-(b) read/write split hands each write arm a PROVEN-bound
+        // principal, so no dispatch arm unwraps an `Option`; and the one
+        // runtime `expect` — `birth_version`'s — asserts an M3 invariant no
+        // input reaches (the idem capacity's is evaluated at compile time).
         let Request { id, op, attest } = req;
         let kind = op.kind(); // Copy; captured before dispatch moves the op
         // (a), then (c), then (b) — that order being the stated precedence

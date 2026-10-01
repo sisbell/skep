@@ -1,11 +1,13 @@
 //! Shared test scaffolding: a minimal engine-side world (the composition
 //! contract's assembler role, in miniature) over M3 + M4 + M5 + M7, an
-//! in-memory kernel, the `Stores` factory the binary would build, and
-//! response extractors. Everything past genesis is driven through the FEBE
-//! surface itself (bootstrap → delegate → create → …), exercising the real
-//! request lifecycle end-to-end.
+//! in-memory kernel (and a journaled one, for a test that reads history
+//! back), the `Stores` factory the binary would build, response extractors,
+//! and the chain that commits every write once. Everything past genesis is
+//! driven through the FEBE surface itself (bootstrap → delegate → create →
+//! …), exercising the real request lifecycle end-to-end.
 
 use std::cell::RefCell;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -14,10 +16,14 @@ use skep_arrangement::{deposit_class_types, HasM5, M5Rec, M5State, Run, VPos, VS
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_febe::{
-    BirthVersion, Deposit, Disposition, EditionClaim, Op, OpKind, OperationSurface, RejectCode, Rejection,
-    ReqId, Request, Response, SessionId, SlotArg, Stores, UniversalGrant, UniversalIndexRow,
+    Base, BirthVersion, Deposit, Disposition, EditionClaim, Op, OpKind, OperationSurface,
+    RejectCode, Rejection, ReqId, Request, Response, SessionId, Shot, ShotRun, SlotArg, Stores,
+    SuccessorSpec, UniversalGrant, UniversalIndexRow,
 };
-use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, WorldState};
+use skep_kernel::{
+    Attestation, BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource,
+    Seq, WorldState,
+};
 use skep_links::{enc, Endset, HasLinks, Invalid, Link, LinkRec, LinkState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 use skep_retrieval::{CompareReport, Deletions, Delivery, DeliveryItem, Spec};
@@ -83,8 +89,8 @@ thread_local! {
     /// daemon's configuration. EMPTY by default, so every read is admitted
     /// and every suite that is not about this arm is unaffected.
     ///
-    /// Cleared by [`surface`], as [`EDITION_CLAIMS`] is, so the table a test
-    /// sees is its own whether the harness gives each test a thread, a
+    /// Cleared by [`surface_over`], as [`EDITION_CLAIMS`] is, so the table a
+    /// test sees is its own whether the harness gives each test a thread, a
     /// process, or neither: no test depends on the order the suite runs in.
     static UNREADABLE_WORLD: RefCell<Vec<Address>> = const { RefCell::new(Vec::new()) };
 }
@@ -115,10 +121,10 @@ thread_local! {
     /// carries none of its own and answers the empty class unless a test
     /// seeds it through [`seed_edition_claims`].
     ///
-    /// Cleared by [`surface`], which every fixture below goes through, so the
-    /// table a test sees is its own whether the harness gives each test a
-    /// thread, a process, or neither: no test depends on the order the suite
-    /// runs in.
+    /// Cleared by [`surface_over`], which every fixture below goes through,
+    /// so the table a test sees is its own whether the harness gives each
+    /// test a thread, a process, or neither: no test depends on the order the
+    /// suite runs in.
     static EDITION_CLAIMS: RefCell<Vec<EditionClaim>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -136,7 +142,8 @@ thread_local! {
     /// of its own and answers the empty index unless a test seeds it through
     /// [`seed_universal_grant_index`]; the FOLD-FILTER that narrows each row
     /// into a served one (RES-231/264/273/298) is M10's own and is what a test
-    /// seeding this is about. Cleared by [`surface`], as [`EDITION_CLAIMS`] is.
+    /// seeding this is about. Cleared by [`surface_over`], as
+    /// [`EDITION_CLAIMS`] is.
     static UNIVERSAL_GRANT_INDEX: RefCell<Vec<UniversalIndexRow>> =
         const { RefCell::new(Vec::new()) };
 }
@@ -255,6 +262,21 @@ pub fn kernel() -> Arc<Kernel<World>> {
     Arc::new(Kernel::open(cfg, genesis_world()).expect("in-memory open cannot fail"))
 }
 
+/// A kernel journaled under `dir`, for a test that reads its history back —
+/// the commit markers, of which an in-memory kernel keeps none.
+pub fn journaled_kernel(dir: &Path) -> Arc<Kernel<World>> {
+    let cfg = KernelConfig {
+        durability: Durability::Fsync {
+            journal_path: dir.to_path_buf(),
+            retain_checkpoints: 1,
+            burned_seq: BurnedSeqPolicy::Rollback,
+        },
+        checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
+    };
+    Arc::new(Kernel::open(cfg, genesis_world()).expect("a journaled open over a fresh directory"))
+}
+
 /// The production-shaped `Stores` factory the binary would build (the
 /// as-built store-driver constructors of the design's Conflicts #6).
 pub struct KernelStores {
@@ -267,11 +289,18 @@ impl Stores<World> for KernelStores {
     }
 }
 
-pub fn surface() -> OperationSurface<World> {
+/// A front door over `kernel`, the miniature world's seeded tables cleared
+/// first, so a test sees only what it seeds itself.
+pub fn surface_over(kernel: Arc<Kernel<World>>) -> OperationSurface<World> {
     seed_edition_claims(Vec::new()); // the empty class, until a test seeds it
     seed_universal_grant_index(Vec::new()); // …the empty universal index, likewise
     seed_unreadable_world(Vec::new()); // …and a world that admits every read
-    OperationSurface::new(Box::new(KernelStores { kernel: kernel() }))
+    OperationSurface::new(Box::new(KernelStores { kernel }))
+}
+
+/// [`surface_over`] a fresh in-memory kernel.
+pub fn surface() -> OperationSurface<World> {
+    surface_over(kernel())
 }
 
 // ───────────────────────────── request helpers ──────────────────────────────
@@ -504,8 +533,14 @@ pub struct Fixture {
     pub account: Address,
 }
 
+/// The standard fixture over [`surface`].
 pub fn setup() -> Fixture {
-    let febe = surface();
+    fixture_on(surface())
+}
+
+/// The standard fixture over `febe`, whichever kernel and predicate it was
+/// built with.
+pub fn fixture_on(febe: OperationSurface<World>) -> Fixture {
     let boot = febe.bootstrap_session();
     let (prefix, _) = maybe_addr(ex(&febe, boot, Op::NextAccountPrefix { parent: node1() }));
     let prefix = prefix.expect("the genesis node has a delegable next-form prefix");
@@ -638,6 +673,118 @@ pub fn fragmented_doc(fx: &Fixture, run_count: u32) -> Address {
     d
 }
 
+// ──────────────────────────────── every write ───────────────────────────────
+
+/// The committed coordinate an acknowledgment carries, whichever of the
+/// three acknowledging shapes it is.
+pub fn at_of(kind: OpKind, r: &Response) -> Seq {
+    match r {
+        Response::Ack { at } | Response::AckAddr { at, .. } | Response::AckEdit { at, .. } => *at,
+        Response::Rejected(rej) => panic!("{kind:?} was rejected: {rej}"),
+        _ => panic!("{kind:?} did not acknowledge a committed write"),
+    }
+}
+
+/// All fifteen writes, once each, as one sequential chain over `fx`, every
+/// one of the fifteen carrying `attest`; the fixtures the chain needs in
+/// between are built through the plain helpers, which carry none. `each` is
+/// handed each of the fifteen as it returns: its kind, the committed head
+/// just before it was sent, and its answer.
+pub fn commit_every_write(
+    fx: &Fixture,
+    attest: Option<&Attestation>,
+    mut each: impl FnMut(OpKind, Seq, &Response),
+) {
+    let mut write = |session: SessionId, op: Op| {
+        let kind = op.kind();
+        let before = fx.febe.log_position();
+        let r = fx.febe.execute(session, Request { id: None, op, attest: attest.cloned() });
+        each(kind, before, &r);
+        r
+    };
+
+    // ── the document family — the working document is a DRAFT (an explicit
+    //    `false`: the account's flagless first mint would be its published
+    //    home, which takes no in-place edit, PUB-2.11) ──
+    let (draft, _) = ack_addr(write(
+        fx.user,
+        Op::CreateNewDocument { account: fx.account.clone(), published: Some(false) },
+    ));
+    ack_addr(write(
+        fx.user,
+        Op::Insert {
+            doc: draft.clone(),
+            at: vp(1, 1),
+            values: vec![Val::new(vec![b'a']), Val::new(vec![b'b']), Val::new(vec![b'c'])],
+            deposit: Deposit::Undeclared,
+        },
+    ));
+    let (fork, _) = ack_addr(write(fx.user, Op::Fork { published: None }));
+
+    // A version needs a PUBLISHED owned source (PUB-2.9): the edition.
+    let edition = create_edition(fx);
+    let (edition_start, _) = deposit3(fx, &edition);
+    let (member, _) =
+        ack_addr(write(fx.user, Op::Version { d_src: edition.clone(), published: None }));
+
+    // The shot (lane 3.2): the next member off the head just minted, the
+    // edition's own three positions supplied by reference.
+    let shot = Shot {
+        base: Some(Base { member, extent: nat(3) }),
+        draft: None,
+        runs: vec![ShotRun {
+            origin: edition.clone(),
+            run: Run::new(edition_start, nat(3)).expect("a content run"),
+        }],
+    };
+    ack_addr(write(fx.user, Op::Publish { doc: edition, shot }));
+
+    ack(write(fx.user, Op::Copy { doc: fork, at: vp(1, 1), specs: vec![vspec(&draft, 1, 1)] }));
+    ack(write(fx.user, Op::Delete { doc: draft.clone(), p: vp(1, 3), width: nat(1) }));
+    ack(write(fx.user, Op::Rearrange { doc: draft, cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)] }));
+
+    // ── the link family, on a document whose three ordinals are intact ──
+    let home = create_doc(fx);
+    let (home_start, _) = insert3(fx, &home);
+    let make = || Op::MakeLink {
+        home: home.clone(),
+        from: SlotArg::Resolve(vec![vspec(&home, 1, 1)]),
+        to: SlotArg::Resolve(vec![vspec(&home, 2, 1)]),
+        ty: SlotArg::Resolve(vec![vspec(&home, 3, 1)]),
+        replaces: None,
+    };
+    let (l1, _) = ack_addr(write(fx.user, make()));
+    let (l2, _) = ack_addr(ex(&fx.febe, fx.user, make()));
+    ack_edit(write(
+        fx.user,
+        Op::EditLink {
+            original: l1.clone(),
+            successor: SuccessorSpec {
+                from: vec![vspec(&home, 1, 1)],
+                to: vec![vspec(&home, 2, 1)],
+                ty: SlotArg::Resolve(vec![vspec(&home, 3, 1)]),
+            },
+            d_s: home.clone(),
+            d_a: home.clone(),
+        },
+    ));
+    ack_addr(write(fx.user, Op::AssertSup { home: home.clone(), old: l1, new: l2.clone() }));
+    ack_addr(write(
+        fx.user,
+        Op::Emit { home: home.clone(), ty: pred_def_ty(), from: home_start, to: vec![] },
+    ));
+    ack_addr(write(fx.user, Op::Nullify { home, target: l2 }));
+
+    // ── provisioning, under the bootstrap session ──
+    let (prefix, _) = maybe_addr(ex(&fx.febe, fx.boot, Op::NextAccountPrefix { parent: node1() }));
+    let prefix = prefix.expect("the genesis node is still delegable");
+    ack_addr(write(
+        fx.boot,
+        Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: PrincipalId(11) },
+    ));
+    ack_addr(write(fx.boot, Op::RegisterNode { addr: tum(&[1, 4]) }));
+}
+
 // ───────────────── the readability fixture (the door's two sides) ───────────
 //
 // The front door answers ONE predicate, so a supplied `ReadPredicate` under
@@ -680,17 +827,7 @@ pub fn setup_with_unreadable() -> (Fixture, Unreadable) {
             principal == Some(USER) || !unreadable.lock().expect("no poisoning").contains(doc)
         }
     };
-    let febe = surface().with_read_predicate(predicate);
-    let boot = febe.bootstrap_session();
-    let (prefix, _) = maybe_addr(ex(&febe, boot, Op::NextAccountPrefix { parent: node1() }));
-    let prefix = prefix.expect("the genesis node has a delegable next-form prefix");
-    let (account, _) = ack_addr(ex(
-        &febe,
-        boot,
-        Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: USER },
-    ));
-    let user = febe.open_session(USER);
-    (Fixture { febe, boot, user, account }, unreadable)
+    (fixture_on(surface().with_read_predicate(predicate)), unreadable)
 }
 
 /// PUB-8.4/8.5 at the door: `withheld`, `reorder`, `site.addr` the document,

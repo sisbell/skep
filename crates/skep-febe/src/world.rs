@@ -17,43 +17,23 @@ use crate::response::EditionClaim;
 /// THE read predicate as a capability of the world M10 reads (PUB round 2,
 /// lane 3.3, §1; PUB-1.31, PUB-6.39). M10 is generic over `W` and names no
 /// concrete `World`, so it reaches the engine's derived predicate — published ∨
-/// subtree ∨ grant — through this one accessor, off M10's OWN read snapshot, so
-/// the answer and the `as_of` it is stamped with stand on one committed state.
+/// subtree ∨ grant — through this one accessor.
 ///
 /// `principal` is `None` for the GUEST (published alone). Implemented by the
-/// engine's `World` (the exception set beside the grant fold). A write
-/// reaches this same predicate as the VISIBILITY CLASS M10 lends a store for
-/// one write; a front door that supplies a [`ReadPredicate`] — the historical
-/// door — answers through that instead, on both paths.
-/// The STRUCK second form — handing readers the principal's account and grant
-/// set — is deliberately absent: what threads down is this opaque `bool`, never
-/// the sets behind it.
-///
-/// [`ReadPredicate`]: crate::ReadPredicate
+/// engine's `World` (the exception set beside the grant fold). The STRUCK
+/// second form — handing readers the principal's account and grant set — is
+/// deliberately absent: what threads down is this opaque `bool`, never the
+/// sets behind it.
 pub trait ReadableWorld {
-    /// `readable(doc, principal)` — the one predicate every read surface
-    /// answers through. `None` ⟹ the guest (published documents only).
+    /// The world's own [`ReadPredicate`]: `readable(doc, principal)` off the
+    /// world it is handed — the snapshot a read pins, or the working world a
+    /// write's store hands its gate. `None` ⟹ the guest (published documents
+    /// only). Its whole contract — who asks it and how often, what it owes
+    /// for an address no store has registered, the one departure the
+    /// engine's `World` records, and where it is evaluated — is stated once,
+    /// on [`ReadPredicate`].
     ///
-    /// TOTAL, over addresses of any tier and whether or not the store has
-    /// registered them: M10's doc-argument consult walks a request's NAMED
-    /// documents before any registration check, and the link-address rule
-    /// asks about a home DERIVED by address arithmetic (PUB-6.38), which no
-    /// store need have registered. An UNREGISTERED address must answer
-    /// READABLE — PUB-7.5's fail-open sign, the exception set holding the
-    /// unpublished side so a membership miss is the published fast path — so
-    /// that each read arm's own `*NotRegistered` speaks and a WITHHELD answer
-    /// is only ever a registered private document (PUB-6.12). A predicate
-    /// that refuses defensively for an address it cannot resolve inverts
-    /// that guarantee and tells a prober that a nonexistent address
-    /// exists-but-is-hidden.
-    ///
-    /// The engine's `World` meets this for every unregistered address but one
-    /// shape, a departure it records on its impl of this trait: an address
-    /// shaped as a VERSION MEMBER of a registered draft reads as that draft
-    /// (PUB-2.15) and is withheld wherever the draft is, though no mint
-    /// produced it. Which of PUB-2.15 and PUB-6.12 governs that shape is
-    /// PUB's to rule; until it does, a `Withheld` naming such an address names
-    /// one no store registered.
+    /// [`ReadPredicate`]: crate::ReadPredicate
     fn readable(&self, principal: Option<PrincipalId>, doc: &Address) -> bool;
 }
 
@@ -212,20 +192,20 @@ impl<
 /// than transcribed identically into every impl, and so is the halt report,
 /// which is the kernel's own answer.
 ///
-/// PRECONDITION on the implementer: **[`Stores::kernel`] answers with the
-/// same `Kernel<W>` on every call.** The signature does not force it — it is
+/// PRECONDITION on the implementer: **[`Stores::kernel`] answers with the same
+/// `Kernel<W>` on every call.** The signature does not force it — it is
 /// consulted afresh per request, so an impl that opened a kernel per call
 /// would compile — and every coordinate M10 reports rests on it:
 /// `OperationSurface::log_position` and every read's `as_of` come from
-/// `kernel()`, while the link writes commit through `linkstore()`. Two kernels
-/// leave those coordinates describing different logs, each store still
-/// committing before it acknowledges and the reported positions no longer
-/// meaning what this module promises. The provided bodies, the drivers and
-/// the halt report alike, are each built over `kernel()`, so an implementer
-/// that supplies only the kernel cannot violate that half — which is why the
-/// precondition is stated on the one method such an implementer writes. An
-/// implementer that OVERRIDES one of them takes the obligation back on, and
-/// owes the same single-kernel guarantee for whatever it returns.
+/// `kernel()`, while the writes commit through the drivers this trait hands
+/// out. Two kernels leave those coordinates describing different logs, each
+/// store still committing before it acknowledges and the reported positions no
+/// longer meaning what this module promises. The provided bodies, the drivers
+/// and the halt report alike, are each built over `kernel()`, so an
+/// implementer that supplies only the kernel cannot violate that half — which
+/// is why the precondition is stated on the one method such an implementer
+/// writes. An implementer that OVERRIDES one of them takes the obligation back
+/// on, and owes the same single-kernel guarantee for whatever it returns.
 ///
 /// The design flagged the engine-facing store-driver constructors as a
 /// required upstream interface amendment (Conflicts resolved #6); the as-built
@@ -273,24 +253,23 @@ pub trait Stores<W: WorldState>: Send + Sync {
         LinkWriter::new(self.kernel(), visibility)
     }
     /// THE ATTESTED M5 DRIVER (signed ops; the placement the owner confirmed
-    /// 2026-09-25: the attestation rides the DRIVER HANDLE): a `Vstream` that
-    /// hands `attest` to the kernel's `transact_attested` arm at the one
-    /// transaction its publish-class-capable calls of this slice open —
-    /// `insert`, `publish` — filling that transaction's commit marker slot and
-    /// no other's. A handle serves exactly one call, which is exactly one
-    /// transaction, so the value can neither outlive the arm (a borrow) nor
-    /// reach a second commit. `None` is [`Stores::vstream`] exactly. WHO CALLS
-    /// THIS is the slot's producer set (the design record §5.5): M10's
-    /// `dispatch_write`, with a value the daemon's check admitted, and no
-    /// other writer — the head writer, M9 and every plain handle build
-    /// through `vstream`, and pass `None` by construction.
+    /// 2026-09-25: the attestation rides the DRIVER HANDLE): a `Vstream` built
+    /// by `Vstream::attested` — the transactions it signs are M5's to state
+    /// there, and it fills no slot outside them. A handle serves exactly one
+    /// call, which is exactly one transaction, so the value can neither
+    /// outlive the arm (a borrow) nor reach a second commit. `None` is
+    /// [`Stores::vstream`] exactly. WHO CALLS THIS is the slot's producer set
+    /// (the design record §5.5): M10's `dispatch_write`, with a value the
+    /// daemon's check admitted, and no other writer — the head writer, M9 and
+    /// every plain handle build through `vstream`, and pass `None` by
+    /// construction.
     fn vstream_attested<'a>(&'a self, attest: Option<&'a Attestation>) -> Vstream<'a, W> {
         Vstream::attested(self.kernel(), attest)
     }
     /// THE ATTESTED M7 DRIVER — [`Stores::linkstore`] with the attestation
-    /// beside the visibility class, handed to `transact_attested` at
-    /// `makelink`'s one transaction (the slice's link write); the same
-    /// producer-set discipline as [`Stores::vstream_attested`].
+    /// beside the visibility class, built by `LinkWriter::attested`, whose
+    /// signed transactions M7 states there; the same producer-set discipline
+    /// as [`Stores::vstream_attested`].
     fn linkstore_attested<'a>(
         &'a self,
         visibility: &'a Visibility<'a, W>,

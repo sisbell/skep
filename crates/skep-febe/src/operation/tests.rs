@@ -161,10 +161,9 @@ fn surface() -> OperationSurface<World> {
     OperationSurface::new(Box::new(KernelStores { kernel: kernel() }))
 }
 
-/// A `Stores` recording every attestation a driver acquisition carries — the
-/// whole of what this surface can put in a commit marker's slot — and
-/// otherwise the three drivers over one kernel, as `KernelStores` builds
-/// them.
+/// A `Stores` recording every attestation a driver acquisition carries —
+/// every value this surface hands a store to sign with — and otherwise the
+/// three drivers over one kernel, as `KernelStores` builds them.
 struct RecordingStores {
     kernel: Arc<Kernel<World>>,
     carried: Arc<Mutex<Vec<Attestation>>>,
@@ -566,14 +565,15 @@ fn every_write_under_a_bound_session_is_answered_and_its_refusals_name_it() {
     }
 }
 
-/// THE ATTESTATION'S PRODUCER SET (`Request::attest`): the value a request
-/// carries reaches a store driver on exactly three writes — `insert`,
-/// `publish`, `make_link` — once each, and is dropped on every other write.
-/// EDITLINK goes a second time with an empty successor: the partition's
-/// fixture is refused by M10's own successor guard before any driver is
-/// acquired, which would leave its row vacuous.
+/// THE ATTESTATION'S PATH (`Request::attest`): the value a request carries
+/// reaches every M5 and M7 driver its write acquires, once, and no namespace
+/// write, whose driver takes none. M10 keeps no copy of which transactions it
+/// signs — each store states that on its handle — and `tests/it/attestation.rs`
+/// pins which commits it lands in. EDITLINK goes with an empty successor: the
+/// partition's own fixture is refused by M10's successor guard before any
+/// driver is acquired.
 #[test]
-fn an_attestation_reaches_a_store_driver_on_insert_publish_and_make_link_alone() {
+fn an_attestation_reaches_every_store_driver_a_write_acquires() {
     let carried = Arc::new(Mutex::new(Vec::new()));
     let febe = OperationSurface::new(Box::new(RecordingStores {
         kernel: kernel(),
@@ -596,15 +596,22 @@ fn an_attestation_reaches_a_store_driver_on_insert_publish_and_make_link_alone()
     let writes = crate::op::tests::all_ops()
         .into_iter()
         .filter_map(|(op, is_read)| (!is_read).then_some(op))
+        .filter(|op| !matches!(op, Op::EditLink { .. }))
         .chain([buildable_edit]);
+    let mut seen = 0;
     for op in writes {
         let kind = op.kind();
         let _ = febe.execute(s, Request { id: None, op, attest: Some(attestation.clone()) });
         let reached = std::mem::take(&mut *carried.lock());
-        let in_the_slice = matches!(kind, OpKind::Insert | OpKind::Publish | OpKind::MakeLink);
-        let expected = if in_the_slice { vec![attestation.clone()] } else { Vec::new() };
+        let namespace_write = matches!(
+            kind,
+            OpKind::CreateNewDocument | OpKind::Delegate | OpKind::RegisterNode | OpKind::Fork
+        );
+        let expected = if namespace_write { Vec::new() } else { vec![attestation.clone()] };
         assert_eq!(reached, expected, "{kind:?}");
+        seen += 1;
     }
+    assert_eq!(seen, 15, "every write, EDITLINK once");
 }
 
 // ── the store-backed tests of `successor` and `publication` ──

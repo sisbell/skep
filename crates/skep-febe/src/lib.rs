@@ -18,27 +18,25 @@
 //! only for the uptime: which principal a session speaks for (§6).
 //! Everything else it holds is a **hint** that may be lost with no loss of
 //! correctness — the best-effort retry memo (§7).
-//! It is, concretely, a lifecycle wrapper +
-//! dispatch table + readability door + client-model adapter. The door is the
-//! largest of the four: ONE read predicate per request, the two consults it
-//! drives — the read side's doc-argument consult and the write side's source
-//! consult — the visibility
-//! class it lends to a store for one write, and the link-address absence
-//! rule. Cross-family COMPOSITE orchestration — a write spanning store
-//! families committed as one M2 transaction — is latent with zero occupants:
-//! the design resolves that no v1 operation needs one (Conflicts resolved
-//! #1). A read spanning store families needs no transaction and is answered
-//! off the one snapshot the read dispatch pins; M10 composes three, the
-//! PUBLICATION READS: [`Op::DocMetadata`] (M3's publication bit, owner and
-//! chain with M5's frozen birth extent), [`Op::EditionClaims`] (the world's
-//! edition-claim class under the door's home rule) and
-//! [`Op::UniversalGrants`] (the grant fold's live universal index narrowed by
-//! M3's ω). Each says at its arm what it assembles, and what the three need
-//! that no store computes for them is the `publication` card's. That card
-//! holds the one rule M10 performs on another component's behalf: the
-//! any-principal read's fold-filter RE-DERIVES the grant fold's issuer test
-//! as a projection over rows, because the world hands its universal index
-//! raw ([`PublicationWorld::universal_grant_index`]).
+//! It is, concretely, a lifecycle wrapper + dispatch table + readability
+//! door + client-model adapter; the door, the largest of the four, is the one
+//! read predicate a request answers through and every rule that predicate
+//! decides (`operation/door.rs` lists them). Cross-family COMPOSITE
+//! orchestration — a write spanning store families committed as one M2
+//! transaction — is latent with zero occupants: the design resolves that no
+//! v1 operation needs one (Conflicts resolved #1). A read spanning store
+//! families needs no transaction and is answered off the one snapshot the
+//! read dispatch pins; M10 composes three, the PUBLICATION READS:
+//! [`Op::DocMetadata`] (M3's publication bit, owner and chain with M5's
+//! frozen birth extent), [`Op::EditionClaims`] (the world's edition-claim
+//! class under the door's home rule) and [`Op::UniversalGrants`] (the grant
+//! fold's live universal index narrowed by M3's ω). Each says at its arm what
+//! it assembles, and what the three need that no store computes for them is
+//! the `publication` card's. That card holds the one rule M10 performs on
+//! another component's behalf: the any-principal read's fold-filter
+//! RE-DERIVES the grant fold's issuer test as a projection over rows, because
+//! the world hands its universal index raw
+//! ([`PublicationWorld::universal_grant_index`]).
 //!
 //! Spec traceability: each public item's doc-comment cites the labels it
 //! realizes (ASN-0134 A1/A2/A5/A7/V1/V2/G0, and §§ of the M10 design), so a
@@ -99,12 +97,11 @@
 //! * journaled state — M10 names no concrete `World`/`Record` and contributes
 //!   no slice, record, or fold to the engine;
 //! * the wire codec byte format, and the request-SIZE limits that travel with
-//!   it — [`Codec`] is a seam the transport fills, and its parser is the only
-//!   bound on how large a request may be, since M10 measures no field of the
-//!   `Op` it is handed but EDITLINK's address-form type slot
-//!   ([`Codec::parse`]); the request↔response correlation — no frame M10
-//!   marshals carries a correlation id, and the optional `ReqId` is an
-//!   idempotency key, never one (§8); the `SessionId`
+//!   it — [`Codec`] is a seam the transport fills, and its parser is what
+//!   bounds how large a request may be, M10 itself measuring almost nothing
+//!   ([`Codec::parse`] says exactly what); the request↔response correlation
+//!   — no frame M10 marshals carries a correlation id, and the optional
+//!   `ReqId` is an idempotency key, never one (§8); the `SessionId`
 //!   non-forgeability precondition and the authentication mechanism (§6), the
 //!   concurrency policy, and reorder/retry buffering (M10 *surfaces*
 //!   `Reorder`, it does not reorder);

@@ -60,11 +60,11 @@ impl M3State {
     /// namespace, content/link included, or, for a node, admitted by
     /// `register_node` (node addresses are never minted here — ASN-0047
     /// NodeBaptism originates them outside the docuverse). THE allocation
-    /// oracle, which §2 assigns to M5's COPY for referential integrity. Ghost
-    /// principle (B3): reflects *allocation*, never byte-presence — a
-    /// registered-empty document is a valid, addressable ghost; content
-    /// existence is M4's separate axis. E is append-only, so a `true` answer
-    /// is permanent (B0/P1).
+    /// oracle (§2). Ghost principle (B3): reflects *allocation*, never
+    /// byte-presence — a registered-empty document is a valid, addressable
+    /// ghost; content existence is M4's separate axis, and a check that
+    /// content exists asks M4, never this read. E is append-only, so a `true`
+    /// answer is permanent (B0/P1).
     pub fn is_allocated(&self, a: &Address) -> bool {
         match a.level() {
             Level::Node => self.nodes.contains(a),
@@ -330,7 +330,9 @@ impl M3State {
     /// scans and is the same answer only while Π is id-injective, which is a
     /// PRODUCER invariant (`delegate`'s `DuplicateId` gate) that
     /// [`M3State::apply_m3`] does not re-check. Here the prefix IS the entry ω
-    /// matched, so the two cannot come apart.
+    /// matched, so the two cannot come apart. A caller that needs the
+    /// principal as well asks [`M3State::effective_owner_pair`], which answers
+    /// both off this one walk.
     ///
     /// FOR A REGISTERED DOCUMENT, ITS OWN ACCOUNT. ASN-0042's O6 promises only
     /// containment — every owner sits at or above an address's account field,
@@ -358,21 +360,22 @@ impl M3State {
     /// cost as [`M3State::effective_owner`]: this is that ONE walk's whole
     /// answer, where the two projections beside it each keep half.
     ///
-    /// OPTIONAL, and published for the one reader that needs both halves of
-    /// ONE entry: the owner-of-address read (AUTH-6.37), which reads
+    /// The read for any caller that needs BOTH halves of one entry — the seat
+    /// and who sits there, or whether a given id does. Asking
+    /// [`M3State::effective_owner_prefix`] and then
+    /// [`M3State::effective_owner`] or [`M3State::is_effective_owner`] gets
+    /// the same answer off one snapshot but walks Π twice — twice the cost
+    /// [`M3State::effective_owner`] states. `None` is exactly the projections'
+    /// `None`: no node- or account-tier seat contains `a`, so the two halves
+    /// are absent TOGETHER by construction.
+    ///
+    /// The owner-of-address read (AUTH-6.37) is one such caller: it reads
     /// `prefix == a` as an ACCOUNT's allocation test and needs the principal
     /// seated AT that prefix. For an account the test is sound because its
     /// seat is its allocation ([`crate::Namespace::delegate`]); at every other
     /// tier it is no allocation test, since a node `register_node` admitted
     /// and every minted document are seated nowhere — a registered document
     /// answers its own account's seat ([`M3State::effective_owner_prefix`]).
-    /// Composing [`M3State::effective_owner_prefix`] with
-    /// [`M3State::effective_owner`] answers the same pair off one snapshot,
-    /// but walks Π TWICE, and that read's cost promise is the walk every
-    /// ownership check already makes — one. No caller is REQUIRED to use it;
-    /// it adds no state, no index and no fold fact, and `None` is exactly the
-    /// projections' `None`: no node- or account-tier seat contains `a`, so the
-    /// two halves are absent TOGETHER by construction.
     pub fn effective_owner_pair(&self, a: &Address) -> Option<(&Address, PrincipalId)> {
         self.omega(a)
     }

@@ -87,10 +87,15 @@ fn is_ghost_ns(key: &NsKey) -> bool {
 /// the ghost content namespace, 0 for every other. Answered as a [`Nat`],
 /// the frontier's own type, so the sites that compare against it just
 /// compare, and the ordinary zero floor is a value rather than a case.
-/// Three readers, and the guarantee needs all three: `M3State::next_in`
-/// mints past `max(frontier, floor)`, `M3State::is_chain_member` refuses
-/// ordinals at or below the floor, and [`M3State::apply_m3`]'s contiguity
-/// check expects `max(frontier, floor) + 1`.
+/// Three readers, each keeping one property. `M3State::next_in` mints past
+/// `max(frontier, floor)`: non-reissue, argued below.
+/// `M3State::is_chain_member` refuses ordinals at or below the floor, so
+/// `is_allocated` answers false at all five ghost tumblers on every board,
+/// forever, however far the chain past them has advanced. And
+/// [`M3State::apply_m3`]'s contiguity check expects
+/// `max(frontier, floor) + 1`, so a debug build's fold accepts the chain's
+/// first `Allocate`, at [`GHOST_POSITIONS`] + 1, and fail-stops on one
+/// inside the region.
 ///
 /// NON-REISSUE, the property this floor exists for: no mint, on any board
 /// running this format, ever yields a ghost tumbler. Every mint returns
@@ -104,10 +109,7 @@ fn is_ghost_ns(key: &NsKey) -> bool {
 /// never below the floor whatever the stored count reads, a count regressed
 /// off a corrupted checkpoint or journal included. So every such mint has an
 /// ordinal above [`GHOST_POSITIONS`] on every build, resting on that MAX and
-/// not on the fold's contiguity check, which is a `debug_assert`. Membership
-/// excludes the floored ordinals besides, so `is_allocated` answers false at
-/// all five, forever: nothing exists at a ghost tumbler on any board, and
-/// M5's referential-integrity oracle refuses a COPY of one.
+/// not on the fold's contiguity check, which is a `debug_assert`.
 ///
 /// The floor is a compiled constant, not genesis state: genesis seeds the
 /// ghost home document EMPTY, so its content chain has no frontier until a

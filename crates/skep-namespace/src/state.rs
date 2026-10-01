@@ -658,35 +658,18 @@ impl M3State {
                 let key = namespace_of(addr)
                     .expect("≥ 2 components — every mint extends a registered parent");
                 let n = ordinal(addr.tumbler()).clone();
-                // Contiguity fail-stop: every record M3's own paths stage
-                // mints exactly c_{m+1} past the floor, so at fold time the
-                // ordinal is the effective frontier + 1 — a regressed or
-                // jumped ordinal is OUTSIDE the totality domain, never
-                // silently absorbed. The floor term matters exactly once per
-                // journal: the ghost home document's first content Allocate
-                // carries ordinal GHOST_POSITIONS + 1 over an absent frontier.
+                // The totality domain's contiguity condition. Its floor term
+                // matters once per journal: the ghost home document's first
+                // content Allocate carries ordinal GHOST_POSITIONS + 1 over an
+                // absent frontier.
                 debug_assert_eq!(
                     n,
                     s.effective_frontier(&key) + 1u32,
                     "Allocate ordinal must equal its namespace's effective frontier + 1"
                 );
                 s.frontiers.insert(key, n);
-                // The publication bit rides only a DOCUMENT's Allocate — a
-                // version is a document — and lands in the same fold step as
-                // the registration, so no reader's snapshot holds the one
-                // without the other (PUB-7.7). On any other tier the field is
-                // `NO_PUBLICATION_STATE`, an absence, and is not read.
-                //
-                // WRITTEN ONCE, and by this `contains_key` test rather than by
-                // the contiguity check above: that check is a `debug_assert`
-                // and is absent in release, so a second `Allocate` naming a
-                // registered document would otherwise REPLACE its bit — a
-                // publication transition, which PUB-1.9 says does not exist
-                // and which no record door can refuse (whether an address is
-                // already registered is a claim about the registry, not a
-                // per-record fact). Inside the totality domain the entry is
-                // absent and this is the plain insert; outside it, the bit a
-                // document was minted with is the bit that stands.
+                // Written once (PUB-1.9) on every build: this `contains_key`
+                // test holds it in release, where the check above is absent.
                 if addr.level() == Level::Document && !s.publication.contains_key(addr) {
                     s.publication.insert(addr.clone(), *published);
                 }
@@ -695,11 +678,7 @@ impl M3State {
                 s.nodes.insert(addr.clone());
             }
             M3Rec::RegisterPrincipal { prefix, id } => {
-                // WRITTEN ONCE, like a document's bit: a seat is never
-                // replaced (O12/O13), and no op re-seats one — `delegate`
-                // seats only a fresh prefix. Whether a prefix is seated is a
-                // claim about the registry, which no record door can settle,
-                // so it is answered here, at one lookup: the first seat stands.
+                // Written once (O12/O13): the first seat stands.
                 if !s.principals.contains_key(prefix) {
                     s.principals.insert(prefix.clone(), *id);
                 }

@@ -79,9 +79,8 @@ fn the_content_chain_of_the_ghost_home_document_never_issues_a_ghost_tumbler() {
     }
 
     // The exclusion is permanent, not merely initial: with the stored
-    // frontier far past the region, the five still answer unallocated —
-    // nothing exists at a reserved type address, and a COPY oracle asking
-    // about one is refused. Position GHOST_POSITIONS + 1 is an ordinary member.
+    // frontier far past the region, the five still answer unallocated, while
+    // position GHOST_POSITIONS + 1 is an ordinary member.
     let snap = k.snapshot();
     let m3 = snap.world().m3();
     for ordinal in 1..=GHOST_POSITIONS {

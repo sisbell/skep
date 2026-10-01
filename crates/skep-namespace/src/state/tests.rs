@@ -403,9 +403,9 @@ fn the_allocate_door_admits_exactly_what_the_fold_can_key() {
     }
 }
 
-/// AUTH-6.37's optional accessor: [`M3State::effective_owner_pair`] is ω
-/// UNPROJECTED — the two projections' answers, as ONE entry, at every
-/// probe — and its `None` is theirs. The probes are the read's own cells:
+/// [`M3State::effective_owner_pair`] is ω UNPROJECTED — the two
+/// projections' answers, as ONE entry, at every probe — and its `None` is
+/// theirs. The probes are the owner-of-address read's own cells (AUTH-6.37):
 /// a seat answers ITSELF (`prefix == a`; these seats are folded without
 /// their allocations, so this pins ω's walk, and the account-tier
 /// equivalence of seat and allocation is

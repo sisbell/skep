@@ -365,18 +365,27 @@ where
     /// Denial-as-fork, allocation half [ASN-0042 O10, account-tier case
     /// ONLY; §7]: a fresh document in the caller's OWN account. Resolves
     /// `pfx(caller)` off a snapshot — value-stable, since prefixes are
-    /// immutable (O13) — so `fork` opens no transaction of its own; an
-    /// unknown id returns
-    /// `Err(TxnError::Rejected(CreateDocumentError::NotOwner))` directly,
-    /// opening NO transaction. Then reduces to
+    /// immutable (O13) — so the resolution takes no transaction; an unknown
+    /// id returns `Err(TxnError::Rejected(CreateDocumentError::NotOwner))`
+    /// directly, opening NO transaction. Then reduces to
     /// [`Namespace::create_new_document`]`(caller, pfx(caller))`, whose
     /// ω-auth passes by construction (SelfOwnershipAtPrefix), and returns
-    /// its `(Address, Seq)`.
+    /// its `(Address, Seq)`: that op's one transaction is the only one `fork`
+    /// opens.
     ///
     /// A node-tier caller is rejected with the typed
     /// `CreateDocumentError::Mint(MintError::NotAnAccount)` — the node-tier
-    /// O10 case is DROPPED, not relocated to `delegate` (Conflicts §6). M5
-    /// wires the shared content separately (mechanism/policy split).
+    /// O10 case is DROPPED, not relocated to `delegate` (Conflicts §6).
+    ///
+    /// It shares no content — the content-sharing fork is M5's VERSION — and
+    /// it cannot run inside a composite: past its unknown-id refusal it opens
+    /// `create_new_document`'s transaction, and M2 answers a nested one with
+    /// a panic (the PRECONDITION on [`Namespace`]). A composite that forks
+    /// WITH content builds the fork from M3's pure parts instead:
+    /// [`M3State::principal_prefix`], read off a snapshot, names the caller's
+    /// account and so the [`M3State::document_lock_key`] the composite takes,
+    /// and [`M3State::mint_document`] mints there inside the composite's own
+    /// transaction.
     ///
     /// `published` is `fork`'s own three-valued flag (PUB-8.16, PUB-8.17's
     /// sibling on the create path), handed through the literal reduction to

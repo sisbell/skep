@@ -197,3 +197,20 @@ fn an_op_past_its_pre_work_opens_a_transaction_of_its_own() {
         Ok(())
     });
 }
+
+/// `fork` under the same PRECONDITION: its one refusal before a transaction
+/// is the unknown id, and past it the op is `create_new_document`'s
+/// transaction. So a composite that forks WITH content cannot call `fork`
+/// inside its own closure — it builds the fork from M3's pure parts, as
+/// `fork`'s doc says. `ID1` is seated in the fixture, so the call is past
+/// that refusal.
+#[test]
+#[should_panic(expected = "transact is not reentrant")]
+fn a_fork_past_its_unknown_id_opens_a_transaction_of_its_own() {
+    let (k, _acct, _doc) = kernel_with_account_and_doc();
+    let ns = Namespace::new(&k);
+    let _ = k.transact::<_, ()>(&[], |_stg| {
+        let _ = ns.fork(ID1, None);
+        Ok(())
+    });
+}

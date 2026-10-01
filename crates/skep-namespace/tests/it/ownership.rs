@@ -111,14 +111,15 @@ fn omega_is_the_longest_covering_prefix_at_every_depth() {
         (a(&[1, 0, 4]), PrincipalId(50)),
         (a(&[1, 0, 4, 1]), PrincipalId(5)),
     ];
-    // Independent oracle: reconstruct x's OWN node/account-tier prefixes,
-    // longest first, and take the first that names a principal. That is the
-    // other derivation of ω — deliberately not the implementation's, which
-    // walks Π and keeps the longest cover — so the two can only agree by
-    // both being right.
-    let oracle = |x: &Address| -> Option<PrincipalId> {
-        (1..=x.tumbler().len()).rev().find_map(|plen| {
-            let p = validate(Tumbler::new(x.tumbler().iter().take(plen).cloned()).ok()?).ok()?;
+    // Independent oracle: reconstruct the probe's OWN node/account-tier
+    // prefixes, longest first, and take the first that names a principal.
+    // That is the other derivation of ω — deliberately not the
+    // implementation's, which walks Π and keeps the longest cover — so the two
+    // can only agree by both being right.
+    let oracle = |probe: &Address| -> Option<PrincipalId> {
+        (1..=probe.tumbler().len()).rev().find_map(|plen| {
+            let p =
+                validate(Tumbler::new(probe.tumbler().iter().take(plen).cloned()).ok()?).ok()?;
             if !matches!(p.level(), Level::Node | Level::Account) {
                 return None;
             }
@@ -162,19 +163,23 @@ fn omega_is_the_longest_covering_prefix_at_every_depth() {
 
     let mut ids: Vec<PrincipalId> = pi.iter().map(|(_, id)| *id).collect();
     ids.push(UNKNOWN_ID);
-    for x in &probes {
-        assert_eq!(m3.effective_owner(x), oracle(x), "ω disagrees at {x:?}");
+    for probe in &probes {
+        assert_eq!(
+            m3.effective_owner(probe),
+            oracle(probe),
+            "ω disagrees at {probe:?}"
+        );
         // The other projection of the same walk: the seat, not the id.
         assert_eq!(
-            m3.effective_owner_prefix(x),
-            oracle(x).and_then(|id| pi.iter().find(|(_, i)| *i == id).map(|(p, _)| p)),
-            "ω's prefix disagrees at {x:?}"
+            m3.effective_owner_prefix(probe),
+            oracle(probe).and_then(|id| pi.iter().find(|(_, i)| *i == id).map(|(p, _)| p)),
+            "ω's prefix disagrees at {probe:?}"
         );
         for id in &ids {
             assert_eq!(
-                m3.is_effective_owner(*id, x),
-                oracle(x) == Some(*id),
-                "is_effective_owner({id:?}, {x:?}) disagrees with ω"
+                m3.is_effective_owner(*id, probe),
+                oracle(probe) == Some(*id),
+                "is_effective_owner({id:?}, {probe:?}) disagrees with ω"
             );
         }
     }
@@ -298,10 +303,10 @@ fn omega_refuses_a_principal_seated_below_the_account_tier() {
     assert_eq!(m3.effective_owner(&doc), Some(ID1));
     assert_eq!(m3.effective_owner_prefix(&doc), Some(&a(&[1, 0, 1])));
     assert!(!m3.is_effective_owner(ID2, &doc));
-    let elem = a(&[1, 0, 1, 0, 1, 0, 1, 1]);
-    assert_eq!(m3.effective_owner(&elem), Some(ID1));
-    assert_eq!(m3.effective_owner_prefix(&elem), Some(&a(&[1, 0, 1])));
-    assert!(!m3.is_effective_owner(ID2, &elem));
+    let element = a(&[1, 0, 1, 0, 1, 0, 1, 1]);
+    assert_eq!(m3.effective_owner(&element), Some(ID1));
+    assert_eq!(m3.effective_owner_prefix(&element), Some(&a(&[1, 0, 1])));
+    assert!(!m3.is_effective_owner(ID2, &element));
 
     // The other two readers of Π answer VERBATIM, as their docs say — the
     // registry still reports the seat…

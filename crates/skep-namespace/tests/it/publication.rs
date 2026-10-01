@@ -9,7 +9,7 @@ use serde::Serialize;
 use skep_address::{Address, Tumbler};
 use skep_kernel::Kernel;
 use skep_namespace::{
-    first_document_address, ghost_home_doc, head_document, HasM3, M3Rec, M3State, Namespace,
+    first_document_address, ghost_home_document, head_document, HasM3, M3Rec, M3State, Namespace,
     PrincipalId, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL,
 };
 use tempfile::tempdir;
@@ -245,7 +245,7 @@ fn only_a_document_allocate_writes_the_publication_map() {
     // (PUB-6.65: `1.1.0.1.0.1` and `H`), which sort above everything under
     // `1.0.1`.
     let (doc, version) = (a(&[1, 0, 1, 0, 1]), a(&[1, 0, 1, 0, 1, 1]));
-    let (seed_1, seed_h) = (ghost_home_doc(), head_document());
+    let (seed_1, seed_h) = (ghost_home_document(), head_document());
     assert_eq!(
         s.documents().collect::<Vec<_>>(),
         vec![
@@ -280,7 +280,7 @@ fn the_publication_walk_is_in_address_order_not_mint_order() {
         a(&[1, 0, 1, 0, 2]),
         a(&[1, 0, 1, 0, 1, 1]),
     );
-    let (seed_1, seed_h) = (ghost_home_doc(), head_document());
+    let (seed_1, seed_h) = (ghost_home_document(), head_document());
     // The seed alone, one minted, many — the walk's three sizes, in mint order
     // d1, d2, v1.
     let s = M3State::genesis();

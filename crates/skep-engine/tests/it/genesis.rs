@@ -15,7 +15,7 @@ use skep_content::{HasContent, Val};
 use skep_engine::World;
 use skep_links::{coverage_class, HasLinks, ReservedAddrs, ShippedType, View};
 use skep_namespace::{
-    ghost_home_doc, ghost_position, head_document, system_account, system_node, HasM3,
+    ghost_home_document, ghost_position, head_document, system_account, system_node, HasM3,
     BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS, SYSTEM_PRINCIPAL,
 };
 
@@ -41,7 +41,7 @@ fn genesis_seeds_each_store_per_its_design() {
     // M3's system account seed (PUB-6.65): two documents, born published and
     // empty. The bit is read off M3, not off `World::published`, which an
     // empty exception set answers `true` whatever M3 holds.
-    for doc in [ghost_home_doc(), head_document()] {
+    for doc in [ghost_home_document(), head_document()] {
         assert!(world.m3().is_registered_document(&doc), "{doc} is seeded");
         assert!(world.m3().published(&doc), "{doc} is born published (M3's bit)");
         assert_eq!(world.m5().content_count(&doc), nat(0), "{doc} is born empty");
@@ -165,7 +165,7 @@ fn no_reserved_address_is_ever_minted_and_the_ceremony_is_not_renumbered() {
 
     // The lineage is seeded at its ordinary ordinals — the pin renumbers
     // nothing — and its document is born EMPTY: nothing at the five, anywhere.
-    let doc1 = ghost_home_doc();
+    let doc1 = ghost_home_document();
     {
         let snap = engine.kernel().snapshot();
         let m3 = snap.world().m3();

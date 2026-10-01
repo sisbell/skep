@@ -179,7 +179,7 @@ fn the_format_stamp_leads_the_world_s_bytes() {
 /// length (M3's own test pins that half; this one rides it).
 #[test]
 fn a_checkpoint_without_the_bit_or_the_stamp_fails_to_decode() {
-    use skep_namespace::{ghost_home_doc, head_document};
+    use skep_namespace::{ghost_home_document, head_document};
 
     let world = World::genesis();
     let current = bincode::serialize(&world).expect("a world serializes");
@@ -207,7 +207,7 @@ fn a_checkpoint_without_the_bit_or_the_stamp_fails_to_decode() {
     // M3's slice.
     let namespace_bytes = bincode::serialize(&world.namespace).expect("M3 serializes");
     let publication_bytes =
-        bincode::serialize(&vec![(ghost_home_doc(), true), (head_document(), true)])
+        bincode::serialize(&vec![(ghost_home_document(), true), (head_document(), true)])
             .expect("the map's entries serialize");
     assert!(
         namespace_bytes.ends_with(&publication_bytes),

@@ -102,7 +102,7 @@ fn the_deposit_class_types_are_enroll_and_retire_in_the_ghost_homes_type_subspac
     let spelled: Vec<String> = types.iter().map(|ty| ty.tumbler().to_string()).collect();
     assert_eq!(spelled, ["1.1.0.1.0.1.0.3.1", "1.1.0.1.0.1.0.3.2"]);
     for ty in types {
-        assert_eq!(document_of(ty), Some(ghost_home_doc()), "{ty:?}: homed in the ghost document");
+        assert_eq!(document_of(ty), Some(ghost_home_document()), "{ty:?}: homed in the ghost document");
         assert_eq!(ty.subspace(), Some(&n(COMMONS_TYPE_SUBSPACE)), "{ty:?}: the type subspace");
     }
     let (enroll, retire) = (types[0].tumbler(), types[1].tumbler());

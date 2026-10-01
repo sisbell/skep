@@ -5,7 +5,7 @@ use crate::common::*;
 
 use skep_address::Level;
 use skep_namespace::{
-    ghost_home_doc, head_document, system_account, system_node, HasM3, M3State,
+    ghost_home_document, head_document, system_account, system_node, HasM3, M3State,
     BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL,
 };
 
@@ -42,7 +42,7 @@ fn genesis_seeds_the_bootstrap_roots_and_the_system_account() {
         s.effective_owner_prefix(&system_account()),
         Some(&system_account())
     );
-    for doc in [ghost_home_doc(), head_document()] {
+    for doc in [ghost_home_document(), head_document()] {
         assert!(s.is_registered_document(&doc), "{doc:?} is seeded");
         assert!(s.published(&doc), "{doc:?} is born published");
     }

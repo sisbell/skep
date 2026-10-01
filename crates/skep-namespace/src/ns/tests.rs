@@ -158,21 +158,19 @@ fn the_chain_family_rule_separates_document_from_version() {
 
     // The fixed families carry what the rule yields, and the two chains
     // anchored at one account are distinct keys.
-    let acct = validate(Tumbler::new([1u32, 0, 1].map(Nat::from)).expect("nonempty"))
-        .expect("T4-valid account");
+    let acct = a(&[1, 0, 1]);
     assert_eq!(version_ns(&acct).g, Generator::SameField);
     assert_eq!(document_ns(&acct).g, Generator::NextField);
     assert_ne!(version_ns(&acct), document_ns(&acct));
     assert_eq!(account_ns(&acct).g, Generator::SameField);
 
-    let doc = validate(Tumbler::new([1u32, 0, 1, 0, 1].map(Nat::from)).expect("nonempty"))
-        .expect("T4-valid document");
+    let doc = a(&[1, 0, 1, 0, 1]);
     assert_eq!(content_ns(&doc).g, Generator::SameField);
     assert_eq!(link_ns(&doc).g, Generator::SameField);
     // The child-side derivation agrees with the anchor-side one: the
     // account peeked under a node sits in the very key `account_ns`
     // builds there.
-    let node = validate(Tumbler::new([Nat::from(1u32)]).expect("nonempty")).expect("T4-valid");
+    let node = a(&[1]);
     assert_eq!(account_ns(&node).g, Generator::NextField);
     assert_eq!(namespace_of(&acct), Some(account_ns(&node)));
 }

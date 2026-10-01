@@ -199,25 +199,31 @@ fn journaled_types_survive_serde_round_trips() {
     .expect("content commit");
     let state = k.snapshot().world().m3().clone();
     let bytes = bincode::serialize(&state).expect("serialize M3State");
-    let back: M3State = bincode::deserialize(&bytes).expect("deserialize M3State");
+    let restored: M3State = bincode::deserialize(&bytes).expect("deserialize M3State");
     // Whole-value: the decoded slice IS the encoded one, entry for entry
     // across the three registries and the publication map — which the
     // per-question probes below then name, so a failure says which claim
     // broke.
-    assert_eq!(back, state);
-    assert!(back.is_allocated(&a(&[1, 0, 1, 0, 1, 0, 1, 1])));
-    assert!(back.is_registered_document(&doc));
+    assert_eq!(restored, state);
+    assert!(restored.is_allocated(&a(&[1, 0, 1, 0, 1, 0, 1, 1])));
+    assert!(restored.is_registered_document(&doc));
     // The publication map rides inside the slice too: the fixture's doc is
     // the account's doc 1, born published by the flagless create.
-    assert!(back.published(&doc));
-    assert_eq!(back.entity_level(&acct), Some(Level::Account));
-    assert_eq!(back.next_account_prefix(&a(&[1])), Some(a(&[1, 0, 2])));
+    assert!(restored.published(&doc));
+    assert_eq!(restored.entity_level(&acct), Some(Level::Account));
+    assert_eq!(restored.next_account_prefix(&a(&[1])), Some(a(&[1, 0, 2])));
     // The whole principal registry rides inside the slice — both its
     // entries, both directions (id → prefix, address → ω).
-    assert_eq!(back.principal_prefix(ID1), Some(&acct));
-    assert_eq!(back.effective_owner(&doc), Some(ID1));
-    assert_eq!(back.principal_prefix(BOOTSTRAP_PRINCIPAL), Some(&a(&[1])));
-    assert_eq!(back.effective_owner(&a(&[1])), Some(BOOTSTRAP_PRINCIPAL));
+    assert_eq!(restored.principal_prefix(ID1), Some(&acct));
+    assert_eq!(restored.effective_owner(&doc), Some(ID1));
+    assert_eq!(
+        restored.principal_prefix(BOOTSTRAP_PRINCIPAL),
+        Some(&a(&[1]))
+    );
+    assert_eq!(
+        restored.effective_owner(&a(&[1])),
+        Some(BOOTSTRAP_PRINCIPAL)
+    );
 }
 
 /// A record comes back off the journal through its fields' doors and no other
@@ -231,9 +237,9 @@ fn a_journal_frame_re_enters_only_through_its_field_doors() {
     // A tumbler that is not T4-valid cannot arrive as a record: the payload
     // re-validates on the way off the journal (M1's validating Deserialize),
     // so the fold is never handed a malformed address.
-    let malformed = bincode::serialize(&RawM3Rec::RegisterNode { addr: t(&[1, 0]) })
+    let malformed_frame = bincode::serialize(&RawM3Rec::RegisterNode { addr: t(&[1, 0]) })
         .expect("serialize the raw shape");
-    assert!(bincode::deserialize::<M3Rec>(&malformed).is_err());
+    assert!(bincode::deserialize::<M3Rec>(&malformed_frame).is_err());
 
     // Nor can a PARENTLESS Allocate. [7] is T4-valid, so M1's door passes it
     // — and `apply_m3` derives its namespace from the parent, which a
@@ -253,13 +259,14 @@ fn a_journal_frame_re_enters_only_through_its_field_doors() {
     }
     // The refusal is exactly the parentless case, not a length rule: the
     // shortest address that DOES extend a parent still decodes.
-    let shortest = bincode::serialize(&RawM3Rec::Allocate {
+    let shortest_parented_frame = bincode::serialize(&RawM3Rec::Allocate {
         addr: t(&[1, 1]),
         published: false,
     })
     .expect("serialize the raw shape");
     assert_eq!(
-        bincode::deserialize::<M3Rec>(&shortest).expect("a two-component Allocate decodes"),
+        bincode::deserialize::<M3Rec>(&shortest_parented_frame)
+            .expect("a two-component Allocate decodes"),
         M3Rec::Allocate {
             addr: a(&[1, 1]),
             published: false,
@@ -387,32 +394,28 @@ fn durable_kernel_recovers_the_whole_slice_by_checkpoint_and_replay() {
     // re-seed). The publication map's own recovery, bit by bit, is pinned in
     // `the_bit_is_immutable_and_recovers_by_checkpoint_and_replay`.
     let dir = tempdir().expect("tempdir");
-    let acct;
-    let doc;
-    let before;
-    {
+    let (acct, doc, live) = {
         let k = Kernel::open(fsync_config(dir.path()), genesis_world()).expect("open");
         let ns = Namespace::new(&k);
-        let (acc, _) = ns
+        let (acct, _) = ns
             .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
             .expect("delegate");
-        acct = acc;
         // Checkpoint here: the delegation is restored FROM the checkpoint;
         // everything after rides post-checkpoint replay.
         k.checkpoint().expect("checkpoint");
-        let (d, _) = ns.create_new_document(ID1, &acct, None).expect("create");
-        doc = d;
+        let (doc, _) = ns.create_new_document(ID1, &acct, None).expect("create");
         ns.register_node(t(&[1, 7])).expect("register node");
-        before = k.snapshot().world().m3().clone();
-    }
+        let live = k.snapshot().world().m3().clone();
+        (acct, doc, live)
+    };
     let k2 = Kernel::open(fsync_config(dir.path()), genesis_world()).expect("reopen");
     let snap = k2.snapshot();
     let m3 = snap.world().m3();
-    // What recovery claims, whole: the restored slice IS the pre-crash slice
-    // — checkpoint-loaded registries plus post-checkpoint replay landing
-    // exactly where the live one stood. The named answers below say which
-    // parts of that a reader cares about.
-    assert_eq!(m3, &before);
+    // What recovery claims, whole: the recovered slice IS the live one —
+    // checkpoint-loaded registries plus post-checkpoint replay landing
+    // exactly where it stood. The named answers below say which parts of
+    // that a reader cares about.
+    assert_eq!(m3, &live);
     assert_eq!(m3.principal_prefix(ID1), Some(&acct));
     assert!(m3.is_registered_document(&doc));
     assert_eq!(m3.entity_level(&a(&[1, 7])), Some(Level::Node));

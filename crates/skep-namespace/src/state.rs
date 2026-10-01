@@ -29,7 +29,7 @@ use num_traits::Zero;
 use serde::{Deserialize, Deserializer, Serialize};
 use skep_address::{ordinal, validate, Address, GateViolation, Level, Nat, Tumbler};
 
-use crate::ghost::{ghost_floor, ghost_home_doc};
+use crate::ghost::{ghost_floor, ghost_home_document};
 use crate::ns::{namespace_of, nth_in, NsKey};
 
 /// Opaque external identity, supplied by M10/session. `delegate` enforces
@@ -476,8 +476,8 @@ pub fn system_node() -> Address {
 /// The SYSTEM ACCOUNT `1.1.0.1` (PUB-6.65, RES-304) — the commons account of
 /// the design, owned by [`SYSTEM_PRINCIPAL`] and seeded by [`M3State::genesis`]
 /// with its doc 1 (the commons registry's future home, which IS
-/// [`ghost_home_doc`]) and its doc 2 (the daemon's head document `H`), both
-/// born published. Its account chain sits under [`system_node`].
+/// [`ghost_home_document`]) and its doc 2 (the daemon's head document `H`),
+/// both born published. Its account chain sits under [`system_node`].
 pub fn system_account() -> Address {
     let t = Tumbler::new([1u32, 1, 0, 1].into_iter().map(Nat::from))
         .expect("a four-component sequence is nonempty");
@@ -516,7 +516,7 @@ impl M3State {
     /// [`system_account`] `1.1.0.1` for [`SYSTEM_PRINCIPAL`], and the
     /// allocations of the two documents
     /// [`crate::Namespace::create_new_document`] mints there, doc 1
-    /// ([`ghost_home_doc`], the commons registry's future home) and doc 2
+    /// ([`ghost_home_document`], the commons registry's future home) and doc 2
     /// ([`head_document`] `H`), born PUBLISHED (PUB-1.25's
     /// genesis/commons-seeded row) — handed to [`M3State::apply_m3`] in that
     /// order. So the fold is the one writer of the frontier and publication
@@ -558,7 +558,7 @@ impl M3State {
             },
             // Two creates under it, both born published: doc 1, then doc 2 (H).
             M3Rec::Allocate {
-                addr: ghost_home_doc(),
+                addr: ghost_home_document(),
                 published: true,
             },
             M3Rec::Allocate {
@@ -659,8 +659,8 @@ impl M3State {
                 // ordinal is the effective frontier + 1 — a regressed or
                 // jumped ordinal is OUTSIDE the totality domain, never
                 // silently absorbed. The floor term matters exactly once per
-                // journal: the ghost home doc's first content Allocate carries
-                // ordinal GHOST_POSITIONS + 1 over an absent frontier.
+                // journal: the ghost home document's first content Allocate
+                // carries ordinal GHOST_POSITIONS + 1 over an absent frontier.
                 debug_assert_eq!(
                     n,
                     s.effective_frontier(&key) + 1u32,

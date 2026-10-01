@@ -5,8 +5,8 @@
 use crate::common::*;
 
 use skep_namespace::{
-    first_document_address, ghost_home_doc, prefix_contains, system_account, CreateDocumentError,
-    HasM3, MintError, Namespace, BOOTSTRAP_PRINCIPAL,
+    first_document_address, ghost_home_document, prefix_contains, system_account,
+    CreateDocumentError, HasM3, MintError, Namespace, BOOTSTRAP_PRINCIPAL,
 };
 
 #[test]
@@ -92,7 +92,7 @@ fn the_first_document_address_is_the_slot_the_document_chain_opens_at() {
     // genesis seeds — so the compiled literal and the chain rule agree.
     assert_eq!(
         first_document_address(&system_account()),
-        Some(ghost_home_doc())
+        Some(ghost_home_document())
     );
     // Only an account anchors a document chain, so off the account tier
     // there is no slot and no documents; an unregistered account's chain is

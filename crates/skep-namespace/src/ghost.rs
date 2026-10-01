@@ -10,12 +10,12 @@ use skep_address::{content_subspace, elem_addr, validate, Address, ElemPos, Nat,
 
 use crate::ns::{content_ns, NsKey};
 
-/// How many content positions of [`ghost_home_doc`] are the GHOST REGION: the
-/// realm-global reserved type addresses M7 compiles as its format constants
-/// (`ReservedAddrs::format` builds them from [`ghost_position`], so the two
-/// crates cannot drift). A ghost tumbler is a reserved type address and
-/// nothing else — a fixed, well-known, T4-valid name at which nothing exists
-/// and nothing may ever be minted.
+/// How many content positions of [`ghost_home_document`] are the GHOST
+/// REGION: the realm-global reserved type addresses M7 compiles as its format
+/// constants (`ReservedAddrs::format` builds them from [`ghost_position`], so
+/// the two crates cannot drift). A ghost tumbler is a reserved type address
+/// and nothing else — a fixed, well-known, T4-valid name at which nothing
+/// exists and nothing may ever be minted.
 ///
 /// M3 owes the allocation half of that sentence, and it is the load-bearing
 /// clause of the whole ruling: dispatch is by number, so a fresh content mint
@@ -41,18 +41,18 @@ pub const GHOST_POSITIONS: u32 = 5;
 /// Both land at their ordinary ordinals: the document is REAL, only content
 /// positions 1..=[`GHOST_POSITIONS`] inside it are ghost, and its first
 /// content mint lands at position [`GHOST_POSITIONS`] + 1.
-pub fn ghost_home_doc() -> Address {
+pub fn ghost_home_document() -> Address {
     let comps = [1u32, 1, 0, 1, 0, 1].into_iter().map(Nat::from);
     let t = Tumbler::new(comps).expect("a six-component sequence is nonempty");
     validate(t).expect("the ghost home document 1.1.0.1.0.1 is T4-valid by construction")
 }
 
 /// Ghost tumbler `ordinal` of the region — M1's element address of
-/// [`ghost_home_doc`] at [`content_subspace`], at that ordinal:
+/// [`ghost_home_document`] at [`content_subspace`], at that ordinal:
 /// `[1,1,0,1,0,1,0,1,ordinal]`. The one mint-shaped spelling of the five
 /// reserved type addresses; M7's `ReservedAddrs::format` reads them here. The
 /// document and the subspace each have exactly one spelling — the document is
-/// [`ghost_home_doc`]'s and the subspace is M1's — so the addresses M7
+/// [`ghost_home_document`]'s and the subspace is M1's — so the addresses M7
 /// dispatches on and the namespace the allocator floors
 /// ([`GHOST_POSITIONS`]) cannot come apart.
 ///
@@ -66,20 +66,20 @@ pub fn ghost_position(ordinal: u32) -> Address {
         "the ghost region is content positions 1..={GHOST_POSITIONS} of doc 1.1.0.1.0.1"
     );
     elem_addr(ElemPos {
-        doc: ghost_home_doc(),
+        doc: ghost_home_document(),
         subspace: content_subspace(),
         ordinal: Nat::from(ordinal),
     })
-    .expect("ghost_home_doc is Document-level; s_C ≥ 1; ordinal ≥ 1 by the assert above")
+    .expect("ghost_home_document is Document-level; s_C ≥ 1; ordinal ≥ 1 by the assert above")
 }
 
-/// Is `key` THE ghost content namespace — `(b_C(ghost_home_doc), 1)`, the one
-/// namespace whose chain contains the five ghost tumblers? Decided by key
-/// equality against a lazily-built constant, so the compare on every other
-/// namespace fails at the first differing component and the hot paths pay a
-/// short slice comparison.
+/// Is `key` THE ghost content namespace — `(b_C(ghost_home_document), 1)`,
+/// the one namespace whose chain contains the five ghost tumblers? Decided by
+/// key equality against a lazily-built constant, so the compare on every
+/// other namespace fails at the first differing component and the hot paths
+/// pay a short slice comparison.
 fn is_ghost_ns(key: &NsKey) -> bool {
-    static GHOST_NS: LazyLock<NsKey> = LazyLock::new(|| content_ns(&ghost_home_doc()));
+    static GHOST_NS: LazyLock<NsKey> = LazyLock::new(|| content_ns(&ghost_home_document()));
     *key == *GHOST_NS
 }
 
@@ -142,7 +142,7 @@ mod tests {
     /// consequence the integration suite checks.
     #[test]
     fn every_ghost_position_sits_in_the_namespace_the_floor_skips() {
-        let ghost_ns = content_ns(&ghost_home_doc());
+        let ghost_ns = content_ns(&ghost_home_document());
         assert_eq!(ghost_floor(&ghost_ns), Nat::from(GHOST_POSITIONS));
         for ordinal in 1..=GHOST_POSITIONS {
             let position = ghost_position(ordinal);

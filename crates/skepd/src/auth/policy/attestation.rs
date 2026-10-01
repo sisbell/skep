@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn the_dry_run_answers_the_store_s_own_gates_and_its_sentinel_passes_them() {
         use skep_arrangement::{Base, VPos};
-        use skep_namespace::{ghost_home_doc, head_document, SYSTEM_PRINCIPAL};
+        use skep_namespace::{ghost_home_document, head_document, SYSTEM_PRINCIPAL};
 
         let engine = skep_engine::Engine::open(KernelConfig {
             durability: Durability::InMemory,
@@ -465,7 +465,7 @@ mod tests {
             !refused_at_or_before_the_source_gate(world, &into_h(None), SYSTEM_PRINCIPAL),
             "a shot the store admits through its gate is not refused there"
         );
-        let foreign = Base { member: ghost_home_doc(), extent: Nat::from(0u32) };
+        let foreign = Base { member: ghost_home_document(), extent: Nat::from(0u32) };
         assert!(
             refused_at_or_before_the_source_gate(world, &into_h(Some(foreign)), SYSTEM_PRINCIPAL),
             "a base outside the document's chain is refused ahead of the gate"

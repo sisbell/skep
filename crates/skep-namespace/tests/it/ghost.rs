@@ -4,8 +4,8 @@
 use crate::common::*;
 
 use skep_namespace::{
-    ghost_home_doc, ghost_position, system_account, HasM3, M3State, Namespace, GHOST_POSITIONS,
-    SYSTEM_PRINCIPAL,
+    ghost_home_document, ghost_position, system_account, HasM3, M3State, Namespace,
+    GHOST_POSITIONS, SYSTEM_PRINCIPAL,
 };
 
 /// The region has exactly [`GHOST_POSITIONS`] names, and this assert is what
@@ -39,13 +39,13 @@ fn ghost_position_refuses_the_ordinal_below_the_region() {
 /// drives the one chain that could issue a ghost tumbler from genesis to well
 /// past the region and watches every answer.
 #[test]
-fn the_content_chain_of_the_ghost_home_doc_never_issues_a_ghost_tumbler() {
+fn the_content_chain_of_the_ghost_home_document_never_issues_a_ghost_tumbler() {
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
 
     // The lineage is seeded and its document is EMPTY: nothing exists at a
     // ghost tumbler at genesis.
-    let doc1 = ghost_home_doc();
+    let d1 = ghost_home_document();
     {
         let snap = k.snapshot();
         let m3 = snap.world().m3();
@@ -54,7 +54,7 @@ fn the_content_chain_of_the_ghost_home_doc_never_issues_a_ghost_tumbler() {
             "the seed seats the system account"
         );
         assert!(
-            m3.is_registered_document(&doc1),
+            m3.is_registered_document(&d1),
             "the seed registers the ghost home document at its ordinary ordinal"
         );
         for ordinal in 1..=GHOST_POSITIONS {
@@ -68,13 +68,13 @@ fn the_content_chain_of_the_ghost_home_doc_never_issues_a_ghost_tumbler() {
     // Drive the one namespace whose chain contains the five ghost tumblers:
     // every mint lands PAST the region, contiguously from GHOST_POSITIONS + 1.
     for ordinal in GHOST_POSITIONS + 1..=GHOST_POSITIONS + 7 {
-        let minted = commit_mint(&k, M3State::content_lock_key(&doc1), |m3| {
-            m3.mint_content(&doc1)
+        let minted = commit_mint(&k, M3State::content_lock_key(&d1), |m3| {
+            m3.mint_content(&d1)
         });
         assert_eq!(
             minted,
             a(&[1, 1, 0, 1, 0, 1, 0, 1, ordinal]),
-            "the ghost home doc's content chain must start past the region and stay contiguous"
+            "the ghost home document's content chain must start past the region and stay contiguous"
         );
     }
 
@@ -96,10 +96,10 @@ fn the_content_chain_of_the_ghost_home_doc_never_issues_a_ghost_tumbler() {
     // never a ghost tumbler — the T4b unique-parse half of the argument, at
     // the chains an attacker would actually drive: the link chain differs in
     // subspace, the version chain in tier shape.
-    let link = commit_mint(&k, M3State::link_lock_key(&doc1), |m3| m3.mint_link(&doc1));
+    let link = commit_mint(&k, M3State::link_lock_key(&d1), |m3| m3.mint_link(&d1));
     assert_eq!(link, a(&[1, 1, 0, 1, 0, 1, 0, 2, 1]));
-    let version = commit_mint(&k, M3State::version_lock_key(&doc1), |m3| {
-        m3.mint_version(&doc1, false)
+    let version = commit_mint(&k, M3State::version_lock_key(&d1), |m3| {
+        m3.mint_version(&d1, false)
     });
     assert_eq!(version, a(&[1, 1, 0, 1, 0, 1, 1]));
 
@@ -107,40 +107,40 @@ fn the_content_chain_of_the_ghost_home_doc_never_issues_a_ghost_tumbler() {
     // starts at 1 like any other — the region is five positions of one
     // document, not a rule about the prefix. Doc 2 is the seeded `H`, so the
     // account's next mint (as its own principal, the system's) is doc 3.
-    let (doc3, _) = ns
+    let (d3, _) = ns
         .create_new_document(SYSTEM_PRINCIPAL, &system_account(), None)
-        .expect("doc-3");
-    assert_eq!(doc3, a(&[1, 1, 0, 1, 0, 3]));
-    let first = commit_mint(&k, M3State::content_lock_key(&doc3), |m3| {
-        m3.mint_content(&doc3)
+        .expect("doc 3");
+    assert_eq!(d3, a(&[1, 1, 0, 1, 0, 3]));
+    let first = commit_mint(&k, M3State::content_lock_key(&d3), |m3| {
+        m3.mint_content(&d3)
     });
     assert_eq!(first, a(&[1, 1, 0, 1, 0, 3, 0, 1, 1]));
 }
 
 /// The floored frontier is ordinary recoverable state: a slice that minted
 /// past the ghost region round-trips M2's checkpoint encoding, and the
-/// recovered slice keeps both halves — members stay members, ghosts stay
-/// excluded. The frontier key's anchor is the ghost home doc's content base,
-/// which must pass `NsKey`'s T4 anchor door like any other key.
+/// restored slice keeps both halves — members stay members, ghosts stay
+/// excluded. The frontier key's anchor is the ghost home document's content
+/// base, which must pass `NsKey`'s T4 anchor door like any other key.
 #[test]
 fn a_floored_frontier_survives_the_checkpoint_round_trip() {
     let k = mem_kernel(genesis_world());
     // The ghost home document is genesis's (PUB-6.65's seed), born empty: the
     // first mint on its chain is what floors the frontier.
-    let doc1 = ghost_home_doc();
-    commit_mint(&k, M3State::content_lock_key(&doc1), |m3| {
-        m3.mint_content(&doc1)
+    let d1 = ghost_home_document();
+    commit_mint(&k, M3State::content_lock_key(&d1), |m3| {
+        m3.mint_content(&d1)
     });
 
     let live = k.snapshot().world().m3().clone();
     let bytes = bincode::serialize(&live).expect("checkpoint-encode the slice");
-    let recovered: M3State = bincode::deserialize(&bytes).expect("the slice re-enters");
-    assert_eq!(recovered, live);
+    let restored: M3State = bincode::deserialize(&bytes).expect("the slice re-enters");
+    assert_eq!(restored, live);
     for ordinal in 1..=GHOST_POSITIONS {
-        assert!(!recovered.is_allocated(&ghost_position(ordinal)));
+        assert!(!restored.is_allocated(&ghost_position(ordinal)));
     }
-    assert!(recovered.is_allocated(&a(&[1, 1, 0, 1, 0, 1, 0, 1, GHOST_POSITIONS + 1])));
-    let (next, _) = recovered.mint_content(&doc1).expect("the chain continues");
+    assert!(restored.is_allocated(&a(&[1, 1, 0, 1, 0, 1, 0, 1, GHOST_POSITIONS + 1])));
+    let (next, _) = restored.mint_content(&d1).expect("the chain continues");
     assert_eq!(next, a(&[1, 1, 0, 1, 0, 1, 0, 1, GHOST_POSITIONS + 2]));
 }
 

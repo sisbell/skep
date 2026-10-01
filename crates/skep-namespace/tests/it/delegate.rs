@@ -144,13 +144,13 @@ fn delegate_commits_the_baptism_and_the_seat_as_one_transaction() {
 #[test]
 fn an_account_is_allocated_iff_a_principal_is_seated_at_it() {
     let (k, acct, _doc) = kernel_with_account_and_doc();
-    let (sub, _) = Namespace::new(&k)
+    let (sub_acct, _) = Namespace::new(&k)
         .delegate(ID1, t(&[1, 0, 1, 1]), ID2)
         .expect("sub-delegate");
     let m3 = k.snapshot().world().m3().clone();
     for probe in [
         acct.clone(),
-        sub.clone(),
+        sub_acct.clone(),
         system_account(),
         a(&[1, 0, 2]),       // the bootstrap node's next slot
         a(&[1, 0, 1, 2]),    // the account's next sub-account slot
@@ -164,7 +164,7 @@ fn an_account_is_allocated_iff_a_principal_is_seated_at_it() {
         );
     }
     // Both answers occur, so the equality is not vacuous.
-    assert!(m3.is_registered_account(&sub));
+    assert!(m3.is_registered_account(&sub_acct));
     assert!(!m3.is_registered_account(&a(&[1, 0, 2])));
 }
 

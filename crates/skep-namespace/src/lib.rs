@@ -83,9 +83,9 @@
 //!   chain opens at, [`first_document_address`] for an account's document
 //!   chain and [`first_version_address`] for a document's version chain.
 //! * **The ghost region** (owner ruling, 2026-08-26) — the first
-//!   [`GHOST_POSITIONS`] content positions of [`ghost_home_doc`], spelled by
-//!   [`ghost_position`]: five ghost tumblers that are compiled format
-//!   constants, which M7's `ReservedAddrs::format` reads to build its
+//!   [`GHOST_POSITIONS`] content positions of [`ghost_home_document`],
+//!   spelled by [`ghost_position`]: five ghost tumblers that are compiled
+//!   format constants, which M7's `ReservedAddrs::format` reads to build its
 //!   reserved type addresses.
 //!   M3 owns the allocation half of the ruling — the allocator skips those
 //!   ordinals, so no mint on any board can ever issue one and
@@ -157,7 +157,7 @@ mod state;
 mod ops;
 
 pub use error::{CreateDocumentError, DelegateError, MintError, NodeError};
-pub use ghost::{ghost_home_doc, ghost_position, GHOST_POSITIONS};
+pub use ghost::{ghost_home_document, ghost_position, GHOST_POSITIONS};
 pub use ns::{first_document_address, first_version_address};
 pub use ops::Namespace;
 pub use state::{

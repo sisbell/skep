@@ -139,7 +139,7 @@ fn lock_keys_distinguish_every_chain_and_key_domain() {
 /// stops.
 #[test]
 fn the_ghost_floor_holds_against_a_regressed_frontier() {
-    let ghost_ns = content_ns(&ghost_home_doc());
+    let ghost_ns = content_ns(&ghost_home_document());
     let mut s = M3State::genesis();
     s.frontiers.insert(ghost_ns.clone(), Nat::from(2u32));
 
@@ -148,7 +148,7 @@ fn the_ghost_floor_holds_against_a_regressed_frontier() {
         .next_in(&ghost_ns)
         .expect("a Document's content base is T4");
     assert_eq!(
-        *ordinal(next.tumbler()),
+        *skep_address::ordinal(next.tumbler()),
         Nat::from(GHOST_POSITIONS + 1),
         "a regressed frontier moved a mint into the ghost region"
     );
@@ -405,7 +405,7 @@ fn the_pair_accessor_is_omega_unprojected() {
         });
 
     let node = a(&[1]);
-    for (probe, expect) in [
+    for (probe, expected) in [
         // A seat of its own: the prefix IS the address asked.
         (x.clone(), Some((&x, x_id))),
         (sub.clone(), Some((&sub, sub_id))),
@@ -423,7 +423,7 @@ fn the_pair_accessor_is_omega_unprojected() {
         (a(&[2, 0, 7]), None),
     ] {
         let pair = s.effective_owner_pair(&probe);
-        assert_eq!(pair, expect, "ω's pair at {probe:?}");
+        assert_eq!(pair, expected, "ω's pair at {probe:?}");
         assert_eq!(
             pair.map(|(prefix, _)| prefix),
             s.effective_owner_prefix(&probe),

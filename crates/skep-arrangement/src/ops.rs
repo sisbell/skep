@@ -49,7 +49,7 @@ use num_traits::{One, Zero};
 use skep_address::{content_subspace, document_of, elem_addr, Address, ElemPos, Nat};
 use skep_content::{stage_write, ContentError, ContentWrite, HasContent, Val};
 use skep_kernel::{Attestation, Kernel, LockKey, Seq, Staging, TxnError, WorldState};
-use skep_namespace::{ghost_home_doc, HasM3, M3Rec, M3State, MintError, PrincipalId};
+use skep_namespace::{ghost_home_document, HasM3, M3Rec, M3State, MintError, PrincipalId};
 
 use crate::chain::{deposit_surface, published_target, reading_surface, trunk_head, trunk_of};
 use crate::error::{
@@ -132,7 +132,7 @@ const DEPOSIT_CLASS_ORDINALS: [u32; 2] = [1, 2];
 /// RES-249, RES-261; the owner's ruling, 2026-09-18): the members' list of
 /// PUB-2.61's class sentence RESTRICTED TO THE CLASSES THAT DEPOSIT AN ATOM —
 /// a BUILD-TIME set, M5's own, each member the ghost home document's
-/// ([`ghost_home_doc`]) subspace-3 element at its commons ordinal
+/// ([`ghost_home_document`]) subspace-3 element at its commons ordinal
 /// (`DEPOSIT_CLASS_ORDINALS`). Today: ENROLL and RETIRE, in that order.
 ///
 /// Membership is EQUALITY — the membership compare RES-249 pins, and the
@@ -171,11 +171,11 @@ pub fn deposit_class_types() -> &'static [Address] {
     static TYPES: LazyLock<[Address; 2]> = LazyLock::new(|| {
         DEPOSIT_CLASS_ORDINALS.map(|ordinal| {
             elem_addr(ElemPos {
-                doc: ghost_home_doc(),
+                doc: ghost_home_document(),
                 subspace: Nat::from(COMMONS_TYPE_SUBSPACE),
                 ordinal: Nat::from(ordinal),
             })
-            .expect("ghost_home_doc is Document-level; the subspace and every ordinal are ≥ 1")
+            .expect("ghost_home_document is Document-level; the subspace and every ordinal are ≥ 1")
         })
     });
     &*TYPES

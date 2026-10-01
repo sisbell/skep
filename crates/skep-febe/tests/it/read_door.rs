@@ -333,7 +333,7 @@ fn discoverable_from_answers_an_unreadable_home_exactly_as_an_unoccupied_address
     insert3(&fx, &home);
     // Homed where the stranger may not read, reaching into `d`'s content:
     // discoverable from `d` in truth, which the owner's answer proves.
-    let hidden = link_over(&fx, &home, &d);
+    let unreadable_l = link_over(&fx, &home, &d);
     // Homed in `d` itself, which the stranger may read — and then RETRACTED.
     let retracted = link_over(&fx, &d, &d);
     ack_addr(ex(&fx.febe, fx.user, Op::Nullify { home: d.clone(), target: retracted.clone() }));
@@ -342,8 +342,12 @@ fn discoverable_from_answers_an_unreadable_home_exactly_as_an_unoccupied_address
     let other = fx.febe.open_session(OTHER);
 
     assert!(
-        bool_val(ex(&fx.febe, fx.user, Op::DiscoverableFrom { a: hidden.clone(), d: d.clone() })),
-        "to its owner the hidden link is discoverable from `d`"
+        bool_val(ex(
+            &fx.febe,
+            fx.user,
+            Op::DiscoverableFrom { a: unreadable_l.clone(), d: d.clone() }
+        )),
+        "to its owner the link is discoverable from `d`"
     );
 
     let code_for = |a: &Address| {
@@ -351,7 +355,7 @@ fn discoverable_from_answers_an_unreadable_home_exactly_as_an_unoccupied_address
     };
     assert_eq!(code_for(&unoccupied), RejectCode::NotALink, "an address no link occupies");
     assert_eq!(
-        code_for(&hidden),
+        code_for(&unreadable_l),
         code_for(&unoccupied),
         "a link homed where the caller cannot read answers exactly as an address no link occupies"
     );

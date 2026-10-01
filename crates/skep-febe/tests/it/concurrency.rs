@@ -200,19 +200,19 @@ fn two_concurrent_first_mints_below_the_daemon_bear_exactly_one_published_home()
         assert!(home_at < draft_at, "round {rounds}: doc 1 is the mint that committed first");
 
         // EXACTLY ONE born published — and it is the home.
-        let published = |session: SessionId, doc: &Address| {
+        let published_of = |session: SessionId, doc: &Address| {
             doc_metadata(ex(&febe, session, Op::DocMetadata { doc: doc.clone() })).1
         };
         assert!(
-            published(sessions[0], &home),
+            published_of(sessions[0], &home),
             "round {rounds}: the first committed mint is born published"
         );
         assert!(
-            !published(sessions[0], &draft),
+            !published_of(sessions[0], &draft),
             "round {rounds}: the second is born PRIVATE, never a second home"
         );
         // The guest is served the one and withheld the other.
-        assert!(published(guest, &home), "round {rounds}: the guest reads the published home");
+        assert!(published_of(guest, &home), "round {rounds}: the guest reads the published home");
         assert_withheld(
             ex(&febe, guest, Op::DocMetadata { doc: draft.clone() }),
             OpKind::DocMetadata,

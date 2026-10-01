@@ -280,8 +280,8 @@ fn an_edit_refused_its_destination_answers_alike_however_long_its_unreadable_sou
     let (fx, unreadable) = setup_with_unreadable();
     // USER's: readable to the stranger, and not the stranger's to write.
     let (user_draft, original) = linked_doc(&fx);
-    let walk = 2048;
-    let fragmented = fragmented_doc(&fx, walk);
+    let run_count = 2048;
+    let fragmented = fragmented_doc(&fx, run_count);
     let contiguous = create_doc(&fx);
     insert3(&fx, &contiguous);
     unreadable.lock().expect("no poisoning").extend([fragmented.clone(), contiguous.clone()]);
@@ -291,8 +291,8 @@ fn an_edit_refused_its_destination_answers_alike_however_long_its_unreadable_sou
     // nothing either way. `fault` appends a spec the request itself gets
     // wrong.
     let edit = |source: &Address, fault: Option<VSpec>| {
-        let past_the_end = VSpec { source: source.clone(), span: vspan(1, walk + 1, 1) };
-        let mut from = vec![past_the_end; MAX_SLOT_RESOLVE_STEPS / walk as usize + 1];
+        let past_the_end = VSpec { source: source.clone(), span: vspan(1, run_count + 1, 1) };
+        let mut from = vec![past_the_end; MAX_SLOT_RESOLVE_STEPS / run_count as usize + 1];
         from.extend(fault);
         Op::EditLink {
             original: original.clone(),

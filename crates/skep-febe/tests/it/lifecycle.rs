@@ -105,18 +105,18 @@ fn the_owner_of_address_read_answers_omega_unprojected() {
 
     // Seated by a `delegate`, the same address answers ITSELF and the
     // principal that delegate registered; beneath it the longest prefix wins.
-    let held = PrincipalId(31);
+    let child_principal = PrincipalId(31);
     ack_addr(ex(
         &fx.febe,
         fx.user,
-        Op::Delegate { new_prefix: first_child.tumbler().clone(), new_id: held },
+        Op::Delegate { new_prefix: first_child.tumbler().clone(), new_id: child_principal },
     ));
-    assert_eq!(owner_of(fx.user, &first_child), Some((first_child.clone(), held)));
+    assert_eq!(owner_of(fx.user, &first_child), Some((first_child.clone(), child_principal)));
     let (grandchild, _) =
         maybe_addr(ex(&fx.febe, fx.user, Op::NextAccountPrefix { parent: first_child.clone() }));
     assert_eq!(
         owner_of(fx.user, &grandchild.expect("the new seat is delegable under")),
-        Some((first_child.clone(), held)),
+        Some((first_child.clone(), child_principal)),
         "an unallocated grandchild answers the NEAREST seat, not the account above it"
     );
 
@@ -256,15 +256,15 @@ fn the_document_family_answers_end_to_end() {
 #[test]
 fn the_version_chain_refusals_surface_as_their_own_permanent_codes() {
     let fx = setup();
-    let e = create_edition(&fx);
-    deposit3(&fx, &e);
-    let d = create_doc(&fx);
-    insert3(&fx, &d);
+    let edition = create_edition(&fx);
+    deposit3(&fx, &edition);
+    let draft = create_doc(&fx);
+    insert3(&fx, &draft);
     let before = fx.febe.log_position();
 
     // PUB-2.11: the four in-place edits on the edition.
     let undeclared = Op::Insert {
-        doc: e.clone(),
+        doc: edition.clone(),
         at: vp(1, 4),
         values: vec![skep_content::Val::new(vec![b'x'])],
         deposit: Deposit::Undeclared,
@@ -273,23 +273,34 @@ fn the_version_chain_refusals_surface_as_their_own_permanent_codes() {
         (OpKind::Insert, ex(&fx.febe, fx.user, undeclared)),
         (
             OpKind::Copy,
-            ex(&fx.febe, fx.user, Op::Copy { doc: e.clone(), at: vp(1, 4), specs: vec![vspec(&d, 1, 1)] }),
+            ex(
+                &fx.febe,
+                fx.user,
+                Op::Copy { doc: edition.clone(), at: vp(1, 4), specs: vec![vspec(&draft, 1, 1)] },
+            ),
         ),
         (
             OpKind::Delete,
-            ex(&fx.febe, fx.user, Op::Delete { doc: e.clone(), p: vp(1, 1), width: nat(1) }),
+            ex(&fx.febe, fx.user, Op::Delete { doc: edition.clone(), p: vp(1, 1), width: nat(1) }),
         ),
         (
             OpKind::Rearrange,
-            ex(&fx.febe, fx.user, Op::Rearrange { doc: e.clone(), cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)] }),
+            ex(
+                &fx.febe,
+                fx.user,
+                Op::Rearrange { doc: edition.clone(), cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)] },
+            ),
         ),
         // PUB-2.7: an explicit private member of the owner's published edition.
         (
             OpKind::Version,
-            ex(&fx.febe, fx.user, Op::Version { d_src: e.clone(), published: Some(false) }),
+            ex(&fx.febe, fx.user, Op::Version { d_src: edition.clone(), published: Some(false) }),
         ),
         // PUB-2.9: any version of the owner's private draft.
-        (OpKind::Version, ex(&fx.febe, fx.user, Op::Version { d_src: d.clone(), published: None })),
+        (
+            OpKind::Version,
+            ex(&fx.febe, fx.user, Op::Version { d_src: draft.clone(), published: None }),
+        ),
     ];
     let expected = [
         RejectCode::PublishedTarget,
@@ -315,7 +326,7 @@ fn the_version_chain_refusals_surface_as_their_own_permanent_codes() {
         &fx.febe,
         fx.user,
         Op::Insert {
-            doc: e.clone(),
+            doc: edition.clone(),
             at: vp(1, 4),
             values: vec![skep_content::Val::new(vec![b'r'])],
             deposit: declared(),
@@ -325,7 +336,7 @@ fn the_version_chain_refusals_surface_as_their_own_permanent_codes() {
         &fx.febe,
         fx.user,
         Op::Insert {
-            doc: e.clone(),
+            doc: edition.clone(),
             at: vp(1, 2),
             values: vec![skep_content::Val::new(vec![b'r'])],
             deposit: declared(),
@@ -341,15 +352,15 @@ fn the_version_chain_refusals_surface_as_their_own_permanent_codes() {
         &fx.febe,
         fx.user,
         Op::Insert {
-            doc: e.clone(),
+            doc: edition.clone(),
             at: vp(1, 5),
             values: vec![skep_content::Val::new(vec![b'r'])],
-            deposit: Deposit::Declared(e.clone()),
+            deposit: Deposit::Declared(edition.clone()),
         },
     ));
     assert_eq!(rej.code, RejectCode::PublishedTarget);
     // The inherited version of the edition is admitted (PUB-2.8).
-    ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: e, published: None }));
+    ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: edition, published: None }));
 }
 
 /// The link family end-to-end: MAKELINK (no dedup), raw reads with the
@@ -364,15 +375,15 @@ fn the_link_family_answers_end_to_end() {
     let (start, _) = insert3(&fx, &d);
     let region = vec![vspan(1, 1, 3)];
 
-    let mk = || Op::MakeLink {
+    let make = || Op::MakeLink {
         home: d.clone(),
         from: SlotArg::Resolve(vec![vspec(&d, 1, 1)]),
         to: SlotArg::Resolve(vec![vspec(&d, 2, 1)]),
         ty: SlotArg::Resolve(vec![vspec(&d, 3, 1)]),
         replaces: None,
     };
-    let (l1, _) = ack_addr(ex(&fx.febe, fx.user, mk()));
-    let (l2, _) = ack_addr(ex(&fx.febe, fx.user, mk()));
+    let (l1, _) = ack_addr(ex(&fx.febe, fx.user, make()));
+    let (l2, _) = ack_addr(ex(&fx.febe, fx.user, make()));
     assert_ne!(l1, l2); // MAKELINK never dedups — distinct links always
 
     // Raw reads: value-or-None, and FOLLOWLINK's in-band Result — absence is
@@ -630,15 +641,15 @@ fn refusals_arrive_typed_classified_and_localized() {
 
     // The as-built [K_sup] emit fence lowers to DcViolation (report: drift):
     // supersession claims write only via AssertSup/EditLink.
-    let mk = || Op::MakeLink {
+    let make = || Op::MakeLink {
         home: d.clone(),
         from: SlotArg::Resolve(vec![vspec(&d, 1, 1)]),
         to: SlotArg::Resolve(vec![vspec(&d, 2, 1)]),
         ty: SlotArg::Resolve(vec![vspec(&d, 3, 1)]),
         replaces: None,
     };
-    let (l1, _) = ack_addr(ex(&fx.febe, fx.user, mk()));
-    let (l2, _) = ack_addr(ex(&fx.febe, fx.user, mk()));
+    let (l1, _) = ack_addr(ex(&fx.febe, fx.user, make()));
+    let (l2, _) = ack_addr(ex(&fx.febe, fx.user, make()));
     let rej = rejected(ex(
         &fx.febe,
         fx.user,

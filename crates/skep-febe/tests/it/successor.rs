@@ -81,7 +81,7 @@ fn a_multi_spec_successor_slot_accumulates_every_spec() {
 /// the store's own gate refuses is answered that refusal instead:
 /// `write_door.rs`.)
 #[test]
-fn an_over_budget_successor_slot_is_refused_before_any_transaction() {
+fn a_successor_slot_over_the_span_budget_is_refused_before_any_transaction() {
     let fx = setup();
     let (d, original) = linked_doc(&fx);
     // Delete the middle element: the V gap closes, and what is left is two
@@ -122,7 +122,7 @@ fn an_over_budget_successor_slot_is_refused_before_any_transaction() {
 /// budget refuses is what M7 would refuse; the counting moves where the
 /// refusal happens, never which requests it answers.
 #[test]
-fn a_successor_slot_at_the_budget_is_still_accepted() {
+fn a_successor_slot_at_the_span_budget_is_still_accepted() {
     let fx = setup();
     let (d, original) = linked_doc(&fx);
     let one_span = || skep_arrangement::VSpec { source: d.clone(), span: vspan(1, 1, 1) };
@@ -162,13 +162,13 @@ fn a_successor_slot_at_the_budget_is_still_accepted() {
 fn a_successor_slot_is_held_to_the_work_budget_makelink_is() {
     let fx = setup();
     let (d, original) = linked_doc(&fx);
-    let walk = 2048;
-    let source = fragmented_doc(&fx, walk);
-    let at_budget = MAX_SLOT_RESOLVE_STEPS / walk as usize;
+    let run_count = 2048;
+    let source = fragmented_doc(&fx, run_count);
+    let at_budget = MAX_SLOT_RESOLVE_STEPS / run_count as usize;
     // Opening past the source's arranged end: it keeps nothing, walking every
     // run to find so.
     let past_the_end =
-        || skep_arrangement::VSpec { source: source.clone(), span: vspan(1, walk + 1, 1) };
+        || skep_arrangement::VSpec { source: source.clone(), span: vspan(1, run_count + 1, 1) };
     let edit = |specs: usize| Op::EditLink {
         original: original.clone(),
         successor: SuccessorSpec {

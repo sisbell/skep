@@ -222,8 +222,8 @@ where
                 let writer = self.stores.linkstore_attested(&visibility, attest);
                 let (addr, at) = match replaces {
                     None => writer.makelink(wc.caller(), &home, from, to, ty),
-                    Some(named) => {
-                        writer.makelink_replacing(wc.caller(), &home, from, to, ty, &named)
+                    Some(replaces) => {
+                        writer.makelink_replacing(wc.caller(), &home, from, to, ty, &replaces)
                     }
                 }
                 .map_err(|e| self.lower_write(kind, e))?;
@@ -389,7 +389,7 @@ where
                 let owner = world
                     .m3()
                     .effective_owner_pair(&addr)
-                    .map(|(prefix, principal)| (prefix.clone(), principal));
+                    .map(|(prefix, id)| (prefix.clone(), id));
                 Ok(Response::EffectiveOwner { owner, as_of })
             }
             // ── raw link reads (→ M7, §2): no driver handle — straight off

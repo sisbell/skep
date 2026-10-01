@@ -21,17 +21,18 @@ fn every_module_names_only_itself_and_modules_declared_above_it() {
         lib.lines().filter_map(|l| l.strip_prefix("mod ")?.strip_suffix(';')).collect();
     assert!(order.len() > 1, "src/lib.rs declares its modules as `mod name;` lines");
     let rank: HashMap<&str, usize> = order.iter().enumerate().map(|(i, m)| (*m, i)).collect();
-    let home = root_reexports(&lib, &rank);
+    let reexport_rank = root_reexports(&lib, &rank);
 
     let mut faults = Vec::new();
-    for (at, module) in order.iter().enumerate() {
+    for (own_rank, module) in order.iter().enumerate() {
         let mut files = vec![src.join(format!("{module}.rs"))];
         rust_files(&src.join(module), &mut files);
         for file in files {
             let text = std::fs::read_to_string(&file).expect("a module file is readable");
             for named in crate_paths(&text) {
-                let target = rank.get(named.as_str()).or_else(|| home.get(named.as_str()));
-                if let Some(&below) = target.filter(|&&r| r > at) {
+                let target =
+                    rank.get(named.as_str()).or_else(|| reexport_rank.get(named.as_str()));
+                if let Some(&below) = target.filter(|&&r| r > own_rank) {
                     faults.push(format!(
                         "{}: `crate::{named}` reaches `{}`, declared below `{module}`",
                         file.strip_prefix(&src).expect("under src").display(),
@@ -53,7 +54,7 @@ fn every_module_names_only_itself_and_modules_declared_above_it() {
 /// of the module it comes from. Upstream re-exports are not modules of this
 /// crate and are left out.
 fn root_reexports(lib: &str, rank: &HashMap<&str, usize>) -> HashMap<String, usize> {
-    let mut home = HashMap::new();
+    let mut reexport_rank = HashMap::new();
     for item in lib.split("pub use ").skip(1) {
         let item = item.split(';').next().expect("a `pub use` ends at `;`");
         let Some((head, rest)) = item.split_once("::") else { continue };
@@ -61,10 +62,10 @@ fn root_reexports(lib: &str, rank: &HashMap<&str, usize>) -> HashMap<String, usi
         let rest = rest.trim();
         let names = rest.strip_prefix('{').and_then(|g| g.strip_suffix('}')).unwrap_or(rest);
         for name in names.split(',').map(str::trim).filter(|n| !n.is_empty()) {
-            home.insert(name.to_string(), r);
+            reexport_rank.insert(name.to_string(), r);
         }
     }
-    home
+    reexport_rank
 }
 
 /// The first segment of every `crate::…` path in code. Comment lines are not

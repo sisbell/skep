@@ -32,20 +32,23 @@ fn the_publication_reads_answer_the_metadata_a_client_admits_an_edition_by() {
     let fx = setup();
 
     // A draft with no chain member: private, owned, and unborn.
-    let d = create_doc(&fx);
-    let (doc, published, owner, birth) = doc_metadata(ex(&fx.febe, fx.user, Op::DocMetadata { doc: d.clone() }));
-    assert_eq!(doc, d);
+    let draft = create_doc(&fx);
+    let (doc, published, owner, birth) =
+        doc_metadata(ex(&fx.febe, fx.user, Op::DocMetadata { doc: draft.clone() }));
+    assert_eq!(doc, draft);
     assert!(!published, "an explicit-`false` mint is a draft");
     assert_eq!(owner.expect("ω is total over the registered space"), fx.account);
     assert!(birth.is_none(), "no member, so no extent is read: absent, not zero");
 
     // A published edition with three deposited positions, versioned once.
-    let e = create_edition(&fx);
-    deposit3(&fx, &e);
-    let (member, _) = ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: e.clone(), published: None }));
+    let edition = create_edition(&fx);
+    deposit3(&fx, &edition);
+    let (member, _) =
+        ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: edition.clone(), published: None }));
 
-    let (doc, published, _, birth) = doc_metadata(ex(&fx.febe, fx.user, Op::DocMetadata { doc: e.clone() }));
-    assert_eq!(doc, e);
+    let (doc, published, _, birth) =
+        doc_metadata(ex(&fx.febe, fx.user, Op::DocMetadata { doc: edition.clone() }));
+    assert_eq!(doc, edition);
     assert!(published);
     let birth = birth.expect("a document whose chain has a member reports its birth version");
     assert_eq!(
@@ -58,14 +61,16 @@ fn the_publication_reads_answer_the_metadata_a_client_admits_an_edition_by() {
     // A VERSION MEMBER answers its DOCUMENT's state (PUB-2.15), birth included.
     let (doc, published, _, birth) =
         doc_metadata(ex(&fx.febe, fx.user, Op::DocMetadata { doc: member.clone() }));
-    assert_eq!(doc, e, "the argument projects to its trunk document");
+    assert_eq!(doc, edition, "the argument projects to its trunk document");
     assert!(published);
     assert_eq!(birth.expect("the document's own birth").addr, member);
 
     // The audit-view lookup answers the class its world composes — this
     // miniature world carries no edition type, so the class is empty — and
     // both reads refuse an unregistered argument rather than inventing one.
-    assert!(edition_claims(ex(&fx.febe, fx.user, Op::EditionClaims { target: e })).is_empty());
+    assert!(
+        edition_claims(ex(&fx.febe, fx.user, Op::EditionClaims { target: edition })).is_empty()
+    );
     let ghost = addr(&[1, 0, 1, 0, 91]);
     for op in [Op::DocMetadata { doc: ghost.clone() }, Op::EditionClaims { target: ghost }] {
         let kind = op.kind();
@@ -257,33 +262,39 @@ fn the_any_principal_discovery_read_hands_a_client_the_answer_set_never_the_inde
     let dy = ghost_doc(&y, 1); // Y's document
     let dy2 = ghost_doc(&y, 2); // another of Y's
 
-    // Two row types, one per side of the seam: `stored` builds what the world
-    // hands over, `row` what a client is served.
-    let stored = |content_prefix: &skep_address::Address, issuers: &[&skep_address::Address]| {
+    // Two row types, one per side of the seam.
+    let stored_row = |content_prefix: &skep_address::Address, issuers: &[&skep_address::Address]| {
         UniversalIndexRow {
             content_prefix: content_prefix.clone(),
             issuers: issuers.iter().map(|a| (*a).clone()).collect(),
         }
     };
-    let row = |prefix: &skep_address::Address, issuers: &[&skep_address::Address]| UniversalGrant {
-        prefix: prefix.clone(),
-        issuers: issuers.iter().map(|a| (*a).clone()).collect(),
+    let served_row = |prefix: &skep_address::Address, issuers: &[&skep_address::Address]| {
+        UniversalGrant {
+            prefix: prefix.clone(),
+            issuers: issuers.iter().map(|a| (*a).clone()).collect(),
+        }
     };
     // The STORED index, deliberately out of prefix order: what each row
     // narrows to is stated beside it.
     seed_universal_grant_index(vec![
-        stored(&x, &[&x1]),      // RES-264: X.1's share over X, wider ⇒ served at X.1
-        stored(&dy, &[&x, &y]),  // RES-231: X's record over Y's document ⇒ X dropped; Y's stands
-        stored(&dx1, &[&x1]),    // ω answers X.1 for its own document ⇒ unchanged
-        stored(&x1, &[&x, &x1]), // RES-298: X's share over its SEATED X.1 ⇒ X dropped; X.1's own stands
-        stored(&dy2, &[&x1]),    // X.1's record over Y's other document ⇒ no row at all
-        stored(&dx, &[&x]),      // ω answers X for its own document ⇒ unchanged
+        stored_row(&x, &[&x1]),      // RES-264: X.1's share over X, wider ⇒ served at X.1
+        stored_row(&dy, &[&x, &y]),  // RES-231: X's record over Y's document ⇒ X dropped; Y's stands
+        stored_row(&dx1, &[&x1]),    // ω answers X.1 for its own document ⇒ unchanged
+        stored_row(&x1, &[&x, &x1]), // RES-298: X's share over its SEATED X.1 ⇒ X dropped; X.1's own stands
+        stored_row(&dy2, &[&x1]),    // X.1's record over Y's other document ⇒ no row at all
+        stored_row(&dx, &[&x]),      // ω answers X for its own document ⇒ unchanged
     ]);
 
     let served = read(fx.user);
     assert_eq!(
         served,
-        vec![row(&dx, &[&x]), row(&x1, &[&x1]), row(&dx1, &[&x1]), row(&dy, &[&y])],
+        vec![
+            served_row(&dx, &[&x]),
+            served_row(&x1, &[&x1]),
+            served_row(&dx1, &[&x1]),
+            served_row(&dy, &[&y]),
+        ],
         "the answer set: covered prefixes, grouped, in prefix order"
     );
     assert!(served.is_sorted_by_key(|r| r.prefix.clone()), "prefix order");

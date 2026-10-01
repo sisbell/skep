@@ -209,8 +209,8 @@ fn doc_arguments_run_in_declaration_order() {
     // there is nothing to consult; its rows are fold-filtered at its arm.
     assert!(Op::UniversalGrants.doc_arguments().is_empty());
     for (op, is_read) in all_ops() {
-        let named = !op.doc_arguments().is_empty();
-        let expects_consult = is_read
+        let names_a_document = !op.doc_arguments().is_empty();
+        let expects = is_read
             && !matches!(
                 op,
                 Op::NextAccountPrefix { .. }
@@ -225,7 +225,7 @@ fn doc_arguments_run_in_declaration_order() {
                     | Op::OutClaims { .. }
                     | Op::UniversalGrants
             );
-        assert_eq!(named, expects_consult, "{:?}: the doc-argument row", op.kind());
+        assert_eq!(names_a_document, expects, "{:?}: the doc-argument row", op.kind());
     }
 }
 
@@ -290,21 +290,21 @@ fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
 /// PUB-6.23 at the pairing of the two lists, which is where it can
 /// silently fail. The door reads `write_consult` FIRST and returns on
 /// [`WriteConsult::NotTaken`] without ever reading `source_arguments`, so
-/// the two are jointly load-bearing: a write that declares a source and
+/// the two are jointly load-bearing: a write that reads a source and
 /// answers `NotTaken` hands that source to its store with no readability
 /// gate, and both matches being exhaustive means the compiler forces two
 /// independent decisions and accepts the wrong pairing. The law is that
-/// pairing — a declared source implies a consult — plus the two arms of
+/// pairing — reading a source implies a consult — plus the two arms of
 /// [`WriteConsult`] itself, which differ in what they let the door do and
 /// are likewise both well-typed.
 #[test]
 fn a_write_that_reads_a_source_is_always_consulted() {
     for (op, is_read) in all_ops() {
-        let declares_a_source = !op.source_arguments().is_empty();
+        let reads_a_source = !op.source_arguments().is_empty();
         let consulted = matches!(op.write_consult(), WriteConsult::AfterOwnershipOf(_));
         assert!(
-            !declares_a_source || consulted,
-            "{:?} declares a source and is NotTaken: its sources reach the store ungated",
+            !reads_a_source || consulted,
+            "{:?} reads a source and is NotTaken: its sources reach the store ungated",
             op.kind()
         );
         assert!(
@@ -319,8 +319,8 @@ fn a_write_that_reads_a_source_is_always_consulted() {
     // daemon's).
     let version = Op::Version { d_src: doc(), published: None };
     match version.write_consult() {
-        WriteConsult::AfterOwnershipOf(d) => assert!(
-            d.is_empty(),
+        WriteConsult::AfterOwnershipOf(destinations) => assert!(
+            destinations.is_empty(),
             "an empty destination list is not the same answer as `NotTaken`"
         ),
         WriteConsult::NotTaken => panic!("version is consulted"),

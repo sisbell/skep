@@ -366,7 +366,7 @@ fn a_halted_kernel_outranks_an_unbound_session() {
 /// reissue MUST re-execute) nor a read answer (whose snapshot goes
 /// stale) can be memoized even when the request carried an id.
 #[test]
-fn only_committed_writes_are_cached() {
+fn only_committed_writes_are_memoized() {
     let febe = surface();
     let s = febe.open_session(PrincipalId(1));
     assert!(Response::Count { n: 3, as_of: Seq(1) }.to_ack().is_none());
@@ -374,20 +374,27 @@ fn only_committed_writes_are_cached() {
         .to_ack()
         .is_none());
     // A rejected write carrying an id leaves no entry behind.
-    let id = ReqId(b"req-2".to_vec());
+    let write_id = ReqId(b"req-2".to_vec());
     let retired = febe.open_session(PrincipalId(3));
     febe.close_session(retired);
-    let r = febe.execute(retired, Request { id: Some(id.clone()), op: insert_op(), attest: None });
+    let r = febe.execute(
+        retired,
+        Request { id: Some(write_id.clone()), op: insert_op(), attest: None },
+    );
     assert!(matches!(r, Response::Rejected(_)));
-    assert!(febe.idem.get(retired, &id, OpKind::Insert).is_none());
+    assert!(febe.idem.get(retired, &write_id, OpKind::Insert).is_none());
     // Nor does a read carrying one.
-    let rid = ReqId(b"req-3".to_vec());
+    let read_id = ReqId(b"req-3".to_vec());
     let resp = febe.execute(
         s,
-        Request { id: Some(rid.clone()), op: Op::NextAccountPrefix { parent: addr(&[1]) }, attest: None },
+        Request {
+            id: Some(read_id.clone()),
+            op: Op::NextAccountPrefix { parent: addr(&[1]) },
+            attest: None,
+        },
     );
     assert!(matches!(resp, Response::MaybeAddr { .. }));
-    assert!(febe.idem.get(s, &rid, OpKind::NextAccountPrefix).is_none());
+    assert!(febe.idem.get(s, &read_id, OpKind::NextAccountPrefix).is_none());
 }
 
 /// §1: step (a) runs AHEAD of the step-(c) poison gate, and that order is
@@ -402,10 +409,11 @@ fn a_memoized_ack_is_replayed_on_a_poisoned_kernel() {
     let s = febe.bootstrap_session();
     let id = ReqId(b"node-5".to_vec());
     let node = || Op::RegisterNode { addr: tum(&[1, 5]) };
-    let (addr, at) = match febe.execute(s, Request { id: Some(id.clone()), op: node(), attest: None }) {
-        Response::AckAddr { addr, at } => (addr, at),
-        _ => panic!("RegisterNode under the bootstrap session commits"),
-    };
+    let (committed, committed_at) =
+        match febe.execute(s, Request { id: Some(id.clone()), op: node(), attest: None }) {
+            Response::AckAddr { addr, at } => (addr, at),
+            _ => panic!("RegisterNode under the bootstrap session commits"),
+        };
 
     // The kernel halts AFTER that write committed — the latch is what this
     // call is for, so the rejection it builds answers nothing.
@@ -423,8 +431,8 @@ fn a_memoized_ack_is_replayed_on_a_poisoned_kernel() {
     // The retry of the committed one is answered from the memo instead.
     match febe.execute(s, Request { id: Some(id), op: node(), attest: None }) {
         Response::AckAddr { addr: replayed, at: replayed_at } => {
-            assert_eq!(replayed, addr, "the replayed ack is the committed one");
-            assert_eq!(replayed_at, at, "…at the coordinate it committed");
+            assert_eq!(replayed, committed, "the replayed ack is the committed one");
+            assert_eq!(replayed_at, committed_at, "…at the coordinate it committed");
         }
         _ => panic!("a memoized ack is served ahead of the poison gate"),
     }
@@ -569,7 +577,7 @@ const DRAFT_OWNER: PrincipalId = PrincipalId(7);
 /// and the next joining two I-addresses no run coalesces across, so the draft
 /// ends at `2^(doublings + 1)` runs of one position each.
 fn fragmented_draft(febe: &OperationSurface<World>, doublings: u32) -> Address {
-    let run = |session: SessionId, op: Op| {
+    let issue = |session: SessionId, op: Op| {
         match febe.execute(session, Request { id: None, op, attest: None }) {
             Response::Rejected(rej) => panic!("the fixture's requests are answered: {rej}"),
             answered => answered,
@@ -577,18 +585,18 @@ fn fragmented_draft(febe: &OperationSurface<World>, doublings: u32) -> Address {
     };
     let boot = febe.bootstrap_session();
     let Response::MaybeAddr { addr: Some(prefix), .. } =
-        run(boot, Op::NextAccountPrefix { parent: addr(&[1]) })
+        issue(boot, Op::NextAccountPrefix { parent: addr(&[1]) })
     else {
         panic!("the genesis node has a delegable next-form prefix");
     };
     let Response::AckAddr { addr: account, .. } =
-        run(boot, Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: DRAFT_OWNER })
+        issue(boot, Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: DRAFT_OWNER })
     else {
         panic!("the bootstrap session delegates the prefix");
     };
     let session = febe.open_session(DRAFT_OWNER);
     let Response::AckAddr { addr: doc, .. } =
-        run(session, Op::CreateNewDocument { account, published: Some(false) })
+        issue(session, Op::CreateNewDocument { account, published: Some(false) })
     else {
         panic!("the owner mints a draft");
     };
@@ -598,9 +606,9 @@ fn fragmented_draft(febe: &OperationSurface<World>, doublings: u32) -> Address {
         values: [b'a', b'b', b'c'].map(|b| Val::new(vec![b])).to_vec(),
         deposit: Deposit::Undeclared,
     };
-    assert!(matches!(run(session, insert), Response::AckAddr { .. }), "the owner fills its draft");
+    assert!(matches!(issue(session, insert), Response::AckAddr { .. }), "the owner fills its draft");
     let p = VPos::content(Nat::from(2u32));
-    let deleted = run(session, Op::Delete { doc: doc.clone(), p, width: Nat::from(1u32) });
+    let deleted = issue(session, Op::Delete { doc: doc.clone(), p, width: Nat::from(1u32) });
     assert!(matches!(deleted, Response::Ack { .. }), "the owner deletes the middle element");
     for k in 0..doublings {
         let extent = 2u32 << k;
@@ -611,7 +619,7 @@ fn fragmented_draft(febe: &OperationSurface<World>, doublings: u32) -> Address {
             at: VPos::content(Nat::from(extent + 1)),
             specs: vec![VSpec { source: doc.clone(), span: whole }],
         };
-        assert!(matches!(run(session, copy), Response::Ack { .. }), "the owner doubles its draft");
+        assert!(matches!(issue(session, copy), Response::Ack { .. }), "the owner doubles its draft");
     }
     doc
 }
@@ -671,7 +679,7 @@ fn an_unjudged_successor_slot_stops_one_span_past_the_budget() {
 /// rather than deposit a successor short of what was asked. One walk fewer is
 /// the budget exactly, an ordinary slot under both.
 #[test]
-fn an_unjudged_slot_over_the_work_budget_is_built_for_the_store_to_refuse() {
+fn an_unjudged_successor_slot_over_the_work_budget_is_built_for_the_store_to_refuse() {
     let febe = surface();
     let doc = fragmented_draft(&febe, 10);
     let owner = febe.open_session(DRAFT_OWNER);
@@ -688,16 +696,16 @@ fn an_unjudged_slot_over_the_work_budget_is_built_for_the_store_to_refuse() {
     };
     let snap = febe.stores.kernel().snapshot();
     let (m3, m5) = (snap.world().m3(), snap.world().m5());
-    let walk = m5.content_run_count(&doc);
-    assert_eq!(walk, 2048, "premise: one walk over this source passes 2048 runs");
+    let run_count = m5.content_run_count(&doc);
+    assert_eq!(run_count, 2048, "premise: one walk over this source passes 2048 runs");
     let past_the_end = || VSpec {
         source: doc.clone(),
         span: Span::new(tum(&[1, 2049]), tum(&[0, 1]))
             .unwrap_or_else(|_| panic!("well-formed test span")),
     };
     assert!(m5.resolve(&doc, &past_the_end().span).is_empty(), "premise: each spec keeps nothing");
-    let at_budget = MAX_SLOT_RESOLVE_STEPS / walk;
-    assert_eq!(at_budget * walk, MAX_SLOT_RESOLVE_STEPS, "premise: the budget is whole walks");
+    let at_budget = MAX_SLOT_RESOLVE_STEPS / run_count;
+    assert_eq!(at_budget * run_count, MAX_SLOT_RESOLVE_STEPS, "premise: the budget is whole walks");
     let successor = |specs: usize| SuccessorSpec {
         from: vec![past_the_end(); specs],
         to: vec![],
@@ -720,7 +728,7 @@ fn an_unjudged_slot_over_the_work_budget_is_built_for_the_store_to_refuse() {
     // M7 refuses the slot there, and nothing is deposited.
     let before = febe.log_position();
     let visibility = |_: &World, _: &Address| true;
-    let deposited = febe.stores.linkstore(&visibility).editlink(
+    let attempt = febe.stores.linkstore(&visibility).editlink(
         Caller::Principal(DRAFT_OWNER),
         &original,
         built_to_fail,
@@ -728,8 +736,8 @@ fn an_unjudged_slot_over_the_work_budget_is_built_for_the_store_to_refuse() {
         &doc,
     );
     assert!(
-        matches!(deposited, Err(TxnError::Rejected(EditLinkError::SlotTooLarge))),
-        "{deposited:?}"
+        matches!(attempt, Err(TxnError::Rejected(EditLinkError::SlotTooLarge))),
+        "{attempt:?}"
     );
     assert_eq!(febe.log_position(), before, "a successor short of what was asked is never deposited");
 

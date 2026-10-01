@@ -118,7 +118,7 @@ fn every_write_acks_at_the_coordinate_it_committed() {
     // ── the link family, on a document whose three ordinals are intact ──
     let home = create_doc(&fx);
     let (home_start, _) = insert3(&fx, &home);
-    let mk = || Op::MakeLink {
+    let make = || Op::MakeLink {
         home: home.clone(),
         from: SlotArg::Resolve(vec![vspec(&home, 1, 1)]),
         to: SlotArg::Resolve(vec![vspec(&home, 2, 1)]),
@@ -126,10 +126,10 @@ fn every_write_acks_at_the_coordinate_it_committed() {
         replaces: None,
     };
 
-    let r = ex(&fx.febe, fx.user, mk());
+    let r = ex(&fx.febe, fx.user, make());
     assert_committed(&fx, OpKind::MakeLink, &r, &mut seen);
     let (l1, _) = ack_addr(r);
-    let (l2, _) = ack_addr(ex(&fx.febe, fx.user, mk()));
+    let (l2, _) = ack_addr(ex(&fx.febe, fx.user, make()));
 
     let r = ex(
         &fx.febe,
@@ -202,15 +202,15 @@ fn every_read_reports_the_committed_head_as_its_as_of() {
     let edition = create_edition(&fx);
     deposit3(&fx, &edition);
     let (version, _) = ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: edition, published: None }));
-    let mk = || Op::MakeLink {
+    let make = || Op::MakeLink {
         home: draft.clone(),
         from: SlotArg::Resolve(vec![vspec(&draft, 1, 1)]),
         to: SlotArg::Resolve(vec![vspec(&draft, 2, 1)]),
         ty: SlotArg::Resolve(vec![vspec(&draft, 3, 1)]),
         replaces: None,
     };
-    let (l1, _) = ack_addr(ex(&fx.febe, fx.user, mk()));
-    let (l2, _) = ack_addr(ex(&fx.febe, fx.user, mk()));
+    let (l1, _) = ack_addr(ex(&fx.febe, fx.user, make()));
+    let (l2, _) = ack_addr(ex(&fx.febe, fx.user, make()));
     ack_addr(ex(
         &fx.febe,
         fx.user,

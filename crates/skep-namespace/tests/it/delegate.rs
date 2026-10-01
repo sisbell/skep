@@ -455,17 +455,15 @@ fn the_first_delegate_under_a_node_receives_account_ordinal_one() {
     let ns = Namespace::new(&k);
 
     // Under the bootstrap node [1], the peek and the gate agree on 1.0.1…
-    let snap = k.snapshot();
     assert_eq!(
-        snap.world().m3().next_account_prefix(&a(&[1])),
+        k.snapshot().world().m3().next_account_prefix(&a(&[1])),
         Some(a(&[1, 0, 1]))
     );
-    drop(snap);
     // …an off-by-one guess is refused as not next-form…
-    assert!(matches!(
+    assert_eq!(
         rejected(ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 2]), ID1)),
         DelegateError::NotNextForm
-    ));
+    );
     // …and the first delegation is exactly account 1.
     let (first, _) = ns
         .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
@@ -475,13 +473,11 @@ fn the_first_delegate_under_a_node_receives_account_ordinal_one() {
     // The system node 1.1 is seeded, and ordinal 1 under it is the system
     // account's seat (PUB-6.65): the seed took the first ordinal the way a
     // first delegate does, so the peek there already answers ordinal 2.
-    let snap = k.snapshot();
     assert_eq!(
-        snap.world().m3().next_account_prefix(&a(&[1, 1])),
+        k.snapshot().world().m3().next_account_prefix(&a(&[1, 1])),
         Some(a(&[1, 1, 0, 2])),
         "the seeded system account holds ordinal 1 under the system node"
     );
-    drop(snap);
 
     // The host node 1.2, registered here: the operator's prefix is 1.2.0.1,
     // and once seated it cannot be delegated to anyone else — π₀ is no longer
@@ -489,28 +485,25 @@ fn the_first_delegate_under_a_node_receives_account_ordinal_one() {
     // operator itself is refused at ancestry (a prefix is never its own strict
     // ancestor). The next arrival lands at ordinal 2.
     ns.register_node(t(&[1, 2])).expect("register 1.2");
-    let snap = k.snapshot();
     assert_eq!(
-        snap.world().m3().next_account_prefix(&a(&[1, 2])),
+        k.snapshot().world().m3().next_account_prefix(&a(&[1, 2])),
         Some(a(&[1, 2, 0, 1])),
         "the first delegate under the host node lands at account 1"
     );
-    drop(snap);
     let (operator, _) = ns
         .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 2, 0, 1]), ID2)
         .expect("the operator's delegation");
     assert_eq!(operator, a(&[1, 2, 0, 1]));
-    assert!(matches!(
+    assert_eq!(
         rejected(ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 2, 0, 1]), UNKNOWN_ID)),
         DelegateError::NotAuthorized
-    ));
-    assert!(matches!(
+    );
+    assert_eq!(
         rejected(ns.delegate(ID2, t(&[1, 2, 0, 1]), UNKNOWN_ID)),
         DelegateError::NotAncestor
-    ));
-    let snap = k.snapshot();
+    );
     assert_eq!(
-        snap.world().m3().next_account_prefix(&a(&[1, 2])),
+        k.snapshot().world().m3().next_account_prefix(&a(&[1, 2])),
         Some(a(&[1, 2, 0, 2])),
         "the operator's prefix is never delegated to anyone else"
     );

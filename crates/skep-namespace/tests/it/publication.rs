@@ -248,7 +248,12 @@ fn only_a_document_allocate_writes_the_publication_map() {
     let (seed_1, seed_h) = (ghost_home_doc(), head_document());
     assert_eq!(
         s.documents().collect::<Vec<_>>(),
-        vec![(&doc, true), (&version, false), (&seed_1, true), (&seed_h, true)]
+        vec![
+            (&doc, true),
+            (&version, false),
+            (&seed_1, true),
+            (&seed_h, true)
+        ]
     );
     // The walk is exact-size and double-ended, as a map walk is in std: the
     // count is answered without walking, and the back of the walk is the
@@ -279,7 +284,10 @@ fn the_publication_walk_is_in_address_order_not_mint_order() {
     // The seed alone, one minted, many — the walk's three sizes, in mint order
     // d1, d2, v1.
     let s = M3State::genesis();
-    assert_eq!(s.documents().collect::<Vec<_>>(), vec![(&seed_1, true), (&seed_h, true)]);
+    assert_eq!(
+        s.documents().collect::<Vec<_>>(),
+        vec![(&seed_1, true), (&seed_h, true)]
+    );
     let s = s.apply_m3(&alloc(&[1, 0, 1])).apply_m3(&M3Rec::Allocate {
         addr: d1.clone(),
         published: true,
@@ -302,7 +310,13 @@ fn the_publication_walk_is_in_address_order_not_mint_order() {
     // mint order (seed), d1, d2, v1.
     assert_eq!(
         s.documents().collect::<Vec<_>>(),
-        vec![(&d1, true), (&v1, true), (&d2, false), (&seed_1, true), (&seed_h, true)]
+        vec![
+            (&d1, true),
+            (&v1, true),
+            (&d2, false),
+            (&seed_1, true),
+            (&seed_h, true)
+        ]
     );
     assert_eq!(s.documents().len(), 5);
     // So the back of the walk is the address-greatest entry and not the
@@ -446,7 +460,14 @@ fn a_record_or_checkpoint_without_the_bit_fails_to_decode() {
     ])
     .expect("the publication map");
     assert!(
-        new.ends_with(&[nodes.as_slice(), principals.as_slice(), publication.as_slice()].concat()),
+        new.ends_with(
+            &[
+                nodes.as_slice(),
+                principals.as_slice(),
+                publication.as_slice()
+            ]
+            .concat()
+        ),
         "the current checkpoint shape ends with the seed's nodes, principals and publication map"
     );
     let old = &new[..new.len() - publication.len()];

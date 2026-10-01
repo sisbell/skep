@@ -318,16 +318,15 @@ fn the_top_down_probe_sees_strict_descendants_and_nothing_else() {
             true,
         ),
     ] {
-        let state =
-            seats
-                .iter()
-                .enumerate()
-                .fold(M3State::genesis(), |state, (nth, prefix)| {
-                    state.apply_m3(&M3Rec::RegisterPrincipal {
-                        prefix: a(prefix),
-                        id: PrincipalId(nth as u64 + 1),
-                    })
-                });
+        let state = seats
+            .iter()
+            .enumerate()
+            .fold(M3State::genesis(), |state, (nth, prefix)| {
+                state.apply_m3(&M3Rec::RegisterPrincipal {
+                    prefix: a(prefix),
+                    id: PrincipalId(nth as u64 + 1),
+                })
+            });
         assert_eq!(
             state.has_principal_strictly_under(&p),
             expected,
@@ -396,8 +395,14 @@ fn the_pair_accessor_is_omega_unprojected() {
     let (x, x_id) = (a(&[1, 0, 1]), PrincipalId(7));
     let (sub, sub_id) = (a(&[1, 0, 1, 2]), PrincipalId(9));
     let s = M3State::genesis()
-        .apply_m3(&M3Rec::RegisterPrincipal { prefix: x.clone(), id: x_id })
-        .apply_m3(&M3Rec::RegisterPrincipal { prefix: sub.clone(), id: sub_id });
+        .apply_m3(&M3Rec::RegisterPrincipal {
+            prefix: x.clone(),
+            id: x_id,
+        })
+        .apply_m3(&M3Rec::RegisterPrincipal {
+            prefix: sub.clone(),
+            id: sub_id,
+        });
 
     let node = a(&[1]);
     for (probe, expect) in [

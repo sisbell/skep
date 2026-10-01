@@ -273,7 +273,7 @@ impl M3State {
     /// Peek the next delegable account-tier prefix under `parent` — the exact
     /// value `delegate` will demand as next-form (O17c), so a caller obtains a
     /// valid `new_prefix` instead of guess-and-retry on `NotNextForm`. It is
-    /// [`M3State::mint_account`] without the record, so the value a caller
+    /// `M3State::mint_account` without the record, so the value a caller
     /// peeks and the value the gate compares come off one chain by one code
     /// path. `g` follows `parent`'s level: a node ⇒ the `(parent, 2)` account
     /// chain; an account ⇒ the `(parent, 1)` sub-account chain (the sixth

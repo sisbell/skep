@@ -283,7 +283,7 @@ fn first_in(key: &NsKey) -> Result<Address, GateViolation> {
 /// [`M3State::latest_version`]: crate::M3State::latest_version
 pub(crate) fn nth_in(key: &NsKey, n: &Nat) -> Result<Address, GateViolation> {
     let c1 = first_in(key)?;
-    Ok(validate(shift(c1.tumbler(), &(n - &Nat::from(1u32))))
+    Ok(validate(shift(c1.tumbler(), &(n - 1u32)))
         .expect("differs from gated c1 only in a positive ordinal"))
 }
 

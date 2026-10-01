@@ -458,7 +458,8 @@ pub(crate) fn bootstrap_root() -> &'static Address {
 /// (`next_account_prefix([1])`, PUB-6.52) — stays exactly what it was, and the
 /// honest claim admits as before.
 pub fn system_node() -> Address {
-    let t = Tumbler::new([1u32, 1].into_iter().map(Nat::from)).expect("a two-component sequence is nonempty");
+    let t = Tumbler::new([1u32, 1].into_iter().map(Nat::from))
+        .expect("a two-component sequence is nonempty");
     validate(t).expect("the system node 1.1 is T4-valid by construction")
 }
 
@@ -468,7 +469,8 @@ pub fn system_node() -> Address {
 /// [`ghost_home_doc`]) and its doc 2 (the daemon's head document `H`), both
 /// born published. Its account chain sits under [`system_node`].
 pub fn system_account() -> Address {
-    let t = Tumbler::new([1u32, 1, 0, 1].into_iter().map(Nat::from)).expect("a four-component sequence is nonempty");
+    let t = Tumbler::new([1u32, 1, 0, 1].into_iter().map(Nat::from))
+        .expect("a four-component sequence is nonempty");
     validate(t).expect("the system account 1.1.0.1 is T4-valid by construction")
 }
 
@@ -478,7 +480,8 @@ pub fn system_account() -> Address {
 /// the seed registers the document it builds and the daemon's head writer
 /// writes the document it builds, so the two cannot come apart.
 pub fn head_document() -> Address {
-    let t = Tumbler::new([1u32, 1, 0, 1, 0, 2].into_iter().map(Nat::from)).expect("a six-component sequence is nonempty");
+    let t = Tumbler::new([1u32, 1, 0, 1, 0, 2].into_iter().map(Nat::from))
+        .expect("a six-component sequence is nonempty");
     validate(t).expect("the head document 1.1.0.1.0.2 is T4-valid by construction")
 }
 
@@ -517,7 +520,7 @@ impl M3State {
     /// seeded account chain is `([1.1], 2)`, not `([1], 2)` — so
     /// `next_account_prefix([1])` answers `1.0.1`; and CONTENT — both
     /// documents are born empty, so the ghost content namespace has no
-    /// frontier and its floor ([`ghost_floor`], [`GHOST_POSITIONS`]) stands.
+    /// frontier and its floor (`ghost_floor`, [`GHOST_POSITIONS`]) stands.
     /// It seeds no unpublished document and no link.
     ///
     /// [`GHOST_POSITIONS`]: crate::GHOST_POSITIONS
@@ -563,7 +566,7 @@ impl M3State {
     /// address BOTH extends a parent AND carries its namespace's effective
     /// frontier + 1 as its ordinal (effective = `max(frontier, floor)`; the
     /// floor is nonzero only for the ghost content namespace —
-    /// [`ghost_floor`]). Every mint's does: a mint extends a REGISTERED
+    /// `ghost_floor`). Every mint's does: a mint extends a REGISTERED
     /// parent and emits exactly `c_{m+1}` past the floor.
     ///
     /// The two conditions differ in kind, and only the first is owed to the
@@ -571,13 +574,14 @@ impl M3State {
     /// at that field's door: the [`Address`] payloads carry T4-validity and
     /// `Allocate`'s address door (`parented_address`) carries the parent, and
     /// a record arriving from disk or a peer that lacks either is refused at
-    /// decode rather than folded into a panic. Contiguity is NOT decidable from one record — it is a claim
-    /// about the frontier the record is about to advance — so no door can
-    /// carry it, and it stays a stated condition of the caller: an `Allocate`
-    /// that regresses or jumps a frontier is outside the domain and fail-stops
-    /// on the contiguity `debug_assert`, which is corruption rather than a
-    /// live error path. What the fold trusts for both is an IN-PROCESS
-    /// producer, which builds the variant directly.
+    /// decode rather than folded into a panic. Contiguity is NOT decidable
+    /// from one record — it is a claim about the frontier the record is about
+    /// to advance — so no door can carry it, and it stays a stated condition
+    /// of the caller: an `Allocate` that regresses or jumps a frontier is
+    /// outside the domain and fail-stops on the contiguity `debug_assert`,
+    /// which is corruption rather than a live error path. What the fold
+    /// trusts for both is an IN-PROCESS producer, which builds the variant
+    /// directly.
     ///
     /// `Allocate`'s publication bit is folded for a DOCUMENT-tier address and
     /// read for no other (PUB-7.7's fold half, at M3's own allocation record:
@@ -651,17 +655,17 @@ impl M3State {
                 // without the other (PUB-7.7). On any other tier the field is
                 // `NO_PUBLICATION_STATE`, an absence, and is not read.
                 //
-                // WRITTEN ONCE, and by this `get` rather than by the contiguity
-                // check above: that check is a `debug_assert` and is absent in
-                // release, so a second `Allocate` naming a registered document
-                // would otherwise REPLACE its bit — a publication transition,
-                // which PUB-1.9 says does not exist and which no record door
-                // can refuse (whether an address is already registered is a
-                // claim about the registry, not a per-record fact). Inside the
-                // totality domain the entry is absent and this is the plain
-                // insert; outside it, the bit a document was minted with is
-                // the bit that stands.
-                if addr.level() == Level::Document && s.publication.get(addr).is_none() {
+                // WRITTEN ONCE, and by this `contains_key` test rather than by
+                // the contiguity check above: that check is a `debug_assert`
+                // and is absent in release, so a second `Allocate` naming a
+                // registered document would otherwise REPLACE its bit — a
+                // publication transition, which PUB-1.9 says does not exist
+                // and which no record door can refuse (whether an address is
+                // already registered is a claim about the registry, not a
+                // per-record fact). Inside the totality domain the entry is
+                // absent and this is the plain insert; outside it, the bit a
+                // document was minted with is the bit that stands.
+                if addr.level() == Level::Document && !s.publication.contains_key(addr) {
                     s.publication.insert(addr.clone(), *published);
                 }
             }

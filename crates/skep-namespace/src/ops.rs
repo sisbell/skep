@@ -108,7 +108,7 @@ where
     /// could half-fail).
     ///
     /// This is the sole allocator of the account chain: the last two gates
-    /// are one call to [`M3State::mint_account`], which refuses an
+    /// are one call to `M3State::mint_account`, which refuses an
     /// unregistered parent and otherwise returns the chain's next address
     /// beside the `Allocate` that advances it, so the value next-form
     /// compares and the record the closure stages are the allocator's own.

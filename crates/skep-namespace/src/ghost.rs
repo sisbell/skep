@@ -25,7 +25,7 @@ use crate::ns::{content_ns, NsKey};
 /// positions of doc 1 of the system account `1.1.0.1`, a REAL document
 /// seeded at genesis (`M3State::genesis`, PUB-6.65) whose content chain any
 /// INSERT by its principal would extend — so unreachability cannot be proven
-/// and an explicit allocator skip is required. The skip is [`ghost_floor`];
+/// and an explicit allocator skip is required. The skip is `ghost_floor`;
 /// the argument that it suffices is stated there.
 pub const GHOST_POSITIONS: u32 = 5;
 

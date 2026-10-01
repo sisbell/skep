@@ -49,7 +49,10 @@ fn the_content_chain_of_the_ghost_home_doc_never_issues_a_ghost_tumbler() {
     {
         let snap = k.snapshot();
         let m3 = snap.world().m3();
-        assert!(m3.is_registered_account(&system_account()), "the seed seats the system account");
+        assert!(
+            m3.is_registered_account(&system_account()),
+            "the seed seats the system account"
+        );
         assert!(
             m3.is_registered_document(&doc1),
             "the seed registers the ghost home document at its ordinary ordinal"

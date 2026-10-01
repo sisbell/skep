@@ -22,7 +22,8 @@ readme = "README.md"
 sign = ["dep:rand_core_06", "dep:hkdf", "dep:sha2", "dep:getrandom"]
 # `test-hooks` compiles in the fixtures' hooks — the seeded RNG
 # (`SeededRng06`), `HybridSigner::sign_with_rng`, the Ed25519 half's signing
-# key and the widths the sizes pin reads (`pq_widths`) — and implies `sign`.
+# key, the KDF's half seeds (`derive_seeds`) and the widths the sizes pin
+# reads (`pq_widths`) — and implies `sign`.
 # No shipped signer enables it: this crate's own tests turn it on through the
 # self dev-dependency below, and skepd's tests through their own
 # dev-dependency on this crate, so a build that compiles no test compiles
@@ -63,7 +64,8 @@ fn-dsa = "=0.4.0"
 rand_core_06 = { package = "rand_core", version = "0.6", optional = true }
 # THE KDF (the record §5.2 (ii); the KDF PIN): one 32-byte seed to both
 # halves by HKDF-SHA-256 with the algorithm token and the half as the
-# domain-separation labels, never the raw seed.
+# domain-separation labels, never the raw seed. `sha2` is the KDF's hash, and
+# the fixtures' seeded stream's (`SeededRng06`, under `test-hooks`).
 hkdf = { version = "0.12", optional = true }
 sha2 = { workspace = true, optional = true }
 # The signer's OS draw: a tag-3 signature's per-signature seed outside a
@@ -78,6 +80,8 @@ getrandom = { version = "0.3", optional = true }
 skep-signature = { path = ".", features = ["test-hooks"] }
 # The goldens' fixed frames name their account, document and type addresses.
 skep-address = { path = "../skep-address" }
+# The goldens' digests (`sha_hex`): each pin is a key's or a blob's SHA-256.
+sha2.workspace = true
 # THE DIFFERENTIAL ORACLE for tag 1 (the PQ investigation §8.4 (4), §8.5 (ii)):
 # a second pure-Rust FIPS 204 implementation the golden checks `ml-dsa`'s
 # keys-from-seed and signatures byte-equal against — the gate every future

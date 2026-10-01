@@ -1,11 +1,12 @@
 //! THE GOLDENS (the frozen-tag rule's pin), beside the one implementation
 //! they pin: per tag, one seed through the KDF to both public keys and the
 //! fingerprint; the four grammars' signatures over fixed entry frames (the
-//! `record` grammar at three kinds); tag 1's
-//! signatures byte-stable (FIPS 204's deterministic variant), tag 3's under
-//! the fixtures' seeded RNG; the hybrid cross-check; and tag 1 DIFFERENTIAL
-//! against a second pure-Rust FIPS 204 crate — keys-from-seed and signatures
-//! byte-equal.
+//! `record` grammar at three kinds); tag 1's signatures byte-stable (FIPS
+//! 204's deterministic variant), tag 3's under the fixtures' seeded RNG; the
+//! hybrid cross-check; tag 1 DIFFERENTIAL against a second pure-Rust FIPS 204
+//! crate — keys-from-seed and signatures byte-equal; the widths each pinned
+//! crate fixes, pinned by hand beside the sizes and timings the report takes
+//! back; and which FN-DSA backend signed them on this target.
 
 use sha2::{Digest, Sha256};
 use skep_identity::{

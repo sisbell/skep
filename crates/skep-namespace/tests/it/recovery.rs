@@ -1,5 +1,6 @@
 //! The fold's totality domain, the journaled types' serde round trips, decode
-//! doors and canonical bytes, and durable recovery by checkpoint and replay.
+//! doors, canonical bytes and the slice's rendering, and durable recovery by
+//! checkpoint and replay.
 
 use crate::common::*;
 
@@ -384,6 +385,31 @@ fn two_slices_holding_the_same_entries_encode_to_one_byte_string() {
         bincode::serialize(&y).expect("serialize history Y"),
         "two slices holding the same entries encode differently"
     );
+}
+
+#[test]
+fn the_slice_prints_its_four_fields_and_their_contents() {
+    // The slice a world embeds is reportable, so a test failure or a `dbg!` in
+    // any engine can print it — the impl has to live here, since no downstream
+    // crate may add it. Rendered from a POPULATED slice, so all four fields —
+    // the three registries and the publication map — have contents to print
+    // and not just names.
+    let (k, _acct, _doc) = kernel_with_account_and_doc();
+    let snap = k.snapshot();
+    let dump = format!("{:?}", snap.world().m3());
+    for field in ["frontiers", "nodes", "principals", "publication"] {
+        assert!(dump.contains(field), "the dump omits {field}: {dump}");
+    }
+    // The contents ride along: the bootstrap principal and the delegate.
+    assert!(dump.contains("PrincipalId(0)"), "{dump}");
+    assert!(dump.contains("PrincipalId(1)"), "{dump}");
+    // NOT: comparing two rendered dumps as an equality oracle. Every field
+    // is an ORDERED collection since 2026-09-23 (`frontiers` moved off the
+    // `im::HashMap` whose per-process `RandomState` once printed equal slices
+    // in differing orders), so two equal slices now render alike — but the
+    // rendering is a report, and `M3State`'s own `PartialEq` is the one that
+    // compares by entries; it is what `journaled_types_survive_serde_round_trips`
+    // asserts on.
 }
 
 #[test]

@@ -1,12 +1,12 @@
-//! §D genesis: Σ₀'s roots, the system-account seed folded onto them
-//! (PUB-6.65), and the seeded slice as a reader prints it.
+//! §D genesis: Σ₀'s roots and the system-account seed folded onto them
+//! (PUB-6.65).
 
 use crate::common::*;
 
 use skep_address::Level;
 use skep_namespace::{
-    ghost_home_document, head_document, system_account, system_node, HasM3, M3State,
-    BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL,
+    ghost_home_document, head_document, system_account, system_node, M3State, BOOTSTRAP_PRINCIPAL,
+    SYSTEM_PRINCIPAL,
 };
 
 #[test]
@@ -62,29 +62,4 @@ fn genesis_seeds_the_bootstrap_roots_and_the_system_account() {
     // Unknown ids resolve to nothing (single-valued scan, §5).
     assert!(s.principal_prefix(ID1).is_none());
     assert!(!s.is_effective_owner(ID1, &a(&[1])));
-}
-
-#[test]
-fn the_slice_prints_its_four_fields_and_their_contents() {
-    // The slice a world embeds is reportable, so a test failure or a `dbg!` in
-    // any engine can print it — the impl has to live here, since no downstream
-    // crate may add it. Rendered from a POPULATED slice, so all four fields —
-    // the three registries and the publication map — have contents to print
-    // and not just names.
-    let (k, _acct, _doc) = kernel_with_account_and_doc();
-    let snap = k.snapshot();
-    let dump = format!("{:?}", snap.world().m3());
-    for field in ["frontiers", "nodes", "principals", "publication"] {
-        assert!(dump.contains(field), "the dump omits {field}: {dump}");
-    }
-    // The contents ride along: the bootstrap principal and the delegate.
-    assert!(dump.contains("PrincipalId(0)"), "{dump}");
-    assert!(dump.contains("PrincipalId(1)"), "{dump}");
-    // NOT: comparing two rendered dumps as an equality oracle. Every field
-    // is an ORDERED collection since 2026-09-23 (`frontiers` moved off the
-    // `im::HashMap` whose per-process `RandomState` once printed equal slices
-    // in differing orders), so two equal slices now render alike — but the
-    // rendering is a report, and `M3State`'s own `PartialEq` is the one that
-    // compares by entries; it is what `journaled_types_survive_serde_round_trips`
-    // asserts on.
 }

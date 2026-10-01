@@ -260,7 +260,8 @@ impl M3State {
     /// at every length, and rebuilding each one clones its components), while
     /// `create_new_document` and `delegate` both evaluate ω in-closure under
     /// the held global `M3State::principals_lock_key`. Here the work is
-    /// `Σ_{p ∈ Π} |p|` component comparisons and no allocation, so a deep
+    /// `Σ_{p ∈ Π} |p|` component comparisons, and the walk's only heap use is
+    /// its iterator's path through Π's tree — never a copy of `a` — so a deep
     /// probe costs no more than a shallow one and neither costs O(#allocated).
     ///
     /// But the walk visits EVERY seat, and the gates that admit a seat do not
@@ -307,13 +308,13 @@ impl M3State {
     /// predicate [`M3State::is_effective_owner`] is stated in terms of this
     /// one.
     ///
-    /// COST — one walk of Π: `Σ_{p ∈ Π} |p|` component comparisons and no
-    /// allocation, however deep `a` is, so a probe a caller made deep costs
-    /// no more than a shallow one — but every call is Θ(|Π|), and |Π| is a
-    /// number any account holder can raise (`omega` says how); the bound is
-    /// per CALL, so one ω per entry of a walk pays the product. A seat below
-    /// the account tier — representable only off a corrupted checkpoint — is
-    /// never the answer (O1a).
+    /// COST — one walk of Π: `Σ_{p ∈ Π} |p|` component comparisons, and heap
+    /// use that does not grow with `a`, however deep it is, so a probe a caller
+    /// made deep costs no more than a shallow one — but every call is Θ(|Π|),
+    /// and |Π| is a number any account holder can raise (`omega` says how);
+    /// the bound is per CALL, so one ω per entry of a walk pays the product. A
+    /// seat below the account tier — representable only off a corrupted
+    /// checkpoint — is never the answer (O1a).
     ///
     /// For WHETHER a given id owns `a` — the authorization question — ask
     /// [`M3State::is_effective_owner`], which settles it without naming the

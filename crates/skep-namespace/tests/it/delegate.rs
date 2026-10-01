@@ -4,6 +4,7 @@
 //! bound, and ordinal one under every node.
 
 use crate::common::*;
+use crate::heap::heap_bytes;
 
 use skep_address::Level;
 use skep_kernel::{HistoryError, Kernel, Seq};
@@ -412,14 +413,40 @@ fn delegate_refuses_a_wire_deep_prefix_structurally() {
     // on tier if not — before the full-depth `parent` clone, the
     // nine-bytes-per-component lock key and the transaction that takes both
     // keys; the fourth case is the deepest ADMISSIBLE prefix, which traverses
-    // the whole gate chain and must still refuse structurally. No assertion
-    // pins a constant — a wall-clock bound is a flake; the depth is chosen so
-    // a regression to superlinear work stops the suite instead of reddening a
-    // line. Corpus seeds for the fuzzing tier.
+    // the whole gate chain and must still refuse structurally. That ordering
+    // is COUNTED, not timed — a wall-clock bound is a flake and a slow test is
+    // no failure: the refusal asks the heap for the same bytes at every depth
+    // past the cap, so a guard moved behind the clone or the encoding is a
+    // different number at once. Corpus seeds for the fuzzing tier.
     // Π = { [1]→π₀, [1,0,1]→ID1, [1,1,0,1]→SYSTEM_PRINCIPAL }
     let (k, acct, _doc) = kernel_with_account_and_doc();
     let ns = Namespace::new(&k);
     let before = k.current_seq();
+
+    // The refusal's heap bytes just past the cap, far past it, and wire-deep,
+    // each inside the caller's own subtree.
+    let over_cap = |len: usize| {
+        let mut comps = vec![1u32, 0, 1];
+        comps.extend(std::iter::repeat_n(1u32, len - 3));
+        t(&comps)
+    };
+    let mut refusal_bytes = Vec::new();
+    for len in [MAX_PRINCIPAL_COMPONENTS + 1, 1_000, 50_000] {
+        let prefix = over_cap(len);
+        let (refused, bytes) = heap_bytes(|| ns.delegate(ID1, prefix, ID2));
+        assert_eq!(
+            rejected(refused),
+            DelegateError::TooDeep,
+            "{len} components"
+        );
+        refusal_bytes.push((len, bytes));
+    }
+    assert!(
+        refusal_bytes
+            .iter()
+            .all(|&(_, bytes)| bytes == refusal_bytes[0].1),
+        "the depth refusal's heap bytes grow with the prefix: {refusal_bytes:?}"
+    );
 
     // Inside the caller's OWN subtree, and outside it: both over-cap, so
     // neither reaches (i)'s containment fence, let alone the registry reads.

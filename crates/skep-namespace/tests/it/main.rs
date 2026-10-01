@@ -5,10 +5,13 @@
 //! which rejection wins on a multiply-defective input (the pinned orders),
 //! that the journaled types survive a serde round trip, and that each part of
 //! the interface does its ordinary job. `common` is the minimal engine
-//! assembly and the helpers every suite shares; each other module is one
-//! surface. Nothing but module declarations belongs here.
+//! assembly and the helpers every suite shares, and `heap` the binary's
+//! allocator, which counts the heap bytes each thread asks for so a cost
+//! claim is a number; each other module is one surface. Nothing but module
+//! declarations belongs here.
 
 mod common;
+mod heap;
 
 mod allocation;
 mod create_new_document;

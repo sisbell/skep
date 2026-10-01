@@ -243,52 +243,78 @@ fn every_address_is_the_member_its_own_key_names() {
 }
 
 /// The `NsKey → LockKey` map is INJECTIVE (§1) — distinct namespaces,
-/// distinct locks — and functional. Over a family crossed with both
-/// generators, including the pair that makes the per-component length
-/// delimiter load-bearing: without it `[1, 256]` and `[257, 0]` encode
-/// alike.
+/// distinct locks — and functional, on EVERY pair a key can be built from,
+/// T4-valid anchor or not. A law, so a generated family: every anchor of one
+/// to three components over an alphabet of magnitudes whose encodings run
+/// together when spliced — zero, one and two, the byte boundaries
+/// 255/256/257 and 65_535/65_536, both sides of the 32-bit and of the 64-bit
+/// limb boundary, and 2⁶⁴ + 1 — crossed with both generators, beside the
+/// chains' own longer anchors. Without the per-component length, `[1, 256]`
+/// and `[257, 0]` encode alike; spliced by machine word instead of by byte,
+/// `[2⁶⁴, 0]` and `[0, 2⁶⁴]` do.
 #[test]
 fn the_lock_key_encoding_is_injective_over_a_generated_family() {
-    let parents: Vec<Tumbler> = [
-        vec![1u32],
-        vec![1, 1],
-        vec![2],
-        vec![1, 2],
-        vec![1, 256],
-        vec![257, 0],
-        vec![1, 0, 1],
-        vec![1, 0, 1, 1],
+    let alphabet: Vec<Nat> = [
+        0u64,
+        1,
+        2,
+        255,
+        256,
+        257,
+        65_535,
+        65_536,
+        u64::from(u32::MAX),
+        1 << 32,
+        u64::MAX,
+    ]
+    .into_iter()
+    .map(Nat::from)
+    .chain([Nat::from(u64::MAX) + 1u32, Nat::from(u64::MAX) + 2u32])
+    .collect();
+    let mut anchors: Vec<Vec<Nat>> = Vec::new();
+    let mut layer: Vec<Vec<Nat>> = vec![Vec::new()];
+    for _ in 1..=3 {
+        layer = layer
+            .iter()
+            .flat_map(|shorter| {
+                alphabet.iter().map(move |c| {
+                    let mut longer = shorter.clone();
+                    longer.push(c.clone());
+                    longer
+                })
+            })
+            .collect();
+        anchors.extend(layer.iter().cloned());
+    }
+    // The chains' own anchors past three components, up to the element tier.
+    for comps in [
+        vec![1u32, 0, 1, 1],
         vec![1, 0, 1, 0, 1],
         vec![1, 0, 1, 0, 1, 0, 1],
         vec![1, 0, 1, 0, 1, 0, 2],
         vec![1, 0, 1, 0, 1, 0, 1, 1],
-    ]
-    .into_iter()
-    .map(|c| Tumbler::new(c.into_iter().map(Nat::from)).expect("nonempty"))
-    .collect();
-    let mut keys = Vec::new();
-    for parent in &parents {
+    ] {
+        anchors.push(comps.into_iter().map(Nat::from).collect());
+    }
+    let mut locks = std::collections::BTreeMap::new();
+    for anchor in &anchors {
         for g in [Generator::SameField, Generator::NextField] {
             let key = NsKey {
-                parent: parent.clone(),
+                parent: Tumbler::new(anchor.iter().cloned()).expect("nonempty"),
                 g,
             };
-            let encoded = ns_lock_key(&key);
-            // Functional: the same key encodes to the same bytes every
-            // time.
-            assert_eq!(ns_lock_key(&key), encoded);
-            keys.push((key, encoded));
+            let lock = ns_lock_key(&key);
+            // Functional: the same key encodes to the same bytes every time.
+            assert_eq!(ns_lock_key(&key), lock);
+            if let Some(other) = locks.insert(lock, key.clone()) {
+                panic!("distinct namespaces share a lock: {other:?} and {key:?}");
+            }
         }
     }
-    for i in 0..keys.len() {
-        for j in (i + 1)..keys.len() {
-            assert_ne!(
-                keys[i].1, keys[j].1,
-                "distinct namespaces share a lock: {:?} and {:?}",
-                keys[i].0, keys[j].0
-            );
-        }
-    }
+    assert!(
+        locks.len() > 4_000,
+        "the generated family is the point of this test"
+    );
 }
 
 /// What a key owes is injectivity, and it owes it on every anchor — a

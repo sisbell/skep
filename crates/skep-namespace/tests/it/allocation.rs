@@ -291,6 +291,15 @@ fn mint_preconditions_reject_structurally() {
         m3.mint_content(&acct).unwrap_err(),
         MintError::HomeNotRegistered
     );
+    // An ACCOUNT home for a link: b_L(A) = inc(b_C(A), 0) = A·0·2, so the key
+    // `link_lock_key(A)` builds is the VERSION chain of A's doc 2 — the alias
+    // that key's doc names and calls harmless because this mint refuses the
+    // home a moment later. Ungated, a link mint under an account hands out
+    // doc 2's first version slot, a Document-tier address, as a link.
+    assert_eq!(
+        m3.mint_link(&acct).unwrap_err(),
+        MintError::HomeNotRegistered
+    );
     // V-WF: version source must be a registered Document — covers an
     // unregistered address AND a registered non-document alike.
     assert_eq!(

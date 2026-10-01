@@ -4,6 +4,7 @@
 //! the probe, and the seats ω refuses or names.
 
 use crate::common::*;
+use crate::heap::heap_bytes;
 
 use skep_address::{same_account, validate, Address, Level, Tumbler};
 use skep_namespace::{
@@ -299,21 +300,50 @@ fn omega_resolves_by_the_registry_not_by_the_probes_depth() {
     // separator is itself account-tier, so a per-candidate prefix walk has no
     // short-circuit and rebuilds ~1.25e9 components for this one call, while
     // `create_new_document` and `delegate` hold the global principals key
-    // across exactly this read. Answering here in the same time as a
-    // three-component probe is the refusal. Corpus seed for the fuzzing tier.
-    // No assertion pins the constant, because a wall-clock bound is a flake;
-    // the depth is chosen so a regression to the per-candidate walk stops the
-    // suite instead of reddening a line.
+    // across exactly this read. Asking the heap for exactly the bytes a
+    // three-component probe asks for is the refusal, and it is COUNTED, not
+    // timed: a wall-clock bound is a flake and a slow test is no failure, so
+    // a probe rebuilt per candidate, or copied even once, is a different
+    // number at four components, before any deep probe runs. Corpus seed for
+    // the fuzzing tier.
     // Π = { [1]→π₀, [1,0,1]→ID1, [1,1,0,1]→SYSTEM_PRINCIPAL }
     let (k, _acct, _doc) = kernel_with_account_and_doc();
     let snap = k.snapshot();
     let m3 = snap.world().m3();
 
+    // The walk's own heap bytes at three components, then at depths
+    // generated past it, before any deep probe runs.
+    let probe = |len: usize| {
+        let mut comps = vec![1u32, 0];
+        comps.extend(std::iter::repeat_n(1u32, len - 2));
+        a(&comps)
+    };
+    let shallow = probe(3);
+    let (owner, walk) = heap_bytes(|| m3.effective_owner(&shallow));
+    assert_eq!(owner, Some(ID1));
+    for len in [4, 10, 100, 1_000] {
+        let deeper = probe(len);
+        let (owner, bytes) = heap_bytes(|| m3.effective_owner(&deeper));
+        assert_eq!(owner, Some(ID1), "ω at {len} components");
+        assert_eq!(bytes, walk, "ω's heap bytes at {len} components against 3");
+        let (owns, bytes) = heap_bytes(|| m3.is_effective_owner(ID1, &deeper));
+        assert!(owns, "the authorization predicate at {len} components");
+        assert_eq!(
+            bytes, walk,
+            "the authorization predicate's heap bytes at {len} components against 3"
+        );
+    }
+
     let mut deep = vec![1u32, 0];
     deep.extend(std::iter::repeat_n(1u32, 49_998));
     let deep = a(&deep);
     assert_eq!(deep.level(), Level::Account); // every prefix past [1,0] is a candidate
-    assert_eq!(m3.effective_owner(&deep), Some(ID1));
+    let (owner, bytes) = heap_bytes(|| m3.effective_owner(&deep));
+    assert_eq!(owner, Some(ID1));
+    assert_eq!(
+        bytes, walk,
+        "ω's heap bytes at fifty thousand components against 3"
+    );
     assert!(m3.is_effective_owner(ID1, &deep));
     assert!(!m3.is_effective_owner(BOOTSTRAP_PRINCIPAL, &deep));
 

@@ -9,8 +9,8 @@ use serde::Serialize;
 use skep_address::{Address, Tumbler};
 use skep_kernel::Kernel;
 use skep_namespace::{
-    first_document_address, ghost_home_document, head_document, HasM3, M3Rec, M3State, Namespace,
-    PrincipalId, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL,
+    first_document_address, ghost_home_document, head_document, prefix_contains, HasM3, M3Rec,
+    M3State, Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL,
 };
 use tempfile::tempdir;
 
@@ -129,6 +129,47 @@ fn a_create_into_a_non_empty_account_is_private_unless_flagged() {
     let m3 = k.snapshot().world().m3().clone();
     assert!(m3.published(&d1), "doc 1's bit is untouched by later mints");
     assert!(!m3.published(&d2) && m3.published(&d3) && !m3.published(&d4));
+}
+
+/// PUB-8.21's "empty" is the account's OWN document chain, `(A, 2)`, and
+/// nothing else beneath its prefix. An account that has delegated a
+/// sub-account, whose sub-account holds documents of its own, has NONE: its
+/// flagless first create is still doc 1, born published (PUB-1.17). Every
+/// other fixture reaches its first create with nothing beneath the account,
+/// so this is the near miss the rule has not been handed — and the one a read
+/// of "a registered document under the prefix" (the publication map holds
+/// exactly those), or of the sub-account chain anchored at the same tumbler,
+/// gets wrong, minting the home private.
+#[test]
+fn a_sub_accounts_documents_leave_its_parent_empty() {
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+    let (acct, _) = ns
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+        .expect("delegate");
+    let (sub_acct, _) = ns
+        .delegate(ID1, t(&[1, 0, 1, 1]), ID2)
+        .expect("sub-delegate");
+    let (sub_doc, published) = create_and_read(&ns, &k, ID2, &sub_acct, None);
+    assert!(
+        published,
+        "the sub-account's flagless first create is ITS doc 1"
+    );
+    assert!(
+        prefix_contains(&acct, &sub_doc),
+        "the near miss: a document under the account's prefix"
+    );
+    assert!(
+        !k.snapshot().world().m3().has_documents(&acct),
+        "the account's own document chain is empty, whatever sits beneath its prefix"
+    );
+
+    let (d1, published) = create_and_read(&ns, &k, ID1, &acct, None);
+    assert_eq!(d1, first_document_address(&acct).expect("slot"));
+    assert!(
+        published,
+        "the account's flagless first create is doc 1, born published"
+    );
 }
 
 /// PUB-8.18: `mint_version` stamps exactly the bit passed — the composite's

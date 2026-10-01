@@ -120,46 +120,51 @@ fn every_module_names_only_its_own_layer_and_below() {
 /// skepd calls its verify.
 /// The gate's `--lib --bins` check proves the library COMPILES without the
 /// feature, never that no hook ships in it: a hook whose gate is dropped
-/// still compiles, and ships, with every other test green.
+/// still compiles, and ships, with every other test green. Each of the two
+/// roots must yield a marker of its own, so a crate whose markers were
+/// reworded fails here rather than leaving its half of the check unread.
 #[test]
 fn every_test_hook_compiles_only_under_test_hooks() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut files = Vec::new();
+    let mut ungated = Vec::new();
     for src in [manifest.join("src"), manifest.join("../skep-signature/src")] {
-        let mut in_src = Vec::new();
-        rust_files(&src, &mut in_src);
-        in_src.sort();
-        files.extend(in_src.into_iter().map(|file| (src.clone(), file)));
-    }
-    let (mut hooks, mut ungated) = (0, Vec::new());
-    for (src, file) in &files {
-        let text = std::fs::read_to_string(file).unwrap();
-        let lines: Vec<&str> = text.lines().collect();
-        let file_gated = declared_under_the_gate(src, &module_of(src, file));
-        let end = lines.iter().position(|l| l.trim() == "mod tests {").unwrap_or(lines.len());
-        for (i, line) in lines[..end].iter().enumerate() {
-            let doc = line.trim_start();
-            if !(doc.starts_with("/// TEST HOOK") || doc.starts_with("/// The test seam")) {
-                continue;
-            }
-            hooks += 1;
-            let mut j = i;
-            while j < lines.len() && lines[j].trim_start().starts_with("///") {
-                j += 1;
-            }
-            let (attributes, item) = attributes_from(&lines, j);
-            if !file_gated && !attributes.iter().any(|a| is_gate(a)) {
-                ungated.push(format!(
-                    "{}:{}: `{}` is documented as a test hook and compiles without \
-                     `test-hooks`",
-                    file.strip_prefix(manifest).unwrap().display(),
-                    item + 1,
-                    lines.get(item).map_or("", |l| l.trim()),
-                ));
+        let mut files = Vec::new();
+        rust_files(&src, &mut files);
+        files.sort();
+        let mut hooks = 0;
+        for file in &files {
+            let text = std::fs::read_to_string(file).unwrap();
+            let lines: Vec<&str> = text.lines().collect();
+            let file_gated = declared_under_the_gate(&src, &module_of(&src, file));
+            let end = lines.iter().position(|l| l.trim() == "mod tests {").unwrap_or(lines.len());
+            for (i, line) in lines[..end].iter().enumerate() {
+                let doc = line.trim_start();
+                if !(doc.starts_with("/// TEST HOOK") || doc.starts_with("/// The test seam")) {
+                    continue;
+                }
+                hooks += 1;
+                let mut j = i;
+                while j < lines.len() && lines[j].trim_start().starts_with("///") {
+                    j += 1;
+                }
+                let (attributes, item) = attributes_from(&lines, j);
+                if !file_gated && !attributes.iter().any(|a| is_gate(a)) {
+                    ungated.push(format!(
+                        "{}:{}: `{}` is documented as a test hook and compiles without \
+                         `test-hooks`",
+                        file.strip_prefix(manifest).unwrap().display(),
+                        item + 1,
+                        lines.get(item).map_or("", |l| l.trim()),
+                    ));
+                }
             }
         }
+        assert!(
+            hooks > 0,
+            "no test hook found under {}: the markers this check reads have moved",
+            src.display()
+        );
     }
-    assert!(hooks > 0, "no test hook found at all: the markers this check reads have moved");
     assert!(
         ungated.is_empty(),
         "every test hook compiles only under `test-hooks`; these do not:\n{}",

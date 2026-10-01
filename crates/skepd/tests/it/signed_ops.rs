@@ -730,6 +730,62 @@ fn a_carried_run_its_principal_never_could_read_is_re_shot_by_address_unread() {
     assert_eq!(text_of(port, Some(&bare), &re_shot, 1, 6), "secret", "D's owner reads D's bytes");
 }
 
+/// A STAGING DRAFT ITS PRINCIPAL MAY NOT READ IS NEVER COPIED IN (the check's
+/// own `attestation_invalid:withheld`; `policy/attestation.rs`'s doc item 4;
+/// PUB-2.40, PUB-6.24). Naming a draft as a shot's STAGING DRAFT makes every
+/// run onto it a run the commit COPIES IN — re-inserted BY VALUE as fresh
+/// identity under the shot document's own I-space — and M5's source gate
+/// skips a run the base already carries. B, granted the claimant's private
+/// draft D, versioned it into F, its own published document, and was revoked.
+/// A shot into F naming D as its staging draft, over runs F CARRIES, is one
+/// the store would admit, D's bytes becoming F's published text. The check
+/// composes no body over a value B may not read: it asks the store's own
+/// gates, and where they would admit the shot it refuses
+/// `attestation_invalid:withheld`, REORDER — unattested, signed over D's true
+/// bytes, or over a wrong guess, alike — and nothing commits. Where the gates
+/// refuse it — a run onto D's sixth address, which F does not carry — the
+/// shot passes through UNATTESTED to the store's own `withheld`, naming D.
+/// Every other shot in the suite names no staging draft, or its author's
+/// own, so this cell alone reaches the check's own refusal.
+#[test]
+fn a_staging_draft_its_principal_may_not_read_is_refused_unread_and_never_copied_in() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_owner_session(port);
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let d = draft_with(port, &bare, "abcde");
+    let b = seat_stranger(port, 961);
+    let b_signed = hire(port, &signed, CLAIMANT_DOC1, &b.account, 961, &distinct_key(62));
+    let grant = deposit_grant(port, &signed, CLAIMANT_DOC1, &d, Some(&b.account));
+    let f = acked_addr(&version_of(port, &b_signed, &d, Some(true)));
+    expect_resp(
+        &typed_link(port, &signed, CLAIMANT_DOC1, &[grant.as_str()], &[b.account.as_str()], T_GRANT),
+        "ack_addr",
+    );
+    assert_withheld(&op(port, Some(&b_signed), &read1_frame(&d)), &d);
+    expect_resp(&insert_text(port, &bare, &d, 6, "f"), "ack_addr");
+    let d_addr = |k: u64| format!("{d}.0.1.{k}");
+    let before = head_position(port);
+
+    // CARRIED, D the staging draft: the store would re-insert D's five values
+    // into F's next member. Refused, whatever is attached.
+    let carried = publish_frame(&f, Some((&f, 5)), Some(&d), &[run(&d, &d_addr(1), 5)]);
+    let withheld =
+        ("credential_refused:attestation_invalid:withheld".to_string(), "reorder".to_string());
+    let v = op_unattested(port, Some(&b_signed), &carried);
+    assert_eq!(refusal(&v), withheld, "unattested: {v}");
+    let v = op_with_publish_values(port, &b_signed, &carried, &per_byte("abcde"));
+    assert_eq!(refusal(&v), withheld, "signed over D's true bytes: {v}");
+    let v = op_with_publish_values(port, &b_signed, &carried, &per_byte("abcdz"));
+    assert_eq!(refusal(&v), withheld, "signed over a wrong guess: {v}");
+    // NOT CARRIED: D's sixth address — the store's own gate answers.
+    let uncarried = publish_frame(&f, Some((&f, 5)), Some(&d), &[run(&d, &d_addr(6), 1)]);
+    assert_withheld(&op_unattested(port, Some(&b_signed), &uncarried), &d);
+    assert_withheld(&op_with_publish_values(port, &b_signed, &uncarried, &per_byte("f")), &d);
+    assert_eq!(head_position(port), before, "nothing committed: D's bytes reached no member of F");
+}
+
 /// A SHOT'S ENTRY-FRAME BODY IS BOUNDED, at parity with the request-body
 /// cap (`skepd::body_cap("/op")`): the body is measured as the check reads
 /// each value (`PublishBody`, in the layout `entry_body_publish` spells), and
@@ -794,6 +850,58 @@ fn a_shot_body_is_refused_before_it_is_built_past_its_budget() {
     let v = op_with_publish_values(port, &signed, &at_cap, &[xs.as_bytes(), xs.as_bytes(), xs.as_bytes(), zs.as_bytes()]);
     assert_eq!(v["resp"].as_str(), Some("ack_addr"), "a shot at the budget is admitted: {v}");
     assert!(sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().is_some(), "and attested");
+}
+
+/// A TERM PAST THE FRAME'S EIGHT BYTES PASSES UNATTESTED TO THE STORE'S OWN
+/// REFUSAL (the check's doc item 4; `ComposeFault::Unspellable`): a base
+/// extent, a window's width or the count a shot places past 2^64 − 1 names
+/// positions no store holds, so no frame is composed and the store refuses the
+/// shot as its own — `base_extent_too_large`, `dangling_source`, PERMANENT.
+/// At 2^64 − 1 the term is spellable and the check stands: unattested,
+/// `attestation_required` (REORDER); attested, the store's same refusal. Two
+/// windows of 2^63 — each spellable, their count not — are the pre-sum's own
+/// cell: without it the builder's overflow reads as the budget's.
+#[test]
+fn a_term_past_the_frames_eight_bytes_passes_unattested_to_the_stores_refusal() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_owner_session(port);
+    let d = draft_with(port, &signed, "pq");
+    let shot = |extent: &str, runs: &[String]| {
+        format!(
+            r#"{{"op":"publish","doc":"{CLAIMANT_DOC1}","base":"{CLAIMANT_DOC1}","base_extent":"{extent}","runs":[{}]}}"#,
+            runs.join(",")
+        )
+    };
+    let window = |width: &str| format!(r#"{{"origin":"{d}","i_start":"{d}.0.1.1","width":"{width}"}}"#);
+    let (top, past, half) = (u64::MAX.to_string(), "18446744073709551616", "9223372036854775808");
+    let store = |code: &str| (code.to_string(), "permanent".to_string());
+    let before = head_position(port);
+
+    let at_top = shot(&top, &[]);
+    assert_eq!(
+        refusal(&op_unattested(port, Some(&signed), &at_top)),
+        ("credential_refused:attestation_required".to_string(), "reorder".to_string()),
+        "2^64 − 1 is a term the frame spells"
+    );
+    assert_eq!(refusal(&op(port, Some(&signed), &at_top)), store("base_extent_too_large"), "attested");
+    assert_eq!(
+        refusal(&op_unattested(port, Some(&signed), &shot(past, &[]))),
+        store("base_extent_too_large"),
+        "an extent past the row passes through"
+    );
+    assert_eq!(
+        refusal(&op_unattested(port, Some(&signed), &shot("1", &[window(past)]))),
+        store("dangling_source"),
+        "a window past the row"
+    );
+    assert_eq!(
+        refusal(&op_unattested(port, Some(&signed), &shot("1", &[window(half), window(half)]))),
+        store("dangling_source"),
+        "two windows whose count passes the row"
+    );
+    assert_eq!(head_position(port), before, "nothing committed");
 }
 
 /// A3 as the wire sees it: the head writer's own commits — the system
@@ -1235,6 +1343,47 @@ fn a_record_lifted_into_a_strangers_doc_1_verifies_under_no_key_of_that_home() {
     let (_, _, v) = deposit_record(port, &b_signed, &b.doc1, &b.account, T_ENROLL, &own);
     assert_eq!(v["resp"].as_str(), Some("ack_addr"), "B's own signature over the same entries: {v}");
     assert!(fingerprints(port, &b.account, "enrolled", None).contains(&k_fp));
+}
+
+/// THE RECORD GRADE TRIES EACH CANDIDATE UNDER ITS OWN ROW (the record grade's
+/// step 6: "the frame under ITS row's token as `alg`, both halves"; AUTH-1.44:
+/// a tag-3 key already enrolled signs as any other): the claimant enrols a
+/// PREVIEW key, and an enrolment record that key SIGNS — the `record` frame
+/// under the preview token, the 730-byte blob — is honored, its key joining
+/// the table, the stored record verifying under the served set. Every other
+/// record whose `sig` reaches the trial is signed under tag 1 — the stranger's
+/// tag-3 blob above meets an opening set holding no key of its row and is
+/// refused before it — so a record grade framing every candidate under tag 1's
+/// token, or verifying under tag 1's rule, passes them all and refuses this one
+/// `attestation_invalid:signature`, PERMANENT.
+#[test]
+fn a_tag_3_key_signs_a_credential_record_as_a_tag_1_key_does() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let device = open_owner_session(port);
+    let tag3 =
+        HybridSigner::from_seed(skep_signature::TAG_FNDSA512_PREVIEW_ED25519, &seed_of(&distinct_key(75)))
+            .expect("tag 3 is a row");
+    // The preview key joins, its record signed by the device key.
+    let joins = [Enrollment::new(tag3.public_key().clone(), false, None).unwrap()];
+    let atom =
+        signed_atom(port, &device, CLAIMANT_DOC1, T_ENROLL, &[CLAIMANT_ACCOUNT], &json_atom(&encode_enroll(&joins)));
+    let (_, _, v) = deposit_record(port, &device, CLAIMANT_DOC1, CLAIMANT_ACCOUNT, T_ENROLL, &atom);
+    assert_eq!(v["resp"].as_str(), Some("ack_addr"), "the preview key joins: {v}");
+    // A record the PREVIEW key signs.
+    let k = distinct_key(76);
+    let entries = [Enrollment::new(public_key_of(&k), false, None).unwrap()];
+    let text = signed_record_text(port, &tag3, CLAIMANT_DOC1, T_ENROLL, &[CLAIMANT_ACCOUNT], &entries)
+        .expect("composable");
+    let (_, _, v) = deposit_record(port, &device, CLAIMANT_DOC1, CLAIMANT_ACCOUNT, T_ENROLL, &json_atom(&text));
+    assert_eq!(v["resp"].as_str(), Some("ack_addr"), "a record the preview key signs is honored: {v}");
+    let fp = Fingerprint::of(&public_key_of(&k)).to_hex();
+    assert!(fingerprints(port, CLAIMANT_ACCOUNT, "enrolled", None).contains(&fp), "its key joins");
+    let record = stored_record(port, &acked_addr(&v));
+    assert_eq!(record.sig.as_deref().map(str::len), Some(2 * 730), "tag 3's blob");
+    let set = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
+    assert!(record.verifies_under(port, &set), "it verifies under the served set");
 }
 
 /// THE MIRROR COMPOSES THE SAME BYTES (the design record §4.2 (C), §7.2; the

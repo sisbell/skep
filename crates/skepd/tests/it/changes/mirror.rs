@@ -2,10 +2,11 @@
 //! the design record §7.3 (i), D12, D25, r6-2a): one end-to-end walk over
 //! every kind of row, Π and the claim boundary read off the feed alone, the
 //! attest store's crash honesty and its keep below the reclaim floor, and
-//! D12 on a record deposit's two rows. The seeded flow, the feed readers,
+//! D12 on a record deposit's rows — its two above the claim, and its atom
+//! below it, where nothing is signed. The seeded flow, the feed readers,
 //! the per-kind term checks and the reclaim helpers are the parent's.
 
-use skep_identity::Fingerprint;
+use skep_identity::{canonical_record, Enrollment, Fingerprint};
 
 use super::*;
 
@@ -515,5 +516,40 @@ fn a_record_deposits_two_rows_carry_neither_key_nor_attest_and_a_sig_less_atom_k
     assert_absent(&e, &["attest"], "a record deposit's atom");
     let v = typed_link(port, &signed, CLAIMANT_DOC1, &[&acked_addr(&ack)], &[&b], T_ENROLL);
     assert_eq!(verdict(&v), "credential_refused:attestation_required", "{v}");
+    sd.shutdown();
+}
+
+/// AT OR BELOW THE CLAIM NOTHING IS SIGNED (A5; `record_deposit_carries_sig`:
+/// "the ceremony's own record, `sig` or not, keeps its row's `key`"): on an
+/// UNCLAIMED board a declared enrolment atom whose record CARRIES a `sig` —
+/// the record grade's shape, a hybrid blob in hex — lands, and its row serves
+/// the session's `key` with no `attest`. The ceremony's own records carry no
+/// `sig`, so every other row below the claim keeps its `key` whatever this arm
+/// says; above the claim the same shape drops it
+/// (`a_record_deposits_two_rows_carry_neither_key_nor_attest_and_a_sig_less_atom_keeps_its_key`).
+#[test]
+fn below_the_claim_a_record_carrying_a_sig_keeps_its_rows_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_unclaimed(dir.path());
+    let port = sd.port();
+    ceremony_before_the_claim(port);
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let entries = [Enrollment::new(public_key_of(&distinct_key(3)), false, None).expect("no label")];
+    let carrying = json_atom(&canonical_record(&entries, Some(&hex(&[0xab; 3373]))));
+    let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
+    let (_, e) = feed_entry(
+        port,
+        &signed,
+        "a record carrying a sig, below the claim",
+        &format!(
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{carrying}}}],"deposit":"{T_ENROLL}"}}"#
+        ),
+    );
+    assert_eq!(
+        e["key"].as_str(),
+        Some(fingerprint_of(&device_key()).as_str()),
+        "nothing is signed below the claim: {e}"
+    );
+    assert_absent(&e, &["attest"], "a row below the claim");
     sd.shutdown();
 }

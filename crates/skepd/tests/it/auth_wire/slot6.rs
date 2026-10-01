@@ -50,6 +50,17 @@ fn a_handoff_is_anchor_grade_wherever_the_set_that_opens_the_account_holds_an_an
         assert_eq!(verdict(&v), ANCHOR_SESSION_REQUIRED, "{hand}'s genesis at X.2: {v}");
     }
     assert_eq!(enrolled_count(port, &x2), 0, "a refused handoff commits nothing");
+    // THE RECORD'S GRADE IS THE ACT'S: the same genesis signed by the DEVICE
+    // key is refused at the record grade even from the anchor session — a
+    // handoff admits an anchor's `sig` alone, though its entries flag none.
+    let by_device = land_record(port, &device, CLAIMANT_DOC1, &fresh_member(61), T_ENROLL, &x2);
+    let v = enroll_for(port, &anchor, CLAIMANT_DOC1, &by_device, &x2);
+    assert_eq!(
+        verdict(&v),
+        "credential_refused:attestation_invalid:signature",
+        "a device-signed handoff: {v}"
+    );
+    assert_eq!(enrolled_count(port, &x2), 0, "…which commits nothing");
     // …and an ANCHOR session's commits: the same record, the same frame.
     expect_resp(&enroll_for(port, &anchor, CLAIMANT_DOC1, &record, &x2), "ack_addr");
     assert_eq!(enrolled_count(port, &x2), 1, "the recipient's key, latched");

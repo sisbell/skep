@@ -740,4 +740,101 @@ mod tests {
             "no claimant for the field to differ from"
         );
     }
+
+    /// A CLAIMED BOARD WITH NO `H.1` ANSWERS A JUDGED RECORD
+    /// `attestation_invalid:board_unavailable` — REORDER, the board's state and
+    /// never the record's (the record grade's step 4: `compose_record`'s one
+    /// refusal, `board_term`'s states). The ceremony is run through M10 alone,
+    /// so no head writer runs: the world is claimed and holds no `H.1`, and a
+    /// retirement whose record carries a well-formed `sig` passes slots (3)–(6)
+    /// and meets the record grade with no board term to compose over. The wire
+    /// reaches this only through a first head the driver refused, which no
+    /// suite can produce.
+    #[test]
+    fn a_claimed_board_with_no_h1_answers_the_record_grade_board_unavailable() {
+        use serde_json::json;
+        use skep_febe::{Codec, OperationSurface, Response};
+        use skep_identity::encode_enroll;
+        use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
+        use skep_namespace::PrincipalId;
+        use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
+
+        use crate::auth::fold::{canonical_identity, T_CLAIM, T_ENROLL, T_RETIRE};
+        use crate::auth::CredentialLock;
+        use crate::codec::JsonCodec;
+        use crate::write_path::board_term;
+
+        let engine = skep_engine::Engine::open(KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(0),
+        })
+        .expect("in-memory genesis cannot fail");
+        let febe = OperationSurface::new(Box::new(engine.stores()));
+        let ty = |t: &[u32; 9]| addr_of(t).tumbler().to_string();
+        let key = |n: u8| {
+            let signer = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[n; 32]).expect("tag 1");
+            signer.public_key().clone()
+        };
+        let (anchor, device) = (key(1), key(2));
+        let exec = |sid, frame: serde_json::Value| -> String {
+            let req = JsonCodec
+                .parse(frame.to_string().as_bytes())
+                .unwrap_or_else(|e| panic!("{frame}: {:?}", e.detail));
+            match febe.execute(sid, req) {
+                Response::AckAddr { addr, .. } => addr.tumbler().to_string(),
+                other => panic!("{frame}: {}", String::from_utf8_lossy(&JsonCodec.marshal(&other))),
+            }
+        };
+        // THE CEREMONY, through M10: the account, its doc 1, the genesis, the claim.
+        let delegate = json!({"op": "delegate", "new_prefix": "1.0.1", "new_id": 900});
+        exec(febe.bootstrap_session(), delegate);
+        let s = febe.open_session(PrincipalId(900));
+        let doc1 = exec(s, json!({"op": "create_new_document", "account": "1.0.1"}));
+        let atom = |ordinal: u64, text: String, t: &[u32; 9]| {
+            json!({"op": "insert", "doc": doc1,
+                   "at": {"subspace": "1", "ordinal": ordinal.to_string()},
+                   "values": [{"atom": text}], "deposit": ty(t)})
+        };
+        let link = |from: &str, to: &[&str], t: &[u32; 9]| {
+            json!({"op": "make_link", "home": doc1, "from": {"addrs": [from]},
+                   "to": {"addrs": to}, "ty": {"addrs": [ty(t)]}})
+        };
+        let genesis = encode_enroll(&[
+            Enrollment::new(anchor, true, None).expect("no label"),
+            Enrollment::new(device.clone(), false, None).expect("no label"),
+        ]);
+        let genesis_atom = exec(s, atom(1, genesis, &T_ENROLL));
+        exec(s, link(&genesis_atom, &["1.0.1"], &T_ENROLL));
+        exec(s, link("1.0.1", &[], &T_CLAIM));
+        // A retirement of the device key, its record carrying a tag-1-width `sig`.
+        let retire = canonical_record(&[Fingerprint::of(&device)], Some(&"ab".repeat(3373)));
+        let retire_atom = exec(s, atom(2, retire, &T_RETIRE));
+        let op = JsonCodec
+            .parse(link(&retire_atom, &["1.0.1"], &T_RETIRE).to_string().as_bytes())
+            .unwrap_or_else(|e| panic!("{:?}", e.detail))
+            .op;
+        let dep = DepositSpans::of(&op).expect("an address-form make_link");
+
+        let snap = engine.kernel().snapshot();
+        let world = snap.world();
+        assert!(board_term(world).is_none(), "the premise: no head writer ran, so no H.1");
+        let identity = canonical_identity(world);
+        assert!(identity.claimant().is_some(), "the premise: the ceremony claimed the board");
+        let lock = CredentialLock::new();
+        assert_eq!(
+            precheck(
+                &lock.write(),
+                world,
+                &identity,
+                &dep,
+                Some(&Fingerprint::of(&device)),
+                Scope::Full,
+                None,
+                false
+            ),
+            Err(CredentialRefusal::AttestationInvalid(AttestFault::BoardUnavailable)),
+            "no board term to compose the record frame over: the state's REORDER cause"
+        );
+    }
 }

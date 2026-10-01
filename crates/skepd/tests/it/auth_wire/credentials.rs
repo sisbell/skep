@@ -998,7 +998,9 @@ fn restart_recovers_the_identity_fold() {
 /// The op-shape slots ahead of the lock: a credential-typed `emit` is
 /// `emit_not_make_link`; a credential `make_link` with a V-spec entity
 /// slot is `resolved_from` — and from NO session both are
-/// `unauthenticated` (slot 0 first).
+/// `unauthenticated` (slot 0 first). And a frame carrying both slot (2)'s
+/// fault and a `replaces` member answers slot (2)'s: the fence stands behind
+/// it, in `op_shape_refusal`'s order and wire.md's.
 #[test]
 fn op_shape_slots_fire_ahead_of_the_lock() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1017,6 +1019,11 @@ fn op_shape_slots_fire_ahead_of_the_lock() {
     );
     let v = op(port, Some(&signed), &vspec_from);
     assert_eq!(rejected_detail(&v), "credential_refused:resolved_from");
+    let both = format!(
+        r#"{{"op":"make_link","home":"{CLAIMANT_DOC1}","from":[{{"source":"{CLAIMANT_DOC1}","span":{{"start":"1.1","width":"0.1"}}}}],"to":{{"addrs":["{CLAIMANT_ACCOUNT}"]}},"ty":{{"addrs":["{T_ENROLL}"]}},"replaces":"{CLAIMANT_DOC1}"}}"#
+    );
+    let v = op(port, Some(&signed), &both);
+    assert_eq!(rejected_detail(&v), "credential_refused:resolved_from", "slot (2) before the fence: {v}");
     sd.shutdown();
 }
 
@@ -1047,6 +1054,11 @@ fn retiring_a_key_needs_an_anchor_session_and_kills_that_keys_sessions() {
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
     let v = deposit(port, &bare, &anchor_retire, T_RETIRE);
     assert_eq!(rejected_detail(&v), "credential_refused:anchor_session_required");
+    // …and the RECORD's grade is the act's: the same device-signed record from
+    // the ANCHOR session passes slot (6) and is refused at the record grade —
+    // a retire record names fingerprints and flags nothing.
+    let v = deposit(port, &anchor_token, &anchor_retire, T_RETIRE);
+    assert_eq!(rejected_detail(&v), "credential_refused:attestation_invalid:signature", "{v}");
 
     // Trigger 2 — a post-genesis ANCHOR-FLAGGED enrollment, same gate.
     let fresh = distinct_key(9);

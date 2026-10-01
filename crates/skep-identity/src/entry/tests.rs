@@ -7,7 +7,7 @@ fn addr(comps: &[u32]) -> Address {
 }
 
 /// The value-sequence row alone, as the pins below state it.
-fn value_sequence<'a>(values: impl IntoIterator<Item = &'a [u8]>) -> Vec<u8> {
+fn value_sequence_bytes<'a>(values: impl IntoIterator<Item = &'a [u8]>) -> Vec<u8> {
     let mut out = Vec::new();
     push_value_sequence(&mut out, values);
     out
@@ -54,7 +54,7 @@ fn the_rows_spell_as_the_module_doc_states() {
     );
     assert_eq!(address_bytes(&addr(&[1, 0, 1, 0, 1])), b"1.0.1.0.1");
     assert_eq!(
-        value_sequence([&b"ab"[..], &b""[..], &b"c"[..]]),
+        value_sequence_bytes([&b"ab"[..], &b""[..], &b"c"[..]]),
         [
             &[0u8, 0, 0, 0, 0, 0, 0, 3][..],
             &[0, 0, 0, 2, b'a', b'b'][..],
@@ -106,7 +106,7 @@ fn the_rows_spell_as_the_module_doc_states() {
     );
     assert_eq!(
         entry_body_insert(None, [&b"x"[..]]).as_bytes(),
-        [&[0u8, 0, 0, 0][..], &value_sequence([&b"x"[..]])[..]].concat()
+        [&[0u8, 0, 0, 0][..], &value_sequence_bytes([&b"x"[..]])[..]].concat()
     );
     assert_eq!(
         entry_body_insert(Some(&addr(&[1, 1, 0, 1, 0, 1, 0, 3, 1])), []).as_bytes(),
@@ -124,7 +124,7 @@ fn the_rows_spell_as_the_module_doc_states() {
         [
             &[0u8, 0, 0, 0, 0, 0, 0, 1][..],
             &[0x02][..],
-            &value_sequence([&b"q"[..]])[..],
+            &value_sequence_bytes([&b"q"[..]])[..],
             &[0, 0, 0, 0][..],
         ]
         .concat(),
@@ -155,11 +155,11 @@ fn the_rows_spell_as_the_module_doc_states() {
         [
             &[0u8, 0, 0, 0, 0, 0, 0, 6][..],
             &[0x02][..],
-            &value_sequence([&b"a"[..], &b"b"[..]])[..],
+            &value_sequence_bytes([&b"a"[..], &b"b"[..]])[..],
             &[0x01][..],
             &window_bytes(&window_start, 3)[..],
             &[0x02][..],
-            &value_sequence([&b"c"[..]])[..],
+            &value_sequence_bytes([&b"c"[..]])[..],
             &[0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 5][..],
         ]
         .concat(),
@@ -167,12 +167,12 @@ fn the_rows_spell_as_the_module_doc_states() {
     );
     // Two windows in a row stay two segments: the builder merges no
     // addresses — the minted member's arrangement did, before they got here.
-    let second = addr(&[1, 0, 3, 0, 1, 1]);
+    let second_start = addr(&[1, 0, 3, 0, 1, 1]);
     assert_eq!(
         entry_body_publish(
             [
                 ShotSegmentPiece::Window { start: &window_start, width: nonzero(3) },
-                ShotSegmentPiece::Window { start: &second, width: nonzero(1) },
+                ShotSegmentPiece::Window { start: &second_start, width: nonzero(1) },
             ],
             Some(0),
         )
@@ -182,7 +182,7 @@ fn the_rows_spell_as_the_module_doc_states() {
             &[0x01][..],
             &window_bytes(&window_start, 3)[..],
             &[0x01][..],
-            &window_bytes(&second, 1)[..],
+            &window_bytes(&second_start, 1)[..],
             &[0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0][..],
         ]
         .concat()
@@ -215,18 +215,23 @@ fn the_rows_spell_as_the_module_doc_states() {
     let revocation = addr(&[1, 0, 1, 0, 1, 0, 2, 9]);
     // Group length 28: the form byte, `be64(1)`, then `be32(15)` and the
     // fifteen bytes of the address's spelling.
-    let present = [
+    let replaces_group = [
         &[0u8, 0, 0, 28][..],
         &[0x01, 0, 0, 0, 0, 0, 0, 0, 1][..],
         &[0, 0, 0, 15][..],
         b"1.0.1.0.1.0.2.9",
     ]
     .concat();
-    assert_eq!(optional_address_bytes(Some(&revocation)), present, "present: one group");
+    assert_eq!(optional_address_bytes(Some(&revocation)), replaces_group, "present: one group");
     assert_eq!(
         entry_body_make_link_replacing(slots, &revocation).as_bytes(),
-        [slot_bytes(slots.ty), slot_bytes(slots.from), slot_bytes(slots.to), present.clone()]
-            .concat(),
+        [
+            slot_bytes(slots.ty),
+            slot_bytes(slots.from),
+            slot_bytes(slots.to),
+            replaces_group.clone()
+        ]
+        .concat(),
         "the three slots, then the `replaces` row's group"
     );
     // A PRESENT group holding an EMPTY slot row — a spelling no op makes,
@@ -286,7 +291,7 @@ fn the_rows_spell_as_the_module_doc_states() {
         [
             slot_bytes(EntrySlot::Addrs(std::slice::from_ref(&record_ty))),
             slot_bytes(empty),
-            present,
+            replaces_group,
             lineage_group,
             vec![0, 0, 0, 1, b'r'],
         ]
@@ -328,7 +333,7 @@ fn the_rows_spell_as_the_module_doc_states() {
 /// `[ab, c]`'s body — the preimage of another publish, whose signature
 /// verifies over it.
 #[test]
-fn a_publish_body_built_within_its_budget_is_the_whole_sequences_body() {
+fn a_publish_body_within_its_budget_finishes_to_the_body_of_all_its_pieces() {
     let start = addr(&[1, 0, 2, 0, 1, 4]);
     let whole = entry_body_publish(
         [
@@ -340,8 +345,8 @@ fn a_publish_body_built_within_its_budget_is_the_whole_sequences_body() {
     );
     let budget = whole.as_bytes().len();
     let fed = |pieces: &[ShotSegmentPiece<'_>]| {
-        pieces.iter().try_fold(PublishBody::within(budget, Some(7)), |body, p| match *p {
-            ShotSegmentPiece::Value(v) => body.push(v),
+        pieces.iter().try_fold(PublishBody::within(budget, Some(7)), |body, piece| match *piece {
+            ShotSegmentPiece::Value(value) => body.push(value),
             ShotSegmentPiece::Window { start, width } => body.window(start, width),
         })
     };
@@ -385,12 +390,12 @@ fn a_publish_body_built_within_its_budget_is_the_whole_sequences_body() {
         Ok(whole),
         "exactly on it"
     );
-    // The base-extent group is counted from the start: the same pieces
-    // under a budget one byte short of the group's present spelling are
-    // refused at the first piece, not at `finish`.
-    let birth = entry_body_publish([ShotSegmentPiece::Value(b"ab")], None).as_bytes().len();
+    // The base-extent group is counted from the start: under a budget of
+    // `ab`'s body in the birth shape — eight bytes short of that body with
+    // the group present — `ab` is refused at its push, not at `finish`.
+    let birth_budget = entry_body_publish([ShotSegmentPiece::Value(b"ab")], None).as_bytes().len();
     assert_eq!(
-        PublishBody::within(birth, Some(7)).push(b"ab").err(),
+        PublishBody::within(birth_budget, Some(7)).push(b"ab").err(),
         past,
         "a present group costs eight bytes more than the EMPTY one"
     );

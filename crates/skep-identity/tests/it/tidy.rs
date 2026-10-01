@@ -364,20 +364,21 @@ fn the_citation_readers_find_a_bare_citation() {
 fn the_dependencies_are_auth_2_1s_five() {
     let manifest =
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")).unwrap();
-    let (mut table, mut tables, mut dependencies) = ("", BTreeSet::new(), BTreeSet::new());
+    let (mut table, mut dependency_tables, mut dependencies) =
+        ("", BTreeSet::new(), BTreeSet::new());
     for line in manifest.lines() {
         let line = line.split('#').next().unwrap_or("").trim();
         if line.starts_with('[') {
             table = line;
             if line.contains("dependencies") {
-                tables.insert(line);
+                dependency_tables.insert(line);
             }
         } else if table == "[dependencies]" {
             dependencies.extend(dependency_named(line));
         }
     }
     assert_eq!(
-        tables,
+        dependency_tables,
         BTreeSet::from(["[dependencies]", "[dev-dependencies]"]),
         "Cargo.toml's dependency tables"
     );
@@ -418,7 +419,7 @@ fn src_reads_no_world_but_its_ctx() {
                 faults.push(format!("src/{path}:{}: `{named}`", at[start].0));
             }
         }
-        for call in printing(&code) {
+        for call in print_calls(&code) {
             faults.push(format!("src/{path}: `{call}…)` prints"));
         }
     }
@@ -462,7 +463,7 @@ fn the_purity_readers_see_the_world_in_every_form() {
             "std::sync::Mutex",
         ]
     );
-    assert_eq!(printing(code), ["eprintln!("], "a print macro, read once");
+    assert_eq!(print_calls(code), ["eprintln!("], "a print macro, read once");
 }
 
 /// The crate a line of a dependency table names — the key ahead of its `=`,
@@ -489,7 +490,7 @@ fn reaches_the_world(path: &str) -> bool {
 /// The print macros `code` calls — writes to the process's own streams —
 /// each where its name opens a word, so an `eprintln!` is never read as the
 /// `println!` its name contains.
-fn printing(code: &str) -> Vec<&'static str> {
+fn print_calls(code: &str) -> Vec<&'static str> {
     let opens_a_word = |at: usize| {
         code[..at].chars().next_back().is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
     };
@@ -515,22 +516,22 @@ fn declared_module(line: &str) -> Option<&str> {
 /// across two lines reads as one.
 fn comment_runs(text: &str) -> Vec<(usize, String)> {
     let mut runs = Vec::new();
-    let mut open: Option<(usize, Vec<&str>)> = None;
+    let mut run: Option<(usize, Vec<&str>)> = None;
     for (i, line) in text.lines().enumerate() {
         let trimmed = line.trim_start();
         if trimmed.starts_with("//") {
             let words = trimmed.trim_start_matches(['/', '!']).split_whitespace();
-            open.get_or_insert((i + 1, Vec::new())).1.extend(words);
+            run.get_or_insert((i + 1, Vec::new())).1.extend(words);
             continue;
         }
-        if let Some((at, words)) = open.take() {
+        if let Some((at, words)) = run.take() {
             runs.push((at, words.join(" ")));
         }
         if let Some((_, trailing)) = line.split_once(" //") {
             runs.push((i + 1, trailing.split_whitespace().collect::<Vec<_>>().join(" ")));
         }
     }
-    if let Some((at, words)) = open {
+    if let Some((at, words)) = run {
         runs.push((at, words.join(" ")));
     }
     runs
@@ -563,22 +564,22 @@ fn code_of(text: &str) -> (String, Vec<(usize, usize)>) {
     let lines: Vec<&str> = text.lines().collect();
     let end = inline_test_module(&lines).map_or(lines.len(), |tests| tests.open);
     let (mut code, mut at) = (String::new(), Vec::new());
-    // The indentation of each inline module open around the current line.
-    let mut open: Vec<usize> = Vec::new();
+    // The indentation of each inline module enclosing the current line.
+    let mut enclosing: Vec<usize> = Vec::new();
     for (i, &line) in lines[..end].iter().enumerate() {
         let trimmed = line.trim();
         if trimmed.starts_with("//") {
             continue;
         }
         let indent = line.len() - line.trim_start().len();
-        if trimmed == "}" && open.last() == Some(&indent) {
-            open.pop();
+        if trimmed == "}" && enclosing.last() == Some(&indent) {
+            enclosing.pop();
         }
         code.push_str(line.split(" //").next().unwrap_or(line));
         code.push('\n');
-        at.resize(code.len(), (i + 1, open.len()));
+        at.resize(code.len(), (i + 1, enclosing.len()));
         if opens_inline_module(trimmed) {
-            open.push(indent);
+            enclosing.push(indent);
         }
     }
     (code, at)

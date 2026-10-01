@@ -716,7 +716,7 @@ impl PublishBody {
             return Err(PublishRefusal::PastBudget);
         }
         let mut stretch = match self.stretch.take() {
-            Some(open) => open,
+            Some(stretch) => stretch,
             None => {
                 self.bytes.push(SEGMENT_VALUE_STRETCH);
                 ValueSequence::open(&mut self.bytes)
@@ -752,8 +752,8 @@ impl PublishBody {
         if self.finished_len().saturating_add(cost) > self.budget {
             return Err(PublishRefusal::PastBudget);
         }
-        if let Some(open) = self.stretch.take() {
-            open.close(&mut self.bytes);
+        if let Some(stretch) = self.stretch.take() {
+            stretch.close(&mut self.bytes);
         }
         self.bytes.push(SEGMENT_WINDOW);
         push_window(&mut self.bytes, &start, width.get());
@@ -767,8 +767,8 @@ impl PublishBody {
     /// never past its budget, by the standing invariant.
     pub fn finish(self) -> EntryBody {
         let PublishBody { mut bytes, stretch, placed, base_extent_group, .. } = self;
-        if let Some(open) = stretch {
-            open.close(&mut bytes);
+        if let Some(stretch) = stretch {
+            stretch.close(&mut bytes);
         }
         bytes[..8].copy_from_slice(&placed.to_be_bytes());
         bytes.extend_from_slice(&base_extent_group);

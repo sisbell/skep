@@ -147,18 +147,18 @@ proptest! {
         let base = encode_enroll(&entries);
         prop_assert_eq!(&encode_enroll(&parse_enroll(base.as_bytes()).unwrap()), &base);
         if let Some(sig) = enroll_sig {
-            let with_sig = with_canonical_sig(&base, &sig);
-            let admitted = parse_enroll(with_sig.as_bytes());
+            let sig_bearing = with_canonical_sig(&base, &sig);
+            let admitted = parse_enroll(sig_bearing.as_bytes());
             prop_assert_eq!(&admitted, &Ok(entries.clone()), "the sig-bearing body is admitted, sig skipped");
             prop_assert_eq!(encode_enroll(&admitted.unwrap()), base.clone(), "encode emits no sig");
             prop_assert_eq!(
-                parse_record_value::<Enrollment>(with_sig.as_bytes()),
+                parse_record_value::<Enrollment>(sig_bearing.as_bytes()),
                 Ok(RecordValue { entries: entries.clone(), sig: Some(sig.clone()) }),
                 "the verifier reads the sig the body carried"
             );
             prop_assert_eq!(
                 &canonical_record(&entries, Some(sig.as_str())),
-                &with_sig,
+                &sig_bearing,
                 "the value is the body again"
             );
         }
@@ -166,18 +166,18 @@ proptest! {
         let base = encode_retire(&fps);
         prop_assert_eq!(&encode_retire(&parse_retire(base.as_bytes()).unwrap()), &base);
         if let Some(sig) = retire_sig {
-            let with_sig = with_canonical_sig(&base, &sig);
-            let admitted = parse_retire(with_sig.as_bytes());
+            let sig_bearing = with_canonical_sig(&base, &sig);
+            let admitted = parse_retire(sig_bearing.as_bytes());
             prop_assert_eq!(&admitted, &Ok(fps.clone()), "the sig-bearing body is admitted, sig skipped");
             prop_assert_eq!(encode_retire(&admitted.unwrap()), base.clone(), "encode emits no sig");
             prop_assert_eq!(
-                parse_record_value::<Fingerprint>(with_sig.as_bytes()),
+                parse_record_value::<Fingerprint>(sig_bearing.as_bytes()),
                 Ok(RecordValue { entries: fps.clone(), sig: Some(sig.clone()) }),
                 "the verifier reads the sig the body carried"
             );
             prop_assert_eq!(
                 &canonical_record(&fps, Some(sig.as_str())),
-                &with_sig,
+                &sig_bearing,
                 "the value is the body again"
             );
         }

@@ -873,25 +873,33 @@ fn every_payload_error_variant_has_its_pinned_token() {
 fn parse_record_value_answers_the_entries_and_the_sig_under_the_folds_own_admission() {
     let h = key_hex(1);
     let bare = canonical_enroll_record();
-    let signed = format!(
+    let sig_bearing = format!(
         r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false}}],"sig":"00ff"}}"#
     );
-    let unsigned: RecordValue<Enrollment> = parse_record_value(bare.as_bytes()).expect("admitted");
-    let with_sig: RecordValue<Enrollment> = parse_record_value(signed.as_bytes()).expect("admitted");
-    assert_eq!(unsigned.sig, None, "no member, no sig");
-    assert_eq!(with_sig.sig.as_deref(), Some("00ff"), "the member, verbatim");
-    assert_eq!(unsigned.entries, with_sig.entries, "the fold's entries, member or not");
-    assert_eq!(with_sig.entries, parse_enroll(signed.as_bytes()).expect("the fold admits it"));
+    let bare_value: RecordValue<Enrollment> =
+        parse_record_value(bare.as_bytes()).expect("admitted");
+    let sig_bearing_value: RecordValue<Enrollment> =
+        parse_record_value(sig_bearing.as_bytes()).expect("admitted");
+    assert_eq!(bare_value.sig, None, "no member, no sig");
+    assert_eq!(sig_bearing_value.sig.as_deref(), Some("00ff"), "the member, verbatim");
+    assert_eq!(bare_value.entries, sig_bearing_value.entries, "the fold's entries, member or not");
+    assert_eq!(
+        sig_bearing_value.entries,
+        parse_enroll(sig_bearing.as_bytes()).expect("the fold admits it")
+    );
     // The round trip on both sides of the projection.
-    assert_eq!(canonical_record(&with_sig.entries, with_sig.sig.as_deref()), signed);
-    assert_eq!(canonical_record(&with_sig.entries, None), bare, "the sig-less projection");
+    assert_eq!(
+        canonical_record(&sig_bearing_value.entries, sig_bearing_value.sig.as_deref()),
+        sig_bearing
+    );
+    assert_eq!(canonical_record(&sig_bearing_value.entries, None), bare, "the sig-less projection");
     // The EMPTY member is a member: `"sig":""` carries a sig, the empty string —
     // never `None`, which says the body carried no `sig` at all.
     let blank = format!("{},\"sig\":\"\"}}", &bare[..bare.len() - 1]);
-    let with_blank: RecordValue<Enrollment> =
+    let blank_value: RecordValue<Enrollment> =
         parse_record_value(blank.as_bytes()).expect("admitted");
-    assert_eq!(with_blank.sig.as_deref(), Some(""), "an empty sig member is a sig");
-    assert_eq!(canonical_record(&with_blank.entries, with_blank.sig.as_deref()), blank);
+    assert_eq!(blank_value.sig.as_deref(), Some(""), "an empty sig member is a sig");
+    assert_eq!(canonical_record(&blank_value.entries, blank_value.sig.as_deref()), blank);
     // The retirement kind alike.
     let retire = format!(r#"{{"type":"skep-retire","fingerprints":["{}"],"sig":"ab"}}"#, fp_hex(1));
     let value: RecordValue<Fingerprint> = parse_record_value(retire.as_bytes()).expect("admitted");
@@ -906,7 +914,8 @@ fn parse_record_value_answers_the_entries_and_the_sig_under_the_folds_own_admiss
         PayloadError::BadRecord
     );
     assert_eq!(
-        parse_record_value::<Fingerprint>(signed.as_bytes()).expect_err("an enrollment is no retirement"),
+        parse_record_value::<Fingerprint>(sig_bearing.as_bytes())
+            .expect_err("an enrollment is no retirement"),
         PayloadError::BadRecord
     );
 }

@@ -151,5 +151,5 @@ fn a_floored_frontier_survives_the_checkpoint_round_trip() {
 #[test]
 #[should_panic(expected = "effective frontier")]
 fn the_fold_fail_stops_on_an_allocate_inside_the_ghost_region() {
-    M3State::genesis().apply_m3(&alloc(&[1, 1, 0, 1, 0, 1, 0, 1, 1]));
+    let _ = M3State::genesis().apply_m3(&alloc(&[1, 1, 0, 1, 0, 1, 0, 1, 1]));
 }

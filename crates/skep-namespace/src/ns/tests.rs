@@ -17,14 +17,8 @@ fn a(comps: &[u32]) -> Address {
 fn every_address_up_to(max_len: u32) -> Vec<Address> {
     (1..=max_len)
         .flat_map(|len| {
-            (0..3u32.pow(len)).filter_map(move |mut code| {
-                let comps: Vec<u32> = (0..len)
-                    .map(|_| {
-                        let digit = code % 3;
-                        code /= 3;
-                        digit
-                    })
-                    .collect();
+            (0..3u32.pow(len)).filter_map(move |code| {
+                let comps: Vec<u32> = (0..len).map(|i| code / 3u32.pow(i) % 3).collect();
                 validate(t(&comps)).ok()
             })
         })

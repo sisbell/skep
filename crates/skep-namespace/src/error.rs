@@ -41,24 +41,25 @@ pub enum MintError {
     NotAnAccount,
     /// M1's TA5a inc gate refused (B6) — defensive: reachable by no input and
     /// no state, corrupted or not; it would mean a mint's own structural gate
-    /// admitted an element (an M3 defect — see [`MintError`]).
+    /// admitted an element (an M3 defect — see [`MintError`]). Its message
+    /// names this layer only; M1's refusal is its `source`.
     Gate(GateViolation),
 }
 
 impl fmt::Display for MintError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MintError::HomeNotRegistered => {
-                f.write_str("mint: home is not a registered Document (P6/C2/L1a)")
+        f.write_str(match self {
+            MintError::HomeNotRegistered => "mint: home is not a registered Document (P6/C2/L1a)",
+            MintError::SourceNotRegistered => {
+                "mint_version: source is not a registered Document (V-WF; covers unregistered and non-document alike)"
             }
-            MintError::SourceNotRegistered => f.write_str(
-                "mint_version: source is not a registered Document (V-WF; covers unregistered and non-document alike)",
-            ),
-            MintError::NotAnAccount => f.write_str(
-                "mint_document: target is not a registered Account (P8; covers unregistered and non-account alike)",
-            ),
-            MintError::Gate(e) => write!(f, "mint: M1 inc gate refused (B6/TA5a, defensive): {e}"),
-        }
+            MintError::NotAnAccount => {
+                "mint_document: target is not a registered Account (P8; covers unregistered and non-account alike)"
+            }
+            // This layer only — M1's own sentence is the `source`, so a
+            // reporter walking the chain prints it once.
+            MintError::Gate(_) => "mint: M1 inc gate refused (B6/TA5a, defensive)",
+        })
     }
 }
 
@@ -96,18 +97,20 @@ pub enum CreateDocumentError {
     /// `mint_document`, so only two [`MintError`] leaves can come out of it:
     /// `NotAnAccount`, and `Gate`, which no state reaches (see [`MintError`])
     /// yet the type still carries. A caller matching on this owes no arm for
-    /// `HomeNotRegistered` or `SourceNotRegistered`.
+    /// `HomeNotRegistered` or `SourceNotRegistered`. Its message names this
+    /// layer only; the mint's refusal is its `source`.
     Mint(MintError),
 }
 
 impl fmt::Display for CreateDocumentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CreateDocumentError::NotOwner => f.write_str(
-                "caller is not the effective owner (ω) of the target account, or — from fork, which has no target — its id names no principal at all (O5; ω arbitrates, never bare containment)",
-            ),
-            CreateDocumentError::Mint(e) => write!(f, "document mint failed: {e}"),
-        }
+        f.write_str(match self {
+            CreateDocumentError::NotOwner => {
+                "caller is not the effective owner (ω) of the target account, or — from fork, which has no target — its id names no principal at all (O5; ω arbitrates, never bare containment)"
+            }
+            // This layer only — the mint's own message is the `source`.
+            CreateDocumentError::Mint(_) => "document mint failed",
+        })
     }
 }
 

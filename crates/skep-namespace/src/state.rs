@@ -652,12 +652,14 @@ impl M3State {
     /// before any delegation can run, and from then on `delegate`'s
     /// `DuplicateId` gate refuses that id. M2's journal is the boundary that
     /// keeps it so.
+    #[must_use = "apply_m3 returns the folded slice; it does not modify the receiver"]
     pub fn apply_m3(&self, r: &M3Rec) -> M3State {
         let mut s = self.clone();
         match r {
             M3Rec::Allocate { addr, published } => {
-                let key = namespace_of(addr)
-                    .expect("≥ 2 components — every mint extends a registered parent");
+                let key = namespace_of(addr).expect(
+                    "≥ 2 components: Allocate's address door refuses a parentless address off the journal, and the totality domain asks it of an in-process producer",
+                );
                 let n = ordinal(addr.tumbler()).clone();
                 // The totality domain's contiguity condition. Its floor term
                 // matters once per journal: the ghost home document's first

@@ -7,6 +7,8 @@
 //! (the linearization coordinate) — only after commit
 //! (commit-before-acknowledge).
 
+use std::fmt;
+
 use skep_address::{parent, validate, Address, Level, Tumbler};
 use skep_kernel::{Kernel, Seq, TxnError, WorldState};
 
@@ -50,6 +52,32 @@ impl<'k, W: WorldState> Namespace<'k, W> {
         Namespace { kernel }
     }
 }
+
+/// The handle renders as what it holds: the kernel it borrows, whose own
+/// `Debug` reports the coordinate, the poison flag and the configuration,
+/// lock-free, and nothing of the world. That is what a derive would print;
+/// it is written out because a derive would also bound the impl on
+/// `W: Debug`, which no `WorldState` owes.
+impl<W: WorldState> fmt::Debug for Namespace<'_, W> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Namespace")
+            .field("kernel", self.kernel)
+            .finish()
+    }
+}
+
+/// One kernel borrow, so a copy of the handle is a copy of a reference and
+/// drives the same kernel. Written out, as `Debug` is: the derives would
+/// bound the impls on `W: Clone` / `W: Copy`, and no `WorldState` is `Copy` —
+/// the choice M5's `Vstream` and M6's `Query` make for the same reason.
+/// `Copy` holds because the handle is that borrow and nothing else; a field
+/// of its own would end it.
+impl<W: WorldState> Clone for Namespace<'_, W> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<W: WorldState> Copy for Namespace<'_, W> {}
 
 impl<W: WorldState + HasM3> Namespace<'_, W>
 where
@@ -278,11 +306,12 @@ where
             if next != new_prefix {
                 return Err(DelegateError::NotNextForm);
             }
-            // Baptism + principal registration, one transaction (O17b).
+            // Baptism + principal registration, one transaction (O17b): both
+            // records carry the allocator's own value.
             stg.push(alloc.into());
             stg.push(
                 M3Rec::RegisterPrincipal {
-                    prefix: new_prefix.clone(),
+                    prefix: next,
                     id: new_id,
                 }
                 .into(),

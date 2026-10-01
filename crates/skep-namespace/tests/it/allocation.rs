@@ -1,10 +1,13 @@
 //! §A frontier mints — the next address on each documented chain, the
-//! caller's half of a mint, the allocator's laws, and each mint's structural
-//! refusals — and §C membership, which is exact chain membership.
+//! caller's half of a mint, the allocator's laws, each mint's structural
+//! refusals and how a wrapping refusal reports its cause — and §C
+//! membership, which is exact chain membership.
+
+use std::error::Error;
 
 use crate::common::*;
 
-use skep_address::{content_subspace, link_subspace, Address, Level};
+use skep_address::{content_subspace, link_subspace, Address, GateViolation, Level};
 use skep_kernel::Kernel;
 use skep_namespace::{
     first_version_address, CreateDocumentError, HasM3, M3Rec, M3State, MintError,
@@ -385,6 +388,34 @@ fn a_mint_refusal_lifts_into_the_document_rejection() {
         create(m3, &doc),
         Err(CreateDocumentError::Mint(MintError::NotAnAccount))
     );
+}
+
+#[test]
+fn a_wrapping_rejection_names_its_own_layer_and_delegates_the_cause() {
+    // A wrapping variant's `Display` names its own layer and `source` hands
+    // over the cause, so a reporter walking the chain prints each message
+    // once — the discipline M5's wrappers of `MintError` keep. Compared
+    // against each cause's OWN message, never a literal, so either layer may
+    // reword freely.
+    let gate = MintError::Gate(GateViolation);
+    let cause = gate.source().expect("M1's refusal is the cause");
+    assert_eq!(cause.to_string(), GateViolation.to_string());
+    assert!(
+        !gate.to_string().contains(&cause.to_string()),
+        "{gate} repeats its cause"
+    );
+
+    let mint = CreateDocumentError::Mint(MintError::NotAnAccount);
+    let cause = mint.source().expect("the mint refusal is the cause");
+    assert_eq!(cause.to_string(), MintError::NotAnAccount.to_string());
+    assert!(
+        !mint.to_string().contains(&cause.to_string()),
+        "{mint} repeats its cause"
+    );
+
+    // The leaves end the chain.
+    assert!(MintError::NotAnAccount.source().is_none());
+    assert!(CreateDocumentError::NotOwner.source().is_none());
 }
 
 // ---- §C queries: membership ----

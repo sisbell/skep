@@ -176,7 +176,7 @@ pub(crate) fn namespace_of(a: &Address) -> Option<NsKey> {
     let par = parent(a)?;
     let g = generator(par.level(), a.level());
     Some(NsKey {
-        parent: par.tumbler().clone(),
+        parent: Tumbler::from(par),
         g,
     })
 }

@@ -1,6 +1,7 @@
 //! §B register_node: validate-not-mint admission in its pinned guard order,
-//! the pre-work refusals that open no transaction, and the transaction every
-//! op opens past them.
+//! the pre-work refusals that open no transaction, the transaction every op
+//! opens past them, and the handle itself — one kernel borrow, which copies
+//! and prints like one.
 
 use crate::common::*;
 
@@ -30,7 +31,7 @@ fn register_node_validates_and_admits_supplied_addresses() {
     // …and delegation beneath it works through the ordinary gate.
     let peek = m3.next_account_prefix(&node).expect("peek under new node");
     assert_eq!(peek, a(&[1, 7, 0, 1]));
-    ns.delegate(BOOTSTRAP_PRINCIPAL, peek.tumbler().clone(), ID1)
+    ns.delegate(BOOTSTRAP_PRINCIPAL, peek.into(), ID1)
         .expect("delegate under the new node");
 
     // Admission asks nothing of the address's ANCESTORS: a node address names
@@ -213,4 +214,23 @@ fn a_fork_past_its_unknown_id_opens_a_transaction_of_its_own() {
         let _ = ns.fork(ID1, None);
         Ok(())
     });
+}
+
+/// The handle is one kernel borrow, so it copies like one, and it prints as
+/// that borrow — the kernel's own rendering, nothing of the world. The world
+/// here is not `Debug`, which is the case a derived impl could not serve. A
+/// copy drives the same kernel: a node admitted through it is no longer fresh
+/// to the original.
+#[test]
+fn the_handle_is_a_kernel_borrow_that_copies_and_prints() {
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+    let copy = ns;
+    assert_eq!(
+        format!("{copy:?}"),
+        format!("Namespace {{ kernel: {k:?} }}")
+    );
+    copy.register_node(t(&[1, 7]))
+        .expect("admitted through the copy");
+    assert_eq!(rejected(ns.register_node(t(&[1, 7]))), NodeError::NotFresh);
 }

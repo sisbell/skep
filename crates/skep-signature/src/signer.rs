@@ -163,8 +163,12 @@ impl PqSigner {
 /// Of the key material it holds, dropping it wipes the Ed25519 key alone
 /// (`ed25519-dalek`'s default `zeroize` feature). The ML-DSA-65 key
 /// (`ml-dsa` is built without its `zeroize` feature) and the stored
-/// FN-DSA-512 encoding are released without being overwritten, as are the
-/// two half seeds [`HybridSigner::from_seed`] derives and drops.
+/// FN-DSA-512 encoding are released without being overwritten, and so are
+/// the half seeds [`HybridSigner::from_seed`] derives and drops, and the
+/// `hkdf` state it derives them through — keyed by a PRK from which every
+/// tag's half seeds derive, so as good as the seed itself. This crate
+/// overwrites no key material itself: what is wiped, its libraries' own
+/// types wipe.
 pub struct HybridSigner {
     ed: EdSigningKey,
     pq: PqSigner,
@@ -182,7 +186,10 @@ impl HybridSigner {
     /// the Ed25519 key from its half, the PQ key from its half by the pinned
     /// crate's own keygen (`PqSigner::keygen`), and the two public halves
     /// composed into one key by the KEY PIN. `None` for a tag no row names or
-    /// this build holds no rule for.
+    /// this build holds no rule for; on `Some`, the signer's
+    /// [`tag`](HybridSigner::tag) is `tag`, and its key is a function of `tag`
+    /// and `seed` alone — the same seed derives the same key every time,
+    /// which is what lets one 64-hex seed back a key up.
     pub fn from_seed(tag: u8, seed: &[u8; 32]) -> Option<HybridSigner> {
         let row = SigAlgRow::of_tag(tag)?;
         let halves = derive_half_seeds(tag, seed)?;
@@ -246,6 +253,10 @@ impl HybridSigner {
     /// where the OS refuses it: the draw is the crate's fail-stop OS source
     /// (`OsEntropy`), so a tag-3 signature is never made over a seed from
     /// anything weaker. Tag 1 draws nothing, so this panic is tag 3's alone.
+    /// Whatever it draws, the blob is its row's `sig_len()` bytes and
+    /// [`verify`](crate::verify) passes it under this signer's
+    /// [`tag`](HybridSigner::tag) and [`public_key`](HybridSigner::public_key)
+    /// over `msg` — the round trip every carrier rests on.
     #[must_use = "sign returns the blob; the signer keeps no copy of it"]
     pub fn sign(&self, msg: &[u8]) -> Vec<u8> {
         self.sign_drawing(&mut OsEntropy, msg)
@@ -375,8 +386,9 @@ mod tests {
     /// WHAT A DROPPED SIGNER WIPES, as [`HybridSigner`]'s doc states it, read
     /// off each type's `ZeroizeOnDrop` in this very build: the Ed25519 signing
     /// key wipes itself, as does the FN-DSA key each tag-3 signature decodes;
-    /// the ML-DSA-65 key and the KDF's half seeds do not. A feature line or a
-    /// derive that moves any of the four fails here, so the doc moves with it.
+    /// the ML-DSA-65 key, the KDF's half seeds and the `hkdf` state the KDF
+    /// derives them through do not. A feature line or a derive that moves any
+    /// of the five fails here, so the doc moves with it.
     #[test]
     fn a_dropped_signer_wipes_the_ed25519_key_alone() {
         use std::marker::PhantomData;
@@ -398,10 +410,12 @@ mod tests {
                 Probe::<SigningKeyStandard>::WIPES,
                 Probe::<ml_dsa::SigningKey<MlDsa65>>::WIPES,
                 Probe::<crate::kdf::HalfSeeds>::WIPES,
+                Probe::<hkdf::Hkdf<sha2::Sha256>>::WIPES,
             ],
-            [true, true, false, false],
+            [true, true, false, false, false],
             "wiped on drop: the Ed25519 key and the decoded FN-DSA key; not the ML-DSA-65 key \
-             (`ml-dsa` is built without `zeroize`), nor the half seeds — `HybridSigner`'s doc"
+             (`ml-dsa` is built without `zeroize`), nor the half seeds, nor the `hkdf` state — \
+             `HybridSigner`'s doc"
         );
     }
 }

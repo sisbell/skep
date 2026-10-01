@@ -37,10 +37,11 @@ test-hooks = ["sign"]
 skep-identity = { path = "../skep-identity" }
 # The Ed25519 verifier — AUTH-7.17's crate pick, argued in the build report:
 # `verify_strict` by name (AUTH-4.32's pinned semantics), pure Rust, and
-# canonical point decoding at `VerifyingKey::from_bytes` (the
-# one-canonical-raw-form-per-token obligation, AUTH-2.99). `skep-signature`
-# is the one crate that links the signature libraries; skepd calls its verify
-# (AUTH-2.2).
+# point decoding at `VerifyingKey::from_bytes` under ZIP-215, which admits a
+# point of small order and a point under a non-canonical encoding alike — so
+# this decode does not discharge AUTH-2.99's one canonical raw form per
+# token. `skep-signature` is the one crate that links the signature
+# libraries; skepd calls its verify (AUTH-2.2).
 ed25519-dalek = "2"
 # THE POST-QUANTUM HALVES OF THE HYBRID SIGNATURE (signed ops, the seam build
 # 2026-09-25; the PQ crate investigation §8.1, §8.4 (5), §8.5 (ii)):
@@ -62,10 +63,11 @@ fn-dsa = "=0.4.0"
 # THE SIGNER's libraries, below: each OPTIONAL, enabled by `sign` alone — the
 # verify links none of them.
 #
-# fn-dsa's signer and keygen draw from a `rand_core` 0.6 RNG (the test signer
-# and the key-derivation golden feed them a seeded stream) — 0.6.4 at least,
-# the first to name the pair `CryptoRngCore`, the bound the signer's draws
-# take.
+# fn-dsa's keygen and signer draw through `rand_core` 0.6's traits: keygen
+# from `ExactBytes`, which yields the KDF's half seed and nothing else, in
+# every build; signing from `OsEntropy`, or from the fixtures' `SeededRng06`
+# under `test-hooks` — 0.6.4 at least, the first to name the pair
+# `CryptoRngCore`, the bound the signer's draws take.
 rand_core_06 = { package = "rand_core", version = "0.6.4", optional = true }
 # THE KDF (the design record §5.2 (ii); the KDF PIN): one 32-byte seed to
 # both halves by HKDF-SHA-256 with the algorithm token and the half as the

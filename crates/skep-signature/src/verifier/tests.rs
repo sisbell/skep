@@ -469,12 +469,15 @@ fn the_pq_half_refuses_a_second_encoding_of_a_genuine_field() {
 }
 
 /// THE ED25519 HALF IS `verify_strict`'s (AUTH-4.32), AGAINST A LOW-ORDER
-/// KEY: under each of the eight low-order Ed25519 halves, beside either tag's
-/// genuine post-quantum half, a blob whose post-quantum field the signer made
-/// over a message and whose Ed25519 field is a forgery the cofactorless check
-/// passes over that message — `S` = 0 and an `R` of low order, found by that
-/// very check — answers `Signature`. A non-strict Ed25519 verify passes every
-/// one, and the hybrid would stand on its post-quantum half alone.
+/// KEY: each of the eight low-order Ed25519 halves is a point, which
+/// [`key_decodes`] admits — as the decode admits a non-canonical encoding,
+/// the identity's `y` written past p — and under each, beside either tag's
+/// genuine post-quantum half, a blob whose post-quantum field the signer
+/// made over a message and whose Ed25519 field is a forgery the cofactorless
+/// check passes over that message — `S` = 0 and an `R` of low order, found
+/// by that very check — answers `Signature`. A non-strict Ed25519 verify
+/// passes every one, and the hybrid would stand on its post-quantum half
+/// alone; the courtesy's `true` is a decode's, not a signature's.
 #[test]
 fn a_low_order_ed25519_half_verifies_no_forgery() {
     use ed25519_dalek::Verifier as _;
@@ -490,13 +493,28 @@ fn a_low_order_ed25519_half_verifies_no_forgery() {
             "the premise: encoding {i} is a point the ones before it are not"
         );
     }
+    // ZIP-215 decodes a non-canonical encoding too: 2^255 − 18 is y = 1
+    // written past p, the identity's second encoding.
+    let past_p = bytes32("eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f");
     for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
         let signer = HybridSigner::from_seed(tag, &[0x42; 32]).unwrap();
         let key = signer.public_key();
         let pq_sig_len = key.sig_alg_row().pq_sig_len;
+        let second =
+            PublicKey::from_halves(key.alg(), key.pq_half(), &past_p).expect("the row's widths");
+        assert!(
+            decode_ed25519_half(&second)
+                .is_some_and(|vk| vk.to_edwards() == points[0].to_edwards())
+                && key_decodes(&second),
+            "tag {tag}: the decode admits the identity's non-canonical encoding, y = 1 past p"
+        );
         for (a, point) in low_order.iter().zip(&points) {
             let weak =
                 PublicKey::from_halves(key.alg(), key.pq_half(), a).expect("the row's widths");
+            assert!(
+                key_decodes(&weak),
+                "tag {tag}: the Ed25519 half {a:02x?} is a point, so the courtesy admits it"
+            );
             let (msg, forged) = (0..64)
                 .map(|n| format!("the entry frame {n}").into_bytes())
                 .find_map(|msg| {

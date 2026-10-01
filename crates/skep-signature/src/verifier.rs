@@ -16,22 +16,25 @@ use skep_identity::PublicKey;
 use crate::Rule;
 
 /// Why [`verify`] refused a hybrid signature, by where the fault lies — the
-/// row the tag names, the blob's width, or the signature itself: the cause a
-/// verifier can tell from the bytes in hand and nothing else. The three are
+/// row the tag names, the blob's width, or the signature itself — judged in
+/// that order, the first that holds being the answer: `Malformed` says the
+/// row is the tag's, and `Signature` that the width is too. Each is a cause a
+/// verifier can tell from the bytes in hand and nothing else; the three are
 /// everything those bytes can tell apart, so the set is closed by design and
 /// not `#[non_exhaustive]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HybridFault {
     /// The tag names no row, or the key is not that row's.
     WrongRow,
-    /// The blob is not the tag's fixed width.
+    /// The tag names the key's row, and the blob is not that row's fixed
+    /// width.
     Malformed,
-    /// The signature itself: a half did not verify, or did not decode — no
-    /// signature passes a half that is no key — and which one is
-    /// deliberately not said: under "both halves verify" a partial pass is
-    /// no pass. The wire names this cause `signature`
-    /// (`attestation_invalid:signature`, where no candidate key's verify
-    /// passes), as it names `Malformed`'s `malformed`.
+    /// The row and the width are the tag's, and the signature itself fails:
+    /// a half did not verify, or did not decode — no signature passes a half
+    /// that is no key — and which one is deliberately not said: under "both
+    /// halves verify" a partial pass is no pass. The wire names this cause
+    /// `signature` (`attestation_invalid:signature`, where no candidate key's
+    /// verify passes), as it names `Malformed`'s `malformed`.
     Signature,
 }
 
@@ -58,10 +61,12 @@ impl fmt::Display for HybridFault {
 impl std::error::Error for HybridFault {}
 
 /// A hybrid key's Ed25519 half as a verifier — `ed25519-dalek`'s
-/// `VerifyingKey::from_bytes`, the canonical point decode (the crate pick is
-/// argued in `Cargo.toml`), over the KEY PIN's LAST 32 raw bytes — or `None`
+/// `VerifyingKey::from_bytes` over the KEY PIN's LAST 32 raw bytes (the
+/// crate pick is argued in `Cargo.toml`), which decodes under ZIP-215: a
+/// point of any order, under its canonical encoding or not — or `None`
 /// where the half is no point. One of the two decodes [`verify`] runs before
-/// its arithmetic and [`key_decodes`] runs alone.
+/// its arithmetic and [`key_decodes`] runs alone; a half of small order,
+/// which it admits, is `verify_strict`'s to refuse, signature by signature.
 fn decode_ed25519_half(key: &PublicKey) -> Option<EdVerifyingKey> {
     EdVerifyingKey::from_bytes(key.ed25519_half()).ok()
 }
@@ -133,12 +138,14 @@ impl PqVerifier {
 /// (AUTH-3.56 as RES-206 landed it; the hybrid-only launch's Q9, owner
 /// 2026-09-26): `true` iff EVERY half the key's row names decodes, by the
 /// very two decodes [`verify`] runs before its arithmetic, so the two cannot
-/// disagree and a new tag's decode is one arm both read. On a key this
-/// answers `false` for, every [`verify`] that gets past the row and the
-/// width answers [`HybridFault::Signature`]; on a key it answers `true` for,
-/// the signature alone decides. A courtesy stricter than the verify would
-/// refuse a key that can sign; a laxer one would admit a key that never can.
-/// It never panics, on any key.
+/// disagree about what decodes and a new tag's decode is one arm both read.
+/// On a key this answers `false` for, every [`verify`] that gets past the
+/// row and the width answers [`HybridFault::Signature`]. Its `true` is a
+/// decode's, not a promise that the key can sign: wire.md's
+/// `undecodable_key` is a half "to no point" or "to no key", and this
+/// answers exactly that test — so an Ed25519 half that is one of the curve's
+/// eight points of small order decodes, and `verify_strict` refuses every
+/// signature under it. It never panics, on any key.
 #[must_use = "key_decodes answers whether every half decodes; it refuses no key itself"]
 pub fn key_decodes(key: &PublicKey) -> bool {
     decode_ed25519_half(key).is_some() && PqVerifier::decode(key).is_some()
@@ -152,21 +159,29 @@ pub fn key_decodes(key: &PublicKey) -> bool {
 /// [`key_decodes`] decodes it, and a half that does not DECODE answers
 /// [`HybridFault::Signature`], as a half that does not verify does,
 /// whichever half it is; [`HybridFault::WrongRow`] is the row's answer
-/// alone — a tag no row names, or a key of another row.
+/// alone — a tag no row names, or a key of another row. The three faults
+/// are judged in that order — `WrongRow`, `Malformed`, `Signature` — and
+/// the first that holds is the answer: a blob of the wrong width under a tag
+/// not the key's answers `WrongRow`, and no half is decoded until the row
+/// and the width have passed (`every_tag_but_the_keys_own_answers_wrong_row`,
+/// `an_undecodable_key_answers_as_its_source_key_save_that_nothing_passes`).
 ///
 /// `tag` is the marker tag the blob is presented under, and nothing more —
 /// an entry's marker names one; a session's or a credential record's `sig`
-/// names none, and each candidate key is tried under its own. It must name
-/// the key's own row, which `verify` reads off the key — a tag is never
-/// looked up in the table — and that row gives the blob's width and where
-/// its halves part; both decodes and all the arithmetic read the key.
+/// names none, and each candidate key is tried under its own. A tag that
+/// does not name the key's own row is refused, by a check `verify` owns: it
+/// reads the row off the key — a tag is never looked up in the table — and
+/// that row gives the blob's width and where its halves part; both decodes
+/// and all the arithmetic read the key.
 ///
-/// It NEVER PANICS, whatever `tag`, `key`, `msg` and `sig` hold: every fault
-/// a stranger's bytes can carry is a [`HybridFault`]. A key holder chooses
-/// the post-quantum field behind their own passing Ed25519 half, so this is a
-/// promise about the two pinned decoders as much as about this function; the
-/// suite hands each decoder, behind a genuine Ed25519 half, the fields that
-/// would trip its bounds checks
+/// It has NO PRECONDITION and NEVER PANICS, whatever `tag`, `key`, `msg` and
+/// `sig` hold: every condition above is a check `verify` makes and answers,
+/// so a caller establishes nothing first, and every fault a stranger's bytes
+/// can carry is a [`HybridFault`]. A key holder chooses the post-quantum
+/// field behind their own passing Ed25519 half, so this is a promise about
+/// the two pinned decoders as much as about this function; the suite hands
+/// each decoder, behind a genuine Ed25519 half, the fields that would trip
+/// its bounds checks
 /// (`a_hostile_post_quantum_field_behind_a_genuine_ed25519_half_answers_signature`).
 ///
 /// `msg` comes before `sig`, the order RustCrypto's

@@ -192,9 +192,10 @@ nothing of it.
    passes through, one at a time, and the head writer
    (`write_path/head.rs`, which commits through the write path's own
    door). Beneath it, and reachable only from it:
-   - `write_path/feed.rs` — the change feed; `write_path/feed/derived.rs`
-     beneath it keeps the feed's derived index files and the attest
-     store, the marker slot mirrored per attested commit;
+   - `write_path/feed.rs` — the change feed; beneath it,
+     `write_path/feed/derived.rs` keeps the feed's derived index files and
+     `write_path/feed/attest.rs` the attest store, the marker slot
+     mirrored per attested commit;
    - `write_path/sidecar.rs` — `commits.log`, the daemon's record of what
      it committed, for whom, and whether the entry was signed;
    - `write_path/classify.rs` — which documents a commit touched, the one
@@ -219,9 +220,9 @@ imports it.
 |---|---|---|---|
 | `observe` | on | `GET /dump`, the engine's world dump | every build; OFF in `scripts/gate-full.sh`'s `--no-default-features` checks |
 | `client` | off | `GET /`, the embedded board — an ACTING client, so opted into (`Cargo.toml` carries the ruling) | `scripts/gate-full.sh`'s `--features client` check and `--all-features` run |
-| `test-hooks` | off | `Daemon`'s `#[doc(hidden)]` test hooks, `fuzz_support`, the `Permit` re-export, and `skep-signature`'s `test-hooks` | every test build (the crate's self dev-dependency); `scripts/gate-full.sh` checks the library and binary without it |
+| `test-hooks` | off | `Daemon`'s `#[doc(hidden)]` test hooks, `fuzz_support`, the `Permit` re-export — nothing in another crate | every test build (the crate's self dev-dependency); `scripts/gate-full.sh` checks the library and binary without it |
 | `skep-signature`'s `sign` | off — skepd depends with no feature, so the daemon's build holds no signer | the signer's half: the KDF, keygen from a seed, signing, the signer's OS draw | every test build (the suites' dev-dependencies); `scripts/gate-full.sh` checks the crate without it (the verify-only build a daemon links) and with it |
-| `skep-signature`'s `test-hooks` | off | implies `sign`; the fixtures' hooks: the seeded RNG, `sign_with_rng`, the Ed25519 half's signing key, the widths | every test build (its self dev-dependency, and skepd's `test-hooks`) |
+| `skep-signature`'s `test-hooks` | off | implies `sign`; the fixtures' hooks: the seeded RNG, `sign_with_rng`, the Ed25519 half's signing key, the widths | every test build (its self dev-dependency, and skepd's dev-dependency on it) |
 
 ## Rules that hold across files
 

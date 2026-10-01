@@ -24,8 +24,9 @@ sign = ["dep:rand_core_06", "dep:hkdf", "dep:sha2", "dep:getrandom"]
 # (`SeededRng06`), `HybridSigner::sign_with_rng`, the Ed25519 half's signing
 # key and the widths the sizes pin reads (`pq_widths`) — and implies `sign`.
 # No shipped signer enables it: this crate's own tests turn it on through the
-# self dev-dependency below, and skepd's `test-hooks` on this crate's line, so
-# a build that compiles no test compiles none of it.
+# self dev-dependency below, and skepd's tests through their own
+# dev-dependency on this crate, so a build that compiles no test compiles
+# none of it.
 test-hooks = ["sign"]
 
 [dependencies]

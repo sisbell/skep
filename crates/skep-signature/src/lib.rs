@@ -103,10 +103,10 @@ pub const TAG_FNDSA512_PREVIEW_ED25519: u8 = 3;
 /// carries `Preview` in every name, as its token does, so the final
 /// standard's arms never share a name with it) is one variant here and one
 /// arm in [`Rule::of`], and the compiler names every step that must learn
-/// it. No step outside this module enumerates the tags: the handshake's
-/// `sig` (`skepd::auth::session::SessionSig`) admits every `SIG_ALGS` row's
-/// width, read off the table at the parse. Each variant is its row's token
-/// in CamelCase.
+/// it. No step outside this module enumerates the tags: skepd's hybrid-blob
+/// parse (`skepd::auth::session::HybridSig`, the handshake's `sig` and a
+/// record's) admits every `SIG_ALGS` row's width, read off the table at the
+/// parse. Each variant is its row's token in CamelCase.
 #[derive(Clone, Copy)]
 enum Rule {
     /// Tag 1: ML-DSA-65 + Ed25519 (`mldsa65-ed25519`).

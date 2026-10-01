@@ -11,7 +11,7 @@
 use std::ops::Bound::{Excluded, Unbounded};
 
 use num_traits::Zero;
-use skep_address::{is_prefix, ordinal, Address, Level};
+use skep_address::{is_prefix, ordinal, validate, Address, Level, Tumbler};
 
 use super::{M3State, PrincipalId};
 use crate::ghost::ghost_floor;
@@ -276,8 +276,18 @@ impl M3State {
     /// ([`crate::Namespace::delegate`] names whose bound it is). And the cost
     /// is per CALL, so a caller that takes one ω per entry of a walk pays the
     /// PRODUCT — an index built that way over [`M3State::documents`] costs
-    /// Θ(entries · |Π|) each time it is built — and the `principals`
-    /// range-walk upgrade is where both land.
+    /// Θ(entries · |Π|) each time it is built — which is why a registered
+    /// document's owner has a read of its own, [`M3State::account_seat`], one
+    /// lookup where this is a walk. The rest lands with the `principals`
+    /// range-walk upgrade, which must not stand on `OrdMap::get_prev` or
+    /// `get_next`: im 15.1.0's `lookup_prev`/`lookup_next` return a child
+    /// node's answer as-is, so once Π outgrows one 64-key leaf, a child holding
+    /// no key on the near side answers `None` where the parent's separator key
+    /// is the neighbour — a false `None` in an ownership oracle. The
+    /// integration suite holds ω to [`M3State::account_seat`]'s exact lookup
+    /// over a Π past one leaf, at every seated account's doc-1 slot `A·0·1` —
+    /// the first address past that seat in key order, where such a `None`
+    /// falls when the seat is a separator.
     ///
     /// The tier filter is O1a, and it is a refusal rather than an
     /// optimisation. O1a is a producer invariant (genesis plus `delegate`'s
@@ -349,8 +359,11 @@ impl M3State {
     /// under a registered document. So for a registered document this
     /// answers the account it lies in — never `None`, never the node above
     /// it, never an ancestor account — and that is what readers take as the
-    /// document's OWNER ACCOUNT: the engine's exception set, which memoizes
-    /// it per draft (PUB-7.5), and the doc-metadata read (PUB-8.12).
+    /// document's OWNER ACCOUNT: the doc-metadata read (PUB-8.12), and the
+    /// engine's exception set, which memoizes it per draft (PUB-7.5). A
+    /// reader that asks it once per entry of a walk over the store asks
+    /// [`M3State::account_seat`] instead, which answers the same seat by one
+    /// lookup — as the exception set does.
     pub fn effective_owner_prefix(&self, a: &Address) -> Option<&Address> {
         self.omega(a).map(|(prefix, _)| prefix)
     }
@@ -379,6 +392,45 @@ impl M3State {
     /// answers its own account's seat ([`M3State::effective_owner_prefix`]).
     pub fn effective_owner_pair(&self, a: &Address) -> Option<(&Address, PrincipalId)> {
         self.omega(a)
+    }
+
+    /// The seat at `a`'s own ACCOUNT, `acct(a)` — the prefix of `a` through
+    /// its user field, `N·0·U` — and the principal seated there, found by ONE
+    /// point lookup in Π: `None` when no principal is seated exactly there,
+    /// and for a node address, which has no account. Never a walk: the work is
+    /// one copy of `acct(a)` — none of the document or element fields past it
+    /// — and O(log |Π|) comparisons, where every ω reader pays Θ(|Π|).
+    ///
+    /// Wherever it answers, it answers ω: no node- or account-tier prefix of
+    /// `a` is longer than `acct(a)`, so a seat AT `acct(a)` is the longest
+    /// covering one, and this equals [`M3State::effective_owner_pair`]. For
+    /// every registered document and every registered account it answers, on
+    /// every state M3's own ops produce — the guarantee
+    /// [`M3State::effective_owner_prefix`] states. Where the two differ, `a`
+    /// is a node or `acct(a)` holds no seat, and this answers `None` where ω
+    /// climbs to an ancestor account or to the node: the fail-CLOSED side, so
+    /// an owner read from it is always the account `a` lies in. Where the
+    /// question IS the covering owner of an unseated account —
+    /// `create_new_document`'s and `delegate`'s authorization — ask ω.
+    ///
+    /// Published for the reader that asks a registered document's OWNER
+    /// ACCOUNT once per entry of a walk over the store — the engine's draft
+    /// memo and grant admission, rebuilt at every load and every historical
+    /// reconstruction — where one ω per entry would cost Θ(entries · |Π|),
+    /// each factor grown by one write apiece.
+    pub fn account_seat(&self, a: &Address) -> Option<(&Address, PrincipalId)> {
+        let user = a.account_field()?;
+        // `acct(a)` is the prefix of `a` through its user field: the node
+        // field, its separator, then `U`.
+        let len = a.node_field().len() + 1 + user.len();
+        // That prefix of a T4-valid address is a T4-valid account — one
+        // separator, both fields nonempty and zero-free, no trailing zero — so
+        // neither `?` below is taken; were one ever taken, the answer is
+        // `None`, never a panic.
+        let account = validate(Tumbler::new(a.tumbler().iter().take(len).cloned()).ok()?).ok()?;
+        self.principals
+            .get_key_value(&account)
+            .map(|(seat, id)| (seat, *id))
     }
 
     /// THE authorization predicate: is `id` the effective owner ω of `a`? An

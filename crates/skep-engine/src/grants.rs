@@ -945,13 +945,16 @@ fn admitted_issuer(namespace: &M3State, drafts: &Drafts, home: &Address) -> Opti
     if !is_published(drafts, home) {
         return None;
     }
-    // The issuer — ω of the home, an account.
-    let issuer = namespace.effective_owner_prefix(home)?.clone();
+    // The issuer — ω of the home, read as the seat at the home's own account
+    // by one lookup. Where that account holds no seat, ω answers a node, an
+    // ancestor account or nobody, and none of them has the home as its doc 1,
+    // so the two reads refuse alike.
+    let (issuer, _) = namespace.account_seat(home)?;
     // The home is the issuer's own doc 1.
-    if first_document_address(&issuer).as_ref() != Some(home) {
+    if first_document_address(issuer).as_ref() != Some(home) {
         return None;
     }
-    Some(issuer)
+    Some(issuer.clone())
 }
 
 /// PUB-5.10's LADDER, read off the address alone: whether `from` is a DOCUMENT
@@ -1216,38 +1219,38 @@ pub(crate) fn fold(prev: &Grants, namespace: &M3State, drafts: &Drafts, rec: &Li
 /// both, each for its own reason. The BIT: M3 writes it once, at the journal
 /// record that registers the document, and the exception set only ever GAINS
 /// entries — so a home published when its grant landed is published still,
-/// and a draft-homed one was unadmitted at both readings. The OWNER: no
-/// account-tier prefix longer than a document's own account can cover it
-/// (`crate::publication`'s `owner_account_of` states M3's half of that), so
-/// no later delegation moves ω of a home. The DOC-1 test is
+/// and a draft-homed one was unadmitted at both readings. The OWNER: the seat
+/// at the home's own account, which M3 writes in the transaction that
+/// allocates that account — before any document in it exists — and never
+/// replaces (O12/O13), so no later delegation moves it. The DOC-1 test is
 /// `first_document_address`, a pure function of the issuer and of no state at
 /// all. A store change that made any of the three time-varying splits the
 /// halves, and `Engine::check_hints` is where that shows.
 ///
-/// SEED COST, per load and per `Engine::world_at` reconstruction, and the
-/// PRODUCT of the grants class and M3's principal registry rather than
-/// anything a caller names: one `type_slice` over that class under the audit
-/// view, then per member two `readlink`s — the member's own and its next
-/// address's, where a pair would sit — and one [`fold_one`]. Every
-/// grant-typed member whose home is PUBLISHED — admitted or not, since the
-/// doc-1 test follows it — pays [`admitted_issuer`]'s ω resolution, M3's walk
-/// of the WHOLE principal registry, so the seed is Θ(members · |Π|) wherever
-/// the members are published-homed, which a depositor's own doc 1 is. A
-/// member whose home admits then joins the earlier-record set — one insert of
-/// its own link address, whatever its kind; one that is a would-be GRANT
-/// replaces its home's unpaired entry and, where the fourth outcome honors
-/// it, adds [`Grants::admit`]'s three — one into the operative map, one into
-/// an ordered index whose key is a content-prefix and whose member is an
-/// issuer, one into its key's population, whose key clones the three
-/// addresses — and one that is a REVOCATION adds one population insert beside
-/// its withdrawal; every address a DEPOSITOR chose and none bounded by this
-/// crate. A pair, where one sits, re-decides its record once. The
-/// ladder test ahead of that arm copies the `from` it is asked of once
-/// ([`trunk_of`]), linear in a component count the depositor chose too. So
-/// the figure is the store's, grown by every grant-typed link any account has
-/// ever deposited and by every principal M3 has ever seated, and never
-/// shrunk: a revocation adds a record to the class rather than removing one,
-/// and a `nullify` leaves the claim in the audit view this walk must read.
+/// SEED COST, per load and per `Engine::world_at` reconstruction, and sized
+/// by the grants class rather than by anything a caller names: one
+/// `type_slice` over that class under the audit view, then per member two
+/// `readlink`s — the member's own and its next address's, where a pair would
+/// sit — and one [`fold_one`]. Every grant-typed member whose home is
+/// PUBLISHED — admitted or not, since the doc-1 test follows it — pays
+/// [`admitted_issuer`]'s owner lookup: M3's `account_seat`, ONE point lookup
+/// in the principal registry, and never ω's walk of all of it, which would
+/// make the seed the product of the class and |Π|. A member whose home
+/// admits then joins the earlier-record set — one insert of its own link
+/// address, whatever its kind; one that is a would-be GRANT replaces its
+/// home's unpaired entry and, where the fourth outcome honors it, adds
+/// [`Grants::admit`]'s three — one into the operative map, one into an
+/// ordered index whose key is a content-prefix and whose member is an issuer,
+/// one into its key's population, whose key clones the three addresses — and
+/// one that is a REVOCATION adds one population insert beside its withdrawal;
+/// every address a DEPOSITOR chose and none bounded by this crate. A pair,
+/// where one sits, re-decides its record once. The ladder test ahead of that
+/// arm copies the `from` it is asked of once ([`trunk_of`]), linear in a
+/// component count the depositor chose too. So the figure is the store's,
+/// grown by every grant-typed link any account has ever deposited — and, by
+/// a logarithm, by every principal M3 has ever seated — and never shrunk: a
+/// revocation adds a record to the class rather than removing one, and a
+/// `nullify` leaves the claim in the audit view this walk must read.
 /// `crate::publication::seed` states the exception set's own figure, and
 /// both run inside `WorldState::rebuild_derived` — the term M2's
 /// `Kernel::world_at` names in its cost and cannot size itself.

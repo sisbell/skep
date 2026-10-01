@@ -72,12 +72,14 @@
 //!   predicate [`M3State::is_effective_owner`] beside the three readers of
 //!   the owner it names ([`M3State::effective_owner`] for the id,
 //!   [`M3State::effective_owner_prefix`] for the address it is seated at,
-//!   [`M3State::effective_owner_pair`] for the whole entry, AUTH-6.37)
-//!   \[ASN-0042 O1–O9\], id→prefix resolution, the three chain-end reads —
-//!   the next-form peek [`M3State::next_account_prefix`], the version
-//!   chain's latest member [`M3State::latest_version`], and the emptiness
-//!   of an account's document chain [`M3State::has_documents`] — and the
-//!   publication read [`M3State::published`] and its enumeration
+//!   [`M3State::effective_owner_pair`] for the whole entry, AUTH-6.37) and
+//!   [`M3State::account_seat`], that entry by one lookup wherever the
+//!   address's own account holds it \[ASN-0042 O1–O9\], id→prefix
+//!   resolution, the three chain-end reads — the next-form peek
+//!   [`M3State::next_account_prefix`], the version chain's latest member
+//!   [`M3State::latest_version`], and the emptiness of an account's document
+//!   chain [`M3State::has_documents`] — and the publication read
+//!   [`M3State::published`] and its enumeration
 //!   [`M3State::documents`] — the engine's ONE definition of a document's
 //!   publication state, the bit its own allocation record journaled
 //!   \[PUB-7.8, PUB-7.10; owner ruling D1\] — plus three

@@ -1,6 +1,6 @@
 use serde::Deserialize;
 use skep_address::{validate, Nat, Tumbler};
-use skep_namespace::HasM3;
+use skep_namespace::{HasM3, PrincipalId};
 
 use crate::canon::{to_tree, SerdeTree, TreeDe};
 use crate::testkit::{addr, delegated_account, mem_engine, USER};
@@ -103,20 +103,17 @@ fn the_seed_memoizes_a_draft_s_own_account() {
     assert!(!is_published(&drafts, &doc));
 }
 
-/// The TIER assertion, over the one shape that reaches it: a slice where
-/// the document's own account has no seat, so ω answers with the longest
-/// remaining covering one — the genesis NODE above it.
-///
-/// Memoizing that node prefix is the fail-OPEN direction, and nothing
-/// downstream could notice. [`crate::World::readable`]'s subtree clause is
-/// a bare `prefix_contains` against this memo, and a node prefix contains
-/// every account beneath it, so every seated principal in the docuverse
-/// would read this draft and each read would look like an ordinary pass.
-/// So the tier is refused here, in every build, rather than asserted in
-/// debug and trusted in release.
+/// A draft whose OWN account's seat is struck while the genesis NODE above
+/// still covers it: ω answers that node, and memoizing it is the fail-OPEN
+/// direction — [`crate::World::readable`]'s subtree clause is a bare
+/// `prefix_contains` against the memo, and a node prefix contains every
+/// account beneath it, so every seated principal in the docuverse would read
+/// this draft and each read would look like an ordinary pass. The memo is
+/// read from the draft's own account, which answers nobody, and the draft is
+/// refused, in every build.
 #[test]
-#[should_panic(expected = "is not the account it was minted under")]
-fn a_node_tier_owner_is_refused_rather_than_memoized() {
+#[should_panic(expected = "has no owner account")]
+fn a_draft_whose_own_account_is_unseated_is_refused_where_omega_answers_the_node() {
     let (namespace, acct, doc) = account_with_a_draft();
     let corrupt = with_entry_struck(&namespace, "principals", &acct);
     // The fixture must still reach the owner lookup: the document is
@@ -134,13 +131,54 @@ fn a_node_tier_owner_is_refused_rather_than_memoized() {
     let _ = seed(&corrupt);
 }
 
-/// The EXISTENCE assertion, beside the tier one above: a registered draft
-/// whose ω answers NOBODY — the seat of its own account and the genesis
-/// node's above it both struck — is refused, never skipped. Skipping is the
-/// tempting repair on a load path, and here it fails open: a skipped draft
-/// is absent from the set, which every reader class reads as published.
+/// The ANCESTOR-ACCOUNT shape, which no tier check sees: a draft under a
+/// sub-account whose seat is struck while its parent's stands, so ω answers
+/// the PARENT — account-tier — and a memo of it would admit every principal
+/// seated under the parent, the owner's siblings included, through the
+/// subtree clause's first compare. The memo is read from the draft's OWN
+/// account, which answers nobody, and the draft is refused.
 #[test]
-#[should_panic(expected = "has no effective owner")]
+#[should_panic(expected = "has no owner account")]
+fn a_draft_under_an_unseated_sub_account_is_refused_rather_than_memoized_to_its_parent() {
+    let engine = mem_engine();
+    let acct = delegated_account(&engine, USER);
+    let sub_prefix = engine
+        .kernel()
+        .snapshot()
+        .world()
+        .m3()
+        .next_account_prefix(&acct)
+        .expect("the account has a delegable sub-account slot");
+    let owner = PrincipalId(8);
+    let (sub, _) = engine
+        .namespace()
+        .delegate(USER, sub_prefix.into(), owner)
+        .expect("the account holder delegates a sub-account");
+    let (doc, _) = engine
+        .namespace()
+        .create_new_document(owner, &sub, Some(false))
+        .expect("an explicit-false mint is a draft");
+    let namespace = engine.kernel().snapshot().world().m3().clone();
+    let corrupt = with_entry_struck(&namespace, "principals", &sub);
+    // The fixture must reach the owner lookup with ω answering an ACCOUNT,
+    // or this would pass for the node-tier reason the test above pins.
+    assert!(corrupt.is_registered_document(&doc), "the mint's registration is untouched");
+    assert!(!corrupt.published(&doc), "the mint's bit is untouched");
+    assert_eq!(
+        corrupt.effective_owner_prefix(&doc),
+        Some(&acct),
+        "the struck seat must leave ω answering the parent ACCOUNT"
+    );
+    let _ = seed(&corrupt);
+}
+
+/// The EXISTENCE assertion where ω, too, answers NOBODY — the seat of the
+/// draft's own account and the genesis node's above it both struck: the
+/// draft is refused, never skipped. Skipping is the tempting repair on a load
+/// path, and here it fails open: a skipped draft is absent from the set,
+/// which every reader class reads as published.
+#[test]
+#[should_panic(expected = "has no owner account")]
 fn a_draft_whose_owner_resolves_to_nobody_is_refused_rather_than_skipped() {
     let (namespace, acct, doc) = account_with_a_draft();
     let seatless = with_entry_struck(
@@ -213,9 +251,9 @@ fn the_seed_skips_an_entry_for_an_address_the_registry_never_held() {
     );
     // …the registry never held the address…
     assert!(!corrupt.is_registered_document(&phantom), "no mint produced it");
-    // …and ω answers the account above it, so a seed that asked the owner
-    // would memoize the address rather than panic.
-    assert_eq!(corrupt.effective_owner_prefix(&phantom), Some(&acct));
+    // …and the account above it — its own — holds a seat, so a seed that
+    // asked the owner would memoize the address rather than panic.
+    assert_eq!(corrupt.account_seat(&phantom).map(|(seat, _)| seat), Some(&acct));
 
     let drafts = seed(&corrupt);
     assert!(

@@ -38,11 +38,13 @@
 //!
 //! The engine adds no semantics here. The bit is M3's (`M3State::published`,
 //! written by the one record that registers the document, PUB-7.10); the
-//! owner is M3's ω answer for the document at the fold; what this module owns
-//! is the INDEX — construction and observation — and the one shape decision
-//! the PUB pack leaves to the build (§5.5 row 3: a build MAY answer the bool
-//! off M3's document records; this build takes the set the spec names, and
-//! the standing subtraction candidate PUB-7.69 records is noted in the round's
+//! owner is M3's too — the seat at the document's own account, read at the
+//! fold through `M3State::account_seat`, which is ω's answer for every
+//! document M3's ops register; what this module owns is the INDEX —
+//! construction and observation — and the one shape decision the PUB pack
+//! leaves to the build (§5.5 row 3: a build MAY answer the bool off M3's
+//! document records; this build takes the set the spec names, and the
+//! standing subtraction candidate PUB-7.69 records is noted in the round's
 //! report).
 
 use skep_address::{Address, Level};
@@ -128,7 +130,8 @@ impl World {
     /// The owner account the set fixed for `doc` at its mint — `Some` iff
     /// `doc` is a DRAFT in the set (PUB-7.2's memo, PUB-7.6's per-item
     /// consumers), `None` for a published or an unregistered document. The
-    /// account is M3's ω of the document, read once at the fold and never
+    /// account is M3's ω of the document — the seat at its own account, read
+    /// once at the fold through `M3State::account_seat` — and is never
     /// re-derived by a nearest-account walk per call.
     pub fn owner_account(&self, doc: &Address) -> Option<&Address> {
         self.drafts.get(doc)
@@ -242,11 +245,13 @@ pub(crate) fn fold(prev: &Drafts, namespace: &M3State, rec: &M3Rec) -> Drafts {
 /// SEED COST, per load and per `Engine::world_at` reconstruction: one walk of
 /// M3's publication map — `M3State::documents`, the store's own enumeration
 /// of its registered documents — then, per document, M3's own registration and
-/// bit lookups, and per DRAFT one ω resolution through [`owner_account_of`]:
-/// M3's `effective_owner_prefix`, a walk of the WHOLE principal registry. So
-/// the seed is Θ(drafts · |Π|). Both factors grow by one committed write
-/// apiece and neither is a caller's argument, so whatever serves historical
-/// reads pays that product per reconstruction it admits.
+/// bit lookups, and per DRAFT one owner lookup through [`owner_account_of`]:
+/// M3's `account_seat`, ONE point lookup in the principal registry. So the
+/// seed is one walk plus, per document, at most three logarithmic lookups,
+/// and never the product of drafts and |Π| that one ω walk per draft would
+/// cost — a product whatever serves historical reads would pay per
+/// reconstruction it admits, both factors grown by one committed write
+/// apiece.
 pub(crate) fn seed(namespace: &M3State) -> Drafts {
     namespace
         .documents()
@@ -254,10 +259,13 @@ pub(crate) fn seed(namespace: &M3State) -> Drafts {
         .collect()
 }
 
-/// The owner account of a registered document — M3's ω, which for a
-/// document is the account it was minted under: every account M3 registers
-/// is seated with a principal in the same transaction (`delegate`), and no
-/// account-tier prefix longer than a document's own account can cover it.
+/// The owner account of a registered document — the seat at the account it
+/// was minted under, read through M3's `account_seat`: ONE point lookup in
+/// the principal registry, never ω's walk of all of it. On every state M3's
+/// ops produce that seat IS ω's answer — every account M3 registers is seated
+/// with a principal in the same transaction (`delegate`), and no account-tier
+/// prefix longer than a document's own account can cover it — and on any
+/// other the lookup answers nobody where ω would climb.
 ///
 /// TWO facts about the answer are asserted here, in every build, and neither
 /// is decoration: this value is the left operand of the subtree clause's FIRST
@@ -266,17 +274,22 @@ pub(crate) fn seed(namespace: &M3State) -> Drafts {
 /// answer rather than a wrong log line.
 ///
 /// * ITS EXISTENCE, the fail-CLOSED direction. `mint_document` refuses an
-///   unregistered account and every registered account is a principal, so a
-///   registered document ω answers nobody for is a world no M3 op produced —
-///   corruption, answered as M3's own fold answers its structural facts, not
-///   a live error path.
+///   unregistered account and every registered account is seated, so a
+///   registered document whose own account holds no seat is a world no M3 op
+///   produced — corruption, answered as M3's own fold answers its structural
+///   facts, not a live error path. ω would answer such a document from
+///   ABOVE: the node, whose prefix contains every account beneath it, or an
+///   ancestor ACCOUNT, which passes any tier check while containing every
+///   principal seated under that ancestor, the owner's siblings included.
+///   Memoized, either would admit them all to the draft through
+///   `prefix_contains`, and nothing downstream could notice: the compare
+///   succeeds and the read is granted. So the lookup asks the document's own
+///   account and nothing ω climbs to, and its `None` is refused here.
 /// * ITS TIER, the fail-OPEN one, which is why it is checked in release and
-///   not in debug alone. M3's ω keeps the LONGEST covering Node-or-Account
-///   prefix, so a document whose own account were somehow absent from Π
-///   would memoize the NODE above it instead — and a node prefix contains
-///   every account beneath it, so `prefix_contains` would then admit every
-///   principal seated anywhere under that node to the draft. Nothing
-///   downstream can notice: the compare succeeds and the read is granted.
+///   not in debug alone: `account_seat` looks up an account-tier key by
+///   construction, and this is this crate's check on that postcondition — a
+///   node-tier memo would admit every principal seated anywhere under that
+///   node to the draft.
 ///
 /// The invariant behind both is M3's, discharged by construction — a
 /// document mints only under a registered account, and `delegate` seats a
@@ -284,17 +297,16 @@ pub(crate) fn seed(namespace: &M3State) -> Drafts {
 /// discharge point for it, at the boundary where a store fact becomes the
 /// engine's memo, and not a second gate on a caller's obligation.
 fn owner_account_of(namespace: &M3State, doc: &Address) -> Address {
-    let owner = namespace
-        .effective_owner_prefix(doc)
-        .cloned()
-        .unwrap_or_else(|| panic!("registered document {doc} has no effective owner"));
+    let (owner, _) = namespace.account_seat(doc).unwrap_or_else(|| {
+        panic!("registered document {doc} has no owner account: its own account holds no seat")
+    });
     assert_eq!(
         owner.level(),
         Level::Account,
-        "the effective owner of registered document {doc} is not the account it was minted \
-         under: a node-tier memo admits every principal seated under that node to the draft"
+        "the owner of registered document {doc} is not the account it was minted under: a \
+         node-tier memo admits every principal seated under that node to the draft"
     );
-    owner
+    owner.clone()
 }
 
 #[cfg(test)]

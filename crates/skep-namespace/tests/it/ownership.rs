@@ -1,15 +1,15 @@
 //! §C ownership: containment is not authorization, ω is the longest covering
-//! prefix, a registered document is owned at its own account, the principal
-//! registry answers in both directions, ω's work follows the registry and not
-//! the probe, and the seats ω refuses or names.
+//! prefix, a registered document is owned at its own account and found there
+//! by one lookup, the principal registry answers in both directions, ω's work
+//! follows the registry and not the probe, and the seats ω refuses or names.
 
 use crate::common::*;
 use crate::heap::heap_bytes;
 
 use skep_address::{same_account, validate, Address, Level, Tumbler};
 use skep_namespace::{
-    prefix_contains, CreateDocumentError, HasM3, M3Rec, M3State, Namespace, PrincipalId,
-    BOOTSTRAP_PRINCIPAL,
+    first_document_address, prefix_contains, system_account, CreateDocumentError, HasM3, M3Rec,
+    M3State, Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL,
 };
 
 #[test]
@@ -241,6 +241,128 @@ fn every_registered_document_is_owned_at_its_own_account() {
     // pinned in `genesis.rs`.
     for built in [&doc, &sub_doc, &forked, &v1, &v2] {
         assert!(walked.contains(built), "the walk missed {built:?}");
+    }
+}
+
+#[test]
+fn the_account_seat_is_omega_by_one_lookup_and_never_climbs() {
+    // §5: `account_seat` is ω by ONE point lookup wherever the probe's own
+    // account holds a seat — on every state M3's ops produce, every registered
+    // document and every registered account — and `None` wherever ω climbs
+    // past that account. It is how a registered document's OWNER ACCOUNT is
+    // read once per entry of a walk over the store (the engine's draft memo
+    // and grant admission, rebuilt at every load and every historical
+    // reconstruction), so agreement is checked over every document, every
+    // seat, and every seated account's doc-1 slot — the first address past
+    // that seat in key order — with Π grown past one 64-key B-tree leaf, so
+    // the lookup descends through an internal node and some seat is that
+    // node's separator key: the shape a neighbour search that ignores the
+    // separator answers wrongly. The two shapes where ω climbs — to an
+    // ancestor ACCOUNT, which a tier check on ω's answer passes, and to the
+    // NODE — are built through the fold, the only way to reach a registered
+    // document whose own account holds no seat. The cost is pinned in heap
+    // bytes: a copy of the account and nothing past it.
+    let (k, acct, doc) = kernel_with_account_and_doc();
+    let ns = Namespace::new(&k);
+    // Seventy sub-accounts, each seated for its own principal: with genesis's
+    // two seats and the account's own, Π holds 73 and spans two B-tree levels.
+    let mut subs = Vec::new();
+    for i in 0..70u64 {
+        let next = k
+            .snapshot()
+            .world()
+            .m3()
+            .next_account_prefix(&acct)
+            .expect("the account has a delegable slot");
+        let (sub, _) = ns
+            .delegate(ID1, next.into(), PrincipalId(100 + i))
+            .expect("sub-delegate");
+        subs.push(sub);
+    }
+    let last = subs.last().expect("seventy sub-accounts").clone();
+    let (last_doc, _) = ns
+        .create_new_document(PrincipalId(169), &last, None)
+        .expect("the last sub-account's doc 1");
+    let v1 = commit_mint(&k, M3State::version_lock_key(&doc), |m3| {
+        m3.mint_version(&doc, true)
+    });
+    let element = commit_mint(&k, M3State::content_lock_key(&last_doc), |m3| {
+        m3.mint_content(&last_doc)
+    });
+    let m3 = k.snapshot().world().m3().clone();
+
+    // Agreement: every document the walk yields — genesis's two included —
+    // every seated account and its doc-1 slot, and an element.
+    let mut probes: Vec<Address> = m3.documents().map(|(d, _)| d.clone()).collect();
+    for built in [&doc, &v1, &last_doc] {
+        assert!(probes.contains(built), "the walk reaches {built:?}");
+    }
+    let mut accounts = vec![acct.clone(), system_account()];
+    accounts.extend(subs);
+    for account in &accounts {
+        probes.push(first_document_address(account).expect("an account anchors a document chain"));
+    }
+    probes.extend(accounts);
+    probes.push(element);
+    for probe in &probes {
+        let seat = m3.account_seat(probe);
+        assert!(seat.is_some(), "{probe:?}: its own account is seated");
+        assert_eq!(seat, m3.effective_owner_pair(probe), "{probe:?}");
+    }
+
+    // Where ω climbs past the probe's own account, this answers nobody. To an
+    // ancestor ACCOUNT — account-tier, so a tier check on ω's answer passes
+    // it, and a memo of it would admit every principal seated under the
+    // ancestor, the owner's siblings included, to the document:
+    let to_an_account = M3State::genesis()
+        .apply_m3(&alloc(&[1, 0, 1]))
+        .apply_m3(&M3Rec::RegisterPrincipal {
+            prefix: a(&[1, 0, 1]),
+            id: ID1,
+        })
+        .apply_m3(&alloc(&[1, 0, 1, 1]))
+        .apply_m3(&alloc(&[1, 0, 1, 1, 0, 1]));
+    let orphan = a(&[1, 0, 1, 1, 0, 1]);
+    assert!(to_an_account.is_registered_document(&orphan));
+    assert_eq!(
+        to_an_account.effective_owner_prefix(&orphan),
+        Some(&a(&[1, 0, 1]))
+    );
+    assert_eq!(to_an_account.account_seat(&orphan), None);
+    // …and to the NODE.
+    let to_the_node = M3State::genesis()
+        .apply_m3(&alloc(&[1, 0, 1]))
+        .apply_m3(&alloc(&[1, 0, 1, 0, 1]));
+    let unseated = a(&[1, 0, 1, 0, 1]);
+    assert!(to_the_node.is_registered_document(&unseated));
+    assert_eq!(
+        to_the_node.effective_owner_prefix(&unseated),
+        Some(&a(&[1]))
+    );
+    assert_eq!(to_the_node.account_seat(&unseated), None);
+    // A node address has no account to look up, seated or not.
+    assert_eq!(m3.effective_owner(&a(&[1])), Some(BOOTSTRAP_PRINCIPAL));
+    assert_eq!(m3.account_seat(&a(&[1])), None);
+
+    // The cost is the ACCOUNT's copy and nothing past it: probes under one
+    // seated account, element fields from one component to fifty thousand,
+    // ask the heap for one byte count.
+    let under = |depth: usize| {
+        let mut comps = vec![1u32, 0, 1, 0, 1, 0, 1];
+        comps.extend(std::iter::repeat_n(1u32, depth - 1));
+        a(&comps)
+    };
+    let shallow = under(1);
+    let (seat, bytes) = heap_bytes(|| m3.account_seat(&shallow));
+    assert_eq!(seat, Some((&acct, ID1)));
+    for depth in [10, 1_000, 50_000] {
+        let deep = under(depth);
+        let (seat, deep_bytes) = heap_bytes(|| m3.account_seat(&deep));
+        assert_eq!(seat, Some((&acct, ID1)), "{depth} element-field components");
+        assert_eq!(
+            deep_bytes, bytes,
+            "a copy past the account at {depth} components"
+        );
     }
 }
 

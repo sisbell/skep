@@ -11,7 +11,7 @@ the change-feed examples are asserted against live daemon bytes in
 `tests/it/changes.rs` with the `time` values normalized, the one field a live
 daemon cannot reproduce; the bare-entry example is byte-exact.) The
 keygen-from-seed rule's two vectors (§The claim ceremony and credentials)
-are asserted against the KDF itself by
+are asserted against the KDF and each half's keygen by
 `skep/crates/skep-signature/tests/it/golden.rs`.
 
 The wire is in DEVELOPMENT: this document is the contract as it stands at

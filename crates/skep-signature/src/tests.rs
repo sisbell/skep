@@ -21,16 +21,16 @@ fn both_tags_sign_verify_and_refuse_a_broken_half() {
         assert_eq!(verify(tag, signer.public_key(), msg, &sig), Ok(()));
         assert_eq!(
             verify(tag, signer.public_key(), b"other", &sig),
-            Err(HybridFault::Rejected)
+            Err(HybridFault::Signature)
         );
         // The Ed25519 half broken.
         let mut broken = sig.clone();
         broken[row.pq_sig_len] ^= 1;
-        assert_eq!(verify(tag, signer.public_key(), msg, &broken), Err(HybridFault::Rejected));
+        assert_eq!(verify(tag, signer.public_key(), msg, &broken), Err(HybridFault::Signature));
         // The PQ half broken.
         let mut broken = sig.clone();
         broken[3] ^= 1;
-        assert_eq!(verify(tag, signer.public_key(), msg, &broken), Err(HybridFault::Rejected));
+        assert_eq!(verify(tag, signer.public_key(), msg, &broken), Err(HybridFault::Signature));
         // The wrong width.
         assert_eq!(
             verify(tag, signer.public_key(), msg, &sig[1..]),
@@ -60,7 +60,7 @@ fn both_tags_sign_verify_and_refuse_a_broken_half() {
     }
     assert!(HybridSigner::from_seed(0, &seed).is_none());
     assert!(HybridSigner::from_seed(2, &seed).is_none());
-    assert!(derive_seeds(2, &seed).is_none());
+    assert!(derive_half_seeds(2, &seed).is_none());
 }
 
 /// THE TAG SET is stated once ([`Rule::of`]): the KDF, keygen and the
@@ -74,7 +74,7 @@ fn every_per_tag_step_answers_for_exactly_the_tags_rule_names() {
     let seed = [0x42u8; 32];
     for tag in 0..=u8::MAX {
         let ruled = Rule::of(tag).is_some();
-        assert_eq!(derive_seeds(tag, &seed).is_some(), ruled, "the KDF, tag {tag}");
+        assert_eq!(derive_half_seeds(tag, &seed).is_some(), ruled, "the KDF, tag {tag}");
         assert_eq!(HybridSigner::from_seed(tag, &seed).is_some(), ruled, "keygen, tag {tag}");
         assert_eq!(pq_widths(tag).is_some(), ruled, "the widths, tag {tag}");
     }

@@ -17,7 +17,7 @@ use fn_dsa::{
 use ml_dsa::{Keypair as _, MlDsa65, Signer as _};
 use skep_identity::{PublicKey, SigAlgRow};
 
-use crate::kdf::derive_seeds;
+use crate::kdf::derive_half_seeds;
 use crate::Rule;
 
 /// An RNG that yields EXACTLY the bytes it was given and then refuses — what
@@ -185,7 +185,7 @@ impl HybridSigner {
     /// this build holds no rule for.
     pub fn from_seed(tag: u8, seed: &[u8; 32]) -> Option<HybridSigner> {
         let row = SigAlgRow::of_tag(tag)?;
-        let halves = derive_seeds(tag, seed)?;
+        let halves = derive_half_seeds(tag, seed)?;
         let ed = EdSigningKey::from_bytes(&halves.ed25519);
         let ed_pk = ed.verifying_key().to_bytes();
         let (pq, pq_pk) = PqSigner::keygen(Rule::of(tag)?, &halves.pq);
@@ -207,14 +207,15 @@ impl HybridSigner {
 
     /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a stable
     /// API) — the Ed25519 half's signing key, ONE of the two halves every blob
-    /// this signer makes carries, a session's and an entry's alike; alone it
-    /// opens nothing (no half opens a session alone). This crate's own tests
-    /// read it (the Ed25519 half differs per tag), skepd's fixtures check
-    /// that it differs from the raw seed and matches the enrolled key's
-    /// Ed25519 half, and the suites' negative vector — a 64-byte Ed25519-only
-    /// `sig`, the classical layout no served board admits — is made with it.
-    /// Hidden because its type is `ed25519-dalek`'s: a caller holding one
-    /// names that crate at this crate's version.
+    /// this signer makes carries, a session's, an entry's and a record's
+    /// alike; alone it opens nothing (no half opens a session alone). This
+    /// crate's own tests read it (the Ed25519 half differs per tag), skepd's
+    /// fixtures check that it differs from the raw seed and matches the
+    /// enrolled key's Ed25519 half, and the suites' negative vector — a
+    /// 64-byte Ed25519-only `sig`, the classical layout no served board
+    /// admits — is made with it. Hidden because its type is
+    /// `ed25519-dalek`'s: a caller holding one names that crate at this
+    /// crate's version.
     #[cfg(feature = "test-hooks")]
     #[doc(hidden)]
     pub fn ed25519_signing_key(&self) -> &EdSigningKey {
@@ -240,13 +241,13 @@ impl HybridSigner {
     }
 
     /// SIGN `msg` under the tag's rule: the PQ signature THEN the Ed25519
-    /// signature over the same bytes — the blob a marker slot carries, and a
-    /// session's `sig`. Tag 1 is deterministic (FIPS 204's deterministic
-    /// variant, empty `ctx`); tag 3 draws its per-signature seed from OS
-    /// entropy, and PANICS where the OS refuses it: the draw is the crate's
-    /// fail-stop OS source (`OsEntropy`), so a tag-3 signature is never made
-    /// over a seed from anything weaker. Tag 1 draws nothing, so this panic
-    /// is tag 3's alone.
+    /// signature over the same bytes — THE BLOB, whichever carrier takes it:
+    /// an entry's `attest`, a credential record's `sig`, a session's `sig`.
+    /// Tag 1 is deterministic (FIPS 204's deterministic variant, empty
+    /// `ctx`); tag 3 draws its per-signature seed from OS entropy, and PANICS
+    /// where the OS refuses it: the draw is the crate's fail-stop OS source
+    /// (`OsEntropy`), so a tag-3 signature is never made over a seed from
+    /// anything weaker. Tag 1 draws nothing, so this panic is tag 3's alone.
     pub fn sign(&self, msg: &[u8]) -> Vec<u8> {
         self.sign_drawing(msg, &mut OsEntropy)
     }
@@ -294,7 +295,7 @@ mod tests {
             printed.contains(&format!("{secret:?}")) || printed.contains(&hex_string(secret))
         };
         for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
-            let halves = derive_seeds(tag, &seed).unwrap();
+            let halves = derive_half_seeds(tag, &seed).unwrap();
             let signer = HybridSigner::from_seed(tag, &seed).unwrap();
             let mut secrets = vec![
                 seed.to_vec(),
@@ -328,7 +329,7 @@ mod tests {
         let msg = b"the entry frame";
         for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
             let signer = HybridSigner::from_seed(tag, &seed).unwrap();
-            let halves = derive_seeds(tag, &seed).unwrap();
+            let halves = derive_half_seeds(tag, &seed).unwrap();
             let (pq, pq_pk) = PqSigner::keygen(Rule::of(tag).unwrap(), &halves.pq);
             assert_eq!(
                 &pq_pk[..],

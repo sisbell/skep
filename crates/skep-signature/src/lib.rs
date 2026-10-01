@@ -1,4 +1,4 @@
-//! THE HYBRID ENTRY SIGNATURE (signed ops, the seam build 2026-09-25): the
+//! THE HYBRID SIGNATURE (signed ops, the seam build 2026-09-25): the
 //! two marker tags' FROZEN RULES — keygen from one seed, signing, verifying —
 //! in `skep-signature`, the one crate that links the signature libraries;
 //! skepd calls its verify (AUTH-2.2; the PQ crate investigation §8.4 (5)).
@@ -14,9 +14,13 @@
 //!   (final FIPS 204; `SigningKey::from_seed` is `ML-DSA.KeyGen_internal(ξ)`,
 //!   Algorithm 6) and `ed25519-dalek` 2 (`verify_strict`). The signature is
 //!   FIPS 204's DETERMINISTIC variant (`rnd` = 0) with an EMPTY context
-//!   string — the CTX PIN: the entry frame's framing tag, `ENTRY_TAG`
-//!   (AUTH-1.11), is the domain separation, and `ml-dsa`'s `Signer` supports
-//!   only the empty `ctx`.
+//!   string — the CTX PIN: every byte string a hybrid signature is made
+//!   over is framed under its own framing tag (AUTH-1.11),
+//!   [`ENTRY_TAG`](skep_identity::ENTRY_TAG) for an entry's and a credential
+//!   record's and [`SESSION_TAG`](skep_identity::SESSION_TAG) or
+//!   [`SESSION_TAG_V2`](skep_identity::SESSION_TAG_V2) for a session's, and
+//!   that tag is the domain separation; `ml-dsa`'s `Signer` supports only the
+//!   empty `ctx`.
 //! * TAG 3 — FN-DSA-512 + Ed25519, PREVIEW: Thomas Pornin's `fn-dsa`
 //!   `=0.4.0` — its 2026-07-22 "best guess" at the FN-DSA draft, which the
 //!   crate itself says will change before 1.0 — so the exact version IS the
@@ -27,9 +31,10 @@
 //!   signature's bytes depend on the signer's RNG and only the KEY and the
 //!   VERIFY are byte-stable; a seeded RNG makes a fixture reproducible.
 //!
-//! THE KDF PIN (the design record §5.2 (ii)'s three inputs: the KDF, the
-//! domain-separation bytes, the keygen entry point) — ONE 32-byte seed to
-//! BOTH halves, never the raw seed to either:
+//! THE KDF PIN — `docs/wire.md`'s keygen-from-seed rule (the design record
+//! §5.2 (ii)'s three inputs: the KDF, the domain-separation bytes, the keygen
+//! entry point) — ONE 32-byte seed to BOTH halves, never the raw seed to
+//! either:
 //!
 //! ```text
 //! half_seed = HKDF-SHA-256(salt = "skep-kdf-v1", IKM = seed,
@@ -48,12 +53,14 @@
 //! Ed25519 half's 32 bytes — [`skep_identity::PublicKey::from_halves`] writes
 //! it and `pq_half`/`ed25519_half` read it, so keygen composes a key without
 //! spelling the order. THE BLOB: the PQ signature THEN the Ed25519
-//! signature's 64 bytes, two fixed-width fields, no length prefix (the record
-//! §2.4) — the marker slot's blob and, since the hybrid handshake (the
-//! hybrid-only launch, owner 2026-09-26), a session's `sig` over the session
-//! bytes too (AUTH-4.32, AUTH-6.3). VERIFY is BOTH halves over the SAME bytes
-//! — either failing fails (the ruled "hybrid, both halves verify"); no half
-//! opens a session alone.
+//! signature's 64 bytes, two fixed-width fields, no length prefix (the
+//! design record §2.4) — one blob for all three carriers: an entry's
+//! `attest`, which the daemon writes into its commit's marker slot; a
+//! credential record's own `sig` (the record grade); and, since the hybrid
+//! handshake (the hybrid-only launch, owner 2026-09-26), a session's `sig`
+//! over the session bytes (AUTH-4.32, AUTH-6.3). VERIFY is BOTH halves over
+//! the SAME bytes — either failing fails (the ruled "hybrid, both halves
+//! verify"); no half opens a session alone.
 //!
 //! THE CODE MAP — a file's build is the gate on its `mod` line below, written
 //! once, so what each build holds is read off those four lines:
@@ -61,7 +68,7 @@
 //! * `verifier.rs` — the verify and the all-halves decode skepd calls, in
 //!   every build. The verify-only build a daemon links is this file and this
 //!   root, and nothing in either signs.
-//! * `kdf.rs` — the KDF PIN as code, one seed to both half seeds; under
+//! * `kdf.rs` — the KDF as code, one seed to both half seeds; under
 //!   `sign`, and on the crate's surface only as a test hook.
 //! * `signer.rs` — keygen from a seed and signing, per tag (`HybridSigner`),
 //!   under `sign`, which skepd leaves off: used by the suites' test signer
@@ -93,7 +100,7 @@ pub use signer::HybridSigner;
 /// `HybridSigner::from_seed` and hands neither out.
 #[cfg(feature = "test-hooks")]
 #[doc(hidden)]
-pub use kdf::{derive_seeds, HalfSeeds};
+pub use kdf::{derive_half_seeds, HalfSeeds};
 #[cfg(feature = "test-hooks")]
 #[doc(hidden)]
 pub use hooks::{pq_widths, PqWidths, SeededRng06};
@@ -108,11 +115,11 @@ pub const TAG_FNDSA512_PREVIEW_ED25519: u8 = 3;
 /// The rules this crate holds, one per marker tag — the ONE statement of
 /// which tags this build can derive, keygen, decode and verify under.
 /// Every per-tag step matches on it exhaustively — the PQ half's KDF label,
-/// its keygen (`PqSigner::keygen`), its decode (`PqHalf::decode`), its
+/// its keygen (`PqSigner::keygen`), its decode (`PqVerifier::decode`), its
 /// widths, a file each (the code map above) — and those two per-tag enums,
-/// `PqSigner` in [`signer`] and `PqHalf` in [`verifier`], carry each tag's
-/// signing and verifying arithmetic, one variant per rule, so a new tag
-/// (tag 2 is free for the final FIPS 206 — whose variant takes the
+/// `PqSigner` in [`signer`] and `PqVerifier` in [`verifier`], carry each
+/// tag's signing and verifying arithmetic, one variant per rule, so a new
+/// tag (tag 2 is free for the final FIPS 206 — whose variant takes the
 /// unqualified token name, `FnDsa512Ed25519`; the preview carries `Preview`
 /// in every name, as its token does, so the final standard's arms never
 /// share a name with it) is one variant here and one arm in [`Rule::of`],

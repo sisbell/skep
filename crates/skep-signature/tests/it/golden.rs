@@ -6,9 +6,9 @@
 //! hybrid cross-check; tag 1 DIFFERENTIAL against a second pure-Rust FIPS 204
 //! crate — keys-from-seed and signatures byte-equal; the widths each pinned
 //! crate fixes, pinned by hand beside the sizes and timings the report takes
-//! back; which FN-DSA backend signed them on this target; and the KDF's two
-//! vectors as `docs/wire.md` publishes them, checked against the keys
-//! themselves.
+//! back; which FN-DSA backend signed them on this target; and the
+//! keygen-from-seed rule's two vectors as `docs/wire.md` publishes them,
+//! checked against the keys themselves.
 
 use sha2::{Digest, Sha256};
 use skep_identity::{
@@ -16,7 +16,7 @@ use skep_identity::{
     BoardTerm, EntrySlot, Fingerprint, LinkSlots, RecordRows, ShotSegmentPiece, SigAlgRow,
     ALG_MLDSA65_ED25519,
 };
-use skep_signature::{derive_seeds, pq_widths, verify, HybridSigner, PqWidths, SeededRng06};
+use skep_signature::{derive_half_seeds, pq_widths, verify, HybridSigner, PqWidths, SeededRng06};
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -103,12 +103,18 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 6] {
 // ── the goldens ─────────────────────────────────────────────────────────────
 
 /// The golden's seed: one 32-byte seed, the paper backup's one 64-hex line —
-/// and the seed of the KDF's vectors `docs/wire.md` publishes, so the
-/// fingerprints below are the ones a client author checks against.
+/// and the seed of the keygen-from-seed rule's vectors `docs/wire.md`
+/// publishes, so the fingerprints below are the ones a client author checks
+/// against.
 const GOLDEN_SEED: [u8; 32] = [
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
     0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
 ];
+
+/// The seed of the fixtures' stream the tag-3 golden signatures draw their
+/// per-signature seeds from — `GOLDEN_SEED`'s bytes reused, so those six
+/// pins depend on the key seed twice: through the key and through the stream.
+const GOLDEN_STREAM_SEED: [u8; 32] = GOLDEN_SEED;
 
 /// One tag's golden, in the documented form: the SHA-256 of the PQ public
 /// half, of the Ed25519 public half, of the whole raw key; the fingerprint;
@@ -142,9 +148,10 @@ fn golden_of(tag: u8) -> (HybridSigner, SignedFrames) {
     let alg = SigAlgRow::of_tag(tag).unwrap().token;
     let mut out = Vec::new();
     for (op, frame) in fixed_frames(alg) {
-        // Tag 3's signature draws its seed from the fixtures' seeded RNG,
-        // reseeded per op so each signature is a function of its frame alone.
-        let mut rng = SeededRng06::new(GOLDEN_SEED);
+        // Tag 3's signature draws its per-signature seed from the fixtures'
+        // stream, reseeded per op from `GOLDEN_STREAM_SEED` so each signature
+        // is a function of its frame alone.
+        let mut rng = SeededRng06::new(GOLDEN_STREAM_SEED);
         let sig = signer.sign_with_rng(&frame, &mut rng);
         assert_eq!(verify(tag, signer.public_key(), &frame, &sig), Ok(()));
         out.push((op.to_string(), frame, sig));
@@ -223,11 +230,11 @@ fn golden_tag_3_fndsa512_preview_ed25519() {
 
 /// THE PUBLISHED VECTORS: `docs/wire.md`'s keygen-from-seed rule (§The
 /// claim ceremony and credentials) hands a client author `GOLDEN_SEED` and
-/// each tag's fingerprint as the KDF's vectors — the keys the two goldens
+/// each tag's fingerprint as that rule's vectors — the keys the two goldens
 /// above derive. Checked against the KDF and keygen themselves, so a vector
 /// that drifts in the prose fails as a drifted key does.
 #[test]
-fn wire_md_publishes_the_vectors_the_kdf_derives() {
+fn wire_md_publishes_the_keygen_from_seed_vectors() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/wire.md");
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
@@ -280,7 +287,7 @@ fn tag_1_is_byte_equal_to_a_second_fips_204_implementation() {
     use fips204::traits::{KeyGen, SerDes, Signer, Verifier};
     for i in 0..16u8 {
         let seed = [i; 32];
-        let halves = derive_seeds(1, &seed).unwrap();
+        let halves = derive_half_seeds(1, &seed).unwrap();
         // `ml-dsa`'s side: the PQ half of the hybrid key and its signature.
         let ours = HybridSigner::from_seed(1, &seed).unwrap();
         let our_pk = ours.public_key().pq_half().to_vec();

@@ -1,9 +1,9 @@
-//! THE KDF PIN as code (the crate doc states the derivation): one 32-byte
+//! THE KDF as code (the crate doc states the KDF PIN whole): one 32-byte
 //! seed to both half seeds under a tag's token by HKDF-SHA-256, never the raw
 //! seed to either — the signer's side, compiled under `sign`. The signer
-//! derives through [`derive_seeds`] inside `HybridSigner::from_seed`; the
-//! crate's surface carries it, and the [`HalfSeeds`] it answers, only as a
-//! test hook, for the goldens that feed a half seed to a second
+//! derives through [`derive_half_seeds`] inside `HybridSigner::from_seed`;
+//! the crate's surface carries it, and the [`HalfSeeds`] it answers, only as
+//! a test hook, for the goldens that feed a half seed to a second
 //! implementation.
 
 use std::fmt;
@@ -60,7 +60,7 @@ fn derive_half_seed(seed: &[u8; 32], token: &str, half_label: &[u8]) -> [u8; 32]
 
 /// THE KDF: one seed to both half seeds under `tag`'s token; `None` for a
 /// tag no row names or this build holds no rule for.
-pub fn derive_seeds(tag: u8, seed: &[u8; 32]) -> Option<HalfSeeds> {
+pub fn derive_half_seeds(tag: u8, seed: &[u8; 32]) -> Option<HalfSeeds> {
     let row = SigAlgRow::of_tag(tag)?;
     let pq_label = match Rule::of(tag)? {
         Rule::MlDsa65Ed25519 => HALF_MLDSA65,
@@ -82,11 +82,11 @@ mod tests {
     #[test]
     fn the_kdf_derives_both_halves_and_neither_is_the_seed() {
         let seed = [0x01u8; 32];
-        let h1 = derive_seeds(TAG_MLDSA65_ED25519, &seed).unwrap();
+        let h1 = derive_half_seeds(TAG_MLDSA65_ED25519, &seed).unwrap();
         assert_ne!(h1.ed25519, seed);
         assert_ne!(h1.pq, seed);
         assert_ne!(h1.ed25519, h1.pq);
-        let h3 = derive_seeds(TAG_FNDSA512_PREVIEW_ED25519, &seed).unwrap();
+        let h3 = derive_half_seeds(TAG_FNDSA512_PREVIEW_ED25519, &seed).unwrap();
         assert_ne!(h3.pq, h1.pq);
         assert_ne!(h3.ed25519, h1.ed25519);
     }

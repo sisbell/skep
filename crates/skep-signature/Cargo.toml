@@ -22,7 +22,7 @@ readme = "README.md"
 sign = ["dep:rand_core_06", "dep:hkdf", "dep:sha2", "dep:getrandom"]
 # `test-hooks` compiles in the fixtures' hooks — the seeded RNG
 # (`SeededRng06`), `HybridSigner::sign_with_rng`, the Ed25519 half's signing
-# key, the KDF's half seeds (`derive_seeds`) and the widths the sizes pin
+# key, the KDF's half seeds (`derive_half_seeds`) and the widths the sizes pin
 # reads (`pq_widths`) — and implies `sign`.
 # No shipped signer enables it: this crate's own tests turn it on through the
 # self dev-dependency below, and skepd's tests through their own
@@ -42,8 +42,8 @@ skep-identity = { path = "../skep-identity" }
 # is the one crate that links the signature libraries; skepd calls its verify
 # (AUTH-2.2).
 ed25519-dalek = "2"
-# THE POST-QUANTUM HALVES OF THE HYBRID ENTRY SIGNATURE (signed ops, the seam
-# build 2026-09-25; the PQ crate investigation §8.1, §8.4 (5), §8.5 (ii)):
+# THE POST-QUANTUM HALVES OF THE HYBRID SIGNATURE (signed ops, the seam build
+# 2026-09-25; the PQ crate investigation §8.1, §8.4 (5), §8.5 (ii)):
 # both sit HERE beside `ed25519-dalek`, never in skep-identity (AUTH-2.1),
 # and both are PINNED EXACTLY — an algorithm tag names one exact, frozen
 # verification rule and one exact keygen-from-seed rule (the design record
@@ -65,8 +65,8 @@ fn-dsa = "=0.4.0"
 # fn-dsa's signer and keygen draw from a `rand_core` 0.6 RNG (the test signer
 # and the key-derivation golden feed them a seeded stream).
 rand_core_06 = { package = "rand_core", version = "0.6", optional = true }
-# THE KDF (the record §5.2 (ii); the KDF PIN): one 32-byte seed to both
-# halves by HKDF-SHA-256 with the algorithm token and the half as the
+# THE KDF (the design record §5.2 (ii); the KDF PIN): one 32-byte seed to
+# both halves by HKDF-SHA-256 with the algorithm token and the half as the
 # domain-separation labels, never the raw seed. `sha2` is the KDF's hash, and
 # the fixtures' seeded stream's (`SeededRng06`, under `test-hooks`).
 hkdf = { version = "0.12", optional = true }

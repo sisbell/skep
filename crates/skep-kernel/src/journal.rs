@@ -356,7 +356,10 @@ enum FramePayload {
 ///   encoder's output, so a frame payload, record or checkpoint body carrying
 ///   bytes past its value is a decode refusal (`Corruption` at replay, a
 ///   skipped base at load) rather than a silent pass. This is the read-side
-///   half of "one byte-form per value".
+///   half of "one byte-form per value" — the codec's half; the order a
+///   value's own `Serialize` visits a map or a set is
+///   [`crate::WorldState`]'s canonical-encoding obligation, which no codec
+///   setting can fix.
 ///
 /// The first three are the configuration bincode's free functions used under
 /// `SKJ2`, so no byte moved for the codec's sake at the `SKJ3` bump — the

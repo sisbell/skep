@@ -48,7 +48,8 @@ struct Committed<W> {
     /// commit a later world under an earlier boundary.
     /// [`journal::CHAIN_GENESIS`] at `Seq(0)` and, under
     /// [`Durability::InMemory`], at every coordinate: there are no frames to
-    /// hash, and nothing reads it there.
+    /// hash, and the genesis value is what [`Kernel::chain_head`] and
+    /// [`Snapshot::chain`] answer there.
     chain: [u8; 32],
 }
 
@@ -439,11 +440,16 @@ impl<W: WorldState> Kernel<W> {
     /// next transaction, the one chaining from a predecessor the scan never
     /// saw (§7 requires no `Seq` contiguity, so by coordinates alone each of
     /// these was once a shorter world answered `Ok` at the true head); two
-    /// damages, at the first only — the chain cannot see past a break. A
-    /// checkpoint's `chain_head` edited, at the base's own coordinate where
-    /// the marker closing it is scanned — at the head whenever the active
-    /// segment holds the head's marker, which it does unless that segment is
-    /// EMPTY after a rotation whose transaction failed or never landed, when
+    /// damages of one kind, at the first only — the halt names the first of
+    /// each kind, and a chain link above a break is judged from the marker's
+    /// own claim, so one edit is one verdict; of two kinds, at the one
+    /// [`OpenError::Corruption`] lists first, whatever their coordinates — an
+    /// edited transaction speaks before an earlier, independent chain break,
+    /// as a corrupt run speaks before both. A checkpoint's `chain_head`
+    /// edited, at the base's own coordinate where the marker closing it is
+    /// scanned — at the head whenever the active segment holds the head's
+    /// marker, which it does unless that segment is EMPTY after a rotation
+    /// whose transaction failed or never landed, when
     /// the head's marker ends the closed segment before it and is skipped
     /// (residue (ii)'s boundary coincidence below; the matrix's case 15) —
     /// and at the first transaction above it otherwise: nothing in the header
@@ -820,11 +826,12 @@ impl<W: WorldState> Kernel<W> {
     /// committed-but-uninstalled txn replays at the next `open()` as a
     /// lost-ack op); the panic then propagates to the caller.
     ///
-    /// A panic AFTER the commit region — the superseded root's destructor,
-    /// run as this call returns and releases what may be the last reference
-    /// to it ([`WorldState`]'s drop obligation) — propagates with the
-    /// transaction committed and installed: the lost-ack case (§3), the
-    /// kernel not poisoned and its order intact.
+    /// A panic AFTER the commit region — the on-commit checkpoint's own (`W`'s
+    /// `Serialize`, or a world's destructor run inside it), or the superseded
+    /// root's destructor, run as this call returns and releases what may be
+    /// the last reference to it ([`WorldState`]'s drop obligation) —
+    /// propagates with the transaction committed and installed: the lost-ack
+    /// case (§3), the kernel not poisoned and its order intact.
     ///
     /// [`BurnedSeqPolicy`]: crate::BurnedSeqPolicy
     pub fn transact<T, E>(

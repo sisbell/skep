@@ -1372,10 +1372,16 @@ fn c12_damage_below_a_standing_base_is_unseen_at_open_and_seen_by_a_replay_from_
     );
 }
 
-/// CASE 13 — TWO DAMAGES, ONE ABOVE THE OTHER: CAUGHT at the FIRST; the error
-/// names the first coordinate only — the chain cannot see past a break.
+/// CASE 13 — TWO DAMAGES, ONE ABOVE THE OTHER. Of ONE kind: CAUGHT at the
+/// FIRST, the error naming the first coordinate only — the scan records the
+/// first chain break, and judges every link above it from the marker's own
+/// claim, so the second edit is a verdict of its own that the first outranks.
+/// Of TWO kinds: CAUGHT at the one `OpenError::Corruption` lists first,
+/// whatever the coordinates — an edited transaction at op 12 speaks before an
+/// earlier, independent chain break at op 5. A halt cuts nothing, so the open
+/// that follows the first repair names the other.
 #[test]
-fn c13_two_damages_name_the_first_only() {
+fn c13_two_damages_name_the_first_of_one_kind_and_the_kind_listed_first_of_two() {
     let golden = Golden::build();
 
     let case = golden.case_from_genesis("c13-records");
@@ -1389,6 +1395,30 @@ fn c13_two_damages_name_the_first_only() {
     rewrite_frame(&seg, golden.txn(5).marker.start, |payload| payload[MARKER_CHAIN_AT] ^= 0xFF);
     rewrite_frame(&seg, golden.txn(12).marker.start, |payload| payload[MARKER_CHAIN_AT] ^= 0xFF);
     open_halts_with_chain_break(&case, golden.seq(5), "case 13: chain fields edited at ops 5 and 12");
+
+    let case = golden.case_from_genesis("c13-two-kinds");
+    let seg = seg_file(&case, 1);
+    rewrite_txn(&seg, 5 - 1, |data, txn| flip_record_byte(data, txn, 0, 40));
+    rewrite_frame(&seg, golden.txn(12).marker.start, |payload| {
+        payload[MARKER_CHECKSUM_AT] ^= 0xFF
+    });
+    open_halts_naming(
+        &case,
+        golden.seq(12),
+        EDITED_TXN,
+        "case 13: a consistent rewrite at op 5 beneath an edited marker at op 12 — the edited \
+         transaction speaks first, whatever the coordinates",
+    );
+    // The marker at op 12 restored, its CRC re-sealed: the open names the
+    // break at op 5, which the halt above left on disk as it found it.
+    rewrite_frame(&seg, golden.txn(12).marker.start, |payload| {
+        payload[MARKER_CHECKSUM_AT] ^= 0xFF
+    });
+    open_halts_with_chain_break(
+        &case,
+        golden.seq(5),
+        "case 13: the edited marker repaired, the earlier break speaks",
+    );
 }
 
 /// Give op `op`'s marker the chain `value` and re-chain every marker above

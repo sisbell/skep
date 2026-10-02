@@ -11,12 +11,13 @@
 //! at most an ignored `.tmp` — §6). `chain_head` is the commit chain's value
 //! at `seq` — the marker that held it may be reclaimed, and this is where a
 //! replay above the base continues the chain from; `body_hash` is SHA-256 over
-//! the body, meaningful because the body is CANONICAL under `SKC4`: every
-//! serialized slice iterates in key order (the encoding report's option (i)),
-//! so two writes of one world, on two processes or two machines, yield one
-//! byte string, and a published head can name a checkpoint by
-//! `(seq, chain_head, body_hash)`. The CRC stays as the first, cheap bit-rot
-//! check `load` runs before anything else.
+//! the body, meaningful because the body is CANONICAL under `SKC4` —
+//! [`crate::WorldState`]'s canonical-encoding obligation, which the engine
+//! discharges with every serialized slice iterating in key order (the
+//! encoding report's option (i)) — so two writes of one world, on two
+//! processes or two machines, yield one byte string, and a published head can
+//! name a checkpoint by `(seq, chain_head, body_hash)`. The CRC stays as the
+//! first, cheap bit-rot check `load` runs before anything else.
 
 use std::fs::{self, File};
 use std::io::{self, Read, Write};

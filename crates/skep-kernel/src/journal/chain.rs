@@ -45,8 +45,10 @@ pub(crate) const CHAIN_GENESIS: [u8; 32] = [0u8; 32];
 /// what it framed and a reader hashes what the CRC just verified, from the
 /// same byte strings, so the chain needs no canonical re-serialization on
 /// either side; that the records themselves have one byte-form per value on
-/// every machine is the codec's promise ([`super::codec`]), which is what makes two
-/// replicas of one history agree on every link.
+/// every machine is two promises — the codec's ([`super::codec`]) for every
+/// width and field's place, and [`crate::WorldState`]'s canonical-encoding
+/// obligation for the order a record's own `Serialize` visits what it holds —
+/// which together make two replicas of one history agree on every link.
 ///
 /// THE SLOT IS A CHAIN INPUT (the board's r6-2c, owner-ruled 2026-09-29,
 /// option (b) of the slot investigation; it was "no chain input, by

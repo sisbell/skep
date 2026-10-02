@@ -63,7 +63,11 @@ pub enum OpenError {
     /// that fails to complete durably (§7; `open()` then fails, the step is
     /// idempotent and the next `open()` retries it) and a failed acquisition
     /// of the journal-path exclusion lock (a second live kernel on this
-    /// journal; Lifecycle).
+    /// journal; Lifecycle). A CHECKPOINT that cannot be read is no `Io`:
+    /// recovery passes it over as a refused base, and where the fallback
+    /// chain is exhausted, a newest base that could not be read is
+    /// [`OpenError::BadCheckpoint`]'s `cause`, carrying the read's own
+    /// failure.
     Io(io::Error),
     /// No retained checkpoint loads and genesis is unreachable (its covering
     /// journal reclaimed). Recovery internally falls back newest → next-older
@@ -80,9 +84,11 @@ pub enum OpenError {
         /// checkpoint written under another format, and its account names the
         /// stamp found, the stamp expected and the remedy
         /// ([`NO_MIGRATION_REMEDY`]), as [`OpenError::ForeignFormat`] does
-        /// for the journal. `None` when no candidate was tried at all — the
-        /// journal retains no checkpoint, and only its unreachable genesis
-        /// was ever available.
+        /// for the journal. A base that could not be READ at all carries the
+        /// read's own I/O failure, which names its own remedy — a permission,
+        /// a device — rather than any of the three above. `None` when no
+        /// candidate was tried at all — the journal retains no checkpoint,
+        /// and only its unreachable genesis was ever available.
         cause: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
     },
     /// Durable committed data the recovered state needs cannot be read, or
@@ -233,7 +239,8 @@ pub enum CheckpointError {
     /// written, not even a temp file: the encode precedes the first file
     /// operation. Retrying repeats the refusal until `W` itself encodes.
     Serialize(Box<dyn std::error::Error + Send + Sync + 'static>),
-    /// A prior barrier/truncation/unwind failure has halted the kernel
+    /// A prior unrecoverable failure — any [`TxnError::Poisoned`] lists, a
+    /// `Seq` order with no room left among them — has halted the kernel
     /// (§1/§3). No checkpoint was attempted, nothing was written, and none
     /// will be until the kernel is reopened.
     Poisoned,
@@ -271,7 +278,8 @@ impl From<io::Error> for CheckpointError {
 /// [`crate::Kernel::chain_at`] and [`crate::Kernel::attestation_at`] — each
 /// derived read-only from the journal directory. None of these poisons the
 /// kernel or perturbs the live write path; every variant is an honest "this
-/// boundary cannot be answered" (or a genuine at-rest corruption find).
+/// boundary cannot be answered" (or a corruption find — at rest, save the one
+/// transient [`HistoryError::Corruption`] names).
 #[derive(Debug)]
 pub enum HistoryError {
     /// `at` is above the INSTALLED head at the time of the call — the
@@ -288,44 +296,65 @@ pub enum HistoryError {
     /// or a burned `Seq` under `TolerateGap`. Boundaries are the `Seq` values
     /// `transact` returns; nothing else is one.
     NotABoundary {
-        /// The greatest boundary at or below the requested value that THIS
-        /// call can still answer — never below the base it selected, since a
-        /// segment straddling that base contributes boundaries below it with
-        /// no base left to fold from (0 = genesis). It is therefore the value
-        /// a caller may safely re-ask with; a boundary lower still may be
-        /// answerable in its own right, from the older base a lower `at`
-        /// would select.
+        /// The greatest committed boundary at or below the requested value,
+        /// never below the base this call selected — a segment straddling
+        /// that base contributes boundaries below it with no base left to
+        /// fold from (0 = genesis). [`crate::Kernel::world_at`] and
+        /// [`crate::Kernel::chain_at`] answer it — the base's own seq from the
+        /// base itself — so it is the value they may safely be re-asked with;
+        /// a boundary lower still may be answerable in its own right, from the
+        /// older base a lower `at` would select.
+        /// [`crate::Kernel::attestation_at`], whose base sits strictly BELOW
+        /// its boundary, answers it too — save where it is that base's own seq
+        /// and the base a checkpoint: re-asked there, it answers only while an
+        /// older base remains derivable, and refuses [`HistoryError::Reclaimed`]
+        /// once none does.
         nearest: Seq,
     },
-    /// No base at or below `at` remains derivable: every retained checkpoint
-    /// sits above it and the journal below the oldest retained checkpoint
-    /// has been reclaimed (§6), so genesis is unreachable. `floor` names the
-    /// oldest boundary a base could still be derived at, when a checkpoint
-    /// exists to derive it from.
+    /// No base at or below `at` remains derivable — strictly BELOW `at`, for
+    /// [`crate::Kernel::attestation_at`], whose base must sit below its
+    /// boundary: no retained checkpoint there loads, and the journal below
+    /// the oldest retained checkpoint has been reclaimed (§6), so genesis is
+    /// unreachable. `floor` names the oldest boundary a base could still be
+    /// derived at, when a checkpoint exists to derive it from.
     Reclaimed {
         /// The oldest retained checkpoint's seq — the oldest boundary a base
         /// could still be derived at — or `None` when no checkpoint exists.
         /// That checkpoint is the oldest CANDIDATE, not a guarantee: one that
         /// refuses to load refuses this way again, which is what `cause`
-        /// distinguishes.
+        /// distinguishes. [`crate::Kernel::attestation_at`] answers only
+        /// strictly ABOVE it: asked at `floor` itself, it refuses this way
+        /// again, `floor` naming the very boundary it was asked.
         floor: Option<Seq>,
         /// Why the NEWEST base this call could have used refused, when one
-        /// was tried at all. That is what separates a boundary genuinely
-        /// below the retained window — where re-asking at `floor` succeeds —
-        /// from a retained base that is itself unusable, where re-asking at
-        /// `floor` refuses identically and a caller honouring the `floor`
-        /// alone retries forever.
+        /// was tried at all. `Some` is a retained base that is itself
+        /// unusable: re-asking at `floor` refuses again, and a caller
+        /// honouring the `floor` alone retries forever. `None` means no
+        /// candidate was tried — every retained base lies above the boundary
+        /// (at or above it, for [`crate::Kernel::attestation_at`]), or none is
+        /// retained: re-asking [`crate::Kernel::world_at`] or
+        /// [`crate::Kernel::chain_at`] at `floor` tries the oldest, and either
+        /// answers or refuses again, now WITH the cause that ends the retry. A
+        /// `Reclaimed` whose `floor` is the boundary asked carries `None` and
+        /// leaves nothing to re-ask: it is [`crate::Kernel::attestation_at`]'s
+        /// answer at the oldest retained checkpoint's own seq, whose slot no
+        /// remaining base reaches.
         cause: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
     },
     /// The kernel runs under [`crate::Durability::InMemory`]: there is no
     /// journal to derive history from.
     Unjournaled,
-    /// I/O failure reading checkpoints or journal segments. May be transient
-    /// (a concurrent checkpoint's segment reclamation can remove a file
-    /// between listing and reading); a retry re-selects a base.
+    /// I/O failure listing the journal directory or reading a journal
+    /// segment. May be transient (a concurrent checkpoint's segment
+    /// reclamation can remove a file between listing and reading); a retry
+    /// re-selects a base. A CHECKPOINT that cannot be read is no `Io`: it is
+    /// a refused base, passed over for the next-older one as recovery passes
+    /// it, and where nothing below it stands in, a newest base that could not
+    /// be read is [`HistoryError::Reclaimed`]'s `cause`, carrying the read's
+    /// own failure.
     Io(io::Error),
-    /// Corrupt data at rest in the scanned region — the same conditions, the
-    /// same coordinate and the same account, that [`OpenError::Corruption`]
+    /// Corrupt data in the scanned region — the same conditions, the same
+    /// coordinate and the same account, that [`OpenError::Corruption`]
     /// carries, with the same halt-never-drop verdict (§7). Two routes are
     /// not available here: the exhausted `Seq` order, which only a mint site
     /// reaches and this call mints nothing; and the damaged sync word, which
@@ -335,6 +364,12 @@ pub enum HistoryError {
     /// reach [`crate::Kernel::world_at`] and neither
     /// [`crate::Kernel::chain_at`] nor [`crate::Kernel::attestation_at`],
     /// which fold nothing: what they read is framed bytes, and those verify.
+    ///
+    /// One cause of this can be transient: a commit whose barrier fails
+    /// truncating its tail while this read is mid-file leaves the read
+    /// holding a discontinuity that classifies as at-rest corruption
+    /// ([`crate::Kernel::world_at`]); a retry that meets it again meets it at
+    /// rest.
     Corruption {
         /// See [`OpenError::Corruption`].
         at: Seq,

@@ -276,11 +276,11 @@ impl ScanOutcome {
     /// intact marker closes ([`ScanOutcome::uncommitted_intact`]), then the
     /// chain break ([`ScanOutcome::chain_break`]). A verdict of an earlier
     /// kind speaks first whatever its coordinate: the base mismatch sits at
-    /// the lowest coordinate scanned, and the un-committed transaction is the
-    /// ROOT of the break the next committed one shows. The corrupt run's
-    /// verdict speaks before all three, in [`ScanOutcome::halt_on`] — this
-    /// method's only caller, which both halts go through. `None` when every
-    /// link verified.
+    /// the base, below every chain link a scan judges, and the un-committed
+    /// transaction is the ROOT of the break the next committed one shows. The
+    /// corrupt run's verdict speaks before all three, in
+    /// [`ScanOutcome::halt_on`] — this method's only caller, which both halts
+    /// go through. `None` when every link verified.
     fn chain_verdict(&self) -> Option<(u64, Cause)> {
         if let Some(at) = self.base_mismatch() {
             return Some((at, base_mismatch_cause(at)));

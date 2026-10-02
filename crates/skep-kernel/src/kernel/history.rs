@@ -36,8 +36,9 @@ impl<W: WorldState> Kernel<W> {
     /// The committed world as of boundary `at` — READ-ONLY bounded replay
     /// over this kernel's own journal directory (the journal already holds
     /// every committed state; this makes a prefix of it answerable). Base =
-    /// the newest retained checkpoint at or below `at` (else `genesis` while
-    /// the journal still reaches back to `Seq(1)`),
+    /// the newest retained checkpoint at or below `at` that loads — one that
+    /// refuses is passed over for the next-older, as recovery passes it (§6)
+    /// — else `genesis` while the journal still reaches back to `Seq(1)`,
     /// seeded through [`WorldState::rebuild_derived`], then folded over
     /// exactly `(base, at]` — recovery's Pass 2 with `W := at`. Deterministic:
     /// the same `at` yields a value-equal world on every call, across
@@ -148,7 +149,8 @@ impl<W: WorldState> Kernel<W> {
     /// carries the very marker value it stands in for.
     ///
     /// COST, per call, uncached: `world_at`'s minus the fold and the resident
-    /// world — the base is still LOADED, since its body hash is the base's
+    /// world — the base is still LOADED and seeded through
+    /// [`WorldState::rebuild_derived`], since its body hash is the base's
     /// door and the header is read through it, and every segment above the
     /// base is still READ and its committed records at or below `at` still
     /// collected; the world is dropped unfolded. Admission and concurrency
@@ -180,6 +182,18 @@ impl<W: WorldState> Kernel<W> {
     /// [`HistoryError::Reclaimed`] where that segment is gone even though
     /// `chain_at` still answers there. Genesis (`Seq(0)`) is no transaction
     /// and answers `None`. The other refusals are `chain_at`'s, in its order.
+    /// At a checkpoint's own seq it answers only while an older base remains
+    /// derivable — an older retained checkpoint that loads, or genesis while
+    /// the journal reaches back to it — so the `nearest` of its
+    /// [`HistoryError::NotABoundary`] and the `floor` of its
+    /// [`HistoryError::Reclaimed`] can name a seq it refuses, as those
+    /// variants say.
+    ///
+    /// COST, per call, uncached: [`Kernel::chain_at`]'s, from a base strictly
+    /// below `at` — never that read's base-only answer, so at a checkpoint's
+    /// own seq it loads an older base and reads the segments above it. Safe
+    /// beside the live appender and `checkpoint()`, with the same two
+    /// transient refusals.
     ///
     /// The kernel INTERPRETS nothing it answers: which pair a tag names and
     /// whether the blob verifies are the verifier's questions, beside the

@@ -158,10 +158,11 @@ use serde::Serialize;
 /// installed nothing — a staged world discarded by `f`'s rejection, a
 /// zero-step return, the journal's refusal, or [`Staging::push`] replacing
 /// it — with nothing committed and the kernel as the answer it displaces
-/// would have left it; out of whichever read releases the last reference to
-/// a superseded root, a [`Snapshot`] most often; and out of [`Kernel::open`],
-/// [`Kernel::world_at`] and [`Kernel::chain_at`], whose base loads and folds
-/// drop worlds of their own.
+/// would have left it; out of whichever read or [`Kernel::checkpoint`]
+/// releases the last reference to a superseded root, a [`Snapshot`] most
+/// often; and out of [`Kernel::open`], [`Kernel::world_at`],
+/// [`Kernel::chain_at`] and [`Kernel::attestation_at`], whose base loads and
+/// folds drop worlds of their own.
 ///
 /// HOSTILE-INPUT OBLIGATION — `W` is decoded from a checkpoint body, which is
 /// bytes M2 does not trust: the header checksum proves they are the bytes that
@@ -169,6 +170,23 @@ use serde::Serialize;
 /// type's `Deserialize` must terminate and must not exhaust the stack on any
 /// byte string. The same obligation binds [`Record`], and is written out in
 /// full there. M2 cannot check this.
+///
+/// CANONICAL-ENCODING OBLIGATION — this type's `Serialize`, and [`Record`]'s,
+/// must write ONE byte string per value, on every process and every machine.
+/// M2's codec fixes every integer's width and every field's place; the order
+/// a type's own `Serialize` visits the entries of a map or a set is the
+/// type's, so an authoritative collection serializes in an order that is a
+/// function of its contents — never a hash map's iteration order under a
+/// per-process `RandomState`, which a derived hint may still hold behind
+/// `#[serde(skip)]`. Two promises rest on it, and recovery on neither: a
+/// checkpoint's `body_hash` names the world it embodies
+/// ([`CheckpointHeader`]), so two checkpoints of one world at one coordinate
+/// are one file and a replica that derived that world can check a published
+/// base by it; and one op sequence under one [`SaltSource::Seeded`] seed
+/// writes one journal byte for byte, so two replicas of one history agree on
+/// every chain link. Recovery reads back the very bytes it framed, so nothing
+/// but a comparison across two processes notices a violation. M2 cannot check
+/// this.
 ///
 /// [`Record`]: WorldState::Record
 pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'static {
@@ -228,23 +246,26 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
     /// [`rebuild_derived`]: WorldState::rebuild_derived
     fn apply(&self, record: &Self::Record) -> Self;
 
-    /// Seed derived hints from authoritative state. Runs ONCE per journaled
-    /// load — on whichever base recovery selects, a retained checkpoint or
-    /// genesis — BEFORE replay, and NEVER on a live commit, so it cannot keep
-    /// any hint current by itself. It exists solely to reconstruct hints a
-    /// checkpoint skip-serialized (`#[serde(skip)]`). NOT run under
-    /// [`Durability::InMemory`], which does not load: that mode installs the
-    /// caller's `genesis` value as the root exactly as given. Default
-    /// identity; override iff hints are skipped.
+    /// Seed derived hints from authoritative state. Runs once per base a
+    /// derivation loads — at every journaled [`Kernel::open`] and at every
+    /// history read ([`Kernel::world_at`], [`Kernel::chain_at`],
+    /// [`Kernel::attestation_at`]), on whichever base it selects, a retained
+    /// checkpoint or genesis — BEFORE replay, and NEVER on a live commit, so
+    /// it cannot keep any hint current by itself. It exists solely to
+    /// reconstruct hints a checkpoint skip-serialized (`#[serde(skip)]`). NOT
+    /// run under [`Durability::InMemory`], which does not load: that mode
+    /// installs the caller's `genesis` value as the root exactly as given.
+    /// Default identity; override iff hints are skipped.
     ///
     /// CONSISTENCY OBLIGATION (§7, seam contract 2): an override MUST seed
     /// exactly the hint state that folding every record with `Seq ≤ S` through
     /// [`apply`] would produce (`S` = the seq of the base selected — a
-    /// retained checkpoint's, or `0` for genesis). Recovery runs
-    /// `rebuild_derived` (seeding `Seq ≤ S`) THEN replays `Seq > S`
-    /// through `apply`; if the seed disagrees with the `apply`-fold it stands
-    /// in for, the recovered hint diverges from the live-maintained one and
-    /// reads go wrong. M2 cannot check this.
+    /// retained checkpoint's, or `0` for genesis). Recovery and
+    /// [`Kernel::world_at`] run `rebuild_derived` (seeding `Seq ≤ S`) THEN
+    /// replay `Seq > S` through `apply`; if the seed disagrees with the
+    /// `apply`-fold it stands in for, the recovered — or the historical —
+    /// hint diverges from the live-maintained one and reads go wrong. M2
+    /// cannot check this.
     ///
     /// WHAT MAY BE SKIPPED (§6/§7): a checkpoint is a serialized `W` standing
     /// in for the fold over `Seq ≤ S`, so ONLY state this method can

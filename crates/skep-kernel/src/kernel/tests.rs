@@ -183,7 +183,12 @@ fn attestation_at_refuses_as_chain_at_does() {
 /// below it reclaimed. The chain there is the base's own, answered from the
 /// checkpoint's header; the slot is the marker's, which no checkpoint
 /// carries and the journal no longer holds — so the slot's read refuses
-/// where the chain's answers, naming the checkpoint as the floor.
+/// where the chain's answers, naming the checkpoint as the floor: a
+/// `Reclaimed` whose `floor` is the boundary asked, which leaves nothing to
+/// re-ask. Strictly above the floor the slot's read answers, from the
+/// checkpoint as its base — while a composite's interior seq there names the
+/// floor as its `nearest`, which `chain_at` answers and the slot's read
+/// refuses, as `HistoryError` says.
 #[test]
 fn a_checkpoints_own_seq_with_the_segment_below_reclaimed_answers_the_chain_and_not_the_slot() {
     let dir = tempfile::tempdir().unwrap();
@@ -216,6 +221,46 @@ fn a_checkpoints_own_seq_with_the_segment_below_reclaimed_answers_the_chain_and_
             })
         ),
         "got {slot:?}"
+    );
+
+    // A composite at 6..=7, into seg-5, which holds one ~300 KiB transaction
+    // and stays the active segment.
+    let (_, s7) = kernel
+        .transact::<_, ()>(&[], |stg| {
+            stg.push(vec![1u8]);
+            stg.push(vec![2u8]);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(s7, Seq(7));
+    assert_eq!(
+        kernel.attestation_at(s7).unwrap(),
+        None,
+        "the first boundary above the floor answers, from the checkpoint as its base"
+    );
+    // The composite's interior seq names the floor as its nearest boundary…
+    for (read, out) in [
+        ("chain_at", kernel.chain_at(Seq(6)).map(|_| ())),
+        ("attestation_at", kernel.attestation_at(Seq(6)).map(|_| ())),
+    ] {
+        assert!(
+            matches!(out, Err(HistoryError::NotABoundary { nearest: Seq(5) })),
+            "{read} at 6 answered {out:?}"
+        );
+    }
+    // …which `chain_at` answers, and the slot's read refuses, the floor it
+    // names being the very boundary asked.
+    assert!(kernel.chain_at(Seq(5)).is_ok(), "chain_at answers the nearest it names");
+    let slot = kernel.attestation_at(Seq(5));
+    assert!(
+        matches!(
+            slot,
+            Err(HistoryError::Reclaimed {
+                floor: Some(Seq(5)),
+                cause: None
+            })
+        ),
+        "the slot's read refuses the nearest it names: {slot:?}"
     );
 }
 

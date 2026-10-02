@@ -336,8 +336,9 @@ impl Journal {
     /// where `MARKER_FRAME_LEN` is defined), so the durable arm frames every
     /// slot the in-memory arm drops. The in-memory arm hands `install`
     /// [`CHAIN_GENESIS`]: the chain is over journal frames, of which that arm
-    /// builds none, and nothing reads a chain off an in-memory kernel — it
-    /// writes no checkpoint.
+    /// builds none, so an in-memory kernel's chain reads as the genesis value
+    /// at every coordinate, as [`crate::Kernel::chain_head`] states, and no
+    /// checkpoint persists it.
     ///
     /// The two limits are judged AS THE LOOP GOES, and a record past the
     /// budget is dropped rather than kept, which is what makes enforcing

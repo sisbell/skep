@@ -4,10 +4,11 @@
 //!
 //! The arithmetic divides by whether a caller can get the question wrong.
 //! [`Run::addrs`], [`Run::into_addrs`] and [`Run::reach`] take no offset, so
-//! they are total and published; [`Run::tumbler_at`], [`Run::addr_at`] and
-//! [`Run::offsets_covered_by`] (with the [`OffsetRange`] it answers in) are
-//! crate-private, the first two carrying a `k ≤ width` precondition nothing
-//! can report and the third an operand the level-class discipline governs.
+//! they are total and published; [`Run::tumbler_at`] is private to this
+//! module and [`Run::addr_at`] and [`Run::offsets_covered_by`] (with the
+//! [`OffsetRange`] it answers in) are crate-private, the first two carrying a
+//! `k ≤ width` precondition nothing can report and the third an operand the
+//! level-class discipline governs.
 
 use std::borrow::Borrow;
 use std::error::Error;
@@ -267,14 +268,14 @@ impl Run {
     /// [`iextent`](Run::iextent), the run-list's I-adjacency test — is asked
     /// of the run through one of those, so the argument is discharged once.
     ///
-    /// CRATE-PRIVATE for the sake of that same precondition, as
-    /// [`addr_at`](Run::addr_at) beside it is: an offset is a thing a caller
-    /// can get wrong, and outside this crate there is no question about a
-    /// run's positions that needs one. A consumer wanting the positions asks
+    /// PRIVATE to this module, for the sake of that same precondition: an
+    /// offset is a thing a caller can get wrong, and the run's own arithmetic
+    /// — [`addr_at`](Run::addr_at), [`reach`](Run::reach) and the boundary
+    /// search — is its only caller. A consumer wanting the positions asks
     /// [`addrs`](Run::addrs) or [`into_addrs`](Run::into_addrs); one wanting
     /// the exclusive end asks [`reach`](Run::reach), which takes no offset at
     /// all. Every published question about a run is therefore total.
-    pub(crate) fn tumbler_at(&self, k: &Nat) -> Tumbler {
+    fn tumbler_at(&self, k: &Nat) -> Tumbler {
         debug_assert!(
             *k <= self.width,
             "run offset past the reach: k ≤ width is the caller's obligation"

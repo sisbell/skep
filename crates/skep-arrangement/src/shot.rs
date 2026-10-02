@@ -1,20 +1,39 @@
-//! §Request-side values of the PUBLISH SHOT (PUB-2.33, PUB-8.1): the
+//! §The PUBLISH SHOT's values (PUB-2.33, PUB-8.1): its request — the
 //! client-supplied I-address runs with the origin each windows, the base the
-//! staged draft was taken from, and the whole shot — the composite's
+//! staged draft was taken from, and the whole shot, the composite's
 //! arrangement input, taken FROM THE CLIENT and never read off any draft's
-//! arrangement at commit.
+//! arrangement at commit — and its ADDRESS FORM on both sides of the commit:
+//! [`Shot::address_form`] for the request, [`M5State::address_form_of`] for the
+//! member it minted, and [`run_origin_document`], the classifier both ask. The
+//! two sides must agree run for run, so they are stated in one file.
 //!
 //! Three values rather than loose arguments, for the reason [`crate::VPos`]
 //! and [`crate::VSpec`] are values: the pieces of a shot travel together, and
 //! a `base` handed over without the extent its copy took would be a base the
 //! composite cannot compose against (PUB-2.42).
 
-use skep_address::{Address, Nat};
+use num_traits::Zero;
+use skep_address::{content_subspace, document_of, Address, Nat};
 
 use crate::chain::trunk_of;
-use crate::ops::run_origin_document;
 use crate::run::Run;
 use crate::runlist::extend_or_push_run;
+use crate::state::M5State;
+
+/// A supplied run's ORIGIN DOCUMENT — the trunk (PUB-2.15) of the document
+/// its addresses were minted under, `document_of` of its start and then
+/// `trunk_of` — provided the start is a CONTENT element; `None` for a link
+/// element or an address with no document. What the source gate asks about
+/// and `Withheld` names (PUB-8.4's `site.addr`), what a shot's stated
+/// `origin` must project to, and what classes a run in the ADDRESS FORM on
+/// both of its sides ([`Shot::address_form`], [`M5State::address_form_of`]).
+/// Pure address arithmetic: it reads nothing.
+pub(crate) fn run_origin_document(run: &Run) -> Option<Address> {
+    if run.i_start().subspace() != Some(&content_subspace()) {
+        return None;
+    }
+    document_of(run.i_start()).map(|d| trunk_of(&d))
+}
 
 /// One client-supplied run of a publish shot (PUB-2.33 as amended,
 /// PUB-8.1): the arrangement the shooting client rendered and the person
@@ -132,8 +151,8 @@ impl Shot {
     /// accumulator, exactly as the member's run-list will hold them; the
     /// copied runs keep their boundaries, which the value form never spells.
     /// So what this answers for a request is what
-    /// [`M5State::address_form_of`](crate::M5State::address_form_of) answers
-    /// for the member it mints, read back with the shot's `placed` count.
+    /// [`M5State::address_form_of`] answers for the member it mints, read
+    /// back with the shot's `placed` count.
     ///
     /// Pure address arithmetic over the request, as the family test at the
     /// commit is: the origin document is derived from each run's own start
@@ -167,9 +186,9 @@ impl Shot {
 /// shot mints, classed by the family the commit gives it — the two classes
 /// the signed body spells apart. Answered for the REQUEST by
 /// [`Shot::address_form`] and for the committed MEMBER by
-/// [`M5State::address_form_of`](crate::M5State::address_form_of), which agree
-/// run for run: that agreement is what lets a verifier holding the member,
-/// and no request, compose the body the client signed.
+/// [`M5State::address_form_of`], which agree run for run: that agreement is
+/// what lets a verifier holding the member, and no request, compose the body
+/// the client signed.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PlacedSegment {
     /// A run the commit COPIES IN — the shot document's own I-space by
@@ -184,4 +203,46 @@ pub enum PlacedSegment {
     /// member's arrangement holds the run, maximally merged, and clipped to
     /// the client's placed positions.
     Window(Run),
+}
+
+impl M5State {
+    /// THE ADDRESS FORM READ AT THE MEMBER (l6-A4 = r6-4, owner-ruled
+    /// 2026-09-29): `member`'s first `placed` content positions — the runs
+    /// the client placed, which its entry signature covers, ahead of the
+    /// base's carried tail — as [`PlacedSegment`]s in V-order, each run
+    /// classed by its ORIGIN DOCUMENT as the commit left it: a run of the
+    /// member's own trunk is [`Copied`](PlacedSegment::Copied) — the shot
+    /// document's own I-space placed by reference, and the staging draft's
+    /// text the commit re-inserted under that trunk, told apart by nothing
+    /// here and signed alike, BY VALUE — and a run of any other document is a
+    /// [`Window`](PlacedSegment::Window), signed BY ADDRESS. The runs are the
+    /// arrangement's own, maximally merged, the last one CLIPPED where the
+    /// client's positions end; so what this answers for a committed member is
+    /// what [`Shot::address_form`] answered for the request that minted it,
+    /// and a verifier holding the member composes the shot's signed body with
+    /// no request in hand. `placed` is the caller's — the member's own
+    /// [`shot_terms`](M5State::shot_terms), or a count a checker chooses. A
+    /// member with fewer positions than `placed` answers what it has; an
+    /// absent arrangement answers nothing.
+    pub fn address_form_of(&self, member: &Address, placed: &Nat) -> Vec<PlacedSegment> {
+        let trunk = trunk_of(member);
+        let mut left = placed.clone();
+        let mut out = Vec::new();
+        for run in self.content_runs(member) {
+            if left.is_zero() {
+                break;
+            }
+            // A propagating site: the start is a resident run's own, and a
+            // width clipped to the positions left is at least one.
+            let taken = if *run.width() > left {
+                Run { i_start: run.i_start.clone(), width: left.clone() }
+            } else {
+                run.clone()
+            };
+            left = &left - taken.width();
+            let copied = run_origin_document(&taken).as_ref() == Some(&trunk);
+            out.push(if copied { PlacedSegment::Copied(taken) } else { PlacedSegment::Window(taken) });
+        }
+        out
+    }
 }

@@ -174,31 +174,52 @@
 
 #![forbid(unsafe_code)]
 
-mod chain;
-mod error;
-mod ops;
-mod ownership;
-mod provenance;
-mod reads;
+// The `Run`: one placed I-extent, its position arithmetic, its one Span
+// lift, its constructor and decode door.
 mod run;
+// The implicit-position run-list: splice, contract, reorder, the merge
+// condition and its one accumulator, the mapping blocks, the lazy walks.
 mod runlist;
-mod seat;
-mod shot;
-mod state;
+// R, the append-only provenance relation, and its decode door.
+mod provenance;
+// Request-side V-space values: `VPos`, `VSpec`, the ordinal V-span shape.
 mod vspace;
+// The version-chain reads: trunk, head, publication, the two surfaces.
+mod chain;
+// The slice: `M5State`, one document's arrangement and the absent-⇒-empty
+// convention, the journal delta `M5Rec`, and the fold.
+mod state;
+// The reads on the slice: resolve, point, image, project, deletions, the
+// counts, and the admission predicates the ops ask.
+mod reads;
+// The publish shot: its request values and its address form, both sides.
+mod shot;
+// The deposit declaration and the deposit class's types.
+mod deposit;
+// `Caller` and `gate_write`, the write surface's one front door.
+mod ownership;
+// The typed rejections, one enum per operation.
+mod error;
+// Link seating: the step M7's MAKELINK composes, and its test-only twin.
+mod seat;
+// `Vstream` and what its operations share; one file per operation beneath.
+mod ops;
 
 #[cfg(test)]
 pub(crate) mod testutil;
 
 pub use chain::{deposit_surface, published_target, reading_surface, trunk_head, trunk_of};
+pub use deposit::{deposit_class_types, Deposit};
 pub use error::{
     CopyError, DeleteError, InsertError, PublishError, RearrangeError, SeatError, VersionError,
 };
-pub use ops::{deposit_class_types, Deposit, Vstream, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES};
+pub use ops::{Vstream, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES};
 pub use ownership::Caller;
 pub use run::{Run, RunError};
 pub use runlist::Runs;
-pub use seat::{seat_link, stage_seat_link};
+#[cfg(feature = "test-hooks")]
+pub use seat::seat_link;
+pub use seat::stage_seat_link;
 pub use shot::{Base, PlacedSegment, Shot, ShotRun};
 pub use state::{M5Rec, M5State, ShotTerms};
 pub use vspace::{as_ordinal_vspan, is_ordinal_vspan, ordinal_vspan, OrdinalVSpan, VPos, VSpec};

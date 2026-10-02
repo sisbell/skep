@@ -1,13 +1,17 @@
-//! §C/§8 — link seating: the pure step composed into M7's MAKELINK, and its
-//! contract-required standalone transact-wrapped twin.
+//! §C/§8 — link seating: the pure step composed into M7's MAKELINK, and,
+//! under the `test-hooks` feature, its contract-required standalone
+//! transact-wrapped twin.
 
 use skep_address::{document_of, link_subspace, Address};
+#[cfg(feature = "test-hooks")]
 use skep_kernel::{Kernel, Seq, TxnError, WorldState};
+#[cfg(feature = "test-hooks")]
 use skep_namespace::M3State;
 
 use crate::error::SeatError;
 use crate::run::Run;
 use crate::state::{M5Rec, M5State};
+#[cfg(feature = "test-hooks")]
 use crate::HasM5;
 
 /// Append an already-allocated home link `link` at doc's next link
@@ -58,10 +62,10 @@ use crate::HasM5;
 ///   `origin(link)`, but a link address in any document's link subspace is a
 ///   tumbler anyone can spell.
 ///
-/// [`seat_link`] below discharges the first two and NOT the third. M7's
-/// MAKELINK discharges all three: it runs its own registration-and-ω gate on
-/// `home` before composing this step, in the same transaction and under the
-/// same key it holds for its K.λ mint.
+/// `seat_link`, the `test-hooks` twin below, discharges the first two and NOT
+/// the third. M7's MAKELINK discharges all three: it runs its own
+/// registration-and-ω gate on `home` before composing this step, in the same
+/// transaction and under the same key it holds for its K.λ mint.
 ///
 /// Returns the delta; M7 lifts via `.into()` and stages it inside MAKELINK's
 /// K.λ + K.μ⁺_L transaction. The fold appends at `n_L(d) + 1` and records NO
@@ -94,9 +98,14 @@ pub fn stage_seat_link(m5: &M5State, doc: &Address, link: &Address) -> Result<M5
 /// with no link allocation in the same composite. Production seats a home
 /// link through MAKELINK, which gates the write on `doc`'s registration and
 /// effective owner and then composes `stage_seat_link` into its transaction
-/// under M3's `link_lock_key(doc)` — the same key held here. Mirrors M4's
-/// `#[doc(hidden)] write`. Returns the seated link address and the commit
-/// `Seq`.
+/// under M3's `link_lock_key(doc)` — the same key held here.
+///
+/// So it is compiled only under the `test-hooks` feature (default off), which
+/// this crate's suites and skep-retrieval's turn on through their
+/// dev-dependencies: a build that compiles no test holds none of it, and a
+/// production path that reached for it would not compile. Returns the seated
+/// link address and the commit `Seq`.
+#[cfg(feature = "test-hooks")]
 #[doc(hidden)]
 pub fn seat_link<W>(
     kernel: &Kernel<W>,

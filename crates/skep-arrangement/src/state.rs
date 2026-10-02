@@ -1,26 +1,32 @@
-//! §A / §3–§8 folds — M5's `WorldState` slice ([`M5State`]), its sole journal
-//! delta ([`M5Rec`]), and the pure fold ([`M5State::apply_m5`]).
+//! §A / §3–§8 folds — M5's `WorldState` slice ([`M5State`]), one document's
+//! arrangement and the absent-⇒-empty convention every read of the map goes
+//! through ([`M5State::arrangement_of`]), its sole journal delta ([`M5Rec`]),
+//! and the pure fold ([`M5State::apply_m5`]), which reaches an arrangement
+//! through this file's own accessors and calls nothing `reads.rs` defines.
 
-use num_traits::{One, Zero};
+use std::sync::LazyLock;
+
+use num_traits::One;
 use serde::{Deserialize, Serialize};
 use skep_address::{content_subspace, link_subspace, Address, Nat};
 use skep_namespace::first_version_address;
 
 use crate::chain::trunk_of;
-use crate::ops::run_origin_document;
 use crate::provenance::Provenance;
 use crate::run::Run;
 use crate::runlist::RunList;
-use crate::shot::PlacedSegment;
 
 /// One document's POOM: the content and link run-lists (§Core data model).
 /// Exactly these two subspaces exist, which is a fact about the arrangement
 /// and so is answered by [`list`](DocArrangement::list) rather than restated
-/// by each read that routes on a subspace numeral.
+/// by each read that routes on a subspace numeral. The two lists are private
+/// to this module: a read reaches one through `list` or through
+/// [`M5State::content_list`]/[`M5State::link_list`], and only the fold
+/// replaces one.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct DocArrangement {
-    pub(crate) content: RunList,
-    pub(crate) link: RunList,
+    content: RunList,
+    link: RunList,
 }
 
 impl DocArrangement {
@@ -37,6 +43,11 @@ impl DocArrangement {
         }
     }
 }
+
+/// The arrangement an ABSENT document reads as: the lazy convention stated on
+/// [`M5State`], made a value so [`M5State::arrangement_of`] can hand back a
+/// borrow on either branch. Once-only initialization of a `Default`.
+static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangement::default);
 
 /// Authoritative folded state: the per-document POOM, and the provenance
 /// relation R (`Provenance`) co-located beside it (ASN-0075). The arrangement
@@ -331,6 +342,31 @@ impl M5State {
         M5State::default()
     }
 
+    /// `doc`'s arrangement, or the EMPTY one — the absent-⇒-empty convention
+    /// (the eager-lazy split with M3, stated on [`M5State`]) applied ONCE, so
+    /// no read decides for itself what an absent document answers and the
+    /// eleventh read inherits the convention rather than restating it. Every
+    /// read of the map — the folds' included, which clone what they will
+    /// update and read the content list a placement splices or a fork shares
+    /// through [`content_list`](M5State::content_list) — comes through here, which
+    /// leaves `arrangements` touched directly only by the writes that own it:
+    /// the folds' `update`, and the no-op arm that hands the map back whole.
+    pub(crate) fn arrangement_of(&self, doc: &Address) -> &DocArrangement {
+        self.arrangements
+            .get(doc)
+            .unwrap_or_else(|| &*EMPTY_ARRANGEMENT)
+    }
+
+    /// `doc`'s content run-list — empty for an absent document.
+    pub(crate) fn content_list(&self, doc: &Address) -> &RunList {
+        &self.arrangement_of(doc).content
+    }
+
+    /// `doc`'s link run-list — empty for an absent document.
+    pub(crate) fn link_list(&self, doc: &Address) -> &RunList {
+        &self.arrangement_of(doc).link
+    }
+
     /// The arrangements map with `doc`'s content run-list replaced by `f` of
     /// the current one — an absent doc reading as the empty arrangement,
     /// asked of [`arrangement_of`](M5State::arrangement_of) as every read
@@ -419,46 +455,6 @@ impl M5State {
     /// One map lookup.
     pub fn shot_terms(&self, member: &Address) -> Option<&ShotTerms> {
         self.shot_terms.get(member)
-    }
-
-    /// THE ADDRESS FORM READ AT THE MEMBER (l6-A4 = r6-4, owner-ruled
-    /// 2026-09-29): `member`'s first `placed` content positions — the runs
-    /// the client placed, which its entry signature covers, ahead of the
-    /// base's carried tail — as [`PlacedSegment`]s in V-order, each run
-    /// classed by its ORIGIN DOCUMENT as the commit left it: a run of the
-    /// member's own trunk is [`Copied`](PlacedSegment::Copied) — the shot
-    /// document's own I-space placed by reference, and the staging draft's
-    /// text the commit re-inserted under that trunk, told apart by nothing
-    /// here and signed alike, BY VALUE — and a run of any other document is a
-    /// [`Window`](PlacedSegment::Window), signed BY ADDRESS. The runs are the
-    /// arrangement's own, maximally merged, the last one CLIPPED where the
-    /// client's positions end; so what this answers for a committed member is
-    /// what [`Shot::address_form`](crate::Shot::address_form) answered for the
-    /// request that minted it, and a verifier holding the member composes the
-    /// shot's signed body with no request in hand. `placed` is the caller's —
-    /// the member's own [`shot_terms`](M5State::shot_terms), or a count a
-    /// checker chooses. A member with fewer positions than `placed` answers
-    /// what it has; an absent arrangement answers nothing.
-    pub fn address_form_of(&self, member: &Address, placed: &Nat) -> Vec<PlacedSegment> {
-        let trunk = trunk_of(member);
-        let mut left = placed.clone();
-        let mut out = Vec::new();
-        for run in self.content_runs(member) {
-            if left.is_zero() {
-                break;
-            }
-            // A propagating site: the start is a resident run's own, and a
-            // width clipped to the positions left is at least one.
-            let taken = if *run.width() > left {
-                Run { i_start: run.i_start.clone(), width: left.clone() }
-            } else {
-                run.clone()
-            };
-            left = &left - taken.width();
-            let copied = run_origin_document(&taken).as_ref() == Some(&trunk);
-            out.push(if copied { PlacedSegment::Copied(taken) } else { PlacedSegment::Window(taken) });
-        }
-        out
     }
 
     /// The pure/deterministic M2 fold (§3–§8 folds; M2's `apply` obligation),

@@ -44,6 +44,9 @@ skep-content = { path = "../skep-content" }
 skep-arrangement = { path = "../skep-arrangement" }
 
 [dev-dependencies]
+# M5 again with `test-hooks` on: its integration suite seats links through
+# `seat_link`, the test-only twin M5 compiles under that feature alone.
+skep-arrangement = { path = "../skep-arrangement", features = ["test-hooks"] }
 # bincode is M2's actual wire format — the marshaling-policy tests serialize
 # M6's Serialize-only result/error types with it (M6 journals nothing, so
 # there is no round trip to test: no Deserialize anywhere by design).

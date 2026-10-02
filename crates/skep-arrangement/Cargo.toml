@@ -8,6 +8,16 @@ license.workspace = true
 description = "M5 — Arrangements & Editing (Vstream): the per-document mutable V→I arrangement (POOM) plus the append-only content-provenance relation R; editing/versioning operations and the publish shot, the version-chain reads (head-float and the deposit surface), link seating for M7, forward/reverse arrangement reads, the R read surface, and the birth-extent read"
 readme = "README.md"
 
+[features]
+# `test-hooks` compiles in the test-only surface: `seat_link`, the standalone
+# transact-wrapped twin of `stage_seat_link` the composition contract asks
+# for. It applies no ownership gate and seats with no link allocation, so
+# production seats through M7's MAKELINK and never through it. DEFAULT-OFF:
+# this crate's tests turn it on through the self dev-dependency below,
+# skep-retrieval's on their own line, so a build that compiles no test
+# compiles none of it.
+test-hooks = []
+
 [dependencies]
 # The design's mandated slice shapes (§Core data model): persistent im
 # collections for the three fields of M5's slice — arrangements keyed by the
@@ -41,6 +51,11 @@ skep-namespace = { path = "../skep-namespace" }
 skep-content = { path = "../skep-content" }
 
 [dev-dependencies]
+# This crate itself with `test-hooks` on, so its integration tests
+# (tests/it, outside this library's `cfg(test)`) compile against `seat_link`
+# under a plain `cargo test` or workspace run, no flag added. A build that
+# compiles no test never reads this table.
+skep-arrangement = { path = ".", features = ["test-hooks"] }
 # bincode is M2's actual wire format — the round-trip tests exercise the real
 # journal/checkpoint encoding; tempfile hosts the durable-recovery test.
 bincode.workspace = true

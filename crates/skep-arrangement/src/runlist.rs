@@ -47,7 +47,7 @@ use crate::run::{OffsetRange, Run};
 ///
 /// Asked of the left run rather than computed here: the ordinal advance and
 /// its TA7a safety argument belong to [`Run`], which states them once.
-pub(crate) fn i_adjacent(left: &Run, right_start: &Address) -> bool {
+fn i_adjacent(left: &Run, right_start: &Address) -> bool {
     left.reach() == *right_start.tumbler()
 }
 
@@ -571,7 +571,7 @@ impl RunList {
     /// The same decomposition collected, for this module's tests to compare
     /// against a literal sequence.
     #[cfg(test)]
-    pub(crate) fn runs(&self) -> Vec<Run> {
+    fn runs(&self) -> Vec<Run> {
         self.0.iter().cloned().collect()
     }
 

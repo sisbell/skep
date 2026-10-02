@@ -938,6 +938,7 @@ dependencies = [
  "num-traits",
  "serde",
  "skep-address",
+ "skep-arrangement",
  "skep-content",
  "skep-kernel",
  "skep-namespace",

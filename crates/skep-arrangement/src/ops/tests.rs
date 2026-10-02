@@ -15,13 +15,17 @@
 
 use serde::{Deserialize, Serialize};
 use skep_content::ContentStore;
-use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource};
-use skep_namespace::M3State;
+use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, TxnError};
+use skep_namespace::{M3State, PrincipalId};
 
 use super::*;
-use crate::shot::{Base, ShotRun};
-use crate::state::{M5State, ShotTerms};
+use crate::error::{CopyError, DeleteError, InsertError, PublishError, RearrangeError};
+use crate::ownership::Caller;
+use crate::shot::{Base, Shot, ShotRun};
+use crate::state::{M5Rec, M5State, ShotTerms};
 use crate::testutil::{a, ca, doc1, doc2, n, pca, pdoc, run, seeded_m3, vp, vspan};
+use crate::vspace::VSpec;
+use crate::HasM5;
 
 /// Unwrap an op's typed rejection (`TxnError::Rejected(E)` — surfaced
 /// verbatim, per M2's transact contract).
@@ -79,42 +83,6 @@ fn the_handle_prints_without_its_world_being_printable() {
     // reason the impl is written out rather than derived.
     let k = mini_kernel();
     assert_eq!(format!("{:?}", Vstream::new(&k)), "Vstream");
-}
-
-#[test]
-fn the_absent_declaration_is_the_default() {
-    // The wire reads an absent `deposit` field as no declaration
-    // (PUB-2.64), so the value a caller gets without saying anything is
-    // the one that clears no refusal — never the exemption.
-    assert_eq!(Deposit::default(), Deposit::Undeclared);
-}
-
-/// The set as spelled: ENROLL then RETIRE, each the ghost home document's
-/// subspace-3 element at its commons ordinal — where no M3 door mints, so
-/// no content address equals a member — pairwise prefix-free, since
-/// membership is equality and a member beneath another would be a subtype
-/// the door never reads as one. The pin EQUAL to the daemon's constants
-/// and prefix-free against the engine's ledger is the daemon suite's, which
-/// can see all three spellings; this crate sits below the other two.
-#[test]
-fn the_deposit_class_types_are_enroll_and_retire_in_the_ghost_homes_type_subspace() {
-    let types = deposit_class_types();
-    let spelled: Vec<String> = types.iter().map(|ty| ty.tumbler().to_string()).collect();
-    assert_eq!(spelled, ["1.1.0.1.0.1.0.3.1", "1.1.0.1.0.1.0.3.2"]);
-    for ty in types {
-        assert_eq!(document_of(ty), Some(ghost_home_document()), "{ty:?}: homed in the ghost document");
-        assert_eq!(ty.subspace(), Some(&n(COMMONS_TYPE_SUBSPACE)), "{ty:?}: the type subspace");
-    }
-    let (enroll, retire) = (types[0].tumbler(), types[1].tumbler());
-    assert!(!skep_address::is_prefix(enroll, retire) && !skep_address::is_prefix(retire, enroll));
-}
-
-/// The set is ONE value, held: two reads hand back the same slice, not
-/// two equal ones — the door consults it on every declared insert into a
-/// published document, and a member is nine big-integer components.
-#[test]
-fn the_deposit_class_types_are_one_held_value_rather_than_a_construction_per_read() {
-    assert!(std::ptr::eq(deposit_class_types(), deposit_class_types()));
 }
 
 /// A world carrying a content store beside the arrangement — the one

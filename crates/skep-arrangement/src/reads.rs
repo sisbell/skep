@@ -19,47 +19,15 @@
 //! to lift. Both routes reach [`Run::iextent`], where the obligation is stated
 //! (Conflicts #8).
 
-use std::sync::LazyLock;
-
 use num_traits::One;
 use skep_address::{difference_sets, union, Address, Nat, Span, SpanSet};
 
 use crate::run::Run;
-use crate::runlist::{RunList, Runs};
-use crate::state::{DocArrangement, M5State};
+use crate::runlist::Runs;
+use crate::state::M5State;
 use crate::vspace::{as_ordinal_vspan, ordinal_vspan, VPos};
 
-/// The arrangement an ABSENT document reads as: the lazy convention stated on
-/// [`M5State`], made a value so [`M5State::arrangement_of`] can hand back a
-/// borrow on either branch. Once-only initialization of a `Default`.
-static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangement::default);
-
 impl M5State {
-    /// `doc`'s arrangement, or the EMPTY one — the absent-⇒-empty convention
-    /// (the eager-lazy split with M3, stated on [`M5State`]) applied ONCE, so
-    /// no read decides for itself what an absent document answers and the
-    /// eleventh read inherits the convention rather than restating it. Every
-    /// read of the map — the folds' included, which clone what they will
-    /// update and read the content list a placement splices or a fork shares
-    /// through [`content_list`](M5State::content_list) — comes through here, which
-    /// leaves `arrangements` touched directly only by the writes that own it:
-    /// the folds' `update`, and the no-op arm that hands the map back whole.
-    pub(crate) fn arrangement_of(&self, doc: &Address) -> &DocArrangement {
-        self.arrangements
-            .get(doc)
-            .unwrap_or_else(|| &*EMPTY_ARRANGEMENT)
-    }
-
-    /// `doc`'s content run-list — empty for an absent document.
-    pub(crate) fn content_list(&self, doc: &Address) -> &RunList {
-        &self.arrangement_of(doc).content
-    }
-
-    /// `doc`'s link run-list — empty for an absent document.
-    fn link_list(&self, doc: &Address) -> &RunList {
-        &self.arrangement_of(doc).link
-    }
-
     /// V→I resolution (§2; ASN-0058 C0; ASN-0118 accept-and-intersect):
     /// I-runs covering an ORDINAL-LEVEL depth-2 V-span (width `[0, n]`,
     /// action point 2), V-ordered, clipped to the arranged range. The span's

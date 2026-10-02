@@ -266,9 +266,11 @@ that a request is built and a response read through `skep_febe` alone; and
 
 ## The daemon, `skepd`
 
-`skepd` owns two decisions of its own: the session layer's gates (who may
-act, and what a credential write may do) and the cadence of the published
-head. Everything else it delegates to the stores through the engine.
+`skepd` owns three decisions of its own: the session layer's gates (who
+may act, and what a credential write may do), the cadence of the published
+head, and the media door (whether a value a write carries is a picture's
+reference cell, and what a write that would mint one is answered).
+Everything else it delegates to the stores through the engine.
 
 Its modules form six layers. A module names only modules in its own layer
 or below it, never above; `crates/skepd/tests/it/tidy.rs` checks it. A
@@ -304,9 +306,11 @@ write passes down through them in this order:
 │                    │                 the attest store    │
 │                    ├── sidecar.rs   commits.log         │
 │                    └── classify.rs  a commit's documents│
+│                    media.rs · media/door.rs             │
+│                    the media door, the cell's one step  │
 ├─────────────────────────────────────────────────────────┤
 │ 6 LEAVES           codec · history · permits · serial · │
-│                    limits · notice                      │
+│                    limits · notice · media/cell         │
 └─────────────────────────────────────────────────────────┘
        │
        ▼
@@ -357,13 +361,27 @@ nothing of it.
    - `write_path/classify.rs` — which documents a commit touched, and
      which of its op's terms the journal can name for a bare position —
      the one place the feed asks the world anything.
+
+   Beside the write path, at the same layer: `media.rs` with
+   `media/door.rs` — THE MEDIA DOOR (media lane A), the one step the
+   plain write sequence takes between its admission and the commit for a
+   value naming the picture cell's kind: `published_target` at a
+   published target whatever the declaration, the shot's owner test
+   (`not_owner` naming the draft), and the two refusals a draft's cell
+   meets while no upload exists. It reads the op's values and, for a
+   shot, the staging draft's own runs off the locked snapshot, through
+   M5's and M4's public reads; from lane B it reads the lease store and
+   the blob store too, which is why it is a step of its own and never a
+   producer of the session layer's admission.
 6. **The leaves** — `codec.rs` with `codec/marshal.rs` (the JSON wire
    format: parse, and marshal), `history.rs` (reading the world at an
    earlier position), `permits.rs` (the counting permit both bounded pools
    use), `serial.rs` (the write-serialization lock and its guard),
-   `limits.rs` (request body caps), `notice.rs` (the operator's log line).
-   None of these knows anything about the daemon; a leaf imports only
-   leaves.
+   `limits.rs` (request body caps, and the cell's cap), `notice.rs` (the
+   operator's log line), `media/cell.rs` (the picture's reference cell:
+   its schema, its one parser under the canonical rule, its encoder, its
+   designation). None of these knows anything about the daemon; a leaf
+   imports only leaves.
 
 `lib.rs` declares the daemon's modules in layer order, then the fuzz
 harness and the crate's public surface; `main.rs` is the binary.
@@ -396,6 +414,15 @@ imports it.
 - **One write path.** Every write to the world goes through
   `write_path`, one at a time. Only the write path records to the feed and
   to `commits.log`.
+- **The cell's parser is the one parser; the door is the one media
+  step.** `media/cell.rs`'s `parse` is the daemon's one reading of a
+  picture cell's bytes, under the canonical rule (`parse(b)` answers a
+  cell only where `b == encode(parse(b))`), and the vector set under
+  `crates/skepd/tests/it/fixtures/media/` is what every other parser of
+  the cell — the shell's, the browser page's — is held to. `media/door.rs`
+  is the one place the daemon acts on that reading: no producer of the
+  session layer's admission reads a value's bytes for the cell, and no
+  route serves one.
 - **The daemon writes only its own files.** The journal and checkpoints
   are the kernel's. The daemon's own files are `commits.log` — its
   testimony about what it committed, for whom, and whether the entry was

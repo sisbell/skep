@@ -11,7 +11,9 @@ use skep_identity::IdentityState;
 use skep_kernel::{Attestation, Snapshot};
 
 use super::actor::Resolved;
-use super::reply::{credential_refused, op_answer, refuse_scan_busy, with_signal, Reply};
+use super::reply::{
+    credential_refused, media_door_refused, op_answer, refuse_scan_busy, with_signal, Reply,
+};
 use super::request::HttpRequest;
 use super::scan::ScanBusy;
 use super::{Daemon, Moment};
@@ -23,6 +25,7 @@ use crate::auth::policy::{
 use crate::auth::session::Actor;
 use crate::auth::LockWrite;
 use crate::codec::{key_set_reply, DaemonOp};
+use crate::media::door::media_door;
 #[cfg(any(test, feature = "test-hooks"))]
 use crate::notice;
 use crate::serial::SerialGuard;
@@ -215,9 +218,11 @@ impl Daemon {
     /// The PLAIN sequence (AUTH-3.35): the read lock → the serialization
     /// lock → [`Daemon::locked_state`] (the head snapshot, the fold beside
     /// it, and this site's own resolve) → `plain_admission`'s ordered
-    /// producers → execute. The serial lock is taken before the snapshot so
-    /// the gates' answers and the execute they gate stand on one committed
-    /// state; the producers' ORDER is `plain_admission`'s, not this site's.
+    /// producers → the media door → execute. The serial lock is taken before
+    /// the snapshot so the gates' answers and the execute they gate stand on
+    /// one committed state; the producers' ORDER is `plain_admission`'s, not
+    /// this site's, and the media door's place — after every producer, ahead
+    /// of the store — is [`crate::media::door`]'s to state.
     fn plain_sequence(
         &self,
         meta: FrameMeta,
@@ -260,6 +265,19 @@ impl Daemon {
                 return with_signal(credential_refused(meta.kind, &r), closed);
             }
         };
+        // THE MEDIA DOOR (media lane A; `media::door`): one step of its own,
+        // after every producer above and ahead of the store, on the same
+        // locked snapshot the commit will read — so the check that passed
+        // and the commit it guards are one interval. A step and never a
+        // producer: from lane B it reads the lease store and `blobs/`, which
+        // no producer may. Its refusal commits nothing and takes the head
+        // writer's turn as an admission refusal does (l7-C1); the admitted
+        // attestation is dropped with the write, as every refusal ahead of
+        // the store drops it.
+        if let Some(refusal) = media_door(snap.world(), &frame.op, binding.principal) {
+            self.writes.take_turn_after_refusal(&serial);
+            return with_signal(media_door_refused(meta.kind, refusal), closed);
+        }
         // THE ENTRY'S SIGNEDNESS, for the change feed's row (D12): the marker
         // the admission filled — the admitted value itself, which the attest
         // store appends beside `commits.log` when the write path records the

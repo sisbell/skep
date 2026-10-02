@@ -1334,6 +1334,14 @@ always carrying a machine `detail` token, and `permanent` at every token
 but the two attestation tokens, which carry their own classes
 (§Credential refusals below).
 
+Media (lane A, the fence): a value naming the picture cell's kind at a
+published target answers `published_target` whatever the insert's
+declaration; a shot re-inserting one from a draft the caller does not own
+answers `not_owner` naming the draft; in a draft, and at the owner's own
+shot, it answers `credential_refused` with one of the media door's two
+tokens — unbound cell, and unknown cell schema — `permanent` both,
+spelled and tabled in §Media under §Operations.
+
 Registration/residence: `home_not_registered`, `doc_not_registered`,
 `source_not_registered`, `parent_not_registered`, `not_registered`,
 `original_not_resident`, `endpoint_not_resident`.
@@ -1699,6 +1707,13 @@ like the family's, each naming the act that exists):
   refused the same at the pre-claim gate. The head writer's own rows are
   no credential deposits and never meet it. The act that exists is an
   enrolment under an account of your own.
+
+**The media door's two tokens** (media lane A; §Media under
+§Operations): `unbound_cell` and `unknown_cell_schema`, PERMANENT like the
+family's, answered at the write path's media step — behind every gate
+above and ahead of the store — to a value naming the picture cell's kind
+in a draft, or at the owner's own shot; stated with their faces and their
+interim standing at their own section.
 
 Every publish-class write of the three ops on a claimed board is judged;
 the system account's own writes (the head document's, owned by
@@ -2311,6 +2326,129 @@ reference and the draft's two as fresh identity:
 ```json
 {"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.7","op":"publish","runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"},{"i_start":"1.0.1.0.7.0.1.1","origin":"1.0.1.0.7","width":"2"}]}
 ```
+
+### Media — the reference cell and its door (lane A; the fence)
+
+A PICTURE is a document whose content is ONE REFERENCE CELL — a composite
+value (`{"atom": "<str>"}`, §Value encodings) whose bytes are one JSON
+object naming its kind (DOCTRINE D13): the cell's `type`, the `hash` of
+the file's bytes and the file's `size`, and nothing else. What this
+build carries is media's WRITE-PATH HALF, fenced before the first served
+board (the media record's §The publication seam; STOP-2): the daemon
+PARSES the cell at every `insert` and every `publish`, by one parser
+under one rule, and refuses every path that would mint one, because no
+upload, no blob store, no index and no fetch route exist yet. Nothing
+here serves a byte, and no cell lands on any board of this build.
+
+**The cell's schema (v1).** ONE JSON object, three members in THIS
+order, no whitespace, nothing else:
+
+| member | JSON type | value |
+| --- | --- | --- |
+| `type` | string | the cell kind's address — INTERIM `1.1.0.1.0.1.0.3.89` (the pins below) |
+| `hash` | string | BLAKE3's default hash of the file's bytes: 32 bytes, written as 64 LOWERCASE hexadecimal characters |
+| `size` | number | the file's byte count: an integer, `0` to 2^53 − 1 |
+
+The canonical form is exactly
+`{"type":"1.1.0.1.0.1.0.3.89","hash":"<64 hex>","size":<count>}`, and
+THE ONE RULE at every parser of a cell — the daemon's, the shell's, the
+browser page's — is the record's own admission rule (§The claim ceremony
+and credentials) applied to the cell: `parse(b)` answers a cell only
+where `b == encode(parse(b))`. So a second `hash` member, a `size` as a
+string, an `extent` member (the v1 cell carries none — the extent is
+video-era), the members in any other order, uppercase hex, a hash of 63
+or 65 characters, a space, a trailing byte — each is NO CELL, at every
+parser alike, and a body past the cell's cap — 1024 bytes — is parsed by
+no reader of a cell at all. The admitted and refused strings are ONE
+VECTOR SET, `crates/skepd/tests/it/fixtures/media/cells.json`, which
+every parser of the cell runs in its own gate; a parser is never derived
+from another parser.
+
+A value NAMES THE KIND when its `type` member is the kind's address,
+whatever the rest of it holds. A value naming the kind that is no v1
+cell — a second schema's form, a malformed one, the two-hash body — is
+one the daemon HALTS on at a permanent act, naming it (D13's carve-out),
+never one it admits as absent: admitted, it would stand unbound the day a
+second schema is pinned. A value that does not name the kind — prose, a
+predicate def, a record of another kind, a body past the cap — is an
+ordinary value and meets nothing here.
+
+**The designation.** The cell's schema names its hash function
+`blake3`, and the hash is FROZEN as an algorithm tag is: a change is a
+second schema under the same kind, never an edit to this one. Where a
+hash becomes a key — the blob store's `blobs/<designation>/<hex>`, the
+lease, the index, from lane B — the designation and the hex are the key
+together, so a second schema's hash of the same width is never read
+under this one's rule.
+
+**The door.** ONE step of the write path, taken after the plain
+sequence's admission — the mint class, the `replaces` fence, the
+board-state gate and the write-path check (§Credential refusals) all
+stand AHEAD of it — and before the store, on the locked snapshot the
+commit will read, so the check that passed and the commit it guards are
+one interval. It reads the op's values — an `insert`'s, and for a
+`publish` the values of the staging draft's own runs, the ones the shot
+would re-insert as fresh identity, read only where the shot passes the
+store's own admission through its source gate, the draft is readable to
+the caller, and the re-insert is within the shot's budget — and answers
+every value naming the kind, in this order:
+
+| code | op | disposition | when |
+| --- | --- | --- | --- |
+| `published_target` | `insert` | permanent | `doc` is a PUBLISHED document (or a member of one) the caller owns, WHATEVER the insert's `deposit` declaration: the declared deposit is M5's one door at a published target and it judges the TYPE, not the atom, so this arm is what refuses a cell declared under a deposit class — ahead of both refusals below, and the same code M5 answers an undeclared insert |
+| `not_owner`, `site.addr` the draft | `publish` | permanent | a draft-native run of the shot holds a value naming the kind and the caller does not OWN the draft (ω, exact — the same test `not_owner` makes of `doc`): a grantee's, an ancestor's or a descendant's shot naming the owner's draft re-mints no cell |
+| `credential_refused`, `detail` `unbound_cell` | `insert` into a draft; the owner's own `publish` | permanent | the value is a cell, and this board takes no uploads, so no picture can be placed here — the binding's refusal in PATTERNS P10's form while no upload exists: it names no deposit and no re-PUT, since neither exists; when lane B lands the store and the lease the same token answers a cell naming a hash this principal did not deposit under its own lease |
+| `credential_refused`, `detail` `unknown_cell_schema` | `insert` into a draft; the owner's own `publish` | permanent | the value names the kind and parses under no schema this board reads — D13's halt at a permanent act, so no second schema ever finds an unbound cell planted under this one; the same bytes are never admitted, and the act that exists is a cell in the form above |
+
+The faces (PUB-6.7), the client's to render, the wire carrying the token:
+
+* `unbound_cell` — "this board takes no uploads, so no picture can be
+  placed here."
+* `unknown_cell_schema` — "this value names a picture cell in a form this
+  board does not read."
+
+Everything the store and the gates ahead already answer stands, each
+BEFORE this door: a stranger's `insert` into the owner's draft is
+`not_owner`, an unregistered `doc` `doc_not_registered`, a bare
+session's write into a published document on a claimed board
+`signed_session_required`, an unsigned shot `attestation_required`, a
+shot naming a draft the caller may not read `withheld`
+(`attestation_invalid:withheld` where the base carries the run) — and
+the door reads no value of a draft the caller may not read. A refused
+write commits nothing. `copy` and `version` share identity and mint no
+cell, so they take no arm. This example inserts a cell into a draft —
+refused `unbound_cell` on every board of this build:
+
+<!-- wire: request insert -->
+```json
+{"at":{"ordinal":"1","subspace":"1"},"doc":"1.0.1.0.2","op":"insert","values":[{"atom":"{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":5}"}]}
+```
+
+```json
+{"code":"credential_refused","detail":"unbound_cell","disposition":"permanent","op":"insert","resp":"rejected"}
+```
+
+**INTERIM PINS** — the subsystem design's, carried by the build and each
+confirmed at the media round (the board's sm-Q8):
+
+* the cell kind's address, `1.1.0.1.0.1.0.3.89` — INTERIM, a TEST-ONLY
+  address under the commons media range 3.80–3.89, which is unallocated;
+  the allocation lands by one constant;
+* the designation, `blake3` — INTERIM in name, the hash itself ruled
+  (BLAKE3-256, 32 bytes as 64 lowercase hex);
+* the cell's cap, 1024 bytes — INTERIM; a canonical cell is under 140
+  bytes, and the cap bounds the JSON tree a hostile body naming the kind
+  can command before it is refused;
+* the two refusal tokens, `unbound_cell` and `unknown_cell_schema`, and
+  their class, PERMANENT — INTERIM, `unbound_cell`'s class until lane B
+  lands the store and the lease.
+
+What lane A does NOT build, by name: the binding's real arm (a hash this
+principal did not deposit under its own lease), its lapsed arm, the size
+check against the deposited blob's length, the upload, the blob store,
+the lease, the index and the fetch route — lanes B, C and D. The door's
+armed set above is whole from this lane, so no later lane moves one
+state's answer from one code to another (PATTERNS P6).
 
 ### Links (writes)
 

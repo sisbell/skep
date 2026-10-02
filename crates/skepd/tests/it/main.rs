@@ -29,6 +29,7 @@ mod hazard;
 mod head;
 mod history;
 mod http_lifecycle;
+mod media;
 mod nullify_class;
 mod ownership;
 mod properties;

@@ -42,12 +42,14 @@ const LAYERS: &[(&str, u8)] = &[
     ("server::scan", 3),
     // 4 — the session layer.
     ("auth", 4),
-    // 5 — the write path.
+    // 5 — the write path, and the media door beside it.
     ("write_path", 5),
+    ("media", 5),
     // 6 — the leaves.
     ("codec", 6),
     ("history", 6),
     ("limits", 6),
+    ("media::cell", 6),
     ("notice", 6),
     ("permits", 6),
     ("serial", 6),

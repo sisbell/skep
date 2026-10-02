@@ -3,12 +3,13 @@
 
 use serde_json::Value;
 use skep_engine::HistoryError;
-use skep_febe::OpKind;
+use skep_febe::{Codec, FaultSite, OpKind, RejectCode, Rejection, Response};
 
 use crate::auth::policy::CredentialRefusal;
 use crate::auth::session::HandshakeRefusal;
-use crate::codec::{credential_refused_reply, obj, to_bytes};
+use crate::codec::{credential_refused_reply, obj, to_bytes, JsonCodec};
 use crate::history::Unavailable;
+use crate::media::door::MediaRefusal;
 
 /// Preflight cache lifetime advertised on `OPTIONS` (wire v4).
 const CORS_MAX_AGE_SECS: &str = "86400";
@@ -427,6 +428,36 @@ pub(super) fn refuse_scan_busy(kind: OpKind) -> Reply {
 /// every answer on that channel, whatever the answer says.
 pub(super) fn credential_refused(kind: OpKind, r: &CredentialRefusal) -> Reply {
     op_answer(credential_refused_reply(kind, r.token(), r.disposition()))
+}
+
+/// THE MEDIA DOOR's refusal as its 200-enveloped rejection (media lane A;
+/// wire.md §Media): the two arms that are M10's own codes —
+/// `published_target`, and `not_owner` naming the draft — are built as M10
+/// builds them, [`Rejection::classified`] over the flat code (its
+/// disposition and standing detail M10's own, so the bytes are the store's
+/// bytes) and marshaled by the one codec; the two that are the daemon's
+/// tokens ride `credential_refused` as every daemon-side refusal does
+/// ([`credential_refused`]'s row), the token and the class the refusal's
+/// own ([`MediaRefusal::token`], [`MediaRefusal::disposition`]).
+pub(super) fn media_door_refused(kind: OpKind, refusal: MediaRefusal) -> Reply {
+    if let Some(token) = refusal.token() {
+        return op_answer(credential_refused_reply(kind, token.to_string(), refusal.disposition()));
+    }
+    let rejection = match refusal {
+        MediaRefusal::PublishedTarget => {
+            Rejection::classified(kind, RejectCode::PublishedTarget, None)
+        }
+        MediaRefusal::NotOwner { draft } => Rejection::classified(
+            kind,
+            RejectCode::NotOwner,
+            Some(FaultSite { addr: Some(draft), ..FaultSite::default() }),
+        ),
+        // Both carry a token: answered above.
+        MediaRefusal::UnboundCell | MediaRefusal::UnknownCellSchema => {
+            unreachable!("a media token rides credential_refused")
+        }
+    };
+    op_answer(JsonCodec.marshal(&Response::Rejected(rejection)))
 }
 
 /// The `410 history_reclaimed` refusal: the position asked for is older

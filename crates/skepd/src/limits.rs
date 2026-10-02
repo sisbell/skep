@@ -1,5 +1,6 @@
-//! The two request-body caps the wire promises (wire.md §Transport), and the
-//! change feed's three page bounds (wire.md §The change feed).
+//! The two request-body caps the wire promises (wire.md §Transport), the
+//! change feed's three page bounds (wire.md §The change feed), and the
+//! picture cell's cap (wire.md §Media).
 
 use std::num::NonZeroUsize;
 
@@ -71,3 +72,20 @@ pub(crate) const MAX_CHANGES_LIMIT: usize = 4096;
 /// pathological depth — is refused by the same measure and never served
 /// past it.
 pub(crate) const MAX_CHANGES_PAGE_BYTES: usize = 256 * 8 * 1024;
+
+/// THE CELL'S CAP (media lane A; wire.md §Media — INTERIM, the board's
+/// sm-Q8): the most bytes the picture cell's parser (`media/cell.rs`) builds
+/// a JSON tree for — 1 KiB. A canonical cell is under 140 bytes (the kind's
+/// address, 64 hex characters of hash, a sixteen-digit count and the member
+/// names), so the cap is some eight times the largest cell that can parse;
+/// what it bounds is the tree `serde_json` builds BEFORE the first schema
+/// check for a body that NAMES the kind and is no cell — which the daemon
+/// must parse to refuse by name (D13's carve-out) — at the record cap's
+/// ratio of close to a hundred times the body (`skep-identity`'s
+/// `payload.rs`), under the serialization lock, per value of an insert. The
+/// cap is the KIND's and every schema's under it: a body past it parses as
+/// no cell of any schema and names nothing. Its own number and not the
+/// record grade's 128 KiB: a cell carries no entry array, and a cap sized
+/// for one would let a hostile insert command a hundred-megabyte tree per
+/// value for nothing a cell can be.
+pub(crate) const MAX_CELL_BYTES: usize = 1024;

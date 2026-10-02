@@ -538,6 +538,57 @@ fn doc_states_the_record_grade_beside_the_entry_grade() {
     );
 }
 
+/// THE MEDIA SECTION (media lane A; the fence): §Media states the cell's
+/// schema row by row, the canonical rule, the designation, the cap and the
+/// kind's interim address, the door's four arms with their codes in a table,
+/// the P10 face's words — naming no deposit and no re-PUT — the vector set
+/// by path, and the INTERIM pins; and §Rejection codes and §Credential
+/// refusals each point at it. The daemon's answers are pinned end to end in
+/// `media.rs`; this pins that the contract says so, and that the fixture the
+/// section names pins the same three constants the section does.
+#[test]
+fn doc_states_the_media_cell_and_its_door() {
+    let media = prose("\n### Media — the reference cell and its door", &["\n### Links (writes)"]);
+    for fact in [
+        "ONE REFERENCE CELL",
+        "| `type` | string |",
+        "| `hash` | string |",
+        "| `size` | number |",
+        "`parse(b)` answers a cell only where `b == encode(parse(b))`",
+        "`blake3`",
+        "1024 bytes",
+        "`1.1.0.1.0.1.0.3.89`",
+        "crates/skepd/tests/it/fixtures/media/cells.json",
+        "| `published_target` | `insert` | permanent |",
+        "| `not_owner`, `site.addr` the draft | `publish` | permanent |",
+        "| `credential_refused`, `detail` `unbound_cell` |",
+        "| `credential_refused`, `detail` `unknown_cell_schema` |",
+        "this board takes no uploads, so no picture can be placed here",
+        "names no deposit and no re-PUT",
+        "INTERIM PINS",
+        "What lane A does NOT build, by name",
+    ] {
+        assert!(media.contains(fact), "§Media says {fact:?}");
+    }
+    let fixture: Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/it/fixtures/media/cells.json"),
+        )
+        .expect("the vector set the section names exists"),
+    )
+    .expect("the vector set is JSON");
+    assert_eq!(fixture["kind"].as_str(), Some("1.1.0.1.0.1.0.3.89"));
+    assert_eq!(fixture["designation"].as_str(), Some("blake3"));
+    assert_eq!(fixture["cap"].as_u64(), Some(1024));
+    let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
+    assert!(codes.contains("Media (lane A, the fence)"), "§Rejection codes points at §Media");
+    let refusals = prose("\n### Credential refusals", &["\n## Operations"]);
+    assert!(
+        refusals.contains("**The media door's two tokens**"),
+        "§Credential refusals points at §Media"
+    );
+}
+
 /// Every `op_at` example is the strict `{"at", "frame"}` envelope around a
 /// canonical READ frame — the doc's history examples parse through the same
 /// codec the daemon uses.

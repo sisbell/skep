@@ -4,11 +4,14 @@
 //! Contract): a long-running process owning ONE `World`, serving the full
 //! M10 operation surface over HTTP/JSON to multiple concurrent local
 //! clients. **skepd owns no semantics** — every decision worth making was
-//! made in a store, save two the spec gives the daemon: the session layer's
-//! gates, and the PUBLISHED HEAD's cadence (PUB-6.65) — when the board's own
+//! made in a store, save three the spec gives the daemon: the session layer's
+//! gates, the PUBLISHED HEAD's cadence (PUB-6.65) — when the board's own
 //! daemon writes the head document `H`, the one write it makes on its own
-//! initiative. This crate is the wire codec, the session layer, the head
-//! writer, the process, and the kernel's configuration:
+//! initiative — and the MEDIA DOOR (media lane A): whether a value a write
+//! carries is a picture's reference cell, parsed by the daemon's one parser,
+//! and what a write that would mint one is answered. This crate is the wire
+//! codec, the session layer, the head writer, the media door, the process,
+//! and the kernel's configuration:
 //!
 //! * [`JsonCodec`] — the one concrete `Codec` (M10's seam): JSON frames in,
 //!   deterministic JSON responses out. The byte conventions are the
@@ -90,6 +93,11 @@ mod auth;
 
 // The write path: every commit, one at a time, and the published head.
 mod write_path;
+
+// Beside it, at its layer: the media door — the one step the plain write
+// sequence takes for a value naming the picture cell's kind — and, a leaf
+// beneath it, the cell's one parser.
+mod media;
 
 // The leaves: none knows anything of the daemon.
 mod codec;

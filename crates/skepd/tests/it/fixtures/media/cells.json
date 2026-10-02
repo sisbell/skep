@@ -1,0 +1,225 @@
+{
+  "note": "THE ONE VECTOR SET of the picture's reference cell (media lane A; media.md item 4 and section Open, ONE STRICTNESS AT THREE PARSERS; PATTERNS P5): every parser of the cell -- skepd's media/cell.rs, the shell's, the browser page's -- runs these in its own gate. The rule is the arbiter: parse(b) answers a cell only where b == encode(parse(b)). `verdict` is `cell` (admitted: the body IS the canonical form) or `no_cell`; `names_kind` says whether the body's `type` member names the cell's kind, which is what a reader whose null permits a permanent act halts on (DOCTRINE D13's carve-out) -- the daemon's write door refuses such a value by name (unknown_cell_schema) and treats a value not naming the kind as ordinary. A body carried as `body_hex` is bytes that are no UTF-8 string. Each pin here is INTERIM (the board's sm-Q8), confirmed at the media round.",
+  "kind": "1.1.0.1.0.1.0.3.89",
+  "designation": "blake3",
+  "cap": 1024,
+  "vectors": [
+    {
+      "name": "canonical",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":5}",
+      "verdict": "cell",
+      "names_kind": true,
+      "why": "the one form: type, hash, size in that order, no whitespace, lowercase hex"
+    },
+    {
+      "name": "canonical_size_zero",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":0}",
+      "verdict": "cell",
+      "names_kind": true,
+      "why": "a byte count of zero is a count; the schema judges form, lane B judges the file"
+    },
+    {
+      "name": "canonical_size_max",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":9007199254740991}",
+      "verdict": "cell",
+      "names_kind": true,
+      "why": "2^53 - 1, the largest count every JavaScript-backed reader reads exactly"
+    },
+    {
+      "name": "two_hash_members",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"hash\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"size\":5}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "the two-hash body: a parser could bind one and a reader check the other; refused by the canonical rule at every parser"
+    },
+    {
+      "name": "size_as_string",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":\"5\"}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "size is a JSON number, never a string"
+    },
+    {
+      "name": "extent_member",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":5,\"extent\":{\"count\":87340,\"unit\":\"frames\"}}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "the v1 cell carries no extent member (ms5-D2): a video-era member is a second schema"
+    },
+    {
+      "name": "member_order",
+      "body": "{\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"type\":\"1.1.0.1.0.1.0.3.89\",\"size\":5}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "the members in any other order round-trip to different bytes"
+    },
+    {
+      "name": "uppercase_hex",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"AF1349B9F5F9A1A6A0404DEA36DCC9499BCB25C9ADC112B7CC9A93CAE41F3262\",\"size\":5}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "the hash is 64 LOWERCASE hex characters; uppercase re-encodes lowercase and fails the compare"
+    },
+    {
+      "name": "hex_63",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f326\",\"size\":5}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "63 hex characters are no 32-byte hash"
+    },
+    {
+      "name": "hex_65",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f32620\",\"size\":5}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "65 hex characters are no 32-byte hash"
+    },
+    {
+      "name": "hex_not_hex",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f326g\",\"size\":5}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "a non-hex character in the hash"
+    },
+    {
+      "name": "second_designation",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":5,\"hash_alg\":\"sha256-tree\"}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "H1: a value naming the kind under a second schema's form parses under no pinned schema; the daemon halts on it, never admits it as absent"
+    },
+    {
+      "name": "whitespace",
+      "body": "{\"type\": \"1.1.0.1.0.1.0.3.89\", \"hash\": \"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\", \"size\": 5}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "parses to the same cell and re-encodes to different bytes: b != encode(parse(b))"
+    },
+    {
+      "name": "trailing_newline",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":5}\n",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "a trailing byte: JSON admits it, the canonical rule does not"
+    },
+    {
+      "name": "size_fraction",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":5.0}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "size is an integer"
+    },
+    {
+      "name": "size_negative",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":-5}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "size is non-negative"
+    },
+    {
+      "name": "size_past_2_53",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":9007199254740992}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "2^53: a count a JavaScript-backed reader cannot read exactly"
+    },
+    {
+      "name": "missing_size",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\"}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "the arity is closed: three members, each present"
+    },
+    {
+      "name": "missing_hash",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"size\":5}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "the arity is closed: three members, each present"
+    },
+    {
+      "name": "hash_not_a_string",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":5,\"size\":5}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "hash is a string"
+    },
+    {
+      "name": "fourth_member",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":5,\"note\":\"x\"}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "the arity is closed: a fourth member of any name is a second schema"
+    },
+    {
+      "name": "another_kind",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.1\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":5}",
+      "verdict": "no_cell",
+      "names_kind": false,
+      "why": "a type naming another kind (the enrollment record's) is not the cell's; its own schema reads it"
+    },
+    {
+      "name": "type_not_a_string",
+      "body": "{\"type\":389,\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":5}",
+      "verdict": "no_cell",
+      "names_kind": false,
+      "why": "a type that is no string names no kind"
+    },
+    {
+      "name": "no_type",
+      "body": "{\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":5}",
+      "verdict": "no_cell",
+      "names_kind": false,
+      "why": "no type member names no kind (D13: every record body names its type)"
+    },
+    {
+      "name": "prose",
+      "body": "a picture of a cat",
+      "verdict": "no_cell",
+      "names_kind": false,
+      "why": "prose is no JSON object"
+    },
+    {
+      "name": "pr_enc_def",
+      "body_hex": "0bff0001020304050607",
+      "verdict": "no_cell",
+      "names_kind": false,
+      "why": "a predicate def's PR-ENC envelope (a varint length, then bytes, 0xff among them: no UTF-8 string) is no JSON object"
+    },
+    {
+      "name": "not_json",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":5",
+      "verdict": "no_cell",
+      "names_kind": false,
+      "why": "not JSON at all (unterminated): every schema is JSON, so nothing names the kind here"
+    },
+    {
+      "name": "size_leading_zero",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":05}",
+      "verdict": "no_cell",
+      "names_kind": false,
+      "why": "not JSON at all (a leading zero): a standard JSON parser reads no value, so nothing names the kind"
+    },
+    {
+      "name": "empty_object",
+      "body": "{}",
+      "verdict": "no_cell",
+      "names_kind": false,
+      "why": "an object naming no type"
+    },
+    {
+      "name": "json_array",
+      "body": "[{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":5}]",
+      "verdict": "no_cell",
+      "names_kind": false,
+      "why": "a cell inside an array is no cell: the value is one object"
+    },
+    {
+      "name": "past_the_cap",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":5,\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+      "verdict": "no_cell",
+      "names_kind": false,
+      "why": "a body past the cell's cap (1024 bytes) is parsed by no reader of a cell, so it names nothing; a canonical cell is under 140 bytes"
+    }
+  ]
+}

@@ -239,21 +239,27 @@ impl<'k, W: WorldState> Vstream<'k, W> {
     }
 }
 
-/// The handle's name and nothing else — it holds one kernel borrow, and a
-/// world is not a thing to print into a diagnostic. Written out rather than
-/// derived: a derive would bound the impl on `W: Debug`, and a world composed
-/// of persistent store slices need not be, so the derived impl would apply to
-/// no `W` that exists.
+/// The handle's ARM and nothing else: whether it carries an attestation —
+/// the one fact about it that changes what its commits write, `insert` and
+/// `publish` filling their marker's signature slot under one — with `..`
+/// for the kernel borrow, a world being no thing to print into a
+/// diagnostic, and never the attestation's bytes, a blob as wide as M2's
+/// `MAX_SIG_BYTES`. Written out rather than derived: a derive would bound
+/// the impl on `W: Debug`, and a world composed of persistent store slices
+/// need not be, so the derived impl would apply to no `W` that exists.
 impl<W: WorldState> fmt::Debug for Vstream<'_, W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("Vstream")
+        f.debug_struct("Vstream")
+            .field("attested", &self.attest.is_some())
+            .finish_non_exhaustive()
     }
 }
 
-/// One kernel borrow, so a copy of the handle is a copy of a reference.
-/// Written out, as `Debug` is: the derives would bound the impls on
-/// `W: Clone` / `W: Copy`, and no `WorldState` is `Copy` — the choice M6's
-/// `Query` makes for the same reason.
+/// Two borrows — the kernel and, on an attested handle, the attestation — so
+/// a copy of the handle is a copy of two references. Written out, as `Debug`
+/// is: the derives would bound the impls on `W: Clone` / `W: Copy`, and no
+/// `WorldState` is `Copy` — the choice M6's `Query` makes for the same
+/// reason.
 impl<W: WorldState> Clone for Vstream<'_, W> {
     fn clone(&self) -> Self {
         *self

@@ -374,7 +374,7 @@ fn a_birth_version_s_extent_is_frozen_at_its_mint_and_a_deposit_never_joins_it()
         runs: vec![run(&ca(1), 3)],
         terms: ShotTerms { placed: n(3), base_extent: None },
     });
-    assert_eq!(born.birth_extent(&vdoc()), Some(n(3)));
+    assert_eq!(born.birth_extent(&vdoc()), Some(&n(3)));
     // An I-ADJACENT deposit, which is why the extent is noted at the mint
     // rather than read off the arrangement: the run-list merges the
     // deposit INTO the last birth run, so afterwards no run boundary marks
@@ -382,12 +382,12 @@ fn a_birth_version_s_extent_is_frozen_at_its_mint_and_a_deposit_never_joins_it()
     let grown = place(&born, &vdoc(), 4, vec![run(&ca(4), 1)]);
     assert_eq!(grown.content_runs(&vdoc()).cloned().collect::<Vec<_>>(), vec![run(&ca(1), 4)]);
     assert_eq!(grown.content_count(&vdoc()), n(4), "the head's arrangement grew");
-    assert_eq!(grown.birth_extent(&vdoc()), Some(n(3)), "the birth content did not");
+    assert_eq!(grown.birth_extent(&vdoc()), Some(&n(3)), "the birth content did not");
     // A second deposit, minted under the member's own content chain: the
     // same.
     let grown = place(&grown, &vdoc(), 5, vec![run(&vca(1), 1)]);
     assert_eq!(grown.content_count(&vdoc()), n(5));
-    assert_eq!(grown.birth_extent(&vdoc()), Some(n(3)));
+    assert_eq!(grown.birth_extent(&vdoc()), Some(&n(3)));
     // Purity: the state the deposit folded onto still answers its own.
     assert_eq!(born.content_count(&vdoc()), n(3));
 }
@@ -425,7 +425,7 @@ fn only_a_trunk_s_birth_version_has_its_extent_noted() {
     let s = s.apply_m5(&mint(&vdoc()));
     assert_eq!(
         s.birth_extent(&vdoc()),
-        Some(n(2)),
+        Some(&n(2)),
         "the birth version beside them is noted"
     );
 }
@@ -439,9 +439,9 @@ fn a_snapshot_born_version_is_noted_at_what_it_shares_and_an_empty_birth_at_zero
         source: doc1(),
         new: vdoc(),
     });
-    assert_eq!(s.birth_extent(&vdoc()), Some(n(3)));
+    assert_eq!(s.birth_extent(&vdoc()), Some(&n(3)));
     let s = place(&s, &vdoc(), 4, vec![run(&ca(9), 1)]);
-    assert_eq!((s.content_count(&vdoc()), s.birth_extent(&vdoc())), (n(4), Some(n(3))));
+    assert_eq!((s.content_count(&vdoc()), s.birth_extent(&vdoc())), (n(4), Some(&n(3))));
     // The record is staged whatever the surface holds, so an EMPTY birth
     // is noted as zero — the arrangement and R still gain no entry — and
     // the version's first deposit, which notes nothing, leaves it so: a
@@ -450,11 +450,11 @@ fn a_snapshot_born_version_is_noted_at_what_it_shares_and_an_empty_birth_at_zero
         source: doc2(),
         new: vdoc(),
     });
-    assert_eq!(born_empty.birth_extent(&vdoc()), Some(n(0)), "noted at zero, not absent");
+    assert_eq!(born_empty.birth_extent(&vdoc()), Some(&n(0)), "noted at zero, not absent");
     assert!(born_empty.arrangements.get(&vdoc()).is_none());
     let deposited = place(&born_empty, &vdoc(), 1, vec![run(&ca(1), 1)]);
     assert_eq!(deposited.content_count(&vdoc()), n(1));
-    assert_eq!(deposited.birth_extent(&vdoc()), Some(n(0)), "born empty, whatever it took since");
+    assert_eq!(deposited.birth_extent(&vdoc()), Some(&n(0)), "born empty, whatever it took since");
     // A cross-owner fork's `new` is a fresh DOCUMENT and notes nothing.
     let forked = s.apply_m5(&M5Rec::VersionSnapshot {
         source: doc1(),
@@ -477,7 +477,7 @@ fn a_member_the_shot_minted_empty_is_noted_at_zero_by_its_own_record() {
         runs: vec![],
         terms: ShotTerms { placed: n(0), base_extent: None },
     });
-    assert_eq!(minted_empty.birth_extent(&vdoc()), Some(n(0)), "noted at zero by the mint");
+    assert_eq!(minted_empty.birth_extent(&vdoc()), Some(&n(0)), "noted at zero by the mint");
     assert!(minted_empty.arrangements.get(&vdoc()).is_none(), "the lazy empty arrangement");
     assert!(!minted_empty.provenance.is_recorded(&vdoc()), "no R entry");
     assert_eq!(
@@ -487,7 +487,7 @@ fn a_member_the_shot_minted_empty_is_noted_at_zero_by_its_own_record() {
     );
     let deposited = place(&minted_empty, &vdoc(), 1, vec![run(&ca(1), 1)]);
     assert_eq!(deposited.content_count(&vdoc()), n(1), "the head took the deposit");
-    assert_eq!(deposited.birth_extent(&vdoc()), Some(n(0)), "born empty, whatever it took since");
+    assert_eq!(deposited.birth_extent(&vdoc()), Some(&n(0)), "born empty, whatever it took since");
 }
 
 #[test]
@@ -515,7 +515,7 @@ fn shot_place_folds_as_a_placement_at_one_and_notes_the_terms() {
         "the same splice"
     );
     assert_eq!(by_shot.provenance, by_place.provenance, "the same R-append");
-    assert_eq!(by_shot.birth_extent(&vdoc()), Some(n(5)), "the whole placement is the birth");
+    assert_eq!(by_shot.birth_extent(&vdoc()), Some(&n(5)), "the whole placement is the birth");
     assert_eq!(
         by_shot.shot_terms(&vdoc()),
         Some(&terms),
@@ -684,7 +684,7 @@ fn the_birth_extents_ride_the_checkpoint_because_nothing_can_rebuild_them() {
     let back: M5State = bincode::deserialize(&bytes).expect("state deserializes");
     assert_eq!(back, grown);
     assert_eq!(back.content_count(&vdoc()), n(4));
-    assert_eq!(back.birth_extent(&vdoc()), Some(n(3)), "the frozen extent, not the live count");
+    assert_eq!(back.birth_extent(&vdoc()), Some(&n(3)), "the frozen extent, not the live count");
     assert_eq!(back.clone().rebuild_derived(), back);
     // Replay re-derives them: the same records fold to the same birth
     // extents.

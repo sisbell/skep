@@ -689,7 +689,12 @@ impl HeadWriter {
         self.run_commit(wp, serial, meta, move || {
             self.stores
                 .vstream()
-                .publish(Caller::Principal(SYSTEM_PRINCIPAL), &doc, shot, &visibility)
+                .publish(
+                    Caller::Principal(SYSTEM_PRINCIPAL),
+                    &doc,
+                    &shot,
+                    &visibility,
+                )
                 .map_err(|e| format!("head publish refused: {e:?}"))
         })
     }

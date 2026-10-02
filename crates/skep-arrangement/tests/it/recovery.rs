@@ -55,7 +55,7 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
             .publish(
                 P1,
                 &pdoc(),
-                Shot {
+                &Shot {
                     base: Some(base(&pdoc(), 4)),
                     draft: Some(doc1()),
                     runs: vec![shot_run(&pdoc(), &pca(1), 4), shot_run(&doc1(), &ca(3), 1)],

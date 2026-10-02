@@ -157,7 +157,7 @@ fn the_shot_refuses_a_client_arrangement_past_the_run_budget_and_places_one_at_i
         rejected(Vstream::new(&k).publish(
             p1,
             &pdoc(),
-            shot_off_the_head(0, runs(MAX_PLACED_RUNS + 1)),
+            &shot_off_the_head(0, runs(MAX_PLACED_RUNS + 1)),
             &anyone
         )),
         PublishError::TooManyRuns
@@ -165,7 +165,7 @@ fn the_shot_refuses_a_client_arrangement_past_the_run_budget_and_places_one_at_i
     assert_eq!(k.current_seq(), before, "the refusal commits nothing");
     // The equal case: a member of exactly the budget is placed, whole.
     let (member, _) = Vstream::new(&k)
-        .publish(p1, &pdoc(), shot_off_the_head(0, runs(MAX_PLACED_RUNS)), &anyone)
+        .publish(p1, &pdoc(), &shot_off_the_head(0, runs(MAX_PLACED_RUNS)), &anyone)
         .expect("a placement at the budget commits");
     assert_eq!(
         k.snapshot().world().m5().content_runs(&member).len(),
@@ -187,14 +187,14 @@ fn the_shot_refuses_a_carried_tail_past_the_run_budget() {
     let anyone = |_: &ShotWorld, _: &Address| true;
     let before = k.current_seq();
     assert!(matches!(
-        rejected(Vstream::new(&k).publish(p1, &pdoc(), shot_off_the_head(0, vec![]), &anyone)),
+        rejected(Vstream::new(&k).publish(p1, &pdoc(), &shot_off_the_head(0, vec![]), &anyone)),
         PublishError::TooManyRuns
     ));
     assert_eq!(k.current_seq(), before, "the refusal commits nothing");
     // The equal case: from extent 1 the tail is exactly the budget, and it
     // is carried whole, in order.
     let (member, _) = Vstream::new(&k)
-        .publish(p1, &pdoc(), shot_off_the_head(1, vec![]), &anyone)
+        .publish(p1, &pdoc(), &shot_off_the_head(1, vec![]), &anyone)
         .expect("a tail of exactly the budget is carried");
     assert_eq!(
         k.snapshot().world().m5().content_runs(&member).cloned().collect::<Vec<_>>(),
@@ -240,18 +240,18 @@ fn the_shot_refuses_a_reinsert_past_the_value_budget_before_probing_an_address()
     };
     let before = k.current_seq();
     assert!(matches!(
-        rejected(vs.publish(p1, &pdoc(), from_the_draft(&[MAX_REINSERTED_VALUES + 1]), &anyone)),
+        rejected(vs.publish(p1, &pdoc(), &from_the_draft(&[MAX_REINSERTED_VALUES + 1]), &anyone)),
         PublishError::TooManyValues
     ));
     let past_half = MAX_REINSERTED_VALUES / 2 + 1;
     assert!(matches!(
-        rejected(vs.publish(p1, &pdoc(), from_the_draft(&[past_half, past_half]), &anyone)),
+        rejected(vs.publish(p1, &pdoc(), &from_the_draft(&[past_half, past_half]), &anyone)),
         PublishError::TooManyValues
     ));
     // Exactly the budget passes the count, and its first probe finds the
     // draft's first address holding nothing.
     assert!(matches!(
-        rejected(vs.publish(p1, &pdoc(), from_the_draft(&[MAX_REINSERTED_VALUES]), &anyone)),
+        rejected(vs.publish(p1, &pdoc(), &from_the_draft(&[MAX_REINSERTED_VALUES]), &anyone)),
         PublishError::DanglingSource
     ));
     // A run of the edition's own I-space past the budget, beside the same
@@ -261,13 +261,13 @@ fn the_shot_refuses_a_reinsert_past_the_value_budget_before_probing_an_address()
         run: run(&pca(1), MAX_REINSERTED_VALUES as u32 + 1),
     };
     assert!(matches!(
-        rejected(vs.publish(p1, &pdoc(), shot_from(vec![own]), &anyone)),
+        rejected(vs.publish(p1, &pdoc(), &shot_from(vec![own]), &anyone)),
         PublishError::DanglingSource
     ));
     // A draft its shooter may not read is withheld, however much of it
     // the shot names.
     assert!(matches!(
-        rejected(vs.publish(p1, &pdoc(), from_the_draft(&[MAX_REINSERTED_VALUES + 1]), &no_one)),
+        rejected(vs.publish(p1, &pdoc(), &from_the_draft(&[MAX_REINSERTED_VALUES + 1]), &no_one)),
         PublishError::Withheld(d) if d == doc1()
     ));
     assert_eq!(k.current_seq(), before, "every refusal commits nothing");
@@ -288,9 +288,8 @@ fn an_empty_shot_mints_its_member_places_nothing_and_journals_its_terms() {
     let before = k.snapshot().world().m5().clone();
     let anyone = |_: &ShotWorld, _: &Address| true;
     let shot = shot_off_the_head(0, vec![]);
-    let extent = shot.base.as_ref().map(|base| base.extent.clone());
     let (member, _) = Vstream::new(&k)
-        .publish(p1, &pdoc(), shot, &anyone)
+        .publish(p1, &pdoc(), &shot, &anyone)
         .expect("an empty shot commits");
     let s = k.snapshot();
     let m5 = s.world().m5();
@@ -301,7 +300,7 @@ fn an_empty_shot_mints_its_member_places_nothing_and_journals_its_terms() {
     assert_eq!(m5.arrangements, before.arrangements, "no arrangement entry: the lazy empty one");
     assert_eq!(
         m5.shot_terms(&member),
-        Some(&ShotTerms { placed: n(0), base_extent: extent }),
+        Some(&ShotTerms { placed: n(0), base_extent: shot.base.map(|base| base.extent) }),
         "the terms are journaled all the same"
     );
     assert_eq!(m5.birth_extent(&member), None, "the chain's second member is no birth version");

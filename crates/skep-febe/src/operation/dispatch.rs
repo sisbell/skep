@@ -202,7 +202,7 @@ where
                 let (addr, at) = self
                     .stores
                     .vstream_attested(attest)
-                    .publish(wc.caller(), &doc, shot, &visibility)
+                    .publish(wc.caller(), &doc, &shot, &visibility)
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }

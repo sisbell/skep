@@ -651,7 +651,7 @@ fn the_publish_shot_publishes_a_new_member_and_leaves_its_staging_draft_a_draft(
     };
     let (member, _) = engine
         .vstream()
-        .publish(caller, &edition, shot, &World::visible_to(caller))
+        .publish(caller, &edition, &shot, &World::visible_to(caller))
         .expect("the birth shot from the staging draft into the edition");
 
     let w = world(&engine);

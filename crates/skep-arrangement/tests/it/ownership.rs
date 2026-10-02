@@ -97,7 +97,7 @@ fn an_unregistered_document_never_yields_an_ownership_verdict() {
         rejected(vs.publish(
             p2,
             &unregistered_doc,
-            Shot { base: None, draft: None, runs: vec![] },
+            &Shot { base: None, draft: None, runs: vec![] },
             &readable_by(PrincipalId(2))
         )),
         PublishError::DocNotRegistered

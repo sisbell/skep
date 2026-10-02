@@ -4,8 +4,8 @@
 
 use skep_address::{Address, Span};
 use skep_arrangement::{
-    as_ordinal_vspan, is_ordinal_vspan, seat_link, Caller, Deposit, HasM5, Run, RunError, Runs,
-    Shot, VSpec, Vstream,
+    as_ordinal_vspan, is_ordinal_vspan, seat_link, Caller, Deposit, HasM5, PlacedSegment, Run,
+    RunError, Runs, Shot, ShotTerms, VSpec, Vstream,
 };
 
 use crate::common::*;
@@ -39,6 +39,23 @@ fn the_public_values_key_a_hash_set_by_the_equality_they_compare_on() {
     one_and_another(
         Shot { base: None, draft: None, runs: vec![] },
         Shot { base: Some(base(&pdoc(), 0)), draft: None, runs: vec![] },
+    );
+    // The birth bit is part of the terms: a base extent of zero and no base
+    // at all are two terms, and they key two entries.
+    one_and_another(
+        ShotTerms {
+            placed: n(2),
+            base_extent: None,
+        },
+        ShotTerms {
+            placed: n(2),
+            base_extent: Some(n(0)),
+        },
+    );
+    // A segment is its class AND its run: one run, two classes, two segments.
+    one_and_another(
+        PlacedSegment::Value(run(&ca(1), 1)),
+        PlacedSegment::Window(run(&ca(1), 1)),
     );
 }
 
@@ -92,9 +109,10 @@ fn the_run_reads_lend_a_walk_that_knows_its_length_and_both_ends() {
 
 #[test]
 fn the_op_handle_copies_as_the_reference_it_is() {
-    // One kernel borrow: a foreign caller holding the handle may hold it
-    // twice without asking the kernel again, and the promise is a trait
-    // only this crate can supply. Using `vs` after it has been copied out
+    // Two borrows — the kernel and, on an attested handle, the attestation:
+    // a foreign caller holding the handle may hold it twice without asking
+    // the kernel again, and the promise is a trait only this crate can
+    // supply. Using `vs` after it has been copied out
     // is the compile-time proof; the insert makes the test earn its name.
     fn copies<T: Copy>(_: T) {}
     let k = mem_kernel();

@@ -45,7 +45,7 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
     };
     let readable = readable_by(PrincipalId(1));
     let (member, s_pub) = Vstream::attested(&k, Some(&tag3))
-        .publish(P1, &pdoc(), shot, &readable)
+        .publish(P1, &pdoc(), &shot, &readable)
         .expect("the shot commits");
     assert_eq!(member, vdoc());
 
@@ -82,7 +82,7 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
         draft: Some(doc1()),
         runs: vec![shot_run(&doc1(), &ca(1), 1), shot_run(&doc1(), &ca(3), 1)],
     };
-    vs.publish(P1, &pdoc(), shot, &readable_by(PrincipalId(1))).unwrap();
+    vs.publish(P1, &pdoc(), &shot, &readable_by(PrincipalId(1))).unwrap();
     vs.insert(P1, &pdoc(), vp(1, 3), vec![val(b"d")], declared()).unwrap();
     vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"e")], declared()).unwrap();
     assert_eq!(twin.chain_at(s_plain).unwrap(), k.chain_at(s_plain).unwrap(), "unsigned alike");

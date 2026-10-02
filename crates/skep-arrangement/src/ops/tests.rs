@@ -59,11 +59,21 @@ fn mini_kernel() -> Kernel<MiniWorld> {
 }
 
 #[test]
-fn the_handle_prints_without_its_world_being_printable() {
+fn the_handle_prints_its_arm_without_its_world_being_printable() {
     // `MiniWorld` is not `Debug`, and the handle is — which is the whole
-    // reason the impl is written out rather than derived.
+    // reason the impl is written out rather than derived. What it prints is
+    // the one fact that changes what its commits write: whether it carries
+    // an attestation, and never the attestation's bytes.
     let k = mini_kernel();
-    assert_eq!(format!("{:?}", Vstream::new(&k)), "Vstream");
+    assert_eq!(
+        format!("{:?}", Vstream::new(&k)),
+        "Vstream { attested: false, .. }"
+    );
+    let tag = Attestation::new(1, vec![0x11; 8]).expect("a non-zero tag and a non-empty blob");
+    assert_eq!(
+        format!("{:?}", Vstream::attested(&k, Some(&tag))),
+        "Vstream { attested: true, .. }"
+    );
 }
 
 /// The two slices J0's allocation step touches — M3's frontier and M4's

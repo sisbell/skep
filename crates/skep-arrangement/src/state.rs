@@ -227,7 +227,7 @@ pub struct M5State {
 /// nothing the arrangement holds afterwards re-derives. Journaled in the
 /// shot's placing record ([`M5Rec::ShotPlace`]), folded into
 /// [`M5State`]'s `shot_terms`, read by [`M5State::shot_terms`].
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShotTerms {
     /// The positions the client PLACED — Σ width of the shot's runs, the
     /// count its signed body leads with: positions `[1, placed]` of the
@@ -423,19 +423,20 @@ impl M5State {
     /// placement included ([`M5Rec::ShotPlace`] carries the shot's terms
     /// whatever the placement holds), and an owned VERSION its snapshot — and
     /// no deposit notes an extent, so the first one grows `content_count`
-    /// alone, and this answers `Some(0)` however much the head has taken
-    /// since. No conforming mint is empty (PUB-3.11).
+    /// alone, and this answers a zero however much the head has taken since.
+    /// No conforming mint is empty (PUB-3.11).
     ///
     /// `None` where no extent is noted — every address that is no birth
-    /// version, and a birth version not yet minted — so `Some(0)`, a birth
-    /// version born EMPTY and noted at zero by its own mint, and `None`, no
-    /// birth at this address, are two answers. It answers the address named,
-    /// as every read here does: a caller holding a document rather than its
-    /// birth version asks the chain card's
-    /// [`birth_version`](crate::birth_version) for that address first. One
-    /// map lookup, reading no run.
-    pub fn birth_extent(&self, member: &Address) -> Option<Nat> {
-        self.birth_extents.get(member).cloned()
+    /// version, and a birth version not yet minted — so a noted zero, a birth
+    /// version born EMPTY, and `None`, no birth at this address, are two
+    /// answers. It answers the address named, as every read here does: a
+    /// caller holding a document rather than its birth version asks the chain
+    /// card's [`birth_version`](crate::birth_version) for that address first.
+    /// One map lookup, reading no run; the extent is lent, as
+    /// [`shot_terms`](M5State::shot_terms) lends the terms beside it, and a
+    /// caller keeping it clones it.
+    pub fn birth_extent(&self, member: &Address) -> Option<&Nat> {
+        self.birth_extents.get(member)
     }
 
     /// THE SHOT TERMS of `member` — the two client terms of the shot that

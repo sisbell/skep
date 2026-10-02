@@ -284,10 +284,7 @@ fn publish_body(
     // positions no count can spell is told so whatever its values would cost;
     // past this, the builder names each refusal itself (`refused`).
     segments.iter().try_fold(0u64, |placed, segment| {
-        let run = match segment {
-            PlacedSegment::Value(run) | PlacedSegment::Window(run) => run,
-        };
-        placed.checked_add(spelled(run.width())?).ok_or(ComposeFault::Unspellable)
+        placed.checked_add(spelled(segment.run().width())?).ok_or(ComposeFault::Unspellable)
     })?;
     // THE STORE'S RE-INSERT BUDGET, asked of the store's own count before a
     // value is read. The staging draft's runs are re-inserted value by value,

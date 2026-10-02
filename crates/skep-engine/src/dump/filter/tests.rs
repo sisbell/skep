@@ -370,7 +370,7 @@ fn every_birth_memo_key_is_a_version_member_whose_state_the_guest_reads() {
     };
     let (shot_member, _) = engine
         .vstream()
-        .publish(caller, &edition, shot, &World::visible_to(caller))
+        .publish(caller, &edition, &shot, &World::visible_to(caller))
         .expect("the birth shot from the draft into the edition");
     let world = engine.kernel().snapshot().world().clone();
     let full = dump_tree(&world);

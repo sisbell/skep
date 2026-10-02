@@ -73,7 +73,7 @@ fn a_shot_appends_the_next_trunk_member_from_the_clients_runs() {
         runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(1), 2)],
     };
     let before = k.current_seq();
-    let (member, seq) = vs.publish(P1, &pdoc(), shot, &readable).expect("the shot commits");
+    let (member, seq) = vs.publish(P1, &pdoc(), &shot, &readable).expect("the shot commits");
     assert_eq!(member, vdoc(), "the chain's first member");
     assert_eq!(seq, k.current_seq(), "one commit");
     assert!(seq > before);
@@ -139,7 +139,7 @@ fn a_shot_places_the_runs_the_client_rendered_not_what_the_draft_holds_at_commit
         .publish(
             P1,
             &pdoc(),
-            Shot {
+            &Shot {
                 base: Some(base(&pdoc(), 3)),
                 draft: Some(doc1()),
                 runs: vec![shot_run(&doc1(), &ca(1), 3)],
@@ -172,7 +172,7 @@ fn a_window_stays_a_window_and_a_daughter_lands_under_its_base() {
         .publish(
             P1,
             &pdoc(),
-            Shot { base: Some(base(&pdoc(), 3)), draft: None, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
+            &Shot { base: Some(base(&pdoc(), 3)), draft: None, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
             &readable,
         )
         .expect("the first member");
@@ -186,11 +186,11 @@ fn a_window_stays_a_window_and_a_daughter_lands_under_its_base() {
         runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 1)],
     };
     // Shot A off the head member1 → the trunk's next member.
-    let (member2, _) = vs.publish(P1, &pdoc(), staged(&member1), &readable).expect("A commits");
+    let (member2, _) = vs.publish(P1, &pdoc(), &staged(&member1), &readable).expect("A commits");
     assert_eq!(member2, a(&[1, 0, 1, 0, 3, 2]));
     // Shot B, ALSO staged off member1, after A landed → member1's daughter,
     // and no refusal (PUB-2.38: the gesture never fails for want of a base).
-    let (daughter, _) = vs.publish(P1, &pdoc(), staged(&member1), &readable).expect("B commits");
+    let (daughter, _) = vs.publish(P1, &pdoc(), &staged(&member1), &readable).expect("B commits");
     assert_eq!(daughter, a(&[1, 0, 1, 0, 3, 1, 1]), "the nested form (PUB-2.55)");
     let s = k.snapshot();
     let m5 = s.world().m5();
@@ -207,12 +207,12 @@ fn a_window_stays_a_window_and_a_daughter_lands_under_its_base() {
     assert_eq!(reading_surface(s.world().m3(), &member1), member1);
     // And a member is itself a base: a shot off the daughter nests again.
     let (granddaughter, _) = vs
-        .publish(P1, &pdoc(), staged(&daughter), &readable)
+        .publish(P1, &pdoc(), &staged(&daughter), &readable)
         .expect("nests again");
     assert_eq!(granddaughter, a(&[1, 0, 1, 0, 3, 1, 1, 1]));
     // A shot may name a member as `doc`: it is the document's shot.
     let (member3, _) = vs
-        .publish(P1, &member2, staged(&member2), &readable)
+        .publish(P1, &member2, &staged(&member2), &readable)
         .expect("named by a member");
     assert_eq!(member3, a(&[1, 0, 1, 0, 3, 3]));
 }
@@ -231,7 +231,7 @@ fn a_declared_deposit_in_the_staging_interval_is_carried_by_the_shot() {
         .publish(
             P1,
             &pdoc(),
-            Shot { base: Some(base(&pdoc(), 3)), draft: None, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
+            &Shot { base: Some(base(&pdoc(), 3)), draft: None, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
             &readable,
         )
         .expect("the head");
@@ -251,7 +251,7 @@ fn a_declared_deposit_in_the_staging_interval_is_carried_by_the_shot() {
         .publish(
             P1,
             &pdoc(),
-            Shot {
+            &Shot {
                 base: Some(base(&member1, 3)),
                 draft: None,
                 runs: vec![shot_run(&pdoc(), &pca(1), 1), shot_run(&pdoc(), &pca(3), 1)],
@@ -270,14 +270,14 @@ fn a_declared_deposit_in_the_staging_interval_is_carried_by_the_shot() {
         draft: None,
         runs: vec![shot_run(&pdoc(), &pca(1), 4)],
     };
-    let (daughter, _) = vs.publish(P1, &pdoc(), daughter_shot, &readable).expect("a daughter");
+    let (daughter, _) = vs.publish(P1, &pdoc(), &daughter_shot, &readable).expect("a daughter");
     assert_eq!(daughter, a(&[1, 0, 1, 0, 3, 1, 1]));
     assert_eq!(k.snapshot().world().m5().content_count(&daughter), n(4));
     assert!(matches!(
         rejected(vs.publish(
             P1,
             &pdoc(),
-            Shot { base: Some(base(&member1, 5)), draft: None, runs: vec![] },
+            &Shot { base: Some(base(&member1, 5)), draft: None, runs: vec![] },
             &readable
         )),
         PublishError::BaseExtentTooLarge
@@ -303,7 +303,7 @@ fn a_birth_shot_carries_no_tail_and_a_memberless_base_carries_its_deposits() {
             .publish(
                 P1,
                 &pdoc(),
-                Shot { base: base_named, draft: None, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
+                &Shot { base: base_named, draft: None, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
                 &readable_by(PrincipalId(1)),
             )
             .expect("the birth shot commits");
@@ -340,7 +340,7 @@ fn the_birth_extent_of_a_shot_born_version_counts_its_whole_placement_and_no_lat
         .publish(
             P1,
             &pdoc(),
-            Shot {
+            &Shot {
                 base: Some(base(&pdoc(), 3)),
                 draft: Some(doc1()),
                 runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(1), 1)],
@@ -356,7 +356,7 @@ fn the_birth_extent_of_a_shot_born_version_counts_its_whole_placement_and_no_lat
         // from pca(4): three families, none I-adjacent to the next.
         assert_eq!(m5.content_run_count(&member), 3, "the fixture places three families");
         assert_eq!(m5.content_count(&member), n(5));
-        assert_eq!(m5.birth_extent(&member), Some(n(5)), "born with all five");
+        assert_eq!(m5.birth_extent(&member), Some(&n(5)), "born with all five");
         // Minted off its memberless document as its base, the birth version
         // carries that base's extent — the birth bit is the birth SHAPE's,
         // not every birth version's — and a `placed` short of its birth
@@ -377,7 +377,7 @@ fn the_birth_extent_of_a_shot_born_version_counts_its_whole_placement_and_no_lat
     assert_eq!(s.world().m5().content_count(&member), n(6));
     assert_eq!(
         s.world().m5().birth_extent(&member),
-        Some(n(5)),
+        Some(&n(5)),
         "the deposit is no part of the birth"
     );
 }
@@ -397,14 +397,14 @@ fn a_birth_version_the_shot_minted_empty_is_noted_at_zero_and_carries_its_terms(
         .publish(
             P1,
             &pdoc(),
-            Shot { base: None, draft: None, runs: vec![] },
+            &Shot { base: None, draft: None, runs: vec![] },
             &readable_by(PrincipalId(1)),
         )
         .expect("an empty birth version, in the birth shape");
     assert_eq!(member, vdoc(), "the chain's first member");
     {
         let s = k.snapshot();
-        assert_eq!(s.world().m5().birth_extent(&member), Some(n(0)), "noted at zero by the mint");
+        assert_eq!(s.world().m5().birth_extent(&member), Some(&n(0)), "noted at zero by the mint");
         assert_eq!(
             s.world().m5().shot_terms(&member),
             Some(&ShotTerms { placed: n(0), base_extent: None }),
@@ -417,7 +417,7 @@ fn a_birth_version_the_shot_minted_empty_is_noted_at_zero_and_carries_its_terms(
     assert_eq!(s.world().m5().content_count(&member), n(1), "the head took the deposit");
     assert_eq!(
         s.world().m5().birth_extent(&member),
-        Some(n(0)),
+        Some(&n(0)),
         "born empty, whatever it took since"
     );
 }
@@ -461,7 +461,7 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
         "named by a member of the chain, the form is the document's (PUB-2.15)"
     );
     let (member, _) = vs
-        .publish(P1, &pdoc(), shot, &readable_by(PrincipalId(1)))
+        .publish(P1, &pdoc(), &shot, &readable_by(PrincipalId(1)))
         .expect("the shot commits");
     assert_eq!(member, vdoc());
     let s = k.snapshot();
@@ -474,10 +474,8 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
     assert_eq!(m5.content_count(&member), n(6));
     let at_member = m5.address_form_of(&member, &terms.placed);
     let values_of = |seg: &PlacedSegment| -> Vec<Vec<u8>> {
-        let run = match seg {
-            PlacedSegment::Value(run) | PlacedSegment::Window(run) => run,
-        };
-        run.addrs()
+        seg.run()
+            .addrs()
             .map(|a| content.value_at(a.tumbler()).expect("a placed value").as_bytes().to_vec())
             .collect()
     };
@@ -540,7 +538,7 @@ fn the_address_forms_agree_as_the_body_spells_them_where_their_runs_do_not() {
     };
     let requested = shot.address_form(&pdoc());
     let (member, _) = vs
-        .publish(P1, &pdoc(), shot, &readable_by(PrincipalId(1)))
+        .publish(P1, &pdoc(), &shot, &readable_by(PrincipalId(1)))
         .expect("the shot commits");
     let s = k.snapshot();
     let (m5, content) = (s.world().m5(), s.world().content());
@@ -618,7 +616,7 @@ fn the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes() {
         "a draft named by a member of its chain is judged as its document (PUB-2.15)"
     );
     let stored = k.snapshot().world().content().len();
-    vs.publish(P1, &pdoc(), shot, &readable_by(PrincipalId(1)))
+    vs.publish(P1, &pdoc(), &shot, &readable_by(PrincipalId(1)))
         .expect("the shot commits");
     assert_eq!(
         k.snapshot().world().content().len() - stored,

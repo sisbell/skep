@@ -108,7 +108,7 @@ pub(crate) fn require_registered_document(
 /// no extent is fabricated.
 pub(crate) fn birth_version(m3: &M3State, m5: &M5State, doc: &Address) -> Option<BirthVersion> {
     let addr = skep_arrangement::birth_version(m3, doc)?;
-    let extent = m5.birth_extent(&addr)?;
+    let extent = m5.birth_extent(&addr).cloned()?;
     Some(BirthVersion { addr, extent })
 }
 

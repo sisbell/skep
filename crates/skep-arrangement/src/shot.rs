@@ -15,7 +15,7 @@
 //! a `base` handed over without the extent its copy took would be a base the
 //! composite cannot compose against (PUB-2.42).
 
-use num_traits::Zero;
+use num_traits::{One, Zero};
 use skep_address::{content_subspace, document_of, Address, Nat};
 
 use crate::chain::trunk_of;
@@ -257,6 +257,17 @@ pub enum PlacedSegment {
     Window(Run),
 }
 
+impl PlacedSegment {
+    /// The run this segment places, whichever class it is — a value run's
+    /// positions or a window's I-extent. The class is the variant; a caller
+    /// after the run alone asks this rather than matching both arms.
+    pub fn run(&self) -> &Run {
+        match self {
+            PlacedSegment::Value(run) | PlacedSegment::Window(run) => run,
+        }
+    }
+}
+
 impl M5State {
     /// THE ADDRESS FORM READ AT THE MEMBER (l6-A4 = r6-4, owner-ruled
     /// 2026-09-29): `member`'s first `placed` content positions — the runs
@@ -269,7 +280,8 @@ impl M5State {
     /// here and signed alike, BY VALUE — and a run of any other document is a
     /// [`Window`](PlacedSegment::Window), signed BY ADDRESS. The runs are the
     /// arrangement's own, maximally merged, the last one CLIPPED where the
-    /// client's positions end; so what this answers for a committed member is
+    /// client's positions end, by the run-list's own clip — the range walk
+    /// every resolution takes; so what this answers for a committed member is
     /// what [`Shot::address_form`] answered for the request that minted it, as
     /// the body spells them (stated there), and a verifier holding the member
     /// composes the shot's signed body with no request in hand. `placed` is
@@ -278,23 +290,15 @@ impl M5State {
     /// `placed` answers what it has; an absent arrangement answers nothing.
     pub fn address_form_of(&self, member: &Address, placed: &Nat) -> Vec<PlacedSegment> {
         let trunk = trunk_of(member);
-        let mut left = placed.clone();
-        let mut out = Vec::new();
-        for run in self.content_runs(member) {
-            if left.is_zero() {
-                break;
-            }
-            // A propagating site: the start is a resident run's own, and a
-            // width clipped to the positions left is at least one.
-            let taken = if *run.width() > left {
-                Run { i_start: run.i_start.clone(), width: left.clone() }
-            } else {
-                run.clone()
-            };
-            left = &left - taken.width();
-            let by_value = run_origin_document(&taken).as_ref() == Some(&trunk);
-            out.push(if by_value { PlacedSegment::Value(taken) } else { PlacedSegment::Window(taken) });
-        }
-        out
+        self.content_list(member)
+            .iter_resolve_range(&Nat::one(), placed)
+            .map(|run| {
+                if run_origin_document(&run).as_ref() == Some(&trunk) {
+                    PlacedSegment::Value(run)
+                } else {
+                    PlacedSegment::Window(run)
+                }
+            })
+            .collect()
     }
 }

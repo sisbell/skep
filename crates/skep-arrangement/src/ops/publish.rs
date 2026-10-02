@@ -159,10 +159,12 @@ where
     /// the document's, whichever member names it, and its publication, chain
     /// and base are judged on that document.
     ///
-    /// `shot` is taken by value, the request handed over whole — no caller
-    /// keeps a shot it has published. Its admission reads it through a
-    /// borrow, as a door's pre-check does, and the placement clones each
-    /// by-reference run it keeps.
+    /// `shot` is BORROWED, as [`shot_admission`] borrows it: the composite
+    /// reads the request — its admission, the re-insert's count, the
+    /// existence walk — and clones each by-reference run into the member's
+    /// placement, so taking it whole would cost a caller that keeps its
+    /// request (to report it, or to ask its address form after the commit) a
+    /// clone of every run, for nothing the composite moves.
     ///
     /// COST, AND WHO OWNS IT. The re-insert pushes a mint and a content write
     /// per draft-native value — `2n` records for `n` values, INSERT's own
@@ -192,7 +194,7 @@ where
         &self,
         caller: Caller,
         doc: &Address,
-        shot: Shot,
+        shot: &Shot,
         readable: &dyn Fn(&W, &Address) -> bool,
     ) -> Result<(Address, Seq), TxnError<PublishError>> {
         let trunk = trunk_of(doc);
@@ -218,7 +220,7 @@ where
             // the member is minted under and the runs settled beside their
             // origin documents.
             let Admission { anchor, supplied } =
-                admit(stg.working(), caller, doc, &shot, readable)?;
+                admit(stg.working(), caller, doc, shot, readable)?;
             // Which runs are the STAGING DRAFT's, re-inserted as fresh
             // identity rather than placed by reference (PUB-2.40) — the
             // family rule `Shot` states, by which `Shot::reinserted_values`

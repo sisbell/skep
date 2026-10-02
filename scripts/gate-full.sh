@@ -22,6 +22,12 @@ cargo check -p skepd --lib --bins || exit $?
 cargo check -p skep-signature || exit $?
 cargo check -p skep-signature --features sign || exit $?
 
+# skep-arrangement's library without `test-hooks` — every test build turns
+# the feature on (the crate's self dev-dependency, and skep-retrieval's), so
+# this is the build that shows the store compiles without `seat_link`,
+# whatever the daemon's graph holds.
+cargo check -p skep-arrangement --lib || exit $?
+
 # The feature edges the full run below never compiles: `client` is
 # default-off, and `observe` is on in every test build. The notebook build
 # (`client` on); the build without the dump route (`observe` off), its

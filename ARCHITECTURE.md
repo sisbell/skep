@@ -40,7 +40,7 @@ foundation and on the stores above it.
   §The name space.
 - `skep-content` — the write-once map from address to value.
 - `skep-arrangement` — documents as arrangements of content, versions,
-  provenance.
+  provenance. Its modules and rules: §The arrangement.
 - `skep-links` — typed links, supersession, retraction.
 - `skep-retrieval` — content and provenance queries.
 - `skep-discovery` — finding links, projection.
@@ -161,6 +161,55 @@ Rules that hold across its files:
 Its integration suite is one binary, `tests/it/`: one file per surface over
 the shared `common` world, and `heap`, the binary's byte-counting
 allocator.
+
+## The arrangement, `skep-arrangement`
+
+`skep-arrangement` owns what a document holds: per document a content and a
+link run-list (its arrangement), the provenance relation R (every content
+address a document has ever held), and two per-member facts — the birth
+extent and the shot terms — all in one slice, `M5State`. It is the one place
+in the workspace where state is destroyed: `delete` removes positions and
+`rearrange` reorders them, in place, and R keeps every address a delete
+removed. Its modules are declared in `src/lib.rs` in dependency order, each
+with a line saying what it holds; each names in code only the modules above
+it, and `tests/it/tidy.rs` checks it. `ops.rs` is the `Vstream` handle and
+what its operations share; beneath it, `ops/insert.rs`, `ops/publish.rs`,
+`ops/copy.rs`, `ops/delete.rs`, `ops/rearrange.rs` and `ops/version.rs` each
+hold one operation's `impl` block. Its `test-hooks` feature (default off)
+compiles in `seat_link`, the test-only twin of the link seat;
+`scripts/gate-full.sh` checks the library without it.
+
+Rules that hold across its files:
+
+- **One fold.** A committed `M5State` comes only from `apply_m5` over an
+  `M5Rec`. The fold reaches an arrangement through `state.rs`'s own
+  `arrangement_of` and calls nothing defined in `reads.rs`, so an edit to a
+  read cannot change what replay folds; `tests/it/tidy.rs` checks it.
+- **One door for a run.** `Run::new` admits every run not built in this
+  crate — the serde shadow and the `LinkSeat` fold go through it — and every
+  in-crate literal starts at an address that already is a full element
+  position: a resident run's start, an in-crate shift of one, or what M3's
+  `mint_content` returned. `runlist::extend_or_push_run` is the one place a
+  built run is widened and the one place a placement's runs are accumulated.
+- **One allocation step.** Every fresh content address is minted and written
+  by `ops::allocate_for_placement`, inside the transaction whose placement
+  record places it.
+- **The version chain is asked, never spelled.** Every trunk, head,
+  publication and surface question in this crate goes through `chain.rs`,
+  the one reader of M3's version frontier; the floating readers of
+  `skep-retrieval` and `skep-discovery` ask its `reading_surface` rather than
+  float by hand.
+- **One front door.** Every gated op opens with `ownership::gate_write`.
+- **The edition is append-only by the ops.** The fold does not check it;
+  `Vstream`'s card lists the ops that keep it, and an op that writes a
+  content arrangement joins that list.
+- **The slice's shape is its format.** `M5State`'s fields and `M5Rec`'s
+  variants are appended, never inserted or reordered: bincode writes fields
+  in order and variants by index, and `skep-kernel`'s goldens pin the bytes.
+
+Its integration suite is one binary, `tests/it/`: one file per surface over
+the shared `common` world, and `tidy`, which checks the module order and the
+first rule.
 
 ## The operation surface, `skep-febe`
 

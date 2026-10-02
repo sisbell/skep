@@ -85,20 +85,22 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// the two CLIENT terms of that shot which nothing else the fold keeps
 /// answers — the COUNT the client placed (Σ width of its runs, `placed`) and
 /// the base's EXTENT the staged copy took (`base_extent`), an option whose
-/// absence IS the birth bit (a first shot with `base` absent, where the count
-/// is `birth_extent(D.1)`). They ride the shot's own placing record
-/// ([`ShotPlace`](M5Rec::ShotPlace)), so they are hashed into the commit
-/// chain, folded here, carried by every checkpoint, replayed on every replica
-/// and read off the live snapshot by anyone holding the member's address
-/// ([`shot_terms`](M5State::shot_terms)) — which is what a verifier of the
-/// shot's entry signature needs beyond the member's own runs: the signature
-/// binds the runs the client placed in the address form, `placed` says where
-/// they end and the base's carried tail begins, `base_extent` is in the
-/// signed bytes, and `base` itself is derived from the member's address. The
-/// run-list erases the boundary between the client's last run and the
-/// carried tail whenever the two are I-adjacent, so nothing the arrangement
-/// holds afterwards could re-derive `placed`. Nothing reads them to decide a
-/// write.
+/// absence IS the birth bit — the BIRTH SHAPE's: a first shot with `base`
+/// absent, where the count is `birth_extent(D.1)`; a birth version minted off
+/// its memberless document as its base carries `Some` of the extent that
+/// copy took, and its birth extent counts the tail carried past it. They ride
+/// the shot's own placing record ([`ShotPlace`](M5Rec::ShotPlace)), so they
+/// are hashed into the commit chain, folded here, carried by every
+/// checkpoint, replayed on every replica and read off the live snapshot by
+/// anyone holding the member's address ([`shot_terms`](M5State::shot_terms))
+/// — which is what a verifier of the shot's entry signature needs beyond the
+/// member's own runs: the signature binds the runs the client placed in the
+/// address form, `placed` says where they end and the base's carried tail
+/// begins, `base_extent` is in the signed bytes, and `base` itself is derived
+/// from the member's address. The run-list erases the boundary between the
+/// client's last run and the carried tail whenever the two are I-adjacent, so
+/// nothing the arrangement holds afterwards could re-derive `placed`. Nothing
+/// reads them to decide a write.
 ///
 /// CLASS INVARIANTS, relating the fields. The reads state what they
 /// answer; these are what makes those answers mean it.
@@ -235,7 +237,11 @@ pub struct ShotTerms {
     /// The extent of the base the staged copy TOOK — the shot's
     /// `base_extent`, in its signed body — or `None` in the BIRTH SHAPE, the
     /// base absent (PUB-2.34): the absence IS the birth bit, and there the
-    /// count is `birth_extent(D.1)`, no tail being carried.
+    /// count is `birth_extent(D.1)`, no tail being carried. The bit is the
+    /// birth SHAPE's, not every birth version's: a birth version minted off
+    /// its memberless document as its base carries `Some` of the extent that
+    /// copy took, and a `placed` short of its birth extent by the tail it
+    /// carried.
     pub base_extent: Option<Nat>,
 }
 
@@ -309,10 +315,12 @@ pub enum M5Rec {
     /// re-inserted, then the base's carried tail — spliced at content
     /// ordinal 1 + R-append (J1★), as `ContentPlace` at ordinal 1 would; AND
     /// the shot's [`ShotTerms`] — the two client facts the arrangement cannot
-    /// keep — which the fold notes for the member. Pushed for EVERY member
-    /// the shot mints, an empty placement included: the terms exist whatever
-    /// the placement holds, and a birth version born empty is noted at its
-    /// birth, zero, by this record (BIRTH★).
+    /// keep, `terms.placed` counting the client's positions alone and so
+    /// short of `runs`' Σ width by the carried tail's — which the fold notes
+    /// for the member. Pushed for EVERY member the shot mints, an empty
+    /// placement included: the terms exist whatever the placement holds, and
+    /// a birth version born empty is noted at its birth, zero, by this record
+    /// (BIRTH★).
     #[non_exhaustive]
     ShotPlace { doc: Address, runs: Vec<Run>, terms: ShotTerms },
 }

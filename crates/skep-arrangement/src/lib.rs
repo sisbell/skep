@@ -116,8 +116,10 @@
 //! outside the chain, as [`Shot`] requires), and any other document's stay
 //! windows behind the source gate (PUB-2.40, PUB-6.23);
 //! the base's post-render deposits are carried after them (PUB-2.42,
-//! PUB-2.45). The BIRTH VERSION is minted by the same composite in its BIRTH
-//! SHAPE — the base absent (PUB-2.34) — and so with no tail to carry.
+//! PUB-2.45). The BIRTH VERSION is minted by the same composite in either of
+//! two shapes: the BIRTH SHAPE, the base absent (PUB-2.34), with no tail to
+//! carry; or the memberless document named as its own base, carrying the
+//! deposits it took after the render (PUB-2.42, PUB-2.66).
 //!
 //! The readers that FLOAT — M6's and M8's arrangement readers, and
 //! `version`'s snapshot, each composing [`reading_surface`] first — answer a

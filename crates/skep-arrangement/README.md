@@ -8,7 +8,7 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **The V-stream** — per-document run lists mapping virtual positions
   (what a reader sees) onto immutable content addresses (what is
   stored); every edit is a new arrangement, never a byte change.
-- **Editing composites** — insert, copy (transclusion — the copied
+- **Editing composites** — insert, copy (transclusion — the transcluded
   spans keep their origin identity), delete, rearrange; each a
   kernel transaction composing namespace mints and content writes.
 - **Versioning** — VERSION forks a document: the fork's arrangement

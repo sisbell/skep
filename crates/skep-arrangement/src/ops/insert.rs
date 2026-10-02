@@ -154,8 +154,9 @@ where
                 Some(ty)
             }
         };
-        // The seam's one line: the attested arm, which is `transact` where
-        // this handle carries no attestation (signed ops).
+        // The attested arm (signed ops): `transact` itself where this handle
+        // carries no attestation, else the same commit with its marker's
+        // signature slot filled.
         self.kernel.transact_attested(&keys, self.attest, |stg| {
             gate_write(
                 stg.working().m3(),

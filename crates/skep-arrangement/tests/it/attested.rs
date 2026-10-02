@@ -9,14 +9,14 @@ use tempfile::tempdir;
 use crate::common::*;
 
 /// THE ATTESTED HANDLE FILLS THE SLOT OF ITS OWN TRANSACTION AND NO OTHER
-/// (signed ops, the seam build; the design record §2.4's route, the confirmed
-/// placement): a `Vstream::attested` handle's `insert` and `publish` commit
-/// under the attestation it carries — the kernel reads it back at exactly
-/// those boundaries — while a plain `Vstream::new` handle's writes, and the
-/// attested handle's other writes (`delete`, `copy`), leave their slots
-/// empty. The driver's own signature is unchanged; the value rides the
-/// handle. The chain is not moved by the slot: an unattested twin history
-/// chains identically.
+/// (signed ops, the seam build; the design record §2.4's route, the
+/// attestation riding the handle): a `Vstream::attested` handle's `insert`
+/// and `publish` commit under the attestation it carries — the kernel reads
+/// it back at exactly those boundaries — while a plain `Vstream::new`
+/// handle's writes, and the attested handle's other writes (`delete`,
+/// `copy`), leave their slots empty. The driver's own signature is
+/// unchanged; the value rides the handle. The chain is not moved by the
+/// slot: an unattested twin history chains identically.
 #[test]
 fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
     use skep_kernel::Attestation;

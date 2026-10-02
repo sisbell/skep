@@ -145,8 +145,8 @@ impl Shot {
     /// member of its chain naming the shot as the document itself does (l6-A4
     /// = r6-4, owner-ruled 2026-09-29; fam2-Q's arm A): the segments the
     /// shot's entry signature is made over, each run classed by the family
-    /// the commit gives it — a run the commit COPIES IN is
-    /// [`Copied`](PlacedSegment::Copied), signed BY VALUE: the shot
+    /// the commit gives it — a run the commit COPIES IN (the corpus's verb)
+    /// is a [`Value`](PlacedSegment::Value) run, signed BY VALUE: the shot
     /// document's own I-space (its origin document, that projection), placed
     /// by reference, and the staging draft's text (its origin document the
     /// draft's trunk), re-inserted as fresh identity under the document's own
@@ -155,15 +155,15 @@ impl Shot {
     /// another document's I-space, signed BY ADDRESS. Consecutive windows
     /// that are I-adjacent become ONE, through the placement's own
     /// accumulator, exactly as the member's run-list will hold them; the
-    /// copied runs keep their boundaries, which the value form never spells.
+    /// value runs keep their boundaries, which the body never spells.
     ///
     /// So it answers for the request what [`M5State::address_form_of`]
     /// answers for the member it mints, read back with the shot's `placed`
     /// count — AS THE SIGNED BODY SPELLS IT: the same windows, run for run
-    /// and in the same V-places, and between them the same copied positions,
-    /// value for value. The copied runs themselves need not match — the member
-    /// holds as one run what the request may name as several, and a
-    /// draft-native run's addresses are the draft's here and fresh there —
+    /// and in the same V-places, and between them the same positions spelled
+    /// by value, value for value. The value runs themselves need not match —
+    /// the member holds as one run what the request may name as several, and
+    /// a draft-native run's addresses are the draft's here and fresh there —
     /// which is why the body spells a stretch by its values and never by its
     /// runs.
     ///
@@ -179,14 +179,14 @@ impl Shot {
         let mut out: Vec<PlacedSegment> = Vec::new();
         // The consecutive windows in hand, accumulated through the ONE run
         // accumulator (`extend_or_push_run`), so the merge condition is the
-        // placement's own; a copied run closes the group.
+        // placement's own; a value run closes the group.
         let mut windows: Vec<Run> = Vec::new();
         for ShotRun { run, .. } in &self.runs {
-            let copied = run_origin_document(run)
+            let by_value = run_origin_document(run)
                 .is_some_and(|origin| origin == trunk || draft_doc.as_ref() == Some(&origin));
-            if copied {
+            if by_value {
                 out.extend(windows.drain(..).map(PlacedSegment::Window));
-                out.push(PlacedSegment::Copied(run.clone()));
+                out.push(PlacedSegment::Value(run.clone()));
             } else {
                 extend_or_push_run(&mut windows, run.clone());
             }
@@ -240,13 +240,16 @@ impl Shot {
 /// holding the member, and no request, compose the body the client signed.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PlacedSegment {
-    /// A run the commit COPIES IN — the shot document's own I-space by
-    /// reference, or the staging draft's text re-inserted as fresh identity
-    /// under it: signed BY VALUE, each position's value in V-order. At the
-    /// member every such run is of the member's own trunk; the request's run
-    /// boundaries within a stretch of them are not the member's and are
-    /// spelled by nothing.
-    Copied(Run),
+    /// A run of a VALUE STRETCH — a run the commit copies in (the corpus's
+    /// verb): the shot document's own I-space by reference, or the staging
+    /// draft's text re-inserted as fresh identity under it — signed BY VALUE,
+    /// each position's value in V-order. The verb is not COPY's act: a value
+    /// run may carry fresh identity, which COPY never mints, and a run the
+    /// draft took by COPY from a third document is a
+    /// [`Window`](PlacedSegment::Window) here. At the member every such run
+    /// is of the member's own trunk; the request's run boundaries within a
+    /// stretch of them are not the member's and are spelled by nothing.
+    Value(Run),
     /// A WINDOW onto another document's I-space, which the commit keeps as a
     /// reference: signed BY ADDRESS, its I-start and its width — as the
     /// member's arrangement holds the run, maximally merged, and clipped to
@@ -260,7 +263,7 @@ impl M5State {
     /// the client placed, which its entry signature covers, ahead of the
     /// base's carried tail — as [`PlacedSegment`]s in V-order, each run
     /// classed by its ORIGIN DOCUMENT as the commit left it: a run of the
-    /// member's own trunk is [`Copied`](PlacedSegment::Copied) — the shot
+    /// member's own trunk is a [`Value`](PlacedSegment::Value) run — the shot
     /// document's own I-space placed by reference, and the staging draft's
     /// text the commit re-inserted under that trunk, told apart by nothing
     /// here and signed alike, BY VALUE — and a run of any other document is a
@@ -289,8 +292,8 @@ impl M5State {
                 run.clone()
             };
             left = &left - taken.width();
-            let copied = run_origin_document(&taken).as_ref() == Some(&trunk);
-            out.push(if copied { PlacedSegment::Copied(taken) } else { PlacedSegment::Window(taken) });
+            let by_value = run_origin_document(&taken).as_ref() == Some(&trunk);
+            out.push(if by_value { PlacedSegment::Value(taken) } else { PlacedSegment::Window(taken) });
         }
         out
     }

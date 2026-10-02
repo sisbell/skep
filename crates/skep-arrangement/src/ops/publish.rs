@@ -32,9 +32,9 @@ where
     /// member of `doc`'s chain, born PUBLISHED, in ONE commit, its
     /// arrangement taken from the CLIENT-SUPPLIED runs of `shot` (PUB-8.1)
     /// and from nothing any draft holds at commit. Returns the member's
-    /// address and the commit `Seq`. The mint ceremony's birth version
-    /// (PUB-2.34) is minted by this same composite in its birth shape,
-    /// `shot.base` absent.
+    /// address and the commit `Seq`. The birth version (PUB-2.34) is minted
+    /// by this same composite — in the birth shape, `shot.base` absent, or off
+    /// the memberless document named as its own base (DESTINATION, below).
     ///
     /// DESTINATION (PUB-2.37, PUB-2.39, PUB-2.55): the next member of the
     /// chain anchored at the base, decided AT COMMIT — the trunk's next
@@ -208,8 +208,9 @@ where
                 keys.push(M3State::version_lock_key(&base.member));
             }
         }
-        // The seam's one line: the attested arm, which is `transact` where
-        // this handle carries no attestation (signed ops).
+        // The attested arm (signed ops): `transact` itself where this handle
+        // carries no attestation, else the same commit with its marker's
+        // signature slot filled.
         self.kernel.transact_attested(&keys, self.attest, |stg| {
             // Slots 1 through 6 — the shot's admission, asked of this
             // transaction's working world: its verdicts are `shot_admission`'s,
@@ -253,15 +254,16 @@ where
                     return Err(PublishError::DanglingSource);
                 }
             }
-            // THE SHOT's FIRST TERM (D25 (c′)): the positions the client
-            // placed — Σ width of its runs, whatever family each is — read off
-            // the request before the placement erases the boundary between
-            // the last of them and the carried tail.
-            let placed_count = supplied.iter().map(|settled| settled.run.width()).sum::<Nat>();
-            // The member's arrangement: the client's runs in order — the
+            // THE SHOT's FIRST TERM (D25 (c′)), `placed`: the positions the
+            // client placed — Σ width of its runs, whatever family each is —
+            // read off the request before the placement below erases the
+            // boundary between the last of them and the carried tail, which
+            // `placed` never counts.
+            let placed = supplied.iter().map(|settled| settled.run.width()).sum::<Nat>();
+            // The member's placement: the client's runs in order — the
             // draft-native ones re-inserted as fresh identity under the
             // document's own I-space — then the base's post-render deposits.
-            let mut placed: Vec<Run> = Vec::new();
+            let mut placement: Vec<Run> = Vec::new();
             for SettledRun { run, origin_doc } in supplied {
                 if draft_native(&origin_doc) {
                     for a in run.addrs() {
@@ -271,12 +273,17 @@ where
                             .value_at(a.tumbler())
                             .cloned()
                             .expect("the existence check found a value at every address of every run, and M4's fold only adds");
-                        allocate_for_placement::<_, PublishError>(stg, &trunk, value, &mut placed)?;
+                        allocate_for_placement::<_, PublishError>(
+                            stg,
+                            &trunk,
+                            value,
+                            &mut placement,
+                        )?;
                     }
                 } else {
-                    extend_or_push_run(&mut placed, run.clone());
+                    extend_or_push_run(&mut placement, run.clone());
                 }
-                if placed.len() > MAX_PLACED_RUNS {
+                if placement.len() > MAX_PLACED_RUNS {
                     return Err(PublishError::TooManyRuns);
                 }
             }
@@ -286,8 +293,8 @@ where
             // each is accumulated, the walk stopping at the cap.
             if let Some(base) = &shot.base {
                 for run in stg.working().m5().content_runs_past(&base.member, &base.extent) {
-                    extend_or_push_run(&mut placed, run);
-                    if placed.len() > MAX_PLACED_RUNS {
+                    extend_or_push_run(&mut placement, run);
+                    if placement.len() > MAX_PLACED_RUNS {
                         return Err(PublishError::TooManyRuns);
                     }
                 }
@@ -302,9 +309,9 @@ where
             stg.push(
                 M5Rec::ShotPlace {
                     doc: member.clone(),
-                    runs: placed,
+                    runs: placement,
                     terms: ShotTerms {
-                        placed: placed_count,
+                        placed,
                         base_extent: shot.base.as_ref().map(|base| base.extent.clone()),
                     },
                 }

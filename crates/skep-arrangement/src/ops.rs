@@ -98,7 +98,11 @@ pub use publish::shot_admission;
 /// accumulated, and what feeds them is pulled a run at a time — COPY's LAZY
 /// resolution of each spec, the shot's walk of its base's carried tail — so
 /// the cap also stops the walk: an over-budget request is refused at the cap
-/// rather than built in full and measured afterwards.
+/// rather than built in full and measured afterwards. For a shot, what it
+/// places is its WHOLE placement — the client's runs and the base's carried
+/// tail together, counted in runs — and never the shot term
+/// [`placed`](crate::ShotTerms::placed), which counts the client's positions
+/// alone.
 ///
 /// THE REMEDY DIFFERS BETWEEN THE TWO. A copy needing more runs than this is
 /// split by the caller, exactly as an over-budget transaction already is. A
@@ -200,16 +204,20 @@ pub const MAX_REINSERTED_VALUES: usize = 1 << 17;
 /// does.
 pub struct Vstream<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
-    /// THE ATTESTATION this handle's publish-class-capable calls commit under
-    /// (signed ops): handed to the kernel's `transact_attested` arm at the one
-    /// transaction `insert` and `publish` each open, filling THAT commit
-    /// marker's signature slot; `None` — the plain handle every other
-    /// constructor site builds — leaves the slot empty. A BORROW, so the
-    /// handle stays `Copy` and the value cannot outlive the caller that owns
-    /// it for the one call this handle serves. The other writes of this
-    /// surface (`delete`, `copy`, `rearrange`, `version`, the seat op) take
-    /// the plain arm whatever this field holds: outside the seam build's
-    /// slice, a handle built with a value fills no slot through them.
+    /// THE ATTESTATION this handle's `insert` and `publish` commit under
+    /// (signed ops) — the two ops of this surface in THE CHECKED SET, the op
+    /// kinds the daemon's write-path check reaches (the owner's term;
+    /// skepd's `in_checked_set`): handed to the kernel's `transact_attested`
+    /// arm at the one transaction each opens, filling THAT commit marker's
+    /// signature slot; `None` — the plain handle every other constructor site
+    /// builds — leaves the slot empty. A BORROW, so the handle stays `Copy`
+    /// and the value cannot outlive the caller that owns it for the one call
+    /// this handle serves. The other writes of this surface (`delete`,
+    /// `copy`, `rearrange`, `version`, the seat op) lie outside the checked
+    /// set and take the plain arm whatever this field holds — `version`
+    /// included where it lands in the published world, the publish class
+    /// being the daemon's classification of a write and not an op kind — so a
+    /// widening of the set that reaches one of them changes its arm here too.
     attest: Option<&'k Attestation>,
 }
 
@@ -221,10 +229,11 @@ impl<'k, W: WorldState> Vstream<'k, W> {
         Vstream::attested(kernel, None)
     }
 
-    /// THE ATTESTED CONSTRUCTOR (signed ops; the confirmed placement): a
-    /// handle whose `insert` and `publish` commit under `attest`. Its callers
-    /// are the slot's producer set — M10's dispatch, with a value the
-    /// daemon's check admitted — and nothing else; `None` is [`Vstream::new`].
+    /// THE ATTESTED CONSTRUCTOR (signed ops; the attestation rides the
+    /// handle, as the owner confirmed it): a handle whose `insert` and
+    /// `publish` commit under `attest`. Its callers are the slot's producer
+    /// set — M10's dispatch, with a value the daemon's check admitted — and
+    /// nothing else; `None` is [`Vstream::new`].
     pub fn attested(kernel: &'k Kernel<W>, attest: Option<&'k Attestation>) -> Vstream<'k, W> {
         Vstream { kernel, attest }
     }

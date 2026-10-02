@@ -251,7 +251,7 @@ fn every_copied_run_origin_readable(
 ) -> bool {
     let reader = world.reader_class(Some(principal));
     segments.iter().all(|segment| match segment {
-        PlacedSegment::Copied(run) => document_of(run.i_start())
+        PlacedSegment::Value(run) => document_of(run.i_start())
             .map(|d| trunk_of(&d))
             .is_some_and(|origin| origin == *trunk || reader.readable(&origin)),
         PlacedSegment::Window(_) => true,
@@ -285,7 +285,7 @@ fn publish_body(
     // past this, the builder names each refusal itself (`refused`).
     segments.iter().try_fold(0u64, |placed, segment| {
         let run = match segment {
-            PlacedSegment::Copied(run) | PlacedSegment::Window(run) => run,
+            PlacedSegment::Value(run) | PlacedSegment::Window(run) => run,
         };
         placed.checked_add(spelled(run.width())?).ok_or(ComposeFault::Unspellable)
     })?;
@@ -305,7 +305,7 @@ fn publish_body(
     let mut body = PublishBody::within(MAX_SHOT_BODY_BYTES, base_extent);
     for segment in segments {
         match segment {
-            PlacedSegment::Copied(run) => {
+            PlacedSegment::Value(run) => {
                 for a in run.addrs() {
                     let v = content.value_at(a.tumbler()).ok_or(ComposeFault::MissingValue)?;
                     body = body.push(v.as_bytes()).map_err(refused)?;

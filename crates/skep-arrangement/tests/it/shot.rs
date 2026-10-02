@@ -19,26 +19,26 @@ fn run_starts(m5: &M5State, doc: &Address) -> Vec<Address> {
     m5.content_runs(doc).map(|r| r.i_start().clone()).collect()
 }
 
-/// One item of a shot's signed body as it spells the address form: a COPIED
-/// position by its value, and a WINDOW by its run — so the runs a stretch of
-/// copied positions was named by, and the addresses they name, are spelled
-/// by nothing.
+/// One item of a shot's signed body as it spells the address form: a
+/// position of a VALUE run by its value, and a WINDOW by its run — so the
+/// runs a value stretch was named by, and the addresses they name, are
+/// spelled by nothing.
 #[derive(Debug, PartialEq)]
 enum Spelled {
     Value(Vec<u8>),
     Window(Run),
 }
 
-/// `form` as the signed body spells it, each copied value read off
+/// `form` as the signed body spells it, each value run's values read off
 /// `content`.
 fn spelled(form: &[PlacedSegment], content: &ContentStore) -> Vec<Spelled> {
     let mut out = Vec::new();
     for segment in form {
         match segment {
-            PlacedSegment::Copied(run) => out.extend(run.addrs().map(|a| {
+            PlacedSegment::Value(run) => out.extend(run.addrs().map(|a| {
                 let value = content
                     .value_at(a.tumbler())
-                    .expect("a copied position holds a value");
+                    .expect("a value run's position holds a value");
                 Spelled::Value(value.as_bytes().to_vec())
             })),
             PlacedSegment::Window(run) => out.push(Spelled::Window(run.clone())),
@@ -357,6 +357,18 @@ fn the_birth_extent_of_a_shot_born_version_counts_its_whole_placement_and_no_lat
         assert_eq!(m5.content_run_count(&member), 3, "the fixture places three families");
         assert_eq!(m5.content_count(&member), n(5));
         assert_eq!(m5.birth_extent(&member), Some(n(5)), "born with all five");
+        // Minted off its memberless document as its base, the birth version
+        // carries that base's extent — the birth bit is the birth SHAPE's,
+        // not every birth version's — and a `placed` short of its birth
+        // extent by the tail it carried.
+        assert_eq!(
+            m5.shot_terms(&member),
+            Some(&ShotTerms {
+                placed: n(4),
+                base_extent: Some(n(3)),
+            }),
+            "the client placed four; the fifth is the carried deposit"
+        );
     }
     // A deposit into the head grows the member and not its birth.
     vs.insert(P1, &pdoc(), vp(1, 6), vec![val(b"y")], declared())
@@ -415,13 +427,13 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
     // l6-A4 = r6-4 on both sides of the commit: `Shot::address_form` for the
     // request and `M5State::address_form_of` for the member it minted agree
     // as the signed body spells them — every window the same run, and the
-    // copied positions the same values in the same places; this fixture's
-    // copied runs fall on the same boundaries on both sides, so they are
-    // compared pair by pair, class and width with them — over a shot holding
-    // all three families with the two seams the member's run-list erases: two
-    // I-ADJACENT WINDOWS the placement merges into one, and the base's
-    // CARRIED TAIL merged into the client's last own-origin run, which the
-    // member side CLIPS back at `placed`. And the terms the member carries
+    // positions spelled by value the same values in the same places; this
+    // fixture's value runs fall on the same boundaries on both sides, so they
+    // are compared pair by pair, class and width with them — over a shot
+    // holding all three families with the two seams the member's run-list
+    // erases: two I-ADJACENT WINDOWS the placement merges into one, and the
+    // base's CARRIED TAIL merged into the client's last own-origin run, which
+    // the member side CLIPS back at `placed`. And the terms the member carries
     // are the request's: `placed` the runs' Σ width, `base_extent` the base's.
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
@@ -463,21 +475,21 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
     let at_member = m5.address_form_of(&member, &terms.placed);
     let values_of = |seg: &PlacedSegment| -> Vec<Vec<u8>> {
         let run = match seg {
-            PlacedSegment::Copied(run) | PlacedSegment::Window(run) => run,
+            PlacedSegment::Value(run) | PlacedSegment::Window(run) => run,
         };
         run.addrs()
             .map(|a| content.value_at(a.tumbler()).expect("a placed value").as_bytes().to_vec())
             .collect()
     };
-    assert_eq!(requested.len(), 3, "the two windows merged, then two copied runs");
+    assert_eq!(requested.len(), 3, "the two windows merged, then two value runs");
     assert_eq!(at_member.len(), 3, "read back the same, the last clipped at `placed`");
     for (r, m) in requested.iter().zip(&at_member) {
         match (r, m) {
             (PlacedSegment::Window(x), PlacedSegment::Window(y)) => {
                 assert_eq!(x, y, "a window is the same run on both sides")
             }
-            (PlacedSegment::Copied(x), PlacedSegment::Copied(y)) => {
-                assert_eq!(x.width(), y.width(), "a copied run keeps its width");
+            (PlacedSegment::Value(x), PlacedSegment::Value(y)) => {
+                assert_eq!(x.width(), y.width(), "a value run keeps its width");
                 assert_eq!(values_of(r), values_of(m), "…and spells the same values");
             }
             other => panic!("the classes differ: {other:?}"),
@@ -488,17 +500,17 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
         "the merged window: {at_member:?}"
     );
     assert!(
-        matches!(&at_member[2], PlacedSegment::Copied(c) if *c.i_start() == pca(1) && *c.width() == n(2)),
+        matches!(&at_member[2], PlacedSegment::Value(v) if *v.i_start() == pca(1) && *v.width() == n(2)),
         "the last own run clipped from three to the two the client placed: {at_member:?}"
     );
     // Asked past the client's positions, the member answers what it has —
     // the whole run, the tail included; asked of nothing, nothing.
     assert!(
-        matches!(&m5.address_form_of(&member, &n(9))[2], PlacedSegment::Copied(c) if *c.width() == n(3))
+        matches!(&m5.address_form_of(&member, &n(9))[2], PlacedSegment::Value(v) if *v.width() == n(3))
     );
     assert!(m5.address_form_of(&member, &n(0)).is_empty());
-    assert!(m5.address_form_of(&doc2(), &n(2)).iter().all(|s| matches!(s, PlacedSegment::Copied(_))),
-        "a document's own runs are copied, read at the address named");
+    assert!(m5.address_form_of(&doc2(), &n(2)).iter().all(|s| matches!(s, PlacedSegment::Value(_))),
+        "a document's own runs are spelled by value, read at the address named");
 }
 
 #[test]
@@ -507,7 +519,7 @@ fn the_address_forms_agree_as_the_body_spells_them_where_their_runs_do_not() {
     // SPELLS THEM, and not run for run. The request names the edition's own
     // `a` and `b` as two runs and the draft's `a b` at the draft's addresses;
     // the member holds the first two as ONE run and the draft's text at FRESH
-    // addresses under the edition's own I-space. Spelled — a copied run by
+    // addresses under the edition's own I-space. Spelled — a value run by
     // its values, a window by its run — the two read alike, the window in the
     // same V-place between them.
     let k = mem_kernel();

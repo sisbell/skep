@@ -40,10 +40,12 @@
 //! M5), C-fin finiteness, and unconditional no-GC permanence (orphan
 //! content persists; M4 does not even know about references).
 //!
-//! **By active enforcement:** the no-overwrite half of S0(b), guarded in
-//! [`stage_write`] — which, because [`ContentWrite`]'s fields are private,
-//! is the compiler-enforced sole constructor of the record, so the total
-//! fold can never be handed a record that skipped the guard.
+//! **By active enforcement:** the no-overwrite half of S0(b), kept on both
+//! sides of one call, as [`stage_write`] states: it refuses an address
+//! already stored in the slice it is handed, and is the only way to stage a
+//! [`ContentWrite`]; its caller hands it the slice the record will be folded
+//! into — a half no type holds, which [`ContentStore::apply_write`]'s
+//! `debug_assert!` nets.
 //!
 //! ## Boundary — deliberately NOT owned here
 //!
@@ -69,11 +71,12 @@
 //!   redundant origin field can diverge;
 //! * ordered iteration, range, prefix-scan, max-under-prefix — the reads
 //!   rely only on `Eq + Hash`; `Tumbler`'s `Ord` is used once, by the
-//!   checkpoint serializer's sort (`store.rs`), and the ordered-map
-//!   rationale belongs to M3's frontier, not here. The ONE enumeration
-//!   beside the point reads, [`ContentStore::iter`], is unordered and
-//!   exists for one consumer: the daemon's cell-index rebuild, which walks
-//!   every value once at open;
+//!   serializer's sort (`store.rs`), whose output — M2's checkpoint body and
+//!   the engine's world dump — is the only ordered whole-store enumeration
+//!   M4 offers; the ordered-map rationale belongs to M3's frontier, not
+//!   here. The ONE enumeration beside the point reads,
+//!   [`ContentStore::iter`], is unordered and exists for one consumer: the
+//!   daemon's cell-index rebuild, which walks every value once at open;
 //! * concurrency — none of M4's own: no locks, no threads, no interior
 //!   mutability. Content writes ride M5's composite under the
 //!   per-(document, content-subspace) lock key; every content address is
@@ -87,8 +90,8 @@
 //! `impl From<ContentWrite> for W::Record` (the write-side mirror), and
 //! dispatches its `Record::Content` variant into the fold
 //! [`ContentStore::apply_write`]. The engine only `From`-lifts and folds
-//! the record — it never constructs one (private fields), so the
-//! `stage_write`-sole-constructor invariant survives assembly. Anything that
+//! the record — it never constructs one (private fields), so assembly opens
+//! no door beside `stage_write` and M2's replay. Anything that
 //! inspects a journaled record reads it through [`ContentWrite::addr`] /
 //! [`ContentWrite::val`] and the manual `Debug`, which the engine's
 //! `Record: Debug` rests on.
@@ -104,10 +107,10 @@ mod error;
 #[cfg(feature = "content-addr-guard")]
 mod guard;
 // The slice, its fold and point queries, the record and `stage_write`.
-// `ContentWrite`'s fields are private to this file, and that is the fence
-// that leaves `stage_write` the record's only constructor (S0(b)): the
-// compiler keeps every other file out; review alone keeps a second
-// constructor out of this one.
+// `ContentWrite`'s fields are private to this file, which leaves a record two
+// doors — `stage_write`, and serde's `Deserialize` for M2's replay (S0(b)):
+// the compiler keeps every other file out; review alone keeps a third door
+// out of this one.
 mod store;
 // `write`, the standalone transact-wrapped twin of `stage_write` —
 // `test-hooks` builds only.
@@ -121,13 +124,14 @@ pub use store::{stage_write, ContentStore, ContentWrite};
 pub use value::Val;
 
 /// The engine's **read accessor** for M4's slice (§A; Engine Composition
-/// Contract): the engine implements this for its concrete world
-/// (`W: WorldState + HasContent`), and M4 — built before `W` exists — codes
-/// against it, reaching its slice as `stg.working().content()` inside a
-/// composite and `snapshot.world().content()` for a read. READ side only;
-/// its write-side mirror is the engine's `impl From<ContentWrite> for
-/// W::Record` lift, through which the write paths stage deltas via
-/// `stg.push(rec.into())`.
+/// Contract). The engine implements it for its concrete world, and every
+/// reader of M4 reaches the permascroll through it: M5's composites as
+/// `stg.working().content()` — the slice they hand [`stage_write`], and ask
+/// `contains` and `value_at` of — and M6's, M9's and the daemon's reads as
+/// `snapshot.world().content()`. M4's library reads no world of its own;
+/// only the test-only `write` bounds on this. READ side only; its write-side
+/// mirror is the engine's `impl From<ContentWrite> for W::Record` lift,
+/// through which the write paths stage deltas via `stg.push(rec.into())`.
 pub trait HasContent {
     /// M4's slice of the world state.
     fn content(&self) -> &ContentStore;

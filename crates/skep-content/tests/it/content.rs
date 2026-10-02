@@ -1,13 +1,15 @@
 //! Integration tests for M4's public surface. Each test states a claim the
 //! design/interface actually makes (§-references inline): what the one guard
-//! admits and rejects (S0(b) no-overwrite), that the fold is pure and
-//! insert-only, that identity is by address and never by value (S4), that
-//! the journaled types survive a serde round trip (and M2's real
-//! checkpoint-plus-replay recovery), and that each part of the interface
-//! does its ordinary job on an ordinary input. The toy `World`/`Rec` pair is
-//! the minimal engine assembly the composition contract prescribes:
-//! `HasContent` read accessor, `From<ContentWrite>` record lift, `apply`
-//! dispatching into `ContentStore::apply_write`.
+//! admits and rejects, and what the fold's debug net catches behind it (S0(b)
+//! no-overwrite, both halves), that the fold is pure and insert-only, that
+//! identity is by address and never by value (S4), that the journaled types
+//! survive a serde round trip (and M2's real checkpoint-plus-replay
+//! recovery), that the slice's serialized form is the format its readers
+//! pin, and that each part of the interface does its ordinary job on an
+//! ordinary input. The toy `World`/`Rec` pair is the minimal engine assembly
+//! the composition contract prescribes: `HasContent` read accessor,
+//! `From<ContentWrite>` record lift, `apply` dispatching into
+//! `ContentStore::apply_write`.
 
 use std::path::Path;
 
@@ -163,6 +165,23 @@ fn apply_write_is_a_pure_insert_only_fold() {
     assert!(!c1.is_empty());
 }
 
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "already stored in the slice it is folded into")]
+fn apply_write_nets_a_record_staged_against_a_slice_it_is_not_folded_into() {
+    // §A/§C: S0(b)'s caller half — stage against the slice the record is
+    // folded into — is the one the private fields cannot hold. Two records
+    // for one address, both staged against the unchanged c0, each pass the
+    // guard; folding the second into c1 is the overwrite, and the fold's
+    // debug net refuses it.
+    let c0 = ContentStore::default();
+    let a1 = ca(1);
+    let first = stage_write(&c0, &a1, val(b"first")).expect("fresh in c0");
+    let second = stage_write(&c0, &a1, val(b"second")).expect("still fresh in c0");
+    let c1 = c0.apply_write(&first);
+    let _ = c1.apply_write(&second);
+}
+
 // ---- §B point queries ----
 
 #[test]
@@ -279,6 +298,38 @@ fn journaled_types_survive_a_bincode_round_trip() {
     assert_eq!(back.len(), 2);
     assert_eq!(back.value_at(a1.tumbler()).map(Val::as_bytes), Some(&b"payload"[..]));
     assert_eq!(back.value_at(a2.tumbler()).map(Val::as_bytes), Some(&b"more"[..]));
+}
+
+#[test]
+fn the_slice_serializes_as_its_map_alone_in_tumbler_order() {
+    // The form is a format (store.rs, `impl Serialize for ContentStore`):
+    // M2's checkpoint hashes these bytes, the engine's World lays them down
+    // as one slice of its layout, and the engine's world dump renders them.
+    // So they are pinned whole — the slice's one field, its map, as its
+    // length then its entries (exactly a `Vec` of pairs' bytes), the entries
+    // in Tumbler order, each value a plain byte blob. Sixty-four entries over
+    // four documents, so the HAMT's own iteration order is not Tumbler order
+    // by accident.
+    let mut c = ContentStore::default();
+    let mut entries: Vec<(Tumbler, Vec<u8>)> = Vec::new();
+    for k in 0..64u32 {
+        // 37 is coprime to 64: every (document, ordinal) once, out of order.
+        let i = k * 37 % 64;
+        let (doc, ordinal) = (1 + i / 16, 1 + i % 16);
+        let addr = a(&[1, 0, 1, 0, doc, 0, 1, ordinal]);
+        let bytes = format!("{doc}.{ordinal}").into_bytes();
+        c = c.apply_write(&stage_write(&c, &addr, Val::new(bytes.clone())).expect("fresh"));
+        entries.push((addr.tumbler().clone(), bytes));
+    }
+    entries.sort_by(|x, y| x.0.cmp(&y.0));
+    assert!(
+        bincode::serialize(&c).expect("slice serializes")
+            == bincode::serialize(&entries).expect("entries serialize"),
+        "M4's slice serialized as something other than its map alone, entries in Tumbler \
+         order: those bytes are M2's hashed checkpoint body, a slice of the engine's World \
+         layout and the engine's world dump — a change to them owes the engine's \
+         WORLD_FORMAT bump and a dump-filter disposition"
+    );
 }
 
 // ---- §C the standalone op over M2 ----

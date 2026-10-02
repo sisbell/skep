@@ -39,9 +39,11 @@ type FixedHasher = BuildHasherDefault<FxHasher>;
 /// `im::HashMap`, not `OrdMap`: the query surface is point membership and
 /// point value-at, plus ONE enumeration — [`ContentStore::iter`], the walk the
 /// daemon's cell-index rebuild makes at open, which reads every entry once
-/// and asks no order of them — and nobody needs range or prefix scans (the
-/// allocator's max-under-prefix reads M3's own frontier, never M4 —
-/// Conflicts #3), so only `Eq + Hash` is relied on for the READS.
+/// and asks no order of them — and no QUERY needs ordered iteration, range,
+/// or prefix scans (the allocator's max-under-prefix reads M3's own frontier,
+/// never M4 — Conflicts #3), so only `Eq + Hash` is relied on for the READS;
+/// the two whole-store readers, the checkpoint and the engine's world dump,
+/// take their order from the sort in `Serialize` below.
 /// Persistent (`im`) for the commit path: each `transact` produces a *new*
 /// `World` and outstanding snapshots pin old ones —
 /// [`apply_write`](ContentStore::apply_write) is O(log₃₂ n) and old/new maps
@@ -66,6 +68,28 @@ pub struct ContentStore {
 /// order-agnostic, and the HAMT is rebuilt from the entries whatever order
 /// they arrive in. Cost: one O(n log n) sort of the entry set per checkpoint,
 /// on top of the O(n) serialization the checkpoint already pays.
+///
+/// THE FORM IS A FORMAT, read by three collaborators, none with a compiler
+/// edge back to this impl. M2's checkpoint hashes it (above), and decodes it
+/// from bytes it does not trust — so the map's key and value types stay free
+/// of recursion and of sequence elements that decode from zero bytes (M2's
+/// hostile-input obligation on `WorldState`, which `Tumbler` and `Val` meet).
+/// The engine's `World` lays these bytes down as one slice of its checkpoint
+/// layout, so a change to them — a field added or removed, an entry encoded
+/// differently — owes the engine's `WORLD_FORMAT` bump; the engine's pin
+/// (`each_slice_serializes_the_fields_the_format_count_names`) sees only
+/// the top-level field set, `map`, and a change beneath it owes the bump by
+/// hand. And the engine's world dump renders the form as M4's authoritative
+/// section, where the daemon's per-reader `/dump` keeps or drops each `map`
+/// entry by its key's document; a field added here would reach every reader
+/// class whole, which
+/// `every_entry_at_each_level_of_the_tree_is_reduced_or_kept_by_name`
+/// refuses until the engine's filter is given a disposition for it. This
+/// crate's suite pins the bytes themselves
+/// (`the_slice_serializes_as_its_map_alone_in_tumbler_order`), so a change
+/// to them fails here first. A rename of `map` leaves the bytes alone and
+/// unhooks the dump filter's path, which ends in that name; only the
+/// engine's two pins, which name the field, see it.
 impl Serialize for ContentStore {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
@@ -95,17 +119,20 @@ impl Serialize for InTumblerOrder<'_> {
 
 impl ContentStore {
     /// The fold — pure, total, deterministic (M2's `apply` obligation; §A).
-    /// Insert only: [`stage_write`] guarantees `r.addr ∉ dom(C)`, so this
-    /// never overwrites a live value; the `debug_assert!` is a release-free
-    /// second net behind that guard (the fold stays total/infallible in
-    /// release). The engine's `World::apply` dispatches its
-    /// `Record::Content` variant here — on live commit and on M2's replay
-    /// alike. S0(a)/S1/C0 fall straight out: a record can only add, so
-    /// `dom(C) ⊆ dom(C')`.
+    /// Insert only, and never an overwrite when `r` was staged against this
+    /// very slice — the caller's half of S0(b), which [`stage_write`]
+    /// states. The `debug_assert!` nets that half, and a record folded
+    /// twice. In release it is compiled out and the fold stays total and
+    /// infallible, so a record that broke the caller's half replaces the
+    /// stored value: no type holds that half, and nothing here refuses it.
+    /// The engine's `World::apply` dispatches its `Record::Content` variant
+    /// here — on live commit and on M2's replay alike. S0(a)/S1/C0 fall
+    /// straight out: a record can only add, so `dom(C) ⊆ dom(C')`.
     pub fn apply_write(&self, r: &ContentWrite) -> ContentStore {
         debug_assert!(
             !self.map.contains_key(&r.addr),
-            "S0(b): apply_write must not overwrite — stage_write guards this"
+            "S0(b): this record's address is already stored in the slice it is folded \
+             into — it was staged against another slice, or folded twice"
         );
         ContentStore {
             map: self.map.update(r.addr.clone(), r.val.clone()),
@@ -124,15 +151,20 @@ impl ContentStore {
     /// `C(a)`: the immutable value at `a`, else `None` (§B). The returned
     /// borrow lives THROUGH the pinning `Snapshot` — bind the snapshot
     /// first (`let s = k.snapshot(); s.world().content().value_at(a)`);
-    /// chaining off the temporary won't compile. RETRIEVEV (M6, ASN-0115)
-    /// and predicate-def read-back (M9) call this.
+    /// chaining off the temporary won't compile. The design's readers are
+    /// RETRIEVEV (M6, ASN-0115) and predicate-def read-back (M9); M5's
+    /// publish shot and the daemon read it too.
     ///
-    /// `None` CONTRACT for those callers: under S3 plus single-snapshot
-    /// consistency, an I-address obtained from a successful V→I resolve
-    /// against the SAME `Snapshot` always yields `Some` — a `None` there is
-    /// an internal invariant violation (report/halt), never a domain-level
-    /// "not found"; do not invent a user-visible not-found semantics from
-    /// it.
+    /// What a `None` MEANS depends on where `a` came from, which the caller
+    /// knows and M4 does not; M4 promises only that a stored value is in
+    /// every later slice (S0). An address an arrangement placed — read off a
+    /// V→I resolve against the same `Snapshot` (S3★, kept on M5's write
+    /// path) — and a registered predicate-def's start (M9's residence gate
+    /// admitted it) always yield `Some`, so a `None` for either is an
+    /// internal invariant violation to report or halt on, never a
+    /// domain-level "not found". An address a request or an endset names
+    /// verbatim carries no such promise — it may be unallocated, a ghost, or
+    /// a link — and the caller holding it names its own refusal.
     pub fn value_at(&self, a: &Tumbler) -> Option<&Val> {
         self.map.get(a)
     }
@@ -169,21 +201,22 @@ impl ContentStore {
 /// (M1: the Tumbler is the storage/journal key; `Address` is the
 /// past-the-door value).
 ///
-/// CONSTRUCTOR-PRIVATE, READ-PUBLIC: the fields are private so
-/// [`stage_write`] is the compiler-enforced sole constructor — no caller can
-/// hand-build a record into the total fold and skip the AlreadyPresent
-/// guard — while [`addr`](ContentWrite::addr)/[`val`](ContentWrite::val)
-/// and the manual `Debug` give full read access (the S0(b) guard needs
-/// constructor privacy only, not read privacy). Serde deserializes the
-/// private fields for M2's replay (the derive expands at the definition
-/// site); the engine only `From`-lifts and folds — it never constructs one
-/// from scratch. This satisfies the composition-contract checklist's
-/// "constructible by upstream producers, readable by downstream consumers"
-/// item in full: the one sanctioned producer (`stage_write`) is public to
-/// M5, serde replays at the definition site, and downstream consumers read
-/// records through the public accessors and `Debug` — the engine's
-/// `Record: Debug`, the one account a holder of a central record gets of
-/// M4's delta, is this manual impl.
+/// CONSTRUCTOR-PRIVATE, READ-PUBLIC: the fields are private, so a record has
+/// two doors, and no struct literal outside this file builds one.
+/// [`stage_write`] stages one past S0(b)'s guard. Serde's `Deserialize` —
+/// public, as M2's `Record: DeserializeOwned` bound requires, and able to set
+/// the private fields because the derive expands at the definition site — is
+/// M2's replay door, decoding records that guard admitted; nothing but review
+/// keeps any other caller from decoding a record out of bytes of its own
+/// making. Neither door makes a record fresh for the slice it is folded into;
+/// [`stage_write`] says whose half that is. Read access is full —
+/// [`addr`](ContentWrite::addr)/[`val`](ContentWrite::val) and the manual
+/// `Debug`, which is what the engine's `Record: Debug` renders for this
+/// variant. The engine only `From`-lifts and folds; it never constructs one.
+/// That is the composition-contract checklist's "constructible by upstream
+/// producers, readable by downstream consumers" item in full: the one
+/// producer (`stage_write`) is public to M5, serde replays at the definition
+/// site, and consumers read through the accessors and `Debug`.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ContentWrite {
     addr: Tumbler,
@@ -191,14 +224,12 @@ pub struct ContentWrite {
 }
 
 impl ContentWrite {
-    /// The flat storage/journal key. Read-only; the sole constructor stays
-    /// [`stage_write`].
+    /// The flat storage/journal key. Read-only.
     pub fn addr(&self) -> &Tumbler {
         &self.addr
     }
 
-    /// The staged payload. Read-only; the sole constructor stays
-    /// [`stage_write`].
+    /// The staged payload. Read-only.
     pub fn val(&self) -> &Val {
         &self.val
     }
@@ -221,18 +252,26 @@ impl fmt::Debug for ContentWrite {
     }
 }
 
-/// PURE STEP — the storage half of K.α (§C; M2 contract 3). Reads off a
-/// supplied working slice, returns the record, commits nothing. THIS is
-/// M4's real export: M5's placement composite (and, via M5, M9's
-/// predicate-def creation) calls it against `stg.working().content()` and
-/// lifts the result with `stg.push(rec.into())`.
+/// PURE STEP — the storage half of K.α (§C; M2 contract 3). Reads the slice
+/// it is handed and nothing else, returns the record, commits nothing. THIS
+/// is M4's real export: M5's placement composite (and, via M5, M9's
+/// predicate-def creation) calls it and lifts the result with
+/// `stg.push(rec.into())`.
 ///
-/// Enforces S0's no-overwrite — the *one* genuine guard M4 owns:
-/// `Err(AlreadyPresent(addr.tumbler()))` if `addr ∈ dom(C)`. The fold is
-/// total and cannot reject, and [`ContentWrite`]'s private fields make this
-/// the compiler-enforced sole constructor of the record, so the guard has
-/// no bypass. It never fires in correct operation (M3 mints fresh; M5
-/// writes once) — it is the cheap correct-the-rare-case insurance over the
+/// S0(b) — NO OVERWRITE — has two halves, one each side of this call. THIS
+/// function's, the one genuine guard M4 owns:
+/// `Err(AlreadyPresent(addr.tumbler()))` if `addr` is stored in `c`. The
+/// CALLER's: `c` is the slice the record will be folded into —
+/// `stg.working().content()`, read after every `push` — because against one
+/// unchanged slice one address stages twice, and the fold, being total,
+/// cannot refuse the second. [`ContentWrite`]'s private fields make this the
+/// only way to stage a record (serde's `Deserialize` is M2's replay of
+/// records already staged), so a record reaches the fold having passed this
+/// guard. That it passed against the right slice is the caller's half: M5's
+/// `allocate_for_placement` keeps it, no type holds it, and
+/// [`ContentStore::apply_write`]'s `debug_assert!` nets it in debug builds.
+/// The guard never fires in correct operation (M3 mints fresh; M5 writes
+/// once) — it is the cheap correct-the-rare-case insurance over the
 /// permascroll. Otherwise the address is TRUSTED: minted and validated
 /// upstream (M3), T4-valid by M1's standing invariant.
 ///

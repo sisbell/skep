@@ -69,9 +69,9 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// content count that version was BORN with, which
 /// [`birth_extent`](M5State::birth_extent) answers and the doc-metadata read
 /// serves. They have no record of their own and no op writes them: the fold
-/// notes each off the record that gives the version its arrangement — the
-/// mint commit's own placement, or the snapshot an owned VERSION stages — so
-/// replay re-derives them from the journal as it stands and the journal
+/// notes each off the record that MINTS the version — the shot's
+/// [`ShotPlace`](M5Rec::ShotPlace), or the snapshot an owned VERSION stages —
+/// so replay re-derives them from the journal as it stands and the journal
 /// carries nothing for them. They are NOT a recomputable hint all the same,
 /// which is why the checkpoint carries them and `rebuild_derived` has nothing
 /// to seed: while a birth version is the head a declared deposit appends to
@@ -133,28 +133,26 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///   V-positions, so a run's V-start is a prefix sum (§1; ASN-0047 D-SEQ★, via
 ///   contiguity D-CTG★ and minimum-position D-MIN★), and no fold arm can open
 ///   a gap because there is nothing in which to open one.
-/// * **BIRTH★ — a birth version's extent is noted ONCE and never moved.**
-///   `birth_extents` gains `m`'s entry at the first placing record that
-///   names `m` — [`ShotPlace`](M5Rec::ShotPlace), which the shot journals
+/// * **BIRTH★ — a birth version's extent is noted ONCE, by its mint, and
+///   never moved.** `birth_extents` gains `m`'s entry at the record that
+///   MINTS `m` — [`ShotPlace`](M5Rec::ShotPlace), which the shot journals
 ///   for every member it mints, an EMPTY placement included, or
 ///   [`VersionSnapshot`](M5Rec::VersionSnapshot), a snapshot of an EMPTY
-///   source noting zero — and no later record touches it, so a deposit that
-///   grows the head grows `content_count(m)` and not `birth_extent(m)`. On
-///   the op path `birth_extent(m) ≤ content_count(m)`, and positions
+///   source noting zero — and at no other: a
+///   [`ContentPlace`](M5Rec::ContentPlace) mints nothing and notes nothing,
+///   so a deposit that grows the head grows `content_count(m)` and not
+///   `birth_extent(m)`, whatever order its record arrives in. On the op path
+///   `birth_extent(m) ≤ content_count(m)`, and positions
 ///   `[1, birth_extent(m)]` of `m` are the arrangement it was minted with: a
 ///   published member admits no removal and no re-arrangement (PUB-2.11), and
-///   a deposit lands past the arranged extent. The one state that escaped it
-///   — a birth version the shot minted with no runs, whose first deposit was
-///   read as its birth — closed when the shot's record began to carry its
-///   terms and so to be journaled whatever the placement holds
-///   (`ShotPlace`'s arm). On the DECODE path BIRTH★ is M2's integrity, as
-///   P4★ is: a checkpoint carries `birth_extents` whole, and no door
-///   re-establishes that each key is a birth version or each count its
-///   mint's. A decoded state violating it faults nothing — no read does
-///   arithmetic on an extent, and [`birth_extent`](M5State::birth_extent)
-///   answers the count carried — but a consumer that takes the key set for
-///   version members, as the engine's dump filter does, trusts the checkpoint
-///   for it.
+///   a deposit lands past the arranged extent. On the DECODE path BIRTH★ is
+///   M2's integrity, as P4★ is: a checkpoint carries `birth_extents` whole,
+///   and no door re-establishes that each key is a birth version or each
+///   count its mint's. A decoded state violating it faults nothing — no read
+///   does arithmetic on an extent, and
+///   [`birth_extent`](M5State::birth_extent) answers the count carried — but
+///   a consumer that takes the key set for version members, as the engine's
+///   dump filter does, trusts the checkpoint for it.
 /// * **TERMS★ — a member's shot terms are the terms of the shot that minted
 ///   it.** `shot_terms` gains `m`'s entry at `m`'s own
 ///   [`ShotPlace`](M5Rec::ShotPlace), the record the commit that minted `m`
@@ -279,8 +277,9 @@ fn is_birth_version(doc: &Address) -> bool {
 #[non_exhaustive]
 pub enum M5Rec {
     /// INSERT and COPY: splice `runs` at content ordinal `at` + R-append each
-    /// placed run's iextent (J1★). The publish shot's placement was this
-    /// record until D25's (c′) gave it terms of its own
+    /// placed run's iextent (J1★). It mints nothing, so it notes no birth
+    /// extent, whatever document it names (BIRTH★). The publish shot's
+    /// placement was this record until D25's (c′) gave it terms of its own
     /// ([`ShotPlace`](M5Rec::ShotPlace)); this variant's bytes did not move
     /// for that — the new one was appended to the set, so an `insert`'s or a
     /// `copy`'s record encodes as it always did.
@@ -323,9 +322,8 @@ pub enum M5Rec {
     /// the count its signed body leads with — and `base_extent`, the base's
     /// extent the staged copy took, `None` in the birth shape. Pushed for
     /// EVERY member the shot mints, an empty placement included: the terms
-    /// exist whatever the placement holds, and a member born empty is noted
-    /// at its true birth (zero) rather than read off its first deposit — the
-    /// residue BIRTH★ carried until this record.
+    /// exist whatever the placement holds, and a birth version born empty is
+    /// noted at its birth, zero, by this record (BIRTH★).
     ///
     /// The LAST variant, appended (2026-09-29) so the five before it keep
     /// their indices — bincode encodes a variant as its index — and every
@@ -404,10 +402,12 @@ impl M5State {
     /// `birth_extents` with `doc`'s extent NOTED — `born_with()`, asked only
     /// where it is wanted — when `doc` is a birth version
     /// ([`is_birth_version`]) not yet noted; `birth_extents` as they stand
-    /// otherwise. The two placing arms call it with the document their record
-    /// places into and the count the record leaves it holding, and BIRTH★ is
-    /// this function's second test: an entry, once written, is what every
-    /// later call hands back.
+    /// otherwise. The two arms that MINT a member call it —
+    /// [`ShotPlace`](M5Rec::ShotPlace) and
+    /// [`VersionSnapshot`](M5Rec::VersionSnapshot) — with the member their
+    /// record mints and the count it leaves the member holding; a record that
+    /// mints nothing never asks. BIRTH★ is this function's second test: an
+    /// entry, once written, is what every later call hands back.
     #[must_use = "returns the updated birth extents; it does not modify the receiver"]
     fn birth_extents_noting(
         &self,
@@ -423,22 +423,18 @@ impl M5State {
     /// PUB-3.19's BIRTH CONTENT, as a count (RES-276; the owner's D2): the
     /// content extent the birth version `member` — a trunk's `D.1` — was
     /// MINTED with, the leading runs of its arrangement, which a deposit
-    /// taken while it is the head never joins — one state excepted, below.
-    /// `content_count(member)` is the live extent and follows every such
-    /// deposit; this one is frozen at the mint, so positions
-    /// `[1, birth_extent]` of the member are what an edition's claim was
-    /// written over (PUB-3.10), and this extent answers the same as of every
-    /// later `Seq`.
+    /// taken while it is the head never joins. `content_count(member)` is the
+    /// live extent and follows every such deposit; this one is frozen at the
+    /// mint, so positions `[1, birth_extent]` of the member are what an
+    /// edition's claim was written over (PUB-3.10), and this extent answers
+    /// the same as of every later `Seq`.
     ///
-    /// EXACT for a birth version born EMPTY too: the shot journals its
-    /// placing record for every member it mints, an empty placement included
-    /// ([`M5Rec::ShotPlace`] carries the shot's terms whatever the placement
-    /// holds), so an empty birth is noted at zero by its own mint — as a
-    /// birth version an owned VERSION mints empty is by its own snapshot —
-    /// and its first deposit grows `content_count` alone. (Until the record
-    /// carried the terms, an empty shot pushed no placement and that first
-    /// deposit was read as the birth — BIRTH★'s one residue, closed.) No
-    /// conforming mint is empty (PUB-3.11).
+    /// EXACT for a birth version born EMPTY too: its mint notes it at zero —
+    /// the shot journals its record for every member it mints, an empty
+    /// placement included ([`M5Rec::ShotPlace`] carries the shot's terms
+    /// whatever the placement holds), and an owned VERSION its snapshot — and
+    /// no deposit notes an extent, so the first one grows `content_count`
+    /// alone. No conforming mint is empty (PUB-3.11).
     ///
     /// Zero for an address with no extent noted: every address that is no
     /// birth version — it answers the address named, as every read here does,
@@ -452,9 +448,8 @@ impl M5State {
     /// minted it ([`ShotTerms`]: `placed`, `base_extent`), which the
     /// doc-metadata read serves beside the birth version and a verifier of
     /// the member's entry signature composes its body from — or `None` for a
-    /// member no shot's record names: a birth version an owned `version`
-    /// minted, a member minted before the record carried the terms, and every
-    /// address that is no version member. Answers the address named — a
+    /// member no shot's record names: a member an owned `version` minted, and
+    /// every address that is no version member. Answers the address named — a
     /// trunk document answers `None`, never its head's — and reads no run.
     /// One map lookup.
     pub fn shot_terms(&self, member: &Address) -> Option<&ShotTerms> {
@@ -486,23 +481,18 @@ impl M5State {
             // root install, so a reader never observes M-updated-without-R
             // (J1★ ⇒ P4★/P4a; with INSERT's composite, J0 ⇒ P7a).
             //
-            // THE BIRTH EXTENT is noted on this arm too (BIRTH★; PUB-3.19,
-            // RES-276), though on the op path no placement here is a mint's:
-            // the shot's placement is `ShotPlace`'s below, and an INSERT or
-            // COPY naming a birth version is a deposit the head took, which
-            // finds its extent already noted by the mint's own record. The
-            // arm keeps the note all the same, as the fold's totality asks —
-            // a record outside the op path's order is folded, not judged.
-            M5Rec::ContentPlace { doc, at, runs } => {
-                let content = self.content_list(doc).splice_in(at, runs.iter().cloned());
-                let birth_extents = self.birth_extents_noting(doc, || content.total_width());
-                M5State {
-                    arrangements: self.arrangements_with_content(doc, |_| content),
-                    provenance: self.provenance.append(doc, runs),
-                    birth_extents,
-                    shot_terms: self.shot_terms.clone(),
-                }
-            }
+            // NO BIRTH EXTENT is noted here: a placement mints nothing, and a
+            // birth version's extent is its mint's to note (BIRTH★). A
+            // `ContentPlace` naming one is a deposit the head took, and one
+            // that names it before its mint's record — which no op stages —
+            // notes nothing rather than its own count as the birth.
+            M5Rec::ContentPlace { doc, at, runs } => M5State {
+                arrangements: self
+                    .arrangements_with_content(doc, |c| c.splice_in(at, runs.iter().cloned())),
+                provenance: self.provenance.append(doc, runs),
+                birth_extents: self.birth_extents.clone(),
+                shot_terms: self.shot_terms.clone(),
+            },
             // THE SHOT's placement (D25 (c′)): `ContentPlace` at ordinal 1 —
             // the same splice, the same R-append — and the member's TERMS
             // noted beside its birth extent. THE BIRTH EXTENT is noted here
@@ -616,8 +606,8 @@ impl M5State {
             // version by this record, and the count shared is what that
             // version is born with. The record is staged whatever the surface
             // holds, so an EMPTY birth is noted here as ZERO — the one entry
-            // the empty arm writes, and what keeps the version's first deposit
-            // from reading as its birth. A cross-owner fork's `new` is a fresh
+            // the empty arm writes — and every birth version holds its entry
+            // however it was born. A cross-owner fork's `new` is a fresh
             // document, no birth version, and notes nothing.
             M5Rec::VersionSnapshot { source, new } => {
                 let content = self.content_list(source).clone();

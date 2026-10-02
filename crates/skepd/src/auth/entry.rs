@@ -129,10 +129,10 @@ pub(super) enum ComposeFault {
     /// positions or a base extent no store holds: a shot the store refuses
     /// (`base_extent_too_large`, `too_many_values`, `dangling_source`).
     Unspellable,
-    /// A `publish`'s STAGING-DRAFT runs — the copied runs whose origin
-    /// document is the draft's trunk, re-inserted by the commit value by
-    /// value — name more values than M5's re-insert budget
-    /// (`skep_arrangement::MAX_REINSERTED_VALUES`): a shot the store refuses
+    /// A `publish` whose STAGING-DRAFT runs — re-inserted by the commit value
+    /// by value — name more values than M5's re-insert budget
+    /// (`Shot::reinserted_values` past
+    /// `skep_arrangement::MAX_REINSERTED_VALUES`): a shot the store refuses
     /// `too_many_values` by request arithmetic before it probes an address,
     /// so one whose values this composer never walks.
     PastReinsertBudget,
@@ -215,8 +215,9 @@ pub(super) fn compose(
         Op::Publish { doc, shot } => {
             let trunk = trunk_of(doc);
             // The runs as the commit will place them — M5's classing, the
-            // one place a run's family is decided (l6-A4).
-            let segments = shot.address_form(&trunk);
+            // one place a run's family is decided (l6-A4), asked with the
+            // address the shot names, as `publish` is.
+            let segments = shot.address_form(doc);
             // No value the principal may not read is ever read here: a
             // copied run's origin must be readable to it; a window is spelled
             // by address and read from nowhere.
@@ -288,30 +289,17 @@ fn publish_body(
         };
         placed.checked_add(spelled(run.width())?).ok_or(ComposeFault::Unspellable)
     })?;
-    // THE STORE'S RE-INSERT BUDGET, off the runs' widths before a value is
-    // read. The staging draft's runs are re-inserted value by value, and M5
-    // refuses a shot re-inserting more than `MAX_REINSERTED_VALUES` by
+    // THE STORE'S RE-INSERT BUDGET, asked of the store's own count before a
+    // value is read. The staging draft's runs are re-inserted value by value,
+    // and M5 refuses a shot re-inserting more than `MAX_REINSERTED_VALUES` by
     // request arithmetic before it probes an address: walked here past it,
     // they would cost the check up to the body budget's worth of positions
-    // under the serialization lock, for a shot nothing commits. The count is
-    // M5's own — `address_form` classes a run `Copied` through M5's origin
-    // derivation, so for a copied run `document_of` then `trunk_of` IS that
-    // derivation, the one `every_copied_run_origin_readable` reads — and the
-    // draft is projected as M5 projects it. So is the comparison, `>`: the
-    // check passes this answer through UNATTESTED, which is safe only because
-    // every shot refused here is one the store refuses too; a stricter test
-    // would pass through, unattested, a shot the store then commits.
-    let draft = shot.draft.as_ref().map(trunk_of);
-    let reinserted: Nat = segments
-        .iter()
-        .filter_map(|segment| match segment {
-            PlacedSegment::Copied(run) => Some(run),
-            PlacedSegment::Window(_) => None,
-        })
-        .filter(|run| draft.is_some() && document_of(run.i_start()).map(|d| trunk_of(&d)) == draft)
-        .map(|run| run.width())
-        .sum();
-    if reinserted > Nat::from(MAX_REINSERTED_VALUES) {
+    // under the serialization lock, for a shot nothing commits. The check
+    // passes this answer through UNATTESTED, which is safe only because every
+    // shot refused here is one the store refuses too — and it is: the count
+    // is M5's own (`Shot::reinserted_values`, the one `publish` holds to the
+    // same constant with the same `>`).
+    if shot.reinserted_values() > Nat::from(MAX_REINSERTED_VALUES) {
         return Err(ComposeFault::PastReinsertBudget);
     }
     let mut body = PublishBody::within(MAX_SHOT_BODY_BYTES, base_extent);

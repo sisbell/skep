@@ -1,13 +1,14 @@
 //! The publish shot (PUB round 2, lane 3.2): the member it appends from the
 //! client's runs, the windows it keeps, the deposits it carries, the birth
-//! extent and terms it records, and its address form on both sides.
+//! extent and terms it records, the values it re-inserts, and its address
+//! form on both sides.
 
 use skep_address::{Address, SpanSet};
 use skep_arrangement::{
     reading_surface, seat_link, trunk_head, Base, Deposit, HasM5, M5State, PlacedSegment,
     PublishError, Run, Shot, ShotTerms, VSpec, Vstream,
 };
-use skep_content::HasContent;
+use skep_content::{ContentStore, HasContent};
 use skep_namespace::{HasM3, PrincipalId};
 
 use crate::common::*;
@@ -16,6 +17,34 @@ use crate::common::*;
 /// address of the draft" is asserted over.
 fn run_starts(m5: &M5State, doc: &Address) -> Vec<Address> {
     m5.content_runs(doc).map(|r| r.i_start().clone()).collect()
+}
+
+/// One item of a shot's signed body as it spells the address form: a COPIED
+/// position by its value, and a WINDOW by its run — so the runs a stretch of
+/// copied positions was named by, and the addresses they name, are spelled
+/// by nothing.
+#[derive(Debug, PartialEq)]
+enum Spelled {
+    Value(Vec<u8>),
+    Window(Run),
+}
+
+/// `form` as the signed body spells it, each copied value read off
+/// `content`.
+fn spelled(form: &[PlacedSegment], content: &ContentStore) -> Vec<Spelled> {
+    let mut out = Vec::new();
+    for segment in form {
+        match segment {
+            PlacedSegment::Copied(run) => out.extend(run.addrs().map(|a| {
+                let value = content
+                    .value_at(a.tumbler())
+                    .expect("a copied position holds a value");
+                Spelled::Value(value.as_bytes().to_vec())
+            })),
+            PlacedSegment::Window(run) => out.push(Spelled::Window(run.clone())),
+        }
+    }
+    out
 }
 
 #[test]
@@ -298,10 +327,10 @@ fn the_birth_extent_of_a_shot_born_version_counts_its_whole_placement_and_no_lat
     // read serves for `D.1` is the count its MINTING commit left, and the
     // fold knows that count only because the shot journals the member's
     // whole arrangement — the runs by reference, the draft's re-inserted text
-    // and the base's carried tail — as ONE placement, the first naming it. A
-    // shot that staged any family as a placement of its own would leave the
-    // first one's count as the birth while every content read and R answered
-    // as they do now; this read alone sees it.
+    // and the base's carried tail — as ONE placement, the record that mints
+    // it. A shot that staged any family as a placement of its own would note
+    // as the birth only what its minting record carries, while every content
+    // read and R answered as they do now; this read alone sees it.
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
     insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
@@ -339,14 +368,13 @@ fn the_birth_extent_of_a_shot_born_version_counts_its_whole_placement_and_no_lat
 
 #[test]
 fn a_birth_version_the_shot_minted_empty_is_noted_at_zero_and_carries_its_terms() {
-    // BIRTH★'s one residue, CLOSED through the ops by D25's (c′): the shot
-    // journals its placing record for every member it mints, an empty
-    // placement included — the record carries the shot's terms, which exist
-    // whatever the placement holds — so a birth version born empty is noted
-    // at zero by its own mint, and its first deposit grows the count alone.
-    // The terms are read off the member: the count zero, and no base extent
-    // — the birth bit. (Until the record carried the terms, an empty shot
-    // journaled no placement and that deposit was read as the birth.)
+    // BIRTH★ through the shot (D25's (c′)): the shot journals its placing
+    // record for every member it mints, an empty placement included — the
+    // record carries the shot's terms, which exist whatever the placement
+    // holds — so a birth version born empty is noted at zero by its own
+    // mint, and its first deposit, which notes nothing, grows the count
+    // alone. The terms are read off the member: the count zero, and no base
+    // extent — the birth bit.
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     let (member, _) = vs
@@ -378,9 +406,11 @@ fn a_birth_version_the_shot_minted_empty_is_noted_at_zero_and_carries_its_terms(
 fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
     // l6-A4 = r6-4 on both sides of the commit: `Shot::address_form` for the
     // request and `M5State::address_form_of` for the member it minted agree
-    // run for run — the same classes, the same widths, every window the
-    // same run, every copied run the same VALUES — over a shot holding all
-    // three families with the two seams the member's run-list erases: two
+    // as the signed body spells them — every window the same run, and the
+    // copied positions the same values in the same places; this fixture's
+    // copied runs fall on the same boundaries on both sides, so they are
+    // compared pair by pair, class and width with them — over a shot holding
+    // all three families with the two seams the member's run-list erases: two
     // I-ADJACENT WINDOWS the placement merges into one, and the base's
     // CARRIED TAIL merged into the client's last own-origin run, which the
     // member side CLIPS back at `placed`. And the terms the member carries
@@ -405,6 +435,11 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
         ],
     };
     let requested = shot.address_form(&pdoc());
+    assert_eq!(
+        shot.address_form(&vdoc()),
+        requested,
+        "named by a member of the chain, the form is the document's (PUB-2.15)"
+    );
     let (member, _) = vs
         .publish(P1, &pdoc(), shot, &readable_by(PrincipalId(1)))
         .expect("the shot commits");
@@ -456,4 +491,118 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
     assert!(m5.address_form_of(&member, &n(0)).is_empty());
     assert!(m5.address_form_of(&doc2(), &n(2)).iter().all(|s| matches!(s, PlacedSegment::Copied(_))),
         "a document's own runs are copied, read at the address named");
+}
+
+#[test]
+fn the_address_forms_agree_as_the_body_spells_them_where_their_runs_do_not() {
+    // l6-A4: the two sides of the address form agree AS THE SIGNED BODY
+    // SPELLS THEM, and not run for run. The request names the edition's own
+    // `a` and `b` as two runs and the draft's `a b` at the draft's addresses;
+    // the member holds the first two as ONE run and the draft's text at FRESH
+    // addresses under the edition's own I-space. Spelled — a copied run by
+    // its values, a window by its run — the two read alike, the window in the
+    // same V-place between them.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
+    insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w")], Deposit::Undeclared)
+        .expect("doc2, the window's source, holds w");
+    let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let shot = Shot {
+        base: Some(base(&pdoc(), 3)),
+        draft: Some(doc1()),
+        runs: vec![
+            shot_run(&pdoc(), &pca(1), 1),
+            shot_run(&pdoc(), &pca(2), 1),
+            shot_run(&doc2(), &w, 1),
+            shot_run(&doc1(), &ca(1), 2),
+        ],
+    };
+    let requested = shot.address_form(&pdoc());
+    let (member, _) = vs
+        .publish(P1, &pdoc(), shot, &readable_by(PrincipalId(1)))
+        .expect("the shot commits");
+    let s = k.snapshot();
+    let (m5, content) = (s.world().m5(), s.world().content());
+    let terms = m5
+        .shot_terms(&member)
+        .expect("the shot's member carries its terms");
+    let at_member = m5.address_form_of(&member, &terms.placed);
+    // The runs differ: four segments asked for, three held — the own `a b`
+    // merged, and the draft's text re-inserted at pca(4..5).
+    assert_eq!(requested.len(), 4, "{requested:?}");
+    assert_eq!(at_member.len(), 3, "{at_member:?}");
+    assert_ne!(
+        requested[3], at_member[2],
+        "the draft's addresses here, fresh ones there"
+    );
+    // Spelled, they agree.
+    let spelled_at_member = spelled(&at_member, content);
+    assert_eq!(spelled(&requested, content), spelled_at_member);
+    assert_eq!(
+        spelled_at_member,
+        vec![
+            Spelled::Value(b"a".to_vec()),
+            Spelled::Value(b"b".to_vec()),
+            Spelled::Window(Run::new(w, n(1)).expect("a run")),
+            Spelled::Value(b"a".to_vec()),
+            Spelled::Value(b"b".to_vec()),
+        ]
+    );
+}
+
+#[test]
+fn the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes() {
+    // `Shot::reinserted_values` is THE count `publish` holds to
+    // MAX_REINSERTED_VALUES, and the one a caller pricing a shot ahead of its
+    // transaction asks — so it must be exactly the values the commit writes:
+    // the draft-native runs' widths, a run the client names twice counted
+    // twice, and no position of the document's own I-space or of a window.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
+    insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w")], Deposit::Undeclared)
+        .expect("doc2, a window's source, holds w");
+    let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let shot = Shot {
+        base: Some(base(&pdoc(), 3)),
+        draft: Some(doc1()),
+        runs: vec![
+            shot_run(&pdoc(), &pca(1), 3),
+            shot_run(&doc1(), &ca(2), 2),
+            shot_run(&doc2(), &w, 1),
+            shot_run(&doc1(), &ca(2), 1),
+        ],
+    };
+    assert_eq!(
+        shot.reinserted_values(),
+        n(3),
+        "the draft's two runs, widths 2 and 1"
+    );
+    let no_draft = Shot {
+        draft: None,
+        ..shot.clone()
+    };
+    assert_eq!(
+        no_draft.reinserted_values(),
+        n(0),
+        "with no draft named, no run is draft-native"
+    );
+    let draft_named_by_its_member = Shot {
+        draft: Some(a(&[1, 0, 1, 0, 1, 1])),
+        ..shot.clone()
+    };
+    assert_eq!(
+        draft_named_by_its_member.reinserted_values(),
+        n(3),
+        "a draft named by a member of its chain is judged as its document (PUB-2.15)"
+    );
+    let stored = k.snapshot().world().content().len();
+    vs.publish(P1, &pdoc(), shot, &readable_by(PrincipalId(1)))
+        .expect("the shot commits");
+    assert_eq!(
+        k.snapshot().world().content().len() - stored,
+        3,
+        "the commit wrote exactly the values the shot said it re-inserts"
+    );
 }

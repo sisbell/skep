@@ -203,7 +203,9 @@ pub enum VersionError {
 /// * `TooManyRuns` — the member's placement exceeds
 ///   [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS), the budget COPY and the
 ///   shot share; a shot cannot be split to meet it.
-/// * `TooManyValues` — the draft-native runs' widths, summed, exceed
+/// * `TooManyValues` — the values the shot re-inserts
+///   ([`Shot::reinserted_values`](crate::Shot::reinserted_values): the
+///   draft-native runs' widths, summed) exceed
 ///   [`MAX_REINSERTED_VALUES`](crate::MAX_REINSERTED_VALUES): each such value
 ///   is re-inserted as fresh identity, two staged records apiece. Arithmetic
 ///   on the request alone, it discloses nothing about what exists; a shot

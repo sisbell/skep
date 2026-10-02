@@ -139,15 +139,9 @@ fn version_of_an_empty_source_has_a_zero_content_footprint() {
 #[test]
 fn a_version_born_empty_keeps_a_birth_extent_of_zero_through_its_first_deposit() {
     // BIRTH★ through `version`: an owned fork of a memberless edition mints
-    // the birth version by snapshot, and the snapshot is staged WHATEVER the
-    // surface holds, so a version born empty is noted at zero by its own
-    // mint. Read at once, zero proves nothing — an extent never noted reads
-    // zero too — so the version takes a deposit: noted, the zero stands;
-    // never noted, the deposit is the first placement the fold sees, and it
-    // is read as the birth. A `version` that skipped an empty snapshot, as the
-    // shot skips an empty placement and as the record's explicit-runs form
-    // (Open decision #4) invites, is that second case — and every content
-    // read and R answer the same under it, so this read alone sees it.
+    // the birth version by snapshot, which notes its extent — zero, for an
+    // empty edition. A deposit landing in the head afterwards notes nothing,
+    // as no placement does, so the zero stands as the count grows.
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     let (member, _) = vs

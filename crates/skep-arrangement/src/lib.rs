@@ -30,10 +30,11 @@
 //! non-recomputable from the current arrangement (a deleted address keeps its
 //! R pair — P2) but, like the POOM, is recovered by replay. v1 has no
 //! skip-serialized hints, so [`M5State::rebuild_derived`] is the identity.
-//! The birth extents are derived by the fold from the placing records — the
-//! shot's for every member it mints, an empty placement included — and the
-//! shot terms are journaled in the shot's own record; both are carried by
-//! the checkpoint, never rebuilt, and [`M5State`] states why.
+//! The birth extents are derived by the fold from the records that MINT a
+//! member — the shot's for every member it mints, an empty placement
+//! included, and an owned version's snapshot — and the shot terms are
+//! journaled in the shot's own record; both are carried by the checkpoint,
+//! never rebuilt, and [`M5State`] states why.
 //!
 //! ## Failure channels
 //!
@@ -193,7 +194,8 @@ mod state;
 // The reads on the slice: resolve, point, image, project, deletions, the
 // counts, and the admission predicates the ops ask.
 mod reads;
-// The publish shot: its request values and its address form, both sides.
+// The publish shot: its request values, the values it re-inserts, and its
+// address form, both sides.
 mod shot;
 // The deposit declaration and the deposit class's types.
 mod deposit;

@@ -364,11 +364,17 @@ fn version_snapshot_of_an_empty_source_leaves_the_fork_absent() {
 #[test]
 fn a_birth_version_s_extent_is_frozen_at_its_mint_and_a_deposit_never_joins_it() {
     // BIRTH★ (PUB-3.19, RES-276): the shot journals a member's whole
-    // arrangement as ONE placement at ordinal 1, so the first placement
-    // naming `D.1` is its mint and the count it leaves is the birth
-    // extent. Every later placement is a deposit the head took: the
-    // arrangement grows (PUB-2.66) and the birth extent does not.
-    let born = place(&M5State::genesis(), &vdoc(), 1, vec![run(&ca(1), 3)]);
+    // arrangement as ONE `ShotPlace` at ordinal 1, the record that mints
+    // `D.1`, and the count it leaves is the birth extent. Every later
+    // placement is a deposit the head took — a `ContentPlace`, which notes
+    // nothing: the arrangement grows (PUB-2.66) and the birth extent does
+    // not.
+    let born = M5State::genesis().apply_m5(&M5Rec::ShotPlace {
+        doc: vdoc(),
+        runs: vec![run(&ca(1), 3)],
+        placed: n(3),
+        base_extent: None,
+    });
     assert_eq!(born.birth_extent(&vdoc()), n(3));
     // An I-ADJACENT deposit, which is why the extent is noted at the mint
     // rather than read off the arrangement: the run-list merges the
@@ -392,10 +398,17 @@ fn only_a_trunk_s_birth_version_has_its_extent_noted() {
     // `birth_extents` holds one entry per TRUNK, keyed by its birth
     // version `D.1` — the one address the doc-metadata read serves an
     // extent for. A trunk, a later trunk member, a daughter of the birth
-    // version and the first daughter of a later member each take a
-    // placement and note nothing:
+    // version and the first daughter of a later member each take the record
+    // that mints a member — `ShotPlace`, which notes — and note nothing:
     // the last is `first_version_address` of ITS anchor, which is why the
-    // test asks the chain the TRUNK opens.
+    // test asks the chain the TRUNK opens. The birth version beside them is
+    // noted by the same record, so the silence is the predicate's.
+    let mint = |doc: &Address| M5Rec::ShotPlace {
+        doc: doc.clone(),
+        runs: vec![run(&ca(1), 2)],
+        placed: n(2),
+        base_extent: None,
+    };
     let mut s = M5State::genesis();
     for doc in [
         doc1(),
@@ -403,13 +416,19 @@ fn only_a_trunk_s_birth_version_has_its_extent_noted() {
         a(&[1, 0, 1, 0, 1, 1, 1]),
         a(&[1, 0, 1, 0, 1, 3, 1]),
     ] {
-        s = place(&s, &doc, 1, vec![run(&ca(1), 2)]);
+        s = s.apply_m5(&mint(&doc));
         assert_eq!(s.content_count(&doc), n(2));
         assert_eq!(s.birth_extent(&doc), n(0), "{doc:?} is no birth version");
     }
     assert!(
         s.birth_extents.is_empty(),
         "and `birth_extents` holds no entry for any of them"
+    );
+    let s = s.apply_m5(&mint(&vdoc()));
+    assert_eq!(
+        s.birth_extent(&vdoc()),
+        n(2),
+        "the birth version beside them is noted"
     );
 }
 
@@ -427,7 +446,7 @@ fn a_snapshot_born_version_is_noted_at_what_it_shares_and_an_empty_birth_at_zero
     assert_eq!((s.content_count(&vdoc()), s.birth_extent(&vdoc())), (n(4), n(3)));
     // The record is staged whatever the surface holds, so an EMPTY birth
     // is noted as zero — the arrangement and R still gain no entry — and
-    // the version's first deposit then finds its extent already noted: a
+    // the version's first deposit, which notes nothing, leaves it so: a
     // home born with no content stays an edition of nothing (RES-130).
     let born_empty = M5State::genesis().apply_m5(&M5Rec::VersionSnapshot {
         source: doc2(),
@@ -448,15 +467,13 @@ fn a_snapshot_born_version_is_noted_at_what_it_shares_and_an_empty_birth_at_zero
 
 #[test]
 fn a_member_the_shot_minted_empty_is_noted_at_zero_by_its_own_record() {
-    // THE RESIDUE BIRTH★ carried, CLOSED by D25's (c′): the shot's record is
-    // pushed whatever the placement holds, since it carries the shot's
-    // terms, so an empty shot-born member is noted at zero by its own mint
-    // — the arrangement and R gaining no entry, as the snapshot arm's empty
-    // birth leaves them — and its first DEPOSIT, a `ContentPlace` at the
-    // same ordinal into the same absent arrangement, finds the extent noted
-    // and grows the count alone. (Until the record carried the terms an
-    // empty shot pushed no placement, and that deposit was read as the
-    // birth.) No conforming mint is empty (PUB-3.11).
+    // D25's (c′): the shot's record is pushed whatever the placement holds,
+    // since it carries the shot's terms, so an empty shot-born member is
+    // noted at zero by its own mint — the arrangement and R gaining no
+    // entry, as the snapshot arm's empty birth leaves them — and its first
+    // DEPOSIT, a `ContentPlace` at the same ordinal into the same absent
+    // arrangement, notes nothing and grows the count alone. No conforming
+    // mint is empty (PUB-3.11).
     let minted_empty = M5State::genesis().apply_m5(&M5Rec::ShotPlace {
         doc: vdoc(),
         runs: vec![],
@@ -479,9 +496,9 @@ fn a_member_the_shot_minted_empty_is_noted_at_zero_by_its_own_record() {
 #[test]
 fn shot_place_folds_as_a_placement_at_one_notes_the_terms_and_is_the_last_variant() {
     // D25's (c′): the shot's record splices at ordinal 1 and appends to R
-    // exactly as `ContentPlace` at ordinal 1 does, notes the birth extent
-    // off the same spliced list, and notes the member's TERMS beside it —
-    // which no insert's or copy's placement does. The terms ride the
+    // exactly as `ContentPlace` at ordinal 1 does, and notes the birth
+    // extent and the member's TERMS — neither of which an insert's or
+    // copy's placement does, a placement minting nothing. The terms ride the
     // checkpoint with the rest of the slice. And the record is the LAST
     // variant, so the five before it kept their indices: an `insert`'s or
     // `copy`'s `ContentPlace` encodes as it did before the variant joined
@@ -508,6 +525,10 @@ fn shot_place_folds_as_a_placement_at_one_notes_the_terms_and_is_the_last_varian
         "the shot's two client terms, as the record carried them"
     );
     assert_eq!(by_place.shot_terms(&vdoc()), None, "a `ContentPlace` notes no terms");
+    assert!(
+        by_place.birth_extents.get(&vdoc()).is_none(),
+        "a `ContentPlace` mints nothing: naming a birth version first, it notes no birth"
+    );
     assert_eq!(by_shot.shot_terms(&doc1()), None, "answers the address named");
     let bytes = bincode::serialize(&by_shot).expect("state serializes");
     let back: M5State = bincode::deserialize(&bytes).expect("state deserializes");
@@ -654,7 +675,13 @@ fn the_birth_extents_ride_the_checkpoint_because_nothing_can_rebuild_them() {
     // `rebuild_derived` is still the identity — and a decoded state
     // answers the extent its records folded to, where a rebuild off the
     // arrangement could only answer the live count.
-    let born = place(&M5State::genesis(), &vdoc(), 1, vec![run(&ca(1), 3)]);
+    let mint = M5Rec::ShotPlace {
+        doc: vdoc(),
+        runs: vec![run(&ca(1), 3)],
+        placed: n(3),
+        base_extent: None,
+    };
+    let born = M5State::genesis().apply_m5(&mint);
     let grown = place(&born, &vdoc(), 4, vec![run(&ca(4), 1)]);
     let bytes = bincode::serialize(&grown).expect("state serializes");
     let back: M5State = bincode::deserialize(&bytes).expect("state deserializes");
@@ -665,7 +692,7 @@ fn the_birth_extents_ride_the_checkpoint_because_nothing_can_rebuild_them() {
     // Replay re-derives them: the same records fold to the same birth
     // extents.
     let again = place(
-        &place(&M5State::genesis(), &vdoc(), 1, vec![run(&ca(1), 3)]),
+        &M5State::genesis().apply_m5(&mint),
         &vdoc(),
         4,
         vec![run(&ca(4), 1)],

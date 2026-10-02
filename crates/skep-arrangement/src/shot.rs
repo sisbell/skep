@@ -2,10 +2,13 @@
 //! client-supplied I-address runs with the origin each windows, the base the
 //! staged draft was taken from, and the whole shot, the composite's
 //! arrangement input, taken FROM THE CLIENT and never read off any draft's
-//! arrangement at commit — and its ADDRESS FORM on both sides of the commit:
-//! [`Shot::address_form`] for the request, [`M5State::address_form_of`] for the
-//! member it minted, and [`run_origin_document`], the classifier both ask. The
-//! two sides must agree run for run, so they are stated in one file.
+//! arrangement at commit — the values it re-inserts
+//! ([`Shot::reinserted_values`]), and its ADDRESS FORM on both sides of the
+//! commit: [`Shot::address_form`] for the request, [`M5State::address_form_of`]
+//! for the member it minted, and [`run_origin_document`], the classifier all
+//! three ask. The two sides of the address form must agree as the signed body
+//! spells them — window for window, and value for value between — so they are
+//! stated in one file.
 //!
 //! Three values rather than loose arguments, for the reason [`crate::VPos`]
 //! and [`crate::VSpec`] are values: the pieces of a shot travel together, and
@@ -137,22 +140,32 @@ pub struct Shot {
 
 impl Shot {
     /// THE ADDRESS FORM of this shot's runs AS THE COMMIT WILL PLACE THEM
-    /// into `trunk`'s next member (l6-A4 = r6-4, owner-ruled 2026-09-29;
-    /// fam2-Q's arm A): the segments the shot's entry signature is made over,
-    /// each run classed by the family the commit gives it — a run the commit
-    /// COPIES IN is [`Copied`](PlacedSegment::Copied), signed BY VALUE: the
-    /// shot document's own I-space (its origin document `trunk`), placed by
-    /// reference, and the staging draft's text (its origin document the
-    /// draft's trunk), re-inserted as fresh identity under `trunk` — at the
-    /// member, both are the trunk's own; every other run is a
-    /// [`Window`](PlacedSegment::Window), a reference the commit keeps to
+    /// when [`Vstream::publish`](crate::Vstream::publish) is asked with `doc`
+    /// — into the next member of the document `doc` projects to (PUB-2.15), a
+    /// member of its chain naming the shot as the document itself does (l6-A4
+    /// = r6-4, owner-ruled 2026-09-29; fam2-Q's arm A): the segments the
+    /// shot's entry signature is made over, each run classed by the family
+    /// the commit gives it — a run the commit COPIES IN is
+    /// [`Copied`](PlacedSegment::Copied), signed BY VALUE: the shot
+    /// document's own I-space (its origin document, that projection), placed
+    /// by reference, and the staging draft's text (its origin document the
+    /// draft's trunk), re-inserted as fresh identity under the document's own
+    /// I-space — at the member, both are the trunk's own; every other run is
+    /// a [`Window`](PlacedSegment::Window), a reference the commit keeps to
     /// another document's I-space, signed BY ADDRESS. Consecutive windows
     /// that are I-adjacent become ONE, through the placement's own
     /// accumulator, exactly as the member's run-list will hold them; the
     /// copied runs keep their boundaries, which the value form never spells.
-    /// So what this answers for a request is what
-    /// [`M5State::address_form_of`] answers for the member it mints, read
-    /// back with the shot's `placed` count.
+    ///
+    /// So it answers for the request what [`M5State::address_form_of`]
+    /// answers for the member it mints, read back with the shot's `placed`
+    /// count — AS THE SIGNED BODY SPELLS IT: the same windows, run for run
+    /// and in the same V-places, and between them the same copied positions,
+    /// value for value. The copied runs themselves need not match — the member
+    /// holds as one run what the request may name as several, and a
+    /// draft-native run's addresses are the draft's here and fresh there —
+    /// which is why the body spells a stretch by its values and never by its
+    /// runs.
     ///
     /// Pure address arithmetic over the request, as the family test at the
     /// commit is: the origin document is derived from each run's own start
@@ -160,8 +173,9 @@ impl Shot {
     /// `origin`, so a run the commit will refuse `BadRun` — a start that is
     /// no content element — classes as a window here, spelled and never
     /// read; the store's refusal answers it. Reads no world.
-    pub fn address_form(&self, trunk: &Address) -> Vec<PlacedSegment> {
-        let draft_doc: Option<Address> = self.draft.as_ref().map(trunk_of);
+    pub fn address_form(&self, doc: &Address) -> Vec<PlacedSegment> {
+        let trunk = trunk_of(doc);
+        let draft_doc = self.draft_document();
         let mut out: Vec<PlacedSegment> = Vec::new();
         // The consecutive windows in hand, accumulated through the ONE run
         // accumulator (`extend_or_push_run`), so the merge condition is the
@@ -169,7 +183,7 @@ impl Shot {
         let mut windows: Vec<Run> = Vec::new();
         for ShotRun { run, .. } in &self.runs {
             let copied = run_origin_document(run)
-                .is_some_and(|origin| origin == *trunk || draft_doc.as_ref() == Some(&origin));
+                .is_some_and(|origin| origin == trunk || draft_doc.as_ref() == Some(&origin));
             if copied {
                 out.extend(windows.drain(..).map(PlacedSegment::Window));
                 out.push(PlacedSegment::Copied(run.clone()));
@@ -180,15 +194,50 @@ impl Shot {
         out.extend(windows.into_iter().map(PlacedSegment::Window));
         out
     }
+
+    /// THE VALUES THIS SHOT RE-INSERTS — the fresh identities its commit
+    /// mints for the staging draft's text (PUB-2.40), two staged records
+    /// apiece: Σ width of the DRAFT-NATIVE runs, those whose ORIGIN DOCUMENT —
+    /// derived from the run's own start, as [`address_form`](Shot::address_form)
+    /// derives it, and never from the stated `origin` — is the document
+    /// `draft` projects to (PUB-2.15), a run named twice counted twice; zero
+    /// with no draft. THE count [`Vstream::publish`](crate::Vstream::publish)
+    /// holds to [`MAX_REINSERTED_VALUES`](crate::MAX_REINSERTED_VALUES)
+    /// (`TooManyValues`), and its one spelling: request arithmetic over the
+    /// runs and the draft as the client stated them, reading nothing — so a
+    /// caller pricing a shot ahead of its transaction asks this, and its
+    /// refusal and the store's cannot part.
+    pub fn reinserted_values(&self) -> Nat {
+        let Some(draft_doc) = self.draft_document() else {
+            return Nat::zero();
+        };
+        self.runs
+            .iter()
+            .filter(|stated| run_origin_document(&stated.run).as_ref() == Some(&draft_doc))
+            .map(|stated| stated.run.width())
+            .sum()
+    }
+
+    /// The document `draft` projects to (PUB-2.15), or `None` with no draft
+    /// named: the one a run's ORIGIN DOCUMENT must be for the run to be
+    /// DRAFT-NATIVE, re-inserted as fresh identity (PUB-2.40). The draft half
+    /// of the family rule [`Shot`] states, spelled once and asked by
+    /// [`address_form`](Shot::address_form),
+    /// [`reinserted_values`](Shot::reinserted_values) and `publish`'s
+    /// registration check and placement alike; the run half, its origin
+    /// document, is `run_origin_document`'s.
+    pub(crate) fn draft_document(&self) -> Option<Address> {
+        self.draft.as_ref().map(trunk_of)
+    }
 }
 
 /// One segment of a shot's ADDRESS FORM (l6-A4): a run of the member the
 /// shot mints, classed by the family the commit gives it — the two classes
 /// the signed body spells apart. Answered for the REQUEST by
 /// [`Shot::address_form`] and for the committed MEMBER by
-/// [`M5State::address_form_of`], which agree run for run: that agreement is
-/// what lets a verifier holding the member, and no request, compose the body
-/// the client signed.
+/// [`M5State::address_form_of`], which agree as the signed body spells them
+/// (stated on [`Shot::address_form`]): that agreement is what lets a verifier
+/// holding the member, and no request, compose the body the client signed.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PlacedSegment {
     /// A run the commit COPIES IN — the shot document's own I-space by
@@ -218,12 +267,12 @@ impl M5State {
     /// [`Window`](PlacedSegment::Window), signed BY ADDRESS. The runs are the
     /// arrangement's own, maximally merged, the last one CLIPPED where the
     /// client's positions end; so what this answers for a committed member is
-    /// what [`Shot::address_form`] answered for the request that minted it,
-    /// and a verifier holding the member composes the shot's signed body with
-    /// no request in hand. `placed` is the caller's — the member's own
-    /// [`shot_terms`](M5State::shot_terms), or a count a checker chooses. A
-    /// member with fewer positions than `placed` answers what it has; an
-    /// absent arrangement answers nothing.
+    /// what [`Shot::address_form`] answered for the request that minted it, as
+    /// the body spells them (stated there), and a verifier holding the member
+    /// composes the shot's signed body with no request in hand. `placed` is
+    /// the caller's — the member's own [`shot_terms`](M5State::shot_terms),
+    /// or a count a checker chooses. A member with fewer positions than
+    /// `placed` answers what it has; an absent arrangement answers nothing.
     pub fn address_form_of(&self, member: &Address, placed: &Nat) -> Vec<PlacedSegment> {
         let trunk = trunk_of(member);
         let mut left = placed.clone();

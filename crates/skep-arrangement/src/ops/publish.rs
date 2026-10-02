@@ -111,9 +111,10 @@ where
     /// arranges (PUB-6.24's carried cell), the FIRST unreadable origin
     /// document answering `Withheld` with it — BEFORE any existence answer,
     /// so a run onto an unreadable origin is refused whether or not its
-    /// addresses exist → `TooManyValues` (the draft-native runs' widths
-    /// summed against [`MAX_REINSERTED_VALUES`] — request arithmetic, so it
-    /// answers before any address is probed) → existence, `DanglingSource` on
+    /// addresses exist → `TooManyValues`
+    /// ([`Shot::reinserted_values`](crate::Shot::reinserted_values) against
+    /// [`MAX_REINSERTED_VALUES`] — request arithmetic, so it answers before
+    /// any address is probed) → existence, `DanglingSource` on
     /// the first run any of whose addresses M4 does not hold → then the
     /// placement, RUN BY RUN in the order given: a draft-native run's values
     /// `Mint` → `Content` apiece, and after each run `TooManyRuns` once the
@@ -193,6 +194,12 @@ where
         readable: &dyn Fn(&W, &Address) -> bool,
     ) -> Result<(Address, Seq), TxnError<PublishError>> {
         let trunk = trunk_of(doc);
+        // The values the shot re-inserts: request arithmetic, reading no
+        // world, so taken before the transaction opens —
+        // `Shot::reinserted_values`, the count's one spelling, which a caller
+        // pricing the shot ahead of this op asks too. Refused at its own
+        // slot, inside.
+        let reinserted = shot.reinserted_values();
         let mut keys = vec![head_lock_key(doc), M3State::content_lock_key(&trunk)];
         if let Some(base) = &shot.base {
             if base.member != trunk {
@@ -220,17 +227,19 @@ where
                     return Err(PublishError::SourceNotRegistered);
                 }
             }
-            let draft_doc: Option<Address> = shot.draft.as_ref().map(trunk_of);
+            let draft_doc = shot.draft_document();
             if let Some(d) = &draft_doc {
                 if !m3.is_registered_document(d) {
                     return Err(PublishError::SourceNotRegistered);
                 }
             }
             // Which runs are the STAGING DRAFT's, re-inserted as fresh
-            // identity rather than placed by reference (PUB-2.40): one
-            // spelling, asked by the re-insert's count and by the placement
-            // alike, so the count bounds exactly the runs the placement
-            // re-inserts.
+            // identity rather than placed by reference (PUB-2.40) — the
+            // family rule `Shot` states, by which `Shot::reinserted_values`
+            // counts the values this placement re-inserts: both compare the
+            // run's origin document with `Shot::draft_document`, and
+            // `the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes`
+            // holds them to one answer.
             let draft_native = |origin_doc: &Address| draft_doc.as_ref() == Some(origin_doc);
             // Each run settled beside its origin document (`SettledRun`):
             // derived from the run's own start, required to be the document
@@ -313,16 +322,13 @@ where
                 }
                 admitted.insert(origin_doc);
             }
-            // The re-insert's size, before any address is probed: every
-            // address of every draft-native run is re-inserted below, two
-            // staged records apiece, and nothing M2 measures stops the staging
-            // before it is whole. Request arithmetic, so it discloses nothing —
-            // and asked here, it bounds the existence walk over those runs too.
-            let reinserted = supplied
-                .iter()
-                .filter(|settled| draft_native(&settled.origin_doc))
-                .map(|settled| settled.run.width())
-                .sum::<Nat>();
+            // The re-insert's size, refused before any address is probed:
+            // every address of every draft-native run is re-inserted below,
+            // two staged records apiece, and nothing M2 measures stops the
+            // staging before it is whole. Request arithmetic (`reinserted`,
+            // counted before the transaction opened), so it discloses
+            // nothing — and refused here, it bounds the existence walk over
+            // those runs too.
             if reinserted > Nat::from(MAX_REINSERTED_VALUES) {
                 return Err(PublishError::TooManyValues);
             }

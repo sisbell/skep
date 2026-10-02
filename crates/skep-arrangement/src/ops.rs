@@ -127,10 +127,11 @@ pub const MAX_PLACED_RUNS: usize = 1 << 16;
 /// closure has returned, and until then every staged value is live heap: a
 /// mint record and a content write, each carrying an address, and the
 /// working world's new content entry. How many values a shot re-inserts is
-/// its draft-native runs' widths summed, and that sum is the REQUEST's to
-/// choose — a run may name any stored I-extent of the draft, as often as the
-/// wire's run list allows — while [`MAX_PLACED_RUNS`] does not see it, the
-/// fresh addresses being I-adjacent and so coalescing into one run. Without
+/// [`Shot::reinserted_values`](crate::Shot::reinserted_values), its
+/// draft-native runs' widths summed, and that sum is the REQUEST's to choose
+/// — a run may name any stored I-extent of the draft, as often as the wire's
+/// run list allows — while [`MAX_PLACED_RUNS`] does not see it, the fresh
+/// addresses being I-adjacent and so coalescing into one run. Without
 /// this count a request of a kilobyte stages the draft's stored content as
 /// many times over as its run list repeats it, before any refusal can arrive.
 /// The count is request arithmetic, taken before any address is probed, so

@@ -624,3 +624,93 @@ fn the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes() {
         "the commit wrote exactly the values the shot said it re-inserts"
     );
 }
+
+#[test]
+fn a_shot_judges_every_address_it_names_as_the_document_it_projects_to() {
+    // PUB-2.15, at every site the shot applies it, each where the projection
+    // MOVES an address: the shot is named by the head; its draft by a member
+    // address of the draft — judged, as `Shot`'s card says, as the document it
+    // projects to, which must be registered; and one own run is a deposit the
+    // head took NAMED BY THE HEAD, so minted under the member's content chain.
+    // Judged as documents, the draft's run is re-inserted — the one value the
+    // count says, and no address of the draft in the member (PUB-2.41) — and
+    // the member-chain run is the document's own on BOTH sides of the address
+    // form, spelled by value as the client's body is.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
+    insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w")], Deposit::Undeclared)
+        .expect("doc2, the window's source, holds w");
+    let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let readable = readable_by(PrincipalId(1));
+    let head_shot = Shot {
+        base: Some(base(&pdoc(), 3)),
+        draft: None,
+        runs: vec![shot_run(&pdoc(), &pca(1), 3)],
+    };
+    let (head, _) = vs
+        .publish(P1, &pdoc(), &head_shot, &readable)
+        .expect("the head");
+    let (z, _) = vs
+        .insert(P1, &head, vp(1, 4), vec![val(b"z")], declared())
+        .expect("a deposit named by the head");
+    assert_eq!(
+        z,
+        vca(1),
+        "the premise: minted under the member's content chain, not the trunk's"
+    );
+    let shot = Shot {
+        base: Some(base(&head, 4)),
+        draft: Some(a(&[1, 0, 1, 0, 1, 1])), // a member address of doc1
+        runs: vec![
+            shot_run(&pdoc(), &pca(1), 2),
+            shot_run(&head, &z, 1),
+            shot_run(&doc2(), &w, 1),
+            shot_run(&doc1(), &ca(3), 1),
+        ],
+    };
+    assert_eq!(
+        shot.reinserted_values(),
+        n(1),
+        "the draft's one run, judged as doc1's"
+    );
+    let requested = shot.address_form(&head);
+    let stored = k.snapshot().world().content().len();
+    let (member, _) = vs
+        .publish(P1, &head, &shot, &readable)
+        .expect("the shot commits");
+    let s = k.snapshot();
+    let (m5, content) = (s.world().m5(), s.world().content());
+    assert_eq!(
+        content.len() - stored,
+        1,
+        "the commit re-inserted the one value the count says"
+    );
+    assert!(
+        run_starts(m5, &member).iter().all(|start| {
+            let origin = skep_address::document_of(start).expect("an element");
+            skep_arrangement::trunk_of(&origin) != doc1()
+        }),
+        "no address of the draft in the member (PUB-2.41)"
+    );
+    let terms = m5
+        .shot_terms(&member)
+        .expect("the shot's member carries its terms");
+    let at_member = spelled(&m5.address_form_of(&member, &terms.placed), content);
+    assert_eq!(
+        at_member,
+        vec![
+            Spelled::Value(b"a".to_vec()),
+            Spelled::Value(b"b".to_vec()),
+            Spelled::Value(b"z".to_vec()),
+            Spelled::Window(Run::new(w, n(1)).expect("a run")),
+            Spelled::Value(b"c".to_vec()),
+        ],
+        "the member's own runs, of either content chain, by value; the window by address"
+    );
+    assert_eq!(
+        spelled(&requested, content),
+        at_member,
+        "the request spells the member's body"
+    );
+}

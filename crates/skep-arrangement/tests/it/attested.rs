@@ -1,7 +1,7 @@
 //! The attested handle (signed ops): its `insert` and `publish` fill their
 //! own transaction's signature slot and no other.
 
-use skep_arrangement::{Deposit, Shot, Vstream};
+use skep_arrangement::{Deposit, Shot, VSpec, Vstream};
 use skep_kernel::Kernel;
 use skep_namespace::PrincipalId;
 use tempfile::tempdir;
@@ -13,10 +13,12 @@ use crate::common::*;
 /// attestation riding the handle): a `Vstream::attested` handle's `insert`
 /// and `publish` commit under the attestation it carries — the kernel reads
 /// it back at exactly those boundaries — while a plain `Vstream::new`
-/// handle's writes, and the attested handle's other writes (`delete`,
-/// `copy`), leave their slots empty. The driver's own signature is
-/// unchanged; the value rides the handle. The chain is not moved by the
-/// slot: an unattested twin history chains identically.
+/// handle's writes, and the attested handle's four others (`delete`, `copy`,
+/// `rearrange`, `version`), leave their slots empty. The driver's own
+/// signature is unchanged; the value rides the handle. And the slot moves
+/// the chain: an unattested twin history chains identically up to the first
+/// filled slot and parts there, the slot's digest being a chain input
+/// (r6-2c).
 #[test]
 fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
     use skep_kernel::Attestation;
@@ -35,8 +37,23 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
     let (_, s_att) = attested
         .insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], declared())
         .expect("the declared deposit commits");
-    // The same attested handle's `delete`: outside the slice, the plain arm.
+    // The same attested handle's `delete`: outside the checked set, the plain arm.
     let s_del = attested.delete(P1, &doc1(), vp(1, 2), n(1)).expect("delete commits");
+    // …and its `copy`, `rearrange` and `version`: the plain arm as well.
+    let from_doc1 = [VSpec {
+        source: doc1(),
+        span: vspan(1, 1, 2),
+    }];
+    let pivot = [vp(1, 1), vp(1, 2), vp(1, 3)];
+    let s_transclude = attested
+        .copy(P1, &doc2(), vp(1, 1), &from_doc1)
+        .expect("copy commits");
+    let s_rearrange = attested
+        .rearrange(P1, &doc1(), &pivot)
+        .expect("rearrange commits");
+    let (_, s_fork) = attested
+        .version(PrincipalId(2), &doc1(), None)
+        .expect("a cross-owner fork");
     // A shot under tag 3: the slot filled with tag 3's blob.
     let shot = Shot {
         base: None,
@@ -52,6 +69,17 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
     assert_eq!(k.attestation_at(s_plain).unwrap(), None, "the plain handle's insert");
     assert_eq!(k.attestation_at(s_att).unwrap(), Some(tag1.clone()), "the attested insert");
     assert_eq!(k.attestation_at(s_del).unwrap(), None, "delete takes the plain arm");
+    for (seq, write) in [
+        (s_transclude, "copy"),
+        (s_rearrange, "rearrange"),
+        (s_fork, "version"),
+    ] {
+        assert_eq!(
+            k.attestation_at(seq).unwrap(),
+            None,
+            "{write} takes the plain arm"
+        );
+    }
     assert_eq!(k.attestation_at(s_pub).unwrap(), Some(tag3), "the attested shot");
 
     // A `Copy` handle copied still carries the borrow; a handle built with
@@ -77,6 +105,9 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
         .unwrap();
     vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], declared()).unwrap();
     vs.delete(P1, &doc1(), vp(1, 2), n(1)).unwrap();
+    vs.copy(P1, &doc2(), vp(1, 1), &from_doc1).unwrap();
+    vs.rearrange(P1, &doc1(), &pivot).unwrap();
+    vs.version(PrincipalId(2), &doc1(), None).unwrap();
     let shot = Shot {
         base: None,
         draft: Some(doc1()),

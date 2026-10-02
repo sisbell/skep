@@ -6,10 +6,10 @@ use std::cell::RefCell;
 use skep_address::{Address, Nat};
 use skep_arrangement::{
     reading_surface, shot_admission, trunk_head, Base, Caller, Deposit, HasM5, PublishError, Run,
-    Shot, ShotRun, MAX_REINSERTED_VALUES,
+    Shot, ShotRun, Vstream, MAX_REINSERTED_VALUES,
 };
 use skep_content::Val;
-use skep_kernel::TxnError;
+use skep_kernel::{Kernel, TxnError};
 use skep_namespace::{HasM3, Namespace, PrincipalId};
 
 use crate::common::*;
@@ -24,6 +24,39 @@ fn recording_consult<'a>(
     move |_world: &World, origin: &Address| {
         asked.borrow_mut().push(origin.clone());
         allowed.contains(origin)
+    }
+}
+
+/// One shot asked of `shot_admission`, on the world `publish` then opens on,
+/// and then of `publish`, under one consult. Where `at_the_gate`, both refuse
+/// it alike and that refusal is handed back; where not, the admission passes
+/// it and `publish` commits it or refuses it past its gate. Any other pair is
+/// the two disagreeing, and panics.
+fn admission_agrees_with_publish(
+    k: &Kernel<World>,
+    caller: Caller,
+    doc: &Address,
+    shot: &Shot,
+    consult: &dyn Fn(&World, &Address) -> bool,
+    at_the_gate: bool,
+) -> Option<PublishError> {
+    let admission = shot_admission(k.snapshot().world(), caller, doc, shot, consult);
+    let published = Vstream::new(k).publish(caller, doc, shot, consult);
+    match (admission, published) {
+        (Err(asked), Err(TxnError::Rejected(answered))) if at_the_gate => {
+            assert_eq!(asked, answered, "{doc:?}");
+            Some(asked)
+        }
+        (Ok(()), Ok(_)) if !at_the_gate => None,
+        (
+            Ok(()),
+            Err(TxnError::Rejected(
+                PublishError::TooManyValues
+                | PublishError::DanglingSource
+                | PublishError::TooManyRuns,
+            )),
+        ) if !at_the_gate => None,
+        other => panic!("{doc:?}: the admission and `publish` disagree: {other:?}"),
     }
 }
 
@@ -916,7 +949,8 @@ fn the_shots_admission_is_the_answer_publish_gives_through_its_source_gate() {
     // refusal of the composite's own — the existence walk's, the budgets' —
     // or a commit. Each shot is asked of the world `publish` then opens on:
     // one slot's verdict apiece, one refused past the gate, one that commits,
-    // after which the birth shape is superseded.
+    // after which the birth shape is superseded — and then the gate's two
+    // skips, under a consult refusing every origin.
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: a b c, memberless
     insert_abc(&k); // doc1: a b c
@@ -946,26 +980,12 @@ fn the_shots_admission_is_the_answer_publish_gives_through_its_source_gate() {
         (P1, pdoc(), plain(Some(base(&pdoc(), 3)), vec![shot_run(&pdoc(), &pca(1), 3)]), false),
         (P1, pdoc(), plain(None, vec![]), true),
     ];
-    let mut refused = Vec::new();
-    for (caller, doc, shot, at_the_gate) in cases {
-        let admission = shot_admission(k.snapshot().world(), caller, &doc, &shot, &readable);
-        match (admission, vs.publish(caller, &doc, &shot, &readable)) {
-            (Err(asked), Err(TxnError::Rejected(answered))) if at_the_gate => {
-                assert_eq!(asked, answered, "{doc:?}");
-                refused.push(asked);
-            }
-            (Ok(()), Ok(_)) if !at_the_gate => {}
-            (
-                Ok(()),
-                Err(TxnError::Rejected(
-                    PublishError::TooManyValues
-                    | PublishError::DanglingSource
-                    | PublishError::TooManyRuns,
-                )),
-            ) if !at_the_gate => {}
-            other => panic!("{doc:?}: the admission and `publish` disagree: {other:?}"),
-        }
-    }
+    let refused: Vec<PublishError> = cases
+        .into_iter()
+        .filter_map(|(caller, doc, shot, at_the_gate)| {
+            admission_agrees_with_publish(&k, caller, &doc, &shot, &readable, at_the_gate)
+        })
+        .collect();
     // Every slot through the gate spoke once, in the order the cases ask.
     assert_eq!(
         refused,
@@ -977,8 +997,47 @@ fn the_shots_admission_is_the_answer_publish_gives_through_its_source_gate() {
             PublishError::PrivateSourceVersionless,
             PublishError::BaseNotInChain,
             PublishError::BaseExtentTooLarge,
-            PublishError::Withheld(subdoc),
+            PublishError::Withheld(subdoc.clone()),
             PublishError::BaseSuperseded,
         ]
+    );
+    // The gate's two SKIPS — the document's own I-space, and a run its base
+    // already arranges (PUB-6.24) — are where the two answers would part: an
+    // admission that consulted either would refuse a shot `publish` commits,
+    // and the daemon's attestation check reads such a refusal as the store's
+    // own at or before its gate and passes the shot through unattested — a
+    // checked-set shot committed unsigned. So: a head windowing subdoc,
+    // minted under a consult admitting it; then, under one refusing EVERY
+    // origin, the window off that head's pinned predecessor, which does not
+    // arrange it — withheld on both sides — and the edition's own run with
+    // the window off the head, which holds both — each skipped, committed on
+    // both sides.
+    let anyone = |_: &World, _: &Address| true;
+    let no_one = |_: &World, _: &Address| false;
+    let (windowing, _) = vs
+        .publish(
+            P1,
+            &pdoc(),
+            &plain(
+                Some(base(&vdoc(), 3)),
+                vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&subdoc, &sca, 1)],
+            ),
+            &anyone,
+        )
+        .expect("a head windowing subdoc, its consult admitting it");
+    let off_the_predecessor = plain(Some(base(&vdoc(), 3)), vec![shot_run(&subdoc, &sca, 1)]);
+    let off_the_head = plain(
+        Some(base(&windowing, 4)),
+        vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&subdoc, &sca, 1)],
+    );
+    assert_eq!(
+        admission_agrees_with_publish(&k, P1, &pdoc(), &off_the_predecessor, &no_one, true),
+        Some(PublishError::Withheld(subdoc)),
+        "not carried: consulted, and refused, on both sides"
+    );
+    assert_eq!(
+        admission_agrees_with_publish(&k, P1, &pdoc(), &off_the_head, &no_one, false),
+        None,
+        "own and carried: consulted on neither side"
     );
 }

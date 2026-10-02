@@ -162,6 +162,46 @@ fn a_version_born_empty_keeps_a_birth_extent_of_zero_through_its_first_deposit()
 }
 
 #[test]
+fn nothing_a_version_mints_carries_shot_terms() {
+    // `shot_terms` answers `None` for what no shot's record names — a member
+    // an owned `version` minted among them — and the doc-metadata read serves
+    // that answer: terms there tell a verifier a shot's entry signature covers
+    // the first `placed` positions. Asked of all three things `version`
+    // mints: a birth version of an EMPTY edition, a later member holding
+    // content, and a cross-owner fork's fresh document. A `version` record
+    // carrying terms — as the snapshot's explicit-runs form (Open decision
+    // #4) would, written in the shot record's shape — answers here.
+    let k = mem_kernel();
+    let vs = Vstream::new(&k);
+    let (birth, _) = vs
+        .version(PrincipalId(1), &pdoc(), None)
+        .expect("the birth version, of an empty edition");
+    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"z")], declared())
+        .expect("a deposit landing in the head");
+    let (later, _) = vs
+        .version(PrincipalId(1), &pdoc(), None)
+        .expect("a member sharing the head's one position");
+    let (fork, _) = vs
+        .version(PrincipalId(2), &pdoc(), None)
+        .expect("a cross-owner fork");
+    let s = k.snapshot();
+    let m5 = s.world().m5();
+    assert_eq!(
+        m5.content_count(&later),
+        n(1),
+        "the premise: the later member holds content"
+    );
+    assert_eq!(
+        m5.birth_extent(&birth),
+        Some(&n(0)),
+        "the premise: a noted birth version"
+    );
+    for minted in [&birth, &later, &fork] {
+        assert_eq!(m5.shot_terms(minted), None, "{minted:?}: no shot minted it");
+    }
+}
+
+#[test]
 fn a_fork_is_as_empty_as_the_reading_surface_it_snapshots_not_the_address_named() {
     // ASN-0123 V1 under head-float: the fork is empty exactly when the
     // arrangement it snapshots — its source's READING SURFACE — is, whatever

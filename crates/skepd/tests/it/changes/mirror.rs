@@ -7,6 +7,8 @@
 //! record. The seeded flow, the feed readers, the per-kind term checks and
 //! the reclaim helpers are the parent's.
 
+use std::collections::BTreeMap;
+
 use skep_identity::{canonical_record, Enrollment, Fingerprint, MAX_RECORD_BYTES};
 
 use super::*;
@@ -49,8 +51,10 @@ fn fingerprint_of(sk: &ed25519_dalek::SigningKey) -> String {
 ///   `effective_owner`'s answer; a `make_link`: `link` equal to its
 ///   `ack_addr`;
 /// * a credential record deposit above the claim (lane D's signed form):
-///   BOTH rows without `key` and without `attest`; the ceremony's rows
-///   below the claim: `key` served, no `attest` —
+///   its ATOM row with `key` — the daemon's testimony of the writing
+///   session (as7-E2 (a); SO-I7 (e)) — and its LINK row, the one the
+///   record's `sig` signs, without; neither with `attest`; the ceremony's
+///   rows below the claim: `key` served, no `attest` —
 ///
 /// and the same page byte-identical across a restart (PUB-8.26) with every
 /// new member.
@@ -128,12 +132,12 @@ fn the_feed_is_the_mirrors_whole_input() {
             assert_terms_by_op(e, "the walk");
         }
         // `attest` rides exactly one row, the shot's; `key` is absent on
-        // exactly the signed rows — the shot's and the deposit's two.
+        // exactly the signed rows — the shot's and the deposit's LINK row
+        // (as7-E2 (a): the atom row keeps its `key`).
         let attested: Vec<u64> =
             entries.iter().filter(|e| e.get("attest").is_some()).map(at_of).collect();
         assert_eq!(attested, vec![publish_at], "attest rides the marker-signed row alone");
-        let mut signed_ats: Vec<u64> = hire_rows.iter().map(at_of).collect();
-        signed_ats.push(publish_at);
+        let signed_ats: Vec<u64> = vec![at_of(&hire_rows[1]), publish_at];
         let keyless: Vec<u64> =
             entries.iter().filter(|e| e.get("key").is_none()).map(at_of).collect();
         assert_eq!(keyless, signed_ats, "key is absent on the signed rows and served on every other");
@@ -183,17 +187,20 @@ fn the_feed_is_the_mirrors_whole_input() {
         );
         assert_eq!(e["key"].as_str(), Some("bare"));
 
-        // The record deposit's two rows (D26; e-Q2): the atom's insert and
-        // its credential link — one signature at the record grade, so
-        // neither carries `key` nor `attest`; the link row names its link.
+        // The record deposit's two rows (D26; e-Q2 re-cut at the atom row,
+        // as7-E2 (a)): the atom's insert carries `key` — the daemon's
+        // testimony of the writing session — and no `attest`; its credential
+        // link, the position the record's `sig` signs, carries neither; the
+        // link row names its link.
         let (atom_row, link_row) = (&hire_rows[0], &hire_rows[1]);
         assert_eq!(atom_row["op"].as_str(), Some("insert"), "{atom_row}");
         assert_eq!(atom_row["docs"], serde_json::json!([CLAIMANT_DOC1]));
+        assert_eq!(atom_row["key"].as_str(), Some(device_fp.as_str()), "the atom row's key: {atom_row}");
+        assert_absent(atom_row, &["attest"], "the record's atom");
+        assert_terms_by_op(atom_row, "the record's atom");
         assert_eq!(link_row["op"].as_str(), Some("make_link"), "{link_row}");
-        for (what, row) in [("the record's atom", atom_row), ("the record's link", link_row)] {
-            assert_absent(row, &["key", "attest"], what);
-            assert_terms_by_op(row, what);
-        }
+        assert_absent(link_row, &["key", "attest"], "the record's link");
+        assert_terms_by_op(link_row, "the record's link");
         assert!(
             link_row["link"].as_str().is_some_and(|l| l.starts_with(&format!("{CLAIMANT_DOC1}.0.2."))),
             "the enroll link, minted in the registry's link subspace: {link_row}"
@@ -468,14 +475,22 @@ fn the_attest_store_keeps_below_the_floor_and_serves_a_lost_slot_at_the_floor_as
     }
 }
 
-/// D12 ON A RECORD DEPOSIT'S TWO ROWS (e-Q2): the atom's `insert` and the
-/// credential `make_link` that names it — one signature at the record
-/// grade, the record's own `sig` — carry neither `key` nor `attest`; and a
-/// record deposited ABOVE the claim carrying NO `sig` keeps its atom's
-/// `key` (the entry carries no signature anywhere) while its link is refused
-/// `attestation_required` (lane D), the atom an orphan no link names.
+/// D12 ON A RECORD DEPOSIT'S TWO ROWS — e-Q2 RE-CUT AT THE ATOM ROW (SO-I7
+/// (e); round 7's as7-E2 ARM (a), owner 2026-10-01): the atom's `insert`
+/// ALWAYS carries `key`, the daemon's testimony of the writing session, and
+/// no `attest`; the credential `make_link` that names it — the one position
+/// the record's own `sig` signs, at the record grade — carries neither. A
+/// record deposited ABOVE the claim carrying NO `sig` lands NOWHERE: refused
+/// at its `insert`, `record_sig_required`, PERMANENT (bu7-E1 ARM (a); SO-I4),
+/// the journal unmoved — e-Q2's "a sig-less record's atom keeps its `key`"
+/// has no population on a conforming daemon. And THE ORPHAN ATOM (the
+/// register's SO-I7 *Test:* line, l7-R3): a record with a GARBAGE `sig` —
+/// well-formed, the row's width, verifying under nothing — passes the
+/// narrowed exemption (it parses, into doc 1), its link is refused
+/// `attestation_invalid:signature`, and the atom's row keeps the one
+/// asserted hand, `key`, with no `attest` — D12's audit diagnostic.
 #[test]
-fn both_rows_of_a_record_deposit_carry_neither_key_nor_attest_and_a_sig_less_atom_keeps_its_key() {
+fn the_atom_row_carries_key_the_link_row_none_a_sig_less_record_is_refused_and_an_orphan_keeps_its_hand() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
@@ -492,32 +507,95 @@ fn both_rows_of_a_record_deposit_carry_neither_key_nor_attest_and_a_sig_less_ato
         .clone();
     assert_eq!(rows.len(), 2, "the atom's insert and its link: {rows:?}");
     assert_eq!((rows[0]["op"].as_str(), rows[1]["op"].as_str()), (Some("insert"), Some("make_link")));
+    assert_eq!(rows[0]["key"].as_str(), Some(device_fp.as_str()), "the atom row's key: {}", rows[0]);
+    assert_absent(&rows[0], &["attest"], "a record deposit's atom row");
+    assert_absent(&rows[1], &["key", "attest"], "a record deposit's link row");
     for row in &rows {
-        assert_absent(row, &["key", "attest"], "a record deposit's row");
         assert_terms_by_op(row, "a record deposit's row");
     }
 
-    // The sig-less record: its atom lands (the insert's check demands no
-    // `attest` of a record deposit, D26), testifying the session's key.
+    // The sig-less record: refused at its insert, nothing landed.
     let (b, _) = delegate_under(port, &boot, "1", 2);
     let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
     let atom = enroll_atom(&[&distinct_key(2)]);
-    let (ack, e) = feed_entry(
+    let before = head(port);
+    let v = op_as_written(
         port,
-        &signed,
-        "a sig-less record's atom",
+        Some(&signed),
         &format!(
             r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":"{T_ENROLL}"}}"#
         ),
     );
-    assert_eq!(
-        e["key"].as_str(),
-        Some(device_fp.as_str()),
-        "a record carrying no sig is an unsigned entry: its key is served: {e}"
+    assert_eq!(verdict(&v), "credential_refused:record_sig_required", "{v}");
+    assert_eq!(v["disposition"].as_str(), Some("permanent"), "{v}");
+    assert_eq!(head(port), before, "no orphan: the journal's position is unmoved");
+
+    // The orphan: a garbage `sig` of the row's width — the atom lands exempt,
+    // its link is refused, and its row keeps the daemon's one asserted hand.
+    let entries = [Enrollment::new(public_key_of(&distinct_key(2)), false, None).expect("no label")];
+    let garbage = json_atom(&canonical_record(&entries, Some(&hex(&[0xab; 3373]))));
+    let (ack, e) = feed_entry_as_written(
+        port,
+        &signed,
+        "an orphan atom: a record with a garbage sig",
+        &format!(
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{garbage}}}],"deposit":"{T_ENROLL}"}}"#
+        ),
     );
-    assert_absent(&e, &["attest"], "a record deposit's atom");
     let v = typed_link(port, &signed, CLAIMANT_DOC1, &[&acked_addr(&ack)], &[&b], T_ENROLL);
-    assert_eq!(verdict(&v), "credential_refused:attestation_required", "{v}");
+    assert_eq!(verdict(&v), "credential_refused:attestation_invalid:signature", "{v}");
+    assert_eq!(e["key"].as_str(), Some(device_fp.as_str()), "the orphan's row keeps its hand: {e}");
+    assert_absent(&e, &["attest"], "the orphan atom's row");
+    sd.shutdown();
+}
+
+/// Π FROM A FEED WITH BARE `delegate` ROWS (SO-I5 (e); round 7's as7-F3 —
+/// bare feed rows served from the journal): with `commits.log` gone, every
+/// position comes back BARE, and a bare `delegate` row still carries its
+/// `op` and its pair — `new_prefix`, `new_id` — answered from the journal's
+/// own records, so the mirror recipe's Π over the bare feed equals
+/// `effective_owner`'s answer for every minted prefix, as it does over the
+/// recorded one (`pi_from_the_feed_alone_is_effective_owners_answer_for_every_minted_prefix`).
+#[test]
+fn pi_from_a_feed_with_bare_delegate_rows_is_effective_owners_answer() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let prefixes = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let boot = open_session(port, 0);
+        let (a, s_a) = delegate_under(port, &boot, "1", 1);
+        let (b, _) = delegate_under(port, &boot, "1", 2);
+        let (a1, _) = delegate_under(port, &s_a, &a, 3);
+        sd.shutdown();
+        vec![(CLAIMANT_ACCOUNT.to_string(), CLAIMANT_PRINCIPAL), (a, 1), (b, 2), (a1, 3)]
+    };
+    // The testimony gone: the open re-covers every position as bare, the
+    // journal answering each row's class and terms.
+    std::fs::remove_file(dir.path().join("commits.log")).expect("delete the testimony");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let mut pi: BTreeMap<String, u64> = BTreeMap::new();
+    let mut since = 0;
+    loop {
+        let page = changes_ok(port, None, &format!("since={since}&limit=3"));
+        for e in page["changes"].as_array().expect("changes") {
+            assert!(e["docs"].is_null() && e["key"].is_null() && e["time"].is_null(), "bare: {e}");
+            if e["op"].as_str() == Some("delegate") {
+                let prefix = e["new_prefix"].as_str().expect("a bare delegate row names its prefix");
+                let id = e["new_id"].as_u64().expect("…and the principal it seated");
+                assert!(pi.insert(prefix.to_string(), id).is_none(), "one row per mint: {e}");
+            }
+        }
+        if !page["more"].as_bool().expect("more") {
+            break;
+        }
+        since = page["last"].as_u64().expect("last");
+    }
+    let want: BTreeMap<String, u64> = prefixes.into_iter().collect();
+    assert_eq!(pi, want, "Π off the bare feed is every account the board minted, with its principal");
+    for (prefix, id) in &pi {
+        assert_eq!(effective_owner(port, None, prefix), Some((prefix.clone(), *id)), "ω agrees for {prefix}");
+    }
     sd.shutdown();
 }
 
@@ -556,17 +634,19 @@ fn below_the_claim_a_record_carrying_a_sig_keeps_its_rows_key() {
     sd.shutdown();
 }
 
-/// A RECORD ATOM PAST THE RECORD CAP IS NO RECORD (AUTH-1.18;
-/// `record_deposit_carries_sig`): above the claim, a declared enrolment atom
-/// spelling a canonical record WITH a `sig` but past `MAX_RECORD_BYTES`
-/// lands — the check stands aside for a declared deposit of a credential
-/// kind (D26) — and its row serves the session's `key`, as an atom that is
-/// no record does: the record parse refuses it `too_large` at its own head,
-/// as the read refuses its link, so its `sig` covers no position. The same
-/// shape under the cap drops the `key`
-/// (`both_rows_of_a_record_deposit_carry_neither_key_nor_attest_and_a_sig_less_atom_keeps_its_key`).
+/// A RECORD ATOM PAST THE RECORD CAP IS NO RECORD (AUTH-1.18; the narrowed
+/// exemption's one parse, `declared_record_atom`, as7-E1 ARM (a)): above
+/// the claim, a declared enrolment atom spelling a canonical record WITH a
+/// `sig` but past `MAX_RECORD_BYTES` parses as no record — the parse refuses
+/// it `too_large` at its own head, as the read refuses its link — so the
+/// exemption does not reach it and it takes the entry check like any insert
+/// (s2's third case): unattested, `attestation_required`; attested, it
+/// commits SIGNED, its row carrying `attest` and no `key`. The same shape
+/// under the cap is the record deposit's own atom, exempt, its row serving
+/// its `key`
+/// (`the_atom_row_carries_key_the_link_row_none_a_sig_less_record_is_refused_and_an_orphan_keeps_its_hand`).
 #[test]
-fn above_the_claim_a_record_atom_past_the_cap_keeps_its_rows_key() {
+fn above_the_claim_a_record_atom_past_the_cap_takes_the_entry_check() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
@@ -580,19 +660,17 @@ fn above_the_claim_a_record_atom_past_the_cap_keeps_its_rows_key() {
     assert!(record.len() > MAX_RECORD_BYTES, "fixture: past the cap");
     let past = json_atom(&record);
     let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
-    let (_, e) = feed_entry(
-        port,
-        &signed,
-        "a record atom past the cap",
-        &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{past}}}],"deposit":"{T_ENROLL}"}}"#
-        ),
+    let frame = format!(
+        r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{past}}}],"deposit":"{T_ENROLL}"}}"#
     );
+    let v = op_as_written(port, Some(&signed), &frame);
     assert_eq!(
-        e["key"].as_str(),
-        Some(fingerprint_of(&device_key()).as_str()),
-        "an atom past the cap is no record: its row serves the session's key: {e}"
+        verdict(&v),
+        "credential_refused:attestation_required",
+        "an atom past the cap is no record: unattested, the check's (1): {v}"
     );
-    assert_absent(&e, &["attest"], "a record deposit's atom");
+    let (_, e) = feed_entry(port, &signed, "a record atom past the cap, attested", &frame);
+    assert!(e["attest"].is_object(), "attested: committed SIGNED, its row carrying attest: {e}");
+    assert_absent(&e, &["key"], "a marker-signed row");
     sd.shutdown();
 }

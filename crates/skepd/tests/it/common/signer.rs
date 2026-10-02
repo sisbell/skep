@@ -358,13 +358,17 @@ pub fn publish_segments(
     Some(out)
 }
 
-/// A `publish` frame's `base_extent` as the body spells it: `Some(None)`
-/// where the frame carries none (the birth shape), `None` where the member
-/// is not a count.
-fn base_extent_of(frame: &Value) -> Option<Option<u64>> {
-    match frame.get("base_extent") {
-        None => Some(None),
-        Some(v) => Some(Some(v.as_str()?.parse().ok()?)),
+/// A `publish` frame's BASE as the body spells it (V; bu7-E2): the member
+/// the frame's `base` names and the extent its `base_extent` counts —
+/// `Some(None)` where the frame carries neither (the birth shape), `None`
+/// where one is carried without the other or is no address or count.
+fn base_of(frame: &Value) -> Option<Option<(Address, u64)>> {
+    match (frame.get("base"), frame.get("base_extent")) {
+        (None, None) => Some(None),
+        (Some(member), Some(extent)) => {
+            Some(Some((parse_addr(member.as_str()?)?, extent.as_str()?.parse().ok()?)))
+        }
+        _ => None,
     }
 }
 
@@ -402,10 +406,11 @@ pub fn entry_frame_for(port: u16, token: &str, principal: u64, frame: &Value) ->
         }
         "publish" => {
             let segments = publish_segments(port, token, frame, None)?;
-            let base_extent = base_extent_of(frame)?;
+            let base = base_of(frame)?;
+            let base = base.as_ref().map(|(member, extent)| ShotBase { member, extent: *extent });
             (
                 parse_addr(&trunk_of_str(frame["doc"].as_str()?))?,
-                entry_body_publish(segments.iter().map(SignerSegment::as_shot), base_extent),
+                entry_body_publish(segments.iter().map(SignerSegment::as_shot), base),
             )
         }
         _ => return None,
@@ -566,8 +571,9 @@ pub fn op_with_publish_values(port: u16, token: &str, frame: &str, values: &[&[u
     let doc = parse_addr(&trunk_of_str(v["doc"].as_str().expect("doc"))).expect("a document address");
     let segments = publish_segments(port, token, &v, Some(values))
         .expect("the frame's runs are content runs and the values supplied cover the copied ones");
-    let base_extent = base_extent_of(&v).expect("a count, or no base");
-    let body = entry_body_publish(segments.iter().map(SignerSegment::as_shot), base_extent);
+    let base = base_of(&v).expect("a member and a count, or no base");
+    let base = base.as_ref().map(|(member, extent)| ShotBase { member, extent: *extent });
+    let body = entry_body_publish(segments.iter().map(SignerSegment::as_shot), base);
     let bytes = entry_frame(alg, board, &account, &doc, &body);
     let signer = HybridSigner::from_seed(FIXTURE_TAG, &seed).expect("tag 1");
     v["attest"] = attest_member(&signer.sign(&bytes));

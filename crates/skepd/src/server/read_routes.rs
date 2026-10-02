@@ -8,20 +8,15 @@ use skep_kernel::Seq;
 
 use super::actor::Resolved;
 use super::reply::{
-    op_answer, refuse, refuse_reclaimed, refuse_unavailable, Reply, TransportError,
+    op_answer, refuse, refuse_over_budget, refuse_reclaimed, refuse_unavailable, Reply,
+    TransportError,
 };
 use super::request::{at_most_once, query_pairs};
 use super::Daemon;
 use crate::auth::fold::{canonical_identity, key_set_of};
 use crate::codec::{check_keys, key_set_reply, obj, DaemonOp};
+use crate::limits::{DEFAULT_CHANGES_LIMIT, MAX_CHANGES_LIMIT};
 use crate::write_path::{ChangesAnswer, ChangesQuery, FeedClass};
-
-/// `/changes` page size when `limit` is absent.
-const DEFAULT_CHANGES_LIMIT: NonZeroUsize = NonZeroUsize::new(256).expect("256 is not zero");
-
-/// `/changes` page-size ceiling; a larger request is refused, not clamped
-/// (the never-silent posture applied to paging).
-const MAX_CHANGES_LIMIT: usize = 4096;
 
 impl Daemon {
     /// `POST /op-at` — answer one READ frame as of a committed position:
@@ -213,6 +208,9 @@ impl Daemon {
         let class = FeedClass::of(head.world(), resolved.principal());
         match self.writes.changes(&class, &changes_query) {
             ChangesAnswer::Reclaimed { floor } => refuse_reclaimed(floor),
+            // The page byte budget (bu7-2; SO-I9): refused whole, with the
+            // budget and the largest `limit` that fits from this fence.
+            ChangesAnswer::OverBudget { budget, fits } => refuse_over_budget(budget, fits),
             ChangesAnswer::Page { entries, last, more } => Reply::json(
                 200,
                 obj(vec![

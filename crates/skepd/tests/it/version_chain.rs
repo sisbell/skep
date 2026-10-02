@@ -433,26 +433,28 @@ fn the_declaration_names_the_class_and_the_write_path_tests_it() {
 
     // A declared MEMBER at the fresh position is admitted — each of the two:
     // an enrollment record under ENROLL's type, a retire record under
-    // RETIRE's. (The class test reads the TYPE; what the atom is it cannot
-    // tell, which is why the prose deposits above it in this file land too.)
+    // RETIRE's. (The class test reads the TYPE; the entry check then parses
+    // the atom and wants the record's own `sig` — a sig-less record of the
+    // kind is refused at its insert, bu7-E1 — so each record lands SIGNED
+    // for its deposit, as every record above the claim does.)
+    let enroll_record = signed_atom(port, &signed, CLAIMANT_DOC1, T_ENROLL, &[CLAIMANT_ACCOUNT], &enroll_atom(&[&distinct_key(81)]));
     let enroll = op(
         port,
         Some(&signed),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
-            enroll_atom(&[&distinct_key(81)])
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":[{{"atom":{enroll_record}}}],"deposit":"{T_ENROLL}"}}"#
         ),
     );
     assert_eq!(acked_addr(&enroll), format!("{CLAIMANT_DOC1}.0.1.2"));
     let enrolled_at = head(port);
     assert!(enrolled_at > before, "the ENROLL deposit committed");
     let retire_record = skep_identity::encode_retire(&[skep_identity::Fingerprint::of(&public_key_of(&distinct_key(81)))]);
+    let retire_record = signed_atom(port, &signed, CLAIMANT_DOC1, T_RETIRE, &[CLAIMANT_ACCOUNT], &json_atom(&retire_record));
     let retire = op(
         port,
         Some(&signed),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"3"}},"values":[{{"atom":{}}}],"deposit":"{T_RETIRE}"}}"#,
-            json_atom(&retire_record)
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"3"}},"values":[{{"atom":{retire_record}}}],"deposit":"{T_RETIRE}"}}"#
         ),
     );
     assert_eq!(acked_addr(&retire), format!("{CLAIMANT_DOC1}.0.1.3"));

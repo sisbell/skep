@@ -57,6 +57,13 @@ use common::*;
 use proptest::prelude::*;
 use proptest::test_runner::FileFailurePersistence;
 use serde_json::{json, Value};
+use skep_address::{Address, Nat, Tumbler};
+use skep_identity::{
+    entry_body_insert, entry_body_make_link, entry_body_publish, entry_frame, BoardTerm,
+    EntrySlot, LinkSlots, ShotBase, ShotSegmentPiece, ALG_FNDSA512_PREVIEW_ED25519,
+    ALG_MLDSA65_ED25519,
+};
+use skep_signature::HybridSigner;
 
 fn exhaustive() -> bool {
     std::env::var_os("PROPS_EXHAUSTIVE").is_some_and(|v| v == "1")
@@ -1240,5 +1247,111 @@ proptest! {
     #[test]
     fn random_valid_op_sequences_hold_the_invariants(plan in plan_strategy()) {
         run_case(&plan);
+    }
+}
+
+// ── SO-I1 — EVERY AXIS BOUND: the entry grade's proptest ────────────────────
+
+/// The entry frame over one op cell of the checked set — `insert`,
+/// `make_link`, `publish` — composed from its members, so the test can move
+/// one member at a time.
+fn composed_frame(
+    alg: &str,
+    board: BoardTerm,
+    account: &Address,
+    doc: &Address,
+    cell: usize,
+    value: &[u8],
+    base_extent: u64,
+) -> Vec<u8> {
+    let (ty, from) = (address("1.1.0.1.0.1.0.3.90"), address("1.0.1.0.1.0.1.1"));
+    let base_member = address("1.0.1.0.1.1");
+    let body = match cell {
+        0 => entry_body_insert(Some(&ty), [value]),
+        1 => entry_body_make_link(LinkSlots {
+            from: EntrySlot::Addrs(std::slice::from_ref(&from)),
+            to: EntrySlot::Addrs(&[]),
+            ty: EntrySlot::Addrs(std::slice::from_ref(&ty)),
+        }),
+        _ => entry_body_publish(
+            [ShotSegmentPiece::Value(value)],
+            Some(ShotBase { member: &base_member, extent: base_extent }),
+        ),
+    };
+    entry_frame(alg, board, account, doc, &body)
+}
+
+fn address(s: &str) -> Address {
+    let comps: Vec<Nat> = s.split('.').map(|c| Nat::from(c.parse::<u64>().expect("a component"))).collect();
+    skep_address::validate(Tumbler::new(comps).expect("a tumbler")).expect("an address")
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 48, ..config() })]
+
+    /// SO-I1 — EVERY AXIS BOUND (the register's *Test:* line: "altering any
+    /// one member of a composed frame fails verification under every key of
+    /// the account"; round 7's owed instrument): over the checked set's
+    /// three op cells and random members — the board term's position and
+    /// chain, the account, the document, a value and a base extent — a frame
+    /// signed under one of the account's keys verifies as composed; with ONE
+    /// member moved — the `alg` token (tag 3's for tag 1's), the board's
+    /// position, its chain, the account, the document, or the body (the
+    /// `insert`'s value, the `make_link`'s `to` slot, the `publish`'s BASE
+    /// EXTENT — the base axis round 7 bound) — the same signature verifies
+    /// under NO key of the account, the signing key included. Bytes in, bytes
+    /// out: no daemon, no board.
+    #[test]
+    fn altering_any_one_member_of_a_composed_frame_fails_verification_under_every_key(
+        cell in 0usize..3,
+        position in any::<u64>(),
+        chain in any::<[u8; 32]>(),
+        account in 1u32..4,
+        doc in 1u32..4,
+        value in prop::collection::vec(any::<u8>(), 0..6),
+        base_extent in 0u64..9,
+        moved in 0usize..6,
+    ) {
+        let keys = [
+            HybridSigner::from_seed(FIXTURE_TAG, &[1; 32]).expect("tag 1"),
+            HybridSigner::from_seed(FIXTURE_TAG, &[2; 32]).expect("tag 1"),
+        ];
+        let board = BoardTerm { log_position: position, chain };
+        let (acct, document) = (address(&format!("1.0.{account}")), address(&format!("1.0.{account}.0.{doc}")));
+        let right = composed_frame(ALG_MLDSA65_ED25519, board, &acct, &document, cell, &value, base_extent);
+        let sig = keys[0].sign(&right);
+        prop_assert_eq!(skep_signature::verify(FIXTURE_TAG, keys[0].public_key(), &right, &sig), Ok(()));
+        let mut moved_chain = chain;
+        moved_chain[0] ^= 0x01;
+        let mut longer = value.clone();
+        longer.push(0x2a);
+        let wrong = match moved {
+            0 => composed_frame(ALG_FNDSA512_PREVIEW_ED25519, board, &acct, &document, cell, &value, base_extent),
+            1 => composed_frame(ALG_MLDSA65_ED25519, BoardTerm { log_position: position.wrapping_add(1), chain }, &acct, &document, cell, &value, base_extent),
+            2 => composed_frame(ALG_MLDSA65_ED25519, BoardTerm { log_position: position, chain: moved_chain }, &acct, &document, cell, &value, base_extent),
+            3 => composed_frame(ALG_MLDSA65_ED25519, board, &address(&format!("1.0.{}", account + 10)), &document, cell, &value, base_extent),
+            4 => composed_frame(ALG_MLDSA65_ED25519, board, &acct, &address(&format!("1.0.{account}.0.{}", doc + 10)), cell, &value, base_extent),
+            _ => match cell {
+                0 => composed_frame(ALG_MLDSA65_ED25519, board, &acct, &document, cell, &longer, base_extent),
+                1 => {
+                    // The `to` slot moved: a one-element slot for the EMPTY one.
+                    let (ty, from, to) = (address("1.1.0.1.0.1.0.3.90"), address("1.0.1.0.1.0.1.1"), address("1.0.2"));
+                    let body = entry_body_make_link(LinkSlots {
+                        from: EntrySlot::Addrs(std::slice::from_ref(&from)),
+                        to: EntrySlot::Addrs(std::slice::from_ref(&to)),
+                        ty: EntrySlot::Addrs(std::slice::from_ref(&ty)),
+                    });
+                    entry_frame(ALG_MLDSA65_ED25519, board, &acct, &document, &body)
+                }
+                _ => composed_frame(ALG_MLDSA65_ED25519, board, &acct, &document, cell, &value, base_extent + 1),
+            },
+        };
+        prop_assert_ne!(&wrong, &right, "the vector moves the bytes");
+        for key in &keys {
+            prop_assert!(
+                skep_signature::verify(FIXTURE_TAG, key.public_key(), &wrong, &sig).is_err(),
+                "member {moved} of cell {cell} moved: the signature verifies under no key"
+            );
+        }
     }
 }

@@ -947,7 +947,11 @@ fn a_shot_on_a_private_document_is_refused_with_one_code() {
 /// refused at its last check — behind the draft-native run it would have
 /// re-minted — leaves NO residue: no commit, no feed entry, no member, and
 /// no content mint (the next shot's identities start where they would
-/// have). Once the member exists the birth shape is superseded.
+/// have). Once the member exists the birth shape is superseded. Beside it,
+/// m1's FIRST ORDER VECTOR (SO-I7 (f), SO-I9 (a); round 7's
+/// `m1-reorder-has-no-lane`, the code landed at `37f611a`): an unsigned
+/// `publish` naming a missing source answers `attestation_required`, never
+/// `dangling_source`.
 #[test]
 fn the_birth_version_is_one_commit_and_a_refused_shot_leaves_no_residue() {
     let dir = tempfile::tempdir().expect("tempdir");

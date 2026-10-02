@@ -7,7 +7,7 @@
 use std::sync::LazyLock;
 
 use skep_address::{document_of, Address};
-use skep_arrangement::trunk_of;
+use skep_arrangement::{trunk_of, Deposit};
 use skep_engine::types::{
     t_consumption_marker, t_endorse, t_grant, t_journal_designation, t_rail_record, t_replaces,
     t_steward_classification, t_successor_of,
@@ -16,10 +16,12 @@ use skep_febe::Op;
 use skep_identity::{AuditClass, Fingerprint, IdentityState, TargetClass, WriteTypes};
 use skep_kernel::Attestation;
 use skep_links::{enc, is_replaces_class, HasLinks, SlotArg};
-use skep_namespace::{first_document_address, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
+use skep_namespace::{
+    first_document_address, system_account, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL,
+};
 
 use super::attestation::attestation_check;
-use super::CredentialRefusal;
+use super::{addr_spans, record_deposit_kind, CredentialRefusal};
 use crate::auth::fold::{identity_types, published_unprojected};
 use crate::auth::LockRead;
 use crate::World;
@@ -556,10 +558,13 @@ fn publish_class(world: &World, op: &Op, principal: PrincipalId) -> bool {
 /// RES-27/27a (AUTH-3.82–3.83): an UNCLAIMED daemon admits only the claim
 /// ceremony's own op SHAPES — per op, by shape, no ceremony state machine:
 /// the `delegate` from principal 0, the mechanical home mint, and the
-/// record atom's `insert` into the depositing account's own doc 1. The
-/// credential deposits' pre-claim cells are the precheck's slot (8), never
-/// this producer's. Everything else refuses `claim_first`, bare and signed
-/// sessions alike.
+/// record atom's `insert` into the depositing account's own doc 1 — never
+/// the SYSTEM ACCOUNT's (as7-F2; SO-I2 (g)(iv)): a declared credential-kind
+/// `insert` into `1.1.0.1`'s doc 1 is refused `system_account_keyless`,
+/// since that account holds no key and the plant it would seed is the one
+/// `claim_residue` cannot count. The credential deposits' pre-claim cells are
+/// the precheck's slot (8), never this producer's. Everything else refuses
+/// `claim_first`, bare and signed sessions alike.
 fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<CredentialRefusal> {
     let admitted = match op {
         Op::Delegate { .. } => principal == BOOTSTRAP_PRINCIPAL,
@@ -567,11 +572,26 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
         // first mint is refused by the door in the mint slot, ahead of this
         // gate, so it never reaches admission.
         Op::CreateNewDocument { account, .. } => !world.m3().has_documents(account),
-        Op::Insert { doc, .. } => world
-            .m3()
-            .principal_prefix(principal)
-            .and_then(first_document_address)
-            .is_some_and(|first| first == *doc),
+        Op::Insert { doc, deposit, .. } => {
+            let own_doc_one = world
+                .m3()
+                .principal_prefix(principal)
+                .and_then(first_document_address)
+                .is_some_and(|first| first == *doc);
+            let credential_kind = match deposit {
+                Deposit::Declared(ty) => {
+                    record_deposit_kind(&addr_spans(std::slice::from_ref(ty))).is_some()
+                }
+                Deposit::Undeclared => false,
+            };
+            if own_doc_one
+                && credential_kind
+                && world.m3().effective_owner_prefix(doc) == Some(&system_account())
+            {
+                return Some(CredentialRefusal::SystemAccountKeyless);
+            }
+            own_doc_one
+        }
         // Fail-CLOSED, which is why this arm may be a wildcard where
         // `deposits_credential_link`'s may not: a new op defaults to
         // `claim_first` and costs its author one decision, rather than

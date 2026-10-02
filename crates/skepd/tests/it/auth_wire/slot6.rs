@@ -455,8 +455,11 @@ fn a_content_session_writes_content_and_deposits_no_credential() {
     let device_fp = fingerprint_hex(&device_key());
 
     // CONTENT LANDS. A declared deposit into the published home — the write
-    // a bare session is refused — testified under the key that opened the
-    // session, the scope being nowhere in the record.
+    // a bare session is refused — prose under the enroll type, which is no
+    // record of the kind and so takes the entry signature like any insert
+    // (round 7's narrowed exemption, as7-E1 ARM (a)): SIGNED by the key that
+    // opened the session, its row carrying `attest` and no `key`, the scope
+    // being nowhere in the record.
     let ordinal = next_content_ordinal(port, Some(&content), CLAIMANT_DOC1);
     let v = op(port, Some(&content), &insert_frame(CLAIMANT_DOC1, ordinal, "z", true));
     let at = acked_at(&v);
@@ -468,8 +471,10 @@ fn a_content_session_writes_content_and_deposits_no_credential() {
         .find(|e| e["at"].as_u64() == Some(at))
         .unwrap_or_else(|| panic!("the insert's own entry: {page}"))
         .clone();
-    assert_eq!(entry["key"].as_str(), Some(device_fp.as_str()), "the opening key testifies");
+    assert!(entry["attest"].is_object(), "the opening key signed the deposit: {entry}");
+    assert!(entry.get("key").is_none(), "a signed row asserts no second hand: {entry}");
     assert!(entry.get("scope").is_none(), "the scope is in no record: {entry}");
+    let _ = &device_fp;
     // A private draft, its bytes, and the session's own draft visibility.
     let draft = create_doc(port, &content, CLAIMANT_ACCOUNT);
     expect_resp(&insert_text(port, &content, &draft, 1, "abcde"), "ack_addr");

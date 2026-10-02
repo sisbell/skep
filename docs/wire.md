@@ -773,7 +773,7 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 400    | `beyond_head`               | the position exceeds the committed head (carries `head`) |
 | 400    | `not_a_position`            | the number is not a committed position (carries `nearest`) |
 | 400    | `malformed_at`              | the `/dump` or `/chain` query isn't `at=<position>` (`/chain` requires it) |
-| 400    | `malformed_changes`         | the `/changes` query isn't `since=<position>` with an optional in-range `limit`, an optional dotted-decimal `under`, and an optional `drafts=true|false` |
+| 400    | `malformed_changes`         | the `/changes` query isn't `since=<position>` with an optional in-range `limit`, an optional dotted-decimal `under`, and an optional `drafts=true|false` — or its `limit` names a page that would pass the page byte budget (carries `budget` and `fits`, §The change feed) |
 | 400    | `malformed_http`            | the request is not the HTTP subset skepd speaks (bad head, chunked body, a body cut short) |
 | 404    | `no_such_endpoint`          | unknown path (including `/dump` on a build without `observe` and `/` on a build without `client`) |
 | 405    | `method_not_allowed`        | known path, wrong method                |
@@ -1630,25 +1630,39 @@ credentials):
   `attest` on a write outside the class, or on the UNCLAIMED board, is
   DROPPED — never verified, never written, never refused. AND, at a
   credential deposit above the claim, THE RECORD CARRIES NO `sig` AT ALL —
-  the record grade's one refusal, answered at the deposit's `make_link`
-  (the record's `sig` member is its one carrier; the atom's `insert`
-  takes no check and lands, the link does not): REORDER, the answer being
-  the same record re-composed with its `sig`, re-inserted and re-linked.
+  the record grade's fence, answered at the deposit's `make_link` (the
+  record's `sig` member is its one carrier) — a fence with NO POPULATION
+  on a conforming daemon: a record-kind atom carrying no `sig` is refused
+  at its own `insert`, `record_sig_required` (below), and lands nowhere,
+  so the only atom this reaches was deposited below the claim or past the
+  check by the operator's hand; REORDER, the act that exists being a new
+  record composed with its `sig`, inserted and linked.
 * `attestation_invalid:<cause>` — the `attest` does not verify; the
   `detail` is the code joined to its cause: `signature` (no enrolled key
   of the algorithm verifies both halves over the frame the daemon
   composed — wrong bytes, a wrong `board` term, a body composed
-  otherwise; PERMANENT: the same request is refused the same, and the
-  client's next act is a different one, the frame re-composed and
-  re-signed), `not_enrolled_at_position` (the set
+  otherwise, a `publish` re-submitted over another base; PERMANENT: the
+  same request is refused the same, and the client's next act is a
+  different one, the frame re-composed and re-signed),
+  `not_enrolled_at_position` (the set
   that opens the writer's account as of the write's base holds no key of
   the algorithm — an empty set included; PERMANENT, no retry under that
   key succeeds), `malformed` (the blob is not the tag's fixed width;
   PERMANENT, a re-compose), `board_unavailable` (the board has no `H.1`, so the frame's
-  `board` term has no value — unreachable on a claimed board in normal
-  operation, since the claim writes `H.1` in its own step and a daemon
-  opening a claimed board whose journal holds no head writes it before it
-  serves; it names a journal damaged below `H.1`; REORDER). At a
+  `board` term has no value — on a claimed board only for the ONE write
+  after a refused `H.1`, whose own turn writes the head (§The other
+  endpoints), or on a journal damaged below `H.1`; REORDER: the retry is
+  admitted), `withheld` (a `publish` COPIES IN a run whose origin the
+  writer may not read — a staging draft's run onto a draft the read
+  predicate withholds from it — and the store would admit the shot, the
+  base carrying the run: no frame is composed over a value its author may
+  not read, so no signature is verified over one; REORDER, as the store's
+  `withheld` is — re-compose without the run, or re-send once a grant lets
+  you read its origin), `frame_too_large` (a `publish` whose entry-frame
+  body — the values its copied runs name, read off the store — would pass
+  the body budget, 8 MiB at parity with the frame routes' request cap;
+  PERMANENT, as `too_many_values` is: a member is born whole, so publish
+  in smaller parts). At a
   credential deposit above the claim the same causes over the record's
   `sig`, each with its class: `signature` (no key of the set that opens
   the record's HOME — the anchors alone where the act is anchor-grade —
@@ -1658,6 +1672,33 @@ credentials):
   blob's row), `malformed` (the `sig` is no hybrid blob's hex — an odd or
   non-hex string, or a width no row takes), `board_unavailable` (as for an
   entry).
+
+**Round 7's two refusals** (signed ops; `credential_refused`, PERMANENT
+like the family's, each naming the act that exists):
+
+* `record_sig_required` — an `insert` above the claim DECLARED under a
+  credential kind whose one value PARSES as a record of that kind and
+  carries no `sig` member. Refused at the `insert`, the earliest act the
+  fault is decidable from: nothing lands, no orphan atom is minted. The
+  act that exists is a different record — the same entries composed WITH
+  their `sig` over the `record` frame (§The claim ceremony and
+  credentials) — inserted and linked. Beside it, the check's reading of a
+  declared deposit as a whole: an `insert` declared under a credential
+  kind is EXEMPT from the entry signature only where its one value parses
+  as a record of that kind, carries its `sig`, and lands in a doc 1 (the
+  home a credential link can name); prose or any other bytes declared
+  under the kind, and a signed record landed outside a doc 1, take the
+  entry signature like any `insert` — `attestation_required` unsigned,
+  committed SIGNED with `attest` otherwise.
+* `system_account_keyless` — a credential deposit whose SUBJECT (the
+  account the link's `to` names) or whose HOME's owner is the system
+  account `1.1.0.1` (§The other endpoints, PUB-6.65): the system account
+  holds no key and enrols none, ever. Refused ahead of the fold's own
+  verdict on claimed and unclaimed boards alike, and — on the unclaimed
+  board — a declared credential-kind `insert` into that account's doc 1 is
+  refused the same at the pre-claim gate. The head writer's own rows are
+  no credential deposits and never meet it. The act that exists is an
+  enrolment under an account of your own.
 
 Every publish-class write of the three ops on a claimed board is judged;
 the system account's own writes (the head document's, owned by
@@ -2239,20 +2280,29 @@ value `be32(len) ‖ bytes`; `0x01` a WINDOW, one run onto ANOTHER
 document's I-space, which the commit keeps as a reference, spelled
 `be32(len) ‖ its i_start's dotted decimal ‖ be64(width)` — two I-adjacent
 windows in a row being ONE segment, as the member's arrangement merges
-them; then one length-delimited group holding `be64(base_extent)`, or
-EMPTY (`be32(0)`) where the shot has no base. `base` itself is no member:
-a verifier derives it from the minted member's address. A window is
-signed by WHERE it quotes from and never by its bytes, so the author
-attests a window it may no longer read; the origin's own entry binds the
-bytes. The daemon composes the same body off its snapshot — the values
-of the copied runs read there, the windows spelled from the request —
-and verifies before the transaction; a reader holding the member later
-composes it again from the member's runs over its first `placed`
-positions, its `doc_metadata` terms and its address, with no request in
-hand (§Namespace, `doc_metadata`). A REPLAYED shot verifies as it did and
-names a `base` its own commit left no longer the head, so the store's
-rule mints that base's DAUGHTER, never the trunk's next: the document's
-current text does not move.
+them; then THE BASE GROUP, one length-delimited group — EMPTY (`be32(0)`)
+where the shot has no base, else the base MEMBER's address as an
+address-form slot row of one element (`0x01 ‖ be64(1) ‖ be32(len) ‖ the
+dotted decimal`, the form the `record` body's optional rows take) followed
+by `be64(base_extent)`. So the signature binds the base, member and
+extent both: `base` is no member of the frame, but a verifier DERIVES it
+from the minted member's address — a trunk member `D.k+1` was minted
+against `D.k`, a daughter `X.m` against `X`, a birth version `D.1` against
+the memberless `D` — and composes it INTO the preimage; the same signed
+shot re-submitted naming another base, the trunk's current head say,
+spells another group and is refused `attestation_invalid:signature`. A
+window is signed by WHERE it quotes from and never by its bytes, so the
+author attests a window it may no longer read; the origin's own entry
+binds the bytes. The daemon composes the same body off its snapshot — the
+values of the copied runs read there, the windows spelled from the
+request, the base as the request names it — and verifies before the
+transaction; a reader holding the member later composes it again from
+the member's runs over its first `placed` positions, its `doc_metadata`
+terms and its address, with no request in hand (§Namespace,
+`doc_metadata`). A REPLAYED shot verifies as it did and names a `base`
+its own commit left no longer the head, so the store's rule mints that
+base's DAUGHTER, never the trunk's next: the document's current text does
+not move.
 → `ack_addr` (the member's address). This example publishes a draft
 staged off the second member: the edition's own three positions by
 reference and the draft's two as fresh identity:
@@ -3024,11 +3074,14 @@ Each entry:
   record written before testimony existed) — never for a bare write, and
   never invented. ABSENT, never null, on a row whose entry carries a
   signature — in its marker slot (the row then carries `attest`, below) or
-  in its record's own `sig` member (a credential record deposit's two rows,
-  the atom's `insert` and the `make_link` naming it; §The claim ceremony
-  and credentials) — on every feed, the origin's own included: a signed
-  entry has one authority for its hand, its own signature, and the daemon
-  asserts no second beside it. Served on every other row — draft writes,
+  in its record's own `sig` member (a credential record deposit's LINK
+  row, the `make_link` naming the atom, where the record grade judged the
+  `sig`; §The claim ceremony and credentials) — on every feed, the
+  origin's own included: a signed entry has one authority for its hand,
+  its own signature, and the daemon asserts no second beside it. PRESENT
+  on the deposit's ATOM row, the `insert`: the daemon's testimony of the
+  writing session, the one asserted hand an orphan atom keeps when every
+  link naming it is refused. Served on every other row too — draft writes,
   `delegate`, `register_node`, the claim ceremony's own rows and the
   published head document's. Forward rule, pinned now: on a feed served by
   a daemon that did not itself commit the entry (a future mirror), the
@@ -3056,25 +3109,26 @@ Each entry:
   exactly-representable range (at most 2^53 − 1, held at the parse). A
   feed-only mirror builds the board's principal list Π from these rows
   alone, never from the node registry; `effective_owner` (§Operations)
-  stays the board's own authority for ω. `null` (both) on a bare row;
-  absent on every other op's row.
+  stays the board's own authority for ω. On a bare row, the JOURNAL's
+  answer (below); absent on every other op's row.
 * `link` — on a `make_link` row: the minted link's address, the `ack_addr`
   the op answered. For a replacing grant (§Links (writes), `replaces`) this
   is the RECORD's address; its `replaces` link sits at the next address in
   the same home, read by adjacency. The claim link's row therefore names
   the claim link's address, which is how a reader maps the link
-  `find_links` answers to its commit position. `null` on a bare row; absent
-  on every other op's row.
+  `find_links` answers to its commit position. On a bare row, the journal's
+  answer (below); absent on every other op's row.
 * `placed`, `base_extent` — on a `publish` row: the shot's two client terms
   exactly as `doc_metadata` serves them for the minted member (§Operations)
   — `placed` the count of positions the client placed (the sum of the
   shot's runs' widths, the count its signed body leads with), a decimal
   string; `base_extent` the extent of the base the staged copy took, a
   decimal string, or `null` in the birth shape (the shot carried no `base`;
-  the absence is the birth bit). The base itself is derived from the
-  member's own address, so these two are what a verifier composing the
-  entry frame from the feed alone still needs. `null` (both) on a bare row;
-  absent on every other op's row.
+  the absence is the birth bit). The base member itself is derived from
+  the member's own address and composed into the signed base group beside
+  this extent, so these two are what a verifier composing the entry frame
+  from the feed alone still needs. On a bare row, the journal's answer
+  (below); absent on every other op's row.
 
 A client MUST ignore an entry member it does not know, and a member of
 the page object likewise: an entry gains members by later deltas (the six
@@ -3105,7 +3159,26 @@ page is answered from:
   reconstructs the documents the commit touched (the drafts it minted,
   the homes of the links it deposited, the drafts whose arrangement it
   moved) and masks it exactly as it would the record — so a lost sidecar
-  never unmasks a draft write; its fields still read `null`;
+  never unmasks a draft write; its testimony fields, `docs`, `key` and
+  `time`, still read `null`. THE OP'S TERMS ARE THE JOURNAL'S TOO (signed
+  ops, round 7): a bare row carries what the journal's own records
+  answer, exactly as the recorded row would have — a `delegate`'s
+  `new_prefix` and `new_id` with `op: "delegate"` (a principal seated),
+  a `publish`'s `placed` and `base_extent` with `op: "publish"` (a member
+  minted with its placing record; a member minted without one is a
+  `version`), a replacing `make_link`'s `link` with its `op`, a `nullify`
+  by its `op` alone, and `link` for the one link any other link write
+  deposited, its `op` left `null` (a plain `make_link` and an `emit`
+  deposit one link alike, so a bare `emit` row carries a `link` its
+  recorded row did not). A member the journal rules out is ABSENT as on
+  the recorded row; one it cannot decide — the op of an arrangement write
+  or a document mint, a `delegate` under a node `register_node` admitted
+  that no walk from the board's own nodes reaches, a `publish` under such
+  a node — stays `null`. So a feed-only mirror's Π is whole across a bare
+  span; where it is not — a bare span whose rows name no `delegate` where
+  one was committed — Π is UNDETERMINABLE for every entry under it, and
+  so is every verdict ω composes there: the mirror's rule, stated here and
+  built nowhere;
 * the two STRADDLE renderings, accepted residues (PUB-6.47): a
   draft-homed `nullify` of a public link in `T` is a `[D, T]` entry a
   guest sees as `{"op":"nullify","docs":["T"]}` — never omitted, and
@@ -3132,7 +3205,16 @@ and times ride beside the world, not in it. A position whose testimony
 was lost answers `null`, never an invented value.
 
 **Paging.** `limit` (default 256, maximum 4096; out-of-range values are
-refused, not clamped) caps the page. The response carries `last` — the
+refused, not clamped) caps the page, and THE PAGE BYTE BUDGET caps its
+bytes (signed ops, round 7; SO-I9): a page whose entries would marshal
+past 2 MiB — 256 rows, the default page, × 8 KiB, the bound on a row the
+wire admits, an attested row under tag 1 being ~6.9 KB of `sig` hex — is
+REFUSED whole, `400 {"error": "malformed_changes", "budget": 2097152,
+"fits": N, "detail": …}`, `fits` the largest `limit` whose page from the
+same `since` fits the budget: re-ask with `limit=N` and the page is served
+whole. Never a page shorter than `limit` before the head. The default
+page of attested rows always fits; a reader of a signed feed pages at or
+below ~300 rows. The response carries `last` — the
 final entry's position, or your `since` echoed when the page is empty —
 and `more`; pass `last` as the next request's `since` to page. `since` is
 a fence, not necessarily a position: any number works, and `since ≥ head`
@@ -3237,7 +3319,7 @@ daemon; all in the published world, so every class sees them), byte-exact:
 
 <!-- wire: changes bare -->
 ```json
-{"changes":[{"at":2,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null},{"at":3,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null},{"at":8,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null}],"last":8,"more":false}
+{"changes":[{"at":2,"docs":null,"key":null,"new_id":1,"new_prefix":"1.0.1","op":"delegate","time":null},{"at":3,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null},{"at":8,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null}],"last":8,"more":false}
 ```
 
 **Retention.** The feed's memory is the daemon's `commits.log` sidecar
@@ -3249,7 +3331,8 @@ discipline as `/op-at`: `410 {"error": "history_reclaimed", "floor": F?}`,
 (missing `since`, a non-integer, an out-of-range `limit`, an `under` that
 is not a dotted-decimal tumbler, a `drafts` that is neither `true` nor
 `false`, a repeated or unknown parameter) is `400 {"error":
-"malformed_changes", "detail": …}`.
+"malformed_changes", "detail": …}` — as is a `limit` whose page would pass
+the byte budget (Paging, above), that body carrying `budget` and `fits`.
 
 **The feed's files.** Beside `commits.log` the daemon keeps four derived
 sidecars in the data dir — `feed-index.log` (document → positions),
@@ -3270,7 +3353,10 @@ checkpoint holds no marker, so a line there is an entry signature's only
 copy at the origin, primary state and not a projection, backed up with
 the board directory as `blobs/` is; a line lost there is served as
 `attest: null`. `commits.log` records only THAT an entry was signed and
-by which carrier, never the signature itself.
+by which carrier, never the signature itself; a bare line of it carries
+the journal's answer for its row under one `journal` member, written by
+the open that reconstructed the position, so the reconstruction is paid
+once.
 
 **Residues, named** (PUB-6.52): `/events` and `/health`'s `head_time`
 move on masked commits too — board-wide draft-write cardinality and
@@ -3338,9 +3424,15 @@ retained checkpoint at or below `position` — `seq`, `chain`, `body_hash` — o
 position are byte-identical) and no `sig` — the head is UNSIGNED. THE CLAIM
 WRITES `H.1`: the board's first head is committed by the daemon in the claim's
 own serialized step, right after the claim link and before any later write is
-admitted, naming the claim's own position — so a claimed board always has the
-board term every attested write's entry frame names (§Sessions,
-`attestation_invalid`), and a daemon that opens a claimed board whose journal
+admitted, naming the claim's own position — so a claimed board has the board
+term every attested write's entry frame names (§Sessions,
+`attestation_invalid`) from the claim's step, or from the write path's next
+turn after a refused `H.1`: where the head writer's driver refuses it the
+claim stands, the one attested write after it answers
+`attestation_invalid:board_unavailable`, that write's own turn writes `H.1`
+(the "claimed, no head" test runs at every turn of the write path, a refused
+write's included, ahead of the cadence's triggers) and its retry is admitted
+— and a daemon that opens a claimed board whose journal
 holds no head (a crash between the claim and its head) writes `H.1` before it
 serves; where the cadence below already wrote a head before or at the claim,
 the claim writes none. Every later head is written when 64 commits that are

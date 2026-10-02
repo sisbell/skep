@@ -40,8 +40,15 @@
 //!   at the first unparseable line; the daemon never wedges on its own
 //!   testimony.
 //! * Positions whose record was lost, or that predate the feature, are
-//!   reconstructed as BARE positions and answer `op`/`docs`/`time` as
-//!   `null`. NEVER an invented value.
+//!   reconstructed as BARE positions and answer `docs`/`key`/`time` as
+//!   `null`. NEVER an invented value. The op's own TERMS, and the op where
+//!   the journal names one alone, ARE answered on a bare row — from the
+//!   journal, as the position's class is (`classify::derived_journal`;
+//!   as7-F3): a `delegate`'s pair, a `make_link`'s link, a `publish`'s count
+//!   and extent, so a feed-only mirror's Π is whole across a bare span. They
+//!   ride the bare line under one `journal` member, written by the walk that
+//!   derived them so the two reconstructions are paid once; `null` stays
+//!   where the journal cannot answer.
 //! * Reconstruction uses the one public journal-fed surface the daemon
 //!   already holds — the engine's bounded replay (`Engine::world_at`):
 //!   walking down from the head, an `Ok` probe proves a boundary, a
@@ -95,7 +102,7 @@ use skep_address::Address;
 use skep_engine::{Engine, HistoryError, World};
 use skep_kernel::{Attestation, Seq};
 
-use super::classify::{derived_docs, parse_dotted};
+use super::classify::{derived_journal, parse_dotted};
 use crate::codec::{j_attest, obj, to_bytes};
 use crate::serial::SerialGuard;
 
@@ -170,10 +177,10 @@ impl Carrier {
 /// commit as `docs` is, the daemon's testimony of what it committed. One
 /// variant per op kind that carries any, rendered as [`OpTerms::members`] on
 /// the wire's row and the file's line alike; every other kind carries none,
-/// and its row renders none. A BARE row renders every member any of them
-/// renders `null` ([`OpTerms::MEMBER_NAMES`]): its op is unknown, so which
-/// terms it would have carried is unknown too, and lost testimony is never
-/// invented.
+/// and its row renders none. A BARE row renders what THE JOURNAL answers
+/// ([`JournalTerms`]) and `null` for every member it cannot
+/// ([`OpTerms::MEMBER_NAMES`]): lost testimony is never invented, and the
+/// journal's answer is no invention.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum OpTerms {
     /// `delegate`: the minted account address in the board's local form (the
@@ -220,6 +227,79 @@ impl OpTerms {
     }
 }
 
+/// THE JOURNAL'S ANSWER on a BARE position (as7-F3; SO-I5 (e)): the op's
+/// own terms as the recorded row would have carried them, and the op where
+/// the journal's facts name one op alone — derived by
+/// `classify::derived_journal` at the open that reconstructs the position,
+/// from the two worlds the walk already holds, and persisted on the bare
+/// line under the `journal` member so the walk is paid once. Not testimony
+/// — the daemon witnessed nothing — and never rendered as such: `docs`,
+/// `key` and `time` stay `null` beside it. Empty where the journal answers
+/// nothing, which renders as the bare row always did.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct JournalTerms {
+    /// The op the journal names, where it names one alone: `delegate`,
+    /// `publish`, `version`, `nullify`, a replacing `make_link`; `None` for
+    /// an op the facts leave ambiguous (`classify::derived_journal`'s terms
+    /// say which).
+    pub op: Option<String>,
+    /// The terms the journal answers — a seated principal's pair, a minted
+    /// member's count and extent, a deposited link.
+    pub terms: Option<OpTerms>,
+}
+
+impl JournalTerms {
+    /// Nothing derived: the row renders as a bare row always did.
+    fn is_empty(&self) -> bool {
+        self.op.is_none() && self.terms.is_none()
+    }
+
+    /// The `journal` member's object — `op` where named, then the terms'
+    /// members in the wire's own spelling.
+    fn members(&self) -> Vec<(&'static str, Value)> {
+        let mut pairs = Vec::new();
+        if let Some(op) = &self.op {
+            pairs.push(("op", Value::String(op.clone())));
+        }
+        if let Some(terms) = &self.terms {
+            pairs.extend(terms.members());
+        }
+        pairs
+    }
+
+    /// The inverse of [`JournalTerms::members`], over a bare line's
+    /// `journal` object: `op` an optional string, the terms by the members
+    /// present — a `delegate`'s pair together (one without the other is
+    /// torn), a `link`, a `placed` with `base_extent` beside it (`null`
+    /// the birth shape). `None` is the torn verdict.
+    fn parse(m: &serde_json::Map<String, Value>) -> Option<JournalTerms> {
+        let field = |k: &str| match m.get(k) {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(v),
+        };
+        let op = match field("op") {
+            None => None,
+            Some(op) => Some(op.as_str()?.to_string()),
+        };
+        let terms = match (field("new_prefix"), field("new_id"), field("link"), field("placed")) {
+            (Some(p), Some(i), None, None) => {
+                Some(OpTerms::Delegate { new_prefix: p.as_str()?.to_string(), new_id: i.as_u64()? })
+            }
+            (None, None, Some(l), None) => Some(OpTerms::MakeLink { link: l.as_str()?.to_string() }),
+            (None, None, None, Some(p)) => Some(OpTerms::Publish {
+                placed: p.as_str()?.to_string(),
+                base_extent: match field("base_extent") {
+                    None => None,
+                    Some(e) => Some(e.as_str()?.to_string()),
+                },
+            }),
+            (None, None, None, None) => None,
+            _ => return None,
+        };
+        Some(JournalTerms { op, terms })
+    }
+}
+
 /// One committed position's metadata — and this file's crash-honesty rule
 /// as a type. A position is either one the daemon OBSERVED committing,
 /// carrying all of op/docs/time, or a BARE one reconstructed from the
@@ -229,10 +309,14 @@ impl OpTerms {
 #[derive(Clone, Debug)]
 pub(super) enum CommitMeta {
     /// Reconstructed, not witnessed: served as explicit `null`s, never as
-    /// an invented value. Its CLASS — which documents the journal shows it
-    /// touched — lives in the feed's classification map, not here: this
-    /// file records testimony, and the journal's answer is not testimony.
-    Bare,
+    /// an invented value — beside what THE JOURNAL answers for it
+    /// ([`JournalTerms`]: the op's terms, and the op where named). Its
+    /// CLASS — which documents the journal shows it touched — lives in the
+    /// feed's classification map, not here: this file records testimony,
+    /// and the journal's answer is not testimony.
+    Bare {
+        journal: JournalTerms,
+    },
     /// Witnessed by the daemon's own write path as the write commits — a
     /// session write's at its ack, the published head writer's own in its
     /// turn. `key` is the AUTH testimony (AUTH-4.48; wire.md §The change
@@ -263,8 +347,13 @@ pub(super) enum CommitMeta {
 impl CommitMeta {
     /// One `GET /changes` entry: the position, the four fields, and —
     /// wire v7.11 — the members a reader needs to judge and to place the
-    /// entry from the feed alone. A bare position renders as explicit
-    /// `null`s, the op's terms included — the crash-honesty rule of this
+    /// entry from the feed alone. A bare position renders its testimony as
+    /// explicit `null`s — `docs`, `key`, `time` — and the op and its terms
+    /// AS THE JOURNAL ANSWERS THEM (as7-F3; [`JournalTerms`]): where the
+    /// journal names the op, exactly that op's members, as the recorded row
+    /// carries them; where it names a deposited link alone, `link`, the
+    /// members no link write carries ABSENT as on a recorded row; where it
+    /// answers nothing, every term `null` — the crash-honesty rule of this
     /// file, expressed where the rule is stated rather than at the handler.
     /// `reduced` is the record's own docs REDUCED to the requester's
     /// readable ones (PUB-6.45), which is what a recorded entry renders —
@@ -281,8 +370,10 @@ impl CommitMeta {
     /// THE MEMBERS THAT ARE ABSENT RATHER THAN NULL, and why:
     ///
     /// * `key` (D12; AUTH-6.15): PRESENT IFF the entry carries no signature —
-    ///   absent on a row whose `signed` names a carrier, served as recorded on
-    ///   every other row, a bare row's reserved `null` included (lost
+    ///   absent on a row whose `signed` names a carrier (a marker-signed
+    ///   row; a credential record deposit's LINK row, as7-E2 (a) — its ATOM
+    ///   row is admitted unsigned and serves its `key`), served as recorded
+    ///   on every other row, a bare row's reserved `null` included (lost
     ///   testimony stays lost; the store's slot is a fact of the journal, not
     ///   testimony this file can restore).
     /// * `attest` (the design record §7.3 (i)): the marker slot as the store
@@ -295,18 +386,29 @@ impl CommitMeta {
     ///   Absence on the origin's own feed is A6's verdict, so a store line
     ///   is served wherever one is held and never dropped.
     /// * the op's terms ([`OpTerms::members`], the file line's spelling too):
-    ///   present on the row of the op that carries them, `null` on a bare row
-    ///   ([`OpTerms::MEMBER_NAMES`]), absent on every other op's.
+    ///   present on the row of the op that carries them, absent on every
+    ///   other op's; on a bare row the journal's answer ([`JournalTerms`]),
+    ///   and `null` for every member it does not reach
+    ///   ([`OpTerms::MEMBER_NAMES`]).
     ///
     /// `attest` is the store's answer for this position, looked up by the
     /// feed beside the line: the signature is never a member of this file.
     pub fn entry(&self, at: u64, reduced: Vec<String>, attest: Option<&Attestation>) -> Value {
         let mut pairs = vec![("at", Value::Number(at.into()))];
         let carrier = match self {
-            CommitMeta::Bare => {
-                let unknown =
-                    ["docs", "key", "op", "time"].into_iter().chain(OpTerms::MEMBER_NAMES);
-                pairs.extend(unknown.map(|k| (k, Value::Null)));
+            CommitMeta::Bare { journal } => {
+                pairs.extend(["docs", "key", "time"].into_iter().map(|k| (k, Value::Null)));
+                pairs.push(("op", journal.op.clone().map(Value::String).unwrap_or(Value::Null)));
+                match &journal.terms {
+                    // The journal names the terms: the op's own members, the
+                    // rest ruled out by the witness that named them.
+                    Some(terms) => pairs.extend(terms.members()),
+                    // The journal names the op and the op carries none —
+                    // `nullify`, `version` — so none renders; the journal
+                    // names nothing — every term stays the reserved null.
+                    None if journal.op.is_some() => {}
+                    None => pairs.extend(OpTerms::MEMBER_NAMES.into_iter().map(|k| (k, Value::Null))),
+                }
                 None
             }
             CommitMeta::Recorded { op, time, key, signed, terms, .. } => {
@@ -334,9 +436,14 @@ impl CommitMeta {
     /// reading of it, which the head writer's resume asks too.
     pub fn time(&self) -> Option<u64> {
         match self {
-            CommitMeta::Bare => None,
+            CommitMeta::Bare { .. } => None,
             CommitMeta::Recorded { time, .. } => Some(*time),
         }
+    }
+
+    /// A bare position the journal answered nothing for.
+    pub fn bare() -> CommitMeta {
+        CommitMeta::Bare { journal: JournalTerms::default() }
     }
 }
 
@@ -367,11 +474,14 @@ enum Record {
 /// journal's classification of it: the documents the commit touched as the
 /// world diff shows them (`Some`, possibly empty), or `None` where the
 /// world below the boundary could not be answered — unclassifiable, served
-/// to every class (the module doc's residue).
+/// to every class (the module doc's residue) — and, off the same two
+/// worlds, the journal's terms for its row ([`JournalTerms`]; empty where
+/// the world below could not be answered).
 #[derive(Debug)]
 pub(super) struct Walked {
     pub at: u64,
     pub docs: Option<Vec<Address>>,
+    pub journal: JournalTerms,
 }
 
 /// The replayed `commits.log`: the file handle, every enumerable entry above
@@ -559,9 +669,10 @@ impl CommitsLog {
             // folds into holds the plain name.
             let (boundaries, walk_min_since) = reconstruct(engine, low, head);
             for w in &boundaries {
-                entries.insert(w.at, CommitMeta::Bare);
+                let meta = CommitMeta::Bare { journal: w.journal.clone() };
                 offsets.insert(w.at, LineOffset(len));
-                let line = entry_line(w.at, &CommitMeta::Bare);
+                let line = entry_line(w.at, &meta);
+                entries.insert(w.at, meta);
                 file.write_all(&line)?;
                 len += line.len() as u64;
             }
@@ -905,12 +1016,12 @@ fn demote_malformed_names(entries: &mut BTreeMap<u64, CommitMeta>) {
                 let dropped = docs.iter().filter(|s| parse_dotted(s).is_none()).count();
                 (dropped > 0).then_some((*at, dropped))
             }
-            CommitMeta::Bare => None,
+            CommitMeta::Bare { .. } => None,
         })
         .collect();
     for (at, dropped) in half_recorded {
         report_malformed_names(SIDECAR_FILE, at, dropped);
-        entries.insert(at, CommitMeta::Bare);
+        entries.insert(at, CommitMeta::bare());
     }
 }
 
@@ -919,11 +1030,12 @@ fn demote_malformed_names(entries: &mut BTreeMap<u64, CommitMeta>) {
 /// an `Ok` probe of `b - 1` proves another; `NotABoundary` jumps to
 /// `nearest` — and CLASSIFY each from the journal on the way down: the walk
 /// holds the world at the boundary it stands on and, once the boundary
-/// below is found, diffs the two (`derived_docs`) for the documents that
-/// commit touched. Returns the boundaries (ascending, each with its
-/// classification) and, when the journal stopped answering (reclaimed /
-/// corrupt / I/O), the smallest `since` the feed can honor from there on —
-/// [`CommitsLog::min_since`]'s number, not the wire's `floor`.
+/// below is found, diffs the two (`derived_journal`) for the documents that
+/// commit touched and the terms its row can answer. Returns the boundaries
+/// (ascending, each with its classification) and, when the journal stopped
+/// answering (reclaimed / corrupt / I/O), the smallest `since` the feed can
+/// honor from there on — [`CommitsLog::min_since`]'s number, not the wire's
+/// `floor`.
 ///
 /// The head's world is the live root (no replay); every other world is one
 /// `world_at`. The lowest boundary's predecessor is `low` itself where `low`
@@ -944,7 +1056,15 @@ fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<Walked>, Option<u64
     let mut boundary = head;
     let mut boundaries: Vec<Walked> = Vec::new();
     let mut min_since = None;
-    let classify = |below: Option<&World>, upper: &World| below.map(|b| derived_docs(b, upper));
+    // The journal's two answers off the two worlds, or — with no world
+    // below — unclassifiable, and no term.
+    let classify = |at: u64, below: Option<&World>, upper: &World| match below {
+        Some(b) => {
+            let (docs, journal) = derived_journal(b, upper);
+            Walked { at, docs: Some(docs), journal }
+        }
+        None => Walked { at, docs: None, journal: JournalTerms::default() },
+    };
     loop {
         // The descent's own guard: `probe` exists only when there is a
         // position below `boundary` and it is still above `low`, so the step
@@ -955,12 +1075,12 @@ fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<Walked>, Option<u64
             // `low` where `low` is one (genesis, or a recorded position);
             // a fence's world refuses and the position stays unclassified.
             let below = engine.world_at(Seq(low)).ok();
-            boundaries.push(Walked { at: boundary, docs: classify(below.as_ref(), &upper) });
+            boundaries.push(classify(boundary, below.as_ref(), &upper));
             break;
         };
         match engine.world_at(Seq(probe)) {
             Ok(w) => {
-                boundaries.push(Walked { at: boundary, docs: classify(Some(&w), &upper) });
+                boundaries.push(classify(boundary, Some(&w), &upper));
                 boundary = probe;
                 upper = w;
             }
@@ -973,12 +1093,12 @@ fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<Walked>, Option<u64
                 // with no port to ask and no line to read.
                 let nearest = nearest.0;
                 if nearest >= boundary {
-                    boundaries.push(Walked { at: boundary, docs: None });
+                    boundaries.push(classify(boundary, None, &upper));
                     break;
                 }
                 match engine.world_at(Seq(nearest)) {
                     Ok(w) => {
-                        boundaries.push(Walked { at: boundary, docs: classify(Some(&w), &upper) });
+                        boundaries.push(classify(boundary, Some(&w), &upper));
                         if nearest <= low {
                             break;
                         }
@@ -988,7 +1108,7 @@ fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<Walked>, Option<u64
                     Err(_) => {
                         // The boundary M2 named cannot be answered: the feed
                         // reaches down to `boundary` and no further.
-                        boundaries.push(Walked { at: boundary, docs: None });
+                        boundaries.push(classify(boundary, None, &upper));
                         if nearest > low {
                             min_since = Some(nearest);
                         }
@@ -997,7 +1117,7 @@ fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<Walked>, Option<u64
                 }
             }
             Err(_) => {
-                boundaries.push(Walked { at: boundary, docs: None });
+                boundaries.push(classify(boundary, None, &upper));
                 min_since = Some(probe);
                 break;
             }
@@ -1045,7 +1165,10 @@ fn parse_records(bytes: &[u8]) -> (Vec<(usize, Record)>, usize) {
 /// beside it, `null` there being the birth shape and not an absence — and
 /// absent altogether on a line written before they were recorded, which
 /// reads as an op carrying none. A term on a line of another op is an
-/// unknown key, ignored.
+/// unknown key, ignored. A BARE line's `journal` member is the journal's
+/// answer ([`JournalTerms::parse`]): absent on a line written before it was
+/// derived, or where the journal answered nothing; an object otherwise, and
+/// anything else is torn.
 fn parse_line(line: &[u8]) -> Option<Record> {
     let v: Value = serde_json::from_slice(line).ok()?;
     let m = v.as_object()?;
@@ -1063,7 +1186,12 @@ fn parse_line(line: &[u8]) -> Option<Record> {
         Some(v) => Some(v),
     };
     let meta = match (field("op"), field("docs"), field("time")) {
-        (None, None, None) => CommitMeta::Bare,
+        (None, None, None) => CommitMeta::Bare {
+            journal: match field("journal") {
+                None => JournalTerms::default(),
+                Some(j) => JournalTerms::parse(j.as_object()?)?,
+            },
+        },
         (Some(op), Some(docs), Some(time)) => {
             let op = op.as_str()?.to_string();
             let terms = match op.as_str() {
@@ -1119,31 +1247,40 @@ fn parse_line(line: &[u8]) -> Option<Record> {
     Some(Record::Entry(at, meta))
 }
 
-/// `{"at":N}` for a bare position; `{"at":N,"docs":[…],"key":"…","op":"…","time":T}`
-/// for a recorded one, `key` omitted only where the record carries none (a
-/// pre-feature line), `"signed":"marker"|"record"` where the entry carries a
-/// signature, and the op's own terms where it has any, spelled as the wire's
-/// row spells them ([`OpTerms::members`]). Built through the codec's
-/// key-sorting device, so a line is the same bytes whatever backs
-/// serde_json's map — which is what lets `GET /changes` answer
-/// byte-identically across a restart.
+/// `{"at":N}` for a bare position the journal answered nothing for, and
+/// `{"at":N,"journal":{…}}` where it did — the op where named and the terms
+/// in the wire's own spelling ([`JournalTerms::members`]);
+/// `{"at":N,"docs":[…],"key":"…","op":"…","time":T}` for a recorded one,
+/// `key` omitted only where the record carries none (a pre-feature line),
+/// `"signed":"marker"|"record"` where the entry carries a signature, and the
+/// op's own terms where it has any, spelled as the wire's row spells them
+/// ([`OpTerms::members`]). Built through the codec's key-sorting device, so a
+/// line is the same bytes whatever backs serde_json's map — which is what
+/// lets `GET /changes` answer byte-identically across a restart.
 fn entry_line(at: u64, meta: &CommitMeta) -> Vec<u8> {
     let mut pairs = vec![("at", Value::Number(at.into()))];
-    if let CommitMeta::Recorded { op, docs, time, key, signed, terms } = meta {
-        pairs.push(("op", Value::String(op.clone())));
-        pairs.push((
-            "docs",
-            Value::Array(docs.iter().map(|d| Value::String(d.clone())).collect()),
-        ));
-        pairs.push(("time", Value::Number((*time).into())));
-        if let Some(k) = key {
-            pairs.push(("key", Value::String(k.clone())));
+    match meta {
+        CommitMeta::Bare { journal } => {
+            if !journal.is_empty() {
+                pairs.push(("journal", obj(journal.members())));
+            }
         }
-        if let Some(carrier) = signed {
-            pairs.push(("signed", Value::String(carrier.token().into())));
-        }
-        if let Some(terms) = terms {
-            pairs.extend(terms.members());
+        CommitMeta::Recorded { op, docs, time, key, signed, terms } => {
+            pairs.push(("op", Value::String(op.clone())));
+            pairs.push((
+                "docs",
+                Value::Array(docs.iter().map(|d| Value::String(d.clone())).collect()),
+            ));
+            pairs.push(("time", Value::Number((*time).into())));
+            if let Some(k) = key {
+                pairs.push(("key", Value::String(k.clone())));
+            }
+            if let Some(carrier) = signed {
+                pairs.push(("signed", Value::String(carrier.token().into())));
+            }
+            if let Some(terms) = terms {
+                pairs.extend(terms.members());
+            }
         }
     }
     line_bytes(obj(pairs))

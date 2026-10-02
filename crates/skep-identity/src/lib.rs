@@ -203,7 +203,7 @@ mod write_types;
 pub use entry::{
     entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_publish,
     entry_body_record, entry_frame, BoardTerm, EntryBody, EntrySlot, LinkSlots, PublishBody,
-    PublishRefusal, RecordRows, ShotSegmentPiece,
+    PublishRefusal, RecordRows, ShotBase, ShotSegmentPiece,
 };
 pub use framing::{
     framed, Tag, ENTRY_TAG, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, TAGS,

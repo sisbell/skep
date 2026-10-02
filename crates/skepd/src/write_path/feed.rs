@@ -114,6 +114,8 @@ use self::derived::{
 use super::sidecar::{report_malformed_names, Carrier, CommitMeta, CommitsLog, LineOffset, OpTerms};
 use super::classify::{classify, derived_docs, parse_dotted, Doc};
 use super::Signed;
+use crate::codec::to_bytes;
+use crate::limits::MAX_CHANGES_PAGE_BYTES;
 use crate::serial::SerialGuard;
 
 /// The most granted prefixes [`Inner::names_under`] scans per candidate
@@ -292,6 +294,14 @@ pub(crate) enum ChangesAnswer {
     /// echoed when the page is empty) and `more` says whether a visible
     /// entry remains past it (PUB-6.44).
     Page { entries: Vec<Value>, last: u64, more: bool },
+    /// THE PAGE BYTE BUDGET (bu7-2 = reg-H1; SO-I9; P29): the page the query
+    /// asks for, marshaled, would pass [`MAX_CHANGES_PAGE_BYTES`] — so it is
+    /// REFUSED whole, never shortened (PUB-6.44: a page is never short of
+    /// `limit` before the head), with the budget and `fits`, the largest
+    /// `limit` whose page from this `since` stays within it: the rows
+    /// measured before the one that crossed. A `fits` of zero says the first
+    /// row alone passes the budget — no `limit` serves this fence.
+    OverBudget { budget: usize, fits: usize },
 }
 
 /// The feed: `commits.log`, the four derived twins and the attest store,
@@ -435,7 +445,7 @@ impl Feed {
                     CommitMeta::Recorded { docs: authority, .. } => {
                         authority.iter().filter_map(|s| parse_dotted(s)).collect()
                     }
-                    CommitMeta::Bare => Vec::new(),
+                    CommitMeta::Bare { .. } => Vec::new(),
                 }
             };
             if !addrs.is_empty() {
@@ -459,9 +469,9 @@ impl Feed {
                         strings.iter().filter_map(|s| parse_dotted(s)).collect()
                     }
                     // Walked this open: classified above, or empty/unclassifiable.
-                    CommitMeta::Bare if walked_at.contains(&at) => Vec::new(),
+                    CommitMeta::Bare { .. } if walked_at.contains(&at) => Vec::new(),
                     // A bare position the index lost: the journal answers.
-                    CommitMeta::Bare => classify_bare(engine, &log, at).unwrap_or_default(),
+                    CommitMeta::Bare { .. } => classify_bare(engine, &log, at).unwrap_or_default(),
                 };
                 if !addrs.is_empty() {
                     vacant.insert(classify(world, addrs));
@@ -692,6 +702,17 @@ impl Feed {
     /// its `attest` member, 6,746 hex characters under tag 1 — is the dearest
     /// part of a page. Under the lock: the merge, the mask, and a clone per
     /// row, the slot an `Arc`.
+    ///
+    /// THE PAGE BYTE BUDGET (bu7-2; SO-I9): the rows are MEASURED as they
+    /// are rendered — each entry's marshaled bytes and the comma between
+    /// entries, the page object's own envelope (`changes`, `last`, `more`:
+    /// under forty bytes) aside — and where the sum passes
+    /// [`MAX_CHANGES_PAGE_BYTES`] the whole request is refused
+    /// ([`ChangesAnswer::OverBudget`]), naming the budget and the rows that
+    /// fit, never a page shorter than `limit` (PUB-6.44). The budget is
+    /// paid at the layer that produces the page (P29), so a guest asking
+    /// the maximum `limit` over attested rows costs the daemon the render of
+    /// at most the budget's worth of rows and one more.
     pub fn page(&self, class: &FeedClass<'_>, query: &ChangesQuery) -> ChangesAnswer {
         let (rows, more) = {
             let inner = self.inner.lock();
@@ -715,10 +736,21 @@ impl Feed {
             (rows, more)
         };
         let last = rows.last().map_or(query.since, |(at, ..)| *at);
-        let entries = rows
-            .into_iter()
-            .map(|(at, meta, reduced, slot)| meta.entry(at, reduced, slot.as_deref()))
-            .collect();
+        let mut entries = Vec::with_capacity(rows.len());
+        let mut bytes = 0usize;
+        for (at, meta, reduced, slot) in rows {
+            let entry = meta.entry(at, reduced, slot.as_deref());
+            // The entry's marshaled length — key order moves no byte of it
+            // — and the comma that joins it to the one before.
+            bytes += to_bytes(entry.clone()).len() + usize::from(!entries.is_empty());
+            if bytes > MAX_CHANGES_PAGE_BYTES {
+                return ChangesAnswer::OverBudget {
+                    budget: MAX_CHANGES_PAGE_BYTES,
+                    fits: entries.len(),
+                };
+            }
+            entries.push(entry);
+        }
         ChangesAnswer::Page { entries, last, more }
     }
 

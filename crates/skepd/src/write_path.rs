@@ -40,9 +40,11 @@
 //! ([`WritePath::write_first_head`]) — the board term every attested write's
 //! entry frame names — and a daemon that opens a claimed board with no head
 //! writes it there, before it serves. Where the head writer's driver refuses
-//! `H.1`, the refusal is surfaced and the claim stands, the board without a
-//! board term until the cadence's next head or the next open (`head.rs`,
-//! WHAT A REFUSAL DOES).
+//! `H.1`, the refusal is surfaced and the claim stands, the head OWED at the
+//! write path's next turn — a refused write's turn included
+//! ([`WritePath::take_turn_after_refusal`]; l7-C1), ahead of the cadence's
+//! own triggers — so the board is without a board term for exactly one
+//! write (`head.rs`, WHAT A REFUSAL DOES).
 //!
 //! The read/write partition is M10's own `Op::is_read`. A read is exactly an
 //! `Op` the change feed has nothing to record, so [`write_meta`] answers
@@ -171,6 +173,14 @@ impl WritePath {
         self.head_writer.set_clock_millis(millis);
     }
 
+    /// The test seam behind `crate::Daemon::refuse_the_next_head_once`: the
+    /// head writer's driver refuses the next head it is due to write, once,
+    /// exactly as a driver refusal is handled. Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(crate) fn refuse_next_head_once(&self) {
+        self.head_writer.refuse_next_head_once();
+    }
+
     /// THE CLAIM'S HEAD (signed ops, s1; RULED 2026-09-25): the board's first
     /// head `H.1`, written now under the caller's serialization guard through
     /// the head writer's own door, whatever the cadence says — a no-op on a
@@ -252,6 +262,18 @@ impl WritePath {
         // answer — so this door hands it nothing to decide it by.
         self.head_writer.take_turn(self, serial);
         resp
+    }
+
+    /// THE HEAD WRITER'S TURN after a write the sequence REFUSED ahead of
+    /// the store — an admission refusal, which never reaches
+    /// [`WritePath::commit_under`] — under the caller's serialization guard
+    /// (l7-C1; SO-I4 (a)): nothing landed, so the cadence counts nothing and
+    /// evaluates no trigger, and what the turn is for is the one head no
+    /// trigger makes due — the claim's `H.1` where its driver refused it,
+    /// owed until a head lands (`head.rs`, THE CLAIM'S HEAD, OWED). Free
+    /// where no head is owed: one lock, one look at the state.
+    pub fn take_turn_after_refusal(&self, serial: &SerialGuard<'_>) {
+        self.head_writer.take_turn(self, serial);
     }
 
     /// The ordering protocol and NOTHING after it: execute, record the
@@ -446,12 +468,14 @@ pub(crate) enum Signed {
     /// (`transact_attested`); the store mirrors it, the wire renders it as
     /// the row's `attest`.
     Marker(Attestation),
-    /// The entry's signature is its CREDENTIAL record's own `sig` member (a
-    /// credential record deposit, D26 — the record's `sig` covers both
-    /// positions, e-Q2): at the atom's `insert` the credential record CARRIES
-    /// a `sig`, verified one position later at its `make_link` under the set
-    /// that opens its home (lane D's `record_grade_check`); at that
-    /// `make_link` the `sig` VERIFIED. Neither row carries `attest`.
+    /// The entry's signature is its CREDENTIAL record's own `sig` member —
+    /// the deposit's `make_link`, where the record grade VERIFIED it under the
+    /// set that opens its home (lane D's `record_grade_check`; D26: a record
+    /// is judged at its link). The LINK row alone (as7-E2 (a), owner
+    /// 2026-10-01 — e-Q2 re-cut at the atom row): the atom's `insert` is
+    /// admitted unsigned, so its row carries `key`, the daemon's testimony of
+    /// the writing session — one asserted hand for an orphan atom whose link
+    /// never lands, D12's audit diagnostic. Neither row carries `attest`.
     RecordSig,
 }
 

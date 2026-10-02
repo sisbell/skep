@@ -27,13 +27,16 @@
 //!   the three slots as the client sent them and its `replaces` member —
 //!   absent, or the address it names — for `make_link`, and for `publish`
 //!   THE COUNT, THE RUNS THE CLIENT PLACED IN THE ADDRESS FORM AND THE BASE
-//!   EXTENT (the design record §2.5's cell as ruled — V, l6-A4, D25): the
-//!   runs as the commit will place them, M5's own classing
-//!   (`Shot::address_form`) — a run the commit COPIES IN (the trunk's own
-//!   I-space, the staging draft's) by its values, read off the snapshot by
-//!   M4's `value_at` in run order; a WINDOW onto another document by its
-//!   address and width, read from nowhere — within [`MAX_SHOT_BODY_BYTES`];
-//!   `base_extent` the shot's own, EMPTY in the birth shape.
+//!   (the design record §2.5's cell as ruled — V, l6-A4, D25; the base
+//!   MEMBER in the group since round 7, bu7-E2 ARM (a)): the runs as the
+//!   commit will place them, M5's own classing (`Shot::address_form`) — a
+//!   run the commit COPIES IN (the trunk's own I-space, the staging draft's)
+//!   by its values, read off the snapshot by M4's `value_at` in run order; a
+//!   WINDOW onto another document by its address and width, read from
+//!   nowhere — within [`MAX_SHOT_BODY_BYTES`]; the base the shot's own,
+//!   `Shot::base`'s member and extent as the request named them, EMPTY in
+//!   the birth shape — the member's address read off the request and never
+//!   minted here, so the frame stays position-free.
 //!
 //! Five `publish` bodies the daemon does not compose. Each is answered as the
 //! [`ComposeFault`] that names its reason, and no more: what the write is
@@ -73,7 +76,7 @@ use skep_febe::Op;
 use skep_identity::{
     entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_record,
     entry_frame, BoardTerm, EntryBody, EntrySlot, LinkSlots, PublishBody, PublishRefusal,
-    RecordRows,
+    RecordRows, ShotBase,
 };
 use skep_links::SlotArg;
 use skep_namespace::{HasM3, PrincipalId};
@@ -260,8 +263,10 @@ fn every_copied_run_origin_readable(
 
 /// A shot's body — its segments in placement order, a copied run's values
 /// pushed one by one and a window pushed as its address and width, onto a
-/// [`PublishBody`] held to [`MAX_SHOT_BODY_BYTES`] over the shot's base
-/// extent — or why it cannot be built: an address M4 holds no value at, a
+/// [`PublishBody`] held to [`MAX_SHOT_BODY_BYTES`] over the shot's base —
+/// the member and the extent the request named, `Shot::base`, which the
+/// signer composed from the same request (V; bu7-E2) — or why it cannot be
+/// built: an address M4 holds no value at, a
 /// segment that would carry the body past the budget, a term the frame's
 /// fixed-width rows cannot spell, or staging-draft runs re-inserting more
 /// values than the store will. The budget is measured in the body's own
@@ -278,7 +283,14 @@ fn publish_body(
 ) -> Result<EntryBody, ComposeFault> {
     let content = world.content();
     let spelled = |n: &Nat| u64::try_from(n).map_err(|_| ComposeFault::Unspellable);
-    let base_extent = shot.base.as_ref().map(|base| spelled(&base.extent)).transpose()?;
+    // THE BASE, both members (V; bu7-E2): the member the request named — a
+    // client-named address, never one minted here — and the extent spelled
+    // into its eight bytes.
+    let base = shot
+        .base
+        .as_ref()
+        .map(|base| Ok::<_, ComposeFault>(ShotBase { member: &base.member, extent: spelled(&base.extent)? }))
+        .transpose()?;
     // The count must fit its eight bytes for the body to exist at all —
     // summed off the runs' widths before a value is read, so a shot naming
     // positions no count can spell is told so whatever its values would cost;
@@ -299,7 +311,7 @@ fn publish_body(
     if shot.reinserted_values() > Nat::from(MAX_REINSERTED_VALUES) {
         return Err(ComposeFault::PastReinsertBudget);
     }
-    let mut body = PublishBody::within(MAX_SHOT_BODY_BYTES, base_extent);
+    let mut body = PublishBody::within(MAX_SHOT_BODY_BYTES, base);
     for segment in segments {
         match segment {
             PlacedSegment::Value(run) => {

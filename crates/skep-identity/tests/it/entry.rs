@@ -12,7 +12,7 @@ use common::{addr, tum};
 use skep_address::{Address, Span};
 use skep_identity::{
     entry_body_make_link, entry_body_publish, EntrySlot, LinkSlots, PublishBody, PublishRefusal,
-    ShotSegmentPiece,
+    ShotBase, ShotSegmentPiece,
 };
 
 /// Every sequence of at most two elements drawn from `elements` — the empty
@@ -89,7 +89,7 @@ fn no_two_distinct_slot_triples_spell_one_make_link_body() {
 /// CLOSES a stretch, the stretch's count being written back in place. Every
 /// sequence of one or two pieces over an empty value, a value and two windows
 /// ends in each of those shapes, so the family is every crossing there is;
-/// for each, under either shape of the base-extent group, a budget of the
+/// for each, under either shape of the base group, a budget of the
 /// finished body's own length takes every piece and finishes to
 /// [`entry_body_publish`]'s body, and one byte less refuses it.
 ///
@@ -110,8 +110,8 @@ fn every_publish_body_lands_exactly_on_a_budget_of_its_own_length() {
         ShotSegmentPiece::Window { start: &start, width: nonzero(1) },
         ShotSegmentPiece::Window { start: &other, width: nonzero(2) },
     ];
-    let fed = |budget: usize, base_extent: Option<u64>, pieces: &[ShotSegmentPiece<'_>]| {
-        let empty = PublishBody::within(budget, base_extent);
+    let fed = |budget: usize, base: Option<ShotBase<'_>>, pieces: &[ShotSegmentPiece<'_>]| {
+        let empty = PublishBody::within(budget, base);
         pieces.iter().try_fold(empty, |body, piece| match *piece {
             ShotSegmentPiece::Value(value) => body.push(value),
             ShotSegmentPiece::Window { start, width } => body.window(start, width),
@@ -119,19 +119,20 @@ fn every_publish_body_lands_exactly_on_a_budget_of_its_own_length() {
     };
     let sequences = sequences_of(&alphabet);
     assert_eq!(sequences.len(), 21, "the empty sequence, four alone, sixteen pairs");
-    for base_extent in [None, Some(5)] {
+    let base_member = addr(&[1, 0, 1, 0, 1, 2]);
+    for base in [None, Some(ShotBase { member: &base_member, extent: 5 })] {
         for pieces in sequences.iter().filter(|pieces| !pieces.is_empty()) {
-            let whole = entry_body_publish(pieces.iter().copied(), base_extent);
+            let whole = entry_body_publish(pieces.iter().copied(), base);
             let budget = whole.as_bytes().len();
             assert_eq!(
-                fed(budget, base_extent, pieces).map(PublishBody::finish),
+                fed(budget, base, pieces).map(PublishBody::finish),
                 Ok(whole),
-                "{pieces:?} under {base_extent:?}: exactly on its budget"
+                "{pieces:?} under {base:?}: exactly on its budget"
             );
             assert_eq!(
-                fed(budget - 1, base_extent, pieces).err(),
+                fed(budget - 1, base, pieces).err(),
                 Some(PublishRefusal::PastBudget),
-                "{pieces:?} under {base_extent:?}: one byte short"
+                "{pieces:?} under {base:?}: one byte short"
             );
         }
     }

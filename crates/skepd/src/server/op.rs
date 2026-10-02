@@ -17,8 +17,8 @@ use super::scan::ScanBusy;
 use super::{Daemon, Moment};
 use crate::auth::fold::key_set_of;
 use crate::auth::policy::{
-    deposits_credential_link, op_shape_refusal, plain_admission, record_deposit_carries_sig,
-    CredentialRefusal, DepositSpans, RecordSig,
+    deposits_credential_link, op_shape_refusal, plain_admission, CredentialRefusal, DepositSpans,
+    RecordSig,
 };
 use crate::auth::session::Actor;
 use crate::auth::LockWrite;
@@ -57,7 +57,11 @@ impl Daemon {
     /// driver REFUSES it, the claim STANDS, whatever the refusal: its ack is
     /// owed, which is why
     /// [`WritePath::write_first_head`](crate::write_path::WritePath::write_first_head)'s
-    /// answer is not read here. What a refusal is and when the first head
+    /// answer is not read here — and the head stays OWED, written at the
+    /// write path's NEXT TURN, a refused write's turn included (l7-C1; SO-I4
+    /// (a)): the first attested write after the refusal answers
+    /// `attestation_invalid:board_unavailable`, its own turn writes `H.1`,
+    /// and its retry is admitted. What a refusal is and when the first head
     /// comes after one are the head writer's (`head.rs`, WHAT A REFUSAL
     /// DOES); what an attested write meets meanwhile is
     /// [`crate::write_path::board_term`]'s. `credential_lock` is the
@@ -83,8 +87,9 @@ impl Daemon {
             }
         }
         // Its answer is not read: a refused `H.1` fails nothing here — the
-        // claim stands (the card above), and the head writer surfaces the
-        // refusal itself.
+        // claim stands (the card above), the head writer surfaces the
+        // refusal itself and owes the head at its next turn, a refused
+        // write's included (l7-C1).
         self.writes.write_first_head(serial);
         self.log_config_warnings(Moment::AtClaim);
         self.auth.reinstall_blocked_at_claim(credential_lock);
@@ -246,18 +251,25 @@ impl Daemon {
             presented,
         ) {
             Ok(admitted) => admitted,
-            Err(r) => return with_signal(credential_refused(meta.kind, &r), closed),
+            Err(r) => {
+                // A refused write's TURN (l7-C1): the head writer owes a
+                // first head the driver refused at every turn of the write
+                // path, this one included — the one trigger the refused
+                // writer can fire.
+                self.writes.take_turn_after_refusal(&serial);
+                return with_signal(credential_refused(meta.kind, &r), closed);
+            }
         };
         // THE ENTRY'S SIGNEDNESS, for the change feed's row (D12): the marker
         // the admission filled — the admitted value itself, which the attest
         // store appends beside `commits.log` when the write path records the
-        // commit — or, at a credential record deposit's atom, the credential
-        // record's own `sig`; nothing for an unsigned entry, whose row serves
-        // its `key`.
-        let signed = match &admitted {
-            Some(a) => Some(Signed::Marker(a.clone())),
-            None => record_deposit_carries_sig(&identity, &frame.op).then_some(Signed::RecordSig),
-        };
+        // commit — or nothing, for an entry the plain sequence admitted
+        // unsigned, whose row serves its `key`: a credential record deposit's
+        // ATOM among them (as7-E2 (a), owner 2026-10-01 — the atom row ALWAYS
+        // carries `key`, the daemon's testimony of the writing session; the
+        // record's `sig` is judged at its `make_link`, whose row the
+        // credential sequence records as signed by it, D26).
+        let signed = admitted.as_ref().map(|a| Signed::Marker(a.clone()));
         frame.attest = admitted;
         let resp =
             self.writes.commit_under(&serial, meta.attributed(binding.testimony(), signed), || {
@@ -354,7 +366,11 @@ impl Daemon {
             self.auth.cfg.allow_preview_keys,
         ) {
             Ok(record_sig) => record_sig,
-            Err(r) => return with_signal(credential_refused(meta.kind, &r), closed),
+            Err(r) => {
+                // A refused write's TURN (l7-C1), as on the plain path.
+                self.writes.take_turn_after_refusal(&serial);
+                return with_signal(credential_refused(meta.kind, &r), closed);
+            }
         };
         // 7 — execute (commit-record-announce under the held serial lock,
         // then the head writer's turn, which may land the head's own commits
@@ -373,9 +389,10 @@ impl Daemon {
         // the check tells D26's case by ROUTE — a credential-typed link write
         // never reaches the plain sequence's producers at all. What the row
         // records instead (D12) is the precheck's own answer: the record's
-        // `sig` VERIFIED — the entry signed by its credential record's `sig`,
-        // its `key` absent — or unjudged at or below the claim, the
-        // ceremony's rows serving their `key`.
+        // `sig` VERIFIED — the LINK row signed by its credential record's
+        // `sig`, its `key` absent (the atom's row keeps its `key`, as7-E2
+        // (a)) — or unjudged at or below the claim, the ceremony's rows
+        // serving their `key`.
         let signed = match record_sig {
             RecordSig::Verified => Some(Signed::RecordSig),
             RecordSig::Unjudged => None,

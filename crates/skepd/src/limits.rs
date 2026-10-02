@@ -1,4 +1,7 @@
-//! The two request-body caps the wire promises (wire.md §Transport).
+//! The two request-body caps the wire promises (wire.md §Transport), and the
+//! change feed's three page bounds (wire.md §The change feed).
+
+use std::num::NonZeroUsize;
 
 /// Request-body cap for the two frame-carrying routes, enforced on the
 /// declared `Content-Length` before any body byte is read or allocated.
@@ -36,3 +39,35 @@ pub(crate) const MAX_REQUEST_BODY: usize = 8 * 1024 * 1024;
 /// whole and then never looked at. Those routes have no use for the ceiling
 /// above, and offering it to them offers the `Value` tree that rides on it.
 pub(crate) const MAX_SMALL_BODY: usize = 16 * 1024;
+
+/// `/changes`'s page size when `limit` is absent — 256 rows.
+pub(crate) const DEFAULT_CHANGES_LIMIT: NonZeroUsize =
+    NonZeroUsize::new(256).expect("256 is not zero");
+
+/// `/changes`'s page-size ceiling — 4,096 rows; a larger `limit` is refused,
+/// not clamped (the never-silent posture applied to paging).
+pub(crate) const MAX_CHANGES_LIMIT: usize = 4096;
+
+/// THE PAGE BYTE BUDGET of `/changes` (signed ops, round 7 — bu7-2 = reg-H1;
+/// SO-I9; P29): the most bytes one page's entries may marshal to, 2 MiB —
+/// 256 rows, the default page, × 8 KiB, the bound on a row the wire admits.
+/// A page that would pass it is REFUSED whole, naming the budget and the
+/// largest `limit` that fits, never served short (PUB-6.44).
+///
+/// THE ARITHMETIC. The row count was chosen before rows carried `attest`,
+/// and an attested row is dominated by that member: under tag 1 the hybrid
+/// blob is 3,373 bytes, 6,746 as hex, with its `alg` token and punctuation
+/// under 6,800; the rest of a row — the position and the time (at most
+/// twenty digits each), the op's token, the documents (two addresses at
+/// most, `nullify`'s two homes, of ordinary depth), the op's own terms (a
+/// link address, or two decimal counts), the member names and the
+/// punctuation — is a few hundred bytes more, so an attested row of this
+/// board's ordinary addresses is under 7.2 KiB and 8 KiB bounds it with
+/// room. So the DEFAULT page of attested rows is always served whole, the
+/// maximal `limit` over attested rows (~27.6 MB at 4,096 rows) is not, and
+/// a reader of a signed feed pages at or below ~300 rows. The budget is
+/// measured in the feed's own marshal as rows are rendered
+/// (`write_path/feed.rs`), so a row larger than the bound — an address of
+/// pathological depth — is refused by the same measure and never served
+/// past it.
+pub(crate) const MAX_CHANGES_PAGE_BYTES: usize = 256 * 8 * 1024;

@@ -13,9 +13,9 @@
 
 use sha2::{Digest, Sha256};
 use skep_identity::{
-    entry_body_insert, entry_body_make_link, entry_body_publish, entry_body_record, entry_frame,
-    BoardTerm, EntrySlot, Fingerprint, LinkSlots, RecordRows, ShotSegmentPiece, SigAlgRow,
-    ALG_MLDSA65_ED25519,
+    entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_publish,
+    entry_body_record, entry_frame, BoardTerm, EntrySlot, Fingerprint, LinkSlots, RecordRows,
+    ShotBase, ShotSegmentPiece, SigAlgRow, ALG_MLDSA65_ED25519,
 };
 use skep_signature::{
     derive_half_seeds, pq_widths, verify, HybridFault, HybridSigner, PqWidths, SeededRng06,
@@ -54,8 +54,9 @@ fn addr(s: &str) -> skep_address::Address {
 /// The six fixed instances every golden signs: the frames of an `insert`
 /// (undeclared, two values), a `make_link` (three address-form slots), a
 /// `publish` (three values copied in, one window of two positions onto
-/// another document, the base taken at three — the address form, l6-A4)
-/// and three `record`s (the frame merge, fm-I; the record grade, 2a): an
+/// another document, the base `1.0.1.0.1.1` taken at three — the address
+/// form, l6-A4; the base member in the group since round 7, bu7-E2) and
+/// three `record`s (the frame merge, fm-I; the record grade, 2a): an
 /// enrol's kind — its type slot, one subject, neither optional row named, a
 /// short canonical body — a retire's kind beside it over the same subject,
 /// and the claim's — its type slot, the EMPTY target slot, no record at all
@@ -73,6 +74,7 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 6] {
         ty: EntrySlot::Addrs(&ty),
     });
     let window = addr("1.0.1.0.2.0.1.1");
+    let base_member = addr("1.0.1.0.1.1");
     let publish = entry_body_publish(
         [
             ShotSegmentPiece::Value(b"x"),
@@ -83,7 +85,7 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 6] {
                 width: std::num::NonZeroU64::new(2).expect("2 is not zero"),
             },
         ],
-        Some(3),
+        Some(ShotBase { member: &base_member, extent: 3 }),
     );
     let subject = [addr("1.0.2")];
     let enrol = entry_body_record(RecordRows {
@@ -138,11 +140,14 @@ const GOLDEN_STREAM_SEED: [u8; 32] = GOLDEN_SEED;
 /// the publish re-pin of 2026-09-29 (V, l6-A4, D25's (c′)): the body became
 /// the count, the runs in the address form and the base-extent group, in
 /// place under the same tag, and the fixed instance gained a window and a
-/// base; and the `record` signatures were minted then, the frame merge's
-/// fourth grammar (fm-I) — the enrol's, which the record grade's build (2a)
-/// left unmoved, pinning the retire's and the claim's beside it. The keys,
-/// the fingerprints and the `insert` signatures have not moved since the tag
-/// was pinned.
+/// base — and moved ONCE MORE at round 7 (bu7-E2 ARM (a), 2026-10-02; still
+/// in place under `skep-entry-v1`, l6-A3): the base group gained the base
+/// MEMBER's address beside the extent, the fixed publish frame growing by
+/// the member's slot row, twenty-four bytes; and the `record` signatures
+/// were minted at the frame merge, its fourth grammar (fm-I) — the enrol's,
+/// which the record grade's build (2a) left unmoved, pinning the retire's
+/// and the claim's beside it. The keys, the fingerprints and the `insert`
+/// signatures have not moved since the tag was pinned.
 struct TagGolden {
     tag: u8,
     pq_pk: &'static str,
@@ -218,7 +223,7 @@ fn golden_tag_1_mldsa65_ed25519() {
         sigs: [
             "2892943416a13f80eeb95f4c8bd55f115d7248324c433bffbeaf7f0501828148",
             "9d47fea8f8cc6077222b89060ebcc69b93d7d9b228c1a9196f324ee3a80119d0",
-            "e36e6e421c3a4ed0826144f6cb2d578cc18eb72e7d84fbc483fd5ac000d7cf16",
+            "b433f7cd372e1bd8073f1b3222eba5b06976ee47734b66e761a3493d2c0deac0",
             "28c70f669d44919062bf99a79cec75a973c7f6acaf315991a53daea054b7f508",
             "abb554df48572fb1fbfa72445b1ef8024dd6fd2c8889ed33cc1a756d5a9a07c3",
             "4c367931a56e731f01c0f5dc19d4d79d7be5b459c3cc113cbf946fe54cf90472",
@@ -243,12 +248,80 @@ fn golden_tag_3_fndsa512_preview_ed25519() {
         sigs: [
             "da92e3fc0247d5f39ed149f574a6c18cc1bf959a4f167ba33d381a955ed95779",
             "a7bc27e514b92dd4bc23f1c69ec46ad010cca17a22eada4f944e0f31edfd7d75",
-            "0af99ce8edd4c6f9230fe381a22b2dfb3eb59febf497d5bb9a76a0e6ca105434",
+            "5df7ecb18a4809f0f6dad4a3db1cecfe946724d66024e66ff78d4fb92c5046a6",
             "38b456b9f4413a0f6164aad2e0cc3e9e8b35b8534c915f465992391cf71b03ad",
             "7399b23baaae2e1a1bdc85eb74bfc6b88f76029bf3e17857635c86b9e106eab1",
             "7807cbba98e2e04fa7647c50baeacdaefb44fbf477fd9ee3f71095f47d1fe37d",
         ],
     });
+}
+
+/// THE PREIMAGE GOLDEN (round 7, 2026-10-02 — the builder's
+/// `owed-test-instruments-without-lane`; SO-I1, SO-I6): one FIXED frame
+/// PREIMAGE per op cell of the entry frame, pinned as its bytes' SHA-256 hex
+/// under tag 1's `alg` token — preimages and not signatures, since tag 3's
+/// signing is randomized — byte-asserted, so a member silently absent from a
+/// body (round 7's BLOCKER: the base member the `publish` body did not carry)
+/// fails the build here, whatever the signatures over it do. The six fixed
+/// frames above cover `insert` (undeclared), `make_link` WITHOUT its
+/// `replaces` row, `publish` with a value stretch, a window and the base
+/// group FILLED, and the three `record`s (rows 3 and 4 EMPTY); this table
+/// adds the cells they leave out — an `insert` DECLARED under a type, a
+/// `make_link` WITH its `replaces` row, the `publish` BIRTH SHAPE with the
+/// EMPTY group — and pins the six beside them, so one table names every
+/// cell with its preimage's length. The frames are the twins skepd pins byte
+/// for byte (`the_entry_frames_bytes_per_op_are_pinned`); the pin here is
+/// the hash a second implementation checks against.
+#[test]
+fn the_frame_preimage_per_op_cell_is_pinned() {
+    let alg = ALG_MLDSA65_ED25519;
+    let six = fixed_frames(alg);
+    let (account, doc) = (addr("1.0.1"), addr("1.0.1.0.1"));
+    let board = BoardTerm { log_position: 12, chain: [0xAB; 32] };
+    let frame = |body: &skep_identity::EntryBody| entry_frame(alg, board, &account, &doc, body);
+    let declared = entry_body_insert(Some(&addr("1.1.0.1.0.1.0.3.1")), [&b"r"[..]]);
+    let (ty, from) = ([addr("1.1.0.1.0.1.0.3.90")], [addr("1.0.1")]);
+    let to: [skep_address::Address; 0] = [];
+    let replacing = entry_body_make_link_replacing(
+        LinkSlots { from: EntrySlot::Addrs(&from), to: EntrySlot::Addrs(&to), ty: EntrySlot::Addrs(&ty) },
+        &addr("1.0.1.0.1.0.2.9"),
+    );
+    let window = addr("1.0.1.0.2.0.1.1");
+    let birth = entry_body_publish(
+        [
+            ShotSegmentPiece::Value(b"x"),
+            ShotSegmentPiece::Window {
+                start: &window,
+                width: std::num::NonZeroU64::new(2).expect("2 is not zero"),
+            },
+        ],
+        None,
+    );
+    let [(_, insert), (_, link), (_, publish), (_, enrol), (_, retire), (_, claim)] = six;
+    // The publish cell's preimage grew by the base member's slot row — 185
+    // to 209 bytes — at round 7's re-pin; every other cell is as the seam
+    // build, the replay fix and the frame merge left it.
+    let cells: [(&str, Vec<u8>, usize, &str); 9] = [
+        ("insert, undeclared", insert, 134, "d84853b3c36c8bf452ec57e662c57911eae550193a6c9cf6e8c468ecf118efe2"),
+        ("insert, declared", frame(&declared), 146, "199775c4e92c52b6b49b7fb702de449690f2b6be837b5f72d07cb640176aed26"),
+        ("make_link, no replaces", link, 177, "771e9abeee6ee4e307dbae7d655dba54aa1b2e258e8234370e51eaa8a51d72f8"),
+        ("make_link, replacing", frame(&replacing), 205, "846ae75615cf2e20895718414f475a43648f3ac3d183ddc1c7d89335c6bb82d7"),
+        ("publish, the base filled", publish, 209, "774ae1d5bd454d7eb59ae7f3f3027a2f7cbc927c855036a9cbdda2b0664a6945"),
+        ("publish, the birth shape", frame(&birth), 167, "34e6abd5f4dc9dac148a29b6dcddf040918730e45bd510d91cff262308e88e6f"),
+        ("record, enroll", enrol, 194, "e15f5fce4fd268e3064237c413eb6d7fb25f67269c6d7f0b046b26c72a9dfc60"),
+        ("record, retire", retire, 194, "e60761e01fbd6785680b07833fd9618de55150aacefaee1d3e1ebf75ae42918a"),
+        ("record, claim", claim, 163, "e5f5b1a5b96c2f7ce52cf32c8ef6f59a8ea56e882f7e5181456feb511b74b15f"),
+    ];
+    let got: Vec<(&str, usize, String)> =
+        cells.iter().map(|(cell, bytes, ..)| (*cell, bytes.len(), sha_hex(bytes))).collect();
+    let want: Vec<(&str, usize, String)> =
+        cells.iter().map(|(cell, _, len, want)| (*cell, *len, want.to_string())).collect();
+    let report = got
+        .iter()
+        .map(|(cell, len, hash)| format!("  {cell}: {len} bytes, sha256 {hash}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(got, want, "a preimage moved — the cells as composed:\n{report}");
 }
 
 /// THE PUBLISHED VECTORS: `docs/wire.md`'s keygen-from-seed rule (§The

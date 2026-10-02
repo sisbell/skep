@@ -61,8 +61,11 @@
 //! two transactions, and a daemon that opens a claimed board whose journal
 //! holds no head writes `H.1` before it serves, through the same call
 //! (`server.rs`, the open). A refused `H.1` is surfaced like any refused head
-//! (below) and the claim stands; the next open writes it, as does the
-//! cadence's next trigger. RESUME BY READING: at open the writer reads `H`'s
+//! (below) and the claim stands, the head OWED: the "claimed, no head" test
+//! runs at EVERY turn of the write path from then on — a refused write's
+//! turn included, [`WritePath::take_turn_after_refusal`] — AHEAD of the
+//! landed-commit triggers, so the next turn writes it (THE CLAIM'S HEAD,
+//! OWED, below; l7-C1). RESUME BY READING: at open the writer reads `H`'s
 //! latest member — its `position` and `chain` (the next head's `prev`; a head
 //! is owed only once the position moves past it) and its `base` (trigger
 //! (b)'s reference: a checkpoint taken after that head, before or after a
@@ -98,19 +101,34 @@
 //! a `skepd:` notice names it, the head is skipped for this cycle with the
 //! writer's state unadvanced, and the triggering write is untouched — it
 //! committed, and its ack is owed whatever the daemon's own write did. The
-//! next landed commit retries a CADENCE head, whose trigger stays due; the
-//! FIRST head, which no trigger made due, waits for the next open or the
-//! cadence's next trigger (THE FIRST HEAD IS THE CLAIM'S, above), the board
-//! meanwhile without a board term. The daemon opens its kernel `Fsync` only,
-//! so a head is never written over an in-memory kernel (whose chain is the
-//! zero seed at every coordinate); a poisoned kernel refuses the triggering
-//! write first, so no head is attempted over it.
+//! next landed commit retries a CADENCE head, whose trigger stays due.
+//!
+//! THE CLAIM'S HEAD, OWED (l7-C1; SO-I4 (a), owner 2026-10-02: the boundary
+//! is derived "from the write path's next turn wherever its first write was
+//! refused"). The FIRST head no trigger made due: refused, it is OWED
+//! (`HeadState::first_head_owed`), and "claimed, no head" is tested at EVERY
+//! turn — a landed write's, a refused write's
+//! ([`WritePath::take_turn_after_refusal`]), a replay's — AHEAD of the
+//! landed-commit triggers, until a head lands; where a head already stands
+//! the test is a no-op, so it costs an idle turn one look at the state. So a
+//! running claimed board whose `H.1` was refused answers attested writes
+//! `attestation_invalid:board_unavailable` for exactly ONE write — the
+//! refused writer's own turn writes `H.1`, and its retry is admitted — where
+//! before it answered so until a trigger it could not fire, or a restart
+//! (sweep-7 lampson 1). The open closes the same window for a board that
+//! restarts inside it (`server.rs`). The daemon opens its kernel `Fsync`
+//! only, so a head is never written over an in-memory kernel (whose chain is
+//! the zero seed at every coordinate); a poisoned kernel refuses the
+//! triggering write first, so no head is attempted over it.
 //!
 //! WHY NOT `Caller::System`. That is M9's rule-fire path (PUB-6.28), which
 //! mints nothing and carries three registration conditions the head cannot
 //! meet. The head writer acts AS the genesis-seeded system principal on M3/M5,
 //! never constructing `Caller::System`; every ω check passes because the system
 //! account owns `H` and its draft, and nothing in the engine is widened.
+
+#[cfg(any(test, feature = "test-hooks"))]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -253,6 +271,14 @@ struct HeadState {
     /// found at open or minted at first need; `None` only on a board that has
     /// never written a head.
     staging_draft: Option<Address>,
+    /// THE CLAIM'S HEAD, OWED (the module doc's section; l7-C1): set where
+    /// a FIRST head — the claim's step's, or the open's — was REFUSED by the
+    /// driver, cleared when any head lands. While set, every turn evaluates
+    /// "claimed, no head" ahead of the cadence's triggers, so the one trigger
+    /// the refused writer can fire — its own next turn — writes the head.
+    /// Never set on a board with a head: `write_head_if_due` reads
+    /// `last_head` first.
+    first_head_owed: bool,
 }
 
 /// A COMMITTED PAIR — a position and the commit chain's value AT it, which
@@ -381,6 +407,13 @@ pub(super) struct HeadWriter {
     stores: EngineStores,
     state: Mutex<HeadState>,
     clock: Clock,
+    /// The test seam behind `crate::Daemon::refuse_the_next_head_once`: the
+    /// next head this writer is due to write meets a DRIVER REFUSAL — the
+    /// head skipped, the state unadvanced, the notice written — exactly as
+    /// `run_commit` answers a real one, and the seam disarms itself there.
+    /// `false` is the only state production ever sees.
+    #[cfg(any(test, feature = "test-hooks"))]
+    refuse_next_head: AtomicBool,
 }
 
 impl HeadWriter {
@@ -414,8 +447,11 @@ impl HeadWriter {
                 commits_since_head: resumed.commits_since_head,
                 last_head_millis: resumed.last_head_millis.unwrap_or(now),
                 staging_draft,
+                first_head_owed: false,
             }),
             clock,
+            #[cfg(any(test, feature = "test-hooks"))]
+            refuse_next_head: AtomicBool::new(false),
         }
     }
 
@@ -425,6 +461,30 @@ impl HeadWriter {
     #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn set_clock_millis(&self, millis: u64) {
         self.clock.set_millis(millis);
+    }
+
+    /// The test seam behind `crate::Daemon::refuse_the_next_head_once`: arm
+    /// one injected driver refusal of the next due head. Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(super) fn refuse_next_head_once(&self) {
+        self.refuse_next_head.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether the armed seam takes THIS head: `true` once per arming, the
+    /// seam disarmed by the read; always `false` in production, where the
+    /// field does not exist.
+    fn injected_refusal(&self) -> bool {
+        #[cfg(any(test, feature = "test-hooks"))]
+        {
+            if self.refuse_next_head.swap(false, Ordering::Relaxed) {
+                notice::line(
+                    "head writer: test seam — the driver's refusal of this head injected; no \
+                     head written this cycle",
+                );
+                return true;
+            }
+        }
+        false
     }
 
     /// THE HEAD WRITER'S TURN, taken from [`WritePath::commit_under`] after
@@ -470,17 +530,27 @@ impl HeadWriter {
     /// [`HeadWriter::write_first_head`] share: decide under the state lock
     /// whether a head is DUE — the cadence's three triggers, or, with
     /// `first`, the board's first head owed — and write it. The two differ in
-    /// what makes a head due, and in nothing else. `true` iff a head landed.
+    /// what makes a head due, and in nothing else — except that a first head
+    /// the driver REFUSED stays owed (THE CLAIM'S HEAD, OWED), so every later
+    /// turn evaluates as a `first` call until a head lands. `true` iff a head
+    /// landed.
     fn write_head_if_due(&self, wp: &WritePath, serial: &SerialGuard<'_>, first: bool) -> bool {
         // Decide under the state lock, releasing it before any commit.
         let due_head = {
             let mut state = self.state.lock();
 
+            // THE CLAIM'S HEAD, OWED (l7-C1): a refused first head is asked
+            // for again at every turn, ahead of the triggers below.
+            let first = first || state.first_head_owed;
+
             // The board's first head is owed ONCE: a board that has one — read
             // off `H` at open, or written this uptime by the claim or by the
-            // cadence — is not asked for another.
-            if first && state.last_head.is_some() {
-                return false;
+            // cadence — is not asked for another, and owes none.
+            if state.last_head.is_some() {
+                state.first_head_owed = false;
+                if first {
+                    return false;
+                }
             }
 
             // The pair the head will name — the kernel's committed
@@ -541,15 +611,22 @@ impl HeadWriter {
             }
             // `prev`: the previous head's committed pair, null at the first.
             let record = HeadRecord { position, chain, base, prev: last.map(HeadRecord::pair) };
-            DueHead { record, now_millis: now }
+            (DueHead { record, now_millis: now }, first)
         };
+        let (due_head, first) = due_head;
 
-        let landed = self.write_head(wp, serial, &due_head.record);
+        let landed = !self.injected_refusal() && self.write_head(wp, serial, &due_head.record);
         let mut state = self.state.lock();
         if landed {
             state.last_head = Some(due_head.record);
             state.commits_since_head = 0;
             state.last_head_millis = due_head.now_millis;
+            state.first_head_owed = false;
+        } else if first {
+            // A refused FIRST head is owed at the next turn (THE CLAIM'S
+            // HEAD, OWED); a refused cadence head is retried by its trigger,
+            // which stays due.
+            state.first_head_owed = true;
         }
         // The head's own commits — a whole head's, or a refused one's partial
         // (the draft mint, the orphaned insert) — moved the seq: the next
@@ -930,16 +1007,16 @@ mod tests {
             (6, system(110)),
             (7, session(200)),
             (8, system(120)),
-            (9, CommitMeta::Bare),
+            (9, CommitMeta::bare()),
         ]);
         assert_eq!(r.commits_since_head, 2, "the session's commit and the bare entry count");
         assert_eq!(r.last_head_millis, Some(120), "the LAST system entry's time, not the first");
 
-        let r = resume_cadence(&[(5, CommitMeta::Bare), (6, session(300)), (7, session(400))]);
+        let r = resume_cadence(&[(5, CommitMeta::bare()), (6, session(300)), (7, session(400))]);
         assert_eq!(r.commits_since_head, 3);
         assert_eq!(r.last_head_millis, Some(300), "no system entry: the EARLIEST timed witness");
 
-        let r = resume_cadence(&[(5, CommitMeta::Bare), (6, CommitMeta::Bare)]);
+        let r = resume_cadence(&[(5, CommitMeta::bare()), (6, CommitMeta::bare())]);
         assert_eq!(
             (r.commits_since_head, r.last_head_millis),
             (2, None),

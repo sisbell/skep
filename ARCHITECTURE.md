@@ -336,9 +336,13 @@ nothing of it.
    headers and query obey), `server/scan.rs` (the class-scan pool): what
    the routes and the transport both speak.
 4. **The session layer** — `auth.rs` and the modules under `auth/`.
-   Sessions and the signed handshake, the policy checks on every write,
-   the identity fold, signature verification — `skep-signature` is the one
-   crate that links the signature libraries; skepd calls its verify.
+   Sessions and the signed handshake, the policy checks on every write
+   (`auth/policy/`: the plain sequence's admission, the credential
+   sequence's precheck with the record grade, and the write-path check —
+   the entry signature, whose one exempt `insert` is a signed credential
+   record into a doc 1), the identity fold, signature verification —
+   `skep-signature` is the one crate that links the signature libraries;
+   skepd calls its verify.
 5. **The write path** — `write_path.rs`. The single point every write
    passes through, one at a time, and the head writer
    (`write_path/head.rs`, which commits through the write path's own
@@ -348,9 +352,11 @@ nothing of it.
      `write_path/feed/attest.rs` the attest store, the marker slot
      mirrored per attested commit;
    - `write_path/sidecar.rs` — `commits.log`, the daemon's record of what
-     it committed, for whom, and whether the entry was signed;
-   - `write_path/classify.rs` — which documents a commit touched, the one
-     question the feed asks the world.
+     it committed, for whom, and whether the entry was signed — and, on a
+     bare line, the journal's answer for the row's op and terms;
+   - `write_path/classify.rs` — which documents a commit touched, and
+     which of its op's terms the journal can name for a bare position —
+     the one place the feed asks the world anything.
 6. **The leaves** — `codec.rs` with `codec/marshal.rs` (the JSON wire
    format: parse, and marshal), `history.rs` (reading the world at an
    earlier position), `permits.rs` (the counting permit both bounded pools

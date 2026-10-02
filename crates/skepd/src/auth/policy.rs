@@ -22,7 +22,6 @@ mod attestation;
 mod credential;
 mod plain;
 
-pub(crate) use attestation::record_deposit_carries_sig;
 pub(crate) use credential::{op_shape_refusal, precheck, DepositSpans, RecordSig};
 pub(crate) use plain::plain_admission;
 
@@ -30,8 +29,31 @@ use skep_address::{Address, Span};
 use skep_febe::{Disposition, Op};
 use skep_identity::{CredentialKind, Inert};
 use skep_links::{enc, SlotArg};
+use skep_namespace::{first_document_address, HasM3};
 
 use super::fold::identity_types;
+use crate::World;
+
+/// THE DOC-1 TEST — the daemon's spelling of AUTH-2.127's home pin, the
+/// fold's `not_doc_one` (`skep_identity`'s `homed_in_doc_one`: a credential
+/// link is honored only where its home IS its account's `doc_1_of`, `A·0·1`)
+/// read through M3's own public slot for that question,
+/// [`skep_namespace::first_document_address`]: `doc` is the FIRST document
+/// of the account that owns it by ω — a READ of the board's principal list Π
+/// and never arithmetic over the address (m3). The one home a credential
+/// link can name, and so the one place a record deposit's atom is exempt
+/// from the entry check (`policy/attestation.rs`'s step 2 (iv), as7-E1
+/// ARM (a)). No projection is taken: a version member of a doc 1 is no doc 1,
+/// as the fold reads it (`a_version_member_of_doc_1_is_not_doc_one`), and an
+/// unregistered or node-owned address has no doc 1 to be. Stated once here,
+/// where both children see it.
+fn homed_in_doc_one(world: &World, doc: &Address) -> bool {
+    world
+        .m3()
+        .effective_owner_prefix(doc)
+        .and_then(first_document_address)
+        .is_some_and(|doc_one| doc_one == *doc)
+}
 
 /// One address-form slot in M7's own deposited form — `enc(addrs)`. The
 /// ONE spelling, so [`deposits_credential_link`]'s classification and
@@ -61,11 +83,13 @@ fn slotarg_kind(s: &SlotArg) -> Option<CredentialKind> {
 /// any borrowed walk of it (a slice, or M7's `&Endset`) — names one of its
 /// kinds. Read by name wherever this module tells a record deposit apart: the
 /// entry check's EXEMPTION of the record's atom (`policy/attestation.rs`'s
-/// `insert` cell, and `record_deposit_carries_sig` beside it), and the ROUTE
-/// of its link to the credential sequence ([`deposits_credential_link`],
-/// every arm), where the record grade verifies the record's `sig` (D26).
-/// Stated once so the two cannot part: a kind exempt at the atom but never
-/// verified at the link would commit a record no signature covers.
+/// `insert` cell — its one parse, `declared_record_atom`), the pre-claim
+/// gate's refusal of a credential-kind deposit into the system account
+/// (`policy/plain.rs`), and the ROUTE of its link to the credential sequence
+/// ([`deposits_credential_link`], every arm), where the record grade
+/// verifies the record's `sig` (D26). Stated once so the readers cannot
+/// part: a kind exempt at the atom but never verified at the link would
+/// commit a record no signature covers.
 ///
 /// The set IS the fold's credential kinds ([`identity_types`]: enroll,
 /// retire, claim), and the route rests on that equality: the credential
@@ -287,13 +311,53 @@ pub(crate) enum CredentialRefusal {
     /// carrying no `attest`. Token `attestation_required`, class REORDER —
     /// the answer is a DIFFERENT request the client composes (the same
     /// content, signed and attached), which under ATTACH WHEN IN DOUBT is the
-    /// ordinary path and no error case. AND THE RECORD GRADE'S ONE REFUSAL
-    /// (§4.5 (4); 2a): a credential deposit above the claim whose record
-    /// carries no `sig` at all — the record's `sig` member being its one
-    /// carrier, its marker slot EMPTY (D27) — answered at the deposit's
-    /// `make_link` (D26), the same token and class: the answer is the same
-    /// record re-composed with its `sig`, the atom re-inserted and re-linked.
+    /// ordinary path and no error case. AND THE RECORD GRADE'S FENCE (§4.5
+    /// (4) step 2; 2a): a credential deposit above the claim whose record
+    /// carries no `sig` at all, answered at the deposit's `make_link` (D26)
+    /// — a fence with NO POPULATION on a conforming daemon since round 7
+    /// (bu7-E1 ARM (a)): a sig-less record-kind atom is refused at its
+    /// `insert`, [`CredentialRefusal::RecordSigRequired`], so the only atom
+    /// this reaches was deposited past that gate — below the claim, or by an
+    /// operator past the check — and the act that exists is a new record,
+    /// composed WITH its `sig`, inserted and linked.
     AttestationRequired,
+    /// THE SIG-LESS RECORD ATOM, REFUSED AT ITS `insert` (signed ops, round
+    /// 7 — bu7-E1 ARM (a), owner 2026-10-01, with as7-E1's narrowing; SO-I4;
+    /// P13): an `insert` above the claim DECLARED under a kind of the
+    /// record-deposit set whose one value PARSES as a record of that kind and
+    /// carries NO `sig` member. Decided at the earliest act the fault is
+    /// decidable from — the write-path check's step 2, where the atom's
+    /// bytes are already parsed — so nothing lands and no orphan atom is
+    /// minted: the retry the record grade's REORDER once named ("re-inserted
+    /// and re-linked") was never free, each attempt leaving a permanent
+    /// orphan in a published doc 1. Token `record_sig_required` — a
+    /// spelling this build chose, the `signed_session_required` pattern —
+    /// and PERMANENT, the family's: the same bytes are never admitted, and
+    /// the act that exists is a DIFFERENT record, the same entries composed
+    /// WITH their `sig` over the `record` frame. Its face is the record
+    /// grade's: "this record carries no `sig`; above the claim a credential
+    /// record is signed by its author — compose it with its `sig` and insert
+    /// that".
+    RecordSigRequired,
+    /// THE SYSTEM ACCOUNT HOLDS NO KEY (PUB-6.65; signed ops, round 7 —
+    /// as7-F2 = reg-S3; SO-I2 (g)(iv), SO-I4 (c)): a credential deposit whose
+    /// SUBJECT — the account the record's own entries enrol, retire or claim,
+    /// the fold's reading of the link's `to` — or whose HOME's owner by ω is
+    /// the system account `1.1.0.1`, refused at the credential sequence's
+    /// precheck on a claimed board (ahead of the record grade) and on an
+    /// unclaimed one (the pre-claim gate's genesis arm), and a declared
+    /// credential-kind `insert` into that account's doc 1 refused at the
+    /// plain path's pre-claim admission. Without it a loopback party on an
+    /// UNCLAIMED board binds a bare session as the system principal, plants
+    /// a genesis in `1.1.0.1.0.1` — the one pre-claim plant `claim_residue`
+    /// cannot see, the account sitting at the genesis floor — and after the
+    /// claim opens SIGNED system sessions whose writes into `H` are A3-exempt
+    /// and poison the head writer's resume. The head writer's own rows are no
+    /// credential deposits and never meet this. Token
+    /// `system_account_keyless` — a spelling this build chose — and
+    /// PERMANENT, the family's: the system account enrols no key, ever; the
+    /// act that exists is an enrolment under an account of one's own.
+    SystemAccountKeyless,
     /// THE WRITE-PATH CHECK's second refusal (§4.5 (2)): an `attest` that
     /// does not verify, or a write over which none can be verified, with the
     /// cause the check can tell from what it holds — the `detail` split §7.3
@@ -415,6 +479,8 @@ impl CredentialRefusal {
             CredentialRefusal::ClaimFirst => "claim_first".into(),
             CredentialRefusal::ClaimResidue => "claim_residue".into(),
             CredentialRefusal::AttestationRequired => "attestation_required".into(),
+            CredentialRefusal::RecordSigRequired => "record_sig_required".into(),
+            CredentialRefusal::SystemAccountKeyless => "system_account_keyless".into(),
             CredentialRefusal::AttestationInvalid(f) => {
                 format!("attestation_invalid:{}", f.sub_token())
             }
@@ -519,5 +585,13 @@ mod tests {
         }
         assert_eq!(CredentialRefusal::AttestationRequired.disposition(), Reorder);
         assert_eq!(CredentialRefusal::ClaimFirst.disposition(), Permanent);
+        // Round 7's two: a sig-less record atom and the system account's
+        // credential deposit are PERMANENT — no committed state admits the
+        // same bytes (SO-I7 (f)).
+        for refusal in [CredentialRefusal::RecordSigRequired, CredentialRefusal::SystemAccountKeyless] {
+            assert_eq!(refusal.disposition(), Permanent, "{}", refusal.token());
+        }
+        assert_eq!(CredentialRefusal::RecordSigRequired.token(), "record_sig_required");
+        assert_eq!(CredentialRefusal::SystemAccountKeyless.token(), "system_account_keyless");
     }
 }

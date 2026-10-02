@@ -25,13 +25,14 @@ use crate::common;
 use std::path::Path;
 
 use common::{
-    acked_at, assert_withheld, ceremony_before_the_claim, claim_frame, claimed, device_key,
-    doc_metadata, expect_resp, get, json, op, open_session, open_signed_session, spawn,
-    spawn_seeded, spawn_unclaimed, CLAIMANT_ACCOUNT, CLAIMANT_DOC1, CLAIMANT_PRINCIPAL,
+    acked_at, assert_withheld, board_term, ceremony_before_the_claim, claim_frame, claimed,
+    device_key, doc_metadata, expect_resp, get, head_position, json, op, op_as_written,
+    open_session, open_signed_session, spawn, spawn_seeded, spawn_unclaimed, typed_link_frame,
+    verdict, CLAIMANT_ACCOUNT, CLAIMANT_DOC1, CLAIMANT_PRINCIPAL, T_GRANT,
 };
 use serde_json::Value;
 use skep_namespace::SYSTEM_PRINCIPAL;
-use skepd::Skepd;
+use skepd::{Seq, Skepd};
 
 /// The head document `H` — doc 2 of the system account (PUB-6.65).
 const H: &str = "1.1.0.1.0.2";
@@ -1288,6 +1289,53 @@ fn the_claim_writes_exactly_one_head_at_its_own_position_and_the_cadence_counts_
     assert_eq!(h2["prev"]["position"].as_u64(), Some(CLAIM_POSITION), "its prev is the claim's head: {h2}");
     assert_eq!(h2["prev"]["chain"], h1["chain"], "…by chain too");
     assert_eq!(expect_latest_head(port), h2);
+    sd.shutdown();
+}
+
+/// (vi) — THE HEAD AFTER A REFUSED `H.1` (SO-I4 (a), its last clause; SO-I7;
+/// round 7's l7-C1 — sweep-7 lampson 1): the claim's own `H.1` refused by
+/// the driver — injected at the test seam `refuse_the_next_head_once`, which
+/// the head writer handles exactly as a driver refusal — leaves a RUNNING
+/// claimed board with no board term; the next attested write is refused
+/// `attestation_invalid:board_unavailable` (the board term stands ahead of
+/// the member), ITS OWN TURN writes `H.1` — the "claimed, no head" test
+/// runs at every turn, a refused write's included, ahead of the cadence's
+/// triggers — naming the claim's position, and its retry is ADMITTED and
+/// attested, with no restart and no second head. Before the fix the board
+/// answered `board_unavailable` until a trigger the refused writer could
+/// not fire, or a restart.
+#[test]
+fn a_refused_first_head_is_written_at_the_next_turn_a_refused_writes_own_included() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_unclaimed(dir.path());
+    let port = sd.port();
+    ceremony_before_the_claim(port);
+    sd.daemon().refuse_the_next_head_once();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let v = op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT));
+    let claim_at = acked_at(&v);
+    assert!(claimed(port), "the claim stands, its H.1 refused");
+    assert!(board_term(port).is_none(), "no board term: the first head was refused");
+    assert_eq!(head_position(port), claim_at, "the refused head landed nothing");
+
+    // The next attested write: refused for want of the board term — and its
+    // turn pays the owed head.
+    let grant = typed_link_frame(CLAIMANT_DOC1, &[CLAIMANT_ACCOUNT], &[], T_GRANT);
+    let v = op_as_written(port, Some(&signed), &grant);
+    assert_eq!(
+        verdict(&v),
+        "credential_refused:attestation_invalid:board_unavailable",
+        "the one write the window costs: {v}"
+    );
+    let h1 = board_term(port).expect("H.1 written at the refused write's turn");
+    assert_eq!(h1.log_position, claim_at, "H.1 names the claim's position: nothing landed between");
+    assert_eq!(head_position(port), claim_at + H1_RECORDS, "the head's records, and nothing else");
+
+    // The retry: admitted, attested, no restart; one head, never a second.
+    let v = op(port, Some(&signed), &grant);
+    assert_eq!(v["resp"].as_str(), Some("ack_addr"), "the retry is admitted: {v}");
+    assert!(sd.daemon().attestation_at(Seq(acked_at(&v))).expect("a boundary").is_some(), "…and attested");
+    assert!(head_record(port, &head_member(2)).is_none(), "no second head");
     sd.shutdown();
 }
 

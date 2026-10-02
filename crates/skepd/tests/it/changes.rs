@@ -457,6 +457,47 @@ fn the_changes_limit_range_is_exactly_one_through_the_maximum() {
     sd.shutdown();
 }
 
+/// THE PAGE BYTE BUDGET (SO-I9 — nobody's request does unbounded work; round
+/// 7's bu7-2 = reg-H1; P29): a page whose entries would marshal past
+/// `MAX_CHANGES_PAGE_BYTES` (2 MiB: 256 rows × 8 KiB) is REFUSED whole —
+/// 400 `malformed_changes`, the face carrying `budget` and `fits`, the
+/// largest `limit` whose page from that `since` fits — never served short
+/// (PUB-6.44). Over three hundred attested grants, each row ~6.9 KB of
+/// `attest` hex under tag 1: the maximal `limit` is refused, `limit=fits` is
+/// served whole with `more`, one past it is refused again, and the DEFAULT
+/// page of attested rows is served whole. The determinism-per-class test
+/// beside it is unmoved: a page under the budget is the page it was.
+#[test]
+fn a_page_past_the_byte_budget_is_refused_whole_and_one_within_it_is_served_whole() {
+    const BUDGET: u64 = 256 * 8 * 1024;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let grant = typed_link_frame(CLAIMANT_DOC1, &[CLAIMANT_ACCOUNT], &[], T_GRANT);
+    for _ in 0..320 {
+        expect_resp(&op(port, Some(&signed), &grant), "ack_addr");
+    }
+    let (st, body) = changes_raw(port, None, "since=0&limit=4096");
+    assert_eq!(st, 400, "the maximal page of attested rows passes the budget: {}", text(&body));
+    let face = json(&body);
+    assert_eq!(face["error"].as_str(), Some("malformed_changes"), "{face}");
+    assert_eq!(face["budget"].as_u64(), Some(BUDGET), "the face names the budget: {face}");
+    let fits = face["fits"].as_u64().expect("the face names the largest limit that fits");
+    assert!((256..320).contains(&fits), "~300 rows of ~6.9 KB fit 2 MiB: {fits}");
+    assert!(face["detail"].as_str().is_some_and(|d| d.contains(&BUDGET.to_string()) && d.contains(&fits.to_string())), "{face}");
+
+    let v = changes_ok(port, None, &format!("since=0&limit={fits}"));
+    assert_eq!(entry_ats(&v).len() as u64, fits, "limit=fits: the page served whole");
+    assert_eq!(v["more"].as_bool(), Some(true), "…with more past it");
+    let (st, body) = changes_raw(port, None, &format!("since=0&limit={}", fits + 1));
+    assert_eq!(st, 400, "one row more passes the budget: {}", text(&body));
+    assert_eq!(json(&body)["fits"].as_u64(), Some(fits), "the same answer");
+    let v = changes_ok(port, None, "since=0");
+    assert_eq!(entry_ats(&v).len(), 256, "the default page of attested rows is served whole");
+    sd.shutdown();
+}
+
 /// The `under` tumbler's two wire caps and the `since` fence's top, both
 /// ends each. A query string's tumbler goes through the codec's own bounded
 /// parse, the door a frame's tumbler meets, and that door is the only thing
@@ -949,25 +990,25 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
         let entries = v["changes"].as_array().expect("changes");
         let (tail, kept) = entries.split_last().expect("eleven entries");
         assert!(
-            tail["op"].is_null()
-                && tail["docs"].is_null()
-                && tail["time"].is_null()
-                && tail["key"].is_null(),
-            "a lost record answers null in EVERY metadata field, `key` included: the \
+            tail["docs"].is_null() && tail["time"].is_null() && tail["key"].is_null(),
+            "a lost record answers null in EVERY testimony field, `key` included: the \
              null is RESERVED for lost testimony, and `\"bare\"` is a positive claim \
              that this write was unsigned — one nobody made about it: {tail}"
         );
-        // …the op's own terms included: the lost record was a `make_link`,
-        // whose minted link address is now lost with it — every term reads
-        // `null`, since a bare row's op is unknown, and none is invented.
-        for term in TERMS {
-            assert!(
-                tail.get(term).is_some_and(Value::is_null),
-                "a bare row's `{term}` is the reserved null: {tail}"
-            );
+        // …while the op's own terms are THE JOURNAL'S (round 7's as7-F3): the
+        // lost record was a `make_link`, and the one link the commit
+        // deposited is the journal's own fact — served as `link`, equal to
+        // the recorded row's, the op left null (a plain `make_link` and an
+        // `emit` deposit one link alike) and the members no link write
+        // carries absent, as on the recorded row. Nothing is invented.
+        let old: Value = serde_json::from_slice(&before).expect("json");
+        let recorded_tail = old["changes"].as_array().expect("changes").last().expect("the lost record");
+        assert!(tail["op"].is_null(), "a plain make_link's op is not the journal's to name: {tail}");
+        assert_eq!(tail["link"], recorded_tail["link"], "the bare row's `link` is the journal's: {tail}");
+        for term in TERMS.iter().filter(|t| **t != "link") {
+            assert!(tail.get(term).is_none(), "a bare link row carries no `{term}`: {tail}");
         }
         assert_absent(tail, &["attest"], "a bare row whose marker was empty");
-        let old: Value = serde_json::from_slice(&before).expect("json");
         assert_eq!(
             kept,
             &old["changes"].as_array().expect("changes")[..kept.len()],

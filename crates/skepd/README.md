@@ -35,7 +35,7 @@ publish-class write carries in its `attest`, checked before the
 transaction; and, above the claim, the `sig` a credential record carries
 inside its own atom, checked in the credential sequence at the record's
 `make_link` under the key set that opens the record's home — a record
-carrying none is refused there. Build the shipped
+carrying none is refused at its own `insert`, before it lands. Build the shipped
 binary with `-p skepd` — Cargo unifies features across one invocation,
 and a `--workspace` build that compiles the test suites turns the signer
 on for everything it builds.

@@ -29,14 +29,14 @@ fn lines_are_key_sorted_and_replay_as_written() {
         entry_line(9, &pre_feature),
         b"{\"at\":9,\"docs\":[\"1.0.1.0.1\"],\"op\":\"insert\",\"time\":1700000000001}\n"
     );
-    assert_eq!(entry_line(3, &CommitMeta::Bare), b"{\"at\":3}\n");
+    assert_eq!(entry_line(3, &CommitMeta::bare()), b"{\"at\":3}\n");
     assert_eq!(min_since_line(2048), b"{\"min_since\":2048}\n");
 
     let mut file: Vec<u8> = Vec::new();
     file.extend_from_slice(&entry_line(8, &meta));
     let second_offset = file.len();
     file.extend_from_slice(&entry_line(9, &pre_feature));
-    file.extend_from_slice(&entry_line(3, &CommitMeta::Bare));
+    file.extend_from_slice(&entry_line(3, &CommitMeta::bare()));
     file.extend_from_slice(&min_since_line(2048));
     let (records, valid_end) = parse_records(&file);
     assert_eq!(valid_end, file.len(), "every whole line is trusted");
@@ -56,8 +56,8 @@ fn lines_are_key_sorted_and_replay_as_written() {
         records[1]
     );
     assert!(
-        matches!(records[2], (_, Record::Entry(3, CommitMeta::Bare))),
-        "third line is a bare entry: {:?}",
+        matches!(&records[2], (_, Record::Entry(3, CommitMeta::Bare { journal })) if journal.is_empty()),
+        "third line is a bare entry the journal answered nothing for: {:?}",
         records[2]
     );
     assert!(
@@ -176,6 +176,74 @@ fn the_signedness_and_the_terms_replay_as_written() {
     );
 }
 
+/// THE JOURNAL'S ANSWER RIDES THE BARE LINE (as7-F3; SO-I5 (e)) under one
+/// `journal` member, in the wire's own spelling of the terms, and replays as
+/// written — a `delegate`'s pair with its op, a `publish`'s count with its
+/// extent (`null` the birth shape), a deposited link with the op unnamed, a
+/// `nullify` named with no term — while a line answering nothing is the
+/// bare line as it always was. A `journal` that is no object, or one naming
+/// half a pair, is torn.
+#[test]
+fn the_journals_answer_rides_the_bare_line_and_replays_as_written() {
+    let delegate = CommitMeta::Bare {
+        journal: JournalTerms {
+            op: Some("delegate".into()),
+            terms: Some(OpTerms::Delegate { new_prefix: "1.0.2".into(), new_id: 1 }),
+        },
+    };
+    assert_eq!(
+        entry_line(4, &delegate),
+        b"{\"at\":4,\"journal\":{\"new_id\":1,\"new_prefix\":\"1.0.2\",\"op\":\"delegate\"}}\n"
+    );
+    let birth = CommitMeta::Bare {
+        journal: JournalTerms {
+            op: Some("publish".into()),
+            terms: Some(OpTerms::Publish { placed: "1".into(), base_extent: None }),
+        },
+    };
+    assert_eq!(
+        entry_line(5, &birth),
+        b"{\"at\":5,\"journal\":{\"base_extent\":null,\"op\":\"publish\",\"placed\":\"1\"}}\n"
+    );
+    let link = CommitMeta::Bare {
+        journal: JournalTerms {
+            op: None,
+            terms: Some(OpTerms::MakeLink { link: "1.0.1.0.1.0.2.3".into() }),
+        },
+    };
+    assert_eq!(entry_line(6, &link), b"{\"at\":6,\"journal\":{\"link\":\"1.0.1.0.1.0.2.3\"}}\n");
+    let nullify =
+        CommitMeta::Bare { journal: JournalTerms { op: Some("nullify".into()), terms: None } };
+    assert_eq!(entry_line(7, &nullify), b"{\"at\":7,\"journal\":{\"op\":\"nullify\"}}\n");
+
+    let mut file: Vec<u8> = Vec::new();
+    for (at, meta) in [(4, &delegate), (5, &birth), (6, &link), (7, &nullify)] {
+        file.extend_from_slice(&entry_line(at, meta));
+    }
+    let (records, valid_end) = parse_records(&file);
+    assert_eq!(valid_end, file.len(), "every whole line is trusted");
+    let replayed = |i: usize| match &records[i] {
+        (_, Record::Entry(_, CommitMeta::Bare { journal })) => journal.clone(),
+        other => panic!("a bare entry: {other:?}"),
+    };
+    for (i, meta) in [delegate, birth, link, nullify].iter().enumerate() {
+        let CommitMeta::Bare { journal } = meta else { unreachable!() };
+        assert_eq!(&replayed(i), journal, "line {i} replays as written");
+    }
+
+    let bare = entry_line(1, &CommitMeta::bare());
+    for torn in [
+        &b"{\"at\":2,\"journal\":\"delegate\"}\n"[..],
+        &b"{\"at\":2,\"journal\":{\"new_prefix\":\"1.0.2\",\"op\":\"delegate\"}}\n"[..],
+        &b"{\"at\":2,\"journal\":{\"link\":\"1.0.1.0.1.0.2.3\",\"placed\":\"1\"}}\n"[..],
+    ] {
+        let mut file = bare.clone();
+        file.extend_from_slice(torn);
+        let (records, valid_end) = parse_records(&file);
+        assert_eq!((records.len(), valid_end), (1, bare.len()), "torn: {}", String::from_utf8_lossy(torn));
+    }
+}
+
 /// A `signed` token no carrier spells, and a `delegate` line carrying one
 /// of its pair without the other, are not lines this daemon wrote: trust
 /// ends there. A term on a line of another op is an unknown key, ignored,
@@ -183,7 +251,7 @@ fn the_signedness_and_the_terms_replay_as_written() {
 /// carrying none.
 #[test]
 fn a_torn_signedness_or_a_half_pair_ends_trust_and_foreign_terms_are_ignored() {
-    let bare = entry_line(1, &CommitMeta::Bare);
+    let bare = entry_line(1, &CommitMeta::bare());
     let torn_signed =
         b"{\"at\":2,\"docs\":[],\"op\":\"insert\",\"signed\":\"maybe\",\"time\":1}\n".to_vec();
     let mut file = bare.clone();
@@ -224,7 +292,7 @@ fn a_torn_signedness_or_a_half_pair_ends_trust_and_foreign_terms_are_ignored() {
 fn both_spellings_of_the_min_since_record_replay() {
     let mut file: Vec<u8> = Vec::new();
     file.extend_from_slice(b"{\"floor\":2048}\n");
-    file.extend_from_slice(&entry_line(2049, &CommitMeta::Bare));
+    file.extend_from_slice(&entry_line(2049, &CommitMeta::bare()));
     let (records, valid_end) = parse_records(&file);
     assert_eq!(valid_end, file.len(), "the `floor` spelling does not end trust");
     assert!(
@@ -246,25 +314,29 @@ fn both_spellings_of_the_min_since_record_replay() {
 #[test]
 fn a_half_recorded_line_ends_trust() {
     let mut file: Vec<u8> = Vec::new();
-    file.extend_from_slice(&entry_line(1, &CommitMeta::Bare));
+    file.extend_from_slice(&entry_line(1, &CommitMeta::bare()));
     file.extend_from_slice(b"{\"at\":2,\"op\":\"insert\"}\n");
-    file.extend_from_slice(&entry_line(3, &CommitMeta::Bare));
+    file.extend_from_slice(&entry_line(3, &CommitMeta::bare()));
     let (records, valid_end) = parse_records(&file);
     assert_eq!(records.len(), 1, "trust ends at the half-recorded line");
-    assert_eq!(valid_end, entry_line(1, &CommitMeta::Bare).len(), "and truncation cuts there");
+    assert_eq!(valid_end, entry_line(1, &CommitMeta::bare()).len(), "and truncation cuts there");
     // A `null`-valued field is absence, not a half record.
     let (records, _) = parse_records(b"{\"at\":4,\"docs\":null,\"op\":null,\"time\":null}\n");
-    assert!(matches!(records.as_slice(), [(_, Record::Entry(4, CommitMeta::Bare))]));
+    assert!(matches!(records.as_slice(), [(_, Record::Entry(4, CommitMeta::Bare { .. }))]));
 }
 
-/// The wire entry names every field, a bare position's as explicit
-/// `null` — never invented, and never merely absent, which a client
-/// could not tell from a field this daemon does not know about; the op's
-/// terms included, since a bare row's op is unknown. The file line omits
-/// what the wire nulls; both are deliberate. `key`'s null is AUTH-1.52's
-/// reserved lost-metadata meaning: a pre-feature record reads it exactly
-/// as a bare position does. The docs rendered are the REDUCED list the
-/// feed hands in — here the whole record's.
+/// The wire entry names every field, a bare position's testimony as explicit
+/// `null` — never invented, and never merely absent, which a client could
+/// not tell from a field this daemon does not know about; the op's terms
+/// included where the journal answers nothing for the row, and AS THE
+/// JOURNAL ANSWERS THEM where it does (as7-F3): the op's own members where
+/// the op is named, exactly as the recorded row carries them; `link` alone
+/// where a link was deposited and the op left unnamed, the members no link
+/// write carries absent. The file line omits what the wire nulls; both are
+/// deliberate. `key`'s null is AUTH-1.52's reserved lost-metadata meaning: a
+/// pre-feature record reads it exactly as a bare position does. The docs
+/// rendered are the REDUCED list the feed hands in — here the whole
+/// record's.
 #[test]
 fn wire_entries_null_what_the_file_line_omits() {
     let render = |meta: &CommitMeta, at: u64, reduced: &[&str]| -> String {
@@ -286,9 +358,45 @@ fn wire_entries_null_what_the_file_line_omits() {
         r#"{"at":8,"docs":["1.0.1.0.1"],"key":null,"op":"insert","time":1700000000000}"#
     );
     assert_eq!(
-        render(&CommitMeta::Bare, 3, &["1.0.1.0.1"]),
+        render(&CommitMeta::bare(), 3, &["1.0.1.0.1"]),
         r#"{"at":3,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null}"#,
         "a bare entry's docs and terms are the reserved null whatever the feed hands in"
+    );
+    // The journal's answers on a bare row: the op's own members, as the
+    // recorded row carries them — a `delegate`'s pair, a `publish`'s count
+    // and extent — and nothing of the other ops'; `link` alone where a link
+    // was deposited and the op is unnamed; a named op carrying no term
+    // renders none.
+    let journaled = |op: Option<&str>, terms: Option<OpTerms>| CommitMeta::Bare {
+        journal: JournalTerms { op: op.map(str::to_string), terms },
+    };
+    assert_eq!(
+        render(
+            &journaled(Some("delegate"), Some(OpTerms::Delegate { new_prefix: "1.0.2".into(), new_id: 1 })),
+            4,
+            &[]
+        ),
+        r#"{"at":4,"docs":null,"key":null,"new_id":1,"new_prefix":"1.0.2","op":"delegate","time":null}"#,
+        "a bare delegate row: the journal's pair, the testimony still null"
+    );
+    assert_eq!(
+        render(
+            &journaled(Some("publish"), Some(OpTerms::Publish { placed: "5".into(), base_extent: Some("3".into()) })),
+            5,
+            &[]
+        ),
+        r#"{"at":5,"base_extent":"3","docs":null,"key":null,"op":"publish","placed":"5","time":null}"#,
+        "a bare publish row: the shot's terms off the placing record"
+    );
+    assert_eq!(
+        render(&journaled(None, Some(OpTerms::MakeLink { link: "1.0.1.0.1.0.2.3".into() })), 6, &[]),
+        r#"{"at":6,"docs":null,"key":null,"link":"1.0.1.0.1.0.2.3","op":null,"time":null}"#,
+        "a deposited link, the op unnamed: `link`, the members no link write carries absent"
+    );
+    assert_eq!(
+        render(&journaled(Some("nullify"), None), 7, &[]),
+        r#"{"at":7,"docs":null,"key":null,"op":"nullify","time":null}"#,
+        "a named op that carries no term renders none"
     );
     // What renders is the REDUCED list, never `Recorded.docs`: a
     // two-document record shown to a requester who may read one of them
@@ -304,12 +412,13 @@ fn wire_entries_null_what_the_file_line_omits() {
     );
 }
 
-/// A BARE row nulls exactly the members the terms render: every variant's
-/// [`OpTerms::members`] lie in [`OpTerms::MEMBER_NAMES`], and together they
-/// are all of it — so a term a new op carries is nulled on a bare row, and
-/// the list names no member no op renders. The match below is exhaustive
-/// with no `_`, so a new variant stops this test compiling until it is named
-/// here — the moment to add one of it to `one_of_each`.
+/// A BARE row the journal answers nothing for nulls exactly the members the
+/// terms render: every variant's [`OpTerms::members`] lie in
+/// [`OpTerms::MEMBER_NAMES`], and together they are all of it — so a term a
+/// new op carries is nulled on such a row, and the list names no member no
+/// op renders. The match below is exhaustive with no `_`, so a new variant
+/// stops this test compiling until it is named here — the moment to add one
+/// of it to `one_of_each`.
 #[test]
 fn a_bare_row_nulls_exactly_the_members_the_terms_render() {
     let one_of_each = [
@@ -403,7 +512,7 @@ fn key_attest_and_the_terms_are_present_absent_or_null_by_the_rule() {
     // A bare row the store answers: the slot is the journal's fact and is
     // served; the testimony stays lost.
     assert_eq!(
-        text(CommitMeta::Bare.entry(12, vec![], Some(&slot))),
+        text(CommitMeta::bare().entry(12, vec![], Some(&slot))),
         r#"{"at":12,"attest":{"alg":"mldsa65-ed25519","sig":"abababab"},"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null}"#
     );
 }

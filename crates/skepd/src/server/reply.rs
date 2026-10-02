@@ -171,6 +171,12 @@ pub(super) enum TransportError {
     MalformedSessionRequest,
     MalformedChallenge,
     MalformedOpAt,
+    /// The `/changes` query out of its range — and, since round 7 (bu7-2),
+    /// a `limit` whose page from the given `since` would pass the page byte
+    /// budget (`crate::limits::MAX_CHANGES_PAGE_BYTES`): out of range for
+    /// that fence, refused whole with `budget` and `fits` beside the name
+    /// ([`refuse_over_budget`]) — the same code, so the armed set does not
+    /// grow and the fuzz oracle's transcription stands.
     MalformedChanges,
     /// The one-parameter `at=<position>` query of `/dump?at` (observe builds)
     /// and `/chain?at` (every build), so it is no longer `observe`-gated.
@@ -287,10 +293,30 @@ pub(super) fn refuse(err: TransportError, detail: Option<&str>) -> Reply {
     refuse_with(err, fields)
 }
 
+/// THE PAGE BUDGET's face (wire.md §The change feed; bu7-2): `400
+/// {"error": "malformed_changes", "budget": B, "fits": N, "detail": …}` —
+/// the `limit` out of range for this fence, with the budget in bytes and the
+/// largest `limit` whose page from the same `since` fits it, so a client
+/// re-asks with `limit=N` and is served whole.
+pub(super) fn refuse_over_budget(budget: usize, fits: usize) -> Reply {
+    let detail = format!(
+        "limit: the page would pass the budget of {budget} bytes; the largest limit that \
+         fits from this since is {fits}"
+    );
+    refuse_with(
+        TransportError::MalformedChanges,
+        vec![
+            ("budget", Value::Number((budget as u64).into())),
+            ("fits", Value::Number((fits as u64).into())),
+            ("detail", Value::String(detail)),
+        ],
+    )
+}
+
 /// The same refusal carrying the diagnostic fields a few errors name —
-/// `head`, `nearest`, `floor` — the coordinate a caller needs to ask a
-/// better question. `error` is appended here, so a field list can never
-/// omit it.
+/// `head`, `nearest`, `floor`, `budget` and `fits` — the coordinate a caller
+/// needs to ask a better question. `error` is appended here, so a field list
+/// can never omit it.
 fn refuse_with(err: TransportError, fields: Vec<(&'static str, Value)>) -> Reply {
     let mut pairs = fields;
     pairs.push(("error", Value::String(err.name().into())));

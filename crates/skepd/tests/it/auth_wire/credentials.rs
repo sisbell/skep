@@ -9,6 +9,9 @@
 //! kind-BLIND), retirement, `key_set` on `/op` and `/op-at`, and restart
 //! carrying the identity fold back (recovery = the canonical rebuild).
 
+use skep_address::{Address, Nat, Tumbler};
+use skep_identity::{canonical_record, entry_body_record, framed, BoardTerm, RecordRows, ENTRY_TAG};
+
 use super::*;
 
 /// One enroll record of `n` real keys with a valid-hex key whose Ed25519 half
@@ -838,6 +841,10 @@ fn the_record_cap_is_128_kib_at_the_fold_over_the_wire() {
 /// this build has one: doc 1's own version, born published by inheritance
 /// (PUB-8.17). A well-formed record there answers `not_doc_one`; an
 /// unparseable one answers the PAYLOAD fault, the parse preceding the pin.
+/// Since round 7 (as7-E1 ARM (a), bu7-E1 ARM (a)) the record landed in the
+/// version CARRIES its `sig` — a sig-less record-kind atom is refused at its
+/// `insert`, `record_sig_required` — and, homed outside a doc 1, it is no
+/// exempt atom: it lands attested, as the unparseable bytes beside it do.
 #[test]
 fn a_draft_homed_credential_refuses_unpublished_and_the_home_pin_needs_a_published_home() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -895,8 +902,9 @@ fn a_draft_homed_credential_refuses_unpublished_and_the_home_pin_needs_a_publish
     let v = op(port, Some(&signed), &format!(r#"{{"op":"version","d_src":"{CLAIMANT_DOC1}"}}"#));
     let version = acked_addr(&v);
     assert_eq!(version, format!("{CLAIMANT_DOC1}.1"), "the version chain opens at the member 1");
+    let carrying = signed_atom(port, &signed, &version, T_ENROLL, &[CLAIMANT_ACCOUNT], &enroll_atom(&[&distinct_key(7)]));
     assert_eq!(
-        rejected_detail(&enroll_in(&version, 2, &enroll_atom(&[&distinct_key(7)]))),
+        rejected_detail(&enroll_in(&version, 2, &carrying)),
         "credential_refused:not_doc_one",
         "a published non-doc-1 home reaches the home pin"
     );
@@ -1249,6 +1257,165 @@ fn retiring_the_last_anchor_commits_kills_the_retiring_session_and_leaves_the_ac
     expect_resp(&enroll_for(port, &device, CLAIMANT_DOC1, &handoff, &x2), "ack_addr");
     assert_eq!(enrolled_count(port, &x2), 1, "the recipient's key, latched from a device session");
 
+    sd.shutdown();
+}
+
+/// THE SYSTEM ACCOUNT HOLDS NO KEY (SO-I2 (g)(iv); SO-I4 (c); PUB-6.65 —
+/// round 7's as7-F2 = reg-S3, the F2 sequence of
+/// `sweep-7/auth-security.md`): on an UNCLAIMED board a loopback bare
+/// session bound as the SYSTEM principal — the bare form binds any
+/// principal — inserts a `T_enroll` atom into the system account's own doc 1
+/// and is refused `system_account_keyless`, PERMANENT, at the plain path's
+/// pre-claim gate; its genesis `make_link` into that home is refused the same
+/// at the credential precheck's head, ahead of the fold's own payload read;
+/// nothing lands, and the board claims normally afterwards (no residue — the
+/// one pre-claim plant `claim_residue` cannot count, the account sitting at
+/// the genesis floor). On the CLAIMED board a signed session's enrollment
+/// naming the system account as its SUBJECT — the record landed in the
+/// claimant's own doc 1, exempt — is refused the same at the link, and the
+/// system account's key set stays empty. The register's corpus row ("a
+/// credential record whose subject or home is the system account, refused").
+#[test]
+fn the_system_account_takes_no_credential_deposit_on_either_board() {
+    const SYSTEM_PRINCIPAL: u64 = 9_000_000_000_000_000;
+    const SYSTEM_ACCOUNT: &str = "1.1.0.1";
+    const SYSTEM_DOC1: &str = "1.1.0.1.0.1";
+    let dir = tempfile::tempdir().expect("tempdir");
+    // Unclaimed, with the loopback origin configured (as every claimed
+    // fixture is), so the signed arm admits the claimant's session once the
+    // board is claimed below.
+    let sd = spawn_configured(dir.path(), true);
+    let port = sd.port();
+    let keyless = |v: &Value, what: &str| {
+        assert_eq!(rejected_detail(v), "credential_refused:system_account_keyless", "{what}: {v}");
+        assert_eq!(v["disposition"].as_str(), Some("permanent"), "{what}: {v}");
+    };
+    let system = open_session(port, SYSTEM_PRINCIPAL);
+    let before = head_position(port);
+    let atom = enroll_atom(&[&distinct_key(70)]);
+    let v = op(
+        port,
+        Some(&system),
+        &format!(
+            r#"{{"op":"insert","doc":"{SYSTEM_DOC1}","at":{{"subspace":"1","ordinal":"1"}},"values":[{{"atom":{atom}}}],"deposit":"{T_ENROLL}"}}"#
+        ),
+    );
+    keyless(&v, "the plant's insert, at the pre-claim gate");
+    let v = typed_link(port, &system, SYSTEM_DOC1, &[&format!("{SYSTEM_DOC1}.0.1.1")], &[SYSTEM_ACCOUNT], T_ENROLL);
+    keyless(&v, "the plant's genesis link, at the precheck's head");
+    assert_eq!(head_position(port), before, "nothing landed");
+
+    // No residue: the board claims normally.
+    claim_board(port);
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let entries = [Enrollment::new(public_key_of(&distinct_key(71)), false, None).expect("no label")];
+    let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
+    let record = signed_atom(port, &signed, CLAIMANT_DOC1, T_ENROLL, &[SYSTEM_ACCOUNT], &json_atom(&encode_enroll(&entries)));
+    let landed = land_claimant_record(port, &signed, ordinal, &record, T_ENROLL);
+    let v = typed_link(port, &signed, CLAIMANT_DOC1, &[&landed], &[SYSTEM_ACCOUNT], T_ENROLL);
+    keyless(&v, "an enrollment naming the system account as its subject, on the claimed board");
+    let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{SYSTEM_ACCOUNT}"}}"#));
+    assert_eq!(v["enrolled"].as_array().map(Vec::len), Some(0), "the system account holds no key: {v}");
+    sd.shutdown();
+}
+
+/// THE WRONG-ONCE CORPUS AT THE RECORD GRADE (SO-I1 — EVERY AXIS BOUND;
+/// SO-I6; AUTH-2.96's form; round 7's `owed-test-instruments-without-lane`):
+/// over ONE valid signed enrollment, one vector per frame member — `board`'s
+/// position, `board`'s chain, `account`, `doc`, `op` — and per `record` body
+/// row — the type, `to`, `replaces` (named where the kind leaves it EMPTY),
+/// the lineage (the same), the sig-less record's bytes — altered ONCE in the
+/// bytes the `sig` is made over, the deposit sent as the valid one is:
+/// every one is refused `attestation_invalid:signature`, PERMANENT; plus the
+/// `alg` tag swapped — the tag-1 key signing over a frame naming tag 3's
+/// token — which the trial under the key's own row fails. The control, the
+/// frame composed as the daemon composes it, commits. Each refused vector
+/// leaves its atom an orphan in doc 1, as a refused link does.
+#[test]
+fn altering_any_one_member_of_a_signed_record_frame_fails_the_record_grade() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let signer = hybrid_signer(&device_key());
+    let address = |s: &str| -> Address {
+        let comps: Vec<Nat> = s.split('.').map(|c| Nat::from(c.parse::<u64>().expect("a component"))).collect();
+        skep_address::validate(Tumbler::new(comps).expect("a tumbler")).expect("an address")
+    };
+    let board = board_term(port).expect("H.1");
+    let (account, doc) = (address(CLAIMANT_ACCOUNT), address(CLAIMANT_DOC1));
+    let (ty, subject) = (address(T_ENROLL), [address(CLAIMANT_ACCOUNT)]);
+    let entries = [Enrollment::new(public_key_of(&distinct_key(72)), false, Some("right".into())).expect("a label")];
+    let canonical = canonical_record(&entries, None);
+    let other = address("1.0.1.0.1.0.2.9");
+    let rows = |ty: &Address, to: &[Address], replaces: Option<&Address>, lineage: Option<&Address>, canonical: &[u8]| -> Vec<u8> {
+        entry_body_record(RecordRows { ty, to, replaces, lineage_fork_point: lineage, sigless_canonical_record: canonical })
+            .as_bytes()
+            .to_vec()
+    };
+    let right_body = rows(&ty, &subject, None, None, canonical.as_bytes());
+    let frame = |alg: &str, board: BoardTerm, account: &Address, doc: &Address, body: &[u8]| -> Vec<u8> {
+        let mut board_row = board.log_position.to_be_bytes().to_vec();
+        board_row.extend_from_slice(&board.chain);
+        framed(
+            ENTRY_TAG,
+            &[alg.as_bytes(), &board_row, account.to_string().as_bytes(), doc.to_string().as_bytes(), b"record", body],
+        )
+    };
+    let right = frame(ALG_MLDSA65_ED25519, board, &account, &doc, &right_body);
+    assert_eq!(
+        right,
+        record_frame_for(port, ALG_MLDSA65_ED25519, CLAIMANT_DOC1, T_ENROLL, &[CLAIMANT_ACCOUNT], canonical.as_bytes()).expect("composable"),
+        "the hand-framed control is the signer's own frame"
+    );
+    let mut moved_chain = board;
+    moved_chain.chain[0] ^= 0x01;
+    let another_label = canonical_record(
+        &[Enrollment::new(public_key_of(&distinct_key(72)), false, Some("wrong".into())).expect("a label")],
+        None,
+    );
+    let vectors: Vec<(&str, Vec<u8>)> = vec![
+        ("board's position", frame(ALG_MLDSA65_ED25519, BoardTerm { log_position: board.log_position + 1, ..board }, &account, &doc, &right_body)),
+        ("board's chain", frame(ALG_MLDSA65_ED25519, moved_chain, &account, &doc, &right_body)),
+        ("account", frame(ALG_MLDSA65_ED25519, board, &address("1.0.2"), &doc, &right_body)),
+        ("doc", frame(ALG_MLDSA65_ED25519, board, &account, &address("1.0.1.0.2"), &right_body)),
+        ("op", {
+            let mut board_row = board.log_position.to_be_bytes().to_vec();
+            board_row.extend_from_slice(&board.chain);
+            framed(ENTRY_TAG, &[ALG_MLDSA65_ED25519.as_bytes(), &board_row, CLAIMANT_ACCOUNT.as_bytes(), CLAIMANT_DOC1.as_bytes(), b"make_link", &right_body])
+        }),
+        ("row 1, the type", frame(ALG_MLDSA65_ED25519, board, &account, &doc, &rows(&address(T_RETIRE), &subject, None, None, canonical.as_bytes()))),
+        ("row 2, to", frame(ALG_MLDSA65_ED25519, board, &account, &doc, &rows(&ty, &[address("1.0.2")], None, None, canonical.as_bytes()))),
+        ("row 3, replaces named", frame(ALG_MLDSA65_ED25519, board, &account, &doc, &rows(&ty, &subject, Some(&other), None, canonical.as_bytes()))),
+        ("row 4, the lineage named", frame(ALG_MLDSA65_ED25519, board, &account, &doc, &rows(&ty, &subject, None, Some(&other), canonical.as_bytes()))),
+        ("row 5, the sig-less bytes", frame(ALG_MLDSA65_ED25519, board, &account, &doc, &rows(&ty, &subject, None, None, another_label.as_bytes()))),
+        ("the alg tag swapped", frame(ALG_FNDSA512_PREVIEW_ED25519, board, &account, &doc, &right_body)),
+    ];
+    assert_eq!(vectors.len(), 11, "five frame members, five body rows, the tag");
+    // The atom landed AS SIGNED HERE — never through the suite's re-signing
+    // helper — exempt at its insert (a record carrying a `sig`, into doc 1).
+    let land = |text: &str| -> String {
+        let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
+        let v = op_as_written(
+            port,
+            Some(&signed),
+            &format!(
+                r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
+                json_atom(text)
+            ),
+        );
+        acked_addr(&v)
+    };
+    for (member, wrong) in &vectors {
+        assert_ne!(wrong, &right, "{member}: the vector moves the bytes");
+        let atom = land(&canonical_record(&entries, Some(&hex(&signer.sign(wrong)))));
+        let v = deposit(port, &signed, &atom, T_ENROLL);
+        assert_eq!(rejected_detail(&v), "credential_refused:attestation_invalid:signature", "{member}: {v}");
+        assert_eq!(v["disposition"].as_str(), Some("permanent"), "{member}: {v}");
+    }
+    // The control: the right frame, signed, commits.
+    let atom = land(&canonical_record(&entries, Some(&hex(&signer.sign(&right)))));
+    expect_resp(&deposit(port, &signed, &atom, T_ENROLL), "ack_addr");
     sd.shutdown();
 }
 

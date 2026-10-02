@@ -512,8 +512,11 @@ fn f_sidecar_mutilation_never_touches_the_world() {
         let d = judge_world_intact(&case, "F torn sidecar tail");
         let entries = changes_entries(&d);
         let (last_at, last) = entries.last().expect("entries");
+        // Bare: the testimony — `docs`, `key`, `time` — null, never invented;
+        // the op and its terms the JOURNAL's where it names them (round 7's
+        // as7-F3), which is no invention.
         assert!(
-            last["op"].is_null() && last["time"].is_null() && last["docs"].is_null(),
+            last["key"].is_null() && last["time"].is_null() && last["docs"].is_null(),
             "torn tail: the lost entry {last_at} must answer bare/null, never invented: {last}"
         );
         let (first_at, first) = entries.first().expect("entries");
@@ -534,7 +537,10 @@ fn f_sidecar_mutilation_never_touches_the_world() {
         let d = judge_world_intact(&case, "F sidecar halved");
         let entries = changes_entries(&d);
         let (last_at, last) = entries.last().expect("entries");
-        assert!(last["op"].is_null(), "halved: the tail region answers bare (entry {last_at}): {last}");
+        assert!(
+            last["key"].is_null() && last["time"].is_null(),
+            "halved: the tail region answers bare (entry {last_at}): {last}"
+        );
     }
 
     // Whole file garbage: everything bare, head_time null.
@@ -545,7 +551,7 @@ fn f_sidecar_mutilation_never_touches_the_world() {
         let d = judge_world_intact(&case, "F sidecar garbage");
         for (at, e) in changes_entries(&d) {
             assert!(
-                e["op"].is_null() && e["time"].is_null() && e["docs"].is_null(),
+                e["key"].is_null() && e["time"].is_null() && e["docs"].is_null(),
                 "garbage: entry {at} must be bare, never invented: {e}"
             );
         }
@@ -563,7 +569,10 @@ fn f_sidecar_mutilation_never_touches_the_world() {
         fs::remove_file(sidecar(&case)).expect("delete sidecar");
         let d = judge_world_intact(&case, "F sidecar deleted");
         for (at, e) in changes_entries(&d) {
-            assert!(e["op"].is_null(), "deleted: entry {at} must be bare: {e}");
+            assert!(
+                e["key"].is_null() && e["time"].is_null() && e["docs"].is_null(),
+                "deleted: entry {at} must be bare: {e}"
+            );
         }
     }
 

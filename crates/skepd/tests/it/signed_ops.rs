@@ -38,7 +38,7 @@ use skep_identity::{
     canonical_record, encode_enroll, encode_retire, entry_body_insert, entry_body_make_link,
     entry_body_make_link_replacing, entry_body_publish, entry_body_record, entry_frame,
     parse_record_value, BoardTerm, Enrollment, EntrySlot, Fingerprint, LinkSlots, PublicKey,
-    RecordRows, RecordValue, ShotSegmentPiece, SigAlgRow, ALG_FNDSA512_PREVIEW_ED25519,
+    RecordRows, RecordValue, ShotBase, ShotSegmentPiece, SigAlgRow, ALG_FNDSA512_PREVIEW_ED25519,
     ALG_MLDSA65_ED25519,
 };
 use skep_signature::HybridSigner;
@@ -485,13 +485,16 @@ fn a_tag_3_key_attests_a_write_as_a_tag_1_key_does() {
 
 /// THE THREE OPS END TO END: `make_link` (a grant) and `publish` (a shot)
 /// commit attested, their slots holding the attached blobs and no other
-/// commit's; `insert` — whose only published-document form in this build is
-/// a declared deposit under a credential kind — is EXEMPT (the record's own
-/// `sig` is its carrier, D26), commits with its slot empty, and an
-/// UNDECLARED insert into the published home passes the check with a valid
-/// attest and meets the store's `published_target`, which is the order the
-/// design states: the check before the transaction, the store's gates
-/// inside it.
+/// commit's; `insert` — a DECLARED deposit under a credential kind whose
+/// atom is NO record of that kind, prose under `T_enroll` — takes the check
+/// like any insert since round 7 (as7-E1 ARM (a), s2's fact's third case;
+/// SO-I4): unattested it answers `attestation_required`, attested it commits
+/// SIGNED with its slot filled (the one exempt insert is a signed record
+/// into a doc 1, `the_record_deposit_exemption_reaches_a_signed_record_in_a_doc_1_alone`);
+/// and an UNDECLARED insert into the published home passes the check with
+/// a valid attest and meets the store's `published_target`, which is the
+/// order the design states: the check before the transaction, the store's
+/// gates inside it.
 #[test]
 fn the_three_ops_commit_attested_where_the_check_demands_it() {
     let dir = tempdir().unwrap();
@@ -522,22 +525,150 @@ fn the_three_ops_commit_attested_where_the_check_demands_it() {
     let v = op_as_written(port, Some(&signed), &frame);
     assert_eq!(verdict(&v), "credential_refused:attestation_required");
 
-    // insert: the declared deposit is exempt — no attest demanded, the slot
-    // empty whether or not one is attached.
+    // insert: prose declared under a record kind is NO record of that kind,
+    // so the narrowed exemption does not reach it (as7-E1 (a)) — unattested,
+    // the check's (1); attested, it commits SIGNED, its slot filled.
     let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
     let v = op_as_written(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "r", true));
-    let dep_at = acked_at(&v);
-    assert_eq!(sd.daemon().attestation_at(Seq(dep_at)).unwrap(), None, "exempt: the record's sig is its carrier");
-    let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
+    assert_eq!(verdict(&v), "credential_refused:attestation_required", "prose under a record kind, unattested: {v}");
     let v = op(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "s", true));
     let dep_at = acked_at(&v);
-    assert_eq!(sd.daemon().attestation_at(Seq(dep_at)).unwrap(), None, "attached, dropped: exempt");
+    assert!(
+        sd.daemon().attestation_at(Seq(dep_at)).unwrap().is_some(),
+        "prose under a record kind, attested: committed SIGNED, the slot filled"
+    );
     // An UNDECLARED insert into the published home: the check demands and
     // verifies, then the store refuses — the check's order.
     let v = op_as_written(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "t", false));
     assert_eq!(verdict(&v), "credential_refused:attestation_required");
     let v = op(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "t", false));
     assert_eq!(verdict(&v), "published_target", "the check passed; the store's own refusal");
+}
+
+/// THE EXEMPTION NARROWED (SO-I4; SO-I7 — round 7's as7-E1 ARM (a) with
+/// bu7-E1 ARM (a), owner 2026-10-01): the one `insert` the check demands no
+/// `attest` of is a record of its declared kind, carrying its `sig`, into a
+/// doc 1 — lane D's path, unchanged. Beside it, three outcomes: (a) prose
+/// declared `T_enroll` into a published document that is no doc 1 takes the
+/// check — unattested, `attestation_required`, nothing landed; attested, it
+/// commits with its slot filled; (b) a record of the kind carrying NO `sig`
+/// into doc 1 is refused at its `insert`, `record_sig_required`, PERMANENT,
+/// the journal's position unmoved and no orphan minted; (c) a record WITH
+/// its `sig` into the published non-doc-1 document, unattested, answers
+/// `attestation_required` — no credential link can name it there, so the
+/// exemption does not reach it. The record deposit's own atom — the signed
+/// record into doc 1 — lands exempt, its slot empty, as every hire in the
+/// suite does.
+#[test]
+fn the_record_deposit_exemption_reaches_a_signed_record_in_a_doc_1_alone() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_owner_session(port);
+    let edition = edition_with(port, &signed, "abc");
+    let permanent = |v: &Value| v["disposition"].as_str() == Some("permanent");
+    let declared = |doc: &str, ordinal: u64, atom: &str| {
+        format!(
+            r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":"{T_ENROLL}"}}"#
+        )
+    };
+    let entries = [Enrollment::new(public_key_of(&distinct_key(71)), false, None).expect("no label")];
+
+    // (a) Prose under the kind, into the edition: the check, not the exemption.
+    let ordinal = next_content_ordinal(port, Some(&signed), &edition);
+    let before = head_position(port);
+    let v = op_as_written(port, Some(&signed), &insert_frame(&edition, ordinal, "p", true));
+    assert_eq!(verdict(&v), "credential_refused:attestation_required", "{v}");
+    assert_eq!(head_position(port), before, "nothing landed");
+    let v = op(port, Some(&signed), &insert_frame(&edition, ordinal, "p", true));
+    assert!(sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().is_some(), "attested, committed SIGNED: {v}");
+
+    // (b) A record of the kind with NO `sig` into doc 1: refused at the
+    // insert, permanent, the journal unmoved.
+    let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
+    let sig_less = json_atom(&encode_enroll(&entries));
+    let before = head_position(port);
+    for attested in [false, true] {
+        let frame = declared(CLAIMANT_DOC1, ordinal, &sig_less);
+        let v = if attested { op(port, Some(&signed), &frame) } else { op_as_written(port, Some(&signed), &frame) };
+        assert_eq!(verdict(&v), "credential_refused:record_sig_required", "attested={attested}: {v}");
+        assert!(permanent(&v), "PERMANENT: the same bytes are never admitted: {v}");
+    }
+    assert_eq!(head_position(port), before, "no orphan: the journal's position is unmoved");
+
+    // (c) A record WITH its `sig` into the edition — no doc 1 — unattested:
+    // the check's (1); with a valid attest it commits SIGNED.
+    let ordinal = next_content_ordinal(port, Some(&signed), &edition);
+    let carrying = signed_atom(port, &signed, &edition, T_ENROLL, &[CLAIMANT_ACCOUNT], &json_atom(&encode_enroll(&entries)));
+    assert_ne!(carrying, json_atom(&encode_enroll(&entries)), "the fixture signed the record");
+    let v = op_as_written(port, Some(&signed), &declared(&edition, ordinal, &carrying));
+    assert_eq!(verdict(&v), "credential_refused:attestation_required", "a signed record outside a doc 1, unattested: {v}");
+    let v = op(port, Some(&signed), &declared(&edition, ordinal, &carrying));
+    assert!(sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().is_some(), "attested: committed SIGNED: {v}");
+
+    // (d) A record WITH its `sig` into doc 1: exempt — lane D's path.
+    let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
+    let carrying = signed_atom(port, &signed, CLAIMANT_DOC1, T_ENROLL, &[CLAIMANT_ACCOUNT], &json_atom(&encode_enroll(&entries)));
+    let v = op_as_written(port, Some(&signed), &declared(CLAIMANT_DOC1, ordinal, &carrying));
+    assert_eq!(v["resp"].as_str(), Some("ack_addr"), "exempt, no attest demanded: {v}");
+    assert_eq!(sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap(), None, "the record's sig is its carrier");
+}
+
+/// THE SIGNATURE BINDS THE BASE (SO-I1 (c); SO-I3 — V's change-the-base
+/// half, round 7's bu7-E2 ARM (a), owner 2026-10-01; the BLOCKER
+/// `publish-body-binds-no-base`): a signed shot's `publish` body carries the
+/// base MEMBER's address beside the extent, so the same signed shot
+/// re-submitted naming the trunk's CURRENT head as its base — D.2's request,
+/// kept byte for byte, its `base` moved from D.1 to D.3 — spells another
+/// preimage and is refused `attestation_invalid:signature`, PERMANENT;
+/// nothing is minted, D.3 stays the head. Before the base joined the group
+/// such a re-submission passed every check and minted D.4 with the author's
+/// old runs as the document's current text. The keep-the-base replay beside
+/// it (`a_replayed_shot_mints_its_bases_daughter_and_the_current_version_stands`)
+/// still mints D.1's daughter.
+#[test]
+fn a_signed_shot_re_submitted_over_another_base_is_refused_signature_and_mints_nothing() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_owner_session(port);
+    let edition = edition_with(port, &signed, "abc");
+    let runs = shot_runs(port, Some(&signed), &edition, 1, 3);
+    let d1 = shot(port, &signed, &edition, Some((&edition, 3)), None, &runs);
+    let draft = draft_with(port, &signed, "xy");
+    let mut runs2 = shot_runs(port, Some(&signed), &d1, 1, 3);
+    runs2.extend(shot_runs(port, Some(&signed), &draft, 1, 2));
+    let d2_request =
+        attach_attest(port, &signed, &publish_frame(&edition, Some((&d1, 3)), Some(&draft), &runs2));
+    let d2 = acked_addr(&op_as_written(port, Some(&signed), &d2_request));
+    assert_eq!(d2, format!("{edition}.2"));
+    let runs3 = shot_runs(port, Some(&signed), &d2, 1, 5);
+    let d3 = shot(port, &signed, &edition, Some((&d2, 5)), None, &runs3);
+    assert_eq!(d3, format!("{edition}.3"));
+    let head_image = image_runs(port, None, &edition, 1, 5);
+    let before = head_position(port);
+
+    // THE CHANGED BASE: the same signed request, its base the current head.
+    let mut moved: Value = serde_json::from_str(&d2_request).unwrap();
+    moved["base"] = Value::String(d3.clone());
+    moved["base_extent"] = Value::String("5".into());
+    let v = op_as_written(port, Some(&signed), &moved.to_string());
+    assert_eq!(
+        refusal(&v),
+        ("credential_refused:attestation_invalid:signature".to_string(), "permanent".to_string()),
+        "the signature was made over the base it named, and verifies over no other: {v}"
+    );
+    assert_eq!(head_position(port), before, "nothing minted");
+    assert_eq!(image_runs(port, None, &edition, 1, 5), head_image, "the current version is still D.3");
+    let v = op(port, None, &format!(r#"{{"op":"retrieve_doc_v_span_set","doc":"{edition}.4"}}"#));
+    assert_eq!(expect_resp(&v, "rejected")["code"].as_str(), Some("doc_not_registered"), "no D.4: {v}");
+    // The same signed shot over the base it named — the extent moved alone —
+    // is another preimage too.
+    let mut narrowed: Value = serde_json::from_str(&d2_request).unwrap();
+    narrowed["base_extent"] = Value::String("2".into());
+    let v = op_as_written(port, Some(&signed), &narrowed.to_string());
+    assert_eq!(verdict(&v), "credential_refused:attestation_invalid:signature", "{v}");
+    assert_eq!(head_position(port), before);
 }
 
 /// THE ENTRY FRAME NAMES THE TRUNK (wire.md: for `insert`, "`doc` the
@@ -747,9 +878,12 @@ fn a_carried_run_its_principal_never_could_read_is_re_shot_by_address_unread() {
 /// it — a run onto D's sixth address, which F does not carry — the signed
 /// shot passes through UNATTESTED to the store's own `withheld`, naming D.
 /// Unattested, either shot meets (1) first, `attestation_required`, ahead of
-/// any composition (the design record §4.5's ratified order). Every other
-/// shot in the suite names no staging draft, or its author's own, so this
-/// cell alone reaches the check's own refusal.
+/// any composition (the design record §4.5's ratified order) — m1's SECOND
+/// ORDER VECTOR (SO-I7 (f), SO-I9 (a); round 7's `m1-reorder-has-no-lane`,
+/// the code landed at `37f611a`): an unsigned `publish` copying an
+/// unreadable origin answers `attestation_required`, never `withheld`.
+/// Every other shot in the suite names no staging draft, or its author's
+/// own, so this cell alone reaches the check's own refusal.
 #[test]
 fn a_staging_draft_its_principal_may_not_read_is_refused_unread_and_never_copied_in() {
     let dir = tempdir().unwrap();
@@ -798,22 +932,30 @@ fn a_staging_draft_its_principal_may_not_read_is_refused_unread_and_never_copied
 /// `attestation_invalid:frame_too_large`, PERMANENT, before the body is built
 /// past the budget — whatever its signature was made over, since a body never
 /// built whole verifies nothing; unattested, (1) answers first and no value
-/// is walked. At the budget exactly the shot is admitted and commits
-/// attested. A run names one stored value as often as the wire's run list
-/// admits, so no cap on the request bounds the body the check reads: four
-/// runs over one two-megabyte atom fill it here.
+/// is walked — m1's THIRD ORDER VECTOR (SO-I7 (f), SO-I9 (a); round 7's
+/// `m1-reorder-has-no-lane`, the code landed at `37f611a`): an unsigned
+/// `publish` whose frame would pass `MAX_SHOT_BODY_BYTES` answers
+/// `attestation_required`, never `frame_too_large`. At the budget exactly
+/// the shot is admitted and commits attested. A run names one stored value
+/// as often as the wire's run list admits, so no cap on the request bounds
+/// the body the check reads: four runs over one two-megabyte atom fill it
+/// here.
 #[test]
 fn a_shot_body_is_refused_before_it_is_built_past_its_budget() {
     let budget = skepd::body_cap("/op");
     // The body is `be64(placed)`, then — four values copied in, one stretch
     // — the stretch's class byte and `be64(count)`, then a be32 length and
-    // the bytes per value, then the base-extent group of twelve bytes (the
-    // shot names a base): three atoms of `width` bytes and one of `last`
-    // fill `8 + 9 + 3 × (4 + width) + (4 + last) + 12` — the budget exactly.
-    let fixed = 8 + 9 + 4 * 4 + 12;
+    // the bytes per value, then the base group of thirty-four bytes (the
+    // shot names `1.0.1.0.1` as its base — bu7-E2: the group's length, the
+    // member's slot row of one element over the nine-byte address, and the
+    // extent): three atoms of `width` bytes and one of `last` fill
+    // `8 + 9 + 3 × (4 + width) + (4 + last) + 34` — the budget exactly.
+    let base_group = 4 + 1 + 8 + 4 + CLAIMANT_DOC1.len() + 8;
+    assert_eq!(base_group, 34);
+    let fixed = 8 + 9 + 4 * 4 + base_group;
     let width = (budget - fixed) / 4;
     let last = budget - fixed - 3 * width;
-    assert_eq!(8 + 9 + 3 * (4 + width) + (4 + last) + 12, budget, "four atoms fill the body to the byte");
+    assert_eq!(8 + 9 + 3 * (4 + width) + (4 + last) + base_group, budget, "four atoms fill the body to the byte");
     let (xs, ys, zs) = ("x".repeat(width), "y".repeat(last + 1), "z".repeat(last));
     let dir = tempdir().unwrap();
     let sd = spawn(dir.path());
@@ -1259,8 +1401,9 @@ impl StoredRecord {
 /// end over the wire, on a claimed board. The claimant ENROLS a second key
 /// SIGNED by its device key (honored: the table gains it, both positions'
 /// marker slots empty, D26), RETIRES it SIGNED (honored); an UNSIGNED
-/// enrolment is refused `attestation_required` (REORDER: the same record,
-/// signed), one signed by a key NOT in the opening set
+/// enrolment is refused at its INSERT, `record_sig_required` (PERMANENT —
+/// round 7's bu7-E1: nothing lands, no orphan), one signed by a key NOT in
+/// the opening set
 /// `attestation_invalid:signature`, one signed by a key of a ROW the set
 /// holds none of `not_enrolled_at_position`, one whose `sig` is no blob's hex
 /// `malformed` — each PERMANENT, each committing no link; and THE GRADE: an
@@ -1320,17 +1463,25 @@ fn above_the_claim_every_honored_credential_record_carries_a_sig_the_opening_set
     assert!(fingerprints(port, CLAIMANT_ACCOUNT, "retired", None).contains(&fp(&k2)));
     assert_table_is_filtered(&expected, &honored);
 
-    // 3 — UNSIGNED: the atom lands (its insert takes no check), the link is
-    // refused, REORDER, and commits nothing.
+    // 3 — UNSIGNED: refused at the atom's INSERT (bu7-E1 — the sig-less
+    // record-kind atom lands nowhere), PERMANENT, committing nothing.
     let k3 = distinct_key(22);
     let head = head_position(port);
-    let (_, _, v) = deposit_record(port, &device, CLAIMANT_DOC1, CLAIMANT_ACCOUNT, T_ENROLL, &enroll_atom(&[&k3]));
+    let ordinal = next_content_ordinal(port, Some(&device), CLAIMANT_DOC1);
+    let v = op(
+        port,
+        Some(&device),
+        &format!(
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
+            enroll_atom(&[&k3])
+        ),
+    );
     assert_eq!(
         refusal(&v),
-        ("credential_refused:attestation_required".to_string(), "reorder".to_string()),
-        "an unsigned enrolment above the claim: {v}"
+        ("credential_refused:record_sig_required".to_string(), "permanent".to_string()),
+        "an unsigned enrolment above the claim, at its insert: {v}"
     );
-    assert!(head_position(port) < head + 4, "the atom alone committed, the link did not");
+    assert_eq!(head_position(port), head, "nothing committed: no atom, no orphan");
     assert_table_is_filtered(&expected, &honored);
 
     // 4 — signed by a key NOT in the opening set: a stranger's tag-1 key.
@@ -1727,18 +1878,22 @@ fn a_replayed_shot_mints_its_bases_daughter_and_the_current_version_stands() {
     );
 }
 
-/// THE FRAME IS CHECKABLE LATER (l6-A4; D25's (c′); fam1-L1): a verifier
-/// holding the MEMBER and no request — a mirror, a reader beside the table
-/// — composes the shot's signed body byte for byte from what the board
-/// serves about the member: its terms off `doc_metadata` (`placed`,
+/// THE FRAME IS CHECKABLE LATER (l6-A4; D25's (c′); fam1-L1; the base
+/// member in the group since round 7, bu7-E2 — SO-I1 (c), SO-I6 (e)): a
+/// verifier holding the MEMBER and no request — a mirror, a reader beside
+/// the table — composes the shot's signed body byte for byte from what the
+/// board serves about the member: its terms off `doc_metadata` (`placed`,
 /// `base_extent`), its runs off the member's own arrangement over the first
 /// `placed` positions (the image, maximally merged), each classed by its
 /// origin — the edition's own trunk BY VALUE, the values read at the member;
-/// any other document BY ADDRESS — and `base` off the member's address. Over
-/// a shot holding all three run classes, with two I-adjacent windows the
-/// placement merged into one: the frame composed at the request (the test
-/// signer's, which the daemon's check verified) and the frame composed off
-/// the member are one byte string, and the marker's attestation verifies
+/// any other document BY ADDRESS — and the BASE MEMBER DERIVED from the
+/// member's own address and composed INTO the base group: `D.1` was minted
+/// against the memberless document `D`. Over a shot holding all three run
+/// classes, with two I-adjacent windows the placement merged into one: the
+/// frame composed at the request (the test signer's, which the daemon's
+/// check verified) and the frame composed off the member are one byte
+/// string — the byte-equality vector, the daemon's composed body equal to
+/// the signer's over one request — and the marker's attestation verifies
 /// over it under the author's enrolled key.
 #[test]
 fn a_publish_frame_composed_from_the_member_is_the_frame_composed_from_the_request() {
@@ -1783,7 +1938,12 @@ fn a_publish_frame_composed_from_the_member_is_the_frame_composed_from_the_reque
     }
     assert_eq!(segments.len(), 6, "three values, one merged window, two values");
     assert!(matches!(&segments[3], SignerSegment::Window(w, 2) if *w == addr(&format!("{other}.0.1.1"))));
-    let body = entry_body_publish(segments.iter().map(SignerSegment::as_shot), base_extent);
+    // THE DERIVATION: the member `D.1` was minted against the memberless
+    // document `D` — the base member is the trunk — at the extent
+    // `doc_metadata` serves; composed INTO the preimage (bu7-E2 ARM (a)).
+    let base_member = addr(&trunk);
+    let base = base_extent.map(|extent| ShotBase { member: &base_member, extent });
+    let body = entry_body_publish(segments.iter().map(SignerSegment::as_shot), base);
     let board = board_term(port).expect("H.1");
     let account = addr(&account_of(port, &signed, CLAIMANT_PRINCIPAL).expect("the account"));
     let frame_from_member = entry_frame(ALG_MLDSA65_ED25519, board, &account, &addr(&trunk), &body);
@@ -1860,8 +2020,9 @@ fn addr(s: &str) -> skep_address::Address {
 /// The six fixed instances every golden signs: the frames of an `insert`
 /// (undeclared, two values), a `make_link` (three address-form slots), a
 /// `publish` (three values copied in, one window of two positions onto
-/// another document, the base taken at three — the address form, l6-A4)
-/// and three `record`s (the frame merge, fm-I; the record grade, 2a): an
+/// another document, the base `1.0.1.0.1.1` taken at three — the address
+/// form, l6-A4; the base member in the group since round 7, bu7-E2) and
+/// three `record`s (the frame merge, fm-I; the record grade, 2a): an
 /// enrol's kind — its type slot, one subject, neither optional row named, a
 /// short canonical body — a retire's kind beside it over the same subject,
 /// and the claim's — its type slot, the EMPTY target slot, no record at all
@@ -1879,6 +2040,7 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 6] {
         ty: EntrySlot::Addrs(&ty),
     });
     let window = addr("1.0.1.0.2.0.1.1");
+    let base_member = addr("1.0.1.0.1.1");
     let publish = entry_body_publish(
         [
             ShotSegmentPiece::Value(b"x"),
@@ -1889,7 +2051,7 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 6] {
                 width: std::num::NonZeroU64::new(2).expect("2 is not zero"),
             },
         ],
-        Some(3),
+        Some(ShotBase { member: &base_member, extent: 3 }),
     );
     let subject = [addr("1.0.2")];
     let enrol = entry_body_record(RecordRows {
@@ -1997,7 +2159,9 @@ fn the_entry_frames_bytes_per_op_are_pinned() {
     // publish: op, then body = be64(5) — five positions placed — ‖ the
     // value stretch: its class byte 0x02, be64(3), x, y, z ‖ the window:
     // its class byte 0x01, the start's spelling delimited, be64(2) ‖ the
-    // base-extent group: be32(8) ‖ be64(3).
+    // base group (bu7-E2): be32(32) ‖ the base member as an address-form
+    // slot row of one element — 0x01, be64(1), the eleven bytes of
+    // `1.0.1.0.1.1` delimited — ‖ be64(3), the extent.
     let mut want = prefix.clone();
     want.extend(member(b"publish"));
     want.extend(member(
@@ -2011,7 +2175,9 @@ fn the_entry_frames_bytes_per_op_are_pinned() {
             &[0x01][..],
             &member(b"1.0.1.0.2.0.1.1")[..],
             &[0, 0, 0, 0, 0, 0, 0, 2][..],
-            &[0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 3][..],
+            &[0, 0, 0, 32][..],
+            &slot(&[b"1.0.1.0.1.1"])[..],
+            &[0, 0, 0, 0, 0, 0, 0, 3][..],
         ]
         .concat(),
     ));

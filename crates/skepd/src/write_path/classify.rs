@@ -2,9 +2,12 @@
 //! of an entry's documents are DRAFTS and whose (the head exception set's
 //! answer, PUB-7.5), and, for a position whose testimony was lost, which
 //! documents the JOURNAL shows the commit touched (PUB-6.45's bare-entry
-//! rule). Both answers are immutable facts about a committed position —
-//! publication is fixed at mint (PUB-1.9), the owner with it, and the
-//! journal does not change — so they are computed once (at commit, or at
+//! rule) and WHICH OF THE OP'S OWN TERMS it can name — a `delegate`'s pair,
+//! a `make_link`'s link, a `publish`'s count and extent, the op itself where
+//! the journal's facts name one op alone ([`derived_journal`]; as7-F3,
+//! SO-I5 (e)). All three answers are immutable facts about a committed
+//! position — publication is fixed at mint (PUB-1.9), the owner with it, and
+//! the journal does not change — so they are computed once (at commit, or at
 //! the open that reconstructs the position) and never re-derived at serve;
 //! what the serve path asks per entry is the read predicate alone
 //! (`FeedClass::readable`, PUB-7.20).
@@ -15,7 +18,10 @@ use std::str::FromStr;
 use skep_address::{document_of, validate, Address, Nat, Tumbler};
 use skep_arrangement::{trunk_of, HasM5};
 use skep_engine::World;
-use skep_links::{HasLinks, ShippedType, View};
+use skep_links::{is_replaces_class, HasLinks, ShippedType, View};
+use skep_namespace::{system_account, system_node, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
+
+use super::sidecar::{JournalTerms, OpTerms};
 
 /// One document an entry names, as the feed classified it: the address the
 /// record named (a document, or a version member — the address written to,
@@ -128,6 +134,34 @@ pub(super) fn parse_dotted(s: &str) -> Option<Address> {
 /// draft the world holds. Paid once per bare boundary at the open that
 /// reconstructs it, never at serve.
 pub(super) fn derived_docs(before: &World, after: &World) -> Vec<Address> {
+    derived_docs_over(before, after, &new_links(before, after))
+}
+
+/// THE JOURNAL'S WHOLE ANSWER for one bare commit: its documents
+/// ([`derived_docs`]) and its terms ([`derived_terms_over`]), the links
+/// deposited enumerated ONCE for both — what the reconstruction walk asks
+/// per boundary.
+pub(super) fn derived_journal(before: &World, after: &World) -> (Vec<Address>, JournalTerms) {
+    let links = new_links(before, after);
+    (derived_docs_over(before, after, &links), derived_terms_over(before, after, &links))
+}
+
+/// The links `after` holds and `before` does not — the ones the commit
+/// deposited, in address order: the whole audit slice of each world, as
+/// witness 2 of [`derived_docs`] reads it.
+fn new_links(before: &World, after: &World) -> Vec<Address> {
+    let before_links = before.links().match_links(&[], View::Audit);
+    after
+        .links()
+        .match_links(&[], View::Audit)
+        .iter()
+        .filter(|link| !before_links.contains(link))
+        .cloned()
+        .collect()
+}
+
+/// [`derived_docs`] over `links` already enumerated.
+fn derived_docs_over(before: &World, after: &World, links: &[Address]) -> Vec<Address> {
     let mut docs: BTreeSet<Address> = BTreeSet::new();
     // 1. Drafts minted by this commit.
     for draft in after.drafts() {
@@ -137,12 +171,8 @@ pub(super) fn derived_docs(before: &World, after: &World) -> Vec<Address> {
     }
     // 2. Links deposited by this commit: each one's home, and a retraction's
     //    targets' homes.
-    let before_links = before.links().match_links(&[], View::Audit);
     let retraction = after.links().reserved_type(ShippedType::Retraction);
-    for link in after.links().match_links(&[], View::Audit).iter() {
-        if before_links.contains(link) {
-            continue;
-        }
+    for link in links {
         if let Some(home) = document_of(link) {
             docs.insert(home);
         }
@@ -174,6 +204,242 @@ pub(super) fn derived_docs(before: &World, after: &World) -> Vec<Address> {
         }
     }
     docs.into_iter().collect()
+}
+
+/// THE JOURNAL'S TERMS for one bare commit (as7-F3; SO-I5 (e): the feed is
+/// the mirror's whole input, so a bare `delegate` row that served its pair
+/// as `null` left a feed-only mirror's Π short of an account and ω composing
+/// the wrong `account`) — the op's own members as the recorded row would
+/// have carried them, read off the two worlds through the engine's public
+/// surface alone, and the op itself where the facts name one op and no
+/// other. One commit is one op, so the three witnesses are exclusive and are
+/// read in this order:
+///
+/// 1. A PRINCIPAL SEATED ([`seated_principal`]) — `delegate` alone seats
+///    one (`register_node` registers a node and seats nobody) — so the row
+///    is a `delegate`'s, with its pair: `new_prefix` the seat, `new_id` the
+///    principal, both as `effective_owner` answers them at `after`.
+/// 2. A VERSION MEMBER MINTED ([`minted_member`]) — with M5's placing record
+///    for it ([`skep_arrangement::M5State::shot_terms`], D25's (c′)) the row
+///    is a `publish`'s, with `placed` and `base_extent` exactly as
+///    `doc_metadata` serves them for that member; without one it is a
+///    `version`'s, which carries no term.
+/// 3. LINKS DEPOSITED — exactly one: a retraction-typed link is `nullify`'s
+///    (no op but `nullify` deposits the shipped `[R]` class), carrying no
+///    term; any other one link is the `link` the commit minted, the op
+///    unnamed — `make_link`, `emit` and `assert_sup` each deposit one and
+///    the world does not tell them apart, so a bare row serves `link` where
+///    an `emit`'s or an `assert_sup`'s recorded row carried none (r6-2a
+///    scoped the member to `make_link`; the journal names the link either
+///    way, and lost testimony is never made up for by omission). Exactly
+///    two, the second at the next link address and typed `replaces`: a
+///    replacing `make_link`'s pair (PUB-5.15 — the class's one writer), the
+///    row a `make_link`'s with `link` the record's own. Any other count — an
+///    `edit_link`'s successor and claim, nothing at all — answers no term.
+///
+/// What this cannot name, and says so by `None`: the op of an arrangement
+/// write into a published document, of a `create_new_document` or `fork`
+/// (one new document, three ops), of a plain `make_link` against an `emit`
+/// or `assert_sup`, of an `edit_link`; a `delegate` under a node that
+/// `register_node` admitted and that no enumeration from the bootstrap and
+/// system nodes reaches (the node registry has no public walk); a `publish`
+/// into a document under such a node, for the same reason. Every member a
+/// witness rules out is ABSENT on the row, as on the recorded one; every
+/// member no witness decides stays `null`.
+///
+/// COST, beside [`derived_docs`]'s: one walk of the board's principal list
+/// at `after` with a frontier read at `before` per account or node, and —
+/// where no principal was seated — one walk of every account's documents
+/// and their version chains with a `latest_version` read at both worlds per
+/// document and member. Paid once per bare boundary at the open that
+/// reconstructs it, never at serve. Reached through [`derived_journal`]
+/// alone, over the links it enumerated.
+fn derived_terms_over(before: &World, after: &World, links: &[Address]) -> JournalTerms {
+    if let Some((prefix, id)) = seated_principal(before, after) {
+        return JournalTerms {
+            op: Some("delegate".into()),
+            terms: Some(OpTerms::Delegate { new_prefix: prefix.to_string(), new_id: id.0 }),
+        };
+    }
+    if let Some(member) = minted_member(before, after) {
+        return match after.m5().shot_terms(&member) {
+            Some(t) if before.m5().shot_terms(&member).is_none() => JournalTerms {
+                op: Some("publish".into()),
+                terms: Some(OpTerms::Publish {
+                    placed: t.placed.to_string(),
+                    base_extent: t.base_extent.as_ref().map(ToString::to_string),
+                }),
+            },
+            _ => JournalTerms { op: Some("version".into()), terms: None },
+        };
+    }
+    let typed = |link: &Address, test: &dyn Fn(&skep_links::Endset) -> bool| {
+        after.links().readlink(link).is_some_and(|value| test(value.type_slot()))
+    };
+    match links {
+        [link] => {
+            let retraction = after.links().reserved_type(ShippedType::Retraction);
+            if typed(link, &|ty| ty == retraction) {
+                JournalTerms { op: Some("nullify".into()), terms: None }
+            } else {
+                JournalTerms { op: None, terms: Some(OpTerms::MakeLink { link: link.to_string() }) }
+            }
+        }
+        [record, replaces]
+            if is_next_address(record, replaces) && typed(replaces, &is_replaces_class) =>
+        {
+            JournalTerms {
+                op: Some("make_link".into()),
+                terms: Some(OpTerms::MakeLink { link: record.to_string() }),
+            }
+        }
+        _ => JournalTerms::default(),
+    }
+}
+
+/// Is `b` the address right after `a` — the same prefix, the last ordinal
+/// one more — the adjacency a replacing `make_link`'s pair is read by
+/// (PUB-5.15: the `replaces` link sits at the record's NEXT address).
+fn is_next_address(a: &Address, b: &Address) -> bool {
+    let (a, b) = (components(a), components(b));
+    let Some((a_last, a_prefix)) = a.split_last() else { return false };
+    let Some((b_last, b_prefix)) = b.split_last() else { return false };
+    a_prefix == b_prefix && a_last.clone() + Nat::from(1u32) == *b_last
+}
+
+/// An address's components, owned.
+fn components(a: &Address) -> Vec<Nat> {
+    a.tumbler().iter().cloned().collect()
+}
+
+/// The address `next` names with its last ordinal replaced by `k` — the
+/// `k`-th member of the frontier-encoded chain `next` is the next slot of
+/// (M3 §1: a chain's realized set is `{c₁..cₘ}`, a gap unrepresentable, so
+/// `next = …·(m+1)` names every member below it). `None` where the result is
+/// no address, which no chain M3 minted produces.
+fn chain_member(next: &Address, k: &Nat) -> Option<Address> {
+    let mut comps = components(next);
+    *comps.last_mut()? = k.clone();
+    validate(Tumbler::new(comps).ok()?).ok()
+}
+
+/// The ordinal of the chain's NEXT slot — `m + 1` for a chain of `m`
+/// members.
+fn next_ordinal(next: &Address) -> Nat {
+    components(next).last().cloned().unwrap_or_else(|| Nat::from(0u32))
+}
+
+/// Every member of the chain whose next slot is `next`, ascending.
+fn chain_members(next: &Address) -> impl Iterator<Item = Address> + '_ {
+    let bound = next_ordinal(next);
+    let mut k = Nat::from(1u32);
+    std::iter::from_fn(move || {
+        if k >= bound {
+            return None;
+        }
+        let member = chain_member(next, &k);
+        k += Nat::from(1u32);
+        member
+    })
+}
+
+/// THE PRINCIPAL THE COMMIT SEATED, if one: Π enumerated at `after` off
+/// M3's public surface — from the bootstrap node (principal 0's own seat)
+/// and the system node, every account chain's members by its frontier
+/// (`next_account_prefix`, the next delegable prefix under a node or an
+/// account, whose ordinal counts the chain), recursively through the
+/// sub-account chains — with each parent's frontier compared against
+/// `before`'s: the one parent whose frontier moved seated the chain's newest
+/// member, whose pair `effective_owner_pair` answers. `None` where no
+/// frontier moved under a parent the walk reaches.
+fn seated_principal(before: &World, after: &World) -> Option<(Address, PrincipalId)> {
+    let (b, a) = (before.m3(), after.m3());
+    let mut parents = walk_roots(after);
+    let mut i = 0;
+    while i < parents.len() {
+        let parent = parents[i].clone();
+        i += 1;
+        let Some(next) = a.next_account_prefix(&parent) else { continue };
+        let moved = b.next_account_prefix(&parent).as_ref() != Some(&next);
+        let mut newest = None;
+        for member in chain_members(&next) {
+            if a.is_registered_account(&member) {
+                parents.push(member.clone());
+            }
+            newest = Some(member);
+        }
+        if moved {
+            let seated = newest?;
+            let (prefix, id) = a.effective_owner_pair(&seated)?;
+            if *prefix == seated {
+                return Some((seated, id));
+            }
+        }
+    }
+    None
+}
+
+/// THE VERSION MEMBER THE COMMIT MINTED, if one: every account the
+/// principal walk reaches, its documents by their frontier-encoded chain
+/// (`A·0·k` while registered), each document's version chain and every
+/// member's own daughter chain compared between the worlds by
+/// `latest_version` — the one read of a chain's end M3 publishes. `None`
+/// where no chain the walk reaches grew.
+fn minted_member(before: &World, after: &World) -> Option<Address> {
+    let a = after.m3();
+    let mut parents = walk_roots(after);
+    // The system account's own documents — the head document `H` among them
+    // — whether or not its seat lies on a frontier the walk reaches.
+    let mut accounts: Vec<Address> = vec![system_account()];
+    let mut i = 0;
+    while i < parents.len() {
+        let parent = parents[i].clone();
+        i += 1;
+        let Some(next) = a.next_account_prefix(&parent) else { continue };
+        for member in chain_members(&next) {
+            if a.is_registered_account(&member) {
+                parents.push(member.clone());
+                accounts.push(member);
+            }
+        }
+    }
+    for account in accounts {
+        let Some(first) = skep_namespace::first_document_address(&account) else { continue };
+        let mut k = Nat::from(1u32);
+        // The account's documents, `A·0·1 ..`, while registered: the chain
+        // is frontier-encoded, so the first unregistered slot ends it.
+        while let Some(doc) = chain_member(&first, &k).filter(|doc| a.is_registered_document(doc)) {
+            if let Some(member) = minted_member_under(before, after, &doc) {
+                return Some(member);
+            }
+            k += Nat::from(1u32);
+        }
+    }
+    None
+}
+
+/// Where the principal walk starts: the bootstrap node (principal 0's own
+/// seat, `1`), the system node (`1.1`, PUB-6.65) and the system account
+/// (`1.1.0.1`) — the seats genesis writes, which no `delegate` row of the
+/// feed names.
+fn walk_roots(world: &World) -> Vec<Address> {
+    let mut roots: Vec<Address> = Vec::new();
+    roots.extend(world.m3().principal_prefix(BOOTSTRAP_PRINCIPAL).cloned());
+    roots.push(system_node());
+    roots.push(system_account());
+    roots
+}
+
+/// The newest member of `doc`'s version chain where `after`'s differs from
+/// `before`'s, else the same question of each member's daughter chain.
+fn minted_member_under(before: &World, after: &World, doc: &Address) -> Option<Address> {
+    let latest = after.m3().latest_version(doc)?;
+    if before.m3().latest_version(doc).as_ref() != Some(&latest) {
+        return Some(latest);
+    }
+    let next = chain_member(&latest, &(next_ordinal(&latest) + Nat::from(1u32)))?;
+    let found = chain_members(&next).find_map(|member| minted_member_under(before, after, &member));
+    found
 }
 
 #[cfg(test)]

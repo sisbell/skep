@@ -4,6 +4,7 @@
 //! question it asks M5's own admission of a shot to decide what a shot the
 //! composer could not read is owed ([`refused_at_or_before_the_source_gate`]).
 
+use skep_address::Address;
 use skep_arrangement::{shot_admission, Caller, Deposit};
 use skep_febe::Op;
 use skep_identity::{
@@ -13,7 +14,7 @@ use skep_identity::{
 use skep_kernel::Attestation;
 use skep_namespace::{system_account, HasM3, PrincipalId};
 
-use super::{addr_spans, record_deposit_kind, AttestFault, CredentialRefusal};
+use super::{addr_spans, homed_in_doc_one, record_deposit_kind, AttestFault, CredentialRefusal};
 use crate::auth::entry::{self, ComposeFault};
 use crate::auth::session::key_subject;
 use crate::write_path::board_term;
@@ -32,17 +33,37 @@ use crate::World;
 ///    publish-class op carries no `attest` (the codec refuses the member
 ///    there) and commits on its signed session as before — the widening
 ///    lane's, not this one's.
-/// 2. THE RECORD DEPOSIT EXEMPTION (§2.5's `insert` cell as re-cut at
-///    required signing; D26): a DECLARED deposit under a kind of THE
-///    RECORD-DEPOSIT SET ([`crate::auth::policy::record_deposit_kind`],
-///    BW-03) — the atom a credential record rides — carries its signature in
-///    the record's own `sig` member (the record grade, 2a), and (1) demands
-///    no `attest` for it. The deposit's OTHER half, the `make_link` naming
-///    the atom, never reaches this producer at all: `deposits_credential_link`
-///    routes it to the credential sequence, whose `precheck` is the record
-///    grade's door — its `record_grade_check` verifies the record's `sig`
-///    there, above the claim — which is how the check tells D26's case: BY
-///    ROUTE for the link, BY DECLARED TYPE for the atom.
+/// 2. THE RECORD DEPOSIT EXEMPTION, NARROWED (§2.5's `insert` cell as re-cut
+///    at required signing and again at round 7 — as7-E1 ARM (a) with bu7-E1
+///    ARM (a), owner 2026-10-01; D26; SO-I4): the one `insert` the check
+///    demands no `attest` of is the ATOM a credential record rides — an
+///    `insert` (i) DECLARED under a kind of THE RECORD-DEPOSIT SET
+///    ([`crate::auth::policy::record_deposit_kind`], BW-03), (ii) carrying
+///    ONE value that PARSES as a record of that kind ([`declared_record_atom`]
+///    — the one parse, one site, one reading), (iii) whose record carries its
+///    `sig` member, and (iv) into a DOC 1, the home a credential link can
+///    name (AUTH-2.127's pin — the fold's `not_doc_one` test, read here
+///    through M3's own slot, `crate::auth::policy`'s `homed_in_doc_one`).
+///    Such an atom's signature is the record's own `sig`, verified one
+///    position later at its `make_link` under the set that opens its home
+///    (the record grade, 2a). The deposit's OTHER half, the `make_link`
+///    naming the atom, never reaches this producer at all:
+///    `deposits_credential_link` routes it to the credential sequence, whose
+///    `precheck` is the record grade's door — which is how the check tells
+///    D26's case: BY ROUTE for the link, BY THE BYTES for the atom. Three
+///    outcomes beside the exemption, each its own path: (a) the atom is NO
+///    record of the declared kind — prose, a record past
+///    [`skep_identity::MAX_RECORD_BYTES`], a record of another kind — and
+///    the entry check runs as for any `insert`: unsigned it answers
+///    `attestation_required`, attested it commits SIGNED, its row carrying
+///    `attest` (s2's fact's third case); (b) the atom parses as a record of
+///    the kind and carries NO `sig`: REFUSED HERE, at the `insert`,
+///    `record_sig_required`, PERMANENT — nothing lands and no orphan is
+///    minted (bu7-E1; P13, the earliest act the fault is decidable from),
+///    the act that exists being a new record composed WITH its `sig`; (c)
+///    the atom parses with its `sig` but the document is no doc 1 — no
+///    credential link can name it there — and the entry check runs. At or
+///    below the claim nothing here runs (A5).
 /// 3. A3 — a document whose OWNER is the SYSTEM ACCOUNT `1.1.0.1` is exempt,
 ///    read by ω — the longest registered prefix over the board's principal
 ///    list Π, a READ and never address arithmetic (m3, the design record's
@@ -124,11 +145,15 @@ pub(super) fn attestation_check(
     if !crate::codec::in_checked_set(op.kind()) {
         return Ok(None);
     }
-    // 2 — the record deposit's atom (D26): its DECLARED type read as a type
-    // slot through the one spelling of `enc`, as every classification here
-    // reads one, against THE RECORD-DEPOSIT SET (BW-03).
-    if let Op::Insert { deposit: Deposit::Declared(ty), .. } = op {
-        if record_deposit_kind(&addr_spans(std::slice::from_ref(ty))).is_some() {
+    // 2 — the record deposit's atom (D26), NARROWED (as7-E1, bu7-E1): the
+    // BYTES decide, by the one parse `declared_record_atom` makes — a
+    // sig-less record is refused at its insert, a signed one into a doc 1
+    // is exempt, and everything else takes the check below.
+    if let Some(record) = declared_record_atom(op) {
+        if !record.carries_sig {
+            return Err(CredentialRefusal::RecordSigRequired);
+        }
+        if homed_in_doc_one(world, record.doc) {
             return Ok(None);
         }
     }
@@ -201,16 +226,30 @@ pub(super) fn attestation_check(
     }
 }
 
-/// THE RECORD DEPOSIT'S ATOM CARRIES ITS OWN `sig` (signed ops, 2a; D26;
-/// D12 as l6-E2 re-cut it — "a row whose entry carries a signature, in its
-/// marker slot or in its record's `sig` member"): on a CLAIMED board, the
-/// `insert` is a DECLARED deposit under a kind of the record-deposit set
-/// (step 2's exemption above, the atom the check demands no `attest` for),
-/// its one value parses as a record of that kind, and the record's `sig`
-/// member is PRESENT. What the change feed's row records as the entry's
-/// signedness for that `insert` (the write path's `Signed::RecordSig`), so
-/// its `key` is absent as its `make_link`'s is: the record's `sig` covers
-/// both positions (D26; e-Q2).
+/// A declared deposit's atom that IS a record of its declared kind — what
+/// [`declared_record_atom`] answers: the document the `insert` lands in, and
+/// whether the record carries its `sig` member.
+struct DeclaredRecord<'a> {
+    doc: &'a Address,
+    carries_sig: bool,
+}
+
+/// THE ONE PARSE OF A DECLARED DEPOSIT'S ATOM (as7-E1: "the daemon already
+/// parses the atom at commit"; D26; the record grade, 2a): `Some` iff `op`
+/// is an `insert` DECLARED under a kind of the record-deposit set — its type
+/// read as a type slot through the one spelling of `enc`, as every
+/// classification here reads one (BW-03) — whose ONE value parses as a
+/// record of that kind, the entries and the `sig` as one value
+/// ([`parse_record_value`], the parse the record grade makes again at the
+/// deposit's `make_link`), with whether the record's `sig` member is
+/// PRESENT. `None` for every other insert: undeclared, declared under no
+/// record kind, more or fewer than one value, or bytes that are no record
+/// of the kind — prose, a record of another kind, a record past
+/// [`skep_identity::MAX_RECORD_BYTES`] (`too_large` at the parse's own head,
+/// as at the read, which is also what bounds this parse of a value no read
+/// has capped, under the serialization lock). A claim's kind answers `None`:
+/// a claim carries no record (AUTH-2.48) and a declared claim atom is refused
+/// at M5's door, so none reaches this.
 ///
 /// PRESENCE, not verification: the record grade's trial needs the link's
 /// type and target and the grade the act needs, which the atom's `insert`
@@ -218,40 +257,29 @@ pub(super) fn attestation_check(
 /// `sig` under the set that opens the home (`credential.rs`'s
 /// `record_grade_check`) or is refused, leaving the atom an orphan no link
 /// names, which a reader renders UNDETERMINABLE HERE (the design record
-/// §7.3 (i)). The daemon serves and never judges; this is its statement of
-/// WHERE the entry's signature is. At or below the claim nothing is signed
-/// (A5) and this answers `false`: the ceremony's own record, `sig` or not,
-/// keeps its row's `key`. A claim carries no record and answers `false`.
-///
-/// An atom past [`skep_identity::MAX_RECORD_BYTES`] parses as no record —
-/// `too_large` at the parse's own head, as at the read — so this answers
-/// `false` and its row serves its `key`: its `make_link` is refused
-/// `malformed_payload:too_large` at the credential precheck's slot (3), the
-/// fold's own read, and no `sig` it carries covers any position. That cap is
-/// also what bounds this parse, of a value no read has capped, under the
-/// serialization lock.
-pub(crate) fn record_deposit_carries_sig(identity: &IdentityState, op: &Op) -> bool {
-    if identity.claimant().is_none() {
-        return false;
-    }
-    let Op::Insert { deposit: Deposit::Declared(ty), values, .. } = op else {
-        return false;
+/// §7.3 (i)), its row carrying `key` and no `attest`. Read by step 2 of
+/// [`attestation_check`] alone; the row's `key` no longer turns on this
+/// parse (as7-E2 (a): a record deposit's ATOM row always carries `key`, the
+/// daemon's testimony of the writing session — the LINK row is the one its
+/// record's `sig` signs).
+fn declared_record_atom(op: &Op) -> Option<DeclaredRecord<'_>> {
+    let Op::Insert { doc, deposit: Deposit::Declared(ty), values, .. } = op else {
+        return None;
     };
-    let Some(kind) = record_deposit_kind(&addr_spans(std::slice::from_ref(ty))) else {
-        return false;
-    };
+    let kind = record_deposit_kind(&addr_spans(std::slice::from_ref(ty)))?;
     let [atom] = values.as_slice() else {
-        return false;
+        return None;
     };
-    match kind {
+    let carries_sig = match kind {
         CredentialKind::Enroll => {
-            parse_record_value::<Enrollment>(atom.as_bytes()).is_ok_and(|v| v.sig.is_some())
+            parse_record_value::<Enrollment>(atom.as_bytes()).ok()?.sig.is_some()
         }
         CredentialKind::Retire => {
-            parse_record_value::<Fingerprint>(atom.as_bytes()).is_ok_and(|v| v.sig.is_some())
+            parse_record_value::<Fingerprint>(atom.as_bytes()).ok()?.sig.is_some()
         }
-        CredentialKind::Claim => false,
-    }
+        CredentialKind::Claim => return None,
+    };
+    Some(DeclaredRecord { doc, carries_sig })
 }
 
 /// A3's test: the write's target or home document is OWNED BY THE SYSTEM
@@ -317,18 +345,28 @@ mod tests {
     /// The check's arms no wire test can reach, on a board with no `H.1` —
     /// the genesis world. A3: a home the SYSTEM ACCOUNT owns by ω is exempt,
     /// nothing demanded even with no board term (the head writer never passes
-    /// dispatch, so no wire write meets A3). D26 and the checked set stand
-    /// aside ahead of the entry frame too. Every other checked write answers
+    /// dispatch, so no wire write meets A3). The checked set stands aside
+    /// ahead of the entry frame too, and so does D26's NARROWED exemption
+    /// (SO-I4; as7-E1 (a), bu7-E1 (a)): a record of the declared kind
+    /// carrying its `sig` into a doc 1 — the system account's, the one doc 1
+    /// genesis holds — is exempt, while the same record WITHOUT its `sig` is
+    /// refused `record_sig_required` ahead of A3's own exemption of that home,
+    /// and the same signed record into a document that is no doc 1 takes the
+    /// check. Every other checked write answers
     /// `attestation_invalid:board_unavailable` with NO attest presented — the
     /// board term is read before the member is asked for (the design record
     /// §4.5's order: `board_unavailable` and (1) ahead of the composition), so
     /// the absent term is told as its own cause, never as
-    /// `attestation_required` — a declared deposit of NO credential kind
-    /// included. And the token and its class are the wire's.
+    /// `attestation_required` — a declared deposit of NO credential kind and
+    /// a declared deposit of a credential kind whose atom is NO record (s2's
+    /// third case) included. And the tokens and their classes are the wire's.
     #[test]
     fn a_board_with_no_h1_answers_board_unavailable_except_where_the_check_stands_aside() {
         use skep_arrangement::VPos;
         use skep_content::Val;
+        use skep_identity::{canonical_record, Enrollment};
+        use skep_namespace::ghost_home_document;
+        use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
 
         let engine = skep_engine::Engine::open(KernelConfig {
             durability: Durability::InMemory,
@@ -347,31 +385,58 @@ mod tests {
             ty: SlotArg::Addrs(vec![t_grant().clone()]),
             replaces: None,
         };
-        let insert = |deposit: Deposit| Op::Insert {
-            doc: doc1.clone(),
+        let insert = |doc: &Address, deposit: Deposit, atom: &str| Op::Insert {
+            doc: doc.clone(),
             at: VPos::content(Nat::from(1u32)),
-            values: vec![Val::new(vec![b'x'])],
+            values: vec![Val::new(atom.as_bytes().to_vec())],
             deposit,
         };
         let check = |op: Op| attestation_check(world, &identity, &op, BOOTSTRAP_PRINCIPAL, None);
         let unavailable: Result<Option<Attestation>, CredentialRefusal> =
             Err(CredentialRefusal::AttestationInvalid(AttestFault::BoardUnavailable));
+        let enroll = addr_of(&T_ENROLL);
 
         assert_eq!(check(grant_in(skep_namespace::head_document())), Ok(None), "A3: exempt by ω");
+        // s2's third case: prose declared under every credential kind takes
+        // the check like any insert.
         for ty in [T_ENROLL, T_RETIRE, T_CLAIM] {
             assert_eq!(
-                check(insert(Deposit::Declared(addr_of(&ty)))),
-                Ok(None),
-                "D26: a credential kind"
+                check(insert(&doc1, Deposit::Declared(addr_of(&ty)), "x")),
+                unavailable,
+                "a declared deposit whose atom is no record is no D26 case"
             );
         }
+        // A record of the kind: with its `sig` into a doc 1, exempt; without
+        // it, refused at the insert, ahead of A3; with it elsewhere, checked.
+        let key = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[9; 32]).expect("tag 1");
+        let entries = [Enrollment::new(key.public_key().clone(), false, None).expect("no label")];
+        let (signed, sig_less) = (
+            canonical_record(&entries, Some(&"ab".repeat(3373))),
+            canonical_record(&entries, None),
+        );
+        let system_doc1 = ghost_home_document();
+        assert_eq!(
+            check(insert(&system_doc1, Deposit::Declared(enroll.clone()), &signed)),
+            Ok(None),
+            "a record carrying its sig into a doc 1: exempt"
+        );
+        assert_eq!(
+            check(insert(&system_doc1, Deposit::Declared(enroll.clone()), &sig_less)),
+            Err(CredentialRefusal::RecordSigRequired),
+            "a sig-less record of the kind: refused at its insert, ahead of A3's exemption of the home"
+        );
+        assert_eq!(
+            check(insert(&doc1, Deposit::Declared(enroll.clone()), &signed)),
+            unavailable,
+            "a signed record into a document that is no doc 1: the check runs"
+        );
         let delete =
             Op::Delete { doc: doc1.clone(), p: VPos::content(Nat::from(1u32)), width: Nat::from(1u32) };
         assert_eq!(check(delete), Ok(None), "outside the checked set");
         assert_eq!(check(grant_in(doc1.clone())), unavailable, "a grant, no attest presented");
-        assert_eq!(check(insert(Deposit::Undeclared)), unavailable, "an undeclared insert");
+        assert_eq!(check(insert(&doc1, Deposit::Undeclared, "x")), unavailable, "an undeclared insert");
         assert_eq!(
-            check(insert(Deposit::Declared(t_grant().clone()))),
+            check(insert(&doc1, Deposit::Declared(t_grant().clone()), "x")),
             unavailable,
             "a declared deposit of no credential kind is no D26 case"
         );
@@ -379,6 +444,11 @@ mod tests {
         assert_eq!(
             (r.token(), r.disposition()),
             ("attestation_invalid:board_unavailable".to_string(), Disposition::Reorder)
+        );
+        let r = CredentialRefusal::RecordSigRequired;
+        assert_eq!(
+            (r.token(), r.disposition()),
+            ("record_sig_required".to_string(), Disposition::Permanent)
         );
     }
 

@@ -10,12 +10,12 @@
 use skep_address::{checked_inc, ordinal, parent, Address, Nat, Span};
 use skep_febe::Op;
 use skep_identity::{
-    canonical_record, parse_record_value, record_bytes, single_address, CredentialKind, Effect,
-    Enrolled, Enrollment, Fingerprint, IdentityState, LinkDeposit, PublicKey, RecordEntry,
-    Verdict, ALG_FNDSA512_PREVIEW_ED25519,
+    canonical_record, parse_record_value, record_bytes, single_address, Effect, Enrolled,
+    Enrollment, Fingerprint, IdentityState, Inert, LinkDeposit, PublicKey, RecordEntry, Verdict,
+    ALG_FNDSA512_PREVIEW_ED25519,
 };
 use skep_links::SlotArg;
-use skep_namespace::HasM3;
+use skep_namespace::{system_account, HasM3};
 
 use super::{addr_spans, deposits_credential_link, AttestFault, CredentialRefusal};
 use crate::auth::entry;
@@ -319,6 +319,16 @@ pub(crate) fn precheck(
     seat: Option<&Address>,
     allow_preview_keys: bool,
 ) -> Result<RecordSig, CredentialRefusal> {
+    // THE SYSTEM ACCOUNT TAKES NO CREDENTIAL DEPOSIT (as7-F2; SO-I2 (g)(iv),
+    // SO-I4 (c)) — AHEAD of the fold's verdict and on both arms of the
+    // board state, so it is the first thing said of such a deposit (P13) and
+    // reachable from the wire: behind slot (3) the fold's own home pin would
+    // answer it `not_genesis_registry` or `not_doc_one` first, and the
+    // claimed arm's record grade and the pre-claim gate's genesis arm would
+    // be reached by no wire sequence.
+    if names_system_account(world, dep) {
+        return Err(CredentialRefusal::SystemAccountKeyless);
+    }
     // (3) — the classify preview's verdict (AUTH-2.57): the fold's own
     // order — kind, home account, publication, the per-kind arm.
     let verdict = identity.classify(identity_types(), &WorldCtx(world), &dep.deposit());
@@ -458,11 +468,17 @@ pub(crate) fn precheck(
         // the act needs; a record carrying none is refused. The kind is the
         // fold's verdict's — the link's type slot as the fold parsed it at
         // slot (3), which is the record-deposit set's answer, that set being
-        // the fold's kinds (`record_deposit_kind`'s card).
+        // the fold's kinds (`record_deposit_kind`'s card) — narrowed to the
+        // TWO kinds that carry a record (l7-C3): the fold honors no claim on
+        // a claimed board (AUTH I5/I6 — a second claim is `already_claimed`
+        // at slot (3)), so the claim arm has no population, and were it ever
+        // reached the fold's own verdict is the one true answer — never
+        // `attestation_required`, an act a record with no payload cannot
+        // take (AUTH-2.48).
         let kind = match &effect {
-            Effect::Genesis { .. } | Effect::Enroll { .. } => CredentialKind::Enroll,
-            Effect::Retire { .. } => CredentialKind::Retire,
-            Effect::Claim { .. } => CredentialKind::Claim,
+            Effect::Genesis { .. } | Effect::Enroll { .. } => RecordKind::Enroll,
+            Effect::Retire { .. } => RecordKind::Retire,
+            Effect::Claim { .. } => return Err(CredentialRefusal::Inert(Inert::AlreadyClaimed)),
         };
         record_grade_check(world, identity, dep, kind, anchor_grade)?;
         Ok(RecordSig::Verified)
@@ -472,7 +488,11 @@ pub(crate) fn precheck(
         // the claim passes only where its OWN admission admits it
         // (PUB-6.63's residue test, [`claim_residue_refusal`]): behind the
         // fold's verdict, ahead of the store, so a refused claim commits
-        // nothing and the board stays unclaimed.
+        // nothing and the board stays unclaimed. The ceremony's genesis arm
+        // admits no genesis whose subject or home is the system account
+        // (as7-F2) — refused ahead of slot (3), above: the one pre-claim
+        // plant `claim_residue` cannot count, the account sitting at the
+        // genesis floor under `1.1`.
         match &effect {
             Effect::Genesis { .. } => {}
             Effect::Claim { account } => {
@@ -486,6 +506,36 @@ pub(crate) fn precheck(
     }
 }
 
+/// THE SYSTEM ACCOUNT HOLDS NO KEY (PUB-6.65; signed ops, round 7 — as7-F2
+/// = reg-S3; SO-I2 (g)(iv); SO-I4 (c)): `true` iff the deposit's SUBJECT —
+/// the enrolled principal, the one address the link's `to` slot names (the
+/// same read the fold makes of it, [`single_address`]; a claim's `to` is
+/// empty and names none) — or the owner of its HOME by ω (a READ of Π, m3)
+/// is the system account `1.1.0.1`. Read at the head of [`precheck`], ahead
+/// of the fold's verdict and on both arms of the board state, so no key is
+/// ever enrolled in that account by any sequence the daemon admits — the
+/// claimed board's record grade and the unclaimed board's genesis arm stand
+/// behind it. A3's exemption of the head writer's own writes keys on the
+/// same account and is untouched: those are no credential deposits.
+fn names_system_account(world: &World, dep: &DepositSpans) -> bool {
+    let system = system_account();
+    single_address(&dep.to).as_ref() == Some(&system)
+        || world.m3().effective_owner_prefix(&dep.home) == Some(&system)
+}
+
+/// THE RECORD GRADE'S OWN KIND (l7-C3; SO-I7): the two kinds whose record
+/// carries a `sig` — ENROLL (a genesis's or a holder's enrolment, both an
+/// `Enrollment` record) and RETIRE (a `Fingerprint` record). A claim carries
+/// no record (AUTH-2.48) and reaches no claimed board's record grade, so it
+/// is UNREPRESENTABLE here rather than asserted away: a `Claim` arm, and the
+/// `attestation_required` a release build once answered one, cannot be
+/// written. The disavowal's and the registry's kinds join at their RESes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecordKind {
+    Enroll,
+    Retire,
+}
+
 /// THE RECORD GRADE'S CHECK (signed ops, 2a; the design record §4.5 (4) and
 /// its table clauses (a)–(c); D26; AUTH-2.94 — a write-path check, never a
 /// fold input): ABOVE THE CLAIM ON A CLAIMED BOARD, a credential record the
@@ -496,22 +546,25 @@ pub(crate) fn precheck(
 /// 1. THE RECORD VALUE — the atom's bytes off the link's `from`, the one
 ///    pinned read ([`record_bytes`]), parsed ([`parse_record_value`]) by the
 ///    KIND the fold's verdict names for the link's type — the record-deposit
-///    set's answer, that set being the fold's kinds: the entries and the
-///    `sig` as it stands. The fold read and parsed these same bytes at
-///    slot (3), so a failure here is unreachable and is answered fail-closed,
-///    as a record no `sig` can be read off. The claim kind carries no record
-///    and no `sig` (AUTH-2.48), and reaches no claimed board's check: a claim
-///    above the claim is `already_claimed` at slot (3) — stated fail-closed
-///    the same way.
+///    set's answer, that set being the fold's kinds, narrowed to the two that
+///    carry a record ([`RecordKind`]; a claim is unrepresentable here): the
+///    entries and the `sig` as it stands. The fold read and parsed these same
+///    bytes at slot (3), so a failure here is unreachable and is answered
+///    fail-closed, as a record no `sig` can be read off.
 /// 2. NO `sig` → `attestation_required` (§4.5 (4): "REFUSE A BODY THAT
-///    CARRIES NO `sig` AT ALL … THE ONE REFUSAL AT A RECORD DEPOSIT"); the
-///    class REORDER, as the entry grade's is — the answer is the same record
-///    re-composed with its `sig`.
-/// 3. THE BLOB — the `sig` is the hybrid blob in hex, no `alg` beside it
-///    (the record names no row: the blob's WIDTH narrows the candidates, as
-///    the handshake's does), parsed by the one parse both doors share
-///    ([`HybridSig::parse`], case-free); hex of no row's width is
-///    `attestation_invalid:malformed`, PERMANENT.
+///    CARRIES NO `sig` AT ALL") — a FENCE with no population on a conforming
+///    daemon since round 7 (bu7-E1 ARM (a)): a sig-less record-kind atom is
+///    refused at its `insert`, `record_sig_required`, PERMANENT, and lands
+///    nowhere (`policy/attestation.rs`'s step 2), so the only atom this
+///    reaches was deposited past that gate — below the claim, or past the
+///    check by the operator's hand; the class REORDER, the act that exists
+///    being a new record composed with its `sig`, inserted and linked.
+/// 3. THE BLOB — the `sig` is the hybrid blob in hex, no `alg` beside it,
+///    parsed by the one parse both doors share ([`HybridSig::parse`],
+///    case-free) into a WIDTH-VALIDATED blob that NAMES NO ROW (l7-C3; SO-I6
+///    (i)): row identity comes from each candidate key alone at step 6, and
+///    where two rows share a width both rows' keys enter the trial; hex of
+///    no row's width is `attestation_invalid:malformed`, PERMANENT.
 /// 4. THE FRAME — the `record` grammar over the link and the atom
 ///    ([`entry::compose_record`]): `H.1`'s pair (none →
 ///    `board_unavailable`), the HOME's account (ω over the home, the fold's
@@ -556,31 +609,30 @@ fn record_grade_check(
     world: &World,
     identity: &IdentityState,
     dep: &DepositSpans,
-    kind: CredentialKind,
+    kind: RecordKind,
     anchor_grade: bool,
 ) -> Result<(), CredentialRefusal> {
     let invalid = CredentialRefusal::AttestationInvalid;
     // 1 — the record value, by the kind's parse.
     let ctx = WorldCtx(world);
     let value = match kind {
-        CredentialKind::Enroll => record_value::<Enrollment>(&ctx, dep),
-        CredentialKind::Retire => record_value::<Fingerprint>(&ctx, dep),
-        CredentialKind::Claim => None,
+        RecordKind::Enroll => record_value::<Enrollment>(&ctx, dep),
+        RecordKind::Retire => record_value::<Fingerprint>(&ctx, dep),
     };
     let Some((canonical, sig)) = value else {
         debug_assert!(
             false,
             "the record grade read no record value for a {kind:?} deposit slot (3) honored: an \
-             enrollment's or retirement's bytes the fold just parsed cannot fail to parse here, \
-             and a claim above the claim is already_claimed at slot (3)"
+             enrollment's or retirement's bytes the fold just parsed cannot fail to parse here"
         );
         return Err(CredentialRefusal::AttestationRequired);
     };
-    // 2 — no `sig` at all.
+    // 2 — no `sig` at all: the fence for an atom deposited past the insert's
+    // own gate, with no population on a conforming daemon (bu7-E1).
     let Some(sig) = sig else {
         return Err(CredentialRefusal::AttestationRequired);
     };
-    // 3 — the blob, by its width.
+    // 3 — the blob, width-validated, naming no row (l7-C3).
     let blob = HybridSig::parse(&sig).ok_or(invalid(AttestFault::Malformed))?;
     let blob = blob.as_bytes();
     // 4 — the frame, every member but `alg`. The home's account is ω's

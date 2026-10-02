@@ -269,7 +269,9 @@ fn hire_logged(
 ) -> String {
     let ordinal = next_content_ordinal(port, Some(claimant_signed), CLAIMANT_DOC1);
     // The record signed for its deposit (2a), as `common::hire` signs it —
-    // the two rows' one signature, so neither shows a hand (D12, D26).
+    // the record's one signature judged at its LINK, whose row shows no hand;
+    // the ATOM's row keeps the daemon's testimony of the writing session, the
+    // claimant's key (D12, D26; as7-E2 (a), e-Q2 re-cut at the atom row).
     let record =
         signed_atom(port, claimant_signed, CLAIMANT_DOC1, T_ENROLL, &[agent_account], &enroll_atom(&[key]));
     let atom = write(
@@ -281,7 +283,7 @@ fn hire_logged(
             r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{record}}}],"deposit":"{T_ENROLL}"}}"#
         ),
         Some(vec![CLAIMANT_DOC1.to_string()]),
-        Hand::RecordSig,
+        Hand::Key,
     );
     write(
         log,
@@ -451,9 +453,10 @@ fn build(port: u16) -> Board {
 
     // A tail past the straddles: one more draft write, and a declared
     // deposit into A's published doc 1 (visible to all) — prose under a
-    // MEMBER type, ENROLL's (PUB-2.60's residue): the check stands aside
-    // for a declared deposit of a credential kind (D26, by type), and the
-    // byte is no record carrying a `sig`, so the row serves the key.
+    // MEMBER type, ENROLL's (PUB-2.60's residue): the byte is NO record of
+    // the kind, so since round 7's narrowed exemption (as7-E1 ARM (a)) the
+    // check reaches it like any insert and it commits SIGNED, its row
+    // carrying `attest` and no `key`.
     insert(&mut log, port, &a, &d1, "s");
     let ordinal = next_content_ordinal(port, Some(&a_signed), &a_doc1);
     write(
@@ -465,7 +468,7 @@ fn build(port: u16) -> Board {
             r#"{{"op":"insert","doc":"{a_doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":["z"],"deposit":"{T_ENROLL}"}}"#
         ),
         Some(vec![a_doc1.clone()]),
-        Hand::Key,
+        Hand::Attest,
     );
 
     assert!(log.windows(2).all(|w| w[0].at < w[1].at), "the log is position-ordered");
@@ -986,14 +989,20 @@ fn the_sidecars_recover_and_two_daemons_agree_per_class() {
     // ARE derived, so the drafts-only forms compare exactly. The attest
     // store is rebuilt from the journal's markers, so a signed row's
     // `attest` is served on its bare entry — the slot is the journal's own
-    // fact — where every other member reads null.
+    // fact — where the testimony's members, `docs`, `key` and `time`, read
+    // null. AND THE OP'S TERMS ARE THE JOURNAL'S (round 7's as7-F3; SO-I5
+    // (e)): a bare `delegate` row carries its `op` and its pair, a bare
+    // `make_link` row its `link`, a bare `publish` row its `op`, `placed` and
+    // `base_extent`, each BYTE-EQUAL to the recorded row's at the twin
+    // daemon — a feed-only mirror's Π is whole across the bare span — and
+    // `op` is null only where the journal names no op alone.
     for f in feed_files().iter().chain(["commits.log"].iter()) {
         std::fs::remove_file(dir.path().join(f)).expect("delete");
     }
     {
         let sd = spawn(dir.path());
         let after = pages_per_class(sd.port(), since0, &ps);
-        let mut attested_rows = 0;
+        let (mut attested_rows, mut termed_rows) = (0, 0);
         for ((label, want), (_, got)) in before.iter().zip(after.iter()) {
             if label.contains("under=") && !label.contains("drafts=true") {
                 continue;
@@ -1007,13 +1016,14 @@ fn the_sidecars_recover_and_two_daemons_agree_per_class() {
             assert_eq!((got["last"].as_u64(), got["more"].as_bool()), (want["last"].as_u64(), want["more"].as_bool()), "{label}: last/more");
             for (e, w) in got["changes"].as_array().expect("changes").iter().zip(want["changes"].as_array().expect("changes")) {
                 assert!(
-                    e["op"].is_null()
-                        && e["docs"].is_null()
-                        && e["time"].is_null()
-                        && e["key"].is_null(),
-                    "{label}: a bare entry answers null in EVERY metadata field, `key` \
+                    e["docs"].is_null() && e["time"].is_null() && e["key"].is_null(),
+                    "{label}: a bare entry answers null in every TESTIMONY field, `key` \
                      included — the null is reserved for LOST testimony, where \
                      `\"bare\"` would claim this write was unsigned: {e}"
+                );
+                assert!(
+                    e["op"].is_null() || e["op"] == w["op"],
+                    "{label}: a bare row's op is the journal's or null, never another's: {e} vs {w}"
                 );
                 assert_eq!(
                     e.get("attest"),
@@ -1023,9 +1033,34 @@ fn the_sidecars_recover_and_two_daemons_agree_per_class() {
                 if e.get("attest").is_some() {
                     attested_rows += 1;
                 }
+                // The terms: the recorded row's, byte for byte, wherever the
+                // recorded row carries one.
+                let recorded_op = w["op"].as_str().unwrap_or("");
+                for member in ["new_prefix", "new_id", "link", "placed", "base_extent"] {
+                    if w.get(member).is_some() {
+                        assert_eq!(e.get(member), w.get(member), "{label}: `{member}` on the bare row equals the recorded row's: {e} vs {w}");
+                        termed_rows += 1;
+                    } else {
+                        // A member the recorded row lacks: null (the journal
+                        // cannot answer) or absent (the journal ruled it out)
+                        // — and, for the one link an `emit` or `assert_sup`
+                        // deposited, the link the journal names where r6-2a
+                        // left the recorded row without one.
+                        let named_link = member == "link" && matches!(recorded_op, "emit" | "assert_sup");
+                        assert!(
+                            e.get(member).is_none_or(Value::is_null) || named_link,
+                            "{label}: `{member}` invented on a bare row: {e} vs {w}"
+                        );
+                    }
+                }
+                assert_eq!((e["op"].is_null(), recorded_op), (e["op"].is_null(), recorded_op));
+                if matches!(recorded_op, "delegate" | "publish") {
+                    assert_eq!(e["op"], w["op"], "{label}: the journal names a delegate's and a publish's op: {e}");
+                }
             }
         }
         assert!(attested_rows > 0, "the fixture's signed writes serve their slots on bare rows");
+        assert!(termed_rows > 0, "the fixture's delegates, links and shots serve their terms on bare rows");
         sd.shutdown();
     }
 }

@@ -1,4 +1,4 @@
-//! The seven test hooks and `CLAIM_HOLD_NOTICE` (`#[doc(hidden)]` items of `Daemon`).
+//! The eight test hooks and `CLAIM_HOLD_NOTICE` (`#[doc(hidden)]` items of `Daemon`).
 
 use std::path::Path;
 use std::sync::atomic::Ordering;
@@ -78,6 +78,20 @@ impl Daemon {
     #[doc(hidden)]
     pub fn hold_between_the_claim_and_its_head(&self) {
         self.hold_between_claim_and_head.store(true, Ordering::Relaxed);
+    }
+
+    /// TEST HOOK (the same standing: `#[doc(hidden)]`, not a stable API):
+    /// the HEAD WRITER'S DRIVER REFUSES THE NEXT HEAD it is due to write,
+    /// once — armed before a claim, the claim's own `H.1` — handled exactly
+    /// as a driver refusal is (`head.rs`, WHAT A REFUSAL DOES: surfaced, the
+    /// state unadvanced, the triggering write untouched), so a suite can
+    /// stand a RUNNING claimed board with no board term and judge what the
+    /// write path does next (l7-C1: the first head owed at every turn, a
+    /// refused write's included — `tests/it/head.rs`). Disarms itself at the
+    /// one refusal it injects.
+    #[doc(hidden)]
+    pub fn refuse_the_next_head_once(&self) {
+        self.writes.refuse_next_head_once();
     }
 
     /// TEST HOOK (the same standing: `#[doc(hidden)]`, not a stable API):

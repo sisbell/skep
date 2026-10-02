@@ -512,15 +512,19 @@ fn a_home_minted_private_below_the_door_is_served_private_and_has_no_clearing_ac
     let second = acked_addr(&op(port, Some(&holder), &create_frame(&account, Some(true))));
     assert_eq!(second, format!("{account}.0.2"));
 
-    // THE HOLDER CELL (AUTH-3.58).
+    // THE HOLDER CELL (AUTH-3.58). Into the PUBLISHED second document the
+    // record carries its `sig` (round 7: a sig-less record-kind atom is
+    // refused at its insert, and a signed record outside a doc 1 lands
+    // attested, no exempt atom); into the draft the declaration is inert.
     let another_key = enroll_atom(&[&distinct_key(22)]);
+    let another_key_signed = signed_atom(port, &holder, &second, T_ENROLL, &[&account], &another_key);
     assert_eq!(
         rejected_detail(&deposit_in(&home, 1, &another_key, &account, T_ENROLL)),
         "credential_refused:unpublished",
         "the holder's one honored home is a draft"
     );
     assert_eq!(
-        rejected_detail(&deposit_in(&second, 1, &another_key, &account, T_ENROLL)),
+        rejected_detail(&deposit_in(&second, 1, &another_key_signed, &account, T_ENROLL)),
         "credential_refused:not_doc_one",
         "every other home answers the home pin"
     );
@@ -549,8 +553,9 @@ fn a_home_minted_private_below_the_door_is_served_private_and_has_no_clearing_ac
         "credential_refused:unpublished",
         "the one legal genesis home is a draft"
     );
+    let genesis_signed = signed_atom(port, &holder, &second, T_ENROLL, &[&delegate], &genesis);
     assert_eq!(
-        rejected_detail(&deposit_in(&second, 2, &genesis, &delegate, T_ENROLL)),
+        rejected_detail(&deposit_in(&second, 2, &genesis_signed, &delegate, T_ENROLL)),
         "credential_refused:not_doc_one"
     );
     assert_eq!(enrolled(&delegate), 0, "a keyless subtree");

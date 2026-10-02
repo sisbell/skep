@@ -379,12 +379,12 @@ fn chain_over(prev: &[u8; 32], data: &[u8], txn: &Txn) -> [u8; 32] {
     }
     let salt_at = txn.marker.payload.start + MARKER_SALT_AT;
     let slot_at = txn.marker.payload.start + MARKER_SIG_ALG_AT;
-    let slot: [u8; 32] = Sha256::digest(&data[slot_at..txn.marker.payload.end]).into();
+    let slot_digest: [u8; 32] = Sha256::digest(&data[slot_at..txn.marker.payload.end]).into();
     link.chain_update(txn.txn.to_le_bytes())
         .chain_update(txn.last_seq.to_le_bytes())
         .chain_update(records_checksum(data, txn).to_le_bytes())
         .chain_update(&data[salt_at..salt_at + 32])
-        .chain_update(slot)
+        .chain_update(slot_digest)
         .finalize()
         .into()
 }
@@ -791,20 +791,20 @@ fn c04_the_signature_slot_is_a_chain_input_a_slot_filled_stripped_or_altered_bre
     // from op 9 re-chained over it — the writer's own formula, the slot's
     // digest included. It opens at the golden's head with the golden's world
     // at every boundary, its chain its own from op 9 on.
-    let signed = golden.case_from_genesis("c04-signed");
-    fill(&seg_file(&signed, 1), golden.txn(OP));
-    let rechained = rechain_from(&golden, &signed, OP);
-    let signed_marker = transactions(&fs::read(seg_file(&signed, 1)).expect("segment"))[OP - 1]
-        .marker
-        .start;
+    let attested = golden.case_from_genesis("c04-attested");
+    fill(&seg_file(&attested, 1), golden.txn(OP));
+    let rechained = rechain_from(&golden, &attested, OP);
+    let attested_marker_start =
+        transactions(&fs::read(seg_file(&attested, 1)).expect("segment"))[OP - 1].marker.start;
     {
-        let engine = open_recovers(&signed, &golden, golden.head(), "case 4: a filled slot, chained");
-        every_boundary_answers(&engine, &golden, "case 4, signed");
+        let engine =
+            open_recovers(&attested, &golden, golden.head(), "case 4: a filled slot, chained");
+        every_boundary_answers(&engine, &golden, "case 4, attested");
         assert_ne!(rechained[0].1, golden.txn(OP).chain, "the filled slot is another link");
         assert_eq!(engine.kernel().chain_head(), rechained.last().expect("links").1);
         drop(engine);
         assert_eq!(
-            fs::metadata(seg_file(&signed, 1)).expect("segment").len(),
+            fs::metadata(seg_file(&attested, 1)).expect("segment").len(),
             golden.fixture.full_len + BLOB.len() as u64,
             "the open kept the filled slot: nothing cut"
         );
@@ -812,20 +812,22 @@ fn c04_the_signature_slot_is_a_chain_input_a_slot_filled_stripped_or_altered_bre
     // …STRIPPED there, nothing else touched: CAUGHT at that transaction —
     // the link over the empty digest is not the one the marker carries.
     let case = golden.tmp.path().join("c04-stripped");
-    copy_dir(&signed, &case);
-    strip(&seg_file(&case, 1), signed_marker);
+    copy_dir(&attested, &case);
+    strip(&seg_file(&case, 1), attested_marker_start);
     open_halts_with_chain_break(&case, golden.seq(OP), "case 4: a signature stripped");
     // …ALTERED there, one blob byte flipped, its CRC re-sealed: CAUGHT.
     let case = golden.tmp.path().join("c04-altered");
-    copy_dir(&signed, &case);
-    rewrite_frame(&seg_file(&case, 1), signed_marker, |payload| payload[MARKER_EMPTY_LEN] ^= 0xFF);
+    copy_dir(&attested, &case);
+    rewrite_frame(&seg_file(&case, 1), attested_marker_start, |payload| {
+        payload[MARKER_EMPTY_LEN] ^= 0xFF
+    });
     open_halts_with_chain_break(&case, golden.seq(OP), "case 4: a signature altered");
     // …and STRIPPED WITH EVERY LATER LINK RE-CHAINED — NOT CAUGHT BY DESIGN:
     // the forger holding the journal writes a consistent history, which is
     // the golden's own to the byte, chain and all.
     let case = golden.tmp.path().join("c04-stripped-rechained");
-    copy_dir(&signed, &case);
-    strip(&seg_file(&case, 1), signed_marker);
+    copy_dir(&attested, &case);
+    strip(&seg_file(&case, 1), attested_marker_start);
     let restored = rechain_from(&golden, &case, OP);
     assert_eq!(restored.last().expect("links").1, golden.txn(GOLDEN_OPS).chain);
     assert_eq!(
@@ -1283,10 +1285,10 @@ fn c11_a_consistent_rewrite_from_genesis_or_from_any_point_passes() {
     //     forged journal from genesis. The boundaries below the forgery
     //     answer the golden's world, those from it on the forger's, and
     //     nothing halts.
-    const A: &[u8] = &[1, 0, 0, 0, 0, 0, 0, 0, b'a'];
+    const WRITTEN: &[u8] = &[1, 0, 0, 0, 0, 0, 0, 0, b'a'];
     const FORGED: &[u8] = &[1, 0, 0, 0, 0, 0, 0, 0, b'A'];
     let case = golden.case("c11-from-op-4");
-    forge_and_rechain(&golden, &case, 4, A, FORGED, CheckpointAfterForgery::Removed);
+    forge_and_rechain(&golden, &case, 4, WRITTEN, FORGED, CheckpointAfterForgery::Removed);
     let engine = timed_open(&case, "case 11: a consistent forgery from op 4");
     assert_eq!(engine.kernel().current_seq(), Seq(golden.head()));
     assert_ne!(engine.kernel().chain_head(), golden.txn(GOLDEN_OPS).chain, "the head moved");
@@ -1301,7 +1303,7 @@ fn c11_a_consistent_rewrite_from_genesis_or_from_any_point_passes() {
     //     who can write the checkpoint file closes with one more write, as
     //     (a) did.
     let case = golden.case("c11-checkpoint-kept");
-    forge_and_rechain(&golden, &case, 4, A, FORGED, CheckpointAfterForgery::Kept);
+    forge_and_rechain(&golden, &case, 4, WRITTEN, FORGED, CheckpointAfterForgery::Kept);
     open_halts_naming(
         &case,
         golden.checkpoint_seq(),

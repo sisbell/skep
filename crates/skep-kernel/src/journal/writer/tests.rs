@@ -126,24 +126,24 @@ fn the_in_memory_journal_refuses_what_the_durable_one_refuses() {
     // construction rather than by whatever the caller remembers to do
     // first.
     let mut installed = false;
-    let mut memory = Journal::InMemory;
+    let mut in_memory = Journal::InMemory;
 
     // The encode: a record the serializer refuses, in the mode that would
     // otherwise never encode anything.
-    let out = memory.commit_txn(1, vec![RefusesSerialization], None, |_| installed = true);
+    let out = in_memory.commit_txn(1, vec![RefusesSerialization], None, |_| installed = true);
     assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
 
     // The frame cap, which is a property of frames this arm never builds.
     let prefix = encode_record(&Vec::<u8>::new()).unwrap().len();
     let cap_bytes = (MAX_FRAME_LEN as u64 - RECORD_PAYLOAD_OVERHEAD) as usize;
     let over_frame = vec![vec![0u8; cap_bytes + 1 - prefix]];
-    let out = memory.commit_txn(1, over_frame, None, |_| installed = true);
+    let out = in_memory.commit_txn(1, over_frame, None, |_| installed = true);
     assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
 
     // The transaction budget, likewise.
     let half = (MAX_TXN_BYTES / 2) as usize;
     let over_budget = vec![vec![0u8; half], vec![0u8; half]];
-    let out = memory.commit_txn(1, over_budget, None, |_| installed = true);
+    let out = in_memory.commit_txn(1, over_budget, None, |_| installed = true);
     assert!(matches!(out, Err(CommitFail::OverBudget { .. })), "got {out:?}");
 
     assert!(!installed, "a refused transaction installs nothing");

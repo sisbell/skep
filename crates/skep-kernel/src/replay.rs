@@ -79,7 +79,7 @@ impl<W> Base<W> {
     }
 }
 
-/// No base at or below the requested boundary remains derivable: no retained
+/// No base at or below the requested ceiling remains derivable: no retained
 /// checkpoint there loads, and the journal no longer reaches back to `Seq(1)`
 /// so genesis cannot stand in (§6/§7).
 pub(crate) struct Unreachable {
@@ -91,7 +91,7 @@ pub(crate) struct Unreachable {
     /// is exhausted: a body that will not decode says roll the binary, a
     /// failed checksum says restore the media, and a bare refusal says
     /// neither. `None` when no candidate was tried at all — no retained
-    /// checkpoint, or every one of them above the requested boundary.
+    /// checkpoint, or every one of them above the ceiling.
     ///
     /// Only an exhausted fallback chain reaches a caller, so a refusal the
     /// fallback walked past is dropped: the derivation then succeeded, and
@@ -100,7 +100,8 @@ pub(crate) struct Unreachable {
 }
 
 /// Choose the base (§6/§7): the newest checkpoint that loads — at or below
-/// `bound`, when one is given — else genesis while it is still reachable.
+/// `ceiling`, the highest coordinate the chosen base may embody, when one is
+/// given — else genesis while it is still reachable.
 /// A checkpoint that refuses ([`CheckpointMeta::load`]) is skipped and the
 /// next-older RETAINED one tried, which is what makes the fallback chain real
 /// rather than nominal; if nothing stands in, [`Unreachable`] carries why the
@@ -130,12 +131,12 @@ pub(crate) struct Unreachable {
 pub(crate) fn select_base<W: WorldState>(
     checkpoints: &[CheckpointMeta],
     segs: &[SegmentMeta],
-    bound: Option<u64>,
+    ceiling: Option<u64>,
     genesis: &W,
 ) -> Result<Base<W>, Unreachable> {
     let mut cause: Option<LoadRefused> = None;
     for cp in checkpoints.iter().rev() {
-        if bound.is_some_and(|b| cp.seq > b) {
+        if ceiling.is_some_and(|c| cp.seq > c) {
             continue;
         }
         match cp.load::<W>() {
@@ -216,11 +217,11 @@ pub(crate) fn fold_to<W: WorldState>(
     scan: &ScanOutcome,
     bound: u64,
 ) -> Result<W, FoldFail> {
-    let journaled = scan
+    let journaled_records = scan
         .records_to(bound)
         .map_err(|at| FoldFail { at, cause: None })?;
     let mut world = base.world;
-    for entry in journaled {
+    for entry in journaled_records {
         let record: W::Record = journal::decode_record(&entry.bytes).map_err(|e| FoldFail {
             at: entry.seq,
             cause: Some(e),

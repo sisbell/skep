@@ -128,7 +128,7 @@ fn a_file_and_its_header_disagreeing_on_its_length_are_refused_before_the_body_i
     write(dir.path(), 3, &world(), &CHAIN_HEAD).expect("fixture checkpoint");
     let path = checkpoint_path(dir.path(), 3);
     let honest = fs::read(&path).unwrap();
-    let load = || {
+    let load_refusal = || {
         list(dir.path()).unwrap()[0]
             .load::<Vec<u64>>()
             .expect_err("a length the file and its header disagree on is not a base")
@@ -142,7 +142,7 @@ fn a_file_and_its_header_disagreeing_on_its_length_are_refused_before_the_body_i
         .unwrap()
         .set_len(extended)
         .unwrap();
-    let refused = load();
+    let refused = load_refusal();
     assert!(
         refused.contains(&format!("checkpoint file is {extended} bytes")),
         "got {refused}"
@@ -151,7 +151,7 @@ fn a_file_and_its_header_disagreeing_on_its_length_are_refused_before_the_body_i
     let mut overclaimed = honest;
     overclaimed[BODY_LEN_AT..BODY_LEN_AT + 8].copy_from_slice(&u64::MAX.to_le_bytes());
     fs::write(&path, &overclaimed).unwrap();
-    let refused = load();
+    let refused = load_refusal();
     assert!(
         refused.contains(&format!("its header claims {HEADER_LEN} + {}", u64::MAX)),
         "got {refused}"
@@ -277,7 +277,16 @@ fn a_base_that_cannot_be_read_says_so_rather_than_looking_damaged() {
     fs::create_dir(checkpoint_path(dir.path(), 5)).unwrap();
     let listed = list(dir.path()).unwrap();
     assert_eq!(listed.len(), 1, "a name is a checkpoint, whatever the file type");
-    assert!(listed[0].load::<Vec<u64>>().is_err());
+    let refused = listed[0]
+        .load::<Vec<u64>>()
+        .expect_err("a base that cannot be read does not load");
+    // …and its account is the read's own failure, which names the remedy —
+    // never a checksum's or a hash's, which would send an operator to restore
+    // media that was never damaged.
+    assert!(
+        refused.downcast_ref::<io::Error>().is_some(),
+        "the read's own failure travels, not a damage account: {refused}"
+    );
 }
 
 #[test]

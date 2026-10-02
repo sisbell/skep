@@ -94,12 +94,12 @@ fn txn_size_accounting_matches_the_encoder_to_the_byte() {
     // The marker half, stated as the figures the layout doc promises: a
     // 97-byte payload with the slot empty (`SKJ4`: the salt's thirty-two
     // after `SKJ3`'s sixty-five), a 109-byte frame.
-    let empty_marker = codec()
+    let empty_marker_payload = codec()
         .serialize(&FramePayload::Marker(marker(Txn(u64::MAX), u64::MAX, u32::MAX)))
         .unwrap();
-    assert_eq!(empty_marker.len(), 97);
+    assert_eq!(empty_marker_payload.len(), 97);
     assert_eq!(MARKER_FRAME_LEN, 109);
-    assert_eq!(MARKER_FRAME_LEN, frame_len(empty_marker.len() as u64));
+    assert_eq!(MARKER_FRAME_LEN, frame_len(empty_marker_payload.len() as u64));
     // THE FILLED SLOT (signed ops): the accounting gains the blob's own
     // width and nothing else — the marker frame is the empty pin plus
     // the blob, the records' frames untouched — pinned at tag 1's ruled
@@ -154,11 +154,11 @@ fn txn_size_accounting_matches_the_encoder_to_the_byte() {
 }
 
 #[test]
-fn records_to_orders_the_fold_ranges_it_and_refuses_a_repeated_seq() {
-    // The three facts about the derived set, settled where the set is:
-    // `apply` need not be idempotent, so a coordinate applied twice is
-    // silent double application answered `Ok`, and a coordinate applied
-    // out of order is a fold over a state that never existed.
+fn records_to_orders_the_fold_and_ranges_it() {
+    // Order and range, two of the three facts about the derived set,
+    // settled where the set is: a coordinate applied out of order is a fold
+    // over a state that never existed. The third — each coordinate once,
+    // since `apply` need not be idempotent — is the next test's.
     let dir = tempdir().unwrap();
     let mut writer = fresh_writer(dir.path());
     // File order is NOT `Seq` order here. In-order append plus the prior
@@ -168,10 +168,10 @@ fn records_to_orders_the_fold_ranges_it_and_refuses_a_repeated_seq() {
     write_txn(&mut writer, 1, vec![rec(10), rec(20)]); // seqs 1, 2
     let segs = list_segments(dir.path()).unwrap();
 
-    let outcome = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
-    assert_eq!(folded_seqs(&outcome, 5), Ok(vec![1, 2, 5]));
+    let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
+    assert_eq!(folded_seqs(&out, 5), Ok(vec![1, 2, 5]));
     // The range is INCLUSIVE at the bound — a fold to 2 applies 2.
-    assert_eq!(folded_seqs(&outcome, 2), Ok(vec![1, 2]));
+    assert_eq!(folded_seqs(&out, 2), Ok(vec![1, 2]));
     // …and EXCLUSIVE at the base, whose records the base already embodies.
     assert_eq!(folded_seqs(&scan(&segs, 1, None, CHAIN_GENESIS).unwrap(), 5), Ok(vec![2, 5]));
 }
@@ -244,7 +244,7 @@ fn a_txn_repeating_a_seq_never_commits() {
 }
 
 #[test]
-fn a_marker_that_disagrees_with_its_records_never_commits() {
+fn a_marker_whose_last_seq_falls_short_of_its_group_never_commits() {
     // A marker whose `last_seq` sits BELOW the group it closes. Its
     // checksum validates — that field ties the records to the marker and
     // says nothing about `last_seq` — so without the third conjunct the
@@ -429,8 +429,8 @@ fn each_commit_chains_from_its_predecessor_and_a_consistent_rewrite_breaks_the_c
     assert_ne!(out.chain_head, CHAIN_GENESIS);
     // …and the appender continues from it: a scan from a base ABOVE T1
     // seeded with T1's own value verifies T2 and T3 against it.
-    let t1 = chain_of_marker_at(&segs[0].path, starts[1]);
-    let above = scan(&segs, 1, None, t1).unwrap();
+    let t1_chain = chain_of_marker_at(&segs[0].path, starts[1]);
+    let above = scan(&segs, 1, None, t1_chain).unwrap();
     assert_eq!(above.chain_break(), None);
     assert_eq!(above.chain_head, out.chain_head);
     // …while a wrong base value is a break at the first transaction
@@ -442,9 +442,9 @@ fn each_commit_chains_from_its_predecessor_and_a_consistent_rewrite_breaks_the_c
     // salt's thirty-two bytes sitting between the checksum and it —
     // re-sealing its frame CRC: every frame stays intact, every group
     // still commits, and the break lands on T2.
-    let t2 = chain_of_marker_at(&segs[0].path, starts[4]);
+    let t2_chain = chain_of_marker_at(&segs[0].path, starts[4]);
     rewrite_payload(&segs[0].path, starts[4], |payload| payload[56] ^= 0xFF);
-    assert_ne!(chain_of_marker_at(&segs[0].path, starts[4]), t2, "the rewrite took");
+    assert_ne!(chain_of_marker_at(&segs[0].path, starts[4]), t2_chain, "the rewrite took");
     let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
     assert!(out.runs.is_empty(), "no frame was damaged");
     assert_eq!(out.committed_head, 4, "the groups still commit — the halt is the caller's");
@@ -452,7 +452,7 @@ fn each_commit_chains_from_its_predecessor_and_a_consistent_rewrite_breaks_the_c
     // A rewritten marker AT the base is not this scan's to judge: the base
     // embodies it, and T3 verifies against the value the base vouches for
     // — what T2 carried when that base was taken…
-    assert_eq!(scan(&segs, 3, None, t2).unwrap().chain_break(), None);
+    assert_eq!(scan(&segs, 3, None, t2_chain).unwrap().chain_break(), None);
     // …while against a base that vouches for something else, T3 is the
     // first break, and T2 below it is never named.
     assert_eq!(scan(&segs, 3, None, [0x77; 32]).unwrap().chain_break(), Some(4));

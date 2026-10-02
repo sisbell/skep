@@ -585,8 +585,9 @@ const fn record_frame_len(record_len: usize) -> u64 {
 /// allocator could hold refuses as over-budget rather than wrapping back
 /// under the budget.
 pub(crate) fn txn_encoded_len(record_bytes: &[Vec<u8>], attestation: Option<&Attestation>) -> u64 {
-    let marker = MARKER_FRAME_LEN.saturating_add(attestation.map_or(0, |a| a.sig().len() as u64));
-    record_bytes.iter().fold(marker, |total, bytes| {
+    let marker_len =
+        MARKER_FRAME_LEN.saturating_add(attestation.map_or(0, |a| a.sig().len() as u64));
+    record_bytes.iter().fold(marker_len, |total, bytes| {
         total.saturating_add(record_frame_len(bytes.len()))
     })
 }

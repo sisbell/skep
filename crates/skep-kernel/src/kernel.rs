@@ -300,7 +300,7 @@ impl Sequencer {
 /// [`ApplierLock::acquire`]: the lock's fields are private to `applier`, so
 /// the door that refuses a nested acquisition is the only way in.
 struct ApplierState {
-    seq: Sequencer,
+    sequencer: Sequencer,
     journal: Journal,
     cadence: Cadence,
 }
@@ -680,11 +680,11 @@ impl<W: WorldState> Kernel<W> {
         journaled: Option<Journaled<W>>,
     ) -> Self {
         let cadence = Cadence::new(cfg.checkpoint);
-        let seq = Sequencer::recovered(root.seq, cfg.durability.burned_seq_policy());
+        let sequencer = Sequencer::recovered(root.seq, cfg.durability.burned_seq_policy());
         Kernel {
             root: ArcSwap::from_pointee(root),
             applier: ApplierLock::new(ApplierState {
-                seq,
+                sequencer,
                 journal,
                 cadence,
             }),
@@ -912,7 +912,7 @@ impl<W: WorldState> Kernel<W> {
         // cannot commit it and cannot renumber it over a committed
         // predecessor, which leaves halting as the only sound answer.
         let state = &mut *applier;
-        let Some((first, last)) = state.seq.mint(n) else {
+        let Some((first, last)) = state.sequencer.mint(n) else {
             self.poisoned.store(true, Ordering::Release);
             return Err(TxnError::Poisoned);
         };
@@ -954,7 +954,7 @@ impl<W: WorldState> Kernel<W> {
             // §3 unwind guard: repair, then let the panic propagate.
             Err(payload) => {
                 match state.journal.repair_after_unwind() {
-                    UnwindRepair::Clean => state.seq.roll_back_to(base_seq),
+                    UnwindRepair::Clean => state.sequencer.roll_back_to(base_seq),
                     // A surviving un-acked marker would let a successor
                     // collide on recovery, and a durably committed txn whose
                     // effect never installed would have later txns folding
@@ -973,21 +973,21 @@ impl<W: WorldState> Kernel<W> {
             // back where this txn found it — a TRUE no-op the caller may
             // re-invoke.
             Ok(Err(CommitFail::Clean(e))) => {
-                state.seq.roll_back_to(base_seq);
+                state.sequencer.roll_back_to(base_seq);
                 Err(TxnError::Durability(e))
             }
             // Nothing ever became frames, so the journal is where this txn
             // found it — the same no-op, burning the same Seqs, and a
             // different remedy: fix the record (§1/§3).
             Ok(Err(CommitFail::Unencodable(e))) => {
-                state.seq.roll_back_to(base_seq);
+                state.sequencer.roll_back_to(base_seq);
                 Err(TxnError::Unencodable(e))
             }
             // The same no-op with the third remedy: no record refused, the
             // staging as a whole is past the transaction budget, and only
             // splitting it changes that (§1/§3).
             Ok(Err(CommitFail::OverBudget { bytes })) => {
-                state.seq.roll_back_to(base_seq);
+                state.sequencer.roll_back_to(base_seq);
                 Err(TxnError::OverBudget { bytes })
             }
             // The truncation itself could not complete durably (§1).

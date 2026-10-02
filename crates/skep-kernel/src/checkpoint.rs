@@ -233,10 +233,10 @@ impl CheckpointMeta {
         // sizes nothing. Checked, since a header claiming near `u64::MAX`
         // would otherwise overflow the sum: a panic in a checked build, and in
         // a release one a wrap back onto a length that matches.
-        let claimed = file.metadata()?.len();
-        if (HEADER_LEN as u64).checked_add(header.body_len) != Some(claimed) {
+        let file_len = file.metadata()?.len();
+        if (HEADER_LEN as u64).checked_add(header.body_len) != Some(file_len) {
             return Err(format!(
-                "checkpoint file is {claimed} bytes, its header claims {HEADER_LEN} + {}",
+                "checkpoint file is {file_len} bytes, its header claims {HEADER_LEN} + {}",
                 header.body_len
             )
             .into());

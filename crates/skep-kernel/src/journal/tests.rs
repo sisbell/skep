@@ -40,7 +40,7 @@ pub(super) fn marker(txn: Txn, last_seq: u64, records_checksum: u32) -> Marker {
     }
 }
 
-/// The committed marker closing the frame at `pos`, decoded whole.
+/// The marker frame at `pos`, decoded whole.
 pub(super) fn marker_at(path: &Path, pos: usize) -> Marker {
     let buf = fs::read(path).unwrap();
     let Parsed::Intact { payload } = parse_frame(&buf, pos) else {
@@ -52,7 +52,7 @@ pub(super) fn marker_at(path: &Path, pos: usize) -> Marker {
     }
 }
 
-/// The `chain` field of the committed marker closing the frame at `pos`.
+/// The `chain` field of the marker frame at `pos`.
 pub(super) fn chain_of_marker_at(path: &Path, pos: usize) -> [u8; 32] {
     marker_at(path, pos).chain
 }
@@ -128,7 +128,7 @@ fn push_frame_refuses_a_payload_past_the_frame_cap() {
 /// the slot's width — so no transaction can write the marker the decoder
 /// refuses, and "unattested" is spelled only by the absent value.
 #[test]
-fn an_attestation_holds_the_one_spelling_of_empty_at_construction() {
+fn an_attestation_holds_the_slot_rule_at_construction() {
     assert_eq!(Attestation::new(0, vec![1]), Err(AttestationError::UnsignedTag));
     assert_eq!(
         Attestation::new(0, Vec::new()),
@@ -167,7 +167,7 @@ fn an_attestation_holds_the_one_spelling_of_empty_at_construction() {
 /// chain moves because the slot is a chain input (r6-2c): the filled
 /// marker's link is not the empty one's.
 #[test]
-fn a_filled_marker_appends_the_blob_after_the_tag_and_moves_no_other_byte() {
+fn a_filled_marker_appends_the_blob_after_the_tag_and_moves_no_byte_but_the_chain() {
     let blob = vec![0xC3u8; 5];
     let attestation = Attestation::new(1, blob.clone()).unwrap();
     let records = vec![vec![9u8, 8, 7]];
@@ -325,7 +325,7 @@ fn frame_payloads_spend_a_bare_u64_on_the_txn_and_carry_the_documented_chain() {
 }
 
 #[test]
-fn the_marker_decoder_admits_one_spelling_of_empty() {
+fn the_marker_decoder_holds_the_slot_rule() {
     // The slot's rule, held at the decode door: tag 0 with no bytes is
     // EMPTY, the one spelling; tag 0 with bytes (a signature under no
     // pair), a non-zero tag with none (a pair that signed nothing) and a

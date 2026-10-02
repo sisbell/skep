@@ -21,8 +21,9 @@
 //!   over a pinned snapshot slice; and [`ContentStore::iter`], the one
 //!   enumeration, for the daemon's cell-index rebuild alone.
 //! * **Write surface** (§C) — the pure step [`stage_write`] (the storage
-//!   half of K.α, composed by M5's placement composite) and the
-//!   `#[doc(hidden)]` standalone transact-wrapped form (M2 contract 3).
+//!   half of K.α, composed by M5's placement composite) and `write`, the
+//!   `#[doc(hidden)]` standalone transact-wrapped form (M2 contract 3) —
+//!   compiled only under the `test-hooks` feature.
 //!
 //! Spec traceability: each public item's doc-comment cites the labels it
 //! realizes (ASN-0036 S0–S5/S3, ASN-0093 C0/C-fin, K.α, J0, and §§ of the
@@ -66,12 +67,13 @@
 //!   allocation discipline and computed structurally by M1's `document_of`
 //!   (surfaced as SHOWORIGIN in M6); M4 stores only `address → Val`, so no
 //!   redundant origin field can diverge;
-//! * ordered iteration, range, prefix-scan, max-under-prefix — `Tumbler`'s
-//!   `Ord` is deliberately unused by the reads (M4 relies only on
-//!   `Eq + Hash`); the ordered-map rationale belongs to M3's frontier, not
-//!   here. The ONE enumeration beside the point reads,
-//!   [`ContentStore::iter`], is unordered and exists for one consumer: the
-//!   daemon's cell-index rebuild, which walks every value once at open;
+//! * ordered iteration, range, prefix-scan, max-under-prefix — the reads
+//!   rely only on `Eq + Hash`; `Tumbler`'s `Ord` is used once, by the
+//!   checkpoint serializer's sort (`store.rs`), and the ordered-map
+//!   rationale belongs to M3's frontier, not here. The ONE enumeration
+//!   beside the point reads, [`ContentStore::iter`], is unordered and
+//!   exists for one consumer: the daemon's cell-index rebuild, which walks
+//!   every value once at open;
 //! * concurrency — none of M4's own: no locks, no threads, no interior
 //!   mutability. Content writes ride M5's composite under the
 //!   per-(document, content-subspace) lock key; every content address is
@@ -86,18 +88,34 @@
 //! dispatches its `Record::Content` variant into the fold
 //! [`ContentStore::apply_write`]. The engine only `From`-lifts and folds
 //! the record — it never constructs one (private fields), so the
-//! `stage_write`-sole-constructor invariant survives assembly; engine-side
-//! journal-inspection/diagnostic tooling reads records through
-//! [`ContentWrite::addr`] / [`ContentWrite::val`] and the manual `Debug`.
+//! `stage_write`-sole-constructor invariant survives assembly. Anything that
+//! inspects a journaled record reads it through [`ContentWrite::addr`] /
+//! [`ContentWrite::val`] and the manual `Debug`, which the engine's
+//! `Record: Debug` rests on.
 
 #![forbid(unsafe_code)]
 
-mod error;
-mod ops;
-mod store;
+// The opaque payload, `Val`.
 mod value;
+// The write surface's one typed rejection, `ContentError`.
+mod error;
+// The `content-addr-guard` routing assertion (Open build decision #4),
+// shared by `stage_write` and `write`.
+#[cfg(feature = "content-addr-guard")]
+mod guard;
+// The slice, its fold and point queries, the record and `stage_write`.
+// `ContentWrite`'s fields are private to this file, and that is the fence
+// that leaves `stage_write` the record's only constructor (S0(b)): the
+// compiler keeps every other file out; review alone keeps a second
+// constructor out of this one.
+mod store;
+// `write`, the standalone transact-wrapped twin of `stage_write` —
+// `test-hooks` builds only.
+#[cfg(feature = "test-hooks")]
+mod ops;
 
 pub use error::ContentError;
+#[cfg(feature = "test-hooks")]
 pub use ops::write;
 pub use store::{stage_write, ContentStore, ContentWrite};
 pub use value::Val;

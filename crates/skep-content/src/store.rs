@@ -8,10 +8,9 @@ use rustc_hash::FxHasher;
 use serde::{Deserialize, Serialize};
 use skep_address::{Address, Tumbler};
 
-#[cfg(feature = "content-addr-guard")]
-use skep_address::{Level, Nat};
-
 use crate::error::ContentError;
+#[cfg(feature = "content-addr-guard")]
+use crate::guard::debug_assert_content_address;
 use crate::value::Val;
 
 /// Fixed-seed deterministic build-hasher (§Core data model: keys are trusted
@@ -31,32 +30,6 @@ use crate::value::Val;
 /// placeholder pick, taken as the default.
 type FixedHasher = BuildHasherDefault<FxHasher>;
 
-/// Content-subspace numeral — ASN-0093's SubspaceConventionAxiom fixes
-/// `s_C = 1`, matching M1's documented `subspace()` convention (1 = text,
-/// 2 = link). Defined HERE, M4-locally, cfg-gated with its only consumer
-/// (Open build decision #4's routing guard): the feature is M4-local and off
-/// by default, so a debug-only assertion warrants no shared-crate export,
-/// and the axiom-pinned value cannot drift. `Nat` (`BigUint`) has no const
-/// constructor, hence a lazy static, not a `const`. NOT the kernel-side
-/// LockKey space-tag — different constant, different layer (§Dependencies &
-/// seams).
-#[cfg(feature = "content-addr-guard")]
-pub(crate) static S_C_SUBSPACE: std::sync::LazyLock<Nat> =
-    std::sync::LazyLock::new(|| Nat::from(1u32));
-
-/// The one routing guard behind Open build decision #4, shared by its two
-/// doors ([`stage_write`] and the standalone `write`): asserts
-/// `level == Element ∧ subspace == s_C`. Debug-assert sub-choice (the
-/// design's recommendation): fatal in debug builds, free in release.
-#[cfg(feature = "content-addr-guard")]
-pub(crate) fn debug_assert_content_address(addr: &Address, site: &str) {
-    debug_assert!(
-        addr.level() == Level::Element && addr.subspace() == Some(&*S_C_SUBSPACE),
-        "content-addr-guard: {site}: not a content-subspace element address \
-         (level == Element ∧ subspace == s_C = 1 required)"
-    );
-}
-
 /// M4's authoritative folded slice: `dom(C) ↦ Val` — the only state M4 owns
 /// (§A; §Core data model). The journal of [`ContentWrite`] records (held by
 /// M2) is ground truth; this map is its fold, fully serialized in
@@ -73,9 +46,9 @@ pub(crate) fn debug_assert_content_address(addr: &Address, site: &str) {
 /// `World` and outstanding snapshots pin old ones —
 /// [`apply_write`](ContentStore::apply_write) is O(log₃₂ n) and old/new maps
 /// share all untouched structure. The `Deserialize` derive requires the `im`
-/// crate built with its `serde` feature (an M4-local dependency knob);
-/// `Serialize` is written by hand, below, and is where `Tumbler`'s `Ord` IS
-/// used: the checkpoint's bytes must be a function of the contents.
+/// crate built with its `serde` feature (set in the workspace's dependency
+/// table); `Serialize` is written by hand, below, and is where `Tumbler`'s
+/// `Ord` IS used: the checkpoint's bytes must be a function of the contents.
 #[derive(Clone, Default, Deserialize)]
 pub struct ContentStore {
     map: im::HashMap<Tumbler, Val, FixedHasher>,
@@ -207,9 +180,10 @@ impl ContentStore {
 /// from scratch. This satisfies the composition-contract checklist's
 /// "constructible by upstream producers, readable by downstream consumers"
 /// item in full: the one sanctioned producer (`stage_write`) is public to
-/// M5, serde replays at the definition site, and downstream consumers —
-/// including engine-side journal-inspection/diagnostic tooling — read
-/// records through the public accessors and `Debug`.
+/// M5, serde replays at the definition site, and downstream consumers read
+/// records through the public accessors and `Debug` — the engine's
+/// `Record: Debug`, the one account a holder of a central record gets of
+/// M4's delta, is this manual impl.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ContentWrite {
     addr: Tumbler,

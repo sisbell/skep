@@ -10,36 +10,58 @@ readme = "README.md"
 
 [features]
 # Open build decision #4 — the optional defensive content-address assertion
-# (level == Element ∧ subspace == s_C) in stage_write/write, plus the
-# NotContentAddress error variant and the S_C_SUBSPACE numeral it compares
-# against. Off by default; when on, the check is a debug_assert! (the design's
-# recommended sub-choice) — fatal in debug/test builds, free in release.
+# (level == Element ∧ subspace == s_C, M1's content_subspace) that stage_write
+# and write run first; it lives in src/guard.rs. Off by default; when on, the
+# check is a debug_assert! (the design's recommended sub-choice) — fatal in
+# debug/test builds, free in release.
 content-addr-guard = []
+# `test-hooks` compiles in the test-only surface: `write`, the standalone
+# transact-wrapped twin of `stage_write` the composition contract asks for.
+# Committed alone a content write has no placement (J0), so production writes
+# through M5's placement composite and never through it. DEFAULT-OFF: this
+# crate's suite turns it on through the self dev-dependency below, so a build
+# that compiles no test compiles none of it — nor the two crate edges only it
+# takes.
+test-hooks = ["dep:skep-kernel", "dep:skep-namespace"]
 
 [dependencies]
 # The design's mandated slice shape (§Core data model): a persistent HAMT for
 # the address→value map — apply_write shares all untouched structure with the
-# prior slice, so live snapshots pinning old Worlds are nearly free. The serde
-# feature because im::HashMap's Serialize/Deserialize impls are feature-gated
-# and the slice is fully serialized in checkpoints (no skip-serialize).
+# prior slice, so live snapshots pinning old Worlds are nearly free. The slice
+# is fully serialized in checkpoints (no skip-serialize), so it needs
+# im::HashMap's feature-gated serde impls; the `serde` feature comes from the
+# workspace's dependency table.
 im.workspace = true
 # Open build decision #5: the FixedHasher alias's concrete pick —
-# BuildHasherDefault<FxHasher>, fixed-seed and deterministic, so checkpoint
-# serialization is reproducible across runs.
+# BuildHasherDefault<FxHasher>, fixed-seed and deterministic. Checkpoint bytes
+# do not depend on it (the slice's Serialize sorts its entries); it stays for
+# its cost and its bounds (the alias in src/store.rs says which).
 rustc-hash.workspace = true
 # rc for the Arc<[u8]> impls behind Val (§Types & errors).
 serde = { workspace = true, features = ["rc"] }
-# M1 — Tumbler/Address/document_of; M4 holds no address algebra of its own.
+# M1 — Tumbler/Address; Level and content_subspace for the routing guard,
+# document_of for `write`. M4 holds no address algebra of its own.
 skep-address = { path = "../skep-address" }
-# M2 — M4 rides the kernel for atomicity/ordering/durability/recovery; it
+# M2 — `write` alone (`test-hooks`): Kernel, Seq, TxnError, WorldState. The
+# library proper names no kernel item: it rides M2 for atomicity, ordering,
+# durability and recovery through the engine's fold and M5's composites, and
 # owns no journal, replay loop, snapshot, or recovery story of its own.
-skep-kernel = { path = "../skep-kernel" }
-# M3 — ONLY the content-namespace LockKey constructor
-# (M3State::content_lock_key), the workspace's one source of those key bytes;
-# see the OPEN DECISION note at `write`. No M3 state is ever read.
-skep-namespace = { path = "../skep-namespace" }
+skep-kernel = { path = "../skep-kernel", optional = true }
+# M3 — `write` alone (`test-hooks`): M3State::content_lock_key, the
+# workspace's one source of those key bytes; see the OPEN DECISION note at
+# `write`. No M3 state is ever read.
+skep-namespace = { path = "../skep-namespace", optional = true }
 
 [dev-dependencies]
+# This crate itself with `test-hooks` on, so its integration tests (tests/it,
+# outside this library's `cfg(test)`) compile against `write` under a plain
+# `cargo test` or workspace run, no flag added. A build that compiles no test
+# never reads this table.
+skep-content = { path = ".", features = ["test-hooks"] }
+# The suite drives M2 itself and takes M3's content key for the composite
+# test, so it names both crates whatever the library's features.
+skep-kernel = { path = "../skep-kernel" }
+skep-namespace = { path = "../skep-namespace" }
 # bincode is M2's actual wire format — the round-trip tests exercise the real
 # journal/checkpoint encoding; tempfile hosts the durable-recovery test.
 bincode.workspace = true

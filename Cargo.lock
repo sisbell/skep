@@ -1031,6 +1031,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "skep-address",
+ "skep-content",
  "skep-kernel",
  "skep-namespace",
  "tempfile",

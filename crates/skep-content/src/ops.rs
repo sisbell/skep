@@ -1,26 +1,32 @@
-//! §C — the standalone transact-wrapped write (M2 contract 3's second form).
+//! §C — the standalone transact-wrapped write (M2 contract 3's second form),
+//! `test-hooks` builds only.
 
 use skep_address::{document_of, Address, Tumbler};
 use skep_kernel::{Kernel, Seq, TxnError, WorldState};
 use skep_namespace::M3State;
 
 use crate::error::ContentError;
+#[cfg(feature = "content-addr-guard")]
+use crate::guard::debug_assert_content_address;
 use crate::store::{stage_write, ContentWrite};
 use crate::value::Val;
 use crate::HasContent;
-
-#[cfg(feature = "content-addr-guard")]
-use crate::store::debug_assert_content_address;
 
 /// STANDALONE OP — the contract-required transact-wrapped form (M2 contract
 /// 3; §C). Generic over `W`. ISOLATION/TEST USE ONLY: committing a content
 /// write *alone* creates content with no placement, violating J0
 /// (content-allocation ⇒ placement) — production content writes MUST ride
-/// M5's J0/J1★-coupled composite via [`stage_write`]. `#[doc(hidden)]`
-/// because it exists ONLY to satisfy the contract's two-composable-forms
-/// rule, hidden so callers reach for M5's composite instead; the symbol is
-/// KEPT in the production build (not `cfg(test)`-gated) — the contract
-/// requires the form to exist.
+/// M5's J0/J1★-coupled composite via [`stage_write`].
+///
+/// So it is compiled only under the `test-hooks` feature (default off),
+/// which this crate's suite turns on through its self dev-dependency: a
+/// build that compiles no test holds none of it, and a production path that
+/// reached for it would not compile. The contract's two-composable-forms
+/// rule asks only that the form exist, and under the feature it does; a
+/// `cfg(test)` gate would not serve, because the suite in `tests/it` is a
+/// separate crate that never sees this library's `cfg(test)`.
+/// `#[doc(hidden)]` as well, so even a `test-hooks` build's docs send a
+/// reader to M5's composite.
 ///
 /// Locks the per-(document, content-subspace) namespace key — the SAME key
 /// M3's content allocation and M5's placement composite hold, so alloc,
@@ -49,9 +55,10 @@ use crate::store::debug_assert_content_address;
 /// byte-identical by construction — is kept by calling
 /// [`M3State::content_lock_key`] rather than re-spelling the encoding
 /// locally (which the design forbids). Cost: an M4 → M3 crate edge the
-/// design's DAG did not carry, for a pure key constructor only; no M3
-/// *state* is ever read, so "M4 reads no module above M1/M2" holds in the
-/// state sense.
+/// design's DAG did not carry, for a pure key constructor only. The edge is
+/// optional and only `test-hooks` takes it, so the shipped library carries
+/// none — nor its M2 edge, which `write` alone takes too — and no M3
+/// *state* is ever read.
 #[doc(hidden)]
 pub fn write<W>(
     k: &Kernel<W>,

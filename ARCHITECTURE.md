@@ -34,7 +34,10 @@ above it.
 
 **The stores** — each owns one slice of the world and depends only on the
 foundation and on the stores above it.
-- `skep-namespace` — accounts, delegation, ownership.
+- `skep-namespace` — the name space: it mints every address and builds the
+  lock keys the stores take; the entity and principal registries and
+  ownership (ω); each document's publication bit. Its modules and rules:
+  §The name space.
 - `skep-content` — the write-once map from address to value.
 - `skep-arrangement` — documents as arrangements of content, versions,
   provenance.
@@ -52,7 +55,7 @@ foundation and on the stores above it.
 **The surface and the assembler**
 - `skep-febe` — the operation surface (`OperationSurface`): one front door
   that dispatches every operation to the stores, and the codec seam a
-  transport fills.
+  transport fills. Its modules and rules: §The operation surface.
 - `skep-engine` — the one assembler. It defines `World` from the stores'
   slices, genesis, recovery and reads at a past position. Nothing depends
   on it except `skepd`, the conformance harness and — as a dev-dependency,
@@ -112,6 +115,102 @@ Its integration suites are one binary, `tests/it/`: `kernel` (the public
 surface's claims), `hazard` (dirty crashes, built through the engine),
 `golden` (the byte pins) and `chain` (the commit chain's tamper matrix),
 over the shared `fixture` and `mutilate`.
+
+## The name space, `skep-namespace`
+
+`skep-namespace` is the one minting authority. Every address a transaction
+creates — account, document, version, content, link — comes off one of its
+five mints, and every store that mints or writes under a chain
+(`skep-content`, `skep-arrangement`, `skep-links`) holds a lock key M3
+built. It also holds who exists, who owns what (ω, the longest seated
+prefix) and each document's publication bit, all in one slice, `M3State`.
+Node addresses come from provisioning and are only admitted. Its modules
+are declared in `src/lib.rs` in dependency order, each with a line saying
+what it holds. `state.rs` is the slice — its types, its journal delta,
+genesis, the fold and the frontier arithmetic; beneath it, `state/mint.rs`
+holds the lock keys and the five mints (§A) and `state/query.rs` the
+queries (§C).
+
+Rules that hold across its files:
+
+- **A mint is a query, and its caller commits it.** A mint returns the next
+  address with the one `M3Rec::Allocate` that realizes it. The caller takes
+  the paired `*_lock_key` for the transaction, mints off that transaction's
+  working state, and pushes the record in it before its next mint on the
+  chain. That record is the only thing that advances a frontier. A mint
+  whose record is dropped hands out the same address again, and nothing
+  reports it; a record pushed anywhere else is stale and issues its address
+  twice, refused only by a debug build's fold.
+- **An account is minted only with its seat.** `delegate` is the only op
+  that allocates an account: it stages the account's `M3Rec::Allocate` and
+  its principal's `M3Rec::RegisterPrincipal` in one transaction, and genesis
+  folds its one account the same way. So a registered account is owned at
+  exactly its own prefix, and so is every document in it — the owner
+  account `skep-engine` reads by one lookup (`M3State::account_seat`) and
+  `skep-febe` and `skepd` read off ω. A second path that allocates an
+  account owes the same seat.
+- **A namespace has one spelling.** `NsKey`'s fields are private to
+  `src/ns.rs`, so every frontier key, and every chain lock key encoded from
+  one, is built there. The two registry keys are M3's own, crate-private.
+- **No mint lands in the ghost region.** `skep-links` builds its reserved
+  type addresses from `ghost_position`, and `src/ghost.rs`'s floor keeps the
+  allocator past them on every board.
+- **The slice's field order is its checkpoint format.** Fields are appended
+  to `M3State`, never inserted.
+
+Its integration suite is one binary, `tests/it/`: one file per surface over
+the shared `common` world, and `heap`, the binary's byte-counting
+allocator.
+
+## The operation surface, `skep-febe`
+
+`skep-febe` is the front door every client operation passes through.
+`OperationSurface::execute` takes a parsed request and the caller's
+session, hands the operation to the store or query module that owns it,
+and answers only after that module returns: an acknowledged write carries
+the position it committed at (`at`), a read answer the position of the
+snapshot it answered from (`as_of`), and every failure is a typed
+`Rejection`, never a silence. It holds no journaled state. Its one
+authoritative fact is which principal each session speaks for, kept for
+the uptime; its retry memo is a hint. It names no concrete `World`: what it
+requires of the engine — the world it reads and the factory it writes
+through — is its `world` module, which `skep-engine` implements.
+
+Its modules are declared in `src/lib.rs` in dependency order, each with a
+line saying what it holds; each names in code only the modules above it,
+and `tests/it/tidy.rs` checks it. `operation.rs` is the lifecycle; beneath
+it, `operation/door.rs` holds the readability door and
+`operation/dispatch.rs` the two dispatch tables.
+
+Rules that hold across its files:
+
+- **One read predicate per request.** `OperationSurface::readable`, where a
+  supplied `ReadPredicate` and the world's own predicate meet, is private
+  to `operation/door.rs`. Everything else asks through `readable_by` — a
+  request's predicate, bound once off the snapshot it answers from — or
+  `visible_to`, the visibility class a write lends its store. The world's
+  own `ReadableWorld::readable` is a supertrait method of `FebeWorld`,
+  callable wherever a `W` is held, so `tests/it/tidy.rs` checks that only
+  `operation/door.rs` asks it.
+- **The read/write partition is written in three places** — `Op::is_read`
+  and each dispatch table's complement arm — and
+  `each_dispatch_table_rejects_exactly_the_other_half` holds them together.
+  Every classifying method on `Op` — in `request.rs`, and the door's own in
+  `operation/door.rs`, private to it — and on `Response` matches
+  exhaustively with no `_` arm, so a new variant is classified everywhere
+  before it compiles.
+- **Every rejection is classified.** Each one the crate builds goes through
+  `Rejection::classified`, which sets its disposition from
+  `RejectCode::disposition`; every upstream store error reaches it through
+  the `lower` table.
+- **The retry memo holds `CommittedAck`s and nothing else** — the one
+  shape an acknowledged write's `Response` yields — so no rejection and no
+  read answer is ever replayed.
+
+Its integration suite is one binary, `tests/it/`: one file per topic over
+the shared `common` world; `reexports`, which checks from outside the crate
+that a request is built and a response read through `skep_febe` alone; and
+`tidy`, the module order and the check the first rule names.
 
 ## The daemon, `skepd`
 

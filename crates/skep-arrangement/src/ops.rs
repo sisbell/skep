@@ -49,6 +49,11 @@
 //! name exactly the slices its op reads and the records it stages, so a
 //! minimal test world can drive `delete`/`rearrange` with `HasM5 + HasM3`
 //! and `From<M5Rec>` alone.
+//!
+//! Unit tests sit with what they test: `ops/tests.rs` tests this file — the
+//! handle, J0's step, the two budgets — and the bound claim above on `delete`
+//! and `rearrange`; `ops/copy/tests.rs` and `ops/publish/tests.rs` hold the
+//! two ops' own claims, which need a world no engine reaches.
 
 use std::fmt;
 

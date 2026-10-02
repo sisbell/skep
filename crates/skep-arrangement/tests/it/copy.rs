@@ -194,11 +194,11 @@ fn copy_rejects_each_documented_guard() {
         rejected(vs.copy(P1, &doc2(), vp(1, 1), &[])),
         CopyError::EmptyResult
     ));
-    // Two of COPY's guards are not exercised from here, both in `ops::tests`
-    // instead. `DanglingSource` needs a world whose arrangement and content
-    // store are seeded APART, which no engine reaches — every address this
-    // one arranges was written by INSERT in the same composite, and `M5Rec`
-    // cannot be built in a foreign crate. `TooManyRuns` needs a spec list
-    // past `MAX_PLACED_RUNS`, which is a claim about the accumulator rather
-    // than about this assembly.
+    // Two of COPY's guards are not exercised from here, both in
+    // `ops::copy::tests` instead. `DanglingSource` needs a world whose
+    // arrangement and content store are seeded APART, which no engine
+    // reaches — every address this one arranges was written by INSERT in the
+    // same composite, and `M5Rec` cannot be built in a foreign crate.
+    // `TooManyRuns` needs a spec list past `MAX_PLACED_RUNS`, which is a
+    // claim about the accumulator rather than about this assembly.
 }

@@ -1,7 +1,7 @@
 //! THE MODULE ORDER, CHECKED: `src/lib.rs` declares this crate's modules in
 //! dependency order, each naming in code only the modules above it, and this
-//! is that sentence as a test — together with the one edge between two
-//! modules that no path records.
+//! is that sentence as a test — together with the edges between modules that
+//! no path records.
 //!
 //! Every `crate::…` path a module's files name in code — its tests included,
 //! comments and doc links not — resolves to that module or to one declared
@@ -11,9 +11,10 @@
 //! no module of the order. A module's children name their parent through
 //! `super::`, which is the tree itself and not an edge between modules.
 //!
-//! `M5State`'s methods are one namespace across `state.rs` and `reads.rs`, so
-//! a call from the fold into a read records no path; the second test reads
-//! that edge off the method names instead.
+//! `M5State`'s methods are one namespace across the modules holding an
+//! `impl M5State` block — `state.rs`, `reads.rs`, `shot.rs` — so a call from
+//! one into a method another defines records no path; the second test reads
+//! those edges off the method names instead.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -55,44 +56,74 @@ fn every_module_names_only_itself_and_modules_declared_above_it() {
     );
 }
 
-/// ARCHITECTURE.md's rule for the slice: the fold reaches an arrangement
-/// through `state.rs`'s own accessors and calls nothing `reads.rs` defines,
-/// so an edit to a read cannot change what replay folds. Every `fn` name
-/// `reads.rs` defines is looked for as a method call (`.name(`) in the code
-/// of `state.rs` itself — its tests, which read the fold's result through the
-/// reads, are `state/tests.rs` and are not looked at. The scan also asserts
-/// that it found the reads, so a scan that matches nothing fails rather than
-/// passing a clean tree.
+/// `M5State`'s methods are one namespace across every module holding an
+/// `impl M5State` block, so a call from one into a method another defines
+/// records no path. Each such module calls only the methods defined in itself
+/// or in a holder declared above it. For the fold, which `state.rs` holds,
+/// that is ARCHITECTURE.md's rule: it reaches an arrangement through its own
+/// accessors and calls nothing the reads or the address form define, so an
+/// edit to either cannot change what replay folds. The holders are found by
+/// the order `src/lib.rs` declares, so a fourth joins the check by holding a
+/// block. Every `fn` name a holder defines is looked for as a method call
+/// (`.name(`) in the code of each holder above it — the holders' own files,
+/// not their tests, which read the fold's result through the reads. The scan
+/// also asserts that it found the slice, its reads and their names, so a scan
+/// that matches nothing fails rather than passing a clean tree.
 #[test]
-fn the_fold_calls_nothing_the_reads_define() {
+fn each_module_calls_only_m5state_methods_defined_in_itself_or_above_it() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let reads = std::fs::read_to_string(src.join("reads.rs")).expect("src/reads.rs is readable");
-    let state = std::fs::read_to_string(src.join("state.rs")).expect("src/state.rs is readable");
-    let defined: Vec<String> = code_lines(&reads)
+    let lib = std::fs::read_to_string(src.join("lib.rs")).expect("src/lib.rs is readable");
+    let holders: Vec<(&str, String)> = lib
+        .lines()
+        .filter_map(|l| l.strip_prefix("mod ")?.strip_suffix(';'))
+        .filter_map(|module| {
+            let text = std::fs::read_to_string(src.join(format!("{module}.rs"))).ok()?;
+            text.contains("impl M5State {").then_some((module, text))
+        })
+        .collect();
+    let order: Vec<&str> = holders.iter().map(|(module, _)| *module).collect();
+    assert!(
+        order.starts_with(&["state", "reads"]),
+        "the slice, then its reads: {order:?}"
+    );
+    assert!(
+        defined_fns(&holders[1].1)
+            .iter()
+            .any(|name| name == "content_count"),
+        "the scan finds the reads `reads.rs` defines"
+    );
+    let mut faults = Vec::new();
+    for (at, (caller, text)) in holders.iter().enumerate() {
+        for (definer, below) in &holders[at + 1..] {
+            for name in defined_fns(below) {
+                let call = format!(".{name}(");
+                for code in code_lines(text).filter(|code| code.contains(&call)) {
+                    faults.push(format!(
+                        "{caller}.rs calls `{name}`, which {definer}.rs defines: {}",
+                        code.trim()
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        faults.is_empty(),
+        "a module calls an `M5State` method defined below it — ask its own accessors, or \
+         move the method:\n{}",
+        faults.join("\n")
+    );
+}
+
+/// The name of every `fn` the code of `text` defines ([`code_lines`]).
+fn defined_fns(text: &str) -> Vec<String> {
+    code_lines(text)
         .filter_map(|code| {
             let (_, rest) = code.split_once("fn ")?;
             let name: String =
                 rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
             (!name.is_empty()).then_some(name)
         })
-        .collect();
-    assert!(
-        defined.iter().any(|name| name == "content_count"),
-        "the scan finds the reads `reads.rs` defines: {defined:?}"
-    );
-    let calls: Vec<String> = code_lines(&state)
-        .flat_map(|code| {
-            defined
-                .iter()
-                .filter(move |name| code.contains(&format!(".{name}(")))
-                .map(move |name| format!("`{name}`: {}", code.trim()))
-        })
-        .collect();
-    assert!(
-        calls.is_empty(),
-        "the fold calls a read — ask `state.rs`'s own accessors, or move the read:\n{}",
-        calls.join("\n")
-    );
+        .collect()
 }
 
 /// The root's `pub use <module>::…;` lines, as re-exported name → the rank

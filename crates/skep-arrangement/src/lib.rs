@@ -187,7 +187,8 @@ mod vspace;
 // The version-chain reads: trunk, head, publication, the two surfaces.
 mod chain;
 // The slice: `M5State`, one document's arrangement and the absent-⇒-empty
-// convention, the journal delta `M5Rec`, and the fold.
+// convention, the journal delta `M5Rec`, the fold, and the two reads
+// (`birth_extent`, `shot_terms`) of the fields only the fold writes.
 mod state;
 // The reads on the slice: resolve, point, image, project, deletions, the
 // counts, and the admission predicates the ops ask.

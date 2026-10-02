@@ -2,7 +2,8 @@
 //! arrangement and the absent-⇒-empty convention every read of the map goes
 //! through ([`M5State::arrangement_of`]), its sole journal delta ([`M5Rec`]),
 //! and the pure fold ([`M5State::apply_m5`]), which reaches an arrangement
-//! through this file's own accessors and calls nothing `reads.rs` defines.
+//! through this file's own accessors and calls nothing `reads.rs` or
+//! `shot.rs` defines.
 
 use std::sync::LazyLock;
 
@@ -57,7 +58,10 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// permanence R promises holds by construction. `arrangements` is sparse: an
 /// absent doc ⇒ empty arrangement (the eager-lazy split with M3). v1 has no
 /// derived-hint fields ⇒ [`rebuild_derived`](M5State::rebuild_derived) is
-/// the identity.
+/// the identity. Two of its four fields, `birth_extents` and `shot_terms`,
+/// are private to this module, so no other module can build an `M5State` by
+/// struct literal: every one in the crate is a default, a decoded checkpoint,
+/// or the fold's output.
 ///
 /// THE BIRTH EXTENTS (`birth_extents`; PUB-3.19 as RES-276 reads it, frozen
 /// by the owner's ruling D2, 2026-09-17) are the third field, and the one
@@ -214,8 +218,8 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 pub struct M5State {
     pub(crate) arrangements: im::OrdMap<Address, DocArrangement>,
     pub(crate) provenance: Provenance,
-    pub(crate) birth_extents: im::OrdMap<Address, Nat>,
-    pub(crate) shot_terms: im::OrdMap<Address, ShotTerms>,
+    birth_extents: im::OrdMap<Address, Nat>,
+    shot_terms: im::OrdMap<Address, ShotTerms>,
 }
 
 /// THE SHOT'S TWO CLIENT TERMS, per member the shot minted (the signed-ops

@@ -413,3 +413,6 @@ struct SettledRun {
     run: Run,
     origin_doc: Address,
 }
+
+#[cfg(test)]
+mod tests;

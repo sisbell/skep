@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "M5 — Arrangements & Editing (Vstream): the per-document mutable V→I arrangement (POOM) plus the append-only content-provenance relation R; editing/versioning operations and the publish shot, the version-chain reads (head-float and the deposit surface), link seating for M7, forward/reverse arrangement reads, the R read surface, and the birth-extent read"
+description = "M5 — Arrangements & Editing (Vstream): the per-document mutable V→I arrangement (POOM) plus the append-only content-provenance relation R; editing/versioning operations and the publish shot, the version-chain reads (head-float and the deposit surface), link seating for M7, forward/reverse arrangement reads, the R read surface, the birth-extent and shot-terms reads, and the shot's address form"
 readme = "README.md"
 
 [features]
@@ -20,14 +20,16 @@ test-hooks = []
 
 [dependencies]
 # The design's mandated slice shapes (§Core data model): persistent im
-# collections for the three fields of M5's slice — arrangements keyed by the
+# collections for the four fields of M5's slice — arrangements keyed by the
 # document Address (im::OrdMap), the provenance relation (im::OrdMap of
 # im::Vector<Span>, behind the Provenance type that keeps it append-only,
-# keyed the same way), and the birth extents the fold derives
-# (im::OrdMap<Address, Nat>, keyed by each trunk's birth version) — plus the
-# RunList's v1 physical backing im::Vector<Run> (Open build decision #1
-# default). The serde feature because all three fields are fully serialized
-# in checkpoints (no skip-serialize; rebuild_derived is identity).
+# keyed the same way), the birth extents the fold derives
+# (im::OrdMap<Address, Nat>, keyed by each trunk's birth version), and the
+# shot terms the shot journals (im::OrdMap<Address, ShotTerms>, keyed by each
+# member it mints) — plus the RunList's v1 physical backing im::Vector<Run>
+# (Open build decision #1 default). The serde feature because all four fields
+# are fully serialized in checkpoints (no skip-serialize; rebuild_derived is
+# identity).
 im.workspace = true
 # Nat::zero()/one()/is_zero() are trait fns the ordinal math keeps in scope.
 num-traits.workspace = true

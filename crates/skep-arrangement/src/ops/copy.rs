@@ -197,3 +197,6 @@ where
             .map(|((), seq)| seq)
     }
 }
+
+#[cfg(test)]
+mod tests;

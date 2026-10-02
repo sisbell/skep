@@ -251,7 +251,7 @@ impl Block<'_> {
     /// The first V-ordinal past the block — `v_start + width`, the V-side
     /// twin of [`Run::reach`]; what `locate`'s bound, the clip and the
     /// splitter's interior test each ask.
-    pub(crate) fn v_reach(&self) -> Nat {
+    fn v_reach(&self) -> Nat {
         &self.v_start + &self.run.width
     }
 }

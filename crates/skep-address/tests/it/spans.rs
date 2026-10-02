@@ -347,8 +347,8 @@ fn split_cuts_at_an_interior_point_and_checks_the_level_clause_first() {
 fn difference_yields_one_or_two_complements_by_sc_case() {
     let a = sp(&[1], &[9]);
     // separated / adjacent: ⟦a⟧ unchanged
-    assert_eq!(difference(&a, &sp(&[20], &[30])).unwrap(), spanset(&[a.clone()]));
-    assert_eq!(difference(&a, &sp(&[9], &[12])).unwrap(), spanset(&[a.clone()]));
+    assert_eq!(difference(&a, &sp(&[20], &[30])).unwrap(), spanset(std::slice::from_ref(&a)));
+    assert_eq!(difference(&a, &sp(&[9], &[12])).unwrap(), spanset(std::slice::from_ref(&a)));
     // proper overlap, a first: the left complement
     assert_eq!(difference(&a, &sp(&[5], &[12])).unwrap(), spanset(&[sp(&[1], &[5])]));
     // proper overlap, b first: the right complement

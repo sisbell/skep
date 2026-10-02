@@ -228,7 +228,7 @@ pub(super) fn filter_tree(
         claims
             .get(old.tumbler())
             .and_then(|by_new| by_new.get(new.tumbler()))
-            .is_some_and(|asserting| asserting.iter().any(|claim| document_readable(claim)))
+            .is_some_and(|asserting| asserting.iter().any(document_readable))
     };
 
     retain_map(&mut root, &["authoritative", "content", "map"], &keep_serde_form);

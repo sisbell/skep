@@ -713,9 +713,9 @@ fn three_atom_record_folds() {
     let spans = fx.mint(
         &doc1(ACCT_A),
         &[
-            record[..bracket].as_bytes(),
-            record[bracket..comma].as_bytes(),
-            record[comma..].as_bytes(),
+            &record.as_bytes()[..bracket],
+            &record.as_bytes()[bracket..comma],
+            &record.as_bytes()[comma..],
         ],
     );
     let dep = Dep {

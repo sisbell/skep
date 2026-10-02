@@ -182,9 +182,12 @@ compiles in `seat_link`, the test-only twin of the link seat;
 Rules that hold across its files:
 
 - **One fold.** A committed `M5State` comes only from `apply_m5` over an
-  `M5Rec`. The fold reaches an arrangement through `state.rs`'s own
-  `arrangement_of` and calls nothing defined in `reads.rs`, so an edit to a
-  read cannot change what replay folds; `tests/it/tidy.rs` checks it.
+  `M5Rec`, and inside this crate only `state.rs` builds one: two of its
+  fields are private there. The fold reaches an arrangement through
+  `state.rs`'s own `arrangement_of` and calls nothing defined in `reads.rs`
+  or `shot.rs`, the other two files holding `M5State`'s methods, so an edit
+  to a read or to the address form cannot change what replay folds;
+  `tests/it/tidy.rs` checks it.
 - **One door for a run.** `Run::new` admits every run not built in this
   crate — the serde shadow and the `LinkSeat` fold go through it — and every
   in-crate literal starts at an address that already is a full element

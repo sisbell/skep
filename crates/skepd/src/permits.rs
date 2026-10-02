@@ -47,7 +47,7 @@ impl Permits {
     #[must_use = "a permit dropped at once returns its slot at once"]
     pub(crate) fn try_acquire(&self) -> Option<Permit<'_>> {
         self.available
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1))
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1))
             .ok()
             .map(|_| Permit { pool: self })
     }

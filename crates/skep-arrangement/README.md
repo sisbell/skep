@@ -39,7 +39,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   took — for every member it mints, so a verifier of the member's entry
   signature reads them off the state beside the member's runs, in the
   address form the signature covers (the document's own runs by value,
-  windows by address).
+  windows by address). Everything `publish` checks before it probes an
+  address — registration, ownership, the base's shape, the source gate —
+  is one query too, `shot_admission`, which a door asks of the world the
+  transaction will open on to learn the shot's verdict through its gate.
 - **Write-surface gates** — the four edit ops and `publish` take a
   `Caller` and admit only the document's effective owner (ω, exact
   account match; `Caller::System` is the in-process automation path,
@@ -59,10 +62,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   address cannot tell you it once did, which is what makes deletions
   and "who has ever contained this" answerable at all.
 - **Birth extents** — per trunk, the content count its birth version
-  was minted with (PUB-3.19), unmoved by the deposits that grow the
-  head; noted by the fold off the mint's own placing record (a shot
-  that mints it empty notes zero) and carried by checkpoints, since
-  the arrangement cannot say afterwards where the birth ended.
+  (`birth_version`, the member that opens the chain) was minted with
+  (PUB-3.19), unmoved by the deposits that grow the head; noted by the
+  fold off the mint's own placing record (a shot that mints it empty
+  notes zero, which reads as `Some(0)` and not as no birth) and carried
+  by checkpoints, since the arrangement cannot say afterwards where the
+  birth ended.
 - **`resolve` / `project`** — the I-runs a V-region maps onto, and the
   V-footprint an I-address cover leaves in a document; the reads every
   query layer builds on.

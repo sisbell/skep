@@ -30,7 +30,7 @@ skep-kernel = { path = "../skep-kernel" }
 # registry and ω reads asked by the namespace reads, the door's deferral, the
 # successor guard and the publication reads (`next_account_prefix`,
 # `principal_prefix`, `effective_owner_pair`/`_prefix`,
-# `is_registered_document`, `first_version_address`, `prefix_contains`).
+# `is_registered_document`, `prefix_contains`).
 skep-namespace = { path = "../skep-namespace" }
 # M4 — four names, no call (design, Conflicts resolved #4): HasContent is a
 # FebeWorld supertrait and ContentWrite the record lift Vstream::insert's bound
@@ -41,7 +41,7 @@ skep-content = { path = "../skep-content" }
 # M5 — the six arrangement/versioning writes via the Vstream driver, each
 # built carrying the request's attestation; `iter_resolve` +
 # `content_run_count` + `Run::iextent` behind `as_ordinal_vspan` assemble
-# editlink's successor (§4); `trunk_of`/`trunk_head`/`published_target`,
+# editlink's successor (§4); `trunk_of`/`published_target`/`birth_version`,
 # `birth_extent`/`shot_terms` and `Caller` for the door and the publication
 # reads.
 skep-arrangement = { path = "../skep-arrangement" }

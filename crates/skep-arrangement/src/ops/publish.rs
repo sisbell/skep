@@ -1,7 +1,8 @@
 //! PUBLISH, the SHOT (PUB-2.33; PUB round 2, lane 3.2): the next member of a
 //! published document's chain, born published in one commit from the runs
-//! the client supplied — and `SettledRun`, the one value its source gate,
-//! existence check and placement each walk.
+//! the client supplied — its ADMISSION ([`shot_admission`]), every check made
+//! before any effect, offered to a door as a query — and `SettledRun`, the
+//! one value its source gate, existence check and placement each walk.
 
 use std::collections::BTreeSet;
 
@@ -19,7 +20,7 @@ use crate::ownership::{gate_write, Caller};
 use crate::run::Run;
 use crate::runlist::extend_or_push_run;
 use crate::shot::{run_origin_document, Shot};
-use crate::state::M5Rec;
+use crate::state::{M5Rec, ShotTerms};
 use crate::HasM5;
 
 impl<W> Vstream<'_, W>
@@ -82,18 +83,18 @@ where
     /// stager un-arranged and nothing else. One [`M5Rec::ShotPlace`] journals
     /// the whole arrangement at ordinal 1 — the fold appends every placed
     /// run's I-extent to R (J1★), the by-reference runs as COPY's are and the
-    /// fresh ones as INSERT's — AND THE SHOT's TWO CLIENT TERMS (the
-    /// signed-ops design record's D25, arm (c′)): `placed`, Σ width of the
-    /// client's runs — where its runs end and the carried tail begins, which
-    /// the run-list erases whenever the two are I-adjacent — and
-    /// `base_extent`, `None` in the birth shape. The record is pushed for
-    /// EVERY member the shot mints, an empty placement included, since the
-    /// terms exist whatever the placement holds; an empty one leaves the
-    /// member reading as the lazy empty arrangement, its birth extent noted
-    /// at zero. The member's LINK subspace starts empty either way: the shot
-    /// places content alone, and a link seated in the base stays the base's
-    /// — a link is arranged only in its home document (CL-OWN, PUB-2.12),
-    /// and the member is a home no link has yet.
+    /// fresh ones as INSERT's — AND THE SHOT's TERMS ([`ShotTerms`]; the
+    /// signed-ops design record's D25, arm (c′)): where the client's runs end
+    /// — Σ width of its runs, the boundary the run-list erases whenever the
+    /// last of them and the carried tail are I-adjacent — and the base's
+    /// extent, absent in the birth shape. The record is pushed for EVERY
+    /// member the shot mints, an empty placement included, since the terms
+    /// exist whatever the placement holds; an empty one leaves the member
+    /// reading as the lazy empty arrangement — and a birth version so minted
+    /// with its birth extent noted at zero. The member's LINK subspace starts
+    /// empty either way: the shot places content alone, and a link seated in
+    /// the base stays the base's — a link is arranged only in its home
+    /// document (CL-OWN, PUB-2.12), and the member is a home no link has yet.
     ///
     /// Check order (which error wins), PUB-6.36's slots: `DocNotRegistered`
     /// → `NotOwner` (slot 1, ω on the address named — the only question the
@@ -111,7 +112,8 @@ where
     /// arranges (PUB-6.24's carried cell), the FIRST unreadable origin
     /// document answering `Withheld` with it — BEFORE any existence answer,
     /// so a run onto an unreadable origin is refused whether or not its
-    /// addresses exist → `TooManyValues`
+    /// addresses exist; every verdict to here is [`shot_admission`]'s, which
+    /// this composite opens with on its working world → `TooManyValues`
     /// ([`Shot::reinserted_values`](crate::Shot::reinserted_values) against
     /// [`MAX_REINSERTED_VALUES`] — request arithmetic, so it answers before
     /// any address is probed) → existence, `DanglingSource` on
@@ -157,10 +159,10 @@ where
     /// the document's, whichever member names it, and its publication, chain
     /// and base are judged on that document.
     ///
-    /// `shot` is taken by value because the composite keeps it: the member's
-    /// arrangement is built from the shot's runs, and each by-reference run
-    /// moves into the placement record rather than being cloned out of a
-    /// borrow.
+    /// `shot` is taken by value, the request handed over whole — no caller
+    /// keeps a shot it has published. Its admission reads it through a
+    /// borrow, as a door's pre-check does, and the placement clones each
+    /// by-reference run it keeps.
     ///
     /// COST, AND WHO OWNS IT. The re-insert pushes a mint and a content write
     /// per draft-native value — `2n` records for `n` values, INSERT's own
@@ -209,30 +211,13 @@ where
         // The seam's one line: the attested arm, which is `transact` where
         // this handle carries no attestation (signed ops).
         self.kernel.transact_attested(&keys, self.attest, |stg| {
-            // Slot 1: registration and ω, on the address named.
-            gate_write(
-                stg.working().m3(),
-                caller,
-                doc,
-                PublishError::DocNotRegistered,
-                PublishError::NotOwner,
-            )?;
-            let world = stg.working();
-            let (m3, m5, content) = (world.m3(), world.m5(), world.content());
-            // Slot 3: registration — the base, the document the draft
-            // projects to, every origin document (PUB-6.37: an unregistered
-            // argument answers registration and nothing later).
-            if let Some(base) = &shot.base {
-                if !m3.is_registered_document(&base.member) {
-                    return Err(PublishError::SourceNotRegistered);
-                }
-            }
-            let draft_doc = shot.draft_document();
-            if let Some(d) = &draft_doc {
-                if !m3.is_registered_document(d) {
-                    return Err(PublishError::SourceNotRegistered);
-                }
-            }
+            // Slots 1 through 6 — the shot's admission, asked of this
+            // transaction's working world: its verdicts are `shot_admission`'s,
+            // and what the rest of the composite needs of it is the anchor
+            // the member is minted under and the runs settled beside their
+            // origin documents.
+            let Admission { anchor, supplied } =
+                admit(stg.working(), caller, doc, &shot, readable)?;
             // Which runs are the STAGING DRAFT's, re-inserted as fresh
             // identity rather than placed by reference (PUB-2.40) — the
             // family rule `Shot` states, by which `Shot::reinserted_values`
@@ -240,88 +225,8 @@ where
             // run's origin document with `Shot::draft_document`, and
             // `the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes`
             // holds them to one answer.
+            let draft_doc = shot.draft_document();
             let draft_native = |origin_doc: &Address| draft_doc.as_ref() == Some(origin_doc);
-            // Each run settled beside its origin document (`SettledRun`):
-            // derived from the run's own start, required to be the document
-            // the client's stated `origin` projects to, then registered — the
-            // first defective run in order deciding.
-            let supplied: Vec<SettledRun> = shot
-                .runs
-                .into_iter()
-                .map(|stated| -> Result<SettledRun, PublishError> {
-                    let origin_doc =
-                        run_origin_document(&stated.run).ok_or(PublishError::BadRun)?;
-                    if origin_doc != trunk_of(&stated.origin) {
-                        return Err(PublishError::BadRun);
-                    }
-                    if !m3.is_registered_document(&origin_doc) {
-                        return Err(PublishError::SourceNotRegistered);
-                    }
-                    Ok(SettledRun { run: stated.run, origin_doc })
-                })
-                .collect::<Result<_, _>>()?;
-            // Slot 5: the model's refusal — a private document has no chain
-            // to append to (PUB-2.9).
-            if !published_target(m3, doc) {
-                return Err(PublishError::PrivateSourceVersionless);
-            }
-            // The base's shape, and the anchor the member is minted under —
-            // judged against the head every floating reader answers from,
-            // read before the member is minted.
-            let head = trunk_head(m3, doc);
-            let anchor: &Address = match &shot.base {
-                None => {
-                    if head.is_some() {
-                        return Err(PublishError::BaseSuperseded);
-                    }
-                    &trunk
-                }
-                Some(base) => {
-                    if base.member == trunk {
-                        if head.is_some() {
-                            return Err(PublishError::BaseSuperseded);
-                        }
-                    } else if trunk_of(&base.member) != trunk {
-                        return Err(PublishError::BaseNotInChain);
-                    }
-                    if base.extent > m5.content_count(&base.member) {
-                        return Err(PublishError::BaseExtentTooLarge);
-                    }
-                    // The head/pinned distinction is the commit's own
-                    // (PUB-2.39's head/older): the memberless document, or a
-                    // base that is still the head ⇒ the trunk's next member;
-                    // else the base's daughter.
-                    if base.member == trunk || head.as_ref() == Some(&base.member) {
-                        &trunk
-                    } else {
-                        &base.member
-                    }
-                }
-            };
-            // Slot 6: the source gate, per distinct origin document, in run
-            // order — the document's own I-space needs no consult, a run the
-            // base already arranges takes none (PUB-6.24), and the FIRST
-            // unreadable origin document speaks before any existence answer.
-            // An origin document joins `admitted` only once the consult admits
-            // it: a carried run adds nothing to it, so a later run from the
-            // same origin that the base does not arrange is still asked about.
-            let mut admitted: BTreeSet<&Address> = BTreeSet::new();
-            for SettledRun { run, origin_doc } in &supplied {
-                if *origin_doc == trunk || admitted.contains(origin_doc) {
-                    continue;
-                }
-                let carried = shot
-                    .base
-                    .as_ref()
-                    .is_some_and(|base| m5.arranges_run(&base.member, run));
-                if carried {
-                    continue;
-                }
-                if !readable(world, origin_doc) {
-                    return Err(PublishError::Withheld(origin_doc.clone()));
-                }
-                admitted.insert(origin_doc);
-            }
             // The re-insert's size, refused before any address is probed:
             // every address of every draft-native run is re-inserted below,
             // two staged records apiece, and nothing M2 measures stops the
@@ -342,6 +247,7 @@ where
             // makes the answer found here the answer the re-insert gets — M4's
             // fold only ever adds (S0), so no write staged in between can take
             // a value away.
+            let content = stg.working().content();
             for SettledRun { run, .. } in &supplied {
                 if !run.addrs().all(|a| content.value_at(a.tumbler()).is_some()) {
                     return Err(PublishError::DanglingSource);
@@ -368,7 +274,7 @@ where
                         allocate_for_placement::<_, PublishError>(stg, &trunk, value, &mut placed)?;
                     }
                 } else {
-                    extend_or_push_run(&mut placed, run);
+                    extend_or_push_run(&mut placed, run.clone());
                 }
                 if placed.len() > MAX_PLACED_RUNS {
                     return Err(PublishError::TooManyRuns);
@@ -387,24 +293,185 @@ where
                 }
             }
             // The member: born published (PUB-2.5, PUB-2.10), under the
-            // anchor decided above.
-            let (member, m3rec) = stg.working().m3().mint_version(anchor, true)?;
+            // anchor its admission decided.
+            let (member, m3rec) = stg.working().m3().mint_version(&anchor, true)?;
             stg.push(m3rec.into());
             // Its placing record, pushed whatever the placement holds: the
-            // whole arrangement and the shot's two client terms, the second
-            // absent in the birth shape (D25 (c′)).
+            // whole arrangement and the shot's terms, the base's extent absent
+            // in the birth shape (D25 (c′)).
             stg.push(
                 M5Rec::ShotPlace {
                     doc: member.clone(),
                     runs: placed,
-                    placed: placed_count,
-                    base_extent: shot.base.as_ref().map(|base| base.extent.clone()),
+                    terms: ShotTerms {
+                        placed: placed_count,
+                        base_extent: shot.base.as_ref().map(|base| base.extent.clone()),
+                    },
                 }
                 .into(),
             );
             Ok(member)
         })
     }
+}
+
+/// THE SHOT'S ADMISSION — every check [`Vstream::publish`] makes before it
+/// probes an address, stages a record or mints: registration and ω of the
+/// address named, the registration and shape of every argument, the
+/// document's publication, the base's shape, and the source gate —
+/// PUB-6.36's slots 1 through 6, in the order `publish` states — asked of
+/// `world` and nothing else. `Err` is the refusal `publish` answers there,
+/// and only a verdict of those slots: `DocNotRegistered`, `NotOwner`,
+/// `SourceNotRegistered`, `BadRun`, `PrivateSourceVersionless`,
+/// `BaseNotInChain`, `BaseSuperseded`, `BaseExtentTooLarge`, `Withheld`.
+/// `Ok` is a shot `publish` carries past its source gate in `world`; whatever
+/// it answers after that — `TooManyValues` onward — is the composite's alone.
+///
+/// ONE ANSWER, NOT TWO: `publish` opens with this check on its working world,
+/// so a door asking it of the world the transaction will open on is told
+/// what `publish` will answer through its gate, with nothing simulated or
+/// staged to learn it. `readable` is asked as `publish` asks it — once per
+/// distinct origin document, in run order, of `world` — and is held to
+/// `publish`'s first REQUIRES: it answers off the world it is handed.
+///
+/// COST: `publish`'s own through its gate — the carried-run sweep, one
+/// consult per distinct origin document — and nothing of the existence walk
+/// or the placement. It reads no content store, so a world of M3 and M5
+/// alone answers it.
+pub fn shot_admission<W: HasM3 + HasM5>(
+    world: &W,
+    caller: Caller,
+    doc: &Address,
+    shot: &Shot,
+    readable: &dyn Fn(&W, &Address) -> bool,
+) -> Result<(), PublishError> {
+    admit(world, caller, doc, shot, readable).map(|_| ())
+}
+
+/// `publish`'s checks through its source gate — PUB-6.36's slots 1 to 6, in
+/// the order `publish` states — asked of `world` alone: [`shot_admission`]'s
+/// verdict, with what the rest of the composite needs of it.
+fn admit<'s, W: HasM3 + HasM5>(
+    world: &W,
+    caller: Caller,
+    doc: &Address,
+    shot: &'s Shot,
+    readable: &dyn Fn(&W, &Address) -> bool,
+) -> Result<Admission<'s>, PublishError> {
+    let trunk = trunk_of(doc);
+    // Slot 1: registration and ω, on the address named.
+    gate_write(
+        world.m3(),
+        caller,
+        doc,
+        PublishError::DocNotRegistered,
+        PublishError::NotOwner,
+    )?;
+    let (m3, m5) = (world.m3(), world.m5());
+    // Slot 3: registration — the base, the document the draft projects to,
+    // every origin document (PUB-6.37: an unregistered argument answers
+    // registration and nothing later).
+    if let Some(base) = &shot.base {
+        if !m3.is_registered_document(&base.member) {
+            return Err(PublishError::SourceNotRegistered);
+        }
+    }
+    if let Some(d) = &shot.draft_document() {
+        if !m3.is_registered_document(d) {
+            return Err(PublishError::SourceNotRegistered);
+        }
+    }
+    // Each run settled beside its origin document (`SettledRun`): derived
+    // from the run's own start, required to be the document the client's
+    // stated `origin` projects to, then registered — the first defective run
+    // in order deciding.
+    let supplied: Vec<SettledRun<'s>> = shot
+        .runs
+        .iter()
+        .map(|stated| -> Result<SettledRun<'s>, PublishError> {
+            let origin_doc = run_origin_document(&stated.run).ok_or(PublishError::BadRun)?;
+            if origin_doc != trunk_of(&stated.origin) {
+                return Err(PublishError::BadRun);
+            }
+            if !m3.is_registered_document(&origin_doc) {
+                return Err(PublishError::SourceNotRegistered);
+            }
+            Ok(SettledRun {
+                run: &stated.run,
+                origin_doc,
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    // Slot 5: the model's refusal — a private document has no chain to
+    // append to (PUB-2.9).
+    if !published_target(m3, doc) {
+        return Err(PublishError::PrivateSourceVersionless);
+    }
+    // The base's shape, and the anchor the member is minted under — judged
+    // against the head every floating reader answers from, read before the
+    // member is minted.
+    let head = trunk_head(m3, doc);
+    let anchor = match &shot.base {
+        None => {
+            if head.is_some() {
+                return Err(PublishError::BaseSuperseded);
+            }
+            trunk.clone()
+        }
+        Some(base) => {
+            if base.member == trunk {
+                if head.is_some() {
+                    return Err(PublishError::BaseSuperseded);
+                }
+            } else if trunk_of(&base.member) != trunk {
+                return Err(PublishError::BaseNotInChain);
+            }
+            if base.extent > m5.content_count(&base.member) {
+                return Err(PublishError::BaseExtentTooLarge);
+            }
+            // The head/pinned distinction is the commit's own (PUB-2.39's
+            // head/older): the memberless document, or a base that is still
+            // the head ⇒ the trunk's next member; else the base's daughter.
+            if base.member == trunk || head.as_ref() == Some(&base.member) {
+                trunk.clone()
+            } else {
+                base.member.clone()
+            }
+        }
+    };
+    // Slot 6: the source gate, per distinct origin document, in run order —
+    // the document's own I-space needs no consult, a run the base already
+    // arranges takes none (PUB-6.24), and the FIRST unreadable origin
+    // document speaks before any existence answer. An origin document joins
+    // `admitted` only once the consult admits it: a carried run adds nothing
+    // to it, so a later run from the same origin that the base does not
+    // arrange is still asked about.
+    let mut admitted: BTreeSet<&Address> = BTreeSet::new();
+    for SettledRun { run, origin_doc } in &supplied {
+        if *origin_doc == trunk || admitted.contains(origin_doc) {
+            continue;
+        }
+        let carried = shot
+            .base
+            .as_ref()
+            .is_some_and(|base| m5.arranges_run(&base.member, run));
+        if carried {
+            continue;
+        }
+        if !readable(world, origin_doc) {
+            return Err(PublishError::Withheld(origin_doc.clone()));
+        }
+        admitted.insert(origin_doc);
+    }
+    Ok(Admission { anchor, supplied })
+}
+
+/// What the shot's admission ([`admit`]) hands the rest of the composite:
+/// the anchor its member is minted under — decided with the base's shape —
+/// and the runs settled beside their origin documents.
+struct Admission<'s> {
+    anchor: Address,
+    supplied: Vec<SettledRun<'s>>,
 }
 
 /// A supplied run beside the ORIGIN DOCUMENT its own start settles
@@ -414,9 +481,9 @@ where
 /// that run's own origin document and no second list has to stay in step
 /// with the runs for the gate to judge the run it is looking at.
 /// [`ShotRun`](crate::ShotRun) is the client's statement; this is the
-/// statement checked.
-struct SettledRun {
-    run: Run,
+/// statement checked, beside the run it checked.
+struct SettledRun<'s> {
+    run: &'s Run,
     origin_doc: Address,
 }
 

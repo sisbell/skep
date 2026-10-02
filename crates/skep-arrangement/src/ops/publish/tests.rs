@@ -5,13 +5,13 @@
 
 use serde::{Deserialize, Serialize};
 use skep_content::{stage_write, ContentStore, Val};
-use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource};
+use skep_kernel::Kernel;
 use skep_namespace::PrincipalId;
 
 use super::*;
 use crate::shot::{Base, ShotRun};
-use crate::state::{M5State, ShotTerms};
-use crate::testutil::{a, ca, doc1, n, pca, pdoc, rejected, run, seeded_m3};
+use crate::state::M5State;
+use crate::testutil::{a, ca, doc1, mem_kernel_of, n, pca, pdoc, rejected, run, seeded_m3};
 
 /// A world carrying all three slices the SHOT touches — M3 (its member's
 /// mint), M4 (the existence check and the re-insert's writes) and M5 (the
@@ -115,12 +115,7 @@ fn shot_kernel(member_runs: Vec<Run>, present: &[u32]) -> Kernel<ShotWorld> {
             .expect("each seeded address is written once");
         content = content.apply_write(&cw);
     }
-    let cfg = KernelConfig {
-        durability: Durability::InMemory,
-        checkpoint: CheckpointPolicy::Manual,
-        salt: SaltSource::Seeded(0),
-    };
-    Kernel::open(cfg, ShotWorld { m3, content, m5 }).expect("in-memory open")
+    mem_kernel_of(ShotWorld { m3, content, m5 })
 }
 
 /// A shot staged off `pdoc_member()`, its copy having taken `extent` of
@@ -286,9 +281,8 @@ fn an_empty_shot_mints_its_member_places_nothing_and_journals_its_terms() {
     // arrangement and R come out exactly as they went in — no arrangement
     // entry and nothing in R for the member, which reads as the lazy empty
     // arrangement, as an empty fork's does — while the member's terms are
-    // noted (nothing placed, the base's extent as the shot named it) and
-    // its birth extent at zero. (Until the record carried the terms an empty
-    // placement pushed no record and the slice was untouched.)
+    // noted (nothing placed, the base's extent as the shot named it) and,
+    // the member being the chain's second, no birth extent.
     let p1 = Caller::Principal(PrincipalId(1));
     let k = shot_kernel(vec![], &[]);
     let before = k.snapshot().world().m5().clone();
@@ -310,5 +304,5 @@ fn an_empty_shot_mints_its_member_places_nothing_and_journals_its_terms() {
         Some(&ShotTerms { placed: n(0), base_extent: extent }),
         "the terms are journaled all the same"
     );
-    assert_eq!(m5.birth_extent(&member), n(0), "a birth version born empty, noted at zero");
+    assert_eq!(m5.birth_extent(&member), None, "the chain's second member is no birth version");
 }

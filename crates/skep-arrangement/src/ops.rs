@@ -45,15 +45,18 @@
 //! key ([`head_lock_key`]). Each operation is a child module holding one
 //! `impl` block — `ops/insert.rs`, `ops/publish.rs`, `ops/copy.rs`,
 //! `ops/delete.rs`, `ops/rearrange.rs`, `ops/version.rs` — and sees this
-//! file's private items and none of its siblings'. Each block's trait bounds
-//! name exactly the slices its op reads and the records it stages, so a
-//! minimal test world can drive `delete`/`rearrange` with `HasM5 + HasM3`
-//! and `From<M5Rec>` alone.
+//! file's private items and none of its siblings'. `ops/publish.rs` holds as
+//! well the shot's admission, the checks `publish` opens with, offered as a
+//! pure query ([`shot_admission`]). Each block's trait bounds name exactly
+//! the slices its op reads and the records it stages, so a minimal test world
+//! can drive `delete`/`rearrange` with `HasM5 + HasM3` and `From<M5Rec>`
+//! alone, and answer the shot's admission with those two slices too.
 //!
 //! Unit tests sit with what they test: `ops/tests.rs` tests this file — the
-//! handle, J0's step, the two budgets — and the bound claim above on `delete`
-//! and `rearrange`; `ops/copy/tests.rs` and `ops/publish/tests.rs` hold the
-//! two ops' own claims, which need a world no engine reaches.
+//! handle, J0's step, the two budgets — and the bound claim above on `delete`,
+//! `rearrange` and the shot's admission; `ops/copy/tests.rs` and
+//! `ops/publish/tests.rs` hold the two ops' own claims, which need a world no
+//! engine reaches.
 
 use std::fmt;
 
@@ -73,6 +76,8 @@ mod insert;
 mod publish;
 mod rearrange;
 mod version;
+
+pub use publish::shot_admission;
 
 /// The most runs one COPY, or one publish shot, may place — and so the
 /// ceiling on what one request can make M5 hold live while it decides

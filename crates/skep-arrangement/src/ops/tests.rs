@@ -1,21 +1,23 @@
 //! The handle and what its operations share, tested. The per-op-bound claim,
 //! verified literally: a MINIMAL world — `HasM5 + HasM3`, `Record = M5Rec`
 //! (the identity `From`) — drives `delete` and `rearrange`, their in-place
-//! refusal included, with no content store and no `From<M3Rec>`; and the
-//! handle prints though that world does not. J0's allocation step, driven in
-//! a world of M3 and M4 alone, which is all it reads. And the two budgets,
-//! each measured against M2's own encoding and ceiling rather than restated.
+//! refusal included, and answers the shot's admission, with no content store
+//! and no `From<M3Rec>`; and the handle prints though that world does not.
+//! J0's allocation step, driven in a world of M3 and M4 alone, which is all it
+//! reads. And the two budgets, each measured against M2's own encoding and
+//! ceiling rather than restated.
 
 use serde::{Deserialize, Serialize};
 use skep_content::ContentStore;
-use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource};
+use skep_kernel::Kernel;
 use skep_namespace::{M3State, PrincipalId};
 
 use super::*;
-use crate::error::{DeleteError, InsertError, RearrangeError};
+use crate::error::{DeleteError, InsertError, PublishError, RearrangeError};
 use crate::ownership::Caller;
+use crate::shot::{Shot, ShotRun};
 use crate::state::{M5Rec, M5State};
-use crate::testutil::{a, ca, doc1, doc2, n, pdoc, rejected, run, seeded_m3, vp};
+use crate::testutil::{a, ca, doc1, doc2, mem_kernel_of, n, pdoc, rejected, run, seeded_m3, vp};
 use crate::HasM5;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -50,12 +52,10 @@ fn mini_kernel() -> Kernel<MiniWorld> {
         at: n(1),
         runs: vec![run(&ca(1), 5)],
     });
-    let cfg = KernelConfig {
-        durability: Durability::InMemory,
-        checkpoint: CheckpointPolicy::Manual,
-        salt: SaltSource::Seeded(0),
-    };
-    Kernel::open(cfg, MiniWorld { m3: seeded_m3(), m5 }).expect("in-memory open")
+    mem_kernel_of(MiniWorld {
+        m3: seeded_m3(),
+        m5,
+    })
 }
 
 #[test]
@@ -128,19 +128,10 @@ fn the_allocation_step_mints_writes_and_accumulates_through_the_merge_condition(
     // coalesce into one run, and a mint under another home, whose address
     // is not I-adjacent, opens a run of its own rather than widening the
     // first over addresses nobody allocated.
-    let cfg = KernelConfig {
-        durability: Durability::InMemory,
-        checkpoint: CheckpointPolicy::Manual,
-        salt: SaltSource::Seeded(0),
-    };
-    let k = Kernel::open(
-        cfg,
-        AllocWorld {
-            m3: seeded_m3(),
-            content: ContentStore::default(),
-        },
-    )
-    .expect("in-memory open");
+    let k = mem_kernel_of(AllocWorld {
+        m3: seeded_m3(),
+        content: ContentStore::default(),
+    });
     let keys = [M3State::content_lock_key(&doc1()), M3State::content_lock_key(&doc2())];
     let (runs, _) = k
         .transact(&keys, |stg| {
@@ -199,19 +190,10 @@ fn the_reinsert_budget_is_a_transaction_m2_accepts() {
     // re-insert calls — in one transaction, commits: the cap refuses no
     // shot M2 could have accepted at that depth, which is what keeps it a
     // bound on the staging rather than a second, tighter journal budget.
-    let cfg = KernelConfig {
-        durability: Durability::InMemory,
-        checkpoint: CheckpointPolicy::Manual,
-        salt: SaltSource::Seeded(0),
-    };
-    let k = Kernel::open(
-        cfg,
-        AllocWorld {
-            m3: seeded_m3(),
-            content: ContentStore::default(),
-        },
-    )
-    .expect("in-memory open");
+    let k = mem_kernel_of(AllocWorld {
+        m3: seeded_m3(),
+        content: ContentStore::default(),
+    });
     let (runs, _) = k
         .transact(&[M3State::content_lock_key(&doc1())], |stg| {
             let mut runs: Vec<Run> = Vec::new();
@@ -278,4 +260,39 @@ fn the_in_place_refusal_needs_only_the_registry_and_the_arrangement() {
     assert_eq!(k.current_seq(), before, "a refusal commits nothing");
     // And the draft beside it is edited as before.
     vs.delete(p1, &doc1(), vp(1, 1), n(1)).expect("a draft's delete commits");
+}
+
+#[test]
+fn the_shots_admission_needs_only_the_registry_and_the_arrangement() {
+    // `shot_admission` is `publish`'s checks through its source gate, and
+    // they read M3 and M5 and nothing else: the MINIMAL world — no content
+    // store, no kernel transaction — answers them, the gate's consult
+    // included, each in the slot `publish` gives it.
+    let k = mini_kernel();
+    let s = k.snapshot();
+    let p1 = Caller::Principal(PrincipalId(1));
+    let anyone = |_: &MiniWorld, _: &Address| true;
+    let no_one = |_: &MiniWorld, _: &Address| false;
+    let plain = |runs: Vec<ShotRun>| Shot {
+        base: None,
+        draft: None,
+        runs,
+    };
+    let window = ShotRun {
+        origin: doc1(),
+        run: run(&ca(1), 1),
+    };
+    assert_eq!(
+        shot_admission(s.world(), p1, &doc1(), &plain(vec![]), &anyone),
+        Err(PublishError::PrivateSourceVersionless)
+    );
+    let withheld = plain(vec![window.clone()]);
+    assert_eq!(
+        shot_admission(s.world(), p1, &pdoc(), &withheld, &no_one),
+        Err(PublishError::Withheld(doc1()))
+    );
+    assert_eq!(
+        shot_admission(s.world(), p1, &pdoc(), &plain(vec![window]), &anyone),
+        Ok(())
+    );
 }

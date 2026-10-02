@@ -5,12 +5,14 @@
 
 use serde::{Deserialize, Serialize};
 use skep_content::{stage_write, ContentStore, Val};
-use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource};
+use skep_kernel::Kernel;
 use skep_namespace::PrincipalId;
 
 use super::*;
 use crate::state::M5State;
-use crate::testutil::{ca, doc1, doc2, n, pdoc, rejected, run, seeded_m3, vp, vspan};
+use crate::testutil::{
+    ca, doc1, doc2, mem_kernel_of, n, pdoc, rejected, run, seeded_m3, vp, vspan,
+};
 
 /// A world carrying a content store beside the arrangement — the one
 /// slice `ops/tests.rs`'s `MiniWorld` deliberately lacks, kept a separate
@@ -69,20 +71,11 @@ fn gate_kernel_arranging(runs: Vec<Run>, present: &[u32]) -> Kernel<GateWorld> {
             .expect("each seeded address is written once");
         content = content.apply_write(&cw);
     }
-    let cfg = KernelConfig {
-        durability: Durability::InMemory,
-        checkpoint: CheckpointPolicy::Manual,
-        salt: SaltSource::Seeded(0),
-    };
-    Kernel::open(
-        cfg,
-        GateWorld {
-            m3: seeded_m3(),
-            content,
-            m5,
-        },
-    )
-    .expect("in-memory open")
+    mem_kernel_of(GateWorld {
+        m3: seeded_m3(),
+        content,
+        m5,
+    })
 }
 
 #[test]

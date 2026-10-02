@@ -19,11 +19,11 @@
 //! values: no front door, no session, no predicate.
 //!
 //! Each asks its owners' reads rather than respelling them — M3's registry
-//! and ω walk, M5's chain and birth memo — with ONE exception, and it is the
-//! one rule M10 performs on another component's behalf anywhere (the crate
-//! doc names it beside M10's boundary): the fold-filter RE-DERIVES the grant
-//! fold's issuer test (`grant_exists`'s compare) as a projection over rows.
-//! It sits here because the world hands its universal index raw
+//! and ω walk, M5's chain card and birth extents — with ONE exception, and it
+//! is the one rule M10 performs on another component's behalf anywhere (the
+//! crate doc names it beside M10's boundary): the fold-filter RE-DERIVES the
+//! grant fold's issuer test (`grant_exists`'s compare) as a projection over
+//! rows. It sits here because the world hands its universal index raw
 //! ([`PublicationWorld::universal_grant_index`]), so the narrowing a client's
 //! answer needs falls to the front door.
 //!
@@ -40,8 +40,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use skep_address::Address;
-use skep_arrangement::{trunk_head, trunk_of, M5State};
-use skep_namespace::{first_version_address, prefix_contains, M3State};
+use skep_arrangement::M5State;
+use skep_namespace::{prefix_contains, M3State};
 
 use crate::reject::{rejection, RejectCode, Rejection};
 use crate::request::OpKind;
@@ -97,36 +97,18 @@ pub(crate) fn require_registered_document(
 /// (PUB-3.10), and so stays in the selection domain (RES-276) and passes the
 /// fill's edition side (RES-284, RES-286's claimed half).
 ///
-/// All three reads are their owner's own, asked rather than respelled: M5's
-/// [`trunk_head`] for whether the chain has a member, M3's
-/// [`first_version_address`] for where it opens — the chain's anchor and
-/// opening ordinal being M3's alone — and M5's
-/// [`birth_extent`](M5State::birth_extent) for the frozen extent, which M5's
-/// fold notes at the mint; that fold states the one state it cannot tell.
-///
-/// The PROJECTION is taken here, before either chain read is asked, because
-/// the two disagree about a version member: [`trunk_head`] projects it to its
-/// trunk and finds that chain's head, while [`first_version_address`] opens
-/// the namespace of whatever it is handed, so `D.3` handed through
-/// unprojected would answer `D.3.1` — a well-formed address no mint produced,
-/// served as `D`'s birth version with no error. Projecting through
-/// [`trunk_of`] first leaves no argument that answers that, so a caller owes
-/// nothing here: the trunk and each of its members answer alike
-/// (`a_version_member_answers_its_trunks_birth_version`).
-///
-/// Every TIER is answered, and truthfully: no tier but a document's anchors a
-/// version chain, [`trunk_of`] leaves every other tier as it is, and
-/// [`trunk_head`] delegates to M3's `latest_version`, which answers `None` for
-/// any other tier before it reads a frontier — so an account, an element or a
-/// node returns `None` at the `?`. No input reaches the `expect` below, so it
-/// guards no caller's obligation: it asserts M3's invariant that a trunk with
-/// a version head is document-tier, and so has an opening address.
+/// Both reads are M5's own, asked rather than respelled: its chain card's
+/// [`birth_version`](skep_arrangement::birth_version) for the member that
+/// opens the chain — which projects a version member to its trunk before
+/// asking M3 where that chain opens, and answers `None` for a chain with no
+/// member and for every tier but a document's
+/// (`a_version_member_answers_its_trunks_birth_version`) — and
+/// [`birth_extent`](M5State::birth_extent) for the extent that member's mint
+/// noted, `None` where none is noted, a state the op path never reaches, so
+/// no extent is fabricated.
 pub(crate) fn birth_version(m3: &M3State, m5: &M5State, doc: &Address) -> Option<BirthVersion> {
-    let trunk = trunk_of(doc);
-    trunk_head(m3, &trunk)?;
-    let addr = first_version_address(&trunk)
-        .expect("a trunk with a version head is document-tier, and so has an opening address");
-    let extent = m5.birth_extent(&addr);
+    let addr = skep_arrangement::birth_version(m3, doc)?;
+    let extent = m5.birth_extent(&addr)?;
     Some(BirthVersion { addr, extent })
 }
 

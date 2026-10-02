@@ -344,10 +344,10 @@ where
     pub fn execute(&self, session: SessionId, req: Request) -> Response {
         // TOTALITY, M10's own half: the locks are non-poisoning (§7); the
         // step-(b) read/write split hands each write arm a PROVEN-bound
-        // principal, so no dispatch arm unwraps an `Option`; and the two
-        // runtime `expect`s assert what no input reaches — `birth_version`'s
-        // an M3 invariant, `unjudged_fill`'s that `[1]` is a nonempty
-        // sequence (the memo capacity's is evaluated at compile time).
+        // principal, so no dispatch arm unwraps an `Option`; and the one
+        // runtime `expect` asserts what no input reaches — `unjudged_fill`'s
+        // that `[1]` is a nonempty sequence (the memo capacity's is evaluated
+        // at compile time).
         let Request { id, op, attest } = req;
         let kind = op.kind(); // Copy; captured before dispatch moves the op
         // (a), then (c), then (b) — that order being the stated precedence

@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "M5 — Arrangements & Editing (Vstream): the per-document mutable V→I arrangement (POOM) plus the append-only content-provenance relation R; editing/versioning operations and the publish shot, the version-chain reads (head-float and the deposit surface), link seating for M7, forward/reverse arrangement reads, the R read surface, the birth-extent and shot-terms reads, and the shot's address form"
+description = "M5 — Arrangements & Editing (Vstream): the per-document mutable V→I arrangement (POOM) plus the append-only content-provenance relation R; editing/versioning operations and the publish shot with its admission query, the version-chain reads (head-float, the deposit surface and the birth version), link seating for M7, forward/reverse arrangement reads, the R read surface, the birth-extent and shot-terms reads, and the shot's address form"
 readme = "README.md"
 
 [features]
@@ -41,8 +41,9 @@ skep-address = { path = "../skep-address" }
 skep-kernel = { path = "../skep-kernel" }
 # M3 — registration, ownership, publication and version-frontier reads (the
 # last two through chain.rs), the pure mints composed into M5's composites,
-# first_version_address (which member is a trunk's birth version, the key of
-# the birth extents), ghost_home_document (where the deposit class's types sit),
+# first_version_address (where a trunk's chain opens — its birth version, the
+# key of the birth extents — asked through chain.rs too),
+# ghost_home_document (where the deposit class's types sit),
 # and the *_lock_key constructors (the workspace's one source of
 # Space::Namespace-tagged key bytes — see the serialization-key note in lib.rs).
 skep-namespace = { path = "../skep-namespace" }

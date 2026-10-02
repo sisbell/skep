@@ -5,10 +5,11 @@ use std::cell::RefCell;
 
 use skep_address::{Address, Nat};
 use skep_arrangement::{
-    reading_surface, trunk_head, Caller, Deposit, HasM5, PublishError, Run, Shot, ShotRun,
-    MAX_REINSERTED_VALUES,
+    reading_surface, shot_admission, trunk_head, Base, Caller, Deposit, HasM5, PublishError, Run,
+    Shot, ShotRun, MAX_REINSERTED_VALUES,
 };
 use skep_content::Val;
+use skep_kernel::TxnError;
 use skep_namespace::{HasM3, Namespace, PrincipalId};
 
 use crate::common::*;
@@ -905,4 +906,79 @@ fn a_shot_refused_at_its_last_check_leaves_no_member_no_mint_and_no_placement() 
         )
         .expect("the ordinary shot");
     assert_eq!(k.snapshot().world().m5().content_count(&member1), n(7));
+}
+
+#[test]
+fn the_shots_admission_is_the_answer_publish_gives_through_its_source_gate() {
+    // `shot_admission` is `publish`'s checks through its source gate, asked
+    // with no transaction. Over one world it agrees with `publish` on every
+    // shot: refused at or before the gate, the same refusal; past it, a
+    // refusal of the composite's own — the existence walk's, the budgets' —
+    // or a commit. Each shot is asked of the world `publish` then opens on:
+    // one slot's verdict apiece, one refused past the gate, one that commits,
+    // after which the birth shape is superseded.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k); // pdoc: a b c, memberless
+    insert_abc(&k); // doc1: a b c
+    let subdoc = a(&[1, 0, 1, 1, 0, 1]);
+    let (sca, _) = vs
+        .insert(
+            Caller::Principal(PrincipalId(3)),
+            &subdoc,
+            vp(1, 1),
+            vec![val(b"s")],
+            Deposit::Undeclared,
+        )
+        .expect("a private draft P1 may not read holds a byte");
+    let unregistered = a(&[1, 0, 1, 0, 9]);
+    let readable = readable_by(PrincipalId(1));
+    let plain = |base: Option<Base>, runs: Vec<ShotRun>| Shot { base, draft: None, runs };
+    let cases = [
+        (P1, unregistered.clone(), plain(None, vec![]), true),
+        (Caller::Principal(PrincipalId(2)), pdoc(), plain(None, vec![]), true),
+        (P1, pdoc(), plain(Some(base(&unregistered, 1)), vec![]), true),
+        (P1, pdoc(), plain(None, vec![shot_run(&doc2(), &ca(1), 1)]), true),
+        (P1, doc1(), plain(None, vec![]), true),
+        (P1, pdoc(), plain(Some(base(&doc1(), 0)), vec![]), true),
+        (P1, pdoc(), plain(Some(base(&pdoc(), 9)), vec![]), true),
+        (P1, pdoc(), plain(None, vec![shot_run(&subdoc, &sca, 1)]), true),
+        (P1, pdoc(), plain(None, vec![shot_run(&pdoc(), &pca(9), 1)]), false),
+        (P1, pdoc(), plain(Some(base(&pdoc(), 3)), vec![shot_run(&pdoc(), &pca(1), 3)]), false),
+        (P1, pdoc(), plain(None, vec![]), true),
+    ];
+    let mut refused = Vec::new();
+    for (caller, doc, shot, at_the_gate) in cases {
+        let admission = shot_admission(k.snapshot().world(), caller, &doc, &shot, &readable);
+        match (admission, vs.publish(caller, &doc, shot, &readable)) {
+            (Err(asked), Err(TxnError::Rejected(answered))) if at_the_gate => {
+                assert_eq!(asked, answered, "{doc:?}");
+                refused.push(asked);
+            }
+            (Ok(()), Ok(_)) if !at_the_gate => {}
+            (
+                Ok(()),
+                Err(TxnError::Rejected(
+                    PublishError::TooManyValues
+                    | PublishError::DanglingSource
+                    | PublishError::TooManyRuns,
+                )),
+            ) if !at_the_gate => {}
+            other => panic!("{doc:?}: the admission and `publish` disagree: {other:?}"),
+        }
+    }
+    // Every slot through the gate spoke once, in the order the cases ask.
+    assert_eq!(
+        refused,
+        [
+            PublishError::DocNotRegistered,
+            PublishError::NotOwner(pdoc()),
+            PublishError::SourceNotRegistered,
+            PublishError::BadRun,
+            PublishError::PrivateSourceVersionless,
+            PublishError::BaseNotInChain,
+            PublishError::BaseExtentTooLarge,
+            PublishError::Withheld(subdoc),
+            PublishError::BaseSuperseded,
+        ]
+    );
 }

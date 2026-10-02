@@ -141,7 +141,9 @@ fn a_version_born_empty_keeps_a_birth_extent_of_zero_through_its_first_deposit()
     // BIRTH★ through `version`: an owned fork of a memberless edition mints
     // the birth version by snapshot, which notes its extent — zero, for an
     // empty edition. A deposit landing in the head afterwards notes nothing,
-    // as no placement does, so the zero stands as the count grows.
+    // as no placement does, so the zero stands as the count grows. Asked as
+    // `Some(0)`, it fails if the snapshot is skipped for an empty surface:
+    // the version would then hold no birth at all.
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     let (member, _) = vs
@@ -152,7 +154,11 @@ fn a_version_born_empty_keeps_a_birth_extent_of_zero_through_its_first_deposit()
         .expect("a deposit landing in the head the version minted");
     let s = k.snapshot();
     assert_eq!(s.world().m5().content_count(&member), n(1), "the head took the deposit");
-    assert_eq!(s.world().m5().birth_extent(&member), n(0), "born empty, whatever it took since");
+    assert_eq!(
+        s.world().m5().birth_extent(&member),
+        Some(n(0)),
+        "born empty, whatever it took since"
+    );
 }
 
 #[test]

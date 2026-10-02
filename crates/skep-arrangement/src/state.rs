@@ -10,9 +10,8 @@ use std::sync::LazyLock;
 use num_traits::One;
 use serde::{Deserialize, Serialize};
 use skep_address::{content_subspace, link_subspace, Address, Nat};
-use skep_namespace::first_version_address;
 
-use crate::chain::trunk_of;
+use crate::chain::is_birth_version;
 use crate::provenance::Provenance;
 use crate::run::Run;
 use crate::runlist::RunList;
@@ -142,10 +141,10 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///   [`ContentPlace`](M5Rec::ContentPlace) mints nothing and notes nothing,
 ///   so a deposit that grows the head grows `content_count(m)` and not
 ///   `birth_extent(m)`, whatever order its record arrives in. On the op path
-///   `birth_extent(m) ≤ content_count(m)`, and positions
-///   `[1, birth_extent(m)]` of `m` are the arrangement it was minted with: a
-///   published member admits no removal and no re-arrangement (PUB-2.11), and
-///   a deposit lands past the arranged extent. On the DECODE path BIRTH★ is
+///   the extent `e` noted for `m` is at most `content_count(m)`, and positions
+///   `[1, e]` of `m` are the arrangement it was minted with: a published
+///   member admits no removal and no re-arrangement (PUB-2.11), and a deposit
+///   lands past the arranged extent. On the DECODE path BIRTH★ is
 ///   M2's integrity, as P4★ is: a checkpoint carries `birth_extents` whole,
 ///   and no door re-establishes that each key is a birth version or each
 ///   count its mint's. A decoded state violating it faults nothing — no read
@@ -196,7 +195,7 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// [`reading_surface`](crate::reading_surface) first, then the read — as
 /// M6's and M8's arrangement readers do. [`birth_extent`](M5State::birth_extent)
 /// answers the address named as well: asked of a bare document it answers
-/// zero — the document is no birth version — and never its `D.1`'s extent.
+/// `None` — the document is no birth version — and never its `D.1`'s extent.
 ///
 /// Every field keys by the document `Address`, which is what every caller
 /// holds and what every insertion site already had. Three consequences, and
@@ -240,19 +239,6 @@ pub struct ShotTerms {
     pub base_extent: Option<Nat>,
 }
 
-/// Is `doc` a BIRTH VERSION — the opening member `D.1` of its trunk's version
-/// chain, the one member whose extent `birth_extents` holds? Asked of the two
-/// owners of that fact rather than respelled: [`trunk_of`] for the trunk
-/// (PUB-2.15) and M3's [`first_version_address`] for where its chain opens.
-/// Pure address arithmetic — the fold reads no slice but its own — and
-/// settled at the first comparison for every address that is no version
-/// member, which is every draft a placement names. A DAUGHTER's first member
-/// (`D.3.1`) is not one: its trunk's chain opens at `D.1`.
-fn is_birth_version(doc: &Address) -> bool {
-    let trunk = trunk_of(doc);
-    trunk != *doc && first_version_address(&trunk).as_ref() == Some(doc)
-}
-
 /// M5's sole journal delta — effect-level (carries concrete
 /// addresses/ordinals so the fold needs no upstream access and never
 /// re-mints; Conflicts #4).
@@ -273,16 +259,20 @@ fn is_birth_version(doc: &Address) -> bool {
 /// rather than a broken build when the set does grow. Neither seal touches
 /// M5's own crate — [`M5State::apply_m5`] matches and destructures freely —
 /// and the engine needs neither, `From`-lifting and folding the record whole.
+///
+/// It grows at its END only: the journal writes a variant as its index and
+/// its fields in order, with no framing (bincode), so a new variant is
+/// appended after the last and no variant or field is ever inserted or
+/// reordered — what keeps every record already journaled decoding as it was
+/// written (ARCHITECTURE.md's rule for this slice's format).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum M5Rec {
     /// INSERT and COPY: splice `runs` at content ordinal `at` + R-append each
     /// placed run's iextent (J1★). It mints nothing, so it notes no birth
-    /// extent, whatever document it names (BIRTH★). The publish shot's
-    /// placement was this record until D25's (c′) gave it terms of its own
-    /// ([`ShotPlace`](M5Rec::ShotPlace)); this variant's bytes did not move
-    /// for that — the new one was appended to the set, so an `insert`'s or a
-    /// `copy`'s record encodes as it always did.
+    /// extent, whatever document it names (BIRTH★). The shot's placement is
+    /// [`ShotPlace`](M5Rec::ShotPlace), which carries terms this record has
+    /// no place for.
     #[non_exhaustive]
     ContentPlace { doc: Address, at: Nat, runs: Vec<Run> },
     /// DELETE: contract + reseat (no C, no R — ASN-0117 P0/P2).
@@ -318,22 +308,13 @@ pub enum M5Rec {
     /// arrangement `runs` — the client's runs in order, the draft-native ones
     /// re-inserted, then the base's carried tail — spliced at content
     /// ordinal 1 + R-append (J1★), as `ContentPlace` at ordinal 1 would; AND
-    /// the shot's two CLIENT terms, `placed` — Σ width of the client's runs,
-    /// the count its signed body leads with — and `base_extent`, the base's
-    /// extent the staged copy took, `None` in the birth shape. Pushed for
-    /// EVERY member the shot mints, an empty placement included: the terms
-    /// exist whatever the placement holds, and a birth version born empty is
-    /// noted at its birth, zero, by this record (BIRTH★).
-    ///
-    /// The LAST variant, appended (2026-09-29) so the five before it keep
-    /// their indices — bincode encodes a variant as its index — and every
-    /// `insert`, `copy`, `delete`, `rearrange`, `make_link` and `version`
-    /// record on disk decodes as before. What moved is only what the fixture
-    /// under `tests/golden/` (skep-kernel) pins: regenerated once under the
-    /// unchanged stamps, by the owner's no-stamp ruling (dev boards
-    /// regenerate).
+    /// the shot's [`ShotTerms`] — the two client facts the arrangement cannot
+    /// keep — which the fold notes for the member. Pushed for EVERY member
+    /// the shot mints, an empty placement included: the terms exist whatever
+    /// the placement holds, and a birth version born empty is noted at its
+    /// birth, zero, by this record (BIRTH★).
     #[non_exhaustive]
-    ShotPlace { doc: Address, runs: Vec<Run>, placed: Nat, base_extent: Option<Nat> },
+    ShotPlace { doc: Address, runs: Vec<Run>, terms: ShotTerms },
 }
 
 impl M5State {
@@ -434,14 +415,19 @@ impl M5State {
     /// placement included ([`M5Rec::ShotPlace`] carries the shot's terms
     /// whatever the placement holds), and an owned VERSION its snapshot — and
     /// no deposit notes an extent, so the first one grows `content_count`
-    /// alone. No conforming mint is empty (PUB-3.11).
+    /// alone, and this answers `Some(0)` however much the head has taken
+    /// since. No conforming mint is empty (PUB-3.11).
     ///
-    /// Zero for an address with no extent noted: every address that is no
-    /// birth version — it answers the address named, as every read here does,
-    /// and a caller asks M3 first whether the member exists at all. One map
-    /// lookup, reading no run.
-    pub fn birth_extent(&self, member: &Address) -> Nat {
-        self.birth_extents.get(member).cloned().unwrap_or_default()
+    /// `None` where no extent is noted — every address that is no birth
+    /// version, and a birth version not yet minted — so `Some(0)`, a birth
+    /// version born EMPTY and noted at zero by its own mint, and `None`, no
+    /// birth at this address, are two answers. It answers the address named,
+    /// as every read here does: a caller holding a document rather than its
+    /// birth version asks the chain card's
+    /// [`birth_version`](crate::birth_version) for that address first. One
+    /// map lookup, reading no run.
+    pub fn birth_extent(&self, member: &Address) -> Option<Nat> {
+        self.birth_extents.get(member).cloned()
     }
 
     /// THE SHOT TERMS of `member` — the two client terms of the shot that
@@ -507,13 +493,10 @@ impl M5State {
             // shares. An empty placement leaves the arrangement ABSENT under
             // the lazy convention (≡ empty), as the snapshot arm leaves an
             // empty source's `new`, and appends no provenance.
-            M5Rec::ShotPlace { doc, runs, placed, base_extent } => {
+            M5Rec::ShotPlace { doc, runs, terms } => {
                 let content = self.content_list(doc).splice_in(&Nat::one(), runs.iter().cloned());
                 let birth_extents = self.birth_extents_noting(doc, || content.total_width());
-                let shot_terms = self.shot_terms.update(
-                    doc.clone(),
-                    ShotTerms { placed: placed.clone(), base_extent: base_extent.clone() },
-                );
+                let shot_terms = self.shot_terms.update(doc.clone(), terms.clone());
                 if runs.is_empty() {
                     M5State {
                         arrangements: self.arrangements.clone(),

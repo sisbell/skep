@@ -1,11 +1,14 @@
-//! In-crate test fixtures, and `rejected`, which unwraps an op's typed
+//! In-crate test fixtures, `mem_kernel_of`, which opens the in-memory kernel
+//! every test world runs on, and `rejected`, which unwraps an op's typed
 //! refusal. Addresses follow M3's minted shapes: account `[1,0,1]`, documents
 //! `[1,0,1,0,d]`, content elements `[doc·0·s_C·k]` (length 8), the version
 //! fork `doc·1` whose content elements are length 9 — the mixed-length
 //! transclusion case the level-class discipline exists for.
 
 use skep_address::{validate, Address, Nat, Span, Tumbler};
-use skep_kernel::TxnError;
+use skep_kernel::{
+    CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, TxnError, WorldState,
+};
 use skep_namespace::{M3Rec, M3State, PrincipalId};
 
 use crate::run::Run;
@@ -127,6 +130,17 @@ pub(crate) fn seeded_m3() -> M3State {
             addr: a(&[1, 0, 1, 0, 3]),
             published: true,
         })
+}
+
+/// An in-memory kernel over `world`, as every in-crate test world opens one:
+/// no journal, manual checkpoints, a fixed salt.
+pub(crate) fn mem_kernel_of<W: WorldState>(world: W) -> Kernel<W> {
+    let cfg = KernelConfig {
+        durability: Durability::InMemory,
+        checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
+    };
+    Kernel::open(cfg, world).expect("in-memory open")
 }
 
 /// Unwrap an op's typed rejection (`TxnError::Rejected(E)` — surfaced

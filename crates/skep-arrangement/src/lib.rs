@@ -73,7 +73,8 @@
 //!   (PUB-6.23) to the caller, M10's pre-dispatch consult on the wire route;
 //!   `publish` alone takes the gate's predicate as an argument — the caller's
 //!   `readable`, which the composite asks per origin document inside its
-//!   transaction (PUB-8.1);
+//!   transaction (PUB-8.1) — and so does [`shot_admission`], `publish`'s
+//!   checks through that gate, which asks it of the world it is given;
 //! * ordering, durability, recovery (M2) — M5 stages [`M5Rec`]s through
 //!   `transact` and is recovered by checkpoint-load + replay.
 //!
@@ -129,8 +130,9 @@
 //! deposit names.
 //!
 //! Those reads — which document a member belongs to ([`trunk_of`]), which
-//! member heads its chain ([`trunk_head`]), whether that document is
-//! published ([`published_target`]), and the two surfaces built on them
+//! member heads its chain ([`trunk_head`]), which member opens it
+//! ([`birth_version`]), whether that document is published
+//! ([`published_target`]), and the two surfaces built on them
 //! ([`reading_surface`], [`deposit_surface`]) — are the version-chain
 //! model's own card, kept in one file.
 //!
@@ -185,7 +187,8 @@ mod runlist;
 mod provenance;
 // Request-side V-space values: `VPos`, `VSpec`, the ordinal V-span shape.
 mod vspace;
-// The version-chain reads: trunk, head, publication, the two surfaces.
+// The version-chain reads: trunk, head, birth version, publication, the two
+// surfaces.
 mod chain;
 // The slice: `M5State`, one document's arrangement and the absent-⇒-empty
 // convention, the journal delta `M5Rec`, the fold, and the two reads
@@ -211,12 +214,14 @@ mod ops;
 #[cfg(test)]
 pub(crate) mod testutil;
 
-pub use chain::{deposit_surface, published_target, reading_surface, trunk_head, trunk_of};
+pub use chain::{
+    birth_version, deposit_surface, published_target, reading_surface, trunk_head, trunk_of,
+};
 pub use deposit::{deposit_class_types, Deposit};
 pub use error::{
     CopyError, DeleteError, InsertError, PublishError, RearrangeError, SeatError, VersionError,
 };
-pub use ops::{Vstream, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES};
+pub use ops::{shot_admission, Vstream, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES};
 pub use ownership::Caller;
 pub use run::{Run, RunError};
 pub use runlist::Runs;

@@ -118,7 +118,7 @@ pub(super) enum ComposeFault {
     /// names an origin document the principal may not read, so no value of
     /// the shot is read: a verdict composed over such a value would answer BY
     /// it. What the write is OWED is not the composer's to know: the check
-    /// asks the store's own gates (`policy/attestation.rs`'s
+    /// asks M5's own admission of the shot (`policy/attestation.rs`'s
     /// `refused_at_or_before_the_source_gate`). A window raises this never:
     /// it is spelled by address and read from nowhere.
     UnreadableCopiedRunOrigin,

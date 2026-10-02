@@ -4,10 +4,11 @@
 //! chain ([`trunk_head`], PUB-2.53), and whether that document is PUBLISHED
 //! ([`published_target`], PUB-2.11) — and, from those three, which
 //! arrangement a READER of an address answers from ([`reading_surface`]) and
-//! which one a DECLARED DEPOSIT naming it lands in ([`deposit_surface`]).
-//! Pure over M1's address arithmetic and M3's slice: no arrangement is read
-//! here, and every chain read the write surface makes asks this file rather
-//! than spelling the read itself.
+//! which one a DECLARED DEPOSIT naming it lands in ([`deposit_surface`]) —
+//! and which member OPENS the chain, its birth version ([`birth_version`],
+//! PUB-2.34). Pure over M1's address arithmetic and M3's slice: no
+//! arrangement is read here, and every chain read the write surface makes
+//! asks this file rather than spelling the read itself.
 //!
 //! The two surfaces are two answers because they differ at exactly one kind
 //! of address, a PINNED member — any member other than the trunk head
@@ -27,7 +28,7 @@
 //! and frontier reads are answered for registered addresses alone.
 
 use skep_address::{validate, Address, Level, Tumbler};
-use skep_namespace::M3State;
+use skep_namespace::{first_version_address, M3State};
 
 /// PUB-2.15 — the TRUNK DOCUMENT of a document: its version components
 /// stripped off the document field, so a member `A·0·d·v·w` answers `A·0·d`
@@ -94,6 +95,31 @@ pub fn trunk_of(a: &Address) -> Address {
 /// as [`published_target`] states.
 pub fn trunk_head(m3: &M3State, doc: &Address) -> Option<Address> {
     m3.latest_version(&trunk_of(doc))
+}
+
+/// PUB-2.34 — the BIRTH VERSION of the document `doc` projects to
+/// (PUB-2.15): the member that OPENS its trunk's own version chain, `D.1` —
+/// M3's [`first_version_address`] of the trunk — or `None` while that chain
+/// has no member. The trunk, each of its members and each daughter answer the
+/// one trunk's `D.1`; a daughter chain's own first member (`D.3.1`) is never
+/// answered. The projection comes first, and must: M3 opens the chain of
+/// whatever it is handed, so a member handed through would answer its own
+/// daughter chain's first address — well-formed, minted nowhere, and no
+/// error. A chain is anchored at a document alone, so every other tier
+/// answers `None`. CONTRACT as [`published_target`] states.
+pub fn birth_version(m3: &M3State, doc: &Address) -> Option<Address> {
+    trunk_head(m3, doc)?;
+    first_version_address(&trunk_of(doc))
+}
+
+/// Is `doc` a birth version — [`birth_version`]'s member, asked of the
+/// address alone, with no frontier read? The fold's question of the member a
+/// minting record names, which that record's own commit mints, so whether it
+/// exists is not in doubt. Settled at the first comparison for every address
+/// that is no version member, as a cross-owner fork's fresh document is.
+pub(crate) fn is_birth_version(doc: &Address) -> bool {
+    let trunk = trunk_of(doc);
+    trunk != *doc && first_version_address(&trunk).as_ref() == Some(doc)
 }
 
 /// PUB-2.11's input, and M5's one publication read: is the DOCUMENT `doc`
@@ -185,7 +211,7 @@ pub fn deposit_surface(m3: &M3State, doc: &Address) -> Address {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::{a, doc1, pdoc, seeded_m3};
+    use crate::testutil::{a, doc1, pca, pdoc, seeded_m3};
     use skep_namespace::M3Rec;
 
     /// PUB-2.49/2.50/2.53/2.66 — the float, over every case it decides: a
@@ -264,6 +290,36 @@ mod tests {
             published: true,
         });
         assert_eq!(deposit_surface(&stamped, &doc1()), doc1());
+    }
+
+    /// PUB-2.34/2.15 — the birth version is the member that opens the
+    /// TRUNK's chain, whichever chain address asks: the trunk, the birth
+    /// version itself, a later member and a daughter of that member all
+    /// answer `D.1`, never the first address of the chain THEY anchor — the
+    /// daughter's is `D.2.1.1`, the later member's `D.2.1`, and M3 would mint
+    /// either as readily. Memberless, the chain has no birth version; and no
+    /// tier but a document's anchors one. The fold's own question,
+    /// `is_birth_version`, answers the same member from the address alone.
+    #[test]
+    fn the_birth_version_is_the_trunks_first_member_whoever_asks() {
+        let m3 = seeded_m3();
+        let trunk = pdoc();
+        assert_eq!(birth_version(&m3, &trunk), None, "memberless");
+        let member1 = a(&[1, 0, 1, 0, 3, 1]);
+        let member2 = a(&[1, 0, 1, 0, 3, 2]);
+        let daughter = a(&[1, 0, 1, 0, 3, 2, 1]);
+        let m3 = m3
+            .apply_m3(&M3Rec::Allocate { addr: member1.clone(), published: true })
+            .apply_m3(&M3Rec::Allocate { addr: member2.clone(), published: true })
+            .apply_m3(&M3Rec::Allocate { addr: daughter.clone(), published: true });
+        for named in [&trunk, &member1, &member2, &daughter] {
+            assert_eq!(birth_version(&m3, named), Some(member1.clone()), "{named:?}");
+            assert_eq!(is_birth_version(named), *named == member1, "{named:?}");
+        }
+        for off_tier in [a(&[1, 0, 1]), pca(1)] {
+            assert_eq!(birth_version(&m3, &off_tier), None, "{off_tier:?}");
+            assert!(!is_birth_version(&off_tier), "{off_tier:?}");
+        }
     }
 
     /// PUB-2.11/2.15 — the bit that decides every refusal is the DOCUMENT's,

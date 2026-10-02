@@ -276,11 +276,9 @@ fn execute_read_on(
 
 /// A THROWAWAY M2 kernel rooted at `world`: in memory, no journal, no
 /// recovery, and nothing it answers outliving it — the one door this crate
-/// opens a second kernel through. Two callers: the history surface, reading
-/// a reconstructed world ([`execute_read_on`]), and the write-path check,
-/// asking the store's own gates about a shot over the live head without
-/// touching the live kernel (`auth/policy/attestation.rs`). Dropped, it takes
-/// every transaction it ever ran with it.
+/// opens a second kernel through, for the history surface, reading a
+/// reconstructed world ([`execute_read_on`]). Dropped, it takes every
+/// transaction it ever ran with it.
 ///
 /// PRECONDITION: `world` carries TRUE derived hints — a live snapshot's root,
 /// or one `Engine::world_at` produced. That is what discharges
@@ -291,7 +289,7 @@ fn execute_read_on(
 /// `rebuild_derived` and maintains them across the fold. A world assembled
 /// any other way would be read through stale hints, and nothing about the
 /// answer would look wrong.
-pub(crate) fn detached_kernel(world: World) -> Kernel<World> {
+fn detached_kernel(world: World) -> Kernel<World> {
     let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,

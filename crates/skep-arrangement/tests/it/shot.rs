@@ -356,14 +356,18 @@ fn the_birth_extent_of_a_shot_born_version_counts_its_whole_placement_and_no_lat
         // from pca(4): three families, none I-adjacent to the next.
         assert_eq!(m5.content_run_count(&member), 3, "the fixture places three families");
         assert_eq!(m5.content_count(&member), n(5));
-        assert_eq!(m5.birth_extent(&member), n(5), "born with all five");
+        assert_eq!(m5.birth_extent(&member), Some(n(5)), "born with all five");
     }
     // A deposit into the head grows the member and not its birth.
     vs.insert(P1, &pdoc(), vp(1, 6), vec![val(b"y")], declared())
         .expect("a deposit landing in the head D.1");
     let s = k.snapshot();
     assert_eq!(s.world().m5().content_count(&member), n(6));
-    assert_eq!(s.world().m5().birth_extent(&member), n(5), "the deposit is no part of the birth");
+    assert_eq!(
+        s.world().m5().birth_extent(&member),
+        Some(n(5)),
+        "the deposit is no part of the birth"
+    );
 }
 
 #[test]
@@ -388,7 +392,7 @@ fn a_birth_version_the_shot_minted_empty_is_noted_at_zero_and_carries_its_terms(
     assert_eq!(member, vdoc(), "the chain's first member");
     {
         let s = k.snapshot();
-        assert_eq!(s.world().m5().birth_extent(&member), n(0), "noted at zero by the mint");
+        assert_eq!(s.world().m5().birth_extent(&member), Some(n(0)), "noted at zero by the mint");
         assert_eq!(
             s.world().m5().shot_terms(&member),
             Some(&ShotTerms { placed: n(0), base_extent: None }),
@@ -399,7 +403,11 @@ fn a_birth_version_the_shot_minted_empty_is_noted_at_zero_and_carries_its_terms(
         .expect("a deposit landing in the head the shot minted");
     let s = k.snapshot();
     assert_eq!(s.world().m5().content_count(&member), n(1), "the head took the deposit");
-    assert_eq!(s.world().m5().birth_extent(&member), n(0), "born empty, whatever it took since");
+    assert_eq!(
+        s.world().m5().birth_extent(&member),
+        Some(n(0)),
+        "born empty, whatever it took since"
+    );
 }
 
 #[test]

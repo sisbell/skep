@@ -115,7 +115,9 @@
 use parking_lot::Mutex;
 use serde_json::Value;
 use skep_address::{validate, Address, Nat, Tumbler};
-use skep_arrangement::{trunk_head, Base, Caller, Deposit, HasM5, Run, Shot, ShotRun, VPos};
+use skep_arrangement::{
+    birth_version, trunk_head, Base, Caller, Deposit, HasM5, Run, Shot, ShotRun, VPos,
+};
 use skep_content::{HasContent, Val};
 use skep_engine::{EngineStores, World};
 use skep_febe::{Op, Response, Stores};
@@ -779,21 +781,14 @@ fn read_head_member(world: &World, member: &Address) -> Option<HeadRecord> {
     HeadRecord::parse(world.content().value_at(i_addr.tumbler())?.as_bytes())
 }
 
-/// `H.1`'s address — the FIRST member of `H`'s trunk chain, `1.1.0.1.0.2.1`:
-/// the member the first head's shot mints, pinned forever (wire.md §The
-/// other endpoints: "`H.k`, the k-th version member, is pinned forever").
-fn first_head_member() -> Address {
-    let h = head_document();
-    let t = Tumbler::new(h.tumbler().iter().cloned().chain([Nat::from(1u32)]))
-        .expect("H's components plus one");
-    validate(t).expect("H.1 is T4-valid by construction")
-}
-
 /// THE BOARD TERM of the ENTRY frame (signed ops; D13, RULED 2026-09-25):
-/// `H.1`'s committed `(position, chain)` pair — durable (it survives
-/// reclamation as checkpoint state), guest-readable (`retrieve_v` on the
-/// bare member), board-unique — read off the snapshot the write's gates
-/// stand on. On a claimed board it is present from the claim on WHERE THE
+/// the committed `(position, chain)` pair of `H.1`, `1.1.0.1.0.2.1` — `H`'s
+/// birth version ([`birth_version`]), the member the first head's shot
+/// mints, pinned forever (wire.md §The other endpoints: "`H.k`, the k-th
+/// version member, is pinned forever") — durable (it survives reclamation as
+/// checkpoint state), guest-readable (`retrieve_v` on the bare member),
+/// board-unique — read off the snapshot the write's gates stand on. On a
+/// claimed board it is present from the claim on WHERE THE
 /// HEAD WRITER'S DRIVER ADMITS `H.1`: the claim's own step writes it
 /// ([`HeadWriter::write_first_head`]; s1, RULED 2026-09-25) and the daemon's
 /// open writes it where a crash split the two. `None` on a claimed board
@@ -807,7 +802,8 @@ fn first_head_member() -> Address {
 /// [`BoardTerm`], and not as its shape: it is a committed pair, but the one
 /// fixed from the claim on, never the live pair `/health` serves.
 pub(crate) fn board_term(world: &World) -> Option<BoardTerm> {
-    let rec = read_head_member(world, &first_head_member())?;
+    let first_head = birth_version(world.m3(), &head_document())?;
+    let rec = read_head_member(world, &first_head)?;
     Some(BoardTerm { log_position: rec.position, chain: rec.chain })
 }
 

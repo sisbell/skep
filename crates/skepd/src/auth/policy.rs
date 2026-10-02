@@ -13,8 +13,7 @@
 //! - `attestation` — THE WRITE-PATH CHECK (signed ops), run behind the plain
 //!   sequence's publish-class gate on a claimed board, whose ADMITTED
 //!   attestation is what the write's commit marker carries, and which asks
-//!   the store's own gates, on a detached kernel, what a shot it could not
-//!   read is owed.
+//!   M5's own admission of the shot what a shot it could not read is owed.
 //!
 //! `addr_spans`, the one spelling of a type slot all three read, lives here,
 //! where each child sees it without a widening.

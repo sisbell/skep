@@ -1,23 +1,21 @@
 //! THE WRITE-PATH CHECK (signed ops): what the plain sequence's
 //! publish-class gate runs on a claimed board ([`attestation_check`]), whose
 //! ADMITTED attestation is what the write's commit marker carries — and the
-//! question it asks the store's own gates to decide what a shot the composer
-//! could not read is owed ([`refused_at_or_before_the_source_gate`]).
+//! question it asks M5's own admission of a shot to decide what a shot the
+//! composer could not read is owed ([`refused_at_or_before_the_source_gate`]).
 
-use skep_address::Nat;
-use skep_arrangement::{trunk_of, Caller, Deposit, PublishError, Run, Shot, ShotRun, Vstream};
+use skep_arrangement::{shot_admission, Caller, Deposit};
 use skep_febe::Op;
 use skep_identity::{
     parse_record_value, CredentialKind, Enrollment, Fingerprint, IdentityState, PublicKey,
     SigAlgRow,
 };
-use skep_kernel::{Attestation, TxnError};
+use skep_kernel::Attestation;
 use skep_namespace::{system_account, HasM3, PrincipalId};
 
 use super::{addr_spans, record_deposit_kind, AttestFault, CredentialRefusal};
 use crate::auth::entry::{self, ComposeFault};
 use crate::auth::session::key_subject;
-use crate::history::detached_kernel;
 use crate::write_path::board_term;
 use crate::World;
 
@@ -69,13 +67,13 @@ use crate::World;
 ///    an address with no value passes UNATTESTED to the store's own
 ///    `dangling_source`; a `publish` copying in a staging draft's run whose
 ///    document the principal may not read is never composed, and what the
-///    shot is owed is decided here by asking the store's own gates on a
-///    detached kernel ([`refused_at_or_before_the_source_gate`]) — UNATTESTED
-///    to the store's own refusal where they refuse it (`withheld`, or an
-///    answer ahead of the source gate), `attestation_invalid:withheld` where
-///    they would admit it, the base carrying the run (a WINDOW is signed by
-///    address since the address form, l6-A4, and never raises this: the
-///    store's gate alone decides it, after the signature); a body past
+///    shot is owed is decided here by asking M5's own admission of the shot
+///    ([`refused_at_or_before_the_source_gate`]) — UNATTESTED to the store's
+///    own refusal where it refuses (`withheld`, or an answer ahead of the
+///    source gate), `attestation_invalid:withheld` where it would admit the
+///    shot, the base carrying the run (a WINDOW is signed by address since
+///    the address form, l6-A4, and never raises this: the store's gate alone
+///    decides it, after the signature); a body past
 ///    `entry::MAX_SHOT_BODY_BYTES` answers
 ///    `attestation_invalid:frame_too_large` before it is built past the
 ///    budget; a term the frame cannot spell — a width, an extent or a count
@@ -271,90 +269,42 @@ fn system_owned(world: &World, op: &Op) -> bool {
 
 /// THE CHECK'S QUESTION about a shot the composer could not read — a copied
 /// run onto a draft the principal may not read
-/// ([`ComposeFault::UnreadableCopiedRunOrigin`]): whether the STORE refuses it at or
-/// before its source gate (M5 `publish`'s slots 1–6, PUB-6.36) — asked of the
-/// store ITSELF, on a detached kernel over this snapshot ([`detached_kernel`]),
-/// so the base's chain and shape, the carried-run test (PUB-6.24) and the
-/// gate's own skips are M5's answers and never a second statement of them
-/// here. Under the serialization guard this snapshot IS the base the real
-/// transaction opens on, and the predicate handed the gate —
-/// [`World::visible_to`] at the principal — answers what M10 lends it on the
-/// real write: M10's `visible_to` asks its front door's `readable`, which is
-/// `World::readable` at the principal wherever that door carries NO read
-/// consult, and the daemon's live door carries none (`Daemon::open_under`
-/// builds it so). That premise is this dry run's to rely on and the open's to
-/// keep: a consult on the live door would make the two gates two predicates,
-/// and one MORE lenient than `World::readable` would pass through UNATTESTED
-/// a shot the real store then admits. So a refusal here is the refusal the
-/// real shot meets.
+/// ([`ComposeFault::UnreadableCopiedRunOrigin`]): whether the STORE refuses it
+/// at or before its source gate (M5 `publish`'s slots 1–6, PUB-6.36) — asked
+/// of M5's own admission of the shot ([`skep_arrangement::shot_admission`],
+/// the checks `publish` opens with), over this snapshot, so the base's chain
+/// and shape, the carried-run test (PUB-6.24) and the gate's own skips are
+/// M5's answers and never a second statement of them here. Under the
+/// serialization guard this snapshot IS the base the real transaction opens
+/// on, and the predicate handed the gate — [`World::visible_to`] at the
+/// principal — answers what M10 lends it on the real write: M10's
+/// `visible_to` asks its front door's `readable`, which is `World::readable`
+/// at the principal wherever that door carries NO read consult, and the
+/// daemon's live door carries none (`Daemon::open_under` builds it so). That
+/// premise is this check's to rely on and the open's to keep: a consult on
+/// the live door would make the two gates two predicates, and one MORE
+/// lenient than `World::readable` would pass through UNATTESTED a shot the
+/// real store then admits. So a refusal here is the refusal the real shot
+/// meets.
 ///
-/// The dry shot is the op's shot behind one SENTINEL run: the shot
-/// document's next content address, which M3's mint only PEEKS (it moves
-/// nothing) and which therefore holds no value. The sentinel passes every
-/// check ahead of the source gate — its origin is the document's own trunk,
-/// registered, stated as itself — and the gate skips it as the document's own
-/// I-space, so the store's answer through the source gate is the real shot's
-/// own. Then the existence walk, which asks the runs in order, stops at the
-/// sentinel's one address: the dry run never pays for the real runs' Σ width
-/// or the placement.
-///
-/// `false` wherever a refusal at or before the source gate cannot be shown:
-/// a dry run that gets past it — every run the principal may not read then
-/// CARRIED by the base — any answer this does not recognize, and an op that
-/// is no shot, which names no run origin at all. [`attestation_check`]
-/// REFUSES the write on `false`, which is safe whether or not the store would
-/// have; it passes the shot through UNATTESTED on `true` alone, which is safe
-/// because the real shot is then refused with the same answer. The match over
-/// M5's refusals is exhaustive so that a new one is placed on one side of the
-/// gate or the other before this compiles.
+/// `false` where the admission passes the shot — every run the principal may
+/// not read then CARRIED by the base — and for an op that is no shot, which
+/// names no run origin at all. [`attestation_check`] REFUSES the write on
+/// `false`, which is safe whether or not the store would have; it passes the
+/// shot through UNATTESTED on `true` alone, which is safe because the real
+/// shot is then refused with the same answer.
 fn refused_at_or_before_the_source_gate(world: &World, op: &Op, principal: PrincipalId) -> bool {
     let Op::Publish { doc, shot } = op else {
         return false;
     };
-    let trunk = trunk_of(doc);
-    let sentinel = world
-        .m3()
-        .mint_content(&trunk)
-        .ok()
-        .and_then(|(next, _)| Run::new(next, Nat::from(1u32)).ok());
-    let Some(sentinel) = sentinel else {
-        return false;
-    };
-    let mut runs = Vec::with_capacity(shot.runs.len() + 1);
-    runs.push(ShotRun { origin: trunk, run: sentinel });
-    runs.extend(shot.runs.iter().cloned());
-    let dry = Shot { base: shot.base.clone(), draft: shot.draft.clone(), runs };
-    let kernel = detached_kernel(world.clone());
     let caller = Caller::Principal(principal);
-    let visibility = World::visible_to(caller);
-    match Vstream::new(&kernel).publish(caller, doc, dry, &visibility) {
-        Err(TxnError::Rejected(refusal)) => match refusal {
-            // At or before the source gate: the real shot — the same runs,
-            // without the sentinel every one of these checks passes — is
-            // refused with the same answer.
-            PublishError::DocNotRegistered
-            | PublishError::NotOwner(_)
-            | PublishError::SourceNotRegistered
-            | PublishError::BadRun
-            | PublishError::PrivateSourceVersionless
-            | PublishError::BaseNotInChain
-            | PublishError::BaseSuperseded
-            | PublishError::BaseExtentTooLarge
-            | PublishError::Withheld(_) => true,
-            // Past the source gate: every run it asks about was admitted.
-            PublishError::TooManyValues
-            | PublishError::DanglingSource
-            | PublishError::TooManyRuns
-            | PublishError::Mint(_)
-            | PublishError::Content(_) => false,
-        },
-        Ok(_) | Err(_) => false,
-    }
+    shot_admission(world, caller, doc, shot, &World::visible_to(caller)).is_err()
 }
 
 #[cfg(test)]
 mod tests {
-    use skep_address::Address;
+    use skep_address::{Address, Nat};
+    use skep_arrangement::Shot;
     use skep_engine::types::t_grant;
     use skep_febe::Disposition;
     use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
@@ -432,19 +382,15 @@ mod tests {
         );
     }
 
-    /// The dry run asks the STORE, and its SENTINEL is invisible to every
-    /// check ahead of the source gate — the premise that makes a pass-through
-    /// safe, since a sentinel some earlier check refused would make every
-    /// dry run a refusal and pass through shots the store then admits. Over
-    /// genesis, the system principal's shot into the head document `H`
-    /// (published, memberless, its own): with no base the dry run gets past
-    /// the gate — the sentinel alone answering the existence walk, so `false`
-    /// — and with a base outside `H`'s chain the store refuses
-    /// `base_not_in_chain` ahead of the gate, so `true`. An op that is no
-    /// shot names no run origin at all and is answered `false`, the side the
-    /// check refuses on.
+    /// The check asks M5's own admission of the shot, over the snapshot it
+    /// is handed. Over genesis, the system principal's shot into the head
+    /// document `H` (published, memberless, its own): with no base the
+    /// admission passes the shot through its gate, so `false` — and with a
+    /// base outside `H`'s chain the store refuses `base_not_in_chain` ahead
+    /// of the gate, so `true`. An op that is no shot names no run origin at
+    /// all and is answered `false`, the side the check refuses on.
     #[test]
-    fn the_dry_run_answers_the_store_s_own_gates_and_its_sentinel_passes_them() {
+    fn the_check_answers_the_store_s_own_admission_of_the_shot() {
         use skep_arrangement::{Base, VPos};
         use skep_namespace::{ghost_home_document, head_document, SYSTEM_PRINCIPAL};
 
@@ -479,7 +425,7 @@ mod tests {
         assert_eq!(
             engine.kernel().current_seq(),
             snap.seq(),
-            "a dry run commits nothing to the live kernel"
+            "the admission commits nothing to the live kernel"
         );
     }
 }

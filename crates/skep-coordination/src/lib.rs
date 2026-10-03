@@ -126,7 +126,8 @@ mod eval;
 mod dynamics;
 // PR3's flat reference expansion, the tree the analyses read.
 mod expand;
-// The rule engine's public vocabulary: rules, actions, occurrences, outcomes.
+// The rule engine's public vocabulary: rules, actions, occurrences, outcomes,
+// and the scope bodies `quiescent_scoped` restricts by.
 mod rule;
 // The handle, `Coordinator`: construction, the guest-class surfaces and
 // group A; its children are `defs` (group B) and `engine` (group C), the rest

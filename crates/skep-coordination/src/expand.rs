@@ -192,7 +192,25 @@ impl Rewrite for Rename<'_> {
                 Term::BigUnion { dom, var, body }
             }
             Term::Ref { .. } => unreachable!("rename runs on flat (ref-free) referent bodies"),
-            _ => rewrite_term(self, t),
+            // The rest bind nothing: their children are rewritten under the
+            // current map. Listed rather than caught, so a former added to
+            // `ast.rs` is classified here before the crate compiles — a
+            // binder this rewrite fell through on would be copied verbatim,
+            // neither freshly named nor scoped in `map`, and PR3's renaming
+            // would break in silence.
+            Term::Var(_)
+            | Term::Lit(_)
+            | Term::Atom(_)
+            | Term::Prim(_)
+            | Term::And(..)
+            | Term::Or(..)
+            | Term::Not(_)
+            | Term::Implies(..)
+            | Term::Iff(..)
+            | Term::Count(_)
+            | Term::MaxT1(_)
+            | Term::MinT1(_)
+            | Term::Reflect(_) => rewrite_term(self, t),
         }
     }
 
@@ -206,7 +224,13 @@ impl Rewrite for Rename<'_> {
                 let (var, pred) = self.under(*var, pred);
                 Dom::Filter { dom, var, pred }
             }
-            _ => rewrite_dom(self, d),
+            // Bind nothing, and listed for `term`'s reason.
+            Dom::MembersDom(_)
+            | Dom::ActiveSlice(_)
+            | Dom::AuditSlice(_)
+            | Dom::LinkDom
+            | Dom::Reg
+            | Dom::SetTerm(_) => rewrite_dom(self, d),
         }
     }
 }

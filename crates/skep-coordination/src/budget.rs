@@ -121,6 +121,12 @@ const MAX_TERM_NODES: usize = 1 << 16;
 /// would multiply by 5^d resp. 2^d while the node count did not. A type
 /// position's endset is deliberately NOT charged — `Checker::guarded` refuses
 /// a non-cataloged key at the first instance, so it is copied once and dies.
+///
+/// No `_` arm, deliberately: the default here would be "no payload", the
+/// unsafe answer for a former or literal that carries one, so one added to
+/// `ast.rs` is priced here before the crate compiles. An atom, a prim or a
+/// domain carries no such payload: its unbounded parts are child terms, each
+/// charged as its own node, and its type positions are cataloged.
 pub(crate) fn weight(t: &Term) -> usize {
     // Saturating, as [`Budget::charge`] is: a payload count that saturates
     // must not then wrap the node's own unit back to zero and charge nothing.
@@ -128,7 +134,24 @@ pub(crate) fn weight(t: &Term) -> usize {
         Term::Lit(Lit::Addr(a)) => a.tumbler().len(),
         Term::Lit(Lit::Nat(n)) => usize::try_from(n.bits().div_ceil(64)).unwrap_or(usize::MAX),
         Term::Ref { addr, .. } => addr.tumbler().len(),
-        _ => 0,
+        Term::Lit(Lit::True | Lit::False | Lit::BotAddr | Lit::BotNat)
+        | Term::Var(_)
+        | Term::Atom(_)
+        | Term::Prim(_)
+        | Term::And(..)
+        | Term::Or(..)
+        | Term::Not(_)
+        | Term::Implies(..)
+        | Term::Iff(..)
+        | Term::Forall { .. }
+        | Term::Exists { .. }
+        | Term::Let { .. }
+        | Term::IfSome { .. }
+        | Term::Count(_)
+        | Term::MaxT1(_)
+        | Term::MinT1(_)
+        | Term::BigUnion { .. }
+        | Term::Reflect(_) => 0,
     })
 }
 

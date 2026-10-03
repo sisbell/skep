@@ -272,7 +272,7 @@ pub(crate) enum Unresolved {
 /// the defined referent at an address, its derivation — if the memo misses
 /// — rooted at the level asked for, or one of the two [`Unresolved`]
 /// refusals.
-pub(crate) type Resolver<'a> = dyn Fn(&Address, u32) -> Result<Arc<TypedTerm>, Unresolved> + 'a;
+type Resolver<'a> = dyn Fn(&Address, u32) -> Result<Arc<TypedTerm>, Unresolved> + 'a;
 
 /// Referent supplier for the DAG-recursive drivers over ref-bearing bodies —
 /// the denotation of a stored def (`eval_term`'s walk plus the one `Ref`

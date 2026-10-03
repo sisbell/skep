@@ -6,7 +6,6 @@
 use crate::common::*;
 use crate::terms::*;
 
-use skep_address::Address;
 use skep_coordination::{
     Arg, Coordinator, Dom, FireAction, Occurrence, Rule, RuleId, Sort, StepOutcome, Term, Trigger,
     View,
@@ -99,7 +98,7 @@ fn fire_count_answers_zero_for_a_foreign_rule_id() {
 #[test]
 fn fire_count_keys_on_exact_coverage_and_home() {
     let k = kernel();
-    let mut c = coord_with_guest(&k, Box::new(|_: &World, d: &Address| *d != doc2()));
+    let mut c = coord_with_guest(&k, |_, d| *d != doc2());
     let writer = link_writer(&k);
     writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
     writer.emit(Caller::System, &doc2(), &marker_ty(), &ca(1), &[]).expect("the draft's marker, ahead of the fire");

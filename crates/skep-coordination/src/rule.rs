@@ -30,7 +30,7 @@ pub struct Rule {
 /// The rule's trigger `T_ρ` — a one-parameter Bool predicate over the domain
 /// element sort — as the submission gives it: inline, as a checked
 /// `TriggerTerm`, or by the content start of a stored def.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Trigger {
     /// Built via `type_check_trigger` (its one parameter may be `Tup`); MUST
     /// be ref-free (`register_rule` rejects otherwise —
@@ -49,7 +49,7 @@ pub enum Trigger {
 /// `#[non_exhaustive]`: multi-deposit fires are deferred pending M7's
 /// `stage_emit`, and arrive as a variant a driver's catch-all should absorb.
 /// Construction is unaffected — both variants' fields are public.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum FireAction {
     /// Canonical certifiable Marker: emit ONE Unary K-tuple covering the

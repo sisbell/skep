@@ -130,7 +130,7 @@ impl TypeRef {
 
 /// PL term formers (ASN-0129 PC0–PC2a, QD-refl; ASN-0130 `Ref`).
 #[allow(clippy::large_enum_variant)] // the interface declares these shapes verbatim
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Term {
     Var(VarId),
     /// ⊤ ⊥ ℕ-lit addr-lit ; ⊥:T∪{⊥} ; ⊥:ℕ∪{⊥}.
@@ -170,7 +170,7 @@ pub enum Term {
 }
 
 /// State-reading atoms (ASN-0128/0129).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Atom {
     /// Core (view-parameterized).
     IsK(TypeRef, ArcTerm),
@@ -216,7 +216,7 @@ pub enum Atom {
 }
 
 /// Quantification/fold domains (ASN-0129 QD).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Dom {
     /// `M_K` : dom(T), view-parameterized.
     MembersDom(TypeRef),
@@ -236,7 +236,7 @@ pub enum Dom {
 }
 
 /// Literals. `BotAddr : T∪{⊥}`, `BotNat : ℕ∪{⊥}`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Lit {
     True,
     False,
@@ -247,7 +247,7 @@ pub enum Lit {
 }
 
 /// V-PRIM operations.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Prim {
     /// Address `=`.
     AddrEq(ArcTerm, ArcTerm),

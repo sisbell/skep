@@ -214,11 +214,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 if !t.is_ref_free() {
                     return Err(RuleError::RefBearingInlineTrigger);
                 }
-                let (_, s) = t.param();
-                if *s != elem_sort {
+                let s = t.param().1;
+                if s != elem_sort {
                     return Err(RuleError::DomainTriggerSortMismatch {
                         expected: elem_sort,
-                        found: *s,
+                        found: s,
                     });
                 }
                 (t.clone(), t.evaluable().clone())

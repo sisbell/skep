@@ -450,7 +450,7 @@ fn a_fire_into_an_unregistered_home_fails_loudly() {
     // (3) The boundary is asked before M7's write path is entered.
     let k = kernel();
     let refused = unregistered.clone();
-    let mut c = coord_with_guest(&k, Box::new(move |_: &World, d: &Address| *d != refused));
+    let mut c = coord_with_guest(&k, move |_, d| *d != refused);
     link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
     c.register_rule(Rule { domain: members_dom(), trigger: always_addr(&c), view: View::Audit, action: marker_at(&unregistered) })
         .expect("register");

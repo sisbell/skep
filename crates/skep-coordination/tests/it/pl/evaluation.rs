@@ -316,7 +316,7 @@ fn a_draft_homed_claim_moves_no_walk() {
     let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
     let l2 = deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
     link_writer(&k).assert_sup(Caller::System, &doc2(), &l1, &l2).expect("a claim homed in doc2");
-    let refusing = coord_with_guest(&k, Box::new(|_: &World, d: &Address| *d != doc2()));
+    let refusing = coord_with_guest(&k, |_, d| *d != doc2());
     let sup = refusing.reserved_type(ShippedType::Supersedes).clone();
     assert!(decide_now(&k, &refusing, View::Active, is_empty(succs(&sup, lit_addr(&l1)))));
     assert!(decide_now(&k, &refusing, View::Active, tip_is(&sup, &l1, &l1)));

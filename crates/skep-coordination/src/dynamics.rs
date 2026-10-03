@@ -57,6 +57,11 @@ pub enum Stability {
 /// rewrites a verdict atom — because every reader takes the footprint as a
 /// superset. So a caller may use it to decide what MIGHT change a verdict,
 /// never to assert that a dependency exists.
+///
+/// Deliberately NOT `Hash`, and neither is [`Dynamics`], which holds one: the
+/// class sets are `im::HashSet`s, whose `Hash` folds their members in
+/// iteration order — an order each set's own hasher fixes — while their
+/// `PartialEq` compares contents, so two equal footprints could hash apart.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Footprint {
     audit: HashSet<CoverageClass>,

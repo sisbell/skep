@@ -95,10 +95,7 @@ fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
     // lives in doc2, and the action's home is a third document the guest
     // class also refuses.
     let k = kernel();
-    let mut c = coord_with_guest(
-        &k,
-        Box::new(|_: &World, d: &Address| *d != doc2() && *d != published_doc()),
-    );
+    let mut c = coord_with_guest(&k, |_, d| *d != doc2() && *d != published_doc());
     let in_doc2 = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
     link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &in_doc2, &[]).expect("rel");
     c.register_rule(Rule {

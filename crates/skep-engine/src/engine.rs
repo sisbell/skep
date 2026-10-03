@@ -240,12 +240,13 @@ impl Engine {
     /// — with the type set compiled into the format there is no twice-passed
     /// configuration whose drift a validate-once-or-fail step would catch.
     ///
-    /// M9 places THREE obligations on the values injected here and can check
-    /// none of them; each is discharged by construction. The two factories are
-    /// named fn items, which capture nothing, so each builds its handle over
-    /// exactly the kernel — and, for the writer, the visibility class — it is
-    /// handed. The guest predicate is [`World::visible_to`]'s System arm,
-    /// PURE and TOTAL as that method states. For an address M3 never
+    /// M9 places THREE obligations on the values injected here, and its types
+    /// carry part of one: the factory types are `fn` pointers, which hold
+    /// nothing. The rest is discharged by construction. The two factories are
+    /// named fn items whose bodies build their handle over exactly the kernel
+    /// — and, for the writer, the visibility class — they are handed. The
+    /// guest predicate is [`World::visible_to`]'s System arm, PURE and TOTAL
+    /// as that method states. For an address M3 never
     /// registered it answers `true` — PUB-7.5's fail-open sign, and the answer
     /// M10's `ReadableWorld` requires of the same predicate — not the `false`
     /// M9's constructor calls safe, so a fire whose action HOME no mint
@@ -264,9 +265,9 @@ impl Engine {
         Coordinator::new(
             Arc::clone(&self.stores.kernel),
             Arc::clone(self.registry()),
-            Box::new(mk_vstream),
-            Box::new(mk_link_writer),
-            Box::new(World::visible_to(Caller::System)),
+            mk_vstream,
+            mk_link_writer,
+            World::visible_to(Caller::System),
         )
     }
 
@@ -310,8 +311,10 @@ impl Engine {
     }
 }
 
-/// M9's factory bodies as named fn items (the proven coercion shape for the
-/// `for<'k>` boxed-Fn parameters).
+/// M9's factory bodies as named fn items, which coerce to its `for<'k>`
+/// `fn`-pointer factory types: each declares its lifetime on itself, where
+/// `Vstream::new` and `LinkWriter::new` take theirs from their impls and so
+/// do not coerce themselves.
 fn mk_vstream(k: &Kernel<World>) -> Vstream<'_, World> {
     Vstream::new(k)
 }

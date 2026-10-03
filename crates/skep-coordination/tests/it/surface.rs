@@ -10,7 +10,7 @@ use crate::common::*;
 use crate::terms::*;
 
 use skep_coordination::{
-    CertifyError, Coordinator, DefineError, Dom, EmitError, Env, EvalError, FireError,
+    CertifyError, Coordinator, DefineError, Dom, EmitError, Env, EvalError, FireAction, FireError,
     InsertError, NullifyError, RegisterError, RetractError, Rule, RuleCertification, RuleError,
     ScopeBody, Sort, Stability, SupersedeError, Term, TxnError, TypeError, TypeKey, Value, VarId,
     View, EXPANSION_NAME_BASE,
@@ -252,7 +252,8 @@ fn a_value_is_buildable_and_self_describing_through_this_crate_s_own_paths() {
 /// against each other; a `Signature`, a `Stability`, an `ActiveExceptions`, a
 /// `ScopeBody` and a `RuleCertification` all hash, so a driver can group defs
 /// by signature, tally checked terms by stability, or key a per-body policy
-/// table.
+/// table — and so do a PL term, a checked term, a trigger and an action, so a
+/// driver can cache a check or group rules by what they share.
 #[test]
 fn the_public_types_compare_and_hash_as_a_caller_needs() {
     use std::collections::{HashMap, HashSet};
@@ -309,4 +310,21 @@ fn the_public_types_compare_and_hash_as_a_caller_needs() {
         RuleCertification::Uncertified { sf: true, marker: false, grow_only: true },
     ])
     .contains(&RuleCertification::CertifiedTerminating));
+
+    // The PL tree, a checked term, a trigger and an action: one built twice
+    // is one key and a different one is another, so the hash is the value's.
+    let ex = || exists(1, Dom::AuditSlice(concrete(&pred_def_ty())), tru());
+    let terms: HashSet<Term> = [ex(), ex(), not(ex())].into_iter().collect();
+    assert_eq!(terms.len(), 2, "one term built twice is one key");
+    let checks: HashSet<_> = [ex(), ex(), not(ex())]
+        .into_iter()
+        .map(|t| c.type_check(vec![], t).expect("checks"))
+        .collect();
+    assert_eq!(checks.len(), 2, "two checks of one term are one key");
+    let triggers: HashSet<_> =
+        [always_addr(&c), always_addr(&c), always_tup(&c)].into_iter().collect();
+    assert_eq!(triggers.len(), 2, "triggers differing only in their parameter's sort are two keys");
+    let actions =
+        HashSet::from([marker_action(), marker_action(), FireAction::Nullify { home: doc1() }]);
+    assert_eq!(actions.len(), 2, "one action built twice is one key");
 }

@@ -41,17 +41,53 @@ use memo::DefMemo;
 
 /// The M5 `Vstream` factory the engine injects: a borrow-scoped op handle
 /// minted off `&Kernel<W>` per call (driver construction is the engine's by
-/// the composition contract, so M9 names `Vstream::new` nowhere; HRTB
-/// because the handle borrows the kernel).
-pub type VstreamFactory<W> = Box<dyn for<'k> Fn(&'k Kernel<W>) -> Vstream<'k, W> + Send + Sync>;
+/// the composition contract, so M9 names `Vstream::new` nowhere;
+/// higher-ranked because the handle borrows the kernel).
+///
+/// A plain `fn` pointer: a factory builds over the kernel it is handed and
+/// over nothing it holds, and a `fn` pointer holds nothing — a capturing
+/// closure does not coerce to one. A non-capturing closure written where the
+/// type is expected coerces, the type supplying its higher-ranked signature,
+/// and so does a fn item that declares its lifetime on itself. `Vstream::new`
+/// takes its `'k` from its impl, so it does not coerce itself, and an
+/// assembler wraps it in one or the other:
+///
+/// ```
+/// use skep_arrangement::Vstream;
+/// use skep_coordination::VstreamFactory;
+/// use skep_kernel::WorldState;
+///
+/// fn factory<W: WorldState>() -> VstreamFactory<W> {
+///     |kernel| Vstream::new(kernel)
+/// }
+/// ```
+///
+/// The same closure holding anything of its own is refused at compile time:
+///
+/// ```compile_fail,E0308
+/// use std::sync::Arc;
+///
+/// use skep_arrangement::Vstream;
+/// use skep_coordination::VstreamFactory;
+/// use skep_kernel::WorldState;
+///
+/// fn factory<W: WorldState>(held: Arc<()>) -> VstreamFactory<W> {
+///     move |kernel| {
+///         let _held = &held;
+///         Vstream::new(kernel)
+///     }
+/// }
+/// ```
+pub type VstreamFactory<W> = for<'k> fn(&'k Kernel<W>) -> Vstream<'k, W>;
 
 /// The M7 `LinkWriter` factory the engine injects: a writer over the kernel
 /// AT A VISIBILITY CLASS (lane 3.3b). Called only by
 /// [`Coordinator::link_writer`], which hands it the coordinator's `guest`
 /// predicate, so the value-keyed gates of every fire and every def write run
-/// at guest class.
+/// at guest class. A plain `fn` pointer, for [`VstreamFactory`]'s reason: it
+/// can hold no kernel and no visibility class of its own.
 pub type LinkWriterFactory<W> =
-    Box<dyn for<'k> Fn(&'k Kernel<W>, &'k Visibility<'k, W>) -> LinkWriter<'k, W> + Send + Sync>;
+    for<'k> fn(&'k Kernel<W>, &'k Visibility<'k, W>) -> LinkWriter<'k, W>;
 
 /// M9's one public handle: PL (group A), predicate definitions (group B), and
 /// the reactive rule engine (group C). Owns no authoritative state — the
@@ -120,25 +156,30 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// drift a validate-once-or-fail step would catch.
     ///
     /// `guest` is the GUEST-class read predicate (lane 3.3 §5): the engine
-    /// passes `World::readable_guest`. It decides three things, so an
-    /// assembler choosing it chooses all three: what every PL verdict sees
-    /// (lane 4.1 — a tuple homed where it answers `false` is invisible to
-    /// `eval`, `evaluate_def` and every rule's domain and trigger); which
-    /// fires are refused before any deposit (`FireError::DraftBoundary`, lane
-    /// 3.3); and what M7's value-keyed gates see at every write M9 makes
-    /// (PUB-6.28, lane 3.3b).
+    /// passes `World::readable_guest`. Any `Fn` of M7's `Visibility` shape
+    /// serves — a closure, or a predicate already boxed — and the handle
+    /// boxes it to hold it. It decides three things, so an assembler
+    /// choosing it chooses all three: what every PL verdict sees (lane 4.1 —
+    /// a tuple homed where it answers `false` is invisible to `eval`,
+    /// `evaluate_def` and every rule's domain and trigger); which fires are
+    /// refused before any deposit (`FireError::DraftBoundary`, lane 3.3); and
+    /// what M7's value-keyed gates see at every write M9 makes (PUB-6.28,
+    /// lane 3.3b).
     ///
-    /// OBLIGATIONS ON THE THREE INJECTED VALUES, owed by the assembler and
-    /// uncheckable here: each factory must build its handle over EXACTLY the
+    /// OBLIGATIONS ON THE THREE INJECTED VALUES — half of one carried by the
+    /// types, the rest owed by the assembler. The factories are `fn`
+    /// pointers, so neither can hold a kernel or a visibility class of its
+    /// own: a capturing closure does not coerce to one. What stays the
+    /// assembler's: each factory builds its handle over EXACTLY the
     /// arguments it is handed — `mk_vstream` over the `&Kernel<W>` given,
-    /// `mk_link_writer` over that kernel AND that `&Visibility` — never over
-    /// a captured one; and `guest` must be a pure function of `(world, doc)`,
-    /// reading nothing outside the world it is passed. M9's
+    /// `mk_link_writer` over that kernel AND that `&Visibility` — rather than
+    /// over a `static` it could still name; and `guest` is a pure function of
+    /// `(world, doc)`, reading nothing outside the world it is passed. M9's
     /// one-pinned-snapshot verdicts and lane 3.3b's byte-identical commit
     /// rest on both: a predicate consulting state outside its world would
     /// give one verdict two visibility answers for one document, and a
-    /// factory capturing its own kernel or its own visibility class would
-    /// type-check and void the guarantee in silence.
+    /// factory building over a kernel or a class it was not handed would
+    /// void the guarantee in silence.
     ///
     /// And `guest` must be TOTAL over every `&Address` M9 hands it, which is
     /// not only registered documents: a fire consults it on the action's HOME
@@ -158,7 +199,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         registry: Arc<TypeRegistry>,
         mk_vstream: VstreamFactory<W>,
         mk_link_writer: LinkWriterFactory<W>,
-        guest: Box<Visibility<'static, W>>,
+        guest: impl Fn(&W, &Address) -> bool + Send + Sync + 'static,
     ) -> Coordinator<W> {
         let catalog = TypeCatalog::project(&registry);
         Coordinator {
@@ -170,7 +211,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
             cursor: 0,
             mk_vstream,
             mk_link_writer,
-            guest,
+            guest: Box::new(guest),
         }
     }
 

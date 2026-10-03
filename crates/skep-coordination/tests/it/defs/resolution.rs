@@ -5,7 +5,7 @@
 use crate::common::*;
 use crate::terms::*;
 
-use skep_address::{document_of, Address};
+use skep_address::document_of;
 use skep_content::HasContent;
 use skep_coordination::{
     CertifyError, Coordinator, Dom, EvalError, RegisterError, Rule, RuleError, Sort, Term, Trigger,
@@ -156,7 +156,7 @@ fn a_probe_before_registration_does_not_freeze_the_start() {
 #[test]
 fn def_probes_are_class_free_while_the_evaluator_s_look_is_not() {
     let k = kernel();
-    let c = coord_with_guest(&k, Box::new(|_: &World, d: &Address| *d != doc2()));
+    let c = coord_with_guest(&k, |_, d| *d != doc2());
     let (start, _) = c
         .define_predicate(&doc2(), &c.type_check(vec![], tru()).expect("closed True"))
         .expect("a def registered into the draft");
@@ -214,7 +214,7 @@ fn def_probes_are_class_free_while_the_evaluator_s_look_is_not() {
 #[test]
 fn a_pdef_hidden_from_the_guest_class_does_not_absorb_a_second_registration() {
     let k = kernel();
-    let c = coord_with_guest(&k, Box::new(|_: &World, d: &Address| *d != doc2()));
+    let c = coord_with_guest(&k, |_, d| *d != doc2());
     let term = c.type_check(vec![], tru()).expect("closed True");
     let (start, _) = c.define_predicate(&doc2(), &term).expect("define into the draft");
 

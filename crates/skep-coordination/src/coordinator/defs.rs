@@ -562,15 +562,15 @@ impl<W: CoordinationWorld> Coordinator<W> {
     }
 
     /// De-register: M7::nullify, from the retracting `home`, on ONE active
-    /// `pdef` tuple at `start` — the first M7 lists, found via
-    /// `.first().ok_or(NotActive)` (never `[0]` — item 8). One tuple per
-    /// call: beside a second active `pdef` at the same start (a twin homed
-    /// where the guest class could not see it when the first was minted),
-    /// `is_active_pred` stays true until each is retracted. `home` must be a
-    /// registered document — `Nullify(Rejected(HomeNotRegistered))`
-    /// otherwise, after the `NotActive` probe. Content untouched; audit
-    /// retains it; re-registration after nullify deposits afresh (the idem
-    /// class is empty again).
+    /// `pdef` tuple at `start` — the first M7 lists, taken by
+    /// `.into_iter().next()`, `NotActive` when there is none (never `[0]` —
+    /// item 8). One tuple per call: beside a second active `pdef` at the same
+    /// start (a twin homed where the guest class could not see it when the
+    /// first was minted), `is_active_pred` stays true until each is
+    /// retracted. `home` must be a registered document —
+    /// `Nullify(Rejected(HomeNotRegistered))` otherwise, after the `NotActive`
+    /// probe. Content untouched; audit retains it; re-registration after
+    /// nullify deposits afresh (the idem class is empty again).
     ///
     /// Does NOT cascade (ASN-0130: "existing referencing definitions, and
     /// evaluations of them, survive untouched"). A def that references `start`
@@ -599,10 +599,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
                     Pattern { from: from_ref(start.tumbler()), to: &[] },
                     View::Active,
                 )
-                .first()
+                .into_iter()
+                .next()
                 .ok_or(RetractError::NotActive)?
                 .addr
-                .clone()
         };
         let (retraction, seq) = self.link_writer().nullify(Caller::System, home, &target)?;
         Ok((retraction, seq))

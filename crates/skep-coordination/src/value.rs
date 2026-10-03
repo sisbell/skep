@@ -36,6 +36,11 @@ pub enum Sort {
 /// The payload types are M1's `Address`/`Nat`, M7's `CoverageClass`/`Tuple`
 /// and `im`'s persistent collections — each re-exported from this crate's
 /// root, so a caller builds a `Value` without naming a second manifest.
+///
+/// Deliberately NOT `Hash`, unlike the PL tree: `Map` holds an
+/// `im::HashMap`, whose `Hash` folds its entries in iteration order — an
+/// order each map's own hasher fixes — while its `PartialEq` compares
+/// contents, so two equal values could hash apart.
 #[allow(clippy::large_enum_variant)] // the interface declares these shapes verbatim
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
@@ -151,7 +156,7 @@ impl From<Arg> for Value {
 /// `TypedTerm::signed`; that check is where Γ_D's names are required
 /// distinct (`DuplicateParameter`), so a checked term's context binds each
 /// name once.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct SignedTerm {
     pub(crate) params: Vec<(VarId, Sort)>,
     pub(crate) body: Term,
@@ -173,7 +178,8 @@ pub struct Signature {
 /// Γ_D zipped with its arguments) and extended by one; a later binding of a
 /// name shadows an earlier one, as `bind` does. Two environments are equal
 /// when they bind the same names to the same values, so one built
-/// positionally and one built by `bind` can be compared.
+/// positionally and one built by `bind` can be compared. Not `Hash`, for
+/// [`Value`]'s reason: the bindings are an `im::HashMap`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Env(HashMap<VarId, Value>);
 

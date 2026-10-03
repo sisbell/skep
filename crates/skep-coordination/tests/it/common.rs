@@ -17,7 +17,6 @@ use skep_coordination::Coordinator;
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, WorldState};
 use skep_links::{
     enc, Caller, Endset, HasLinks, LinkRec, LinkState, LinkWriter, SlotArg, TypeRegistry,
-    Visibility,
 };
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
@@ -235,20 +234,6 @@ pub fn registry() -> Arc<TypeRegistry> {
     Arc::clone(skep_links::registry())
 }
 
-fn mk_vstream(k: &Kernel<World>) -> Vstream<'_, World> {
-    Vstream::new(k)
-}
-
-/// The writer factory the Coordinator builds its M7 handles through: the
-/// kernel and the visibility class the Coordinator lends it (its injected
-/// `guest`, lane 3.3b).
-fn mk_link_writer<'k>(
-    k: &'k Kernel<World>,
-    visibility: &'k Visibility<'k, World>,
-) -> LinkWriter<'k, World> {
-    LinkWriter::new(k, visibility)
-}
-
 /// The ALL-VISIBLE class for the suite's direct upstream writes: this
 /// miniature world carries no publication state (M3's `published` bit is
 /// folded engine-side), so every document is readable to every caller here.
@@ -267,20 +252,24 @@ fn every_document(_: &World, _: &Address) -> bool {
 /// incumbent, the PRIVATE seed's included. [`coord_with_guest`] injects a
 /// refusing one.
 pub fn coord(k: &Arc<Kernel<World>>) -> Coordinator<World> {
-    coord_with_guest(k, Box::new(|_: &World, _: &Address| true))
+    coord_with_guest(k, |_, _| true)
 }
 
-/// [`coord`] under a caller-chosen guest-class predicate (lane 3.3 §5), in
-/// M7's own `Visibility` shape.
+/// [`coord`] under a caller-chosen guest-class predicate (lane 3.3 §5) — any
+/// `Fn` of M7's `Visibility` shape, a closure or a predicate already boxed.
+/// The two factories are non-capturing closures written at the argument,
+/// which `Coordinator::new`'s `fn`-pointer factory types admit: the writer's
+/// is handed the kernel and the visibility class the Coordinator lends it
+/// (its injected `guest`, lane 3.3b).
 pub fn coord_with_guest(
     k: &Arc<Kernel<World>>,
-    guest: Box<Visibility<'static, World>>,
+    guest: impl Fn(&World, &Address) -> bool + Send + Sync + 'static,
 ) -> Coordinator<World> {
     Coordinator::new(
         Arc::clone(k),
         registry(),
-        Box::new(mk_vstream),
-        Box::new(mk_link_writer),
+        |kernel| Vstream::new(kernel),
+        |kernel, visibility| LinkWriter::new(kernel, visibility),
         guest,
     )
 }

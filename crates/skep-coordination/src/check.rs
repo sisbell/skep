@@ -56,7 +56,7 @@ use crate::walk::{rewrite_term, Rewrite};
 /// may be a tuple — does not yield one, in this crate or out of it. That is
 /// what lets `define_predicate` take a `TypedTerm` and store it without a
 /// tuple check of its own.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypedTerm {
     signed: SignedTerm,
     result: Sort,
@@ -154,7 +154,7 @@ impl TypedTerm {
 /// are the trigger's parameter, its ref-freeness, its source body and, for
 /// the rule engine, its evaluable projection. Holds the checked term shared,
 /// so a registration captures it without a copy.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TriggerTerm(Arc<TypedTerm>);
 
 impl TriggerTerm {

@@ -276,7 +276,7 @@ fn type_check_charges_a_literal_s_payload_against_the_node_budget() {
 /// resolved. Each refused term fits the budget once its payload goes
 /// uncharged.
 #[test]
-fn type_check_charges_every_payload_too_large_names() {
+fn type_check_charges_every_payload_kind_against_the_node_budget() {
     let k = kernel();
     let c = coord(&k);
     let context = |n: u32| (1..=n).map(|i| (v(i), Sort::Bool)).collect::<Vec<_>>();

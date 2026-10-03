@@ -151,17 +151,17 @@ mod tag {
 // ─────────────────────────────── encoding ───────────────────────────────
 
 /// Encode the signed term, or refuse its Γ_D as [`UnencodableTup`].
-pub(crate) fn encode(t: &SignedTerm) -> Result<Vec<u8>, UnencodableTup> {
+pub(crate) fn encode(signed: &SignedTerm) -> Result<Vec<u8>, UnencodableTup> {
     let mut payload = Vec::new();
-    w_varint(&mut payload, t.params.len() as u64);
-    for (v, s) in &t.params {
+    w_varint(&mut payload, signed.params.len() as u64);
+    for (v, s) in &signed.params {
         if *s == Sort::Tup {
             return Err(UnencodableTup(*v));
         }
         w_varid(&mut payload, v);
         payload.push(sort_tag(*s));
     }
-    w_term(&mut payload, &t.body);
+    w_term(&mut payload, &signed.body);
     let mut out = Vec::with_capacity(payload.len() + 10);
     w_varint(&mut out, payload.len() as u64);
     out.extend_from_slice(&payload);

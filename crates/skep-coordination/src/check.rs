@@ -388,8 +388,8 @@ impl<'a> Checker<'a> {
     /// `TypeRef` `Concrete`, no `Reg` survivor, and no node deeper than
     /// `MAX_DEPTH` — the bound `enum_dom` and `Analyzer::dom` take, having
     /// none of their own.
-    pub(crate) fn check_closed_dom(self, dm: &Dom) -> Result<CheckedDom, TypeError> {
-        self.check_dom(&Ctx::new(), dm, 0)
+    pub(crate) fn check_closed_dom(self, d: &Dom) -> Result<CheckedDom, TypeError> {
+        self.check_dom(&Ctx::new(), d, 0)
     }
 
     /// A walk over this term reaches `level`: refused past `MAX_DEPTH`
@@ -502,11 +502,11 @@ impl<'a> Checker<'a> {
     fn extremum(
         &self,
         ctx: &Ctx,
-        dm: &ArcDom,
+        d: &ArcDom,
         depth: u32,
         mk: fn(ArcDom) -> Term,
     ) -> Result<Checked, TypeError> {
-        let cd = self.check_dom(ctx, dm, depth)?;
+        let cd = self.check_dom(ctx, d, depth)?;
         want(Sort::Addr, cd.elem)?;
         Ok(Checked { term: Arc::new(mk(cd.dom)), sort: Sort::OptAddr, ref_free: cd.ref_free })
     }
@@ -611,7 +611,7 @@ impl<'a> Checker<'a> {
                     ref_free: co.ref_free && ct.ref_free && ce.ref_free,
                 })
             }
-            Term::Count(dm) => match dm.as_ref() {
+            Term::Count(d) => match d.as_ref() {
                 // count(Reg) folds to a Lit — the registered-class count,
                 // constant by R1/C0 (V-IDX).
                 Dom::Reg => Ok(Self::leaf(
@@ -619,7 +619,7 @@ impl<'a> Checker<'a> {
                     Sort::Nat,
                 )),
                 _ => {
-                    let cd = self.check_dom(ctx, dm, child_depth)?;
+                    let cd = self.check_dom(ctx, d, child_depth)?;
                     Ok(Checked {
                         term: Arc::new(Term::Count(cd.dom)),
                         sort: Sort::Nat,
@@ -627,8 +627,8 @@ impl<'a> Checker<'a> {
                     })
                 }
             },
-            Term::MaxT1(dm) => self.extremum(ctx, dm, child_depth, Term::MaxT1),
-            Term::MinT1(dm) => self.extremum(ctx, dm, child_depth, Term::MinT1),
+            Term::MaxT1(d) => self.extremum(ctx, d, child_depth, Term::MaxT1),
+            Term::MinT1(d) => self.extremum(ctx, d, child_depth, Term::MinT1),
             Term::BigUnion { dom, var, body } => {
                 // PC2a excludes Reg from ⋃; Addr and Tup element sorts bind.
                 let cd = self.check_dom(ctx, dom, child_depth)?;
@@ -640,11 +640,11 @@ impl<'a> Checker<'a> {
                     ref_free: cd.ref_free && cb.ref_free,
                 })
             }
-            Term::Reflect(dm) => {
+            Term::Reflect(d) => {
                 // QD-refl: only an address-valued domain reflects; a
                 // tuple-valued (or class-valued Reg) domain is rejected at
                 // the element-sort check.
-                let cd = self.check_dom(ctx, dm, child_depth)?;
+                let cd = self.check_dom(ctx, d, child_depth)?;
                 want(Sort::Addr, cd.elem)?;
                 Ok(Checked {
                     term: Arc::new(Term::Reflect(cd.dom)),
@@ -965,13 +965,13 @@ impl<'a> Checker<'a> {
     /// design's "likewise rejected at the element-sort check" it surfaces as
     /// `SortMismatch{expected: Addr, found: Tup}` (the vocabulary has no
     /// class sort to name).
-    fn check_dom(&self, ctx: &Ctx, dm: &Dom, depth: u32) -> Result<CheckedDom, TypeError> {
+    fn check_dom(&self, ctx: &Ctx, d: &Dom, depth: u32) -> Result<CheckedDom, TypeError> {
         // A domain former carries no unbounded payload of its own: its type
         // position is a cataloged endset (`guarded`), its children are terms.
         self.enter(1, depth)?;
         let child_depth = depth + 1;
         let leaf = |dom: Dom, elem: Sort| CheckedDom { dom: Arc::new(dom), elem, ref_free: true };
-        match dm {
+        match d {
             Dom::MembersDom(tr) => {
                 let k = self.guarded(tr, Guard::Cataloged)?;
                 Ok(leaf(Dom::MembersDom(TypeRef::Concrete(k)), Sort::Addr))

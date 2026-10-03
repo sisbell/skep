@@ -69,11 +69,11 @@ pub(crate) struct TypeCatalog {
     /// Φ — the cataloged classes declaring `ReadFilter` (class, verbatim key
     /// endset), for the UV default-view per-type filter
     /// (`is_k(J, ·) ≡ is_filtered_J`, D2 — BH1).
-    read_filter: Vec<(CoverageClass, Endset)>,
+    read_filter_classes: Vec<(CoverageClass, Endset)>,
     /// The classes declaring `ReverseLookup` (class, verbatim key endset) —
     /// `targets_keyed`'s footprint and its join (BH3). Empty in this format:
     /// no shipped registration declares it.
-    reverse_lookup: Vec<(CoverageClass, Endset)>,
+    reverse_lookup_classes: Vec<(CoverageClass, Endset)>,
     /// The `[R]` class, the shipped `Supersedes` key, and the two PredLayer
     /// classes — each answered by an accessor below, so a collaborator asks
     /// the catalog the question rather than performing the comparison itself.
@@ -133,7 +133,7 @@ impl TypeCatalog {
         // `ReverseLookup` set is exactly the classes `targets_keyed` joins
         // over — so the join and the footprint analysis of what it reads
         // cannot come apart.
-        let read_filter = classes
+        let read_filter_classes = classes
             .iter()
             .filter_map(|k| {
                 let entry = &entries[k];
@@ -142,7 +142,7 @@ impl TypeCatalog {
                     .then(|| (entry.class.clone(), k.0.clone()))
             })
             .collect();
-        let reverse_lookup = classes
+        let reverse_lookup_classes = classes
             .iter()
             .filter_map(|k| {
                 let entry = &entries[k];
@@ -164,8 +164,8 @@ impl TypeCatalog {
             shipped,
             entries,
             classes,
-            read_filter,
-            reverse_lookup,
+            read_filter_classes,
+            reverse_lookup_classes,
         }
     }
 
@@ -203,21 +203,21 @@ impl TypeCatalog {
     /// Φ — the cataloged `ReadFilter` classes (BH1), for the UV `K_queried`
     /// self-exclusion.
     pub(crate) fn read_filter_classes(&self) -> &[(CoverageClass, Endset)] {
-        &self.read_filter
+        &self.read_filter_classes
     }
 
     /// The cataloged `ReverseLookup` classes (BH3) — the classes
     /// `targets_keyed` joins over, and its footprint. The projection of the
     /// registry's own `reverse_lookup_classes`, and named for it.
     pub(crate) fn reverse_lookup_classes(&self) -> &[(CoverageClass, Endset)] {
-        &self.reverse_lookup
+        &self.reverse_lookup_classes
     }
 
     /// V-atom: `targets_keyed` is in the vocabulary iff some cataloged class
     /// declares `ReverseLookup` (BH3) — none does in this format, so the atom
     /// is out of the vocabulary on every board.
     pub(crate) fn has_reverse_lookup_class(&self) -> bool {
-        !self.reverse_lookup.is_empty()
+        !self.reverse_lookup_classes.is_empty()
     }
 
     /// Is this one of the two classes PR-DISC reserves for the predicate

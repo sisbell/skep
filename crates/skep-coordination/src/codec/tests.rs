@@ -60,7 +60,7 @@ fn roundtrip_is_identity_on_every_former() {
 /// The codec refuses `Sort::Tup` in a parameter context (Codom-only at
 /// encode time — ASN-0130 SignedTerm).
 #[test]
-fn encode_refuses_tup_param() {
+fn encode_refuses_a_tup_parameter() {
     let signed = SignedTerm { params: vec![(v(1), Sort::Tup)], body: Term::Lit(Lit::True) };
     assert_eq!(encode(&signed), Err(UnencodableTup(v(1))));
 }
@@ -271,7 +271,7 @@ fn decode_charges_a_literal_s_payload_against_the_node_budget() {
 /// without the count's charge they would (60 001).
 #[test]
 fn decode_charges_an_endset_s_spans_against_the_node_budget() {
-    let members = |spans: u32| {
+    let costly = |spans: u32| {
         let e = Endset::from_spans((0..spans).flat_map(|i| {
             skep_links::enc(&[a(&[1, 1, 0, 1, 0, 1, 0, 1, i + 1])]).spans().cloned().collect::<Vec<_>>()
         }));
@@ -280,14 +280,14 @@ fn decode_charges_an_endset_s_spans_against_the_node_budget() {
             body: Term::Atom(Atom::Members(TypeRef::Concrete(TypeKey(e)))),
         }
     };
-    let within = members(100);
+    let within = costly(100);
     assert_eq!(decode(&encode(&within).expect("encodes")), Ok(within));
-    assert_eq!(decode(&encode(&members(4000)).expect("encodes")), Err(Malformed));
+    assert_eq!(decode(&encode(&costly(4000)).expect("encodes")), Err(Malformed));
 
     let cheap = |spans: u32| {
         let e = Endset::from_spans(
             (1..=spans)
-                .flat_map(|k| skep_links::enc(&[a(&[k])]).spans().cloned().collect::<Vec<_>>()),
+                .flat_map(|i| skep_links::enc(&[a(&[i])]).spans().cloned().collect::<Vec<_>>()),
         );
         SignedTerm {
             params: vec![],

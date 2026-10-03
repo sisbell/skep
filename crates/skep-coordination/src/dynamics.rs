@@ -345,14 +345,14 @@ impl<'a> Analyzer<'a> {
                 Analysis { st, sf, grow_only: fp.is_step_constant(), fp }
             }
             Term::Let { bound, body, .. } => {
-                let ab = self.term(bound);
-                let ay = self.term(body);
-                let bound_const = ab.fp.is_step_constant();
-                let fp = ab.fp.union(ay.fp);
+                let abound = self.term(bound);
+                let ab = self.term(body);
+                let bound_const = abound.fp.is_step_constant();
+                let fp = abound.fp.union(ab.fp);
                 Analysis {
-                    st: bound_const && ay.st,
-                    sf: bound_const && ay.sf,
-                    grow_only: bound_const && ay.grow_only,
+                    st: bound_const && ab.st,
+                    sf: bound_const && ab.sf,
+                    grow_only: bound_const && ab.grow_only,
                     fp,
                 }
             }
@@ -579,9 +579,9 @@ impl<'a> Analyzer<'a> {
                 DomAnalysis { fp: ad.fp.union(ap.fp), grow_only }
             }
             Dom::SetTerm(t) => {
-                let at = self.term(t);
-                let grow_only = at.grow_only || at.fp.is_step_constant();
-                DomAnalysis { fp: at.fp, grow_only }
+                let aset = self.term(t);
+                let grow_only = aset.grow_only || aset.fp.is_step_constant();
+                DomAnalysis { fp: aset.fp, grow_only }
             }
         }
     }

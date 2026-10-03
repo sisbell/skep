@@ -379,11 +379,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
         };
         // A `None` — the body and the element's shape disagree — leaves the
         // rule UNSCOPED: every one of its arguments counts.
-        let scoped = |arg: &Arg| body.in_scope(arg, &s_of).unwrap_or(true);
+        let counted = |arg: &Arg| body.in_scope(arg, &s_of).unwrap_or(true);
         !self
             .rules
             .iter()
-            .any(|rule| self.first_enabled(rule, snap, scoped).is_some())
+            .any(|rule| self.first_enabled(rule, snap, counted).is_some())
     }
 
     // ───────────────────────────── the scheduler ─────────────────────────────

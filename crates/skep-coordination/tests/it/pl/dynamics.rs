@@ -86,12 +86,20 @@ fn view_independence_refuses_every_view_parameterized_and_uv_rewritten_form() {
     let ps = pred_stable_ty();
     let independent = |t: Term| {
         let tt = c.type_check(vec![], t).expect("test term type-checks");
-        let at = |view: View| c.classify(&tt, view).view_independent;
+        let at_view = |view: View| c.classify(&tt, view).view_independent;
         // `view_independent` is the one report `Dynamics` calls view-AGNOSTIC,
         // so every row below states its claim at all three views at once.
-        assert_eq!(at(View::Active), at(View::Audit), "view_independent moved with the view");
-        assert_eq!(at(View::Audit), at(View::Default), "view_independent moved with the view");
-        at(View::Audit)
+        assert_eq!(
+            at_view(View::Active),
+            at_view(View::Audit),
+            "view_independent moved with the view"
+        );
+        assert_eq!(
+            at_view(View::Audit),
+            at_view(View::Default),
+            "view_independent moved with the view"
+        );
+        at_view(View::Audit)
     };
     // `sources_to`/`stale` are out of the vocabulary in this format.
     for t in [

@@ -29,13 +29,13 @@ fn next_enabled_names_the_first_rule_in_registration_order() {
         .emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[])
         .expect("a pred_stable member");
     writer.emit(Caller::System, &doc1(), &pred_def_ty(), &ca(3), &[]).expect("a pred_def member");
-    let stable = |c: &Coordinator<World>| Rule {
+    let pred_stable_rule = |c: &Coordinator<World>| Rule {
         domain: Dom::MembersDom(concrete(&pred_stable_ty())),
         trigger: always_addr(c),
         view: View::Audit,
         action: marker_action(),
     };
-    let def = |c: &Coordinator<World>| Rule {
+    let pred_def_rule = |c: &Coordinator<World>| Rule {
         domain: Dom::MembersDom(concrete(&pred_def_ty())),
         trigger: always_addr(c),
         view: View::Audit,
@@ -44,17 +44,17 @@ fn next_enabled_names_the_first_rule_in_registration_order() {
     let s = k.snapshot();
 
     let mut c = coord(&k);
-    let first = c.register_rule(stable(&c)).expect("R1");
-    let second = c.register_rule(def(&c)).expect("R2");
+    let first = c.register_rule(pred_stable_rule(&c)).expect("R1");
+    let second = c.register_rule(pred_def_rule(&c)).expect("R2");
     assert!(first < second, "a RuleId orders by registration");
     assert_eq!(c.next_enabled(&s), Some(Occurrence { rule: first, arg: Arg::Addr(ca(1)) }));
 
     let mut reversed = coord(&k);
-    let def_first = reversed.register_rule(def(&reversed)).expect("R1'");
-    reversed.register_rule(stable(&reversed)).expect("R2'");
+    let pred_def_first = reversed.register_rule(pred_def_rule(&reversed)).expect("R1'");
+    reversed.register_rule(pred_stable_rule(&reversed)).expect("R2'");
     assert_eq!(
         reversed.next_enabled(&s),
-        Some(Occurrence { rule: def_first, arg: Arg::Addr(ca(3)) })
+        Some(Occurrence { rule: pred_def_first, arg: Arg::Addr(ca(3)) })
     );
 }
 
@@ -170,9 +170,9 @@ fn marker_rule_certifies_fires_and_quiesces() {
 
     let s = k.snapshot();
     assert!(!c.quiescent(&s));
-    let e = c.next_enabled(&s).expect("an enabled occurrence");
-    assert_eq!(e.rule, id);
-    assert_eq!(e.arg, Arg::Addr(ca(1))); // members in TUMBLER order — ca3 was deposited first
+    let peeked = c.next_enabled(&s).expect("an enabled occurrence");
+    assert_eq!(peeked.rule, id);
+    assert_eq!(peeked.arg, Arg::Addr(ca(1))); // members in TUMBLER order — ca3 was deposited first
 
     match c.step(&k.snapshot()) {
         StepOutcome::Fired { rule, arg, .. } => {

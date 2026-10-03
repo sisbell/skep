@@ -38,28 +38,37 @@ fn a_def_registers_evaluates_retracts_and_re_registers_afresh() {
     // and a dedup hit commits nothing — M7 answers the incumbent with its
     // base `Seq`.
     let before = k.current_seq();
-    let (p1, _) = c.register_pred(&doc1(), &start).expect("re-register (dedup)");
-    let (p2, _) = c.register_pred(&doc1(), &start).expect("re-register (dedup)");
-    assert_eq!(p1, p2);
+    let (incumbent, _) = c.register_pred(&doc1(), &start).expect("re-register (dedup)");
+    let (again, _) = c.register_pred(&doc1(), &start).expect("re-register (dedup)");
+    assert_eq!(incumbent, again);
     assert_eq!(k.current_seq(), before, "a dedup hit commits nothing");
 
     // A parameterized def: positional Γ_D binding with arity/sort guards.
-    let tt1 = c
+    let tt = c
         .type_check(vec![(v(1), Sort::Addr)], addr_eq(var(1), lit_addr(&ca(1))))
         .expect("param def");
-    let (pd, _) = c.define_predicate(&doc1(), &tt1).expect("define param def");
+    let (param_def, _) = c.define_predicate(&doc1(), &tt).expect("define param def");
     let s2 = k.snapshot();
-    assert_eq!(c.evaluate_def(&pd, &[Value::Addr(ca(1))], View::Active, &s2), Ok(Value::Bool(true)));
-    assert_eq!(c.evaluate_def(&pd, &[Value::Addr(ca(2))], View::Active, &s2), Ok(Value::Bool(false)));
-    assert_eq!(c.evaluate_def(&pd, &[], View::Active, &s2), Err(EvalError::ArgArityMismatch));
     assert_eq!(
-        c.evaluate_def(&pd, &[Value::Nat(n(1))], View::Active, &s2),
+        c.evaluate_def(&param_def, &[Value::Addr(ca(1))], View::Active, &s2),
+        Ok(Value::Bool(true))
+    );
+    assert_eq!(
+        c.evaluate_def(&param_def, &[Value::Addr(ca(2))], View::Active, &s2),
+        Ok(Value::Bool(false))
+    );
+    assert_eq!(
+        c.evaluate_def(&param_def, &[], View::Active, &s2),
+        Err(EvalError::ArgArityMismatch)
+    );
+    assert_eq!(
+        c.evaluate_def(&param_def, &[Value::Nat(n(1))], View::Active, &s2),
         Err(EvalError::ArgSortMismatch)
     );
     // A tuple is no Γ_D value: its sort, `Tup`, matches no stored parameter.
     let tuple = Tuple { addr: la(1), from: enc(&[ca(1)]), to: enc(&[ca(2)]) };
     assert_eq!(
-        c.evaluate_def(&pd, &[Value::Tuple(tuple)], View::Active, &s2),
+        c.evaluate_def(&param_def, &[Value::Tuple(tuple)], View::Active, &s2),
         Err(EvalError::ArgSortMismatch)
     );
     assert_eq!(
@@ -76,8 +85,8 @@ fn a_def_registers_evaluates_retracts_and_re_registers_afresh() {
     assert!(c.is_ever_pred(&start, &s3));
     assert_eq!(c.evaluate_def(&start, &[], View::Active, &s3), Ok(Value::Bool(true)));
     assert!(matches!(c.retract_pred(&doc1(), &start), Err(RetractError::NotActive)));
-    let (p3, _) = c.register_pred(&doc1(), &start).expect("resurrect");
-    assert_ne!(p3, p1);
+    let (fresh, _) = c.register_pred(&doc1(), &start).expect("resurrect");
+    assert_ne!(fresh, incumbent);
 }
 
 /// `retract_pred` returns the `[R]` TUPLE it deposited — never the `pdef` it

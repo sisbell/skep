@@ -1,8 +1,8 @@
-//! [`Op`]'s `Debug`, written out because a derive cannot reach past one
-//! field: M4's `Val` withholds `Debug` so that content bytes never render into
-//! a log, and `Op::Insert` carries `Val`s. So an `Insert`'s values render as
-//! their COUNT — `Vec::len`, since this crate calls no M4 function — and every
-//! other field by its own `Debug`, in the shape a derive would print. M6's
+//! [`Op`]'s `Debug`, written out so an `Insert`'s values render as their
+//! COUNT — `Vec::len`, since this crate calls no M4 function — where a derive
+//! would list one byte length per value, and an insert can carry a value per
+//! byte. Every other field renders by its own `Debug`, in the shape a derive
+//! would print, and no content byte renders anywhere: M4's `Val`, M6's
 //! `DeliveryItem` and M2's `Attestation` redact their payloads the same way.
 //!
 //! Every arm names every field of its variant, with no `..`, so a field added

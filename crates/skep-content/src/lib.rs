@@ -94,8 +94,8 @@
 //! [`ContentStore::apply_write`]. The engine only `From`-lifts and folds
 //! the record; it never builds one. Anything that inspects a journaled
 //! record reads it through [`ContentWrite::addr`] /
-//! [`ContentWrite::val`] and the manual `Debug`, which the engine's
-//! `Record: Debug` rests on.
+//! [`ContentWrite::val`] and its `Debug`, which the engine's
+//! `Record: Debug` rests on and which renders a value as its length.
 
 #![forbid(unsafe_code)]
 
@@ -133,3 +133,26 @@ pub trait HasContent {
     /// M4's slice of the world state.
     fn content(&self) -> &ContentStore;
 }
+
+/// The auto traits M4's types promise without saying. `WorldState` is
+/// `Send + Sync + 'static`, so the engine's `impl WorldState for World` owes
+/// those bounds of [`ContentStore`], a field of its `World`, and of
+/// [`ContentWrite`], the payload of its `Record::Content`, through types no
+/// signature in this crate mentions; [`Val`] rides M10's `Request` across the
+/// daemon's workers; and [`ContentError`] travels inside M5's `InsertError`
+/// and `PublishError`. They are kept by what the private fields contain — the
+/// `im` map, its hasher, the `Arc` under `Val` — so a field that revoked one
+/// (the `Rc`-backed `im-rc` for `im`, an `Rc` under `Val`, a `Cell` in the
+/// hasher) would compile here and fail a crate away, never naming the field.
+/// Asserted in the library rather than the suite, because that is the build
+/// a manifest change is made in, and it is this crate's manifest that names
+/// `im` and the hasher.
+const _: fn() = || {
+    fn owed<T: Send + Sync + 'static>() {}
+    owed::<ContentStore>(); // the `WorldState` bound reaches this through the engine
+    owed::<ContentWrite>(); // and this through `WorldState::Record`
+    owed::<Val>();
+    // The rejection too: a caller that boxes one meets
+    // `Box<dyn Error + Send + Sync>`, which is the crossing form.
+    owed::<ContentError>();
+};

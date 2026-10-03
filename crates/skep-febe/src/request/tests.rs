@@ -165,10 +165,10 @@ fn a_successor_spec_is_a_value_the_comparison_macros_accept() {
     assert_eq!(spec(1).clone(), spec(1), "a clone is the same successor too");
 }
 
-/// C-DEBUG on the request model. `Op` writes its `Debug` by hand, since M4's
-/// `Val` withholds one: an `Insert`'s values render as their COUNT and never
-/// a byte, and every variant under the name [`Op::kind`] echoes — the two
-/// tables are kept by hand, and this pins them to each other. A [`Request`]
+/// C-DEBUG on the request model. `Op` writes its `Debug` by hand: an
+/// `Insert`'s values render as their COUNT and never a byte, and every
+/// variant under the name [`Op::kind`] echoes — the two tables are kept by
+/// hand, and this pins them to each other. A [`Request`]
 /// derives `Debug` over it, so the comparison macros a harness writes over a
 /// parsed request compile, which this test's own `assert_eq!` witnesses.
 #[test]

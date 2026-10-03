@@ -12,7 +12,10 @@ use skep_address::{content_subspace, Address, Level};
 /// `s_C = 1`). That is the element field's subspace, NOT the kernel-side
 /// LockKey space-tag — different constant, different layer (§Dependencies &
 /// seams). A `debug_assert!`: every debug and test build in the workspace
-/// checks every content write, and release pays nothing.
+/// checks every content write, and release pays nothing. `#[track_caller]`,
+/// as both doors are, so the panic's location is the line that handed the
+/// address in, and `site` names the door it came through.
+#[track_caller]
 pub(crate) fn debug_assert_content_address_routing(addr: &Address, site: &str) {
     debug_assert!(
         addr.level() == Level::Element && addr.subspace() == Some(&content_subspace()),

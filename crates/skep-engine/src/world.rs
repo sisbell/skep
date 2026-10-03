@@ -142,12 +142,10 @@ pub struct World {
 /// `#[derive(Debug)]` gets for holding a world, as `Engine`'s is for holding
 /// an engine, and every public type in this crate answers one.
 ///
-/// Opaque rather than structural for a reason that is M4's and not a matter of
-/// volume: `ContentStore` carries no `Debug` at all, because `Val` carries
-/// none on purpose so that content blobs never render into a log. So there is
-/// nothing here to derive, and writing the fields out by hand would be
-/// reaching around that decision — while `namespace` and `links` would put
-/// whole registries into a `dbg!`.
+/// Opaque rather than structural for volume: the slices' own `Debug`s would
+/// put every stored value (`content`, by address and byte length — `Val`
+/// never renders a byte) and whole registries (`namespace`, `links`) into a
+/// `dbg!`.
 impl fmt::Debug for World {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("World").finish_non_exhaustive()
@@ -242,11 +240,11 @@ impl<'de> Deserialize<'de> for FormatStamp {
 /// ever lifts and folds.
 ///
 /// `Debug` is the whole of what a holder can read a record BY, and it is the
-/// four stores' own: each writes its variant's account of itself, and M4's is
-/// written by hand for exactly this reader — it reports a byte length where
-/// the payload is, so a content blob never renders into a log. A journal
-/// inspector or a harness holding a central record has no accessor to reach
-/// past it, by design, since a store's record is that store's to describe.
+/// four stores' own: each gives its variant's account of itself, and M4's
+/// reports a byte length where the value is (`Val`'s own `Debug`), so a
+/// content blob never renders into a log. A journal inspector or a harness
+/// holding a central record has no accessor to reach past it, by design,
+/// since a store's record is that store's to describe.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Record {

@@ -3250,9 +3250,9 @@ fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
 
 #[test]
 fn a_delivery_renders_items_by_length_and_address_and_never_by_payload() {
-    // M4 withholds `Debug` from `Val` so blobs never reach a log; M6 absorbs
-    // that discipline in `DeliveryItem`'s hand-written `Debug` and states the
-    // shape on its card. A payload byte in any rendering is the failure this
+    // A value renders as its byte length and never a byte — `Val`'s own
+    // `Debug`, which `DeliveryItem`'s hand-written `Debug` keeps, in the shape
+    // its card states. A payload byte in any rendering is the failure this
     // test exists to name.
     assert_eq!(
         format!("{:?}", DeliveryItem::Content(val(b"hello"))),

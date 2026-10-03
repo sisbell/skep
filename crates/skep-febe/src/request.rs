@@ -116,11 +116,12 @@ pub const MAX_REQ_ID_BYTES: usize = 256;
 ///
 /// [`OperationSurface::execute`]: crate::OperationSurface::execute
 ///
-/// `Debug` by hand, in `request/debug.rs`: M4's `Val` withholds `Debug` so that
-/// content bytes never render into a log, and a derive cannot reach past it —
-/// so an `Insert`'s values render as their count, never a byte (M6's
-/// `DeliveryItem` and M2's `Attestation` redact theirs the same way), and every
-/// other field by its own `Debug`. NOT `Hash`, on that same one leaf.
+/// `Debug` by hand, in `request/debug.rs`, so an `Insert`'s values render as
+/// their count — one short field however many values the insert carries,
+/// where a derive would list one byte length per value — and never a byte
+/// (M4's `Val`, M6's `DeliveryItem` and M2's `Attestation` redact theirs the
+/// same way), and every other field by its own `Debug`. NOT `Hash`: M4's
+/// `Val` has none.
 ///
 /// Deliberately not `#[non_exhaustive]`, and nor are [`OpKind`],
 /// [`RejectCode`] and [`Response`]: a consumer's exhaustive match over each is
@@ -877,8 +878,7 @@ impl Op {
     }
 }
 
-// `Op`'s hand-written `Debug`, the one standard trait it carries that a
-// derive cannot supply.
+// `Op`'s hand-written `Debug`, which renders an `Insert`'s values by count.
 mod debug;
 
 #[cfg(test)]

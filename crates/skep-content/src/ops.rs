@@ -36,7 +36,8 @@ use crate::HasContent;
 /// documented internal-invariant violation, never a domain rejection. In
 /// debug builds the routing assertion runs BEFORE key derivation (mirroring
 /// [`stage_write`]'s order), so a zeros < 2 input panics on its own terms;
-/// in release it is compiled out, and the `.expect` is what fires.
+/// in release it is compiled out, and the `.expect` is what fires. Either
+/// panic is located at the caller's line: `write` is `#[track_caller]`.
 ///
 /// On success returns the flat storage key and the committed `Seq` (the
 /// write's V1 coordinate); rejections surface verbatim as
@@ -58,6 +59,7 @@ use crate::HasContent;
 /// none — nor its M2 edge, which `write` alone takes too — and no M3
 /// *state* is ever read.
 #[doc(hidden)]
+#[track_caller]
 pub fn write<W>(
     k: &Kernel<W>,
     addr: &Address,

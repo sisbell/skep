@@ -1,7 +1,6 @@
 //! §A/§B and the pure half of §C — the slice, the record, the fold, the two
 //! point queries, and the composable write step.
 
-use std::fmt;
 use std::hash::BuildHasherDefault;
 
 use rustc_hash::FxHasher;
@@ -16,16 +15,15 @@ use crate::value::Val;
 /// internal tumblers, not adversarial input, so flooding-resistance buys
 /// nothing). Checkpoint bytes do not depend on it — the `Serialize` below
 /// sorts — so it is picked for cost: a fixed hasher is cheaper than a
-/// randomized one. MUST be
-/// `BuildHasher + Default + Clone + Send + Sync + 'static`: the first three
-/// so [`ContentStore`]'s `Default`/`Clone`/`Deserialize` derives hold; the
-/// last three because `ContentStore` becomes a field of the engine's `W`,
-/// and M2's `WorldState` bound requires
-/// `Send + Sync + 'static` — a pick missing them surfaces as an opaque
-/// compile error in `skep-engine`, far from the decision point. The
-/// *specific* hasher is Open build decision #5; this alias is the one place
-/// it is named — `BuildHasherDefault<FxHasher>` (rustc-hash), the design's
-/// placeholder pick, taken as the default.
+/// randomized one. MUST be `BuildHasher + Default + Send + Sync + 'static`:
+/// the first two so [`ContentStore`]'s derives hold (im's map asks no more
+/// of its hasher for any of them); the last three because `ContentStore`
+/// becomes a field of the engine's `W`, and M2's `WorldState` bound requires
+/// `Send + Sync + 'static` — checked at the crate root (`lib.rs`), so a pick
+/// missing one fails this library's own build. The *specific* hasher is Open
+/// build decision #5; this alias is the one place it is named —
+/// `BuildHasherDefault<FxHasher>` (rustc-hash), the design's placeholder
+/// pick, taken as the default.
 type FixedHasher = BuildHasherDefault<FxHasher>;
 
 /// M4's authoritative folded slice: `dom(C) ↦ Val` — the only state M4 owns
@@ -40,7 +38,7 @@ type FixedHasher = BuildHasherDefault<FxHasher>;
 /// as it was — so a snapshot pinning an old `World` costs next to nothing.
 /// Its serialized form is canonical, a function of the contents alone (the
 /// `Serialize` impl below says who reads it).
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 pub struct ContentStore {
     // A persistent HAMT, not `im::OrdMap`: the reads are point lookups, plus
     // ONE enumeration — `ContentStore::iter`, the walk the daemon's
@@ -105,14 +103,9 @@ struct InTumblerOrder<'a>(&'a im::HashMap<Tumbler, Val, FixedHasher>);
 
 impl Serialize for InTumblerOrder<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeMap;
         let mut entries: Vec<(&Tumbler, &Val)> = self.0.iter().collect();
-        entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
-        let mut map = serializer.serialize_map(Some(entries.len()))?;
-        for (addr, val) in entries {
-            map.serialize_entry(addr, val)?;
-        }
-        map.end()
+        entries.sort_unstable_by_key(|&(addr, _)| addr);
+        serializer.collect_map(entries)
     }
 }
 
@@ -129,6 +122,7 @@ impl ContentStore {
     /// A record whose address already has a value stored is still a caller's
     /// bug — staged against another slice, or folded twice — and the write it
     /// carries is lost; a debug build's `debug_assert!` panics on it.
+    #[must_use = "apply_write returns the folded slice; it does not modify the receiver"]
     pub fn apply_write(&self, r: &ContentWrite) -> ContentStore {
         let already_stored = self.map.contains_key(&r.addr);
         debug_assert!(
@@ -210,10 +204,11 @@ impl ContentStore {
 /// Its fields are private, so [`stage_write`] is its one producer; serde's
 /// `Deserialize` — public, as M2's `Record: DeserializeOwned` bound requires —
 /// is M2's replay of records already staged. Read access is full:
-/// [`addr`](ContentWrite::addr)/[`val`](ContentWrite::val), and the manual
-/// `Debug` the engine's `Record: Debug` renders for this variant. The engine
-/// only `From`-lifts and folds a record; it never builds one.
-#[derive(Clone, Serialize, Deserialize)]
+/// [`addr`](ContentWrite::addr)/[`val`](ContentWrite::val), and its derived
+/// `Debug`, which the engine's `Record: Debug` renders for this variant and
+/// which shows the value as its length, never a byte. The engine only
+/// `From`-lifts and folds a record; it never builds one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContentWrite {
     addr: Tumbler,
     val: Val,
@@ -228,24 +223,6 @@ impl ContentWrite {
     /// The value the record writes at [`addr`](ContentWrite::addr). Read-only.
     pub fn val(&self) -> &Val {
         &self.val
-    }
-}
-
-/// Manual, not derived: renders the address by walking its components and
-/// the value by BYTE LENGTH only — [`Val`] deliberately carries no `Debug`,
-/// so a value's bytes can never leak into diagnostics (and a derive would
-/// therefore not compile). Shape:
-/// `ContentWrite { addr: [c₁, …, c_#t], val: n bytes }`.
-impl fmt::Debug for ContentWrite {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ContentWrite {{ addr: [")?;
-        for (i, c) in self.addr.iter().enumerate() {
-            if i > 0 {
-                f.write_str(", ")?;
-            }
-            write!(f, "{c:?}")?;
-        }
-        write!(f, "], val: {} bytes }}", self.val.len())
     }
 }
 
@@ -269,8 +246,10 @@ impl fmt::Debug for ContentWrite {
 ///
 /// In debug builds a routing assertion (`level == Element ∧ subspace ==
 /// s_C`; Open build decision #4) runs BEFORE the already-stored check, so a
-/// mis-routed address panics on its own terms, never masked by a value that
-/// happens to be stored there; release compiles it out.
+/// mis-routed address panics on its own terms — at the caller's line, this
+/// function being `#[track_caller]` — never masked by a value that happens
+/// to be stored there; release compiles it out.
+#[track_caller]
 pub fn stage_write(
     c: &ContentStore,
     addr: &Address,

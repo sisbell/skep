@@ -6,13 +6,14 @@
 //! that the journaled types survive a serde round trip (and M2's real
 //! checkpoint-plus-replay recovery), that the slice's serialized form is the
 //! format its readers pin, that a debug build panics on a non-content
-//! address before writing it, and that each part of the interface does its
-//! ordinary job on an ordinary input. Where a debug build's assertion
-//! panics, release does something else, and those tests say what each build
-//! does; the gate runs the suite in both. The toy `World`/`Rec` pair is the
-//! minimal engine assembly the composition contract prescribes:
-//! `HasContent` read accessor, `From<ContentWrite>` record lift, `apply`
-//! dispatching into `ContentStore::apply_write`.
+//! address before writing it, at the line that passed it in, that a value
+//! renders into `Debug` as its byte length and never a byte, and that each
+//! part of the interface does its ordinary job on an ordinary input. Where a
+//! debug build's assertion panics, release does something else, and those
+//! tests say what each build does; the gate runs the suite in both. The toy
+//! `World`/`Rec` pair is the minimal engine assembly the composition contract
+//! prescribes: `HasContent` read accessor, `From<ContentWrite>` record lift,
+//! `apply` dispatching into `ContentStore::apply_write`.
 
 use std::path::Path;
 
@@ -138,10 +139,11 @@ fn stage_write_rejects_an_address_already_stored() {
     let c = ContentStore::default();
     let a1 = ca(1);
     let c = c.apply_write(&stage_write(&c, &a1, val(b"first")).expect("fresh"));
-    assert_eq!(
-        stage_write(&c, &a1, val(b"second")).unwrap_err(),
-        ContentError::AlreadyStored(a1.tumbler().clone())
-    );
+    let err = stage_write(&c, &a1, val(b"second")).unwrap_err();
+    assert_eq!(err, ContentError::AlreadyStored(a1.tumbler().clone()));
+    // The message names the address dotted, as M1 renders one, and leaves
+    // "rejected" to whichever wrapper carries it.
+    assert_eq!(err.to_string(), "a value is already stored at 1.0.1.0.1.0.1.1 (S0 no-overwrite)");
     // The check is per-address: a different fresh address is still admitted.
     assert!(stage_write(&c, &ca(2), val(b"second")).is_ok());
 }
@@ -223,6 +225,21 @@ fn identity_is_by_address_never_by_value() {
     assert_eq!(c.value_at(a2.tumbler()).map(Val::as_bytes), Some(&b"same bytes"[..]));
 }
 
+#[test]
+fn slices_are_equal_when_they_store_the_same_values_at_the_same_addresses() {
+    // §A: a slice's equality is its contents' — `dom(C)` and `C(a)` — in
+    // whatever order its records were folded; a record's is its address and
+    // its value.
+    let c0 = ContentStore::default();
+    let r1 = stage_write(&c0, &ca(1), val(b"one")).expect("fresh");
+    let r2 = stage_write(&c0, &ca(2), val(b"two")).expect("fresh");
+    assert_eq!(c0.apply_write(&r1).apply_write(&r2), c0.apply_write(&r2).apply_write(&r1));
+    assert_ne!(c0.apply_write(&r1), c0.apply_write(&r2));
+    let other = stage_write(&c0, &ca(1), val(b"uno")).expect("fresh");
+    assert_ne!(r1, other, "one address, two values: two records");
+    assert_ne!(c0.apply_write(&r1), c0.apply_write(&other));
+}
+
 // ---- §B the one enumeration ----
 
 #[test]
@@ -256,29 +273,39 @@ fn iter_visits_every_entry_exactly_once_and_promises_no_order() {
     assert_eq!(c.iter().len(), n as usize, "and the pinned slice is untouched by it");
 }
 
-// ---- §Types: Val and the record's Debug ----
+// ---- §Types: Val, and Debug over the types that hold one ----
 
 #[test]
 fn val_wraps_bytes_and_compares_by_content_value() {
     let from_slice = Val::new(b"payload".as_slice());
     let from_vec = Val::new(b"payload".to_vec());
     assert_eq!(from_slice.as_bytes(), b"payload");
+    let generic: &[u8] = from_slice.as_ref();
+    assert_eq!(generic, b"payload");
     assert_eq!(from_slice.len(), 7);
-    assert!(from_slice == from_vec);
-    assert!(from_slice != Val::new(b"other".as_slice()));
+    assert!(!from_slice.is_empty());
+    assert_eq!(from_slice, from_vec);
+    assert_eq!(Val::new(*b"payload"), from_vec, "an array wraps as the same value");
+    assert_ne!(from_slice, Val::new(b"other".as_slice()));
     // A zero-length value is legal.
     assert_eq!(Val::new(Vec::<u8>::new()).len(), 0);
+    assert!(Val::new(Vec::<u8>::new()).is_empty());
 }
 
 #[test]
-fn content_write_debug_renders_components_and_byte_length_only() {
-    // §A: the manual Debug renders the address by walking its components and
-    // the value by byte length — never the bytes.
-    let a1 = ca(7);
-    let rec = stage_write(&ContentStore::default(), &a1, val(b"abc")).expect("fresh");
+fn debug_renders_a_value_by_its_byte_length_never_its_bytes() {
+    // §Types/§A: `Val`'s `Debug` is its byte length, so the record and the
+    // slice, deriving theirs, render addresses and lengths and never a byte.
+    assert_eq!(format!("{:?}", val(b"secret")), "6 bytes");
+    let rec = stage_write(&ContentStore::default(), &ca(7), val(b"abc")).expect("fresh");
     assert_eq!(
         format!("{rec:?}"),
-        "ContentWrite { addr: [1, 0, 1, 0, 1, 0, 1, 7], val: 3 bytes }"
+        "ContentWrite { addr: Tumbler([1, 0, 1, 0, 1, 0, 1, 7]), val: 3 bytes }"
+    );
+    let c = ContentStore::default().apply_write(&rec);
+    assert_eq!(
+        format!("{c:?}"),
+        "ContentStore { map: {Tumbler([1, 0, 1, 0, 1, 0, 1, 7]): 3 bytes} }"
     );
 }
 
@@ -293,8 +320,7 @@ fn journaled_types_survive_a_bincode_round_trip() {
     let rec = stage_write(&ContentStore::default(), &a1, val(b"payload")).expect("fresh");
     let bytes = bincode::serialize(&rec).expect("record serializes");
     let back: ContentWrite = bincode::deserialize(&bytes).expect("record deserializes");
-    assert_eq!(back.addr(), rec.addr());
-    assert!(back.val() == rec.val());
+    assert_eq!(back, rec);
     // The replayed record folds to the same store effect (replay re-applies,
     // no re-derivation).
     let c = ContentStore::default().apply_write(&back);
@@ -304,6 +330,7 @@ fn journaled_types_survive_a_bincode_round_trip() {
     let c = c.apply_write(&stage_write(&c, &a2, val(b"more")).expect("fresh"));
     let bytes = bincode::serialize(&c).expect("slice serializes");
     let back: ContentStore = bincode::deserialize(&bytes).expect("slice deserializes");
+    assert_eq!(back, c, "the slice round-trips whole");
     assert_eq!(back.len(), 2);
     assert_eq!(back.value_at(a1.tumbler()).map(Val::as_bytes), Some(&b"payload"[..]));
     assert_eq!(back.value_at(a2.tumbler()).map(Val::as_bytes), Some(&b"more"[..]));
@@ -457,6 +484,46 @@ fn write_panics_on_a_non_content_address_routing_first() {
     let k = mem_kernel();
     let account = a(&[1, 0, 1]);
     let _ = write(&k, &account, val(b"x"));
+}
+
+/// The source file a panic inside `f` is located at, read by a hook set for
+/// this call alone, the previous hook put back after it.
+fn panic_file(f: impl FnOnce()) -> String {
+    use std::cell::RefCell;
+    use std::panic::{self, AssertUnwindSafe};
+    thread_local! {
+        static FILE: RefCell<Option<String>> = const { RefCell::new(None) };
+    }
+    let previous = panic::take_hook();
+    panic::set_hook(Box::new(|info| {
+        let file = info.location().map(|l| l.file().to_owned());
+        FILE.with(|slot| *slot.borrow_mut() = file);
+    }));
+    let outcome = panic::catch_unwind(AssertUnwindSafe(f));
+    panic::set_hook(previous);
+    assert!(outcome.is_err(), "the call was expected to panic");
+    FILE.with(|slot| slot.borrow_mut().take()).expect("a panic has a location")
+}
+
+#[test]
+fn a_routing_panic_is_located_at_the_line_that_passed_the_address_in() {
+    // §C: both doors are `#[track_caller]`, so a mis-routed address panics
+    // at the caller's line — in this file — and not inside M4. A debug
+    // build's routing assertion fires through either door; in release it is
+    // compiled out, `stage_write` admits the address, and `write`'s
+    // `.expect` fires at the caller's line instead.
+    let k = mem_kernel();
+    let account = a(&[1, 0, 1]);
+    let through_write = panic_file(|| {
+        let _ = write(&k, &account, val(b"x"));
+    });
+    assert_eq!(through_write, file!());
+    if cfg!(debug_assertions) {
+        let through_stage = panic_file(|| {
+            let _ = stage_write(&ContentStore::default(), &account, val(b"x"));
+        });
+        assert_eq!(through_stage, file!());
+    }
 }
 
 // A debug_assert!: it fires only in debug builds.

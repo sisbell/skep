@@ -1,5 +1,6 @@
 //! §Types & errors — the opaque content value, `Val`.
 
+use std::fmt;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -19,18 +20,21 @@ use serde::{Deserialize, Serialize};
 /// byte specialization for `[u8]` — which bincode, M2's journal and
 /// checkpoint format, lays down as the length then the raw bytes; a transcode
 /// to a value tree, like the engine's world dump, sees one integer per byte
-/// (skep-engine's `a_content_byte_costs_a_whole_tree_node` pins that). No
-/// `Debug` on purpose: a value's bytes never render into logs —
-/// [`ContentWrite`]'s manual `Debug` reports only the byte length.
+/// (skep-engine's `a_content_byte_costs_a_whole_tree_node` pins that).
 ///
-/// [`ContentWrite`]: crate::ContentWrite
+/// A value's bytes never render into a log: its `Debug` is its LENGTH, the
+/// redaction M2's `Attestation` gives a signature, so a type holding a `Val`
+/// derives `Debug` and inherits it. No `Hash`, so no map can key on a value:
+/// identity is by address (S4).
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Val(Arc<[u8]>);
 
-#[allow(clippy::len_without_is_empty)] // the interface declares len() only; a zero-length value is legal, not an "empty store"
 impl Val {
-    /// Wrap bytes as a value (`Vec<u8>`, `&[u8]`, `Box<[u8]>`, … — anything
-    /// `Into<Arc<[u8]>>`).
+    /// Wrap bytes as a value — anything `Into<Arc<[u8]>>`: `&[u8]`,
+    /// `[u8; N]`, `Vec<u8>`, `Box<[u8]>`, …. The bytes land in one shared
+    /// allocation, so a `Vec` built only to be wrapped costs a second:
+    /// `Val::new([b])` is a one-byte value in one allocation,
+    /// `Val::new(vec![b])` in two.
     pub fn new(b: impl Into<Arc<[u8]>>) -> Val {
         Val(b.into())
     }
@@ -43,5 +47,26 @@ impl Val {
     /// The value's length in bytes.
     pub fn len(&self) -> usize {
         self.0.len()
+    }
+
+    /// Whether the value is zero bytes long — legal, as an empty `Vec` is.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// `3 bytes`: the length, never a byte. Bare, as `Duration` renders `1.5s`,
+/// so a holder's derived `Debug` reads `val: 3 bytes` or `Content(3 bytes)`.
+impl fmt::Debug for Val {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} bytes", self.len())
+    }
+}
+
+/// The value's bytes, for APIs generic over `AsRef<[u8]>` — the conversion
+/// `Vec<u8>`, `String` and `Arc<[u8]>` offer beside their inherent views.
+impl AsRef<[u8]> for Val {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
     }
 }

@@ -22,13 +22,16 @@ pub enum ContentError {
     AlreadyStored(Tumbler),
 }
 
+/// The refusal's own fact, with its address in M1's dotted form. Which write
+/// was rejected, and by what operation, is the wrapper's to say: M5's
+/// `InsertError` and `PublishError` say it, and carry this as their `source`,
+/// so a reporter that walks the chain prints each layer once.
 impl fmt::Display for ContentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ContentError::AlreadyStored(t) => write!(
-                f,
-                "content write rejected: a value is already stored at {t:?} (S0 no-overwrite)"
-            ),
+            ContentError::AlreadyStored(t) => {
+                write!(f, "a value is already stored at {t} (S0 no-overwrite)")
+            }
         }
     }
 }

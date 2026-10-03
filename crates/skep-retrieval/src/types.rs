@@ -13,12 +13,12 @@
 //! others would read as accident. Two departures from the plain derive, each
 //! for a reason its own leaf gives:
 //!
-//! * [`DeliveryItem`]'s `Debug` is hand-written, because M4's `Val` has none
-//!   — blobs never render into logs, which is M4's decision. M6 is in the
-//!   same position M4 put its own [`ContentWrite`] in, and keeps the
-//!   discipline the same way: the item renders its payload's byte LENGTH and
-//!   never its bytes, so the difficulty is absorbed here rather than exported
-//!   to every caller that wants to log, `expect` or `assert_eq!` a delivery.
+//! * [`DeliveryItem`]'s `Debug` is hand-written, because its address leaves'
+//!   derived `Debug` spells every field out: the item renders a link address
+//!   in M1's dotted decimal and a masked run as its origin and width, and a
+//!   content item as its value's byte LENGTH, as `Val`'s own `Debug` does —
+//!   never a payload byte. So every caller that wants to log, `expect` or
+//!   `assert_eq!` a delivery reads it in one line.
 //! * [`CorrPair`]/[`CompareReport`] have no `Serialize`, because M5's `VPos`
 //!   has none. They are destructure-and-marshal values M10 writes out
 //!   **field-by-field** — every leaf serializes individually, `VPos`'s
@@ -36,8 +36,6 @@
 //! orphan rule would otherwise forbid a consumer from arranging for itself.
 //! Not `Extend`: these are answers produced whole, never grown in place, and
 //! the narrower promise is the honest one.
-//!
-//! [`ContentWrite`]: skep_content::ContentWrite
 
 use std::fmt;
 
@@ -107,10 +105,10 @@ pub enum DeliveryItem {
     Withheld { origin: Address, width: Nat },
 }
 
-/// Renders a content item by its payload's BYTE LENGTH and a link item by its
-/// address (M1's dotted decimal) — never a payload byte, which is the whole of
-/// M4's reason for withholding `Debug` from `Val` and is kept here by hand
-/// because a derive could not. Shape: `Content(n bytes)` / `Ref(c₁.….c_#t)` /
+/// Renders a content item by its value's BYTE LENGTH, as `Val`'s own `Debug`
+/// does — never a payload byte — and a link item by its address in M1's
+/// dotted decimal, where a derive would spell the address out field by
+/// field. Shape: `Content(n bytes)` / `Ref(c₁.….c_#t)` /
 /// `Withheld(origin, width wide)`.
 impl fmt::Debug for DeliveryItem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

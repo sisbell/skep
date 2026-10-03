@@ -177,7 +177,8 @@ fn a_wire_list_at_the_cap_parses_and_one_past_it_does_not() {
 #[test]
 fn insert_value_cap_counts_values_not_elements() {
     let forms = |n: usize| Value::Array(vec![Value::String("a".repeat(n))]);
-    // `Val` derives no Debug upstream, so unwrap the failure by hand.
+    // Unwrap the failure by hand, so a parse that wrongly succeeds reports
+    // its count rather than a cap's worth of per-value lengths.
     let refusal = |v: &Value| match p_values(v) {
         Err(e) => e,
         Ok(vals) => panic!("{} values must not parse", vals.len()),

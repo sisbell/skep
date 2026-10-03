@@ -1,0 +1,129 @@
+//! §D SHOWDELETIONS (ASN-0075): the cross-document combine of CURRENT and
+//! DELETED, both ways, and the CURRENT enumeration only it uses.
+
+use skep_address::Address;
+use skep_arrangement::{M5State, Run};
+
+use super::{sorted_addr_set, Query, RetrievalWorld};
+use crate::error::DeletionsError;
+use crate::types::Deletions;
+
+/// The enumeration of `CURRENT(·, d)` (ASN-0075's predicate; ASN-0124 calls
+/// the set `ran_C(d)`) — every content I-address `d`'s arrangement currently
+/// binds, in V order. M5's own `content_image` is the same set and is private,
+/// so it is NOT called here.
+///
+/// Walking the CONTENT runs is not a narrowing of `CURRENT` but its whole
+/// extent: ASN-0075 defines the predicate over `a ∈ dom(C)`, so
+/// `{a : CURRENT(a, d)} = ran(M(d)) ∩ dom(C) = ran_C(d)` and no link run is
+/// skipped — there is none to skip (D-SUBSP).
+///
+/// `CURRENT` is a set and this is an enumeration WITH MULTIPLICITY: an
+/// address placed at two V-positions of `d` by intra-document transclusion is
+/// yielded twice, so callers dedup.
+///
+/// LAZY, and that is the point rather than a style: `d`'s arrangement binds
+/// one content position per byte the document was written with, and each
+/// position enumerated is an OWNED `Address` — a `Vec<Nat>` of element
+/// components, order hundreds of bytes and a handful of allocations. Handing
+/// back a `Vec` would make the peak live heap of a two-document combine the
+/// size of both documents, from a request naming two addresses and nothing
+/// else; streaming makes it the size of the part the caller's filter keeps.
+/// Each run's positions are enumerated by the run that owns them —
+/// `Run::addrs`, over M5's lent run-list, so no run is cloned to be walked and
+/// the stream holds one cursor into the snapshot's arrangement.
+///
+/// Enumerating the content runs alone therefore loses nothing AND needs no
+/// filter behind it: `DELETED(a, d)` requires `(a, d) ∈ R`, and R is appended
+/// only where content is placed — seating a link records nothing in it — so a
+/// link position enumerated here could only be filtered away again.
+fn current_content<'a>(m5: &'a M5State, d: &Address) -> impl Iterator<Item = Address> + 'a {
+    m5.content_runs(d).flat_map(Run::addrs)
+}
+
+impl<W: RetrievalWorld> Query<'_, W> {
+    /// SHOWDELETIONS (ASN-0075) — gate, then membership-test the
+    /// cross-document combine IN M6 from M5's per-document primitives:
+    /// `DeletedFromAWithB = { a : CURRENT(a, d_b) ∧ DELETED(a, d_a) }` and its
+    /// symmetric twin. Never opens M4; both halves read off the one pinned
+    /// snapshot (single consistent `(M, R)` — no torn-read phantom deletion).
+    ///
+    /// Reads the arrangement and the provenance record of each address as
+    /// NAMED, and does not float (crate doc, *Which arrangement an operation
+    /// answers from*): `CURRENT` is enumerated from, and `DELETED` tested
+    /// against, the two addresses given.
+    ///
+    /// Both documents must be registered (Err otherwise; `d_a` checked
+    /// first); registered-empty is fine and yields empty halves. Each half is
+    /// a set of the EXISTING I-addresses (D-IDENT — never copies), returned
+    /// deduplicated and T1-ascending: the dedup is the comprehension's, the
+    /// ordering M6's own presentation, which D-ORD licenses (T1-orderability
+    /// is a property of the addresses) and does not require (the operation
+    /// transports no ordering of its own).
+    ///
+    /// Whole for two readable arguments (PUB-6.15): no predicate; each half is
+    /// the addresses themselves whatever their origins' readability, the two
+    /// arguments' consult being M10's pre-dispatch.
+    ///
+    /// BOTH HALVES ARE CONTENT I-ADDRESSES BY DEFINITION (D-SUBSP): ASN-0075
+    /// classifies `(a, d)` with `a ∈ dom(C)`, so `CURRENT` and `DELETED` are
+    /// defined only there and both output sets are `{a ∈ dom(C) : …}` — every
+    /// such `a` has `subspace_I(a) = s_C`, and `dom(C) ∩ dom(L) = ∅` (L14), so
+    /// no link address can appear in either half whatever the enumeration does.
+    /// The operation's domain is what confines it, not this implementation's
+    /// choice of walk.
+    ///
+    /// TIME IS UNBOUNDED AND M6 DOES NOT BOUND IT — and unlike RETRIEVEV's,
+    /// it is not bounded by the answer either. No span narrows the request, so
+    /// both documents are enumerated WHOLE: the work is
+    /// `|R↾d_a| log |R↾d_a| + |R↾d_b| log |R↾d_b|`, the two `M5State::deletions`
+    /// calls that build the halves (each rebuilds and SORTS the document's
+    /// whole provenance record — M5 states this cost where it is paid), plus
+    /// `n_C(d_a)·|deletions(d_b)| + n_C(d_b)·|deletions(d_a)|` for the
+    /// membership pass, all paid in full even when the two share nothing and
+    /// both halves come back empty. THE FIRST TERM USUALLY DOMINATES, and it
+    /// is the one a document's current size does not reveal: R never shrinks,
+    /// so a document that has deleted far more than it holds carries a
+    /// record far larger than its arrangement. M6 owns no admission control
+    /// and no refusal for any of it: capping request rate and concurrency for
+    /// a route carrying this read is M10's, as the request lifecycle's owner —
+    /// and a request-size cap is no help here, this request being two
+    /// addresses whatever the documents behind them hold.
+    ///
+    /// MEMORY IS THE ANSWER'S. The enumeration streams, so what is held live
+    /// is the deduped halves and one address at a time, not a materialized
+    /// copy of either document's position list. The worst case is therefore
+    /// the honest one: two documents where each has deleted what the other
+    /// still holds, whose answer genuinely is that many addresses.
+    pub fn show_deletions(
+        &self,
+        d_a: &Address,
+        d_b: &Address,
+    ) -> Result<Deletions, DeletionsError> {
+        let w = self.0.world();
+        let (m3, m5) = (w.m3(), w.m5());
+        for d in [d_a, d_b] {
+            if !m3.is_registered_document(d) {
+                return Err(DeletionsError::DocNotRegistered(d.clone()));
+            }
+        }
+        let deletions_a = m5.deletions(d_a); // { a : DELETED(a, d_a) } as a per-level-class cover
+        let deletions_b = m5.deletions(d_b); // { a : DELETED(a, d_b) }
+        // CURRENT in the one document ∧ DELETED from the other, both ways.
+        // CURRENT(·, d) is enumerated by `current_content`, which asks each
+        // content run for its addresses exactly as RETRIEVEV does; DELETED(·, d)
+        // is tested by membership in M5's per-document deleted cover
+        // (`deletions(d).denotes(a)`) — exact UNCONDITIONALLY by
+        // `difference_sets`' denotational contract
+        // (`⟦deletions(d)⟧ = {x : DELETED(x, d)}` whatever the cover's internal
+        // span packing), so there are no false positives.
+        let deleted_from_a_with_b =
+            sorted_addr_set(current_content(m5, d_b).filter(|a| deletions_a.denotes(a.tumbler())));
+        let deleted_from_b_with_a =
+            sorted_addr_set(current_content(m5, d_a).filter(|a| deletions_b.denotes(a.tumbler())));
+        Ok(Deletions {
+            deleted_from_a_with_b,
+            deleted_from_b_with_a,
+        })
+    }
+}

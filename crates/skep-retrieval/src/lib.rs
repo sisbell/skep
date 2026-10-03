@@ -131,102 +131,31 @@
 //!   marshaling (M10);
 //! * any write path — M6 exposes no `transact`/`Kernel` and has no
 //!   commit-before-acknowledge obligation for reads.
+//!
+//! [`Snapshot`]: skep_kernel::Snapshot
 
 #![forbid(unsafe_code)]
 
-use std::fmt;
+// The modules in dependency order: each names, in code, only modules above
+// it, which `tests/it/tidy.rs` checks.
 
-mod compare;
+// The three request budgets and their argument: COMPARE's operand and pair
+// budgets, FINDDOCSCONTAINING's coverage budget.
+mod budget;
+// The typed rejections, one enum per operation, and the two fault
+// vocabularies they carry.
 mod error;
-mod query;
+// The request and result values every operation takes and returns.
 mod types;
+// How M6 reads one request V-span: `Subspace` and the span gate.
 mod vspan;
+// `Query` and what its operations share; one file per operation beneath.
+mod query;
 
-pub use compare::{MAX_COMPARE_OPERAND_BLOCKS, MAX_COMPARE_PAIRS};
+pub use budget::{MAX_COMPARE_OPERAND_BLOCKS, MAX_COMPARE_PAIRS, MAX_FIND_COVERAGE_SPANS};
 pub use error::{
     CompareError, DeletionsError, ExtentError, FindError, Operand, OriginError, RetrieveError,
     SpanFault,
 };
-pub use query::MAX_FIND_COVERAGE_SPANS;
+pub use query::{Query, RetrievalWorld};
 pub use types::{CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, RegionSpec, Spec};
-
-/// `CorrPair`/`CompareReport` carry M5's `VPos`; re-exported so the type a
-/// report's feet carry is nameable from M6's own surface without a
-/// dependency on M5. M10 has that dependency for its own reasons — its
-/// arrangement requests take a `VPos` — and names the type there, as this
-/// crate's suite does; this stands for the consumer that does not.
-pub use skep_arrangement::VPos;
-
-use skep_arrangement::HasM5;
-use skep_kernel::{Seq, Snapshot, WorldState};
-use skep_namespace::HasM3;
-
-/// The world bound EVERY M6 observation reads under: the registry each one
-/// gates on and the arrangements each one resolves through, and no slice of
-/// its own (Engine Composition Contract — M6 contributes no slice, no record
-/// variant, no accessor trait, no fold).
-///
-/// M4 is deliberately absent. Six of the seven operations answer from
-/// addresses, counts and provenance without ever dereferencing a byte —
-/// COMPARE's join is keyed on address equality, the extents are counts,
-/// SHOWORIGIN projects, and SHOWDELETIONS and FINDDOCSCONTAINING read R — so a
-/// content store is not among their collaborators, and under this bound it is
-/// not in their scope either. RETRIEVEV is the one operation that delivers
-/// bytes, and it declares `HasContent` on its own impl block, which is where
-/// that obligation belongs.
-pub trait RetrievalWorld: WorldState + HasM3 + HasM5 {}
-impl<W: WorldState + HasM3 + HasM5> RetrievalWorld for W {}
-
-/// Stateless reader over ONE pinned snapshot. Owns nothing; holds a borrow.
-///
-/// The caller (M10) takes the snapshot (`Kernel::snapshot()`) and constructs
-/// the handle over it. The obligation is on the SNAPSHOT, not the handle: take
-/// **one `Kernel::snapshot()` per logical query** and route every read of that
-/// query through handles built on it, so all of them observe one consistent
-/// `(M, R)` root — the discharge of M2's clause 6 and the single-Σ requirement
-/// of ASN-0075/0122/0124. Reads never commit and have no
-/// commit-before-acknowledge obligation.
-pub struct Query<'s, W: RetrievalWorld>(&'s Snapshot<W>);
-
-impl<'s, W: RetrievalWorld> Query<'s, W> {
-    /// Pin one snapshot. No precondition: any `&Snapshot<W>` is
-    /// admissible, and the single-Σ obligation is the caller's over the
-    /// snapshot it takes (see the type's card), not over how many handles it
-    /// builds on one.
-    pub fn new(snap: &'s Snapshot<W>) -> Self {
-        Query(snap)
-    }
-
-    /// The committed index this query reads (V1 retrospective).
-    pub fn as_of(&self) -> Seq {
-        self.0.seq()
-    }
-}
-
-/// Renders the pinned coordinate, which is the whole of a `Query`'s
-/// observable identity: the snapshot behind it has no `Debug` of its own, and
-/// the world it holds is not a thing to print into a log. Hand-written
-/// because a derive would demand `W: Debug` on an impl that never touches
-/// `W`.
-impl<W: RetrievalWorld> fmt::Debug for Query<'_, W> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Query")
-            .field("as_of", &self.as_of())
-            .finish_non_exhaustive()
-    }
-}
-
-/// A `Query` IS a borrow, so it copies like one — a copy reads the SAME
-/// pinned `Snapshot`, which is why the single-Σ obligation is stated over the
-/// snapshot rather than over the handles built on it. The charter above (no
-/// slice, no fold, no state) is what keeps that safe to promise: the day this
-/// holds a field of its own, it stops being a borrow and loses `Copy` with it.
-///
-/// Hand-written because the derives would put `W: Clone`/`W: Copy` on impls
-/// that never touch `W`, and no `WorldState` is `Copy`.
-impl<W: RetrievalWorld> Clone for Query<'_, W> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-impl<W: RetrievalWorld> Copy for Query<'_, W> {}

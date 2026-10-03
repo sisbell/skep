@@ -15,9 +15,10 @@ and exported here as they converge.
 
 ## Workspace
 
-Fifteen crates; the boundaries are the architecture. Eleven domain
-crates realize the spec's converged designs (the M1–M10 modules and
-the AUTH identity layer) and encode the composition contract's
+Eighteen crates; the boundaries are the architecture. Fourteen domain
+crates realize the spec's converged designs (the M1–M10 modules, the
+AUTH identity layer, signed ops, the registry and the blob store) and
+encode the composition contract's
 layering in the dependency graph itself — the
 compiler enforces what the design ruled (no store depends on the engine,
 type-only edges stay type-only, nothing depends on the engine but a
@@ -37,6 +38,9 @@ them, the differential-conformance harness.
 | `skep-coordination` | M9 — predicate definitions & coordinator (stateless) |
 | `skep-febe` | M10 — the operation surface (`Operation<W>`), codec seam |
 | `skep-identity` | AUTH — credential records, key sets, the identity fold (pure) |
+| `skep-signature` | signed ops — the hybrid signature: key derivation, signing, verify |
+| `skep-registry` | the registry's commons rows and binding/endpoint bodies (pure values) |
+| `skep-blobs` | the blob store: deposited files, partial uploads, upload records, leases |
 | `skep-engine` | the one assembler: `World`, genesis, recovery, `world_at` |
 | `skepd` | the daemon: HTTP/JSON wire v4, sessions, history, SSE |
 | `skep-mcp` | stdio MCP adapter for agent harnesses |

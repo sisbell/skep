@@ -34,23 +34,42 @@
 //!    private original would otherwise re-mint its cell with no `insert`
 //!    and no refusal on the way — the binding's own attack, one op over.
 //! 3. `unbound_cell` (`credential_refused`, PERMANENT) — a cell in a draft
-//!    `insert`, or at the owner's own shot: THE BINDING's refusal, in
-//!    PATTERNS P10's form while no upload exists — "this board takes no
-//!    uploads, so no picture can be placed here" — naming no deposit and no
-//!    re-PUT, since neither exists. From lane B the same token answers a
-//!    cell naming a hash this principal did not deposit under its own lease,
-//!    its class re-read there; until then no act exists, so PERMANENT.
+//!    `insert`, or at the owner's own shot, naming a hash THIS PRINCIPAL
+//!    DID NOT DEPOSIT UNDER ITS OWN LEASE: THE BINDING's refusal, real from
+//!    lane B — the gate reads the principal's own lease record first and the
+//!    file only where that record names the hash under a live lease
+//!    ([`MediaGate::binding`]); a cell whose hash the principal holds a live
+//!    lease on, over a whole file whose length the cell's `size` names, is
+//!    ADMITTED and goes on to the store. A deposit whole on disk whose size
+//!    the cell contradicts is this refusal too — no deposit of this
+//!    principal's is the cell as written. PERMANENT for the request as
+//!    sent: the act that exists is a PUT of the bytes, then the cell the
+//!    PUT's answer spells. P10's fence-only face ("this board takes no
+//!    uploads") is RETIRED with the store: the face now names the deposit
+//!    the cell lacks.
 //! 4. `unknown_cell_schema` (`credential_refused`, PERMANENT) — a value
 //!    naming the kind that parses under no pinned schema, in the same two
 //!    positions: DOCTRINE D13's carve-out, the halt a reader makes at a
 //!    permanent act on a schema it does not know, so the day a second
 //!    schema is pinned no board holds a cell of it that was never bound
 //!    (the record's H1). The same bytes are never admitted.
+//! 5. `lease_lapsed` (`credential_refused`, PERMANENT for the request as
+//!    sent) — a cell naming a hash this principal DID deposit, whose lease
+//!    has lapsed within the horizon, or whose lease is live over a file
+//!    that is not there or not whole: the deposit is gone, and the act is a
+//!    re-PUT of the bytes, which re-takes the lease. Told apart from the
+//!    binding's refusal so a client's resume can be written against it,
+//!    and read off this principal's own record alone — never off the file's
+//!    presence beyond that record's live lease (Op inventory 1, "a client
+//!    meeting a LAPSED lease meets its OWN refusal"). Past the horizon the
+//!    record answers no lease and the binding's refusal stands.
 //!
-//! NOT BUILT IN THIS LANE, BY NAME: the size check against the deposited
-//! blob's length and the binding's LAPSED arm — both read the lease store
-//! and `blobs/`, which do not exist. They join this step, never the
-//! admission.
+//! THE SHOT'S BINDING, lane B's reading: the owner's own shot re-inserting
+//! a draft's cell asks the binding again, as its `insert` did — the whole
+//! armed set lands together at both positions — so a lease lapsed between
+//! the insert and the shot answers `lease_lapsed` there until the bytes are
+//! re-PUT. Lane C's cell index re-reads this arm: a hash the requester's
+//! own cells already name is a reference, kept by no lease.
 //!
 //! WHAT STANDS AHEAD. The plain sequence's producers — the mint class, the
 //! `replaces` fence, the board-state gate with the write-path check behind
@@ -80,11 +99,12 @@ use skep_febe::{Disposition, Op};
 use skep_namespace::{HasM3, PrincipalId};
 
 use super::cell;
+use super::gate::{Binding, MediaGate};
 use crate::World;
 
 /// The door's answer — one variant per arm of the armed set, in the
 /// module's order. Two are M10's own codes, raised here on the daemon's
-/// channel with M10's classification; two are the daemon's tokens, riding
+/// channel with M10's classification; three are the daemon's tokens, riding
 /// `credential_refused` as every daemon-side refusal does (AUTH-3.53's
 /// family; wire.md §Credential refusals).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,30 +114,35 @@ pub(crate) enum MediaRefusal {
     /// Arm 2: `not_owner`, M10's code, `site.addr` the DRAFT — the document
     /// that failed the ω test, as every `not_owner` names one.
     NotOwner { draft: Address },
-    /// Arm 3: the binding's refusal in P10's form — token `unbound_cell`.
+    /// Arm 3: the binding's refusal — token `unbound_cell`: a hash this
+    /// principal did not deposit under its own lease.
     UnboundCell,
     /// Arm 4: D13's halt — token `unknown_cell_schema`.
     UnknownCellSchema,
+    /// Arm 5: the binding's LAPSED arm — token `lease_lapsed`: the deposit
+    /// is gone, re-PUT the bytes. INTERIM in spelling (the board's sm-Q8).
+    LeaseLapsed,
 }
 
 impl MediaRefusal {
-    /// The `detail` token of the two refusals that ride `credential_refused`;
-    /// `None` for the two that are M10's own codes. Spelled here and only
-    /// here.
+    /// The `detail` token of the three refusals that ride
+    /// `credential_refused`; `None` for the two that are M10's own codes.
+    /// Spelled here and only here.
     pub(crate) fn token(&self) -> Option<&'static str> {
         match self {
             MediaRefusal::PublishedTarget | MediaRefusal::NotOwner { .. } => None,
             MediaRefusal::UnboundCell => Some("unbound_cell"),
             MediaRefusal::UnknownCellSchema => Some("unknown_cell_schema"),
+            MediaRefusal::LeaseLapsed => Some("lease_lapsed"),
         }
     }
 
-    /// The class of the two tokens: PERMANENT, the family's — no act exists
-    /// in this build that admits the same request, and a value under an
-    /// unknown schema is never admitted. (`unbound_cell`'s class is re-read
-    /// when lane B lands the store: the module doc says so.) The two M10
-    /// codes take M10's own classification, `RejectCode::disposition`, where
-    /// the reply is built.
+    /// The class of the three tokens: PERMANENT, the family's — for the
+    /// request AS SENT no act admits it: a value under an unknown schema is
+    /// never admitted, and an unbound or lapsed cell is admitted only after
+    /// a PUT, which is another act (the lease re-taken by it), never a
+    /// retry of this one. The two M10 codes take M10's own classification,
+    /// `RejectCode::disposition`, where the reply is built.
     pub(crate) fn disposition(&self) -> Disposition {
         Disposition::Permanent
     }
@@ -125,26 +150,42 @@ impl MediaRefusal {
 
 /// What a value is to this door: a cell, a value naming the kind under no
 /// pinned schema, or — `None` — nothing it answers.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Named {
-    Cell,
+    Cell(cell::Cell),
     UnknownSchema,
 }
 
 /// The one parse, read for what the door acts on.
 fn names_the_kind(value: &Val) -> Option<Named> {
     match cell::parse(value.as_bytes()) {
-        Ok(_) => Some(Named::Cell),
+        Ok(c) => Some(Named::Cell(c)),
         Err(refusal) if refusal.names_kind() => Some(Named::UnknownSchema),
         Err(_) => None,
     }
 }
 
+/// Arms 3, 4 and 5 — the value's own verdict once the target's and the
+/// owner's arms have passed: a cell is asked of THE BINDING at the gate,
+/// `None` where it is admitted.
+fn value_arm(named: Named, gate: &MediaGate, principal: PrincipalId) -> Option<MediaRefusal> {
+    match named {
+        Named::Cell(c) => match gate.binding(principal, &c) {
+            Binding::Admitted => None,
+            Binding::Lapsed => Some(MediaRefusal::LeaseLapsed),
+            Binding::Unbound => Some(MediaRefusal::UnboundCell),
+        },
+        Named::UnknownSchema => Some(MediaRefusal::UnknownCellSchema),
+    }
+}
+
 /// THE STEP: the door's answer to `op` by `principal` on `world`, the
-/// locked snapshot — `Some` where an arm fires, `None` where the write goes
-/// on to the store. `world` MUST be the snapshot taken under the
-/// serialization guard for this request, the one the commit will run
-/// against; the plain sequence is its one caller.
+/// locked snapshot, with `gate` the daemon's media resource the binding is
+/// asked of — `Some` where an arm fires, `None` where the write goes on to
+/// the store. `world` MUST be the snapshot taken under the serialization
+/// guard for this request, the one the commit will run against; the plain
+/// sequence is its one caller, which holds the credential lock's read arm
+/// across this step and the commit.
 ///
 /// EXHAUSTIVE with no `_` arm, the treatment `deposits_credential_link`
 /// gives the route: a new `Op` fails to compile here until someone decides
@@ -152,10 +193,15 @@ fn names_the_kind(value: &Val) -> Option<Named> {
 /// `version` share identity and mint no cell (`media.md` §The publication
 /// seam, consequence (b): "a `copy` of a cell shares identity and mints no
 /// baptism"), so they take no arm; every other op carries no content value.
-pub(crate) fn media_door(world: &World, op: &Op, principal: PrincipalId) -> Option<MediaRefusal> {
+pub(crate) fn media_door(
+    world: &World,
+    op: &Op,
+    principal: PrincipalId,
+    gate: &MediaGate,
+) -> Option<MediaRefusal> {
     match op {
-        Op::Insert { doc, values, .. } => insert_arm(world, doc, values, principal),
-        Op::Publish { doc, shot } => publish_arm(world, doc, shot, principal),
+        Op::Insert { doc, values, .. } => insert_arm(world, doc, values, principal, gate),
+        Op::Publish { doc, shot } => publish_arm(world, doc, shot, principal, gate),
         Op::CreateNewDocument { .. }
         | Op::Delegate { .. }
         | Op::RegisterNode { .. }
@@ -212,6 +258,7 @@ fn insert_arm(
     doc: &Address,
     values: &[Val],
     principal: PrincipalId,
+    gate: &MediaGate,
 ) -> Option<MediaRefusal> {
     let m3 = world.m3();
     if !(m3.is_registered_document(doc) && Caller::Principal(principal).is_owner(m3, doc)) {
@@ -224,10 +271,7 @@ fn insert_arm(
     if published_target(m3, doc) {
         return Some(MediaRefusal::PublishedTarget);
     }
-    Some(match named {
-        Named::Cell => MediaRefusal::UnboundCell,
-        Named::UnknownSchema => MediaRefusal::UnknownCellSchema,
-    })
+    value_arm(named, gate, principal)
 }
 
 /// The `publish` arms (2, 3, 4): read only where M5's own admission of the
@@ -244,6 +288,7 @@ fn publish_arm(
     doc: &Address,
     shot: &Shot,
     principal: PrincipalId,
+    gate: &MediaGate,
 ) -> Option<MediaRefusal> {
     let caller = Caller::Principal(principal);
     // Slots 1 through 6 — registration and ω of `doc`, the arguments'
@@ -296,10 +341,7 @@ fn publish_arm(
     if !caller.is_owner(world.m3(), &draft) {
         return Some(MediaRefusal::NotOwner { draft });
     }
-    Some(match named {
-        Named::Cell => MediaRefusal::UnboundCell,
-        Named::UnknownSchema => MediaRefusal::UnknownCellSchema,
-    })
+    value_arm(named, gate, principal)
 }
 
 #[cfg(test)]
@@ -333,15 +375,22 @@ mod tests {
     /// Over the genesis world, as the system principal — the one principal
     /// genesis seats with documents: the head document `H` (published, its
     /// own) and a private draft it mints — the insert arms: a cell into a
-    /// draft `unbound_cell`, a value under an unknown schema
-    /// `unknown_cell_schema`, prose and a def nothing; into `H`
-    /// `published_target` whatever the value's form and whatever the
-    /// declaration; and a caller who does not own the draft meets nothing
-    /// here (the store's `not_owner` stands). Then the shot: the owner's own
-    /// shot of the draft holding a cell is refused in P10's form, a shot
-    /// naming no draft meets nothing, and nothing commits.
+    /// draft `unbound_cell` while the principal holds no lease on its hash,
+    /// a value under an unknown schema `unknown_cell_schema`, prose and a
+    /// def nothing; into `H` `published_target` whatever the value's form
+    /// and whatever the declaration; and a caller who does not own the
+    /// draft meets nothing here (the store's `not_owner` stands). Then the
+    /// shot: the owner's own shot of the draft holding a cell is refused
+    /// `unbound_cell` the same, a shot naming no draft meets nothing, and
+    /// nothing commits. Then THE BINDING MADE REAL (lane B): the bytes
+    /// deposited under the principal's own lease, the same insert and the
+    /// same shot are ADMITTED; the lease lapsed, both answer `lease_lapsed`;
+    /// and another principal's deposit of the same bytes admits nothing of
+    /// this one's.
     #[test]
     fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let gate = MediaGate::open(dir.path()).expect("the store opens");
         let engine = skep_engine::Engine::open(KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
@@ -366,7 +415,7 @@ mod tests {
         let snap = engine.kernel().snapshot();
         let world = snap.world();
         let h = head_document();
-        let door = |op: Op, p: PrincipalId| media_door(world, &op, p);
+        let door = |op: Op, p: PrincipalId| media_door(world, &op, p, &gate);
 
         assert_eq!(door(insert(&draft, canonical()), SYSTEM_PRINCIPAL), Some(MediaRefusal::UnboundCell));
         assert_eq!(
@@ -405,11 +454,77 @@ mod tests {
         for (refusal, token) in [
             (MediaRefusal::UnboundCell, Some("unbound_cell")),
             (MediaRefusal::UnknownCellSchema, Some("unknown_cell_schema")),
+            (MediaRefusal::LeaseLapsed, Some("lease_lapsed")),
             (MediaRefusal::PublishedTarget, None),
             (MediaRefusal::NotOwner { draft: draft.clone() }, None),
         ] {
             assert_eq!(refusal.token(), token);
             assert_eq!(refusal.disposition(), Disposition::Permanent);
         }
+
+        // THE BINDING MADE REAL: five real bytes, the cell naming THEIR
+        // hash — the fixture's `HASH` above is the empty input's, which no
+        // five-byte deposit can carry — in a second draft the engine seeds
+        // below the door, as the first was.
+        let bytes = b"hello";
+        let hex = blake3::hash(bytes).to_hex();
+        let real = || format!(r#"{{"type":"{}","hash":"{hex}","size":5}}"#, cell::KIND).into_bytes();
+        let (draft2, _) = engine
+            .namespace()
+            .create_new_document(SYSTEM_PRINCIPAL, &system_account(), Some(false))
+            .expect("a second private draft");
+        let real_at = engine
+            .vstream()
+            .insert(
+                Caller::Principal(SYSTEM_PRINCIPAL),
+                &draft2,
+                VPos::content(Nat::from(1u32)),
+                vec![Val::new(real())],
+                Deposit::Undeclared,
+            )
+            .expect("the engine, below the door, writes any bytes")
+            .0;
+        let snap = engine.kernel().snapshot();
+        let world = snap.world();
+        let door = |op: Op, p: PrincipalId| media_door(world, &op, p, &gate);
+        let shot2 = || Op::Publish {
+            doc: h.clone(),
+            shot: Shot {
+                base: None,
+                draft: Some(draft2.clone()),
+                runs: vec![ShotRun {
+                    origin: draft2.clone(),
+                    run: Run::new(real_at.clone(), Nat::from(1u32)).expect("one position"),
+                }],
+            },
+        };
+        let deposit = |p: PrincipalId, interval: u64| {
+            let key = MediaGate::key(p);
+            let now = gate.now_ms();
+            let store = gate.store();
+            let rec = store.create_upload(&key, "blake3", 5, now + interval, None).unwrap();
+            store.resume(&key, &rec.id, 0, now).unwrap();
+            store.append(&key, &rec.id, bytes, now, interval).unwrap();
+            store.settle(&key, &rec.id, now, interval).unwrap();
+            store.finish(&key, &rec.id, now, now + interval).unwrap();
+        };
+        assert_eq!(door(insert(&draft2, real()), SYSTEM_PRINCIPAL), Some(MediaRefusal::UnboundCell));
+        assert_eq!(door(shot2(), SYSTEM_PRINCIPAL), Some(MediaRefusal::UnboundCell));
+        deposit(BOOTSTRAP_PRINCIPAL, 1_000_000);
+        assert_eq!(
+            door(insert(&draft2, real()), SYSTEM_PRINCIPAL),
+            Some(MediaRefusal::UnboundCell),
+            "another principal's deposit admits nothing of this one's"
+        );
+        deposit(SYSTEM_PRINCIPAL, 1_000);
+        assert_eq!(door(insert(&draft2, real()), SYSTEM_PRINCIPAL), None, "admitted under its own live lease");
+        assert_eq!(door(shot2(), SYSTEM_PRINCIPAL), None, "the owner's shot too");
+        let wrong_size = format!(r#"{{"type":"{}","hash":"{hex}","size":4}}"#, cell::KIND).into_bytes();
+        assert_eq!(door(insert(&draft2, wrong_size), SYSTEM_PRINCIPAL), Some(MediaRefusal::UnboundCell), "the size check");
+        assert_eq!(door(insert(&h, real()), SYSTEM_PRINCIPAL), Some(MediaRefusal::PublishedTarget), "the target first, lease or none");
+        gate.advance_clock_ms(1_000);
+        assert_eq!(door(insert(&draft2, real()), SYSTEM_PRINCIPAL), Some(MediaRefusal::LeaseLapsed));
+        assert_eq!(door(shot2(), SYSTEM_PRINCIPAL), Some(MediaRefusal::LeaseLapsed));
+        assert_eq!(engine.kernel().current_seq(), snap.seq(), "the door commits nothing");
     }
 }

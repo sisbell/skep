@@ -206,15 +206,15 @@ fn the_vector_set_meets_one_verdict_at_the_daemons_parser() {
     sd.shutdown();
 }
 
-/// M-I1 (a), (f) — THE DRAFT INSERT, the fence-only P10 face: a cell
+/// M-I1 (a), (f) — THE DRAFT INSERT, the binding's refusal: a cell
 /// inserted into the owner's draft, from a bare and from a signed session,
-/// is refused `unbound_cell` — the token's bytes exact, PERMANENT, no site,
-/// no prose: the face ("this board takes no uploads, so no picture can be
-/// placed here") is the client's, keyed on the token, and names no deposit
-/// and no re-PUT (wire.md §Media) — and nothing commits: the head stands
-/// and the draft stays empty. A value naming the kind under no pinned
-/// schema is refused `unknown_cell_schema` the same way; prose beside it
-/// lands.
+/// naming a hash this principal did not deposit under its own lease is
+/// refused `unbound_cell` — the token's bytes exact, PERMANENT, no site,
+/// no prose: the face is the client's, keyed on the token, and from lane B
+/// names the deposit the cell lacks (wire.md §Media) — and nothing commits:
+/// the head stands and the draft stays empty. A value naming the kind
+/// under no pinned schema is refused `unknown_cell_schema` the same way;
+/// prose beside it lands.
 #[test]
 fn a_cell_inserted_into_a_draft_is_refused_in_p10s_form_and_nothing_commits() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -252,6 +252,59 @@ fn a_cell_inserted_into_a_draft_is_refused_in_p10s_form_and_nothing_commits() {
     expect_resp(&insert_text(port, &bare, &draft, 1, "abc"), "ack_addr");
     expect_resp(&op(port, Some(&bare), &atom_frame(&draft, 4, json!({"atom_hex": DEF_HEX}), None)), "ack_addr");
     assert_eq!(content_extent(port, Some(&bare), &draft), 4);
+    sd.shutdown();
+}
+
+/// M-I1 (a), M-I2 (e), M-I5 (c) — THE DRAFT INSERT's ADMITTED TWIN (media
+/// lane B; the door matrix's cell 1 with the binding made real): the same
+/// cell, its hash the bytes' the caller deposited under its own lease by a
+/// PUT, is ADMITTED into the caller's draft from a bare and from a signed
+/// session — the insert commits, the draft holds the cell — while another
+/// principal's insert of the same cell into its own draft is refused
+/// `unbound_cell` (the deposit is not theirs), a cell whose `size` is not
+/// the file's length is refused `unbound_cell` (the size check at the same
+/// door), and once the lease lapses the owner's own insert is refused
+/// `lease_lapsed`, the deposit read listing the deposit no longer. The
+/// owner's shot of the draft holding the admitted cell is admitted under
+/// the live lease — the cell re-inserted into the edition.
+#[test]
+fn a_cell_whose_hash_the_caller_deposited_under_its_own_lease_is_admitted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bytes = b"the picture's bytes";
+    let cell = cell_of(bytes, bytes.len() as u64);
+    let (d_bare, d_signed) = (owner_draft(port, &bare), owner_draft(port, &bare));
+    // Before the deposit: the binding's refusal.
+    assert_token(&op(port, Some(&bare), &cell_frame(&d_bare, 1, &cell, None)), "insert", "unbound_cell");
+    // The deposit, under the caller's own lease.
+    put_whole(port, &bare, bytes);
+    assert_eq!(deposits_of(port, &bare), vec![(blob_hex(bytes), bytes.len() as u64, false)]);
+    let before = head_position(port);
+    for (token, draft) in [(&bare, &d_bare), (&signed, &d_signed)] {
+        let v = op(port, Some(token), &cell_frame(draft, 1, &cell, None));
+        expect_resp(&v, "ack_addr");
+        assert_eq!(delivery(port, Some(&bare), draft, 1, 1), json!([{"atom": cell}]), "the draft holds the cell");
+    }
+    assert!(head_position(port) > before, "the admitted inserts commit");
+    // Another principal, the same cell: not its deposit.
+    let stranger = seat_stranger(port, 991);
+    let d_stranger = create_doc(port, &stranger.session, &stranger.account);
+    assert_token(&op(port, Some(&stranger.session), &cell_frame(&d_stranger, 1, &cell, None)), "insert", "unbound_cell");
+    // The size check: the deposit is whole, the cell contradicts it.
+    let short = cell_of(bytes, bytes.len() as u64 - 1);
+    assert_token(&op(port, Some(&bare), &cell_frame(&owner_draft(port, &bare), 1, &short, None)), "insert", "unbound_cell");
+    // The owner's shot of the draft holding the admitted cell: admitted.
+    let edition = published_edition(port, &signed);
+    let m = acked_addr(&op(port, Some(&signed), &publish_frame(&edition, None, Some(&d_signed), &[run(&d_signed, &format!("{d_signed}.0.1.1"), 1)])));
+    assert_eq!(delivery(port, None, &m, 1, 1), json!([{"atom": cell}]), "the member holds the cell");
+    // The lease lapsed: the owner's own refusal, told apart from the
+    // binding's; the read lists the deposit no longer.
+    sd.daemon().advance_media_clock_ms(7 * 24 * 3600 * 1000);
+    assert_eq!(deposits_of(port, &bare), vec![]);
+    assert_token(&op(port, Some(&bare), &cell_frame(&owner_draft(port, &bare), 1, &cell, None)), "insert", "lease_lapsed");
     sd.shutdown();
 }
 

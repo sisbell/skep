@@ -1,0 +1,236 @@
+{
+  "note": "THE VECTOR SET of the resumable upload (media lane B; media.md Op inventory 1, THE RESUMABLE UPLOAD IS THE STANDARD SHAPE, its seven clauses; the register M-I2 (e), M-I5 (a), (c), M-I6 (b), (e); PATTERNS P5): the second file of the media vector set beside cells.json. `pins` are the build's INTERIM pins (the board's sm-Q8), stated once in wire.md section Media and held here so a client's implementation of the shape — the FRONTEND's shell — reads them from the set and not from a transcription; `refusals` the family's error names and statuses; `vectors` the clauses as scenarios over the wire, each a list of steps the daemon's suite (tests/it/blob_routes.rs) drives and a client suite drives the same way. A step is one act under `as` (a: the board's claimant, b: a stranger seated as an account, boot: principal 0, guest: no session) with its expectation; a body is a string (its UTF-8 bytes) or {\"bytes\": n, \"seed\": k} (SplitMix64 bytes); `bind` names a created upload for later steps; `clock` advances the daemon's media clock; `limits` installs a limits record through the serving layer's channel (the test seam until AUTH-4.70's lands); `free_space` sets the floor's reading.",
+  "pins": {
+    "family": "/blob/upload",
+    "designation": "blake3",
+    "per_file_cap": 67108864,
+    "chunk": 65536,
+    "sync_grain": 1048576,
+    "identifier_bytes": 16,
+    "identifier_hex": 32,
+    "partial_name": ".upload-<identifier>",
+    "lease_interval_ms": 604800000,
+    "lease_horizon_ms": 2592000000,
+    "idle_bound_ms": 30000,
+    "transfer_bound_ms": 600000,
+    "floor_bytes": 268435456,
+    "interim_header": "Upload-Id"
+  },
+  "refusals": {
+    "malformed_blob": 400,
+    "upload_refused": 403,
+    "no_upload": 404,
+    "upload_held": 409,
+    "upload_offset": 409,
+    "upload_length": 400,
+    "payload_too_large": 413,
+    "deposit_refused": 507,
+    "blob_io": 500
+  },
+  "vectors": [
+    {
+      "name": "clause_1_the_identifier",
+      "clause": "(1) THE IDENTIFIER: minted at the creation and answered before any byte; unpredictable; it answers to the uploader alone — another principal's lookup, resume and end, and an identifier never minted, meet one answer",
+      "steps": [
+        {"create": {"as": "a", "length": 10}, "bind": "u1", "expect": {"status": 200, "offset": 0, "length": 10, "upload": true}},
+        {"progress": {"as": "a", "upload": "u1"}, "expect": {"status": 200, "offset": 0}},
+        {"progress": {"as": "b", "upload": "u1"}, "expect": {"status": 404, "error": "no_upload"}},
+        {"append": {"as": "b", "upload": "u1", "offset": 0, "body": "x"}, "expect": {"status": 404, "error": "no_upload"}},
+        {"end": {"as": "b", "upload": "u1"}, "expect": {"status": 404, "error": "no_upload"}},
+        {"progress": {"as": "a", "upload": "00000000000000000000000000000000"}, "expect": {"status": 404, "error": "no_upload"}},
+        {"progress": {"as": "a", "upload": "u1"}, "expect": {"status": 200, "offset": 0}},
+        {"create": {"as": "a", "length": 67108865}, "expect": {"status": 413, "error": "payload_too_large"}},
+        {"create": {"as": "a", "length": 67108864}, "expect": {"status": 200, "offset": 0, "upload": true}},
+        {"create": {"as": "a"}, "expect": {"status": 400, "error": "malformed_blob"}}
+      ]
+    },
+    {
+      "name": "clause_1_creation_with_upload_whole",
+      "clause": "(1) one sent whole in a single request is the standard's creation-with-upload: the finish's answer, the lease taken, the cell admitted",
+      "steps": [
+        {"create": {"as": "a", "length": 5, "body": "hello"}, "expect": {"status": 200, "finish": true}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "deposits": ["hello"], "uploads": [], "pending": 5, "base": 0}},
+        {"insert_cell": {"as": "a", "body": "hello"}, "expect": {"verdict": "ok"}}
+      ]
+    },
+    {
+      "name": "clause_1_creation_with_upload_partial_then_resume",
+      "clause": "(1) a creation-with-upload short of the length answers the record; the resume continues from its offset; the hash covers the whole",
+      "steps": [
+        {"create": {"as": "a", "length": 10, "body": "hello"}, "bind": "u1", "expect": {"status": 200, "offset": 5, "upload": true}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "deposits": [], "uploads": ["u1"], "pending": 5}},
+        {"append": {"as": "a", "upload": "u1", "offset": 5, "body": "world"}, "expect": {"status": 200, "finish": true}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "deposits": ["helloworld"], "uploads": [], "pending": 10}}
+      ]
+    },
+    {
+      "name": "clause_1_the_declared_total_binds_the_bytes",
+      "clause": "(1) THE CREATION DECLARES THE UPLOAD's TOTAL LENGTH: a request whose offset and length together pass it is refused, nothing taken",
+      "steps": [
+        {"create": {"as": "a", "length": 3, "body": "hello"}, "expect": {"status": 400, "error": "upload_length"}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "uploads": [], "pending": 0}},
+        {"create": {"as": "a", "length": 10}, "bind": "u1", "expect": {"status": 200, "offset": 0}},
+        {"append": {"as": "a", "upload": "u1", "offset": 0, "body": "elevenbytes"}, "expect": {"status": 400, "error": "upload_length"}},
+        {"progress": {"as": "a", "upload": "u1"}, "expect": {"status": 200, "offset": 0}},
+        {"append": {"as": "a", "upload": "u1", "offset": 0, "body": "0123456789"}, "expect": {"status": 200, "finish": true}}
+      ]
+    },
+    {
+      "name": "clause_2_the_pending_quota_at_the_own_scope",
+      "clause": "(2) THE PENDING QUOTA, M-I6 (b), (e): at lane B's zero base the own scope is the pending bytes alone — live leases and bytes received — refused on the declared total BEFORE the body, the upload kept",
+      "steps": [
+        {"limits": {"per_account": 100}},
+        {"create": {"as": "a", "length": 101}, "expect": {"status": 507, "error": "deposit_refused", "scope": "own", "ended": false, "offset": 0}},
+        {"create": {"as": "a", "length": 60, "body": {"bytes": 60, "seed": 1}}, "expect": {"status": 200, "finish": true}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "pending": 60, "base": 0}},
+        {"create": {"as": "a", "length": 50}, "expect": {"status": 507, "error": "deposit_refused", "scope": "own", "ended": false}},
+        {"create": {"as": "a", "length": 40}, "bind": "u1", "expect": {"status": 200, "offset": 0}},
+        {"append": {"as": "a", "upload": "u1", "offset": 0, "body": {"bytes": 20, "seed": 2}}, "expect": {"status": 200, "offset": 20}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "pending": 80, "uploads": ["u1"]}},
+        {"limits": {"per_account": 70}},
+        {"append": {"as": "a", "upload": "u1", "offset": 20, "body": {"bytes": 20, "seed": 3}}, "expect": {"status": 507, "error": "deposit_refused", "scope": "own", "ended": false, "offset": 20}},
+        {"progress": {"as": "a", "upload": "u1"}, "expect": {"status": 200, "offset": 20}},
+        {"create": {"as": "b", "length": 70, "body": {"bytes": 70, "seed": 4}}, "expect": {"status": 200, "finish": true}},
+        {"end": {"as": "a", "upload": "u1"}, "expect": {"status": 204}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "pending": 60, "uploads": []}}
+      ]
+    },
+    {
+      "name": "clause_3_one_expiry_and_clause_4_removed_on_expiry",
+      "clause": "(3) ONE EXPIRY fixed from the last byte received, re-fixed by each byte and by nothing else; (4) past it the identifier answers no upload and the partial counts nothing",
+      "steps": [
+        {"create": {"as": "a", "length": 10, "body": "hello"}, "bind": "u1", "bind_expires": "e1", "expect": {"status": 200, "offset": 5}},
+        {"clock": 1000},
+        {"progress": {"as": "a", "upload": "u1"}, "expect": {"status": 200, "offset": 5, "expires_eq": "e1"}},
+        {"append": {"as": "a", "upload": "u1", "offset": 5, "body": ""}, "expect": {"status": 200, "offset": 5, "expires_eq": "e1"}},
+        {"append": {"as": "a", "upload": "u1", "offset": 5, "body": "wo"}, "bind_expires": "e2", "expect": {"status": 200, "offset": 7, "expires_gt": "e1"}},
+        {"progress": {"as": "a", "upload": "u1"}, "expect": {"status": 200, "offset": 7, "expires_eq": "e2"}},
+        {"clock": 604800000},
+        {"progress": {"as": "a", "upload": "u1"}, "expect": {"status": 404, "error": "no_upload"}},
+        {"append": {"as": "a", "upload": "u1", "offset": 7, "body": "rld"}, "expect": {"status": 404, "error": "no_upload"}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "uploads": [], "pending": 0}}
+      ]
+    },
+    {
+      "name": "clause_5_a_stream_claims_its_upload_first",
+      "clause": "(5) A STREAM CLAIMS ITS UPLOAD FIRST: a PUT naming an upload another stream holds is refused while it is held, an end too; a resume states the offset its body starts at, one other than the record's refused naming the record's",
+      "steps": [
+        {"create": {"as": "a", "length": 10}, "bind": "u1", "expect": {"status": 200, "offset": 0}},
+        {"stream_open": {"as": "a", "upload": "u1", "offset": 0, "declare": 10, "send": "hel"}, "bind_stream": "s1"},
+        {"append": {"as": "a", "upload": "u1", "offset": 3, "body": "lo"}, "expect": {"status": 409, "error": "upload_held"}},
+        {"end": {"as": "a", "upload": "u1"}, "expect": {"status": 409, "error": "upload_held"}},
+        {"progress": {"as": "a", "upload": "u1"}, "expect": {"status": 200}},
+        {"stream_send": {"stream": "s1", "body": "loworld"}},
+        {"stream_finish": {"stream": "s1"}, "expect": {"status": 200, "finish": true}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "deposits": ["helloworld"], "uploads": []}},
+        {"create": {"as": "a", "length": 10}, "bind": "u2", "expect": {"status": 200, "offset": 0}},
+        {"append": {"as": "a", "upload": "u2", "offset": 3, "body": "abc"}, "expect": {"status": 409, "error": "upload_offset", "offset": 0}},
+        {"append": {"as": "a", "upload": "u2", "offset": 0, "body": "abc"}, "expect": {"status": 200, "offset": 3}},
+        {"append": {"as": "a", "upload": "u2", "offset": 0, "body": "abc"}, "expect": {"status": 409, "error": "upload_offset", "offset": 3}}
+      ]
+    },
+    {
+      "name": "clause_6_refused_is_ended_mid_body_and_kept_before",
+      "clause": "(6) REFUSED IS ENDED: a PUT refused as its body is written — at the venue's total, at the floor — ends its upload and keeps nothing, its face saying so; a refusal before a request's first body byte keeps its upload",
+      "steps": [
+        {"limits": {"venue_total": 204800}},
+        {"create": {"as": "a", "length": 102400, "body": {"bytes": 102400, "seed": 11}}, "expect": {"status": 200, "finish": true}},
+        {"create": {"as": "b", "length": 1048576, "body": {"bytes": 1048576, "seed": 12}}, "expect": {"status": 507, "error": "deposit_refused", "scope": "venue", "ended": true, "offset": 65536}},
+        {"read": {"as": "b"}, "expect": {"status": 200, "uploads": [], "pending": 0}},
+        {"limits": {"venue_total": null, "per_account": 51200}},
+        {"create": {"as": "b", "length": 40960}, "bind": "u1", "expect": {"status": 200, "offset": 0}},
+        {"limits": {"per_account": 30720}},
+        {"append": {"as": "b", "upload": "u1", "offset": 0, "body": {"bytes": 40960, "seed": 13}}, "expect": {"status": 507, "error": "deposit_refused", "scope": "own", "ended": false, "offset": 0}},
+        {"progress": {"as": "b", "upload": "u1"}, "expect": {"status": 200, "offset": 0}},
+        {"read": {"as": "b"}, "expect": {"status": 200, "uploads": ["u1"]}},
+        {"limits": {"per_account": null}},
+        {"free_space": 268445696},
+        {"create": {"as": "a", "length": 1048576, "body": {"bytes": 1048576, "seed": 14}}, "expect": {"status": 507, "error": "deposit_refused", "scope": "floor", "ended": true, "offset": 0}},
+        {"free_space": null},
+        {"read": {"as": "a"}, "expect": {"status": 200, "uploads": [], "pending": 102400}}
+      ]
+    },
+    {
+      "name": "clause_6_the_uploader_may_end_it",
+      "clause": "(6) AND ITS UPLOADER MAY END IT: the termination keeps nothing; the identifier then answers no upload",
+      "steps": [
+        {"create": {"as": "a", "length": 10, "body": "hello"}, "bind": "u1", "expect": {"status": 200, "offset": 5}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "uploads": ["u1"], "pending": 5}},
+        {"end": {"as": "a", "upload": "u1"}, "expect": {"status": 204}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "uploads": [], "pending": 0}},
+        {"progress": {"as": "a", "upload": "u1"}, "expect": {"status": 404, "error": "no_upload"}},
+        {"append": {"as": "a", "upload": "u1", "offset": 5, "body": "world"}, "expect": {"status": 404, "error": "no_upload"}},
+        {"end": {"as": "a", "upload": "u1"}, "expect": {"status": 404, "error": "no_upload"}}
+      ]
+    },
+    {
+      "name": "clause_7_finished_the_lease_takes_over",
+      "clause": "(7) FINISHED, THE LEASE TAKES OVER: the cell admitted under the live lease, the size check at the same door, and the lapsed arm after the interval, the binding's refusal past the horizon",
+      "steps": [
+        {"create": {"as": "a", "length": 5, "body": "hello"}, "expect": {"status": 200, "finish": true}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "deposits": ["hello"], "uploads": [], "pending": 5}},
+        {"insert_cell": {"as": "a", "body": "hello", "size": 4}, "expect": {"verdict": "credential_refused:unbound_cell"}},
+        {"insert_cell": {"as": "b", "body": "hello"}, "expect": {"verdict": "credential_refused:unbound_cell"}},
+        {"insert_cell": {"as": "a", "body": "hello"}, "expect": {"verdict": "ok"}},
+        {"clock": 604800000},
+        {"read": {"as": "a"}, "expect": {"status": 200, "deposits": [], "pending": 0}},
+        {"insert_cell": {"as": "a", "body": "hello"}, "expect": {"verdict": "credential_refused:lease_lapsed"}},
+        {"clock": 2592000000},
+        {"insert_cell": {"as": "a", "body": "hello"}, "expect": {"verdict": "credential_refused:unbound_cell"}},
+        {"create": {"as": "a", "length": 5, "body": "hello"}, "expect": {"status": 200, "finish": true}},
+        {"insert_cell": {"as": "a", "body": "hello"}, "expect": {"verdict": "ok"}}
+      ]
+    },
+    {
+      "name": "h1_presence_a_put_of_a_file_another_account_holds_answers_the_same",
+      "clause": "H1 (M-I2 (e); NO ANSWER OF THE UPLOAD SAYS WHETHER THE FILE WAS ALREADY HERE): a second account's PUT of the same bytes answers as its PUT of fresh bytes does, and each account's deposit read lists its own deposits alone",
+      "steps": [
+        {"create": {"as": "a", "length": 5, "body": "hello"}, "expect": {"status": 200, "finish": true}},
+        {"create": {"as": "b", "length": 5, "body": "hello"}, "expect": {"status": 200, "finish": true}},
+        {"create": {"as": "b", "length": 5, "body": "world"}, "expect": {"status": 200, "finish": true}},
+        {"read": {"as": "b"}, "expect": {"status": 200, "deposits": ["hello", "world"], "pending": 10}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "deposits": ["hello"], "pending": 5}},
+        {"insert_cell": {"as": "b", "body": "world"}, "expect": {"verdict": "ok"}},
+        {"insert_cell": {"as": "a", "body": "world"}, "expect": {"verdict": "credential_refused:unbound_cell"}}
+      ]
+    },
+    {
+      "name": "e1_the_venue_totals_residue_is_priced",
+      "clause": "ms4-E1 (ACCEPT AND NAME): as the body is written the venue total's refusal fires at the byte where the total would pass the limit, at the chunk's grain — its offset the venue's headroom less the prober's own scope, priced at that headroom's transfer",
+      "steps": [
+        {"limits": {"venue_total": 307200}},
+        {"create": {"as": "a", "length": 102400, "body": {"bytes": 102400, "seed": 21}}, "expect": {"status": 200, "finish": true}},
+        {"create": {"as": "b", "length": 1048576, "body": {"bytes": 1048576, "seed": 22}}, "expect": {"status": 507, "error": "deposit_refused", "scope": "venue", "ended": true, "offset": 196608}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "pending": 102400}},
+        {"read": {"as": "b"}, "expect": {"status": 200, "pending": 0, "uploads": []}}
+      ]
+    },
+    {
+      "name": "the_session_layer_gate",
+      "clause": "D12, PUB-6.35's I10, sweep-5 media-leak: a guest is refused at every act, a node-tier principal at the creation, before any body byte",
+      "steps": [
+        {"create": {"as": "guest", "length": 5, "body": "hello"}, "expect": {"status": 403, "error": "upload_refused", "detail": "unauthenticated"}},
+        {"read": {"as": "guest"}, "expect": {"status": 403, "error": "upload_refused", "detail": "unauthenticated"}},
+        {"create": {"as": "boot", "length": 5, "body": "hello"}, "expect": {"status": 403, "error": "upload_refused", "detail": "node_tier"}},
+        {"read": {"as": "boot"}, "expect": {"status": 403, "error": "upload_refused", "detail": "node_tier"}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "deposits": [], "uploads": []}}
+      ]
+    },
+    {
+      "name": "the_requests_shape",
+      "clause": "the never-silent posture at the family: an unknown or repeated parameter, a malformed identifier and an unsupported method are each refused by name",
+      "steps": [
+        {"create": {"as": "a", "query": "length=abc"}, "expect": {"status": 400, "error": "malformed_blob"}},
+        {"create": {"as": "a", "query": "length=5&length=6"}, "expect": {"status": 400, "error": "malformed_blob"}},
+        {"create": {"as": "a", "query": "size=5"}, "expect": {"status": 400, "error": "malformed_blob"}},
+        {"raw": {"as": "a", "method": "GET", "path": "/blob/upload/not-an-identifier"}, "expect": {"status": 400, "error": "malformed_blob"}},
+        {"raw": {"as": "a", "method": "PUT", "path": "/blob/upload"}, "expect": {"status": 405, "error": "method_not_allowed"}},
+        {"raw": {"as": "a", "method": "POST", "path": "/blob/upload/0123456789abcdef0123456789abcdef"}, "expect": {"status": 405, "error": "method_not_allowed"}},
+        {"create": {"as": "a", "length": 10}, "bind": "u1", "expect": {"status": 200}},
+        {"raw": {"as": "a", "method": "PATCH", "path": "/blob/upload/{u1}", "body": "abc"}, "expect": {"status": 400, "error": "malformed_blob"}},
+        {"raw": {"as": "a", "method": "PATCH", "path": "/blob/upload/{u1}?offset=0&limit=1", "body": "abc"}, "expect": {"status": 400, "error": "malformed_blob"}},
+        {"raw": {"as": "a", "method": "GET", "path": "/blob/nope"}, "expect": {"status": 404, "error": "no_such_endpoint"}}
+      ]
+    }
+  ]
+}

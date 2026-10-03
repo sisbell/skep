@@ -1,0 +1,43 @@
+[package]
+name = "skep-blobs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "The blob store (media lane B): the four media stores under one root — the files at blobs/<designation>/<hex>, the partials, the upload records and the lease log — with the PUT's fsync order, REPLACE on a present hash, and the lease's honest-null answer. It knows no principal, no lock and no limits record."
+readme = "README.md"
+
+[features]
+# The hazard seam: HOLD the finish at a named step (the SIGKILL harness
+# parks there and kills the process) or FAIL that step with an injected I/O
+# error (the fsync-order test observes what each failure leaves). DEFAULT-OFF
+# and never enabled by a shipped build: this crate's own tests turn it on
+# through the self dev-dependency below, skepd's tests on their `skep-blobs`
+# line, and a build that compiles no test compiles none of it.
+test-hooks = []
+
+[dependencies]
+# The file hash: BLAKE3-256, the cell schema's frozen hash (Q-sm1). Hashed as
+# the bytes arrive, so the hash is known the moment the last byte is.
+blake3.workspace = true
+# The two logs are JSON lines, as the daemon's own sidecars are; the map
+# behind serde_json's objects is sorted, so a line's member order is fixed.
+serde_json.workspace = true
+# The upload identifier: 128 bits from the OS per upload, never a sequence
+# (the record's clause (1); AUTH-4.13's standard for a token).
+getrandom = "0.3"
+# The floor's one read of the host: the volume's free space at the root
+# (`statvfs`), safe Rust — this crate forbids `unsafe` as every crate of the
+# workspace does. Already in the graph through tempfile.
+rustix = { version = "1", features = ["fs"] }
+# Non-poisoning locks, for the reason skepd's manifest gives: a panic under
+# one releases it with the data as it stands.
+parking_lot.workspace = true
+
+[dev-dependencies]
+# This crate with its hazard seam on, so its integration tests reach the
+# hold and the failure injection; a build that compiles no test never reads
+# this table.
+skep-blobs = { path = ".", features = ["test-hooks"] }
+tempfile.workspace = true

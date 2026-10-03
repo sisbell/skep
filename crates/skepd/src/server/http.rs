@@ -7,11 +7,13 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use skep_kernel::Seq;
 
+use super::blob_routes::{self, BodySource};
 use super::reply::{reason_phrase, refuse, Reply, TransportError, SESSION_HEADER};
 use super::request::{at_most_once, HttpRequest};
 use super::body_cap;
 use crate::auth::session::Peer;
 use crate::codec::{obj, to_bytes};
+use crate::limits::{BLOB_IDLE_BOUND, MAX_SMALL_BODY};
 
 /// Socket read deadline for one request's head+body: a stalled local
 /// client releases its worker instead of pinning it.
@@ -136,6 +138,20 @@ pub(super) fn refuse_request(refusal: RequestRefusal) -> Reply {
 /// connection, HTTP/1.0 or 1.1, bodies by `Content-Length` (absent =
 /// empty, capped at the route's [`body_cap`]), `Expect: 100-continue`
 /// honored, `Transfer-Encoding` refused.
+///
+/// THE STREAMING ARM (media lane B; `blob_routes`): for the two methods of
+/// the blob upload's path family that carry bytes, the body is NOT read
+/// here — a body of the route's cap would otherwise sit whole in memory,
+/// which is what the cap raise alone was priced as unsafe for. The head is
+/// read as for every request, the declared length held to the route's cap,
+/// and the body parked for the route as a [`BodySource`] over a clone of
+/// this socket — the bytes that arrived with the head, the length, and the
+/// `100 Continue` the client may be waiting for, which the route sends with
+/// the upload's identifier once it has decided to invite the body. The
+/// socket's read deadline is set to the idle bound for the body's phase,
+/// renewed by any byte; the transfer bound is the source's own. A method of
+/// the family that carries no bytes reads its body here under the small
+/// cap, as every frameless route does.
 ///
 /// Each header this daemon READS — `Content-Length`, `Expect`,
 /// `Skepd-Session` and `Origin` — may appear at most once; a repeat is
@@ -265,10 +281,29 @@ pub(super) fn read_request(
     // The one unbounded-allocation vector: refuse on the declared length
     // alone, before 100-continue invites the body and before the loop reads
     // (and allocates) a single byte of it. The cap is the ROUTE's, so a
-    // route that carries no frame is never asked to allocate for one.
-    let cap = body_cap(&path);
+    // route that carries no frame is never asked to allocate for one — and
+    // the blob family's cap is its two streaming methods' alone: the rest
+    // of the family reads a body it never looks at under the small cap.
+    let streams = blob_routes::streams_body(&method, &path);
+    let cap = if !streams && blob_routes::is_blob_path(&path) { MAX_SMALL_BODY } else { body_cap(&path) };
     if declared > cap {
         return Err(RequestRefusal::BodyTooLarge { declared, cap });
+    }
+    if streams {
+        // THE STREAMING ARM: the body stays on the socket for the route.
+        body.truncate(declared);
+        let clone = stream.try_clone().map_err(|e| format!("socket: {e}"))?;
+        clone.set_read_timeout(Some(BLOB_IDLE_BOUND)).map_err(|e| format!("socket: {e}"))?;
+        blob_routes::park(BodySource::parked(clone, body, declared, expects_continue));
+        return Ok(Some(HttpRequest {
+            method,
+            path,
+            query,
+            session_token,
+            origin,
+            peer,
+            body: Vec::new(),
+        }));
     }
     if expects_continue && body.len() < declared {
         // The client is holding the body until told to send it (curl does

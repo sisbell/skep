@@ -74,7 +74,7 @@ fn valid_op_request() -> Vec<u8> {
 /// write to a socket; the daemon must answer each with exactly one
 /// well-formed response.
 fn hostile_request(rng: &mut u64, corpus: &[Vec<u8>]) -> Vec<u8> {
-    match splitmix64(rng) % 8 {
+    match splitmix64(rng) % 9 {
         // Pure garbage — no HTTP shape at all.
         0 => random_bytes(rng, 300),
         // A random method/path/version request line, empty body.
@@ -120,6 +120,27 @@ fn hostile_request(rng: &mut u64, corpus: &[Vec<u8>]) -> Vec<u8> {
         6 => {
             let body = mutate(splitmix64(rng), corpus);
             build_request("POST", "/session", "Content-Type: application/json\r\n", &body)
+        }
+        // The blob upload's streaming arm (media lane B) under hostile
+        // bytes: a random method on the family, a junk query, a body whose
+        // declared length may overstate it (half-close → EOF mid-body), no
+        // session — every arm meets the route's gate or its parse and must
+        // answer exactly one well-formed response.
+        7 => {
+            let methods = ["POST", "PATCH", "GET", "DELETE", "PUT"];
+            let m = methods[splitmix64(rng) as usize % methods.len()];
+            let id = "0123456789abcdef0123456789abcdef";
+            let path = match splitmix64(rng) % 3 {
+                0 => format!("/blob/upload?length={}", splitmix64(rng) % 100_000),
+                1 => format!("/blob/upload/{id}?offset={}", splitmix64(rng) % 100),
+                _ => format!("/blob/upload/{}", random_token(rng, 40)),
+            };
+            let body = random_bytes(rng, 3000);
+            let overstate = splitmix64(rng) % 3 == 0;
+            let declared = body.len() + if overstate { 1 + splitmix64(rng) as usize % 4096 } else { 0 };
+            let mut v = format!("{m} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {declared}\r\n\r\n").into_bytes();
+            v.extend_from_slice(&body);
+            v
         }
         // A junk query on a real GET route.
         _ => {

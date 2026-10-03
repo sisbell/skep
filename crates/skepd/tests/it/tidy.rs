@@ -36,15 +36,18 @@ const LAYERS: &[(&str, u8)] = &[
     ("server::listen", 1),
     // 2 — the routes.
     ("server", 2),
+    ("server::blob_routes", 2),
     // 3 — the daemon's vocabulary.
     ("server::reply", 3),
     ("server::request", 3),
     ("server::scan", 3),
     // 4 — the session layer.
     ("auth", 4),
-    // 5 — the write path, and the media door beside it.
+    // 5 — the write path, and the media door, gate and deposit read beside it.
     ("write_path", 5),
     ("media", 5),
+    ("media::deposit_read", 5),
+    ("media::gate", 5),
     // 6 — the leaves.
     ("codec", 6),
     ("history", 6),

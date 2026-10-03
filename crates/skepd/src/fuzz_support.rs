@@ -113,6 +113,16 @@ pub const TRANSPORT_ERRORS: &[&str] = &[
     "history_io",
     "history_corrupt",
     "no_journal",
+    // The blob upload's eight (media lane B; wire.md §Media): the PUT's
+    // path family answers transport refusals alone — no `Op` runs there.
+    "malformed_blob",
+    "upload_refused",
+    "no_upload",
+    "upload_held",
+    "upload_offset",
+    "upload_length",
+    "deposit_refused",
+    "blob_io",
 ];
 
 // ── the codec oracle ─────────────────────────────────────────────────────
@@ -285,11 +295,13 @@ pub fn check_http_response(bytes: &[u8]) -> Result<(u16, &[u8]), String> {
 }
 
 /// The envelope endpoints' oracle (wire.md §Reading history, §The change
-/// feed, §Sessions): route the fuzz bytes to one of the four structured
-/// endpoints, exchange, and demand a well-formed HTTP response whose error
-/// name — on any non-2xx — is one wire.md documents. A 2xx is any documented
-/// success. An empty answer (clean close) is accepted; the endpoint-specific
-/// success shapes are asserted more tightly in the tier-1 tests.
+/// feed, §Sessions, §Media): route the fuzz bytes to one of the five
+/// structured endpoints — the blob upload's creation among them, which a
+/// tokenless exchange meets at its session-layer gate — exchange, and
+/// demand a well-formed HTTP response whose error name — on any non-2xx —
+/// is one wire.md documents. A 2xx is any documented success. An empty
+/// answer (clean close) is accepted; the endpoint-specific success shapes
+/// are asserted more tightly in the tier-1 tests.
 ///
 /// Reports a violation — an undocumented error name, a malformed response,
 /// or an exchange that could not be made (the daemon gone, or its socket
@@ -302,10 +314,11 @@ pub fn envelope_oracle(port: u16, data: &[u8]) -> Result<(), String> {
         return Ok(());
     }
     let payload = &data[1..];
-    let raw = match data[0] % 4 {
+    let raw = match data[0] % 5 {
         0 => build_post("/session", payload),
         1 => build_post("/op-at", payload),
         2 => build_get(&format!("/changes?{}", String::from_utf8_lossy(payload))),
+        3 => build_post(&format!("/blob/upload?{}", String::from_utf8_lossy(payload)), payload),
         _ => build_get(&format!("/dump?{}", String::from_utf8_lossy(payload))),
     };
     let resp = http_raw_exchange(port, &raw).map_err(|e| format!("exchange: {e}"))?;

@@ -1,8 +1,10 @@
-//! The two request-body caps the wire promises (wire.md §Transport), the
-//! change feed's three page bounds (wire.md §The change feed), and the
-//! picture cell's cap (wire.md §Media).
+//! The three request-body caps the wire promises (wire.md §Transport), the
+//! change feed's three page bounds (wire.md §The change feed), the picture
+//! cell's cap, and the blob route's own bounds — the per-file cap, the
+//! streaming arm's chunk, and its two deadlines (wire.md §Media).
 
 use std::num::NonZeroUsize;
+use std::time::Duration;
 
 /// Request-body cap for the two frame-carrying routes, enforced on the
 /// declared `Content-Length` before any body byte is read or allocated.
@@ -25,9 +27,49 @@ use std::num::NonZeroUsize;
 /// (`auth::entry`'s `MAX_SHOT_BODY_BYTES`, parity with this) — so
 /// raising it raises what the write-path check reads and verifies per shot.
 ///
-/// REVISIT at the media round: blob upload raises this for its route only,
-/// which is the shape [`crate::body_cap`] already has.
+/// The media round's raise is NOT this constant's: the blob route carries
+/// its own cap, [`MAX_BLOB_BYTES`], on a body that never sits whole in
+/// memory — raising this one alone would have bought a buffered body of the
+/// cap's size, the amplified costs above with it.
 pub(crate) const MAX_REQUEST_BODY: usize = 8 * 1024 * 1024;
+
+/// THE BLOB ROUTE's CAP (media lane B; wire.md §Media — INTERIM, the
+/// board's sm-Q8): the most bytes one upload may declare, and the
+/// request-body cap of `/blob/upload`'s two body-carrying methods — 64 MiB.
+/// The per-file cap of the daemon's own, which a venue's limits record may
+/// lower and never raise. Sized for v1's images (ms5-V1: v1 media stays
+/// images only): a camera's raw frame is tens of megabytes, a web picture a
+/// few, so 64 MiB holds every picture a board is likely to be handed with
+/// room, and no video. What it bounds is DISK and TRANSFER, never memory:
+/// the streaming arm (`server/blob_routes.rs`'s `BodySource`) holds one
+/// [`BLOB_CHUNK`] of the body at a time, and the store writes each chunk
+/// to the partial as it arrives. A declared `length` past it is refused at
+/// the creation with `413 payload_too_large` naming this number, before any
+/// body byte.
+pub(crate) const MAX_BLOB_BYTES: u64 = 64 * 1024 * 1024;
+
+/// THE STREAMING ARM's CHUNK — 64 KiB, INTERIM: the one buffer the blob
+/// route holds of a body, filled from the socket and handed to the store
+/// per read. The arm's whole memory per in-flight upload is this buffer and
+/// the hasher's state; a body at the cap costs 1,024 reads of it.
+pub(crate) const BLOB_CHUNK: usize = 64 * 1024;
+
+/// THE IDLE BOUND of a blob body (the record's "idle bound the subsystem
+/// design pins", clause (5)) — 30 s, INTERIM: the socket's read deadline
+/// while a body streams, renewed by any byte and never by silence; a
+/// connection whose body stalls past it ends, its upload KEPT (a dropped
+/// connection keeps its upload until the expiry).
+pub(crate) const BLOB_IDLE_BOUND: Duration = Duration::from_secs(30);
+
+/// THE TRANSFER BOUND of one blob request — 10 minutes, INTERIM: the
+/// deadline on SLOWNESS the idle bound cannot give (a peer pacing one byte
+/// per interval renews the idle bound for as long as it cares to, and the
+/// transport's own `TRANSFER_DEADLINE` of 30 s would cut an honest body at
+/// the cap on a slow link). A body at the cap needs 112 KB/s to pass it; a
+/// request cut here leaves its upload standing at the last durable grain,
+/// resumable at once — which is what makes a per-request bound safe where a
+/// per-file one would not be.
+pub(crate) const BLOB_TRANSFER_BOUND: Duration = Duration::from_secs(600);
 
 /// Request-body cap for every route that carries no frame — 16 KiB, ONE
 /// constant at EVERY small-body route (rc-1, owner 2026-09-26: "n 8 KiB cap.

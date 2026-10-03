@@ -21,7 +21,7 @@ position in the journal.
 
 ## Code map
 
-The workspace is sixteen crates under `crates/`. Dependencies point
+The workspace is seventeen crates under `crates/`. Dependencies point
 downward in the list below: a crate may depend only on crates listed
 above it.
 
@@ -31,6 +31,13 @@ above it.
 - `skep-kernel` — transactions, the journal, checkpoints and recovery. It
   knows nothing of what a transaction means; the world it stores is a
   type parameter the engine supplies. Its modules and rules: §The kernel.
+- `skep-blobs` — the blob store (media lane B): the four media stores
+  under one root — the files at `blobs/<designation>/<hex>`, the partials,
+  the upload records and the lease log — the PUT's fsync order, REPLACE on
+  a present hash, and the lease's honest-null answer. It depends on no
+  other skep crate, knows no principal (a key is an opaque string), holds
+  no lock the daemon's write path takes, and reads no limits record. Its
+  rules: §The blob store.
 
 **The stores** — each owns one slice of the world and depends only on the
 foundation and on the stores above it.
@@ -115,6 +122,51 @@ Its integration suites are one binary, `tests/it/`: `kernel` (the public
 surface's claims), `hazard` (dirty crashes, built through the engine),
 `golden` (the byte pins) and `chain` (the commit chain's tamper matrix),
 over the shared `fixture` and `mutilate`.
+
+## The blob store, `skep-blobs`
+
+`skep-blobs` owns one directory — the daemon hands it `blobs/` inside the
+board's data directory — holding the four media stores the media record
+names: the files, `<root>/<designation>/<hex>`; the partials,
+`<root>/<designation>/.upload-<identifier>`; the upload records,
+`<root>/uploads.log`; and the lease log, `<root>/leases.log`. Its modules:
+`lib.rs` is the `Store`, the one handle over the four; beneath it
+`blobs.rs` holds the directory discipline (the install order, the
+directory fsync, the JSON-lines logs' tail check and compaction, the free-
+space read, the hazard seam's steps), `partials.rs` the partial files and
+the reconciliation at open, `uploads.rs` the identifier and the records'
+log, `lease.rs` the leases' log, `error.rs` the refusals.
+
+Rules that hold across its files:
+
+- **The PUT's order.** `Store::finish` is the one path from a partial to a
+  file: the partial fsynced, renamed onto `<designation>/<hex>` (REPLACE
+  where the name exists, never a no-op), the designation directory
+  fsynced, the root fsynced where this process created the directory,
+  THEN the lease appended and synced, THEN the record retired, THEN the
+  answer. Nothing names a file before it is durable, and a crash leaves at
+  worst a file with no lease or a record open's reconciliation retires.
+- **A byte is received once it is durable.** The partial is fsynced at a
+  grain and at every request's end (`Store::settle`), and the record's
+  offset and expiry are written after each sync; a resume continues from
+  the record's offset, the partial cut back to it where longer.
+- **One answer per key.** An identifier the asking key's records do not
+  name is `NoUpload` whoever minted it; a hash the key holds no lease on
+  is `LeaseState::None` whatever the directory holds; a finish answers
+  one shape whether or not the file was already here.
+- **Open reconciles and compacts.** Both logs are tail-checked and
+  rewritten to their current records; the partials and the records are
+  held to each other both ways; a lease past the horizon is dropped — all
+  before the store answers anything.
+- **The hazard seam is a feature.** `test-hooks` (default off) compiles in
+  the hold and the injected failure at a named `Step` of the finish; the
+  shipped build carries neither.
+
+Its integration suite is one binary, `tests/it/`: `blobs` (the order under
+a seeded failure injection at each step, REPLACE's repair and its one
+answer), `uploads` (the identifier, the durable offset, the reconciliation,
+the end), `lease` (the three states and the horizon, latest-wins, the
+compaction, the pending bytes).
 
 ## The name space, `skep-namespace`
 
@@ -269,8 +321,10 @@ that a request is built and a response read through `skep_febe` alone; and
 `skepd` owns three decisions of its own: the session layer's gates (who
 may act, and what a credential write may do), the cadence of the published
 head, and the media door (whether a value a write carries is a picture's
-reference cell, and what a write that would mint one is answered).
-Everything else it delegates to the stores through the engine.
+reference cell, and what a write that would mint one is answered — from
+lane B, whether its hash is a deposit of the caller's own). Everything
+else it delegates to the stores through the engine, and the media bytes
+to `skep-blobs`.
 
 Its modules form six layers. A module names only modules in its own layer
 or below it, never above; `crates/skepd/tests/it/tidy.rs` checks it. A
@@ -283,13 +337,17 @@ write passes down through them in this order:
 ┌─────────────────────────────────────────────────────────┐
 │ 1 TRANSPORT        server/listen.rs   server/http.rs    │
 │                    accept · read request · write reply  │
-│                    serve the event stream               │
+│                    serve the event stream · park a      │
+│                    streaming body for the blob route    │
 ├─────────────────────────────────────────────────────────┤
 │ 2 ROUTES           server.rs (router) · actor.rs        │
-│                    session_routes · read_routes · op    │
+│                    session_routes · read_routes · op ·  │
+│                    blob_routes                          │
 │                    hooks (test-hooks builds only)       │
 │                    /op: resolve → check → commit →      │
 │                         record → head writer's turn     │
+│                    /blob/upload: resolve → gate →       │
+│                         stream → finish → answer        │
 ├─────────────────────────────────────────────────────────┤
 │ 3 VOCABULARY       server/reply.rs · request.rs ·       │
 │                    scan.rs                              │
@@ -306,8 +364,11 @@ write passes down through them in this order:
 │                    │                 the attest store    │
 │                    ├── sidecar.rs   commits.log         │
 │                    └── classify.rs  a commit's documents│
-│                    media.rs · media/door.rs             │
-│                    the media door, the cell's one step  │
+│   MEDIA RESOURCE   media.rs · media/door.rs ·           │
+│                    media/gate.rs · media/deposit_read.rs│
+│                    the media door · the blob store, the │
+│                    limits, the hold, the scopes, the    │
+│                    binding · the deposit read           │
 ├─────────────────────────────────────────────────────────┤
 │ 6 LEAVES           codec · history · permits · serial · │
 │                    limits · notice · media/cell         │
@@ -315,26 +376,37 @@ write passes down through them in this order:
        │
        ▼
   skep-engine  →  the stores  →  skep-kernel (journal)
+  skep-blobs   →  blobs/ (the files, partials, records, leases)
 
   Imports point DOWN or sideways within a layer. Never up.
 ```
 
 A read skips the write path: a read route goes from the routes to
 `history` and the engine. The engine sits below the daemon and knows
-nothing of it.
+nothing of it. A blob upload skips the write path too: the blob route
+goes from the routes to the media resource and `skep-blobs`, commits
+nothing to the journal, and takes no `Serial`.
 
 1. **The transport** — `server/listen.rs` (sockets, worker threads, the
    event streams' loop and budget) and `server/http.rs` (the HTTP bytes:
-   the request reader, the reply writer, the event framing). It hands each
-   request to the router and knows nothing of what a request means.
+   the request reader, the reply writer, the event framing — and the
+   streaming arm: for the blob upload's two body-carrying methods the
+   reader takes the head alone and parks the body, as a `BodySource` over
+   the connection's socket, for the route on the same thread). It hands
+   each request to the router and knows nothing of what a request means.
 2. **The routes** — `server.rs` (`Daemon` and the router) and the handler
    files beneath it, each an `impl Daemon` block: `server/actor.rs` (who
    the caller is), `server/session_routes.rs`, `server/read_routes.rs`,
-   `server/op.rs`, and — in `test-hooks` builds only —
-   `server/hooks.rs`. `/op` runs one of the two write sequences — the
-   plain (AUTH-3.35) or the credential (AUTH-3.37), chosen off the op's
-   own type slot before any lock is taken: resolve the caller, run the
-   checks, commit, record, then give the head writer its turn.
+   `server/op.rs`, `server/blob_routes.rs` (the PUT: the path family
+   `/blob/upload`, the body source and the parked hand-off, the five
+   methods), and — in `test-hooks` builds only — `server/hooks.rs`. `/op`
+   runs one of the two write sequences — the plain (AUTH-3.35) or the
+   credential (AUTH-3.37), chosen off the op's own type slot before any
+   lock is taken: resolve the caller, run the checks, commit, record, then
+   give the head writer its turn. `/blob/upload` resolves the caller,
+   gates the declared total, streams the body one chunk at a time into
+   the store, each chunk gated, and finishes under the credential lock's
+   read arm — the requester re-resolved there — never under `Serial`.
 3. **The daemon's vocabulary** — `server/reply.rs` (the reply and every
    transport refusal), `server/request.rs` (the request, and the rules its
    headers and query obey), `server/scan.rs` (the class-scan pool): what
@@ -362,17 +434,26 @@ nothing of it.
      which of its op's terms the journal can name for a bare position —
      the one place the feed asks the world anything.
 
-   Beside the write path, at the same layer: `media.rs` with
-   `media/door.rs` — THE MEDIA DOOR (media lane A), the one step the
-   plain write sequence takes between its admission and the commit for a
-   value naming the picture cell's kind: `published_target` at a
-   published target whatever the declaration, the shot's owner test
-   (`not_owner` naming the draft), and the two refusals a draft's cell
-   meets while no upload exists. It reads the op's values and, for a
-   shot, the staging draft's own runs off the locked snapshot, through
-   M5's and M4's public reads; from lane B it reads the lease store and
-   the blob store too, which is why it is a step of its own and never a
-   producer of the session layer's admission.
+   Beside the write path, at the same layer, THE MEDIA RESOURCE:
+   `media.rs` with `media/door.rs` — THE MEDIA DOOR (media lane A), the
+   one step the plain write sequence takes between its admission and the
+   commit for a value naming the picture cell's kind: `published_target`
+   at a published target whatever the declaration, the shot's owner test
+   (`not_owner` naming the draft), and THE BINDING (lane B): a cell is
+   admitted where its hash is one this principal deposited under its own
+   live lease over a whole file, refused `unbound_cell` otherwise and
+   `lease_lapsed` where the deposit is gone. It reads the op's values and,
+   for a shot, the staging draft's own runs off the locked snapshot,
+   through M5's and M4's public reads, and the lease and the file through
+   the gate — which is why it is a step of its own and never a producer
+   of the session layer's admission. `media/gate.rs` — THE GATE: the blob
+   store (`skep-blobs`) opened under `blobs/` in the data dir, the limits
+   in force (the daemon's defaults and the install hook the serving
+   layer's channel will call), the hold a stream has on its upload, the
+   three scopes a deposit is refused on (the own scope, the venue total,
+   the floor — in that order, the requester's own record first), and the
+   binding's read. `media/deposit_read.rs` — the one read of a
+   principal's own deposits and uploads, served on the upload's own path.
 6. **The leaves** — `codec.rs` with `codec/marshal.rs` (the JSON wire
    format: parse, and marshal), `history.rs` (reading the world at an
    earlier position), `permits.rs` (the counting permit both bounded pools
@@ -414,6 +495,17 @@ imports it.
 - **One write path.** Every write to the world goes through
   `write_path`, one at a time. Only the write path records to the feed and
   to `commits.log`.
+- **The PUT takes no `Serial`.** A blob upload commits nothing to the
+  journal, so the write-serialization lock has nothing to order for it:
+  `media/` and `server/blob_routes.rs` never name `serial`. What the
+  finish holds — from the rename through the lease's sync — is the
+  credential lock's READ arm, the arm the plain write sequence holds
+  across the media door, so the door's read of the lease and the finish's
+  write of it never interleave with a credential write; the requester is
+  re-resolved under it at the rename.
+- **The store knows no policy.** `skep-blobs` is handed a root and opaque
+  keys; who a key is, what bounds its bytes, and which lock a finish runs
+  under are the daemon's (`media/gate.rs`), never the store's.
 - **The cell's parser is the one parser; the door is the one media
   step.** `media/cell.rs`'s `parse` is the daemon's one reading of a
   picture cell's bytes, under the canonical rule (`parse(b)` answers a
@@ -433,8 +525,14 @@ imports it.
   the reclaim floor, and the one daemon file that is not a projection —
   below the floor the checkpoint holds no marker, so its line there is
   the entry signature's only copy at the origin, kept and never compacted,
-  backed up with the board directory as the kernel's own files are. It
-  never writes anything about the world outside the kernel.
+  backed up with the board directory as the kernel's own files are. And,
+  through `skep-blobs`, the media stores under `blobs/`: the deposited
+  files (PRIMARY — neither prunable nor rebuildable beyond the unreferenced
+  tail, restored by the exact bytes), the partials, `uploads.log` and
+  `leases.log` (honest-null sidecars: a lost record reads as no upload, a
+  lost lease as no lease, cured by a re-PUT), backed up with the board
+  directory, the journal copied first. It never writes anything about
+  the world outside the kernel.
 - **Nothing is overwritten.** Content, links and journal entries are
   append-only. A removal is a new record, not a deletion.
 - **The wire is a contract.** `docs/wire.md` is what clients build

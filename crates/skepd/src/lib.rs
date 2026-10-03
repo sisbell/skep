@@ -32,6 +32,15 @@
 //!   version on the write path's own cadence, as the system account's
 //!   principal with no session, its commits testifying `"system"` on
 //!   `/changes` (wire.md §The other endpoints).
+//! * `media/` — the MEDIA DOOR (lane A) and, beside the write path, the
+//!   daemon's media resource (lane B): the blob store `skep-blobs` opened
+//!   under `blobs/` in the data dir, the limits in force, the hold a stream
+//!   has on its upload, the three scopes a deposit is refused on, and the
+//!   binding the door asks — a cell is admitted only where its hash is one
+//!   this principal deposited under its own live lease; the deposit read.
+//!   The PUT's routes (`server/blob_routes.rs`, the family `/blob/upload`)
+//!   stream a body one chunk at a time into the store and commit nothing
+//!   to the journal (wire.md §Media).
 //! * [`Daemon`] — the state and the socket-free router: `GET /challenge`,
 //!   `POST /session`, `POST /session/close`, `POST /op`, `POST /op-at`
 //!   (any READ frame answered as of a committed
@@ -95,8 +104,9 @@ mod auth;
 mod write_path;
 
 // Beside it, at its layer: the media door — the one step the plain write
-// sequence takes for a value naming the picture cell's kind — and, a leaf
-// beneath it, the cell's one parser.
+// sequence takes for a value naming the picture cell's kind — the gate the
+// door and the PUT's routes read the blob store through, the deposit read,
+// and, a leaf beneath them, the cell's one parser.
 mod media;
 
 // The leaves: none knows anything of the daemon.

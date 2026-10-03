@@ -13,8 +13,15 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **The wire** — `/op` (execute), `/op-at` (historical reads over
   reconstructed worlds), `/chain` (the commit chain's value at a
   position), `/changes`, `/dump`, `/events` (commit stream),
-  `/health`, and the session routes `/challenge`, `/session`,
-  `/session/close`.
+  `/health`, the session routes `/challenge`, `/session`,
+  `/session/close`, and the blob upload's family `/blob/upload` — the
+  resumable PUT of a picture's bytes, streamed to the blob store
+  ([skep-blobs](../skep-blobs)) one chunk at a time, and the deposit read.
+- **The media door and the gate** — a picture's reference cell is parsed
+  by one parser at every `insert` and `publish` and admitted only where
+  its hash is a deposit of the caller's own under a live lease; the
+  gate's three scopes (the own scope, the venue total, the floor) bound
+  what a deposit may take.
 - **Deterministic JSON codec** — key-sorted marshalling so wire bytes
   never depend on map iteration order.
 - **Durability is configuration** — fsync policy and checkpoint

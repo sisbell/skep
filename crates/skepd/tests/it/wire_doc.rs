@@ -625,10 +625,10 @@ fn doc_states_the_media_cell_and_its_door() {
         "| `not_owner`, `site.addr` the draft | `publish` | permanent |",
         "| `credential_refused`, `detail` `unbound_cell` |",
         "| `credential_refused`, `detail` `unknown_cell_schema` |",
-        "this board takes no uploads, so no picture can be placed here",
-        "names no deposit and no re-PUT",
+        "this picture's bytes were not deposited here under your account",
+        "the face now names the deposit the cell lacks",
         "INTERIM PINS",
-        "What lane A does NOT build, by name",
+        "What lane B does NOT build, by name",
     ] {
         assert!(media.contains(fact), "§Media says {fact:?}");
     }
@@ -643,12 +643,93 @@ fn doc_states_the_media_cell_and_its_door() {
     assert_eq!(fixture["designation"].as_str(), Some("blake3"));
     assert_eq!(fixture["cap"].as_u64(), Some(1024));
     let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
-    assert!(codes.contains("Media (lane A, the fence)"), "§Rejection codes points at §Media");
+    assert!(codes.contains("Media (lanes A and B"), "§Rejection codes points at §Media");
     let refusals = prose("\n### Credential refusals", &["\n## Operations"]);
     assert!(
-        refusals.contains("**The media door's two tokens**"),
+        refusals.contains("**The media door's three tokens**"),
         "§Credential refusals points at §Media"
     );
+}
+
+/// THE UPLOAD (media lane B; the record's clauses, the H1 rows): §Media
+/// states the PUT's path family and its five method/path pairs, the
+/// identifier's two carriers, the seven clauses each by number, the nine
+/// refusals of the family with their statuses, the deposit read's members,
+/// the binding's three answers at the door with `lease_lapsed` the third
+/// token, the INTERIM pins the build carries — the cap, the chunk, the
+/// grain, the identifier's bits, the partial's name, the lease interval and
+/// the horizon, the idle and transfer bounds, the floor, the limits record's
+/// default and its owed channel — and the H1 rows; §Endpoints lists the
+/// family, §Transport the family's cap, §HTTP status codes the nine; and the
+/// vector set the section names pins the same constants.
+#[test]
+fn doc_states_the_upload_its_pins_and_its_refusals() {
+    let media = prose("\n### Media — the reference cell and its door", &["\n### Links (writes)"]);
+    for fact in [
+        "**The upload — the PUT**",
+        "`POST /blob/upload?length=<N>`",
+        "`PATCH /blob/upload/<id>?offset=<K>`",
+        "`GET /blob/upload/<id>`",
+        "`DELETE /blob/upload/<id>`",
+        "`GET /blob/upload`",
+        "`Upload-Id`",
+        "(1) THE IDENTIFIER",
+        "(2) THE PENDING QUOTA",
+        "(3) ONE EXPIRY",
+        "(4) REMOVED ON EXPIRY",
+        "(5) A STREAM CLAIMS ITS UPLOAD FIRST",
+        "(6) REFUSED IS ENDED",
+        "(7) FINISHED, THE LEASE TAKES OVER",
+        "| 400 | `malformed_blob` |",
+        "| 403 | `upload_refused` |",
+        "| 404 | `no_upload` |",
+        "| 409 | `upload_held` |",
+        "| 409 | `upload_offset` |",
+        "| 400 | `upload_length` |",
+        "| 413 | `payload_too_large` |",
+        "| 507 | `deposit_refused` |",
+        "| 500 | `blob_io` |",
+        "{\"base\":0,\"deposits\":[…],\"limits\":null,\"pending\":<bytes>,\"uploads\":[…]}",
+        "`credential_refused`, `detail` `lease_lapsed`",
+        "a hash this principal did not deposit under its own lease",
+        "NO ANSWER OF THE UPLOAD SAYS WHETHER THE FILE WAS ALREADY HERE",
+        "the per-file cap, 64 MiB",
+        "the chunk, 64 KiB",
+        "the partial's fsync grain, 1 MiB",
+        "128 bits",
+        "`.upload-<identifier>`",
+        "the lease interval's default, seven days",
+        "the horizon, thirty days",
+        "the idle bound, 30 s",
+        "the transfer bound, 10 minutes",
+        "the floor, 256 MiB",
+        "AUTH-4.70",
+        "takes no `Serial`",
+        "crates/skepd/tests/it/fixtures/media/uploads.json",
+        "**The H1 rows**",
+    ] {
+        assert!(media.contains(fact), "§Media says {fact:?}");
+    }
+    let endpoints = prose("\n### Endpoints", &["\n### Transport"]);
+    assert!(endpoints.contains("`POST /blob/upload`"), "§Endpoints lists the family");
+    assert!(endpoints.contains("`PATCH /blob/upload/<id>`"), "§Endpoints lists the family's resume");
+    let transport = prose("\n### Transport", &["\n### Identity"]);
+    assert!(transport.contains("**64 MiB** on the blob upload"), "§Transport names the family's cap");
+    let statuses = prose("\n### HTTP status codes", &["\n### Determinism"]);
+    for name in ["malformed_blob", "upload_refused", "no_upload", "upload_held", "upload_offset", "upload_length", "deposit_refused", "blob_io"] {
+        assert!(statuses.contains(&format!("`{name}`")), "§HTTP status codes lists {name}");
+    }
+    let fixture: Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/it/fixtures/media/uploads.json"),
+        )
+        .expect("the vector set the section names exists"),
+    )
+    .expect("the vector set is JSON");
+    assert_eq!(fixture["pins"]["per_file_cap"].as_u64(), Some(64 * 1024 * 1024));
+    assert_eq!(fixture["pins"]["lease_interval_ms"].as_u64(), Some(7 * 24 * 3600 * 1000));
+    assert_eq!(fixture["pins"]["lease_horizon_ms"].as_u64(), Some(30 * 24 * 3600 * 1000));
+    assert_eq!(fixture["refusals"]["deposit_refused"].as_u64(), Some(507));
 }
 
 /// Every `op_at` example is the strict `{"at", "frame"}` envelope around a

@@ -265,16 +265,16 @@ impl Daemon {
                 return with_signal(credential_refused(meta.kind, &r), closed);
             }
         };
-        // THE MEDIA DOOR (media lane A; `media::door`): one step of its own,
-        // after every producer above and ahead of the store, on the same
-        // locked snapshot the commit will read — so the check that passed
-        // and the commit it guards are one interval. A step and never a
-        // producer: from lane B it reads the lease store and `blobs/`, which
-        // no producer may. Its refusal commits nothing and takes the head
-        // writer's turn as an admission refusal does (l7-C1); the admitted
-        // attestation is dropped with the write, as every refusal ahead of
-        // the store drops it.
-        if let Some(refusal) = media_door(snap.world(), &frame.op, binding.principal) {
+        // THE MEDIA DOOR (media lanes A and B; `media::door`): one step of
+        // its own, after every producer above and ahead of the store, on the
+        // same locked snapshot the commit will read — so the check that
+        // passed and the commit it guards are one interval. A step and never
+        // a producer: it reads the lease store and `blobs/` through the
+        // daemon's media gate, which no producer may. Its refusal commits
+        // nothing and takes the head writer's turn as an admission refusal
+        // does (l7-C1); the admitted attestation is dropped with the write,
+        // as every refusal ahead of the store drops it.
+        if let Some(refusal) = media_door(snap.world(), &frame.op, binding.principal, &self.media) {
             self.writes.take_turn_after_refusal(&serial);
             return with_signal(media_door_refused(meta.kind, refusal), closed);
         }

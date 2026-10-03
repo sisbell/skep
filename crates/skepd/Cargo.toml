@@ -39,14 +39,16 @@ client = []
 # `test-hooks` compiles in the test-only code: `Daemon`'s `#[doc(hidden)]`
 # hooks (server/hooks.rs) and the claim-flip hold one of them arms, the
 # `fuzz_support` harness, and the `Permit` re-export the pool hooks return —
-# and turns on nothing in another crate: `skep-signature`'s signer and
-# fixture hooks reach this crate's tests through their own dev-dependency
-# line below, and a consumer that signs names the feature it needs on its
-# own `skep-signature` line. DEFAULT-OFF, and the shipped binary never
-# enables it: this crate's own tests turn it on through the self
-# dev-dependency below, and skep-mcp's tests and skep/fuzz/ on their `skepd`
-# lines, so a build that compiles no test compiles none of it.
-test-hooks = []
+# and turns on ONE thing in another crate: `skep-blobs`'s hazard seam, the
+# hold at a named step of a finish that this crate's own blob-store hold
+# (`Daemon::hold_blob_finish_at`, media lane B) is a door to. `skep-signature`'s
+# signer and fixture hooks reach this crate's tests through their own
+# dev-dependency line below, and a consumer that signs names the feature it
+# needs on its own `skep-signature` line. DEFAULT-OFF, and the shipped
+# binary never enables it: this crate's own tests turn it on through the
+# self dev-dependency below, and skep-mcp's tests and skep/fuzz/ on their
+# `skepd` lines, so a build that compiles no test compiles none of it.
+test-hooks = ["skep-blobs/test-hooks"]
 
 [dependencies]
 # The assembled engine: Engine::open (genesis-or-recover), the Stores<World>
@@ -70,6 +72,11 @@ skep-discovery = { path = "../skep-discovery" }
 # oracle). skepd composes the fold BESIDE the engine — derived state rebuilt
 # from the recovered world, never persisted here.
 skep-identity = { path = "../skep-identity" }
+# THE BLOB STORE (media lane B): the files, the partials, the upload records
+# and the lease log under `blobs/` in the data dir — the PUT's fsync order
+# and the lease's honest-null answer. It knows no principal, lock or limits
+# record; the daemon's gate (`media/gate.rs`) is what reads those.
+skep-blobs = { path = "../skep-blobs" }
 # THE HYBRID ENTRY SIGNATURE's frozen rules (signed ops): `skep-signature` is
 # the one crate that links the signature libraries; skepd calls its verify
 # (AUTH-2.2) — the session verify, the write-path check — and its all-halves
@@ -110,6 +117,12 @@ parking_lot.workspace = true
 # tests with the dump route after all.
 skepd = { path = ".", features = ["test-hooks"], default-features = false }
 tempfile.workspace = true
+# The blob store with its hazard seam named, so the SIGKILL harness can name
+# the step it holds a finish at (`skep_blobs::Step`); and BLAKE3 itself, so
+# the suites hash a file they send and judge the daemon's answer against
+# their own hash — the signer's rule (Q-sm2), applied by the tests.
+skep-blobs = { path = "../skep-blobs", features = ["test-hooks"] }
+blake3.workspace = true
 # Test-side keys (the daemon itself only verifies): the suites' fixed seed
 # carriers are `SigningKey::from_bytes` — the 32 bytes that seed each hybrid
 # key (`common::seed_of`); the crate's `Signer`, over a hybrid key's derived

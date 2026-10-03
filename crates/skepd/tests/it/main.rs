@@ -4,6 +4,7 @@
 
 mod auth_wire;
 mod authz;
+mod blob_routes;
 mod cascade;
 mod chain_at;
 mod chain_head;

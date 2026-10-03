@@ -153,6 +153,7 @@ mod listen;
 // The routes: `Daemon`'s handlers, each an `impl Daemon` block, and the
 // caller each request resolves to.
 mod actor;
+mod blob_routes;
 #[cfg(any(test, feature = "test-hooks"))]
 mod hooks;
 mod op;
@@ -177,10 +178,12 @@ use skep_namespace::PrincipalId;
 use crate::auth::{startup_warnings, AuthOptions, AuthState, PortAlreadyBound, Reissue};
 use crate::codec::JsonCodec;
 use crate::history::History;
-use crate::limits::{MAX_REQUEST_BODY, MAX_SMALL_BODY};
+use crate::limits::{MAX_BLOB_BYTES, MAX_REQUEST_BODY, MAX_SMALL_BODY};
+use crate::media::gate::MediaGate;
 use crate::notice;
 use crate::write_path::WritePath;
 use actor::Resolved;
+use blob_routes::BodySource;
 use reply::{class_varying, refuse, with_signal, TransportError};
 use scan::ClassScans;
 
@@ -205,16 +208,20 @@ const RETAINED_CHECKPOINTS: usize = 2;
 
 /// The body cap for a path — checked on the declared `Content-Length`
 /// before a byte is read, so a route that cannot use a large body is never
-/// asked to allocate for one.
+/// asked to allocate for one. The blob upload's family takes
+/// `MAX_BLOB_BYTES` — the one cap a body never sits whole in memory
+/// under: its two body-carrying methods stream (`server/http.rs`, THE
+/// STREAMING ARM), and the socket reader holds the family's other methods
+/// to the small cap.
 ///
 /// Public because [`HttpRequest`] names it as a caller's obligation: a
 /// caller building a request for [`Daemon::route`] over a transport of its
 /// own takes the bound from here rather than transcribing it, so a
-/// route-scoped raise — the media round [`MAX_REQUEST_BODY`] anticipates —
-/// moves for them too.
+/// route-scoped raise moves for them too.
 pub fn body_cap(path: &str) -> usize {
     match path {
         "/op" | "/op-at" => MAX_REQUEST_BODY,
+        p if blob_routes::is_blob_path(p) => MAX_BLOB_BYTES as usize,
         _ => MAX_SMALL_BODY,
     }
 }
@@ -259,6 +266,11 @@ pub enum DaemonError {
     /// daemon that cannot read the one it was handed does not start on an
     /// empty one: that would lapse every standing block in silence.
     BlockedPrefixes(std::io::Error),
+    /// The blob store under `blobs/` in the data dir (media lane B) could
+    /// not be opened: its two logs tail-checked and compacted, its partials
+    /// reconciled with its records, the directory synced — the data dir
+    /// refusing I/O, as [`DaemonError::Sidecar`] is.
+    Media(std::io::Error),
 }
 
 impl std::fmt::Display for DaemonError {
@@ -267,6 +279,7 @@ impl std::fmt::Display for DaemonError {
             DaemonError::Engine(e) => write!(f, "{e}"),
             DaemonError::Sidecar(e) => write!(f, "change-feed sidecar: {e}"),
             DaemonError::BlockedPrefixes(e) => write!(f, "blocked-prefix list: {e}"),
+            DaemonError::Media(e) => write!(f, "blob store: {e}"),
         }
     }
 }
@@ -280,6 +293,7 @@ impl std::error::Error for DaemonError {
             DaemonError::Engine(e) => Some(e),
             DaemonError::Sidecar(e) => Some(e),
             DaemonError::BlockedPrefixes(e) => Some(e),
+            DaemonError::Media(e) => Some(e),
         }
     }
 }
@@ -287,7 +301,10 @@ impl std::error::Error for DaemonError {
 /// The paths this daemon serves — the one place the route set is stated, so
 /// preflight, method refusal and dispatch cannot disagree about what exists.
 /// A known path answers `OPTIONS` with a preflight and a wrong method with
-/// `405`; everything else is the ordinary `404`.
+/// `405`; everything else is the ordinary `404`. The blob upload's path
+/// family (media lane B) is known as a family: `/blob/upload` and
+/// `/blob/upload/<id>`, the latter known for any `<id>` and refused by name
+/// where it is no identifier.
 fn path_is_known(path: &str) -> bool {
     matches!(
         path,
@@ -295,6 +312,7 @@ fn path_is_known(path: &str) -> bool {
             | "/changes" | "/chain"
     ) || (cfg!(feature = "observe") && path == "/dump")
         || (cfg!(feature = "client") && path == "/")
+        || blob_routes::is_blob_path(path)
 }
 
 // The token ↔ session binding, the handshake, and per-request resolution
@@ -336,6 +354,14 @@ pub struct Daemon {
     /// gate, never of the substrate): M8 and M7 are asked or not asked, and
     /// never told.
     scans: ClassScans,
+    /// The daemon's MEDIA resource (media lane B): the blob store under
+    /// `blobs/` in the data dir — the files, the partials, the upload
+    /// records and the lease log — the limits in force, the hold a stream
+    /// has on its upload, and the binding the write door asks. The PUT's
+    /// routes reach it as `op.rs` reaches the write path; the door reads
+    /// it under the plain sequence's locks. It commits nothing to the
+    /// journal and takes no `Serial`.
+    media: MediaGate,
     /// The dirty-crash harness's one seam into the claim's step
     /// (`Daemon::hold_between_the_claim_and_its_head`): armed, the
     /// claim-flip tail announces the crash window and parks there, both
@@ -488,6 +514,14 @@ impl Daemon {
             let snap = engine.kernel().snapshot();
             AuthState::open(opts, snap.world()).map_err(DaemonError::BlockedPrefixes)?
         };
+        // THE BLOB STORE, opened under `blobs/` beside the journal: its
+        // reconciliation and compaction complete here, before anything is
+        // served (the record: "OPEN's PASSES OVER BOTH STORES … COMPLETE
+        // BEFORE THE DAEMON SERVES ITS FIRST REQUEST"). The limits in force
+        // — the daemon's defaults until the serving layer's channel installs
+        // a record (AUTH-4.70, owed) — are named on the operator stream.
+        let media = MediaGate::open(data_dir).map_err(DaemonError::Media)?;
+        notice::line(media.limits().log_line());
         let daemon = Daemon {
             engine,
             febe,
@@ -496,6 +530,7 @@ impl Daemon {
             writes,
             history: History::new(),
             scans: ClassScans::new(),
+            media,
             #[cfg(any(test, feature = "test-hooks"))]
             hold_between_claim_and_head: AtomicBool::new(false),
         };
@@ -654,11 +689,20 @@ impl Daemon {
     /// ([`Daemon::reissue_blocked_prefixes`]) — ahead of dispatch and of
     /// every lock, so a reissue is in force before the request that noticed
     /// it resolves its own actor, `/events` included.
+    ///
+    /// THE BLOB UPLOAD's BODY (media lane B): a request of that family's two
+    /// body-carrying methods arrives from the socket reader with its body
+    /// PARKED for this thread rather than in `body` (`server/http.rs`, THE
+    /// STREAMING ARM), and this router takes it here, at the head of every
+    /// routing — so a body parked for one request is never read by the
+    /// next. A caller over its own transport parks nothing, and the route
+    /// reads the request's own `body` instead.
     pub fn route(&self, req: &HttpRequest) -> Routed {
+        let parked = blob_routes::take_parked();
         self.reissue_blocked_prefixes();
         match (req.method.as_str(), req.path.as_str()) {
             ("GET", "/events") => Routed::EventStream,
-            _ => Routed::Reply(self.reply(req)),
+            _ => Routed::Reply(self.reply(req, parked)),
         }
     }
 
@@ -666,14 +710,27 @@ impl Daemon {
     /// stream, decided in one match. The token-accepting set (AUTH-4.43) is
     /// the arms wearing [`Daemon::token_route`]: `/op`, `/op-at`,
     /// `/changes`, `/dump` and `/session/close` here, plus `/events`, which
-    /// the accept path runs by hand because a stream is not a [`Reply`].
+    /// the accept path runs by hand because a stream is not a [`Reply`] —
+    /// and the blob upload's family, whose every method resolves its actor
+    /// the same way inside `blob_route` and carries the signal the same.
     /// `/health`, `/chain`, `/challenge`, `/session` and `/` are token-blind
     /// by design.
-    fn reply(&self, req: &HttpRequest) -> Reply {
+    fn reply(&self, req: &HttpRequest, parked: Option<BodySource<'static>>) -> Reply {
         match (req.method.as_str(), req.path.as_str()) {
+            // The blob family's preflight names its own four methods; every
+            // other known path keeps the common preflight, byte-identical.
+            ("OPTIONS", p) if blob_routes::is_blob_path(p) => Reply::preflight_blob(),
             // CORS preflight (wire v4): 204 on any known path; an unknown
             // path falls through to the ordinary 404 below.
             ("OPTIONS", p) if path_is_known(p) => Reply::preflight(),
+            // THE BLOB UPLOAD (media lane B; wire.md §Media): the family's
+            // five method/path pairs, dispatched inside — each answer a
+            // function of the presented token, so each wears the
+            // class-varying headers as `/op`'s does.
+            (_, p) if blob_routes::is_blob_path(p) => {
+                let mut source = parked.unwrap_or_else(|| BodySource::bytes(&req.body));
+                class_varying(self.blob_route(req, &mut source))
+            }
             ("GET", "/challenge") => self.get_challenge(req.query.as_deref()),
             ("POST", "/session") => self.post_session(req),
             ("POST", "/session/close") => {

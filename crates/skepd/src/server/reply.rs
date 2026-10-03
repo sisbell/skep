@@ -130,6 +130,23 @@ impl Reply {
             ],
         }
     }
+
+    /// The CORS preflight of the blob upload's path family (media lane B;
+    /// wire.md §Media): the four methods the family dispatches — the
+    /// creation and the deposit read, the resume, the end — named, so a
+    /// browser sends them cross-origin; every other known path keeps
+    /// [`Reply::preflight`]'s three, byte-identical to before the family.
+    pub(super) fn preflight_blob() -> Reply {
+        Reply {
+            status: 204,
+            body: None,
+            headers: vec![
+                ("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS"),
+                ("Access-Control-Allow-Headers", "Content-Type, Skepd-Session"),
+                ("Access-Control-Max-Age", CORS_MAX_AGE_SECS),
+            ],
+        }
+    }
 }
 
 /// One routing decision. Almost everything is a complete [`Reply`]; the
@@ -200,6 +217,29 @@ pub(super) enum TransportError {
     MalformedHttp,
     PayloadTooLarge,
     InternalPanic,
+    // The blob upload (media lane B; wire.md §Media) — every refusal of
+    // the PUT's path family, each a transport refusal: no `Op` ran.
+    /// The request's query or identifier is not the documented shape.
+    MalformedBlob,
+    /// The session-layer gate at the route: a guest, an unclaimed board, a
+    /// node-tier principal — `detail` names which.
+    UploadRefused,
+    /// An identifier the requester's own records do not name — expired,
+    /// ended, another's, never minted: one answer.
+    NoUpload,
+    /// Another stream holds the upload (clause (5)).
+    UploadHeld,
+    /// The stated offset is not the record's; carries `offset`, the
+    /// record's.
+    UploadOffset,
+    /// The request's bytes would pass the declared length.
+    UploadLength,
+    /// The gate's refusal: `scope` names which of the three fired, `ended`
+    /// whether the upload was ended (refused as the body was written) or
+    /// kept (refused before it), `offset` the bytes received.
+    DepositRefused,
+    /// The blob store refused I/O.
+    BlobIo,
 }
 
 impl TransportError {
@@ -224,6 +264,14 @@ impl TransportError {
             TransportError::MalformedHttp => "malformed_http",
             TransportError::PayloadTooLarge => "payload_too_large",
             TransportError::InternalPanic => "internal_panic",
+            TransportError::MalformedBlob => "malformed_blob",
+            TransportError::UploadRefused => "upload_refused",
+            TransportError::NoUpload => "no_upload",
+            TransportError::UploadHeld => "upload_held",
+            TransportError::UploadOffset => "upload_offset",
+            TransportError::UploadLength => "upload_length",
+            TransportError::DepositRefused => "deposit_refused",
+            TransportError::BlobIo => "blob_io",
         }
     }
 
@@ -242,17 +290,26 @@ impl TransportError {
             | TransportError::BeyondHead
             | TransportError::NotAPosition
             | TransportError::MalformedHttp
-            | TransportError::MalformedAt => 400,
-            TransportError::NoSuchEndpoint => 404,
+            | TransportError::MalformedAt
+            | TransportError::MalformedBlob
+            | TransportError::UploadLength => 400,
+            TransportError::UploadRefused => 403,
+            TransportError::NoSuchEndpoint | TransportError::NoUpload => 404,
             TransportError::MethodNotAllowed => 405,
+            // The standard shape's two conflicts: a held upload, a stated
+            // offset that is not the record's.
+            TransportError::UploadHeld | TransportError::UploadOffset => 409,
             TransportError::HistoryReclaimed => 410,
             TransportError::PayloadTooLarge => 413,
             TransportError::NoJournal
             | TransportError::HistoryIo
             | TransportError::HistoryCorrupt
-            | TransportError::InternalPanic => 500,
+            | TransportError::InternalPanic
+            | TransportError::BlobIo => 500,
             // The two retry-class refusals: a pool is momentarily full.
             TransportError::HistoryBusy | TransportError::ScanBusy => 503,
+            // The gate's: the scope it names has no room for these bytes.
+            TransportError::DepositRefused => 507,
         }
     }
 }
@@ -273,10 +330,12 @@ pub(super) fn reason_phrase(status: u16) -> Option<&'static str> {
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        409 => "Conflict",
         410 => "Gone",
         413 => "Payload Too Large",
         500 => "Internal Server Error",
         503 => "Service Unavailable",
+        507 => "Insufficient Storage",
         _ => return None,
     })
 }
@@ -315,10 +374,11 @@ pub(super) fn refuse_over_budget(budget: usize, fits: usize) -> Reply {
 }
 
 /// The same refusal carrying the diagnostic fields a few errors name —
-/// `head`, `nearest`, `floor`, `budget` and `fits` — the coordinate a caller
-/// needs to ask a better question. `error` is appended here, so a field list
-/// can never omit it.
-fn refuse_with(err: TransportError, fields: Vec<(&'static str, Value)>) -> Reply {
+/// `head`, `nearest`, `floor`, `budget` and `fits`, the blob upload's
+/// `offset`, `scope` and `ended` — the coordinate a caller needs to ask a
+/// better question. `error` is appended here, so a field list can never
+/// omit it.
+pub(super) fn refuse_with(err: TransportError, fields: Vec<(&'static str, Value)>) -> Reply {
     let mut pairs = fields;
     pairs.push(("error", Value::String(err.name().into())));
     Reply::json(err.status(), obj(pairs))
@@ -430,12 +490,12 @@ pub(super) fn credential_refused(kind: OpKind, r: &CredentialRefusal) -> Reply {
     op_answer(credential_refused_reply(kind, r.token(), r.disposition()))
 }
 
-/// THE MEDIA DOOR's refusal as its 200-enveloped rejection (media lane A;
-/// wire.md §Media): the two arms that are M10's own codes —
+/// THE MEDIA DOOR's refusal as its 200-enveloped rejection (media lanes A
+/// and B; wire.md §Media): the two arms that are M10's own codes —
 /// `published_target`, and `not_owner` naming the draft — are built as M10
 /// builds them, [`Rejection::classified`] over the flat code (its
 /// disposition and standing detail M10's own, so the bytes are the store's
-/// bytes) and marshaled by the one codec; the two that are the daemon's
+/// bytes) and marshaled by the one codec; the three that are the daemon's
 /// tokens ride `credential_refused` as every daemon-side refusal does
 /// ([`credential_refused`]'s row), the token and the class the refusal's
 /// own ([`MediaRefusal::token`], [`MediaRefusal::disposition`]).
@@ -452,10 +512,10 @@ pub(super) fn media_door_refused(kind: OpKind, refusal: MediaRefusal) -> Reply {
             RejectCode::NotOwner,
             Some(FaultSite { addr: Some(draft), ..FaultSite::default() }),
         ),
-        // Both carry a token: answered above.
-        MediaRefusal::UnboundCell | MediaRefusal::UnknownCellSchema => {
-            unreachable!("a media token rides credential_refused")
-        }
+        // All three carry a token: answered above.
+        MediaRefusal::UnboundCell
+        | MediaRefusal::UnknownCellSchema
+        | MediaRefusal::LeaseLapsed => unreachable!("a media token rides credential_refused"),
     };
     op_answer(JsonCodec.marshal(&Response::Rejected(rejection)))
 }
@@ -580,6 +640,14 @@ mod tests {
             (TransportError::NoJournal, "no_journal", 500),
             (TransportError::HistoryBusy, "history_busy", 503),
             (TransportError::ScanBusy, "scan_busy", 503),
+            (TransportError::MalformedBlob, "malformed_blob", 400),
+            (TransportError::UploadRefused, "upload_refused", 403),
+            (TransportError::NoUpload, "no_upload", 404),
+            (TransportError::UploadHeld, "upload_held", 409),
+            (TransportError::UploadOffset, "upload_offset", 409),
+            (TransportError::UploadLength, "upload_length", 400),
+            (TransportError::DepositRefused, "deposit_refused", 507),
+            (TransportError::BlobIo, "blob_io", 500),
         ];
         for &(err, name, status) in &table {
             assert_eq!(err.name(), name, "wire name drifted for {err:?}");
@@ -635,6 +703,21 @@ mod tests {
         for status in [rejected.status, blocked.status, Reply::preflight().status, 200] {
             assert!(reason_phrase(status).is_some(), "{status} has no reason phrase");
         }
+    }
+
+    /// The blob family's preflight names the four methods the family
+    /// dispatches and keeps the other two headers the common preflight
+    /// carries; the common preflight is unchanged — the wire of every other
+    /// path byte-identical to before the family.
+    #[test]
+    fn the_blob_preflight_names_the_familys_methods_and_the_common_one_is_unmoved() {
+        let common = Reply::preflight();
+        let blob = Reply::preflight_blob();
+        assert_eq!(common.headers[0], ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"));
+        assert_eq!(blob.headers[0], ("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS"));
+        assert_eq!(common.headers[1..], blob.headers[1..]);
+        assert_eq!(blob.status, 204);
+        assert!(blob.body.is_none());
     }
 
     /// The `scan_busy` refusal's exact body: a transport refusal (no `resp`,

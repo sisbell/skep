@@ -1140,3 +1140,167 @@ impl Sse {
         }
     }
 }
+
+// ── the blob upload (media lane B; wire.md §Media) ───────────────────────
+
+/// The blob upload's path family, as wire.md §Media pins it.
+pub const BLOB_UPLOAD: &str = "/blob/upload";
+
+/// BLAKE3 of `bytes` as the 64 lowercase hex the PUT answers — the suites'
+/// OWN hash, judged against the daemon's and never adopted from it (Q-sm2).
+pub fn blob_hex(bytes: &[u8]) -> String {
+    blake3::hash(bytes).to_hex().to_string()
+}
+
+/// `n` seeded pseudo-random bytes (SplitMix64), so a suite sends a large
+/// body it never has to store in a fixture and two suites agree on it.
+pub fn seeded_bytes(n: usize, seed: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(n);
+    let mut x = seed ^ 0x9E37_79B9_7F4A_7C15;
+    while out.len() < n {
+        x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = x;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        let take = (n - out.len()).min(8);
+        out.extend_from_slice(&z.to_le_bytes()[..take]);
+    }
+    out
+}
+
+/// One exchange of the blob family: the request written WHOLE, every
+/// write error ignored — the daemon refuses a creation on its declared
+/// total, and ends a refused upload mid-body, BEFORE it has read the body,
+/// and closes, so a client still writing meets a broken pipe, which is
+/// the refusal working — then the answer read to any end. Unlike
+/// [`http_full`], which panics on a write the daemon declined to read;
+/// unlike [`raw_exchange`], under deadlines a body at the cap and its
+/// finish's fsyncs fit.
+pub fn blob_exchange(
+    port: u16,
+    method: &str,
+    path: &str,
+    token: Option<&str>,
+    body: &[u8],
+) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    let ctx = format!("{method} {path}");
+    let mut stream = TcpStream::connect(("127.0.0.1", port))
+        .unwrap_or_else(|e| panic!("{ctx}: connect to skepd: {e}"));
+    stream.set_nodelay(true).ok();
+    stream.set_read_timeout(Some(Duration::from_secs(120))).expect("read timeout");
+    stream.set_write_timeout(Some(Duration::from_secs(120))).expect("write timeout");
+    let mut head = format!(
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: {}\r\n",
+        body.len()
+    );
+    if let Some(tok) = token {
+        head.push_str(&format!("Skepd-Session: {tok}\r\n"));
+    }
+    head.push_str("\r\n");
+    let _ = stream.write_all(head.as_bytes());
+    let _ = stream.write_all(body);
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    let mut raw = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => raw.extend_from_slice(&chunk[..n]),
+            // A reset after the answer (the daemon closed with our body
+            // unread) ends the read as EOF does; the bytes before it are
+            // the answer.
+            Err(_) => break,
+        }
+    }
+    assert!(!raw.is_empty(), "{ctx}: the daemon closed without answering");
+    parse_response(&raw, &ctx)
+}
+
+/// THE CREATION: `POST /blob/upload?length=<length>` with `body` — empty
+/// for the two-step shape, the first bytes (or all of them) for the
+/// creation-with-upload. Answers the exchange whole.
+pub fn blob_create(
+    port: u16,
+    token: Option<&str>,
+    length: u64,
+    body: &[u8],
+) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    blob_exchange(port, "POST", &format!("{BLOB_UPLOAD}?length={length}"), token, body)
+}
+
+/// THE RESUME: `PATCH /blob/upload/<id>?offset=<offset>` with `body`.
+pub fn blob_append(
+    port: u16,
+    token: Option<&str>,
+    id: &str,
+    offset: u64,
+    body: &[u8],
+) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    blob_exchange(port, "PATCH", &format!("{BLOB_UPLOAD}/{id}?offset={offset}"), token, body)
+}
+
+/// THE PROGRESS: `GET /blob/upload/<id>`.
+pub fn blob_progress(port: u16, token: Option<&str>, id: &str) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    blob_exchange(port, "GET", &format!("{BLOB_UPLOAD}/{id}"), token, b"")
+}
+
+/// THE DEPOSIT READ: `GET /blob/upload`.
+pub fn blob_read(port: u16, token: Option<&str>) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    blob_exchange(port, "GET", BLOB_UPLOAD, token, b"")
+}
+
+/// THE END: `DELETE /blob/upload/<id>`.
+pub fn blob_end(port: u16, token: Option<&str>, id: &str) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    blob_exchange(port, "DELETE", &format!("{BLOB_UPLOAD}/{id}"), token, b"")
+}
+
+/// One whole PUT — the creation-with-upload of `bytes` in one request —
+/// asserting the finish and judging the daemon's hash against the suite's
+/// own. Answers the finish's body.
+pub fn put_whole(port: u16, token: &str, bytes: &[u8]) -> Value {
+    let (st, _, body) = blob_create(port, Some(token), bytes.len() as u64, bytes);
+    assert_eq!(st, 200, "the PUT: {}", String::from_utf8_lossy(&body));
+    let v = json(&body);
+    assert_eq!(v["hash"].as_str(), Some(blob_hex(bytes).as_str()), "the daemon's hash is the suite's own: {v}");
+    assert_eq!(v["size"].as_u64(), Some(bytes.len() as u64));
+    assert_eq!(v["designation"].as_str(), Some("blake3"));
+    v
+}
+
+/// The deposits a principal's read lists, as `(hash, size, lapsed)`.
+pub fn deposits_of(port: u16, token: &str) -> Vec<(String, u64, bool)> {
+    let (st, _, body) = blob_read(port, Some(token));
+    assert_eq!(st, 200, "the deposit read: {}", String::from_utf8_lossy(&body));
+    json(&body)["deposits"]
+        .as_array()
+        .expect("deposits")
+        .iter()
+        .map(|d| {
+            (
+                d["hash"].as_str().expect("hash").to_string(),
+                d["size"].as_u64().expect("size"),
+                d["lapsed"].as_bool().expect("lapsed"),
+            )
+        })
+        .collect()
+}
+
+/// The canonical cell of `bytes` at `size` — the form the daemon's parser
+/// admits (wire.md §Media), the hash the suite's own.
+pub fn cell_of(bytes: &[u8], size: u64) -> String {
+    format!(r#"{{"type":"1.1.0.1.0.1.0.3.89","hash":"{}","size":{size}}}"#, blob_hex(bytes))
+}
+
+/// Insert the cell of `bytes` into `draft` at ordinal 1 and answer the
+/// verdict (`ok`, or `credential_refused:<token>`).
+pub fn insert_cell(port: u16, token: &str, draft: &str, bytes: &[u8], size: u64) -> String {
+    let frame = json!({
+        "op": "insert",
+        "doc": draft,
+        "at": {"subspace": "1", "ordinal": "1"},
+        "values": [{"atom": cell_of(bytes, size)}],
+    })
+    .to_string();
+    verdict(&op(port, Some(token), &frame))
+}

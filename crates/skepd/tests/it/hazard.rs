@@ -20,6 +20,16 @@
 //!   daemon's hold seam, the kernel hazard suite's self-exec pattern —
 //!   reopens to a claimed board WITH `H.1`, written by the open before it
 //!   serves, and takes an attested write at once.
+//! * **E′ and H′ — the blob store** (media lane B; M-I5 (a) DURABLE
+//!   BEFORE NAMED, ANSWERED AFTER RECORDED): the E program over whole-file
+//!   PUTs — the real binary killed at seeded moments under PUT load; every
+//!   acked PUT answers after reopen, listed to its principal and whole on
+//!   disk, every un-acked one absent, a partial, or the finish's one
+//!   residue, a leased whole file; no orphan partial stands — and the hold
+//!   family inside the finish: power lost between the rename and the
+//!   directory fsync, after a first rename into a new designation
+//!   directory, and between a finish's rename and its record's retirement,
+//!   each a child killed at the store's hold seam and the reopen judged.
 //!
 //! Finding protocol (per the H3 ruling): a test that discovers a real
 //! violation is converted to `#[ignore = "FINDING-<n>: …"]` with its
@@ -38,12 +48,14 @@ use std::thread;
 use std::time::Duration;
 
 use common::{
-    acked_addr, acked_at, board_term, ceremony_before_the_claim, claim_frame, claimed,
-    device_key, expect_resp, head_position, json, op, open_session, open_signed_session,
-    spawn_configured, spawn_unclaimed, typed_link_frame, CLAIMANT_ACCOUNT, CLAIMANT_DOC1,
-    CLAIMANT_PRINCIPAL, HEAD_MEMBER_1, T_ENROLL, T_GRANT,
+    acked_addr, acked_at, blob_hex, board_term, cell_of, ceremony_before_the_claim, claim_board,
+    claim_frame, claimed, create_frame, device_key, expect_resp, head_position, json, op,
+    open_session, open_signed_session, seeded_bytes, spawn_configured, spawn_unclaimed,
+    typed_link_frame, verdict, BLOB_UPLOAD, CLAIMANT_ACCOUNT, CLAIMANT_DOC1, CLAIMANT_PRINCIPAL,
+    HEAD_MEMBER_1, T_ENROLL, T_GRANT,
 };
 use serde_json::Value;
+use skep_blobs::Step;
 use skep_engine::{Engine, KernelConfig};
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, SaltSource};
 use skepd::{Daemon, HttpRequest, Reply, Routed, Seq};
@@ -74,7 +86,7 @@ impl SplitMix64 {
 
 /// Spawn the real `skepd` binary on an ephemeral port (`--port 0`); the
 /// bound port is parsed from its startup line.
-fn spawn_skepd(dir: &Path) -> (Child, u16) {
+pub(crate) fn spawn_skepd(dir: &Path) -> (Child, u16) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_skepd"))
         .arg("--data-dir")
         .arg(dir)
@@ -964,4 +976,324 @@ fn h_a_crash_between_the_claim_and_its_head_reopens_with_h1() {
     assert_eq!(d.log_position().0, at, "a clean reopen of a headed board writes no head");
     let v = route_op(&d, None, &retrieve_frame("1.1.0.1.0.2.2", 1));
     assert_ne!(v["resp"].as_str(), Some("delivery"), "no H.2 was written: {v}");
+}
+
+// ── E′. The blob store under SIGKILL (media lane B) ──────────────────────
+
+/// One whole PUT of `bytes` that treats every transport mishap — refused
+/// connect, reset, partial response, a non-200 — as "no ack": the honest
+/// client view while the daemon is being killed. A parsed 200 body comes
+/// back whole.
+fn try_put(port: u16, token: &str, bytes: &[u8]) -> Option<Value> {
+    let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
+    let _ = s.set_nodelay(true);
+    let _ = s.set_read_timeout(Some(Duration::from_secs(30)));
+    let _ = s.set_write_timeout(Some(Duration::from_secs(30)));
+    let head = format!(
+        "POST {BLOB_UPLOAD}?length={} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
+         Content-Length: {}\r\nSkepd-Session: {token}\r\n\r\n",
+        bytes.len(),
+        bytes.len()
+    );
+    s.write_all(head.as_bytes()).ok()?;
+    s.write_all(bytes).ok()?;
+    let mut raw = Vec::new();
+    s.read_to_end(&mut raw).ok()?;
+    let sep = raw.windows(4).position(|w| w == b"\r\n\r\n")?;
+    if !raw.starts_with(b"HTTP/1.1 200 ") {
+        return None;
+    }
+    serde_json::from_slice(&raw[sep + 4..]).ok()
+}
+
+/// The principal's deposit read through the socket-free router, as
+/// `(hash → (size, lapsed), the standing uploads' (id, offset))`.
+fn deposit_read(d: &Daemon, token: &str) -> (std::collections::HashMap<String, (u64, bool)>, Vec<(String, u64)>) {
+    let r = route_raw(d, "GET", BLOB_UPLOAD, None, Some(token), b"");
+    assert_eq!(r.status, 200, "the deposit read: {}", String::from_utf8_lossy(r.bytes()));
+    let v = json(r.bytes());
+    let deposits = v["deposits"]
+        .as_array()
+        .expect("deposits")
+        .iter()
+        .map(|d| {
+            (
+                d["hash"].as_str().expect("hash").to_string(),
+                (d["size"].as_u64().expect("size"), d["lapsed"].as_bool().expect("lapsed")),
+            )
+        })
+        .collect();
+    let uploads = v["uploads"]
+        .as_array()
+        .expect("uploads")
+        .iter()
+        .map(|u| (u["upload"].as_str().expect("upload").to_string(), u["offset"].as_u64().expect("offset")))
+        .collect();
+    (deposits, uploads)
+}
+
+/// THE STORE's INVARIANTS after a reopen, judged over the directory and
+/// the principal's read together: every listed deposit is a whole file at
+/// its hash; every standing upload's partial is exactly its offset long;
+/// and no partial stands that no upload names.
+fn judge_store_whole(d: &Daemon, dir: &Path, token: &str, ctx: &str) {
+    let blake3_dir = dir.join("blobs").join("blake3");
+    let (deposits, uploads) = deposit_read(d, token);
+    for (hex, (size, lapsed)) in &deposits {
+        assert!(!lapsed, "FINDING (E′, {ctx}): a listed deposit {hex} reads as lapsed");
+        let bytes = fs::read(blake3_dir.join(hex))
+            .unwrap_or_else(|e| panic!("FINDING (E′, {ctx}): a leased file {hex} is not there: {e}"));
+        assert_eq!(bytes.len() as u64, *size, "FINDING (E′, {ctx}): {hex}'s length");
+        assert_eq!(blob_hex(&bytes), *hex, "FINDING (E′, {ctx}): a leased file's bytes are not its hash's");
+    }
+    for (id, offset) in &uploads {
+        let len = fs::metadata(blake3_dir.join(format!(".upload-{id}")))
+            .unwrap_or_else(|e| panic!("FINDING (E′, {ctx}): a standing upload {id} has no partial: {e}"))
+            .len();
+        assert_eq!(len, *offset, "FINDING (E′, {ctx}): a partial's length is its record's offset");
+    }
+    if let Ok(entries) = fs::read_dir(&blake3_dir) {
+        for e in entries {
+            let name = e.expect("entry").file_name().to_string_lossy().into_owned();
+            if let Some(id) = name.strip_prefix(".upload-") {
+                assert!(
+                    uploads.iter().any(|(u, _)| u == id),
+                    "FINDING (E′, {ctx}): an orphan partial {name} stands after the reopen"
+                );
+            }
+        }
+    }
+}
+
+/// E′ — ACKED PUTs SURVIVE SIGKILL (M-I5 (a); the E program over the blob
+/// store): the real binary under sustained whole-file PUT load is killed at
+/// a seeded moment; after the reopen every acked PUT is listed to its
+/// principal and whole on disk at its hash; at most one un-acked PUT
+/// stands, as a leased whole file (the finish landed before the kill) or a
+/// standing partial no longer than its bytes; and the store's invariants
+/// hold whole.
+#[test]
+fn e_blob_acked_puts_survive_sigkill() {
+    let trials: u64 = if exhaustive() { 24 } else { 8 };
+    let mut total_acked = 0usize;
+    let mut unacked_landed = 0usize;
+    for trial in 0..trials {
+        let (acked, landed) = e_blob_trial(trial);
+        total_acked += acked;
+        unacked_landed += landed;
+    }
+    println!(
+        "E′: {trials} SIGKILL trials (seeds 0xB000+trial), {total_acked} acked PUTs verified whole \
+         and listed, {unacked_landed} un-acked PUTs whose finish landed before the kill"
+    );
+}
+
+fn e_blob_trial(trial: u64) -> (usize, usize) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("data");
+    let (child, port) = spawn_skepd(&dir);
+    let child = Arc::new(Mutex::new(child));
+    // The board claimed over the wire (healthy: the killer waits on `go`).
+    claim_board(port);
+    let token = open_session(port, CLAIMANT_PRINCIPAL);
+
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    let killer = {
+        let child = Arc::clone(&child);
+        thread::spawn(move || {
+            let _ = go_rx.recv();
+            let mut rng = SplitMix64::new(0xB000 + trial);
+            thread::sleep(Duration::from_millis(25 + rng.next_range(400)));
+            let _ = child.lock().expect("child lock").kill();
+        })
+    };
+
+    // Sustained whole-file PUTs of seeded bytes at seeded sizes.
+    let mut rng = SplitMix64::new(0xB100 + trial);
+    let mut acked: Vec<(String, Vec<u8>)> = Vec::new();
+    go_tx.send(()).expect("killer is waiting");
+    let mut i: u64 = 0;
+    loop {
+        i += 1;
+        let n = 1 + rng.next_range(300 * 1024) as usize;
+        let bytes = seeded_bytes(n, 0xB200 + trial * 100_000 + i);
+        match try_put(port, &token, &bytes) {
+            Some(v) => {
+                assert_eq!(v["hash"].as_str(), Some(blob_hex(&bytes).as_str()), "E′ trial {trial}: the ack's hash");
+                acked.push((blob_hex(&bytes), bytes));
+            }
+            None => break,
+        }
+        assert!(i < 100_000, "E′ trial {trial}: the killer never fired");
+    }
+    killer.join().expect("killer thread");
+    {
+        let mut c = child.lock().expect("child lock");
+        let _ = c.kill();
+        let _ = c.wait();
+    }
+
+    // Judge: reopen in-process.
+    let ctx = format!("E′ trial {trial} (seed 0xB000+{trial}), {} acks", acked.len());
+    let d = timed_daemon_open(&dir, &ctx);
+    let token = route_session(&d, CLAIMANT_PRINCIPAL);
+    let (deposits, uploads) = deposit_read(&d, &token);
+    for (hex, bytes) in &acked {
+        let (size, lapsed) = deposits
+            .get(hex)
+            .unwrap_or_else(|| panic!("FINDING (E′, {ctx}): acked PUT {hex} is not listed after reopen"));
+        assert_eq!((*size, *lapsed), (bytes.len() as u64, false), "FINDING (E′, {ctx}): {hex}");
+        let on_disk = fs::read(dir.join("blobs").join("blake3").join(hex))
+            .unwrap_or_else(|e| panic!("FINDING (E′, {ctx}): acked PUT {hex} is not on disk: {e}"));
+        assert_eq!(&on_disk, bytes, "FINDING (E′, {ctx}): acked PUT {hex}'s bytes");
+    }
+    // At most ONE un-acked PUT can have landed (the single in-flight
+    // request at the kill), as a leased whole file; at most one partial.
+    let landed = deposits.len().saturating_sub(acked.len());
+    assert!(landed <= 1, "FINDING (E′, {ctx}): {landed} deposits past the acked set");
+    assert!(uploads.len() <= 1, "FINDING (E′, {ctx}): {} standing uploads", uploads.len());
+    judge_store_whole(&d, &dir, &token, &ctx);
+    (acked.len(), landed)
+}
+
+// ── H′. A crash inside the finish (media lane B) ─────────────────────────
+
+/// The child's environment: the data dir and the step the finish is held
+/// at. Set by the parent alone; their presence IS child mode.
+const BLOB_CRASH_DIR: &str = "SKEP_HAZARD_BLOB_CRASH_DIR";
+const BLOB_CRASH_STEP: &str = "SKEP_HAZARD_BLOB_CRASH_STEP";
+
+/// The bytes the held PUT carries.
+const HELD_BYTES: &[u8] = b"the bytes a crash inside the finish leaves behind";
+
+fn blob_step(name: &str) -> Step {
+    match name {
+        "dir_sync" => Step::DirSync,
+        "root_sync" => Step::RootSync,
+        "record_retire" => Step::RecordRetire,
+        other => panic!("no hold named {other}"),
+    }
+}
+
+/// The child: a fresh board served in-process and claimed, the store's
+/// hold seam armed at `step`, one whole PUT — whose finish parks at the
+/// hold, announced on stderr for the parent to kill. Never returns.
+fn blob_crash_child(dir: &Path, step: &str) -> ! {
+    let sd = spawn_unclaimed(dir);
+    let port = sd.port();
+    claim_board(port);
+    sd.daemon().hold_blob_finish_at(blob_step(step));
+    let token = open_session(port, CLAIMANT_PRINCIPAL);
+    let _ = try_put(port, &token, HELD_BYTES);
+    panic!("the PUT answered: the blob store's hold seam did not hold");
+}
+
+/// H′ — A CRASH INSIDE THE FINISH REOPENS TO WHAT THE ORDER PROMISES
+/// (M-I5 (a); `media.md` Op inventory 1, the lease's crash story: "a crash
+/// leaves at worst a blob with no lease, unreferenced and prunable, and
+/// never a lease naming bytes that are not there"; clause (7): "a crash
+/// anywhere in the finish leaves at worst a record that open's
+/// reconciliation retires, beside a file the lease holds or the pruner may
+/// take"). Three children, each killed at a named hold of the finish —
+/// BEFORE THE DIRECTORY FSYNC (between the rename and the directory's
+/// sync), BEFORE THE ROOT FSYNC (after the first rename into a designation
+/// directory this process created), and BEFORE THE RECORD's RETIREMENT
+/// (after the lease's sync) — and the reopen judged: at the first two the
+/// un-acked PUT is ABSENT from its principal's view (no lease, the file on
+/// disk leaseless and prunable, its cell refused `unbound_cell`, its record
+/// retired by the reconciliation), and a re-PUT of the bytes answers and
+/// binds; at the third the lease stands over a whole file — the finish's
+/// one residue — listed, its cell admitted, its record retired. No partial
+/// stands after any of the three.
+#[test]
+fn h_a_crash_inside_the_blob_finish_reopens_to_what_the_order_promises() {
+    if let (Some(dir), Ok(step)) = (std::env::var_os(BLOB_CRASH_DIR), std::env::var(BLOB_CRASH_STEP)) {
+        blob_crash_child(Path::new(&dir), &step);
+    }
+    let hex = blob_hex(HELD_BYTES);
+    for step in ["dir_sync", "root_sync", "record_retire"] {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("data");
+        fs::create_dir_all(&dir).expect("data dir");
+        let exe = std::env::current_exe().expect("test binary path");
+        let mut child = Command::new(exe)
+            .args([
+                "hazard::h_a_crash_inside_the_blob_finish_reopens_to_what_the_order_promises",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(BLOB_CRASH_DIR, &dir)
+            .env(BLOB_CRASH_STEP, step)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn the blob-crash child");
+        let stderr = child.stderr.take().expect("child stderr");
+        let (tx, rx) = mpsc::channel::<()>();
+        let reader = thread::spawn(move || {
+            for line in BufReader::new(stderr).lines() {
+                let Ok(line) = line else { break };
+                if line.contains(Daemon::BLOB_HOLD_NOTICE) {
+                    let _ = tx.send(());
+                } else {
+                    eprintln!("[blob-crash child {step}] {line}");
+                }
+            }
+        });
+        match rx.recv_timeout(Duration::from_secs(60)) {
+            Ok(()) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let _ = child.kill();
+                panic!("FINDING (H′ {step}): the child reached no hold within 60s");
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = child.wait();
+                panic!("FINDING (H′ {step}): the child exited before the hold — its stderr is forwarded above");
+            }
+        }
+        child.kill().expect("SIGKILL the held child");
+        let _ = child.wait();
+        reader.join().expect("stderr reader thread");
+
+        // THE REOPEN, judged.
+        let ctx = format!("H′ {step}");
+        let d = timed_daemon_open(&dir, &ctx);
+        let token = route_session(&d, CLAIMANT_PRINCIPAL);
+        let file = dir.join("blobs").join("blake3").join(&hex);
+        let (deposits, uploads) = deposit_read(&d, &token);
+        assert!(uploads.is_empty(), "FINDING ({ctx}): the record whose partial was renamed away is retired at open: {uploads:?}");
+        let draft = acked_addr(&route_op(&d, Some(&token), &create_frame(CLAIMANT_ACCOUNT, Some(false))));
+        let insert = |d: &Daemon| {
+            let frame = serde_json::json!({
+                "op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"},
+                "values": [{"atom": cell_of(HELD_BYTES, HELD_BYTES.len() as u64)}],
+            })
+            .to_string();
+            verdict(&route_op(d, Some(&token), &frame))
+        };
+        match step {
+            "dir_sync" | "root_sync" => {
+                // The rename survives a SIGKILL (the page cache holds it);
+                // what the order promises is that nothing NAMES it.
+                assert!(file.is_file(), "{ctx}: the renamed file stands on disk, leaseless");
+                assert!(deposits.is_empty(), "FINDING ({ctx}): a lease names a file whose directory sync never ran: {deposits:?}");
+                assert_eq!(insert(&d), "credential_refused:unbound_cell", "{ctx}: absent from the principal's view");
+                // The repair: a re-PUT of the bytes through the socket-free
+                // route answers the hash and binds.
+                let r = route_raw(&d, "POST", BLOB_UPLOAD, Some(&format!("length={}", HELD_BYTES.len())), Some(&token), HELD_BYTES);
+                assert_eq!(r.status, 200, "{ctx}: the re-PUT: {}", String::from_utf8_lossy(r.bytes()));
+                assert_eq!(json(r.bytes())["hash"].as_str(), Some(hex.as_str()));
+                let (deposits, _) = deposit_read(&d, &token);
+                assert_eq!(deposits.get(&hex), Some(&(HELD_BYTES.len() as u64, false)));
+                assert_eq!(insert(&d), "ok", "{ctx}: bound by the re-PUT");
+            }
+            _ => {
+                assert!(file.is_file(), "{ctx}: the leased file stands");
+                assert_eq!(deposits.get(&hex), Some(&(HELD_BYTES.len() as u64, false)), "FINDING ({ctx}): the lease that synced before the kill stands over a whole file: {deposits:?}");
+                assert_eq!(insert(&d), "ok", "{ctx}: the finish's one residue is a bound deposit");
+            }
+        }
+        judge_store_whole(&d, &dir, &token, &ctx);
+    }
 }

@@ -222,12 +222,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// The stored-def parameters are Codom-only (ASN-0130 SignedTerm), and no
     /// check is made here: a caller's only route to a `TypedTerm` is
     /// `type_check`, which refuses a `Tup` in Γ_D, and the one checked term
-    /// whose parameter may be a tuple is a `TriggerTerm`, which yields no
-    /// `TypedTerm` publicly. The codec's own `Tup` refusal (it has no tag for
-    /// the sort) is therefore unreachable from every call a caller can write.
-    /// Within the crate it is a ROUTING obligation, not a type-level one — a
-    /// trigger's checked term derefs to the `&TypedTerm` this signature takes,
-    /// so `TriggerTerm::checked`'s result must never be routed here.
+    /// whose parameter may be a tuple is a `TriggerTerm`, no accessor of which
+    /// returns its `TypedTerm`. The codec's own `Tup` refusal (it has no tag
+    /// for the sort) is therefore unreachable, in this crate or out of it.
     ///
     /// `home` must be a registered document that is NOT a published TARGET
     /// (M5's `published_target`: the publication bit of `trunk_of(home)` —
@@ -258,7 +255,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     ) -> Result<(Address, Seq), DefineError> {
         let bytes = codec::encode(term.signed()).expect(
             "a Codom-only Γ_D: type_check admits no Tup parameter, TypedTerm is built only in \
-             check.rs, and no path in this crate routes a TriggerTerm's checked term here",
+             check.rs, and a TriggerTerm yields none",
         );
         // Insert position off a snapshot read; M5's insert re-validates
         // against committed state (benign TOCTOU — item 6).

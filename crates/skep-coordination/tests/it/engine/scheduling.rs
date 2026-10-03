@@ -7,8 +7,9 @@ use crate::terms::*;
 
 use skep_address::Address;
 use skep_coordination::{
-    Arg, Coordinator, Dom, FireAction, FireError, FireOutcome, Occurrence, Rule, RuleCertification,
-    RuleId, ScopeBody, Sort, StepOutcome, Term, Trigger, TypedTerm, View,
+    Arg, Atom, Coordinator, Dom, FireAction, FireError, FireOutcome, Occurrence, Rule,
+    RuleCertification, RuleId, ScopeBody, Sort, StepOutcome, Term, Trigger, TypeRef, TypedTerm,
+    View,
 };
 use skep_kernel::TxnError;
 use skep_links::{enc, Caller, HasLinks, NullifyError, SlotArg, Tuple};
@@ -533,6 +534,51 @@ fn a_def_trigger_through_a_reference_is_linted_flat_and_evaluated_through_the_me
     assert_eq!(c.armer_cycles(), vec![vec![id]], "the flat expansion reads the class it emits");
     assert!(matches!(c.step(&k.snapshot()), StepOutcome::Fired { arg, .. } if arg == ca(1)));
     assert!(matches!(c.step(&k.snapshot()), StepOutcome::Quiescent));
+}
+
+/// A trigger keeps its `Reg` quantifier and class variable in its source
+/// body, and the engine reads it by its `Reg`-expanded projection alone —
+/// one instance per cataloged class: the lint classifies the instances, the
+/// peek enables the argument through them, and once the rule's own marker
+/// lands the marker class's instance falsifies the trigger. Neither the
+/// evaluator nor the analyzer can walk a `Reg` binder, so a trigger read by
+/// its source body could not be linted, registered or fired at all.
+#[test]
+fn a_reg_quantified_trigger_is_read_by_its_expansion() {
+    let k = kernel();
+    let mut c = coord(&k);
+    link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
+    // T(x) := ∃K ∈ Reg :: is_K(x) ∧ ¬is_K(marker, x) — x heads some cataloged
+    // class and bears no marker.
+    let heads_a_class_unmarked = exists(
+        7,
+        Dom::Reg,
+        and(
+            Term::Atom(Atom::IsK(TypeRef::ClassVar(v(7)), at(var(1)))),
+            not(is_k(&marker_ty(), var(1))),
+        ),
+    );
+    let trigger = c
+        .type_check_trigger((v(1), Sort::Addr), heads_a_class_unmarked.clone())
+        .expect("a Reg-quantified trigger");
+    assert_eq!(trigger.source_body(), &heads_a_class_unmarked, "the source keeps the quantifier");
+    let rule = Rule {
+        domain: Dom::MembersDom(concrete(&pred_stable_ty())),
+        trigger: Trigger::Inline(trigger),
+        view: View::Audit,
+        action: marker_action(),
+    };
+    assert_eq!(
+        c.certify_rule(&rule).expect("well-formed"),
+        RuleCertification::Uncertified { sf: false, marker: false, grow_only: true }
+    );
+    let id = c.register_rule(rule).expect("register");
+    assert_eq!(c.next_enabled(&k.snapshot()), Some(Occurrence { rule: id, arg: Arg::Addr(ca(1)) }));
+    assert!(matches!(c.step(&k.snapshot()), StepOutcome::Fired { arg, .. } if arg == ca(1)));
+    assert!(
+        matches!(c.step(&k.snapshot()), StepOutcome::Quiescent),
+        "the marker class's instance falsifies the trigger"
+    );
 }
 
 /// A rule's domain is enumerated at the RULE's declared view: a

@@ -274,7 +274,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         if t.result_sort() != Sort::Bool {
             return Err(TypeError::SortMismatch { expected: Sort::Bool, found: t.result_sort() });
         }
-        Ok(TriggerTerm::new(t))
+        Ok(TriggerTerm::new(Arc::new(t)))
     }
 
     /// The checker's invocation for a signed term — one of its two, wired

@@ -6,14 +6,13 @@
 //! set holds (`CheckedRule`, `TypedDom`), which only this module builds.
 
 use std::slice::from_ref;
-use std::sync::Arc;
 
 use skep_address::{document_of, Address};
 use skep_kernel::{Seq, Snapshot, TxnError};
 use skep_links::{Caller, EmitError, Endset, NullifyError, Pattern, ShippedType, View};
 
 use crate::ast::{ArcDom, Dom, Term};
-use crate::check::TypedTerm;
+use crate::check::{TriggerTerm, TypedTerm};
 use crate::coordinator::memo::DefStatus;
 use crate::coordinator::Coordinator;
 use crate::dynamics::{negated_membership, Analyzer, Emission, Footprint};
@@ -55,15 +54,15 @@ impl TypedDom {
 pub(super) struct CheckedRule {
     pub(super) id: RuleId,
     domain: TypedDom,
-    /// The checked trigger: a one-parameter Bool `TypedTerm` — an `Inline`
-    /// trigger's own, or the memo entry of a `Def` trigger's def, captured
-    /// at registration. The body is immutable content, so the trigger reads
+    /// The checked trigger — an `Inline` trigger's own [`TriggerTerm`], or a
+    /// `Def` trigger's def captured into one at registration (the memo's own
+    /// `Arc`, no copy). The body is immutable content, so the trigger reads
     /// only the snapshot it is evaluated on: no ordering between that
     /// snapshot and the def's registration is required, and a later
     /// retraction of the def changes nothing. Ref-bearing iff it came from a
     /// def; evaluation resolves referents through the memo, the static
     /// analyses through the flat expansion.
-    trigger: Arc<TypedTerm>,
+    trigger: TriggerTerm,
     view: View,
     action: FireAction,
     /// FP over the TRIGGER — `footprint(T_ρ)`, the subject §8's edge rule
@@ -86,7 +85,7 @@ pub(super) struct CheckedRule {
 /// re-derives it or has to argue that it fits.
 struct Validated {
     domain: TypedDom,
-    trigger: Arc<TypedTerm>,
+    trigger: TriggerTerm,
     flat_expansion: Term,
 }
 
@@ -175,7 +174,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // engine's, which alone knows what the action emits.
         let marker = match &rule.action {
             FireAction::Marker { ty, .. } => {
-                let param = trigger.params()[0].0;
+                let param = trigger.param().0;
                 rule.view == View::Audit
                     && negated_membership(&flat_expansion, param).is_some_and(|witness| {
                         self.catalog.class_of(witness) == self.catalog.class_of(ty)
@@ -201,15 +200,15 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // a BARE Reg fails the sort check), closed (binds only its own
         // variables).
         let cd = self.check_closed_dom(&rule.domain).map_err(RuleError::IllFormedDomain)?;
-        if !cd.ref_free {
+        if !cd.is_ref_free() {
             return Err(RuleError::RefBearingDomain);
         }
-        let elem = cd.elem;
+        let elem = cd.elem();
         // Trigger: one-parameter Bool (a `TriggerTerm` is that by type; a
-        // def is checked here), sort-matched to the element sort — and its
-        // FLAT ref-free expansion, which an `Inline` trigger's evaluable
-        // projection already is (a shallow node copy: the children are
-        // `Arc`s).
+        // def is checked here and captured into one), sort-matched to the
+        // element sort — and its FLAT ref-free expansion, which an `Inline`
+        // trigger's evaluable projection already is (a shallow node copy: the
+        // children are `Arc`s).
         let (trigger, flat_expansion) = match &rule.trigger {
             Trigger::Inline(t) => {
                 if !t.is_ref_free() {
@@ -219,9 +218,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 if *s != elem {
                     return Err(RuleError::DomainTriggerSortMismatch { expected: elem, found: *s });
                 }
-                let checked = Arc::clone(t.checked());
-                let flat_expansion = checked.evaluable().clone();
-                (checked, flat_expansion)
+                (t.clone(), t.evaluable().clone())
             }
             Trigger::Def(addr) => {
                 let DefStatus::Defined(def) = self.def_status(addr) else {
@@ -247,7 +244,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 let flat_expansion = self
                     .expand_def(&def)
                     .map_err(|_| RuleError::TriggerExpansionTooLarge)?;
-                (def, flat_expansion)
+                (TriggerTerm::new(def), flat_expansion)
             }
         };
         // Marker shape: cataloged Unary (BadMarkerType), idem⊤
@@ -268,7 +265,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 return Err(RuleError::PredLayerMarkerType(ty.clone()));
             }
         }
-        Ok(Validated { domain: TypedDom(cd.dom), trigger, flat_expansion })
+        Ok(Validated { domain: TypedDom(cd.into_dom()), trigger, flat_expansion })
     }
 
     // ─────────────────────── enumeration & triggers ───────────────────────
@@ -287,14 +284,14 @@ impl<W: CoordinationWorld> Coordinator<W> {
 
     /// `T_ρ(x, snap)` at the rule's view, read THROUGH THE GUEST-CLASS VIEW
     /// (lane 4.1, PUB-6.28) — the captured trigger body with its one
-    /// parameter bound to `elem`, referents (a `Def` trigger's) resolved
+    /// parameter bound to `arg`, referents (a `Def` trigger's) resolved
     /// through the memo — so a draft-homed tuple satisfies no trigger's
     /// pattern and a fire's verdict never turns on a document rule 4 hides.
     /// Reads nothing but `snap`: the body is immutable content captured at
     /// registration, so any snapshot serves.
     fn trigger_true(&self, rule: &CheckedRule, arg: &Arg, snap: &Snapshot<W>) -> bool {
         let cx = self.eval_ctx(snap.world(), rule.view, Some(self));
-        let env = Env::empty().bind(rule.trigger.params()[0].0, Value::from(arg.clone()));
+        let env = Env::empty().bind(rule.trigger.param().0, Value::from(arg.clone()));
         as_bool(eval_term(&cx, &env, rule.trigger.evaluable()))
     }
 

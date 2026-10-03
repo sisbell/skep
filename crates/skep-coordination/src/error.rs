@@ -144,15 +144,13 @@ impl Error for TypeError {
 /// `define_predicate` rejection — its two transactions, the content insert
 /// and the `pdef` registration.
 ///
-/// `#[non_exhaustive]`: the codec's own Codom-only refusal has no variant
-/// here. A CALLER cannot reach it — stored-def parameters are Codom-only
-/// (ASN-0130 SignedTerm) by the `TypedTerm` type, which no term with a `Tup`
-/// parameter inhabits — while in-crate it rests on a routing obligation
-/// rather than on the type (`TriggerTerm::checked`), and giving that refusal
-/// a variant here is the structural closure; a consumer's catch-all should
-/// absorb such a variant rather than break.
+/// Deliberately exhaustive: its two variants are its two transactions, and
+/// the codec's Codom-only refusal (ASN-0130 SignedTerm) needs none — no
+/// `TypedTerm` with a `Tup` parameter reaches it, in this crate or out of
+/// it: `type_check` refuses one, a stored def's Γ_D is decoded from a format
+/// with no `Tup` tag, and the one checked term whose parameter may be a
+/// tuple is held in a `TriggerTerm`, which yields none.
 #[derive(Debug)]
-#[non_exhaustive]
 pub enum DefineError {
     Insert(TxnError<InsertError>),
     Register(RegisterError),

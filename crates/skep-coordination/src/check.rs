@@ -34,16 +34,17 @@ use crate::walk::{rewrite_term, Rewrite};
 
 /// The post-type-check form — the ONE checked-term shape in the crate: what
 /// `type_check` hands back, what a stored def's memo entry holds, what a
-/// rule's trigger is captured as. Carries the signed term — Γ_D and the
-/// compact pre-`Reg`-expansion body, read back via [`TypedTerm::params`] /
-/// [`TypedTerm::source_body`], the form `define_predicate` encodes
-/// (§Internal 4) — the synthesized codomain ([`TypedTerm::result_sort`]),
-/// the ref-free flag, the Reg-expanded evaluable projection (every
-/// `TypeRef` `Concrete`, no surviving `Reg` quantifier — `Ref` nodes may
-/// remain: see [`TypedTerm::is_ref_free`]), and the term's reach — the
-/// deepest level any walk over it recurses to, counted through its
-/// references. Deliberately carries NO view (PR-VIEW): the view is an
-/// evaluation/classification parameter, never a term annotation.
+/// rule's trigger wraps ([`TriggerTerm`]). Carries the signed term — Γ_D and
+/// the compact pre-`Reg`-expansion body, read back via
+/// [`TypedTerm::params`] / [`TypedTerm::source_body`], the form
+/// `define_predicate` encodes (§Internal 4) — the synthesized codomain
+/// ([`TypedTerm::result_sort`]), the ref-free flag, the Reg-expanded
+/// evaluable projection (every `TypeRef` `Concrete`, no surviving `Reg`
+/// quantifier — `Ref` nodes may remain: see [`TypedTerm::is_ref_free`]), and
+/// the term's reach — the deepest level any walk over it recurses to,
+/// counted through its references. Deliberately carries NO view (PR-VIEW):
+/// the view is an evaluation/classification parameter, never a term
+/// annotation.
 ///
 /// The type has no constructor outside this module: its fields are private,
 /// so every `TypedTerm` is the checker's, and no struct literal elsewhere can
@@ -52,8 +53,9 @@ use crate::walk::{rewrite_term, Rewrite};
 /// constructor, exists only in test builds). Every one a caller can hold
 /// came through `type_check`, whose Γ_D is Codom-only (ASN-0130
 /// SignedTerm), and a [`TriggerTerm`] — the one checked term whose parameter
-/// may be a tuple — does not yield one. That is what lets `define_predicate`
-/// take a `TypedTerm` and store it without a tuple check of its own.
+/// may be a tuple — does not yield one, in this crate or out of it. That is
+/// what lets `define_predicate` take a `TypedTerm` and store it without a
+/// tuple check of its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedTerm {
     signed: SignedTerm,
@@ -140,30 +142,35 @@ impl TypedTerm {
     }
 }
 
-/// A rule trigger, checked by `Coordinator::type_check_trigger`: a
-/// ONE-parameter Bool term whose parameter may be `Tup`-sorted — the only PL
-/// term with a tuple PARAMETER (ASN-0133 ρ_R); any term may still bind
-/// tuples through a quantifier over `A_K`/`L_K`. A type of its own so the def
-/// path cannot receive it: `define_predicate` takes a `TypedTerm`, and this
-/// type yields none (its accessors are the trigger's parameter, its
-/// ref-freeness and its source body; the checked term beneath is the rule
-/// engine's). Holds the checked term shared, so a registration captures it
-/// without a copy.
+/// A rule trigger: a ONE-parameter Bool term whose parameter may be
+/// `Tup`-sorted — the only PL term with a tuple PARAMETER (ASN-0133 ρ_R); any
+/// term may still bind tuples through a quantifier over `A_K`/`L_K`. A
+/// caller's comes from `Coordinator::type_check_trigger`; inside the crate
+/// the rule engine also captures a `Def` trigger's def into this shape at
+/// registration, so the working set holds one trigger type. A type of its
+/// own so the def path cannot receive it: `define_predicate` takes a
+/// `TypedTerm`, and no accessor of this type returns the checked term
+/// beneath, so it yields none, in this crate or out of it — its accessors
+/// are the trigger's parameter, its ref-freeness, its source body and, for
+/// the rule engine, its evaluable projection. Holds the checked term shared,
+/// so a registration captures it without a copy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TriggerTerm(Arc<TypedTerm>);
 
 impl TriggerTerm {
-    /// The one construction — `Coordinator::type_check_trigger`'s, after the
-    /// Bool-codomain check. The field being private, [`TriggerTerm::checked`]
-    /// is the ONLY in-crate route to the term beneath, which is where the
-    /// routing obligation is written: a maintainer cannot reach it without
-    /// passing the warning.
-    pub(crate) fn new(checked: TypedTerm) -> TriggerTerm {
-        TriggerTerm(Arc::new(checked))
+    /// The two constructions, each after establishing the shape — one
+    /// parameter, Bool codomain: `Coordinator::type_check_trigger`'s (its
+    /// signature supplies the one parameter; it refuses a non-Bool codomain),
+    /// and `validate_rule`'s capture of a `Def` trigger's def, after
+    /// `BadTriggerArity` and `TriggerNotBoolean` — the memo's own `Arc`,
+    /// shared. The field is private and no accessor returns the term beneath.
+    pub(crate) fn new(checked: Arc<TypedTerm>) -> TriggerTerm {
+        TriggerTerm(checked)
     }
 
     /// The one parameter — `register_rule` reconciles its sort with the
-    /// domain's element sort.
+    /// domain's element sort, the engine binds each candidate argument to
+    /// it, and the termination lint's Marker leg names it.
     pub fn param(&self) -> &(VarId, Sort) {
         &self.0.params()[0]
     }
@@ -179,16 +186,11 @@ impl TriggerTerm {
         self.0.source_body()
     }
 
-    /// The checked term beneath, shared — the shape the rule engine captures
-    /// at registration, and the rule engine's alone. NEVER route it to
-    /// `define_predicate`: that signature takes the `&TypedTerm` this derefs
-    /// to, and its encode `expect` rests on a Γ_D that is Codom-only, which a
-    /// trigger's need not be (`type_check_trigger` admits one `Tup`
-    /// parameter). A `Tup`-sorted trigger persisted through that path is the
-    /// codec's `UnencodableTup` — a panic, not a rejection. The type system
-    /// does not close this: only the crate's own routing does.
-    pub(crate) fn checked(&self) -> &Arc<TypedTerm> {
-        &self.0
+    /// The `Reg`-expanded evaluable projection — what the rule engine
+    /// evaluates the trigger by, and, for a ref-free trigger, its flat
+    /// expansion as it stands.
+    pub(crate) fn evaluable(&self) -> &Term {
+        self.0.evaluable()
     }
 }
 
@@ -241,11 +243,36 @@ struct Checked {
     ref_free: bool,
 }
 
+/// The WT domain judgment's product — for a domain inside a term, and for a
+/// rule's closed domain through [`Checker::check_closed_dom`]: the
+/// `Reg`-expanded domain (every `TypeRef` `Concrete`, no `Reg` survivor, no
+/// node checked past `MAX_DEPTH`), the element sort it yields, and whether a
+/// `Ref` survives in it. The checker's alone, as [`TypedTerm`] is: the fields
+/// are private, so the guarantees a rule's `TypedDom` rests on come from the
+/// judgment and never from a struct literal elsewhere.
 #[derive(Debug, Clone)]
 pub(crate) struct CheckedDom {
-    pub(crate) dom: ArcDom,
-    pub(crate) elem: Sort,
-    pub(crate) ref_free: bool,
+    dom: ArcDom,
+    elem: Sort,
+    ref_free: bool,
+}
+
+impl CheckedDom {
+    /// The checked domain — a rule's `TypedDom` once its caller has refused
+    /// a ref-bearing one.
+    pub(crate) fn into_dom(self) -> ArcDom {
+        self.dom
+    }
+
+    /// The element sort the domain yields: `Addr` or `Tup` (QD).
+    pub(crate) fn elem(&self) -> Sort {
+        self.elem
+    }
+
+    /// False iff a `Ref` survives — in a `Filter` predicate or a set term.
+    pub(crate) fn is_ref_free(&self) -> bool {
+        self.ref_free
+    }
 }
 
 fn want(expected: Sort, found: Sort) -> Result<(), TypeError> {
@@ -383,8 +410,9 @@ impl<'a> Checker<'a> {
     /// The WT domain judgment over a CLOSED domain — one that binds only its
     /// own variables, as a rule's does — from nesting level 0: the checker's
     /// second top-level judgment beside [`Checker::check_signed`], consuming
-    /// it likewise. Once a caller has refused a `ref_free == false` answer,
-    /// its product carries every guarantee the domain's walks lean on: every
+    /// it likewise. Once a caller has refused one that is not
+    /// [`CheckedDom::is_ref_free`], its product carries every guarantee the
+    /// domain's walks lean on: every
     /// `TypeRef` `Concrete`, no `Reg` survivor, and no node deeper than
     /// `MAX_DEPTH` — the bound `enum_dom` and `Analyzer::dom` take, having
     /// none of their own.

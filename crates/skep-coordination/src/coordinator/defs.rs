@@ -8,8 +8,9 @@
 //! rides M5's placement composite or M7's gated `emit`/`nullify`.
 //!
 //! THE DEF LAYER READS CLASS-FREE, where the evaluator does not (lane 4.1):
-//! a def's registration is not a trigger read, so `ever_registered`,
-//! `is_active_pred`, `is_certified_stable`, `current_version` and
+//! a def's registration is not a trigger read, so the two registration
+//! probes every gate and query asks — `ever_registered` and
+//! `actively_registered` — and `is_certified_stable`, `current_version` and
 //! `retract_pred`'s target probe all read M7's `LinkState` directly, and a
 //! def registered into a draft home is ever-registered as it was — signed,
 //! resolvable and evaluable — while the guest-class view the evaluator looks
@@ -111,6 +112,16 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 View::Audit,
             )
             .is_empty()
+    }
+
+    /// `is_K(pdef, start)@active` off the world `w` of a pinned snapshot —
+    /// CLASS-FREE, for [`Coordinator::ever_registered`]'s reason: endorsement
+    /// is a registration question, not a trigger read. The active twin of the
+    /// ever-probe; every actively-registered question in the crate asks it
+    /// here (`register_pred`'s endorsement gate, `is_active_pred`, and through
+    /// it `certify_stable`'s leg).
+    fn actively_registered(&self, w: &W, start: &Address) -> bool {
+        w.links().is_k(self.catalog.reserved_type(ShippedType::PredDef), start.tumbler())
     }
 
     // ───────────── resolution: the DefMemo's memo-or-derive (§Internal 4) ─────────────
@@ -314,9 +325,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // content-intrinsic).
         let def = self.check_signed(signed, 0).map_err(RegisterError::IllTyped)?;
         // (iv) endorsement: every referent ACTIVELY registered at σ.
-        let pdef = self.catalog.reserved_type(ShippedType::PredDef);
-        if let Some(referent) =
-            refs.iter().find(|referent| !w.links().is_k(pdef, referent.tumbler()))
+        if let Some(referent) = refs.iter().find(|referent| !self.actively_registered(w, referent))
         {
             return Err(RegisterError::ReferentNotActive(referent.clone()));
         }
@@ -329,8 +338,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // writes at (lane 3.3b, PUB-6.28): a pdef tuple homed in a document
         // unreadable at guest class is invisible to the dedup and a second is
         // minted beside it.
+        let pdef = self.catalog.reserved_type(ShippedType::PredDef);
         let (tuple, seq) = self.link_writer().emit(Caller::System, home, pdef, start, &[])?;
-        // Memoize the freshly-derived hint (immutable-once-defined).
+        // The memo's second admission site, under `derive_def`'s rule: the
+        // start is ever-registered now, and `def` is the content's own status,
+        // checked at level 0.
         self.memo.fill(start, Ok(def));
         Ok((tuple, seq))
     }
@@ -402,11 +414,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
         self.resolve_def_at(start, 0).ok().map(|def| def.signature())
     }
 
-    /// `is_K(pdef, start)@active`.
+    /// `is_K(pdef, start)@active` — class-free (`actively_registered`).
     pub fn is_active_pred(&self, start: &Address, snap: &Snapshot<W>) -> bool {
-        snap.world()
-            .links()
-            .is_k(self.catalog.reserved_type(ShippedType::PredDef), start.tumbler())
+        self.actively_registered(snap.world(), start)
     }
 
     /// `is_K(pdef, start)@audit` — through the one observe-honors-Audit seam.

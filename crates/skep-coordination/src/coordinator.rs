@@ -6,10 +6,10 @@
 //!
 //! The handle's impl is cut one file per capability group. This file holds
 //! construction, the two class-bearing surfaces (`eval_ctx`, `link_writer`),
-//! the one checker invocation and group A; its children `defs` (group B) and
-//! `engine` (group C) are the rest of the impl, and `memo` is the def-status
-//! cache the handle holds. Being children they share the private state this
-//! module declares — no other module of the crate can reach it.
+//! the checker's two invocations and group A; its children `defs` (group B)
+//! and `engine` (group C) are the rest of the impl, and `memo` is the
+//! def-status cache the handle holds. Being children they share the private
+//! state this module declares — no other module of the crate can reach it.
 
 // The def-status memo the handle holds: permanence here, admission in `defs`.
 mod memo;
@@ -26,9 +26,9 @@ use skep_arrangement::Vstream;
 use skep_kernel::{Kernel, Snapshot, WorldState};
 use skep_links::{Endset, LinkWriter, ShippedType, TypeRegistry, View, Visibility};
 
-use crate::ast::{Term, VarId};
+use crate::ast::{Dom, Term, VarId};
 use crate::catalog::TypeCatalog;
-use crate::check::{Checker, DefSource, TriggerTerm, TypedTerm};
+use crate::check::{CheckedDom, Checker, DefSource, TriggerTerm, TypedTerm};
 use crate::dynamics::{classify_term, Dynamics};
 use crate::error::TypeError;
 use crate::eval::{eval_term, EvalCtx};
@@ -69,16 +69,25 @@ pub struct Coordinator<W: WorldState> {
     /// The GUEST-class read predicate over a document address (PUB round 2,
     /// lane 3.3, §5), in M7's own `Visibility` shape: `true` iff the
     /// document is readable at guest class — the engine supplies
-    /// `published(doc)`. A fire consults it, off the fire's own pinned
-    /// snapshot, on the action's HOME and on the bound argument's document
-    /// before any deposit, so a rule's effect never crosses the draft
-    /// boundary in either direction (a marker on a draft's content, or a
-    /// deposit into a draft home). And every `LinkWriter` M9 builds is built
-    /// AT this class (lane 3.3b, PUB-6.28): the same closure is lent to
-    /// `mk_link_writer`, so M7's idempotency and dedup lookups see only
-    /// guest-readable incumbents and a fire commits byte-identically to a
-    /// world with no drafts. M9 holds no publication state of its own — the
-    /// predicate is injected like the factories.
+    /// `published(doc)`. It is applied THREE ways, each by one element:
+    ///
+    /// - THE LOOK (lane 4.1, PUB-6.28): every verdict's read context is built
+    ///   over it ([`Coordinator::eval_ctx`] → `GuestLinks`), so a tuple homed
+    ///   where it answers `false` seeds no domain, satisfies no trigger and
+    ///   moves no PL verdict;
+    /// - THE BOUNDARY (lane 3.3): a fire consults it, off its own pinned
+    ///   snapshot, on the action's HOME and on the bound argument's document
+    ///   before any deposit (`draft_boundary`), so a rule's effect never
+    ///   crosses the draft boundary in either direction (a marker on a
+    ///   draft's content, or a deposit into a draft home);
+    /// - THE GATES (lane 3.3b, PUB-6.28): every `LinkWriter` M9 builds is
+    ///   built AT this class ([`Coordinator::link_writer`] lends this closure
+    ///   to `mk_link_writer`), so M7's idempotency and dedup lookups see only
+    ///   guest-readable incumbents and a fire commits byte-identically to a
+    ///   world with no drafts.
+    ///
+    /// M9 holds no publication state of its own — the predicate is injected
+    /// like the factories.
     guest: Box<Visibility<'static, W>>,
 }
 
@@ -110,10 +119,13 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// drift a validate-once-or-fail step would catch.
     ///
     /// `guest` is the GUEST-class read predicate (lane 3.3 §5): the engine
-    /// passes `World::readable_guest`; a fire refuses, before any deposit,
-    /// an action whose home or bound argument's document it answers `false`
-    /// for (`FireError::DraftBoundary`), and every write M9 makes runs its
-    /// value-keyed gates at this class (PUB-6.28).
+    /// passes `World::readable_guest`. It decides three things, so an
+    /// assembler choosing it chooses all three: what every PL verdict sees
+    /// (lane 4.1 — a tuple homed where it answers `false` is invisible to
+    /// `eval`, `evaluate_def` and every rule's domain and trigger); which
+    /// fires are refused before any deposit (`FireError::DraftBoundary`, lane
+    /// 3.3); and what M7's value-keyed gates see at every write M9 makes
+    /// (PUB-6.28, lane 3.3b).
     ///
     /// OBLIGATIONS ON THE THREE INJECTED VALUES, owed by the assembler and
     /// uncheckable here: each factory must build its handle over EXACTLY the
@@ -158,7 +170,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     }
 
     /// M9's own cached catalog accessor (no snapshot) — the `&Endset` every
-    /// `emit(d, reserved_type(…), …)` / PL `TypeKey` construction reads.
+    /// `emit(home, reserved_type(…), …)` / PL `TypeKey` construction reads.
     /// Distinct from M7's snapshot-bound `LinkState::reserved_type`, and
     /// byte-identical to it: the catalog is a projection of the same
     /// registry.
@@ -257,19 +269,30 @@ impl<W: CoordinationWorld> Coordinator<W> {
         Ok(TriggerTerm::new(t))
     }
 
-    /// The ONE checker invocation: the catalog and the def resolver handed to
-    /// a fresh [`Checker`], whose judgment runs from nesting level `depth` —
-    /// 0 at the top of a chain (the public checks, `register_pred`, a cold
-    /// `signature`), and for a def derived through a `Ref` the level the
-    /// checker charged that `Ref` for its referent, so the chain's total
-    /// nesting is bounded by `MAX_DEPTH` however deep the derivation runs.
-    /// Referents resolve through the def memo at the level the checker asks
-    /// for them: a referent with no defined signature is `DanglingReference`,
-    /// and one whose derivation cannot complete at that level is `TooDeep`,
-    /// with the referent left unjudged.
+    /// The checker's invocation for a signed term — one of its two, wired
+    /// alike (the other is [`Coordinator::check_closed_dom`]): the catalog
+    /// and the def resolver handed to a fresh [`Checker`], whose judgment
+    /// runs from nesting level `depth` — 0 at the top of a chain (the public
+    /// checks, `register_pred`, a cold `signature`), and for a def derived
+    /// through a `Ref` the level the checker charged that `Ref` for its
+    /// referent, so the chain's total nesting is bounded by `MAX_DEPTH`
+    /// however deep the derivation runs. Referents resolve through the def
+    /// memo at the level the checker asks for them: a referent with no
+    /// defined signature is `DanglingReference`, and one whose derivation
+    /// cannot complete at that level is `TooDeep`, with the referent left
+    /// unjudged.
     fn check_signed(&self, signed: SignedTerm, depth: u32) -> Result<TypedTerm, TypeError> {
         let resolve = |start: &Address, depth: u32| self.resolve_def_at(start, depth);
         Checker::new(&self.catalog, &resolve).check_signed(signed, depth)
+    }
+
+    /// A rule's domain through the checker's closed-domain judgment, wired as
+    /// [`Coordinator::check_signed`] is: the catalog, and referents resolved
+    /// through the def memo — a rule's domain must be ref-free, but its
+    /// `Ref`s are checked and resolved before `validate_rule` refuses them.
+    fn check_closed_dom(&self, dom: &Dom) -> Result<CheckedDom, TypeError> {
+        let resolve = |start: &Address, depth: u32| self.resolve_def_at(start, depth);
+        Checker::new(&self.catalog, &resolve).check_closed_dom(dom)
     }
 
     /// Pure, total, terminating denotation at one view against one committed

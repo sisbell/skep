@@ -223,9 +223,12 @@ fn state_read(fp: Footprint) -> Analysis {
 /// PRECONDITIONS on every input: ref-free, every `TypeRef` concrete, and
 /// WITHIN [`crate::budget::MAX_DEPTH`] — this pass recurses once per node on
 /// the caller's thread with no bound of its own, and takes that bound from
-/// `TypedTerm::reach`, which the checker charges for the flat expansion as
-/// well as for the checked tree. The two shapes that satisfy all three are a
-/// checked term's evaluable projection and an `Expander` output.
+/// the checker: for a checked term or a flat expansion, `TypedTerm::reach`,
+/// which the checker charges for the flat expansion as well as for the
+/// checked tree; for a domain, the closed-domain judgment, which refuses any
+/// node past the cap. The three shapes that satisfy all three are a checked
+/// term's evaluable projection, an `Expander` output, and a rule's checked
+/// domain (`TypedDom`, which `certify_rule` passes to [`Analyzer::dom`]).
 ///
 /// The fields are private and [`Analyzer::new`] leaves `widen` false, so
 /// [`st_plus`] — the one judgment PD0's widening belongs to — is the only

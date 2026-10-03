@@ -45,12 +45,15 @@ pub(super) struct Breach;
 /// loses nothing), nothing is ever evicted or overwritten, and both statuses
 /// are therefore permanent — content is immutable and ever-registration
 /// monotone, so a `Defined` entry can never be contradicted and a `Poisoned`
-/// one is freeze-on-breach. ADMISSION is `Coordinator::derive_def`'s, and
-/// cannot be this type's: only a start that is ever-registered AT A PINNED
-/// SNAPSHOT is offered (a never-registered start must surface a later
-/// registration), and only a status about the CONTENT is filled — a
-/// derivation that could not complete at the level it was asked at fills
-/// nothing, that being the asking term's refusal, not the content's.
+/// one is freeze-on-breach. ADMISSION is the def layer's, and cannot be this
+/// type's: `Coordinator::derive_def` admits on a miss, and
+/// `Coordinator::register_pred` admits the def it has just checked and
+/// registered. At both, only a start that is ever-registered is offered — at
+/// `derive_def`'s pinned snapshot, and at `register_pred` by the emit that
+/// just committed or deduped onto an incumbent (a never-registered start must
+/// surface a later registration) — and only a status about the CONTENT is
+/// filled: a derivation that could not complete at the level it was asked at
+/// fills nothing, that being the asking term's refusal, not the content's.
 ///
 /// A `RwLock`, never a `RefCell`: the `&self` signature/define paths of a
 /// shared `Coordinator` need `Sync`. A poisoned lock is read through: the one

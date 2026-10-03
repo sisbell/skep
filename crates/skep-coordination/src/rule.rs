@@ -1,6 +1,7 @@
 //! §Internal 5 — the reactive rule engine's public vocabulary: the raw
-//! [`Rule`] submission, trigger/action forms, the occurrence, and the
-//! fire/step outcome types. The checked shapes the working set holds are the
+//! [`Rule`] submission, trigger/action forms, the occurrence, the fire/step
+//! outcome types, and the scope bodies `quiescent_scoped` restricts by, each
+//! saying what it reads. The checked shapes the working set holds are the
 //! engine's own (`coordinator/engine.rs`). A rule's bound argument is a PL
 //! domain element, so it is [`crate::value::Arg`] — `Occurrence` names it,
 //! this module does not declare it.
@@ -12,7 +13,7 @@ use skep_links::View;
 use crate::ast::{Dom, TypeKey};
 use crate::check::TriggerTerm;
 use crate::error::FireError;
-use crate::value::Arg;
+use crate::value::{lift, Arg};
 
 /// One trigger→action rule. `domain` is the RAW submission — `register_rule`
 /// checks + `Reg`-expands it into the internal checked `TypedDom` the working
@@ -80,15 +81,46 @@ impl FireAction {
     }
 }
 
-/// `quiescent_scoped`'s per-rule restriction form (Q7). All four use the
-/// scope predicate `S` only positively, so Q9's global⟹scope inference holds
-/// by construction. Deliberately NOT `Ord`: the four bodies have no order.
+/// `quiescent_scoped`'s per-rule restriction form (Q7): which address of a
+/// rule's bound argument the scope predicate `S` is asked about — Q9's β. A
+/// body reads one element shape: `PerAddress` an address domain's element,
+/// the other three a tuple slice's; a rule whose domain yields the other
+/// shape is left UNSCOPED, every one of its arguments counted — a safe
+/// over-approximation of remaining work, never false quiescence. All four
+/// use `S` only positively, so Q9's global⟹scope inference holds by
+/// construction. Deliberately NOT `Ord`: the four bodies have no order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ScopeBody {
+    /// A tuple is in scope iff `S` holds of its OWN address, `t.addr` —
+    /// `S(addr(x))`. That is a LINK address, never a document's, so a scope
+    /// written `x = D` for a document `D` holds of no tuple; a scope by the
+    /// emitting (home) document asks `D ≼ x`, which holds of the links homed
+    /// in `D` and in every document whose address extends `D`'s (its
+    /// versions).
     PerEmitter,
+    /// A tuple is in scope iff `S` holds of ANY address its G slot denotes —
+    /// `∃y ∈ addrs_G(x) :: S(y)`.
     PerTarget,
+    /// A tuple is in scope iff `S` holds of ANY address its F slot denotes —
+    /// `∃y ∈ addrs_F(x) :: S(y)`.
     PerSource,
+    /// An address is in scope iff `S` holds of it — `S(x)`.
     PerAddress,
+}
+
+impl ScopeBody {
+    /// β_ρ^S(x): whether `arg` is in scope under this body, or `None` when
+    /// the body and the argument's shape disagree — which leaves the rule
+    /// UNSCOPED, its full `[D_ρ]` counted.
+    pub(crate) fn in_scope(self, arg: &Arg, s: &dyn Fn(&Address) -> bool) -> Option<bool> {
+        match (self, arg) {
+            (ScopeBody::PerAddress, Arg::Addr(a)) => Some(s(a)),
+            (ScopeBody::PerEmitter, Arg::Tuple(t)) => Some(s(&t.addr)),
+            (ScopeBody::PerTarget, Arg::Tuple(t)) => Some(t.to.addrs().any(|y| s(&lift(y)))),
+            (ScopeBody::PerSource, Arg::Tuple(t)) => Some(t.from.addrs().any(|y| s(&lift(y)))),
+            _ => None,
+        }
+    }
 }
 
 /// A registered rule's handle. Ordered by registration: the registry is

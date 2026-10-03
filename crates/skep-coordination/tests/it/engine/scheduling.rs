@@ -8,7 +8,7 @@ use crate::terms::*;
 use skep_address::Address;
 use skep_coordination::{
     Arg, Coordinator, Dom, FireAction, FireError, FireOutcome, Occurrence, Rule, RuleCertification,
-    RuleId, ScopeBody, Sort, StepOutcome, Trigger, TypedTerm, View,
+    RuleId, ScopeBody, Sort, StepOutcome, Term, Trigger, TypedTerm, View,
 };
 use skep_kernel::TxnError;
 use skep_links::{enc, Caller, HasLinks, NullifyError, SlotArg, Tuple};
@@ -637,6 +637,32 @@ fn a_multi_address_slot_is_in_scope_when_any_of_its_addresses_is() {
     }
     assert!(c.quiescent_scoped(&scope(&ca(9)), ScopeBody::PerTarget, &s));
     assert!(c.quiescent_scoped(&scope(&ca(9)), ScopeBody::PerSource, &s));
+}
+
+/// `PerEmitter` asks `S` about the tuple's OWN address, a LINK address: a
+/// scope naming the home document, `x = D`, holds of no tuple, and the rule's
+/// work drops out of it; the scope `ScopeBody::PerEmitter` names for a home,
+/// `D ≼ x`, keeps that work in view — and leaves out a tuple homed elsewhere.
+#[test]
+fn per_emitter_asks_about_the_link_address_not_its_home() {
+    let k = kernel();
+    let mut c = coord(&k);
+    deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2)); // homed in doc1
+    c.register_rule(Rule {
+        domain: Dom::ActiveSlice(concrete(&pred_stable_ty())),
+        trigger: always_tup(&c),
+        view: View::Active,
+        action: FireAction::Nullify { home: doc1() },
+    })
+    .expect("register");
+    let s = k.snapshot();
+    let quiet = |body: Term| {
+        let scope = c.type_check(vec![(v(9), Sort::Addr)], body).expect("scope");
+        c.quiescent_scoped(&scope, ScopeBody::PerEmitter, &s)
+    };
+    assert!(quiet(addr_eq(var(9), lit_addr(&doc1()))), "a link address is never its home's");
+    assert!(!quiet(prefix(lit_addr(&doc1()), var(9))), "doc1 ≼ the link: the work is in scope");
+    assert!(quiet(prefix(lit_addr(&doc2()), var(9))), "a doc1 tuple is outside doc2's scope");
 }
 
 #[test]

@@ -3,7 +3,9 @@
 //! Γ_D (ASN-0129 WT is a Γ-parameterized CHECKING judgment), with `Reg`
 //! expansion (V-IDX), the catalog + behavior guards (V-STAT), and WT-ref via
 //! the signature resolver. Decided once at construction, valid at every
-//! reachable state (WT).
+//! reachable state (WT). The pass has two top-level judgments — a signed term
+//! under its Γ_D, and the WT domain judgment over a rule's CLOSED domain —
+//! and nothing outside this module starts its walk any other way.
 //!
 //! The pass is also the crate's two resource doors for a term, stored or
 //! supplied: it refuses a tree that nests past [`MAX_DEPTH`] — counting the
@@ -224,7 +226,7 @@ impl Rewrite for SubstClassVar<'_> {
     }
 }
 
-pub(crate) type Ctx = im::HashMap<VarId, Sort>;
+type Ctx = im::HashMap<VarId, Sort>;
 
 /// A checked term: its evaluable projection, sort and ref-freeness. How deep
 /// the pass went is the pass's own record ([`Checker::deepest`]), not a
@@ -323,10 +325,12 @@ const SEQ_ELEMS: PrimRule = PrimRule { operand: Sort::AddrSeq, result: Sort::Add
 /// exactly the levels the `Ref` node was charged for, and answering
 /// [`Unresolved::TooDeep`] when the referent cannot be derived there.
 /// `nodes` is the node budget, one sum across the pass and its `Reg`
-/// substitutions; `deepest` is the pass's high-water mark, so how deep the
-/// judgment went is recorded once per level entered rather than recombined
-/// at every node. One judgment per `Checker`: [`Checker::check_signed`]
-/// consumes it, so a second judgment cannot inherit the first's mark.
+/// substitutions; `deepest` is the pass's high-water mark, written only
+/// through [`Checker::reach_to`] — at every level a node is entered at, and
+/// at the far end of every reference — rather than recombined at every node.
+/// One judgment per `Checker`: each of its two top-level judgments —
+/// [`Checker::check_signed`], [`Checker::check_closed_dom`] — consumes it, so
+/// a second cannot inherit the first's mark or its spent budget.
 pub(crate) struct Checker<'a> {
     catalog: &'a TypeCatalog,
     resolve: &'a Resolver<'a>,
@@ -371,18 +375,42 @@ impl<'a> Checker<'a> {
         })
     }
 
-    /// The two doors at every node — nesting past `MAX_DEPTH` and the node
-    /// budget, charged `weight` units for the node and the payload it carries
-    /// — and, once both pass, the ONE place a level is recorded against the
-    /// pass's high-water mark.
-    fn enter(&self, weight: usize, depth: u32) -> Result<(), TypeError> {
-        if depth > MAX_DEPTH {
+    /// The WT domain judgment over a CLOSED domain — one that binds only its
+    /// own variables, as a rule's does — from nesting level 0: the checker's
+    /// second top-level judgment beside [`Checker::check_signed`], consuming
+    /// it likewise. Once a caller has refused a `ref_free == false` answer,
+    /// its product carries every guarantee the domain's walks lean on: every
+    /// `TypeRef` `Concrete`, no `Reg` survivor, and no node deeper than
+    /// `MAX_DEPTH` — the bound `enum_dom` and `Analyzer::dom` take, having
+    /// none of their own.
+    pub(crate) fn check_closed_dom(self, dm: &Dom) -> Result<CheckedDom, TypeError> {
+        self.check_dom(&Ctx::new(), dm, 0)
+    }
+
+    /// A walk over this term reaches `level`: refused past `MAX_DEPTH`
+    /// (`TooDeep`), otherwise recorded against the pass's high-water mark —
+    /// the ONE place either happens. [`Checker::enter`] asks it for every
+    /// level a node is checked at; the `Ref` arm asks it for the deepest level
+    /// a walk through the reference reaches ([`reference_reach`]), which is
+    /// the referent's and so entered by no node of this pass.
+    fn reach_to(&self, level: u32) -> Result<(), TypeError> {
+        if level > MAX_DEPTH {
             return Err(TypeError::TooDeep);
         }
+        self.deepest.set(self.deepest.get().max(level));
+        Ok(())
+    }
+
+    /// The two doors at every node — the nesting cap ([`Checker::reach_to`],
+    /// which also records the level) and the node budget, charged `weight`
+    /// units for the node and the payload it carries. The cap speaks first, so
+    /// a node past both is `TooDeep`; a level recorded ahead of a `TooLarge`
+    /// is never read, the judgment failing with it.
+    fn enter(&self, weight: usize, depth: u32) -> Result<(), TypeError> {
+        self.reach_to(depth)?;
         if !self.nodes.charge(weight) {
             return Err(TypeError::TooLarge);
         }
-        self.deepest.set(self.deepest.get().max(depth));
         Ok(())
     }
 
@@ -636,13 +664,9 @@ impl<'a> Checker<'a> {
                     Unresolved::TooDeep => TypeError::TooDeep,
                 })?;
                 let checked_args = self.reference_args(ctx, &referent, args, depth)?;
-                let reach = reference_reach(depth, args.len(), referent.reach);
-                if reach > MAX_DEPTH {
-                    return Err(TypeError::TooDeep);
-                }
                 // The levels a walk through this node reaches are the
                 // referent's, which no `enter` on this pass records.
-                self.deepest.set(self.deepest.get().max(reach));
+                self.reach_to(reference_reach(depth, args.len(), referent.reach))?;
                 Ok(Checked {
                     term: Arc::new(Term::Ref { addr: addr.clone(), args: checked_args }),
                     sort: referent.result,
@@ -935,7 +959,7 @@ impl<'a> Checker<'a> {
     /// design's "likewise rejected at the element-sort check" it surfaces as
     /// `SortMismatch{expected: Addr, found: Tup}` (the vocabulary has no
     /// class sort to name).
-    pub(crate) fn check_dom(&self, ctx: &Ctx, dm: &Dom, depth: u32) -> Result<CheckedDom, TypeError> {
+    fn check_dom(&self, ctx: &Ctx, dm: &Dom, depth: u32) -> Result<CheckedDom, TypeError> {
         // A domain former carries no unbounded payload of its own: its type
         // position is a cataloged endset (`guarded`), its children are terms.
         self.enter(1, depth)?;

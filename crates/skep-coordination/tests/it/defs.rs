@@ -758,8 +758,8 @@ fn a_probe_before_registration_does_not_freeze_the_start() {
 
 /// The def-registration probes are class-free by design, and the
 /// evaluator's look is not: a def registered into a document the guest
-/// predicate refuses is ever-registered, active, signed and evaluable —
-/// and invisible to `is_K(pdef, ·)` at every view.
+/// predicate refuses is ever-registered, active, signed, evaluable and
+/// endorsable as a referent — and invisible to `is_K(pdef, ·)` at every view.
 #[test]
 fn def_probes_are_class_free_while_the_evaluator_s_look_is_not() {
     let k = kernel();
@@ -775,6 +775,14 @@ fn def_probes_are_class_free_while_the_evaluator_s_look_is_not() {
     for view in [View::Active, View::Audit, View::Default] {
         assert!(!decide_now(&k, &c, view, is_k(&pred_def_ty(), lit_addr(&start))), "{view:?}");
     }
+
+    // Endorsement is a registration question too: a consumer of the
+    // draft-registered def registers in a readable home, the referent active
+    // to `register_pred`'s class-free gate though hidden from the look.
+    let consumer = c
+        .type_check(vec![], Term::Ref { addr: start.clone(), args: vec![] })
+        .expect("a reference to the draft-registered def");
+    c.define_predicate(&doc1(), &consumer).expect("the endorsement gate reads class-free");
 
     // `is_certified_stable` is the same split: the certificate lands in the
     // draft, so the def probe answers and the evaluator's look does not.

@@ -13,7 +13,7 @@ use skep_kernel::{Seq, Snapshot, TxnError};
 use skep_links::{Caller, EmitError, Endset, NullifyError, Pattern, ShippedType, View};
 
 use crate::ast::{ArcDom, Dom, Term};
-use crate::check::{Checker, Ctx, TypedTerm};
+use crate::check::TypedTerm;
 use crate::coordinator::memo::DefStatus;
 use crate::coordinator::Coordinator;
 use crate::dynamics::{negated_membership, Analyzer, Emission, Footprint};
@@ -23,12 +23,16 @@ use crate::rule::{
     FireAction, FireOutcome, Occurrence, Rule, RuleCertification, RuleId, ScopeBody, StepOutcome,
     Trigger,
 };
-use crate::value::{lift, Arg, Env, Sort, Value};
+use crate::value::{Arg, Env, Sort, Value};
 use crate::CoordinationWorld;
 
-/// A rule domain that passed `check_dom` — the `Dom` analogue of
+/// A rule domain that passed the checker's closed-domain judgment and
+/// `validate_rule`'s `RefBearingDomain` gate — the `Dom` analogue of
 /// `TypedTerm`'s evaluable projection: every `TypeRef` `Concrete`, no
-/// surviving `Reg` binder. A [`Rule`]'s own `domain` is the raw submission;
+/// surviving `Reg` binder, REF-FREE (so its enumeration needs no
+/// `DefSource`: `enum_rule_dom` builds its context with none), and nested
+/// within `MAX_DEPTH` — the bound `enum_dom` and `Analyzer::dom` rely on,
+/// having none of their own. A [`Rule`]'s own `domain` is the raw submission;
 /// only this shape is ever enumerated, and only this module builds one —
 /// `validate_rule`, the shared doorkeeper both `register_rule` and
 /// `certify_rule` run — so the working set holds no unchecked domain.
@@ -192,11 +196,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // Domain: checked + Reg-expanded (a body-level Reg is legitimate PL;
         // a BARE Reg fails the sort check), closed (binds only its own
         // variables).
-        let resolve = |start: &Address, depth: u32| self.resolve_def_at(start, depth);
-        let checker = Checker::new(&self.catalog, &resolve);
-        let cd = checker
-            .check_dom(&Ctx::new(), &rule.domain, 0)
-            .map_err(RuleError::IllFormedDomain)?;
+        let cd = self.check_closed_dom(&rule.domain).map_err(RuleError::IllFormedDomain)?;
         if !cd.ref_free {
             return Err(RuleError::RefBearingDomain);
         }
@@ -296,10 +296,12 @@ impl<W: CoordinationWorld> Coordinator<W> {
 
     /// The rule's first ENABLED occurrence at `snap` among the arguments
     /// `keep` admits: `[D_ρ]` in enumeration order, the first whose trigger
-    /// holds — the ONE statement of "enabled" (ASN-0133), so `step`,
-    /// `next_enabled`/`quiescent` and `quiescent_scoped` cannot come apart on
-    /// it. `keep` is asked first, so an argument it rejects costs no trigger
-    /// evaluation.
+    /// holds — the ONE statement of "enabled" (ASN-0133). The peek asks it
+    /// (`next_enabled`/`quiescent` and `step`), `quiescent_scoped` filters it
+    /// by scope, and `fire` asks it again at its own snapshot, narrowed to
+    /// one element — so the peek and the fire answer the same question, and
+    /// `NoOp` means exactly "enabled at the peek, not at the fire". `keep` is
+    /// asked first, so an argument it rejects costs no trigger evaluation.
     fn first_enabled(
         &self,
         rule: &CheckedRule,
@@ -377,7 +379,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         };
         // A `None` — the body and the element's shape disagree — leaves the
         // rule UNSCOPED: every one of its arguments counts.
-        let scoped = |arg: &Arg| in_scope(body, arg, &s_of).unwrap_or(true);
+        let scoped = |arg: &Arg| body.in_scope(arg, &s_of).unwrap_or(true);
         !self
             .rules
             .iter()
@@ -399,12 +401,13 @@ impl<W: CoordinationWorld> Coordinator<W> {
         })
     }
 
-    /// The fire executor: pin a fresh snapshot; re-check `x ∈ [D_ρ]` (out ⇒
-    /// `NoOp` — ASN-0133's fire relation is defined only on domain members;
-    /// the fairness "removed" discharge — an `arg` of the other shape than
-    /// the rule's domain yields is out of it by construction, and answers
-    /// `NoOp` like any other non-member); evaluate the trigger (false ⇒
-    /// `NoOp` — Q1 falsified-in-place); then run the action through M7's
+    /// The fire executor: pin a fresh snapshot; ask again there whether
+    /// `(ρ, x)` is ENABLED (`first_enabled`, the peek's own question,
+    /// narrowed to `x`'s element), two cases answering `NoOp` — `x` out of
+    /// `[D_ρ]` (ASN-0133's fire relation is defined only on domain members:
+    /// the fairness "removed" discharge, which an `arg` of the other shape
+    /// than the rule's domain yields meets by construction), or the trigger
+    /// false (Q1, falsified in place); then run the action through M7's
     /// gated write path — ONE emit/nullify per fire, one M2 transaction
     /// (H-ATOM/H-FIN), home checked by M7 (H-HOME → `HomeNotRegistered`,
     /// never a silent skip).
@@ -444,20 +447,15 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 "fire precondition: the RuleId was minted by this Coordinator (ids are per-handle)",
             );
         let snap = self.kernel.snapshot();
-        // Membership is the domain element's own identity rule
-        // (`Arg::same_element`), and what it finds is the STORE's element —
-        // never the caller's — so the trigger and the action see what the
-        // domain yielded.
-        let found = self
-            .enum_rule_dom(rule, &snap)
-            .into_iter()
-            .find(|elem| elem.same_element(&occurrence.arg));
-        let Some(arg) = found else {
+        // Enabledness at the fire's own snapshot is the peek's question —
+        // `first_enabled` — narrowed to the occurrence's element by the domain
+        // element's identity rule (`Arg::same_element`). What it yields is the
+        // STORE's element, never the caller's, so the trigger and the action
+        // see what the domain yielded.
+        let is_occurrence = |elem: &Arg| elem.same_element(&occurrence.arg);
+        let Some(arg) = self.first_enabled(rule, &snap, is_occurrence) else {
             return Ok(FireOutcome::NoOp);
         };
-        if !self.trigger_true(rule, &arg, &snap) {
-            return Ok(FireOutcome::NoOp);
-        }
         let arg_addr = arg.key_addr();
         if let Some(doc) = self.draft_boundary(snap.world(), rule.action.home(), arg_addr) {
             return Err(FireError::DraftBoundary(doc));
@@ -498,8 +496,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// M7's H-HOME), which is why `Coordinator::new` obliges the assembler
     /// to make it TOTAL.
     ///
-    /// This is the READ half of the class. What a deposit's own value-keyed
-    /// gates see is `Coordinator::link_writer`'s (lane 3.3b).
+    /// This is the BOUNDARY, one of the class's three applications: what a
+    /// verdict sees is `Coordinator::eval_ctx`'s (the look, lane 4.1), and
+    /// what a deposit's own value-keyed gates see is
+    /// `Coordinator::link_writer`'s (lane 3.3b).
     fn draft_boundary(&self, w: &W, home: &Address, arg_addr: &Address) -> Option<Address> {
         let arg_doc = document_of(arg_addr).unwrap_or_else(|| arg_addr.clone());
         for doc in [home, &arg_doc] {
@@ -697,22 +697,6 @@ fn nullify_refusal(err: TxnError<NullifyError>) -> FireError {
     match err {
         TxnError::Rejected(NullifyError::HomeNotRegistered) => FireError::HomeNotRegistered,
         other => FireError::Nullify(other),
-    }
-}
-
-/// β_ρ^S(x) — the four canonical S-positive bodies (Q9): whether the bound
-/// argument is in scope, or `None` when the body and the argument's shape
-/// disagree (`PerAddress` goes with an address element, the three tuple
-/// bodies with a tuple element). A `None` leaves the rule UNSCOPED — its
-/// full `[D_ρ]` — a safe over-approximation of remaining work, never false
-/// quiescence.
-fn in_scope(body: ScopeBody, arg: &Arg, s_of: &dyn Fn(&Address) -> bool) -> Option<bool> {
-    match (body, arg) {
-        (ScopeBody::PerAddress, Arg::Addr(a)) => Some(s_of(a)),
-        (ScopeBody::PerEmitter, Arg::Tuple(t)) => Some(s_of(&t.addr)),
-        (ScopeBody::PerTarget, Arg::Tuple(t)) => Some(t.to.addrs().any(|y| s_of(&lift(y)))),
-        (ScopeBody::PerSource, Arg::Tuple(t)) => Some(t.from.addrs().any(|y| s_of(&lift(y)))),
-        _ => None,
     }
 }
 

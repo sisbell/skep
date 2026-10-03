@@ -155,17 +155,23 @@ impl<'a, W> GuestLinks<'a, W> {
     }
 
     /// M7's `observe` over one stored slice, UNFILTERED — the ONE place a
-    /// slice widens to the `View` M7 names it by. Every read here starts from
-    /// it and narrows by [`GuestLinks::admits`]: the collections through
+    /// slice widens to the `View` M7 names it by. Every TUPLE read here starts
+    /// from it and narrows by [`GuestLinks::admits`]: the collections through
     /// [`GuestLinks::observe`]'s `retain`, the two membership predicates
-    /// through `any`, which stops at the first tuple that answers.
+    /// through `any`, which stops at the first tuple that answers. BH4's
+    /// `age` and `stale` read no slice — M7 answers them in addresses, from
+    /// its own computation — and narrow by [`GuestLinks::home_readable`]
+    /// directly.
     fn candidates(&self, ty: &Endset, pat: Pattern<'_>, slice: Slice) -> Vec<Tuple> {
         self.unfiltered.observe(ty, pat, slice.into())
     }
 
     /// M7's `observe` over one stored slice, with the tuples of unreadable
-    /// homes dropped — the ONE filtering primitive every COLLECTION read here
-    /// is built on, so the guest-class test has one statement.
+    /// homes dropped — the ONE filtering primitive every TUPLE-collection read
+    /// here is built on. `stale`, whose answer is M7's own staleness
+    /// computation over addresses, filters through
+    /// [`GuestLinks::home_readable`] directly, and the guest-class test has
+    /// its one statement there.
     pub(crate) fn observe(&self, ty: &Endset, pat: Pattern<'_>, slice: Slice) -> Vec<Tuple> {
         let mut out = self.candidates(ty, pat, slice);
         out.retain(|t| self.admits(t));

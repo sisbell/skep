@@ -1,12 +1,12 @@
 //! §Internal 1/4 — the resource budget: what an untrusted PL term may command
 //! of the process, and how each walk charges against it. Two numbers bound a
-//! term — [`MAX_DEPTH`] its nesting, [`MAX_TERM_NODES`] its size — a pair of
-//! functions prices a reference in levels ([`argument_depth`],
-//! [`reference_reach`], over [`DERIVATION_COST`]), one prices a node
-//! ([`weight`]), and one counter spends the size ([`Budget`]); three doors
-//! enforce them, the def decoder's, the checker's and the expander's,
-//! differing only in the refusal each answers with (`Malformed`,
-//! `TypeError::{TooDeep, TooLarge}`, `ExpansionTooLarge`).
+//! term — [`MAX_DEPTH`] its nesting, [`MAX_TERM_NODES`] its size — three
+//! functions place a reference in levels ([`referent_depth`],
+//! [`argument_depth`], [`reference_reach`]), one prices a node ([`weight`]),
+//! and one counter spends the size ([`Budget`]); three doors enforce them,
+//! the def decoder's, the checker's and the expander's, differing only in the
+//! refusal each answers with (`Malformed`, `TypeError::{TooDeep, TooLarge}`,
+//! `ExpansionTooLarge`).
 //!
 //! Every walk over a term recurses once per former on the caller's thread and
 //! none is bounded otherwise, so the caps are set against a MEASURED stack and
@@ -40,13 +40,29 @@ pub(crate) const MAX_DEPTH: u32 = 128;
 /// The levels a reference costs beyond its own node, in [`MAX_DEPTH`]'s
 /// units: the frames between a `Ref` node's check and its referent's — the
 /// resolver, the memo probe, the derivation — and the evaluator's and
-/// expander's re-entry at the referent. [`reference_reach`] composes this
-/// with the flat expansion's `Let` chain and the referent's own reach;
-/// [`argument_depth`] places each argument in that chain. Set against the
+/// expander's re-entry at the referent. [`referent_depth`] carries a walk
+/// across these frames to the referent's root; [`reference_reach`] adds the
+/// flat expansion's `Let` chain and the referent's own reach. Set against the
 /// same measurement as [`MAX_DEPTH`]: the chain test derives a chain
 /// registered to the cap cold, on a default thread, so a cost set too low
-/// aborts there.
-pub(crate) const DERIVATION_COST: u32 = 2;
+/// aborts there. Private to this module, as [`MAX_TERM_NODES`] is: a
+/// reference is placed only through the three functions below, so its
+/// arithmetic has one copy.
+const DERIVATION_COST: u32 = 2;
+
+/// The level at which a walk through a reference at level `depth` reaches
+/// its referent's root, [`DERIVATION_COST`]'s frames past the reference:
+/// where a cold derivation starts the referent's own check, and so the level
+/// the checker asks the resolver for the referent at. A derivation from here
+/// of a def that fits at level 0 — every def `register_pred` admits —
+/// reaches this level plus the referent's reach, which is WITHIN
+/// [`reference_reach`]: the charge adds the flat expansion's `Let` chain,
+/// and no derivation builds one. So a derivation refused here means the
+/// charge is past the cap too, and a cold memo never refuses a reference the
+/// warm one would admit.
+pub(crate) fn referent_depth(depth: u32) -> u32 {
+    depth.saturating_add(DERIVATION_COST)
+}
 
 /// The level at which argument `i` of a reference at level `depth` is checked
 /// — which is the level its own expansion will occupy. PR3a realizes a
@@ -63,15 +79,16 @@ pub(crate) fn argument_depth(depth: u32, i: usize) -> u32 {
 }
 
 /// The deepest level a walk through a reference at level `depth` reaches:
-/// past [`DERIVATION_COST`] to the referent's own check, past the flat
-/// expansion's `Let` chain (one level per argument — PR3a), and through the
-/// referent's recorded reach. With [`argument_depth`] this is the WHOLE of
-/// what a reference costs in levels, stated here so the checker that charges
-/// it and the expander that builds to match cannot drift: a change to
-/// `expand.rs`'s realization of a reference is a change to these two
+/// past [`referent_depth`] to the referent's root, past the flat expansion's
+/// `Let` chain (one level per argument — PR3a), and through the referent's
+/// recorded reach. With [`referent_depth`] and [`argument_depth`] this is the
+/// WHOLE of what a reference costs in levels, stated here so the checker that
+/// charges it, the derivation it asks for, and the expander that builds to
+/// match cannot drift: a change to `expand.rs`'s realization of a reference,
+/// or to the frames a derivation spends, is a change to these three
 /// functions, and the checker follows.
 pub(crate) fn reference_reach(depth: u32, arity: usize, referent_reach: u32) -> u32 {
-    depth.saturating_add(DERIVATION_COST)
+    referent_depth(depth)
         .saturating_add(u32::try_from(arity).unwrap_or(u32::MAX))
         .saturating_add(referent_reach)
 }

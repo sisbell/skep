@@ -152,9 +152,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// The miss path: pin its OWN snapshot to check ever-registration (a
     /// never-registered start is never cached — a later registration must
     /// surface), then derive from immutable content with the body's root at
-    /// `depth`, recursing through referents at the levels the checker
-    /// charges them (well-founded by PR2; a breach cycle strictly deepens
-    /// each round until the checker's nesting door refuses it).
+    /// `depth`, recursing through referents at the levels the checker asks
+    /// for them at (`budget::referent_depth`; well-founded by PR2; a breach
+    /// cycle strictly deepens each round until the checker's nesting door
+    /// refuses it).
     ///
     /// What is memoized is the CONTENT's status and nothing else: an
     /// ever-registered start whose content fails the parse, or fails WT on
@@ -187,8 +188,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
 
     /// The defined referent at `start`, its derivation (if the memo misses)
     /// rooted at nesting level `depth` — the resolver the checker consults
-    /// for a `Ref`, which asks at the level it charged the reference for.
-    /// No defined signature (never registered, or poisoned) is
+    /// for a `Ref`, which asks at `budget::referent_depth` of the reference's
+    /// own level. No defined signature (never registered, or poisoned) is
     /// `Unresolved::Dangling`; a derivation that cannot complete at `depth`
     /// is `Unresolved::TooDeep`, the referent unjudged.
     pub(super) fn resolve_def_at(

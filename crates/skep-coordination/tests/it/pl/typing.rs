@@ -197,6 +197,35 @@ fn type_check_reports_the_first_rejection_in_its_stated_walk_order() {
     );
 }
 
+/// A `Ref`'s referent speaks before its arguments in both of its parts —
+/// whether it resolves, then how deep a walk through it reaches — so which
+/// rejection speaks does not turn on whether the memo was warm. Cold, the
+/// referent's derivation is refused at the level the reference asks for it
+/// at; warm, the reach the reference is charged is refused at the same
+/// point; an argument with a fault of its own is reached on neither, and the
+/// same argument under a shallow reference shows the fault is real.
+#[test]
+fn a_reference_too_deep_for_its_referent_is_refused_before_its_arguments_warm_or_cold() {
+    let k = kernel();
+    let warm = coord(&k);
+    // P(x) := ¬¹⁰⁰ ⊤, reach 100 — defined through `warm`, which memoizes it.
+    let p_body = (0..100).fold(tru(), |t, _| not(t));
+    let p_term = warm.type_check(vec![(v(1), Sort::Addr)], p_body).expect("P(x) := ¬¹⁰⁰ ⊤");
+    let (p, _) = warm.define_predicate(&doc1(), &p_term).expect("define P");
+    let reference = || Term::Ref { addr: p.clone(), args: vec![at(and(tru(), lit_nat(1)))] };
+    // At level 27: P derives at 29 and would reach 129; the reference is
+    // charged 27 + 2 + 1 + 100 = 130.
+    let deep = (0..27).fold(reference(), |t, _| not(t));
+    let cold = coord(&k);
+    assert!(matches!(cold.type_check(vec![], deep.clone()), Err(TypeError::TooDeep)));
+    assert!(matches!(warm.type_check(vec![], deep), Err(TypeError::TooDeep)));
+    // At the root the reach fits, and the argument's own fault speaks.
+    assert_eq!(
+        warm.type_check(vec![], reference()).err(),
+        Some(TypeError::SortMismatch { expected: Sort::Bool, found: Sort::Nat })
+    );
+}
+
 /// The node budget: `Reg`-expansion instantiates a body once per cataloged
 /// class, so nested `Reg` quantifiers multiply — six over a leaf fit, seven
 /// do not (`TooLarge`, before the seventh level's 78 125 instances exist) —

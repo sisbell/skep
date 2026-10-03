@@ -242,7 +242,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// first rejection the checker meets in a pre-order walk of the body —
     /// a node's type position and behavior guard before its children;
     /// children left to right, a binder's domain or bound term before its
-    /// body; a `Ref`'s referent before its arguments, each argument checked
+    /// body; a `Ref`'s referent — whether it resolves, then how deep a walk
+    /// through it reaches — before its arguments, each argument checked
     /// before it is matched against its formal, so an arity mismatch (a
     /// `SortMismatch`) speaks at the first unmatched position; a `Reg`
     /// quantifier's instances in catalog order — with `TooDeep`/`TooLarge`
@@ -274,13 +275,13 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// and the def resolver handed to a fresh [`Checker`], whose judgment
     /// runs from nesting level `depth` — 0 at the top of a chain (the public
     /// checks, `register_pred`, a cold `signature`), and for a def derived
-    /// through a `Ref` the level the checker charged that `Ref` for its
-    /// referent, so the chain's total nesting is bounded by `MAX_DEPTH`
-    /// however deep the derivation runs. Referents resolve through the def
-    /// memo at the level the checker asks for them: a referent with no
-    /// defined signature is `DanglingReference`, and one whose derivation
-    /// cannot complete at that level is `TooDeep`, with the referent left
-    /// unjudged.
+    /// through a `Ref` the level the checker asks for its referent at
+    /// ([`crate::budget::referent_depth`]), so the chain's total nesting is
+    /// bounded by `MAX_DEPTH` however deep the derivation runs. Referents
+    /// resolve through the def memo at the level the checker asks for them:
+    /// a referent with no defined signature is `DanglingReference`, and one
+    /// whose derivation cannot complete at that level is `TooDeep`, with the
+    /// referent left unjudged.
     fn check_signed(&self, signed: SignedTerm, depth: u32) -> Result<TypedTerm, TypeError> {
         let resolve = |start: &Address, depth: u32| self.resolve_def_at(start, depth);
         Checker::new(&self.catalog, &resolve).check_signed(signed, depth)

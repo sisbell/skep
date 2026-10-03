@@ -10,13 +10,13 @@
 //! The pass is also the crate's two resource doors for a term, stored or
 //! supplied: it refuses a tree that nests past [`MAX_DEPTH`] — counting the
 //! evaluable projection it builds (`Reg`-expansion joins included) and the
-//! levels a reference costs, its referent's own reach and each argument at
-//! the `Let` position its index gives it ([`argument_depth`],
-//! [`reference_reach`]) — and one that spends the node [`Budget`], counting
-//! every node it visits or builds AND the payload each carries, so nested
-//! `Reg` quantifiers, an `Arc`-shared body and a large literal are charged
-//! for what they produce and the check stops at the budget rather than after
-//! it.
+//! levels a reference costs: the level its referent is derived at, the
+//! referent's own reach, and each argument at the `Let` position its index
+//! gives it ([`referent_depth`], [`reference_reach`], [`argument_depth`]) —
+//! and one that spends the node [`Budget`], counting every node it visits or
+//! builds AND the payload each carries, so nested `Reg` quantifiers, an
+//! `Arc`-shared body and a large literal are charged for what they produce
+//! and the check stops at the budget rather than after it.
 
 use std::cell::Cell;
 use std::collections::HashSet;
@@ -26,9 +26,7 @@ use skep_address::{Address, Nat};
 use skep_links::Behavior;
 
 use crate::ast::{ArcDom, ArcTerm, Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId};
-use crate::budget::{
-    argument_depth, reference_reach, weight, Budget, DERIVATION_COST, MAX_DEPTH,
-};
+use crate::budget::{argument_depth, reference_reach, referent_depth, weight, Budget, MAX_DEPTH};
 use crate::catalog::TypeCatalog;
 use crate::error::TypeError;
 use crate::value::{Signature, SignedTerm, Sort};
@@ -105,8 +103,12 @@ impl TypedTerm {
         self.result
     }
 
-    /// False iff any `Ref` node survives — every PL evaluator but
-    /// `evaluate_def` requires it true.
+    /// False iff any `Ref` node survives. `eval` (and so `decide`),
+    /// `classify` and `quiescent_scoped`'s scope require it true, each
+    /// asserting it at its door. A ref-bearing term is used by ADDRESS:
+    /// `define_predicate` stores it, `evaluate_def` evaluates it, and its
+    /// static analyses run over the stored def's flat reference expansion —
+    /// `certify_stable`'s, and `certify_rule`'s for a `Def` trigger.
     pub fn is_ref_free(&self) -> bool {
         self.ref_free
     }
@@ -277,9 +279,11 @@ pub(crate) type Resolver<'a> = dyn Fn(&Address, u32) -> Result<Arc<TypedTerm>, U
 /// run over — where [`Resolver`] is the checker's own consultation of the
 /// same memo. It answers at level 0: every referent a driver asks for belongs
 /// to a checked body, so the one refusal is "no defined signature". An
-/// evaluation context holds none for the public `eval`/`decide`, whose
-/// ref-free precondition makes the `Ref` arm a panic. A `Some` is the memo's
-/// own `Arc` — the checked term of a defined referent, never a copy.
+/// evaluation context holds none wherever a gate has already made its term
+/// ref-free — `eval`/`decide`'s precondition, a rule's checked domain,
+/// `quiescent_scoped`'s scope — so the `Ref` arm there is a panic, not a
+/// resolution. A `Some` is the memo's own `Arc` — the checked term of a
+/// defined referent, never a copy.
 pub(crate) trait DefSource {
     fn resolve_def(&self, addr: &Address) -> Option<Arc<TypedTerm>>;
 }
@@ -320,11 +324,11 @@ const SEQ_ELEMS: PrimRule = PrimRule { operand: Sort::AddrSeq, result: Sort::Add
 
 /// The checking pass. `resolve` is the referent resolver WT-ref consults —
 /// the only external consultation (it reads the immutable def memo, so even
-/// ref-bearing type-checking is "decided once") — asked at the depth the
-/// referent's own check would start at, so a cold derivation reaches
-/// exactly the levels the `Ref` node was charged for, and answering
-/// [`Unresolved::TooDeep`] when the referent cannot be derived there.
-/// `nodes` is the node budget, one sum across the pass and its `Reg`
+/// ref-bearing type-checking is "decided once") — asked at the level the
+/// referent's own check starts at ([`referent_depth`]), so a cold derivation
+/// stays within the levels the `Ref` node is charged ([`reference_reach`]),
+/// and answering [`Unresolved::TooDeep`] when the referent cannot be derived
+/// there. `nodes` is the node budget, one sum across the pass and its `Reg`
 /// substitutions; `deepest` is the pass's high-water mark, written only
 /// through [`Checker::reach_to`] — at every level a node is entered at, and
 /// at the far end of every reference — rather than recombined at every node.
@@ -351,11 +355,11 @@ impl<'a> Checker<'a> {
     /// duplicate-name set, the typing context); then Γ_D binds each name once
     /// (`DuplicateParameter` otherwise), so that an `Env` can bind every
     /// parameter at its sort; then WT + WT-ref over the body, referents
-    /// resolved at the levels the `Ref` arm charges them.
-    /// [`TypedTerm::reach`] is the pass's high-water mark RELATIVE to this
-    /// root — the same quantity [`Checker::check_term`]'s `Ref` arm adds to
-    /// its own level when it charges a reference to this term, so the two
-    /// halves of the depth accounting are stated together.
+    /// resolved at the levels the `Ref` arm asks for them at
+    /// ([`referent_depth`]). [`TypedTerm::reach`] is the pass's high-water
+    /// mark RELATIVE to this root — the referent's term in [`reference_reach`]
+    /// when [`Checker::check_term`]'s `Ref` arm charges a reference to this
+    /// term — so the two halves of the depth accounting are stated together.
     pub(crate) fn check_signed(self, signed: SignedTerm, depth: u32) -> Result<TypedTerm, TypeError> {
         if !self.nodes.charge(signed.params.len()) {
             return Err(TypeError::TooLarge);
@@ -512,8 +516,8 @@ impl<'a> Checker<'a> {
     }
 
     /// WT over `t` at nesting level `depth` (0 at a term's root; a def
-    /// derived through a `Ref` starts at the `Ref`'s level plus
-    /// `DERIVATION_COST`).
+    /// derived through a `Ref` starts at [`referent_depth`] of the `Ref`'s
+    /// level).
     fn check_term(&self, ctx: &Ctx, t: &Term, depth: u32) -> Result<Checked, TypeError> {
         self.enter(weight(t), depth)?;
         // `depth` is this node's level, `child_depth` the level its children
@@ -652,21 +656,22 @@ impl<'a> Checker<'a> {
                 // each argᵢ checks at Cᵢ. No defined signature (never
                 // registered, or undisciplined) ⇒ DanglingReference.
                 //
-                // The referent is asked for at the level its own check would
-                // start at from here — this node's plus the derivation's — so
-                // the levels a cold derivation through this node reaches are
-                // exactly the reach `reference_reach` charges. A derivation
-                // that cannot complete at that level is THIS node's TooDeep —
-                // the same answer the reach check below gives on a memo hit —
-                // and says nothing about the referent.
-                let referent = (self.resolve)(addr, depth + DERIVATION_COST).map_err(|u| match u {
+                // The referent is asked for at `referent_depth`, where its own
+                // check starts from here. A derivation that cannot complete
+                // there is THIS node's TooDeep and says nothing about the
+                // referent; on a memo hit the same reference is refused by the
+                // reach charge below (`referent_depth` states why). That
+                // charge is the referent's, so it is made BEFORE the arguments
+                // are checked: the referent speaks first, warm or cold, and a
+                // term's answer does not turn on whether the memo was warm.
+                let referent = (self.resolve)(addr, referent_depth(depth)).map_err(|u| match u {
                     Unresolved::Dangling => TypeError::DanglingReference(addr.clone()),
                     Unresolved::TooDeep => TypeError::TooDeep,
                 })?;
-                let checked_args = self.reference_args(ctx, &referent, args, depth)?;
                 // The levels a walk through this node reaches are the
                 // referent's, which no `enter` on this pass records.
                 self.reach_to(reference_reach(depth, args.len(), referent.reach))?;
+                let checked_args = self.reference_args(ctx, &referent, args, depth)?;
                 Ok(Checked {
                     term: Arc::new(Term::Ref { addr: addr.clone(), args: checked_args }),
                     sort: referent.result,

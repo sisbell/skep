@@ -9,11 +9,12 @@
 //! the journaled types survive a serde round trip (and M2's real
 //! checkpoint-plus-replay recovery), that the slice's decode takes its
 //! entries in any order and neither journaled type's decode trusts a count
-//! its bytes do not carry, that the slice's serialized form is the format its
-//! readers pin, that a debug build panics on a non-content address before it
-//! looks at what is stored there, at the line that passed it in, that a
-//! value renders into `Debug` as its byte length and never a byte, and that
-//! each part of the interface does its ordinary job on an ordinary input.
+//! its bytes do not carry or admits a key that is no tumbler, that the
+//! slice's serialized form is the format its readers pin, that a debug build
+//! panics on a non-content address before it looks at what is stored there,
+//! at the line that passed it in, that a value renders into `Debug` as its
+//! byte length and never a byte, and that each part of the interface does its
+//! ordinary job on an ordinary input.
 //! Where a debug build's assertion panics, release does something else, and
 //! those tests say what each build does; the gate runs the suite in both.
 //! The toy `World`/`Rec` pair is the minimal engine assembly the composition
@@ -486,15 +487,17 @@ fn the_slice_serializes_as_its_map_alone_in_tumbler_order() {
 }
 
 /// Decodes `bytes` as `T` and asserts the decode REFUSED them: an `Err` —
-/// neither a value nor a panic, which is how a reservation sized by a count
-/// the bytes do not carry shows itself when it overflows.
+/// neither a value nor a panic. A panic is how a reservation sized by a count
+/// the bytes do not carry shows itself when it overflows, and how a decode
+/// that takes what they hold on trust, through an `expect`, shows itself at
+/// all.
 fn assert_refused<T: DeserializeOwned>(what: &str, bytes: &[u8]) {
     match std::panic::catch_unwind(|| bincode::deserialize::<T>(bytes)) {
         Ok(Err(_)) => {}
-        Ok(Ok(_)) => panic!("{what}: decoded, though the bytes carry less than they declare"),
+        Ok(Ok(_)) => panic!("{what}: decoded, though no value serializes as these bytes"),
         Err(_) => panic!(
-            "{what}: the decode panicked instead of refusing the bytes — it reserved room for \
-             the count they declare before reading what they carry"
+            "{what}: the decode panicked instead of refusing the bytes — a reservation sized by \
+             a count they do not carry, or an `expect` that took what they hold on trust"
         ),
     }
 }
@@ -531,6 +534,42 @@ fn journaled_types_refuse_a_count_their_bytes_do_not_carry() {
         "a record whose address counts more components than follow",
         &u64::MAX.to_le_bytes(),
     );
+}
+
+#[test]
+fn journaled_types_refuse_a_key_that_is_no_tumbler() {
+    // M2's hostile-input obligation, at the key: the slice's decode
+    // (`entry_by_entry`) and the record's derived decode take each address as
+    // a `Tumbler`, whose `Deserialize` is M1's mint path (`try_from` →
+    // `Tumbler::new`), and that refuses the empty component sequence — no
+    // tumbler at all (T0). So a checkpoint body or a journal frame laying an
+    // empty sequence where an address belongs is REFUSED, never stored: M1's
+    // reads stand on T0 (`ordinal` takes the last component with an `expect`
+    // that names it), and a key in `dom(C)` reaches every reader of the
+    // recovered store. No constructor builds such a key, so the bytes are laid
+    // through the raw shapes the types serialize as — a tumbler as its
+    // `Vec<Nat>`, a value as its byte sequence, the slice as a `Vec` of pairs.
+    // The same shapes carrying a real address are the control: they decode to
+    // the slice and the record that hold it, so the refusal is the empty
+    // key's alone.
+    let slice = |key: &[Nat]| {
+        bincode::serialize(&vec![(key.to_vec(), b"x".to_vec())]).expect("the raw slice serializes")
+    };
+    let record = |key: &[Nat]| {
+        bincode::serialize(&(key.to_vec(), b"x".to_vec())).expect("the raw record serializes")
+    };
+    let real: Vec<Nat> = ca(1).tumbler().iter().cloned().collect();
+    let rec = stage_write(&ContentStore::default(), &ca(1), val(b"x")).expect("fresh");
+    assert_eq!(
+        bincode::deserialize::<ContentStore>(&slice(&real)).expect("the control slice decodes"),
+        ContentStore::default().apply_write(&rec)
+    );
+    assert_eq!(
+        bincode::deserialize::<ContentWrite>(&record(&real)).expect("the control record decodes"),
+        rec
+    );
+    assert_refused::<ContentStore>("a slice whose one key is an empty sequence", &slice(&[]));
+    assert_refused::<ContentWrite>("a record whose address is an empty sequence", &record(&[]));
 }
 
 #[test]

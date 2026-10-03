@@ -173,6 +173,10 @@ pub fn def(x: Term) -> Term {
     Term::Prim(Prim::Def(at(x)))
 }
 
+pub fn map_get(m: Term, e: &Endset) -> Term {
+    Term::Prim(Prim::MapGet(at(m), concrete(e)))
+}
+
 // ───────────────────────────────── atoms ─────────────────────────────────
 
 pub fn is_k(e: &Endset, x: Term) -> Term {

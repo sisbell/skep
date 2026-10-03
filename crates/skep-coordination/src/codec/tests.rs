@@ -260,10 +260,15 @@ fn decode_charges_a_literal_s_payload_against_the_node_budget() {
     assert_eq!(decode(&encode(&nat(1 << 16)).expect("encodes")), Err(Malformed));
 }
 
-/// A count the input chooses — here an endset's span count, at four bytes
-/// of input per ~48 bytes of `Span` — is charged against the budget
-/// BEFORE it sizes anything, so it can size nothing past the budget's
-/// remainder: a hundred spans decode, four thousand are `Malformed`.
+/// An endset's spans are charged twice over: through their tumblers'
+/// components and limbs, as every tumbler is, and through the span COUNT —
+/// at four bytes of input per ~48 bytes of `Span` — charged BEFORE it sizes
+/// anything, so it can size nothing past the budget's remainder. Spans of two
+/// nine-component tumblers cost 36 units each in those tumblers alone: a
+/// hundred decode and four thousand are `Malformed`, an answer the count's own
+/// unit cannot move. One-component spans cost 4 units beside it: twelve
+/// thousand fit (60 001 units) and fifteen thousand do not (75 001), where
+/// without the count's charge they would (60 001).
 #[test]
 fn decode_charges_an_endset_s_spans_against_the_node_budget() {
     let members = |spans: u32| {
@@ -278,4 +283,53 @@ fn decode_charges_an_endset_s_spans_against_the_node_budget() {
     let within = members(100);
     assert_eq!(decode(&encode(&within).expect("encodes")), Ok(within));
     assert_eq!(decode(&encode(&members(4000)).expect("encodes")), Err(Malformed));
+
+    let cheap = |spans: u32| {
+        let e = Endset::from_spans(
+            (1..=spans)
+                .flat_map(|k| skep_links::enc(&[a(&[k])]).spans().cloned().collect::<Vec<_>>()),
+        );
+        SignedTerm {
+            params: vec![],
+            body: Term::Atom(Atom::Members(TypeRef::Concrete(TypeKey(e)))),
+        }
+    };
+    let round_trips = |s: SignedTerm| decode(&encode(&s).expect("encodes")) == Ok(s);
+    assert!(round_trips(cheap(12_000)), "twelve thousand one-component spans fit the budget");
+    assert!(
+        decode(&encode(&cheap(15_000)).expect("encodes")).is_err(),
+        "fifteen thousand one-component spans decoded within the budget"
+    );
+}
+
+/// Every count the input chooses is charged, not only the formers it spells:
+/// Γ_D's parameters, a tumbler's components, a `Ref`'s arguments. Each body
+/// that round-trips fits WITH its count's charge, and each refused one fits
+/// only WITHOUT it — a parameter costs nothing else, and a component or an
+/// argument one unit more — so dropping any one of those charges decodes a
+/// body the budget refuses.
+#[test]
+fn decode_charges_every_count_the_input_chooses() {
+    let signed = |params: u32, body: Term| SignedTerm {
+        params: (0..params).map(|i| (v(i), Sort::Bool)).collect(),
+        body,
+    };
+    let round_trips = |s: SignedTerm| decode(&encode(&s).expect("encodes")) == Ok(s);
+    let refused = |s: SignedTerm| decode(&encode(&s).expect("encodes")) == Err(Malformed);
+    // Γ_D: one unit per parameter, one for the body's former.
+    assert!(round_trips(signed(60_000, Term::Lit(Lit::True))));
+    assert!(refused(signed(70_000, Term::Lit(Lit::True))));
+    // An address literal of C components, no separator among them (a node
+    // address): 1 + C (the count) + C (a limb each).
+    let ones = |comps: usize| Term::Lit(Lit::Addr(a(&vec![1u32; comps])));
+    assert!(round_trips(signed(0, ones(30_000))));
+    assert!(refused(signed(0, ones(40_000))));
+    // A `Ref` of n arguments: 1 + 16 (its address) + n (the count) + n (a
+    // former each).
+    let call = |n: usize| Term::Ref {
+        addr: a(&[1, 0, 1, 0, 1, 0, 1, 1]),
+        args: (0..n).map(|_| Arc::new(Term::Lit(Lit::True))).collect(),
+    };
+    assert!(round_trips(signed(0, call(30_000))));
+    assert!(refused(signed(0, call(40_000))));
 }

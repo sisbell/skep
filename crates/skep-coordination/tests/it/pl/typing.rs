@@ -8,7 +8,7 @@ use crate::terms::*;
 use skep_coordination::{
     Atom, Dom, Env, Lit, Nat, Sort, Term, TypeError, TypeKey, TypeRef, Value, VarId, View,
 };
-use skep_links::{coverage_class, Behavior, Caller, Endset};
+use skep_links::{coverage_class, Behavior, Caller, Endset, ShippedType};
 
 /// Γ_D is part of the checking judgment: unbound vars, the def-path/
 /// trigger-path Tup split, sort synthesis, and the catalog/behavior guards.
@@ -267,6 +267,35 @@ fn type_check_charges_a_literal_s_payload_against_the_node_budget() {
     ));
 }
 
+/// `TooLarge` names four payloads besides the node itself, and the checker
+/// charges each where it meets it — not only a `Nat`'s limbs: a Γ_D
+/// parameter, before anything is sized by the context's length, so an
+/// over-long context is `TooLarge` even where it also repeats a name; a
+/// literal address's components, once per `Reg` instance it is copied into;
+/// and a `Ref`'s address, at the `Ref`'s own node, before its referent is
+/// resolved. Each refused term fits the budget once its payload goes
+/// uncharged.
+#[test]
+fn type_check_charges_every_payload_too_large_names() {
+    let k = kernel();
+    let c = coord(&k);
+    let context = |n: u32| (1..=n).map(|i| (v(i), Sort::Bool)).collect::<Vec<_>>();
+    c.type_check(context(60_000), tru()).expect("sixty thousand parameters fit the budget");
+    let mut repeated = context(70_000);
+    repeated.push((v(1), Sort::Bool));
+    assert!(matches!(c.type_check(repeated, tru()), Err(TypeError::TooLarge)));
+
+    let long = a(&vec![1u32; 1 << 13]); // 8 192 components, no separator: a node address
+    c.type_check(vec![], is_doc(lit_addr(&long))).expect("one long literal fits");
+    assert!(matches!(
+        c.type_check(vec![], forall(10, Dom::Reg, is_doc(lit_addr(&long)))),
+        Err(TypeError::TooLarge)
+    ));
+
+    let far = Term::Ref { addr: a(&vec![1u32; 1 << 16]), args: vec![] };
+    assert!(matches!(c.type_check(vec![], far), Err(TypeError::TooLarge)));
+}
+
 /// The nesting cap is the checker's as it is the decoder's: `¬¹²⁸ ⊤`
 /// checks and `¬¹²⁹ ⊤` is `TooDeep` — at the cap, before recursing further,
 /// so a term nested thousands deep is refused on this default thread rather
@@ -386,9 +415,10 @@ fn reg_expansion_folds_count_instantiates_per_class_and_refuses_an_ill_typed_ins
     assert!(c.decide(&ex, &env, View::Active, &k.snapshot()));
 
     // A class-indexed behavior atom at the bound class dies by instantiation
-    // (some instance lacks the behavior) — RegInstanceIllTyped: only Retired
-    // declares BH1, so the Forall's pred_def instance is the ill-typed one.
-    assert!(matches!(
+    // (some instance lacks the behavior) — RegInstanceIllTyped, naming the
+    // FIRST ill-typed instance in catalog order: only Retired declares BH1,
+    // so it is the second class's, Supersedes'.
+    assert_eq!(
         c.type_check(
             vec![(v(1), Sort::Addr)],
             Term::Forall {
@@ -396,9 +426,13 @@ fn reg_expansion_folds_count_instantiates_per_class_and_refuses_an_ill_typed_ins
                 dom: ad(Dom::Reg),
                 body: at(Term::Atom(Atom::IsFiltered(TypeRef::ClassVar(v(7)), at(var(1))))),
             },
-        ),
-        Err(TypeError::RegInstanceIllTyped(_))
-    ));
+        )
+        .err(),
+        Some(TypeError::RegInstanceIllTyped(Box::new(TypeError::BehaviorMissing {
+            ty: key(c.reserved_type(ShippedType::Supersedes)),
+            needs: Behavior::ReadFilter,
+        })))
+    );
 }
 
 /// V-IDX scoping: an inner `Reg` binder that reuses the outer's name

@@ -7,7 +7,7 @@ use crate::terms::*;
 
 use skep_address::Address;
 use skep_coordination::{Dom, Env, Sort, Term, Value, View};
-use skep_links::{Caller, HasLinks, ShippedType, Tip};
+use skep_links::{coverage_class, Caller, CoverageClass, Endset, HasLinks, ShippedType, Tip};
 
 /// The atom dispatch end-to-end: active/audit/default readings, the UV
 /// `K_queried` self-exclusion (settled OQ1), `L_dom`, reflection, BH3, the
@@ -513,6 +513,33 @@ fn every_boolean_prim_answers_both_ways() {
     // Definedness, true at a defined optional.
     assert!(d(def(Term::MinT1(ad(Dom::MembersDom(concrete(&ps)))))));
     assert!(!d(def(bot_addr())));
+}
+
+/// V-PRIM's `·[K]` keys a map by K's CATALOGED class, and an absent key
+/// denotes ⊥. No cataloged class serves `targets_keyed`, but a `Map`-sorted
+/// parameter is a map's other source, so the lookup is reachable — and the
+/// key is what decides: a map holding two classes answers each at its own.
+#[test]
+fn map_get_keys_by_the_cataloged_class_and_an_absent_key_is_bot() {
+    let k = kernel();
+    let c = coord(&k);
+    let s = k.snapshot();
+    let decide_over = |m: im::HashMap<CoverageClass, Address>, t: Term| {
+        let tt = c.type_check(vec![(v(1), Sort::Map)], t).expect("a Map-parameter term");
+        c.decide(&tt, &Env::empty().bind(v(1), Value::Map(m)), View::Active, &s)
+    };
+    let at_key = |key: &Endset, x: &Address| {
+        if_some(map_get(var(1), key), 2, addr_eq(var(2), lit_addr(x)), fls())
+    };
+    let pd = coverage_class(&pred_def_ty());
+    let ps = coverage_class(&pred_stable_ty());
+    let both = im::HashMap::new().update(pd.clone(), ca(1)).update(ps, ca(2));
+    assert!(decide_over(both.clone(), at_key(&pred_def_ty(), &ca(1))));
+    assert!(decide_over(both, at_key(&pred_stable_ty(), &ca(2))));
+    let only_pd = im::HashMap::unit(pd, ca(1));
+    assert!(decide_over(only_pd.clone(), def(map_get(var(1), &pred_def_ty()))));
+    assert!(!decide_over(only_pd, def(map_get(var(1), &pred_stable_ty()))), "an absent key is ⊥");
+    assert!(!decide_over(im::HashMap::new(), def(map_get(var(1), &pred_def_ty()))));
 }
 
 /// A verdict is "as of `snap.seq()`" (M2 V1 retrospective): the same term

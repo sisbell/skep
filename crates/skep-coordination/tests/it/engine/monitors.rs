@@ -155,9 +155,10 @@ fn fire_counts_are_recomputed_from_the_store_not_tallied_in_memory() {
 /// The armer graph's edge rule: an empty footprint is armed by nothing;
 /// emitting one class while reading another's audit slice makes no edge;
 /// the Default reading charges the BH1 filter slice — the class emitted, a
-/// self-loop; and a Marker landing in a Nullify rule's active footprint,
-/// whose retraction arms any active-reading trigger, closes a two-rule
-/// cycle.
+/// self-loop; a Marker landing in a Nullify rule's active footprint, whose
+/// retraction arms any active-reading trigger, closes a two-rule cycle; and a
+/// whole-audit read is armed by any deposit. Disjoint cycles come back
+/// ordered by their least member.
 #[test]
 fn armer_cycles_follow_the_edge_rule() {
     let rule = |c: &Coordinator<World>, body: Term, view: View, action: FireAction| Rule {
@@ -200,4 +201,31 @@ fn armer_cycles_follow_the_edge_rule() {
     for scc in c.armer_cycles() {
         assert!(scc.windows(2).all(|w| w[0] < w[1]), "each component ascends by RuleId");
     }
+
+    // The whole-audit read: a trigger over `L_dom` is armed by ANY deposit,
+    // the rule's own marker included — a cataloged link lands in the sublayer.
+    let k = kernel();
+    let mut c = coord(&k);
+    let id = c
+        .register_rule(rule(&c, exists(2, Dom::LinkDom, tru()), View::Audit, marker_action()))
+        .expect("register");
+    assert_eq!(c.armer_cycles(), vec![vec![id]]);
+
+    // Two disjoint cycles — a Marker rule arms the Nullify rule, whose
+    // retraction arms only active readers — returned ordered by their least
+    // member, which is not the order the search finishes them in.
+    let k = kernel();
+    let mut c = coord(&k);
+    let marker = c
+        .register_rule(rule(&c, is_k(&marker_ty(), var(1)), View::Audit, marker_action()))
+        .expect("reads its own class at audit");
+    let nullify = c
+        .register_rule(rule(
+            &c,
+            is_k(&marker_ty(), var(1)),
+            View::Active,
+            FireAction::Nullify { home: doc1() },
+        ))
+        .expect("reads that class at active");
+    assert_eq!(c.armer_cycles(), vec![vec![marker], vec![nullify]]);
 }

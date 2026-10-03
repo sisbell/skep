@@ -205,18 +205,22 @@ fn a_rejection_names_a_type_key_by_the_addresses_it_denotes() {
 
 /// A caller builds a `Value` from this crate alone: every payload a variant
 /// names — M1's tumbler and numeral, `im`'s persistent collections, M7's
-/// coverage class — is reachable through `skep_coordination`'s own paths,
-/// with no second manifest to version-match. And a value answers its own
-/// sort, which is what `eval`'s door and `evaluate_def`'s argument check
-/// compare against Γ_D.
+/// coverage class, tuple and endset — is reachable through
+/// `skep_coordination`'s own paths, with no second manifest to version-match.
+/// And a value answers its own sort, which is what `eval`'s door and
+/// `evaluate_def`'s argument check compare against Γ_D — a tuple's, `Tup`,
+/// being one no stored def's Γ_D holds.
 #[test]
 fn a_value_is_buildable_and_self_describing_through_this_crate_s_own_paths() {
     use skep_coordination::im::{HashMap as ImMap, OrdSet, Vector};
-    use skep_coordination::{Address, CoverageClass, Nat as ReNat, Tumbler as ReTumbler};
+    use skep_coordination::{
+        Address, CoverageClass, Endset as ReEndset, Nat as ReNat, Tumbler as ReTumbler, Tuple,
+    };
 
     let addr: Address = ca(1);
     let tumbler: ReTumbler = addr.tumbler().clone();
     let set = Value::AddrSet(OrdSet::unit(tumbler));
+    let tuple = Tuple { addr: la(1), from: ReEndset::empty(), to: ReEndset::empty() };
     let shapes = [
         (Value::Bool(true), Sort::Bool),
         (Value::Addr(addr.clone()), Sort::Addr),
@@ -226,6 +230,7 @@ fn a_value_is_buildable_and_self_describing_through_this_crate_s_own_paths() {
         (Value::Map(ImMap::<CoverageClass, Address>::new()), Sort::Map),
         (Value::Nat(ReNat::from(7u32)), Sort::Nat),
         (Value::OptNat(Some(ReNat::from(7u32))), Sort::OptNat),
+        (Value::Tuple(tuple), Sort::Tup),
     ];
     for (val, sort) in &shapes {
         assert_eq!(val.sort(), *sort, "{val:?}");

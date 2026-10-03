@@ -206,6 +206,53 @@ fn marker_rule_certifies_fires_and_quiesces() {
     assert_eq!(c.armer_cycles(), vec![vec![id]]);
 }
 
+/// A rule's DECLARED view reaches its trigger, and the termination
+/// certificate rests on it. `¬is_K(marker, x)` read at `audit` stays false
+/// once the rule's marker exists, even after that marker is retracted — the
+/// audit slice keeps the record — so a `CertifiedTerminating` rule is not
+/// re-armed by a retraction of its own effect. The same rule at `active` IS
+/// re-armed by it, which is why the lint's Marker leg demands `audit`; and
+/// Q0 judges each rule at its own view, so one registry holds the extinct
+/// rule beside the re-armed one. A trigger's view shows only once a witness
+/// is retracted, which is why the history retracts one.
+#[test]
+fn a_certified_marker_rule_is_not_re_armed_by_retracting_its_own_marker() {
+    let k = kernel();
+    let mut c = coord(&k);
+    link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
+    let rule = |c: &Coordinator<World>, view: View| Rule {
+        domain: Dom::MembersDom(concrete(&pred_stable_ty())),
+        trigger: not_marked(c),
+        view,
+        action: marker_action(),
+    };
+    assert_eq!(
+        c.certify_rule(&rule(&c, View::Audit)).expect("well-formed"),
+        RuleCertification::CertifiedTerminating
+    );
+    let audit = c.register_rule(rule(&c, View::Audit)).expect("the certified rule");
+    let active = c.register_rule(rule(&c, View::Active)).expect("its active twin");
+    let marker = match c.step(&k.snapshot()) {
+        StepOutcome::Fired { rule: fired, effect, .. } if fired == audit => effect,
+        other => panic!("expected the certified rule to fire first, got {other:?}"),
+    };
+    assert!(c.quiescent(&k.snapshot()), "its marker falsifies both triggers");
+
+    link_writer(&k)
+        .nullify(Caller::System, &doc1(), &marker)
+        .expect("retract the rule's own marker");
+    assert_eq!(
+        c.next_enabled(&k.snapshot()),
+        Some(Occurrence { rule: active, arg: Arg::Addr(ca(1)) }),
+        "only the active twin is re-armed: the audit trigger still reads the marker's record"
+    );
+    assert!(matches!(
+        c.step(&k.snapshot()),
+        StepOutcome::Fired { rule: fired, .. } if fired == active
+    ));
+    assert!(c.quiescent(&k.snapshot()));
+}
+
 /// The two-transaction gap, accounted exactly: a rule whose trigger no fire
 /// falsifies meets its own marker at the second fire — M7 answers the
 /// incumbent and commits nothing, the step reports `Deduped` with the
@@ -443,6 +490,42 @@ fn a_def_trigger_reads_only_the_snapshot_it_is_evaluated_on() {
     assert_eq!(c.armer_cycles(), vec![vec![id]]);
 }
 
+/// A `Def` trigger may reference other defs, and each of its three readers
+/// meets the reference its own way: the lint and the armer graph read the
+/// FLAT expansion built at registration — here `let x' = x in ¬is_K(marker,
+/// x')` — and evaluation resolves the referent through the memo. The lint's
+/// Marker leg recognizes the canonical spelling by spelling alone, and the
+/// expansion's `let` is not it: the rule is SF and grow-only, and
+/// uncertified on that leg, as documented.
+#[test]
+fn a_def_trigger_through_a_reference_is_linted_flat_and_evaluated_through_the_memo() {
+    let k = kernel();
+    let mut c = coord(&k);
+    link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
+    let p = c
+        .type_check(vec![(v(1), Sort::Addr)], not(is_k(&marker_ty(), var(1))))
+        .expect("P(x) := ¬is_K(marker, x)");
+    let (p, _) = c.define_predicate(&doc1(), &p).expect("define P");
+    let q = c
+        .type_check(vec![(v(1), Sort::Addr)], Term::Ref { addr: p, args: vec![at(var(1))] })
+        .expect("Q(x) := P(x)");
+    let (q, _) = c.define_predicate(&doc1(), &q).expect("define Q");
+    let rule = Rule {
+        domain: Dom::MembersDom(concrete(&pred_stable_ty())),
+        trigger: Trigger::Def(q),
+        view: View::Audit,
+        action: marker_action(),
+    };
+    assert_eq!(
+        c.certify_rule(&rule).expect("well-formed"),
+        RuleCertification::Uncertified { sf: true, marker: false, grow_only: true }
+    );
+    let id = c.register_rule(rule).expect("register");
+    assert_eq!(c.armer_cycles(), vec![vec![id]], "the flat expansion reads the class it emits");
+    assert!(matches!(c.step(&k.snapshot()), StepOutcome::Fired { arg, .. } if arg == ca(1)));
+    assert!(matches!(c.step(&k.snapshot()), StepOutcome::Quiescent));
+}
+
 /// A rule's domain is enumerated at the RULE's declared view: a
 /// `default`-view rule never sees a UV-hidden member, while the same rule at
 /// `Active` does — and the peek names the first enabled rule in
@@ -546,9 +629,10 @@ fn a_nullify_rule_is_uncertified_fires_once_and_surfaces_bad_target_as_failed() 
     }
 }
 
-/// Q7: scoped quiescence is exact for a sort-homogeneous scoped set and a
-/// strict over-approximation (never false quiescence) once a sort-
-/// incompatible rule joins the registry.
+/// Q7: scoped quiescence is exact for a sort-homogeneous scoped set, and a
+/// strict over-approximation (never false quiescence) wherever a body and a
+/// rule's element shape disagree — a tuple body over an address domain, or
+/// `PerAddress` once a tuple-domained rule joins the registry.
 #[test]
 fn quiescent_scoped_is_exact_then_over_approximates_in_the_safe_direction() {
     let k = kernel();
@@ -574,6 +658,14 @@ fn quiescent_scoped_is_exact_then_over_approximates_in_the_safe_direction() {
         .type_check(vec![(v(9), Sort::Addr)], addr_eq(var(9), lit_addr(&ca(1))))
         .expect("one-Addr-param Bool scope");
     assert!(!c.quiescent_scoped(&scope, ScopeBody::PerAddress, &k.snapshot()));
+    // The other shape mismatch is unscoped too: a TUPLE body cannot scope this
+    // address-domained rule, so its work counts even under a scope that holds
+    // of nothing — while the address body, exact here, scopes all of it out.
+    let nowhere = c.type_check(vec![(v(9), Sort::Addr)], fls()).expect("a scope of nothing");
+    for body in [ScopeBody::PerEmitter, ScopeBody::PerTarget, ScopeBody::PerSource] {
+        assert!(!c.quiescent_scoped(&nowhere, body, &k.snapshot()), "{body:?} over addresses");
+    }
+    assert!(c.quiescent_scoped(&nowhere, ScopeBody::PerAddress, &k.snapshot()));
 
     // Discharge the in-scope work only: scoped-quiescent, globally not.
     match c.fire(&Occurrence { rule: id, arg: Arg::Addr(ca(1)) }).expect("fire ca1") {

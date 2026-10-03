@@ -6,9 +6,10 @@ use skep_links::{CoverageClass, Tuple};
 
 use crate::ast::{Term, VarId};
 
-/// COD ∪ {Tup} (ASN-0129 WT). `Tup` is bindable only by a rule trigger's one
-/// parameter (`type_check_trigger`) and by quantifier binders over `A_K`/`L_K`
-/// — a stored def's `Γ_D` is Codom-only (ASN-0130 SignedTerm).
+/// COD ∪ {Tup} (ASN-0129 WT). `Tup` is bound only by a rule trigger's one
+/// parameter (`type_check_trigger`) and by a binder over `A_K`/`L_K` — `∀`,
+/// `∃`, a `Filter`, a `⋃` — or a `Let` rebinding such a value; a stored def's
+/// `Γ_D` is Codom-only (ASN-0130 SignedTerm).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Sort {
     Bool,

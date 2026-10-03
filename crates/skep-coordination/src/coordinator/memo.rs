@@ -1,8 +1,13 @@
 //! §Core data model / §Internal 4 — the DefMemo: M9's one interior-mutable
 //! hint, a per-start cache of PERMANENT statuses for stored predicate
-//! definitions. It holds no authority: every entry is recomputable from the
-//! def's immutable content plus M7's audit slice, and a rebuilt memo answers
-//! every question the old one did.
+//! definitions. It holds no authority: on the disciplined domain every entry
+//! is recomputable from the def's immutable content plus M7's audit slice,
+//! and a rebuilt memo answers every question the old one did. A POISONED
+//! entry is the deliberate exception (freeze-on-breach, §Internal 4): it
+//! records a PR-DISC breach as this handle first met it, and a referent not
+//! yet registered at that moment is no fact about the content — a rebuilt
+//! memo may derive the start defined, the safe direction (the crate root
+//! states it).
 
 use std::collections::HashMap;
 use std::sync::{Arc, PoisonError, RwLock};
@@ -50,9 +55,11 @@ impl From<&MemoEntry> for DefStatus {
 pub(super) struct Breach;
 
 /// The memo. THE POLICY, in two halves. THIS TYPE OWNS PERMANENCE: the first
-/// fill of a start wins and every later fill of it is a no-op (racing fills
-/// derive the same status from the same immutable content, so first-wins
-/// loses nothing), nothing is ever evicted or overwritten, and both statuses
+/// fill of a start wins and every later fill of it is a no-op (on the
+/// disciplined domain racing fills derive the same status from the same
+/// immutable content, so first-wins loses nothing; under a breach a fill made
+/// before a referent's registration and one made after can differ, and the
+/// first stands), nothing is ever evicted or overwritten, and both statuses
 /// are therefore permanent — content is immutable and ever-registration
 /// monotone, so a `Defined` entry can never be contradicted and a `Poisoned`
 /// one is freeze-on-breach. ADMISSION is the def layer's, and cannot be this

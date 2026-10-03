@@ -108,8 +108,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// POSTCONDITION: the rule is in the working set for the life of this
     /// `Coordinator` — the registry is APPEND-ONLY (nothing de-registers, and
     /// a `RuleId` is never reused), so every later `quiescent`,
-    /// `next_enabled`, `step`, `fire`, `fire_count` and `armer_cycles`
-    /// includes it, and a rule is shed only with its coordinator.
+    /// `quiescent_scoped`, `next_enabled`, `step`, `fire`, `fire_count` and
+    /// `armer_cycles` includes it, and a rule is shed only with its
+    /// coordinator.
     ///
     /// WHICH REJECTION SPEAKS, when several hold — the domain, then the
     /// trigger, then the action: `IllFormedDomain` (in `type_check`'s walk
@@ -152,7 +153,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// expansion); (b) the Marker witness-coverage match — the declared view
     /// is `audit` AND the trigger's body is the canonical negated membership
     /// `¬ is_K(x)` at the trigger's own parameter, naming a class
-    /// coverage-equal to `Marker.ty`; (c) the domain is grow-only.
+    /// coverage-equal to `Marker.ty`; (c) the domain is grow-only. The lint
+    /// reads no HOME: `CertifiedTerminating` presumes the action's fires
+    /// commit, and a rule whose fires all fail never terminates — `step`
+    /// states that hypothesis.
     ///
     /// Leg (b) is recognized BY SPELLING (`dynamics::negated_membership`), so
     /// an equivalent trigger written otherwise is simply not certified, and a
@@ -412,12 +416,18 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// (H-ATOM/H-FIN), home checked by M7 (H-HOME → `HomeNotRegistered`,
     /// never a silent skip).
     ///
-    /// The membership+trigger check and the deposit are TWO transactions; the
-    /// gap accounting is exact (§Internal 5): an idem⊤ dedup hit (M7 returned
-    /// an incumbent, committed nothing) reports `Deduped`; a fresh deposit
-    /// reports `Fired` — discriminated by the fire-snapshot residence of the
-    /// returned effect (an incumbent already existed in `snap`). Only `Fired`
-    /// advances the divergence count.
+    /// The membership+trigger check and the deposit are TWO transactions, and
+    /// the outcome is decided by where the address M7 returns stands at THIS
+    /// fire's snapshot (§Internal 5): resident there, it is an incumbent M7
+    /// deduped onto — `Deduped`, nothing committed, M7's base `Seq`; absent,
+    /// it is `Fired`. Absent concurrency that is exact: a `Fired` is this
+    /// fire's fresh deposit and its commit `Seq`. Under concurrency it errs
+    /// ONE way — M7's `emit`/`nullify` report no hit or miss — so a witness
+    /// another writer deposits after this fire's snapshot and before its emit
+    /// is deduped onto and still reported `Fired`, its `effect` that writer's
+    /// tuple and its `seq` M7's base `Seq`; a fresh deposit is never reported
+    /// `Deduped`. The divergence count is recomputed from the store
+    /// (`fire_count`), so it counts deposits, never these outcomes.
     ///
     /// THE LOOK AT GUEST CLASS (lane 4.1, PUB-6.28): the domain re-check and
     /// the trigger read M7 through the guest-class view off this fire's own
@@ -510,10 +520,12 @@ impl<W: CoordinationWorld> Coordinator<W> {
         None
     }
 
-    /// A returned incumbent was already resident at the fire snapshot; a
-    /// fresh deposit's address is newly minted and absent from it. Safe
-    /// direction under concurrency: at worst a gap-deposited witness is
-    /// miscounted as a real fire — the monitor is only a backstop.
+    /// A returned incumbent resident at the fire snapshot is `Deduped`; a
+    /// fresh deposit's address is newly minted and absent from it, `Fired`.
+    /// The one miscount runs the safe way: a witness another writer deposited
+    /// after the snapshot and M7 deduped onto is absent too, and is reported
+    /// `Fired` ([`Coordinator::fire`] states it) — never a fresh deposit as
+    /// `Deduped`. The divergence count reads the store, not this answer.
     ///
     /// Reads `LinkState` CLASS-FREE, as the def probes and the divergence
     /// monitor do (`coordinator/defs.rs` enumerates the regime): the writer
@@ -548,6 +560,13 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// one fire and then `NoOp` forever, with `quiescent(&snap)` false
     /// forever — no concurrent writer needed, the rule's own deposit being
     /// what falsifies it.
+    ///
+    /// The claim has a SECOND hypothesis: every fire the loop attempts
+    /// commits or dedups. A `Failed` changes nothing — the occurrence stays
+    /// enabled and comes round again — so a rule that fails every fire
+    /// (`HomeNotRegistered`, or `DraftBoundary` on its home or on an
+    /// argument's document) keeps the registry from `Quiescent` however it
+    /// certifies, until the caller repairs it ([`StepOutcome::Failed`]).
     pub fn step(&mut self, snap: &Snapshot<W>) -> StepOutcome {
         let n = self.rules.len();
         if n == 0 {

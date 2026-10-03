@@ -187,7 +187,10 @@ pub enum SupersedeError {
     OldStartNotEverRegistered(Address),
     Define(DefineError),
     /// The lineage claim — the `supersedes` emit, the third of three
-    /// non-atomic transactions.
+    /// non-atomic transactions, the first two committed. As built it is
+    /// `Rejected(SupersessionClass)` on every call that reaches it: M7 fences
+    /// the class to `assert_sup`/`editlink` (`Coordinator::supersede` states
+    /// what that costs a retry).
     Lineage(TxnError<EmitError>),
 }
 

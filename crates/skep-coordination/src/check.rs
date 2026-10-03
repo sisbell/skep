@@ -663,8 +663,10 @@ impl<'a> Checker<'a> {
                 // referent; on a memo hit the same reference is refused by the
                 // reach charge below (`referent_depth` states why). That
                 // charge is the referent's, so it is made BEFORE the arguments
-                // are checked: the referent speaks first, warm or cold, and a
-                // term's answer does not turn on whether the memo was warm.
+                // are checked: the referent speaks first, warm or cold, so on
+                // the disciplined domain a term's answer does not turn on
+                // whether the memo was warm (the crate root states the breach
+                // exception).
                 let referent = (self.resolve)(addr, referent_depth(depth)).map_err(|u| match u {
                     Unresolved::Dangling => TypeError::DanglingReference(addr.clone()),
                     Unresolved::TooDeep => TypeError::TooDeep,

@@ -253,13 +253,16 @@ fn a_certified_marker_rule_is_not_re_armed_by_retracting_its_own_marker() {
     assert!(c.quiescent(&k.snapshot()));
 }
 
-/// The two-transaction gap, accounted exactly: a rule whose trigger no fire
-/// falsifies meets its own marker at the second fire — M7 answers the
-/// incumbent and commits nothing, the step reports `Deduped` with the
-/// incumbent's address, the divergence count does not move, and the rule
-/// stays enabled (the monitor's case).
+/// The dedup a fire can see: a rule whose trigger no fire falsifies meets its
+/// own marker at its second fire — an incumbent already resident at that
+/// fire's own snapshot — so M7 answers the incumbent with its base `Seq` and
+/// commits nothing, the step reports `Deduped`, the recomputed count does not
+/// move, and the rule stays enabled; the first fire's `Fired` carries its own
+/// commit. A witness planted AFTER a fire's snapshot reports `Fired` instead
+/// (`Coordinator::fire`'s one-way miscount), which no single-threaded test
+/// can arrange.
 #[test]
-fn a_dedup_hit_in_the_gap_reports_deduped_and_commits_nothing() {
+fn a_dedup_onto_an_incumbent_the_fire_can_see_reports_deduped_and_commits_nothing() {
     let k = kernel();
     let mut c = coord(&k);
     link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
@@ -272,22 +275,28 @@ fn a_dedup_hit_in_the_gap_reports_deduped_and_commits_nothing() {
         })
         .expect("register");
     let first = match c.step(&k.snapshot()) {
-        StepOutcome::Fired { rule, arg, effect, .. } => {
+        StepOutcome::Fired { rule, arg, effect, seq } => {
             assert_eq!((rule, arg), (id, ca(1)));
+            assert_eq!(seq, k.current_seq(), "a fresh deposit carries its own commit");
             effect
         }
         other => panic!("expected Fired, got {other:?}"),
     };
     let before = k.current_seq();
     match c.step(&k.snapshot()) {
-        StepOutcome::Deduped { rule, arg, effect, .. } => {
+        StepOutcome::Deduped { rule, arg, effect, seq } => {
             assert_eq!((rule, arg), (id, ca(1)));
             assert_eq!(effect, first, "the incumbent, not a fresh deposit");
+            assert_eq!(seq, before, "M7's base Seq: nothing committed");
         }
         other => panic!("expected Deduped, got {other:?}"),
     }
     assert_eq!(k.current_seq(), before, "M7 committed nothing");
-    assert_eq!(c.fire_count(id, &ca(1)), 1, "only Fired advances the count");
+    assert_eq!(
+        c.fire_count(id, &ca(1)),
+        1,
+        "a dedup deposits nothing, so the recomputed count does not move"
+    );
     assert!(!c.quiescent(&k.snapshot()), "a ⊤ trigger stays enabled");
 }
 

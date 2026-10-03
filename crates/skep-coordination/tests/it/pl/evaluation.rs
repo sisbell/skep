@@ -363,11 +363,17 @@ fn domains_have_set_semantics_and_binders_bind_the_element() {
         Dom::ActiveSlice(concrete(&ps)),
         or(set_mem(lit_addr(&ca(1)), tup_addrs_f(2)), set_mem(lit_addr(&ca(3)), tup_addrs_f(2)))
     )));
-    // Let binds a set value.
+    // Let binds a set value …
     assert!(d(let_(
         3,
         members(&ps),
         and(set_mem(lit_addr(&ca(1)), var(3)), not(set_mem(lit_addr(&ca(2)), var(3))))
+    )));
+    // … and rebinds a tuple a binder bound, which V-TUP then reads.
+    assert!(d(exists(
+        2,
+        Dom::ActiveSlice(concrete(&ps)),
+        let_(3, var(2), in_coverage_g(lit_addr(&ca(2)), 3))
     )));
 }
 

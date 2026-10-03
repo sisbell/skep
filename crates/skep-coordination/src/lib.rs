@@ -31,11 +31,20 @@
 //!
 //! Several QUERIES may fill that memo on a miss — `signature`, a
 //! `type_check`/`type_check_trigger` over a `Ref`, `evaluate_def`,
-//! `certify_stable`, a rule validation over a `Def` trigger. Each stays a
-//! query: an entry is derived from the def's immutable content plus M7's
-//! monotone audit slice, the first fill wins and nothing is ever evicted, so
-//! the answer does not turn on whether the memo was warm — a caller may ask
-//! twice and be answered the same.
+//! `certify_stable`, a rule validation over a `Def` trigger. The first fill
+//! of a start wins and nothing is ever evicted, so once a start is memoized
+//! ONE handle answers every later probe of it as it answered the first (a
+//! never-registered start is never memoized, its answer following the
+//! registration). On the disciplined domain (PR-DISC) an entry is moreover a
+//! function of the def's immutable content plus M7's monotone audit slice,
+//! so the fill is unobservable — every handle, warm or cold, answers alike —
+//! and each of these stays a query. Under a breach the design gives that up
+//! on purpose (freeze-on-breach, §Internal 4): a start deposited past the
+//! gate before its referent was registered, and probed in that window, stays
+//! POISONED on the probing handle while a handle that first probes it later
+//! derives it defined; and a reference to breached content may be refused
+//! one way warm and another cold. Every such disagreement is between
+//! refusals, or a refusal and a defined answer — never a wrong `Some`.
 //!
 //! ## Boundary — deliberately NOT owned here
 //!
@@ -69,10 +78,16 @@
 //!   on the bound argument's document, falling back to the argument itself;
 //!   `false` is the safe answer for an address it does not recognize, and a
 //!   panic is not an answer ([`Coordinator::new`] states the whole of it);
-//! * **PR-DISC**: no holder of M7's `emit` other than M9's
-//!   `register_pred`/`certify_stable` may route a typed emit whose `ty` is
-//!   `pdef`/`pd_stable` (M7's gate rejects only R-class; M9's own
-//!   `register_rule` closes the in-module route via `PredLayerMarkerType`).
+//! * **PR-DISC**: no write but M9's own `register_pred`/`certify_stable` may
+//!   grow the `pdef`/`pd_stable` slices (§Internal 4). M7 classes a deposit
+//!   by its TYPE slot, whatever surface it arrives through, so the obligation
+//!   covers a typed `emit`, the open surface's `makelink` and `editlink`'s
+//!   successor alike — M7 itself fences only the `[R]`, `[K_sup]` and
+//!   `replaces` classes. M9's `register_rule` closes the in-module route
+//!   (`PredLayerMarkerType`). A breach degrades per start, as defined
+//!   (`UndisciplinedDef`, freeze-on-breach), but `is_ever_pred`,
+//!   `is_active_pred` and `is_certified_stable` read the classes: nothing in
+//!   M9 can tell a breaching `pd_stable` tuple from a certificate.
 
 #![forbid(unsafe_code)]
 

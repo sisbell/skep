@@ -33,6 +33,15 @@ fn classify_places_a_spelling_on_the_lattice_relative_to_its_view() {
     let eq = tc(nat_eq(count(Dom::AuditSlice(concrete(&pred_def_ty()))), lit_nat(2)));
     assert_eq!(c.classify(&eq, View::Audit).stability, Stability::Neither);
 
+    // A codomain other than Bool: the two directions coincide — `StSf`
+    // exactly when the term reads no state, `Neither` otherwise, a grow-only
+    // set included.
+    assert_eq!(c.classify(&tc(lit_nat(1)), View::Audit).stability, Stability::StSf);
+    let card = tc(count(Dom::AuditSlice(concrete(&pred_def_ty()))));
+    assert_eq!(c.classify(&card, View::Audit).stability, Stability::Neither);
+    let audit_members = tc(members(&pred_def_ty()));
+    assert_eq!(c.classify(&audit_members, View::Audit).stability, Stability::Neither);
+
     // Audit is_K at a step-constant argument is ST; the SAME term classified
     // at Active is Neither (PC3: classification is relative to the view).
     let isk = tc1(is_k(&marker_ty(), var(1)));

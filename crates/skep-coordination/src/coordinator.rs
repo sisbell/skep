@@ -238,8 +238,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// refused at the bound, not after it. Reads no structural state for a
     /// ref-free body; consults the def memo for any `Ref`, and on a MISS
     /// derives the referent from its immutable content, pinning its own
-    /// snapshot — the answer is the same either way. Once `Ok`, valid at
-    /// every reachable state (WT).
+    /// snapshot — on the disciplined domain the answer is the same either way
+    /// (the crate root states the breach exception, which runs only toward
+    /// refusal). Once `Ok`, valid at every reachable state (WT).
     ///
     /// WHICH REJECTION SPEAKS, when several hold: `TupParameter` (over Γ_D)
     /// first, then `TooLarge` for a Γ_D longer than the budget (charged
@@ -354,10 +355,12 @@ impl<W: CoordinationWorld> Coordinator<W> {
         }
     }
 
-    /// Static footprint + 4-point stability lattice + the three active-view
-    /// exceptions + view-independence flag, computed RELATIVE TO `view` (PC3
-    /// binds the view-parameterized constituents to it); `view_independent`
-    /// alone is view-agnostic (the PR-VIEW scan). Sound-but-incomplete; never
+    /// Static footprint + 4-point stability lattice (for any codomain —
+    /// [`Stability`](crate::dynamics::Stability) states what a non-`Bool`
+    /// term's point means) + the three active-view exceptions +
+    /// view-independence flag, computed RELATIVE TO `view` (PC3 binds the
+    /// view-parameterized constituents to it); `view_independent` alone is
+    /// view-agnostic (the PR-VIEW scan). Sound-but-incomplete; never
     /// over-certifies. Reads no state. PRECONDITION: ref-free (panics
     /// otherwise); a stored def is certified through `certify_stable` and a
     /// trigger linted through `certify_rule`, each over its flat expansion.

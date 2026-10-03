@@ -1,10 +1,12 @@
-//! Resolution: the memo's two permanent statuses and the one it never keeps,
-//! and the class-free registration probes beside the guest-class look.
+//! Resolution: the memo's two permanent statuses — the poisoned one a
+//! per-handle policy — and the one it never keeps, and the class-free
+//! registration probes beside the guest-class look.
 
 use crate::common::*;
 use crate::terms::*;
 
 use skep_address::{document_of, Address};
+use skep_content::HasContent;
 use skep_coordination::{
     CertifyError, Coordinator, Dom, EvalError, RegisterError, Rule, RuleError, Sort, Term, Trigger,
     TypeError, Value, View,
@@ -47,6 +49,64 @@ fn a_breach_freezes_the_start_poisoned() {
         Err(RuleError::DanglingDefTrigger(x)) if x == g
     ));
     assert!(matches!(c.register_pred(&doc1(), &g), Err(RegisterError::ParseFailed)));
+}
+
+/// Freeze-on-breach is a per-handle POLICY, not an immutability fact
+/// (§Internal 4): content deposited past the gate before its referent exists,
+/// and probed in that window, freezes POISONED on the probing handle and stays
+/// so — through the referent's registration, and through a `register_pred`
+/// that passes every gate and returns `Ok` — while a handle that first probes
+/// it afterwards derives it defined. The disagreement runs only toward
+/// `None`: the cold handle's `Some` is right.
+#[test]
+fn a_freeze_on_breach_holds_on_its_handle_and_errs_only_toward_none() {
+    let k = kernel();
+    let c = coord(&k);
+    let (p, _) =
+        c.define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("P")).expect("define P");
+    let (q, _) = c
+        .define_predicate(
+            &doc1(),
+            &c.type_check(vec![], Term::Ref { addr: p.clone(), args: vec![] }).expect("Q := P"),
+        )
+        .expect("define Q");
+    assert_eq!((p, q.clone()), (ca(1), ca(2)));
+    let mut bytes = k
+        .snapshot()
+        .world()
+        .content()
+        .value_at(q.tumbler())
+        .expect("Q is resident")
+        .as_bytes()
+        .to_vec();
+    let end = bytes.len();
+    assert_eq!(
+        &bytes[end - 2..],
+        &[1, 0],
+        "PR-ENC: the referent's last component, then the argument count"
+    );
+    bytes[end - 2] = 4; // the reference now names ca4 — nothing is there yet
+    let s = insert_raw(&k, &doc1(), bytes);
+    assert_eq!(s, ca(3));
+    link_writer(&k)
+        .emit(Caller::System, &doc1(), &pred_def_ty(), &s, &[])
+        .expect("the breach: a pdef past the gate, ahead of its referent");
+    assert!(c.signature(&s).is_none(), "probed while ca4 is unregistered: frozen poisoned");
+
+    let (r, _) =
+        c.define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("R")).expect("define R");
+    assert_eq!(r, ca(4));
+    assert!(c.signature(&s).is_none(), "the freeze declines to re-check");
+    assert_eq!(
+        c.evaluate_def(&s, &[], View::Active, &k.snapshot()),
+        Err(EvalError::UndisciplinedDef)
+    );
+    c.register_pred(&doc1(), &s).expect("every gate passes now — the dedup absorbs it");
+    assert!(c.signature(&s).is_none(), "the memo's first fill stands");
+
+    let cold = coord(&k);
+    assert_eq!(cold.signature(&s).map(|sig| sig.result), Some(Sort::Bool));
+    assert_eq!(cold.evaluate_def(&s, &[], View::Active, &k.snapshot()), Ok(Value::Bool(true)));
 }
 
 /// A never-registered start is never memoized: every probe made before the
@@ -119,11 +179,19 @@ fn def_probes_are_class_free_while_the_evaluator_s_look_is_not() {
 
     // `is_certified_stable` is the same split: the certificate lands in the
     // draft, so the def probe answers and the evaluator's look does not.
-    c.certify_stable(&doc2(), &start).expect("⊤ is Bool, active, view-independent and ST⁺");
+    let (certificate, _) =
+        c.certify_stable(&doc2(), &start).expect("⊤ is Bool, active, view-independent and ST⁺");
     assert!(c.is_certified_stable(&start, &k.snapshot()));
     for view in [View::Active, View::Audit, View::Default] {
         assert!(!decide_now(&k, &c, view, is_k(&pred_stable_ty(), lit_addr(&start))), "{view:?}");
     }
+    // ≤1 active `pd_stable` per start holds WITHIN THE GUEST CLASS the writer
+    // runs at: the draft's certificate is invisible to its dedup, so a
+    // re-certification into the draft mints a second one and commits.
+    let before = k.current_seq();
+    let (twin, seq) = c.certify_stable(&doc2(), &start).expect("re-certify into the draft");
+    assert_ne!(twin, certificate, "a guest-hidden incumbent absorbs no re-certification");
+    assert!(seq > before, "and the re-certification commits");
 
     // `current_version` walks M7's claims CLASS-FREE, where the `tip` atom
     // rebuilds the walk over the VISIBLE ones — so one draft-homed claim moves

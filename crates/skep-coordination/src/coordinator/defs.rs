@@ -159,18 +159,23 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// cycle strictly deepens each round until the checker's nesting door
     /// refuses it).
     ///
-    /// What is memoized is the CONTENT's status and nothing else: an
-    /// ever-registered start whose content fails the parse, or fails WT on
-    /// its own account, fills the memo poisoned — freeze-on-breach (PR-DISC,
-    /// §Internal 4). A nesting refusal ABOVE level 0 is not the content's:
-    /// every registered def was checked at level 0 and fits there, and every
-    /// registered consumer's `Ref` charge (`TypedTerm::reach`) guarantees
-    /// its referents fit where a cold derivation starts them — so a
-    /// `TooDeep` at `depth > 0` is the referring term's, answered as
-    /// [`DerivedTooDeep`] with the memo untouched, and the same term
-    /// answers `TooDeep` on a warm memo and a cold one alike. At level 0 a
-    /// `TooDeep` can only be a breach (content registered past the gate),
-    /// and freezes.
+    /// What is memoized is a status of the CONTENT, never of the asking
+    /// term: an ever-registered start whose content fails the parse, or
+    /// fails WT on its own account, fills the memo poisoned —
+    /// freeze-on-breach (PR-DISC, §Internal 4), a deliberate policy and not
+    /// an immutability consequence: a `DanglingReference` to a referent not
+    /// yet registered could heal on that referent's registration, and the
+    /// freeze declines to re-check (safe — the start merely stays
+    /// signature-less, never a wrong `Some`; the crate root states what that
+    /// costs across handles). A nesting refusal ABOVE level 0 is not the
+    /// content's: every def `register_pred` admits was checked at level 0 and
+    /// fits there, and every such consumer's `Ref` charge
+    /// (`TypedTerm::reach`) guarantees its referents fit where a cold
+    /// derivation starts them — so a `TooDeep` at `depth > 0` is the
+    /// referring term's, answered as [`DerivedTooDeep`] with the memo
+    /// untouched, and on the disciplined domain the same term answers
+    /// `TooDeep` on a warm memo and a cold one alike. At level 0 a `TooDeep`
+    /// can only be a breach (content registered past the gate), and freezes.
     fn derive_def(&self, start: &Address, depth: u32) -> Result<DefStatus, DerivedTooDeep> {
         let snap = self.kernel.snapshot();
         let w = snap.world();
@@ -414,7 +419,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// undisciplined start answers `None` via a PERMANENT poisoned entry
     /// (freeze-on-breach, §Internal 4). No snapshot parameter — the miss
     /// path pins its own. A query: the memo it may fill answers every later
-    /// probe as this one was answered.
+    /// probe on THIS handle as this one was answered, and every handle alike
+    /// on the disciplined domain (the crate root states the breach exception).
     pub fn signature(&self, start: &Address) -> Option<Signature> {
         self.resolve_def_at(start, 0).ok().map(|def| def.signature())
     }
@@ -446,6 +452,16 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// coordination caller's (not M10's — this reaches M5/M7 directly).
     /// Returns the successor's identity (its content start) and the
     /// `supersedes` EMIT's commit `Seq` — the third transaction's.
+    ///
+    /// AS BUILT the third never commits: M7 fences every `[K_sup]`-typed
+    /// `emit` pre-transact (`EmitError::SupersessionClass` — `assert_sup` and
+    /// `editlink` being that class's sole writers), so a call that passes the
+    /// gate commits the successor and its `pdef` (transactions 1–2) and
+    /// answers `Err(Lineage(Rejected(SupersessionClass)))` — every time, until
+    /// M7 admits content-endpoint def lineage. A retry registers another
+    /// successor; the tripwire
+    /// `supersede_gates_up_front_and_trips_m7_s_supersession_fence` flips when
+    /// M7 changes.
     pub fn supersede(
         &self,
         home: &Address,
@@ -491,17 +507,23 @@ impl<W: CoordinationWorld> Coordinator<W> {
     ///
     /// THE LEGS READ THREE STATES, and the operation is not atomic over
     /// them: (0) resolves through the memo, which on a miss pins its own
-    /// snapshot (`derive_def`) — content-intrinsic, so the pin cannot change
-    /// the answer; (ii) reads the `snap` this call pins; the deposit is a
-    /// THIRD transaction after both. A def retracted in the gap is still
+    /// snapshot (`derive_def`) — content-intrinsic on the disciplined domain,
+    /// so the pin cannot change the answer there (the crate root states the
+    /// breach exception); (ii) reads the `snap` this call pins; the deposit
+    /// is a THIRD transaction after both. A def retracted in the gap is still
     /// certified — the accepted state `retract_pred` states from its side,
     /// the certificate being about the immutable content — and a def
     /// registered between `snap` and the memo's pin answers `NotActive`,
     /// which a retry resolves.
     ///
     /// RETURNS `(tuple, seq)`: the active `pd_stable` tuple's address — the
-    /// fresh deposit's, or on re-certification the incumbent's, with M7's
-    /// base `Seq` and nothing committed.
+    /// fresh deposit's, or, where the guest class can see an incumbent, the
+    /// incumbent's, with M7's base `Seq` and nothing committed: ≤1 active
+    /// `pd_stable` per start WITHIN THE GUEST CLASS, as `register_pred`
+    /// states for `pdef`. An incumbent homed where the guest predicate
+    /// refuses — a draft, under the engine's predicate — is invisible to the
+    /// writer's dedup (lane 3.3b), so re-certifying into such a home mints a
+    /// second certificate and commits.
     pub fn certify_stable(
         &self,
         home: &Address,
@@ -536,7 +558,12 @@ impl<W: CoordinationWorld> Coordinator<W> {
         Ok((tuple, seq))
     }
 
-    /// `is_K(pd_stable, start)@active`.
+    /// `is_K(pd_stable, start)@active` — class-free, as the def probes are.
+    /// `true` is a CERTIFICATE (CVALID passed by `certify_stable`, over the
+    /// immutable content) only under PR-DISC: a `pd_stable` tuple any other
+    /// write deposited reads `true` here as well, and nothing in M9
+    /// re-validates it (the crate root states the obligation and the surfaces
+    /// it covers).
     pub fn is_certified_stable(&self, start: &Address, snap: &Snapshot<W>) -> bool {
         snap.world()
             .links()

@@ -153,17 +153,25 @@ pub struct Occurrence {
     pub arg: Arg,
 }
 
-/// One fire's outcome (§Internal 5, the two-transaction race exactly
-/// accounted). Only `Fired` advances the divergence count — a `Deduped`
-/// (idem⊤ dedup hit in the trigger-check↔commit gap: M7 committed NOTHING,
-/// returned the incumbent) and a `NoOp` (argument out of `[D_ρ]` — removed —
-/// or trigger false — falsified — at fire time, Q1) leave no journal record.
+/// One fire's outcome (§Internal 5), decided by where the address M7 returns
+/// stands at the fire's own snapshot — M7 reports no hit or miss of its own.
+/// `Deduped`: an idem⊤ dedup hit on an incumbent already resident there; M7
+/// committed NOTHING and answered its base `Seq`. `Fired`: an address absent
+/// there — this fire's fresh deposit and its commit `Seq`, except under
+/// concurrency, where M7 may have deduped onto a witness another writer
+/// deposited after the fire's snapshot: still `Fired`, carrying that writer's
+/// tuple and M7's base `Seq`, nothing committed by this fire. The miscount
+/// runs one way — a fresh deposit is never `Deduped`. `NoOp` (argument out of
+/// `[D_ρ]` — removed — or trigger false — falsified — at fire time, Q1):
+/// nothing written. The divergence count is recomputed from the store
+/// (`fire_count`), never from these outcomes.
 ///
 /// Deliberately exhaustive (no `#[non_exhaustive]`): the three outcomes are
 /// closed by the quiescence theory — a fire either commits, is absorbed, or
-/// finds nothing to do — and a driver's exhaustive match is what keeps its
-/// accounting complete. `#[must_use]` on the type, for the same accounting:
-/// a dropped outcome is a fire whose effect nothing recorded.
+/// finds nothing to do, as its own snapshot can tell them apart — and a
+/// driver's exhaustive match is what keeps its accounting complete.
+/// `#[must_use]` on the type, for the same accounting: a dropped outcome is a
+/// fire whose effect nothing recorded.
 #[must_use]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FireOutcome {
@@ -173,17 +181,18 @@ pub enum FireOutcome {
 }
 
 /// One `step`'s outcome. `Fired`/`Deduped` carry `FireOutcome`'s `effect`
-/// (the deposited resp. incumbent tuple's address) through, so a driver can
-/// reconcile the divergence monitor against the journal without re-deriving
-/// the deposited tuple's address. `arg` is the bookkeeping KEY, never the
-/// bound value: the bound address for an `Addr`-domain rule, a bound tuple's
-/// `t.addr` for a `Tup`-domain one — which is what `fire_count(rule, &arg)`
-/// keys on. A fire error surfaces as `Failed` — never a
-/// silent swallow — with rotate-past rotation (§7): nothing committed; the
-/// rule stays registered — the working set offers no de-registration — and
-/// its occurrence enabled, re-attempted when the rotation returns to it;
-/// repair (registering the home, publishing the document) is the caller's,
-/// and a rule that cannot be repaired is shed only with its coordinator.
+/// and `seq` through with `FireOutcome`'s meaning — `Fired`'s one-way
+/// concurrency exception included — so a driver can reconcile against the
+/// journal without re-deriving the deposited tuple's address. `arg` is the
+/// bookkeeping KEY, never the bound value: the bound address for an
+/// `Addr`-domain rule, a bound tuple's `t.addr` for a `Tup`-domain one —
+/// which is what `fire_count(rule, &arg)` keys on. A fire error surfaces as
+/// `Failed` — never a silent swallow — with rotate-past rotation (§7):
+/// nothing committed; the rule stays registered — the working set offers no
+/// de-registration — and its occurrence enabled, re-attempted when the
+/// rotation returns to it; repair (registering the home, publishing the
+/// document) is the caller's, and a rule that cannot be repaired is shed only
+/// with its coordinator.
 ///
 /// `NoOp` means the pick was enabled at the peeked snapshot and not at the
 /// fire's own: nothing committed, the cursor rotated, and — the peek being

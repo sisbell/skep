@@ -32,9 +32,12 @@ pub struct Dynamics {
 /// The 4-point lattice: ST∩SF / ST / SF / neither (PD0). A point is what a
 /// SPELLING is certified at — PD0 classifies by spelling and errs toward
 /// not-certified — so `Neither` reads "certified in neither direction", never
-/// "stable in neither": a tautology can land there. Deliberately NOT `Ord`:
-/// `StOnly` and `SfOnly` are incomparable, so a derived total order would
-/// compile, read meaningful, and contradict PD0.
+/// "stable in neither": a tautology can land there. For a term whose codomain
+/// is not `Bool` the two directions coincide: the term is `StSf` exactly when
+/// it reads no state, its value fixed across steps, and `Neither` otherwise —
+/// a grow-only set included — so `StOnly`/`SfOnly` arise only for a Boolean
+/// term. Deliberately NOT `Ord`: `StOnly` and `SfOnly` are incomparable, so a
+/// derived total order would compile, read meaningful, and contradict PD0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Stability {
     StSf,

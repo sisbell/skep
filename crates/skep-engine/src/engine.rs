@@ -10,7 +10,7 @@ use std::sync::Arc;
 use skep_arrangement::Vstream;
 use skep_coordination::Coordinator;
 use skep_febe::Stores;
-use skep_kernel::{HistoryError, Kernel, KernelConfig, OpenError, Seq};
+use skep_kernel::{Attestation, HistoryError, Kernel, KernelConfig, OpenError, Seq};
 use skep_links::{Caller, LinkWriter, TypeRegistry, Visibility};
 use skep_namespace::Namespace;
 
@@ -199,6 +199,14 @@ impl Engine {
     /// M3's driver (borrows the kernel for the call).
     pub fn namespace(&self) -> Namespace<'_, World> {
         self.stores.namespace()
+    }
+
+    /// THE ATTESTED M3 DRIVER (signed ops): [`Engine::namespace`] with the
+    /// attestation its two document mints commit under — `Stores`'
+    /// `namespace_attested` body, the one M10's dispatch acquires for a mint
+    /// the daemon's check admitted. `None` is [`Engine::namespace`] exactly.
+    pub fn namespace_attested<'a>(&'a self, attest: Option<&'a Attestation>) -> Namespace<'a, World> {
+        self.stores.namespace_attested(attest)
     }
 
     /// M5's driver (borrows the kernel for the call).

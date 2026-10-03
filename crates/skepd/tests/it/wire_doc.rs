@@ -538,6 +538,68 @@ fn doc_states_the_record_grade_beside_the_entry_grade() {
     );
 }
 
+/// THE TEN CELLS AND THE STORED SLOT ROW (SO-I6 (a), (h); SO-I7 (f)):
+/// §Credential refusals names the ten kinds the check runs on and states
+/// the frame's rows once — the stored slot row under `0x03`, its EMPTY
+/// spelling, the address-list row, the pair's row, the EMPTY body — and
+/// that the armed set gained no cause; each op's paragraph carries its
+/// `attest` statement (the mints' EMPTY body over the parent account,
+/// `nullify`'s and `assert_sup`'s class constants, `edit_link`'s pair and
+/// fifth row); and §The change feed states the third absence. The daemon's
+/// bytes are pinned in `signed_ops.rs` and `feed_class.rs`; this pins that
+/// the contract says so.
+#[test]
+fn doc_states_the_ten_cells_and_the_stored_slot_row() {
+    let refusals = prose("\n### Credential refusals", &["\n## Operations"]);
+    for fact in [
+        "publish-class write of the TEN KINDS that have an entry frame",
+        "`delete`, `copy` and `rearrange` have no frame",
+        "**The entry frame's rows**",
+        "THE PAIR'S ROW, its two homes as an address-list row of two: `0x01 ‖ be64(2) ‖ be32(len) ‖ d_s ‖ be32(len) ‖ d_a`",
+        "THE SLOT ROW, a link slot AS THE STORE HOLDS IT",
+        "`0x03 ‖ be64(n) ‖ per span: be32(len) ‖ start ‖ be32(len) ‖ width`",
+        "the EMPTY slot has one spelling, `0x03 ‖ be64(0)`",
+        "THE ADDRESS-LIST ROW, `0x01 ‖ be64(n) ‖ each address be32(len) ‖ dotted decimal` — never a link slot's row",
+        "THE EMPTY BODY, the three mints': the member PRESENT and empty, `be32(0)` in the frame",
+        "the widening to the ten kinds added no cause",
+        "Every publish-class write of the ten kinds on a claimed board is judged",
+    ] {
+        assert!(refusals.contains(fact), "§Credential refusals says {fact:?}");
+    }
+    let namespace = prose("\n### Namespace", &["\n### Identity reads"]);
+    for fact in [
+        "`doc` is the PARENT ACCOUNT the document lands in — `account` itself",
+        "`op` `create_new_document` and `body` EMPTY",
+        "`doc` the principal's own account, `op` `fork`, `body` EMPTY",
+    ] {
+        assert!(namespace.contains(fact), "§Namespace says {fact:?}");
+    }
+    let arrangement = prose("\n### Arrangement (document editing)", &["\n### Media"]);
+    assert!(
+        arrangement.contains("never the trunk of `d_src` — `op` `version` and `body` EMPTY"),
+        "§Arrangement states the version's cell over the parent account"
+    );
+    let links = prose("\n### Links (writes)", &["\n### Links (raw reads)"]);
+    for fact in [
+        "each a SLOT ROW — the slot AS THE STORE WILL HOLD IT, its spans verbatim under `0x03`",
+        "the client resolves through `image` over each source before signing",
+        "the retraction class's one unit span, its reserved ghost tumbler `1.1.0.1.0.1.0.1.5`",
+        "the supersedes class's one unit span, its reserved ghost tumbler `1.1.0.1.0.1.0.1.4`",
+        "`doc` is THE PAIR'S ROW — `d_s` then `d_a`, the op's own order",
+        "THE FIFTH ROW, the claim's `from` slot row: `original`'s one unit span",
+        "the `to` slot row one unit span per address and EMPTY (`0x03 ‖ be64(0)`) at a Unary class",
+    ] {
+        assert!(links.contains(fact), "§Links (writes) says {fact:?}");
+    }
+    let feed = prose("\n## The change feed", &["\n## The other endpoints"]);
+    for fact in [
+        "a row whose `docs` your class REDUCES carries no `attest` member — ABSENT, not `null`",
+        "ABSENT on a row whose `docs` your class REDUCES (the straddle renderings above), the third absence",
+    ] {
+        assert!(feed.contains(fact), "§The change feed says {fact:?}");
+    }
+}
+
 /// THE MEDIA SECTION (media lane A; the fence): §Media states the cell's
 /// schema row by row, the canonical rule, the designation, the cap and the
 /// kind's interim address, the door's four arms with their codes in a table,

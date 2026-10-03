@@ -14,41 +14,59 @@
 //!   [`compose_record`] itself;
 //! * `account` — the act's principal's account in the board's local form,
 //!   M3's `principal_prefix`;
-//! * `doc` — per op cell: the TRUNK of the op's `doc` for `insert` and
-//!   `publish` (M5's one truncation, PUB-2.15), the op's `home` for
-//!   `make_link`;
+//! * `doc` — per op cell ([`DocTerm`]): the TRUNK of the op's `doc` for
+//!   `insert` and `publish` (M5's one truncation, PUB-2.15); the op's `home`
+//!   for `make_link`, `emit`, `nullify` and `assert_sup`; the PAIR of homes
+//!   `(d_s, d_a)` for `edit_link`; the PARENT ACCOUNT the minted document
+//!   lands in for the three mints — the request's `account` at
+//!   `create_new_document`, the principal's own at `fork` and at `version`
+//!   (d24-3: never the trunk of `d_src`, which would put ω(`doc`) off
+//!   `account` at a cross-owner version);
 //! * `op` — the op-kind token as the wire spells it, which the body's
 //!   [`EntryBody`] carries (`each_body_carries_the_wire_name_of_its_op`
 //!   holds it to the codec's own `op_name`) — and, at a credential deposit's
 //!   `make_link`, the RECORD grade's `record` ([`compose_record`]: the frame
 //!   the record's own `sig` is made over, `account` the HOME's account and
 //!   `doc` the home, both the fold's own reading of the link's address);
-//! * `body` — per op cell: the declared type and the values for `insert`,
-//!   the three slots as the client sent them and its `replaces` member —
-//!   absent, or the address it names — for `make_link`, and for `publish`
-//!   THE COUNT, THE RUNS THE CLIENT PLACED IN THE ADDRESS FORM AND THE BASE
-//!   (the design record §2.5's cell as ruled — V, l6-A4, D25; the base
-//!   MEMBER in the group since round 7, bu7-E2 ARM (a)): the runs as the
-//!   commit will place them, M5's own classing (`Shot::address_form`) — a
-//!   run the commit COPIES IN (the trunk's own I-space, the staging draft's)
-//!   by its values, read off the snapshot by M4's `value_at` in run order; a
-//!   WINDOW onto another document by its address and width, read from
-//!   nowhere — within [`MAX_SHOT_BODY_BYTES`]; the base the shot's own,
-//!   `Shot::base`'s member and extent as the request named them, EMPTY in
-//!   the birth shape — the member's address read off the request and never
-//!   minted here, so the frame stays position-free.
+//! * `body` — per op cell: EMPTY for the three mints; the declared type and
+//!   the values for `insert`; for the LINK WRITES the stored link's slots AS
+//!   THE TRANSACTION WILL DEPOSIT THEM (the design record §2.5's slot row as
+//!   ruled, ap6-3 and d24-2): a `make_link`'s three slots resolved through
+//!   M7's own [`slot_endset`] over this snapshot — an address-form slot's
+//!   unit spans, a V-spec slot's I-extents — with its `replaces` member,
+//!   absent or the address it names; an `emit`'s `(unit(from), unit(to…),
+//!   ty)` with `ty` the request's spans verbatim; a `nullify`'s
+//!   `(unit(home), unit(target), retraction)` and an `assert_sup`'s
+//!   `(unit(old), unit(new), supersedes)` under M7's own constants for the
+//!   two classes; an `edit_link`'s successor as M10's own
+//!   [`successor_link`] builds it over this snapshot, then `original`'s unit
+//!   span — the composer and the dispatch resolving through ONE function
+//!   each, under the daemon's serialization lock, over the base the
+//!   transaction opens on, so the signed row and the stored endset agree by
+//!   construction; and for `publish` THE COUNT, THE RUNS THE CLIENT PLACED
+//!   IN THE ADDRESS FORM AND THE BASE (the design record §2.5's cell as
+//!   ruled — V, l6-A4, D25; the base MEMBER in the group since round 7,
+//!   bu7-E2 ARM (a)): the runs as the commit will place them, M5's own
+//!   classing (`Shot::address_form`) — a run the commit COPIES IN (the
+//!   trunk's own I-space, the staging draft's) by its values, read off the
+//!   snapshot by M4's `value_at` in run order; a WINDOW onto another
+//!   document by its address and width, read from nowhere — within
+//!   [`MAX_SHOT_BODY_BYTES`]; the base the shot's own, `Shot::base`'s member
+//!   and extent as the request named them, EMPTY in the birth shape — the
+//!   member's address read off the request and never minted here, so the
+//!   frame stays position-free.
 //!
-//! Five `publish` bodies the daemon does not compose. Each is answered as the
+//! Eight bodies the daemon does not compose. Each is answered as the
 //! [`ComposeFault`] that names its reason, and no more: what the write is
-//! then OWED — passed through to the store's own refusal, or refused as its
-//! own cause — is the check's to decide, and is stated there alone
-//! (`policy/attestation.rs`'s `attestation_check`, its doc item 6).
+//! then OWED — passed through to the store's or the door's own refusal, or
+//! refused as its own cause — is the check's to decide, and is stated there
+//! alone (`policy/attestation.rs`'s `attestation_check`, its doc item 6).
 //!
-//! * a body whose values it does not hold — a copied run naming an address
-//!   M4 has no value at ([`ComposeFault::MissingValue`]). (A window's
+//! * a `publish` body whose values it does not hold — a copied run naming an
+//!   address M4 has no value at ([`ComposeFault::MissingValue`]). (A window's
 //!   addresses are never walked here: the body spells them.)
-//! * a body over a value the principal may NOT READ — a COPIED run onto a
-//!   staging draft the read predicate withholds from it
+//! * a `publish` body over a value the principal may NOT READ — a COPIED run
+//!   onto a staging draft the read predicate withholds from it
 //!   ([`ComposeFault::UnreadableCopiedRunOrigin`]). Those values are never read
 //!   here: a verdict composed over them answers BY them —
 //!   `attestation_required` telling that an address holds a value,
@@ -58,27 +76,48 @@
 //!   is signed by its address, which its author holds whatever it may read,
 //!   so it is composed unread — and an author whose grant lapsed re-signs a
 //!   re-shoot that keeps a window (fam2-Q's (c), closed by arm A).
-//! * a body past [`MAX_SHOT_BODY_BYTES`] ([`ComposeFault::PastBodyBudget`]),
-//!   answered before it is built past the budget.
-//! * a body with a term the frame's fixed-width rows cannot spell — a width,
-//!   an extent or a placed count past 2^64 − 1 ([`ComposeFault::Unspellable`]):
-//!   a shot naming positions or a base extent no store holds.
-//! * a body whose STAGING-DRAFT runs re-insert more values than the store's
-//!   own re-insert budget ([`ComposeFault::PastReinsertBudget`]), answered off
-//!   the runs' widths before a value is read.
+//! * a `publish` body past [`MAX_SHOT_BODY_BYTES`]
+//!   ([`ComposeFault::PastBodyBudget`]), answered before it is built past the
+//!   budget.
+//! * a `publish` body with a term the frame's fixed-width rows cannot spell
+//!   — a width, an extent or a placed count past 2^64 − 1
+//!   ([`ComposeFault::Unspellable`]): a shot naming positions or a base
+//!   extent no store holds.
+//! * a `publish` body whose STAGING-DRAFT runs re-insert more values than
+//!   the store's own re-insert budget ([`ComposeFault::PastReinsertBudget`]),
+//!   answered off the runs' widths before a value is read.
+//! * a link write's slot over either of M7's per-slot budgets — the spans a
+//!   slot keeps, the run-list steps its resolution walks
+//!   ([`ComposeFault::SlotTooLarge`]): the same two budgets M7 charges
+//!   inside the write, charged here as there, so the composer walks no
+//!   further than the transaction would (SO-I9); a slot past either is a
+//!   slot M7 refuses `slot_too_large`.
+//! * a `make_link`'s or an `edit_link`'s V-spec naming a source the
+//!   principal may NOT READ ([`ComposeFault::UnreadableSlotSource`]): no
+//!   arrangement the read predicate withholds is resolved here, since a
+//!   verdict composed over its I-extents would answer by them — `signature`
+//!   whether a guess at a private draft's I-space is right — where the write
+//!   door promises `withheld` naming the source; the door judges every
+//!   write that reaches this composer, both homes being registered and the
+//!   principal's own, so that refusal follows.
+//! * an `edit_link` whose successor M10's own build refuses — an ill-formed
+//!   spec, an unregistered source, a slot past a budget
+//!   ([`ComposeFault::SuccessorRefused`]): the dispatch refuses the same
+//!   request by the same function.
 
 use std::num::NonZeroU64;
 
 use skep_address::{document_of, Address, Nat, Span};
-use skep_arrangement::{trunk_of, Deposit, PlacedSegment, Shot, MAX_REINSERTED_VALUES};
+use skep_arrangement::{trunk_of, Deposit, HasM5, PlacedSegment, Shot, MAX_REINSERTED_VALUES};
 use skep_content::HasContent;
-use skep_febe::Op;
+use skep_febe::{successor_link, Judgment, Op};
 use skep_identity::{
-    entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_record,
-    entry_frame, BoardTerm, EntryBody, EntrySlot, LinkSlots, PublishBody, PublishRefusal,
-    RecordRows, ShotBase,
+    entry_body_assert_sup, entry_body_edit_link, entry_body_emit, entry_body_empty,
+    entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_nullify,
+    entry_body_record, entry_frame, unit_span, BoardTerm, ContentFreeOp, DocTerm, EntryBody,
+    EntrySlot, LinkSlots, PublishBody, PublishRefusal, RecordRows, ShotBase,
 };
-use skep_links::SlotArg;
+use skep_links::{registry, slot_endset, Endset, ShippedType, SlotArg, MAX_SLOT_SPANS};
 use skep_namespace::{HasM3, PrincipalId};
 
 use crate::write_path::board_term;
@@ -139,31 +178,65 @@ pub(super) enum ComposeFault {
     /// `too_many_values` by request arithmetic before it probes an address,
     /// so one whose values this composer never walks.
     PastReinsertBudget,
+    /// A link write's slot over either of M7's per-slot budgets —
+    /// `MAX_SLOT_SPANS` spans in whichever form, or a V-spec slot commanding
+    /// more than `MAX_SLOT_RESOLVE_STEPS` run-list steps — charged here as
+    /// M7 charges them inside the write, by M7's own `slot_endset` for a
+    /// `make_link`, by M10's own `successor_link` for an `edit_link`, and by
+    /// M7's `emit` arithmetic for an `emit`: a slot the store refuses
+    /// `slot_too_large`.
+    SlotTooLarge,
+    /// A `make_link`'s or an `edit_link`'s V-spec names a source document
+    /// the principal may not read, so no slot is resolved: the write door
+    /// refuses it `withheld` naming the source, ahead of the store
+    /// (`consult_write`'s source consult, which judges every write that
+    /// reaches here).
+    UnreadableSlotSource,
+    /// An `edit_link` whose successor M10's own build refuses — an ill-formed
+    /// spec, an unregistered source — so no frame is composed: the dispatch
+    /// refuses the same request by the same function, before any driver.
+    SuccessorRefused,
 }
 
-/// A link slot as the entry frame's slot row takes it — the resolve form's
-/// V-specs re-paired as `(source, span)`.
-enum Slot<'a> {
-    Addrs(&'a [Address]),
-    Resolve(Vec<(Address, Span)>),
+/// The `doc` term as the composer holds it, owned: one document, or an
+/// `edit_link`'s two homes — [`DocTerm`]'s owning twin, spelled by
+/// [`EntryFrame::to_bytes`] through [`skep_identity::entry_frame`].
+enum FrameDoc {
+    One(Address),
+    Pair { d_s: Address, d_a: Address },
 }
 
-impl<'a> Slot<'a> {
-    fn of(arg: &'a SlotArg) -> Slot<'a> {
-        match arg {
-            SlotArg::Addrs(addrs) => Slot::Addrs(addrs),
-            SlotArg::Resolve(specs) => Slot::Resolve(
-                specs.iter().map(|s| (s.source.clone(), s.span.clone())).collect(),
-            ),
-        }
-    }
-
-    fn as_entry(&self) -> EntrySlot<'_> {
+impl FrameDoc {
+    fn term(&self) -> DocTerm<'_> {
         match self {
-            Slot::Addrs(a) => EntrySlot::Addrs(a),
-            Slot::Resolve(v) => EntrySlot::Resolve(v),
+            FrameDoc::One(a) => DocTerm::One(a),
+            FrameDoc::Pair { d_s, d_a } => DocTerm::Pair { d_s, d_a },
         }
     }
+}
+
+/// An endset's spans, owned — the slot row's input, as M7 stores the slot.
+fn spans_of(endset: &Endset) -> Vec<Span> {
+    endset.spans().cloned().collect()
+}
+
+/// ONE `make_link` slot AS THE TRANSACTION WILL STORE IT: M7's own
+/// [`slot_endset`] over this snapshot's M5 — an address-form slot's unit
+/// spans, a V-spec slot's I-extents — under M7's two per-slot budgets
+/// ([`ComposeFault::SlotTooLarge`] past either); a V-spec naming a source the
+/// principal may not read is never resolved
+/// ([`ComposeFault::UnreadableSlotSource`]): the door withholds the write
+/// before the store sees it, and a verdict composed over the source's
+/// I-extents would answer by them.
+fn stored_slot(world: &World, principal: PrincipalId, arg: &SlotArg) -> Result<Vec<Span>, ComposeFault> {
+    if let SlotArg::Resolve(specs) = arg {
+        let reader = world.reader_class(Some(principal));
+        if specs.iter().any(|spec| !reader.readable(&spec.source)) {
+            return Err(ComposeFault::UnreadableSlotSource);
+        }
+    }
+    let endset = slot_endset(world.m5(), arg).ok_or(ComposeFault::SlotTooLarge)?;
+    Ok(spans_of(&endset))
 }
 
 /// THE ENTRY FRAME for `op` by `principal` on `world`, over the board term
@@ -195,17 +268,33 @@ pub(super) fn compose(
 ) -> Result<EntryFrame, ComposeFault> {
     let account = world.m3().principal_prefix(principal).ok_or(ComposeFault::NoAccount)?.clone();
     let (doc, body) = match op {
+        // THE THREE MINTS (D24's cells (1)–(3)): the EMPTY body over the
+        // parent account — the request's at `create_new_document`, the
+        // principal's own at `fork` and `version` (d24-3). No minted address
+        // enters: the frame stays position-free.
+        Op::CreateNewDocument { account: parent, .. } => (
+            FrameDoc::One(parent.clone()),
+            entry_body_empty(ContentFreeOp::CreateNewDocument),
+        ),
+        Op::Fork { .. } => (FrameDoc::One(account.clone()), entry_body_empty(ContentFreeOp::Fork)),
+        Op::Version { .. } => (FrameDoc::One(account.clone()), entry_body_empty(ContentFreeOp::Version)),
         Op::Insert { doc, values, deposit, .. } => {
             let declared = match deposit {
                 Deposit::Declared(ty) => Some(ty),
                 Deposit::Undeclared => None,
             };
             let values = values.iter().map(|v| v.as_bytes());
-            (trunk_of(doc), entry_body_insert(declared, values))
+            (FrameDoc::One(trunk_of(doc)), entry_body_insert(declared, values))
         }
         Op::MakeLink { home, from, to, ty, replaces } => {
-            let (from, to, ty) = (Slot::of(from), Slot::of(to), Slot::of(ty));
-            let slots = LinkSlots { from: from.as_entry(), to: to.as_entry(), ty: ty.as_entry() };
+            // Every slot AS STORED: M7's own resolution over this snapshot,
+            // which under the serialization lock is the transaction's base.
+            let (from, to, ty) = (
+                stored_slot(world, principal, from)?,
+                stored_slot(world, principal, to)?,
+                stored_slot(world, principal, ty)?,
+            );
+            let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
             // The `replaces` member rides the signed body (PUB-5.15): the
             // EMPTY group where the op carries none, else the state named —
             // so a copy of the request carries the one state its signer named.
@@ -213,7 +302,57 @@ pub(super) fn compose(
                 None => entry_body_make_link(slots),
                 Some(named) => entry_body_make_link_replacing(slots, named),
             };
-            (home.clone(), body)
+            (FrameDoc::One(home.clone()), body)
+        }
+        // THE OTHER LINK WRITES (D24's cells (4)–(6)): the stored tuple's
+        // rows — M7 deposits `(enc([from]), enc(to), ty)`, `(enc([home]),
+        // enc([target]), retraction)` and `(enc([old]), enc([new]),
+        // supersedes)` — each an address-named slot's unit spans, the two
+        // classes' types M7's own reserved endsets, `emit`'s type the
+        // request's spans verbatim.
+        Op::Emit { home, ty, from, to } => {
+            // M7's pre-transact budget on the two caller-sized slots.
+            if to.len() > MAX_SLOT_SPANS || ty.len() > MAX_SLOT_SPANS {
+                return Err(ComposeFault::SlotTooLarge);
+            }
+            let (from, to, ty) = ([unit_span(from)], to.iter().map(unit_span).collect::<Vec<_>>(), spans_of(ty));
+            let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
+            (FrameDoc::One(home.clone()), entry_body_emit(slots))
+        }
+        Op::Nullify { home, target } => {
+            let (from, to) = ([unit_span(home)], [unit_span(target)]);
+            let ty = spans_of(registry().reserved_type(ShippedType::Retraction));
+            let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
+            (FrameDoc::One(home.clone()), entry_body_nullify(slots))
+        }
+        Op::AssertSup { home, old, new } => {
+            let (from, to) = ([unit_span(old)], [unit_span(new)]);
+            let ty = spans_of(registry().reserved_type(ShippedType::Supersedes));
+            let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
+            (FrameDoc::One(home.clone()), entry_body_assert_sup(slots))
+        }
+        // THE EDIT (D24's cell (7)): the successor as M10's own build makes
+        // it over this snapshot — the door judges every write that reaches
+        // here, so `Judged`, which answers a spec's faults as the dispatch
+        // will — then the claim's `from`, `original`'s unit span; the pair
+        // of homes as the frame's `doc`.
+        Op::EditLink { original, successor, d_s, d_a } => {
+            let reader = world.reader_class(Some(principal));
+            let resolve_ty = match &successor.ty {
+                SlotArg::Resolve(specs) => specs.as_slice(),
+                SlotArg::Addrs(_) => &[],
+            };
+            if successor.from.iter().chain(&successor.to).chain(resolve_ty).any(|spec| !reader.readable(&spec.source)) {
+                return Err(ComposeFault::UnreadableSlotSource);
+            }
+            let link = successor_link(world.m3(), world.m5(), successor, Judgment::Judged)
+                .map_err(|_| ComposeFault::SuccessorRefused)?;
+            let (from, to, ty) = (spans_of(link.from_slot()), spans_of(link.to_slot()), spans_of(link.type_slot()));
+            let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
+            (
+                FrameDoc::Pair { d_s: d_s.clone(), d_a: d_a.clone() },
+                entry_body_edit_link(slots, &unit_span(original)),
+            )
         }
         Op::Publish { doc, shot } => {
             let trunk = trunk_of(doc);
@@ -227,7 +366,7 @@ pub(super) fn compose(
             if !every_copied_run_origin_readable(world, &trunk, &segments, principal) {
                 return Err(ComposeFault::UnreadableCopiedRunOrigin);
             }
-            (trunk, publish_body(world, shot, &segments)?)
+            (FrameDoc::One(trunk), publish_body(world, shot, &segments)?)
         }
         _ => unreachable!(
             "compose's precondition: {:?} is outside the checked set, or the set was \
@@ -389,17 +528,17 @@ pub(super) fn compose_record(
         lineage_fork_point: None,
         sigless_canonical_record: canonical,
     });
-    Some(EntryFrame { board, account: home_account.clone(), doc: home.clone(), body })
+    Some(EntryFrame { board, account: home_account.clone(), doc: FrameDoc::One(home.clone()), body })
 }
 
 /// An ENTRY frame composed but for its `alg` member — [`compose`]'s answer,
 /// or [`compose_record`]'s — every other member as the value
 /// [`skep_identity::entry_frame`] spells: the board term, the account, the
-/// document, and the body with its grammar's token.
+/// document term, and the body with its grammar's token.
 pub(super) struct EntryFrame {
     board: BoardTerm,
     account: Address,
-    doc: Address,
+    doc: FrameDoc,
     body: EntryBody,
 }
 
@@ -411,7 +550,7 @@ impl EntryFrame {
     /// borrow, as `write_path/head.rs`'s `HeadRecord::to_bytes` is; the free
     /// borrow is `EntryBody::as_bytes`.
     pub(super) fn to_bytes(&self, alg: &str) -> Vec<u8> {
-        entry_frame(alg, self.board, &self.account, &self.doc, &self.body)
+        entry_frame(alg, self.board, &self.account, self.doc.term(), &self.body)
     }
 }
 
@@ -419,6 +558,7 @@ impl EntryFrame {
 mod tests {
     use skep_febe::{Codec, OpKind};
     use skep_identity::{entry_body_publish, entry_body_record};
+    use skep_links::enc;
 
     use super::*;
     use crate::codec::op_name;
@@ -426,18 +566,36 @@ mod tests {
 
     /// The frame's `op` member is the op-kind token AS THE WIRE SPELLS IT
     /// (the design record §2.5): each entry-grade body `skep_identity` builds
-    /// carries the codec's own name for its op, so a wire rename meets this
-    /// test before it can move a signed preimage. ONE EXCEPTION, the frame
-    /// merge's (fm-I, 2026-09-29): `record` names the record grade's body
-    /// and no wire op — the codec parses no such op, and the body's token
-    /// says which grammar a `sig` was made over.
+    /// — one per kind of the checked set — carries the codec's own name for
+    /// its op, so a wire rename meets this test before it can move a signed
+    /// preimage. ONE EXCEPTION, the frame merge's (fm-I, 2026-09-29):
+    /// `record` names the record grade's body and no wire op — the codec
+    /// parses no such op, and the body's token says which grammar a `sig`
+    /// was made over.
     #[test]
     fn each_body_carries_the_wire_name_of_its_op() {
-        let empty = EntrySlot::Addrs(&[]);
+        let empty = EntrySlot(&[]);
         let slots = LinkSlots { from: empty, to: empty, ty: empty };
-        assert_eq!(entry_body_insert(None, std::iter::empty()).op(), op_name(OpKind::Insert));
-        assert_eq!(entry_body_make_link(slots).op(), op_name(OpKind::MakeLink));
-        assert_eq!(entry_body_publish(std::iter::empty(), None).op(), op_name(OpKind::Publish));
+        let original = skep_address::validate(
+            skep_address::Tumbler::new([1u32, 0, 1, 0, 1, 0, 2, 1].map(skep_address::Nat::from))
+                .expect("a tumbler"),
+        )
+        .expect("an address");
+        for (body, kind) in [
+            (entry_body_empty(ContentFreeOp::CreateNewDocument), OpKind::CreateNewDocument),
+            (entry_body_empty(ContentFreeOp::Fork), OpKind::Fork),
+            (entry_body_empty(ContentFreeOp::Version), OpKind::Version),
+            (entry_body_insert(None, std::iter::empty()), OpKind::Insert),
+            (entry_body_make_link(slots), OpKind::MakeLink),
+            (entry_body_emit(slots), OpKind::Emit),
+            (entry_body_nullify(slots), OpKind::Nullify),
+            (entry_body_assert_sup(slots), OpKind::AssertSup),
+            (entry_body_edit_link(slots, &unit_span(&original)), OpKind::EditLink),
+            (entry_body_publish(std::iter::empty(), None), OpKind::Publish),
+        ] {
+            assert_eq!(body.op(), op_name(kind), "{kind:?}");
+            assert!(crate::codec::in_checked_set(kind), "{kind:?}: every body's kind is of the checked set");
+        }
         let ty = skep_address::validate(
             skep_address::Tumbler::new([1u32, 1, 0, 1, 0, 1, 0, 3, 1].map(skep_address::Nat::from))
                 .expect("a tumbler"),
@@ -454,6 +612,49 @@ mod tests {
         assert!(
             JsonCodec.parse(br#"{"op":"record"}"#).is_err(),
             "`record` is a grammar token with no wire op: the codec parses none by that name"
+        );
+    }
+
+    /// THE UNIT SPAN IS M7's OWN SPELLING: the span the frame's `unit_span`
+    /// gives an address — the start the address, the width the unit at its
+    /// length — is the span M7's `enc` stores for a slot that names it, at
+    /// every depth an address takes, and over a list the two agree span for
+    /// span and in order. So a slot row composed from addresses alone — a
+    /// `nullify`'s, an `assert_sup`'s, an `emit`'s, the `edit_link` claim's
+    /// `from` — is the row a verifier composes from `read_link`.
+    #[test]
+    fn the_unit_span_is_the_span_enc_stores() {
+        let addr = |comps: &[u32]| {
+            skep_address::validate(
+                skep_address::Tumbler::new(comps.iter().map(|&c| skep_address::Nat::from(c)))
+                    .expect("a tumbler"),
+            )
+            .expect("an address")
+        };
+        let addrs = [
+            addr(&[1, 0, 1]),
+            addr(&[1, 0, 1, 0, 1]),
+            addr(&[1, 0, 1, 0, 1, 0, 2, 1]),
+            addr(&[1, 1, 0, 1, 0, 1, 0, 1, 5]),
+            addr(&[1, 0, 1, 0, 1, 2, 0, 1, 7]),
+        ];
+        for a in &addrs {
+            assert_eq!(enc([a]).spans().cloned().collect::<Vec<_>>(), vec![unit_span(a)], "{a}");
+        }
+        assert_eq!(
+            spans_of(&enc(addrs.iter())),
+            addrs.iter().map(unit_span).collect::<Vec<_>>(),
+            "over a list, span for span and in order"
+        );
+        assert_eq!(
+            spans_of(registry().reserved_type(ShippedType::Retraction)),
+            vec![unit_span(&addr(&[1, 1, 0, 1, 0, 1, 0, 1, 5]))],
+            "the retraction class's type slot is its ghost address's one unit span"
+        );
+        assert_eq!(
+            spans_of(registry().reserved_type(ShippedType::Supersedes)),
+            vec![unit_span(&addr(&[1, 1, 0, 1, 0, 1, 0, 1, 4]))],
+            "the supersedes class's type slot is its ghost address's one unit span"
         );
     }
 

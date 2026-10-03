@@ -204,20 +204,20 @@ pub const MAX_REINSERTED_VALUES: usize = 1 << 17;
 /// does.
 pub struct Vstream<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
-    /// THE ATTESTATION this handle's `insert` and `publish` commit under
-    /// (signed ops) — the two ops of this surface in THE CHECKED SET, the op
-    /// kinds the daemon's write-path check reaches (the owner's term;
-    /// skepd's `in_checked_set`): handed to the kernel's `transact_attested`
-    /// arm at the one transaction each opens, filling THAT commit marker's
-    /// signature slot; `None` — the plain handle every other constructor site
-    /// builds — leaves the slot empty. A BORROW, so the handle stays `Copy`
-    /// and the value cannot outlive the caller that owns it for the one call
-    /// this handle serves. The other writes of this surface (`delete`,
-    /// `copy`, `rearrange`, `version`, the seat op) lie outside the checked
-    /// set and take the plain arm whatever this field holds — `version`
-    /// included where it lands in the published world, the publish class
-    /// being the daemon's classification of a write and not an op kind — so a
-    /// widening of the set that reaches one of them changes its arm here too.
+    /// THE ATTESTATION this handle's `insert`, `publish` and `version` commit
+    /// under (signed ops) — the three ops of this surface in THE CHECKED
+    /// SET, the op kinds the daemon's write-path check reaches (the owner's
+    /// term; skepd's `in_checked_set`): handed to the kernel's
+    /// `transact_attested` arm at the one transaction each opens, filling
+    /// THAT commit marker's signature slot; `None` — the plain handle every
+    /// other constructor site builds — leaves the slot empty. A BORROW, so
+    /// the handle stays `Copy` and the value cannot outlive the caller that
+    /// owns it for the one call this handle serves. The other writes of this
+    /// surface (`delete`, `copy`, `rearrange`, the seat op) lie outside the
+    /// checked set and take the plain arm whatever this field holds: the
+    /// store refuses each of the three into a published document
+    /// (`PublishedTarget`), so no entry of their kind exists for a frame to
+    /// cover.
     attest: Option<&'k Attestation>,
 }
 
@@ -230,18 +230,19 @@ impl<'k, W: WorldState> Vstream<'k, W> {
     }
 
     /// THE ATTESTED CONSTRUCTOR (signed ops; the attestation rides the
-    /// handle, as the owner confirmed it): a handle whose `insert` and
-    /// `publish` commit under `attest`. Its callers are the slot's producer
-    /// set — M10's dispatch, with a value the daemon's check admitted — and
-    /// nothing else; `None` is [`Vstream::new`].
+    /// handle, as the owner confirmed it): a handle whose `insert`, `publish`
+    /// and `version` commit under `attest`. Its callers are the slot's
+    /// producer set — M10's dispatch, with a value the daemon's check
+    /// admitted — and nothing else; `None` is [`Vstream::new`].
     pub fn attested(kernel: &'k Kernel<W>, attest: Option<&'k Attestation>) -> Vstream<'k, W> {
         Vstream { kernel, attest }
     }
 }
 
 /// The handle's ARM and nothing else: whether it carries an attestation —
-/// the one fact about it that changes what its commits write, `insert` and
-/// `publish` filling their marker's signature slot under one — with `..`
+/// the one fact about it that changes what its commits write, `insert`,
+/// `publish` and `version` filling their marker's signature slot under one
+/// — with `..`
 /// for the kernel borrow, a world being no thing to print into a
 /// diagnostic, and never the attestation's bytes, a blob as wide as M2's
 /// `MAX_SIG_BYTES`. Written out rather than derived: a derive would bound

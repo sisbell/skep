@@ -224,8 +224,9 @@ pub struct JsonCodec;
 impl Codec for JsonCodec {
     /// M10's seam, reading the frame AS PRESENTED — the round-trip oracle's
     /// door and every test's, and not the daemon's: a frame's `attest`
-    /// member (admitted on the checked set alone — `insert`, `make_link`,
-    /// `publish` — under a `SIG_ALGS` row's token) rides in
+    /// member (admitted on the checked set alone — the ten publish-class
+    /// kinds [`in_checked_set`] states — under a `SIG_ALGS` row's token)
+    /// rides in
     /// [`Request::attest`] PARSED AND UNVERIFIED. M10's card makes that
     /// field the signature the daemon's write-path check ADMITTED, which
     /// `execute` hands the store and the kernel writes into the commit
@@ -260,9 +261,9 @@ impl JsonCodec {
     /// [`p_val_form`] refuses by design (coarse granularity must be said, and
     /// a zero-byte atom says nothing), carries an `id`, if any, that is
     /// UTF-8, which a `ReqId` this codec parsed always is, and carries an
-    /// `attest`, if any, only on an op of the checked set (`insert`,
-    /// `make_link`, `publish`: the set `in_checked_set` states
-    /// and the parse side admits the member on), under a marker tag a
+    /// `attest`, if any, only on an op of the checked set (the ten
+    /// publish-class kinds `in_checked_set` states and the parse side admits
+    /// the member on), under a marker tag a
     /// `SIG_ALGS` row names, which an `Attestation` this codec parsed always
     /// is. Under all of that, `parse(marshal_request(r))` reproduces `r` and
     /// re-marshaling the parse is byte-identical.
@@ -591,23 +592,40 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
 }
 
 /// THE CHECKED SET — the op kinds the write-path check reaches, and so the
-/// ops an ENTRY frame is composed for: `insert`, `make_link`, `publish` (the
+/// ops an ENTRY frame is composed for: the TEN publish-class kinds (the
 /// owner's term, m2, the design record's round 5 rulings 2026-09-26; the
-/// seam build's three — the record's thirteen publish-class-capable inputs
-/// are the WIDENING lane's). The ONE statement of it: the codec admits a
-/// request's `attest` member exactly on these, the check demands and
-/// verifies one exactly on these, and `auth::entry::compose` has an arm
-/// exactly for these. The acting hand ATTESTS; the check admits or refuses,
-/// and signs nothing. The three must agree in both directions — a member the
-/// codec admits and the check never demands is a signature parsed and
-/// silently DROPPED, the commit landing with its marker slot empty; one the
-/// check demands and the codec refuses is a write no signed session can make
-/// on a claimed board — so a widening is one edit here and one arm in
-/// `auth::entry::compose`, whose wildcard stops loudly in every build: a
-/// widening that forgets the arm answers `500 internal_panic` on each such
-/// write, and never commits one with its marker slot empty.
+/// ten cells D24 pins) — `create_new_document`, `fork`, `version`,
+/// `insert`, `publish`, `make_link`, `emit`, `nullify`, `assert_sup`,
+/// `edit_link`. The three other publish-class-capable kinds — `delete`,
+/// `copy`, `rearrange` — have no cell: the store refuses every one of them
+/// into a published document (`published_target`) and nothing of their kind
+/// commits above the claim, so the gate's thirteen inputs are the check's
+/// ten. The ONE statement of it: the codec admits a request's `attest`
+/// member exactly on these, the check demands and verifies one exactly on
+/// these, and `auth::entry::compose` has an arm exactly for these. The
+/// acting hand ATTESTS; the check admits or refuses, and signs nothing. The
+/// three must agree in both directions — a member the codec admits and the
+/// check never demands is a signature parsed and silently DROPPED, the
+/// commit landing with its marker slot empty; one the check demands and the
+/// codec refuses is a write no signed session can make on a claimed board —
+/// so a widening is one edit here and one arm in `auth::entry::compose`,
+/// whose wildcard stops loudly in every build: a widening that forgets the
+/// arm answers `500 internal_panic` on each such write, and never commits
+/// one with its marker slot empty.
 pub(crate) fn in_checked_set(kind: OpKind) -> bool {
-    matches!(kind, OpKind::Insert | OpKind::MakeLink | OpKind::Publish)
+    matches!(
+        kind,
+        OpKind::CreateNewDocument
+            | OpKind::Fork
+            | OpKind::Version
+            | OpKind::Insert
+            | OpKind::Publish
+            | OpKind::MakeLink
+            | OpKind::Emit
+            | OpKind::Nullify
+            | OpKind::AssertSup
+            | OpKind::EditLink
+    )
 }
 
 /// The request object being consumed: known fields are taken out; anything

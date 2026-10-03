@@ -725,21 +725,34 @@ impl Feed {
             let mut rows = Vec::new();
             let mut more = false;
             for at in Merge::new(inner.sources(class, query, start)) {
-                let Some((meta, reduced)) = inner.visible(class, query, at) else { continue };
+                let Some(Visible { meta, reduced, whole }) = inner.visible(class, query, at) else {
+                    continue;
+                };
                 if rows.len() == query.limit.get() {
                     more = true;
                     break;
                 }
                 let reduced: Vec<String> = reduced.iter().map(|d| d.addr.to_string()).collect();
-                rows.push((at, meta.clone(), reduced, inner.attest.slot(at)));
+                rows.push((at, meta.clone(), reduced, whole, inner.attest.slot(at)));
             }
             (rows, more)
         };
         let last = rows.last().map_or(query.since, |(at, ..)| *at);
         let mut entries = Vec::with_capacity(rows.len());
         let mut bytes = 0usize;
-        for (at, meta, reduced, slot) in rows {
-            let entry = meta.entry(at, reduced, slot.as_deref());
+        for (at, meta, reduced, whole, slot) in rows {
+            let mut entry = meta.entry(at, reduced, slot.as_deref());
+            // THE THIRD ABSENCE (mi7-E2; SO-I5 (e)): a row whose `docs` this
+            // class REDUCES — a straddle, a draft-homed `nullify` of a public
+            // link or an `edit_link` with one home a draft (PUB-6.47) —
+            // carries no `attest`, ABSENT and never `null`: the signature is
+            // a function of the home the row withholds, and served it would
+            // confirm a guess at that home, the confirmation the chain's
+            // salt exists to deny. The verdict there is undeterminable from
+            // this feed; the owner's own page carries the member whole.
+            if !whole {
+                entry.as_object_mut().expect("an entry is an object").remove("attest");
+            }
             // The entry's marshaled length — key order moves no byte of it
             // — and the comma that joins it to the one before.
             bytes += to_bytes(entry.clone()).len() + usize::from(!entries.is_empty());
@@ -764,6 +777,16 @@ impl Feed {
     pub fn entries_above(&self, position: u64) -> Vec<(u64, CommitMeta)> {
         self.inner.lock().log.entries_above(position)
     }
+}
+
+/// One entry as a class sees it ([`Inner::visible`]): its meta, its docs
+/// REDUCED to the ones the class may read, and whether that reduction dropped
+/// none of them — `false` on a straddle row, whose `attest` the page then
+/// withholds (mi7-E2).
+struct Visible<'a> {
+    meta: &'a CommitMeta,
+    reduced: Vec<&'a Doc>,
+    whole: bool,
 }
 
 impl Inner {
@@ -830,13 +853,10 @@ impl Inner {
 
     /// THE MASK, per entry (PUB-7.20; PUB-6.44–6.45), plus the narrowings'
     /// per-entry predicates: the entry's meta and its docs REDUCED to the
-    /// requester's readable ones, or `None` when the entry is omitted.
-    fn visible(
-        &self,
-        class: &FeedClass<'_>,
-        query: &ChangesQuery,
-        at: u64,
-    ) -> Option<(&CommitMeta, Vec<&Doc>)> {
+    /// requester's readable ones — and whether the reduction kept the record's
+    /// docs WHOLE, which is what decides the row's `attest` (mi7-E2) — or
+    /// `None` when the entry is omitted.
+    fn visible(&self, class: &FeedClass<'_>, query: &ChangesQuery, at: u64) -> Option<Visible<'_>> {
         let meta = self.log.entries().get(&at)?;
         let docs: &[Doc] = self.docs.get(&at).map(Vec::as_slice).unwrap_or(&[]);
         let reduced: Vec<&Doc> = docs.iter().filter(|d| class.readable(&d.addr)).collect();
@@ -851,7 +871,8 @@ impl Inner {
         if query.drafts_only && !reduced.iter().any(|d| d.is_draft()) {
             return None;
         }
-        Some((meta, reduced))
+        let whole = reduced.len() == docs.len();
+        Some(Visible { meta, reduced, whole })
     }
 
     /// The candidate sources for `class` and `query`, each an ascending iterator

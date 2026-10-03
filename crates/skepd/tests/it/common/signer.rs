@@ -1,15 +1,24 @@
-//! THE TEST SIGNER (signed ops, the seam build 2026-09-25; the placement
-//! investigation §4.3): a token → (principal, seed) registry the two
+//! THE TEST SIGNER (signed ops; the placement investigation §4.3) — the
+//! FRONTEND's stand-in: a token → (principal, seed) registry the two
 //! session-opening helpers fill, and the composition of the ENTRY frame from
 //! the frame a suite is about to post — `board` read off `H.1`, `account` off
-//! `principal_prefix`, `doc` and `body` per op, a `publish`'s body in the
-//! ADDRESS FORM (l6-A4): the runs the commit copies in by their values, read
-//! back over the wire from their origins, its windows by address, and its
-//! base extent — signed by the seed's hybrid key and attached as the frame's
-//! top-level `attest`.
+//! `principal_prefix`, `doc` and `body` per op cell of the ten: the three
+//! mints' EMPTY body over the parent account; a link write's slots AS THE
+//! STORE WILL HOLD THEM — an address-form slot spelled as its unit spans, a
+//! V-spec slot RESOLVED through the wire's own `image` read over its source
+//! before signing (the read that answers a V-span's I-extents; see
+//! [`resolve_specs`]); an `edit_link`'s pair of homes and its original's
+//! unit span; a `publish`'s body in the ADDRESS FORM (l6-A4): the runs the
+//! commit copies in by their values, read back over the wire from their
+//! origins, its windows by address, and its base — signed by the seed's
+//! hybrid key and attached as the frame's top-level `attest`.
 
 use std::num::NonZeroU64;
 use std::sync::{LazyLock, PoisonError};
+
+// The frame's own unit span, named ahead of the glob so it shadows the
+// suite's JSON helper of the same name.
+use skep_identity::unit_span;
 
 use super::*;
 
@@ -119,6 +128,24 @@ fn parse_tumbler(s: &str) -> Option<Tumbler> {
     Tumbler::new(comps?).ok()
 }
 
+/// A span as the wire spells one — `{"start": <tumbler>, "width": <tumbler>}`.
+fn parse_span(v: &Value) -> Option<Span> {
+    let start = parse_tumbler(v["start"].as_str()?)?;
+    let width = parse_tumbler(v["width"].as_str()?)?;
+    Span::new(start, width).ok()
+}
+
+/// A stored content extent from a run as `image` answers it — its I-start and
+/// its width in positions — the span a run's `iextent` spells: the start's
+/// own tumbler, and a width of zeros at every component but the last, which
+/// holds the count.
+fn extent_span(i_start: &str, width: u64) -> Option<Span> {
+    let start = parse_tumbler(i_start)?;
+    let mut comps = vec![Nat::from(0u64); start.len()];
+    *comps.last_mut()? = Nat::from(width);
+    Span::new(start, Tumbler::new(comps).ok()?).ok()
+}
+
 /// M5's `trunk_of` over the dotted spelling: a version member cut back to
 /// its document — the components through the first past the second `0`
 /// separator (node, then `0`, the account, then `0`, the document's first
@@ -180,42 +207,71 @@ fn unhex(h: &str) -> Option<Vec<u8>> {
     (0..h.len() / 2).map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).ok()).collect()
 }
 
-/// A link slot as the frame carries it: the address form's names, or the
-/// V-spec form's `(source, span)` pairs.
-enum SignerSlot {
-    Addrs(Vec<Address>),
-    Resolve(Vec<(Address, Span)>),
+/// THE SIGNER'S RESOLVE — a V-spec slot's spans AS THE STORE WILL HOLD THEM,
+/// read through the wire's own `image` answer over each spec's source: the
+/// I-runs the region maps onto, each run's I-start and width spelled as the
+/// run's extent, in the order the specs are given — the row the daemon
+/// composes from M7's own resolution of the same specs over the base the
+/// transaction opens on. `None` where a source cannot be read (a withheld
+/// draft, an unregistered document): the signer composes no slot it cannot
+/// read, as a frontend holding no grant could not, and the frame goes out as
+/// written.
+///
+/// Two spellings a frontend cannot reach through `image` are stated and not
+/// hidden: `image` answers a PUBLISHED source's head (head-float) where the
+/// store resolves a slot against the address named, and it answers a run
+/// placed twice by transclusion ONCE where the store keeps both; a spec over
+/// either resolves to a row the daemon refuses `signature`. Every V-spec
+/// slot the suites sign names a draft's own positions, where the two agree.
+pub fn resolve_specs(port: u16, token: &str, specs: &[(Address, Span)]) -> Option<Vec<Span>> {
+    let mut spans = Vec::new();
+    for (source, span) in specs {
+        let frame = json!({
+            "op": "image",
+            "d": source.to_string(),
+            "region": [{"start": span.start().to_string(), "width": span.width().to_string()}],
+        });
+        let v = op_as_written(port, Some(token), &frame.to_string());
+        if v["resp"].as_str() != Some("runs") {
+            return None;
+        }
+        for (i_start, width) in runs_in(&v) {
+            spans.push(extent_span(&i_start, width)?);
+        }
+    }
+    Some(spans)
 }
 
-fn signer_slot(v: &Value) -> Option<SignerSlot> {
+/// A V-spec array as the wire carries one — `[{"source": …, "span": …}, …]`.
+fn parse_specs(specs: &[Value]) -> Option<Vec<(Address, Span)>> {
+    specs
+        .iter()
+        .map(|s| {
+            let source = parse_addr(s["source"].as_str()?)?;
+            Some((source, parse_span(&s["span"])?))
+        })
+        .collect()
+}
+
+/// A link slot as the frame carries it — THE SLOT AS STORED: an address form
+/// (`{"addrs": [...]}`) spelled as its unit spans, one per address; a V-spec
+/// form — the bare array `make_link` and an `edit_link` successor's `from`
+/// and `to` take, or the `{"resolve": [...]}` object its type slot takes —
+/// resolved through [`resolve_specs`]. `None` where the slot is no slot, or
+/// a source cannot be read.
+fn signer_slot(port: u16, token: &str, v: &Value) -> Option<Vec<Span>> {
     match v {
         Value::Object(m) => {
-            let addrs = m.get("addrs")?.as_array()?;
-            Some(SignerSlot::Addrs(
-                addrs.iter().map(|a| parse_addr(a.as_str()?)).collect::<Option<_>>()?,
-            ))
+            if let Some(addrs) = m.get("addrs").and_then(Value::as_array) {
+                addrs.iter().map(|a| Some(unit_span(&parse_addr(a.as_str()?)?))).collect()
+            } else if let Some(specs) = m.get("resolve").and_then(Value::as_array) {
+                resolve_specs(port, token, &parse_specs(specs)?)
+            } else {
+                None
+            }
         }
-        Value::Array(specs) => Some(SignerSlot::Resolve(
-            specs
-                .iter()
-                .map(|s| {
-                    let source = parse_addr(s["source"].as_str()?)?;
-                    let start = parse_tumbler(s["span"]["start"].as_str()?)?;
-                    let width = parse_tumbler(s["span"]["width"].as_str()?)?;
-                    Some((source, Span::new(start, width).ok()?))
-                })
-                .collect::<Option<_>>()?,
-        )),
+        Value::Array(specs) => resolve_specs(port, token, &parse_specs(specs)?),
         _ => None,
-    }
-}
-
-impl SignerSlot {
-    fn as_entry(&self) -> EntrySlot<'_> {
-        match self {
-            SignerSlot::Addrs(a) => EntrySlot::Addrs(a),
-            SignerSlot::Resolve(v) => EntrySlot::Resolve(v),
-        }
     }
 }
 
@@ -372,17 +428,45 @@ fn base_of(frame: &Value) -> Option<Option<(Address, u64)>> {
     }
 }
 
+/// The ten op-kind tokens the checked set admits an `attest` on — the ones
+/// [`entry_frame_for`] composes a frame for.
+const CHECKED_SET: [&str; 10] = [
+    "create_new_document",
+    "fork",
+    "version",
+    "insert",
+    "publish",
+    "make_link",
+    "emit",
+    "nullify",
+    "assert_sup",
+    "edit_link",
+];
+
 /// The ENTRY frame for `frame` as `principal` would sign it on this board,
-/// or `None` where a member cannot be composed (no `H.1` yet, an
-/// unreadable copied origin, an op outside the three). Every address the
+/// or `None` where a member cannot be composed (no `H.1` yet, an unreadable
+/// copied origin or slot source, an op outside the ten). Every address the
 /// frame names is PARSED before it is framed, so `entry_frame` spells the
-/// address and not the string the frame happened to carry.
+/// address and not the string the frame happened to carry; every link slot
+/// is composed AS THE STORE WILL HOLD IT ([`signer_slot`]).
 pub fn entry_frame_for(port: u16, token: &str, principal: u64, frame: &Value) -> Option<Vec<u8>> {
     let op = frame["op"].as_str()?;
     let board = board_term(port)?;
     let account = parse_addr(&account_of(port, token, principal)?)?;
     let alg = SigAlgRow::of_tag(FIXTURE_TAG)?.token;
+    let slot = |v: &Value| signer_slot(port, token, v);
+    // THE PAIR'S ROW: the one op whose `doc` names two homes; every other
+    // op's `doc` is one address.
+    let mut pair: Option<(Address, Address)> = None;
     let (doc, body) = match op {
+        // The three mints: the EMPTY body over the parent account — the
+        // request's `account`, or the principal's own.
+        "create_new_document" => (
+            parse_addr(frame["account"].as_str()?)?,
+            entry_body_empty(ContentFreeOp::CreateNewDocument),
+        ),
+        "fork" => (account.clone(), entry_body_empty(ContentFreeOp::Fork)),
+        "version" => (account.clone(), entry_body_empty(ContentFreeOp::Version)),
         "insert" => {
             let doc = parse_addr(&trunk_of_str(frame["doc"].as_str()?))?;
             let declared = match frame.get("deposit").and_then(Value::as_str) {
@@ -396,13 +480,44 @@ pub fn entry_frame_for(port: u16, token: &str, principal: u64, frame: &Value) ->
             (doc, entry_body_insert(declared.as_ref(), values.iter().map(Vec::as_slice)))
         }
         "make_link" => {
-            let (from, to, ty) = (
-                signer_slot(&frame["from"])?,
-                signer_slot(&frame["to"])?,
-                signer_slot(&frame["ty"])?,
-            );
-            let slots = LinkSlots { from: from.as_entry(), to: to.as_entry(), ty: ty.as_entry() };
-            (parse_addr(frame["home"].as_str()?)?, entry_body_make_link(slots))
+            let (from, to, ty) = (slot(&frame["from"])?, slot(&frame["to"])?, slot(&frame["ty"])?);
+            let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
+            let body = match frame.get("replaces").and_then(Value::as_str) {
+                Some(named) => entry_body_make_link_replacing(slots, &parse_addr(named)?),
+                None => entry_body_make_link(slots),
+            };
+            (parse_addr(frame["home"].as_str()?)?, body)
+        }
+        "emit" => {
+            let ty: Vec<Span> = frame["ty"].as_array()?.iter().map(parse_span).collect::<Option<_>>()?;
+            let from = [unit_span(&parse_addr(frame["from"].as_str()?)?)];
+            let to: Vec<Span> =
+                frame["to"].as_array()?.iter().map(|a| Some(unit_span(&parse_addr(a.as_str()?)?))).collect::<Option<_>>()?;
+            let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
+            (parse_addr(frame["home"].as_str()?)?, entry_body_emit(slots))
+        }
+        "nullify" => {
+            let home = parse_addr(frame["home"].as_str()?)?;
+            let (from, to) = ([unit_span(&home)], [unit_span(&parse_addr(frame["target"].as_str()?)?)]);
+            let ty = [unit_span(&parse_addr(T_RETRACTION)?)];
+            let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
+            (home, entry_body_nullify(slots))
+        }
+        "assert_sup" => {
+            let from = [unit_span(&parse_addr(frame["old"].as_str()?)?)];
+            let to = [unit_span(&parse_addr(frame["new"].as_str()?)?)];
+            let ty = [unit_span(&parse_addr(T_SUPERSEDES)?)];
+            let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
+            (parse_addr(frame["home"].as_str()?)?, entry_body_assert_sup(slots))
+        }
+        "edit_link" => {
+            let successor = &frame["successor"];
+            let (from, to, ty) = (slot(&successor["from"])?, slot(&successor["to"])?, slot(&successor["ty"])?);
+            let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
+            let original = unit_span(&parse_addr(frame["original"].as_str()?)?);
+            let (d_s, d_a) = (parse_addr(frame["d_s"].as_str()?)?, parse_addr(frame["d_a"].as_str()?)?);
+            pair = Some((d_s.clone(), d_a));
+            (d_s, entry_body_edit_link(slots, &original))
         }
         "publish" => {
             let segments = publish_segments(port, token, frame, None)?;
@@ -415,7 +530,11 @@ pub fn entry_frame_for(port: u16, token: &str, principal: u64, frame: &Value) ->
         }
         _ => return None,
     };
-    Some(entry_frame(alg, board, &account, &doc, &body))
+    let term = match &pair {
+        Some((d_s, d_a)) => DocTerm::Pair { d_s, d_a },
+        None => DocTerm::One(&doc),
+    };
+    Some(entry_frame(alg, board, &account, term, &body))
 }
 
 /// The `attest` member carrying `sig` under the fixtures' tag
@@ -483,7 +602,7 @@ pub fn record_frame_for(
         lineage_fork_point: None,
         sigless_canonical_record: canonical,
     });
-    Some(entry_frame(alg, board, &account, &home, &body))
+    Some(entry_frame(alg, board, &account, DocTerm::One(&home), &body))
 }
 
 /// The record `entries` SIGNED at the record grade by `signer` for a deposit
@@ -574,7 +693,7 @@ pub fn op_with_publish_values(port: u16, token: &str, frame: &str, values: &[&[u
     let base = base_of(&v).expect("a member and a count, or no base");
     let base = base.as_ref().map(|(member, extent)| ShotBase { member, extent: *extent });
     let body = entry_body_publish(segments.iter().map(SignerSegment::as_shot), base);
-    let bytes = entry_frame(alg, board, &account, &doc, &body);
+    let bytes = entry_frame(alg, board, &account, DocTerm::One(&doc), &body);
     let signer = HybridSigner::from_seed(FIXTURE_TAG, &seed).expect("tag 1");
     v["attest"] = attest_member(&signer.sign(&bytes));
     op_as_written(port, Some(token), &v.to_string())
@@ -590,7 +709,7 @@ pub fn attach_attest(port: u16, token: &str, frame: &str) -> String {
     let Ok(mut v) = serde_json::from_str::<Value>(frame) else {
         return frame.to_string();
     };
-    if !matches!(v["op"].as_str(), Some("insert" | "make_link" | "publish")) {
+    if !v["op"].as_str().is_some_and(|op| CHECKED_SET.contains(&op)) {
         return frame.to_string();
     }
     if v.get("attest").is_some() {

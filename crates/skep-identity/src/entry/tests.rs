@@ -20,11 +20,27 @@ fn slot_bytes(slot: EntrySlot<'_>) -> Vec<u8> {
     out
 }
 
+/// The address-list row alone, as the pins below state it.
+fn address_list_bytes(addrs: &[Address]) -> Vec<u8> {
+    let mut out = Vec::new();
+    push_address_list(&mut out, addrs);
+    out
+}
+
 /// The optional-address row alone, as the pins below state it.
 fn optional_address_bytes(named: Option<&Address>) -> Vec<u8> {
     let mut out = Vec::new();
     push_optional_address(&mut out, named);
     out
+}
+
+/// A span from its two tumblers' components, as a pin spells one.
+fn span(start: &[u32], width: &[u32]) -> Span {
+    Span::new(
+        Tumbler::new(start.iter().map(|&c| Nat::from(c))).unwrap(),
+        Tumbler::new(width.iter().map(|&c| Nat::from(c))).unwrap(),
+    )
+    .unwrap()
 }
 
 /// The window row alone, as the pins below state it.
@@ -43,9 +59,10 @@ fn nonzero(width: u64) -> NonZeroU64 {
 /// second implementation composes against — and the token each body
 /// carries into the frame's `op` member. The two insert pins put the
 /// value sequence after a prefix, so a count written back anywhere but
-/// where its row began is caught; the slot row is pinned at TWO elements
-/// as well as one, since only a second element can show the ORDER the row
-/// keeps.
+/// where its row began is caught; the slot row and the address-list row
+/// are each pinned at TWO elements as well as one, since only a second
+/// element can show the ORDER the row keeps; the slot row's EMPTY spelling
+/// is pinned alone, and the pair's row beside the list row it is one of.
 #[test]
 fn the_rows_spell_as_the_module_doc_states() {
     assert_eq!(
@@ -63,19 +80,58 @@ fn the_rows_spell_as_the_module_doc_states() {
         ]
         .concat()
     );
+    // THE SLOT ROW, as stored: one unit span — the span an address named
+    // stores as, its start the address and its width the unit at the
+    // address's own length — then its start and width, each delimited.
     let element = addr(&[1, 0, 1, 0, 1, 0, 1, 1]);
     assert_eq!(
-        slot_bytes(EntrySlot::Addrs(std::slice::from_ref(&element))),
+        unit_span(&element),
+        span(&[1, 0, 1, 0, 1, 0, 1, 1], &[0, 0, 0, 0, 0, 0, 0, 1]),
+        "the unit span: the address as the start, the unit at its length as the width"
+    );
+    assert_eq!(
+        slot_bytes(EntrySlot(&[unit_span(&element)])),
+        [
+            &[0x03u8, 0, 0, 0, 0, 0, 0, 0, 1][..],
+            &[0, 0, 0, 15][..],
+            b"1.0.1.0.1.0.1.1",
+            &[0, 0, 0, 15][..],
+            b"0.0.0.0.0.0.0.1",
+        ]
+        .concat()
+    );
+    // …at TWO spans, in the order given — a resolved content extent of two
+    // positions, then a unit span — DESCENDING both in address order
+    // (30 > 2) and in spelled order ("1.0.30…" > "1.0.2"), so a row that
+    // sorted its spans by either comparison spells other bytes. `30` is a
+    // component only base ten spells `30`, so the row's DECIMAL shows too.
+    let extent = span(&[1, 0, 30, 0, 1, 0, 1, 4], &[0, 0, 0, 0, 0, 0, 0, 2]);
+    assert_eq!(
+        slot_bytes(EntrySlot(&[extent.clone(), unit_span(&addr(&[1, 0, 2]))])),
+        [
+            &[0x03u8, 0, 0, 0, 0, 0, 0, 0, 2][..],
+            &[0, 0, 0, 16][..],
+            b"1.0.30.0.1.0.1.4",
+            &[0, 0, 0, 15][..],
+            b"0.0.0.0.0.0.0.2",
+            &[0, 0, 0, 5][..],
+            b"1.0.2",
+            &[0, 0, 0, 5][..],
+            b"0.0.1",
+        ]
+        .concat(),
+        "the slot row keeps its spans in the order given"
+    );
+    // …and EMPTY: one spelling, the form byte and a zero count.
+    assert_eq!(slot_bytes(EntrySlot(&[])), [0x03u8, 0, 0, 0, 0, 0, 0, 0, 0], "the EMPTY slot");
+    // THE ADDRESS-LIST ROW: `0x01`, the count, each address delimited.
+    assert_eq!(
+        address_list_bytes(std::slice::from_ref(&element)),
         [&[0x01u8, 0, 0, 0, 0, 0, 0, 0, 1][..], &[0, 0, 0, 15][..], b"1.0.1.0.1.0.1.1"].concat()
     );
-    // …and at TWO elements, in the order given: DESCENDING both in address
-    // order (30 > 2) and in spelled order ("1.0.30" > "1.0.2"), so a row
-    // that sorted its elements by either comparison spells other bytes.
-    // `30` is a component only base ten spells `30`, so the row's DECIMAL
-    // shows here too.
     let pair = [addr(&[1, 0, 30]), addr(&[1, 0, 2])];
     assert_eq!(
-        slot_bytes(EntrySlot::Addrs(&pair)),
+        address_list_bytes(&pair),
         [
             &[0x01u8, 0, 0, 0, 0, 0, 0, 0, 2][..],
             &[0, 0, 0, 6][..],
@@ -84,25 +140,28 @@ fn the_rows_spell_as_the_module_doc_states() {
             b"1.0.2",
         ]
         .concat(),
-        "the slot row keeps its elements in the order given"
+        "the address-list row keeps its elements in the order given"
     );
-    let span = Span::new(
-        Tumbler::new([1u32, 1].map(Nat::from)).unwrap(),
-        Tumbler::new([0u32, 2].map(Nat::from)).unwrap(),
-    )
-    .unwrap();
+    // THE PAIR'S ROW: an `edit_link`'s two homes as a list row of two, the
+    // successor's home FIRST — and the one-document term the address row.
+    let (d_s, d_a) = (addr(&[1, 0, 1, 0, 2]), addr(&[1, 0, 1, 0, 1]));
     assert_eq!(
-        slot_bytes(EntrySlot::Resolve(&[(addr(&[1, 0, 1, 0, 1]), span)])),
+        doc_bytes(DocTerm::Pair { d_s: &d_s, d_a: &d_a }),
         [
-            &[0x02u8, 0, 0, 0, 0, 0, 0, 0, 1][..],
+            &[0x01u8, 0, 0, 0, 0, 0, 0, 0, 2][..],
+            &[0, 0, 0, 9][..],
+            b"1.0.1.0.2",
             &[0, 0, 0, 9][..],
             b"1.0.1.0.1",
-            &[0, 0, 0, 3][..],
-            b"1.1",
-            &[0, 0, 0, 3][..],
-            b"0.2",
         ]
-        .concat()
+        .concat(),
+        "the pair's row: d_s then d_a"
+    );
+    assert_eq!(doc_bytes(DocTerm::One(&d_a)), b"1.0.1.0.1", "one document: the address row");
+    assert_ne!(
+        doc_bytes(DocTerm::Pair { d_s: &d_s, d_a: &d_a }),
+        doc_bytes(DocTerm::Pair { d_s: &d_a, d_a: &d_s }),
+        "the two homes swapped spell another term"
     );
     assert_eq!(
         entry_body_insert(None, [&b"x"[..]]).as_bytes(),
@@ -221,23 +280,21 @@ fn the_rows_spell_as_the_module_doc_states() {
     // in, and a builder that wrote them in any other order spells other
     // bytes here. Then the `replaces` row: EMPTY where the op carries no
     // `replaces` member, so such a body is never the three slots alone.
-    let (ty, from) = ([element], [addr(&[1, 0, 1])]);
-    let empty = EntrySlot::Addrs(&[]);
-    let slots = LinkSlots { from: EntrySlot::Addrs(&from), to: empty, ty: EntrySlot::Addrs(&ty) };
+    let (ty, from) = ([unit_span(&element)], [unit_span(&addr(&[1, 0, 1]))]);
+    let empty = EntrySlot(&[]);
+    let slots = LinkSlots { from: EntrySlot(&from), to: empty, ty: EntrySlot(&ty) };
     assert_eq!(optional_address_bytes(None), [0u8, 0, 0, 0], "absent: the EMPTY group");
+    let four_rows = |slots: LinkSlots<'_>| {
+        [slot_bytes(slots.ty), slot_bytes(slots.from), slot_bytes(slots.to), optional_address_bytes(None)]
+            .concat()
+    };
     assert_eq!(
         entry_body_make_link(slots).as_bytes(),
-        [
-            slot_bytes(slots.ty),
-            slot_bytes(slots.from),
-            slot_bytes(slots.to),
-            optional_address_bytes(None)
-        ]
-        .concat(),
+        four_rows(slots),
         "the type slot, then from, then to, then the `replaces` row's EMPTY group"
     );
-    // …and a `replaces` member PRESENT: the one address as an address-form
-    // slot row, the whole row one group, length-delimited.
+    // …and a `replaces` member PRESENT: the one address as an address-list
+    // row, the whole row one group, length-delimited.
     let revocation = addr(&[1, 0, 1, 0, 1, 0, 2, 9]);
     // Group length 28: the form byte, `be64(1)`, then `be32(15)` and the
     // fifteen bytes of the address's spelling.
@@ -260,20 +317,55 @@ fn the_rows_spell_as_the_module_doc_states() {
         .concat(),
         "the three slots, then the `replaces` row's group"
     );
-    // A PRESENT group holding an EMPTY slot row — a spelling no op makes,
+    // A PRESENT group holding an EMPTY list row — a spelling no op makes,
     // the wire's `replaces` member being one address — is still not the
     // absent bytes: the group's length tells the two apart.
     let mut present_and_empty = Vec::new();
-    push_delimited(&mut present_and_empty, &slot_bytes(empty));
-    assert_eq!(present_and_empty, [&[0u8, 0, 0, 9][..], &slot_bytes(empty)[..]].concat());
+    push_delimited(&mut present_and_empty, &address_list_bytes(&[]));
+    assert_eq!(present_and_empty, [&[0u8, 0, 0, 9][..], &address_list_bytes(&[])[..]].concat());
     assert_ne!(
         present_and_empty,
         optional_address_bytes(None),
         "present-and-empty is never absent"
     );
-    // THE RECORD BODY: the type slot row, the `to` slot row, the
-    // `replaces` row, the lineage row, the sig-less record's bytes — here a
-    // targeted kind with neither optional row named…
+    // THE OTHER LINK WRITES: the same four rows over the stored link, under
+    // the op's own token — `emit` with its `to` EMPTY, as a Unary class
+    // stores it; `nullify` over the home's and the target's unit spans
+    // under the retraction's; `assert_sup` over the two links' under the
+    // supersedes constant's. Each body is bytes-equal to a `make_link`'s
+    // over the same slots and differs in its token alone.
+    for (body, token) in [
+        (entry_body_emit(slots), "emit"),
+        (entry_body_nullify(slots), "nullify"),
+        (entry_body_assert_sup(slots), "assert_sup"),
+    ] {
+        assert_eq!(body.as_bytes(), four_rows(slots), "{token}: the make_link body's four rows");
+        assert_eq!(body.op(), token);
+    }
+    // THE EDIT_LINK BODY: the successor's four rows, then the claim's `from`
+    // slot row — `original`'s one unit span — and nothing after it.
+    let original = addr(&[1, 0, 1, 0, 1, 0, 2, 1]);
+    let edit = entry_body_edit_link(slots, &unit_span(&original));
+    assert_eq!(
+        edit.as_bytes(),
+        [four_rows(slots), slot_bytes(EntrySlot(&[unit_span(&original)]))].concat(),
+        "the successor's four rows, then the claim's from slot: the original's unit span"
+    );
+    assert_eq!(edit.op(), "edit_link");
+    // THE EMPTY BODY: no bytes, under each content-free op's own token.
+    for (op, token) in [
+        (ContentFreeOp::CreateNewDocument, "create_new_document"),
+        (ContentFreeOp::Fork, "fork"),
+        (ContentFreeOp::Version, "version"),
+    ] {
+        let body = entry_body_empty(op);
+        assert!(body.as_bytes().is_empty(), "{token}: the EMPTY body");
+        assert_eq!(body.op(), token);
+    }
+    // THE RECORD BODY: the type slot row, the `to` slot row — address-list
+    // rows both — the `replaces` row, the lineage row, the sig-less
+    // record's bytes — here a targeted kind with neither optional row
+    // named…
     let (record_ty, subject) = (addr(&[1, 1, 0, 1, 0, 1, 0, 3, 1]), [addr(&[1, 0, 2])]);
     assert_eq!(
         entry_body_record(RecordRows {
@@ -285,8 +377,8 @@ fn the_rows_spell_as_the_module_doc_states() {
         })
         .as_bytes(),
         [
-            slot_bytes(EntrySlot::Addrs(std::slice::from_ref(&record_ty))),
-            slot_bytes(EntrySlot::Addrs(&subject)),
+            address_list_bytes(std::slice::from_ref(&record_ty)),
+            address_list_bytes(&subject),
             vec![0, 0, 0, 0],
             vec![0, 0, 0, 0],
             vec![0, 0, 0, 2, b'{', b'}'],
@@ -294,7 +386,7 @@ fn the_rows_spell_as_the_module_doc_states() {
         .concat(),
         "type, to, the EMPTY replaces group, the EMPTY lineage group, the bytes"
     );
-    // …and a targetless kind naming both: the `to` row is the EMPTY slot
+    // …and a targetless kind naming both: the `to` row is the EMPTY list
     // (nine bytes, never absent), each optional row its one address in
     // the `replaces` row's own spelling, and `from` is nowhere.
     let fork_point = addr(&[1, 0, 1, 0, 1, 3]);
@@ -315,8 +407,8 @@ fn the_rows_spell_as_the_module_doc_states() {
         })
         .as_bytes(),
         [
-            slot_bytes(EntrySlot::Addrs(std::slice::from_ref(&record_ty))),
-            slot_bytes(empty),
+            address_list_bytes(std::slice::from_ref(&record_ty)),
+            address_list_bytes(&[]),
             replaces_group,
             lineage_group,
             vec![0, 0, 0, 1, b'r'],
@@ -502,19 +594,80 @@ fn each_refusal_names_its_cause() {
 
 /// The frame is `framed(ENTRY_TAG, …)` over the six members in order and
 /// nothing else: the tag, then each member length-delimited — the board
-/// term as the board row, the two addresses as the address row, the op
-/// and body the [`EntryBody`]'s own.
+/// term as the board row, the account as the address row, the `doc` term
+/// as the address row or the pair's row, the op and body the
+/// [`EntryBody`]'s own — over EVERY body: each builder's token is the
+/// frame's fifth member and its bytes the sixth, the EMPTY body framed as
+/// `be32(0)` with the member present, and an `edit_link`'s pair's row the
+/// fourth member whole.
 #[test]
 fn the_frame_is_framed_under_the_entry_tag_over_six_members() {
-    let body = EntryBody { op: "insert", bytes: b"B".to_vec() };
     let term = BoardTerm { log_position: 1, chain: [0; 32] };
-    let frame =
-        entry_frame("mldsa65-ed25519", term, &addr(&[1, 0, 1]), &addr(&[1, 0, 1, 0, 1]), &body);
     let board = board_bytes(&term);
-    let mut want = b"skep-entry-v1".to_vec();
-    for m in [&b"mldsa65-ed25519"[..], &board[..], b"1.0.1", b"1.0.1.0.1", b"insert", b"B"] {
-        want.extend_from_slice(&(m.len() as u32).to_be_bytes());
-        want.extend_from_slice(m);
+    let (account, doc) = (addr(&[1, 0, 1]), addr(&[1, 0, 1, 0, 1]));
+    let framed_members = |members: [&[u8]; 6]| {
+        let mut want = b"skep-entry-v1".to_vec();
+        for m in members {
+            want.extend_from_slice(&(m.len() as u32).to_be_bytes());
+            want.extend_from_slice(m);
+        }
+        want
+    };
+    let body = EntryBody { op: "insert", bytes: b"B".to_vec() };
+    assert_eq!(
+        entry_frame("mldsa65-ed25519", term, &account, DocTerm::One(&doc), &body),
+        framed_members([b"mldsa65-ed25519", &board, b"1.0.1", b"1.0.1.0.1", b"insert", b"B"])
+    );
+    // Every body, under its own token, over one document.
+    let unit = [unit_span(&addr(&[1, 0, 1, 0, 1, 0, 2, 1]))];
+    let slots = LinkSlots { from: EntrySlot(&unit), to: EntrySlot(&[]), ty: EntrySlot(&unit) };
+    let ty = addr(&[1, 1, 0, 1, 0, 1, 0, 3, 1]);
+    let bodies = [
+        entry_body_empty(ContentFreeOp::CreateNewDocument),
+        entry_body_empty(ContentFreeOp::Fork),
+        entry_body_empty(ContentFreeOp::Version),
+        entry_body_insert(None, [&b"a"[..]]),
+        entry_body_make_link(slots),
+        entry_body_make_link_replacing(slots, &doc),
+        entry_body_emit(slots),
+        entry_body_nullify(slots),
+        entry_body_assert_sup(slots),
+        entry_body_edit_link(slots, &unit[0]),
+        entry_body_publish([ShotSegmentPiece::Value(b"q")], None),
+        entry_body_record(RecordRows {
+            ty: &ty,
+            to: &[],
+            replaces: None,
+            lineage_fork_point: None,
+            sigless_canonical_record: b"",
+        }),
+    ];
+    for body in &bodies {
+        assert_eq!(
+            entry_frame("mldsa65-ed25519", term, &account, DocTerm::One(&doc), body),
+            framed_members([
+                b"mldsa65-ed25519",
+                &board,
+                b"1.0.1",
+                b"1.0.1.0.1",
+                body.op().as_bytes(),
+                body.as_bytes()
+            ]),
+            "{}: the frame's fifth and sixth members are the body's token and bytes",
+            body.op()
+        );
     }
-    assert_eq!(frame, want);
+    // The pair's row as the `doc` member, whole, where the op names two homes.
+    let d_s = addr(&[1, 0, 1, 0, 2]);
+    assert_eq!(
+        entry_frame("mldsa65-ed25519", term, &account, DocTerm::Pair { d_s: &d_s, d_a: &doc }, &bodies[9]),
+        framed_members([
+            b"mldsa65-ed25519",
+            &board,
+            b"1.0.1",
+            &doc_bytes(DocTerm::Pair { d_s: &d_s, d_a: &doc }),
+            b"edit_link",
+            bodies[9].as_bytes()
+        ])
+    );
 }

@@ -684,9 +684,10 @@ pub(crate) fn plain_admission(
     // The board-state pair — and, inside its claimed arm, the write-path
     // check (signed ops), whose admitted attestation is this function's
     // answer. It stands where the pair stood: ahead of the `nullify` class,
-    // so a signed `nullify` carrying no `attest` is judged as before (no
-    // `attest` is admitted on `nullify`, which is outside the checked set)
-    // and its class token still speaks last.
+    // so a signed `nullify` into the published world is judged by the check
+    // first — `attestation_required` with no `attest`, its signature
+    // verified with one — and its class token still speaks last: a session
+    // that may not write here is never told what the target link is.
     let admitted = board_state_admission(lock, world, identity, op, principal, signer, presented)?;
     if let Some(r) = nullify_refusal(lock, world, identity, op, principal) {
         return Err(r);

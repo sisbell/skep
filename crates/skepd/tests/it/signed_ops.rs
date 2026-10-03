@@ -1,9 +1,15 @@
-//! SIGNED OPS — THE SEAM (the seam build 2026-09-25): one signed write, end
-//! to end, for the three ops of the checked set — `insert`, `make_link`,
-//! `publish` — under the two tags: the hybrid key enrolled, the entry frame
-//! composed and signed by the test signer, the `attest` member on the wire,
-//! the claimed-board check before the transaction, the attestation into the
-//! commit marker's reserved slot and read back off the kernel.
+//! SIGNED OPS — THE SEAM (the seam build 2026-09-25) AND THE WIDENING: one
+//! signed write, end to end, for each of the ten op kinds of the checked set
+//! — the three mints, `insert`, `publish`, `make_link`, `emit`, `nullify`,
+//! `assert_sup`, `edit_link` — under the two tags: the hybrid key enrolled,
+//! the entry frame composed and signed by the test signer, the `attest`
+//! member on the wire, the claimed-board check before the transaction, the
+//! attestation into the commit marker's reserved slot and read back off the
+//! kernel; and for every cell, the frame composed from the REQUEST at the
+//! check equal to the frame a verifier composes from the STORED result —
+//! the minted document's owner, the stored link's slots off `read_link` and
+//! `find_links`, the member's runs and terms — the slot row signing the
+//! endset AS STORED (SO-I6 (h); the design record §7.6's vector (vii)).
 //!
 //! THE CLAIM TEST (the design record §7.6's row; A1–A6): at or below the
 //! claim unsigned and an `attest` DROPPED; above it refused
@@ -33,13 +39,15 @@ use crate::common::*;
 
 use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
+use skep_address::Span;
 use skep_febe::Codec;
 use skep_identity::{
-    canonical_record, encode_enroll, encode_retire, entry_body_insert, entry_body_make_link,
-    entry_body_make_link_replacing, entry_body_publish, entry_body_record, entry_frame,
-    parse_record_value, BoardTerm, Enrollment, EntrySlot, Fingerprint, LinkSlots, PublicKey,
-    RecordRows, RecordValue, ShotBase, ShotSegmentPiece, SigAlgRow, ALG_FNDSA512_PREVIEW_ED25519,
-    ALG_MLDSA65_ED25519,
+    canonical_record, encode_enroll, encode_retire, entry_body_assert_sup, entry_body_edit_link,
+    entry_body_emit, entry_body_empty, entry_body_insert, entry_body_make_link,
+    entry_body_make_link_replacing, entry_body_nullify, entry_body_publish, entry_body_record,
+    entry_frame, parse_record_value, unit_span as unit, BoardTerm, ContentFreeOp, DocTerm,
+    Enrollment, EntryBody, EntrySlot, Fingerprint, LinkSlots, PublicKey, RecordRows, RecordValue,
+    ShotBase, ShotSegmentPiece, SigAlgRow, ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519,
 };
 use skep_signature::HybridSigner;
 use skepd::{JsonCodec, Seq};
@@ -48,6 +56,68 @@ use tempfile::tempdir;
 /// A refusal's `(code:detail, disposition)`.
 fn refusal(v: &Value) -> (String, String) {
     (verdict(v), v["disposition"].as_str().unwrap_or("?").to_string())
+}
+
+/// A V-spec array over `doc`'s content ordinals `from ..+width` — the
+/// resolve form of a `make_link` slot and of an `edit_link` successor's
+/// `from`/`to`.
+fn vspecs(doc: &str, from: u64, width: u64) -> String {
+    format!(r#"[{{"source":"{doc}","span":{{"start":"1.{from}","width":"0.{width}"}}}}]"#)
+}
+
+/// A ghost type under `home` — the address form, one name.
+fn ghost_ty(home: &str, n: u64) -> String {
+    format!(r#"{{"addrs":["{home}.0.3.6.{n}"]}}"#)
+}
+
+/// A stored span as `read_link` serves one — `{"start", "width"}`.
+fn span_of(v: &Value) -> Span {
+    let tum = |s: &str| {
+        skep_address::Tumbler::new(s.split('.').map(|c| skep_address::Nat::from(c.parse::<u64>().unwrap()))).unwrap()
+    };
+    Span::new(tum(v["start"].as_str().expect("start")), tum(v["width"].as_str().expect("width")))
+        .expect("a served span is well-formed")
+}
+
+/// THE STORED LINK, as `read_link` serves it: its three slots' spans,
+/// verbatim and in stored order, as `(from, to, ty)`.
+fn stored_slots(port: u16, link: &str) -> (Vec<Span>, Vec<Span>, Vec<Span>) {
+    let value = read_link(port, None, link);
+    assert!(!value.is_null(), "{link} is a link");
+    let slot = |i: usize| -> Vec<Span> { value["slots"][i].as_array().expect("a slot").iter().map(span_of).collect() };
+    (slot(0), slot(1), slot(2))
+}
+
+/// The home of a link at `<home>.0.2.<n>`.
+fn home_of(link: &str) -> String {
+    let parts: Vec<&str> = link.split('.').collect();
+    parts[..parts.len() - 3].join(".")
+}
+
+/// THE VERIFIER'S FRAME for a link write, from the stored link alone: its
+/// home off its own address, the account by ω over the home (the writer owns
+/// what it deposits into), the slots off `read_link`, the body under the
+/// row's op token, `H.1`'s pair — nothing from the request.
+fn frame_from_stored_link(port: u16, op: &str, link: &str) -> Vec<u8> {
+    let (from, to, ty) = stored_slots(port, link);
+    let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
+    let body = match op {
+        "make_link" => entry_body_make_link(slots),
+        "emit" => entry_body_emit(slots),
+        "nullify" => entry_body_nullify(slots),
+        "assert_sup" => entry_body_assert_sup(slots),
+        other => panic!("{other} deposits no one link"),
+    };
+    let home = home_of(link);
+    let (account, _) = effective_owner(port, None, &home).expect("the home's owner");
+    let board = board_term(port).expect("H.1");
+    entry_frame(ALG_MLDSA65_ED25519, board, &addr(&account), DocTerm::One(&addr(&home)), &body)
+}
+
+/// Whether `sig` — a marker's blob — verifies over `frame` under the
+/// claimant's device key, which signs every attested write of the suite.
+fn verifies(frame: &[u8], sig: &[u8]) -> bool {
+    skep_signature::verify(FIXTURE_TAG, &public_key_of(&device_key()), frame, sig).is_ok()
 }
 
 /// Opens the seat every claimed-board cell writes from: a fresh SIGNED
@@ -68,15 +138,14 @@ fn claimant_grant() -> String {
 /// its members' values — for the cells that sign over a term, or under a
 /// token, the test signer never would.
 fn claimant_grant_entry_frame(alg: &str, board: BoardTerm) -> Vec<u8> {
-    let ty = [addr(T_GRANT)];
-    let from = [addr(CLAIMANT_ACCOUNT)];
-    let to: [skep_address::Address; 0] = [];
+    let ty = [unit(&addr(T_GRANT))];
+    let from = [unit(&addr(CLAIMANT_ACCOUNT))];
     let body = entry_body_make_link(LinkSlots {
-        from: EntrySlot::Addrs(&from),
-        to: EntrySlot::Addrs(&to),
-        ty: EntrySlot::Addrs(&ty),
+        from: EntrySlot(&from),
+        to: EntrySlot(&[]),
+        ty: EntrySlot(&ty),
     });
-    entry_frame(alg, board, &addr(CLAIMANT_ACCOUNT), &addr(CLAIMANT_DOC1), &body)
+    entry_frame(alg, board, &addr(CLAIMANT_ACCOUNT), DocTerm::One(&addr(CLAIMANT_DOC1)), &body)
 }
 
 /// [`claimant_grant`] carrying `sig` under `alg` as its `attest` member.
@@ -191,9 +260,10 @@ fn filled_slots(sd: &skepd::Skepd, lo: u64, hi: u64) -> Vec<u64> {
 /// request is refused the same, the client's next act a re-composed one);
 /// the wrong width → `:malformed` (permanent, the same); a bare session →
 /// `signed_session_required` as before; an
-/// unknown `alg` token → unparseable; the member on an op outside the three
-/// → unparseable (the unknown-field rule); and a signed write OUTSIDE the
-/// publish class carrying an `attest` → admitted with the member dropped.
+/// unknown `alg` token → unparseable; the member on an op outside the ten
+/// (a `delete`) → unparseable (the unknown-field rule); and a signed write
+/// OUTSIDE the publish class carrying an `attest` → admitted with the member
+/// dropped.
 #[test]
 fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
     let dir = tempdir().unwrap();
@@ -271,7 +341,7 @@ fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
     empty["attest"]["sig"] = Value::String(String::new());
     let v = op_as_written(port, Some(&signed), &empty.to_string());
     assert_eq!(v["op"].as_str(), Some("unparseable"), "{v}");
-    // The member on an op outside the three: unknown field.
+    // The member on an op outside the ten: unknown field.
     let v = op_as_written(
         port,
         Some(&signed),
@@ -483,24 +553,64 @@ fn a_tag_3_key_attests_a_write_as_a_tag_1_key_does() {
     assert_eq!(slot.sig(), &sig[..], "and the blob attached, whole");
 }
 
-/// THE THREE OPS END TO END: `make_link` (a grant) and `publish` (a shot)
-/// commit attested, their slots holding the attached blobs and no other
-/// commit's; `insert` — a DECLARED deposit under a credential kind whose
-/// atom is NO record of that kind, prose under `T_enroll` — takes the check
-/// like any insert since round 7 (as7-E1 ARM (a), s2's fact's third case;
-/// SO-I4): unattested it answers `attestation_required`, attested it commits
-/// SIGNED with its slot filled (the one exempt insert is a signed record
-/// into a doc 1, `the_record_deposit_exemption_reaches_a_signed_record_in_a_doc_1_alone`);
+/// THE TEN OPS END TO END (SO-I4: every publishing act above the claim is
+/// signed): each publish-class kind, from the claimant's signed session into
+/// its published world — a `create_new_document` born published (not the
+/// account's first), a `fork` born published, a `version` of the published
+/// edition, an `emit` of the retired class, a `nullify`, an `assert_sup` and
+/// an `edit_link` over ghost links in doc 1 — answers `attestation_required`
+/// unattested and commits attested with its own slot holding the attached
+/// blob; `make_link` (a grant) and `publish` (a shot) as before; `insert` —
+/// a DECLARED deposit under a credential kind whose atom is NO record of
+/// that kind, prose under `T_enroll` — takes the check like any insert since
+/// round 7 (as7-E1 ARM (a), s2's fact's third case): unattested it answers
+/// `attestation_required`, attested it commits SIGNED with its slot filled
+/// (the one exempt insert is a signed record into a doc 1,
+/// `the_record_deposit_exemption_reaches_a_signed_record_in_a_doc_1_alone`);
 /// and an UNDECLARED insert into the published home passes the check with
 /// a valid attest and meets the store's `published_target`, which is the
 /// order the design states: the check before the transaction, the store's
 /// gates inside it.
 #[test]
-fn the_three_ops_commit_attested_where_the_check_demands_it() {
+fn the_ten_ops_commit_attested_where_the_check_demands_it() {
     let dir = tempdir().unwrap();
     let sd = spawn(dir.path());
     let port = sd.port();
     let signed = open_owner_session(port);
+    // Unattested, the check's (1); attested, an ack whose own slot holds the
+    // tag-1 blob and whose predecessor's stays empty.
+    let demanded = |frame: &str, what: &str| -> Value {
+        let v = op_as_written(port, Some(&signed), frame);
+        assert_eq!(verdict(&v), "credential_refused:attestation_required", "{what}, unattested: {v}");
+        let v = op(port, Some(&signed), frame);
+        assert!(
+            matches!(v["resp"].as_str(), Some("ack_addr" | "ack_edit")),
+            "{what}, attested: {v}"
+        );
+        let at = acked_at(&v);
+        let slot = sd.daemon().attestation_at(Seq(at)).unwrap().unwrap_or_else(|| panic!("{what}: its slot is filled"));
+        assert_eq!(slot.sig().len(), 3373, "{what}: tag 1's blob");
+        v
+    };
+
+    // The three mints: a second document born published, a published fork,
+    // a version of the published edition — each the EMPTY body over the
+    // parent account.
+    let edition = acked_addr(&demanded(&create_frame(CLAIMANT_ACCOUNT, Some(true)), "create_new_document"));
+    demanded(&fork_frame(Some(true)), "fork");
+    let member = acked_addr(&demanded(&version_frame(&edition, None), "version"));
+    assert_eq!(member, format!("{edition}.1"), "the version is the edition's first member");
+
+    // The other link writes, over ghost links in the published doc 1.
+    let (l1, l2, l3) = (
+        ghost_link(port, &signed, CLAIMANT_DOC1, 11),
+        ghost_link(port, &signed, CLAIMANT_DOC1, 12),
+        ghost_link(port, &signed, CLAIMANT_DOC1, 13),
+    );
+    demanded(&emit_frame(CLAIMANT_DOC1), "emit");
+    demanded(&assert_sup_frame(CLAIMANT_DOC1, &l1, &l2), "assert_sup");
+    demanded(&edit_link_frame(&l3, CLAIMANT_DOC1, CLAIMANT_DOC1, "[]", &ghost_ty(CLAIMANT_DOC1, 14)), "edit_link");
+    demanded(&nullify_frame(CLAIMANT_DOC1, &l1), "nullify");
 
     // make_link: a grant, attested.
     let v = op(port, Some(&signed), &typed_link_frame(CLAIMANT_DOC1, &[CLAIMANT_ACCOUNT], &[], T_GRANT));
@@ -543,6 +653,303 @@ fn the_three_ops_commit_attested_where_the_check_demands_it() {
     assert_eq!(verdict(&v), "credential_refused:attestation_required");
     let v = op(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "t", false));
     assert_eq!(verdict(&v), "published_target", "the check passed; the store's own refusal");
+}
+
+/// THE MINTS' FRAMES ARE CHECKABLE FROM THE MINTED DOCUMENT (SO-I6 (e); the
+/// design record §2.5's cell for the content-free ops): a verifier holding
+/// the minted document and no request — its address off the feed's `docs`,
+/// its parent account by ω, `effective_owner`, over it — composes the EMPTY
+/// body over that account under the row's op token, and the frame it
+/// composes is byte for byte the frame the signer composed from the request;
+/// the marker's attestation verifies over it under the author's enrolled
+/// key. For all three: a `create_new_document` born published into an
+/// account that already holds documents, a published `fork`, a `version` of
+/// the edition (the member's ω is the account — never the trunk of `d_src`,
+/// d24-3).
+#[test]
+fn a_mints_frame_composed_from_the_minted_document_is_the_frame_composed_from_the_request() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_owner_session(port);
+    let edition = published_edition(port, &signed);
+    for (frame, op_token) in [
+        (create_frame(CLAIMANT_ACCOUNT, Some(true)), ContentFreeOp::CreateNewDocument),
+        (fork_frame(Some(true)), ContentFreeOp::Fork),
+        (version_frame(&edition, None), ContentFreeOp::Version),
+    ] {
+        let parsed: Value = serde_json::from_str(&frame).unwrap();
+        let frame_from_request = entry_frame_for(port, &signed, CLAIMANT_PRINCIPAL, &parsed).expect("composable");
+        let v = op(port, Some(&signed), &frame);
+        let minted = acked_addr(&v);
+        let slot = sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().expect("attested");
+        // THE LATER VERIFIER: the parent account by ω over the minted
+        // document, the EMPTY body under the op's token.
+        let (account, _) = effective_owner(port, None, &minted).expect("the minted document's owner");
+        assert_eq!(account, CLAIMANT_ACCOUNT, "{op_token:?}: ω over the minted document is the parent account");
+        let body = entry_body_empty(op_token);
+        assert!(body.as_bytes().is_empty(), "the EMPTY body");
+        let board = board_term(port).expect("H.1");
+        let frame_from_store =
+            entry_frame(ALG_MLDSA65_ED25519, board, &addr(&account), DocTerm::One(&addr(&account)), &body);
+        assert_eq!(frame_from_store, frame_from_request, "{op_token:?}: one preimage, from the request and from the store");
+        assert!(verifies(&frame_from_store, slot.sig()), "{op_token:?}: the marker's attestation verifies over it");
+    }
+}
+
+/// THE LINK WRITES' FRAMES ARE CHECKABLE FROM THE STORED LINK (SO-I6 (h);
+/// the design record §7.6's vector (vii), MET): a verifier holding the
+/// stored link alone — found by `find_links` and read by `read_link`, its
+/// home off its own address and the account by ω — composes each slot row
+/// from the endset the store serves, and the frame it composes is byte for
+/// byte the frame the signer composed from the request, the marker's
+/// attestation verifying over it. Four cells: the any-principal GRANT, whose
+/// `to` is EMPTY (`0x03 ‖ be64(0)`); a `make_link` whose `from` was SENT IN
+/// THE RESOLVE FORM over a draft's two positions — the row the stored
+/// I-extent's, the signer having resolved it through `image` before signing
+/// — found by `find_links_v` over the draft; an `emit` of the retired class
+/// with its `to` EMPTY; a `nullify` and an `assert_sup` over ghost links,
+/// each verified end to end over the wire — the stored tuple's type slot
+/// the class's reserved ghost address, its one unit span.
+#[test]
+fn a_link_writes_frame_composed_from_the_stored_link_is_the_frame_composed_from_the_request() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_owner_session(port);
+    let draft = draft_with(port, &signed, "abcd");
+    let (l1, l2) = (ghost_link(port, &signed, CLAIMANT_DOC1, 21), ghost_link(port, &signed, CLAIMANT_DOC1, 22));
+    let check = |frame: &str, op_token: &str, find: &dyn Fn(&Value) -> String| {
+        let parsed: Value = serde_json::from_str(frame).unwrap();
+        let frame_from_request = entry_frame_for(port, &signed, CLAIMANT_PRINCIPAL, &parsed).expect("composable");
+        let v = op(port, Some(&signed), frame);
+        let slot = sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().expect("attested");
+        let link = find(&v);
+        let frame_from_store = frame_from_stored_link(port, op_token, &link);
+        assert_eq!(frame_from_store, frame_from_request, "{op_token}: one preimage, from the request and from the stored link {link}");
+        assert!(verifies(&frame_from_store, slot.sig()), "{op_token}: the marker's attestation verifies over the stored-composed frame");
+        link
+    };
+    let acked = |v: &Value| acked_addr(v);
+    // The any-principal grant: `to` EMPTY.
+    let grant = check(&typed_link_frame(CLAIMANT_DOC1, &[&draft], &[], T_GRANT), "make_link", &acked);
+    let (_, to, _) = stored_slots(port, &grant);
+    assert!(to.is_empty(), "the grant's to slot is EMPTY as stored");
+    // The resolve form: `from` over the draft's first two positions, found
+    // by `find_links` — the four-set query keyed on the link's type, since a
+    // query by the draft's positions alone also matches the account-wide
+    // slots of the ceremony's links and the grant's — the stored extent,
+    // never the V-spec.
+    let resolved = check(
+        &link_frame(CLAIMANT_DOC1, &vspecs(&draft, 1, 2), r#"{"addrs":[]}"#, &ghost_ty(CLAIMANT_DOC1, 23)),
+        "make_link",
+        &|_| {
+            let found = addrs_of(&op(
+                port,
+                Some(&signed),
+                &ftt_frame("find_links_ftt", r#""any""#, r#""any""#, r#""any""#, &unit_span(&format!("{CLAIMANT_DOC1}.0.3.6.23"))),
+            ));
+            assert_eq!(found.len(), 1, "one link of the ghost type: {found:?}");
+            assert!(find_links_v(port, Some(&signed), &draft, 1, 2).contains(&found[0]), "found by the draft's positions too");
+            found[0].clone()
+        },
+    );
+    let (from, _, _) = stored_slots(port, &resolved);
+    assert_eq!(from, vec![span_of(&json!({"start": format!("{draft}.0.1.1"), "width": "0.0.0.0.0.0.0.2"}))], "the stored I-extent");
+    // The emit: the retired class, `to` EMPTY.
+    check(&emit_frame(CLAIMANT_DOC1), "emit", &acked);
+    // The assert_sup and the nullify, over the ghost links.
+    check(&assert_sup_frame(CLAIMANT_DOC1, &l1, &l2), "assert_sup", &acked);
+    let retraction = check(&nullify_frame(CLAIMANT_DOC1, &l2), "nullify", &acked);
+    let (from, to, ty) = stored_slots(port, &retraction);
+    assert_eq!(
+        (from, to, ty),
+        (vec![unit(&addr(CLAIMANT_DOC1))], vec![unit(&addr(&l2))], vec![unit(&addr(T_RETRACTION))]),
+        "the stored retraction: the home's, the target's and the class's unit spans"
+    );
+}
+
+/// AN EDIT_LINK'S FRAME IS CHECKABLE FROM ITS TWO STORED LINKS (SO-I6 (h);
+/// D24's cell (7), d24-1 and d24-6): a verifier holding the successor off
+/// `read_link` at `d_s` and the claim off `read_link` at `d_a` composes the
+/// successor's rows AS STORED — its `to` sent as a V-SPEC over the draft and
+/// its type `{"resolve": …}` over a third position, each the stored I-extent
+/// — then the claim's `from`, the original's unit span, under the pair's
+/// row `(d_s, d_a)` read off the two links' own addresses, and the frame is
+/// byte for byte the signer's, the marker's attestation verifying over it.
+/// The two homes differ, so the pair's order is watched.
+#[test]
+fn an_edit_links_frame_composed_from_its_two_stored_links_is_the_frame_composed_from_the_request() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_owner_session(port);
+    let edition = published_edition(port, &signed);
+    let draft = draft_with(port, &signed, "abcd");
+    let original = ghost_link(port, &signed, CLAIMANT_DOC1, 31);
+    let frame = edit_link_frame(&original, &edition, CLAIMANT_DOC1, &vspecs(&draft, 1, 2), &resolve_slot(&vspecs(&draft, 3, 1)));
+    let parsed: Value = serde_json::from_str(&frame).unwrap();
+    let frame_from_request = entry_frame_for(port, &signed, CLAIMANT_PRINCIPAL, &parsed).expect("composable");
+    let v = op(port, Some(&signed), &frame);
+    let edit = expect_resp(&v, "ack_edit");
+    let (successor, claim) = (edit["successor"].as_str().unwrap().to_string(), edit["claim"].as_str().unwrap().to_string());
+    let slot = sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().expect("attested");
+    // THE LATER VERIFIER: the successor's slots and the claim's `from`.
+    let (from, to, ty) = stored_slots(port, &successor);
+    assert!(from.is_empty());
+    assert_eq!(to, vec![span_of(&json!({"start": format!("{draft}.0.1.1"), "width": "0.0.0.0.0.0.0.2"}))]);
+    assert_eq!(ty, vec![span_of(&json!({"start": format!("{draft}.0.1.3"), "width": "0.0.0.0.0.0.0.1"}))]);
+    let (claim_from, claim_to, claim_ty) = stored_slots(port, &claim);
+    assert_eq!(claim_from, vec![unit(&addr(&original))], "the claim's from: the original's unit span");
+    assert_eq!(claim_to, vec![unit(&addr(&successor))], "the claim's to: the successor, minted inside the transaction — no row");
+    assert_eq!(claim_ty, vec![unit(&addr(T_SUPERSEDES))], "the claim's type: the supersedes constant — no row");
+    let (d_s, d_a) = (home_of(&successor), home_of(&claim));
+    assert_eq!((d_s.as_str(), d_a.as_str()), (edition.as_str(), CLAIMANT_DOC1), "the pair, off the two links' addresses");
+    let body = entry_body_edit_link(
+        LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) },
+        &claim_from[0],
+    );
+    let (account, _) = effective_owner(port, None, &d_s).expect("the owner");
+    let board = board_term(port).expect("H.1");
+    let frame_from_store =
+        entry_frame(ALG_MLDSA65_ED25519, board, &addr(&account), DocTerm::Pair { d_s: &addr(&d_s), d_a: &addr(&d_a) }, &body);
+    assert_eq!(frame_from_store, frame_from_request, "one preimage, from the request and from the two stored links");
+    assert!(verifies(&frame_from_store, slot.sig()));
+    // The pair's order is signed: the same body under the homes swapped is
+    // another preimage, which the blob does not verify over.
+    let swapped =
+        entry_frame(ALG_MLDSA65_ED25519, board, &addr(&account), DocTerm::Pair { d_s: &addr(&d_a), d_a: &addr(&d_s) }, &body);
+    assert!(!verifies(&swapped, slot.sig()), "the homes swapped: another preimage");
+}
+
+/// A STALE RESOLUTION IS REFUSED, THE RE-SIGNED FRAME ADMITTED (SO-I6 (h);
+/// the design record §2.5's slot row, d24-5: the daemon composes the row
+/// from the endset its own transaction deposits, and "the daemon cannot tell
+/// a stale resolution from a forgery"): the signer resolves a `make_link`'s
+/// V-spec over a draft's first position — the draft's first I-address —
+/// and signs; the draft's owner then PREPENDS a byte, so the same V-position
+/// now names a later I-address; the signed request, posted as it was, is
+/// refused `attestation_invalid:signature`, PERMANENT, nothing committed;
+/// re-composed and re-signed over the base as it now stands, it is admitted,
+/// and the stored slot is the new extent.
+#[test]
+fn a_make_link_signed_over_a_stale_resolution_is_refused_and_the_re_signed_frame_admitted() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_owner_session(port);
+    let draft = draft_with(port, &signed, "ab");
+    let frame = link_frame(CLAIMANT_DOC1, &vspecs(&draft, 1, 1), r#"{"addrs":[]}"#, &ghost_ty(CLAIMANT_DOC1, 41));
+    let stale = attach_attest(port, &signed, &frame);
+    assert!(stale.contains("\"attest\""), "signed over the draft's first I-address");
+    // The base moves: a prepend, so V-position 1 is a fresh I-address.
+    expect_resp(&insert_text(port, &signed, &draft, 1, "z"), "ack_addr");
+    let before = head_position(port);
+    let v = op_as_written(port, Some(&signed), &stale);
+    assert_eq!(
+        refusal(&v),
+        ("credential_refused:attestation_invalid:signature".to_string(), "permanent".to_string()),
+        "the row signed is not the row the transaction would deposit: {v}"
+    );
+    assert_eq!(head_position(port), before, "nothing committed");
+    // Re-composed over the moved base: admitted, the stored slot the new extent.
+    let v = op(port, Some(&signed), &frame);
+    let link = acked_addr(&v);
+    assert!(sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().is_some(), "attested");
+    let (from, _, _) = stored_slots(port, &link);
+    assert_eq!(from, vec![span_of(&json!({"start": format!("{draft}.0.1.3"), "width": "0.0.0.0.0.0.0.1"}))], "the prepended byte's I-address");
+}
+
+/// THE PASS-THROUGH'S PAIRING (reg-S2; SO-I4 (b), SO-I9): every fault the
+/// check passes through UNATTESTED rests on the premise that the store or
+/// the door then refuses the write, so each is paired here with the refusal
+/// it defers to — the three link-write faults the widening adds, each sent
+/// with an attestation that verifies over no frame, so the answer cannot be
+/// a signature's, and unattested first, where (1) speaks ahead of every
+/// composition: a `make_link` whose `to` RESOLVES a stranger's private draft
+/// → the door's `withheld` naming it (`UnreadableSlotSource`); an
+/// `edit_link` whose successor `to` names the same draft → the same; an
+/// `edit_link` whose successor names an UNREGISTERED source →
+/// `source_not_registered`, and one whose spec is ILL-FORMED (a link-subspace
+/// span) → `ill_formed_spec` (`SuccessorRefused`); a `make_link` whose
+/// `from` is 4,096 V-specs — the most the wire admits — over a draft of
+/// sixty-five runs, which command more run-list steps than M7's work
+/// budget admits → `slot_too_large` (`SlotTooLarge`; the span budget is
+/// unreachable through the wire, whose list cap is M7's span cap). The three
+/// `publish` faults are paired by their own cells: `dangling_source`
+/// (`MissingValue`; `publish.rs`), `base_extent_too_large` /
+/// `dangling_source` (`Unspellable`;
+/// `a_term_past_the_frames_eight_bytes_passes_unattested_to_the_stores_refusal`)
+/// and `too_many_values` (`PastReinsertBudget`;
+/// `a_shot_past_the_stores_re_insert_budget_passes_unattested_to_its_refusal`).
+/// Nothing commits in any cell.
+#[test]
+fn each_pass_through_of_the_composer_is_paired_with_the_refusal_it_defers_to() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_owner_session(port);
+    let stranger = seat_stranger(port, 981);
+    // The stranger's own private draft, holding two bytes.
+    let private = create_doc(port, &stranger.session, &stranger.account);
+    expect_resp(&insert_text(port, &stranger.session, &private, 1, "pq"), "ack_addr");
+    let original = ghost_link(port, &signed, CLAIMANT_DOC1, 51);
+    // A draft of sixty-five runs: sixty-four prepends, each a fresh
+    // I-address placed ahead of the rest, so no run merges.
+    let fragmented = draft_with(port, &signed, "ab");
+    for _ in 0..64 {
+        expect_resp(&insert_text(port, &signed, &fragmented, 1, "x"), "ack_addr");
+    }
+    let required = ("credential_refused:attestation_required".to_string(), "reorder".to_string());
+    let before = head_position(port);
+    let paired = |frame: &str, code: &str, disposition: &str, why: &str| {
+        let v = op_as_written(port, Some(&signed), frame);
+        assert_eq!(refusal(&v), required, "{why}, unattested: (1) first: {v}");
+        let v = op_as_written(port, Some(&signed), &with_unverifiable_attest(frame));
+        assert_eq!(refusal(&v), (code.to_string(), disposition.to_string()), "{why}: passed through, whatever is attached: {v}");
+        v
+    };
+    // An unreadable slot source: the door's `withheld`, naming the draft.
+    let v = paired(
+        &link_frame(CLAIMANT_DOC1, r#"{"addrs":[]}"#, &vspecs(&private, 1, 1), &ghost_ty(CLAIMANT_DOC1, 52)),
+        "withheld",
+        "reorder",
+        "a make_link resolving a stranger's draft",
+    );
+    assert_eq!(v["site"]["addr"].as_str(), Some(private.as_str()), "the door names the source: {v}");
+    let v = paired(
+        &edit_link_frame(&original, CLAIMANT_DOC1, CLAIMANT_DOC1, &vspecs(&private, 1, 1), &ghost_ty(CLAIMANT_DOC1, 53)),
+        "withheld",
+        "reorder",
+        "an edit_link whose successor resolves a stranger's draft",
+    );
+    assert_eq!(v["site"]["addr"].as_str(), Some(private.as_str()), "{v}");
+    // A successor M10's own build refuses.
+    paired(
+        &edit_link_frame(&original, CLAIMANT_DOC1, CLAIMANT_DOC1, &vspecs("1.0.1.0.99", 1, 1), &ghost_ty(CLAIMANT_DOC1, 54)),
+        "source_not_registered",
+        "reorder",
+        "an edit_link whose successor names an unregistered source",
+    );
+    let ill_formed = format!(r#"[{{"source":"{CLAIMANT_DOC1}","span":{{"start":"2.1","width":"0.1"}}}}]"#);
+    paired(
+        &edit_link_frame(&original, CLAIMANT_DOC1, CLAIMANT_DOC1, &ill_formed, &ghost_ty(CLAIMANT_DOC1, 55)),
+        "ill_formed_spec",
+        "permanent",
+        "an edit_link whose successor spec is ill-formed",
+    );
+    // A slot past M7's work budget: 4,096 specs, each over the fragmented
+    // draft's first position, command 4,096 × 65 run-list steps — past the
+    // 64 × 4,096 M7 admits — while keeping one span each.
+    let spec = format!(r#"{{"source":"{fragmented}","span":{{"start":"1.1","width":"0.1"}}}}"#);
+    let from = format!("[{}]", vec![spec; skep_links::MAX_SLOT_SPANS].join(","));
+    paired(
+        &link_frame(CLAIMANT_DOC1, &from, r#"{"addrs":[]}"#, &ghost_ty(CLAIMANT_DOC1, 56)),
+        "slot_too_large",
+        "permanent",
+        "a make_link whose from passes the per-slot work budget",
+    );
+    assert_eq!(head_position(port), before, "nothing committed");
 }
 
 /// THE EXEMPTION NARROWED (SO-I4; SO-I7 — round 7's as7-E1 ARM (a) with
@@ -1946,7 +2353,8 @@ fn a_publish_frame_composed_from_the_member_is_the_frame_composed_from_the_reque
     let body = entry_body_publish(segments.iter().map(SignerSegment::as_shot), base);
     let board = board_term(port).expect("H.1");
     let account = addr(&account_of(port, &signed, CLAIMANT_PRINCIPAL).expect("the account"));
-    let frame_from_member = entry_frame(ALG_MLDSA65_ED25519, board, &account, &addr(&trunk), &body);
+    let frame_from_member =
+        entry_frame(ALG_MLDSA65_ED25519, board, &account, DocTerm::One(&addr(&trunk)), &body);
     assert_eq!(
         frame_from_member, frame_from_request,
         "one preimage, composed from the request and from the member"
@@ -2017,27 +2425,45 @@ fn addr(s: &str) -> skep_address::Address {
     skep_address::validate(skep_address::Tumbler::new(comps).unwrap()).unwrap()
 }
 
-/// The six fixed instances every golden signs: the frames of an `insert`
-/// (undeclared, two values), a `make_link` (three address-form slots), a
-/// `publish` (three values copied in, one window of two positions onto
-/// another document, the base `1.0.1.0.1.1` taken at three — the address
-/// form, l6-A4; the base member in the group since round 7, bu7-E2) and
-/// three `record`s (the frame merge, fm-I; the record grade, 2a): an
-/// enrol's kind — its type slot, one subject, neither optional row named, a
-/// short canonical body — a retire's kind beside it over the same subject,
-/// and the claim's — its type slot, the EMPTY target slot, no record at all
-/// (a claim carries none, AUTH-2.48), the body-bytes row empty — on a board
-/// whose `H.1` pair is `(12, 0xAB…)`, by account `1.0.1`.
-fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 6] {
-    let (account, doc) = (addr("1.0.1"), addr("1.0.1.0.1"));
+/// A stored content extent — a resolved slot's span — from its I-start and
+/// its width in positions, as a run's `iextent` spells one.
+fn extent(start: &str, width: u64) -> Span {
+    let start = addr(start);
+    let depth = start.tumbler().len();
+    let mut comps = vec![skep_address::Nat::from(0u64); depth];
+    comps[depth - 1] = skep_address::Nat::from(width);
+    Span::new(start.tumbler().clone(), skep_address::Tumbler::new(comps).unwrap()).unwrap()
+}
+
+/// The thirteen fixed instances every golden signs, on a board whose `H.1`
+/// pair is `(12, 0xAB…)`, by account `1.0.1`: the frames of an `insert`
+/// (undeclared, two values), a `make_link` (three slots as stored: a unit
+/// type span, a unit `from`, the `to` EMPTY), a `publish` (three values
+/// copied in, one window of two positions onto another document, the base
+/// `1.0.1.0.1.1` taken at three — the address form, l6-A4; the base member
+/// in the group since round 7, bu7-E2) and three `record`s (the frame
+/// merge, fm-I; the record grade, 2a): an enrol's kind — its type slot, one
+/// subject, neither optional row named, a short canonical body — a retire's
+/// kind beside it over the same subject, and the claim's — its type slot,
+/// the EMPTY target slot, no record at all (a claim carries none,
+/// AUTH-2.48), the body-bytes row empty; then the seven cells D24 pinned: a
+/// `create_new_document`, a `fork` and a `version`, each the EMPTY body
+/// over the parent account `1.0.1`; a `nullify` of the link `…0.2.1` from
+/// its home, a `assert_sup` of that link by `…0.2.2`, an `emit` of the
+/// retired class over `1.0.1.0.2` with its `to` EMPTY (Unary), each the
+/// stored link's rows; and an `edit_link` of `…0.2.1` whose successor is
+/// homed in `1.0.1.0.2` with two resolved content extents and a named
+/// type, its claim homed in `1.0.1.0.1` — the pair's row as its `doc`.
+fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 13] {
+    let (account, doc, other) = (addr("1.0.1"), addr("1.0.1.0.1"), addr("1.0.1.0.2"));
+    let board = BoardTerm { log_position: 12, chain: [0xAB; 32] };
     let insert = entry_body_insert(None, [&b"a"[..], &b"b"[..]]);
-    let ty = [addr("1.1.0.1.0.1.0.3.90")];
-    let from = [addr("1.0.1")];
-    let to: [skep_address::Address; 0] = [];
+    let ty = [unit(&addr("1.1.0.1.0.1.0.3.90"))];
+    let from = [unit(&addr("1.0.1"))];
     let link = entry_body_make_link(LinkSlots {
-        from: EntrySlot::Addrs(&from),
-        to: EntrySlot::Addrs(&to),
-        ty: EntrySlot::Addrs(&ty),
+        from: EntrySlot(&from),
+        to: EntrySlot(&[]),
+        ty: EntrySlot(&ty),
     });
     let window = addr("1.0.1.0.2.0.1.1");
     let base_member = addr("1.0.1.0.1.1");
@@ -2075,34 +2501,104 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 6] {
         lineage_fork_point: None,
         sigless_canonical_record: b"",
     });
-    let board = BoardTerm { log_position: 12, chain: [0xAB; 32] };
-    [insert, link, publish, enrol, retire, claim]
-        .map(|body| (body.op(), entry_frame(alg, board, &account, &doc, &body)))
+    let (l1, l2) = (unit(&addr("1.0.1.0.1.0.2.1")), unit(&addr("1.0.1.0.1.0.2.2")));
+    let (home, retraction) = (unit(&doc), unit(&addr("1.1.0.1.0.1.0.1.5")));
+    let supersedes = unit(&addr("1.1.0.1.0.1.0.1.4"));
+    let (retired, retired_doc) = (unit(&addr("1.1.0.1.0.1.0.1.3")), unit(&other));
+    let nullify = entry_body_nullify(LinkSlots {
+        from: EntrySlot(std::slice::from_ref(&home)),
+        to: EntrySlot(std::slice::from_ref(&l1)),
+        ty: EntrySlot(std::slice::from_ref(&retraction)),
+    });
+    let assert_sup = entry_body_assert_sup(LinkSlots {
+        from: EntrySlot(std::slice::from_ref(&l1)),
+        to: EntrySlot(std::slice::from_ref(&l2)),
+        ty: EntrySlot(std::slice::from_ref(&supersedes)),
+    });
+    let emit = entry_body_emit(LinkSlots {
+        from: EntrySlot(std::slice::from_ref(&retired_doc)),
+        to: EntrySlot(&[]),
+        ty: EntrySlot(std::slice::from_ref(&retired)),
+    });
+    let (s_from, s_to) = (extent("1.0.1.0.2.0.1.1", 5), extent("1.0.1.0.2.0.1.6", 2));
+    let s_ty = unit(&addr("1.0.1.0.3.0.2.1"));
+    let edit = entry_body_edit_link(
+        LinkSlots {
+            from: EntrySlot(std::slice::from_ref(&s_from)),
+            to: EntrySlot(std::slice::from_ref(&s_to)),
+            ty: EntrySlot(std::slice::from_ref(&s_ty)),
+        },
+        &l1,
+    );
+    let frame = |body: &EntryBody, term: DocTerm<'_>| (body.op(), entry_frame(alg, board, &account, term, body));
+    [
+        frame(&insert, DocTerm::One(&doc)),
+        frame(&link, DocTerm::One(&doc)),
+        frame(&publish, DocTerm::One(&doc)),
+        frame(&enrol, DocTerm::One(&doc)),
+        frame(&retire, DocTerm::One(&doc)),
+        frame(&claim, DocTerm::One(&doc)),
+        frame(&entry_body_empty(ContentFreeOp::CreateNewDocument), DocTerm::One(&account)),
+        frame(&entry_body_empty(ContentFreeOp::Fork), DocTerm::One(&account)),
+        frame(&entry_body_empty(ContentFreeOp::Version), DocTerm::One(&account)),
+        frame(&nullify, DocTerm::One(&doc)),
+        frame(&assert_sup, DocTerm::One(&doc)),
+        frame(&emit, DocTerm::One(&doc)),
+        frame(&edit, DocTerm::Pair { d_s: &other, d_a: &doc }),
+    ]
 }
 
-/// THE FRAME REGRESSION per grammar: the bytes, spelled out by hand once —
+/// THE FRAME REGRESSION per op cell: the bytes, spelled out by hand once —
 /// the D24 pins as the seam build made them; the `make_link` body's
 /// `replaces` row since the replay fix moved it in place under
 /// `skep-entry-v1` (l6-A3): an EMPTY group where the member is absent, the
-/// member's address-form slot row, delimited, where it is present; the
-/// `publish` body since the re-pin of 2026-09-29 (V, l6-A4, D25's (c′)):
-/// the count, the segments in the address form, the base-extent group; and
-/// the `record` body since the frame merge (fm-I): five rows under a token
-/// no wire op spells — the enrol's kind as B+C pinned it, unmoved by the
-/// record grade's build (2a), which pinned the retire's and the claim's
-/// beside it.
+/// member's address-list row, delimited, where it is present; its three
+/// slots since the slot row's re-pin (ap6-3, d24-2): each `0x03`, the span
+/// count, then every span's start and width delimited — a unit span per
+/// address named, the EMPTY slot `0x03 ‖ be64(0)`; the `publish` body since
+/// the re-pin of 2026-09-29 (V, l6-A4, D25's (c′)): the count, the segments
+/// in the address form, the base-extent group; the `record` body since the
+/// frame merge (fm-I): five rows under a token no wire op spells — the
+/// enrol's kind as B+C pinned it, unmoved by the record grade's build (2a),
+/// which pinned the retire's and the claim's beside it, its two slot rows
+/// under `0x01` still (d24-4); and the seven cells D24 pinned — the EMPTY
+/// body, `be32(0)` with the member present, over the parent account; the
+/// stored tuple's four rows for `nullify`, `assert_sup` and `emit`; the
+/// successor's four rows, the claim's `from` and the pair's row for
+/// `edit_link`.
 #[test]
 fn the_entry_frames_bytes_per_op_are_pinned() {
-    let [(_, insert), (_, link), (_, publish), (_, enrol), (_, retire), (_, claim)] =
+    let [(_, insert), (_, link), (_, publish), (_, enrol), (_, retire), (_, claim), (_, create), (_, fork), (_, version), (_, nullify), (_, assert_sup), (_, emit), (_, edit)] =
         fixed_frames(ALG_MLDSA65_ED25519);
-    // The members all three frames share: the framing tag, then `alg`,
-    // `board`, `account` and `doc`.
-    let mut prefix = b"skep-entry-v1".to_vec();
+    // The members every frame shares: the framing tag, then `alg`, `board`
+    // and `account`; then `doc` — the document, the parent account at the
+    // mints, the pair's row at the edit.
+    let mut head = b"skep-entry-v1".to_vec();
     let member = |m: &[u8]| [&(m.len() as u32).to_be_bytes()[..], m].concat();
-    prefix.extend(member(b"mldsa65-ed25519"));
-    prefix.extend(member(&[&[0u8, 0, 0, 0, 0, 0, 0, 12][..], &[0xAB; 32][..]].concat()));
-    prefix.extend(member(b"1.0.1"));
-    prefix.extend(member(b"1.0.1.0.1"));
+    head.extend(member(b"mldsa65-ed25519"));
+    head.extend(member(&[&[0u8, 0, 0, 0, 0, 0, 0, 12][..], &[0xAB; 32][..]].concat()));
+    head.extend(member(b"1.0.1"));
+    // THE ADDRESS-LIST ROW: `0x01`, `be64(n)`, each address delimited.
+    let list = |addrs: &[&[u8]]| {
+        let mut s = vec![0x01u8];
+        s.extend((addrs.len() as u64).to_be_bytes());
+        for a in addrs {
+            s.extend(member(a));
+        }
+        s
+    };
+    // THE SLOT ROW, as stored: `0x03`, `be64(n)`, each span's start and
+    // width delimited.
+    let stored = |spans: &[(&[u8], &[u8])]| {
+        let mut s = vec![0x03u8];
+        s.extend((spans.len() as u64).to_be_bytes());
+        for (start, width) in spans {
+            s.extend(member(start));
+            s.extend(member(width));
+        }
+        s
+    };
+    let prefix = [head.clone(), member(b"1.0.1.0.1")].concat();
     // insert: op, then body = be32(0) (undeclared) ‖ be64(2) ‖ 4:1:a ‖ 4:1:b
     let mut want = prefix.clone();
     want.extend(member(b"insert"));
@@ -2111,56 +2607,40 @@ fn the_entry_frames_bytes_per_op_are_pinned() {
     ));
     assert_eq!(insert, want, "insert");
     // make_link: op, then body = ty slot ‖ from slot ‖ to slot ‖ the
-    // `replaces` row — absent here, so the EMPTY group `be32(0)`.
-    let slot = |addrs: &[&[u8]]| {
-        let mut s = vec![0x01u8];
-        s.extend((addrs.len() as u64).to_be_bytes());
-        for a in addrs {
-            s.extend(member(a));
-        }
-        s
-    };
+    // `replaces` row — absent here, so the EMPTY group `be32(0)`. Each slot
+    // a unit span: the address as the start, the unit at its length as the
+    // width; the `to` EMPTY.
+    let grant_ty: (&[u8], &[u8]) = (b"1.1.0.1.0.1.0.3.90", b"0.0.0.0.0.0.0.0.1");
+    let grant_from: (&[u8], &[u8]) = (b"1.0.1", b"0.0.1");
     let mut want = prefix.clone();
     want.extend(member(b"make_link"));
-    want.extend(member(
-        &[slot(&[b"1.1.0.1.0.1.0.3.90"]), slot(&[b"1.0.1"]), slot(&[]), vec![0, 0, 0, 0]].concat(),
-    ));
+    want.extend(member(&[stored(&[grant_ty]), stored(&[grant_from]), stored(&[]), vec![0, 0, 0, 0]].concat()));
     assert_eq!(link, want, "make_link");
     // …and a re-share: the same slots with the member PRESENT, naming the
-    // revocation at `1.0.1.0.1.0.2.9` — its slot row, delimited as one group.
-    let (ty, from, to) = ([addr("1.1.0.1.0.1.0.3.90")], [addr("1.0.1")], []);
+    // revocation at `1.0.1.0.1.0.2.9` — its list row, delimited as one group.
+    let (ty, from) = ([unit(&addr("1.1.0.1.0.1.0.3.90"))], [unit(&addr("1.0.1"))]);
     let re_share = entry_body_make_link_replacing(
-        LinkSlots {
-            from: EntrySlot::Addrs(&from),
-            to: EntrySlot::Addrs(&to),
-            ty: EntrySlot::Addrs(&ty),
-        },
+        LinkSlots { from: EntrySlot(&from), to: EntrySlot(&[]), ty: EntrySlot(&ty) },
         &addr("1.0.1.0.1.0.2.9"),
     );
     let frame = entry_frame(
         ALG_MLDSA65_ED25519,
         BoardTerm { log_position: 12, chain: [0xAB; 32] },
         &addr("1.0.1"),
-        &addr("1.0.1.0.1"),
+        DocTerm::One(&addr("1.0.1.0.1")),
         &re_share,
     );
     let mut want = prefix.clone();
     want.extend(member(b"make_link"));
     want.extend(member(
-        &[
-            slot(&[b"1.1.0.1.0.1.0.3.90"]),
-            slot(&[b"1.0.1"]),
-            slot(&[]),
-            member(&slot(&[b"1.0.1.0.1.0.2.9"])),
-        ]
-        .concat(),
+        &[stored(&[grant_ty]), stored(&[grant_from]), stored(&[]), member(&list(&[b"1.0.1.0.1.0.2.9"]))].concat(),
     ));
     assert_eq!(frame, want, "make_link with its replaces member");
     // publish: op, then body = be64(5) — five positions placed — ‖ the
     // value stretch: its class byte 0x02, be64(3), x, y, z ‖ the window:
     // its class byte 0x01, the start's spelling delimited, be64(2) ‖ the
-    // base group (bu7-E2): be32(32) ‖ the base member as an address-form
-    // slot row of one element — 0x01, be64(1), the eleven bytes of
+    // base group (bu7-E2): be32(32) ‖ the base member as an address-list
+    // row of one element — 0x01, be64(1), the eleven bytes of
     // `1.0.1.0.1.1` delimited — ‖ be64(3), the extent.
     let mut want = prefix.clone();
     want.extend(member(b"publish"));
@@ -2176,21 +2656,22 @@ fn the_entry_frames_bytes_per_op_are_pinned() {
             &member(b"1.0.1.0.2.0.1.1")[..],
             &[0, 0, 0, 0, 0, 0, 0, 2][..],
             &[0, 0, 0, 32][..],
-            &slot(&[b"1.0.1.0.1.1"])[..],
+            &list(&[b"1.0.1.0.1.1"])[..],
             &[0, 0, 0, 0, 0, 0, 0, 3][..],
         ]
         .concat(),
     ));
     assert_eq!(publish, want, "publish");
     // record: op `record` — no wire op spells it — then body = the type
-    // slot row ‖ the `to` slot row ‖ the `replaces` row EMPTY ‖ the lineage
-    // row EMPTY ‖ the canonical bytes, delimited. The enrol's kind…
+    // slot row ‖ the `to` slot row — list rows both — ‖ the `replaces` row
+    // EMPTY ‖ the lineage row EMPTY ‖ the canonical bytes, delimited. The
+    // enrol's kind…
     let mut want = prefix.clone();
     want.extend(member(b"record"));
     want.extend(member(
         &[
-            slot(&[b"1.1.0.1.0.1.0.3.1"]),
-            slot(&[b"1.0.2"]),
+            list(&[b"1.1.0.1.0.1.0.3.1"]),
+            list(&[b"1.0.2"]),
             vec![0, 0, 0, 0],
             vec![0, 0, 0, 0],
             member(br#"{"type":"skep-enroll"}"#),
@@ -2203,8 +2684,8 @@ fn the_entry_frames_bytes_per_op_are_pinned() {
     want.extend(member(b"record"));
     want.extend(member(
         &[
-            slot(&[b"1.1.0.1.0.1.0.3.2"]),
-            slot(&[b"1.0.2"]),
+            list(&[b"1.1.0.1.0.1.0.3.2"]),
+            list(&[b"1.0.2"]),
             vec![0, 0, 0, 0],
             vec![0, 0, 0, 0],
             member(br#"{"type":"skep-retire"}"#),
@@ -2215,12 +2696,12 @@ fn the_entry_frames_bytes_per_op_are_pinned() {
     // …and the claim's: its type slot, the `to` slot EMPTY (nine bytes, never
     // absent), both optional rows EMPTY, and the body-bytes row EMPTY — a
     // claim carries no record (AUTH-2.48), so its row delimits nothing.
-    let mut want = prefix;
+    let mut want = prefix.clone();
     want.extend(member(b"record"));
     want.extend(member(
         &[
-            slot(&[b"1.1.0.1.0.1.0.3.3"]),
-            slot(&[]),
+            list(&[b"1.1.0.1.0.1.0.3.3"]),
+            list(&[]),
             vec![0, 0, 0, 0],
             vec![0, 0, 0, 0],
             vec![0, 0, 0, 0],
@@ -2228,6 +2709,73 @@ fn the_entry_frames_bytes_per_op_are_pinned() {
         .concat(),
     ));
     assert_eq!(claim, want, "record, the claim's kind");
+    // THE THREE MINTS: `doc` the parent account, the body EMPTY — the
+    // member present, `be32(0)`, and nothing else.
+    for (frame, token) in [(create, "create_new_document"), (fork, "fork"), (version, "version")] {
+        let mut want = [head.clone(), member(b"1.0.1")].concat();
+        want.extend(member(token.as_bytes()));
+        want.extend(member(b""));
+        assert_eq!(frame, want, "{token}: the EMPTY body over the parent account");
+    }
+    // THE OTHER LINK WRITES: the stored tuple's four rows, each slot a unit
+    // span — the type the class's reserved ghost address — under the op's
+    // own token.
+    let (link_1, link_2): ((&[u8], &[u8]), (&[u8], &[u8])) =
+        ((b"1.0.1.0.1.0.2.1", b"0.0.0.0.0.0.0.1"), (b"1.0.1.0.1.0.2.2", b"0.0.0.0.0.0.0.1"));
+    let home: (&[u8], &[u8]) = (b"1.0.1.0.1", b"0.0.0.0.1");
+    let mut want = prefix.clone();
+    want.extend(member(b"nullify"));
+    want.extend(member(
+        &[
+            stored(&[(b"1.1.0.1.0.1.0.1.5", b"0.0.0.0.0.0.0.0.1")]),
+            stored(&[home]),
+            stored(&[link_1]),
+            vec![0, 0, 0, 0],
+        ]
+        .concat(),
+    ));
+    assert_eq!(nullify, want, "nullify: the retraction's unit span, the home's, the target's");
+    let mut want = prefix.clone();
+    want.extend(member(b"assert_sup"));
+    want.extend(member(
+        &[
+            stored(&[(b"1.1.0.1.0.1.0.1.4", b"0.0.0.0.0.0.0.0.1")]),
+            stored(&[link_1]),
+            stored(&[link_2]),
+            vec![0, 0, 0, 0],
+        ]
+        .concat(),
+    ));
+    assert_eq!(assert_sup, want, "assert_sup: the supersedes class's unit span, old's, new's");
+    let mut want = prefix.clone();
+    want.extend(member(b"emit"));
+    want.extend(member(
+        &[
+            stored(&[(b"1.1.0.1.0.1.0.1.3", b"0.0.0.0.0.0.0.0.1")]),
+            stored(&[(b"1.0.1.0.2", b"0.0.0.0.1")]),
+            stored(&[]),
+            vec![0, 0, 0, 0],
+        ]
+        .concat(),
+    ));
+    assert_eq!(emit, want, "emit: the retired class's unit span, from's, the to EMPTY");
+    // THE EDIT: `doc` the pair's row — `1.0.1.0.2` then `1.0.1.0.1`, a list
+    // row of two — then the successor's four rows (two resolved extents and
+    // a named type) and the fifth, the claim's `from`: the original's unit
+    // span.
+    let mut want = [head, member(&list(&[b"1.0.1.0.2", b"1.0.1.0.1"]))].concat();
+    want.extend(member(b"edit_link"));
+    want.extend(member(
+        &[
+            stored(&[(b"1.0.1.0.3.0.2.1", b"0.0.0.0.0.0.0.1")]),
+            stored(&[(b"1.0.1.0.2.0.1.1", b"0.0.0.0.0.0.0.5")]),
+            stored(&[(b"1.0.1.0.2.0.1.6", b"0.0.0.0.0.0.0.2")]),
+            vec![0, 0, 0, 0],
+            stored(&[link_1]),
+        ]
+        .concat(),
+    ));
+    assert_eq!(edit, want, "edit_link: the pair's row, the successor's rows, the claim's from");
 }
 
 /// The codec's round trip carries the member: `parse(marshal(r))` reproduces

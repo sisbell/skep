@@ -28,11 +28,13 @@ use crate::World;
 /// serialization guard IS the transaction's base). Reached for a
 /// publish-class write from a SIGNED session on a CLAIMED board:
 ///
-/// 1. THE CHECKED SET — [`crate::codec::in_checked_set`]: the three ops the seam
-///    build's check reaches (`insert`, `make_link`, `publish`); every other
-///    publish-class op carries no `attest` (the codec refuses the member
-///    there) and commits on its signed session as before — the widening
-///    lane's, not this one's.
+/// 1. THE CHECKED SET — [`crate::codec::in_checked_set`]: the ten
+///    publish-class op kinds — `create_new_document`, `fork`, `version`,
+///    `insert`, `publish`, `make_link`, `emit`, `nullify`, `assert_sup`,
+///    `edit_link` — each with its cell of the entry frame (D24); `delete`,
+///    `copy` and `rearrange` carry no `attest` (the codec refuses the member
+///    there) and have no cell, the store refusing each into a published
+///    document, so no entry of their kind commits above the claim.
 /// 2. THE RECORD DEPOSIT EXEMPTION, NARROWED (§2.5's `insert` cell as re-cut
 ///    at required signing and again at round 7 — as7-E1 ARM (a) with bu7-E1
 ///    ARM (a), owner 2026-10-01; D26; SO-I4): the one `insert` the check
@@ -102,11 +104,22 @@ use crate::World;
 ///    (`base_extent_too_large`, `too_many_values`, `dangling_source`); a shot
 ///    whose staging-draft runs re-insert more values than M5's
 ///    `MAX_REINSERTED_VALUES` passes UNATTESTED to the store's
-///    `too_many_values`, its values never walked; a principal with no
-///    account answers `attestation_invalid:not_enrolled_at_position`. A write
-///    passed through UNATTESTED here DROPS the member it presented — never
-///    verified, never written — and is one the store refuses, each passing
-///    arm's premise, so nothing commits unattested.
+///    `too_many_values`, its values never walked; a link write whose slot
+///    is over either of M7's per-slot budgets passes UNATTESTED to M7's own
+///    `slot_too_large`, the slot never resolved past the budget; a
+///    `make_link` or `edit_link` whose V-spec names a source the principal
+///    may not read is never resolved and passes UNATTESTED to the write
+///    door's own `withheld`, naming the source — the door judges every write
+///    that reaches here, both homes being registered and the principal's —
+///    so no slot is composed over an arrangement the principal may not read;
+///    an `edit_link` whose successor M10's own build refuses — an ill-formed
+///    spec, an unregistered source — passes UNATTESTED to that refusal; a
+///    principal with no account answers
+///    `attestation_invalid:not_enrolled_at_position`. A write passed through
+///    UNATTESTED here DROPS the member it presented — never verified, never
+///    written — and is one the store or the door refuses, each passing arm's
+///    premise, so nothing commits unattested; the pairing of each arm with
+///    the refusal it defers to is pinned in `signed_ops.rs`.
 /// 7. (2): the member's marker tag names its row (a tag no row names is
 ///    `malformed`), whose token is the entry frame's `alg`; the blob's width
 ///    under it; the KEY SET that OPENS the act's principal AS OF this base
@@ -186,14 +199,19 @@ pub(super) fn attestation_check(
             };
         }
         Err(ComposeFault::PastBodyBudget) => return Err(invalid(AttestFault::FrameTooLarge)),
-        // A shot the store refuses whatever it carries: the walk finds no
-        // value, a term names what no store holds, or the staging draft's runs
-        // pass the store's re-insert budget. The store's own answer is owed,
-        // so the write passes through UNATTESTED to it.
+        // A write the store or the door refuses whatever it carries: the walk
+        // finds no value, a term names what no store holds, the staging
+        // draft's runs pass the store's re-insert budget, a link slot passes
+        // M7's budgets, a V-spec names a source the door withholds, or M10's
+        // successor build refuses the request. The store's or the door's own
+        // answer is owed, so the write passes through UNATTESTED to it.
         Err(
             ComposeFault::MissingValue
             | ComposeFault::Unspellable
-            | ComposeFault::PastReinsertBudget,
+            | ComposeFault::PastReinsertBudget
+            | ComposeFault::SlotTooLarge
+            | ComposeFault::UnreadableSlotSource
+            | ComposeFault::SuccessorRefused,
         ) => return Ok(None),
     };
     // 7 — (2): the member's marker tag names its row, whose token is the
@@ -282,17 +300,27 @@ fn declared_record_atom(op: &Op) -> Option<DeclaredRecord<'_>> {
     Some(DeclaredRecord { doc, carries_sig })
 }
 
-/// A3's test: the write's target or home document is OWNED BY THE SYSTEM
-/// ACCOUNT `1.1.0.1` (PUB-6.65) — ω, a READ of the board's principal list
-/// Π and never address arithmetic (m3) — and by nothing served or
-/// testified.
+/// A3's test: every document the write's frame names as its `doc` — an
+/// arrangement write's target, a link write's home, both of an `edit_link`'s
+/// homes, a mint's parent account — is OWNED BY THE SYSTEM ACCOUNT `1.1.0.1`
+/// (PUB-6.65) — ω, a READ of the board's principal list Π and never address
+/// arithmetic (m3) — and by nothing served or testified. A `fork` or a
+/// `version` names the acting principal's own account, which is the system
+/// account's only for the system principal, which never passes dispatch.
 fn system_owned(world: &World, op: &Op) -> bool {
-    let target = match op {
-        Op::Insert { doc, .. } | Op::Publish { doc, .. } => doc,
-        Op::MakeLink { home, .. } => home,
-        _ => return false,
-    };
-    world.m3().effective_owner_prefix(target) == Some(&system_account())
+    let m3 = world.m3();
+    let system = system_account();
+    let owned = |a: &Address| m3.effective_owner_prefix(a) == Some(&system);
+    match op {
+        Op::Insert { doc, .. } | Op::Publish { doc, .. } => owned(doc),
+        Op::MakeLink { home, .. }
+        | Op::Emit { home, .. }
+        | Op::Nullify { home, .. }
+        | Op::AssertSup { home, .. } => owned(home),
+        Op::EditLink { d_s, d_a, .. } => owned(d_s) && owned(d_a),
+        Op::CreateNewDocument { account, .. } => owned(account),
+        _ => false,
+    }
 }
 
 /// THE CHECK'S QUESTION about a shot the composer could not read — a copied

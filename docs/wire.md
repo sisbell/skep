@@ -1623,12 +1623,15 @@ bare session depositing a credential on a claimed board, for example:
 
 **The two attestation codes** (signed ops; the write-path check, which
 runs on every CLAIMED board, with no operator switch, on a dispatched
-publish-class `insert`, `make_link` or `publish` ABOVE the claim entry,
-from a signed session, BEFORE the transaction — beside the publish-class
-gate below, after it, and ahead of the store's own gates; and, at THE
-RECORD GRADE, on every credential deposit above the claim, over the
-record's own `sig` at the deposit's `make_link` — §The claim ceremony and
-credentials):
+publish-class write of the TEN KINDS that have an entry frame —
+`create_new_document`, `fork`, `version`, `insert`, `publish`,
+`make_link`, `emit`, `nullify`, `assert_sup`, `edit_link` — ABOVE the
+claim entry, from a signed session, BEFORE the transaction — beside the
+publish-class gate below, after it, and ahead of the store's own gates
+(`delete`, `copy` and `rearrange` have no frame: a published document
+admits none of them, `published_target`); and, at THE RECORD GRADE, on
+every credential deposit above the claim, over the record's own `sig` at
+the deposit's `make_link` — §The claim ceremony and credentials):
 
 * `attestation_required` — the write carries no `attest` member.
   Disposition REORDER: the answer is a different request, the same
@@ -1681,6 +1684,44 @@ credentials):
   non-hex string, or a width no row takes), `board_unavailable` (as for an
   entry).
 
+**The entry frame's rows** (signed ops; the design record's one table,
+stated by encoding). Every entry signature is made over
+`framed("skep-entry-v1", [alg, board, account, doc, op, body])` — the tag,
+then each member `be32(len) ‖ bytes`: `alg` the signing key's token;
+`board` the head document `H.1`'s `(position, chain)` pair, `be64(position)
+‖ chain` (§The other endpoints); `account` the writer's account in the
+board's local form, dotted decimal; `doc` per op (below), one address in
+dotted decimal — or, for `edit_link` alone, THE PAIR'S ROW, its two homes
+as an address-list row of two: `0x01 ‖ be64(2) ‖ be32(len) ‖ d_s ‖ be32(len)
+‖ d_a`, the successor's home then the claim's, no separator and no other
+form byte; `op` the op-kind token as this document spells it; `body` per
+op. The body's rows: THE SLOT ROW, a link slot AS THE STORE HOLDS IT — the
+stored endset's spans, verbatim and in stored order — `0x03 ‖ be64(n) ‖ per
+span: be32(len) ‖ start ‖ be32(len) ‖ width`, each tumbler in dotted
+decimal; a slot given by ADDRESS stores as one unit span per address (the
+address as the start, the unit at the address's own length as the width —
+`1.0.1` is the span from `1.0.1` of width `0.0.1`), and a slot given as
+V-SPECS stores as the I-extents the store resolves them to, which the
+signer reads through `image` over each source before signing, against the
+base the transaction will take, and which a later reader takes off
+`read_link` or `find_links`; the EMPTY slot has one spelling, `0x03 ‖
+be64(0)`; a slot signed over a resolution the base has since moved is
+refused `attestation_invalid:signature`, re-composed and re-signed. THE
+ADDRESS-LIST ROW, `0x01 ‖ be64(n) ‖ each address be32(len) ‖ dotted
+decimal` — never a link slot's row: the `record` body's two slot rows (the
+credential grade's, address-form by its own refusal), the one address an
+optional row names, the base group's member, the pair's row. THE
+OPTIONAL-ADDRESS ROW, one length-delimited group, EMPTY (`be32(0)`) where
+no address is named, else the address as an address-list row of one. THE
+VALUE-SEQUENCE ROW, `be64(count)` then each value `be32(len) ‖ bytes`. THE
+EMPTY BODY, the three mints': the member PRESENT and empty, `be32(0)` in
+the frame. Each op's `doc` and `body` are stated at the op: the mints'
+(§Namespace, `version` under §Arrangement), `insert`'s and `publish`'s
+(§Arrangement), the five link writes' (§Links (writes)), the record
+grade's (§The claim ceremony and credentials). The armed set of
+`attestation_invalid`'s causes above is the whole of it: the widening to
+the ten kinds added no cause.
+
 **Round 7's two refusals** (signed ops; `credential_refused`, PERMANENT
 like the family's, each naming the act that exists):
 
@@ -1715,7 +1756,7 @@ above and ahead of the store — to a value naming the picture cell's kind
 in a draft, or at the owner's own shot; stated with their faces and their
 interim standing at their own section.
 
-Every publish-class write of the three ops on a claimed board is judged;
+Every publish-class write of the ten kinds on a claimed board is judged;
 the system account's own writes (the head document's, owned by
 `1.1.0.1`) are exempt by ownership and never dispatched. Every other
 write, and every write at or below the claim, is outside the check and
@@ -1966,6 +2007,21 @@ refused `credential_refused:mint_home_public` (permanent) — the home is
 public from birth; create it first, then everything else is private by
 default.
 
+On a CLAIMED board a mint BORN PUBLISHED — an explicit `published:true`
+into an account that already holds a document — carries the optional
+top-level `attest` member (signed ops; §Credential refusals, the entry
+frame's rows): the entry signature over the frame whose `doc` is the
+PARENT ACCOUNT the document lands in — `account` itself, so the
+signature attests that this principal performed this kind of act on this
+board against this parent and nothing else — `op` `create_new_document`
+and `body` EMPTY: the member present and empty, `be32(0)`. No minted
+address enters the frame, so a client signs before the commit; two such
+mints by one principal sign identical bytes, which the design accepts. A
+later reader derives the parent account by `effective_owner` over the
+minted document and composes the same frame. The account's first,
+flagless mint — the home — is outside the publish class and takes no
+`attest`.
+
 **`delegate`** — carve `new_prefix` off your account (or node) and register
 principal `new_id` as its owner, atomically. Obtain `new_prefix` from
 `next_account_prefix`; only the owner of the parent may delegate under it. A
@@ -2015,7 +2071,10 @@ first fork into an empty account is refused `mint_home_first` before the
 flag matters, and a later fork is private by default. A forked draft is
 the sibling draft the version-chain refusals point you to (§The
 version-chain refusals): edited in place, and versionless until it is
-published as an edition of its own.
+published as an edition of its own. On a CLAIMED board a fork born
+published (`published:true`) carries the optional top-level `attest`
+member exactly as a mint born published does (`create_new_document`
+above): `doc` the principal's own account, `op` `fork`, `body` EMPTY.
 
 **`next_account_prefix`** — the next delegable prefix under `parent`
 (what `delegate` demands). → `maybe_addr` (`null` = ineligible parent, or a
@@ -2250,7 +2309,15 @@ is published, a version of a draft is a draft. `true` publishes, `false`
 keeps the new version private. On a claimed board a bare session's `version`
 that lands in the published world — an explicit `true`, or a flagless
 version of a published source — is refused `signed_session_required`
-(§Credential refusals).
+(§Credential refusals), and a signed session's carries the optional
+top-level `attest` member (signed ops; §Credential refusals, the entry
+frame's rows): the entry signature over the frame whose `doc` is the
+PARENT ACCOUNT the new member or the fresh document is minted under — the
+acting principal's own account, at an owned and at a cross-owner `version`
+alike, never the trunk of `d_src` — `op` `version` and `body` EMPTY
+(`be32(0)`, the member present); `d_src` enters no row. A later reader
+derives the account by `effective_owner` over the minted member or
+document and composes the same frame.
 
 Where you own `d_src`, the new version is a MEMBER of its chain —
 `1.0.1.0.1.1`, `1.0.1.0.1.2`, … — and both the publish gate and the
@@ -2538,16 +2605,23 @@ writer: a `make_link` whose own `ty` is it, an `emit` of it and an
 
 On a CLAIMED board a link write
 into a published home carries the optional top-level `attest` member
-(signed ops; the object `insert` describes): the entry signature over
-the frame whose `doc` is `home`, `op` `make_link` and `body` the type
-slot, the `from` slot and the `to` slot exactly as this frame carries
-them — the address form's names verbatim, the V-spec form's specs as
-the client's own (the endsets the store resolves them to are the
-transaction's and enter no frame) — and then the `replaces` row: ONE
-length-delimited group, EMPTY (`be32(0)`) where the member is absent,
-else the named address as an address-form slot row of one element,
-delimited. So the member a signature covers is the one deposited, and a
-member-less body is never the three slots alone. A credential-typed
+(signed ops; the object `insert` describes; §Credential refusals, the
+entry frame's rows): the entry signature over the frame whose `doc` is
+`home`, `op` `make_link` and `body` the type slot, the `from` slot and
+the `to` slot, each a SLOT ROW — the slot AS THE STORE WILL HOLD IT, its
+spans verbatim under `0x03`: an address-form slot's one unit span per
+name, a V-spec slot's I-extents, which the client resolves through
+`image` over each source before signing, against the base the
+transaction will take (a resolution the base has since moved is refused
+`attestation_invalid:signature`: re-compose and re-sign); the EMPTY slot
+`0x03 ‖ be64(0)` — and then the `replaces` row: ONE length-delimited
+group, EMPTY (`be32(0)`) where the member is absent, else the named
+address as an address-list row of one element, delimited. So the member
+a signature covers is the one deposited, a member-less body is never the
+three slots alone, and a later reader composes every row from the stored
+link alone — `read_link` or `find_links`, which serve the resolved endset
+verbatim — so the served `attest` tells a reader nothing about a private
+source's V-positions. A credential-typed
 `make_link` (the enroll, retire and claim kinds) takes the credential
 path and carries no `attest` — the record's own `sig` covers it, and
 above the claim the daemon verifies that `sig` at this very deposit
@@ -2595,7 +2669,15 @@ read is invisible to the gate, so the re-emit mints afresh, and
 value-identical tuples may coexist across the visibility boundary.
 → `ack_addr`. The example retires `1.0.1.0.2` under the shipped Retired
 class at its reserved ghost tumbler `1.1.0.1.0.1.0.1.3`: Unary, so `to`
-is empty.
+is empty. On a CLAIMED board an `emit` into a published home carries the
+optional top-level `attest` member (signed ops): the entry signature over
+the frame whose `doc` is `home`, `op` `emit` and `body` the `make_link`
+body's four rows over the tuple THE STORE DEPOSITS — the type slot row
+`ty`'s spans verbatim, the `from` slot row the one address's unit span,
+the `to` slot row one unit span per address and EMPTY (`0x03 ‖ be64(0)`)
+at a Unary class, the `replaces` row EMPTY (an `emit` carries no member)
+— so a reader composes it from `read_link` alone. A re-emit that acks an
+incumbent commits nothing and fills no slot.
 
 The five reserved type addresses are GHOST TUMBLERS — compiled format
 constants at `1.1.0.1.0.1.0.1.x` for x = 1..5 (pred_def, pred_stable,
@@ -2619,7 +2701,18 @@ board a bare session's `nullify` whose `home` or whose target's home is
 published is `signed_session_required`, and a target that is
 credential-typed, grant-typed, or of an audit-view class is refused to
 its owner with the class's token — retraction is not how those records
-end (§Links (writes) above; §Credential refusals, item 3).
+end (§Links (writes) above; §Credential refusals, item 3). A signed
+session's carries the optional top-level `attest` member (signed ops),
+judged by the write-path check AHEAD of the class tokens: the entry
+signature over the frame whose `doc` is `home`, `op` `nullify` and
+`body` the `make_link` body's four rows over the retraction the store
+deposits — the type slot row the retraction class's one unit span, its
+reserved ghost tumbler `1.1.0.1.0.1.0.1.5`; the `from` slot row `home`'s
+unit span; the `to` slot row `target`'s; the `replaces` row EMPTY. A
+re-retraction that acks the incumbent commits nothing and fills no slot.
+On the change feed a retraction homed in a draft against a public link —
+the straddle below — serves its `attest` to the classes that read its
+home and withholds it from the rest (§The change feed).
 
 <!-- wire: request nullify -->
 ```json
@@ -2627,7 +2720,13 @@ end (§Links (writes) above; §Credential refusals, item 3).
 ```
 
 **`assert_sup`** — record "`old` is superseded by `new`". → `ack_addr`
-(the claim's address).
+(the claim's address). On a CLAIMED board, into a published home, it
+carries the optional top-level `attest` member (signed ops): the entry
+signature over the frame whose `doc` is `home`, `op` `assert_sup` and
+`body` the `make_link` body's four rows over the claim the store deposits
+— the type slot row the supersedes class's one unit span, its reserved
+ghost tumbler `1.1.0.1.0.1.0.1.4`; the `from` slot row `old`'s unit span;
+the `to` slot row `new`'s; the `replaces` row EMPTY.
 
 <!-- wire: request assert_sup -->
 ```json
@@ -2638,7 +2737,21 @@ end (§Links (writes) above; §Credential refusals, item 3).
 (endsets given as content V-specs; the type slot either
 `{"addrs": [addresses…]}` — the identical encoding of `make_link`'s
 address form — or `{"resolve": [v-specs…]}`), homed in `d_s`, plus the
-supersession claim homed in `d_a`. → `ack_edit`.
+supersession claim homed in `d_a`. → `ack_edit`. On a CLAIMED board,
+where either home is published, it carries the optional top-level
+`attest` member (signed ops): the entry signature over the frame whose
+`doc` is THE PAIR'S ROW — `d_s` then `d_a`, the op's own order, as an
+address-list row of two (§Credential refusals, the entry frame's rows) —
+`op` `edit_link` and `body` FIVE rows: the successor as a `make_link`
+body — its type, `from` and `to` slot rows AS STORED, the I-extents its
+V-specs resolve to (resolved by the client through `image` before
+signing) and its type as named or resolved, then the `replaces` row EMPTY
+(a successor typed `replaces` is refused) — and THE FIFTH ROW, the
+claim's `from` slot row: `original`'s one unit span. The claim's `to`
+(the successor's address, minted inside the transaction) and its type
+(the supersedes constant) are no rows. A reader composes the five rows
+from `read_link` at the successor and at the claim, the two homes off
+the two links' own addresses.
 
 <!-- wire: request edit_link -->
 ```json
@@ -3235,12 +3348,15 @@ Each entry:
   renders undeterminable and never as unsigned; ABSENT on every other row:
   an unsigned entry, a credential record deposit's two rows (the deposit's
   slot is empty; its signature is the record's own `sig`, fetched with the
-  atom), the ceremony's rows, the head writer's `system` rows. On the
-  origin's own feed an absent `attest` above the claim is a verdict — the
-  entry is unsigned — so a party re-serving this feed carries the member
-  as it received it and never drops it. On a bare entry the member is
-  served wherever the store holds the slot: the slot is the journal's own
-  fact, and the null testimony beside it stays lost.
+  atom), the ceremony's rows, the head writer's `system` rows — and ABSENT
+  on a row whose `docs` your class REDUCES (the straddle renderings
+  above), the third absence: there the entry may well be signed, and its
+  verdict is undeterminable from your feed alone. On the
+  origin's own feed an absent `attest` above the claim on a row served
+  WHOLE is a verdict — the entry is unsigned — so a party re-serving this
+  feed carries the member as it received it and never drops it. On a bare
+  entry the member is served wherever the store holds the slot: the slot
+  is the journal's own fact, and the null testimony beside it stays lost.
 * `new_prefix`, `new_id` — on a `delegate` row (AUTH-6.36): the minted
   account address in the board's local form — the `ack_addr` the op
   answered — and the principal id it seated, a JSON number in the wire's
@@ -3324,7 +3440,12 @@ page is answered from:
   identically; an `edit_link` with `d_s` public and `d_a` a draft
   reduces to `[P]` under `op: "edit_link"`. From either a guest learns
   that a draft-homed record EXISTS — its type, its target or public
-  `new`, its commit position — never its home, `old`, or a byte.
+  `new`, its commit position — never its home, `old`, or a byte; and
+  NEVER ITS SIGNATURE: a row whose `docs` your class REDUCES carries no
+  `attest` member — ABSENT, not `null` — the entry's signature being a
+  function of the home the row withholds, which served would confirm a
+  guess at that home; the row carries no `key` either, so its verdict is
+  undeterminable from your feed, and whole on the owner's.
 
 A principal's page is its SUPPLEMENT merged over the published stream:
 its own account's draft writes, its ancestor accounts' and its

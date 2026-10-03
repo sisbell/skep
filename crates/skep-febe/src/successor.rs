@@ -30,8 +30,13 @@ use crate::request::{OpKind, SuccessorSpec};
 /// answer — and so what may speak before the store does. Defined here, where
 /// it is read, because the module order lets the door name this module and
 /// not the reverse; the door fills it, as M7's `Visibility` is filled by M10.
+/// Public with [`successor_link`], for the one caller outside this crate
+/// that composes the successor the dispatch will deposit: a write that
+/// reaches the daemon's entry-frame composer has passed registration and
+/// ownership on both homes, so it is one the door judges, and the composer
+/// passes [`Judgment::Judged`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Judgment {
+pub enum Judgment {
     /// The door ran past the deferral and every rule it owns passed: the
     /// caller may read every source, so a verdict their arrangements decide
     /// may speak here.
@@ -76,7 +81,14 @@ pub(crate) enum Judgment {
 /// `from` and `to` are content-resolved only. An address-denoting successor
 /// endpoint is not constructible through this surface — [`SuccessorSpec`]'s
 /// types say so — so there is no form here for M7 to reject.
-pub(crate) fn successor_link(
+///
+/// PUBLIC for one caller beside the dispatch: the daemon's composer of an
+/// `edit_link`'s entry frame (signed ops), which composes the successor's
+/// slot rows from THE LINK THIS FUNCTION BUILDS over the same base, under
+/// the daemon's serialization lock ahead of the transaction — so the signed
+/// rows and the stored successor agree by construction, and a request this
+/// function refuses is passed through to the dispatch's own refusal of it.
+pub fn successor_link(
     m3: &M3State,
     m5: &M5State,
     successor: &SuccessorSpec,

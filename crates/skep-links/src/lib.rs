@@ -54,10 +54,14 @@
 //! the write handle takes the caller's read predicate at construction, and
 //! the value-keyed gates (idempotency, `assert_sup`'s dedup) see only the
 //! incumbents that predicate admits at link-home identity — M7 names no
-//! principal. And, since signed ops, the ATTESTATION its `makelink` commits
-//! under ([`LinkWriter::attested`]; `None` through [`LinkWriter::new`]):
-//! handed to the kernel's attested arm at that one transaction's commit
-//! marker, and read by no gate, no fold and no index here.
+//! principal. And, since signed ops, the ATTESTATION its link writes commit
+//! under ([`LinkWriter::attested`]; `None` through [`LinkWriter::new`]) —
+//! `makelink` in both forms, `emit`, `nullify`, `assert_sup` and `editlink`,
+//! each one transaction: handed to the kernel's attested arm at that
+//! transaction's commit marker, and read by no gate, no fold and no index
+//! here. What a signature over one of them covers is the STORED link —
+//! the endset each slot deposits, verbatim — which the daemon's composer
+//! reads off this crate's own [`slot_endset`] ahead of the transaction.
 //!
 //! One commons VALUE is spelled here, beside the fences that read it: the
 //! `replaces` type ([`replaces_type`]; PUB-5.15), the authority successor
@@ -93,7 +97,7 @@ pub use registry::{
 };
 pub use state::{LinkRec, LinkState};
 pub use writes::{
-    is_replaces_class, replaces_type, Edit, LinkWriter, SlotArg, Visibility,
+    is_replaces_class, replaces_type, slot_endset, Edit, LinkWriter, SlotArg, Visibility,
     MAX_SLOT_RESOLVE_STEPS, MAX_SLOT_SPANS,
 };
 

@@ -239,6 +239,15 @@ pub trait Stores<W: WorldState>: Send + Sync {
     fn namespace(&self) -> Namespace<'_, W> {
         Namespace::new(self.kernel())
     }
+    /// THE ATTESTED M3 DRIVER (signed ops) — [`Stores::namespace`] with the
+    /// attestation beside the kernel, built by `Namespace::attested`, whose
+    /// signed transactions M3 states there: the two document mints, a mint
+    /// born published being a publish-class act. The same producer-set
+    /// discipline as [`Stores::vstream_attested`]; `None` is
+    /// [`Stores::namespace`] exactly.
+    fn namespace_attested<'a>(&'a self, attest: Option<&'a Attestation>) -> Namespace<'a, W> {
+        Namespace::attested(self.kernel(), attest)
+    }
     /// M5 driver — borrows the held kernel for the call.
     fn vstream(&self) -> Vstream<'_, W> {
         Vstream::new(self.kernel())

@@ -39,9 +39,11 @@
 //! Signed ops' declarations are consumed in skepd as well, at both grades. It
 //! composes the ENTRY frame it verifies through [`entry_frame`], over the
 //! locked snapshot's [`BoardTerm`], the principal's account, and the op's
-//! document and [`EntryBody`] — a `publish`'s built piece by piece within
-//! its budget through [`PublishBody`], whose [`PublishRefusal`] tells it which
-//! answer a refused shot is owed. At a credential deposit above the claim it
+//! [`DocTerm`] and [`EntryBody`] — a link write's slots as the transaction
+//! stores them, each a [`unit_span`] or a resolved extent; a `publish`'s
+//! built piece by piece within its budget through [`PublishBody`], whose
+//! [`PublishRefusal`] tells it which answer a refused shot is owed. At a
+//! credential deposit above the claim it
 //! checks the RECORD grade: it reads the record's atom through
 //! [`record_bytes`], its entries and `sig` through [`parse_record_value`] and
 //! the link's type and target through [`single_address`], and frames the
@@ -103,19 +105,26 @@
 //!   (AUTH-1.11–1.17);
 //! * `entry`: THE ENTRY FRAME under [`ENTRY_TAG`] — [`entry_frame`], which
 //!   spells every member from the values a signer or verifier holds: the
-//!   [`BoardTerm`], the account and document addresses, and an [`EntryBody`]
-//!   — a grammar's token paired with its body, built by [`entry_body_insert`],
-//!   [`entry_body_make_link`] and [`entry_body_make_link_replacing`] (over a
-//!   [`LinkSlots`] naming three [`EntrySlot`]s, the second with the op's
-//!   `replaces` member), [`entry_body_publish`] (over [`ShotSegmentPiece`]s
-//!   — the shot's address form, one copied position's value or one window
-//!   at a time, the pieces its segments are built from — and the shot's base
-//!   extent), or piece by piece under a byte budget by [`PublishBody`], with
-//!   its refusal [`PublishRefusal`], and [`entry_body_record`], over a
-//!   [`RecordRows`] naming the record grade's five rows, under the `record`
-//!   token — the bytes a publish-class entry's signature, or a record's
-//!   `sig`, is made over (signed ops; the design record §2.5; the frame
-//!   merge);
+//!   [`BoardTerm`], the account address, the [`DocTerm`] (one document, or
+//!   an `edit_link`'s two homes as the pair's row), and an [`EntryBody`] —
+//!   a grammar's token paired with its body, one per publish-class op
+//!   kind: [`entry_body_empty`] (over a [`ContentFreeOp`]: the three mints'
+//!   EMPTY body), [`entry_body_insert`], [`entry_body_make_link`] and
+//!   [`entry_body_make_link_replacing`] (over a [`LinkSlots`] naming three
+//!   [`EntrySlot`]s — each the slot's spans AS STORED, a [`unit_span`] per
+//!   address named or the extents resolved — the second with the op's
+//!   `replaces` member), [`entry_body_emit`], [`entry_body_nullify`] and
+//!   [`entry_body_assert_sup`] (the same four rows over the stored link,
+//!   under the op's own token), [`entry_body_edit_link`] (the successor's
+//!   rows then the claim's `from` slot), [`entry_body_publish`] (over
+//!   [`ShotSegmentPiece`]s — the shot's address form, one copied position's
+//!   value or one window at a time, the pieces its segments are built from
+//!   — and the shot's base), or piece by piece under a byte budget by
+//!   [`PublishBody`], with its refusal [`PublishRefusal`], and
+//!   [`entry_body_record`], over a [`RecordRows`] naming the record grade's
+//!   five rows, under the `record` token — the bytes a publish-class
+//!   entry's signature, or a record's `sig`, is made over (signed ops; the
+//!   design record §2.5; the frame merge);
 //! * `payload`: the credential-record constants and payload types —
 //!   [`ENROLL_TYPE`], [`RETIRE_TYPE`], [`MAX_RECORD_BYTES`], [`Enrollment`]
 //!   with its refusal [`LabelError`], [`PayloadError`] (AUTH-1.18–1.28) —
@@ -201,9 +210,11 @@ mod verdict;
 mod write_types;
 
 pub use entry::{
-    entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_publish,
-    entry_body_record, entry_frame, BoardTerm, EntryBody, EntrySlot, LinkSlots, PublishBody,
-    PublishRefusal, RecordRows, ShotBase, ShotSegmentPiece,
+    entry_body_assert_sup, entry_body_edit_link, entry_body_emit, entry_body_empty,
+    entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_nullify,
+    entry_body_publish, entry_body_record, entry_frame, unit_span, BoardTerm, ContentFreeOp,
+    DocTerm, EntryBody, EntrySlot, LinkSlots, PublishBody, PublishRefusal, RecordRows, ShotBase,
+    ShotSegmentPiece,
 };
 pub use framing::{
     framed, Tag, ENTRY_TAG, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, TAGS,

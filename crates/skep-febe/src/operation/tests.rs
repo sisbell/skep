@@ -14,7 +14,7 @@ use skep_links::{
     EditLinkError, HasLinks, LinkRec, LinkState, LinkWriter, SlotArg, Visibility, FROM,
     MAX_SLOT_RESOLVE_STEPS, MAX_SLOT_SPANS,
 };
-use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
+use skep_namespace::{HasM3, M3Rec, M3State, Namespace, PrincipalId};
 
 use super::*;
 use crate::publication::birth_version;
@@ -179,6 +179,10 @@ struct RecordingStores {
 impl crate::Stores<World> for RecordingStores {
     fn kernel(&self) -> &Kernel<World> {
         &self.kernel
+    }
+    fn namespace_attested<'a>(&'a self, attest: Option<&'a Attestation>) -> Namespace<'a, World> {
+        self.carried.lock().extend(attest.cloned());
+        Namespace::attested(self.kernel(), attest)
     }
     fn vstream_attested<'a>(&'a self, attest: Option<&'a Attestation>) -> Vstream<'a, World> {
         self.carried.lock().extend(attest.cloned());
@@ -600,12 +604,13 @@ fn every_write_under_a_bound_session_is_answered_and_its_refusals_name_it() {
 }
 
 /// THE ATTESTATION'S PATH (`Request::attest`): the value a request carries
-/// reaches every M5 and M7 driver its write acquires, once, and no namespace
-/// write, whose driver takes none. M10 keeps no copy of which transactions it
-/// signs — each store states that on its handle — and `tests/it/attestation.rs`
-/// pins which commits it lands in. EDITLINK goes with an empty successor: the
-/// partition's own fixture is refused by M10's successor guard before any
-/// driver is acquired.
+/// reaches every M3, M5 and M7 driver its write acquires, once — the two
+/// document mints' attested namespace driver among them — and neither
+/// `delegate` nor `register_node`, whose driver takes none. M10 keeps no
+/// copy of which transactions it signs — each store states that on its
+/// handle — and `tests/it/attestation.rs` pins which commits it lands in.
+/// EDITLINK goes with an empty successor: the partition's own fixture is
+/// refused by M10's successor guard before any driver is acquired.
 #[test]
 fn an_attestation_reaches_every_store_driver_a_write_acquires() {
     let carried = Arc::new(Mutex::new(Vec::new()));
@@ -637,11 +642,8 @@ fn an_attestation_reaches_every_store_driver_a_write_acquires() {
         let kind = op.kind();
         let _ = febe.execute(s, Request { attest: Some(attestation.clone()), ..Request::from(op) });
         let reached = std::mem::take(&mut *carried.lock());
-        let namespace_write = matches!(
-            kind,
-            OpKind::CreateNewDocument | OpKind::Delegate | OpKind::RegisterNode | OpKind::Fork
-        );
-        let expected = if namespace_write { Vec::new() } else { vec![attestation.clone()] };
+        let plain_driver = matches!(kind, OpKind::Delegate | OpKind::RegisterNode);
+        let expected = if plain_driver { Vec::new() } else { vec![attestation.clone()] };
         assert_eq!(reached, expected, "{kind:?}");
         seen += 1;
     }

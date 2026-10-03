@@ -22,10 +22,12 @@ use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{json, Value};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_identity::{
-    canonical_record, encode_enroll, entry_body_insert, entry_body_make_link,
-    entry_body_make_link_replacing, entry_body_publish, entry_body_record, entry_frame, framed,
-    parse_record_value, BoardTerm, Enrollment, EntrySlot, Fingerprint, LinkSlots, PublicKey,
-    RecordEntry, RecordRows, ShotBase, ShotSegmentPiece, SigAlgRow, SESSION_TAG, SESSION_TAG_V2,
+    canonical_record, encode_enroll, entry_body_assert_sup, entry_body_edit_link,
+    entry_body_emit, entry_body_empty, entry_body_insert, entry_body_make_link,
+    entry_body_make_link_replacing, entry_body_nullify, entry_body_publish, entry_body_record,
+    entry_frame, framed, parse_record_value, BoardTerm, ContentFreeOp, DocTerm, Enrollment,
+    EntrySlot, Fingerprint, LinkSlots, PublicKey, RecordEntry, RecordRows, ShotBase,
+    ShotSegmentPiece, SigAlgRow, SESSION_TAG, SESSION_TAG_V2,
 };
 use skep_signature::HybridSigner;
 use skepd::{serve, AuthOptions, Daemon, NodePrefix, Origin, Skepd, DEFAULT_WORKERS};
@@ -41,6 +43,13 @@ pub use signer::*;
 pub const T_ENROLL: &str = "1.1.0.1.0.1.0.3.1";
 pub const T_RETIRE: &str = "1.1.0.1.0.1.0.3.2";
 pub const T_CLAIM: &str = "1.1.0.1.0.1.0.3.3";
+
+/// The two shipped link classes a `nullify` and an `assert_sup` deposit
+/// under — the reserved ghost tumblers M7 fixes by kind (the format's
+/// `1.1.0.1.0.1.0.1.x`, x = 5 the retraction, 4 the supersedes class): the
+/// type slot of the stored link each op's entry frame signs.
+pub const T_RETRACTION: &str = "1.1.0.1.0.1.0.1.5";
+pub const T_SUPERSEDES: &str = "1.1.0.1.0.1.0.1.4";
 
 /// The GRANTS class type address (COMMONS DECISION 5 — 1.1.0.1.0.1.0.3.90):
 /// the type a sharing grant's link carries (PUB-5.8, wire.md §The read
@@ -488,42 +497,15 @@ pub fn hire(
     open_signed_session(port, agent_id, key)
 }
 
-/// `frame` — an address-form `make_link` — carrying its `replaces` member
-/// naming `replaces` (PUB-5.15), signed by `token`'s key over the entry frame
-/// WITH the member (`entry_body_make_link_replacing`) and attached. Composed
-/// here rather than through [`op`]: the suite's signer (`signer.rs`) spells a
-/// `make_link` body without the member, which the daemon — whose composer
-/// reads the member — would refuse as a wrong signature.
+/// `frame` — a `make_link` — carrying its `replaces` member naming `replaces`
+/// (PUB-5.15), signed by `token`'s key over the entry frame WITH the member
+/// (`entry_body_make_link_replacing`, which the suite's signer spells where
+/// the frame carries one) and attached — the frame [`op`] would post, held
+/// as a string so a cell can replay it verbatim.
 pub fn signed_with_replaces(port: u16, token: &str, frame: &str, replaces: &str) -> String {
     let mut v: Value = serde_json::from_str(frame).expect("a JSON frame");
-    let (principal, seed) = signer_of(token).expect("a signed session");
-    let board = board_term(port).expect("the board term: H.1");
-    let parse = |s: &str| -> Address {
-        let comps: Vec<Nat> =
-            s.split('.').map(|c| Nat::from(c.parse::<u64>().expect("a component"))).collect();
-        validate(Tumbler::new(comps).expect("nonempty")).expect("T4-valid")
-    };
-    let account = parse(&account_of(port, token, principal).expect("the signer's account"));
-    let names = |slot: &Value| -> Vec<Address> {
-        let slot = slot["addrs"].as_array().expect("an address-form slot");
-        slot.iter().map(|a| parse(a.as_str().expect("an address"))).collect()
-    };
-    let (from, to, ty) = (names(&v["from"]), names(&v["to"]), names(&v["ty"]));
-    let body = entry_body_make_link_replacing(
-        LinkSlots {
-            from: EntrySlot::Addrs(&from),
-            to: EntrySlot::Addrs(&to),
-            ty: EntrySlot::Addrs(&ty),
-        },
-        &parse(replaces),
-    );
-    let home = parse(v["home"].as_str().expect("home"));
-    let alg = SigAlgRow::of_tag(FIXTURE_TAG).expect("the fixtures' tag").token;
-    let bytes = entry_frame(alg, board, &account, &home, &body);
-    let signer = HybridSigner::from_seed(FIXTURE_TAG, &seed).expect("the fixtures' tag");
     v["replaces"] = json!(replaces);
-    v["attest"] = attest_member(&signer.sign(&bytes));
-    v.to_string()
+    attach_attest(port, token, &v.to_string())
 }
 
 /// The link address one past `link` in its home — where a `make_link`'s

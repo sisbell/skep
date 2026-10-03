@@ -1,5 +1,5 @@
-//! The attested handle (signed ops): its `insert` and `publish` fill their
-//! own transaction's signature slot and no other.
+//! The attested handle (signed ops): its `insert`, `publish` and `version`
+//! fill their own transaction's signature slot and no other.
 
 use skep_arrangement::{Deposit, Shot, VSpec, Vstream};
 use skep_kernel::Kernel;
@@ -9,12 +9,13 @@ use tempfile::tempdir;
 use crate::common::*;
 
 /// THE ATTESTED HANDLE FILLS THE SLOT OF ITS OWN TRANSACTION AND NO OTHER
-/// (signed ops, the seam build; the design record §2.4's route, the
-/// attestation riding the handle): a `Vstream::attested` handle's `insert`
-/// and `publish` commit under the attestation it carries — the kernel reads
-/// it back at exactly those boundaries — while a plain `Vstream::new`
-/// handle's writes, and the attested handle's four others (`delete`, `copy`,
-/// `rearrange`, `version`), leave their slots empty. The driver's own
+/// (signed ops; the design record §2.4's route, the attestation riding the
+/// handle; SO-I4): a `Vstream::attested` handle's `insert`, `publish` and
+/// `version` — the three publish-class kinds of this surface — commit under
+/// the attestation it carries — the kernel reads it back at exactly those
+/// boundaries — while a plain `Vstream::new` handle's writes, and the
+/// attested handle's three others (`delete`, `copy`, `rearrange`, which no
+/// published document admits), leave their slots empty. The driver's own
 /// signature is unchanged; the value rides the handle. And the slot moves
 /// the chain: an unattested twin history chains identically up to the first
 /// filled slot and parts there, the slot's digest being a chain input
@@ -39,7 +40,8 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
         .expect("the declared deposit commits");
     // The same attested handle's `delete`: outside the checked set, the plain arm.
     let s_del = attested.delete(P1, &doc1(), vp(1, 2), n(1)).expect("delete commits");
-    // …and its `copy`, `rearrange` and `version`: the plain arm as well.
+    // …and its `copy` and `rearrange`: the plain arm as well; its `version`
+    // — a publish-class kind — the attested arm.
     let from_doc1 = [VSpec {
         source: doc1(),
         span: vspan(1, 1, 2),
@@ -69,17 +71,14 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
     assert_eq!(k.attestation_at(s_plain).unwrap(), None, "the plain handle's insert");
     assert_eq!(k.attestation_at(s_att).unwrap(), Some(tag1.clone()), "the attested insert");
     assert_eq!(k.attestation_at(s_del).unwrap(), None, "delete takes the plain arm");
-    for (seq, write) in [
-        (s_transclude, "copy"),
-        (s_rearrange, "rearrange"),
-        (s_fork, "version"),
-    ] {
+    for (seq, write) in [(s_transclude, "copy"), (s_rearrange, "rearrange")] {
         assert_eq!(
             k.attestation_at(seq).unwrap(),
             None,
             "{write} takes the plain arm"
         );
     }
+    assert_eq!(k.attestation_at(s_fork).unwrap(), Some(tag1.clone()), "the attested version");
     assert_eq!(k.attestation_at(s_pub).unwrap(), Some(tag3), "the attested shot");
 
     // A `Copy` handle copied still carries the borrow; a handle built with

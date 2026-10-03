@@ -174,6 +174,13 @@ where
     /// [`content_run_count`](crate::M5State::content_run_count) of the
     /// source's [`reading_surface`], which the arrangement answers without
     /// reading a run.
+    ///
+    /// THE ATTESTED ARM (signed ops): the transaction commits under the
+    /// handle's attestation where it carries one — a `version` landing in
+    /// the published world is a publish-class act, signed over the parent
+    /// account the member or the fresh document is minted under, with an
+    /// EMPTY body — and with the slot empty otherwise, the kernel's arm being
+    /// `transact` itself under `None`.
     pub fn version(
         &self,
         principal: PrincipalId,
@@ -209,7 +216,7 @@ where
             }
         };
         let keys = [key, head_lock_key(source)];
-        self.kernel.transact(&keys, |stg| {
+        self.kernel.transact_attested(&keys, self.attest, |stg| {
             let m3 = stg.working().m3();
             // PUB-8.16/8.17: resolve the three-valued flag off this
             // composite's OWN working state — `Some(b)` ⇒ `b`, ABSENT ⇒

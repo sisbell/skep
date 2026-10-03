@@ -53,19 +53,20 @@ where
     /// operation carries an `at` of its own (a `VPos`). Those are the only
     /// two spellings; a third would make one concept read as two.
     ///
-    /// THE ATTESTATION (signed ops) rides EVERY M5 and M7 driver a write
-    /// acquires — [`Stores::vstream_attested`] and
-    /// [`Stores::linkstore_attested`] — and which of a store's transactions it
-    /// signs is that store's alone, stated on its handle's `attest` field: a
-    /// handle built with a value fills no signature slot outside the
-    /// transactions its store signs. So this table holds no copy of the
-    /// checked set — skepd's name for the writes an attestation is admitted
-    /// on, `insert`, `make_link` and `publish` — and widening it is the
-    /// stores' and the transport's work. The namespace writes acquire a driver
-    /// that takes none, so there it is dropped. Nothing is classified,
-    /// verified or filtered here: the value arrives ADMITTED by the dispatched
-    /// write path's check, or not at all.
+    /// THE ATTESTATION (signed ops) rides EVERY M3, M5 and M7 driver a write
+    /// acquires — [`Stores::namespace_attested`] on the two document mints,
+    /// [`Stores::vstream_attested`] and [`Stores::linkstore_attested`] — and
+    /// which of a store's transactions it signs is that store's alone, stated
+    /// on its handle's `attest` field: a handle built with a value fills no
+    /// signature slot outside the transactions its store signs. So this table
+    /// holds no copy of the checked set — skepd's name for the writes an
+    /// attestation is admitted on, the ten publish-class kinds — and widening
+    /// it is the stores' and the transport's work. `delegate` and
+    /// `register_node` acquire the plain namespace driver, so there it is
+    /// dropped. Nothing is classified, verified or filtered here: the value
+    /// arrives ADMITTED by the dispatched write path's check, or not at all.
     ///
+    /// [`Stores::namespace_attested`]: crate::Stores::namespace_attested
     /// [`Stores::vstream_attested`]: crate::Stores::vstream_attested
     /// [`Stores::linkstore_attested`]: crate::Stores::linkstore_attested
     pub(super) fn dispatch_write(
@@ -100,7 +101,7 @@ where
             Op::CreateNewDocument { account, published } => {
                 let (addr, at) = self
                     .stores
-                    .namespace()
+                    .namespace_attested(attest)
                     .create_new_document(wc.principal, &account, published)
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
@@ -135,7 +136,7 @@ where
             Op::Fork { published } => {
                 let (addr, at) = self
                     .stores
-                    .namespace()
+                    .namespace_attested(attest)
                     .fork(wc.principal, published)
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })

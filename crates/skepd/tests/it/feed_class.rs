@@ -420,7 +420,11 @@ fn build(port: u16) -> Board {
 
     // The straddles (PUB-6.46, PUB-6.47): a draft-homed nullify of a public
     // link; the same-home retraction beside it; an edit_link with d_s
-    // public and d_a a draft.
+    // public and d_a a draft. Each lands in the published world from A's
+    // signed session, so each is attested (`nullify` and `edit_link` are of
+    // the checked set) — and each straddle's `attest` is served to the
+    // classes that read its draft home WHOLE and withheld from the classes
+    // that reduce it (mi7-E2; the oracle's own rule, `expected`).
     write(
         &mut log,
         port,
@@ -428,7 +432,7 @@ fn build(port: u16) -> Board {
         "nullify",
         &format!(r#"{{"op":"nullify","home":"{d1}","target":"{l1}"}}"#),
         Some(vec![d1.clone(), a_doc1.clone()]),
-        Hand::Key,
+        Hand::Attest,
     );
     write(
         &mut log,
@@ -437,7 +441,7 @@ fn build(port: u16) -> Board {
         "nullify",
         &format!(r#"{{"op":"nullify","home":"{a_doc1}","target":"{l2}"}}"#),
         Some(vec![a_doc1.clone()]),
-        Hand::Key,
+        Hand::Attest,
     );
     write(
         &mut log,
@@ -448,7 +452,7 @@ fn build(port: u16) -> Board {
             r#"{{"op":"edit_link","original":"{l3}","d_s":"{a_doc1}","d_a":"{d1}","successor":{{"from":[],"to":[],"ty":{{"addrs":["{a_doc1}.0.3.6.9"]}}}}}}"#
         ),
         Some(vec![a_doc1.clone(), d1.clone()]),
-        Hand::Key,
+        Hand::Attest,
     );
 
     // A tail past the straddles: one more draft write, and a declared
@@ -551,7 +555,10 @@ fn under_prefix(prefix: &str, doc: &str) -> bool {
 /// over the visible stream. Returns `(entries, last, more)`, each entry the
 /// WHOLE object the page is owed — `at`, `docs` reduced, `op`, and the
 /// members the fixture stated for the write (its hand, its terms) —
-/// everything but `time`, the one field a live daemon cannot reproduce.
+/// everything but `time`, the one field a live daemon cannot reproduce; and
+/// ONE member the reduction itself withholds (mi7-E2; SO-I5 (e)): a row
+/// whose `docs` the class REDUCES carries no `attest`, whatever hand the
+/// fixture stated — the third absence, beside LOST and NEVER.
 fn expected(
     log: &[Entry],
     drafts: &BTreeSet<String>,
@@ -574,11 +581,15 @@ fn expected(
         if n.drafts && !reduced.iter().any(|d| drafts.contains(d)) {
             continue;
         }
+        let whole = reduced.len() == e.docs.len();
         let mut entry = Map::new();
         entry.insert("at".into(), Value::Number(e.at.into()));
         entry.insert("docs".into(), Value::Array(reduced.into_iter().map(Value::String).collect()));
         entry.insert("op".into(), Value::String(e.op.into()));
         for (k, v) in &e.rest {
+            if k == "attest" && !whole {
+                continue; // the third absence: a reduced row serves no signature
+            }
             entry.insert(k.clone(), v.clone());
         }
         visible.push(Value::Object(entry));
@@ -764,6 +775,32 @@ fn every_page_of_every_class_is_the_oracle_s_walk() {
     // …and as the owner: whole.
     let (page, ..) = actual(port, Some(&board.a), &query(n1 - 1, 1, Narrowing { under: None, drafts: false }));
     assert_eq!(docs_of(&page[0]), vec![board.d1.clone(), board.a_doc1.clone()], "the owner sees [D, T], home first");
+
+    // ── 3b. THE THIRD ABSENCE (mi7-E2; SO-I5 (e)): the two straddles are
+    //    ATTESTED — signed writes into the published world — and their rows
+    //    carry the request's own `attest` to the OWNER, who reads D1 whole,
+    //    while the GUEST and the non-entitled C, for whom the row REDUCES to
+    //    the public home, are served NEITHER `attest` nor `key`: the verdict
+    //    is undeterminable from their feed, a signature over the withheld
+    //    home being a function of it that would confirm a guess at it. The
+    //    same-home retraction between them reduces nothing and carries its
+    //    `attest` to every class. ──
+    let signed = |at: u64| &board.log.iter().find(|e| e.at == at).expect("logged").rest["attest"];
+    for (at, straddles) in [(n1, true), (n2, false), (el, true)] {
+        let (page, ..) = actual(port, Some(&board.a), &query(at - 1, 1, Narrowing { under: None, drafts: false }));
+        assert_eq!(&page[0]["attest"], signed(at), "the owner's row at {at} carries the request's attest");
+        assert!(page[0].get("key").is_none(), "a signed row carries no key: {}", page[0]);
+        for (class, token) in [("the guest", None), ("non-entitled C", Some(board.c.as_str()))] {
+            let (page, ..) = actual(port, token, &query(at - 1, 1, Narrowing { under: None, drafts: false }));
+            assert_eq!(at_of(&page[0]), at, "{class} sees the row at {at}");
+            if straddles {
+                assert!(page[0].get("attest").is_none(), "{class}: a reduced row serves no attest: {}", page[0]);
+                assert!(page[0].get("key").is_none(), "{class}: nor a key: {}", page[0]);
+            } else {
+                assert_eq!(&page[0]["attest"], signed(at), "{class}: an unreduced row serves its attest");
+            }
+        }
+    }
 
     // ── 5. `under=`: a guest's page under a draft is EMPTY; B's drafts-only
     //    page under D1 is the oracle's walk over D1 — its run, AND the two

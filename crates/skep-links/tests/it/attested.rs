@@ -1,8 +1,8 @@
-//! THE ATTESTED WRITER (signed ops, the seam build; the confirmed placement):
-//! `LinkWriter::attested`'s `makelink` commits under the attestation it
-//! carries and the kernel reads it back at that boundary alone — a plain
-//! writer's `makelink`, and the attested writer's other link writes, leave
-//! their slots empty. No driver method signature moves.
+//! THE ATTESTED WRITER (signed ops; the confirmed placement): every link
+//! write of a `LinkWriter::attested` commits under the attestation it
+//! carries — `makelink`, `nullify` and the rest, each one transaction — and
+//! the kernel reads it back at exactly those boundaries, while a plain
+//! writer's leave their slots empty. No driver method signature moves.
 
 use crate::common::*;
 
@@ -25,8 +25,13 @@ fn journaled(dir: &std::path::Path) -> Kernel<World> {
     Kernel::open(cfg, genesis_world()).expect("journaled open")
 }
 
+/// Every link write of the attested writer fills its own transaction's slot
+/// — the `makelink` and the `nullify` here, the other three being driven
+/// through the same arm and pinned at the surface where they are dispatched
+/// — and the plain writer's fills none (SO-I4: every publishing act above
+/// the claim is signed).
 #[test]
-fn an_attested_writer_fills_the_slot_of_its_own_makelink_alone() {
+fn an_attested_writer_fills_the_slot_of_each_of_its_own_link_writes() {
     let dir = tempdir().expect("tempdir");
     let k = journaled(dir.path());
     seed_content(&k, &doc1(), 4);
@@ -53,12 +58,12 @@ fn an_attested_writer_fills_the_slot_of_its_own_makelink_alone() {
             SlotArg::Addrs(vec![unregistered_ta(14)]),
         )
         .expect("makelink");
-    // The attested writer's `nullify` — outside the slice — takes the plain
-    // arm: the retraction of the plain link commits with an empty slot.
+    // The attested writer's `nullify` commits under the same attestation:
+    // the retraction of the plain link fills its own transaction's slot.
     let (_, s_null) = attested.nullify(P1, &doc1(), &plain_link).expect("nullify commits");
     assert_eq!(k.attestation_at(s_plain).unwrap(), None, "the plain writer's makelink");
-    assert_eq!(k.attestation_at(s_att).unwrap(), Some(tag1), "the attested makelink");
-    assert_eq!(k.attestation_at(s_null).unwrap(), None, "nullify takes the plain arm");
+    assert_eq!(k.attestation_at(s_att).unwrap(), Some(tag1.clone()), "the attested makelink");
+    assert_eq!(k.attestation_at(s_null).unwrap(), Some(tag1), "the attested nullify");
     // `attested(…, None)` is `new` exactly.
     let (_, s_none) = LinkWriter::attested(&k, &ALL_VISIBLE, None)
         .makelink(

@@ -110,14 +110,18 @@ pub type Visibility<'a, W> = dyn Fn(&W, &Address) -> bool + Send + Sync + 'a;
 pub struct LinkWriter<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
     visibility: &'k Visibility<'k, W>,
-    /// THE ATTESTATION this handle's `makelink` commits under (signed ops):
+    /// THE ATTESTATION this handle's link writes commit under (signed ops):
     /// handed to the kernel's `transact_attested` arm at the one transaction
-    /// that write opens, filling THAT commit marker's signature slot; `None`
-    /// — the plain handle — leaves it empty. A borrow, held beside the
-    /// visibility class for the one call this handle serves. The other link
-    /// writes (`emit`, `nullify`, `assert_sup`, `editlink`) take the plain
-    /// arm whatever this field holds: outside the seam build's slice, a
-    /// handle built with a value fills no slot through them.
+    /// each of the five publish-class link writes opens — `makelink` in both
+    /// forms, `emit`, `nullify`, `assert_sup`, `editlink` — filling THAT
+    /// commit marker's signature slot; `None` — the plain handle — leaves it
+    /// empty. A borrow, held beside the visibility class for the one call
+    /// this handle serves: a handle serves exactly one call, which is exactly
+    /// one transaction, so one admitted value fills one slot. The BH4 batch
+    /// (`retract_stale`) drives `nullify` once per target and would fill
+    /// each of its commits under one value, which no caller does: it is
+    /// reached by no dispatched write and served under no shipped
+    /// registration, and the handles that could reach it are plain.
     attest: Option<&'k Attestation>,
 }
 
@@ -184,7 +188,7 @@ where
     }
 
     /// THE ATTESTED CONSTRUCTOR (signed ops; the confirmed placement): a
-    /// writer whose `makelink` commits under `attest`. Its callers are the
+    /// writer whose link writes commit under `attest`. Its callers are the
     /// slot's producer set — M10's dispatch, with a value the daemon's check
     /// admitted — and nothing else; `None` is [`LinkWriter::new`].
     pub fn attested(
@@ -790,7 +794,18 @@ pub const MAX_SLOT_RESOLVE_STEPS: usize = 64 * MAX_SLOT_SPANS;
 ///
 /// `Addrs`: the canonical name encoding, deposited unresolved, one span per
 /// name, counted before the encoding is built and commanding no walk.
-fn slot_endset(m5: &M5State, arg: &SlotArg) -> Option<Endset> {
+///
+/// PUBLIC for one caller beside [`LinkWriter::makelink`]: the daemon's
+/// composer of a MAKELINK's entry frame (signed ops), which composes each
+/// slot's row from THE ENDSET THIS TRANSACTION WILL DEPOSIT — the same
+/// function over the same base, under the daemon's serialization lock ahead
+/// of the transaction — so the signed row and the stored endset agree by
+/// construction, and charges the same two budgets there, passing a slot
+/// over either through to this crate's own refusal of it (`SlotTooLarge`).
+/// It reads the base and stages nothing: a caller that resolves through it
+/// off a snapshot the transaction will not open on composes the base's
+/// endset, not the transaction's.
+pub fn slot_endset(m5: &M5State, arg: &SlotArg) -> Option<Endset> {
     match arg {
         SlotArg::Resolve(specs) => {
             let mut spans: Vec<Span> = Vec::new();
@@ -1151,7 +1166,10 @@ where
         }
         let value = Link::triple(enc([from]), enc(to), ty.clone());
         let keys = deposit_lock_set(&value, home);
-        self.kernel.transact(&keys, |stg| {
+        // The attested arm (signed ops): `transact` itself where this handle
+        // carries no attestation, else the same commit with its marker's
+        // signature slot filled. A dedup hit commits nothing and fills none.
+        self.kernel.transact_attested(&keys, self.attest, |stg| {
             Ok(emit_core(stg, self.visibility, caller, home, value, Gate::Managed)?.address())
         })
     }
@@ -1216,7 +1234,8 @@ where
         let retraction = registry().reserved_type(ShippedType::Retraction).clone();
         let value = Link::triple(enc([home]), enc([target]), retraction);
         let keys = deposit_lock_set(&value, home);
-        self.kernel.transact(&keys, |stg| {
+        // The attested arm (signed ops), as `emit`'s.
+        self.kernel.transact_attested(&keys, self.attest, |stg| {
             {
                 let base = stg.base();
                 home_gate(base.m3(), caller, &[home])?; // P0 then ω on home
@@ -1265,7 +1284,8 @@ where
         let sup = registry().reserved_type(ShippedType::Supersedes).clone();
         let value = Link::triple(enc([old]), enc([new]), sup);
         let keys = deposit_lock_set(&value, home);
-        self.kernel.transact(&keys, |stg| {
+        // The attested arm (signed ops), as `emit`'s.
+        self.kernel.transact_attested(&keys, self.attest, |stg| {
             {
                 let base = stg.base();
                 // P0 then ω on home, before the endpoint verdicts.
@@ -1347,7 +1367,9 @@ where
         let sup = registry().reserved_type(ShippedType::Supersedes).clone();
         let sup_class = registry().shipped_class(ShippedType::Supersedes);
         let r_class = registry().shipped_class(ShippedType::Retraction);
-        self.kernel.transact(&keys, |stg| {
+        // The attested arm (signed ops): one attestation over the one
+        // transaction both deposits ride, as `makelink_replacing`'s pair.
+        self.kernel.transact_attested(&keys, self.attest, |stg| {
             {
                 let base = stg.base();
                 // P0 on both homes, then ω on both: the successor deposits

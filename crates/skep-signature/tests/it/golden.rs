@@ -1,21 +1,23 @@
 //! THE GOLDENS (the frozen-tag rule's pin), beside the one implementation
 //! they pin: per tag, one seed through the KDF to both public keys and the
-//! fingerprint; the four grammars' signatures over fixed entry frames (the
-//! `record` grammar at three kinds); tag 1's signatures byte-stable (FIPS
-//! 204's deterministic variant), tag 3's under the fixtures' seeded RNG; the
-//! hybrid cross-check; tag 1 DIFFERENTIAL against a second pure-Rust FIPS 204
-//! crate — keys-from-seed and signatures byte-equal; the widths each pinned
-//! crate fixes, pinned by hand beside the sizes and timings the report takes
-//! back; which FN-DSA backend signed them on this target; and the
-//! keygen-from-seed rule as `docs/wire.md` publishes it: its formula,
-//! recomputed from RFC 5869 against the KDF, and its two vectors, checked
-//! against the keys themselves.
+//! fingerprint; every op cell's signature over a fixed entry frame — the ten
+//! publish-class kinds and the `record` grammar at three kinds; tag 1's
+//! signatures byte-stable (FIPS 204's deterministic variant), tag 3's under
+//! the fixtures' seeded RNG; the hybrid cross-check; tag 1 DIFFERENTIAL
+//! against a second pure-Rust FIPS 204 crate — keys-from-seed and signatures
+//! byte-equal; the widths each pinned crate fixes, pinned by hand beside the
+//! sizes and timings the report takes back; which FN-DSA backend signed them
+//! on this target; and the keygen-from-seed rule as `docs/wire.md` publishes
+//! it: its formula, recomputed from RFC 5869 against the KDF, and its two
+//! vectors, checked against the keys themselves.
 
 use sha2::{Digest, Sha256};
 use skep_identity::{
-    entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_publish,
-    entry_body_record, entry_frame, BoardTerm, EntrySlot, Fingerprint, LinkSlots, RecordRows,
-    ShotBase, ShotSegmentPiece, SigAlgRow, ALG_MLDSA65_ED25519,
+    entry_body_assert_sup, entry_body_edit_link, entry_body_emit, entry_body_empty,
+    entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_nullify,
+    entry_body_publish, entry_body_record, entry_frame, unit_span, BoardTerm, ContentFreeOp,
+    DocTerm, EntrySlot, Fingerprint, LinkSlots, RecordRows, ShotBase, ShotSegmentPiece,
+    SigAlgRow, ALG_MLDSA65_ED25519,
 };
 use skep_signature::{
     derive_half_seeds, pq_widths, verify, HybridFault, HybridSigner, PqWidths, SeededRng06,
@@ -51,27 +53,46 @@ fn addr(s: &str) -> skep_address::Address {
     skep_address::validate(skep_address::Tumbler::new(comps).unwrap()).unwrap()
 }
 
-/// The six fixed instances every golden signs: the frames of an `insert`
-/// (undeclared, two values), a `make_link` (three address-form slots), a
-/// `publish` (three values copied in, one window of two positions onto
-/// another document, the base `1.0.1.0.1.1` taken at three — the address
-/// form, l6-A4; the base member in the group since round 7, bu7-E2) and
-/// three `record`s (the frame merge, fm-I; the record grade, 2a): an
-/// enrol's kind — its type slot, one subject, neither optional row named, a
-/// short canonical body — a retire's kind beside it over the same subject,
-/// and the claim's — its type slot, the EMPTY target slot, no record at all
-/// (a claim carries none, AUTH-2.48), the body-bytes row empty — on a board
-/// whose `H.1` pair is `(12, 0xAB…)`, by account `1.0.1`.
-fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 6] {
-    let (account, doc) = (addr("1.0.1"), addr("1.0.1.0.1"));
+/// A stored content extent — a resolved slot's span — from its I-start and
+/// its width in positions, as a run's `iextent` spells one.
+fn extent(start: &str, width: u64) -> skep_address::Span {
+    let start = addr(start);
+    let depth = start.tumbler().len();
+    let mut comps = vec![skep_address::Nat::from(0u64); depth];
+    comps[depth - 1] = skep_address::Nat::from(width);
+    skep_address::Span::new(start.tumbler().clone(), skep_address::Tumbler::new(comps).unwrap())
+        .unwrap()
+}
+
+/// The thirteen fixed instances every golden signs, on a board whose `H.1`
+/// pair is `(12, 0xAB…)`, by account `1.0.1`: the frames of an `insert`
+/// (undeclared, two values), a `make_link` (three slots as stored: a unit
+/// type span, a unit `from`, the `to` EMPTY), a `publish` (three values
+/// copied in, one window of two positions onto another document, the base
+/// `1.0.1.0.1.1` taken at three — the address form, l6-A4; the base member
+/// in the group since round 7, bu7-E2) and three `record`s (the frame
+/// merge, fm-I; the record grade, 2a): an enrol's kind — its type slot, one
+/// subject, neither optional row named, a short canonical body — a retire's
+/// kind beside it over the same subject, and the claim's — its type slot,
+/// the EMPTY target slot, no record at all (a claim carries none,
+/// AUTH-2.48), the body-bytes row empty; then the seven cells D24 pinned: a
+/// `create_new_document`, a `fork` and a `version`, each the EMPTY body
+/// over the parent account `1.0.1`; a `nullify` of the link `…0.2.1` from
+/// its home, a `assert_sup` of that link by `…0.2.2`, an `emit` of the
+/// retired class over `1.0.1.0.2` with its `to` EMPTY (Unary), each the
+/// stored link's rows; and an `edit_link` of `…0.2.1` whose successor is
+/// homed in `1.0.1.0.2` with two resolved content extents and a named
+/// type, its claim homed in `1.0.1.0.1` — the pair's row as its `doc`.
+fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 13] {
+    let (account, doc, other) = (addr("1.0.1"), addr("1.0.1.0.1"), addr("1.0.1.0.2"));
+    let board = BoardTerm { log_position: 12, chain: [0xAB; 32] };
     let insert = entry_body_insert(None, [&b"a"[..], &b"b"[..]]);
-    let ty = [addr("1.1.0.1.0.1.0.3.90")];
-    let from = [addr("1.0.1")];
-    let to: [skep_address::Address; 0] = [];
+    let ty = [unit_span(&addr("1.1.0.1.0.1.0.3.90"))];
+    let from = [unit_span(&addr("1.0.1"))];
     let link = entry_body_make_link(LinkSlots {
-        from: EntrySlot::Addrs(&from),
-        to: EntrySlot::Addrs(&to),
-        ty: EntrySlot::Addrs(&ty),
+        from: EntrySlot(&from),
+        to: EntrySlot(&[]),
+        ty: EntrySlot(&ty),
     });
     let window = addr("1.0.1.0.2.0.1.1");
     let base_member = addr("1.0.1.0.1.1");
@@ -109,9 +130,59 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 6] {
         lineage_fork_point: None,
         sigless_canonical_record: b"",
     });
-    let board = BoardTerm { log_position: 12, chain: [0xAB; 32] };
-    [insert, link, publish, enrol, retire, claim]
-        .map(|body| (body.op(), entry_frame(alg, board, &account, &doc, &body)))
+    // The other link writes, over the stored link's unit spans: the link
+    // `1.0.1.0.1.0.2.1` retracted from its home, superseded by `…0.2.2`; a
+    // retired-class tuple over `1.0.1.0.2`, its `to` EMPTY.
+    let (l1, l2) = (unit_span(&addr("1.0.1.0.1.0.2.1")), unit_span(&addr("1.0.1.0.1.0.2.2")));
+    let (home, retraction) = (unit_span(&doc), unit_span(&addr("1.1.0.1.0.1.0.1.5")));
+    let supersedes = unit_span(&addr("1.1.0.1.0.1.0.1.4"));
+    let (retired, retired_doc) = (unit_span(&addr("1.1.0.1.0.1.0.1.3")), unit_span(&other));
+    let nullify = entry_body_nullify(LinkSlots {
+        from: EntrySlot(std::slice::from_ref(&home)),
+        to: EntrySlot(std::slice::from_ref(&l1)),
+        ty: EntrySlot(std::slice::from_ref(&retraction)),
+    });
+    let assert_sup = entry_body_assert_sup(LinkSlots {
+        from: EntrySlot(std::slice::from_ref(&l1)),
+        to: EntrySlot(std::slice::from_ref(&l2)),
+        ty: EntrySlot(std::slice::from_ref(&supersedes)),
+    });
+    let emit = entry_body_emit(LinkSlots {
+        from: EntrySlot(std::slice::from_ref(&retired_doc)),
+        to: EntrySlot(&[]),
+        ty: EntrySlot(std::slice::from_ref(&retired)),
+    });
+    // The edit: the successor's `from` and `to` resolved to content extents
+    // of `1.0.1.0.2` (five positions from its first, two from its sixth),
+    // its type a ghost name, the original `…0.2.1`'s unit span the fifth row.
+    let (s_from, s_to) = (extent("1.0.1.0.2.0.1.1", 5), extent("1.0.1.0.2.0.1.6", 2));
+    let s_ty = unit_span(&addr("1.0.1.0.3.0.2.1"));
+    let edit = entry_body_edit_link(
+        LinkSlots {
+            from: EntrySlot(std::slice::from_ref(&s_from)),
+            to: EntrySlot(std::slice::from_ref(&s_to)),
+            ty: EntrySlot(std::slice::from_ref(&s_ty)),
+        },
+        &l1,
+    );
+    let frame = |body: &skep_identity::EntryBody, term: DocTerm<'_>| {
+        (body.op(), entry_frame(alg, board, &account, term, body))
+    };
+    [
+        frame(&insert, DocTerm::One(&doc)),
+        frame(&link, DocTerm::One(&doc)),
+        frame(&publish, DocTerm::One(&doc)),
+        frame(&enrol, DocTerm::One(&doc)),
+        frame(&retire, DocTerm::One(&doc)),
+        frame(&claim, DocTerm::One(&doc)),
+        frame(&entry_body_empty(ContentFreeOp::CreateNewDocument), DocTerm::One(&account)),
+        frame(&entry_body_empty(ContentFreeOp::Fork), DocTerm::One(&account)),
+        frame(&entry_body_empty(ContentFreeOp::Version), DocTerm::One(&account)),
+        frame(&nullify, DocTerm::One(&doc)),
+        frame(&assert_sup, DocTerm::One(&doc)),
+        frame(&emit, DocTerm::One(&doc)),
+        frame(&edit, DocTerm::Pair { d_s: &other, d_a: &doc }),
+    ]
 }
 
 // ── the goldens ─────────────────────────────────────────────────────────────
@@ -126,35 +197,43 @@ const GOLDEN_SEED: [u8; 32] = [
 ];
 
 /// The seed of the fixtures' stream the tag-3 golden signatures draw their
-/// per-signature seeds from — `GOLDEN_SEED`'s bytes reused, so those six
-/// pins depend on the key seed twice: through the key and through the stream.
+/// per-signature seeds from — `GOLDEN_SEED`'s bytes reused, so those
+/// thirteen pins depend on the key seed twice: through the key and through
+/// the stream.
 const GOLDEN_STREAM_SEED: [u8; 32] = GOLDEN_SEED;
 
 /// One tag's golden, in the documented form: the SHA-256 of the PQ public
 /// half, of the Ed25519 public half, of the whole raw key; the fingerprint;
-/// and per grammar the SHA-256 of the signature blob — the frames themselves
+/// and per op cell the SHA-256 of the signature blob — the frames themselves
 /// pinned byte for byte by skepd's `the_entry_frames_bytes_per_op_are_pinned`.
 /// The `make_link` signatures moved with the replay fix (PUB-5.15): the body
 /// gained its `replaces` row, an EMPTY group in this member-less frame, in
-/// place under `skep-entry-v1` (l6-A3). The `publish` signatures moved with
-/// the publish re-pin of 2026-09-29 (V, l6-A4, D25's (c′)): the body became
-/// the count, the runs in the address form and the base-extent group, in
-/// place under the same tag, and the fixed instance gained a window and a
-/// base — and moved ONCE MORE at round 7 (bu7-E2 ARM (a), 2026-10-02; still
-/// in place under `skep-entry-v1`, l6-A3): the base group gained the base
-/// MEMBER's address beside the extent, the fixed publish frame growing by
-/// the member's slot row, twenty-four bytes; and the `record` signatures
-/// were minted at the frame merge, its fourth grammar (fm-I) — the enrol's,
-/// which the record grade's build (2a) left unmoved, pinning the retire's
-/// and the claim's beside it. The keys, the fingerprints and the `insert`
-/// signatures have not moved since the tag was pinned.
+/// place under `skep-entry-v1` (l6-A3) — and ONCE MORE with the slot row's
+/// re-pin (ap6-3, d24-2; still in place under `skep-entry-v1`): the three
+/// slots are signed AS STORED, each a `0x03` row of spans, so the fixed
+/// make_link frame grew by its two unit spans' widths. The `publish`
+/// signatures moved with the publish re-pin of 2026-09-29 (V, l6-A4, D25's
+/// (c′)): the body became the count, the runs in the address form and the
+/// base-extent group, in place under the same tag, and the fixed instance
+/// gained a window and a base — and moved ONCE MORE at round 7 (bu7-E2 ARM
+/// (a), 2026-10-02; still in place under `skep-entry-v1`, l6-A3): the base
+/// group gained the base MEMBER's address beside the extent, the fixed
+/// publish frame growing by the member's slot row, twenty-four bytes; the
+/// `record` signatures were minted at the frame merge, its fourth grammar
+/// (fm-I) — the enrol's, which the record grade's build (2a) left unmoved,
+/// pinning the retire's and the claim's beside it — and stood through the
+/// slot row's re-pin, their two slot rows staying under `0x01` (d24-4); and
+/// the seven cells of the ten D24 pinned were minted with the widening, the
+/// three EMPTY bodies, the three other link writes and the `edit_link`. The
+/// keys, the fingerprints and the `insert` signatures have not moved since
+/// the tag was pinned.
 struct TagGolden {
     tag: u8,
     pq_pk: &'static str,
     ed_pk: &'static str,
     raw_key: &'static str,
     fingerprint: &'static str,
-    sigs: [&'static str; 6],
+    sigs: [&'static str; 13],
 }
 
 /// One fixed frame, signed: its op's name, the frame's bytes and the
@@ -210,8 +289,9 @@ fn check_golden(g: &TagGolden) {
 }
 
 /// TAG 1's GOLDEN: the KEY-DERIVATION golden (seed → KDF → both public
-/// keys → fingerprint) and the six fixed frames' signatures, byte-stable under
-/// FIPS 204's deterministic variant and Ed25519's own determinism.
+/// keys → fingerprint) and the thirteen fixed frames' signatures,
+/// byte-stable under FIPS 204's deterministic variant and Ed25519's own
+/// determinism.
 #[test]
 fn golden_tag_1_mldsa65_ed25519() {
     check_golden(&TagGolden {
@@ -222,18 +302,25 @@ fn golden_tag_1_mldsa65_ed25519() {
         fingerprint: "8c7d0b0e21969ffa5039ccebce2c857614740c3be9498ab8c697bc9320c30623",
         sigs: [
             "2892943416a13f80eeb95f4c8bd55f115d7248324c433bffbeaf7f0501828148",
-            "9d47fea8f8cc6077222b89060ebcc69b93d7d9b228c1a9196f324ee3a80119d0",
+            "66f4f573eaf53426b5a3d4d360a06d98df61ca6d0578fa5fe5aadc92c9c32bb0",
             "b433f7cd372e1bd8073f1b3222eba5b06976ee47734b66e761a3493d2c0deac0",
             "28c70f669d44919062bf99a79cec75a973c7f6acaf315991a53daea054b7f508",
             "abb554df48572fb1fbfa72445b1ef8024dd6fd2c8889ed33cc1a756d5a9a07c3",
             "4c367931a56e731f01c0f5dc19d4d79d7be5b459c3cc113cbf946fe54cf90472",
+            "cf8c0a4ffd3e6a77b7eda2443c2cad4ccf998f255c119d6eb507d20d68073c60",
+            "002fbd1c5cd08cd8726f163db8810e647246b4ab04ea2236fe773c89f3f90024",
+            "69438cf67ea4ae427185e7b6cdf153935df95c277ff075441716aa145cd40836",
+            "87993cf5652f6cb0c71de67152615f67b66300534b7d0f8282bf119c48959c02",
+            "4979c2918ea65effe9786f37f0c17507542552fa3f77905d872bd3b0c11ddeb4",
+            "bb1e5dd0f0d3eb078fefc15c45742dadf0799e7fe299db0d2ceac3ea8059d972",
+            "d2257f46aa5bc456f5012509ad36a5a8fe59c6fdac7cd6f8b1649653c2b95c13",
         ],
     });
 }
 
 /// TAG 3's GOLDEN (the PREVIEW): the KEY-DERIVATION golden — `fn-dsa`
 /// 0.4.0's keygen from the KDF's seed IS the tag's frozen keygen rule — and
-/// the six signatures under the fixtures' seeded RNG (FN-DSA signing is
+/// the thirteen signatures under the fixtures' seeded RNG (FN-DSA signing is
 /// randomized by the draft's own rule; what the tag freezes is the key, the
 /// frame and the verify, and the fixture's RNG makes the bytes reproducible
 /// here).
@@ -247,11 +334,18 @@ fn golden_tag_3_fndsa512_preview_ed25519() {
         fingerprint: "d38e5be29f0c62fe1a51cb09d00250ea18bfd2ba799536c0596077d1d1d65fca",
         sigs: [
             "da92e3fc0247d5f39ed149f574a6c18cc1bf959a4f167ba33d381a955ed95779",
-            "a7bc27e514b92dd4bc23f1c69ec46ad010cca17a22eada4f944e0f31edfd7d75",
+            "be84ffa9151b386e184f89530add29898fb70808537dc8b2bd044c290a1173cb",
             "5df7ecb18a4809f0f6dad4a3db1cecfe946724d66024e66ff78d4fb92c5046a6",
             "38b456b9f4413a0f6164aad2e0cc3e9e8b35b8534c915f465992391cf71b03ad",
             "7399b23baaae2e1a1bdc85eb74bfc6b88f76029bf3e17857635c86b9e106eab1",
             "7807cbba98e2e04fa7647c50baeacdaefb44fbf477fd9ee3f71095f47d1fe37d",
+            "8aa28f13cdcf1d3d7eae7333123a111cd099a56752edad5ce1e90a0d82cd581d",
+            "8cc3a677839554c92ef680e8e890f4005b86e9bb02db6693a6566da55d376f85",
+            "e8b3180c3e5e756e8c92b43c8f26a079f9c2427d207d03cbe3c6d2311deea456",
+            "c20031b32997b4a332d318caebd02844e31f9c2779d1e5bc091bbf31f6cbd711",
+            "8dbf24acd9767066804d04d1bc1c4d7b5e7e5cbce18bb36ce3d44b4c4ee5af01",
+            "cff4019b429c51d254eebfb0e416a275c53ac839789585d2409014fcdc025b28",
+            "68bd991afd3b4f9283f12027cf51f914f437f3952aba3afbdd7be974b07c5cc0",
         ],
     });
 }
@@ -262,30 +356,39 @@ fn golden_tag_3_fndsa512_preview_ed25519() {
 /// under tag 1's `alg` token — preimages and not signatures, since tag 3's
 /// signing is randomized — byte-asserted, so a member silently absent from a
 /// body (round 7's BLOCKER: the base member the `publish` body did not carry)
-/// fails the build here, whatever the signatures over it do. The six fixed
-/// frames above cover `insert` (undeclared), `make_link` WITHOUT its
-/// `replaces` row, `publish` with a value stretch, a window and the base
-/// group FILLED, and the three `record`s (rows 3 and 4 EMPTY); this table
-/// adds the cells they leave out — an `insert` DECLARED under a type, a
-/// `make_link` WITH its `replaces` row, the `publish` BIRTH SHAPE with the
-/// EMPTY group — and pins the six beside them, so one table names every
-/// cell with its preimage's length. The frames are the twins skepd pins byte
-/// for byte (`the_entry_frames_bytes_per_op_are_pinned`); the pin here is
-/// the hash a second implementation checks against.
+/// fails the build here, whatever the signatures over it do. The thirteen
+/// fixed frames above cover `insert` (undeclared), `make_link` WITHOUT its
+/// `replaces` row over unit spans and the EMPTY `to`, `publish` with a value
+/// stretch, a window and the base group FILLED, the three `record`s (rows 3
+/// and 4 EMPTY), the three EMPTY bodies over the parent account, the three
+/// other link writes over the stored link and the `edit_link` with its
+/// pair's row and resolved extents; this table adds the cells they leave
+/// out — an `insert` DECLARED under a type, a `make_link` WITH its
+/// `replaces` row, a `make_link` whose `to` is a RESOLVED content extent
+/// (the slot a V-spec stores as, §7.6's vector (vii)), the `publish` BIRTH
+/// SHAPE with the EMPTY group — and pins the thirteen beside them, so one
+/// table names every cell with its preimage's length. The frames are the
+/// twins skepd pins byte for byte (`the_entry_frames_bytes_per_op_are_pinned`);
+/// the pin here is the hash a second implementation checks against.
 #[test]
 fn the_frame_preimage_per_op_cell_is_pinned() {
     let alg = ALG_MLDSA65_ED25519;
-    let six = fixed_frames(alg);
+    let thirteen = fixed_frames(alg);
     let (account, doc) = (addr("1.0.1"), addr("1.0.1.0.1"));
     let board = BoardTerm { log_position: 12, chain: [0xAB; 32] };
-    let frame = |body: &skep_identity::EntryBody| entry_frame(alg, board, &account, &doc, body);
+    let frame = |body: &skep_identity::EntryBody| entry_frame(alg, board, &account, DocTerm::One(&doc), body);
     let declared = entry_body_insert(Some(&addr("1.1.0.1.0.1.0.3.1")), [&b"r"[..]]);
-    let (ty, from) = ([addr("1.1.0.1.0.1.0.3.90")], [addr("1.0.1")]);
-    let to: [skep_address::Address; 0] = [];
+    let (ty, from) = ([unit_span(&addr("1.1.0.1.0.1.0.3.90"))], [unit_span(&addr("1.0.1"))]);
     let replacing = entry_body_make_link_replacing(
-        LinkSlots { from: EntrySlot::Addrs(&from), to: EntrySlot::Addrs(&to), ty: EntrySlot::Addrs(&ty) },
+        LinkSlots { from: EntrySlot(&from), to: EntrySlot(&[]), ty: EntrySlot(&ty) },
         &addr("1.0.1.0.1.0.2.9"),
     );
+    let resolved_to = [extent("1.0.1.0.2.0.1.1", 5)];
+    let resolved = entry_body_make_link(LinkSlots {
+        from: EntrySlot(&from),
+        to: EntrySlot(&resolved_to),
+        ty: EntrySlot(&ty),
+    });
     let window = addr("1.0.1.0.2.0.1.1");
     let birth = entry_body_publish(
         [
@@ -297,20 +400,32 @@ fn the_frame_preimage_per_op_cell_is_pinned() {
         ],
         None,
     );
-    let [(_, insert), (_, link), (_, publish), (_, enrol), (_, retire), (_, claim)] = six;
+    let [(_, insert), (_, link), (_, publish), (_, enrol), (_, retire), (_, claim), (_, create), (_, fork), (_, version), (_, nullify), (_, assert_sup), (_, emit), (_, edit)] =
+        thirteen;
     // The publish cell's preimage grew by the base member's slot row — 185
-    // to 209 bytes — at round 7's re-pin; every other cell is as the seam
-    // build, the replay fix and the frame merge left it.
-    let cells: [(&str, Vec<u8>, usize, &str); 9] = [
+    // to 209 bytes — at round 7's re-pin; the make_link cells grew by their
+    // two unit spans' delimited widths — 177 to 207 and 205 to 235 — at the
+    // slot row's re-pin, which minted the resolved cell and the seven D24
+    // cells beside them; every other cell is as the seam build, the replay
+    // fix and the frame merge left it.
+    let cells: [(&str, Vec<u8>, usize, &str); 17] = [
         ("insert, undeclared", insert, 134, "d84853b3c36c8bf452ec57e662c57911eae550193a6c9cf6e8c468ecf118efe2"),
         ("insert, declared", frame(&declared), 146, "199775c4e92c52b6b49b7fb702de449690f2b6be837b5f72d07cb640176aed26"),
-        ("make_link, no replaces", link, 177, "771e9abeee6ee4e307dbae7d655dba54aa1b2e258e8234370e51eaa8a51d72f8"),
-        ("make_link, replacing", frame(&replacing), 205, "846ae75615cf2e20895718414f475a43648f3ac3d183ddc1c7d89335c6bb82d7"),
+        ("make_link, no replaces", link, 207, "c31ac3319996a82e6900d2571724d5b8ae69616fd2c3f785535bb09f63e880f5"),
+        ("make_link, replacing", frame(&replacing), 235, "c18ce6f345cde5d15dcd2883d6be46b693fdaf87e0059dab6bdd1ecd1c093da3"),
+        ("make_link, a resolved to", frame(&resolved), 245, "daea951d32f82858d99ea5e0500feceec7ae5d926d2ee5375f7392b48a95cd7b"),
         ("publish, the base filled", publish, 209, "774ae1d5bd454d7eb59ae7f3f3027a2f7cbc927c855036a9cbdda2b0664a6945"),
         ("publish, the birth shape", frame(&birth), 167, "34e6abd5f4dc9dac148a29b6dcddf040918730e45bd510d91cff262308e88e6f"),
         ("record, enroll", enrol, 194, "e15f5fce4fd268e3064237c413eb6d7fb25f67269c6d7f0b046b26c72a9dfc60"),
         ("record, retire", retire, 194, "e60761e01fbd6785680b07833fd9618de55150aacefaee1d3e1ebf75ae42918a"),
         ("record, claim", claim, 163, "e5f5b1a5b96c2f7ce52cf32c8ef6f59a8ea56e882f7e5181456feb511b74b15f"),
+        ("create_new_document, the empty body", create, 121, "a7c1b8b81d99252b51dcd44f342ab306f5db48a0226f43d41b5352b136c15fd5"),
+        ("fork, the empty body", fork, 106, "a1225f6e56bf757f138ebb8471b417dbce494effff30f959840b99bfcf77eed2"),
+        ("version, the empty body", version, 109, "6f593040109dc5cf8932bb1c7d690fb053339fdba2ac196aee60ae74e833f1f6"),
+        ("nullify", nullify, 250, "662660f94fedf12edec1f1a6aac041f953344dc3c4214b3021c3cee880662d1b"),
+        ("assert_sup", assert_sup, 265, "9fd23e8ac0bb18347353b830fbc5bbbd0f68a268bd45451651c18d854aff54cc"),
+        ("emit, the to empty", emit, 209, "e7b6e747a67f7d0f3545ae31f096c82df586c07e51c9d3537482bd8e22288d10"),
+        ("edit_link, the pair row", edit, 333, "86c04744e99ffe3317c82e6283afa645e4601e177474fbf5f2eb61c80a39e09c"),
     ];
     let got: Vec<(&str, usize, String)> =
         cells.iter().map(|(cell, bytes, ..)| (*cell, bytes.len(), sha_hex(bytes))).collect();

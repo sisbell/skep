@@ -189,6 +189,10 @@ pub use reject::{Disposition, FaultSite, RejectCode, Rejection};
 pub use request::{Op, OpKind, ReqId, Request, SuccessorSpec, MAX_REQ_ID_BYTES};
 pub use response::{BirthVersion, EditionClaim, Response, UniversalGrant};
 pub use session::SessionId;
+// EDITLINK's successor build, for the daemon's composer of its entry frame
+// (signed ops): the one function the dispatch and the composer both resolve
+// a successor's V-specs through, so the two cannot disagree.
+pub use successor::{successor_link, Judgment};
 pub use world::{FebeWorld, PublicationWorld, ReadableWorld, Stores, UniversalIndexRow};
 
 // Every upstream type or constructor named on the request/response path, plus

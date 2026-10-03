@@ -10,7 +10,7 @@
 use std::fmt;
 
 use skep_address::{parent, validate, Address, Level, Tumbler};
-use skep_kernel::{Kernel, Seq, TxnError, WorldState};
+use skep_kernel::{Attestation, Kernel, Seq, TxnError, WorldState};
 
 use crate::error::{CreateDocumentError, DelegateError, RegisterNodeError};
 use crate::state::{
@@ -43,21 +43,45 @@ use crate::HasM3;
 /// `Unencodable`, `OverBudget` and `Durability`.
 pub struct Namespace<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
+    /// THE ATTESTATION this handle's two document mints commit under (signed
+    /// ops) — [`Namespace::create_new_document`] and [`Namespace::fork`],
+    /// which opens that same transaction — the two ops of this surface in
+    /// the daemon's checked set, a mint born published signing an EMPTY body
+    /// over its parent account: handed to the kernel's `transact_attested`
+    /// arm at the one transaction each opens, filling THAT commit marker's
+    /// signature slot; `None` — the plain handle every other constructor
+    /// site builds — leaves the slot empty. A BORROW, so the handle stays
+    /// `Copy` and the value cannot outlive the caller that owns it for the
+    /// one call this handle serves. `delegate` and `register_node` lie
+    /// outside the checked set and take the plain arm whatever this field
+    /// holds.
+    attest: Option<&'k Attestation>,
 }
 
 impl<'k, W: WorldState> Namespace<'k, W> {
-    /// Borrow the engine's kernel — the handle holds nothing else, so this is
-    /// the whole of its construction.
+    /// Borrow the engine's kernel — the plain handle, whose transactions
+    /// commit with the signature slot EMPTY.
     pub fn new(kernel: &'k Kernel<W>) -> Namespace<'k, W> {
-        Namespace { kernel }
+        Namespace::attested(kernel, None)
+    }
+
+    /// THE ATTESTED CONSTRUCTOR (signed ops; the attestation rides the
+    /// handle, as M5's `Vstream::attested` and M7's `LinkWriter::attested`
+    /// carry theirs): a handle whose `create_new_document` and `fork` commit
+    /// under `attest`. Its callers are the slot's producer set — M10's
+    /// dispatch, with a value the daemon's check admitted — and nothing
+    /// else; `None` is [`Namespace::new`].
+    pub fn attested(kernel: &'k Kernel<W>, attest: Option<&'k Attestation>) -> Namespace<'k, W> {
+        Namespace { kernel, attest }
     }
 }
 
-/// The handle renders as what it holds: the kernel it borrows, whose own
+/// The handle renders as what it drives: the kernel it borrows, whose own
 /// `Debug` reports the coordinate, the poison flag and the configuration,
-/// lock-free, and nothing of the world. That is what a derive would print;
-/// it is written out because a derive would also bound the impl on
-/// `W: Debug`, which no `WorldState` owes.
+/// lock-free, and nothing of the world — never the attestation it may
+/// carry, a blob as wide as M2's `MAX_SIG_BYTES` that is no thing to print
+/// into a diagnostic. Written out because a derive would also bound the impl
+/// on `W: Debug`, which no `WorldState` owes.
 impl<W: WorldState> fmt::Debug for Namespace<'_, W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Namespace")
@@ -66,12 +90,13 @@ impl<W: WorldState> fmt::Debug for Namespace<'_, W> {
     }
 }
 
-/// One kernel borrow, so a copy of the handle is a copy of a reference and
-/// drives the same kernel. Written out, as `Debug` is: the derives would
-/// bound the impls on `W: Clone` / `W: Copy`, and no `WorldState` is `Copy` —
-/// the choice M5's `Vstream` and M6's `Query` make for the same reason.
-/// `Copy` holds because the handle is that borrow and nothing else; a field
-/// of its own would end it.
+/// Two borrows — the kernel and, on an attested handle, the attestation — so
+/// a copy of the handle is a copy of two references and drives the same
+/// kernel. Written out, as `Debug` is: the derives would bound the impls on
+/// `W: Clone` / `W: Copy`, and no `WorldState` is `Copy` — the choice M5's
+/// `Vstream` and M6's `Query` make for the same reason. `Copy` holds because
+/// the handle is those borrows and nothing else; a field of its own would
+/// end it.
 impl<W: WorldState> Clone for Namespace<'_, W> {
     fn clone(&self) -> Self {
         *self
@@ -128,6 +153,12 @@ where
     /// (the one departure from PUB-8.19's letter). "Has documents" is
     /// [`M3State::has_documents`], M3's own read of the account's document
     /// chain.
+    ///
+    /// THE ATTESTED ARM (signed ops): the transaction commits under the
+    /// handle's attestation where it carries one — a mint born published is
+    /// a publish-class act, signed over its parent account — and with the
+    /// slot empty otherwise; the kernel's arm is `transact` itself under
+    /// `None`.
     pub fn create_new_document(
         &self,
         caller: PrincipalId,
@@ -138,7 +169,7 @@ where
             M3State::document_lock_key(account),
             M3State::principals_lock_key(),
         ];
-        self.kernel.transact(&keys, |stg| {
+        self.kernel.transact_attested(&keys, self.attest, |stg| {
             if !stg.base().m3().is_effective_owner(caller, account) {
                 return Err(CreateDocumentError::NotOwner);
             }
@@ -437,6 +468,8 @@ where
     /// case is the one the daemon's mint-first door refuses before this op is
     /// reached (PUB-1.18, PUB-8.22), and the explicit-`false` first mint is
     /// the daemon's door too (PUB-8.20); here both mint what the rule says.
+    /// The one transaction it opens is `create_new_document`'s, so it
+    /// commits under the handle's attestation exactly as that op does.
     pub fn fork(
         &self,
         caller: PrincipalId,

@@ -32,6 +32,24 @@ type FixedHasher = BuildHasherDefault<FxHasher>;
 /// checkpoints (no skip-serialize, so the engine's `rebuild_derived` is
 /// identity for M4).
 ///
+/// Two INVARIANTS hold of every key, each at a named gate:
+///
+/// * **T4-valid** (ASN-0093 StoreT4Validity, one premise of SD) — every key
+///   is the tumbler of an `Address`. Gates: [`stage_write`], which takes an
+///   `Address` on every build, so nothing a build journals or checkpoints
+///   holds a key the decode door refuses; and the two decode paths, a
+///   record's and a slice's, which re-enter M1's `Address` door (`validate`)
+///   for each address, so a journal frame or a checkpoint body carrying any
+///   other key is refused, never folded.
+/// * **A content-subspace element address** (ASN-0093 C1 and L0 — M4's half
+///   of SD, `dom(C) ∩ dom(L) = ∅`). Gate: [`stage_write`], whose caller owes
+///   it — M3 mints only such addresses for content, and M5 hands only those
+///   to this door — and whose routing assertion checks it in debug builds;
+///   release trusts it and stages a violator as given. Both decode paths
+///   take it on journal and checkpoint integrity: a release build can journal
+///   what its stage door did not check, and a decode that refused it would
+///   leave that build unable to replay its own journal.
+///
 /// Cheap to keep many of: `clone` is O(1), and
 /// [`apply_write`](ContentStore::apply_write) returns a new slice in
 /// O(log₃₂ n), sharing all untouched structure with the old one, which stays
@@ -49,7 +67,7 @@ pub struct ContentStore {
     // the two whole-store readers, the checkpoint and the engine's world
     // dump, take their order from the sort in `Serialize`. Its decode is
     // `entry_by_entry`'s, not `im`'s own visitor, which reserves the count
-    // the bytes declare.
+    // the bytes declare; it takes each key through M1's `Address` door.
     #[serde(deserialize_with = "entry_by_entry")]
     map: im::HashMap<Tumbler, Val, FixedHasher>,
 }
@@ -63,8 +81,9 @@ pub struct ContentStore {
 /// So two writes of one store, on two processes or two machines, yield one
 /// byte string, and M2's checkpoint header can commit to its body by hash.
 /// `Deserialize` stays derived, its one field decoded by `entry_by_entry`
-/// below: the HAMT is rebuilt from the entries whatever order they arrive in,
-/// and nothing is reserved for a count the bytes have not carried. Cost:
+/// below: each key re-enters M1's `Address` door, the HAMT is rebuilt from
+/// the entries whatever order they arrive in, and nothing is reserved for a
+/// count the bytes have not carried. Cost:
 /// one O(n log n) sort of the entry set per checkpoint, on top of the O(n)
 /// serialization the checkpoint already pays.
 ///
@@ -121,8 +140,10 @@ impl Serialize for InTumblerOrder<'_> {
 /// this length, or a crafted file — makes that reservation panic or abort the
 /// process, where M2's load must refuse the base and fall back. Inserting each
 /// entry as it arrives reserves nothing the bytes have not carried, so a short
-/// body runs out of input and the decode refuses it; and it takes the entries
-/// in whatever order they arrive.
+/// body runs out of input and the decode refuses it; each key re-enters M1's
+/// `Address` door (`validate`), so a body carrying a key no [`stage_write`]
+/// could have staged is refused the same way ([`ContentStore`]'s key
+/// invariants); and it takes the entries in whatever order they arrive.
 fn entry_by_entry<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<im::HashMap<Tumbler, Val, FixedHasher>, D::Error> {
@@ -139,8 +160,8 @@ fn entry_by_entry<'de, D: serde::Deserializer<'de>>(
 
         fn visit_map<A: MapAccess<'de>>(self, mut entries: A) -> Result<Self::Value, A::Error> {
             let mut map: im::HashMap<Tumbler, Val, FixedHasher> = im::HashMap::default();
-            while let Some((addr, val)) = entries.next_entry()? {
-                map.insert(addr, val);
+            while let Some((addr, val)) = entries.next_entry::<Address, Val>()? {
+                map.insert(Tumbler::from(addr), val);
             }
             Ok(map)
         }
@@ -150,18 +171,26 @@ fn entry_by_entry<'de, D: serde::Deserializer<'de>>(
 }
 
 impl ContentStore {
-    /// The fold — pure, total, deterministic (M2's `apply` obligation; §A),
-    /// on live commit and on M2's replay alike (the engine's `World::apply`
-    /// dispatches its `Record::Content` variant here). It only adds, and it
-    /// never replaces: a record whose address is already stored leaves the
-    /// slice as it was, so no record — staged against whatever slice, folded
-    /// however often — overwrites the permascroll. S0(a)/S1/C0 and S0(b)
-    /// fall straight out: `dom(C) ⊆ dom(C')`, and every value in `C` is in
-    /// `C'` unchanged.
+    /// The fold — pure, deterministic, insert-only (§A), on live commit and
+    /// on M2's replay alike (the engine's `World::apply` dispatches its
+    /// `Record::Content` variant here). It returns a new slice and leaves the
+    /// receiver as it was.
     ///
-    /// A record whose address already has a value stored is still a caller's
-    /// bug — staged against another slice, or folded twice — and the write it
-    /// carries is lost; a debug build's `debug_assert!` panics on it.
+    /// TOTALITY DOMAIN (M2's total-apply obligation, stated here at the seam
+    /// the engine wires): total — deterministic, side-effect-free, panic-free
+    /// — over every record whose address is not stored in the receiver, which
+    /// is every record [`stage_write`] admitted against this very slice,
+    /// folded once. There the result is the receiver's contents with
+    /// `r.addr ↦ r.val` added.
+    ///
+    /// Outside the domain — a record staged against another slice, or folded
+    /// twice: a caller's bug, met live or on replaying the journal a release
+    /// build wrote past it — a debug build fail-stops on the `debug_assert!`,
+    /// and a release build returns a slice equal to the receiver: the STORED
+    /// value wins and the record's write is lost. So no record overwrites the
+    /// permascroll, inside the domain or out of it, on any build: S0(b), and
+    /// with it S0(a)/S1/C0 — `dom(C) ⊆ dom(C')`, and every value in `C` is in
+    /// `C'` unchanged.
     #[must_use = "apply_write returns the folded slice; it does not modify the receiver"]
     pub fn apply_write(&self, r: &ContentWrite) -> ContentStore {
         let already_stored = self.map.contains_key(&r.addr);
@@ -243,19 +272,23 @@ impl ContentStore {
 ///
 /// Its fields are private, so [`stage_write`] is its one producer; serde's
 /// `Deserialize` — public, as M2's `Record: DeserializeOwned` bound requires —
-/// is M2's replay of records already staged. Read access is full:
-/// [`addr`](ContentWrite::addr)/[`val`](ContentWrite::val), and its derived
-/// `Debug`, which the engine's `Record: Debug` renders for this variant and
-/// which shows the value as its length, never a byte. The engine only
-/// `From`-lifts and folds a record; it never builds one.
+/// is M2's replay of records already staged. That decode takes `addr`
+/// through M1's `Address` door (`through_address`), so a replayed record's
+/// key is T4-valid as a staged one's is ([`ContentStore`]'s key invariants).
+/// Read access is full: [`addr`](ContentWrite::addr)/[`val`](ContentWrite::val),
+/// and its derived `Debug`, which the engine's `Record: Debug` renders for
+/// this variant and which shows the value as its length, never a byte. The
+/// engine only `From`-lifts and folds a record; it never builds one.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContentWrite {
+    #[serde(deserialize_with = "through_address")]
     addr: Tumbler,
     val: Val,
 }
 
 impl ContentWrite {
-    /// The flat storage/journal key. Read-only.
+    /// The flat storage/journal key — the tumbler of an `Address`, whether
+    /// the record was staged or decoded. Read-only.
     pub fn addr(&self) -> &Tumbler {
         &self.addr
     }
@@ -264,6 +297,15 @@ impl ContentWrite {
     pub fn val(&self) -> &Val {
         &self.val
     }
+}
+
+/// A record's address decoded through M1's `Address` door — `validate`, so
+/// T4, [`ContentStore`]'s first key invariant — and kept as its flat tumbler.
+/// An `Address` journals as its bare tumbler, so this reads exactly the bytes
+/// the record's `Serialize` writes, and refuses an address no [`stage_write`]
+/// could have staged.
+fn through_address<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Tumbler, D::Error> {
+    Address::deserialize(deserializer).map(Tumbler::from)
 }
 
 /// PURE STEP — the storage half of K.α (§C; M2 contract 3). Reads the slice
@@ -288,7 +330,9 @@ impl ContentWrite {
 /// s_C`; Open build decision #4) runs BEFORE the already-stored check, so a
 /// mis-routed address panics on its own terms — at the caller's line, this
 /// function being `#[track_caller]` — never masked by a value that happens
-/// to be stored there; release compiles it out.
+/// to be stored there; release compiles it out. The routing is the caller's
+/// to guarantee — M3's mint, M5's routing — and is [`ContentStore`]'s second
+/// key invariant: a release build stages a mis-routed address as given.
 #[track_caller]
 pub fn stage_write(
     c: &ContentStore,

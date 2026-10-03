@@ -30,18 +30,21 @@ use crate::HasContent;
 /// Locks the per-(document, content-subspace) namespace key — the SAME key
 /// M3's content allocation and M5's placement composite hold, so alloc,
 /// write, and placement serialize in one scope. `home` is derived by M1's
-/// [`document_of`]; a content address has zeros = 3, so it is always `Some`
-/// — the `.expect` IS the trusted-address contract on this
-/// trusted-address-only op, turning the unreachable `None` into a
-/// documented internal-invariant violation, never a domain rejection. In
-/// debug builds the routing assertion runs BEFORE key derivation (mirroring
-/// [`stage_write`]'s order), so a zeros < 2 input panics on its own terms;
-/// in release it is compiled out, and the `.expect` is what fires. Either
-/// panic is located at the caller's line: `write` is `#[track_caller]`.
+/// [`document_of`]; a content address has zeros = 3, so it is always `Some`,
+/// and the `.expect` turns the `None` of an address with no document
+/// (zeros < 2) into a documented violation of the trusted-address contract,
+/// never a domain rejection. It is a release build's only check of that
+/// contract, and a partial one: a document-level or mis-routed element
+/// address has a document, passes it, and is written as given. In debug
+/// builds the routing assertion runs BEFORE key derivation (mirroring
+/// [`stage_write`]'s order), so every non-content address panics on its own
+/// terms; in release it is compiled out. Either panic is located at the
+/// caller's line: `write` is `#[track_caller]`.
 ///
 /// On success returns the flat storage key and the committed `Seq` (the
-/// write's V1 coordinate); rejections surface verbatim as
-/// `TxnError::Rejected(ContentError)`.
+/// write's V1 coordinate). `stage_write`'s refusal surfaces verbatim as
+/// `TxnError::Rejected(ContentError)`; every other `TxnError` is M2's own,
+/// in the precedence [`Kernel::transact`] states.
 ///
 /// OPEN DECISION (drift-forced; §Dependencies & seams "M2"): the design
 /// derives this key via a shared base-crate `key(home, …)` constructor plus

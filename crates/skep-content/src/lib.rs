@@ -44,6 +44,11 @@
 //! C-fin finiteness; and unconditional no-GC permanence (orphan content
 //! persists; M4 does not even know about references).
 //!
+//! **At the doors:** every key is T4-valid (ASN-0093 StoreT4Validity) and a
+//! content-subspace element address (C1, L0 — M4's half of SD);
+//! [`ContentStore`] names each invariant's gate, the two decode paths
+//! included.
+//!
 //! **Diagnosed, not relied on:** an upstream duplicate. [`stage_write`]
 //! refuses an address already stored in the slice it is handed
 //! (`AlreadyStored`), so a duplicate mint becomes a typed rejection instead
@@ -51,8 +56,10 @@
 //!
 //! ## Boundary — deliberately NOT owned here
 //!
-//! * minting or validating addresses (M3) — every address M4 handles is
-//!   T4-valid by M1's standing invariant;
+//! * minting or validating addresses (M3; M1's validator) — every key M4
+//!   stores is the tumbler of an `Address`, taken as one at the write doors
+//!   and re-checked through M1's `Address` door wherever a record or a slice
+//!   is decoded;
 //! * arranging, referencing, or routing content, and enforcing referential
 //!   integrity (M5 — M4 only *answers* the check via `contains`; the
 //!   strongest S3 timing is achieved by M2's atomicity around M5's
@@ -129,6 +136,16 @@ pub use value::Val;
 /// only the test-only `write` bounds on this. READ side only; its write-side
 /// mirror is the engine's `impl From<ContentWrite> for W::Record` lift,
 /// through which the write paths stage deltas via `stg.push(rec.into())`.
+///
+/// IMPLEMENTORS OWE one fact the signature cannot carry: `content()` is the
+/// very slice the world's `WorldState::apply` folds this crate's records
+/// into, through [`ContentStore::apply_write`]. Two promises rest on it:
+/// [`stage_write`]'s duplicate check sees only the slice it is handed, so it
+/// refuses what the fold would drop only when `stg.working().content()` is
+/// that slice; and a reader's `snapshot.world().content()` holds every value
+/// the snapshot's placements resolve to, which M6's RETRIEVEV `expect`s
+/// (S3★). An implementor that answered any other `ContentStore` would void
+/// both, and nothing in this crate can check it.
 pub trait HasContent {
     /// M4's slice of the world state.
     fn content(&self) -> &ContentStore;

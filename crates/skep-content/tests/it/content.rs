@@ -9,12 +9,13 @@
 //! the record and the slice survive a serde round trip (and M2's durable
 //! recovery across a checkpoint), that the slice's decode takes its entries
 //! in any order and neither the record's decode nor the slice's trusts a
-//! count its bytes do not carry or admits a key that is no tumbler, that the
-//! slice's serialized form is the format its readers pin, that a debug build
-//! panics on a non-content address before it looks at what is stored there,
-//! at the line that passed it in, that a value renders into `Debug` as its
-//! byte length and never a byte, and that each part of the interface does its
-//! ordinary job on an ordinary input.
+//! count its bytes do not carry or admits a key that is no tumbler, or no
+//! T4-valid address, that the slice's serialized form is the format its
+//! readers pin, that a debug build panics on a non-content address before it
+//! looks at what is stored there, at the line that passed it in, while a
+//! release build writes one with a document as given, that a value renders
+//! into `Debug` as its byte length and never a byte, and that each part of
+//! the interface does its ordinary job on an ordinary input.
 //! Where a debug build's assertion panics, release does something else, and
 //! those tests say what each build does; the gate runs the suite in both.
 //! The toy `World`/`Rec` pair is the minimal engine assembly the composition
@@ -24,7 +25,7 @@
 use std::path::Path;
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use skep_address::{validate, Address, Nat, Tumbler};
+use skep_address::{validate, Address, Nat, T4Clause, Tumbler};
 use skep_content::{stage_write, write, ContentError, ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{
     BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, TxnError,
@@ -486,14 +487,15 @@ fn the_slice_serializes_as_its_map_alone_in_tumbler_order() {
     );
 }
 
-/// Decodes `bytes` as `T` and asserts the decode REFUSED them: an `Err` —
-/// neither a value nor a panic. A panic is how a reservation sized by a count
-/// the bytes do not carry shows itself when it overflows, and how a decode
-/// that takes what they hold on trust, through an `expect`, shows itself at
-/// all.
-fn assert_refused<T: DeserializeOwned>(what: &str, bytes: &[u8]) {
+/// Decodes `bytes` as `T`, asserts the decode REFUSED them — an `Err`,
+/// neither a value nor a panic — and returns the refusal's message, for a
+/// caller that pins which door refused. A panic is how a reservation sized by
+/// a count the bytes do not carry shows itself when it overflows, and how a
+/// decode that takes what they hold on trust, through an `expect`, shows
+/// itself at all.
+fn assert_refused<T: DeserializeOwned>(what: &str, bytes: &[u8]) -> String {
     match std::panic::catch_unwind(|| bincode::deserialize::<T>(bytes)) {
-        Ok(Err(_)) => {}
+        Ok(Err(refusal)) => refusal.to_string(),
         Ok(Ok(_)) => panic!("{what}: decoded, though no value serializes as these bytes"),
         Err(_) => panic!(
             "{what}: the decode panicked instead of refusing the bytes — a reservation sized by \
@@ -539,19 +541,19 @@ fn the_record_and_the_slice_refuse_a_count_their_bytes_do_not_carry() {
 #[test]
 fn the_record_and_the_slice_refuse_a_key_that_is_no_tumbler() {
     // M2's hostile-input obligation, at the key: the slice's decode
-    // (`entry_by_entry`) and the record's derived decode take each address as
-    // a `Tumbler`, whose `Deserialize` is M1's mint path (`try_from` →
-    // `Tumbler::new`), and that refuses the empty component sequence — no
-    // tumbler at all (T0). So a checkpoint body or a journal frame laying an
-    // empty sequence where an address belongs is REFUSED, never stored: M1's
-    // reads stand on T0 (`ordinal` takes the last component with an `expect`
-    // that names it), and a key in `dom(C)` reaches every reader of the
-    // recovered store. No constructor builds such a key, so the bytes are laid
-    // through the raw shapes the types serialize as — a tumbler as its
-    // `Vec<Nat>`, a value as its byte sequence, the slice as a `Vec` of pairs.
-    // The same shapes carrying a real address are the control: they decode to
-    // the slice and the record that hold it, so the refusal is the empty
-    // key's alone.
+    // (`entry_by_entry`) and the record's decode take each address as an
+    // `Address`, whose `Deserialize` first re-enters `Tumbler`'s door
+    // (`try_from` → `Tumbler::new`), and that refuses the empty component
+    // sequence — no tumbler at all (T0). So a checkpoint body or a journal
+    // frame laying an empty sequence where an address belongs is REFUSED,
+    // never stored: M1's reads stand on T0 (`ordinal` takes the last
+    // component with an `expect` that names it), and a key in `dom(C)`
+    // reaches every reader of the recovered store. No constructor builds such
+    // a key, so the bytes are laid through the raw shapes the types serialize
+    // as — a tumbler as its `Vec<Nat>`, a value as its byte sequence, the
+    // slice as a `Vec` of pairs. The same shapes carrying a real address are
+    // the control: they decode to the slice and the record that hold it, so
+    // the refusal is the empty key's alone.
     let slice = |key: &[Nat]| {
         bincode::serialize(&vec![(key.to_vec(), b"x".to_vec())]).expect("the raw slice serializes")
     };
@@ -570,6 +572,71 @@ fn the_record_and_the_slice_refuse_a_key_that_is_no_tumbler() {
     );
     assert_refused::<ContentStore>("a slice whose one key is an empty sequence", &slice(&[]));
     assert_refused::<ContentWrite>("a record whose address is an empty sequence", &record(&[]));
+}
+
+#[test]
+fn the_record_and_the_slice_refuse_a_key_that_is_no_address() {
+    // ASN-0093 StoreT4Validity (store.rs, `ContentStore`'s key invariants):
+    // every key in `dom(C)` is T4-valid, and both decode paths re-enter M1's
+    // `Address` door (`validate`) to keep it so — an `Address` journals as
+    // its bare tumbler, so the door reads the bytes the record and the slice
+    // already write. Each key below is nonempty, so `Tumbler`'s own door (T0,
+    // the test above) admits it, and breaks exactly one T4 clause, so only
+    // the `Address` door can refuse it — and the refusal is pinned as that
+    // door's own, word for word. The door's other edge is pinned too: a
+    // link-subspace element address is T4-valid, and a release build — its
+    // routing assertion compiled out — can journal one, so the decode admits
+    // it; a door that refused it would leave that build unable to replay its
+    // own journal.
+    let raw = |key: &[u32]| -> Vec<Nat> { key.iter().map(|&c| Nat::from(c)).collect() };
+    let slice = |key: &[u32]| {
+        bincode::serialize(&vec![(raw(key), b"x".to_vec())]).expect("the raw slice serializes")
+    };
+    let record = |key: &[u32]| {
+        bincode::serialize(&(raw(key), b"x".to_vec())).expect("the raw record serializes")
+    };
+    for (clause, key) in [
+        (T4Clause::LeadingZero, &[0u32, 1][..]),
+        (T4Clause::TrailingZero, &[1, 0][..]),
+        (T4Clause::AdjacentZeros, &[1, 0, 0, 1][..]),
+        (T4Clause::OverDepth, &[1, 0, 1, 0, 1, 0, 1, 0, 1][..]),
+    ] {
+        let door = validate(t(key)).expect_err("each key breaks a T4 clause");
+        assert_eq!(door.clauses(), [clause].as_slice(), "{key:?} breaks {clause} alone");
+        let door = door.to_string();
+        for (form, refusal) in [
+            (
+                "slice",
+                assert_refused::<ContentStore>(
+                    &format!("a slice whose one key breaks {clause}"),
+                    &slice(key),
+                ),
+            ),
+            (
+                "record",
+                assert_refused::<ContentWrite>(
+                    &format!("a record whose address breaks {clause}"),
+                    &record(key),
+                ),
+            ),
+        ] {
+            assert_eq!(
+                refusal, door,
+                "the {form} refused a key breaking {clause} for another reason"
+            );
+        }
+    }
+    let link_elem = [1, 0, 1, 0, 1, 0, 2, 1]; // subspace s_L = 2
+    let decoded = bincode::deserialize::<ContentStore>(&slice(&link_elem))
+        .expect("a mis-routed, T4-valid key is the stage door's to check, not the decode's");
+    assert!(decoded.contains(&t(&link_elem)), "the decoded slice holds the key it carried");
+    let decoded = bincode::deserialize::<ContentWrite>(&record(&link_elem))
+        .expect("a mis-routed, T4-valid address is the stage door's to check, not the decode's");
+    assert_eq!(
+        decoded.addr(),
+        &t(&link_elem),
+        "the decoded record carries the address it was given"
+    );
 }
 
 #[test]
@@ -715,6 +782,23 @@ fn write_panics_on_a_non_content_address_routing_first() {
     let k = mem_kernel();
     let account = a(&[1, 0, 1]);
     let _ = write(&k, &account, val(b"x"));
+}
+
+#[test]
+#[cfg_attr(debug_assertions, should_panic(expected = "content routing: write"))]
+fn write_trusts_a_document_level_address_in_release_and_panics_on_it_in_debug() {
+    // §C: `write`'s `.expect` catches only an address with no document
+    // (zeros < 2). A document-level address has one — itself — so it passes
+    // the `.expect`: a debug build's routing assertion is what stops it, and
+    // a release build, that assertion compiled out, writes it as given. The
+    // trusted-address contract is the caller's, checked whole in debug builds
+    // only.
+    let k = mem_kernel();
+    let doc = a(&[1, 0, 1, 0, 1]);
+    let (stored, _) = write(&k, &doc, val(b"x")).expect("release trusts the caller's address");
+    assert_eq!(stored, *doc.tumbler());
+    let s = k.snapshot();
+    assert!(s.world().content().contains(doc.tumbler()), "release writes the address as given");
 }
 
 /// The source file a panic inside `f` is located at, read by a hook set for

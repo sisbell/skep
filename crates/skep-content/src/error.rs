@@ -16,9 +16,15 @@ use skep_address::Tumbler;
 #[non_exhaustive]
 pub enum ContentError {
     /// An upstream duplicate (ASN-0036 S0; ASN-0093 C0): a value is already
-    /// stored at this address. Cannot occur in production (M3 mints fresh;
-    /// M5 writes once) — converts an upstream bug into a clean typed
-    /// rejection instead of a write the fold would drop.
+    /// stored at this address. Never produced in correct operation (M3 mints
+    /// fresh; M5 writes once): it reports an upstream invariant violation,
+    /// and reports it as a VALUE rather than a panic because the fault turns
+    /// on runtime state no test can exhaust — the frontier M3 mints from,
+    /// what a composite has already pushed — and a refusal aborts the
+    /// caller's whole transaction, where a release build's fold would drop
+    /// the write and leave the caller's placement on another write's value.
+    /// Reachable whenever that upstream is wrong, so a caller handles it as
+    /// a refusal, never as unreachable.
     AlreadyStored(Tumbler),
 }
 

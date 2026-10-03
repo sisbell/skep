@@ -113,7 +113,7 @@ mod dynamics;
 mod expand;
 // The rule engine's public vocabulary: rules, actions, occurrences, outcomes.
 mod rule;
-// The handle, `Coordinator`: construction, the class-bearing surfaces and
+// The handle, `Coordinator`: construction, the guest-class surfaces and
 // group A; its children are `defs` (group B) and `engine` (group C), the rest
 // of its impl, and `memo`, the def-status cache it holds — all three inside
 // the wall around its private state.

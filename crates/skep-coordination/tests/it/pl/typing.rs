@@ -52,7 +52,7 @@ fn type_check_refuses_at_each_gamma_and_catalog_gate() {
     // The catalog probe is Endset-equality: an uncataloged key misses.
     assert!(matches!(
         c.type_check(vec![], Term::Atom(Atom::Members(TypeRef::Concrete(TypeKey(uncataloged_ty(20)))))),
-        Err(TypeError::UnregisteredType(_))
+        Err(TypeError::UncatalogedTypeKey(_))
     ));
     // An atom needing a behavior the registration lacks.
     assert!(matches!(
@@ -165,7 +165,7 @@ fn type_check_reports_the_first_rejection_in_its_stated_walk_order() {
     // The type position and its guard, before the children.
     assert!(matches!(
         c.type_check(vec![], is_k(&uncataloged_ty(20), lit_nat(1))),
-        Err(TypeError::UnregisteredType(_))
+        Err(TypeError::UncatalogedTypeKey(_))
     ));
     assert!(matches!(
         c.type_check(vec![], succs(&retired_ty(), lit_nat(1))),
@@ -179,7 +179,7 @@ fn type_check_reports_the_first_rejection_in_its_stated_walk_order() {
     // A binder's domain before its body.
     assert!(matches!(
         c.type_check(vec![], exists(2, Dom::MembersDom(concrete(&uncataloged_ty(20))), lit_nat(1))),
-        Err(TypeError::UnregisteredType(_))
+        Err(TypeError::UncatalogedTypeKey(_))
     ));
     // A `Ref`'s referent before its arguments …
     assert!(matches!(
@@ -446,7 +446,7 @@ fn a_checked_term_reports_its_source_body_and_its_ordered_context() {
 
 /// The catalog probe is `Endset`-equality, not coverage: a key spelling the
 /// canonical endset twice has the same coverage class and misses as
-/// `UnregisteredType`.
+/// `UncatalogedTypeKey` — its class is cataloged; its key is not.
 #[test]
 fn a_coverage_equal_but_byte_different_key_misses() {
     let k = kernel();
@@ -457,7 +457,7 @@ fn a_coverage_equal_but_byte_different_key_misses() {
     assert_eq!(coverage_class(&dup), coverage_class(&canonical));
     assert!(matches!(
         c.type_check(vec![], Term::Atom(Atom::Members(TypeRef::Concrete(TypeKey(dup))))),
-        Err(TypeError::UnregisteredType(_))
+        Err(TypeError::UncatalogedTypeKey(_))
     ));
     assert!(c.type_check(vec![], members(&canonical)).is_ok());
 }

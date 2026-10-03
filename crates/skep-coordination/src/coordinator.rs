@@ -5,7 +5,7 @@
 //! working set (§Core data model).
 //!
 //! The handle's impl is cut one file per capability group. This file holds
-//! construction, the two class-bearing surfaces (`eval_ctx`, `link_writer`),
+//! construction, the two guest-class surfaces (`eval_ctx`, `link_writer`),
 //! the checker's two invocations and group A; its children `defs` (group B)
 //! and `engine` (group C) are the rest of the impl, and `memo` is the
 //! def-status cache the handle holds. Being children they share the private
@@ -69,7 +69,8 @@ pub struct Coordinator<W: WorldState> {
     /// The GUEST-class read predicate over a document address (PUB round 2,
     /// lane 3.3, §5), in M7's own `Visibility` shape: `true` iff the
     /// document is readable at guest class — the engine supplies
-    /// `published(doc)`. It is applied THREE ways, each by one element:
+    /// `World::readable_guest`. It is applied THREE ways, each by one
+    /// element:
     ///
     /// - THE LOOK (lane 4.1, PUB-6.28): every verdict's read context is built
     ///   over it ([`Coordinator::eval_ctx`] → `GuestLinks`), so a tuple homed
@@ -136,8 +137,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// one-pinned-snapshot verdicts and lane 3.3b's byte-identical commit
     /// rest on both: a predicate consulting state outside its world would
     /// give one verdict two visibility answers for one document, and a
-    /// factory capturing its own kernel or its own class would type-check and
-    /// void the guarantee in silence.
+    /// factory capturing its own kernel or its own visibility class would
+    /// type-check and void the guarantee in silence.
     ///
     /// And `guest` must be TOTAL over every `&Address` M9 hands it, which is
     /// not only registered documents: a fire consults it on the action's HOME
@@ -146,8 +147,12 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// bound argument, falling back to the argument itself when it has no
     /// document field. It must ANSWER for any of those, never panic, and
     /// `false` is the safe answer for an address it does not recognize. The
-    /// engine's `World::readable_guest` is total by construction: M3's
-    /// `published` answers for any address.
+    /// engine's `World::readable_guest` is total by construction: it answers
+    /// through the engine's `World::published`, which answers for any address
+    /// — fail-open where M3's `published` is fail-private, an address no mint
+    /// produced reading published. That is safe here as well: such an address
+    /// is no draft, so no boundary is crossed, and as a home it is refused by
+    /// M7's H-HOME.
     pub fn new(
         kernel: Arc<Kernel<W>>,
         registry: Arc<TypeRegistry>,
@@ -217,23 +222,24 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// Type-check `body` under the ordered parameter context `params` (Γ_D —
     /// ASN-0129 WT is a Γ-parameterized CHECKING judgment; empty for a closed
     /// term), expand `Reg`-quantifiers to concrete-class instances (V-IDX),
-    /// and reject ill-typed / dangling-reference / unregistered-type /
+    /// and reject ill-typed / dangling-reference / uncataloged-type-key /
     /// unbound-variable / non-Codomain-parameter terms. Γ_D is Codom-only: a
-    /// `Tup`-sorted parameter is `TupParameter` — a stored def binds values,
-    /// never a tuple (ASN-0130 SignedTerm) — and the one PL term that binds a
-    /// tuple, a rule trigger, is checked by [`Coordinator::type_check_trigger`]
-    /// into a type of its own. Every `Concrete` `TypeKey` must be a canonical
-    /// catalog endset (the probe is `Endset`-equality, not coverage). The
-    /// check is also the term's resource door: a body nested past the
-    /// crate's one nesting cap, counted through its references, is
-    /// `TooDeep`, and one whose `Reg`-expansion outgrows the node budget —
-    /// counted per node AND per unit of payload, so a large literal under a
-    /// `Reg` quantifier is charged for every instance it multiplies into — is
-    /// `TooLarge`; each refused at the bound, not after it. Reads no
-    /// structural state for a ref-free body; consults the def memo for any
-    /// `Ref`, and on a MISS derives the referent from its immutable content,
-    /// pinning its own snapshot — the answer is the same either way. Once
-    /// `Ok`, valid at every reachable state (WT).
+    /// `Tup`-sorted parameter is `TupParameter` — a stored def's parameters
+    /// are Codom-sorted, never `Tup` (ASN-0130 SignedTerm) — and the one PL
+    /// term with a tuple parameter, a rule trigger, is checked by
+    /// [`Coordinator::type_check_trigger`] into a type of its own. Every
+    /// `Concrete` `TypeKey` must be a canonical catalog endset (the probe is
+    /// `Endset`-equality, not coverage). The check is also the term's
+    /// resource door: a body nested past the crate's one nesting cap,
+    /// counted through its references, is `TooDeep`, and one whose
+    /// `Reg`-expansion outgrows the node budget — counted per node AND per
+    /// unit of payload, so a large literal under a `Reg` quantifier is
+    /// charged for every instance it multiplies into — is `TooLarge`; each
+    /// refused at the bound, not after it. Reads no structural state for a
+    /// ref-free body; consults the def memo for any `Ref`, and on a MISS
+    /// derives the referent from its immutable content, pinning its own
+    /// snapshot — the answer is the same either way. Once `Ok`, valid at
+    /// every reachable state (WT).
     ///
     /// WHICH REJECTION SPEAKS, when several hold: `TupParameter` (over Γ_D)
     /// first, then `TooLarge` for a Γ_D longer than the budget (charged

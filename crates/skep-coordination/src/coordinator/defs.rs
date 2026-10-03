@@ -21,9 +21,10 @@
 //! (`coordinator/engine.rs::fired_or_deduped`), which probes residence of the
 //! address M7 just returned — the writer runs at guest class, so a returned
 //! incumbent is guest-readable and a fresh mint is absent from the fire
-//! snapshot under either reading, and the verdict is the same filtered or
-//! not. Every read inside a VERDICT — this module's `evaluate_def` included —
-//! goes through `Coordinator::eval_ctx`'s guest-class view.
+//! snapshot under either reading, and the discrimination is the same
+//! filtered or not. Every read inside a VERDICT — this module's
+//! `evaluate_def` included — goes through `Coordinator::eval_ctx`'s
+//! guest-class view.
 
 use std::collections::HashSet;
 use std::slice::from_ref;
@@ -68,20 +69,21 @@ fn parse_def(content: &ContentStore, start: &Address) -> Result<SignedTerm, Pars
     codec::decode(val.as_bytes()).map_err(|_| ParseFail::Malformed)
 }
 
-/// The DISTINCT `Ref` addresses in `t` (recursively, including inside domain
-/// bodies), in first-occurrence pre-order — the direct referents
-/// `register_pred`'s (iii)/(iv) checks range over (§Internal 4).
+/// The direct referents of `t` — the DISTINCT addresses its `Ref` nodes name
+/// (recursively, including inside domain bodies), in first-occurrence
+/// pre-order: what `register_pred`'s (iii)/(iv) checks range over
+/// (§Internal 4).
 ///
 /// Distinct, because each of those checks is an M7 slice scan and the node
 /// budget admits a body spelling tens of thousands of `Ref` nodes at ONE
 /// address; first-occurrence order, because the gates name the referent they
 /// refuse on and the design's walk order reaches it first.
-fn ref_addrs(t: &Term) -> Vec<Address> {
-    struct RefAddrs {
+fn direct_referents(t: &Term) -> Vec<Address> {
+    struct DirectReferents {
         out: Vec<Address>,
         seen: HashSet<Tumbler>,
     }
-    impl Visit for RefAddrs {
+    impl Visit for DirectReferents {
         fn term(&mut self, t: &Term) {
             if let Term::Ref { addr, .. } = t {
                 if self.seen.insert(addr.tumbler().clone()) {
@@ -91,9 +93,9 @@ fn ref_addrs(t: &Term) -> Vec<Address> {
             visit_term(self, t);
         }
     }
-    let mut refs = RefAddrs { out: Vec::new(), seen: HashSet::new() };
-    refs.term(t);
-    refs.out
+    let mut referents = DirectReferents { out: Vec::new(), seen: HashSet::new() };
+    referents.term(t);
+    referents.out
 }
 
 impl<W: CoordinationWorld> Coordinator<W> {
@@ -215,12 +217,12 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// The stored-def parameters are Codom-only (ASN-0130 SignedTerm), and no
     /// check is made here: a caller's only route to a `TypedTerm` is
     /// `type_check`, which refuses a `Tup` in Γ_D, and the one checked term
-    /// that may bind a tuple is a `TriggerTerm`, which yields no `TypedTerm`
-    /// publicly. The codec's own `Tup` refusal (it has no tag for the sort) is
-    /// therefore unreachable from every call a caller can write. Within the
-    /// crate it is a ROUTING obligation, not a type-level one — a trigger's
-    /// checked term derefs to the `&TypedTerm` this signature takes, so
-    /// `TriggerTerm::checked`'s result must never be routed here.
+    /// whose parameter may be a tuple is a `TriggerTerm`, which yields no
+    /// `TypedTerm` publicly. The codec's own `Tup` refusal (it has no tag for
+    /// the sort) is therefore unreachable from every call a caller can write.
+    /// Within the crate it is a ROUTING obligation, not a type-level one — a
+    /// trigger's checked term derefs to the `&TypedTerm` this signature takes,
+    /// so `TriggerTerm::checked`'s result must never be routed here.
     ///
     /// `home` must be a registered document that is NOT a published TARGET
     /// (M5's `published_target`: the publication bit of `trunk_of(home)` —
@@ -284,8 +286,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// (`HomeNotRegistered`, P0); M7's own refusal of the emit (`Emit`).
     /// Where several referents fail one of the two referent gates, the
     /// address carried is the FIRST in first-occurrence pre-order
-    /// (`ref_addrs`), which is the referent the design's walk order reaches
-    /// first.
+    /// (`direct_referents`), which is the referent the design's walk order
+    /// reaches first.
     ///
     /// RETURNS `(tuple, seq)`: the active `pdef` tuple's address — the
     /// fresh deposit's, or on an idem⊤ dedup hit the incumbent's, with M7's
@@ -297,8 +299,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// PR-DISC breach and which this call does not lift: the memo's first
     /// fill wins and never yields (§Internal 4). The one shape is a
     /// breach-registered start probed while a referent was still
-    /// unregistered — `DanglingReference` is the single WT verdict not fixed
-    /// by the immutable content — so the freeze stands, this call still
+    /// unregistered — `DanglingReference` is the single WT rejection not
+    /// fixed by the immutable content — so the freeze stands, this call still
     /// returns `Ok`, and `signature(start)` keeps answering `None`. Through
     /// this gate it cannot arise: (iii) puts every referent's
     /// ever-registration ahead of the check, and PR2 registers the DAG
@@ -316,8 +318,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
             ParseFail::Malformed => RegisterError::ParseFailed,
         })?;
         // (iii) every referent ever-registered at σ.
-        let refs = ref_addrs(&signed.body);
-        if let Some(referent) = refs.iter().find(|referent| !self.ever_registered(w, referent)) {
+        let referents = direct_referents(&signed.body);
+        if let Some(referent) = referents.iter().find(|referent| !self.ever_registered(w, referent))
+        {
             return Err(RegisterError::ReferentNotEverRegistered(referent.clone()));
         }
         // (iii) WT + WT-ref. Sigs via the resolver (memo-missing signature
@@ -326,7 +329,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // content-intrinsic).
         let def = self.check_signed(signed, 0).map_err(RegisterError::IllTyped)?;
         // (iv) endorsement: every referent ACTIVELY registered at σ.
-        if let Some(referent) = refs.iter().find(|referent| !self.actively_registered(w, referent))
+        if let Some(referent) =
+            referents.iter().find(|referent| !self.actively_registered(w, referent))
         {
             return Err(RegisterError::ReferentNotActive(referent.clone()));
         }
@@ -477,13 +481,13 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// `UndisciplinedDef`), Boolean sort (`NotBoolean`), actively registered
     /// (`NotActive`), an expansion within the node budget
     /// (`ExpansionTooLarge`), view-independent expansion (`ViewDependent`),
-    /// ST⁺ (`NotStable`) — then emit `pd_stable` at `home`, which must be a
-    /// registered document: after every static leg, an unregistered `home` is
-    /// M7's door, `Emit(Rejected(HomeNotRegistered))`. ST⁺ runs PD0 over the
-    /// FLAT reference expansion (ST⁺ is not compositional — §Internal 3),
-    /// with the aggregate threshold widened to a bound ℕ parameter, at a
-    /// fixed view (view-independence makes the classification
-    /// view-invariant).
+    /// ST⁺ (`StabilityUnproven` — unknown, never unstable) — then emit
+    /// `pd_stable` at `home`, which must be a registered document: after
+    /// every static leg, an unregistered `home` is M7's door,
+    /// `Emit(Rejected(HomeNotRegistered))`. ST⁺ runs PD0 over the FLAT
+    /// reference expansion (ST⁺ is not compositional — §Internal 3), with the
+    /// aggregate threshold widened to a bound ℕ parameter, at a fixed view
+    /// (view-independence makes the classification view-invariant).
     ///
     /// THE LEGS READ THREE STATES, and the operation is not atomic over
     /// them: (0) resolves through the memo, which on a miss pins its own
@@ -520,7 +524,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
             return Err(CertifyError::ViewDependent);
         }
         if !st_plus(&self.catalog, &flat_expansion) {
-            return Err(CertifyError::NotStable);
+            return Err(CertifyError::StabilityUnproven);
         }
         let (tuple, seq) = self.link_writer().emit(
             Caller::System,
@@ -590,9 +594,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
 }
 
 /// A derivation asked for at a level where it cannot complete: the
-/// referring term is too deep. A verdict about the asking depth, never
-/// about the content — so never memoized. Unreachable at level 0, where
-/// `derive_def` freezes a nesting refusal as the content's breach.
+/// referring term is too deep. The asking term's refusal, never the
+/// content's — so never memoized. Unreachable at level 0, where `derive_def`
+/// freezes a nesting refusal as the content's breach.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DerivedTooDeep;
 
@@ -613,7 +617,7 @@ mod tests {
 
     use skep_address::{validate, Address, Nat, Tumbler};
 
-    use super::ref_addrs;
+    use super::direct_referents;
     use crate::ast::{Dom, Term, VarId};
 
     fn a(comps: &[u32]) -> Address {
@@ -621,13 +625,13 @@ mod tests {
             .expect("T4-valid")
     }
 
-    /// [`ref_addrs`] answers each referent ONCE, in first-occurrence order:
-    /// `register_pred` runs an M7 slice scan per answer, and the node budget
-    /// admits a body spelling tens of thousands of `Ref` nodes at one
+    /// [`direct_referents`] names each referent ONCE, in first-occurrence
+    /// order: `register_pred` runs an M7 slice scan per referent, and the node
+    /// budget admits a body spelling tens of thousands of `Ref` nodes at one
     /// address; the order is what lets its gates name the referent the
     /// design's walk order reaches first.
     #[test]
-    fn ref_addrs_answers_each_referent_once_in_first_occurrence_order() {
+    fn each_direct_referent_appears_once_in_first_occurrence_order() {
         let (p, q) = (a(&[1, 0, 1, 0, 1, 0, 1, 1]), a(&[1, 0, 1, 0, 1, 0, 1, 2]));
         let at = |t: Term| Arc::new(t);
         let r = |x: &Address| Term::Ref { addr: x.clone(), args: vec![] };
@@ -645,6 +649,6 @@ mod tests {
                 body: at(r(&q)),
             }),
         );
-        assert_eq!(ref_addrs(&body), vec![q, p]);
+        assert_eq!(direct_referents(&body), vec![q, p]);
     }
 }

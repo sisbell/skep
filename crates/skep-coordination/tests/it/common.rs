@@ -184,7 +184,7 @@ pub fn retraction_ty() -> Endset {
     enc(&[ra(RETRACTION)])
 }
 
-/// An UNCATALOGED type number — `type_check`'s `UnregisteredType` probe and
+/// An UNCATALOGED type number — `type_check`'s `UncatalogedTypeKey` probe and
 /// the open surface's verbatim deposits.
 pub fn uncataloged_ty(ordinal: u32) -> Endset {
     enc(&[ra(ordinal)])

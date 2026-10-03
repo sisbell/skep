@@ -1,7 +1,7 @@
 //! M9 contract tests over a real kernel (InMemory), group B — predicate
 //! definitions as content: store/register/evaluate/supersede/certify/
 //! retract, the PR-ENC byte contract as `register_pred` reads it back, the
-//! memo's two permanent verdicts and the one it never keeps, and the
+//! memo's two permanent statuses and the one it never keeps, and the
 //! class-free registration probes beside the guest-class look. Every
 //! assertion states a claim the design or interface makes — nothing more.
 
@@ -167,10 +167,10 @@ fn endorsement_gates_a_new_reference_and_retraction_never_cascades() {
     assert_eq!(c.evaluate_def(&q_start, &[], View::Active, &s2), Ok(Value::Bool(true)));
 }
 
-/// register_pred's parse-level gates. (A tuple-binding def is not a
+/// register_pred's parse-level gates. (A def with a tuple parameter is not a
 /// rejection here but a type error: `define_predicate` takes a `TypedTerm`,
-/// and `type_check_trigger` — the one way to bind a `Tup` — yields a
-/// `TriggerTerm`, so no such def can be spelled.)
+/// and `type_check_trigger` — the one way to declare a `Tup` parameter —
+/// yields a `TriggerTerm`, so no such def can be spelled.)
 #[test]
 fn register_pred_refuses_garbage_bytes_an_empty_start_and_an_unregistered_home() {
     let k = kernel();
@@ -871,6 +871,31 @@ fn a_def_s_parameters_are_ordered_and_arguments_bind_positionally() {
     assert_eq!(cold.evaluate_def(&start, &swapped, View::Active, &s), Ok(Value::Bool(false)));
 }
 
+/// A def's PARAMETERS are Codom-only (`TupParameter` refuses a tuple one),
+/// yet its body binds tuples like any PL term — through a quantifier over
+/// `A_K`/`L_K` — and reads them through V-TUP: such a def stores, re-derives
+/// from its own bytes on a cold coordinator, evaluates, and certifies over its
+/// flat expansion.
+#[test]
+fn a_stored_def_binds_tuples_through_its_quantifiers() {
+    let k = kernel();
+    let c = coord(&k);
+    deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    let tt = c
+        .type_check(
+            vec![(v(1), Sort::Addr)],
+            exists(2, Dom::AuditSlice(concrete(&pred_stable_ty())), in_coverage_f(var(1), 2)),
+        )
+        .expect("P(x) := ∃ t ∈ L_K :: x ∈ cov_F(t)");
+    let (p, _) = c.define_predicate(&doc1(), &tt).expect("define");
+    let cold = coord(&k); // re-derives the body from its stored bytes
+    let s = k.snapshot();
+    let at_arg = |x: Address| cold.evaluate_def(&p, &[Value::Addr(x)], View::Active, &s);
+    assert_eq!(at_arg(ca(1)), Ok(Value::Bool(true)));
+    assert_eq!(at_arg(ca(3)), Ok(Value::Bool(false)));
+    cold.certify_stable(&doc1(), &p).expect("∃ over the grow-only L_K is ST⁺");
+}
+
 /// PC2's binder guard narrows `ℕ∪{⊥} → ℕ` in the then-branch — the one
 /// optional-narrowing branch reachable in this format, an `OptNat` parameter
 /// being its only source.
@@ -966,8 +991,14 @@ fn certify_stable_refuses_each_cvalid_leg_in_order_and_certifies_through_referen
 
     // (iii) ST⁺: an SF-only spelling is not ⊤-stable.
     let (sn, _) = define(not(exists(1, Dom::AuditSlice(concrete(&pred_def_ty())), tru())));
-    assert!(matches!(c.certify_stable(&doc1(), &sn), Err(CertifyError::NotStable)));
+    assert!(matches!(c.certify_stable(&doc1(), &sn), Err(CertifyError::StabilityUnproven)));
     assert!(!c.is_certified_stable(&sn, &k.snapshot()), "a refused certification deposits nothing");
+    // … and the refusal means UNPROVEN, never unstable (ASN-0130): a
+    // tautology — true at every state — is refused too, ST⁺ classifying by
+    // spelling.
+    let ex = || exists(1, Dom::AuditSlice(concrete(&pred_def_ty())), tru());
+    let (taut, _) = define(or(ex(), not(ex())));
+    assert!(matches!(c.certify_stable(&doc1(), &taut), Err(CertifyError::StabilityUnproven)));
 
     // The ST⁺ widening: `count(L_K) ≥ x` with x a bound ℕ parameter
     // certifies (a literal-only PD0 would refuse) — while plain classify
@@ -993,7 +1024,7 @@ fn certify_stable_refuses_each_cvalid_leg_in_order_and_certifies_through_referen
     let (rv, _) = define_ref(&sv, vec![]);
     assert!(matches!(c.certify_stable(&doc1(), &rv), Err(CertifyError::ViewDependent)));
     let (rn, _) = define_ref(&sn, vec![]);
-    assert!(matches!(c.certify_stable(&doc1(), &rn), Err(CertifyError::NotStable)));
+    assert!(matches!(c.certify_stable(&doc1(), &rn), Err(CertifyError::StabilityUnproven)));
     let (rw, _) = define_ref(&sw, vec![lit_nat(3)]);
     c.certify_stable(&doc1(), &rw).expect("the expansion binds the referent's threshold parameter");
 

@@ -72,14 +72,14 @@ impl VarId {
 /// MUST be built from a canonical catalog endset —
 /// `Coordinator::reserved_type(ShippedType)`, the shipped five being the
 /// catalog's whole population. A coverage-equal-but-byte-different key
-/// misses as `UnregisteredType`.
+/// misses as `UncatalogedTypeKey`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeKey(pub Endset);
 
 /// A type key as the addresses it denotes — `{a}` for the one-address keys
 /// the catalog holds — falling back to the span count for an endset that
 /// denotes no address, which is exactly what a key built by hand and refused
-/// as `UnregisteredType` may be. So a rejection naming a key reads.
+/// as `UncatalogedTypeKey` may be. So a rejection naming a key reads.
 impl fmt::Display for TypeKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if !self.0.is_address_denoting() {

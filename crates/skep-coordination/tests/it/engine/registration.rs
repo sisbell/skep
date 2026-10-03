@@ -49,7 +49,7 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
             always_addr(&c),
             marker_action()
         )),
-        Err(RuleError::IllFormedDomain(TypeError::UnregisteredType(_)))
+        Err(RuleError::IllFormedDomain(TypeError::UncatalogedTypeKey(_)))
     ));
     // A Ref inside the domain body — no Def escape for domains.
     assert!(matches!(

@@ -156,7 +156,7 @@ fn an_audit_reading_keeps_what_a_retraction_removes_from_the_active_one() {
 /// holds must not move the answer; every row is stated absolutely, and the
 /// `audit` row is the one a view-parameterized read would fail. (`is_doc`
 /// reads M3 and no slice; the rest of the list is dormant in this format or
-/// binds a tuple.)
+/// reads a tuple-bound variable.)
 #[test]
 fn a_fixed_slice_atom_denotes_the_same_at_every_view() {
     let k = kernel();

@@ -51,9 +51,9 @@ use crate::walk::{rewrite_term, Rewrite};
 /// `ClassVar` that `TypeRef::key` refuses (`from_parts`, the one other
 /// constructor, exists only in test builds). Every one a caller can hold
 /// came through `type_check`, whose Γ_D is Codom-only (ASN-0130
-/// SignedTerm), and a [`TriggerTerm`] — the one checked term that may bind a
-/// tuple — does not yield one. That is what lets `define_predicate` take a
-/// `TypedTerm` and store it without a tuple check of its own.
+/// SignedTerm), and a [`TriggerTerm`] — the one checked term whose parameter
+/// may be a tuple — does not yield one. That is what lets `define_predicate`
+/// take a `TypedTerm` and store it without a tuple check of its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedTerm {
     signed: SignedTerm,
@@ -142,12 +142,13 @@ impl TypedTerm {
 
 /// A rule trigger, checked by `Coordinator::type_check_trigger`: a
 /// ONE-parameter Bool term whose parameter may be `Tup`-sorted — the only PL
-/// term that binds a tuple (ASN-0133 ρ_R). A type of its own so the def path
-/// cannot receive it: `define_predicate` takes a `TypedTerm`, and this type
-/// yields none (its accessors are the trigger's parameter, its ref-freeness
-/// and its source body; the checked term beneath is the rule engine's).
-/// Holds the checked term shared, so a registration captures it without a
-/// copy.
+/// term with a tuple PARAMETER (ASN-0133 ρ_R); any term may still bind
+/// tuples through a quantifier over `A_K`/`L_K`. A type of its own so the def
+/// path cannot receive it: `define_predicate` takes a `TypedTerm`, and this
+/// type yields none (its accessors are the trigger's parameter, its
+/// ref-freeness and its source body; the checked term beneath is the rule
+/// engine's). Holds the checked term shared, so a registration captures it
+/// without a copy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TriggerTerm(Arc<TypedTerm>);
 
@@ -259,8 +260,8 @@ fn want(expected: Sort, found: Sort) -> Result<(), TypeError> {
 /// `Dangling` — the address has no defined signature (never registered, or
 /// ever-registered-but-undisciplined), WT-ref's domain failure; `TooDeep` —
 /// the referent's derivation could not complete at the level it was asked
-/// at, a verdict about the ASKING term's nesting and never about the
-/// referent, which the resolver leaves unjudged (and unmemoized).
+/// at — the ASKING term's refusal, never the referent's: the resolver leaves
+/// the referent unjudged (and unmemoized).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Unresolved {
     Dangling,
@@ -420,16 +421,16 @@ impl<'a> Checker<'a> {
 
     /// The cataloged key of a type position, its `guard` met (V-STAT). A
     /// surviving `ClassVar` is `UnboundClassVar` (no enclosing `Reg` binder
-    /// substituted it); a `Concrete` key absent from the catalog is
-    /// `UnregisteredType` — the probe being `Endset`-equality, that subsumes
-    /// non-address-denoting keys and coverage-equal-but-byte-different
+    /// substituted it); a `Concrete` key that is not one of the catalog's keys
+    /// is `UncatalogedTypeKey` — the probe being `Endset`-equality, that
+    /// subsumes non-address-denoting keys and coverage-equal-but-byte-different
     /// misses.
     fn guarded(&self, tr: &TypeRef, guard: Guard) -> Result<TypeKey, TypeError> {
         let k = match tr {
             TypeRef::ClassVar(v) => return Err(TypeError::UnboundClassVar(*v)),
             TypeRef::Concrete(k) => k,
         };
-        let entry = self.catalog.get(k).ok_or_else(|| TypeError::UnregisteredType(k.clone()))?;
+        let entry = self.catalog.get(k).ok_or_else(|| TypeError::UncatalogedTypeKey(k.clone()))?;
         // The GATE, against `CatalogEntry::declares`'s question: this refuses,
         // so every use of it ends in `?`.
         let require = |needs: Behavior| -> Result<(), TypeError> {

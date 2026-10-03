@@ -32,8 +32,9 @@ pub struct Rule {
 /// `TriggerTerm`, or by the content start of a stored def.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Trigger {
-    /// Built via `type_check_trigger` (may bind one `Tup`); MUST be ref-free
-    /// (`register_rule` rejects otherwise — `RuleError::RefBearingInlineTrigger`).
+    /// Built via `type_check_trigger` (its one parameter may be `Tup`); MUST
+    /// be ref-free (`register_rule` rejects otherwise —
+    /// `RuleError::RefBearingInlineTrigger`).
     Inline(TriggerTerm),
     /// pdef-backed: the def's checked body is captured at `register_rule`,
     /// so the rule survives the def's later retraction and reads only the

@@ -33,8 +33,8 @@ pub enum TypeError {
     /// A `TypeRef::ClassVar` under no enclosing `Reg` binder (V-IDX).
     UnboundClassVar(VarId),
     /// A `type_check` Γ_D parameter sorted `Tup` — excluded from Codom
-    /// (ASN-0130 SignedTerm); a rule trigger, the one term that binds a
-    /// tuple, is checked by `type_check_trigger` into a `TriggerTerm`.
+    /// (ASN-0130 SignedTerm); a rule trigger, the one term with a tuple
+    /// parameter, is checked by `type_check_trigger` into a `TriggerTerm`.
     TupParameter(VarId),
     /// A Γ_D name bound twice — a context binds each name once, so that an
     /// `Env` can bind every parameter at its sort. Carries the repeated name.
@@ -47,11 +47,13 @@ pub enum TypeError {
     /// `Supersedes` (empty/trivial otherwise), so admitting it would silently
     /// denote ∅/\[\]; lifts when M7 serves app Walk classes (Conflicts §8).
     UnservedWalkClass(TypeKey),
-    /// Concrete `TypeKey` absent from the catalog (subsumes
-    /// non-address-denoting — every cataloged key is genesis-validated
-    /// address-denoting — and the coverage-equal-but-byte-different miss,
-    /// the probe being `Endset`-equality).
-    UnregisteredType(TypeKey),
+    /// A concrete `TypeKey` that is not one of the catalog's keys. The probe
+    /// is `Endset`-equality, so this subsumes a non-address-denoting key
+    /// (every cataloged key is genesis-validated address-denoting) and the
+    /// coverage-equal-but-byte-different miss — a key whose CLASS is
+    /// cataloged, spelled otherwise than the catalog spells it. The remedy is
+    /// the key `reserved_type` hands out, never a registration.
+    UncatalogedTypeKey(TypeKey),
     /// The `targets_keyed` atom used (bare or under `MapGet`) with no
     /// cataloged class attaching BH3 (V-atom).
     NoReverseLookupClass,
@@ -90,7 +92,7 @@ impl fmt::Display for TypeError {
             TypeError::TupParameter(v) => write!(
                 f,
                 "type_check: parameter {v:?} is Tup-sorted — a stored def's Γ_D is Codom-only \
-                 (a tuple-binding term is a rule trigger; use type_check_trigger)"
+                 (a term with a tuple parameter is a rule trigger; use type_check_trigger)"
             ),
             TypeError::DuplicateParameter(v) => {
                 write!(f, "type_check: parameter {v:?} is bound twice in Γ_D")
@@ -105,9 +107,11 @@ impl fmt::Display for TypeError {
                 f,
                 "type_check: BH2 walk atoms are served only at the shipped Supersedes class, not {ty}"
             ),
-            TypeError::UnregisteredType(ty) => {
-                write!(f, "type_check: type key {ty} is not a cataloged class")
-            }
+            TypeError::UncatalogedTypeKey(ty) => write!(
+                f,
+                "type_check: type key {ty} is not a catalog key (the probe is Endset-equality, \
+                 not coverage — build the key from reserved_type)"
+            ),
             TypeError::NoReverseLookupClass => f.write_str(
                 "type_check: targets_keyed is outside the vocabulary — no cataloged class attaches BH3",
             ),
@@ -142,11 +146,11 @@ impl Error for TypeError {
 ///
 /// `#[non_exhaustive]`: the codec's own Codom-only refusal has no variant
 /// here. A CALLER cannot reach it — stored-def parameters are Codom-only
-/// (ASN-0130 SignedTerm) by the `TypedTerm` type, which no `Tup`-binding term
-/// inhabits — while in-crate it rests on a routing obligation rather than on
-/// the type (`TriggerTerm::checked`), and giving that refusal a variant here
-/// is the structural closure; a consumer's catch-all should absorb such a
-/// variant rather than break.
+/// (ASN-0130 SignedTerm) by the `TypedTerm` type, which no term with a `Tup`
+/// parameter inhabits — while in-crate it rests on a routing obligation
+/// rather than on the type (`TriggerTerm::checked`), and giving that refusal
+/// a variant here is the structural closure; a consumer's catch-all should
+/// absorb such a variant rather than break.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum DefineError {
@@ -310,7 +314,13 @@ pub enum CertifyError {
     /// Asked before view-independence: the expansion is what both legs read.
     ExpansionTooLarge,
     ViewDependent,
-    NotStable,
+    /// CVALID (iii): the flat expansion is outside ST⁺, so the def's
+    /// ⊤-stability is UNPROVEN — ASN-0130's *unknown*, never *unstable*. ST⁺
+    /// classifies by spelling and is sound but incomplete: an extensionally
+    /// ⊤-stable def spelled outside its rules (a tautology, say) lands here
+    /// too, and the remedy is a respelling, not a conclusion about the
+    /// predicate.
+    StabilityUnproven,
     Emit(TxnError<EmitError>),
 }
 
@@ -332,7 +342,10 @@ impl fmt::Display for CertifyError {
             CertifyError::ViewDependent => {
                 f.write_str("certify_stable: the def's expansion is view-dependent (PR-VIEW)")
             }
-            CertifyError::NotStable => f.write_str("certify_stable: the def is not ⊤-stable (ST⁺)"),
+            CertifyError::StabilityUnproven => f.write_str(
+                "certify_stable: the def's ⊤-stability is unproven (ST⁺ classifies by spelling — \
+                 unknown, not unstable)",
+            ),
             CertifyError::Emit(e) => write!(f, "certify_stable: the pd_stable emit failed: {e}"),
         }
     }

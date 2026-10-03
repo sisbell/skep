@@ -29,9 +29,12 @@ pub struct Dynamics {
     pub view_independent: bool,
 }
 
-/// The 4-point lattice: ST∩SF / ST / SF / neither (PD0). Deliberately NOT
-/// `Ord`: `StOnly` and `SfOnly` are incomparable, so a derived total order
-/// would compile, read meaningful, and contradict PD0.
+/// The 4-point lattice: ST∩SF / ST / SF / neither (PD0). A point is what a
+/// SPELLING is certified at — PD0 classifies by spelling and errs toward
+/// not-certified — so `Neither` reads "certified in neither direction", never
+/// "stable in neither": a tautology can land there. Deliberately NOT `Ord`:
+/// `StOnly` and `SfOnly` are incomparable, so a derived total order would
+/// compile, read meaningful, and contradict PD0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Stability {
     StSf,

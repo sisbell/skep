@@ -34,6 +34,16 @@ enum MemoEntry {
     Poisoned,
 }
 
+/// A cached entry's status, the defined term shared rather than copied.
+impl From<&MemoEntry> for DefStatus {
+    fn from(entry: &MemoEntry) -> DefStatus {
+        match entry {
+            MemoEntry::Defined(term) => DefStatus::Defined(Arc::clone(term)),
+            MemoEntry::Poisoned => DefStatus::Poisoned,
+        }
+    }
+}
+
 /// An ever-registered start whose immutable content fails the PR-ENC parse or
 /// WT — the breach the poison records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,10 +81,7 @@ impl DefMemo {
     /// def".
     pub(super) fn get(&self, start: &Address) -> Option<DefStatus> {
         let memo = self.0.read().unwrap_or_else(PoisonError::into_inner);
-        memo.get(start.tumbler()).map(|e| match e {
-            MemoEntry::Defined(term) => DefStatus::Defined(Arc::clone(term)),
-            MemoEntry::Poisoned => DefStatus::Poisoned,
-        })
+        memo.get(start.tumbler()).map(DefStatus::from)
     }
 
     /// Record the derived status for an ever-registered start — first fill
@@ -85,9 +92,6 @@ impl DefMemo {
             Ok(t) => MemoEntry::Defined(Arc::new(t)),
             Err(Breach) => MemoEntry::Poisoned,
         });
-        match entry {
-            MemoEntry::Defined(term) => DefStatus::Defined(Arc::clone(term)),
-            MemoEntry::Poisoned => DefStatus::Poisoned,
-        }
+        DefStatus::from(&*entry)
     }
 }

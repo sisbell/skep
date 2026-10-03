@@ -91,21 +91,24 @@ impl Value {
 /// Set-element lift (Tumbler → Address) at the binding sites — M1 `validate`,
 /// infallible on what reaches it (§Internal 2), and the BINDING SITE's half of
 /// the ℘_fin(T) invariant [`Value::holds_addresses`] checks at the doors.
-/// Every tumbler lifted here is one of two things: the start of a unit-depth
-/// span in a stored slot endset, or an element of a `Value::AddrSet`, which
-/// the evaluator builds from those and the two caller-facing doors
-/// (`evaluate_def`, `eval`) check element by element.
+/// Every tumbler lifted here is one of three things: the start of a unit-depth
+/// span in a stored slot endset; the tumbler of an `Address` — a link's own
+/// address (`L_dom`'s elements reflected, BH4's `stale` set), an `AddrSeq`
+/// element under `elems`, a walk's starting node — T4-valid by type; or an
+/// element of a `Value::AddrSet`, which the evaluator builds from the first
+/// two and the two caller-facing doors (`evaluate_def`, `eval`) check element
+/// by element.
 ///
-/// BOTH rest on one upstream property that is M7's to keep: EVERY UNIT-DEPTH
-/// SPAN IN A STORED SLOT HAS A T4-VALID START. `Endset::addrs()` filters on a
-/// span's SHAPE (`s == subtree_of(s.start())`) and says nothing about its
-/// start, so the property is established by M7's write doors — which admit a
-/// start only as an `Address` (`SlotArg::Addrs`, `emit`'s and `assert_sup`'s
-/// endpoints) or as a `Run::i_start`, an `Address` by type — and is NOT
-/// re-established on the journal/checkpoint deserialize path, where `Endset`
-/// derives a plain `Deserialize` while `Address`, `Span`, `Tumbler` and
-/// `Link` each validate through a shadow. So a tampered store reaches this
-/// `expect`; a hostile peer does not.
+/// The first, and through it the third, rest on one upstream property that is
+/// M7's to keep: EVERY UNIT-DEPTH SPAN IN A STORED SLOT HAS A T4-VALID START.
+/// `Endset::addrs()` filters on a span's SHAPE (`s == subtree_of(s.start())`)
+/// and says nothing about its start, so the property is established by M7's
+/// write doors — which admit a start only as an `Address` (`SlotArg::Addrs`,
+/// `emit`'s and `assert_sup`'s endpoints) or as a `Run::i_start`, an `Address`
+/// by type — and is NOT re-established on the journal/checkpoint deserialize
+/// path, where `Endset` derives a plain `Deserialize` while `Address`, `Span`,
+/// `Tumbler` and `Link` each validate through a shadow. So a tampered store
+/// reaches this `expect`; a hostile peer does not.
 pub(crate) fn lift(t: &Tumbler) -> Address {
     validate(t.clone()).expect("PL set elements are store-minted, T4-valid addresses")
 }

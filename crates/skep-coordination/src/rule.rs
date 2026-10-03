@@ -112,13 +112,15 @@ pub enum ScopeBody {
 impl ScopeBody {
     /// β_ρ^S(x): whether `arg` is in scope under this body, or `None` when
     /// the body and the argument's shape disagree — which leaves the rule
-    /// UNSCOPED, its full `[D_ρ]` counted.
-    pub(crate) fn in_scope(self, arg: &Arg, s: &dyn Fn(&Address) -> bool) -> Option<bool> {
+    /// UNSCOPED, its full `[D_ρ]` counted. `s` owns each address it is asked
+    /// about — `quiescent_scoped`'s binds it into the scope's environment —
+    /// so a slot's addresses are lifted straight into it.
+    pub(crate) fn in_scope(self, arg: &Arg, s: &dyn Fn(Address) -> bool) -> Option<bool> {
         match (self, arg) {
-            (ScopeBody::PerAddress, Arg::Addr(a)) => Some(s(a)),
-            (ScopeBody::PerEmitter, Arg::Tuple(t)) => Some(s(&t.addr)),
-            (ScopeBody::PerTarget, Arg::Tuple(t)) => Some(t.to.addrs().any(|y| s(&lift(y)))),
-            (ScopeBody::PerSource, Arg::Tuple(t)) => Some(t.from.addrs().any(|y| s(&lift(y)))),
+            (ScopeBody::PerAddress, Arg::Addr(a)) => Some(s(a.clone())),
+            (ScopeBody::PerEmitter, Arg::Tuple(t)) => Some(s(t.addr.clone())),
+            (ScopeBody::PerTarget, Arg::Tuple(t)) => Some(t.to.addrs().any(|y| s(lift(y)))),
+            (ScopeBody::PerSource, Arg::Tuple(t)) => Some(t.from.addrs().any(|y| s(lift(y)))),
             _ => None,
         }
     }

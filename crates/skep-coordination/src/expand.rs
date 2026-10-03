@@ -64,8 +64,11 @@ impl State {
 }
 
 /// The expander (ASN-0130): one expansion's referent supplier and state.
-/// Build one per top-level expansion (`certify_stable`'s and the rule
-/// engine's each start at zero — PR3's determinism is per expansion).
+/// One per top-level expansion, which [`Expander::expand`] consumes: PR3's
+/// determinism is per expansion (`certify_stable`'s and the rule engine's
+/// each start at zero), and a second expansion through one supply would
+/// continue its name counter and inherit its spent budget — so the type
+/// offers none, as `Checker::check_signed` offers no second judgment.
 pub(crate) struct Expander<'a> {
     defs: &'a dyn DefSource,
     state: State,
@@ -78,7 +81,7 @@ impl<'a> Expander<'a> {
 
     /// `expand` — the flat reference expansion of a checked (every `Ref`
     /// resolvable) body, or `ExpansionTooLarge` once the budget is spent.
-    pub(crate) fn expand(&mut self, t: &Term) -> Result<Term, ExpansionTooLarge> {
+    pub(crate) fn expand(mut self, t: &Term) -> Result<Term, ExpansionTooLarge> {
         let out = self.term(t);
         if self.state.nodes.spent() {
             Err(ExpansionTooLarge)
@@ -103,7 +106,7 @@ impl Rewrite for Expander<'_> {
         let referent = self
             .defs
             .resolve_def(addr)
-            .unwrap_or_else(|| unreachable!("WT-ref: a checked body's referent has a defined signature"));
+            .expect("WT-ref: a checked body's referent has a defined signature");
         // The node: fresh names for the referent's parameters first, in
         // signature order …
         let fresh_names: Vec<VarId> = referent.params().iter().map(|_| self.state.fresh()).collect();

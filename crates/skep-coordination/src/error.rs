@@ -216,7 +216,16 @@ impl Error for SupersedeError {
 }
 
 /// `register_pred` rejection (gate-first; ASN-0130 VALID).
+///
+/// `#[non_exhaustive]`: the gates are the design's, but one resource gate is
+/// foreseen — a cap on the DISTINCT referents a stored body may name. Each
+/// costs this call an unindexed audit-slice scan at gate (iii), and the
+/// decoder's node budget admits some sixteen thousand in one body (a `Ref` to
+/// a one-component address is three units, its join one more). The cap's
+/// refusal is a variant here, and a consumer's catch-all should absorb it
+/// rather than break.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum RegisterError {
     NotResident,
     ParseFailed,
@@ -260,7 +269,15 @@ impl Error for RegisterError {
 }
 
 /// `evaluate_def` rejection.
+///
+/// `#[non_exhaustive]`: PL evaluation has no fuel budget, and a stored def's
+/// denotation is where the need is measured — `Pᵢ(x) := Pᵢ₋₁(x) ∧ Pᵢ₋₁(x)`
+/// registers through `P₃₂` (its reach grows four levels per def), and one
+/// `evaluate_def` of `P₃₂` walks 2³² leaves. A fuel budget's refusal lands
+/// here, this being the one evaluator that already answers in a `Result`, and
+/// a consumer's catch-all should absorb it rather than break.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum EvalError {
     NotEverRegistered,
     /// Ever-registered start whose immutable content fails the PR-ENC

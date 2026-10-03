@@ -58,6 +58,39 @@ fn next_enabled_names_the_first_rule_in_registration_order() {
     );
 }
 
+/// An address domain enumerates in Tumbler order — `next_enabled`'s stated
+/// pick — even where its elements come from several class slices: `L_dom` is
+/// the union of the catalog's classes, read class by class, and a link of an
+/// earlier class homed in a later document must not be picked ahead of a
+/// T1-smaller link of a later class.
+#[test]
+fn an_address_domain_enumerates_in_tumbler_order_across_class_slices() {
+    let k = kernel();
+    let mut c = coord(&k);
+    let writer = link_writer(&k);
+    // Retired heads the catalog's class order and PredStable ends it; doc2's
+    // links are T1-greater than doc1's.
+    let (later, _) = writer
+        .emit(Caller::System, &doc2(), &retired_ty(), &ca(1), &[])
+        .expect("a Retired link homed in doc2");
+    let (earlier, _) = writer
+        .emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(2), &[])
+        .expect("a PredStable link homed in doc1");
+    assert!(earlier.tumbler() < later.tumbler());
+    let id = c
+        .register_rule(Rule {
+            domain: Dom::LinkDom,
+            trigger: always_addr(&c),
+            view: View::Audit,
+            action: marker_action(),
+        })
+        .expect("register");
+    assert_eq!(
+        c.next_enabled(&k.snapshot()),
+        Some(Occurrence { rule: id, arg: Arg::Addr(earlier) })
+    );
+}
+
 /// A fire's trigger and action see the STORE's domain element, never the
 /// caller's: an `Occurrence` is caller-built and carries a whole `Tuple`, so
 /// `fire` looks its argument up by identity (`t.addr`) and then uses what the

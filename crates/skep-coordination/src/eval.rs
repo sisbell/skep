@@ -26,6 +26,8 @@
 //! draft can neither satisfy a rule's trigger nor seed its domain, and a
 //! public fire never testifies to a draft's contents (PUB-6.28).
 
+use std::collections::BTreeSet;
+
 use im::OrdSet;
 use skep_address::{is_prefix, Address, Nat, Tumbler};
 use skep_links::{CoverageClass, Pattern, Tip, Tuple, View};
@@ -157,16 +159,19 @@ impl<W> EvalCtx<'_, W> {
         self.links.is_k(&k.0, x.tumbler(), Slice::of(self.view))
     }
 
-    /// The UV rewrite over a whole M7 answer, and the ONE place that answer
-    /// becomes a ℘_fin(T) value: M7 answers in `Address`, a PL set holds
-    /// `Tumbler` (M1's `Address` is neither `Hash` nor `Ord`), and at
-    /// `default` the elements [`EvalCtx::uv_keeps`] refuses are dropped — at
-    /// `active` and `audit` that predicate short-circuits on the view, so the
-    /// rewrite costs one comparison per element and keeps them all. So every
-    /// UV-rewritten read is ONE call, and a read that should have been
-    /// rewritten and was not is visible as the one that did not make it.
-    fn uv_rewrite(&self, k: &TypeKey, answer: Vec<Address>) -> OrdSet<Tumbler> {
-        answer.into_iter().map(|a| a.tumbler().clone()).filter(|e| self.uv_keeps(k, e)).collect()
+    /// The UV rewrite over a whole ℘_fin(T) answer — ONE call per
+    /// UV-rewritten read, so a read that should have been rewritten and was
+    /// not is visible as the one that did not make it. The elements
+    /// [`EvalCtx::uv_keeps`] refuses are removed in place: at `default` those
+    /// another BH1 class filters; at `active` and `audit` none, the predicate
+    /// short-circuiting on the view, so the answer passes through whole.
+    fn uv_rewrite(&self, k: &TypeKey, mut answer: OrdSet<Tumbler>) -> OrdSet<Tumbler> {
+        let refused: Vec<Tumbler> =
+            answer.iter().filter(|e| !self.uv_keeps(k, e)).cloned().collect();
+        for e in &refused {
+            answer.remove(e);
+        }
+        answer
     }
 
     /// BH3 join: `target_of` across the catalog's `ReverseLookup` classes —
@@ -251,25 +256,16 @@ pub(crate) fn eval_term<W>(cx: &EvalCtx<'_, W>, env: &Env, t: &Term) -> Value {
                 .min_by(|a, b| a.tumbler().cmp(b.tumbler()));
             Value::OptAddr(best)
         }
-        Term::BigUnion { dom, var, body } => {
-            let mut out: OrdSet<Tumbler> = OrdSet::new();
-            for e in enum_dom(cx, env, dom) {
-                let s = as_set(eval_term(cx, &env.bind(*var, Value::from(e)), body));
-                for elem in s.iter() {
-                    out.insert(elem.clone());
-                }
-            }
-            Value::AddrSet(out)
-        }
+        Term::BigUnion { dom, var, body } => Value::AddrSet(OrdSet::unions(
+            enum_dom(cx, env, dom)
+                .into_iter()
+                .map(|e| as_set(eval_term(cx, &env.bind(*var, Value::from(e)), body))),
+        )),
         // QD-refl: the reflected ℘_fin(T) value is the domain's address
         // denotation at this snapshot.
-        Term::Reflect(d) => {
-            let mut out: OrdSet<Tumbler> = OrdSet::new();
-            for e in enum_dom(cx, env, d) {
-                out.insert(addr_elem(e).tumbler().clone());
-            }
-            Value::AddrSet(out)
-        }
+        Term::Reflect(d) => Value::AddrSet(
+            enum_dom(cx, env, d).into_iter().map(addr_elem).map(Tumbler::from).collect(),
+        ),
         Term::Ref { addr, args } => {
             let Some(defs) = cx.defs else {
                 panic!(
@@ -460,15 +456,17 @@ pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, d: &Dom) -> Vec<Arg> {
             .collect(),
         // L_dom = ⋃_{K∈catalog} observe(K, ⟨⟩, Audit) ↦ t.addr — the
         // typed-relation sublayer only (open MAKELINK links excluded); never
-        // M8's type_slice.
+        // M8's type_slice. Deduplicated in T1 order — an `Address` orders by
+        // its tumbler — each element the `Address` M7 handed over.
         Dom::LinkDom => {
-            let mut out: OrdSet<Tumbler> = OrdSet::new();
-            for k in cx.catalog.classes() {
-                for tuple in cx.links.observe(&k.0, Pattern::default(), Slice::Audit) {
-                    out.insert(tuple.addr.tumbler().clone());
-                }
-            }
-            out.iter().map(lift).map(Arg::Addr).collect()
+            let links: BTreeSet<Address> = cx
+                .catalog
+                .classes()
+                .iter()
+                .flat_map(|k| cx.links.observe(&k.0, Pattern::default(), Slice::Audit))
+                .map(|t| t.addr)
+                .collect();
+            links.into_iter().map(Arg::Addr).collect()
         }
         Dom::Reg => unreachable!("no Reg domain survives type_check's Reg-expansion/folding"),
         Dom::Filter { dom, var, pred } => enum_dom(cx, env, dom)

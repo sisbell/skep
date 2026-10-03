@@ -34,14 +34,19 @@ fn catalog_projects_and_serves_reserved_endsets() {
 }
 
 /// The reserved expansion-name range is structurally uninhabitable by caller
-/// names (`VarId::new` is the sole public constructor); `Env` binds
-/// functionally, and is a collection of bindings — built from an iterator,
-/// extended, a later binding of a name shadowing an earlier one as `bind`
-/// does.
+/// names (`VarId::new` is the sole public constructor, and a `const fn`, so a
+/// driver's named constants are held to the watershed at compile time);
+/// `Env` binds functionally, and is a collection of bindings — built from an
+/// iterator, extended, a later binding of a name shadowing an earlier one as
+/// `bind` does.
 #[test]
 fn varid_new_stops_at_the_watershed_and_env_binds_functionally() {
     assert!(VarId::new(EXPANSION_NAME_BASE).is_none());
     assert!(VarId::new(EXPANSION_NAME_BASE - 1).is_some());
+    const FIRST: VarId = VarId::new(1).expect("below the watershed");
+    const RESERVED: Option<VarId> = VarId::new(EXPANSION_NAME_BASE);
+    assert_eq!(Some(FIRST), VarId::new(1));
+    assert!(RESERVED.is_none());
     let base = Env::empty();
     let bound = base.bind(v(1), Value::Bool(true));
     assert_eq!(bound.get(&v(1)), Some(&Value::Bool(true)));

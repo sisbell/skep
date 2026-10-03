@@ -37,8 +37,10 @@ pub struct VarId(u32);
 
 impl VarId {
     /// The sole public constructor — the reservation's enforcement point:
-    /// `None ⇔ v ≥ EXPANSION_NAME_BASE`.
-    pub fn new(v: u32) -> Option<VarId> {
+    /// `None ⇔ v ≥ EXPANSION_NAME_BASE`. A `const fn`, so a driver can name
+    /// its PL variables as constants and have the watershed checked at
+    /// compile time.
+    pub const fn new(v: u32) -> Option<VarId> {
         if v >= EXPANSION_NAME_BASE {
             None
         } else {

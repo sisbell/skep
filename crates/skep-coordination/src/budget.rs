@@ -150,6 +150,7 @@ impl Budget {
     /// once the budget is spent AND EVERY TIME AFTER: the count only grows
     /// and saturates, which is why no walk needs an `exhausted` flag beside
     /// its counter.
+    #[must_use = "the answer is the door: drop it and the walk builds past the budget"]
     pub(crate) fn charge(&self, weight: usize) -> bool {
         let n = self.0.get().saturating_add(weight);
         self.0.set(n);

@@ -373,8 +373,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // The OPEN scope-view decision the doc states: `active`, the current
         // structural state, as the conservative default.
         let cx = self.eval_ctx(snap.world(), View::Active, None);
-        let s_of = |y: &Address| -> bool {
-            let env = Env::empty().bind(scope_param, Value::Addr(y.clone()));
+        let s_of = |y: Address| -> bool {
+            let env = Env::empty().bind(scope_param, Value::Addr(y));
             as_bool(eval_term(&cx, &env, scope.evaluable()))
         };
         // A `None` — the body and the element's shape disagree — leaves the

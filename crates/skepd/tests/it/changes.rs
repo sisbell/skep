@@ -20,10 +20,11 @@
 //! own terms. Their per-row shape is pinned here beside the rest of the
 //! entry's (the testimony and affected-docs cells); the cells that read the
 //! feed as the mirror's WHOLE input, and the attest store's crash honesty,
-//! are the child `mirror` — all but the store's crash test against the
-//! reclamation, which stands here beside the compaction cell whose helpers
-//! it shares. What more than one family uses — the seeded flow, the feed
-//! readers, the per-kind term checks, the reclaim helpers — lives here.
+//! are the child `mirror` — all but the store's cells against the
+//! reclamation (SO-I5 (d)) — its crash test, its sync, its halt — which
+//! stand here beside the compaction cell whose helpers they share. What more
+//! than one family uses — the seeded flow, the feed readers, the per-kind
+//! term checks, the reclaim helpers — lives here.
 
 use crate::common;
 
@@ -1830,31 +1831,34 @@ fn kill_reclaim_crash_child(after: &str) -> (tempfile::TempDir, Crash) {
 ///    (every 1,024 commits) may checkpoint: the file written, two retained,
 ///    then every closed segment wholly below the OLDEST retained unlinked
 ///    and the directory fsynced;
-/// 3. under the same guard, `commits.log`'s line, then the store's — one
-///    write to the OS, never fsynced — then the four derived files'.
+/// 3. under the same guard, `commits.log`'s line, then the store's —
+///    written, then synced to disk before the step goes on — then the four
+///    derived files'.
 ///
 /// The checkpoint that reclaims a write's segment is a LATER commit's step
 /// 2, since the oldest retained checkpoint must lie above that segment, and
-/// every later commit opens after the write's step 3: the line is written
+/// every later commit opens after the write's step 3: the line is on disk
 /// before any checkpoint that could reclaim its segment begins, and the open
 /// takes no checkpoint, so it rebuilds a missing line from the journal
-/// first. So a process killed anywhere loses no signature. What no kill
-/// shows is power lost before the OS writes the line back, which nothing in
-/// the order rules out.
+/// first. So a process killed anywhere loses no signature, and power lost
+/// after the sync loses none either. What no kill shows is the sync itself —
+/// the OS holds a killed process's line whether or not it was synced — which
+/// is why [`each_attest_store_line_is_synced_before_the_next_commit_begins`]
+/// observes it through its seam.
 ///
 /// Each boundary is judged on a copy of a SIGKILLed child's board (this
 /// binary re-exec'd, as `hazard.rs` does), its checkpoints the kernel's own,
 /// taken between writes through `checkpoint_now`: STORE APPEND, the write
 /// committed and its line not yet appended — the lines the record step had
 /// not reached cut off the files' ends, `commits.log`, written first,
-/// keeping its own; STORE SYNC, where a sync would stand after the append,
-/// which the order has none of — the line written and never synced;
-/// CHECKPOINT, the reclaiming checkpoint written, its unlink not reached —
-/// the segments it unlinked restored from a copy taken before it; SEGMENT
-/// UNLINK, after it. Each reopens, is driven until the signed write lies
-/// below the floor, and reopens again: every attested position, read off
-/// the journal before any checkpoint, still has its line, and the journal
-/// refuses each one below the floor.
+/// keeping its own; STORE SYNC, the line written and its sync not yet
+/// returned — to a kill, the board the ack leaves, the OS holding the line
+/// either way; CHECKPOINT, the reclaiming checkpoint written, its unlink not
+/// reached — the segments it unlinked restored from a copy taken before it;
+/// SEGMENT UNLINK, after it. Each reopens, is driven until the signed write
+/// lies below the floor, and reopens again: every attested position, read
+/// off the journal before any checkpoint, still has its line, and the
+/// journal refuses each one below the floor.
 #[test]
 fn a_kill_at_each_boundary_keeps_every_signature_below_the_floor() {
     if let (Some(dir), Ok(after)) =
@@ -1947,6 +1951,141 @@ fn a_kill_at_each_boundary_keeps_every_signature_below_the_floor() {
         }
         sd.shutdown();
     }
+}
+
+/// EACH STORE LINE IS DURABLE BEFORE THE NEXT COMMIT BEGINS (SO-I5 (d)):
+/// below the reclaim floor a store line is an entry signature's only copy,
+/// and the checkpoint that reclaims the journal's copy runs inside a LATER
+/// commit — so each attested commit's line is synced before its record step
+/// returns, and the open syncs the lines it rebuilds before the first
+/// commit. No kill can show either, the OS holding a killed process's line
+/// whether or not it was synced, so the sync is observed through its own
+/// seam: the coverage the store's last successful `sync_data` made durable,
+/// read between commits. After each attested write, before the next is
+/// sent, the store holds the write's line and the synced coverage has
+/// reached its position; after a reopen that lost the file, the rebuilt
+/// lines are synced through the head before any write.
+#[test]
+fn each_attest_store_line_is_synced_before_the_next_commit_begins() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let mut sigs = BTreeMap::new();
+    for n in 1..=3 {
+        let (at, attest) = signed_ghost_link(port, &signed, n);
+        assert_eq!(
+            sd.daemon().attest_store_synced_through(),
+            at,
+            "write {n}: the store's synced coverage reaches its position before the next commit"
+        );
+        let sig = attest["sig"].as_str().expect("sig").to_string();
+        assert_eq!(
+            attest_store_lines(dir.path()).get(&at).map(|(_, held)| held),
+            Some(&sig),
+            "write {n}: the line the sync covers is the row's signature"
+        );
+        sigs.insert(at, sig);
+    }
+    let head_at = head(port);
+    sd.shutdown();
+
+    std::fs::remove_file(dir.path().join("feed-attest.log")).expect("lose the store");
+    let sd = spawn(dir.path());
+    assert_eq!(head(sd.port()), head_at, "the reopen commits nothing");
+    assert_eq!(
+        sd.daemon().attest_store_synced_through(),
+        head_at,
+        "the open synced the lines it rebuilt, through the head, before any write"
+    );
+    let rebuilt: BTreeMap<u64, String> =
+        attest_store_lines(dir.path()).into_iter().map(|(at, (_, sig))| (at, sig)).collect();
+    assert_eq!(rebuilt, sigs, "every attested position's line is rebuilt from the journal");
+    sd.shutdown();
+}
+
+/// A FAILED STORE LINE HALTS WRITES (SO-I5 (d)): a store that failed a
+/// line holds no copy of that signature, and any later commit could trigger
+/// the checkpoint that deletes the journal's — so the daemon refuses every
+/// later write, `poisoned` at the `halt` disposition, for the rest of the
+/// uptime, while reads are served; the restart's open rebuilds the line from
+/// the journal, which the halt kept. The failure is forced through its seam
+/// — the store's next write fails at the OS — on the write after a healthy
+/// one, with the head writer's clock past the hour, so the turn after the
+/// failing write has a head due. That write is acked, and nothing commits
+/// after it, the due head included; every later write — an attested link,
+/// an attested mint, an unattested `delegate` — is refused `poisoned`;
+/// reads answer, the feed serving the failed position's row with its
+/// `attest`; and after a restart the store holds the failed position's
+/// signature and writes are admitted again.
+#[test]
+fn a_failed_attest_store_line_halts_every_later_write_until_a_restart() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ghost = |n| {
+        link_frame(CLAIMANT_DOC1, r#"{"addrs":[]}"#, r#"{"addrs":[]}"#, &ghost_ty(CLAIMANT_DOC1, n))
+    };
+    let (failed_at, failed_sig) = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+        signed_ghost_link(port, &signed, 1);
+        sd.daemon().set_head_writer_clock_millis(u64::MAX);
+        sd.daemon().fail_the_attest_stores_next_write();
+        let before = head(port);
+        let failed_at = acked_at(&op(port, Some(&signed), &ghost(2)));
+        assert_eq!(head(port), failed_at, "the failing write is acked, and the due head refused");
+        assert!(
+            !attest_store_lines(dir.path()).contains_key(&failed_at),
+            "the store holds no line for the failed position"
+        );
+        assert!(
+            matches!(sd.daemon().attestation_at(Seq(failed_at)), Ok(Some(_))),
+            "the journal holds its marker"
+        );
+
+        let boot = open_session(port, 0);
+        let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
+        let prefix =
+            expect_resp(&v, "maybe_addr")["addr"].as_str().expect("a read answers").to_string();
+        for (what, token, frame) in [
+            ("an attested link", &signed, ghost(3)),
+            (
+                "an attested mint",
+                &signed,
+                format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#),
+            ),
+            (
+                "an unattested delegate",
+                &boot,
+                format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":1}}"#),
+            ),
+        ] {
+            let v = op(port, Some(token), &frame);
+            assert_eq!(
+                (v["resp"].as_str(), v["code"].as_str(), v["disposition"].as_str()),
+                (Some("rejected"), Some("poisoned"), Some("halt")),
+                "{what} is refused while the store has failed: {v}"
+            );
+        }
+        assert_eq!(head(port), failed_at, "no refused write committed");
+        let row = one_entry_since(port, &signed, "the failed write's row", before);
+        assert_eq!(row["at"].as_u64(), Some(failed_at));
+        let sig = row["attest"]["sig"].as_str().expect("the uptime serves the slot").to_string();
+        sd.shutdown();
+        (failed_at, sig)
+    };
+
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    assert_eq!(
+        attest_store_lines(dir.path()).get(&failed_at).map(|(_, sig)| sig),
+        Some(&failed_sig),
+        "the restart's open rebuilt the failed position's line from the journal"
+    );
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let (at, _) = signed_ghost_link(port, &signed, 3);
+    assert!(at > failed_at, "writes are admitted again");
+    sd.shutdown();
 }
 
 fn text(b: &[u8]) -> String {

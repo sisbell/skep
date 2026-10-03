@@ -232,4 +232,26 @@ impl Daemon {
     pub fn attestation_at(&self, at: Seq) -> Result<Option<Attestation>, HistoryError> {
         self.engine.kernel().attestation_at(at)
     }
+
+    /// TEST HOOK (the same standing: `#[doc(hidden)]`, not a stable API):
+    /// the position through which the ATTEST STORE's file was last SYNCED —
+    /// the coverage its last successful `sync_data` made durable — so a
+    /// suite can pin that each attested commit's line is on disk before the
+    /// next commit begins (SO-I5 (d)), which no kill can show: a killed
+    /// process loses nothing the OS already holds.
+    #[doc(hidden)]
+    pub fn attest_store_synced_through(&self) -> u64 {
+        self.writes.attest_store_synced_through()
+    }
+
+    /// TEST HOOK (the same standing): FAIL THE ATTEST STORE'S NEXT WRITE —
+    /// its file's handle swapped for a read-only one, so the next line's
+    /// write fails at the OS — answered as every store failure is (SO-I5
+    /// (d)): that commit acked, every later write refused `poisoned` until a
+    /// restart, whose open rebuilds the line from the journal. A seam whose
+    /// act failed PANICS here. Not disarmable.
+    #[doc(hidden)]
+    pub fn fail_the_attest_stores_next_write(&self) {
+        self.writes.fail_the_attest_stores_next_write();
+    }
 }

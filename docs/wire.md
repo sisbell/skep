@@ -1299,8 +1299,9 @@ Fields:
     state you're waiting on commits;
   * `"retry"` — transient (durability hiccup); the operation did nothing;
     reissue as-is;
-  * `"halt"` — the kernel has stopped accepting writes (operator
-    condition); reads still work.
+  * `"halt"` — the board has stopped accepting writes (operator
+    condition): its kernel halted, or the daemon's attest store failed a
+    signature's line (`poisoned`, below); reads still work.
   The code is authoritative; a client that knows its own context may
   reissue despite a conservative hint. Note `not_next_form`/`not_fresh` are
   `permanent` *by design*: recover by re-deriving a fresh prefix via
@@ -1349,7 +1350,13 @@ Transport/lifecycle: `unauthenticated`, `malformed`, `durability`,
 into a journal frame at all — permanent; reissuing the same request
 stages the same record), `txn_over_budget` (the request's records all
 encode, but the transaction as a whole exceeds the kernel's
-per-transaction byte budget — permanent; split the request), `poisoned`.
+per-transaction byte budget — permanent; split the request), `poisoned`
+(the board has stopped accepting writes — halt: the kernel halted its
+write paths, or the daemon's attest store (§The change feed) failed to
+write or sync a signature's line, after which every write is refused
+until a restart, whose open rebuilds the line from the journal — the
+repeat of an acknowledged write included, unless a credential deposit's
+own memo answers it; reads are served throughout).
 
 Credentials: `credential_refused` — the auth work's one new code,
 always carrying a machine `detail` token, and `permanent` at every token

@@ -48,9 +48,11 @@
 //!   position reads as one that contributed nothing — which for
 //!   `feed-index.log` is a `[]`-docs entry, and those are never masked.
 //! * appends are flushed to the OS, not fsynced (the trade `commits.log`
-//!   makes: testimony never doubles a write's fsync); a rewrite goes to
-//!   `<file>.compact` and is renamed over the original — whole old file or
-//!   whole new one, never half of either.
+//!   makes: testimony never doubles a write's fsync) — the attest store's
+//!   alone excepted, each of its lines synced before its record step
+//!   returns ([`LineFile::append_synced`]; SO-I5 (d), which `attest.rs`
+//!   states); a rewrite goes to `<file>.compact` and is renamed over the
+//!   original — whole old file or whole new one, never half of either.
 //!
 //! Loss unmasks nothing: no derived file is consulted for WHAT an entry
 //! says (that is `commits.log`'s) or for WHETHER a class may see it (that
@@ -113,8 +115,9 @@ pub(super) struct LineFile {
     dir: PathBuf,
     name: &'static str,
     coverage: u64,
-    /// Set by the first FAILED [`LineFile::append`] of this uptime, after
-    /// which this file takes no further APPEND and no FENCE.
+    /// Set by the first FAILED [`LineFile::append`] of this uptime — or
+    /// failed [`LineFile::sync`] — after which this file takes no further
+    /// APPEND and no FENCE.
     ///
     /// [`LineFile::rewrite`] is EXEMPT and needs no guard, on two counts.
     /// It writes the file WHOLE from the resident twin and fences at the
@@ -137,6 +140,11 @@ pub(super) struct LineFile {
     /// ahead of every append, so this uptime still answers correctly; what
     /// stops is the testimony, which is what the next open reads.
     stopped: bool,
+    /// The coverage the last successful [`LineFile::sync`] made durable —
+    /// set in that sync's own success arm, so no line reads as synced that
+    /// no `sync_data` covered.
+    #[cfg(any(test, feature = "test-hooks"))]
+    synced: u64,
 }
 
 /// The ENTRIES a line file replays — the position-carrying records its
@@ -200,8 +208,15 @@ impl LineFile {
             ));
             file.set_len(valid_end)?;
         }
-        let mut this =
-            LineFile { file, dir: dir.to_path_buf(), name, coverage, stopped: false };
+        let mut this = LineFile {
+            file,
+            dir: dir.to_path_buf(),
+            name,
+            coverage,
+            stopped: false,
+            #[cfg(any(test, feature = "test-hooks"))]
+            synced: 0,
+        };
         if foreign {
             // Purge what is not this journal's, once, so it cannot come back.
             this.purge_foreign(head)?;
@@ -268,6 +283,64 @@ impl LineFile {
                 self.name
             ));
         }
+    }
+
+    /// Append one record and SYNC the file before answering — the attest
+    /// store's record-time append (SO-I5 (d)): there a line below the
+    /// reclaim floor is an entry signature's only copy, so it must be on disk
+    /// before any later commit, which could reclaim the journal's copy, can
+    /// begin. The four derived files never take it; what they lose the next
+    /// open re-derives.
+    ///
+    /// A failed write or sync STOPS the file and is ANSWERED, never reported
+    /// here: the caller owes the failure a disposition of its own. A stopped
+    /// file takes nothing and answers an error, never `Ok` — a line it did
+    /// not write is no durable line.
+    pub fn append_synced(&mut self, at: u64, fields: Vec<(&'static str, Value)>) -> io::Result<()> {
+        if self.stopped {
+            return Err(io::Error::other(format!("{} stopped at an earlier failure", self.name)));
+        }
+        self.append(at, fields)?;
+        self.sync()
+    }
+
+    /// Sync the file's data to disk (`sync_data`): every line appended so
+    /// far made durable. A failed sync STOPS the file as a failed append
+    /// does — whether the lines reached the disk is then unknown, and the
+    /// next open's replay is what decides what it covers.
+    pub fn sync(&mut self) -> io::Result<()> {
+        match self.file.sync_data() {
+            Ok(()) => {
+                #[cfg(any(test, feature = "test-hooks"))]
+                {
+                    self.synced = self.coverage;
+                }
+                Ok(())
+            }
+            Err(e) => {
+                self.stopped = true;
+                Err(e)
+            }
+        }
+    }
+
+    /// The test seam behind `crate::Daemon::attest_store_synced_through`:
+    /// the coverage the last successful [`LineFile::sync`] made durable —
+    /// every position at or below it whose line this file holds is on disk.
+    /// Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn synced(&self) -> u64 {
+        self.synced
+    }
+
+    /// The test seam behind `crate::Daemon::fail_the_attest_stores_next_write`:
+    /// swap this file's handle for a READ-ONLY one on the same file, so its
+    /// next write fails at the OS, as a full or failing disk's would, and
+    /// the failure takes the path a real one takes. Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn make_unwritable(&mut self) -> io::Result<()> {
+        self.file = File::open(self.dir.join(self.name))?;
+        Ok(())
     }
 
     /// Append the coverage fence `{"covered":N}` — a no-op when the file
@@ -373,7 +446,7 @@ impl LineFile {
         let path = dir.join(name);
         File::create(&path).expect("create the file to be opened read-only");
         let file = File::open(&path).expect("a read-only handle");
-        LineFile { file, dir: dir.to_path_buf(), name, coverage, stopped: false }
+        LineFile { file, dir: dir.to_path_buf(), name, coverage, stopped: false, synced: 0 }
     }
 }
 
@@ -539,5 +612,21 @@ mod tests {
             Vec::<u8>::new(),
             "nothing reached the file after the failure"
         );
+    }
+
+    /// The attest store's append (SO-I5 (d)) is synced through its own line,
+    /// ANSWERS its failure rather than reporting it, and on a stopped file
+    /// answers every later line an error, never `Ok`: a line the file did
+    /// not write is no durable line.
+    #[test]
+    fn a_synced_append_answers_its_failure_and_a_stopped_file_holds_no_line_durable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut f, _) = LineFile::open(dir.path(), MASKED_FILE, 20, |_| true).expect("open");
+        f.append_synced(3, vec![]).expect("a writable file takes and syncs the line");
+        assert_eq!(f.synced(), 3, "the sync covers the line it follows");
+        let mut f = LineFile::over_unwritable(dir.path(), INDEX_FILE, 3);
+        assert!(f.append_synced(4, vec![]).is_err(), "a read-only handle refuses the line");
+        assert!(f.append_synced(5, vec![]).is_err(), "a stopped file answers no later line Ok");
+        assert_eq!((f.coverage(), f.synced()), (3, 0), "nothing covered past it, nothing synced");
     }
 }

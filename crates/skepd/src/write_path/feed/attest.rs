@@ -32,6 +32,25 @@
 //! the lines below it are kept for a read that does not yet exist, the class
 //! being the design record's and not this build's to narrow.
 //!
+//! DURABLE BEFORE THE NEXT COMMIT, AND A FAILED LINE HALTS WRITES (SO-I5 (d):
+//! no signature the board keeps is lost by a crash, a power loss or a failed
+//! write). The checkpoint that reclaims a position's journal segment runs
+//! inside a LATER commit than the position's own — the kernel checkpoints
+//! from within a commit, and reclaims only below the oldest checkpoint it
+//! retains — and every commit opens after the previous write's record step,
+//! under the write path's serialization lock. So [`AttestStore::record`]
+//! SYNCS the line before it returns ([`LineFile::append_synced`]), and the
+//! line is on disk before any commit that could take the journal's copy away
+//! can begin; the open syncs what it rebuilt before the first commit, for the
+//! same reason. The four derived files are not synced: what they lose, the
+//! next open re-derives. A write or a sync that FAILS stops this file as a
+//! failed append stops theirs, and — the file being primary where theirs are
+//! projections — it HALTS the write path: the record answers
+//! [`super::StoreFailed`], and the daemon refuses every later write until a
+//! restart, since any commit could trigger the checkpoint that deletes the
+//! journal copy the lost line depends on. The restart's open rebuilds the
+//! line from the journal, which the halt kept.
+//!
 //! What keeps the class is this card's privacy: [`AttestStore`]'s file is its
 //! own, and nothing rewrites it but [`LineFile::open`]'s purge of the lines
 //! above the head — another journal's — which copies every line of this
@@ -48,6 +67,7 @@ use skep_kernel::{Attestation, Seq};
 
 use super::derived::LineFile;
 use super::super::sidecar::CommitsLog;
+use super::StoreFailed;
 use crate::codec::{hex_string, parse_lower_hex_bytes};
 
 // The file is named BESIDE the fields its records carry, and both beside the
@@ -82,7 +102,8 @@ impl AttestStore {
     /// below the head, a line at a time, holding resident the SERVED window
     /// alone — the lines below the log's fence are read past and stay in the
     /// FILE, untouched — then rebuild the missing tail from the journal's
-    /// markers, then fence at the head.
+    /// markers, then fence at the head and SYNC, so every line the open
+    /// rebuilt is on disk before the first commit can begin (SO-I5 (d)).
     ///
     /// A line this daemon cannot read (a tag of no signature, a blob of none,
     /// hex it did not write) is reported and not held: the row then renders
@@ -124,17 +145,44 @@ impl AttestStore {
             }
         }
         file.fence(head)?;
+        file.sync()?;
         Ok(AttestStore { file, served })
     }
 
     /// Mirror one admitted marker slot at RECORD time — the attestation the
-    /// plain sequence's check admitted and handed the kernel — into the file
-    /// and the served window. A failed append is reported and stops the file
-    /// for the uptime ([`LineFile::append_or_report`]); this uptime still
-    /// serves the slot, and the next open rebuilds it from the journal.
-    pub(super) fn record(&mut self, at: u64, slot: Attestation) {
-        self.file.append_or_report(at, attest_fields(&slot));
+    /// plain sequence's check admitted and handed the kernel — into the file,
+    /// SYNCED before this returns, and into the served window (SO-I5 (d)).
+    /// A failed write or sync stops the file for the uptime, is said ONCE
+    /// on the operator stream — this file and the position — and is
+    /// answered [`StoreFailed`], on which the write path halts, so no later
+    /// commit runs to say it twice. This uptime still serves the slot, and
+    /// the restart's open rebuilds the line from the journal.
+    pub(super) fn record(&mut self, at: u64, slot: Attestation) -> Result<(), StoreFailed> {
+        let durable = self.file.append_synced(at, attest_fields(&slot));
         self.served.insert(at, Arc::new(slot));
+        durable.map_err(|e| {
+            crate::notice::line(format_args!(
+                "{ATTEST_FILE}: position {at}'s line is not durable ({e}); every later write is \
+                 refused until a restart, whose open rebuilds the line from the journal"
+            ));
+            StoreFailed
+        })
+    }
+
+    /// The test seam behind `crate::Daemon::attest_store_synced_through`:
+    /// the coverage the file's last successful sync made durable. Not a
+    /// stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(super) fn synced_through(&self) -> u64 {
+        self.file.synced()
+    }
+
+    /// The test seam behind `crate::Daemon::fail_the_attest_stores_next_write`:
+    /// the file's next write fails at the OS ([`LineFile::make_unwritable`]).
+    /// A seam whose act failed PANICS here. Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(super) fn fail_next_write(&mut self) {
+        self.file.make_unwritable().expect("the test seam's read-only handle");
     }
 
     /// The slot the store holds for a served position — `None` where it holds
@@ -190,7 +238,8 @@ mod tests {
                 LineFile::open(dir.path(), ATTEST_FILE, 9, |_| true).expect("a fresh store opens");
             assert!(entries.is_empty());
             let mut store = AttestStore { file, served: BTreeMap::new() };
-            store.record(5, slot.clone());
+            store.record(5, slot.clone()).expect("a writable store takes the line");
+            assert_eq!(store.synced_through(), 5, "and syncs it before answering");
             assert_eq!(store.slot(5).as_deref(), Some(&slot), "served at once");
             assert_eq!(store.slot(4).as_deref(), None, "and only where recorded");
         }

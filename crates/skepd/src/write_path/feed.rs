@@ -310,6 +310,13 @@ pub(super) struct Feed {
     inner: Mutex<Inner>,
 }
 
+/// THE ATTEST STORE'S FAILURE (SO-I5 (d)): a line [`AttestStore::record`]
+/// could not make durable — its write or its sync failed, said once on the
+/// operator stream there — answered through [`Feed::record`] to the write
+/// path, which refuses every later write for the uptime on it.
+#[derive(Debug)]
+pub(super) struct StoreFailed;
+
 struct Inner {
     log: CommitsLog,
     /// Position → its classified docs (positions with docs only) — the
@@ -659,8 +666,11 @@ impl Feed {
     ///
     /// The derived appends are testimony too: a failed one is reported and
     /// the resident twin stays right, so this uptime answers correctly and
-    /// the next open's tail check re-derives what the file missed — the
-    /// store's from the journal, above the floor.
+    /// the next open's tail check re-derives what the file missed. The attest
+    /// store's line is the exception (SO-I5 (d)): synced before this
+    /// returns, and where its write or its sync fails, answered
+    /// [`StoreFailed`], on which the write path halts — the slot still served
+    /// this uptime, the line rebuilt from the journal by the restart's open.
     ///
     /// `docs` arrives as ADDRESSES and is rendered once, here, for the
     /// authority file alone: the classification reads them as addresses, so
@@ -679,7 +689,7 @@ impl Feed {
         signed: Option<Signed>,
         terms: Option<OpTerms>,
         world: &World,
-    ) {
+    ) -> Result<(), StoreFailed> {
         let mut inner = self.inner.lock();
         let rendered: Vec<String> = docs.iter().map(|a| a.tumbler().to_string()).collect();
         let (carrier, attest) = match signed {
@@ -689,9 +699,24 @@ impl Feed {
         };
         let Some(offset) = inner.log.record(serial, at, op, rendered, testimony, carrier, terms)
         else {
-            return;
+            return Ok(());
         };
-        inner.fold_position(at, offset, classify(world, docs), attest);
+        inner.fold_position(at, offset, classify(world, docs), attest)
+    }
+
+    /// The test seam behind `crate::Daemon::attest_store_synced_through`:
+    /// the coverage the attest store's last successful sync made durable.
+    /// Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(super) fn attest_store_synced_through(&self) -> u64 {
+        self.inner.lock().attest.synced_through()
+    }
+
+    /// The test seam behind `crate::Daemon::fail_the_attest_stores_next_write`:
+    /// the attest store's next write fails at the OS. Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(super) fn fail_the_attest_stores_next_write(&self) {
+        self.inner.lock().attest.fail_next_write();
     }
 
     /// The data behind `GET /changes` at `class`.
@@ -806,16 +831,21 @@ impl Inner {
     /// claiming completeness, not the silent incompleteness the coverage
     /// check closes. (The attest store owes its own two, on its own card, and
     /// by its class no third.)
+    ///
+    /// Answers the attest store's [`StoreFailed`] where its line failed
+    /// (SO-I5 (d)); the four twins and their files are folded whatever it
+    /// answers.
     fn fold_position(
         &mut self,
         at: u64,
         offset: LineOffset,
         docs: Vec<Doc>,
         attest: Option<Attestation>,
-    ) {
-        if let Some(slot) = attest {
-            self.attest.record(at, slot);
-        }
+    ) -> Result<(), StoreFailed> {
+        let stored = match attest {
+            Some(slot) => self.attest.record(at, slot),
+            None => Ok(()),
+        };
         self.files
             .offsets
             .append_or_report(at, vec![(OFFSETS_OFFSET, Value::Number(offset.0.into()))]);
@@ -849,6 +879,7 @@ impl Inner {
         if !docs.is_empty() {
             self.docs.insert(at, docs);
         }
+        stored
     }
 
     /// THE MASK, per entry (PUB-7.20; PUB-6.44–6.45), plus the narrowings'

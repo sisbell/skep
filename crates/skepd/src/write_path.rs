@@ -46,6 +46,18 @@
 //! own triggers — so the board is without a board term for exactly one
 //! write (`head.rs`, WHAT A REFUSAL DOES).
 //!
+//! AND THE HALT (SO-I5 (d): no signature the board keeps is lost by a
+//! crash, a power loss or a failed write). Below the reclaim floor the
+//! attest store (`feed/attest.rs`) holds an entry signature's only copy, and
+//! the record step syncs each of its lines before it returns. Where one
+//! FAILS — its write or its sync — the commit it records stands and is
+//! acked, and from then on [`WritePath::commit_recorded`] refuses every
+//! commit, a session's and the head writer's alike, for the rest of the
+//! uptime: any commit can trigger the checkpoint that deletes the journal
+//! copy the lost line depends on. The refusal is M10's own for a board that
+//! cannot commit, `poisoned` (`halt`). Reads are served throughout, and the
+//! restart's open rebuilds the line from the journal.
+//!
 //! The read/write partition is M10's own `Op::is_read`. A read is exactly an
 //! `Op` the change feed has nothing to record, so [`write_meta`] answers
 //! `None` for precisely those — an equivalence it asserts against the
@@ -66,6 +78,7 @@
 
 use std::io;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -73,7 +86,7 @@ use parking_lot::{Condvar, Mutex};
 use skep_address::{document_of, Address};
 use skep_arrangement::HasM5;
 use skep_engine::{Engine, EngineStores, World};
-use skep_febe::{Op, OpKind, Response, Stores};
+use skep_febe::{Op, OpKind, RejectCode, Rejection, Response, Stores};
 use skep_kernel::{Attestation, Seq};
 
 // The change feed behind `GET /changes`: its authority file, and the one
@@ -150,6 +163,12 @@ pub(crate) struct WritePath {
     /// [`WritePath::record`] at every commit that mints a cell, under the
     /// serialization guard, before it drops.
     index: Arc<CellIndex>,
+    /// THE HALT (the module doc; SO-I5 (d)): set by [`WritePath::record`]
+    /// where the attest store failed a line, and never cleared — every
+    /// commit after it is refused at [`WritePath::commit_recorded`]'s door.
+    /// Set and read under the serialization guard alone, so the guard is
+    /// what orders it, and the atomic only what makes the field `Sync`.
+    halted: AtomicBool,
 }
 
 impl WritePath {
@@ -183,6 +202,7 @@ impl WritePath {
             stores: engine.stores(),
             head_writer,
             index,
+            halted: AtomicBool::new(false),
         })
     }
 
@@ -200,6 +220,22 @@ impl WritePath {
     #[cfg(any(test, feature = "test-hooks"))]
     pub(crate) fn refuse_next_head_once(&self) {
         self.head_writer.refuse_next_head_once();
+    }
+
+    /// The test seam behind `crate::Daemon::attest_store_synced_through`:
+    /// the coverage the attest store's last successful sync made durable.
+    /// Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(crate) fn attest_store_synced_through(&self) -> u64 {
+        self.feed.attest_store_synced_through()
+    }
+
+    /// The test seam behind `crate::Daemon::fail_the_attest_stores_next_write`:
+    /// the attest store's next write fails at the OS, answered as any store
+    /// failure is (the module doc's HALT). Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(crate) fn fail_the_attest_stores_next_write(&self) {
+        self.feed.fail_the_attest_stores_next_write();
     }
 
     /// THE CLAIM'S HEAD (signed ops, s1; RULED 2026-09-25): the board's first
@@ -318,12 +354,26 @@ impl WritePath {
     /// writes are attributed to [`head::SYSTEM_TESTIMONY`], and it discharges
     /// the first half as the write sequences do, deriving `meta` from the
     /// `Op` whose fields its driver call then runs.
+    ///
+    /// Once the write path has HALTED (the module doc; SO-I5 (d)), none of
+    /// it: `execute` never runs, and the answer is M10's `Poisoned`
+    /// (`Halt`), built as M10 builds it, so the bytes are M10's own. Being
+    /// this door's, the refusal follows the write sequence's admission —
+    /// and the credential memo's recall — and precedes M10's whole
+    /// `execute`, its retry memo included: a plain write repeated after its
+    /// ack was lost meets the halt and not its original ack. A guest's
+    /// write never reaches the door, and M10 refuses it `Unauthenticated`,
+    /// committing nothing.
     fn commit_recorded(
         &self,
         serial: &SerialGuard<'_>,
         meta: WriteMeta,
         execute: impl FnOnce() -> Response,
     ) -> Response {
+        if self.halted.load(Ordering::Relaxed) {
+            let halt = Rejection::classified(meta.kind, RejectCode::Poisoned, None);
+            return Response::Rejected(halt);
+        }
         let resp = execute();
         if let Some(at) = self.record(serial, meta, &resp) {
             self.commit_stream.announce(at);
@@ -397,7 +447,9 @@ impl WritePath {
     /// because it sits at or below the position the stream opened at. A
     /// failed append is the fourth: the line is lost but the in-memory entry
     /// is not, so `/changes` answers that position this uptime and answers it
-    /// bare after a restart.
+    /// bare after a restart. A failed ATTEST STORE line is the fifth, and
+    /// HALTS the write path (the module doc; SO-I5 (d)): this commit stands
+    /// and is announced, and every later one is refused.
     ///
     /// The record is classified against the head AS IT STANDS after the
     /// execute — this commit's own post-state, since the serialization
@@ -486,7 +538,20 @@ impl WritePath {
             }
         }
         let terms = terms.complete(minted, post.world());
-        self.feed.record(serial, at.0, op_name(kind), docs, testimony, signed, terms, post.world());
+        let recorded = self.feed.record(
+            serial,
+            at.0,
+            op_name(kind),
+            docs,
+            testimony,
+            signed,
+            terms,
+            post.world(),
+        );
+        if recorded.is_err() {
+            // The store has said it, once: the line's file and position.
+            self.halted.store(true, Ordering::Relaxed);
+        }
         Some(at)
     }
 }

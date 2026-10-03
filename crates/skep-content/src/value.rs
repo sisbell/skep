@@ -12,9 +12,13 @@ use serde::{Deserialize, Serialize};
 /// stored tag (ASN-0036 content-typing: no type discriminator on the value).
 ///
 /// Serde rides serde's `rc` feature for the `Arc<[u8]>` impls (an M4-local
-/// dependency knob); the payload serializes as a plain byte blob. No `Debug`
-/// on purpose: blobs never render into logs — [`ContentWrite`]'s manual
-/// `Debug` reports only the byte length.
+/// dependency knob). The payload serializes as a SEQUENCE of `u8` — serde has
+/// no byte specialization for `[u8]` — which bincode, M2's journal and
+/// checkpoint format, lays down as the length then the raw bytes; a transcode
+/// to a value tree, like the engine's world dump, sees one integer per byte
+/// (skep-engine's `a_content_byte_costs_a_whole_tree_node` pins that). No
+/// `Debug` on purpose: blobs never render into logs — [`ContentWrite`]'s
+/// manual `Debug` reports only the byte length.
 ///
 /// [`ContentWrite`]: crate::ContentWrite
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

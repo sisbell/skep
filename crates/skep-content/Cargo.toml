@@ -9,12 +9,6 @@ description = "M4 — the permascroll: an append-only, write-once map from alloc
 readme = "README.md"
 
 [features]
-# Open build decision #4 — the optional defensive content-address assertion
-# (level == Element ∧ subspace == s_C, M1's content_subspace) that stage_write
-# and write run first; it lives in src/guard.rs. Off by default; when on, the
-# check is a debug_assert! (the design's recommended sub-choice) — fatal in
-# debug/test builds, free in release.
-content-addr-guard = []
 # `test-hooks` compiles in the test-only surface: `write`, the standalone
 # transact-wrapped twin of `stage_write` the composition contract asks for.
 # Committed alone a content write has no placement (J0), so production writes
@@ -39,8 +33,9 @@ im.workspace = true
 rustc-hash.workspace = true
 # rc for the Arc<[u8]> impls behind Val (§Types & errors).
 serde = { workspace = true, features = ["rc"] }
-# M1 — Tumbler/Address; Level and content_subspace for the routing guard,
-# document_of for `write`. M4 holds no address algebra of its own.
+# M1 — Tumbler/Address; Level and content_subspace for the routing assertion
+# (src/guard.rs), document_of for `write`. M4 holds no address algebra of its
+# own.
 skep-address = { path = "../skep-address" }
 # M2 — `write` alone (`test-hooks`): Kernel, Seq, TxnError, WorldState. The
 # library proper names no kernel item: it rides M2 for atomicity, ordering,

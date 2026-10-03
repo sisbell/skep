@@ -1,15 +1,18 @@
 //! Integration tests for M4's public surface. Each test states a claim the
-//! design/interface actually makes (§-references inline): what the one guard
-//! admits and rejects, and what the fold's debug net catches behind it (S0(b)
-//! no-overwrite, both halves), that the fold is pure and insert-only, that
-//! identity is by address and never by value (S4), that the journaled types
-//! survive a serde round trip (and M2's real checkpoint-plus-replay
-//! recovery), that the slice's serialized form is the format its readers
-//! pin, and that each part of the interface does its ordinary job on an
-//! ordinary input. The toy `World`/`Rec` pair is the minimal engine assembly
-//! the composition contract prescribes: `HasContent` read accessor,
-//! `From<ContentWrite>` record lift, `apply` dispatching into
-//! `ContentStore::apply_write`.
+//! design/interface actually makes (§-references inline): what the duplicate
+//! check admits and rejects, that the fold never replaces a stored value
+//! (S0(b)) and panics on the attempt in debug builds, that the fold is pure
+//! and insert-only, that identity is by address and never by value (S4),
+//! that the journaled types survive a serde round trip (and M2's real
+//! checkpoint-plus-replay recovery), that the slice's serialized form is the
+//! format its readers pin, that a debug build panics on a non-content
+//! address before writing it, and that each part of the interface does its
+//! ordinary job on an ordinary input. Where a debug build's assertion
+//! panics, release does something else, and those tests say what each build
+//! does; the gate runs the suite in both. The toy `World`/`Rec` pair is the
+//! minimal engine assembly the composition contract prescribes:
+//! `HasContent` read accessor, `From<ContentWrite>` record lift, `apply`
+//! dispatching into `ContentStore::apply_write`.
 
 use std::path::Path;
 
@@ -130,7 +133,8 @@ fn stage_write_admits_a_fresh_address_and_commits_nothing() {
 
 #[test]
 fn stage_write_rejects_an_occupied_address_with_already_present() {
-    // S0(b) no-overwrite — M4's one genuine guard (§Invariants).
+    // The duplicate check (§Invariants): an occupied address is a typed
+    // rejection.
     let c = ContentStore::default();
     let a1 = ca(1);
     let c = c.apply_write(&stage_write(&c, &a1, val(b"first")).expect("fresh"));
@@ -138,7 +142,7 @@ fn stage_write_rejects_an_occupied_address_with_already_present() {
         stage_write(&c, &a1, val(b"second")).unwrap_err(),
         ContentError::AlreadyPresent(a1.tumbler().clone())
     );
-    // The guard is per-address: a different fresh address is still admitted.
+    // The check is per-address: a different fresh address is still admitted.
     assert!(stage_write(&c, &ca(2), val(b"second")).is_ok());
 }
 
@@ -165,21 +169,25 @@ fn apply_write_is_a_pure_insert_only_fold() {
     assert!(!c1.is_empty());
 }
 
-#[cfg(debug_assertions)]
 #[test]
-#[should_panic(expected = "already stored in the slice it is folded into")]
-fn apply_write_nets_a_record_staged_against_a_slice_it_is_not_folded_into() {
-    // §A/§C: S0(b)'s caller half — stage against the slice the record is
-    // folded into — is the one the private fields cannot hold. Two records
-    // for one address, both staged against the unchanged c0, each pass the
-    // guard; folding the second into c1 is the overwrite, and the fold's
-    // debug net refuses it.
+#[cfg_attr(
+    debug_assertions,
+    should_panic(expected = "already stored in the slice it is folded into")
+)]
+fn apply_write_never_replaces_a_stored_value_and_nets_the_attempt_in_debug() {
+    // §A/§C: S0(b) is the fold's own — the stored value wins. Staging against
+    // the slice the record is folded into only decides whether a duplicate is
+    // refused or dropped: two records for one address, both staged against
+    // the unchanged c0, each pass the duplicate check; folding the second
+    // panics in a debug build and, in release, leaves the first value where
+    // it was.
     let c0 = ContentStore::default();
     let a1 = ca(1);
     let first = stage_write(&c0, &a1, val(b"first")).expect("fresh in c0");
     let second = stage_write(&c0, &a1, val(b"second")).expect("still fresh in c0");
-    let c1 = c0.apply_write(&first);
-    let _ = c1.apply_write(&second);
+    let c2 = c0.apply_write(&first).apply_write(&second);
+    assert_eq!(c2.len(), 1);
+    assert_eq!(c2.value_at(a1.tumbler()).map(Val::as_bytes), Some(&b"first"[..]));
 }
 
 // ---- §B point queries ----
@@ -307,9 +315,10 @@ fn the_slice_serializes_as_its_map_alone_in_tumbler_order() {
     // as one slice of its layout, and the engine's world dump renders them.
     // So they are pinned whole — the slice's one field, its map, as its
     // length then its entries (exactly a `Vec` of pairs' bytes), the entries
-    // in Tumbler order, each value a plain byte blob. Sixty-four entries over
-    // four documents, so the HAMT's own iteration order is not Tumbler order
-    // by accident.
+    // in Tumbler order, each value its length then its raw bytes (bincode's
+    // form for a sequence of `u8`, which `Val` and `Vec<u8>` both serialize
+    // as). Sixty-four entries over four documents, so the HAMT's own
+    // iteration order is not Tumbler order by accident.
     let mut c = ContentStore::default();
     let mut entries: Vec<(Tumbler, Vec<u8>)> = Vec::new();
     for k in 0..64u32 {
@@ -402,18 +411,6 @@ fn stage_write_composes_into_one_transaction_off_the_working_slice() {
     assert_eq!(c.value_at(a2.tumbler()).map(Val::as_bytes), Some(&b"two"[..]));
 }
 
-#[cfg(not(feature = "content-addr-guard"))]
-#[test]
-#[should_panic(expected = "content address ⇒ zeros = 3")]
-fn standalone_write_panics_at_key_derivation_on_a_non_content_address() {
-    // §C: in the base build the document_of .expect IS the trusted-address
-    // contract — a zeros < 2 input is an internal invariant violation, never
-    // a domain rejection.
-    let k = mem_kernel();
-    let account = a(&[1, 0, 1]);
-    let _ = write(&k, &account, val(b"x"));
-}
-
 // ---- M2-driven recovery: checkpoint load + tail replay ----
 
 #[test]
@@ -437,7 +434,7 @@ fn content_survives_durable_recovery_by_checkpoint_and_replay() {
     assert_eq!(c.len(), 2);
     assert_eq!(c.value_at(a1.tumbler()).map(Val::as_bytes), Some(&b"alpha"[..]));
     assert_eq!(c.value_at(a2.tumbler()).map(Val::as_bytes), Some(&b"beta"[..]));
-    // The recovered dom(C) still feeds the S0(b) guard.
+    // The recovered dom(C) still feeds `stage_write`'s duplicate check.
     drop(s);
     assert_eq!(
         rejected(write(&k, &a1, val(b"again"))),
@@ -445,54 +442,38 @@ fn content_survives_durable_recovery_by_checkpoint_and_replay() {
     );
 }
 
-// ---- Open build decision #4: the content-addr-guard feature ----
+// ---- Open build decision #4: the routing assertion ----
 
-#[cfg(feature = "content-addr-guard")]
-mod guard {
+#[test]
+#[cfg_attr(debug_assertions, should_panic(expected = "content routing: write"))]
+#[cfg_attr(not(debug_assertions), should_panic(expected = "content address ⇒ zeros = 3"))]
+fn write_panics_on_a_non_content_address_routing_first() {
+    // §C: a zeros = 1 input is an internal invariant violation, never a
+    // domain rejection. A debug build's routing assertion fires BEFORE key
+    // derivation (its message, not the `.expect`'s); in release it is
+    // compiled out and the `document_of` `.expect` — the trusted-address
+    // contract — fires.
+    let k = mem_kernel();
+    let account = a(&[1, 0, 1]);
+    let _ = write(&k, &account, val(b"x"));
+}
+
+// A debug_assert!: it fires only in debug builds.
+#[cfg(debug_assertions)]
+mod routing {
     use super::*;
 
     #[test]
-    fn guard_admits_content_addresses_and_already_present_still_guards_occupancy() {
-        // The routing check admits a proper content-subspace element address;
-        // the overwrite check remains reachable behind it (§C check order).
-        let c = ContentStore::default();
-        let a1 = ca(1);
-        let r = stage_write(&c, &a1, val(b"x")).expect("guard admits a content address");
-        let c = c.apply_write(&r);
-        assert_eq!(
-            stage_write(&c, &a1, val(b"y")).unwrap_err(),
-            ContentError::AlreadyPresent(a1.tumbler().clone())
-        );
+    #[should_panic(expected = "content routing: stage_write")]
+    fn stage_write_asserts_against_a_link_subspace_address() {
+        let link_elem = a(&[1, 0, 1, 0, 1, 0, 2, 1]); // subspace s_L = 2
+        let _ = stage_write(&ContentStore::default(), &link_elem, val(b"x"));
     }
 
-    // The debug-assert sub-choice fires only in debug builds.
-    #[cfg(debug_assertions)]
-    mod panics {
-        use super::*;
-
-        #[test]
-        #[should_panic(expected = "content-addr-guard: stage_write")]
-        fn guard_rejects_a_link_subspace_address() {
-            let link_elem = a(&[1, 0, 1, 0, 1, 0, 2, 1]); // subspace s_L = 2
-            let _ = stage_write(&ContentStore::default(), &link_elem, val(b"x"));
-        }
-
-        #[test]
-        #[should_panic(expected = "content-addr-guard: stage_write")]
-        fn guard_rejects_a_non_element_address() {
-            let doc = a(&[1, 0, 1, 0, 1]);
-            let _ = stage_write(&ContentStore::default(), &doc, val(b"x"));
-        }
-
-        #[test]
-        #[should_panic(expected = "content-addr-guard: write")]
-        fn guard_runs_before_lock_key_derivation_in_write() {
-            // §C hoist: a zeros = 1 input must be rejected by the routing
-            // guard on its own terms — the expected message proves it fired
-            // BEFORE the document_of .expect (whose message differs).
-            let k = mem_kernel();
-            let account = a(&[1, 0, 1]);
-            let _ = write(&k, &account, val(b"x"));
-        }
+    #[test]
+    #[should_panic(expected = "content routing: stage_write")]
+    fn stage_write_asserts_against_a_non_element_address() {
+        let doc = a(&[1, 0, 1, 0, 1]);
+        let _ = stage_write(&ContentStore::default(), &doc, val(b"x"));
     }
 }

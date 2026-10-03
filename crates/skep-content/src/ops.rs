@@ -6,7 +6,6 @@ use skep_kernel::{Kernel, Seq, TxnError, WorldState};
 use skep_namespace::M3State;
 
 use crate::error::ContentError;
-#[cfg(feature = "content-addr-guard")]
 use crate::guard::debug_assert_content_address;
 use crate::store::{stage_write, ContentWrite};
 use crate::value::Val;
@@ -34,11 +33,10 @@ use crate::HasContent;
 /// [`document_of`]; a content address has zeros = 3, so it is always `Some`
 /// — the `.expect` IS the trusted-address contract on this
 /// trusted-address-only op, turning the unreachable `None` into a
-/// documented internal-invariant violation, never a domain rejection. With
-/// the `content-addr-guard` feature on, the routing check runs BEFORE key
-/// derivation (mirroring [`stage_write`]'s check order): without the hoist
-/// a zeros < 2 input would hit the `.expect` first and the guard could
-/// never fire on this path.
+/// documented internal-invariant violation, never a domain rejection. In
+/// debug builds the routing assertion runs BEFORE key derivation (mirroring
+/// [`stage_write`]'s order), so a zeros < 2 input panics on its own terms;
+/// in release it is compiled out, and the `.expect` is what fires.
 ///
 /// On success returns the flat storage key and the committed `Seq` (the
 /// write's V1 coordinate); rejections surface verbatim as
@@ -69,7 +67,6 @@ where
     W: WorldState + HasContent,
     W::Record: From<ContentWrite>,
 {
-    #[cfg(feature = "content-addr-guard")]
     debug_assert_content_address(addr, "write");
     let home = document_of(addr).expect("content address ⇒ zeros = 3 (trusted-address contract)");
     k.transact(&[M3State::content_lock_key(&home)], |stg| {

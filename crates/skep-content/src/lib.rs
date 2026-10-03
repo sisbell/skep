@@ -33,19 +33,19 @@
 //! ## Invariants
 //!
 //! **By construction:** S0(a) domain-persistence and S1/C0 growth
-//! (insert-only fold, no removal op), the modify half of S0(b) (no modify
-//! op exists), S4 origin-based identity (keyed by address, never by value —
-//! two equal byte-runs at two addresses are two entries; no value→address
-//! index), S5 unbounded sharing (no refcount, no cap — references live in
-//! M5), C-fin finiteness, and unconditional no-GC permanence (orphan
-//! content persists; M4 does not even know about references).
+//! (insert-only fold, no removal op); S0(b) value-preservation (no modify
+//! op exists, and the fold never replaces a stored value — a record that
+//! finds its address occupied leaves the slice as it was); S4 origin-based
+//! identity (keyed by address, never by value — two equal byte-runs at two
+//! addresses are two entries; no value→address index); S5 unbounded sharing
+//! (no refcount, no cap — references live in M5); C-fin finiteness; and
+//! unconditional no-GC permanence (orphan content persists; M4 does not even
+//! know about references).
 //!
-//! **By active enforcement:** the no-overwrite half of S0(b), kept on both
-//! sides of one call, as [`stage_write`] states: it refuses an address
-//! already stored in the slice it is handed, and is the only way to stage a
-//! [`ContentWrite`]; its caller hands it the slice the record will be folded
-//! into — a half no type holds, which [`ContentStore::apply_write`]'s
-//! `debug_assert!` nets.
+//! **Diagnosed, not relied on:** an upstream duplicate. [`stage_write`]
+//! refuses an address already stored in the slice it is handed
+//! (`AlreadyPresent`), so a duplicate mint becomes a typed rejection instead
+//! of a write the fold drops; its doc says which slice to hand it.
 //!
 //! ## Boundary — deliberately NOT owned here
 //!
@@ -90,9 +90,8 @@
 //! `impl From<ContentWrite> for W::Record` (the write-side mirror), and
 //! dispatches its `Record::Content` variant into the fold
 //! [`ContentStore::apply_write`]. The engine only `From`-lifts and folds
-//! the record — it never constructs one (private fields), so assembly opens
-//! no door beside `stage_write` and M2's replay. Anything that
-//! inspects a journaled record reads it through [`ContentWrite::addr`] /
+//! the record; it never builds one. Anything that inspects a journaled
+//! record reads it through [`ContentWrite::addr`] /
 //! [`ContentWrite::val`] and the manual `Debug`, which the engine's
 //! `Record: Debug` rests on.
 
@@ -102,15 +101,11 @@
 mod value;
 // The write surface's one typed rejection, `ContentError`.
 mod error;
-// The `content-addr-guard` routing assertion (Open build decision #4),
-// shared by `stage_write` and `write`.
-#[cfg(feature = "content-addr-guard")]
+// The routing assertion (Open build decision #4), shared by `stage_write`
+// and `write`.
 mod guard;
-// The slice, its fold and point queries, the record and `stage_write`.
-// `ContentWrite`'s fields are private to this file, which leaves a record two
-// doors — `stage_write`, and serde's `Deserialize` for M2's replay (S0(b)):
-// the compiler keeps every other file out; review alone keeps a third door
-// out of this one.
+// The slice, its fold and point queries, the record, and `stage_write`, the
+// record's one producer (`ContentWrite`'s fields are private to this file).
 mod store;
 // `write`, the standalone transact-wrapped twin of `stage_write` —
 // `test-hooks` builds only.

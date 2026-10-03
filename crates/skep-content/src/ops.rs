@@ -6,7 +6,7 @@ use skep_kernel::{Kernel, Seq, TxnError, WorldState};
 use skep_namespace::M3State;
 
 use crate::error::ContentError;
-use crate::guard::debug_assert_content_address;
+use crate::guard::debug_assert_content_address_routing;
 use crate::store::{stage_write, ContentWrite};
 use crate::value::Val;
 use crate::HasContent;
@@ -67,7 +67,7 @@ where
     W: WorldState + HasContent,
     W::Record: From<ContentWrite>,
 {
-    debug_assert_content_address(addr, "write");
+    debug_assert_content_address_routing(addr, "write");
     let home = document_of(addr).expect("content address ⇒ zeros = 3 (trusted-address contract)");
     k.transact(&[M3State::content_lock_key(&home)], |stg| {
         let r = stage_write(stg.working().content(), addr, val)?;

@@ -526,7 +526,7 @@ mod tests {
             cause.to_string()
         );
 
-        let refusal = ContentError::AlreadyPresent(t(&[1, 0, 1, 0, 1, 0, 1, 1]));
+        let refusal = ContentError::AlreadyStored(t(&[1, 0, 1, 0, 1, 0, 1, 1]));
         let insert_write = InsertError::Content(refusal.clone());
         assert_eq!(insert_write.to_string(), "insert: content write rejected");
         assert_eq!(

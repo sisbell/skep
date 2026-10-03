@@ -132,15 +132,15 @@ fn stage_write_admits_a_fresh_address_and_commits_nothing() {
 }
 
 #[test]
-fn stage_write_rejects_an_occupied_address_with_already_present() {
-    // The duplicate check (§Invariants): an occupied address is a typed
-    // rejection.
+fn stage_write_rejects_an_address_already_stored() {
+    // The duplicate check (§Invariants): an address with a value already
+    // stored is a typed rejection.
     let c = ContentStore::default();
     let a1 = ca(1);
     let c = c.apply_write(&stage_write(&c, &a1, val(b"first")).expect("fresh"));
     assert_eq!(
         stage_write(&c, &a1, val(b"second")).unwrap_err(),
-        ContentError::AlreadyPresent(a1.tumbler().clone())
+        ContentError::AlreadyStored(a1.tumbler().clone())
     );
     // The check is per-address: a different fresh address is still admitted.
     assert!(stage_write(&c, &ca(2), val(b"second")).is_ok());
@@ -194,9 +194,10 @@ fn apply_write_never_replaces_a_stored_value_and_nets_the_attempt_in_debug() {
 
 #[test]
 fn point_queries_report_content_presence_only() {
-    // §B: contains/value_at answer presence in dom(C) — nothing else. Absent
-    // address ⇒ false/None, on the empty (Default) slice and next to a live
-    // entry alike.
+    // §B: contains/value_at answer content-presence — whether content is
+    // stored at an address (`a ∈ dom(C)`) — and nothing else. An address
+    // with nothing stored ⇒ false/None, on the empty (Default) slice and next
+    // to a live entry alike.
     let c = ContentStore::default();
     let a1 = ca(1);
     let a2 = ca(2);
@@ -210,7 +211,7 @@ fn point_queries_report_content_presence_only() {
 
 #[test]
 fn identity_is_by_address_never_by_value() {
-    // S4: two equal byte-runs at two addresses are simply two entries — no
+    // S4: two equal values at two addresses are simply two entries — no
     // content-addressed collapse.
     let c = ContentStore::default();
     let a1 = ca(1);
@@ -258,14 +259,14 @@ fn iter_visits_every_entry_exactly_once_and_promises_no_order() {
 // ---- §Types: Val and the record's Debug ----
 
 #[test]
-fn val_wraps_bytes_and_compares_by_content() {
+fn val_wraps_bytes_and_compares_by_content_value() {
     let from_slice = Val::new(b"payload".as_slice());
     let from_vec = Val::new(b"payload".to_vec());
     assert_eq!(from_slice.as_bytes(), b"payload");
     assert_eq!(from_slice.len(), 7);
     assert!(from_slice == from_vec);
     assert!(from_slice != Val::new(b"other".as_slice()));
-    // A zero-length payload is a legal value.
+    // A zero-length value is legal.
     assert_eq!(Val::new(Vec::<u8>::new()).len(), 0);
 }
 
@@ -369,7 +370,7 @@ fn standalone_write_rejects_a_double_write_and_preserves_the_first_value() {
     write(&k, &a1, val(b"first")).expect("fresh write commits");
     let seq_before = k.current_seq();
     let err = rejected(write(&k, &a1, val(b"second")));
-    assert_eq!(err, ContentError::AlreadyPresent(a1.tumbler().clone()));
+    assert_eq!(err, ContentError::AlreadyStored(a1.tumbler().clone()));
     assert_eq!(k.current_seq(), seq_before);
     let s = k.snapshot();
     let c = s.world().content();
@@ -394,7 +395,7 @@ fn stage_write_composes_into_one_transaction_off_the_working_slice() {
             // working() reflects the push: re-staging a1 here is rejected.
             assert!(matches!(
                 stage_write(stg.working().content(), &a1, val(b"dup")),
-                Err(ContentError::AlreadyPresent(t)) if t == *a1.tumbler()
+                Err(ContentError::AlreadyStored(t)) if t == *a1.tumbler()
             ));
             let r2 = stage_write(stg.working().content(), &a2, val(b"two"))?;
             stg.push(r2.into());
@@ -438,7 +439,7 @@ fn content_survives_durable_recovery_by_checkpoint_and_replay() {
     drop(s);
     assert_eq!(
         rejected(write(&k, &a1, val(b"again"))),
-        ContentError::AlreadyPresent(a1.tumbler().clone())
+        ContentError::AlreadyStored(a1.tumbler().clone())
     );
 }
 

@@ -4,7 +4,8 @@
 //! I-address to opaque content value, plus the two point queries over it —
 //! *is content stored here?* ([`ContentStore::contains`]) and *what is
 //! stored here?* ([`ContentStore::value_at`]). M4 owns the immutable,
-//! never-GC'd half of the two-layer state and does exactly that one thing:
+//! never-GC'd half of the strand — ASN-0036's two-component state, the
+//! content store and the arrangements — and does exactly that one thing:
 //! **store an immutable value at an address forever, and look it up — never
 //! mutate, never delete, never reclaim, never key on the value.** Addresses
 //! arrive as parameters already minted and validated upstream (M3); M4
@@ -16,10 +17,11 @@
 //!   [`ContentWrite`], the accessor [`HasContent`], and the fold
 //!   [`ContentStore::apply_write`], per the Engine Composition Contract.
 //! * **Read API** (§B) — [`ContentStore::contains`] (the S3
-//!   referential-integrity oracle: content-presence, not "allocated", not
-//!   "registered") and [`ContentStore::value_at`] (`C(a)`), point queries
-//!   over a pinned snapshot slice; and [`ContentStore::iter`], the one
-//!   enumeration, for the daemon's cell-index rebuild alone.
+//!   referential-integrity oracle: content-presence, whether content is
+//!   stored here — not "allocated", not "registered") and
+//!   [`ContentStore::value_at`] (`C(a)`), point queries over a pinned
+//!   snapshot slice; and [`ContentStore::iter`], the one enumeration, for
+//!   the daemon's cell-index rebuild alone.
 //! * **Write surface** (§C) — the pure step [`stage_write`] (the storage
 //!   half of K.α, composed by M5's placement composite) and `write`, the
 //!   `#[doc(hidden)]` standalone transact-wrapped form (M2 contract 3) —
@@ -34,17 +36,17 @@
 //!
 //! **By construction:** S0(a) domain-persistence and S1/C0 growth
 //! (insert-only fold, no removal op); S0(b) value-preservation (no modify
-//! op exists, and the fold never replaces a stored value — a record that
-//! finds its address occupied leaves the slice as it was); S4 origin-based
-//! identity (keyed by address, never by value — two equal byte-runs at two
-//! addresses are two entries; no value→address index); S5 unbounded sharing
-//! (no refcount, no cap — references live in M5); C-fin finiteness; and
-//! unconditional no-GC permanence (orphan content persists; M4 does not even
-//! know about references).
+//! op exists, and the fold never replaces a stored value — a record whose
+//! address already has a value stored leaves the slice as it was); S4
+//! origin-based identity (keyed by address, never by value — two equal
+//! values at two addresses are two entries; no value→address index); S5
+//! unrestricted sharing (no refcount, no cap — references live in M5);
+//! C-fin finiteness; and unconditional no-GC permanence (orphan content
+//! persists; M4 does not even know about references).
 //!
 //! **Diagnosed, not relied on:** an upstream duplicate. [`stage_write`]
 //! refuses an address already stored in the slice it is handed
-//! (`AlreadyPresent`), so a duplicate mint becomes a typed rejection instead
+//! (`AlreadyStored`), so a duplicate mint becomes a typed rejection instead
 //! of a write the fold drops; its doc says which slice to hand it.
 //!
 //! ## Boundary — deliberately NOT owned here
@@ -97,7 +99,7 @@
 
 #![forbid(unsafe_code)]
 
-// The opaque payload, `Val`.
+// The opaque content value, `Val`.
 mod value;
 // The write surface's one typed rejection, `ContentError`.
 mod error;

@@ -43,7 +43,7 @@ where
     /// the gate above and is M3's own boundary discharge;
     /// `Mint(MintError::Gate)` is M3's defence against a corrupted frontier,
     /// which M3 states never fires on a live path; and
-    /// `Content(AlreadyPresent)` cannot occur in production at all — M3 mints
+    /// `Content(AlreadyStored)` cannot occur in production at all — M3 mints
     /// fresh and M5 writes once, which is the argument `stage_write` itself
     /// makes for keeping the guard. All three are defensive, as the shot's and
     /// VERSION's mints are.

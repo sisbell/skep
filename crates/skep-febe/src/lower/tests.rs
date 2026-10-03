@@ -21,7 +21,7 @@ fn wrappers_recurse() {
     assert_eq!(code, RejectCode::AlreadySeated);
     let (code, _) = PublishError::Mint(MintError::SourceNotRegistered).lower();
     assert_eq!(code, RejectCode::SourceNotRegistered);
-    let (code, _) = PublishError::Content(ContentError::AlreadyPresent(
+    let (code, _) = PublishError::Content(ContentError::AlreadyStored(
         Tumbler::new([1u32].map(Nat::from)).expect("nonempty"),
     ))
     .lower();
@@ -60,7 +60,7 @@ fn every_wrapper_lowers_as_the_leaf_it_wraps_for_every_leaf() {
         assert_eq!(lowered, leaf.lower(), "MakeLinkError::Seat({leaf:?})");
     }
     let content = || {
-        ContentError::AlreadyPresent(Tumbler::new([1u32].map(Nat::from)).expect("nonempty"))
+        ContentError::AlreadyStored(Tumbler::new([1u32].map(Nat::from)).expect("nonempty"))
     };
     let lowered = InsertError::Content(content()).lower();
     assert_eq!(lowered, content().lower(), "InsertError::Content");
@@ -72,7 +72,7 @@ fn every_wrapper_lowers_as_the_leaf_it_wraps_for_every_leaf() {
 /// (Permanent), discarding M4's structure — the flagged best-effort.
 #[test]
 fn content_error_collapses_wholesale() {
-    let e = InsertError::Content(ContentError::AlreadyPresent(
+    let e = InsertError::Content(ContentError::AlreadyStored(
         Tumbler::new([1u32].map(Nat::from)).expect("nonempty"),
     ));
     let (code, site) = e.lower();
@@ -281,8 +281,8 @@ fn flat_variants_lower_to_the_same_named_code() {
     //    which the collapse makes moot: whatever the variant, the code is
     //    `Content`.
     deviates(
-        "AlreadyPresent",
-        ContentError::AlreadyPresent(Tumbler::new([1u32].map(Nat::from)).expect("nonempty")),
+        "AlreadyStored",
+        ContentError::AlreadyStored(Tumbler::new([1u32].map(Nat::from)).expect("nonempty")),
         RejectCode::Content,
     );
 

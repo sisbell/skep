@@ -19,13 +19,13 @@ pub enum ContentError {
     /// stored at this address. Cannot occur in production (M3 mints fresh;
     /// M5 writes once) — converts an upstream bug into a clean typed
     /// rejection instead of a write the fold would drop.
-    AlreadyPresent(Tumbler),
+    AlreadyStored(Tumbler),
 }
 
 impl fmt::Display for ContentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ContentError::AlreadyPresent(t) => write!(
+            ContentError::AlreadyStored(t) => write!(
                 f,
                 "content write rejected: a value is already stored at {t:?} (S0 no-overwrite)"
             ),

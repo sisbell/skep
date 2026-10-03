@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use skep_address::{Address, Tumbler};
 
 use crate::error::ContentError;
-use crate::guard::debug_assert_content_address;
+use crate::guard::debug_assert_content_address_routing;
 use crate::value::Val;
 
 /// Fixed-seed deterministic build-hasher (§Core data model: keys are trusted
@@ -126,17 +126,17 @@ impl ContentStore {
     /// fall straight out: `dom(C) ⊆ dom(C')`, and every value in `C` is in
     /// `C'` unchanged.
     ///
-    /// A record that finds its address occupied is still a caller's bug —
-    /// staged against another slice, or folded twice — and the write it
+    /// A record whose address already has a value stored is still a caller's
+    /// bug — staged against another slice, or folded twice — and the write it
     /// carries is lost; a debug build's `debug_assert!` panics on it.
     pub fn apply_write(&self, r: &ContentWrite) -> ContentStore {
-        let occupied = self.map.contains_key(&r.addr);
+        let already_stored = self.map.contains_key(&r.addr);
         debug_assert!(
-            !occupied,
+            !already_stored,
             "S0(b): this record's address is already stored in the slice it is folded \
              into — it was staged against another slice, or folded twice"
         );
-        if occupied {
+        if already_stored {
             // S0(b): the STORED value wins.
             return self.clone();
         }
@@ -145,11 +145,11 @@ impl ContentStore {
         }
     }
 
-    /// S3 referential-integrity oracle: `a ∈ dom(C)` (ASN-0036 S3; §B).
-    /// CONTENT-PRESENCE — not "allocated" (M3) and not "registered" (M3): a
-    /// content address can be allocated yet content-absent (a ghost); this
-    /// reports presence only. M5 calls this on the content side of
-    /// placement.
+    /// S3 referential-integrity oracle — content-presence: is content STORED
+    /// at `a`, `a ∈ dom(C)` (ASN-0036 S3; §B)? Not "allocated" (M3) and not
+    /// "registered" (M3): an allocated address with nothing stored is a ghost
+    /// element (ASN-0034 T8; ASN-0040 B3), and this answers `false` for it.
+    /// M5 calls this on the content side of placement.
     pub fn contains(&self, a: &Tumbler) -> bool {
         self.map.contains_key(a)
     }
@@ -169,8 +169,8 @@ impl ContentStore {
     /// admitted it) always yield `Some`, so a `None` for either is an
     /// internal invariant violation to report or halt on, never a
     /// domain-level "not found". An address a request or an endset names
-    /// verbatim carries no such promise — it may be unallocated, a ghost, or
-    /// a link — and the caller holding it names its own refusal.
+    /// verbatim carries no such promise — it may be unallocated, a ghost
+    /// element, or a link — and the caller holding it names its own refusal.
     pub fn value_at(&self, a: &Tumbler) -> Option<&Val> {
         self.map.get(a)
     }
@@ -225,7 +225,7 @@ impl ContentWrite {
         &self.addr
     }
 
-    /// The staged payload. Read-only.
+    /// The value the record writes at [`addr`](ContentWrite::addr). Read-only.
     pub fn val(&self) -> &Val {
         &self.val
     }
@@ -233,8 +233,9 @@ impl ContentWrite {
 
 /// Manual, not derived: renders the address by walking its components and
 /// the value by BYTE LENGTH only — [`Val`] deliberately carries no `Debug`,
-/// so blobs can never leak into diagnostics (and a derive would therefore not
-/// compile). Shape: `ContentWrite { addr: [c₁, …, c_#t], val: n bytes }`.
+/// so a value's bytes can never leak into diagnostics (and a derive would
+/// therefore not compile). Shape:
+/// `ContentWrite { addr: [c₁, …, c_#t], val: n bytes }`.
 impl fmt::Debug for ContentWrite {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ContentWrite {{ addr: [")?;
@@ -254,7 +255,7 @@ impl fmt::Debug for ContentWrite {
 /// predicate-def creation) calls it and lifts the result with
 /// `stg.push(rec.into())`.
 ///
-/// Refuses a duplicate: `Err(AlreadyPresent(addr.tumbler()))` if `addr` is
+/// Refuses a duplicate: `Err(AlreadyStored(addr.tumbler()))` if `addr` is
 /// stored in `c`. M3 mints fresh and M5 writes once, so this never fires in
 /// correct operation; when an upstream bug does hand it a duplicate, the
 /// caller gets a typed rejection to refuse its transaction with, instead of
@@ -267,17 +268,17 @@ impl fmt::Debug for ContentWrite {
 /// M1's standing invariant.
 ///
 /// In debug builds a routing assertion (`level == Element ∧ subspace ==
-/// s_C`; Open build decision #4) runs BEFORE the occupancy check, so a
-/// mis-routed address panics on its own terms, never masked by a
-/// coincidental occupancy; release compiles it out.
+/// s_C`; Open build decision #4) runs BEFORE the already-stored check, so a
+/// mis-routed address panics on its own terms, never masked by a value that
+/// happens to be stored there; release compiles it out.
 pub fn stage_write(
     c: &ContentStore,
     addr: &Address,
     val: Val,
 ) -> Result<ContentWrite, ContentError> {
-    debug_assert_content_address(addr, "stage_write");
+    debug_assert_content_address_routing(addr, "stage_write");
     if c.contains(addr.tumbler()) {
-        return Err(ContentError::AlreadyPresent(addr.tumbler().clone()));
+        return Err(ContentError::AlreadyStored(addr.tumbler().clone()));
     }
     Ok(ContentWrite {
         addr: addr.tumbler().clone(),

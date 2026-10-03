@@ -15,3 +15,9 @@ or more it lives in the module's own `tests.rs` — `foo/tests.rs` beside
 skepd is layered; imports point down. The layers are drawn in
 `ARCHITECTURE.md` §The daemon, and `crates/skepd/tests/it/tidy.rs` checks
 them.
+
+## Commits and comments
+
+Commit messages and doc comments follow `CONTRIBUTING.md`: the commit
+convention, the body that states the problem first, and the citation of
+the design rule a change implements.

@@ -47,9 +47,10 @@ pub struct ContentStore {
     // ordered iteration, range or prefix scans (the allocator's
     // max-under-prefix reads M3's own frontier, never M4: Conflicts #3) — and
     // the two whole-store readers, the checkpoint and the engine's world
-    // dump, take their order from the sort in `Serialize`. `Deserialize`
-    // needs `im`'s `serde` feature, which the workspace's dependency table
-    // sets.
+    // dump, take their order from the sort in `Serialize`. Its decode is
+    // `entry_by_entry`'s, not `im`'s own visitor, which reserves the count
+    // the bytes declare.
+    #[serde(deserialize_with = "entry_by_entry")]
     map: im::HashMap<Tumbler, Val, FixedHasher>,
 }
 
@@ -61,8 +62,9 @@ pub struct ContentStore {
 /// is `u32` on 32-bit and `u64` on 64-bit targets) and not of the contents.
 /// So two writes of one store, on two processes or two machines, yield one
 /// byte string, and M2's checkpoint header can commit to its body by hash.
-/// `Deserialize` stays derived: bincode's map decode is order-agnostic, and
-/// the HAMT is rebuilt from the entries whatever order they arrive in. Cost:
+/// `Deserialize` stays derived, its one field decoded by `entry_by_entry`
+/// below: the HAMT is rebuilt from the entries whatever order they arrive in,
+/// and nothing is reserved for a count the bytes have not carried. Cost:
 /// one O(n log n) sort of the entry set per checkpoint, on top of the O(n)
 /// serialization the checkpoint already pays.
 ///
@@ -70,10 +72,12 @@ pub struct ContentStore {
 /// edge back to this impl. M2's checkpoint hashes it (above), and decodes it
 /// from bytes it does not trust — so the map's key and value types stay free
 /// of recursion and of sequence elements that decode from zero bytes (M2's
-/// hostile-input obligation on `WorldState`, which `Tumbler` and `Val` meet).
-/// The engine's `World` lays these bytes down as one slice of its checkpoint
-/// layout, so a change to them — a field added or removed, an entry encoded
-/// differently — owes the engine's `WORLD_FORMAT` bump; the engine's pin
+/// hostile-input obligation on `WorldState`, which `Tumbler` and `Val` meet),
+/// and the map's own declared count is never trusted with a reservation
+/// (`entry_by_entry`). The engine's `World` lays these bytes down as one
+/// slice of its checkpoint layout, so a change to them — a field added or
+/// removed, an entry encoded differently — owes the engine's `WORLD_FORMAT`
+/// bump; the engine's pin
 /// (`each_slice_serializes_the_fields_the_format_count_names`) sees only
 /// the top-level field set, `map`, and a change beneath it owes the bump by
 /// hand. And the engine's world dump renders the form as M4's authoritative
@@ -107,6 +111,42 @@ impl Serialize for InTumblerOrder<'_> {
         entries.sort_unstable_by_key(|&(addr, _)| addr);
         serializer.collect_map(entries)
     }
+}
+
+/// The content map decoded one entry at a time — the decoding half of
+/// [`ContentStore`]'s serde form, beside [`InTumblerOrder`]. `im`'s own map
+/// visitor reserves room for the entry count the bytes declare before it has
+/// read one entry, and a checkpoint body is bytes M2 does not trust: a count
+/// they do not carry — a writer/reader skew reading another slice's bytes as
+/// this length, or a crafted file — makes that reservation panic or abort the
+/// process, where M2's load must refuse the base and fall back. Inserting each
+/// entry as it arrives reserves nothing the bytes have not carried, so a short
+/// body runs out of input and the decode refuses it; and it takes the entries
+/// in whatever order they arrive.
+fn entry_by_entry<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<im::HashMap<Tumbler, Val, FixedHasher>, D::Error> {
+    use serde::de::{MapAccess, Visitor};
+
+    struct Entries;
+
+    impl<'de> Visitor<'de> for Entries {
+        type Value = im::HashMap<Tumbler, Val, FixedHasher>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a map from content address to value")
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, mut entries: A) -> Result<Self::Value, A::Error> {
+            let mut map: im::HashMap<Tumbler, Val, FixedHasher> = im::HashMap::default();
+            while let Some((addr, val)) = entries.next_entry()? {
+                map.insert(addr, val);
+            }
+            Ok(map)
+        }
+    }
+
+    deserializer.deserialize_map(Entries)
 }
 
 impl ContentStore {

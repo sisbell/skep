@@ -155,8 +155,8 @@ fn register_pred_refuses_a_stored_literal_that_multiplies_past_the_node_budget()
 /// chain at the cap then derives COLD on a fresh coordinator — every link
 /// parsed and checked one derivation inside the last — evaluates through
 /// every link, and expands and analyzes through every link, on this
-/// default thread: this test is the measurement the derivation's level
-/// cost is set against.
+/// default thread: this test and its argument-free twin below, the deeper of
+/// the two, are the measurements the derivation's level cost is set against.
 #[test]
 fn a_reference_chain_at_the_cap_derives_cold_and_one_deeper_is_refused() {
     let k = kernel();
@@ -187,12 +187,44 @@ fn a_reference_chain_at_the_cap_derives_cold_and_one_deeper_is_refused() {
     fresh.certify_stable(&doc1(), &top).expect("expand and analyze through every link");
 }
 
+/// The derivation's level cost measured at its WORST case: references with no
+/// arguments spend every level they are charged on derivations — two per
+/// link, where the one-argument chain above spends one of its three on an
+/// argument that never nests — so the chain reaches the cap in 64 links and
+/// derives 65 deep on a cold memo, against that chain's 43. It registers to
+/// the cap and no further, then derives cold, evaluates and certifies through
+/// every link on this default thread.
+#[test]
+fn an_argument_free_reference_chain_at_the_cap_derives_cold() {
+    let k = kernel();
+    let c = coord(&k);
+    let (mut top, _) =
+        c.define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("P₀")).expect("define P₀");
+    let mut links = 0u32;
+    loop {
+        match c.type_check(vec![], Term::Ref { addr: top.clone(), args: vec![] }) {
+            Ok(tt) => {
+                top = c.define_predicate(&doc1(), &tt).expect("define the next link").0;
+                links += 1;
+            }
+            Err(TypeError::TooDeep) => break,
+            Err(other) => panic!("expected TooDeep at the cap, got {other:?}"),
+        }
+    }
+    assert_eq!(links, 64, "two levels per link, over a cap of 128");
+    let fresh = coord(&k);
+    assert_eq!(fresh.signature(&top).map(|s| s.result), Some(Sort::Bool));
+    assert_eq!(fresh.evaluate_def(&top, &[], View::Active, &k.snapshot()), Ok(Value::Bool(true)));
+    fresh.certify_stable(&doc1(), &top).expect("expand and analyze through every link");
+}
+
 /// The expansion budget: `Pᵢ(x) := Pᵢ₋₁(x) ∧ Pᵢ₋₁(x)` is a few nodes per
 /// def and registers at every level (its reach grows four per level), while
 /// its flat expansion doubles per level — `P₈` certifies, `P₁₆` is
 /// `ExpansionTooLarge` before its 2¹⁶ copies of `P₀` exist, and a `Def`
 /// trigger over it is refused at the door `certify_rule` and `armer_cycles`
-/// stand behind.
+/// stand behind. Retracted, `P₁₆` is `NotActive` instead: the activity leg
+/// speaks before the expansion is built.
 #[test]
 fn certify_stable_refuses_an_expansion_past_the_node_budget() {
     let k = kernel();
@@ -223,6 +255,11 @@ fn certify_stable_refuses_an_expansion_past_the_node_budget() {
     };
     assert!(matches!(c.certify_rule(&rule), Err(RuleError::TriggerExpansionTooLarge)));
     assert!(matches!(c.register_rule(rule), Err(RuleError::TriggerExpansionTooLarge)));
+    c.retract_pred(&doc1(), &p).expect("retract P₁₆");
+    assert!(
+        matches!(c.certify_stable(&doc1(), &p), Err(CertifyError::NotActive)),
+        "endorsement before the expansion"
+    );
 }
 
 /// The expansion budget is charged in payload too, because PR3's fresh-name

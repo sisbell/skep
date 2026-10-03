@@ -1,6 +1,7 @@
 //! Registration: every `register_rule` gate as its own typed rejection, in its
-//! stated order; the nesting cap a rule's domain is checked to; the home an
-//! action writes into; and `certify_rule`'s three legs, each failed alone.
+//! stated order, and `certify_rule` refusing exactly what it refuses; the
+//! nesting cap a rule's domain is checked to; the home an action writes into;
+//! and `certify_rule`'s three legs, each failed alone.
 
 use crate::common::*;
 use crate::terms::*;
@@ -9,7 +10,7 @@ use skep_coordination::{
     Arg, Dom, FireAction, Rule, RuleCertification, RuleError, Sort, Term, Trigger, TypeError,
     TypeKey, TypeRef, View,
 };
-use skep_links::{enc, Caller, ShippedType};
+use skep_links::{enc, Caller, Endset, ShippedType};
 
 /// Every `register_rule` validation gate, as a typed rejection — never a
 /// deferred fire-time panic; `certify_rule` re-runs the same gates.
@@ -181,6 +182,67 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
         )),
         Err(RuleError::BadTriggerArity)
     ));
+}
+
+/// `certify_rule` runs `register_rule`'s one shared validation: every rule
+/// `register_rule` refuses, `certify_rule` refuses with the same variant — the
+/// law over one malformed rule per gate, each at `audit` with the canonical
+/// trigger so the lint's Marker leg would reach the marker type's class. That
+/// leg asks the catalog for the class, a question an uncataloged type has no
+/// answer to: a lint that skipped the doorkeeper would panic where it must
+/// refuse, and would certify where it must refuse a PredLayer or Binary
+/// marker.
+#[test]
+fn certify_rule_refuses_exactly_what_register_rule_refuses() {
+    let k = kernel();
+    let mut c = coord(&k);
+    let (p, _) = c
+        .define_predicate(&doc1(), &c.type_check(vec![(v(1), Sort::Addr)], tru()).expect("P(x)"))
+        .expect("define P");
+    let (nat_def, _) = c
+        .define_predicate(
+            &doc1(),
+            &c.type_check(vec![(v(1), Sort::Addr)], lit_nat(1)).expect("an ℕ-codomain def"),
+        )
+        .expect("define an ℕ-codomain def");
+    let (closed_def, _) = c
+        .define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("a closed def"))
+        .expect("define a closed def");
+    let ref_trig = c
+        .type_check_trigger(
+            (v(1), Sort::Addr),
+            Term::Ref { addr: p.clone(), args: vec![at(var(1))] },
+        )
+        .expect("a ref-bearing trigger");
+    let members_dom = || Dom::MembersDom(concrete(&pred_stable_ty()));
+    let marker_of = |ty: &Endset| FireAction::Marker { home: doc1(), ty: key(ty) };
+    let rule = |domain: Dom, trigger: Trigger, action: FireAction| Rule {
+        domain,
+        trigger,
+        view: View::Audit,
+        action,
+    };
+    let in_domain = Term::Ref { addr: p.clone(), args: vec![at(var(2))] };
+    let malformed = vec![
+        rule(Dom::Reg, not_marked(&c), marker_action()),
+        rule(Dom::MembersDom(concrete(&uncataloged_ty(20))), not_marked(&c), marker_action()),
+        rule(filter(Dom::LinkDom, 2, in_domain), not_marked(&c), marker_action()),
+        rule(Dom::ActiveSlice(concrete(&pred_stable_ty())), not_marked(&c), marker_action()),
+        rule(members_dom(), Trigger::Inline(ref_trig), marker_action()),
+        rule(members_dom(), Trigger::Def(ca(77)), marker_action()),
+        rule(members_dom(), Trigger::Def(closed_def), marker_action()),
+        rule(members_dom(), Trigger::Def(nat_def), marker_action()),
+        rule(members_dom(), not_marked(&c), marker_of(&retraction_ty())),
+        rule(members_dom(), not_marked(&c), marker_of(&uncataloged_ty(20))),
+        rule(members_dom(), not_marked(&c), marker_of(&pred_def_ty())),
+        rule(members_dom(), not_marked(&c), marker_of(&pred_stable_ty())),
+    ];
+    for r in malformed {
+        let linted = c.certify_rule(&r).err();
+        let refused = c.register_rule(r.clone()).err();
+        assert!(refused.is_some(), "register_rule admitted {r:?}");
+        assert_eq!(linted, refused, "{r:?}");
+    }
 }
 
 /// A rule's domain is checked from nesting level 0 by the checker's

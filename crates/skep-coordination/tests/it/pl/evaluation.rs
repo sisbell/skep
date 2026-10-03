@@ -401,6 +401,38 @@ fn the_quantifiers_denote_all_and_any() {
     assert!(!d(exists(2, empty(), tru())));
 }
 
+/// V-TUP reads a slot two ways (ASN-0129): `addrs_F(t)` is the slot's DENOTED
+/// set, `t ∈ coverage_F(x)` a COVERAGE test — so where a tuple's F is
+/// `enc({doc1})`, an element of doc1 is in F's coverage and not among its
+/// addresses, and G's pair reads the other slot alike. ASN-0129 derives the
+/// audit `is_K` from the coverage test, and the two agree at every probe:
+/// under a denoted document, at it, and outside it.
+#[test]
+fn the_coverage_tests_read_coverage_and_derive_the_audit_is_k() {
+    let k = kernel();
+    let c = coord(&k);
+    let in_doc2 = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    deposit_rel(&k, PRED_STABLE, &doc1(), &ca(2)); // F denotes doc1, covers its subtree
+    deposit_rel(&k, PRED_STABLE, &ca(5), &doc2()); // G denotes doc2, covers its subtree
+    let some_tuple = |body: Term| exists(2, Dom::AuditSlice(concrete(&pred_stable_ty())), body);
+    let d = |t: Term| decide_now(&k, &c, View::Audit, t);
+    assert!(d(some_tuple(in_coverage_f(lit_addr(&ca(1)), 2))), "ca1 is in F's coverage");
+    assert!(!d(some_tuple(set_mem(lit_addr(&ca(1)), tup_addrs_f(2)))), "… not among F's addresses");
+    assert!(d(some_tuple(set_mem(lit_addr(&doc1()), tup_addrs_f(2)))), "doc1 is");
+    assert!(
+        d(some_tuple(in_coverage_g(lit_addr(&in_doc2), 2))),
+        "doc2's element is in G's coverage"
+    );
+    assert!(
+        !d(some_tuple(set_mem(lit_addr(&in_doc2), tup_addrs_g(2)))),
+        "… not among G's addresses"
+    );
+    for probe in [ca(1), doc1(), ca(5), doc2(), in_doc2.clone()] {
+        let derived = some_tuple(in_coverage_f(lit_addr(&probe), 2));
+        assert!(d(iff(derived, is_k(&pred_stable_ty(), lit_addr(&probe)))), "{probe}");
+    }
+}
+
 /// `L_dom` is the typed-relation sublayer and nothing else: a link deposited
 /// through the open surface in an UNCATALOGED type is outside PL's universe —
 /// it seeds no domain element and enters no reflection — while the cataloged

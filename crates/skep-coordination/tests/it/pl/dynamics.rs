@@ -84,8 +84,10 @@ fn classify_places_a_spelling_on_the_lattice_relative_to_its_view() {
 }
 
 /// PR-VIEW's scan refuses EXACTLY the view-parameterized constituents and the
-/// UV-rewritten collection atoms — the gate `certify_stable` stands behind, so
-/// a form dropped from it certifies a def whose ⊤-stability holds at one view
+/// UV-rewritten collection atoms — wherever they sit, under a filter's
+/// predicate or inside a set-term domain included, where the scan must
+/// descend to find them. It is the gate `certify_stable` stands behind, so a
+/// form dropped from it certifies a def whose ⊤-stability holds at one view
 /// and not another, and a form wrongly added to it refuses a legitimate def.
 #[test]
 fn view_independence_refuses_every_view_parameterized_and_uv_rewritten_form() {
@@ -118,6 +120,10 @@ fn view_independence_refuses_every_view_parameterized_and_uv_rewritten_form() {
         succs(&sup, lit_addr(&ca(1))),
         chain(&sup, lit_addr(&ca(1))),
         count(Dom::MembersDom(concrete(&ps))),
+        // Found wherever it sits: under a filter's predicate, inside a
+        // set-term domain.
+        count(filter(Dom::AuditSlice(concrete(&ps)), 2, is_k(&ps, lit_addr(&ca(1))))),
+        count(Dom::SetTerm(at(members(&ps)))),
     ] {
         assert!(!independent(t.clone()), "view-dependent: {t:?}");
     }
@@ -129,6 +135,8 @@ fn view_independence_refuses_every_view_parameterized_and_uv_rewritten_form() {
         count(Dom::ActiveSlice(concrete(&ps))),
         count(Dom::AuditSlice(concrete(&ps))),
         count(Dom::LinkDom),
+        count(filter(Dom::AuditSlice(concrete(&ps)), 2, is_doc(lit_addr(&doc1())))),
+        count(Dom::SetTerm(at(big_union(Dom::AuditSlice(concrete(&ps)), 2, tup_addrs_g(2))))),
     ] {
         assert!(independent(t.clone()), "view-independent: {t:?}");
     }
@@ -140,7 +148,8 @@ fn view_independence_refuses_every_view_parameterized_and_uv_rewritten_form() {
 /// wholly stable; `¬` swaps) — then each named rule at one assertion: the
 /// quantifier cases, `Let` and `IfSome` under a state-reading versus a
 /// constant part, grow-only membership and emptiness at audit only, the
-/// derived closure forms, a non-literal threshold, and the Default view's
+/// derived closure forms and the bases under which each can shrink,
+/// residence's ⊤-stability, a non-literal threshold, and the Default view's
 /// BH1 charge.
 #[test]
 fn the_pd0_rules_hold_over_a_generated_family() {
@@ -215,6 +224,29 @@ fn the_pd0_rules_hold_over_a_generated_family() {
         Stability::Neither
     );
     assert_eq!(stab(set_mem(lit_addr(&ca(1)), reflect(Dom::MembersDom(pd()))), View::Audit), Stability::StOnly);
+    // … and each grows only where its base does: Reflect of an active M_K, ⋃
+    // over A_K, a set-term domain over an active `members` can shrink;
+    // `targets_of` at a constant argument is grow-only at audit and nowhere
+    // else.
+    assert_eq!(
+        stab(set_mem(lit_addr(&ca(1)), reflect(Dom::MembersDom(pd()))), View::Active),
+        Stability::Neither
+    );
+    assert_eq!(
+        stab(
+            set_mem(lit_addr(&ca(1)), big_union(Dom::ActiveSlice(pd()), 2, tup_addrs_f(2))),
+            View::Audit
+        ),
+        Stability::Neither
+    );
+    let in_targets = || set_mem(lit_addr(&ca(2)), targets_of(&pred_def_ty(), lit_addr(&ca(1))));
+    assert_eq!(stab(in_targets(), View::Audit), Stability::StOnly);
+    assert_eq!(stab(in_targets(), View::Active), Stability::Neither);
+    let over_members = || nat_le(lit_nat(2), count(Dom::SetTerm(at(members(&pred_def_ty())))));
+    assert_eq!(stab(over_members(), View::Audit), Stability::StOnly);
+    assert_eq!(stab(over_members(), View::Active), Stability::Neither);
+    // Residence only ever extends: ST, and never SF.
+    assert_eq!(stab(is_doc(lit_addr(&doc1())), View::Audit), Stability::StOnly);
     // A threshold that is not a literal leaves the count unclassified (the
     // widening to a bound parameter is certification-only).
     assert_eq!(

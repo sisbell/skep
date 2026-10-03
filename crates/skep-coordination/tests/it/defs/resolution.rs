@@ -1,8 +1,11 @@
 //! Resolution: the memo's two permanent statuses — the poisoned one a
-//! per-handle policy — and the one it never keeps, and the class-free
-//! registration probes beside the guest-class look.
+//! per-handle policy, and the answer to every breach a level-0 derivation
+//! meets, a body too deep and a reference cycle included — and the one it
+//! never keeps, and the class-free registration probes beside the guest-class
+//! look.
 
 use crate::common::*;
+use crate::defs::envelope;
 use crate::terms::*;
 
 use skep_address::document_of;
@@ -107,6 +110,96 @@ fn a_freeze_on_breach_holds_on_its_handle_and_errs_only_toward_none() {
     let cold = coord(&k);
     assert_eq!(cold.signature(&s).map(|sig| sig.result), Some(Sort::Bool));
     assert_eq!(cold.evaluate_def(&s, &[], View::Active, &k.snapshot()), Ok(Value::Bool(true)));
+}
+
+/// A body the decoder admits and the checker refuses as too deep AT LEVEL 0
+/// is the content's own fault, never an asking term's: `register_pred`
+/// refuses it `IllTyped(TooDeep)`, and where a breach registers it anyway it
+/// freezes POISONED like any undisciplined content — every probe answers the
+/// breach, none panics. `¬¹²⁵(∀K ∈ Reg :: ⊤)` decodes with its quantifier at
+/// level 125, inside the cap, and checks its `Reg` instances four joins
+/// deeper, at 129.
+#[test]
+fn a_body_too_deep_at_level_zero_is_a_breach_and_freezes_poisoned() {
+    let k = kernel();
+    let c = coord(&k);
+    let mut payload = vec![0u8]; // no parameters
+    payload.extend(std::iter::repeat_n(7u8, 125)); // NOT, per level
+    payload.extend([10u8, 10, 5, 2, 1]); // FORALL v10 ∈ REG :: LIT TRUE
+    let s = insert_raw(&k, &doc1(), envelope(payload));
+    assert!(matches!(
+        c.register_pred(&doc1(), &s),
+        Err(RegisterError::IllTyped(TypeError::TooDeep))
+    ));
+    link_writer(&k)
+        .emit(Caller::System, &doc1(), &pred_def_ty(), &s, &[])
+        .expect("the breach: a pdef past the gate");
+    assert!(c.signature(&s).is_none());
+    assert_eq!(
+        c.evaluate_def(&s, &[], View::Active, &k.snapshot()),
+        Err(EvalError::UndisciplinedDef)
+    );
+    assert!(matches!(c.certify_stable(&doc1(), &s), Err(CertifyError::UndisciplinedDef)));
+}
+
+/// A breach CYCLE ends: two runs registered past the gate, each a reference
+/// to the other, derive their referent two levels deeper per hop
+/// (`referent_depth`) until the checker's nesting door refuses; each refusal
+/// above level 0 is the asking term's and fills nothing, and the root, at
+/// level 0, freezes poisoned on its own account — as does the other member,
+/// the root of its own derivation when it is first probed. Asked at a fixed
+/// level, the first probe would recurse without end; a level-0 refusal taken
+/// for the asking term's would reach `def_status`'s `unreachable!`.
+#[test]
+fn a_breach_cycle_ends_at_the_nesting_cap_and_freezes_its_root() {
+    let k = kernel();
+    let c = coord(&k);
+    let (p, _) =
+        c.define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("P")).expect("define P");
+    let (q, _) = c
+        .define_predicate(
+            &doc1(),
+            &c.type_check(vec![], Term::Ref { addr: p.clone(), args: vec![] }).expect("Q := P"),
+        )
+        .expect("define Q");
+    assert_eq!((p, q.clone()), (ca(1), ca(2)));
+    let template = k
+        .snapshot()
+        .world()
+        .content()
+        .value_at(q.tumbler())
+        .expect("Q is resident")
+        .as_bytes()
+        .to_vec();
+    let end = template.len();
+    assert_eq!(
+        &template[end - 2..],
+        &[1, 0],
+        "PR-ENC: the referent's last component, then the argument count"
+    );
+    let referring_to = |ordinal: u8| {
+        let mut bytes = template.clone();
+        bytes[end - 2] = ordinal;
+        bytes
+    };
+    let cycle_a = insert_raw(&k, &doc1(), referring_to(4)); // → ca4, landing at ca3
+    let cycle_b = insert_raw(&k, &doc1(), referring_to(3)); // → ca3, landing at ca4
+    assert_eq!((cycle_a.clone(), cycle_b.clone()), (ca(3), ca(4)));
+    for start in [&cycle_a, &cycle_b] {
+        link_writer(&k)
+            .emit(Caller::System, &doc1(), &pred_def_ty(), start, &[])
+            .expect("the breach: a pdef past the gate");
+    }
+    assert!(c.signature(&cycle_a).is_none(), "the cycle ends, its root poisoned");
+    assert_eq!(
+        c.evaluate_def(&cycle_a, &[], View::Active, &k.snapshot()),
+        Err(EvalError::UndisciplinedDef)
+    );
+    assert!(c.signature(&cycle_b).is_none());
+    assert_eq!(
+        c.evaluate_def(&cycle_b, &[], View::Active, &k.snapshot()),
+        Err(EvalError::UndisciplinedDef)
+    );
 }
 
 /// A never-registered start is never memoized: every probe made before the

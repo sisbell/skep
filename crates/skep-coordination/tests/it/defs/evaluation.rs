@@ -1,12 +1,13 @@
 //! A stored def's denotation (`evaluate_def`): the view and the snapshot it
-//! reads at, its argument door, positional binding, and the binders in its
-//! body.
+//! reads at, its argument door, positional binding, the binders in its body,
+//! and the source form it is stored as and re-derived from.
 
 use crate::common::*;
 use crate::terms::*;
 
 use skep_address::Address;
-use skep_coordination::{Dom, EvalError, Sort, Value, View};
+use skep_content::HasContent;
+use skep_coordination::{Atom, Dom, EvalError, Sort, Term, TypeRef, Value, View};
 use skep_links::Caller;
 
 /// `evaluate_def`'s `view` is the term view the denotation reads at: a stored
@@ -155,4 +156,41 @@ fn an_opt_nat_argument_narrows_through_the_binder_guard() {
     assert_eq!(at_arg(Value::OptNat(Some(n(5)))), Ok(Value::Bool(false)));
     assert_eq!(at_arg(Value::OptNat(None)), Ok(Value::Bool(false)));
     assert_eq!(at_arg(Value::Nat(n(2))), Err(EvalError::ArgSortMismatch));
+}
+
+/// A stored def is its SOURCE: `define_predicate` encodes the compact
+/// pre-`Reg`-expansion body, so `∃K ∈ Reg :: is_K(x)` names no class and its
+/// stored run is SHORTER than that of its first instance `is_K(Retired, x)`,
+/// which spells a key — the expansion would spell five. A cold coordinator
+/// re-derives the expansion from those bytes, its last instance included.
+#[test]
+fn a_def_is_stored_as_its_source_and_expanded_when_derived() {
+    let k = kernel();
+    let c = coord(&k);
+    let define = |t: Term| {
+        let tt = c.type_check(vec![(v(1), Sort::Addr)], t).expect("P(x)");
+        c.define_predicate(&doc1(), &tt).expect("define").0
+    };
+    let in_some_class = Term::Atom(Atom::IsK(TypeRef::ClassVar(v(7)), at(var(1))));
+    let some_class = define(exists(7, Dom::Reg, in_some_class));
+    let one_class = define(is_k(&retired_ty(), var(1)));
+    let stored = |start: &Address| {
+        k.snapshot().world().content().value_at(start.tumbler()).expect("resident").len()
+    };
+    assert!(
+        stored(&some_class) < stored(&one_class),
+        "{} bytes against {}",
+        stored(&some_class),
+        stored(&one_class)
+    );
+    // PredStable is the catalog's last class, so its instance is the last the
+    // expansion builds.
+    link_writer(&k)
+        .emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(5), &[])
+        .expect("ca5 heads PredStable");
+    let cold = coord(&k);
+    let s = k.snapshot();
+    let at_arg = |x: Address| cold.evaluate_def(&some_class, &[Value::Addr(x)], View::Active, &s);
+    assert_eq!(at_arg(ca(5)), Ok(Value::Bool(true)));
+    assert_eq!(at_arg(doc2()), Ok(Value::Bool(false)));
 }

@@ -146,3 +146,44 @@ fn certify_stable_refuses_a_view_independent_def_the_store_can_falsify() {
     c.certify_stable(&doc1(), &resident)
         .expect("residence is permanent: ⊤-stable and view-independent");
 }
+
+/// ST⁺ decides over the FLAT expansion, which carries a referent's quantifier
+/// as the referent spelled it: `∀t ∈ L_K :: ca11 ∈ cov_F(t)` holds of the
+/// empty slice and falls to the first tuple not covering ca11 — ⊥-stable,
+/// never ⊤-stable — so it is refused, and so is a def that is nothing but a
+/// reference to it; its `∃` twin certifies, directly and through a reference.
+/// Evaluation never reads the expansion, so only certification can see a `∀`
+/// rebuilt as an `∃` — and it would certify the def this test falsifies.
+#[test]
+fn st_plus_reads_a_referent_s_universal_as_a_universal() {
+    let k = kernel();
+    let c = coord(&k);
+    let define = |t: Term| {
+        let tt = c.type_check(vec![], t).expect("a closed Boolean def");
+        c.define_predicate(&doc1(), &tt).expect("define").0
+    };
+    let through = |p: &Address| define(Term::Ref { addr: p.clone(), args: vec![] });
+    // The Retired class: nothing below deposits into it but the falsification.
+    let l_k = || Dom::AuditSlice(concrete(&retired_ty()));
+    let covers_ca11 = || in_coverage_f(lit_addr(&ca(11)), 2);
+    let all = define(forall(2, l_k(), covers_ca11()));
+    let some = define(exists(2, l_k(), covers_ca11()));
+    let (all_ref, some_ref) = (through(&all), through(&some));
+    let now = |p: &Address| c.evaluate_def(p, &[], View::Audit, &k.snapshot());
+    assert_eq!(now(&all_ref), Ok(Value::Bool(true)), "vacuous over the empty slice");
+    for p in [&all, &all_ref] {
+        assert!(
+            matches!(c.certify_stable(&doc1(), p), Err(CertifyError::StabilityUnproven)),
+            "{p}"
+        );
+    }
+    for p in [&some, &some_ref] {
+        c.certify_stable(&doc1(), p).expect("∃ over the grow-only L_K is ST⁺");
+    }
+    deposit_rel(&k, RETIRED, &ca(12), &ca(13));
+    assert_eq!(
+        now(&all_ref),
+        Ok(Value::Bool(false)),
+        "the falsification the refusal stood against"
+    );
+}

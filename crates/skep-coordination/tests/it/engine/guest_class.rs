@@ -15,8 +15,9 @@ use skep_links::{Caller, HasLinks, Visibility};
 /// bound argument's DOCUMENT, the injected guest predicate answers `false`
 /// for is refused BEFORE any deposit — a `Failed` step carrying
 /// `DraftBoundary(doc)`, never a silent skip and never a link. A document
-/// address bound as the argument is judged as itself. Under an all-readable
-/// predicate the same rule fires.
+/// address bound as the argument is judged as itself, and so is an argument
+/// with no document field at all. Under an all-readable predicate the same
+/// rule fires.
 #[test]
 fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
     // doc2 is the "draft": unreadable at guest class under this predicate.
@@ -147,6 +148,32 @@ fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
         c.fire(&Occurrence { rule: id, arg: Arg::Addr(ca(1)) }).expect("fire"),
         FireOutcome::NoOp
     ));
+
+    // (7) An argument with NO document field — an account address, above the
+    // document level — is judged as itself: the guest predicate is asked
+    // about it, and refuses the fire.
+    let k = kernel();
+    let account = a(&[1, 0, 1]);
+    let refused = account.clone();
+    let mut c = coord_with_guest(&k, move |_, d| *d != refused);
+    link_writer(&k)
+        .emit(Caller::System, &doc1(), &pred_stable_ty(), &account, &[])
+        .expect("an account-level member");
+    c.register_rule(Rule {
+        domain: Dom::MembersDom(concrete(&pred_stable_ty())),
+        trigger: always_addr(&c),
+        view: View::Audit,
+        action: marker_action(),
+    })
+    .expect("register");
+    match c.step(&k.snapshot()) {
+        StepOutcome::Failed { arg, err: FireError::DraftBoundary(d), .. } => {
+            assert_eq!(arg, account);
+            assert_eq!(d, account, "judged as itself");
+        }
+        other => panic!("expected Failed(DraftBoundary(the account)), got {other:?}"),
+    }
+    assert!(!k.snapshot().world().links().is_k(&marker_ty(), account.tumbler()));
 }
 
 /// THE LOOK AT GUEST CLASS (lane 4.1, PUB-6.28): under a guest predicate that

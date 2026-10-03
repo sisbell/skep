@@ -71,14 +71,50 @@ fn expands_a_reference_with_fresh_disjoint_names() {
     assert_eq!(Expander::new(&stub).expand(&host), Ok(expected), "deterministic per expansion");
 }
 
-/// PR3's renaming over EVERY binding position — the four binding term
-/// formers and `Dom::Filter` — in one expansion: the referent's
-/// parameters take the first fresh names in signature order, its binders
-/// follow depth-first left to right, and each binder's IN-SCOPE child
-/// alone sees the extended map, so an `IfSome`'s else-branch still reads
-/// the enclosing `Let`'s name. The host's arguments are left as they
-/// stand, though they are spelled with the referent's own parameter
-/// names, so the `Let` chain binds the fresh names and captures nothing.
+/// The universal binder is renamed like every other and stays universal: an
+/// `∀` the renaming rebuilt as an `∃` would read as ⊤-stable to ST⁺, which
+/// runs over this expansion, while evaluation, which never expands, would
+/// still answer the `∀`.
+#[test]
+fn a_universal_binder_takes_a_fresh_name_and_stays_universal() {
+    let p = a(&[1, 0, 1, 0, 1, 0, 1, 1]);
+    // P(x) := ∀ y ∈ L_dom :: y = x.
+    let body = Term::Forall {
+        var: v(2),
+        dom: Arc::new(Dom::LinkDom),
+        body: Arc::new(addr_eq(Term::Var(v(2)), Term::Var(v(1)))),
+    };
+    let referent = TypedTerm::from_parts(
+        SignedTerm { params: vec![(v(1), Sort::Addr)], body: body.clone() },
+        Sort::Bool,
+        Arc::new(body),
+        true, // ref-free
+        2,    // reach
+    );
+    let stub = Stub(HashMap::from([(p.tumbler().clone(), Arc::new(referent))]));
+    let host = Term::Ref { addr: p, args: vec![Arc::new(Term::Var(v(2)))] };
+    let (x0, x1) = (VarId::expansion(0), VarId::expansion(1));
+    let expected = Term::Let {
+        var: x0,
+        bound: Arc::new(Term::Var(v(2))),
+        body: Arc::new(Term::Forall {
+            var: x1,
+            dom: Arc::new(Dom::LinkDom),
+            body: Arc::new(addr_eq(Term::Var(x1), Term::Var(x0))),
+        }),
+    };
+    assert_eq!(Expander::new(&stub).expand(&host), Ok(expected));
+}
+
+/// PR3's renaming over the binding positions beside the two quantifiers —
+/// `Let`, `⋃`, `IfSome` and `Dom::Filter` — in one expansion (`∃` and `∀`
+/// have a test each): the referent's parameters take the first fresh names
+/// in signature order, its binders follow depth-first left to right, and
+/// each binder's IN-SCOPE child alone sees the extended map, so an
+/// `IfSome`'s else-branch still reads the enclosing `Let`'s name. The host's
+/// arguments are left as they stand, though they are spelled with the
+/// referent's own parameter names, so the `Let` chain binds the fresh names
+/// and captures nothing.
 #[test]
 fn every_binding_position_takes_a_fresh_name_in_its_own_scope() {
     let p = a(&[1, 0, 1, 0, 1, 0, 1, 1]);

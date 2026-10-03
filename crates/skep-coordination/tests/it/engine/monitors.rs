@@ -155,9 +155,10 @@ fn fire_counts_are_recomputed_from_the_store_not_tallied_in_memory() {
 /// emitting one class while reading another's audit slice makes no edge;
 /// the Default reading charges the BH1 filter slice — the class emitted, a
 /// self-loop; a Marker landing in a Nullify rule's active footprint, whose
-/// retraction arms any active-reading trigger, closes a two-rule cycle; and a
-/// whole-audit read is armed by any deposit. Disjoint cycles come back
-/// ordered by their least member.
+/// retraction arms any active-reading trigger, closes a two-rule cycle; a
+/// whole-audit read is armed by any deposit; and a Nullify's own `[R]` tuple
+/// arms a reader of `[R]`'s audit slice through its class. Disjoint cycles
+/// come back ordered by their least member.
 #[test]
 fn armer_cycles_follow_the_edge_rule() {
     let rule = |c: &Coordinator<World>, body: Term, view: View, action: FireAction| Rule {
@@ -227,4 +228,18 @@ fn armer_cycles_follow_the_edge_rule() {
         ))
         .expect("reads that class at active");
     assert_eq!(c.armer_cycles(), vec![vec![marker], vec![nullify]]);
+
+    // A Nullify emission lands in `[R]` itself, so it arms a trigger reading
+    // `[R]`'s AUDIT slice through that class — with no active read in sight.
+    let k = kernel();
+    let mut c = coord(&k);
+    let id = c
+        .register_rule(rule(
+            &c,
+            is_k(&retraction_ty(), var(1)),
+            View::Audit,
+            FireAction::Nullify { home: doc1() },
+        ))
+        .expect("reads [R] at audit");
+    assert_eq!(c.armer_cycles(), vec![vec![id]]);
 }

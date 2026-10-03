@@ -35,9 +35,10 @@ use crate::ast::{Lit, Term};
 /// there; a release build carries several times that), and far above any
 /// hand-authored body. The suite runs each walk at exactly this depth on a
 /// default thread (`a_hand_forged_body_at_the_decode_cap_survives_every_walk`,
-/// `a_reference_chain_at_the_cap_derives_cold_and_one_deeper_is_refused`), so
-/// a cap raised past the budget, or a walk grown past it, aborts there rather
-/// than in a daemon.
+/// `a_reference_chain_at_the_cap_derives_cold_and_one_deeper_is_refused`,
+/// `an_argument_free_reference_chain_at_the_cap_derives_cold`), so a cap
+/// raised past the budget, or a walk grown past it, aborts there rather than
+/// in a daemon.
 pub(crate) const MAX_DEPTH: u32 = 128;
 
 /// The levels a reference costs beyond its own node, in [`MAX_DEPTH`]'s
@@ -46,11 +47,15 @@ pub(crate) const MAX_DEPTH: u32 = 128;
 /// expander's re-entry at the referent. [`referent_depth`] carries a walk
 /// across these frames to the referent's root; [`reference_reach`] adds the
 /// flat expansion's `Let` chain and the referent's own reach. Set against the
-/// same measurement as [`MAX_DEPTH`]: the chain test derives a chain
-/// registered to the cap cold, on a default thread, so a cost set too low
-/// aborts there. Private to this module, as [`MAX_TERM_NODES`] is: a
-/// reference is placed only through the three functions below, so its
-/// arithmetic has one copy.
+/// same measurement as [`MAX_DEPTH`], at its worst case: a chain of
+/// argument-free references spends every level it is charged on derivations,
+/// so registered to the cap it derives 65 deep on a cold memo — the deepest
+/// derivation legitimate content can demand — and the suite derives it on a
+/// default thread (`an_argument_free_reference_chain_at_the_cap_derives_cold`),
+/// so a cost set too low, or a derivation frame grown past the budget, fails
+/// there. Private to this module, as [`MAX_TERM_NODES`] is: a reference is
+/// placed only through the three functions below, so its arithmetic has one
+/// copy.
 const DERIVATION_COST: u32 = 2;
 
 /// The level at which a walk through a reference at level `depth` reaches

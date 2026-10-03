@@ -10,9 +10,10 @@
 //! (every refusal a def write meets, and the order they speak in), `budgets`
 //! (the resource doors on the stored-bytes path), `resolution` (the memo's
 //! statuses, and the class-free registration probes beside the guest-class
-//! look), `evaluation` (a stored def's denotation and its argument door) and
-//! `certification` (`certify_stable`'s legs). The PR-ENC spellings below are
-//! what `gates` and `budgets` forge stored content with.
+//! look), `evaluation` (a stored def's denotation, its argument door, and the
+//! source form it is stored as) and `certification` (`certify_stable`'s
+//! legs). The PR-ENC spellings below are what `gates`, `budgets` and
+//! `resolution` forge stored content with.
 
 mod budgets;
 mod certification;

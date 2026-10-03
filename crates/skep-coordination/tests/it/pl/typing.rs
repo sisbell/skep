@@ -197,6 +197,122 @@ fn type_check_reports_the_first_rejection_in_its_stated_walk_order() {
     );
 }
 
+/// WT is what makes `eval` infallible past its door, one position at a time:
+/// every place the checker requires a sort refuses a child of another, and
+/// each refusal stands between a checked term and an `unreachable!` in the
+/// evaluator. One row per such place — a reference's arguments aside, which
+/// `type_check_refuses_each_documented_edge_by_name` and the stored-bytes gate
+/// pin — and PC2's line crossed both ways: an optional is not a value, nor a
+/// value an optional; the binder guard is the only way from `T∪{⊥}` to `T`.
+#[test]
+fn every_sorted_position_refuses_a_child_of_another_sort() {
+    let k = kernel();
+    let c = coord(&k);
+    let mismatch = |expected: Sort, found: Sort| TypeError::SortMismatch { expected, found };
+    let set = || members(&pred_def_ty());
+    let addr = || lit_addr(&ca(1));
+    for (t, refused) in [
+        (not(lit_nat(1)), mismatch(Sort::Bool, Sort::Nat)),
+        (and(lit_nat(1), tru()), mismatch(Sort::Bool, Sort::Nat)),
+        (exists(2, Dom::LinkDom, lit_nat(1)), mismatch(Sort::Bool, Sort::Nat)),
+        (
+            forall(7, Dom::Reg, lit_nat(1)),
+            TypeError::RegInstanceIllTyped(Box::new(mismatch(Sort::Bool, Sort::Nat))),
+        ),
+        (count(filter(Dom::LinkDom, 2, lit_nat(1))), mismatch(Sort::Bool, Sort::Nat)),
+        (big_union(Dom::LinkDom, 2, lit_nat(1)), mismatch(Sort::AddrSet, Sort::Nat)),
+        (count_set(lit_nat(1)), mismatch(Sort::AddrSet, Sort::Nat)),
+        (reflect(Dom::ActiveSlice(concrete(&pred_def_ty()))), mismatch(Sort::Addr, Sort::Tup)),
+        (is_doc(lit_nat(1)), mismatch(Sort::Addr, Sort::Nat)),
+        (exists(1, Dom::LinkDom, is_doc(tup_addr(1))), mismatch(Sort::Tup, Sort::Addr)),
+        (addr_eq(lit_nat(1), addr()), mismatch(Sort::Addr, Sort::Nat)),
+        (set_eq(lit_nat(1), set()), mismatch(Sort::AddrSet, Sort::Nat)),
+        (is_empty(lit_nat(1)), mismatch(Sort::AddrSet, Sort::Nat)),
+        (nat_le(tru(), lit_nat(1)), mismatch(Sort::Nat, Sort::Bool)),
+        (nat_add(tru(), lit_nat(1)), mismatch(Sort::Nat, Sort::Bool)),
+        (elems(set()), mismatch(Sort::AddrSeq, Sort::AddrSet)),
+        (set_mem(lit_nat(1), set()), mismatch(Sort::Addr, Sort::Nat)),
+        (set_mem(addr(), lit_nat(1)), mismatch(Sort::AddrSet, Sort::Nat)),
+        (map_get(lit_nat(1), &pred_def_ty()), mismatch(Sort::Map, Sort::Nat)),
+        // PC2's line, crossed both ways.
+        (addr_eq(bot_addr(), addr()), mismatch(Sort::Addr, Sort::OptAddr)),
+        (nat_le(bot_nat(), lit_nat(1)), mismatch(Sort::Nat, Sort::OptNat)),
+        (if_some(bot_addr(), 2, bot_addr(), addr()), mismatch(Sort::OptAddr, Sort::Addr)),
+        (def(addr()), mismatch(Sort::OptAddr, Sort::Addr)),
+        (if_some(lit_nat(1), 2, tru(), tru()), mismatch(Sort::OptAddr, Sort::Nat)),
+    ] {
+        assert_eq!(c.type_check(vec![], t.clone()).err(), Some(refused), "{t:?}");
+    }
+}
+
+/// A variable is read only inside its binder's scope, the other half of what
+/// keeps `eval` from meeting an unbound name: a tuple projection names a
+/// variable some binder bound, and the binder guard binds its variable in the
+/// THEN-branch alone — the else-branch runs exactly when nothing was bound,
+/// so it cannot read the name, and where the name is also bound outside it
+/// reads that outer binding at its own sort.
+#[test]
+fn a_binder_s_variable_is_read_only_inside_its_scope() {
+    let k = kernel();
+    let c = coord(&k);
+    assert_eq!(c.type_check(vec![], tup_addrs_f(9)).err(), Some(TypeError::UnboundVariable(v(9))));
+    assert_eq!(
+        c.type_check(vec![], if_some(bot_addr(), 2, tru(), is_doc(var(2)))).err(),
+        Some(TypeError::UnboundVariable(v(2)))
+    );
+    let shadowing = c
+        .type_check(
+            vec![(v(2), Sort::Nat)],
+            if_some(bot_addr(), 2, is_doc(var(2)), nat_le(var(2), lit_nat(3))),
+        )
+        .expect("then reads the guard's v2: Addr; else the parameter v2: Nat");
+    let env = Env::empty().bind(v(2), Value::Nat(n(2)));
+    assert!(c.decide(&shadowing, &env, View::Active, &k.snapshot()));
+}
+
+/// V-STAT's behavior guard as a law over every atom that needs one: each
+/// refuses a class whose registration lacks its behavior, naming the key and
+/// the behavior, so no atom denotes a walk, a reverse lookup or an age over
+/// tuples no registration declared able to answer it. `PredDef` declares none
+/// of the four; the classes that declare one admit its atoms (`Walk` at the
+/// shipped `Supersedes`, `ReadFilter` at `Retired`; nothing declares
+/// `ReverseLookup` or `Age` in this format).
+#[test]
+fn every_behavior_atom_refuses_a_class_without_its_behavior() {
+    let k = kernel();
+    let c = coord(&k);
+    let sup = c.reserved_type(ShippedType::Supersedes).clone();
+    let pd = pred_def_ty();
+    let x = || lit_addr(&ca(1));
+    let atom = |a: Atom| Term::Atom(a);
+    for (t, needs) in [
+        (is_filtered(&pd, x()), Behavior::ReadFilter),
+        (succs(&pd, x()), Behavior::Walk),
+        (chain(&pd, x()), Behavior::Walk),
+        (tip(&pd, x()), Behavior::Walk),
+        (is_in_chain(&pd, x(), x()), Behavior::Walk),
+        (atom(Atom::SourcesTo(concrete(&pd), at(x()))), Behavior::ReverseLookup),
+        (atom(Atom::TargetOf(concrete(&pd), at(x()))), Behavior::ReverseLookup),
+        (atom(Atom::Age(concrete(&pd), at(x()))), Behavior::Age),
+        (atom(Atom::Stale(concrete(&pd), at(lit_nat(1)))), Behavior::Age),
+    ] {
+        assert_eq!(
+            c.type_check(vec![], t.clone()).err(),
+            Some(TypeError::BehaviorMissing { ty: key(&pd), needs }),
+            "{t:?}"
+        );
+    }
+    for t in [
+        is_filtered(&retired_ty(), x()),
+        succs(&sup, x()),
+        chain(&sup, x()),
+        tip(&sup, x()),
+        is_in_chain(&sup, x(), x()),
+    ] {
+        assert!(c.type_check(vec![], t.clone()).is_ok(), "{t:?}");
+    }
+}
+
 /// A `Ref`'s referent speaks before its arguments in both of its parts —
 /// whether it resolves, then how deep a walk through it reaches — so which
 /// rejection speaks does not turn on whether the memo was warm. Cold, the

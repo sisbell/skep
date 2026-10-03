@@ -1,6 +1,7 @@
 //! Scheduling: the peek, the fire and the step — the two-transaction gap
-//! accounted, the rotation's fairness and rotate-past on failure, quiescence
-//! and its base case — and the Nullify action with Q7's scoped quiescence.
+//! accounted, the rotation's fairness and its rotate-past on every outcome,
+//! failure included, quiescence and its base case — and the Nullify action
+//! with Q7's scoped quiescence.
 
 use crate::common::*;
 use crate::terms::*;
@@ -12,7 +13,7 @@ use skep_coordination::{
     View,
 };
 use skep_kernel::TxnError;
-use skep_links::{enc, Caller, HasLinks, NullifyError, SlotArg, Tuple};
+use skep_links::{enc, Caller, Endset, HasLinks, NullifyError, SlotArg, Tuple};
 
 // ─────────────────────────── fire, step, quiescence ───────────────────────────
 
@@ -401,6 +402,73 @@ fn a_failing_rule_does_not_starve_the_agenda() {
     assert!(
         matches!(c.step(&k.snapshot()), StepOutcome::Failed { rule, .. } if rule == r1),
         "the failing occurrence stays enabled; the cursor rotated past it, not around it"
+    );
+}
+
+/// The cursor rotates past its pick on a `Deduped` step too: two rules whose
+/// triggers no fire falsifies alternate through their dedups, where a cursor
+/// that held on a dedup would hand the first rule every turn.
+#[test]
+fn a_deduped_step_rotates_past_its_rule() {
+    let k = kernel();
+    let mut c = coord(&k);
+    let writer = link_writer(&k);
+    writer
+        .emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[])
+        .expect("a pred_stable member");
+    writer.emit(Caller::System, &doc1(), &pred_def_ty(), &ca(5), &[]).expect("a pred_def member");
+    let over = |c: &Coordinator<World>, class: &Endset| Rule {
+        domain: Dom::MembersDom(concrete(class)),
+        trigger: always_addr(c),
+        view: View::Audit,
+        action: marker_action(),
+    };
+    let r1 = c.register_rule(over(&c, &pred_stable_ty())).expect("R1");
+    let r2 = c.register_rule(over(&c, &pred_def_ty())).expect("R2");
+    let mut picks = Vec::new();
+    for _ in 0..4 {
+        picks.push(match c.step(&k.snapshot()) {
+            StepOutcome::Fired { rule, .. } => ("fired", rule),
+            StepOutcome::Deduped { rule, .. } => ("deduped", rule),
+            other => panic!("expected Fired or Deduped, got {other:?}"),
+        });
+    }
+    assert_eq!(picks, [("fired", r1), ("fired", r2), ("deduped", r1), ("deduped", r2)]);
+}
+
+/// A `NoOp` step rotates the cursor as well (`StepOutcome::NoOp`: "the cursor
+/// rotated"): two rules enabled at a stale snapshot, the first falsified
+/// since — the step after its `NoOp` fires the second at that same snapshot,
+/// where a cursor that held on a `NoOp` would pick the falsified rule again.
+#[test]
+fn a_no_op_step_rotates_past_its_rule() {
+    let k = kernel();
+    let mut c = coord(&k);
+    let writer = link_writer(&k);
+    writer
+        .emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[])
+        .expect("a pred_stable member");
+    writer.emit(Caller::System, &doc1(), &pred_def_ty(), &ca(5), &[]).expect("a pred_def member");
+    let over = |c: &Coordinator<World>, class: &Endset| Rule {
+        domain: Dom::MembersDom(concrete(class)),
+        trigger: not_marked(c),
+        view: View::Audit,
+        action: marker_action(),
+    };
+    let r1 = c.register_rule(over(&c, &pred_stable_ty())).expect("R1");
+    let r2 = c.register_rule(over(&c, &pred_def_ty())).expect("R2");
+    let stale = k.snapshot();
+    assert!(matches!(
+        c.fire(&Occurrence { rule: r1, arg: Arg::Addr(ca(1)) }).expect("fire"),
+        FireOutcome::Fired { .. }
+    ));
+    assert!(
+        matches!(c.step(&stale), StepOutcome::NoOp),
+        "enabled at the stale peek, falsified at the fire's own"
+    );
+    assert!(
+        matches!(c.step(&stale), StepOutcome::Fired { rule, arg, .. } if rule == r2 && arg == ca(5)),
+        "the cursor rotated past R1"
     );
 }
 

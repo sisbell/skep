@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 
-use skep_address::{validate, Address, Nat, Tumbler};
+use skep_address::{Address, Tumbler};
 
 use super::*;
 use crate::ast::Prim;
 use crate::check::TypedTerm;
+use crate::fixture::{a, v};
 use crate::value::{SignedTerm, Sort};
 
 /// A referent table standing in for the memo.
@@ -14,15 +15,6 @@ impl DefSource for Stub {
     fn resolve_def(&self, addr: &Address) -> Option<Arc<TypedTerm>> {
         self.0.get(addr.tumbler()).cloned()
     }
-}
-
-fn v(x: u32) -> VarId {
-    VarId::new(x).expect("test var below the watershed")
-}
-
-fn a(comps: &[u32]) -> Address {
-    validate(Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty"))
-        .expect("T4-valid")
 }
 
 fn addr_eq(x: Term, y: Term) -> Term {

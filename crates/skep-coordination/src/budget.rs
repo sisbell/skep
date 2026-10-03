@@ -2,11 +2,14 @@
 //! of the process, and how each walk charges against it. Two numbers bound a
 //! term — [`MAX_DEPTH`] its nesting, [`MAX_TERM_NODES`] its size — three
 //! functions place a reference in levels ([`referent_depth`],
-//! [`argument_depth`], [`reference_reach`]), one prices a node ([`weight`]),
-//! and one counter spends the size ([`Budget`]); three doors enforce them,
-//! the def decoder's, the checker's and the expander's, differing only in the
-//! refusal each answers with (`Malformed`, `TypeError::{TooDeep, TooLarge}`,
-//! `ExpansionTooLarge`).
+//! [`argument_depth`], [`reference_reach`]), one prices a built node
+//! ([`weight`]), and one counter spends the size ([`Budget`]). Three doors
+//! enforce the two numbers — the def decoder's, the checker's and the
+//! expander's — refusing as `Malformed`, `TypeError::{TooDeep, TooLarge}` and
+//! `ExpansionTooLarge`. Only the checker and the expander price by
+//! [`weight`]: the decoder must refuse a count before the node it sizes
+//! exists, so it charges every count it reads (`codec`'s `Rd::charge`) —
+//! never less than [`weight`] charges the node it builds.
 //!
 //! Every walk over a term recurses once per former on the caller's thread and
 //! none is bounded otherwise, so the caps are set against a MEASURED stack and
@@ -94,13 +97,14 @@ pub(crate) fn reference_reach(depth: u32, arity: usize, referent_reach: u32) -> 
 }
 
 /// The ONE budget on the SIZE of a PL tree, counted in NODES AND IN THE
-/// PAYLOAD UNITS A NODE CARRIES ([`weight`]), so what it bounds is the tree's
-/// bytes and not merely its node count: what the def decoder builds from one
-/// run, what the checker traverses and builds (`Reg` expansion instantiates a
-/// body once per cataloged class, so nested `Reg` quantifiers multiply — six
-/// over a bare leaf fit, seven do not — and a `Arc`-shared input is charged
-/// per traversal, as a tree), and what the expander traverses and builds for
-/// one flat reference expansion. A node is ~100 bytes behind its `Arc` and a
+/// PAYLOAD UNITS A NODE CARRIES ([`weight`]; the decoder charges the counts it
+/// reads, at least as much), so what it bounds is the tree's bytes and not
+/// merely its node count: what the def decoder builds from one run, what the
+/// checker traverses and builds (`Reg` expansion instantiates a body once per
+/// cataloged class, so nested `Reg` quantifiers multiply — six over a bare
+/// leaf fit, seven do not — and a `Arc`-shared input is charged per
+/// traversal, as a tree), and what the expander traverses and builds for one
+/// flat reference expansion. A node is ~100 bytes behind its `Arc` and a
 /// payload unit 24–56, so the budget is ~6 MiB of nodes plus ~4 MiB of
 /// payload — held per memo entry and per captured rule trigger for the life
 /// of the process, and transiently per expansion — against hand-authored
@@ -110,7 +114,9 @@ pub(crate) fn reference_reach(depth: u32, arity: usize, referent_reach: u32) -> 
 /// [`Budget`], so the comparison against it has one copy.
 const MAX_TERM_NODES: usize = 1 << 16;
 
-/// A node's charge against [`MAX_TERM_NODES`]: one unit for the node itself,
+/// A built node's charge against [`MAX_TERM_NODES`] — what the checker and
+/// the expander charge per node they visit or build (the decoder charges the
+/// counts it reads instead, at least as much): one unit for the node itself,
 /// plus one for each unit of PAYLOAD it carries that no gate bounds — a
 /// `Lit::Addr`'s tumbler components, a `Lit::Nat`'s 64-bit limbs, a `Ref`'s
 /// address components. Measured, each of those is 24–56 bytes against a bare
@@ -157,10 +163,11 @@ pub(crate) fn weight(t: &Term) -> usize {
 
 /// ONE walk's spend against [`MAX_TERM_NODES`] — the counter the def decoder,
 /// the checker (together with its `Reg` substitution) and the expander each
-/// charge [`weight`] units to. The arithmetic lives here and nowhere else: a
-/// second copy of "saturating add, compare to the cap" could drift into a
-/// plain `+`, and a wrapped counter bounds nothing while the cap it reads
-/// still looks right.
+/// charge: the checker and the expander [`weight`] units per node, the decoder
+/// every count it reads, before that count sizes anything. The arithmetic
+/// lives here and nowhere else: a second copy of "saturating add, compare to
+/// the cap" could drift into a plain `+`, and a wrapped counter bounds nothing
+/// while the cap it reads still looks right.
 ///
 /// A `Cell`, so a pass whose walk takes `&self` (the checker's) and a
 /// sub-walk sharing the same counter (its `Reg` substitution's) need no
@@ -169,10 +176,10 @@ pub(crate) fn weight(t: &Term) -> usize {
 pub(crate) struct Budget(Cell<usize>);
 
 impl Budget {
-    /// Charge `weight` units — a node and the payload it carries. `false`
-    /// once the budget is spent AND EVERY TIME AFTER: the count only grows
-    /// and saturates, which is why no walk needs an `exhausted` flag beside
-    /// its counter.
+    /// Charge `weight` units — a built node and the payload it carries
+    /// ([`weight`]), or a count the decoder read. `false` once the budget is
+    /// spent AND EVERY TIME AFTER: the count only grows and saturates, which
+    /// is why no walk needs an `exhausted` flag beside its counter.
     #[must_use = "the answer is the door: drop it and the walk builds past the budget"]
     pub(crate) fn charge(&self, weight: usize) -> bool {
         let n = self.0.get().saturating_add(weight);
@@ -185,5 +192,12 @@ impl Budget {
     /// so must ask afterwards.
     pub(crate) fn spent(&self) -> bool {
         self.0.get() > MAX_TERM_NODES
+    }
+
+    /// The units charged so far — test builds only, for the law that the
+    /// decoder never charges less than [`weight`] prices what it builds.
+    #[cfg(test)]
+    pub(crate) fn units(&self) -> usize {
+        self.0.get()
     }
 }

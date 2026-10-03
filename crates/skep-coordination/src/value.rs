@@ -1,7 +1,7 @@
 //! §Core data model — values, sorts, signatures, the eval environment.
 
 use im::{HashMap, OrdSet, Vector};
-use skep_address::{is_t4_valid, validate, Address, Nat, Tumbler};
+use skep_address::{validate, Address, Nat, Tumbler};
 use skep_links::{CoverageClass, Tuple};
 
 use crate::ast::{Term, VarId};
@@ -23,24 +23,25 @@ pub enum Sort {
     Tup,
 }
 
-/// Denoted values. Set values hold raw `Tumbler`s (cheap union for ⋃-folds,
-/// dedup = set semantics for `count`); the lift to M1's `Address` happens at
-/// the binding sites via `validate` (§Internal 2), so every element of an
-/// `AddrSet` IS a T4-valid address: the evaluator builds its sets from
-/// store-minted addresses only, and the two doors that take a caller's
-/// value — `evaluate_def`'s argument check and `eval`'s precondition —
-/// refuse a set holding anything else. `Tuple` binds a `Tup` var.
+/// Denoted values. `AddrSet` is ℘_fin(T) as `im::OrdSet<Address>`: M1 orders
+/// and compares an `Address` by its tumbler (T1), so union (the ⋃-fold),
+/// dedup (`count`'s set semantics) and the T1 extrema cost no more than over
+/// the tumblers M7's endsets yield, and every element is an address BY TYPE —
+/// a set is gathered from addresses M7 or M3 hand over, or from the tumblers a
+/// stored slot denotes, each lifted once as it is gathered (the crate's
+/// `lift`). `AddrSeq` has the same element type, so `elems` converts nothing,
+/// and a quantifier, a fold or a rule binds a set's element as it stands.
+/// `Tuple` binds a `Tup` var.
 ///
-/// The payload types are M1's `Tumbler`/`Address`/`Nat`, M7's
-/// `CoverageClass`/`Tuple` and `im`'s persistent collections — each
-/// re-exported from this crate's root, so a caller builds a `Value` without
-/// naming a second manifest.
+/// The payload types are M1's `Address`/`Nat`, M7's `CoverageClass`/`Tuple`
+/// and `im`'s persistent collections — each re-exported from this crate's
+/// root, so a caller builds a `Value` without naming a second manifest.
 #[allow(clippy::large_enum_variant)] // the interface declares these shapes verbatim
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     Bool(bool),
     Addr(Address),
-    AddrSet(OrdSet<Tumbler>),
+    AddrSet(OrdSet<Address>),
     OptAddr(Option<Address>),
     AddrSeq(Vector<Address>),
     Map(HashMap<CoverageClass, Address>),
@@ -66,52 +67,30 @@ impl Value {
             Value::Tuple(_) => Sort::Tup,
         }
     }
-
-    /// The ℘_fin(T) invariant a caller-built value must meet: an `AddrSet`'s
-    /// every element is a T4-valid address. True of every other shape — their
-    /// address positions are `Address`-typed already. This is the DOOR's half
-    /// of the invariant ([`lift`] is the binding site's): `eval`'s
-    /// precondition and `evaluate_def`'s argument check ask it of every value
-    /// a caller supplies, so `lift` is infallible on what passed here.
-    ///
-    /// Public as the DISCHARGE POINT for `eval`'s ℘_fin(T) precondition: a
-    /// caller that builds an `AddrSet` from tumblers it did not take from a
-    /// store-minted `Address` must be able to check it before calling, and
-    /// this crate re-exports `Tumbler` without M1's `validate`.
-    /// `evaluate_def` refuses the same condition as a value
-    /// (`ArgSortMismatch`), its Γ_D not being in the caller's hand; `eval`
-    /// asserts it, so the caller owes it and needs this.
-    pub fn holds_addresses(&self) -> bool {
-        match self {
-            Value::AddrSet(s) => s.iter().all(is_t4_valid),
-            _ => true,
-        }
-    }
 }
 
-/// Set-element lift (Tumbler → Address) at the binding sites — M1 `validate`,
-/// infallible on what reaches it (§Internal 2), and the BINDING SITE's half of
-/// the ℘_fin(T) invariant [`Value::holds_addresses`] checks at the doors.
-/// Every tumbler lifted here is one of three things: the start of a unit-depth
-/// span in a stored slot endset; the tumbler of an `Address` — a link's own
-/// address (`L_dom`'s elements reflected, BH4's `stale` set), an `AddrSeq`
-/// element under `elems`, a walk's starting node — T4-valid by type; or an
-/// element of a `Value::AddrSet`, which the evaluator builds from the first
-/// two and the two caller-facing doors (`evaluate_def`, `eval`) check element
-/// by element.
+/// The lift of a tumbler a stored slot DENOTES — the start of a unit-depth
+/// span in an M7 endset, as `Endset::addrs()` and `Endset::single_denoted()`
+/// yield it — to the `Address` a PL value holds: M1 `validate`, infallible on
+/// what reaches it (§Internal 2). Its callers are the reads that gather a
+/// slot's denotation — `GuestLinks`' set reads, its claim index and its
+/// `target_of`, the V-TUP slot atoms, and the scope bodies — so a set is made
+/// of addresses from the moment it is gathered. Every other address a value
+/// holds is one by type: handed over by M7 or M3 as an `Address`, decoded as
+/// a literal through the codec's own `validate`, or supplied by a caller.
 ///
-/// The first, and through it the third, rest on one upstream property that is
-/// M7's to keep: EVERY UNIT-DEPTH SPAN IN A STORED SLOT HAS A T4-VALID START.
-/// `Endset::addrs()` filters on a span's SHAPE (`s == subtree_of(s.start())`)
-/// and says nothing about its start, so the property is established by M7's
-/// write doors — which admit a start only as an `Address` (`SlotArg::Addrs`,
-/// `emit`'s and `assert_sup`'s endpoints) or as a `Run::i_start`, an `Address`
-/// by type — and is NOT re-established on the journal/checkpoint deserialize
-/// path, where `Endset` derives a plain `Deserialize` while `Address`, `Span`,
-/// `Tumbler` and `Link` each validate through a shadow. So a tampered store
-/// reaches this `expect`; a hostile peer does not.
+/// That rests on one upstream property that is M7's to keep: EVERY UNIT-DEPTH
+/// SPAN IN A STORED SLOT HAS A T4-VALID START. `Endset::addrs()` filters on a
+/// span's SHAPE (`s == subtree_of(s.start())`) and says nothing about its
+/// start, so the property is established by M7's write doors — which admit a
+/// start only as an `Address` (`SlotArg::Addrs`, `emit`'s and `assert_sup`'s
+/// endpoints) or as a `Run::i_start`, an `Address` by type — and is NOT
+/// re-established on the journal/checkpoint deserialize path, where `Endset`
+/// derives a plain `Deserialize` while `Address`, `Span`, `Tumbler` and `Link`
+/// each validate through a shadow. So a tampered store reaches this `expect`
+/// at the first read that gathers the slot; a hostile peer does not.
 pub(crate) fn lift(t: &Tumbler) -> Address {
-    validate(t.clone()).expect("PL set elements are store-minted, T4-valid addresses")
+    validate(t.clone()).expect("a stored slot denotes T4-valid addresses only (M7's write doors)")
 }
 
 /// A PL DOMAIN ELEMENT — what `[D]_snap` yields (QD, §Internal 2): an address,

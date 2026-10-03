@@ -52,10 +52,11 @@
 //! filtered the same way). Signatures follow M7's, save three departures:
 //! each names the stored [`Slice`] it reads rather than a term view; the
 //! set-valued reads answer in the ℘_fin(T) shape the evaluator holds,
-//! `OrdSet<Tumbler>` — the set each builds from M7's endsets, or for `stale`
-//! from M7's own addresses — rather than M7's `Vec<Address>`; and
-//! `is_active_tuple` — BH4's totalization premise — is PL's composition of
-//! `observe`, M7 offering no such read.
+//! `OrdSet<Address>` — each tumbler M7's endsets denote lifted once as the
+//! set is gathered ([`lift`]), and for `stale` M7's own addresses kept as they
+//! are — rather than M7's `Vec<Address>`; and `is_active_tuple` — BH4's
+//! totalization premise — is PL's composition of `observe`, M7 offering no
+//! such read.
 
 use std::collections::BTreeMap;
 use std::slice::from_ref;
@@ -108,17 +109,18 @@ impl From<Slice> for View {
 }
 
 /// The visible operative claims as a forward map, `old → {new}` by
-/// denotation — built once per walk, so a walk of C steps over C claims
-/// costs C map probes, not C scans of the claim set.
-type ForwardClaims = BTreeMap<Tumbler, OrdSet<Tumbler>>;
+/// denotation, each endpoint lifted to its address as the map is built —
+/// built once per walk, so a walk of C steps over C claims costs C map
+/// probes, not C scans of the claim set.
+type ForwardClaims = BTreeMap<Address, OrdSet<Address>>;
 
 /// One forward walk's result over the visible operative claims.
 struct Walk {
     /// The traversed path from the starting node, inclusive of it.
-    path: Vec<Tumbler>,
+    path: Vec<Address>,
     /// The successor-free node the walk halted at — `None` at a branch or a
     /// cycle, where the head is indeterminate.
-    sink: Option<Tumbler>,
+    sink: Option<Address>,
 }
 
 /// M7's read surface at guest class, over the world of one pinned snapshot.
@@ -193,12 +195,12 @@ impl<'a, W> GuestLinks<'a, W> {
     }
 
     /// The deduplicated denotation of one slot over `tuples`: `⋃
-    /// slot(t).addrs()` as the ℘_fin(T) value the evaluator holds — the
-    /// shape M7's own equations for D1, D3, V-AUD's D3 and BH3's reverse all
-    /// take, so each of those is one line over its own tuple source and
-    /// checkable against M7's.
-    fn denote_slot(tuples: Vec<Tuple>, slot: fn(&Tuple) -> &Endset) -> OrdSet<Tumbler> {
-        tuples.iter().flat_map(|t| slot(t).addrs()).cloned().collect()
+    /// slot(t).addrs()` as the ℘_fin(T) value the evaluator holds, each
+    /// denoted tumbler lifted to its address ([`lift`]) — the shape M7's own
+    /// equations for D1, D3, V-AUD's D3 and BH3's reverse all take, so each of
+    /// those is one line over its own tuple source and checkable against M7's.
+    fn denote_slot(tuples: Vec<Tuple>, slot: fn(&Tuple) -> &Endset) -> OrdSet<Address> {
+        tuples.iter().flat_map(|t| slot(t).addrs()).map(lift).collect()
     }
 
     /// [`GuestLinks::denote_slot`] over the visible tuples of `slice` matching
@@ -209,7 +211,7 @@ impl<'a, W> GuestLinks<'a, W> {
         pat: Pattern<'_>,
         slice: Slice,
         slot: fn(&Tuple) -> &Endset,
-    ) -> OrdSet<Tumbler> {
+    ) -> OrdSet<Address> {
         Self::denote_slot(self.observe(ty, pat, slice), slot)
     }
 
@@ -230,13 +232,13 @@ impl<'a, W> GuestLinks<'a, W> {
     }
 
     /// D1 over the visible slice: `⋃ F.addrs()` — M7's own equation.
-    pub(crate) fn members(&self, ty: &Endset, slice: Slice) -> OrdSet<Tumbler> {
+    pub(crate) fn members(&self, ty: &Endset, slice: Slice) -> OrdSet<Address> {
         self.denoted(ty, Pattern::default(), slice, |t| &t.from)
     }
 
     /// D3 over the visible slice: `⋃ G.addrs()` of the tuples whose F COVERS
     /// `x` (M7's own coverage regime for this read).
-    pub(crate) fn targets_of(&self, ty: &Endset, x: &Address, slice: Slice) -> OrdSet<Tumbler> {
+    pub(crate) fn targets_of(&self, ty: &Endset, x: &Address, slice: Slice) -> OrdSet<Address> {
         let pat = Pattern { from: from_ref(x.tumbler()), to: &[] };
         self.denoted(ty, pat, slice, |t| &t.to)
     }
@@ -245,7 +247,7 @@ impl<'a, W> GuestLinks<'a, W> {
     /// the tuples whose F DENOTES `x`, where [`GuestLinks::targets_of`] takes
     /// those whose F COVERS it — the one place a PL view changes WHICH TUPLES
     /// MATCH and not merely which slice is read.
-    pub(crate) fn targets_of_denoting(&self, ty: &Endset, x: &Address) -> OrdSet<Tumbler> {
+    pub(crate) fn targets_of_denoting(&self, ty: &Endset, x: &Address) -> OrdSet<Address> {
         Self::denote_slot(self.tuples_denoting(ty, x, Slice::Audit), |t| &t.to)
     }
 
@@ -265,19 +267,19 @@ impl<'a, W> GuestLinks<'a, W> {
         let mut fwd = ForwardClaims::new();
         for t in self.observe(ty, Pattern::default(), Slice::Active) {
             for old in t.from.addrs() {
-                fwd.entry(old.clone()).or_default().extend(t.to.addrs().cloned());
+                fwd.entry(lift(old)).or_default().extend(t.to.addrs().map(lift));
             }
         }
         fwd
     }
 
     /// `succ_o(x)` over the visible claims — deduplicated over `new`.
-    fn succs_operative(fwd: &ForwardClaims, x: &Tumbler) -> OrdSet<Tumbler> {
+    fn succs_operative(fwd: &ForwardClaims, x: &Address) -> OrdSet<Address> {
         fwd.get(x).cloned().unwrap_or_default()
     }
 
     /// The visited-set-bounded forward walk (M7's own halting rule).
-    fn walk_claims(fwd: &ForwardClaims, x: &Tumbler) -> Walk {
+    fn walk_claims(fwd: &ForwardClaims, x: &Address) -> Walk {
         let mut path = vec![x.clone()];
         let mut visited = OrdSet::unit(x.clone());
         let mut node = x.clone();
@@ -303,22 +305,20 @@ impl<'a, W> GuestLinks<'a, W> {
     }
 
     /// BH2 forward step over the visible operative claims.
-    pub(crate) fn succs(&self, ty: &Endset, x: &Address) -> OrdSet<Tumbler> {
-        Self::succs_operative(&self.forward_claims(ty), x.tumbler())
+    pub(crate) fn succs(&self, ty: &Endset, x: &Address) -> OrdSet<Address> {
+        Self::succs_operative(&self.forward_claims(ty), x)
     }
 
     /// BH2 chain over the visible operative claims.
     pub(crate) fn chain(&self, ty: &Endset, x: &Address) -> Vec<Address> {
-        let fwd = self.forward_claims(ty);
-        Self::walk_claims(&fwd, x.tumbler()).path.iter().map(lift).collect()
+        Self::walk_claims(&self.forward_claims(ty), x).path
     }
 
     /// BH2 head over the visible operative claims: `Sink(head)` at a
     /// successor-free node, `Indeterminate` at a branch or cycle.
     pub(crate) fn tip(&self, ty: &Endset, x: &Address) -> Tip {
-        let fwd = self.forward_claims(ty);
-        match Self::walk_claims(&fwd, x.tumbler()).sink {
-            Some(sink) => Tip::Sink(lift(&sink)),
+        match Self::walk_claims(&self.forward_claims(ty), x).sink {
+            Some(sink) => Tip::Sink(sink),
             None => Tip::Indeterminate,
         }
     }
@@ -326,14 +326,14 @@ impl<'a, W> GuestLinks<'a, W> {
     /// BH2 chain membership: `target ∈ chain(ty, addr)` — walk-result
     /// membership, never a coverage test.
     pub(crate) fn is_in_chain(&self, ty: &Endset, addr: &Address, target: &Address) -> bool {
-        Self::walk_claims(&self.forward_claims(ty), addr.tumbler()).path.contains(target.tumbler())
+        Self::walk_claims(&self.forward_claims(ty), addr).path.contains(target)
     }
 
     // ────────────────────────── BH3 — over the visible slice ──────────────────────────
 
     /// BH3 reverse: the F-denoted sources of the visible active type-`ty`
     /// tuples whose G COVERS `target`.
-    pub(crate) fn sources_to(&self, ty: &Endset, target: &Address) -> OrdSet<Tumbler> {
+    pub(crate) fn sources_to(&self, ty: &Endset, target: &Address) -> OrdSet<Address> {
         let pat = Pattern { from: &[], to: from_ref(target.tumbler()) };
         self.denoted(ty, pat, Slice::Active, |t| &t.from)
     }
@@ -374,10 +374,9 @@ impl<'a, W> GuestLinks<'a, W> {
 
     /// BH4 stale set: M7's own (its `NotBh4` fence included), with the
     /// tuples of unreadable homes dropped — the one read here whose M7 answer
-    /// is already in addresses, each consumed into the tumbler a ℘_fin(T)
-    /// value holds.
-    pub(crate) fn stale(&self, ty: &Endset, horizon: u64) -> Result<OrdSet<Tumbler>, NotBh4> {
+    /// is already in addresses, kept as the addresses a ℘_fin(T) value holds.
+    pub(crate) fn stale(&self, ty: &Endset, horizon: u64) -> Result<OrdSet<Address>, NotBh4> {
         let stale = self.unfiltered.stale(ty, horizon)?;
-        Ok(stale.into_iter().filter(|a| self.home_readable(a)).map(Tumbler::from).collect())
+        Ok(stale.into_iter().filter(|a| self.home_readable(a)).collect())
     }
 }

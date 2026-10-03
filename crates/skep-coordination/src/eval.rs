@@ -29,7 +29,7 @@
 use std::collections::BTreeSet;
 
 use im::OrdSet;
-use skep_address::{is_prefix, Address, Nat, Tumbler};
+use skep_address::{is_prefix, Address, Nat};
 use skep_links::{CoverageClass, Pattern, Tip, Tuple, View};
 use skep_namespace::M3State;
 
@@ -65,7 +65,7 @@ fn as_addr(v: Value) -> Address {
     }
 }
 
-fn as_set(v: Value) -> OrdSet<Tumbler> {
+fn as_set(v: Value) -> OrdSet<Address> {
     match v {
         Value::AddrSet(s) => s,
         other => unreachable!("well-typed AddrSet position held {other:?}"),
@@ -106,10 +106,10 @@ impl<W> EvalCtx<'_, W> {
     /// per-type BH1 filter (D2), fixed active, never M7's aggregate
     /// `is_filtered`. Takes the queried KEY, so the class lookup a UV rewrite
     /// needs is made here rather than at each of its four sites.
-    fn filtered_other(&self, k: &TypeKey, x: &Tumbler) -> bool {
+    fn filtered_other(&self, k: &TypeKey, x: &Address) -> bool {
         let k_class = self.catalog.class_of(k);
         self.catalog.read_filter_classes().iter().any(|(j_class, j_endset)| {
-            j_class != k_class && self.links.is_k(j_endset, x, Slice::Active)
+            j_class != k_class && self.links.is_k(j_endset, x.tumbler(), Slice::Active)
         })
     }
 
@@ -119,7 +119,7 @@ impl<W> EvalCtx<'_, W> {
     /// Every view-parameterized read and every UV-rewritten collection asks
     /// this and nothing else — the verdict atoms (`is_K`, `tip`,
     /// `is_in_chain`, `target_of`, `age`) never ask it (UV).
-    fn uv_keeps(&self, k: &TypeKey, e: &Tumbler) -> bool {
+    fn uv_keeps(&self, k: &TypeKey, e: &Address) -> bool {
         self.view != View::Default || !self.filtered_other(k, e)
     }
 
@@ -135,7 +135,7 @@ impl<W> EvalCtx<'_, W> {
     /// and `targets_of_at`, the core atoms and `M_K`, which take the TERM
     /// view — against the fixed-view atoms (BH1–BH4, `A_K`, `L_K`), which
     /// read their named slice whatever the term view says.
-    fn members_at(&self, k: &TypeKey) -> OrdSet<Tumbler> {
+    fn members_at(&self, k: &TypeKey) -> OrdSet<Address> {
         self.uv_rewrite(k, self.links.members(&k.0, Slice::of(self.view)))
     }
 
@@ -144,7 +144,7 @@ impl<W> EvalCtx<'_, W> {
     /// slice is read: `active`/`default` take the tuples whose F COVERS `x`
     /// (M7's own regime for this read), `audit` those whose F DENOTES it
     /// (V-AUD's exact membership, `GuestLinks::targets_of_denoting`).
-    fn targets_of_at(&self, k: &TypeKey, x: &Address) -> OrdSet<Tumbler> {
+    fn targets_of_at(&self, k: &TypeKey, x: &Address) -> OrdSet<Address> {
         let answer = match self.view {
             View::Audit => self.links.targets_of_denoting(&k.0, x),
             View::Active | View::Default => self.links.targets_of(&k.0, x, Slice::Active),
@@ -165,8 +165,8 @@ impl<W> EvalCtx<'_, W> {
     /// [`EvalCtx::uv_keeps`] refuses are removed in place: at `default` those
     /// another BH1 class filters; at `active` and `audit` none, the predicate
     /// short-circuiting on the view, so the answer passes through whole.
-    fn uv_rewrite(&self, k: &TypeKey, mut answer: OrdSet<Tumbler>) -> OrdSet<Tumbler> {
-        let refused: Vec<Tumbler> =
+    fn uv_rewrite(&self, k: &TypeKey, mut answer: OrdSet<Address>) -> OrdSet<Address> {
+        let refused: Vec<Address> =
             answer.iter().filter(|e| !self.uv_keeps(k, e)).cloned().collect();
         for e in &refused {
             answer.remove(e);
@@ -263,9 +263,9 @@ pub(crate) fn eval_term<W>(cx: &EvalCtx<'_, W>, env: &Env, t: &Term) -> Value {
         )),
         // QD-refl: the reflected ℘_fin(T) value is the domain's address
         // denotation at this snapshot.
-        Term::Reflect(d) => Value::AddrSet(
-            enum_dom(cx, env, d).into_iter().map(addr_elem).map(Tumbler::from).collect(),
-        ),
+        Term::Reflect(d) => {
+            Value::AddrSet(enum_dom(cx, env, d).into_iter().map(addr_elem).collect())
+        }
         Term::Ref { addr, args } => {
             let Some(defs) = cx.defs else {
                 panic!(
@@ -316,7 +316,7 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
             let x = as_addr(eval_term(cx, env, e));
             let chain = cx.links.chain(&k.0, &x);
             let seq: im::Vector<Address> =
-                chain.into_iter().filter(|a| cx.uv_keeps(k, a.tumbler())).collect();
+                chain.into_iter().filter(|a| cx.uv_keeps(k, a)).collect();
             Value::AddrSeq(seq)
         }
         // Verdict/traversal atoms are never UV-rewritten (UV): unfiltered
@@ -381,8 +381,8 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
             Value::Bool(cx.m3.is_registered_document(&d))
         }
         Atom::TupAddr(v) => Value::Addr(tuple_var(env, v).addr.clone()),
-        Atom::TupAddrsF(v) => Value::AddrSet(tuple_var(env, v).from.addrs().cloned().collect()),
-        Atom::TupAddrsG(v) => Value::AddrSet(tuple_var(env, v).to.addrs().cloned().collect()),
+        Atom::TupAddrsF(v) => Value::AddrSet(tuple_var(env, v).from.addrs().map(lift).collect()),
+        Atom::TupAddrsG(v) => Value::AddrSet(tuple_var(env, v).to.addrs().map(lift).collect()),
         Atom::InCoverageF(e, v) => {
             let x = as_addr(eval_term(cx, env, e));
             Value::Bool(tuple_var(env, v).from.covers(x.tumbler()))
@@ -402,11 +402,11 @@ fn eval_prim<W>(cx: &EvalCtx<'_, W>, env: &Env, p: &Prim) -> Value {
             Value::Bool(is_prefix(as_addr(ev(a)).tumbler(), as_addr(ev(b)).tumbler()))
         }
         Prim::T1Lt(a, b) => Value::Bool(as_addr(ev(a)).tumbler() < as_addr(ev(b)).tumbler()),
-        Prim::SetMem(x, s) => Value::Bool(as_set(ev(s)).contains(as_addr(ev(x)).tumbler())),
+        Prim::SetMem(x, s) => Value::Bool(as_set(ev(s)).contains(&as_addr(ev(x)))),
         Prim::SetEq(a, b) => Value::Bool(as_set(ev(a)) == as_set(ev(b))),
         Prim::IsEmpty(s) => Value::Bool(as_set(ev(s)).is_empty()),
         Prim::Elems(q) => match ev(q) {
-            Value::AddrSeq(seq) => Value::AddrSet(seq.iter().map(|a| a.tumbler().clone()).collect()),
+            Value::AddrSeq(seq) => Value::AddrSet(seq.into_iter().collect()),
             other => unreachable!("Elems checked at AddrSeq, held {other:?}"),
         },
         Prim::NatEq(a, b) => Value::Bool(as_nat(ev(a)) == as_nat(ev(b))),
@@ -439,9 +439,7 @@ fn eval_prim<W>(cx: &EvalCtx<'_, W>, env: &Env, p: &Prim) -> Value {
 pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, d: &Dom) -> Vec<Arg> {
     match d {
         // M_K at the TERM view (view-parameterized domain).
-        Dom::MembersDom(tr) => {
-            cx.members_at(tr.key()).iter().map(lift).map(Arg::Addr).collect()
-        }
+        Dom::MembersDom(tr) => cx.members_at(tr.key()).iter().cloned().map(Arg::Addr).collect(),
         Dom::ActiveSlice(tr) => cx
             .links
             .observe(&tr.key().0, Pattern::default(), Slice::Active)
@@ -473,9 +471,6 @@ pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, d: &Dom) -> Vec<Arg> {
             .into_iter()
             .filter(|e| as_bool(eval_term(cx, &env.bind(*var, Value::from(e.clone())), pred)))
             .collect(),
-        Dom::SetTerm(t) => {
-            let s = as_set(eval_term(cx, env, t));
-            s.iter().map(lift).map(Arg::Addr).collect()
-        }
+        Dom::SetTerm(t) => as_set(eval_term(cx, env, t)).iter().cloned().map(Arg::Addr).collect(),
     }
 }

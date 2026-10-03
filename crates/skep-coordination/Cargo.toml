@@ -13,10 +13,11 @@ readme = "README.md"
 # intermediate values during folds — never journaled snapshots (§Core data
 # model: M9 owns no authoritative state).
 im.workspace = true
-# M1 — tumbler/address/span algebra: the T1 order and is_prefix behind
-# V-PRIM's ≼/</T1 extrema; validate/is_t4_valid for the set-element lifts and
-# the def codec's parse; document_of for the guest-class home test and the
-# fire attribution key.
+# M1 — tumbler/address/span algebra: the T1 order (`Address: Ord`, the order
+# PL's address sets keep) and is_prefix behind V-PRIM's ≼/</T1 extrema;
+# validate for the lift of a slot's denoted tumbler to a PL address
+# (`value::lift`) and for the def codec's parse; document_of for the
+# guest-class home test and the fire attribution key.
 skep-address = { path = "../skep-address" }
 # M2 — every verdict reads one pinned Snapshot; every write rides M5's/M7's
 # transact-wrapped ops (M9 drives no transact directly).

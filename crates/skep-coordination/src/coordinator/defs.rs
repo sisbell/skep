@@ -359,14 +359,12 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// (`NotEverRegistered`); an ever-registered start whose immutable
     /// content fails the PR-ENC parse/WT — a PR-DISC breach
     /// (`UndisciplinedDef`); an argument count differing from Γ_D's
-    /// (`ArgArityMismatch`); an argument at the wrong sort, or an `AddrSet`
-    /// holding a tumbler that is no T4-valid address and so no ℘_fin(T)
-    /// value (`ArgSortMismatch`). `args` bind positionally to Γ_D
-    /// (= `signature(start).params`). The denotation is DAG-recursive
-    /// (`eval`'s walk + the one `Ref` arm), never a materialized flat term
-    /// (Conflicts §5), and reads M7 through the GUEST-CLASS view (lane 4.1)
-    /// — the same view an `Inline` trigger reads — while the
-    /// ever-registration probe stays class-free (`ever_registered`).
+    /// (`ArgArityMismatch`); an argument at the wrong sort (`ArgSortMismatch`).
+    /// `args` bind positionally to Γ_D (= `signature(start).params`). The
+    /// denotation is DAG-recursive (`eval`'s walk + the one `Ref` arm), never
+    /// a materialized flat term (Conflicts §5), and reads M7 through the
+    /// GUEST-CLASS view (lane 4.1) — the same view an `Inline` trigger reads —
+    /// while the ever-registration probe stays class-free (`ever_registered`).
     ///
     /// A pure pin to `snap` for the DENOTATION: every structural read it
     /// makes is `snap`'s. The def's RESOLUTION is the memo's, which on a miss
@@ -397,11 +395,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         if args.len() != params.len() {
             return Err(EvalError::ArgArityMismatch);
         }
-        if args
-            .iter()
-            .zip(params)
-            .any(|(arg, (_, s))| arg.sort() != *s || !arg.holds_addresses())
-        {
+        if args.iter().zip(params).any(|(arg, (_, s))| arg.sort() != *s) {
             return Err(EvalError::ArgSortMismatch);
         }
         let env: Env = params.iter().map(|(v, _)| *v).zip(args.iter().cloned()).collect();
@@ -639,15 +633,11 @@ impl<W: CoordinationWorld> DefSource for Coordinator<W> {
 mod tests {
     use std::sync::Arc;
 
-    use skep_address::{validate, Address, Nat, Tumbler};
+    use skep_address::Address;
 
     use super::direct_referents;
-    use crate::ast::{Dom, Term, VarId};
-
-    fn a(comps: &[u32]) -> Address {
-        validate(Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty"))
-            .expect("T4-valid")
-    }
+    use crate::ast::{Dom, Term};
+    use crate::fixture::{a, v};
 
     /// [`direct_referents`] names each referent ONCE, in first-occurrence
     /// order: `register_pred` runs an M7 slice scan per referent, and the node
@@ -664,10 +654,10 @@ mod tests {
         let body = Term::And(
             at(r(&q)),
             at(Term::Exists {
-                var: VarId::new(1).expect("below the watershed"),
+                var: v(1),
                 dom: Arc::new(Dom::Filter {
                     dom: Arc::new(Dom::LinkDom),
-                    var: VarId::new(2).expect("below the watershed"),
+                    var: v(2),
                     pred: at(r(&p)),
                 }),
                 body: at(r(&q)),

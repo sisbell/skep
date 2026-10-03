@@ -60,11 +60,11 @@ fn a_stored_def_answers_as_of_the_caller_s_snapshot() {
     assert_eq!(c.evaluate_def(&p, &args, View::Active, &witnessed), Ok(Value::Bool(true)));
 }
 
-/// `evaluate_def`'s argument door on a set: an `AddrSet` holding a tumbler
-/// that is no T4-valid address (adjacent separators) is `ArgSortMismatch`,
-/// where one holding an address is bound and counted.
+/// `evaluate_def` binds an `AddrSet` argument — a set of addresses by type,
+/// so there is no element its door could refuse — and the def counts it: one
+/// address satisfies `|s| = 1`, two do not.
 #[test]
-fn evaluate_def_refuses_a_set_argument_holding_a_non_address() {
+fn a_set_argument_is_bound_as_a_set_of_addresses() {
     let k = kernel();
     let c = coord(&k);
     let (p, _) = c
@@ -78,10 +78,10 @@ fn evaluate_def_refuses_a_set_argument_holding_a_non_address() {
         )
         .expect("define");
     let s = k.snapshot();
-    let bad = Value::AddrSet(im::OrdSet::unit(t(&[1, 0, 0, 1])));
-    assert_eq!(c.evaluate_def(&p, &[bad], View::Active, &s), Err(EvalError::ArgSortMismatch));
-    let good = Value::AddrSet(im::OrdSet::unit(ca(1).tumbler().clone()));
-    assert_eq!(c.evaluate_def(&p, &[good], View::Active, &s), Ok(Value::Bool(true)));
+    let one = Value::AddrSet(im::OrdSet::unit(ca(1)));
+    assert_eq!(c.evaluate_def(&p, &[one], View::Active, &s), Ok(Value::Bool(true)));
+    let two = Value::AddrSet([ca(1), ca(2)].into_iter().collect());
+    assert_eq!(c.evaluate_def(&p, &[two], View::Active, &s), Ok(Value::Bool(false)));
 }
 
 /// A def's Γ_D is an ORDERED context: it survives the codec round trip, a

@@ -13,7 +13,9 @@
 //! dispatches on tag bytes and its readers end in `_ => Malformed`, so a
 //! missing arm compiles and every stored def using the former is refused
 //! `ParseFailed`, and the round trip over `fixture::every_former` catches it
-//! only once the fixture spells the former too.
+//! only once the fixture spells the former too. Once written, that arm charges
+//! the former's payload counts itself (`Rd::charge`): `weight` prices only the
+//! trees the checker and the expander walk.
 //!
 //! Children are walked left to right in declaration order, and a binder's
 //! out-of-scope children (a quantifier's domain, a `Let`'s bound term, an

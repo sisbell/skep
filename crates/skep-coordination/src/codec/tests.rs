@@ -1,16 +1,9 @@
 use std::sync::Arc;
 
 use super::*;
-use crate::fixture::every_former;
-
-fn v(x: u32) -> VarId {
-    VarId::new(x).expect("test var below the watershed")
-}
-
-fn a(comps: &[u32]) -> Address {
-    validate(Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty"))
-        .expect("T4-valid")
-}
+use crate::budget::weight;
+use crate::fixture::{a, every_former, v};
+use crate::walk::{visit_dom, visit_term, Visit};
 
 /// decode ∘ encode = id on a body exercising every recursive family —
 /// PR-ENC's round-trip (injectivity witness on this input).
@@ -55,6 +48,51 @@ fn roundtrip_is_identity_on_every_former() {
     let signed = every_former();
     let bytes = encode(&signed).expect("Codom-only params encode");
     assert_eq!(decode(&bytes), Ok(signed));
+}
+
+/// The decoder never charges less than `weight` prices what it builds: over
+/// every subtree of the body that spells every former, one decode spends at
+/// least the subtree's `weight` sum, one unit per domain former beside it. So
+/// the price the checker and the expander charge is a floor the decoder's
+/// count-by-count charging (`Rd::charge`) cannot fall under — and a former
+/// whose decoder arm leaves its payload uncharged fails here as soon as the
+/// fixture spells it, which the round trip above already requires.
+#[test]
+fn the_decoder_never_charges_less_than_weight_prices_what_it_builds() {
+    struct Subtrees(Vec<Term>);
+    impl Visit for Subtrees {
+        fn term(&mut self, t: &Term) {
+            self.0.push(t.clone());
+            visit_term(self, t);
+        }
+    }
+    struct Priced(usize);
+    impl Visit for Priced {
+        fn term(&mut self, t: &Term) {
+            self.0 += weight(t);
+            visit_term(self, t);
+        }
+        fn dom(&mut self, d: &Dom) {
+            self.0 += 1;
+            visit_dom(self, d);
+        }
+    }
+    let mut subtrees = Subtrees(Vec::new());
+    subtrees.term(&every_former().body);
+    assert!(subtrees.0.len() > 60, "the fixture spans every former");
+    for body in subtrees.0 {
+        let mut priced = Priced(0);
+        priced.term(&body);
+        let bytes = encode(&SignedTerm { params: vec![], body: body.clone() }).expect("closed");
+        let mut rd = Rd { b: &bytes, pos: 0, nodes: Budget::default() };
+        assert_eq!(rd.signed().expect("a subtree of the fixture decodes").body, body);
+        assert!(
+            rd.nodes.units() >= priced.0,
+            "the decoder charged {} units where weight prices {}: {body:?}",
+            rd.nodes.units(),
+            priced.0
+        );
+    }
 }
 
 /// The codec refuses `Sort::Tup` in a parameter context (Codom-only at

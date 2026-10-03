@@ -102,7 +102,9 @@ mod ast;
 // Sorts, values and domain elements; the signed term; the environment.
 mod value;
 // Test only: one signed term spelling every former — the codec's round trip
-// and the walks' agreement are checked on it.
+// and the walks' agreement are checked on it — and the unit tests' two
+// builders, `v` (a variable below the watershed) and `a` (an address from its
+// components).
 #[cfg(test)]
 mod fixture;
 // The tree's child structure, stated once: `Rewrite` and `Visit`.
@@ -159,7 +161,8 @@ pub use value::{Arg, Env, Signature, Sort, Value};
 
 // Foreign types in this surface, re-exported so a caller names everything a
 // `Coordinator` signature carries — and every payload a `Value` it builds
-// carries — from one crate: M1's address, tumbler and numeral, M2's
+// carries — from one crate: M1's address, numeral and tumbler (what a
+// `Tuple`'s endsets denote, `Endset::addrs()` yielding it), M2's
 // snapshot/position/transaction refusal, M5's insert refusal, and M7's view,
 // walk head, shipped types, endset, coverage class, tuple, behavior, write
 // refusals and visibility class. The assembly-time types (`Kernel`,
@@ -177,7 +180,7 @@ pub use skep_links::{
 /// PUBLIC dependency: the exact version the crate was built against is
 /// nameable here — `skep_coordination::im::OrdSet` — rather than matched by
 /// luck at a caller's own manifest, where a version skew would spell itself
-/// `expected OrdSet<Tumbler>, found OrdSet<Tumbler>`. The `const _` below
+/// `expected OrdSet<Address>, found OrdSet<Address>`. The `const _` below
 /// pins what the choice of `im` (over the `Rc`-backed `im-rc`) promises.
 pub use im;
 

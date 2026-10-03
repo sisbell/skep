@@ -285,10 +285,7 @@ pub enum EvalError {
     /// parse/WT — reachable only under a PR-DISC breach (§Internal 4).
     UndisciplinedDef,
     ArgArityMismatch,
-    /// An argument's sort differs from Γ_D's — or an `AddrSet` argument
-    /// holds a tumbler that is not a T4-valid address, which is no ℘_fin(T)
-    /// value at all (the evaluator lifts every set element to an `Address`
-    /// at its binding sites).
+    /// An argument's sort differs from Γ_D's.
     ArgSortMismatch,
 }
 

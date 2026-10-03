@@ -548,6 +548,29 @@ fn map_get_keys_by_the_cataloged_class_and_an_absent_key_is_bot() {
     assert!(!decide_over(im::HashMap::new(), def(map_get(var(1), &pred_def_ty()))));
 }
 
+/// A set verdict hands back ADDRESSES: ℘_fin(T) is a set of `Address`, each
+/// element lifted from the slot that denotes it as the set is gathered, so a
+/// caller acts on an element as it stands — here, binding each straight into
+/// a second verdict — with nothing to convert and nothing that can fail.
+#[test]
+fn a_set_verdict_hands_back_the_addresses_it_holds() {
+    let k = kernel();
+    let c = coord(&k);
+    deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
+    let s = k.snapshot();
+    let sources = c.type_check(vec![], members(&pred_stable_ty())).expect("members(K)");
+    let Value::AddrSet(held) = c.eval(&sources, &Env::empty(), View::Active, &s) else {
+        panic!("members(K) denotes a set");
+    };
+    assert_eq!(held, [ca(1), ca(3)].into_iter().collect::<im::OrdSet<_>>());
+    let heads =
+        c.type_check(vec![(v(1), Sort::Addr)], is_k(&pred_stable_ty(), var(1))).expect("is_K(x)");
+    for x in held {
+        assert!(c.decide(&heads, &Env::empty().bind(v(1), Value::Addr(x)), View::Active, &s));
+    }
+}
+
 /// A verdict is "as of `snap.seq()`" (M2 V1 retrospective): the same term
 /// answers differently at two pinned snapshots on either side of a deposit.
 #[test]
@@ -596,20 +619,6 @@ fn eval_panics_on_an_unbound_parameter() {
     let tt = c.type_check(vec![(v(1), Sort::Addr)], tru()).expect("one-param term");
     let s = k.snapshot();
     let _ = c.eval(&tt, &Env::empty(), View::Active, &s);
-}
-
-/// `eval`'s door, the set half: an `AddrSet` argument holding a tumbler
-/// that is no T4-valid address (adjacent separators) is no ℘_fin(T) value,
-/// and is named at the door — never lifted inside the walk.
-#[test]
-#[should_panic(expected = "eval precondition")]
-fn eval_panics_on_a_set_holding_a_non_address() {
-    let k = kernel();
-    let c = coord(&k);
-    let tt = c.type_check(vec![(v(1), Sort::AddrSet)], tru()).expect("one-set-param term");
-    let s = k.snapshot();
-    let bad = Value::AddrSet(im::OrdSet::unit(t(&[1, 0, 0, 1])));
-    let _ = c.eval(&tt, &Env::empty().bind(v(1), bad), View::Active, &s);
 }
 
 #[test]

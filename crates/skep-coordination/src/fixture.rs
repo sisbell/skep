@@ -1,7 +1,8 @@
 //! A signed term spelling every former, atom, prim, domain, literal and type
 //! position, with every encodable sort in Γ_D — the input the codec's round
 //! trip and the walks' agreement are checked on. It need not type-check: the
-//! codec and the walks are structural. Test builds only.
+//! codec and the walks are structural. Beside it, the unit tests' two
+//! builders, [`v`] and [`a`]. Test builds only.
 
 use std::sync::Arc;
 
@@ -11,11 +12,13 @@ use skep_links::enc;
 use crate::ast::{ArcDom, ArcTerm, Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId};
 use crate::value::{SignedTerm, Sort};
 
-fn v(x: u32) -> VarId {
+/// A variable below the reserved expansion range.
+pub(crate) fn v(x: u32) -> VarId {
     VarId::new(x).expect("test var below the watershed")
 }
 
-fn a(comps: &[u32]) -> Address {
+/// An address from its components, which must spell a T4-valid tumbler.
+pub(crate) fn a(comps: &[u32]) -> Address {
     validate(Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty"))
         .expect("T4-valid")
 }

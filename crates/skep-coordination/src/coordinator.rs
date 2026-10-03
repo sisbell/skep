@@ -304,37 +304,29 @@ impl<W: CoordinationWorld> Coordinator<W> {
     }
 
     /// Pure, total, terminating denotation at one view against one committed
-    /// snapshot. PRECONDITIONS, all asserted at the door: `t.is_ref_free()`
+    /// snapshot. PRECONDITIONS, both asserted at the door: `t.is_ref_free()`
     /// — a surviving `Ref` node is a precondition violation (PANICS, like
     /// `decide` on a non-Bool codomain); ref-bearing terms evaluate only
     /// through `evaluate_def`, keeping this denotation content-free — and
-    /// `env` binds every Γ_D parameter at its sort, an `AddrSet` holding
-    /// T4-valid addresses only (the evaluator lifts each set element to an
-    /// `Address` at its binding sites). INFALLIBLE past the door; reads ONLY
-    /// M7 + M3, all off `snap` (PC4 / ASN-0134 clause 6) — M7 through the
-    /// GUEST-CLASS view (lane 4.1, PUB-6.28): a tuple homed in a document
-    /// the injected `guest` predicate refuses is invisible to the verdict,
-    /// exactly as it is to a fire's gates. The verdict is "as of
+    /// `env` binds every Γ_D parameter at its sort. INFALLIBLE past the door;
+    /// reads ONLY M7 + M3, all off `snap` (PC4 / ASN-0134 clause 6) — M7
+    /// through the GUEST-CLASS view (lane 4.1, PUB-6.28): a tuple homed in a
+    /// document the injected `guest` predicate refuses is invisible to the
+    /// verdict, exactly as it is to a fire's gates. The verdict is "as of
     /// `snap.seq()`" (M2 V1 retrospective).
     ///
     /// Each precondition has a PUBLIC discharge point, so a caller can check
-    /// what it owes before it calls: [`TypedTerm::is_ref_free`],
-    /// [`TypedTerm::params`] against [`Value::sort`], and
-    /// [`Value::holds_addresses`].
+    /// what it owes before it calls: [`TypedTerm::is_ref_free`] for the
+    /// first, [`TypedTerm::params`] against [`Value::sort`] for the second.
     pub fn eval(&self, t: &TypedTerm, env: &Env, view: View, snap: &Snapshot<W>) -> Value {
         assert!(
             t.is_ref_free(),
             "eval precondition violated: ref-bearing TypedTerm — route through evaluate_def"
         );
         for (v, s) in t.params() {
-            let bound = env.get(v);
             assert!(
-                bound.is_some_and(|val| val.sort() == *s),
+                env.get(v).is_some_and(|val| val.sort() == *s),
                 "eval precondition violated: Γ_D parameter {v:?} unbound or mis-sorted in env (expected {s:?})"
-            );
-            assert!(
-                bound.is_some_and(Value::holds_addresses),
-                "eval precondition violated: AddrSet parameter {v:?} holds a tumbler that is not a T4-valid address"
             );
         }
         let cx = self.eval_ctx(snap.world(), view, None);

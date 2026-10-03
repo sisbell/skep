@@ -204,7 +204,7 @@ fn a_rejection_names_a_type_key_by_the_addresses_it_denotes() {
 }
 
 /// A caller builds a `Value` from this crate alone: every payload a variant
-/// names — M1's tumbler and numeral, `im`'s persistent collections, M7's
+/// names — M1's address and numeral, `im`'s persistent collections, M7's
 /// coverage class, tuple and endset — is reachable through
 /// `skep_coordination`'s own paths, with no second manifest to version-match.
 /// And a value answers its own sort, which is what `eval`'s door and
@@ -213,13 +213,10 @@ fn a_rejection_names_a_type_key_by_the_addresses_it_denotes() {
 #[test]
 fn a_value_is_buildable_and_self_describing_through_this_crate_s_own_paths() {
     use skep_coordination::im::{HashMap as ImMap, OrdSet, Vector};
-    use skep_coordination::{
-        Address, CoverageClass, Endset as ReEndset, Nat as ReNat, Tumbler as ReTumbler, Tuple,
-    };
+    use skep_coordination::{Address, CoverageClass, Endset as ReEndset, Nat as ReNat, Tuple};
 
     let addr: Address = ca(1);
-    let tumbler: ReTumbler = addr.tumbler().clone();
-    let set = Value::AddrSet(OrdSet::unit(tumbler));
+    let set = Value::AddrSet(OrdSet::unit(addr.clone()));
     let tuple = Tuple { addr: la(1), from: ReEndset::empty(), to: ReEndset::empty() };
     let shapes = [
         (Value::Bool(true), Sort::Bool),
@@ -236,13 +233,7 @@ fn a_value_is_buildable_and_self_describing_through_this_crate_s_own_paths() {
         assert_eq!(val.sort(), *sort, "{val:?}");
     }
 
-    // `eval`'s ℘_fin(T) precondition has a discharge point: a caller building
-    // a set from hand-made tumblers — this crate re-exports `Tumbler` without
-    // M1's `validate` — can reject one before `eval` asserts on it.
-    assert!(set.holds_addresses());
-    assert!(!Value::AddrSet(OrdSet::unit(t(&[1, 0, 0, 1]))).holds_addresses());
-
-    // The re-exported `OrdSet<Tumbler>` IS the type the doors accept.
+    // The re-exported `OrdSet<Address>` IS the type the doors accept.
     let k = kernel();
     let c = coord(&k);
     let tt = c

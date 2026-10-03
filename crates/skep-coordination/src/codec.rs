@@ -531,27 +531,7 @@ fn w_prim2(b: &mut Vec<u8>, tag: u8, x: &Term, y: &Term) {
 /// the budget — which is what bounds the checker's context and duplicate-name
 /// set in turn.
 pub(crate) fn decode(bytes: &[u8]) -> Result<SignedTerm, Malformed> {
-    let mut r = Rd { b: bytes, pos: 0, nodes: Budget::default() };
-    let len = r.len_prefix()?;
-    if bytes.get(r.pos..).map(<[u8]>::len) != Some(len) {
-        return Err(Malformed);
-    }
-    let n_params = r.len_prefix()?;
-    if n_params > len {
-        return Err(Malformed); // cheap bound against absurd counts
-    }
-    r.charge(n_params)?;
-    let mut params = Vec::with_capacity(n_params);
-    for _ in 0..n_params {
-        let v = r.varid()?;
-        let s = r.sort()?;
-        params.push((v, s));
-    }
-    let body = r.term(0)?;
-    if r.pos != bytes.len() {
-        return Err(Malformed);
-    }
-    Ok(SignedTerm { params, body })
+    Rd { b: bytes, pos: 0, nodes: Budget::default() }.signed()
 }
 
 struct Rd<'a> {
@@ -564,6 +544,32 @@ struct Rd<'a> {
 }
 
 impl Rd<'_> {
+    /// The whole of `b` as one signed term: the envelope, Γ_D, the body, and
+    /// nothing after it. [`decode`] is this over a fresh reader; the codec's
+    /// tests run it over one whose spend they then read.
+    fn signed(&mut self) -> Result<SignedTerm, Malformed> {
+        let len = self.len_prefix()?;
+        if self.b.get(self.pos..).map(<[u8]>::len) != Some(len) {
+            return Err(Malformed);
+        }
+        let n_params = self.len_prefix()?;
+        if n_params > len {
+            return Err(Malformed); // cheap bound against absurd counts
+        }
+        self.charge(n_params)?;
+        let mut params = Vec::with_capacity(n_params);
+        for _ in 0..n_params {
+            let v = self.varid()?;
+            let s = self.sort()?;
+            params.push((v, s));
+        }
+        let body = self.term(0)?;
+        if self.pos != self.b.len() {
+            return Err(Malformed);
+        }
+        Ok(SignedTerm { params, body })
+    }
+
     fn u8(&mut self) -> Result<u8, Malformed> {
         let x = *self.b.get(self.pos).ok_or(Malformed)?;
         self.pos += 1;
@@ -573,10 +579,13 @@ impl Rd<'_> {
     /// Charge `weight` payload units — Γ_D parameters, tumbler components,
     /// endset spans, `Nat` limbs, `Ref` arguments — against the same
     /// [`Budget`] [`Rd::enter`] charges formers against (`budget::weight`
-    /// states the unit and why a payload is charged like a node). Called
-    /// BEFORE a count is used to size an allocation, so an untrusted count
-    /// can size nothing past the budget: a `Vec::with_capacity` below is
-    /// bounded by the budget's remainder, not by the input's length.
+    /// states why a payload is charged like a node). The decoder does not
+    /// price by `weight`: it charges every count it reads, never less than
+    /// `weight` charges the node it builds, so a former added to the format
+    /// charges its payload counts in its own arm here. Called BEFORE a count
+    /// is used to size an allocation, so an untrusted count can size nothing
+    /// past the budget: a `Vec::with_capacity` below is bounded by the
+    /// budget's remainder, not by the input's length.
     fn charge(&mut self, weight: usize) -> Result<(), Malformed> {
         if self.nodes.charge(weight) {
             Ok(())

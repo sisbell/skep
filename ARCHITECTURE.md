@@ -52,7 +52,9 @@ foundation and on the stores above it.
   lock keys the stores take; the entity and principal registries and
   ownership (ω); each document's publication bit. Its modules and rules:
   §The name space.
-- `skep-content` — the write-once map from address to value.
+- `skep-content` — the write-once map from address to value: point reads,
+  and one unordered enumeration of every entry for the daemon's
+  cell-index rebuild at open.
 - `skep-arrangement` — documents as arrangements of content, versions,
   provenance. Its modules and rules: §The arrangement.
 - `skep-links` — typed links, supersession, retraction.
@@ -147,12 +149,22 @@ log, `lease.rs` the leases' log, `error.rs` the refusals.
 Rules that hold across its files:
 
 - **The PUT's order.** `Store::finish` is the one path from a partial to a
-  file: the partial fsynced, renamed onto `<designation>/<hex>` (REPLACE
-  where the name exists, never a no-op), the designation directory
-  fsynced, the root fsynced where this process created the directory,
-  THEN the lease appended and synced, THEN the record retired, THEN the
-  answer. Nothing names a file before it is durable, and a crash leaves at
-  worst a file with no lease or a record open's reconciliation retires.
+  file: the partial fsynced; where the name already holds a file, that
+  file hard-linked to an aside name (`.retired-<hex>-<n>`, so the rename
+  frees no blocks); the partial renamed onto `<designation>/<hex>`
+  (REPLACE where the name exists, never a no-op), the designation
+  directory fsynced, the root fsynced where this process created the
+  directory, THEN the lease appended and synced, THEN the record retired,
+  THEN the answer — and the aside unlinked AFTER the answer
+  (`Store::retire_asides`, the deferred step the daemon's transport runs
+  once the reply is written). Nothing names a file before it is durable,
+  nothing ever names an aside, and a crash leaves at worst a file with no
+  lease, a record open's reconciliation retires, or an aside open removes.
+- **The pruner's reads are one act each.** The designation directories,
+  the files at hex names, the asides, whether any key holds a live lease
+  on a file, the expired uploads and their removal, the unlink of one
+  file — each a method of the store doing one thing, so the daemon's pass
+  holds its own lock around exactly one.
 - **A byte is received once it is durable.** The partial is fsynced at a
   grain and at every request's end (`Store::settle`), and the record's
   offset and expiry are written after each sync; a resume continues from
@@ -366,10 +378,11 @@ that a request is built and a response read through `skep_febe` alone; and
 `skepd` owns three decisions of its own: the session layer's gates (who
 may act, and what a credential write may do), the cadence of the published
 head, and the media door (whether a value a write carries is a picture's
-reference cell, and what a write that would mint one is answered — from
-lane B, whether its hash is a deposit of the caller's own). Everything
-else it delegates to the stores through the engine, and the media bytes
-to `skep-blobs`.
+reference cell, and what a write that would mint one is answered — whether
+its hash is one the caller's own cells already name, or a deposit of the
+caller's own) — with, behind the door, the cell index the base and the
+pruner read, and the pruner's pass. Everything else it delegates to the
+stores through the engine, and the media bytes to `skep-blobs`.
 
 Its modules form six layers. A module names only modules in its own layer
 or below it, never above; `crates/skepd/tests/it/tidy.rs` checks it. A
@@ -382,8 +395,10 @@ write passes down through them in this order:
 ┌─────────────────────────────────────────────────────────┐
 │ 1 TRANSPORT        server/listen.rs   server/http.rs    │
 │                    accept · read request · write reply  │
-│                    serve the event stream · park a      │
-│                    streaming body for the blob route    │
+│                    serve the event stream · carry a     │
+│                    streaming body in the request · the  │
+│                    pruner's cadence · a replace's       │
+│                    deferred unlink after the reply      │
 ├─────────────────────────────────────────────────────────┤
 │ 2 ROUTES           server.rs (router) · actor.rs        │
 │                    session_routes · read_routes · op ·  │
@@ -391,13 +406,15 @@ write passes down through them in this order:
 │                    hooks (test-hooks builds only)       │
 │                    /op: resolve → check → commit →      │
 │                         record → head writer's turn     │
-│                    /blob/upload: resolve → gate →       │
-│                         stream → finish → answer        │
+│                    /blob/upload: resolve → readiness →  │
+│                         gate → stream → finish → answer │
+│                    the pruner's pass under the arm      │
 ├─────────────────────────────────────────────────────────┤
 │ 3 VOCABULARY       server/reply.rs · request.rs ·       │
 │                    scan.rs                              │
-│                    replies & refusals · the request ·   │
-│                    the class-scan pool                  │
+│                    replies & refusals · the request and │
+│                    its streaming body · the class-scan  │
+│                    pool                                 │
 ├─────────────────────────────────────────────────────────┤
 │ 4 SESSION LAYER    auth.rs · auth/                      │
 │                    sessions · policy · identity fold ·  │
@@ -410,10 +427,15 @@ write passes down through them in this order:
 │                    ├── sidecar.rs   commits.log         │
 │                    └── classify.rs  a commit's documents│
 │   MEDIA RESOURCE   media.rs · media/door.rs ·           │
-│                    media/gate.rs · media/deposit_read.rs│
+│                    media/gate.rs · media/index.rs ·     │
+│                    media/pruner.rs ·                    │
+│                    media/deposit_read.rs                │
 │                    the media door · the blob store, the │
 │                    limits, the hold, the scopes, the    │
-│                    binding · the deposit read           │
+│                    binding · the cell index: the base,  │
+│                    the walk at open, the readiness ·    │
+│                    the pruner's pass and its halts ·    │
+│                    the deposit read                     │
 ├─────────────────────────────────────────────────────────┤
 │ 6 LEAVES           codec · history · permits · serial · │
 │                    limits · notice · media/cell         │
@@ -430,31 +452,42 @@ A read skips the write path: a read route goes from the routes to
 `history` and the engine. The engine sits below the daemon and knows
 nothing of it. A blob upload skips the write path too: the blob route
 goes from the routes to the media resource and `skep-blobs`, commits
-nothing to the journal, and takes no `Serial`.
+nothing to the journal, and takes no `Serial`. The cell index is entered
+by the write path at every commit that mints a cell and read by the
+media resource; the pruner's pass runs from the routes under the session
+layer's lock, on the transport's cadence.
 
 1. **The transport** — `server/listen.rs` (sockets, worker threads, the
-   event streams' loop and budget) and `server/http.rs` (the HTTP bytes:
-   the request reader, the reply writer, the event framing — and the
-   streaming arm: for the blob upload's two body-carrying methods the
-   reader takes the head alone and parks the body, as a `BodySource` over
-   the connection's socket, for the route on the same thread). It hands
-   each request to the router and knows nothing of what a request means.
+   event streams' loop and budget, the pruner's cadence thread — the pass
+   once the cell index is ready and then hourly — and, after a blob
+   reply is written, the replaced file's deferred unlink) and
+   `server/http.rs` (the HTTP bytes: the request reader, the reply
+   writer, the event framing — and the streaming arm: for the blob
+   upload's two body-carrying methods the reader takes the head alone
+   and leaves the body, as a `BodySource` over the connection's socket,
+   in the request's own slot for the router to take). It hands each
+   request to the router and knows nothing of what a request means.
 2. **The routes** — `server.rs` (`Daemon` and the router) and the handler
    files beneath it, each an `impl Daemon` block: `server/actor.rs` (who
    the caller is), `server/session_routes.rs`, `server/read_routes.rs`,
    `server/op.rs`, `server/blob_routes.rs` (the PUT: the path family
-   `/blob/upload`, the body source and the parked hand-off, the five
-   methods), and — in `test-hooks` builds only — `server/hooks.rs`. `/op`
-   runs one of the three write sequences — the plain (AUTH-3.35), the
-   credential (AUTH-3.37) or the registry (the record grade for registry
-   records), chosen off the op's own type slot before any lock is taken:
-   resolve the caller, run the checks, commit, record, then give the head
-   writer its turn. `/blob/upload` resolves the caller,
-   gates the declared total, streams the body one chunk at a time into
-   the store, each chunk gated, and finishes under the credential lock's
-   read arm — the requester re-resolved there — never under `Serial`.
+   `/blob/upload`, the readiness refusal of the index's three readers,
+   the five methods, the pruner's pass as the daemon runs it), and — in
+   `test-hooks` builds only — `server/hooks.rs`. `/op` runs one of the
+   three write sequences — the plain (AUTH-3.35), the credential
+   (AUTH-3.37) or the registry (the record grade for registry records),
+   chosen off the op's own type slot before any lock is taken: resolve
+   the caller, run the checks, commit, record, then give the head writer
+   its turn. `/blob/upload` resolves the caller, refuses the creation,
+   the resume and the deposit read `index_rebuilding` until the index's
+   walk at open completes, gates the declared total, streams the body
+   one chunk at a time into the store, each chunk gated, and finishes
+   under the credential lock's read arm — the requester re-resolved
+   there — never under `Serial`. The router takes the streaming body out
+   of the request's slot at the head of every routing.
 3. **The daemon's vocabulary** — `server/reply.rs` (the reply and every
-   transport refusal), `server/request.rs` (the request, and the rules its
+   transport refusal), `server/request.rs` (the request, the streaming
+   body's source and the slot it rides in, and the rules the request's
    headers and query obey), `server/scan.rs` (the class-scan pool): what
    the routes and the transport both speak.
 4. **The session layer** — `auth.rs` and the modules under `auth/`.
@@ -484,25 +517,43 @@ nothing to the journal, and takes no `Serial`.
      the one place the feed asks the world anything.
 
    Beside the write path, at the same layer, THE MEDIA RESOURCE:
-   `media.rs` with `media/door.rs` — THE MEDIA DOOR (media lane A), the
-   one step the plain write sequence takes between its admission and the
-   commit for a value naming the picture cell's kind: `published_target`
-   at a published target whatever the declaration, the shot's owner test
-   (`not_owner` naming the draft), and THE BINDING (lane B): a cell is
-   admitted where its hash is one this principal deposited under its own
-   live lease over a whole file, refused `unbound_cell` otherwise and
+   `media.rs` with `media/door.rs` — THE MEDIA DOOR, the one step the
+   plain write sequence takes between its admission and the commit for a
+   value naming the picture cell's kind: `published_target` at a
+   published target whatever the declaration, the shot's owner test
+   (`not_owner` naming the draft), and THE BINDING: a cell is admitted
+   where its hash is one the principal's own cells already name over a
+   file whole at the cell's size (the index's arm, read first once the
+   index is ready), or one this principal deposited under its own live
+   lease over a whole file; refused `unbound_cell` otherwise and
    `lease_lapsed` where the deposit is gone. It reads the op's values and,
    for a shot, the staging draft's own runs off the locked snapshot,
-   through M5's and M4's public reads, and the lease and the file through
-   the gate — which is why it is a step of its own and never a producer
-   of the session layer's admission. `media/gate.rs` — THE GATE: the blob
-   store (`skep-blobs`) opened under `blobs/` in the data dir, the limits
-   in force (the daemon's defaults and the install hook the serving
-   layer's channel will call), the hold a stream has on its upload, the
-   three scopes a deposit is refused on (the own scope, the venue total,
-   the floor — in that order, the requester's own record first), and the
-   binding's read. `media/deposit_read.rs` — the one read of a
-   principal's own deposits and uploads, served on the upload's own path.
+   through M5's and M4's public reads, and the index, the lease and the
+   file through the gate — which is why it is a step of its own and never
+   a producer of the session layer's admission. `media/gate.rs` — THE
+   GATE: the blob store (`skep-blobs`) opened under `blobs/` in the data
+   dir, the limits in force (the daemon's defaults and the install hook
+   the serving layer's channel will call), the hold a stream has on its
+   upload, the three scopes a deposit is refused on (the own scope — the
+   base plus the pending bytes — the venue total, the floor — in that
+   order, the requester's own record first), and the binding's read.
+   `media/index.rs` — THE CELL INDEX: per hash the cells naming it, per
+   account the distinct hashes its cells name at their size (the base);
+   entered by `write_path.rs`'s `record` at every commit that mints a cell
+   — a sideways step at this layer — and rebuilt whole at every open on a
+   thread over an immutable snapshot of the content store, its entries
+   added into the one copy (an entry is idempotent per cell); its
+   readiness flag is what the index's three readers consult, and a value
+   naming the kind under no pinned schema stands in it as a halt mark.
+   `media/pruner.rs` — THE PRUNER's PASS: the expired partials removed off
+   the record's expiry and the hold; the halts on a foreign designation
+   directory or a halt mark; the unreferenced files unlinked under an
+   exclusive arm the caller hands in (the credential lock's write arm —
+   named nowhere here), one file per acquisition, re-reading the index
+   and the lease log there; and the cadence the transport's thread waits
+   on. `media/deposit_read.rs` — the one read of a principal's own
+   deposits and uploads, its base the index's number, served on the
+   upload's own path.
 6. **The leaves** — `codec.rs` with `codec/marshal.rs` (the JSON wire
    format: parse, and marshal), `history.rs` (reading the world at an
    earlier position), `permits.rs` (the counting permit both bounded pools
@@ -551,7 +602,14 @@ imports it.
   credential lock's READ arm, the arm the plain write sequence holds
   across the media door, so the door's read of the lease and the finish's
   write of it never interleave with a credential write; the requester is
-  re-resolved under it at the rename.
+  re-resolved under it at the rename. The pruner's unlink holds that
+  lock's WRITE arm, one file per acquisition, so the door's check and the
+  commit it guards are one interval no unlink enters.
+- **The cell index has one lock of its own, taken innermost.** The write
+  path enters it under `Serial`, the gate reads it under the credential
+  lock's read arm, the pruner under its write arm, the walk at open under
+  neither; `media/index.rs`'s lock is held across no other lock, and no
+  caller holds it while taking one.
 - **The store knows no policy.** `skep-blobs` is handed a root and opaque
   keys; who a key is, what bounds its bytes, and which lock a finish runs
   under are the daemon's (`media/gate.rs`), never the store's.

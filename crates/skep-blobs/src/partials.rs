@@ -14,17 +14,18 @@
 //! names no partial is retired; and their lengths are set to agree — a
 //! longer partial cut back to the record's offset, a record whose offset
 //! passes its partial's length set back to that length. An expired upload
-//! is retired and its partial removed at open too: the pruner's pass, which
-//! removes an expired partial while the daemon serves (lane C), is the
-//! reclaim that never waits for the next open; until it exists, open is the
-//! one.
+//! is retired and its partial removed at open too, as the daemon's pruner
+//! removes one while it serves ([`Store::expire_upload`](crate::Store::expire_upload)
+//! is the pass's door); and every ASIDE name a replace left — a crash
+//! between the answer and the deferred unlink — is removed, nothing naming
+//! it.
 
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use crate::blobs::{designation_ok, fsync_dir};
+use crate::blobs::{designation_ok, fsync_dir, is_aside_name};
 use crate::uploads::{id_of_partial_name, UploadId, UploadRecords};
 
 /// THE FSYNC GRAIN of a partial — 1 MiB, INTERIM: the most a dropped
@@ -190,6 +191,14 @@ pub(crate) fn reconcile(
         for file in fs::read_dir(&dir)? {
             let file = file?;
             let fname = file.file_name().to_string_lossy().into_owned();
+            // An aside a replace left behind: a second name of a file whose
+            // first name the finish answered, which the deferred unlink
+            // never reached. Named by nothing; removed.
+            if is_aside_name(&fname) {
+                fs::remove_file(file.path())?;
+                removed = true;
+                continue;
+            }
             let Some(id) = id_of_partial_name(&fname) else { continue };
             if !named.contains(&(name.clone(), id)) {
                 fs::remove_file(file.path())?;

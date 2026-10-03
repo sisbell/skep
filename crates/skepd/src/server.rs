@@ -175,16 +175,19 @@ use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, S
 #[cfg(feature = "observe")]
 use skep_namespace::PrincipalId;
 
+use std::sync::Arc;
+
 use crate::auth::{startup_warnings, AuthOptions, AuthState, PortAlreadyBound, Reissue};
 use crate::codec::JsonCodec;
 use crate::history::History;
 use crate::limits::{MAX_BLOB_BYTES, MAX_REQUEST_BODY, MAX_SMALL_BODY};
 use crate::media::gate::MediaGate;
+use crate::media::index;
 use crate::notice;
 use crate::write_path::WritePath;
 use actor::Resolved;
-use blob_routes::BodySource;
 use reply::{class_varying, refuse, with_signal, TransportError};
+use request::BodySource;
 use scan::ClassScans;
 
 pub use crate::auth::session::Peer;
@@ -365,13 +368,15 @@ pub struct Daemon {
     /// gate, never of the substrate): M8 and M7 are asked or not asked, and
     /// never told.
     scans: ClassScans,
-    /// The daemon's MEDIA resource (media lane B): the blob store under
-    /// `blobs/` in the data dir — the files, the partials, the upload
-    /// records and the lease log — the limits in force, the hold a stream
-    /// has on its upload, and the binding the write door asks. The PUT's
-    /// routes reach it as `op.rs` reaches the write path; the door reads
-    /// it under the plain sequence's locks. It commits nothing to the
-    /// journal and takes no `Serial`.
+    /// The daemon's MEDIA resource: the blob store under `blobs/` in the
+    /// data dir — the files, the partials, the upload records and the lease
+    /// log — the limits in force, the hold a stream has on its upload, THE
+    /// CELL INDEX (entered by the write path at every commit that mints a
+    /// cell, rebuilt at open on a thread) and the binding the write door
+    /// asks. The PUT's routes reach it as `op.rs` reaches the write path;
+    /// the door reads it under the plain sequence's locks; the pruner's
+    /// pass reads it under the credential lock's write arm. It commits
+    /// nothing to the journal and takes no `Serial`.
     media: MediaGate,
     /// The dirty-crash harness's one seam into the claim's step
     /// (`Daemon::hold_between_the_claim_and_its_head`): armed, the
@@ -504,7 +509,18 @@ impl Daemon {
         // board record, nothing written, no engine opened.
         crate::auth::policy::genesis_seeding_check().map_err(DaemonError::Registry)?;
         let engine = Engine::open(cfg).map_err(DaemonError::Engine)?;
-        let writes = WritePath::open(data_dir, &engine).map_err(DaemonError::Sidecar)?;
+        // THE BLOB STORE, opened under `blobs/` beside the journal: its
+        // reconciliation and compaction complete here, before anything is
+        // served (the record: "OPEN's PASSES OVER BOTH STORES … COMPLETE
+        // BEFORE THE DAEMON SERVES ITS FIRST REQUEST"). The limits in force
+        // — the daemon's defaults until the serving layer's channel installs
+        // a record (AUTH-4.70, owed) — are named on the operator stream.
+        // Opened AHEAD of the write path, which takes the gate's cell index
+        // to enter at every commit from here on.
+        let media = MediaGate::open(data_dir).map_err(DaemonError::Media)?;
+        notice::line(media.limits().log_line());
+        let writes = WritePath::open(data_dir, &engine, Arc::clone(media.index()))
+            .map_err(DaemonError::Sidecar)?;
         // THE READ PREDICATE (PUB-1.31; PUB-6.39's one-per-request shape;
         // PUB round 2, lane 3.3). The live front door is given NO consult:
         // M10 answers `World::readable` — published ∨ subtree ∨ grant, with
@@ -532,14 +548,6 @@ impl Daemon {
             let snap = engine.kernel().snapshot();
             AuthState::open(opts, snap.world()).map_err(DaemonError::BlockedPrefixes)?
         };
-        // THE BLOB STORE, opened under `blobs/` beside the journal: its
-        // reconciliation and compaction complete here, before anything is
-        // served (the record: "OPEN's PASSES OVER BOTH STORES … COMPLETE
-        // BEFORE THE DAEMON SERVES ITS FIRST REQUEST"). The limits in force
-        // — the daemon's defaults until the serving layer's channel installs
-        // a record (AUTH-4.70, owed) — are named on the operator stream.
-        let media = MediaGate::open(data_dir).map_err(DaemonError::Media)?;
-        notice::line(media.limits().log_line());
         let daemon = Daemon {
             engine,
             febe,
@@ -556,6 +564,12 @@ impl Daemon {
         // see the method): a claimed board whose journal holds no head owes
         // `H.1`, and the open is where it is paid.
         daemon.write_the_claims_head_if_owed();
+        // THE CELL INDEX's WALK, on a thread of its own over the world as it
+        // stands now — every commit from here on enters its own cells, and
+        // the walk adds the world's into the same copy (the composition
+        // clause). The daemon serves while it walks; the index's three
+        // readers refuse `index_rebuilding` until it completes (ms5-R).
+        index::start_walk(&daemon.engine, Arc::clone(daemon.media.index()));
         Ok(daemon)
     }
 
@@ -708,15 +722,16 @@ impl Daemon {
     /// every lock, so a reissue is in force before the request that noticed
     /// it resolves its own actor, `/events` included.
     ///
-    /// THE BLOB UPLOAD's BODY (media lane B): a request of that family's two
-    /// body-carrying methods arrives from the socket reader with its body
-    /// PARKED for this thread rather than in `body` (`server/http.rs`, THE
-    /// STREAMING ARM), and this router takes it here, at the head of every
-    /// routing — so a body parked for one request is never read by the
-    /// next. A caller over its own transport parks nothing, and the route
-    /// reads the request's own `body` instead.
+    /// THE BLOB UPLOAD's BODY: a request of that family's two body-carrying
+    /// methods arrives from the socket reader with its body in the
+    /// request's own slot rather than in `body` (`server/http.rs`, THE
+    /// STREAMING ARM; `HttpRequest::body_stream`), and this router takes it
+    /// here, at the head of every routing — so a body carried by one
+    /// request is never read by the next, and a request routed twice reads
+    /// its own `body`. A caller over its own transport leaves the slot
+    /// empty, and the route reads the request's own `body` instead.
     pub fn route(&self, req: &HttpRequest) -> Routed {
-        let parked = blob_routes::take_parked();
+        let parked = req.body_stream.take();
         self.reissue_blocked_prefixes();
         match (req.method.as_str(), req.path.as_str()) {
             ("GET", "/events") => Routed::EventStream,

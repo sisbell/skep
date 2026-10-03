@@ -18,7 +18,8 @@
 //! * **Read API** (§B) — [`ContentStore::contains`] (the S3
 //!   referential-integrity oracle: content-presence, not "allocated", not
 //!   "registered") and [`ContentStore::value_at`] (`C(a)`), point queries
-//!   over a pinned snapshot slice.
+//!   over a pinned snapshot slice; and [`ContentStore::iter`], the one
+//!   enumeration, for the daemon's cell-index rebuild alone.
 //! * **Write surface** (§C) — the pure step [`stage_write`] (the storage
 //!   half of K.α, composed by M5's placement composite) and the
 //!   `#[doc(hidden)]` standalone transact-wrapped form (M2 contract 3).
@@ -66,8 +67,11 @@
 //!   (surfaced as SHOWORIGIN in M6); M4 stores only `address → Val`, so no
 //!   redundant origin field can diverge;
 //! * ordered iteration, range, prefix-scan, max-under-prefix — `Tumbler`'s
-//!   `Ord` is deliberately unused (M4 relies only on `Eq + Hash`); the
-//!   ordered-map rationale belongs to M3's frontier, not here;
+//!   `Ord` is deliberately unused by the reads (M4 relies only on
+//!   `Eq + Hash`); the ordered-map rationale belongs to M3's frontier, not
+//!   here. The ONE enumeration beside the point reads,
+//!   [`ContentStore::iter`], is unordered and exists for one consumer: the
+//!   daemon's cell-index rebuild, which walks every value once at open;
 //! * concurrency — none of M4's own: no locks, no threads, no interior
 //!   mutability. Content writes ride M5's composite under the
 //!   per-(document, content-subspace) lock key; every content address is

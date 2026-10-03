@@ -61,6 +61,16 @@ pub(crate) const BLOB_CHUNK: usize = 64 * 1024;
 /// connection keeps its upload until the expiry).
 pub(crate) const BLOB_IDLE_BOUND: Duration = Duration::from_secs(30);
 
+/// THE PRUNER's CADENCE — one hour, INTERIM (D1: a daemon constant for a
+/// cadence, as the nonce TTL is): the interval between two passes of the
+/// pruner over `blobs/` (`media/pruner.rs`), the first pass running once
+/// the cell index's rebuild at open completes. What the interval bounds is
+/// how long an expired partial or a lapsed, unreferenced file stands past
+/// its expiry — the lease interval is days, so an hour's lag on top of it
+/// is nothing a scope reads (the scopes are record-derived and count
+/// neither) and a pass over a quiet board costs one directory listing.
+pub(crate) const PRUNE_INTERVAL: Duration = Duration::from_secs(3600);
+
 /// THE TRANSFER BOUND of one blob request — 10 minutes, INTERIM: the
 /// deadline on SLOWNESS the idle bound cannot give (a peer pacing one byte
 /// per interval renews the idle bound for as long as it cares to, and the

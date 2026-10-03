@@ -121,6 +121,9 @@ fn open_reconciles_the_partials_and_the_records_both_ways() {
     fs::write(root.join("blake3").join(".upload-ffffffffffffffffffffffffffffffff"), b"orphan").unwrap();
     fs::create_dir_all(root.join("sha256-tree")).unwrap();
     fs::write(root.join("sha256-tree").join(".upload-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"), b"orphan too").unwrap();
+    // An aside a replace left — a crash between the answer and the deferred
+    // unlink — named by nothing.
+    fs::write(root.join("blake3").join(format!(".retired-{}-0", hex_of(b"old"))), b"old").unwrap();
     let lines_before = fs::read_to_string(root.join("uploads.log")).unwrap().lines().count();
     assert!(lines_before > 5, "each standing upload wrote more than one line");
     // Reopened past `expired`'s expiry alone.
@@ -139,6 +142,8 @@ fn open_reconciles_the_partials_and_the_records_both_ways() {
     assert!(!partial(&expired.id).exists(), "and its partial removed");
     assert!(!root.join("blake3").join(".upload-ffffffffffffffffffffffffffffffff").exists(), "an orphan is removed");
     assert!(!root.join("sha256-tree").join(".upload-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee").exists(), "in every designation directory");
+    assert!(store.asides_of("blake3").unwrap().is_empty(), "an aside is removed at open");
+    assert_eq!(store.designations().unwrap(), vec!["blake3".to_string(), "sha256-tree".to_string()], "every directory under the root, the foreign one included");
     let lines_after = fs::read_to_string(root.join("uploads.log")).unwrap().lines().count();
     assert_eq!(lines_after, 3, "compacted to the three current records");
     assert_eq!(store.pending_bytes("k", now), 4 + 6 + 3);
@@ -157,6 +162,36 @@ fn open_reconciles_the_partials_and_the_records_both_ways() {
         whole.extend(fill);
         assert_eq!(fin.hex, hex_of(&whole));
     }
+}
+
+/// (4) REMOVED ON EXPIRY, while the store serves — the pruner's door:
+/// [`Store::expired_uploads`] lists every record past its expiry, whatever
+/// key minted it, reading no reference; [`Store::expire_upload`] removes
+/// the partial and retires the record, and leaves a standing upload as it
+/// is, so a clock that moved between the read and the act costs nothing.
+///
+/// [`Store::expired_uploads`]: skep_blobs::Store::expired_uploads
+/// [`Store::expire_upload`]: skep_blobs::Store::expire_upload
+#[test]
+fn the_expired_uploads_are_listed_and_removed_while_the_store_serves() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let store = open(&root, 0);
+    let early = standing(&store, "a", 100, b"early", 0);
+    let late = standing(&store, "b", 100, b"late", 50);
+    let partial = |id: &UploadId| root.join("blake3").join(format!(".upload-{}", id.to_hex()));
+    assert!(store.expired_uploads(10).is_empty());
+    let now = early.expires;
+    let expired: Vec<UploadId> = store.expired_uploads(now).into_iter().map(|r| r.id).collect();
+    assert_eq!(expired, vec![early.id], "the one past its expiry, whoever minted it");
+    assert!(!store.expire_upload(&late.id, now).unwrap(), "a standing upload is left as it is");
+    assert!(partial(&late.id).is_file());
+    assert!(store.expire_upload(&early.id, now).unwrap());
+    assert!(!partial(&early.id).exists(), "its partial removed");
+    assert!(store.upload("a", &early.id, 1).is_none(), "its record retired, at any clock");
+    assert!(!store.expire_upload(&early.id, now).unwrap(), "retired once");
+    assert_eq!(store.pending_bytes("a", 1), 0);
+    assert_eq!(store.pending_bytes("b", now), 4, "the standing one counts");
 }
 
 /// (6) THE END keeps nothing: the partial removed, the record retired, the

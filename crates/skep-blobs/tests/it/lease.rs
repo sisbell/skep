@@ -73,7 +73,10 @@ fn the_latest_lease_wins_and_open_compacts_to_it() {
 /// THE PENDING BYTES (M-I6 (b)): a key's live leases' sizes plus its
 /// standing uploads' durable offsets, falling as a lease lapses; the venue
 /// total the sum over every key, never the directory's bytes — one file two
-/// keys both leased counts twice there and once in each key's own.
+/// keys both leased counts twice there and once in each key's own. And the
+/// counted form: a lease the caller's predicate leaves out — the daemon's
+/// own scope leaves out one on a hash the key's cells name — counts
+/// nothing, the partials counted whole either way.
 #[test]
 fn pending_bytes_are_record_derived_per_key_and_in_total() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -86,9 +89,35 @@ fn pending_bytes_are_record_derived_per_key_and_in_total() {
     assert_eq!(store.pending_bytes("b", 11), 6 + 7);
     assert_eq!(store.pending_total(11), 6 + 7 + 6 + 7, "the sum of own scopes, the shared file counted in each");
     assert_eq!(store.pending_bytes("c", 11), 0);
+    let shared = hex_of(b"shared");
+    let not_shared = |l: &skep_blobs::Lease| l.hex != shared;
+    assert_eq!(store.pending_bytes_of("a", 11, &not_shared), 7, "a's own lease alone");
+    assert_eq!(store.pending_bytes_of("b", 11, &not_shared), 7, "b's partial alone, counted whole");
+    assert_eq!(store.pending_total_of(11, &not_shared), 7 + 7);
     let lapsed = 10 + INTERVAL;
     assert_eq!(store.pending_bytes("a", lapsed), 0, "lapsed leases count nothing");
     assert_eq!(store.pending_total(lapsed), 0, "and an expired upload neither");
+}
+
+/// THE ANY-KEY READ (the pruner's; M-I5 (b) at its strictest): a file is
+/// held while ANY key's lease on it is live — whoever deposited it — and
+/// not once every lease has lapsed; a lapsed lease within the horizon holds
+/// nothing here, though it answers LAPSED to its own key; the designation
+/// is part of the key.
+#[test]
+fn any_live_lease_answers_for_every_key_together() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = open(&dir.path().join("blobs"), 0);
+    let fin = put_whole(&store, "a", b"shared", 100);
+    put_whole(&store, "b", b"shared", 200);
+    assert!(store.any_live_lease("blake3", &fin.hex, 150));
+    let a_lapsed = 100 + INTERVAL;
+    assert!(store.any_live_lease("blake3", &fin.hex, a_lapsed), "b's lease still holds it");
+    assert_eq!(store.lease("a", "blake3", &fin.hex, a_lapsed), LeaseState::Lapsed { expires: a_lapsed });
+    let both_lapsed = 200 + INTERVAL;
+    assert!(!store.any_live_lease("blake3", &fin.hex, both_lapsed), "every lease lapsed: held by no key");
+    assert!(!store.any_live_lease("sha256-tree", &fin.hex, 150), "the designation is part of the key");
+    assert!(!store.any_live_lease("blake3", &hex_of(b"never"), 150));
 }
 
 /// A torn tail of the lease log is truncated at open — a half-written

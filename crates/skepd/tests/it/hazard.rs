@@ -185,6 +185,7 @@ fn route_raw(
         origin: None,
         peer: skepd::Peer::Loopback,
         body: body.to_vec(),
+        body_stream: Default::default(),
     };
     match d.route(&req) {
         Routed::Reply(r) => r,
@@ -983,27 +984,38 @@ fn h_a_crash_between_the_claim_and_its_head_reopens_with_h1() {
 /// One whole PUT of `bytes` that treats every transport mishap — refused
 /// connect, reset, partial response, a non-200 — as "no ack": the honest
 /// client view while the daemon is being killed. A parsed 200 body comes
-/// back whole.
+/// back whole. The one non-200 a client retries, `503 index_rebuilding` —
+/// the cell index's walk at open unfinished — is retried here, bounded.
 fn try_put(port: u16, token: &str, bytes: &[u8]) -> Option<Value> {
-    let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
-    let _ = s.set_nodelay(true);
-    let _ = s.set_read_timeout(Some(Duration::from_secs(30)));
-    let _ = s.set_write_timeout(Some(Duration::from_secs(30)));
-    let head = format!(
-        "POST {BLOB_UPLOAD}?length={} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
-         Content-Length: {}\r\nSkepd-Session: {token}\r\n\r\n",
-        bytes.len(),
-        bytes.len()
-    );
-    s.write_all(head.as_bytes()).ok()?;
-    s.write_all(bytes).ok()?;
-    let mut raw = Vec::new();
-    s.read_to_end(&mut raw).ok()?;
-    let sep = raw.windows(4).position(|w| w == b"\r\n\r\n")?;
-    if !raw.starts_with(b"HTTP/1.1 200 ") {
-        return None;
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
+        let _ = s.set_nodelay(true);
+        let _ = s.set_read_timeout(Some(Duration::from_secs(30)));
+        let _ = s.set_write_timeout(Some(Duration::from_secs(30)));
+        let head = format!(
+            "POST {BLOB_UPLOAD}?length={} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
+             Content-Length: {}\r\nSkepd-Session: {token}\r\n\r\n",
+            bytes.len(),
+            bytes.len()
+        );
+        s.write_all(head.as_bytes()).ok()?;
+        s.write_all(bytes).ok()?;
+        let mut raw = Vec::new();
+        s.read_to_end(&mut raw).ok()?;
+        let sep = raw.windows(4).position(|w| w == b"\r\n\r\n")?;
+        if raw.starts_with(b"HTTP/1.1 503 ")
+            && String::from_utf8_lossy(&raw[sep + 4..]).contains("\"index_rebuilding\"")
+            && std::time::Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(5));
+            continue;
+        }
+        if !raw.starts_with(b"HTTP/1.1 200 ") {
+            return None;
+        }
+        return serde_json::from_slice(&raw[sep + 4..]).ok();
     }
-    serde_json::from_slice(&raw[sep + 4..]).ok()
 }
 
 /// The principal's deposit read through the socket-free router, as
@@ -1171,20 +1183,37 @@ fn blob_step(name: &str) -> Step {
         "dir_sync" => Step::DirSync,
         "root_sync" => Step::RootSync,
         "record_retire" => Step::RecordRetire,
+        "unlink_aside" => Step::UnlinkAside,
         other => panic!("no hold named {other}"),
     }
 }
 
 /// The child: a fresh board served in-process and claimed, the store's
 /// hold seam armed at `step`, one whole PUT — whose finish parks at the
-/// hold, announced on stderr for the parent to kill. Never returns.
+/// hold, announced on stderr for the parent to kill. At the deferred
+/// step, `unlink_aside`, the name is put once beforehand so the held PUT
+/// is a REPLACE: its answer is written and the transport's thread parks in
+/// the deferred unlink after it, so the child waits to be killed rather
+/// than reporting the answer. Never returns.
 fn blob_crash_child(dir: &Path, step: &str) -> ! {
     let sd = spawn_unclaimed(dir);
     let port = sd.port();
     claim_board(port);
-    sd.daemon().hold_blob_finish_at(blob_step(step));
     let token = open_session(port, CLAIMANT_PRINCIPAL);
-    let _ = try_put(port, &token, HELD_BYTES);
+    if step == "unlink_aside" {
+        let first = try_put(port, &token, HELD_BYTES).expect("the first PUT, the name's");
+        assert_eq!(first["hash"].as_str(), Some(blob_hex(HELD_BYTES).as_str()));
+    }
+    sd.daemon().hold_blob_finish_at(blob_step(step));
+    let answered = try_put(port, &token, HELD_BYTES);
+    if step == "unlink_aside" {
+        // The replace answered — the hold is past the answer — and the
+        // transport's worker parks; this thread waits for the kill.
+        let _ = answered;
+        loop {
+            thread::park();
+        }
+    }
     panic!("the PUT answered: the blob store's hold seam did not hold");
 }
 
@@ -1194,24 +1223,27 @@ fn blob_crash_child(dir: &Path, step: &str) -> ! {
 /// never a lease naming bytes that are not there"; clause (7): "a crash
 /// anywhere in the finish leaves at worst a record that open's
 /// reconciliation retires, beside a file the lease holds or the pruner may
-/// take"). Three children, each killed at a named hold of the finish —
-/// BEFORE THE DIRECTORY FSYNC (between the rename and the directory's
-/// sync), BEFORE THE ROOT FSYNC (after the first rename into a designation
-/// directory this process created), and BEFORE THE RECORD's RETIREMENT
-/// (after the lease's sync) — and the reopen judged: at the first two the
-/// un-acked PUT is ABSENT from its principal's view (no lease, the file on
-/// disk leaseless and prunable, its cell refused `unbound_cell`, its record
-/// retired by the reconciliation), and a re-PUT of the bytes answers and
-/// binds; at the third the lease stands over a whole file — the finish's
-/// one residue — listed, its cell admitted, its record retired. No partial
-/// stands after any of the three.
+/// take"; mb-K2, the replaced instance retired after the answer). Four
+/// children, each killed at a named hold — BEFORE THE DIRECTORY FSYNC
+/// (between the rename and the directory's sync), BEFORE THE ROOT FSYNC
+/// (after the first rename into a designation directory this process
+/// created), BEFORE THE RECORD's RETIREMENT (after the lease's sync), and
+/// at THE DEFERRED UNLINK of a replace's aside, after the answer — and the
+/// reopen judged: at the first two the un-acked PUT is ABSENT from its
+/// principal's view (no lease, the file on disk leaseless and prunable,
+/// its cell refused `unbound_cell`, its record retired by the
+/// reconciliation), and a re-PUT of the bytes answers and binds; at the
+/// third the lease stands over a whole file — the finish's one residue —
+/// listed, its cell admitted, its record retired; at the fourth the
+/// reopen removes the aside, and the hash answers whole under its lease.
+/// No partial stands after any of the four.
 #[test]
 fn h_a_crash_inside_the_blob_finish_reopens_to_what_the_order_promises() {
     if let (Some(dir), Ok(step)) = (std::env::var_os(BLOB_CRASH_DIR), std::env::var(BLOB_CRASH_STEP)) {
         blob_crash_child(Path::new(&dir), &step);
     }
     let hex = blob_hex(HELD_BYTES);
-    for step in ["dir_sync", "root_sync", "record_retire"] {
+    for step in ["dir_sync", "root_sync", "record_retire", "unlink_aside"] {
         let tmp = tempfile::tempdir().expect("tempdir");
         let dir = tmp.path().join("data");
         fs::create_dir_all(&dir).expect("data dir");
@@ -1288,6 +1320,17 @@ fn h_a_crash_inside_the_blob_finish_reopens_to_what_the_order_promises() {
                 assert_eq!(deposits.get(&hex), Some(&(HELD_BYTES.len() as u64, false)));
                 assert_eq!(insert(&d), "ok", "{ctx}: bound by the re-PUT");
             }
+            "unlink_aside" => {
+                assert!(file.is_file(), "{ctx}: the hash stands");
+                assert_eq!(fs::read(&file).expect("the file"), HELD_BYTES, "FINDING ({ctx}): the hash answers the new bytes whole");
+                assert_eq!(deposits.get(&hex), Some(&(HELD_BYTES.len() as u64, false)), "FINDING ({ctx}): the replace's lease stands: {deposits:?}");
+                let asides = fs::read_dir(dir.join("blobs").join("blake3"))
+                    .expect("the designation directory")
+                    .filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with(".retired-"))
+                    .count();
+                assert_eq!(asides, 0, "FINDING ({ctx}): the reopen removes the aside a crash before the deferred unlink left");
+                assert_eq!(insert(&d), "ok", "{ctx}: the cell is admitted under the lease");
+            }
             _ => {
                 assert!(file.is_file(), "{ctx}: the leased file stands");
                 assert_eq!(deposits.get(&hex), Some(&(HELD_BYTES.len() as u64, false)), "FINDING ({ctx}): the lease that synced before the kill stands over a whole file: {deposits:?}");
@@ -1296,4 +1339,146 @@ fn h_a_crash_inside_the_blob_finish_reopens_to_what_the_order_promises() {
         }
         judge_store_whole(&d, &dir, &token, &ctx);
     }
+}
+
+// ── P′. A crash inside the pruner's pass ─────────────────────────────────
+
+/// The child's environment for the pruner's crash: the data dir alone;
+/// its presence IS child mode.
+const PRUNE_CRASH_DIR: &str = "SKEP_HAZARD_PRUNE_CRASH_DIR";
+
+/// The four files the pruner's crash child deposits: one a cell names,
+/// two lapsed and unreferenced, one under a live lease.
+fn prune_crash_files() -> [Vec<u8>; 4] {
+    [seeded_bytes(50_000, 0xC1), seeded_bytes(50_001, 0xC2), seeded_bytes(50_002, 0xC3), seeded_bytes(50_003, 0xC4)]
+}
+
+/// The child: a fresh board served in-process and claimed; three files
+/// deposited under a one-second lease — the first named by a cell — and a
+/// fourth under the default lease; the leases lapsed by the wall clock;
+/// the pass's hold armed after its first unlink; the pass run on a thread
+/// of its own, which parks there, announced on stderr for the parent to
+/// kill. Never returns.
+fn prune_crash_child(dir: &Path) -> ! {
+    let sd = spawn_unclaimed(dir);
+    let port = sd.port();
+    claim_board(port);
+    let token = open_session(port, CLAIMANT_PRINCIPAL);
+    let [referenced, lapsed_a, lapsed_b, live] = prune_crash_files();
+    sd.daemon().install_media_limits(None, None, Some(1_000), None);
+    for bytes in [&referenced, &lapsed_a, &lapsed_b] {
+        try_put(port, &token, bytes).expect("a PUT on a healthy daemon");
+    }
+    let draft = acked_addr(&op(port, Some(&token), &create_frame(CLAIMANT_ACCOUNT, Some(false))));
+    let frame = serde_json::json!({
+        "op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"},
+        "values": [{"atom": cell_of(&referenced, referenced.len() as u64)}],
+    })
+    .to_string();
+    assert_eq!(verdict(&op(port, Some(&token), &frame)), "ok");
+    sd.daemon().install_media_limits(None, None, None, None);
+    try_put(port, &token, &live).expect("a PUT on a healthy daemon");
+    thread::sleep(Duration::from_millis(1_200));
+    sd.daemon().hold_the_prune_pass_after_an_unlink();
+    let daemon: &'static Daemon = unsafe_leak(sd);
+    thread::spawn(move || {
+        let _ = daemon.prune_now();
+    });
+    loop {
+        thread::park();
+    }
+}
+
+/// The served daemon leaked for the life of the child, so the pass's
+/// thread can borrow it past this thread's park — the child exists to be
+/// killed and frees nothing.
+fn unsafe_leak(sd: skepd::Skepd) -> &'static Daemon {
+    let sd: &'static skepd::Skepd = Box::leak(Box::new(sd));
+    sd.daemon()
+}
+
+/// P′ — A CRASH INSIDE THE PRUNER's PASS, between an unlink and the next
+/// acquisition (M-I5 (b); Op inventory 2, "ONE FILE PER ACQUISITION"): the
+/// child is killed with its pass parked after its first unlink; the
+/// reopen's index and store agree — the file a cell names stands and its
+/// base counts it, the file under a live lease stands and is listed, of
+/// the two lapsed and unreferenced files at most one is gone, no partial
+/// stands — and no acked PUT a lease holds is lost; the reopened daemon's
+/// own pass then takes the other lapsed file and keeps the two.
+#[test]
+fn p_a_crash_inside_the_pruners_pass_reopens_to_an_index_and_a_store_that_agree() {
+    if let Some(dir) = std::env::var_os(PRUNE_CRASH_DIR) {
+        prune_crash_child(Path::new(&dir));
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("data");
+    fs::create_dir_all(&dir).expect("data dir");
+    let exe = std::env::current_exe().expect("test binary path");
+    let mut child = Command::new(exe)
+        .args([
+            "hazard::p_a_crash_inside_the_pruners_pass_reopens_to_an_index_and_a_store_that_agree",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(PRUNE_CRASH_DIR, &dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn the prune-crash child");
+    let stderr = child.stderr.take().expect("child stderr");
+    let (tx, rx) = mpsc::channel::<()>();
+    let reader = thread::spawn(move || {
+        for line in BufReader::new(stderr).lines() {
+            let Ok(line) = line else { break };
+            if line.contains(Daemon::PRUNE_HOLD_NOTICE) {
+                let _ = tx.send(());
+            } else {
+                eprintln!("[prune-crash child] {line}");
+            }
+        }
+    });
+    match rx.recv_timeout(Duration::from_secs(90)) {
+        Ok(()) => {}
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            let _ = child.kill();
+            panic!("FINDING (P′): the child reached no hold within 90s");
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            let _ = child.wait();
+            panic!("FINDING (P′): the child exited before the hold — its stderr is forwarded above");
+        }
+    }
+    child.kill().expect("SIGKILL the held child");
+    let _ = child.wait();
+    reader.join().expect("stderr reader thread");
+
+    // THE REOPEN, judged.
+    let ctx = "P′";
+    let d = timed_daemon_open(&dir, ctx);
+    while !d.index_is_ready() {
+        thread::sleep(Duration::from_millis(5));
+    }
+    let token = route_session(&d, CLAIMANT_PRINCIPAL);
+    let [referenced, lapsed_a, lapsed_b, live] = prune_crash_files();
+    let blobs = dir.join("blobs").join("blake3");
+    assert!(blobs.join(blob_hex(&referenced)).is_file(), "FINDING ({ctx}): the file a cell names was unlinked");
+    assert!(blobs.join(blob_hex(&live)).is_file(), "FINDING ({ctx}): the file under a live lease was unlinked");
+    let standing = [&lapsed_a, &lapsed_b].iter().filter(|b| blobs.join(blob_hex(b)).is_file()).count();
+    assert!(standing <= 1, "{ctx}: the pass unlinked one before the hold");
+    let (deposits, uploads) = deposit_read(&d, &token);
+    assert_eq!(deposits.get(&blob_hex(&live)), Some(&(live.len() as u64, false)), "FINDING ({ctx}): the live lease is listed over a whole file: {deposits:?}");
+    assert!(uploads.is_empty(), "no partial stands: {uploads:?}");
+    let r = route_raw(&d, "GET", BLOB_UPLOAD, None, Some(&token), b"");
+    assert_eq!(json(r.bytes())["base"].as_u64(), Some(referenced.len() as u64), "FINDING ({ctx}): the reopen's index counts the named hash");
+    assert_eq!(d.index_counts(), (1, 1, 0));
+    judge_store_whole(&d, &dir, &token, ctx);
+    // The reopened daemon's own pass: the other lapsed file goes, the two
+    // stand.
+    let pass = d.prune_now().expect("ready");
+    assert_eq!(pass.unlinked, standing, "{pass:?}");
+    assert_eq!(pass.kept, 2, "{pass:?}");
+    assert!(blobs.join(blob_hex(&referenced)).is_file());
+    assert!(blobs.join(blob_hex(&live)).is_file());
+    assert!(!blobs.join(blob_hex(&lapsed_a)).exists() && !blobs.join(blob_hex(&lapsed_b)).exists());
 }

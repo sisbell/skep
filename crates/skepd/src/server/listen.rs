@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
+use super::blob_routes;
 use super::http::{
     push_header, read_request, refuse_request, response_head, write_commit_event, write_reply,
     REQUEST_READ_TIMEOUT, TRANSFER_DEADLINE, WRITE_TIMEOUT,
@@ -18,6 +19,9 @@ use super::reply::{refuse, Routed, TransportError, SESSION_HEADER};
 use super::scan::MAX_CONCURRENT_CLASS_SCANS;
 use super::{Daemon, Moment};
 use crate::auth::session::Peer;
+use crate::limits::PRUNE_INTERVAL;
+use crate::media::pruner::{Cadence, Wake};
+use crate::notice;
 use crate::write_path::StreamStep;
 
 /// The request worker count `skepd` serves with when the operator names
@@ -88,6 +92,11 @@ pub struct Skepd {
     workers: Vec<JoinHandle<()>>,
     subscribers: Arc<Subscribers>,
     stop: Arc<AtomicBool>,
+    /// THE PRUNER's thread and its cadence: the pass runs once the cell
+    /// index is ready and then every [`PRUNE_INTERVAL`]; the stop wakes it
+    /// at once, and the shutdown joins it.
+    pruner: Option<JoinHandle<()>>,
+    cadence: Arc<Cadence>,
     port: u16,
 }
 
@@ -213,7 +222,34 @@ pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
             }
         }
     }
-    let server = Skepd { daemon, _listener: listener, workers: handles, subscribers, stop, port };
+    // THE PRUNER (`media/pruner.rs`), on a thread of its own: the pass once
+    // the cell index's walk at open completes, then on the cadence. A
+    // served daemon's — an embedder routing by hand runs no pass but
+    // through the hook. Spawned fallibly like the workers; a refused thread
+    // costs the cadence and nothing of the serving, and is said.
+    let cadence = Arc::new(Cadence::new());
+    let pruner = {
+        let daemon = Arc::clone(&daemon);
+        let cadence = Arc::clone(&cadence);
+        thread::Builder::new().name("skepd-pruner".into()).spawn(move || prune_on_cadence(&daemon, &cadence))
+    };
+    let pruner = match pruner {
+        Ok(h) => Some(h),
+        Err(e) => {
+            notice::line(format_args!("pruner: the OS refused its thread ({e}); no pass runs on this daemon's cadence"));
+            None
+        }
+    };
+    let server = Skepd {
+        daemon,
+        _listener: listener,
+        workers: handles,
+        subscribers,
+        stop,
+        pruner,
+        cadence,
+        port,
+    };
     match refused {
         // A refused thread costs the whole start, never a half-started
         // server: the stop joins the workers that did start, ends any
@@ -300,6 +336,40 @@ impl Skepd {
         // The workers are gone, so no new subscriber can appear past here.
         self.daemon.writes.shutdown();
         self.subscribers.join_all();
+        // The pruner: woken out of its wait at once, joined — at most one
+        // file's work past the wake, the arm held one file at a time.
+        self.cadence.stop();
+        if let Some(h) = self.pruner.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+/// THE PRUNER's LOOP: wait for the cell index to ready — in short waits, so
+/// the stop reaches it — run the pass, then wait the cadence out or the
+/// stop, whichever comes first. A pass's I/O failure is the operator's
+/// line, and the next pass tries again.
+fn prune_on_cadence(daemon: &Daemon, cadence: &Cadence) {
+    loop {
+        if daemon.index_is_ready_for_pruning() {
+            match daemon.prune_pass() {
+                Ok(Some(pass)) => notice::line(format_args!(
+                    "pruner: {} expired partials removed, {} files unlinked, {} kept, {} asides removed{}",
+                    pass.expired_partials,
+                    pass.unlinked,
+                    pass.kept,
+                    pass.asides,
+                    pass.halted.as_deref().map_or(String::new(), |why| format!(" — the unlink pass halted: {why}"))
+                )),
+                Ok(None) => {}
+                Err(e) => notice::line(format_args!("pruner: the pass failed: {e}")),
+            }
+            if cadence.wait(PRUNE_INTERVAL) == Wake::Stop {
+                return;
+            }
+        } else if cadence.wait(Duration::from_millis(250)) == Wake::Stop {
+            return;
+        }
     }
 }
 
@@ -378,6 +448,12 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
     match routed {
         Routed::Reply(reply) => {
             let _ = write_reply(&mut stream, &reply, Instant::now() + TRANSFER_DEADLINE);
+            // THE DEFERRED STEP of a replace: the replaced instance's name
+            // unlinked AFTER the answer is on the socket, off the request's
+            // path — the blob family's requests alone owe one.
+            if blob_routes::is_blob_path(&req.path) {
+                daemon.retire_asides();
+            }
         }
         Routed::EventStream => {
             // The one token-accepting route `Daemon::token_route` cannot

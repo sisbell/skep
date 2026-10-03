@@ -34,6 +34,7 @@ mod media;
 mod nullify_class;
 mod ownership;
 mod properties;
+mod pruner;
 mod publication_reads;
 mod publish;
 mod read_surface;

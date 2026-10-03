@@ -64,12 +64,17 @@
 //!    meeting a LAPSED lease meets its OWN refusal"). Past the horizon the
 //!    record answers no lease and the binding's refusal stands.
 //!
-//! THE SHOT'S BINDING, lane B's reading: the owner's own shot re-inserting
-//! a draft's cell asks the binding again, as its `insert` did — the whole
-//! armed set lands together at both positions — so a lease lapsed between
-//! the insert and the shot answers `lease_lapsed` there until the bytes are
-//! re-PUT. Lane C's cell index re-reads this arm: a hash the requester's
-//! own cells already name is a reference, kept by no lease.
+//! THE SHOT'S BINDING: the owner's own shot re-inserting a draft's cell asks
+//! the binding again, as its `insert` did — the whole armed set lands
+//! together at both positions. The binding reads THE CELL INDEX FIRST
+//! ([`MediaGate::binding`]): a hash the requester's own cells already name
+//! is a reference, kept by no lease — so the owner's shot of a draft whose
+//! cell was admitted is admitted after the lease lapsed, while the file is
+//! whole at the cell's size, and `lease_lapsed` where it is not. Until the
+//! index's walk at open completes the index arm is skipped and the lease
+//! arm alone decides, so a lease lapsed between the insert and the shot
+//! answers `lease_lapsed` in that window until the bytes are re-PUT: the
+//! door never waits on the index.
 //!
 //! WHAT STANDS AHEAD. The plain sequence's producers — the mint class, the
 //! `replaces` fence, the board-state gate with the write-path check behind

@@ -240,6 +240,12 @@ pub(super) enum TransportError {
     DepositRefused,
     /// The blob store refused I/O.
     BlobIo,
+    /// THE READINESS REFUSAL (ms5-R): the cell index's rebuild at open has
+    /// not completed, and this is one of its three readers — the PUT's
+    /// creation or resume, the deposit read. Retry-class, `history_busy`'s
+    /// sibling: the request may be perfectly good and the walk momentarily
+    /// unfinished. Every other request is served throughout.
+    IndexRebuilding,
 }
 
 impl TransportError {
@@ -272,6 +278,7 @@ impl TransportError {
             TransportError::UploadLength => "upload_length",
             TransportError::DepositRefused => "deposit_refused",
             TransportError::BlobIo => "blob_io",
+            TransportError::IndexRebuilding => "index_rebuilding",
         }
     }
 
@@ -306,8 +313,11 @@ impl TransportError {
             | TransportError::HistoryCorrupt
             | TransportError::InternalPanic
             | TransportError::BlobIo => 500,
-            // The two retry-class refusals: a pool is momentarily full.
-            TransportError::HistoryBusy | TransportError::ScanBusy => 503,
+            // The three retry-class refusals: a pool is momentarily full, or
+            // the cell index's walk at open is momentarily unfinished.
+            TransportError::HistoryBusy
+            | TransportError::ScanBusy
+            | TransportError::IndexRebuilding => 503,
             // The gate's: the scope it names has no room for these bytes.
             TransportError::DepositRefused => 507,
         }
@@ -683,6 +693,7 @@ mod tests {
             (TransportError::UploadLength, "upload_length", 400),
             (TransportError::DepositRefused, "deposit_refused", 507),
             (TransportError::BlobIo, "blob_io", 500),
+            (TransportError::IndexRebuilding, "index_rebuilding", 503),
         ];
         for &(err, name, status) in &table {
             assert_eq!(err.name(), name, "wire name drifted for {err:?}");

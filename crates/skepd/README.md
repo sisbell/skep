@@ -17,11 +17,20 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `/session/close`, and the blob upload's family `/blob/upload` — the
   resumable PUT of a picture's bytes, streamed to the blob store
   ([skep-blobs](../skep-blobs)) one chunk at a time, and the deposit read.
-- **The media door and the gate** — a picture's reference cell is parsed
-  by one parser at every `insert` and `publish` and admitted only where
-  its hash is a deposit of the caller's own under a live lease; the
-  gate's three scopes (the own scope, the venue total, the floor) bound
-  what a deposit may take.
+- **The media door, the gate, the index and the pruner** — a picture's
+  reference cell is parsed by one parser at every `insert` and `publish`
+  and admitted only where its hash is one the caller's own cells already
+  name over a whole file, or a deposit of the caller's own under a live
+  lease; the gate's three scopes (the own scope — the base plus the
+  pending bytes — the venue total, the floor) bound what a deposit may
+  take; the cell index — per hash the cells naming it, per account the
+  base — is entered at every commit that mints a cell and rebuilt at
+  every open on a thread, its three readers (the upload's creation and
+  resume, the deposit read) answered `503 index_rebuilding` until the
+  walk completes and every other request served meanwhile; the pruner's
+  pass removes expired partials and, under the credential lock's
+  exclusive arm one file at a time, unlinks the files no cell names and
+  no live lease holds, halting on a schema it does not know.
 - **Deterministic JSON codec** — key-sorted marshalling so wire bytes
   never depend on map iteration order.
 - **Durability is configuration** — fsync policy and checkpoint

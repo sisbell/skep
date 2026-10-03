@@ -1,10 +1,11 @@
-//! THE BLOB UPLOAD — "the PUT", the record's word for the surface (media
-//! lane B; `media.md` Op inventory 1, "THE RESUMABLE UPLOAD IS THE STANDARD
-//! SHAPE, STATED ONCE", its seven clauses, the lease's crash story, the
-//! deposit read; the register M-I2 (e), M-I5 (a), (c), M-I6 (b), (e);
-//! wire.md §Media): the path family `/blob/upload`, every method of it
-//! TOKEN-ACCEPTING through [`Daemon::resolve_actor`], and the one transport
-//! seam a request/response signature cannot carry — the body that streams.
+//! THE BLOB UPLOAD — "the PUT", the record's word for the surface
+//! (`media.md` Op inventory 1, "THE RESUMABLE UPLOAD IS THE STANDARD SHAPE,
+//! STATED ONCE", its seven clauses, the lease's crash story, the deposit
+//! read; the register M-I2 (e), M-I5 (a), (c), M-I6 (b), (e); the ruling
+//! ms5-R; wire.md §Media): the path family `/blob/upload`, every method of
+//! it TOKEN-ACCEPTING through [`Daemon::resolve_actor`], the readiness
+//! refusal of the cell index's three readers, and the pruner's pass as the
+//! daemon runs it.
 //!
 //! THE SHAPE (the owner's ruling ms3-2: the tus protocol's SHAPE, no byte
 //! of its wire): the CREATION — `POST /blob/upload?length=<N>`, the
@@ -19,54 +20,60 @@
 //! after which the identifier answers "no upload"; the TERMINATION —
 //! `DELETE /blob/upload/<id>`, nothing kept; and THE DEPOSIT READ — `GET
 //! /blob/upload`, the principal's own deposits and uploads, no surface of
-//! its own (m-Q10). Every spelling here is an INTERIM pin (sm-Q8),
-//! stated once in wire.md §Media.
+//! its own (m-Q10). Every spelling here is an INTERIM pin (sm-Q8), stated
+//! once in wire.md §Media.
 //!
 //! THE ORDER OF ONE REQUEST THAT CARRIES BYTES: the session-layer gate
 //! (a guest, an unclaimed board, a node-tier principal: refused before
-//! anything — D12, PUB-6.35's I10, P13); the request's shape; the per-file
-//! cap and the own scope on the DECLARED total, before the body — refused
-//! there, the upload is KEPT (clause (6)); the hold (clause (5)); then the
-//! body, chunk by chunk through the one buffer, each chunk gated — the own
-//! scope, the venue's total, the floor, in that order — and refused there
-//! the upload is ENDED, nothing kept, the refusal naming the scope and the
-//! bytes it had taken (ms4-E1, the venue total's priced residue); then,
-//! where the offset reaches the length, THE FINISH under the credential
-//! lock's READ arm and never `Serial`: the requester re-resolved against the
-//! head (dead there, the upload is ended), the store's rename through the
-//! lease's sync, the record retired, THEN the answer — one shape whether or
-//! not the file was already here (M-I5 (a); "NO ANSWER OF THE UPLOAD SAYS
-//! WHETHER THE FILE WAS ALREADY HERE").
+//! anything — D12, PUB-6.35's I10, P13); THE READINESS — the creation and
+//! the resume read the own scope, whose base is the cell index's number,
+//! so until the index's walk at open completes both are refused
+//! `index_rebuilding`, 503, retry-class, as the deposit read is (ms5-R:
+//! the index's three readers wait, and nothing else — the progress read,
+//! the termination, every text read and write, the door's own binding arm
+//! are served throughout); the request's shape; the per-file cap and the
+//! own scope on the DECLARED total, before the body — refused there, the
+//! upload is KEPT (clause (6)); the hold (clause (5)); then the body, chunk
+//! by chunk through the one buffer, each chunk gated — the own scope, the
+//! venue's total, the floor, in that order — and refused there the upload
+//! is ENDED, nothing kept, the refusal naming the scope and the bytes it
+//! had taken (ms4-E1, the venue total's priced residue); then, where the
+//! offset reaches the length, THE FINISH under the credential lock's READ
+//! arm and never `Serial`: the requester re-resolved against the head (dead
+//! there, the upload is ended), the store's rename through the lease's
+//! sync, the record retired, THEN the answer — one shape whether or not the
+//! file was already here (M-I5 (a); "NO ANSWER OF THE UPLOAD SAYS WHETHER
+//! THE FILE WAS ALREADY HERE") — and one TIME: the replaced instance's
+//! unlink is the store's deferred step, run by the transport after the
+//! reply is written ([`Daemon::retire_asides`]) and swept by the pruner's
+//! pass where that did not run.
 //!
 //! THE TRANSPORT SEAM. The transport reads the request head and, for the
-//! two body-carrying methods of this family, reads NO body: it parks a
-//! [`BodySource`] over a clone of the connection's socket in this thread's
-//! slot ([`park`]) and returns the head; the router takes the slot
-//! ([`take_parked`]) on the same thread and hands it to the route, which
-//! drains the socket one [`BLOB_CHUNK`] at a time into the store. A caller
-//! over its own transport — the socket-free router, the tests — parks
-//! nothing, and the route reads the request's own `body` through the same
-//! type. The arm's whole memory is the one buffer the source holds; nothing
-//! here ever holds the body whole.
+//! two body-carrying methods of this family, reads NO body: it leaves a
+//! [`BodySource`] over a clone of the connection's socket in the request's
+//! own slot (`HttpRequest::body_stream`) and returns the head; the router
+//! takes the slot at the head of every routing and hands the source to the
+//! route, which drains the socket one [`BLOB_CHUNK`](crate::limits::BLOB_CHUNK)
+//! at a time into the store. A caller over its own transport — the socket-free router, the
+//! tests — leaves the slot empty, and the route reads the request's own
+//! `body` through the same type. The arm's whole memory is the one buffer
+//! the source holds; nothing here ever holds the body whole.
 
-use std::cell::RefCell;
-use std::io::{self, Read, Write};
-use std::net::TcpStream;
-use std::time::Instant;
+use std::io;
 
 use serde_json::Value;
 use skep_blobs::{BlobError, Finished, UploadId, UploadRecord};
-use skep_namespace::HasM3;
+use skep_namespace::{HasM3, PrincipalId};
 
 use super::actor::Resolved;
 use super::reply::{refuse, refuse_with, with_signal, Reply, TransportError};
-use super::request::{at_most_once, query_pairs, HttpRequest};
+use super::request::{at_most_once, query_pairs, BodySource, HttpRequest};
 use super::Daemon;
 use crate::auth::session::Actor;
 use crate::codec::obj;
-use crate::limits::{BLOB_CHUNK, BLOB_TRANSFER_BOUND};
 use crate::media::deposit_read::deposit_read;
 use crate::media::gate::{MediaGate, Scope, DESIGNATION};
+use crate::media::pruner::{self, PrunePass};
 #[cfg(feature = "test-hooks")]
 use crate::notice;
 
@@ -109,199 +116,6 @@ pub(super) fn streams_body(method: &str, path: &str) -> bool {
     )
 }
 
-// ── the body source ──────────────────────────────────────────────────────
-
-/// Where a body's bytes come from: the connection's socket (its clone,
-/// owned here), or the request's own bytes.
-enum Conn<'a> {
-    Socket(TcpStream),
-    Bytes(&'a [u8]),
-}
-
-/// THE STREAMING ARM's reader: the body of one blob request, handed to the
-/// route one chunk at a time through the ONE buffer this value holds — the
-/// arm's whole memory per in-flight upload, [`BLOB_CHUNK`] and the
-/// counters beside it (asserted by `the_arm_holds_one_chunk_and_no_body`).
-/// Over a socket it carries the early bytes the head's read took with it,
-/// the declared length, the `Expect: 100-continue` the transport deferred to
-/// the route, and the transfer bound; the socket's own read deadline is the
-/// idle bound, set by the transport.
-pub(super) struct BodySource<'a> {
-    conn: Conn<'a>,
-    early: Vec<u8>,
-    early_at: usize,
-    declared: usize,
-    consumed: usize,
-    expects_continue: bool,
-    continued: bool,
-    deadline: Instant,
-    buf: Box<[u8]>,
-    /// An end met while a chunk was filling — the connection closed, a
-    /// deadline — answered AFTER the bytes filled so far, so a dropped
-    /// connection's last bytes are received before its drop is.
-    pending_end: Option<io::Error>,
-}
-
-impl<'a> BodySource<'a> {
-    /// A source over the connection's socket, parked by the transport: the
-    /// bytes that arrived with the head, the declared length, and whether
-    /// the client is holding the body for a `100 Continue`.
-    pub(super) fn parked(
-        socket: TcpStream,
-        early: Vec<u8>,
-        declared: usize,
-        expects_continue: bool,
-    ) -> BodySource<'static> {
-        BodySource {
-            conn: Conn::Socket(socket),
-            early,
-            early_at: 0,
-            declared,
-            consumed: 0,
-            expects_continue,
-            continued: false,
-            deadline: Instant::now() + BLOB_TRANSFER_BOUND,
-            buf: vec![0u8; BLOB_CHUNK].into_boxed_slice(),
-            pending_end: None,
-        }
-    }
-
-    /// A source over a request's own bytes — the socket-free router's.
-    pub(super) fn bytes(body: &'a [u8]) -> BodySource<'a> {
-        BodySource {
-            conn: Conn::Bytes(body),
-            early: Vec::new(),
-            early_at: 0,
-            declared: body.len(),
-            consumed: 0,
-            expects_continue: false,
-            continued: false,
-            deadline: Instant::now() + BLOB_TRANSFER_BOUND,
-            buf: vec![0u8; BLOB_CHUNK].into_boxed_slice(),
-            pending_end: None,
-        }
-    }
-
-    /// The declared length of the body.
-    pub(super) fn declared(&self) -> usize {
-        self.declared
-    }
-
-    /// Invite the body: where the client asked `Expect: 100-continue`, the
-    /// interim `100 Continue` carrying `interim`'s headers — the creation's
-    /// identifier, so it reaches the uploader before the first body byte
-    /// (clause (1)) — written once; nothing otherwise.
-    pub(super) fn begin(&mut self, interim: &[(&str, &str)]) -> io::Result<()> {
-        if !self.expects_continue || self.continued {
-            return Ok(());
-        }
-        self.continued = true;
-        if let Conn::Socket(s) = &mut self.conn {
-            let mut head = b"HTTP/1.1 100 Continue\r\n".to_vec();
-            for (name, value) in interim {
-                head.extend_from_slice(format!("{name}: {value}\r\n").as_bytes());
-            }
-            head.extend_from_slice(b"\r\n");
-            s.write_all(&head)?;
-        }
-        Ok(())
-    }
-
-    /// The next chunk of the body — [`BLOB_CHUNK`] bytes, FILLED to that
-    /// grain from the early bytes and the socket however the socket paces
-    /// them, or the body's last bytes; `None` once the declared length is
-    /// consumed. The grain is what the gate's refusal offset is read at: a
-    /// refusal as the body is written fires at a chunk's boundary, never at
-    /// whatever a socket read happened to deliver. A connection closed
-    /// inside the body, a read past the idle bound, or a transfer past its
-    /// bound is an error — answered after the bytes it found filled, so a
-    /// dropped connection's last bytes are received before its drop is — and
-    /// the route keeps the upload at its durable point.
-    pub(super) fn next_chunk(&mut self) -> io::Result<Option<&[u8]>> {
-        if let Some(end) = self.pending_end.take() {
-            return Err(end);
-        }
-        let left = self.declared - self.consumed;
-        if left == 0 {
-            return Ok(None);
-        }
-        let want = left.min(self.buf.len());
-        let mut filled = 0usize;
-        while filled < want {
-            let n = if self.early_at < self.early.len() {
-                let take = (self.early.len() - self.early_at).min(want - filled);
-                self.buf[filled..filled + take]
-                    .copy_from_slice(&self.early[self.early_at..self.early_at + take]);
-                self.early_at += take;
-                take
-            } else {
-                let read = match &mut self.conn {
-                    Conn::Bytes(b) => {
-                        let at = self.consumed + filled;
-                        let take = (want - filled).min(b.len().saturating_sub(at));
-                        if take == 0 {
-                            Err(io::Error::new(
-                                io::ErrorKind::UnexpectedEof,
-                                "the request's body is shorter than its declared length",
-                            ))
-                        } else {
-                            self.buf[filled..filled + take].copy_from_slice(&b[at..at + take]);
-                            Ok(take)
-                        }
-                    }
-                    Conn::Socket(s) => {
-                        if Instant::now() >= self.deadline {
-                            Err(io::Error::new(
-                                io::ErrorKind::TimedOut,
-                                "request body not delivered within the blob transfer bound",
-                            ))
-                        } else {
-                            match s.read(&mut self.buf[filled..want]) {
-                                Ok(0) => Err(io::Error::new(
-                                    io::ErrorKind::UnexpectedEof,
-                                    "connection closed inside the request body",
-                                )),
-                                other => other,
-                            }
-                        }
-                    }
-                };
-                match read {
-                    Ok(n) => n,
-                    Err(e) if filled > 0 => {
-                        self.pending_end = Some(e);
-                        break;
-                    }
-                    Err(e) => return Err(e),
-                }
-            };
-            filled += n;
-        }
-        self.consumed += filled;
-        Ok(Some(&self.buf[..filled]))
-    }
-}
-
-thread_local! {
-    /// The body the transport parked for the request this thread is
-    /// serving — set by [`park`] after the head is read, taken by the
-    /// router before dispatch, on the one thread a connection is served
-    /// on.
-    static PARKED: RefCell<Option<BodySource<'static>>> = const { RefCell::new(None) };
-}
-
-/// Park a streaming body for the router — the transport's half of the seam.
-pub(super) fn park(body: BodySource<'static>) {
-    PARKED.with(|slot| *slot.borrow_mut() = Some(body));
-}
-
-/// Take the parked body, if any — the router's half, at the head of every
-/// routing, so a body parked for one request can never be read by the
-/// next.
-pub(super) fn take_parked() -> Option<BodySource<'static>> {
-    PARKED.with(|slot| slot.borrow_mut().take())
-}
-
 // ── the routes ───────────────────────────────────────────────────────────
 
 impl Daemon {
@@ -313,13 +127,17 @@ impl Daemon {
         with_signal(reply, resolved.closed)
     }
 
-    /// THE SESSION-LAYER GATE, then the method. The gate (D12; PUB-6.35's
-    /// I10; sweep-5 media-leak `upload-admitted-where-no-op-would-be`): a
-    /// guest is refused; before the claim every act of the upload and the
-    /// deposit read answers `claim_first`; a NODE-TIER principal —
-    /// principal 0 of this node or of a sub-node, which owns no documents —
-    /// is refused before any body byte, so no deposit stands that no
-    /// account's scope counts.
+    /// THE SESSION-LAYER GATE, then THE READINESS, then the method. The gate
+    /// (D12; PUB-6.35's I10; sweep-5 media-leak
+    /// `upload-admitted-where-no-op-would-be`): a guest is refused; before
+    /// the claim every act of the upload and the deposit read answers
+    /// `claim_first`; a NODE-TIER principal — principal 0 of this node or of
+    /// a sub-node, which owns no documents — is refused before any body
+    /// byte, so no deposit stands that no account's scope counts. The
+    /// readiness (ms5-R): the creation, the resume and the deposit read —
+    /// the index's three readers at this family — are refused
+    /// `index_rebuilding` until the walk at open completes; the progress
+    /// read and the termination read no base and are served.
     fn blob_dispatch(
         &self,
         resolved: &Resolved,
@@ -346,11 +164,18 @@ impl Daemon {
         if !account_tier {
             return refuse_upload("node_tier");
         }
+        let reads_the_index = matches!(
+            (req.method.as_str(), &target),
+            ("POST", BlobPath::Create) | ("GET", BlobPath::Create) | ("PATCH", BlobPath::Upload(_))
+        );
+        if reads_the_index && !self.media.index_ready() {
+            return refuse_rebuilding();
+        }
         let key = MediaGate::key(principal);
         match (req.method.as_str(), target) {
-            ("POST", BlobPath::Create) => self.blob_create(&key, req, body),
+            ("POST", BlobPath::Create) => self.blob_create(principal, &key, req, body),
             ("GET", BlobPath::Create) => Reply::json(200, deposit_read(&self.media, principal)),
-            ("PATCH", BlobPath::Upload(id)) => self.blob_append(&key, id, req, body),
+            ("PATCH", BlobPath::Upload(id)) => self.blob_append(principal, &key, id, req, body),
             ("GET", BlobPath::Upload(id)) => self.blob_progress(&key, id),
             ("DELETE", BlobPath::Upload(id)) => self.blob_end(&key, id),
             (_, BlobPath::Malformed) => refuse(
@@ -368,7 +193,13 @@ impl Daemon {
     /// own scope on it BEFORE the body, the identifier minted and the record
     /// written; with no body the answer is the record; with one — the
     /// creation-with-upload — the identifier is held and the body streamed.
-    fn blob_create(&self, key: &str, req: &HttpRequest, body: &mut BodySource<'_>) -> Reply {
+    fn blob_create(
+        &self,
+        principal: PrincipalId,
+        key: &str,
+        req: &HttpRequest,
+        body: &mut BodySource<'_>,
+    ) -> Reply {
         let length = match create_query(req.query.as_deref()) {
             Ok(n) => n,
             Err(detail) => return refuse(TransportError::MalformedBlob, Some(&detail)),
@@ -387,7 +218,7 @@ impl Daemon {
             );
         }
         let now = self.media.now_ms();
-        if let Err(scope) = self.media.admit_declared(key, length, now) {
+        if let Err(scope) = self.media.admit_declared(principal, length, now) {
             return refuse_deposit(scope, false, 0);
         }
         let record = match self.media.store().create_upload(
@@ -408,7 +239,7 @@ impl Daemon {
         // pruner's re-read and a racing resume meet the hold.
         self.media.claim(id);
         let hex = id.to_hex();
-        let reply = self.stream_body(key, record, 0, req, body, &[("Upload-Id", hex.as_str())]);
+        let reply = self.stream_body(principal, key, record, 0, req, body, &[("Upload-Id", hex.as_str())]);
         self.media.release(id);
         reply
     }
@@ -420,6 +251,7 @@ impl Daemon {
     /// is kept — then the body.
     fn blob_append(
         &self,
+        principal: PrincipalId,
         key: &str,
         id: UploadId,
         req: &HttpRequest,
@@ -436,13 +268,14 @@ impl Daemon {
         if !self.media.claim(id) {
             return refuse(TransportError::UploadHeld, Some("another stream holds this upload"));
         }
-        let reply = self.append_held(key, record, offset, req, body);
+        let reply = self.append_held(principal, key, record, offset, req, body);
         self.media.release(id);
         reply
     }
 
     fn append_held(
         &self,
+        principal: PrincipalId,
         key: &str,
         record: UploadRecord,
         offset: u64,
@@ -466,10 +299,10 @@ impl Daemon {
             );
         }
         let now = self.media.now_ms();
-        if let Err(scope) = self.media.admit_declared(key, record.length - offset, now) {
+        if let Err(scope) = self.media.admit_declared(principal, record.length - offset, now) {
             return refuse_deposit(scope, false, record.offset);
         }
-        self.stream_body(key, record, offset, req, body, &[])
+        self.stream_body(principal, key, record, offset, req, body, &[])
     }
 
     /// THE BODY, chunk by chunk: resumed at `offset`, each chunk gated as
@@ -478,8 +311,10 @@ impl Daemon {
     /// is written ENDS it; a body that leaves the upload short of its
     /// length settles and answers the record; one that reaches it goes on
     /// to the finish.
+    #[allow(clippy::too_many_arguments)]
     fn stream_body(
         &self,
+        principal: PrincipalId,
         key: &str,
         record: UploadRecord,
         offset: u64,
@@ -515,7 +350,7 @@ impl Daemon {
                 }
             };
             let n = chunk.len() as u64;
-            if let Err(scope) = self.media.admit_bytes(key, &id, written, n, now) {
+            if let Err(scope) = self.media.admit_bytes(principal, &id, written, n, now) {
                 // REFUSED IS ENDED (clause (6)): nothing kept.
                 let _ = store.end_upload(key, &id, now);
                 return refuse_deposit(scope, true, written);
@@ -596,6 +431,31 @@ impl Daemon {
         reply
     }
 
+    /// THE DEFERRED STEP of a replace (the store's `retire_asides`): the
+    /// replaced instance's names unlinked, off the answer's path — the
+    /// transport runs it after a blob reply is written; the pruner's pass
+    /// sweeps whatever it did not reach. An I/O failure here is the
+    /// operator's line, never a client's: the aside stands for the pass or
+    /// the next open.
+    pub(super) fn retire_asides(&self) {
+        if let Err(e) = self.media.store().retire_asides() {
+            crate::notice::line(format_args!("blob store: a replaced file's aside could not be unlinked: {e}"));
+        }
+    }
+
+    /// THE PRUNER's PASS, as the daemon runs it (`media/pruner.rs`): the
+    /// credential lock's WRITE arm taken for one file at a time. `None`
+    /// where the index is not ready — the pass does not start (ms5-R).
+    pub(super) fn prune_pass(&self) -> io::Result<Option<PrunePass>> {
+        pruner::pass(&self.media, || self.auth.credential_lock.write())
+    }
+
+    /// Whether the cell index's walk at open has completed — what the
+    /// pruner's loop waits on before its first pass.
+    pub(super) fn index_is_ready_for_pruning(&self) -> bool {
+        self.media.index_ready()
+    }
+
     /// The line [`Daemon::hold_blob_finish_at`]'s hold writes on the
     /// operator stream as it parks — what the harness watches the child's
     /// stderr for before it kills.
@@ -607,10 +467,12 @@ impl Daemon {
     /// TEST HOOK (the standing of every hook in `server/hooks.rs`:
     /// `#[doc(hidden)]`, not a stable API): HOLD every later finish of the
     /// blob store before the named step — writing
-    /// [`Daemon::BLOB_HOLD_NOTICE`] on the operator stream and parking the
-    /// request's thread for good — so the dirty-crash harness
+    /// [`Daemon::BLOB_HOLD_NOTICE`] on the operator stream and parking
+    /// the request's thread for good — so the dirty-crash harness
     /// (`tests/it/hazard.rs`) can SIGKILL the process THERE and judge the
-    /// reopen over exactly the directory a crash at that step leaves. Not
+    /// reopen over exactly the directory a crash at that step leaves. Held
+    /// at the deferred `UnlinkAside` step, the hold parks the TRANSPORT's
+    /// thread after the reply is written, the answer already given. Not
     /// disarmable.
     #[cfg(feature = "test-hooks")]
     #[doc(hidden)]
@@ -749,6 +611,15 @@ fn refuse_upload(detail: &str) -> Reply {
     refuse(TransportError::UploadRefused, Some(detail))
 }
 
+/// THE READINESS REFUSAL (ms5-R): the cell index's walk at open is not
+/// done, and this request is one of its three readers.
+fn refuse_rebuilding() -> Reply {
+    refuse(
+        TransportError::IndexRebuilding,
+        Some("the cell index is being rebuilt from the board; retry shortly"),
+    )
+}
+
 /// The gate's refusal: the scope it fired on, whether the upload was ended
 /// or kept, and the bytes received — no headroom (M-I6 (h)).
 fn refuse_deposit(scope: Scope, ended: bool, offset: u64) -> Reply {
@@ -785,33 +656,6 @@ fn blob_refusal(e: BlobError) -> Reply {
 mod tests {
     use super::*;
 
-    /// THE RSS BOUND BY CONSTRUCTION (the investigation §3.4, "memory per
-    /// in-flight PUT under the streaming arm — O(chunk), never O(body)"):
-    /// the arm's one buffer is [`BLOB_CHUNK`] long, the source's own size
-    /// is a few words beside it — no `Vec` that grows with the body — and a
-    /// body of many chunks comes through it one chunk at a time, every
-    /// chunk at most the buffer's length. The number: 64 KiB per in-flight
-    /// upload, against a 64 MiB cap.
-    #[test]
-    fn the_arm_holds_one_chunk_and_no_body() {
-        assert_eq!(BLOB_CHUNK, 64 * 1024);
-        assert!(std::mem::size_of::<BodySource<'_>>() <= 160, "{}", std::mem::size_of::<BodySource<'_>>());
-        let body = vec![7u8; 10 * BLOB_CHUNK + 13];
-        let mut source = BodySource::bytes(&body);
-        assert_eq!(source.buf.len(), BLOB_CHUNK);
-        let mut chunks = 0;
-        let mut total = 0;
-        while let Some(chunk) = source.next_chunk().expect("bytes") {
-            assert!(chunk.len() <= BLOB_CHUNK);
-            assert!(chunk.iter().all(|&b| b == 7));
-            total += chunk.len();
-            chunks += 1;
-        }
-        assert_eq!(total, body.len());
-        assert_eq!(chunks, 11);
-        assert_eq!(source.buf.len(), BLOB_CHUNK, "the buffer never grew");
-    }
-
     /// The family's parse: the creation, an upload by a well-formed
     /// identifier, a malformed one (known, refused by name), and the paths
     /// outside it; and which method/path pairs stream.
@@ -838,5 +682,8 @@ mod tests {
         assert!(create_query(None).is_err());
         assert_eq!(append_query(Some("offset=0")), Ok(0));
         assert!(append_query(Some("offset=")).is_err());
+        let r = refuse_rebuilding();
+        assert_eq!(r.status, 503);
+        assert!(String::from_utf8_lossy(r.bytes()).contains("\"error\":\"index_rebuilding\""));
     }
 }

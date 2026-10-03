@@ -1,4 +1,4 @@
-//! The eight test hooks and `CLAIM_HOLD_NOTICE` (`#[doc(hidden)]` items of `Daemon`).
+//! The test hooks and `CLAIM_HOLD_NOTICE` (`#[doc(hidden)]` items of `Daemon`).
 
 use std::path::Path;
 use std::sync::atomic::Ordering;
@@ -8,9 +8,98 @@ use skep_kernel::{Attestation, SaltSource, Seq};
 
 use super::{Daemon, DaemonError};
 use crate::auth::AuthOptions;
+use crate::media::index::{Rebuild, WALK_HOLD};
+use crate::media::pruner::PrunePass;
 use crate::permits::Permit;
 
 impl Daemon {
+    /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a
+    /// stable API): whether the cell index's walk at open has completed —
+    /// what a suite waits on before its first PUT, rather than racing the
+    /// walk's thread.
+    #[doc(hidden)]
+    pub fn index_is_ready(&self) -> bool {
+        self.media.index_ready()
+    }
+
+    /// TEST HOOK (the same standing): the walk's report once it has
+    /// completed — the values walked, the cells and halt marks entered, its
+    /// duration and the time past the prefix test — the open-cost measure.
+    #[doc(hidden)]
+    pub fn index_rebuild_report(&self) -> Option<Rebuild> {
+        self.media.index().rebuild_report()
+    }
+
+    /// TEST HOOK (the same standing): the index's counts — cells, distinct
+    /// hashes, halt marks.
+    #[doc(hidden)]
+    pub fn index_counts(&self) -> (usize, usize, usize) {
+        self.media.index().counts()
+    }
+
+    /// TEST HOOK (the same standing): HOLD THE WALK — every cell index walk
+    /// started from here on, in this process, parks before its first entry
+    /// until [`Daemon::release_the_index_walk`]. Armed BEFORE a daemon
+    /// opens, so a suite can serve requests against a daemon whose index is
+    /// not ready: the readiness refusal at the three readers, every other
+    /// request served, the composition clause at the release. A process-wide
+    /// seam, since the walk starts inside the open.
+    #[doc(hidden)]
+    pub fn hold_the_index_walk() {
+        WALK_HOLD.hold();
+    }
+
+    /// TEST HOOK (the same standing): release every held walk, and hold no
+    /// later one.
+    #[doc(hidden)]
+    pub fn release_the_index_walk() {
+        WALK_HOLD.release();
+    }
+
+    /// TEST HOOK (the same standing): RUN THE PRUNER's PASS now, on this
+    /// thread — the pass the cadence runs, under the credential lock's
+    /// write arm one file at a time — and answer what it did; `None` where
+    /// the index is not ready and the pass did not start. A pass that
+    /// cannot read or unlink PANICS here: a seam whose act failed fails its
+    /// test here, not at a later assertion.
+    #[doc(hidden)]
+    pub fn prune_now(&self) -> Option<PrunePass> {
+        self.prune_pass().expect("the test seam's pass")
+    }
+
+    /// The line the pruner's hold writes on the operator stream as it
+    /// parks — what the harness watches the child's stderr for before it
+    /// kills.
+    #[doc(hidden)]
+    pub const PRUNE_HOLD_NOTICE: &'static str = crate::media::gate::MediaGate::PRUNE_HOLD_NOTICE;
+
+    /// TEST HOOK (the same standing): HOLD THE PASS after its next unlink —
+    /// the arm released, the next file's acquisition not yet taken — writing
+    /// [`Daemon::PRUNE_HOLD_NOTICE`] and parking the pass's thread for good,
+    /// so the dirty-crash harness can SIGKILL the process between an unlink
+    /// and the next acquisition and judge the reopen. Not disarmable.
+    #[doc(hidden)]
+    pub fn hold_the_prune_pass_after_an_unlink(&self) {
+        self.media.arm_prune_hold();
+    }
+
+    /// TEST HOOK (the same standing): run the replaced files' deferred step
+    /// now — what the transport runs after a blob reply — and answer how
+    /// many asides it unlinked; the socket-free router runs none itself.
+    #[doc(hidden)]
+    pub fn retire_asides_now(&self) -> usize {
+        self.media.store().retire_asides().expect("the test seam's drain")
+    }
+
+    /// TEST HOOK (the same standing): the pruner passes this daemon has
+    /// completed — the cadence's and the hook's alike — so a suite seeding
+    /// files before the open waits for the cadence's first pass to end
+    /// before it lapses their leases, rather than racing it.
+    #[doc(hidden)]
+    pub fn prune_passes_completed(&self) -> u64 {
+        self.media.passes_completed()
+    }
+
     /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a
     /// stable API): hold one reconstruction permit exactly as an in-flight
     /// reconstruction does, or `None` when the whole budget is taken. Real

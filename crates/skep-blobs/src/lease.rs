@@ -144,20 +144,31 @@ impl LeaseLog {
         out
     }
 
-    /// The sum of the key's live leases' sizes at `now_ms`.
-    pub fn pending_of(&self, key: &str, now_ms: u64) -> u64 {
+    /// The sum of the key's live leases' sizes at `now_ms` — those
+    /// `counted` admits.
+    pub fn pending_of(&self, key: &str, now_ms: u64, counted: &dyn Fn(&Lease) -> bool) -> u64 {
         self.leases
             .values()
-            .filter(|l| l.key == key && l.live(now_ms))
+            .filter(|l| l.key == key && l.live(now_ms) && counted(l))
             .fold(0u64, |acc, l| acc.saturating_add(l.size))
     }
 
-    /// The sum of every key's live leases' sizes at `now_ms`.
-    pub fn pending_total(&self, now_ms: u64) -> u64 {
+    /// The sum of every key's live leases' sizes at `now_ms` — those
+    /// `counted` admits.
+    pub fn pending_total(&self, now_ms: u64, counted: &dyn Fn(&Lease) -> bool) -> u64 {
         self.leases
             .values()
-            .filter(|l| l.live(now_ms))
+            .filter(|l| l.live(now_ms) && counted(l))
             .fold(0u64, |acc, l| acc.saturating_add(l.size))
+    }
+
+    /// Whether ANY key holds a live lease on `<designation>/<hex>` at
+    /// `now_ms` — the pruner's read, beside the per-key [`LeaseLog::state`]:
+    /// a scan of the map, whose key leads with the holder.
+    pub fn any_live(&self, designation: &str, hex: &str, now_ms: u64) -> bool {
+        self.leases
+            .values()
+            .any(|l| l.designation == designation && l.hex == hex && l.live(now_ms))
     }
 
     /// Rewrite the log to the current leases where any line on disk is not

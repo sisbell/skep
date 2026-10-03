@@ -15,6 +15,24 @@
 //! never crosses a filesystem. REPLACE is `rename(2)`'s own disposition
 //! over an existing name: the file holding the wrong bytes under the right
 //! name is the one case a repair exists for, and a no-op would defeat it.
+//!
+//! THE REPLACED INSTANCE IS RETIRED AFTER THE ANSWER (`media.md` Op
+//! inventory 1, "NO ANSWER OF THE UPLOAD SAYS WHETHER THE FILE WAS ALREADY
+//! HERE" — the TIME an answer takes is part of what it says). A rename over
+//! a name whose inode holds its last link frees that inode's blocks inside
+//! the rename, which at the per-file cap costs the replace arm hundreds of
+//! milliseconds a create never pays. So where the name exists the finish
+//! first gives the old inode a SECOND NAME — a hard link at an ASIDE name no
+//! hex spells, `.retired-<hex>-<n>` in the same directory — then renames the
+//! partial onto the hash: the old inode keeps a link, the rename frees
+//! nothing, and the aside is unlinked AFTER the answer has been written
+//! ([`Store::retire_asides`](crate::Store::retire_asides)), where the
+//! freeing's cost lands off the request's path. A link rather than a rename aside, so the hash is never
+//! without a file: a failure at the rename leaves the old bytes at the hash
+//! and the aside beside them, never an absent name. Nothing names an aside
+//! — no lease, no cell — so every reader of the directory ignores it, the
+//! pruner's pass removes one the deferred step did not, and open removes
+//! every one it finds (a crash between the answer and the unlink).
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -24,11 +42,17 @@ use serde_json::Value;
 
 /// The steps of a finish, in order — the points the hazard seam names
 /// (`test-hooks`): a hold or an injected failure is placed BEFORE the step
-/// it names, after every step before it has completed.
+/// it names, after every step before it has completed. Two are the
+/// REPLACE's own and are met only where the name already exists:
+/// [`Step::LinkAside`] inside the finish, [`Step::UnlinkAside`] in the
+/// deferred step after the answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Step {
     /// The partial's final fsync.
     TempSync,
+    /// The hard link of the old file at `<designation>/<hex>` to its aside
+    /// name — taken only where the name exists.
+    LinkAside,
     /// The rename of the partial onto `<designation>/<hex>`.
     Rename,
     /// The designation directory's fsync — the rename's durability.
@@ -41,6 +65,26 @@ pub enum Step {
     LeaseSync,
     /// The upload record's retirement — the last act before the answer.
     RecordRetire,
+    /// The unlink of a replaced file's aside name — the deferred step, run
+    /// after the answer ([`Store::retire_asides`](crate::Store::retire_asides))
+    /// and never inside a finish; met only on a finish that replaced a
+    /// present name.
+    UnlinkAside,
+}
+
+/// The prefix of an aside name: `.retired-<hex>-<n>`, the second name a
+/// replaced file carries from the finish's link until the deferred unlink.
+/// The leading dot keeps it apart from any hex name, as the partial's is.
+pub(crate) const ASIDE_PREFIX: &str = ".retired-";
+
+/// The aside name of the `n`th replace of `hex` this process makes.
+pub(crate) fn aside_name(hex: &str, n: u64) -> String {
+    format!("{ASIDE_PREFIX}{hex}-{n}")
+}
+
+/// Whether a directory entry's name is an aside's.
+pub(crate) fn is_aside_name(name: &str) -> bool {
+    name.starts_with(ASIDE_PREFIX)
 }
 
 /// A finished upload's answer: the file's designation, its hash as

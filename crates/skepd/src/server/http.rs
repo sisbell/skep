@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use skep_kernel::Seq;
 
-use super::blob_routes::{self, BodySource};
+use super::blob_routes;
 use super::reply::{reason_phrase, refuse, Reply, TransportError, SESSION_HEADER};
-use super::request::{at_most_once, HttpRequest};
+use super::request::{at_most_once, BodySlot, BodySource, HttpRequest};
 use super::body_cap;
 use crate::auth::session::Peer;
 use crate::codec::{obj, to_bytes};
@@ -139,19 +139,19 @@ pub(super) fn refuse_request(refusal: RequestRefusal) -> Reply {
 /// empty, capped at the route's [`body_cap`]), `Expect: 100-continue`
 /// honored, `Transfer-Encoding` refused.
 ///
-/// THE STREAMING ARM (media lane B; `blob_routes`): for the two methods of
-/// the blob upload's path family that carry bytes, the body is NOT read
-/// here — a body of the route's cap would otherwise sit whole in memory,
-/// which is what the cap raise alone was priced as unsafe for. The head is
-/// read as for every request, the declared length held to the route's cap,
-/// and the body parked for the route as a [`BodySource`] over a clone of
-/// this socket — the bytes that arrived with the head, the length, and the
-/// `100 Continue` the client may be waiting for, which the route sends with
-/// the upload's identifier once it has decided to invite the body. The
-/// socket's read deadline is set to the idle bound for the body's phase,
-/// renewed by any byte; the transfer bound is the source's own. A method of
-/// the family that carries no bytes reads its body here under the small
-/// cap, as every frameless route does.
+/// THE STREAMING ARM (`blob_routes`): for the two methods of the blob
+/// upload's path family that carry bytes, the body is NOT read here — a
+/// body of the route's cap would otherwise sit whole in memory, which is
+/// what the cap raise alone was priced as unsafe for. The head is read as
+/// for every request, the declared length held to the route's cap, and the
+/// body carried IN THE REQUEST's OWN SLOT (`HttpRequest::body_stream`) as a
+/// [`BodySource`] over a clone of this socket — the bytes that arrived
+/// with the head, the length, and the `100 Continue` the client may be
+/// waiting for, which the route sends with the upload's identifier once it
+/// has decided to invite the body. The socket's read deadline is set to
+/// the idle bound for the body's phase, renewed by any byte; the transfer
+/// bound is the source's own. A method of the family that carries no bytes
+/// reads its body here under the small cap, as every frameless route does.
 ///
 /// Each header this daemon READS — `Content-Length`, `Expect`,
 /// `Skepd-Session` and `Origin` — may appear at most once; a repeat is
@@ -290,11 +290,12 @@ pub(super) fn read_request(
         return Err(RequestRefusal::BodyTooLarge { declared, cap });
     }
     if streams {
-        // THE STREAMING ARM: the body stays on the socket for the route.
+        // THE STREAMING ARM: the body stays on the socket for the route,
+        // carried in the request's own slot.
         body.truncate(declared);
         let clone = stream.try_clone().map_err(|e| format!("socket: {e}"))?;
         clone.set_read_timeout(Some(BLOB_IDLE_BOUND)).map_err(|e| format!("socket: {e}"))?;
-        blob_routes::park(BodySource::parked(clone, body, declared, expects_continue));
+        let source = BodySource::parked(clone, body, declared, expects_continue);
         return Ok(Some(HttpRequest {
             method,
             path,
@@ -303,6 +304,7 @@ pub(super) fn read_request(
             origin,
             peer,
             body: Vec::new(),
+            body_stream: BodySlot::parked(source),
         }));
     }
     if expects_continue && body.len() < declared {
@@ -326,7 +328,16 @@ pub(super) fn read_request(
     // A byte past Content-Length would be a pipelined second request; this
     // connection answers one and closes, so it is dropped unread.
     body.truncate(declared);
-    Ok(Some(HttpRequest { method, path, query, session_token, origin, peer, body }))
+    Ok(Some(HttpRequest {
+        method,
+        path,
+        query,
+        session_token,
+        origin,
+        peer,
+        body,
+        body_stream: BodySlot::none(),
+    }))
 }
 
 fn find_head_end(buf: &[u8]) -> Option<usize> {

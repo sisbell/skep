@@ -14,14 +14,24 @@
 //! daemon's). What it promises is the ORDER of its own acts and what each
 //! leaves behind on a crash:
 //!
-//! * THE PUT's ORDER ([`Store::finish`]): the partial fsynced, RENAMED onto
+//! * THE PUT's ORDER ([`Store::finish`]): the partial fsynced; where the
+//!   name exists, the old file LINKED ASIDE (a second name no hex spells,
+//!   so the rename frees nothing); the partial RENAMED onto
 //!   `<designation>/<hex>` — REPLACE where the name exists, never a no-op —
 //!   that directory fsynced, the root fsynced where this process created
 //!   the designation directory, THEN the lease appended and synced, THEN
-//!   the upload record retired, THEN the answer. A crash leaves at worst a
-//!   file with no lease (unreferenced, prunable) or a retired-by-open
-//!   record beside a leased file, and never a lease naming bytes the
-//!   restart does not hold.
+//!   the upload record retired, THEN the answer — and the aside UNLINKED
+//!   AFTER the answer ([`Store::retire_asides`]), off the request's path.
+//!   A crash leaves at worst a file with no lease (unreferenced, prunable),
+//!   a retired-by-open record beside a leased file, or an aside open
+//!   removes, and never a lease naming bytes the restart does not hold.
+//! * THE PRUNER's READS: the designation directories and the files at hex
+//!   names ([`Store::designations`], [`Store::blobs_of`]), whether ANY key
+//!   holds a live lease on a file ([`Store::any_live_lease`]), the expired
+//!   uploads and their removal ([`Store::expired_uploads`],
+//!   [`Store::expire_upload`]), and the unlink of one file
+//!   ([`Store::unlink_blob`]) — each one act, so the daemon's pass holds its
+//!   own lock around exactly one.
 //! * A BYTE IS RECEIVED ONCE IT IS DURABLE: the partial is fsynced at
 //!   [`SYNC_GRAIN`] and at [`Store::settle`], and the record's offset and
 //!   expiry are written after each sync.
@@ -55,10 +65,11 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::Mutex;
 
-use blobs::{blob_path, designation_ok, fsync_dir, hex_ok};
+use blobs::{aside_name, blob_path, designation_ok, fsync_dir, hex_ok, is_aside_name};
 use lease::LeaseLog;
 use partials::Live;
 use uploads::UploadRecords;
@@ -76,6 +87,13 @@ pub struct Store {
     /// Designation directories this process created whose entry in the
     /// root is not yet fsynced; the first finish into one syncs the root.
     fresh_dirs: Mutex<HashSet<String>>,
+    /// The aside names replaces have left for the deferred unlink
+    /// ([`Store::retire_asides`]), in the order their finishes answered.
+    asides: Mutex<Vec<PathBuf>>,
+    /// The count of asides this process has made — the `<n>` of the aside
+    /// name, so two replaces of one hash before the first's unlink take two
+    /// names.
+    aside_count: AtomicU64,
     #[cfg(feature = "test-hooks")]
     hooks: Mutex<blobs::Hooks>,
 }
@@ -105,9 +123,104 @@ impl Store {
             leases: Mutex::new(leases),
             live: Mutex::new(HashMap::new()),
             fresh_dirs: Mutex::new(HashSet::new()),
+            asides: Mutex::new(Vec::new()),
+            aside_count: AtomicU64::new(0),
             #[cfg(feature = "test-hooks")]
             hooks: Mutex::new(blobs::Hooks::default()),
         })
+    }
+
+    // ── the directory, as the pruner reads it ────────────────────────────
+
+    /// Every DIRECTORY under the root, by name, in name order — the
+    /// designation directories this root holds, whatever their names: the
+    /// pruner's pass reads the set against the designations it knows and
+    /// halts on one it does not. Files under the root (the two logs, their
+    /// compaction twins) are not among them.
+    pub fn designations(&self) -> io::Result<Vec<String>> {
+        let mut out = Vec::new();
+        for entry in fs::read_dir(&self.root)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                out.push(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+        out.sort();
+        Ok(out)
+    }
+
+    /// The files at HEX NAMES in `<designation>/`, in name order — the blobs
+    /// the directory holds, a partial or an aside excluded by its name. An
+    /// absent directory holds none.
+    pub fn blobs_of(&self, designation: &str) -> io::Result<Vec<String>> {
+        if !designation_ok(designation) {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for entry in match fs::read_dir(self.root.join(designation)) {
+            Ok(d) => d,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(out),
+            Err(e) => return Err(e),
+        } {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if hex_ok(&name) && entry.file_type()?.is_file() {
+                out.push(name);
+            }
+        }
+        out.sort();
+        Ok(out)
+    }
+
+    /// The ASIDE names in `<designation>/` — the second names replaces left
+    /// that the deferred unlink has not reached — in name order.
+    pub fn asides_of(&self, designation: &str) -> io::Result<Vec<String>> {
+        if !designation_ok(designation) {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for entry in match fs::read_dir(self.root.join(designation)) {
+            Ok(d) => d,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(out),
+            Err(e) => return Err(e),
+        } {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if is_aside_name(&name) {
+                out.push(name);
+            }
+        }
+        out.sort();
+        Ok(out)
+    }
+
+    /// UNLINK the file at `<designation>/<hex>` — the pruner's one act per
+    /// acquisition, after its re-read of the index and the lease. `Ok(true)`
+    /// where a file went, `Ok(false)` where none stood. The directory is not
+    /// fsynced: a crash that reverts the unlink leaves a file the next pass
+    /// re-judges, which costs nothing.
+    pub fn unlink_blob(&self, designation: &str, hex: &str) -> io::Result<bool> {
+        if !designation_ok(designation) || !hex_ok(hex) {
+            return Ok(false);
+        }
+        match fs::remove_file(self.blob_path(designation, hex)) {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Remove one aside by name — the pruner's housekeeping where the
+    /// deferred step did not run. `Ok(false)` where none stood.
+    pub fn remove_aside(&self, designation: &str, name: &str) -> io::Result<bool> {
+        if !designation_ok(designation) || !is_aside_name(name) || name.contains('/') {
+            return Ok(false);
+        }
+        match fs::remove_file(self.root.join(designation).join(name)) {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
     /// The root the store was opened at.
@@ -296,14 +409,19 @@ impl Store {
     }
 
     /// THE FINISH (clause (7); M-I5 (a)): the upload's bytes must reach its
-    /// length. The partial is fsynced, renamed onto `<designation>/<hex>` —
-    /// REPLACE where the name exists — the designation directory fsynced,
-    /// the root fsynced where this process created the directory, the
-    /// lease for `key` on the hash appended and synced with `lease_expires_ms`,
-    /// the record retired. Answers the file's designation, hex and size —
-    /// one shape whether or not the file was already here. The caller
-    /// holds, from the rename through the lease's sync, whatever lock its
-    /// own write path takes (the daemon's credential-lock read arm).
+    /// length. The partial is fsynced; where `<designation>/<hex>` already
+    /// holds a file, that file is LINKED ASIDE — a second name,
+    /// `.retired-<hex>-<n>`, so the rename below frees no blocks; the
+    /// partial is renamed onto `<designation>/<hex>` — REPLACE where the
+    /// name exists — the designation directory fsynced, the root fsynced
+    /// where this process created the directory, the lease for `key` on the
+    /// hash appended and synced with `lease_expires_ms`, the record
+    /// retired. Answers the file's designation, hex and size — one shape
+    /// whether or not the file was already here, and in one time: the old
+    /// instance's unlink waits for [`Store::retire_asides`], after the
+    /// answer. The caller holds, from the rename through the lease's sync,
+    /// whatever lock its own write path takes (the daemon's credential-lock
+    /// read arm).
     pub fn finish(
         &self,
         key: &str,
@@ -324,6 +442,17 @@ impl Store {
         let dir = self.root.join(&designation);
         let from = partials::partial_path(&self.root, &designation, id);
         let to = blob_path(&self.root, &designation, &hex);
+        if to.is_file() {
+            // THE REPLACE: the old inode keeps a name through the rename, so
+            // the rename frees nothing; the aside is unlinked after the
+            // answer. A link, not a rename aside: the hash is never without
+            // a file, whatever fails next.
+            self.before(Step::LinkAside)?;
+            let n = self.aside_count.fetch_add(1, Ordering::Relaxed);
+            let aside = dir.join(aside_name(&hex, n));
+            fs::hard_link(&to, &aside)?;
+            self.asides.lock().push(aside);
+        }
         self.before(Step::Rename)?;
         fs::rename(&from, &to)?;
         self.before(Step::DirSync)?;
@@ -358,6 +487,76 @@ impl Store {
         Ok(())
     }
 
+    /// THE DEFERRED STEP of every replace this process has answered since
+    /// the last call: each aside name unlinked, in order — the old
+    /// instance's blocks freed here, after its answer, and never on the
+    /// request's path. Answers the count unlinked. A failure leaves the rest
+    /// queued for the next call, and open removes any aside a crash leaves.
+    pub fn retire_asides(&self) -> io::Result<usize> {
+        let queued: Vec<PathBuf> = std::mem::take(&mut *self.asides.lock());
+        let mut done = 0;
+        let mut rest = queued.into_iter();
+        for aside in rest.by_ref() {
+            if let Err(e) = self.before(Step::UnlinkAside) {
+                let mut queue = self.asides.lock();
+                queue.insert(0, aside);
+                queue.splice(1..1, rest);
+                return Err(e);
+            }
+            match fs::remove_file(&aside) {
+                Ok(()) => done += 1,
+                // Already gone — open's reconciliation or the pruner's
+                // pass took it: nothing to retire.
+                Err(e) if e.kind() == io::ErrorKind::NotFound => done += 1,
+                Err(e) => {
+                    let mut queue = self.asides.lock();
+                    queue.insert(0, aside);
+                    queue.splice(1..1, rest);
+                    return Err(e);
+                }
+            }
+        }
+        Ok(done)
+    }
+
+    /// The asides this process has answered and not yet unlinked — what
+    /// [`Store::retire_asides`] will take.
+    pub fn asides_pending(&self) -> usize {
+        self.asides.lock().len()
+    }
+
+    // ── the expired uploads, as the pruner removes them ──────────────────
+
+    /// THE EXPIRED UPLOADS at `now_ms`: every record past its expiry, in
+    /// identifier order — the pruner's read, which reads no reference. The
+    /// hold a stream has on one is the daemon's to consult before
+    /// [`Store::expire_upload`].
+    pub fn expired_uploads(&self, now_ms: u64) -> Vec<UploadRecord> {
+        let uploads = self.uploads.lock();
+        let mut out: Vec<UploadRecord> = uploads.all().filter(|r| !r.stands(now_ms)).cloned().collect();
+        out.sort_by_key(|r| r.id.to_hex());
+        out
+    }
+
+    /// Remove an EXPIRED upload: its handle dropped, its partial removed,
+    /// its record retired — the pruner's act, whatever key minted it, after
+    /// the daemon has found no stream holding it. A record that stands at
+    /// `now_ms` is left as it is (`Ok(false)`), so a clock moved between the
+    /// read and the act costs a standing upload nothing.
+    pub fn expire_upload(&self, id: &UploadId, now_ms: u64) -> io::Result<bool> {
+        let record = {
+            let uploads = self.uploads.lock();
+            match uploads.get(id) {
+                Some(r) if !r.stands(now_ms) => r.clone(),
+                _ => return Ok(false),
+            }
+        };
+        self.live.lock().remove(id);
+        partials::remove(&self.root, &record.designation, id)?;
+        self.uploads.lock().retire(id)?;
+        Ok(true)
+    }
+
     /// Drop this process's handle on an upload without ending it — a
     /// stream's end that leaves the upload standing; the hasher goes with it
     /// and is rebuilt at the next resume.
@@ -380,11 +579,26 @@ impl Store {
         self.leases.lock().live_of(key, now_ms)
     }
 
+    /// Whether ANY key holds a live lease on `<designation>/<hex>` at
+    /// `now_ms` — the pruner's read beside the per-key [`Store::lease`]: a
+    /// file any key holds live is kept, whoever deposited it.
+    pub fn any_live_lease(&self, designation: &str, hex: &str, now_ms: u64) -> bool {
+        self.leases.lock().any_live(designation, hex, now_ms)
+    }
+
     /// THE KEY's PENDING BYTES at `now_ms` (Op inventory 1, "THE OWN SCOPE
     /// BEING THE BASE PLUS THAT PRINCIPAL's PENDING BYTES"): its live
     /// leases' sizes plus its standing uploads' durable offsets.
     pub fn pending_bytes(&self, key: &str, now_ms: u64) -> u64 {
-        let leased = self.leases.lock().pending_of(key, now_ms);
+        self.pending_bytes_of(key, now_ms, &|_| true)
+    }
+
+    /// [`Store::pending_bytes`] over the key's live leases `counted` admits
+    /// — the daemon's own scope leaves out a lease on a hash the key's own
+    /// cells already name, which its base counts — plus its standing
+    /// uploads' durable offsets, counted whole.
+    pub fn pending_bytes_of(&self, key: &str, now_ms: u64, counted: &dyn Fn(&Lease) -> bool) -> u64 {
+        let leased = self.leases.lock().pending_of(key, now_ms, counted);
         let partial = self
             .uploads
             .lock()
@@ -397,7 +611,14 @@ impl Store {
     /// EVERY key's pending bytes at `now_ms` — the venue total's record-
     /// derived figure.
     pub fn pending_total(&self, now_ms: u64) -> u64 {
-        let leased = self.leases.lock().pending_total(now_ms);
+        self.pending_total_of(now_ms, &|_| true)
+    }
+
+    /// [`Store::pending_total`] over the live leases `counted` admits, the
+    /// standing uploads counted whole — the daemon's venue total, which
+    /// adds every base to it.
+    pub fn pending_total_of(&self, now_ms: u64, counted: &dyn Fn(&Lease) -> bool) -> u64 {
+        let leased = self.leases.lock().pending_total(now_ms, counted);
         let partial = self
             .uploads
             .lock()

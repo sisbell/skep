@@ -50,9 +50,23 @@
 //! `Op` the change feed has nothing to record, so [`write_meta`] answers
 //! `None` for precisely those — an equivalence it asserts against the
 //! partition rather than assumes.
+//!
+//! AND THE CELL INDEX's ENTRY (`media.md` Op inventory 1: "EACH ENTRY IS
+//! ENTERED IN skepd's MEMORY AT EVERY COMMIT THAT MINTS A CELL, whichever
+//! op minted it … before that commit's guard drops"). [`WritePath::record`]
+//! is the one step every commit rides, and it takes the post-commit
+//! snapshot under the guard — so it is where the index is entered: for an
+//! `insert`, the values the ack placed, read off that snapshot at the
+//! addresses the commit minted; for a `publish`, the values the shot
+//! re-inserted as fresh identity under the trunk's content chain. `copy`
+//! and `version` mint no cell and take no entry. Which values a write may
+//! mint a cell at is decided per op by [`write_meta`] ([`Minting`]), off
+//! the frame, through the index's cheap prefix test, so a prose insert of
+//! a million bytes costs the hook a byte compare apiece and no read.
 
 use std::io;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex};
@@ -75,6 +89,7 @@ pub(crate) use feed::{ChangesAnswer, ChangesQuery, FeedClass};
 pub(crate) use head::board_term;
 
 use crate::codec::op_name;
+use crate::media::index::{names_kind_by_prefix, CellIndex};
 use crate::serial::{Serial, SerialGuard};
 use feed::Feed;
 use self::head::HeadWriter;
@@ -131,6 +146,10 @@ pub(crate) struct WritePath {
     /// writes `H` on the cadence through [`WritePath::commit_recorded`], under
     /// the caller's serialization guard.
     head_writer: HeadWriter,
+    /// THE CELL INDEX — the media gate's, shared: entered by
+    /// [`WritePath::record`] at every commit that mints a cell, under the
+    /// serialization guard, before it drops.
+    index: Arc<CellIndex>,
 }
 
 impl WritePath {
@@ -138,11 +157,12 @@ impl WritePath {
     /// derived sidecars checked — then the commit stream at the journal's
     /// committed head, then the head writer over the feed just replayed — in
     /// that order, the first two being the base case of this card's
-    /// guarantee (see the module doc). Fallible only in the feed — the lock
-    /// and the stream are memory, and the head writer resumes as if no head
+    /// guarantee (see the module doc). `index` is the cell index every
+    /// commit from here on enters. Fallible only in the feed — the lock and
+    /// the stream are memory, and the head writer resumes as if no head
     /// were written where it cannot read one — so the caller's error type
     /// need name only that.
-    pub fn open(data_dir: &Path, engine: &Engine) -> io::Result<WritePath> {
+    pub fn open(data_dir: &Path, engine: &Engine, index: Arc<CellIndex>) -> io::Result<WritePath> {
         let feed = Feed::open(data_dir, engine)?;
         // Opened AFTER the feed, at the same head, and before any febe
         // exists to commit between the two: the stream's first announced
@@ -162,6 +182,7 @@ impl WritePath {
             commit_stream,
             stores: engine.stores(),
             head_writer,
+            index,
         })
     }
 
@@ -386,13 +407,19 @@ impl WritePath {
     /// forwarded rather than dropped: the feed's own record and the
     /// authority file's below it are the same obligation, and each names it
     /// in its arguments.
+    ///
+    /// THE CELL INDEX IS ENTERED HERE, off the same post-commit snapshot,
+    /// under the same guard (the module doc) — for a FRESH commit alone,
+    /// the one whose position is the snapshot's own: an idempotency
+    /// replay's memoized ack names an older position, and its cells were
+    /// entered when it first committed.
     fn record(
         &self,
         serial: &SerialGuard<'_>,
         meta: WriteMeta,
         resp: &Response,
     ) -> Option<Seq> {
-        let WriteMeta { kind, docs, testimony, signed, terms } = meta;
+        let WriteMeta { kind, docs, testimony, signed, terms, minting } = meta;
         let (at, minted) = match resp {
             Response::Ack { at } => (*at, None),
             Response::AckAddr { addr, at } => (*at, Some(addr)),
@@ -447,6 +474,17 @@ impl WritePath {
             }
         };
         let post = self.stores.kernel().snapshot();
+        if post.seq() == at {
+            match (&minting, minted) {
+                (Minting::Insert { naming }, Some(start)) if !naming.is_empty() => {
+                    self.index.enter_insert(post.world(), start, naming);
+                }
+                (Minting::Publish { reinserted }, Some(member)) if *reinserted > 0 => {
+                    self.index.enter_publish(post.world(), member, *reinserted);
+                }
+                _ => {}
+            }
+        }
         let terms = terms.complete(minted, post.world());
         self.feed.record(serial, at.0, op_name(kind), docs, testimony, signed, terms, post.world());
         Some(at)
@@ -496,6 +534,8 @@ pub(crate) struct FrameMeta {
     docs: AffectedDocs,
     /// Which of the op's own terms its row carries ([`RowTerms`]).
     terms: RowTerms,
+    /// Which content addresses the write may mint a cell at ([`Minting`]).
+    minting: Minting,
 }
 
 impl FrameMeta {
@@ -507,8 +547,37 @@ impl FrameMeta {
     /// plain sequence admitted, or the credential record's own `sig`; `None`
     /// for an unsigned entry, the head writer's own included.
     pub fn attributed(self, testimony: String, signed: Option<Signed>) -> WriteMeta {
-        WriteMeta { kind: self.kind, docs: self.docs, testimony, signed, terms: self.terms }
+        WriteMeta {
+            kind: self.kind,
+            docs: self.docs,
+            testimony,
+            signed,
+            terms: self.terms,
+            minting: self.minting,
+        }
     }
+}
+
+/// WHICH CONTENT ADDRESSES A WRITE MINTS THAT MAY HOLD A CELL — the cell
+/// index's entry at commit, decided per op by [`write_meta`] off the frame
+/// and completed by [`WritePath::record`] off the post-commit snapshot.
+/// Two ops mint content from a request's or a draft's values; every other
+/// mints none, `copy` and `version` sharing identity (the media record's
+/// §The publication seam: a copy of a cell mints no baptism).
+#[derive(Debug)]
+enum Minting {
+    /// No content value is minted.
+    None,
+    /// An `insert`: its values are minted I-adjacent from the ack's address;
+    /// `naming` holds the indices of those whose bytes pass the index's
+    /// prefix test — read ahead of the commit, so a prose insert enters
+    /// nothing and reads nothing after it.
+    Insert { naming: Vec<usize> },
+    /// A `publish`: the shot re-inserts `reinserted` values of the staging
+    /// draft as fresh identity under the trunk's content chain — the count
+    /// the shot's own arithmetic answers, each value read off the
+    /// post-commit snapshot.
+    Publish { reinserted: u64 },
 }
 
 /// What the change feed will say about one write: the op kind, the
@@ -538,6 +607,8 @@ pub(crate) struct WriteMeta {
     signed: Option<Signed>,
     /// Which of the op's own terms its row carries ([`RowTerms`]).
     terms: RowTerms,
+    /// Which content addresses the write may mint a cell at ([`Minting`]).
+    minting: Minting,
 }
 
 /// A write's affected document(s) for the feed (wire.md §The change feed):
@@ -660,7 +731,7 @@ impl RowTerms {
 /// worlds on the write path even in a debug build — so the pair of inclusions
 /// above is what a test at the wire asserts instead.
 pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
-    let meta = |kind, docs, terms| Some(FrameMeta { kind, docs, terms });
+    let meta = |kind, docs, terms| Some(FrameMeta { kind, docs, terms, minting: Minting::None });
     let one = |a: &Address| AffectedDocs::Named(vec![a.clone()]);
     let absent = RowTerms::Absent;
     let answer = match op {
@@ -678,14 +749,36 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
             meta(OpKind::RegisterNode, AffectedDocs::Named(Vec::new()), absent)
         }
         Op::Fork { .. } => meta(OpKind::Fork, AffectedDocs::Minted, absent),
-        Op::Insert { doc, .. } => meta(OpKind::Insert, one(doc), absent),
+        // The values that may hold a cell, by index — the prefix test ahead
+        // of the commit, so the record's entry reads only those.
+        Op::Insert { doc, values, .. } => Some(FrameMeta {
+            kind: OpKind::Insert,
+            docs: one(doc),
+            terms: absent,
+            minting: Minting::Insert {
+                naming: values
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, v)| names_kind_by_prefix(v.as_bytes()))
+                    .map(|(i, _)| i)
+                    .collect(),
+            },
+        }),
         Op::Delete { doc, .. } => meta(OpKind::Delete, one(doc), absent),
         Op::Copy { doc, .. } => meta(OpKind::Copy, one(doc), absent),
         Op::Rearrange { doc, .. } => meta(OpKind::Rearrange, one(doc), absent),
         Op::Version { .. } => meta(OpKind::Version, AffectedDocs::Minted, absent),
         // The shot mints the chain's next member, known only from its ack —
-        // the document it advances is the member's own trunk.
-        Op::Publish { .. } => meta(OpKind::Publish, AffectedDocs::Minted, RowTerms::Publish),
+        // the document it advances is the member's own trunk — and
+        // re-inserts the draft's values as fresh identity under it.
+        Op::Publish { shot, .. } => Some(FrameMeta {
+            kind: OpKind::Publish,
+            docs: AffectedDocs::Minted,
+            terms: RowTerms::Publish,
+            minting: Minting::Publish {
+                reinserted: u64::try_from(&shot.reinserted_values()).unwrap_or(u64::MAX),
+            },
+        }),
         Op::MakeLink { home, .. } => meta(OpKind::MakeLink, one(home), RowTerms::MakeLink),
         // `emit` mints a link too, and its row carries no `link`: r6-2a names
         // `make_link` alone.
@@ -840,6 +933,7 @@ impl CommitStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use skep_content::Val;
     use skep_namespace::PrincipalId;
 
     /// Reads are exactly the ops the change feed records nothing for —
@@ -852,6 +946,40 @@ mod tests {
         let read = Op::PrincipalPrefix { id: PrincipalId(1) };
         assert!(read.is_read(), "principal_prefix reads");
         assert!(write_meta(&read).is_none());
+    }
+
+    /// The index's entry hint, decided off the frame: an insert names the
+    /// indices of its values that pass the prefix test and nothing of the
+    /// rest; a publish carries the shot's re-inserted count; every other
+    /// write mints no cell.
+    #[test]
+    fn each_write_states_which_addresses_may_hold_a_cell() {
+        use skep_address::Nat;
+        use skep_febe::{Deposit, Shot, VPos};
+
+        let doc = crate::codec::wire_address("1.0.1.0.1").expect("a test address");
+        let cell = format!(
+            r#"{{"type":"{}","hash":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262","size":5}}"#,
+            crate::media::cell::KIND
+        );
+        let insert = Op::Insert {
+            doc: doc.clone(),
+            at: VPos::content(Nat::from(1u32)),
+            values: vec![Val::new(b"a".as_slice()), Val::new(cell.as_bytes()), Val::new(b"b".as_slice())],
+            deposit: Deposit::Undeclared,
+        };
+        let minting = write_meta(&insert).expect("a write").minting;
+        assert!(matches!(&minting, Minting::Insert { naming } if naming == &[1]), "{minting:?}");
+        let prose = Op::Insert {
+            doc: doc.clone(),
+            at: VPos::content(Nat::from(1u32)),
+            values: vec![Val::new(b"ab".as_slice())],
+            deposit: Deposit::Undeclared,
+        };
+        assert!(matches!(write_meta(&prose).expect("a write").minting, Minting::Insert { naming } if naming.is_empty()));
+        let publish = Op::Publish { doc, shot: Shot { base: None, draft: None, runs: Vec::new() } };
+        assert!(matches!(write_meta(&publish).expect("a write").minting, Minting::Publish { reinserted: 0 }));
+        assert!(matches!(write_meta(&Op::Fork { published: None }).expect("a write").minting, Minting::None));
     }
 
     /// Each write's arm of the table states the terms its row carries, beside

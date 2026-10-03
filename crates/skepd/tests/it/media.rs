@@ -16,19 +16,30 @@
 //! CELL COMMITTED BEFORE THE BINDING IS NEVER BOUND"), and the one the
 //! deployment obligation says is never served — here it is served to prove
 //! what the door does with it.
+//!
+//! AND THE CELL INDEX (`media.md` Op inventory 1; the register M-I5 (b),
+//! M-I6 (a); the ruling ms5-R): the readiness refusal at exactly its three
+//! readers and nothing else, the binding's window while the walk runs, the
+//! composition clause, the base as one record-derived number, and the
+//! rebuild's open cost, reported.
 
+use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use skep_address::{validate, Address, Nat, Tumbler};
+use skep_address::{content_subspace, elem_addr, validate, Address, ElemPos, Nat, Tumbler};
 use skep_arrangement::{Caller, Deposit, VPos};
-use skep_content::Val;
+use skep_content::{HasContent, Val};
 use skep_engine::{Engine, KernelConfig};
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, SaltSource};
-use skep_namespace::PrincipalId;
+use skep_namespace::{HasM3, PrincipalId};
 
 use crate::common;
 use common::*;
+
+/// The lease interval the fixtures' daemon runs under, seven days.
+const LEASE_MS: u64 = 7 * 24 * 3600 * 1000;
 
 /// The cell kind's INTERIM address (wire.md §Media), as the fixture pins it.
 const KIND: &str = "1.1.0.1.0.1.0.3.89";
@@ -55,8 +66,8 @@ fn canonical_cell() -> String {
 }
 
 /// A value naming the kind under a form this board does not read — H1's
-/// second designation.
-fn unknown_schema_value() -> String {
+/// second designation. The pruner suite plants one the same way.
+pub(crate) fn unknown_schema_value() -> String {
     format!(r#"{{"type":"{KIND}","hash":"{HASH}","size":5,"hash_alg":"sha256-tree"}}"#)
 }
 
@@ -92,8 +103,9 @@ fn address(s: &str) -> Address {
 /// `account` holding `bytes` at its first position, through M5 and below
 /// every door of the daemon's. The kernel is released on return; the daemon
 /// respawned on the directory recovers the position and reconstructs its
-/// feed row. Answers the draft's address.
-fn seed_pre_fence_draft(dir: &Path, principal: u64, account: &str, bytes: &[u8]) -> String {
+/// feed row. Answers the draft's address. The pruner suite seeds its halt
+/// mark through it, and the open-cost measure its world.
+pub(crate) fn seed_pre_fence_draft(dir: &Path, principal: u64, account: &str, bytes: &[u8]) -> String {
     let cfg = KernelConfig {
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
@@ -255,18 +267,22 @@ fn a_cell_inserted_into_a_draft_is_refused_in_p10s_form_and_nothing_commits() {
     sd.shutdown();
 }
 
-/// M-I1 (a), M-I2 (e), M-I5 (c) — THE DRAFT INSERT's ADMITTED TWIN (media
-/// lane B; the door matrix's cell 1 with the binding made real): the same
+/// M-I1 (a), M-I2 (e), M-I5 (c), M-I6 (a) — THE DRAFT INSERT's ADMITTED
+/// TWIN (the door matrix's cell 1 with the binding made real): the same
 /// cell, its hash the bytes' the caller deposited under its own lease by a
 /// PUT, is ADMITTED into the caller's draft from a bare and from a signed
 /// session — the insert commits, the draft holds the cell — while another
 /// principal's insert of the same cell into its own draft is refused
 /// `unbound_cell` (the deposit is not theirs), a cell whose `size` is not
 /// the file's length is refused `unbound_cell` (the size check at the same
-/// door), and once the lease lapses the owner's own insert is refused
-/// `lease_lapsed`, the deposit read listing the deposit no longer. The
-/// owner's shot of the draft holding the admitted cell is admitted under
-/// the live lease — the cell re-inserted into the edition.
+/// door). The owner's shot of the draft holding the admitted cell is
+/// admitted under the live lease — the cell re-inserted into the edition —
+/// and the base counts the one hash once across the two cells and the
+/// member's. Once the lease lapses the deposit read lists the deposit no
+/// longer, and the owner's own insert of the cell is ADMITTED STILL: its
+/// own cells name the hash, a reference kept by no lease — the index's arm
+/// ahead of the lease's — while a cell naming a hash it never deposited is
+/// `unbound_cell` as ever, and a stranger's `unbound_cell` too.
 #[test]
 fn a_cell_whose_hash_the_caller_deposited_under_its_own_lease_is_admitted() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -300,12 +316,425 @@ fn a_cell_whose_hash_the_caller_deposited_under_its_own_lease_is_admitted() {
     let edition = published_edition(port, &signed);
     let m = acked_addr(&op(port, Some(&signed), &publish_frame(&edition, None, Some(&d_signed), &[run(&d_signed, &format!("{d_signed}.0.1.1"), 1)])));
     assert_eq!(delivery(port, None, &m, 1, 1), json!([{"atom": cell}]), "the member holds the cell");
-    // The lease lapsed: the owner's own refusal, told apart from the
-    // binding's; the read lists the deposit no longer.
-    sd.daemon().advance_media_clock_ms(7 * 24 * 3600 * 1000);
+    // The base: one hash, counted once across the two drafts' cells and the
+    // member's re-inserted one; the live lease on a named hash pends nothing.
+    let usage = json(&blob_read(port, Some(&bare)).2);
+    assert_eq!(usage["base"].as_u64(), Some(bytes.len() as u64), "{usage}");
+    assert_eq!(usage["pending"].as_u64(), Some(0), "{usage}");
+    assert_eq!(sd.daemon().index_counts(), (3, 1, 0), "three cells over one hash, no halt mark");
+    // The lease lapsed: the read lists the deposit no longer — and the
+    // owner's own insert is admitted still, its cells naming the hash.
+    sd.daemon().advance_media_clock_ms(LEASE_MS);
     assert_eq!(deposits_of(port, &bare), vec![]);
+    expect_resp(&op(port, Some(&bare), &cell_frame(&owner_draft(port, &bare), 1, &cell, None)), "ack_addr");
+    assert_token(&op(port, Some(&bare), &cell_frame(&owner_draft(port, &bare), 1, &cell_of(b"never deposited", 15), None)), "insert", "unbound_cell");
+    assert_token(&op(port, Some(&stranger.session), &cell_frame(&d_stranger, 1, &cell, None)), "insert", "unbound_cell");
+    // The owner's shot of a draft holding the cell, the lease lapsed:
+    // admitted, the file whole at the cell's size.
+    let m = acked_addr(&op(port, Some(&signed), &publish_frame(&edition, Some((&m, 1)), Some(&d_bare), &[run(&d_bare, &format!("{d_bare}.0.1.1"), 1)])));
+    assert_eq!(delivery(port, None, &m, 1, 1), json!([{"atom": cell}]));
+    // The file gone from under the reference: the deposit is gone.
+    std::fs::remove_file(dir.path().join("blobs").join("blake3").join(blob_hex(bytes))).expect("the file removed");
     assert_token(&op(port, Some(&bare), &cell_frame(&owner_draft(port, &bare), 1, &cell, None)), "insert", "lease_lapsed");
     sd.shutdown();
+}
+
+/// ms5-R — THE READINESS REFUSAL REACHES THE INDEX's THREE READERS AND
+/// NOTHING ELSE: with the walk held, the PUT's creation, the resume and
+/// the deposit read answer `503 index_rebuilding`; the progress read and
+/// the termination are served (no upload: `404 no_upload`), every text
+/// read and write is served, `/changes` is served, and the door's own
+/// binding arm answers off the lease arm alone (`unbound_cell` for a cell
+/// no lease covers). The walk released, the creation is admitted and the
+/// deposit read answers.
+#[test]
+fn the_three_readers_refuse_index_rebuilding_and_nothing_else_does() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_walk_held(dir.path());
+    let port = sd.port();
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    assert!(!sd.daemon().index_is_ready());
+    let rebuilding = |answer: (u16, Vec<(String, String)>, Vec<u8>), what: &str| {
+        assert_eq!(answer.0, 503, "{what}: {}", String::from_utf8_lossy(&answer.2));
+        let v = json(&answer.2);
+        assert_eq!(v["error"].as_str(), Some("index_rebuilding"), "{what}: {v}");
+        assert!(v["detail"].as_str().is_some_and(|d| d.contains("retry")), "{what}: retry-class, said so: {v}");
+    };
+    let id = "0123456789abcdef0123456789abcdef";
+    rebuilding(blob_exchange_once(port, "POST", &format!("{BLOB_UPLOAD}?length=5"), Some(&bare), b"hello"), "the creation");
+    rebuilding(blob_exchange_once(port, "PATCH", &format!("{BLOB_UPLOAD}/{id}?offset=0"), Some(&bare), b"x"), "the resume");
+    rebuilding(blob_exchange_once(port, "GET", BLOB_UPLOAD, Some(&bare), b""), "the deposit read");
+    let (st, _, body) = blob_exchange_once(port, "GET", &format!("{BLOB_UPLOAD}/{id}"), Some(&bare), b"");
+    assert_eq!((st, json(&body)["error"].as_str()), (404, Some("no_upload")), "the progress read is served");
+    let (st, _, body) = blob_exchange_once(port, "DELETE", &format!("{BLOB_UPLOAD}/{id}"), Some(&bare), b"");
+    assert_eq!((st, json(&body)["error"].as_str()), (404, Some("no_upload")), "the termination is served");
+    let draft = owner_draft(port, &bare);
+    expect_resp(&insert_text(port, &bare, &draft, 1, "abc"), "ack_addr");
+    assert_eq!(text_of(port, Some(&bare), &draft, 1, 3), "abc", "a text read is served");
+    let (st, _) = get(port, "/changes?since=0");
+    assert_eq!(st, 200, "/changes is served");
+    assert_token(&op(port, Some(&bare), &cell_frame(&draft, 4, &canonical_cell(), None)), "insert", "unbound_cell");
+    assert!(!sd.daemon().index_is_ready(), "nothing above readied the index");
+    release_the_walk(&sd);
+    assert!(sd.daemon().index_is_ready());
+    let (st, _, body) = blob_read(port, Some(&bare));
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(json(&body)["base"].as_u64(), Some(0));
+    put_whole(port, &bare, b"hello");
+    sd.shutdown();
+}
+
+/// ms5-R, THE DOOR NEVER WAITS — THE WINDOW's ANSWER: a cell whose lease
+/// lapsed, named by the owner's own cell already, is refused
+/// `lease_lapsed` while the walk runs — the index arm skipped, the lease
+/// arm alone — a refusal for the request as sent, its act the re-PUT, and
+/// nothing permanent lands; the walk done, the same insert is admitted
+/// (the index arm) and the owner's shot too.
+#[test]
+fn the_binding_reads_the_lease_arm_alone_until_the_walk_completes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bytes = b"a picture whose lease lapses by the wall clock";
+    let cell = cell_of(bytes, bytes.len() as u64);
+    let d1 = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let bare = open_session(port, CLAIMANT_PRINCIPAL);
+        sd.daemon().install_media_limits(None, None, Some(500), None);
+        put_whole(port, &bare, bytes);
+        let d1 = owner_draft(port, &bare);
+        expect_resp(&op(port, Some(&bare), &cell_frame(&d1, 1, &cell, None)), "ack_addr");
+        std::thread::sleep(Duration::from_millis(700));
+        sd.shutdown();
+        d1
+    };
+    let sd = spawn_walk_held(dir.path());
+    let port = sd.port();
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let d2 = owner_draft(port, &bare);
+    let before = head_position(port);
+    assert_token(&op(port, Some(&bare), &cell_frame(&d2, 1, &cell, None)), "insert", "lease_lapsed");
+    let edition = published_edition(port, &signed);
+    let v = op(port, Some(&signed), &publish_frame(&edition, None, Some(&d1), &[run(&d1, &format!("{d1}.0.1.1"), 1)]));
+    assert_token(&v, "publish", "lease_lapsed");
+    assert_eq!(content_extent(port, Some(&bare), &d2), 0, "nothing permanent landed");
+    assert_eq!(content_extent(port, None, &edition), 0);
+    let _ = before;
+    release_the_walk(&sd);
+    assert_eq!(sd.daemon().index_counts(), (1, 1, 0), "the walk found d1's cell");
+    expect_resp(&op(port, Some(&bare), &cell_frame(&d2, 1, &cell, None)), "ack_addr");
+    let m = acked_addr(&op(port, Some(&signed), &publish_frame(&edition, None, Some(&d1), &[run(&d1, &format!("{d1}.0.1.1"), 1)])));
+    assert_eq!(delivery(port, None, &m, 1, 1), json!([{"atom": cell}]), "the owner's shot after the lapse");
+    assert_eq!(sd.daemon().index_counts(), (3, 1, 0), "the insert's and the shot's cells entered at commit");
+    sd.shutdown();
+}
+
+/// THE COMPOSITION CLAUSE (M-I5 (b); `media.md` Op inventory 1, "THE WALK's
+/// ENTRIES ARE ADDED INTO THE ONE COPY, WHICH EVERY COMMIT SINCE THAT OPEN
+/// HAS ENTERED ITS OWN INTO, AND NEVER INSTALLED IN ITS PLACE"): a cell
+/// inserted while the walk is held — admitted off the lease arm — is in
+/// the index when the walk completes, beside the cell the walk found; its
+/// file outlives its lapsed lease at the pruner's pass; and the base
+/// counts both.
+#[test]
+fn a_cell_inserted_during_the_walk_joins_the_one_copy_and_keeps_its_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let walked = b"the picture the walk finds";
+    let during = b"the picture inserted while the walk runs";
+    {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let bare = open_session(port, CLAIMANT_PRINCIPAL);
+        put_whole(port, &bare, walked);
+        put_whole(port, &bare, during);
+        assert_eq!(insert_cell(port, &bare, &owner_draft(port, &bare), walked, walked.len() as u64), "ok");
+        sd.shutdown();
+    }
+    let sd = spawn_walk_held(dir.path());
+    let port = sd.port();
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    assert_eq!(sd.daemon().index_counts(), (0, 0, 0), "held: the walk has entered nothing");
+    assert_eq!(insert_cell(port, &bare, &owner_draft(port, &bare), during, during.len() as u64), "ok", "admitted off the live lease");
+    assert_eq!(sd.daemon().index_counts(), (1, 1, 0), "the commit entered its own cell into the one copy");
+    release_the_walk(&sd);
+    assert_eq!(sd.daemon().index_counts(), (2, 2, 0), "the walk's entry joined it, nothing installed in its place");
+    let usage = json(&blob_read(port, Some(&bare)).2);
+    assert_eq!(usage["base"].as_u64(), Some((walked.len() + during.len()) as u64), "{usage}");
+    sd.daemon().advance_media_clock_ms(LEASE_MS);
+    let pass = sd.daemon().prune_now().expect("ready");
+    assert_eq!((pass.unlinked, pass.kept), (0, 2), "{pass:?}");
+    let blobs = dir.path().join("blobs").join("blake3");
+    assert!(blobs.join(blob_hex(walked)).is_file());
+    assert!(blobs.join(blob_hex(during)).is_file(), "the cell inserted during the walk keeps its file past its lease");
+    sd.shutdown();
+}
+
+/// THE BASE PROPERTY (M-I6 (a) — RECORD-DERIVED, ONCE, IDENTICAL
+/// EVERYWHERE): two opens of one data dir answer one `base` — the first
+/// built by the commits' entries, the second by the walk — and it equals
+/// the sum the test computes from the journal's own account: every
+/// document `/changes` names as touched, read back, its cells parsed, the
+/// distinct hashes summed at their size; a transclusion counts nothing and
+/// the edition's re-inserted cell counts once with its original.
+#[test]
+fn the_base_is_one_number_across_opens_and_equals_the_journals_own_count() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let a = seeded_bytes(1_001, 31);
+    let b = seeded_bytes(2_002, 32);
+    let c = seeded_bytes(3_003, 33);
+    let (first, from_the_journal) = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let bare = open_session(port, CLAIMANT_PRINCIPAL);
+        let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+        for bytes in [&a, &b, &c] {
+            put_whole(port, &bare, bytes);
+        }
+        let d1 = owner_draft(port, &bare);
+        let d2 = owner_draft(port, &bare);
+        let d3 = owner_draft(port, &bare);
+        assert_eq!(insert_cell(port, &bare, &d1, &a, 1_001), "ok");
+        assert_eq!(insert_cell(port, &bare, &d2, &a, 1_001), "ok", "a second cell over the same hash");
+        assert_eq!(insert_cell(port, &bare, &d3, &b, 2_002), "ok");
+        // `c` deposited and never placed: pending, in no base.
+        let edition = published_edition(port, &signed);
+        let m = acked_addr(&op(port, Some(&signed), &publish_frame(&edition, None, Some(&d1), &[run(&d1, &format!("{d1}.0.1.1"), 1)])));
+        // A transclusion of the member's cell into a draft mints no cell.
+        let d4 = owner_draft(port, &bare);
+        expect_resp(&copy_span(port, &bare, &d4, 1, &m, 1, 1), "ack");
+        let usage = json(&blob_read(port, Some(&bare)).2);
+        let first = usage["base"].as_u64().expect("base");
+        assert_eq!(first, 1_001 + 2_002, "{usage}");
+        assert_eq!(usage["pending"].as_u64(), Some(3_003), "{usage}");
+        // THE JOURNAL's OWN COUNT: every document `/changes` names at the
+        // owner's class — its drafts among them — read back; the cells
+        // parsed by the test's own reading of the schema.
+        let (st, body) = http(port, "GET", "/changes?since=0&limit=4096", Some(&bare), b"");
+        assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
+        let mut docs: Vec<String> = Vec::new();
+        for entry in json(&body)["changes"].as_array().expect("changes") {
+            if !matches!(entry["op"].as_str(), Some("insert" | "publish" | "copy")) {
+                continue;
+            }
+            for d in entry["docs"].as_array().expect("docs") {
+                let d = d.as_str().expect("a document").to_string();
+                if !docs.contains(&d) {
+                    docs.push(d);
+                }
+            }
+        }
+        let mut hashes: BTreeMap<String, u64> = BTreeMap::new();
+        for doc in &docs {
+            let extent = content_extent(port, Some(&bare), doc);
+            if extent == 0 {
+                continue;
+            }
+            for value in values_of(port, Some(&bare), doc, 1, extent) {
+                let Ok(v) = serde_json::from_slice::<Value>(&value) else { continue };
+                if v["type"].as_str() != Some(KIND) {
+                    continue;
+                }
+                let (Some(hash), Some(size)) = (v["hash"].as_str(), v["size"].as_u64()) else { continue };
+                hashes.insert(hash.to_string(), size);
+            }
+        }
+        let from_the_journal: u64 = hashes.values().sum();
+        assert_eq!(hashes.len(), 2, "two distinct hashes across four cells: {hashes:?}");
+        sd.shutdown();
+        (first, from_the_journal)
+    };
+    assert_eq!(first, from_the_journal, "the base is the journal's own count");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let usage = json(&blob_read(port, Some(&bare)).2);
+    assert_eq!(usage["base"].as_u64(), Some(first), "the second open's walk answers the first open's number: {usage}");
+    assert_eq!(sd.daemon().index_counts(), (4, 2, 0), "four cells — three inserts and the shot's — over two hashes");
+    assert_eq!(usage["pending"].as_u64(), Some(3_003), "{usage}");
+    sd.shutdown();
+}
+
+/// §3.1 — THE INDEX REBUILD's OPEN COST (`#[ignore]`, the gate's timing
+/// partition; REPORTED, with one interim regression bound): a world of N
+/// per-byte values and K cells — two tiers, N = 10⁶ with K = 10³ and N =
+/// 10⁷ with K = 10⁴ — seeded OVER THE WIRE: long-prose inserts of a
+/// hundred thousand bytes apiece (the request cap bounds one insert) and
+/// the cells a hundred per insert, then a checkpoint, so the reopen loads
+/// it and replays no tail. Not through the engine with the daemon
+/// stopped: every position so seeded is one the change feed holds no
+/// record of, and the daemon's next open reconstructs each from the
+/// journal — a whole-world replay apiece, a million-value checkpoint
+/// loaded per position — which at a thousand positions costs the open
+/// hours and measures the feed, not the index. Then measured: (a) the walk
+/// alone with the prefix test, over the engine's own snapshot in the test
+/// — the kept enumeration, the same walk sorted into tumbler order, and
+/// the alternative walk of every registered document's content frontier
+/// with one `value_at` per minted address, written here from M3's and
+/// M4's public reads (the mints as peeks, the point read); (b) the parse
+/// over the K composite values; (c) the time from the daemon's open to
+/// the first PUT the gate admits — the record's measure — with the open's
+/// own duration beside it, and the daemon's own report of its walk. The
+/// bound: (c) past the open under 5 s at either tier. THE GATE RUNS THE
+/// 10⁶ TIER: its profile terminates a test after ten minutes, and the 10⁷
+/// tier's seeding alone takes twenty on this build; `INDEX_TIERS=large`
+/// or `both` runs the 10⁷ tier explicitly, outside the gate.
+#[test]
+#[ignore = "timing test - gate-full only"]
+fn index_rebuild_at_open_scales_with_the_world() {
+    let tiers = std::env::var("INDEX_TIERS").unwrap_or_else(|_| "small".into());
+    let mut plans: Vec<(usize, usize)> = Vec::new();
+    if tiers != "large" {
+        plans.push((1_000_000, 1_000));
+    }
+    if tiers != "small" {
+        plans.push((10_000_000, 10_000));
+    }
+    for (n, k) in plans {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bytes = b"the one picture every cell names";
+        let cell = cell_of(bytes, bytes.len() as u64);
+        let seeding = Instant::now();
+        {
+            let sd = spawn(dir.path());
+            let port = sd.port();
+            let bare = open_session(port, CLAIMANT_PRINCIPAL);
+            put_whole(port, &bare, bytes);
+            // The prose: `n` per-byte values, a hundred thousand per insert
+            // into one draft.
+            let prose = owner_draft(port, &bare);
+            let piece = 100_000usize;
+            let text: String = (0..piece).map(|i| (b'a' + (i % 26) as u8) as char).collect();
+            let mut placed = 0usize;
+            let mut ordinal = 1u64;
+            while placed < n {
+                let take = piece.min(n - placed);
+                expect_resp(&insert_text(port, &bare, &prose, ordinal, &text[..take]), "ack_addr");
+                placed += take;
+                ordinal += take as u64;
+            }
+            // The cells: `k` of them, a hundred per insert into drafts of
+            // their own — one draft per hundred.
+            let per_insert = 100usize;
+            let mut entered = 0usize;
+            while entered < k {
+                let take = per_insert.min(k - entered);
+                let draft = owner_draft(port, &bare);
+                let values: Vec<Value> = (0..take).map(|_| json!({"atom": cell})).collect();
+                let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": values}).to_string();
+                expect_resp(&op(port, Some(&bare), &frame), "ack_addr");
+                entered += take;
+            }
+            assert_eq!(sd.daemon().index_counts().0, k, "every cell entered at its commit");
+            sd.daemon().checkpoint_now();
+            sd.shutdown();
+        }
+        println!("rebuild n={n} k={k}: seeded over the wire in {:?}", seeding.elapsed());
+        // (a) and (b), over the engine's own snapshot, the daemon stopped.
+        {
+            let opening = Instant::now();
+            let engine = Engine::open(engine_config(dir.path())).expect("engine recover");
+            let engine_open = opening.elapsed();
+            let snap = engine.kernel().snapshot();
+            let world = snap.world();
+            let prefix = format!("{{\"type\":\"{KIND}\"");
+            let walking = Instant::now();
+            let (mut values, mut naming) = (0usize, 0usize);
+            for (_, v) in world.content().iter() {
+                values += 1;
+                if v.as_bytes().starts_with(prefix.as_bytes()) {
+                    naming += 1;
+                }
+            }
+            let walk_alone = walking.elapsed();
+            // The same walk SORTED into tumbler order — the checkpoint's
+            // own order, which the kept enumeration does not promise:
+            // what a rebuild reading the entries in that order would pay
+            // beyond the walk itself.
+            let sorting = Instant::now();
+            let mut entries: Vec<_> = world.content().iter().collect();
+            entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
+            let sorted_walk = sorting.elapsed();
+            drop(entries);
+            let parsing = Instant::now();
+            let mut parsed = 0usize;
+            for (_, v) in world.content().iter() {
+                if v.as_bytes().starts_with(prefix.as_bytes()) {
+                    let parsed_value: Value = serde_json::from_slice(v.as_bytes()).expect("a cell is JSON");
+                    assert_eq!(parsed_value["type"].as_str(), Some(KIND));
+                    parsed += 1;
+                }
+            }
+            let parse = parsing.elapsed() - walk_alone.min(parsing.elapsed());
+            // THE ALTERNATIVE WALK: every registered document's content
+            // frontier — the mint asked and not staged is the chain's peek
+            // — with one `value_at` per minted address.
+            let alternative = Instant::now();
+            let (mut alt_values, mut alt_naming) = (0usize, 0usize);
+            let m3 = world.m3();
+            let content = world.content();
+            for (doc, _) in m3.documents() {
+                let Ok((next, _)) = m3.mint_content(doc) else { continue };
+                let frontier: u64 = skep_address::ordinal(next.tumbler()).to_string().parse::<u64>().expect("an ordinal") - 1;
+                for i in 1..=frontier {
+                    let at = elem_addr(ElemPos { doc: doc.clone(), subspace: content_subspace(), ordinal: Nat::from(i) }).expect("a content address");
+                    if let Some(v) = content.value_at(at.tumbler()) {
+                        alt_values += 1;
+                        if v.as_bytes().starts_with(prefix.as_bytes()) {
+                            alt_naming += 1;
+                        }
+                    }
+                }
+            }
+            let alt_walk = alternative.elapsed();
+            println!(
+                "rebuild n={n} k={k}: engine open {engine_open:?}; (a) the kept walk over {values} values with the prefix test {walk_alone:?} ({naming} naming the kind), the same walk sorted into tumbler order {sorted_walk:?}; (b) the parse of {parsed} composite values {parse:?}; the alternative frontier walk over {alt_values} values {alt_walk:?} ({alt_naming} naming the kind)"
+            );
+            assert_eq!(naming, k);
+            assert_eq!(alt_naming, k);
+        }
+        // (c) the time from open to the first PUT the gate admits — the
+        // spawn that does not wait for the walk, so the clock below runs
+        // from the open's return, the session's open inside it.
+        let opening = Instant::now();
+        let sd = spawn_not_waiting_for_the_index(dir.path());
+        let open_took = opening.elapsed();
+        let after_open = Instant::now();
+        let port = sd.port();
+        let bare = open_session(port, CLAIMANT_PRINCIPAL);
+        let mut refusals = 0usize;
+        loop {
+            let (st, _, body) = blob_exchange_once(port, "POST", &format!("{BLOB_UPLOAD}?length=3"), Some(&bare), b"abc");
+            if st == 200 {
+                break;
+            }
+            assert_eq!(st, 503, "{}", String::from_utf8_lossy(&body));
+            refusals += 1;
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let to_first_put = after_open.elapsed();
+        let report = sd.daemon().index_rebuild_report().expect("the walk completed");
+        println!(
+            "rebuild n={n} k={k}: (c) the daemon's open (the engine's recovery, the feed, the fold) {open_took:?}; from the open's return to the first admitted PUT {to_first_put:?} after {refusals} index_rebuilding refusals; the daemon's walk: {} values, {} cells, {} halt marks, {:?} ({:?} past the prefix test)",
+            report.values, report.cells, report.halts, report.walk, report.parse
+        );
+        assert_eq!(report.cells, k);
+        assert!(to_first_put < Duration::from_secs(5), "the interim bound: (c) < 5 s at n={n}, measured {to_first_put:?}");
+        sd.shutdown();
+    }
+}
+
+/// The daemon's own kernel configuration, for the engine opened on a data
+/// dir with the daemon stopped — the open-cost measure's own walks.
+fn engine_config(dir: &Path) -> KernelConfig {
+    KernelConfig {
+        durability: Durability::Fsync {
+            journal_path: dir.to_path_buf(),
+            retain_checkpoints: 2,
+            burned_seq: BurnedSeqPolicy::Rollback,
+        },
+        checkpoint: CheckpointPolicy::EveryN(1024),
+        salt: SaltSource::Seeded(0),
+    }
 }
 
 /// M-I1 (a) — THE DECLARED DEPOSIT AT A PUBLISHED TARGET answers
@@ -355,19 +784,22 @@ fn a_declared_deposit_of_a_cell_at_a_published_target_answers_published_target_a
     sd.shutdown();
 }
 
-/// M-I1 (a), (c) — THE SHOT'S OWNER TEST, ω exact, and the fence-only P10
-/// face at the shot. Over a pre-fence journal holding three drafts — the
-/// owner's with a cell, the owner's with a value under an unknown schema,
-/// a sub-account's with a cell — a GRANTEE's, an ANCESTOR's and a
-/// DESCENDANT's shot naming the owner's draft as its staging draft, each
-/// reading it, is refused `not_owner` naming the draft (nothing minted:
-/// their targets stay empty); the OWNER's own shot is refused `unbound_cell`
-/// — no store exists, P10's form at the shot — and `unknown_cell_schema`
-/// for the unknown form; a stranger who cannot read the draft meets the
-/// store's `withheld` attested and the check's `attestation_required`
-/// unattested, BEFORE this door; and prose or a def in the same position
-/// takes the ordinary answer — the reader's shot lands. The whole armed set
-/// lands together: every refusal commits nothing.
+/// M-I1 (a), (c) — THE SHOT'S OWNER TEST, ω exact, and the binding at the
+/// shot. Over a pre-fence journal holding three drafts — the owner's with a
+/// cell, the owner's with a value under an unknown schema, a sub-account's
+/// with a cell — a GRANTEE's, an ANCESTOR's and a DESCENDANT's shot naming
+/// the owner's draft as its staging draft, each reading it, is refused
+/// `not_owner` naming the draft (nothing minted: their targets stay
+/// empty); the OWNER's own shot is refused `lease_lapsed` — the walk at
+/// open indexed the pre-fence cell, so the owner's own cells name the
+/// hash, a reference whose file is not on disk: the deposit is gone and
+/// the act is the PUT — and `unknown_cell_schema` for the unknown form,
+/// entered as a halt mark and counted in no base; a stranger who cannot
+/// read the draft meets the store's `withheld` attested and the check's
+/// `attestation_required` unattested, BEFORE this door; and prose or a def
+/// in the same position takes the ordinary answer — the reader's shot
+/// lands. The whole armed set lands together: every refusal commits
+/// nothing.
 #[test]
 fn a_readers_shot_naming_a_draft_holding_a_cell_is_refused_not_owner_and_the_owners_own_in_p10s_form() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -418,11 +850,16 @@ fn a_readers_shot_naming_a_draft_holding_a_cell_is_refused_not_owner_and_the_own
     let v = op(port, Some(&sub_signed), &publish_frame(&sub.doc1, None, Some(&d_unknown), &cell_run(&d_unknown)));
     assert_not_owner(&v, "publish", &d_unknown);
 
-    // Arms 3 and 4 — the owner's own shot.
+    // Arms 5 and 4 — the owner's own shot: its own pre-fence cell names the
+    // hash (the index's arm), the file is not there — the deposit is gone;
+    // the unknown form halts, and stands in the index as a halt mark.
     let v = op(port, Some(&signed), &publish_frame(&edition, None, Some(&d_cell), &cell_run(&d_cell)));
-    assert_token(&v, "publish", "unbound_cell");
+    assert_token(&v, "publish", "lease_lapsed");
     let v = op(port, Some(&signed), &publish_frame(&edition, None, Some(&d_unknown), &cell_run(&d_unknown)));
     assert_token(&v, "publish", "unknown_cell_schema");
+    assert_eq!(sd.daemon().index_counts(), (2, 1, 1), "the two pre-fence cells over one hash, one halt mark");
+    let usage = json(&blob_read(port, Some(&bare)).2);
+    assert_eq!(usage["base"].as_u64(), Some(5), "the pre-fence cell counts at its size; the halt mark counts nothing: {usage}");
 
     // Ahead of the door — the unreadable draft: the store's `withheld`
     // attested over a guess at the bytes, the check's `attestation_required`

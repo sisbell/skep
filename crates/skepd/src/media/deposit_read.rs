@@ -1,13 +1,15 @@
-//! THE DEPOSIT READ (media lane B; `media.md` Op inventory 1, "THE DEPOSITOR
-//! CAN READ THEIR OWN DEPOSIT RECORD, AND THE RESUME NAMES ONE ACT PER
-//! RESIDUE"; "IT ANSWERS THE REQUESTER's OWN USAGE BESIDE THEM"; the
-//! register M-I5 (c), M-I2 (e)): one read of the asking principal's OWN
-//! records — its standing deposits (hash, size, expiry; a live lease over a
-//! file that is not there marked LAPSED, at this read as at the `insert`),
-//! its standing uploads (identifier, the offset a resume continues from,
-//! the length, the expiry), its usage as two figures (the BASE, zero at
-//! lane B — the cell index is lane C's — and its PENDING bytes), and the
-//! limits record's address as installed, or `null` where none is.
+//! THE DEPOSIT READ (`media.md` Op inventory 1, "THE DEPOSITOR CAN READ
+//! THEIR OWN DEPOSIT RECORD, AND THE RESUME NAMES ONE ACT PER RESIDUE"; "IT
+//! ANSWERS THE REQUESTER's OWN USAGE BESIDE THEM"; the register M-I5 (c),
+//! M-I2 (e), M-I6 (a), (b)): one read of the asking principal's OWN records
+//! — its standing deposits (hash, size, expiry; a live lease over a file
+//! that is not there marked LAPSED, at this read as at the `insert`), its
+//! standing uploads (identifier, the offset a resume continues from, the
+//! length, the expiry), its usage as two figures — the BASE, the cell
+//! index's number for its account (the distinct hashes its cells name, at
+//! their size), and its PENDING bytes (its live leases on hashes none of
+//! its cells names, and its uploads' bytes received) — and the limits
+//! record's address as installed, or `null` where none is.
 //!
 //! NO SURFACE OF ITS OWN (m-Q10, RULED): it is the resumable PUT's own
 //! state made readable, served on the upload's path family (`GET
@@ -15,9 +17,11 @@
 //! delta. It is keyed to the asking principal's own record and never to a
 //! file's presence beyond that record's live lease: it lists no deposit of
 //! another's, and answers "this board holds these bytes" of nothing a
-//! principal did not deposit itself. The sweep-3 subtraction of this read
-//! was DECLINED (sm-Q10): the records exist for the resume and the binding,
-//! and the listing is this one function over them.
+//! principal did not deposit itself. Its base is one of the index's three
+//! readers: the route refuses it `index_rebuilding` until the walk at open
+//! completes (ms5-R). The sweep-3 subtraction of this read was DECLINED
+//! (sm-Q10): the records exist for the resume and the binding, and the
+//! listing is this one function over them.
 
 use serde_json::Value;
 use skep_namespace::PrincipalId;
@@ -25,7 +29,8 @@ use skep_namespace::PrincipalId;
 use super::gate::MediaGate;
 use crate::codec::obj;
 
-/// The read, as its JSON object.
+/// The read, as its JSON object. The caller has read the index's
+/// readiness: the base here is the index's number.
 pub(crate) fn deposit_read(gate: &MediaGate, principal: PrincipalId) -> Value {
     let key = MediaGate::key(principal);
     let now = gate.now_ms();
@@ -60,12 +65,11 @@ pub(crate) fn deposit_read(gate: &MediaGate, principal: PrincipalId) -> Value {
         .collect();
     let limits = gate.limits();
     obj(vec![
-        // The base is journal-derived and zero until the cell index (lane
-        // C) counts the account's distinct hashes.
-        ("base", Value::Number(0u64.into())),
+        // Record-derived: the index's one number for the account.
+        ("base", Value::Number(gate.index().base(principal).into())),
         ("deposits", Value::Array(deposits)),
         ("limits", limits.address.map_or(Value::Null, Value::String)),
-        ("pending", Value::Number(store.pending_bytes(&key, now).into())),
+        ("pending", Value::Number(gate.own_pending(principal, now).into())),
         ("uploads", Value::Array(uploads)),
     ])
 }

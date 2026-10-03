@@ -628,7 +628,7 @@ fn doc_states_the_media_cell_and_its_door() {
         "this picture's bytes were not deposited here under your account",
         "the face now names the deposit the cell lacks",
         "INTERIM PINS",
-        "What lane B does NOT build, by name",
+        "What this build does NOT carry, by name",
     ] {
         assert!(media.contains(fact), "§Media says {fact:?}");
     }
@@ -790,7 +790,8 @@ fn doc_states_the_upload_its_pins_and_its_refusals() {
         "| 413 | `payload_too_large` |",
         "| 507 | `deposit_refused` |",
         "| 500 | `blob_io` |",
-        "{\"base\":0,\"deposits\":[…],\"limits\":null,\"pending\":<bytes>,\"uploads\":[…]}",
+        "| 503 | `index_rebuilding` |",
+        "{\"base\":<bytes>,\"deposits\":[…],\"limits\":null,\"pending\":<bytes>,\"uploads\":[…]}",
         "`credential_refused`, `detail` `lease_lapsed`",
         "a hash this principal did not deposit under its own lease",
         "NO ANSWER OF THE UPLOAD SAYS WHETHER THE FILE WAS ALREADY HERE",
@@ -817,7 +818,7 @@ fn doc_states_the_upload_its_pins_and_its_refusals() {
     let transport = prose("\n### Transport", &["\n### Identity"]);
     assert!(transport.contains("**64 MiB** on the blob upload"), "§Transport names the family's cap");
     let statuses = prose("\n### HTTP status codes", &["\n### Determinism"]);
-    for name in ["malformed_blob", "upload_refused", "no_upload", "upload_held", "upload_offset", "upload_length", "deposit_refused", "blob_io"] {
+    for name in ["malformed_blob", "upload_refused", "no_upload", "upload_held", "upload_offset", "upload_length", "deposit_refused", "blob_io", "index_rebuilding"] {
         assert!(statuses.contains(&format!("`{name}`")), "§HTTP status codes lists {name}");
     }
     let fixture: Value = serde_json::from_str(
@@ -831,6 +832,56 @@ fn doc_states_the_upload_its_pins_and_its_refusals() {
     assert_eq!(fixture["pins"]["lease_interval_ms"].as_u64(), Some(7 * 24 * 3600 * 1000));
     assert_eq!(fixture["pins"]["lease_horizon_ms"].as_u64(), Some(30 * 24 * 3600 * 1000));
     assert_eq!(fixture["refusals"]["deposit_refused"].as_u64(), Some(507));
+    assert_eq!(fixture["refusals"]["index_rebuilding"].as_u64(), Some(503));
+}
+
+/// THE CELL INDEX, THE READINESS REFUSAL AND THE PRUNER (the register
+/// M-I5 (b), (f), M-I6 (a), (b); the rulings ms5-R and ms5-T4): §Media
+/// states the index — what it holds, the entry at commit and the walk at
+/// open, the composition clause, the halt mark — the readiness token and
+/// its exactly three readers, the pruner's pass with its arm, its grain,
+/// its halts and its cadence, the deposit read's two figures, the own
+/// scope's two terms, the binding's index-first order, the replace's aside
+/// and its deferred unlink; and the status table carries the token. The
+/// daemon's answers are pinned in `media.rs`, `pruner.rs`, `blob_routes.rs`
+/// and `hazard.rs`; this pins that the contract says so.
+#[test]
+fn doc_states_the_cell_index_the_readiness_refusal_and_the_pruner() {
+    let media = prose("\n### Media — the reference cell and its door", &["\n### Links (writes)"]);
+    for fact in [
+        "**The cell index.**",
+        "ONE DERIVED INDEX SERVES THE BASE AND THE PRUNER's",
+        "ENTERED AT EVERY COMMIT THAT MINTS A",
+        "REBUILT WHOLE AT EVERY OPEN from the world replayed",
+        "never from the retained journal alone",
+        "THE COMPOSITION",
+        "never installed in its place",
+        "THE HALT MARK",
+        "**The readiness refusal**",
+        "READY FOR THE INDEX's THREE READERS AND FOR NOTHING ELSE",
+        "`index_rebuilding`",
+        "and the pruner's pass does",
+        "**The pruner.**",
+        "(a) THE EXPIRED",
+        "(b) THE HALTS",
+        "(c) THE UNREFERENCED FILES",
+        "UNDER THE CREDENTIAL LOCK's EXCLUSIVE ARM, ONE FILE PER",
+        "`blake3` alone",
+        "one hour",
+        "THE BINDING READS THE CELL INDEX FIRST",
+        "is a REFERENCE, kept by no",
+        "the principal's BASE plus its PENDING BYTES",
+        "LINKED ASIDE",
+        "`.retired-<hex>-<n>`",
+        "THE ASIDE IS UNLINKED AFTER THE",
+        "the time an answer takes is part of",
+        "the readiness token, `index_rebuilding`, 503, retry-class",
+        "the pruner's cadence, one hour between passes",
+    ] {
+        assert!(media.contains(fact), "§Media says {fact:?}");
+    }
+    let statuses = prose("\n### HTTP status codes", &["\n### Determinism"]);
+    assert!(statuses.contains("| 503 | `index_rebuilding` |"), "§HTTP status codes carries the token at 503");
 }
 
 /// Every `op_at` example is the strict `{"at", "frame"}` envelope around a

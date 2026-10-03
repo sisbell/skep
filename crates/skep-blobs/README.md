@@ -20,8 +20,20 @@ story:
   where the designation directory is new. Nothing names a file before it
   is durable, directory entry and all. The disposition on a hash already
   present is REPLACE, never a no-op, so a file holding the wrong bytes
-  under the right name is repaired by a re-PUT of the right ones; and no
-  answer of the store says whether the file was already here.
+  under the right name is repaired by a re-PUT of the right ones; the
+  replaced instance is first hard-linked to an aside name
+  (`.retired-<hex>-<n>`) so the rename frees nothing, and unlinked by
+  the deferred step after the answer (`retire_asides`) — open removes
+  any aside a crash leaves; and no answer of the store says whether the
+  file was already here, by its bytes or by its time.
+- **The pruner's reads** — the designation directories, the files at hex
+  names, the asides, whether ANY key holds a live lease on a file
+  (`any_live_lease`), the expired uploads and their removal
+  (`expired_uploads`, `expire_upload`), the unlink of one file
+  (`unlink_blob`) — each one act, so a daemon's pass holds its own lock
+  around exactly one; and the pending bytes counted under a predicate
+  (`pending_bytes_of`, `pending_total_of`), so a daemon leaves out of a
+  key's pending bytes the leases its own cells already count.
 - **The partials**, `blobs/<designation>/.upload-<identifier>` — the
   bytes received so far of one standing upload. Fsynced at a grain of
   1 MiB, the record's offset written after each sync, so a byte counts as

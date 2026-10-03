@@ -63,10 +63,12 @@ pub(crate) fn debug_assert_content_address(addr: &Address, site: &str) {
 /// checkpoints (no skip-serialize, so the engine's `rebuild_derived` is
 /// identity for M4).
 ///
-/// `im::HashMap`, not `OrdMap`: the entire query surface is point membership
-/// and point value-at — nobody needs ordered iteration, range, or prefix
-/// scans (the allocator's max-under-prefix reads M3's own frontier, never
-/// M4 — Conflicts #3), so only `Eq + Hash` is relied on for the READS.
+/// `im::HashMap`, not `OrdMap`: the query surface is point membership and
+/// point value-at, plus ONE enumeration — [`ContentStore::iter`], the walk the
+/// daemon's cell-index rebuild makes at open, which reads every entry once
+/// and asks no order of them — and nobody needs range or prefix scans (the
+/// allocator's max-under-prefix reads M3's own frontier, never M4 —
+/// Conflicts #3), so only `Eq + Hash` is relied on for the READS.
 /// Persistent (`im`) for the commit path: each `transact` produces a *new*
 /// `World` and outstanding snapshots pin old ones —
 /// [`apply_write`](ContentStore::apply_write) is O(log₃₂ n) and old/new maps
@@ -170,6 +172,23 @@ impl ContentStore {
     /// `dom(C) = ∅` — diagnostics only (§B).
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    /// THE ONE ENUMERATION of the slice: every `(address, value)` pair it
+    /// holds, each exactly once, in the map's own order — a function of the
+    /// hasher and the platform's word size, not of the contents (which is why
+    /// the checkpoint's `Serialize` above sorts, and this does not). Its one
+    /// consumer is the daemon's cell-index rebuild at open, which walks the
+    /// world's whole content once over a pinned snapshot, reading every
+    /// value's leading bytes and asking no order of them: a sort of the
+    /// entry set would cost that walk more than the walk itself at the
+    /// scale it exists for, and would buy a determinism no reader of the
+    /// index can observe. Over a pinned snapshot the walk is immutable while
+    /// commits proceed on later roots (the persistent map's structural
+    /// sharing). Exact-size, as the map's own walk is. No range, no prefix
+    /// and no ordered form is offered beside it; the reads stay point reads.
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&Tumbler, &Val)> + '_ {
+        self.map.iter()
     }
 }
 

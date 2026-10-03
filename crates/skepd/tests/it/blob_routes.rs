@@ -177,7 +177,7 @@ fn judge(step: &Value, name: &str, scene: &mut Scene, status: u16, body: &[u8], 
         assert_eq!(v["pending"].as_u64(), Some(pending), "{name}: {text}");
     }
     if let Some(base) = expect["base"].as_u64() {
-        assert_eq!(v["base"].as_u64(), Some(base), "{name}: the base at lane B is zero: {text}");
+        assert_eq!(v["base"].as_u64(), Some(base), "{name}: the base is the index's number: {text}");
     }
     if let Some(bind) = step["bind"].as_str() {
         let id = v["upload"].as_str().unwrap_or_else(|| panic!("{name}: binding {bind} needs an identifier: {text}"));
@@ -320,11 +320,12 @@ fn run_vector(vector: &Value) {
     sd.shutdown();
 }
 
-/// THE SEVEN CLAUSES AS VECTORS (M-I2 (e); M-I5 (a), (c); M-I6 (a) at its
-/// zero base, (b), (e), (f)): every vector of `uploads.json` runs against
-/// a fresh claimed board and meets its expectations step by step; the
-/// fixture pins the same constants the daemon does, and names every
-/// refusal the family answers with its status.
+/// THE SEVEN CLAUSES AS VECTORS (M-I2 (e); M-I5 (a), (c); M-I6 (a), (b),
+/// (e), (f)): every vector of `uploads.json` runs against a fresh claimed
+/// board and meets its expectations step by step — the deposit read's
+/// `base` the index's number, moving as a cell lands; the fixture pins the
+/// same constants the daemon does, and names every refusal the family
+/// answers with its status, the readiness refusal among them.
 #[test]
 fn the_seven_clauses_as_vectors_over_the_wire() {
     let fixture = fixture();
@@ -349,6 +350,7 @@ fn the_seven_clauses_as_vectors_over_the_wire() {
         ("payload_too_large", 413),
         ("deposit_refused", 507),
         ("blob_io", 500),
+        ("index_rebuilding", 503),
     ] {
         assert_eq!(refusals[name].as_u64(), Some(status), "{name}");
     }
@@ -668,14 +670,14 @@ fn put_answer_latency_does_not_separate_replace_from_create() {
     sd.shutdown();
 }
 
-/// (4) AN EXPIRED UPLOAD's PARTIAL GOES AT THE NEXT OPEN (M-I6 (c); until
-/// lane C's pruner removes it while the daemon serves): past its expiry
-/// the identifier answers no upload and the bytes count nothing; the
-/// partial file stands until the daemon reopens, when the reconciliation
-/// retires the record and removes it; a standing upload survives the
-/// reopen with its offset. The expiry here is the WALL CLOCK's — an
-/// installed record's interval of one millisecond — since a restart keeps
-/// no test clock.
+/// (4) AN EXPIRED UPLOAD's PARTIAL GOES AT THE NEXT OPEN (M-I6 (c); the
+/// pruner's pass removes one while the daemon serves, `pruner.rs`): past
+/// its expiry the identifier answers no upload and the bytes count
+/// nothing; the partial file stands until a pass or the daemon's reopen,
+/// when the reconciliation retires the record and removes it; a standing
+/// upload survives the reopen with its offset. The expiry here is the
+/// WALL CLOCK's — an installed record's interval of one millisecond —
+/// since a restart keeps no test clock.
 #[test]
 fn an_expired_uploads_partial_goes_at_the_next_open_and_a_standing_one_survives_it() {
     let dir = tempfile::tempdir().expect("tempdir");

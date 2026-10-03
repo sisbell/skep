@@ -799,6 +799,7 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 400    | `upload_length`             | the request's bytes would pass the upload's declared length; nothing taken (§Media) |
 | 507    | `deposit_refused`           | the gate refused the deposit: `scope` names `own`, `venue` or `floor`, `ended` whether the upload was ended (refused as the body was written) or kept (refused before it), `offset` the bytes received (§Media) |
 | 500    | `blob_io`                   | the blob store refused I/O; the upload stands at its last durable point (§Media) |
+| 503    | `index_rebuilding`          | the cell index is being rebuilt from the board after an open, and this request is one of its three readers — the blob upload's creation or resume, or the deposit read; retry shortly (§Media) |
 | 410    | `history_reclaimed`         | the position (`/op-at`) or the `since` fence (`/changes`) predates retained history (carries `floor` when known) |
 | 503    | `history_busy`              | all historical-reconstruction permits (`/op-at`, `/dump?at`, `/chain?at`) are in use; retry shortly |
 | 503    | `scan_busy`                 | all class-scan permits are in use — a `find_links_ftt`/`count_ftt`/`window_ftt` on `/op` whose four-set constrains `ty` alone (§Link discovery reads); carries `op`; retry shortly |
@@ -2452,10 +2453,12 @@ build carries is media's WRITE-PATH HALF, fenced before the first served
 board (the media record's §The publication seam; STOP-2) — the daemon
 PARSES the cell at every `insert` and every `publish`, by one parser
 under one rule, and admits one only where its hash is a deposit of the
-caller's own — and, from lane B, THE UPLOAD: the resumable PUT, the blob
-store under `blobs/` in the data dir (the files, the partials, the upload
-records and the lease log), the gate's three scopes, and the deposit
-read. No index and no fetch route exist yet (lanes C and D): nothing here
+caller's own or a reference its own cells already make — THE UPLOAD: the
+resumable PUT, the blob store under `blobs/` in the data dir (the files,
+the partials, the upload records and the lease log), the gate's three
+scopes, and the deposit read — and, beside them, THE CELL INDEX the base
+and the pruner read, THE READINESS REFUSAL of its three readers, and THE
+PRUNER's pass (each below). No fetch route exists yet: nothing here
 serves a byte.
 
 **The cell's schema (v1).** ONE JSON object, three members in THIS
@@ -2521,11 +2524,20 @@ every value naming the kind, in this order:
 
 A cell naming a hash this principal holds a LIVE lease on, over a whole
 file whose length the cell's `size` names, is ADMITTED: the insert commits
-and the draft holds the cell. The owner's own `publish` of a draft holding
-a cell asks the binding again, so a lease lapsed between the insert and
-the shot answers `lease_lapsed` there until the bytes are re-PUT (lane C's
-cell index re-reads that arm: a hash the requester's own cells already
-name is a reference, kept by no lease).
+and the draft holds the cell. THE BINDING READS THE CELL INDEX FIRST: a
+hash the requester's OWN cells already name is a REFERENCE, kept by no
+lease — admitted where the file is on disk whole at the cell's `size`,
+`unbound_cell` where the file is whole at the size those cells name and
+this cell contradicts it (the size check), `lease_lapsed` where the file
+is absent or not whole (the deposit is gone; the act is the PUT) — and
+only then the principal's own lease. So the owner's own `publish` of a
+draft holding an admitted cell is admitted after the lease lapsed, the
+cell's file standing, and a re-PUT of a file the account's cells name is
+charged nothing at its own scope. Until the index's rebuild at open
+completes (THE READINESS REFUSAL, below) the index arm is skipped and the
+lease arm alone decides: the door is not one of the index's readers and
+never waits; a cell refused `lease_lapsed` in that window is a refusal
+for the request as sent, its act the re-PUT, and nothing permanent lands.
 
 The faces (PUB-6.7), the client's to render, the wire carrying the token:
 
@@ -2574,7 +2586,7 @@ nothing to the journal and takes no `Serial`:
 | `PATCH /blob/upload/<id>?offset=<K>` | THE RESUME: the bytes from `K`, which must be the record's offset; `K` plus the body's length at most `N`; the own scope on what the upload leaves past `K` BEFORE the body (refused there, the upload is kept) | the record where the body stops short; the finish's answer — `200 {"designation":"blake3","hash":"<64 hex>","size":N}` — where the offset reaches the length, after the file is durable, the lease synced and the record retired |
 | `GET /blob/upload/<id>` | THE PROGRESS: the upload's record — the offset a resume continues from | `200 {"expires":…,"length":N,"offset":K,"upload":"<id>"}` |
 | `DELETE /blob/upload/<id>` | THE TERMINATION: the upload ended, nothing kept | `204` |
-| `GET /blob/upload` | THE DEPOSIT READ — no surface of its own (m-Q10): the requester's own standing deposits (hash, size, expiry, and `lapsed` where a live lease stands over a file that is not there or not whole), its standing uploads (identifier, offset, length, expiry), its usage as two figures — the BASE, zero in this build (the cell index is lane C's) and its PENDING bytes — and the limits record's address as installed | `200 {"base":0,"deposits":[…],"limits":null,"pending":<bytes>,"uploads":[…]}` |
+| `GET /blob/upload` | THE DEPOSIT READ — no surface of its own (m-Q10): the requester's own standing deposits (hash, size, expiry, and `lapsed` where a live lease stands over a file that is not there or not whole), its standing uploads (identifier, offset, length, expiry), its usage as two figures — the BASE, the cell index's number for its account (the distinct hashes its cells name, at their size), and its PENDING bytes (its live leases on hashes none of its cells names, and its uploads' bytes received) — and the limits record's address as installed; refused `503 index_rebuilding` until the index's rebuild at open completes | `200 {"base":<bytes>,"deposits":[…],"limits":null,"pending":<bytes>,"uploads":[…]}` |
 
 The seven clauses, as the wire keeps them: (1) THE IDENTIFIER — 128 bits
 from the OS per upload, 32 lowercase hex, answered before any body byte
@@ -2589,7 +2601,7 @@ below, the record's offset written after it, so the offset a resume
 continues from, the `offset` the read answers and the byte the expiry is
 fixed from are one figure. (4) REMOVED ON EXPIRY — past its expiry the
 identifier answers `no_upload` and the bytes count nothing; the partial is
-removed by the pruner's pass (lane C) and, until then, at the next open.
+removed by the pruner's pass (below) and at the next open.
 (5) A STREAM CLAIMS ITS UPLOAD FIRST — a request naming an upload another
 stream holds is `409 upload_held` while it is held; a resume stating an
 offset other than the record's is `409 upload_offset` carrying the
@@ -2618,13 +2630,17 @@ The family's refusals, each a transport refusal (no `Op` ran):
 | 413 | `payload_too_large` | the declared `length`, or a request's `Content-Length`, past the per-file cap |
 | 507 | `deposit_refused` | the gate: `scope`, `ended`, `offset` |
 | 500 | `blob_io` | the store refused I/O; the upload stands at its last durable point |
+| 503 | `index_rebuilding` | the creation, the resume or the deposit read while the cell index is being rebuilt from the board after an open — retry-class, as `history_busy` is; the progress read, the termination and every other request are served meanwhile |
 
 THE GATE's THREE SCOPES, in the order read — the requester's own record
-first: THE OWN SCOPE, the principal's base plus its pending bytes against
-the venue's per-account limit — at this build's ZERO BASE the pending
-bytes alone — refused on the declared total before the body and
-re-checked as the body is written; THE VENUE TOTAL, the sum of every
-account's own scope, record-derived and never the directory's bytes,
+first: THE OWN SCOPE, the principal's BASE plus its PENDING BYTES against
+the venue's per-account limit — the base the cell index's number for its
+account, the pending bytes its live leases on hashes none of its cells
+names plus its uploads' bytes received, so a hash a cell names moves from
+the pending to the base and the scope is one number either way — refused
+on the declared total before the body and re-checked as the body is
+written; THE VENUE TOTAL, the sum of every account's own scope — every
+base, every pending — record-derived and never the directory's bytes,
 enforced ONLY as the body is written; THE FLOOR, the volume's free space
 held above the floor below, read off the host and showing no figure. The
 refusal names the scope and reports no headroom. THE LIMITS RECORD —
@@ -2636,16 +2652,85 @@ per-account limit, no venue total, the lease interval below, the route's
 cap, no address — the startup log names the record in force or that none
 is, and the deposit read echoes its address or `null`.
 
-THE ORDER OF ONE FINISH (M-I5 (a)): the partial fsynced, RENAMED onto
-`blobs/<designation>/<hex>` — REPLACE where the name exists, never a
-no-op, so a file holding the wrong bytes under the right name is repaired
-by a re-PUT of the right ones — that directory fsynced, `blobs/` itself
-where the designation directory is new, THEN the lease appended and
-synced, THEN the record retired, THEN the answer; under the credential
-lock's READ arm from the rename through the lease's sync, and never
-`Serial`. NO ANSWER OF THE UPLOAD SAYS WHETHER THE FILE WAS ALREADY HERE:
-the status, the body and the completion are one whether or not the file
-existed, and a resume is keyed to the identifier alone.
+THE ORDER OF ONE FINISH (M-I5 (a)): the partial fsynced; where the name
+already holds a file, that file LINKED ASIDE — a second name no hex
+spells, `.retired-<hex>-<n>` in the same directory, so the rename below
+frees no blocks; the partial RENAMED onto `blobs/<designation>/<hex>` —
+REPLACE where the name exists, never a no-op, so a file holding the wrong
+bytes under the right name is repaired by a re-PUT of the right ones —
+that directory fsynced, `blobs/` itself where the designation directory
+is new, THEN the lease appended and synced, THEN the record retired, THEN
+the answer; under the credential lock's READ arm from the rename through
+the lease's sync, and never `Serial`. THE ASIDE IS UNLINKED AFTER THE
+ANSWER — the replaced instance's retirement is off the answer's path: the
+transport unlinks it once the reply is written, the pruner's pass removes
+one that step did not reach, and the next open removes every one a crash
+left; nothing names an aside, so no reader of the directory sees it. NO
+ANSWER OF THE UPLOAD SAYS WHETHER THE FILE WAS ALREADY HERE: the status,
+the body and the completion are one whether or not the file existed, and
+so is the time the answer takes — the time an answer takes is part of
+what it says — and a resume is keyed to the identifier alone.
+
+**The cell index.** ONE DERIVED INDEX SERVES THE BASE AND THE PRUNER's
+REFERENCE TEST BOTH: per hash — the designation and the hex — the cells
+naming it; per account — ω of the cell's document, the principal seated
+at it — the DISTINCT hashes its cells name, each at its size, whose sum
+is THE BASE: record-derived, replayable, one number on every open and
+every mirror, a published picture's original and the cell its edition
+re-inserts counting once, a transclusion counting nothing. Held in the
+daemon's memory and in no store. ENTERED AT EVERY COMMIT THAT MINTS A
+CELL, whichever op minted it — an `insert`'s values, the values a
+`publish` re-inserts as fresh identity (`copy` and `version` mint none)
+— under the commit's own serialization guard, before it drops, off the
+post-commit snapshot. REBUILT WHOLE AT EVERY OPEN from the world replayed
+there — every value, a checkpoint's below the retained journal among them
+— and never from the retained journal alone: a thread walks an immutable
+snapshot of the content store while every other request is served, each
+value put through a cheap prefix test (the canonical opening,
+`{"type":"<the kind's address>"`) before any parse. THE COMPOSITION
+CLAUSE: the walk's entries are ADDED INTO THE ONE COPY the commits since
+the open have entered their own into, and never installed in its place —
+an entry is idempotent per cell address, a cell being permanent, so a
+cell committed during the walk is in the index when the walk completes
+and its file outlives its lease. THE HALT MARK: a value naming the kind
+that parses under no schema this build pins is entered as a halt mark —
+its address and the fault — and counts in no base; the door refuses such
+a value at its own insert, so one stands only on a board another build
+wrote, and while it stands the pruner's unlink pass halts, naming it, and
+never reads it as absent (DOCTRINE D13's carve-out, ms5-T4).
+
+**The readiness refusal** (ms5-R, the narrow reading): the daemon is NOT
+READY FOR THE INDEX's THREE READERS AND FOR NOTHING ELSE. Until the walk
+at open completes, the blob upload's creation and resume (their own scope
+reads the base) and the deposit read (its `base`) are answered `503
+{"error":"index_rebuilding","detail":"…"}` — retry-class, as
+`history_busy` answers past its permit pool — and the pruner's pass does
+not start; the progress read and the termination, every text read and
+write, `/changes`, the door's own binding arm — every other request — is
+served throughout (PATTERNS P22: a derived structure's loss is a slower
+answer, never an outage). The readiness is monotone: once ready, ready
+for the life of the process.
+
+**The pruner.** THE PASS runs once the index is ready and then on a
+cadence — one hour (the pin below) — and does, in order: (a) THE EXPIRED
+PARTIALS — every upload record past its expiry and held by no stream is
+retired and its partial removed, off the record's expiry and the hold,
+reading no reference; (b) THE HALTS — a designation directory under
+`blobs/` outside the set this build pins (`blake3` alone), or a halt mark
+standing in the index, halts the unlink pass before its first unlink,
+with one operator line naming the directory or the schema, the partials'
+removal running regardless and the halt re-evaluated at the next pass;
+(c) THE UNREFERENCED FILES — for each file at a hex name under the pinned
+designation, UNDER THE CREDENTIAL LOCK's EXCLUSIVE ARM, ONE FILE PER
+ACQUISITION: the index re-read (no cell names the hash, and no halt mark
+stands), the lease log re-read (no key holds a live lease on it,
+whoever deposited it), the file unlinked, the arm released. A file a
+cell names or any live lease holds is KEPT (M-I5 (b): no housekeeping act
+creates a hole); the arm is held one file at a time, so a retirement
+never queues behind a drain's I/O (M-I5 (f)); a replace's aside the
+deferred step did not reach is removed under the same arm. The pass
+never touches a partial whose upload stands and reads no directory's
+bytes as a scope (M-I6: the scopes stay record-derived).
 
 **INTERIM PINS** — the subsystem design's, carried by the build and each
 confirmed at the media round (the board's sm-Q8):
@@ -2679,7 +2764,14 @@ confirmed at the media round (the board's sm-Q8):
   body;
 * the floor, 256 MiB of the volume's free space;
 * the limits record's defaults above, and its install channel (AUTH-4.70),
-  owed.
+  owed;
+* the readiness token, `index_rebuilding`, 503, retry-class — the one
+  refusal of the cell index's three readers;
+* the pruner's cadence, one hour between passes, the first once the index
+  is ready; the pinned designation set, `blake3` alone;
+* the aside name, `.retired-<hex>-<n>` in the designation directory — a
+  replaced file's second name from the finish's link to the deferred
+  unlink, never read by anything.
 
 The set's second file, `crates/skepd/tests/it/fixtures/media/uploads.json`,
 carries these pins, the refusals, and the seven clauses as vectors over the
@@ -2695,12 +2787,11 @@ cell says nothing of whether another account deposited the file — a
 stranger's cell over a deposited hash is `unbound_cell`, as over any
 other.
 
-What lane B does NOT build, by name: the cell index and the base it
-counts (the own scope's base is zero here), the pruner — nothing under
-`blobs/` is reclaimed while the daemon serves; an expired partial goes at
-the next open — the readiness refusal, the fetch route and the read by
-identity: lanes C and D. The door's armed set above is whole, so no later
-lane moves one state's answer from one code to another (PATTERNS P6).
+What this build does NOT carry, by name: the fetch route and the read by
+identity — nothing here serves a byte; a cell is placed, indexed, counted
+and kept, and its bytes are read by no route yet. The door's armed set
+above is whole, so no later addition moves one state's answer from one
+code to another (PATTERNS P6).
 
 ### Registry — the twelve rows, the two bodies and the record grade
 

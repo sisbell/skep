@@ -113,8 +113,10 @@ pub const TRANSPORT_ERRORS: &[&str] = &[
     "history_io",
     "history_corrupt",
     "no_journal",
-    // The blob upload's eight (media lane B; wire.md §Media): the PUT's
-    // path family answers transport refusals alone — no `Op` runs there.
+    // The blob upload's nine (wire.md §Media): the PUT's path family
+    // answers transport refusals alone — no `Op` runs there — the ninth
+    // the readiness refusal of the cell index's three readers, 503,
+    // retry-class as `history_busy` is.
     "malformed_blob",
     "upload_refused",
     "no_upload",
@@ -123,6 +125,7 @@ pub const TRANSPORT_ERRORS: &[&str] = &[
     "upload_length",
     "deposit_refused",
     "blob_io",
+    "index_rebuilding",
 ];
 
 // ── the codec oracle ─────────────────────────────────────────────────────

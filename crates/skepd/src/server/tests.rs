@@ -65,6 +65,7 @@ fn the_route_set_agrees_across_preflight_dispatch_and_refusal() {
         origin: None,
         peer: Peer::Loopback,
         body: Vec::new(),
+        body_stream: Default::default(),
     };
     let status = |method: &str, path: &str| match daemon.route(&bare(method, path)) {
         Routed::Reply(r) => r.status,
@@ -129,6 +130,7 @@ fn a_guest_reads_and_an_unknown_token_is_signalled() {
             origin: None,
             peer: Peer::Loopback,
             body: body.as_bytes().to_vec(),
+            body_stream: Default::default(),
         }) else {
             panic!("POST /op is not the event stream")
         };
@@ -239,6 +241,7 @@ fn bare_session(daemon: &Daemon, principal: u64) -> String {
         origin: None,
         peer: Peer::Loopback,
         body: format!("{{\"principal\":{principal}}}").into_bytes(),
+        body_stream: Default::default(),
     }) else {
         panic!("POST /session is not the event stream")
     };
@@ -272,6 +275,7 @@ fn only_a_committing_write_announces_and_only_its_own_position() {
         origin: None,
         peer: Peer::Loopback,
         body: body.as_bytes().to_vec(),
+        body_stream: Default::default(),
     }) {
         Routed::Reply(r) => serde_json::from_slice::<Value>(r.bytes()).expect("json"),
         Routed::EventStream => panic!("POST /op is not the event stream"),

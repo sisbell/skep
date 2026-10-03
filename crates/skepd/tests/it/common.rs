@@ -782,6 +782,7 @@ fn spawn_under(
         match serve(daemon, port, DEFAULT_WORKERS) {
             Ok(sd) => {
                 forget_port(sd.port());
+                wait_for_the_index(&sd);
                 return sd;
             }
             Err(e) if e.kind() == ErrorKind::AddrInUse => continue,
@@ -792,6 +793,62 @@ fn spawn_under(
         "spawn: lost the rebind or journal-lock race {ATTEMPTS} times running \
          (last lock error: {last_lock_err:?})"
     )
+}
+
+/// THE CELL INDEX's WALK AT OPEN runs on a thread of the daemon's, and its
+/// three readers — the PUT's creation and resume, the deposit read — refuse
+/// `index_rebuilding` until it completes (wire.md §Media). Every spawn here
+/// waits for it, bounded, so a suite's first PUT never races the walk; the
+/// suites that drive the walk's window arm the hold first and spawn through
+/// [`spawn_walk_held`], which does not wait.
+fn wait_for_the_index(sd: &Skepd) {
+    if walk_is_held() {
+        return;
+    }
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !sd.daemon().index_is_ready() {
+        assert!(Instant::now() < deadline, "the cell index's walk did not complete within 60 s");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Whether this process has asked its spawns NOT to wait for the index —
+/// the walk's hold armed ([`spawn_walk_held`]) or the open-cost measure's
+/// own clock running ([`spawn_not_waiting_for_the_index`]).
+fn walk_is_held() -> bool {
+    *WALK_HELD.lock().expect("the hold's flag")
+}
+
+static WALK_HELD: Mutex<bool> = Mutex::new(false);
+
+/// Spawn a daemon WITH THE CELL INDEX's WALK HELD — armed before the open,
+/// so the daemon serves with its index not ready until
+/// [`release_the_walk`] — and claim its board (the claim is a text write,
+/// served throughout). Readiness is never waited on here.
+pub fn spawn_walk_held(dir: &Path) -> Skepd {
+    *WALK_HELD.lock().expect("the hold's flag") = true;
+    Daemon::hold_the_index_walk();
+    let sd = spawn_configured(dir, true);
+    claim_board(sd.port());
+    sd
+}
+
+/// Release the held walk and wait for `sd`'s index to ready.
+pub fn release_the_walk(sd: &Skepd) {
+    *WALK_HELD.lock().expect("the hold's flag") = false;
+    Daemon::release_the_index_walk();
+    wait_for_the_index(sd);
+}
+
+/// [`spawn_configured`] on a board already claimed, returning the moment
+/// the daemon serves and NOT waiting for the index's walk — the open-cost
+/// measure's spawn, whose clock runs from the open's return to the first
+/// PUT the gate admits.
+pub fn spawn_not_waiting_for_the_index(dir: &Path) -> Skepd {
+    *WALK_HELD.lock().expect("the hold's flag") = true;
+    let sd = spawn_configured(dir, true);
+    *WALK_HELD.lock().expect("the hold's flag") = false;
+    sd
 }
 
 /// Does this `Daemon::open_with` failure carry a transient journal-directory
@@ -891,6 +948,7 @@ pub fn spawn_unclaimed(dir: &Path) -> Skepd {
     let daemon = Daemon::open_with(dir, opts).expect("daemon open (genesis or recover)");
     let sd = serve(daemon, 0, DEFAULT_WORKERS).expect("bind an ephemeral port");
     forget_port(sd.port());
+    wait_for_the_index(&sd);
     sd
 }
 
@@ -1279,8 +1337,31 @@ pub fn seeded_bytes(n: usize, seed: u64) -> Vec<u8> {
 /// the refusal working — then the answer read to any end. Unlike
 /// [`http_full`], which panics on a write the daemon declined to read;
 /// unlike [`raw_exchange`], under deadlines a body at the cap and its
-/// finish's fsyncs fit.
+/// finish's fsyncs fit. THE RETRY-CLASS REFUSAL IS RETRIED: an
+/// `index_rebuilding` answer — the cell index's walk at open unfinished —
+/// is what a client retries, and this helper does, bounded; a suite that
+/// wants to SEE that answer sends through [`blob_exchange_once`].
 pub fn blob_exchange(
+    port: u16,
+    method: &str,
+    path: &str,
+    token: Option<&str>,
+    body: &[u8],
+) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let answer = blob_exchange_once(port, method, path, token, body);
+        if answer.0 != 503 || !String::from_utf8_lossy(&answer.2).contains("\"index_rebuilding\"") {
+            return answer;
+        }
+        assert!(Instant::now() < deadline, "{method} {path}: index_rebuilding for 60 s");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// [`blob_exchange`] sent ONCE — the answer as given, a retry-class refusal
+/// included.
+pub fn blob_exchange_once(
     port: u16,
     method: &str,
     path: &str,

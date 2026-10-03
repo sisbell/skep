@@ -25,7 +25,8 @@
     "upload_length": 400,
     "payload_too_large": 413,
     "deposit_refused": 507,
-    "blob_io": 500
+    "blob_io": 500,
+    "index_rebuilding": 503
   },
   "vectors": [
     {
@@ -50,7 +51,8 @@
       "steps": [
         {"create": {"as": "a", "length": 5, "body": "hello"}, "expect": {"status": 200, "finish": true}},
         {"read": {"as": "a"}, "expect": {"status": 200, "deposits": ["hello"], "uploads": [], "pending": 5, "base": 0}},
-        {"insert_cell": {"as": "a", "body": "hello"}, "expect": {"verdict": "ok"}}
+        {"insert_cell": {"as": "a", "body": "hello"}, "expect": {"verdict": "ok"}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "deposits": ["hello"], "uploads": [], "pending": 0, "base": 5}}
       ]
     },
     {
@@ -77,22 +79,24 @@
     },
     {
       "name": "clause_2_the_pending_quota_at_the_own_scope",
-      "clause": "(2) THE PENDING QUOTA, M-I6 (b), (e): at lane B's zero base the own scope is the pending bytes alone — live leases and bytes received — refused on the declared total BEFORE the body, the upload kept",
+      "clause": "(2) THE PENDING QUOTA, M-I6 (b), (e): the own scope is the base plus the pending bytes — the base the cell index's number for the account, the pending its live leases on hashes none of its cells names and its bytes received — refused on the declared total BEFORE the body, the upload kept; a hash a cell names moves from the pending to the base and the scope is one number either way",
       "steps": [
         {"limits": {"per_account": 100}},
         {"create": {"as": "a", "length": 101}, "expect": {"status": 507, "error": "deposit_refused", "scope": "own", "ended": false, "offset": 0}},
         {"create": {"as": "a", "length": 60, "body": {"bytes": 60, "seed": 1}}, "expect": {"status": 200, "finish": true}},
         {"read": {"as": "a"}, "expect": {"status": 200, "pending": 60, "base": 0}},
+        {"insert_cell": {"as": "a", "body": {"bytes": 60, "seed": 1}}, "expect": {"verdict": "ok"}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "pending": 0, "base": 60}},
         {"create": {"as": "a", "length": 50}, "expect": {"status": 507, "error": "deposit_refused", "scope": "own", "ended": false}},
         {"create": {"as": "a", "length": 40}, "bind": "u1", "expect": {"status": 200, "offset": 0}},
         {"append": {"as": "a", "upload": "u1", "offset": 0, "body": {"bytes": 20, "seed": 2}}, "expect": {"status": 200, "offset": 20}},
-        {"read": {"as": "a"}, "expect": {"status": 200, "pending": 80, "uploads": ["u1"]}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "pending": 20, "base": 60, "uploads": ["u1"]}},
         {"limits": {"per_account": 70}},
         {"append": {"as": "a", "upload": "u1", "offset": 20, "body": {"bytes": 20, "seed": 3}}, "expect": {"status": 507, "error": "deposit_refused", "scope": "own", "ended": false, "offset": 20}},
         {"progress": {"as": "a", "upload": "u1"}, "expect": {"status": 200, "offset": 20}},
         {"create": {"as": "b", "length": 70, "body": {"bytes": 70, "seed": 4}}, "expect": {"status": 200, "finish": true}},
         {"end": {"as": "a", "upload": "u1"}, "expect": {"status": 204}},
-        {"read": {"as": "a"}, "expect": {"status": 200, "pending": 60, "uploads": []}}
+        {"read": {"as": "a"}, "expect": {"status": 200, "pending": 0, "base": 60, "uploads": []}}
       ]
     },
     {
@@ -165,20 +169,26 @@
     },
     {
       "name": "clause_7_finished_the_lease_takes_over",
-      "clause": "(7) FINISHED, THE LEASE TAKES OVER: the cell admitted under the live lease, the size check at the same door, and the lapsed arm after the interval, the binding's refusal past the horizon",
+      "clause": "(7) FINISHED, THE LEASE TAKES OVER: the cell admitted under the live lease, the size check at the same door; a hash the account's own cells name is a reference kept by no lease — admitted past the interval and past the horizon, counted in the base; a deposited hash no cell names meets the lapsed arm after the interval and the binding's refusal past the horizon, until a re-PUT",
       "steps": [
         {"create": {"as": "a", "length": 5, "body": "hello"}, "expect": {"status": 200, "finish": true}},
-        {"read": {"as": "a"}, "expect": {"status": 200, "deposits": ["hello"], "uploads": [], "pending": 5}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "deposits": ["hello"], "uploads": [], "pending": 5, "base": 0}},
         {"insert_cell": {"as": "a", "body": "hello", "size": 4}, "expect": {"verdict": "credential_refused:unbound_cell"}},
         {"insert_cell": {"as": "b", "body": "hello"}, "expect": {"verdict": "credential_refused:unbound_cell"}},
         {"insert_cell": {"as": "a", "body": "hello"}, "expect": {"verdict": "ok"}},
+        {"insert_cell": {"as": "a", "body": "hello", "size": 4}, "expect": {"verdict": "credential_refused:unbound_cell"}},
+        {"create": {"as": "a", "length": 5, "body": "world"}, "expect": {"status": 200, "finish": true}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "deposits": ["hello", "world"], "uploads": [], "pending": 5, "base": 5}},
         {"clock": 604800000},
-        {"read": {"as": "a"}, "expect": {"status": 200, "deposits": [], "pending": 0}},
-        {"insert_cell": {"as": "a", "body": "hello"}, "expect": {"verdict": "credential_refused:lease_lapsed"}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "deposits": [], "pending": 0, "base": 5}},
+        {"insert_cell": {"as": "a", "body": "hello"}, "expect": {"verdict": "ok"}},
+        {"insert_cell": {"as": "a", "body": "world"}, "expect": {"verdict": "credential_refused:lease_lapsed"}},
         {"clock": 2592000000},
-        {"insert_cell": {"as": "a", "body": "hello"}, "expect": {"verdict": "credential_refused:unbound_cell"}},
-        {"create": {"as": "a", "length": 5, "body": "hello"}, "expect": {"status": 200, "finish": true}},
-        {"insert_cell": {"as": "a", "body": "hello"}, "expect": {"verdict": "ok"}}
+        {"insert_cell": {"as": "a", "body": "hello"}, "expect": {"verdict": "ok"}},
+        {"insert_cell": {"as": "a", "body": "world"}, "expect": {"verdict": "credential_refused:unbound_cell"}},
+        {"create": {"as": "a", "length": 5, "body": "world"}, "expect": {"status": 200, "finish": true}},
+        {"insert_cell": {"as": "a", "body": "world"}, "expect": {"verdict": "ok"}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "deposits": ["world"], "pending": 0, "base": 10}}
       ]
     },
     {

@@ -195,6 +195,39 @@ fn identity_is_by_address_never_by_value() {
     assert_eq!(c.value_at(a2.tumbler()).map(Val::as_bytes), Some(&b"same bytes"[..]));
 }
 
+// ---- §B the one enumeration ----
+
+#[test]
+fn iter_visits_every_entry_exactly_once_and_promises_no_order() {
+    // The one enumeration beside the point reads: every pair once, its
+    // count the slice's, over a pinned slice while a later slice grows —
+    // the daemon's cell-index rebuild walks a snapshot this way while
+    // commits proceed. The order is the map's own, so the test asserts the
+    // SET and the count, never a sequence.
+    let c0 = ContentStore::default();
+    assert_eq!(c0.iter().len(), 0);
+    assert!(c0.iter().next().is_none());
+    let mut c = c0.clone();
+    let n = 257u32; // past one HAMT node, so the walk crosses levels
+    for i in 1..=n {
+        let rec = stage_write(&c, &ca(i), val(format!("v{i}").as_bytes())).expect("fresh");
+        c = c.apply_write(&rec);
+    }
+    let later = c.apply_write(&stage_write(&c, &ca(n + 1), val(b"later")).expect("fresh"));
+    let walk = c.iter();
+    assert_eq!(walk.len(), n as usize, "exact-size: the slice's count");
+    let mut seen = std::collections::BTreeSet::new();
+    for (addr, v) in walk {
+        let ordinal: u32 = addr.iter().last().expect("an ordinal").to_string().parse().expect("small");
+        assert_eq!(v.as_bytes(), format!("v{ordinal}").as_bytes(), "the pair is the stored one");
+        assert!(seen.insert(ordinal), "an entry is visited once");
+        assert!(c.contains(addr), "every address walked is in the slice");
+    }
+    assert_eq!(seen.len(), n as usize, "every entry is visited");
+    assert_eq!(later.iter().len(), n as usize + 1, "a later slice walks its own entry too");
+    assert_eq!(c.iter().len(), n as usize, "and the pinned slice is untouched by it");
+}
+
 // ---- §Types: Val and the record's Debug ----
 
 #[test]

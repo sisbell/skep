@@ -1,147 +1,15 @@
-//! §Public interface — the request/result value types of the query surface:
-//! the four-set descriptor request ([`SlotSpec`]/[`FourSet`], which reads its
-//! own slots), the windowing pair ([`Cursor`]/[`Window`]), the lineage and
-//! survival reports ([`SupClaim`]/[`OrphanReport`]), and the two typed
-//! rejections ([`QueryError`] for the query surface, [`OrphanError`] for the
+//! §Public interface — the plain values the reads take and return: the
+//! windowing pair ([`Cursor`]/[`Window`]), the lineage and survival reports
+//! ([`SupClaim`]/[`OrphanReport`]), and the two typed rejections
+//! ([`QueryError`] for the query surface, [`OrphanError`] for the
 //! delete-orphan preview). M8 journals nothing, so none of these serialize.
+//! The four-set request, whose slots carry the descriptor family's logic,
+//! lives with that family in `descriptor`.
 
 use std::error::Error;
 use std::fmt;
 
 use skep_address::Address;
-use skep_links::Endset;
-
-use crate::home::home_of;
-use crate::{FROM, TO, TYPE};
-
-/// Per-slot request component for the four-set descriptor query — the
-/// three-way distinction the conjunction needs (ASN-0121).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
-pub enum SlotSpec {
-    /// ∗ / NOSPECS — the unit: drops out of the conjunction (FL-WILD), and so
-    /// the default: an unstated slot constrains nothing.
-    #[default]
-    Any,
-    /// ∅ constrained-empty — the zero: annihilates the whole result (FL-EMP).
-    Empty,
-    /// Populated address-spans (M7's readable [`Endset`]). An EMPTY `Endset`
-    /// is accepted and read as [`SlotSpec::Empty`] — the same zero
-    /// ([`FourSet::is_unsatisfiable`] answers for both), so M7's `match_links`
-    /// is never handed an empty constraint.
-    Spans(Endset),
-}
-
-/// The four-set descriptor `q = (H, F, G, Θ)` (ASN-0121). `home` is the HOME
-/// SLOT, which ASN-0132 calls structurally different from the three link
-/// slots: it is matched against `home(a)` — an M1 `document_of` address
-/// projection — so it is NOT a link slot (it never reaches M7's AND-of-ORs;
-/// `FourSet::at_home` answers it) and NOT an arrangement-presence test
-/// (ASN-0132 CN-STAB: a reverse-orphaned link still satisfies a home-bounded
-/// query).
-///
-/// `Eq`/`Hash` are REPRESENTATIONAL, not semantic: [`SlotSpec::Empty`] and a
-/// `Spans` naming nothing are one query — [`FourSet::is_unsatisfiable`]
-/// answers for both — and two distinct values, so a map keyed on a descriptor
-/// holds two entries for that one query. A missed hit, never a wrong answer;
-/// the semantic test is `is_unsatisfiable`, which reads the slots rather than
-/// their spelling.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct FourSet {
-    pub home: SlotSpec,
-    pub from: SlotSpec,
-    pub to: SlotSpec,
-    pub ty: SlotSpec,
-}
-
-impl FourSet {
-    /// `(∗,∗,∗,∗)` — the UNIT descriptor (FL-WILD): every slot wildcard, so
-    /// it matches the whole addressable slice. The counterpart to the zero
-    /// [`FourSet::is_unsatisfiable`] answers for, and the base a narrowed
-    /// query is built from: `FourSet { from: …, ..FourSet::any() }` names
-    /// only the slots it constrains, so no slot is left at something other
-    /// than the wildcard by accident.
-    pub fn any() -> FourSet {
-        FourSet {
-            home: SlotSpec::Any,
-            from: SlotSpec::Any,
-            to: SlotSpec::Any,
-            ty: SlotSpec::Any,
-        }
-    }
-
-    /// FL-EMP: does some slot carry the zero — an explicit
-    /// [`SlotSpec::Empty`], or a `Spans` that names nothing? Such a descriptor
-    /// matches no link whatever the other slots say.
-    ///
-    /// This is what separates the two zeros ASN-0132 keeps apart: a `0` from
-    /// [`crate::count_ftt_on`] over a satisfiable descriptor asserts that no
-    /// addressable link the reader may see satisfies `q` (CN-ZERO), while a
-    /// `0` over an unsatisfiable one says only that the REQUEST names
-    /// nothing. Same number, different assertion — and this answers the
-    /// second off the descriptor's own slots, with no store read at all.
-    pub fn is_unsatisfiable(&self) -> bool {
-        [&self.home, &self.from, &self.to, &self.ty]
-            .into_iter()
-            .any(|spec| match spec {
-                SlotSpec::Any => false,
-                SlotSpec::Empty => true,
-                SlotSpec::Spans(e) => e.is_empty(),
-            })
-    }
-
-    /// The constrained LINK slots as M7's AND-of-ORs takes them (FL-WILD: an
-    /// `Any` slot is omitted, never handed over as an empty constraint), or
-    /// `None` when the descriptor is unsatisfiable.
-    ///
-    /// The zero and the constraint list are answered together because they
-    /// are read off the same four slots: a slot carrying `Empty` has no
-    /// endset to hand M7, so a list built without first asking
-    /// [`FourSet::is_unsatisfiable`] would drop that slot exactly as it drops
-    /// `Any` and silently widen the query. Every endset in a `Some` list is
-    /// non-empty.
-    ///
-    /// In FROM/TO/TYPE order: the descriptor answers what its slots say; the
-    /// order M7 is asked in is `candidates`' to decide, beside its call to M7.
-    pub(crate) fn link_constraints(&self) -> Option<Vec<(usize, &Endset)>> {
-        if self.is_unsatisfiable() {
-            return None;
-        }
-        let mut constraints = Vec::new();
-        for (slot, spec) in [(FROM, &self.from), (TO, &self.to), (TYPE, &self.ty)] {
-            if let SlotSpec::Spans(e) = spec {
-                constraints.push((slot, e)); // e non-empty: a satisfiable descriptor has no empty Spans
-            }
-        }
-        Some(constraints)
-    }
-
-    /// `athome(a, H)` — ASN-0121/0132's residence test, the companion of
-    /// `touch`: does the home slot admit the link at `a`? `Any` admits every
-    /// link (FL-WILD); a `Spans` admits those whose `home(a)` its coverage
-    /// names — an ADDRESS projection, never an arrangement-presence test
-    /// (CN-STAB: a reverse-orphaned link still satisfies a home-bounded
-    /// query); and the zero admits none, which is FL-EMP for the home slot.
-    ///
-    /// Crate-internal because it reads `home(a)` unconditionally, which every
-    /// LINK address has: the addresses reaching it come off M7's
-    /// `match_links` and are keys of the link store by construction.
-    pub(crate) fn at_home(&self, a: &Address) -> bool {
-        match &self.home {
-            SlotSpec::Any => true,
-            SlotSpec::Empty => false,
-            SlotSpec::Spans(h) => h.covers(home_of(a).tumbler()),
-        }
-    }
-}
-
-/// `FourSet::default()` IS [`FourSet::any()`] — the unit descriptor, so
-/// `FourSet { from: …, ..Default::default() }` reads as the wildcard base it
-/// is. The domain name carries the doc; this is the std spelling of it.
-impl Default for FourSet {
-    fn default() -> FourSet {
-        FourSet::any()
-    }
-}
 
 /// Windowing cursor (ASN-0108 W2/W3): `None` = ⊥ (start); `Some(a)` = resume
 /// strictly past `a`. The whole continuation is this value, held by the
@@ -363,34 +231,3 @@ impl fmt::Display for OrphanError {
     }
 }
 impl Error for OrphanError {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use skep_address::{validate, Nat, Tumbler};
-    use skep_links::enc;
-
-    fn a(comps: &[u32]) -> Address {
-        let t = Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty");
-        validate(t).expect("test addresses are T4-valid")
-    }
-
-    /// The descriptor answers what its slots say, in slot order: which
-    /// constraint M7 is asked with first is `candidates`' decision, beside its
-    /// call to M7, so a wide FROM beside a narrow TO comes back FROM first.
-    #[test]
-    fn link_constraints_answer_in_slot_order_whatever_their_size() {
-        let wide = enc(&[a(&[1, 0, 1, 0, 1, 0, 1, 1]), a(&[1, 0, 1, 0, 1, 0, 1, 5])]);
-        let narrow = enc(&[a(&[1, 0, 1, 0, 1, 0, 1, 2])]);
-        assert!(wide.len() > narrow.len(), "a size order would reverse them");
-        let q = FourSet {
-            from: SlotSpec::Spans(wide.clone()),
-            to: SlotSpec::Spans(narrow.clone()),
-            ..FourSet::any()
-        };
-        assert_eq!(
-            q.link_constraints(),
-            Some(vec![(FROM, &wide), (TO, &narrow)])
-        );
-    }
-}

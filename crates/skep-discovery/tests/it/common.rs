@@ -8,9 +8,6 @@
 //! elements `[doc·0·2·k]`; the five reserved type addresses are the compiled
 //! ghost tumblers (`ReservedAddrs::format` — owner ruling, 2026-08-26).
 
-#![allow(dead_code)] // each integration test binary uses a subset
-
-
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{

@@ -6,11 +6,11 @@
 
 use skep_address::{validate, Address};
 use skep_kernel::Snapshot;
-use skep_links::{enc, Endset, LinkState, ShippedType, View};
+use skep_links::{enc, Endset, LinkState, ShippedType, View, FROM, TO};
 
 use crate::home::{home_of, home_readable};
 use crate::types::SupClaim;
-use crate::{DiscoveryWorld, FROM, TO};
+use crate::DiscoveryWorld;
 
 /// What one resident claim says: its two endpoints under the flipped
 /// convention, its home attribution (EL8b), and its own activity.

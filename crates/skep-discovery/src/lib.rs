@@ -237,27 +237,45 @@
 
 #![forbid(unsafe_code)]
 
+// The modules in dependency order: each names, in code, only modules above
+// it, which `tests/it/tidy.rs` checks.
+
+// The two budgets and their argument: the run budget with its square, and
+// the answer's span budget.
 mod budget;
-mod descriptor;
+// The home projection and the home rule: the one place a link's home is
+// computed and the caller's predicate asked about it.
 mod home;
-mod lineage;
-mod pointwise;
-mod region;
-mod sets;
-mod survival;
+// The plain values the reads take and return — the window pair, the lineage
+// claim, the orphan report — and the two typed rejections.
 mod types;
+// M7's link sets as the reads build and walk them: the run-set stab, the one
+// window combinator, and the rule every read walks a set by.
+mod sets;
+// A region's shape — its constructor and its gate — and `image_on`, its V→I
+// resolution: the door the region family reads through.
+mod image;
+// The region family: `findlinks_v`, `count_v`, `window_v` and
+// RETRIEVEENDSETS, read out of one selection index.
+mod region;
+// The descriptor family: the four-set request, its candidates and `sat`, and
+// its three read-outs.
+mod descriptor;
+// The pointwise pair: projection and addressable discoverability.
+mod pointwise;
+// The delete-orphan preview.
+mod survival;
+// Supersession lineage: the claims naming a link.
+mod lineage;
 
 pub use budget::{MAX_ANSWER_SPANS, MAX_IMAGE_RUNS};
-pub use descriptor::{count_ftt_on, findlinks_ftt_on, window_ftt_on};
+pub use descriptor::{count_ftt_on, findlinks_ftt_on, window_ftt_on, FourSet, SlotSpec};
+pub use image::{content_vspan, image_on};
 pub use lineage::{in_claims_on, out_claims_on};
 pub use pointwise::{addressably_discoverable_from_on, project_on};
-pub use region::{
-    content_vspan, count_v_on, findlinks_v_on, image_on, retrieve_endsets_on, window_v_on,
-};
+pub use region::{count_v_on, findlinks_v_on, retrieve_endsets_on, window_v_on};
 pub use survival::delete_orphans_on;
-pub use types::{
-    Cursor, FourSet, OrphanError, OrphanReport, QueryError, SlotSpec, SupClaim, Window,
-};
+pub use types::{Cursor, OrphanError, OrphanReport, QueryError, SupClaim, Window};
 // The 1-based standard slot numerals every query here indexes by, and the two
 // M7 types M8's own surface is written in: a descriptor slot's `Endset` (with
 // `enc`, the address lift that builds one) and the lineage pair's `View`.

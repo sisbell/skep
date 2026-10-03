@@ -19,10 +19,9 @@ use std::ops::Bound::{Excluded, Unbounded};
 use im::OrdSet;
 use skep_address::Address;
 use skep_arrangement::Run;
-use skep_links::{Endset, LinkState, View};
+use skep_links::{Endset, LinkState, View, FROM, TO, TYPE};
 
 use crate::types::{Cursor, Window};
-use crate::{FROM, TO, TYPE};
 
 /// The slots a v1 link has: every v1 link-creation path deposits an arity-3
 /// link, so a disjunction over these three is exact over ALL slots and a

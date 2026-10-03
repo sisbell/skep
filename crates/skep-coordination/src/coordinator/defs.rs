@@ -163,9 +163,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// term: an ever-registered start whose content fails the parse, or
     /// fails WT on its own account, fills the memo poisoned —
     /// freeze-on-breach (PR-DISC, §Internal 4), a deliberate policy and not
-    /// an immutability consequence: a `DanglingReference` to a referent not
-    /// yet registered could heal on that referent's registration, and the
-    /// freeze declines to re-check (safe — the start merely stays
+    /// an immutability consequence: an `UndefinedReference` — to a referent
+    /// not yet registered — could heal on that referent's registration, and
+    /// the freeze declines to re-check (safe — the start merely stays
     /// signature-less, never a wrong `Some`; the crate root states what that
     /// costs across handles). A nesting refusal ABOVE level 0 is not the
     /// content's: every def `register_pred` admits was checked at level 0 and
@@ -196,8 +196,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// The defined referent at `start`, its derivation (if the memo misses)
     /// rooted at nesting level `depth` — the resolver the checker consults
     /// for a `Ref`, which asks at `budget::referent_depth` of the reference's
-    /// own level. No defined signature (never registered, or poisoned) is
-    /// `Unresolved::Dangling`; a derivation that cannot complete at `depth`
+    /// own level. An undefined signature (never registered, or poisoned) is
+    /// `Unresolved::Undefined`; a derivation that cannot complete at `depth`
     /// is `Unresolved::TooDeep`, the referent unjudged.
     pub(super) fn resolve_def_at(
         &self,
@@ -206,7 +206,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     ) -> Result<Arc<TypedTerm>, Unresolved> {
         match self.def_status_at(start, depth) {
             Ok(DefStatus::Defined(def)) => Ok(def),
-            Ok(DefStatus::Poisoned | DefStatus::NeverRegistered) => Err(Unresolved::Dangling),
+            Ok(DefStatus::Poisoned | DefStatus::NeverRegistered) => Err(Unresolved::Undefined),
             Err(DerivedTooDeep) => Err(Unresolved::TooDeep),
         }
     }
@@ -281,9 +281,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// gates speak in this order: no content `Val` at `start`
     /// (`NotResident`); bytes the PR-ENC codec refuses (`ParseFailed`); a
     /// referent not ever-registered at σ (`ReferentNotEverRegistered`, ahead
-    /// of WT-ref, so a stored reference to nothing is a gate refusal, not a
-    /// dangling type error); WT + WT-ref over the signed term (`IllTyped`);
-    /// a referent ever- but not actively registered at σ
+    /// of WT-ref, so a stored reference to nothing is a gate refusal, not an
+    /// `IllTyped(UndefinedReference)`); WT + WT-ref over the signed term
+    /// (`IllTyped`); a referent ever- but not actively registered at σ
     /// (`ReferentNotActive` — endorsement); `home` not a registered document
     /// (`HomeNotRegistered`, P0); M7's own refusal of the emit (`Emit`).
     /// Where several referents fail one of the two referent gates, the
@@ -301,7 +301,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// PR-DISC breach and which this call does not lift: the memo's first
     /// fill wins and never yields (§Internal 4). The one shape is a
     /// breach-registered start probed while a referent was still
-    /// unregistered — `DanglingReference` is the single WT rejection not
+    /// unregistered — `UndefinedReference` is the single WT rejection not
     /// fixed by the immutable content — so the freeze stands, this call still
     /// returns `Ok`, and `signature(start)` keeps answering `None`. Through
     /// this gate it cannot arise: (iii) puts every referent's
@@ -570,10 +570,17 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// registered document — `Nullify(Rejected(HomeNotRegistered))`
     /// otherwise, after the `NotActive` probe. Content untouched; audit
     /// retains it; re-registration after nullify deposits afresh (the idem
-    /// class is empty again). Does NOT cascade: not to referents, and not to
-    /// the `pd_stable` certificate — `is_certified_stable` stays true for a
-    /// retracted def (the certificate is about the immutable content), while
-    /// `certify_stable` on that def now refuses `NotActive`.
+    /// class is empty again).
+    ///
+    /// Does NOT cascade (ASN-0130: "existing referencing definitions, and
+    /// evaluations of them, survive untouched"). A def that references `start`
+    /// keeps its signature and goes on evaluating: its reference now dangles
+    /// but stays live (ASN-0130 OQ3). `start`'s endorsement is withdrawn, so
+    /// `register_pred` refuses a NEW reference to it as `ReferentNotActive`.
+    /// The defs `start` references are untouched, and so is the `pd_stable`
+    /// certificate: `is_certified_stable` stays true for a retracted def (the
+    /// certificate is about the immutable content), while `certify_stable` on
+    /// that def now refuses `NotActive`.
     ///
     /// RETURNS `(retraction, seq)`: the address of the `[R]` tuple itself —
     /// never the `pdef`'s — or, on a dedup hit, the incumbent retraction's,

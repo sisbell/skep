@@ -167,6 +167,22 @@ fn timed_daemon_open(dir: &Path, ctx: &str) -> Daemon {
     }
 }
 
+/// THE CELL INDEX's WALK AT OPEN runs on a thread of the reopened daemon's,
+/// and its three readers — the PUT's creation and resume, the deposit read —
+/// refuse `index_rebuilding` until it completes (ms5-R). A judgment of the
+/// blob store after a reopen waits for it, bounded as the suite's spawns
+/// wait, so what it reads is the reopened store and never the walk's window.
+fn await_the_index(d: &Daemon, ctx: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while !d.index_is_ready() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "FINDING (wedge, {ctx}): the cell index's walk at open did not complete within 60 s"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
 /// Route one request through the socket-free router; the event stream is
 /// unreachable from these paths.
 fn route_raw(
@@ -1148,6 +1164,7 @@ fn e_blob_trial(trial: u64) -> (usize, usize) {
     // Judge: reopen in-process.
     let ctx = format!("E′ trial {trial} (seed 0xB000+{trial}), {} acks", acked.len());
     let d = timed_daemon_open(&dir, &ctx);
+    await_the_index(&d, &ctx);
     let token = route_session(&d, CLAIMANT_PRINCIPAL);
     let (deposits, uploads) = deposit_read(&d, &token);
     for (hex, bytes) in &acked {
@@ -1291,6 +1308,7 @@ fn h_a_crash_inside_the_blob_finish_reopens_to_what_the_order_promises() {
         // THE REOPEN, judged.
         let ctx = format!("H′ {step}");
         let d = timed_daemon_open(&dir, &ctx);
+        await_the_index(&d, &ctx);
         let token = route_session(&d, CLAIMANT_PRINCIPAL);
         let file = dir.join("blobs").join("blake3").join(&hex);
         let (deposits, uploads) = deposit_read(&d, &token);
@@ -1456,9 +1474,7 @@ fn p_a_crash_inside_the_pruners_pass_reopens_to_an_index_and_a_store_that_agree(
     // THE REOPEN, judged.
     let ctx = "P′";
     let d = timed_daemon_open(&dir, ctx);
-    while !d.index_is_ready() {
-        thread::sleep(Duration::from_millis(5));
-    }
+    await_the_index(&d, ctx);
     let token = route_session(&d, CLAIMANT_PRINCIPAL);
     let [referenced, lapsed_a, lapsed_b, live] = prune_crash_files();
     let blobs = dir.join("blobs").join("blake3");

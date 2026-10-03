@@ -170,7 +170,8 @@ fn endorsement_gates_a_new_reference_and_retraction_never_cascades() {
         Err(DefineError::Register(RegisterError::ReferentNotActive(x))) => assert_eq!(x, p_start),
         other => panic!("expected ReferentNotActive, got {other:?}"),
     }
-    // …while the standing consumer keeps evaluating (dangling-but-live).
+    // …while the standing consumer keeps evaluating: its reference to P
+    // dangles but stays live (ASN-0130 OQ3).
     let s2 = k.snapshot();
     assert_eq!(c.evaluate_def(&q_start, &[], View::Active, &s2), Ok(Value::Bool(true)));
 }

@@ -67,7 +67,7 @@ fn type_check_refuses_at_each_gamma_and_catalog_gate() {
     // Ref to an address with no defined signature.
     assert!(matches!(
         c.type_check(vec![], Term::Ref { addr: ca(9), args: vec![] }),
-        Err(TypeError::DanglingReference(_))
+        Err(TypeError::UndefinedReference(_))
     ));
 
     // targets_keyed is in the vocabulary iff some cataloged class attaches
@@ -184,7 +184,7 @@ fn type_check_reports_the_first_rejection_in_its_stated_walk_order() {
     // A `Ref`'s referent before its arguments …
     assert!(matches!(
         c.type_check(vec![], Term::Ref { addr: ca(9), args: vec![at(bad_arg())] }),
-        Err(TypeError::DanglingReference(_))
+        Err(TypeError::UndefinedReference(_))
     ));
     // … and an argument's own ill-typedness before its match to the formal,
     // which would report `{expected: Addr, found: Bool}`.

@@ -81,7 +81,7 @@ fn as_nat(v: Value) -> Nat {
 
 /// The address element of an ADDRESS-VALUED domain — the three formers that
 /// fold one (`MaxT1`, `MinT1`, `Reflect`) require `dom(Addr)` at the checker
-/// (`want(Sort::Addr, cd.elem)`), so a tuple here is a checked-input
+/// (`want(Sort::Addr, cd.elem_sort)`), so a tuple here is a checked-input
 /// violation, as an ill-sorted `Value` is above.
 fn addr_elem(e: Arg) -> Address {
     match e {

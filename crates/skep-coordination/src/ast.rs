@@ -67,7 +67,9 @@ impl VarId {
     }
 }
 
-/// A registered/reserved type, named by its key endset.
+/// A type KEY: an endset spelling a link type — the key, not the type, so
+/// its equality is the spelling's. One type (one coverage class) has many
+/// spellings, and the catalog admits only its own.
 ///
 /// Caller contract (§Core data model): the catalog probe is `Endset`-equality
 /// while M7's type identity is by coverage (I0), so every `Concrete` `TypeKey`
@@ -98,10 +100,12 @@ impl fmt::Display for TypeKey {
     }
 }
 
-/// A type position: a concrete cataloged type OR a class variable bound by an
-/// enclosing `Reg` quantifier (V-IDX). `Reg`-expansion substitutes
-/// `ClassVar(cvar) → Concrete(class)` per registered class at type-check, so
-/// a `TypedTerm`'s evaluable projection holds only `Concrete` refs.
+/// A type position: a concrete type key OR a class variable bound by an
+/// enclosing `Reg` quantifier (V-IDX). The checker admits a `Concrete` key
+/// only as the catalog spells it (`UncatalogedTypeKey` otherwise), and
+/// `Reg`-expansion substitutes `ClassVar(cvar) → Concrete(key)` — the
+/// catalog's key for each registered class — at type-check, so a
+/// `TypedTerm`'s evaluable projection holds only `Concrete` refs.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeRef {
     Concrete(TypeKey),

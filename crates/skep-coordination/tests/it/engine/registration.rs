@@ -106,7 +106,7 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
     // A Def trigger with no defined signature.
     assert!(matches!(
         c.register_rule(mk(Dom::MembersDom(concrete(&pred_stable_ty())), Trigger::Def(ca(77)), marker_action())),
-        Err(RuleError::DanglingDefTrigger(_))
+        Err(RuleError::UndefinedDefTrigger(_))
     ));
     // Marker.ty guards: cataloged Unary and non-PredLayer. A Binary shipped
     // class and an uncataloged number both land BadMarkerType; the PredLayer

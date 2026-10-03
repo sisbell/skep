@@ -253,7 +253,7 @@ struct Checked {
 #[derive(Debug, Clone)]
 pub(crate) struct CheckedDom {
     dom: ArcDom,
-    elem: Sort,
+    elem_sort: Sort,
     ref_free: bool,
 }
 
@@ -265,8 +265,8 @@ impl CheckedDom {
     }
 
     /// The element sort the domain yields: `Addr` or `Tup` (QD).
-    pub(crate) fn elem(&self) -> Sort {
-        self.elem
+    pub(crate) fn elem_sort(&self) -> Sort {
+        self.elem_sort
     }
 
     /// False iff a `Ref` survives — in a `Filter` predicate or a set term.
@@ -284,14 +284,14 @@ fn want(expected: Sort, found: Sort) -> Result<(), TypeError> {
 }
 
 /// The resolver's two refusals, each the `Ref` arm's own rejection:
-/// `Dangling` — the address has no defined signature (never registered, or
+/// `Undefined` — the address's signature is undefined (never registered, or
 /// ever-registered-but-undisciplined), WT-ref's domain failure; `TooDeep` —
 /// the referent's derivation could not complete at the level it was asked
 /// at — the ASKING term's refusal, never the referent's: the resolver leaves
 /// the referent unjudged (and unmemoized).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Unresolved {
-    Dangling,
+    Undefined,
     TooDeep,
 }
 
@@ -521,7 +521,7 @@ impl<'a> Checker<'a> {
         depth: u32,
     ) -> Result<(CheckedDom, Checked), TypeError> {
         let cd = self.check_dom(ctx, dom, depth)?;
-        let inner = ctx.update(var, cd.elem);
+        let inner = ctx.update(var, cd.elem_sort);
         let c = self.sub(&inner, body, Sort::Bool, depth)?;
         Ok((cd, c))
     }
@@ -535,7 +535,7 @@ impl<'a> Checker<'a> {
         mk: fn(ArcDom) -> Term,
     ) -> Result<Checked, TypeError> {
         let cd = self.check_dom(ctx, d, depth)?;
-        want(Sort::Addr, cd.elem)?;
+        want(Sort::Addr, cd.elem_sort)?;
         Ok(Checked { term: Arc::new(mk(cd.dom)), sort: Sort::OptAddr, ref_free: cd.ref_free })
     }
 
@@ -660,7 +660,7 @@ impl<'a> Checker<'a> {
             Term::BigUnion { dom, var, body } => {
                 // PC2a excludes Reg from ⋃; Addr and Tup element sorts bind.
                 let cd = self.check_dom(ctx, dom, child_depth)?;
-                let inner = ctx.update(*var, cd.elem);
+                let inner = ctx.update(*var, cd.elem_sort);
                 let cb = self.sub(&inner, body, Sort::AddrSet, child_depth)?;
                 Ok(Checked {
                     term: Arc::new(Term::BigUnion { dom: cd.dom, var: *var, body: cb.term }),
@@ -673,7 +673,7 @@ impl<'a> Checker<'a> {
                 // tuple-valued (or class-valued Reg) domain is rejected at
                 // the element-sort check.
                 let cd = self.check_dom(ctx, d, child_depth)?;
-                want(Sort::Addr, cd.elem)?;
+                want(Sort::Addr, cd.elem_sort)?;
                 Ok(Checked {
                     term: Arc::new(Term::Reflect(cd.dom)),
                     sort: Sort::AddrSet,
@@ -682,8 +682,8 @@ impl<'a> Checker<'a> {
             }
             Term::Ref { addr, args } => {
                 // WT-ref: types to C_r when signature(addr) is defined and
-                // each argᵢ checks at Cᵢ. No defined signature (never
-                // registered, or undisciplined) ⇒ DanglingReference.
+                // each argᵢ checks at Cᵢ. An undefined signature (never
+                // registered, or undisciplined) ⇒ UndefinedReference.
                 //
                 // The referent is asked for at `referent_depth`, where its own
                 // check starts from here. A derivation that cannot complete
@@ -696,7 +696,7 @@ impl<'a> Checker<'a> {
                 // whether the memo was warm (the crate root states the breach
                 // exception).
                 let referent = (self.resolve)(addr, referent_depth(depth)).map_err(|u| match u {
-                    Unresolved::Dangling => TypeError::DanglingReference(addr.clone()),
+                    Unresolved::Undefined => TypeError::UndefinedReference(addr.clone()),
                     Unresolved::TooDeep => TypeError::TooDeep,
                 })?;
                 // The levels a walk through this node reaches are the
@@ -752,14 +752,14 @@ impl<'a> Checker<'a> {
     }
 
     /// V-IDX `Reg` expansion: instantiate `body` once per registered class,
-    /// substituting `ClassVar(cvar) → Concrete(class)`, check EACH instance
-    /// (an ill-typed one rejects the whole term — `RegInstanceIllTyped`), and
-    /// join the instances through `join` (`And` for ∀, `Or` for ∃) as the
-    /// evaluable projection. The join is a left-nested chain of `n − 1`
-    /// connectives over `n` classes, so an instance sits up to `n − 1` levels
-    /// below the quantifier's node in the evaluable: every instance is
-    /// checked at that level, the deepest one's, so the projection's real
-    /// depth is what the walks are charged for.
+    /// substituting `ClassVar(cvar) → Concrete(key)`, that class's catalog
+    /// key, check EACH instance (an ill-typed one rejects the whole term —
+    /// `RegInstanceIllTyped`), and join the instances through `join` (`And`
+    /// for ∀, `Or` for ∃) as the evaluable projection. The join is a
+    /// left-nested chain of `n − 1` connectives over `n` classes, so an
+    /// instance sits up to `n − 1` levels below the quantifier's node in the
+    /// evaluable: every instance is checked at that level, the deepest one's,
+    /// so the projection's real depth is what the walks are charged for.
     fn expand_reg(
         &self,
         ctx: &Ctx,
@@ -1000,7 +1000,11 @@ impl<'a> Checker<'a> {
         // position is a cataloged endset (`guarded`), its children are terms.
         self.enter(1, depth)?;
         let child_depth = depth + 1;
-        let leaf = |dom: Dom, elem: Sort| CheckedDom { dom: Arc::new(dom), elem, ref_free: true };
+        let leaf = |dom: Dom, elem_sort: Sort| CheckedDom {
+            dom: Arc::new(dom),
+            elem_sort,
+            ref_free: true,
+        };
         match d {
             Dom::MembersDom(tr) => {
                 let k = self.guarded(tr, Guard::Cataloged)?;
@@ -1018,11 +1022,11 @@ impl<'a> Checker<'a> {
             Dom::Reg => Err(TypeError::SortMismatch { expected: Sort::Addr, found: Sort::Tup }),
             Dom::Filter { dom, var, pred } => {
                 let base = self.check_dom(ctx, dom, child_depth)?;
-                let inner = ctx.update(*var, base.elem);
+                let inner = ctx.update(*var, base.elem_sort);
                 let c = self.sub(&inner, pred, Sort::Bool, child_depth)?;
                 Ok(CheckedDom {
                     dom: Arc::new(Dom::Filter { dom: base.dom, var: *var, pred: c.term }),
-                    elem: base.elem,
+                    elem_sort: base.elem_sort,
                     ref_free: base.ref_free && c.ref_free,
                 })
             }
@@ -1030,7 +1034,7 @@ impl<'a> Checker<'a> {
                 let c = self.sub(ctx, t, Sort::AddrSet, child_depth)?;
                 Ok(CheckedDom {
                     dom: Arc::new(Dom::SetTerm(c.term)),
-                    elem: Sort::Addr,
+                    elem_sort: Sort::Addr,
                     ref_free: c.ref_free,
                 })
             }

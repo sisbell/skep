@@ -115,7 +115,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// trigger, then the action: `IllFormedDomain` (in `type_check`'s walk
     /// order), `RefBearingDomain`; for an `Inline` trigger
     /// `RefBearingInlineTrigger`, `DomainTriggerSortMismatch`; for a `Def`
-    /// trigger `DanglingDefTrigger`, `BadTriggerArity`, `TriggerNotBoolean`,
+    /// trigger `UndefinedDefTrigger`, `BadTriggerArity`, `TriggerNotBoolean`,
     /// `DomainTriggerSortMismatch`, `TriggerExpansionTooLarge`; for a Marker
     /// action `BadMarkerType`, `NonIdemMarkerType`, `PredLayerMarkerType`.
     /// The same order in [`Coordinator::certify_rule`], which runs the same
@@ -203,7 +203,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         if !cd.is_ref_free() {
             return Err(RuleError::RefBearingDomain);
         }
-        let elem = cd.elem();
+        let elem_sort = cd.elem_sort();
         // Trigger: one-parameter Bool (a `TriggerTerm` is that by type; a
         // def is checked here and captured into one), sort-matched to the
         // element sort — and its FLAT ref-free expansion, which an `Inline`
@@ -215,14 +215,17 @@ impl<W: CoordinationWorld> Coordinator<W> {
                     return Err(RuleError::RefBearingInlineTrigger);
                 }
                 let (_, s) = t.param();
-                if *s != elem {
-                    return Err(RuleError::DomainTriggerSortMismatch { expected: elem, found: *s });
+                if *s != elem_sort {
+                    return Err(RuleError::DomainTriggerSortMismatch {
+                        expected: elem_sort,
+                        found: *s,
+                    });
                 }
                 (t.clone(), t.evaluable().clone())
             }
             Trigger::Def(addr) => {
                 let DefStatus::Defined(def) = self.def_status(addr) else {
-                    return Err(RuleError::DanglingDefTrigger(addr.clone()));
+                    return Err(RuleError::UndefinedDefTrigger(addr.clone()));
                 };
                 if def.params().len() != 1 {
                     return Err(RuleError::BadTriggerArity);
@@ -231,10 +234,13 @@ impl<W: CoordinationWorld> Coordinator<W> {
                     return Err(RuleError::TriggerNotBoolean);
                 }
                 let s = def.params()[0].1;
-                if s != elem {
+                if s != elem_sort {
                     // A Def signature is Codom-only, so a Tup domain lands
                     // here — the remediation is an Inline trigger.
-                    return Err(RuleError::DomainTriggerSortMismatch { expected: elem, found: s });
+                    return Err(RuleError::DomainTriggerSortMismatch {
+                        expected: elem_sort,
+                        found: s,
+                    });
                 }
                 // The expansion door: the flat tree the lint and the armer
                 // graph read must fit the node budget, decided here — over
@@ -286,7 +292,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// (lane 4.1, PUB-6.28) — the captured trigger body with its one
     /// parameter bound to `arg`, referents (a `Def` trigger's) resolved
     /// through the memo — so a draft-homed tuple satisfies no trigger's
-    /// pattern and a fire's verdict never turns on a document rule 4 hides.
+    /// pattern and a fire's verdict never turns on a document hidden from the
+    /// guest class (PUB's model rule 4, PUB-1.13–1.16).
     /// Reads nothing but `snap`: the body is immutable content captured at
     /// registration, so any snapshot serves.
     fn trigger_true(&self, rule: &CheckedRule, arg: &Arg, snap: &Snapshot<W>) -> bool {

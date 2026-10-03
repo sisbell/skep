@@ -222,7 +222,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// Type-check `body` under the ordered parameter context `params` (Γ_D —
     /// ASN-0129 WT is a Γ-parameterized CHECKING judgment; empty for a closed
     /// term), expand `Reg`-quantifiers to concrete-class instances (V-IDX),
-    /// and reject ill-typed / dangling-reference / uncataloged-type-key /
+    /// and reject ill-typed / undefined-reference / uncataloged-type-key /
     /// unbound-variable / non-Codomain-parameter terms. Γ_D is Codom-only: a
     /// `Tup`-sorted parameter is `TupParameter` — a stored def's parameters
     /// are Codom-sorted, never `Tup` (ASN-0130 SignedTerm) — and the one PL
@@ -286,9 +286,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// ([`crate::budget::referent_depth`]), so the chain's total nesting is
     /// bounded by `MAX_DEPTH` however deep the derivation runs. Referents
     /// resolve through the def memo at the level the checker asks for them:
-    /// a referent with no defined signature is `DanglingReference`, and one
-    /// whose derivation cannot complete at that level is `TooDeep`, with the
-    /// referent left unjudged.
+    /// a referent whose signature is undefined is `UndefinedReference`, and
+    /// one whose derivation cannot complete at that level is `TooDeep`, with
+    /// the referent left unjudged.
     fn check_signed(&self, signed: SignedTerm, depth: u32) -> Result<TypedTerm, TypeError> {
         let resolve = |start: &Address, depth: u32| self.resolve_def_at(start, depth);
         Checker::new(&self.catalog, &resolve).check_signed(signed, depth)

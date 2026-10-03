@@ -21,10 +21,12 @@
 //! WHY HERE (PUB-6.28; the owner's placement ruling of 2026-09-06 — the
 //! class is threaded from the caller): "a fire's verdict never turns on a
 //! document rule 4 hides, and a fire commits byte-identically to a world
-//! with no drafts". The verdict is the trigger's as much as the write's, so
-//! the class lane 3.3 pinned on the action's home (`FireError::DraftBoundary`)
-//! and lane 3.3b on the writer's gates is applied to the LOOK too — in M9,
-//! the delegator that holds `guest`. M7 is told nothing.
+//! with no drafts" — rule 4 being PUB's model rule (PUB-1.13–1.16: addresses
+//! are not secret; a draft's bytes and structure are), not a registered
+//! rule. The verdict is the trigger's as much as the write's, so the class
+//! lane 3.3 pinned on the action's home (`FireError::DraftBoundary`) and
+//! lane 3.3b on the writer's gates is applied to the LOOK too — in M9, the
+//! delegator that holds `guest`. M7 is told nothing.
 //!
 //! COST (PUB-7.15's shape): one `document_of` (M1 arithmetic, no read) and
 //! one predicate call per candidate tuple a COLLECTION read keeps — a rule's
@@ -39,8 +41,8 @@
 //! THE READS, each answered over the visible slice exactly as M7's own
 //! answers it over the whole — the collections by dropping the tuples of
 //! unreadable homes, the membership predicates by scanning for the first one
-//! that answers: `is_k` and `observe` (the two reads the delta
-//! names) and, listed as the delta asks, the rest the evaluator makes —
+//! that answers: `is_k` and `observe` (the two reads lane 4.1 names) and,
+//! listed as that lane asks, the rest the evaluator makes —
 //! `members`, `targets_of` and `targets_of_denoting` (D1/D3 over the visible
 //! slice, the last in V-AUD's exact-denotation regime, which is the one read
 //! where a PL view changes which tuples match); the BH2 walk

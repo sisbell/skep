@@ -125,7 +125,7 @@ fn define_predicate_refuses_a_published_home_while_the_link_writes_land_there() 
 /// register_pred's gate order at a stored reference: the referent's
 /// ever-registration is asked BEFORE WT-ref, so a stored body naming an
 /// address nothing was ever registered at is `ReferentNotEverRegistered`,
-/// not `IllTyped(DanglingReference)`. The rejection leaves orphan content —
+/// not `IllTyped(UndefinedReference)`. The rejection leaves orphan content —
 /// never registered, never poisoned — which a later `register_pred` adopts
 /// once the referent exists. The stored bytes are PR-ENC's, so the
 /// reference is retargeted by rewriting the referent's last component.

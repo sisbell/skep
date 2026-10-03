@@ -57,9 +57,14 @@ pub enum TypeError {
     /// The `targets_keyed` atom used (bare or under `MapGet`) with no
     /// cataloged class attaching BH3 (V-atom).
     NoReverseLookupClass,
-    /// `Ref` to an address with NO DEFINED SIGNATURE (WT-ref domain failure):
-    /// never-registered, or ever-registered-but-undisciplined (§Internal 4).
-    DanglingReference(Address),
+    /// A `Ref` whose referent's signature is UNDEFINED — ASN-0130's WT-ref
+    /// failure ("a never-registered referent leaves `sig(r)` undefined —
+    /// hence no typing judgment"): never registered, or
+    /// ever-registered-but-undisciplined (§Internal 4). Not a reference to a
+    /// RETRACTED def: that referent's signature stays defined and the
+    /// reference types — ASN-0130's *dangling live* reference (OQ3), which
+    /// only a NEW registration refuses (`RegisterError::ReferentNotActive`).
+    UndefinedReference(Address),
     /// A `Reg`-quantified body has an ill-typed concrete instance (V-IDX).
     RegInstanceIllTyped(Box<TypeError>),
     /// The term nests past `MAX_DEPTH`, counted through references: its
@@ -115,8 +120,8 @@ impl fmt::Display for TypeError {
             TypeError::NoReverseLookupClass => f.write_str(
                 "type_check: targets_keyed is outside the vocabulary — no cataloged class attaches BH3",
             ),
-            TypeError::DanglingReference(a) => {
-                write!(f, "type_check: reference to {a} has no defined signature (WT-ref)")
+            TypeError::UndefinedReference(a) => {
+                write!(f, "type_check: undefined reference — {a} has no defined signature (WT-ref)")
             }
             TypeError::RegInstanceIllTyped(e) => {
                 write!(f, "type_check: a Reg-quantified instance is ill-typed: {e}")
@@ -472,10 +477,10 @@ pub enum RuleError {
     /// A `Def` trigger whose def's codomain ≠ Bool (a `TriggerTerm` is Bool
     /// by type).
     TriggerNotBoolean,
-    /// `Trigger::Def` names an address with no defined signature —
+    /// `Trigger::Def` names an address whose signature is undefined —
     /// never-registered, or ever-registered-but-undisciplined (§Internal 4):
-    /// the rule-level twin of `TypeError::DanglingReference`.
-    DanglingDefTrigger(Address),
+    /// the rule-level twin of `TypeError::UndefinedReference`.
+    UndefinedDefTrigger(Address),
     /// A `Def` trigger whose def is not single-parameter (a `TriggerTerm`
     /// binds exactly one by type).
     BadTriggerArity,
@@ -515,7 +520,7 @@ impl fmt::Display for RuleError {
             RuleError::TriggerNotBoolean => {
                 f.write_str("register_rule: the Def trigger's codomain is not Bool")
             }
-            RuleError::DanglingDefTrigger(a) => {
+            RuleError::UndefinedDefTrigger(a) => {
                 write!(f, "register_rule: Def trigger {a} has no defined signature")
             }
             RuleError::BadTriggerArity => {

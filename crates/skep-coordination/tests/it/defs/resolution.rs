@@ -19,7 +19,7 @@ use skep_links::{Caller, ShippedType, Tip};
 /// question that needs the def's signature answers with the breach:
 /// `UndisciplinedDef` on the evaluation and the certification side alike
 /// (never `NotEverRegistered` — the two `None` causes stay distinct), no
-/// signature, a dangling reference, a dangling `Def` trigger, and the
+/// signature, an undefined reference, an undefined `Def` trigger, and the
 /// gate's own `ParseFailed`.
 #[test]
 fn a_breach_freezes_the_start_poisoned() {
@@ -37,7 +37,7 @@ fn a_breach_freezes_the_start_poisoned() {
     assert!(c.signature(&g).is_none());
     assert!(matches!(
         c.type_check(vec![], Term::Ref { addr: g.clone(), args: vec![] }),
-        Err(TypeError::DanglingReference(x)) if x == g
+        Err(TypeError::UndefinedReference(x)) if x == g
     ));
     assert!(matches!(
         c.register_rule(Rule {
@@ -46,7 +46,7 @@ fn a_breach_freezes_the_start_poisoned() {
             view: View::Audit,
             action: marker_action(),
         }),
-        Err(RuleError::DanglingDefTrigger(x)) if x == g
+        Err(RuleError::UndefinedDefTrigger(x)) if x == g
     ));
     assert!(matches!(c.register_pred(&doc1(), &g), Err(RegisterError::ParseFailed)));
 }
@@ -133,8 +133,8 @@ fn a_probe_before_registration_does_not_freeze_the_start() {
         c.evaluate_def(&start, &[Value::Addr(ca(2))], View::Active, &k.snapshot()),
         Err(EvalError::NotEverRegistered)
     );
-    assert!(matches!(c.type_check(vec![], reference()), Err(TypeError::DanglingReference(_))));
-    assert!(matches!(def_rule(&mut c), Err(RuleError::DanglingDefTrigger(_))));
+    assert!(matches!(c.type_check(vec![], reference()), Err(TypeError::UndefinedReference(_))));
+    assert!(matches!(def_rule(&mut c), Err(RuleError::UndefinedDefTrigger(_))));
 
     let (defined, _) = c
         .define_predicate(&doc1(), &c.type_check(vec![(v(1), Sort::Addr)], tru()).expect("P(x)"))

@@ -50,6 +50,7 @@ gate run. Release binaries are `skepd` and `skep-mcp`; library crates
 publish to crates.io as they stabilize (`skep-address` first). The wire contract clients build against is
 `docs/wire.md` — the contract as it stands; versioning begins at the first
 release, independent of crate versions. License: MIT OR Apache-2.0 (dual, the Rust convention).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the commit convention.
 
 ---
 

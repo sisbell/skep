@@ -111,13 +111,12 @@ mod eval;
 mod dynamics;
 // PR3's flat reference expansion, the tree the analyses read.
 mod expand;
-// The def-status memo: permanence here, admission in `coordinator::defs`.
-mod memo;
 // The rule engine's public vocabulary: rules, actions, occurrences, outcomes.
 mod rule;
 // The handle, `Coordinator`: construction, the class-bearing surfaces and
-// group A; its children `defs` (group B) and `engine` (group C) are the rest
-// of its impl and share its private state.
+// group A; its children are `defs` (group B) and `engine` (group C), the rest
+// of its impl, and `memo`, the def-status cache it holds — all three inside
+// the wall around its private state.
 mod coordinator;
 
 use skep_arrangement::{HasM5, M5Rec};

@@ -19,7 +19,7 @@ use crate::check::TypedTerm;
 /// its signature (`params`/`result_sort`) and its `Reg`-expanded evaluable
 /// body.
 #[derive(Debug, Clone)]
-pub(crate) enum DefStatus {
+pub(super) enum DefStatus {
     Defined(Arc<TypedTerm>),
     Poisoned,
     NeverRegistered,
@@ -37,7 +37,7 @@ enum MemoEntry {
 /// An ever-registered start whose immutable content fails the PR-ENC parse or
 /// WT — the breach the poison records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Breach;
+pub(super) struct Breach;
 
 /// The memo. THE POLICY, in two halves. THIS TYPE OWNS PERMANENCE: the first
 /// fill of a start wins and every later fill of it is a no-op (racing fills
@@ -57,16 +57,16 @@ pub(crate) struct Breach;
 /// write under it is an `or_insert_with` of a fully built entry, so a panic
 /// mid-write leaves nothing torn to guard.
 #[derive(Debug)]
-pub(crate) struct DefMemo(RwLock<HashMap<Tumbler, MemoEntry>>);
+pub(super) struct DefMemo(RwLock<HashMap<Tumbler, MemoEntry>>);
 
 impl DefMemo {
-    pub(crate) fn new() -> DefMemo {
+    pub(super) fn new() -> DefMemo {
         DefMemo(RwLock::new(HashMap::new()))
     }
 
     /// The cached status, if any — `None` means "derive it", never "not a
     /// def".
-    pub(crate) fn get(&self, start: &Address) -> Option<DefStatus> {
+    pub(super) fn get(&self, start: &Address) -> Option<DefStatus> {
         let memo = self.0.read().unwrap_or_else(PoisonError::into_inner);
         memo.get(start.tumbler()).map(|e| match e {
             MemoEntry::Defined(term) => DefStatus::Defined(Arc::clone(term)),
@@ -76,7 +76,7 @@ impl DefMemo {
 
     /// Record the derived status for an ever-registered start — first fill
     /// wins — and answer with whatever the memo now holds for it.
-    pub(crate) fn fill(&self, start: &Address, derived: Result<TypedTerm, Breach>) -> DefStatus {
+    pub(super) fn fill(&self, start: &Address, derived: Result<TypedTerm, Breach>) -> DefStatus {
         let mut memo = self.0.write().unwrap_or_else(PoisonError::into_inner);
         let entry = memo.entry(start.tumbler().clone()).or_insert_with(|| match derived {
             Ok(t) => MemoEntry::Defined(Arc::new(t)),

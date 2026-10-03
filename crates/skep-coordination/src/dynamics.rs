@@ -182,21 +182,24 @@ pub struct ActiveExceptions {
 /// Per-node analysis: footprint, ⊤-stability (st), ⊥-stability (sf), and —
 /// for set-valued nodes — membership in PD0's grow-only closure. PD0's other
 /// closure property, step-constancy, is the footprint's own
-/// ([`Footprint::is_step_constant`]) rather than a field here.
+/// ([`Footprint::is_step_constant`]) rather than a field here. The rule
+/// engine reads two of a term's: `fp`, the trigger footprint it records,
+/// and `sf`, the certification lint's leg (a).
 #[derive(Debug, Clone)]
 pub(crate) struct Analysis {
     pub(crate) fp: Footprint,
-    pub(crate) st: bool,
+    st: bool,
     pub(crate) sf: bool,
-    pub(crate) grow_only: bool,
+    grow_only: bool,
 }
 
 /// A domain's analysis: its footprint and its membership in PD0's grow-only
 /// closure — the two facts the quantifier, fold and `Filter` rules read of a
-/// domain, and the certification lint's leg (c).
+/// domain; the rule engine reads `grow_only`, the certification lint's leg
+/// (c).
 #[derive(Debug, Clone)]
 pub(crate) struct DomAnalysis {
-    pub(crate) fp: Footprint,
+    fp: Footprint,
     pub(crate) grow_only: bool,
 }
 

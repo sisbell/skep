@@ -7,10 +7,12 @@
 //! The handle's impl is cut one file per capability group. This file holds
 //! construction, the two class-bearing surfaces (`eval_ctx`, `link_writer`),
 //! the one checker invocation and group A; its children `defs` (group B) and
-//! `engine` (group C) are the rest of the impl, and being children they share
-//! the private state this module declares — no other module of the crate can
-//! reach it.
+//! `engine` (group C) are the rest of the impl, and `memo` is the def-status
+//! cache the handle holds. Being children they share the private state this
+//! module declares — no other module of the crate can reach it.
 
+// The def-status memo the handle holds: permanence here, admission in `defs`.
+mod memo;
 // Group B: predicate definitions as content, and their resolution.
 mod defs;
 // Group C: the reactive rule engine and its working set's shapes.
@@ -31,11 +33,11 @@ use crate::dynamics::{classify_term, Dynamics};
 use crate::error::TypeError;
 use crate::eval::{eval_term, EvalCtx};
 use crate::guest::GuestLinks;
-use crate::memo::DefMemo;
 use crate::value::{Env, SignedTerm, Sort, Value};
 use crate::CoordinationWorld;
 
 use engine::CheckedRule;
+use memo::DefMemo;
 
 /// The M5 `Vstream` factory the engine injects: a borrow-scoped op handle
 /// minted off `&Kernel<W>` per call (driver construction is the engine's by

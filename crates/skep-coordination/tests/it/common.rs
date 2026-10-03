@@ -7,8 +7,6 @@
 //! rule/marker fixtures lean on the three Unary idem⊤ classes and TO-bearing
 //! tuples enter cataloged classes through the open surface.
 
-#![allow(dead_code)] // each integration test binary uses a subset
-
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -147,10 +145,6 @@ pub fn la(ordinal: u32) -> Address {
 /// uncataloged numbers).
 pub fn ra(ordinal: u32) -> Address {
     a(&[1, 1, 0, 1, 0, 1, 0, 1, ordinal])
-}
-
-pub fn vp(subspace: u32, ordinal: u32) -> VPos {
-    VPos { subspace: n(subspace), ordinal: n(ordinal) }
 }
 
 // ─────────────────────────── the format type set ────────────────────────────

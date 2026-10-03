@@ -14,11 +14,11 @@ use skep_links::{Caller, EmitError, Endset, NullifyError, Pattern, ShippedType, 
 
 use crate::ast::{ArcDom, Dom, Term};
 use crate::check::{Checker, Ctx, TypedTerm};
+use crate::coordinator::memo::DefStatus;
 use crate::coordinator::Coordinator;
 use crate::dynamics::{negated_membership, Analyzer, Emission, Footprint};
 use crate::error::{FireError, RuleError};
 use crate::eval::{as_bool, enum_dom, eval_term};
-use crate::memo::DefStatus;
 use crate::rule::{
     FireAction, FireOutcome, Occurrence, Rule, RuleCertification, RuleId, ScopeBody, StepOutcome,
     Trigger,

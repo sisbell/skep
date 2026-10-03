@@ -2,9 +2,11 @@
 //! this binary, not a target of its own, so the gate links these tests once
 //! instead of once per file. Three suites follow the interface's three
 //! capability groups — `pl` (A), `defs` (B), `engine` (C) — and `surface`
-//! holds what the root publishes across them; `tidy` checks the source
-//! tree's module map. `common` is the assembled world, `terms` the shared
-//! term builders. Nothing but module declarations belongs here.
+//! holds what the root publishes across them; `pl` and `engine` hold their
+//! group's claims as children, one concern each. `tidy` checks the source
+//! tree's module map, and that every file in either tree is declared.
+//! `common` is the assembled world, `terms` the shared term builders. Nothing
+//! but module declarations belongs here.
 
 mod common;
 mod terms;

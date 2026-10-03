@@ -26,11 +26,11 @@ use skep_links::{enc, Endset, ShippedType};
 fn catalog_projects_and_serves_reserved_endsets() {
     let k = kernel();
     let c = coord(&k);
-    assert_eq!(c.reserved_type(ShippedType::PredDef), &enc(&[ra(1)]));
-    assert_eq!(c.reserved_type(ShippedType::PredStable), &enc(&[ra(2)]));
-    assert_eq!(c.reserved_type(ShippedType::Retired), &enc(&[ra(3)]));
-    assert_eq!(c.reserved_type(ShippedType::Supersedes), &enc(&[ra(4)]));
-    assert_eq!(c.reserved_type(ShippedType::Retraction), &enc(&[ra(5)]));
+    assert_eq!(c.reserved_type(ShippedType::PredDef), &enc(&[ra(PRED_DEF)]));
+    assert_eq!(c.reserved_type(ShippedType::PredStable), &enc(&[ra(PRED_STABLE)]));
+    assert_eq!(c.reserved_type(ShippedType::Retired), &enc(&[ra(RETIRED)]));
+    assert_eq!(c.reserved_type(ShippedType::Supersedes), &enc(&[ra(SUPERSEDES)]));
+    assert_eq!(c.reserved_type(ShippedType::Retraction), &enc(&[ra(RETRACTION)]));
 }
 
 /// The reserved expansion-name range is structurally uninhabitable by caller

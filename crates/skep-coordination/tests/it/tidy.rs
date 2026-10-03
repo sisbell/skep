@@ -3,11 +3,12 @@
 //! order's rule — each module names only modules above it and the root's own
 //! `CoordinationWorld`, test code included. Two checks hold it.
 //!
-//! The first reads the tree's shape: every file under `src/` is a module its
-//! parent declares — the compiler never reads a file no `mod` names, and no
-//! build says so — and every such declaration but a `tests` module carries
-//! its map line, a `//` comment directly above it (an attribute between the
-//! two is allowed).
+//! The first reads the trees' shape: every file under `src/`, and under the
+//! test target's `tests/it/`, is a module its parent declares — the compiler
+//! never reads a file no `mod` names, and no build says so — and every `src/`
+//! declaration but a `tests` module carries its map line, a `//` comment
+//! directly above it (an attribute between the two is allowed). A test-tree
+//! parent names its children in its `//!` doc instead.
 //!
 //! The second reads the order: every path a `src/` file's code spells from
 //! the root — every `crate::…` token, and every `super::…` token that climbs
@@ -35,23 +36,15 @@ const ROOT_ITEM: &str = "CoordinationWorld";
 
 #[test]
 fn every_file_is_declared_and_every_declaration_says_what_it_holds() {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut faults = undeclared_files(crate_dir, "src", "lib");
+    faults.extend(undeclared_files(crate_dir, "tests/it", "main"));
+    let src = crate_dir.join("src");
     let mut files = Vec::new();
     rust_files(&src, &mut files);
     files.sort();
-    let mut faults = Vec::new();
     for file in &files {
         let path = file.strip_prefix(&src).unwrap().display().to_string();
-        if let Some((parent, name)) = declared_by(&src, file) {
-            let parent_text = std::fs::read_to_string(&parent).unwrap_or_default();
-            if !parent_text.lines().any(|line| declared_module(line.trim()) == Some(name.as_str())) {
-                let parent = parent.strip_prefix(&src).unwrap().display();
-                faults.push(format!(
-                    "src/{path}: src/{parent} declares no `mod {name};` — the compiler never reads \
-                     this file"
-                ));
-            }
-        }
         let text = std::fs::read_to_string(file).unwrap();
         let lines: Vec<&str> = text.lines().collect();
         for (i, line) in lines.iter().enumerate() {
@@ -180,25 +173,58 @@ fn declared_module(line: &str) -> Option<&str> {
     item.strip_prefix("mod ")?.strip_suffix(';')
 }
 
-/// The file that must declare a `src/` file, and the name it must declare it
-/// by — `src/lib.rs` declares `ast` for `src/ast.rs`, `src/coordinator.rs`
-/// declares `defs` for `src/coordinator/defs.rs` — or `None` for the root.
-fn declared_by(src: &Path, file: &Path) -> Option<(PathBuf, String)> {
-    let relative = file.strip_prefix(src).ok()?;
+/// Every file under the crate's `tree` that its parent does not declare, as
+/// a fault naming both — the compiler never reads such a file, and no build
+/// says so. `root` is the stem of the tree's root file: `lib` for `src/`,
+/// `main` for the test target's `tests/it/`.
+fn undeclared_files(crate_dir: &Path, tree: &str, root: &str) -> Vec<String> {
+    let dir = crate_dir.join(tree);
+    let shown = |path: &Path| path.strip_prefix(crate_dir).unwrap().display().to_string();
+    let mut files = Vec::new();
+    rust_files(&dir, &mut files);
+    files.sort();
+    let (mut faults, mut held) = (Vec::new(), 0);
+    for file in &files {
+        let Some((parent, name)) = declared_by(&dir, root, file) else { continue };
+        held += 1;
+        let parent_text = std::fs::read_to_string(&parent).unwrap_or_default();
+        if !parent_text.lines().any(|line| declared_module(line.trim()) == Some(name.as_str())) {
+            faults.push(format!(
+                "{}: {} declares no `mod {name};` — the compiler never reads this file",
+                shown(file),
+                shown(&parent)
+            ));
+        }
+    }
+    assert!(
+        held > 0,
+        "{tree}: this check held no file to its parent — the layout it reads has moved"
+    );
+    faults
+}
+
+/// The file that must declare `file`, and the name it must declare it by, in
+/// the tree at `dir` whose root file's stem is `root` — in `src/`, `lib.rs`
+/// declares `ast` for `ast.rs` and `coordinator.rs` declares `defs` for
+/// `coordinator/defs.rs`; in `tests/it/`, `main.rs` declares `pl` for
+/// `pl.rs` and `pl.rs` declares `typing` for `pl/typing.rs` — or `None` for
+/// the root itself.
+fn declared_by(dir: &Path, root: &str, file: &Path) -> Option<(PathBuf, String)> {
+    let relative = file.strip_prefix(dir).ok()?;
     let mut parts: Vec<String> =
         relative.iter().map(|part| part.to_string_lossy().into_owned()).collect();
     let last = parts.pop()?;
     let name = match last.strip_suffix(".rs")? {
-        "lib" if parts.is_empty() => return None,
+        stem if stem == root && parts.is_empty() => return None,
         "mod" => parts.pop()?,
         stem => stem.to_string(),
     };
     let parent = match parts.split_last() {
-        None => src.join("lib.rs"),
-        Some((dir, above)) => {
-            let base = above.iter().fold(src.to_path_buf(), |path, part| path.join(part));
-            let flat = base.join(format!("{dir}.rs"));
-            if flat.exists() { flat } else { base.join(dir).join("mod.rs") }
+        None => dir.join(format!("{root}.rs")),
+        Some((sub, above)) => {
+            let base = above.iter().fold(dir.to_path_buf(), |path, part| path.join(part));
+            let flat = base.join(format!("{sub}.rs"));
+            if flat.exists() { flat } else { base.join(sub).join("mod.rs") }
         }
     };
     Some((parent, name))

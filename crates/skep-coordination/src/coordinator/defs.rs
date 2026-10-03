@@ -37,6 +37,7 @@ use skep_links::{Caller, Pattern, ShippedType, Tip, View};
 use crate::ast::Term;
 use crate::check::{DefSource, TypedTerm, Unresolved};
 use crate::codec;
+use crate::coordinator::memo::{Breach, DefStatus};
 use crate::coordinator::Coordinator;
 use crate::dynamics::{st_plus, view_independent};
 use crate::error::{
@@ -44,7 +45,6 @@ use crate::error::{
 };
 use crate::eval::eval_term;
 use crate::expand::{Expander, ExpansionTooLarge};
-use crate::memo::{Breach, DefStatus};
 use crate::value::{Env, Signature, SignedTerm, Sort, Value};
 use crate::walk::{visit_term, Visit};
 use crate::CoordinationWorld;

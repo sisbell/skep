@@ -4,8 +4,6 @@
 //! one-line constructor over the public AST; a suite module imports the lot
 //! and uses what it needs.
 
-#![allow(dead_code)] // each suite module uses a subset
-
 use std::sync::Arc;
 
 use skep_address::Address;

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use skep_address::{Address, Tumbler};
 
 use crate::error::ContentError;
-use crate::guard::debug_assert_content_address_routing;
+use crate::routing::debug_assert_content_address_routing;
 use crate::value::Val;
 
 /// Fixed-seed deterministic build-hasher (§Core data model: keys are trusted
@@ -94,9 +94,9 @@ pub struct ContentStore {
 impl Serialize for ContentStore {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut store = serializer.serialize_struct("ContentStore", 1)?;
-        store.serialize_field("map", &InTumblerOrder(&self.map))?;
-        store.end()
+        let mut state = serializer.serialize_struct("ContentStore", 1)?;
+        state.serialize_field("map", &InTumblerOrder(&self.map))?;
+        state.end()
     }
 }
 
@@ -128,9 +128,9 @@ fn entry_by_entry<'de, D: serde::Deserializer<'de>>(
 ) -> Result<im::HashMap<Tumbler, Val, FixedHasher>, D::Error> {
     use serde::de::{MapAccess, Visitor};
 
-    struct Entries;
+    struct MapVisitor;
 
-    impl<'de> Visitor<'de> for Entries {
+    impl<'de> Visitor<'de> for MapVisitor {
         type Value = im::HashMap<Tumbler, Val, FixedHasher>;
 
         fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -146,7 +146,7 @@ fn entry_by_entry<'de, D: serde::Deserializer<'de>>(
         }
     }
 
-    deserializer.deserialize_map(Entries)
+    deserializer.deserialize_map(MapVisitor)
 }
 
 impl ContentStore {

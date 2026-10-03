@@ -6,10 +6,10 @@
 //! by address and never by value and `Val` implements no `Hash` (S4), that a
 //! point query matches its address exactly, never a prefix or an extension,
 //! that any byte string is a value and comes back exactly as written, that
-//! the journaled types survive a serde round trip (and M2's real
-//! checkpoint-plus-replay recovery), that the slice's decode takes its
-//! entries in any order and neither journaled type's decode trusts a count
-//! its bytes do not carry or admits a key that is no tumbler, that the
+//! the record and the slice survive a serde round trip (and M2's durable
+//! recovery across a checkpoint), that the slice's decode takes its entries
+//! in any order and neither the record's decode nor the slice's trusts a
+//! count its bytes do not carry or admits a key that is no tumbler, that the
 //! slice's serialized form is the format its readers pin, that a debug build
 //! panics on a non-content address before it looks at what is stored there,
 //! at the line that passed it in, that a value renders into `Debug` as its
@@ -182,7 +182,7 @@ fn apply_write_is_a_pure_insert_only_fold() {
     debug_assertions,
     should_panic(expected = "already stored in the slice it is folded into")
 )]
-fn apply_write_never_replaces_a_stored_value_and_nets_the_attempt_in_debug() {
+fn apply_write_never_replaces_a_stored_value_and_panics_on_the_attempt_in_debug() {
     // §A/§C: S0(b) is the fold's own — the stored value wins. Staging against
     // the slice the record is folded into only decides whether a duplicate is
     // refused or dropped: two records for one address, both staged against
@@ -404,10 +404,10 @@ fn debug_renders_a_value_by_its_byte_length_never_its_bytes() {
     );
 }
 
-// ---- serde: the journaled types ----
+// ---- serde: the journaled record and the checkpointed slice ----
 
 #[test]
-fn journaled_types_survive_a_bincode_round_trip() {
+fn the_record_and_the_slice_survive_a_bincode_round_trip() {
     // §A/§Recovery: ContentWrite is the delta M2 journals; the slice is fully
     // serialized in checkpoints. bincode is M2's actual wire format.
     let a1 = ca(1);
@@ -460,16 +460,16 @@ fn the_slice_serializes_as_its_map_alone_in_tumbler_order() {
     // document 2's — not shortest first; and ordinals 256, 2³² and 2⁶⁴ (one
     // `u32` digit past a byte, two digits, three), each sorting after 16 —
     // not by encoded bytes, nor by a low digit.
-    let deep = |prefix: &[u32], last: Nat| {
-        let comps = prefix.iter().map(|&c| Nat::from(c)).chain(std::iter::once(last));
+    let ca_under = |anchor: &[u32], ordinal: Nat| {
+        let comps = anchor.iter().map(|&c| Nat::from(c)).chain(std::iter::once(ordinal));
         validate(Tumbler::new(comps).expect("nonempty")).expect("T4-valid")
     };
     for addr in [
-        deep(&[1, 0, 1, 0, 1, 1, 0, 1], Nat::from(2u32)),
-        deep(&[1, 0, 1, 0, 3, 0, 1], Nat::from(256u32)),
-        deep(&[1, 0, 1, 0, 2, 0, 1], Nat::from(1u64 << 32)),
-        deep(&[1, 0, 1, 0, 1, 1, 0, 1], Nat::from(1u32)),
-        deep(&[1, 0, 1, 0, 4, 0, 1], Nat::from(u64::MAX) + 1u32),
+        ca_under(&[1, 0, 1, 0, 1, 1, 0, 1], Nat::from(2u32)),
+        ca_under(&[1, 0, 1, 0, 3, 0, 1], Nat::from(256u32)),
+        ca_under(&[1, 0, 1, 0, 2, 0, 1], Nat::from(1u64 << 32)),
+        ca_under(&[1, 0, 1, 0, 1, 1, 0, 1], Nat::from(1u32)),
+        ca_under(&[1, 0, 1, 0, 4, 0, 1], Nat::from(u64::MAX) + 1u32),
     ] {
         let bytes = addr.tumbler().to_string().into_bytes();
         c = c.apply_write(&stage_write(&c, &addr, Val::new(bytes.clone())).expect("fresh"));
@@ -503,7 +503,7 @@ fn assert_refused<T: DeserializeOwned>(what: &str, bytes: &[u8]) {
 }
 
 #[test]
-fn journaled_types_refuse_a_count_their_bytes_do_not_carry() {
+fn the_record_and_the_slice_refuse_a_count_their_bytes_do_not_carry() {
     // M2's hostile-input obligation (store.rs, `impl Serialize for
     // ContentStore`): a checkpoint body and a journal frame are bytes M2 does
     // not trust, and M2 answers one that will not decode by refusing it — a
@@ -537,7 +537,7 @@ fn journaled_types_refuse_a_count_their_bytes_do_not_carry() {
 }
 
 #[test]
-fn journaled_types_refuse_a_key_that_is_no_tumbler() {
+fn the_record_and_the_slice_refuse_a_key_that_is_no_tumbler() {
     // M2's hostile-input obligation, at the key: the slice's decode
     // (`entry_by_entry`) and the record's derived decode take each address as
     // a `Tumbler`, whose `Deserialize` is M1's mint path (`try_from` →
@@ -667,10 +667,10 @@ fn stage_write_composes_into_one_transaction_off_the_working_slice() {
     assert_eq!(c.value_at(a2.tumbler()).map(Val::as_bytes), Some(&b"two"[..]));
 }
 
-// ---- M2-driven recovery: checkpoint load + tail replay ----
+// ---- M2-driven recovery across a checkpoint ----
 
 #[test]
-fn content_survives_durable_recovery_by_checkpoint_and_replay() {
+fn content_survives_durable_recovery_across_a_checkpoint() {
     // §Recovery: M4 owns no recovery machinery — M2's open loads the latest
     // checkpoint (deserializing the slice) and replays the tail by folding
     // ContentWrite records through apply → apply_write: a1 is written before

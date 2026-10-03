@@ -6,7 +6,7 @@ use skep_kernel::{Kernel, Seq, TxnError, WorldState};
 use skep_namespace::M3State;
 
 use crate::error::ContentError;
-use crate::guard::debug_assert_content_address_routing;
+use crate::routing::debug_assert_content_address_routing;
 use crate::store::{stage_write, ContentWrite};
 use crate::value::Val;
 use crate::HasContent;

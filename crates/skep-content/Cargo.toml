@@ -34,8 +34,8 @@ rustc-hash.workspace = true
 # rc for the Arc<[u8]> impls behind Val (§Types & errors).
 serde = { workspace = true, features = ["rc"] }
 # M1 — Tumbler/Address; Level and content_subspace for the routing assertion
-# (src/guard.rs), document_of for `write`. M4 holds no address algebra of its
-# own.
+# (src/routing.rs), document_of for `write`. M4 holds no address algebra of
+# its own.
 skep-address = { path = "../skep-address" }
 # M2 — `write` alone (`test-hooks`): Kernel, Seq, TxnError, WorldState. The
 # library proper names no kernel item: it rides M2 for atomicity, ordering,

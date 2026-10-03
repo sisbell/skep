@@ -35,8 +35,8 @@ impl Val {
     /// allocation, so a `Vec` built only to be wrapped costs a second:
     /// `Val::new([b])` is a one-byte value in one allocation,
     /// `Val::new(vec![b])` in two.
-    pub fn new(b: impl Into<Arc<[u8]>>) -> Val {
-        Val(b.into())
+    pub fn new(bytes: impl Into<Arc<[u8]>>) -> Val {
+        Val(bytes.into())
     }
 
     /// The value's bytes.

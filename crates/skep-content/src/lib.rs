@@ -105,7 +105,7 @@ mod value;
 mod error;
 // The routing assertion (Open build decision #4), shared by `stage_write`
 // and `write`.
-mod guard;
+mod routing;
 // The slice, its fold and point queries, the record, and `stage_write`, the
 // record's one producer (`ContentWrite`'s fields are private to this file).
 mod store;

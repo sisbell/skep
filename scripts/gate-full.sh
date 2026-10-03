@@ -28,6 +28,18 @@ cargo check -p skep-signature --features sign || exit $?
 # whatever the daemon's graph holds.
 cargo check -p skep-arrangement --lib || exit $?
 
+# skep-content's library without `test-hooks` — every test build turns it on
+# (the crate's self dev-dependency), so this is the build that shows the
+# store compiles without `write` and without the two crate edges only it
+# takes.
+cargo check -p skep-content --lib || exit $?
+
+# …and its suite in release. Every other run here is a debug build, and two
+# of M4's behaviors exist only in release: the fold keeping a stored value
+# where a debug build panics, and `write` reaching its `.expect` with the
+# routing assertion compiled out.
+cargo nextest run -p skep-content --release --profile full || exit $?
+
 # The feature edges the full run below never compiles: `client` is
 # default-off, and `observe` is on in every test build. The notebook build
 # (`client` on); the build without the dump route (`observe` off), its

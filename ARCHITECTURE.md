@@ -54,12 +54,22 @@ foundation and on the stores above it.
   §The name space.
 - `skep-content` — the write-once map from address to value: point reads,
   and one unordered enumeration of every entry for the daemon's
-  cell-index rebuild at open.
+  cell-index rebuild at open. One feature, default off: `test-hooks`
+  compiles in `write`, the test-only twin of `stage_write`, and the
+  `skep-kernel` and `skep-namespace` edges only `write` takes. Every debug
+  build asserts that each address written is a content element address.
+  `scripts/gate-full.sh` checks the library without the feature and runs
+  its suite in release.
 - `skep-arrangement` — documents as arrangements of content, versions,
   provenance. Its modules and rules: §The arrangement.
 - `skep-links` — typed links, supersession, retraction.
 - `skep-retrieval` — content and provenance queries.
-- `skep-discovery` — finding links, projection.
+- `skep-discovery` — the link reads: which links reach a document's content
+  (the region family) or match a four-set description (the descriptor
+  family), counted and paged; projection and discoverability; the
+  delete-orphan preview; supersession lineage. It owns no slice and no
+  index, and every link read takes the caller's reader predicate. Its
+  modules are listed in `src/lib.rs` in dependency order, a line each.
 - `skep-coordination` — predicate definitions and the coordinator.
 - `skep-identity` — credential records, key sets, the identity fold. Pure;
   of the skep crates it depends only on `skep-address`.
@@ -230,15 +240,15 @@ vector set at this parser, the examples' one canonical form).
 `skep-namespace` is the one minting authority. Every address a transaction
 creates — account, document, version, content, link — comes off one of its
 five mints, and every store that mints or writes under a chain
-(`skep-content`, `skep-arrangement`, `skep-links`) holds a lock key M3
-built. It also holds who exists, who owns what (ω, the longest seated
-prefix) and each document's publication bit, all in one slice, `M3State`.
-Node addresses come from provisioning and are only admitted. Its modules
-are declared in `src/lib.rs` in dependency order, each with a line saying
-what it holds. `state.rs` is the slice — its types, its journal delta,
-genesis, the fold and the frontier arithmetic; beneath it, `state/mint.rs`
-holds the lock keys and the five mints (§A) and `state/query.rs` the
-queries (§C).
+(`skep-arrangement`, which places content and forks versions, and
+`skep-links`) holds a lock key M3 built. It also holds who exists, who
+owns what (ω, the longest seated prefix) and each document's publication
+bit, all in one slice, `M3State`. Node addresses come from provisioning
+and are only admitted. Its modules are declared in `src/lib.rs` in
+dependency order, each with a line saying what it holds. `state.rs` is the
+slice — its types, its journal delta, genesis, the fold and the frontier
+arithmetic; beneath it, `state/mint.rs` holds the lock keys and the five
+mints (§A) and `state/query.rs` the queries (§C).
 
 Rules that hold across its files:
 

@@ -651,6 +651,107 @@ fn doc_states_the_media_cell_and_its_door() {
     );
 }
 
+/// THE REGISTRY SECTION (the registry's stable core): §Registry states the
+/// twelve rows with their addresses and the "Deposits" column, the deposit
+/// class's four members, the two bodies' canonical forms with the spec's
+/// examples IN CANONICAL FORM and the spaced spelling as what the parse
+/// refuses, the cap, the vector set by path, the record grade's reach — a
+/// deposit's two positions — the registry sequence's order and its refusal
+/// table under the one code, the audit-view refusal's three members with
+/// the endpoint outside, the seeding check's three arms, the interim pins
+/// and what the build does not carry; §The claim ceremony and credentials
+/// points at the four members, §Credential refusals lists the registry's
+/// three classes and points at the family, §Rejection codes points at the
+/// code. The daemon's answers are pinned end to end in `registry.rs` and
+/// `nullify_class.rs`; this pins that the contract says so, and that the
+/// vector set the section names pins the same cap and holds the section's
+/// two examples as admitted bodies.
+#[test]
+fn doc_states_the_registry_rows_the_bodies_and_the_refusals() {
+    let registry = prose(
+        "\n### Registry — the twelve rows, the two bodies and the record grade",
+        &["\n### Links (writes)"],
+    );
+    for fact in [
+        "| `1.1.0.1.0.1.0.3.55` | the BINDING — the registration record | on the bare ordinal (one reading) |",
+        "| `1.1.0.1.0.1.0.3.56` | the ENDPOINT | on the bare ordinal (one reading); no subtype row |",
+        "| `1.1.0.1.0.1.0.3.57` | the TAKEDOWN RECORD — the kind | NONE on the bare ordinal (two readings) |",
+        "| `1.1.0.1.0.1.0.3.57.1` | the takedown record's own BASE reading | on this row |",
+        "| `1.1.0.1.0.1.0.3.57.2` | LIFTED | on this row |",
+        "| `1.1.0.1.0.1.0.3.58` | the POLICY LINK — the kind | NONE on the bare ordinal (five readings) |",
+        "| `1.1.0.1.0.1.0.3.58.1` | the policy link's OWN reading | on this row |",
+        "| `1.1.0.1.0.1.0.3.58.2` | the DISAVOWAL | on this row |",
+        "| `1.1.0.1.0.1.0.3.58.3` | an expulsion's GROUND RECORD | on this row |",
+        "| `1.1.0.1.0.1.0.3.58.4` | a succession's GROUND RECORD | on this row |",
+        "| `1.1.0.1.0.1.0.3.58.5` | the ORG-CHOSEN SUCCESSION POLICY | on this row |",
+        "| `1.1.0.1.0.1.0.3.59` | `successor-of` — the succession claim | on the bare ordinal (one reading) |",
+        "**The deposit class's four members.**",
+        "`parse(b)` answers a record only where `b == encode(parse(b))`",
+        r#"{"type":"binding","prefix":"1.5"}"#,
+        r#"{"type":"endpoint","origins":["https://acme.example","https://acme.example.net","http://<acme's onion host>.onion"]}"#,
+        "are what the parse REFUSES",
+        "16 KiB",
+        "crates/skep-registry/tests/vectors/records.json",
+        "**The record grade for registry records**",
+        "BOTH of the deposit's positions",
+        "| `claim_first` | permanent |",
+        "| `signed_session_required` | permanent |",
+        "| `not_doc_one` | permanent |",
+        "| `registry_form` | permanent |",
+        "| `malformed_record:<cause>` | permanent |",
+        "| `attestation_required` | reorder |",
+        "| `attestation_invalid:<cause>` | the cause's |",
+        r#"{"code":"registry_refused","detail":"registry_form","disposition":"permanent","op":"make_link","resp":"rejected"}"#,
+        "**The audit-view refusal**",
+        "The ENDPOINT is NOT a member",
+        "**The seeding check**",
+        "**INTERIM PINS**",
+        "What this build does NOT carry, by name",
+        "The checked set of the write-path check is UNCHANGED",
+    ] {
+        assert!(registry.contains(fact), "§Registry says {fact:?}");
+    }
+    let fixture: Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../skep-registry/tests/vectors/records.json"),
+        )
+        .expect("the vector set the section names exists"),
+    )
+    .expect("the vector set is JSON");
+    assert_eq!(fixture["cap"].as_u64(), Some(16_384));
+    let vectors = fixture["vectors"].as_array().expect("vectors");
+    for example in [
+        r#"{"type":"binding","prefix":"1.5"}"#,
+        r#"{"type":"endpoint","origins":["https://acme.example","https://acme.example.net","http://<acme's onion host>.onion"]}"#,
+    ] {
+        assert!(
+            vectors.iter().any(|v| v["bytes"].as_str() == Some(example) && v["verdict"] == "ok"),
+            "the section's example is an admitted vector: {example}"
+        );
+    }
+    let credentials = prose("\n### The claim ceremony and credentials", &["\n### Correlation and idempotency"]);
+    assert!(
+        credentials.contains("four members, stated once at §Registry"),
+        "§The claim ceremony and credentials points at the deposit class's four members"
+    );
+    let refusals = prose("\n### Credential refusals", &["\n## Operations"]);
+    for fact in [
+        "the binding (`1.1.0.1.0.1.0.3.55`)",
+        "the takedown record (`1.1.0.1.0.1.0.3.57`)",
+        "the policy link (`1.1.0.1.0.1.0.3.58`)",
+        "the endpoint (`1.1.0.1.0.1.0.3.56`) OUTSIDE",
+        "**The registry sequence's family**",
+        "`registry_refused`",
+    ] {
+        assert!(refusals.contains(fact), "§Credential refusals says {fact:?}");
+    }
+    let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
+    assert!(
+        codes.contains("The registry: registry refused") && codes.contains("§Registry under §Operations"),
+        "§Rejection codes points at §Registry"
+    );
+}
+
 /// THE UPLOAD (media lane B; the record's clauses, the H1 rows): §Media
 /// states the PUT's path family and its five method/path pairs, the
 /// identifier's two carriers, the seven clauses each by number, the nine

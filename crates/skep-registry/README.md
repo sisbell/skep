@@ -1,0 +1,70 @@
+# skep-registry
+
+The registry's stable core as values: the twelve commons rows the registry
+allocates, the binding and endpoint bodies under one canonical rule, the
+seeding check, and the vector set every parser of the bodies is held to.
+
+Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substrate in the Project Xanadu lineage.
+
+## 1. What skep-registry is
+
+The registry is a skep board under the account law: a registrar's console
+binds a prefix to a node account by a signed deposit into the registrar's
+own doc 1, and an org deposits its endpoint into its node account's doc 1.
+What those two halves share — the daemon that verifies and commits the
+deposits, and the resolver that reads them back — is this crate:
+
+- **The twelve rows** (`rows`, `Row`, `Kind`, `Subtype`, and a held reader
+  per row, `t_binding` … `t_successor_of`) — five kinds on the reserve's
+  ordinals `3.55`–`3.59` of the ghost home document's type subspace and
+  seven subtype rows nested under their kinds by prefix, at the addresses
+  commons-map pins (REG-1.14, REG-1.15, REG-1.20, REG-1.24): the binding
+  `3.55`, the endpoint `3.56`, the takedown record `3.57` with its base
+  reading `3.57.1` and LIFTED `3.57.2`, the policy link `3.58` with its own
+  reading `3.58.1`, the disavowal `3.58.2`, an expulsion's ground record
+  `3.58.3`, a succession's ground record `3.58.4` and the org-chosen
+  succession policy `3.58.5`, and `successor-of` `3.59`. Each row says
+  whether a deposit rides its address (REG-1.18: a kind that reads more than
+  one way carries none on its bare ordinal) and the `type` string its body
+  carries where it has one.
+- **The two bodies** (`Binding`, `Endpoint`, `parse`, `encode`, `Record`,
+  `Refusal`) — `{"type":"binding","prefix":…}` and
+  `{"type":"endpoint","origins":[…]}`, each with `replaces` where a later
+  record names the one it replaces and `sig` where signed, under THE
+  CANONICAL RULE: `parse(b)` answers a body only where `b ==
+  encode(parse(b))`. The parse checks the FORM of every member — `type` the
+  kind the caller names, no JSON number anywhere, no member beside the row's
+  own, `prefix` and `replaces` addresses in dotted decimal, `origins`
+  non-empty — and never a member's admissibility, which is the resolver's
+  and the reader's. A body past `MAX_REGISTRY_RECORD_BYTES` (16 KiB,
+  interim; a signed body carries its `sig` inside it, near seven kilobytes
+  of hex under the production row) is refused before any parse. The other
+  five body kinds have rows here and no parser: their schemas are pinned
+  where their own rules land.
+- **The seeding check** (`seeding_check`, `SeedingRefusal`) — three arms over
+  the registry's rows and every other commons row a build holds:
+  DISJOINTNESS at the subtree grain, COMPLETENESS against the kinds' home,
+  and THE COUNT against the reserve's five ordinals (REG-1.28 to REG-1.32).
+  A refusal names its arm; the hand that runs it writes nothing.
+- **The vector set**, `tests/vectors/records.json` — the admitted and
+  refused bodies, one JSON array, with each refused body's cause and each
+  admitted body's sig-less canonical projection. Every parser of the two
+  bodies runs it in its own gate: this crate's parser here, and the
+  resolver's, which loads the same file. A parser is never derived from
+  another parser.
+
+Who reads it: the daemon, whose write path parses a registry record at the
+atom's `insert` and verifies its `sig` at the deposit's `make_link` under
+the set that opens its home, and whose open runs the seeding check ahead of
+every genesis; and the resolver, which folds the registry board's rows into
+the prefix → binding index and reads the current endpoint off the active
+view.
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](../../LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](../../LICENSE-MIT))
+
+at your option.

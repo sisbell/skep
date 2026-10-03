@@ -41,6 +41,10 @@ im.workspace = true
 skep-address = { path = "../skep-address" }
 # M2 — Kernel::open over the assembled World; WorldState is implemented here.
 skep-kernel = { path = "../skep-kernel" }
+# The registry's twelve commons rows, read by the `types` ledger's readers
+# — one table, the crate's — so the ledger names every commons pin and the
+# registry's rows never carry a second spelling here.
+skep-registry = { path = "../skep-registry" }
 # M3–M7 — the four state-contributing store crates: one slice, one record
 # variant, one accessor impl, one fold dispatch apiece.
 skep-namespace = { path = "../skep-namespace" }

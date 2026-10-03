@@ -543,7 +543,10 @@ Deposit slots are **address-form only** (`{"addrs": […]}`): a V-spec
 refuses `emit_not_make_link`, and a credential-typed `edit_link` always
 refuses `resolved_from` (§Credential refusals). The home pin (RES-17):
 a credential link homed in any document of its account other than
-doc 1 refuses `not_doc_one`.
+doc 1 refuses `not_doc_one`. The deposit class the insert door tests a
+declared deposit's class type against holds enroll and retire beside
+the registry's binding and endpoint — four members, stated once at
+§Registry under §Operations, where the registry's own record grade is.
 
 The records themselves are plain content. Write the record's bytes into
 the home document first — the convention is ONE composite atom, so one
@@ -1362,6 +1365,13 @@ one of the media door's three tokens — unbound cell, unknown cell schema,
 and lease lapsed — `permanent` all three, spelled and tabled in §Media
 under §Operations.
 
+The registry: registry refused — the registry sequence's one code, the
+credential family's shape under a code of its own, always carrying a
+machine detail token, permanent at every token but the two attestation
+tokens, which carry their own classes; a link write typed the registry's
+binding or endpoint answers it, spelled and tabled in §Registry under
+§Operations.
+
 Registration/residence: `home_not_registered`, `doc_not_registered`,
 `source_not_registered`, `parent_not_registered`, `not_registered`,
 `original_not_resident`, `endpoint_not_resident`.
@@ -1776,6 +1786,18 @@ behind every gate above and ahead of the store — to a value naming the
 picture cell's kind in a draft, or at the owner's own shot; stated with
 their faces and their interim standing at their own section.
 
+**The registry sequence's family** (§Registry under §Operations): a
+`make_link` typed the registry's binding or endpoint takes a sequence of
+its own, whose refusals ride the same `rejected` shape under a code of
+its own, `registry_refused` — `claim_first`, `signed_session_required`,
+`not_doc_one`, `registry_form`, `malformed_record:<cause>`,
+`attestation_required` and `attestation_invalid:<cause>` — the tokens
+that family shares with this one spelled alike and never renamed, and
+tabled with their classes at that section. The registry record's ATOM
+takes this family's `record_sig_required` at its `insert`, as a
+credential record's does: a record of the declared kind carrying no `sig`
+lands nowhere.
+
 Every publish-class write of the ten kinds on a claimed board is judged;
 the system account's own writes (the head document's, owned by
 `1.1.0.1`) are exempt by ownership and never dispatched. Every other
@@ -1877,10 +1899,16 @@ resolves AFTER every token below.
      (`1.1.0.1.0.1.0.3.22`); the rail record (`1.1.0.1.0.1.0.3.60`);
      the steward's classification link (`1.1.0.1.0.1.0.3.61`) where the
      LINK's OWN HOME is published — draft-homed, it is an ordinary link
-     and its owner's retraction lands; and the `replaces` link a grant is
+     and its owner's retraction lands; the `replaces` link a grant is
      deposited with (`1.1.0.1.0.1.0.3.12`, §The read predicate): its
      retraction would leave every active-view read of the pair naming the
-     EMPTY state for a grant that named a revocation. ONE code for the class list; a
+     EMPTY state for a grant that named a revocation; and the registry's
+     three classes (§Registry under §Operations) — the binding
+     (`1.1.0.1.0.1.0.3.55`), the takedown record (`1.1.0.1.0.1.0.3.57`)
+     and the policy link (`1.1.0.1.0.1.0.3.58`), each with its subtype
+     rows by prefix — the endpoint (`1.1.0.1.0.1.0.3.56`) OUTSIDE by the
+     same test, read on the active view with its org's own retraction
+     landing. ONE code for the class list; a
      client splits the
      face by the target's type, which the owner can read. The classes are
      the members' list, never the boundary: the next audit-view class
@@ -2673,6 +2701,207 @@ counts (the own scope's base is zero here), the pruner — nothing under
 the next open — the readiness refusal, the fetch route and the read by
 identity: lanes C and D. The door's armed set above is whole, so no later
 lane moves one state's answer from one code to another (PATTERNS P6).
+
+### Registry — the twelve rows, the two bodies and the record grade
+
+The REGISTRY is a skep board under the account law: a registrar's console
+binds a prefix to a node account by a signed deposit into the registrar's
+own doc 1, and an org deposits its endpoint into its node account's doc 1
+(REG-1.1, REG-1.9, REG-2.18). What this build carries is the registry's
+STABLE CORE on the daemon's side — the twelve commons rows the registry
+allocates, the binding's and the endpoint's bodies under one canonical
+rule, the record grade for registry records at both of a deposit's
+positions, the audit-view refusal for the registry's classes, and the
+seeding check the daemon runs ahead of every genesis — the values of one
+crate, `skep-registry`, which a resolver reads too. No resolve, no door,
+no takedown and no fork stands here.
+
+**The twelve rows** (REG-1.14, REG-1.15, REG-1.24; commons-map's table of
+them): five kinds on the reserve's ordinals `3.55`–`3.59` of the ghost
+document's type subspace `1.1.0.1.0.1.0.3` — where the credential kinds
+sit at `3.1`–`3.3` — and seven subtype rows nested under their kinds by
+prefix (REG-1.20), each subtype its own wire type at the type slot
+(REG-1.21). A kind that reads ONE way carries its deposits on its bare
+ordinal; a kind that reads more than one way carries NONE there, every
+reading a row under it (REG-1.18). The rows are PINS — compiled addresses
+the daemon keys on, as the credential types are — and genesis seeds no
+record at any of them.
+
+| Address | Row | Deposits |
+| --- | --- | --- |
+| `1.1.0.1.0.1.0.3.55` | the BINDING — the registration record | on the bare ordinal (one reading) |
+| `1.1.0.1.0.1.0.3.56` | the ENDPOINT | on the bare ordinal (one reading); no subtype row |
+| `1.1.0.1.0.1.0.3.57` | the TAKEDOWN RECORD — the kind | NONE on the bare ordinal (two readings) |
+| `1.1.0.1.0.1.0.3.57.1` | the takedown record's own BASE reading | on this row |
+| `1.1.0.1.0.1.0.3.57.2` | LIFTED | on this row |
+| `1.1.0.1.0.1.0.3.58` | the POLICY LINK — the kind | NONE on the bare ordinal (five readings) |
+| `1.1.0.1.0.1.0.3.58.1` | the policy link's OWN reading | on this row |
+| `1.1.0.1.0.1.0.3.58.2` | the DISAVOWAL | on this row |
+| `1.1.0.1.0.1.0.3.58.3` | an expulsion's GROUND RECORD | on this row |
+| `1.1.0.1.0.1.0.3.58.4` | a succession's GROUND RECORD | on this row |
+| `1.1.0.1.0.1.0.3.58.5` | the ORG-CHOSEN SUCCESSION POLICY | on this row |
+| `1.1.0.1.0.1.0.3.59` | `successor-of` — the succession claim | on the bare ordinal (one reading) |
+
+**The deposit class's four members.** The set the insert door tests a
+declared deposit's class type against (§The claim ceremony and
+credentials; §Arrangement) holds, in order: enroll `1.1.0.1.0.1.0.3.1`,
+retire `1.1.0.1.0.1.0.3.2`, the binding `1.1.0.1.0.1.0.3.55` and the
+endpoint `1.1.0.1.0.1.0.3.56` — the four atom-bearing kinds whose records
+the daemon parses. A declared `insert` under any other registry row — the
+five other body-bearing rows among them, until their schemas are pinned —
+is refused `published_target` at the door, and the three link-alone rows
+(`…3.57.2`, `…3.58.1`, `…3.59`) carry no body ever.
+
+**The two bodies** (REG-1.86). A binding's and an endpoint's atom is ONE
+JSON OBJECT naming its kind in `type`, the row's member beside it,
+`replaces` where a later record names the deposit it replaces, `sig`
+where signed, and NOTHING ELSE — under THE CANONICAL RULE, the credential
+record's own admission rule applied to the flat object: `parse(b)`
+answers a record only where `b == encode(parse(b))`. The canonical form
+is `{"type":"<the row's string>"`, then the row's member, then `replaces`
+where present, then `sig` where present, `}` — no whitespace outside
+strings, the shortest JSON escapes and no others, no byte after the
+brace. The members:
+
+| row | `type` | members |
+| --- | --- | --- |
+| the binding | `"binding"` | `prefix` — a string, the prefix in address form, dotted decimal; `replaces` — a string, the link's address of the binding this one replaces at that prefix, ABSENT on an allocation |
+| the endpoint | `"endpoint"` | `origins` — an array of strings, AT LEAST ONE, the org's origins in its own order; `replaces` — a string, the link's address of the endpoint deposit this one replaces, ABSENT on the org's first |
+
+The daemon checks the FORM of every member and never its admissibility:
+`type` is the string of the kind the link's type slot names, and a body
+whose `type` is another kind's is no record of the slot's kind; NO member
+is a JSON number, anywhere in the body; `prefix` and `replaces` parse as
+addresses in their one spelling (no sign, no leading zero, the whole
+T4-valid); `origins` is non-empty. Whether an origin is https with a
+routable host is the resolver's check, and whether `replaces` names the
+deposit current at the record's position is the reader's currency rule —
+a later record naming one that is no longer current COMMITS and is inert
+at every reader (REG-1.10, REG-2.24). A body past the cap, 16 KiB with
+its `sig` inside it, is refused before any parse. The two examples, in
+canonical form — 33 and 116 bytes:
+
+```
+{"type":"binding","prefix":"1.5"}
+```
+
+```
+{"type":"endpoint","origins":["https://acme.example","https://acme.example.net","http://<acme's onion host>.onion"]}
+```
+
+The same two with a space after each colon and comma — the spelling a
+specification prints them in — are what the parse REFUSES, as it refuses
+a member twice, a member out of order, a `\/` escape and a trailing
+newline: the admitted and refused bodies are ONE VECTOR SET,
+`crates/skep-registry/tests/vectors/records.json`, which every parser of
+the bodies runs in its own gate; a parser is never derived from another
+parser.
+
+**The record grade for registry records** (signed ops; REG-1.86 (e)). A
+registry record is signed and never hashed: above the claim its `sig`
+member carries the hybrid signature blob in hex, as a credential record's
+does, made by the writing hand's key over the entry frame under the
+`record` grammar — `board` `H.1`'s pair, `account` the HOME's account (ω
+over the home: the claimant's for a binding in the registrar's doc 1, the
+node account's for an endpoint in its own), `doc` the home, and the
+body's five rows: the link's type address, its target as stored (the
+account bound, or none), the `replaces` row EMPTY (the member rides
+INSIDE the signed body for these kinds, and no `replaces` link is written
+with them), the lineage row EMPTY, and the SIG-LESS CANONICAL PROJECTION
+of the body. The record covers BOTH of the deposit's positions: the atom's
+`insert`, declared under the kind's type, is exempt from the entry
+signature where it parses as a record of that kind, carries its `sig` and
+lands in a doc 1 — a record of the kind carrying none is refused at its
+`insert`, `record_sig_required` — and its `make_link`, routed to THE
+REGISTRY SEQUENCE, is where the `sig` is verified under THE SET THAT
+OPENS THE HOME'S ACCOUNT, at device grade (no rule names an anchor grade
+for a registry record), and commits with its marker slot EMPTY by route:
+the link's row on `/changes` carries neither `key` nor `attest`, as a
+credential deposit's does, and the atom's row carries `key`. The system
+account's doc 1 admits no registry record: a registry-kind `insert` into
+it is refused `system_account_keyless` as a credential-kind one is, and
+no atom can be read there for a link to name.
+
+**The registry sequence and its refusals.** A `make_link` whose type slot
+names the binding or the endpoint takes the registry sequence — chosen
+off the op's own type slot ahead of any lock, after the credential route
+and before the plain one — under the serialization lock and the
+credential lock's read arm, in this order: above the claim only
+(`claim_first` on an unclaimed board) and from a signed session
+(`signed_session_required`); the HOME PIN — the home is a doc 1, else
+`not_doc_one`; THE FORM — an address-form `make_link` carrying no
+`replaces` member, its `from` ONE atom in the home's own space, its `to`
+EMPTY or ONE address, which for a binding is a registered account on this
+board (a targetless binding being the one spelling of "no account") and
+for an endpoint is none — else `registry_form`; THE RECORD VALUE — the
+atom's bytes parsed by the kind the slot names, else
+`malformed_record:<cause>` with the parser's cause joined (`wrong_type`,
+`number`, `unknown_member`, `empty_origins`, `not_an_address:prefix`,
+`not_canonical`, `past_cap` and the rest, as the vector set spells them);
+NO `sig` → `attestation_required`; and THE TRIAL —
+`attestation_invalid:<cause>` with the record grade's own causes
+(`malformed`, `not_enrolled_at_position`, `signature`,
+`board_unavailable`). Every refusal is the ordinary `rejected` shape
+under ONE code of its own, `registry_refused`, with `detail` the token
+and `disposition` the refusal's class — PERMANENT but for
+`attestation_required` (REORDER) and `attestation_invalid`'s own classes
+— so a client tells the registry's family from the credential's; the
+tokens the two families share are spelled alike and never renamed:
+
+| `detail` | disposition | when |
+| --- | --- | --- |
+| `claim_first` | permanent | the board is unclaimed |
+| `signed_session_required` | permanent | a bare session |
+| `not_doc_one` | permanent | the home is no doc 1 |
+| `registry_form` | permanent | the shape, the `from`, the `to`, or a `replaces` member on the link |
+| `malformed_record:<cause>` | permanent | the atom is no record of the slot's kind under the canonical rule |
+| `attestation_required` | reorder | the record carries no `sig` |
+| `attestation_invalid:<cause>` | the cause's | the `sig` does not verify under the set that opens the home |
+
+```json
+{"code":"registry_refused","detail":"registry_form","disposition":"permanent","op":"make_link","resp":"rejected"}
+```
+
+A refused link commits nothing; the atom it would have named stays an
+orphan no link names, which a reader renders undeterminable.
+
+**The audit-view refusal** (REG-1.44, REG-1.46). The write path's
+`nullify_audit_view` class (§Credential refusals) gains three members and
+no code: the binding `1.1.0.1.0.1.0.3.55`, the takedown record
+`1.1.0.1.0.1.0.3.57` and the policy link `1.1.0.1.0.1.0.3.58`, each at
+its kind's address so every subtype row under the last two is a member by
+prefix; `successor-of` `1.1.0.1.0.1.0.3.59` was a member already. The
+ENDPOINT is NOT a member: it is read on the active view and its org's own
+`nullify` is EFFECTIVE — the deposit leaves the active view and the one
+before it stands (REG-1.11).
+
+**The seeding check** (REG-1.28 to REG-1.32). Ahead of every open — a
+fresh data dir's genesis and a reopen alike — the daemon runs three arms
+over the twelve rows and every other commons row the build holds (the
+engine's pins, the credential types, the deposit class): DISJOINTNESS at
+the subtree grain, COMPLETENESS against the kinds' home, and THE COUNT
+against the reserve's five ordinals; a refusal is a genesis that does not
+complete — the daemon does not open, naming the arm — so a served board
+never holds a registry row that collides with another row or a subtype
+without a row.
+
+**INTERIM PINS** — confirmed at the registry's review round:
+
+* the body cap, 16 KiB, the `sig` member inside it — a binding's members
+  are under a hundred bytes and an endpoint's a few hundred, and the
+  production row's `sig` is 6,746 bytes of hex on its own, so a signed
+  body is near seven kilobytes;
+* the two tokens' spellings, `registry_form` and
+  `malformed_record:<cause>`, and the family's code `registry_refused`.
+
+What this build does NOT carry, by name: the resolve from a root hint and
+the prefix → binding index, which are a resolver's; the five other
+body-bearing rows' schemas and their parse; every door, the queue and the
+reply; the takedown record and its lift (the blocked-prefix list reads
+the version address a takedown record would carry, and that record is
+not written here); the fork and the realm. The checked set of the
+write-path check is UNCHANGED: the ten kinds, a registry deposit's two
+positions taking the record grade in their place.
 
 ### Links (writes)
 

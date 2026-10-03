@@ -23,6 +23,9 @@ const T_JOURNAL_DESIGNATION: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 22];
 const T_RAIL_RECORD: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 60];
 const T_STEWARD_CLASSIFICATION: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 61];
 const T_REPLACES: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 12];
+const T_BINDING: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 55];
+const T_TAKEDOWN_RECORD: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 57];
+const T_POLICY_LINK: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 58];
 
 fn credential() -> TypeAddrs {
     TypeAddrs::new(addr(T_ENROLL), addr(T_RETIRE), addr(T_CLAIM))
@@ -38,6 +41,9 @@ fn audit_list() -> Vec<(AuditClass, skep_address::Address)> {
         (AuditClass::RailRecord, addr(T_RAIL_RECORD)),
         (AuditClass::StewardClassification, addr(T_STEWARD_CLASSIFICATION)),
         (AuditClass::Replaces, addr(T_REPLACES)),
+        (AuditClass::Binding, addr(T_BINDING)),
+        (AuditClass::TakedownRecord, addr(T_TAKEDOWN_RECORD)),
+        (AuditClass::PolicyLink, addr(T_POLICY_LINK)),
     ]
 }
 
@@ -193,6 +199,9 @@ fn the_declared_order_of_the_classes_decides_nothing() {
         T_RAIL_RECORD,
         T_STEWARD_CLASSIFICATION,
         T_REPLACES,
+        T_BINDING,
+        T_TAKEDOWN_RECORD,
+        T_POLICY_LINK,
     ] {
         let subtype: Vec<u32> = class_addr.iter().copied().chain([1]).collect();
         for slot in [vec![unit(class_addr)], vec![unit(&subtype)]] {
@@ -255,11 +264,23 @@ fn a_many_span_slot_is_ordinary_in_two_steps() {
 /// A SUBTYPE BY PREFIX is its class's member (L10: hierarchy is prefix — one
 /// subtree span matches a type and its subtypes): `endorse.trust` is in the
 /// delegator endorsement's class, a grant subtype is a grant, two levels down
-/// too. A "subtype" of a CREDENTIAL type is nothing: `kind_of` is `Equal`-only
-/// (the fold's frozen rule) and the classes do not reach it.
+/// too; the registry's subtype rows — LIFTED under the takedown record, the
+/// disavowal under the policy link — are their kinds' members (REG-1.21,
+/// REG-1.46). A "subtype" of a CREDENTIAL type is nothing: `kind_of` is
+/// `Equal`-only (the fold's frozen rule) and the classes do not reach it.
 #[test]
 fn a_subtype_by_prefix_is_a_member_of_its_class() {
     let t = write_types();
+    assert_eq!(
+        t.target_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 57, 2])]),
+        Some(TargetClass::AuditView(AuditClass::TakedownRecord)),
+        "lifted"
+    );
+    assert_eq!(
+        t.target_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 58, 2])]),
+        Some(TargetClass::AuditView(AuditClass::PolicyLink)),
+        "the disavowal"
+    );
     assert_eq!(
         t.target_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 42, 2])]),
         Some(TargetClass::AuditView(AuditClass::DelegatorEndorsement)),

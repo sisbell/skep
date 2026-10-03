@@ -19,6 +19,7 @@ use std::sync::{LazyLock, PoisonError};
 // The frame's own unit span, named ahead of the glob so it shadows the
 // suite's JSON helper of the same name.
 use skep_identity::unit_span;
+use skep_registry::BodyKind;
 
 use super::*;
 
@@ -624,20 +625,52 @@ pub fn signed_record_text<T: RecordEntry>(
     Some(canonical_record(entries, Some(&hex(&signer.sign(&frame)))))
 }
 
+/// A REGISTRY RECORD's body — the binding's or the endpoint's, in
+/// `skep_registry`'s canonical form — SIGNED at the record grade by `signer`
+/// for a deposit homed in `home`, typed `ty`, naming `to` (the record grade
+/// for registry records; REG-1.86 (e)): the atom's TEXT, the body carrying,
+/// as its `sig`, the hybrid blob's hex over [`record_frame_for`]'s frame with
+/// the body's SIG-LESS CANONICAL PROJECTION as its body-bytes row — the same
+/// frame the daemon composes at the record's `make_link`. `None` where the
+/// frame cannot be composed (no `H.1`, an unowned home), where `ty` is no
+/// registry kind, or where `body` is no record of that kind under the
+/// canonical rule.
+pub fn signed_registry_text(
+    port: u16,
+    signer: &HybridSigner,
+    home: &str,
+    ty: &str,
+    to: &[&str],
+    body: &str,
+) -> Option<String> {
+    let kind = match ty {
+        T_BINDING => BodyKind::Binding,
+        T_ENDPOINT => BodyKind::Endpoint,
+        _ => return None,
+    };
+    let record = skep_registry::parse(kind, body.as_bytes()).ok()?;
+    let alg = SigAlgRow::of_tag(signer.tag())?.token;
+    let canonical = record.canonical_sigless();
+    let frame = record_frame_for(port, alg, home, ty, to, canonical.as_bytes())?;
+    Some(skep_registry::encode(&record.body, Some(&hex(&signer.sign(&frame)))))
+}
+
 /// A record ATOM (its JSON fragment, as [`json_atom`] spells one) RE-SIGNED
 /// for the deposit its caller is about to make — homed in `home`, typed `ty`,
 /// naming `to` — under the key that opened `token`'s session: the atom's text
-/// is parsed by the kind `ty` names (the record grade's own parse,
-/// `parse_record_value`), the entries re-encoded with the `sig` the frame's
-/// signature makes. THE ATOM IS RETURNED AS GIVEN where nothing can be
-/// signed: a bare or foreign token (no seed carrier opened it), a board with
-/// no `H.1` yet (at or below the claim, where no record is judged, A5), a type
-/// of no record-bearing kind, or a text no parser admits (a malformed record,
-/// which the fold refuses ahead of any signature and which a cell sends on
-/// purpose) — so every helper that lands a record can pass through here, and
-/// only a record the daemon would judge is signed. Every address the frame
-/// names is PARSED before it is framed, so a leading-zero spelling on the
-/// wire signs its one address.
+/// is parsed by the kind `ty` names (the record grade's own parse —
+/// `parse_record_value` for a credential kind, `skep_registry`'s parse under
+/// the canonical rule for the binding and the endpoint), the record
+/// re-encoded with the `sig` the frame's signature makes. THE ATOM IS
+/// RETURNED AS GIVEN where nothing can be signed: a bare or foreign token
+/// (no seed carrier opened it), a board with no `H.1` yet (at or below the
+/// claim, where no record is judged, A5), a type of no record-bearing kind,
+/// or a text no parser admits (a malformed record, which the daemon refuses
+/// ahead of any signature and which a cell sends on purpose) — so every
+/// helper that lands a record can pass through here, and only a record the
+/// daemon would judge is signed. Every address the frame names is PARSED
+/// before it is framed, so a leading-zero spelling on the wire signs its one
+/// address.
 pub fn signed_atom(port: u16, token: &str, home: &str, ty: &str, to: &[&str], atom: &str) -> String {
     let Some((_, seed)) = signer_of(token) else {
         return atom.to_string();
@@ -653,6 +686,7 @@ pub fn signed_atom(port: u16, token: &str, home: &str, ty: &str, to: &[&str], at
         T_RETIRE => parse_record_value::<Fingerprint>(text.as_bytes())
             .ok()
             .and_then(|v| signed_record_text(port, &signer, home, ty, to, &v.entries)),
+        T_BINDING | T_ENDPOINT => signed_registry_text(port, &signer, home, ty, to, &text),
         _ => None,
     };
     signed.map_or_else(|| atom.to_string(), |text| json_atom(&text))

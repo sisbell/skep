@@ -34,6 +34,19 @@
 //! ([`skep_links::replaces_type`]), and the ledger's tests hold the two
 //! EQUAL.
 //!
+//! THE REGISTRY'S TWELVE ROWS (REG-1.14, REG-1.15; commons-map's table of
+//! them) are `skep-registry`'s table, read through readers here —
+//! [`t_binding`] … [`t_succession_policy`] — so ONE ledger names every
+//! commons pin the engine or the daemon keys on; [`t_successor_of`] stays
+//! the engine's own pin, the registry's fourth kind, and the tests hold it
+//! EQUAL to the crate's row. The daemon's deposit class spells the binding
+//! and the endpoint a second time, M5 sitting below this crate, and the
+//! daemon's suite holds those EQUAL as it holds the credential pair. The
+//! registry's subtype rows NEST under their kinds by prefix (REG-1.20) —
+//! the one prefix relation the ledger's guarantee below admits, by design:
+//! a consumer recognizing a kind's subtypes by prefix reads a subtype row as
+//! its kind's member, which is what REG-1.21 wants of it.
+//!
 //! A pin is HELD, not manufactured per call: each reader below hands back a
 //! borrow of one process-wide value, so the ledger is one instance and not
 //! one construction per consult. That matters where the consults are: the
@@ -44,13 +57,15 @@
 //! for them to depend on.
 //!
 //! GUARANTEE the ledger maintains, and the reason a pin is a decision about
-//! ALL of them: the pins are pairwise DISTINCT and pairwise PREFIX-FREE. A
-//! consumer that recognizes a class's subtypes by prefix — the daemon's write
-//! path does, at every pin it refuses a `nullify` at — relies on it, so a pin
-//! sitting under another's prefix makes one class swallow the other and
-//! silently widens or narrows a refusal nobody chose. The tests below hold it
-//! off ONE list of the pins, which is where a tenth joins: nothing else here
-//! can notice a pin that reaches a consumer without joining the guarantee.
+//! ALL of them: the pins are pairwise DISTINCT and pairwise PREFIX-FREE —
+//! but for a registry subtype row under its own kind's row, the nesting the
+//! registry designs. A consumer that recognizes a class's subtypes by prefix
+//! — the daemon's write path does, at every pin it refuses a `nullify` at —
+//! relies on it, so a pin sitting under another's prefix makes one class
+//! swallow the other and silently widens or narrows a refusal nobody chose.
+//! The tests below hold it off ONE list of the pins, which is where a
+//! twenty-first joins: nothing else here can notice a pin that reaches a
+//! consumer without joining the guarantee.
 
 use std::sync::LazyLock;
 
@@ -97,15 +112,109 @@ pub fn t_edition() -> &'static Address {
 }
 
 /// The succession pair's `successor-of` claim type — `1.1.0.1.0.1.0.3.59`
-/// (PUB-7.63; PUB-6.64's member).
+/// (PUB-7.63; PUB-6.64's member) — and the registry's fourth kind, the
+/// succession claim at the fork's seat (REG-1.14), pinned where the build
+/// had it: commons-map's table of the registry's twelve rows reads `3.59`
+/// as this pin, and the ledger's tests hold it EQUAL to `skep-registry`'s
+/// own row ([`skep_registry::t_successor_of`]).
 ///
-/// commons-map.md: "Succession | successor-of | 3.59 (registry reserve; the
-/// supersession CLAIM stays the managed ⟦supersedes⟧ class, not commons)";
-/// commons-seeding.md's reserved-range table lists `3.59` as CLAIMED. Not
-/// provisional.
+/// commons-map.md: "Succession | successor-of | 3.59"; commons-seeding.md's
+/// reserved-range table lists `3.59` as CLAIMED. Not provisional.
 pub fn t_successor_of() -> &'static Address {
     static ADDR: LazyLock<Address> = LazyLock::new(|| commons_type(59));
     &ADDR
+}
+
+// ── the registry's rows (REG-1.14, REG-1.15), `skep-registry`'s table ────
+
+/// The BINDING — `1.1.0.1.0.1.0.3.55`: the registration record, prefix →
+/// account, deposits riding the bare ordinal (REG-1.18). The daemon's
+/// deposit class holds it (REG-1.37 as the record grade's join re-reads it),
+/// its write path refuses a `nullify` at it (REG-1.44, REG-1.46), and the
+/// record grade verifies its record's `sig` under the set that opens its
+/// home (REG-1.86 (e)).
+pub fn t_binding() -> &'static Address {
+    skep_registry::t_binding()
+}
+
+/// The ENDPOINT — `1.1.0.1.0.1.0.3.56`: the org's own endpoint deposit
+/// (REG-1.9), deposits riding the bare ordinal, no subtype row. The daemon's
+/// deposit class holds it; its `nullify` is ADMITTED — the endpoint is read
+/// on the active view, its org's own retraction effective (REG-1.11,
+/// REG-1.46).
+pub fn t_endpoint() -> &'static Address {
+    skep_registry::t_endpoint()
+}
+
+/// The TAKEDOWN RECORD's kind — `1.1.0.1.0.1.0.3.57`: no deposit on the bare
+/// ordinal (two readings, REG-1.18); the write path refuses a `nullify` at
+/// it and, by prefix, at both rows under it (REG-1.44).
+pub fn t_takedown() -> &'static Address {
+    skep_registry::t_takedown()
+}
+
+/// The takedown record's BASE reading — `1.1.0.1.0.1.0.3.57.1`.
+pub fn t_takedown_base() -> &'static Address {
+    skep_registry::t_takedown_base()
+}
+
+/// LIFTED — `1.1.0.1.0.1.0.3.57.2`, the takedown record's reversal, a
+/// link-alone row.
+pub fn t_takedown_lifted() -> &'static Address {
+    skep_registry::t_takedown_lifted()
+}
+
+/// The POLICY LINK's kind — `1.1.0.1.0.1.0.3.58`: no deposit on the bare
+/// ordinal (five readings, REG-1.18); the write path refuses a `nullify` at
+/// it and, by prefix, at the five rows under it (REG-1.44).
+pub fn t_policy_link() -> &'static Address {
+    skep_registry::t_policy_link()
+}
+
+/// The policy link's OWN reading — `1.1.0.1.0.1.0.3.58.1`, a link-alone row.
+pub fn t_policy_link_own() -> &'static Address {
+    skep_registry::t_policy_link_own()
+}
+
+/// The DISAVOWAL — `1.1.0.1.0.1.0.3.58.2`, the one type of it.
+pub fn t_disavowal() -> &'static Address {
+    skep_registry::t_disavowal()
+}
+
+/// An expulsion's GROUND RECORD — `1.1.0.1.0.1.0.3.58.3`.
+pub fn t_expulsion_ground() -> &'static Address {
+    skep_registry::t_expulsion_ground()
+}
+
+/// A succession's GROUND RECORD — `1.1.0.1.0.1.0.3.58.4`.
+pub fn t_succession_ground() -> &'static Address {
+    skep_registry::t_succession_ground()
+}
+
+/// The ORG-CHOSEN SUCCESSION POLICY — `1.1.0.1.0.1.0.3.58.5`.
+pub fn t_succession_policy() -> &'static Address {
+    skep_registry::t_succession_policy()
+}
+
+/// Every pin of this ledger that is NO registry row, in the ledger's order
+/// — the grant, the edition claim, endorse, the consumption marker, the
+/// journal designation, the rail record, the steward's classification and
+/// `replaces`: the parent's domain as the engine sees it (REG-1.31), which
+/// the seeding check compares the registry's rows against at every genesis
+/// (REG-1.30, REG-1.32). The daemon widens it by the credential constants,
+/// spelled nowhere below the daemon. The ledger's tests hold this list to be
+/// exactly the pins outside the registry's table.
+pub fn pins_outside_the_registry() -> [&'static Address; 8] {
+    [
+        t_grant(),
+        t_edition(),
+        t_endorse(),
+        t_consumption_marker(),
+        t_journal_designation(),
+        t_rail_record(),
+        t_steward_classification(),
+        t_replaces(),
+    ]
 }
 
 /// The ENDORSE class type address — `1.1.0.1.0.1.0.3.42`, the succession
@@ -204,53 +313,103 @@ mod tests {
     type Reader = fn() -> &'static Address;
 
     /// THE LEDGER as the tests walk it: each pin's reader, with the commons
-    /// ordinal its own doc cites. ONE list, because a pin's obligations are
-    /// the ledger's rather than that pin's — three hand-kept lists would be
-    /// three places to be forgotten, and a pin absent from all of them reaches
-    /// the daemon's refusal set with nothing here failing. So this is the
-    /// single gate a tenth pin passes through, and each test below is one
-    /// question asked of every row.
-    const PINS: [(Reader, u32); 9] = [
-        (t_grant, 90),
-        (t_edition, 14),
-        (t_successor_of, 59),
-        (t_endorse, 42),
-        (t_consumption_marker, 91),
-        (t_journal_designation, 22),
-        (t_rail_record, 60),
-        (t_steward_classification, 61),
-        (t_replaces, 12),
+    /// ordinals its own doc cites — one for a kind's row, the kind's then
+    /// the subtype's for a registry subtype row. ONE list, because a pin's
+    /// obligations are the ledger's rather than that pin's — three hand-kept
+    /// lists would be three places to be forgotten, and a pin absent from
+    /// all of them reaches the daemon's refusal set with nothing here
+    /// failing. So this is the single gate a twenty-first pin passes
+    /// through, and each test below is one question asked of every row.
+    const PINS: [(Reader, &str); 20] = [
+        (t_grant, "90"),
+        (t_edition, "14"),
+        (t_successor_of, "59"),
+        (t_endorse, "42"),
+        (t_consumption_marker, "91"),
+        (t_journal_designation, "22"),
+        (t_rail_record, "60"),
+        (t_steward_classification, "61"),
+        (t_replaces, "12"),
+        (t_binding, "55"),
+        (t_endpoint, "56"),
+        (t_takedown, "57"),
+        (t_takedown_base, "57.1"),
+        (t_takedown_lifted, "57.2"),
+        (t_policy_link, "58"),
+        (t_policy_link_own, "58.1"),
+        (t_disavowal, "58.2"),
+        (t_expulsion_ground, "58.3"),
+        (t_succession_ground, "58.4"),
+        (t_succession_policy, "58.5"),
     ];
+
+    /// Whether `a` is a registry row — one of `skep-registry`'s twelve.
+    fn is_registry_row(a: &Address) -> bool {
+        skep_registry::rows().iter().any(|r| r.address == *a)
+    }
+
+    /// The pairs the registry's own nesting admits (REG-1.20): each subtype
+    /// row under its own kind's row, and nothing else.
+    fn nested_pairs() -> Vec<(&'static Address, &'static Address)> {
+        skep_registry::rows()
+            .iter()
+            .filter_map(|r| {
+                let subtype = r.subtype?;
+                Some((&skep_registry::row(subtype.kind(), None).address, &r.address))
+            })
+            .collect()
+    }
 
     /// The ledger's GUARANTEE (the module doc's): the pins are pairwise
     /// distinct and — since a consumer recognizes a class's SUBTYPES by
-    /// prefix — pairwise prefix-free, so no class swallows another.
+    /// prefix — pairwise prefix-free, so no class swallows another; the ONE
+    /// prefix relation admitted is a registry subtype row under its own
+    /// kind's row, the nesting the registry designs (REG-1.20) — so every
+    /// registry row stays prefix-free against every pin outside the
+    /// registry's table, and the kinds against each other.
     #[test]
-    fn the_commons_pins_are_pairwise_prefix_free() {
+    fn the_commons_pins_are_pairwise_prefix_free_but_for_the_registrys_own_nesting() {
         let pins: Vec<&'static Address> = PINS.into_iter().map(|(read, _)| read()).collect();
+        let nested = nested_pairs();
+        assert_eq!(nested.len(), 7, "seven subtype rows nest under their kinds");
         for (i, a) in pins.iter().enumerate() {
             for b in &pins[i + 1..] {
-                assert!(
-                    !is_prefix(a.tumbler(), b.tumbler()) && !is_prefix(b.tumbler(), a.tumbler()),
-                    "{} and {} are prefix-related",
-                    a.tumbler(),
-                    b.tumbler()
-                );
+                assert_ne!(a, b, "{} is pinned twice", a.tumbler());
+                if is_prefix(a.tumbler(), b.tumbler()) || is_prefix(b.tumbler(), a.tumbler()) {
+                    assert!(
+                        nested.contains(&(a, b)) || nested.contains(&(b, a)),
+                        "{} and {} are prefix-related and no registry kind/subtype pair",
+                        a.tumbler(),
+                        b.tumbler()
+                    );
+                }
             }
         }
     }
 
-    /// The deposit class's types — M5's set, the credential types ENROLL and
-    /// RETIRE (the module doc's pointer) — are prefix-free against every pin:
-    /// none IS a pin, which would make a typed-link class with no atom (the
-    /// grant, the edition claim, `successor-of`) a member the insert door
-    /// admits a declared deposit under (PUB-2.11, RES-261), and none sits
-    /// above or beneath one, which would make the daemon's prefix-recognizing
-    /// write path read a credential as that pin's class or subtype. Walked
-    /// off the same ONE list, so a tenth pin meets the set where it joins.
+    /// The deposit class's types — M5's set: the credential types ENROLL
+    /// and RETIRE (the module doc's pointer), and the registry's binding and
+    /// endpoint, spelled a second time — are each EITHER exactly one of the
+    /// two registry rows the set spells again (held equal to the pin, member
+    /// for member, by the daemon's suite too) OR prefix-free against every
+    /// pin: none IS another pin, which would make a typed-link class with no
+    /// atom (the grant, the edition claim, `successor-of`) a member the
+    /// insert door admits a declared deposit under (PUB-2.11, RES-261), and
+    /// none sits above or beneath one, which would make the daemon's
+    /// prefix-recognizing write path read a credential as that pin's class
+    /// or subtype. Walked off the same ONE list, so a twenty-first pin meets
+    /// the set where it joins.
     #[test]
-    fn the_deposit_class_types_are_prefix_free_against_every_pin() {
+    fn the_deposit_class_types_are_prefix_free_against_every_pin_but_the_two_rows_they_spell_again() {
+        let spelled_again: Vec<&Address> = skep_arrangement::deposit_class_types()
+            .iter()
+            .filter(|ty| is_registry_row(ty))
+            .collect();
+        assert_eq!(spelled_again, [t_binding(), t_endpoint()], "the set's registry members, exactly");
         for ty in skep_arrangement::deposit_class_types() {
+            if is_registry_row(ty) {
+                continue;
+            }
             for (read, _) in PINS {
                 let pin = read();
                 assert!(
@@ -266,12 +425,30 @@ mod tests {
     /// Every pin sits in the ghost document's subspace 3, where nothing is
     /// ever minted (the credential types' own unreachability argument,
     /// AUTH-3.70), so no content resolution can ever equal one — and at the
-    /// ordinal its own doc cites, so a silent renumbering fails here.
+    /// ordinals its own doc cites, so a silent renumbering fails here.
     #[test]
     fn every_pin_is_a_ghost_subspace_3_element() {
-        for (read, ordinal) in PINS {
-            assert_eq!(read().tumbler().to_string(), format!("1.1.0.1.0.1.0.3.{ordinal}"));
+        for (read, ordinals) in PINS {
+            assert_eq!(read().tumbler().to_string(), format!("1.1.0.1.0.1.0.3.{ordinals}"));
         }
+    }
+
+    /// THE REGISTRY'S ROWS ARE THE CRATE'S TABLE (the module doc): the
+    /// eleven readers hand back the crate's own held rows, `t_successor_of`
+    /// — the engine's own pin, the registry's fourth kind — EQUALS the
+    /// crate's `3.59`, and the pins outside the registry are exactly the
+    /// ledger's rows the crate's table does not hold.
+    #[test]
+    fn the_registry_rows_are_the_crates_table_and_successor_of_is_held_equal() {
+        for r in skep_registry::rows() {
+            let held = PINS.iter().find(|(read, _)| *read() == r.address);
+            assert!(held.is_some(), "{} is a registry row and no pin", r.address.tumbler());
+        }
+        assert_eq!(t_successor_of(), skep_registry::t_successor_of());
+        assert!(std::ptr::eq(t_binding(), skep_registry::t_binding()), "one held row, not a copy");
+        let outside: Vec<&Address> =
+            PINS.into_iter().map(|(read, _)| read()).filter(|a| !is_registry_row(a)).collect();
+        assert_eq!(outside, pins_outside_the_registry());
     }
 
     /// THE PIN SPELLED TWICE (the module doc): [`t_replaces`] and M7's own

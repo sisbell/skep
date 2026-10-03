@@ -72,6 +72,11 @@ skep-discovery = { path = "../skep-discovery" }
 # oracle). skepd composes the fold BESIDE the engine — derived state rebuilt
 # from the recovered world, never persisted here.
 skep-identity = { path = "../skep-identity" }
+# THE REGISTRY'S CORE AS VALUES: the twelve commons rows, the binding and
+# endpoint bodies under one canonical rule, and the seeding check — read
+# by the registry sequence's parse (`auth/policy/registry.rs`) and run by
+# the open ahead of every genesis.
+skep-registry = { path = "../skep-registry" }
 # THE BLOB STORE (media lane B): the files, the partials, the upload records
 # and the lease log under `blobs/` in the data dir — the PUT's fsync order
 # and the lease's honest-null answer. It knows no principal, lock or limits

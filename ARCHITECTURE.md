@@ -21,13 +21,20 @@ position in the journal.
 
 ## Code map
 
-The workspace is seventeen crates under `crates/`. Dependencies point
+The workspace is eighteen crates under `crates/`. Dependencies point
 downward in the list below: a crate may depend only on crates listed
 above it.
 
 **The foundation**
 - `skep-address` — tumblers, addresses and span algebra. Pure values; it
   depends on no other skep crate.
+- `skep-registry` — the registry's stable core as values: the twelve
+  commons rows the registry allocates (five kinds, seven subtype rows) at
+  the addresses commons-map pins, the binding and endpoint bodies under
+  one canonical rule, the seeding check's three arms, and the vector set
+  every parser of the bodies is held to. Of the skep crates it depends
+  only on `skep-address`; it knows no engine, no daemon and no signature
+  library. Its rules: §The registry rows and bodies.
 - `skep-kernel` — transactions, the journal, checkpoints and recovery. It
   knows nothing of what a transaction means; the world it stores is a
   type parameter the engine supplies. Its modules and rules: §The kernel.
@@ -167,6 +174,44 @@ a seeded failure injection at each step, REPLACE's repair and its one
 answer), `uploads` (the identifier, the durable offset, the reconciliation,
 the end), `lease` (the three states and the horizon, latest-wins, the
 compaction, the pending bytes).
+
+## The registry rows and bodies, `skep-registry`
+
+`skep-registry` holds what the registry's two halves — the daemon that
+verifies and commits a registry deposit, and a resolver that reads it back
+— both read and neither owns. Its modules: `rows.rs` is the one table of
+the twelve commons rows the registry allocates — five kinds on the
+reserve's ordinals `3.55`–`3.59` of the ghost home document's type
+subspace and seven subtype rows nested under their kinds by prefix — each
+row with its kind, its subtype, whether a deposit rides its address and
+the `type` string its body carries, read through one held pin per row;
+`body.rs` the binding's and the endpoint's bodies, their one parser under
+the canonical rule, their encoder and the cap; `check.rs` the seeding
+check's three arms and the refusal that names the arm.
+
+Rules that hold across its files:
+
+- **One table, one address apiece.** A row's address is spelled once, in
+  `rows.rs`'s table, from the commons type prefix and the row's ordinals;
+  the engine's ledger reads the rows through this crate's pins and holds
+  its own `successor-of` equal to the table's, and the daemon's deposit
+  class and write-path classes, which spell a row a second time below
+  this crate, are held equal to it by the daemon's suite.
+- **The canonical rule is the parser.** `body::parse` answers a record
+  only where the bytes are the encoder's re-encoding of what they spell,
+  `sig` included; it checks the FORM of every member and never a member's
+  admissibility, and a body whose `type` is not the kind the caller names
+  is no record of that kind. The vector set under `tests/vectors/` is
+  what every other parser of the bodies — a resolver's — is held to; a
+  parser is never derived from another parser.
+- **The check runs on lists.** `seeding_check` takes the registry's rows
+  and the foreign rows as lists, so every arm is proved on a list a suite
+  builds; the shipped table passes, and the daemon runs the check over
+  the whole domain it can see ahead of every genesis.
+
+Its integration suite is one binary, `tests/it/`: `rows` (the table from
+outside the crate and the three arms on mutated lists) and `body` (the
+vector set at this parser, the examples' one canonical form).
 
 ## The name space, `skep-namespace`
 
@@ -400,10 +445,11 @@ nothing to the journal, and takes no `Serial`.
    `server/op.rs`, `server/blob_routes.rs` (the PUT: the path family
    `/blob/upload`, the body source and the parked hand-off, the five
    methods), and — in `test-hooks` builds only — `server/hooks.rs`. `/op`
-   runs one of the two write sequences — the plain (AUTH-3.35) or the
-   credential (AUTH-3.37), chosen off the op's own type slot before any
-   lock is taken: resolve the caller, run the checks, commit, record, then
-   give the head writer its turn. `/blob/upload` resolves the caller,
+   runs one of the three write sequences — the plain (AUTH-3.35), the
+   credential (AUTH-3.37) or the registry (the record grade for registry
+   records), chosen off the op's own type slot before any lock is taken:
+   resolve the caller, run the checks, commit, record, then give the head
+   writer its turn. `/blob/upload` resolves the caller,
    gates the declared total, streams the body one chunk at a time into
    the store, each chunk gated, and finishes under the credential lock's
    read arm — the requester re-resolved there — never under `Serial`.
@@ -414,11 +460,14 @@ nothing to the journal, and takes no `Serial`.
 4. **The session layer** — `auth.rs` and the modules under `auth/`.
    Sessions and the signed handshake, the policy checks on every write
    (`auth/policy/`: the plain sequence's admission, the credential
-   sequence's precheck with the record grade, and the write-path check —
-   the entry signature, whose one exempt `insert` is a signed credential
-   record into a doc 1), the identity fold, signature verification —
-   `skep-signature` is the one crate that links the signature libraries;
-   skepd calls its verify.
+   sequence's precheck with the record grade, the registry sequence's
+   admission — `auth/policy/registry.rs`, the record grade for registry
+   records, whose trial is the credential grade's own, and the seeding
+   check the open runs ahead of every genesis — and the write-path check
+   — the entry signature, whose one exempt `insert` is a signed
+   credential or registry record into a doc 1), the identity fold,
+   signature verification — `skep-signature` is the one crate that links
+   the signature libraries; skepd calls its verify.
 5. **The write path** — `write_path.rs`. The single point every write
    passes through, one at a time, and the head writer
    (`write_path/head.rs`, which commits through the write path's own
@@ -546,9 +595,9 @@ imports it.
 ## Where the reasons live
 
 - `docs/wire.md` — the wire protocol, every route and refusal.
-- The module designs (M1–M10), the composition contract and the AUTH and
-  PUB specifications, in the design project — the reasoning behind each
-  crate and each rule above.
+- The module designs (M1–M10), the composition contract and the AUTH, PUB
+  and REGISTRY specifications, in the design project — the reasoning
+  behind each crate and each rule above.
 
 This file changes when the layout changes: a new crate, a moved module, a
 new cross-cutting rule. It does not record history.

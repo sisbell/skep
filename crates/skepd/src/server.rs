@@ -271,6 +271,15 @@ pub enum DaemonError {
     /// reconciled with its records, the directory synced — the data dir
     /// refusing I/O, as [`DaemonError::Sidecar`] is.
     Media(std::io::Error),
+    /// THE REGISTRY'S SEEDING CHECK refused the genesis (REG-1.28 to
+    /// REG-1.32): one of its three arms — disjointness, completeness, the
+    /// count — fired over the registry's twelve rows and every other commons
+    /// row this build holds, the refusal naming the arm. Run ahead of
+    /// `Engine::open` on every open, so a refusal is a genesis that does not
+    /// complete: nothing is written and no engine is opened. A BUILD fault,
+    /// never a data dir's: the rows and the domain are compiled constants,
+    /// so the condition is operator intervention at the build and no retry.
+    Registry(skep_registry::SeedingRefusal),
 }
 
 impl std::fmt::Display for DaemonError {
@@ -280,6 +289,7 @@ impl std::fmt::Display for DaemonError {
             DaemonError::Sidecar(e) => write!(f, "change-feed sidecar: {e}"),
             DaemonError::BlockedPrefixes(e) => write!(f, "blocked-prefix list: {e}"),
             DaemonError::Media(e) => write!(f, "blob store: {e}"),
+            DaemonError::Registry(e) => write!(f, "registry seeding: {e}"),
         }
     }
 }
@@ -294,6 +304,7 @@ impl std::error::Error for DaemonError {
             DaemonError::Sidecar(e) => Some(e),
             DaemonError::BlockedPrefixes(e) => Some(e),
             DaemonError::Media(e) => Some(e),
+            DaemonError::Registry(e) => Some(e),
         }
     }
 }
@@ -485,6 +496,13 @@ impl Daemon {
             checkpoint: CheckpointPolicy::EveryN(CHECKPOINT_EVERY_COMMITS),
             salt,
         };
+        // THE SEEDING CHECK, THIS DAEMON ITS HAND (REG-1.28, REG-1.32): the
+        // registry's three arms over its twelve rows and every other commons
+        // row this build holds, AHEAD of the engine on every open — a fresh
+        // data dir's genesis and a reopen's re-genesis alike — so a refusal
+        // is a genesis that does not complete: no claim, no session and no
+        // board record, nothing written, no engine opened.
+        crate::auth::policy::genesis_seeding_check().map_err(DaemonError::Registry)?;
         let engine = Engine::open(cfg).map_err(DaemonError::Engine)?;
         let writes = WritePath::open(data_dir, &engine).map_err(DaemonError::Sidecar)?;
         // THE READ PREDICATE (PUB-1.31; PUB-6.39's one-per-request shape;

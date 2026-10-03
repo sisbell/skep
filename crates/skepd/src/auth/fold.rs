@@ -438,19 +438,31 @@ mod tests {
     /// and which sits below this crate, and the daemon's own credential
     /// constants, which the fold classifies the pair's `make_link` by — and
     /// the two are pinned EQUAL here, member for member in the set's order,
-    /// ENROLL then RETIRE (PUB-2.11, PUB-2.63; RES-249, RES-261). This is
-    /// the one place both spellings are in reach: the constants are this
-    /// crate's own and no integration suite can name them, and the codec's
-    /// `deposit` parse is where a declared type enters the daemon. If this
-    /// fails, an enrollment a client declares as the fold will classify it
-    /// is refused `published_target` at the store — or admitted there and
-    /// typed as nothing the fold honors.
+    /// ENROLL then RETIRE (PUB-2.11, PUB-2.63; RES-249, RES-261), the set's
+    /// two further members being the registry's binding and endpoint, the
+    /// engine ledger's rows, which the registry sequence classifies by
+    /// (REG-1.37 as the record grade for registry records re-reads it).
+    /// This is the one place the credential spellings are in reach: the
+    /// constants are this crate's own and no integration suite can name
+    /// them, and the codec's `deposit` parse is where a declared type enters
+    /// the daemon. If this fails, an enrollment a client declares as the
+    /// fold will classify it is refused `published_target` at the store —
+    /// or admitted there and typed as nothing the fold honors.
     #[test]
     fn the_deposit_class_types_are_the_daemons_enroll_and_retire_constants() {
         let spelled: Vec<Vec<Nat>> = skep_arrangement::deposit_class_types()
             .iter()
             .map(|ty| ty.tumbler().iter().cloned().collect())
             .collect();
-        assert_eq!(spelled, [T_ENROLL.map(Nat::from).to_vec(), T_RETIRE.map(Nat::from).to_vec()]);
+        let row = |a: &Address| -> Vec<Nat> { a.tumbler().iter().cloned().collect() };
+        assert_eq!(
+            spelled,
+            [
+                T_ENROLL.map(Nat::from).to_vec(),
+                T_RETIRE.map(Nat::from).to_vec(),
+                row(skep_engine::types::t_binding()),
+                row(skep_engine::types::t_endpoint()),
+            ]
+        );
     }
 }

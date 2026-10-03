@@ -18,6 +18,7 @@ members = [
     "crates/skep-kernel",
     "crates/skep-address",
     "crates/skep-blobs",
+    "crates/skep-registry",
 ]
 # The nightly libFuzzer crate (hardening H2, tier 2) is deliberately NOT a
 # member: it needs nightly (its own rust-toolchain.toml) and is built only by

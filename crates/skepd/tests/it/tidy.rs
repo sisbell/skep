@@ -41,8 +41,9 @@ const LAYERS: &[(&str, u8)] = &[
     ("server::reply", 3),
     ("server::request", 3),
     ("server::scan", 3),
-    // 4 — the session layer.
+    // 4 — the session layer, the registry sequence's producers among it.
     ("auth", 4),
+    ("auth::policy::registry", 4),
     // 5 — the write path, and the media door, gate and deposit read beside it.
     ("write_path", 5),
     ("media", 5),

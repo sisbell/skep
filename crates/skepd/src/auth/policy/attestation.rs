@@ -14,7 +14,10 @@ use skep_identity::{
 use skep_kernel::Attestation;
 use skep_namespace::{system_account, HasM3, PrincipalId};
 
-use super::{addr_spans, homed_in_doc_one, record_deposit_kind, AttestFault, CredentialRefusal};
+use super::{
+    addr_spans, homed_in_doc_one, record_deposit_kind, registry_deposit_kind, AttestFault,
+    CredentialRefusal,
+};
 use crate::auth::entry::{self, ComposeFault};
 use crate::auth::session::key_subject;
 use crate::write_path::board_term;
@@ -253,21 +256,25 @@ struct DeclaredRecord<'a> {
 }
 
 /// THE ONE PARSE OF A DECLARED DEPOSIT'S ATOM (as7-E1: "the daemon already
-/// parses the atom at commit"; D26; the record grade, 2a): `Some` iff `op`
-/// is an `insert` DECLARED under a kind of the record-deposit set — its type
-/// read as a type slot through the one spelling of `enc`, as every
-/// classification here reads one (BW-03) — whose ONE value parses as a
-/// record of that kind, the entries and the `sig` as one value
-/// ([`parse_record_value`], the parse the record grade makes again at the
-/// deposit's `make_link`), with whether the record's `sig` member is
-/// PRESENT. `None` for every other insert: undeclared, declared under no
-/// record kind, more or fewer than one value, or bytes that are no record
-/// of the kind — prose, a record of another kind, a record past
-/// [`skep_identity::MAX_RECORD_BYTES`] (`too_large` at the parse's own head,
-/// as at the read, which is also what bounds this parse of a value no read
-/// has capped, under the serialization lock). A claim's kind answers `None`:
-/// a claim carries no record (AUTH-2.48) and a declared claim atom is refused
-/// at M5's door, so none reaches this.
+/// parses the atom at commit"; D26; the record grade, 2a, and for registry
+/// records 2b): `Some` iff `op` is an `insert` DECLARED under a kind of the
+/// record-deposit set — the credential set's, or the registry's two
+/// ([`registry_deposit_kind`]: the exemption widened to the registry's
+/// kinds) — its type read as a type slot through the one spelling of `enc`,
+/// as every classification here reads one (BW-03) — whose ONE value parses
+/// as a record of that kind, the entries and the `sig` as one value
+/// ([`parse_record_value`] for a credential kind, `skep-registry`'s parse
+/// under the canonical rule for a registry kind — the parse the record grade
+/// makes again at the deposit's `make_link`), with whether the record's
+/// `sig` member is PRESENT. `None` for every other insert: undeclared,
+/// declared under no record kind, more or fewer than one value, or bytes
+/// that are no record of the kind — prose, a record of another kind, a
+/// record past [`skep_identity::MAX_RECORD_BYTES`] or a registry body past
+/// its own cap (`too_large` at the parse's own head, as at the read, which
+/// is also what bounds this parse of a value no read has capped, under the
+/// serialization lock). A claim's kind answers `None`: a claim carries no
+/// record (AUTH-2.48) and a declared claim atom is refused at M5's door, so
+/// none reaches this.
 ///
 /// PRESENCE, not verification: the record grade's trial needs the link's
 /// type and target and the grade the act needs, which the atom's `insert`
@@ -284,20 +291,27 @@ fn declared_record_atom(op: &Op) -> Option<DeclaredRecord<'_>> {
     let Op::Insert { doc, deposit: Deposit::Declared(ty), values, .. } = op else {
         return None;
     };
-    let kind = record_deposit_kind(&addr_spans(std::slice::from_ref(ty)))?;
+    let slot = addr_spans(std::slice::from_ref(ty));
     let [atom] = values.as_slice() else {
         return None;
     };
-    let carries_sig = match kind {
-        CredentialKind::Enroll => {
-            parse_record_value::<Enrollment>(atom.as_bytes()).ok()?.sig.is_some()
-        }
-        CredentialKind::Retire => {
-            parse_record_value::<Fingerprint>(atom.as_bytes()).ok()?.sig.is_some()
-        }
-        CredentialKind::Claim => return None,
-    };
-    Some(DeclaredRecord { doc, carries_sig })
+    if let Some(kind) = record_deposit_kind(&slot) {
+        let carries_sig = match kind {
+            CredentialKind::Enroll => {
+                parse_record_value::<Enrollment>(atom.as_bytes()).ok()?.sig.is_some()
+            }
+            CredentialKind::Retire => {
+                parse_record_value::<Fingerprint>(atom.as_bytes()).ok()?.sig.is_some()
+            }
+            CredentialKind::Claim => return None,
+        };
+        return Some(DeclaredRecord { doc, carries_sig });
+    }
+    // The registry's two kinds (2b): the body under the canonical rule, by
+    // the kind the declaration names.
+    let kind = registry_deposit_kind(&slot)?;
+    let record = skep_registry::parse(kind.body_kind(), atom.as_bytes()).ok()?;
+    Some(DeclaredRecord { doc, carries_sig: record.sig.is_some() })
 }
 
 /// A3's test: every document the write's frame names as its `doc` — an

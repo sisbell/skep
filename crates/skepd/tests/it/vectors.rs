@@ -303,6 +303,37 @@ fn m2_7_a_subtype_by_prefix_is_its_audit_view_class_s_member() {
     sd.shutdown();
 }
 
+/// 2.7 — THE REGISTRY'S CLASSES (REG-1.44, REG-1.46; REG-1.21): the three
+/// audit-view kinds the routed entry adds to the list — the takedown record
+/// `…3.57` and the policy link `…3.58`, each at its kind's address, and the
+/// binding (`nullify_class.rs`) — reach every subtype row under them by
+/// prefix: links typed the takedown record's kind, its base reading
+/// `…3.57.1`, the policy link's kind, the disavowal `…3.58.2` and the
+/// org-chosen succession policy `…3.58.5` — ordinary attested link writes
+/// from the owner's signed session into its doc 1 — each answer
+/// `nullify_audit_view` to the owner, permanent, and stand.
+#[test]
+fn m2_7_the_registrys_subtype_rows_are_their_kinds_members() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    for row in [
+        "1.1.0.1.0.1.0.3.57",
+        "1.1.0.1.0.1.0.3.57.1",
+        "1.1.0.1.0.1.0.3.58",
+        "1.1.0.1.0.1.0.3.58.2",
+        "1.1.0.1.0.1.0.3.58.5",
+    ] {
+        let target = acked_addr(&typed_link(port, &signed, CLAIMANT_DOC1, &[CLAIMANT_DOC1], &[], row));
+        let v = op(port, Some(&signed), &nullify_frame(CLAIMANT_DOC1, &target));
+        assert_eq!(verdict(&v), "credential_refused:nullify_audit_view", "2.7 / REG-1.46: {row}: {v}");
+        assert_eq!(v["disposition"].as_str(), Some("permanent"), "{v}");
+        assert!(!read_link(port, None, &target).is_null(), "{row}: nothing was retracted");
+    }
+    sd.shutdown();
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // 2.10 — cells pinned at their own rules
 // ═══════════════════════════════════════════════════════════════════════

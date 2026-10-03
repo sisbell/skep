@@ -48,8 +48,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   account match; `Caller::System` is the in-process automation path,
   exempt from ω alone). A PUBLISHED document refuses every in-place edit
   (`PublishedTarget`, PUB-2.11) except an `insert` DECLARED under a type
-  the deposit class holds (`deposit_class_types` — ENROLL and RETIRE
-  today) at `n_C + 1` of the arrangement `deposit_surface` names (the
+  the deposit class holds (`deposit_class_types` — ENROLL, RETIRE, the
+  registry's BINDING and its ENDPOINT today, the four atom-bearing kinds
+  whose records the daemon parses) at `n_C + 1` of the arrangement
+  `deposit_surface` names (the
   chain's head, or the document's own while it has no member) — the one
   way content enters an account's born-published home; `version` refuses a
   private owned source (`PrivateSourceVersionless`, PUB-2.9) and an

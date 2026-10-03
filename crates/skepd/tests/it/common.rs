@@ -56,6 +56,13 @@ pub const T_SUPERSEDES: &str = "1.1.0.1.0.1.0.1.4";
 /// predicate).
 pub const T_GRANT: &str = "1.1.0.1.0.1.0.3.90";
 
+/// The registry's two record-deposit kinds (REG-1.14; `skep_registry`'s
+/// table, the engine's ledger): the BINDING `3.55` and the ENDPOINT `3.56`
+/// of the ghost document's type subspace, spelled as a client names them —
+/// the deposit class's third and fourth members (wire.md §Registry).
+pub const T_BINDING: &str = "1.1.0.1.0.1.0.3.55";
+pub const T_ENDPOINT: &str = "1.1.0.1.0.1.0.3.56";
+
 /// The claim ceremony's fixed test identity: a high principal id so suite
 /// principals (0, 1, 2, …) never collide with it, and deterministic key
 /// seeds so a reopened board verifies against the same keys.
@@ -495,6 +502,102 @@ pub fn hire(
         "hire of {agent_id} ({agent_account}) refused by the fold — an AUTH finding: {v}"
     );
     open_signed_session(port, agent_id, key)
+}
+
+/// A BINDING's body in its canonical form (REG-1.86; `skep_registry`'s
+/// encoder): the prefix in address form, and `replaces` where a later
+/// binding names the link's address of the one it replaces.
+pub fn binding_body(prefix: &str, replaces: Option<&str>) -> String {
+    skep_registry::encode(
+        &skep_registry::Body::Binding(skep_registry::Binding {
+            prefix: prefix.into(),
+            replaces: replaces.map(str::to_owned),
+        }),
+        None,
+    )
+}
+
+/// An ENDPOINT's body in its canonical form (REG-1.86): the org's origins
+/// in its own order, and `replaces` where a later deposit names the link's
+/// address of the one it replaces.
+pub fn endpoint_body(origins: &[&str], replaces: Option<&str>) -> String {
+    skep_registry::encode(
+        &skep_registry::Body::Endpoint(skep_registry::Endpoint {
+            origins: origins.iter().map(|o| o.to_string()).collect(),
+            replaces: replaces.map(str::to_owned),
+        }),
+        None,
+    )
+}
+
+/// A REGISTRY RECORD DEPOSIT (REG-2.18, REG-2.19, REG-2.23; the record grade
+/// for registry records): `body` — a binding's or an endpoint's canonical
+/// text — SIGNED at the record grade under the key that opened `signed`
+/// ([`signed_atom`]: the body's sig-less projection framed over `home`, `ty`
+/// and `to`), inserted DECLARED under `ty` at `home`'s next free content
+/// position, then the `make_link` typed `ty` from the atom's verified
+/// I-address — the insert's own ack — to `to`: the account bound for a
+/// binding, none for a targetless one or an endpoint. Answers `(the atom's
+/// address, the link's answer)`, the link UNJUDGED so a refusal cell reads
+/// its token; the insert is asserted, every refusal a cell pins being the
+/// link's unless the cell lands the atom itself.
+pub fn deposit_registry_record(
+    port: u16,
+    signed: &str,
+    home: &str,
+    ty: &str,
+    to: &[&str],
+    body: &str,
+) -> (String, Value) {
+    let atom = signed_atom(port, signed, home, ty, to, &json_atom(body));
+    let ordinal = next_content_ordinal(port, Some(signed), home);
+    let v = op(
+        port,
+        Some(signed),
+        &format!(
+            r#"{{"op":"insert","doc":"{home}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":"{ty}"}}"#
+        ),
+    );
+    assert_eq!(v["resp"].as_str(), Some("ack_addr"), "the record atom's deposit into {home}: {v}");
+    let atom_addr = acked_addr(&v);
+    let link = op(port, Some(signed), &typed_link_frame(home, &[atom_addr.as_str()], to, ty));
+    (atom_addr, link)
+}
+
+/// THE BINDING WRITE as the registrar's console makes it (REG-4.108; the
+/// console's signed write under the registrar's account): `prefix` bound to
+/// `to` — the node account, or none (REG-2.21's targetless binding) — from
+/// the claimant's signed session into its own doc 1, `replaces` naming the
+/// link a later binding replaces. The link's address.
+pub fn deposit_binding(
+    port: u16,
+    signed: &str,
+    prefix: &str,
+    to: Option<&str>,
+    replaces: Option<&str>,
+) -> String {
+    let to: Vec<&str> = to.into_iter().collect();
+    let (_, v) =
+        deposit_registry_record(port, signed, CLAIMANT_DOC1, T_BINDING, &to, &binding_body(prefix, replaces));
+    assert_eq!(v["resp"].as_str(), Some("ack_addr"), "the binding of {prefix}: {v}");
+    acked_addr(&v)
+}
+
+/// THE ENDPOINT DEPOSIT as the org makes it (REG-1.9): into `home`, the
+/// org's node account's doc 1, from that account's own signed session,
+/// targetless (REG-2.26's carriage), `replaces` naming the link a later
+/// deposit replaces. The link's address.
+pub fn deposit_endpoint(
+    port: u16,
+    signed: &str,
+    home: &str,
+    origins: &[&str],
+    replaces: Option<&str>,
+) -> String {
+    let (_, v) =
+        deposit_registry_record(port, signed, home, T_ENDPOINT, &[], &endpoint_body(origins, replaces));
+    assert_eq!(v["resp"].as_str(), Some("ack_addr"), "the endpoint deposit into {home}: {v}");
+    acked_addr(&v)
 }
 
 /// `frame` — a `make_link` — carrying its `replaces` member naming `replaces`

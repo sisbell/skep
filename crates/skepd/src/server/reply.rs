@@ -3,11 +3,11 @@
 
 use serde_json::Value;
 use skep_engine::HistoryError;
-use skep_febe::{Codec, FaultSite, OpKind, RejectCode, Rejection, Response};
+use skep_febe::{Codec, Disposition, FaultSite, OpKind, RejectCode, Rejection, Response};
 
-use crate::auth::policy::CredentialRefusal;
+use crate::auth::policy::{CredentialRefusal, RegistryRefusal};
 use crate::auth::session::HandshakeRefusal;
-use crate::codec::{credential_refused_reply, obj, to_bytes, JsonCodec};
+use crate::codec::{credential_refused_reply, obj, op_name, to_bytes, JsonCodec};
 use crate::history::Unavailable;
 use crate::media::door::MediaRefusal;
 
@@ -488,6 +488,41 @@ pub(super) fn refuse_scan_busy(kind: OpKind) -> Reply {
 /// every answer on that channel, whatever the answer says.
 pub(super) fn credential_refused(kind: OpKind, r: &CredentialRefusal) -> Reply {
     op_answer(credential_refused_reply(kind, r.token(), r.disposition()))
+}
+
+/// THE REGISTRY SEQUENCE's refusal as its 200-enveloped rejection (the
+/// record grade for registry records, 2b; wire.md §Registry): the ordinary
+/// `rejected` shape under the code `registry_refused`, `detail` ONE machine
+/// token and `disposition` the refusal's own class
+/// ([`RegistryRefusal::token`], [`RegistryRefusal::disposition`]) — the
+/// credential family's shape under a code of its own, so a client tells the
+/// two families apart. Rendered here, through the codec's own key-sorting
+/// object, because the code is the one thing this family's shape adds to
+/// the credential family's, and the 200 is [`op_answer`]'s as for every
+/// answer on that channel.
+pub(super) fn registry_refused(kind: OpKind, r: &RegistryRefusal) -> Reply {
+    op_answer(to_bytes(obj(vec![
+        ("resp", Value::String("rejected".into())),
+        ("op", Value::String(op_name(kind).into())),
+        ("code", Value::String(REGISTRY_REFUSED.into())),
+        ("disposition", Value::String(disposition_token(r.disposition()).into())),
+        ("detail", Value::String(r.token())),
+    ])))
+}
+
+/// The registry family's one code (wire.md §Registry).
+const REGISTRY_REFUSED: &str = "registry_refused";
+
+/// A disposition's wire spelling — the four classes as the codec renders
+/// them on every rejection. Exhaustive, so a new class is spelled here
+/// before this compiles.
+fn disposition_token(d: Disposition) -> &'static str {
+    match d {
+        Disposition::Permanent => "permanent",
+        Disposition::Reorder => "reorder",
+        Disposition::Retry => "retry",
+        Disposition::Halt => "halt",
+    }
 }
 
 /// THE MEDIA DOOR's refusal as its 200-enveloped rejection (media lanes A

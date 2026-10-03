@@ -26,8 +26,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   halves; declarations only — making and checking signatures is
   [skep-signature](../skep-signature)'s.
 - **Write-path type classes** — the credential kinds widened by the
-  grants and audit-view classes, for the daemon's `nullify` refusals;
-  recognition only, never fold state.
+  grants and audit-view classes — the registry's binding, takedown
+  record and policy link among them, each with its subtype rows by
+  prefix — for the daemon's `nullify` refusals; recognition only,
+  never fold state.
 
 Pure enough for a mirror or an audit tool to embed directly. skepd
 holds the fold beside the world today; the spec seats it in the

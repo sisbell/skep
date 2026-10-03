@@ -39,10 +39,13 @@ The daemon verifies signatures and makes none: it calls
 feature off, so its build holds no signer and no key. That verify runs
 at three doors: the signed session's handshake; the entry signature a
 publish-class write carries in its `attest`, checked before the
-transaction; and, above the claim, the `sig` a credential record carries
-inside its own atom, checked in the credential sequence at the record's
-`make_link` under the key set that opens the record's home — a record
-carrying none is refused at its own `insert`, before it lands. Build the shipped
+transaction; and, above the claim, the `sig` a credential record — or a
+registry record, the binding and the endpoint of
+[skep-registry](../skep-registry) — carries inside its own atom, checked
+in the credential or the registry sequence at the record's `make_link`
+under the key set that opens the record's home — a record carrying none
+is refused at its own `insert`, before it lands. The open runs the
+registry's seeding check ahead of every genesis. Build the shipped
 binary with `-p skepd` — Cargo unifies features across one invocation,
 and a `--workspace` build that compiles the test suites turns the signer
 on for everything it builds.

@@ -1,6 +1,8 @@
 //! The WRITE PATH's type-recognition input — PUB-6.30, PUB-6.64; owner ruling
 //! D3, 2026-09-05. The fold's credential kinds widened by the grants class
-//! and PUB-6.64's audit-view classes, for the one question the write path
+//! and PUB-6.64's audit-view classes — the registry's three among them, the
+//! binding, the takedown record and the policy link with their subtype rows
+//! by prefix (REG-1.44, REG-1.46) — for the one question the write path
 //! asks that the fold does not: which refusal a `nullify`'s target class
 //! earns. It READS the fold's recognition — [`TypeAddrs::kind_of`] and
 //! [`single_address`], in `crate::shape` — and changes none of it; nothing
@@ -54,6 +56,29 @@ pub enum AuditClass {
     /// link exists to close. Its home is the grant's own doc 1, published by
     /// the residence pin (PUB-5.17), so its membership waits on nothing more.
     Replaces,
+    /// The registry's BINDING — the registration record, prefix → account
+    /// (REG-1.39's first member, REG-1.44, REG-1.46): the binding walk reads
+    /// the AUDIT view at every position, so a retraction clears nothing it
+    /// reads; a later binding at the prefix is the one correction. Homed in
+    /// the binding-writing account's own doc 1 by rule, so its membership
+    /// waits on no home read.
+    Binding,
+    /// The registry's TAKEDOWN RECORD, at its KIND's address, so the two rows
+    /// under it — its base reading and LIFTED — are members by prefix
+    /// (REG-1.21, REG-1.42, REG-1.46): the serving layer reads both on the
+    /// AUDIT view at their own positions, and the LIFT stays the class's one
+    /// reversal. Homed in the operator's own doc 1 by rule.
+    TakedownRecord,
+    /// The registry's POLICY LINK, at its KIND's address, so the five rows
+    /// under it — its own reading, the disavowal, an expulsion's and a
+    /// succession's ground record, the org-chosen succession policy — are
+    /// members by prefix (REG-1.21, REG-1.40, REG-1.46): the grounded reads
+    /// take each at its own key on the AUDIT view, corrected by a positive
+    /// later record from the same home and never by a retraction. Homed in
+    /// a doc 1 by rule. The ENDPOINT, the registry's other kind, is NO
+    /// member: read on the ACTIVE view, its org's own `nullify` EFFECTIVE
+    /// (REG-1.11).
+    PolicyLink,
 }
 
 impl AuditClass {
@@ -63,7 +88,7 @@ impl AuditClass {
     /// to the classes its fixture names. It sits beside
     /// [`AuditClass::requires_published_home`], whose exhaustive match is where
     /// a new class first fails to compile, so the class joins it in that edit.
-    const ALL: [AuditClass; 7] = [
+    const ALL: [AuditClass; 10] = [
         AuditClass::SuccessorOf,
         AuditClass::DelegatorEndorsement,
         AuditClass::ConsumptionMarker,
@@ -71,6 +96,9 @@ impl AuditClass {
         AuditClass::RailRecord,
         AuditClass::StewardClassification,
         AuditClass::Replaces,
+        AuditClass::Binding,
+        AuditClass::TakedownRecord,
+        AuditClass::PolicyLink,
     ];
 
     /// ⇔ a link of this class is a MEMBER only where the link's OWN HOME is
@@ -89,7 +117,10 @@ impl AuditClass {
             | AuditClass::ConsumptionMarker
             | AuditClass::JournalDesignation
             | AuditClass::RailRecord
-            | AuditClass::Replaces => false,
+            | AuditClass::Replaces
+            | AuditClass::Binding
+            | AuditClass::TakedownRecord
+            | AuditClass::PolicyLink => false,
         }
     }
 }

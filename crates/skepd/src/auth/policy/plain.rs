@@ -9,8 +9,8 @@ use std::sync::LazyLock;
 use skep_address::{document_of, Address};
 use skep_arrangement::{trunk_of, Deposit};
 use skep_engine::types::{
-    t_consumption_marker, t_endorse, t_grant, t_journal_designation, t_rail_record, t_replaces,
-    t_steward_classification, t_successor_of,
+    t_binding, t_consumption_marker, t_endorse, t_grant, t_journal_designation, t_policy_link,
+    t_rail_record, t_replaces, t_steward_classification, t_successor_of, t_takedown,
 };
 use skep_febe::Op;
 use skep_identity::{AuditClass, Fingerprint, IdentityState, TargetClass, WriteTypes};
@@ -21,7 +21,7 @@ use skep_namespace::{
 };
 
 use super::attestation::attestation_check;
-use super::{addr_spans, record_deposit_kind, CredentialRefusal};
+use super::{addr_spans, record_deposit_kind, registry_deposit_kind, CredentialRefusal};
 use crate::auth::fold::{identity_types, published_unprojected};
 use crate::auth::LockRead;
 use crate::World;
@@ -39,12 +39,18 @@ use crate::World;
 /// the grant `3.90`, `successor-of` `3.59`, `endorse` `3.42`, the consumption
 /// marker `3.91`, the journal designation `3.22`, the rail record `3.60`, the
 /// steward's classification link `3.61` — each cited to its commons row
-/// there and to the owner's confirmation of 2026-09-07 — and the `replaces`
-/// link `3.12`, ruled 2026-09-29 (PUB-5.15, RES-310). Adding a member of
-/// PUB-6.64's class is one `AuditClass` arm and one address in this list;
-/// the refusal that reads them takes no edit. The list order is the
-/// recognition order and every address is pairwise prefix-free
-/// (`WriteTypes::new` asserts it, once, here).
+/// there and to the owner's confirmation of 2026-09-07 — the `replaces`
+/// link `3.12`, ruled 2026-09-29 (PUB-5.15, RES-310), and the registry's
+/// three audit-view kinds (REG-1.44, REG-1.46: "adds members to that class
+/// list and no code") — the binding `3.55`, the takedown record `3.57` and
+/// the policy link `3.58`, each at its KIND's address so every subtype row
+/// under the last two is a member by prefix (REG-1.21); the endpoint `3.56`
+/// is NOT listed, read on the active view with its org's own `nullify`
+/// effective (REG-1.11). Adding a member of PUB-6.64's class is one
+/// `AuditClass` arm and one address in this list; the refusal that reads
+/// them takes no edit. The list order is the recognition order and every
+/// address is pairwise prefix-free (`WriteTypes::new` asserts it, once,
+/// here).
 fn write_types() -> &'static WriteTypes {
     static TYPES: LazyLock<WriteTypes> = LazyLock::new(|| {
         WriteTypes::new(
@@ -58,6 +64,9 @@ fn write_types() -> &'static WriteTypes {
                 (AuditClass::RailRecord, t_rail_record().clone()),
                 (AuditClass::StewardClassification, t_steward_classification().clone()),
                 (AuditClass::Replaces, t_replaces().clone()),
+                (AuditClass::Binding, t_binding().clone()),
+                (AuditClass::TakedownRecord, t_takedown().clone()),
+                (AuditClass::PolicyLink, t_policy_link().clone()),
             ],
         )
     });
@@ -559,12 +568,15 @@ fn publish_class(world: &World, op: &Op, principal: PrincipalId) -> bool {
 /// ceremony's own op SHAPES — per op, by shape, no ceremony state machine:
 /// the `delegate` from principal 0, the mechanical home mint, and the
 /// record atom's `insert` into the depositing account's own doc 1 — never
-/// the SYSTEM ACCOUNT's (as7-F2; SO-I2 (g)(iv)): a declared credential-kind
-/// `insert` into `1.1.0.1`'s doc 1 is refused `system_account_keyless`,
-/// since that account holds no key and the plant it would seed is the one
-/// `claim_residue` cannot count. The credential deposits' pre-claim cells are
-/// the precheck's slot (8), never this producer's. Everything else refuses
-/// `claim_first`, bare and signed sessions alike.
+/// the SYSTEM ACCOUNT's (as7-F2; SO-I2 (g)(iv)): a declared record-kind
+/// `insert` — a credential kind's, or a registry kind's (REG-1.32: the
+/// system account's doc 1 takes no registry record either, the only
+/// registry rows below the claim being the seeded pins) — into `1.1.0.1`'s
+/// doc 1 is refused `system_account_keyless`, since that account holds no
+/// key and the plant it would seed is the one `claim_residue` cannot count.
+/// The credential deposits' pre-claim cells are the precheck's slot (8),
+/// never this producer's. Everything else refuses `claim_first`, bare and
+/// signed sessions alike.
 fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<CredentialRefusal> {
     let admitted = match op {
         Op::Delegate { .. } => principal == BOOTSTRAP_PRINCIPAL,
@@ -578,14 +590,15 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
                 .principal_prefix(principal)
                 .and_then(first_document_address)
                 .is_some_and(|first| first == *doc);
-            let credential_kind = match deposit {
+            let record_kind = match deposit {
                 Deposit::Declared(ty) => {
-                    record_deposit_kind(&addr_spans(std::slice::from_ref(ty))).is_some()
+                    let slot = addr_spans(std::slice::from_ref(ty));
+                    record_deposit_kind(&slot).is_some() || registry_deposit_kind(&slot).is_some()
                 }
                 Deposit::Undeclared => false,
             };
             if own_doc_one
-                && credential_kind
+                && record_kind
                 && world.m3().effective_owner_prefix(doc) == Some(&system_account())
             {
                 return Some(CredentialRefusal::SystemAccountKeyless);
@@ -745,6 +758,9 @@ mod tests {
             (AuditClass::RailRecord, t_rail_record()),
             (AuditClass::StewardClassification, t_steward_classification()),
             (AuditClass::Replaces, t_replaces()),
+            (AuditClass::Binding, t_binding()),
+            (AuditClass::TakedownRecord, t_takedown()),
+            (AuditClass::PolicyLink, t_policy_link()),
         ] {
             assert_eq!(
                 types.target_class(&unit(addr)),
@@ -753,6 +769,16 @@ mod tests {
                 addr.tumbler()
             );
         }
+        // The registry's subtype rows are their kinds' members by prefix
+        // (REG-1.21); the endpoint is no class at all (REG-1.11, REG-1.46).
+        for (class, addr) in [
+            (AuditClass::TakedownRecord, skep_engine::types::t_takedown_lifted()),
+            (AuditClass::PolicyLink, skep_engine::types::t_disavowal()),
+            (AuditClass::PolicyLink, skep_engine::types::t_succession_policy()),
+        ] {
+            assert_eq!(types.target_class(&unit(addr)), Some(TargetClass::AuditView(class)));
+        }
+        assert_eq!(types.target_class(&unit(skep_engine::types::t_endpoint())), None);
         // The edition class (3.14) is read under the ACTIVE view: no class.
         assert_eq!(types.target_class(&unit(skep_engine::types::t_edition())), None);
         // A content I-span names nothing here either.

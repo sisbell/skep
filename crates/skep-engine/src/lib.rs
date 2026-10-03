@@ -78,8 +78,11 @@
 //! * **The commons type pins** (the public [`types`] module) — every commons
 //!   type address the engine or the daemon keys on as a VALUE, in one ledger:
 //!   the grant, `replaces` and edition classes the two indexes above read,
-//!   and the audit-view classes the daemon's write path refuses a `nullify`
-//!   at (PUB-6.30, PUB-6.64; lane 3.5). None is a registered M7 type.
+//!   the audit-view classes the daemon's write path refuses a `nullify`
+//!   at (PUB-6.30, PUB-6.64; lane 3.5), and the registry's twelve rows —
+//!   `skep-registry`'s table, read through the ledger's readers (REG-1.14,
+//!   REG-1.15). None is a registered M7 type, and genesis seeds nothing at
+//!   any of them: a commons row is a compiled address, never a record.
 //! * **The world dump** ([`dump`], behind the `dump` feature) — a
 //!   deterministic, byte-comparable rendering of the world's AUTHORITATIVE
 //!   state (every store slice, and M3's publication map as a `publication`

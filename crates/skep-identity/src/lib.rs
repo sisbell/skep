@@ -143,8 +143,10 @@
 //!   [`LinkDeposit`], [`single_address`] (AUTH-2.20–2.28);
 //! * `write_types`: the write path's type-recognition input —
 //!   [`WriteTypes`]/[`TargetClass`]/[`AuditClass`] (PUB-6.30, PUB-6.64; owner
-//!   ruling D3): the grant and audit-view classes a `nullify` is refused at,
-//!   read off the fold's recognition with `kind_of` untouched;
+//!   ruling D3): the grant and audit-view classes a `nullify` is refused at
+//!   — the registry's binding, takedown record and policy link among them
+//!   (REG-1.44, REG-1.46) — read off the fold's recognition with `kind_of`
+//!   untouched;
 //! * `seam`: the fold seam — [`Values`], [`FoldCtx`], [`Owner`]
 //!   (AUTH-2.29–2.34);
 //! * `verdict`: the fold's answers — [`Verdict`], [`Effect`], [`Inert`]

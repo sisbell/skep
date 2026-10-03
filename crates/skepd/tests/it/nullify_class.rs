@@ -33,6 +33,12 @@ const T_STEWARD_CLASSIFICATION: &str = "1.1.0.1.0.1.0.3.61";
 /// ACTIVE view (PUB-6.32), so OUTSIDE PUB-6.64 by its own test.
 const T_EDITION: &str = "1.1.0.1.0.1.0.3.14";
 const T_EDITION_EXPANDED: &str = "1.1.0.1.0.1.0.3.14.2";
+/// The registry's two link-alone subtype rows (REG-1.15, REG-2.26) — the
+/// policy link's own reading under its kind `3.58`, LIFTED under the
+/// takedown record's kind `3.57` — members of the audit-view class by
+/// prefix of their kinds (REG-1.21, REG-1.46).
+const T_POLICY_LINK_OWN: &str = "1.1.0.1.0.1.0.3.58.1";
+const T_TAKEDOWN_LIFTED: &str = "1.1.0.1.0.1.0.3.57.2";
 
 /// A rejection's verdict: the code, or `credential_refused:<token>` for the
 /// daemon-originated family (the `auth_wire` convention).
@@ -412,6 +418,66 @@ fn an_audit_view_class_nullify_is_refused_to_the_owner_and_masked_for_strangers(
     let draft_classification =
         typed_link_addr(port, &bare, &working, &[working.as_str()], &[working.as_str()], T_STEWARD_CLASSIFICATION);
     expect_resp(&nullify(port, Some(&bare), &working, &draft_classification), "ack_addr");
+    sd.shutdown();
+}
+
+/// REG-1.44, REG-1.46 — THE REGISTRY'S AUDIT-VIEW CLASSES: the routed entry
+/// adds three members to the class list and no code. A committed BINDING's
+/// `nullify` by its owner — the claimant, the binding-writing account — is
+/// refused `nullify_audit_view`, permanent, the binding standing; a link
+/// typed the policy link's own reading `3.58.1` and one typed LIFTED
+/// `3.57.2` — link-alone rows, ordinary attested link writes from the
+/// signed session into doc 1 — are refused the same by prefix of their
+/// kinds (REG-1.21). And the ENDPOINT's `nullify` by the org COMMITS
+/// (REG-1.11): the deposit leaves the active view and the one before it
+/// stands — the endpoint is no member, its org's own retraction effective.
+#[test]
+fn the_registry_classes_refuse_a_nullify_and_the_endpoints_commits() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let console = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let (node_account, _) = bootstrap_delegate(port, 971);
+    let node_signed = hire(port, &console, CLAIMANT_DOC1, &node_account, 971, &distinct_key(71));
+    let binding = deposit_binding(port, &console, "1.2", Some(&node_account), None);
+    let own_reading = typed_link_addr(port, &console, CLAIMANT_DOC1, &[CLAIMANT_DOC1], &[], T_POLICY_LINK_OWN);
+    let lifted = typed_link_addr(port, &console, CLAIMANT_DOC1, &[CLAIMANT_DOC1], &[], T_TAKEDOWN_LIFTED);
+    let before = head(port);
+    for (what, target) in [
+        ("the binding", &binding),
+        ("the policy link's own reading", &own_reading),
+        ("lifted", &lifted),
+    ] {
+        let v = nullify(port, Some(&console), CLAIMANT_DOC1, target);
+        assert_eq!(verdict(&v), "credential_refused:nullify_audit_view", "{what}: {v}");
+        assert_eq!(v["disposition"].as_str(), Some("permanent"), "{what}: {v}");
+        assert!(link_resident(port, None, target), "{what}: nothing was retracted");
+    }
+    assert_eq!(head(port), before, "the refusals commit nothing");
+
+    // THE ENDPOINT (REG-1.11): the org's own `nullify` of its latest deposit
+    // commits, and the active view answers the deposit before it.
+    let doc1 = create_doc(port, &node_signed, &node_account);
+    let first = deposit_endpoint(port, &node_signed, &doc1, &["https://acme.example"], None);
+    let second = deposit_endpoint(port, &node_signed, &doc1, &["https://acme.example.net"], Some(&first));
+    let active = |port: u16| -> Vec<String> {
+        let v = op(
+            port,
+            None,
+            &format!(
+                r#"{{"op":"find_links_ftt","q":{{"home":"any","from":"any","to":"any","ty":[{{"start":"{T_ENDPOINT}","width":"0.0.0.0.0.0.0.0.1"}}]}}}}"#
+            ),
+        );
+        expect_resp(&v, "addrs")["addrs"]
+            .as_array()
+            .expect("addrs")
+            .iter()
+            .map(|a| a.as_str().expect("an address").to_string())
+            .collect()
+    };
+    assert_eq!(active(port), [first.clone(), second.clone()]);
+    expect_resp(&nullify(port, Some(&node_signed), &doc1, &second), "ack_addr");
+    assert_eq!(active(port), [first.clone()], "the deposit before it stands current");
     sd.shutdown();
 }
 

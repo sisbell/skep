@@ -12,15 +12,16 @@ use skep_kernel::{Attestation, Snapshot};
 
 use super::actor::Resolved;
 use super::reply::{
-    credential_refused, media_door_refused, op_answer, refuse_scan_busy, with_signal, Reply,
+    credential_refused, media_door_refused, op_answer, refuse_scan_busy, registry_refused,
+    with_signal, Reply,
 };
 use super::request::HttpRequest;
 use super::scan::ScanBusy;
 use super::{Daemon, Moment};
 use crate::auth::fold::key_set_of;
 use crate::auth::policy::{
-    deposits_credential_link, op_shape_refusal, plain_admission, CredentialRefusal, DepositSpans,
-    RecordSig,
+    deposits_credential_link, deposits_registry_link, op_shape_refusal, plain_admission,
+    registry_admission, CredentialRefusal, DepositSpans, RecordSig,
 };
 use crate::auth::session::Actor;
 use crate::auth::LockWrite;
@@ -152,14 +153,17 @@ impl Daemon {
 
     /// One write, through its pinned sequence: the credential path for a
     /// deposit-classified op (`deposits_credential_link`, decided lock-free
-    /// off the op's own type slot), the plain path for everything else.
+    /// off the op's own type slot), the registry path for a registry-typed
+    /// one (`deposits_registry_link`, its sibling, asked second — the two
+    /// sets are disjoint), the plain path for everything else.
     ///
     /// The `attest` the frame presented goes to the plain sequence alone: a
-    /// credential deposit's link takes no entry signature (D26), so on that
-    /// route the member goes no further than here. `frame` arrives with its
-    /// `attest` EMPTY — the codec split the member out at the door
-    /// (`DaemonOp::Febe`) — so the plain sequence's assignment of what its
-    /// admission verified is `Request::attest`'s one writer.
+    /// credential or registry deposit's link takes no entry signature (D26;
+    /// REG-1.86 (e)), so on those routes the member goes no further than
+    /// here. `frame` arrives with its `attest` EMPTY — the codec split the
+    /// member out at the door (`DaemonOp::Febe`) — so the plain sequence's
+    /// assignment of what its admission verified is `Request::attest`'s one
+    /// writer.
     fn write_sequence(
         &self,
         resolved: &Resolved,
@@ -174,9 +178,65 @@ impl Daemon {
         );
         if deposits_credential_link(&frame.op) {
             self.credential_sequence(resolved, meta, frame, req)
+        } else if deposits_registry_link(&frame.op) {
+            self.registry_sequence(resolved, meta, frame, req)
         } else {
             self.plain_sequence(meta, frame, presented, req)
         }
+    }
+
+    /// The REGISTRY sequence (the record grade for registry records, 2b;
+    /// REG-1.86 (e)): the pre-lock actor check, then the credential lock's
+    /// READ arm → the serialization lock → [`Daemon::locked_state`] → the
+    /// registry admission's ordered producers (`policy/registry.rs`: above
+    /// the claim and from a signed session, the home pin, the form, the
+    /// record value by the kind the slot names, the `sig`, the trial under
+    /// the set that opens the home's account) → execute. The READ arm,
+    /// because the sequence reads the fold's key table and steps nothing: a
+    /// registry record enrols no key, so there is no committed tail, no fold
+    /// step and no memo. The marker slot stays EMPTY by route, as the
+    /// credential sequence's does (D26): the record's own `sig`, verified at
+    /// this `make_link`, covers both of the deposit's positions, and the row
+    /// records it — the LINK row signed by its record (`Signed::RecordSig`),
+    /// serving no `key` and no `attest`.
+    fn registry_sequence(
+        &self,
+        resolved: &Resolved,
+        meta: FrameMeta,
+        frame: Request,
+        req: &HttpRequest,
+    ) -> Reply {
+        // 1 — the pre-lock actor check, as the credential sequence's.
+        if let Actor::Guest(_) = resolved.actor {
+            return self.guest_reply(frame);
+        }
+        // 2 — the locks, the locked snapshot, and this site's own resolution.
+        let credential_lock = self.auth.credential_lock.read();
+        let serial = self.writes.serial_lock();
+        let (snap, identity, Resolved { actor, closed }) = self.locked_state(&serial, req);
+        let binding = match actor {
+            Actor::Principal(b) => b,
+            Actor::Guest(_) => return with_signal(self.guest_reply(frame), closed),
+        };
+        // 3 — the admission's ordered producers.
+        if let Err(r) = registry_admission(
+            &credential_lock,
+            snap.world(),
+            &identity,
+            &frame.op,
+            binding.signer.as_ref(),
+        ) {
+            // A refused write's TURN (l7-C1), as on every path.
+            self.writes.take_turn_after_refusal(&serial);
+            return with_signal(registry_refused(meta.kind, &r), closed);
+        }
+        // 4 — execute, the link row signed by its record.
+        let signed = Some(Signed::RecordSig);
+        let resp =
+            self.writes.commit_under(&serial, meta.attributed(binding.testimony(), signed), || {
+                self.febe.execute(binding.sid, frame)
+            });
+        with_signal(self.op_reply(&resp), closed)
     }
 
     /// The locked state one write sequence stands on: the world snapshot,

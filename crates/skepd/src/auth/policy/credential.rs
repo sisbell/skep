@@ -559,6 +559,10 @@ enum RecordKind {
 ///    reaches was deposited past that gate — below the claim, or past the
 ///    check by the operator's hand; the class REORDER, the act that exists
 ///    being a new record composed with its `sig`, inserted and linked.
+///
+/// Steps 3 to 6 are [`verify_record_sig`], the trial the registry arm calls
+/// too (`policy/registry.rs`), so the two grades verify one way:
+///
 /// 3. THE BLOB — the `sig` is the hybrid blob in hex, no `alg` beside it,
 ///    parsed by the one parse both doors share ([`HybridSig::parse`],
 ///    case-free) into a WIDTH-VALIDATED blob that NAMES NO ROW (l7-C3; SO-I6
@@ -632,11 +636,8 @@ fn record_grade_check(
     let Some(sig) = sig else {
         return Err(CredentialRefusal::AttestationRequired);
     };
-    // 3 — the blob, width-validated, naming no row (l7-C3).
-    let blob = HybridSig::parse(&sig).ok_or(invalid(AttestFault::Malformed))?;
-    let blob = blob.as_bytes();
-    // 4 — the frame, every member but `alg`. The home's account is ω's
-    // answer, the fold's own H (slot (3) found one, so this is `Some`),
+    // 3–6 — the trial, shared with the registry arm. The home's account is
+    // ω's answer, the fold's own H (slot (3) found one, so this is `Some`),
     // borrowed off the snapshot as every read here is; the slots are read as
     // a mirror reads a stored link's: one address each, the `to` slot empty
     // at a targetless kind. The type slot is the one `kind_of` read at
@@ -652,28 +653,80 @@ fn record_grade_check(
         return Err(invalid(AttestFault::Signature));
     };
     let to = single_address(&dep.to);
+    verify_record_sig(
+        world,
+        identity,
+        RecordTrial {
+            home: &dep.home,
+            home_account,
+            ty: &ty,
+            to: to.as_slice(),
+            canonical: canonical.as_bytes(),
+            sig: &sig,
+            anchor_grade,
+        },
+    )
+    .map_err(invalid)
+}
+
+/// THE RECORD GRADE'S TRIAL, its inputs by name — what [`verify_record_sig`]
+/// takes: the deposit's home and the home's account (ω over the home, the
+/// frame's `account`), the link's type address and its target as stored
+/// (none at a targetless kind), the SIG-LESS CANONICAL PROJECTION of the
+/// record (the frame's body-bytes row), the record's `sig` as found, and
+/// whether the act is ANCHOR-GRADE (AUTH-3.20–3.22: the credential arm's
+/// slot (6) reading; FALSE for a registry record, no rule naming an anchor
+/// grade for one). By field, as [`RecordRows`](skep_identity::RecordRows)
+/// takes the frame's rows: the two arms that compose one name each input.
+pub(super) struct RecordTrial<'a> {
+    pub home: &'a Address,
+    pub home_account: &'a Address,
+    pub ty: &'a Address,
+    pub to: &'a [Address],
+    pub canonical: &'a [u8],
+    pub sig: &'a str,
+    pub anchor_grade: bool,
+}
+
+/// THE TRIAL — steps 3 to 6 of [`record_grade_check`], the one function the
+/// credential arm and the registry arm (`policy/registry.rs`; the record
+/// grade for registry records, 2b) both call, so the two grades verify one
+/// way: the blob, the frame, the candidates, the trial. Each fault is the
+/// `attestation_invalid` cause the caller joins to its own family's code.
+pub(super) fn verify_record_sig(
+    world: &World,
+    identity: &IdentityState,
+    trial: RecordTrial<'_>,
+) -> Result<(), AttestFault> {
+    // 3 — the blob, width-validated, naming no row (l7-C3).
+    let blob = HybridSig::parse(trial.sig).ok_or(AttestFault::Malformed)?;
+    let blob = blob.as_bytes();
+    // 4 — the frame, every member but `alg`: the `record` grammar over the
+    // link and the atom, `H.1`'s pair (none → `board_unavailable`), the
+    // home's account and the home, the type and target as stored, the
+    // `replaces` and lineage rows EMPTY, the sig-less projection.
     let Some(frame) = entry::compose_record(
         world,
-        home_account,
-        &dep.home,
-        &ty,
-        to.as_slice(),
-        canonical.as_bytes(),
+        trial.home_account,
+        trial.home,
+        trial.ty,
+        trial.to,
+        trial.canonical,
     ) else {
-        return Err(invalid(AttestFault::BoardUnavailable));
+        return Err(AttestFault::BoardUnavailable);
     };
     // 5 — the candidates: the set that opens the home's account, at the
     // grade the act needs, of the blob's row.
-    let opening = opening_account(identity, home_account);
+    let opening = opening_account(identity, trial.home_account);
     let candidates: Vec<&PublicKey> = identity
         .key_set(&opening)
         .enrolled()
-        .filter(|(_, e)| !anchor_grade || e.anchor)
+        .filter(|(_, e)| !trial.anchor_grade || e.anchor)
         .map(|(_, e)| &e.key)
         .filter(|key| key.sig_alg_row().sig_len() == blob.len())
         .collect();
     if candidates.is_empty() {
-        return Err(invalid(AttestFault::NotEnrolledAtPosition));
+        return Err(AttestFault::NotEnrolledAtPosition);
     }
     // 6 — the trial, the frame under each candidate's own token.
     if candidates.iter().any(|key| {
@@ -682,7 +735,7 @@ fn record_grade_check(
     }) {
         Ok(())
     } else {
-        Err(invalid(AttestFault::Signature))
+        Err(AttestFault::Signature)
     }
 }
 

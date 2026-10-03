@@ -10,8 +10,14 @@
 use crate::common;
 
 use common::*;
+use skep_address::Address;
 use skep_arrangement::{deposit_class_types, Caller, Deposit, HasM5};
 use skep_content::{HasContent, Val};
+use skep_engine::types::{
+    pins_outside_the_registry, t_binding, t_disavowal, t_endpoint, t_expulsion_ground,
+    t_policy_link, t_policy_link_own, t_succession_ground, t_succession_policy, t_successor_of,
+    t_takedown, t_takedown_base, t_takedown_lifted,
+};
 use skep_engine::World;
 use skep_links::{coverage_class, HasLinks, ReservedAddrs, ShippedType, View};
 use skep_namespace::{
@@ -145,6 +151,61 @@ fn the_format_pins_its_five_reserved_addresses() {
     ] {
         assert_eq!(engine.registry().reserved_type(ty), &skep_links::enc(std::slice::from_ref(addr)));
     }
+}
+
+/// REG-1.24, REG-1.32 — THE TWELVE ROWS ARE PRESENT at every board as the
+/// ledger's pins, at the addresses commons-map pins, each the one row
+/// `skep-registry`'s table holds: five kinds at `3.55`–`3.59`, seven subtype
+/// rows under their kinds. A commons row is a compiled address and never a
+/// record, so genesis seeds nothing at any of them — nothing is allocated
+/// at a row on a fresh board, and the ghost document is born empty as the
+/// cell above shows; `successor-of`, the engine's own pin, is held equal to
+/// the table's `3.59`.
+#[test]
+fn the_registrys_twelve_rows_are_the_ledgers_pins_at_the_maps_addresses() {
+    type Reader = fn() -> &'static Address;
+    let readers: [(Reader, &str); 12] = [
+        (t_binding, "55"),
+        (t_endpoint, "56"),
+        (t_takedown, "57"),
+        (t_takedown_base, "57.1"),
+        (t_takedown_lifted, "57.2"),
+        (t_policy_link, "58"),
+        (t_policy_link_own, "58.1"),
+        (t_disavowal, "58.2"),
+        (t_expulsion_ground, "58.3"),
+        (t_succession_ground, "58.4"),
+        (t_succession_policy, "58.5"),
+        (t_successor_of, "59"),
+    ];
+    let engine = mem_engine();
+    let snap = engine.kernel().snapshot();
+    let m3 = snap.world().m3();
+    for ((read, tail), row) in readers.iter().zip(skep_registry::rows()) {
+        let pin = read();
+        assert_eq!(pin.tumbler().to_string(), format!("1.1.0.1.0.1.0.3.{tail}"));
+        assert_eq!(pin, &row.address, "the ledger's reader is the table's row");
+        assert!(!m3.is_allocated(pin), "{pin}: a commons row is a pin, never an allocation");
+    }
+    assert_eq!(t_successor_of(), skep_registry::t_successor_of());
+}
+
+/// REG-1.30 to REG-1.32 — THE SEEDING CHECK over what the engine sees: the
+/// registry's rows against the ledger's pins outside the registry and M5's
+/// deposit-class set, with the set's two registry members set aside — they
+/// are the rows spelled a second time, held equal above, and no foreign row.
+/// The three arms pass, so a daemon's genesis over this domain completes;
+/// each arm's refusal is proved on a list the registry crate's own suite
+/// builds, and the daemon widens the domain by its credential constants.
+#[test]
+fn the_seeding_check_passes_over_what_the_engine_sees() {
+    let registry_rows = |a: &Address| skep_registry::rows().iter().any(|r| r.address == *a);
+    let domain: Vec<&Address> = pins_outside_the_registry()
+        .into_iter()
+        .chain(deposit_class_types().iter().filter(|ty| !registry_rows(ty)))
+        .collect();
+    assert_eq!(domain.len(), 8 + 2, "eight pins and the two credential members of M5's set");
+    assert_eq!(skep_registry::seeding_check(skep_registry::rows(), domain), Ok(()));
 }
 
 /// Non-reissue end to end, through the assembled engine — the load-bearing

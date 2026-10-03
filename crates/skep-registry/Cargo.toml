@@ -1,0 +1,19 @@
+[package]
+name = "skep-registry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "The registry's stable core as values: the twelve commons rows the registry allocates (five kinds, seven subtype rows) at the addresses commons-map pins, the binding and endpoint bodies under one canonical rule, the seeding check's three arms, and the vector set every parser of the bodies is held to. A leaf: it knows no engine, no daemon and no signature library."
+readme = "README.md"
+
+[dependencies]
+# M1 — the address vocabulary: each row's address, the subtree grain the
+# disjointness arm compares at, and the address form a body's `prefix` and
+# `replaces` members must parse as.
+skep-address = { path = "../skep-address" }
+# The one question a body's bytes are asked of a JSON parser — which value
+# they are — with every verdict written here, as the credential records'
+# parser takes it.
+serde_json.workspace = true

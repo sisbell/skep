@@ -1083,6 +1083,7 @@ dependencies = [
  "skep-kernel",
  "skep-links",
  "skep-namespace",
+ "skep-registry",
  "skep-retrieval",
  "tempfile",
 ]
@@ -1180,6 +1181,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "skep-registry"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "skep-address",
+]
+
+[[package]]
 name = "skep-retrieval"
 version = "0.1.0"
 dependencies = [
@@ -1233,6 +1242,7 @@ dependencies = [
  "skep-kernel",
  "skep-links",
  "skep-namespace",
+ "skep-registry",
  "skep-retrieval",
  "skep-signature",
  "skepd",

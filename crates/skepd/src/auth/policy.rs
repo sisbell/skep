@@ -1,12 +1,20 @@
-//! The write-path policy surface (AUTH part 03): which of the two write
-//! sequences a write takes ([`deposits_credential_link`], read off the op's
-//! own type slot before any lock), the refusal vocabulary both answer in
-//! ([`CredentialRefusal`]), and — one file per sequence, and one for the
-//! check the plain sequence runs — their ordered producers:
+//! The write-path policy surface (AUTH part 03): which of the three write
+//! sequences a write takes ([`deposits_credential_link`] and
+//! [`deposits_registry_link`], each read off the op's own type slot before
+//! any lock, the credential route asked first), the refusal vocabularies they
+//! answer in ([`CredentialRefusal`]; the registry's own,
+//! [`RegistryRefusal`]), and — one file per sequence, and one for the check
+//! the plain sequence runs — their ordered producers:
 //!
 //! - `credential` — the CREDENTIAL sequence's (AUTH-3.37): slots (1)–(2)
 //!   ahead of the credential write lock, the precheck's slots (3)–(8) under
-//!   it, and the record grade's check inside slot (7);
+//!   it, and the record grade's check inside slot (7), whose trial the
+//!   registry sequence shares;
+//! - `registry` — the REGISTRY sequence's (the record grade for registry
+//!   records, 2b): the registry's two record-deposit kinds, the route of
+//!   their links, the admission's ordered producers under the credential
+//!   lock's read arm, and the seeding check the open runs ahead of every
+//!   genesis;
 //! - `plain` — the PLAIN sequence's admission (AUTH-3.35): the mint class,
 //!   the `replaces` fence, the board-state pair and the nullify class, in
 //!   their pinned order;
@@ -15,15 +23,20 @@
 //!   attestation is what the write's commit marker carries, and which asks
 //!   M5's own admission of the shot what a shot it could not read is owed.
 //!
-//! `addr_spans`, the one spelling of a type slot all three read, lives here,
+//! `addr_spans`, the one spelling of a type slot all four read, lives here,
 //! where each child sees it without a widening.
 
 mod attestation;
 mod credential;
 mod plain;
+mod registry;
 
 pub(crate) use credential::{op_shape_refusal, precheck, DepositSpans, RecordSig};
 pub(crate) use plain::plain_admission;
+pub(crate) use registry::{
+    deposits_registry_link, genesis_seeding_check, registry_admission, registry_deposit_kind,
+    RegistryRefusal,
+};
 
 use skep_address::{Address, Span};
 use skep_febe::{Disposition, Op};
@@ -95,19 +108,23 @@ fn slotarg_kind(s: &SlotArg) -> Option<CredentialKind> {
 /// retire, claim), and the route rests on that equality: the credential
 /// sequence classifies every deposit routed to it through the FOLD (the
 /// precheck's slot (3)), and the record grade parses the record by the kind
-/// the fold's verdict names. So the kinds the design record names for this
-/// set later — the disavowal's (`…3.4`, its ordinal reserved) and the
-/// registry's (2b) — do not join by an edit here: an edit here alone routes
-/// such a kind's link to a classify that answers `NotCredential` — the
-/// precheck's defect arm, which in a release build commits the deposit with
-/// no `sig` verified — and exempts its atom from the entry check with no
-/// record grade behind it. Each joins with the lane that builds the classify
-/// and the precheck its record needs. The claim is a member though a claim
-/// carries no record, because the fold folds it: on a published document —
-/// the only place the entry check runs — a declared claim atom is refused at
-/// M5's door, whose deposit class holds the kinds that deposit an atom
-/// (enroll and retire), and a claim's link above the claim is
-/// `already_claimed` at slot (3), before the record grade runs.
+/// the fold's verdict names. So a kind the fold does not fold never joins
+/// by an edit here: an edit here alone routes such a kind's link to a
+/// classify that answers `NotCredential` — the precheck's defect arm, which
+/// in a release build commits the deposit with no `sig` verified — and
+/// exempts its atom from the entry check with no record grade behind it.
+/// Each joins with its own classify and the precheck its record needs: the
+/// registry's two record-deposit kinds, the binding and the endpoint, joined
+/// as a SECOND SET with a sequence of their own ([`registry_deposit_kind`],
+/// `policy/registry.rs`; the record grade for registry records, 2b), the two
+/// sets disjoint by construction and this one asked first at the route; the
+/// disavowal's (`…3.58.2`, the registry's subtype row) joins the same way
+/// where its schema lands. The claim is a member though a claim carries no
+/// record, because the fold folds it: on a published document — the only
+/// place the entry check runs — a declared claim atom is refused at M5's
+/// door, whose deposit class holds the kinds that deposit an atom (enroll,
+/// retire, the binding, the endpoint), and a claim's link above the claim
+/// is `already_claimed` at slot (3), before the record grade runs.
 ///
 /// Private to this module and its children, where its readers live;
 /// `every_arm_of_the_route_reads_the_one_set_the_fold_folds` holds every arm
@@ -510,19 +527,22 @@ mod tests {
     use crate::auth::fold::{addr_of, T_CLAIM, T_ENROLL, T_RETIRE};
 
     /// THE RECORD-DEPOSIT SET IS THE FOLD'S KINDS, and every arm of the route
-    /// reads it: over the three credential kinds and the disavowal's reserved
-    /// ordinal (`…3.4`, which the fold does not fold), [`record_deposit_kind`]
-    /// answers what [`identity_types`] answers, and a `make_link`, an `emit`
-    /// and an `edit_link` successor so typed are routed to the credential
-    /// sequence exactly where it answers `Some`. The route rests on that
-    /// equality — the credential sequence classifies what it is routed through
-    /// the fold — so an edit adding a kind to the set alone, the join its card
-    /// rules out, fails here.
+    /// reads it: over the three credential kinds, the disavowal's released
+    /// ordinal (`…3.4`, which the fold does not fold) and the registry's two
+    /// kinds (a second set, never this one), [`record_deposit_kind`] answers
+    /// what [`identity_types`] answers, and a `make_link`, an `emit` and an
+    /// `edit_link` successor so typed are routed to the credential sequence
+    /// exactly where it answers `Some`. The route rests on that equality —
+    /// the credential sequence classifies what it is routed through the fold
+    /// — so an edit adding a kind to the set alone, the join its card rules
+    /// out, fails here.
     #[test]
     fn every_arm_of_the_route_reads_the_one_set_the_fold_folds() {
         let doc = addr_of(&[1, 0, 1, 0, 1]);
         let disavowal = [1, 1, 0, 1, 0, 1, 0, 3, 4];
-        for comps in [T_ENROLL, T_RETIRE, T_CLAIM, disavowal] {
+        let binding = [1, 1, 0, 1, 0, 1, 0, 3, 55];
+        let endpoint = [1, 1, 0, 1, 0, 1, 0, 3, 56];
+        for comps in [T_ENROLL, T_RETIRE, T_CLAIM, disavowal, binding, endpoint] {
             let ty = addr_of(&comps);
             let slot = addr_spans(std::slice::from_ref(&ty));
             let folded = identity_types().kind_of(&slot);

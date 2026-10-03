@@ -15,9 +15,9 @@ use common::{
 };
 use sha2::{Digest, Sha256};
 use skep_identity::{
-    canonical_record, entry_body_publish, framed, parse_enroll, parse_record_value, parse_retire,
-    record_bytes, single_address, AlgRow, CredentialKind, Enrollment, Fingerprint, FoldCtx,
-    HasIdentity, IdentityState, Inert, LabelError, ParseKeyError, PayloadError, PublicKey,
+    canonical_record, doc_1_of, entry_body_publish, framed, parse_enroll, parse_record_value,
+    parse_retire, record_bytes, single_address, AlgRow, CredentialKind, Enrollment, Fingerprint,
+    FoldCtx, HasIdentity, IdentityState, Inert, LabelError, ParseKeyError, PayloadError, PublicKey,
     PublishBody, PublishRefusal, RecordValue, SigAlgRow, Values, ALGS,
     ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, ED25519_KEY_LEN, ENROLL_TYPE, ENTRY_TAG,
     FNDSA512_PREVIEW_ED25519_KEY_LEN, FNDSA512_PREVIEW_KEY_LEN, KEY_TAG, MAX_RECORD_BYTES,
@@ -781,6 +781,9 @@ fn the_items_published_for_readers_outside_the_workspace_are_public() {
     let _ = single_address(std::iter::empty());
     let _: Option<&dyn HasIdentity> = None;
     let _ = NODE_HELLO_TAG;
+    // A reader holding no M3, finding the doc 1 every honored credential link
+    // is homed in (AUTH-2.126, AUTH-2.127).
+    let _ = doc_1_of(&addr(ACCT_A));
     // The tables and constants the spec declares as the crate's surface
     // (AUTH-1.5, AUTH-1.11, AUTH-1.17, AUTH-1.18), and the widths the design
     // record declares beside them.

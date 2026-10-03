@@ -14,6 +14,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **The fold** — a deterministic state machine over credential link
   deposits: same records, same order, same table — on the origin, on
   every mirror, forever. Frozen by a conformance corpus.
+- **The doc-1 address** — `doc_1_of`, the address of an account's first
+  document, computed from the account address alone: the only document
+  of an account a credential link is honored in.
+  [skep-namespace](../skep-namespace)'s `first_document_address` names
+  the same slot; skepd's suite holds the two equal.
 - **`Values` / `FoldCtx`** — the crate defines its own minimal
   world-fact traits and consumes only
   [skep-address](../skep-address) types: no I/O, no clock, no

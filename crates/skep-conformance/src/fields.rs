@@ -164,10 +164,9 @@ pub fn parse_python_spec(s: &str) -> Option<(Option<String>, Vec<RawSpan>)> {
     } else if let Some(r) = s.strip_prefix("VSpan in ") {
         let (d, tail) = r.split_once(" at ")?;
         (Some(d.trim().to_string()), format!(" at {tail}"))
-    } else if let Some(r) = s.strip_prefix("Span at ") {
-        (None, format!(" at {r}"))
     } else {
-        return None;
+        let r = s.strip_prefix("Span at ")?;
+        (None, format!(" at {r}"))
     };
     let mut spans = Vec::new();
     for part in rest.split(',') {

@@ -382,9 +382,13 @@ impl CommitMeta {
     ///   answer; ABSENT on every other row: an unsigned entry, a credential
     ///   record deposit's two rows (the deposit's slot is empty; its signature
     ///   is the credential record's own `sig`), the ceremony's rows, the head
-    ///   writer's.
-    ///   Absence on the origin's own feed is A6's verdict, so a store line
-    ///   is served wherever one is held and never dropped.
+    ///   writer's — and a row whose `docs` the requester's class REDUCES
+    ///   (PUB-6.47's straddles; SO-I5 (e)), its signature a function of the
+    ///   home the row withholds, where the feed's page removes the member
+    ///   this method renders.
+    ///   Absence on the origin's own feed, on a row served WHOLE at the
+    ///   reader's own class, is A6's verdict, so a store line is served
+    ///   wherever one is held and never dropped.
     /// * the op's terms ([`OpTerms::members`], the file line's spelling too):
     ///   present on the row of the op that carries them, absent on every
     ///   other op's; on a bare row the journal's answer ([`JournalTerms`]),

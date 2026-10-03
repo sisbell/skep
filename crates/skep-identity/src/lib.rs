@@ -80,7 +80,13 @@
 //! spec declares as this crate's surface — [`ALGS`] and its [`AlgRow`]
 //! (AUTH-1.5), [`TAGS`], [`KEY_TAG`] and [`ENTRY_TAG`] (AUTH-1.11, AUTH-1.17),
 //! [`ENROLL_TYPE`] and [`RETIRE_TYPE`] (AUTH-1.18); and the five `*_KEY_LEN`
-//! constants the design record declares beside them (AUTH-1.5's cite). The
+//! constants the design record declares beside them (AUTH-1.5's cite). One
+//! item the spec declares crate-private is published too: [`doc_1_of`]
+//! (AUTH-2.126), since every honored credential link is homed in a doc 1
+//! (AUTH-2.127) and a reader holding no M3 — a mirror or an audit tool
+//! embedding this crate — computes that address here. M3 spells the slot as
+//! `first_document_address`, which AUTH-2.1's dependency set keeps out of
+//! this crate, and skepd's suite holds the two equal at every account. The
 //! outside reader is why each of these is public, whether or not a crate of
 //! this workspace also calls it, and the suite's `surface.rs` names each of
 //! them from outside the crate, so narrowing one fails the build there.
@@ -152,9 +158,9 @@
 //! * `verdict`: the fold's answers — [`Verdict`], [`Effect`], [`Inert`]
 //!   (AUTH-2.51–2.55);
 //! * `state`: the fold itself — [`IdentityState`] with `classify`/`step`,
-//!   [`HasIdentity`], and the fold's ω projections and doc-1 address, private
-//!   to it (AUTH-1.38–1.41, AUTH-2.35, AUTH-2.56–2.60, AUTH-2.62–2.78,
-//!   AUTH-2.126–2.127).
+//!   [`HasIdentity`], the doc-1 address [`doc_1_of`], and the fold's ω
+//!   projections, private to it (AUTH-1.38–1.41, AUTH-2.35, AUTH-2.56–2.60,
+//!   AUTH-2.62–2.78, AUTH-2.126–2.127).
 //!
 //! ## In AUTH's data model, deliberately NOT in this crate
 //!
@@ -235,7 +241,7 @@ pub use payload::{
 pub use read::record_bytes;
 pub use seam::{FoldCtx, Owner, Values};
 pub use shape::{single_address, CredentialKind, LinkDeposit, TypeAddrs};
-pub use state::{HasIdentity, IdentityState};
+pub use state::{doc_1_of, HasIdentity, IdentityState};
 pub use verdict::{Effect, Inert, Verdict};
 pub use write_types::{AuditClass, TargetClass, WriteTypes};
 

@@ -20,9 +20,10 @@
 //! own terms. Their per-row shape is pinned here beside the rest of the
 //! entry's (the testimony and affected-docs cells); the cells that read the
 //! feed as the mirror's WHOLE input, and the attest store's crash honesty,
-//! are the child `mirror`. What more than one family uses — the seeded
-//! flow, the feed readers, the per-kind term checks, the reclaim helpers —
-//! lives here.
+//! are the child `mirror` — all but the store's crash test against the
+//! reclamation, which stands here beside the compaction cell whose helpers
+//! it shares. What more than one family uses — the seeded flow, the feed
+//! readers, the per-kind term checks, the reclaim helpers — lives here.
 
 use crate::common;
 
@@ -1600,6 +1601,352 @@ fn the_sidecar_compacts_to_the_journals_retention() {
     }
 
     sd.shutdown();
+}
+
+/// The crash child's environment: its data dir, and the point it is killed
+/// after — `append`, the signed write acked, or `checkpoint`, the reclaiming
+/// checkpoint returned. Set by the parent alone; their presence IS child mode.
+const RECLAIM_CRASH_DIR: &str = "SKEP_CHANGES_RECLAIM_CRASH_DIR";
+const RECLAIM_CRASH_AFTER: &str = "SKEP_CHANGES_RECLAIM_CRASH_AFTER";
+
+/// The child's lines on stderr: `attested <at> <tag> <hex>` per attested
+/// position, `doc <addr>`, `signed <at>`, then `held`, each after this.
+const RECLAIM_CRASH_LINE: &str = "reclaim-crash:";
+
+/// What a killed child reported: every attested position's slot, read off
+/// the journal before any checkpoint (`position → (tag, sig hex)`, the
+/// shape [`attest_store_lines`] reads the store in), the seeded flow's
+/// private document, and the signed write's position.
+struct Crash {
+    oracle: BTreeMap<u64, (u64, String)>,
+    doc: String,
+    signed_at: u64,
+}
+
+/// The store's line for `at` is the journal's slot, compared whole and
+/// named in brief — its tag, and its blob's length and first bytes — so a
+/// failure does not print a whole signature.
+fn assert_line(lines: &BTreeMap<u64, (u64, String)>, crash: &Crash, at: u64, what: &str) {
+    let brief = |line: Option<&(u64, String)>| match line {
+        Some((tag, sig)) => {
+            format!("tag {tag}, {} hex from {}", sig.len(), &sig[..sig.len().min(16)])
+        }
+        None => "no line".to_string(),
+    };
+    let (held, slot) = (lines.get(&at), crash.oracle.get(&at));
+    assert!(
+        held == slot,
+        "{what}: the store holds {} where the journal's slot is {}",
+        brief(held),
+        brief(slot)
+    );
+}
+
+/// The journal's segment files in `dir` (`seg-<first seq>.wal`).
+fn segment_files(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut segs: Vec<_> = std::fs::read_dir(dir)
+        .expect("read the journal directory")
+        .map(|e| e.expect("a directory entry").path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("seg-") && n.ends_with(".wal"))
+        })
+        .collect();
+    segs.sort();
+    segs
+}
+
+/// `src`'s tree copied to `dst`, so one killed board serves the boundaries
+/// that share its crash.
+fn copy_tree(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).expect("create the copy");
+    for entry in std::fs::read_dir(src).expect("read the crashed board") {
+        let entry = entry.expect("a directory entry");
+        let to = dst.join(entry.file_name());
+        if entry.file_type().expect("a file type").is_dir() {
+            copy_tree(&entry.path(), &to);
+        } else {
+            std::fs::copy(entry.path(), &to).expect("copy a file");
+        }
+    }
+}
+
+/// Cut `path`'s lines for position `at` off its end — what a record step
+/// killed before it reached the file had not written. Each must be the
+/// file's last, as a crash leaves it: a truncation, never a hole.
+fn cut_trailing_position(path: &Path, at: u64) {
+    let text = std::fs::read_to_string(path).expect("a feed file");
+    let of = |line: &str| serde_json::from_str::<Value>(line).ok()?.get("at")?.as_u64();
+    let mut lines: Vec<&str> = text.lines().collect();
+    while lines.last().is_some_and(|&l| of(l) == Some(at)) {
+        lines.pop();
+    }
+    assert!(
+        lines.iter().all(|&l| of(l) != Some(at)),
+        "{}: position {at}'s line is not the file's last",
+        path.display()
+    );
+    let kept: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    std::fs::write(path, kept).expect("cut the file");
+}
+
+/// The crash child: a claimed board served in-process, the seeded flow and
+/// one signed write from the claimant's device session — the head, no head
+/// owed after it — then every attested position's slot reported off the
+/// journal. Killed `after` the `checkpoint`, it first rotates a segment and
+/// copies the segment files aside, then takes the board's FIRST checkpoint,
+/// which retains itself alone and so unlinks every closed segment below it,
+/// the signed write's among them. Then it parks for the parent's SIGKILL.
+/// Never returns.
+fn reclaim_crash_child(dir: &Path, after: &str) -> ! {
+    let sd = spawn(dir);
+    let port = sd.port();
+    let doc = seed_flow(port);
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let (signed_at, _) = signed_ghost_link(port, &signed, 1);
+    assert_eq!(signed_at, head(port), "the signed write is the head");
+    for at in 1..=signed_at {
+        if let Ok(Some(slot)) = sd.daemon().attestation_at(Seq(at)) {
+            eprintln!("{RECLAIM_CRASH_LINE} attested {at} {} {}", slot.sig_alg(), hex(slot.sig()));
+        }
+    }
+    if after == "checkpoint" {
+        rotate_a_segment(port, &open_session(port, 1), &doc);
+        let aside = dir.parent().expect("the data dir's parent").join("segments-aside");
+        std::fs::create_dir_all(&aside).expect("the aside directory");
+        for seg in segment_files(dir) {
+            std::fs::copy(&seg, aside.join(seg.file_name().expect("a name")))
+                .expect("copy a segment aside");
+        }
+        sd.daemon().checkpoint_now();
+    }
+    eprintln!("{RECLAIM_CRASH_LINE} doc {doc}");
+    eprintln!("{RECLAIM_CRASH_LINE} signed {signed_at}");
+    eprintln!("{RECLAIM_CRASH_LINE} held");
+    loop {
+        std::thread::park();
+    }
+}
+
+/// The crash child, SIGKILLed however the parent leaves the scope that holds
+/// it — a panic included — so no parked board outlives its test.
+struct KilledOnDrop(std::process::Child);
+
+impl Drop for KilledOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Run the crash child to its hold `after` the named point and SIGKILL it
+/// there: the board it leaves, under `data/` (and `segments-aside/`) in the
+/// directory answered, and what it reported.
+fn kill_reclaim_crash_child(after: &str) -> (tempfile::TempDir, Crash) {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("data");
+    std::fs::create_dir_all(&dir).expect("data dir");
+    let exe = std::env::current_exe().expect("test binary path");
+    let mut child = KilledOnDrop(
+        Command::new(exe)
+            .args([
+                "changes::a_kill_at_each_boundary_keeps_every_signature_below_the_floor",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(RECLAIM_CRASH_DIR, &dir)
+            .env(RECLAIM_CRASH_AFTER, after)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn the crash child"),
+    );
+    let stderr = child.0.stderr.take().expect("child stderr");
+    let (tx, rx) = mpsc::channel::<String>();
+    let tag = after.to_string();
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines() {
+            let Ok(line) = line else { break };
+            match line.strip_prefix(RECLAIM_CRASH_LINE) {
+                Some(said) => {
+                    let _ = tx.send(said.trim().to_string());
+                }
+                // The child's other notices, and a failing child's panic
+                // message, land in this test's own output.
+                None => eprintln!("[reclaim-crash child {tag}] {line}"),
+            }
+        }
+    });
+    let mut crash = Crash { oracle: BTreeMap::new(), doc: String::new(), signed_at: 0 };
+    loop {
+        let said = match rx.recv_timeout(Duration::from_secs(120)) {
+            Ok(said) => said,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!("the {after} child reached no hold within 120s");
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the {after} child exited before its hold — its stderr is forwarded above");
+            }
+        };
+        let words: Vec<&str> = said.split(' ').collect();
+        match words[..] {
+            ["attested", at, tag, sig] => {
+                let at = at.parse().expect("a position");
+                crash.oracle.insert(at, (tag.parse().expect("a tag"), sig.to_string()));
+            }
+            ["doc", doc] => crash.doc = doc.to_string(),
+            ["signed", at] => crash.signed_at = at.parse().expect("a position"),
+            ["held"] => break,
+            _ => panic!("the {after} child said what this parent does not read: {said}"),
+        }
+    }
+    child.0.kill().expect("SIGKILL the held child");
+    drop(child);
+    reader.join().expect("stderr reader thread");
+    assert!(
+        crash.oracle.contains_key(&crash.signed_at),
+        "the journal answered the signed write's slot before any checkpoint"
+    );
+    (tmp, crash)
+}
+
+/// THE ATTEST STORE AGAINST RECLAMATION (SO-I5 (d); BW-01): below the
+/// reclaim floor a store line is a signature's only copy at the origin, so
+/// no crash may leave an attested position there with neither its line nor
+/// the journal segment that holds its marker. The order a running daemon
+/// keeps, for a signed write and the checkpoint that later reclaims its
+/// segment:
+///
+/// 1. the write commits — its marker, the signature in the slot, fsynced in
+///    the journal — under the write path's serialization guard;
+/// 2. inside that commit, once it is durable, the kernel's on-commit cadence
+///    (every 1,024 commits) may checkpoint: the file written, two retained,
+///    then every closed segment wholly below the OLDEST retained unlinked
+///    and the directory fsynced;
+/// 3. under the same guard, `commits.log`'s line, then the store's — one
+///    write to the OS, never fsynced — then the four derived files'.
+///
+/// The checkpoint that reclaims a write's segment is a LATER commit's step
+/// 2, since the oldest retained checkpoint must lie above that segment, and
+/// every later commit opens after the write's step 3: the line is written
+/// before any checkpoint that could reclaim its segment begins, and the open
+/// takes no checkpoint, so it rebuilds a missing line from the journal
+/// first. So a process killed anywhere loses no signature. What no kill
+/// shows is power lost before the OS writes the line back, which nothing in
+/// the order rules out.
+///
+/// Each boundary is judged on a copy of a SIGKILLed child's board (this
+/// binary re-exec'd, as `hazard.rs` does), its checkpoints the kernel's own,
+/// taken between writes through `checkpoint_now`: STORE APPEND, the write
+/// committed and its line not yet appended — the lines the record step had
+/// not reached cut off the files' ends, `commits.log`, written first,
+/// keeping its own; STORE SYNC, where a sync would stand after the append,
+/// which the order has none of — the line written and never synced;
+/// CHECKPOINT, the reclaiming checkpoint written, its unlink not reached —
+/// the segments it unlinked restored from a copy taken before it; SEGMENT
+/// UNLINK, after it. Each reopens, is driven until the signed write lies
+/// below the floor, and reopens again: every attested position, read off
+/// the journal before any checkpoint, still has its line, and the journal
+/// refuses each one below the floor.
+#[test]
+fn a_kill_at_each_boundary_keeps_every_signature_below_the_floor() {
+    if let (Some(dir), Ok(after)) =
+        (std::env::var_os(RECLAIM_CRASH_DIR), std::env::var(RECLAIM_CRASH_AFTER))
+    {
+        reclaim_crash_child(Path::new(&dir), &after);
+    }
+    let appended = kill_reclaim_crash_child("append");
+    let checkpointed = kill_reclaim_crash_child("checkpoint");
+    for (boundary, (crashed, crash)) in [
+        ("store append", &appended),
+        ("store sync", &appended),
+        ("checkpoint", &checkpointed),
+        ("segment unlink", &checkpointed),
+    ] {
+        let case = tempfile::tempdir().expect("tempdir");
+        let dir = case.path().join("data");
+        copy_tree(&crashed.path().join("data"), &dir);
+        let signed_at = crash.signed_at;
+        match boundary {
+            "store append" => {
+                for file in [
+                    "feed-attest.log",
+                    "feed-offsets.log",
+                    "feed-index.log",
+                    "feed-masked.log",
+                    "feed-streams.log",
+                ] {
+                    cut_trailing_position(&dir.join(file), signed_at);
+                }
+                assert!(
+                    !attest_store_lines(&dir).contains_key(&signed_at),
+                    "{boundary}: the store holds no line for the signed write"
+                );
+            }
+            "checkpoint" => {
+                let mut restored = 0;
+                for seg in segment_files(&crashed.path().join("segments-aside")) {
+                    let to = dir.join(seg.file_name().expect("a name"));
+                    if !to.exists() {
+                        std::fs::copy(&seg, &to).expect("restore a segment");
+                        restored += 1;
+                    }
+                }
+                assert!(restored > 0, "{boundary}: the checkpoint had unlinked a segment");
+            }
+            _ => {}
+        }
+        // Above the floor still, but at the unlink: the line stands — at the
+        // store append, rebuilt from the journal by the open — and the board
+        // is driven until a checkpoint unlinks the signed write's segment.
+        if boundary != "segment unlink" {
+            let sd = spawn(&dir);
+            let port = sd.port();
+            assert_line(
+                &attest_store_lines(&dir),
+                crash,
+                signed_at,
+                &format!("{boundary}: the signed write's line stands above the floor"),
+            );
+            if boundary != "checkpoint" {
+                rotate_a_segment(port, &open_session(port, 1), &crash.doc);
+            }
+            sd.daemon().checkpoint_now();
+            sd.shutdown();
+        }
+        let sd = spawn(&dir);
+        let port = sd.port();
+        let (st, body) = changes_raw(port, None, "since=0");
+        assert_eq!(st, 410, "{boundary}: the feed has a floor: {}", text(&body));
+        let floor = json(&body)["floor"].as_u64().expect("the refusal names the floor");
+        assert!(signed_at < floor, "{boundary}: the signed write lies below the floor");
+        let lines = attest_store_lines(&dir);
+        for at in crash.oracle.keys() {
+            assert_line(
+                &lines,
+                crash,
+                *at,
+                &format!("{boundary}: attested position {at} keeps its line"),
+            );
+            if *at < floor {
+                assert!(
+                    matches!(
+                        sd.daemon().attestation_at(Seq(*at)),
+                        Err(skepd::HistoryError::Reclaimed { .. })
+                    ),
+                    "{boundary}: the journal holds no copy of position {at}'s marker"
+                );
+            }
+        }
+        sd.shutdown();
+    }
 }
 
 fn text(b: &[u8]) -> String {

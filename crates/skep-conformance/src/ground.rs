@@ -1792,7 +1792,7 @@ pub fn insert_pad_width(
         if label.starts_with("create_version") || label.starts_with("version") {
             let src = str_field(op, &["from", "source", "of", "original"])
                 .and_then(|s| shadow.resolve_doc(s));
-            if src.as_deref() == Some(doc) || src.map_or(false, |s| aliases.contains(&s)) {
+            if src.as_deref() == Some(doc) || src.is_some_and(|s| aliases.contains(&s)) {
                 if let Some(Value::String(res)) = field(op, &["result"]) {
                     aliases.push(res.clone());
                 }
@@ -2219,7 +2219,7 @@ pub fn next_content_probe(all: &[Value], i: usize, doc: &str, shadow: &Shadow) -
         if let Some(map) = op.get("docs").and_then(Value::as_object) {
             for (name, exp) in map {
                 if shadow.resolve_doc(name).as_deref() == Some(doc) {
-                    if let Some(s) = expect_strings(exp).and_then(&content) {
+                    if let Some(s) = expect_strings(exp).and_then(content) {
                         return Some(s);
                     }
                 }
@@ -2238,7 +2238,7 @@ pub fn next_content_probe(all: &[Value], i: usize, doc: &str, shadow: &Shadow) -
                     });
                 if named.as_deref() == Some(doc) {
                     if let Some(s) =
-                        e.get("contents").and_then(expect_strings).and_then(&content)
+                        e.get("contents").and_then(expect_strings).and_then(content)
                     {
                         return Some(s);
                     }
@@ -2254,7 +2254,7 @@ pub fn next_content_probe(all: &[Value], i: usize, doc: &str, shadow: &Shadow) -
             continue;
         }
         if let Some(v) = field(op, &["result", "content", "contents"]) {
-            if let Some(s) = expect_strings(v).and_then(&content) {
+            if let Some(s) = expect_strings(v).and_then(content) {
                 return Some(s);
             }
         }

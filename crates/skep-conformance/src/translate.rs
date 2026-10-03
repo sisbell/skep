@@ -413,10 +413,10 @@ fn has_observation_fields(op: &Value) -> bool {
             "vspanset" | "vspans" | "contents" | "content" | "positions" | "docs" | "targets" => {
                 return true
             }
-            "result" | "before" | "after" | "empty" => {
-                if expect_strings(v).is_some() || fields::looks_like_spanset(v) {
-                    return true;
-                }
+            "result" | "before" | "after" | "empty"
+                if expect_strings(v).is_some() || fields::looks_like_spanset(v) =>
+            {
+                return true;
             }
             _ => {}
         }
@@ -780,7 +780,7 @@ impl Cx<'_> {
     /// The whole-content V→I image of one golden doc as
     /// (I-prefix, I-ordinal, width, V-start) rows, V order — the raw
     /// material for identity rendering and transcluded-region detection.
-    fn image_rows(&mut self, docid: &str) -> Vec<(String, u64, u64, u64)> {
+    fn image_rows(&mut self, docid: &str) -> Vec<ImageRow> {
         let n = self.shadow.text_len(docid);
         let (Some(d), Some(span)) = (self.alpha.peek(docid), vspan(1, 1, n)) else {
             return Vec::new();
@@ -836,7 +836,7 @@ impl Cx<'_> {
         };
         // Index every doc's live V→I rows once.
         let docs = self.shadow.all_docs();
-        let mut world: Vec<(String, Vec<(String, u64, u64, u64)>)> = Vec::new();
+        let mut world: Vec<(String, Vec<ImageRow>)> = Vec::new();
         for docid in &docs {
             if self.shadow.text_len(docid) == 0 {
                 continue;
@@ -925,6 +925,10 @@ impl Cx<'_> {
         Ok((String::from_utf8_lossy(&rendered_bytes).into_owned(), notes))
     }
 }
+
+/// One row of a golden doc's V→I image: (I-prefix, I-ordinal, width,
+/// V-start), as `Cx::image_rows` lists them.
+type ImageRow = (String, u64, u64, u64);
 
 /// A contiguous element-level span as (prefix components, first ordinal,
 /// width) — sound exactly for the single-I-extent shape `Run::iextent` and
@@ -2276,7 +2280,7 @@ fn endset_evidence(
                         &["target_text", "text", "content"]
                     };
                     for k in keys {
-                        if let Some(sides) = e.get(*k).and_then(&ground) {
+                        if let Some(sides) = e.get(*k).and_then(ground) {
                             return Some(sides);
                         }
                     }
@@ -2295,7 +2299,7 @@ fn endset_evidence(
                     None => want_source, // bare follow records the SOURCE end
                 };
                 if slot_matches {
-                    if let Some(sides) = field(op, &["result"]).and_then(&ground) {
+                    if let Some(sides) = field(op, &["result"]).and_then(ground) {
                         return Some(sides);
                     }
                 }
@@ -2553,8 +2557,8 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
             })
             .collect()
     };
-    let from_triples = op.get("fromset").map(&triples).unwrap_or_default();
-    let to_triples = op.get("toset").map(&triples).unwrap_or_default();
+    let from_triples = op.get("fromset").map(triples).unwrap_or_default();
+    let to_triples = op.get("toset").map(triples).unwrap_or_default();
 
     match cx.rig.exec(Op::MakeLink {
         home,
@@ -3427,9 +3431,7 @@ fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
             // A landing-content entry without an outgoing link: the link
             // ARRIVING at this entry's doc (preferring the one leaving the
             // previous position), else the last followed link.
-            if expectation.is_none() {
-                return None;
-            }
+            expectation?;
             let land = from_doc.clone().or_else(|| current.clone())?;
             let inbound = cx.shadow.links_to(&land);
             inbound
@@ -3566,7 +3568,7 @@ fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
                 }
                 let ispans = cx.rig.locate_deleted(s.as_bytes())?;
                 icov_tag = true;
-                return Some(SideSpec::I(Endset::from_spans(ispans.into_iter())));
+                return Some(SideSpec::I(Endset::from_spans(ispans)));
             }
             let arr = v.as_array()?;
             let vspecs: Option<Vec<_>> = arr.iter().map(vspec_dict).collect();
@@ -3583,7 +3585,7 @@ fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
             }
             let ispans = cx.rig.locate_deleted(t.as_bytes())?;
             icov_tag = true;
-            return Some(SideSpec::I(Endset::from_spans(ispans.into_iter())));
+            return Some(SideSpec::I(Endset::from_spans(ispans)));
         }
         // A doc-valued search field (link_chain's `search_doc: "B"`).
         if let Some(d) =
@@ -3761,7 +3763,7 @@ fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
                     clamped_any |= cl;
                     all.extend(e.spans().cloned());
                 }
-                let e = Endset::from_spans(all.into_iter());
+                let e = Endset::from_spans(all);
                 if e.is_empty() {
                     SlotSpec::Empty
                 } else {
@@ -3825,7 +3827,7 @@ fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
                             all.extend(e.spans().cloned());
                         }
                     }
-                    let e = Endset::from_spans(all.into_iter());
+                    let e = Endset::from_spans(all);
                     if e.is_empty() {
                         SlotSpec::Empty
                     } else {
@@ -4583,9 +4585,8 @@ fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, label:
         };
         let pos = str_field(op, &["address", "at", "position"]).and_then(parse_vpos).or_else(
             || {
-                position_from_label(label).map(|p| {
+                position_from_label(label).inspect(|_| {
                     out.adaptations.push("position-from-label".into());
-                    p
                 })
             },
         );
@@ -4620,7 +4621,7 @@ fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, label:
                 if (text_len as u64) < n
                     && n - text_len as u64 <= 2
                     && text_len > 0
-                    && shadow_text.as_bytes().len() >= text_len
+                    && shadow_text.len() >= text_len
                     && ss
                         .iter()
                         .find(|s| !fields::is_link_address(s))
@@ -5121,10 +5122,13 @@ fn render_ranges(ranges: &[(String, u64, u64)]) -> String {
 
 // ── compare ─────────────────────────────────────────────────────────────────
 
+/// One side of a recorded shared-span pair: (optional docid, ord, width).
+type PairSide = (Option<String>, u64, u64);
+
 /// A shared-span pair side: bare `{start,width}`, `{docid, span}`, or
 /// `{docid, spans:[…]}` — returns (optional docid, ord, width), content
 /// subspace only.
-fn pair_side(v: &Value) -> Option<(Option<String>, u64, u64)> {
+fn pair_side(v: &Value) -> Option<PairSide> {
     if let Some((sub, ord, w)) = span_dict(v) {
         if sub == 1 {
             return Some((None, ord, w));
@@ -5160,10 +5164,8 @@ fn orient_pair(
     ref_b: &str,
 ) -> Option<((u64, u64), (u64, u64))> {
     let o = item.as_object()?;
-    let sides: Vec<(String, (Option<String>, u64, u64))> = o
-        .iter()
-        .filter_map(|(k, v)| pair_side(v).map(|s| (k.clone(), s)))
-        .collect();
+    let sides: Vec<(String, PairSide)> =
+        o.iter().filter_map(|(k, v)| pair_side(v).map(|s| (k.clone(), s))).collect();
     if sides.len() < 2 {
         return None;
     }
@@ -5209,18 +5211,23 @@ fn orient_pair(
     Some(((*oa, *wa), (*ob, *wa)))
 }
 
+/// One side of a compare: its golden docid, the reference the golden names
+/// it by (which orients the recorded pairs), and the operand window that
+/// narrows its ρ, if any.
+struct CompareSide<'a> {
+    doc: &'a str,
+    reference: &'a str,
+    window: Option<Vec<(u64, u64)>>,
+}
+
 fn run_compare_pair(
     cx: &mut Cx,
     out: &mut OpOutcome,
-    ga: &str,
-    gb: &str,
-    ref_a: &str,
-    ref_b: &str,
+    a: CompareSide,
+    b: CompareSide,
     shared: &[Value],
-    win_a: Option<Vec<(u64, u64)>>,
-    win_b: Option<Vec<(u64, u64)>>,
 ) -> Option<()> {
-    let (Some(da), Some(db)) = (cx.alpha.translate(ga), cx.alpha.translate(gb)) else {
+    let (Some(da), Some(db)) = (cx.alpha.translate(a.doc), cx.alpha.translate(b.doc)) else {
         out.status = Status::Disagreed;
         out.comparator = Some("alpha".into());
         out.note = Some("compare over unresolvable documents".into());
@@ -5242,8 +5249,8 @@ fn run_compare_pair(
             };
             RegionSpec { doc: d.clone(), spans }
         };
-    let rho1 = vec![region_of(cx, ga, &da, win_a)];
-    let rho2 = vec![region_of(cx, gb, &db, win_b)];
+    let rho1 = vec![region_of(cx, a.doc, &da, a.window)];
+    let rho2 = vec![region_of(cx, b.doc, &db, b.window)];
     let rep = match cx.rig.exec(Op::Compare { rho1, rho2 }) {
         Response::Compare { rep, .. } => rep,
         other => {
@@ -5286,7 +5293,8 @@ fn run_compare_pair(
     }
     let mut want: Vec<(u64, u64, u64)> = Vec::new();
     for item in shared {
-        if let Some(((oa, wa), (ob, _))) = orient_pair(item, ga, gb, ref_a, ref_b) {
+        if let Some(((oa, wa), (ob, _))) = orient_pair(item, a.doc, b.doc, a.reference, b.reference)
+        {
             want.push((oa, ob, wa));
         }
     }
@@ -5306,6 +5314,10 @@ fn run_compare_pair(
     Some(())
 }
 
+/// A compare operand named by a top-level vspec-dict field: (field key,
+/// golden docid, content-subspace (ord, width) windows).
+type Operand = (String, String, Vec<(u64, u64)>);
+
 fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     // Corpus-extension operands (policy `compare-operands-explicit`): two
     // top-level role-keyed vspec-dict fields name the sides and their
@@ -5316,7 +5328,7 @@ fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     // demonstrably do not mean. Verified absent from the 263-scenario
     // corpus, so the legacy paths are untouched.
     const NOT_OPERAND: &[&str] = &["result", "pairs", "shared", "shared_spans"];
-    let operands: Vec<(String, String, Vec<(u64, u64)>)> = op
+    let operands: Vec<Operand> = op
         .as_object()
         .map(|o| {
             o.iter()
@@ -5341,9 +5353,9 @@ fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        let win_a = (!wa.is_empty()).then_some(wa);
-        let win_b = (!wb.is_empty()).then_some(wb);
-        if run_compare_pair(cx, out, &da, &db, &ka, &kb, &shared, win_a, win_b).is_none() {
+        let a = CompareSide { doc: &da, reference: &ka, window: (!wa.is_empty()).then_some(wa) };
+        let b = CompareSide { doc: &db, reference: &kb, window: (!wb.is_empty()).then_some(wb) };
+        if run_compare_pair(cx, out, a, b, &shared).is_none() {
             return;
         }
         // A bare pair_count (no recorded pair list) re-judges as a count.
@@ -5386,7 +5398,9 @@ fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 let shared: Vec<Value> =
                     e.get("shared").and_then(Value::as_array).cloned().unwrap_or_default();
                 let mut sub = OpOutcome::new(out.index, &out.label);
-                run_compare_pair(cx, &mut sub, &dest, &src, "target", "source", &shared, None, None);
+                let a = CompareSide { doc: &dest, reference: "target", window: None };
+                let b = CompareSide { doc: &src, reference: "source", window: None };
+                run_compare_pair(cx, &mut sub, a, b, &shared);
                 if sub.status == Status::Disagreed {
                     fails.push((
                         format!("{srcname}: {}", sub.expected.unwrap_or_default()),
@@ -5509,7 +5523,9 @@ fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             }
         }
     }
-    if run_compare_pair(cx, out, &ga, &gb, &ref_a, &ref_b, &shared, win_a, win_b).is_none() {
+    let a = CompareSide { doc: &ga, reference: &ref_a, window: win_a };
+    let b = CompareSide { doc: &gb, reference: &ref_b, window: win_b };
+    if run_compare_pair(cx, out, a, b, &shared).is_none() {
         return;
     }
     // shared_span_pairs count check rides on top when present and the span

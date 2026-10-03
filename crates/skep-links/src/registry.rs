@@ -26,8 +26,9 @@ use crate::endset::{coverage_class, enc, CoverageClass, Endset, Link};
 /// `editlink` successor take the open deposit gate and are shape-blind. So a
 /// stored link may sit in a registered class without conforming to that
 /// class's shape, and a read over a typed slice must not assume otherwise.
-/// The two classes whose STORED discipline is guaranteed are `[R]` and
-/// `[K_sup]`, held by their sole-writer fences rather than by this shape.
+/// The three classes whose STORED discipline is guaranteed are `[R]`,
+/// `[K_sup]` and the `replaces` class (PUB-5.15), held by their sole-writer
+/// fences rather than by this shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
     Unary,

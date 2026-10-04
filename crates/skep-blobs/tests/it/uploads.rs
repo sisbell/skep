@@ -7,9 +7,11 @@
 //! the cut-back, and every other offset refused; one expiry, moved by a
 //! byte received and by nothing else, fixed from the upload's own interval
 //! and saturating at the last instant; one handle per request; the
-//! reconciliation both ways at open; the expiry, an expired upload's handle
-//! closed with it; the end; the listings in identifier order; and the
-//! compaction, down to nothing where nothing stands.
+//! reconciliation both ways at open, and a record line whose designation
+//! climbs out of the root read as no record, nothing beside the root
+//! touched; the expiry, an expired upload's handle closed with it; the end;
+//! the listings in identifier order; and the compaction, down to nothing
+//! where nothing stands.
 
 use std::fs::{self, OpenOptions};
 use std::time::Duration;
@@ -342,6 +344,64 @@ fn a_record_line_without_its_interval_reads_as_no_upload() {
     let r = store.upload("k", &with, 1).expect("the line carrying its interval stands");
     assert_eq!((r.offset, r.interval), (3, Duration::from_millis(1_000)));
     assert!(partial(&with).is_file());
+}
+
+/// (4) A RECORD LINE WHOSE DESIGNATION CLIMBS OUT OF THE ROOT IS NO RECORD
+/// (`Store`: "THE STORE CHECKS EVERY NAME IT IS HANDED", a log's names at
+/// open as a caller's): a log restored from elsewhere is read through the
+/// name check a creation's designation meets, so a line whose designation
+/// would carry its partial's path out of the root — above it through `..`,
+/// anywhere as an absolute path — reads as a lost record does. Open's
+/// reconciliation, which cuts a standing upload's partial back to its
+/// record's offset and removes an expired one's, then touches no file
+/// beside the root; the same line naming a designation a creation admits
+/// stands, and the compaction keeps it alone.
+#[test]
+fn a_record_line_whose_designation_climbs_out_of_the_root_is_no_record() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let elsewhere = dir.path().join("elsewhere");
+    fs::create_dir_all(root.join("blake3")).unwrap();
+    fs::create_dir_all(&elsewhere).unwrap();
+    let absolute = elsewhere.to_str().expect("a UTF-8 tempdir").to_string();
+    // Each escape, the directory its partial's name lands in, and its
+    // expiry: standing at the open below, so cut back, or past, so removed.
+    let escapes = [
+        ("..".to_string(), dir.path().to_path_buf(), 9_999),
+        ("..".to_string(), dir.path().to_path_buf(), 5),
+        ("../elsewhere".to_string(), elsewhere.clone(), 9_999),
+        (absolute.clone(), elsewhere.clone(), 9_999),
+        (absolute, elsewhere.clone(), 5),
+    ];
+    let id = |n: usize| UploadId::parse(&hex_of(&[n as u8])[..32]).expect("32 lowercase hex");
+    let line = |id: &UploadId, designation: &str, expires: u64| {
+        let v = serde_json::json!({
+            "designation": designation, "expires": expires, "id": id.to_hex(),
+            "interval": 1_000, "key": "k", "length": 100, "offset": 3,
+        });
+        format!("{v}\n")
+    };
+    let mut log = String::new();
+    for (n, (designation, at, expires)) in escapes.iter().enumerate() {
+        fs::write(at.join(format!(".upload-{}", id(n).to_hex())), b"beside the root").unwrap();
+        log += &line(&id(n), designation, *expires);
+    }
+    let kept = id(escapes.len());
+    fs::write(root.join("blake3").join(format!(".upload-{}", kept.to_hex())), b"abc").unwrap();
+    log += &line(&kept, "blake3", 9_999);
+    fs::write(root.join("uploads.log"), log).unwrap();
+    let store = open(&root, 10);
+    for (n, (designation, at, _)) in escapes.iter().enumerate() {
+        assert_eq!(
+            fs::read(at.join(format!(".upload-{}", id(n).to_hex()))).ok().as_deref(),
+            Some(b"beside the root".as_slice()),
+            "{designation:?}: the file beside the root neither cut back nor removed"
+        );
+        assert_eq!(store.upload("k", &id(n), 10), None, "{designation:?}: no record");
+    }
+    let stand: Vec<UploadId> = store.uploads_of("k", 10).into_iter().map(|r| r.id).collect();
+    assert_eq!(stand, vec![kept], "the line naming a designation a creation admits stands alone");
+    assert_eq!(fs::read_to_string(root.join("uploads.log")).unwrap().lines().count(), 1, "compacted to it");
 }
 
 /// (3) ONE HANDLE PER REQUEST: a resume opens the partial for the request

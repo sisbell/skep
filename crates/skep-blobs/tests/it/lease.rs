@@ -2,7 +2,8 @@
 //! 1, "EACH KEY's CURRENT RECORD IS ITS LATEST, AND OPEN COMPACTS BOTH
 //! STORES"): the three states and the horizon, read off the record alone,
 //! a principal's live leases in hex order, the latest-wins re-PUT, the
-//! compaction at open, the pending bytes, and the torn tail. "A LIVE LEASE
+//! compaction at open, the pending bytes, the torn tail, and a line naming
+//! a malformed designation or hex read as no lease. "A LIVE LEASE
 //! OVER A FILE THAT IS NOT THERE READS AS LAPSED" is the daemon's rule,
 //! built on this store's `lease` and `blob_size`; the store's lease answers
 //! the record and nothing of the file.
@@ -176,4 +177,46 @@ fn a_torn_lease_tail_reads_as_no_lease() {
     assert_eq!(store.lease("k", "blake3", &hex_of(b"torn"), 2), LeaseState::None);
     assert!(matches!(store.lease("k", "blake3", &hex, 2), LeaseState::Live { size: 5, .. }));
     assert!(fs::read_to_string(&log).unwrap().ends_with('\n'));
+}
+
+/// A LEASE LINE NAMING A MALFORMED NAME IS NO LEASE (`Store`: "THE STORE
+/// CHECKS EVERY NAME IT IS HANDED", a log's names at open as a caller's): a
+/// log restored from elsewhere is read through the name check a caller's
+/// names meet, so a line whose designation or hex the check refuses — an
+/// escape above the root or to an absolute path, the wrong case, a name that
+/// is no hex — reads as a lost lease does: NONE to its principal, live for no
+/// principal, among no deposits, in no pending byte. The same line naming a
+/// well-formed designation and hex stands, and the compaction keeps it alone.
+#[test]
+fn a_lease_line_naming_a_malformed_name_is_no_lease() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    fs::create_dir_all(&root).unwrap();
+    let hex = hex_of(b"a deposit");
+    let malformed = [
+        ("blake3".to_string(), "../../x".to_string()),
+        ("blake3".to_string(), hex.to_uppercase()),
+        ("blake3".to_string(), format!("{hex}/")),
+        ("blake3".to_string(), format!(".retired-{hex}-0")),
+        ("..".to_string(), hex.clone()),
+        ("BLAKE3".to_string(), hex.clone()),
+        ("blake3/..".to_string(), hex.clone()),
+        (dir.path().to_str().expect("a UTF-8 tempdir").to_string(), hex.clone()),
+    ];
+    let line = |designation: &str, hex: &str| {
+        let v = serde_json::json!({"designation": designation, "expires": 9_999, "hex": hex, "key": "k", "size": 7});
+        format!("{v}\n")
+    };
+    let log: String = malformed.iter().map(|(d, h)| line(d, h)).chain([line("blake3", &hex)]).collect();
+    fs::write(root.join("leases.log"), log).unwrap();
+    let store = open(&root, 1);
+    for (d, h) in &malformed {
+        assert_eq!(store.lease("k", d, h, 1), LeaseState::None, "{d:?}/{h:?}");
+        assert!(!store.any_live_lease(d, h, 1), "{d:?}/{h:?}: live for no principal");
+    }
+    let listed: Vec<(String, String)> =
+        store.live_leases_of("k", 1).into_iter().map(|l| (l.designation, l.hex)).collect();
+    assert_eq!(listed, vec![("blake3".to_string(), hex.clone())], "the well-formed line's lease alone");
+    assert_eq!(store.pending_bytes("k", 1, every_deposit_unplaced), 7, "its size alone");
+    assert_eq!(fs::read_to_string(root.join("leases.log")).unwrap().lines().count(), 1, "compacted to it");
 }

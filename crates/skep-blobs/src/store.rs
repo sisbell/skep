@@ -134,9 +134,14 @@ pub struct Finished {
 /// answered as absent by every read and act — [`Store::blob_path`],
 /// [`Store::blob_size`], [`Store::blobs_of`], [`Store::asides_of`],
 /// [`Store::unlink_blob`], [`Store::remove_aside`] — and refused as
-/// `InvalidInput` by [`Store::create_upload`]. Inside the crate a name that
-/// has passed this check, or that the store spelled itself (a finish's
-/// hash), is trusted.
+/// `InvalidInput` by [`Store::create_upload`]. A name read back off a log
+/// at open meets the same check where it enters from disk: a record or
+/// lease line naming a malformed one reads as a lost line does
+/// (`uploads.rs`, `lease.rs`), so a log restored from elsewhere names no
+/// path out of the root, and the leases, holding no malformed name, answer
+/// one as none ([`Store::lease`], [`Store::any_live_lease`]). Inside the
+/// crate a name that has passed this check, or that the store spelled
+/// itself (a finish's hash), is trusted.
 pub struct Store {
     root: PathBuf,
     uploads: Mutex<UploadRecords>,
@@ -369,7 +374,12 @@ impl Store {
             return Err(BlobError::Length { length, offset: handle.written() });
         }
         handle.write(bytes)?;
-        if handle.written() - durable >= SYNC_GRAIN {
+        // Saturating: the record's offset passes the bytes this handle holds
+        // only where a settle raced a resume of the upload — a caller not
+        // serializing one upload's acts (see `Store`) — and the grain is then
+        // measured from none, until the request's settle sets the record to
+        // the handle's bytes.
+        if handle.written().saturating_sub(durable) >= SYNC_GRAIN {
             handle.sync()?;
             self.record_offset(principal, id, handle.written(), now_ms)?;
         }
@@ -674,4 +684,45 @@ impl Store {
 /// and an interval never trade places at a call and compile.
 fn expiry(now_ms: u64, interval: Duration) -> u64 {
     now_ms.saturating_add(millis(interval))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// AN APPEND MEASURES ITS GRAIN IN RANGE WHATEVER THE RECORD SAYS: a
+    /// settle that raced a resume of the same upload — its handle taken out,
+    /// the resume reopening the partial at the record's offset behind it,
+    /// then the settle's own offset written past the new handle's bytes —
+    /// leaves the record ahead of the handle, the state a caller that does
+    /// not serialize one upload's acts (`Store`) can reach. Played here
+    /// through the settle's own two halves, step by step: the append over it
+    /// answers, neither panicking nor wrapping, and the request's settle sets
+    /// the record to the bytes its handle holds.
+    #[test]
+    fn an_append_after_a_settle_raced_its_resume_answers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = Store::open(dir.path(), Duration::from_secs(1), 0).expect("the store opens");
+        let rec = store.create_upload("k", "blake3", 10, Duration::from_secs(60), 0).expect("create");
+        store.resume("k", &rec.id, 0, 1).expect("the first request's resume");
+        store.append("k", &rec.id, b"abcd", 1).expect("the first request's bytes");
+        // The first request's settle, its first half: its handle taken out.
+        let mut first = store.take_handle(&mut store.handles.lock(), "k", &rec.id).expect("its handle");
+        // The second request's resume, at the record's offset as it stands.
+        store.resume("k", &rec.id, 0, 2).expect("the second request's resume");
+        // The settle's second half: its handle's bytes written as the offset.
+        first.sync().expect("the first handle's sync");
+        store.record_offset("k", &rec.id, first.written(), 3).expect("the first handle's offset");
+        drop(first);
+        assert_eq!(store.upload("k", &rec.id, 3).map(|r| r.offset), Some(4), "the record ahead of the handle");
+        assert_eq!(store.append("k", &rec.id, b"x", 4).expect("the append answers"), 1);
+        assert_eq!(
+            store.upload("k", &rec.id, 4).map(|r| r.offset),
+            Some(4),
+            "the grain measured from none: no sync and no record written, where a wrapped measure takes both"
+        );
+        let settled = store.settle("k", &rec.id, 5).expect("the settle answers");
+        assert_eq!(settled.offset, 1, "the record set to the bytes the handle holds");
+        assert_eq!(fs::read(partials::partial_path(dir.path(), "blake3", &rec.id)).unwrap(), b"x");
+    }
 }

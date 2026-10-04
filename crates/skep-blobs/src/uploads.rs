@@ -4,7 +4,10 @@
 //! compacted there to the current records, every retired upload dropped
 //! (`media.md` Op inventory 1, the resumable upload (1), (3), (4), (6),
 //! (7); §The media stores). A lost record reads as NO upload: its partial
-//! is then an orphan open removes, and the resume starts afresh.
+//! is then an orphan open removes, and the resume starts afresh. A record
+//! line naming a designation the store's name check refuses reads as lost
+//! too — the check is the log's door as it is a caller's (`parse_line`) —
+//! so a log restored from elsewhere names no path out of the root.
 //!
 //! THE IDENTIFIER (clause (1)): 128 bits drawn from the OS per upload,
 //! never a sequence, spelled as 32 lowercase hex; it answers to the
@@ -24,6 +27,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
+use crate::blobs::designation_ok;
 use crate::jsonl::Log;
 
 /// The identifier's width: 128 bits.
@@ -173,9 +177,15 @@ enum Line {
 }
 
 /// A line's value read as a record or a retirement — `None` for a value of
-/// no shape this build reads, a record line lacking any member it carries
-/// (its interval included) among them: the store holds no value of its own
-/// to put in a missing member's place.
+/// no shape this build reads. Among them, a record line lacking any member
+/// it carries (its interval included): the store holds no value of its own
+/// to put in a missing member's place. And a record line naming a
+/// designation the store's name check refuses (`designation_ok`, the check
+/// [`Store::create_upload`](crate::Store::create_upload) makes): no creation
+/// writes one, but a log restored from elsewhere (`media.md` §Recovery) may,
+/// and read, its designation would be the directory open's reconciliation
+/// cuts a partial back in or removes one from — above the root through
+/// `..`, anywhere as an absolute path. It reads as a lost record does.
 fn parse_line(v: &Value) -> Option<Line> {
     let id = UploadId::parse(v.get("id")?.as_str()?)?;
     if v.get("retired").and_then(Value::as_bool) == Some(true) {
@@ -184,7 +194,7 @@ fn parse_line(v: &Value) -> Option<Line> {
     Some(Line::Record(UploadRecord {
         id,
         principal: v.get("key")?.as_str()?.to_string(),
-        designation: v.get("designation")?.as_str()?.to_string(),
+        designation: v.get("designation")?.as_str().filter(|d| designation_ok(d))?.to_string(),
         length: v.get("length")?.as_u64()?,
         offset: v.get("offset")?.as_u64()?,
         interval: Duration::from_millis(v.get("interval")?.as_u64()?),

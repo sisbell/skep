@@ -22,6 +22,7 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
+use crate::blobs::{designation_ok, hex_ok};
 use crate::jsonl::Log;
 
 /// The log's file name under the root.
@@ -56,11 +57,19 @@ impl Lease {
         })
     }
 
+    /// A line's value read as a lease — `None` for a value of no shape this
+    /// build reads: a member missing, or a designation or hex the store's
+    /// name check refuses (`designation_ok`, `hex_ok`, the check every name
+    /// a caller hands [`Store`](crate::Store) meets). No finish writes such
+    /// a line, but a log restored from elsewhere (`media.md` §Recovery) may,
+    /// and read, it would stand in the map as a lease under a name no file
+    /// can have — counted in its principal's pending bytes, listed among its
+    /// deposits. It reads as a lost lease does.
     fn parse(v: &Value) -> Option<Lease> {
         Some(Lease {
             principal: v.get("key")?.as_str()?.to_string(),
-            designation: v.get("designation")?.as_str()?.to_string(),
-            hex: v.get("hex")?.as_str()?.to_string(),
+            designation: v.get("designation")?.as_str().filter(|d| designation_ok(d))?.to_string(),
+            hex: v.get("hex")?.as_str().filter(|h| hex_ok(h))?.to_string(),
             size: v.get("size")?.as_u64()?,
             expires: v.get("expires")?.as_u64()?,
         })

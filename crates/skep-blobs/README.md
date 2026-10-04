@@ -51,18 +51,21 @@ story:
   declared length, its durable offset, the interval fixed at its creation
   and its expiry, which each byte received re-fixes by that interval — a
   later limits record reaches the next upload, never a standing one.
-  Append-only, tail-checked at open, compacted at open to each upload's
-  latest line with every retired upload dropped; reconciled with the
-  partials both ways at open — a partial no record names is removed, a
+  Append-only, tail-checked at open — a line naming a designation the
+  store's name check refuses read as no record, so a log restored from
+  elsewhere names no path out of the root — compacted at open to each
+  upload's latest line with every retired upload dropped; reconciled with
+  the partials both ways at open — a partial no record names is removed, a
   record whose partial is gone is retired, and their lengths are set to
   agree.
 - **The lease log**, `blobs/leases.log` — one JSON line per deposit:
   the principal, the designation and hex, the size and the expiry fixed at
   the PUT. On PATTERNS P22's honest-null arm: append-only, tail-checked,
-  a principal's current lease on a hash its latest line there, compacted
-  at open; a lease lapsed past a HORIZON answers as NONE, so LAPSED is
-  exact within the horizon. A lost lease reads as no lease, cured by a
-  re-PUT.
+  a line naming a designation or hex the name check refuses read as no
+  lease, a principal's current lease on a hash its latest line there,
+  compacted at open; a lease lapsed past a HORIZON answers as NONE, so
+  LAPSED is exact within the horizon. A lost lease reads as no lease,
+  cured by a re-PUT.
 
 The crate knows nothing of who a principal is — an opaque string to it —
 holds no lock a daemon's write path takes, and reads no limits record: it

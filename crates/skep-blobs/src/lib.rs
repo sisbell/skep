@@ -55,9 +55,12 @@
 //!   back off its log, and a log whose cut fails too takes no further
 //!   append (`jsonl.rs`), so open's tail check never cuts a whole line.
 //! * OPEN RECONCILES AND COMPACTS: both logs tail-checked and rewritten to
-//!   their current records; the partials and the records held to each
-//!   other both ways (`partials.rs`); every aside a crash left removed
-//!   (`blobs.rs`); a lease past the horizon dropped.
+//!   their current records, a line naming a designation or hex the store's
+//!   name check refuses read as no record (see [`Store`]), so a log
+//!   restored from elsewhere names no path out of the root; the partials
+//!   and the records held to each other both ways (`partials.rs`); every
+//!   aside a crash left removed (`blobs.rs`); a lease past the horizon
+//!   dropped.
 //!
 //! The `test-hooks` feature compiles in the test seam (`store/hooks.rs`):
 //! the hazard seam — a hold or an injected failure at a named [`Step`] of

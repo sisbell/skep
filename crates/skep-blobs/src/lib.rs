@@ -8,26 +8,27 @@
 //! `<root>/leases.log`. The daemon hands this crate `blobs/` inside the
 //! board's data directory and nothing else of itself: the crate knows a
 //! PRINCIPAL only as the opaque string its caller spells it as, compared
-//! exactly and never read; it holds NO lock — it asks its caller for one
-//! exclusion, no [`Store::unlink_blob`] or [`Store::remove_aside`] while a
-//! [`Store::finish`] runs (see there) — and reads NO limits record (it
-//! answers pending bytes and the volume's free space; what bounds them is
-//! policy, the daemon's). What it promises is the ORDER of its own acts and
-//! what each leaves behind on a crash:
+//! exactly and never read; it holds NO lock — it asks its caller for two
+//! exclusions: no second store over its root while one is open
+//! ([`Store::open`]), and no [`Store::unlink_blob`] or
+//! [`Store::remove_aside`] while a [`Store::finish`] runs (see there) — and
+//! reads NO limits record (it answers pending bytes and the volume's free
+//! space; what bounds them is policy, the daemon's). What it promises is the
+//! ORDER of its own acts and what each leaves behind on a crash:
 //!
 //! * THE PUT's ORDER ([`Store::finish`]): the partial fsynced; where the
 //!   name exists, the old file LINKED ASIDE (a second name no hex spells,
 //!   so the rename frees nothing); the partial RENAMED onto
 //!   `<designation>/<hex>` — REPLACE where the name exists, never a no-op —
-//!   that directory fsynced, the root fsynced where this process created
-//!   the designation directory, THEN the lease appended and synced, THEN
-//!   the upload record retired, THEN the answer — the aside queued as the
-//!   finish answers and never sooner, and UNLINKED AFTER the answer
-//!   ([`Store::unlink_asides`]), off the request's path, on whatever thread
-//!   drains the queue. A crash leaves at worst a file with no lease
-//!   (unreferenced, prunable), a retired-by-open record beside a leased
-//!   file, or an aside open removes, and never a lease naming bytes the
-//!   restart does not hold.
+//!   that directory fsynced, the root fsynced where no root fsync since the
+//!   open has made the designation directory durable, THEN the lease
+//!   appended and synced, THEN the upload record retired, THEN the answer —
+//!   the aside queued as the finish answers and never sooner, and UNLINKED
+//!   AFTER the answer ([`Store::unlink_asides`]), off the request's path, on
+//!   whatever thread drains the queue. A crash leaves at worst a file with
+//!   no lease (unreferenced, prunable), a retired-by-open record beside a
+//!   leased file, or an aside open removes, and never a lease naming bytes
+//!   the restart does not hold.
 //! * THE PRUNER's READS AND ACTS: the designation directories, the files at
 //!   hex names and the asides ([`Store::designations`], [`Store::blobs_of`],
 //!   [`Store::asides_of`]), whether ANY principal holds a live lease on a
@@ -52,15 +53,22 @@
 //!   lease on is [`LeaseState::None`] whatever the directory holds; and a
 //!   finish answers one shape whether or not the file was already here.
 //! * A TORN LINE IS ONLY EVER A LOG's TAIL: an append that fails is cut
-//!   back off its log, and a log whose cut fails too takes no further
-//!   append (`jsonl.rs`), so open's tail check never cuts a whole line.
+//!   back off its log, and a log whose cut fails too — or whose compaction
+//!   failed past its rename — takes no further append until a compaction
+//!   completes (`jsonl.rs`), so open's tail check never cuts a whole line
+//!   and no line lands in a file no open reads.
 //! * OPEN RECONCILES AND COMPACTS: both logs tail-checked and rewritten to
 //!   their current records, a line naming a designation or hex the store's
-//!   name check refuses read as no record (see [`Store`]), so a log
-//!   restored from elsewhere names no path out of the root; the partials
-//!   and the records held to each other both ways (`partials.rs`); every
-//!   aside a crash left removed (`blobs.rs`); a lease past the horizon
-//!   dropped.
+//!   name check refuses, or an offset past its length, read as no record
+//!   (see [`Store`]), so a log restored from elsewhere names no path out of
+//!   the root; the partials and the records held to each other both ways,
+//!   a partial that cannot be read failing the open rather than reading as
+//!   absent (`partials.rs`); every aside removed, a crash's or a failed
+//!   finish's (`blobs.rs`); a lease past the horizon dropped.
+//! * A CALLER's BUG IS NO REFUSAL: an append with no handle open and a
+//!   finish short of the declared length PANIC, naming the obligation they
+//!   break ([`Store::append`], [`Store::finish`]); [`BlobError`] carries
+//!   only answers a caller acts on.
 //!
 //! The `test-hooks` feature compiles in the test seam (`store/hooks.rs`):
 //! the hazard seam — a hold or an injected failure at a named [`Step`] of

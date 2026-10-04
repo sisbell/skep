@@ -358,6 +358,8 @@ impl Daemon {
                 }
             }
         }
+        // `Store::finish`'s precondition, discharged here: the bytes written
+        // reach the length, or the request settles instead of finishing.
         if written < record.length {
             return match store.settle(key, &id, self.media.now_ms()) {
                 Ok(r) => progress_reply(&r),
@@ -636,10 +638,6 @@ fn blob_refusal(e: BlobError) -> Reply {
             Some(&format!("the bytes at offset {offset} would pass the declared length {length}")),
         ),
         BlobError::Io(e) => refuse(TransportError::BlobIo, Some(&e.to_string())),
-        // Defects of this route's own sequencing, never a wire state.
-        BlobError::Incomplete { .. } | BlobError::NotResumed => {
-            refuse(TransportError::BlobIo, Some(&format!("defect: {e}")))
-        }
     }
 }
 

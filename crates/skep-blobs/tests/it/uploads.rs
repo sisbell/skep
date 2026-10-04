@@ -6,19 +6,25 @@
 //! answers for an identifier the asker does not hold; the durable offset,
 //! the cut-back, and every other offset refused; one expiry, moved by a
 //! byte received and by nothing else, fixed from the upload's own interval
-//! and saturating at the last instant; one handle per request; the
-//! reconciliation both ways at open, and a record line whose designation
-//! climbs out of the root read as no record, nothing beside the root
-//! touched; the expiry, an expired upload's handle closed with it; the end;
-//! the listings in identifier order; and the compaction, down to nothing
-//! where nothing stands.
+//! and saturating at the last instant; one handle per request, an append
+//! past its request's end stopped as its caller's bug; the reconciliation
+//! both ways at open, a partial that cannot be read failing the open and
+//! retiring nothing, and a record line whose designation climbs out of the
+//! root, or whose offset passes its length, read as no record, nothing
+//! beside the root touched; the expiry, an expired upload's handle closed
+//! with it; the end; the listings in identifier order; and the compaction,
+//! down to nothing where nothing stands.
 
 use std::fs::{self, OpenOptions};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::time::Duration;
 
-use skep_blobs::{BlobError, LeaseState, NotAnUploadId, UploadId, UploadRecord, SYNC_GRAIN};
+use skep_blobs::{BlobError, LeaseState, NotAnUploadId, Store, UploadId, UploadRecord, SYNC_GRAIN};
 
-use crate::{every_deposit_unplaced, hex_of, open, put_whole, standing, HORIZON_MS, INTERVAL, INTERVAL_MS};
+use crate::{
+    every_deposit_unplaced, hex_of, open, panic_message, put_whole, standing, HORIZON, HORIZON_MS, INTERVAL,
+    INTERVAL_MS,
+};
 
 /// (1) THE IDENTIFIER: 32 lowercase hex of 128 OS bits — two mints differ
 /// (that no run of mints is a sequence is
@@ -162,7 +168,7 @@ fn every_act_answers_no_upload_for_every_identifier_the_asker_does_not_hold() {
     }
     assert_eq!(store.upload("a", &held.id, 1), Some(held.clone()), "the held upload stands as it was");
     assert!(root.join("blake3").join(format!(".upload-{}", held.id.to_hex())).is_file(), "its partial on disk");
-    assert_eq!(store.blob_size("blake3", &hex_of(b"held by a")), None, "no finish named its bytes");
+    assert_eq!(store.blob_size("blake3", &hex_of(b"held by a")).unwrap(), None, "no finish named its bytes");
     assert_eq!(store.live_leases_of("b", 1), vec![], "no lease is b's");
     assert_eq!(store.pending_bytes("b", 1, every_deposit_unplaced), 0, "nothing counts as b's");
     assert_eq!(fs::read_to_string(root.join("leases.log")).unwrap().lines().count(), 1, "one finish, one lease line");
@@ -410,13 +416,47 @@ fn a_record_line_whose_designation_climbs_out_of_the_root_is_no_record() {
     assert_eq!(fs::read_to_string(root.join("uploads.log")).unwrap().lines().count(), 1, "compacted to it");
 }
 
+/// (1) A RECORD LINE WHOSE OFFSET PASSES ITS LENGTH IS NO RECORD
+/// (`UploadRecord`: "ITS OFFSET NEVER PASSES ITS LENGTH", the log's line the
+/// one gate of that invariant a line from disk meets): no act writes one,
+/// and standing, its upload would refuse every resume and never reach a
+/// finish, counted past its length in its principal's pending bytes. It
+/// reads as a lost record does — its partial an orphan open removes — while
+/// the same line with its offset AT its length stands.
+#[test]
+fn a_record_line_whose_offset_passes_its_length_is_no_record() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let past = UploadId::parse("0123456789abcdef0123456789abcdef").unwrap();
+    let at = UploadId::parse("fedcba9876543210fedcba9876543210").unwrap();
+    let partial = |id: &UploadId| root.join("blake3").join(format!(".upload-{}", id.to_hex()));
+    fs::create_dir_all(root.join("blake3")).unwrap();
+    fs::write(partial(&past), [b'x'; 11]).unwrap();
+    fs::write(partial(&at), [b'x'; 10]).unwrap();
+    let line = |id: &UploadId, offset: u64| {
+        let v = serde_json::json!({
+            "designation": "blake3", "expires": 9_999, "id": id.to_hex(),
+            "interval": 1_000, "key": "k", "length": 10, "offset": offset,
+        });
+        format!("{v}\n")
+    };
+    fs::write(root.join("uploads.log"), line(&past, 11) + &line(&at, 10)).unwrap();
+    let store = open(&root, 1);
+    assert_eq!(store.upload("k", &past, 1), None, "an offset past its length: no record");
+    assert!(!partial(&past).exists(), "its partial an orphan open removes");
+    let r = store.upload("k", &at, 1).expect("an offset at its length stands");
+    assert_eq!((r.offset, r.length), (10, 10));
+    assert_eq!(store.pending_bytes("k", 1, every_deposit_unplaced), 10, "the standing one's bytes alone");
+}
+
 /// (3) ONE HANDLE PER REQUEST: a resume opens the partial for the request
 /// that resumes it, and the request's end closes it — a settle short of the
 /// length, a finish, an end, a `close_handle` for a request cut short — so
 /// no file stays open for an upload no request is streaming. Another
-/// principal's settle closes nothing of this principal's; and past its
-/// settle a request appends nothing until the next resume opens the partial
-/// again.
+/// principal's settle closes nothing of this principal's; and an append
+/// past its request's settle, before the next resume opens the partial
+/// again, STOPS as its caller's bug (`Store::append`'s precondition), a
+/// panic naming the obligation, nothing written.
 #[test]
 fn no_handle_outlives_the_request_that_opened_it() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -430,7 +470,10 @@ fn no_handle_outlives_the_request_that_opened_it() {
     let r = store.settle("k", &rec.id, 1).unwrap();
     assert_eq!(r.offset, 5);
     assert_eq!(store.handles_open(), 0, "a settle short of the length closes it");
-    assert!(matches!(store.append("k", &rec.id, b"-", 1), Err(BlobError::NotResumed)));
+    let past_its_end = catch_unwind(AssertUnwindSafe(|| store.append("k", &rec.id, b"-", 1)));
+    let stopped = panic_message(past_its_end.expect_err("an append past its request's settle stops"));
+    assert!(stopped.contains("no handle open") && stopped.contains("precondition"), "{stopped}");
+    assert_eq!(store.written("k", &rec.id, 1), Some(5), "and wrote nothing");
     store.resume("k", &rec.id, 5, 2).unwrap();
     store.append("k", &rec.id, b"-last", 2).unwrap();
     let fin = store.finish("k", &rec.id, INTERVAL, 2).unwrap();
@@ -525,6 +568,35 @@ fn open_reconciles_the_partials_and_the_records_both_ways() {
         whole.extend(fill);
         assert_eq!(fin.hex, hex_of(&whole));
     }
+}
+
+/// (4) A PARTIAL THAT CANNOT BE READ FAILS THE OPEN AND RETIRES NOTHING
+/// (clause (4) retires "a record that names no temp file", and a record
+/// naming one that cannot be read still names it): the reconciliation
+/// answers the failure rather than reading it as an absence, writing no
+/// retirement a later open would remove the partial as an orphan for; once
+/// the partial can be read again, the upload stands where its record left
+/// it, its bytes whole.
+#[cfg(unix)]
+#[test]
+fn a_partial_that_cannot_be_read_fails_the_open_and_retires_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let rec = standing(&open(&root, 0), "k", 100, b"abc", 1);
+    let designation_dir = root.join("blake3");
+    let mode = fs::metadata(&designation_dir).unwrap().permissions();
+    // Read and written, never searched: no partial in it can be stat'ed.
+    fs::set_permissions(&designation_dir, fs::Permissions::from_mode(0o600)).unwrap();
+    let opened = Store::open(&root, HORIZON, 2).map(drop).map_err(|e| e.kind());
+    fs::set_permissions(&designation_dir, mode).unwrap();
+    if opened.is_ok() {
+        return; // a privileged process searches any directory: nothing to inject
+    }
+    assert_eq!(opened, Err(std::io::ErrorKind::PermissionDenied), "the open answers the failure");
+    let store = open(&root, 3);
+    assert_eq!(store.upload("k", &rec.id, 3).map(|r| r.offset), Some(3), "the upload stands where its record left it");
+    assert_eq!(fs::read(designation_dir.join(format!(".upload-{}", rec.id.to_hex()))).unwrap(), b"abc", "its partial whole");
 }
 
 /// OPEN COMPACTS EACH LOG TO ITS CURRENT RECORDS — NONE AMONG THEM — OVER

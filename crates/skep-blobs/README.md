@@ -53,11 +53,12 @@ story:
   later limits record reaches the next upload, never a standing one.
   Append-only, tail-checked at open — a line naming a designation the
   store's name check refuses read as no record, so a log restored from
-  elsewhere names no path out of the root — compacted at open to each
-  upload's latest line with every retired upload dropped; reconciled with
-  the partials both ways at open — a partial no record names is removed, a
-  record whose partial is gone is retired, and their lengths are set to
-  agree.
+  elsewhere names no path out of the root, and a line whose offset passes
+  its length read as none too — compacted at open to each upload's latest
+  line with every retired upload dropped; reconciled with the partials both
+  ways at open — a partial no record names is removed, a record whose
+  partial is gone is retired, a partial that cannot be read fails the open
+  rather than reading as gone, and their lengths are set to agree.
 - **The lease log**, `blobs/leases.log` — one JSON line per deposit:
   the principal, the designation and hex, the size and the expiry fixed at
   the PUT. On PATTERNS P22's honest-null arm: append-only, tail-checked,
@@ -73,11 +74,15 @@ answers "is `<designation>/<hex>` held under a live lease of PRINCIPAL?"
 (off PRINCIPAL's record alone — whether the file is there is the caller's
 read of `blob_size`), "PRINCIPAL's own uploads and deposits",
 "PRINCIPAL's pending bytes", and the volume's free space, and nothing of
-policy. It asks its caller for one exclusion: no `unlink_blob` or
-`remove_aside` while a `finish` runs — the daemon keeps it with its
-credential lock, the finish under the read arm and each pruner act under
-the write arm. The crate's own guarantee is the order of its steps and
-what each leaves behind on a crash.
+policy. It asks its caller for two exclusions, and checks neither: no
+second store open over its root while one is — the daemon opens it only
+after its kernel has taken the exclusive lock on the data directory — and
+no `unlink_blob` or `remove_aside` while a `finish` runs — the daemon keeps
+it with its credential lock, the finish under the read arm and each pruner
+act under the write arm. An append with no handle open and a finish short
+of the declared length are a caller's bugs, and panic. The crate's own
+guarantee is the order of its steps and what each leaves behind on a
+crash.
 
 Its `test-hooks` feature (default off) compiles in the test seam,
 `src/store/hooks.rs`: the hazard seam — a hold or an injected failure at

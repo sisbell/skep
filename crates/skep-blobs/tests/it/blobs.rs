@@ -3,18 +3,21 @@
 //! lease's crash story): the fsync order observed through a SEEDED FAILURE
 //! INJECTION at each step of the finish — never a mock of the filesystem —
 //! and what each failure leaves; the root's fsync owed until a finish pays
-//! it; a finish short of its length refused; the finishes run one at a
-//! time, and a hold parking its own finish alone; REPLACE's answer, the one
-//! a PUT gives where no file stood, and its repair of a corrupt file; an
-//! aside name of its own for every replace, and the deferred unlink's queue
-//! — an aside queued only at its finish's answer, one already gone counted
-//! unlinked, a failure leaving it and every one after it queued; the name
-//! check at every entry point; the directory listings, each naming its own
-//! class in name order; and the floor's read of the space available on the
-//! volume.
+//! it, by every designation directory made after the open whatever made
+//! it; a finish short of its length stopped as its caller's bug; the
+//! finishes run one at a time, and a hold parking its own finish alone;
+//! REPLACE's answer, the one a PUT gives where no file stood, and its
+//! repair of a corrupt file; an aside name of its own for every replace,
+//! and the deferred unlink's queue — an aside queued only at its finish's
+//! answer, one already gone counted unlinked, a failure leaving it and
+//! every one after it queued; the size check's read, a size that cannot be
+//! read answered as a failure and never as an absence; the name check at
+//! every entry point; the directory listings, each naming its own class in
+//! name order; and the floor's read of the space available on the volume.
 
 use std::fs;
 use std::io;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Barrier};
@@ -23,7 +26,7 @@ use std::time::Duration;
 
 use skep_blobs::{BlobError, LeaseState, Step};
 
-use crate::{every_deposit_unplaced, hex_of, open, put_whole, standing, INTERVAL, INTERVAL_MS};
+use crate::{every_deposit_unplaced, hex_of, open, panic_message, put_whole, standing, INTERVAL, INTERVAL_MS};
 
 /// THE ORDER, STEP BY STEP (M-I5 (a)): for every step of the finish, a
 /// finish that FAILS at that step — the seeded injection, one trial per
@@ -63,7 +66,7 @@ fn a_failure_at_each_step_of_the_finish_leaves_what_the_order_promises() {
             // whatever the directory holds — and the file is present only
             // from the rename on.
             let state = store.lease_state("k", "blake3", &hex, now);
-            let present = store.blob_size("blake3", &hex).is_some();
+            let present = store.blob_size("blake3", &hex).unwrap_or_else(|e| panic!("{step:?}: {e}")).is_some();
             (rec.id, state, present)
         };
         let (id, state, present) = outcome;
@@ -112,7 +115,7 @@ fn a_failure_at_each_step_of_the_finish_leaves_what_the_order_promises() {
         }
         for lease in store.live_leases_of("k", now + 1) {
             assert_eq!(
-                store.blob_size(&lease.designation, &lease.hex),
+                store.blob_size(&lease.designation, &lease.hex).unwrap_or_else(|e| panic!("{step:?}: {e}")),
                 Some(lease.size),
                 "{step:?}: a lease names a whole file"
             );
@@ -159,28 +162,59 @@ fn the_roots_fsync_is_owed_until_a_finish_pays_it() {
     assert!(put(b"fourth", 4).is_ok(), "once paid, never taken again");
 }
 
-/// (7) A FINISH IS OWED THE WHOLE LENGTH (`Store::finish`: "the upload's
-/// bytes must reach its length"): short of it — with the request's handle
-/// open over unsettled bytes, and with none over a settled short offset —
-/// the finish is refused `Incomplete`, naming the bytes held and the
-/// length, its handle gone whatever it answered; nothing is named, no file
-/// at the hash of the bytes held and no lease, and the upload stands to be
-/// resumed; the bytes that complete it finish it whole.
+/// A DESIGNATION DIRECTORY MADE AFTER THE OPEN OWES THE ROOT's FSYNC,
+/// WHATEVER MADE IT (M-I5 (a); `Step::RootSync`): a creation that fails past
+/// its directory's mkdir leaves the directory standing with no upload in it
+/// — made on disk here — and the first finish into it still meets the
+/// root's fsync before its lease; a directory that stood when the store
+/// opened, which the open's own root fsync made durable, owes none.
 #[test]
-fn a_finish_short_of_the_declared_length_is_refused_and_names_nothing() {
+fn a_designation_directory_made_after_the_open_owes_the_roots_fsync_whatever_made_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let store = open(&root, 0);
+    fs::create_dir(root.join("blake3")).unwrap();
+    store.fail_at(Some(Step::RootSync));
+    let rec = store.create_upload("k", "blake3", 5, INTERVAL, 1).unwrap();
+    store.resume("k", &rec.id, 0, 1).unwrap();
+    store.append("k", &rec.id, b"bytes", 1).unwrap();
+    assert!(matches!(store.finish("k", &rec.id, INTERVAL, 1), Err(BlobError::Io(_))), "the root's fsync owed, and met");
+    assert_eq!(store.lease_state("k", "blake3", &hex_of(b"bytes"), 1), LeaseState::None, "no lease before it");
+    drop(store);
+    let store = open(&root, 2);
+    store.fail_at(Some(Step::RootSync));
+    assert_eq!(put_whole(&store, "k", b"bytes", 3).hex, hex_of(b"bytes"), "a directory standing at the open owes none");
+}
+
+/// (7) A FINISH IS OWED THE WHOLE LENGTH (`Store::finish`'s precondition: the
+/// upload's bytes written reach its declared length): short of it — with the
+/// request's handle open over unsettled bytes, and with none over a settled
+/// short offset — the finish STOPS as its caller's bug, a panic naming the
+/// bytes held, the length and the obligation, never a refusal an honest
+/// caller would have to answer; its handle is gone all the same, nothing is
+/// named — no file at the hash of the bytes held, no lease — and the upload
+/// stands to be resumed; the bytes that complete it finish it whole.
+#[test]
+fn a_finish_short_of_the_declared_length_stops_as_its_callers_bug_and_names_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = open(&dir.path().join("blobs"), 0);
     let rec = store.create_upload("k", "blake3", 10, INTERVAL, 1).unwrap();
     let held = hex_of(b"half-");
+    let short_finish = |now: u64| {
+        let stopped = catch_unwind(AssertUnwindSafe(|| store.finish("k", &rec.id, INTERVAL, now)));
+        panic_message(stopped.expect_err("a short finish stops"))
+    };
     store.resume("k", &rec.id, 0, 1).unwrap();
     store.append("k", &rec.id, b"half-", 1).unwrap();
-    assert!(matches!(store.finish("k", &rec.id, INTERVAL, 1), Err(BlobError::Incomplete { offset: 5, length: 10 })));
-    assert_eq!(store.handles_open(), 0, "the handle left with the refused finish");
+    let stopped = short_finish(1);
+    assert!(stopped.contains("at 5 of its 10 bytes") && stopped.contains("precondition"), "{stopped}");
+    assert_eq!(store.handles_open(), 0, "the handle left with the stopped finish");
     store.resume("k", &rec.id, 0, 2).unwrap();
     store.append("k", &rec.id, b"half-", 2).unwrap();
     store.settle("k", &rec.id, 2).unwrap();
-    assert!(matches!(store.finish("k", &rec.id, INTERVAL, 3), Err(BlobError::Incomplete { offset: 5, length: 10 })));
-    assert_eq!(store.blob_size("blake3", &held), None, "no file named by the bytes held");
+    let stopped = short_finish(3);
+    assert!(stopped.contains("at 5 of its 10 bytes"), "with no handle open: {stopped}");
+    assert_eq!(store.blob_size("blake3", &held).unwrap(), None, "no file named by the bytes held");
     assert_eq!(store.lease_state("k", "blake3", &held, 3), LeaseState::None, "and no lease");
     assert_eq!(store.upload("k", &rec.id, 3).map(|r| r.offset), Some(5), "the upload stands, to be resumed");
     store.resume("k", &rec.id, 5, 4).unwrap();
@@ -267,7 +301,7 @@ fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
                     assert!(store.asides_of("blake3").unwrap().is_empty(), "gone");
                     assert_eq!(fs::read(store.blob_path("blake3", &hex).unwrap()).unwrap(), right);
                 }
-                Step::RootSync => unreachable!("the designation directory exists before every replace"),
+                Step::RootSync => unreachable!("the plant's install paid the root's fsync before every replace"),
             }
             (store.asides_of("blake3").unwrap(), root.join("blake3").join(format!(".upload-{}", rec.id.to_hex())))
         };
@@ -285,7 +319,7 @@ fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
         }
         for lease in store.live_leases_of("k", now + 1) {
             assert_eq!(
-                store.blob_size(&lease.designation, &lease.hex),
+                store.blob_size(&lease.designation, &lease.hex).unwrap_or_else(|e| panic!("{step:?}: {e}")),
                 Some(lease.size),
                 "{step:?}: a lease names a whole file"
             );
@@ -546,7 +580,7 @@ fn replace_repairs_a_corrupt_file_and_answers_as_a_fresh_put_does() {
     let hex = hex_of(&right);
     // Planted: the right name, the wrong bytes.
     store.install("blake3", &hex, b"garbage under the right name").unwrap();
-    assert_eq!(store.blob_size("blake3", &hex), Some(28));
+    assert_eq!(store.blob_size("blake3", &hex).unwrap(), Some(28));
     let fresh_bytes = b"another picture".to_vec();
     let fresh = put_whole(&store, "k", &fresh_bytes, 10);
     assert_eq!(store.asides_queued(), 0, "a fresh PUT links nothing aside");
@@ -635,16 +669,43 @@ fn blob_size_answers_the_files_size_and_nothing_for_a_name_that_is_no_hex() {
     let root = dir.path().join("blobs");
     let store = open(&root, 0);
     let fin = put_whole(&store, "k", b"12345", 1);
-    assert_eq!(store.blob_size("blake3", &fin.hex), Some(5));
-    assert_eq!(store.blob_size("blake3", &hex_of(b"other")), None);
-    assert_eq!(store.blob_size("blake3", "../leases.log"), None);
-    assert_eq!(store.blob_size("blake3", "ABCDEF"), None, "uppercase is no hex here");
-    assert_eq!(store.blob_size("BLAKE3", &fin.hex), None, "a designation is lowercase");
-    assert_eq!(store.blob_size("blake3", ".upload-00000000000000000000000000000000"), None);
+    assert_eq!(store.blob_size("blake3", &fin.hex).unwrap(), Some(5));
+    assert_eq!(store.blob_size("blake3", &hex_of(b"other")).unwrap(), None);
+    assert_eq!(store.blob_size("blake3", "../leases.log").unwrap(), None);
+    assert_eq!(store.blob_size("blake3", "ABCDEF").unwrap(), None, "uppercase is no hex here");
+    assert_eq!(store.blob_size("BLAKE3", &fin.hex).unwrap(), None, "a designation is lowercase");
+    assert_eq!(store.blob_size("blake3", ".upload-00000000000000000000000000000000").unwrap(), None);
     assert_eq!(store.blob_path("blake3", &fin.hex), Some(root.join("blake3").join(&fin.hex)));
     assert_eq!(store.blob_path("blake3", "../leases.log"), None, "no path out of the directory");
     assert_eq!(store.blob_path("BLAKE3", &fin.hex), None);
     assert_eq!(store.blob_path("..", &fin.hex), None);
+}
+
+/// AN UNREADABLE SIZE IS A FAILURE, NEVER AN ABSENCE (`Store::blob_size`:
+/// "An I/O failure is no absence"; M-I5 (c), the deposit record exact of
+/// what is on disk): a file whose name cannot be read — its designation
+/// directory listed but not searched — answers the failure, where an
+/// absence would tell the binding and the deposit read the deposit is gone;
+/// readable again, the same file answers its size.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_size_is_a_failure_never_an_absence() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let store = open(&root, 0);
+    let fin = put_whole(&store, "k", b"12345", 1);
+    let designation_dir = root.join("blake3");
+    let mode = fs::metadata(&designation_dir).unwrap().permissions();
+    // Read and written, never searched: no name in it can be stat'ed.
+    fs::set_permissions(&designation_dir, fs::Permissions::from_mode(0o600)).unwrap();
+    let unreadable = store.blob_size("blake3", &fin.hex).map_err(|e| e.kind());
+    fs::set_permissions(&designation_dir, mode).unwrap();
+    if unreadable == Ok(Some(5)) {
+        return; // a privileged process searches any directory: nothing to inject
+    }
+    assert_eq!(unreadable, Err(io::ErrorKind::PermissionDenied), "the failure answered, never an absence");
+    assert_eq!(store.blob_size("blake3", &fin.hex).unwrap(), Some(5), "readable again, the file answers its size");
 }
 
 /// Every entry under `at` by its path relative to `at` — a directory as
@@ -695,7 +756,7 @@ fn every_entry_point_answers_a_malformed_name_as_absent_and_touches_nothing() {
         .chain(["a".repeat(33)]);
     for d in designations {
         assert_eq!(store.blob_path(&d, &blob), None, "{d:?}");
-        assert_eq!(store.blob_size(&d, &blob), None, "{d:?}");
+        assert!(matches!(store.blob_size(&d, &blob), Ok(None)), "{d:?}");
         assert!(matches!(store.blobs_of(&d).as_deref(), Ok([])), "{d:?}: listed");
         assert!(matches!(store.asides_of(&d).as_deref(), Ok([])), "{d:?}: listed");
         assert!(matches!(store.unlink_blob(&d, &blob), Ok(false)), "{d:?}: unlinked");
@@ -714,7 +775,7 @@ fn every_entry_point_answers_a_malformed_name_as_absent_and_touches_nothing() {
     ]);
     for h in hexes {
         assert_eq!(store.blob_path("blake3", &h), None, "{h:?}");
-        assert_eq!(store.blob_size("blake3", &h), None, "{h:?}");
+        assert!(matches!(store.blob_size("blake3", &h), Ok(None)), "{h:?}");
         assert!(matches!(store.unlink_blob("blake3", &h), Ok(false)), "{h:?}: unlinked");
     }
     let near_asides = [

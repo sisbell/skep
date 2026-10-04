@@ -6,8 +6,10 @@
 //! (7); §The media stores). A lost record reads as NO upload: its partial
 //! is then an orphan open removes, and the resume starts afresh. A record
 //! line naming a designation the store's name check refuses reads as lost
-//! too — the check is the log's door as it is a caller's (`parse_line`) —
-//! so a log restored from elsewhere names no path out of the root.
+//! too — the log's lines meet the check a caller's names meet
+//! (`parse_line`) — so a log restored from elsewhere names no path out of
+//! the root. A record line whose offset passes its length, which no act
+//! writes, reads as lost as well.
 //!
 //! THE IDENTIFIER (clause (1)): 128 bits drawn from the OS per upload,
 //! never a sequence, spelled as 32 lowercase hex; it answers to the
@@ -109,8 +111,8 @@ impl fmt::Display for NotAnUploadId {
 
 impl std::error::Error for NotAnUploadId {}
 
-/// The ecosystem door beside [`UploadId::parse`]: what a generic caller — an
-/// argument parser, an environment reader — can reach, the same spelling
+/// The ecosystem's spelling of [`UploadId::parse`]: what a generic caller —
+/// an argument parser, an environment reader — can reach, the same spelling
 /// admitted and anything else refused as [`NotAnUploadId`].
 impl FromStr for UploadId {
     type Err = NotAnUploadId;
@@ -124,6 +126,14 @@ impl FromStr for UploadId {
 /// uploader, the designation, its declared length, the DURABLE offset
 /// (bytes received), the interval fixed at its creation, and the expiry
 /// fixed from the last byte received.
+///
+/// ITS OFFSET NEVER PASSES ITS LENGTH. Each of the four gates a record
+/// passes keeps it: its creation writes 0; a byte received writes the bytes
+/// a handle holds, and an append refuses past the length; open's
+/// reconciliation sets an offset back to a shorter partial's length; and a
+/// line read back at open whose offset passes its length reads as no record
+/// (`parse_line`). So every standing upload can still reach its length and
+/// be finished.
 ///
 /// `#[non_exhaustive]`: emitted, never constructed by a caller — field
 /// reads are unaffected, and a further field is an addition rather than a
@@ -185,18 +195,24 @@ enum Line {
 /// writes one, but a log restored from elsewhere (`media.md` §Recovery) may,
 /// and read, its designation would be the directory open's reconciliation
 /// cuts a partial back in or removes one from — above the root through
-/// `..`, anywhere as an absolute path. It reads as a lost record does.
+/// `..`, anywhere as an absolute path. It reads as a lost record does. So
+/// does a record line whose offset passes its length, the one gate of
+/// [`UploadRecord`]'s invariant a line from disk meets: no act writes one,
+/// and standing, its upload would refuse every resume, never reach a
+/// finish, and count past its length in its principal's pending bytes
+/// until it expired.
 fn parse_line(v: &Value) -> Option<Line> {
     let id = UploadId::parse(v.get("id")?.as_str()?)?;
     if v.get("retired").and_then(Value::as_bool) == Some(true) {
         return Some(Line::Retirement(id));
     }
+    let length = v.get("length")?.as_u64()?;
     Some(Line::Record(UploadRecord {
         id,
         principal: v.get("key")?.as_str()?.to_string(),
         designation: v.get("designation")?.as_str().filter(|d| designation_ok(d))?.to_string(),
-        length: v.get("length")?.as_u64()?,
-        offset: v.get("offset")?.as_u64()?,
+        length,
+        offset: v.get("offset")?.as_u64().filter(|&offset| offset <= length)?,
         interval: Duration::from_millis(v.get("interval")?.as_u64()?),
         expires: v.get("expires")?.as_u64()?,
     }))
@@ -311,10 +327,14 @@ impl UploadRecords {
         Ok(())
     }
 
-    /// Retire an upload: its line appended, the record dropped. A lost
-    /// retirement line costs nothing — a record whose partial is gone is
-    /// retired by open's reconciliation — so the line's durability is left
-    /// to the OS.
+    /// Retire an upload: the record dropped, THEN its line appended — the
+    /// one write of either store whose map moves before its append returns.
+    /// Every caller retires an upload whose partial is already gone — a
+    /// finish's rename took it, an end, an expiry or open removed it — so a
+    /// record kept here over a failed line would answer as standing over
+    /// nothing, while a lost retirement line costs nothing: open's
+    /// reconciliation retires a record whose partial is gone. So the record
+    /// goes first, and the line's durability is left to the OS.
     pub fn retire(&mut self, id: &UploadId) -> io::Result<()> {
         if self.records.remove(id).is_none() {
             return Ok(());

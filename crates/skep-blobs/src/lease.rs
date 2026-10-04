@@ -156,7 +156,8 @@ impl LeaseLog {
         }
     }
 
-    /// The principal's LIVE leases at `now_ms`, in hex order.
+    /// The principal's LIVE leases at `now_ms`, in designation order and in
+    /// hex order within one.
     pub fn live_of(&self, principal: &str, now_ms: u64) -> Vec<Lease> {
         let mut out: Vec<Lease> =
             self.leases.values().filter(|l| l.principal == principal && l.live(now_ms)).cloned().collect();

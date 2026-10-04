@@ -6,6 +6,7 @@ mod blobs;
 mod lease;
 mod uploads;
 
+use std::any::Any;
 use std::path::Path;
 use std::time::Duration;
 
@@ -57,4 +58,14 @@ pub fn standing(store: &Store, principal: &str, length: u64, bytes: &[u8], now: 
 /// `Store::pending_total` are handed.
 pub fn every_deposit_unplaced(_: &Lease) -> bool {
     true
+}
+
+/// The message a caught panic carried — what a suite reads a broken
+/// precondition's name off: a formatted panic's `String`, a literal's
+/// `&str`, and nothing for any other payload.
+pub fn panic_message(payload: Box<dyn Any + Send>) -> String {
+    match payload.downcast::<String>() {
+        Ok(message) => *message,
+        Err(payload) => payload.downcast_ref::<&str>().map_or_else(String::new, |message| (*message).to_string()),
+    }
 }

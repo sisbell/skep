@@ -426,7 +426,10 @@ impl MediaGate {
         let hex = hex_of(&cell.hash);
         if self.index.is_ready() {
             if let Some(named) = self.index.size_named(principal, DESIGNATION, &hex) {
-                return match self.store.blob_size(DESIGNATION, &hex) {
+                // A size that cannot be read is read as no file: the
+                // binding has no I/O answer of its own, and a deposit whose
+                // bytes it cannot see is not one it admits.
+                return match self.store.blob_size(DESIGNATION, &hex).ok().flatten() {
                     Some(len) if len == cell.size => Binding::Admitted,
                     Some(len) if len == named => Binding::Unbound,
                     _ => Binding::Lapsed,
@@ -436,9 +439,9 @@ impl MediaGate {
         match self.store.lease_state(&key, DESIGNATION, &hex, self.now_ms()) {
             LeaseState::None => Binding::Unbound,
             LeaseState::Lapsed { .. } => Binding::Lapsed,
-            LeaseState::Live { size, .. } => match self.store.blob_size(DESIGNATION, &hex) {
-                // The file absent, or not the length the lease recorded:
-                // the deposit is gone.
+            LeaseState::Live { size, .. } => match self.store.blob_size(DESIGNATION, &hex).ok().flatten() {
+                // The file absent, unreadable, or not the length the lease
+                // recorded: the deposit is gone.
                 Some(len) if len == size => {
                     if cell.size == len {
                         Binding::Admitted

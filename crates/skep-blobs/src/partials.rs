@@ -17,11 +17,14 @@
 //! removed, in every designation directory under the root; a record that
 //! names no partial is retired; and their lengths are set to agree — a
 //! longer partial cut back to the record's offset, a record whose offset
-//! passes its partial's length set back to that length. An expired upload
-//! has its partial removed and its record retired at open too, in the order
-//! the end and the daemon's pruner take while the store serves
-//! ([`Store::expire_upload`](crate::Store::expire_upload) is the pass's
-//! act).
+//! passes its partial's length set back to that length. A partial that
+//! cannot be read fails the open, retiring nothing: it is still named, and
+//! a retirement written over it would have the next open remove it as an
+//! orphan (clause (4) retires a record that names no partial, and only
+//! that). An expired upload has its partial removed and its record retired
+//! at open too, in the order the end and the daemon's pruner take while the
+//! store serves ([`Store::expire_upload`](crate::Store::expire_upload) is
+//! the pass's act).
 
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
@@ -73,18 +76,16 @@ pub(crate) fn partial_path(root: &Path, designation: &str, id: &UploadId) -> Pat
 }
 
 /// Create an empty partial for a new upload, its designation directory
-/// made where absent. Answers whether the directory was CREATED here — the
-/// finish then owes the root an fsync.
-pub(crate) fn create(root: &Path, designation: &str, id: &UploadId) -> io::Result<bool> {
+/// made where absent — the directory's own entry in the root left to the
+/// finish, which fsyncs the root for any directory no root fsync since the
+/// open has made durable.
+pub(crate) fn create(root: &Path, designation: &str, id: &UploadId) -> io::Result<()> {
     let dir = root.join(designation);
-    let fresh = !dir.is_dir();
-    if fresh {
-        fs::create_dir_all(&dir)?;
-    }
+    fs::create_dir_all(&dir)?;
     let f = File::create(partial_path(root, designation, id))?;
     f.sync_all()?;
     fsync_dir(&dir)?;
-    Ok(fresh)
+    Ok(())
 }
 
 /// Open a partial for one request at `offset` — the record's durable
@@ -200,11 +201,17 @@ pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -
             continue;
         }
         let path = partial_path(root, &r.designation, &r.id);
-        let Ok(meta) = fs::metadata(&path) else {
-            records.retire(&r.id)?;
-            continue;
+        // Absent is the one answer that retires: a record naming a partial
+        // that cannot be read still names one, so that failure fails the
+        // open, and nothing is retired for a later open to remove as orphan.
+        let len = match fs::metadata(&path) {
+            Ok(meta) => meta.len(),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                records.retire(&r.id)?;
+                continue;
+            }
+            Err(e) => return Err(e),
         };
-        let len = meta.len();
         if len > r.offset {
             let f = OpenOptions::new().write(true).open(&path)?;
             f.set_len(r.offset)?;

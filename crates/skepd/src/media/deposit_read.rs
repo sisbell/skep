@@ -40,8 +40,9 @@ pub(crate) fn deposit_read(gate: &MediaGate, principal: PrincipalId) -> Value {
         .into_iter()
         .map(|l| {
             // Exact of what is on disk: a lease over a file that is absent
-            // or not whole reads as LAPSED here as at the insert.
-            let whole = store.blob_size(&l.designation, &l.hex) == Some(l.size);
+            // or not whole reads as LAPSED here as at the insert — and so,
+            // as the binding takes it, does one whose size cannot be read.
+            let whole = store.blob_size(&l.designation, &l.hex).ok().flatten() == Some(l.size);
             obj(vec![
                 ("designation", Value::String(l.designation)),
                 ("expires", Value::Number(l.expires.into())),

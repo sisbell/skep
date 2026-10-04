@@ -53,7 +53,8 @@ impl Store {
 
     /// TEST HOOK (`test-hooks`): FAIL the named step of every later finish
     /// with an I/O error, or `None` to fail nothing — the fsync-order test's
-    /// seeded injection.
+    /// seeded injection. At [`Step::UnlinkAside`] it fails the deferred drain
+    /// ([`Store::unlink_asides`]), never a finish.
     pub fn fail_at(&self, step: Option<Step>) {
         self.hooks.lock().fail_at = step;
     }
@@ -71,7 +72,8 @@ impl Store {
 
     /// TEST HOOK (`test-hooks`): install `bytes` as `<designation>/<hex>`
     /// by the blob's own order — a temp file beside the target, fsynced,
-    /// renamed over it, the directory and the root fsynced — with no
+    /// renamed over it, the directory and the root fsynced, the root's fsync
+    /// paid for the designation directory as a finish's is — with no
     /// upload, no lease, and the hex NOT checked against the bytes: a
     /// test's way to plant a file, the corrupt one a REPLACE repairs
     /// included. It is the one way to name a file by a hash its bytes do
@@ -82,7 +84,9 @@ impl Store {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "designation or hex"));
         };
         install_whole(&path, bytes)?;
-        fsync_dir(&self.root)
+        fsync_dir(&self.root)?;
+        self.root_synced.lock().insert(designation.to_string());
+        Ok(())
     }
 
     /// TEST HOOK (`test-hooks`): the bytes written so far through the handle

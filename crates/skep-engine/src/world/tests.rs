@@ -29,13 +29,15 @@ fn field_names(value: &impl Serialize) -> Vec<String> {
 /// COLLECTION order (before a rendering sorts it) is that order. The names
 /// are here to identify the fields; the ORDER is the claim — the format
 /// stamp FIRST (it is what refuses a base under a foreign format count
-/// before any slice is read), and the two skip-serialized derived indexes
+/// before any slice is read), the identity slice LAST (a body written before
+/// it ends where it would begin, which is what lets that body read as the
+/// absent slice, AUTH-2.79), and the three skip-serialized derived fields
 /// absent, since they occupy no bytes.
 #[test]
 fn the_world_serializes_its_slices_in_declaration_order() {
     assert_eq!(
         field_names(&World::genesis()),
-        ["format", "namespace", "content", "arrangement", "links"]
+        ["format", "namespace", "content", "arrangement", "links", "identity"]
     );
 }
 
@@ -74,6 +76,13 @@ fn each_slice_serializes_the_fields_the_format_count_names() {
             &["arrangements", "provenance", "birth_extents", "shot_terms"],
         ),
         ("links", field_names(&world.links), &["links"]),
+        // AUTH-1.40's compatibility surface, at the World: the slice's two
+        // fields, in the order `skep-identity`'s own suite pins their bytes.
+        (
+            "identity",
+            field_names(world.identity.as_ref().expect("Σ₀ carries its slice")),
+            &["sets", "claimant"],
+        ),
     ] {
         assert_eq!(
             found, pinned,
@@ -173,10 +182,11 @@ fn the_format_stamp_leads_the_world_s_bytes() {
 /// bit FAILS TO DECODE — and so does one written with the bit but before
 /// the stamp. The premise is pinned first, so the hand-built shapes are
 /// the old ones and not a strawman: the current encoding IS the stamp
-/// followed by the four slices, and M3's slice at genesis IS its old
-/// bytes followed by the publication map — since PUB-6.65's seed, the
-/// system account's two born-published documents behind an eight-byte
-/// length (M3's own test pins that half; this one rides it).
+/// followed by the four slices and then the identity slice, and M3's slice
+/// at genesis IS its old bytes followed by the publication map — since
+/// PUB-6.65's seed, the system account's two born-published documents
+/// behind an eight-byte length (M3's own test pins that half; this one
+/// rides it).
 #[test]
 fn a_checkpoint_without_the_bit_or_the_stamp_fails_to_decode() {
     use skep_namespace::{ghost_home_document, head_document};
@@ -184,6 +194,7 @@ fn a_checkpoint_without_the_bit_or_the_stamp_fails_to_decode() {
     let world = World::genesis();
     let current = bincode::serialize(&world).expect("a world serializes");
     let stamp = bincode::serialize(&FormatStamp).expect("a u64 serializes");
+    let identity = bincode::serialize(&world.identity).expect("the slice serializes");
 
     // The pre-stamp layout (the bit present, no leading stamp): the four
     // slices alone, in order — a tuple encodes exactly as a struct does.
@@ -192,8 +203,8 @@ fn a_checkpoint_without_the_bit_or_the_stamp_fails_to_decode() {
             .expect("the slices serialize");
     assert_eq!(
         current,
-        [stamp.as_slice(), pre_stamp.as_slice()].concat(),
-        "the current layout is the stamp, then the old bytes"
+        [stamp.as_slice(), pre_stamp.as_slice(), identity.as_slice()].concat(),
+        "the current layout is the stamp, then the old bytes, then the identity slice"
     );
     assert!(
         bincode::deserialize::<World>(&pre_stamp).is_err(),
@@ -255,13 +266,14 @@ fn links_in_a_draft(shapes: &[(bool, bool)]) -> World {
 }
 
 /// `world`'s bytes as a build from before M5's birth memo wrote them: the
-/// stamp, then each slice's, with M5's cut short of its two trailing maps —
-/// the memo and, after it, the shot terms that joined the slice with D25's
-/// (c′) (`each_slice_serializes_the_fields_the_format_count_names`), both
-/// EMPTY in every world handed here, so the two eight-byte zero lengths
-/// that end M5's bytes. Checked rather than assumed: both are read off the
-/// slice's serde form, and the same parts kept whole must be this build's
-/// own bytes.
+/// stamp, then each store slice's, with M5's cut short of its two trailing
+/// maps — the memo and, after it, the shot terms that joined the slice with
+/// D25's (c′) (`each_slice_serializes_the_fields_the_format_count_names`),
+/// both EMPTY in every world handed here, so the two eight-byte zero lengths
+/// that end M5's bytes — and no identity slice, which no build of that age
+/// wrote either. Checked rather than assumed: both lengths are read off the
+/// slice's serde form, and the same parts kept whole, with the identity
+/// slice after them, must be this build's own bytes.
 fn written_before_the_birth_memo(world: &World) -> Vec<u8> {
     let SerdeTree::Map(fields) = to_tree(&world.arrangement) else {
         panic!("M5State serializes as a struct — a map of its fields")
@@ -281,6 +293,7 @@ fn written_before_the_birth_memo(world: &World) -> Vec<u8> {
     let content_bytes = bincode::serialize(&world.content).expect("M4 serializes");
     let arrangement_bytes = bincode::serialize(&world.arrangement).expect("M5 serializes");
     let links_bytes = bincode::serialize(&world.links).expect("M7 serializes");
+    let identity_bytes = bincode::serialize(&world.identity).expect("the identity slice serializes");
     assert_eq!(
         bincode::serialize(world).expect("a world serializes"),
         [
@@ -289,9 +302,10 @@ fn written_before_the_birth_memo(world: &World) -> Vec<u8> {
             content_bytes.as_slice(),
             arrangement_bytes.as_slice(),
             links_bytes.as_slice(),
+            identity_bytes.as_slice(),
         ]
         .concat(),
-        "a World's bytes are the stamp, then each slice's"
+        "a World's bytes are the stamp, then each store slice's, then the identity slice"
     );
     assert!(
         arrangement_bytes.ends_with(&[0u8; 16]),

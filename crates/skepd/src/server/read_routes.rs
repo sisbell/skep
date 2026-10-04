@@ -4,6 +4,7 @@ use std::num::NonZeroUsize;
 
 use serde_json::Value;
 use skep_febe::{consult_read, Response};
+use skep_identity::HasIdentity;
 use skep_kernel::Seq;
 
 use super::actor::Resolved;
@@ -13,7 +14,7 @@ use super::reply::{
 };
 use super::request::{at_most_once, query_pairs};
 use super::Daemon;
-use crate::auth::fold::{canonical_identity, key_set_of};
+use crate::auth::fold::key_set_of;
 use crate::codec::{check_keys, key_set_reply, obj, DaemonOp};
 use crate::limits::{DEFAULT_CHANGES_LIMIT, MAX_CHANGES_LIMIT};
 use crate::write_path::{ChangesAnswer, ChangesQuery, FeedClass};
@@ -59,15 +60,20 @@ impl Daemon {
         };
         match parsed {
             DaemonOp::KeySet { account } => {
-                // The SAME dispatcher as /op's, over the reconstructed
-                // world and its canonical identity rebuild (AUTH-6.20) —
-                // under the reconstruction budget like every historical
-                // answer. Exempt from the predicate (PUB-6.50): it reads
-                // only the born-published credential class.
+                // The SAME dispatcher as /op's, over the reconstructed World
+                // with the identity slice riding in it (AUTH-6.20) — the
+                // table AS OF `at`, folded by the same replay that built the
+                // world, in commit order (AUTH-2.95: equal to the live
+                // `key_set` when the head was `at`) — under the
+                // reconstruction budget like every historical answer. A
+                // position whose every base is slice-less over credential
+                // deposits is refused WHOLE as `history_reclaimed`
+                // (AUTH-2.87), as every read at that position is. Exempt
+                // from the predicate (PUB-6.50): it reads only the
+                // born-published credential class.
                 match self.history.reconstruct(&self.engine, at) {
                     Ok((_permit, world)) => {
-                        let identity = canonical_identity(&world);
-                        op_answer(key_set_reply(at, key_set_of(&world, &identity, &account)))
+                        op_answer(key_set_reply(at, key_set_of(&world, world.identity(), &account)))
                     }
                     Err(e) => refuse_unavailable(e),
                 }
@@ -104,17 +110,18 @@ impl Daemon {
         // older position's time offered in the head's place.
         //
         // THREE independent reads under no lock — this, the auth object's
-        // own fold snapshot, and the `(log_position, chain_head)` pair at the
-        // end — so this answer may straddle one in-flight commit at either
-        // seam. A `head_time` correct for the position the sidecar last
-        // recorded sits beside a `log_position` one commit newer; and a
-        // client polling for the claim flip can see the position advance
-        // before `claimant` appears, or read the pre-claim `signed_origins`
-        // beside a post-claim position, which costs it one `session_rejected`
-        // and a retry. Every one of them corrects itself on the next probe.
-        // Taking the serialization lock here would serialize a liveness probe
-        // behind every write, which is the worse trade;
-        // `CommitsLog::head_time` states what each field is true of.
+        // own head snapshot (whose World carries the key table), and the
+        // `(log_position, chain_head)` pair at the end — so this answer may
+        // straddle one in-flight commit at either seam. A `head_time` correct
+        // for the position the sidecar last recorded sits beside a
+        // `log_position` one commit newer; and a client polling for the claim
+        // flip can see the position advance before `claimant` appears, or
+        // read the pre-claim `signed_origins` beside a post-claim position,
+        // which costs it one `session_rejected` and a retry. Every one of them
+        // corrects itself on the next probe. Taking the serialization lock
+        // here would serialize a liveness probe behind every write, which is
+        // the worse trade; `CommitsLog::head_time` states what each field is
+        // true of.
         //
         // `log_position` and `chain_head` do NOT straddle each other: the
         // kernel's root carries the seq and the chain together, and
@@ -131,7 +138,7 @@ impl Daemon {
         // claimant, the flag and the two origin sets, with the wire's own
         // negative pin stated there too. Read BEFORE that pair, which is the
         // direction the straddle above describes.
-        let auth = self.auth.auth_object();
+        let auth = self.auth.auth_object(self.engine.kernel().snapshot().world().identity());
         let (log_position, chain_head) = self.febe.head_coordinate();
         Reply::json(
             200,

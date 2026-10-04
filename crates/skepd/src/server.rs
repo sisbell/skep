@@ -56,8 +56,11 @@
 //! carries `Skepd-Session: closed` back.
 //! `auth/` owns the rest and `server` holds none of it: the two origin
 //! sets and their publication, the handshake, the credential write lock,
-//! the ordered refusal producers, and the identity fold rebuilt beside the
-//! engine.
+//! the ordered refusal producers, and the readers of the World's identity
+//! slice — the key table the engine folds at each credential commit and
+//! checkpoints with the world (AUTH-2.79), which every route here reads off
+//! the one head snapshot it already holds, so the world a check reads and
+//! the table it reads are one committed state.
 //! What `server` adds is the two write sequences that call them in their
 //! pinned order, and the `/session` and `/health` marshals. Tokens are
 //! uptime-scoped; the daemon binds 127.0.0.1 only.
@@ -169,8 +172,9 @@ use std::path::Path;
 #[cfg(any(test, feature = "test-hooks"))]
 use std::sync::atomic::AtomicBool;
 
-use skep_engine::{Engine, EngineError, HistoryError, World};
+use skep_engine::{Engine, EngineError, HistoryError, Recovery, World};
 use skep_febe::OperationSurface;
+use skep_identity::HasIdentity;
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource, Seq};
 #[cfg(feature = "observe")]
 use skep_namespace::PrincipalId;
@@ -434,21 +438,26 @@ impl Daemon {
     /// checkpoint, a data dir refusing I/O the kernel just performed):
     /// surface it and exit, never retry.
     ///
-    /// TWO steps here cost more than O(1) in the data dir. The feed's open
-    /// is one: where commit metadata is missing it reconstructs the
-    /// uncovered positions from the journal, one whole-world replay (plus
-    /// one world diff, for the position's class) each, up to the retained
-    /// window (`CHECKPOINT_EVERY_COMMITS` × `RETAINED_CHECKPOINTS`).
+    /// ONE step here costs more than O(1) in the data dir beyond the engine's
+    /// own recovery: the feed's open. Where commit metadata is missing it
+    /// reconstructs the uncovered positions from the journal, one whole-world
+    /// replay (plus one world diff, for the position's class) each, up to the
+    /// retained window (`CHECKPOINT_EVERY_COMMITS` × `RETAINED_CHECKPOINTS`).
     /// `CommitsLog::open` states that bound; `Feed::open` the derived
     /// sidecars' own, O(their files) plus O(any missing tail); and the attest
     /// store's open inside it (`write_path/feed/attest.rs`'s
     /// `AttestStore::open`) is O(its file) — the one feed file the journal's
     /// retention does not bound, a line for every attested commit the board
     /// has ever made, never compacted — plus one bounded journal scan per
-    /// uncovered retained position. The identity fold is the other:
-    /// [`Daemon::open_with`] rebuilds it from the recovered world, which
-    /// reads every link in it — [`crate::auth::fold::canonical_identity`]
-    /// states that bound.
+    /// uncovered retained position. The identity table costs nothing here:
+    /// it rides in the World the engine recovered, checkpointed with it and
+    /// stepped by the replay (AUTH-2.79, AUTH-2.80). What the engine's
+    /// recovery can cost over it is a base written WITHOUT the slice over
+    /// credential deposits — not a start point, so the open steps back to an
+    /// older one or to genesis and replays, slower, once — and that is said
+    /// on the operator stream (AUTH-2.86; [`Engine::recovery`]). A board with
+    /// no start point left refuses to open (AUTH-2.88): `Engine` carries
+    /// `BadCheckpoint` with the slice's own remedy, and nothing is invented.
     pub fn open(data_dir: impl AsRef<Path>) -> Result<Daemon, DaemonError> {
         Daemon::open_with(data_dir, AuthOptions::default())
     }
@@ -458,11 +467,11 @@ impl Daemon {
     /// list's supply. [`Daemon::open`]'s PRECONDITION, its account of which
     /// failures a retry can clear, and the commits it makes on a claimed board
     /// whose journal holds no head are this one's too — that method delegates
-    /// here, so both doors carry one contract. The identity fold is
-    /// seeded here from the RECOVERED world (derived state — the canonical
-    /// rebuild; the journal stays the one source of truth), which reads
-    /// every link in that world: [`crate::auth::fold::canonical_identity`]
-    /// states the bound, and [`Daemon::open`] names it beside the sidecar's.
+    /// here, so both doors carry one contract. The identity table is the
+    /// recovered World's own slice (AUTH-2.86: the daemon serves from the
+    /// resolved World): nothing is rebuilt here, and what the engine's open
+    /// skipped or resolved on the way to that World is logged here as the two
+    /// warnings that rule names.
     ///
     /// A supply file the options name is read HERE, at every start, and the
     /// list installed from it before anything is served
@@ -509,6 +518,14 @@ impl Daemon {
         // board record, nothing written, no engine opened.
         crate::auth::policy::genesis_seeding_check().map_err(DaemonError::Registry)?;
         let engine = Engine::open(cfg).map_err(DaemonError::Engine)?;
+        // THE START POINT's account (AUTH-2.86): every retained checkpoint
+        // the engine's open passed over, with the start point it resolved
+        // from, and a slice-less start point that resolved to the empty
+        // table — said before anything is served, and only where there is
+        // something to say.
+        for warning in recovery_warnings(engine.recovery()) {
+            notice::line(format_args!("warning (at open): {warning}"));
+        }
         // THE BLOB STORE, opened under `blobs/` beside the journal: its
         // reconciliation and compaction complete here, before anything is
         // served (the record: "OPEN's PASSES OVER BOTH STORES … COMPLETE
@@ -605,7 +622,7 @@ impl Daemon {
     /// (`head.rs`, WHAT A HEAD IS), not a limit of the journal's format, and
     /// this open is what closes the gap it leaves.
     fn write_the_claims_head_if_owed(&self) {
-        if self.auth.fold.snapshot().claimant().is_none() {
+        if self.engine.kernel().snapshot().world().identity().claimant().is_none() {
             return;
         }
         let serial = self.writes.serial_lock();
@@ -804,7 +821,8 @@ impl Daemon {
     }
 
     /// [`Daemon::resolve_actor`] against the HEAD — the route-level
-    /// resolution run before dispatch on every token-accepting route. The
+    /// resolution run before dispatch on every token-accepting route, over
+    /// ONE head snapshot: the world and the key table it carries. The
     /// resolved actor is handed to dispatch; the write sequences re-resolve
     /// at their own sites against the snapshot their gates stand on.
     ///
@@ -815,8 +833,7 @@ impl Daemon {
     /// at the route level and again under the lock harmless.
     fn resolve_at_head(&self, req: &HttpRequest) -> Resolved {
         let snap = self.engine.kernel().snapshot();
-        let identity = self.auth.fold.snapshot();
-        self.resolve_actor(req, snap.world(), &identity)
+        self.resolve_actor(req, snap.world(), snap.world().identity())
     }
 
     /// One token-accepting route (AUTH-4.43): resolve the actor against the
@@ -846,11 +863,11 @@ impl Daemon {
     /// are this daemon's, and [`serve`] would otherwise reach two levels
     /// into [`crate::auth::AuthState`] to spell them.
     ///
-    /// `when` only labels the line. The claim itself is READ from the fold
-    /// rather than supplied, so no caller can hand this method a fact the
-    /// daemon can answer.
+    /// `when` only labels the line. The claim itself is READ from the head's
+    /// slice rather than supplied, so no caller can hand this method a fact
+    /// the daemon can answer.
     fn log_config_warnings(&self, when: Moment) {
-        let claimed = self.auth.fold.snapshot().claimant().is_some();
+        let claimed = self.engine.kernel().snapshot().world().identity().claimant().is_some();
         for w in startup_warnings(&self.auth.cfg, claimed) {
             notice::line(format_args!("warning ({when}): {w}"));
         }
@@ -896,9 +913,12 @@ impl Daemon {
     /// list in force stands and the refusal is logged, once.
     ///
     /// A COMMAND, and called under NO lock: it takes the credential write
-    /// lock, which is why it runs here and not where the list is read.
+    /// lock, which is why it runs here and not where the list is read. The
+    /// claimant the install compares against is the head's slice, read
+    /// under that lock through the closure handed down.
     fn reissue_blocked_prefixes(&self) {
-        match self.auth.reissue_blocked_prefixes() {
+        let head_identity = || self.engine.kernel().snapshot().world().identity().clone();
+        match self.auth.reissue_blocked_prefixes(head_identity) {
             None => {}
             Some(Reissue::Installed) => self.log_blocked_prefixes(Moment::Reissued),
             Some(Reissue::Refused(e)) => notice::line(format_args!(
@@ -906,6 +926,57 @@ impl Daemon {
             )),
         }
     }
+}
+
+impl Daemon {
+    /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a
+    /// stable API): what the engine's open found in the data dir — the start
+    /// point, the retained checkpoints it passed over and whether a
+    /// slice-less start point resolved empty — the account the open's two
+    /// warnings are rendered from (`recovery_warnings`), so a suite can pin
+    /// what the daemon LOGGED against the report it logged it from.
+    #[cfg(any(test, feature = "test-hooks"))]
+    #[doc(hidden)]
+    pub fn recovery(&self) -> Option<&Recovery> {
+        self.engine.recovery()
+    }
+}
+
+/// AUTH-2.86's two startup warnings, rendered from what the engine's open
+/// found — one line per retained checkpoint that was NOT a start point,
+/// naming it, why, and the start point the world was resolved from; and one
+/// line where the start point itself carried no identity slice and resolved
+/// to the EMPTY table (AUTH-2.83), naming that checkpoint and the empty
+/// resolution — the operator's one tell that a build which wrote no slice
+/// ran on this board. Nothing where there is nothing to say, which is every
+/// open on a board whose checkpoints carry the slice. The downgrade window's
+/// own commits read `key: null` on `/changes` (AUTH-1.52), which needs no
+/// line here.
+fn recovery_warnings(recovery: Option<&Recovery>) -> Vec<String> {
+    let Some(recovery) = recovery else { return Vec::new() };
+    let start = match recovery.start_point {
+        Seq(0) => "genesis".to_string(),
+        Seq(seq) => format!("checkpoint.{seq}"),
+    };
+    let mut lines: Vec<String> = recovery
+        .skipped
+        .iter()
+        .map(|skipped| {
+            format!(
+                "checkpoint.{} is not a start point and was SKIPPED — {}; the world was \
+                 resolved from {start} and replayed forward from there",
+                skipped.seq.0, skipped.why
+            )
+        })
+        .collect();
+    if recovery.identity_resolved_empty {
+        lines.push(format!(
+            "{start} carries no identity slice and no credential deposit: its key table \
+             RESOLVED EMPTY — no account keyed, the board unclaimed — rather than being read \
+             from the checkpoint; a build that wrote no identity slice ran on this board"
+        ));
+    }
+    lines
 }
 
 /// When the daemon names its configuration on the operator stream — the

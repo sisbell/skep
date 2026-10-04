@@ -428,13 +428,16 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
     // walk re-covers it as a bare entry, and the next commit's announcement
     // carries the stream past it. A panic after a CREDENTIAL commit costs a
     // second thing: `credential_sequence`'s tail runs after `commit_under`
-    // returns, so the live identity fold is left one deposit behind the
-    // committed world. It fails CLOSED — a key the fold does not hold
-    // establishes no session — and it heals at restart, where
-    // `crate::auth::fold::canonical_identity` rebuilds from the world.
-    // Until then `/op`'s `key_set` (the live fold) and `/op-at` at the head
-    // (the canonical rebuild) disagree, and the next `precheck` runs its
-    // slots against the short fold.
+    // returns, so the ack goes unmemoized — a retry under the same `id`
+    // re-executes and meets the fold's `nothing_changed` or
+    // `already_claimed` in place of the original ack — and, where the commit
+    // was the claim, the flip's consequences (`H.1`, the warnings, the list)
+    // wait for the open, which closes the crash window. It costs NO key: the
+    // engine steps the World's identity slice inside the commit itself
+    // (AUTH-2.80), so the table a committed world carries is never a deposit
+    // behind it — the window that stood here, a live fold left one deposit
+    // short of the committed world until restart, with `/op`'s `key_set` and
+    // `/op-at`'s at the head disagreeing meanwhile, is CLOSED.
     //
     // The third card is the one panic the router raises by design, OS
     // entropy refused (`Daemon::route`'s card): `POST /session` draws its

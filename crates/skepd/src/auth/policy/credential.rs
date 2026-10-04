@@ -17,9 +17,10 @@ use skep_identity::{
 use skep_links::SlotArg;
 use skep_namespace::{system_account, HasM3};
 
+use skep_engine::types::IDENTITY_TYPES;
+
 use super::{addr_spans, deposits_credential_link, AttestFault, CredentialRefusal};
 use crate::auth::entry;
-use crate::auth::fold::{identity_types, WorldCtx};
 use crate::auth::session::{keyed_above, opening_account, HybridSig, Scope};
 use crate::auth::LockWrite;
 use crate::World;
@@ -272,10 +273,10 @@ pub(crate) enum RecordSig {
 
 /// The precheck's answer: the refusal, or what it established about the
 /// record's `sig` ([`RecordSig`]). The previewed effect is deliberately NOT
-/// returned — the committed tail re-derives from the same deposit under the
-/// same guard ([`crate::auth::fold::IdentityFold::step_committed`]), so
-/// handing it forward would be a second path to one state change, and a
-/// signature that offers it invites exactly that.
+/// returned — the engine's fold hook re-derives it from the same deposit at
+/// the commit itself (`World::apply`, AUTH-2.80), so handing it forward would
+/// be a second path to one state change, and a signature that offers it
+/// invites exactly that.
 ///
 /// The `Ok` taken at the classify line is AUTH-3.19's defect arm —
 /// `NotCredential` there is unreachable by construction (the classifier
@@ -331,7 +332,7 @@ pub(crate) fn precheck(
     }
     // (3) — the classify preview's verdict (AUTH-2.57): the fold's own
     // order — kind, home account, publication, the per-kind arm.
-    let verdict = identity.classify(identity_types(), &WorldCtx(world), &dep.deposit());
+    let verdict = identity.classify(&IDENTITY_TYPES, world, &dep.deposit());
     let effect = match verdict {
         Verdict::NotCredential => {
             debug_assert!(false, "classify answered NotCredential on a classified deposit");
@@ -618,10 +619,9 @@ fn record_grade_check(
 ) -> Result<(), CredentialRefusal> {
     let invalid = CredentialRefusal::AttestationInvalid;
     // 1 — the record value, by the kind's parse.
-    let ctx = WorldCtx(world);
     let value = match kind {
-        RecordKind::Enroll => record_value::<Enrollment>(&ctx, dep),
-        RecordKind::Retire => record_value::<Fingerprint>(&ctx, dep),
+        RecordKind::Enroll => record_value::<Enrollment>(world, dep),
+        RecordKind::Retire => record_value::<Fingerprint>(world, dep),
     };
     let Some((canonical, sig)) = value else {
         debug_assert!(
@@ -741,11 +741,12 @@ pub(super) fn verify_record_sig(
 
 /// The record value a deposit's atom carries, for the record grade: the
 /// sig-less canonical projection and the `sig` as it stands — read by the one
-/// pinned read and parsed by the kind `T` names, as the fold reads and parses
-/// it (`None` where either refuses, which the fold's own verdict at slot (3)
+/// pinned read over the world as the fold's ctx (the engine's `FoldCtx for
+/// World`) and parsed by the kind `T` names, as the fold reads and parses it
+/// (`None` where either refuses, which the fold's own verdict at slot (3)
 /// makes unreachable).
-fn record_value<T: RecordEntry>(ctx: &WorldCtx<'_>, dep: &DepositSpans) -> Option<(String, Option<String>)> {
-    let bytes = record_bytes(ctx, &dep.home, &dep.from).ok()?;
+fn record_value<T: RecordEntry>(world: &World, dep: &DepositSpans) -> Option<(String, Option<String>)> {
+    let bytes = record_bytes(world, &dep.home, &dep.from).ok()?;
     let value = parse_record_value::<T>(&bytes).ok()?;
     Some((canonical_record(&value.entries, None), value.sig))
 }
@@ -905,7 +906,9 @@ mod tests {
         use skep_namespace::PrincipalId;
         use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
 
-        use crate::auth::fold::{canonical_identity, T_CLAIM, T_ENROLL, T_RETIRE};
+        use skep_engine::types::{t_claim, t_enroll, t_retire};
+        use skep_identity::HasIdentity;
+
         use crate::auth::CredentialLock;
         use crate::codec::JsonCodec;
         use crate::write_path::board_term;
@@ -917,7 +920,7 @@ mod tests {
         })
         .expect("in-memory genesis cannot fail");
         let febe = OperationSurface::new(Box::new(engine.stores()));
-        let ty = |t: &[u32; 9]| addr_of(t).tumbler().to_string();
+        let ty = |t: &Address| t.tumbler().to_string();
         let key = |n: u8| {
             let signer = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[n; 32]).expect("tag 1");
             signer.public_key().clone()
@@ -937,12 +940,12 @@ mod tests {
         exec(febe.bootstrap_session(), delegate);
         let sid = febe.open_session(PrincipalId(900));
         let doc1 = exec(sid, json!({"op": "create_new_document", "account": "1.0.1"}));
-        let atom = |ordinal: u64, text: String, t: &[u32; 9]| {
+        let atom = |ordinal: u64, text: String, t: &Address| {
             json!({"op": "insert", "doc": doc1,
                    "at": {"subspace": "1", "ordinal": ordinal.to_string()},
                    "values": [{"atom": text}], "deposit": ty(t)})
         };
-        let link = |from: &str, to: &[&str], t: &[u32; 9]| {
+        let link = |from: &str, to: &[&str], t: &Address| {
             json!({"op": "make_link", "home": doc1, "from": {"addrs": [from]},
                    "to": {"addrs": to}, "ty": {"addrs": [ty(t)]}})
         };
@@ -950,14 +953,14 @@ mod tests {
             Enrollment::new(anchor, true, None).expect("no label"),
             Enrollment::new(device.clone(), false, None).expect("no label"),
         ]);
-        let genesis_atom = exec(sid, atom(1, genesis, &T_ENROLL));
-        exec(sid, link(&genesis_atom, &["1.0.1"], &T_ENROLL));
-        exec(sid, link("1.0.1", &[], &T_CLAIM));
+        let genesis_atom = exec(sid, atom(1, genesis, t_enroll()));
+        exec(sid, link(&genesis_atom, &["1.0.1"], t_enroll()));
+        exec(sid, link("1.0.1", &[], t_claim()));
         // A retirement of the device key, its record carrying a tag-1-width `sig`.
         let retire = canonical_record(&[Fingerprint::of(&device)], Some(&"ab".repeat(3373)));
-        let retire_atom = exec(sid, atom(2, retire, &T_RETIRE));
+        let retire_atom = exec(sid, atom(2, retire, t_retire()));
         let op = JsonCodec
-            .parse(link(&retire_atom, &["1.0.1"], &T_RETIRE).to_string().as_bytes())
+            .parse(link(&retire_atom, &["1.0.1"], t_retire()).to_string().as_bytes())
             .unwrap_or_else(|e| panic!("{:?}", e.detail))
             .op;
         let dep = DepositSpans::of(&op).expect("an address-form make_link");
@@ -965,14 +968,16 @@ mod tests {
         let snap = engine.kernel().snapshot();
         let world = snap.world();
         assert!(board_term(world).is_none(), "the premise: no head writer ran, so no H.1");
-        let identity = canonical_identity(world);
+        // The slice the World carries, stepped at each of the ceremony's
+        // deposits by the engine's own fold hook.
+        let identity = world.identity();
         assert!(identity.claimant().is_some(), "the premise: the ceremony claimed the board");
         let lock = CredentialLock::new();
         assert_eq!(
             precheck(
                 &lock.write(),
                 world,
-                &identity,
+                identity,
                 &dep,
                 Some(&Fingerprint::of(&device)),
                 Scope::Full,

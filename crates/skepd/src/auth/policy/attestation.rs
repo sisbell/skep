@@ -381,8 +381,10 @@ mod tests {
     use skep_links::SlotArg;
     use skep_namespace::BOOTSTRAP_PRINCIPAL;
 
+    use skep_engine::types::{t_claim, t_enroll, t_retire};
+
     use super::*;
-    use crate::auth::fold::{addr_of, T_CLAIM, T_ENROLL, T_RETIRE};
+    use crate::auth::fold::addr_of;
 
     /// The check's arms no wire test can reach, on a board with no `H.1` —
     /// the genesis world. A3: a home the SYSTEM ACCOUNT owns by ω is exempt,
@@ -436,14 +438,14 @@ mod tests {
         let check = |op: Op| attestation_check(world, &identity, &op, BOOTSTRAP_PRINCIPAL, None);
         let unavailable: Result<Option<Attestation>, CredentialRefusal> =
             Err(CredentialRefusal::AttestationInvalid(AttestFault::BoardUnavailable));
-        let enroll = addr_of(&T_ENROLL);
+        let enroll = t_enroll().clone();
 
         assert_eq!(check(grant_in(skep_namespace::head_document())), Ok(None), "A3: exempt by ω");
         // s2's third case: prose declared under every credential kind takes
         // the check like any insert.
-        for ty in [T_ENROLL, T_RETIRE, T_CLAIM] {
+        for ty in [t_enroll(), t_retire(), t_claim()] {
             assert_eq!(
-                check(insert(&doc1, Deposit::Declared(addr_of(&ty)), "x")),
+                check(insert(&doc1, Deposit::Declared(ty.clone()), "x")),
                 unavailable,
                 "a declared deposit whose atom is no record is no D26 case"
             );

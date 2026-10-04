@@ -27,6 +27,46 @@ pub(crate) fn stamp_text(stamp: &[u8; 4]) -> String {
 /// what each holds.
 pub(crate) type Cause = Box<dyn std::error::Error + Send + Sync + 'static>;
 
+/// Why [`crate::WorldState::rebuild_derived`] could not SEED a base — M2's
+/// OWN vocabulary, and slice-agnostic (the AUTH spec's M2 seam delta,
+/// AUTH-2.85): the method is this crate's trait's, so its refusal is nameable
+/// here and names no subsystem's concept — `Unresolved { slice }` and never a
+/// per-subsystem variant. Nothing at the seam branches on it: `open` and the
+/// history reads treat an `Err` base exactly as one that does not load — not
+/// a start point, passed over for the next-older retained checkpoint, then
+/// genesis while the journal reaches it — and only the exhausted chain
+/// reaches an operator, through [`OpenError::BadCheckpoint`]'s or
+/// [`HistoryError::Reclaimed`]'s `cause`, which is where the sentence below
+/// is read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RebuildError {
+    /// A derived slice the base carries no input to seed from: the checkpoint
+    /// was written without it, and the authoritative state it does carry holds
+    /// records whose fold the slice could only reproduce by a replay in commit
+    /// order — an order no checkpoint holds. The base is not a start point,
+    /// and the remedy is the one the sentence names: a base that carries the
+    /// slice, or a journal that reaches one.
+    Unresolved {
+        /// The slice's name, for the line an operator reads.
+        slice: &'static str,
+    },
+}
+
+impl fmt::Display for RebuildError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RebuildError::Unresolved { slice } => write!(
+                f,
+                "the `{slice}` slice could not be resolved from this checkpoint, so it is not a \
+                 start point: restore a checkpoint that carries the slice, or a journal that \
+                 reaches one, from backup"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RebuildError {}
+
 /// Failure of [`crate::Kernel::open`] (§6/§7).
 #[derive(Debug)]
 pub enum OpenError {
@@ -69,11 +109,17 @@ pub enum OpenError {
     /// [`OpenError::BadCheckpoint`]'s `cause`, carrying the read's own
     /// failure.
     Io(io::Error),
-    /// No retained checkpoint loads and genesis is unreachable (its covering
-    /// journal reclaimed). Recovery internally falls back newest → next-older
-    /// RETAINED checkpoint → genesis-while-reachable (§6/§7); this is returned
-    /// only when that whole chain is exhausted. Operator-intervention
+    /// No retained checkpoint loads AND SEEDS, and genesis is unreachable
+    /// (its covering journal reclaimed). Recovery internally falls back
+    /// newest → next-older RETAINED checkpoint → genesis-while-reachable
+    /// (§6/§7) — a base that decodes but whose [`WorldState::rebuild_derived`]
+    /// answers [`RebuildError`] is passed over exactly as one that does not
+    /// decode (the seam delta, AUTH-2.85) — and this is returned only when
+    /// that whole chain is exhausted; what the chain did on the way is
+    /// [`crate::Recovery`]'s to report when it is not. Operator-intervention
     /// condition — not auto-retried.
+    ///
+    /// [`WorldState::rebuild_derived`]: crate::WorldState::rebuild_derived
     BadCheckpoint {
         /// Why the NEWEST base recovery could have used refused — the whole
         /// of what names the remedy, since nothing else about an exhausted
@@ -84,9 +130,12 @@ pub enum OpenError {
         /// checkpoint written under another format, and its account names the
         /// stamp found, the stamp expected and the remedy
         /// ([`NO_MIGRATION_REMEDY`]), as [`OpenError::ForeignFormat`] does
-        /// for the journal. A base that could not be READ at all carries the
+        /// for the journal. A base that decoded but could not SEED a derived
+        /// slice carries [`RebuildError`]'s sentence, which names its own
+        /// remedy — a base that carries the slice, or a journal that reaches
+        /// one (AUTH-2.88). A base that could not be READ at all carries the
         /// read's own I/O failure, which names its own remedy — a permission,
-        /// a device — rather than any of the three above. `None` when no
+        /// a device — rather than any of the four above. `None` when no
         /// candidate was tried at all — the journal retains no checkpoint,
         /// and only its unreachable genesis was ever available.
         cause: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
@@ -313,8 +362,10 @@ pub enum HistoryError {
     },
     /// No base at or below `at` remains derivable — strictly BELOW `at`, for
     /// [`crate::Kernel::attestation_at`], whose base must sit below its
-    /// boundary: no retained checkpoint there loads, and the journal below
-    /// the oldest retained checkpoint has been reclaimed (§6), so genesis is
+    /// boundary: no retained checkpoint there loads and seeds (a base whose
+    /// [`crate::WorldState::rebuild_derived`] refuses is passed over as one
+    /// that does not load, AUTH-2.85), and the journal below the oldest
+    /// retained checkpoint has been reclaimed (§6), so genesis is
     /// unreachable. `floor` names the oldest boundary a base could still be
     /// derived at, when a checkpoint exists to derive it from.
     Reclaimed {

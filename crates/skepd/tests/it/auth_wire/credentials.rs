@@ -7,7 +7,8 @@
 //! `preview_key` and `undecodable_key`, the credential idempotency memo,
 //! whose contract differs from M10's on exactly one point (the hit is
 //! kind-BLIND), retirement, `key_set` on `/op` and `/op-at`, and restart
-//! carrying the identity fold back (recovery = the canonical rebuild).
+//! carrying the identity table back (the World's own slice, recovered with
+//! it; the suite `identity_slice` holds the rest of that).
 
 use skep_address::{Address, Nat, Tumbler};
 use skep_identity::{canonical_record, entry_body_record, framed, BoardTerm, RecordRows, ENTRY_TAG};
@@ -964,9 +965,9 @@ fn key_set_reads_head_and_history_identically() {
     sd.shutdown();
 }
 
-/// Restart carries the identity fold back (recovery = the canonical
-/// rebuild from the recovered world): the claim, the keys, and a working
-/// signed handshake all survive reopen.
+/// Restart carries the identity table back (the World's own slice,
+/// checkpointed with it and replayed by the open): the claim, the keys, and
+/// a working signed handshake all survive reopen.
 #[test]
 fn restart_recovers_the_identity_fold() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -984,7 +985,7 @@ fn restart_recovers_the_identity_fold() {
     let after = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
     assert_eq!(
         before["enrolled"], after["enrolled"],
-        "the rebuilt key table equals the live fold's"
+        "the recovered key table equals the live fold's"
     );
     // The recovered fold verifies a fresh signed handshake, and the signed
     // session deposits into the published home (ordinal 2 — the one legal

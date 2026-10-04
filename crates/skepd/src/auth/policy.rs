@@ -44,7 +44,8 @@ use skep_identity::{CredentialKind, Inert};
 use skep_links::{enc, SlotArg};
 use skep_namespace::{first_document_address, HasM3};
 
-use super::fold::identity_types;
+use skep_engine::types::IDENTITY_TYPES;
+
 use crate::World;
 
 /// THE DOC-1 TEST — the daemon's spelling of AUTH-2.127's home pin, the
@@ -104,8 +105,8 @@ fn slotarg_kind(s: &SlotArg) -> Option<CredentialKind> {
 /// part: a kind exempt at the atom but never verified at the link would
 /// commit a record no signature covers.
 ///
-/// The set IS the fold's credential kinds ([`identity_types`]: enroll,
-/// retire, claim), and the route rests on that equality: the credential
+/// The set IS the fold's credential kinds (the engine's [`IDENTITY_TYPES`]:
+/// enroll, retire, claim), and the route rests on that equality: the credential
 /// sequence classifies every deposit routed to it through the FOLD (the
 /// precheck's slot (3)), and the record grade parses the record by the kind
 /// the fold's verdict names. So a kind the fold does not fold never joins
@@ -130,7 +131,7 @@ fn slotarg_kind(s: &SlotArg) -> Option<CredentialKind> {
 /// `every_arm_of_the_route_reads_the_one_set_the_fold_folds` holds every arm
 /// of the route to it, and it to the fold.
 fn record_deposit_kind<'s>(ty: impl IntoIterator<Item = &'s Span>) -> Option<CredentialKind> {
-    identity_types().kind_of(ty)
+    IDENTITY_TYPES.kind_of(ty)
 }
 
 /// AUTH-2.61 — op classification: the op's OWN type slot, no world read,
@@ -140,22 +141,22 @@ fn record_deposit_kind<'s>(ty: impl IntoIterator<Item = &'s Span>) -> Option<Cre
 /// lock).
 ///
 /// OBLIGATION, and the one this predicate cannot check: `true` for exactly
-/// the deposits [`precheck`]'s classify and
-/// [`crate::auth::fold::canonical_identity`] will read as credential-typed.
-/// All three read the type slot's spans, and two of the three readings are
-/// structural rather than claimed — this one and [`DepositSpans::of`] both
-/// go through [`addr_spans`], the one spelling of `enc(addrs)`. Only the
-/// rebuild's stays a claim: it reads M7's stored slot, which records `enc`
-/// verbatim. And the three read one SET: every arm here names the kind
-/// through [`record_deposit_kind`], which IS the fold's credential kinds —
-/// the equality its card states, and the reason no kind the fold does not
-/// fold joins it by an edit there. The subspace-3 allocation in
-/// [`super::fold`] is what keeps a `Resolve` slot out of the codomain. A
-/// FALSE NEGATIVE is the divergence this module cannot detect: the deposit
-/// commits through the plain path with no gate and no fold step, so the
-/// world holds a credential the live fold never saw, `key_set` answers one
-/// thing until restart and another after it, and nothing reports either. A
-/// false positive reaches [`precheck`]'s defect arm at the classify line.
+/// the deposits [`precheck`]'s classify and the engine's fold hook
+/// (`World::apply`, AUTH-2.80) will read as credential-typed. All three read
+/// the type slot's spans, and two of the three readings are structural
+/// rather than claimed — this one and [`DepositSpans::of`] both go through
+/// [`addr_spans`], the one spelling of `enc(addrs)`. Only the hook's stays a
+/// claim: it reads M7's stored slot, which records `enc` verbatim. And the
+/// three read one SET, the engine's one `IDENTITY_TYPES`: every arm here
+/// names the kind through [`record_deposit_kind`], which IS the fold's
+/// credential kinds — the equality its card states, and the reason no kind
+/// the fold does not fold joins it by an edit there. The subspace-3
+/// allocation the engine's pins state is what keeps a `Resolve` slot out of
+/// the codomain. A FALSE NEGATIVE is the divergence this module cannot
+/// detect: the deposit commits through the plain path with no gate, the
+/// engine folds it all the same, and the world holds a credential the
+/// precheck never judged. A false positive reaches [`precheck`]'s defect arm
+/// at the classify line.
 ///
 /// EXHAUSTIVE with no `_` arm, the treatment [`crate::write_path::write_meta`]
 /// already gives the read/write partition: the non-deposit arm is written
@@ -524,28 +525,29 @@ mod tests {
     use skep_febe::SuccessorSpec;
 
     use super::*;
-    use crate::auth::fold::{addr_of, T_CLAIM, T_ENROLL, T_RETIRE};
+    use skep_engine::types::{t_claim, t_enroll, t_retire};
+
+    use crate::auth::fold::addr_of;
 
     /// THE RECORD-DEPOSIT SET IS THE FOLD'S KINDS, and every arm of the route
     /// reads it: over the three credential kinds, the disavowal's released
     /// ordinal (`…3.4`, which the fold does not fold) and the registry's two
     /// kinds (a second set, never this one), [`record_deposit_kind`] answers
-    /// what [`identity_types`] answers, and a `make_link`, an `emit` and an
-    /// `edit_link` successor so typed are routed to the credential sequence
-    /// exactly where it answers `Some`. The route rests on that equality —
-    /// the credential sequence classifies what it is routed through the fold
-    /// — so an edit adding a kind to the set alone, the join its card rules
-    /// out, fails here.
+    /// what the engine's [`IDENTITY_TYPES`] answers, and a `make_link`, an
+    /// `emit` and an `edit_link` successor so typed are routed to the
+    /// credential sequence exactly where it answers `Some`. The route rests
+    /// on that equality — the credential sequence classifies what it is
+    /// routed through the fold — so an edit adding a kind to the set alone,
+    /// the join its card rules out, fails here.
     #[test]
     fn every_arm_of_the_route_reads_the_one_set_the_fold_folds() {
         let doc = addr_of(&[1, 0, 1, 0, 1]);
-        let disavowal = [1, 1, 0, 1, 0, 1, 0, 3, 4];
-        let binding = [1, 1, 0, 1, 0, 1, 0, 3, 55];
-        let endpoint = [1, 1, 0, 1, 0, 1, 0, 3, 56];
-        for comps in [T_ENROLL, T_RETIRE, T_CLAIM, disavowal, binding, endpoint] {
-            let ty = addr_of(&comps);
+        let disavowal = addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 4]);
+        let binding = addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 55]);
+        let endpoint = addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 56]);
+        for ty in [t_enroll().clone(), t_retire().clone(), t_claim().clone(), disavowal, binding, endpoint] {
             let slot = addr_spans(std::slice::from_ref(&ty));
-            let folded = identity_types().kind_of(&slot);
+            let folded = IDENTITY_TYPES.kind_of(&slot);
             assert_eq!(
                 record_deposit_kind(&slot),
                 folded,

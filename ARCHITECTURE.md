@@ -75,7 +75,9 @@ foundation and on the stores above it.
   modules are listed in `src/lib.rs` in dependency order, a line each.
 - `skep-coordination` — predicate definitions and the coordinator.
 - `skep-identity` — credential records, key sets, the identity fold. Pure;
-  of the skep crates it depends only on `skep-address`.
+  of the skep crates it depends only on `skep-address`. The engine depends
+  on it: `World` seats the fold as its identity slice, stepped at each
+  credential deposit's commit and checkpointed with the world (AUTH-2.79).
 - `skep-signature` — the hybrid signature's frozen rules: the KDF, keygen
   and signing (behind its `sign` feature), the key and blob layouts, the
   verify. The one crate that links the signature libraries; skepd calls its
@@ -86,7 +88,8 @@ foundation and on the stores above it.
   that dispatches every operation to the stores, and the codec seam a
   transport fills. Its modules and rules: §The operation surface.
 - `skep-engine` — the one assembler. It defines `World` from the stores'
-  slices, genesis, recovery and reads at a past position. Nothing depends
+  slices and the identity slice, genesis, recovery and reads at a past
+  position. Nothing depends
   on it except `skepd`, the conformance harness and — as a dev-dependency,
   for the fixture its hazard, golden and chain suites share —
   `skep-kernel`.
@@ -656,7 +659,7 @@ write passes down through them in this order:
 │                    pool                                 │
 ├─────────────────────────────────────────────────────────┤
 │ 4 SESSION LAYER    auth.rs · auth/                      │
-│                    sessions · policy · identity fold ·  │
+│                    sessions · policy · slice readers ·  │
 │                    signature check                      │
 ├─────────────────────────────────────────────────────────┤
 │ 5 WRITE PATH       write_path.rs  (one write at a time) │
@@ -737,7 +740,9 @@ layer's lock, on the transport's cadence.
    records, whose trial is the credential grade's own, and the seeding
    check the open runs ahead of every genesis — and the write-path check
    — the entry signature, whose one exempt `insert` is a signed
-   credential or registry record into a doc 1), the identity fold,
+   credential or registry record into a doc 1), the readers of the World's
+   identity slice (the key table is the engine's, read off the head
+   snapshot each route already holds; the daemon holds no fold of its own),
    signature verification — `skep-signature` is the one crate that links
    the signature libraries; skepd calls its verify.
 5. **The write path** — `write_path.rs`. The single point every write
@@ -883,6 +888,21 @@ imports it.
   lost lease as no lease, cured by a re-PUT), backed up with the board
   directory, the journal copied first. It never writes anything about
   the world outside the kernel.
+- **The key table is the World's.** The identity slice — every account's
+  key set and the board's claim — lives in `World`, stepped by the engine
+  at each credential deposit's commit and checkpointed with the world
+  (AUTH-2.79–2.88). Nothing rebuilds it from the deposits: the fold's
+  verdicts depend on the order the deposits committed in, and the journal
+  is the one record of that order. A checkpoint written before the slice
+  that holds credential deposits is not a start point; the open steps back
+  to one that is, or to genesis while the journal reaches it, and replays.
+  So at its FIRST OPEN under a build that writes the slice, a board whose
+  journal still reaches genesis replays from genesis — correct, once,
+  slower — and a board past genesis-reachability (two retained
+  checkpoints of 1,024 commits) refuses to serve until regenerated or
+  restored: dev boards regenerate, a served board is the owner's call. A
+  slice-less checkpoint with no credential deposit loads as the empty
+  table, which is the true one.
 - **Nothing is overwritten.** Content, links and journal entries are
   append-only. A removal is a new record, not a deletion.
 - **The wire is a contract.** `docs/wire.md` is what clients build

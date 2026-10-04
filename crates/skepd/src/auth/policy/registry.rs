@@ -22,7 +22,9 @@
 
 use skep_address::{Address, Span};
 use skep_arrangement::deposit_class_types;
-use skep_engine::types::{pins_outside_the_registry, t_binding, t_endpoint};
+use skep_engine::types::{
+    pins_outside_the_registry, t_binding, t_claim, t_endpoint, t_enroll, t_retire,
+};
 use skep_febe::{Disposition, Op};
 use skep_identity::{record_bytes, single_address, Fingerprint, IdentityState, Inert, PayloadError};
 use skep_links::SlotArg;
@@ -31,7 +33,6 @@ use skep_registry::{BodyKind, SeedingRefusal};
 
 use super::credential::{verify_record_sig, RecordTrial};
 use super::{addr_spans, homed_in_doc_one, AttestFault, CredentialRefusal};
-use crate::auth::fold::{addr_of, WorldCtx, T_CLAIM, T_ENROLL, T_RETIRE};
 use crate::auth::LockRead;
 use crate::World;
 
@@ -331,8 +332,9 @@ pub(crate) fn registry_admission(
         (RegistryKind::Endpoint, None) => {}
         (RegistryKind::Endpoint, Some(_)) => return Err(RegistryRefusal::Form),
     }
-    // 3 — the record value, by the kind the slot names.
-    let bytes = match record_bytes(&WorldCtx(world), &dep.home, &dep.from) {
+    // 3 — the record value, by the kind the slot names, read over the world
+    // as the fold's ctx (the engine's `FoldCtx for World`).
+    let bytes = match record_bytes(world, &dep.home, &dep.from) {
         Ok(bytes) => bytes,
         Err(PayloadError::TooLarge) => {
             return Err(RegistryRefusal::MalformedRecord(skep_registry::Refusal::PastCap))
@@ -374,18 +376,19 @@ pub(crate) fn registry_admission(
 
 /// THE PARENT'S DOMAIN AS THE DAEMON SEES IT (REG-1.31): every commons row
 /// the build holds that the registry does not itself allocate — the engine
-/// ledger's pins outside the registry, the three credential constants
-/// (`3.1`–`3.3`, spelled nowhere below this crate), and M5's deposit-class
-/// members that are no registry row. The binding and the endpoint are M5's
-/// third and fourth members and the registry's own rows spelled a second
-/// time — held EQUAL by the suite that sees both spellings, and no foreign
-/// row here.
+/// ledger's class pins outside the registry, the three credential pins
+/// (`3.1`–`3.3`, the engine's own since the World seats the identity fold,
+/// standing beside that ledger's list rather than in it), and M5's
+/// deposit-class members that are no registry row, which spell the first two
+/// a second time. The binding and the endpoint are M5's third and fourth
+/// members and the registry's own rows spelled a second time — held EQUAL by
+/// the suite that sees both spellings, and no foreign row here.
 pub(crate) fn seeding_domain() -> Vec<Address> {
     let registry_row = |a: &Address| skep_registry::rows().iter().any(|r| r.address == *a);
     pins_outside_the_registry()
         .into_iter()
+        .chain([t_enroll(), t_retire(), t_claim()])
         .cloned()
-        .chain([T_ENROLL, T_RETIRE, T_CLAIM].iter().map(|c| addr_of(c)))
         .chain(deposit_class_types().iter().filter(|ty| !registry_row(ty)).cloned())
         .collect()
 }
@@ -407,10 +410,11 @@ mod tests {
     use skep_febe::Disposition::{Permanent, Reorder};
 
     use super::*;
+    use crate::auth::fold::addr_of;
     use crate::auth::policy::{deposits_credential_link, record_deposit_kind};
 
     /// THE TWO SETS ARE DISJOINT BY CONSTRUCTION: over every registry row,
-    /// the three credential constants and the disavowal's released ordinal,
+    /// the three credential pins and the disavowal's released ordinal,
     /// no type slot answers both `record_deposit_kind` and
     /// `registry_deposit_kind`; the registry set holds the binding and the
     /// endpoint alone; and a `make_link` so typed is routed to exactly one
@@ -419,7 +423,12 @@ mod tests {
     fn the_registry_set_and_the_credential_set_are_disjoint() {
         let doc = addr_of(&[1, 0, 1, 0, 1]);
         let mut types: Vec<Address> = skep_registry::rows().iter().map(|r| r.address.clone()).collect();
-        types.extend([T_ENROLL, T_RETIRE, T_CLAIM, [1, 1, 0, 1, 0, 1, 0, 3, 4]].iter().map(|c| addr_of(c)));
+        types.extend([
+            t_enroll().clone(),
+            t_retire().clone(),
+            t_claim().clone(),
+            addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 4]),
+        ]);
         for ty in types {
             let slot = addr_spans(std::slice::from_ref(&ty));
             let (credential, registry) = (record_deposit_kind(&slot), registry_deposit_kind(&slot));
@@ -444,16 +453,16 @@ mod tests {
         }
     }
 
-    /// The shipped domain holds the eight pins outside the registry, the
-    /// three credential constants and M5's two credential members, no
+    /// The shipped domain holds the eight class pins outside the registry,
+    /// the three credential pins and M5's two credential members, no
     /// registry row — and the check over it passes, so a daemon opens.
     #[test]
     fn the_shipped_domain_passes_the_seeding_check() {
         let domain = seeding_domain();
         assert_eq!(domain.len(), 8 + 3 + 2);
         assert!(domain.iter().all(|a| !skep_registry::rows().iter().any(|r| r.address == *a)));
-        for c in [T_ENROLL, T_RETIRE, T_CLAIM] {
-            assert!(domain.contains(&addr_of(&c)));
+        for c in [t_enroll(), t_retire(), t_claim()] {
+            assert!(domain.contains(c));
         }
         assert_eq!(genesis_seeding_check(), Ok(()));
     }

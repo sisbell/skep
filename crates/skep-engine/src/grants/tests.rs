@@ -308,7 +308,8 @@ fn a_rebuilt_grant_fold_equals_the_live_one_after_every_deposit_of_a_generated_h
             }
             let world = engine.kernel().snapshot().world().clone();
             let live = &world.grants;
-            let rebuilt = world.clone().rebuild_derived().grants;
+            let rebuilt =
+                world.clone().rebuild_derived().expect("a live world's slice is carried").grants;
             let at = format!("history {history}, step {step}");
             assert_eq!(
                 rebuilt.operative_records, live.operative_records,
@@ -485,7 +486,7 @@ fn the_measurement_n_re_shares_of_one_key() {
         let rebuild_time = median(&|| {
             let copy = world.clone();
             let started = Instant::now();
-            let rebuilt = copy.rebuild_derived();
+            let rebuilt = copy.rebuild_derived().expect("a live world's slice is carried");
             let took = started.elapsed();
             drop(rebuilt);
             took

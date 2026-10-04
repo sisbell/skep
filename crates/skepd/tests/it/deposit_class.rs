@@ -7,8 +7,9 @@
 //! BUILD-TIME set that is M5's own (`skep_arrangement::deposit_class_types`)
 //! — the door's crate sits below the engine and the daemon and can read
 //! neither's constants — so ENROLL and RETIRE are spelled TWICE: there, for
-//! the door, and in the daemon's credential constants (`T_ENROLL`,
-//! `T_RETIRE`), for the fold that classifies the pair's `make_link`; and so
+//! the door, and in the engine's credential pins (`t_enroll`, `t_retire`,
+//! the `IDENTITY_TYPES` the fold hook classifies the pair's `make_link`
+//! by); and so
 //! are the registry's BINDING and ENDPOINT: there, and in `skep_registry`'s
 //! table, which the engine's ledger reads for the registry sequence's
 //! classify. A second spelling is safe only while it cannot drift, and this

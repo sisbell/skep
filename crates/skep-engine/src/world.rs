@@ -2,11 +2,16 @@
 //! `WorldState` implementation, the accessor-trait implementations, and the
 //! record lifts — the Engine Composition Contract's "The engine crate
 //! assembles" block, realized verbatim for the four state-contributing
-//! stores (M3, M4, M5, M7) — plus the three things the assembled world
-//! carries that no store does: its checkpoint FORMAT STAMP, the exception set
+//! stores (M3, M4, M5, M7) — plus the four things the assembled world
+//! carries that no store does: its checkpoint FORMAT STAMP, the IDENTITY
+//! SLICE (AUTH's key table and claim, `identity`), the exception set
 //! (`crate::publication`) and the grant fold (`crate::grants`). M6/M8/M9/M10
 //! contribute no slice and no record variant, so nothing of theirs appears
 //! here but one role impl, M10's `PublicationWorld` seam.
+
+// The identity slice's seat: the fold hook, the slice-less resolution at
+// load, the trailing field's reading, and the fold's seam over this world.
+mod identity;
 
 use std::fmt;
 
@@ -15,7 +20,8 @@ use skep_address::Address;
 use skep_arrangement::{HasM5, M5Rec, M5State};
 use skep_content::{ContentStore, ContentWrite, HasContent};
 use skep_febe::EditionClaim;
-use skep_kernel::WorldState;
+use skep_identity::IdentityState;
+use skep_kernel::{RebuildError, WorldState};
 use skep_links::{HasLinks, LinkRec, LinkState};
 use skep_namespace::{HasM3, M3Rec, M3State};
 
@@ -39,20 +45,25 @@ use crate::publication::{self, Drafts};
 /// pre-publication-bit layout above all (PUB-7.8) — is refused at byte 0 by a
 /// value comparison, before any slice's bytes are read as another's. Which
 /// bases reach that word at all, and what count 1's history means for the
-/// rest, is `FormatStamp`'s card. The two skip-serialized fields, `drafts` and
-/// `grants`, sit outside the surface: neither occupies a byte.
+/// rest, is `FormatStamp`'s card. The three skip-serialized fields —
+/// `identity_resolved`, `drafts` and `grants` — sit outside the surface: none
+/// occupies a byte. The identity slice is the LAST serialized field, and that
+/// is load-bearing too: a body written before it simply ends where it would
+/// begin, which is the one shape `identity::slice_or_absent` reads as `None`.
 ///
 /// CANONICAL BYTES — this type's serialization IS the checkpoint body M2
 /// hashes into its header (`body_hash`, which a published head names),
 /// so it must be a function of the world's contents on any process and any
 /// machine. The engine's part holds by construction: the stamp is a
-/// constant, the four slices serialize in declaration order, and the only
-/// hash-ordered structures the world holds — the exception set and the grant
-/// fold — are `#[serde(skip)]`. Each slice's part is its store's (option (i),
-/// stated at its own `Serialize`). A field added here joins the obligation: a
-/// derived one stays skipped, and an authoritative one serializes in an order
-/// that is a function of its contents. M2's golden suite holds it over this
-/// type across the dev edge
+/// constant, the five slices serialize in declaration order, the identity
+/// slice's two maps are ordered maps keyed by address and fingerprint
+/// (AUTH-1.40's shape, which `skep-identity`'s suite pins as bytes), and the
+/// only hash-ordered structures the world holds — the exception set and the
+/// grant fold — are `#[serde(skip)]`. Each slice's part is its store's
+/// (option (i), stated at its own `Serialize`). A field added here joins the
+/// obligation: a derived one stays skipped, and an authoritative one
+/// serializes in an order that is a function of its contents. M2's golden
+/// suite holds it over this type across the dev edge
 /// (`two_processes_write_one_history_to_one_checkpoint_byte_string`: two
 /// processes, each with its own hashers, write one history to one checkpoint
 /// byte string).
@@ -120,6 +131,36 @@ pub struct World {
     pub(crate) content: ContentStore,
     pub(crate) arrangement: M5State,
     pub(crate) links: LinkState,
+    /// THE IDENTITY SLICE (AUTH-2.79): the board's key table and claim —
+    /// AUTH's `IdentityState`, a fold over the credential deposits of the
+    /// LINK slice above it, stepped by [`WorldState::apply`] at each such
+    /// deposit's commit (AUTH-2.80, AUTH-2.66) and CHECKPOINTED with the
+    /// world, which is what lets a reopen and every historical read answer
+    /// the table the live fold answered: the fold's verdicts depend on the
+    /// order the deposits committed in, and the journal is the one record of
+    /// that order. AUTHORITATIVE in the checkpoint sense — serialized, LAST
+    /// of the serialized fields, and never rebuilt from the deposits (no
+    /// order to rebuild by) — though derived in the fold's: `None` ⇔ the
+    /// checkpoint body was written WITHOUT the slice (a build before it, or
+    /// one that dropped it), the one case the load resolves or refuses
+    /// (AUTH-2.83, AUTH-2.84) in [`WorldState::rebuild_derived`], so every
+    /// LOADED World carries `Some` (the post-load invariant, AUTH-2.81) and
+    /// [`skep_identity::HasIdentity`] reads it without a branch. The field's
+    /// serde form is AUTH-1.40's compatibility surface, which freezes with the
+    /// first checkpoint a served board writes; how a body that ENDS before
+    /// this field reads is `identity::slice_or_absent`'s, stated there.
+    #[serde(default, deserialize_with = "identity::slice_or_absent")]
+    pub(crate) identity: Option<IdentityState>,
+    /// Whether the slice above was RESOLVED at load (AUTH-2.83: a body
+    /// without it, over a link slice holding no credential deposit, resolves
+    /// to the empty table) rather than CARRIED by the body — a fact about the
+    /// load, recorded by [`WorldState::rebuild_derived`] and carried unchanged
+    /// through every commit after it, read once at [`crate::Engine::open`]
+    /// for the startup warning AUTH-2.86 owes the operator. Derived and
+    /// skipped: it occupies no byte of the checkpoint, and a decoded world
+    /// holds it `false` until the rebuild says otherwise.
+    #[serde(skip)]
+    pub(crate) identity_resolved: bool,
     /// The exception set (PUB-7.5): DERIVED, never checkpointed — seeded by
     /// [`WorldState::rebuild_derived`], folded by [`WorldState::apply`] — so
     /// a decoded world holds it empty until the rebuild runs (the invariant
@@ -162,15 +203,23 @@ impl fmt::Debug for World {
 /// every slice's top-level fields to the count, and says what it cannot see
 /// below that level.
 ///
-/// `1` has named TWO layouts: the first carries M3's publication bit
+/// `1` has named THREE layouts: the first carries M3's publication bit
 /// (2026-09-05, PUB round 1); the second appends M5's birth memo to its slice
-/// (W5, 2026-09-17) under the same count. No base any build wrote in the
-/// first reaches this word through a header this build loads: every one
-/// carries an M2 stamp older than this build's, which M2 refuses at load by
-/// name, with the owner's no-migration remedy (PUB-1.2). So the count names
-/// one loadable layout, and the next World layout change bumps it. A body in
-/// the first layout under a current header — which only hand-built bytes
-/// produce — still fails to decode, and not by chance:
+/// (W5, 2026-09-17) under the same count; the third appends the IDENTITY
+/// SLICE after M7's (AUTH-2.79, 2026-10-04), under the same count by the
+/// owner's no-stamp ruling in dev. No base any build wrote in the first
+/// reaches this word through a header this build loads: every one carries an
+/// M2 stamp older than this build's, which M2 refuses at load by name, with
+/// the owner's no-migration remedy (PUB-1.2). A body in the SECOND layout
+/// under a current header — every checkpoint written before the slice — does
+/// reach the decoder, and is NOT refused here: it ends where the slice would
+/// begin, reads as `identity: None` (`World`'s field states the reading), and
+/// is RESOLVED or REFUSED at load by AUTH-2.83's rule rather than defaulted
+/// into a table — the one layout change this count has named whose old
+/// bodies the spec gives a reading. So the count names two loadable layouts,
+/// the second resolving into the third, and the next World layout change
+/// bumps it. A body in the first layout under a current header — which only
+/// hand-built bytes produce — still fails to decode, and not by chance:
 /// `a_base_written_before_the_birth_memo_fails_to_decode` states why, in the
 /// encodings of M5's and M7's slices, and pins the refusal on each shape it
 /// branches on, so a change beneath a slice's top level that moved the
@@ -281,6 +330,16 @@ impl WorldState for World {
     /// transition would break both halves at once, under-granting live and
     /// over-granting at the next restart.
     ///
+    /// THE IDENTITY SLICE rides the Links arm too, AFTER the link and the
+    /// grant fold have landed (AUTH-2.80): `identity::fold` steps the slice
+    /// from the deposit just folded, over THIS post-deposit world as the
+    /// fold's ctx — so the record bytes the deposit names, the home's owner
+    /// and account-hood and its birth state are read as of this very commit
+    /// (AUTH-2.66's "evaluated at the deposit's commit"), live and on every
+    /// replay alike — with the two fast exits that leave every non-credential
+    /// deposit, which is nearly every link, un-folded at the cost of an arity
+    /// test and at most three span comparisons.
+    ///
     /// Every arm ends `..self.clone()`, which carries each unnamed field
     /// through unchanged. So a derived index added to [`World`] is folded by
     /// exactly the arms that name it here, and — because
@@ -310,10 +369,12 @@ impl WorldState for World {
                 // admits joins the fold, a revoking one leaves it, and the
                 // registration and grant reach a reader in one snapshot. A
                 // link deposit changes neither M3 nor the exception set, so
-                // both are read as they stand.
+                // both are read as they stand. Then the identity slice's
+                // step, over the world the deposit has just entered
+                // (AUTH-2.80) — the one place the slice moves.
                 let links = self.links.apply_link(x);
                 let grants = grants::fold(&self.grants, &self.namespace, &self.drafts, x);
-                World { links, grants, ..self.clone() }
+                identity::fold(World { links, grants, ..self.clone() }, x)
             }
         }
     }
@@ -364,12 +425,25 @@ impl WorldState for World {
     /// identity rebuild has restored verbatim, so it has no edge beyond
     /// coming after M3.
     ///
-    /// Infallible by M2's trait, and fail-stop in fact: the rebuilds composed
+    /// THEN THE IDENTITY SLICE's resolution (AUTH-2.83), last and after M7's
+    /// rebuild — `identity::resolve`, which reads the REBUILT link slice and
+    /// nothing else: a body that carried the slice keeps it; a body that did
+    /// not, over a link slice holding no credential deposit, resolves to the
+    /// empty table (the fold over no credential deposit IS the genesis table,
+    /// so nothing is guessed); and one holding any such deposit is REFUSED —
+    /// the one `Err` this method answers, M2's own `RebuildError`, which makes
+    /// the base NOT A START POINT (AUTH-2.84) and hands M2's fallback chain
+    /// its turn, at `Kernel::open` and at every `Kernel::world_at` alike. The
+    /// order is a cheap defense and no correctness pin: the candidates are
+    /// read off M7's SERIALIZED link map, which no rebuild moves.
+    ///
+    /// Fallible by M2's trait on that one arm (the AUTH spec's seam delta,
+    /// AUTH-2.85), and fail-stop on every other: the store rebuilds composed
     /// here run over state that was just DESERIALIZED, and M7's asserts what
     /// it needs of it — that every stored link key is T4-valid and
     /// element-level — as the seed asserts that every draft has an owner.
-    /// With no error channel to refuse through, a base that violates any of
-    /// those panics rather than returning — inside `Kernel::open` and
+    /// With no error channel for those, a base that violates any of them
+    /// panics rather than returning — inside `Kernel::open` and
     /// `Kernel::world_at` alike, after that checkpoint loaded, so M2's
     /// next-older-base fallback does not get its turn. A base that cannot
     /// LOAD is the other case, and the one this method never sees: it is
@@ -392,8 +466,18 @@ impl WorldState for World {
     /// what M2's `Kernel::world_at` means where its own cost names this method
     /// and does not size it — so a caller reading that figure for a historical
     /// reconstruction reads this one for the rest of it.
-    fn rebuild_derived(self) -> Self {
-        let World { format, namespace, content, arrangement, links, drafts: _, grants: _ } = self;
+    fn rebuild_derived(self) -> Result<Self, RebuildError> {
+        let World {
+            format,
+            namespace,
+            content,
+            arrangement,
+            links,
+            identity,
+            identity_resolved: _,
+            drafts: _,
+            grants: _,
+        } = self;
         // M3, then M4: neither rebuilds — both slices are fully serialized, so
         // M2's default identity is the whole of their recovery, and their
         // places in the order are held open rather than skipped.
@@ -405,7 +489,19 @@ impl WorldState for World {
         // admitted only when its home is a published document).
         let drafts = publication::seed(&namespace);
         let grants = grants::seed(&namespace, &links, &drafts);
-        World { format, namespace, content, arrangement, links, drafts, grants }
+        // Last, the identity slice: carried, resolved, or refused (AUTH-2.83).
+        let (identity, identity_resolved) = identity::resolve(identity, &links)?;
+        Ok(World {
+            format,
+            namespace,
+            content,
+            arrangement,
+            links,
+            identity: Some(identity),
+            identity_resolved,
+            drafts,
+            grants,
+        })
     }
 }
 

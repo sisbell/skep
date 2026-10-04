@@ -64,6 +64,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 use skep_blobs::{BlobError, Finished, UploadId, UploadRecord};
+use skep_identity::HasIdentity;
 use skep_namespace::{HasM3, PrincipalId};
 
 use super::actor::Resolved;
@@ -152,16 +153,18 @@ impl Daemon {
             Actor::Principal(b) => b.principal,
             Actor::Guest(_) => return refuse_upload("unauthenticated"),
         };
-        if self.auth.fold.snapshot().claimant().is_none() {
+        // ONE head snapshot for the claim and the tier: the world and the
+        // table it carries are one committed state.
+        let snap = self.engine.kernel().snapshot();
+        if snap.world().identity().claimant().is_none() {
             return refuse_upload("claim_first");
         }
-        let account_tier = {
-            let snap = self.engine.kernel().snapshot();
-            snap.world()
-                .m3()
-                .principal_prefix(principal)
-                .is_some_and(|p| p.level() == skep_address::Level::Account)
-        };
+        let account_tier = snap
+            .world()
+            .m3()
+            .principal_prefix(principal)
+            .is_some_and(|p| p.level() == skep_address::Level::Account);
+        drop(snap);
         if !account_tier {
             return refuse_upload("node_tier");
         }
@@ -387,8 +390,7 @@ impl Daemon {
         let now = self.media.now_ms();
         let resolved = {
             let snap = self.engine.kernel().snapshot();
-            let identity = self.auth.fold.snapshot();
-            self.resolve_actor(req, snap.world(), &identity)
+            self.resolve_actor(req, snap.world(), snap.world().identity())
         };
         let same = matches!(&resolved.actor, Actor::Principal(b) if MediaGate::key(b.principal) == key);
         if !same {

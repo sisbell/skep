@@ -26,9 +26,31 @@ use crate::error::{CheckpointError, OpenError, TxnError};
 use crate::journal::{
     self, Attestation, CommitFail, FirstSyncWord, Journal, JournalWriter, ScanFail, UnwindRepair,
 };
-use crate::replay;
+use crate::replay::{self, SkippedBase};
 use crate::{LockKey, Seq, WorldState};
 use applier::ApplierLock;
+
+/// What a journaled [`Kernel::open`] FOUND (§7): the start point its
+/// derivation resolved from, and every retained checkpoint it passed over on
+/// the way there, each with the refusal that passed it over — the account
+/// `open` owes its caller under the AUTH spec's M2 seam delta ("`open` …
+/// reports the start point it resolved from", AUTH-2.85), so the daemon above
+/// can log at startup which checkpoint it did NOT start from and where it did
+/// (AUTH-2.86). A report and never a verdict: a skipped base is no failure of
+/// the open — the derivation succeeded from an older one — and the chain's
+/// one failure, the exhausted chain, is [`OpenError::BadCheckpoint`]'s.
+/// Absent under [`Durability::InMemory`], which loads nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Recovery {
+    /// `S_load` — the coordinate of the base the recovered world was folded
+    /// from: a retained checkpoint's seq, or `Seq(0)` where genesis stood in.
+    pub start_point: Seq,
+    /// The retained checkpoints above the start point that could not stand
+    /// in, newest first, each with why — a header or body that failed its
+    /// checks, a body that would not decode, or a seed
+    /// [`WorldState::rebuild_derived`] refused.
+    pub skipped: Vec<SkippedBase>,
+}
 
 /// One installed committed state: the root's identity IS the version
 /// coordinate (§Core data model). Reached only through [`Snapshot`], and
@@ -323,6 +345,9 @@ struct Journaled<W> {
     /// the boundary ([`Kernel::world_at`], [`Kernel::chain_at`],
     /// [`Kernel::attestation_at`]).
     genesis: W,
+    /// What the open found: the start point and the bases it passed over
+    /// ([`Kernel::recovery`]).
+    recovery: Recovery,
     /// The `open()`-held exclusive advisory lock, kept for its `Drop`: the
     /// flock releases when this file closes (Lifecycle).
     _lock: File,
@@ -380,11 +405,14 @@ impl<W: WorldState> Kernel<W> {
     ///
     /// Under [`Durability::Fsync`]: take the exclusive advisory journal lock
     /// (a second `open()` of the same journal fails with [`OpenError::Io`]);
-    /// load the latest valid RETAINED checkpoint @`S_load` — on a bad one fall
-    /// back to the next-older retained checkpoint, then to genesis while still
-    /// reachable (earliest surviving segment's `firstSeq` still `Seq(1)`;
-    /// chain exhausted ⟹ [`OpenError::BadCheckpoint`]) — run
-    /// [`WorldState::rebuild_derived`], scan the journal (Pass 1: derive `W`
+    /// load the latest valid RETAINED checkpoint @`S_load` and seed it through
+    /// [`WorldState::rebuild_derived`] — on a bad one, or one whose seed
+    /// REFUSES ([`RebuildError`](crate::RebuildError): a base that is not a
+    /// start point, AUTH-2.84/2.85), fall back to the next-older retained
+    /// checkpoint, then to genesis while still reachable (earliest surviving
+    /// segment's `firstSeq` still `Seq(1)`; chain exhausted ⟹
+    /// [`OpenError::BadCheckpoint`]), and report the start point and every
+    /// base passed over as [`Kernel::recovery`] — scan the journal (Pass 1: derive `W`
     /// = the last committed marker's `last_seq`, classify corrupt runs by
     /// inferred `Seq` max — in `(S_load, W]` ⟹ [`OpenError::Corruption`],
     /// halt, never drop), replay exactly `S_load < Seq ≤ W` through
@@ -544,7 +572,8 @@ impl<W: WorldState> Kernel<W> {
                 retain_checkpoints,
                 ..
             } => {
-                let (root, journal, lock) = Self::recover(journal_path, &genesis, cfg.salt)?;
+                let (root, journal, lock, recovery) =
+                    Self::recover(journal_path, &genesis, cfg.salt)?;
                 (
                     root,
                     journal,
@@ -552,6 +581,7 @@ impl<W: WorldState> Kernel<W> {
                         dir: journal_path.clone(),
                         retain_checkpoints: *retain_checkpoints,
                         genesis,
+                        recovery,
                         _lock: lock,
                     }),
                 )
@@ -563,24 +593,28 @@ impl<W: WorldState> Kernel<W> {
     /// Recover the journal at `dir` into the root it commits from, its live
     /// appender — handed `salt_source`, the configured [`SaltSource`] every
     /// transaction it commits draws from (`SKJ4`); recovery itself draws
-    /// nothing, reading each salt off its marker — and the exclusion lock the
-    /// kernel holds for its lifetime (§7).
+    /// nothing, reading each salt off its marker — the exclusion lock the
+    /// kernel holds for its lifetime, and the account of the base it stood
+    /// on and the bases it passed over (§7).
     fn recover(
         dir: &Path,
         genesis: &W,
         salt_source: SaltSource,
-    ) -> Result<(Committed<W>, Journal, File), OpenError> {
+    ) -> Result<(Committed<W>, Journal, File, Recovery), OpenError> {
         fs::create_dir_all(dir)?;
         let lock = journal::acquire_journal_lock(dir)?;
         let segs = journal::list_segments(dir)?;
         let checkpoints = checkpoint::list(dir)?;
 
-        // The base, with its whole fallback chain: newest valid retained
-        // checkpoint → next-older retained → genesis-while-reachable; an
-        // exhausted chain is the operator-intervention condition (§6/§7).
+        // The base, with its whole fallback chain: newest retained checkpoint
+        // that loads and seeds → next-older retained → genesis-while-reachable;
+        // an exhausted chain is the operator-intervention condition (§6/§7).
+        // What the chain passed over is reported, never a failure.
         let base = replay::select_base(&checkpoints, &segs, None, genesis).map_err(|fail| {
             OpenError::BadCheckpoint { cause: fail.cause }
         })?;
+        let recovery =
+            Recovery { start_point: Seq(base.s_load()), skipped: base.skipped().to_vec() };
 
         // THE FIRST-SYNC-WORD PROBE, ahead of the scan (the encoding report's
         // §8; the owner's ruling of 2026-09-23). A segment written under
@@ -676,6 +710,7 @@ impl<W: WorldState> Kernel<W> {
             },
             Journal::Segments(writer),
             lock,
+            recovery,
         ))
     }
 
@@ -1028,6 +1063,17 @@ impl<W: WorldState> Kernel<W> {
     /// only write/checkpoint paths fail with `Poisoned`.
     pub fn snapshot(&self) -> Snapshot<W> {
         Snapshot(self.root.load_full())
+    }
+
+    /// What this kernel's [`Kernel::open`] found in its journal directory —
+    /// the start point it resolved from and the retained checkpoints it passed
+    /// over ([`Recovery`]; §7; AUTH-2.85) — or `None` under
+    /// [`Durability::InMemory`], which loaded nothing. Fixed at `open`: a
+    /// checkpoint taken since neither adds to it nor retires an entry, since
+    /// the report is of the open and not of the directory as it now stands.
+    /// Lock-free, like every other read.
+    pub fn recovery(&self) -> Option<&Recovery> {
+        self.journaled.as_ref().map(|journaled| &journaled.recovery)
     }
 
     /// The currently installed root's seq — equal AT THE INSTANT OF CALL to a

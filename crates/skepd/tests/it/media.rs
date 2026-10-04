@@ -664,7 +664,12 @@ fn index_rebuild_at_open_scales_with_the_world() {
                     parsed += 1;
                 }
             }
-            let parse = parsing.elapsed() - walk_alone.min(parsing.elapsed());
+            // ONE read of the clock: two `elapsed()` calls around the `min`
+            // let a later, larger reading be the subtrahend's bound while the
+            // earlier, smaller one was the minuend, and a parse that took
+            // about as long as the walk underflowed under the gate's load.
+            let parsing_took = parsing.elapsed();
+            let parse = parsing_took - walk_alone.min(parsing_took);
             // THE ALTERNATIVE WALK: every registered document's content
             // frontier — the mint asked and not staged is the chain's peek
             // — with one `value_at` per minted address.

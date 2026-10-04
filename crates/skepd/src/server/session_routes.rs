@@ -3,6 +3,7 @@
 use std::time::Instant;
 
 use serde_json::Value;
+use skep_identity::HasIdentity;
 use skep_namespace::PrincipalId;
 
 use super::actor::Resolved;
@@ -53,13 +54,15 @@ impl Daemon {
                 return refuse(TransportError::MalformedSessionRequest, Some(&detail))
             }
         };
+        // ONE head snapshot: the world and the key table it carries, so the
+        // handshake's account registry and its key set are one committed
+        // state.
         let snap = self.engine.kernel().snapshot();
-        let identity = self.auth.fold.snapshot();
         let outcome = handshake(
             &self.auth.cfg,
             &self.auth.challenges,
             snap.world(),
-            &identity,
+            snap.world().identity(),
             body,
             req.peer,
             req.origin.as_deref(),

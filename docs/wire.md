@@ -2212,8 +2212,8 @@ published by law), so NO session is needed and a guest and a bound
 principal are answered byte-identically; the no-session read is
 deliberate — and served on `/op-at` too, as of any committed position
 (the same
-dispatcher; a historical world's identity table is rebuilt from the
-deposits committed by then, under the reconstruction budget like every
+dispatcher; the identity table rides in the reconstructed world, folded by
+the same replay in commit order, under the reconstruction budget like every
 historical answer). A non-account address rejects with the code
 `not_an_account` (`reorder`); a keyless account answers empty
 lists; an `id` is accepted and ignored, as on every read. → `key_set`.

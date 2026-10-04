@@ -22,16 +22,18 @@ use crate::verdict::{Effect, Inert, Verdict};
 static EMPTY_KEY_SET: LazyLock<KeySet> = LazyLock::new(KeySet::default);
 
 /// AUTH-1.38 — the board's key table plus claim: a folded projection,
-/// advanced only by [`step`] and never journaled, which the spec seats as a
-/// World slice serialized in checkpoints; as built skepd holds it beside the
-/// engine and rebuilds it at every open (the crate-level composition note).
-/// Account addresses have ONE representation in the slice — both `sets`'
-/// keys and `claimant` are `Address` (AUTH-1.39). The serialized shape is
-/// AUTH-1.40's compatibility surface — the checkpoints, the engine's
-/// `#[serde(default)] identity: Option<IdentityState>`, the cross-mirror
-/// `/dump` pin, none of which the build writes yet — and freezes with the
-/// first checkpoint a v1 board writes. `IdentityState` at N is a function of
-/// the record stream ≤ N and the fold's frozen constants, and of nothing
+/// advanced only by [`step`] and never journaled, seated as the engine's
+/// World slice and serialized in every checkpoint (AUTH-2.79; the crate-level
+/// composition note) — the engine steps it at each credential deposit's
+/// commit and a reopen replays it from the last checkpoint that carries it,
+/// so no host rebuilds it from the deposits. Account addresses have ONE
+/// representation in the slice — both `sets`' keys and `claimant` are
+/// `Address` (AUTH-1.39). The serialized shape is AUTH-1.40's compatibility
+/// surface — the checkpoints, the engine's `#[serde(default)] identity:
+/// Option<IdentityState>`, which the engine writes today, and the
+/// cross-mirror `/dump` pin, which it does not yet — and freezes with the
+/// first checkpoint a served board writes. `IdentityState` at N is a function
+/// of the record stream ≤ N and the fold's frozen constants, and of nothing
 /// else (I2, AUTH-2.90).
 ///
 /// Standing invariant — every row of `sets` is KEYED, its enrolled map
@@ -54,9 +56,10 @@ pub struct IdentityState {
 
 /// AUTH-2.60 — the bound a host that SEATS the slice implements (the World in
 /// AUTH-2.79's cast; a mirror's projection), so identity readers dispatch
-/// over the host instead of being handed the slice. As built no host
-/// implements it: skepd holds the fold beside its `World` and hands each
-/// reader `&IdentityState` (the crate-level composition note).
+/// over the host instead of being handed the slice. The engine's `World`
+/// implements it over the slice it carries, and skepd's readers take the
+/// slice off whichever World snapshot they hold through it (the crate-level
+/// composition note).
 pub trait HasIdentity {
     /// The identity slice.
     fn identity(&self) -> &IdentityState;

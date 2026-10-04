@@ -3,22 +3,24 @@
 //! of them. Each is the ghost document's subspace-3 element `ordinal` —
 //! `1.1.0.1.0.1 · 0 · 3 · ordinal`, the core vocabulary's home
 //! (`commons-map.md`), where the AUTH round's credential types
-//! (`3.{1,2,3}`, the daemon's own constants) already sit.
+//! (`3.{1,2,3}`) sit first.
 //!
-//! NOT PINNED HERE, and where they are: the credential types. The engine
-//! keys on none of them, so they take no reader below. ENROLL `3.1` and
-//! RETIRE `3.2` are spelled twice, each where its consumer can read it — the
-//! daemon's `T_ENROLL` / `T_RETIRE` for the credential fold, and M5's
-//! [`deposit_class_types`](skep_arrangement::deposit_class_types), the set
-//! the insert door tests a deposit declaration's class type against
-//! (PUB-2.11; RES-249, RES-261), M5 sitting below this crate and the daemon
-//! alike. The daemon's suite pins the two spellings EQUAL; the ledger's tests
-//! below hold M5's set prefix-free against every pin, so a pin that joins
+//! THE CREDENTIAL TYPES are pinned here too, since the World seats the
+//! identity fold (AUTH-2.79): ENROLL `3.1`, RETIRE `3.2` and CLAIM `3.3`
+//! ([`t_enroll`], [`t_retire`], [`t_claim`]), and the ONE `TypeAddrs` built
+//! over them, [`IDENTITY_TYPES`], which the fold hook and the daemon's
+//! classifiers all read. ENROLL and RETIRE are spelled twice — here, and in
+//! M5's [`deposit_class_types`](skep_arrangement::deposit_class_types), the
+//! set the insert door tests a deposit declaration's class type against
+//! (PUB-2.11; RES-249, RES-261), M5 sitting below this crate — and the
+//! ledger's tests hold M5's set to be exactly the pins it spells again, member
+//! for member, and prefix-free against every other, so a pin that joins
 //! cannot land on, above or beneath a deposit-class type unnoticed.
 //!
-//! Two consumers: the engine's own derived indexes ([`t_grant`] and
-//! [`t_replaces`] for the grant fold, [`t_edition`] for the audit-view
-//! edition-claim lookup), and the daemon's write-path type-recognition input
+//! Three consumers: the engine's own folds ([`IDENTITY_TYPES`] for the
+//! identity slice; [`t_grant`] and [`t_replaces`] for the grant fold,
+//! [`t_edition`] for the audit-view edition-claim lookup), and the daemon's
+//! write-path type-recognition input
 //! (PUB round 2, lane 3.5 §1; owner ruling D3, 2026-09-05) — the class
 //! addresses a `nullify` is refused at (PUB-6.30's grant, PUB-6.64's
 //! audit-view members), pinned here beside the ones the engine reads so ONE
@@ -63,13 +65,14 @@
 //! — the daemon's write path does, at every pin it refuses a `nullify` at —
 //! relies on it, so a pin sitting under another's prefix makes one class
 //! swallow the other and silently widens or narrows a refusal nobody chose.
-//! The tests below hold it off ONE list of the pins, which is where a
-//! twenty-first joins: nothing else here can notice a pin that reaches a
-//! consumer without joining the guarantee.
+//! The tests (`types/tests.rs`) hold it off ONE list of the pins, which is
+//! where the next pin joins: nothing else here can notice a pin that reaches
+//! a consumer without joining the guarantee.
 
 use std::sync::LazyLock;
 
 use skep_address::{validate, Address, Nat, Tumbler};
+use skep_identity::TypeAddrs;
 
 /// A commons type address: the ghost document's subspace-3 element `ordinal`.
 /// Called once per pin, at that pin's first read.
@@ -80,6 +83,52 @@ fn commons_type(ordinal: u32) -> Address {
     )
     .expect("a subspace-3 element of the ghost document is T4-valid by construction")
 }
+
+// ── the credential types (AUTH-2.79; AUTH-7.1 horn B) ───────────────────────
+
+/// The ENROLLMENT record's type — `1.1.0.1.0.1.0.3.1`: subspace 3 of the
+/// ghost document, ordinal 1 (AUTH-7.1 horn B's allocation, the
+/// commons-seeding table's first core row). M5's deposit class spells it a
+/// second time, as the type a record atom is DECLARED under at its insert
+/// (PUB-2.63), and the ledger's tests hold the two EQUAL.
+///
+/// Why subspace 3 discharges AUTH-3.70's unreachability obligation with no
+/// store edit: content V-spec RESOLUTION only ever yields I-spans in the
+/// CONTENT subspace (subspace 1) of real documents — M3's content mints are
+/// the resolution's whole codomain — and no M3 door mints into any document's
+/// subspace 3 at all, so these names are never allocated and no resolved span
+/// can equal their subtree spans. The daemon's `deposits_credential_link`
+/// therefore answers false for every `Resolve` type slot without resolving
+/// anything, which is exactly AUTH-2.61's lock-free classifier.
+pub fn t_enroll() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| commons_type(1));
+    &ADDR
+}
+
+/// The RETIREMENT record's type — `1.1.0.1.0.1.0.3.2`, M5's deposit class's
+/// second member, held EQUAL below.
+pub fn t_retire() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| commons_type(2));
+    &ADDR
+}
+
+/// The BOARD CLAIM's type — `1.1.0.1.0.1.0.3.3`. A claim deposits no atom
+/// (AUTH-2.48), so M5's set does not hold it.
+pub fn t_claim() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| commons_type(3));
+    &ADDR
+}
+
+/// THE ONE `TypeAddrs` (AUTH-2.79) — an I2 frozen constant (AUTH-2.90),
+/// constructed once per build from the three pins above via
+/// [`TypeAddrs::new`], which precomputes the three subtree spans the fold's
+/// `kind_of` compares a type slot against (AUTH-2.21). Every classifier
+/// reads THIS instance — the World's fold hook, the daemon's lock-free op
+/// classifier, its precheck and its write-path type-recognition input — so
+/// none can disagree about what a credential is. `TypeAddrs::new` asserts the
+/// three pairwise distinct, once, here.
+pub static IDENTITY_TYPES: LazyLock<TypeAddrs> =
+    LazyLock::new(|| TypeAddrs::new(t_enroll().clone(), t_retire().clone(), t_claim().clone()));
 
 /// The GRANTS class type address — `1.1.0.1.0.1.0.3.90`.
 ///
@@ -196,14 +245,17 @@ pub fn t_succession_policy() -> &'static Address {
     skep_registry::t_succession_policy()
 }
 
-/// Every pin of this ledger that is NO registry row, in the ledger's order
-/// — the grant, the edition claim, endorse, the consumption marker, the
+/// Every CLASS pin of this ledger that is NO registry row, in the ledger's
+/// order — the grant, the edition claim, endorse, the consumption marker, the
 /// journal designation, the rail record, the steward's classification and
 /// `replaces`: the parent's domain as the engine sees it (REG-1.31), which
 /// the seeding check compares the registry's rows against at every genesis
-/// (REG-1.30, REG-1.32). The daemon widens it by the credential constants,
-/// spelled nowhere below the daemon. The ledger's tests hold this list to be
-/// exactly the pins outside the registry's table.
+/// (REG-1.30, REG-1.32). The three credential types stand beside this list
+/// rather than in it — they are the fold's kinds, not a class the engine's
+/// indexes or the write path's refusals read — and the daemon widens the
+/// domain by them ([`t_enroll`], [`t_retire`], [`t_claim`]) and by M5's
+/// deposit-class spellings. The ledger's tests hold this list to be exactly
+/// the pins outside the registry's table but those three.
 pub fn pins_outside_the_registry() -> [&'static Address; 8] {
     [
         t_grant(),
@@ -303,177 +355,4 @@ pub fn t_steward_classification() -> &'static Address {
 }
 
 #[cfg(test)]
-mod tests {
-    use skep_address::is_prefix;
-
-    use super::*;
-
-    /// One pin's READER — the accessor half of a [`PINS`] row, and the word
-    /// the module doc uses for it.
-    type Reader = fn() -> &'static Address;
-
-    /// THE LEDGER as the tests walk it: each pin's reader, with the commons
-    /// ordinals its own doc cites — one for a kind's row, the kind's then
-    /// the subtype's for a registry subtype row. ONE list, because a pin's
-    /// obligations are the ledger's rather than that pin's — three hand-kept
-    /// lists would be three places to be forgotten, and a pin absent from
-    /// all of them reaches the daemon's refusal set with nothing here
-    /// failing. So this is the single gate a twenty-first pin passes
-    /// through, and each test below is one question asked of every row.
-    const PINS: [(Reader, &str); 20] = [
-        (t_grant, "90"),
-        (t_edition, "14"),
-        (t_successor_of, "59"),
-        (t_endorse, "42"),
-        (t_consumption_marker, "91"),
-        (t_journal_designation, "22"),
-        (t_rail_record, "60"),
-        (t_steward_classification, "61"),
-        (t_replaces, "12"),
-        (t_binding, "55"),
-        (t_endpoint, "56"),
-        (t_takedown, "57"),
-        (t_takedown_base, "57.1"),
-        (t_takedown_lifted, "57.2"),
-        (t_policy_link, "58"),
-        (t_policy_link_own, "58.1"),
-        (t_disavowal, "58.2"),
-        (t_expulsion_ground, "58.3"),
-        (t_succession_ground, "58.4"),
-        (t_succession_policy, "58.5"),
-    ];
-
-    /// Whether `a` is a registry row — one of `skep-registry`'s twelve.
-    fn is_registry_row(a: &Address) -> bool {
-        skep_registry::rows().iter().any(|r| r.address == *a)
-    }
-
-    /// The pairs the registry's own nesting admits (REG-1.20): each subtype
-    /// row under its own kind's row, and nothing else.
-    fn nested_pairs() -> Vec<(&'static Address, &'static Address)> {
-        skep_registry::rows()
-            .iter()
-            .filter_map(|r| {
-                let subtype = r.subtype?;
-                Some((&skep_registry::row(subtype.kind(), None).address, &r.address))
-            })
-            .collect()
-    }
-
-    /// The ledger's GUARANTEE (the module doc's): the pins are pairwise
-    /// distinct and — since a consumer recognizes a class's SUBTYPES by
-    /// prefix — pairwise prefix-free, so no class swallows another; the ONE
-    /// prefix relation admitted is a registry subtype row under its own
-    /// kind's row, the nesting the registry designs (REG-1.20) — so every
-    /// registry row stays prefix-free against every pin outside the
-    /// registry's table, and the kinds against each other.
-    #[test]
-    fn the_commons_pins_are_pairwise_prefix_free_but_for_the_registrys_own_nesting() {
-        let pins: Vec<&'static Address> = PINS.into_iter().map(|(read, _)| read()).collect();
-        let nested = nested_pairs();
-        assert_eq!(nested.len(), 7, "seven subtype rows nest under their kinds");
-        for (i, a) in pins.iter().enumerate() {
-            for b in &pins[i + 1..] {
-                assert_ne!(a, b, "{} is pinned twice", a.tumbler());
-                if is_prefix(a.tumbler(), b.tumbler()) || is_prefix(b.tumbler(), a.tumbler()) {
-                    assert!(
-                        nested.contains(&(a, b)) || nested.contains(&(b, a)),
-                        "{} and {} are prefix-related and no registry kind/subtype pair",
-                        a.tumbler(),
-                        b.tumbler()
-                    );
-                }
-            }
-        }
-    }
-
-    /// The deposit class's types — M5's set: the credential types ENROLL
-    /// and RETIRE (the module doc's pointer), and the registry's binding and
-    /// endpoint, spelled a second time — are each EITHER exactly one of the
-    /// two registry rows the set spells again (held equal to the pin, member
-    /// for member, by the daemon's suite too) OR prefix-free against every
-    /// pin: none IS another pin, which would make a typed-link class with no
-    /// atom (the grant, the edition claim, `successor-of`) a member the
-    /// insert door admits a declared deposit under (PUB-2.11, RES-261), and
-    /// none sits above or beneath one, which would make the daemon's
-    /// prefix-recognizing write path read a credential as that pin's class
-    /// or subtype. Walked off the same ONE list, so a twenty-first pin meets
-    /// the set where it joins.
-    #[test]
-    fn the_deposit_class_types_are_prefix_free_against_every_pin_but_the_two_rows_they_spell_again() {
-        let spelled_again: Vec<&Address> = skep_arrangement::deposit_class_types()
-            .iter()
-            .filter(|ty| is_registry_row(ty))
-            .collect();
-        assert_eq!(spelled_again, [t_binding(), t_endpoint()], "the set's registry members, exactly");
-        for ty in skep_arrangement::deposit_class_types() {
-            if is_registry_row(ty) {
-                continue;
-            }
-            for (read, _) in PINS {
-                let pin = read();
-                assert!(
-                    !is_prefix(ty.tumbler(), pin.tumbler()) && !is_prefix(pin.tumbler(), ty.tumbler()),
-                    "the deposit-class type {} and the pin {} are prefix-related",
-                    ty.tumbler(),
-                    pin.tumbler()
-                );
-            }
-        }
-    }
-
-    /// Every pin sits in the ghost document's subspace 3, where nothing is
-    /// ever minted (the credential types' own unreachability argument,
-    /// AUTH-3.70), so no content resolution can ever equal one — and at the
-    /// ordinals its own doc cites, so a silent renumbering fails here.
-    #[test]
-    fn every_pin_is_a_ghost_subspace_3_element() {
-        for (read, ordinals) in PINS {
-            assert_eq!(read().tumbler().to_string(), format!("1.1.0.1.0.1.0.3.{ordinals}"));
-        }
-    }
-
-    /// THE REGISTRY'S ROWS ARE THE CRATE'S TABLE (the module doc): the
-    /// eleven readers hand back the crate's own held rows, `t_successor_of`
-    /// — the engine's own pin, the registry's fourth kind — EQUALS the
-    /// crate's `3.59`, and the pins outside the registry are exactly the
-    /// ledger's rows the crate's table does not hold.
-    #[test]
-    fn the_registry_rows_are_the_crates_table_and_successor_of_is_held_equal() {
-        for r in skep_registry::rows() {
-            let held = PINS.iter().find(|(read, _)| *read() == r.address);
-            assert!(held.is_some(), "{} is a registry row and no pin", r.address.tumbler());
-        }
-        assert_eq!(t_successor_of(), skep_registry::t_successor_of());
-        assert!(std::ptr::eq(t_binding(), skep_registry::t_binding()), "one held row, not a copy");
-        let outside: Vec<&Address> =
-            PINS.into_iter().map(|(read, _)| read()).filter(|a| !is_registry_row(a)).collect();
-        assert_eq!(outside, pins_outside_the_registry());
-    }
-
-    /// THE PIN SPELLED TWICE (the module doc): [`t_replaces`] and M7's own
-    /// spelling, which its sole-writer fences and its one writer read, are
-    /// one address — so the class the fold reads a grant's `replaces` by is
-    /// the class M7 fences and mints, and a renumbering of either fails here.
-    #[test]
-    fn the_replaces_pin_is_the_address_m7_fences_and_mints() {
-        assert_eq!(t_replaces(), skep_links::replaces_type());
-        assert!(skep_links::is_replaces_class(&skep_links::enc([t_replaces()])));
-    }
-
-    /// A pin is ONE value, held: two reads hand back the same address, not
-    /// two equal ones. The ledger's readers are on hot paths — the grant fold
-    /// consults [`t_grant`] per folded link record, live and through replay —
-    /// so a reader that rebuilt its address per call would be paying nine
-    /// big-integer allocations and a T4 walk for a compiled constant.
-    #[test]
-    fn every_pin_is_one_held_value_rather_than_a_construction_per_read() {
-        for (read, _) in PINS {
-            assert!(
-                std::ptr::eq(read(), read()),
-                "{} is rebuilt per read, not held",
-                read().tumbler()
-            );
-        }
-    }
-}
+mod tests;

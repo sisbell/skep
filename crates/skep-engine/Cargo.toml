@@ -51,6 +51,13 @@ skep-namespace = { path = "../skep-namespace" }
 skep-content = { path = "../skep-content" }
 skep-arrangement = { path = "../skep-arrangement" }
 skep-links = { path = "../skep-links" }
+# AUTH — the identity fold the World SEATS as its fifth slice (AUTH-2.79):
+# the `IdentityState` every checkpoint carries, stepped by `World::apply` at
+# each credential deposit's commit (AUTH-2.80) through the fold's own seam,
+# which `World` implements (`FoldCtx`, `Values`), and read through
+# `HasIdentity`. The crate is pure and knows no world; this is the one edge
+# between the two, and it points this way.
+skep-identity = { path = "../skep-identity" }
 # M9 — the Coordinator is engine-assembled: the factory bodies presuppose the
 # engine can build Vstream/LinkWriter from &Kernel<W> (M9's standing assembly
 # obligation), and its catalog projects M7's registry constant, which the

@@ -115,13 +115,13 @@ impl WorldState for TestWorld {
         next
     }
 
-    fn rebuild_derived(self) -> Self {
+    fn rebuild_derived(self) -> Result<Self, skep_kernel::RebuildError> {
         let sum = self.items.iter().sum();
-        TestWorld {
+        Ok(TestWorld {
             sum,
             rebuilds: self.rebuilds + 1,
             items: self.items,
-        }
+        })
     }
 }
 

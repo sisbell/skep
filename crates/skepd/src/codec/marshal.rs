@@ -64,18 +64,19 @@ fn daemon_rejected(r: DaemonRejection<'_>) -> Vec<u8> {
 /// channel's shapes are rendered (the codec's module doc draws the line,
 /// and the transport's own shapes sit on the other side of it).
 ///
-/// `set` is [`crate::auth::fold::key_set_of`]'s answer over the
-/// `(world, identity)` pair the route holds: `None` is the not-an-account
-/// case and answers the EXISTING code `not_an_account`; a keyless account
-/// answers empty lists. Entries ride in the key set's own fingerprint
-/// order.
+/// `set` is [`crate::auth::fold::key_set_of`]'s answer over the world the
+/// route holds and the identity slice that world carries: `None` is the
+/// not-an-account case and answers the EXISTING code `not_an_account`; a
+/// keyless account answers empty lists. Entries ride in the key set's own
+/// fingerprint order.
 ///
-/// `as_of` is a BOUND and not merely a stamp: every entry is the account's
-/// set as of some position AT OR BEFORE it, never after — which is what
-/// lets a client correlate the answer with `/changes` and re-read it at
-/// `/op-at`. The caller owes the ordering that makes it true (the fold is
-/// read before the world, since the fold is stepped after its deposit
-/// commits); this function cannot check it.
+/// `as_of` is a stamp AND a bound: every entry is the account's set AS OF
+/// that position, since the world the route holds carries its table
+/// (AUTH-2.79) and the caller stamps the answer with that world's own
+/// coordinate — the head snapshot's `seq` on `/op`, the requested position on
+/// `/op-at` — which is what lets a client correlate the answer with
+/// `/changes` and re-read it at `/op-at`. The caller owes handing the slice
+/// of the SAME world it stamps; this function cannot check it.
 pub(crate) fn key_set_reply(as_of: Seq, set: Option<&KeySet>) -> Vec<u8> {
     let Some(set) = set else {
         // M10's own code, so M10's own advice: the table is asked rather than

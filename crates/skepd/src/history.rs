@@ -105,6 +105,13 @@ impl History {
     ///
     /// Admitted through [`History::admit`], so [`Unavailable::Busy`]
     /// precedes every journal verdict about `at`.
+    ///
+    /// The world handed back carries its identity slice as of `at`
+    /// (AUTH-6.20: the slice riding in the reconstructed World), folded by
+    /// the same replay that built the rest of it; a position no retained
+    /// checkpoint at or below it can stand in for — every one slice-less over
+    /// credential deposits, the journal below reclaimed — is refused whole as
+    /// `Reclaimed` (AUTH-2.87), never served without its table.
     pub(crate) fn reconstruct(
         &self,
         engine: &Engine,

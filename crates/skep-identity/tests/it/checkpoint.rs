@@ -200,3 +200,33 @@ fn populated_state_survives_serde() {
     assert_eq!(back.claimant(), Some(&addr(CLAIMANT)));
     assert!(back.key_set(&addr(ACCT_A)).contains(&fp(1)));
 }
+
+/// AUTH-1.40 — the slice AS THE WORLD CARRIES IT: the engine's
+/// `#[serde(default)] identity: Option<IdentityState>`, the LAST field of a
+/// checkpoint body (AUTH-2.79). Under bincode the `Option` is ONE tag byte
+/// then the state's own bytes — `1` then `genesis_checkpoint_encoding_is_pinned`'s
+/// nine for the genesis table, `0` alone for a slice serialized as absent —
+/// so a body written before the slice ENDS where this tag would be, which is
+/// what the engine reads as `None` and resolves at load (AUTH-2.83). The
+/// tag's width is the pin: an `Option` whose discriminant widened, or a slice
+/// wrapped in a struct of its own, moves every later byte of every
+/// checkpoint written since, and the state's own pins would not notice.
+#[test]
+fn the_world_slice_encodes_as_one_tag_byte_then_the_state() {
+    let mut want: Vec<u8> = vec![1]; // `Some`
+    want.extend_from_slice(&0u64.to_le_bytes()); // `sets`: an empty map
+    want.push(0); // `claimant`: None
+    assert_eq!(
+        bincode::serialize(&Some(IdentityState::genesis())).expect("serialize the slice"),
+        want,
+        "a carried genesis table: the tag, then its nine bytes"
+    );
+    assert_eq!(
+        bincode::serialize(&None::<IdentityState>).expect("serialize the absent slice"),
+        [0],
+        "a slice serialized as absent is the one tag byte"
+    );
+    let back: Option<IdentityState> =
+        bincode::deserialize(&want).expect("deserialize the carried slice");
+    assert_eq!(back, Some(IdentityState::genesis()));
+}

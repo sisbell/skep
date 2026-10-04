@@ -7,7 +7,7 @@ use std::thread;
 
 use skep_engine::World;
 use skep_febe::{Codec, Request, Response, SessionId};
-use skep_identity::IdentityState;
+use skep_identity::{HasIdentity, IdentityState};
 use skep_kernel::{Attestation, Snapshot};
 
 use super::actor::Resolved;
@@ -78,9 +78,16 @@ impl Daemon {
     /// pausing an hour before the ceremony's last step is enough), in which
     /// case `H.1` stands and
     /// [`WritePath::write_first_head`](crate::write_path::WritePath::write_first_head)
-    /// writes nothing — made by no session, they meet no list, and
-    /// `IdentityFold::step_committed`'s premise already counts them.
-    fn on_claim_flip(&self, credential_lock: &LockWrite<'_>, serial: &SerialGuard<'_>) {
+    /// writes nothing — made by no session, they meet no list, and they
+    /// deposit no credential, so the slice is as the claim left it. `identity`
+    /// is the POST-COMMIT world's slice — the one that names the claimant the
+    /// flip seated, which the re-install compares against.
+    fn on_claim_flip(
+        &self,
+        credential_lock: &LockWrite<'_>,
+        serial: &SerialGuard<'_>,
+        identity: &IdentityState,
+    ) {
         // THE CRASH WINDOW's seam: armed, the process is held HERE — the
         // claim durable and flipped, no head — for the harness to kill.
         #[cfg(any(test, feature = "test-hooks"))]
@@ -96,7 +103,7 @@ impl Daemon {
         // write's included (l7-C1).
         self.writes.write_first_head(serial);
         self.log_config_warnings(Moment::AtClaim);
-        self.auth.reinstall_blocked_at_claim(credential_lock);
+        self.auth.reinstall_blocked_at_claim(credential_lock, identity);
         // The flip can only have made an entry INERT, so an issue with no
         // entries has nothing to say; where it has one, the whole list in
         // force is named (AUTH-4.36 step 4b's "ignored at install and said
@@ -115,20 +122,19 @@ impl Daemon {
         match self.codec.parse_daemon(&req.body) {
             Err(e) => self.op_reply(&self.codec.unparseable(e)),
             Ok(DaemonOp::KeySet { account }) => {
-                // The one dispatcher (AUTH-6.20): the head pair — the live
-                // fold beside the head snapshot. Principal-free.
+                // The one dispatcher (AUTH-6.20): the head snapshot, whose
+                // World carries the key table (AUTH-2.79). Principal-free.
                 //
-                // The FOLD IS READ FIRST, and that order is load-bearing:
-                // the fold is stepped AFTER its deposit commits
-                // (`commit_under` then `commit_tail`), so a fold read taken
-                // after the world read can hold a key committed past
-                // `as_of` and the answer would then be AHEAD of the
-                // position it names. Read first, every discrepancy is the
-                // one AUTH-3.36 licenses: a set at or behind its stamp,
-                // never past it.
-                let identity = self.auth.fold.snapshot();
+                // ONE snapshot carries both the account registry and the
+                // table, so the answer is the set AT the position it names —
+                // never ahead of its `as_of`, never behind it. The straddle
+                // that stood here — a fold stepped after its deposit's
+                // commit, read in a second step beside the world — is CLOSED:
+                // the engine steps the slice inside the commit that deposits
+                // the credential (AUTH-2.80), and there is no second read to
+                // order.
                 let snap = self.engine.kernel().snapshot();
-                let set = key_set_of(snap.world(), &identity, &account);
+                let set = key_set_of(snap.world(), snap.world().identity(), &account);
                 op_answer(key_set_reply(snap.seq(), set))
             }
             Ok(DaemonOp::Febe { request: frame, presented }) => match write_meta(&frame.op) {
@@ -213,7 +219,7 @@ impl Daemon {
         // 2 — the locks, the locked snapshot, and this site's own resolution.
         let credential_lock = self.auth.credential_lock.read();
         let serial = self.writes.serial_lock();
-        let (snap, identity, Resolved { actor, closed }) = self.locked_state(&serial, req);
+        let (snap, Resolved { actor, closed }) = self.locked_state(&serial, req);
         let binding = match actor {
             Actor::Principal(b) => b,
             Actor::Guest(_) => return with_signal(self.guest_reply(frame), closed),
@@ -222,7 +228,7 @@ impl Daemon {
         if let Err(r) = registry_admission(
             &credential_lock,
             snap.world(),
-            &identity,
+            snap.world().identity(),
             &frame.op,
             binding.signer.as_ref(),
         ) {
@@ -239,11 +245,11 @@ impl Daemon {
         with_signal(self.op_reply(&resp), closed)
     }
 
-    /// The locked state one write sequence stands on: the world snapshot,
-    /// the fold snapshot beside it, and this site's own resolution against
-    /// that pair (AUTH-4.28's WHICH-lookup pin). Taken AFTER the
-    /// serialization lock — which is what the guard argument proves — so no
-    /// commit can intervene between what the gates read and what the
+    /// The locked state one write sequence stands on: the world snapshot —
+    /// which carries the key table its gates read (AUTH-2.79) — and this
+    /// site's own resolution against it (AUTH-4.28's WHICH-lookup pin). Taken
+    /// AFTER the serialization lock — which is what the guard argument proves
+    /// — so no commit can intervene between what the gates read and what the
     /// execute they gate runs against.
     ///
     /// The credential lock is the CALLER's: the two sequences hold
@@ -256,15 +262,10 @@ impl Daemon {
     /// the credential memo — so this is not a pure read of the locked
     /// state, despite the name. Idempotent, for the reason
     /// [`Daemon::resolve_at_head`] states.
-    fn locked_state(
-        &self,
-        _serial: &SerialGuard<'_>,
-        req: &HttpRequest,
-    ) -> (Snapshot<World>, IdentityState, Resolved) {
+    fn locked_state(&self, _serial: &SerialGuard<'_>, req: &HttpRequest) -> (Snapshot<World>, Resolved) {
         let snap = self.engine.kernel().snapshot();
-        let identity = self.auth.fold.snapshot();
-        let resolved = self.resolve_actor(req, snap.world(), &identity);
-        (snap, identity, resolved)
+        let resolved = self.resolve_actor(req, snap.world(), snap.world().identity());
+        (snap, resolved)
     }
 
     /// The answer every Guest arm gives: execute under M10's guest session,
@@ -276,8 +277,8 @@ impl Daemon {
     }
 
     /// The PLAIN sequence (AUTH-3.35): the read lock → the serialization
-    /// lock → [`Daemon::locked_state`] (the head snapshot, the fold beside
-    /// it, and this site's own resolve) → `plain_admission`'s ordered
+    /// lock → [`Daemon::locked_state`] (the head snapshot, the key table it
+    /// carries, and this site's own resolve) → `plain_admission`'s ordered
     /// producers → the media door → execute. The serial lock is taken before
     /// the snapshot so the gates' answers and the execute they gate stand on
     /// one committed state; the producers' ORDER is `plain_admission`'s, not
@@ -292,7 +293,7 @@ impl Daemon {
     ) -> Reply {
         let credential_lock = self.auth.credential_lock.read();
         let serial = self.writes.serial_lock();
-        let (snap, identity, Resolved { actor, closed }) = self.locked_state(&serial, req);
+        let (snap, Resolved { actor, closed }) = self.locked_state(&serial, req);
         let binding = match actor {
             Actor::Principal(b) => b,
             Actor::Guest(_) => return with_signal(self.guest_reply(frame), closed),
@@ -309,7 +310,7 @@ impl Daemon {
         let admitted = match plain_admission(
             &credential_lock,
             snap.world(),
-            &identity,
+            snap.world().identity(),
             &frame.op,
             binding.principal,
             binding.signer.as_ref(),
@@ -360,8 +361,10 @@ impl Daemon {
     /// `resolve_at_head`'s; `op_shape_refusal` and the verbatim deposit —
     /// both pure functions of the frame — run ahead of the lock; then the
     /// write lock → serial → [`Daemon::locked_state`] → recall → precheck →
-    /// execute → the fold step, the memo, and the claim-flip tail — all
-    /// under the write guard.
+    /// execute — which steps the World's identity slice inside the commit
+    /// itself (AUTH-2.80) — → the memo and the claim-flip tail, all under the
+    /// write guard, which is what keeps the precheck and the execute it gates
+    /// one atomic step (AUTH-3.3).
     fn credential_sequence(
         &self,
         resolved: &Resolved,
@@ -409,7 +412,7 @@ impl Daemon {
         // snapshot, and this site's OWN resolution.
         let credential_lock = self.auth.credential_lock.write();
         let serial = self.writes.serial_lock();
-        let (snap, identity, Resolved { actor, closed }) = self.locked_state(&serial, req);
+        let (snap, Resolved { actor, closed }) = self.locked_state(&serial, req);
         let binding = match actor {
             Actor::Principal(b) => b,
             // 4 — the only reachable arms are Unknown | BindingDead
@@ -436,7 +439,7 @@ impl Daemon {
         let record_sig = match crate::auth::policy::precheck(
             &credential_lock,
             snap.world(),
-            &identity,
+            snap.world().identity(),
             &dep,
             binding.signer.as_ref(),
             binding.scope,
@@ -453,7 +456,12 @@ impl Daemon {
         // 7 — execute (commit-record-announce under the held serial lock,
         // then the head writer's turn, which may land the head's own commits
         // before `commit_under` returns — the `post` snapshot at 8 then holds
-        // them, which `step_committed`'s premise accounts for).
+        // them; they deposit no credential, so the slice they carry is the
+        // one this commit stepped). THE SLICE MOVES HERE: the engine's fold
+        // hook steps the World's identity slice inside the transaction that
+        // deposits the link (AUTH-2.80), so the committed world and its key
+        // table are installed together and no reader can see one without the
+        // other.
         //
         // THE CREDENTIAL DEPOSIT'S MARKER SLOT STAYS EMPTY (signed ops; D26,
         // RULED 2026-09-25): the `make_link` half of a credential deposit is
@@ -482,23 +490,23 @@ impl Daemon {
             });
         let ack = self.codec.marshal(&resp);
         if matches!(resp, Response::AckAddr { .. }) {
-            // 8 — the committed tail (AUTH-3.43): the fold step from the
-            // committed deposit against the post-commit snapshot, and the
-            // memo entry, as one operation under the write guard.
+            // 8 — the committed tail (AUTH-3.43): the memo entry under the
+            // write guard, and the flip read off the two slices — the locked
+            // snapshot's before the commit, the post-commit snapshot's after.
             //
             // The `AckAddr` test is a SHAPE test standing in for "this write
             // committed", on two premises: only an address-form `MakeLink`
             // reaches here ([`DepositSpans::of`] is `Some` for nothing
             // else), and M10 acks a committed `make_link` with `AckAddr`.
             // If either failed, a committed deposit would skip this tail
-            // and the live fold would fall SILENTLY behind the world until
-            // restart, with `/op`'s `key_set` and `/op-at`'s at the head
-            // disagreeing meanwhile.
+            // and the ack would go unmemoized and the claim flip's
+            // consequences unrun — never a key: the slice moved inside the
+            // commit, whatever this tail does.
             let post = self.engine.kernel().snapshot();
             let flipped = self.auth.commit_tail(
                 &credential_lock,
-                post.world(),
-                &dep.deposit(),
+                snap.world().identity(),
+                post.world().identity(),
                 binding.sid,
                 req_id,
                 &ack,
@@ -506,7 +514,7 @@ impl Daemon {
             // 9 — the claim flip's tail, under both guards: `H.1` in this
             // same step (signed ops, s1), then the warnings and the list.
             if flipped {
-                self.on_claim_flip(&credential_lock, &serial);
+                self.on_claim_flip(&credential_lock, &serial, post.world().identity());
             }
         }
         with_signal(op_answer(ack), closed)

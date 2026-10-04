@@ -11,6 +11,7 @@ use skep_arrangement::{trunk_of, Deposit};
 use skep_engine::types::{
     t_binding, t_consumption_marker, t_endorse, t_grant, t_journal_designation, t_policy_link,
     t_rail_record, t_replaces, t_steward_classification, t_successor_of, t_takedown,
+    IDENTITY_TYPES,
 };
 use skep_febe::Op;
 use skep_identity::{AuditClass, Fingerprint, IdentityState, TargetClass, WriteTypes};
@@ -22,18 +23,18 @@ use skep_namespace::{
 
 use super::attestation::attestation_check;
 use super::{addr_spans, record_deposit_kind, registry_deposit_kind, CredentialRefusal};
-use crate::auth::fold::{identity_types, published_unprojected};
+use crate::auth::fold::published_unprojected;
 use crate::auth::LockRead;
 use crate::World;
 
 /// The WRITE PATH's type-recognition input (PUB-6.30, PUB-6.64; owner ruling
-/// D3, 2026-09-05) — [`identity_types`]'s sibling: the same three credential
-/// kinds (a clone of the one frozen instance, so the fold and the write path
-/// cannot disagree about a credential), WIDENED beside them by the GRANTS
-/// class and PUB-6.64's audit-view members. Read by [`nullify_refusal`]
-/// alone; the fold and `deposits_credential_link` keep reading
-/// [`identity_types`] (`kind_of`, the I2 rule, is untouched — a class here
-/// is never a credential there).
+/// D3, 2026-09-05) — [`IDENTITY_TYPES`]'s sibling: the same three credential
+/// kinds (a clone of the engine's one frozen instance, so the fold and the
+/// write path cannot disagree about a credential), WIDENED beside them by
+/// the GRANTS class and PUB-6.64's audit-view members. Read by
+/// [`nullify_refusal`] alone; the fold and `deposits_credential_link` keep
+/// reading [`IDENTITY_TYPES`] (`kind_of`, the I2 rule, is untouched — a
+/// class here is never a credential there).
 ///
 /// The class addresses are the engine's commons pins (`skep_engine::types`):
 /// the grant `3.90`, `successor-of` `3.59`, `endorse` `3.42`, the consumption
@@ -54,7 +55,7 @@ use crate::World;
 fn write_types() -> &'static WriteTypes {
     static TYPES: LazyLock<WriteTypes> = LazyLock::new(|| {
         WriteTypes::new(
-            identity_types().clone(),
+            IDENTITY_TYPES.clone(),
             t_grant().clone(),
             [
                 (AuditClass::SuccessorOf, t_successor_of().clone()),
@@ -713,8 +714,10 @@ mod tests {
     use skep_address::subtree_of;
     use skep_identity::CredentialKind;
 
+    use skep_engine::types::t_enroll;
+
     use super::*;
-    use crate::auth::fold::{addr_of, T_ENROLL};
+    use crate::auth::fold::addr_of;
 
     /// PUB-2.15's projection is address arithmetic and total: a version
     /// member answers its document, a document answers itself, a member of
@@ -746,7 +749,7 @@ mod tests {
         let types = write_types();
         let unit = |a: &Address| vec![subtree_of(a.tumbler())];
         assert_eq!(
-            types.target_class(&unit(&addr_of(&T_ENROLL))),
+            types.target_class(&unit(t_enroll())),
             Some(TargetClass::Credential(CredentialKind::Enroll))
         );
         assert_eq!(types.target_class(&unit(t_grant())), Some(TargetClass::Grant));

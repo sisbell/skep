@@ -97,19 +97,19 @@ impl WorldState for World {
             },
         }
     }
-    fn rebuild_derived(self) -> Self {
+    fn rebuild_derived(self) -> Result<Self, skep_kernel::RebuildError> {
         let World {
             m3,
             content,
             m5,
             links,
         } = self;
-        World {
+        Ok(World {
             m3,
             content,
             m5: m5.rebuild_derived(),
             links: links.rebuild_derived(),
-        }
+        })
     }
 }
 

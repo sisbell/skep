@@ -1,8 +1,8 @@
 //! The AUTH session layer and write-path gates (spec parts 03/04/06): the
 //! two origin sets and their publication, the challenge/response handshake,
 //! the sessions store and per-request resolution, the credential write lock
-//! and the pinned refusal producers it scopes, and the identity fold the
-//! daemon composes BESIDE the engine.
+//! and the pinned refusal producers it scopes, and the daemon's readers of
+//! the World's identity slice.
 //!
 //! And, since signed ops (the seam build 2026-09-25), the write-path
 //! signature seam: the ENTRY frame the daemon composes for an attested
@@ -19,11 +19,16 @@
 //! lives — the handshake verifies signatures over bytes, deposits commit
 //! records carrying pubkeys, `key_set` reads records.
 //!
-//! The identity fold is DERIVED state: rebuilt from the recovered world at
-//! open (`fold::canonical_identity`) and advanced from every committed
-//! credential deposit at runtime, under the credential write lock. It is
-//! never persisted by this crate — the journal remains the one source of
-//! truth.
+//! The identity fold is the ENGINE's (AUTH-2.79–2.88): the World carries
+//! the key table and the claim as its identity slice, `World::apply` steps
+//! it at each credential deposit's commit, and every checkpoint carries it —
+//! so this crate holds no fold of its own, rebuilds none at open and
+//! advances none at runtime. Every reader here takes the slice off the one
+//! World snapshot it already holds (`skep_identity::HasIdentity`), so the
+//! world a check reads and the table it reads are one committed state. The
+//! credential write lock stays: it is what makes the precheck and the
+//! execute it gates one atomic step (AUTH-3.3), which no slice placement
+//! supplies.
 
 // What the rest of the daemon reaches.
 pub(crate) mod fold;
@@ -55,11 +60,11 @@ use std::path::Path;
 
 use serde_json::Value;
 use skep_febe::{ReqId, SessionId};
-use skep_identity::LinkDeposit;
+use skep_identity::{HasIdentity, IdentityState};
 
 use crate::codec::obj;
 use crate::World;
-use fold::{CredMemo, IdentityFold};
+use fold::CredMemo;
 use session::{Challenges, Sessions};
 
 // Names this module and its own files use: its children reach them as
@@ -74,14 +79,14 @@ use origin::{bare_origins, signed_origins};
 const MAX_LIVE_NONCES: usize = 4096;
 
 /// The whole auth state one daemon holds: config, the two ephemeral stores,
-/// the credential write lock, the identity fold, and the credential
-/// idempotency memo.
+/// the credential write lock, and the credential idempotency memo. The
+/// identity table is NOT here: it is the World's slice, read off whichever
+/// snapshot a caller holds.
 pub(crate) struct AuthState {
     pub cfg: AuthConfig,
     pub challenges: Challenges,
     pub sessions: Sessions,
     pub credential_lock: CredentialLock,
-    pub fold: IdentityFold,
     pub memo: CredMemo,
     /// The blocked-prefix list's supply channel; `None` where the operator
     /// named no file, and the list then stays empty for the process's life.
@@ -89,11 +94,11 @@ pub(crate) struct AuthState {
 }
 
 impl AuthState {
-    /// Assemble at daemon open: the fold is seeded from the RECOVERED world
-    /// (the canonical rebuild — derived state, never a second persistence
-    /// layer), and the blocked-prefix list is installed from the START-UP
-    /// SUPPLY (AUTH-4.70; RES-115) — after the fold, whose claimant the
-    /// install's comparands read.
+    /// Assemble at daemon open over the RECOVERED world — whose identity
+    /// slice the engine resolved at load (AUTH-2.86: the daemon serves from
+    /// the resolved World) — and install the blocked-prefix list from the
+    /// START-UP SUPPLY (AUTH-4.70; RES-115) against the claimant that slice
+    /// names.
     ///
     /// Fails only on that supply: a file the options name that cannot be
     /// read, is not a list, or is past the channel's byte cap
@@ -113,11 +118,10 @@ impl AuthState {
             challenges: Challenges::new(MAX_LIVE_NONCES),
             sessions: Sessions::new(),
             credential_lock: CredentialLock::new(),
-            fold: IdentityFold::seeded(fold::canonical_identity(world)),
             memo: CredMemo::new(),
             blocked_supply,
         };
-        state.install_blocked(&state.credential_lock.write(), issue);
+        state.install_blocked(&state.credential_lock.write(), issue, world.identity());
         Ok(state)
     }
 
@@ -125,11 +129,11 @@ impl AuthState {
     /// comparands (AUTH-4.36 step 4b) — the header's, the claimant taken
     /// where it names none, the off-board test read against the node prefix
     /// in force — and the result swapped in under the credential write lock.
-    /// The claimant is read HERE, under that lock, because the claim commits
-    /// only under it: the comparands an install resolves are the ones in
-    /// force at its own position.
-    fn install_blocked(&self, lock: &LockWrite<'_>, issue: BlockedIssue) {
-        let identity = self.fold.snapshot();
+    /// `identity` is the slice of the world in force at the install — read
+    /// under that lock by the caller, because the claim commits only under
+    /// it: the comparands an install resolves are the ones in force at its
+    /// own position.
+    fn install_blocked(&self, lock: &LockWrite<'_>, issue: BlockedIssue, identity: &IdentityState) {
         let list =
             BlockedPrefixes::installed_under(issue, identity.claimant(), self.cfg.node_prefix());
         self.cfg.install_blocked(lock, list);
@@ -140,16 +144,17 @@ impl AuthState {
     /// The claimant is the comparand wherever the header names none, and it
     /// is set ONCE, by the claim — so the issue in force is re-compared at
     /// that one transition, under the write guard the claim itself commits
-    /// under.
+    /// under, against `identity`, the POST-COMMIT world's slice, which names
+    /// the claimant the flip seated.
     ///
     /// Answers NOTHING: whether the flip is worth a log line is the log's
     /// question, and the list in force answers it
     /// ([`BlockedPrefixes::issue_is_empty`]) at the site that writes the
     /// line. This install keeps the issue's entries, so that read is the
     /// same either side of it.
-    pub fn reinstall_blocked_at_claim(&self, lock: &LockWrite<'_>) {
+    pub fn reinstall_blocked_at_claim(&self, lock: &LockWrite<'_>, identity: &IdentityState) {
         let issue = self.cfg.blocked_prefixes().issue().clone();
-        self.install_blocked(lock, issue);
+        self.install_blocked(lock, issue, identity);
     }
 
     /// THE REISSUE CHANNEL's daemon half (AUTH-4.70 "RE-ISSUED to the
@@ -171,11 +176,20 @@ impl AuthState {
     ///
     /// The look itself is [`BlockedSupply::reissue`]'s — the file's identity
     /// is that type's own knowledge. What this half owns is the INSTALL, which
-    /// takes a lock the channel knows nothing about.
-    pub fn reissue_blocked_prefixes(&self) -> Option<Reissue> {
-        self.blocked_supply
-            .as_ref()?
-            .reissue(|issue| self.install_blocked(&self.credential_lock.write(), issue))
+    /// takes a lock the channel knows nothing about, and the claimant it
+    /// compares against is read through `head_identity` UNDER that lock —
+    /// the head's slice as it stands once no credential write can land — so
+    /// the comparands an install resolves are the ones in force at its own
+    /// position, as they were when the daemon held a fold of its own.
+    pub fn reissue_blocked_prefixes(
+        &self,
+        head_identity: impl Fn() -> IdentityState,
+    ) -> Option<Reissue> {
+        self.blocked_supply.as_ref()?.reissue(|issue| {
+            let lock = self.credential_lock.write();
+            let identity = head_identity();
+            self.install_blocked(&lock, issue, &identity)
+        })
     }
 
     /// The supply file's path, for the log; `None` where none was named.
@@ -198,12 +212,11 @@ impl AuthState {
     /// why: the wire publishes the PAIR and the client derives the mode, so
     /// the type is the daemon's and not the wire's.
     ///
-    /// ONE fold snapshot for the whole object, so `claimant` and
-    /// `signed_origins` cannot straddle the claim between THEMSELVES;
-    /// `/health`'s own card states the straddle its independent reads still
-    /// admit.
-    pub fn auth_object(&self) -> Value {
-        let identity = self.fold.snapshot();
+    /// ONE slice for the whole object — `identity`, off the one world
+    /// snapshot the route took — so `claimant` and `signed_origins` cannot
+    /// straddle the claim between THEMSELVES; `/health`'s own card states
+    /// the straddle its independent reads still admit.
+    pub fn auth_object(&self, identity: &IdentityState) -> Value {
         let claimed = identity.claimant().is_some();
         let origins = |set: BTreeSet<Origin>| {
             Value::Array(set.iter().map(|o| Value::String(o.as_str().to_string())).collect())
@@ -222,34 +235,47 @@ impl AuthState {
         ])
     }
 
-    /// The credential path's committed tail (AUTH-3.43), whole and under
-    /// the write guard the caller already holds: advance the fold from the
-    /// deposit this write committed, memoize the marshaled ack under the
-    /// frame's id (AUTH-7.20's first horn), and answer whether this step
-    /// flipped the board claimed — the claim-flip warning's trigger.
+    /// The credential path's committed tail (AUTH-3.43), under the write
+    /// guard the caller already holds: memoize the marshaled ack under the
+    /// frame's id (AUTH-7.20's first horn), and answer whether this commit
+    /// flipped the board claimed — the claim-flip warning's trigger — read
+    /// off the two slices the caller holds, the locked snapshot's before the
+    /// commit and the post-commit snapshot's after it.
     ///
-    /// One method because the three are one obligation: a fold advanced
-    /// without its memo entry replays nothing on retry, and a memo entry
-    /// stored without the fold step memoizes an ack for a state the fold
-    /// never reached. `world_post` is the POST-COMMIT snapshot — the ctx
-    /// the deposit's own commit is visible in.
+    /// The fold step that stood here is the ENGINE's now (AUTH-2.80): the
+    /// deposit's commit stepped the World's slice inside the transaction that
+    /// committed it, so `after` already holds the deposit folded, and nothing
+    /// here can fall behind the world — a panic between the commit and this
+    /// tail costs the memo entry alone, never a key.
     ///
-    /// The returned flip is [`fold::IdentityFold::step_committed`]'s, and a
-    /// COMMAND's answer for the reason stated there: it is a property of
-    /// the transition, which no read of the resulting state recovers.
+    /// The flip is a property of the TRANSITION, which no read of one state
+    /// recovers: a claimant present in `after` was absent in `before` iff
+    /// THIS commit seated it, and the claim is set once (AUTH-2.67, I6).
+    ///
+    /// E4, checkable here as it was at the live step (precheck ≡ fold): a
+    /// committed credential deposit was classified `Honored` under the gate
+    /// against `before`'s world, and the fold, stepping the same deposit over
+    /// the post-commit world, honors it too — every honored verdict MOVES the
+    /// slice (a genesis or an enrollment adds a key, a retirement moves one, a
+    /// claim seats the claimant), so an unmoved slice names a broken E4. The
+    /// head writer's own commits inside this step (`H.1`) touch no credential
+    /// and move nothing here.
     pub fn commit_tail(
         &self,
         lock: &LockWrite<'_>,
-        world_post: &World,
-        dep: &LinkDeposit<'_>,
+        before: &IdentityState,
+        after: &IdentityState,
         sid: SessionId,
         id: Option<ReqId>,
         ack: &[u8],
     ) -> bool {
-        let flipped = self.fold.step_committed(lock, world_post, dep);
+        debug_assert!(
+            before != after,
+            "a committed credential deposit must fold honored and move the slice (E4)"
+        );
         if let Some(id) = id {
             self.memo.store(lock, sid, id, ack.to_vec());
         }
-        flipped
+        before.claimant().is_none() && after.claimant().is_some()
     }
 }

@@ -1465,3 +1465,175 @@ fn every_history_read_is_unjournaled_in_memory_at_every_boundary() {
         }
     }
 }
+
+// ── the seam delta: a base whose seed REFUSES (AUTH-2.84, AUTH-2.85) ──────
+
+use crate::error::RebuildError;
+
+/// A world whose derived seed can REFUSE a base — the seam delta over a toy.
+/// The items are the authoritative state; a base whose LAST item is
+/// [`POISON`] is one this world cannot seed from, which is what a slice
+/// written without its input looks like to M2. Live, the poison folds like
+/// any item: only a LOAD asks the seed.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+struct Picky(Vec<Vec<u8>>);
+
+const POISON: &[u8] = b"no start point here";
+
+impl WorldState for Picky {
+    type Record = Vec<u8>;
+    fn apply(&self, record: &Vec<u8>) -> Self {
+        let mut items = self.0.clone();
+        items.push(record.clone());
+        Picky(items)
+    }
+    fn rebuild_derived(self) -> Result<Self, RebuildError> {
+        if self.0.last().is_some_and(|item| item == POISON) {
+            Err(RebuildError::Unresolved { slice: "picky" })
+        } else {
+            Ok(self)
+        }
+    }
+}
+
+fn picky_cfg(dir: &std::path::Path, retain: usize) -> KernelConfig {
+    KernelConfig {
+        durability: Durability::Fsync {
+            journal_path: dir.to_path_buf(),
+            retain_checkpoints: retain,
+            burned_seq: BurnedSeqPolicy::Rollback,
+        },
+        checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(TEST_SEED),
+    }
+}
+
+fn picky_commit(k: &Kernel<Picky>, item: &[u8]) -> Seq {
+    k.transact(&[], |stg| {
+        stg.push(item.to_vec());
+        Ok::<(), ()>(())
+    })
+    .unwrap()
+    .1
+}
+
+/// Four blobs that fill the first segment past its rotation threshold, so the
+/// next transaction opens the second.
+fn picky_fill_a_segment(k: &Kernel<Picky>) {
+    for _ in 0..4 {
+        picky_commit(k, &vec![0xAB; 300 * 1024]);
+    }
+}
+
+/// A base whose seed refuses is NOT A START POINT: `open` passes it over for
+/// the next-older retained checkpoint and replays forward — the TRUE state,
+/// the poison folded like any item — and REPORTS the start point and the
+/// base it passed over, with the refusal's own words; `world_at` runs the same
+/// chain; an in-memory kernel has no report. A clean open reports the newest
+/// base and nothing skipped.
+#[test]
+fn a_base_whose_seed_refuses_is_passed_over_for_the_next_older_and_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let k = Kernel::<Picky>::open(picky_cfg(dir.path(), 2), Picky(vec![])).unwrap();
+    picky_commit(&k, b"a");
+    picky_commit(&k, b"b");
+    let older = k.checkpoint().unwrap();
+    let poisoned_at = picky_commit(&k, POISON);
+    let newer = k.checkpoint().unwrap();
+    assert_eq!(newer, poisoned_at, "the newer base's last item is the poison");
+    picky_commit(&k, b"c");
+    assert_eq!(
+        k.recovery(),
+        Some(&Recovery { start_point: Seq(0), skipped: vec![] }),
+        "a fresh journal's open: genesis, nothing skipped"
+    );
+    drop(k);
+
+    let k = Kernel::<Picky>::open(picky_cfg(dir.path(), 2), Picky(vec![])).unwrap();
+    assert_eq!(
+        k.snapshot().world().0,
+        vec![b"a".to_vec(), b"b".to_vec(), POISON.to_vec(), b"c".to_vec()],
+        "replayed from the older base: the true state"
+    );
+    let recovery = k.recovery().expect("journaled");
+    assert_eq!(recovery.start_point, older);
+    assert_eq!(recovery.skipped.len(), 1, "{recovery:?}");
+    assert_eq!(recovery.skipped[0].seq, newer);
+    assert!(recovery.skipped[0].why.contains("`picky` slice"), "{}", recovery.skipped[0].why);
+    assert!(recovery.skipped[0].why.contains("not a start point"), "{}", recovery.skipped[0].why);
+    // The history read runs the same chain: at the poisoned boundary the
+    // newer base is passed over and the older one folded forward.
+    assert_eq!(
+        k.world_at(poisoned_at).unwrap().0,
+        vec![b"a".to_vec(), b"b".to_vec(), POISON.to_vec()]
+    );
+    drop(k);
+
+    let mem = Kernel::<Picky>::open(
+        KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(TEST_SEED),
+        },
+        Picky(vec![]),
+    )
+    .unwrap();
+    assert!(mem.recovery().is_none(), "nothing was loaded, so nothing is reported");
+}
+
+/// The exhausted chain: the one retained base refuses to seed and the journal
+/// below it is reclaimed, so no start point remains — `BadCheckpoint`, its
+/// cause the seed's own refusal, naming the slice and the remedy.
+#[test]
+fn an_exhausted_chain_names_the_slice_its_newest_base_could_not_seed() {
+    let dir = tempfile::tempdir().unwrap();
+    let k = Kernel::<Picky>::open(picky_cfg(dir.path(), 1), Picky(vec![])).unwrap();
+    picky_fill_a_segment(&k);
+    picky_commit(&k, POISON); // the first transaction of the second segment
+    k.checkpoint().unwrap(); // reclaims the first segment: genesis unreachable
+    assert!(k.world_at(Seq(0)).is_err(), "the fixture must have reclaimed genesis");
+    drop(k);
+
+    let refused = Kernel::<Picky>::open(picky_cfg(dir.path(), 1), Picky(vec![]))
+        .expect_err("no base seeds and genesis is unreachable");
+    let OpenError::BadCheckpoint { cause: Some(cause) } = refused else {
+        panic!("expected BadCheckpoint carrying the seed's refusal, got {refused:?}");
+    };
+    let sentence = cause.to_string();
+    assert!(sentence.contains("`picky` slice"), "{sentence}");
+    assert!(sentence.contains("restore a checkpoint that carries the slice"), "{sentence}");
+}
+
+/// A history read at a boundary whose only base at or below it refuses to
+/// seed, the journal below reclaimed, is `Reclaimed` — the floor named, the
+/// cause the seed's own — while the head, with a newer base that seeds,
+/// opens and serves; and a boundary below the floor refuses with nothing
+/// tried, as it always did.
+#[test]
+fn a_history_read_below_a_base_that_cannot_seed_is_reclaimed_with_its_cause() {
+    let dir = tempfile::tempdir().unwrap();
+    let k = Kernel::<Picky>::open(picky_cfg(dir.path(), 2), Picky(vec![])).unwrap();
+    picky_fill_a_segment(&k);
+    let poisoned_at = picky_commit(&k, POISON);
+    let older = k.checkpoint().unwrap(); // the oldest retained: reclaims the first segment
+    assert_eq!(older, poisoned_at);
+    assert!(k.world_at(Seq(0)).is_err(), "genesis reclaimed below the older base");
+    picky_commit(&k, b"d");
+    let newer = k.checkpoint().unwrap();
+    drop(k);
+
+    let k = Kernel::<Picky>::open(picky_cfg(dir.path(), 2), Picky(vec![])).unwrap();
+    assert_eq!(k.recovery().expect("journaled").skipped, vec![], "the newer base stood in");
+    assert_eq!(k.world_at(newer).unwrap(), *k.snapshot().world());
+    match k.world_at(older) {
+        Err(HistoryError::Reclaimed { floor, cause: Some(cause) }) => {
+            assert_eq!(floor, Some(older), "the floor is the oldest retained checkpoint");
+            assert!(cause.to_string().contains("`picky` slice"), "{cause}");
+        }
+        other => panic!("expected Reclaimed with the seed's cause, got {other:?}"),
+    }
+    match k.world_at(Seq(older.0 - 1)) {
+        Err(HistoryError::Reclaimed { floor, cause: None }) => assert_eq!(floor, Some(older)),
+        other => panic!("expected Reclaimed with nothing tried, got {other:?}"),
+    }
+}

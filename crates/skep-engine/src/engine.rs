@@ -10,11 +10,38 @@ use std::sync::Arc;
 use skep_arrangement::Vstream;
 use skep_coordination::Coordinator;
 use skep_febe::Stores;
-use skep_kernel::{Attestation, HistoryError, Kernel, KernelConfig, OpenError, Seq};
+use skep_kernel::{Attestation, HistoryError, Kernel, KernelConfig, OpenError, Seq, SkippedBase};
 use skep_links::{Caller, LinkWriter, TypeRegistry, Visibility};
 use skep_namespace::Namespace;
 
 use crate::world::World;
+
+/// What [`Engine::open`] FOUND in the journal directory (AUTH-2.85,
+/// AUTH-2.86): M2's own account of the open — the start point its derivation
+/// resolved from and every retained checkpoint it passed over, each with why
+/// — and the one fact only this assembler can add to it, whether the start
+/// point's identity slice was RESOLVED to the empty table rather than carried
+/// (AUTH-2.83). The daemon above logs both at startup: a skipped checkpoint
+/// with the start point it resolved from, and a slice-less checkpoint that
+/// resolved empty — the operator's one tell of a build that wrote no slice.
+/// A report and never a verdict: the open succeeded from the start point
+/// named; the chain's one failure is [`EngineError::Open`]'s. Absent under
+/// `Durability::InMemory`, which loads nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Recovery {
+    /// The base the recovered world was folded from — a retained
+    /// checkpoint's seq, or `Seq(0)` where genesis stood in.
+    pub start_point: Seq,
+    /// The retained checkpoints above the start point that were NOT start
+    /// points, newest first, each with the refusal that passed it over — a
+    /// base written without the identity slice over credential deposits
+    /// among the causes, in M2's slice-agnostic words.
+    pub skipped: Vec<SkippedBase>,
+    /// Whether the start point carried no identity slice and its link slice
+    /// held no credential deposit, so its table RESOLVED empty (AUTH-2.83) —
+    /// the true table, and the one case a slice-less base is a start point.
+    pub identity_resolved_empty: bool,
+}
 
 /// `Engine::open` failure: M2's recovery failed. The genesis and its type
 /// registry are compiled format constants (owner ruling, 2026-08-26), so the
@@ -73,6 +100,9 @@ impl std::error::Error for EngineError {
 /// module constant, not state of this handle's.
 pub struct Engine {
     stores: EngineStores,
+    /// What the open found, for the daemon's startup warnings; `None` under
+    /// the in-memory mode.
+    recovery: Option<Recovery>,
 }
 
 /// `skepd` serves a whole worker pool off one shared `Engine`, so `Send +
@@ -153,19 +183,48 @@ impl Engine {
     /// byte-identical on every reopen and consistent in its derived state as
     /// passed, are the caller contracts this method discharges.
     ///
+    /// THE IDENTITY SLICE's load (AUTH-2.83–2.86): a retained checkpoint
+    /// written WITHOUT the slice — by a build before it — is a start point
+    /// only where its link slice holds no credential deposit, resolving to
+    /// the empty table; one holding any is NOT a start point, and M2's
+    /// fallback chain steps back to the next-older retained checkpoint that
+    /// is, or to genesis while the journal reaches it, and replays forward —
+    /// the TRUE table, slower, once; with no start point left the open
+    /// REFUSES, `OpenError::BadCheckpoint` carrying the slice's own sentence
+    /// and remedy (AUTH-2.88). What the chain did is [`Engine::recovery`]'s to
+    /// tell, and the daemon's to log.
+    ///
     /// PANICS, rather than returning `Err`, under `Durability::Fsync` when
     /// recovery meets state that DECODES but violates a structural fact a fold
     /// or a rebuild asserts — the stores' own, M7's that every link key is a
     /// T4-valid element address among them, and the exception set's that a
     /// registered draft's owner resolves to an account, reached from a
     /// checkpoint base through its seed and from a replayed `Allocate` through
-    /// its fold. Neither `WorldState::rebuild_derived` nor `WorldState::apply`
-    /// has an error channel, and M2 selects and folds a base with no unwind
-    /// boundary, so such a checkpoint does not fall back to an older retained
-    /// base. No state the stores' ops produce holds such a shape.
+    /// its fold. `WorldState::rebuild_derived`'s one error channel is the
+    /// identity slice's refusal above, `WorldState::apply` has none, and M2
+    /// selects and folds a base with no unwind boundary, so such a checkpoint
+    /// does not fall back to an older retained base. No state the stores' ops
+    /// produce holds such a shape.
     pub fn open(cfg: KernelConfig) -> Result<Engine, EngineError> {
         let kernel = Arc::new(Kernel::open(cfg, World::genesis())?);
-        Ok(Engine { stores: EngineStores::new(kernel) })
+        // M2's account of the open, and the assembler's one addition to it —
+        // read off the recovered root BEFORE anything commits over it, which
+        // is this constructor's own position.
+        let recovery = kernel.recovery().map(|found| Recovery {
+            start_point: found.start_point,
+            skipped: found.skipped.clone(),
+            identity_resolved_empty: kernel.snapshot().world().identity_resolved,
+        });
+        Ok(Engine { stores: EngineStores::new(kernel), recovery })
+    }
+
+    /// What this engine's open found in the journal directory
+    /// ([`Recovery`]): the start point, the checkpoints it passed over, and
+    /// whether the start point's identity slice resolved empty — `None` under
+    /// `Durability::InMemory`. Fixed at [`Engine::open`]; a checkpoint taken
+    /// since does not move it.
+    pub fn recovery(&self) -> Option<&Recovery> {
+        self.recovery.as_ref()
     }
 
     /// The kernel (M2). Snapshots, checkpoints, and `current_seq` are reached

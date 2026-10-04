@@ -15,17 +15,36 @@
 use crate::checkpoint::{CheckpointMeta, LoadRefused, Loaded};
 use crate::error::Cause;
 use crate::journal::{self, ScanFail, ScanOutcome, SegmentMeta};
-use crate::WorldState;
+use crate::{Seq, WorldState};
+
+/// A retained checkpoint the base selection PASSED OVER, and why — what a
+/// journaled open reports beside the start point it resolved from
+/// ([`crate::Recovery`]), so the daemon above this kernel can log the
+/// checkpoints it did NOT start from (the AUTH spec's startup report,
+/// AUTH-2.85, AUTH-2.86). The account is the refusal's own sentence,
+/// rendered: a base is skipped the same way whatever refused it — a header
+/// or body that fails its checks, a body that will not decode, or a seed
+/// [`WorldState::rebuild_derived`] refuses — and only the sentence tells the
+/// reader which.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkippedBase {
+    /// The checkpoint's coordinate.
+    pub seq: Seq,
+    /// Why it could not stand in as a base.
+    pub why: String,
+}
 
 /// A base to fold onto: the world embodying every record with
 /// `Seq ≤ s_load`, already seeded through [`WorldState::rebuild_derived`],
-/// and the commit chain's value at that coordinate, which the scan above it
-/// verifies the first committed transaction against.
+/// the commit chain's value at that coordinate, which the scan above it
+/// verifies the first committed transaction against — and the retained
+/// checkpoints the selection passed over on its way to this one, which the
+/// fold does not read and a journaled open reports.
 ///
-/// The three travel together and none is settable from outside this module,
-/// so [`select_base`] is the only site that can mint one. That is what makes
-/// the pairing an invariant rather than a habit: a world at a coordinate it
-/// does not embody folds records it already holds, and since
+/// The three that fold travel together and none is settable from outside
+/// this module, so [`select_base`] is the only site that can mint one. That
+/// is what makes the pairing an invariant rather than a habit: a world at a
+/// coordinate it does not embody folds records it already holds, and since
 /// [`WorldState::apply`] need not be idempotent, that is silent double
 /// application answered `Ok`; and a chain value from anywhere but the base's
 /// own header would judge the first link above the base against the wrong
@@ -34,12 +53,19 @@ pub(crate) struct Base<W> {
     s_load: u64,
     world: W,
     chain: [u8; 32],
+    skipped: Vec<SkippedBase>,
 }
 
 impl<W> Base<W> {
     /// The coordinate this base embodies — §7's `S_load`.
     pub(crate) fn s_load(&self) -> u64 {
         self.s_load
+    }
+
+    /// The retained checkpoints above this base that could not stand in,
+    /// newest first — what a journaled open reports ([`crate::Recovery`]).
+    pub(crate) fn skipped(&self) -> &[SkippedBase] {
+        &self.skipped
     }
 
     /// The commit chain's value at [`Base::s_load`] — the `SKC4` header's
@@ -93,20 +119,26 @@ pub(crate) struct Unreachable {
     /// neither. `None` when no candidate was tried at all — no retained
     /// checkpoint, or every one of them above the ceiling.
     ///
-    /// Only an exhausted fallback chain reaches a caller, so a refusal the
-    /// fallback walked past is dropped: the derivation then succeeded, and
-    /// why an older base was preferred is not a failure to report.
+    /// Only an exhausted fallback chain reaches a caller this way; a refusal
+    /// the fallback walked past is no failure, and travels instead on the base
+    /// that did stand in ([`Base::skipped`]), for a journaled open to report.
     pub cause: Option<LoadRefused>,
 }
 
-/// Choose the base (§6/§7): the newest checkpoint that loads — at or below
-/// `ceiling`, the highest coordinate the chosen base may embody, when one is
-/// given — else genesis while it is still reachable.
-/// A checkpoint that refuses ([`CheckpointMeta::load`]) is skipped and the
-/// next-older RETAINED one tried, which is what makes the fallback chain real
-/// rather than nominal; if nothing stands in, [`Unreachable`] carries why the
-/// newest candidate refused, since by then that account is all an operator
-/// has.
+/// Choose the base (§6/§7): the newest checkpoint that loads AND SEEDS — at
+/// or below `ceiling`, the highest coordinate the chosen base may embody,
+/// when one is given — else genesis while it is still reachable.
+/// A checkpoint that refuses at either door — [`CheckpointMeta::load`], or
+/// the seed [`WorldState::rebuild_derived`] runs over what loaded, which
+/// since the AUTH spec's seam delta (AUTH-2.85) may refuse a base written
+/// without a slice it cannot rebuild — is skipped and the next-older
+/// RETAINED one tried, which is what makes the fallback chain real rather
+/// than nominal (AUTH-2.84: a checkpoint that is not a start point is handled
+/// by this existing chain, at startup and for every history read alike); if
+/// nothing stands in, [`Unreachable`] carries why the newest candidate
+/// refused, since by then that account is all an operator has. What the
+/// chain passed over on the way to the base it did choose rides on the base
+/// ([`Base::skipped`]), for the open to report.
 ///
 /// Whichever base is chosen is seeded through
 /// [`WorldState::rebuild_derived`] BEFORE anything is folded onto it: the
@@ -121,6 +153,9 @@ pub(crate) struct Unreachable {
 ///
 /// `genesis` is borrowed and copied only on the branch that uses it, so the
 /// common case — a checkpoint that loads — costs no copy of a world at all.
+/// A genesis whose own seed refuses is the caller's broken genesis
+/// obligation ([`WorldState::rebuild_derived`]), and is answered as the
+/// exhausted chain it leaves: no base of this journal can stand in.
 ///
 /// `checkpoints` must be ASCENDING by seq, as [`crate::checkpoint::list`]
 /// produces it: this walks it from the back as newest-first and reads its front
@@ -134,39 +169,40 @@ pub(crate) fn select_base<W: WorldState>(
     ceiling: Option<u64>,
     genesis: &W,
 ) -> Result<Base<W>, Unreachable> {
+    let floor = checkpoints.first().map(|cp| cp.seq);
     let mut cause: Option<LoadRefused> = None;
+    let mut skipped = Vec::new();
     for cp in checkpoints.iter().rev() {
         if ceiling.is_some_and(|c| cp.seq > c) {
             continue;
         }
-        match cp.load::<W>() {
-            Ok(Loaded { world, chain_head }) => {
-                return Ok(Base {
-                    s_load: cp.seq,
-                    world: world.rebuild_derived(),
-                    chain: chain_head,
-                });
-            }
-            // Newest-first, so the first refusal met is the newest base's —
-            // the one this derivation most wanted, and the one an operator
-            // needs if nothing below it stands in either.
-            Err(refused) => {
-                cause.get_or_insert(refused);
-            }
-        }
+        // Two doors, one verdict: a body that will not load and a body that
+        // loads but will not seed are each a base that cannot stand in, and
+        // the chain steps past either the same way.
+        let refused = match cp.load::<W>() {
+            Ok(Loaded { world, chain_head }) => match world.rebuild_derived() {
+                Ok(world) => {
+                    return Ok(Base { s_load: cp.seq, world, chain: chain_head, skipped });
+                }
+                Err(unresolved) => LoadRefused::from(unresolved),
+            },
+            Err(refused) => refused,
+        };
+        skipped.push(SkippedBase { seq: Seq(cp.seq), why: refused.to_string() });
+        // Newest-first, so the first refusal met is the newest base's — the
+        // one this derivation most wanted, and the one an operator needs if
+        // nothing below it stands in either.
+        cause.get_or_insert(refused);
     }
     // Genesis stands in only while the journal still reaches back to it.
     if !journal::reaches_genesis(segs) {
-        return Err(Unreachable {
-            floor: checkpoints.first().map(|cp| cp.seq),
-            cause,
-        });
+        return Err(Unreachable { floor, cause });
     }
-    Ok(Base {
-        s_load: 0,
-        world: genesis.clone().rebuild_derived(),
-        chain: journal::CHAIN_GENESIS,
-    })
+    let world = genesis.clone().rebuild_derived().map_err(|unresolved| Unreachable {
+        floor,
+        cause: cause.or_else(|| Some(LoadRefused::from(unresolved))),
+    })?;
+    Ok(Base { s_load: 0, world, chain: journal::CHAIN_GENESIS, skipped })
 }
 
 /// Why a fold refused: the coordinate naming the damage, and — where there

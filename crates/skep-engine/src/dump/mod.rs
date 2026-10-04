@@ -785,7 +785,15 @@ impl crate::Engine {
     /// not acquire a caller that does not gate it.
     pub fn check_hints_of(&self, world: &World) -> Result<(), HintDivergence> {
         let live = dump(world);
-        let rebuilt = dump(&world.clone().rebuild_derived());
+        // A live world CARRIES its identity slice (the post-load invariant),
+        // so the one refusal the rebuild can answer — a slice-less base over
+        // credential deposits — is unreachable from here.
+        let rebuilt = dump(
+            &world
+                .clone()
+                .rebuild_derived()
+                .expect("a live world carries its identity slice, so its rebuild resolves"),
+        );
         if live == rebuilt {
             Ok(())
         } else {

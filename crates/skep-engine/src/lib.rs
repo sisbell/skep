@@ -33,7 +33,19 @@
 //!   states what either door's refusal does.
 //! * **Recovery order** (`WorldState::rebuild_derived` for `World`) — the
 //!   cross-store rebuild sequence at load, stated in one place, with its two
-//!   engine edges pinned by the tests that method names.
+//!   engine edges pinned by the tests that method names — and, last, the
+//!   identity slice's resolution, the one arm that can REFUSE a base.
+//! * **The identity slice** ([`World`]'s `identity`; the `world::identity`
+//!   module; the pins [`types::IDENTITY_TYPES`], [`types::t_enroll`],
+//!   [`types::t_retire`], [`types::t_claim`]) — AUTH's key table and claim,
+//!   `skep-identity`'s pure fold SEATED as a World slice (AUTH-2.79):
+//!   stepped by `World::apply` at each credential deposit's commit
+//!   (AUTH-2.80), checkpointed with the world, read through
+//!   `skep_identity::HasIdentity`, and never rebuilt from the deposits —
+//!   a checkpoint written without it over credential deposits is not a
+//!   start point (AUTH-2.83, AUTH-2.84), which [`Engine::recovery`] reports.
+//!   The World implements the fold's seam (`FoldCtx`, `Values`), so the
+//!   fold reads every fact as of the deposit's own commit (AUTH-2.66).
 //! * **The exception set** ([`World::published`], [`World::owner_account`];
 //!   the `publication` module) — the derived membership index over M3's
 //!   publication bit (PUB-7.5; owner ruling D1, 2026-09-05: ONE publication
@@ -116,21 +128,22 @@ mod world;
 #[cfg(feature = "dump")]
 pub mod dump;
 
-pub use engine::{Engine, EngineError, EngineStores};
+pub use engine::{Engine, EngineError, EngineStores, Recovery};
 pub use grants::{IssuerGrantIndexRow, UniversalGrantIndexRow};
 pub use publication::Draft;
 pub use readable::ReaderClass;
 pub use world::{Record, World};
 
 // The KERNEL types this crate's own public signatures name — `Kernel`,
-// `KernelConfig`, `OpenError`, `HistoryError` and `Seq` — and the four a
-// `KernelConfig` is built from, re-exported so a binary can open an engine,
-// pair a reconstructed world with a kernel at `EngineStores::new`, and call
-// `world_at` without naming M2 itself. The integration suite is a separate
-// crate and builds its kernel configurations and its historical kernel
-// through these names, so narrowing the set fails that build. What those
-// types' own methods hand back (`Snapshot`, `CheckpointError`, the drivers'
-// `TxnError`), and the `WorldState` trait `World` implements, are M2's
+// `KernelConfig`, `OpenError`, `HistoryError`, `Seq`, and `Recovery`'s
+// `SkippedBase` — and the four a `KernelConfig` is built from, re-exported
+// so a binary can open an engine, pair a reconstructed world with a kernel
+// at `EngineStores::new`, call `world_at` and read the open's report without
+// naming M2 itself. The integration suite is a separate crate and builds its
+// kernel configurations and its historical kernel through these names, so
+// narrowing the set fails that build. What those types' own methods hand
+// back (`Snapshot`, `CheckpointError`, the drivers' `TxnError`), and the
+// `WorldState` trait `World` implements with its `RebuildError`, are M2's
 // surface and stay M2's to export. The address and principal vocabulary the
 // read surfaces speak (`Address`, `PrincipalId`, `Caller`) stays the stores'
 // to export: a caller holding an argument for `World::readable` or
@@ -138,5 +151,5 @@ pub use world::{Record, World};
 // owns it.
 pub use skep_kernel::{
     BurnedSeqPolicy, CheckpointPolicy, Durability, HistoryError, Kernel, KernelConfig, OpenError,
-    SaltSource, Seq,
+    SaltSource, Seq, SkippedBase,
 };

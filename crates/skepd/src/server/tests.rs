@@ -397,3 +397,55 @@ fn a_connecting_subscriber_is_told_the_announced_position_not_the_head() {
 
     server.shutdown();
 }
+
+/// AUTH-2.86's two startup warnings, rendered from the open's report
+/// ([`recovery_warnings`]): nothing for an in-memory engine or a start point
+/// that carried its slice with nothing skipped; one line per SKIPPED
+/// checkpoint, naming it by name, why, and the start point the world was
+/// resolved from — genesis, or the checkpoint that stood in; and one line
+/// where the start point carried no identity slice and RESOLVED EMPTY,
+/// naming that checkpoint and the empty resolution. The daemon writes each
+/// through the operator stream at open, which no test can read back, so the
+/// rendering is pinned here against the report the daemon renders it from.
+#[test]
+fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_empty_resolution() {
+    use skep_engine::{Recovery, SkippedBase};
+
+    assert!(recovery_warnings(None).is_empty(), "in memory, nothing to say");
+    let carried = Recovery { start_point: Seq(2048), skipped: vec![], identity_resolved_empty: false };
+    assert!(recovery_warnings(Some(&carried)).is_empty(), "a carried start point: nothing to say");
+
+    let stepped_back = Recovery {
+        start_point: Seq(0),
+        skipped: vec![SkippedBase {
+            seq: Seq(2048),
+            why: "the `identity` slice could not be resolved from this checkpoint".into(),
+        }],
+        identity_resolved_empty: false,
+    };
+    let lines = recovery_warnings(Some(&stepped_back));
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    for needle in ["checkpoint.2048", "SKIPPED", "`identity` slice", "resolved from genesis"] {
+        assert!(lines[0].contains(needle), "{needle:?} missing from {:?}", lines[0]);
+    }
+
+    let two_skipped_one_stood = Recovery {
+        start_point: Seq(1024),
+        skipped: vec![
+            SkippedBase { seq: Seq(3072), why: "the `identity` slice could not be resolved".into() },
+            SkippedBase { seq: Seq(2048), why: "checkpoint body failed its header checksum".into() },
+        ],
+        identity_resolved_empty: false,
+    };
+    let lines = recovery_warnings(Some(&two_skipped_one_stood));
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[0].contains("checkpoint.3072") && lines[0].contains("resolved from checkpoint.1024"), "{:?}", lines[0]);
+    assert!(lines[1].contains("checkpoint.2048") && lines[1].contains("header checksum"), "{:?}", lines[1]);
+
+    let resolved_empty = Recovery { start_point: Seq(1024), skipped: vec![], identity_resolved_empty: true };
+    let lines = recovery_warnings(Some(&resolved_empty));
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    for needle in ["checkpoint.1024", "no identity slice", "RESOLVED EMPTY", "wrote no identity slice"] {
+        assert!(lines[0].contains(needle), "{needle:?} missing from {:?}", lines[0]);
+    }
+}

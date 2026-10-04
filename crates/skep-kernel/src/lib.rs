@@ -123,9 +123,10 @@ mod kernel;
 
 pub use checkpoint::CheckpointHeader;
 pub use config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
-pub use error::{CheckpointError, HistoryError, OpenError, TxnError};
+pub use error::{CheckpointError, HistoryError, OpenError, RebuildError, TxnError};
 pub use journal::{Attestation, AttestationError, MAX_SIG_BYTES, MAX_TXN_BYTES};
-pub use kernel::{Kernel, Snapshot, Staging};
+pub use kernel::{Kernel, Recovery, Snapshot, Staging};
+pub use replay::SkippedBase;
 
 use std::fmt;
 
@@ -247,26 +248,47 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
     /// [`rebuild_derived`]: WorldState::rebuild_derived
     fn apply(&self, record: &Self::Record) -> Self;
 
-    /// Seed derived hints from authoritative state. Runs once per base a
-    /// derivation loads — at every journaled [`Kernel::open`] and at every
-    /// history read ([`Kernel::world_at`], [`Kernel::chain_at`],
-    /// [`Kernel::attestation_at`]), on whichever base it selects, a retained
-    /// checkpoint or genesis — BEFORE replay, and NEVER on a live commit, so
-    /// it cannot keep any hint current by itself. It exists solely to
-    /// reconstruct hints a checkpoint skip-serialized (`#[serde(skip)]`). NOT
-    /// run under [`Durability::InMemory`], which does not load: that mode
-    /// installs the caller's `genesis` value as the root exactly as given.
-    /// Default identity; override iff hints are skipped.
+    /// Seed derived hints from authoritative state, or REFUSE the base. Runs
+    /// once per base a derivation loads — at every journaled
+    /// [`Kernel::open`] and at every history read ([`Kernel::world_at`],
+    /// [`Kernel::chain_at`], [`Kernel::attestation_at`]), on whichever base
+    /// it selects, a retained checkpoint or genesis — BEFORE replay, and
+    /// NEVER on a live commit, so it cannot keep any hint current by itself.
+    /// It exists solely to reconstruct hints a checkpoint skip-serialized
+    /// (`#[serde(skip)]`), and to say when it cannot. NOT run under
+    /// [`Durability::InMemory`], which does not load: that mode installs the
+    /// caller's `genesis` value as the root exactly as given. Default
+    /// `Ok(self)`; override iff hints are skipped or a slice can be absent.
+    ///
+    /// THE REFUSAL (the AUTH spec's M2 seam delta, AUTH-2.85): an override
+    /// that cannot seed from what the base carries answers
+    /// [`RebuildError`], and the base is NOT A START POINT — `open` and every
+    /// history read pass it over exactly as they pass over a checkpoint that
+    /// does not decode, under the existing fallback chain: the next-older
+    /// retained checkpoint, then genesis while the journal still reaches it,
+    /// and [`OpenError::BadCheckpoint`] or [`HistoryError::Reclaimed`] only
+    /// when the chain is exhausted, carrying the refusal as its `cause`.
+    /// Startup and the history reads run the SAME chain (AUTH-2.84), and a
+    /// journaled `open` reports what it did — the start point and every base
+    /// it passed over — as [`Recovery`], so the caller can say so. Retention
+    /// and the reclaim floor are unchanged by the delta. The error is M2's
+    /// own and slice-agnostic: it names the slice and nothing of what the
+    /// slice means, since this kernel knows nothing about what any change
+    /// means.
     ///
     /// CONSISTENCY OBLIGATION (§7, seam contract 2): an override MUST seed
     /// exactly the hint state that folding every record with `Seq ≤ S` through
     /// [`apply`] would produce (`S` = the seq of the base selected — a
-    /// retained checkpoint's, or `0` for genesis). Recovery and
+    /// retained checkpoint's, or `0` for genesis) — or refuse. Recovery and
     /// [`Kernel::world_at`] run `rebuild_derived` (seeding `Seq ≤ S`) THEN
     /// replay `Seq > S` through `apply`; if the seed disagrees with the
     /// `apply`-fold it stands in for, the recovered — or the historical —
-    /// hint diverges from the live-maintained one and reads go wrong. M2
-    /// cannot check this.
+    /// hint diverges from the live-maintained one and reads go wrong. A
+    /// refusal is what an override answers where no seed it could compute
+    /// would agree — a slice the base was written without, over records whose
+    /// fold depends on a commit order the base does not hold — and it is the
+    /// only honest answer there: a guessed seed is exactly the divergence this
+    /// obligation forbids. M2 cannot check this.
     ///
     /// WHAT MAY BE SKIPPED (§6/§7): a checkpoint is a serialized `W` standing
     /// in for the fold over `Seq ≤ S`, so ONLY state this method can
@@ -275,20 +297,22 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
     /// world at a boundary whichever base carries it, and a skipped
     /// authoritative field makes a checkpoint-based derivation differ from a
     /// genesis-based one by exactly that field, silently. A world that skips
-    /// nothing needs no override at all, which is why the default is identity.
+    /// nothing needs no override at all, which is why the default is `Ok(self)`.
     /// M2 cannot check this either.
     ///
     /// GENESIS OBLIGATION — the `genesis` handed to [`Kernel::open`] MUST
     /// arrive with its derived hints already consistent with its own
-    /// authoritative state, because [`Durability::InMemory`] installs it
-    /// unseeded while a journaled `open()` seeds it through this method. A
-    /// world that relies on that seeding is right in one mode and wrong in the
-    /// other, silently, and both modes answer the same coordinate — `Seq(0)` —
-    /// with different hints. M2 cannot check this.
+    /// authoritative state, and MUST seed `Ok`, because
+    /// [`Durability::InMemory`] installs it unseeded while a journaled
+    /// `open()` seeds it through this method. A world that relies on that
+    /// seeding is right in one mode and wrong in the other, silently, and both
+    /// modes answer the same coordinate — `Seq(0)` — with different hints; a
+    /// genesis that refuses leaves a journal no base of which can stand in,
+    /// answered as the exhausted chain it is. M2 cannot check this.
     ///
     /// [`apply`]: WorldState::apply
-    fn rebuild_derived(self) -> Self {
-        self
+    fn rebuild_derived(self) -> Result<Self, RebuildError> {
+        Ok(self)
     }
 }
 

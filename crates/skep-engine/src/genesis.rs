@@ -11,6 +11,7 @@
 
 use skep_arrangement::M5State;
 use skep_content::ContentStore;
+use skep_identity::IdentityState;
 use skep_links::LinkState;
 use skep_namespace::M3State;
 
@@ -76,6 +77,12 @@ impl World {
             content: ContentStore::default(),
             arrangement: M5State::genesis(),
             links: LinkState::genesis(),
+            // The identity slice at Σ₀ is the fold's own genesis (AUTH-1.41):
+            // no credential deposit exists, so no account is keyed and the
+            // board is unclaimed — `Some`, as every loaded World must carry
+            // it (AUTH-2.81), and carried rather than resolved.
+            identity: Some(IdentityState::genesis()),
+            identity_resolved: false,
             drafts: Drafts::new(),
             // Σ₀ has no links, so no grants — the fold's fail-open sign
             // (PUB-7.68: an empty fold ⟺ an empty link map) holds trivially

@@ -1081,6 +1081,7 @@ dependencies = [
  "skep-coordination",
  "skep-discovery",
  "skep-febe",
+ "skep-identity",
  "skep-kernel",
  "skep-links",
  "skep-namespace",

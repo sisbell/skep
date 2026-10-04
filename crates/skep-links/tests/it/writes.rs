@@ -759,7 +759,8 @@ fn nullifying_a_retraction_restores_nothing() {
     // [R] link, so recovery restores nothing either.
     let bytes = bincode::serialize(snap.world()).expect("world serializes");
     let recovered: World = bincode::deserialize(&bytes).expect("world deserializes");
-    let recovered = skep_kernel::WorldState::rebuild_derived(recovered);
+    let recovered =
+        skep_kernel::WorldState::rebuild_derived(recovered).expect("this world's seed never refuses");
     assert!(recovered.links().is_nullified(&target));
     assert!(recovered.links().is_nullified(&r1));
 }
@@ -1916,7 +1917,8 @@ fn checkpoint_roundtrip_then_rebuild_derived_restores_every_hint() {
     let snap = k.snapshot();
     let bytes = bincode::serialize(snap.world()).expect("world serializes");
     let recovered: World = bincode::deserialize(&bytes).expect("world deserializes");
-    let recovered = skep_kernel::WorldState::rebuild_derived(recovered);
+    let recovered =
+        skep_kernel::WorldState::rebuild_derived(recovered).expect("this world's seed never refuses");
 
     let live = snap.world().links();
     let back = recovered.links();

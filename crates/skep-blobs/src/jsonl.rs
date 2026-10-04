@@ -211,6 +211,23 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), whole, "the torn tail is cut");
     }
 
+    /// TRUST ENDS AT THE FIRST TORN LINE, WHATEVER TORE IT, AND IS NEVER READ
+    /// PAST: for each way a line between two whole ones can be torn — no JSON,
+    /// JSON that is no object, an empty line, two objects run together — open
+    /// answers the lines before it alone and cuts the file there, the whole
+    /// line after it with it.
+    #[test]
+    fn trust_ends_at_the_first_torn_line_whatever_tore_it() {
+        for torn in ["{\"n\":2\n", "[2]\n", "2\n", "\"two\"\n", "null\n", "\n", "{\"n\":2}{\"n\":3}\n"] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("x.log");
+            fs::write(&path, format!("{{\"n\":1}}\n{torn}{{\"n\":4}}\n")).unwrap();
+            let (_, values) = Log::open(path.clone()).unwrap();
+            assert_eq!(values, vec![json!({"n": 1})], "{torn:?}: the lines before it alone");
+            assert_eq!(fs::read_to_string(&path).unwrap(), "{\"n\":1}\n", "{torn:?}: cut there, the line after it too");
+        }
+    }
+
     /// AN APPEND THAT FAILS is cut back off the file: a write cut short —
     /// part of the line on disk, then an error, as a full disk gives —
     /// leaves the file at its whole lines, the next append lands on a whole
@@ -232,6 +249,51 @@ mod tests {
         drop(log);
         let (_, values) = Log::open(path.clone()).unwrap();
         assert_eq!(values, vec![json!({"n": 1}), json!({"n": 3})], "the line after the failure stands");
+    }
+
+    /// A FAILED APPEND LEAVES THE FILE AS IT FOUND IT, WHATEVER OPENED OR
+    /// REWROTE IT: the length it is cut back to is the file's whole lines —
+    /// read at open, over a torn tail cut there too, and reset by a
+    /// compaction that rewrote the file shorter — so a write cut short by a
+    /// full disk never cuts a whole line away, nor leaves behind bytes the
+    /// next open would cut a later whole line with.
+    #[test]
+    fn a_failed_append_leaves_the_file_as_it_found_it_whatever_opened_or_rewrote_it() {
+        for state in ["fresh", "reopened", "reopened over a torn tail", "compacted shorter"] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("x.log");
+            match state {
+                "reopened" => fs::write(&path, "{\"n\":1}\n{\"n\":2}\n").unwrap(),
+                "reopened over a torn tail" => fs::write(&path, "{\"n\":1}\n{\"n\":2}\n{\"n\"").unwrap(),
+                _ => {}
+            }
+            let (mut log, _) = Log::open(path.clone()).unwrap();
+            match state {
+                "fresh" => log.append_synced(&json!({"n": 1})).unwrap(),
+                "compacted shorter" => {
+                    for n in 1..=3 {
+                        log.append_synced(&json!({"n": n})).unwrap();
+                    }
+                    log.compact(vec![json!({"n": 3})].into_iter()).unwrap();
+                }
+                _ => {}
+            }
+            let before = fs::read(&path).unwrap();
+            let failed = log.append_by(&json!({"n": 9}), |file, line| {
+                file.write_all(&line[..4])?;
+                Err(io::Error::other("no space left on the device"))
+            });
+            assert!(failed.is_err(), "{state}");
+            assert_eq!(fs::read(&path).unwrap(), before, "{state}: cut back to exactly the whole lines it held");
+            log.append_synced(&json!({"n": 10})).unwrap();
+            drop(log);
+            let want: Vec<Value> = match state {
+                "fresh" => vec![json!({"n": 1}), json!({"n": 10})],
+                "compacted shorter" => vec![json!({"n": 3}), json!({"n": 10})],
+                _ => vec![json!({"n": 1}), json!({"n": 2}), json!({"n": 10})],
+            };
+            assert_eq!(Log::open(path).unwrap().1, want, "{state}: the line after the failure stands at the next open");
+        }
     }
 
     /// AN APPEND WHOSE CUT-BACK FAILS TOO stops the log: every later append

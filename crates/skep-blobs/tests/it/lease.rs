@@ -1,11 +1,11 @@
 //! THE LEASE LOG on the honest-null arm (M-I5 (c); `media.md` Op inventory
 //! 1, "EACH KEY's CURRENT RECORD IS ITS LATEST, AND OPEN COMPACTS BOTH
 //! STORES"): the three states and the horizon, read off the record alone,
-//! the latest-wins re-PUT, the compaction at open, the pending bytes, and
-//! the torn tail. "A LIVE LEASE OVER A FILE THAT IS NOT THERE READS AS
-//! LAPSED" is the daemon's rule, built on this store's `lease` and
-//! `blob_size`; the store's lease answers the record and nothing of the
-//! file.
+//! a principal's live leases in hex order, the latest-wins re-PUT, the
+//! compaction at open, the pending bytes, and the torn tail. "A LIVE LEASE
+//! OVER A FILE THAT IS NOT THERE READS AS LAPSED" is the daemon's rule,
+//! built on this store's `lease` and `blob_size`; the store's lease answers
+//! the record and nothing of the file.
 
 use std::fs;
 use std::time::Duration;
@@ -47,6 +47,19 @@ fn a_lease_is_live_then_lapsed_within_the_horizon_then_none() {
         LeaseState::Live { size: 5, expires },
         "read off the record alone"
     );
+}
+
+/// A PRINCIPAL's LIVE LEASES LIST IN HEX ORDER (`Store::live_leases_of`, the
+/// deposit read's list): eight deposits come back sorted by hex — eight in
+/// a random order fall sorted once in 40,320.
+#[test]
+fn a_principals_live_leases_list_in_hex_order() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = open(&dir.path().join("blobs"), 0);
+    let mut hexes: Vec<String> = (0u8..8).map(|i| put_whole(&store, "k", &[i; 3], 1).hex).collect();
+    hexes.sort();
+    let listed: Vec<String> = store.live_leases_of("k", 2).into_iter().map(|l| l.hex).collect();
+    assert_eq!(listed, hexes);
 }
 
 /// A re-PUT's lease REPLACES the one before whatever either's expiry: the

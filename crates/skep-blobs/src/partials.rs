@@ -295,4 +295,21 @@ mod tests {
         assert_eq!(handle.hash(), blake3::hash(b"AC"));
         assert_eq!(handle.written(), 2);
     }
+
+    /// A PARTIAL SHORTER THAN ITS RECORD's OFFSET IS REFUSED, NEVER EXTENDED:
+    /// opened past its bytes, the open answers an error and leaves the file
+    /// as it stands, never grown with zeros a resume would append after and a
+    /// finish would hash.
+    #[test]
+    fn a_partial_shorter_than_its_offset_is_refused_and_never_extended() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (id, mut handle, path) = opened(dir.path());
+        handle.write(b"abc").unwrap();
+        handle.sync().unwrap();
+        drop(handle);
+        for offset in [4, 100] {
+            assert!(open_at(dir.path(), "blake3", &id, offset).is_err(), "offset {offset}");
+            assert_eq!(fs::read(&path).unwrap(), b"abc", "offset {offset}: the file as it stood");
+        }
+    }
 }

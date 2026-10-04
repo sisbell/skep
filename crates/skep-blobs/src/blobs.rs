@@ -157,8 +157,8 @@ mod tests {
     use super::*;
 
     /// AN ASIDE NAME is exactly what `aside_name` spells — the prefix, a
-    /// hex name, `-`, a decimal count — and nothing else that begins with
-    /// the prefix.
+    /// hex name, `-`, a decimal count of at most twenty digits, the most
+    /// `u64::MAX` takes — and nothing else that begins with the prefix.
     #[test]
     fn an_aside_name_is_exactly_what_aside_name_spells() {
         let hex = "ab".repeat(32);
@@ -170,6 +170,7 @@ mod tests {
             format!(".retired-{hex}"),
             format!(".retired-{hex}-"),
             format!(".retired-{hex}-1x"),
+            format!(".retired-{hex}-{}", "1".repeat(21)),
             format!(".retired-{}-1", hex.to_uppercase()),
             format!(".retired-{hex}-1/../x"),
             format!("retired-{hex}-1"),

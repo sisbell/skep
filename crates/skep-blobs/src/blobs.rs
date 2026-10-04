@@ -1,12 +1,14 @@
 //! THE FILES, `<root>/<designation>/<hex>`: where a file lives, the
 //! spellings a designation and a hex name must have, the ASIDE name a
-//! replaced file carries until the deferred unlink, the directory fsync
-//! every install order under the root ends in (a rename is durable only at
-//! its directory's fsync — `media.md` Op inventory 1; the register M-I5
-//! (a)), and the floor's one read of the host, the volume's free space. The
-//! order that installs a file is the store's (`store.rs`); the logs' is
-//! `jsonl.rs`'s.
+//! replaced file carries until the deferred unlink, the listings of the
+//! directories that hold those names and open's sweep of the asides
+//! ([`remove_asides`]), the directory fsync every install order under the
+//! root ends in (a rename is durable only at its directory's fsync —
+//! `media.md` Op inventory 1; the register M-I5 (a)), and the floor's one
+//! read of the host, the volume's free space. The order that installs a
+//! file is the store's (`store.rs`); the logs' is `jsonl.rs`'s.
 
+use std::fs::{self, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -15,7 +17,7 @@ use std::path::{Path, PathBuf};
 /// The leading dot keeps it apart from any hex name, as the partial's is.
 /// Nothing names an aside — no lease, no cell — so every reader of a
 /// designation directory passes over one, and the pruner's pass and open's
-/// reconciliation (`partials::reconcile`) remove it.
+/// sweep ([`remove_asides`]) remove it.
 const ASIDE_PREFIX: &str = ".retired-";
 
 /// The aside name of the `n`th replace of `hex` this process makes.
@@ -23,9 +25,13 @@ pub(crate) fn aside_name(hex: &str, n: u64) -> String {
     format!("{ASIDE_PREFIX}{hex}-{n}")
 }
 
-/// Whether a directory entry's name is an aside's.
+/// Whether a directory entry's name is an aside's: exactly what
+/// [`aside_name`] spells — the prefix, a hex name, `-`, and a count in at
+/// most twenty decimal digits.
 pub(crate) fn is_aside_name(name: &str) -> bool {
-    name.starts_with(ASIDE_PREFIX)
+    name.strip_prefix(ASIDE_PREFIX).and_then(|rest| rest.rsplit_once('-')).is_some_and(|(hex, n)| {
+        hex_ok(hex) && !n.is_empty() && n.len() <= 20 && n.bytes().all(|b| b.is_ascii_digit())
+    })
 }
 
 /// A designation's spelling: lowercase letters, digits and `-`, nonempty,
@@ -42,6 +48,67 @@ pub(crate) fn hex_ok(hex: &str) -> bool {
         && hex.len() <= 128
         && hex.len() % 2 == 0
         && hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// Every directory under `root`, by name, in name order — whatever the
+/// names; a reader of designations alone passes over the rest.
+pub(crate) fn dirs_under(root: &Path) -> io::Result<Vec<String>> {
+    let mut out = Vec::new();
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            out.push(entry.file_name().to_string_lossy().into_owned());
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// The names in `<root>/<designation>/` that `keep` accepts, handed each
+/// name and its entry's type, in name order — none where the designation
+/// is malformed or its directory absent.
+pub(crate) fn names_in(
+    root: &Path,
+    designation: &str,
+    keep: impl Fn(&str, FileType) -> bool,
+) -> io::Result<Vec<String>> {
+    let mut out = Vec::new();
+    if !designation_ok(designation) {
+        return Ok(out);
+    }
+    let entries = match fs::read_dir(root.join(designation)) {
+        Ok(d) => d,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(out),
+        Err(e) => return Err(e),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if keep(&name, entry.file_type()?) {
+            out.push(name);
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// OPEN's SWEEP OF THE ASIDES: every aside in every designation directory
+/// under `root` removed, each directory fsynced where one went — the second
+/// names of replaced files whose deferred unlink a crash between the
+/// finish's answer and that unlink never let run. Nothing names an aside,
+/// so nothing is lost.
+pub(crate) fn remove_asides(root: &Path) -> io::Result<()> {
+    for designation in dirs_under(root)? {
+        let asides = names_in(root, &designation, |name, _| is_aside_name(name))?;
+        let dir = root.join(&designation);
+        for name in &asides {
+            fs::remove_file(dir.join(name))?;
+        }
+        if !asides.is_empty() {
+            fsync_dir(&dir)?;
+        }
+    }
+    Ok(())
 }
 
 /// Fsync a directory, so entry creations, removals and renames inside it
@@ -69,4 +136,31 @@ pub(crate) fn free_space(path: &Path) -> io::Result<u64> {
 /// The path of a blob under `root`.
 pub(crate) fn blob_path(root: &Path, designation: &str, hex: &str) -> PathBuf {
     root.join(designation).join(hex)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// AN ASIDE NAME is exactly what `aside_name` spells — the prefix, a
+    /// hex name, `-`, a decimal count — and nothing else that begins with
+    /// the prefix.
+    #[test]
+    fn an_aside_name_is_exactly_what_aside_name_spells() {
+        let hex = "ab".repeat(32);
+        assert!(is_aside_name(&aside_name(&hex, 0)));
+        assert!(is_aside_name(&aside_name(&hex, u64::MAX)));
+        for near in [
+            ".retired-".to_string(),
+            ".retired-x".to_string(),
+            format!(".retired-{hex}"),
+            format!(".retired-{hex}-"),
+            format!(".retired-{hex}-1x"),
+            format!(".retired-{}-1", hex.to_uppercase()),
+            format!(".retired-{hex}-1/../x"),
+            format!("retired-{hex}-1"),
+        ] {
+            assert!(!is_aside_name(&near), "{near}");
+        }
+    }
 }

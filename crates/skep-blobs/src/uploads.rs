@@ -10,7 +10,10 @@
 //! never a sequence, spelled as 32 lowercase hex; it answers to the
 //! uploader alone — a lookup takes the asking key, and an identifier whose
 //! record is another key's answers exactly as one that was never minted
-//! (the register M-I2 (e)).
+//! (the register M-I2 (e)). The check is [`UploadRecords`]' own: every
+//! lookup it answers takes the asking key, and its one keyless lookup
+//! serves the pruner's expiry, which acts on an expired upload whatever key
+//! minted it.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -27,8 +30,9 @@ pub const IDENTIFIER_BYTES: usize = 16;
 /// The log's file name under the root.
 const UPLOADS_LOG: &str = "uploads.log";
 
-/// One upload's identifier — 128 bits from the OS, compared exactly.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+/// One upload's identifier — 128 bits from the OS, compared exactly, and
+/// ordered by its bytes, which is the order of its hex spelling.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct UploadId([u8; IDENTIFIER_BYTES]);
 
 impl UploadId {
@@ -133,7 +137,11 @@ fn parse_line(v: &Value) -> Option<Line> {
     }))
 }
 
-/// The records as held in memory beside their log.
+/// The records as held in memory beside their log — answered by the asking
+/// key, as the lease log answers its leases: a record goes only to the key
+/// that minted it, save to the pruner's keyless lookup
+/// ([`UploadRecords::of_any_key`]) and open's walk of every record
+/// ([`UploadRecords::all`]).
 pub(crate) struct UploadRecords {
     log: Log,
     records: HashMap<UploadId, UploadRecord>,
@@ -164,10 +172,60 @@ impl UploadRecords {
         Ok(UploadRecords { log, records })
     }
 
-    pub fn get(&self, id: &UploadId) -> Option<&UploadRecord> {
+    /// THE KEY's record by identifier, whatever its expiry — `None` for an
+    /// identifier `key`'s records do not name. The appends' and the durable
+    /// point's lookup.
+    pub fn of_key(&self, key: &str, id: &UploadId) -> Option<&UploadRecord> {
+        self.records.get(id).filter(|r| r.key == key)
+    }
+
+    /// THE KEY's STANDING record by identifier — `None` for an identifier
+    /// `key`'s records do not name or whose upload has expired at `now_ms`,
+    /// one answer for both (M-I2 (e)).
+    pub fn standing(&self, key: &str, id: &UploadId, now_ms: u64) -> Option<&UploadRecord> {
+        self.of_key(key, id).filter(|r| r.stands(now_ms))
+    }
+
+    /// THE KEY's standing uploads at `now_ms`, in identifier order.
+    pub fn standing_of(&self, key: &str, now_ms: u64) -> Vec<UploadRecord> {
+        let mut out: Vec<UploadRecord> =
+            self.records.values().filter(|r| r.key == key && r.stands(now_ms)).cloned().collect();
+        out.sort_by_key(|r| r.id);
+        out
+    }
+
+    /// EVERY key's expired uploads at `now_ms`, in identifier order — the
+    /// pruner's read.
+    pub fn expired(&self, now_ms: u64) -> Vec<UploadRecord> {
+        let mut out: Vec<UploadRecord> = self.records.values().filter(|r| !r.stands(now_ms)).cloned().collect();
+        out.sort_by_key(|r| r.id);
+        out
+    }
+
+    /// The sum of the key's standing uploads' durable offsets at `now_ms` —
+    /// its bytes received and not yet finished.
+    pub fn received_of(&self, key: &str, now_ms: u64) -> u64 {
+        self.records
+            .values()
+            .filter(|r| r.key == key && r.stands(now_ms))
+            .fold(0u64, |acc, r| acc.saturating_add(r.offset))
+    }
+
+    /// The sum of every key's standing uploads' durable offsets at `now_ms`.
+    pub fn received_total(&self, now_ms: u64) -> u64 {
+        self.records.values().filter(|r| r.stands(now_ms)).fold(0u64, |acc, r| acc.saturating_add(r.offset))
+    }
+
+    /// ANY key's record by identifier — the one keyless lookup, which serves
+    /// the pruner's expiry alone ([`Store::expire_upload`](crate::Store::expire_upload)):
+    /// that act removes an expired upload whoever minted it, and answers
+    /// nothing of the record.
+    pub fn of_any_key(&self, id: &UploadId) -> Option<&UploadRecord> {
         self.records.get(id)
     }
 
+    /// Every record, every key's — the walk open's reconciliation makes over
+    /// them all, and nothing else.
     pub fn all(&self) -> impl Iterator<Item = &UploadRecord> {
         self.records.values()
     }
@@ -195,7 +253,7 @@ impl UploadRecords {
     /// not one — so the log never grows with the board's upload history.
     pub fn compact(&mut self) -> io::Result<()> {
         let mut ids: Vec<&UploadId> = self.records.keys().collect();
-        ids.sort_by_key(|id| id.to_hex());
+        ids.sort();
         self.log.compact(ids.into_iter().map(|id| self.records[id].value()))
     }
 }

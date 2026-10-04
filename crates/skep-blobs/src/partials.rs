@@ -14,18 +14,17 @@
 //! names no partial is retired; and their lengths are set to agree — a
 //! longer partial cut back to the record's offset, a record whose offset
 //! passes its partial's length set back to that length. An expired upload
-//! is retired and its partial removed at open too, as the daemon's pruner
-//! removes one while it serves ([`Store::expire_upload`](crate::Store::expire_upload)
-//! is the pass's door); and every ASIDE name a replace left — a crash
-//! between the answer and the deferred unlink — is removed, nothing naming
-//! it.
+//! has its partial removed and its record retired at open too, in the order
+//! the end and the daemon's pruner take while the store serves
+//! ([`Store::expire_upload`](crate::Store::expire_upload) is the pass's
+//! door).
 
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use crate::blobs::{designation_ok, fsync_dir, is_aside_name};
+use crate::blobs::{dirs_under, fsync_dir, names_in};
 use crate::uploads::{UploadId, UploadRecords};
 
 /// THE FSYNC GRAIN of a partial — 1 MiB, INTERIM: the most a dropped
@@ -35,17 +34,25 @@ pub const SYNC_GRAIN: u64 = 1024 * 1024;
 
 /// One upload open in this process: its partial's handle, the hasher over
 /// every byte written so far, the hasher as it stood at the last durable
-/// point, and the bytes written (the file's length), which may stand past
-/// the record's durable offset until the next sync. The fields are this
-/// file's alone — only [`open_at`], [`Live::write`], [`Live::sync`] and
-/// [`Live::cut_back_to`] move them — so the hashers stay the hashes of
-/// exactly the bytes written and the bytes synced, and the hash a finish
-/// names the file by ([`Live::hash`]) is its bytes' hash.
+/// point and the count of bytes that point covers, the bytes written, and
+/// whether a write or sync has failed since the last cut-back. The fields
+/// are this file's alone — only [`open_at`], [`Live::write`], [`Live::sync`]
+/// and [`Live::cut_back_to`] move them — and the claim they keep holds
+/// across a failed call: the hasher is the hash of exactly the bytes
+/// written, the durable hasher of exactly the first `durable` bytes, so the
+/// hash a finish names the file by ([`Live::hash`]) is its bytes' hash. A
+/// write or sync that fails marks the upload TORN — the file may then hold
+/// bytes no hasher covers, or bytes whose durability nothing vouches for —
+/// and nothing is written or synced until a cut-back has put the file at a
+/// count its hasher covers. A torn upload needs no release: the next resume
+/// is that cut-back.
 pub(crate) struct Live {
     file: File,
     hasher: blake3::Hasher,
     hasher_durable: blake3::Hasher,
+    durable: u64,
     written: u64,
+    torn: bool,
 }
 
 /// The partial's file name inside its designation directory —
@@ -98,11 +105,18 @@ pub(crate) fn open_at(root: &Path, designation: &str, id: &UploadId, offset: u64
         file.set_len(offset)?;
         file.sync_all()?;
     }
+    let hasher = hash_prefix(&mut file, offset)?;
+    file.seek(SeekFrom::End(0))?;
+    Ok(Live { file, hasher: hasher.clone(), hasher_durable: hasher, durable: offset, written: offset, torn: false })
+}
+
+/// The hasher over the first `len` bytes of `file`, read from its start.
+fn hash_prefix(file: &mut File, len: u64) -> io::Result<blake3::Hasher> {
     let mut hasher = blake3::Hasher::new();
-    if offset > 0 {
+    if len > 0 {
         file.seek(SeekFrom::Start(0))?;
         let mut buf = vec![0u8; 256 * 1024];
-        let mut left = offset;
+        let mut left = len;
         while left > 0 {
             let want = buf.len().min(left as usize);
             let n = file.read(&mut buf[..want])?;
@@ -113,12 +127,13 @@ pub(crate) fn open_at(root: &Path, designation: &str, id: &UploadId, offset: u64
             left -= n as u64;
         }
     }
-    file.seek(SeekFrom::End(0))?;
-    Ok(Live { file, hasher: hasher.clone(), hasher_durable: hasher, written: offset })
+    Ok(hasher)
 }
 
 impl Live {
-    /// The bytes written so far — the file's length, durable or not.
+    /// The bytes written so far, durable or not — counted by the writes
+    /// that succeeded. Past a failed write the file may hold more, which
+    /// the next cut-back removes.
     pub fn written(&self) -> u64 {
         self.written
     }
@@ -129,31 +144,69 @@ impl Live {
         self.hasher.finalize()
     }
 
-    /// Write `bytes` at the end and hash them; not yet durable.
+    /// Write `bytes` at the end and hash them; not yet durable. Refused on
+    /// a torn upload; a write that fails tears it, whatever part of `bytes`
+    /// reached the file.
     pub fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
-        self.file.write_all(bytes)?;
+        self.refuse_torn()?;
+        if let Err(e) = self.file.write_all(bytes) {
+            self.torn = true;
+            return Err(e);
+        }
         self.hasher.update(bytes);
         self.written += bytes.len() as u64;
         Ok(())
     }
 
-    /// Make every byte written durable: the one fsync a grain costs.
+    /// Make every byte written durable — the one fsync a grain costs — and
+    /// move the durable point to it. Refused on a torn upload; a sync that
+    /// fails tears it, since a retried fsync can answer success over pages
+    /// the failed one dropped, and no later sync vouches for those bytes.
     pub fn sync(&mut self) -> io::Result<()> {
-        self.file.sync_all()?;
+        self.refuse_torn()?;
+        if let Err(e) = self.file.sync_all() {
+            self.torn = true;
+            return Err(e);
+        }
         self.hasher_durable = self.hasher.clone();
+        self.durable = self.written;
         Ok(())
     }
 
-    /// Cut the file back to `offset` (the record's durable offset) and the
-    /// hasher with it — a resume in this process after a request that
-    /// dropped mid-grain.
+    /// Cut the file back to `offset`, and the hashers with it — a resume in
+    /// this process. `offset` is the record's durable offset, which never
+    /// passes this upload's durable point: the record's offset is written
+    /// only after a sync, from the count that sync covered. Three branches:
+    /// an upload whole at `offset` is left as it is; one whose durable point
+    /// is `offset` takes its durable hasher back; and one whose durable
+    /// point passes `offset` — the record's write failed after the partial's
+    /// sync — rebuilds its hasher from the file's first `offset` bytes. A
+    /// torn upload is always cut, and stays torn until the cut completes.
     pub fn cut_back_to(&mut self, offset: u64) -> io::Result<()> {
-        if self.written != offset {
-            self.file.set_len(offset)?;
-            self.file.sync_all()?;
-            self.file.seek(SeekFrom::End(0))?;
-            self.hasher = self.hasher_durable.clone();
-            self.written = offset;
+        debug_assert!(offset <= self.durable, "a record's offset never passes the bytes its upload synced");
+        if !self.torn && self.written == offset {
+            return Ok(());
+        }
+        self.torn = true;
+        self.file.set_len(offset)?;
+        self.file.sync_all()?;
+        let hasher =
+            if offset == self.durable { self.hasher_durable.clone() } else { hash_prefix(&mut self.file, offset)? };
+        self.file.seek(SeekFrom::End(0))?;
+        self.hasher = hasher.clone();
+        self.hasher_durable = hasher;
+        self.durable = offset;
+        self.written = offset;
+        self.torn = false;
+        Ok(())
+    }
+
+    /// A torn upload's refusal of a write or a sync.
+    fn refuse_torn(&self) -> io::Result<()> {
+        if self.torn {
+            return Err(io::Error::other(
+                "an earlier write or sync of this partial failed: a resume cuts it back before another",
+            ));
         }
         Ok(())
     }
@@ -172,15 +225,16 @@ pub(crate) fn remove(root: &Path, designation: &str, id: &UploadId) -> io::Resul
 /// under `root`.
 pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -> io::Result<()> {
     let mut named: HashSet<(String, UploadId)> = HashSet::new();
-    // Records first: expired ones retired; the rest held to their partials.
+    // Records first: expired ones removed as the end and the pruner remove
+    // one, the partial before the record; the rest held to their partials.
     let all: Vec<_> = records.all().cloned().collect();
     for r in &all {
-        let path = partial_path(root, &r.designation, &r.id);
         if !r.stands(now_ms) {
+            remove(root, &r.designation, &r.id)?;
             records.retire(&r.id)?;
-            let _ = fs::remove_file(&path);
             continue;
         }
+        let path = partial_path(root, &r.designation, &r.id);
         let Ok(meta) = fs::metadata(&path) else {
             records.retire(&r.id)?;
             continue;
@@ -198,37 +252,78 @@ pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -
         named.insert((r.designation.clone(), r.id));
     }
     // Then the directories: every partial no record names is an orphan.
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
+    for designation in dirs_under(root)? {
+        let orphans = names_in(root, &designation, |name, _| {
+            id_of_partial_name(name).is_some_and(|id| !named.contains(&(designation.clone(), id)))
+        })?;
+        let dir = root.join(&designation);
+        for name in &orphans {
+            fs::remove_file(dir.join(name))?;
         }
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !designation_ok(&name) {
-            continue;
-        }
-        let dir = entry.path();
-        let mut removed = false;
-        for file in fs::read_dir(&dir)? {
-            let file = file?;
-            let fname = file.file_name().to_string_lossy().into_owned();
-            // An aside a replace left behind: a second name of a file whose
-            // first name the finish answered, which the deferred unlink
-            // never reached. Named by nothing; removed.
-            if is_aside_name(&fname) {
-                fs::remove_file(file.path())?;
-                removed = true;
-                continue;
-            }
-            let Some(id) = id_of_partial_name(&fname) else { continue };
-            if !named.contains(&(name.clone(), id)) {
-                fs::remove_file(file.path())?;
-                removed = true;
-            }
-        }
-        if removed {
+        if !orphans.is_empty() {
             fsync_dir(&dir)?;
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fresh partial under `root`, opened at offset 0, and its path.
+    fn opened(root: &Path) -> (Live, PathBuf) {
+        let id = UploadId::parse("0123456789abcdef0123456789abcdef").unwrap();
+        create(root, "blake3", &id).unwrap();
+        (open_at(root, "blake3", &id, 0).unwrap(), partial_path(root, "blake3", &id))
+    }
+
+    /// A CUT-BACK BELOW THE DURABLE POINT rebuilds the hasher from the
+    /// file: A written and synced, B written, the upload cut back to 0 —
+    /// the record's write having failed after A's sync — and what follows
+    /// is hashed over the file's bytes alone.
+    #[test]
+    fn a_cut_back_below_the_durable_point_rebuilds_the_hash_from_the_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut live, path) = opened(dir.path());
+        live.write(b"A, synced").unwrap();
+        live.sync().unwrap();
+        live.write(b"B, never synced").unwrap();
+        live.cut_back_to(0).unwrap();
+        live.write(b"C").unwrap();
+        live.sync().unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"C");
+        assert_eq!(live.hash(), blake3::hash(b"C"), "the hash is the file's bytes'");
+    }
+
+    /// A FAILED WRITE TEARS THE UPLOAD: bytes it left on disk are counted
+    /// by no hasher, so nothing is written or synced until a cut-back
+    /// removes them; past it, the upload continues from its durable point
+    /// and its hash is its file's.
+    #[test]
+    fn a_failed_write_tears_the_upload_until_a_cut_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut live, path) = opened(dir.path());
+        live.write(b"A").unwrap();
+        live.sync().unwrap();
+        // A read-only handle: the next write fails at the OS, as a full or
+        // failing disk's would. The bytes a write cut short leaves land
+        // through a second handle, and the upload's own handle comes back
+        // past them, where the failed write left its position.
+        live.file = File::open(&path).unwrap();
+        assert!(live.write(b"B").is_err());
+        OpenOptions::new().append(true).open(&path).unwrap().write_all(b"stray").unwrap();
+        live.file = OpenOptions::new().read(true).write(true).open(&path).unwrap();
+        live.file.seek(SeekFrom::End(0)).unwrap();
+        assert!(live.write(b"C").is_err(), "a torn upload takes no write");
+        assert!(live.sync().is_err(), "and no sync");
+        assert_eq!(fs::read(&path).unwrap(), b"Astray");
+        live.cut_back_to(1).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"A", "the cut-back removes what no hasher covers");
+        live.write(b"C").unwrap();
+        live.sync().unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"AC");
+        assert_eq!(live.hash(), blake3::hash(b"AC"));
+        assert_eq!(live.written(), 2);
+    }
 }

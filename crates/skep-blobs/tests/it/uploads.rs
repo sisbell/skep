@@ -12,10 +12,11 @@ use skep_blobs::{BlobError, UploadId, SYNC_GRAIN};
 use crate::{hex_of, open, standing, INTERVAL};
 
 /// (1) THE IDENTIFIER: 32 lowercase hex of 128 OS bits, never a sequence —
-/// two mints differ; the parse admits exactly the spelling; and an
-/// identifier is answered to its key ALONE: another key's lookup, a resume,
-/// an end and a finish each answer `NoUpload`, exactly as a never-minted
-/// identifier does (M-I2 (e)).
+/// two mints differ; the parse admits exactly the spelling; identifiers
+/// order as their spellings do; and an identifier is answered to its key
+/// ALONE: another key's lookup, a resume, an end, an append and the count
+/// of bytes written each answer as for a never-minted identifier, even
+/// while the upload is open in this process (M-I2 (e)).
 #[test]
 fn the_identifier_is_unpredictable_and_answers_to_its_key_alone() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -28,6 +29,7 @@ fn the_identifier_is_unpredictable_and_answers_to_its_key_alone() {
     assert_eq!(UploadId::parse(&a.id.to_hex()), Some(a.id));
     assert_eq!(UploadId::parse(&a.id.to_hex().to_uppercase()), None);
     assert_eq!(UploadId::parse(&a.id.to_hex()[..31]), None);
+    assert_eq!(a.id < b.id, a.id.to_hex() < b.id.to_hex(), "an identifier orders as its spelling");
     let never = UploadId::parse("00000000000000000000000000000000").unwrap();
     for (key, id) in [("b", a.id), ("a", never)] {
         assert!(store.upload(key, &id, 1).is_none());
@@ -35,7 +37,16 @@ fn the_identifier_is_unpredictable_and_answers_to_its_key_alone() {
         assert!(matches!(store.end_upload(key, &id, 1), Err(BlobError::NoUpload)));
     }
     assert_eq!(store.uploads_of("b", 1), vec![]);
-    assert_eq!(store.uploads_of("a", 1).len(), 2);
+    let listed: Vec<String> = store.uploads_of("a", 1).iter().map(|r| r.id.to_hex()).collect();
+    let mut ordered = listed.clone();
+    ordered.sort();
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed, ordered, "in identifier order");
+    // Open in this process, the upload still answers its own key alone.
+    store.resume("a", &a.id, 0, 1).unwrap();
+    assert_eq!(store.written("a", &a.id, 1), Some(0));
+    assert_eq!(store.written("b", &a.id, 1), None, "another key's count is no upload's");
+    assert!(matches!(store.append("b", &a.id, b"x", 1, INTERVAL), Err(BlobError::NoUpload)));
 }
 
 /// (3) ONE EXPIRY, fixed from the LAST BYTE RECEIVED and durable with it:
@@ -88,7 +99,7 @@ fn a_byte_is_received_once_durable_and_a_resume_continues_from_the_records_offse
     whole.extend(rest);
     whole.extend([4u8; 100]);
     assert_eq!(fin.hex, hex_of(&whole), "the hash covers the bytes as cut back and continued");
-    assert_eq!(fs::read(store.blob_path("blake3", &fin.hex)).unwrap(), whole);
+    assert_eq!(fs::read(store.blob_path("blake3", &fin.hex).unwrap()).unwrap(), whole);
     assert!(!partial.exists());
 }
 
@@ -98,7 +109,9 @@ fn a_byte_is_received_once_durable_and_a_resume_continues_from_the_records_offse
 /// record's offset is cut back; a record whose offset passes its partial's
 /// length is set back to the length (a copy that took the partial before
 /// its record); an expired upload is retired and its partial removed; and
-/// the records log is compacted to the current records.
+/// the records log is compacted to the current records. Beside them, every
+/// aside a crash left is removed — and a name that only begins as an
+/// aside's is none, and is left.
 #[test]
 fn open_reconciles_the_partials_and_the_records_both_ways() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -122,8 +135,10 @@ fn open_reconciles_the_partials_and_the_records_both_ways() {
     fs::create_dir_all(root.join("sha256-tree")).unwrap();
     fs::write(root.join("sha256-tree").join(".upload-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"), b"orphan too").unwrap();
     // An aside a replace left — a crash between the answer and the deferred
-    // unlink — named by nothing.
+    // unlink — named by nothing; and a file whose name only begins as an
+    // aside's, which no replace made.
     fs::write(root.join("blake3").join(format!(".retired-{}-0", hex_of(b"old"))), b"old").unwrap();
+    fs::write(root.join("blake3").join(".retired-x"), b"not an aside").unwrap();
     let lines_before = fs::read_to_string(root.join("uploads.log")).unwrap().lines().count();
     assert!(lines_before > 5, "each standing upload wrote more than one line");
     // Reopened past `expired`'s expiry alone.
@@ -143,6 +158,8 @@ fn open_reconciles_the_partials_and_the_records_both_ways() {
     assert!(!root.join("blake3").join(".upload-ffffffffffffffffffffffffffffffff").exists(), "an orphan is removed");
     assert!(!root.join("sha256-tree").join(".upload-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee").exists(), "in every designation directory");
     assert!(store.asides_of("blake3").unwrap().is_empty(), "an aside is removed at open");
+    assert!(root.join("blake3").join(".retired-x").is_file(), "a name no aside has is left");
+    assert!(!store.remove_aside("blake3", ".retired-x").unwrap(), "and is no aside to remove");
     assert_eq!(store.designations().unwrap(), vec!["blake3".to_string(), "sha256-tree".to_string()], "every directory under the root, the foreign one included");
     let lines_after = fs::read_to_string(root.join("uploads.log")).unwrap().lines().count();
     assert_eq!(lines_after, 3, "compacted to the three current records");

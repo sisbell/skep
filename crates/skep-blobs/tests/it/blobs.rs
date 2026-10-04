@@ -98,7 +98,7 @@ fn a_failure_at_each_step_of_the_finish_leaves_what_the_order_promises() {
         let fin = put_whole(&store, "k", &bytes, now + 2);
         assert_eq!(fin.hex, hex);
         assert_eq!(fin.size, bytes.len() as u64);
-        assert_eq!(fs::read(store.blob_path("blake3", &hex)).unwrap(), bytes);
+        assert_eq!(fs::read(store.blob_path("blake3", &hex).unwrap()).unwrap(), bytes);
         assert_eq!(store.lease("k", "blake3", &hex, now + 2), LeaseState::Live { size: bytes.len() as u64, expires: now + 2 + INTERVAL });
     }
 }
@@ -141,7 +141,7 @@ fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
             store.append("k", &rec.id, &right, now, INTERVAL).unwrap();
             store.settle("k", &rec.id, now, INTERVAL).unwrap();
             let finish = store.finish("k", &rec.id, now, now + INTERVAL);
-            let at_hash = fs::read(store.blob_path("blake3", &hex)).expect("the hash is never without a file");
+            let at_hash = fs::read(store.blob_path("blake3", &hex).unwrap()).expect("the hash is never without a file");
             let asides = store.asides_of("blake3").unwrap();
             match step {
                 Step::TempSync | Step::LinkAside => {
@@ -173,7 +173,7 @@ fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
                     store.fail_at(None);
                     assert_eq!(store.retire_asides().unwrap(), 1, "the next drain takes it");
                     assert!(store.asides_of("blake3").unwrap().is_empty(), "gone");
-                    assert_eq!(fs::read(store.blob_path("blake3", &hex)).unwrap(), right);
+                    assert_eq!(fs::read(store.blob_path("blake3", &hex).unwrap()).unwrap(), right);
                 }
                 Step::RootSync => unreachable!("the designation directory exists before every replace"),
             }
@@ -185,7 +185,7 @@ fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
         let store = open(&root, now + 1);
         assert!(store.asides_of("blake3").unwrap().is_empty(), "{step:?}: open removes the aside ({aside_after:?})");
         let expected = if matches!(step, Step::TempSync | Step::LinkAside | Step::Rename) { &wrong } else { &right };
-        assert_eq!(&fs::read(store.blob_path("blake3", &hex)).unwrap(), expected, "{step:?}");
+        assert_eq!(&fs::read(store.blob_path("blake3", &hex).unwrap()).unwrap(), expected, "{step:?}");
         if matches!(step, Step::TempSync | Step::LinkAside | Step::Rename) {
             assert!(partial.is_file(), "{step:?}: the partial stands with its record");
         } else {
@@ -198,7 +198,7 @@ fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
         // leased, one answer — a replace of whatever the step left.
         let fin = put_whole(&store, "k", &right, now + 2);
         assert_eq!(fin.hex, hex);
-        assert_eq!(fs::read(store.blob_path("blake3", &hex)).unwrap(), right);
+        assert_eq!(fs::read(store.blob_path("blake3", &hex).unwrap()).unwrap(), right);
         assert_eq!(store.retire_asides().unwrap(), 1, "one aside per replace, whatever the bytes replaced");
         assert!(store.asides_of("blake3").unwrap().is_empty());
     }
@@ -227,7 +227,7 @@ fn replace_repairs_a_corrupt_file_and_answers_as_a_fresh_put_does() {
     assert_eq!(replaced.designation, fresh.designation);
     assert_eq!(replaced.hex, hex);
     assert_eq!(replaced.size, right.len() as u64);
-    assert_eq!(fs::read(store.blob_path("blake3", &hex)).unwrap(), right, "repaired");
+    assert_eq!(fs::read(store.blob_path("blake3", &hex).unwrap()).unwrap(), right, "repaired");
     // The old instance's second name stands until the deferred step, and
     // holds the old bytes; the drain unlinks it.
     let asides = store.asides_of("blake3").unwrap();
@@ -241,7 +241,7 @@ fn replace_repairs_a_corrupt_file_and_answers_as_a_fresh_put_does() {
     // answer again, the file the same.
     let again = put_whole(&store, "k2", &right, 30);
     assert_eq!(again, replaced);
-    assert_eq!(fs::read(store.blob_path("blake3", &hex)).unwrap(), right);
+    assert_eq!(fs::read(store.blob_path("blake3", &hex).unwrap()).unwrap(), right);
     assert_eq!(store.retire_asides().unwrap(), 1, "one aside per replace, whatever the bytes");
     // Each key holds its own lease; neither answer named the other's.
     assert!(matches!(store.lease("k", "blake3", &hex, 31), LeaseState::Live { .. }));
@@ -261,11 +261,14 @@ fn replace_repairs_a_corrupt_file_and_answers_as_a_fresh_put_does() {
 }
 
 /// The size check's read: present with its length, absent as `None`, and a
-/// name that is no hex — a partial's, a path's — as absent too.
+/// name that is no hex — a partial's, a path's — as absent too. And the
+/// door it reads through: a path is answered for well-formed names alone,
+/// so no name a caller hands in reaches past its designation directory.
 #[test]
 fn blob_len_answers_the_files_length_and_nothing_for_a_name_that_is_no_hex() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let store = open(&dir.path().join("blobs"), 0);
+    let root = dir.path().join("blobs");
+    let store = open(&root, 0);
     let fin = put_whole(&store, "k", b"12345", 1);
     assert_eq!(store.blob_len("blake3", &fin.hex), Some(5));
     assert_eq!(store.blob_len("blake3", &hex_of(b"other")), None);
@@ -273,6 +276,10 @@ fn blob_len_answers_the_files_length_and_nothing_for_a_name_that_is_no_hex() {
     assert_eq!(store.blob_len("blake3", "ABCDEF"), None, "uppercase is no hex here");
     assert_eq!(store.blob_len("BLAKE3", &fin.hex), None, "a designation is lowercase");
     assert_eq!(store.blob_len("blake3", ".upload-00000000000000000000000000000000"), None);
+    assert_eq!(store.blob_path("blake3", &fin.hex), Some(root.join("blake3").join(&fin.hex)));
+    assert_eq!(store.blob_path("blake3", "../leases.log"), None, "no path out of the directory");
+    assert_eq!(store.blob_path("BLAKE3", &fin.hex), None);
+    assert_eq!(store.blob_path("..", &fin.hex), None);
 }
 
 /// The floor's read answers the volume's free space — a positive figure on

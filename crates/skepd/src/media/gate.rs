@@ -607,7 +607,7 @@ mod tests {
         store.settle(&key, &rec.id, now, 10_000).unwrap();
         store.finish(&key, &rec.id, now, now + 10_000).unwrap();
         assert_eq!(gate.binding(p, &cell), Binding::Admitted);
-        std::fs::remove_file(store.blob_path(DESIGNATION, &hex_of(&hash))).unwrap();
+        std::fs::remove_file(store.blob_path(DESIGNATION, &hex_of(&hash)).unwrap()).unwrap();
         assert_eq!(gate.binding(p, &cell), Binding::Lapsed, "a live lease over no file reads as lapsed");
 
         // THE INDEX ARM. The file re-deposited, the cell entered as p's.
@@ -637,7 +637,7 @@ mod tests {
         assert_eq!(gate.binding(p, &cell), Binding::Admitted, "named by p's own cell: admitted past the lease's horizon");
         assert_eq!(gate.binding(p, &Cell { hash, size: 8 }), Binding::Unbound, "named, the file whole at the named size, the cell contradicting it: the size check's answer");
         assert_eq!(gate.binding(PrincipalId(8), &cell), Binding::Unbound, "another principal's cells admit nothing of this one's");
-        let path = store.blob_path(DESIGNATION, &hex_of(&hash));
+        let path = store.blob_path(DESIGNATION, &hex_of(&hash)).unwrap();
         std::fs::write(&path, b"a pictur").unwrap();
         assert_eq!(gate.binding(p, &cell), Binding::Lapsed, "named, the file not whole: the deposit is gone");
         std::fs::remove_file(&path).unwrap();

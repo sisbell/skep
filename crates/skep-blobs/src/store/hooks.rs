@@ -6,17 +6,17 @@
 //! place (the fsync-order suite observes what each failure leaves). And the
 //! three methods only a test calls: [`Store::install`], which plants a file
 //! under a hex its bytes need not hash to; [`Store::written`], the bytes a
-//! resumed upload has written, durable or not, read off an upload open here
-//! whatever key asks; and [`Store::asides_pending`], the deferred unlink's
-//! queue. A build without the feature carries none of it, and its gate
-//! before a step is a no-op (`store.rs`).
+//! resumed upload has written, durable or not, answered to its own key
+//! alone; and [`Store::asides_pending`], the deferred unlink's queue. A
+//! build without the feature carries none of it, and its gate before a step
+//! is a no-op (`store.rs`).
 
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::Path;
 
 use super::{Step, Store};
-use crate::blobs::{designation_ok, fsync_dir, hex_ok};
+use crate::blobs::fsync_dir;
 use crate::uploads::UploadId;
 
 /// The hazard seam's state: at most one failure point and one hold.
@@ -66,20 +66,21 @@ impl Store {
     /// not have, so only the seam carries it; the operator's pull
     /// (`media.md` §Recovery) re-hashes what it installs and opens no store.
     pub fn install(&self, designation: &str, hex: &str, bytes: &[u8]) -> io::Result<()> {
-        if !designation_ok(designation) || !hex_ok(hex) {
+        let Some(path) = self.blob_path(designation, hex) else {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "designation or hex"));
-        }
-        install_whole(&self.blob_path(designation, hex), bytes)?;
+        };
+        install_whole(&path, bytes)?;
         fsync_dir(&self.root)
     }
 
     /// TEST HOOK (`test-hooks`): the bytes written so far of a resumed
-    /// upload (the file's length, durable or not), or the record's offset
-    /// where the upload is not resumed here — the suites' read of bytes
-    /// written and not yet received. An upload open in this process answers
-    /// whatever `key` asks; the daemon takes the count from
+    /// upload (durable or not), or the record's offset where the upload is
+    /// not resumed here — the suites' read of bytes written and not yet
+    /// received. `None` for an identifier `key`'s records do not name, as
+    /// [`Store::append`] answers it; the daemon takes the count from
     /// [`Store::append`]'s answer instead.
     pub fn written(&self, key: &str, id: &UploadId, now_ms: u64) -> Option<u64> {
+        self.uploads.lock().of_key(key, id)?;
         if let Some(l) = self.live.lock().get(id) {
             return Some(l.written());
         }

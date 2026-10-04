@@ -102,10 +102,26 @@ pub struct Finished {
 /// acts of ONE upload (the daemon's hold on an upload's identifier while
 /// a stream owns it), and the store's own locks keep its records whole
 /// across uploads.
+///
+/// THE STORE CHECKS EVERY NAME IT IS HANDED. A designation or a hex a
+/// caller passes in becomes a path only past its spelling's check
+/// (`blobs.rs`), made here at the door: a malformed one is answered as
+/// absent by every read and act — [`Store::blob_path`], [`Store::blob_len`],
+/// [`Store::blobs_of`], [`Store::asides_of`], [`Store::unlink_blob`],
+/// [`Store::remove_aside`] — and refused as `InvalidInput` by
+/// [`Store::create_upload`]. Inside the crate a name that has passed the
+/// door, or that the store spelled itself (a finish's hash), is trusted.
 pub struct Store {
     root: PathBuf,
     uploads: Mutex<UploadRecords>,
     leases: Mutex<LeaseLog>,
+    /// The uploads open in this process (`Live`: a partial's handle and its
+    /// hashers). The lock does three jobs: it keeps the map whole; it gives
+    /// one call sole use of an open upload; and, held through the whole of
+    /// a finish, it runs the finishes one at a time — so two finishes of
+    /// one hash never interleave the replace's check, link and rename, which
+    /// would let the second rename free the first file's blocks inside its
+    /// own answer. A narrower lock here owes the finish a lock of its own.
     live: Mutex<HashMap<UploadId, Live>>,
     /// Designation directories this process created whose entry in the
     /// root is not yet fsynced; the first finish into one syncs the root.
@@ -130,14 +146,15 @@ impl std::fmt::Debug for Store {
 impl Store {
     /// Open the store at `root` (created where absent): the lease log
     /// opened and compacted under `horizon_ms`, the upload records opened,
-    /// the partials reconciled with them both ways, the records compacted,
-    /// the root fsynced. Everything here completes before the store answers
-    /// anything.
+    /// the partials reconciled with them both ways, every aside a crash left
+    /// removed, the records compacted, the root fsynced. Everything here
+    /// completes before the store answers anything.
     pub fn open(root: &Path, now_ms: u64, horizon_ms: u64) -> io::Result<Store> {
         fs::create_dir_all(root)?;
         let leases = LeaseLog::open(root, now_ms, horizon_ms)?;
         let mut uploads = UploadRecords::open(root)?;
         partials::reconcile(root, &mut uploads, now_ms)?;
+        blobs::remove_asides(root)?;
         uploads.compact()?;
         fsync_dir(root)?;
         Ok(Store {
@@ -161,60 +178,20 @@ impl Store {
     /// halts on one it does not. Files under the root (the two logs, their
     /// compaction twins) are not among them.
     pub fn designations(&self) -> io::Result<Vec<String>> {
-        let mut out = Vec::new();
-        for entry in fs::read_dir(&self.root)? {
-            let entry = entry?;
-            if entry.file_type()?.is_dir() {
-                out.push(entry.file_name().to_string_lossy().into_owned());
-            }
-        }
-        out.sort();
-        Ok(out)
+        blobs::dirs_under(&self.root)
     }
 
     /// The files at HEX NAMES in `<designation>/`, in name order — the blobs
     /// the directory holds, a partial or an aside excluded by its name. An
     /// absent directory holds none.
     pub fn blobs_of(&self, designation: &str) -> io::Result<Vec<String>> {
-        if !designation_ok(designation) {
-            return Ok(Vec::new());
-        }
-        let mut out = Vec::new();
-        for entry in match fs::read_dir(self.root.join(designation)) {
-            Ok(d) => d,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(out),
-            Err(e) => return Err(e),
-        } {
-            let entry = entry?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if hex_ok(&name) && entry.file_type()?.is_file() {
-                out.push(name);
-            }
-        }
-        out.sort();
-        Ok(out)
+        blobs::names_in(&self.root, designation, |name, ty| hex_ok(name) && ty.is_file())
     }
 
     /// The ASIDE names in `<designation>/` — the second names replaces left
     /// that the deferred unlink has not reached — in name order.
     pub fn asides_of(&self, designation: &str) -> io::Result<Vec<String>> {
-        if !designation_ok(designation) {
-            return Ok(Vec::new());
-        }
-        let mut out = Vec::new();
-        for entry in match fs::read_dir(self.root.join(designation)) {
-            Ok(d) => d,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(out),
-            Err(e) => return Err(e),
-        } {
-            let entry = entry?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if is_aside_name(&name) {
-                out.push(name);
-            }
-        }
-        out.sort();
-        Ok(out)
+        blobs::names_in(&self.root, designation, |name, _| is_aside_name(name))
     }
 
     /// UNLINK the file at `<designation>/<hex>` — the pruner's one act per
@@ -223,10 +200,10 @@ impl Store {
     /// fsynced: a crash that reverts the unlink leaves a file the next pass
     /// re-judges, which costs nothing.
     pub fn unlink_blob(&self, designation: &str, hex: &str) -> io::Result<bool> {
-        if !designation_ok(designation) || !hex_ok(hex) {
+        let Some(path) = self.blob_path(designation, hex) else {
             return Ok(false);
-        }
-        match fs::remove_file(self.blob_path(designation, hex)) {
+        };
+        match fs::remove_file(path) {
             Ok(()) => Ok(true),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
             Err(e) => Err(e),
@@ -234,9 +211,10 @@ impl Store {
     }
 
     /// Remove one aside by name — the pruner's housekeeping where the
-    /// deferred step did not run. `Ok(false)` where none stood.
+    /// deferred step did not run. `Ok(false)` where none stood, and for a
+    /// name no aside has.
     pub fn remove_aside(&self, designation: &str, name: &str) -> io::Result<bool> {
-        if !designation_ok(designation) || !is_aside_name(name) || name.contains('/') {
+        if !designation_ok(designation) || !is_aside_name(name) {
             return Ok(false);
         }
         match fs::remove_file(self.root.join(designation).join(name)) {
@@ -246,9 +224,11 @@ impl Store {
         }
     }
 
-    /// The path a blob of `designation` and `hex` would have.
-    pub fn blob_path(&self, designation: &str, hex: &str) -> PathBuf {
-        blob_path(&self.root, designation, hex)
+    /// The path a blob of `designation` and `hex` has, or `None` where
+    /// either name is malformed — the door's check (see [`Store`]), which
+    /// every act on a file a caller names goes through.
+    pub fn blob_path(&self, designation: &str, hex: &str) -> Option<PathBuf> {
+        (designation_ok(designation) && hex_ok(hex)).then(|| blob_path(&self.root, designation, hex))
     }
 
     /// The length of the file at `<designation>/<hex>`, or `None` where no
@@ -256,10 +236,8 @@ impl Store {
     /// only where the asking key's record names the hash under a live
     /// lease. Refuses a malformed designation or hex as absent.
     pub fn blob_len(&self, designation: &str, hex: &str) -> Option<u64> {
-        if !designation_ok(designation) || !hex_ok(hex) {
-            return None;
-        }
-        fs::metadata(self.blob_path(designation, hex)).ok().filter(|m| m.is_file()).map(|m| m.len())
+        let path = self.blob_path(designation, hex)?;
+        fs::metadata(path).ok().filter(|m| m.is_file()).map(|m| m.len())
     }
 
     /// The volume's free space at the root, in bytes — the floor's read.
@@ -306,24 +284,19 @@ impl Store {
     /// records do not name or whose upload has expired at `now_ms`, one
     /// answer for both (M-I2 (e)).
     pub fn upload(&self, key: &str, id: &UploadId, now_ms: u64) -> Option<UploadRecord> {
-        let uploads = self.uploads.lock();
-        let r = uploads.get(id)?;
-        (r.key == key && r.stands(now_ms)).then(|| r.clone())
+        self.uploads.lock().standing(key, id, now_ms).cloned()
     }
 
     /// THE KEY's standing uploads at `now_ms`, in identifier order.
     pub fn uploads_of(&self, key: &str, now_ms: u64) -> Vec<UploadRecord> {
-        let uploads = self.uploads.lock();
-        let mut out: Vec<UploadRecord> =
-            uploads.all().filter(|r| r.key == key && r.stands(now_ms)).cloned().collect();
-        out.sort_by_key(|r| r.id.to_hex());
-        out
+        self.uploads.lock().standing_of(key, now_ms)
     }
 
     /// THE RESUME (clauses (3), (5)): open the key's upload for appends at
     /// `offset`, which must be the record's durable offset — the partial cut
     /// back to it where longer, the hasher rebuilt over it where this
-    /// process holds none. Answers the record as it stands.
+    /// process holds none, or holds one whose durable point is not that
+    /// offset. Answers the record as it stands.
     pub fn resume(&self, key: &str, id: &UploadId, offset: u64, now_ms: u64) -> Result<UploadRecord, BlobError> {
         let record = self.upload(key, id, now_ms).ok_or(BlobError::NoUpload)?;
         if offset != record.offset {
@@ -355,7 +328,7 @@ impl Store {
     ) -> Result<u64, BlobError> {
         let (length, durable) = {
             let uploads = self.uploads.lock();
-            let r = uploads.get(id).filter(|r| r.key == key).ok_or(BlobError::NoUpload)?;
+            let r = uploads.of_key(key, id).ok_or(BlobError::NoUpload)?;
             (r.length, r.offset)
         };
         let mut live = self.live.lock();
@@ -408,7 +381,7 @@ impl Store {
         interval_ms: u64,
     ) -> Result<(), BlobError> {
         let mut uploads = self.uploads.lock();
-        let r = uploads.get(id).filter(|r| r.key == key).ok_or(BlobError::NoUpload)?;
+        let r = uploads.of_key(key, id).ok_or(BlobError::NoUpload)?;
         let mut next = r.clone();
         next.offset = offset;
         next.expires = now_ms.saturating_add(interval_ms);
@@ -427,9 +400,11 @@ impl Store {
     /// retired. Answers the file's designation, hex and size — one shape
     /// whether or not the file was already here, and in one time: the old
     /// instance's unlink waits for [`Store::retire_asides`], after the
-    /// answer. The caller holds, from the rename through the lease's sync,
-    /// whatever lock its own write path takes (the daemon's credential-lock
-    /// read arm).
+    /// answer. The store's own lock on its open uploads is held from the
+    /// first act to the answer, so finishes run one at a time and two of one
+    /// hash never interleave the replace's check, link and rename. The
+    /// caller holds, from the rename through the lease's sync, whatever lock
+    /// its own write path takes (the daemon's credential-lock read arm).
     pub fn finish(
         &self,
         key: &str,
@@ -534,10 +509,7 @@ impl Store {
     /// hold a stream has on one is the daemon's to consult before
     /// [`Store::expire_upload`].
     pub fn expired_uploads(&self, now_ms: u64) -> Vec<UploadRecord> {
-        let uploads = self.uploads.lock();
-        let mut out: Vec<UploadRecord> = uploads.all().filter(|r| !r.stands(now_ms)).cloned().collect();
-        out.sort_by_key(|r| r.id.to_hex());
-        out
+        self.uploads.lock().expired(now_ms)
     }
 
     /// Remove an EXPIRED upload: its handle dropped, its partial removed,
@@ -548,7 +520,7 @@ impl Store {
     pub fn expire_upload(&self, id: &UploadId, now_ms: u64) -> io::Result<bool> {
         let record = {
             let uploads = self.uploads.lock();
-            match uploads.get(id) {
+            match uploads.of_any_key(id) {
                 Some(r) if !r.stands(now_ms) => r.clone(),
                 _ => return Ok(false),
             }
@@ -561,7 +533,9 @@ impl Store {
 
     /// Drop this process's handle on an upload without ending it — a
     /// stream's end that leaves the upload standing; the hasher goes with it
-    /// and is rebuilt at the next resume.
+    /// and is rebuilt at the next resume. No failed call needs it: an open
+    /// upload a failed write, sync or record write left behind repairs
+    /// itself at its next resume.
     pub fn release(&self, id: &UploadId) {
         self.live.lock().remove(id);
     }
@@ -601,13 +575,8 @@ impl Store {
     /// uploads' durable offsets, counted whole.
     pub fn pending_bytes_of(&self, key: &str, now_ms: u64, counted: &dyn Fn(&Lease) -> bool) -> u64 {
         let leased = self.leases.lock().pending_of(key, now_ms, counted);
-        let partial = self
-            .uploads
-            .lock()
-            .all()
-            .filter(|r| r.key == key && r.stands(now_ms))
-            .fold(0u64, |acc, r| acc.saturating_add(r.offset));
-        leased.saturating_add(partial)
+        let received = self.uploads.lock().received_of(key, now_ms);
+        leased.saturating_add(received)
     }
 
     /// EVERY key's pending bytes at `now_ms` — the venue total's record-
@@ -621,13 +590,8 @@ impl Store {
     /// adds every base to it.
     pub fn pending_total_of(&self, now_ms: u64, counted: &dyn Fn(&Lease) -> bool) -> u64 {
         let leased = self.leases.lock().pending_total(now_ms, counted);
-        let partial = self
-            .uploads
-            .lock()
-            .all()
-            .filter(|r| r.stands(now_ms))
-            .fold(0u64, |acc, r| acc.saturating_add(r.offset));
-        leased.saturating_add(partial)
+        let received = self.uploads.lock().received_total(now_ms);
+        leased.saturating_add(received)
     }
 
     // ── the hazard seam ──────────────────────────────────────────────────

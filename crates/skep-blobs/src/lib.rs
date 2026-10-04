@@ -35,15 +35,22 @@
 //!   own lock around exactly one.
 //! * A BYTE IS RECEIVED ONCE IT IS DURABLE: the partial is fsynced at
 //!   [`SYNC_GRAIN`] and at [`Store::settle`], and the record's offset and
-//!   expiry are written after each sync.
+//!   expiry are written after each sync. An upload open in this process
+//!   holds the count its durable hash covers, so a resume restores no hash
+//!   past the record's offset, and a write or sync that failed is cut back
+//!   at the next resume before another lands.
 //! * ONE ANSWER PER KEY: an identifier the asking key's records do not
-//!   name is [`BlobError::NoUpload`] whoever minted it; a hash the key
-//!   holds no lease on is [`LeaseState::None`] whatever the directory
-//!   holds; and a finish answers one shape whether or not the file was
-//!   already here.
+//!   name is [`BlobError::NoUpload`] whoever minted it (the upload records
+//!   answer by key); a hash the key holds no lease on is
+//!   [`LeaseState::None`] whatever the directory holds; and a finish
+//!   answers one shape whether or not the file was already here.
+//! * A TORN LINE IS ONLY EVER A LOG's TAIL: an append that fails is cut
+//!   back off its log, and a log whose cut fails too takes no further
+//!   append (`jsonl.rs`), so open's tail check never cuts a whole line.
 //! * OPEN RECONCILES AND COMPACTS: both logs tail-checked and rewritten to
 //!   their current records; the partials and the records held to each
-//!   other both ways (`partials.rs`); a lease past the horizon dropped.
+//!   other both ways (`partials.rs`); every aside a crash left removed
+//!   (`blobs.rs`); a lease past the horizon dropped.
 //!
 //! The `test-hooks` feature compiles in the test seam (`store/hooks.rs`):
 //! the hazard seam — a hold or an injected failure at a named [`Step`] of
@@ -56,20 +63,23 @@
 // The store's refusals, `BlobError`.
 mod error;
 // The files at `<designation>/<hex>`: where one lives, the spellings a
-// designation and a hex name must have, the aside name, the directory fsync
-// every install order ends in, and the floor's free-space read.
+// designation and a hex name must have, the aside name, the listings of the
+// designation directories and open's sweep of the asides, the directory
+// fsync every install order ends in, and the floor's free-space read.
 mod blobs;
 // The JSON-lines log both record logs are, `Log`: its tail check at open,
-// its append, and its compaction by the install order.
+// its append, undone where it fails, and its compaction by the install
+// order.
 mod jsonl;
-// The upload records, `uploads.log`: the identifier and the records' log.
+// The upload records, `uploads.log`: the identifier and the records' log,
+// which answers by the asking key.
 mod uploads;
 // The lease log, `leases.log`: the leases, their three states, the horizon.
 mod lease;
 // The partials, `.upload-<identifier>`: their name, an upload open in this
-// process (`Live`, the bytes written and their hash), and the walk at open
-// that reconciles them with the records and removes every aside a crash
-// left.
+// process (`Live`, the bytes written and their hash, kept true across a
+// failed write), and the walk at open that reconciles them with the
+// records.
 mod partials;
 // `Store`, the one handle over the four, and the order of its acts: the
 // finish and its steps, the resume and the durable point, the pruner's acts,

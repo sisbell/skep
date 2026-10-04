@@ -119,7 +119,7 @@ pub fn judge(record: &Record, trial: &Trial<'_>) -> Verdict {
 #[cfg(test)]
 mod tests {
     use skep_registry::{encode, parse, Binding, Body, BodyKind, Record};
-    use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
+    use skep_signature::{HybridSigner, TAG_FNDSA512_PREVIEW_ED25519, TAG_MLDSA65_ED25519};
 
     use super::*;
     use crate::parse_address;
@@ -195,6 +195,45 @@ mod tests {
         assert_eq!(verdict(&short, &keys, board, &to_slot), Verdict::Unsigned, "no row's width");
         let unsigned = parse(BodyKind::Binding, sigless.as_bytes()).unwrap();
         assert_eq!(verdict(&unsigned, &keys, board, &to_slot), Verdict::Unsigned, "no sig at all");
+    }
+
+    /// THE TRIAL runs over the whole set, in its order (steps 4 and 5): a
+    /// key that does not verify is passed over for the next, and so is a key
+    /// of another row's width — never the trial's end — and the hand named is
+    /// the fingerprint of the key that verified, never the set's first; a
+    /// record signed under the other row is SIGNED by its own key alike.
+    #[test]
+    fn the_first_candidate_that_verifies_names_the_hand() {
+        let (board, home, account, ty, to) = trial_parts();
+        let one = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[3; 32]).expect("tag 1");
+        let foreign = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[4; 32]).expect("tag 1");
+        let three = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &[5; 32]).expect("tag 3");
+        let body = Body::Binding(Binding { prefix: "1.5".into(), replaces: None });
+        let sigless = encode(&body, None);
+        let to_slot = [to];
+        let signed_by = |signer: &HybridSigner| -> Record {
+            let rows = RecordRows {
+                ty: &ty,
+                to: &to_slot,
+                replaces: None,
+                lineage_fork_point: None,
+                sigless_canonical_record: sigless.as_bytes(),
+            };
+            let frame = entry_frame(signer.public_key().alg(), board, &account, DocTerm::One(&home), &entry_body_record(rows));
+            let sig: String = signer.sign(&frame).iter().map(|b| format!("{b:02x}")).collect();
+            parse(BodyKind::Binding, encode(&body, Some(&sig)).as_bytes()).expect("canonical")
+        };
+        let set = |signers: &[&HybridSigner]| -> Vec<Enrolled> {
+            signers.iter().map(|s| Enrolled { key: s.public_key().clone(), anchor: false }).collect()
+        };
+        let verdict = |record: &Record, keys: &[Enrolled]| {
+            judge(record, &Trial { board, home: &home, home_account: &account, ty: &ty, to: &to_slot, lineage: None, keys })
+        };
+        let hand = |signer: &HybridSigner| Verdict::Signed(Fingerprint::of(signer.public_key()));
+        let (by_one, by_three) = (signed_by(&one), signed_by(&three));
+        assert_eq!(verdict(&by_one, &set(&[&foreign, &one])), hand(&one), "a key that does not verify is passed over");
+        assert_eq!(verdict(&by_one, &set(&[&three, &foreign, &one])), hand(&one), "a key of another row's width is passed over");
+        assert_eq!(verdict(&by_three, &set(&[&one, &foreign, &three])), hand(&three), "a record signed under the other row");
     }
 
     #[test]

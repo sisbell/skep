@@ -1,13 +1,17 @@
 //! THE RESOLVER'S OWN CHECKS (REG-3.34 to REG-3.37; R5 (f), (o)) on the
 //! members themselves, no board needed: the scheme term, the host term at a
-//! literal and at a name — this resolver's own yield, and the system
-//! resolver's at `localhost` — the self-authenticating member with and
-//! without its transport, and the ordered walk's one precedence.
+//! literal and at a name — this resolver's own yield, a resolution that could
+//! not run, and the system resolver's at `localhost` — the
+//! self-authenticating member with and without its transport, and the
+//! ordered walk's one precedence.
 
 use std::collections::HashMap;
+use std::io;
 use std::net::IpAddr;
 
-use skep_resolve::{judge_member, walk_members, MemberKind, MemberOutcome, SystemResolver, Term, Transports};
+use skep_resolve::{
+    judge_member, walk_members, MemberKind, MemberOutcome, NameResolver, SystemResolver, Term, Transports,
+};
 
 use crate::{loopback, public_ip, Names};
 
@@ -59,6 +63,26 @@ fn https_at_a_name_is_tested_at_every_address_this_resolver_yields() {
         MemberOutcome::Refused { member: "https://loop.example".into(), term: Term::Host { yielded: vec![loopback(), "10.1.1.1".parse().unwrap()] } }
     );
     assert!(matches!(judge_member("https://dead.example", &names, &t), MemberOutcome::Dead { .. }));
+}
+
+/// A resolver whose resolution cannot run.
+struct Failing;
+
+impl NameResolver for Failing {
+    fn resolve(&self, _: &str) -> io::Result<Vec<IpAddr>> {
+        Err(io::Error::other("no resolver"))
+    }
+}
+
+/// REG-3.35 at a name whose resolution COULD NOT RUN: the DEAD arm, as a
+/// name that yields no address is — never a refusal, the record standing
+/// admitted; the resolver's failure is not the record's fault.
+#[test]
+fn a_resolution_that_errs_is_dead_and_never_a_refusal() {
+    match judge_member("https://acme.example", &Failing, &Transports::default()) {
+        MemberOutcome::Dead { origin } => assert_eq!(origin.as_str(), "https://acme.example"),
+        other => panic!("{other:?}"),
+    }
 }
 
 /// REG-3.35 at a name THE SYSTEM resolves: `localhost` yields this host's own

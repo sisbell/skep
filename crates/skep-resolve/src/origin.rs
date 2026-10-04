@@ -509,4 +509,41 @@ mod tests {
             assert!(routable(ok.parse().unwrap()), "{ok} is globally routable");
         }
     }
+
+    /// REG-3.35's classes held TO THEIR EDGES: each range's first and last
+    /// address is not routable, and the address just outside it, where that
+    /// address is a global one, is — so a range is refused whole and nothing
+    /// beside it is. (`fe80::/10` and `fc00::/7` sit in IPv6 space that is
+    /// itself reserved, so no neighbor of theirs is asserted routable.)
+    #[test]
+    fn the_host_terms_ranges_hold_to_their_edges() {
+        let ranges: [(&str, &str, &[&str]); 18] = [
+            ("0.0.0.0", "0.255.255.255", &["1.0.0.0"]),
+            ("10.0.0.0", "10.255.255.255", &["9.255.255.255", "11.0.0.0"]),
+            ("100.64.0.0", "100.127.255.255", &["100.63.255.255", "100.128.0.0"]),
+            ("127.0.0.0", "127.255.255.255", &["126.255.255.255", "128.0.0.0"]),
+            ("169.254.0.0", "169.254.255.255", &["169.253.255.255", "169.255.0.0"]),
+            ("172.16.0.0", "172.31.255.255", &["172.15.255.255", "172.32.0.0"]),
+            ("192.0.0.0", "192.0.0.255", &["191.255.255.255", "192.0.1.0"]),
+            ("192.0.2.0", "192.0.2.255", &["192.0.1.255", "192.0.3.0"]),
+            ("192.168.0.0", "192.168.255.255", &["192.167.255.255", "192.169.0.0"]),
+            ("198.18.0.0", "198.19.255.255", &["198.17.255.255", "198.20.0.0"]),
+            ("198.51.100.0", "198.51.100.255", &["198.51.99.255", "198.51.101.0"]),
+            ("203.0.113.0", "203.0.113.255", &["203.0.112.255", "203.0.114.0"]),
+            ("224.0.0.0", "239.255.255.255", &["223.255.255.255"]),
+            ("240.0.0.0", "255.255.255.255", &[]),
+            ("fe80::", "febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff", &[]),
+            ("fc00::", "fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", &[]),
+            ("ff00::", "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", &[]),
+            ("2001:db8::", "2001:db8:ffff:ffff:ffff:ffff:ffff:ffff", &["2001:db7:ffff:ffff:ffff:ffff:ffff:ffff", "2001:db9::"]),
+        ];
+        for (first, last, outside) in ranges {
+            for edge in [first, last] {
+                assert!(!routable(edge.parse().unwrap()), "{edge}, an edge of {first}–{last}, is not globally routable");
+            }
+            for beside in outside {
+                assert!(routable(beside.parse().unwrap()), "{beside}, beside {first}–{last}, is globally routable");
+            }
+        }
+    }
 }

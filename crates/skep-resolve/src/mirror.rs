@@ -1021,12 +1021,83 @@ pub fn account_of_document(doc: &Address) -> Option<Address> {
 
 #[cfg(test)]
 mod tests {
+    use skep_identity::{entry_body_record, entry_frame, DocTerm, RecordRows};
+    use skep_registry::{encode, Binding};
     use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
 
     use super::*;
 
     fn a(s: &str) -> Address {
         parse_address(s).unwrap()
+    }
+
+    /// THE BINDING-WRITING ACCOUNT (R5 (g); REG-2.8, REG-2.6): a
+    /// binding-typed record an org deposits in its own doc 1 — signed by the
+    /// org's own key, so the board's home check and the verify would both
+    /// pass it — binds nothing: it is counted apart, never judged, and its
+    /// prefix has no standing; the registrar's own binding, deposited the
+    /// same way in the claimant's doc 1, is SIGNED and stands. The copy is
+    /// rebuilt offline, every fetch served from a cache written by `Fetched`.
+    #[test]
+    fn a_binding_typed_record_outside_the_claimants_doc_one_binds_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let registrar = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[1; 32]).expect("tag 1");
+        let org = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[2; 32]).expect("tag 1");
+        let term = BoardTerm { log_position: 1, chain: [7; 32] };
+        let bound = [a("1.0.2")];
+        // A binding of `prefix` deposited in `home`, signed over the record
+        // frame the home's account composes.
+        let record = |signer: &HybridSigner, home: &Address, prefix: &str| -> String {
+            let body = Body::Binding(Binding { prefix: prefix.into(), replaces: None });
+            let sigless = encode(&body, None);
+            let rows = RecordRows {
+                ty: t_binding(),
+                to: &bound,
+                replaces: None,
+                lineage_fork_point: None,
+                sigless_canonical_record: sigless.as_bytes(),
+            };
+            let account = account_of_document(home).expect("a doc 1's account");
+            let frame = entry_frame(signer.public_key().alg(), term, &account, DocTerm::One(home), &entry_body_record(rows));
+            encode(&body, Some(&signer.sign(&frame).iter().map(|b| format!("{b:02x}")).collect::<String>()))
+        };
+        let (registry, own) = (a("1.0.1.0.1"), a("1.0.2.0.1"));
+        let stored = |at: u64, address: &str, home: &Address, ty: &Address, from: &str, to: &[Address]| StoredLink {
+            at,
+            address: a(address),
+            home: home.clone(),
+            ty: Some(ty.clone()),
+            from: vec![a(from)],
+            to: to.to_vec(),
+        };
+        let mut kept = Fetched::default();
+        let lines: Vec<Value> = [
+            kept.keep_link(stored(1, "1.0.1.0.1.0.2.1", &registry, &commons_type(&[3]), "1.0.1", &[])),
+            kept.keep_link(stored(2, "1.0.2.0.1.0.2.1", &own, t_binding(), "1.0.2.0.1.0.1.1", &bound)),
+            kept.keep_link(stored(3, "1.0.1.0.1.0.2.2", &registry, t_binding(), "1.0.1.0.1.0.1.1", &bound)),
+            kept.keep_atom(a("1.0.2.0.1.0.1.1"), record(&org, &own, "1.9")),
+            kept.keep_atom(a("1.0.1.0.1.0.1.1"), record(&registrar, &registry, "1.8")),
+            kept.keep_board(term, &"07".repeat(32)),
+            kept.keep_keys(KeysAsOf { account: a("1.0.1"), epoch: Epoch(0), at: 0, enrolled: vec![Enrolled { key: registrar.public_key().clone(), anchor: true }] }),
+            kept.keep_keys(KeysAsOf { account: a("1.0.2"), epoch: Epoch(0), at: 0, enrolled: vec![Enrolled { key: org.public_key().clone(), anchor: true }] }),
+        ]
+        .into_iter()
+        .map(|line| line.expect("a value not held writes its line"))
+        .collect();
+        let genesis = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
+        let header = json!({ "skep-resolve": FEED_FORMAT, "realm": genesis.to_hex(), "root": null });
+        let rows = [(1, "1.0.1.0.1.0.2.1", "1.0.1.0.1"), (2, "1.0.2.0.1.0.2.1", "1.0.2.0.1"), (3, "1.0.1.0.1.0.2.2", "1.0.1.0.1")]
+            .map(|(at, link, home)| json!({ "row": { "at": at, "op": "make_link", "link": link, "docs": [home] } }));
+        let feed: String = std::iter::once(&header).chain(&rows).map(|line| format!("{line}\n")).collect();
+        fs::write(dir.path().join(FEED_COPY), feed).expect("the feed copy");
+        fs::write(dir.path().join(FETCH_CACHE), lines.iter().map(|line| format!("{line}\n")).collect::<String>()).expect("the cache");
+        let hint = RootHint::new(vec![Origin::parse("http://127.0.0.1:1").unwrap()], genesis, None).unwrap();
+        let mirror = Mirror::rebuild_offline(&hint, dir.path()).expect("rebuilt");
+        let verdict = mirror.index().standing(&a("1.8")).map(|s| s.current.verdict);
+        assert_eq!(verdict, Some(Verdict::Signed(Fingerprint::of(registrar.public_key()))), "the registrar's binding stands");
+        assert_eq!(mirror.index().standing(&a("1.9")), None, "the org's binding-typed record binds nothing");
+        assert_eq!(mirror.stats().binding_typed_outside_home, 1, "counted apart");
+        assert!(mirror.index().suppressed().is_empty(), "and never judged: {:?}", mirror.index().suppressed());
     }
 
     /// The address arithmetic the fold rests on: a doc 1's account.

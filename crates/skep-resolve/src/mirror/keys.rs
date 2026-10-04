@@ -175,9 +175,10 @@ mod tests {
     use std::fs;
 
     use serde_json::json;
-    use skep_identity::Fingerprint;
+    use skep_identity::{Fingerprint, PublicKey};
+    use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
 
-    use super::super::{FEED_COPY, FEED_FORMAT, FETCH_CACHE};
+    use super::super::{Fetched, FEED_COPY, FEED_FORMAT, FETCH_CACHE};
     use super::*;
     use crate::hint::RootHint;
     use crate::origin::Origin;
@@ -187,29 +188,83 @@ mod tests {
         parse_address(s).unwrap()
     }
 
+    fn key(seed: u8) -> PublicKey {
+        HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[seed; 32]).expect("tag 1").public_key().clone()
+    }
+
+    /// The hint the copies below are rebuilt under, and its genesis.
+    fn hint() -> RootHint {
+        let genesis = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
+        RootHint::new(vec![Origin::parse("http://127.0.0.1:1").unwrap()], genesis, None).unwrap()
+    }
+
+    /// A copy under `dir` holding `rows` and a fetch cache of `cache`'s lines.
+    fn copy(dir: &std::path::Path, rows: &[serde_json::Value], cache: &[serde_json::Value]) {
+        let header = json!({ "skep-resolve": FEED_FORMAT, "realm": hint().realm().genesis.to_hex(), "root": null });
+        let feed: String = std::iter::once(&header).chain(rows).map(|line| format!("{line}\n")).collect();
+        fs::write(dir.join(FEED_COPY), feed).expect("the feed copy");
+        fs::write(dir.join(FETCH_CACHE), cache.iter().map(|line| format!("{line}\n")).collect::<String>()).expect("the fetch cache");
+    }
+
     /// A CREDENTIAL ACT is the enroll or retire link naming the account in
     /// ANY home: the genesis of an account beneath another, seeded in its
     /// delegating account's doc 1 (AUTH-2.62's genesis registry), is an act
     /// of the account — so the live table is never taken for the one before
-    /// it. The act at 5 lies in `(4, 6]` and not in `(5, 6]`, and is the
-    /// subject's alone.
+    /// it. The act at 5 lies in `(4, 6]` and in `(4, 5]`, closed above, and
+    /// not in `(5, 6]`, open below; and it is the subject's alone.
     #[test]
     fn a_credential_act_in_the_delegators_doc_one_is_an_act_of_the_account() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let genesis = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
-        let header = json!({ "skep-resolve": FEED_FORMAT, "realm": genesis.to_hex(), "root": null });
         let row = json!({ "row": { "at": 5, "op": "make_link", "link": "1.0.2.0.1.0.2.1", "docs": ["1.0.2.0.1"] } });
-        fs::write(dir.path().join(FEED_COPY), format!("{header}\n{row}\n")).expect("the feed copy");
         let seeding = json!({ "link": {
             "at": 5, "address": "1.0.2.0.1.0.2.1", "home": "1.0.2.0.1",
             "ty": "1.1.0.1.0.1.0.3.1", "from": ["1.0.2.0.1.0.1.1"], "to": ["1.0.2.3"],
         }});
-        fs::write(dir.path().join(FETCH_CACHE), format!("{seeding}\n")).expect("the fetch cache");
-        let hint = RootHint::new(vec![Origin::parse("http://127.0.0.1:1").unwrap()], genesis, None).unwrap();
-        let mirror = Mirror::rebuild_offline(&hint, dir.path()).expect("rebuilt");
+        copy(dir.path(), &[row], &[seeding]);
+        let mirror = Mirror::rebuild_offline(&hint(), dir.path()).expect("rebuilt");
         assert!(mirror.later_credential_act(&a("1.0.2.3"), 4, 6), "the seeding in the delegator's doc 1");
+        assert!(mirror.later_credential_act(&a("1.0.2.3"), 4, 5), "the interval is closed above");
         assert!(!mirror.later_credential_act(&a("1.0.2.3"), 5, 6), "the interval is open below");
         assert!(!mirror.later_credential_act(&a("1.0.2"), 4, 6), "the act is the subject's, not its delegator's");
         assert_eq!(mirror.epoch_of(&a("1.0.2.3"), 9), Epoch(5));
+    }
+
+    /// THE SET THAT OPENS AN ACCOUNT (AUTH-4.30 (i)'s walk): the account's own
+    /// table where it holds a key, whatever the account above holds; where it
+    /// is empty, the nearest keyed account above it, and the empty set itself
+    /// where the walk reaches the node; and where a table on the walk cannot
+    /// be read — the account's own, or one above an empty one — none at all,
+    /// never the table of an account further up and never an empty set.
+    #[test]
+    fn an_empty_table_opens_through_the_account_above_and_an_unread_one_does_not() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut kept = Fetched::default();
+        let tables: [(&str, &[u8]); 7] = [
+            ("1.0.2.3", &[]),
+            ("1.0.2", &[2]),
+            ("1.0.5.1", &[]),
+            ("1.0.6", &[6]),
+            ("1.0.7", &[]),
+            ("1.0.8", &[8]),
+            ("1.0.8.1", &[9]),
+        ];
+        let lines: Vec<serde_json::Value> = tables
+            .iter()
+            .map(|(account, seeds)| {
+                let enrolled = seeds.iter().map(|s| Enrolled { key: key(*s), anchor: true }).collect();
+                kept.keep_keys(KeysAsOf { account: a(account), epoch: Epoch(0), at: 0, enrolled }).expect("a new table")
+            })
+            .collect();
+        copy(dir.path(), &[], &lines);
+        let mut mirror = Mirror::rebuild_offline(&hint(), dir.path()).expect("rebuilt");
+        let mut opening = |account: &str| -> Option<Vec<PublicKey>> {
+            let keys = mirror.keys_opening(&a(account), 9).expect("no board, no wire error");
+            keys.map(|keys| keys.into_iter().map(|e| e.key).collect())
+        };
+        assert_eq!(opening("1.0.2.3"), Some(vec![key(2)]), "empty: the account above");
+        assert_eq!(opening("1.0.8.1"), Some(vec![key(9)]), "its own keys, whatever the account above holds");
+        assert_eq!(opening("1.0.6.1"), None, "its own table unread: never the one above");
+        assert_eq!(opening("1.0.5.1"), None, "empty, and the account above unread");
+        assert_eq!(opening("1.0.7"), Some(Vec::new()), "empty, and above it the node: the empty set itself");
     }
 }

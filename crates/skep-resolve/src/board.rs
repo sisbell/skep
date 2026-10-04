@@ -589,6 +589,50 @@ mod tests {
         Board::new(Box::new(Canned(200, body.to_string())))
     }
 
+    /// A board that answers every read with a well-formed empty answer of
+    /// its kind, `/op-at` only after `busy` refusals `history_busy`.
+    struct Busy {
+        busy: Cell<u32>,
+    }
+
+    impl Transport for Busy {
+        fn exchange(&self, method: Method, path: &str, _: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+            let answer = match (method, path) {
+                (Method::Post, "/op-at") if self.busy.get() > 0 => {
+                    self.busy.set(self.busy.get() - 1);
+                    return Ok((503, json!({ "error": "history_busy" }).to_string().into_bytes()));
+                }
+                (Method::Post, "/op" | "/op-at") => json!({ "resp": "runs", "runs": [] }),
+                (Method::Get, "/health") => json!({}),
+                (Method::Get, "/changes?since=0") => json!({ "changes": [], "last": 0, "more": false }),
+                (Method::Get, "/chain?at=5") => json!({ "at": 5, "chain": "07".repeat(32) }),
+                _ => panic!("a read this board does not answer: {method} {path}"),
+            };
+            Ok((200, answer.to_string().into_bytes()))
+        }
+    }
+
+    /// THE COUNT OF EVERY READ: each request counted once, under its kind —
+    /// one over `/op-at` under its own kind AND under `op_at` — and a busy
+    /// answer retried counted under `busy_retries` and never again under its
+    /// kind; the total is the requests made, the `op_at` tally and the
+    /// retries never among them.
+    #[test]
+    fn every_read_is_counted_once_by_its_kind() {
+        let board = Board::new(Box::new(Busy { busy: Cell::new(2) }));
+        let doc = a("1.0.1.0.1");
+        board.op_at(5, &image_frame(&doc, 1, 1)).expect("answered after two busy refusals");
+        board.op(&span_set_frame(&doc)).expect("answered");
+        board.op_at(5, &retrieve_frame(&doc, 1)).expect("answered");
+        board.health().expect("answered");
+        board.changes(0, None).expect("answered");
+        board.chain_at(5).expect("answered");
+        let r = board.reads();
+        assert_eq!((r.image, r.span_set, r.retrieve, r.op_at, r.busy_retries), (1, 1, 1, 2, 2));
+        assert_eq!((r.health, r.changes, r.chain), (1, 1, 1));
+        assert_eq!(r.total(), 6, "{r:?}");
+    }
+
     /// A chain is sixty-four hex characters, either case, and nothing else —
     /// text of any other shape is no chain and never a panic: a multi-byte
     /// character at sixty-four bytes, a sign `from_str_radix` would read.

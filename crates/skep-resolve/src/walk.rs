@@ -112,3 +112,93 @@ fn face_of(
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::net::IpAddr;
+
+    use skep_identity::Fingerprint;
+
+    use super::*;
+    use crate::origin::Term;
+    use crate::parse_address;
+    use crate::state::{BindingRecord, Standing, Verdict};
+
+    fn a(s: &str) -> Address {
+        parse_address(s).unwrap()
+    }
+
+    /// This resolver's own resolution of a name, fixed: `acme.example` at a
+    /// public address, every other name at none.
+    struct Names;
+
+    impl NameResolver for Names {
+        fn resolve(&self, host: &str) -> io::Result<Vec<IpAddr>> {
+            Ok(if host == "acme.example" { vec!["93.184.216.34".parse().unwrap()] } else { Vec::new() })
+        }
+    }
+
+    /// `1.5` bound to `1.0.2`, its one binding SIGNED.
+    fn standing() -> Standing {
+        let current = Judged {
+            position: 10,
+            link: a("1.0.1.0.1.0.2.1"),
+            home: a("1.0.1.0.1"),
+            record: BindingRecord { prefix: a("1.5"), account: Some(a("1.0.2")), replaces: None, honored: true },
+            verdict: Verdict::Signed(Fingerprint::parse_hex(&"ab".repeat(32)).unwrap()),
+        };
+        Standing { prefix: a("1.5"), current: current.clone(), history: vec![current] }
+    }
+
+    /// `1.0.2`'s endpoint, its members `origins` in the org's order.
+    fn endpoint(origins: &[&str]) -> Judged<EndpointRecord> {
+        Judged {
+            position: 11,
+            link: a("1.0.2.0.1.0.2.1"),
+            home: a("1.0.2.0.1"),
+            record: EndpointRecord { origins: origins.iter().map(|o| o.to_string()).collect(), replaces: None, honored: true, nullified: false },
+            verdict: Verdict::Signed(Fingerprint::parse_hex(&"cd".repeat(32)).unwrap()),
+        }
+    }
+
+    fn face(endpoint: Option<Judged<EndpointRecord>>, any_honored: bool) -> Resolution {
+        face_of(standing(), None, endpoint, any_honored, &Names, &Transports::default())
+    }
+
+    /// BOUND-BUT-UNREACHABLE with no current endpoint (REG-3.80): named by
+    /// whether a deposit ever stood — NO ENDPOINT YET where none did, THE
+    /// LAST NULLIFIED where every one that did is off the active view — the
+    /// standing beside it, never a blank, and the key set as the walk read it.
+    #[test]
+    fn no_current_endpoint_is_named_by_whether_one_ever_stood() {
+        for (any_honored, cause) in [(false, Unreachable::NoEndpointYet), (true, Unreachable::NullifiedLast)] {
+            assert_eq!(
+                face(None, any_honored),
+                Resolution::BoundButUnreachable { standing: standing(), keys: None, endpoint: None, cause, members: Vec::new() },
+            );
+        }
+    }
+
+    /// REG-3.34's ONE PRECEDENCE at the face (REG-3.80): where no member
+    /// would dial, the FIRST member's outcome in the org's order is the
+    /// face's — a dead origin first is BOUND-BUT-UNREACHABLE, a plaintext
+    /// member first unreachable-by-policy on the scheme term — and every
+    /// member's outcome rides beside it.
+    #[test]
+    fn where_no_member_dials_the_first_members_outcome_is_the_face() {
+        match face(Some(endpoint(&["https://dead.example", "http://plain.example"])), true) {
+            Resolution::BoundButUnreachable { cause: Unreachable::DeadOrigin { member }, endpoint: Some(_), members, .. } => {
+                assert_eq!((member.as_str(), members.len()), ("https://dead.example", 2));
+            }
+            other => panic!("{other:?}"),
+        }
+        match face(Some(endpoint(&["http://plain.example", "https://dead.example"])), true) {
+            Resolution::UnreachableByPolicy { member, term: Term::Scheme, members, .. } => {
+                assert_eq!((member.as_str(), members.len()), ("http://plain.example", 2));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(face(Some(endpoint(&["https://dead.example", "https://acme.example"])), true), Resolution::Bound { .. }));
+    }
+}

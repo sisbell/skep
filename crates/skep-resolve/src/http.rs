@@ -265,12 +265,14 @@ mod tests {
 
     /// The dial tries every address a name yields, in order, as
     /// `TcpStream::connect` does: a refused address is passed over for the
-    /// next, and only where none answers is a refusal the error.
+    /// next, and only where none answers is a refusal the error. The closed
+    /// address is port 1, which no ephemeral bind is ever handed — a port
+    /// freed by a dropped listener can be the next bind's, and answer.
     #[test]
     fn every_address_is_tried_in_order() {
         let live = TcpListener::bind("127.0.0.1:0").expect("a listener");
         let live_at = live.local_addr().expect("its address");
-        let closed = TcpListener::bind("127.0.0.1:0").expect("a listener").local_addr().expect("its address");
+        let closed: SocketAddr = "127.0.0.1:1".parse().expect("an address");
         let stream = connect_any(&[closed, live_at]).expect("the second address answers");
         assert_eq!(stream.peer_addr().expect("a peer"), live_at);
         assert!(connect_any(&[closed]).is_err(), "no address answers");

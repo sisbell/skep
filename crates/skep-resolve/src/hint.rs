@@ -279,6 +279,61 @@ mod tests {
         );
     }
 
+    /// THE ONE LINE in any order and any whitespace, as a file or an
+    /// environment delivers it: every ordering of two origins, the realm term
+    /// and the fork term reads to one realm and to the origins in the order
+    /// the line gives them; and a trailing newline, tabs, runs of spaces and
+    /// a `\r\n` are whitespace like a space, never part of a term.
+    #[test]
+    fn the_one_line_reads_in_any_order_and_any_whitespace() {
+        let realm = RealmId { genesis: fp(7), fork_point: Some(parse_address("1.0.1.0.1.0.2.9").unwrap()) };
+        let realm_term = format!("realm:{}", fp(7).to_hex());
+        let terms: [&str; 4] = ["https://a.example", "https://b.example", &realm_term, "fork:1.0.1.0.1.0.2.9"];
+        let mut orderings = 0;
+        for i in 0..4 {
+            for j in (0..4).filter(|&j| j != i) {
+                for k in (0..4).filter(|&k| k != i && k != j) {
+                    let l = 6 - i - j - k;
+                    let line = [terms[i], terms[j], terms[k], terms[l]].join(" ");
+                    let hint = RootHint::parse(&line).unwrap_or_else(|e| panic!("{line}: {e}"));
+                    assert_eq!(hint.realm, realm, "{line}");
+                    let origins: Vec<&str> = [i, j, k, l].into_iter().filter(|&t| t < 2).map(|t| terms[t]).collect();
+                    assert_eq!(hint.origins.iter().map(Origin::as_str).collect::<Vec<_>>(), origins, "{line}");
+                    orderings += 1;
+                }
+            }
+        }
+        assert_eq!(orderings, 24);
+        let bare = RootHint::parse(&terms.join(" ")).expect("a hint");
+        for line in [
+            format!("{}\n", terms.join(" ")),
+            format!("\t{}\t \t{}  {}\t{}  ", terms[0], terms[1], realm_term, terms[3]),
+            format!("{}\r\n{}\r\n{}\r\n{}\r\n", terms[0], terms[1], realm_term, terms[3]),
+        ] {
+            assert_eq!(RootHint::parse(&line), Ok(bare.clone()), "{line:?}");
+        }
+    }
+
+    /// THE GENESIS FINGERPRINT'S FORM, as the module doc states it and no
+    /// other: SHA-256 over `skep-realm-v1`, then each fingerprint of the set
+    /// in ascending order, a four-byte big-endian length before its
+    /// thirty-two bytes — the empty set's the tag's hash alone.
+    #[test]
+    fn the_genesis_fingerprint_is_the_form_the_module_doc_states() {
+        let stated = |set: &[Fingerprint]| -> [u8; 32] {
+            let mut bytes = b"skep-realm-v1".to_vec();
+            for member in set {
+                bytes.extend_from_slice(&32u32.to_be_bytes());
+                bytes.extend_from_slice(member.as_bytes());
+            }
+            let mut digest = [0u8; 32];
+            digest.copy_from_slice(&Sha256::digest(&bytes));
+            digest
+        };
+        assert_eq!(RealmId::genesis_fingerprint(&[]).as_bytes(), &stated(&[]), "the empty set");
+        assert_eq!(RealmId::genesis_fingerprint(&[fp(2), fp(1)]).as_bytes(), &stated(&[fp(1), fp(2)]), "in ascending order");
+    }
+
     /// The genesis fingerprint is over the SET: the same fingerprints in any
     /// order hash alike, a different set differently, and the empty set is a
     /// value.

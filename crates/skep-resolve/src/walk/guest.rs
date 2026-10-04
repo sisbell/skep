@@ -208,3 +208,104 @@ fn atom_at_head(board: &Board, home: &Address, addr: &Address) -> Result<Option<
 fn live_keys(board: &Board, account: &Address) -> Result<Option<Vec<Enrolled>>, MirrorError> {
     Ok(board.key_set(account)?.map(|answer| answer.enrolled))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::net::IpAddr;
+
+    use skep_registry::{encode, Binding, Endpoint};
+    use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
+
+    use super::*;
+    use crate::http::{Method, Transport, TransportError};
+
+    fn a(s: &str) -> Address {
+        parse_address(s).unwrap()
+    }
+
+    /// A span over one address as `read_link` answers a slot.
+    fn span(start: &str) -> Value {
+        json!({ "start": start, "width": "0.1" })
+    }
+
+    /// A BOARD THE SUITE HOLDS FIXED, as the guest reads it over `/op` alone:
+    /// one candidate binding, the registrar's, binding `1.2` to `1.0.2`; that
+    /// account's one endpoint deposit in its doc 1, retracted by nothing; its
+    /// live table one key; every atom at its home's head, at the content
+    /// ordinal it was minted at. Any other read is no read this board answers.
+    struct Guest;
+
+    impl Transport for Guest {
+        fn exchange(&self, method: Method, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+            assert_eq!((method, path), (Method::Post, "/op"), "the guest reads /op alone");
+            let frame: Value = serde_json::from_slice(body).expect("a frame");
+            let window = |link: &str| json!({ "resp": "window", "window": { "batch": [link], "exhausted": true } });
+            let doc = frame["d"].as_str().or(frame["specs"][0]["doc"].as_str());
+            let answer = match (frame["op"].as_str(), frame["a"].as_str(), doc) {
+                (Some("window_ftt"), _, _) if frame["q"]["ty"][0] == unit_span_json(t_binding()) => window("1.0.1.0.1.0.2.1"),
+                (Some("window_ftt"), _, _) if frame["q"]["ty"][0] == unit_span_json(t_endpoint()) => {
+                    assert_eq!(frame["q"]["home"], json!([unit_span_json(&a("1.0.2.0.1"))]), "the scan over the account's doc 1");
+                    window("1.0.2.0.1.0.2.1")
+                }
+                (Some("read_link"), Some("1.0.1.0.1.0.2.1"), _) => json!({ "resp": "link", "link": { "slots": [
+                    [span("1.0.1.0.1.0.1.1")], [span("1.0.2")], [unit_span_json(t_binding())],
+                ] } }),
+                (Some("read_link"), Some("1.0.2.0.1.0.2.1"), _) => json!({ "resp": "link", "link": { "slots": [
+                    [span("1.0.2.0.1.0.1.1")], [], [unit_span_json(t_endpoint())],
+                ] } }),
+                (Some("image"), _, Some(home)) => json!({ "resp": "runs", "runs": [{ "i_start": format!("{home}.0.1.1"), "width": "1" }] }),
+                (Some("retrieve_v"), _, Some("1.0.1.0.1")) => {
+                    let binding = encode(&Body::Binding(Binding { prefix: "1.2".into(), replaces: None }), None);
+                    json!({ "resp": "delivery", "items": [{ "atom": binding }] })
+                }
+                (Some("retrieve_v"), _, Some("1.0.2.0.1")) => {
+                    let origins = vec!["https://acme.example".to_string()];
+                    let endpoint = encode(&Body::Endpoint(Endpoint { origins, replaces: None }), None);
+                    json!({ "resp": "delivery", "items": [{ "atom": endpoint }] })
+                }
+                (Some("key_set"), _, _) if frame["account"] == "1.0.2" => {
+                    let key = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[2; 32]).expect("tag 1").public_key().clone();
+                    json!({ "resp": "key_set", "as_of": 9, "enrolled": [{ "alg": key.alg(), "key": key.to_hex(), "anchor": true }] })
+                }
+                (Some("find_links_ftt"), _, _) => json!({ "resp": "links", "addrs": [] }),
+                _ => panic!("a read this board does not answer: {frame}"),
+            };
+            Ok((200, answer.to_string().into_bytes()))
+        }
+    }
+
+    /// This resolver's own resolution of a name, fixed: `acme.example` at a
+    /// public address.
+    struct Names;
+
+    impl NameResolver for Names {
+        fn resolve(&self, _: &str) -> io::Result<Vec<IpAddr>> {
+            Ok(vec!["93.184.216.34".parse().unwrap()])
+        }
+    }
+
+    /// THE GUEST-READING RESOLVE JUDGES NO RECORD (REG-3.24, REG-3.33): it
+    /// holds no position to judge one as of, so the verdict beside every
+    /// record it answers from — the binding's and the endpoint's alike — is
+    /// UNDETERMINABLE HERE, never one manufactured from the input it lacks;
+    /// and a prefix no candidate binding names is UNREGISTERED.
+    #[test]
+    fn the_guest_reading_resolve_judges_every_record_undeterminable_here() {
+        let board = Board::new(Box::new(Guest));
+        let (face, cost) = guest_resolve(&board, &a("1.2"), &Names, &Transports::default()).expect("the guest resolve");
+        match face {
+            Resolution::Bound { standing, keys, endpoint, dial, .. } => {
+                assert_eq!(standing.current.link, a("1.0.1.0.1.0.2.1"));
+                assert!(standing.history.iter().all(|b| b.verdict == Verdict::UndeterminableHere), "{:?}", standing.history);
+                assert_eq!(endpoint.verdict, Verdict::UndeterminableHere);
+                assert_eq!(keys.map(|k| k.len()), Some(1), "the live table");
+                assert_eq!(dial.origin.as_str(), "https://acme.example");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!((cost.candidate_bindings_scanned, cost.atoms_read), (1, 2));
+        let (face, _) = guest_resolve(&board, &a("1.3"), &Names, &Transports::default()).expect("the guest resolve");
+        assert_eq!(face, Resolution::Unregistered { prefix: a("1.3") });
+    }
+}

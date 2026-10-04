@@ -6,7 +6,7 @@ use crate::common::*;
 use crate::terms::*;
 
 use skep_address::Address;
-use skep_coordination::{Dom, Env, Sort, Term, Value, View};
+use skep_coordination::{Dom, Sort, Term, Value, View};
 use skep_links::{coverage_class, Caller, CoverageClass, Endset, HasLinks, ShippedType, Tip};
 
 /// The atom dispatch end-to-end: active/audit/default readings, the UV
@@ -564,7 +564,7 @@ fn map_get_keys_by_the_cataloged_class_and_an_absent_key_is_bot() {
     let s = k.snapshot();
     let decide_over = |m: im::HashMap<CoverageClass, Address>, t: Term| {
         let tt = c.type_check(vec![(v(1), Sort::Map)], t).expect("a Map-parameter term");
-        c.decide(&tt, &Env::empty().bind(v(1), Value::Map(m)), View::Active, &s)
+        c.decide(&tt, &[Value::Map(m)], View::Active, &s)
     };
     let at_key = |key: &Endset, x: &Address| {
         if_some(map_get(var(1), key), 2, addr_eq(var(2), lit_addr(x)), fls())
@@ -592,14 +592,14 @@ fn a_set_verdict_hands_back_the_addresses_it_holds() {
     deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
     let s = k.snapshot();
     let sources = c.type_check(vec![], members(&pred_stable_ty())).expect("members(K)");
-    let Value::AddrSet(held) = c.eval(&sources, &Env::empty(), View::Active, &s) else {
+    let Value::AddrSet(held) = c.eval(&sources, &[], View::Active, &s) else {
         panic!("members(K) denotes a set");
     };
     assert_eq!(held, [ca(1), ca(3)].into_iter().collect::<im::OrdSet<_>>());
     let heads =
         c.type_check(vec![(v(1), Sort::Addr)], is_k(&pred_stable_ty(), var(1))).expect("is_K(x)");
     for x in held {
-        assert!(c.decide(&heads, &Env::empty().bind(v(1), Value::Addr(x)), View::Active, &s));
+        assert!(c.decide(&heads, &[Value::Addr(x)], View::Active, &s));
     }
 }
 
@@ -613,9 +613,31 @@ fn a_verdict_is_as_of_its_snapshot() {
     link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
     let s1 = k.snapshot();
     let tt = c.type_check(vec![], is_k(&pred_stable_ty(), lit_addr(&ca(1)))).expect("checks");
-    assert!(!c.decide(&tt, &Env::empty(), View::Active, &s0));
-    assert!(c.decide(&tt, &Env::empty(), View::Active, &s1));
+    assert!(!c.decide(&tt, &[], View::Active, &s0));
+    assert!(c.decide(&tt, &[], View::Active, &s1));
     assert!(s0.seq() < s1.seq());
+}
+
+/// A binder's name is bound only within its subterm: an inner `Let` that
+/// rebinds a Γ_D parameter's name — at another sort — shadows it inside, and
+/// the name reads the argument passed for it again once the inner scope
+/// ends. The argument binds by position, to the parameter's own name.
+#[test]
+fn a_binder_shadows_an_outer_name_only_within_its_scope() {
+    let k = kernel();
+    let c = coord(&k);
+    let tt = c
+        .type_check(
+            vec![(v(2), Sort::Nat)],
+            and(
+                let_(2, lit_addr(&ca(1)), addr_eq(var(2), lit_addr(&ca(1)))),
+                nat_eq(var(2), lit_nat(7)),
+            ),
+        )
+        .expect("v2: Addr inside the let, the Nat parameter outside it");
+    let s = k.snapshot();
+    assert!(c.decide(&tt, &[Value::Nat(n(7))], View::Active, &s));
+    assert!(!c.decide(&tt, &[Value::Nat(n(8))], View::Active, &s));
 }
 
 #[test]
@@ -625,32 +647,44 @@ fn decide_panics_on_non_bool_codomain() {
     let c = coord(&k);
     let tt = c.type_check(vec![], lit_nat(1)).expect("Nat-codomain term");
     let s = k.snapshot();
-    let _ = c.decide(&tt, &Env::empty(), View::Active, &s);
+    let _ = c.decide(&tt, &[], View::Active, &s);
 }
 
-/// `eval`'s door: an `Env` that binds a Γ_D parameter at the wrong sort is
-/// a precondition violation named at the door, not a failure somewhere
-/// inside the walk.
+/// `eval`'s door: an argument at the wrong sort for its Γ_D parameter is a
+/// precondition violation named at the door, not a failure somewhere inside
+/// the walk.
 #[test]
-#[should_panic(expected = "eval precondition")]
+#[should_panic(expected = "eval precondition violated: ArgSortMismatch")]
 fn eval_panics_on_a_mis_sorted_parameter() {
     let k = kernel();
     let c = coord(&k);
     let tt = c.type_check(vec![(v(1), Sort::Addr)], tru()).expect("one-param term");
     let s = k.snapshot();
-    let _ = c.eval(&tt, &Env::empty().bind(v(1), Value::Nat(n(1))), View::Active, &s);
+    let _ = c.eval(&tt, &[Value::Nat(n(1))], View::Active, &s);
 }
 
-/// `eval`'s door, the other half: an `Env` that leaves a Γ_D parameter
-/// unbound is named at the door too.
+/// `eval`'s door, the other half: an argument list one short leaves a Γ_D
+/// parameter unbound, and is named at the door too.
 #[test]
-#[should_panic(expected = "eval precondition")]
+#[should_panic(expected = "eval precondition violated: ArgArityMismatch")]
 fn eval_panics_on_an_unbound_parameter() {
     let k = kernel();
     let c = coord(&k);
     let tt = c.type_check(vec![(v(1), Sort::Addr)], tru()).expect("one-param term");
     let s = k.snapshot();
-    let _ = c.eval(&tt, &Env::empty(), View::Active, &s);
+    let _ = c.eval(&tt, &[], View::Active, &s);
+}
+
+/// `eval`'s door, the other way round: an extra argument binds no
+/// parameter, and is named at the door rather than ignored.
+#[test]
+#[should_panic(expected = "eval precondition violated: ArgArityMismatch")]
+fn eval_panics_on_an_extra_argument() {
+    let k = kernel();
+    let c = coord(&k);
+    let tt = c.type_check(vec![(v(1), Sort::Addr)], tru()).expect("one-param term");
+    let s = k.snapshot();
+    let _ = c.eval(&tt, &[Value::Addr(ca(1)), Value::Addr(ca(2))], View::Active, &s);
 }
 
 #[test]
@@ -664,5 +698,5 @@ fn eval_panics_on_a_ref_bearing_term() {
     let tt = c.type_check(vec![], Term::Ref { addr: p, args: vec![] }).expect("ref-bearing checks");
     assert!(!tt.is_ref_free());
     let s = k.snapshot();
-    let _ = c.eval(&tt, &Env::empty(), View::Active, &s);
+    let _ = c.eval(&tt, &[], View::Active, &s);
 }

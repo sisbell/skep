@@ -169,7 +169,7 @@ pub use rule::{
     FireAction, FireOutcome, Occurrence, Rule, RuleCertification, RuleId, ScopeBody, StepOutcome,
     Trigger,
 };
-pub use value::{Arg, Env, Signature, Sort, Value};
+pub use value::{Arg, Signature, Sort, Value};
 
 // Foreign types in this surface, re-exported so a caller names everything a
 // `Coordinator` signature carries — and every payload a `Value` it builds
@@ -223,11 +223,11 @@ impl<W> CoordinationWorld for W where
 /// What this crate promises without saying, pinned so a private change
 /// cannot revoke it silently: every value a driver carries out of a verdict
 /// or a step — and every rejection, in its `Box<dyn Error + Send + Sync>`
-/// crossing form — is `Send + Sync + 'static`. `Value`/`Env` keep the
-/// promise through `im`'s `Arc`-backed collections, which this crate's
-/// manifest names; a swap to the `Rc`-backed `im-rc` would revoke it with
-/// nothing else failing to build. `Coordinator<W>` itself is pinned over a
-/// concrete world in the suite, being generic here.
+/// crossing form — is `Send + Sync + 'static`. `Value` keeps the promise
+/// through `im`'s `Arc`-backed collections, which this crate's manifest
+/// names; a swap to the `Rc`-backed `im-rc` would revoke it with nothing else
+/// failing to build. `Coordinator<W>` itself is pinned over a concrete world
+/// in the suite, being generic here.
 const _: fn() = || {
     fn owed<T: Send + Sync + 'static>() {}
     fn owed_error<T: std::error::Error + Send + Sync + 'static>() {}
@@ -235,7 +235,6 @@ const _: fn() = || {
     owed::<TriggerTerm>();
     owed::<Value>();
     owed::<Arg>();
-    owed::<Env>();
     owed::<Signature>();
     owed::<Dynamics>();
     owed::<Occurrence>();

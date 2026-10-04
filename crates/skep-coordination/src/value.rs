@@ -56,9 +56,9 @@ pub enum Value {
 }
 
 impl Value {
-    /// The sort this value inhabits — what `eval`'s door and
-    /// `evaluate_def`'s positional argument check compare against Γ_D, so a
-    /// caller can ask the same question of its own values before it calls.
+    /// The sort this value inhabits — what both evaluators' positional
+    /// binding compares against Γ_D, so a caller can ask the same question of
+    /// its own values before it calls.
     pub fn sort(&self) -> Sort {
         match self {
             Value::Bool(_) => Sort::Bool,
@@ -172,40 +172,35 @@ pub struct Signature {
     pub result: Sort,
 }
 
-/// Eval environment: free-param + quantifier/Let-bound `VarId → Value`.
-/// Functional (persistent) update — `bind` returns a new `Env`. A collection
-/// of bindings: built from an iterator of `(VarId, Value)` pairs (a def's
-/// Γ_D zipped with its arguments) and extended by one; a later binding of a
-/// name shadows an earlier one, as `bind` does. Two environments are equal
-/// when they bind the same names to the same values, so one built
-/// positionally and one built by `bind` can be compared. Not `Hash`, for
-/// [`Value`]'s reason: the bindings are an `im::HashMap`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Env(HashMap<VarId, Value>);
+/// The evaluator's environment: a term's Γ_D arguments and every name a
+/// quantifier, `Let` or binder guard binds, `VarId → Value`, updated
+/// functionally — `bind` returns a new `Env`, a later binding of a name
+/// shadowing an earlier one, so a binder's scope ends where its subterm does.
+/// Crate-private: a caller hands a term its arguments positionally
+/// (`Coordinator::eval`, `Coordinator::evaluate_def`), so how the evaluator
+/// holds its bindings is its own to change.
+#[derive(Debug, Clone)]
+pub(crate) struct Env(HashMap<VarId, Value>);
 
 impl Env {
-    pub fn empty() -> Env {
+    pub(crate) fn empty() -> Env {
         Env(HashMap::new())
     }
 
     #[must_use = "bind returns the extended environment; Env is persistent and the receiver is untouched"]
-    pub fn bind(&self, v: VarId, val: Value) -> Env {
+    pub(crate) fn bind(&self, v: VarId, val: Value) -> Env {
         Env(self.0.update(v, val))
     }
 
-    pub fn get(&self, v: &VarId) -> Option<&Value> {
+    pub(crate) fn get(&self, v: &VarId) -> Option<&Value> {
         self.0.get(v)
     }
 }
 
+/// A Γ_D zipped with its arguments: `bind_args`'s binding, and the
+/// evaluator's of a referent's parameters to a `Ref`'s arguments.
 impl FromIterator<(VarId, Value)> for Env {
     fn from_iter<I: IntoIterator<Item = (VarId, Value)>>(iter: I) -> Env {
         Env(iter.into_iter().collect())
-    }
-}
-
-impl Extend<(VarId, Value)> for Env {
-    fn extend<I: IntoIterator<Item = (VarId, Value)>>(&mut self, iter: I) {
-        self.0.extend(iter)
     }
 }

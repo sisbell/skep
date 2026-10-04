@@ -11,8 +11,8 @@
 //!
 //! WHY BY HOME (PUB-1.26, PUB-1.31, PUB-6.13): a link carries no publication
 //! flag of its own — its publishedness is its HOME's — so a tuple is visible
-//! at guest class iff `readable_guest(document_of(t.addr))`, its home
-//! document being published. That is the same test M7's own value-keyed
+//! at guest class iff the guest predicate admits `document_of(t.addr)` — its
+//! home document being published. That is the same test M7's own value-keyed
 //! gates apply at link-home identity (lane 3.3b) and the result-set row
 //! applies to every link (PUB-6.13). The SLICE (`Active`/`Audit`) is
 //! ORTHOGONAL to the class: an `AuditSlice` domain still shows the retracted

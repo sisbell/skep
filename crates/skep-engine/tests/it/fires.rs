@@ -38,8 +38,8 @@ use std::sync::Arc;
 use common::*;
 use skep_address::{document_of, Address, Nat};
 use skep_coordination::{
-    Arg, Atom, Coordinator, Dom, Env, FireAction, FireError, FireOutcome, Lit, Occurrence, Prim,
-    Rule, Sort, StepOutcome, Term, Trigger, TypeKey, TypeRef, Value, VarId,
+    Arg, Atom, Coordinator, Dom, FireAction, FireError, FireOutcome, Lit, Occurrence, Prim, Rule,
+    Sort, StepOutcome, Term, Trigger, TypeKey, TypeRef, Value, VarId,
 };
 use skep_engine::{Engine, World};
 use skep_links::{Caller, HasLinks, ShippedType, View};
@@ -507,7 +507,7 @@ fn domain_enumeration_excludes_the_draft_tuple_and_keeps_a_retracted_one() {
         let body = Term::Prim(Prim::AddrEq(Arc::new(lhs), Arc::new(Term::Lit(Lit::Addr(a.clone())))));
         let term = Term::Exists { var: t, dom: Arc::new(dom), body: Arc::new(body) };
         let tt = coord.type_check(vec![], term).expect("a closed Bool term type-checks");
-        coord.decide(&tt, &Env::empty(), View::Audit, &snap)
+        coord.decide(&tt, &[], View::Audit, &snap)
     };
     // AuditSlice: the retracted p2 stays; the draft's q never enters.
     assert!(holds(&coord, Dom::AuditSlice(k.clone()), &p1, true));
@@ -531,7 +531,7 @@ fn domain_enumeration_excludes_the_draft_tuple_and_keeps_a_retracted_one() {
             )),
         )
         .expect("a closed Bool term type-checks");
-    assert!(coord.decide(&two, &Env::empty(), View::Audit, &snap));
+    assert!(coord.decide(&two, &[], View::Audit, &snap));
 
     // The rule engine's own enumeration: a Tup-domained rule whose trigger
     // names the draft's tuple peeks nothing; one naming the retracted tuple

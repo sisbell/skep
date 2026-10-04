@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use skep_address::Address;
 use skep_coordination::{
-    ArcDom, ArcTerm, Atom, Coordinator, Dom, Env, FireAction, Lit, Prim, Sort, Term, Trigger,
-    TypeKey, TypeRef, VarId, View,
+    ArcDom, ArcTerm, Atom, Coordinator, Dom, FireAction, Lit, Prim, Sort, Term, Trigger, TypeKey,
+    TypeRef, VarId, View,
 };
 use skep_kernel::Kernel;
 use skep_links::Endset;
@@ -247,7 +247,7 @@ pub fn in_coverage_g(x: Term, vv: u32) -> Term {
 pub fn decide_now(k: &Arc<Kernel<World>>, c: &Coordinator<World>, view: View, t: Term) -> bool {
     let tt = c.type_check(vec![], t).expect("test term type-checks");
     let s = k.snapshot();
-    c.decide(&tt, &Env::empty(), view, &s)
+    c.decide(&tt, &[], view, &s)
 }
 
 /// The always-true one-`Addr`-parameter trigger.

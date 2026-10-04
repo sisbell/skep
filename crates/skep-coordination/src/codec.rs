@@ -5,8 +5,9 @@
 //! parse consumed" is a one-line check. n = 1: one `Val` at one content
 //! address (Conflicts §2).
 //!
-//! The codec refuses to encode `Sort::Tup` in a parameter context (Codom-only
-//! at encode time as well as at registration — `Tup` has no tag at all), and
+//! A parameter context is Codom-only at encode time as at registration —
+//! `Tup` has no tag at all, and no writer can hand the encoder one
+//! (`stored_run`'s `TypedTerm` is Codom-only by type) — and the codec
 //! decodes a variable name through `VarId::new`, so a reserved-range name
 //! (`≥ EXPANSION_NAME_BASE`) in stored content is malformed and stored defs
 //! cannot smuggle expansion names. Varints are minimal-form-checked on
@@ -55,16 +56,6 @@ pub(crate) struct Malformed;
 /// holds. Surfaced as `DefineError::Unstorable`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Unstorable;
-
-/// Encode failure: the named parameter is `Tup`-sorted, and Γ_D is Codom-only
-/// at encode time as at registration — the sort has no tag in this format at
-/// all. Unreachable through [`stored_run`], whose `TypedTerm` is Codom-only by
-/// type; the raw writer keeps its own invariant regardless, and the codec's
-/// tests spell a `Tup` context to see it refused. Named for the refusal rather
-/// than for `TypeError::TupParameter`, the checker's rejection of the same
-/// shape at a different door.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct UnencodableTup(VarId);
 
 /// The tag table — the ONE statement of the format's discriminants, read by
 /// the encoder and the decoder alike. Each family numbers its own
@@ -179,27 +170,21 @@ mod tag {
 /// decoder meter different trees (`budget.rs`) — and one past the doors is
 /// [`Unstorable`].
 pub(crate) fn stored_run(term: &TypedTerm) -> Result<Vec<u8>, Unstorable> {
-    let bytes = encode(term.signed()).expect(
-        "a Codom-only Γ_D: type_check admits no Tup parameter, TypedTerm is built only in \
-         check.rs, and a TriggerTerm yields none",
-    );
+    let bytes = encode(term.signed());
     match decode(&bytes) {
         Ok(_) => Ok(bytes),
         Err(Malformed) => Err(Unstorable),
     }
 }
 
-/// The raw PR-ENC writer beneath [`stored_run`]: encode the signed term, or
-/// refuse its Γ_D as [`UnencodableTup`], with no read-back check — so the
-/// codec's own tests can spell encodings past the decoder's doors. The crate
-/// writes a def through [`stored_run`].
-fn encode(signed: &SignedTerm) -> Result<Vec<u8>, UnencodableTup> {
+/// The raw PR-ENC writer beneath [`stored_run`], with no read-back check — so
+/// the codec's own tests can spell encodings past the decoder's doors. Its
+/// Γ_D is Codom-only, as every `TypedTerm`'s is (`sort_tag` states why); the
+/// crate writes a def through [`stored_run`].
+fn encode(signed: &SignedTerm) -> Vec<u8> {
     let mut payload = Vec::new();
     w_varint(&mut payload, signed.params.len() as u64);
     for (v, s) in &signed.params {
-        if *s == Sort::Tup {
-            return Err(UnencodableTup(*v));
-        }
         w_varid(&mut payload, v);
         payload.push(sort_tag(*s));
     }
@@ -207,7 +192,7 @@ fn encode(signed: &SignedTerm) -> Result<Vec<u8>, UnencodableTup> {
     let mut out = Vec::with_capacity(payload.len() + 10);
     w_varint(&mut out, payload.len() as u64);
     out.extend_from_slice(&payload);
-    Ok(out)
+    out
 }
 
 fn w_varint(b: &mut Vec<u8>, mut x: u64) {
@@ -236,7 +221,10 @@ fn sort_tag(s: Sort) -> u8 {
         Sort::Map => tag::sort::MAP,
         Sort::Nat => tag::sort::NAT,
         Sort::OptNat => tag::sort::OPT_NAT,
-        Sort::Tup => unreachable!("encode refuses Sort::Tup before tagging"),
+        Sort::Tup => unreachable!(
+            "a stored def's Γ_D is Codom-only, and Tup has no tag: type_check admits no Tup \
+             parameter, TypedTerm is built only in check.rs, and a TriggerTerm yields none"
+        ),
     }
 }
 

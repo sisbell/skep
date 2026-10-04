@@ -6,7 +6,7 @@ use crate::common::*;
 use crate::terms::*;
 
 use skep_coordination::{
-    Atom, Dom, Env, Lit, Nat, Sort, Term, TypeError, TypeKey, TypeRef, Value, VarId, View,
+    Atom, Dom, Lit, Nat, Sort, Term, TypeError, TypeKey, TypeRef, Value, VarId, View,
 };
 use skep_links::{coverage_class, Behavior, Caller, Endset, ShippedType};
 
@@ -79,11 +79,13 @@ fn type_check_refuses_at_each_gamma_and_catalog_gate() {
     ));
 }
 
-/// The checker's documented edges: the two `Ref` arity spellings, the
+/// The checker's documented edges: a `Ref`'s arity, short and long, the
 /// binder guard's and `Def`'s optional-sort requirement and the branch
 /// agreement, the address-valued-domain requirement of `Reflect`/`MaxT1`, a
 /// bare `Reg` in every position outside ∀/∃/`Count`, and the behavior
-/// guards of the BH1/BH2/BH4 atoms — each its own typed rejection.
+/// guards of the BH1/BH2/BH4 atoms — each its own typed rejection, and an
+/// arity refusal's message naming the referent and both counts, so a caller
+/// holding only the message reads what was wrong.
 #[test]
 fn type_check_refuses_each_documented_edge_by_name() {
     let k = kernel();
@@ -95,16 +97,22 @@ fn type_check_refuses_each_documented_edge_by_name() {
         .define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("Q"))
         .expect("define Q");
 
-    // Ref arity: too few arguments — expected the first unmatched formal,
-    // found the result sort; too many — expected the result sort, found the
-    // extra argument's sort.
+    // Ref arity: too few arguments, and too many.
+    let short = c.type_check(vec![], Term::Ref { addr: p.clone(), args: vec![] }).err();
     assert_eq!(
-        c.type_check(vec![], Term::Ref { addr: p, args: vec![] }).err(),
-        Some(TypeError::SortMismatch { expected: Sort::Addr, found: Sort::Bool })
+        short,
+        Some(TypeError::ArgArityMismatch { referent: p.clone(), expected: 1, found: 0 })
     );
     assert_eq!(
-        c.type_check(vec![], Term::Ref { addr: q, args: vec![at(lit_addr(&ca(1)))] }).err(),
-        Some(TypeError::SortMismatch { expected: Sort::Bool, found: Sort::Addr })
+        c.type_check(vec![], Term::Ref { addr: q.clone(), args: vec![at(lit_addr(&ca(1)))] }).err(),
+        Some(TypeError::ArgArityMismatch { referent: q, expected: 0, found: 1 })
+    );
+    let said = short.expect("refused").to_string();
+    assert!(
+        said.contains(&format!(
+            "a reference to {p} passes 0 argument(s) to a def of 1 parameter(s)"
+        )),
+        "{said}"
     );
 
     // The binder guard and `def` take an optional; the two branches agree.
@@ -116,18 +124,24 @@ fn type_check_refuses_each_documented_edge_by_name() {
         Some(TypeError::SortMismatch { expected: Sort::Bool, found: Sort::Nat })
     );
 
-    // Only an address-valued domain reflects or has a T1 extremum; a bare
-    // Reg outside ∀/∃/Count is class-valued and fails the same check.
+    // Only an address-valued domain reflects or has a T1 extremum.
     let tup_for_addr = || Some(TypeError::SortMismatch { expected: Sort::Addr, found: Sort::Tup });
     let tuples = || Dom::ActiveSlice(concrete(&pred_def_ty()));
     assert_eq!(c.type_check(vec![], reflect(tuples())).err(), tup_for_addr());
     assert_eq!(c.type_check(vec![], Term::MaxT1(ad(tuples()))).err(), tup_for_addr());
-    assert_eq!(c.type_check(vec![], reflect(Dom::Reg)).err(), tup_for_addr());
-    assert_eq!(c.type_check(vec![], Term::MinT1(ad(Dom::Reg))).err(), tup_for_addr());
-    assert_eq!(c.type_check(vec![], count(filter(Dom::Reg, 2, tru()))).err(), tup_for_addr());
+    // A bare Reg outside ∀/∃/Count is misplaced wherever it sits — a
+    // quantifier's FILTERED domain included: ∃ admits Reg only as its own.
+    let misplaced = || Some(TypeError::MisplacedReg);
+    assert_eq!(c.type_check(vec![], reflect(Dom::Reg)).err(), misplaced());
+    assert_eq!(c.type_check(vec![], Term::MinT1(ad(Dom::Reg))).err(), misplaced());
+    assert_eq!(c.type_check(vec![], count(filter(Dom::Reg, 2, tru()))).err(), misplaced());
+    assert_eq!(
+        c.type_check(vec![], exists(2, filter(Dom::Reg, 3, tru()), tru())).err(),
+        misplaced()
+    );
     assert_eq!(
         c.type_check(vec![], big_union(Dom::Reg, 2, members(&pred_def_ty()))).err(),
-        tup_for_addr()
+        misplaced()
     );
 
     // The behavior guards, one per behavior: BH4 on a class without Age,
@@ -153,7 +167,8 @@ fn type_check_refuses_each_documented_edge_by_name() {
 /// WHICH rejection speaks when several hold: a node's type position and its
 /// behavior guard before its children; children left to right; a binder's
 /// domain before its body; a `Ref`'s referent before its arguments, and each
-/// argument on its own account before it is matched against its formal.
+/// argument on its own account before it is matched against its formal — an
+/// extra argument included, before the arity it breaks.
 #[test]
 fn type_check_reports_the_first_rejection_in_its_stated_walk_order() {
     let k = kernel();
@@ -193,6 +208,14 @@ fn type_check_reports_the_first_rejection_in_its_stated_walk_order() {
         .expect("define P");
     assert_eq!(
         c.type_check(vec![], Term::Ref { addr: p, args: vec![at(bad_arg())] }).err(),
+        mismatch(Sort::Bool, Sort::Nat)
+    );
+    // An EXTRA argument likewise speaks on its own account before the arity
+    // it breaks — which would report `ArgArityMismatch`.
+    let (q, _) =
+        c.define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("Q")).expect("define Q");
+    assert_eq!(
+        c.type_check(vec![], Term::Ref { addr: q, args: vec![at(bad_arg())] }).err(),
         mismatch(Sort::Bool, Sort::Nat)
     );
 }
@@ -266,8 +289,7 @@ fn a_binder_s_variable_is_read_only_inside_its_scope() {
             if_some(bot_addr(), 2, is_doc(var(2)), nat_le(var(2), lit_nat(3))),
         )
         .expect("then reads the guard's v2: Addr; else the parameter v2: Nat");
-    let env = Env::empty().bind(v(2), Value::Nat(n(2)));
-    assert!(c.decide(&shadowing, &env, View::Active, &k.snapshot()));
+    assert!(c.decide(&shadowing, &[Value::Nat(n(2))], View::Active, &k.snapshot()));
 }
 
 /// V-STAT's behavior guard as a law over every atom that needs one: each
@@ -525,10 +547,10 @@ fn reg_expansion_folds_count_instantiates_per_class_and_refuses_an_ill_typed_ins
             },
         )
         .expect("Reg-quantified IsK body type-checks");
-    let env = Env::empty().bind(v(1), Value::Addr(ca(5)));
-    assert!(!c.decide(&ex, &env, View::Active, &k.snapshot()));
+    let args = [Value::Addr(ca(5))];
+    assert!(!c.decide(&ex, &args, View::Active, &k.snapshot()));
     writer.emit(Caller::System, &doc1(), &pred_def_ty(), &ca(5), &[]).expect("pred_def emit");
-    assert!(c.decide(&ex, &env, View::Active, &k.snapshot()));
+    assert!(c.decide(&ex, &args, View::Active, &k.snapshot()));
 
     // A class-indexed behavior atom at the bound class dies by instantiation
     // (some instance lacks the behavior) — RegInstanceIllTyped, naming the
@@ -567,10 +589,10 @@ fn an_inner_reg_binder_shadows_the_outer() {
     let distinct = c
         .type_check(vec![(v(1), Sort::Addr)], exists(7, Dom::Reg, forall(8, Dom::Reg, is_k7())))
         .expect("∃K :: ∀K' :: is_K(x)");
-    let env = Env::empty().bind(v(1), Value::Addr(ca(5)));
+    let args = [Value::Addr(ca(5))];
     let s = k.snapshot();
-    assert!(!c.decide(&shadowed, &env, View::Active, &s));
-    assert!(c.decide(&distinct, &env, View::Active, &s));
+    assert!(!c.decide(&shadowed, &args, View::Active, &s));
+    assert!(c.decide(&distinct, &args, View::Active, &s));
 }
 
 /// A checked term keeps its SOURCE body — `Reg` quantifiers and class

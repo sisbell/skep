@@ -32,16 +32,16 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
         action,
     };
 
-    // A bare Reg domain fails the sort check.
+    // A bare Reg domain is misplaced: `Reg` ranges over classes.
     assert!(matches!(
         c.register_rule(rule(Dom::Reg, always_addr(&c), marker_action())),
-        Err(RuleError::IllFormedDomain(TypeError::SortMismatch { .. }))
+        Err(RuleError::IllFormedDomain(TypeError::MisplacedReg))
     ));
     // certify_rule re-runs the same validation: a malformed rule is the same
     // typed rejection, callable pre-registration.
     assert!(matches!(
         c.certify_rule(&rule(Dom::Reg, always_addr(&c), marker_action())),
-        Err(RuleError::IllFormedDomain(TypeError::SortMismatch { .. }))
+        Err(RuleError::IllFormedDomain(TypeError::MisplacedReg))
     ));
     // An uncataloged domain class.
     assert!(matches!(

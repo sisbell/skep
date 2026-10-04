@@ -228,7 +228,8 @@ pub enum Dom {
     /// links are outside PL's universe).
     LinkDom,
     /// Class-valued; quantification-only (admissible under exactly
-    /// `Forall`/`Exists`/`Count`); expanded/folded at type_check (V-IDX).
+    /// `Forall`/`Exists`/`Count`, `TypeError::MisplacedReg` elsewhere);
+    /// expanded/folded at type_check (V-IDX).
     Reg,
     Filter { dom: ArcDom, var: VarId, pred: ArcTerm },
     /// QD set-valued-term closure: a ℘_fin(T)-valued term used as a domain.

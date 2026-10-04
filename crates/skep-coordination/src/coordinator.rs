@@ -6,10 +6,11 @@
 //!
 //! The handle's impl is cut one file per capability group. This file holds
 //! construction, the two guest-class surfaces (`eval_ctx`, `link_writer`),
-//! the checker's two invocations and group A; its children `defs` (group B)
-//! and `engine` (group C) are the rest of the impl, and `memo` is the
-//! def-status cache the handle holds. Being children they share the private
-//! state this module declares — no other module of the crate can reach it.
+//! the checker's two invocations, the calling convention both evaluators
+//! bind Γ_D by (`bind_args`) and group A; its children `defs` (group B) and
+//! `engine` (group C) are the rest of the impl, and `memo` is the def-status
+//! cache the handle holds. Being children they share the private state this
+//! module declares — no other module of the crate can reach it.
 
 // The def-status memo the handle holds: permanence here, admission in `defs`.
 mod memo;
@@ -30,7 +31,7 @@ use crate::ast::{Dom, Term, VarId};
 use crate::catalog::TypeCatalog;
 use crate::check::{CheckedDom, Checker, DefSource, TriggerTerm, TypedTerm};
 use crate::dynamics::{classify_term, Dynamics};
-use crate::error::TypeError;
+use crate::error::{EvalError, TypeError};
 use crate::eval::{eval_term, EvalCtx};
 use crate::guest::GuestLinks;
 use crate::value::{Env, SignedTerm, Sort, Value};
@@ -104,9 +105,8 @@ pub struct Coordinator<W: WorldState> {
     mk_link_writer: LinkWriterFactory<W>,
     /// The GUEST-class read predicate over a document address (PUB round 2,
     /// lane 3.3, §5), in M7's own `Visibility` shape: `true` iff the
-    /// document is readable at guest class — the engine supplies
-    /// `World::readable_guest`. It is applied THREE ways, each by one
-    /// element:
+    /// document is readable at guest class, with no principal. It is applied
+    /// THREE ways, each by one element:
     ///
     /// - THE LOOK (lane 4.1, PUB-6.28): every verdict's read context is built
     ///   over it ([`Coordinator::eval_ctx`] → `GuestLinks`), so a tuple homed
@@ -150,15 +150,14 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// the kernel — lane 3.3b: M9 lends it `guest` at every construction, a
     /// borrow of the one closure it holds).
     ///
-    /// Infallible: the registry's population is the compiled shipped five
-    /// (owner ruling, 2026-08-26), so the projection is a pure read of the
-    /// injected registry and there is no twice-passed configuration whose
-    /// drift a validate-once-or-fail step would catch.
+    /// Infallible: the projection is a pure read of the injected registry,
+    /// whose population is the compiled shipped five (owner ruling,
+    /// 2026-08-26).
     ///
-    /// `guest` is the GUEST-class read predicate (lane 3.3 §5): the engine
-    /// passes `World::readable_guest`. Any `Fn` of M7's `Visibility` shape
-    /// serves — a closure, or a predicate already boxed — and the handle
-    /// boxes it to hold it. It decides three things, so an assembler
+    /// `guest` is the GUEST-class read predicate (lane 3.3 §5) — `true` iff a
+    /// document is readable with no principal. Any `Fn` of M7's `Visibility`
+    /// shape serves — a closure, or a predicate already boxed — and the
+    /// handle boxes it to hold it. It decides three things, so an assembler
     /// choosing it chooses all three: what every PL verdict sees (lane 4.1 —
     /// a tuple homed where it answers `false` is invisible to `eval`,
     /// `evaluate_def` and every rule's domain and trigger); which fires are
@@ -187,13 +186,12 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// established to be a registered document — and on `document_of` of the
     /// bound argument, falling back to the argument itself when it has no
     /// document field. It must ANSWER for any of those, never panic, and
-    /// `false` is the safe answer for an address it does not recognize. The
-    /// engine's `World::readable_guest` is total by construction: it answers
-    /// through the engine's `World::published`, which answers for any address
-    /// — fail-open where M3's `published` is fail-private, an address no mint
-    /// produced reading published. That is safe here as well: such an address
-    /// is no draft, so no boundary is crossed, and as a home it is refused by
-    /// M7's H-HOME.
+    /// `false` is the safe answer for an address it does not recognize: the
+    /// fire stops at the draft boundary (`FireError::DraftBoundary`) before
+    /// any deposit. A `true` for a HOME no mint produced lets the fire reach
+    /// M7, whose H-HOME refuses it (`FireError::HomeNotRegistered`). Which
+    /// addresses an injected predicate reads as drafts is its assembler's to
+    /// state; M9 states what it does with each answer.
     pub fn new(
         kernel: Arc<Kernel<W>>,
         registry: Arc<TypeRegistry>,
@@ -295,8 +293,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// children left to right, a binder's domain or bound term before its
     /// body; a `Ref`'s referent — whether it resolves, then how deep a walk
     /// through it reaches — before its arguments, each argument checked
-    /// before it is matched against its formal, so an arity mismatch (a
-    /// `SortMismatch`) speaks at the first unmatched position; a `Reg`
+    /// before it is matched against its formal, so an arity mismatch
+    /// (`ArgArityMismatch`) speaks at the first unmatched position; a `Reg`
     /// quantifier's instances in catalog order — with `TooDeep`/`TooLarge`
     /// at the node where the budget is spent.
     pub fn type_check(&self, params: Vec<(VarId, Sort)>, body: Term) -> Result<TypedTerm, TypeError> {
@@ -352,7 +350,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// — a surviving `Ref` node is a precondition violation (PANICS, like
     /// `decide` on a non-Bool codomain); ref-bearing terms evaluate only
     /// through `evaluate_def`, keeping this denotation content-free — and
-    /// `env` binds every Γ_D parameter at its sort. INFALLIBLE past the door;
+    /// `args` bind positionally to Γ_D, one per parameter, each at its sort:
+    /// the convention `evaluate_def` shares (`bind_args`), refused there as a
+    /// value where this door panics. INFALLIBLE past the door;
     /// reads ONLY M7 + M3, all off `snap` (PC4 / ASN-0134 clause 6) — M7
     /// through the GUEST-CLASS view (lane 4.1, PUB-6.28): a tuple homed in a
     /// document the injected `guest` predicate refuses is invisible to the
@@ -362,30 +362,30 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// Each precondition has a PUBLIC discharge point, so a caller can check
     /// what it owes before it calls: [`TypedTerm::is_ref_free`] for the
     /// first, [`TypedTerm::params`] against [`Value::sort`] for the second.
-    pub fn eval(&self, t: &TypedTerm, env: &Env, view: View, snap: &Snapshot<W>) -> Value {
+    pub fn eval(&self, t: &TypedTerm, args: &[Value], view: View, snap: &Snapshot<W>) -> Value {
         assert!(
             t.is_ref_free(),
             "eval precondition violated: ref-bearing TypedTerm — route through evaluate_def"
         );
-        for (v, s) in t.params() {
-            assert!(
-                env.get(v).is_some_and(|val| val.sort() == *s),
-                "eval precondition violated: Γ_D parameter {v:?} unbound or mis-sorted in env (expected {s:?})"
-            );
-        }
+        let env = bind_args(t.params(), args).unwrap_or_else(|refused| {
+            panic!(
+                "eval precondition violated: {refused:?} — args bind positionally to Γ_D {:?}",
+                t.params()
+            )
+        });
         let cx = self.eval_ctx(snap.world(), view, None);
-        eval_term(&cx, env, t.evaluable())
+        eval_term(&cx, &env, t.evaluable())
     }
 
     /// Convenience for Bool-codomain terms; panics if the codomain is not
     /// Bool, or on any of `eval`'s preconditions.
-    pub fn decide(&self, t: &TypedTerm, env: &Env, view: View, snap: &Snapshot<W>) -> bool {
+    pub fn decide(&self, t: &TypedTerm, args: &[Value], view: View, snap: &Snapshot<W>) -> bool {
         assert!(
             t.result_sort() == Sort::Bool,
             "decide precondition violated: codomain is {:?}, not Bool",
             t.result_sort()
         );
-        match self.eval(t, env, view, snap) {
+        match self.eval(t, args, view, snap) {
             Value::Bool(b) => b,
             other => unreachable!("Bool-codomain term denoted {other:?}"),
         }
@@ -408,4 +408,19 @@ impl<W: CoordinationWorld> Coordinator<W> {
         );
         classify_term(&self.catalog, view, t.evaluable())
     }
+}
+
+/// Γ_D's calling convention, stated once for both public evaluators: `args`
+/// bind POSITIONALLY to `params` — one argument per parameter, each at its
+/// parameter's sort. [`Coordinator::eval`] asserts it at its door;
+/// [`Coordinator::evaluate_def`] answers a violation as a value, arity
+/// before sort.
+fn bind_args(params: &[(VarId, Sort)], args: &[Value]) -> Result<Env, EvalError> {
+    if args.len() != params.len() {
+        return Err(EvalError::ArgArityMismatch);
+    }
+    if args.iter().zip(params).any(|(arg, (_, s))| arg.sort() != *s) {
+        return Err(EvalError::ArgSortMismatch);
+    }
+    Ok(params.iter().map(|(v, _)| *v).zip(args.iter().cloned()).collect())
 }

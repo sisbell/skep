@@ -10,7 +10,7 @@ use crate::common::*;
 use crate::terms::*;
 
 use skep_coordination::{
-    CertifyError, Coordinator, DefineError, Dom, EmitError, Env, EvalError, FireAction, FireError,
+    CertifyError, Coordinator, DefineError, Dom, EmitError, EvalError, FireAction, FireError,
     InsertError, NullifyError, RegisterError, RetractError, Rule, RuleCertification, RuleError,
     ScopeBody, Sort, Stability, SupersedeError, Term, TxnError, TypeError, TypeKey, Value, VarId,
     View, EXPANSION_NAME_BASE,
@@ -19,9 +19,7 @@ use skep_links::{enc, Endset, ShippedType};
 
 /// Catalog projection: a pure, infallible read of the injected registry —
 /// the cached `reserved_type` accessor serves the five shipped endsets at
-/// the compiled ghost-tumbler constants (there is no twice-passed
-/// configuration left to drift; the old validate-once-or-fail arms went
-/// with the retired `GenesisConfig` seam).
+/// the compiled ghost-tumbler constants.
 #[test]
 fn catalog_projects_and_serves_reserved_endsets() {
     let k = kernel();
@@ -35,40 +33,24 @@ fn catalog_projects_and_serves_reserved_endsets() {
 
 /// The reserved expansion-name range is structurally uninhabitable by caller
 /// names (`VarId::new` is the sole public constructor, and a `const fn`, so a
-/// driver's named constants are held to the watershed at compile time);
-/// `Env` binds functionally, and is a collection of bindings — built from an
-/// iterator, extended, a later binding of a name shadowing an earlier one as
-/// `bind` does.
+/// driver's named constants are held to the watershed at compile time).
 #[test]
-fn varid_new_stops_at_the_watershed_and_env_binds_functionally() {
+fn varid_new_stops_at_the_watershed() {
     assert!(VarId::new(EXPANSION_NAME_BASE).is_none());
     assert!(VarId::new(EXPANSION_NAME_BASE - 1).is_some());
     const FIRST: VarId = VarId::new(1).expect("below the watershed");
     const RESERVED: Option<VarId> = VarId::new(EXPANSION_NAME_BASE);
     assert_eq!(Some(FIRST), VarId::new(1));
     assert!(RESERVED.is_none());
-    let base = Env::empty();
-    let bound = base.bind(v(1), Value::Bool(true));
-    assert_eq!(bound.get(&v(1)), Some(&Value::Bool(true)));
-    assert_eq!(bound.get(&v(2)), None);
-    assert_eq!(base.get(&v(1)), None); // functional update
-
-    let mut collected: Env =
-        [(v(1), Value::Bool(false)), (v(2), Value::Nat(n(2))), (v(1), Value::Bool(true))]
-            .into_iter()
-            .collect();
-    assert_eq!(collected.get(&v(1)), Some(&Value::Bool(true)));
-    assert_eq!(collected.get(&v(2)), Some(&Value::Nat(n(2))));
-    collected.extend([(v(2), Value::Nat(n(3)))]);
-    assert_eq!(collected.get(&v(2)), Some(&Value::Nat(n(3))));
 }
 
 /// A `Coordinator` over the assembled world crosses threads: a driver that
 /// shares one behind an `Arc` or moves it onto a worker depends on the
-/// promise, and nothing in the handle's signature states it — the boxed
-/// factories, the memo's lock and the catalog all have to keep it. And it
-/// renders: a struct holding one derives `Debug`, and the rendering is the
-/// working set — the registered rule ids and the rotation cursor.
+/// promise, and nothing in the handle's signature states it — the injected
+/// factories and predicate, the memo's lock and the catalog all have to keep
+/// it. And it renders: a struct holding one derives `Debug`, and the
+/// rendering is the working set — the registered rule ids and the rotation
+/// cursor.
 #[test]
 fn a_coordinator_is_send_sync_and_debug() {
     fn owed<T: Send + Sync + std::fmt::Debug>() {}
@@ -248,28 +230,18 @@ fn a_value_is_buildable_and_self_describing_through_this_crate_s_own_paths() {
     assert_eq!(c.evaluate_def(&start, &[set], View::Active, &s), Ok(Value::Bool(true)));
 }
 
-/// The public types carry the traits a caller cannot add for itself: an `Env`
-/// compares, so one built positionally and one built by `bind` can be checked
-/// against each other; a `Signature`, a `Stability`, an `ActiveExceptions`, a
-/// `ScopeBody` and a `RuleCertification` all hash, so a driver can group defs
-/// by signature, tally checked terms by stability, or key a per-body policy
-/// table — and so do a PL term, a checked term, a trigger and an action, so a
-/// driver can cache a check or group rules by what they share.
+/// The public types carry the traits a caller cannot add for itself: a
+/// `Signature`, a `Stability`, an `ActiveExceptions`, a `ScopeBody` and a
+/// `RuleCertification` all hash, so a driver can group defs by signature,
+/// tally checked terms by stability, or key a per-body policy table — and so
+/// do a PL term, a checked term, a trigger and an action, so a driver can
+/// cache a check or group rules by what they share.
 #[test]
 fn the_public_types_compare_and_hash_as_a_caller_needs() {
     use std::collections::{HashMap, HashSet};
 
     let k = kernel();
     let c = coord(&k);
-
-    // `Env`: the two ways of building one agree, and a different binding does
-    // not — so the equality is the bindings' and not a blanket true.
-    let positional: Env =
-        [(v(1), Value::Nat(n(1))), (v(2), Value::Bool(true))].into_iter().collect();
-    let bound = Env::empty().bind(v(1), Value::Nat(n(1))).bind(v(2), Value::Bool(true));
-    assert_eq!(positional, bound);
-    assert_ne!(positional, Env::empty().bind(v(1), Value::Nat(n(1))));
-    assert_ne!(positional, bound.bind(v(2), Value::Bool(false)));
 
     // `Signature`: defs grouped by their calling convention — two DISTINCT
     // defs sharing a Γ_D and a codomain land in one bucket (the hash is the

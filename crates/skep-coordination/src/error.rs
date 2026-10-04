@@ -21,10 +21,9 @@ use crate::value::Sort;
 /// `type_check`/`type_check_trigger` rejection (ASN-0129 WT, V-IDX, V-STAT,
 /// WT-ref).
 ///
-/// `#[non_exhaustive]`: the vocabulary names neither a `Ref` arity mismatch
-/// nor a bare `Reg` domain (both spelled `SortMismatch` today), and a
-/// dedicated variant for either is an addition a consumer's catch-all should
-/// absorb rather than a broken build.
+/// `#[non_exhaustive]`: the checker's refusals are a vocabulary that grows — a
+/// further resource door, say — and an addition is one a consumer's catch-all
+/// should absorb rather than a broken build.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TypeError {
@@ -36,10 +35,20 @@ pub enum TypeError {
     /// (ASN-0130 SignedTerm); a rule trigger, the one term with a tuple
     /// parameter, is checked by `type_check_trigger` into a `TriggerTerm`.
     TupParameter(VarId),
-    /// A Γ_D name bound twice — a context binds each name once, so that an
-    /// `Env` can bind every parameter at its sort. Carries the repeated name.
+    /// A Γ_D name bound twice — a context binds each name once: a repeated
+    /// name's later binding would shadow its earlier one, leaving the argument
+    /// passed at the earlier position unreadable. Carries the repeated name.
     DuplicateParameter(VarId),
     SortMismatch { expected: Sort, found: Sort },
+    /// A `Ref` passing `found` arguments to a referent whose Γ_D binds
+    /// `expected` (WT-ref: one argument per formal). Speaks where
+    /// `type_check`'s walk order puts it — at the first unmatched position,
+    /// every argument up to it, the extra one included, checked first.
+    ArgArityMismatch { referent: Address, expected: usize, found: usize },
+    /// A `Reg` domain under any former but `∀`, `∃` and `count`, the three
+    /// V-IDX admits it under: `Reg` ranges over classes, so it has no element
+    /// sort to bind, reflect, fold or filter by.
+    MisplacedReg,
     /// An atom needs a behavior the (concrete) type's registration lacks.
     BehaviorMissing { ty: TypeKey, needs: Behavior },
     /// A BH2 atom (`Succs`/`Chain`/`Tip`/`IsInChain`) at a cataloged Walk
@@ -105,6 +114,15 @@ impl fmt::Display for TypeError {
             TypeError::SortMismatch { expected, found } => {
                 write!(f, "type_check: expected sort {expected:?}, found {found:?}")
             }
+            TypeError::ArgArityMismatch { referent, expected, found } => write!(
+                f,
+                "type_check: a reference to {referent} passes {found} argument(s) to a def of \
+                 {expected} parameter(s) (WT-ref)"
+            ),
+            TypeError::MisplacedReg => f.write_str(
+                "type_check: Reg ranges over classes — admissible only as the domain of ∀, ∃ or \
+                 count (V-IDX)",
+            ),
             TypeError::BehaviorMissing { ty, needs } => {
                 write!(f, "type_check: type {ty} does not declare behavior {needs:?}")
             }
@@ -151,7 +169,7 @@ impl Error for TypeError {
 /// registration.
 ///
 /// Deliberately exhaustive: its variants are those three steps, and the
-/// codec's Codom-only refusal (ASN-0130 SignedTerm) needs none — no
+/// codec's Codom-only invariant (ASN-0130 SignedTerm) needs none — no
 /// `TypedTerm` with a `Tup` parameter reaches it, in this crate or out of
 /// it: `type_check` refuses one, a stored def's Γ_D is decoded from a format
 /// with no `Tup` tag, and the one checked term whose parameter may be a
@@ -406,8 +424,8 @@ impl Error for CertifyError {
     }
 }
 
-/// `retract_pred` rejection. `NotActive`: no active `pdef` tuple — a clean
-/// rejection, never a panic (item 8).
+/// `retract_pred` rejection. `NotActive`: no active `pdef` tuple names the
+/// start.
 #[derive(Debug)]
 pub enum RetractError {
     NotActive,
@@ -493,7 +511,7 @@ pub enum RuleError {
     /// escape for domains; inline the helper.
     RefBearingDomain,
     /// `rule.domain` fails the WT-domain + `Reg`-expansion pass (incl. a bare
-    /// `Reg` domain — the sort check). Carries that pass's own resource
+    /// `Reg` domain — `MisplacedReg`). Carries that pass's own resource
     /// refusals too, `TooDeep` and `TooLarge`: the domain is checked under a
     /// fresh budget of its own, never the submitting term's.
     IllFormedDomain(TypeError),

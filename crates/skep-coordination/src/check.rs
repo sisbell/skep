@@ -383,8 +383,9 @@ impl<'a> Checker<'a> {
     /// Γ_D is charged against the node budget first, so a context longer than
     /// the budget is `TooLarge` before anything is sized by its length (the
     /// duplicate-name set, the typing context); then Γ_D binds each name once
-    /// (`DuplicateParameter` otherwise), so that an `Env` can bind every
-    /// parameter at its sort; then WT + WT-ref over the body, referents
+    /// (`DuplicateParameter` otherwise) — a repeated name's later binding
+    /// would shadow its earlier one, leaving the argument passed at the
+    /// earlier position unreadable; then WT + WT-ref over the body, referents
     /// resolved at the levels the `Ref` arm asks for them at
     /// ([`referent_depth`]). [`TypedTerm::reach`] is the pass's high-water
     /// mark RELATIVE to this root — the referent's term in [`reference_reach`]
@@ -672,8 +673,8 @@ impl<'a> Checker<'a> {
             }
             Term::Reflect(d) => {
                 // QD-refl: only an address-valued domain reflects; a
-                // tuple-valued (or class-valued Reg) domain is rejected at
-                // the element-sort check.
+                // tuple-valued domain is rejected at the element-sort check
+                // (a bare Reg already at `check_dom`, `MisplacedReg`).
                 let cd = self.check_dom(ctx, d, child_depth)?;
                 want(Sort::Addr, cd.elem_sort)?;
                 Ok(Checked {
@@ -704,7 +705,7 @@ impl<'a> Checker<'a> {
                 // The levels a walk through this node reaches are the
                 // referent's, which no `enter` on this pass records.
                 self.reach_to(reference_reach(depth, args.len(), referent.reach))?;
-                let checked_args = self.reference_args(ctx, &referent, args, depth)?;
+                let checked_args = self.reference_args(ctx, addr, &referent, args, depth)?;
                 Ok(Checked {
                     term: Arc::new(Term::Ref { addr: addr.clone(), args: checked_args }),
                     sort: referent.result,
@@ -714,41 +715,38 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// WT-ref's argument matching: each argument checked at the level its own
-    /// `Let` gives it in the flat expansion ([`argument_depth`], over the
-    /// reference's own level `depth`), then matched against its formal. An
-    /// arity mismatch has no variant of its own, so it is reported as the
-    /// closest thing the declared vocabulary admits — a `SortMismatch` at the
-    /// first unmatched position: too few arguments expects that formal and
-    /// finds the reference's result sort, too many expects the result sort and
-    /// finds the extra argument's sort.
+    /// WT-ref's argument matching for the reference to `addr`: each argument
+    /// checked at the level its own `Let` gives it in the flat expansion
+    /// ([`argument_depth`], over the reference's own level `depth`), then
+    /// matched against its formal. An arity mismatch is `ArgArityMismatch`, at
+    /// the first unmatched position: too many at the first extra argument,
+    /// once it has checked on its own account; too few once every argument
+    /// has.
     fn reference_args(
         &self,
         ctx: &Ctx,
+        addr: &Address,
         referent: &TypedTerm,
         args: &[ArcTerm],
         depth: u32,
     ) -> Result<Vec<ArcTerm>, TypeError> {
         let params = referent.params();
+        let arity = || TypeError::ArgArityMismatch {
+            referent: addr.clone(),
+            expected: params.len(),
+            found: args.len(),
+        };
         let mut checked_args: Vec<ArcTerm> = Vec::with_capacity(args.len());
         for (i, arg) in args.iter().enumerate() {
             let c = self.check_term(ctx, arg, argument_depth(depth, i))?;
             match params.get(i) {
                 Some((_, s)) => want(*s, c.sort)?,
-                None => {
-                    return Err(TypeError::SortMismatch {
-                        expected: referent.result,
-                        found: c.sort,
-                    })
-                }
+                None => return Err(arity()),
             }
             checked_args.push(c.term);
         }
         if args.len() < params.len() {
-            return Err(TypeError::SortMismatch {
-                expected: params[args.len()].1,
-                found: referent.result,
-            });
+            return Err(arity());
         }
         Ok(checked_args)
     }
@@ -992,11 +990,11 @@ impl<'a> Checker<'a> {
     }
 
     /// The WT domain judgment `⊢ D dom(s)`, `s ∈ {Addr, Tup}`, at nesting
-    /// level `depth`. A `Reg` in a non-quantifier/`Count` position —
-    /// including here — is class-valued and has no element sort; per the
-    /// design's "likewise rejected at the element-sort check" it surfaces as
-    /// `SortMismatch{expected: Addr, found: Tup}` (the vocabulary has no
-    /// class sort to name).
+    /// level `depth`. A `Reg` reaching here sits under a former V-IDX does
+    /// not admit it under — `∀`/`∃` and `count` each take it before asking
+    /// for a domain — and is `MisplacedReg`, refused where its element sort
+    /// would be read (the design's "likewise rejected at the element-sort
+    /// check").
     fn check_dom(&self, ctx: &Ctx, d: &Dom, depth: u32) -> Result<CheckedDom, TypeError> {
         // A domain former carries no unbounded payload of its own: its type
         // position is a cataloged endset (`guarded`), its children are terms.
@@ -1021,7 +1019,7 @@ impl<'a> Checker<'a> {
                 Ok(leaf(Dom::AuditSlice(TypeRef::Concrete(k)), Sort::Tup))
             }
             Dom::LinkDom => Ok(leaf(Dom::LinkDom, Sort::Addr)),
-            Dom::Reg => Err(TypeError::SortMismatch { expected: Sort::Addr, found: Sort::Tup }),
+            Dom::Reg => Err(TypeError::MisplacedReg),
             Dom::Filter { dom, var, pred } => {
                 let base = self.check_dom(ctx, dom, child_depth)?;
                 let inner = ctx.update(*var, base.elem_sort);

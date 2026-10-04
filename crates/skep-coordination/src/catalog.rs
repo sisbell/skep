@@ -10,10 +10,9 @@
 //! question the checker, the evaluator and the analyses ask is answered here.
 //! A cached copy of genesis-immutable data (R1): it never goes stale. The
 //! registry's population is the compiled shipped five (owner ruling,
-//! 2026-08-26 — the app-decl seam is deleted), so the projection reads
-//! everything from the registry itself — the classes, and the two behavior
-//! rules it publishes as `declares` and `reverse_lookup_classes` — and there
-//! is no twice-passed configuration and no restated rule left to drift.
+//! 2026-08-26), so the projection reads everything from the registry itself
+//! — the classes, and the two behavior rules it publishes as `declares` and
+//! `reverse_lookup_classes` — and restates none of them.
 
 use std::collections::HashMap;
 

@@ -38,7 +38,7 @@ fn round_trip_is_identity_on_every_recursive_family() {
         )),
     };
     let signed = SignedTerm { params: vec![(v(7), Sort::Addr), (v(8), Sort::Nat)], body };
-    let bytes = encode(&signed).expect("Codom-only params encode");
+    let bytes = encode(&signed);
     assert_eq!(decode(&bytes), Ok(signed));
 }
 
@@ -48,7 +48,7 @@ fn round_trip_is_identity_on_every_recursive_family() {
 #[test]
 fn round_trip_is_identity_on_every_former() {
     let signed = every_former();
-    let bytes = encode(&signed).expect("Codom-only params encode");
+    let bytes = encode(&signed);
     assert_eq!(decode(&bytes), Ok(signed));
 }
 
@@ -80,7 +80,7 @@ fn stored_run_hands_back_only_a_run_the_decoder_reads_back() {
     assert_eq!(decode(&run), Ok(within.signed().clone()));
     let past = checked(MAX_DEPTH - 1);
     assert_eq!(stored_run(&past), Err(Unstorable));
-    let raw = encode(past.signed()).expect("a Codom-only Γ_D");
+    let raw = encode(past.signed());
     assert_eq!(decode(&raw), Err(Malformed), "the raw writer hands back what the decoder refuses");
 }
 
@@ -117,7 +117,7 @@ fn the_decoder_never_charges_less_than_weight_prices_what_it_builds() {
     for body in subtrees.0 {
         let mut priced = Priced(0);
         priced.term(&body);
-        let bytes = encode(&SignedTerm { params: vec![], body: body.clone() }).expect("closed");
+        let bytes = encode(&SignedTerm { params: vec![], body: body.clone() });
         let mut rd = Rd { b: &bytes, pos: 0, nodes: Budget::default() };
         assert_eq!(rd.signed().expect("a subtree of the fixture decodes").body, body);
         assert!(
@@ -129,12 +129,14 @@ fn the_decoder_never_charges_less_than_weight_prices_what_it_builds() {
     }
 }
 
-/// The codec refuses `Sort::Tup` in a parameter context (Codom-only at
-/// encode time — ASN-0130 SignedTerm).
+/// A `Tup` in a parameter context is a broken invariant, not an input:
+/// Codom-only at encode time as at registration (ASN-0130 SignedTerm), the
+/// sort has no tag, and the encoder refuses to spell one.
 #[test]
+#[should_panic(expected = "Codom-only")]
 fn encode_refuses_a_tup_parameter() {
     let signed = SignedTerm { params: vec![(v(1), Sort::Tup)], body: Term::Lit(Lit::True) };
-    assert_eq!(encode(&signed), Err(UnencodableTup(v(1))));
+    let _ = encode(&signed);
 }
 
 /// A reserved-range `VarId` in stored content is not a valid parse
@@ -143,7 +145,7 @@ fn encode_refuses_a_tup_parameter() {
 #[test]
 fn decode_refuses_a_reserved_range_varid() {
     let signed = SignedTerm { params: vec![], body: Term::Var(VarId::expansion(0)) };
-    let bytes = encode(&signed).expect("encode does not police body vars");
+    let bytes = encode(&signed);
     assert_eq!(decode(&bytes), Err(Malformed));
 }
 
@@ -151,7 +153,7 @@ fn decode_refuses_a_reserved_range_varid() {
 #[test]
 fn decode_refuses_trailing_bytes() {
     let signed = SignedTerm { params: vec![], body: Term::Lit(Lit::True) };
-    let mut bytes = encode(&signed).expect("encodes");
+    let mut bytes = encode(&signed);
     bytes.push(0);
     assert_eq!(decode(&bytes), Err(Malformed));
 }
@@ -177,9 +179,9 @@ fn decode_refuses_an_absurd_length_prefix() {
 #[test]
 fn decode_refuses_every_non_canonical_spelling() {
     let closed_true = SignedTerm { params: vec![], body: Term::Lit(Lit::True) };
-    assert_eq!(encode(&closed_true).expect("encodes"), vec![3, 0, 2, 1]);
+    assert_eq!(encode(&closed_true), vec![3, 0, 2, 1]);
     let not_true = SignedTerm { params: vec![], body: Term::Not(Arc::new(Term::Lit(Lit::True))) };
-    assert_eq!(encode(&not_true).expect("encodes"), vec![4, 0, 7, 2, 1]);
+    assert_eq!(encode(&not_true), vec![4, 0, 7, 2, 1]);
     let five = SignedTerm { params: vec![], body: Term::Lit(Lit::Nat(Nat::from(5u32))) };
     assert_eq!(decode(&[5, 0, 2, 3, 1, 5]), Ok(five));
     let malformed: [&[u8]; 7] = [
@@ -214,7 +216,7 @@ fn decode_refuses_every_non_canonical_spelling() {
 #[test]
 fn decode_refuses_a_varint_whose_limbs_overflow_a_u64() {
     let closed_true = SignedTerm { params: vec![], body: Term::Lit(Lit::True) };
-    assert_eq!(encode(&closed_true).expect("encodes"), vec![3, 0, 2, 1]);
+    assert_eq!(encode(&closed_true), vec![3, 0, 2, 1]);
     // Ten limbs: the tenth contributes `2 << 63` = 0 — the same length,
     // a different byte string.
     let mut overflowing = vec![0x83];
@@ -241,9 +243,9 @@ fn decode_caps_nesting_at_max_depth() {
         SignedTerm { params: vec![], body: t }
     };
     let at_cap = nested(MAX_DEPTH as usize);
-    assert_eq!(decode(&encode(&at_cap).expect("encodes")), Ok(at_cap));
+    assert_eq!(decode(&encode(&at_cap)), Ok(at_cap));
     let past = nested(MAX_DEPTH as usize + 1);
-    assert_eq!(decode(&encode(&past).expect("encodes")), Err(Malformed));
+    assert_eq!(decode(&encode(&past)), Err(Malformed));
 }
 
 /// The DOMAIN family has its own recursion through `Rd::dom`, and
@@ -272,12 +274,12 @@ fn decode_charges_the_domain_family_and_caps_its_nesting() {
         SignedTerm { params: vec![], body: t }
     };
     let past = leaves(1 << 15);
-    assert_eq!(decode(&encode(&past).expect("encodes")), Err(Malformed));
+    assert_eq!(decode(&encode(&past)), Err(Malformed));
     // Halving the leaves halves all three counts, so the same body is
     // within the budget with the domains charged — the refusal above is
     // the budget's, not the shape's.
     let within = leaves(1 << 14);
-    assert_eq!(decode(&encode(&within).expect("encodes")), Ok(within));
+    assert_eq!(decode(&encode(&within)), Ok(within));
 
     // `Count` at 0, filter k at k, the innermost `L_dom` at n + 1.
     let filters = |n: usize| {
@@ -292,9 +294,9 @@ fn decode_charges_the_domain_family_and_caps_its_nesting() {
         SignedTerm { params: vec![], body: Term::Count(Arc::new(d)) }
     };
     let at_cap = filters(MAX_DEPTH as usize - 1);
-    assert_eq!(decode(&encode(&at_cap).expect("encodes")), Ok(at_cap));
+    assert_eq!(decode(&encode(&at_cap)), Ok(at_cap));
     let deeper = filters(MAX_DEPTH as usize);
-    assert_eq!(decode(&encode(&deeper).expect("encodes")), Err(Malformed));
+    assert_eq!(decode(&encode(&deeper)), Err(Malformed));
 }
 
 /// The node budget at its boundary, on a body that is shallow and wide:
@@ -312,9 +314,9 @@ fn decode_caps_nodes_at_max_term_nodes() {
         SignedTerm { params: vec![], body: t }
     };
     let within = balanced(1 << 15);
-    assert_eq!(decode(&encode(&within).expect("encodes")), Ok(within));
+    assert_eq!(decode(&encode(&within)), Ok(within));
     let past = balanced(1 << 16);
-    assert_eq!(decode(&encode(&past).expect("encodes")), Err(Malformed));
+    assert_eq!(decode(&encode(&past)), Err(Malformed));
 }
 
 /// The budget counts the PAYLOAD a node carries, not the node alone: a
@@ -328,8 +330,8 @@ fn decode_charges_a_literal_s_payload_against_the_node_budget() {
         body: Term::Lit(Lit::Nat(Nat::from_bytes_be(&vec![1u8; limbs * 8]))),
     };
     let within = nat(1 << 14);
-    assert_eq!(decode(&encode(&within).expect("encodes")), Ok(within));
-    assert_eq!(decode(&encode(&nat(1 << 16)).expect("encodes")), Err(Malformed));
+    assert_eq!(decode(&encode(&within)), Ok(within));
+    assert_eq!(decode(&encode(&nat(1 << 16))), Err(Malformed));
 }
 
 /// An endset's spans are charged twice over: through their tumblers'
@@ -353,8 +355,8 @@ fn decode_charges_an_endset_s_spans_against_the_node_budget() {
         }
     };
     let within = costly(100);
-    assert_eq!(decode(&encode(&within).expect("encodes")), Ok(within));
-    assert_eq!(decode(&encode(&costly(4000)).expect("encodes")), Err(Malformed));
+    assert_eq!(decode(&encode(&within)), Ok(within));
+    assert_eq!(decode(&encode(&costly(4000))), Err(Malformed));
 
     let cheap = |spans: u32| {
         let e = Endset::from_spans(
@@ -366,10 +368,10 @@ fn decode_charges_an_endset_s_spans_against_the_node_budget() {
             body: Term::Atom(Atom::Members(TypeRef::Concrete(TypeKey(e)))),
         }
     };
-    let round_trips = |s: SignedTerm| decode(&encode(&s).expect("encodes")) == Ok(s);
+    let round_trips = |s: SignedTerm| decode(&encode(&s)) == Ok(s);
     assert!(round_trips(cheap(12_000)), "twelve thousand one-component spans fit the budget");
     assert!(
-        decode(&encode(&cheap(15_000)).expect("encodes")).is_err(),
+        decode(&encode(&cheap(15_000))).is_err(),
         "fifteen thousand one-component spans decoded within the budget"
     );
 }
@@ -386,8 +388,8 @@ fn decode_charges_every_count_the_input_chooses() {
         params: (0..params).map(|i| (v(i), Sort::Bool)).collect(),
         body,
     };
-    let round_trips = |s: SignedTerm| decode(&encode(&s).expect("encodes")) == Ok(s);
-    let refused = |s: SignedTerm| decode(&encode(&s).expect("encodes")) == Err(Malformed);
+    let round_trips = |s: SignedTerm| decode(&encode(&s)) == Ok(s);
+    let refused = |s: SignedTerm| decode(&encode(&s)) == Err(Malformed);
     // Γ_D: one unit per parameter, one for the body's former.
     assert!(round_trips(signed(60_000, Term::Lit(Lit::True))));
     assert!(refused(signed(70_000, Term::Lit(Lit::True))));

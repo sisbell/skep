@@ -56,14 +56,14 @@ use crate::ast::Term;
 use crate::check::{DefSource, TypedTerm, Unresolved};
 use crate::codec;
 use crate::coordinator::memo::{ContentBreach, DefStatus};
-use crate::coordinator::Coordinator;
+use crate::coordinator::{bind_args, Coordinator};
 use crate::dynamics::{st_plus, view_independent};
 use crate::error::{
     CertifyError, DefineError, EvalError, RegisterError, RetractError, SupersedeError, TypeError,
 };
 use crate::eval::eval_term;
 use crate::expand::{Expander, ExpansionTooLarge};
-use crate::value::{Env, Signature, SignedTerm, Sort, Value};
+use crate::value::{Signature, SignedTerm, Sort, Value};
 use crate::walk::{visit_term, Visit};
 use crate::CoordinationWorld;
 
@@ -281,7 +281,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// whose parameter may be a tuple is a `TriggerTerm`, no accessor of which
     /// returns its `TypedTerm`. The codec's own `Tup` refusal (it has no tag
     /// for the sort) is therefore unreachable, in this crate or out of it —
-    /// `codec::stored_run` states it at its `expect`.
+    /// the codec states why where it relies on it.
     ///
     /// A CHECKED term is not thereby storable, and that is the one refusal
     /// made BEFORE any transaction: `Unstorable`, when the codec has no stored
@@ -317,8 +317,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// Under concurrency: a concurrent INSERT lands the def mid-document
     /// (harmless — identity is the returned start); a concurrent DELETE
     /// yields a retryable `Insert(Rejected(OutOfBounds))` — benign, recompute
-    /// and re-insert (item 6; the design's `BadPosition`, split by the
-    /// as-built M5). Borrows the term: the stored def is re-derived from its
+    /// and re-insert. Borrows the term: the stored def is re-derived from its
     /// own bytes by `register_pred`, so nothing of the caller's value is
     /// kept, and the caller goes on evaluating or classifying it.
     pub fn define_predicate(
@@ -332,7 +331,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // orphan no registration adopts.
         let bytes = codec::stored_run(term).map_err(|codec::Unstorable| DefineError::Unstorable)?;
         // Insert position off a snapshot read; M5's insert re-validates
-        // against committed state (benign TOCTOU — item 6).
+        // against committed state (a benign TOCTOU).
         let content_count = self.kernel.snapshot().world().m5().content_count(home);
         let at = VPos::content(content_count + 1u32);
         let vstream = (self.mk_vstream)(self.kernel.as_ref());
@@ -467,14 +466,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
             // Answered rather than asserted, so the query stays total.
             DefStatus::NeverRegistered => return Err(EvalError::NotEverRegistered),
         };
-        let params = def.params();
-        if args.len() != params.len() {
-            return Err(EvalError::ArgArityMismatch);
-        }
-        if args.iter().zip(params).any(|(arg, (_, s))| arg.sort() != *s) {
-            return Err(EvalError::ArgSortMismatch);
-        }
-        let env: Env = params.iter().map(|(v, _)| *v).zip(args.iter().cloned()).collect();
+        let env = bind_args(def.params(), args)?;
         let cx = self.eval_ctx(snap.world(), view, Some(self));
         Ok(eval_term(&cx, &env, def.evaluable()))
     }
@@ -644,15 +636,15 @@ impl<W: CoordinationWorld> Coordinator<W> {
 
     /// De-register: M7::nullify, from the retracting `home`, on ONE active
     /// `pdef` tuple naming `start` — the T1-least, as `tuple_naming` returns
-    /// it, `NotActive` when there is none (never `[0]` — item 8); a `pdef`
-    /// whose F merely covers `start` is never taken for the def's own. One
-    /// tuple per call: beside a second active `pdef` naming the same start (a
-    /// twin homed where the guest class could not see it when the first was
-    /// minted), `is_active_pred` stays true until each is retracted. `home`
-    /// must be a registered document —
-    /// `Nullify(Rejected(HomeNotRegistered))` otherwise, after the `NotActive`
-    /// probe. Content untouched; audit retains it; re-registration after
-    /// nullify deposits afresh (the idem class is empty again).
+    /// it, `NotActive` when there is none; a `pdef` whose F merely covers
+    /// `start` is never taken for the def's own. One tuple per call: beside a
+    /// second active `pdef` naming the same start (a twin homed where the
+    /// guest class could not see it when the first was minted),
+    /// `is_active_pred` stays true until each is retracted. `home` must be a
+    /// registered document — `Nullify(Rejected(HomeNotRegistered))`
+    /// otherwise, after the `NotActive` probe. Content untouched; audit
+    /// retains it; re-registration after nullify deposits afresh (the idem
+    /// class is empty again).
     ///
     /// Does NOT cascade (ASN-0130: "existing referencing definitions, and
     /// evaluations of them, survive untouched"). A def that references `start`

@@ -197,7 +197,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// it and handed on in [`Validated`].
     fn validate_rule(&self, rule: &Rule) -> Result<Validated, RuleError> {
         // Domain: checked + Reg-expanded (a body-level Reg is legitimate PL;
-        // a BARE Reg fails the sort check), closed (binds only its own
+        // a BARE Reg is `MisplacedReg`), closed (binds only its own
         // variables).
         let cd = self.check_closed_dom(&rule.domain).map_err(RuleError::IllFormedDomain)?;
         if !cd.is_ref_free() {

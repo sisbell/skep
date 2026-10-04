@@ -2,8 +2,9 @@
 //! REG-2.24; REG-1.10, REG-1.11; rm-2): the verified bindings and endpoints
 //! the fixture board holds, the two tampered records suppressed by cause,
 //! the rebuild from the copy with no wire read, the realm checked at the
-//! base under a fresh base and a held copy alike (REG-3.42), and the hint's
-//! one line (REG-3.2).
+//! base under a fresh base and a held copy alike (REG-3.42), the copy's two
+//! files — begun together, read back by their format, written once per
+//! value — and the hint's one line (REG-3.2).
 
 use std::fs;
 
@@ -129,6 +130,64 @@ fn a_held_copy_naming_another_realm_is_refused_at_the_claim() {
     );
     assert_eq!(fs::read_to_string(dir.path().join(FEED_COPY)).expect("the feed copy"), shipped_feed, "no line of the copy");
     assert_eq!(fs::read_to_string(dir.path().join(FETCH_CACHE)).expect("the fetch cache"), shipped_cache, "nor of the cache");
+}
+
+/// A NEW BASE BEGINS BOTH FILES: a fetch cache left in the directory with no
+/// feed copy beside it — another base's, or what a reset left — holds no
+/// line of the base the bootstrap writes, so no resume ever reads it as this
+/// mirror's own.
+#[test]
+fn a_bootstrap_begins_the_cache_afresh() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stray = json!({ "link": { "at": 1, "address": "1.0.1.0.1.0.2.1", "home": "1.0.1.0.1", "ty": null, "from": [], "to": [], "of": "another base" } });
+    fs::write(dir.path().join(FETCH_CACHE), format!("{stray}\n")).expect("a cache with no feed copy");
+    let (_, mirror) = open_fixture_mirror(dir.path());
+    assert_eq!(*mirror.opened(), Opened::Bootstrapped);
+    let cache = fs::read_to_string(dir.path().join(FETCH_CACHE)).expect("the fetch cache");
+    assert!(!cache.contains("another base"), "the stray line survived the bootstrap");
+    assert!(cache.lines().any(|l| l.starts_with(r#"{"claim":"#)), "the base's own lines");
+}
+
+/// THE COPY IS READ BY ITS FORMAT: a feed copy whose header carries no
+/// format stamp is no copy this build writes, and is refused offline as it
+/// is at the open — never rebuilt from.
+#[test]
+fn a_copy_with_no_format_stamp_is_refused_offline() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (fixture, mirror) = open_fixture_mirror(dir.path());
+    drop(mirror);
+    let feed = fs::read_to_string(dir.path().join(FEED_COPY)).expect("the feed copy");
+    let (header, rows) = feed.split_once('\n').expect("a header and rows");
+    let mut unstamped: serde_json::Value = serde_json::from_str(header).expect("the header is JSON");
+    unstamped.as_object_mut().expect("an object").remove("skep-resolve");
+    fs::write(dir.path().join(FEED_COPY), format!("{unstamped}\n{rows}")).expect("the copy unstamped");
+    assert!(
+        matches!(Mirror::rebuild_offline(&fixture.hint, dir.path()).err(), Some(MirrorError::Copy(e)) if e.contains("not a feed copy")),
+        "an unstamped copy is refused"
+    );
+    let dial = replay_dial(fixture.clone());
+    assert!(matches!(Mirror::open(&fixture.hint, dir.path(), &dial).err(), Some(MirrorError::Copy(_))), "offline as at the open");
+}
+
+/// A VALUE IS WRITTEN ONCE: the copy resumed twice against the source reads
+/// every link, atom, table and the claim it holds back through its own
+/// cache, so each re-open writes no line — the cache holds one claim line,
+/// never one per open, and both files come back as they were.
+#[test]
+fn a_resumed_copy_writes_no_line_its_cache_holds() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (fixture, mirror) = open_fixture_mirror(dir.path());
+    drop(mirror);
+    let read = |name: &str| fs::read_to_string(dir.path().join(name)).expect("a file of the copy");
+    let (feed, cache) = (read(FEED_COPY), read(FETCH_CACHE));
+    let dial = replay_dial(fixture.clone());
+    for _ in 0..2 {
+        let resumed = Mirror::open(&fixture.hint, dir.path(), &dial).expect("resumed");
+        assert!(matches!(resumed.opened(), Opened::Resumed { .. }));
+    }
+    assert_eq!(read(FETCH_CACHE).lines().filter(|l| l.starts_with(r#"{"claim":"#)).count(), 1);
+    assert_eq!(read(FETCH_CACHE), cache, "no line of the cache");
+    assert_eq!(read(FEED_COPY), feed, "nor of the feed copy");
 }
 
 /// THE REPLAY MATRIX at the resolver (REG-2.9, REG-2.10, REG-2.24; REG-1.10,

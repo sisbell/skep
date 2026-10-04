@@ -101,10 +101,14 @@ pub fn parse_address(s: &str) -> Option<Address> {
     validate(Tumbler::new(comps?).ok()?).ok()
 }
 
-/// The auto traits a host holds this crate's values to: a mirror lives in a
-/// client's own threads, so what it holds is `Send`; the resolutions it
-/// answers cross to a UI thread. Asserted here, where a field change would
-/// otherwise revoke them in silence.
+/// The auto traits a host holds this crate's values to. A mirror stays on
+/// the thread that opened it: it holds the caller's `Transport`, which this
+/// crate does not require to be `Send` (both suites' replays hold an `Rc`),
+/// so neither `Mirror` nor `Board` is — as `Mirror`'s own doc checks. What a
+/// mirror answers crosses threads — a resolution to a UI thread, the stats
+/// or a cloned index to a reporter, the hint to the next mirror — and is
+/// asserted `Send` here, where a field change would otherwise revoke it in
+/// silence.
 const _: fn() = || {
     fn send<T: Send + 'static>() {}
     send::<RootHint>();

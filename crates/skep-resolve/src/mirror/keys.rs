@@ -5,9 +5,10 @@
 //! it the same, `/op-at` otherwise, the reclaim floor where the same proof
 //! reaches it — are [`Mirror::read_keys_at`]'s. THE CREDENTIAL ACTS that
 //! proof is read by are recorded here too, by the fold's first pass
-//! ([`Mirror::scan_credential_acts`]), before any record is judged. An `impl
-//! Mirror` child of `mirror`, reading the mirror's private state the way a
-//! child does.
+//! ([`Mirror::scan_credential_acts`]), before any record is judged; and THE
+//! GENESIS SET the realm is compared against ([`Mirror::genesis_keys`]) is
+//! read here, by the same acts. An `impl Mirror` child of `mirror`, reading
+//! the mirror's private state the way a child does.
 
 use skep_address::{parent, Address, Level};
 use skep_identity::Enrolled;
@@ -87,17 +88,17 @@ impl Mirror {
     /// where the board has RECLAIMED the position (REG-3.15's floor: a root
     /// that cannot answer from genesis), the read at the floor WHERE THE ACTS
     /// THE MIRROR HOLDS SHOW NONE OF THE ACCOUNT'S BETWEEN THE POSITION AND
-    /// THE FLOOR: the
-    /// table is constant across an epoch, so the read at the floor IS the
-    /// table as of the position, derived from inputs the mirror holds and
-    /// manufactured from none; where an act does lie between, the table as
-    /// of the position is gone with the journal and the answer is `None` —
-    /// UNDETERMINABLE HERE, as it is with no board held.
-    pub(super) fn read_keys_at(&mut self, account: &Address, at: u64) -> Result<Option<Vec<Enrolled>>, MirrorError> {
+    /// THE FLOOR: the table is constant across an epoch, so the read at the
+    /// floor IS the table as of the position, derived from inputs the mirror
+    /// holds and manufactured from none; where an act does lie between, the
+    /// table as of the position is gone with the journal and the answer is
+    /// `None` — UNDETERMINABLE HERE, as it is with no board held, and as it
+    /// is for a table this build cannot read whole.
+    fn read_keys_at(&mut self, account: &Address, at: u64) -> Result<Option<Vec<Enrolled>>, MirrorError> {
         let Some(board) = self.board.as_ref() else { return Ok(None) };
-        // The credential pass has read every held row, so the acts it
-        // recorded reach the last held row and not the fold's cursor.
-        let held = self.rows.last().and_then(|r| r["at"].as_u64()).unwrap_or(self.head);
+        // The acts are known through the last row the credential pass read;
+        // a table is proven unchanged only inside it.
+        let known = self.acts_through();
         // THE TABLE AS OF THE POSITION, OFF THE LIVE READ WHERE THE ACTS
         // PROVE IT: the live `key_set` answers `as_of`, the snapshot's
         // position; where that position is one the mirror holds the feed
@@ -111,7 +112,7 @@ impl Mirror {
         // thousands of homes a matter of seconds and not of hours.
         if let Ok(Some(live)) = board.key_set(account) {
             if let Some(as_of) = live.as_of {
-                if as_of <= held && !self.later_credential_act(account, at, as_of) {
+                if as_of <= known && !self.later_credential_act(account, at, as_of) {
                     self.stats.reads_live_proven += 1;
                     return Ok(Some(live.enrolled));
                 }
@@ -120,8 +121,8 @@ impl Mirror {
         let answer = match board.key_set_at(at, account) {
             Ok(answer) => answer,
             Err(BoardError::Reclaimed { floor }) => {
-                let floor = floor.unwrap_or(held);
-                if floor > held || self.later_credential_act(account, at, floor) {
+                let floor = floor.unwrap_or(known);
+                if floor > known || self.later_credential_act(account, at, floor) {
                     self.stats.reclaimed_undeterminable += 1;
                     return Ok(None);
                 }
@@ -139,10 +140,22 @@ impl Mirror {
     }
 
     /// A table kept as `account`'s at `epoch`, read for `at`: held, and its
-    /// line written to the fetch cache.
-    pub(super) fn keep_keys(&mut self, account: &Address, epoch: u64, at: u64, enrolled: Vec<Enrolled>) -> Result<(), MirrorError> {
+    /// line written to the fetch cache where the cache does not hold it.
+    fn keep_keys(&mut self, account: &Address, epoch: u64, at: u64, enrolled: Vec<Enrolled>) -> Result<(), MirrorError> {
         let line = self.fetched.keep_keys(KeysAsOf { account: account.clone(), epoch, at, enrolled });
         self.append_cache(line)
+    }
+
+    /// THE GENESIS SET of `account`: its table at its first credential act,
+    /// read off the board and never off the fetch cache — the realm is never
+    /// read off the cache (REG-3.42) — and kept under that act's epoch, the
+    /// first act's position being its own epoch; `None` where no act of the
+    /// account is held or the table cannot be read.
+    pub(super) fn genesis_keys(&mut self, account: &Address) -> Result<Option<Vec<Enrolled>>, MirrorError> {
+        let Some(&genesis) = self.epochs.get(account).and_then(|acts| acts.first()) else { return Ok(None) };
+        let Some(keys) = self.read_keys_at(account, genesis)? else { return Ok(None) };
+        self.keep_keys(account, genesis, genesis, keys.clone())?;
+        Ok(Some(keys))
     }
 
     /// THE CURRENT KEYS of `account` as this mirror holds them — the set that

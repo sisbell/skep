@@ -29,7 +29,11 @@ parts, each under the design rule it realizes:
   `/op-at` otherwise — and keeps a journal copy from genesis under a
   caller-given directory: `feed.jsonl`, the copy of the feed the check
   covers, and `fetched.jsonl`, the mirror's own fetch cache the rebuild
-  reads. The base is from genesis at the root the hint names (REG-3.12); a
+  reads, both begun afresh by a new base, so a cache that outlived its
+  feed copy is never read as this mirror's own. A sync that fails leaves
+  its rows held, and the next takes them up where it stopped. A key table
+  holding a key this build cannot read is no table, never a smaller one.
+  The base is from genesis at the root the hint names (REG-3.12); a
   held copy is CHECKED against the source read from genesis and resumed
   only where every held position comes back identical and every held chain
   pair answers the same (REG-3.18); on either, the realm is compared at the

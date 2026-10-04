@@ -13,21 +13,25 @@
 //! An `impl Mirror` child of `mirror`: a record's bytes from the cache, the
 //! head, the chain walk or the position read, reading the mirror's private
 //! state the way a child does. The fold calls one method here,
-//! [`Mirror::fetch_atom`]; [`Image`] is the value of the mirror's image
-//! cache.
+//! [`Mirror::fetch_atom`]; [`Chains`] is the walk's memory between two
+//! pulls, which the fold teaches the members a `publish` or a `version` row
+//! names and the pull marks stale.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
-use serde_json::{json, Value};
-use skep_address::{document_of, Address, Nat};
+use serde_json::Value;
+use skep_address::{document_of, Address, Nat, Tumbler};
 
 use super::{Mirror, MirrorError};
-use crate::board::{content_extent, position_in, retrieve_frame};
+use crate::board::{
+    content_extent, content_ordinal_in, image_frame, position_in, retrieve_frame, runs_of, span_set_frame,
+};
 use crate::parse_address;
 
 /// A document's or a member's V→I image: its content runs, in V-order.
 #[derive(Debug, Clone)]
-pub(super) struct Image {
+struct Image {
     runs: Vec<(Address, u64)>,
 }
 
@@ -35,6 +39,44 @@ impl Image {
     /// The V-ordinal `addr` sits at, where the image holds it.
     fn position_of(&self, addr: &Address) -> Option<u64> {
         position_in(&self.runs, addr)
+    }
+}
+
+/// THE CHAIN WALK'S MEMORY between two pulls: the members each home's chain
+/// is known to hold, the homes whose members need no probe, and the images
+/// read — written by the walk, by the fold through [`Chains::learn`], and
+/// marked stale by the pull through [`Chains::stale`], and by nothing else.
+#[derive(Debug, Default)]
+pub(super) struct Chains {
+    members: BTreeMap<Address, Vec<Address>>,
+    probed: BTreeSet<Address>,
+    images: BTreeMap<Address, Image>,
+}
+
+impl Chains {
+    /// A member a `publish` or a `version` row names, kept under its trunk,
+    /// and the trunk marked probed: a member the feed names needs no probe
+    /// to be known.
+    pub(super) fn learn(&mut self, member: &Address) {
+        let Some(trunk) = trunk_of(member) else { return };
+        let list = self.members.entry(trunk.clone()).or_default();
+        if !list.contains(member) {
+            list.push(member.clone());
+        }
+        self.probed.insert(trunk);
+    }
+
+    /// A pull began: the images are forgotten, since the new rows can
+    /// rearrange a head, and the probes, since they can add members; the
+    /// members known are kept, a member never unregistered.
+    pub(super) fn stale(&mut self) {
+        self.images.clear();
+        self.probed.clear();
+    }
+
+    /// The members of `home`'s chain the walk knows, oldest first.
+    pub(super) fn members_of(&self, home: &Address) -> &[Address] {
+        self.members.get(home).map(Vec::as_slice).unwrap_or(&[])
     }
 }
 
@@ -51,15 +93,14 @@ impl Mirror {
             return Ok(None);
         }
         // The head, through its cached image where one is held.
-        if let Some(pos) = self.images.get(home).and_then(|i| i.position_of(addr)) {
+        if let Some(pos) = self.chains.images.get(home).and_then(|i| i.position_of(addr)) {
             if let Some(text) = self.retrieve(home, pos)? {
                 return self.keep_atom(addr, text);
             }
         }
         // The append-only guess: a doc 1 written only by deposits arranges
         // its content ordinal n at V-ordinal n.
-        let has_members = self.members.get(home).is_some_and(|m| !m.is_empty());
-        if !has_members {
+        if self.chains.members_of(home).is_empty() {
             if let Some(n) = content_ordinal_in(home, addr) {
                 if let Some(runs) = self.image(home, n, 1)? {
                     if runs.len() == 1 && runs[0].0 == *addr && runs[0].1 == 1 {
@@ -82,7 +123,7 @@ impl Mirror {
         let t = Instant::now();
         let reads_before = self.board_ref()?.reads().total();
         self.probe_members(home)?;
-        let members = self.members.get(home).cloned().unwrap_or_default();
+        let members = self.chains.members_of(home).to_vec();
         let mut visited = 0;
         let mut found = None;
         for member in members.iter().rev() {
@@ -123,7 +164,7 @@ impl Mirror {
     /// The members of `home`'s chain, probed off the board where the feed
     /// has not named them: `D.1`, `D.2`, … until one is unregistered.
     fn probe_members(&mut self, home: &Address) -> Result<(), MirrorError> {
-        if self.members_probed.get(home).copied().unwrap_or(false) {
+        if self.chains.probed.contains(home) {
             return Ok(());
         }
         let mut k = 1u64;
@@ -135,33 +176,33 @@ impl Mirror {
             found.push(member);
             k += 1;
         }
-        let list = self.members.entry(home.clone()).or_default();
+        let list = self.chains.members.entry(home.clone()).or_default();
         for m in found {
             if !list.contains(&m) {
                 list.push(m);
             }
         }
-        self.members_probed.insert(home.clone(), true);
+        self.chains.probed.insert(home.clone());
         Ok(())
     }
 
     /// The whole image of `doc` (a document or a member), cached.
     fn image_of(&mut self, doc: &Address) -> Result<Option<Image>, MirrorError> {
-        if let Some(i) = self.images.get(doc) {
+        if let Some(i) = self.chains.images.get(doc) {
             return Ok(Some(i.clone()));
         }
         let Some(extent) = self.span_set(doc)? else { return Ok(None) };
         let runs = if extent == 0 { Some(Vec::new()) } else { self.image(doc, 1, extent)? };
         let Some(runs) = runs else { return Ok(None) };
         let image = Image { runs };
-        self.images.insert(doc.clone(), image.clone());
+        self.chains.images.insert(doc.clone(), image.clone());
         Ok(Some(image))
     }
 
     /// `retrieve_doc_v_span_set`: the content extent of `doc`, `None` where
     /// the read is refused (an unregistered member).
     fn span_set(&self, doc: &Address) -> Result<Option<u64>, MirrorError> {
-        let v = self.board_ref()?.op(&json!({ "op": "retrieve_doc_v_span_set", "doc": doc.to_string() }))?;
+        let v = self.board_ref()?.op(&span_set_frame(doc))?;
         if v["resp"].as_str() != Some("span_set") {
             return Ok(None);
         }
@@ -169,9 +210,9 @@ impl Mirror {
     }
 
     /// `image`: the runs at content ordinals `from ..` of `doc`, `None`
-    /// where refused.
+    /// where refused or where a run does not read.
     fn image(&self, doc: &Address, from: u64, width: u64) -> Result<Option<Vec<(Address, u64)>>, MirrorError> {
-        let v = self.board_ref()?.op(&json!({ "op": "image", "d": doc.to_string(), "region": [{ "start": format!("1.{from}"), "width": format!("0.{width}") }] }))?;
+        let v = self.board_ref()?.op(&image_frame(doc, from, width))?;
         if v["resp"].as_str() != Some("runs") {
             return Ok(None);
         }
@@ -181,7 +222,7 @@ impl Mirror {
     /// `retrieve_v`: the atom at content ordinal `pos` of `doc`, `None`
     /// where refused or no atom stands there.
     fn retrieve(&self, doc: &Address, pos: u64) -> Result<Option<String>, MirrorError> {
-        let v = self.board_ref()?.op(&retrieve_frame(&doc.to_string(), pos))?;
+        let v = self.board_ref()?.op(&retrieve_frame(doc, pos))?;
         Ok(atom_of(&v))
     }
 
@@ -189,12 +230,12 @@ impl Mirror {
     /// through `/op-at` — the extent, the image, the value.
     fn position_read(&self, at: u64, home: &Address, addr: &Address) -> Result<Option<String>, MirrorError> {
         let board = self.board_ref()?;
-        let v = board.op_at(at, &json!({ "op": "retrieve_doc_v_span_set", "doc": home.to_string() }))?;
+        let v = board.op_at(at, &span_set_frame(home))?;
         let Some(extent) = content_extent(&v) else { return Ok(None) };
-        let v = board.op_at(at, &json!({ "op": "image", "d": home.to_string(), "region": [{ "start": "1.1", "width": format!("0.{extent}") }] }))?;
+        let v = board.op_at(at, &image_frame(home, 1, extent))?;
         let Some(runs) = runs_of(&v) else { return Ok(None) };
-        let Some(pos) = (Image { runs }).position_of(addr) else { return Ok(None) };
-        let v = board.op_at(at, &retrieve_frame(&home.to_string(), pos))?;
+        let Some(pos) = position_in(&runs, addr) else { return Ok(None) };
+        let v = board.op_at(at, &retrieve_frame(home, pos))?;
         Ok(atom_of(&v))
     }
 }
@@ -211,26 +252,14 @@ fn atom_of(v: &Value) -> Option<String> {
     items[0]["atom"].as_str().map(str::to_string)
 }
 
-/// A `runs` answer as `(i_start, width)` pairs.
-fn runs_of(v: &Value) -> Option<Vec<(Address, u64)>> {
-    v["runs"].as_array()?.iter().map(|r| {
-        let start = parse_address(r["i_start"].as_str()?)?;
-        let width = r["width"].as_str()?.parse::<u64>().ok()?;
-        Some((start, width))
-    }).collect()
-}
-
-/// Where `addr` is a content element of `home` itself — `home.0.1.n` — its
-/// ordinal `n`.
-fn content_ordinal_in(home: &Address, addr: &Address) -> Option<u64> {
-    if document_of(addr)? != *home {
-        return None;
-    }
-    let element = addr.element_field()?;
-    if element.len() != 2 || element[0] != Nat::from(1u32) {
-        return None;
-    }
-    u64::try_from(&element[1]).ok()
+/// The TRUNK of a document or a version member: the document address cut
+/// after the document field's first component (`1.0.1.0.1.2` → `1.0.1.0.1`).
+fn trunk_of(doc: &Address) -> Option<Address> {
+    let d = document_of(doc)?;
+    let comps: Vec<Nat> = d.tumbler().iter().cloned().collect();
+    let second_zero = comps.iter().enumerate().filter(|(_, c)| **c == Nat::from(0u32)).map(|(i, _)| i).nth(1)?;
+    let trunk = Tumbler::new(comps[..=second_zero + 1].iter().cloned()).ok()?;
+    skep_address::validate(trunk).ok()
 }
 
 #[cfg(test)]
@@ -241,15 +270,30 @@ mod tests {
         parse_address(s).unwrap()
     }
 
-    /// The address arithmetic the append-only guess rests on: a content
-    /// element's ordinal in its own document — never a link element's, nor a
-    /// member's mint. An image reads its positions the board's one way.
+    /// THE WALK'S MEMORY: a member a row names is kept under its trunk — a
+    /// daughter under the same trunk, an element's document read to its
+    /// trunk — once, and the trunk needs no probe; a pull forgets the probes
+    /// and the images and keeps the members. An image reads its positions
+    /// the board's one way.
     #[test]
-    fn a_content_elements_ordinal_is_read_in_its_own_document() {
-        assert_eq!(content_ordinal_in(&a("1.0.1.0.1"), &a("1.0.1.0.1.0.1.4")), Some(4));
-        assert_eq!(content_ordinal_in(&a("1.0.1.0.1"), &a("1.0.1.0.1.0.2.4")), None, "a link element");
-        assert_eq!(content_ordinal_in(&a("1.0.1.0.1"), &a("1.0.1.0.1.1.0.1.4")), None, "a member's mint");
+    fn the_walk_keeps_its_members_across_a_pull() {
+        assert_eq!(trunk_of(&a("1.0.1.0.1.2")), Some(a("1.0.1.0.1")));
+        assert_eq!(trunk_of(&a("1.0.1.0.1.2.1")), Some(a("1.0.1.0.1")), "a daughter's trunk");
+        assert_eq!(trunk_of(&a("1.0.1.0.1")), Some(a("1.0.1.0.1")));
+        assert_eq!(trunk_of(&a("1.0.1.0.1.0.1.4")), Some(a("1.0.1.0.1")));
+        let home = a("1.0.1.0.1");
+        let mut chains = Chains::default();
+        for member in ["1.0.1.0.1.1", "1.0.1.0.1.2", "1.0.1.0.1.1"] {
+            chains.learn(&a(member));
+        }
         let image = Image { runs: vec![(a("1.0.1.0.1.0.1.1"), 2), (a("1.0.1.0.1.0.1.7"), 3)] };
         assert_eq!(image.position_of(&a("1.0.1.0.1.0.1.8")), Some(4));
+        chains.images.insert(home.clone(), image);
+        assert_eq!(chains.members_of(&home), [a("1.0.1.0.1.1"), a("1.0.1.0.1.2")], "each member once, oldest first");
+        assert!(chains.probed.contains(&home), "a member the feed names needs no probe");
+        chains.stale();
+        assert_eq!(chains.members_of(&home), [a("1.0.1.0.1.1"), a("1.0.1.0.1.2")], "a pull keeps the members");
+        assert!(chains.probed.is_empty() && chains.images.is_empty(), "and forgets the probes and the images");
+        assert!(chains.members_of(&a("1.0.2.0.1")).is_empty());
     }
 }

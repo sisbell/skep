@@ -21,7 +21,10 @@ use skep_identity::{doc_1_of, Enrolled};
 use skep_registry::{parse, t_binding, t_endpoint, Body, BodyKind};
 
 use super::face_of;
-use crate::board::{content_extent, position_in, unit_span_json, Board};
+use crate::board::{
+    content_extent, content_ordinal_in, image_frame, position_in, retrieve_frame, runs_of, span_set_frame,
+    unit_span_json, Board,
+};
 use crate::index::Ledger;
 use crate::mirror::MirrorError;
 use crate::origin::{NameResolver, Transports};
@@ -178,31 +181,22 @@ fn read_link(board: &Board, link: &Address) -> Result<Option<(Address, Address, 
 }
 
 /// An atom at the head of its home: the append-only guess, else the head's
-/// whole image.
+/// whole image — an image whose runs do not all read locating nothing.
 fn atom_at_head(board: &Board, home: &Address, addr: &Address) -> Result<Option<String>, MirrorError> {
     let retrieve = |pos: u64| -> Result<Option<String>, MirrorError> {
-        let v = board.op(&json!({ "op": "retrieve_v", "specs": [{ "doc": home.to_string(), "span": { "start": format!("1.{pos}"), "width": "0.1" } }] }))?;
+        let v = board.op(&retrieve_frame(home, pos))?;
         Ok(v["items"].as_array().filter(|i| i.len() == 1).and_then(|i| i[0]["atom"].as_str()).map(str::to_string))
     };
     let image = |from: u64, width: u64| -> Result<Vec<(Address, u64)>, MirrorError> {
-        let v = board.op(&json!({ "op": "image", "d": home.to_string(), "region": [{ "start": format!("1.{from}"), "width": format!("0.{width}") }] }))?;
-        Ok(v["runs"]
-            .as_array()
-            .map(|runs| {
-                runs.iter()
-                    .filter_map(|r| Some((parse_address(r["i_start"].as_str()?)?, r["width"].as_str()?.parse::<u64>().ok()?)))
-                    .collect()
-            })
-            .unwrap_or_default())
+        Ok(runs_of(&board.op(&image_frame(home, from, width))?).unwrap_or_default())
     };
-    if let Some(n) = addr.element_field().filter(|e| e.len() == 2).and_then(|e| u64::try_from(&e[1]).ok()) {
+    if let Some(n) = content_ordinal_in(home, addr) {
         let runs = image(n, 1)?;
         if runs.len() == 1 && runs[0].0 == *addr {
             return retrieve(n);
         }
     }
-    let v = board.op(&json!({ "op": "retrieve_doc_v_span_set", "doc": home.to_string() }))?;
-    let extent = content_extent(&v).unwrap_or(0);
+    let extent = content_extent(&board.op(&span_set_frame(home))?).unwrap_or(0);
     if extent == 0 {
         return Ok(None);
     }

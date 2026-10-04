@@ -15,13 +15,19 @@
 //! * [`keys`] — the set that opens an account as of a position, and the
 //!   credential acts that set is read by.
 //! * [`atoms`] — a record's bytes: the head, the chain walk, the position
-//!   read (REG-3.25, REG-3.26).
+//!   read (REG-3.25, REG-3.26), and the walk's memory between two pulls.
 //!
 //! One ordering crosses them: every row is held before any is folded (the
 //! pull, in [`base`]), and the fold takes the held rows in two passes —
 //! every credential act among them recorded first, then each row folded —
 //! because the fold's as-of reads lean on the acts AFTER a record's position
-//! (the floor's clause, in [`keys`]).
+//! (the floor's clause, in [`keys`]). So three positions are read off the
+//! held rows, each for its own use: where the copy ends
+//! ([`Mirror::held_through`], the next pull's start), how far the credential
+//! pass has read ([`Mirror::acts_through`], how far a live table can be
+//! proven), and the head (the last row folded). A sync that fails leaves the
+//! copy's end ahead of the head and the credential pass anywhere between the
+//! two; the next sync takes each up where it stopped.
 //!
 //! FETCH-AND-FOLD. The mirror reads every row of the feed as the GUEST and
 //! fetches the bytes a row's record needs — the stored link (`read_link`),
@@ -36,16 +42,20 @@
 //! read is the board's own journal (R5 (a)).
 //!
 //! THE JOURNAL COPY (the copy's on-disk form, an interim pin), under the
-//! caller's directory, two append-only files of JSON lines. No line reaches
-//! either file before the realm is compared at the claim's row (REG-3.42):
-//! until then every line waits, so a base refused at the realm — a fresh one
-//! or a held one — writes nothing.
+//! caller's directory, two files of JSON lines, begun together by a new base
+//! and appended to by a held one — so a cache that outlived its feed copy is
+//! never read as this base's own. No line reaches either file before the
+//! realm is compared at the claim's row (REG-3.42): until then every line
+//! waits, so a base refused at the realm — a fresh one or a held one —
+//! writes nothing.
 //!
 //! * `feed.jsonl` — THE COPY OF THE FEED, what the check covers and what a
 //!   courier could ship: a header `{"skep-resolve":"feed-v1","realm":<hex>,
 //!   "root":<origin>}`, then one `{"row":<entry>}` per feed row in position
 //!   order, exactly as the board served it, and a `{"head":{"at":N,
-//!   "chain":<hex>}}` after each sync — the chain pair the resume compares.
+//!   "chain":<hex>}}` after each sync — the chain pair the resume compares;
+//!   every line of it written and read back in [`base`], the format stamp
+//!   checked on every read.
 //! * `fetched.jsonl` — THIS MIRROR'S OWN FETCH CACHE, what the fold read off
 //!   the board: `{"link":{…}}` a stored link's slots, `{"atom":{"address",
 //!   "text"}}` a record's bytes, `{"keys":{"account","epoch","at",
@@ -53,7 +63,8 @@
 //!   {"at","link"}}` a retraction the fold found, `{"board":{"position",
 //!   "chain"}}` the board term, `{"claim":{"at","claimant"}}` the claim —
 //!   each line written and read back by `Fetched` alone, the format's one
-//!   writer and one reader. The REBUILD of the index is a re-read of the
+//!   writer and one reader, which writes a line only for a value it does not
+//!   hold already. The REBUILD of the index is a re-read of the
 //!   feed copy at the deposits' own positions (REG-3.25) with every fetch
 //!   served from this cache, so it reads no wire; where a line is absent the
 //!   fold fetches afresh. A cache adopted from a stranger is that stranger's
@@ -70,7 +81,7 @@ mod keys;
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -80,7 +91,7 @@ use skep_address::{document_of, Address, Nat, Tumbler};
 use skep_identity::{doc_1_of, BoardTerm, Enrolled, Fingerprint, PublicKey};
 use skep_registry::{commons_type, parse, t_binding, t_endpoint, Body, BodyKind};
 
-use atoms::Image;
+use atoms::Chains;
 use crate::board::{parse_chain, Board, BoardError, Reads};
 use crate::hint::RootHint;
 use crate::index::{Cause, Index, Suppressed};
@@ -107,7 +118,8 @@ pub enum MirrorError {
     Refused(Refusal),
     /// The feed ended with no claim: an unclaimed board resolves nothing.
     NoClaim,
-    /// The claim stands on no genesis set: no realm can be computed.
+    /// The claimant's genesis set is not held, or this build could not read
+    /// it: no realm can be computed.
     NoGenesis,
     /// The copy could not be read or written, or is malformed.
     Copy(String),
@@ -122,7 +134,7 @@ impl fmt::Display for MirrorError {
             MirrorError::Board(e) => write!(f, "{e}"),
             MirrorError::Refused(r) => write!(f, "{r}"),
             MirrorError::NoClaim => f.write_str("the board is unclaimed: no registry to read"),
-            MirrorError::NoGenesis => f.write_str("the claim stands on no genesis set"),
+            MirrorError::NoGenesis => f.write_str("the claim's genesis set could not be read"),
             MirrorError::Copy(e) => write!(f, "the journal copy: {e}"),
             MirrorError::Offline => f.write_str("a wire read was needed with no board held"),
         }
@@ -266,7 +278,10 @@ struct KeysAsOf {
 /// The fetch cache in memory — what `fetched.jsonl` holds — and THE ONE
 /// WRITER AND READER of that file's format: each kind of line is spelled by
 /// its `keep_*` method, which holds the value and answers the line, and read
-/// back by [`Fetched::recall`].
+/// back by [`Fetched::recall`]. A `keep_*` answers a line only for a value
+/// it does not hold already — a credential table counting as held where the
+/// same keys stand under its account and epoch — so a value read twice, or
+/// read again by a resume's fold, is written once.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Fetched {
     links: BTreeMap<Address, StoredLink>,
@@ -309,8 +324,11 @@ impl Fetched {
         }
     }
 
-    /// A stored link held; its `{"link":{…}}` line.
-    fn keep_link(&mut self, link: StoredLink) -> Value {
+    /// A stored link held; its `{"link":{…}}` line, where it is new.
+    fn keep_link(&mut self, link: StoredLink) -> Option<Value> {
+        if self.links.get(&link.address) == Some(&link) {
+            return None;
+        }
         let line = json!({ "link": {
             "at": link.at,
             "address": link.address.to_string(),
@@ -320,69 +338,105 @@ impl Fetched {
             "to": link.to.iter().map(ToString::to_string).collect::<Vec<_>>(),
         }});
         self.links.insert(link.address.clone(), link);
-        line
+        Some(line)
     }
 
-    /// A record's bytes held; its `{"atom":{…}}` line.
-    fn keep_atom(&mut self, address: Address, text: String) -> Value {
+    /// A record's bytes held; its `{"atom":{…}}` line, where they are new.
+    fn keep_atom(&mut self, address: Address, text: String) -> Option<Value> {
+        if self.atoms.get(&address) == Some(&text) {
+            return None;
+        }
         let line = json!({ "atom": { "address": address.to_string(), "text": text } });
         self.atoms.insert(address, text);
-        line
+        Some(line)
     }
 
     /// A credential table held under its epoch; its `{"keys":{…}}` line, each
-    /// enrolled key spelled as [`enrolled_line_of`] reads it back.
-    fn keep_keys(&mut self, keys: KeysAsOf) -> Value {
+    /// enrolled key spelled as [`enrolled_line_of`] reads it back, where the
+    /// account's table at that epoch is not these keys already.
+    fn keep_keys(&mut self, keys: KeysAsOf) -> Option<Value> {
+        let key = (keys.account.clone(), keys.epoch);
+        if self.keys.get(&key).is_some_and(|held| held.enrolled == keys.enrolled) {
+            return None;
+        }
         let line = json!({ "keys": {
             "account": keys.account.to_string(),
             "epoch": keys.epoch,
             "at": keys.at,
             "enrolled": keys.enrolled.iter().map(|e| json!({ "alg": e.key.alg(), "key": e.key.to_hex(), "anchor": e.anchor })).collect::<Vec<_>>(),
         }});
-        self.keys.insert((keys.account.clone(), keys.epoch), keys);
-        line
+        self.keys.insert(key, keys);
+        Some(line)
     }
 
-    /// A retraction held; its `{"retracted":{…}}` line.
-    fn keep_retracted(&mut self, at: u64, link: Address) -> Value {
+    /// A retraction held; its `{"retracted":{…}}` line, where it is new.
+    fn keep_retracted(&mut self, at: u64, link: Address) -> Option<Value> {
+        if self.retracted.get(&at).is_some_and(|held| held.contains(&link)) {
+            return None;
+        }
         let line = json!({ "retracted": { "at": at, "link": link.to_string() } });
         self.retracted.entry(at).or_default().push(link);
-        line
+        Some(line)
     }
 
     /// The board term held; its `{"board":{…}}` line, the chain as the board
-    /// spelled it.
-    fn keep_board(&mut self, term: BoardTerm, chain: &str) -> Value {
+    /// spelled it, where the term is new.
+    fn keep_board(&mut self, term: BoardTerm, chain: &str) -> Option<Value> {
+        if self.board == Some(term) {
+            return None;
+        }
         self.board = Some(term);
-        json!({ "board": { "position": term.log_position, "chain": chain } })
+        Some(json!({ "board": { "position": term.log_position, "chain": chain } }))
     }
 
-    /// The claim held; its `{"claim":{…}}` line.
-    fn keep_claim(&mut self, at: u64, claimant: Address) -> Value {
+    /// The claim held; its `{"claim":{…}}` line, where it is new.
+    fn keep_claim(&mut self, at: u64, claimant: Address) -> Option<Value> {
+        if self.claim.as_ref().is_some_and(|(held_at, held)| *held_at == at && *held == claimant) {
+            return None;
+        }
         let line = json!({ "claim": { "at": at, "claimant": claimant.to_string() } });
         self.claim = Some((at, claimant));
-        line
+        Some(line)
     }
 }
 
-/// One appendable JSON-lines file, created at the first line written.
+/// One JSON-lines file of the copy, written a line at a time: a file this
+/// mirror holds, appended to ([`Lines::held`]), or one a new base begins,
+/// whatever the path held before cut away by its first line
+/// ([`Lines::begin`]).
 struct Lines {
     path: PathBuf,
     out: Option<BufWriter<File>>,
+    /// Whether the first line written truncates what the path held.
+    begins: bool,
     bytes: u64,
 }
 
 impl Lines {
-    fn at(path: PathBuf) -> Lines {
-        Lines { path, out: None, bytes: 0 }
+    /// A file this mirror holds, appended to — its bytes counted from the
+    /// length it has now, none where it is absent.
+    fn held(path: PathBuf) -> Lines {
+        let bytes = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        Lines { path, out: None, begins: false, bytes }
+    }
+
+    /// A file a new base begins: nothing of what the path held survives its
+    /// first line, and nothing is cut before that line — so a base refused
+    /// before its first line leaves the path as it found it.
+    fn begin(path: PathBuf) -> Lines {
+        Lines { path, out: None, begins: true, bytes: 0 }
     }
 
     fn append(&mut self, line: &Value) -> Result<(), MirrorError> {
         let text = line.to_string();
         if self.out.is_none() {
-            let file = OpenOptions::new()
-                .create(true)
-                .append(true)
+            let mut options = OpenOptions::new();
+            if self.begins {
+                options.write(true).create(true).truncate(true);
+            } else {
+                options.create(true).append(true);
+            }
+            let file = options
                 .open(&self.path)
                 .map_err(|e| MirrorError::Copy(format!("{}: {e}", self.path.display())))?;
             self.out = Some(BufWriter::new(file));
@@ -443,6 +497,20 @@ impl Types {
 
 /// THE MIRROR: the hint it is scoped to, the board it reads, its copy, its
 /// fetch cache, and the index it derives.
+///
+/// A mirror stays on the thread that opened it: the board it reads holds
+/// the caller's [`Transport`](crate::Transport), which this crate does not
+/// require to be `Send`. What it answers crosses threads. The twin below
+/// compiles and the refusal beside it does not, the type the one difference:
+///
+/// ```
+/// fn send<T: Send>() {}
+/// send::<skep_resolve::Resolution>();
+/// ```
+/// ```compile_fail,E0277
+/// fn send<T: Send>() {}
+/// send::<skep_resolve::Mirror>();
+/// ```
 pub struct Mirror {
     hint: RootHint,
     root: Option<Origin>,
@@ -462,6 +530,7 @@ pub struct Mirror {
     scanned: usize,
     /// How many of `rows` the fold has consumed.
     folded: usize,
+    /// The position of the last row the fold took.
     head: u64,
     /// Whether this mirror compared the claimant's genesis set against the
     /// hint (REG-3.42) — the gate every line passes to reach the copy: until
@@ -471,9 +540,8 @@ pub struct Mirror {
     /// position order — the epochs a table is kept under, and the acts the
     /// as-of reads are proven by.
     epochs: BTreeMap<Address, Vec<u64>>,
-    members: BTreeMap<Address, Vec<Address>>,
-    members_probed: BTreeMap<Address, bool>,
-    images: BTreeMap<Address, Image>,
+    /// The chain walk's memory between two pulls.
+    chains: Chains,
     stats: Stats,
     opened: Opened,
 }
@@ -517,7 +585,7 @@ impl Mirror {
 
     /// The members of `home`'s version chain the mirror knows, oldest first.
     pub fn members_of(&self, home: &Address) -> &[Address] {
-        self.members.get(home).map(Vec::as_slice).unwrap_or(&[])
+        self.chains.members_of(home)
     }
 
     /// The numbers, with every read the board was asked.
@@ -535,6 +603,22 @@ impl Mirror {
         self.board.as_ref().ok_or(MirrorError::Offline)
     }
 
+    /// THE COPY'S FRONTIER: the position of the last row held, the copy's
+    /// last — where the next pull starts. Ahead of `head` where a sync held
+    /// rows and failed before the fold took them; those rows wait for the
+    /// next fold and are never asked for again.
+    fn held_through(&self) -> u64 {
+        self.rows.last().and_then(position).unwrap_or(self.head)
+    }
+
+    /// How far THE CREDENTIAL ACTS are known: the position of the last row
+    /// the credential pass read — the bound inside which the held feed proves
+    /// a table unchanged. Behind [`Mirror::held_through`] where a sync failed
+    /// inside that pass.
+    fn acts_through(&self) -> u64 {
+        self.scanned.checked_sub(1).and_then(|last| position(&self.rows[last])).unwrap_or(self.head)
+    }
+
     // ── the copy's lines ────────────────────────────────────────────────────
 
     fn append_feed(&mut self, line: Value) -> Result<(), MirrorError> {
@@ -546,7 +630,11 @@ impl Mirror {
         }
     }
 
-    fn append_cache(&mut self, line: Value) -> Result<(), MirrorError> {
+    /// A line a `keep_*` of [`Fetched`] answered, written — none where the
+    /// value was held already, and none on a mirror with no board, whose
+    /// every value came off the cache.
+    fn append_cache(&mut self, line: Option<Value>) -> Result<(), MirrorError> {
+        let Some(line) = line else { return Ok(()) };
         if self.board.is_none() {
             return Ok(());
         }
@@ -556,16 +644,6 @@ impl Mirror {
             self.pending_cache.push(line);
             Ok(())
         }
-    }
-
-    /// A NEW copy's header, the first line it holds: the format stamp, the
-    /// realm, and the root that answered.
-    fn header(&self) -> Value {
-        json!({
-            "skep-resolve": FEED_FORMAT,
-            "realm": self.hint.realm.to_hex(),
-            "root": self.root.as_ref().map(|o| o.as_str().to_string()),
-        })
     }
 
     /// The realm compared: every line that waited on it written, in order —
@@ -595,7 +673,7 @@ impl Mirror {
         if let Some((at, link, home)) = link_row(row) {
             return self.fold_link(at, &link, &home);
         }
-        let at = row["at"].as_u64().unwrap_or(0);
+        let at = position(row).unwrap_or(0);
         let docs = docs_of(row);
         match row["op"].as_str() {
             Some("nullify") => {
@@ -616,13 +694,7 @@ impl Mirror {
             }
             Some("publish") | Some("version") => {
                 for member in &docs {
-                    if let Some(trunk) = trunk_of(member) {
-                        let list = self.members.entry(trunk.clone()).or_default();
-                        if !list.contains(member) {
-                            list.push(member.clone());
-                        }
-                        self.members_probed.insert(trunk.clone(), true);
-                    }
+                    self.chains.learn(member);
                 }
             }
             _ => {}
@@ -817,7 +889,13 @@ fn link_row(row: &Value) -> Option<(u64, Address, Address)> {
     }
     let link = row["link"].as_str().and_then(parse_address)?;
     let home = docs_of(row).into_iter().next()?;
-    Some((row["at"].as_u64().unwrap_or(0), link, home))
+    Some((position(row).unwrap_or(0), link, home))
+}
+
+/// A feed row's position, where it names one — the one reading of a row's
+/// `at` every position the mirror keeps is taken through.
+fn position(row: &Value) -> Option<u64> {
+    row["at"].as_u64()
 }
 
 /// The documents a feed row names, in its order, each that is an address.
@@ -874,16 +952,6 @@ pub fn account_of_document(doc: &Address) -> Option<Address> {
     skep_address::validate(account).ok()
 }
 
-/// The TRUNK of a document or a version member: the document address cut
-/// after the document field's first component (`1.0.1.0.1.2` → `1.0.1.0.1`).
-fn trunk_of(doc: &Address) -> Option<Address> {
-    let d = document_of(doc)?;
-    let comps: Vec<Nat> = d.tumbler().iter().cloned().collect();
-    let second_zero = comps.iter().enumerate().filter(|(_, c)| **c == Nat::from(0u32)).map(|(i, _)| i).nth(1)?;
-    let trunk = Tumbler::new(comps[..=second_zero + 1].iter().cloned()).ok()?;
-    skep_address::validate(trunk).ok()
-}
-
 #[cfg(test)]
 mod tests {
     use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
@@ -894,19 +962,14 @@ mod tests {
         parse_address(s).unwrap()
     }
 
-    /// The address arithmetic the fold rests on: a doc 1's account and a
-    /// member's trunk.
+    /// The address arithmetic the fold rests on: a doc 1's account.
     #[test]
-    fn the_homes_account_and_trunk_are_read_by_arithmetic() {
+    fn the_homes_account_is_read_by_arithmetic() {
         assert_eq!(account_of_document(&a("1.0.1.0.1")), Some(a("1.0.1")));
         assert_eq!(account_of_document(&a("1.0.2.3.0.1")), Some(a("1.0.2.3")));
         assert_eq!(account_of_document(&a("1.0.1.0.1.2")), Some(a("1.0.1")), "a member's account");
         assert_eq!(account_of_document(&a("1.0.1.0.1.0.1.4")), Some(a("1.0.1")), "an element's");
         assert_eq!(account_of_document(&a("1.0.1")), None);
-        assert_eq!(trunk_of(&a("1.0.1.0.1.2")), Some(a("1.0.1.0.1")));
-        assert_eq!(trunk_of(&a("1.0.1.0.1.2.1")), Some(a("1.0.1.0.1")), "a daughter's trunk");
-        assert_eq!(trunk_of(&a("1.0.1.0.1")), Some(a("1.0.1.0.1")));
-        assert_eq!(trunk_of(&a("1.0.1.0.1.0.1.4")), Some(a("1.0.1.0.1")));
     }
 
     /// A link row is an unattested `make_link` with a link and a home — the
@@ -925,9 +988,11 @@ mod tests {
     }
 
     /// THE FETCH CACHE'S FORMAT has one writer and one reader: every kind of
-    /// line `Fetched` keeps reads back into the value it kept; and a keys
-    /// line one of whose entries does not read holds no table at all, never
-    /// a smaller one.
+    /// line `Fetched` keeps reads back into the value it kept; a value it
+    /// holds already — a credential table read again for another position
+    /// of its epoch among them — writes no second line, and another table
+    /// under the same epoch does; and a keys line one of whose entries does
+    /// not read holds no table at all, never a smaller one.
     #[test]
     fn every_cache_line_reads_back_as_what_was_kept() {
         let key = |seed: u8| HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[seed; 32]).expect("tag 1").public_key().clone();
@@ -946,19 +1011,36 @@ mod tests {
             at: 9,
             enrolled: vec![Enrolled { key: key(3), anchor: true }, Enrolled { key: key(4), anchor: false }],
         };
-        let lines = [
-            kept.keep_link(link),
-            kept.keep_atom(a("1.0.1.0.1.0.1.1"), r#"{"type":"binding","prefix":"1.5"}"#.into()),
-            kept.keep_keys(keys),
+        let atom = (a("1.0.1.0.1.0.1.1"), r#"{"type":"binding","prefix":"1.5"}"#.to_string());
+        let (term, chain) = (BoardTerm { log_position: 12, chain: [7; 32] }, "07".repeat(32));
+        let lines: Vec<Value> = [
+            kept.keep_link(link.clone()),
+            kept.keep_atom(atom.0.clone(), atom.1.clone()),
+            kept.keep_keys(keys.clone()),
             kept.keep_retracted(14, a("1.0.2.0.1.0.2.1")),
-            kept.keep_board(BoardTerm { log_position: 12, chain: [7; 32] }, &"07".repeat(32)),
+            kept.keep_board(term, &chain),
             kept.keep_claim(3, a("1.0.1")),
-        ];
+        ]
+        .into_iter()
+        .map(|line| line.expect("a value not held writes its line"))
+        .collect();
         let mut recalled = Fetched::default();
         for line in &lines {
             recalled.recall(&serde_json::from_str(&line.to_string()).expect("a line is JSON"));
         }
         assert_eq!(recalled, kept);
+        let again = [
+            kept.keep_link(link),
+            kept.keep_atom(atom.0, atom.1),
+            kept.keep_keys(KeysAsOf { at: 11, ..keys.clone() }),
+            kept.keep_retracted(14, a("1.0.2.0.1.0.2.1")),
+            kept.keep_board(term, &chain),
+            kept.keep_claim(3, a("1.0.1")),
+        ];
+        assert!(again.iter().all(Option::is_none), "a value held already writes no line: {again:?}");
+        assert_eq!(recalled, kept, "and holds what it held");
+        let rotated = KeysAsOf { enrolled: vec![Enrolled { key: key(4), anchor: false }], ..keys };
+        assert!(kept.keep_keys(rotated).is_some(), "another table under the epoch is a new line");
         let mut torn = lines[2].clone();
         torn["keys"]["enrolled"][1]["alg"] = json!("no-such-alg");
         let mut held = Fetched::default();

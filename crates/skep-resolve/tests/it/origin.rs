@@ -146,10 +146,10 @@ fn the_ordered_walk_has_one_precedence() {
     let names = table(&[("dead.example", Vec::new()), ("acme.example", vec![public_ip()])]);
     let t = Transports::default();
     let walk = |members: &[&str]| walk_members(members, &names, &t);
-    assert_eq!(walk(&[ONION, "https://acme.example"]).dial.map(|d| d.member), Some(1));
-    assert_eq!(walk(&["http://plain.example", "https://acme.example"]).dial.map(|d| d.member), Some(1));
-    assert_eq!(walk(&["https://dead.example", "https://127.0.0.1", "https://acme.example"]).dial.map(|d| d.member), Some(2));
-    assert_eq!(walk(&["https://acme.example", ONION]).dial.map(|d| d.member), Some(0));
+    assert_eq!(walk(&[ONION, "https://acme.example"]).dial.map(|d| d.member_index), Some(1));
+    assert_eq!(walk(&["http://plain.example", "https://acme.example"]).dial.map(|d| d.member_index), Some(1));
+    assert_eq!(walk(&["https://dead.example", "https://127.0.0.1", "https://acme.example"]).dial.map(|d| d.member_index), Some(2));
+    assert_eq!(walk(&["https://acme.example", ONION]).dial.map(|d| d.member_index), Some(0));
     let none = walk(&["http://plain.example", ONION, "https://dead.example"]);
     assert_eq!(none.dial, None);
     assert_eq!(none.outcomes.len(), 3);

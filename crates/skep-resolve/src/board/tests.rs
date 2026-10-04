@@ -124,7 +124,7 @@ fn the_boards_word_is_typed_where_the_wire_spells_it() {
 /// The answers both readers of the board read alike: a link's slots, a
 /// document's content extent, an image's runs — whole or not at all —
 /// and an atom's V-ordinal among them, the runs taken in V-order, a gap
-/// between two runs no position, and widths that overflow no position
+/// between two runs no V-ordinal, and widths that overflow no V-ordinal
 /// either; and a content element's ordinal in its own document, never a
 /// link element's nor a member's mint.
 #[test]
@@ -145,12 +145,12 @@ fn the_shared_answers_read_one_way() {
     ] });
     let runs = runs_of(&image).expect("every run reads");
     assert_eq!(runs, [(a("1.0.1.0.1.0.1.1"), 2), (a("1.0.1.0.1.0.1.7"), 3)]);
-    assert_eq!(position_in(&runs, &a("1.0.1.0.1.0.1.2")), Some(2));
-    assert_eq!(position_in(&runs, &a("1.0.1.0.1.0.1.8")), Some(4));
-    assert_eq!(position_in(&runs, &a("1.0.1.0.1.0.1.3")), None);
-    assert_eq!(position_in(&runs, &a("1.0.1.0.1.0.2.1")), None, "a link element");
+    assert_eq!(v_ordinal_in(&runs, &a("1.0.1.0.1.0.1.2")), Some(2));
+    assert_eq!(v_ordinal_in(&runs, &a("1.0.1.0.1.0.1.8")), Some(4));
+    assert_eq!(v_ordinal_in(&runs, &a("1.0.1.0.1.0.1.3")), None);
+    assert_eq!(v_ordinal_in(&runs, &a("1.0.1.0.1.0.2.1")), None, "a link element");
     let overflowing = [(a("1.0.1.0.1.0.2.1"), u64::MAX), (a("1.0.1.0.1.0.1.1"), 1)];
-    assert_eq!(position_in(&overflowing, &a("1.0.1.0.1.0.1.1")), None, "widths that overflow place nothing");
+    assert_eq!(v_ordinal_in(&overflowing, &a("1.0.1.0.1.0.1.1")), None, "widths that overflow place nothing");
     let torn = json!({ "resp": "runs", "runs": [
         { "i_start": "1.0.1.0.1.0.1.1", "width": "2" },
         { "i_start": "not an address", "width": "4" },

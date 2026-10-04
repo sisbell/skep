@@ -30,7 +30,7 @@
 //! the span-set, `image` and one-position `retrieve_v` frames; a span-set
 //! answer's content extent; an `image` answer's runs, read whole or not at
 //! all, and an atom's V-ordinal among them; and a content element's ordinal
-//! in its own document, the append-only guess's position.
+//! in its own document, the append-only guess's V-ordinal.
 
 use std::cell::Cell;
 use std::fmt;
@@ -383,7 +383,8 @@ impl Board {
     }
 
     /// `GET /chain?at=N`: the commit chain's value as of `at`, recomputed by
-    /// the board (wire.md §Reading history) — `(at, chain)`.
+    /// the board (wire.md §Reading history) — the position the board answers
+    /// as of, and the chain.
     pub fn chain_at(&self, at: u64) -> Result<(u64, [u8; 32]), BoardError> {
         self.bump(|r| r.chain += 1);
         let mut tries = 0;
@@ -393,10 +394,10 @@ impl Board {
             match st {
                 200 => {
                     let v = Board::json(&body)?;
-                    let at = v["at"].as_u64().ok_or_else(|| BoardError::Malformed("no at".into()))?;
+                    let as_of = v["at"].as_u64().ok_or_else(|| BoardError::Malformed("no at".into()))?;
                     let hex = v["chain"].as_str().ok_or_else(|| BoardError::Malformed("no chain".into()))?;
                     let chain = parse_chain(hex).ok_or_else(|| BoardError::Malformed(format!("chain {hex}")))?;
-                    return Ok((at, chain));
+                    return Ok((as_of, chain));
                 }
                 503 if text.contains("history_busy") && tries < BUSY_RETRIES => {
                     tries += 1;
@@ -452,7 +453,7 @@ impl Board {
     }
 
     /// THE BOARD TERM (D13): `H.1`'s committed pair, off `retrieve_v` at the
-    /// pinned member's first position — the term, and its chain as the board
+    /// pinned member's V-ordinal 1 — the term, and its chain as the board
     /// spelled it; `None` where the board holds none.
     pub(crate) fn board_term(&self) -> Result<Option<(BoardTerm, String)>, BoardError> {
         let v = self.op(&retrieve_frame(&HEAD_MEMBER_1, 1))?;
@@ -497,10 +498,10 @@ impl Board {
     }
 }
 
-/// The one-position `retrieve_v` frame: the atom at content ordinal `pos`
-/// of `doc`.
-pub(crate) fn retrieve_frame(doc: &Address, pos: u64) -> Value {
-    json!({ "op": "retrieve_v", "specs": [{ "doc": doc.to_string(), "span": { "start": format!("1.{pos}"), "width": "0.1" } }] })
+/// The one-position `retrieve_v` frame: the atom at V-ordinal `ordinal` of
+/// `doc`.
+pub(crate) fn retrieve_frame(doc: &Address, ordinal: u64) -> Value {
+    json!({ "op": "retrieve_v", "specs": [{ "doc": doc.to_string(), "span": { "start": format!("1.{ordinal}"), "width": "0.1" } }] })
 }
 
 /// The `retrieve_doc_v_span_set` frame: `doc`'s V-span set, its content
@@ -509,8 +510,8 @@ pub(crate) fn span_set_frame(doc: &Address) -> Value {
     json!({ "op": "retrieve_doc_v_span_set", "doc": doc.to_string() })
 }
 
-/// The `image` frame: the runs `width` content ordinals from ordinal `from`
-/// of `doc` arrange ([`runs_of`]).
+/// The `image` frame: the runs `doc` arranges at the `width` V-ordinals from
+/// `from` ([`runs_of`]).
 pub(crate) fn image_frame(doc: &Address, from: u64, width: u64) -> Value {
     json!({ "op": "image", "d": doc.to_string(), "region": [{ "start": format!("1.{from}"), "width": format!("0.{width}") }] })
 }
@@ -573,7 +574,7 @@ pub(crate) fn content_extent(answer: &Value) -> Option<u64> {
 
 /// An `image` answer's runs — each its I-start and its width, in V-order —
 /// read WHOLE, or not at all: a run dropped would shift every later run's
-/// V-ordinals, and a read at the shifted position fetches another atom.
+/// V-ordinals, and a read at the shifted V-ordinal fetches another atom.
 pub(crate) fn runs_of(answer: &Value) -> Option<Vec<(Address, u64)>> {
     answer["runs"]
         .as_array()?
@@ -586,13 +587,13 @@ pub(crate) fn runs_of(answer: &Value) -> Option<Vec<(Address, u64)>> {
 /// I-start and a width, in V-order from ordinal 1 — where a run holds it.
 /// The widths are the board's word, so they are summed checked: an image
 /// whose widths overflow places nothing.
-pub(crate) fn position_in(runs: &[(Address, u64)], addr: &Address) -> Option<u64> {
-    let mut pos = 1u64;
-    for (start, width) in runs {
-        if let Some(k) = offset_within(start, addr, *width) {
-            return pos.checked_add(k);
+pub(crate) fn v_ordinal_in(runs: &[(Address, u64)], addr: &Address) -> Option<u64> {
+    let mut v_start = 1u64;
+    for (i_start, width) in runs {
+        if let Some(k) = offset_within(i_start, addr, *width) {
+            return v_start.checked_add(k);
         }
-        pos = pos.checked_add(*width)?;
+        v_start = v_start.checked_add(*width)?;
     }
     None
 }
@@ -610,7 +611,7 @@ fn offset_within(start: &Address, addr: &Address, width: u64) -> Option<u64> {
 }
 
 /// Where `addr` is a content element of `home` itself — `home.0.1.n` — its
-/// ordinal `n`: THE APPEND-ONLY GUESS's position, a doc 1 written only by
+/// ordinal `n`: THE APPEND-ONLY GUESS's V-ordinal, a doc 1 written only by
 /// deposits arranging its content ordinal n at V-ordinal n. A link element,
 /// a member's mint and another document's element have none.
 pub(crate) fn content_ordinal_in(home: &Address, addr: &Address) -> Option<u64> {

@@ -94,13 +94,13 @@ pub fn judge(record: &Record, trial: &Trial<'_>) -> Verdict {
     let Some(blob) = hybrid_blob(sig) else {
         return Verdict::Unsigned;
     };
-    let canonical = record.canonical_sigless();
+    let sigless = record.canonical_sigless();
     let body = entry_body_record(RecordRows {
         ty: trial.ty,
         to: trial.to,
         replaces: None,
         lineage_fork_point: trial.lineage,
-        sigless_canonical_record: canonical.as_bytes(),
+        sigless_canonical_record: sigless.as_bytes(),
     });
     for enrolled in trial.keys {
         let key = &enrolled.key;
@@ -108,8 +108,8 @@ pub fn judge(record: &Record, trial: &Trial<'_>) -> Verdict {
         if row.sig_len() != blob.len() {
             continue;
         }
-        let bytes = entry_frame(key.alg(), trial.board, trial.home_account, DocTerm::One(trial.home), &body);
-        if skep_signature::verify(row.tag, key, &bytes, &blob).is_ok() {
+        let frame = entry_frame(key.alg(), trial.board, trial.home_account, DocTerm::One(trial.home), &body);
+        if skep_signature::verify(row.tag, key, &frame, &blob).is_ok() {
             return Verdict::Signed(Fingerprint::of(key));
         }
     }

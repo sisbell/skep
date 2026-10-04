@@ -47,8 +47,8 @@ pub fn resolve(
     let Some(standing) = mirror.index().standing(prefix) else {
         // A depth address whose parent has a standing here, held or retired:
         // the hop not made.
-        if let Some(parent) = mirror.index().parent_prefix(prefix) {
-            let parent = resolve(mirror, &parent, names, transports)?;
+        if let Some(parent_prefix) = mirror.index().parent_prefix(prefix) {
+            let parent = resolve(mirror, &parent_prefix, names, transports)?;
             return Ok(Resolution::HopNotMade { prefix: prefix.clone(), parent: Box::new(parent) });
         }
         return Ok(Resolution::Unregistered { prefix: prefix.clone() });

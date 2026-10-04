@@ -406,7 +406,7 @@ pub enum MemberOutcome {
 /// order, the origin, and the addresses that passed the host term.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EndpointDial {
-    pub member: usize,
+    pub member_index: usize,
     pub origin: Origin,
     pub kind: MemberKind,
     pub addresses: Vec<IpAddr>,
@@ -467,12 +467,12 @@ pub fn judge_member(member: &str, names: &dyn NameResolver, transports: &Transpo
 /// outcome is the face's (REG-3.80). The members are read and never kept:
 /// any slice of text will do — an endpoint record's own `Vec<String>`, a
 /// caller's `&[&str]`.
-pub fn walk_members<S: AsRef<str>>(origins: &[S], names: &dyn NameResolver, transports: &Transports) -> EndpointWalk {
+pub fn walk_members<S: AsRef<str>>(members: &[S], names: &dyn NameResolver, transports: &Transports) -> EndpointWalk {
     let outcomes: Vec<MemberOutcome> =
-        origins.iter().map(|m| judge_member(m.as_ref(), names, transports)).collect();
+        members.iter().map(|member| judge_member(member.as_ref(), names, transports)).collect();
     let dial = outcomes.iter().enumerate().find_map(|(i, o)| match o {
         MemberOutcome::WouldDial { origin, kind, addresses } => Some(EndpointDial {
-            member: i,
+            member_index: i,
             origin: origin.clone(),
             kind: *kind,
             addresses: addresses.clone(),

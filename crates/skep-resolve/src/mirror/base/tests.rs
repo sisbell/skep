@@ -219,7 +219,7 @@ fn a_reclaimed_position_is_read_at_the_floor_only_where_no_act_lies_between() {
         // through it.
         mirror.rows = vec![json!({ "at": 8, "op": "publish", "docs": [] })];
         mirror.scanned = 1;
-        mirror.epochs.insert(a("1.0.2"), acts.to_vec());
+        mirror.credential_acts.insert(a("1.0.2"), acts.to_vec());
         let case = format!("acts {acts:?}, floor {floor:?}");
         let read = mirror.keys_opening(&a("1.0.2"), 6).expect("read");
         assert_eq!(read.map(|keys| keys.into_iter().map(|e| e.key).collect::<Vec<_>>()), opening, "{case}");

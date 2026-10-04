@@ -275,7 +275,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn response_parse() {
+    fn a_response_splits_into_status_and_body_and_a_broken_one_is_refused() {
         let (st, body) = parse_response(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}").expect("parse");
         assert_eq!((st, body.as_slice()), (200, &b"{}"[..]));
         assert!(parse_response(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n{}").is_err(), "a short body is a broken connection");

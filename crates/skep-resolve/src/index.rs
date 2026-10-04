@@ -71,7 +71,7 @@ pub struct Suppressed {
 /// One prefix's bindings in journal order, and which of them the walk
 /// honors.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct PrefixEntries {
+struct Bindings {
     entries: Vec<Judged<BindingRecord>>,
     honored: Vec<usize>,
 }
@@ -121,7 +121,7 @@ pub struct Counts {
 /// handed, which must be journal order — the folds' one precondition.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Ledger {
-    prefixes: BTreeMap<Address, PrefixEntries>,
+    prefixes: BTreeMap<Address, Bindings>,
     endpoints: BTreeMap<Address, Deposits>,
     places: BTreeMap<Address, Place>,
 }
@@ -132,24 +132,24 @@ impl Ledger {
     /// module doc states; answers whether it was honored.
     pub(crate) fn fold_binding(&mut self, mut judged: Judged<BindingRecord>) -> bool {
         let prefix = judged.record.prefix.clone();
-        let entries = self.prefixes.entry(prefix.clone()).or_default();
-        let honored = match entries.honored.last() {
+        let bindings = self.prefixes.entry(prefix.clone()).or_default();
+        let honored = match bindings.honored.last() {
             // THE FIRST RECORD OF A KEY NAMES THE EMPTY STATE, by the member's
             // absence: an allocation.
             None => judged.record.replaces.is_none(),
             Some(&last) => {
-                let stood = &entries.entries[last];
-                let allocation = &entries.entries[entries.honored[0]].record.account;
+                let stood = &bindings.entries[last];
+                let allocated = &bindings.entries[bindings.honored[0]].record.account;
                 let names_current = judged.record.replaces.as_ref() == Some(&stood.link);
-                let same_or_none = judged.record.account.is_none() || judged.record.account == *allocation;
+                let same_or_none = judged.record.account.is_none() || judged.record.account == *allocated;
                 names_current && same_or_none
             }
         };
         judged.record.honored = honored;
         self.places.insert(judged.link.clone(), Place::Binding(prefix));
-        entries.entries.push(judged);
+        bindings.entries.push(judged);
         if honored {
-            entries.honored.push(entries.entries.len() - 1);
+            bindings.honored.push(bindings.entries.len() - 1);
         }
         honored
     }
@@ -161,14 +161,14 @@ impl Ledger {
         let deposits = self.endpoints.entry(judged.home.clone()).or_default();
         let honored = match deposits.last_stood {
             None => judged.record.replaces.is_none(),
-            Some(stood) => judged.record.replaces.as_ref() == Some(&deposits.entries[stood].link),
+            Some(last) => judged.record.replaces.as_ref() == Some(&deposits.entries[last].link),
         };
         judged.record.honored = honored;
-        let at = deposits.entries.len();
-        self.places.entry(judged.link.clone()).or_insert(Place::Endpoint(judged.home.clone(), at));
+        let index = deposits.entries.len();
+        self.places.entry(judged.link.clone()).or_insert(Place::Endpoint(judged.home.clone(), index));
         deposits.entries.push(judged);
         if honored {
-            deposits.last_stood = Some(at);
+            deposits.last_stood = Some(index);
         }
         honored
     }
@@ -178,8 +178,8 @@ impl Ledger {
     /// view, so the retraction clears nothing (REG-2.14) and this answers
     /// `false`, as it does for a link the ledger does not hold.
     pub(crate) fn nullify(&mut self, link: &Address) -> bool {
-        let Some(Place::Endpoint(home, at)) = self.places.get(link) else { return false };
-        match self.endpoints.get_mut(home).and_then(|d| d.entries.get_mut(*at)) {
+        let Some(Place::Endpoint(home, index)) = self.places.get(link) else { return false };
+        match self.endpoints.get_mut(home).and_then(|d| d.entries.get_mut(*index)) {
             Some(deposit) => {
                 deposit.record.nullified = true;
                 true
@@ -191,9 +191,9 @@ impl Ledger {
     /// The prefix's STANDING: the binding the walk holds current and the
     /// whole history, where an honored binding names the prefix.
     pub(crate) fn standing(&self, prefix: &Address) -> Option<Standing> {
-        let entries = self.prefixes.get(prefix)?;
-        let current = entries.entries[*entries.honored.last()?].clone();
-        Some(Standing { prefix: prefix.clone(), current, history: entries.entries.clone() })
+        let bindings = self.prefixes.get(prefix)?;
+        let current = bindings.entries[*bindings.honored.last()?].clone();
+        Some(Standing { prefix: prefix.clone(), current, history: bindings.entries.clone() })
     }
 
     /// THE PARENT PREFIX a depth address's walk reaches (REG-3.80,
@@ -203,8 +203,8 @@ impl Ledger {
     pub(crate) fn parent_prefix(&self, prefix: &Address) -> Option<Address> {
         self.prefixes
             .iter()
-            .filter(|(parent, entries)| {
-                !entries.honored.is_empty() && *parent != prefix && is_prefix(parent.tumbler(), prefix.tumbler())
+            .filter(|(parent, bindings)| {
+                !bindings.honored.is_empty() && *parent != prefix && is_prefix(parent.tumbler(), prefix.tumbler())
             })
             .max_by_key(|(parent, _)| parent.tumbler().len())
             .map(|(parent, _)| parent.clone())

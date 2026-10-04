@@ -176,7 +176,7 @@ fn resolve_prefix(mirror: &mut Mirror, prefix: &str) -> Resolution {
 /// The dial member a BOUND face would take, as `(index, origin)`.
 fn dial_of(r: &Resolution) -> Option<(usize, String)> {
     match r {
-        Resolution::Bound { dial, .. } => Some((dial.member, dial.origin.as_str().to_string())),
+        Resolution::Bound { dial, .. } => Some((dial.member_index, dial.origin.as_str().to_string())),
         _ => None,
     }
 }
@@ -411,7 +411,7 @@ fn the_fixture_board_resolves_live_and_is_recorded_on_demand() {
             }
             ("1.10", Resolution::DialNotMade { member, .. }) => assert_eq!(member, ONION),
             ("1.11", Resolution::Bound { dial, members, .. }) => {
-                assert_eq!(dial.member, 1);
+                assert_eq!(dial.member_index, 1);
                 assert!(matches!(members[0], MemberOutcome::NotDialed { .. }));
             }
             ("1.12", Resolution::UnreachableByPolicy { term: Term::Host { yielded }, .. }) => {
@@ -828,7 +828,7 @@ fn one_org_registered_by_the_console_resolves_from_the_hint_by_a_cold_resolver()
             assert_eq!(endpoint.link, addr(org.endpoint.as_ref().unwrap()));
             assert_eq!(endpoint.verdict, Verdict::Signed(Fingerprint::of(&public_key_of(&org.key))));
             assert_eq!(endpoint.record.origins, ["https://acme.example", "https://acme.example.net"]);
-            assert_eq!((dial.member, dial.origin.as_str()), (0, "https://acme.example"));
+            assert_eq!((dial.member_index, dial.origin.as_str()), (0, "https://acme.example"));
             assert_eq!(dial.addresses, ["93.184.216.34".parse::<IpAddr>().unwrap()]);
             assert_eq!(members.len(), 2);
         }

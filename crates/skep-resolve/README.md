@@ -26,16 +26,17 @@ parts, each under the design rule it realizes:
   (REG-3.42); the fork point is compared by no check of this crate.
 - **The mirror** (`Mirror`) — a `/changes` consumer from the floor
   (REG-3.10: no TTL, no negative cache) that fetches every row's bytes it
-  needs — the stored link, the atom at the position the link names, the
-  home's credential table AS OF the record's position: the live `key_set`
-  where the credential acts the mirror holds prove it the same table,
-  `/op-at` otherwise — and keeps a journal copy from genesis under a
-  caller-given directory: `feed.jsonl`, the copy of the feed the check
-  covers, and `fetched.jsonl`, the mirror's own fetch cache the rebuild
-  reads, both begun afresh by a new base, so a cache that outlived its
-  feed copy is never read as this mirror's own. A sync that fails leaves
-  its rows held, and the next takes them up where it stopped. A key table
-  holding a key this build cannot read is no table, never a smaller one.
+  needs — the stored link, the atom the link names (read where its home
+  arranges it), the home's credential table AS OF the record's position:
+  the live `key_set` where the credential acts the mirror holds prove it
+  the same table, `/op-at` otherwise — and keeps a journal copy from
+  genesis under a caller-given directory: `feed.jsonl`, the copy of the
+  feed the check covers, and `fetched.jsonl`, the mirror's own fetch cache
+  the rebuild reads, both begun afresh by a new base, so a cache that
+  outlived its feed copy is never read as this mirror's own. A sync that
+  fails leaves its rows held, and the next takes them up where it stopped.
+  A key table holding a key this build cannot read is no table, never a
+  smaller one.
   The base is from genesis at the root the hint names (REG-3.12); a
   held copy is CHECKED against the source read from genesis and resumed
   only where every held position comes back identical and every held head

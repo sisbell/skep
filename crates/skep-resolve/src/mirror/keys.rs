@@ -43,7 +43,7 @@ impl Mirror {
                     let credential =
                         stored.ty.as_ref().is_some_and(|t| *t == self.types.enroll || *t == self.types.retire);
                     if let (true, Some(subject)) = (credential, stored.to.first()) {
-                        self.epochs.entry(subject.clone()).or_default().push(at);
+                        self.credential_acts.entry(subject.clone()).or_default().push(at);
                     }
                 }
             }
@@ -55,13 +55,14 @@ impl Mirror {
     /// The EPOCH of `account`'s table as of `at`: its latest credential
     /// position at or below `at`, or 0.
     fn epoch_of(&self, account: &Address, at: u64) -> Epoch {
-        Epoch(self.epochs.get(account).and_then(|v| v.iter().rev().find(|p| **p <= at)).copied().unwrap_or(0))
+        let acts = self.credential_acts.get(account).map(Vec::as_slice).unwrap_or_default();
+        Epoch(acts.iter().rev().find(|p| **p <= at).copied().unwrap_or(0))
     }
 
     /// Whether a credential act of `account` lies in `(after, upto]` among
     /// the held rows — an act as the credential pass records one.
     fn later_credential_act(&self, account: &Address, after: u64, upto: u64) -> bool {
-        self.epochs.get(account).is_some_and(|acts| acts.iter().any(|p| *p > after && *p <= upto))
+        self.credential_acts.get(account).is_some_and(|acts| acts.iter().any(|p| *p > after && *p <= upto))
     }
 
     /// THE SET THAT OPENS `account` as of `at`: its own table where not
@@ -167,9 +168,9 @@ impl Mirror {
     /// first act's position being its own epoch; `None` where no act of the
     /// account is held or the table cannot be read.
     pub(super) fn genesis_keys(&mut self, account: &Address) -> Result<Option<Vec<Enrolled>>, MirrorError> {
-        let Some(&genesis) = self.epochs.get(account).and_then(|acts| acts.first()) else { return Ok(None) };
-        let Some(keys) = self.read_keys_at(account, genesis)? else { return Ok(None) };
-        self.keep_keys(account, Epoch(genesis), genesis, keys.clone())?;
+        let Some(&genesis_at) = self.credential_acts.get(account).and_then(|acts| acts.first()) else { return Ok(None) };
+        let Some(keys) = self.read_keys_at(account, genesis_at)? else { return Ok(None) };
+        self.keep_keys(account, Epoch(genesis_at), genesis_at, keys.clone())?;
         Ok(Some(keys))
     }
 
@@ -212,8 +213,9 @@ mod tests {
         RootHint::new(vec![Origin::parse("http://127.0.0.1:1").unwrap()], genesis, None).unwrap()
     }
 
-    /// A copy under `dir` holding `rows` and a fetch cache of `cache`'s lines.
-    fn copy(dir: &std::path::Path, rows: &[serde_json::Value], cache: &[serde_json::Value]) {
+    /// Writes a copy under `dir` holding `rows` and a fetch cache of `cache`'s
+    /// lines.
+    fn write_copy(dir: &std::path::Path, rows: &[serde_json::Value], cache: &[serde_json::Value]) {
         let header = json!({ "skep-resolve": FEED_FORMAT, "realm": hint().realm().genesis.to_hex(), "root": null });
         let feed: String = std::iter::once(&header).chain(rows).map(|line| format!("{line}\n")).collect();
         fs::write(dir.join(FEED_COPY), feed).expect("the feed copy");
@@ -234,7 +236,7 @@ mod tests {
             "at": 5, "address": "1.0.2.0.1.0.2.1", "home": "1.0.2.0.1",
             "ty": "1.1.0.1.0.1.0.3.1", "from": ["1.0.2.0.1.0.1.1"], "to": ["1.0.2.3"],
         }});
-        copy(dir.path(), &[row], &[seeding]);
+        write_copy(dir.path(), &[row], &[seeding]);
         let mirror = Mirror::rebuild_offline(&hint(), dir.path()).expect("rebuilt");
         assert!(mirror.later_credential_act(&a("1.0.2.3"), 4, 6), "the seeding in the delegator's doc 1");
         assert!(mirror.later_credential_act(&a("1.0.2.3"), 4, 5), "the interval is closed above");
@@ -269,7 +271,7 @@ mod tests {
                 kept.keep_keys(KeysAsOf { account: a(account), epoch: Epoch(0), at: 0, enrolled }).expect("a new table")
             })
             .collect();
-        copy(dir.path(), &[], &lines);
+        write_copy(dir.path(), &[], &lines);
         let mut mirror = Mirror::rebuild_offline(&hint(), dir.path()).expect("rebuilt");
         let mut opening = |account: &str| -> Option<Vec<PublicKey>> {
             let keys = mirror.keys_opening(&a(account), 9).expect("no board, no wire error");
@@ -300,7 +302,7 @@ mod tests {
                 kept.keep_keys(KeysAsOf { account: acct.clone(), epoch: Epoch(0), at: 0, enrolled }).expect("a new table")
             })
             .collect();
-        copy(dir.path(), &[], &lines);
+        write_copy(dir.path(), &[], &lines);
         let mut mirror = Mirror::rebuild_offline(&hint(), dir.path()).expect("rebuilt");
         assert_eq!(account(65).tumbler().len(), 65);
         assert_eq!(mirror.keys_opening(&account(65), 9), Ok(None), "past the deepest prefix a board mints");

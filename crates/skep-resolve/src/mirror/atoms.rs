@@ -1,12 +1,12 @@
-//! THE UN-ARRANGED ATOM (REG-3.25, REG-3.26): a deposit's atom is read at the
-//! position its link's `from` names — at the head where it is arranged
-//! there, and otherwise recovered BY THE HOME'S CHAIN WALK, one version at a
-//! time down the home's chain to the version that arranged it, each version
-//! asked for its extent, its image and the value — never by a read of the
-//! arranged head; the walk probes the home's members off the board itself,
-//! so it needs no feed, and its cost is counted
-//! ([`ChainWalkStats`](super::ChainWalkStats)). Where no version holds it, the
-//! POSITION READ off the feed the mirror holds (`/op-at` at the link's
+//! THE UN-ARRANGED ATOM (REG-3.25, REG-3.26): a deposit's atom — the address
+//! its link's `from` names — is read where its home arranges it: at the head
+//! where it is arranged there, and otherwise recovered BY THE HOME'S CHAIN
+//! WALK, one version at a time down the home's chain to the version that
+//! arranged it, each version asked for its extent, its image and the value —
+//! never by a read of the arranged head; the walk probes the home's members
+//! off the board itself, so it needs no feed, and its cost is counted
+//! ([`ChainWalkStats`](super::ChainWalkStats)). Where no version holds it,
+//! the POSITION READ off the feed the mirror holds (`/op-at` at the link's
 //! position) is the last recourse; where that fails too the record is
 //! UNDETERMINABLE HERE, suppressed and counted.
 //!
@@ -15,7 +15,7 @@
 //! state the way a child does. The fold calls one method here,
 //! [`Mirror::fetch_atom`]; [`Chains`] is the walk's memory between two
 //! pulls, which the fold teaches the members a `publish` or a `version` row
-//! names and the pull marks stale.
+//! names and whose stale part the pull forgets.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
@@ -26,7 +26,7 @@ use skep_registry::MAX_REGISTRY_RECORD_BYTES;
 
 use super::{Mirror, MirrorError};
 use crate::board::{
-    content_extent, content_ordinal_in, image_frame, position_in, retrieve_frame, runs_of, span_set_frame,
+    content_extent, content_ordinal_in, image_frame, retrieve_frame, runs_of, span_set_frame, v_ordinal_in,
 };
 use crate::parse_address;
 
@@ -38,15 +38,16 @@ struct Image {
 
 impl Image {
     /// The V-ordinal `addr` sits at, where the image holds it.
-    fn position_of(&self, addr: &Address) -> Option<u64> {
-        position_in(&self.runs, addr)
+    fn v_ordinal_of(&self, addr: &Address) -> Option<u64> {
+        v_ordinal_in(&self.runs, addr)
     }
 }
 
 /// THE CHAIN WALK'S MEMORY between two pulls: the members each home's chain
 /// is known to hold, the homes whose members need no probe, and the images
-/// read — written by the walk, by the fold through [`Chains::learn`], and
-/// marked stale by the pull through [`Chains::stale`], and by nothing else.
+/// read — written by the walk, by the fold through [`Chains::learn`], and in
+/// part forgotten by the pull through [`Chains::forget_stale`], and by
+/// nothing else.
 #[derive(Debug, Default)]
 pub(super) struct Chains {
     members: BTreeMap<Address, Vec<Address>>,
@@ -80,7 +81,7 @@ impl Chains {
     /// A pull began: the images are forgotten, since the new rows can
     /// rearrange a head, and the probes, since they can add members; the
     /// members known are kept, a member never unregistered.
-    pub(super) fn stale(&mut self) {
+    pub(super) fn forget_stale(&mut self) {
         self.images.clear();
         self.probed.clear();
     }
@@ -97,15 +98,15 @@ impl Mirror {
     /// WALK down the home's members (REG-3.25); the position read off the
     /// feed (REG-3.26); else `None`.
     pub(super) fn fetch_atom(&mut self, at: u64, home: &Address, addr: &Address) -> Result<Option<String>, MirrorError> {
-        if let Some(t) = self.fetched.atoms.get(addr) {
-            return Ok(Some(t.clone()));
+        if let Some(text) = self.fetched.atoms.get(addr) {
+            return Ok(Some(text.clone()));
         }
         if self.board.is_none() {
             return Ok(None);
         }
         // The head, through its cached image where one is held.
-        if let Some(pos) = self.chains.images.get(home).and_then(|i| i.position_of(addr)) {
-            if let Some(text) = self.retrieve(home, pos)? {
+        if let Some(ordinal) = self.chains.images.get(home).and_then(|i| i.v_ordinal_of(addr)) {
+            if let Some(text) = self.retrieve(home, ordinal)? {
                 return self.keep_atom(addr, text);
             }
         }
@@ -124,8 +125,8 @@ impl Mirror {
         }
         // The head's whole image.
         if let Some(image) = self.image_of(home)? {
-            if let Some(pos) = image.position_of(addr) {
-                if let Some(text) = self.retrieve(home, pos)? {
+            if let Some(ordinal) = image.v_ordinal_of(addr) {
+                if let Some(text) = self.retrieve(home, ordinal)? {
                     return self.keep_atom(addr, text);
                 }
             }
@@ -140,8 +141,8 @@ impl Mirror {
         for member in members.iter().rev() {
             visited += 1;
             if let Some(image) = self.image_of(member)? {
-                if let Some(pos) = image.position_of(addr) {
-                    found = self.retrieve(member, pos)?;
+                if let Some(ordinal) = image.v_ordinal_of(addr) {
+                    found = self.retrieve(member, ordinal)?;
                     if found.is_some() {
                         break;
                     }
@@ -224,8 +225,8 @@ impl Mirror {
         Ok(Some(content_extent(&v).unwrap_or(0)))
     }
 
-    /// `image`: the runs at content ordinals `from ..` of `doc`, `None`
-    /// where refused or where a run does not read.
+    /// `image`: the runs at V-ordinals `from ..` of `doc`, `None` where
+    /// refused or where a run does not read.
     fn image(&self, doc: &Address, from: u64, width: u64) -> Result<Option<Vec<(Address, u64)>>, MirrorError> {
         let v = self.board_ref()?.op(&image_frame(doc, from, width))?;
         if v["resp"].as_str() != Some("runs") {
@@ -234,10 +235,10 @@ impl Mirror {
         Ok(runs_of(&v))
     }
 
-    /// `retrieve_v`: the atom at content ordinal `pos` of `doc`, `None`
-    /// where refused or no atom stands there.
-    fn retrieve(&self, doc: &Address, pos: u64) -> Result<Option<String>, MirrorError> {
-        let v = self.board_ref()?.op(&retrieve_frame(doc, pos))?;
+    /// `retrieve_v`: the atom at V-ordinal `ordinal` of `doc`, `None` where
+    /// refused or no atom stands there.
+    fn retrieve(&self, doc: &Address, ordinal: u64) -> Result<Option<String>, MirrorError> {
+        let v = self.board_ref()?.op(&retrieve_frame(doc, ordinal))?;
         Ok(atom_of(&v))
     }
 
@@ -249,8 +250,8 @@ impl Mirror {
         let Some(extent) = content_extent(&v) else { return Ok(None) };
         let v = board.op_at(at, &image_frame(home, 1, extent))?;
         let Some(runs) = runs_of(&v) else { return Ok(None) };
-        let Some(pos) = position_in(&runs, addr) else { return Ok(None) };
-        let v = board.op_at(at, &retrieve_frame(home, pos))?;
+        let Some(ordinal) = v_ordinal_in(&runs, addr) else { return Ok(None) };
+        let v = board.op_at(at, &retrieve_frame(home, ordinal))?;
         Ok(atom_of(&v))
     }
 }
@@ -291,7 +292,7 @@ mod tests {
     /// and the images and keeps the members. A member a probe found under
     /// the home it was made from is kept under its trunk as well once a row
     /// names it: each home lists its members once, whatever another home
-    /// lists. An image reads its positions the board's one way.
+    /// lists. An image reads its V-ordinals the board's one way.
     #[test]
     fn the_walk_keeps_its_members_across_a_pull() {
         assert_eq!(trunk_of(&a("1.0.1.0.1.2")), Some(a("1.0.1.0.1")));
@@ -304,11 +305,11 @@ mod tests {
             chains.learn(&a(member));
         }
         let image = Image { runs: vec![(a("1.0.1.0.1.0.1.1"), 2), (a("1.0.1.0.1.0.1.7"), 3)] };
-        assert_eq!(image.position_of(&a("1.0.1.0.1.0.1.8")), Some(4));
+        assert_eq!(image.v_ordinal_of(&a("1.0.1.0.1.0.1.8")), Some(4));
         chains.images.insert(home.clone(), image);
         assert_eq!(chains.members_of(&home), [a("1.0.1.0.1.1"), a("1.0.1.0.1.2")], "each member once, oldest first");
         assert!(chains.probed.contains(&home), "a member the feed names needs no probe");
-        chains.stale();
+        chains.forget_stale();
         assert_eq!(chains.members_of(&home), [a("1.0.1.0.1.1"), a("1.0.1.0.1.2")], "a pull keeps the members");
         assert!(chains.probed.is_empty() && chains.images.is_empty(), "and forgets the probes and the images");
         assert!(chains.members_of(&a("1.0.2.0.1")).is_empty());

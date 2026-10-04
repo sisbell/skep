@@ -365,7 +365,7 @@ fn a_resumed_copy_writes_no_line_its_cache_holds() {
 /// first again, is inert; at 1.7 the nullified second deposit leaves the view
 /// and the first stands.
 #[test]
-fn the_replay_matrix_at_the_resolver() {
+fn the_replay_matrix_holds_over_the_boards_own_records() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (_, mirror) = open_fixture_mirror(dir.path());
     let index = mirror.index();

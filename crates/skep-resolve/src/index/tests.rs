@@ -126,13 +126,13 @@ fn the_replay_clause_holds_over_every_short_sequence() {
             continue;
         };
         assert!(!honored.is_empty(), "a standing and no binding honored: {seq:?}");
-        let allocation = seq[honored[0]].0;
+        let allocated = seq[honored[0]].0;
         assert_eq!(seq[honored[0]].1, None, "the allocation replaces nothing: {seq:?}");
         for pair in honored.windows(2) {
             assert_eq!(seq[pair[1]].1, Some(l(pair[0])), "each replaces the one honored before it: {seq:?}");
         }
         for &h in &honored {
-            assert!(seq[h].0.is_none() || seq[h].0 == allocation, "bound to another account: {seq:?}");
+            assert!(seq[h].0.is_none() || seq[h].0 == allocated, "bound to another account: {seq:?}");
         }
         assert_eq!(standing.current.link, a(&l(*honored.last().expect("one honored"))), "{seq:?}");
         let walked: Vec<(Address, bool)> = standing.history.iter().map(|b| (b.link.clone(), b.record.honored)).collect();
@@ -162,7 +162,7 @@ fn the_parent_prefix_is_the_longest_proper_prefix_with_a_standing() {
 /// nullified second leaving the view and the first standing, and the
 /// org's next deposit naming the nullified one honored.
 #[test]
-fn the_endpoint_current_is_the_latest_honored_on_the_active_view() {
+fn the_current_endpoint_is_the_latest_honored_deposit_on_the_active_view() {
     let mut ledger = Ledger::default();
     let home = "1.0.2.0.1";
     let l = |n: u32| format!("1.0.2.0.1.0.2.{n}");

@@ -24,8 +24,8 @@ use skep_registry::{parse, t_binding, t_endpoint, Body, BodyKind};
 
 use super::face_of;
 use crate::board::{
-    content_extent, content_ordinal_in, image_frame, position_in, retrieve_frame, runs_of, span_set_frame,
-    unit_span_json, Board, BoardError,
+    content_extent, content_ordinal_in, image_frame, retrieve_frame, runs_of, span_set_frame, unit_span_json,
+    v_ordinal_in, Board, BoardError,
 };
 use crate::index::Ledger;
 use crate::mirror::MirrorError;
@@ -51,13 +51,13 @@ pub struct GuestCost {
 /// THE GUEST-READING RESOLVE of `prefix` with NO mirror (REG-3.24, REG-3.33):
 /// every candidate binding of the board — every binding-typed link, by its
 /// class (`window_ftt` over the binding's type, paged) — each read, each
-/// atom fetched by its head position and parsed; the prefix's candidate
-/// bindings in their home's link order (journal order within one home); the
-/// account's live key set; its endpoint deposits by the same scan over its
-/// doc 1; each honored deposit's standing on the board's active view, as
-/// the board itself reads it (REG-1.11). Every verdict UNDETERMINABLE HERE:
-/// no position is held to judge a record as of. Answers the face and the
-/// cost.
+/// atom fetched at its V-ordinal in the head and parsed; the prefix's
+/// candidate bindings in their home's link order (journal order within one
+/// home); the account's live key set; its endpoint deposits by the same scan
+/// over its doc 1; each honored deposit's standing on the board's active
+/// view, as the board itself reads it (REG-1.11). Every verdict
+/// UNDETERMINABLE HERE: no position is held to judge a record as of. Answers
+/// the face and the cost.
 pub fn guest_resolve(
     board: &Board,
     prefix: &Address,
@@ -74,18 +74,18 @@ pub fn guest_resolve(
     cost.candidate_bindings_scanned = links.len() as u64;
     links.sort_unstable();
     for link in &links {
-        let Some((home, from, to)) = read_link(board, link, t_binding())? else { continue };
-        let Some(text) = atom_at_head(board, &home, &from)? else { continue };
+        let Some((home, atom, to)) = read_link(board, link, t_binding())? else { continue };
+        let Some(text) = atom_at_head(board, &home, &atom)? else { continue };
         cost.atoms_read += 1;
         let Ok(record) = parse(BodyKind::Binding, text.as_bytes()) else { continue };
         let Body::Binding(b) = record.body else { continue };
-        let Some(prefix) = parse_address(&b.prefix) else { continue };
+        let Some(binding_prefix) = parse_address(&b.prefix) else { continue };
         ledger.fold_binding(Judged {
             position: 0,
             link: link.clone(),
             home,
             record: BindingRecord {
-                prefix,
+                prefix: binding_prefix,
                 account: to.first().cloned(),
                 replaces: b.replaces.as_deref().and_then(parse_address),
                 honored: false,
@@ -111,18 +111,18 @@ pub fn guest_resolve(
     let mut deposits = scan_class(board, t_endpoint(), Some(&home))?;
     deposits.sort_unstable();
     for link in &deposits {
-        let Some((dep_home, from, _)) = read_link(board, link, t_endpoint())? else { continue };
-        if dep_home != home {
+        let Some((deposit_home, atom, _)) = read_link(board, link, t_endpoint())? else { continue };
+        if deposit_home != home {
             continue;
         }
-        let Some(text) = atom_at_head(board, &dep_home, &from)? else { continue };
+        let Some(text) = atom_at_head(board, &deposit_home, &atom)? else { continue };
         cost.atoms_read += 1;
         let Ok(record) = parse(BodyKind::Endpoint, text.as_bytes()) else { continue };
         let Body::Endpoint(e) = record.body else { continue };
         let honored = ledger.fold_endpoint(Judged {
             position: 0,
             link: link.clone(),
-            home: dep_home,
+            home: deposit_home,
             record: EndpointRecord {
                 origins: e.origins,
                 replaces: e.replaces.as_deref().and_then(parse_address),
@@ -131,14 +131,14 @@ pub fn guest_resolve(
             },
             verdict: Verdict::UndeterminableHere,
         });
-        if honored && !board.stands_active(link, &home, t_endpoint(), &from)? {
+        if honored && !board.stands_active(link, &home, t_endpoint(), &atom)? {
             ledger.nullify(link);
         }
     }
     let endpoint = ledger.current_endpoint(&home).cloned();
-    let any = ledger.any_honored_endpoint(&home);
+    let any_honored = ledger.any_honored_endpoint(&home);
     finish(&mut cost);
-    Ok((face_of(standing, keys, endpoint, any, names, transports), cost))
+    Ok((face_of(standing, keys, endpoint, any_honored, names, transports), cost))
 }
 
 /// The addresses a class scan's window asks for — and so exactly how many an
@@ -200,8 +200,8 @@ fn read_link(board: &Board, link: &Address, ty: &Address) -> Result<Option<(Addr
 /// An atom at the head of its home: the append-only guess, else the head's
 /// whole image — an image whose runs do not all read locating nothing.
 fn atom_at_head(board: &Board, home: &Address, addr: &Address) -> Result<Option<String>, MirrorError> {
-    let retrieve = |pos: u64| -> Result<Option<String>, MirrorError> {
-        let v = board.op(&retrieve_frame(home, pos))?;
+    let retrieve = |ordinal: u64| -> Result<Option<String>, MirrorError> {
+        let v = board.op(&retrieve_frame(home, ordinal))?;
         Ok(v["items"].as_array().filter(|i| i.len() == 1).and_then(|i| i[0]["atom"].as_str()).map(str::to_string))
     };
     let image = |from: u64, width: u64| -> Result<Vec<(Address, u64)>, MirrorError> {
@@ -217,8 +217,8 @@ fn atom_at_head(board: &Board, home: &Address, addr: &Address) -> Result<Option<
     if extent == 0 {
         return Ok(None);
     }
-    match position_in(&image(1, extent)?, addr) {
-        Some(pos) => retrieve(pos),
+    match v_ordinal_in(&image(1, extent)?, addr) {
+        Some(ordinal) => retrieve(ordinal),
         None => Ok(None),
     }
 }

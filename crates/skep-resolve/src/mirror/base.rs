@@ -95,7 +95,7 @@ impl Mirror {
         let t = Instant::now();
         mirror.load_cache()?;
         mirror.check_against_source(&held.rows, &held.head_pairs)?;
-        mirror.stats.resume_check = Some(t.elapsed());
+        mirror.stats.resume_check_time = Some(t.elapsed());
         let checked_rows = held.rows.len() as u64;
         mirror.rows = held.rows;
         mirror.fold_pending()?;
@@ -137,8 +137,8 @@ impl Mirror {
             root,
             board,
             dir: dir.to_path_buf(),
-            feed: Lines::held(dir.join(FEED_COPY)),
-            cache: Lines::held(dir.join(FETCH_CACHE)),
+            feed_copy: Lines::held(dir.join(FEED_COPY)),
+            fetch_cache: Lines::held(dir.join(FETCH_CACHE)),
             pending_feed: Vec::new(),
             pending_cache: Vec::new(),
             fetched: Fetched::default(),
@@ -149,7 +149,7 @@ impl Mirror {
             folded: 0,
             head: 0,
             realm_compared: false,
-            epochs: BTreeMap::new(),
+            credential_acts: BTreeMap::new(),
             asked: BTreeMap::new(),
             chains: Chains::default(),
             stats: Stats::default(),
@@ -161,8 +161,8 @@ impl Mirror {
     /// before is another base's, never this one's — then a new copy's
     /// header and `since=0` to the head, the realm compared at the claim.
     fn bootstrap(&mut self) -> Result<(), MirrorError> {
-        self.feed = Lines::begin(self.dir.join(FEED_COPY));
-        self.cache = Lines::begin(self.dir.join(FETCH_CACHE));
+        self.feed_copy = Lines::begin(self.dir.join(FEED_COPY));
+        self.fetch_cache = Lines::begin(self.dir.join(FETCH_CACHE));
         let header = self.header();
         self.append_feed(header)?;
         self.pull(0)?;
@@ -203,7 +203,7 @@ impl Mirror {
     /// page is held to its own rules ([`Board::changes`]), so the next one is
     /// asked past its `last`.
     fn pull(&mut self, mut since: u64) -> Result<(), MirrorError> {
-        self.chains.stale();
+        self.chains.forget_stale();
         let mut limit: Option<usize> = None;
         loop {
             let page = page_from(self.board_ref()?, since, &mut limit)?;
@@ -264,34 +264,34 @@ impl Mirror {
     /// REG-3.18's CHECK: the source read from genesis must answer every held
     /// row identically through the copy's head, and its chain, recomputed at
     /// each held head pair's position, must be that pair's chain.
-    fn check_against_source(&mut self, rows: &[Value], head_pairs: &[(u64, [u8; 32])]) -> Result<(), MirrorError> {
-        let held_head = rows.last().and_then(position).unwrap_or(0);
-        let mut fresh: Vec<Value> = Vec::new();
+    fn check_against_source(&mut self, held_rows: &[Value], head_pairs: &[(u64, [u8; 32])]) -> Result<(), MirrorError> {
+        let held_head = held_rows.last().and_then(position).unwrap_or(0);
+        let mut source_rows: Vec<Value> = Vec::new();
         let mut since = 0;
         let mut limit = None;
         loop {
             let page = page_from(self.board_ref()?, since, &mut limit)?;
             self.stats.pages += 1;
-            fresh.extend(page.rows);
+            source_rows.extend(page.rows);
             since = page.last;
             if !page.more || since >= held_head {
                 break;
             }
         }
-        for (i, held) in rows.iter().enumerate() {
+        for (i, held) in held_rows.iter().enumerate() {
             let at = position(held).unwrap_or(0);
-            match fresh.get(i) {
+            match source_rows.get(i) {
                 None => {
-                    let source_head = fresh.last().and_then(position).unwrap_or(0);
+                    let source_head = source_rows.last().and_then(position).unwrap_or(0);
                     return Err(MirrorError::Refused(Refusal::SourceBehind { source_head, held: at }));
                 }
-                Some(f) if f != held => return Err(MirrorError::Refused(Refusal::Diverged { at })),
+                Some(served) if served != held => return Err(MirrorError::Refused(Refusal::Diverged { at })),
                 Some(_) => {}
             }
         }
         for (at, chain) in head_pairs {
-            let (_, fresh_chain) = self.board_ref()?.chain_at(*at)?;
-            if fresh_chain != *chain {
+            let (_, source_chain) = self.board_ref()?.chain_at(*at)?;
+            if source_chain != *chain {
                 return Err(MirrorError::Refused(Refusal::ChainDiverged { at: *at }));
             }
         }

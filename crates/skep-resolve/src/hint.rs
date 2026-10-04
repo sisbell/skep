@@ -124,7 +124,7 @@ pub enum HintError {
     /// characters.
     BadRealm(String),
     /// A `fork:` term that is no address.
-    BadForkPoint(String),
+    BadFork(String),
     /// The `realm:` term given twice.
     DuplicateRealm,
     /// The `fork:` term given twice.
@@ -138,7 +138,7 @@ impl fmt::Display for HintError {
             HintError::BadOrigin(t) => write!(f, "'{t}' is no canonical origin"),
             HintError::NoRealm => f.write_str("the hint names no realm (realm:<64 hex>)"),
             HintError::BadRealm(t) => write!(f, "'{t}' is no genesis fingerprint (64 hex characters)"),
-            HintError::BadForkPoint(t) => write!(f, "'{t}' is no fork point (an address)"),
+            HintError::BadFork(t) => write!(f, "'{t}' is no fork point (an address)"),
             HintError::DuplicateRealm => f.write_str("the realm term is given twice"),
             HintError::DuplicateFork => f.write_str("the fork term is given twice"),
         }
@@ -190,8 +190,7 @@ impl RootHint {
                 if fork_point.is_some() {
                     return Err(HintError::DuplicateFork);
                 }
-                fork_point =
-                    Some(parse_address(addr).ok_or_else(|| HintError::BadForkPoint(term.into()))?);
+                fork_point = Some(parse_address(addr).ok_or_else(|| HintError::BadFork(term.into()))?);
             } else {
                 origins.push(Origin::parse(term).ok_or_else(|| HintError::BadOrigin(term.into()))?);
             }
@@ -267,7 +266,7 @@ mod tests {
         );
         assert_eq!(
             RootHint::parse(&format!("https://r.example realm:{} fork:1.0", fp(1).to_hex())),
-            Err(HintError::BadForkPoint("fork:1.0".into()))
+            Err(HintError::BadFork("fork:1.0".into()))
         );
         assert_eq!(
             RootHint::parse(&format!("https://r.example realm:{} realm:{}", fp(1).to_hex(), fp(2).to_hex())),

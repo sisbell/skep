@@ -13,7 +13,7 @@ use crate::{addr, loopback, names, open_fixture_mirror, public_ip, resolve_prefi
 /// beside it; `1.99` is UNREGISTERED, a visible state; `1.3`, bound with no
 /// deposit yet, is BOUND-BUT-UNREACHABLE and never UNREGISTERED.
 #[test]
-fn the_walks_three_answers() {
+fn the_walk_answers_bound_unregistered_or_bound_but_unreachable() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (_, mut mirror) = open_fixture_mirror(dir.path());
     match resolve_prefix(&mut mirror, "1.2") {
@@ -24,7 +24,7 @@ fn the_walks_three_answers() {
             assert_eq!(keys.as_ref().map(Vec::len), Some(1), "the node's one key");
             assert!(matches!(endpoint.verdict, Verdict::Signed(_)));
             assert_eq!(endpoint.record.origins, ["https://acme.example.net"]);
-            assert_eq!((dial.member, dial.origin.as_str(), dial.kind), (0, "https://acme.example.net", MemberKind::Https));
+            assert_eq!((dial.member_index, dial.origin.as_str(), dial.kind), (0, "https://acme.example.net", MemberKind::Https));
             assert_eq!(dial.addresses, [public_ip()]);
             assert_eq!(members.len(), 1);
         }
@@ -66,7 +66,7 @@ fn retired_with_history_names_the_org_that_existed() {
 /// HOP NOT MADE, never UNREGISTERED and never a blank; a depth address under
 /// no prefix with a standing is UNREGISTERED.
 #[test]
-fn the_hop_not_made_at_a_depth_address() {
+fn a_depth_address_resolves_to_its_parents_standing_and_the_hop_not_made() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (_, mut mirror) = open_fixture_mirror(dir.path());
     match resolve_prefix(&mut mirror, "1.2.3") {
@@ -91,7 +91,7 @@ fn the_hop_not_made_at_a_depth_address() {
 /// https member; a dead origin; and the org's own nullify leaving the earlier
 /// deposit current (REG-1.11).
 #[test]
-fn the_faces_of_the_resolvers_own_checks() {
+fn the_resolvers_own_checks_each_render_a_named_face() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (_, mut mirror) = open_fixture_mirror(dir.path());
     match resolve_prefix(&mut mirror, "1.8") {
@@ -125,7 +125,7 @@ fn the_faces_of_the_resolvers_own_checks() {
     }
     match resolve_prefix(&mut mirror, "1.11") {
         Resolution::Bound { dial, members, .. } => {
-            assert_eq!((dial.member, dial.origin.as_str()), (1, "https://eleven.example"));
+            assert_eq!((dial.member_index, dial.origin.as_str()), (1, "https://eleven.example"));
             assert!(matches!(members[0], MemberOutcome::NotDialed { kind: MemberKind::Onion, .. }));
             assert!(matches!(members[1], MemberOutcome::WouldDial { .. }));
         }
@@ -155,13 +155,13 @@ fn the_onion_transport_held_dials_the_onion_member() {
     let transports = Transports::default().with(MemberKind::Onion);
     match skep_resolve::resolve(&mut mirror, &addr("1.10"), &names(), &transports).expect("resolve") {
         Resolution::Bound { dial, .. } => {
-            assert_eq!((dial.member, dial.kind), (0, MemberKind::Onion));
+            assert_eq!((dial.member_index, dial.kind), (0, MemberKind::Onion));
             assert!(dial.addresses.is_empty(), "nothing to test at a self-authenticating member");
         }
         other => panic!("{other:?}"),
     }
     match skep_resolve::resolve(&mut mirror, &addr("1.11"), &names(), &transports).expect("resolve") {
-        Resolution::Bound { dial, .. } => assert_eq!(dial.member, 0, "the first member in the org's order dials"),
+        Resolution::Bound { dial, .. } => assert_eq!(dial.member_index, 0, "the first member in the org's order dials"),
         other => panic!("{other:?}"),
     }
 }

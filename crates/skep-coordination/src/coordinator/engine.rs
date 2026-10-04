@@ -351,9 +351,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// scope observes that choice, and a later settlement would change this
     /// verdict for such a scope.
     ///
-    /// Enabledness is [`Coordinator::first_enabled`]'s, as Q0's is, with the
-    /// scope test as its argument filter — so a scoped verdict cannot come
-    /// apart from an unscoped one on what "enabled" means.
+    /// Enabledness is the one statement Q0 answers from too — the private
+    /// `first_enabled`, behind [`Coordinator::quiescent`] and
+    /// [`Coordinator::next_enabled`] — with the scope test as its argument
+    /// filter, so a scoped verdict cannot come apart from an unscoped one on
+    /// what "enabled" means.
     pub fn quiescent_scoped(&self, scope: &TypedTerm, body: ScopeBody, snap: &Snapshot<W>) -> bool {
         // Each conjunct of Q7's "a ref-free one-Addr-parameter Bool
         // TypedTerm" on its own, so a caller who trips one learns WHICH —

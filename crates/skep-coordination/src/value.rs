@@ -41,7 +41,6 @@ pub enum Sort {
 /// `im::HashMap`, whose `Hash` folds its entries in iteration order — an
 /// order each map's own hasher fixes — while its `PartialEq` compares
 /// contents, so two equal values could hash apart.
-#[allow(clippy::large_enum_variant)] // the interface declares these shapes verbatim
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     Bool(bool),

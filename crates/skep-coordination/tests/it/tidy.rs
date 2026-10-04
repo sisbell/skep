@@ -30,9 +30,12 @@
 //! Beside the map, one check reads both trees as plain text, comments
 //! included: the guest axis keeps its own words (`guest.rs` states them), so
 //! the spellings that fused the guest class with PC3's term view or with a
-//! coverage class are refused wherever they would be written.
+//! coverage class are refused wherever they would be written. And one reads
+//! the def decoder against the tag table it decodes (`codec.rs`): every tag
+//! the table declares is matched once, by its path, and no arm opens on a
+//! bare name, which compiles as a catch-all once it stops resolving.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// The one root item a module may name through `crate::` — the world bound
@@ -205,6 +208,69 @@ fn the_guest_axis_keeps_its_own_words() {
     assert!(
         faults.is_empty(),
         "the guest axis borrows a word that is not its own (`guest.rs` states its words):\n{}",
+        faults.join("\n")
+    );
+}
+
+/// The def decoder against the tag table it reads (`src/codec.rs`): every tag
+/// the table declares is matched exactly once, by its path (`term::VAR`), and
+/// no arm opens on a bare name. A bare constant that stops resolving — a tag
+/// renamed in the table — compiles as a binding that matches every byte, and
+/// as its family's last arm it decodes each unknown tag as that former: a
+/// second spelling of one stored term, PR-ENC's injectivity gone, that no
+/// round trip notices. A tag no arm matches compiles too, and every stored def
+/// spelling its former is refused `ParseFailed`; the encoder, exhaustive over
+/// the AST, writes only tags the table declares, so an arm per declared tag is
+/// an arm per tag the encoder can write.
+#[test]
+fn the_def_decoder_reads_every_tag_by_its_path() {
+    let codec = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/codec.rs"))
+        .unwrap();
+    // The table: `family::NAME` for every `pub const NAME: u8` of `mod tag`.
+    let table = codec.find("\nmod tag {\n").expect("codec.rs declares `mod tag`");
+    let table_end = table + codec[table..].find("\n}\n").expect("`mod tag` closes");
+    let (mut declared, mut family) = (BTreeSet::new(), "");
+    for line in codec[table..table_end].lines().map(str::trim) {
+        if let Some(name) = line.strip_prefix("pub mod ").and_then(|l| l.strip_suffix(" {")) {
+            family = name;
+        } else if let Some(constant) = line.strip_prefix("pub const ") {
+            let name = constant.split(':').next().unwrap_or_default();
+            declared.insert(format!("{family}::{name}"));
+        }
+    }
+    assert!(declared.len() > 60, "this check read {} tags: the table has moved", declared.len());
+    // The decoder: every match arm from `impl Rd` to the codec's test module.
+    let decoder = codec.find("\nimpl Rd<'_> {\n").expect("codec.rs holds the decoder, `impl Rd`");
+    let decoder_end = codec[decoder..].find("#[cfg(test)]").map_or(codec.len(), |n| decoder + n);
+    let first_line = codec[..decoder].lines().count() + 1;
+    let is_name =
+        |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    let (mut matched, mut faults) = (BTreeMap::<String, usize>::new(), Vec::new());
+    for (i, line) in codec[decoder..decoder_end].lines().enumerate() {
+        let line = line.trim();
+        let Some((pattern, _)) = line.split_once(" =>").filter(|_| !line.starts_with("//")) else {
+            continue;
+        };
+        for alternative in pattern.split('|').map(str::trim).filter(|a| *a != "_") {
+            if is_name(alternative) {
+                let at = first_line + i;
+                faults.push(format!("src/codec.rs:{at}: `{alternative}` is a bare name"));
+            } else if alternative.split("::").all(is_name) {
+                let path = alternative.strip_prefix("tag::").unwrap_or(alternative);
+                *matched.entry(path.to_string()).or_default() += 1;
+            }
+        }
+    }
+    for tag in &declared {
+        match matched.get(tag) {
+            Some(1) => {}
+            Some(n) => faults.push(format!("`tag::{tag}` is matched {n} times")),
+            None => faults.push(format!("`tag::{tag}` has no decoder arm read by its path")),
+        }
+    }
+    assert!(
+        faults.is_empty(),
+        "the def decoder does not read the tag table by path (`codec.rs`'s `tag` states why):\n{}",
         faults.join("\n")
     );
 }

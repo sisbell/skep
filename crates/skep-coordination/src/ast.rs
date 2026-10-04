@@ -26,7 +26,7 @@ pub const EXPANSION_NAME_BASE: u32 = 1 << 31;
 ///
 /// The reservation is structural, not merely intended: the type has exactly
 /// two constructors, one per side of the watershed — [`VarId::new`], the
-/// sole public one, rejects the reserved range; [`VarId::expansion`], the
+/// sole public one, rejects the reserved range; `VarId::expansion`, the
 /// crate-private one, inhabits nothing else and is what the flat expansion's
 /// fresh-name supply mints through (§Internal 4). The def codec decodes a
 /// name through `new`, so a reserved-range name in stored content is a
@@ -129,7 +129,6 @@ impl TypeRef {
 }
 
 /// PL term formers (ASN-0129 PC0–PC2a, QD-refl; ASN-0130 `Ref`).
-#[allow(clippy::large_enum_variant)] // the interface declares these shapes verbatim
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Term {
     Var(VarId),

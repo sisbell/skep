@@ -82,9 +82,9 @@ use memo::DefMemo;
 pub type VstreamFactory<W> = for<'k> fn(&'k Kernel<W>) -> Vstream<'k, W>;
 
 /// The M7 `LinkWriter` factory the engine injects: a writer over the kernel
-/// AT A VISIBILITY CLASS (lane 3.3b). Called only by
-/// [`Coordinator::link_writer`], which hands it the coordinator's `guest`
-/// predicate, so the value-keyed gates of every fire and every def write run
+/// AT A VISIBILITY CLASS (lane 3.3b). Called at one site, the coordinator's
+/// `link_writer`, which hands it the `guest` predicate [`Coordinator::new`]
+/// was given, so the value-keyed gates of every fire and every def write run
 /// at guest class. A plain `fn` pointer, for [`VstreamFactory`]'s reason: it
 /// can hold no kernel and no visibility class of its own.
 pub type LinkWriterFactory<W> =

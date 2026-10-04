@@ -61,6 +61,14 @@ pub(crate) struct Unstorable;
 /// the encoder and the decoder alike. Each family numbers its own
 /// constructors from 1 in declaration order; a term tag and an atom tag may
 /// coincide, since a tag is only ever read where its family is expected.
+///
+/// The decoder matches every tag by a path (`term::VAR`), never by a bare
+/// name, so a tag that stops resolving — a constant renamed here, say — is a
+/// compile error. A bare constant that stops resolving compiles instead, as a
+/// binding that matches every byte: as its family's last arm it would decode
+/// each unknown tag as that former, a second spelling of one stored term
+/// (PR-ENC's injectivity gone) that no round trip notices.
+/// `tests/it/tidy.rs` holds the decoder to it.
 mod tag {
     pub mod sort {
         pub const BOOL: u8 = 1;
@@ -676,16 +684,16 @@ impl Rd<'_> {
     }
 
     fn sort(&mut self) -> Result<Sort, Malformed> {
-        use tag::sort::*;
+        use tag::sort;
         Ok(match self.u8()? {
-            BOOL => Sort::Bool,
-            ADDR => Sort::Addr,
-            ADDR_SET => Sort::AddrSet,
-            OPT_ADDR => Sort::OptAddr,
-            ADDR_SEQ => Sort::AddrSeq,
-            MAP => Sort::Map,
-            NAT => Sort::Nat,
-            OPT_NAT => Sort::OptNat,
+            sort::BOOL => Sort::Bool,
+            sort::ADDR => Sort::Addr,
+            sort::ADDR_SET => Sort::AddrSet,
+            sort::OPT_ADDR => Sort::OptAddr,
+            sort::ADDR_SEQ => Sort::AddrSeq,
+            sort::MAP => Sort::Map,
+            sort::NAT => Sort::Nat,
+            sort::OPT_NAT => Sort::OptNat,
             // No Tup tag: the Codom-only invariant holds at parse time.
             _ => return Err(Malformed),
         })
@@ -739,51 +747,69 @@ impl Rd<'_> {
     }
 
     fn typeref(&mut self) -> Result<TypeRef, Malformed> {
-        use tag::typeref::*;
+        use tag::typeref;
         Ok(match self.u8()? {
-            CONCRETE => TypeRef::Concrete(TypeKey(self.endset()?)),
-            CLASS_VAR => TypeRef::ClassVar(self.varid()?),
+            typeref::CONCRETE => TypeRef::Concrete(TypeKey(self.endset()?)),
+            typeref::CLASS_VAR => TypeRef::ClassVar(self.varid()?),
             _ => return Err(Malformed),
         })
     }
 
     fn term(&mut self, depth: u32) -> Result<Term, Malformed> {
-        use tag::term::*;
+        use tag::{lit, term};
         self.enter(depth)?;
         let child_depth = depth + 1;
         Ok(match self.u8()? {
-            VAR => Term::Var(self.varid()?),
-            LIT => Term::Lit(match self.u8()? {
-                tag::lit::TRUE => Lit::True,
-                tag::lit::FALSE => Lit::False,
-                tag::lit::NAT => Lit::Nat(self.nat()?),
-                tag::lit::ADDR => Lit::Addr(self.addr()?),
-                tag::lit::BOT_ADDR => Lit::BotAddr,
-                tag::lit::BOT_NAT => Lit::BotNat,
+            term::VAR => Term::Var(self.varid()?),
+            term::LIT => Term::Lit(match self.u8()? {
+                lit::TRUE => Lit::True,
+                lit::FALSE => Lit::False,
+                lit::NAT => Lit::Nat(self.nat()?),
+                lit::ADDR => Lit::Addr(self.addr()?),
+                lit::BOT_ADDR => Lit::BotAddr,
+                lit::BOT_NAT => Lit::BotNat,
                 _ => return Err(Malformed),
             }),
-            ATOM => Term::Atom(self.atom(child_depth)?),
-            PRIM => Term::Prim(self.prim(child_depth)?),
-            AND => Term::And(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
-            OR => Term::Or(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
-            NOT => Term::Not(self.arc_term(child_depth)?),
-            IMPLIES => Term::Implies(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
-            IFF => Term::Iff(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
-            FORALL => Term::Forall { var: self.varid()?, dom: self.arc_dom(child_depth)?, body: self.arc_term(child_depth)? },
-            EXISTS => Term::Exists { var: self.varid()?, dom: self.arc_dom(child_depth)?, body: self.arc_term(child_depth)? },
-            LET => Term::Let { var: self.varid()?, bound: self.arc_term(child_depth)?, body: self.arc_term(child_depth)? },
-            IF_SOME => Term::IfSome {
+            term::ATOM => Term::Atom(self.atom(child_depth)?),
+            term::PRIM => Term::Prim(self.prim(child_depth)?),
+            term::AND => Term::And(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
+            term::OR => Term::Or(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
+            term::NOT => Term::Not(self.arc_term(child_depth)?),
+            term::IMPLIES => {
+                Term::Implies(self.arc_term(child_depth)?, self.arc_term(child_depth)?)
+            }
+            term::IFF => Term::Iff(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
+            term::FORALL => Term::Forall {
+                var: self.varid()?,
+                dom: self.arc_dom(child_depth)?,
+                body: self.arc_term(child_depth)?,
+            },
+            term::EXISTS => Term::Exists {
+                var: self.varid()?,
+                dom: self.arc_dom(child_depth)?,
+                body: self.arc_term(child_depth)?,
+            },
+            term::LET => Term::Let {
+                var: self.varid()?,
+                bound: self.arc_term(child_depth)?,
+                body: self.arc_term(child_depth)?,
+            },
+            term::IF_SOME => Term::IfSome {
                 opt: self.arc_term(child_depth)?,
                 var: self.varid()?,
                 then_: self.arc_term(child_depth)?,
                 else_: self.arc_term(child_depth)?,
             },
-            COUNT => Term::Count(self.arc_dom(child_depth)?),
-            MAX_T1 => Term::MaxT1(self.arc_dom(child_depth)?),
-            MIN_T1 => Term::MinT1(self.arc_dom(child_depth)?),
-            BIG_UNION => Term::BigUnion { dom: self.arc_dom(child_depth)?, var: self.varid()?, body: self.arc_term(child_depth)? },
-            REFLECT => Term::Reflect(self.arc_dom(child_depth)?),
-            REF => {
+            term::COUNT => Term::Count(self.arc_dom(child_depth)?),
+            term::MAX_T1 => Term::MaxT1(self.arc_dom(child_depth)?),
+            term::MIN_T1 => Term::MinT1(self.arc_dom(child_depth)?),
+            term::BIG_UNION => Term::BigUnion {
+                dom: self.arc_dom(child_depth)?,
+                var: self.varid()?,
+                body: self.arc_term(child_depth)?,
+            },
+            term::REFLECT => Term::Reflect(self.arc_dom(child_depth)?),
+            term::REF => {
                 let addr = self.addr()?;
                 let n = self.len_prefix()?;
                 if n > self.b.len() {
@@ -809,62 +835,70 @@ impl Rd<'_> {
     }
 
     fn atom(&mut self, child_depth: u32) -> Result<Atom, Malformed> {
-        use tag::atom::*;
+        use tag::atom;
         Ok(match self.u8()? {
-            IS_K => Atom::IsK(self.typeref()?, self.arc_term(child_depth)?),
-            MEMBERS => Atom::Members(self.typeref()?),
-            TARGETS_OF => Atom::TargetsOf(self.typeref()?, self.arc_term(child_depth)?),
-            IS_FILTERED => Atom::IsFiltered(self.typeref()?, self.arc_term(child_depth)?),
-            SUCCS => Atom::Succs(self.typeref()?, self.arc_term(child_depth)?),
-            CHAIN => Atom::Chain(self.typeref()?, self.arc_term(child_depth)?),
-            TIP => Atom::Tip(self.typeref()?, self.arc_term(child_depth)?),
-            IS_IN_CHAIN => Atom::IsInChain(self.typeref()?, self.arc_term(child_depth)?, self.arc_term(child_depth)?),
-            SOURCES_TO => Atom::SourcesTo(self.typeref()?, self.arc_term(child_depth)?),
-            TARGET_OF => Atom::TargetOf(self.typeref()?, self.arc_term(child_depth)?),
-            TARGETS_KEYED => Atom::TargetsKeyed(self.arc_term(child_depth)?),
-            AGE => Atom::Age(self.typeref()?, self.arc_term(child_depth)?),
-            STALE => Atom::Stale(self.typeref()?, self.arc_term(child_depth)?),
-            IS_DOC => Atom::IsDoc(self.arc_term(child_depth)?),
-            TUP_ADDR => Atom::TupAddr(self.varid()?),
-            TUP_ADDRS_F => Atom::TupAddrsF(self.varid()?),
-            TUP_ADDRS_G => Atom::TupAddrsG(self.varid()?),
-            IN_COVERAGE_F => Atom::InCoverageF(self.arc_term(child_depth)?, self.varid()?),
-            IN_COVERAGE_G => Atom::InCoverageG(self.arc_term(child_depth)?, self.varid()?),
+            atom::IS_K => Atom::IsK(self.typeref()?, self.arc_term(child_depth)?),
+            atom::MEMBERS => Atom::Members(self.typeref()?),
+            atom::TARGETS_OF => Atom::TargetsOf(self.typeref()?, self.arc_term(child_depth)?),
+            atom::IS_FILTERED => Atom::IsFiltered(self.typeref()?, self.arc_term(child_depth)?),
+            atom::SUCCS => Atom::Succs(self.typeref()?, self.arc_term(child_depth)?),
+            atom::CHAIN => Atom::Chain(self.typeref()?, self.arc_term(child_depth)?),
+            atom::TIP => Atom::Tip(self.typeref()?, self.arc_term(child_depth)?),
+            atom::IS_IN_CHAIN => Atom::IsInChain(
+                self.typeref()?,
+                self.arc_term(child_depth)?,
+                self.arc_term(child_depth)?,
+            ),
+            atom::SOURCES_TO => Atom::SourcesTo(self.typeref()?, self.arc_term(child_depth)?),
+            atom::TARGET_OF => Atom::TargetOf(self.typeref()?, self.arc_term(child_depth)?),
+            atom::TARGETS_KEYED => Atom::TargetsKeyed(self.arc_term(child_depth)?),
+            atom::AGE => Atom::Age(self.typeref()?, self.arc_term(child_depth)?),
+            atom::STALE => Atom::Stale(self.typeref()?, self.arc_term(child_depth)?),
+            atom::IS_DOC => Atom::IsDoc(self.arc_term(child_depth)?),
+            atom::TUP_ADDR => Atom::TupAddr(self.varid()?),
+            atom::TUP_ADDRS_F => Atom::TupAddrsF(self.varid()?),
+            atom::TUP_ADDRS_G => Atom::TupAddrsG(self.varid()?),
+            atom::IN_COVERAGE_F => Atom::InCoverageF(self.arc_term(child_depth)?, self.varid()?),
+            atom::IN_COVERAGE_G => Atom::InCoverageG(self.arc_term(child_depth)?, self.varid()?),
             _ => return Err(Malformed),
         })
     }
 
     fn dom(&mut self, depth: u32) -> Result<Dom, Malformed> {
-        use tag::dom::*;
+        use tag::dom;
         self.enter(depth)?;
         let child_depth = depth + 1;
         Ok(match self.u8()? {
-            MEMBERS_DOM => Dom::MembersDom(self.typeref()?),
-            ACTIVE_SLICE => Dom::ActiveSlice(self.typeref()?),
-            AUDIT_SLICE => Dom::AuditSlice(self.typeref()?),
-            LINK_DOM => Dom::LinkDom,
-            REG => Dom::Reg,
-            FILTER => Dom::Filter { dom: self.arc_dom(child_depth)?, var: self.varid()?, pred: self.arc_term(child_depth)? },
-            SET_TERM => Dom::SetTerm(self.arc_term(child_depth)?),
+            dom::MEMBERS_DOM => Dom::MembersDom(self.typeref()?),
+            dom::ACTIVE_SLICE => Dom::ActiveSlice(self.typeref()?),
+            dom::AUDIT_SLICE => Dom::AuditSlice(self.typeref()?),
+            dom::LINK_DOM => Dom::LinkDom,
+            dom::REG => Dom::Reg,
+            dom::FILTER => Dom::Filter {
+                dom: self.arc_dom(child_depth)?,
+                var: self.varid()?,
+                pred: self.arc_term(child_depth)?,
+            },
+            dom::SET_TERM => Dom::SetTerm(self.arc_term(child_depth)?),
             _ => return Err(Malformed),
         })
     }
 
     fn prim(&mut self, child_depth: u32) -> Result<Prim, Malformed> {
-        use tag::prim::*;
+        use tag::prim;
         Ok(match self.u8()? {
-            ADDR_EQ => Prim::AddrEq(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
-            PREFIX => Prim::Prefix(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
-            T1_LT => Prim::T1Lt(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
-            SET_MEM => Prim::SetMem(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
-            SET_EQ => Prim::SetEq(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
-            IS_EMPTY => Prim::IsEmpty(self.arc_term(child_depth)?),
-            ELEMS => Prim::Elems(self.arc_term(child_depth)?),
-            NAT_EQ => Prim::NatEq(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
-            NAT_LE => Prim::NatLe(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
-            NAT_ADD => Prim::NatAdd(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
-            MAP_GET => Prim::MapGet(self.arc_term(child_depth)?, self.typeref()?),
-            DEF => Prim::Def(self.arc_term(child_depth)?),
+            prim::ADDR_EQ => Prim::AddrEq(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
+            prim::PREFIX => Prim::Prefix(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
+            prim::T1_LT => Prim::T1Lt(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
+            prim::SET_MEM => Prim::SetMem(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
+            prim::SET_EQ => Prim::SetEq(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
+            prim::IS_EMPTY => Prim::IsEmpty(self.arc_term(child_depth)?),
+            prim::ELEMS => Prim::Elems(self.arc_term(child_depth)?),
+            prim::NAT_EQ => Prim::NatEq(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
+            prim::NAT_LE => Prim::NatLe(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
+            prim::NAT_ADD => Prim::NatAdd(self.arc_term(child_depth)?, self.arc_term(child_depth)?),
+            prim::MAP_GET => Prim::MapGet(self.arc_term(child_depth)?, self.typeref()?),
+            prim::DEF => Prim::Def(self.arc_term(child_depth)?),
             _ => return Err(Malformed),
         })
     }

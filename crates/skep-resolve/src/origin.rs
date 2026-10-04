@@ -273,10 +273,10 @@ pub enum MemberOutcome {
     Dead { origin: Origin },
 }
 
-/// The member this resolver WOULD dial: its index in the org's order, the
-/// origin, and the addresses that passed the host term.
+/// The endpoint member this resolver WOULD dial: its index in the org's
+/// order, the origin, and the addresses that passed the host term.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Dial {
+pub struct EndpointDial {
     pub member: usize,
     pub origin: Origin,
     pub kind: MemberKind,
@@ -288,7 +288,7 @@ pub struct Dial {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EndpointWalk {
     pub outcomes: Vec<MemberOutcome>,
-    pub dial: Option<Dial>,
+    pub dial: Option<EndpointDial>,
 }
 
 /// Judge ONE member (REG-3.34, REG-3.35): the scheme term, the kind, the
@@ -345,7 +345,7 @@ pub fn walk_members(origins: &[String], names: &dyn NameResolver, transports: &T
     let outcomes: Vec<MemberOutcome> =
         origins.iter().map(|m| judge_member(m, names, transports)).collect();
     let dial = outcomes.iter().enumerate().find_map(|(i, o)| match o {
-        MemberOutcome::WouldDial { origin, kind, addresses } => Some(Dial {
+        MemberOutcome::WouldDial { origin, kind, addresses } => Some(EndpointDial {
             member: i,
             origin: origin.clone(),
             kind: *kind,

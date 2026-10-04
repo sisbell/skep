@@ -78,8 +78,8 @@ fn a_hint_naming_another_realm_is_refused_at_the_base() {
         refused,
         Some(MirrorError::Refused(Refusal::RealmMismatch { expected: other, found: fixture.hint.realm }))
     );
-    assert!(!dir.path().join(skep_resolve::mirror::FEED_COPY).exists());
-    assert!(!dir.path().join(skep_resolve::mirror::FETCH_CACHE).exists());
+    assert!(!dir.path().join(skep_resolve::FEED_COPY).exists());
+    assert!(!dir.path().join(skep_resolve::FETCH_CACHE).exists());
 }
 
 /// THE REPLAY MATRIX at the resolver (REG-2.9, REG-2.10, REG-2.24; REG-1.10,

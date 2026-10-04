@@ -39,7 +39,7 @@
 use std::collections::BTreeMap;
 
 use skep_address::{is_prefix, Address};
-use skep_registry::{BodyKind, Refusal};
+use skep_registry::BodyKind;
 
 use crate::state::{BindingRecord, EndpointRecord, Judged, Standing};
 
@@ -48,7 +48,7 @@ use crate::state::{BindingRecord, EndpointRecord, Judged, Standing};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cause {
     /// The bytes are no record of the slot's kind under the canonical rule.
-    Malformed(Refusal),
+    Malformed(skep_registry::Refusal),
     /// The verdict is UNSIGNED: no `sig`, a `sig` of no row's width, or a
     /// signer outside the home's set as of the position.
     Unsigned,
@@ -97,6 +97,40 @@ pub struct Counts {
 
 /// The position-annotated prefix → binding index, with the endpoint
 /// deposits per doc 1 beside it.
+///
+/// Its write side — the two folds, `nullify`, `suppress` — is this crate's
+/// alone (rm-2): a dependent can fold nothing into an index, so every entry
+/// of one it holds was folded by a mirror, after the verify. The twin builds
+/// and reads everything the refusal below it does; the refusal's one
+/// difference is the fold. (The `E0624` code is checked on nightly only,
+/// which is why the twin rather than the annotation carries the weight.)
+///
+/// ```
+/// use skep_resolve::{parse_address, BindingRecord, Index, Judged, Verdict};
+/// let a = |s: &str| parse_address(s).unwrap();
+/// let index = Index::default();
+/// let unsigned = Judged {
+///     position: 1,
+///     link: a("1.0.1.0.1.0.2.1"),
+///     home: a("1.0.1.0.1"),
+///     record: BindingRecord { prefix: a("1.5"), account: Some(a("1.0.2")), replaces: None, honored: false },
+///     verdict: Verdict::Unsigned,
+/// };
+/// assert!(index.standing(&unsigned.record.prefix).is_none());
+/// ```
+/// ```compile_fail,E0624
+/// use skep_resolve::{parse_address, BindingRecord, Index, Judged, Verdict};
+/// let a = |s: &str| parse_address(s).unwrap();
+/// let mut index = Index::default();
+/// let unsigned = Judged {
+///     position: 1,
+///     link: a("1.0.1.0.1.0.2.1"),
+///     home: a("1.0.1.0.1"),
+///     record: BindingRecord { prefix: a("1.5"), account: Some(a("1.0.2")), replaces: None, honored: false },
+///     verdict: Verdict::Unsigned,
+/// };
+/// index.fold_binding(unsigned);
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct Index {
     prefixes: BTreeMap<Address, PrefixEntries>,
@@ -107,7 +141,7 @@ pub struct Index {
 }
 
 impl Index {
-    pub fn new() -> Index {
+    pub(crate) fn new() -> Index {
         Index::default()
     }
 
@@ -115,7 +149,7 @@ impl Index {
     /// REG-2.24): the entry joins the prefix's history, honored or inert by
     /// the rule the module doc states; answers whether it was honored. Rows
     /// arrive in journal order — the fold's one precondition.
-    pub fn fold_binding(&mut self, mut judged: Judged<BindingRecord>) -> bool {
+    pub(crate) fn fold_binding(&mut self, mut judged: Judged<BindingRecord>) -> bool {
         let prefix = judged.record.prefix.clone();
         let entries = self.prefixes.entry(prefix.clone()).or_default();
         let honored = match entries.honored.last() {
@@ -142,7 +176,7 @@ impl Index {
     /// Fold one VERIFIED endpoint deposit at its position (REG-1.10): honored
     /// where `replaces` names the latest deposit that STOOD in its doc 1, or
     /// none where none has; answers whether it was honored.
-    pub fn fold_endpoint(&mut self, mut judged: Judged<EndpointRecord>) -> bool {
+    pub(crate) fn fold_endpoint(&mut self, mut judged: Judged<EndpointRecord>) -> bool {
         let deposits = self.endpoints.entry(judged.home.clone()).or_default();
         let last_stood = deposits.iter().rev().find(|d| d.record.honored).map(|d| &d.link);
         let honored = match last_stood {
@@ -159,7 +193,7 @@ impl Index {
     /// active view — answers `true`; a binding's link is read on the AUDIT
     /// view, so the retraction clears nothing (REG-2.14) and this answers
     /// `false`, as it does for a link the index does not hold.
-    pub fn nullify(&mut self, link: &Address) -> bool {
+    pub(crate) fn nullify(&mut self, link: &Address) -> bool {
         match self.places.get(link) {
             Some(Place::Endpoint(home)) => {
                 let home = home.clone();
@@ -224,7 +258,7 @@ impl Index {
     }
 
     /// Keep a record out of the index, by cause.
-    pub fn suppress(&mut self, suppressed: Suppressed) {
+    pub(crate) fn suppress(&mut self, suppressed: Suppressed) {
         self.suppressed.push(suppressed);
     }
 

@@ -13,9 +13,10 @@
 //!   (REG-3.40), ONE overridable config value, parsed from one line and from
 //!   a struct; every resolution the mirror performs is scoped to its realm
 //!   by construction (REG-3.42).
-//! * `http` — the written-out HTTP/1.1 client (`Transport`, `Http`) and the
-//!   typed reads over it (`Board`: the feed's pages, `/op`, `/op-at`,
-//!   `/chain`), with the count of every read made.
+//! * `http` — the written-out HTTP/1.1 client (`Transport`, `Http`): plain
+//!   `http` alone, an `https` root a transport this build does not hold.
+//! * `board` — the typed reads over any transport (`Board`: the feed's
+//!   pages, `/op`, `/op-at`, `/chain`), with the count of every read made.
 //! * `mirror` — THE MIRROR (REG-3.10 to REG-3.13, REG-3.17 to REG-3.19): a
 //!   `/changes` consumer from the floor that fetches every row's bytes it
 //!   needs and keeps an append-only journal copy from genesis; the base from
@@ -42,25 +43,33 @@
 //!
 //! Every read the resolver makes is the board's own journal or its own copy
 //! of it (R5 (a)); no resolution hop reads a third party.
+//!
+//! The modules are private: the root is the crate's whole surface — the
+//! names re-exported below and [`parse_address`] — each name at one path, so
+//! a file moved inside the crate moves nothing a dependent names.
 
 #![forbid(unsafe_code)]
 
-pub mod hint;
-pub mod http;
-pub mod index;
-pub mod mirror;
-pub mod origin;
-pub mod state;
-pub mod verify;
-pub mod walk;
+mod board;
+mod hint;
+mod http;
+mod index;
+mod mirror;
+mod origin;
+mod state;
+mod verify;
+mod walk;
 
+pub use board::{Board, BoardError, Page, Reads};
 pub use hint::{realm_id, HintError, RootHint};
-pub use http::{dial_http, Board, BoardError, Dial, Http, Page, Reads, Transport, TransportError};
-pub use index::{Cause, Index, Suppressed};
-pub use mirror::{Mirror, MirrorError, Opened, Refusal, Stats, WalkStats};
+pub use http::{dial_http, Dial, Http, Transport, TransportError};
+pub use index::{Cause, Counts, Index, Suppressed};
+pub use mirror::{
+    account_of_document, Mirror, MirrorError, Opened, Refusal, Stats, WalkStats, FEED_COPY, FETCH_CACHE,
+};
 pub use origin::{
-    judge_member, routable, walk_members, Dial as EndpointDial, EndpointWalk, MemberKind,
-    MemberOutcome, NameResolver, Origin, SystemResolver, Term, Transports,
+    judge_member, routable, walk_members, EndpointDial, EndpointWalk, MemberKind, MemberOutcome,
+    NameResolver, Origin, SystemResolver, Term, Transports,
 };
 pub use state::{
     BindingRecord, EndpointRecord, Judged, Resolution, Standing, Successor, Unreachable, Verdict,

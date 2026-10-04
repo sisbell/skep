@@ -579,7 +579,7 @@ fn a_couriers_image_that_omits_reorders_or_replays_rows_is_refused() {
     let mirror = cold_mirror(port, own.path());
     let rows = mirror.stats().rows;
     drop(mirror);
-    let feed = fs::read_to_string(own.path().join(skep_resolve::mirror::FEED_COPY)).expect("the feed copy");
+    let feed = fs::read_to_string(own.path().join(skep_resolve::FEED_COPY)).expect("the feed copy");
     let lines: Vec<&str> = feed.lines().collect();
     let row_lines: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| l.starts_with("{\"row\":")).map(|(i, _)| i).collect();
     assert_eq!(row_lines.len() as u64, rows);
@@ -588,8 +588,8 @@ fn a_couriers_image_that_omits_reorders_or_replays_rows_is_refused() {
         let courier = tempfile::Builder::new().prefix("courier").tempdir_in(dir.path()).expect("tempdir").keep();
         let mut owned: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
         mutate(&mut owned);
-        fs::write(courier.join(skep_resolve::mirror::FEED_COPY), owned.join("\n") + "\n").expect("write");
-        fs::copy(own.path().join(skep_resolve::mirror::FETCH_CACHE), courier.join(skep_resolve::mirror::FETCH_CACHE)).expect("copy");
+        fs::write(courier.join(skep_resolve::FEED_COPY), owned.join("\n") + "\n").expect("write");
+        fs::copy(own.path().join(skep_resolve::FETCH_CACHE), courier.join(skep_resolve::FETCH_CACHE)).expect("copy");
         courier
     };
     let at_of = |line: &str| -> u64 { serde_json::from_str::<Value>(line).unwrap()["row"]["at"].as_u64().unwrap() };
@@ -691,7 +691,7 @@ fn a_root_move_under_the_same_lineage_resumes_and_its_refusals_are_named() {
     let refused = Mirror::open(&hint_for(sd_c.port()), fresh.path(), &skep_resolve::dial_http).err();
     let found = realm_id(&[Fingerprint::of(&public_key_of(&other_anchor)), Fingerprint::of(&public_key_of(&other_device))]);
     assert_eq!(refused, Some(MirrorError::Refused(Refusal::RealmMismatch { expected: suite_realm(), found })));
-    assert!(!fresh.path().join(skep_resolve::mirror::FEED_COPY).exists(), "a refused base writes no copy");
+    assert!(!fresh.path().join(skep_resolve::FEED_COPY).exists(), "a refused base writes no copy");
     sd_c.shutdown();
 }
 
@@ -874,7 +874,7 @@ impl RecordSigner {
 
     fn sign(&self, signer: &skep_signature::HybridSigner, home: &str, ty: &str, to: &[&str], sigless: &str) -> String {
         let home = addr(home);
-        let account = skep_resolve::mirror::account_of_document(&home).expect("a doc 1's account");
+        let account = skep_resolve::account_of_document(&home).expect("a doc 1's account");
         let ty = addr(ty);
         let to: Vec<Address> = to.iter().map(|a| addr(a)).collect();
         let body = skep_identity::entry_body_record(skep_identity::RecordRows {

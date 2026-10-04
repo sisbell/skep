@@ -68,10 +68,12 @@ parts, each under the design rule it realizes:
   BOUND-BUT-DISCLAIMED and the live-enforcement face, named for the caller
   to fill after the dial it alone makes. No copy, no rendering.
 
-The HTTP client (`Http`, `Transport`, `Board`) is a written-out HTTP/1.1
-client over `std::net`, as the MCP adapter's is; it speaks plain `http`
-alone, so an `https` root is a transport this build does not hold, refused
-by name. Every read is counted by kind (`Reads`) and reported (`Stats`).
+The HTTP client (`Http`, `Transport`) is a written-out HTTP/1.1 client
+over `std::net`, as the MCP adapter's is; it speaks plain `http` alone, so
+an `https` root is a transport this build does not hold, refused by name.
+The board's typed reads (`Board`) run over any `Transport` — that client,
+or a suite's replay of a recording — and count every read by kind
+(`Reads`), reported in `Stats`.
 
 ## 2. The crate's suite and its fixture
 

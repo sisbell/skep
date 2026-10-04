@@ -24,7 +24,7 @@
 use skep_address::Address;
 use skep_identity::{Enrolled, Fingerprint};
 
-use crate::origin::{Dial, MemberKind, MemberOutcome, Term};
+use crate::origin::{EndpointDial, MemberKind, MemberOutcome, Term};
 
 /// THE VERDICT — the signed-ops record §3.5's five values of "whose act was
 /// this", spelled as that record enumerates them. A registry record's
@@ -206,7 +206,7 @@ pub enum Resolution {
         standing: Standing,
         keys: Vec<Enrolled>,
         endpoint: Judged<EndpointRecord>,
-        dial: Dial,
+        dial: EndpointDial,
         members: Vec<MemberOutcome>,
     },
     /// The board a prefix's current deposit names asserts a DIFFERENT prefix

@@ -21,7 +21,8 @@ skep-identity = { path = "../skep-identity" }
 skep-registry = { path = "../skep-registry" }
 # THE VERIFY, client-side (rm-2; the seam investigation's Q7): both halves
 # of a record's hybrid `sig` over the record frame. No feature — this crate
-# signs nothing.
+# signs nothing, which `scripts/gate-full.sh` checks by building the library
+# alone: every test build turns `sign` on.
 skep-signature = { path = "../skep-signature" }
 # JSON is the one library: the wire's frames and answers, and the journal
 # copy's lines.

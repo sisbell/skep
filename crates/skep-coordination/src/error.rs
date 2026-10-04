@@ -27,7 +27,9 @@ use crate::value::Sort;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TypeError {
-    /// A free `Var` outside the supplied Γ_D (the missing-context case).
+    /// A variable — a `Var`, or a V-TUP atom's tuple variable — read where
+    /// neither Γ_D nor an enclosing binder binds it (an `IfSome`'s guard name
+    /// in its else-branch included).
     UnboundVariable(VarId),
     /// A `TypeRef::ClassVar` under no enclosing `Reg` binder (V-IDX).
     UnboundClassVar(VarId),
@@ -39,6 +41,11 @@ pub enum TypeError {
     /// name's later binding would shadow its earlier one, leaving the argument
     /// passed at the earlier position unreadable. Carries the repeated name.
     DuplicateParameter(VarId),
+    /// A term at a sort its position does not take — a child under its
+    /// former, or a trigger's body, whose codomain is `Bool`. `expected` is
+    /// the sort the position requires — `OptAddr` where it takes either
+    /// optional (an `IfSome` guard, `def`), the then-branch's sort where an
+    /// `IfSome`'s two branches must agree — and `found` the term's.
     SortMismatch { expected: Sort, found: Sort },
     /// A `Ref` passing `found` arguments to a referent whose Γ_D binds
     /// `expected` (WT-ref: one argument per formal). Speaks where
@@ -74,7 +81,10 @@ pub enum TypeError {
     /// reference types — ASN-0130's *dangling live* reference (OQ3), which
     /// only a NEW registration refuses (`RegisterError::ReferentNotActive`).
     UndefinedReference(Address),
-    /// A `Reg`-quantified body has an ill-typed concrete instance (V-IDX).
+    /// A `Reg`-quantified body has an ill-typed concrete instance (V-IDX) —
+    /// the first in catalog order, carrying that instance's refusal; never a
+    /// resource refusal: `TooDeep` and `TooLarge` are the whole term's and
+    /// surface bare.
     RegInstanceIllTyped(Box<TypeError>),
     /// The term nests past `MAX_DEPTH`, counted through references: its
     /// evaluable projection (`Reg`-expansion joins included), or the reach of
@@ -191,7 +201,15 @@ pub enum DefineError {
     /// `MAX_DEPTH` at the cap.
     Unstorable,
     Insert(TxnError<InsertError>),
-    Register(RegisterError),
+    /// The run is stored at `start` — the insert committed — and
+    /// `register_pred` refused it (`cause`): the content stays, orphan, with
+    /// no `pdef`, and a later `register_pred(home, start)` adopts it once the
+    /// cause is gone. `start` travels here because this refusal is the
+    /// caller's only route to it.
+    Register {
+        start: Address,
+        cause: RegisterError,
+    },
 }
 
 impl fmt::Display for DefineError {
@@ -202,7 +220,9 @@ impl fmt::Display for DefineError {
                  (MAX_DEPTH, or the node budget as the decoder meters it); nothing committed",
             ),
             DefineError::Insert(e) => write!(f, "define_predicate: content insert failed: {e}"),
-            DefineError::Register(e) => write!(f, "define_predicate: {e}"),
+            DefineError::Register { start, cause } => {
+                write!(f, "define_predicate: the run stored at {start} is not registered: {cause}")
+            }
         }
     }
 }
@@ -212,7 +232,7 @@ impl Error for DefineError {
         match self {
             DefineError::Unstorable => None,
             DefineError::Insert(e) => Some(e),
-            DefineError::Register(e) => Some(e),
+            DefineError::Register { cause, .. } => Some(cause),
         }
     }
 }
@@ -228,11 +248,17 @@ pub enum SupersedeError {
     OldStartNotEverRegistered(Address),
     Define(DefineError),
     /// The lineage claim — the `supersedes` emit, the third of three
-    /// non-atomic transactions, the first two committed. As built it is
+    /// non-atomic transactions — refused (`cause`) after the first two
+    /// committed: the successor is stored and registered at `successor`,
+    /// carried because this refusal is the caller's only route to it — to
+    /// evaluate, reference or retract it. As built `cause` is
     /// `Rejected(SupersessionClass)` on every call that reaches it: M7 fences
     /// the class to `assert_sup`/`editlink` (`Coordinator::supersede` states
     /// what that costs a retry).
-    Lineage(TxnError<EmitError>),
+    Lineage {
+        successor: Address,
+        cause: TxnError<EmitError>,
+    },
 }
 
 impl fmt::Display for SupersedeError {
@@ -242,9 +268,11 @@ impl fmt::Display for SupersedeError {
                 write!(f, "supersede: old start {a} is not an ever-registered def")
             }
             SupersedeError::Define(e) => write!(f, "supersede: {e}"),
-            SupersedeError::Lineage(e) => {
-                write!(f, "supersede: the supersedes emit failed: {e}")
-            }
+            SupersedeError::Lineage { successor, cause } => write!(
+                f,
+                "supersede: successor {successor} is defined, but the supersedes emit failed: \
+                 {cause}"
+            ),
         }
     }
 }
@@ -253,7 +281,7 @@ impl Error for SupersedeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             SupersedeError::Define(e) => Some(e),
-            SupersedeError::Lineage(e) => Some(e),
+            SupersedeError::Lineage { cause, .. } => Some(cause),
             SupersedeError::OldStartNotEverRegistered(_) => None,
         }
     }
@@ -435,7 +463,9 @@ pub enum RetractError {
 impl fmt::Display for RetractError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RetractError::NotActive => f.write_str("retract_pred: no active pdef tuple at start"),
+            RetractError::NotActive => {
+                f.write_str("retract_pred: no active pdef tuple names start")
+            }
             RetractError::Nullify(e) => write!(f, "retract_pred: the nullify failed: {e}"),
         }
     }
@@ -551,38 +581,38 @@ impl fmt::Display for RuleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RuleError::RefBearingInlineTrigger => {
-                f.write_str("register_rule: an Inline trigger must be ref-free")
+                f.write_str("rule validation: an Inline trigger must be ref-free")
             }
             RuleError::RefBearingDomain => {
-                f.write_str("register_rule: the rule domain must be ref-free")
+                f.write_str("rule validation: the rule domain must be ref-free")
             }
-            RuleError::IllFormedDomain(e) => write!(f, "register_rule: ill-formed domain: {e}"),
+            RuleError::IllFormedDomain(e) => write!(f, "rule validation: ill-formed domain: {e}"),
             RuleError::DomainTriggerSortMismatch { expected, found } => write!(
                 f,
-                "register_rule: the domain's element sort is {expected:?}, the trigger's parameter sort {found:?}"
+                "rule validation: the domain's element sort is {expected:?}, the trigger's parameter sort {found:?}"
             ),
             RuleError::TriggerNotBoolean => {
-                f.write_str("register_rule: the Def trigger's codomain is not Bool")
+                f.write_str("rule validation: the Def trigger's codomain is not Bool")
             }
             RuleError::UndefinedDefTrigger(a) => {
-                write!(f, "register_rule: Def trigger {a} has no defined signature")
+                write!(f, "rule validation: Def trigger {a} has no defined signature")
             }
             RuleError::BadTriggerArity => {
-                f.write_str("register_rule: the Def trigger's def does not bind exactly one parameter")
+                f.write_str("rule validation: the Def trigger's def does not bind exactly one parameter")
             }
             RuleError::TriggerExpansionTooLarge => f.write_str(
-                "register_rule: the Def trigger's flat reference expansion exceeds the \
+                "rule validation: the Def trigger's flat reference expansion exceeds the \
                  MAX_TERM_NODES budget (nodes and the payload they carry)",
             ),
             RuleError::BadMarkerType(ty) => {
-                write!(f, "register_rule: Marker type {ty} is not a cataloged Unary class")
+                write!(f, "rule validation: Marker type {ty} is not a cataloged Unary class")
             }
             RuleError::NonIdemMarkerType(ty) => {
-                write!(f, "register_rule: Marker type {ty} is not idempotent (idem⊤ required)")
+                write!(f, "rule validation: Marker type {ty} is not idempotent (idem⊤ required)")
             }
             RuleError::PredLayerMarkerType(ty) => write!(
                 f,
-                "register_rule: Marker type {ty} is a PredLayer class (pdef/pd_stable), reserved by PR-DISC"
+                "rule validation: Marker type {ty} is a PredLayer class (pdef/pd_stable), reserved by PR-DISC"
             ),
         }
     }
@@ -602,12 +632,6 @@ impl Error for RuleError {
 impl From<TxnError<InsertError>> for DefineError {
     fn from(e: TxnError<InsertError>) -> Self {
         DefineError::Insert(e)
-    }
-}
-
-impl From<RegisterError> for DefineError {
-    fn from(e: RegisterError) -> Self {
-        DefineError::Register(e)
     }
 }
 

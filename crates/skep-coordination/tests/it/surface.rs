@@ -88,10 +88,13 @@ fn rejections_display_and_chain_to_their_cause() {
     assert!(boxed.to_string().starts_with("register_pred:"));
     assert!(boxed.source().is_none(), "a leaf rejection has no cause");
 
-    // A wrapped one chains: DefineError → RegisterError → TypeError.
+    // A wrapped one chains: DefineError → RegisterError → TypeError — and
+    // names the start its insert committed, the refusal's own payload.
     let ill = TypeError::UnboundVariable(v(9));
-    let define = DefineError::Register(RegisterError::IllTyped(ill.clone()));
-    assert_eq!(define.to_string(), format!("define_predicate: register_pred: the def is ill-typed: {ill}"));
+    let define =
+        DefineError::Register { start: ca(1), cause: RegisterError::IllTyped(ill.clone()) };
+    let stored = format!("define_predicate: the run stored at {} is not registered", ca(1));
+    assert_eq!(define.to_string(), format!("{stored}: register_pred: the def is ill-typed: {ill}"));
     let cause = define.source().expect("Register carries its RegisterError");
     assert_eq!(cause.to_string(), format!("register_pred: the def is ill-typed: {ill}"));
     let root = cause.source().expect("IllTyped carries its TypeError");
@@ -103,14 +106,20 @@ fn rejections_display_and_chain_to_their_cause() {
     let sup = SupersedeError::Define(define);
     assert_eq!(
         sup.to_string(),
-        format!("supersede: define_predicate: register_pred: the def is ill-typed: {ill}")
+        format!("supersede: {stored}: register_pred: the def is ill-typed: {ill}")
     );
     let define_cause = sup.source().expect("Define carries its DefineError");
     assert_eq!(
         define_cause.to_string(),
-        format!("define_predicate: register_pred: the def is ill-typed: {ill}")
+        format!("{stored}: register_pred: the def is ill-typed: {ill}")
     );
     assert!(define_cause.source().is_some(), "and the chain runs on beneath it");
+    // Its lineage refusal names the successor transactions 1–2 committed.
+    let lineage = SupersedeError::Lineage {
+        successor: ca(2),
+        cause: TxnError::Rejected(EmitError::SupersessionClass),
+    };
+    assert!(lineage.to_string().contains(&format!("successor {} is defined", ca(2))), "{lineage}");
     // Its own up-front gate is a leaf, as `register_pred`'s parse refusal is.
     let gate = SupersedeError::OldStartNotEverRegistered(ca(1));
     assert_eq!(gate.to_string(), format!("supersede: old start {} is not an ever-registered def", ca(1)));
@@ -135,8 +144,15 @@ fn every_wrapping_rejection_yields_its_cause() {
         (Box::new(RetractError::Nullify(nullify())), nullify().to_string()),
         (Box::new(FireError::Emit(emit())), emit().to_string()),
         (Box::new(FireError::Nullify(nullify())), nullify().to_string()),
-        (Box::new(SupersedeError::Lineage(emit())), emit().to_string()),
+        (Box::new(SupersedeError::Lineage { successor: ca(1), cause: emit() }), emit().to_string()),
         (Box::new(DefineError::Insert(insert())), insert().to_string()),
+        (
+            Box::new(DefineError::Register {
+                start: ca(1),
+                cause: RegisterError::HomeNotRegistered,
+            }),
+            RegisterError::HomeNotRegistered.to_string(),
+        ),
         (Box::new(RuleError::IllFormedDomain(TypeError::TooDeep)), TypeError::TooDeep.to_string()),
         (
             Box::new(TypeError::RegInstanceIllTyped(Box::new(TypeError::TooLarge))),

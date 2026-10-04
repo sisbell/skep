@@ -560,13 +560,13 @@ impl<W: CoordinationWorld> Coordinator<W> {
     ///
     /// CALLER'S OBLIGATION, and the hypothesis the reachability claim above
     /// rests on: RE-PIN between steps — `step(&kernel.snapshot())` per
-    /// iteration. A `NoOp` makes NO progress toward `quiescent(snap)`: the
-    /// peek reads `snap` and only the fire reads the present, so an
-    /// occurrence the fire itself falsified is still enabled AT `snap`. A
-    /// driver that pins once and loops on the stale snapshot therefore gets
-    /// one fire and then `NoOp` forever, with `quiescent(&snap)` false
-    /// forever — no concurrent writer needed, the rule's own deposit being
-    /// what falsifies it.
+    /// iteration, over the kernel this coordinator was built on. A `NoOp`
+    /// makes NO progress toward `quiescent(snap)`: the peek reads `snap` and
+    /// only the fire reads the present, so an occurrence the fire itself
+    /// falsified is still enabled AT `snap`. A driver that pins once and loops
+    /// on the stale snapshot therefore gets one fire and then `NoOp` forever,
+    /// with `quiescent(&snap)` false forever — no concurrent writer needed,
+    /// the rule's own deposit being what falsifies it.
     ///
     /// The claim has a SECOND hypothesis: every fire the loop attempts
     /// commits or dedups. A `Failed` changes nothing — the occurrence stays
@@ -617,8 +617,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// `t.addr`. A `RuleId` this handle did not mint counts 0 when it names no
     /// rule here, and counts the LOCAL rule's attribution key when it collides
     /// with one this handle minted — ids are per-handle ([`RuleId`]). The
-    /// count is as of a snapshot pinned at the call — the one read in this
-    /// group that takes no caller's snapshot.
+    /// count is as of a snapshot pinned at the call, never a caller's.
     ///
     /// Reads `LinkState` AT NO VISIBILITY CLASS, where every verdict reads
     /// through the look at guest class: the attribution key pins the home to

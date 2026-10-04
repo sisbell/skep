@@ -292,15 +292,19 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// n = 1 — Conflicts §2) — written through M5's placement composite
     /// (mint + write + place + R, atomically — J0/J1★), then validate +
     /// register the `pdef`. Returns the def IDENTITY (content start address)
-    /// and the `pdef` EMIT's commit `Seq` — NOT the insert's.
+    /// and `register_pred`'s `Seq`: the `pdef` EMIT's commit, NOT the
+    /// insert's — or, where that emit dedups onto an incumbent already naming
+    /// the start, M7's base `Seq` with nothing committed, as `register_pred`
+    /// states.
     ///
     /// The stored-def parameters are Codom-only (ASN-0130 SignedTerm), and no
     /// check is made here: a caller's only route to a `TypedTerm` is
     /// `type_check`, which refuses a `Tup` in Γ_D, and the one checked term
     /// whose parameter may be a tuple is a `TriggerTerm`, no accessor of which
-    /// returns its `TypedTerm`. The codec's own `Tup` refusal (it has no tag
-    /// for the sort) is therefore unreachable, in this crate or out of it —
-    /// the codec states why where it relies on it.
+    /// returns its `TypedTerm`. The codec's own `Tup` invariant (it has no tag
+    /// for the sort, and panics rather than spell one) is therefore never
+    /// tripped, in this crate or out of it — the codec states why where it
+    /// relies on it.
     ///
     /// A CHECKED term is not thereby storable, and that is the one refusal
     /// made BEFORE any transaction: `Unstorable`, when the codec has no stored
@@ -308,8 +312,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// gets there). The refusals speak in this order:
     /// `Unstorable`; then the content insert's (`Insert(..)` — M5's door on
     /// `home`, below, among them — nothing committed); then `register_pred`'s
-    /// gates over the run just committed (`Register(..)`), the content
-    /// staying.
+    /// gates over the run just committed (`Register { start, cause }`), the
+    /// content staying at the `start` the refusal carries.
     ///
     /// `home` must be a registered document that is NOT a published TARGET
     /// (M5's `published_target`: the publication bit of `trunk_of(home)` —
@@ -330,7 +334,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// def retracted before the call (`type_check` keys on ever-registration,
     /// gate (iv) on endorsement; `retract_pred` states it), or when one is
     /// retracted in the gap — and M7's own refusal of the emit (`Emit`).
-    /// Either way the content stays, orphan, and a later
+    /// Either way the content stays, orphan, at the `start` the refusal
+    /// carries — the caller's only route to it — and a later
     /// `register_pred(home, start)` adopts it once the cause is gone.
     ///
     /// Under concurrency: a concurrent INSERT lands the def mid-document
@@ -362,8 +367,12 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // above is stated against.
         let (start, _insert_seq) =
             vstream.insert(Caller::System, home, at, vec![Val::new(bytes)], Deposit::Undeclared)?;
-        let (_pdef_tuple, seq) = self.register_pred(home, &start)?;
-        Ok((start, seq))
+        match self.register_pred(home, &start) {
+            Ok((_pdef_tuple, seq)) => Ok((start, seq)),
+            // The insert committed: the refusal carries the start, the
+            // caller's only route to the orphan it leaves.
+            Err(cause) => Err(DefineError::Register { start, cause }),
+        }
     }
 
     /// Validate the run already at `start` against ONE pinned snapshot σ,
@@ -381,7 +390,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// Where several referents fail one of the two referent gates, the
     /// address carried is the FIRST in first-occurrence pre-order
     /// (`direct_referents`), which is the referent the design's walk order
-    /// reaches first.
+    /// reaches first. Both referent gates read at no visibility class, as
+    /// [`Coordinator::is_ever_pred`] and [`Coordinator::is_active_pred`] do:
+    /// a referent registered into a draft home is ever-registered and
+    /// endorsed.
     ///
     /// RETURNS `(tuple, seq)`: the active `pdef` tuple's address — the
     /// fresh deposit's, or on an idem⊤ dedup hit the incumbent's, with M7's
@@ -463,11 +475,12 @@ impl<W: CoordinationWorld> Coordinator<W> {
     ///
     /// A pure pin to `snap` for the DENOTATION: every structural read it
     /// makes is `snap`'s. The def's RESOLUTION is the memo's, which on a miss
-    /// pins its own later snapshot (`derive_def`); the answer is the same
-    /// either way, by `register_pred`'s argument — the ever-gate above ran at
-    /// `snap`, ever-registration is monotone, and signature facts are
-    /// content-intrinsic, so a def ever-registered at `snap` has its whole
-    /// referent DAG ever-registered there too (PR2, gate (iii)).
+    /// pins its own later snapshot of the same kernel (`derive_def`; the
+    /// handle, [`Coordinator`], states whose pin `snap` must be); the answer
+    /// is the same either way, by `register_pred`'s argument — the ever-gate
+    /// above ran at `snap`, ever-registration is monotone, and signature
+    /// facts are content-intrinsic, so a def ever-registered at `snap` has its
+    /// whole referent DAG ever-registered there too (PR2, gate (iii)).
     pub fn evaluate_def(
         &self,
         start: &Address,
@@ -498,7 +511,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// ever-registered start with nothing resident yet; an ever-registered
     /// start whose resident content is undisciplined answers `None` via a
     /// PERMANENT poisoned entry (freeze-on-breach, §Internal 4). No snapshot
-    /// parameter — the miss path pins its own. A query: the memo it may fill
+    /// parameter — the miss path pins its own; its ever-registration probe
+    /// reads at no visibility class, as [`Coordinator::is_ever_pred`] does, so
+    /// a def registered into a draft home answers `Some` though PL's
+    /// `is_K(pdef, ·)` does not see its tuple. A query: the memo it may fill
     /// answers every later probe on THIS handle as this one was answered, and
     /// every handle alike on the disciplined domain (the crate root states the
     /// breach exception).
@@ -524,7 +540,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// via the shipped `supersedes` class with CONTENT-ADDRESS endpoints —
     /// `emit`, NOT M7::assert_sup (which requires resident links; def starts
     /// are content addresses — Conflicts §4). Gates `old_start` UP FRONT,
-    /// before any transaction: it must be EVER-registered (superseding a
+    /// before any transaction: it must be EVER-registered
+    /// ([`Coordinator::is_ever_pred`], at no visibility class; superseding a
     /// retracted def is legitimate lineage — PR4) — else
     /// `OldStartNotEverRegistered`. The successor's content is written
     /// through `define_predicate`, so `home` carries that operation's whole
@@ -542,9 +559,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// `emit` pre-transact (`EmitError::SupersessionClass` — `assert_sup` and
     /// `editlink` being that class's sole writers), so a call that passes the
     /// gate commits the successor and its `pdef` (transactions 1–2) and
-    /// answers `Err(Lineage(Rejected(SupersessionClass)))` — every time, until
-    /// M7 admits content-endpoint def lineage. A retry registers another
-    /// successor; the tripwire
+    /// answers `Err(Lineage { successor, cause: Rejected(SupersessionClass) })`
+    /// — every time, until M7 admits content-endpoint def lineage — carrying
+    /// the registered successor, which the caller can evaluate, reference or
+    /// retract. A retry registers another successor; the tripwire
     /// `supersede_gates_up_front_and_trips_m7_s_supersession_fence` flips when
     /// M7 changes.
     pub fn supersede(
@@ -559,11 +577,13 @@ impl<W: CoordinationWorld> Coordinator<W> {
         }
         let (new_start, _pdef_seq) = self.define_predicate(home, new_term)?;
         let sup = self.catalog.reserved_type(ShippedType::Supersedes);
-        let (_claim, seq) = self
-            .link_writer()
-            .emit(Caller::System, home, sup, old_start, from_ref(&new_start))
-            .map_err(SupersedeError::Lineage)?;
-        Ok((new_start, seq))
+        let lineage =
+            self.link_writer().emit(Caller::System, home, sup, old_start, from_ref(&new_start));
+        match lineage {
+            Ok((_claim, seq)) => Ok((new_start, seq)),
+            // Transactions 1–2 committed: the refusal carries the successor.
+            Err(cause) => Err(SupersedeError::Lineage { successor: new_start, cause }),
+        }
     }
 
     /// The lineage head: `tip(reserved_type(Supersedes), start)` —
@@ -571,6 +591,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// cycle. The `supersedes` lineage is not constrained to be acyclic (it
     /// is a claim graph, not PR4's reference DAG): the walk halts on its own
     /// visited set, and `Indeterminate` is the contract for both shapes.
+    /// Read from M7 at no visibility class, as the def probes are, where PL's
+    /// `tip` atom walks only the claims the look at guest class admits: a
+    /// claim homed in a draft moves this answer and not the atom's.
     pub fn current_version(&self, start: &Address, snap: &Snapshot<W>) -> Tip {
         snap.world()
             .links()
@@ -580,7 +603,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// CVALID(0..iii), the refusals speaking in this order: defined signature
     /// (its two `None` causes surfaced distinctly — `NotEverRegistered`,
     /// `UndisciplinedDef`), Boolean sort (`NotBoolean`), actively registered
-    /// (`NotActive`), an expansion within the node budget
+    /// (`NotActive` — [`Coordinator::is_active_pred`], at no visibility
+    /// class), an expansion within the node budget
     /// (`ExpansionTooLarge`), view-independent expansion (`ViewDependent`),
     /// ST⁺ (`StabilityUnproven` — unknown, never unstable) — then emit
     /// `pd_stable` at `home`, which must be a registered document: after

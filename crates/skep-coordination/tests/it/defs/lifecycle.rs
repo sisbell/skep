@@ -136,7 +136,9 @@ fn define_predicate_returns_the_pdef_emit_s_seq() {
 
 /// WT-ref + endorsement: refs to registered defs check and evaluate
 /// DAG-recursively; a gap-de-registered referent blocks NEW registrations
-/// (endorsement) while existing consumers keep evaluating (no cascade).
+/// (endorsement) while existing consumers keep evaluating (no cascade) — and
+/// the refusal carries the start the run was stored at, which a later
+/// `register_pred` adopts once the referent is endorsed again.
 #[test]
 fn endorsement_gates_a_new_reference_and_retraction_never_cascades() {
     let k = kernel();
@@ -172,20 +174,31 @@ fn endorsement_gates_a_new_reference_and_retraction_never_cascades() {
     let r = c
         .type_check(vec![], Term::Ref { addr: p_start.clone(), args: vec![at(lit_addr(&ca(2)))] })
         .expect("type_check keys on ever-registration, so a retracted referent still checks");
-    match c.define_predicate(&doc1(), &r) {
-        Err(DefineError::Register(RegisterError::ReferentNotActive(x))) => assert_eq!(x, p_start),
-        other => panic!("expected ReferentNotActive, got {other:?}"),
-    }
+    let orphan = match c.define_predicate(&doc1(), &r) {
+        Err(DefineError::Register { start, cause: RegisterError::ReferentNotActive(x) }) => {
+            assert_eq!(x, p_start);
+            start
+        }
+        other => panic!("expected Register {{ ReferentNotActive }}, got {other:?}"),
+    };
     // …while the standing consumer keeps evaluating: its reference to P
     // dangles but stays live (ASN-0130 OQ3).
     let s2 = k.snapshot();
     assert_eq!(c.evaluate_def(&q_start, &[], View::Active, &s2), Ok(Value::Bool(true)));
+
+    // The refusal carried the start the run was stored at: once P is endorsed
+    // again, a later `register_pred` adopts the orphan.
+    assert!(!c.is_ever_pred(&orphan, &k.snapshot()), "stored, never registered");
+    c.register_pred(&doc1(), &p_start).expect("P re-registers afresh");
+    c.register_pred(&doc1(), &orphan).expect("the orphan is adopted");
+    assert_eq!(c.evaluate_def(&orphan, &[], View::Active, &k.snapshot()), Ok(Value::Bool(false)));
 }
 
 /// supersede's up-front gates, `current_version` over the shipped class, and
 /// the M7 supersession-fence drift tripwire (see the report: as-built M7
 /// rejects a raw `[K_sup]`-typed `emit`, so the design's def-lineage claim
-/// cannot commit — the first two of the three non-atomic transactions do).
+/// cannot commit — the first two of the three non-atomic transactions do,
+/// and the refusal carries the successor they registered).
 #[test]
 fn supersede_gates_up_front_and_trips_m7_s_supersession_fence() {
     let k = kernel();
@@ -213,7 +226,17 @@ fn supersede_gates_up_front_and_trips_m7_s_supersession_fence() {
     // fence for content-endpoint def lineage, this match arm flips.
     let before = k.snapshot().world().m5().content_count(&doc1());
     match c.supersede(&doc1(), &p_start, &c.type_check(vec![], Term::Lit(Lit::False)).expect("term")) {
-        Err(SupersedeError::Lineage(TxnError::Rejected(EmitError::SupersessionClass))) => {}
+        Err(SupersedeError::Lineage {
+            successor,
+            cause: TxnError::Rejected(EmitError::SupersessionClass),
+        }) => {
+            // The refusal carries what transactions 1–2 committed.
+            assert!(c.is_active_pred(&successor, &k.snapshot()), "transactions 1–2 registered it");
+            assert_eq!(
+                c.evaluate_def(&successor, &[], View::Active, &k.snapshot()),
+                Ok(Value::Bool(false))
+            );
+        }
         other => panic!("fence drift resolved? got {other:?}"),
     }
     assert_eq!(

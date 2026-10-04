@@ -94,6 +94,15 @@ pub type LinkWriterFactory<W> =
 /// the reactive rule engine (group C). Owns no authoritative state — the
 /// `DefMemo` is an interior-mutable recomputable hint; the rule registry
 /// and rotation cursor are the `&mut self` working set.
+///
+/// Every `&Snapshot<W>` an operation takes is the caller's pin of THIS
+/// coordinator's kernel — the one [`Coordinator::new`] was handed. A
+/// `Snapshot` does not carry its kernel, so M9 cannot check it and does not:
+/// a pure read over a pin of another kernel answers about that other world,
+/// and [`Coordinator::evaluate_def`] and [`Coordinator::step`], which join the
+/// caller's pin with this coordinator's own kernel (a def resolved, a fire
+/// pinned), would join two logs in one answer. "As of `snap.seq()`" names a
+/// position in this kernel's log.
 pub struct Coordinator<W: WorldState> {
     kernel: Arc<Kernel<W>>,
     catalog: TypeCatalog,

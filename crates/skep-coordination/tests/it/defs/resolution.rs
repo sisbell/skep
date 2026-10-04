@@ -15,7 +15,7 @@ use skep_address::{document_of, Address};
 use skep_content::HasContent;
 use skep_coordination::{
     CertifyError, Coordinator, DefineError, Dom, EvalError, RegisterError, Rule, RuleError, Sort,
-    Term, Trigger, TypeError, Value, View,
+    SupersedeError, Term, Trigger, TypeError, Value, View,
 };
 use skep_links::{Caller, HasLinks, ShippedType, SlotArg, Tip};
 
@@ -289,9 +289,9 @@ fn a_probe_of_a_start_with_no_content_yet_does_not_freeze_it() {
 
 /// The def-registration probes read at no visibility class by design, and the
 /// evaluator's look reads at guest class: a def registered into a document the
-/// guest predicate refuses is ever-registered, active, signed, evaluable and
-/// endorsable as a referent — and invisible to `is_K(pdef, ·)` at every term
-/// view.
+/// guest predicate refuses is ever-registered, active, signed, evaluable,
+/// endorsable as a referent, certifiable and supersedable — and invisible to
+/// `is_K(pdef, ·)` at every term view.
 #[test]
 fn def_probes_see_what_the_evaluator_s_look_hides() {
     let k = kernel();
@@ -345,6 +345,15 @@ fn def_probes_see_what_the_evaluator_s_look_hides() {
     let sup = c.reserved_type(ShippedType::Supersedes).clone();
     assert_eq!(c.current_version(&l1, &k.snapshot()), Tip::Sink(l2));
     assert!(decide_now(&k, &c, View::Active, tip_is(&sup, &l1, &l1)), "the atom's walk stops at l1");
+
+    // `supersede`'s up-front gate is the ever-probe: the draft-registered def
+    // is an old start it admits, whatever M7 then answers the lineage claim.
+    let successor = c.type_check(vec![], fls()).expect("closed False");
+    let superseded = c.supersede(&doc1(), &start, &successor);
+    assert!(
+        !matches!(superseded, Err(SupersedeError::OldStartNotEverRegistered(_))),
+        "{superseded:?}"
+    );
 }
 
 /// ≤1 active `pdef` per start (PR0) holds WITHIN the guest class the writer
@@ -432,7 +441,8 @@ fn a_registration_probe_never_takes_a_covering_tuple_for_its_start() {
         .expect("a reference to the retracted def still types");
     assert!(matches!(
         c.define_predicate(&doc1(), &reference),
-        Err(DefineError::Register(RegisterError::ReferentNotActive(x))) if x == retracted
+        Err(DefineError::Register { cause: RegisterError::ReferentNotActive(x), .. })
+            if x == retracted
     ));
     c.retract_pred(&doc1(), &live).expect("retract the live def");
     assert!(!c.is_active_pred(&live, &k.snapshot()), "its own pdef, never the covering one");

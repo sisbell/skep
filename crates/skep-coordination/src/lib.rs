@@ -30,23 +30,26 @@
 //! `apply`, no `WorldState` slice, no record variant.
 //!
 //! Several QUERIES may fill that memo on a miss — `signature`, a
-//! `type_check`/`type_check_trigger` over a `Ref`, `evaluate_def`,
-//! `certify_stable`, a rule validation over a `Def` trigger. The first fill
-//! of a start wins and nothing is ever evicted, so once a start is memoized
-//! ONE handle answers every later probe of it as it answered the first (a
-//! never-registered start is never memoized, its answer following the
-//! registration; nor is an ever-registered start with nothing resident yet,
-//! its answer following the content). On the disciplined domain (PR-DISC) an
-//! entry is moreover a function of the def's immutable content plus M7's
-//! monotone audit slice, so the fill is unobservable — every handle, warm or
-//! cold, answers alike — and each of these stays a query. Under a breach the
-//! design gives that up on purpose (freeze-on-breach, §Internal 4): a start
-//! deposited past the gate before its referent was defined, and probed in
-//! that window, stays POISONED on the probing handle while a handle that
-//! first probes it later derives it defined; and a reference to breached
-//! content may be refused one way warm and another cold. Every such
-//! disagreement is between refusals, or a refusal and a defined answer —
-//! never a wrong `Some`.
+//! `type_check`/`type_check_trigger` over a `Ref`, `evaluate_def`, and
+//! `certify_rule` over a `Def` trigger or over a domain naming a `Ref` (each
+//! `Ref` resolved before the domain is refused) — and so do the commands that
+//! resolve through it on their way: `register_pred`, which admits the def it
+//! has registered, `define_predicate` and `supersede` through it,
+//! `certify_stable`, and `register_rule`. The first fill of a start wins and
+//! nothing is ever evicted, so once a start is memoized ONE handle answers
+//! every later probe of it as it answered the first (a never-registered start
+//! is never memoized, its answer following the registration; nor is an
+//! ever-registered start with nothing resident yet, its answer following the
+//! content). On the disciplined domain (PR-DISC) an entry is moreover a
+//! function of the def's immutable content plus M7's monotone audit slice, so
+//! the fill is unobservable — every handle, warm or cold, answers alike — and
+//! each of those queries stays one. Under a breach the design gives that up
+//! on purpose (freeze-on-breach, §Internal 4): a start deposited past the
+//! gate before its referent was defined, and probed in that window, stays
+//! POISONED on the probing handle while a handle that first probes it later
+//! derives it defined; and a reference to breached content may be refused
+//! one way warm and another cold. Every such disagreement is between
+//! refusals, or a refusal and a defined answer — never a wrong `Some`.
 //!
 //! ## Boundary — deliberately NOT owned here
 //!

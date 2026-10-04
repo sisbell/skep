@@ -41,8 +41,8 @@ fn a_verdict_reads_its_view_s_slice_and_uv_drops_only_other_bh1_classes() {
     ));
 
     // UV default view: members(K, default) drops elements filtered by BH1
-    // types OTHER than K — and never by K itself (retired is unfiltered in
-    // its own default reading — the OQ1 commitment).
+    // types OTHER than K — and never by K itself (retired's own default
+    // reading is unrewritten — the OQ1 commitment).
     writer.emit(Caller::System, &doc1(), &retired_ty(), &ca(3), &[]).expect("retire ca3");
     assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::MembersDom(concrete(&pred_stable_ty()))), lit_nat(1))));
     assert!(decide_now(&k, &c, View::Default, nat_eq(count(Dom::MembersDom(concrete(&pred_stable_ty()))), lit_nat(0))));
@@ -279,8 +279,8 @@ fn a_nullified_claim_is_not_operative_so_the_walk_does_not_follow_it() {
 }
 
 /// UV over the BH2 family: a `default`-view term's `chain`/`succs` drop the
-/// elements another BH1 class filters, while `tip`/`is_in_chain` walk
-/// unfiltered — the same membership answers differently through the
+/// elements another BH1 class filters, while `tip`/`is_in_chain` read the
+/// unrewritten walk — the same membership answers differently through the
 /// collection and through the verdict.
 #[test]
 fn uv_drops_retired_elements_from_chain_and_succs_but_never_from_the_walk() {

@@ -15,7 +15,7 @@ use skep_links::Caller;
 /// `Arg::key_addr` bridges the peek to the monitor: `next_enabled` hands back
 /// a bound argument of either shape, and `fire_count` keys on an address —
 /// the tuple's `t.addr` (R1), never a slot endpoint. A driver outside the
-/// crate reaches the engine's own key through this accessor rather than
+/// crate reaches the rule engine's own key through this accessor rather than
 /// re-deriving the projection by matching the shapes.
 #[test]
 fn a_peeked_occurrence_yields_the_key_the_monitor_counts_by() {

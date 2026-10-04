@@ -17,8 +17,8 @@
 //! at `default` drop elements filtered by the BH1 types OTHER than
 //! `K_queried` — per-type via `is_k(J, ·)` (≡ BH1's `is_filtered_J`, D2) —
 //! never M7's aggregate `is_filtered`; `succs`/`chain`/`sources_to`/`stale`
-//! post-filter their returned collections; `tip`/`is_in_chain` walk
-//! unfiltered.
+//! post-filter their returned collections; `tip`/`is_in_chain` read the
+//! unrewritten walk.
 //!
 //! Every M7 read the evaluator makes goes through [`GuestLinks`] — M7's read
 //! surface filtered at link HOME by the coordinator's injected guest
@@ -40,9 +40,9 @@ use crate::guest::{GuestLinks, Slice};
 use crate::value::{lift, Arg, Env, Value};
 
 /// One verdict's read context — all slices off one pinned snapshot, M7's
-/// through the guest-class view, at ONE term view (PC3: the view is fixed
-/// for the life of a verdict, so it is context, not an argument). Built only
-/// by `Coordinator::eval_ctx`.
+/// through the look at guest class, at ONE term view (PC3: the term view is
+/// fixed for the life of a verdict, so it is context, not an argument). Built
+/// only by `Coordinator::eval_ctx`.
 pub(crate) struct EvalCtx<'a, W> {
     pub(crate) catalog: &'a TypeCatalog,
     pub(crate) links: GuestLinks<'a, W>,
@@ -127,9 +127,9 @@ impl<W> EvalCtx<'_, W> {
     /// slice — `Slice::of` folds `default` onto the active tuples — through
     /// [`EvalCtx::uv_rewrite`], which drops an element at `default` and
     /// nowhere else. `⋃ F.addrs()` over that slice is D1's equation, and
-    /// V-AUD's is the same one over the audit slice. Every read is the
-    /// guest-class view's (lane 4.1), so a draft-homed tuple contributes no
-    /// member at any view.
+    /// V-AUD's is the same one over the audit slice. Every read is the look's
+    /// (lane 4.1), so a draft-homed tuple contributes no member at any term
+    /// view.
     ///
     /// `_at` marks the three VIEW-PARAMETERIZED reads — this one, `is_k_at`
     /// and `targets_of_at`, the core atoms and `M_K`, which take the TERM
@@ -154,7 +154,7 @@ impl<W> EvalCtx<'_, W> {
 
     /// `is_K(x)` at the CONTEXT's view — a verdict atom, so a `default` term
     /// reads it at the ACTIVE slice, never UV-filtered (UV). Both slices are
-    /// the guest-class view's, so a draft-homed tuple witnesses nothing.
+    /// the look's, so a draft-homed tuple witnesses nothing.
     fn is_k_at(&self, k: &TypeKey, x: &Address) -> bool {
         self.links.is_k(&k.0, x.tumbler(), Slice::of(self.view))
     }
@@ -319,8 +319,7 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
                 chain.into_iter().filter(|a| cx.uv_keeps(k, a)).collect();
             Value::AddrSeq(seq)
         }
-        // Verdict/traversal atoms are never UV-rewritten (UV): unfiltered
-        // active walk.
+        // Verdict/traversal atoms read the unrewritten active walk (UV).
         Atom::Tip(tr, e) => {
             let k = tr.key();
             let x = as_addr(eval_term(cx, env, e));

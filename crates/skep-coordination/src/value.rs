@@ -117,7 +117,7 @@ impl Arg {
     /// itself, or the tuple's `t.addr` (R1 AddressInjectivity, so an address
     /// hit is a value hit) — what a `StepOutcome` reports and what
     /// `fire_count` keys on, so a driver holding a peeked `Occurrence`
-    /// reaches the same key the engine would rather than re-deriving it.
+    /// reaches the same key the rule engine would rather than re-deriving it.
     pub fn key_addr(&self) -> &Address {
         match self {
             Arg::Addr(a) => a,

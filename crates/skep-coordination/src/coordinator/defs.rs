@@ -7,24 +7,24 @@
 //! ever-registration gate it rests on. M9 drives no `transact` — every write
 //! rides M5's placement composite or M7's gated `emit`/`nullify`.
 //!
-//! THE DEF LAYER READS CLASS-FREE, where the evaluator does not (lane 4.1):
-//! a def's registration is not a trigger read, so the two registration
-//! probes every gate and query asks — `ever_registered` and
+//! THE DEF LAYER READS AT NO VISIBILITY CLASS, where the evaluator reads at
+//! guest class (lane 4.1): a def's registration is not a trigger read, so the
+//! two registration probes every gate and query asks — `ever_registered` and
 //! `actively_registered` — and `is_certified_stable`, `current_version` and
 //! `retract_pred`'s target probe all read M7's `LinkState` directly, and a
 //! def registered into a draft home is ever-registered as it was — signed,
-//! resolvable and evaluable — while the guest-class view the evaluator looks
-//! through hides its `pdef` tuple from `is_K`. Two class-free reads sit
-//! outside this module and complete the list: the divergence monitor's
+//! resolvable and evaluable — while the look the evaluator reads through
+//! hides its `pdef` tuple from `is_K`. Two more reads at no visibility class
+//! sit outside this module and complete the list: the divergence monitor's
 //! (`coordinator/engine.rs::fire_count`), whose attribution key pins the home
 //! to the rule's own action home; and a fire's gap discrimination
 //! (`coordinator/engine.rs::fired_or_deduped`), which probes residence of the
 //! address M7 just returned — the writer runs at guest class, so a returned
 //! incumbent is guest-readable and a fresh mint is absent from the fire
-//! snapshot under either reading, and the discrimination is the same
-//! filtered or not. Every read inside a VERDICT — this module's
-//! `evaluate_def` included — goes through `Coordinator::eval_ctx`'s
-//! guest-class view.
+//! snapshot under either reading, and the discrimination is the same at guest
+//! class or at none. Every read inside a VERDICT — this module's
+//! `evaluate_def` included — goes through `Coordinator::eval_ctx`'s look at
+//! guest class.
 //!
 //! THE DEF LAYER MATCHES A START BY ITS COVERAGE CLASS, where PL's `is_K`
 //! matches by coverage (D2): `register_pred` and `certify_stable` deposit
@@ -123,17 +123,18 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// identity M7's idem dedup keys `register_pred`'s and `certify_stable`'s
     /// own deposits by (ASN-0128 I0), so a tuple that absorbs either deposit
     /// is one this finds — the T1-least if several, off the world `w` of a
-    /// pinned snapshot and CLASS-FREE, as every def probe is. The one place
-    /// the def layer matches a start, and by class (the module doc states
-    /// why): M7's `observe` matches F by COVERAGE, a sound pre-filter — an F
-    /// of `start`'s class denotes `start`, and a denoted address is the start
-    /// of a unit-depth span, which covers it — and the scan keeps that class.
-    /// An F covering `start` from an ancestor has the ancestor's class and
-    /// names nothing there; one spelling `start` beside addresses under it has
-    /// `start`'s class and names it, as M7's dedup counts it. Total:
-    /// `enc({start})` is address-denoting, and M7's fold classified every
-    /// stored F of these two idem⊤ classes when it indexed the tuple's dedup
-    /// key, so `coverage_class` meets no endset here it cannot answer.
+    /// pinned snapshot and AT NO VISIBILITY CLASS, as every def probe is. The
+    /// one place the def layer matches a start, and by coverage class (the
+    /// module doc states why): M7's `observe` matches F by COVERAGE, a sound
+    /// pre-filter — an F of `start`'s class denotes `start`, and a denoted
+    /// address is the start of a unit-depth span, which covers it — and the
+    /// scan keeps that class. An F covering `start` from an ancestor has the
+    /// ancestor's class and names nothing there; one spelling `start` beside
+    /// addresses under it has `start`'s class and names it, as M7's dedup
+    /// counts it. Total: `enc({start})` is address-denoting, and M7's fold
+    /// classified every stored F of these two idem⊤ classes when it indexed
+    /// the tuple's dedup key, so `coverage_class` meets no endset here it
+    /// cannot answer.
     fn tuple_naming(&self, w: &W, ty: ShippedType, start: &Address, view: View) -> Option<Tuple> {
         let named = coverage_class(&enc(from_ref(start)));
         w.links()
@@ -149,10 +150,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// Some `pdef` tuple, active or retracted, names `start` — the
     /// ever-registration probe, [`Coordinator::tuple_naming`] at `Audit` (the
     /// one `observe`-honors-`Audit` seam) off the world `w` of a pinned
-    /// snapshot, and CLASS-FREE by design: a def's registration is not a
-    /// trigger read, so the guest-class view the evaluator looks through does
-    /// not apply, and a def registered into a draft home is ever-registered as
-    /// it was. Every ever-registration question in the crate asks it here (the
+    /// snapshot, and AT NO VISIBILITY CLASS by design: a def's registration is
+    /// not a trigger read, so the look the evaluator reads through does not
+    /// apply, and a def registered into a draft home is ever-registered as it
+    /// was. Every ever-registration question in the crate asks it here (the
     /// memo's derivation gate, the referent gate of `register_pred`,
     /// `evaluate_def`, `is_ever_pred`).
     fn ever_registered(&self, w: &W, start: &Address) -> bool {
@@ -162,9 +163,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// An ACTIVE `pdef` tuple names `start` — the endorsement probe, the
     /// active twin of [`Coordinator::ever_registered`]:
     /// [`Coordinator::tuple_naming`] at `Active`, off the world `w` of a
-    /// pinned snapshot, and CLASS-FREE for the ever-probe's reason —
-    /// endorsement is a registration question, not a trigger read. Every
-    /// actively-registered question in the crate asks it here
+    /// pinned snapshot, and AT NO VISIBILITY CLASS for the ever-probe's
+    /// reason — endorsement is a registration question, not a trigger read.
+    /// Every actively-registered question in the crate asks it here
     /// (`register_pred`'s endorsement gate, `is_active_pred`, and through it
     /// `certify_stable`'s leg).
     fn actively_registered(&self, w: &W, start: &Address) -> bool {
@@ -437,9 +438,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// (`ArgArityMismatch`); an argument at the wrong sort (`ArgSortMismatch`).
     /// `args` bind positionally to Γ_D (= `signature(start).params`). The
     /// denotation is DAG-recursive (`eval`'s walk + the one `Ref` arm), never
-    /// a materialized flat term (Conflicts §5), and reads M7 through the
-    /// GUEST-CLASS view (lane 4.1) — the same view an `Inline` trigger reads —
-    /// while the ever-registration probe stays class-free (`ever_registered`).
+    /// a materialized flat term (Conflicts §5), and reads M7 at the term view
+    /// `view` through the look at guest class (lane 4.1) — the look an
+    /// `Inline` trigger is evaluated through — while the ever-registration
+    /// probe reads at no visibility class (`ever_registered`).
     ///
     /// A pure pin to `snap` for the DENOTATION: every structural read it
     /// makes is `snap`'s. The def's RESOLUTION is the memo's, which on a miss
@@ -487,14 +489,15 @@ impl<W: CoordinationWorld> Coordinator<W> {
     }
 
     /// An active `pdef` tuple names `start` — matched by `start`'s coverage
-    /// class, never by covering it, and class-free (`actively_registered`).
+    /// class, never by covering it, and read at no visibility class
+    /// (`actively_registered`).
     pub fn is_active_pred(&self, start: &Address, snap: &Snapshot<W>) -> bool {
         self.actively_registered(snap.world(), start)
     }
 
     /// A `pdef` tuple, active or retracted, names `start` — matched by
-    /// `start`'s coverage class, never by covering it, and class-free
-    /// (`ever_registered`).
+    /// `start`'s coverage class, never by covering it, and read at no
+    /// visibility class (`ever_registered`).
     pub fn is_ever_pred(&self, start: &Address, snap: &Snapshot<W>) -> bool {
         self.ever_registered(snap.world(), start)
     }
@@ -585,9 +588,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// incumbent's, with M7's base `Seq` and nothing committed: ≤1 active
     /// `pd_stable` per start WITHIN THE GUEST CLASS, as `register_pred`
     /// states for `pdef`. An incumbent homed where the guest predicate
-    /// refuses — a draft, under the engine's predicate — is invisible to the
-    /// writer's dedup (lane 3.3b), so re-certifying into such a home mints a
-    /// second certificate and commits.
+    /// refuses — a draft — is invisible to the writer's dedup (lane 3.3b), so
+    /// re-certifying into such a home mints a second certificate and commits.
     pub fn certify_stable(
         &self,
         home: &Address,
@@ -623,13 +625,13 @@ impl<W: CoordinationWorld> Coordinator<W> {
     }
 
     /// An active `pd_stable` tuple names `start` — `tuple_naming`, matched by
-    /// `start`'s coverage class, and class-free, as the def probes are. `true`
-    /// is a CERTIFICATE (CVALID passed by `certify_stable`, over the immutable
-    /// content) only under PR-DISC: a `pd_stable` tuple naming `start` that
-    /// any other write deposited reads `true` here as well, and nothing in M9
-    /// re-validates it — though one whose F merely covers `start`, from an
-    /// ancestor, certifies nothing (the crate root states the obligation and
-    /// the surfaces it covers).
+    /// `start`'s coverage class, and read at no visibility class, as the def
+    /// probes are. `true` is a CERTIFICATE (CVALID passed by `certify_stable`,
+    /// over the immutable content) only under PR-DISC: a `pd_stable` tuple
+    /// naming `start` that any other write deposited reads `true` here as
+    /// well, and nothing in M9 re-validates it — though one whose F merely
+    /// covers `start`, from an ancestor, certifies nothing (the crate root
+    /// states the obligation and the surfaces it covers).
     pub fn is_certified_stable(&self, start: &Address, snap: &Snapshot<W>) -> bool {
         self.tuple_naming(snap.world(), ShippedType::PredStable, start, View::Active).is_some()
     }
@@ -643,8 +645,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// `is_active_pred` stays true until each is retracted. `home` must be a
     /// registered document — `Nullify(Rejected(HomeNotRegistered))`
     /// otherwise, after the `NotActive` probe. Content untouched; audit
-    /// retains it; re-registration after nullify deposits afresh (the idem
-    /// class is empty again).
+    /// retains it; once no active `pdef` names `start`, the I0-class
+    /// `register_pred` deposits into has no active member, and a
+    /// re-registration deposits afresh.
     ///
     /// Does NOT cascade (ASN-0130: "existing referencing definitions, and
     /// evaluations of them, survive untouched"). A def that references `start`

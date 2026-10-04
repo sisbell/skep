@@ -171,8 +171,8 @@ impl TriggerTerm {
     }
 
     /// The one parameter — `register_rule` reconciles its sort with the
-    /// domain's element sort, the engine binds each candidate argument to
-    /// it, and the termination lint's Marker leg names it.
+    /// domain's element sort, the rule engine binds each candidate argument
+    /// to it, and the termination lint's Marker leg names it.
     pub fn param(&self) -> &(VarId, Sort) {
         &self.0.params()[0]
     }

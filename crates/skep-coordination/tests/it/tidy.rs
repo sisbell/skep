@@ -26,6 +26,11 @@
 //! such a tree it passes whether its readers can see or not; it is held,
 //! beside it, to the forms those readers exist for, where a reader gone
 //! blind fails.
+//!
+//! Beside the map, one check reads both trees as plain text, comments
+//! included: the guest axis keeps its own words (`guest.rs` states them), so
+//! the spellings that fused the guest class with PC3's term view or with a
+//! coverage class are refused wherever they would be written.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -160,6 +165,47 @@ fn the_order_readers_see_the_forms_src_does_not_spell() {
     assert_eq!(
         read,
         [("crate::ast::Term".to_owned(), 0), ("crate::fixture::every_former".to_owned(), 1)]
+    );
+}
+
+/// The guest axis keeps its own words: a tuple is visible at guest class, a
+/// read outside the look is at no visibility class, and the look is never a
+/// "view" — in this crate, PC3's term view. The spellings that said otherwise
+/// are refused in every file of both trees and in the manifest and readme, a
+/// doc comment or a test message included, so the homonym cannot return
+/// through prose. Each is spelled here in two pieces, so this file does not
+/// refuse itself.
+#[test]
+fn the_guest_axis_keeps_its_own_words() {
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let retired = [
+        ["class", "-free"].concat(),
+        ["guest-class", " view"].concat(),
+        ["filtered", " view"].concat(),
+    ];
+    let mut files = vec![crate_dir.join("Cargo.toml"), crate_dir.join("README.md")];
+    rust_files(&crate_dir.join("src"), &mut files);
+    rust_files(&crate_dir.join("tests"), &mut files);
+    files.sort();
+    assert!(
+        files.iter().any(|file| file.ends_with("src/guest.rs")),
+        "this check read no `src/guest.rs`: the layout it scans has moved"
+    );
+    let mut faults = Vec::new();
+    for file in &files {
+        let text = std::fs::read_to_string(file).unwrap();
+        for (i, line) in text.lines().enumerate() {
+            let lower = line.to_lowercase();
+            for word in retired.iter().filter(|word| lower.contains(word.as_str())) {
+                let path = file.strip_prefix(crate_dir).unwrap().display();
+                faults.push(format!("{path}:{}: \"{word}\"", i + 1));
+            }
+        }
+    }
+    assert!(
+        faults.is_empty(),
+        "the guest axis borrows a word that is not its own (`guest.rs` states its words):\n{}",
+        faults.join("\n")
     );
 }
 

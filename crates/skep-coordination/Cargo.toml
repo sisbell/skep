@@ -31,12 +31,12 @@ skep-content = { path = "../skep-content" }
 # (J0); content_count and VPos::content for the append position.
 skep-arrangement = { path = "../skep-arrangement" }
 # M7 — the link store, read off `LinkState`: `observe` (the one slice
-# `GuestLinks` rebuilds every PL read over at guest class, and the class-free
-# reads' — the def probes and the divergence monitor), BH4's `age`/`stale`,
-# `tip` for a def's lineage head and `readlink` for a fire's gap accounting;
-# `coverage_class` over `enc({start})` and each candidate's F — the def
-# layer's registration identity, the F half of the I0 identity M7's idem
-# dedup keys a deposit by (`Coordinator::tuple_naming`), and M9's one
+# `GuestLinks` rebuilds every PL read over at guest class, and the one the def
+# probes and the divergence monitor read at no visibility class), BH4's
+# `age`/`stale`, `tip` for a def's lineage head and `readlink` for a fire's
+# gap accounting; `coverage_class` over `enc({start})` and each candidate's F
+# — the def layer's registration identity, the F half of the I0 identity M7's
+# idem dedup keys a deposit by (`Coordinator::tuple_naming`), and M9's one
 # classification of an endset; the `TypeRegistry` the catalog projects once;
 # the gated writes (`emit`/`nullify`) through the injected `LinkWriter`; and
 # the vocabulary PL's type keys and values are spelled in (`Endset`,

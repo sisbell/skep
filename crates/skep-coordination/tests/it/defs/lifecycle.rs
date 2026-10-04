@@ -78,7 +78,7 @@ fn a_def_registers_evaluates_retracts_and_re_registers_afresh() {
 
     // Retraction: content untouched, audit retained, evaluation still served
     // (ever-keyed), no panic on a second retract, re-registration deposits
-    // afresh (the idem class emptied).
+    // afresh (the I0-class it deposits into has no active member).
     c.retract_pred(&doc1(), &start).expect("retract");
     let s3 = k.snapshot();
     assert!(!c.is_active_pred(&start, &s3));

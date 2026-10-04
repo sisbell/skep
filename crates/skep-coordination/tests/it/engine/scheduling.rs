@@ -605,8 +605,8 @@ fn a_def_trigger_through_a_reference_is_linted_flat_and_evaluated_through_the_me
 }
 
 /// A trigger keeps its `Reg` quantifier and class variable in its source
-/// body, and the engine reads it by its `Reg`-expanded projection alone —
-/// one instance per cataloged class: the lint classifies the instances, the
+/// body, and the rule engine reads it by its `Reg`-expanded projection alone
+/// — one instance per cataloged class: the lint classifies the instances, the
 /// peek enables the argument through them, and once the rule's own marker
 /// lands the marker class's instance falsifies the trigger. Neither the
 /// evaluator nor the analyzer can walk a `Reg` binder, so a trigger read by

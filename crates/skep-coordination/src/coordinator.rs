@@ -118,10 +118,10 @@ pub struct Coordinator<W: WorldState> {
     ///   crosses the draft boundary in either direction (a marker on a
     ///   draft's content, or a deposit into a draft home);
     /// - THE GATES (lane 3.3b, PUB-6.28): every `LinkWriter` M9 builds is
-    ///   built AT this class ([`Coordinator::link_writer`] lends this closure
-    ///   to `mk_link_writer`), so M7's idempotency and dedup lookups see only
-    ///   guest-readable incumbents and a fire commits byte-identically to a
-    ///   world with no drafts.
+    ///   built AT this visibility class ([`Coordinator::link_writer`] lends
+    ///   this closure to `mk_link_writer`), so M7's idempotency and dedup
+    ///   lookups see only guest-readable incumbents and a fire commits
+    ///   byte-identically to a world with no drafts.
     ///
     /// M9 holds no publication state of its own — the predicate is injected
     /// like the factories.
@@ -177,8 +177,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// one-pinned-snapshot verdicts and lane 3.3b's byte-identical commit
     /// rest on both: a predicate consulting state outside its world would
     /// give one verdict two visibility answers for one document, and a
-    /// factory building over a kernel or a class it was not handed would
-    /// void the guarantee in silence.
+    /// factory building over a kernel or a visibility class it was not handed
+    /// would void the guarantee in silence.
     ///
     /// And `guest` must be TOTAL over every `&Address` M9 hands it, which is
     /// not only registered documents: a fire consults it on the action's HOME
@@ -223,14 +223,14 @@ impl<W: CoordinationWorld> Coordinator<W> {
     }
 
     /// One verdict's read context over the world `w` of a pinned snapshot,
-    /// at the term view `view`: the catalog, M3, and M7 THROUGH THE
-    /// GUEST-CLASS VIEW (`GuestLinks`, PUB round 2, lane 4.1 — every tuple
-    /// homed where the injected `guest` predicate answers `false` is dropped
-    /// from every read). The ONE construction site in the crate:
-    /// `eval`/`decide`, the rule engine's domain enumeration, trigger
-    /// evaluation and scope test, the fire's own re-check, and
-    /// `evaluate_def`'s denotation all build their context here, so no
-    /// evaluator ever reads the link store class-free.
+    /// at the term view `view`: the catalog, M3, and M7 THROUGH THE LOOK AT
+    /// GUEST CLASS (`GuestLinks`, PUB round 2, lane 4.1 — every tuple homed
+    /// where the injected `guest` predicate answers `false` is dropped from
+    /// every read). The ONE construction site in the crate: `eval`/`decide`,
+    /// the rule engine's domain enumeration, trigger evaluation and scope
+    /// test, the fire's own re-check, and `evaluate_def`'s denotation all
+    /// build their context here, so every evaluator reads the link store at
+    /// guest class.
     fn eval_ctx<'a>(
         &'a self,
         w: &'a W,
@@ -251,7 +251,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// site: every `emit`/`nullify` M9 makes (`register_pred`, `supersede`,
     /// `certify_stable`, `retract_pred`, and a rule's fire) goes through a
     /// writer built here, so M7's idempotency and dedup lookups see only
-    /// guest-readable incumbents and no write can be built class-free.
+    /// guest-readable incumbents and every writer M9 builds runs at guest
+    /// class.
     fn link_writer(&self) -> LinkWriter<'_, W> {
         (self.mk_link_writer)(self.kernel.as_ref(), &*self.guest)
     }
@@ -354,8 +355,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// the convention `evaluate_def` shares (`bind_args`), refused there as a
     /// value where this door panics. INFALLIBLE past the door;
     /// reads ONLY M7 + M3, all off `snap` (PC4 / ASN-0134 clause 6) — M7
-    /// through the GUEST-CLASS view (lane 4.1, PUB-6.28): a tuple homed in a
-    /// document the injected `guest` predicate refuses is invisible to the
+    /// through the look at guest class (lane 4.1, PUB-6.28): a tuple homed in
+    /// a document the injected `guest` predicate refuses is invisible to the
     /// verdict, exactly as it is to a fire's gates. The verdict is "as of
     /// `snap.seq()`" (M2 V1 retrospective).
     ///

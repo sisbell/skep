@@ -170,7 +170,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // Leg (b): the Marker pattern — the emitted tuple's slot-coverage is
         // exactly the witness the trigger's negated membership names
         // (canonical: trigger ¬is_K(a) @ audit ⟺ Marker{_, K}). The spelling
-        // is the analyzer's to recognize; the class comparison is this
+        // is the analyzer's to recognize; the class comparison is the rule
         // engine's, which alone knows what the action emits.
         let marker = match &rule.action {
             FireAction::Marker { ty, .. } => {
@@ -278,8 +278,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
 
     /// `[D_ρ]_snap` — the stored `TypedDom` evaluated off the snapshot at the
     /// RULE's declared view (a `default`-view rule never fires on UV-hidden
-    /// arguments); finite by QD-fin. Enumerated THROUGH THE GUEST-CLASS VIEW
-    /// (lane 4.1, PUB-6.28): a tuple homed in a private draft seeds no
+    /// arguments); finite by QD-fin. Enumerated THROUGH THE LOOK AT GUEST
+    /// CLASS (lane 4.1, PUB-6.28): a tuple homed in a private draft seeds no
     /// domain — a rule whose only matching tuples are draft-homed has an
     /// EMPTY visible domain and reports as a rule with no matching tuple
     /// does today (`next_enabled` → `None`, `step` → `Quiescent`).
@@ -288,7 +288,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         enum_dom(&cx, &Env::empty(), rule.domain.as_dom())
     }
 
-    /// `T_ρ(x, snap)` at the rule's view, read THROUGH THE GUEST-CLASS VIEW
+    /// `T_ρ(x, snap)` at the rule's view, read THROUGH THE LOOK AT GUEST CLASS
     /// (lane 4.1, PUB-6.28) — the captured trigger body with its one
     /// parameter bound to `arg`, referents (a `Def` trigger's) resolved
     /// through the memo — so a draft-homed tuple satisfies no trigger's
@@ -434,8 +434,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// (`fire_count`), so it counts deposits, never these outcomes.
     ///
     /// THE LOOK AT GUEST CLASS (lane 4.1, PUB-6.28): the domain re-check and
-    /// the trigger read M7 through the guest-class view off this fire's own
-    /// snapshot — the same view `next_enabled`/`step` peeked through — so an
+    /// the trigger read M7 through the look at guest class off this fire's
+    /// own snapshot — the look `next_enabled`/`step` peeked through — so an
     /// argument whose only witnessing tuple is draft-homed is OUT of the
     /// visible domain and answers `NoOp` (the removed discharge), never
     /// `DraftBoundary`: the trigger never reaches the action. Answer order,
@@ -510,9 +510,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// M7's H-HOME), which is why `Coordinator::new` obliges the assembler
     /// to make it TOTAL.
     ///
-    /// This is the BOUNDARY, one of the class's three applications: what a
-    /// verdict sees is `Coordinator::eval_ctx`'s (the look, lane 4.1), and
-    /// what a deposit's own value-keyed gates see is
+    /// This is the BOUNDARY, one of the guest class's three applications:
+    /// what a verdict sees is `Coordinator::eval_ctx`'s (the look, lane 4.1),
+    /// and what a deposit's own value-keyed gates see is
     /// `Coordinator::link_writer`'s (lane 3.3b).
     fn draft_boundary(&self, w: &W, home: &Address, arg_addr: &Address) -> Option<Address> {
         let arg_doc = document_of(arg_addr).unwrap_or_else(|| arg_addr.clone());
@@ -531,11 +531,12 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// `Fired` ([`Coordinator::fire`] states it) — never a fresh deposit as
     /// `Deduped`. The divergence count reads the store, not this answer.
     ///
-    /// Reads `LinkState` CLASS-FREE, as the def probes and the divergence
-    /// monitor do (`coordinator/defs.rs` enumerates the regime): the writer
-    /// runs at guest class, so a returned incumbent is guest-readable and a
-    /// fresh mint is absent from this snapshot under either reading — the
-    /// discrimination is the same filtered or not.
+    /// Reads `LinkState` AT NO VISIBILITY CLASS, as the def probes and the
+    /// divergence monitor do (`coordinator/defs.rs` enumerates the regime):
+    /// the writer runs at guest class, so a returned incumbent is
+    /// guest-readable and a fresh mint is absent from this snapshot under
+    /// either reading — the discrimination is the same at guest class or at
+    /// none.
     fn fired_or_deduped(&self, snap: &Snapshot<W>, effect: Address, seq: Seq) -> FireOutcome {
         if snap.world().links().readlink(&effect).is_some() {
             FireOutcome::Deduped { effect, seq }
@@ -617,11 +618,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// count is as of a snapshot pinned at the call — the one read in this
     /// group that takes no caller's snapshot.
     ///
-    /// Reads `LinkState` CLASS-FREE, where every verdict reads through the
-    /// guest-class view: the attribution key pins the home to the rule's own
-    /// action home, and a fire into a home the guest class hides deposits
-    /// nothing (`FireError::DraftBoundary`), so no count this recompute can
-    /// produce would differ under the filtered view — while an operator
+    /// Reads `LinkState` AT NO VISIBILITY CLASS, where every verdict reads
+    /// through the look at guest class: the attribution key pins the home to
+    /// the rule's own action home, and a fire into a home the guest class
+    /// hides deposits nothing (`FireError::DraftBoundary`), so no count this
+    /// recompute can produce would differ through the look — while an operator
     /// looking for a runaway wants every tuple the journal recovered.
     pub fn fire_count(&self, id: RuleId, x: &Address) -> u64 {
         let Some(rule) = self.rules.iter().find(|r| r.id == id) else {
@@ -677,8 +678,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
         if n == 0 {
             return Vec::new();
         }
-        // What each rule's fire deposits — the engine's knowledge, since only
-        // it knows what an action emits; the edge rule itself is
+        // What each rule's fire deposits — the rule engine's knowledge, since
+        // only it knows what an action emits; the edge rule itself is
         // `Footprint::armed_by`'s, which alone knows what a term reads, over
         // the footprint recorded at registration.
         let emitted: Vec<Emission> = self

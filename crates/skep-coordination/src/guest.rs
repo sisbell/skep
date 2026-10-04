@@ -1,13 +1,13 @@
 //! THE LOOK AT GUEST CLASS (PUB round 2, lane 4.1): M7's read surface as the
-//! evaluator sees it — one filtered view over `&LinkState` that DROPS every
+//! evaluator sees it — `&LinkState` behind one home filter that DROPS every
 //! tuple whose HOME document the coordinator's injected guest predicate
 //! refuses. Every read the evaluator makes of the store goes through this
-//! view, and through nothing else: `EvalCtx.links` IS this view in every
-//! construction (`eval`/`decide`, the rule engine's domain enumeration and
-//! trigger evaluation, the fire's own re-check, the def-path denotation), so
-//! no draft-homed tuple can satisfy a rule's trigger, seed its domain, or
-//! move a PL verdict. M7's `LinkState` reads stay class-free; the filter is
-//! the delegator's, applied here.
+//! surface, and through nothing else: `EvalCtx.links` IS this surface in
+//! every construction (`eval`/`decide`, the rule engine's domain enumeration
+//! and trigger evaluation, the fire's own re-check, the def-path denotation),
+//! so no draft-homed tuple can satisfy a rule's trigger, seed its domain, or
+//! move a PL verdict. M7's `LinkState` reads take no visibility class; the
+//! home filter is the delegator's, applied here.
 //!
 //! WHY BY HOME (PUB-1.26, PUB-1.31, PUB-6.13): a link carries no publication
 //! flag of its own — its publishedness is its HOME's — so a tuple is visible
@@ -15,18 +15,23 @@
 //! home document being published. That is the same test M7's own value-keyed
 //! gates apply at link-home identity (lane 3.3b) and the result-set row
 //! applies to every link (PUB-6.13). The SLICE (`Active`/`Audit`) is
-//! ORTHOGONAL to the class: an `AuditSlice` domain still shows the retracted
-//! tuples of READABLE homes, and never a draft's tuples.
+//! ORTHOGONAL to the visibility class: an `AuditSlice` domain still shows the
+//! retracted tuples of READABLE homes, and never a draft's tuples. This axis
+//! keeps its own words: a tuple is VISIBLE at guest class when its home is
+//! READABLE there, a read outside this surface is AT NO VISIBILITY CLASS, and
+//! this surface is the look — never a "view", which in this crate is PC3's
+//! term view, nor a bare "class", which is a coverage class (ASN-0128 I0).
 //!
 //! WHY HERE (PUB-6.28; the owner's placement ruling of 2026-09-06 — the
-//! class is threaded from the caller): "a fire's verdict never turns on a
-//! document rule 4 hides, and a fire commits byte-identically to a world
-//! with no drafts" — rule 4 being PUB's model rule (PUB-1.13–1.16: addresses
-//! are not secret; a draft's bytes and structure are), not a registered
-//! rule. The verdict is the trigger's as much as the write's, so the class
-//! lane 3.3 pinned on the action's home (`FireError::DraftBoundary`) and
-//! lane 3.3b on the writer's gates is applied to the LOOK too — in M9, the
-//! delegator that holds `guest`. M7 is told nothing.
+//! visibility class is threaded from the caller): "a fire's verdict never
+//! turns on a document rule 4 hides, and a fire commits byte-identically to a
+//! world with no drafts" — rule 4 being PUB's model rule (PUB-1.13–1.16:
+//! addresses are not secret; a draft's bytes and structure are), not a
+//! registered rule. The verdict is the trigger's as much as the write's, so
+//! the guest class lane 3.3 pinned on the action's home
+//! (`FireError::DraftBoundary`) and lane 3.3b on the writer's gates is
+//! applied to the LOOK too — in M9, the delegator that holds `guest`. M7 is
+//! told nothing.
 //!
 //! COST (PUB-7.15's shape): one `document_of` (M1 arithmetic, no read) and
 //! one predicate call per candidate tuple a COLLECTION read keeps — a rule's
@@ -76,8 +81,8 @@ use crate::value::lift;
 /// DISTINCT from a term's [`View`] (PC3), an evaluation parameter with three
 /// values: `default` names no slice — it is the active slice plus M9's UV
 /// rewrite over it (`EvalCtx`). [`Slice::of`] is the one statement of that
-/// relation. At a DIRECT `LinkState` read — the class-free def probes
-/// (`coordinator/defs.rs`) and the divergence monitor
+/// relation. At a DIRECT `LinkState` read, at no visibility class — the def
+/// probes (`coordinator/defs.rs`) and the divergence monitor
 /// (`coordinator/engine.rs`) — M9 speaks M7's `View`; inside this read
 /// surface, where a term view also circulates, the slice has its own name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

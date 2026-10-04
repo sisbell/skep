@@ -27,7 +27,7 @@
 //! recomputable hint or an in-memory working set, rebuilt by
 //! replay/re-query/re-registration, and the fire counts it reports are
 //! recomputed from M7's journal-recovered slices at every ask. No journal, no
-//! `apply`, no slice, no record variant.
+//! `apply`, no `WorldState` slice, no record variant.
 //!
 //! Several QUERIES may fill that memo on a miss — `signature`, a
 //! `type_check`/`type_check_trigger` over a `Ref`, `evaluate_def`,
@@ -75,12 +75,12 @@
 //!   is handed, with `guest` a pure function of the world it is passed: the
 //!   one-pinned-snapshot verdict and the byte-identical commit rest on both.
 //!   The factory types are `fn` pointers, so a factory holding a kernel or a
-//!   class of its own does not compile; one naming a `static` instead, and
-//!   an impure `guest`, nothing here can refuse. And `guest` must be TOTAL
-//!   over every `&Address` M9 hands it, a fire consulting it on the action's
-//!   HOME before M7's H-HOME gate has run and on the bound argument's
-//!   document, falling back to the argument itself; `false` is the safe
-//!   answer for an address it does not recognize, and a panic is not an
+//!   visibility class of its own does not compile; one naming a `static`
+//!   instead, and an impure `guest`, nothing here can refuse. And `guest`
+//!   must be TOTAL over every `&Address` M9 hands it, a fire consulting it on
+//!   the action's HOME before M7's H-HOME gate has run and on the bound
+//!   argument's document, falling back to the argument itself; `false` is the
+//!   safe answer for an address it does not recognize, and a panic is not an
 //!   answer ([`Coordinator::new`] states the whole of it);
 //! * **PR-DISC**: no write but M9's own `register_pred`/`certify_stable` may
 //!   grow the `pdef`/`pd_stable` slices (§Internal 4). M7 classes a deposit

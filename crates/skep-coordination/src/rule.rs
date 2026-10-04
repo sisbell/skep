@@ -2,8 +2,8 @@
 //! [`Rule`] submission, trigger/action forms, the occurrence, the fire/step
 //! outcome types, and the scope bodies `quiescent_scoped` restricts by, each
 //! saying what it reads. The checked shapes the working set holds are the
-//! engine's own (`coordinator/engine.rs`). A rule's bound argument is a PL
-//! domain element, so it is [`crate::value::Arg`] — `Occurrence` names it,
+//! rule engine's own (`coordinator/engine.rs`). A rule's bound argument is a
+//! PL domain element, so it is [`crate::value::Arg`] — `Occurrence` names it,
 //! this module does not declare it.
 
 use skep_address::Address;

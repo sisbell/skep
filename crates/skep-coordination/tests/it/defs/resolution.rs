@@ -2,10 +2,10 @@
 //! per-handle policy, and the answer to every breach a level-0 derivation
 //! meets, a body too deep and a reference cycle included — and the two
 //! answers it never keeps, a never-registered start's and that of a start
-//! with nothing resident yet; and the registration probes, class-free beside
-//! the guest-class look, and matching a start by its coverage class — the
-//! identity M7's dedup keys a registration by — where PL's `is_K` matches by
-//! coverage.
+//! with nothing resident yet; and the registration probes, read at no
+//! visibility class beside the guest-class look, and matching a start by its
+//! coverage class — the identity M7's dedup keys a registration by — where
+//! PL's `is_K` matches by coverage.
 
 use crate::common::*;
 use crate::defs::{envelope, forged_negations};
@@ -282,12 +282,13 @@ fn a_probe_of_a_start_with_no_content_yet_does_not_freeze_it() {
     referrer.type_check(vec![], reference()).expect("nor did the reference's derivation");
 }
 
-/// The def-registration probes are class-free by design, and the
-/// evaluator's look is not: a def registered into a document the guest
-/// predicate refuses is ever-registered, active, signed, evaluable and
-/// endorsable as a referent — and invisible to `is_K(pdef, ·)` at every view.
+/// The def-registration probes read at no visibility class by design, and the
+/// evaluator's look reads at guest class: a def registered into a document the
+/// guest predicate refuses is ever-registered, active, signed, evaluable and
+/// endorsable as a referent — and invisible to `is_K(pdef, ·)` at every term
+/// view.
 #[test]
-fn def_probes_are_class_free_while_the_evaluator_s_look_is_not() {
+fn def_probes_see_what_the_evaluator_s_look_hides() {
     let k = kernel();
     let c = coord_with_guest(&k, |_, d| *d != doc2());
     let (start, _) = c
@@ -304,11 +305,13 @@ fn def_probes_are_class_free_while_the_evaluator_s_look_is_not() {
 
     // Endorsement is a registration question too: a consumer of the
     // draft-registered def registers in a readable home, the referent active
-    // to `register_pred`'s class-free gate though hidden from the look.
+    // to `register_pred`'s gate, which reads at no visibility class, though
+    // hidden from the look.
     let consumer = c
         .type_check(vec![], Term::Ref { addr: start.clone(), args: vec![] })
         .expect("a reference to the draft-registered def");
-    c.define_predicate(&doc1(), &consumer).expect("the endorsement gate reads class-free");
+    c.define_predicate(&doc1(), &consumer)
+        .expect("the endorsement gate reads at no visibility class");
 
     // `is_certified_stable` is the same split: the certificate lands in the
     // draft, so the def probe answers and the evaluator's look does not.
@@ -326,9 +329,9 @@ fn def_probes_are_class_free_while_the_evaluator_s_look_is_not() {
     assert_ne!(twin, certificate, "a guest-hidden incumbent absorbs no re-certification");
     assert!(seq > before, "and the re-certification commits");
 
-    // `current_version` walks M7's claims CLASS-FREE, where the `tip` atom
-    // rebuilds the walk over the VISIBLE ones — so one draft-homed claim moves
-    // the def layer's lineage read and not the evaluator's.
+    // `current_version` walks M7's claims AT NO VISIBILITY CLASS, where the
+    // `tip` atom rebuilds the walk over the VISIBLE ones — so one draft-homed
+    // claim moves the def layer's lineage read and not the evaluator's.
     let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
     let l2 = deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
     link_writer(&k)
@@ -342,8 +345,8 @@ fn def_probes_are_class_free_while_the_evaluator_s_look_is_not() {
 /// ≤1 active `pdef` per start (PR0) holds WITHIN the guest class the writer
 /// runs at (lane 3.3b): a pdef homed where the guest predicate refuses is
 /// invisible to M7's idempotency lookup, so a second registration mints a
-/// fresh tuple beside it — and `is_active_pred`, which reads class-free,
-/// stays true until each of the two is retracted, one per call.
+/// fresh tuple beside it — and `is_active_pred`, which reads at no visibility
+/// class, stays true until each of the two is retracted, one per call.
 #[test]
 fn a_pdef_hidden_from_the_guest_class_does_not_absorb_a_second_registration() {
     let k = kernel();

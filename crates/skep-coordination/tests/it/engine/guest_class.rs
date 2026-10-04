@@ -11,7 +11,7 @@ use skep_coordination::{
 };
 use skep_links::{Caller, HasLinks, Visibility};
 
-/// The guest-class filter (lane 3.3 §5): a fire whose Marker HOME, or whose
+/// The draft boundary (lane 3.3 §5): a fire whose Marker HOME, or whose
 /// bound argument's DOCUMENT, the injected guest predicate answers `false`
 /// for is refused BEFORE any deposit — a `Failed` step carrying
 /// `DraftBoundary(doc)`, never a silent skip and never a link. A document
@@ -199,7 +199,7 @@ fn the_trigger_s_look_is_filtered_at_guest_class() {
     link_writer(&k).emit(Caller::System, &doc2(), &pred_stable_ty(), &ca(1), &[]).expect("rel in doc2");
     assert!(
         k.snapshot().world().links().is_k(&pred_stable_ty(), ca(1).tumbler()),
-        "M7's class-free read holds the tuple — it is the evaluator's look that must not"
+        "M7's own read holds the tuple — it is the evaluator's look that must not"
     );
     assert!(!decide_now(&k, &c, View::Active, is_k(&pred_stable_ty(), lit_addr(&ca(1)))));
     assert!(!decide_now(&k, &c, View::Audit, is_k(&pred_stable_ty(), lit_addr(&ca(1)))));

@@ -49,7 +49,13 @@ parts, each under the design rule it realizes:
   the first position that differs (REG-3.13). An atom un-arranged at the
   head is recovered by the home's chain walk, one version at a time
   (REG-3.25), its cost counted (`ChainWalkStats`). A mirror rebuilt from
-  its copy alone, no board dialed, says so (`Opened::Rebuilt`).
+  its copy alone, no board dialed, says so (`Opened::Rebuilt`). A deposit
+  leaves the active view as the board itself reads it — its home's active
+  links of its type and atom no longer answer it (REG-1.11) — and never
+  because some link of the retraction's type is found, which any account's
+  link of another class overlaps; each standing deposit is asked once a
+  pass of the fold. A feed page that re-serves a row or does not advance is
+  refused, as is a limit the feed names and refuses again.
 - **The verify** (`judge`, `Trial`) — the record grade for registry
   records, client-side (rm-2; REG-1.86 (e)): the body parsed under the
   canonical rule by `skep_registry::parse`, the record frame rebuilt from
@@ -81,8 +87,10 @@ parts, each under the design rule it realizes:
   name (`MemberKind`: `Onion` the first) with its own transport
   (`Transports`), the host term met by an address and never a name — this
   resolver's own resolution of a name, tested at every address it yields
-  (REG-3.35) — the ordered walk's one precedence, and the dial not made for
-  a kind whose transport is not held.
+  (REG-3.35), an address a translator dials on (IPv4-mapped, or under
+  NAT64's `64:ff9b::/96`) tested as the IPv4 it reaches and the local-use
+  `64:ff9b:1::/48` refused whole — the ordered walk's one precedence, and
+  the dial not made for a kind whose transport is not held.
 - **The states** (`Resolution`) — every outcome a named visible state,
   REG-3.80's faces and BOUND, the walk's own answer (REG-3.7):
   UNREGISTERED, RETIRED-WITH-HISTORY, BOUND-BUT-UNREACHABLE,
@@ -96,12 +104,16 @@ The HTTP client (`Http`, `Transport`) is a written-out HTTP/1.1 client
 over `std::net`, as the MCP adapter's is, trying every address a host's
 name yields in order, as `TcpStream::connect` does; it speaks plain `http`
 alone, so an `https` root is a transport this build does not hold, refused
-by name.
+by name, and it reads no answer past the feed's 2 MiB page budget and its
+envelope (`TransportError::TooLarge`).
 The board's typed reads (`Board`) run over any `Transport` — that client,
 or a suite's replay of a recording — and count every read by kind
 (`Reads`), reported in `Stats`; every value the resolver takes on the
-board's word (the head pair, the board term, a link's slots, a key set) is
-typed there.
+board's word (the head pair, the board term, a link's type and slots, a
+key set, a deposit's standing on the active view) is typed there, and an
+`/op` answer past the cap is one no typed read takes. A link's slots are
+read only for a link of a type the reader names, its type slot that
+type's unit span exactly.
 
 ## 2. The crate's suite and its fixture
 

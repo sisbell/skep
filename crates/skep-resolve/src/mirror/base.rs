@@ -43,7 +43,7 @@ use super::{
     position, Chains, Fetched, Lines, Mirror, MirrorError, Opened, Refusal, Row, Stats, Types, FEED_COPY,
     FEED_FORMAT, FETCH_CACHE,
 };
-use crate::board::{parse_chain, Board, BoardError};
+use crate::board::{parse_chain, Board, BoardError, Page};
 use crate::hint::{RealmId, RootHint};
 use crate::http::Dial;
 use crate::index::Index;
@@ -150,6 +150,7 @@ impl Mirror {
             head: 0,
             realm_compared: false,
             epochs: BTreeMap::new(),
+            asked: BTreeMap::new(),
             chains: Chains::default(),
             stats: Stats::default(),
             opened: Opened::Bootstrapped,
@@ -198,26 +199,20 @@ impl Mirror {
 
     /// Pages from `since` to the feed's end, each row appended to the copy
     /// and folded; the page size the feed's own default, and the limit the
-    /// feed names where a page passes its byte budget.
+    /// feed names where a page passes its byte budget ([`page_from`]). Each
+    /// page is held to its own rules ([`Board::changes`]), so the next one is
+    /// asked past its `last`.
     fn pull(&mut self, mut since: u64) -> Result<(), MirrorError> {
         self.chains.stale();
         let mut limit: Option<usize> = None;
         loop {
-            let page = match self.board_ref()?.changes(since, limit) {
-                Ok(page) => page,
-                Err(BoardError::PageTooLarge { fits }) => {
-                    limit = Some(fits.max(1));
-                    continue;
-                }
-                Err(e) => return Err(e.into()),
-            };
+            let page = page_from(self.board_ref()?, since, &mut limit)?;
             self.stats.pages += 1;
-            let last_at = page.rows.last().and_then(position).unwrap_or(0);
             for row in page.rows {
                 self.append_feed(json!({ "row": row }))?;
                 self.rows.push(row);
             }
-            since = page.last.max(last_at);
+            since = page.last;
             if !page.more {
                 break;
             }
@@ -231,9 +226,11 @@ impl Mirror {
     /// credential pass first ([`Mirror::scan_credential_acts`]), so every act
     /// among the held rows is recorded before any record is judged; then each
     /// row folded, in order — read into what the fold takes ([`Row::of`]),
-    /// the held row staying where the copy's positions are read off it.
+    /// the held row staying where the copy's positions are read off it. A
+    /// pass begins with no deposit asked of the active view (`asked`).
     fn fold_pending(&mut self) -> Result<(), MirrorError> {
         let t = Instant::now();
+        self.asked.clear();
         self.scan_credential_acts()?;
         while self.folded < self.rows.len() {
             let held = &self.rows[self.folded];
@@ -273,14 +270,7 @@ impl Mirror {
         let mut since = 0;
         let mut limit = None;
         loop {
-            let page = match self.board_ref()?.changes(since, limit) {
-                Ok(page) => page,
-                Err(BoardError::PageTooLarge { fits }) => {
-                    limit = Some(fits.max(1));
-                    continue;
-                }
-                Err(e) => return Err(e.into()),
-            };
+            let page = page_from(self.board_ref()?, since, &mut limit)?;
             self.stats.pages += 1;
             fresh.extend(page.rows);
             since = page.last;
@@ -354,6 +344,29 @@ fn read_copy(dir: &Path) -> Result<Option<HeldCopy>, MirrorError> {
         }
     }
     Ok(Some(HeldCopy { genesis, rows, head_pairs }))
+}
+
+/// One page of the feed from `since` at `limit` — re-asked ONCE, at the
+/// limit the feed names, where it refuses the page past its byte budget
+/// (wire.md §The change feed, Paging: "re-ask with `limit=N` and the page is
+/// served whole"), never at `limit=0`, which the wire refuses; the limit is
+/// kept for the pages after it. A feed that refuses again the page it was
+/// re-asked at its own limit is malformed, and is not asked a third time.
+fn page_from(board: &Board, since: u64, limit: &mut Option<usize>) -> Result<Page, MirrorError> {
+    let mut re_asked = false;
+    loop {
+        match board.changes(since, *limit) {
+            Err(BoardError::PageTooLarge { fits }) if !re_asked => {
+                re_asked = true;
+                *limit = Some(fits.max(1));
+            }
+            Err(BoardError::PageTooLarge { .. }) => {
+                let refused = format!("the feed refuses the page from {since} at the limit it named");
+                return Err(BoardError::Malformed(refused).into());
+            }
+            page => return Ok(page?),
+        }
+    }
 }
 
 /// Dial the hint's origins in order; the first that answers `/health` is the

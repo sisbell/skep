@@ -3,11 +3,15 @@ use std::rc::Rc;
 
 use skep_address::Address;
 use skep_identity::PublicKey;
+use skep_registry::{commons_type, t_endpoint, MAX_REGISTRY_RECORD_BYTES};
 use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
 
 use super::*;
+use crate::board::unit_span_json;
 use crate::http::{dial_http, Method, Transport, TransportError};
+use crate::mirror::StoredLink;
 use crate::parse_address;
+use crate::state::{EndpointRecord, Judged, Verdict};
 
 fn a(s: &str) -> Address {
     parse_address(s).unwrap()
@@ -88,7 +92,7 @@ impl Transport for Scripted {
                 Ok((503, b"unavailable".to_vec()))
             }
             (Some("read_link"), Some("1.0.2.0.1.0.2.2"), None) => answer(json!({ "resp": "link", "link": { "slots": [
-                [span("1.0.2.0.1.0.1.2")], [span("1.0.2")], [span("1.1.0.1.0.1.0.3.1")],
+                [span("1.0.2.0.1.0.1.2")], [span("1.0.2")], [unit_span_json(&commons_type(&[1]))],
             ] } })),
             (Some("key_set"), None, None) => answer(table(&self.live, 6)),
             (Some("key_set"), None, Some(at)) => answer(table(&self.before, at)),
@@ -351,4 +355,218 @@ fn every_origin_tried_is_named_beside_its_own_error() {
     assert!(matches!(tried[1].1, BoardError::Transport(TransportError::Connect(_))), "{:?}", tried[1].1);
     assert_eq!(tried.len(), 2);
     assert!(!dir.path().join(FEED_COPY).exists(), "nothing written");
+}
+
+/// A BOARD WHERE A FORGED RETRACTION STANDS: an account's own link in its
+/// own doc 1, typed `1.1.0.1.0.1.0.1` — a prefix of the retraction class's
+/// address, another class `make_link` admits — and naming the node, so it
+/// overlaps every link of the retraction's type and target a query asks
+/// for, and such a query answers it. The board's active view, asked for
+/// the deposit by its home, its type and its atom, answers `active`. Every
+/// query asked is kept.
+struct ActiveView {
+    active: Value,
+    asked: RefCell<Vec<Value>>,
+}
+
+impl Transport for ActiveView {
+    fn exchange(&self, method: Method, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+        assert_eq!((method, path), (Method::Post, "/op"));
+        let frame: Value = serde_json::from_slice(body).expect("a frame");
+        assert_eq!(frame["op"], "find_links_ftt", "a read this board does not answer: {frame}");
+        self.asked.borrow_mut().push(frame["q"].clone());
+        if frame["q"]["ty"][0]["start"] == "1.1.0.1.0.1.0.1.5" {
+            return answer(json!({ "resp": "addrs", "addrs": ["1.0.9.0.1.0.2.1"] }));
+        }
+        answer(self.active.clone())
+    }
+}
+
+/// A RETRACTION IS THE BOARD'S OWN READING (REG-1.11): a deposit leaves the
+/// active view where the board's active links of its home, its type and its
+/// atom answer it no longer — the org's own `nullify` — and never where a
+/// link of the retraction's type is found, which any account's link of
+/// another class overlaps; a refusal takes nothing off the view. A deposit
+/// found off the view is kept at the `nullify`'s row, a standing one never.
+#[test]
+fn a_link_of_another_class_takes_no_deposit_off_the_view() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (deposit, home, atom) = (a("1.0.2.0.1.0.2.1"), a("1.0.2.0.1"), a("1.0.2.0.1.0.1.1"));
+    let stored = StoredLink { at: 7, address: deposit.clone(), home: home.clone(), ty: Some(t_endpoint().clone()), from: vec![atom.clone()], to: Vec::new() };
+    let asked = |active: Value| {
+        let board = Rc::new(ActiveView { active, asked: RefCell::new(Vec::new()) });
+        let mut mirror = over(board.clone(), dir.path());
+        mirror.fetched.keep_link(stored.clone());
+        let retracted = mirror.retracted(8, &deposit, &home).expect("answered");
+        let queries = board.asked.borrow().clone();
+        (retracted, queries, mirror.fetched.retracted)
+    };
+    let (retracted, queries, kept) = asked(json!({ "resp": "addrs", "addrs": [deposit.to_string()] }));
+    assert!(!retracted, "the forged link takes nothing off the view");
+    let active = json!({ "home": [unit_span_json(&home)], "from": [unit_span_json(&atom)], "to": "any", "ty": [unit_span_json(t_endpoint())] });
+    assert_eq!(queries, [active], "the active view asked, never the retraction's type");
+    assert!(kept.is_empty(), "a standing deposit is kept as no retraction");
+    let (retracted, _, kept) = asked(json!({ "resp": "addrs", "addrs": [] }));
+    assert!(retracted, "the org's own nullify: off the view");
+    assert_eq!(kept.get(&8), Some(&vec![deposit.clone()]), "kept at the nullify's row");
+    let refused = json!({ "resp": "rejected", "op": "find_links_ftt", "code": "unparseable" });
+    assert!(!asked(refused).0, "a refusal takes nothing off the view");
+}
+
+/// A BOARD WHOSE ACTIVE VIEW HOLDS EVERY DEPOSIT of `1.0.2.0.1`.
+struct AllStanding;
+
+impl Transport for AllStanding {
+    fn exchange(&self, _: Method, _: &str, _: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+        answer(json!({ "resp": "addrs", "addrs": ["1.0.2.0.1.0.2.1", "1.0.2.0.1.0.2.2", "1.0.2.0.1.0.2.3"] }))
+    }
+}
+
+/// A STANDING DEPOSIT IS ASKED ONCE A PASS: every row a pass folds was
+/// held before it asks, so the active view's answer stands for the pass —
+/// three `nullify` rows naming a home of three standing deposits ask three
+/// times, never nine — and a later pass, its rows past the answer, asks
+/// afresh.
+#[test]
+fn each_standing_deposit_is_asked_once_a_pass() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut mirror = over(AllStanding, dir.path());
+    let home = a("1.0.2.0.1");
+    let deposit = |n: u64| a(&format!("1.0.2.0.1.0.2.{n}"));
+    for n in 1..=3 {
+        let atom = a(&format!("1.0.2.0.1.0.1.{n}"));
+        mirror.fetched.keep_link(StoredLink { at: n, address: deposit(n), home: home.clone(), ty: Some(t_endpoint().clone()), from: vec![atom], to: Vec::new() });
+        let record = EndpointRecord { origins: Vec::new(), replaces: (n > 1).then(|| deposit(n - 1)), honored: false, nullified: false };
+        let judged = Judged { position: n, link: deposit(n), home: home.clone(), record, verdict: Verdict::UndeterminableHere };
+        assert!(mirror.index.fold_endpoint(judged), "deposit {n} honored");
+    }
+    mirror.rows = (10..13).map(|at| json!({ "at": at, "op": "nullify", "docs": ["1.0.2.0.1"] })).collect();
+    mirror.fold_pending().expect("folded");
+    assert_eq!(mirror.stats().reads.find_links, 3, "each standing deposit asked once, never once a row");
+    assert_eq!(mirror.index.current_endpoint(&home).map(|d| d.link.clone()), Some(deposit(3)), "every deposit stands");
+    mirror.rows.push(json!({ "at": 13, "op": "nullify", "docs": ["1.0.2.0.1"] }));
+    mirror.fold_pending().expect("folded");
+    assert_eq!(mirror.stats().reads.find_links, 6, "a later pass asks afresh");
+}
+
+/// A BOARD THAT RE-SERVES A ROW: the page past `since=0` holds the row at 5
+/// and announces more, and so does every page after it — every request
+/// recorded, a request past the tenth a panic, so a pull that would page
+/// forever fails.
+struct Repeating {
+    asked: RefCell<Vec<String>>,
+}
+
+impl Transport for Repeating {
+    fn exchange(&self, method: Method, path: &str, _: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+        self.asked.borrow_mut().push(format!("{method} {path}"));
+        assert!(self.asked.borrow().len() <= 10, "a pull that pages forever: {path}");
+        let row = json!({ "at": 5, "op": "publish", "docs": ["1.0.2.0.1.1"] });
+        answer(json!({ "changes": [row], "last": 5, "more": true }))
+    }
+}
+
+/// A PAGE THAT SERVES A ROW AGAIN IS REFUSED (wire.md §The change feed,
+/// Paging): the row the first page served is held once, and the page past
+/// it that serves it again is refused — never held, never asked again.
+#[test]
+fn a_page_that_serves_a_row_again_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = Rc::new(Repeating { asked: RefCell::new(Vec::new()) });
+    let mut mirror = over(board.clone(), dir.path());
+    assert!(matches!(mirror.sync(), Err(MirrorError::Board(BoardError::Malformed(_)))));
+    assert_eq!(mirror.rows.len(), 1, "the row held once");
+    assert_eq!(*board.asked.borrow(), ["GET /changes?since=0", "GET /changes?since=5"], "never asked a third time");
+}
+
+/// A BOARD THAT REFUSES EVERY PAGE past its byte budget, naming `fits` 0
+/// each time — every request recorded, a request past the tenth a panic.
+struct Refusing {
+    asked: RefCell<Vec<String>>,
+}
+
+impl Transport for Refusing {
+    fn exchange(&self, method: Method, path: &str, _: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+        self.asked.borrow_mut().push(format!("{method} {path}"));
+        assert!(self.asked.borrow().len() <= 10, "a feed re-asked forever: {path}");
+        Ok((400, json!({ "error": "malformed_changes", "budget": 2_097_152, "fits": 0 }).to_string().into_bytes()))
+    }
+}
+
+/// A FEED THAT REFUSES THE LIMIT IT NAMED IS REFUSED: a page refused past
+/// the byte budget is re-asked once, at the limit the feed names, and
+/// refused again it is malformed — by the pull and by the resume's check
+/// alike, neither asking a third time.
+#[test]
+fn a_feed_that_refuses_the_limit_it_named_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = Rc::new(Refusing { asked: RefCell::new(Vec::new()) });
+    let mut mirror = over(board.clone(), dir.path());
+    let re_asked_once = ["GET /changes?since=0", "GET /changes?since=0&limit=1"];
+    assert!(matches!(mirror.sync(), Err(MirrorError::Board(BoardError::Malformed(_)))), "the pull");
+    assert_eq!(*board.asked.borrow(), re_asked_once);
+    board.asked.borrow_mut().clear();
+    assert!(matches!(mirror.check_against_source(&[], &[]), Err(MirrorError::Board(BoardError::Malformed(_)))), "the resume's check");
+    assert_eq!(*board.asked.borrow(), re_asked_once);
+}
+
+/// A BOARD WHOSE LINK `1.0.2.0.1.0.2.7` IS OF A TYPE THE FOLD DOES NOT
+/// READ: its type slot two spans, its `from` three thousand atoms.
+struct Untyped;
+
+impl Transport for Untyped {
+    fn exchange(&self, _: Method, _: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+        let frame: Value = serde_json::from_slice(body).expect("a frame");
+        assert_eq!((frame["op"].as_str(), frame["a"].as_str()), (Some("read_link"), Some("1.0.2.0.1.0.2.7")));
+        let from: Vec<Value> = (1..=3_000).map(|n| span(&format!("1.0.2.0.1.0.1.{n}"))).collect();
+        let ty = [unit_span_json(t_endpoint()), unit_span_json(&commons_type(&[1]))];
+        answer(json!({ "resp": "link", "link": { "slots": [from, [span("1.0.2")], ty] } }))
+    }
+}
+
+/// A LINK OF NO TYPE THE FOLD READS is held with no slots: none of its
+/// spans is parsed, and its cache line holds its type as none and nothing
+/// of its `from` or its `to`.
+#[test]
+fn a_link_of_no_type_the_fold_reads_is_held_with_no_slots() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut mirror = over(Untyped, dir.path());
+    let stored = mirror.read_link(5, &a("1.0.2.0.1.0.2.7"), &a("1.0.2.0.1")).expect("answered").expect("a link stands");
+    assert_eq!((stored.ty, stored.from.len(), stored.to.len()), (None, 0, 0));
+    let line = json!({ "link": { "at": 5, "address": "1.0.2.0.1.0.2.7", "home": "1.0.2.0.1", "ty": null, "from": [], "to": [] } });
+    assert_eq!(mirror.pending_cache, [line], "its cache line holds no slot");
+}
+
+/// A BOARD WHOSE HOME `1.0.2.0.1` ARRANGES ITS ATOM `…0.1.1` AT THE HEAD,
+/// the bytes there `len` long.
+struct Lengthy {
+    len: usize,
+}
+
+impl Transport for Lengthy {
+    fn exchange(&self, _: Method, _: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+        let frame: Value = serde_json::from_slice(body).expect("a frame");
+        match frame["op"].as_str() {
+            Some("image") => answer(json!({ "resp": "runs", "runs": [{ "i_start": "1.0.2.0.1.0.1.1", "width": "1" }] })),
+            Some("retrieve_v") => answer(json!({ "resp": "delivery", "items": [{ "atom": "x".repeat(self.len) }] })),
+            _ => panic!("a read this board does not answer: {frame}"),
+        }
+    }
+}
+
+/// BYTES PAST ANY RECORD ARE NEVER HELD: an atom longer than the largest
+/// record the canonical rule admits is handed to the parse, which refuses
+/// it, and kept neither in the cache nor in its file; a record's own bytes,
+/// at that length, are kept.
+#[test]
+fn bytes_past_any_record_are_handed_to_the_parse_and_never_held() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (home, atom) = (a("1.0.2.0.1"), a("1.0.2.0.1.0.1.1"));
+    let mut mirror = over(Lengthy { len: MAX_REGISTRY_RECORD_BYTES + 1 }, dir.path());
+    let bytes = mirror.fetch_atom(5, &home, &atom).expect("read").expect("the bytes");
+    assert_eq!(bytes.len(), MAX_REGISTRY_RECORD_BYTES + 1, "handed to the parse");
+    assert!(mirror.fetched.atoms.is_empty() && mirror.pending_cache.is_empty(), "never held");
+    let mut mirror = over(Lengthy { len: MAX_REGISTRY_RECORD_BYTES }, dir.path());
+    mirror.fetch_atom(5, &home, &atom).expect("read").expect("the bytes");
+    assert_eq!((mirror.fetched.atoms.len(), mirror.pending_cache.len()), (1, 1), "a record's bytes, held");
 }

@@ -16,6 +16,15 @@ use skep_identity::Enrolled;
 use super::{Epoch, KeysAsOf, Mirror, MirrorError, Row};
 use crate::board::BoardError;
 
+/// THE DEEPEST PRINCIPAL PREFIX A BOARD MINTS, in components — its node
+/// field, the separator and its account field together: skep-namespace's
+/// `MAX_PRINCIPAL_COMPONENTS`, which `delegate` refuses past, restated here
+/// because this crate links no engine. An account deeper than it is one no
+/// board of this build wrote, so the walk that opens it — a read per level,
+/// each carrying the whole prefix, quadratic in its depth — is never made:
+/// its table is one this reader cannot read.
+const MAX_PRINCIPAL_COMPONENTS: usize = 64;
+
 impl Mirror {
     /// THE CREDENTIAL PASS, the fold's first: every link row among the held
     /// rows this pass has not read — its stored link from the cache or the
@@ -57,8 +66,13 @@ impl Mirror {
 
     /// THE SET THAT OPENS `account` as of `at`: its own table where not
     /// empty, else the nearest keyed account above it (AUTH-4.30 (i)'s walk,
-    /// as the daemon makes it); `None` where the table cannot be read.
+    /// as the daemon makes it); `None` where the table cannot be read, as it
+    /// cannot for an account deeper than any board mints
+    /// ([`MAX_PRINCIPAL_COMPONENTS`]).
     pub(super) fn keys_opening(&mut self, account: &Address, at: u64) -> Result<Option<Vec<Enrolled>>, MirrorError> {
+        if account.tumbler().len() > MAX_PRINCIPAL_COMPONENTS {
+            return Ok(None);
+        }
         let mut acct = account.clone();
         loop {
             let epoch = self.epoch_of(&acct, at);
@@ -266,5 +280,31 @@ mod tests {
         assert_eq!(opening("1.0.6.1"), None, "its own table unread: never the one above");
         assert_eq!(opening("1.0.5.1"), None, "empty, and the account above unread");
         assert_eq!(opening("1.0.7"), Some(Vec::new()), "empty, and above it the node: the empty set itself");
+    }
+
+    /// AN ACCOUNT DEEPER THAN ANY BOARD MINTS opens nothing: past sixty-four
+    /// components — the node field, the separator and the account field
+    /// together — its table is one this reader cannot read, and the walk up
+    /// its levels is never made, though an account above it holds a key; at
+    /// sixty-four the walk is made as for any account.
+    #[test]
+    fn an_account_deeper_than_any_board_mints_opens_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let account = |components: usize| a(&format!("1.0{}", ".1".repeat(components - 2)));
+        let mut kept = Fetched::default();
+        let tables = [(account(65), vec![]), (account(64), vec![]), (account(63), vec![key(5)])];
+        let lines: Vec<serde_json::Value> = tables
+            .iter()
+            .map(|(acct, keys)| {
+                let enrolled = keys.iter().map(|k| Enrolled { key: k.clone(), anchor: true }).collect();
+                kept.keep_keys(KeysAsOf { account: acct.clone(), epoch: Epoch(0), at: 0, enrolled }).expect("a new table")
+            })
+            .collect();
+        copy(dir.path(), &[], &lines);
+        let mut mirror = Mirror::rebuild_offline(&hint(), dir.path()).expect("rebuilt");
+        assert_eq!(account(65).tumbler().len(), 65);
+        assert_eq!(mirror.keys_opening(&account(65), 9), Ok(None), "past the deepest prefix a board mints");
+        let opened = mirror.keys_opening(&account(64), 9).expect("no board, no wire error");
+        assert_eq!(opened.map(|keys| keys.into_iter().map(|e| e.key).collect::<Vec<_>>()), Some(vec![key(5)]), "at it");
     }
 }

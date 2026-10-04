@@ -76,11 +76,25 @@ struct PrefixEntries {
     honored: Vec<usize>,
 }
 
-/// Where a link's record stands in the ledger, for the retraction's lookup.
+/// One doc 1's endpoint deposits in journal order, and the latest of them
+/// that STOOD — honored, nullified or not — the one a later deposit's
+/// `replaces` must name (REG-1.10): kept, so a deposit is folded without a
+/// walk back over the ones before it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Deposits {
+    entries: Vec<Judged<EndpointRecord>>,
+    last_stood: Option<usize>,
+}
+
+/// Where a link's record stands in the ledger, for the retraction's lookup:
+/// a binding's prefix, or an endpoint deposit's home and the index it was
+/// first folded at among that home's deposits, which never move — so a link
+/// handed twice is retracted where it stood, never at the inert copy beside
+/// it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Place {
     Binding(Address),
-    Endpoint(Address),
+    Endpoint(Address, usize),
 }
 
 /// The counts a build reports: the ledger's prefixes, bindings and deposits,
@@ -108,7 +122,7 @@ pub struct Counts {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Ledger {
     prefixes: BTreeMap<Address, PrefixEntries>,
-    endpoints: BTreeMap<Address, Vec<Judged<EndpointRecord>>>,
+    endpoints: BTreeMap<Address, Deposits>,
     places: BTreeMap<Address, Place>,
 }
 
@@ -145,14 +159,17 @@ impl Ledger {
     /// where none has; answers whether it was honored.
     pub(crate) fn fold_endpoint(&mut self, mut judged: Judged<EndpointRecord>) -> bool {
         let deposits = self.endpoints.entry(judged.home.clone()).or_default();
-        let last_stood = deposits.iter().rev().find(|d| d.record.honored).map(|d| &d.link);
-        let honored = match last_stood {
+        let honored = match deposits.last_stood {
             None => judged.record.replaces.is_none(),
-            Some(link) => judged.record.replaces.as_ref() == Some(link),
+            Some(stood) => judged.record.replaces.as_ref() == Some(&deposits.entries[stood].link),
         };
         judged.record.honored = honored;
-        self.places.insert(judged.link.clone(), Place::Endpoint(judged.home.clone()));
-        deposits.push(judged);
+        let at = deposits.entries.len();
+        self.places.entry(judged.link.clone()).or_insert(Place::Endpoint(judged.home.clone(), at));
+        deposits.entries.push(judged);
+        if honored {
+            deposits.last_stood = Some(at);
+        }
         honored
     }
 
@@ -161,16 +178,13 @@ impl Ledger {
     /// view, so the retraction clears nothing (REG-2.14) and this answers
     /// `false`, as it does for a link the ledger does not hold.
     pub(crate) fn nullify(&mut self, link: &Address) -> bool {
-        match self.places.get(link) {
-            Some(Place::Endpoint(home)) => {
-                let home = home.clone();
-                if let Some(d) = self.endpoints.get_mut(&home).and_then(|ds| ds.iter_mut().find(|d| d.link == *link)) {
-                    d.record.nullified = true;
-                    return true;
-                }
-                false
+        let Some(Place::Endpoint(home, at)) = self.places.get(link) else { return false };
+        match self.endpoints.get_mut(home).and_then(|d| d.entries.get_mut(*at)) {
+            Some(deposit) => {
+                deposit.record.nullified = true;
+                true
             }
-            Some(Place::Binding(_)) | None => false,
+            None => false,
         }
     }
 
@@ -198,7 +212,7 @@ impl Ledger {
 
     /// Every endpoint deposit in `home`, in journal order.
     pub(crate) fn endpoints(&self, home: &Address) -> &[Judged<EndpointRecord>] {
-        self.endpoints.get(home).map(Vec::as_slice).unwrap_or(&[])
+        self.endpoints.get(home).map(|d| d.entries.as_slice()).unwrap_or(&[])
     }
 
     /// The CURRENT endpoint of `home` (REG-1.10, REG-1.11): the latest
@@ -224,7 +238,7 @@ impl Ledger {
 
     /// Every folded endpoint deposit of every home.
     pub(crate) fn all_endpoints(&self) -> impl Iterator<Item = &Judged<EndpointRecord>> {
-        self.endpoints.values().flat_map(|d| d.iter())
+        self.endpoints.values().flat_map(|d| d.entries.iter())
     }
 
     /// The ledger's counts: prefixes, bindings and deposits, each total and
@@ -236,8 +250,8 @@ impl Ledger {
             c.honored_bindings += p.honored.len();
         }
         for d in self.endpoints.values() {
-            c.endpoints += d.len();
-            c.honored_endpoints += d.iter().filter(|e| e.record.honored).count();
+            c.endpoints += d.entries.len();
+            c.honored_endpoints += d.entries.iter().filter(|e| e.record.honored).count();
         }
         c
     }

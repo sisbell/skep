@@ -58,11 +58,13 @@
 //!   resume compares; every line of it written and read back in [`base`],
 //!   the format stamp checked on every read.
 //! * `fetched.jsonl` — THIS MIRROR'S OWN FETCH CACHE, what the fold read off
-//!   the board: `{"link":{…}}` a stored link's slots, `{"atom":{"address",
-//!   "text"}}` a record's bytes, `{"keys":{"account","epoch","at",
-//!   "enrolled":[…]}}` a credential table as of a position, `{"retracted":
-//!   {"at","link"}}` a retraction the fold found, `{"board":{"position",
-//!   "chain"}}` the board term, `{"claim":{"at","claimant"}}` the claim —
+//!   the board: `{"link":{…}}` a stored link's type and slots — its slots
+//!   for a link of a type the fold reads, none for any other —
+//!   `{"atom":{"address","text"}}` a record's bytes, `{"keys":{"account",
+//!   "epoch","at","enrolled":[…]}}` a credential table as of a position,
+//!   `{"retracted":{"at","link"}}` a deposit the fold found off the board's
+//!   active view at a `nullify` row, `{"board":{"position","chain"}}` the
+//!   board term, `{"claim":{"at","claimant"}}` the claim —
 //!   each line written and read back by `Fetched` alone, the format's one
 //!   writer and one reader, which writes a line only for a value it does not
 //!   hold already. The REBUILD of the index is a re-read of the
@@ -524,6 +526,13 @@ impl Types {
             claim: commons_type(&[3]),
         }
     }
+
+    /// The five types the fold reads a link's slots for: the claim, the two
+    /// record kinds and the two credential kinds. A link of any other type
+    /// is no row the fold takes, and its slots are never read.
+    fn read(&self) -> [&Address; 5] {
+        [&self.claim, &self.binding, &self.endpoint, &self.enroll, &self.retire]
+    }
 }
 
 /// THE MIRROR: the hint it is scoped to, the board it reads, its copy, its
@@ -571,6 +580,13 @@ pub struct Mirror {
     /// position order — the epochs a table is kept under, and the acts the
     /// as-of reads are proven by.
     epochs: BTreeMap<Address, Vec<u64>>,
+    /// THIS PASS's asks of the active view, per home: how many of the home's
+    /// deposits a `nullify` row of the pass has had the board answer for.
+    /// Every row a pass folds was held before the pass asks anything, so a
+    /// deposit asked once is answered for the whole pass; a `nullify`
+    /// committed since lands in a later pass, which asks afresh. Cleared as
+    /// each pass begins.
+    asked: BTreeMap<Address, usize>,
     /// The chain walk's memory between two pulls.
     chains: Chains,
     stats: Stats,
@@ -722,16 +738,21 @@ impl Mirror {
         match row {
             Row::Link { at, link, home } => self.fold_link(at, &link, &home),
             Row::Nullify { at, docs } => {
+                // Each standing deposit of a home the row names, asked once a
+                // pass (`asked`): those the pass has not asked yet.
                 for doc in &docs {
-                    let candidates: Vec<Address> = self
-                        .index
-                        .endpoints(doc)
+                    let deposits = self.index.endpoints(doc);
+                    let from = self.asked.get(doc).copied().unwrap_or(0);
+                    let candidates: Vec<Address> = deposits
+                        .get(from..)
+                        .unwrap_or_default()
                         .iter()
                         .filter(|d| d.record.honored && !d.record.nullified)
                         .map(|d| d.link.clone())
                         .collect();
+                    self.asked.insert(doc.clone(), deposits.len());
                     for link in candidates {
-                        if self.retracted(at, &link)? {
+                        if self.retracted(at, &link, doc)? {
                             self.index.nullify(&link);
                         }
                     }
@@ -765,18 +786,19 @@ impl Mirror {
         } else if ty == self.types.binding {
             match &self.fetched.claim {
                 Some((_, claimant)) if doc_1_of(claimant) == *home => {
-                    self.fold_record(BodyKind::Binding, &stored)?;
+                    self.fold_record(BodyKind::Binding, &ty, &stored)?;
                 }
                 _ => self.stats.binding_typed_outside_home += 1,
             }
         } else if ty == self.types.endpoint {
-            self.fold_record(BodyKind::Endpoint, &stored)?;
+            self.fold_record(BodyKind::Endpoint, &ty, &stored)?;
         }
         Ok(())
     }
 
-    /// One registry record: fetched, parsed, judged, folded or suppressed.
-    fn fold_record(&mut self, kind: BodyKind, link: &StoredLink) -> Result<(), MirrorError> {
+    /// One registry record of `kind`, its link typed `ty`: fetched, parsed,
+    /// judged, folded or suppressed.
+    fn fold_record(&mut self, kind: BodyKind, ty: &Address, link: &StoredLink) -> Result<(), MirrorError> {
         let suppress = |m: &mut Mirror, cause: Cause| {
             m.index.suppress(Suppressed { position: link.at, link: link.address.clone(), kind, cause });
         };
@@ -806,7 +828,6 @@ impl Mirror {
         let verdict = match (board, keys) {
             (Some(board), Some(keys)) => {
                 let t = Instant::now();
-                let ty = link.ty.clone().expect("a record link's type was read");
                 // The lineage row EMPTY: this build composes every record
                 // grade so (D2; wire.md §Registry), and the hint's fork point
                 // is not read into the frame.
@@ -814,7 +835,7 @@ impl Mirror {
                     board,
                     home: &link.home,
                     home_account: &home_account,
-                    ty: &ty,
+                    ty,
                     to: &link.to,
                     lineage: None,
                     keys: &keys,
@@ -869,40 +890,39 @@ impl Mirror {
     // ── the fetches a row makes ─────────────────────────────────────────────
 
     /// The stored link at `link`, from the cache or `read_link`; `None`
-    /// where no link stands there.
+    /// where no link stands there. Its slots are read for a link of a type
+    /// the fold reads ([`Types::read`]) alone, a link of any other type held
+    /// with none ([`Board::link_slots`]).
     fn read_link(&mut self, at: u64, link: &Address, home: &Address) -> Result<Option<StoredLink>, MirrorError> {
         if let Some(s) = self.fetched.links.get(link) {
             return Ok(Some(s.clone()));
         }
         let Some(board) = self.board.as_ref() else { return Ok(None) };
-        let Some([from, to, ty]) = board.link_slots(link)? else { return Ok(None) };
-        let stored = StoredLink {
-            at,
-            address: link.clone(),
-            home: home.clone(),
-            ty: (ty.len() == 1).then(|| ty[0].clone()),
-            from,
-            to,
-        };
+        let Some(slots) = board.link_slots(link, &self.types.read())? else { return Ok(None) };
+        let stored = StoredLink { at, address: link.clone(), home: home.clone(), ty: slots.ty, from: slots.from, to: slots.to };
         let line = self.fetched.keep_link(stored.clone());
         self.append_cache(line)?;
         Ok(Some(stored))
     }
 
-    /// Whether a retraction link targeting `link` stands at `at` — the
-    /// `nullify`'s own deposit ([`Board::retraction_stands`]), from the cache
-    /// or the board.
-    fn retracted(&mut self, at: u64, link: &Address) -> Result<bool, MirrorError> {
+    /// Whether the deposit at `link`, homed in `home`, is off the board's
+    /// ACTIVE view — the org's own retraction (REG-1.11), read the board's
+    /// own way ([`Board::stands_active`]) and never as a link of the
+    /// retraction's type found — asked at the `nullify` row at `at`, from the
+    /// cache or the board. A deposit with no stored link held, and so no atom
+    /// to be asked by, stands.
+    fn retracted(&mut self, at: u64, link: &Address, home: &Address) -> Result<bool, MirrorError> {
         if self.fetched.retracted.get(&at).is_some_and(|l| l.contains(link)) {
             return Ok(true);
         }
         let Some(board) = self.board.as_ref() else { return Ok(false) };
-        let found = board.retraction_stands(link)?;
-        if found {
-            let line = self.fetched.keep_retracted(at, link.clone());
-            self.append_cache(line)?;
+        let Some(atom) = self.fetched.links.get(link).and_then(|s| s.from.first()) else { return Ok(false) };
+        if board.stands_active(link, home, &self.types.endpoint, atom)? {
+            return Ok(false);
         }
-        Ok(found)
+        let line = self.fetched.keep_retracted(at, link.clone());
+        self.append_cache(line)?;
+        Ok(true)
     }
 
     /// THE BOARD TERM ([`Board::board_term`]), read once; `None` where the

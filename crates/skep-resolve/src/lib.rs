@@ -16,11 +16,13 @@
 //!   compares the id's genesis fingerprint at the base (REG-3.42).
 //! * `http` — the written-out HTTP/1.1 client (`Transport`, `Method`,
 //!   `Http`): plain `http` alone, an `https` root a transport this build
-//!   does not hold.
+//!   does not hold, and no answer read past the cap.
 //! * `board` — the typed reads over any transport (`Board`: the feed's
 //!   pages, `/op`, `/op-at`, `/chain`), with the count of every read made,
-//!   and every value the resolver takes on the board's word typed where the
-//!   wire spells it.
+//!   every value the resolver takes on the board's word typed where the
+//!   wire spells it, and every answer held to the shape the wire promises —
+//!   a page that does not advance refused, a deposit's retraction the
+//!   board's own active view.
 //! * `mirror` — THE MIRROR (REG-3.10 to REG-3.13, REG-3.17 to REG-3.19): a
 //!   `/changes` consumer from the floor that fetches every row's bytes it
 //!   needs and keeps an append-only journal copy from genesis; the base from

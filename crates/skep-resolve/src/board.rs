@@ -8,15 +8,22 @@
 //! THE VALUES THE RESOLVER TAKES ON THE BOARD'S WORD — answers no check
 //! after them re-derives — are typed here, each where the wire spells it:
 //! the live head pair off `/health` ([`Board::head_pair`]), the board term
-//! off `H.1` ([`Board::board_term`]), a stored link's three slots
+//! off `H.1` ([`Board::board_term`]), a stored link's type and slots
 //! ([`Board::link_slots`]), an account's key set live and as of a position
-//! ([`Board::key_set`], [`Board::key_set_at`]), and whether a retraction
-//! stands ([`Board::retraction_stands`]). What each caller makes of them —
-//! the copy's head pair, the verdict's frame, the table a record is judged
-//! under — is the caller's. The feed's rows are checked by the base's
-//! provenance and a record's bytes by the verify, so the reads that only
-//! locate those bytes (the span set, `image`, `retrieve_v`) stay with their
-//! callers.
+//! ([`Board::key_set`], [`Board::key_set_at`]), and whether a deposit stands
+//! on the board's active view ([`Board::stands_active`]). What each caller
+//! makes of them — the copy's head pair, the verdict's frame, the table a
+//! record is judged under — is the caller's. The feed's rows are checked by
+//! the base's provenance and a record's bytes by the verify, so the reads
+//! that only locate those bytes (the span set, `image`, `retrieve_v`) stay
+//! with their callers.
+//!
+//! An answer is held to the shape the wire promises before any caller reads
+//! it: a feed page whose entries do not rise past `since`, or whose `last`
+//! and `more` do not follow them, is refused ([`Board::changes`]), so no row
+//! is held twice and no page asked forever; and an `/op` answer past the
+//! transport's cap ([`TransportError::TooLarge`]) is `null`, which every
+//! typed read takes as its own cannot-read.
 //!
 //! The wire's spellings that both readers of the board — the mirror and the
 //! guest-reading resolve — read alike are stated here, once: a unit span;
@@ -45,11 +52,6 @@ const BUSY_RETRIES: u32 = 200;
 
 /// The pause between two busy retries.
 const BUSY_PAUSE: Duration = Duration::from_millis(25);
-
-/// The retraction class's reserved ghost tumbler, the type slot of the link
-/// a `nullify` deposits (wire.md §Links (writes)).
-static RETRACTION_TYPE: LazyLock<Address> =
-    LazyLock::new(|| parse_address("1.1.0.1.0.1.0.1.5").expect("the retraction class's ghost tumbler"));
 
 /// `H.1`'s address — the head document's first chain member, the board
 /// term's carrier (wire.md §The other endpoints).
@@ -164,6 +166,20 @@ pub(crate) struct KeySetAnswer {
     pub(crate) enrolled: Vec<Enrolled>,
 }
 
+/// A stored link as `read_link` serves it, read only as far as its reader
+/// asked: its TYPE, where its type slot is the unit span of one of the
+/// types the reader named and nothing else — the daemon's own reading of a
+/// registry or credential type slot, one span EQUAL to the type's unit
+/// subtree (`single_address`; wire.md §Registry) — and, for a link of such
+/// a type, the addresses its `from` and `to` spans start at. A link of any
+/// other type holds no slot: none of its spans is parsed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LinkSlots {
+    pub(crate) ty: Option<Address>,
+    pub(crate) from: Vec<Address>,
+    pub(crate) to: Vec<Address>,
+}
+
 /// One page of the feed (wire.md §The change feed).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -234,7 +250,12 @@ impl Board {
         Board::json(&body)
     }
 
-    /// `GET /changes?since=N[&limit=L]` as the guest: one page.
+    /// `GET /changes?since=N[&limit=L]` as the guest: one page, held to the
+    /// page's own rules (wire.md §The change feed, Paging) — every entry's
+    /// position past `since` and past the entry before it, `last` the final
+    /// entry's position or `since` echoed on an empty page, and no empty page
+    /// announcing more. A page that breaks one re-serves a row or does not
+    /// advance, and is refused [`BoardError::Malformed`].
     pub fn changes(&self, since: u64, limit: Option<usize>) -> Result<Page, BoardError> {
         self.bump(|r| r.changes += 1);
         let path = match limit {
@@ -268,11 +289,24 @@ impl Board {
         };
         let last = v["last"].as_u64().ok_or_else(|| BoardError::Malformed("no last".into()))?;
         let more = v["more"].as_bool().ok_or_else(|| BoardError::Malformed("no more".into()))?;
+        let mut reached = since;
+        for row in &rows {
+            match row["at"].as_u64() {
+                Some(at) if at > reached => reached = at,
+                _ => return Err(BoardError::Malformed(format!("a page from {since} whose entries do not advance"))),
+            }
+        }
+        if last != reached || (more && rows.is_empty()) {
+            return Err(BoardError::Malformed(format!("a page from {since} whose last or more does not follow its entries")));
+        }
         Ok(Page { rows, last, more, bytes: body.len() as u64 })
     }
 
     /// `POST /op` as the guest: the answer as served, a `rejected` included
-    /// (a caller that cannot take one asks [`Board::op_ok`]).
+    /// (a caller that cannot take one asks [`Board::op_ok`]), and `null`
+    /// where the answer runs past the transport's cap
+    /// ([`TransportError::TooLarge`]) — an answer every typed read takes as
+    /// its own cannot-read: no link, no key set, no image, no atom.
     pub fn op(&self, frame: &Value) -> Result<Value, BoardError> {
         let op = frame["op"].as_str().unwrap_or("");
         self.bump(|r| r.count_op(op));
@@ -308,11 +342,19 @@ impl Board {
         Ok(v)
     }
 
-    /// One POST of a JSON body, the busy refusals retried.
+    /// One POST of a JSON body, the busy refusals retried. An answer past the
+    /// transport's cap is `null`: every answer a typed read must take whole
+    /// fits it on a conforming board, and a link an owner writes into its
+    /// own home need not — read as an error, one such link would stall every
+    /// mirror's fold at its row.
     fn post_json(&self, path: &str, body: &str, op: &str) -> Result<Value, BoardError> {
         let mut tries = 0;
         loop {
-            let (st, answer) = self.transport.exchange(Method::Post, path, body.as_bytes())?;
+            let (st, answer) = match self.transport.exchange(Method::Post, path, body.as_bytes()) {
+                Ok(exchanged) => exchanged,
+                Err(TransportError::TooLarge { .. }) => return Ok(Value::Null),
+                Err(e) => return Err(e.into()),
+            };
             let text = || String::from_utf8_lossy(&answer).into_owned();
             match st {
                 200 => return Board::json(&answer),
@@ -367,16 +409,34 @@ impl Board {
         }
     }
 
-    /// Whether a retraction link targeting `link` stands — the `nullify`'s
-    /// own deposit, found by its type and target (two slots constrained: no
-    /// class scan).
-    pub(crate) fn retraction_stands(&self, link: &Address) -> Result<bool, BoardError> {
-        let v = self.op_ok(&json!({ "op": "find_links_ftt", "q": {
-            "home": "any", "from": "any",
-            "to": [unit_span_json(link)],
-            "ty": [unit_span_json(&RETRACTION_TYPE)],
+    /// Whether `link` stands on the board's ACTIVE view (REG-1.11) — the
+    /// board's own reading, which a link leaves only by the retraction a
+    /// `nullify` mints, its target's owner's alone (wire.md §Links (writes))
+    /// — asked as the active links homed in `home`, typed `ty`, naming `atom`
+    /// in their `from` (`find_links_ftt` answers the active slice, wire.md
+    /// §Link discovery reads): where it stands, the link answers itself.
+    /// Never a search for a link of the retraction's type: discovery matches
+    /// a slot by OVERLAP, and a type slot naming a prefix of the retraction
+    /// class's address, a subtype of it, or it beside another address is
+    /// another class, which `make_link` admits to any owner in its own home.
+    /// `false` only where the answer is an `addrs` list without `link`: a
+    /// refusal, or an answer past the cap, takes nothing off the view.
+    pub(crate) fn stands_active(
+        &self,
+        link: &Address,
+        home: &Address,
+        ty: &Address,
+        atom: &Address,
+    ) -> Result<bool, BoardError> {
+        let v = self.op(&json!({ "op": "find_links_ftt", "q": {
+            "home": [unit_span_json(home)],
+            "from": [unit_span_json(atom)],
+            "to": "any",
+            "ty": [unit_span_json(ty)],
         }}))?;
-        Ok(v["addrs"].as_array().is_some_and(|a| !a.is_empty()))
+        let Some(addrs) = v["addrs"].as_array() else { return Ok(true) };
+        let link = link.to_string();
+        Ok(addrs.iter().any(|a| a.as_str() == Some(link.as_str())))
     }
 
     /// `/health`'s live pair (wire.md §The other endpoints): the committed
@@ -406,15 +466,21 @@ impl Board {
         Ok(parse_chain(chain).map(|bytes| (BoardTerm { log_position: position, chain: bytes }, chain.to_string())))
     }
 
-    /// A stored link's three slots off `read_link` — 0 the `from`, 1 the `to`,
-    /// 2 the type — each as the addresses its spans start at; `None` where no
-    /// link stands at `link`.
-    pub(crate) fn link_slots(&self, link: &Address) -> Result<Option<[Vec<Address>; 3]>, BoardError> {
+    /// A stored link off `read_link`, read as far as `types` asks
+    /// ([`LinkSlots`]): its type where its type slot is one of their unit
+    /// spans exactly — compared as served, so no span of another type's
+    /// slot is parsed — and then its `from` and `to`; `None` where no link
+    /// stands at `link`.
+    pub(crate) fn link_slots(&self, link: &Address, types: &[&Address]) -> Result<Option<LinkSlots>, BoardError> {
         let v = self.op_ok(&json!({ "op": "read_link", "a": link.to_string() }))?;
         if v["link"].is_null() {
             return Ok(None);
         }
-        Ok(Some([link_slot(&v, 0), link_slot(&v, 1), link_slot(&v, 2)]))
+        let served = &v["link"]["slots"][2];
+        let Some(ty) = types.iter().find(|t| *served == json!([unit_span_json(t)])) else {
+            return Ok(Some(LinkSlots { ty: None, from: Vec::new(), to: Vec::new() }));
+        };
+        Ok(Some(LinkSlots { ty: Some((*ty).clone()), from: link_slot(&v, 0), to: link_slot(&v, 1) }))
     }
 
     /// `key_set` of `account`, live; `None` where the answer is no `key_set`
@@ -487,8 +553,8 @@ pub(crate) fn unit_span_json(a: &Address) -> Value {
     json!({ "start": span.start().to_string(), "width": span.width().to_string() })
 }
 
-/// Slot `i` of a `read_link` answer — 0 the `from`, 1 the `to`, 2 the type —
-/// as the addresses its spans start at; empty where the slot is absent.
+/// Slot `i` of a `read_link` answer — 0 the `from`, 1 the `to` — as the
+/// addresses its spans start at; empty where the slot is absent.
 fn link_slot(answer: &Value, i: usize) -> Vec<Address> {
     answer["link"]["slots"][i]
         .as_array()
@@ -567,169 +633,4 @@ fn enrolled_of(e: &Value) -> Option<Enrolled> {
 }
 
 #[cfg(test)]
-mod tests {
-    use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
-
-    use super::*;
-
-    fn a(s: &str) -> Address {
-        parse_address(s).unwrap()
-    }
-
-    /// A board that answers every exchange with one status and one body.
-    struct Canned(u16, String);
-
-    impl Transport for Canned {
-        fn exchange(&self, _: Method, _: &str, _: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
-            Ok((self.0, self.1.clone().into_bytes()))
-        }
-    }
-
-    fn canned(body: Value) -> Board {
-        Board::new(Box::new(Canned(200, body.to_string())))
-    }
-
-    /// A board that answers every read with a well-formed empty answer of
-    /// its kind, `/op-at` only after `busy` refusals `history_busy`.
-    struct Busy {
-        busy: Cell<u32>,
-    }
-
-    impl Transport for Busy {
-        fn exchange(&self, method: Method, path: &str, _: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
-            let answer = match (method, path) {
-                (Method::Post, "/op-at") if self.busy.get() > 0 => {
-                    self.busy.set(self.busy.get() - 1);
-                    return Ok((503, json!({ "error": "history_busy" }).to_string().into_bytes()));
-                }
-                (Method::Post, "/op" | "/op-at") => json!({ "resp": "runs", "runs": [] }),
-                (Method::Get, "/health") => json!({}),
-                (Method::Get, "/changes?since=0") => json!({ "changes": [], "last": 0, "more": false }),
-                (Method::Get, "/chain?at=5") => json!({ "at": 5, "chain": "07".repeat(32) }),
-                _ => panic!("a read this board does not answer: {method} {path}"),
-            };
-            Ok((200, answer.to_string().into_bytes()))
-        }
-    }
-
-    /// THE COUNT OF EVERY READ: each request counted once, under its kind —
-    /// one over `/op-at` under its own kind AND under `op_at` — and a busy
-    /// answer retried counted under `busy_retries` and never again under its
-    /// kind; the total is the requests made, the `op_at` tally and the
-    /// retries never among them.
-    #[test]
-    fn every_read_is_counted_once_by_its_kind() {
-        let board = Board::new(Box::new(Busy { busy: Cell::new(2) }));
-        let doc = a("1.0.1.0.1");
-        board.op_at(5, &image_frame(&doc, 1, 1)).expect("answered after two busy refusals");
-        board.op(&span_set_frame(&doc)).expect("answered");
-        board.op_at(5, &retrieve_frame(&doc, 1)).expect("answered");
-        board.health().expect("answered");
-        board.changes(0, None).expect("answered");
-        board.chain_at(5).expect("answered");
-        let r = board.reads();
-        assert_eq!((r.image, r.span_set, r.retrieve, r.op_at, r.busy_retries), (1, 1, 1, 2, 2));
-        assert_eq!((r.health, r.changes, r.chain), (1, 1, 1));
-        assert_eq!(r.total(), 6, "{r:?}");
-    }
-
-    /// A chain is sixty-four hex characters, either case, and nothing else —
-    /// text of any other shape is no chain and never a panic: a multi-byte
-    /// character at sixty-four bytes, a sign `from_str_radix` would read.
-    #[test]
-    fn chain_hex_parses_at_sixty_four_characters_alone() {
-        assert!(parse_chain(&"ab".repeat(32)).is_some());
-        assert_eq!(parse_chain(&"AB".repeat(32)), parse_chain(&"ab".repeat(32)), "either case");
-        assert!(parse_chain(&"ab".repeat(31)).is_none());
-        assert!(parse_chain(&"zz".repeat(32)).is_none());
-        assert!(parse_chain(&format!("a€{}", "0".repeat(60))).is_none(), "a character across a byte pair");
-        assert!(parse_chain(&"+f".repeat(32)).is_none(), "a sign is no hex digit");
-    }
-
-    /// The values taken on the board's word are read where the wire spells
-    /// them: the head pair only where its chain is a chain, the board term
-    /// off `H.1`'s record with its chain as spelled, and a key set only where
-    /// the answer is one this build reads whole — its `as_of` and every entry
-    /// beside it; an entry of an algorithm this build holds no row for, an
-    /// answer with no list, and an entry with no anchor flag are no table,
-    /// never a smaller one and never an empty one. A board shows the reads
-    /// it made, and a reclaimed read names its floor where the board named
-    /// one.
-    #[test]
-    fn the_boards_word_is_typed_where_the_wire_spells_it() {
-        let chain = "07".repeat(32);
-        let board = canned(json!({ "log_position": 9, "chain_head": chain }));
-        assert_eq!(board.head_pair(), Ok(Some((9, chain.clone()))));
-        assert!(format!("{board:?}").contains("health: 1"), "a board shows the reads it made: {board:?}");
-        assert_eq!(canned(json!({ "log_position": 9, "chain_head": "07" })).head_pair(), Ok(None), "no chain");
-        assert_eq!(canned(json!({ "chain_head": chain })).head_pair(), Ok(None), "no position");
-        let h1 = json!({ "position": 4, "chain": chain }).to_string();
-        let term = canned(json!({ "resp": "delivery", "items": [{ "atom": h1 }] })).board_term().expect("read");
-        assert_eq!(term, Some((BoardTerm { log_position: 4, chain: [7; 32] }, chain.clone())));
-        assert_eq!(canned(json!({ "resp": "delivery", "items": [] })).board_term(), Ok(None), "no H.1");
-        let key = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[3; 32]).expect("tag 1").public_key().clone();
-        let entry = json!({ "alg": key.alg(), "key": key.to_hex(), "anchor": true });
-        let answer = canned(json!({ "resp": "key_set", "as_of": 12, "enrolled": [entry] })).key_set(&a("1.0.2"));
-        assert_eq!(answer, Ok(Some(KeySetAnswer { as_of: Some(12), enrolled: vec![Enrolled { key: key.clone(), anchor: true }] })));
-        let refused = json!({ "resp": "rejected", "op": "key_set", "code": "no_such_account" });
-        assert_eq!(canned(refused).key_set(&a("1.0.2")), Ok(None), "a refusal is no key set");
-        let newer = json!({ "alg": "a-row-this-build-lacks", "key": key.to_hex(), "anchor": false });
-        let partial = json!({ "resp": "key_set", "as_of": 12, "enrolled": [entry, newer] });
-        assert_eq!(canned(partial).key_set(&a("1.0.2")), Ok(None), "an entry this build cannot read");
-        assert_eq!(canned(json!({ "resp": "key_set", "as_of": 12 })).key_set(&a("1.0.2")), Ok(None), "no list");
-        let unflagged = json!({ "alg": key.alg(), "key": key.to_hex() });
-        let answer = json!({ "resp": "key_set", "as_of": 12, "enrolled": [unflagged] });
-        assert_eq!(canned(answer).key_set(&a("1.0.2")), Ok(None), "an entry with no anchor flag");
-        let keyless = json!({ "resp": "key_set", "as_of": 12, "enrolled": [] });
-        assert_eq!(canned(keyless).key_set(&a("1.0.2")), Ok(Some(KeySetAnswer { as_of: Some(12), enrolled: Vec::new() })), "a keyless account");
-        let link = json!({ "resp": "link", "link": { "slots": [[{ "start": "1.0.2.0.1.0.1.1", "width": "0.1" }], [], [{ "start": "1.0.2", "width": "0.1" }]] } });
-        assert_eq!(canned(link).link_slots(&a("1.0.2.0.1.0.2.1")), Ok(Some([vec![a("1.0.2.0.1.0.1.1")], vec![], vec![a("1.0.2")]])));
-        assert_eq!(canned(json!({ "resp": "link", "link": null })).link_slots(&a("1.0.2.0.1.0.2.1")), Ok(None), "no link stands");
-        let reclaimed = |floor| BoardError::Reclaimed { floor }.to_string();
-        assert_eq!(reclaimed(Some(42)), "history reclaimed below position 42");
-        assert_eq!(reclaimed(None), "history reclaimed", "no floor named, none rendered");
-    }
-
-    /// The answers both readers of the board read alike: a link's slots, a
-    /// document's content extent, an image's runs — whole or not at all —
-    /// and an atom's V-ordinal among them, the runs taken in V-order, a gap
-    /// between two runs no position, and widths that overflow no position
-    /// either; and a content element's ordinal in its own document, never a
-    /// link element's nor a member's mint.
-    #[test]
-    fn the_shared_answers_read_one_way() {
-        let link = json!({ "link": { "slots": [
-            [{ "start": "1.0.1.0.1.0.1.4", "width": "0.1" }],
-            [{ "start": "1.0.2", "width": "0.1" }, { "start": "not an address", "width": "0.1" }],
-        ] } });
-        assert_eq!(link_slot(&link, 0), [a("1.0.1.0.1.0.1.4")]);
-        assert_eq!(link_slot(&link, 1), [a("1.0.2")], "a span that starts at no address is dropped");
-        assert!(link_slot(&link, 2).is_empty(), "an absent slot is empty");
-        let set = json!({ "set": [{ "start": "2.1", "width": "0.3" }, { "start": "1.1", "width": "0.7" }] });
-        assert_eq!(content_extent(&set), Some(7));
-        assert_eq!(content_extent(&json!({ "set": [{ "start": "2.1", "width": "0.3" }] })), None);
-        let image = json!({ "resp": "runs", "runs": [
-            { "i_start": "1.0.1.0.1.0.1.1", "width": "2" },
-            { "i_start": "1.0.1.0.1.0.1.7", "width": "3" },
-        ] });
-        let runs = runs_of(&image).expect("every run reads");
-        assert_eq!(runs, [(a("1.0.1.0.1.0.1.1"), 2), (a("1.0.1.0.1.0.1.7"), 3)]);
-        assert_eq!(position_in(&runs, &a("1.0.1.0.1.0.1.2")), Some(2));
-        assert_eq!(position_in(&runs, &a("1.0.1.0.1.0.1.8")), Some(4));
-        assert_eq!(position_in(&runs, &a("1.0.1.0.1.0.1.3")), None);
-        assert_eq!(position_in(&runs, &a("1.0.1.0.1.0.2.1")), None, "a link element");
-        let overflowing = [(a("1.0.1.0.1.0.2.1"), u64::MAX), (a("1.0.1.0.1.0.1.1"), 1)];
-        assert_eq!(position_in(&overflowing, &a("1.0.1.0.1.0.1.1")), None, "widths that overflow place nothing");
-        let torn = json!({ "resp": "runs", "runs": [
-            { "i_start": "1.0.1.0.1.0.1.1", "width": "2" },
-            { "i_start": "not an address", "width": "4" },
-            { "i_start": "1.0.1.0.1.0.1.7", "width": "3" },
-        ] });
-        assert_eq!(runs_of(&torn), None, "a run that does not read would shift every run after it");
-        assert_eq!(runs_of(&json!({ "resp": "rejected" })), None);
-        assert_eq!(content_ordinal_in(&a("1.0.1.0.1"), &a("1.0.1.0.1.0.1.4")), Some(4));
-        assert_eq!(content_ordinal_in(&a("1.0.1.0.1"), &a("1.0.1.0.1.0.2.4")), None, "a link element");
-        assert_eq!(content_ordinal_in(&a("1.0.1.0.1"), &a("1.0.1.0.1.1.0.1.4")), None, "a member's mint");
-        assert_eq!(content_ordinal_in(&a("1.0.1.0.1"), &a("1.0.2.0.1.0.1.4")), None, "another document's element");
-    }
-}
+mod tests;

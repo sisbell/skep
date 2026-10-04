@@ -17,7 +17,7 @@
 
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
+use serde_json::json;
 use skep_address::Address;
 use skep_identity::{doc_1_of, Enrolled};
 use skep_registry::{parse, t_binding, t_endpoint, Body, BodyKind};
@@ -25,7 +25,7 @@ use skep_registry::{parse, t_binding, t_endpoint, Body, BodyKind};
 use super::face_of;
 use crate::board::{
     content_extent, content_ordinal_in, image_frame, position_in, retrieve_frame, runs_of, span_set_frame,
-    unit_span_json, Board,
+    unit_span_json, Board, BoardError,
 };
 use crate::index::Ledger;
 use crate::mirror::MirrorError;
@@ -54,9 +54,10 @@ pub struct GuestCost {
 /// atom fetched by its head position and parsed; the prefix's candidate
 /// bindings in their home's link order (journal order within one home); the
 /// account's live key set; its endpoint deposits by the same scan over its
-/// doc 1; the retraction of each by its own retraction link. Every verdict
-/// UNDETERMINABLE HERE: no position is held to judge a record as of. Answers
-/// the face and the cost.
+/// doc 1; each honored deposit's standing on the board's active view, as
+/// the board itself reads it (REG-1.11). Every verdict UNDETERMINABLE HERE:
+/// no position is held to judge a record as of. Answers the face and the
+/// cost.
 pub fn guest_resolve(
     board: &Board,
     prefix: &Address,
@@ -73,7 +74,7 @@ pub fn guest_resolve(
     cost.candidate_bindings_scanned = links.len() as u64;
     links.sort_unstable();
     for link in &links {
-        let Some((home, from, to)) = read_link(board, link)? else { continue };
+        let Some((home, from, to)) = read_link(board, link, t_binding())? else { continue };
         let Some(text) = atom_at_head(board, &home, &from)? else { continue };
         cost.atoms_read += 1;
         let Ok(record) = parse(BodyKind::Binding, text.as_bytes()) else { continue };
@@ -110,7 +111,7 @@ pub fn guest_resolve(
     let mut deposits = scan_class(board, t_endpoint(), Some(&home))?;
     deposits.sort_unstable();
     for link in &deposits {
-        let Some((dep_home, from, _)) = read_link(board, link)? else { continue };
+        let Some((dep_home, from, _)) = read_link(board, link, t_endpoint())? else { continue };
         if dep_home != home {
             continue;
         }
@@ -130,7 +131,7 @@ pub fn guest_resolve(
             },
             verdict: Verdict::UndeterminableHere,
         });
-        if honored && board.retraction_stands(link)? {
+        if honored && !board.stands_active(link, &home, t_endpoint(), &from)? {
             ledger.nullify(link);
         }
     }
@@ -140,41 +141,60 @@ pub fn guest_resolve(
     Ok((face_of(standing, keys, endpoint, any, names, transports), cost))
 }
 
+/// The addresses a class scan's window asks for — and so exactly how many an
+/// unexhausted window holds.
+const WINDOW: usize = 256;
+
 /// Every link of type `ty` on the board, by `window_ftt` paged; `home`
-/// constrains the home where given.
+/// constrains the home where given. A window that is not the last holds
+/// WINDOW addresses, ascending, every one past the cursor, its `next` the
+/// last of them (skep-discovery's `Window`; wire.md §Value encodings) — the
+/// one shape that moves the cursor, so any other is refused
+/// [`BoardError::Malformed`] and no board pages a scan forever.
 fn scan_class(board: &Board, ty: &Address, home: Option<&Address>) -> Result<Vec<Address>, MirrorError> {
+    let home_spec = match home {
+        Some(h) => json!([unit_span_json(h)]),
+        None => json!("any"),
+    };
     let mut out = Vec::new();
-    let mut cur = Value::Null;
+    let mut cur: Option<Address> = None;
     loop {
-        let home_spec = match home {
-            Some(h) => json!([unit_span_json(h)]),
-            None => json!("any"),
-        };
         let v = board.op_ok(&json!({
-            "op": "window_ftt", "cur": cur, "n": 256,
+            "op": "window_ftt", "cur": cur.as_ref().map(ToString::to_string), "n": WINDOW,
             "q": { "home": home_spec, "from": "any", "to": "any", "ty": [unit_span_json(ty)] },
         }))?;
         let window = &v["window"];
-        for a in window["batch"].as_array().into_iter().flatten() {
-            if let Some(addr) = a.as_str().and_then(parse_address) {
-                out.push(addr);
-            }
-        }
+        let batch = window["batch"].as_array().map(Vec::as_slice).unwrap_or_default();
         if window["exhausted"].as_bool().unwrap_or(true) {
-            break;
+            out.extend(batch.iter().filter_map(|a| a.as_str().and_then(parse_address)));
+            return Ok(out);
         }
-        cur = window["next"].clone();
+        let read: Option<Vec<Address>> = batch.iter().map(|a| a.as_str().and_then(parse_address)).collect();
+        let full = read.filter(|addrs| {
+            addrs.len() == WINDOW
+                && addrs.windows(2).all(|pair| pair[0] < pair[1])
+                && cur.as_ref().is_none_or(|c| addrs[0] > *c)
+                && window["next"].as_str().and_then(parse_address).as_ref() == addrs.last()
+        });
+        let Some(addrs) = full else {
+            return Err(BoardError::Malformed("a window that does not advance past its cursor".into()).into());
+        };
+        cur = addrs.last().cloned();
+        out.extend(addrs);
     }
-    Ok(out)
 }
 
-/// A stored link's home, `from` and `to` — the home from the link's own
-/// address.
-fn read_link(board: &Board, link: &Address) -> Result<Option<(Address, Address, Vec<Address>)>, MirrorError> {
-    let Some([from, to, _]) = board.link_slots(link)? else { return Ok(None) };
+/// A stored link of type `ty` — its home, from the link's own address, its
+/// `from` atom and its `to`; `None` where no link stands there, or one of
+/// another type ([`Board::link_slots`]).
+fn read_link(board: &Board, link: &Address, ty: &Address) -> Result<Option<(Address, Address, Vec<Address>)>, MirrorError> {
+    let Some(slots) = board.link_slots(link, &[ty])? else { return Ok(None) };
+    if slots.ty.is_none() {
+        return Ok(None);
+    }
     let Some(home) = skep_address::document_of(link) else { return Ok(None) };
-    let Some(atom) = from.first().cloned() else { return Ok(None) };
-    Ok(Some((home, atom, to)))
+    let Some(atom) = slots.from.first().cloned() else { return Ok(None) };
+    Ok(Some((home, atom, slots.to)))
 }
 
 /// An atom at the head of its home: the append-only guess, else the head's
@@ -211,9 +231,12 @@ fn live_keys(board: &Board, account: &Address) -> Result<Option<Vec<Enrolled>>, 
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::io;
     use std::net::IpAddr;
+    use std::rc::Rc;
 
+    use serde_json::Value;
     use skep_registry::{encode, Binding, Endpoint};
     use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
 
@@ -231,9 +254,10 @@ mod tests {
 
     /// A BOARD THE SUITE HOLDS FIXED, as the guest reads it over `/op` alone:
     /// one candidate binding, the registrar's, binding `1.2` to `1.0.2`; that
-    /// account's one endpoint deposit in its doc 1, retracted by nothing; its
-    /// live table one key; every atom at its home's head, at the content
-    /// ordinal it was minted at. Any other read is no read this board answers.
+    /// account's one endpoint deposit in its doc 1, standing on the active
+    /// view; its live table one key; every atom at its home's head, at the
+    /// content ordinal it was minted at. Any other read is no read this board
+    /// answers.
     struct Guest;
 
     impl Transport for Guest {
@@ -268,11 +292,67 @@ mod tests {
                     let key = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[2; 32]).expect("tag 1").public_key().clone();
                     json!({ "resp": "key_set", "as_of": 9, "enrolled": [{ "alg": key.alg(), "key": key.to_hex(), "anchor": true }] })
                 }
-                (Some("find_links_ftt"), _, _) => json!({ "resp": "links", "addrs": [] }),
+                (Some("find_links_ftt"), _, _) => {
+                    let active = json!({
+                        "home": [unit_span_json(&a("1.0.2.0.1"))], "from": [unit_span_json(&a("1.0.2.0.1.0.1.1"))],
+                        "to": "any", "ty": [unit_span_json(t_endpoint())],
+                    });
+                    assert_eq!(frame["q"], active, "the deposit asked of the board's active view");
+                    json!({ "resp": "addrs", "addrs": ["1.0.2.0.1.0.2.1"] })
+                }
                 _ => panic!("a read this board does not answer: {frame}"),
             };
             Ok((200, answer.to_string().into_bytes()))
         }
+    }
+
+    /// A BOARD WHOSE CLASS SCAN ANSWERS `windows` in turn, each a batch, a
+    /// `next` and `exhausted`: every request recorded, and a request past
+    /// the last window a panic — so a scan that would page forever fails.
+    struct Windows {
+        windows: Vec<(Vec<String>, Option<String>, bool)>,
+        asked: Cell<usize>,
+    }
+
+    impl Transport for Windows {
+        fn exchange(&self, _: Method, _: &str, _: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+            let (batch, next, exhausted) = self.windows.get(self.asked.get()).expect("a window this board serves").clone();
+            self.asked.set(self.asked.get() + 1);
+            let answer = json!({ "resp": "page", "window": { "batch": batch, "next": next, "exhausted": exhausted } });
+            Ok((200, answer.to_string().into_bytes()))
+        }
+    }
+
+    /// A WINDOW THAT DOES NOT ADVANCE IS REFUSED (skep-discovery's `Window`):
+    /// a scan pages through full windows, ascending, each past the cursor and
+    /// naming its last as `next`, to the exhausted one; a window that is not
+    /// the last and is short, re-serves the cursor, or names another `next`
+    /// is refused at once, never asked again.
+    #[test]
+    fn a_window_that_does_not_advance_is_refused() {
+        let links = |from: u32| (from..from + WINDOW as u32).map(|n| format!("1.0.1.0.1.0.2.{n}")).collect::<Vec<_>>();
+        let scan = |windows: Vec<(Vec<String>, Option<String>, bool)>| {
+            let board = Rc::new(Windows { windows, asked: Cell::new(0) });
+            let scanned = scan_class(&Board::new(Box::new(board.clone())), t_binding(), None);
+            (scanned, board.asked.get())
+        };
+        let (first, second) = (links(1), links(1 + WINDOW as u32));
+        let last_of = |batch: &[String]| batch.last().cloned();
+        let (scanned, asked) = scan(vec![(first.clone(), last_of(&first), false), (vec!["1.0.1.0.1.0.2.999".into()], None, true)]);
+        assert_eq!((scanned.map(|links| links.len()), asked), (Ok(WINDOW + 1), 2), "a full window, then the last");
+        for (window, case) in [
+            ((Vec::new(), None, false), "an empty window that is not the last"),
+            ((first[..WINDOW - 1].to_vec(), last_of(&first[..WINDOW - 1]), false), "a short window"),
+            ((first.clone(), Some(first[0].clone()), false), "a next that is not its last"),
+        ] {
+            let (scanned, asked) = scan(vec![window]);
+            assert!(matches!(scanned, Err(MirrorError::Board(BoardError::Malformed(_)))), "{case}");
+            assert_eq!(asked, 1, "{case}: never asked again");
+        }
+        let replayed = vec![(second.clone(), last_of(&second), false), (first.clone(), last_of(&first), false)];
+        let (scanned, asked) = scan(replayed);
+        assert!(matches!(scanned, Err(MirrorError::Board(BoardError::Malformed(_)))), "a window behind its cursor");
+        assert_eq!(asked, 2);
     }
 
     /// This resolver's own resolution of a name, fixed: `acme.example` at a

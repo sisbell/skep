@@ -24,9 +24,11 @@
 //!   at EVERY ADDRESS this resolver's own resolution of the name yields, and
 //!   the dial connects only to an address that passed. A name that yields
 //!   addresses and no routable one is refused as the literal is; a name that
-//!   yields none is not refused but DEAD (endpoint rot). A
-//!   self-authenticating member meets the term by construction: there is
-//!   nothing to test.
+//!   yields none is not refused but DEAD (endpoint rot). An address a
+//!   translator dials on as IPv4 — IPv4-mapped, or under NAT64's well-known
+//!   prefix — is tested as the IPv4 it reaches, and the local-use
+//!   translation prefix is refused whole. A self-authenticating member meets
+//!   the term by construction: there is nothing to test.
 //! * THE THIRD WAY A MEMBER DOES NOT DIAL (REG-3.34 as RES-28 amends it): a
 //!   member of an ADMITTED kind whose TRANSPORT this resolver does not hold —
 //!   an `.onion` address on a client with no onion transport — is NOT DIALED,
@@ -187,15 +189,29 @@ fn host_is_canonical(host: &str) -> bool {
 /// — not a loopback, a link-local (the host-local metadata service lives
 /// there), a private range, the shared address space, the unspecified
 /// address, a broadcast or multicast address, a reserved or documentation
-/// range. An IPv4-mapped IPv6 address is tested as its IPv4.
+/// range. An address a translator dials on as IPv4 is tested as the IPv4 it
+/// reaches: an IPv4-mapped one, and one under NAT64's WELL-KNOWN PREFIX
+/// `64:ff9b::/96`, whose last thirty-two bits a NAT64 gateway dials — which
+/// RFC 6052 §3.1 forbids to carry a non-global IPv4. The LOCAL-USE
+/// translation prefix `64:ff9b:1::/48` (RFC 8215) is refused whole: what a
+/// translator there reaches is its operator's choice, the resolver's network
+/// as likely as any.
 pub fn routable(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => routable_v4(v4),
-        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped().or_else(|| nat64_ipv4(v6)) {
             Some(v4) => routable_v4(v4),
             None => routable_v6(v6),
         },
     }
+}
+
+/// The IPv4 a NAT64 gateway dials for `a`, where `a` lies under the
+/// well-known prefix `64:ff9b::/96` (RFC 6052 §2.1): its last thirty-two
+/// bits.
+fn nat64_ipv4(a: Ipv6Addr) -> Option<Ipv4Addr> {
+    let seg = a.segments();
+    (seg[..6] == [0x0064, 0xff9b, 0, 0, 0, 0]).then(|| Ipv4Addr::from((u32::from(seg[6]) << 16) | u32::from(seg[7])))
 }
 
 fn routable_v4(a: Ipv4Addr) -> bool {
@@ -221,7 +237,8 @@ fn routable_v6(a: Ipv6Addr) -> bool {
         || a.is_multicast()
         || (seg[0] & 0xffc0) == 0xfe80
         || (seg[0] & 0xfe00) == 0xfc00
-        || (seg[0] == 0x2001 && seg[1] == 0x0db8))
+        || (seg[0] == 0x2001 && seg[1] == 0x0db8)
+        || (seg[0] == 0x0064 && seg[1] == 0xff9b && seg[2] == 0x0001))
 }
 
 /// THIS RESOLVER'S OWN RESOLUTION OF A NAME (REG-3.35): the addresses a host
@@ -513,11 +530,12 @@ mod tests {
     /// REG-3.35's classes held TO THEIR EDGES: each range's first and last
     /// address is not routable, and the address just outside it, where that
     /// address is a global one, is — so a range is refused whole and nothing
-    /// beside it is. (`fe80::/10` and `fc00::/7` sit in IPv6 space that is
-    /// itself reserved, so no neighbor of theirs is asserted routable.)
+    /// beside it is. (`fe80::/10`, `fc00::/7` and `64:ff9b:1::/48` sit in
+    /// IPv6 space that is itself reserved, so no neighbor of theirs is
+    /// asserted routable.)
     #[test]
     fn the_host_terms_ranges_hold_to_their_edges() {
-        let ranges: [(&str, &str, &[&str]); 18] = [
+        let ranges: [(&str, &str, &[&str]); 19] = [
             ("0.0.0.0", "0.255.255.255", &["1.0.0.0"]),
             ("10.0.0.0", "10.255.255.255", &["9.255.255.255", "11.0.0.0"]),
             ("100.64.0.0", "100.127.255.255", &["100.63.255.255", "100.128.0.0"]),
@@ -536,6 +554,7 @@ mod tests {
             ("fc00::", "fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", &[]),
             ("ff00::", "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", &[]),
             ("2001:db8::", "2001:db8:ffff:ffff:ffff:ffff:ffff:ffff", &["2001:db7:ffff:ffff:ffff:ffff:ffff:ffff", "2001:db9::"]),
+            ("64:ff9b:1::", "64:ff9b:1:ffff:ffff:ffff:ffff:ffff", &[]),
         ];
         for (first, last, outside) in ranges {
             for edge in [first, last] {
@@ -545,5 +564,41 @@ mod tests {
                 assert!(routable(beside.parse().unwrap()), "{beside}, beside {first}–{last}, is globally routable");
             }
         }
+    }
+
+    /// This resolver's own resolution of a name, fixed: every name at
+    /// `64:ff9b::a00:5`, the NAT64 spelling of `10.0.0.5`.
+    struct Translated;
+
+    impl NameResolver for Translated {
+        fn resolve(&self, _: &str) -> io::Result<Vec<IpAddr>> {
+            Ok(vec!["64:ff9b::a00:5".parse().unwrap()])
+        }
+    }
+
+    /// REG-3.35 THROUGH A TRANSLATOR: an address under NAT64's well-known
+    /// prefix is tested as the IPv4 a gateway dials for it — a private, a
+    /// loopback, a link-local or a shared one refused, a global one passed —
+    /// at a literal and at every address a name yields alike; the local-use
+    /// translation prefix is refused whatever it carries. A seed of the host
+    /// term's corpus.
+    #[test]
+    fn a_nat64_address_is_tested_as_the_ipv4_it_carries() {
+        for bad in ["64:ff9b::a00:1", "64:ff9b::7f00:1", "64:ff9b::a9fe:a9fe", "64:ff9b::c0a8:101", "64:ff9b::6440:1", "64:ff9b::", "64:ff9b:1::808:808"] {
+            assert!(!routable(bad.parse().unwrap()), "{bad} reaches no global IPv4");
+        }
+        assert!(routable("64:ff9b::808:808".parse().unwrap()), "8.8.8.8 through the well-known prefix");
+        let t = Transports::default();
+        let literal: IpAddr = "64:ff9b::a00:5".parse().unwrap();
+        assert_eq!(
+            judge_member("https://[64:ff9b::a00:5]", &Translated, &t),
+            MemberOutcome::Refused { member: "https://[64:ff9b::a00:5]".into(), term: Term::Host { yielded: vec![literal] } },
+            "at a literal",
+        );
+        assert_eq!(
+            judge_member("https://translated.example", &Translated, &t),
+            MemberOutcome::Refused { member: "https://translated.example".into(), term: Term::Host { yielded: vec![literal] } },
+            "at a name that yields it alone",
+        );
     }
 }

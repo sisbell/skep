@@ -22,6 +22,7 @@ use std::time::Instant;
 
 use serde_json::Value;
 use skep_address::{document_of, Address, Nat, Tumbler};
+use skep_registry::MAX_REGISTRY_RECORD_BYTES;
 
 use super::{Mirror, MirrorError};
 use crate::board::{
@@ -49,6 +50,11 @@ impl Image {
 #[derive(Debug, Default)]
 pub(super) struct Chains {
     members: BTreeMap<Address, Vec<Address>>,
+    /// Every member kept, beside the home it is kept under — a member once
+    /// per home, as `members` lists it — so keeping one more asks a set and
+    /// never scans the members a home already holds: a `publish` row costs
+    /// the fold the same at its ten-thousandth member as at its first.
+    known: BTreeSet<(Address, Address)>,
     probed: BTreeSet<Address>,
     images: BTreeMap<Address, Image>,
 }
@@ -59,11 +65,16 @@ impl Chains {
     /// to be known.
     pub(super) fn learn(&mut self, member: &Address) {
         let Some(trunk) = trunk_of(member) else { return };
-        let list = self.members.entry(trunk.clone()).or_default();
-        if !list.contains(member) {
-            list.push(member.clone());
-        }
+        self.keep(&trunk, member);
         self.probed.insert(trunk);
+    }
+
+    /// `member` kept under `home` — its trunk, or the home a probe was made
+    /// under — once, in the order members are met.
+    fn keep(&mut self, home: &Address, member: &Address) {
+        if self.known.insert((home.clone(), member.clone())) {
+            self.members.entry(home.clone()).or_default().push(member.clone());
+        }
     }
 
     /// A pull began: the images are forgotten, since the new rows can
@@ -154,8 +165,15 @@ impl Mirror {
         Ok(None)
     }
 
-    /// A record's bytes, kept: held, and its line written to the fetch cache.
+    /// A record's bytes, kept: held, and its line written to the fetch cache
+    /// — where they can be a record at all. Bytes past the largest record
+    /// the canonical rule admits (`MAX_REGISTRY_RECORD_BYTES`) are handed to
+    /// the parse, which refuses them before it reads one, and never held: a
+    /// board sizes neither the cache nor its file past a record.
     fn keep_atom(&mut self, addr: &Address, text: String) -> Result<Option<String>, MirrorError> {
+        if text.len() > MAX_REGISTRY_RECORD_BYTES {
+            return Ok(Some(text));
+        }
         let line = self.fetched.keep_atom(addr.clone(), text.clone());
         self.append_cache(line)?;
         Ok(Some(text))
@@ -176,11 +194,8 @@ impl Mirror {
             found.push(member);
             k += 1;
         }
-        let list = self.chains.members.entry(home.clone()).or_default();
-        for m in found {
-            if !list.contains(&m) {
-                list.push(m);
-            }
+        for member in &found {
+            self.chains.keep(home, member);
         }
         self.chains.probed.insert(home.clone());
         Ok(())
@@ -273,8 +288,10 @@ mod tests {
     /// THE WALK'S MEMORY: a member a row names is kept under its trunk — a
     /// daughter under the same trunk, an element's document read to its
     /// trunk — once, and the trunk needs no probe; a pull forgets the probes
-    /// and the images and keeps the members. An image reads its positions
-    /// the board's one way.
+    /// and the images and keeps the members. A member a probe found under
+    /// the home it was made from is kept under its trunk as well once a row
+    /// names it: each home lists its members once, whatever another home
+    /// lists. An image reads its positions the board's one way.
     #[test]
     fn the_walk_keeps_its_members_across_a_pull() {
         assert_eq!(trunk_of(&a("1.0.1.0.1.2")), Some(a("1.0.1.0.1")));
@@ -295,5 +312,11 @@ mod tests {
         assert_eq!(chains.members_of(&home), [a("1.0.1.0.1.1"), a("1.0.1.0.1.2")], "a pull keeps the members");
         assert!(chains.probed.is_empty() && chains.images.is_empty(), "and forgets the probes and the images");
         assert!(chains.members_of(&a("1.0.2.0.1")).is_empty());
+        let (version, daughter) = (a("1.0.1.0.1.1"), a("1.0.1.0.1.1.1"));
+        chains.keep(&version, &daughter);
+        chains.learn(&daughter);
+        assert_eq!(chains.members_of(&version), std::slice::from_ref(&daughter), "under the home its probe was made from");
+        let trunk_members = [a("1.0.1.0.1.1"), a("1.0.1.0.1.2"), daughter];
+        assert_eq!(chains.members_of(&home), trunk_members, "and under its trunk once a row names it");
     }
 }

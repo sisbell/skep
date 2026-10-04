@@ -11,6 +11,11 @@
 //! an `https` root in a hint is a transport this build does not hold,
 //! refused by name ([`TransportError::NotHeld`]) and never dialed in the
 //! clear.
+//!
+//! An answer is read to EOF and no further than THE ANSWER CAP: a board
+//! sizes this client's memory by at most the largest answer the fold reads
+//! whole, and an answer past it is [`TransportError::TooLarge`], never read
+//! on.
 
 use std::fmt;
 use std::io::{self, Read, Write};
@@ -29,6 +34,17 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// most seconds even on a loaded board; a minute is headroom, not a wait.
 const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// THE ANSWER CAP: the most bytes one exchange reads off a board. The
+/// largest answer the fold must read whole is a feed page at THE PAGE BYTE
+/// BUDGET, 2 MiB (wire.md §The change feed, Paging); 4 KiB beside it hold
+/// the status line, the headers and the page's envelope. Every other answer
+/// the fold reads whole is smaller by construction: a registry or credential
+/// link is one atom and at most one address (the daemon's shape check,
+/// wire.md §Registry), a record at most `MAX_REGISTRY_RECORD_BYTES` (16 KiB),
+/// a key set at most sixteen keys, a doc 1's image at most `MAX_IMAGE_RUNS`
+/// runs. Raising the board's page budget raises this.
+const MAX_ANSWER_BYTES: usize = 2 * 1024 * 1024 + 4 * 1024;
+
 /// Why an exchange could not be made.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -44,6 +60,9 @@ pub enum TransportError {
     Io(String),
     /// The bytes read were no HTTP response.
     Response(String),
+    /// The answer ran past `cap` bytes, the most the transport reads of
+    /// one, and was read no further.
+    TooLarge { cap: usize },
 }
 
 impl fmt::Display for TransportError {
@@ -56,6 +75,7 @@ impl fmt::Display for TransportError {
             TransportError::Connect(e) => write!(f, "connect: {e}"),
             TransportError::Io(e) => write!(f, "io: {e}"),
             TransportError::Response(e) => write!(f, "response: {e}"),
+            TransportError::TooLarge { cap } => write!(f, "the answer runs past {cap} bytes, the most read of one"),
         }
     }
 }
@@ -179,10 +199,20 @@ impl Transport for Http {
             .write_all(head.as_bytes())
             .and_then(|()| stream.write_all(body))
             .map_err(|e| TransportError::Io(self.fail("write", e)))?;
-        let mut raw = Vec::new();
-        stream.read_to_end(&mut raw).map_err(|e| TransportError::Io(self.fail("read", e)))?;
+        let raw = read_answer(&mut stream, MAX_ANSWER_BYTES)
+            .map_err(|e| TransportError::Io(self.fail("read", e)))?
+            .ok_or(TransportError::TooLarge { cap: MAX_ANSWER_BYTES })?;
         parse_response(&raw).map_err(|e| TransportError::Response(self.fail("response", e)))
     }
+}
+
+/// One whole answer off `stream`, to EOF — or `None` where it runs past
+/// `cap` bytes, read no further than the byte past the cap: no answer sizes
+/// this client's memory past it.
+fn read_answer(stream: impl Read, cap: usize) -> io::Result<Option<Vec<u8>>> {
+    let mut raw = Vec::new();
+    stream.take(cap as u64 + 1).read_to_end(&mut raw)?;
+    Ok((raw.len() <= cap).then_some(raw))
 }
 
 /// The shipped dial: plain HTTP to the origin.
@@ -250,6 +280,19 @@ mod tests {
         assert_eq!((st, body.as_slice()), (200, &b"{}"[..]));
         assert!(parse_response(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n{}").is_err(), "a short body is a broken connection");
         assert!(parse_response(b"garbage").is_err());
+    }
+
+    /// THE ANSWER CAP: an answer of `cap` bytes is read whole, and one a
+    /// byte past it is no answer — read no further than that byte, so a
+    /// board that never stops sending sizes nothing.
+    #[test]
+    fn an_answer_past_the_cap_is_read_no_further() {
+        let at_cap = vec![7u8; 1024];
+        assert_eq!(read_answer(&at_cap[..], 1024).expect("read"), Some(at_cap.clone()), "at the cap, whole");
+        assert_eq!(read_answer(&[7u8; 1025][..], 1024).expect("read"), None, "a byte past it");
+        let mut endless = io::repeat(7).take(u64::MAX);
+        assert_eq!(read_answer(&mut endless, 1024).expect("read"), None, "a board that never stops");
+        assert_eq!(endless.limit(), u64::MAX - 1025, "read no further than the byte past the cap");
     }
 
     /// An `https` root is a transport this build does not hold, refused by

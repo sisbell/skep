@@ -182,6 +182,19 @@ fn the_endpoint_current_is_the_latest_honored_on_the_active_view() {
     assert_eq!(ledger.counts().honored_endpoints, 3);
 }
 
+/// A DEPOSIT HANDED TWICE is retracted where it stood: its second fold is
+/// inert beside the first, and the `nullify` takes the honored one off the
+/// active view — never the inert copy, leaving the deposit standing.
+#[test]
+fn a_deposit_handed_twice_is_retracted_where_it_stood() {
+    let mut ledger = Ledger::default();
+    let (home, link) = ("1.0.2.0.1", "1.0.2.0.1.0.2.1");
+    assert!(ledger.fold_endpoint(endpoint(20, link, home, None)));
+    assert!(!ledger.fold_endpoint(endpoint(21, link, home, None)), "handed again: inert beside the first");
+    assert!(ledger.nullify(&a(link)));
+    assert_eq!(ledger.current_endpoint(&a(home)), None, "the deposit that stood is off the view");
+}
+
 /// THE INDEX is the ledger behind the gate: what the gate passes folds
 /// by the ledger's rule, and what it keeps out is read back in journal
 /// order and counted by cause beside the ledger's counts — each verdict

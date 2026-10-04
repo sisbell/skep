@@ -42,9 +42,12 @@ above it.
   under one root — the files at `blobs/<designation>/<hex>`, the partials,
   the upload records and the lease log — the PUT's fsync order, REPLACE on
   a present hash, and the lease's honest-null answer. It depends on no
-  other skep crate, knows no principal (a key is an opaque string), holds
-  no lock the daemon's write path takes, and reads no limits record. Its
-  rules: §The blob store.
+  other skep crate, knows a principal only as an opaque string, holds no
+  lock the daemon's write path takes, and reads no limits record. One
+  feature, default off: `test-hooks` compiles in the test seam — the hold
+  and the injected failure at a step of the finish, and `install`,
+  `written`, `asides_queued` and `handles_open`. `scripts/gate-full.sh`
+  checks the library without it. Its modules and rules: §The blob store.
 
 **The stores** — each owns one slice of the world and depends only on the
 foundation and on the stores above it.
@@ -159,13 +162,23 @@ over the shared `fixture` and `mutilate`.
 board's data directory — holding the four media stores the media record
 names: the files, `<root>/<designation>/<hex>`; the partials,
 `<root>/<designation>/.upload-<identifier>`; the upload records,
-`<root>/uploads.log`; and the lease log, `<root>/leases.log`. Its modules:
-`lib.rs` is the `Store`, the one handle over the four; beneath it
-`blobs.rs` holds the directory discipline (the install order, the
-directory fsync, the JSON-lines logs' tail check and compaction, the free-
-space read, the hazard seam's steps), `partials.rs` the partial files and
-the reconciliation at open, `uploads.rs` the identifier and the records'
-log, `lease.rs` the leases' log, `error.rs` the refusals.
+`<root>/uploads.log`; and the lease log, `<root>/leases.log`. Its modules
+are declared in `src/lib.rs` in dependency order, a line each: `error.rs`
+the refusals; `blobs.rs` the files — where one lives, the designation's
+and the hex's spellings, the aside name, the listings of the designation
+directories and open's sweep of the asides, the directory fsync and the
+free-space read; `jsonl.rs` the JSON-lines log both record logs are
+(`Log`, which owns the file, the length and count of its whole lines,
+and its stop: the tail check at open, the append — an append that fails
+cut back off the file — and the compaction, one that fails past its
+rename stopping the log until one completes); `uploads.rs` the
+identifier and the records' log, which answers by the asking principal
+and holds every record's offset within its length; `lease.rs`
+the leases' log; `partials.rs` the partial files, the handle a request
+opens on one (`Handle`, whose fields are its own and whose hash holds
+across a failed write or sync) and the reconciliation at open; `store.rs`
+the `Store`, the four opened as one, with the finish's order and its
+steps (`Step`), and beneath it `store/hooks.rs`, the test seam.
 
 Rules that hold across its files:
 
@@ -174,39 +187,129 @@ Rules that hold across its files:
   file hard-linked to an aside name (`.retired-<hex>-<n>`, so the rename
   frees no blocks); the partial renamed onto `<designation>/<hex>`
   (REPLACE where the name exists, never a no-op), the designation
-  directory fsynced, the root fsynced where this process created the
-  directory, THEN the lease appended and synced, THEN the record retired,
-  THEN the answer — and the aside unlinked AFTER the answer
-  (`Store::retire_asides`, the deferred step the daemon's transport runs
-  once the reply is written). Nothing names a file before it is durable,
-  nothing ever names an aside, and a crash leaves at worst a file with no
-  lease, a record open's reconciliation retires, or an aside open removes.
+  directory fsynced, the root fsynced where no root fsync since the open
+  has made the directory durable — whatever made it, a creation that
+  failed past its mkdir included — THEN the lease appended and synced,
+  THEN the record retired,
+  THEN the answer — the aside queued for the deferred unlink only as the
+  finish answers, and unlinked AFTER the answer (`Store::unlink_asides`,
+  the deferred step the daemon's transport runs once the reply is
+  written, on whichever worker served it). Nothing names a file before it
+  is durable, nothing ever names an aside, and a crash leaves at worst a
+  file with no lease, a record open's reconciliation retires, or an aside
+  open removes.
 - **The pruner's reads are one act each.** The designation directories,
-  the files at hex names, the asides, whether any key holds a live lease
-  on a file, the expired uploads and their removal, the unlink of one
+  the files at hex names, the asides, whether any principal holds a live
+  lease on a file, the expired uploads and their removal, the unlink of one
   file — each a method of the store doing one thing, so the daemon's pass
   holds its own lock around exactly one.
+- **Two exclusions are the caller's.** No second `Store` open over its
+  root while one is — its open would cut back, remove and rewrite under a
+  store that serves — which the daemon keeps by opening the store only
+  after its kernel has taken the exclusive lock on the data directory
+  (`Daemon::open`'s precondition), so a second daemon fails there; and no
+  `unlink_blob` or `remove_aside` while a `finish` runs, which the daemon
+  keeps with its credential lock, the finish under the read arm and each
+  pruner act under the write arm. The store sees no lock of its caller's
+  and checks neither.
+- **A caller's bug is no refusal.** An `append` with no handle open and a
+  `finish` short of the declared length PANIC, naming the obligation they
+  break; `BlobError` carries only answers a caller acts on. The daemon
+  appends only between its own resume and the act that ends the request,
+  and finishes only where the bytes written reach the length, so it has
+  no arm for either.
 - **A byte is received once it is durable.** The partial is fsynced at a
   grain and at every request's end (`Store::settle`), and the record's
-  offset and expiry are written after each sync; a resume continues from
-  the record's offset, the partial cut back to it where longer.
-- **One answer per key.** An identifier the asking key's records do not
-  name is `NoUpload` whoever minted it; a hash the key holds no lease on
-  is `LeaseState::None` whatever the directory holds; a finish answers
-  one shape whether or not the file was already here.
+  offset and expiry are written after each sync, the expiry re-fixed from
+  the interval the record took at the upload's creation, so a later
+  limits record never reaches a standing upload; a resume continues from
+  the record's offset, the partial cut back to it where longer. A handle
+  lives for one request: every resume opens the partial afresh, and the
+  settle, finish or end that closes the request closes the handle — a
+  request cut short owes a `close_handle` — so no file stays open for an
+  upload no request is streaming, nor past a finish whose rename made the
+  partial's file the hash's.
+- **One answer per principal.** An identifier the asking principal's
+  records do not name is `NoUpload` whoever minted it; a hash the
+  principal holds no lease on is `LeaseState::None` whatever the
+  directory holds; a finish answers one shape whether or not the file was
+  already here. The principal check is `UploadRecords`' own; its one
+  lookup by identifier alone serves the pruner's expiry.
+- **Every name passes one check.** A designation or a hex becomes a path
+  only past its spelling's check (`blobs.rs`): a caller's at every entry
+  point of `Store`, where a malformed one is answered as absent or
+  refused; a log's at open, where a record or lease line naming a
+  malformed one reads as a lost line does. So no name — handed in, or read
+  back off a log restored from elsewhere — names a path out of the root.
+- **Pending bytes are the unplaced deposits and the bytes received.**
+  `Store::pending_bytes` and `Store::pending_total` count a live lease
+  only where the caller's `unplaced` answers that no cell of its
+  principal's names the hash — which the store, reading no cell, cannot
+  know — so a placed file is counted once, in the base, never again in
+  the pending bytes.
+- **A torn line is only ever a log's tail.** An append that fails is cut
+  back off its log, and a log whose cut fails too takes no further
+  append, so open's tail check — which cuts everything from the first
+  torn line on — never cuts a whole line; nor does a log whose
+  compaction failed past its rename, whose open file is the one the
+  rewrite replaced, until a compaction completes.
 - **Open reconciles and compacts.** Both logs are tail-checked and
-  rewritten to their current records; the partials and the records are
-  held to each other both ways; a lease past the horizon is dropped — all
-  before the store answers anything.
-- **The hazard seam is a feature.** `test-hooks` (default off) compiles in
-  the hold and the injected failure at a named `Step` of the finish; the
-  shipped build carries neither.
+  rewritten to their current records, a record line whose offset passes
+  its length read as no record; the partials and the records are held to
+  each other both ways, a partial that cannot be read failing the open
+  rather than reading as absent; every aside is removed, a crash's or a
+  failed finish's; a lease past the horizon is dropped — all before the
+  store answers anything. An I/O failure is no absence here or at the
+  size check (`Store::blob_size`), which answers it.
+- **The test seam is a feature.** `test-hooks` (default off) compiles in
+  `store/hooks.rs` alone: the hazard seam — the hold and the injected
+  failure at a named `Step` of the finish, the hold run with none of the
+  seam's own state locked, so it parks its own finish alone — and the
+  four methods only a test calls: `install`, the one way to name a file
+  by a hash its bytes do not have, `written`, `asides_queued` and
+  `handles_open`. The shipped build carries none of it;
+  `scripts/gate-full.sh` checks the library without the feature.
 
 Its integration suite is one binary, `tests/it/`: `blobs` (the order under
-a seeded failure injection at each step, REPLACE's repair and its one
-answer), `uploads` (the identifier, the durable offset, the reconciliation,
-the end), `lease` (the three states and the horizon, latest-wins, the
-compaction, the pending bytes).
+a seeded failure injection at each step, the root's fsync owed until a
+finish pays it, by every designation directory made after the open
+whatever made it, a finish short of its length stopped as its caller's
+bug, the finishes run one at a time, a hold parking its own finish alone,
+REPLACE's repair and its one answer, an aside name of its own for every
+replace, the aside queued only at the answer, the drain counting an aside
+already gone and leaving a failed one and every one after it queued, no
+handle left on the hash's file past a failed finish, a size that cannot
+be read answered as a failure and never as an absence, the name check at
+every entry point, the directory listings each naming its own class in
+name order, the floor's read of the space available), `uploads` (the
+identifier — never a sequence, its two parses exact over a family of near
+spellings, its order — and one "no upload" from every act for every
+identifier the asker does not hold, the durable offset and every other
+offset refused, nothing but a byte received moving the expiry, the
+upload's own interval held as its line spells it and saturating at the
+last instant, one handle per request and an append past its request's end
+stopped as its caller's bug, the reconciliation, a partial that cannot be
+read failing the open and retiring nothing, a record line whose
+designation climbs out of the root read as no record with nothing beside
+the root touched, a record line whose offset passes its length read as no
+record, the compaction down to nothing over a stale twin, the expiry and
+an expired upload's handle, the listings in identifier order, the end),
+`lease` (the three states and the horizon read off the record alone, a
+principal's live leases in hex order, latest-wins, the compaction, the
+pending bytes and the unplaced deposits, a line naming a malformed
+designation or hex read as no lease). Four unit suites sit beside their
+code: `store.rs`'s holds an append's measure of its grain in range where a
+settle that raced a resume of the same upload left the record's offset
+past the new handle's bytes; `jsonl.rs`'s, in `jsonl/tests.rs`, holds
+`Log` to its own line count and to an append that fails — the torn tail,
+trust ending at the first torn line whatever tore it, the failed append
+cut back to exactly its whole lines whatever opened or rewrote the log,
+the stop where the cut fails too and where a compaction fails past its
+rename, and the compaction the count decides; `partials.rs`'s holds
+`Handle`'s hash to its file's bytes across a resume below what the file
+holds and a failed write, and the open to refusing a partial shorter than
+its record's offset; `blobs.rs`'s holds the aside name to its exact
+spelling.
 
 ## The registry rows and bodies, `skep-registry`
 
@@ -252,50 +355,114 @@ vector set at this parser, the examples' one canonical form).
 board the daemon serves and knows the bindings it read were genuine. It
 links no daemon and no engine, speaks the wire as a guest, and opens no
 socket to an endpoint — the dial is the caller's. Its modules: `hint.rs`
-the root hint (the root's origins, the realm id over the genesis set, the
-fork point) parsed from one line and from a struct; `http.rs` the
-written-out HTTP/1.1 client behind a `Transport` trait and the typed
-reads over it (`Board`), every read counted by kind; `mirror.rs` the
-`/changes` consumer, the fetch-and-fold, the journal copy and the fetch
-cache under the caller's directory, the base's check and its refusals;
-`verify.rs` the record grade for registry records, client-side;
-`index.rs` the position-annotated prefix → binding index and the
-endpoint's currency; `walk.rs` the resolve, and the guest-reading resolve
-that scans with no mirror; `origin.rs` the scheme and host terms and the
-ordered walk's one precedence; `state.rs` the verdict and the faces.
+the root hint (the root's origins and the realm id, `RealmId` — the
+genesis fingerprint and, on a forked lineage, the fork point beside it)
+parsed from one line or built from its parts, never with no origin;
+`http.rs` the written-out
+HTTP/1.1 client behind a `Transport` trait; `board.rs` the typed reads
+over any transport (`Board`), every read counted by kind;
+`mirror.rs` the `/changes` consumer's types and state, the journal copy
+and the fetch cache under the caller's directory, and the fold, with three
+children — `mirror/base.rs` the base's check, its refusals and the sync,
+`mirror/keys.rs` the key set as of a position, `mirror/atoms.rs` a
+record's bytes and the chain walk; `verify.rs` the record grade for
+registry records, client-side; `index.rs` the ledger of the rules (the
+binding walk and the endpoint's currency) and the verified prefix →
+binding index behind the mirror's gate; `walk.rs` the resolve, and its
+child `walk/guest.rs` the guest-reading resolve that scans with no mirror;
+`origin.rs` the scheme and host terms and the ordered walk's one
+precedence; `state.rs` the verdict and the faces. The modules are
+private: `lib.rs` re-exports the crate's whole surface, one path per name.
 
 Rules that hold across its files:
 
 - **The verdict decides, the registry's reads do not.** `verify::judge`
   is the one place a `sig` is judged, under the set that opens the home's
   account as of the record's position; a record whose verdict is not
-  SIGNED enters no index and is counted (`Index::suppressed`). The body is
-  parsed by `skep_registry::parse` alone: this crate derives no parser.
-- **The table as of the position.** A record's key set is the one its
-  home's account held at the record's own position — read off the live
-  `key_set` only where the feed the mirror holds proves no credential act
-  of the account lies between the position and the live answer's `as_of`,
-  off `/op-at` otherwise, and at the reclaim floor only where the same
-  proof reaches it; where the table is gone with the journal the record is
-  UNDETERMINABLE HERE, never unsigned.
-- **The base is checked, never trusted.** A copy under the mirror's
-  directory serves only after the source, read from genesis, answers
-  every held row identically and every held chain pair the same; a hint
-  of another realm retires the copy and bootstraps afresh; the refusals
-  are named. Only `feed.jsonl` is the checked image; `fetched.jsonl` is
-  this mirror's own cache.
+  SIGNED enters no index and is counted under that verdict as judged
+  (`Cause`, `Index::suppressed`), and the index's write side is the
+  crate's own, so a dependent folds nothing into one; the guest-reading
+  resolve folds into a `Ledger`, the rules alone, never into an `Index`.
+  The body is parsed by `skep_registry::parse`
+  alone — this crate derives no parser — and what it admits is not judged
+  again: a record's address members are the addresses they name, read at
+  any size the canonical rule admits. The library links the verify and
+  never the signer — `skep-signature` with no `sign`, which
+  `scripts/gate-full.sh` checks by building the library alone.
+- **The table as of the position** (`mirror/keys.rs`). A record's key set
+  is the one its home's account held at the record's own position — read
+  off the live `key_set` only where the credential acts the mirror holds —
+  those the credential pass has read, through the last row it read — prove
+  none of the account's lies between the position and the live answer's
+  `as_of`, off `/op-at` otherwise, and at the reclaim floor only where the
+  same proof reaches it; where the table is gone with the journal the
+  record is UNDETERMINABLE HERE, never unsigned, a table the walk cannot
+  read is `None`, never an empty set, and a table holding a key this build
+  cannot read is no table, never a smaller one. The proof reads acts past
+  the record's position, so the pull holds every row of a sync before the
+  fold takes any, and `fold_pending` records every credential act among
+  them — an enroll or retire link naming the account, in any home — before
+  it judges any record. A sync that fails leaves its rows held, and the
+  next takes them up where it stopped, never asking the board for them
+  again.
+- **The base is checked, never trusted** (`mirror/base.rs`). A copy under
+  the mirror's directory serves only after the source, read from genesis,
+  answers every held row identically and every held head pair the same,
+  and the realm id's genesis fingerprint is compared at the claim's row on
+  every open that holds a board — for the board's own claimant, at the
+  board's own genesis act, against the genesis set the source answers
+  there: until it is compared the fold reads every link row off the board,
+  never the fetch cache, and it honors one claim, a claim row past it
+  moving nothing — the copy's header is the copy's word, and the fork point
+  is compared by no check; no line reaches the copy before that
+  comparison, so a refused base writes no line; a hint of another genesis
+  retires the copy and bootstraps afresh; the refusals are named, in the
+  order `Mirror::open` states. Only `feed.jsonl` is the checked image,
+  every line of it written and read back in `mirror/base.rs` under its
+  format stamp, and an offline rebuild, which no source checks, holds its
+  rows to the feed's own order; `fetched.jsonl` is this mirror's own
+  cache, its format written and read by `Fetched` alone, a value written
+  once, a line that does not read — a write a crash cut short — held as
+  absent and never run into. A new base begins both files afresh, so a
+  cache that outlived its feed copy is never read as this mirror's own.
+- **A retraction is the board's own reading** (`board.rs`). A deposit
+  leaves the active view where the board's active links of its home, its
+  type and its atom no longer answer it (`Board::stands_active`) — the
+  org's own `nullify` — and never where a link of the retraction's type is
+  found: discovery matches a slot by overlap, and any account's link of
+  another class, in its own home, overlaps every address. The mirror asks
+  each standing deposit once a pass.
+- **The board's shapes are held, not trusted** (`http.rs`, `board.rs`).
+  No answer is read past the feed's page budget and its envelope; an `/op`
+  answer past it is one no typed read takes; a page that re-serves a row or
+  does not advance is refused, a limit the feed names and refuses again is
+  refused, a class scan's window that does not move its cursor is refused,
+  and a reclaimed read whose floor does not lie past the position asked is
+  refused — so no board sizes the client's memory past a page or pages it
+  forever, and no floor clause counts acts over an empty interval. A link's slots are read only for a link of a type its reader
+  names, its type slot that type's unit span exactly, the daemon's own
+  reading of a registry or credential type.
 - **The walk reads the index and the board, nothing else.** Every hop is
   the registry board's own journal or the mirror's copy of it; a depth
-  address answers its parent's standing and the hop not made; no name is
-  tested — the host term is met at the addresses this resolver's own
-  resolution yields, through a `NameResolver` a suite can hold fixed.
+  address answers its parent prefix's standing — held or retired — and the
+  hop not made; no name is tested — the host term is met at the addresses
+  this resolver's own resolution yields, through a `NameResolver` a suite
+  can hold fixed, an address a translator dials on tested as the IPv4 it
+  reaches.
 
 Its integration suite is one binary, `tests/it/`, over a RECORDED feed
 (`tests/fixtures/feed.json`, written by the daemon suite's `resolve.rs` on
-demand): `index` (the index from the fixture, the rebuild from the copy,
-the realm check, the replay matrix), `walk` (the faces) and `origin` (the
-terms and the precedence). The end-to-end cells and the measurements run
-in `crates/skepd/tests/it/resolve.rs`.
+demand): `index` (the index from the fixture, a missing input's verdict,
+the rebuild from the copy and the offline mirror's scope, the realm check,
+the head pairs, the re-bootstrap, the root's failover, the copy's two
+files, the replay matrix), `walk` (the faces) and `origin` (the terms and
+the precedence). The paths no recording reaches — the reclaim floor, the
+page budget, the position read, an unclaimed feed, the binding home, a
+cache naming another claimant or hiding the genesis act, a second claim,
+an address past a machine word, the guest-reading resolve's verdicts, a
+forged retraction, a page or a window that does not advance, an answer
+past the cap — run in the unit suites over boards they hold fixed. The end-to-end cells and the measurements run in
+`crates/skepd/tests/it/resolve.rs`.
 
 ## The name space, `skep-namespace`
 
@@ -685,9 +852,10 @@ imports it.
   lock's read arm, the pruner under its write arm, the walk at open under
   neither; `media/index.rs`'s lock is held across no other lock, and no
   caller holds it while taking one.
-- **The store knows no policy.** `skep-blobs` is handed a root and opaque
-  keys; who a key is, what bounds its bytes, and which lock a finish runs
-  under are the daemon's (`media/gate.rs`), never the store's.
+- **The store knows no policy.** `skep-blobs` is handed a root and
+  principals as opaque strings; who a principal is, what bounds its bytes,
+  the interval an upload and a lease are given, and which lock a finish
+  runs under are the daemon's (`media/gate.rs`), never the store's.
 - **The cell's parser is the one parser; the door is the one media
   step.** `media/cell.rs`'s `parse` is the daemon's one reading of a
   picture cell's bytes, under the canonical rule (`parse(b)` answers a

@@ -40,6 +40,20 @@ cargo check -p skep-content --lib || exit $?
 # routing assertion compiled out.
 cargo nextest run -p skep-content --release --profile full || exit $?
 
+# skep-blobs' library without `test-hooks` — every test build turns it on
+# (the crate's self dev-dependency, and skepd's), so this is the build that
+# shows the store compiles without its test seam (`src/store/hooks.rs`): no
+# hold, no injected failure, no `install`, `written`, `asides_queued` or
+# `handles_open`.
+cargo check -p skep-blobs --lib || exit $?
+
+# skep-resolve's library without the signer — every test build turns
+# skep-signature's `sign` on (the crate's own dev-dependency, and in the
+# workspace's builds skep-mcp's dependency and skepd's dev-dependency), so
+# this is the build that shows the verify-only library a client embeds
+# compiles with no signer in it.
+cargo check -p skep-resolve --lib || exit $?
+
 # The feature edges the full run below never compiles: `client` is
 # default-off, and `observe` is on in every test build. The notebook build
 # (`client` on); the build without the dump route (`observe` off), its
@@ -52,12 +66,12 @@ cargo nextest run -p skepd --all-features --profile full \
     -E 'test(/^client::/) | test(/^cors::/) | test(/the_death_signal_rides_exactly_the_documented_routes$/) | test(/the_route_set_agrees_across_preflight_dispatch_and_refusal$/)' \
     || exit $?
 
-# Every intra-doc link in skepd and skep-signature resolves — a private
-# item's too, and a link resolves only where its module could name the
-# target in code, so a narrowing that strands a link fails here rather than
-# in a reader's hands.
+# Every intra-doc link in skepd, skep-signature, skep-resolve and skep-blobs
+# resolves — a private item's too, and a link resolves only where its module
+# could name the target in code, so a narrowing that strands a link fails
+# here rather than in a reader's hands.
 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
-    cargo doc -p skepd -p skep-signature --lib --no-deps --document-private-items --all-features \
+    cargo doc -p skepd -p skep-signature -p skep-resolve -p skep-blobs --lib --no-deps --document-private-items --all-features \
     || exit $?
 
 # --run-ignored all re-admits the #[ignore] timing partition. One test is

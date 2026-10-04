@@ -731,7 +731,7 @@ impl<'a> Checker<'a> {
         depth: u32,
     ) -> Result<Vec<ArcTerm>, TypeError> {
         let params = referent.params();
-        let arity = || TypeError::ArgArityMismatch {
+        let arity_mismatch = || TypeError::ArgArityMismatch {
             referent: addr.clone(),
             expected: params.len(),
             found: args.len(),
@@ -741,12 +741,12 @@ impl<'a> Checker<'a> {
             let c = self.check_term(ctx, arg, argument_depth(depth, i))?;
             match params.get(i) {
                 Some((_, s)) => want(*s, c.sort)?,
-                None => return Err(arity()),
+                None => return Err(arity_mismatch()),
             }
             checked_args.push(c.term);
         }
         if args.len() < params.len() {
-            return Err(arity());
+            return Err(arity_mismatch());
         }
         Ok(checked_args)
     }

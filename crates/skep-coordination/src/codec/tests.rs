@@ -65,7 +65,7 @@ fn stored_run_hands_back_only_a_run_the_decoder_reads_back() {
     let catalog = TypeCatalog::project(skep_links::registry());
     let resolve =
         |_: &Address, _: u32| -> Result<Arc<TypedTerm>, Unresolved> { Err(Unresolved::Undefined) };
-    let checked = |negations: u32| {
+    let negated_count = |negations: u32| {
         let leaf = Term::Prim(Prim::NatEq(
             Arc::new(Term::Count(Arc::new(Dom::Reg))),
             Arc::new(Term::Lit(Lit::Nat(Nat::from(5u32)))),
@@ -75,10 +75,10 @@ fn stored_run_hands_back_only_a_run_the_decoder_reads_back() {
             .check_signed(SignedTerm { params: vec![], body }, 0)
             .expect("the checker folds count(Reg) to a literal at the count's own level")
     };
-    let within = checked(MAX_DEPTH - 2);
+    let within = negated_count(MAX_DEPTH - 2);
     let run = stored_run(&within).expect("a run the decoder reads back");
     assert_eq!(decode(&run), Ok(within.signed().clone()));
-    let past = checked(MAX_DEPTH - 1);
+    let past = negated_count(MAX_DEPTH - 1);
     assert_eq!(stored_run(&past), Err(Unstorable));
     let raw = encode(past.signed());
     assert_eq!(decode(&raw), Err(Malformed), "the raw writer hands back what the decoder refuses");
@@ -131,10 +131,10 @@ fn the_decoder_never_charges_less_than_weight_prices_what_it_builds() {
 
 /// A `Tup` in a parameter context is a broken invariant, not an input:
 /// Codom-only at encode time as at registration (ASN-0130 SignedTerm), the
-/// sort has no tag, and the encoder refuses to spell one.
+/// sort has no tag, and the encoder panics rather than spell one.
 #[test]
 #[should_panic(expected = "Codom-only")]
-fn encode_refuses_a_tup_parameter() {
+fn encode_panics_on_a_tup_parameter() {
     let signed = SignedTerm { params: vec![(v(1), Sort::Tup)], body: Term::Lit(Lit::True) };
     let _ = encode(&signed);
 }

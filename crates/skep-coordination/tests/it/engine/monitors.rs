@@ -10,7 +10,7 @@ use skep_coordination::{
     Arg, Coordinator, Dom, FireAction, Occurrence, Rule, RuleId, Sort, StepOutcome, Term, Trigger,
     View,
 };
-use skep_links::Caller;
+use skep_links::{Caller, SlotArg};
 
 /// `Arg::key_addr` bridges the peek to the monitor: `next_enabled` hands back
 /// a bound argument of either shape, and `fire_count` keys on an address —
@@ -92,11 +92,14 @@ fn fire_count_answers_zero_for_a_foreign_rule_id() {
     assert_eq!(c2.fire_count(id, &ca(1)), 0);
 }
 
-/// The attribution key is exact: a same-typed tuple whose F merely COVERS
-/// the argument, and one with the exact F homed elsewhere (a draft's,
-/// invisible to the fire's dedup), are both outside the count.
+/// The attribution key is exact — `F = {x}` in the action's home — and three
+/// same-typed tuples are outside the count: one whose F merely COVERS the
+/// argument; one whose F denotes it beside an address under it, which has the
+/// argument's coverage class (the def probes' key) and is not `{x}`; and one
+/// with the exact F homed elsewhere (a draft's, invisible to the fire's
+/// dedup).
 #[test]
-fn fire_count_keys_on_exact_coverage_and_home() {
+fn fire_count_keys_on_exact_denotation_and_home() {
     let k = kernel();
     let mut c = coord_with_guest(&k, |_, d| *d != doc2());
     let writer = link_writer(&k);
@@ -112,6 +115,15 @@ fn fire_count_keys_on_exact_coverage_and_home() {
         .expect("register");
     assert!(matches!(c.step(&k.snapshot()), StepOutcome::Fired { .. }));
     writer.emit(Caller::System, &doc1(), &marker_ty(), &doc1(), &[]).expect("a marker covering ca1 without naming it");
+    writer
+        .makelink(
+            Caller::System,
+            &doc1(),
+            SlotArg::Addrs(vec![ca(1), a(&[1, 0, 1, 0, 1, 0, 1, 1, 7])]),
+            SlotArg::Addrs(vec![]),
+            SlotArg::Addrs(vec![ra(RETIRED)]),
+        )
+        .expect("a marker denoting ca1 beside an address under it");
     assert_eq!(c.fire_count(id, &ca(1)), 1);
 }
 

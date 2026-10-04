@@ -169,9 +169,9 @@ fn a_fixed_slice_atom_denotes_the_same_at_every_view() {
     let (claim, _) = writer.assert_sup(Caller::System, &doc1(), &l1, &l2).expect("l1 → l2");
     writer.nullify(Caller::System, &doc1(), &claim).expect("retract the claim");
     // … and a BH1 membership likewise.
-    let (retired, _) =
+    let (retirement, _) =
         writer.emit(Caller::System, &doc1(), &retired_ty(), &ca(5), &[]).expect("retire ca5");
-    writer.nullify(Caller::System, &doc1(), &retired).expect("un-retire ca5");
+    writer.nullify(Caller::System, &doc1(), &retirement).expect("un-retire ca5");
     for view in [View::Active, View::Audit, View::Default] {
         assert!(
             !decide_now(&k, &c, view, is_filtered(&retired_ty(), lit_addr(&ca(5)))),
@@ -294,8 +294,8 @@ fn uv_drops_retired_elements_from_chain_and_succs_but_never_from_the_walk() {
     writer.assert_sup(Caller::System, &doc1(), &l1, &l2).expect("l1 → l2");
     writer.assert_sup(Caller::System, &doc1(), &l2, &l3).expect("l2 → l3");
     writer.emit(Caller::System, &doc1(), &retired_ty(), &l2, &[]).expect("retire l2");
-    let chain_len = |view: View, n_: u32| {
-        decide_now(&k, &c, view, nat_eq(count_set(elems(chain(&sup, lit_addr(&l1)))), lit_nat(n_)))
+    let chain_len = |view: View, len: u32| {
+        decide_now(&k, &c, view, nat_eq(count_set(elems(chain(&sup, lit_addr(&l1)))), lit_nat(len)))
     };
     assert!(chain_len(View::Active, 3));
     assert!(chain_len(View::Audit, 3));
@@ -642,7 +642,7 @@ fn a_binder_shadows_an_outer_name_only_within_its_scope() {
 
 #[test]
 #[should_panic(expected = "decide precondition")]
-fn decide_panics_on_non_bool_codomain() {
+fn decide_panics_on_a_non_boolean_codomain() {
     let k = kernel();
     let c = coord(&k);
     let tt = c.type_check(vec![], lit_nat(1)).expect("Nat-codomain term");
@@ -655,7 +655,7 @@ fn decide_panics_on_non_bool_codomain() {
 /// the walk.
 #[test]
 #[should_panic(expected = "eval precondition violated: ArgSortMismatch")]
-fn eval_panics_on_a_mis_sorted_parameter() {
+fn eval_panics_on_a_mis_sorted_argument() {
     let k = kernel();
     let c = coord(&k);
     let tt = c.type_check(vec![(v(1), Sort::Addr)], tru()).expect("one-param term");
@@ -667,7 +667,7 @@ fn eval_panics_on_a_mis_sorted_parameter() {
 /// parameter unbound, and is named at the door too.
 #[test]
 #[should_panic(expected = "eval precondition violated: ArgArityMismatch")]
-fn eval_panics_on_an_unbound_parameter() {
+fn eval_panics_on_a_missing_argument() {
     let k = kernel();
     let c = coord(&k);
     let tt = c.type_check(vec![(v(1), Sort::Addr)], tru()).expect("one-param term");

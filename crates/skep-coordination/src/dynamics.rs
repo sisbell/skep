@@ -282,7 +282,7 @@ impl<'a> Analyzer<'a> {
     /// element (`EvalCtx::filtered_other`, fixed active); empty at `active`
     /// and `audit`, where no rewrite runs. Charged in one place per family —
     /// after the arm, in [`Analyzer::atom`] and [`Analyzer::dom`] — to every
-    /// read whose denotation moves with the view ([`moves_with_view`],
+    /// read whose denotation moves with the view ([`atom_moves_with_view`],
     /// [`dom_moves_with_view`]). That covers every read the evaluator
     /// UV-rewrites: UV runs only at `default`, so every read it rewrites moves
     /// with the view. The one read charged beyond them is `is_K`, which moves
@@ -409,12 +409,13 @@ impl<'a> Analyzer<'a> {
     }
 
     /// The fused FP + PD0 pass over an atom: what its own arm reads, then —
-    /// for an atom whose denotation [`moves_with_view`] — the BH1 filter
-    /// slices ([`Analyzer::read_filter_fp`]), charged once after the match
-    /// rather than in each arm, so the exhaustive classification decides the
-    /// footprint as well as the scan. No arm's `st`/`sf`/`grow_only` reads that
-    /// charge: each turns on the argument's footprint or on the view, so the
-    /// charge moves no stability.
+    /// for an atom whose denotation moves with the view
+    /// ([`atom_moves_with_view`]) — the BH1 filter slices
+    /// ([`Analyzer::read_filter_fp`]), charged once after the match rather than
+    /// in each arm, so the exhaustive classification decides the footprint as
+    /// well as the scan. No arm's `st`/`sf`/`grow_only` reads that charge: each
+    /// turns on the argument's footprint or on the view, so the charge moves no
+    /// stability.
     fn atom(&self, a: &Atom) -> Analysis {
         let view = self.view;
         let mut analysis = match a {
@@ -499,7 +500,7 @@ impl<'a> Analyzer<'a> {
                 step_constant(ae.fp)
             }
         };
-        if moves_with_view(a) {
+        if atom_moves_with_view(a) {
             analysis.fp = analysis.fp.union(self.read_filter_fp());
         }
         analysis
@@ -625,7 +626,7 @@ impl<'a> Analyzer<'a> {
 /// the analyzer's BH1 charge at `default` ([`Analyzer::read_filter_fp`]),
 /// asked of this function rather than restated per arm, so classifying an
 /// atom here classifies its footprint too.
-fn moves_with_view(a: &Atom) -> bool {
+fn atom_moves_with_view(a: &Atom) -> bool {
     match a {
         Atom::IsK(..)
         | Atom::Members(_)
@@ -650,9 +651,9 @@ fn moves_with_view(a: &Atom) -> bool {
 }
 
 /// The domains whose enumeration moves with the TERM VIEW, classified
-/// EXHAUSTIVELY for [`moves_with_view`]'s reason: `M_K` alone — D1/V-AUD's
-/// view-selected slice, UV-rewritten at `default`. The rest name a fixed
-/// slice (`A_K`/`L_K`/`L_dom`), carry no state (`Reg`, folded away at
+/// EXHAUSTIVELY for [`atom_moves_with_view`]'s reason: `M_K` alone —
+/// D1/V-AUD's view-selected slice, UV-rewritten at `default`. The rest name a
+/// fixed slice (`A_K`/`L_K`/`L_dom`), carry no state (`Reg`, folded away at
 /// type-check), or are closures whose children a walker reaches on its own.
 /// PR-VIEW's scan refuses these domains, and the analyzer charges them the
 /// BH1 filter slices at `default` ([`Analyzer::dom`]).
@@ -669,8 +670,8 @@ fn dom_moves_with_view(d: &Dom) -> bool {
 }
 
 /// The syntactic scan: no atom and no domain whose denotation moves with the
-/// view ([`moves_with_view`], [`dom_moves_with_view`]). The same answer at
-/// every view. Preconditions as the [`Analyzer`]'s — the depth bound
+/// view ([`atom_moves_with_view`], [`dom_moves_with_view`]). The same answer
+/// at every view. Preconditions as the [`Analyzer`]'s — the depth bound
 /// included: this walk has none of its own. Ref-free, in particular, because
 /// a referent's body is the one part a `Ref` node's own spelling cannot vouch
 /// for, so the scan runs over the flat expansion, never around a `Ref`.
@@ -684,7 +685,7 @@ pub(crate) fn view_independent(t: &Term) -> bool {
                 return;
             }
             match t {
-                Term::Atom(a) if moves_with_view(a) => self.independent = false,
+                Term::Atom(a) if atom_moves_with_view(a) => self.independent = false,
                 Term::Ref { .. } => unreachable!(
                     "classification precondition: ref-free input (an inline trigger's projection or a flat expansion)"
                 ),

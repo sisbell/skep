@@ -68,15 +68,15 @@ fn classify_places_a_spelling_on_the_lattice_relative_to_its_view() {
     let pdef_class = coverage_class(&pred_def_ty());
     let marker_class = coverage_class(&marker_ty());
     let fp_ex = c.classify(&ex, View::Audit).footprint;
-    assert!(fp_ex.audit_classes().any(|k| *k == pdef_class));
+    assert!(fp_ex.audit_classes().any(|read| *read == pdef_class));
     assert_eq!(fp_ex.active_classes().count(), 0);
     assert!(!fp_ex.reads_all_audit() && !fp_ex.reads_residence());
     assert!(!fp_ex.reads_home_frontier() && !fp_ex.reads_targets_keyed());
     let fp_act = c.classify(&act, View::Active).footprint;
-    assert!(fp_act.active_classes().any(|k| *k == pdef_class));
+    assert!(fp_act.active_classes().any(|read| *read == pdef_class));
     assert_eq!(fp_act.audit_classes().count(), 0);
     let fp_isk = c.classify(&isk, View::Audit).footprint;
-    assert!(fp_isk.audit_classes().any(|k| *k == marker_class));
+    assert!(fp_isk.audit_classes().any(|read| *read == marker_class));
     let ldom = tc(exists(2, Dom::LinkDom, tru()));
     assert!(c.classify(&ldom, View::Audit).footprint.reads_all_audit());
     let isdoc = tc1(is_doc(var(1)));
@@ -255,9 +255,12 @@ fn the_pd0_rules_hold_over_a_generated_family() {
     );
     // The Default reading of a core atom charges every BH1 filter slice.
     let isk = c.type_check(vec![(v(1), Sort::Addr)], is_k(&pred_def_ty(), var(1))).expect("checks");
-    let retired = coverage_class(&retired_ty());
-    assert!(c.classify(&isk, View::Default).footprint.active_classes().any(|x| *x == retired));
-    assert!(!c.classify(&isk, View::Active).footprint.active_classes().any(|x| *x == retired));
+    let retired_class = coverage_class(&retired_ty());
+    let charges = |view: View| {
+        c.classify(&isk, view).footprint.active_classes().any(|read| *read == retired_class)
+    };
+    assert!(charges(View::Default));
+    assert!(!charges(View::Active));
 }
 
 /// PD0's binder rules over a generated family: each binding former over each
@@ -337,10 +340,10 @@ fn the_default_view_charges_bh1_slices_for_exactly_the_reads_that_move_with_the_
     let k = kernel();
     let c = coord(&k);
     let sup = c.reserved_type(ShippedType::Supersedes).clone();
-    let retired = coverage_class(&retired_ty());
+    let retired_class = coverage_class(&retired_ty());
     let charges = |t: &Term, view: View| {
         let tt = c.type_check(vec![], t.clone()).expect("test term type-checks");
-        c.classify(&tt, view).footprint.active_classes().any(|x| *x == retired)
+        c.classify(&tt, view).footprint.active_classes().any(|read| *read == retired_class)
     };
     for t in [
         is_k(&pred_def_ty(), lit_addr(&ca(1))),
@@ -385,7 +388,7 @@ fn every_state_reading_form_records_the_slice_it_reads() {
     let x = || lit_addr(&ca(1));
     let analyzed =
         |t: &Term, view: View| c.classify(&c.type_check(vec![], t.clone()).expect("checks"), view);
-    let (pd_class, sup_class, retired) =
+    let (pd_class, sup_class, retired_class) =
         (coverage_class(&pd), coverage_class(&sup), coverage_class(&retired_ty()));
     // (the form, the class it reads, whether its slice follows the term view)
     let forms = [
@@ -394,7 +397,7 @@ fn every_state_reading_form_records_the_slice_it_reads() {
         (targets_of(&pd, x()), &pd_class, true),
         (count(Dom::MembersDom(concrete(&pd))), &pd_class, true),
         (count(Dom::ActiveSlice(concrete(&pd))), &pd_class, false),
-        (is_filtered(&retired_ty(), x()), &retired, false),
+        (is_filtered(&retired_ty(), x()), &retired_class, false),
         (succs(&sup, x()), &sup_class, false),
         (chain(&sup, x()), &sup_class, false),
         (tip(&sup, x()), &sup_class, false),

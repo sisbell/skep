@@ -117,19 +117,19 @@ fn type_check_refuses_each_documented_edge_by_name() {
     );
     // … and arguments meet formals BY POSITION: a referent of two sorts takes
     // its arguments in its own order and refuses them swapped, at the first.
-    let (two, _) = c
+    let (r, _) = c
         .define_predicate(
             &doc1(),
             &c.type_check(vec![(v(1), Sort::Addr), (v(2), Sort::Nat)], tru()).expect("R(x, n)"),
         )
         .expect("define R");
-    let calling_two = |args: [Term; 2]| {
+    let calling_r = |args: [Term; 2]| {
         let args = args.into_iter().map(at).collect();
-        c.type_check(vec![], Term::Ref { addr: two.clone(), args })
+        c.type_check(vec![], Term::Ref { addr: r.clone(), args })
     };
-    calling_two([lit_addr(&ca(1)), lit_nat(1)]).expect("each argument at its own formal");
+    calling_r([lit_addr(&ca(1)), lit_nat(1)]).expect("each argument at its own formal");
     assert_eq!(
-        calling_two([lit_nat(1), lit_addr(&ca(1))]).err(),
+        calling_r([lit_nat(1), lit_addr(&ca(1))]).err(),
         Some(TypeError::SortMismatch { expected: Sort::Addr, found: Sort::Nat })
     );
 

@@ -49,16 +49,17 @@ deposits, and the resolver that reads them back — is this crate:
 - **The vector set**, `tests/vectors/records.json` — the admitted and
   refused bodies, one JSON array, with each refused body's cause and each
   admitted body's sig-less canonical projection. Every parser of the two
-  bodies runs it in its own gate: this crate's parser here, and the
-  resolver's, which loads the same file. A parser is never derived from
-  another parser.
+  bodies runs it in its own gate: this crate's parser here, and any other
+  a reader of the bodies builds. A parser is never derived from another
+  parser — and the resolver builds none: `skep-resolve` calls `parse`.
 
 Who reads it: the daemon, whose write path parses a registry record at the
 atom's `insert` and verifies its `sig` at the deposit's `make_link` under
 the set that opens its home, and whose open runs the seeding check ahead of
-every genesis; and the resolver, which folds the registry board's rows into
-the prefix → binding index and reads the current endpoint off the active
-view.
+every genesis; and the resolver, `skep-resolve`, which parses each record
+it fetches by this crate's `parse`, folds the registry board's verified
+bindings into the prefix → binding index and reads the current endpoint
+off the active view.
 
 ## License
 

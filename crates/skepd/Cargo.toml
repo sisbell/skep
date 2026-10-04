@@ -143,3 +143,7 @@ skep-signature = { path = "../skep-signature", features = ["test-hooks"] }
 # plans with shrinking; failure seeds persist to proptest-regressions/
 # (pins, same standing as goldens).
 proptest.workspace = true
+# THE VERIFYING RESOLVER, taken as the library it is (tests/it/resolve.rs):
+# the end-to-end cells and the measurements run here, where boards are
+# spawned and registered. The daemon itself never depends on it.
+skep-resolve = { path = "../skep-resolve" }

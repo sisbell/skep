@@ -21,7 +21,7 @@ position in the journal.
 
 ## Code map
 
-The workspace is eighteen crates under `crates/`. Dependencies point
+The workspace is nineteen crates under `crates/`. Dependencies point
 downward in the list below: a crate may depend only on crates listed
 above it.
 
@@ -91,6 +91,17 @@ foundation and on the stores above it.
 **The programs**
 - `skepd` — the daemon (below).
 - `skep-mcp` — a stdio adapter for agent harnesses.
+- `skep-resolve` — the verifying registry resolver, a LIBRARY a client
+  embeds (the frontend, the `skep` command, a node's federation
+  transport): the mirror of the registry board from a shipped root hint
+  over its `/changes` feed, the verify of every binding and endpoint under
+  its home's key set as of the record's position, the position-annotated
+  prefix → binding index, the walk from a prefix to its endpoint and key
+  set, and every outcome as a named state. Of the skep crates it depends
+  on `skep-address`, `skep-registry`, `skep-identity` and `skep-signature`
+  alone — no engine, no store, and never `skepd`, which never depends on
+  it (the daemon's own suite takes it as a dev-dependency, where boards
+  are spawned). Its modules and rules: §The resolver.
 - `skep-conformance` — a differential harness against `udanax-green`'s
   goldens.
 
@@ -234,6 +245,57 @@ Rules that hold across its files:
 Its integration suite is one binary, `tests/it/`: `rows` (the table from
 outside the crate and the three arms on mutated lists) and `body` (the
 vector set at this parser, the examples' one canonical form).
+
+## The resolver, `skep-resolve`
+
+`skep-resolve` is the client's half of the registry: what reads the
+board the daemon serves and knows the bindings it read were genuine. It
+links no daemon and no engine, speaks the wire as a guest, and opens no
+socket to an endpoint — the dial is the caller's. Its modules: `hint.rs`
+the root hint (the root's origins, the realm id over the genesis set, the
+fork point) parsed from one line and from a struct; `http.rs` the
+written-out HTTP/1.1 client behind a `Transport` trait and the typed
+reads over it (`Board`), every read counted by kind; `mirror.rs` the
+`/changes` consumer, the fetch-and-fold, the journal copy and the fetch
+cache under the caller's directory, the base's check and its refusals;
+`verify.rs` the record grade for registry records, client-side;
+`index.rs` the position-annotated prefix → binding index and the
+endpoint's currency; `walk.rs` the resolve, and the guest-reading resolve
+that scans with no mirror; `origin.rs` the scheme and host terms and the
+ordered walk's one precedence; `state.rs` the verdict and the faces.
+
+Rules that hold across its files:
+
+- **The verdict decides, the registry's reads do not.** `verify::judge`
+  is the one place a `sig` is judged, under the set that opens the home's
+  account as of the record's position; a record whose verdict is not
+  SIGNED enters no index and is counted (`Index::suppressed`). The body is
+  parsed by `skep_registry::parse` alone: this crate derives no parser.
+- **The table as of the position.** A record's key set is the one its
+  home's account held at the record's own position — read off the live
+  `key_set` only where the feed the mirror holds proves no credential act
+  of the account lies between the position and the live answer's `as_of`,
+  off `/op-at` otherwise, and at the reclaim floor only where the same
+  proof reaches it; where the table is gone with the journal the record is
+  UNDETERMINABLE HERE, never unsigned.
+- **The base is checked, never trusted.** A copy under the mirror's
+  directory serves only after the source, read from genesis, answers
+  every held row identically and every held chain pair the same; a hint
+  of another realm retires the copy and bootstraps afresh; the refusals
+  are named. Only `feed.jsonl` is the checked image; `fetched.jsonl` is
+  this mirror's own cache.
+- **The walk reads the index and the board, nothing else.** Every hop is
+  the registry board's own journal or the mirror's copy of it; a depth
+  address answers its parent's standing and the hop not made; no name is
+  tested — the host term is met at the addresses this resolver's own
+  resolution yields, through a `NameResolver` a suite can hold fixed.
+
+Its integration suite is one binary, `tests/it/`, over a RECORDED feed
+(`tests/fixtures/feed.json`, written by the daemon suite's `resolve.rs` on
+demand): `index` (the index from the fixture, the rebuild from the copy,
+the realm check, the replay matrix), `walk` (the faces) and `origin` (the
+terms and the precedence). The end-to-end cells and the measurements run
+in `crates/skepd/tests/it/resolve.rs`.
 
 ## The name space, `skep-namespace`
 
@@ -595,7 +657,10 @@ imports it.
 - **Crate dependencies point down.** The order in the code map is the
   order the compiler enforces between libraries; the dev-dependencies
   pointing back up are `skep-kernel`'s, whose integration suites build
-  their shared fixture through `skep-engine` and the stores it assembles.
+  their shared fixture through `skep-engine` and the stores it assembles,
+  and `skepd`'s on `skep-resolve`, whose end-to-end cells and measurements
+  run where boards are spawned — the daemon's library never depends on
+  the resolver.
 - **Inside `skepd`, imports point down.** A module names only modules in
   its own layer or below it, never above: the transport calls the router,
   and nothing below the router calls the transport; a leaf imports only

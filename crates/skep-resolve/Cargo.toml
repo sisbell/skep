@@ -1,0 +1,39 @@
+[package]
+name = "skep-resolve"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "The verifying registry resolver: a mirror of the registry board from a shipped root hint over its /changes feed, every binding and endpoint verified under its home's key set as of its own position, the position-annotated prefix → binding index, and the walk from a prefix to its endpoint and key set or to a named state saying why not. A library the frontend, the skep command and a node's federation transport embed; it links no daemon and opens no socket to an endpoint."
+readme = "README.md"
+
+[dependencies]
+# M1 — the address vocabulary: prefixes, link and atom addresses, the
+# document-to-account arithmetic a home's account is read by (R5 (j)).
+skep-address = { path = "../skep-address" }
+# The record grammar a registry record's `sig` is made over (`entry_frame`,
+# `entry_body_record`, `RecordRows`), the key set's shape (`Enrolled`) and
+# the key and fingerprint types; no fold is run here.
+skep-identity = { path = "../skep-identity" }
+# The registry's rows, the two bodies and THE CANONICAL RULE: the resolver
+# CALLS `skep_registry::parse` and derives no parser of its own (REG-1.86 (h)).
+skep-registry = { path = "../skep-registry" }
+# THE VERIFY, client-side (rm-2; the seam investigation's Q7): both halves
+# of a record's hybrid `sig` over the record frame. No feature — this crate
+# signs nothing.
+skep-signature = { path = "../skep-signature" }
+# JSON is the one library: the wire's frames and answers, and the journal
+# copy's lines.
+serde_json.workspace = true
+# The realm id (REG-3.39): SHA-256 over the genesis set's fingerprints in
+# fingerprint order — the one hash this crate computes itself.
+sha2.workspace = true
+
+[dev-dependencies]
+# The journal copy lives under a caller-given directory; the suite gives a
+# temporary one.
+tempfile.workspace = true
+# The verify's own unit test signs a record to judge it: the signer's half,
+# which the library build leaves off.
+skep-signature = { path = "../skep-signature", features = ["sign"] }

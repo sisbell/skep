@@ -1190,6 +1190,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "skep-resolve"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sha2",
+ "skep-address",
+ "skep-identity",
+ "skep-registry",
+ "skep-signature",
+ "tempfile",
+]
+
+[[package]]
 name = "skep-retrieval"
 version = "0.1.0"
 dependencies = [
@@ -1244,6 +1257,7 @@ dependencies = [
  "skep-links",
  "skep-namespace",
  "skep-registry",
+ "skep-resolve",
  "skep-retrieval",
  "skep-signature",
  "skepd",

@@ -41,6 +41,7 @@ mod publish;
 mod read_surface;
 mod register;
 mod registry;
+mod resolve;
 mod restart;
 mod scan_bound;
 mod signed_ops;

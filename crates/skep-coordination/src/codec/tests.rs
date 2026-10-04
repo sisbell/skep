@@ -6,9 +6,9 @@ use crate::fixture::{a, every_former, v};
 use crate::walk::{visit_dom, visit_term, Visit};
 
 /// decode ∘ encode = id on a body exercising every recursive family —
-/// PR-ENC's round-trip (injectivity witness on this input).
+/// PR-ENC's round trip (injectivity witness on this input).
 #[test]
-fn roundtrip_is_identity_on_every_recursive_family() {
+fn round_trip_is_identity_on_every_recursive_family() {
     let key = TypeKey(skep_links::enc(&[a(&[1, 1, 0, 1, 0, 1, 0, 1, 1])]));
     let body = Term::Exists {
         var: v(1),
@@ -44,7 +44,7 @@ fn roundtrip_is_identity_on_every_recursive_family() {
 /// and type position, and every encodable sort in Γ_D — so a tag the two
 /// halves read differently, anywhere in the table, fails here.
 #[test]
-fn roundtrip_is_identity_on_every_former() {
+fn round_trip_is_identity_on_every_former() {
     let signed = every_former();
     let bytes = encode(&signed).expect("Codom-only params encode");
     assert_eq!(decode(&bytes), Ok(signed));

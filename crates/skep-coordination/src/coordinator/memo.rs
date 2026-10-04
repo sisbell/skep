@@ -17,19 +17,20 @@ use skep_address::{Address, Tumbler};
 use crate::check::TypedTerm;
 
 /// A def-status answer, distinguishing CVALID (0)'s two `None` causes:
-/// `Poisoned` (ever-registered, content undisciplined or absent — a PR-DISC
-/// breach) and `NeverRegistered` (never registered at the answering
-/// snapshot). The two answers a later write can change are never memoized:
-/// `NeverRegistered`, which a registration changes, and the `Poisoned` of an
-/// ever-registered start with nothing resident, which an insert changes
-/// (`Coordinator::derive_def`); every other `Poisoned` is a fact about
-/// resident content, and the memo keeps it. A `Defined` answer is the memo's
-/// own `Arc` of the def's checked term — its signature
-/// (`params`/`result_sort`) and its `Reg`-expanded evaluable body.
+/// `Undisciplined` (ever-registered, content undisciplined or absent — a
+/// PR-DISC breach, `UndisciplinedDef` to a caller) and `NeverRegistered`
+/// (never registered at the answering snapshot). The two answers a later
+/// write can change are never memoized: `NeverRegistered`, which a
+/// registration changes, and the `Undisciplined` of an ever-registered start
+/// with nothing resident, which an insert changes (`Coordinator::derive_def`);
+/// every other `Undisciplined` answers a `Poisoned` entry, a fact about
+/// resident content that the memo keeps. A `Defined` answer is the memo's own
+/// `Arc` of the def's checked term — its signature (`params`/`result_sort`)
+/// and its `Reg`-expanded evaluable body.
 #[derive(Debug, Clone)]
 pub(super) enum DefStatus {
     Defined(Arc<TypedTerm>),
-    Poisoned,
+    Undisciplined,
     NeverRegistered,
 }
 
@@ -47,17 +48,18 @@ impl From<&MemoEntry> for DefStatus {
     fn from(entry: &MemoEntry) -> DefStatus {
         match entry {
             MemoEntry::Defined(term) => DefStatus::Defined(Arc::clone(term)),
-            MemoEntry::Poisoned => DefStatus::Poisoned,
+            MemoEntry::Poisoned => DefStatus::Undisciplined,
         }
     }
 }
 
-/// An ever-registered start whose RESIDENT content fails the PR-ENC parse or
-/// WT — the breach the poison records. A start with nothing resident is not
-/// one: no content there has failed anything, and a run may yet be minted
-/// there (`Coordinator::derive_def` answers it unmemoized).
+/// The content's own breach: an ever-registered start whose RESIDENT content
+/// fails the PR-ENC parse or WT — what a `Poisoned` entry records. A start
+/// with nothing resident has none: no content there has failed anything, and
+/// a run may yet be minted there (`Coordinator::derive_def` answers it
+/// `Undisciplined`, unmemoized).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Breach;
+pub(super) struct ContentBreach;
 
 /// The memo. THE POLICY, in two halves. THIS TYPE OWNS PERMANENCE: the first
 /// fill of a start wins and every later fill of it is a no-op (on the
@@ -100,11 +102,15 @@ impl DefMemo {
 
     /// Record the derived status for an ever-registered start — first fill
     /// wins — and answer with whatever the memo now holds for it.
-    pub(super) fn fill(&self, start: &Address, derived: Result<TypedTerm, Breach>) -> DefStatus {
+    pub(super) fn fill(
+        &self,
+        start: &Address,
+        derived: Result<TypedTerm, ContentBreach>,
+    ) -> DefStatus {
         let mut memo = self.0.write().unwrap_or_else(PoisonError::into_inner);
         let entry = memo.entry(start.tumbler().clone()).or_insert_with(|| match derived {
             Ok(t) => MemoEntry::Defined(Arc::new(t)),
-            Err(Breach) => MemoEntry::Poisoned,
+            Err(ContentBreach) => MemoEntry::Poisoned,
         });
         DefStatus::from(&*entry)
     }

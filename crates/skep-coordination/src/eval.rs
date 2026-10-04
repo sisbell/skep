@@ -377,8 +377,8 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
         // V-DOC — M3 residence (a registered-but-arrangementless doc is a
         // valid residence; the eager/lazy split).
         Atom::IsDoc(e) => {
-            let d = as_addr(eval_term(cx, env, e));
-            Value::Bool(cx.m3.is_registered_document(&d))
+            let x = as_addr(eval_term(cx, env, e));
+            Value::Bool(cx.m3.is_registered_document(&x))
         }
         Atom::TupAddr(v) => Value::Addr(tuple_var(env, v).addr.clone()),
         Atom::TupAddrsF(v) => Value::AddrSet(tuple_var(env, v).from.addrs().map(lift).collect()),
@@ -457,14 +457,14 @@ pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, d: &Dom) -> Vec<Arg> {
         // M8's type_slice. Deduplicated in T1 order — an `Address` orders by
         // its tumbler — each element the `Address` M7 handed over.
         Dom::LinkDom => {
-            let links: BTreeSet<Address> = cx
+            let link_addrs: BTreeSet<Address> = cx
                 .catalog
                 .classes()
                 .iter()
                 .flat_map(|k| cx.links.observe(&k.0, Pattern::default(), Slice::Audit))
-                .map(|t| t.addr)
+                .map(|tuple| tuple.addr)
                 .collect();
-            links.into_iter().map(Arg::Addr).collect()
+            link_addrs.into_iter().map(Arg::Addr).collect()
         }
         Dom::Reg => unreachable!("no Reg domain survives type_check's Reg-expansion/folding"),
         Dom::Filter { dom, var, pred } => enum_dom(cx, env, dom)

@@ -25,7 +25,7 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
         .expect("P");
     let (p_start, _) = c.define_predicate(&doc1(), &p).expect("define P");
 
-    let mk = |domain: Dom, trigger: Trigger, action: FireAction| Rule {
+    let rule = |domain: Dom, trigger: Trigger, action: FireAction| Rule {
         domain,
         trigger,
         view: View::Active,
@@ -34,18 +34,18 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
 
     // A bare Reg domain fails the sort check.
     assert!(matches!(
-        c.register_rule(mk(Dom::Reg, always_addr(&c), marker_action())),
+        c.register_rule(rule(Dom::Reg, always_addr(&c), marker_action())),
         Err(RuleError::IllFormedDomain(TypeError::SortMismatch { .. }))
     ));
     // certify_rule re-runs the same validation: a malformed rule is the same
     // typed rejection, callable pre-registration.
     assert!(matches!(
-        c.certify_rule(&mk(Dom::Reg, always_addr(&c), marker_action())),
+        c.certify_rule(&rule(Dom::Reg, always_addr(&c), marker_action())),
         Err(RuleError::IllFormedDomain(TypeError::SortMismatch { .. }))
     ));
     // An uncataloged domain class.
     assert!(matches!(
-        c.register_rule(mk(
+        c.register_rule(rule(
             Dom::MembersDom(TypeRef::Concrete(TypeKey(enc(&[ra(20)])))),
             always_addr(&c),
             marker_action()
@@ -54,7 +54,7 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
     ));
     // A Ref inside the domain body — no Def escape for domains.
     assert!(matches!(
-        c.register_rule(mk(
+        c.register_rule(rule(
             Dom::Filter {
                 dom: ad(Dom::LinkDom),
                 var: v(2),
@@ -68,12 +68,12 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
     // Domain↔trigger sort reconciliation: a Tup domain demands a Tup-param
     // trigger.
     assert!(matches!(
-        c.register_rule(mk(Dom::ActiveSlice(concrete(&pred_stable_ty())), always_addr(&c), marker_action())),
+        c.register_rule(rule(Dom::ActiveSlice(concrete(&pred_stable_ty())), always_addr(&c), marker_action())),
         Err(RuleError::DomainTriggerSortMismatch { expected: Sort::Tup, found: Sort::Addr })
     ));
     // A Def trigger is Codom-only, so it can never serve a Tup domain.
     assert!(matches!(
-        c.register_rule(mk(
+        c.register_rule(rule(
             Dom::ActiveSlice(concrete(&pred_stable_ty())),
             Trigger::Def(p_start.clone()),
             marker_action()
@@ -86,14 +86,14 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
         .define_predicate(&doc1(), &c.type_check(vec![(v(1), Sort::Addr)], lit_nat(1)).expect("Nat def"))
         .expect("define a Nat-codomain def");
     assert!(matches!(
-        c.register_rule(mk(Dom::MembersDom(concrete(&pred_stable_ty())), Trigger::Def(nat_def), marker_action())),
+        c.register_rule(rule(Dom::MembersDom(concrete(&pred_stable_ty())), Trigger::Def(nat_def), marker_action())),
         Err(RuleError::TriggerNotBoolean)
     ));
     let (closed_def, _) = c
         .define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("closed def"))
         .expect("define a closed def");
     assert!(matches!(
-        c.register_rule(mk(Dom::MembersDom(concrete(&pred_stable_ty())), Trigger::Def(closed_def), marker_action())),
+        c.register_rule(rule(Dom::MembersDom(concrete(&pred_stable_ty())), Trigger::Def(closed_def), marker_action())),
         Err(RuleError::BadTriggerArity)
     ));
     // A ref-bearing Inline trigger.
@@ -101,12 +101,12 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
         .type_check_trigger((v(1), Sort::Addr), Term::Ref { addr: p_start.clone(), args: vec![at(var(1))] })
         .expect("ref-bearing trigger term");
     assert!(matches!(
-        c.register_rule(mk(Dom::MembersDom(concrete(&pred_stable_ty())), Trigger::Inline(ref_trig.clone()), marker_action())),
+        c.register_rule(rule(Dom::MembersDom(concrete(&pred_stable_ty())), Trigger::Inline(ref_trig.clone()), marker_action())),
         Err(RuleError::RefBearingInlineTrigger)
     ));
     // A Def trigger with no defined signature.
     assert!(matches!(
-        c.register_rule(mk(Dom::MembersDom(concrete(&pred_stable_ty())), Trigger::Def(ca(77)), marker_action())),
+        c.register_rule(rule(Dom::MembersDom(concrete(&pred_stable_ty())), Trigger::Def(ca(77)), marker_action())),
         Err(RuleError::UndefinedDefTrigger(_))
     ));
     // Marker.ty guards: cataloged Unary and non-PredLayer. A Binary shipped
@@ -116,7 +116,7 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
     // every cataloged Unary class is idem⊤ — and stays declared for the day
     // a registered idem⊥ Unary class exists again.
     assert!(matches!(
-        c.register_rule(mk(
+        c.register_rule(rule(
             Dom::MembersDom(concrete(&pred_stable_ty())),
             always_addr(&c),
             FireAction::Marker { home: doc1(), ty: key(&retraction_ty()) }
@@ -124,7 +124,7 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
         Err(RuleError::BadMarkerType(_))
     ));
     assert!(matches!(
-        c.register_rule(mk(
+        c.register_rule(rule(
             Dom::MembersDom(concrete(&pred_stable_ty())),
             always_addr(&c),
             FireAction::Marker { home: doc1(), ty: key(&uncataloged_ty(20)) }
@@ -135,7 +135,7 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
         let ty = TypeKey(c.reserved_type(reserved).clone());
         assert!(
             matches!(
-                c.register_rule(mk(
+                c.register_rule(rule(
                     Dom::MembersDom(concrete(&pred_stable_ty())),
                     always_addr(&c),
                     FireAction::Marker { home: doc1(), ty }
@@ -149,11 +149,11 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
     // action — so a rule failing two reports the earlier.
     let bad_marker = || FireAction::Marker { home: doc1(), ty: key(&uncataloged_ty(20)) };
     assert!(matches!(
-        c.register_rule(mk(Dom::Reg, always_addr(&c), bad_marker())),
+        c.register_rule(rule(Dom::Reg, always_addr(&c), bad_marker())),
         Err(RuleError::IllFormedDomain(_))
     ));
     assert!(matches!(
-        c.register_rule(mk(
+        c.register_rule(rule(
             Dom::ActiveSlice(concrete(&pred_stable_ty())),
             always_addr(&c),
             bad_marker()
@@ -163,7 +163,7 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
     // Within a group the stated order likewise decides: for an `Inline`
     // trigger ref-bearing speaks before the sort reconciliation …
     assert!(matches!(
-        c.register_rule(mk(
+        c.register_rule(rule(
             Dom::ActiveSlice(concrete(&pred_stable_ty())),
             Trigger::Inline(ref_trig),
             marker_action()
@@ -175,7 +175,7 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
         .define_predicate(&doc1(), &c.type_check(vec![], lit_nat(1)).expect("closed Nat def"))
         .expect("define a closed Nat-codomain def");
     assert!(matches!(
-        c.register_rule(mk(
+        c.register_rule(rule(
             Dom::MembersDom(concrete(&pred_stable_ty())),
             Trigger::Def(nat_closed),
             marker_action()

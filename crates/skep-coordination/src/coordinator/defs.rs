@@ -53,7 +53,7 @@ use skep_links::{Caller, Pattern, ShippedType, Tip, Tuple, View};
 use crate::ast::Term;
 use crate::check::{DefSource, TypedTerm, Unresolved};
 use crate::codec;
-use crate::coordinator::memo::{Breach, DefStatus};
+use crate::coordinator::memo::{ContentBreach, DefStatus};
 use crate::coordinator::Coordinator;
 use crate::dynamics::{st_plus, view_independent};
 use crate::error::{
@@ -203,7 +203,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// signature-less, never a wrong `Some`; the crate root states what that
     /// costs across handles). An ever-registered start with NOTHING resident
     /// is a breach too — a `pdef` naming no def — but no fact about content:
-    /// a run may yet be minted there, so it answers `Poisoned` and fills
+    /// a run may yet be minted there, so it answers `Undisciplined` and fills
     /// nothing, as a never-registered start does, and a `pdef` deposited past
     /// the gate at a home's next content address cannot freeze the def its
     /// owner defines there. A nesting refusal ABOVE level 0 is not the
@@ -223,14 +223,15 @@ impl<W: CoordinationWorld> Coordinator<W> {
         }
         let derived = match parse_def(w.content(), start) {
             // Nothing resident at `start` is no fact about its content: a run
-            // may yet be minted there. Answered as the breach it is and never
-            // memoized — `NeverRegistered`'s reason.
-            Err(ParseFail::NotResident) => return Ok(DefStatus::Poisoned),
-            Err(ParseFail::Malformed) => Err(Breach),
+            // may yet be minted there. Undisciplined — a `pdef` naming no def
+            // is a breach — but no `ContentBreach`, so never memoized:
+            // `NeverRegistered`'s reason.
+            Err(ParseFail::NotResident) => return Ok(DefStatus::Undisciplined),
+            Err(ParseFail::Malformed) => Err(ContentBreach),
             Ok(signed) => match self.check_signed(signed, depth) {
                 Ok(def) => Ok(def),
                 Err(TypeError::TooDeep) if depth > 0 => return Err(DerivedTooDeep),
-                Err(_) => Err(Breach),
+                Err(_) => Err(ContentBreach),
             },
         };
         Ok(self.memo.fill(start, derived))
@@ -239,9 +240,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// The defined referent at `start`, its derivation (if the memo misses)
     /// rooted at nesting level `depth` — the resolver the checker consults
     /// for a `Ref`, which asks at `budget::referent_depth` of the reference's
-    /// own level. An undefined signature (never registered, or poisoned) is
-    /// `Unresolved::Undefined`; a derivation that cannot complete at `depth`
-    /// is `Unresolved::TooDeep`, the referent unjudged.
+    /// own level. An undefined signature (never registered, or undisciplined)
+    /// is `Unresolved::Undefined`; a derivation that cannot complete at
+    /// `depth` is `Unresolved::TooDeep`, the referent unjudged.
     pub(super) fn resolve_def_at(
         &self,
         start: &Address,
@@ -249,7 +250,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     ) -> Result<Arc<TypedTerm>, Unresolved> {
         match self.def_status_at(start, depth) {
             Ok(DefStatus::Defined(def)) => Ok(def),
-            Ok(DefStatus::Poisoned | DefStatus::NeverRegistered) => Err(Unresolved::Undefined),
+            Ok(DefStatus::Undisciplined | DefStatus::NeverRegistered) => Err(Unresolved::Undefined),
             Err(DerivedTooDeep) => Err(Unresolved::TooDeep),
         }
     }
@@ -430,7 +431,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         }
         let def = match self.def_status(start) {
             DefStatus::Defined(def) => def,
-            DefStatus::Poisoned => return Err(EvalError::UndisciplinedDef),
+            DefStatus::Undisciplined => return Err(EvalError::UndisciplinedDef),
             // Unreachable: ever at the caller's snap and not at the memo's
             // own fresh pin cannot happen, ever-registration being monotone.
             // Answered rather than asserted, so the query stays total.
@@ -572,7 +573,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         let snap = self.kernel.snapshot();
         let def = match self.def_status(start) {
             DefStatus::Defined(def) => def,
-            DefStatus::Poisoned => return Err(CertifyError::UndisciplinedDef),
+            DefStatus::Undisciplined => return Err(CertifyError::UndisciplinedDef),
             DefStatus::NeverRegistered => return Err(CertifyError::NotEverRegistered),
         };
         if def.result_sort() != Sort::Bool {

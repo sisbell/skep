@@ -91,27 +91,27 @@ fn a_freeze_on_breach_holds_on_its_handle_and_errs_only_toward_none() {
         "PR-ENC: the referent's last component, then the argument count"
     );
     bytes[end - 2] = 4; // the reference now names ca4 — nothing is there yet
-    let s = insert_raw(&k, &doc1(), bytes);
-    assert_eq!(s, ca(3));
+    let forged = insert_raw(&k, &doc1(), bytes);
+    assert_eq!(forged, ca(3));
     link_writer(&k)
-        .emit(Caller::System, &doc1(), &pred_def_ty(), &s, &[])
+        .emit(Caller::System, &doc1(), &pred_def_ty(), &forged, &[])
         .expect("the breach: a pdef past the gate, ahead of its referent");
-    assert!(c.signature(&s).is_none(), "probed while ca4 is unregistered: frozen poisoned");
+    assert!(c.signature(&forged).is_none(), "probed while ca4 is unregistered: frozen poisoned");
 
     let (r, _) =
         c.define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("R")).expect("define R");
     assert_eq!(r, ca(4));
-    assert!(c.signature(&s).is_none(), "the freeze declines to re-check");
+    assert!(c.signature(&forged).is_none(), "the freeze declines to re-check");
     assert_eq!(
-        c.evaluate_def(&s, &[], View::Active, &k.snapshot()),
+        c.evaluate_def(&forged, &[], View::Active, &k.snapshot()),
         Err(EvalError::UndisciplinedDef)
     );
-    c.register_pred(&doc1(), &s).expect("every gate passes now — the dedup absorbs it");
-    assert!(c.signature(&s).is_none(), "the memo's first fill stands");
+    c.register_pred(&doc1(), &forged).expect("every gate passes now — the dedup absorbs it");
+    assert!(c.signature(&forged).is_none(), "the memo's first fill stands");
 
     let cold = coord(&k);
-    assert_eq!(cold.signature(&s).map(|sig| sig.result), Some(Sort::Bool));
-    assert_eq!(cold.evaluate_def(&s, &[], View::Active, &k.snapshot()), Ok(Value::Bool(true)));
+    assert_eq!(cold.signature(&forged).map(|sig| sig.result), Some(Sort::Bool));
+    assert_eq!(cold.evaluate_def(&forged, &[], View::Active, &k.snapshot()), Ok(Value::Bool(true)));
 }
 
 /// A body the decoder admits and the checker refuses as too deep AT LEVEL 0
@@ -128,20 +128,20 @@ fn a_body_too_deep_at_level_zero_is_a_breach_and_freezes_poisoned() {
     let mut payload = vec![0u8]; // no parameters
     payload.extend(std::iter::repeat_n(7u8, 125)); // NOT, per level
     payload.extend([10u8, 10, 5, 2, 1]); // FORALL v10 ∈ REG :: LIT TRUE
-    let s = insert_raw(&k, &doc1(), envelope(payload));
+    let forged = insert_raw(&k, &doc1(), envelope(payload));
     assert!(matches!(
-        c.register_pred(&doc1(), &s),
+        c.register_pred(&doc1(), &forged),
         Err(RegisterError::IllTyped(TypeError::TooDeep))
     ));
     link_writer(&k)
-        .emit(Caller::System, &doc1(), &pred_def_ty(), &s, &[])
+        .emit(Caller::System, &doc1(), &pred_def_ty(), &forged, &[])
         .expect("the breach: a pdef past the gate");
-    assert!(c.signature(&s).is_none());
+    assert!(c.signature(&forged).is_none());
     assert_eq!(
-        c.evaluate_def(&s, &[], View::Active, &k.snapshot()),
+        c.evaluate_def(&forged, &[], View::Active, &k.snapshot()),
         Err(EvalError::UndisciplinedDef)
     );
-    assert!(matches!(c.certify_stable(&doc1(), &s), Err(CertifyError::UndisciplinedDef)));
+    assert!(matches!(c.certify_stable(&doc1(), &forged), Err(CertifyError::UndisciplinedDef)));
 }
 
 /// A breach CYCLE ends: two runs registered past the gate, each a reference

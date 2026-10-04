@@ -408,7 +408,7 @@ fn the_quantifiers_denote_all_and_any() {
 /// audit `is_K` from the coverage test, and the two agree at every probe:
 /// under a denoted document, at it, and outside it.
 #[test]
-fn the_coverage_tests_read_coverage_and_derive_the_audit_is_k() {
+fn in_coverage_reads_coverage_not_denotation_and_derives_the_audit_is_k() {
     let k = kernel();
     let c = coord(&k);
     let in_doc2 = a(&[1, 0, 1, 0, 2, 0, 1, 1]);

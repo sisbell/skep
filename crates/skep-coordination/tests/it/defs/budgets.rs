@@ -150,13 +150,14 @@ fn register_pred_refuses_a_stored_literal_that_multiplies_past_the_node_budget()
 
 /// A reference chain is bounded at registration, not discovered at a cold
 /// derivation: `P₀(x) := ⊤`, `Pᵢ(x) := Pᵢ₋₁(x)` registers while its reach —
-/// three levels per link: the reference's derivation and its one argument —
-/// fits the cap, and the first link past it is `IllTyped(TooDeep)`. The
-/// chain at the cap then derives COLD on a fresh coordinator — every link
+/// three levels per reference: its derivation and its one argument — fits
+/// the cap, and the first reference past it is `IllTyped(TooDeep)`. The
+/// chain at the cap then derives COLD on a fresh coordinator — every `Pᵢ`
 /// parsed and checked one derivation inside the last — evaluates through
-/// every link, and expands and analyzes through every link, on this
-/// default thread: this test and its argument-free twin below, the deeper of
-/// the two, are the measurements the derivation's level cost is set against.
+/// every reference, and expands and analyzes through every reference, on
+/// this default thread: this test and its argument-free twin below, the
+/// deeper of the two, are the measurements the derivation's level cost is
+/// set against.
 #[test]
 fn a_reference_chain_at_the_cap_derives_cold_and_one_deeper_is_refused() {
     let k = kernel();
@@ -164,19 +165,19 @@ fn a_reference_chain_at_the_cap_derives_cold_and_one_deeper_is_refused() {
     let (mut top, _) = c
         .define_predicate(&doc1(), &c.type_check(vec![(v(1), Sort::Addr)], tru()).expect("P₀"))
         .expect("define P₀");
-    let mut links = 0u32;
+    let mut references = 0u32;
     loop {
         let next = Term::Ref { addr: top.clone(), args: vec![at(var(1))] };
         match c.type_check(vec![(v(1), Sort::Addr)], next) {
             Ok(tt) => {
-                top = c.define_predicate(&doc1(), &tt).expect("define the next link").0;
-                links += 1;
+                top = c.define_predicate(&doc1(), &tt).expect("define Pᵢ").0;
+                references += 1;
             }
             Err(TypeError::TooDeep) => break,
             Err(other) => panic!("expected TooDeep at the cap, got {other:?}"),
         }
     }
-    assert_eq!(links, 42, "three levels per link, over a cap of 128");
+    assert_eq!(references, 42, "three levels per reference, over a cap of 128");
 
     let fresh = coord(&k);
     assert_eq!(fresh.signature(&top).map(|s| s.result), Some(Sort::Bool));
@@ -184,38 +185,38 @@ fn a_reference_chain_at_the_cap_derives_cold_and_one_deeper_is_refused() {
         fresh.evaluate_def(&top, &[Value::Addr(ca(1))], View::Active, &k.snapshot()),
         Ok(Value::Bool(true))
     );
-    fresh.certify_stable(&doc1(), &top).expect("expand and analyze through every link");
+    fresh.certify_stable(&doc1(), &top).expect("expand and analyze through every reference");
 }
 
 /// The derivation's level cost measured at its WORST case: references with no
 /// arguments spend every level they are charged on derivations — two per
-/// link, where the one-argument chain above spends one of its three on an
-/// argument that never nests — so the chain reaches the cap in 64 links and
-/// derives 65 deep on a cold memo, against that chain's 43. It registers to
-/// the cap and no further, then derives cold, evaluates and certifies through
-/// every link on this default thread.
+/// reference, where the one-argument chain above spends one of its three on
+/// an argument that never nests — so the chain reaches the cap in 64
+/// references and derives 65 deep on a cold memo, against that chain's 43. It
+/// registers to the cap and no further, then derives cold, evaluates and
+/// certifies through every reference on this default thread.
 #[test]
 fn an_argument_free_reference_chain_at_the_cap_derives_cold() {
     let k = kernel();
     let c = coord(&k);
     let (mut top, _) =
         c.define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("P₀")).expect("define P₀");
-    let mut links = 0u32;
+    let mut references = 0u32;
     loop {
         match c.type_check(vec![], Term::Ref { addr: top.clone(), args: vec![] }) {
             Ok(tt) => {
-                top = c.define_predicate(&doc1(), &tt).expect("define the next link").0;
-                links += 1;
+                top = c.define_predicate(&doc1(), &tt).expect("define Pᵢ").0;
+                references += 1;
             }
             Err(TypeError::TooDeep) => break,
             Err(other) => panic!("expected TooDeep at the cap, got {other:?}"),
         }
     }
-    assert_eq!(links, 64, "two levels per link, over a cap of 128");
+    assert_eq!(references, 64, "two levels per reference, over a cap of 128");
     let fresh = coord(&k);
     assert_eq!(fresh.signature(&top).map(|s| s.result), Some(Sort::Bool));
     assert_eq!(fresh.evaluate_def(&top, &[], View::Active, &k.snapshot()), Ok(Value::Bool(true)));
-    fresh.certify_stable(&doc1(), &top).expect("expand and analyze through every link");
+    fresh.certify_stable(&doc1(), &top).expect("expand and analyze through every reference");
 }
 
 /// The expansion budget: `Pᵢ(x) := Pᵢ₋₁(x) ∧ Pᵢ₋₁(x)` is a few nodes per

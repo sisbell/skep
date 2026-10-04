@@ -61,9 +61,10 @@ fn retired_with_history_names_the_org_that_existed() {
     }
 }
 
-/// REG-3.82: a depth address whose parent this board binds resolves to the
-/// parent's standing and THE HOP NOT MADE, never UNREGISTERED and never a
-/// blank; a depth address under no bound prefix is UNREGISTERED.
+/// REG-3.82: a depth address whose parent has a standing on this board —
+/// held, or retired as 1.5 is — resolves to the parent's standing and THE
+/// HOP NOT MADE, never UNREGISTERED and never a blank; a depth address under
+/// no prefix with a standing is UNREGISTERED.
 #[test]
 fn the_hop_not_made_at_a_depth_address() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -117,7 +118,7 @@ fn the_faces_of_the_resolvers_own_checks() {
     match resolve_prefix(&mut mirror, "1.10") {
         Resolution::DialNotMade { member, kind, members, .. } => {
             assert!(member.ends_with(".onion"), "{member}");
-            assert_eq!(kind, MemberKind::SelfAuthenticating);
+            assert_eq!(kind, MemberKind::Onion);
             assert!(matches!(members[0], MemberOutcome::NotDialed { .. }));
         }
         other => panic!("{other:?}"),
@@ -125,7 +126,7 @@ fn the_faces_of_the_resolvers_own_checks() {
     match resolve_prefix(&mut mirror, "1.11") {
         Resolution::Bound { dial, members, .. } => {
             assert_eq!((dial.member, dial.origin.as_str()), (1, "https://eleven.example"));
-            assert!(matches!(members[0], MemberOutcome::NotDialed { kind: MemberKind::SelfAuthenticating, .. }));
+            assert!(matches!(members[0], MemberOutcome::NotDialed { kind: MemberKind::Onion, .. }));
             assert!(matches!(members[1], MemberOutcome::WouldDial { .. }));
         }
         other => panic!("{other:?}"),
@@ -151,10 +152,10 @@ fn the_faces_of_the_resolvers_own_checks() {
 fn the_onion_transport_held_dials_the_onion_member() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (_, mut mirror) = open_fixture_mirror(dir.path());
-    let transports = Transports { https: true, self_authenticating: true };
+    let transports = Transports { https: true, onion: true };
     match skep_resolve::resolve(&mut mirror, &addr("1.10"), &names(), &transports).expect("resolve") {
         Resolution::Bound { dial, .. } => {
-            assert_eq!((dial.member, dial.kind), (0, MemberKind::SelfAuthenticating));
+            assert_eq!((dial.member, dial.kind), (0, MemberKind::Onion));
             assert!(dial.addresses.is_empty(), "nothing to test at a self-authenticating member");
         }
         other => panic!("{other:?}"),

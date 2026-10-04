@@ -1,16 +1,18 @@
 //! THE GUEST-READING RESOLVE (REG-3.24, REG-3.33): a reader holding no
-//! mirror answers a prefix by SCANNING — every binding link of the board by
-//! its class, each link read, each atom fetched — inside the design and
-//! outside the availability claim, exactly as available as the root. It
-//! holds no positions, so no record it reads can be judged as of one: its
-//! verdicts are UNDETERMINABLE HERE. Built here to be PRICED
-//! ([`GuestCost`]), never to be the hot-loop reader. A child of `walk`: its
-//! answer renders through the walk's own faces ([`face_of`]).
+//! mirror answers a prefix by SCANNING — every CANDIDATE BINDING of the
+//! board, REG-3.24's word: every binding-typed link, by its class — each
+//! link read, each atom fetched — inside the design and outside the
+//! availability claim, exactly as available as the root. It holds no
+//! positions, so no record it reads can be judged as of one: its verdicts
+//! are UNDETERMINABLE HERE. Built here to be PRICED ([`GuestCost`]), never
+//! to be the hot-loop reader. A child of `walk`: its answer renders through
+//! the walk's own faces ([`face_of`]).
 //!
 //! It folds what it reads into a [`Ledger`] — the rules alone — and never
 //! into an [`Index`](crate::index::Index), whose one writer is the mirror's
-//! gate: every binding the class scan lists, FROM EVERY HOME, each
-//! UNDETERMINABLE HERE. Neither the verdict nor the registrar's home
+//! gate: every candidate binding the class scan lists, FROM EVERY HOME — the
+//! binding home's bindings and the records REG-2.6 calls no binding alike —
+//! each UNDETERMINABLE HERE. Neither the verdict nor the registrar's home
 //! (REG-2.8) admits what this resolve answers from.
 
 use std::time::{Duration, Instant};
@@ -34,8 +36,9 @@ use crate::state::{BindingRecord, EndpointRecord, Judged, Resolution, Verdict};
 /// What the guest-reading resolve cost (the investigation §3.1).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GuestCost {
-    /// Binding links the class scan listed.
-    pub bindings_scanned: u64,
+    /// Candidate bindings the class scan listed: binding-typed links from
+    /// every home (REG-3.24).
+    pub candidate_bindings_scanned: u64,
     /// Atoms read.
     pub atoms_read: u64,
     /// Wire reads made, every kind.
@@ -45,13 +48,14 @@ pub struct GuestCost {
 }
 
 /// THE GUEST-READING RESOLVE of `prefix` with NO mirror (REG-3.24, REG-3.33):
-/// every binding link of the board by its class (`window_ftt` over the
-/// binding's type, paged), each read, each atom fetched by its head position
-/// and parsed; the prefix's bindings in their home's link order (journal
-/// order within one home); the account's live key set; its endpoint
-/// deposits by the same scan over its doc 1; the retraction of each by its
-/// own retraction link. Every verdict UNDETERMINABLE HERE: no position is
-/// held to judge a record as of. Answers the face and the cost.
+/// every candidate binding of the board — every binding-typed link, by its
+/// class (`window_ftt` over the binding's type, paged) — each read, each
+/// atom fetched by its head position and parsed; the prefix's candidate
+/// bindings in their home's link order (journal order within one home); the
+/// account's live key set; its endpoint deposits by the same scan over its
+/// doc 1; the retraction of each by its own retraction link. Every verdict
+/// UNDETERMINABLE HERE: no position is held to judge a record as of. Answers
+/// the face and the cost.
 pub fn guest_resolve(
     board: &Board,
     prefix: &Address,
@@ -62,9 +66,10 @@ pub fn guest_resolve(
     let reads_before = board.reads().total();
     let mut cost = GuestCost::default();
     let mut ledger = Ledger::default();
-    // Every binding link on the board, by its class.
+    // Every candidate binding on the board: every binding-typed link, by its
+    // class.
     let mut links = scan_class(board, t_binding(), None)?;
-    cost.bindings_scanned = links.len() as u64;
+    cost.candidate_bindings_scanned = links.len() as u64;
     links.sort_by_key(|a| a.tumbler().iter().cloned().collect::<Vec<_>>());
     for link in &links {
         if let Some((home, from, to)) = read_link(board, link)? {

@@ -5,7 +5,7 @@
 //! asked for its extent, its image and the value — never by a read of the
 //! arranged head; the walk probes the home's members off the board itself,
 //! so it needs no feed, and its cost is counted
-//! ([`WalkStats`](super::WalkStats)). Where no version holds it, the
+//! ([`ChainWalkStats`](super::ChainWalkStats)). Where no version holds it, the
 //! POSITION READ off the feed the mirror holds (`/op-at` at the link's
 //! position) is the last recourse; where that fails too the record is
 //! UNDETERMINABLE HERE, suppressed and counted.

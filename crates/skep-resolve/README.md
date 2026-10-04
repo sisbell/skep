@@ -14,13 +14,14 @@ transport embed. It links no daemon and no engine, speaks the wire as a
 guest, and opens no socket to an endpoint: the dial is the caller's. Its
 parts, each under the design rule it realizes:
 
-- **The root hint** (`RootHint`, `realm_id`) — the registry root's
-  origin(s), the realm id (the fingerprint of the root's GENESIS key set,
-  REG-3.39) and the fork point on a forked lineage (REG-3.40), ONE
-  overridable config value and never a baked constant (REG-3.2), parsed
-  from one line — `https://registry.example realm:<64 hex>` — and from a
-  struct. Every resolution the mirror performs is scoped to the hint's
-  realm by construction (REG-3.42).
+- **The root hint** (`RootHint`, `RealmId`) — the registry root's
+  origin(s) and the realm id: the fingerprint of the root's GENESIS key set
+  (REG-3.39; `RealmId::genesis_fingerprint`) and, on a forked lineage, the
+  fork point beside it (REG-3.40) — ONE overridable config value and never
+  a baked constant (REG-3.2), parsed from one line —
+  `https://registry.example realm:<64 hex>` — and from a struct. The
+  mirror's realm check compares the id's genesis fingerprint at the base
+  (REG-3.42); the fork point is compared by no check of this crate.
 - **The mirror** (`Mirror`) — a `/changes` consumer from the floor
   (REG-3.10: no TTL, no negative cache) that fetches every row's bytes it
   needs — the stored link, the atom at the position the link names, the
@@ -35,18 +36,18 @@ parts, each under the design rule it realizes:
   holding a key this build cannot read is no table, never a smaller one.
   The base is from genesis at the root the hint names (REG-3.12); a
   held copy is CHECKED against the source read from genesis and resumed
-  only where every held position comes back identical and every held chain
-  pair answers the same (REG-3.18); on either, the realm is compared at the
-  claim's row against the genesis set the source answers (REG-3.42), and
-  no line reaches the copy before it is; a re-pointed hint re-bootstraps
-  afresh (REG-3.17); the refusals are named (`Refusal`: a diverged
-  frontier, a source behind the mirror, a contradicted chain pair, a realm
-  mismatch — REG-3.19). An image that omits, re-orders or replays genuinely
-  signed rows fails the check at the first position that differs
-  (REG-3.13). An atom un-arranged at the head is recovered by the home's
-  chain walk, one version at a time (REG-3.25), its cost counted
-  (`WalkStats`). A mirror rebuilt from its copy alone, no board dialed,
-  says so (`Opened::Rebuilt`).
+  only where every held position comes back identical and every held head
+  pair answers the same (REG-3.18); on either, the realm id's genesis
+  fingerprint is compared at the claim's row against the genesis set the
+  source answers (REG-3.42), and no line reaches the copy before it is; a
+  hint re-pointed to another genesis re-bootstraps afresh (REG-3.17); the
+  refusals are named (`Refusal`: a diverged frontier, a source behind the
+  mirror, a contradicted head pair, a realm mismatch — REG-3.19). An image
+  that omits, re-orders or replays genuinely signed rows fails the check at
+  the first position that differs (REG-3.13). An atom un-arranged at the
+  head is recovered by the home's chain walk, one version at a time
+  (REG-3.25), its cost counted (`ChainWalkStats`). A mirror rebuilt from
+  its copy alone, no board dialed, says so (`Opened::Rebuilt`).
 - **The verify** (`judge`, `Trial`) — the record grade for registry
   records, client-side (rm-2; REG-1.86 (e)): the body parsed under the
   canonical rule by `skep_registry::parse`, the record frame rebuilt from
@@ -57,26 +58,32 @@ parts, each under the design rule it realizes:
   counted (`Index::suppressed`), never consulted at a resolve.
 - **The index** (`Index`) — the position-annotated prefix → binding index
   over the verified bindings (REG-3.21 to REG-3.26), its one writer the
-  mirror's gate: a binding from the claimant's doc 1 alone, a record SIGNED
-  alone, the rest counted by cause (`Index::suppressed`). Membership is the
+  mirror's gate: a binding from the claimant's doc 1 alone — a
+  binding-typed record in any other home is no binding (REG-2.6), counted
+  apart — a record SIGNED alone, the rest kept out by cause, malformed or
+  the verdict as judged (`Cause`, `Index::suppressed`). Membership is the
   rule's own test: the binding walk on the audit view with the replay
   clause (REG-2.8 to REG-2.11, REG-2.24) — a retraction clears nothing —
   and the endpoint's currency on the active view (REG-1.10, REG-1.11).
 - **The walk** (`resolve`, `guest_resolve`) — `1.5` → the binding → the
   account → its key set and current endpoint (REG-3.7 to REG-3.9); a depth
-  address resolves to its parent's standing — a parent with a standing,
-  never one whose bindings are all inert — and THE HOP NOT MADE
-  (REG-3.82). The guest-reading resolve scans every binding's atom with no
-  mirror (REG-3.24, REG-3.33), priced (`GuestCost`), its verdicts
-  undeterminable here: it folds what it reads, from every home, into a
-  ledger of the rules alone and never into an index.
+  address resolves to its parent prefix's standing (`Index::parent_prefix`)
+  — held or retired, never a prefix whose bindings are all inert — and THE
+  HOP NOT MADE (REG-3.82). The guest-reading resolve scans the atom of
+  every candidate binding — every binding-typed link, from every home
+  (REG-3.24) — with no mirror (REG-3.33), priced (`GuestCost`), its
+  verdicts undeterminable here: it folds what it reads into a ledger of the
+  rules alone and never into an index.
 - **The origin checks** (`judge_member`, `walk_members`) — https or a
-  self-authenticating origin per member (REG-3.34), the host term met by an
-  address and never a name — this resolver's own resolution of a name,
-  tested at every address it yields (REG-3.35) — the ordered walk's one
-  precedence, and the dial not made for a kind whose transport is not held.
-- **The states** (`Resolution`) — every outcome a named visible state
-  (REG-3.80): UNREGISTERED, RETIRED-WITH-HISTORY, BOUND-BUT-UNREACHABLE,
+  self-authenticating origin per member (REG-3.34), each admitted kind by
+  name (`MemberKind`: `Onion` the first) with its own transport
+  (`Transports`), the host term met by an address and never a name — this
+  resolver's own resolution of a name, tested at every address it yields
+  (REG-3.35) — the ordered walk's one precedence, and the dial not made for
+  a kind whose transport is not held.
+- **The states** (`Resolution`) — every outcome a named visible state,
+  REG-3.80's faces and BOUND, the walk's own answer (REG-3.7):
+  UNREGISTERED, RETIRED-WITH-HISTORY, BOUND-BUT-UNREACHABLE,
   unreachable-by-policy, THE DIAL NOT MADE, THE HOP NOT MADE, BOUND; and
   BOUND-BUT-DISCLAIMED and the live-enforcement face, named for the caller
   to fill after the dial it alone makes. A face naming a bound account

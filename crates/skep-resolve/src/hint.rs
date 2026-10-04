@@ -1,35 +1,37 @@
 //! THE ROOT HINT (REG-3.1 to REG-3.3; REG-3.39, REG-3.40, REG-3.42; R5) —
 //! the ENTIRE bootstrap surface: the registry root's endpoint URL(s) plus the
-//! REALM ID — the genesis key-set fingerprint, and on a forked lineage the
-//! fork point beside it — shipped with a client as ONE OVERRIDABLE CONFIG
+//! REALM ID ([`RealmId`]) — the genesis fingerprint, and on a forked lineage
+//! the fork point beside it — shipped with a client as ONE OVERRIDABLE CONFIG
 //! VALUE and never a baked constant. The root's address lives in the hint
 //! alone and on no board (REG-3.3): no key on any board can move what a
-//! mirror resolves from. Every resolution a mirror performs is scoped to the
-//! hint's realm by construction (REG-3.42): the id is compared at the base,
-//! and a mismatch is REG-3.19's refusal, named.
+//! mirror resolves from. A mirror's resolutions are scoped by the realm check
+//! at the base (REG-3.42), which compares the id's GENESIS FINGERPRINT
+//! against the root's genesis set — a mismatch is REG-3.19's refusal, named;
+//! the fork point rides in the hint and is compared by no check of this
+//! crate.
 //!
 //! THE ONE LINE (the hint's one-line syntax, an interim pin): whitespace-
 //! separated terms — one or more origins in the order they are tried, the
-//! realm as `realm:<64 lowercase hex>`, and on a forked lineage the fork
-//! point as `fork:<address>` (REG-3.40). Pointing a world at a forked
-//! registry is editing this one line (REG-3.2).
+//! realm id's genesis fingerprint as `realm:<64 lowercase hex>`, and on a
+//! forked lineage its fork point as `fork:<address>` (REG-3.40). Pointing a
+//! world at a forked registry is editing this one line (REG-3.2).
 //!
 //! ```text
 //! https://registry.example https://registry.example.net realm:9f2a…c41d
 //! ```
 //!
-//! THE REALM ID's FORM (REG-3.39: "the FINGERPRINT of the registry root's
-//! GENESIS key set — its initial set, never its living one"; AUTH-2.119: the
-//! form is built on the framing rule, over the genesis set in FINGERPRINT
-//! ORDER — RES-1 — under a tag the registry's design is to declare; an
-//! interim pin here, the design having pinned no tag yet): SHA-256 over the
-//! bytes `skep-realm-v1` then, per enrolled key of the genesis set in
-//! ascending fingerprint order, the key's fingerprint as a four-byte
-//! big-endian length and its thirty-two digest bytes — the framing rule's
-//! layout, spelled here because the tag is not among the declared ones and a
-//! foreign crate frames under none. Two implementers that frame or order the
-//! set differently mint different realm ids and fail every check, which is
-//! why the order is ruled and the form is stated once, here.
+//! THE GENESIS FINGERPRINT'S FORM (REG-3.39: "the FINGERPRINT of the registry
+//! root's GENESIS key set — its initial set, never its living one";
+//! AUTH-2.119: the form is built on the framing rule, over the genesis set in
+//! FINGERPRINT ORDER — RES-1 — under a tag the registry's design is to
+//! declare; an interim pin here, the design having pinned no tag yet):
+//! SHA-256 over the bytes `skep-realm-v1` then, per enrolled key of the
+//! genesis set in ascending fingerprint order, the key's fingerprint as a
+//! four-byte big-endian length and its thirty-two digest bytes — the framing
+//! rule's layout, spelled here because the tag is not among the declared ones
+//! and a foreign crate frames under none. Two implementers that frame or order
+//! the set differently mint different genesis fingerprints and fail every
+//! check, which is why the order is ruled and the form is stated once, here.
 
 use std::fmt;
 
@@ -40,17 +42,52 @@ use skep_identity::Fingerprint;
 use crate::origin::Origin;
 use crate::parse_address;
 
+/// THE REALM ID (REG-3.39, REG-3.40; R5): the GENESIS FINGERPRINT — the
+/// fingerprint of the registry root's genesis key set, in the form the module
+/// doc states ([`RealmId::genesis_fingerprint`]) — and, on a forked lineage,
+/// the FORK POINT beside it, the address of the fork's succession record
+/// (REG-3.49). Two lineages that share one genesis and differ in their fork
+/// point are two realms; on an unforked lineage the genesis fingerprint is
+/// the whole id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RealmId {
+    /// The genesis fingerprint — the id's first half.
+    pub genesis: Fingerprint,
+    /// The fork point — the id's second half; `None` on an unforked lineage.
+    pub fork_point: Option<Address>,
+}
+
+impl RealmId {
+    /// THE GENESIS FINGERPRINT of a genesis set (REG-3.39; AUTH-2.119's
+    /// order): the realm id's first half, and on an unforked lineage the
+    /// whole id — the set's fingerprints in ascending fingerprint order,
+    /// hashed under the form the module doc states. Total over any set, the
+    /// empty one included.
+    pub fn genesis_fingerprint(genesis_set: &[Fingerprint]) -> Fingerprint {
+        let mut ordered: Vec<&Fingerprint> = genesis_set.iter().collect();
+        ordered.sort();
+        ordered.dedup();
+        let mut hasher = Sha256::new();
+        hasher.update(b"skep-realm-v1");
+        for fp in ordered {
+            hasher.update((fp.as_bytes().len() as u32).to_be_bytes());
+            hasher.update(fp.as_bytes());
+        }
+        let digest = hasher.finalize();
+        let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        Fingerprint::parse_hex(&hex).expect("a SHA-256 digest is 64 hex characters")
+    }
+}
+
 /// The root hint — the one config value a resolver boots from (REG-3.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RootHint {
     /// The root's endpoint URL(s), in the order a mirror tries them; at
     /// least one.
     pub origins: Vec<Origin>,
-    /// The realm id: the genesis key-set fingerprint (REG-3.39).
-    pub realm: Fingerprint,
-    /// The fork point on a forked lineage — the address of the fork's
-    /// succession record (REG-3.40); EMPTY on an unforked lineage.
-    pub fork_point: Option<Address>,
+    /// The realm id: the genesis fingerprint, and the fork point on a forked
+    /// lineage (REG-3.2, REG-3.40).
+    pub realm: RealmId,
 }
 
 /// Why a line is no root hint.
@@ -62,7 +99,8 @@ pub enum HintError {
     BadOrigin(String),
     /// No `realm:` term.
     NoRealm,
-    /// A `realm:` term that is not 64 hex characters.
+    /// A `realm:` term whose value is no genesis fingerprint — 64 hex
+    /// characters.
     BadRealm(String),
     /// A `fork:` term that is no address.
     BadForkPoint(String),
@@ -76,7 +114,7 @@ impl fmt::Display for HintError {
             HintError::NoOrigin => f.write_str("the hint names no origin"),
             HintError::BadOrigin(t) => write!(f, "'{t}' is no canonical origin"),
             HintError::NoRealm => f.write_str("the hint names no realm (realm:<64 hex>)"),
-            HintError::BadRealm(t) => write!(f, "'{t}' is no realm id (64 hex characters)"),
+            HintError::BadRealm(t) => write!(f, "'{t}' is no genesis fingerprint (64 hex characters)"),
             HintError::BadForkPoint(t) => write!(f, "'{t}' is no fork point (an address)"),
             HintError::Duplicate(term) => write!(f, "the {term} term is given twice"),
         }
@@ -86,30 +124,32 @@ impl fmt::Display for HintError {
 impl std::error::Error for HintError {}
 
 impl RootHint {
-    /// A hint from its parts: at least one origin.
+    /// A hint from its parts: at least one origin, and the realm id's two
+    /// halves — the genesis fingerprint, and the fork point where the lineage
+    /// forked.
     pub fn new(
         origins: Vec<Origin>,
-        realm: Fingerprint,
+        genesis: Fingerprint,
         fork_point: Option<Address>,
     ) -> Result<RootHint, HintError> {
         if origins.is_empty() {
             return Err(HintError::NoOrigin);
         }
-        Ok(RootHint { origins, realm, fork_point })
+        Ok(RootHint { origins, realm: RealmId { genesis, fork_point } })
     }
 
     /// THE ONE LINE, parsed: origins, `realm:<hex>`, and `fork:<address>`
     /// where the lineage forked, in any order, whitespace-separated.
     pub fn parse(line: &str) -> Result<RootHint, HintError> {
         let mut origins = Vec::new();
-        let mut realm = None;
+        let mut genesis = None;
         let mut fork_point = None;
         for term in line.split_whitespace() {
             if let Some(hex) = term.strip_prefix("realm:") {
-                if realm.is_some() {
+                if genesis.is_some() {
                     return Err(HintError::Duplicate("realm"));
                 }
-                realm = Some(Fingerprint::parse_hex(hex).ok_or_else(|| HintError::BadRealm(term.into()))?);
+                genesis = Some(Fingerprint::parse_hex(hex).ok_or_else(|| HintError::BadRealm(term.into()))?);
             } else if let Some(addr) = term.strip_prefix("fork:") {
                 if fork_point.is_some() {
                     return Err(HintError::Duplicate("fork"));
@@ -120,8 +160,8 @@ impl RootHint {
                 origins.push(Origin::parse(term).ok_or_else(|| HintError::BadOrigin(term.into()))?);
             }
         }
-        let realm = realm.ok_or(HintError::NoRealm)?;
-        RootHint::new(origins, realm, fork_point)
+        let genesis = genesis.ok_or(HintError::NoRealm)?;
+        RootHint::new(origins, genesis, fork_point)
     }
 }
 
@@ -131,30 +171,12 @@ impl fmt::Display for RootHint {
         for o in &self.origins {
             write!(f, "{o} ")?;
         }
-        write!(f, "realm:{}", self.realm.to_hex())?;
-        if let Some(fork) = &self.fork_point {
+        write!(f, "realm:{}", self.realm.genesis.to_hex())?;
+        if let Some(fork) = &self.realm.fork_point {
             write!(f, " fork:{fork}")?;
         }
         Ok(())
     }
-}
-
-/// THE REALM ID of a genesis set (REG-3.39; AUTH-2.119's order): the
-/// fingerprints in ascending fingerprint order, hashed under the form the
-/// module doc states. Total over any set, the empty one included.
-pub fn realm_id(genesis: &[Fingerprint]) -> Fingerprint {
-    let mut ordered: Vec<&Fingerprint> = genesis.iter().collect();
-    ordered.sort();
-    ordered.dedup();
-    let mut hasher = Sha256::new();
-    hasher.update(b"skep-realm-v1");
-    for fp in ordered {
-        hasher.update((fp.as_bytes().len() as u32).to_be_bytes());
-        hasher.update(fp.as_bytes());
-    }
-    let digest = hasher.finalize();
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    Fingerprint::parse_hex(&hex).expect("a SHA-256 digest is 64 hex characters")
 }
 
 #[cfg(test)]
@@ -166,19 +188,22 @@ mod tests {
     }
 
     /// The one line reads back as itself, with and without a fork point,
-    /// and each malformed term is refused by name.
+    /// and each malformed term is refused by name. The two lines name two
+    /// realms (REG-3.40): one genesis fingerprint, and a fork point on the
+    /// one alone.
     #[test]
     fn the_one_line_parses_and_renders() {
         let line = format!("https://registry.example http://127.0.0.1:8642 realm:{}", fp(0xab).to_hex());
         let hint = RootHint::parse(&line).expect("a hint");
         assert_eq!(hint.origins.len(), 2);
-        assert_eq!(hint.realm, fp(0xab));
-        assert_eq!(hint.fork_point, None);
+        assert_eq!(hint.realm, RealmId { genesis: fp(0xab), fork_point: None });
         assert_eq!(hint.to_string(), line);
         let forked = format!("{line} fork:1.0.1.0.1.0.2.9");
-        let hint = RootHint::parse(&forked).expect("a forked hint");
-        assert_eq!(hint.fork_point.as_ref().map(ToString::to_string).as_deref(), Some("1.0.1.0.1.0.2.9"));
-        assert_eq!(hint.to_string(), forked);
+        let forked_hint = RootHint::parse(&forked).expect("a forked hint");
+        assert_eq!(forked_hint.realm.fork_point.as_ref().map(ToString::to_string).as_deref(), Some("1.0.1.0.1.0.2.9"));
+        assert_eq!(forked_hint.to_string(), forked);
+        assert_eq!(forked_hint.realm.genesis, hint.realm.genesis, "one genesis");
+        assert_ne!(forked_hint.realm, hint.realm, "two realms");
         assert_eq!(RootHint::parse(&format!("realm:{}", fp(1).to_hex())), Err(HintError::NoOrigin));
         assert_eq!(RootHint::parse("https://registry.example"), Err(HintError::NoRealm));
         assert_eq!(RootHint::parse("https://registry.example realm:zz"), Err(HintError::BadRealm("realm:zz".into())));
@@ -196,15 +221,17 @@ mod tests {
         );
     }
 
-    /// The realm id is over the SET: the same fingerprints in any order
-    /// hash alike, a different set differently, and the empty set is a value.
+    /// The genesis fingerprint is over the SET: the same fingerprints in any
+    /// order hash alike, a different set differently, and the empty set is a
+    /// value.
     #[test]
-    fn the_realm_id_is_order_free_and_set_sensitive() {
-        let a = realm_id(&[fp(1), fp(2)]);
-        assert_eq!(a, realm_id(&[fp(2), fp(1)]));
-        assert_eq!(a, realm_id(&[fp(2), fp(1), fp(2)]), "a repeated fingerprint is one member");
-        assert_ne!(a, realm_id(&[fp(1)]));
-        assert_ne!(a, realm_id(&[fp(1), fp(3)]));
-        assert_ne!(realm_id(&[]), realm_id(&[fp(1)]));
+    fn the_genesis_fingerprint_is_order_free_and_set_sensitive() {
+        let of = RealmId::genesis_fingerprint;
+        let a = of(&[fp(1), fp(2)]);
+        assert_eq!(a, of(&[fp(2), fp(1)]));
+        assert_eq!(a, of(&[fp(2), fp(1), fp(2)]), "a repeated fingerprint is one member");
+        assert_ne!(a, of(&[fp(1)]));
+        assert_ne!(a, of(&[fp(1), fp(3)]));
+        assert_ne!(of(&[]), of(&[fp(1)]));
     }
 }

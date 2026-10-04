@@ -45,8 +45,9 @@ pub fn resolve(
     transports: &Transports,
 ) -> Result<Resolution, MirrorError> {
     let Some(standing) = mirror.index().standing(prefix) else {
-        // A depth address whose parent this board binds: the hop not made.
-        if let Some(parent) = mirror.index().longest_bound_prefix(prefix) {
+        // A depth address whose parent has a standing here, held or retired:
+        // the hop not made.
+        if let Some(parent) = mirror.index().parent_prefix(prefix) {
             let parent = resolve(mirror, &parent, names, transports)?;
             return Ok(Resolution::HopNotMade { prefix: prefix.clone(), parent: Box::new(parent) });
         }

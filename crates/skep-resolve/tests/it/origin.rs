@@ -77,20 +77,26 @@ fn at_a_name_the_system_resolver_yields_its_own_addresses() {
     }
 }
 
-/// REG-3.34 as RES-1 and RES-28 amend it: an `.onion` member is a
-/// self-authenticating origin under either scheme — not dialed without its
-/// transport, with no refusal and the record standing admitted; dialed with
-/// it, there being nothing to test.
+/// REG-3.34 as RES-1 and RES-28 amend it: an `.onion` member is the ONION
+/// kind, a self-authenticating kind, under either scheme — not dialed
+/// without the onion transport, with no refusal and the record standing
+/// admitted; dialed with it, there being nothing to test. An https origin is
+/// of no self-authenticating kind.
 #[test]
 fn a_self_authenticating_member_is_not_dialed_without_its_transport_and_dialed_with_it() {
     let names = table(&[]);
+    assert!(MemberKind::Onion.is_self_authenticating() && !MemberKind::Https.is_self_authenticating());
+    let https = skep_resolve::Origin::parse("https://acme.example").unwrap();
+    assert_eq!(https.self_authenticating_kind(), None);
     for member in [ONION, &ONION.replacen("http://", "https://", 1)] {
+        let origin = skep_resolve::Origin::parse(member).unwrap();
+        assert_eq!(origin.self_authenticating_kind(), Some(MemberKind::Onion), "{member}");
         assert!(
-            matches!(judge_member(member, &names, &Transports::default()), MemberOutcome::NotDialed { kind: MemberKind::SelfAuthenticating, .. }),
+            matches!(judge_member(member, &names, &Transports::default()), MemberOutcome::NotDialed { kind: MemberKind::Onion, .. }),
             "{member}"
         );
-        match judge_member(member, &names, &Transports { https: true, self_authenticating: true }) {
-            MemberOutcome::WouldDial { kind: MemberKind::SelfAuthenticating, addresses, .. } => assert!(addresses.is_empty()),
+        match judge_member(member, &names, &Transports { https: true, onion: true }) {
+            MemberOutcome::WouldDial { kind: MemberKind::Onion, addresses, .. } => assert!(addresses.is_empty()),
             other => panic!("{member}: {other:?}"),
         }
     }

@@ -122,12 +122,12 @@ impl Origin {
         self.https
     }
 
-    /// Whether the host is a SELF-AUTHENTICATING origin's (REG-3.34 as
-    /// RES-1 amends it): an `.onion` address, whose address is the service's
-    /// key — the first admitted kind, under either scheme; a later kind is
-    /// one more admitted kind by name here.
-    pub fn is_self_authenticating(&self) -> bool {
-        self.host.ends_with(".onion")
+    /// The SELF-AUTHENTICATING kind the host is, where it is one (REG-3.34
+    /// as RES-1 amends it) — an origin whose address IS the service's key,
+    /// under either scheme: an `.onion` host is [`MemberKind::Onion`], the
+    /// first admitted kind; a later kind is one more arm here, by name.
+    pub fn self_authenticating_kind(&self) -> Option<MemberKind> {
+        self.host.ends_with(".onion").then_some(MemberKind::Onion)
     }
 
     /// The host as an IP literal, where it is one.
@@ -212,28 +212,31 @@ impl NameResolver for SystemResolver {
     }
 }
 
-/// The transports this resolver holds, by admitted kind (REG-3.34 as RES-28
-/// amends it): a member of a kind whose transport is not held is NOT
-/// DIALED. The default is the frontend's: https held, no onion transport.
+/// The transports this resolver holds, one per admitted kind, by the kind's
+/// name (REG-3.34 as RES-28 amends it): a member of a kind whose transport
+/// is not held is NOT DIALED. The default is the frontend's: https held, no
+/// onion transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Transports {
     pub https: bool,
-    pub self_authenticating: bool,
+    pub onion: bool,
 }
 
 impl Default for Transports {
     fn default() -> Transports {
-        Transports { https: true, self_authenticating: false }
+        Transports { https: true, onion: false }
     }
 }
 
-/// The admitted kinds of an endpoint member (REG-3.34).
+/// The admitted kinds of an endpoint member (REG-3.34), each by its name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MemberKind {
     /// An `https` origin.
     Https,
-    /// A self-authenticating origin — an `.onion` address.
-    SelfAuthenticating,
+    /// An `.onion` address — the first admitted SELF-AUTHENTICATING kind
+    /// (REG-3.34 as RES-1 amends it), its transport the onion transport
+    /// (RES-28).
+    Onion,
 }
 
 impl MemberKind {
@@ -241,7 +244,17 @@ impl MemberKind {
     pub fn name(self) -> &'static str {
         match self {
             MemberKind::Https => "https",
-            MemberKind::SelfAuthenticating => "onion",
+            MemberKind::Onion => "onion",
+        }
+    }
+
+    /// Whether the kind's address IS the service's key: the host term met
+    /// by construction (REG-3.35), each such kind admitted BY NAME
+    /// (REG-3.34).
+    pub fn is_self_authenticating(self) -> bool {
+        match self {
+            MemberKind::Https => false,
+            MemberKind::Onion => true,
         }
     }
 }
@@ -299,23 +312,22 @@ pub fn judge_member(member: &str, names: &dyn NameResolver, transports: &Transpo
     let Some(origin) = Origin::parse(member) else {
         return refused(Term::Scheme);
     };
-    // The kind: self-authenticating under either scheme; else https alone.
-    let kind = if origin.is_self_authenticating() {
-        MemberKind::SelfAuthenticating
-    } else if origin.is_https() {
-        MemberKind::Https
-    } else {
-        return refused(Term::Scheme);
+    // The kind: a self-authenticating kind under either scheme; else https
+    // alone.
+    let kind = match origin.self_authenticating_kind() {
+        Some(kind) => kind,
+        None if origin.is_https() => MemberKind::Https,
+        None => return refused(Term::Scheme),
     };
     let held = match kind {
         MemberKind::Https => transports.https,
-        MemberKind::SelfAuthenticating => transports.self_authenticating,
+        MemberKind::Onion => transports.onion,
     };
     if !held {
         return MemberOutcome::NotDialed { origin, kind };
     }
     // The host term: nothing to test at a self-authenticating member.
-    if kind == MemberKind::SelfAuthenticating {
+    if kind.is_self_authenticating() {
         return MemberOutcome::WouldDial { origin, kind, addresses: Vec::new() };
     }
     if let Some(literal) = origin.ip_literal() {

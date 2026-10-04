@@ -32,8 +32,8 @@ use skep_address::Address;
 use skep_identity::{canonical_record, Fingerprint};
 use skep_registry::{encode, Body, BodyKind};
 use skep_resolve::{
-    guest_resolve, realm_id, resolve, Board, Cause, Http, MemberOutcome, Mirror, MirrorError,
-    NameResolver, Opened, Origin, Refusal, Resolution, RootHint, Term, Transport, TransportError,
+    guest_resolve, resolve, Board, Cause, Http, MemberOutcome, Mirror, MirrorError, NameResolver,
+    Opened, Origin, RealmId, Refusal, Resolution, RootHint, Term, Transport, TransportError,
     Transports, Unreachable, Verdict,
 };
 
@@ -45,11 +45,12 @@ fn addr(s: &str) -> Address {
     skep_resolve::parse_address(s).unwrap_or_else(|| panic!("{s} is an address"))
 }
 
-/// THE REALM every board this suite spawns belongs to: the fingerprint of
-/// the ceremony's genesis set, the paper anchor and the notebook device key
-/// (REG-3.39).
+/// THE REALM every board this suite spawns belongs to, an unforked lineage's
+/// and so its genesis fingerprint alone (REG-3.39, REG-3.40): the
+/// fingerprint of the ceremony's genesis set, the paper anchor and the
+/// notebook device key.
 fn suite_realm() -> Fingerprint {
-    realm_id(&[Fingerprint::of(&public_key_of(&anchor_key())), Fingerprint::of(&public_key_of(&device_key()))])
+    RealmId::genesis_fingerprint(&[Fingerprint::of(&public_key_of(&anchor_key())), Fingerprint::of(&public_key_of(&device_key()))])
 }
 
 /// THE ROOT HINT for a board at `port` (REG-3.2): its loopback origin and
@@ -382,7 +383,7 @@ fn the_fixture_board_resolves_live_and_is_recorded_on_demand() {
     assert_eq!(mirror.sync().expect("an empty delta"), 0);
     let suppressed = mirror.index().suppressed().to_vec();
     assert_eq!(suppressed.len(), 2, "{suppressed:?}");
-    assert!(suppressed.iter().any(|s| s.link == addr(&orgs["1.4"].binding) && s.cause == Cause::Unsigned));
+    assert!(suppressed.iter().any(|s| s.link == addr(&orgs["1.4"].binding) && s.cause == Cause::Verdict(Verdict::Unsigned)));
     assert!(suppressed.iter().any(|s| s.link == addr(&orgs["1.14"].binding) && matches!(s.cause, Cause::Malformed(skep_registry::Refusal::NotCanonical))));
     let faces: Vec<(&str, Resolution)> =
         FIXTURE_PREFIXES.iter().map(|p| (*p, resolve_prefix(&mut mirror, p))).collect();
@@ -562,7 +563,7 @@ fn a_tampered_body_is_suppressed_by_the_verifying_resolver() {
     assert!(matches!(resolve_prefix(&mut mirror, "1.3"), Resolution::Unregistered { .. }));
     assert_eq!(mirror.index().suppressed().len(), 1);
     assert_eq!(mirror.index().suppressed()[0].link, addr(&o3.binding));
-    assert_eq!(mirror.index().suppressed()[0].cause, Cause::Unsigned);
+    assert_eq!(mirror.index().suppressed()[0].cause, Cause::Verdict(Verdict::Unsigned));
     assert!(mirror.index().bindings().any(|b| b.link == addr(&o2.binding)));
     sd.shutdown();
 }
@@ -621,12 +622,12 @@ fn a_couriers_image_that_omits_reorders_or_replays_rows_is_refused() {
 
 /// THE ROOT MOVE (REG-3.18, REG-3.19; R5 (b)): the same lineage served at a
 /// second origin RESUMES by the byte-identical check — every held row and
-/// chain pair answered the same, the delta synced; a source whose head is
+/// head pair answered the same, the delta synced; a source whose head is
 /// BELOW the mirror's position (a root brought up from a backup) is
 /// refused as SOURCE BEHIND; a source whose frontier DIVERGES below the
 /// mirror's head is refused as DIVERGED; a root of another GENESIS is
-/// refused at the base as a REALM MISMATCH (REG-3.42), the hint's realm and
-/// the one found both named.
+/// refused at the base as a REALM MISMATCH (REG-3.42), the hint's genesis
+/// fingerprint and the one found both named.
 #[test]
 fn a_root_move_under_the_same_lineage_resumes_and_its_refusals_are_named() {
     let dir_a = tempfile::tempdir().expect("tempdir");
@@ -695,7 +696,7 @@ fn a_root_move_under_the_same_lineage_resumes_and_its_refusals_are_named() {
     assert!(claimed(sd_c.port()));
     let fresh = tempfile::tempdir().expect("tempdir");
     let refused = Mirror::open(&hint_for(sd_c.port()), fresh.path(), &skep_resolve::dial_http).err();
-    let found = realm_id(&[Fingerprint::of(&public_key_of(&other_anchor)), Fingerprint::of(&public_key_of(&other_device))]);
+    let found = RealmId::genesis_fingerprint(&[Fingerprint::of(&public_key_of(&other_anchor)), Fingerprint::of(&public_key_of(&other_device))]);
     assert_eq!(refused, Some(MirrorError::Refused(Refusal::RealmMismatch { expected: suite_realm(), found })));
     assert!(!fresh.path().join(skep_resolve::FEED_COPY).exists(), "a refused base writes no copy");
     sd_c.shutdown();
@@ -788,7 +789,7 @@ fn an_un_arranged_atom_is_recovered_by_the_homes_chain_walk() {
     assert_eq!(walk.versions_visited, 4, "D.2 missed and D.1 held it, twice: {walk:?}");
     assert_eq!(walk.position_reads, 0, "never the position read where a version holds it");
     assert!(walk.reads >= 4, "{walk:?}");
-    assert_eq!(mirror.members_of(&addr(CLAIMANT_DOC1)), [addr(&d1), addr(&d2)]);
+    assert_eq!(mirror.chain_members_of(&addr(CLAIMANT_DOC1)), [addr(&d1), addr(&d2)]);
     for org in &orgs {
         assert!(matches!(resolve_prefix(&mut mirror, &org.prefix), Resolution::Bound { .. }), "{}", org.prefix);
     }
@@ -1126,8 +1127,8 @@ fn measure(n: u64, k: usize, chain_walk: bool) {
     let (guest, cost) = guest_resolve(&board, &addr(&target.prefix), &names(), &Transports::default()).expect("the guest resolve");
     assert_eq!(dial_of(&guest), dial_of(&resolve_prefix(&mut mirror, &target.prefix)), "the guest and the mirror agree on the dial");
     report(&format!(
-        "N={n} k={k} | GUEST (no mirror, REG-3.24): bindings_scanned={} atoms_read={} reads={} time={}",
-        cost.bindings_scanned, cost.atoms_read, cost.reads, ms(cost.time),
+        "N={n} k={k} | GUEST (no mirror, REG-3.24): candidate_bindings_scanned={} atoms_read={} reads={} time={}",
+        cost.candidate_bindings_scanned, cost.atoms_read, cost.reads, ms(cost.time),
     ));
 
     // THE CHAIN WALK (§3.3) against a direct value read.

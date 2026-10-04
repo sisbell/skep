@@ -148,9 +148,10 @@ pub enum Unreachable {
     DeadOrigin { member: String },
 }
 
-/// THE FACES — every resolution outcome, REG-3.80's table as an enum. The
-/// walk ([`crate::walk::resolve`]) answers the first seven; the last two are
-/// the caller's to fill after the dial it alone makes.
+/// THE FACES — every resolution outcome: REG-3.80's table as an enum, and
+/// BOUND, the walk's own answer (REG-3.7). The walk
+/// ([`crate::walk::resolve`]) answers the first seven; the last two are the
+/// caller's to fill after the dial it alone makes.
 ///
 /// Every face that names a BOUND account carries its key set as `keys`: the
 /// set that opens the account at the position the reader stands at, and
@@ -159,8 +160,9 @@ pub enum Unreachable {
 /// would say the account holds no key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolution {
-    /// A prefix no binding names: unknown is a visible state, never a
-    /// silent trust.
+    /// A prefix with no standing — no binding the reader holds names it (a
+    /// mirror's index holds only what its gate admitted), or none the walk
+    /// honors: unknown is a visible state, never a silent trust.
     Unregistered { prefix: Address },
     /// A RETIRED binding — the current binding at the prefix names no
     /// account: that the org existed, with its history; the successor where
@@ -200,9 +202,10 @@ pub enum Resolution {
         members: Vec<MemberOutcome>,
     },
     /// THE HOP NOT MADE (REG-3.82): a depth address whose walk reaches its
-    /// parent — the longest prefix this board binds — and cannot make the
-    /// next hop, that board being another mirror's (REG-3.32). The parent's
-    /// own resolution rides beside it; nothing is promised about the child.
+    /// parent — the longest prefix with a standing on this board, held or
+    /// retired — and cannot make the next hop, that board being another
+    /// mirror's (REG-3.32). The parent's own resolution rides beside it;
+    /// nothing is promised about the child.
     HopNotMade { prefix: Address, parent: Box<Resolution> },
     /// BOUND: the binding, the account's key set, its current endpoint and
     /// the member this resolver WOULD dial — the first in the org's order it
@@ -226,8 +229,9 @@ pub enum Resolution {
 }
 
 impl Resolution {
-    /// The face's name as REG-3.80's table spells it — a stable token a
-    /// renderer keys on, not its copy.
+    /// The face's name — REG-3.80's spelling for each face its table lists,
+    /// and BOUND, the walk's own answer (REG-3.7) — a stable token a renderer
+    /// keys on, not its copy.
     pub fn face(&self) -> &'static str {
         match self {
             Resolution::Unregistered { .. } => "UNREGISTERED",

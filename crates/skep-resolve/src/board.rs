@@ -12,7 +12,7 @@
 //! ([`Board::link_slots`]), an account's key set live and as of a position
 //! ([`Board::key_set`], [`Board::key_set_at`]), and whether a retraction
 //! stands ([`Board::retraction_stands`]). What each caller makes of them —
-//! the copy's chain pair, the verdict's frame, the table a record is judged
+//! the copy's head pair, the verdict's frame, the table a record is judged
 //! under — is the caller's. The feed's rows are checked by the base's
 //! provenance and a record's bytes by the verify, so the reads that only
 //! locate those bytes (the span set, `image`, `retrieve_v`) stay with their

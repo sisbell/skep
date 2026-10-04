@@ -51,11 +51,12 @@
 //!
 //! * `feed.jsonl` — THE COPY OF THE FEED, what the check covers and what a
 //!   courier could ship: a header `{"skep-resolve":"feed-v1","realm":<hex>,
-//!   "root":<origin>}`, then one `{"row":<entry>}` per feed row in position
-//!   order, exactly as the board served it, and a `{"head":{"at":N,
-//!   "chain":<hex>}}` after each sync — the chain pair the resume compares;
-//!   every line of it written and read back in [`base`], the format stamp
-//!   checked on every read.
+//!   "root":<origin>}` — the format stamp, the realm id's genesis
+//!   fingerprint and the root that answered — then one `{"row":<entry>}` per
+//!   feed row in position order, exactly as the board served it, and a
+//!   `{"head":{"at":N,"chain":<hex>}}` after each sync — the head pair the
+//!   resume compares; every line of it written and read back in [`base`],
+//!   the format stamp checked on every read.
 //! * `fetched.jsonl` — THIS MIRROR'S OWN FETCH CACHE, what the fold read off
 //!   the board: `{"link":{…}}` a stored link's slots, `{"atom":{"address",
 //!   "text"}}` a record's bytes, `{"keys":{"account","epoch","at",
@@ -72,8 +73,9 @@
 //!   root, and the realm is never read off the cache.
 //!
 //! THE BINDING-WRITING ACCOUNT (R5 (g); REG-2.8): on an unforked lineage the
-//! bindings the walk reads are the CLAIMANT's — a binding deposited in any
-//! other home is no registrar's binding and enters no index, counted apart.
+//! bindings the walk reads are the CLAIMANT's, its doc 1 the binding home; a
+//! binding-typed record deposited in any other home is that account's own
+//! content and NO BINDING (REG-2.6) — it enters no index, counted apart.
 
 mod atoms;
 mod base;
@@ -119,7 +121,7 @@ pub enum MirrorError {
     /// The feed ended with no claim: an unclaimed board resolves nothing.
     NoClaim,
     /// The claimant's genesis set is not held, or this build could not read
-    /// it: no realm can be computed.
+    /// it: no genesis fingerprint can be computed.
     NoGenesis,
     /// The copy could not be read or written, or is malformed.
     Copy(String),
@@ -152,8 +154,10 @@ impl From<BoardError> for MirrorError {
 /// THE REFUSALS of the base's provenance (REG-3.19, REG-3.42).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
-    /// The source's genesis set is not the hint's realm: a lineage change,
-    /// not a root move (REG-3.19; detection point 1, REG-3.42).
+    /// The root's genesis set does not fingerprint to the genesis half of the
+    /// hint's realm id — `expected` the hint's genesis fingerprint, `found`
+    /// the root's: a lineage change, not a root move (REG-3.19; detection
+    /// point 1, REG-3.42).
     RealmMismatch { expected: Fingerprint, found: Fingerprint },
     /// A position the mirror holds came back different, or not at all, from
     /// the source read from genesis: a frontier diverging below the mirror's
@@ -163,8 +167,8 @@ pub enum Refusal {
     /// The source's head is below the mirror's position: a root brought up
     /// from a backup cannot answer for what it already served.
     SourceBehind { source_head: u64, held: u64 },
-    /// A chain pair the mirror held is contradicted by the source's own
-    /// recomputation at that position.
+    /// A head pair the mirror held is contradicted by the source's own
+    /// recomputation of the chain at that position.
     ChainDiverged { at: u64 },
 }
 
@@ -172,13 +176,13 @@ impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Refusal::RealmMismatch { expected, found } => {
-                write!(f, "the root's genesis set is realm {found}, the hint names {expected}")
+                write!(f, "the root's genesis fingerprint is {found}, the hint's realm names {expected}")
             }
             Refusal::Diverged { at } => write!(f, "the source diverges from the held journal at {at}"),
             Refusal::SourceBehind { source_head, held } => {
                 write!(f, "the source's head {source_head} is below the held position {held}")
             }
-            Refusal::ChainDiverged { at } => write!(f, "the source's chain at {at} contradicts the held pair"),
+            Refusal::ChainDiverged { at } => write!(f, "the source's chain at {at} contradicts the held head pair"),
         }
     }
 }
@@ -191,18 +195,18 @@ pub enum Opened {
     /// A copy held, checked byte-identical through its head against the
     /// source read from genesis, and resumed (REG-3.18).
     Resumed { checked_rows: u64 },
-    /// The hint named another realm than the copy held: the copy retired to
-    /// `retired`, the base established afresh (REG-3.17).
+    /// The hint's genesis fingerprint is not the one the copy held: the copy
+    /// retired to `retired`, the base established afresh (REG-3.17).
     Rebootstrapped { retired: PathBuf },
     /// Rebuilt from the copy under the directory alone, no board dialed
-    /// (REG-3.25): nothing checked against a source, and the realm the one
-    /// the copy's header names.
+    /// (REG-3.25): nothing checked against a source, and the genesis
+    /// fingerprint the one the copy's header names.
     Rebuilt,
 }
 
-/// What the chain walk cost (REG-3.25; the investigation §3.3).
+/// What the home's chain walk cost (REG-3.25; the investigation §3.3).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct WalkStats {
+pub struct ChainWalkStats {
     /// Atoms recovered by the walk.
     pub atoms: u64,
     /// Versions visited across every walk, the one that held the atom
@@ -237,10 +241,12 @@ pub struct Stats {
     pub bootstrap_time: Duration,
     /// Time of the resume check, where one ran.
     pub resume_check: Option<Duration>,
-    /// The chain walk's cost.
-    pub chain_walk: WalkStats,
-    /// Bindings homed outside the claimant's doc 1, no registrar's.
-    pub foreign_bindings: u64,
+    /// The home's chain walk's cost.
+    pub chain_walk: ChainWalkStats,
+    /// Binding-typed records homed outside the lineage's binding home — the
+    /// claimant's doc 1 on an unforked lineage: each that account's own
+    /// content and no binding (REG-2.6), entering no index.
+    pub binding_typed_outside_home: u64,
     /// As-of reads answered off the live table where the held feed proved
     /// it the table as of the position.
     pub reads_live_proven: u64,
@@ -584,7 +590,7 @@ impl Mirror {
     }
 
     /// The members of `home`'s version chain the mirror knows, oldest first.
-    pub fn members_of(&self, home: &Address) -> &[Address] {
+    pub fn chain_members_of(&self, home: &Address) -> &[Address] {
         self.chains.members_of(home)
     }
 
@@ -721,7 +727,7 @@ impl Mirror {
                 Some((_, claimant)) if doc_1_of(claimant) == *home => {
                     self.fold_record(BodyKind::Binding, &stored)?;
                 }
-                _ => self.stats.foreign_bindings += 1,
+                _ => self.stats.binding_typed_outside_home += 1,
             }
         } else if ty == self.types.endpoint {
             self.fold_record(BodyKind::Endpoint, &stored)?;
@@ -735,15 +741,15 @@ impl Mirror {
             m.index.suppress(Suppressed { position: link.at, link: link.address.clone(), kind, cause });
         };
         let Some(atom) = link.from.first().cloned() else {
-            suppress(self, Cause::UndeterminableHere);
+            suppress(self, Cause::Verdict(Verdict::UndeterminableHere));
             return Ok(());
         };
         let Some(home_account) = account_of_document(&link.home) else {
-            suppress(self, Cause::UndeterminableHere);
+            suppress(self, Cause::Verdict(Verdict::UndeterminableHere));
             return Ok(());
         };
         let Some(text) = self.fetch_atom(link.at, &link.home, &atom)? else {
-            suppress(self, Cause::UndeterminableHere);
+            suppress(self, Cause::Verdict(Verdict::UndeterminableHere));
             return Ok(());
         };
         let record = match parse(kind, text.as_bytes()) {
@@ -780,11 +786,7 @@ impl Mirror {
             _ => Verdict::UndeterminableHere,
         };
         if !verdict.admits() {
-            let cause = match verdict {
-                Verdict::UndeterminableHere => Cause::UndeterminableHere,
-                _ => Cause::Unsigned,
-            };
-            suppress(self, cause);
+            suppress(self, Cause::Verdict(verdict));
             return Ok(());
         }
         let replaces = match record.body.replaces() {

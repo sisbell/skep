@@ -8,11 +8,11 @@
 //! not. It links no daemon and no engine, and it opens no socket to an
 //! endpoint: the dial is the caller's.
 //!
-//! * `hint` — THE ROOT HINT (REG-3.2, REG-3.3): the root's origin(s), the
-//!   realm id (the genesis key-set fingerprint, REG-3.39) and the fork point
-//!   (REG-3.40), ONE overridable config value, parsed from one line and from
-//!   a struct; every resolution the mirror performs is scoped to its realm
-//!   by construction (REG-3.42).
+//! * `hint` — THE ROOT HINT (REG-3.2, REG-3.3): the root's origin(s) and the
+//!   realm id (`RealmId`: the genesis key-set fingerprint, REG-3.39, and the
+//!   fork point beside it, REG-3.40), ONE overridable config value, parsed
+//!   from one line and from a struct; the mirror's realm check compares the
+//!   id's genesis fingerprint at the base (REG-3.42).
 //! * `http` — the written-out HTTP/1.1 client (`Transport`, `Http`): plain
 //!   `http` alone, an `https` root a transport this build does not hold.
 //! * `board` — the typed reads over any transport (`Board`: the feed's
@@ -66,11 +66,11 @@ mod verify;
 mod walk;
 
 pub use board::{Board, BoardError, Page, Reads};
-pub use hint::{realm_id, HintError, RootHint};
+pub use hint::{HintError, RealmId, RootHint};
 pub use http::{dial_http, Dial, Http, Transport, TransportError};
 pub use index::{Cause, Counts, Index, Suppressed};
 pub use mirror::{
-    account_of_document, Mirror, MirrorError, Opened, Refusal, Stats, WalkStats, FEED_COPY, FETCH_CACHE,
+    account_of_document, ChainWalkStats, Mirror, MirrorError, Opened, Refusal, Stats, FEED_COPY, FETCH_CACHE,
 };
 pub use origin::{
     judge_member, routable, walk_members, EndpointDial, EndpointWalk, MemberKind, MemberOutcome,

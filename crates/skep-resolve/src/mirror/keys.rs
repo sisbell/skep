@@ -195,8 +195,8 @@ mod tests {
     #[test]
     fn a_credential_act_in_the_delegators_doc_one_is_an_act_of_the_account() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let realm = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
-        let header = json!({ "skep-resolve": FEED_FORMAT, "realm": realm.to_hex(), "root": null });
+        let genesis = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
+        let header = json!({ "skep-resolve": FEED_FORMAT, "realm": genesis.to_hex(), "root": null });
         let row = json!({ "row": { "at": 5, "op": "make_link", "link": "1.0.2.0.1.0.2.1", "docs": ["1.0.2.0.1"] } });
         fs::write(dir.path().join(FEED_COPY), format!("{header}\n{row}\n")).expect("the feed copy");
         let seeding = json!({ "link": {
@@ -204,7 +204,7 @@ mod tests {
             "ty": "1.1.0.1.0.1.0.3.1", "from": ["1.0.2.0.1.0.1.1"], "to": ["1.0.2.3"],
         }});
         fs::write(dir.path().join(FETCH_CACHE), format!("{seeding}\n")).expect("the fetch cache");
-        let hint = RootHint::new(vec![Origin::parse("http://127.0.0.1:1").unwrap()], realm, None).unwrap();
+        let hint = RootHint::new(vec![Origin::parse("http://127.0.0.1:1").unwrap()], genesis, None).unwrap();
         let mirror = Mirror::rebuild_offline(&hint, dir.path()).expect("rebuilt");
         assert!(mirror.later_credential_act(&a("1.0.2.3"), 4, 6), "the seeding in the delegator's doc 1");
         assert!(!mirror.later_credential_act(&a("1.0.2.3"), 5, 6), "the interval is open below");

@@ -10,7 +10,7 @@ use std::fs;
 
 use serde_json::json;
 use skep_identity::Fingerprint;
-use skep_resolve::{realm_id, Cause, Mirror, MirrorError, Opened, Refusal, RootHint, Verdict, FEED_COPY, FETCH_CACHE};
+use skep_resolve::{Cause, Mirror, MirrorError, Opened, RealmId, Refusal, RootHint, Verdict, FEED_COPY, FETCH_CACHE};
 use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
 
 use crate::{addr, fixture, open_fixture_mirror, replay_dial};
@@ -33,7 +33,7 @@ fn the_index_holds_the_verified_records_and_suppresses_the_tampered() {
     assert!(index.bindings().all(|b| matches!(b.verdict, Verdict::Signed(_))));
     assert!(index.all_endpoints().all(|e| matches!(e.verdict, Verdict::Signed(_))));
     assert_eq!(index.suppressed().len(), 2, "{:?}", index.suppressed());
-    assert!(index.suppressed().iter().any(|s| s.cause == Cause::Unsigned), "{:?}", index.suppressed());
+    assert!(index.suppressed().iter().any(|s| s.cause == Cause::Verdict(Verdict::Unsigned)), "{:?}", index.suppressed());
     assert!(
         index.suppressed().iter().any(|s| matches!(s.cause, Cause::Malformed(skep_registry::Refusal::NotCanonical))),
         "{:?}",
@@ -76,8 +76,9 @@ fn the_rebuild_from_the_copy_reads_no_wire_and_equals_the_live_index() {
     assert_eq!(resumed.index().counts(), offline.index().counts());
 }
 
-/// REG-3.42, REG-3.19: a hint naming another realm than the root's genesis
-/// set is refused at the base, the two realms named, and no copy is written.
+/// REG-3.42, REG-3.19: a hint whose realm id names another genesis
+/// fingerprint than the root's genesis set's is refused at the base, the two
+/// genesis fingerprints named, and no copy is written.
 #[test]
 fn a_hint_naming_another_realm_is_refused_at_the_base() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -88,20 +89,21 @@ fn a_hint_naming_another_realm_is_refused_at_the_base() {
     let refused = Mirror::open(&hint, dir.path(), &dial).err();
     assert_eq!(
         refused,
-        Some(MirrorError::Refused(Refusal::RealmMismatch { expected: other, found: fixture.hint.realm }))
+        Some(MirrorError::Refused(Refusal::RealmMismatch { expected: other, found: fixture.hint.realm.genesis }))
     );
     assert!(!dir.path().join(FEED_COPY).exists());
     assert!(!dir.path().join(FETCH_CACHE).exists());
 }
 
-/// REG-3.42 UNDER A HELD COPY: what the copy says of its realm is the copy's
-/// word, never the root's. A courier's feed copy of this root's journal,
-/// its header rewritten to another realm and shipped with a fetch cache
-/// whose genesis table for the claimant agrees with that realm, matches the
-/// source row for row and chain pair for pair — and is refused at the
-/// claim's row all the same, the realm compared against the genesis set the
-/// source answers and never the cache's; the two realms named, and nothing
-/// written: the feed copy and the cache as they were shipped.
+/// REG-3.42 UNDER A HELD COPY: what the copy says of its genesis is the
+/// copy's word, never the root's. A courier's feed copy of this root's
+/// journal, its header rewritten to another genesis fingerprint and shipped
+/// with a fetch cache whose genesis table for the claimant agrees with that
+/// fingerprint, matches the source row for row and head pair for pair — and
+/// is refused at the claim's row all the same, the realm compared against
+/// the genesis set the source answers and never the cache's; the two genesis
+/// fingerprints named, and nothing written: the feed copy and the cache as
+/// they were shipped.
 #[test]
 fn a_held_copy_naming_another_realm_is_refused_at_the_claim() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -109,10 +111,10 @@ fn a_held_copy_naming_another_realm_is_refused_at_the_claim() {
     let claimant = mirror.claim().map(|(_, c)| c.to_string()).expect("the claim");
     drop(mirror);
     let forged = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[9; 32]).expect("tag 1").public_key().clone();
-    let other = realm_id(&[Fingerprint::of(&forged)]);
+    let other = RealmId::genesis_fingerprint(&[Fingerprint::of(&forged)]);
     let feed = fs::read_to_string(dir.path().join(FEED_COPY)).expect("the feed copy");
-    let shipped_feed = feed.replacen(&fixture.hint.realm.to_hex(), &other.to_hex(), 1);
-    assert_ne!(shipped_feed, feed, "the header names the realm");
+    let shipped_feed = feed.replacen(&fixture.hint.realm.genesis.to_hex(), &other.to_hex(), 1);
+    assert_ne!(shipped_feed, feed, "the header names the genesis fingerprint");
     fs::write(dir.path().join(FEED_COPY), &shipped_feed).expect("the courier's header");
     let genesis = json!({ "keys": {
         "account": claimant, "epoch": 0, "at": 0,
@@ -126,7 +128,7 @@ fn a_held_copy_naming_another_realm_is_refused_at_the_claim() {
     let refused = Mirror::open(&hint, dir.path(), &dial).err();
     assert_eq!(
         refused,
-        Some(MirrorError::Refused(Refusal::RealmMismatch { expected: other, found: fixture.hint.realm }))
+        Some(MirrorError::Refused(Refusal::RealmMismatch { expected: other, found: fixture.hint.realm.genesis }))
     );
     assert_eq!(fs::read_to_string(dir.path().join(FEED_COPY)).expect("the feed copy"), shipped_feed, "no line of the copy");
     assert_eq!(fs::read_to_string(dir.path().join(FETCH_CACHE)).expect("the fetch cache"), shipped_cache, "nor of the cache");
@@ -233,5 +235,5 @@ fn the_hint_line_in_the_fixture_parses_back_to_itself() {
     let line = fixture.hint.to_string();
     assert_eq!(RootHint::parse(&line).expect("parses"), fixture.hint);
     assert!(line.contains(" realm:"), "{line}");
-    assert_eq!(fixture.hint.fork_point, None, "an unforked lineage");
+    assert_eq!(fixture.hint.realm.fork_point, None, "an unforked lineage");
 }

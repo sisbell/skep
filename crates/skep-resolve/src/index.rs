@@ -45,20 +45,17 @@ use std::collections::BTreeMap;
 use skep_address::{is_prefix, Address};
 use skep_registry::BodyKind;
 
-use crate::state::{BindingRecord, EndpointRecord, Judged, Standing};
+use crate::state::{BindingRecord, EndpointRecord, Judged, Standing, Verdict};
 
-/// Why a record was kept out of the index (rm-2): its verdict, or no record
-/// at all.
+/// Why a record was kept out of the index (rm-2): no record of the slot's
+/// kind at all, or its VERDICT — any of the five but SIGNED, the one that
+/// admits it — carried as judged and never re-worded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cause {
     /// The bytes are no record of the slot's kind under the canonical rule.
     Malformed(skep_registry::Refusal),
-    /// The verdict is UNSIGNED: no `sig`, a `sig` of no row's width, or a
-    /// signer outside the home's set as of the position.
-    Unsigned,
-    /// The verdict is UNDETERMINABLE HERE: the bytes, the board term or the
-    /// set as of the position could not be read.
-    UndeterminableHere,
+    /// The record's verdict, any but SIGNED.
+    Verdict(Verdict),
 }
 
 /// One suppressed record: its link's position and address, the kind its
@@ -86,7 +83,9 @@ enum Place {
     Endpoint(Address),
 }
 
-/// The counts a build reports.
+/// The counts a build reports: the ledger's prefixes, bindings and deposits,
+/// each total and honored, and the records the gate kept out — malformed,
+/// and one count per verdict but SIGNED.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Counts {
     pub prefixes: usize,
@@ -97,6 +96,8 @@ pub struct Counts {
     pub suppressed_malformed: usize,
     pub suppressed_unsigned: usize,
     pub suppressed_undeterminable: usize,
+    pub suppressed_before_attestation: usize,
+    pub suppressed_disavowed: usize,
 }
 
 /// THE LEDGER: the prefix → binding walk and the endpoint deposits per doc
@@ -180,17 +181,18 @@ impl Ledger {
         Some(Standing { prefix: prefix.clone(), current, history: entries.entries.clone() })
     }
 
-    /// The longest PROPER prefix of `prefix` with a standing — the parent a
-    /// depth address's walk reaches (REG-3.82); a prefix whose bindings are
-    /// all inert has none, and is no parent.
-    pub(crate) fn longest_bound_prefix(&self, prefix: &Address) -> Option<Address> {
+    /// THE PARENT PREFIX a depth address's walk reaches (REG-3.80,
+    /// REG-3.82): the longest PROPER prefix of `prefix` with a standing —
+    /// held or retired; a prefix whose bindings are all inert has none, and
+    /// is no parent.
+    pub(crate) fn parent_prefix(&self, prefix: &Address) -> Option<Address> {
         self.prefixes
             .iter()
-            .filter(|(bound, entries)| {
-                !entries.honored.is_empty() && *bound != prefix && is_prefix(bound.tumbler(), prefix.tumbler())
+            .filter(|(parent, entries)| {
+                !entries.honored.is_empty() && *parent != prefix && is_prefix(parent.tumbler(), prefix.tumbler())
             })
-            .max_by_key(|(bound, _)| bound.tumbler().len())
-            .map(|(bound, _)| bound.clone())
+            .max_by_key(|(parent, _)| parent.tumbler().len())
+            .map(|(parent, _)| parent.clone())
     }
 
     /// Every endpoint deposit in `home`, in journal order.
@@ -326,10 +328,11 @@ impl Index {
         self.ledger.standing(prefix)
     }
 
-    /// The longest PROPER prefix of `prefix` with a standing — the parent a
-    /// depth address's walk reaches (REG-3.82).
-    pub fn longest_bound_prefix(&self, prefix: &Address) -> Option<Address> {
-        self.ledger.longest_bound_prefix(prefix)
+    /// THE PARENT PREFIX a depth address's walk reaches (REG-3.80,
+    /// REG-3.82): the longest PROPER prefix of `prefix` with a standing —
+    /// held or retired.
+    pub fn parent_prefix(&self, prefix: &Address) -> Option<Address> {
+        self.ledger.parent_prefix(prefix)
     }
 
     /// Every endpoint deposit in `home`, in journal order.
@@ -368,10 +371,14 @@ impl Index {
     pub fn counts(&self) -> Counts {
         let mut c = self.ledger.counts();
         for s in &self.suppressed {
-            match s.cause {
+            match &s.cause {
                 Cause::Malformed(_) => c.suppressed_malformed += 1,
-                Cause::Unsigned => c.suppressed_unsigned += 1,
-                Cause::UndeterminableHere => c.suppressed_undeterminable += 1,
+                Cause::Verdict(Verdict::Unsigned) => c.suppressed_unsigned += 1,
+                Cause::Verdict(Verdict::UndeterminableHere) => c.suppressed_undeterminable += 1,
+                Cause::Verdict(Verdict::BeforeAttestation) => c.suppressed_before_attestation += 1,
+                Cause::Verdict(Verdict::Disavowed) => c.suppressed_disavowed += 1,
+                // SIGNED admits; the gate never keeps a signed record out.
+                Cause::Verdict(Verdict::Signed(_)) => {}
             }
         }
         c
@@ -384,7 +391,6 @@ mod tests {
 
     use super::*;
     use crate::parse_address;
-    use crate::state::Verdict;
 
     fn a(s: &str) -> Address {
         parse_address(s).unwrap()
@@ -449,10 +455,10 @@ mod tests {
         assert_eq!(ledger.standing(&a("1.5")).unwrap().current.link, a(&l(8)));
         assert_eq!(ledger.standing(&a("1.7")), None, "an inert binding alone is no standing");
         assert_eq!(ledger.standing(&a("1.8")), None);
-        assert_eq!(ledger.longest_bound_prefix(&a("1.5.3")), Some(a("1.5")));
-        assert_eq!(ledger.longest_bound_prefix(&a("1.5")), None, "a proper prefix alone");
-        assert_eq!(ledger.longest_bound_prefix(&a("1.7.1")), None, "a prefix with no standing is no parent");
-        assert_eq!(ledger.longest_bound_prefix(&a("1.8.1")), None);
+        assert_eq!(ledger.parent_prefix(&a("1.5.3")), Some(a("1.5")));
+        assert_eq!(ledger.parent_prefix(&a("1.5")), None, "a proper prefix alone");
+        assert_eq!(ledger.parent_prefix(&a("1.7.1")), None, "a prefix with no standing is no parent");
+        assert_eq!(ledger.parent_prefix(&a("1.8.1")), None);
         assert_eq!(ledger.counts().honored_bindings, 5);
     }
 
@@ -483,18 +489,23 @@ mod tests {
 
     /// THE INDEX is the ledger behind the gate: what the gate passes folds
     /// by the ledger's rule, and what it keeps out is read back in journal
-    /// order and counted by cause beside the ledger's counts.
+    /// order and counted by cause beside the ledger's counts — each verdict
+    /// but SIGNED counted as itself, never as another.
     #[test]
     fn the_index_counts_what_the_gate_kept_out_beside_the_ledger() {
         let mut index = Index::new();
         assert!(index.fold_binding(binding(10, "1.0.1.0.1.0.2.1", "1.5", Some("1.0.2"), None)));
         let out = |at: u64, cause| Suppressed { position: at, link: a(&format!("1.0.1.0.1.0.2.{at}")), kind: BodyKind::Binding, cause };
-        index.suppress(out(11, Cause::Unsigned));
-        index.suppress(out(12, Cause::UndeterminableHere));
-        assert_eq!(index.suppressed().iter().map(|s| s.position).collect::<Vec<_>>(), [11, 12]);
+        index.suppress(out(11, Cause::Verdict(Verdict::Unsigned)));
+        index.suppress(out(12, Cause::Verdict(Verdict::UndeterminableHere)));
+        index.suppress(out(13, Cause::Verdict(Verdict::Disavowed)));
+        index.suppress(out(14, Cause::Verdict(Verdict::BeforeAttestation)));
+        index.suppress(out(15, Cause::Malformed(skep_registry::Refusal::NotCanonical)));
+        assert_eq!(index.suppressed().iter().map(|s| s.position).collect::<Vec<_>>(), [11, 12, 13, 14, 15]);
         let c = index.counts();
         assert_eq!((c.prefixes, c.bindings, c.honored_bindings), (1, 1, 1));
-        assert_eq!((c.suppressed_unsigned, c.suppressed_undeterminable, c.suppressed_malformed), (1, 1, 0));
+        assert_eq!((c.suppressed_unsigned, c.suppressed_undeterminable, c.suppressed_malformed), (1, 1, 1));
+        assert_eq!((c.suppressed_disavowed, c.suppressed_before_attestation), (1, 1), "a verdict counted as itself");
         assert!(index.standing(&a("1.5")).is_some());
     }
 }

@@ -21,8 +21,8 @@ use crate::{hex_of, open, standing, INTERVAL};
 fn the_identifier_is_unpredictable_and_answers_to_its_key_alone() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = open(&dir.path().join("blobs"), 0);
-    let a = store.create_upload("a", "blake3", 5, INTERVAL, None).unwrap();
-    let b = store.create_upload("a", "blake3", 5, INTERVAL, None).unwrap();
+    let a = store.create_upload("a", "blake3", 5, 0, INTERVAL).unwrap();
+    let b = store.create_upload("a", "blake3", 5, 0, INTERVAL).unwrap();
     assert_ne!(a.id, b.id);
     assert_eq!(a.id.to_hex().len(), 32);
     assert!(a.id.to_hex().bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)));
@@ -61,7 +61,7 @@ fn a_byte_is_received_once_durable_and_a_resume_continues_from_the_records_offse
     let root = dir.path().join("blobs");
     let store = open(&root, 0);
     let length = SYNC_GRAIN + 100;
-    let rec = store.create_upload("k", "blake3", length, INTERVAL, None).unwrap();
+    let rec = store.create_upload("k", "blake3", length, 0, INTERVAL).unwrap();
     store.resume("k", &rec.id, 0, 10).unwrap();
     // Short of the grain: written, not received.
     store.append("k", &rec.id, &[1u8; 100], 10, INTERVAL).unwrap();
@@ -92,15 +92,55 @@ fn a_byte_is_received_once_durable_and_a_resume_continues_from_the_records_offse
     let r = store.settle("k", &rec.id, 40, INTERVAL).unwrap();
     assert_eq!(r.offset, length);
     assert_eq!(r.expires, 40 + INTERVAL);
-    // One byte more is refused, nothing written.
+    // The settle ended that request; the next resumes at the length, and
+    // one byte more is refused, nothing written.
+    store.resume("k", &rec.id, length, 41).unwrap();
     assert!(matches!(store.append("k", &rec.id, &[5u8], 41, INTERVAL), Err(BlobError::Length { .. })));
-    let fin = store.finish("k", &rec.id, 50, 50 + INTERVAL).unwrap();
+    let fin = store.finish("k", &rec.id, 50, INTERVAL).unwrap();
     let mut whole = vec![1u8; 100];
     whole.extend(rest);
     whole.extend([4u8; 100]);
     assert_eq!(fin.hex, hex_of(&whole), "the hash covers the bytes as cut back and continued");
     assert_eq!(fs::read(store.blob_path("blake3", &fin.hex).unwrap()).unwrap(), whole);
     assert!(!partial.exists());
+}
+
+/// (3) ONE HANDLE PER REQUEST: a resume opens the partial for the request
+/// that resumes it, and the request's end closes it — a settle short of the
+/// length, a finish, an end, a release for a request cut short — so no file
+/// stays open for an upload no request is streaming. Another key's settle
+/// closes nothing of this key's; and past its settle a request appends
+/// nothing until the next resume opens the partial again.
+#[test]
+fn no_handle_outlives_the_request_that_opened_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = open(&dir.path().join("blobs"), 0);
+    let rec = store.create_upload("k", "blake3", 10, 0, INTERVAL).unwrap();
+    store.resume("k", &rec.id, 0, 1).unwrap();
+    store.append("k", &rec.id, b"first", 1, INTERVAL).unwrap();
+    assert_eq!(store.handles_open(), 1, "the request streaming holds one");
+    assert!(matches!(store.settle("other", &rec.id, 1, INTERVAL), Err(BlobError::NoUpload)));
+    assert_eq!(store.handles_open(), 1, "another key's settle closes nothing of this key's");
+    let r = store.settle("k", &rec.id, 1, INTERVAL).unwrap();
+    assert_eq!(r.offset, 5);
+    assert_eq!(store.handles_open(), 0, "a settle short of the length closes it");
+    assert!(matches!(store.append("k", &rec.id, b"-", 1, INTERVAL), Err(BlobError::NotResumed)));
+    store.resume("k", &rec.id, 5, 2).unwrap();
+    store.append("k", &rec.id, b"-last", 2, INTERVAL).unwrap();
+    let fin = store.finish("k", &rec.id, 2, INTERVAL).unwrap();
+    assert_eq!(fin.hex, hex_of(b"first-last"));
+    assert_eq!(store.handles_open(), 0, "and so does a finish");
+    // An end, and a release for a request cut short, close theirs too.
+    let ended = standing(&store, "k", 10, b"", 3);
+    store.resume("k", &ended.id, 0, 3).unwrap();
+    store.end_upload("k", &ended.id, 3).unwrap();
+    assert_eq!(store.handles_open(), 0, "an end closes it");
+    let cut = standing(&store, "k", 10, b"", 3);
+    store.resume("k", &cut.id, 0, 3).unwrap();
+    store.append("k", &cut.id, b"cut", 3, INTERVAL).unwrap();
+    store.release(&cut.id);
+    assert_eq!(store.handles_open(), 0, "a release closes it");
+    assert_eq!(store.upload("k", &cut.id, 3).unwrap().offset, 0, "unsettled: nothing received");
 }
 
 /// (4) AT OPEN THE TWO ARE RECONCILED BOTH WAYS, and their lengths: a
@@ -173,7 +213,7 @@ fn open_reconciles_the_partials_and_the_records_both_ways() {
         store.append("k", &r.id, tail, now, INTERVAL).unwrap();
         store.append("k", &r.id, &fill, now, INTERVAL).unwrap();
         store.settle("k", &r.id, now, INTERVAL).unwrap();
-        let fin = store.finish("k", &r.id, now, now + INTERVAL).unwrap();
+        let fin = store.finish("k", &r.id, now, INTERVAL).unwrap();
         let mut whole = head.to_vec();
         whole.extend_from_slice(tail);
         whole.extend(fill);

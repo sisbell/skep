@@ -82,8 +82,7 @@ impl fmt::Debug for UploadId {
 
 /// One standing upload's record — the identifier bound to its uploader's
 /// key, the designation, its declared length, the DURABLE offset (bytes
-/// received), the expiry fixed from the last byte received, and a repair's
-/// named cell (carried for the repair PUT; this crate reads nothing of it).
+/// received), and the expiry fixed from the last byte received.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UploadRecord {
     pub id: UploadId,
@@ -92,7 +91,6 @@ pub struct UploadRecord {
     pub length: u64,
     pub offset: u64,
     pub expires: u64,
-    pub repair: Option<String>,
 }
 
 impl UploadRecord {
@@ -105,7 +103,6 @@ impl UploadRecord {
             "key": self.key,
             "length": self.length,
             "offset": self.offset,
-            "repair": self.repair,
         })
     }
 
@@ -133,7 +130,6 @@ fn parse_line(v: &Value) -> Option<Line> {
         length: v.get("length")?.as_u64()?,
         offset: v.get("offset")?.as_u64()?,
         expires: v.get("expires")?.as_u64()?,
-        repair: v.get("repair").and_then(Value::as_str).map(str::to_string),
     }))
 }
 
@@ -230,11 +226,12 @@ impl UploadRecords {
         self.records.values()
     }
 
-    /// Append `record` as the upload's current line; `sync` fsyncs the
-    /// log, which a durable offset owes (the byte is received once the
-    /// partial AND its record's offset are on disk).
-    pub fn put(&mut self, record: UploadRecord, sync: bool) -> io::Result<()> {
-        self.log.append(&record.value(), sync)?;
+    /// Append `record` as the upload's current line, SYNCED: a record's
+    /// line carries the upload's birth, the offset received, or that offset
+    /// set back at open, and a byte counts as received only once the
+    /// partial AND its record's offset are on disk.
+    pub fn put(&mut self, record: UploadRecord) -> io::Result<()> {
+        self.log.append(&record.value(), true)?;
         self.records.insert(record.id, record);
         Ok(())
     }

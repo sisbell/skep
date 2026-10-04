@@ -221,13 +221,7 @@ impl Daemon {
         if let Err(scope) = self.media.admit_declared(principal, length, now) {
             return refuse_deposit(scope, false, 0);
         }
-        let record = match self.media.store().create_upload(
-            key,
-            DESIGNATION,
-            length,
-            now.saturating_add(limits.lease_interval_ms),
-            None,
-        ) {
+        let record = match self.media.store().create_upload(key, DESIGNATION, length, now, limits.lease_interval_ms) {
             Ok(r) => r,
             Err(e) => return refuse(TransportError::BlobIo, Some(&e.to_string())),
         };
@@ -398,8 +392,7 @@ impl Daemon {
             let _ = store.end_upload(key, &id, now);
             return with_signal(refuse_upload("unauthenticated"), resolved.closed);
         }
-        let lease_expires = now.saturating_add(self.media.limits().lease_interval_ms);
-        match store.finish(key, &id, now, lease_expires) {
+        match store.finish(key, &id, now, self.media.limits().lease_interval_ms) {
             Ok(finished) => finish_reply(&finished),
             Err(e) => {
                 store.release(&id);

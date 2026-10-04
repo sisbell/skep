@@ -68,6 +68,13 @@ impl Lease {
 /// lease lapsed within the horizon (its expiry named, so a client's resume
 /// can be written against it), or none — the one answer for "never
 /// deposited", "lapsed past the horizon" and "another key's" alike.
+///
+/// Read off the key's record alone: `Live` says the record holds, never
+/// that the file does. A caller acting on the deposit's bytes reads the
+/// file at `size` too ([`Store::blob_len`](crate::Store::blob_len)) — a
+/// live lease over a file absent or not whole reads as lapsed, as the
+/// daemon's binding and deposit read take it (`media.md` Op inventory 1, "A
+/// LIVE LEASE OVER A FILE THAT IS NOT THERE READS AS LAPSED").
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LeaseState {
     Live { size: u64, expires: u64 },

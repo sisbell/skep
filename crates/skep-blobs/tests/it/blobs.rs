@@ -7,6 +7,8 @@
 //! target; the free-space read.
 
 use std::fs;
+use std::sync::{Arc, Barrier};
+use std::thread;
 
 use skep_blobs::{BlobError, LeaseState, Step};
 
@@ -40,11 +42,11 @@ fn a_failure_at_each_step_of_the_finish_leaves_what_the_order_promises() {
         let outcome = {
             let store = open(&root, now);
             store.fail_at(Some(*step));
-            let rec = store.create_upload("k", "blake3", bytes.len() as u64, now + INTERVAL, None).unwrap();
+            let rec = store.create_upload("k", "blake3", bytes.len() as u64, now, INTERVAL).unwrap();
             store.resume("k", &rec.id, 0, now).unwrap();
             store.append("k", &rec.id, &bytes, now, INTERVAL).unwrap();
             store.settle("k", &rec.id, now, INTERVAL).unwrap();
-            let err = store.finish("k", &rec.id, now, now + INTERVAL).expect_err("the injected failure");
+            let err = store.finish("k", &rec.id, now, INTERVAL).expect_err("the injected failure");
             assert!(matches!(err, BlobError::Io(_)), "{step:?}: {err}");
             // Before the lease's sync, the key holds NO lease — whatever
             // the directory holds — and the file is present only from the
@@ -110,10 +112,11 @@ fn a_failure_at_each_step_of_the_finish_leaves_what_the_order_promises() {
 /// among them — leaves the hash holding the OLD bytes whole before the
 /// rename and the NEW bytes whole after it, never an absent name; the
 /// aside stands from the link until the deferred unlink and is gone or
-/// present, never a third state; a failure at the deferred unlink itself
-/// leaves the answer given and the aside queued for the next drain; and
-/// the reopen removes every aside a failure left, the hash's bytes as the
-/// step left them.
+/// present, never a third state; a finish that fails past its link queues
+/// no aside, leaving it to the pruner's pass and to open; a failure at the
+/// deferred unlink itself leaves the answer given and the aside queued for
+/// the next drain; and the reopen removes every aside a failure left, the
+/// hash's bytes as the step left them.
 #[test]
 fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
     let steps = [
@@ -136,11 +139,11 @@ fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
             let store = open(&root, now);
             store.install("blake3", &hex, &wrong).unwrap();
             store.fail_at(Some(*step));
-            let rec = store.create_upload("k", "blake3", right.len() as u64, now + INTERVAL, None).unwrap();
+            let rec = store.create_upload("k", "blake3", right.len() as u64, now, INTERVAL).unwrap();
             store.resume("k", &rec.id, 0, now).unwrap();
             store.append("k", &rec.id, &right, now, INTERVAL).unwrap();
             store.settle("k", &rec.id, now, INTERVAL).unwrap();
-            let finish = store.finish("k", &rec.id, now, now + INTERVAL);
+            let finish = store.finish("k", &rec.id, now, INTERVAL);
             let at_hash = fs::read(store.blob_path("blake3", &hex).unwrap()).expect("the hash is never without a file");
             let asides = store.asides_of("blake3").unwrap();
             match step {
@@ -158,8 +161,12 @@ fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
                 Step::DirSync | Step::LeaseSync | Step::RecordRetire => {
                     assert!(matches!(finish, Err(BlobError::Io(_))), "{step:?}");
                     assert_eq!(at_hash, right, "{step:?}: the new bytes stand past the rename");
-                    assert_eq!(asides.len(), 1, "{step:?}: the aside stands until the deferred unlink");
-                    assert_eq!(store.asides_pending(), 1, "{step:?}: queued for the drain");
+                    assert_eq!(asides.len(), 1, "{step:?}: the aside stands beside them");
+                    assert_eq!(
+                        store.asides_pending(),
+                        0,
+                        "{step:?}: left to the pruner's pass and to open — only an answered replace is queued"
+                    );
                 }
                 Step::UnlinkAside => {
                     // The finish ANSWERS: the unlink is no step of it.
@@ -202,6 +209,76 @@ fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
         assert_eq!(store.retire_asides().unwrap(), 1, "one aside per replace, whatever the bytes replaced");
         assert!(store.asides_of("blake3").unwrap().is_empty());
     }
+}
+
+/// AN ASIDE IS QUEUED ONLY WHEN ITS FINISH ANSWERS ("NO ANSWER OF THE
+/// UPLOAD SAYS WHETHER THE FILE WAS ALREADY HERE"): the queue is drained on
+/// whichever thread asks, so an aside it held between the link and the
+/// answer could be unlinked there, leaving the old file one link for the
+/// rename to free inside the answer. A replace held before its last step
+/// has linked its aside and queued nothing; answered, it has queued the one.
+#[test]
+fn an_aside_is_queued_only_when_its_finish_answers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = open(&dir.path().join("blobs"), 0);
+    let right = b"the picture's bytes".to_vec();
+    let hex = hex_of(&right);
+    store.install("blake3", &hex, b"garbage under the right name").unwrap();
+    let parked = Arc::new(Barrier::new(2));
+    let resumed = Arc::new(Barrier::new(2));
+    let (at_hold, after) = (parked.clone(), resumed.clone());
+    store.hold_at(
+        Step::RecordRetire,
+        Box::new(move || {
+            at_hold.wait();
+            after.wait();
+        }),
+    );
+    let (linked, queued, finished) = thread::scope(|s| {
+        let finishing = s.spawn(|| put_whole(&store, "k", &right, 10));
+        parked.wait();
+        // Reads alone while the finish is held, and no assertion: a drain
+        // would wait for good on the seam's lock the held finish holds, and
+        // a failed assertion here would leave the finish parked, the scope
+        // waiting on it.
+        let seen = (store.asides_of("blake3").unwrap().len(), store.asides_pending());
+        resumed.wait();
+        (seen.0, seen.1, finishing.join())
+    });
+    assert_eq!(linked, 1, "held before its last step, the replace has linked its aside");
+    assert_eq!(queued, 0, "and queued nothing before its answer");
+    assert_eq!(finished.expect("the held finish answers").hex, hex);
+    assert_eq!(store.asides_pending(), 1, "answered: queued for the drain");
+    assert_eq!(store.retire_asides().unwrap(), 1);
+    assert!(store.asides_of("blake3").unwrap().is_empty());
+}
+
+/// A FINISH THAT FAILED PAST ITS RENAME CLOSES ITS HANDLE (clause (7)): from
+/// the rename on, the partial's open file IS the hash's file, so a handle
+/// kept there would let the next resume cut the hash's bytes back to the
+/// record's offset and stream the next request's bytes into them. The
+/// bytes here were never settled — the record's offset stands at 0 — and
+/// the resume after the failure finds no partial, answering I/O, the
+/// hash's bytes untouched.
+#[test]
+fn a_finish_that_failed_past_its_rename_leaves_no_handle_on_the_hashs_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = open(&dir.path().join("blobs"), 0);
+    let bytes = b"the bytes the rename named".to_vec();
+    let hex = hex_of(&bytes);
+    let rec = store.create_upload("k", "blake3", bytes.len() as u64, 1, INTERVAL).unwrap();
+    store.resume("k", &rec.id, 0, 1).unwrap();
+    store.append("k", &rec.id, &bytes, 1, INTERVAL).unwrap();
+    assert_eq!(store.upload("k", &rec.id, 1).unwrap().offset, 0, "short of the grain: written, not received");
+    store.fail_at(Some(Step::DirSync));
+    assert!(matches!(store.finish("k", &rec.id, 1, INTERVAL), Err(BlobError::Io(_))));
+    assert_eq!(store.handles_open(), 0, "the finish's handle closed with its failure");
+    let at_hash = store.blob_path("blake3", &hex).unwrap();
+    assert_eq!(fs::read(&at_hash).unwrap(), bytes, "the rename named the bytes");
+    store.fail_at(None);
+    assert!(matches!(store.resume("k", &rec.id, 0, 2), Err(BlobError::Io(_))), "the partial was renamed away");
+    assert_eq!(store.handles_open(), 0);
+    assert_eq!(fs::read(&at_hash).unwrap(), bytes, "the hash's file untouched");
 }
 
 /// REPLACE, NOT NO-OP (Op inventory 1): a file holding the WRONG bytes

@@ -507,11 +507,11 @@ mod tests {
             let key = MediaGate::key(p);
             let now = gate.now_ms();
             let store = gate.store();
-            let rec = store.create_upload(&key, "blake3", 5, now + interval, None).unwrap();
+            let rec = store.create_upload(&key, "blake3", 5, now, interval).unwrap();
             store.resume(&key, &rec.id, 0, now).unwrap();
             store.append(&key, &rec.id, bytes, now, interval).unwrap();
             store.settle(&key, &rec.id, now, interval).unwrap();
-            store.finish(&key, &rec.id, now, now + interval).unwrap();
+            store.finish(&key, &rec.id, now, interval).unwrap();
         };
         assert_eq!(door(insert(&draft2, real()), SYSTEM_PRINCIPAL), Some(MediaRefusal::UnboundCell));
         assert_eq!(door(shot2(), SYSTEM_PRINCIPAL), Some(MediaRefusal::UnboundCell));

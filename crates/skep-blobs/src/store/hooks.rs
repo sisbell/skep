@@ -4,12 +4,13 @@
 //! closure (the daemon's SIGKILL harness parks the thread in it and kills
 //! the process) or an injected FAILURE answers an I/O error in the step's
 //! place (the fsync-order suite observes what each failure leaves). And the
-//! three methods only a test calls: [`Store::install`], which plants a file
+//! four methods only a test calls: [`Store::install`], which plants a file
 //! under a hex its bytes need not hash to; [`Store::written`], the bytes a
-//! resumed upload has written, durable or not, answered to its own key
-//! alone; and [`Store::asides_pending`], the deferred unlink's queue. A
-//! build without the feature carries none of it, and its gate before a step
-//! is a no-op (`store.rs`).
+//! request's open upload has written, durable or not, answered to its own
+//! key alone; [`Store::asides_pending`], the deferred unlink's queue; and
+//! [`Store::handles_open`], the handles requests hold. A build without the
+//! feature carries none of it, and its gate before a step is a no-op
+//! (`store.rs`).
 
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -73,9 +74,9 @@ impl Store {
         fsync_dir(&self.root)
     }
 
-    /// TEST HOOK (`test-hooks`): the bytes written so far of a resumed
-    /// upload (durable or not), or the record's offset where the upload is
-    /// not resumed here — the suites' read of bytes written and not yet
+    /// TEST HOOK (`test-hooks`): the bytes written so far of the upload a
+    /// request has open (durable or not), or the record's offset where no
+    /// request has it open — the suites' read of bytes written and not yet
     /// received. `None` for an identifier `key`'s records do not name, as
     /// [`Store::append`] answers it; the daemon takes the count from
     /// [`Store::append`]'s answer instead.
@@ -91,6 +92,13 @@ impl Store {
     /// not yet unlinked — what [`Store::retire_asides`] will take.
     pub fn asides_pending(&self) -> usize {
         self.asides.lock().len()
+    }
+
+    /// TEST HOOK (`test-hooks`): the handles this process holds open — one
+    /// per upload a request has resumed and not yet settled, finished,
+    /// ended or released.
+    pub fn handles_open(&self) -> usize {
+        self.live.lock().len()
     }
 }
 

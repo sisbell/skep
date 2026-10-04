@@ -2,11 +2,13 @@
 //! spellings a designation and a hex name must have, the ASIDE name a
 //! replaced file carries until the deferred unlink, the listings of the
 //! directories that hold those names and open's sweep of the asides
-//! ([`remove_asides`]), the directory fsync every install order under the
-//! root ends in (a rename is durable only at its directory's fsync —
-//! `media.md` Op inventory 1; the register M-I5 (a)), and the floor's one
-//! read of the host, the volume's free space. The order that installs a
-//! file is the store's (`store.rs`); the logs' is `jsonl.rs`'s.
+//! ([`remove_asides`]), the removal of a name another remover may have
+//! taken first ([`remove_if_present`]), the directory fsync every install
+//! order under the root ends in (a rename is durable only at its
+//! directory's fsync — `media.md` Op inventory 1; the register M-I5 (a)),
+//! and the floor's one read of the host, the volume's free space. The order
+//! that installs a file is the store's (`store.rs`); the logs' is
+//! `jsonl.rs`'s.
 
 use std::fs::{self, FileType};
 use std::io;
@@ -109,6 +111,18 @@ pub(crate) fn remove_asides(root: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Remove the file at `path`: `Ok(true)` where a file went, `Ok(false)`
+/// where none stood — a name another remover took first (the pruner's
+/// pass, open's sweep, the deferred unlink) leaves nothing to do — and any
+/// other failure answered.
+pub(crate) fn remove_if_present(path: &Path) -> io::Result<bool> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
+    }
 }
 
 /// Fsync a directory, so entry creations, removals and renames inside it

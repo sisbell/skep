@@ -7,12 +7,12 @@
 //! UPLOAD RECORDS in `<root>/uploads.log` and the LEASE LOG in
 //! `<root>/leases.log`. The daemon hands this crate `blobs/` inside the
 //! board's data directory and nothing else of itself: the crate knows NO
-//! principal (a key is an opaque string), NO lock (the ordering a finish
-//! needs under the daemon's credential-lock read arm is the caller's to
-//! hold around [`Store::finish`]) and NO limits record (it answers pending
-//! bytes and the volume's free space; what bounds them is policy, the
-//! daemon's). What it promises is the ORDER of its own acts and what each
-//! leaves behind on a crash:
+//! principal (a key is an opaque string), NO lock — it asks its caller for
+//! one exclusion, no [`Store::unlink_blob`] or [`Store::remove_aside`]
+//! while a [`Store::finish`] runs (see there) — and NO limits record (it
+//! answers pending bytes and the volume's free space; what bounds them is
+//! policy, the daemon's). What it promises is the ORDER of its own acts and
+//! what each leaves behind on a crash:
 //!
 //! * THE PUT's ORDER ([`Store::finish`]): the partial fsynced; where the
 //!   name exists, the old file LINKED ASIDE (a second name no hex spells,
@@ -20,11 +20,13 @@
 //!   `<designation>/<hex>` — REPLACE where the name exists, never a no-op —
 //!   that directory fsynced, the root fsynced where this process created
 //!   the designation directory, THEN the lease appended and synced, THEN
-//!   the upload record retired, THEN the answer — and the aside UNLINKED
-//!   AFTER the answer ([`Store::retire_asides`]), off the request's path.
-//!   A crash leaves at worst a file with no lease (unreferenced, prunable),
-//!   a retired-by-open record beside a leased file, or an aside open
-//!   removes, and never a lease naming bytes the restart does not hold.
+//!   the upload record retired, THEN the answer — the aside queued as the
+//!   finish answers and never sooner, and UNLINKED AFTER the answer
+//!   ([`Store::retire_asides`]), off the request's path, on whatever thread
+//!   drains the queue. A crash leaves at worst a file with no lease
+//!   (unreferenced, prunable), a retired-by-open record beside a leased
+//!   file, or an aside open removes, and never a lease naming bytes the
+//!   restart does not hold.
 //! * THE PRUNER's READS AND ACTS: the designation directories, the files at
 //!   hex names and the asides ([`Store::designations`], [`Store::blobs_of`],
 //!   [`Store::asides_of`]), whether ANY key holds a live lease on a file
@@ -35,10 +37,11 @@
 //!   own lock around exactly one.
 //! * A BYTE IS RECEIVED ONCE IT IS DURABLE: the partial is fsynced at
 //!   [`SYNC_GRAIN`] and at [`Store::settle`], and the record's offset and
-//!   expiry are written after each sync. An upload open in this process
-//!   holds the count its durable hash covers, so a resume restores no hash
-//!   past the record's offset, and a write or sync that failed is cut back
-//!   at the next resume before another lands.
+//!   expiry are written after each sync. A HANDLE LIVES FOR ONE REQUEST:
+//!   every resume opens the partial afresh at the record's offset, cutting
+//!   off whatever an earlier request left past it, and the settle, finish
+//!   or end that closes the request closes the handle — so no file stays
+//!   open for an upload no request is streaming.
 //! * ONE ANSWER PER KEY: an identifier the asking key's records do not
 //!   name is [`BlobError::NoUpload`] whoever minted it (the upload records
 //!   answer by key); a hash the key holds no lease on is
@@ -54,9 +57,9 @@
 //!
 //! The `test-hooks` feature compiles in the test seam (`store/hooks.rs`):
 //! the hazard seam — a hold or an injected failure at a named [`Step`] of
-//! the finish — and the three methods only a test calls, `Store::install`,
-//! `Store::written` and `Store::asides_pending`. A build without it carries
-//! none of them.
+//! the finish — and the four methods only a test calls, `Store::install`,
+//! `Store::written`, `Store::asides_pending` and `Store::handles_open`. A
+//! build without it carries none of them.
 
 #![forbid(unsafe_code)]
 
@@ -76,8 +79,8 @@ mod jsonl;
 mod uploads;
 // The lease log, `leases.log`: the leases, their three states, the horizon.
 mod lease;
-// The partials, `.upload-<identifier>`: their name, an upload open in this
-// process (`Live`, the bytes written and their hash, kept true across a
+// The partials, `.upload-<identifier>`: their name, an upload open for one
+// request (`Live`, the bytes written and their hash, kept true across a
 // failed write), and the walk at open that reconciles them with the
 // records.
 mod partials;

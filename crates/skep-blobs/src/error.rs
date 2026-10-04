@@ -26,8 +26,8 @@ pub enum BlobError {
     /// length — a caller's defect, never a wire state: the daemon finishes
     /// only where the offset reaches the length (clause (7)).
     Incomplete { offset: u64, length: u64 },
-    /// `append` or `finish` on an upload no `resume` opened in this
-    /// process — a caller's defect.
+    /// `append` on an upload no resume has opened for this request — a
+    /// caller's defect.
     NotResumed,
 }
 
@@ -51,7 +51,7 @@ impl fmt::Display for BlobError {
             BlobError::Incomplete { offset, length } => {
                 write!(f, "a finish at offset {offset} of a length-{length} upload")
             }
-            BlobError::NotResumed => f.write_str("the upload was not resumed in this process"),
+            BlobError::NotResumed => f.write_str("the upload has no handle open: resume it first"),
         }
     }
 }

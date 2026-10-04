@@ -379,11 +379,11 @@ fn pruner_drain_keeps_plain_writes_and_a_retirement_inside_e2() {
             for i in 0..n {
                 // One distinct file per lease: the first bytes carry the index.
                 buf[..8].copy_from_slice(&(i as u64).to_le_bytes());
-                let rec = store.create_upload(&key, "blake3", size as u64, now + lease, None).unwrap();
+                let rec = store.create_upload(&key, "blake3", size as u64, now, lease).unwrap();
                 store.resume(&key, &rec.id, 0, now).unwrap();
                 store.append(&key, &rec.id, &buf, now, lease).unwrap();
                 store.settle(&key, &rec.id, now, lease).unwrap();
-                store.finish(&key, &rec.id, now, now + lease).unwrap();
+                store.finish(&key, &rec.id, now, lease).unwrap();
             }
         }
         println!("drain {label}: {n} files seeded in {:?}", seeding.elapsed());

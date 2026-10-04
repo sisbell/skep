@@ -1,8 +1,10 @@
 //! THE LEASE LOG on the honest-null arm (M-I5 (c); `media.md` Op inventory
 //! 1, "EACH KEY's CURRENT RECORD IS ITS LATEST, AND OPEN COMPACTS BOTH
-//! STORES"; "A LIVE LEASE OVER A FILE THAT IS NOT THERE READS AS LAPSED"):
-//! the three states and the horizon, the latest-wins re-PUT, the compaction
-//! at open, the pending bytes, and the torn tail.
+//! STORES"): the three states and the horizon, read off the record alone,
+//! the latest-wins re-PUT, the compaction at open, the pending bytes, and
+//! the torn tail. "A LIVE LEASE OVER A FILE THAT IS NOT THERE READS AS
+//! LAPSED" is the daemon's rule, built on this store's `lease` and
+//! `blob_len`; the store's lease answers the record and nothing of the file.
 
 use std::fs;
 
@@ -12,7 +14,8 @@ use crate::{hex_of, open, put_whole, HORIZON, INTERVAL};
 
 /// LIVE within the interval, LAPSED past it within the HORIZON (its expiry
 /// named), NONE past the horizon — and NONE for another key at every
-/// moment, whatever the directory holds.
+/// moment, whatever the directory holds. Each answer is the record's: a
+/// live lease whose file is gone still answers LIVE.
 #[test]
 fn a_lease_is_live_then_lapsed_within_the_horizon_then_none() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -30,6 +33,12 @@ fn a_lease_is_live_then_lapsed_within_the_horizon_then_none() {
     }
     assert_eq!(store.leases_of("k", 100), vec![skep_blobs::Lease { key: "k".into(), designation: "blake3".into(), hex: fin.hex.clone(), size: 5, expires }]);
     assert_eq!(store.leases_of("k", expires), vec![], "the deposit read lists live leases alone");
+    fs::remove_file(store.blob_path("blake3", &fin.hex).unwrap()).unwrap();
+    assert_eq!(
+        store.lease("k", "blake3", &fin.hex, 100),
+        LeaseState::Live { size: 5, expires },
+        "read off the record alone"
+    );
 }
 
 /// A re-PUT's lease REPLACES the one before whatever either's expiry: the
@@ -45,13 +54,14 @@ fn the_latest_lease_wins_and_open_compacts_to_it() {
         let store = open(&root, 0);
         let fin = put_whole(&store, "k", b"same bytes", 1_000);
         assert_eq!(fin.hex, hex);
-        // The same bytes again with an EARLIER expiry: the later line wins.
-        let rec = store.create_upload("k", "blake3", 10, 2_000 + INTERVAL, None).unwrap();
+        // The same bytes again with an EARLIER expiry — an interval of
+        // nothing: the later line wins.
+        let rec = store.create_upload("k", "blake3", 10, 2_000, INTERVAL).unwrap();
         store.resume("k", &rec.id, 0, 2_000).unwrap();
         store.append("k", &rec.id, b"same bytes", 2_000, INTERVAL).unwrap();
         store.settle("k", &rec.id, 2_000, INTERVAL).unwrap();
-        store.finish("k", &rec.id, 2_000, 500).unwrap();
-        assert_eq!(store.lease("k", "blake3", &hex, 2_001), LeaseState::Lapsed { expires: 500 });
+        store.finish("k", &rec.id, 2_000, 0).unwrap();
+        assert_eq!(store.lease("k", "blake3", &hex, 2_001), LeaseState::Lapsed { expires: 2_000 });
         // And a third time, the latest line again: live once more.
         put_whole(&store, "k", b"same bytes", 3_000);
         assert_eq!(store.lease("k", "blake3", &hex, 3_001), LeaseState::Live { size: 10, expires: 3_000 + INTERVAL });

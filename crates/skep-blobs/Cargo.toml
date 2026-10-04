@@ -12,13 +12,13 @@ readme = "README.md"
 # The test seam, `src/store/hooks.rs`: the hazard seam — HOLD the finish at
 # a named step (the SIGKILL harness parks there and kills the process) or
 # FAIL that step with an injected I/O error (the fsync-order test observes
-# what each failure leaves) — and the three methods only a test calls:
+# what each failure leaves) — and the four methods only a test calls:
 # `install`, which plants a file under a hash its bytes need not have,
-# `written` and `asides_pending`. DEFAULT-OFF and never enabled by a shipped
-# build: this crate's own tests turn it on through the self dev-dependency
-# below, skepd's tests on their `skep-blobs` line, and a build that compiles
-# no test compiles none of it — `scripts/gate-full.sh` checks the library
-# without it.
+# `written`, `asides_pending` and `handles_open`. DEFAULT-OFF and never
+# enabled by a shipped build: this crate's own tests turn it on through the
+# self dev-dependency below, skepd's tests on their `skep-blobs` line, and a
+# build that compiles no test compiles none of it — `scripts/gate-full.sh`
+# checks the library without it.
 test-hooks = []
 
 [dependencies]

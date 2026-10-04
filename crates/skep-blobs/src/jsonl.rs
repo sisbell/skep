@@ -58,19 +58,20 @@ impl Log {
 
     /// Append `v` as the log's next line — the line and its newline in one
     /// write, fsynced where `sync`, which a figure that must be durable
-    /// owes, flushed otherwise. A write or sync that FAILS is undone: the
-    /// file cut back to its whole lines and the cut synced, so a failed
-    /// append leaves the file as it found it — what each store's map, moved
-    /// only after an append returns, already assumes. Where the cut fails
-    /// too, the log stops and the append answers its own failure; a stopped
-    /// log refuses every later append.
+    /// owes, and left to the OS otherwise, for a line whose loss costs
+    /// nothing. A write or sync that FAILS is undone: the file cut back to
+    /// its whole lines and the cut synced, so a failed append leaves the
+    /// file as it found it — what each store's map, moved only after an
+    /// append returns, already assumes. Where the cut fails too, the log
+    /// stops and the append answers its own failure; a stopped log refuses
+    /// every later append.
     pub fn append(&mut self, v: &Value, sync: bool) -> io::Result<()> {
         self.append_by(v, |file, line| {
             file.write_all(line)?;
             if sync {
                 file.sync_all()
             } else {
-                file.flush()
+                Ok(())
             }
         })
     }

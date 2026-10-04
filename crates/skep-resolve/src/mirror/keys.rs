@@ -13,7 +13,7 @@
 use skep_address::{parent, Address, Level};
 use skep_identity::Enrolled;
 
-use super::{link_row, KeysAsOf, Mirror, MirrorError};
+use super::{Epoch, KeysAsOf, Mirror, MirrorError, Row};
 use crate::board::BoardError;
 
 impl Mirror {
@@ -29,7 +29,7 @@ impl Mirror {
     /// one as of the position; counting one too few would.
     pub(super) fn scan_credential_acts(&mut self) -> Result<(), MirrorError> {
         while self.scanned < self.rows.len() {
-            if let Some((at, link, home)) = link_row(&self.rows[self.scanned]) {
+            if let Row::Link { at, link, home } = Row::of(&self.rows[self.scanned]) {
                 if let Some(stored) = self.read_link(at, &link, &home)? {
                     let credential =
                         stored.ty.as_ref().is_some_and(|t| *t == self.types.enroll || *t == self.types.retire);
@@ -43,9 +43,10 @@ impl Mirror {
         Ok(())
     }
 
-    /// The latest credential position of `account` at or below `at`, or 0.
-    fn epoch_of(&self, account: &Address, at: u64) -> u64 {
-        self.epochs.get(account).and_then(|v| v.iter().rev().find(|p| **p <= at)).copied().unwrap_or(0)
+    /// The EPOCH of `account`'s table as of `at`: its latest credential
+    /// position at or below `at`, or 0.
+    fn epoch_of(&self, account: &Address, at: u64) -> Epoch {
+        Epoch(self.epochs.get(account).and_then(|v| v.iter().rev().find(|p| **p <= at)).copied().unwrap_or(0))
     }
 
     /// Whether a credential act of `account` lies in `(after, upto]` among
@@ -74,7 +75,7 @@ impl Mirror {
 
     /// The table of `account` at `epoch`, read for `at`: the cache's, else
     /// [`Mirror::read_keys_at`]'s, kept.
-    fn fetch_keys_epoch(&mut self, account: &Address, epoch: u64, at: u64) -> Result<Option<Vec<Enrolled>>, MirrorError> {
+    fn fetch_keys_epoch(&mut self, account: &Address, epoch: Epoch, at: u64) -> Result<Option<Vec<Enrolled>>, MirrorError> {
         if let Some(k) = self.fetched.keys.get(&(account.clone(), epoch)) {
             return Ok(Some(k.enrolled.clone()));
         }
@@ -141,7 +142,7 @@ impl Mirror {
 
     /// A table kept as `account`'s at `epoch`, read for `at`: held, and its
     /// line written to the fetch cache where the cache does not hold it.
-    fn keep_keys(&mut self, account: &Address, epoch: u64, at: u64, enrolled: Vec<Enrolled>) -> Result<(), MirrorError> {
+    fn keep_keys(&mut self, account: &Address, epoch: Epoch, at: u64, enrolled: Vec<Enrolled>) -> Result<(), MirrorError> {
         let line = self.fetched.keep_keys(KeysAsOf { account: account.clone(), epoch, at, enrolled });
         self.append_cache(line)
     }
@@ -154,7 +155,7 @@ impl Mirror {
     pub(super) fn genesis_keys(&mut self, account: &Address) -> Result<Option<Vec<Enrolled>>, MirrorError> {
         let Some(&genesis) = self.epochs.get(account).and_then(|acts| acts.first()) else { return Ok(None) };
         let Some(keys) = self.read_keys_at(account, genesis)? else { return Ok(None) };
-        self.keep_keys(account, genesis, genesis, keys.clone())?;
+        self.keep_keys(account, Epoch(genesis), genesis, keys.clone())?;
         Ok(Some(keys))
     }
 
@@ -209,6 +210,6 @@ mod tests {
         assert!(mirror.later_credential_act(&a("1.0.2.3"), 4, 6), "the seeding in the delegator's doc 1");
         assert!(!mirror.later_credential_act(&a("1.0.2.3"), 5, 6), "the interval is open below");
         assert!(!mirror.later_credential_act(&a("1.0.2"), 4, 6), "the act is the subject's, not its delegator's");
-        assert_eq!(mirror.epoch_of(&a("1.0.2.3"), 9), 5);
+        assert_eq!(mirror.epoch_of(&a("1.0.2.3"), 9), Epoch(5));
     }
 }

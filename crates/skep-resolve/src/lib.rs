@@ -11,10 +11,12 @@
 //! * `hint` — THE ROOT HINT (REG-3.2, REG-3.3): the root's origin(s) and the
 //!   realm id (`RealmId`: the genesis key-set fingerprint, REG-3.39, and the
 //!   fork point beside it, REG-3.40), ONE overridable config value, parsed
-//!   from one line and from a struct; the mirror's realm check compares the
-//!   id's genesis fingerprint at the base (REG-3.42).
-//! * `http` — the written-out HTTP/1.1 client (`Transport`, `Http`): plain
-//!   `http` alone, an `https` root a transport this build does not hold.
+//!   from one line (`RootHint::parse`, `str::parse`) or built from its parts
+//!   (`RootHint::new`), never with no origin; the mirror's realm check
+//!   compares the id's genesis fingerprint at the base (REG-3.42).
+//! * `http` — the written-out HTTP/1.1 client (`Transport`, `Method`,
+//!   `Http`): plain `http` alone, an `https` root a transport this build
+//!   does not hold.
 //! * `board` — the typed reads over any transport (`Board`: the feed's
 //!   pages, `/op`, `/op-at`, `/chain`), with the count of every read made,
 //!   and every value the resolver takes on the board's word typed where the
@@ -67,14 +69,14 @@ mod walk;
 
 pub use board::{Board, BoardError, Page, Reads};
 pub use hint::{HintError, RealmId, RootHint};
-pub use http::{dial_http, Dial, Http, Transport, TransportError};
+pub use http::{dial_http, Dial, Http, Method, Transport, TransportError};
 pub use index::{Cause, Counts, Index, Suppressed};
 pub use mirror::{
     account_of_document, ChainWalkStats, Mirror, MirrorError, Opened, Refusal, Stats, FEED_COPY, FETCH_CACHE,
 };
 pub use origin::{
     judge_member, routable, walk_members, EndpointDial, EndpointWalk, MemberKind, MemberOutcome,
-    NameResolver, Origin, SystemResolver, Term, Transports,
+    NameResolver, NotCanonical, Origin, SystemResolver, Term, Transports,
 };
 pub use state::{
     BindingRecord, EndpointRecord, Judged, Resolution, Standing, Successor, Unreachable, Verdict,
@@ -101,18 +103,55 @@ pub fn parse_address(s: &str) -> Option<Address> {
     validate(Tumbler::new(comps?).ok()?).ok()
 }
 
-/// The auto traits a host holds this crate's values to. A mirror stays on
-/// the thread that opened it: it holds the caller's `Transport`, which this
-/// crate does not require to be `Send` (both suites' replays hold an `Rc`),
-/// so neither `Mirror` nor `Board` is — as `Mirror`'s own doc checks. What a
-/// mirror answers crosses threads — a resolution to a UI thread, the stats
-/// or a cloned index to a reporter, the hint to the next mirror — and is
-/// asserted `Send` here, where a field change would otherwise revoke it in
-/// silence.
+/// One byte from two hex digits, either case — `None` for any other byte.
+/// Every hex string this crate decodes itself — a signature's blob, a chain
+/// — passes through here a byte pair at a time, so text of any content,
+/// off the wire, a copy or a cache, answers `None` and never panics; a
+/// fingerprint or a key is decoded by skep-identity's own reader.
+pub(crate) fn hex_byte([hi, lo]: [u8; 2]) -> Option<u8> {
+    let nibble = |c: u8| match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        _ => None,
+    };
+    Some((nibble(hi)? << 4) | nibble(lo)?)
+}
+
+/// The traits a host holds this crate's values to, asserted here, where a
+/// field change or a dropped derive would otherwise revoke one in silence.
+///
+/// A mirror stays on the thread that opened it: it holds the caller's
+/// `Transport`, which this crate does not require to be `Send` (both suites'
+/// replays hold an `Rc`), so neither `Mirror` nor `Board` is — as `Mirror`'s
+/// own doc checks. What a mirror answers crosses threads — a resolution to a
+/// UI thread, the stats or a cloned index to a reporter, the hint to the next
+/// mirror, an error to whoever reports it — and is `Send` and `Sync` both: an
+/// error is boxed as a `Box<dyn Error + Send + Sync>` or taken into an
+/// `anyhow::Error`, each of which asks for `Sync`, and a resolution a UI
+/// shares behind an `Arc` is read from every thread that holds it.
+///
+/// Every public type shows itself through `Debug` (C-DEBUG), the three that
+/// hold a caller's transport or a socket's address among them, so a host's
+/// own state that holds one derives its own; and the values a caller keys a
+/// map by — a realm, a hint, a verdict — hash.
 const _: fn() = || {
-    fn send<T: Send + 'static>() {}
-    send::<RootHint>();
-    send::<Resolution>();
-    send::<Index>();
-    send::<Stats>();
+    fn send_sync<T: Send + Sync + 'static>() {}
+    fn debug<T: std::fmt::Debug>() {}
+    fn hash_key<T: Eq + std::hash::Hash>() {}
+    send_sync::<RootHint>();
+    send_sync::<Resolution>();
+    send_sync::<Index>();
+    send_sync::<Stats>();
+    send_sync::<MirrorError>();
+    send_sync::<BoardError>();
+    send_sync::<TransportError>();
+    send_sync::<HintError>();
+    send_sync::<NotCanonical>();
+    debug::<Mirror>();
+    debug::<Board>();
+    debug::<Http>();
+    hash_key::<RealmId>();
+    hash_key::<RootHint>();
+    hash_key::<Verdict>();
 };

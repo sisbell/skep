@@ -3,7 +3,9 @@
 //! `Connection: close` on every response (wire.md §Transport), so a client
 //! is a `TcpStream`, one request, and a read to EOF — behind a trait
 //! ([`Transport`]) the board's typed reads ([`crate::board`]) run over and a
-//! suite can replay a recorded feed through.
+//! suite can replay a recorded feed through. The connection is made the way
+//! `TcpStream::connect` makes one: every address the host's name yields is
+//! tried in order, and the first that answers is the board's.
 //!
 //! The client speaks plain `http` alone: this crate links no TLS library, so
 //! an `https` root in a hint is a transport this build does not hold,
@@ -11,8 +13,10 @@
 //! clear.
 
 use std::fmt;
-use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::io::{self, Read, Write};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::origin::Origin;
@@ -27,12 +31,14 @@ const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Why an exchange could not be made.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TransportError {
     /// The origin's scheme is one this transport does not hold (`https`).
     NotHeld(String),
     /// The host did not resolve to an address.
     Resolve(String),
-    /// The connection was refused or timed out.
+    /// The connection was refused or timed out at every address the host
+    /// yields.
     Connect(String),
     /// The request could not be written or the response read whole.
     Io(String),
@@ -56,11 +62,65 @@ impl fmt::Display for TransportError {
 
 impl std::error::Error for TransportError {}
 
+/// The method of one exchange: the reads this crate makes of a board take
+/// two — `GET` for the feed's pages, `/health` and `/chain`, `POST` for
+/// `/op` and `/op-at` — and a type of its own keeps the method and the path,
+/// both text on the request line, from trading places in a call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Method {
+    Get,
+    Post,
+}
+
+impl Method {
+    /// The method as the request line spells it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Method::Get => "GET",
+            Method::Post => "POST",
+        }
+    }
+}
+
+impl fmt::Display for Method {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// One exchange with a board: write a request, read the answer whole.
 /// `Err` means the board was not reached or did not answer; an answered
 /// refusal is a status and a body.
 pub trait Transport {
-    fn exchange(&self, method: &str, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError>;
+    fn exchange(&self, method: Method, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError>;
+}
+
+/// A transport behind a reference or a pointer is the transport it points
+/// to, as std's own `Read` and `Write` are: one transport can be shared — a
+/// recording its caller reads back once the mirror is done, say — with no
+/// wrapper of the caller's own, which the orphan rule would refuse it.
+impl<T: Transport + ?Sized> Transport for &T {
+    fn exchange(&self, method: Method, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+        (**self).exchange(method, path, body)
+    }
+}
+
+impl<T: Transport + ?Sized> Transport for Box<T> {
+    fn exchange(&self, method: Method, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+        (**self).exchange(method, path, body)
+    }
+}
+
+impl<T: Transport + ?Sized> Transport for Rc<T> {
+    fn exchange(&self, method: Method, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+        (**self).exchange(method, path, body)
+    }
+}
+
+impl<T: Transport + ?Sized> Transport for Arc<T> {
+    fn exchange(&self, method: Method, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+        (**self).exchange(method, path, body)
+    }
 }
 
 /// The function a mirror dials an origin through: the shipped one is
@@ -69,6 +129,7 @@ pub type Dial<'a> = dyn Fn(&Origin) -> Result<Box<dyn Transport>, TransportError
 
 /// One board's plain-HTTP endpoint: host, port, and the authority string for
 /// the `Host` header and error messages.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Http {
     host: String,
     port: u16,
@@ -98,14 +159,15 @@ impl Http {
 }
 
 impl Transport for Http {
-    fn exchange(&self, method: &str, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
-        let addr = (self.host.as_str(), self.port)
+    fn exchange(&self, method: Method, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+        let addrs: Vec<SocketAddr> = (self.host.as_str(), self.port)
             .to_socket_addrs()
             .map_err(|e| TransportError::Resolve(self.fail("resolve", e)))?
-            .next()
-            .ok_or_else(|| TransportError::Resolve(self.fail("resolve", "no addresses")))?;
-        let mut stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
-            .map_err(|e| TransportError::Connect(self.fail("connect", e)))?;
+            .collect();
+        if addrs.is_empty() {
+            return Err(TransportError::Resolve(self.fail("resolve", "no addresses")));
+        }
+        let mut stream = connect_any(&addrs).map_err(|e| TransportError::Connect(self.fail("connect", e)))?;
         stream.set_read_timeout(Some(IO_TIMEOUT)).map_err(|e| TransportError::Io(self.fail("socket", e)))?;
         stream.set_write_timeout(Some(IO_TIMEOUT)).map_err(|e| TransportError::Io(self.fail("socket", e)))?;
         let head = format!(
@@ -126,6 +188,22 @@ impl Transport for Http {
 /// The shipped dial: plain HTTP to the origin.
 pub fn dial_http(origin: &Origin) -> Result<Box<dyn Transport>, TransportError> {
     Ok(Box::new(Http::for_origin(origin)?))
+}
+
+/// A connection to the first of `addrs` that answers, each tried in order
+/// within the connect bound — as `TcpStream::connect` tries every address a
+/// name yields — else the last refusal: a host whose name yields `::1`
+/// before `127.0.0.1`, where the board listens on the second alone, is
+/// reached at the second.
+fn connect_any(addrs: &[SocketAddr]) -> io::Result<TcpStream> {
+    let mut last = None;
+    for addr in addrs {
+        match TcpStream::connect_timeout(addr, CONNECT_TIMEOUT) {
+            Ok(stream) => return Ok(stream),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no address to connect to")))
 }
 
 /// Split status and body out of one complete HTTP response. The daemon
@@ -162,6 +240,8 @@ fn parse_response(raw: &[u8]) -> Result<(u16, Vec<u8>), String> {
 
 #[cfg(test)]
 mod tests {
+    use std::net::TcpListener;
+
     use super::*;
 
     #[test]
@@ -177,9 +257,45 @@ mod tests {
     #[test]
     fn https_is_not_held_and_http_is() {
         let o = Origin::parse("https://registry.example").unwrap();
-        assert_eq!(Http::for_origin(&o).err(), Some(TransportError::NotHeld("https".into())));
+        assert_eq!(Http::for_origin(&o).unwrap_err(), TransportError::NotHeld("https".into()));
         let o = Origin::parse("http://[::1]:8642").unwrap();
         let h = Http::for_origin(&o).expect("held");
         assert_eq!((h.host.as_str(), h.port, h.authority()), ("::1", 8642, "[::1]:8642"));
+    }
+
+    /// The dial tries every address a name yields, in order, as
+    /// `TcpStream::connect` does: a refused address is passed over for the
+    /// next, and only where none answers is a refusal the error.
+    #[test]
+    fn every_address_is_tried_in_order() {
+        let live = TcpListener::bind("127.0.0.1:0").expect("a listener");
+        let live_at = live.local_addr().expect("its address");
+        let closed = TcpListener::bind("127.0.0.1:0").expect("a listener").local_addr().expect("its address");
+        let stream = connect_any(&[closed, live_at]).expect("the second address answers");
+        assert_eq!(stream.peer_addr().expect("a peer"), live_at);
+        assert!(connect_any(&[closed]).is_err(), "no address answers");
+        assert!(connect_any(&[]).is_err(), "no address at all");
+    }
+
+    /// A board that answers each exchange with its own method and path.
+    struct Echo;
+
+    impl Transport for Echo {
+        fn exchange(&self, method: Method, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+            Ok((200, [method.as_str().as_bytes(), b" ", path.as_bytes(), b" ", body].concat()))
+        }
+    }
+
+    /// A transport behind a reference or a pointer is the transport it
+    /// points to: the method, the path and the body reach it as given.
+    #[test]
+    fn a_shared_transport_answers_as_itself() {
+        let echoed = |t: &dyn Transport| t.exchange(Method::Post, "/op", b"{}").expect("answered").1;
+        let expected = b"POST /op {}".to_vec();
+        assert_eq!(echoed(&&Echo), expected);
+        assert_eq!(echoed(&Box::new(Echo)), expected);
+        assert_eq!(echoed(&Rc::new(Echo)), expected);
+        assert_eq!(echoed(&Arc::new(Echo)), expected);
+        assert_eq!((Method::Get.to_string(), Method::Post.to_string()), ("GET".to_string(), "POST".to_string()));
     }
 }

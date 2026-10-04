@@ -66,6 +66,7 @@ fn the_rebuild_from_the_copy_reads_no_wire_and_equals_the_live_index() {
     }
     assert_eq!(offline.index().counts(), live.index().counts());
     assert_eq!(offline.index().suppressed(), live.index().suppressed());
+    assert_eq!(offline.index(), live.index(), "every deposit and its verdict, not their counts alone");
     let claimant = offline.claim().map(|(_, c)| c.clone()).expect("the claim, from the cache");
     assert_eq!(offline.current_keys(&claimant), Ok(None), "the table at the head was never fetched");
     assert_eq!(offline.stats().reads.total(), 0, "no wire read");
@@ -84,12 +85,12 @@ fn a_hint_naming_another_realm_is_refused_at_the_base() {
     let dir = tempfile::tempdir().expect("tempdir");
     let fixture = fixture();
     let other = Fingerprint::parse_hex(&"11".repeat(32)).unwrap();
-    let hint = RootHint::new(fixture.hint.origins.clone(), other, None).unwrap();
+    let hint = RootHint::new(fixture.hint.origins().to_vec(), other, None).unwrap();
     let dial = replay_dial(fixture.clone());
-    let refused = Mirror::open(&hint, dir.path(), &dial).err();
+    let refused = Mirror::open(&hint, dir.path(), &dial).unwrap_err();
     assert_eq!(
         refused,
-        Some(MirrorError::Refused(Refusal::RealmMismatch { expected: other, found: fixture.hint.realm.genesis }))
+        MirrorError::Refused(Refusal::RealmMismatch { expected: other, found: fixture.hint.realm().genesis })
     );
     assert!(!dir.path().join(FEED_COPY).exists());
     assert!(!dir.path().join(FETCH_CACHE).exists());
@@ -113,7 +114,7 @@ fn a_held_copy_naming_another_realm_is_refused_at_the_claim() {
     let forged = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[9; 32]).expect("tag 1").public_key().clone();
     let other = RealmId::genesis_fingerprint(&[Fingerprint::of(&forged)]);
     let feed = fs::read_to_string(dir.path().join(FEED_COPY)).expect("the feed copy");
-    let shipped_feed = feed.replacen(&fixture.hint.realm.genesis.to_hex(), &other.to_hex(), 1);
+    let shipped_feed = feed.replacen(&fixture.hint.realm().genesis.to_hex(), &other.to_hex(), 1);
     assert_ne!(shipped_feed, feed, "the header names the genesis fingerprint");
     fs::write(dir.path().join(FEED_COPY), &shipped_feed).expect("the courier's header");
     let genesis = json!({ "keys": {
@@ -123,12 +124,12 @@ fn a_held_copy_naming_another_realm_is_refused_at_the_claim() {
     let cache = fs::read_to_string(dir.path().join(FETCH_CACHE)).expect("the fetch cache");
     let shipped_cache = format!("{cache}{genesis}\n");
     fs::write(dir.path().join(FETCH_CACHE), &shipped_cache).expect("the courier's cache");
-    let hint = RootHint::new(fixture.hint.origins.clone(), other, None).unwrap();
+    let hint = RootHint::new(fixture.hint.origins().to_vec(), other, None).unwrap();
     let dial = replay_dial(fixture.clone());
-    let refused = Mirror::open(&hint, dir.path(), &dial).err();
+    let refused = Mirror::open(&hint, dir.path(), &dial).unwrap_err();
     assert_eq!(
         refused,
-        Some(MirrorError::Refused(Refusal::RealmMismatch { expected: other, found: fixture.hint.realm.genesis }))
+        MirrorError::Refused(Refusal::RealmMismatch { expected: other, found: fixture.hint.realm().genesis })
     );
     assert_eq!(fs::read_to_string(dir.path().join(FEED_COPY)).expect("the feed copy"), shipped_feed, "no line of the copy");
     assert_eq!(fs::read_to_string(dir.path().join(FETCH_CACHE)).expect("the fetch cache"), shipped_cache, "nor of the cache");
@@ -164,11 +165,11 @@ fn a_copy_with_no_format_stamp_is_refused_offline() {
     unstamped.as_object_mut().expect("an object").remove("skep-resolve");
     fs::write(dir.path().join(FEED_COPY), format!("{unstamped}\n{rows}")).expect("the copy unstamped");
     assert!(
-        matches!(Mirror::rebuild_offline(&fixture.hint, dir.path()).err(), Some(MirrorError::Copy(e)) if e.contains("not a feed copy")),
+        matches!(Mirror::rebuild_offline(&fixture.hint, dir.path()).unwrap_err(), MirrorError::Copy(e) if e.contains("not a feed copy")),
         "an unstamped copy is refused"
     );
     let dial = replay_dial(fixture.clone());
-    assert!(matches!(Mirror::open(&fixture.hint, dir.path(), &dial).err(), Some(MirrorError::Copy(_))), "offline as at the open");
+    assert!(matches!(Mirror::open(&fixture.hint, dir.path(), &dial).unwrap_err(), MirrorError::Copy(_)), "offline as at the open");
 }
 
 /// A VALUE IS WRITTEN ONCE: the copy resumed twice against the source reads
@@ -235,5 +236,5 @@ fn the_hint_line_in_the_fixture_parses_back_to_itself() {
     let line = fixture.hint.to_string();
     assert_eq!(RootHint::parse(&line).expect("parses"), fixture.hint);
     assert!(line.contains(" realm:"), "{line}");
-    assert_eq!(fixture.hint.realm.fork_point, None, "an unforked lineage");
+    assert_eq!(fixture.hint.realm().fork_point, None, "an unforked lineage");
 }

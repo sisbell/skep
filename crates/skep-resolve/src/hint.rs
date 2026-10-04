@@ -34,6 +34,7 @@
 //! check, which is why the order is ruled and the form is stated once, here.
 
 use std::fmt;
+use std::str::FromStr;
 
 use sha2::{Digest, Sha256};
 use skep_address::Address;
@@ -48,8 +49,9 @@ use crate::parse_address;
 /// the FORK POINT beside it, the address of the fork's succession record
 /// (REG-3.49). Two lineages that share one genesis and differ in their fork
 /// point are two realms; on an unforked lineage the genesis fingerprint is
-/// the whole id.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// the whole id. A realm keys a map — a node holding one mirror per realm —
+/// by hash or by order.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RealmId {
     /// The genesis fingerprint — the id's first half.
     pub genesis: Fingerprint,
@@ -80,18 +82,37 @@ impl RealmId {
 }
 
 /// The root hint — the one config value a resolver boots from (REG-3.2).
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Every hint comes through [`RootHint::new`] or the one line
+/// ([`RootHint::parse`], or `str::parse`), so every hint holds an origin
+/// and renders a line `parse` reads back as itself: its fields are read
+/// through [`RootHint::origins`] and [`RootHint::realm`], and written by
+/// nothing outside this module. The twin reads what the refusal below it
+/// writes, the refusal's one difference the write:
+///
+/// ```
+/// use skep_resolve::{RealmId, RootHint};
+/// let line = format!("http://127.0.0.1:8642 realm:{}", RealmId::genesis_fingerprint(&[]).to_hex());
+/// let hint: RootHint = line.parse().expect("a hint");
+/// assert!(!hint.origins().is_empty());
+/// assert_eq!(hint.to_string().parse::<RootHint>(), Ok(hint));
+/// ```
+/// ```compile_fail,E0616
+/// use skep_resolve::{RealmId, RootHint};
+/// let line = format!("http://127.0.0.1:8642 realm:{}", RealmId::genesis_fingerprint(&[]).to_hex());
+/// let mut hint: RootHint = line.parse().expect("a hint");
+/// hint.origins.clear();
+/// assert_eq!(hint.to_string().parse::<RootHint>(), Ok(hint));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RootHint {
-    /// The root's endpoint URL(s), in the order a mirror tries them; at
-    /// least one.
-    pub origins: Vec<Origin>,
-    /// The realm id: the genesis fingerprint, and the fork point on a forked
-    /// lineage (REG-3.2, REG-3.40).
-    pub realm: RealmId,
+    origins: Vec<Origin>,
+    realm: RealmId,
 }
 
 /// Why a line is no root hint.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum HintError {
     /// No origin term.
     NoOrigin,
@@ -104,8 +125,10 @@ pub enum HintError {
     BadRealm(String),
     /// A `fork:` term that is no address.
     BadForkPoint(String),
-    /// A term given twice.
-    Duplicate(&'static str),
+    /// The `realm:` term given twice.
+    DuplicateRealm,
+    /// The `fork:` term given twice.
+    DuplicateFork,
 }
 
 impl fmt::Display for HintError {
@@ -116,7 +139,8 @@ impl fmt::Display for HintError {
             HintError::NoRealm => f.write_str("the hint names no realm (realm:<64 hex>)"),
             HintError::BadRealm(t) => write!(f, "'{t}' is no genesis fingerprint (64 hex characters)"),
             HintError::BadForkPoint(t) => write!(f, "'{t}' is no fork point (an address)"),
-            HintError::Duplicate(term) => write!(f, "the {term} term is given twice"),
+            HintError::DuplicateRealm => f.write_str("the realm term is given twice"),
+            HintError::DuplicateFork => f.write_str("the fork term is given twice"),
         }
     }
 }
@@ -138,6 +162,18 @@ impl RootHint {
         Ok(RootHint { origins, realm: RealmId { genesis, fork_point } })
     }
 
+    /// The root's endpoint URL(s), in the order a mirror tries them — at
+    /// least one.
+    pub fn origins(&self) -> &[Origin] {
+        &self.origins
+    }
+
+    /// The realm id: the genesis fingerprint, and the fork point on a forked
+    /// lineage (REG-3.2, REG-3.40).
+    pub fn realm(&self) -> &RealmId {
+        &self.realm
+    }
+
     /// THE ONE LINE, parsed: origins, `realm:<hex>`, and `fork:<address>`
     /// where the lineage forked, in any order, whitespace-separated.
     pub fn parse(line: &str) -> Result<RootHint, HintError> {
@@ -147,12 +183,12 @@ impl RootHint {
         for term in line.split_whitespace() {
             if let Some(hex) = term.strip_prefix("realm:") {
                 if genesis.is_some() {
-                    return Err(HintError::Duplicate("realm"));
+                    return Err(HintError::DuplicateRealm);
                 }
                 genesis = Some(Fingerprint::parse_hex(hex).ok_or_else(|| HintError::BadRealm(term.into()))?);
             } else if let Some(addr) = term.strip_prefix("fork:") {
                 if fork_point.is_some() {
-                    return Err(HintError::Duplicate("fork"));
+                    return Err(HintError::DuplicateFork);
                 }
                 fork_point =
                     Some(parse_address(addr).ok_or_else(|| HintError::BadForkPoint(term.into()))?);
@@ -162,6 +198,17 @@ impl RootHint {
         }
         let genesis = genesis.ok_or(HintError::NoRealm)?;
         RootHint::new(origins, genesis, fork_point)
+    }
+}
+
+/// The one line through `str::parse`, as [`RootHint::parse`] reads it — the
+/// form a generic caller reaches: a command's argument parser, an
+/// environment reader, a config loader.
+impl FromStr for RootHint {
+    type Err = HintError;
+
+    fn from_str(line: &str) -> Result<RootHint, HintError> {
+        RootHint::parse(line)
     }
 }
 
@@ -181,20 +228,24 @@ impl fmt::Display for RootHint {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeSet, HashSet};
+
     use super::*;
 
     fn fp(byte: u8) -> Fingerprint {
         Fingerprint::parse_hex(&format!("{byte:02x}").repeat(32)).unwrap()
     }
 
-    /// The one line reads back as itself, with and without a fork point,
-    /// and each malformed term is refused by name. The two lines name two
+    /// The one line reads back as itself, with and without a fork point —
+    /// through `parse` and `str::parse` alike — and each malformed term is
+    /// refused by name, a term given twice by which. The two lines name two
     /// realms (REG-3.40): one genesis fingerprint, and a fork point on the
-    /// one alone.
+    /// one alone — two keys of a map, by hash and by order.
     #[test]
     fn the_one_line_parses_and_renders() {
         let line = format!("https://registry.example http://127.0.0.1:8642 realm:{}", fp(0xab).to_hex());
         let hint = RootHint::parse(&line).expect("a hint");
+        assert_eq!(line.parse::<RootHint>(), Ok(hint.clone()), "str::parse reads the one line");
         assert_eq!(hint.origins.len(), 2);
         assert_eq!(hint.realm, RealmId { genesis: fp(0xab), fork_point: None });
         assert_eq!(hint.to_string(), line);
@@ -204,6 +255,9 @@ mod tests {
         assert_eq!(forked_hint.to_string(), forked);
         assert_eq!(forked_hint.realm.genesis, hint.realm.genesis, "one genesis");
         assert_ne!(forked_hint.realm, hint.realm, "two realms");
+        let realms = [hint.realm.clone(), forked_hint.realm.clone(), hint.realm.clone()];
+        assert_eq!(realms.iter().collect::<HashSet<_>>().len(), 2, "two realms key two entries by hash");
+        assert_eq!(realms.iter().collect::<BTreeSet<_>>().len(), 2, "and by order");
         assert_eq!(RootHint::parse(&format!("realm:{}", fp(1).to_hex())), Err(HintError::NoOrigin));
         assert_eq!(RootHint::parse("https://registry.example"), Err(HintError::NoRealm));
         assert_eq!(RootHint::parse("https://registry.example realm:zz"), Err(HintError::BadRealm("realm:zz".into())));
@@ -217,7 +271,11 @@ mod tests {
         );
         assert_eq!(
             RootHint::parse(&format!("https://r.example realm:{} realm:{}", fp(1).to_hex(), fp(2).to_hex())),
-            Err(HintError::Duplicate("realm"))
+            Err(HintError::DuplicateRealm)
+        );
+        assert_eq!(
+            format!("https://r.example realm:{} fork:1.0.1.0.1.0.2.9 fork:1.0.1.0.1.0.2.9", fp(1).to_hex()).parse::<RootHint>(),
+            Err(HintError::DuplicateFork)
         );
     }
 

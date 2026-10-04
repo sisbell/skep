@@ -30,8 +30,9 @@ use crate::origin::{EndpointDial, MemberKind, MemberOutcome, Term};
 /// this", spelled as that record enumerates them. A registry record's
 /// verdict is judged at the record grade (REG-1.86 (e); 2b): the `sig`
 /// member over the record frame under the set that opens the home's account
-/// as of the record's own position.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// as of the record's own position. A verdict keys a map — a reporter
+/// tallying the records it saw by verdict — by its hash.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Verdict {
     /// At or below the board's claim entry, where there was no law yet
     /// (A1). No registry record stands there (REG-1.32), so this crate

@@ -32,9 +32,9 @@ use skep_address::Address;
 use skep_identity::{canonical_record, Fingerprint};
 use skep_registry::{encode, Body, BodyKind};
 use skep_resolve::{
-    guest_resolve, resolve, Board, Cause, Http, MemberOutcome, Mirror, MirrorError, NameResolver,
-    Opened, Origin, RealmId, Refusal, Resolution, RootHint, Term, Transport, TransportError,
-    Transports, Unreachable, Verdict,
+    guest_resolve, resolve, Board, Cause, Http, MemberOutcome, Method, Mirror, MirrorError,
+    NameResolver, Opened, Origin, RealmId, Refusal, Resolution, RootHint, Term, Transport,
+    TransportError, Transports, Unreachable, Verdict,
 };
 
 /// The orgs' principals, above every other suite's ids; an org's key seed is
@@ -142,7 +142,7 @@ fn register_org(port: u16, console: &str, i: u64, prefix: &str, origins: Option<
 struct Names(BTreeMap<&'static str, Vec<IpAddr>>);
 
 impl NameResolver for Names {
-    fn resolve(&self, host: &str) -> Result<Vec<IpAddr>, String> {
+    fn resolve(&self, host: &str) -> std::io::Result<Vec<IpAddr>> {
         Ok(self.0.get(host).cloned().unwrap_or_default())
     }
 }
@@ -201,14 +201,14 @@ struct Recording {
 }
 
 impl Transport for Recording {
-    fn exchange(&self, method: &str, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+    fn exchange(&self, method: Method, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
         let (status, mut response) = self.inner.exchange(method, path, body)?;
         if path == "/op" && status == 200 && !self.tamper.is_empty() {
             response = tamper_delivery(&response, &self.tamper);
         }
         if let Some(log) = &self.log {
             log.borrow_mut().push(json!({
-                "method": method,
+                "method": method.as_str(),
                 "path": path,
                 "request": String::from_utf8_lossy(body),
                 "status": status,
@@ -1122,7 +1122,7 @@ fn measure(n: u64, k: usize, chain_walk: bool) {
     ));
 
     // THE GUEST-READING RESOLVE with no mirror.
-    let board = Board::new(skep_resolve::dial_http(&hint_for(port).origins[0]).expect("http"));
+    let board = Board::new(skep_resolve::dial_http(&hint_for(port).origins()[0]).expect("http"));
     let target = &orgs[orgs.len() / 2];
     let (guest, cost) = guest_resolve(&board, &addr(&target.prefix), &names(), &Transports::default()).expect("the guest resolve");
     assert_eq!(dial_of(&guest), dial_of(&resolve_prefix(&mut mirror, &target.prefix)), "the guest and the mirror agree on the dial");

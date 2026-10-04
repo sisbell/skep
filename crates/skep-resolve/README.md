@@ -19,7 +19,9 @@ parts, each under the design rule it realizes:
   (REG-3.39; `RealmId::genesis_fingerprint`) and, on a forked lineage, the
   fork point beside it (REG-3.40) — ONE overridable config value and never
   a baked constant (REG-3.2), parsed from one line —
-  `https://registry.example realm:<64 hex>` — and from a struct. The
+  `https://registry.example realm:<64 hex>`, by `RootHint::parse` or
+  `str::parse` — and built from its parts by `RootHint::new`; either way it
+  holds an origin, its fields read through `origins()` and `realm()`. The
   mirror's realm check compares the id's genesis fingerprint at the base
   (REG-3.42); the fork point is compared by no check of this crate.
 - **The mirror** (`Mirror`) — a `/changes` consumer from the floor
@@ -91,8 +93,10 @@ parts, each under the design rule it realizes:
   an empty set in its place. No copy, no rendering.
 
 The HTTP client (`Http`, `Transport`) is a written-out HTTP/1.1 client
-over `std::net`, as the MCP adapter's is; it speaks plain `http` alone, so
-an `https` root is a transport this build does not hold, refused by name.
+over `std::net`, as the MCP adapter's is, trying every address a host's
+name yields in order, as `TcpStream::connect` does; it speaks plain `http`
+alone, so an `https` root is a transport this build does not hold, refused
+by name.
 The board's typed reads (`Board`) run over any `Transport` — that client,
 or a suite's replay of a recording — and count every read by kind
 (`Reads`), reported in `Stats`; every value the resolver takes on the

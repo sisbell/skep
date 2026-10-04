@@ -70,7 +70,7 @@ pub struct Suppressed {
 
 /// One prefix's bindings in journal order, and which of them the walk
 /// honors.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct PrefixEntries {
     entries: Vec<Judged<BindingRecord>>,
     honored: Vec<usize>,
@@ -87,6 +87,7 @@ enum Place {
 /// each total and honored, and the records the gate kept out — malformed,
 /// and one count per verdict but SIGNED.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Counts {
     pub prefixes: usize,
     pub bindings: usize,
@@ -104,7 +105,7 @@ pub struct Counts {
 /// 1, under the rules the module doc states — the rules alone. It checks no
 /// verdict and no home: it holds what its writer handed it, in the order
 /// handed, which must be journal order — the folds' one precondition.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Ledger {
     prefixes: BTreeMap<Address, PrefixEntries>,
     endpoints: BTreeMap<Address, Vec<Judged<EndpointRecord>>>,
@@ -283,17 +284,18 @@ impl Ledger {
 /// };
 /// index.fold_binding(unsigned);
 /// ```
-#[derive(Debug, Clone, Default)]
+///
+/// Two indexes are equal where every entry is — each binding and deposit,
+/// its position, its record and the verdict beside it — and the records
+/// kept out are the same, by cause: the rebuild from the copy is held to
+/// the live index by that equality, not by its counts alone.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Index {
     ledger: Ledger,
     suppressed: Vec<Suppressed>,
 }
 
 impl Index {
-    pub(crate) fn new() -> Index {
-        Index::default()
-    }
-
     /// Fold one binding the gate passed, by the ledger's rule; answers
     /// whether it was honored.
     pub(crate) fn fold_binding(&mut self, judged: Judged<BindingRecord>) -> bool {
@@ -493,7 +495,7 @@ mod tests {
     /// but SIGNED counted as itself, never as another.
     #[test]
     fn the_index_counts_what_the_gate_kept_out_beside_the_ledger() {
-        let mut index = Index::new();
+        let mut index = Index::default();
         assert!(index.fold_binding(binding(10, "1.0.1.0.1.0.2.1", "1.5", Some("1.0.2"), None)));
         let out = |at: u64, cause| Suppressed { position: at, link: a(&format!("1.0.1.0.1.0.2.{at}")), kind: BodyKind::Binding, cause };
         index.suppress(out(11, Cause::Verdict(Verdict::Unsigned)));

@@ -95,7 +95,7 @@ fn a_self_authenticating_member_is_not_dialed_without_its_transport_and_dialed_w
             matches!(judge_member(member, &names, &Transports::default()), MemberOutcome::NotDialed { kind: MemberKind::Onion, .. }),
             "{member}"
         );
-        match judge_member(member, &names, &Transports { https: true, onion: true }) {
+        match judge_member(member, &names, &Transports::default().with(MemberKind::Onion)) {
             MemberOutcome::WouldDial { kind: MemberKind::Onion, addresses, .. } => assert!(addresses.is_empty()),
             other => panic!("{member}: {other:?}"),
         }
@@ -121,7 +121,7 @@ fn a_plaintext_member_and_a_bare_host_are_refused_on_the_scheme_term() {
 fn the_ordered_walk_has_one_precedence() {
     let names = table(&[("dead.example", Vec::new()), ("acme.example", vec![public_ip()])]);
     let t = Transports::default();
-    let walk = |members: &[&str]| walk_members(&members.iter().map(|m| m.to_string()).collect::<Vec<_>>(), &names, &t);
+    let walk = |members: &[&str]| walk_members(members, &names, &t);
     assert_eq!(walk(&[ONION, "https://acme.example"]).dial.map(|d| d.member), Some(1));
     assert_eq!(walk(&["http://plain.example", "https://acme.example"]).dial.map(|d| d.member), Some(1));
     assert_eq!(walk(&["https://dead.example", "https://127.0.0.1", "https://acme.example"]).dial.map(|d| d.member), Some(2));

@@ -40,8 +40,8 @@ use serde_json::{json, Value};
 use skep_identity::Fingerprint;
 
 use super::{
-    position, Chains, Fetched, Lines, Mirror, MirrorError, Opened, Refusal, Stats, Types, FEED_COPY, FEED_FORMAT,
-    FETCH_CACHE,
+    position, Chains, Fetched, Lines, Mirror, MirrorError, Opened, Refusal, Row, Stats, Types, FEED_COPY,
+    FEED_FORMAT, FETCH_CACHE,
 };
 use crate::board::{parse_chain, Board, BoardError};
 use crate::hint::{RealmId, RootHint};
@@ -78,7 +78,7 @@ impl Mirror {
             mirror.stats.bootstrap_time = t.elapsed();
             return Ok(mirror);
         };
-        if held.genesis != hint.realm.genesis {
+        if held.genesis != hint.realm().genesis {
             // REG-3.17 — a hint re-pointed to another genesis: afresh from the
             // new root's genesis.
             let retired = retire(dir, held.genesis)?;
@@ -120,7 +120,7 @@ impl Mirror {
         let Some(held) = read_copy(dir)? else {
             return Err(MirrorError::Copy(format!("{}: no feed copy", dir.join(FEED_COPY).display())));
         };
-        if held.genesis != hint.realm.genesis {
+        if held.genesis != hint.realm().genesis {
             return Err(MirrorError::Copy("the copy is another realm's".into()));
         }
         let mut mirror = Mirror::fresh(hint, None, None, dir);
@@ -142,7 +142,7 @@ impl Mirror {
             pending_feed: Vec::new(),
             pending_cache: Vec::new(),
             fetched: Fetched::default(),
-            index: Index::new(),
+            index: Index::default(),
             types: Types::new(),
             rows: Vec::new(),
             scanned: 0,
@@ -177,7 +177,7 @@ impl Mirror {
     fn header(&self) -> Value {
         json!({
             "skep-resolve": FEED_FORMAT,
-            "realm": self.hint.realm.genesis.to_hex(),
+            "realm": self.hint.realm().genesis.to_hex(),
             "root": self.root.as_ref().map(|o| o.as_str().to_string()),
         })
     }
@@ -230,14 +230,16 @@ impl Mirror {
     /// Fold every held row the fold has not consumed, in two passes: the
     /// credential pass first ([`Mirror::scan_credential_acts`]), so every act
     /// among the held rows is recorded before any record is judged; then each
-    /// row folded, in order.
+    /// row folded, in order — read into what the fold takes ([`Row::of`]),
+    /// the held row staying where the copy's positions are read off it.
     fn fold_pending(&mut self) -> Result<(), MirrorError> {
         let t = Instant::now();
         self.scan_credential_acts()?;
         while self.folded < self.rows.len() {
-            let row = self.rows[self.folded].clone();
-            self.fold_row(&row)?;
-            self.head = position(&row).unwrap_or(self.head);
+            let held = &self.rows[self.folded];
+            let (row, at) = (Row::of(held), position(held));
+            self.fold_row(row)?;
+            self.head = at.unwrap_or(self.head);
             self.stats.rows += 1;
             self.folded += 1;
         }
@@ -317,7 +319,7 @@ impl Mirror {
         let (_, claimant) = self.fetched.claim.clone().ok_or(MirrorError::NoClaim)?;
         let keys = self.genesis_keys(&claimant)?.ok_or(MirrorError::NoGenesis)?;
         let found = RealmId::genesis_fingerprint(&keys.iter().map(|e| Fingerprint::of(&e.key)).collect::<Vec<_>>());
-        let expected = self.hint.realm.genesis;
+        let expected = self.hint.realm().genesis;
         if found != expected {
             return Err(MirrorError::Refused(Refusal::RealmMismatch { expected, found }));
         }
@@ -330,40 +332,45 @@ impl Mirror {
 /// [`Mirror::header`], [`Mirror::pull`] and [`Mirror::record_head_pair`]
 /// write: `None` where no copy is held (the file absent, or no line in it),
 /// and refused where its header is no feed copy of the format this build
-/// writes.
+/// writes. The lines are taken by value, each row moved out of its line.
 fn read_copy(dir: &Path) -> Result<Option<HeldCopy>, MirrorError> {
     let path = dir.join(FEED_COPY);
-    let lines = Lines::read(&path)?;
-    let Some((header, held)) = lines.split_first() else { return Ok(None) };
+    let mut lines = Lines::read(&path)?.into_iter();
+    let Some(header) = lines.next() else { return Ok(None) };
     let stamped = header["skep-resolve"].as_str() == Some(FEED_FORMAT);
     let Some(genesis) = header["realm"].as_str().and_then(Fingerprint::parse_hex).filter(|_| stamped) else {
         return Err(MirrorError::Copy(format!("{}: not a feed copy", path.display())));
     };
-    let rows = held.iter().filter_map(|l| l.get("row").cloned()).collect();
-    let head_pairs = held
-        .iter()
-        .filter_map(|l| {
-            let h = l.get("head")?;
-            Some((h["at"].as_u64()?, parse_chain(h["chain"].as_str()?)?))
-        })
-        .collect();
+    let mut rows = Vec::new();
+    let mut head_pairs = Vec::new();
+    for mut line in lines {
+        if let Some(h) = line.get("head") {
+            if let (Some(at), Some(chain)) = (h["at"].as_u64(), h["chain"].as_str().and_then(parse_chain)) {
+                head_pairs.push((at, chain));
+            }
+        }
+        if let Some(row) = line.get_mut("row").map(Value::take) {
+            rows.push(row);
+        }
+    }
     Ok(Some(HeldCopy { genesis, rows, head_pairs }))
 }
 
 /// Dial the hint's origins in order; the first that answers `/health` is the
-/// root.
+/// root. Where none does, every origin is named beside its own error — the
+/// transport's where the dial failed, the board's where `/health` did.
 fn dial_root(hint: &RootHint, dial: &Dial<'_>) -> Result<(Origin, Board), MirrorError> {
     let mut tried = Vec::new();
-    for origin in &hint.origins {
+    for origin in hint.origins() {
         match dial(origin) {
             Ok(transport) => {
                 let board = Board::new(transport);
                 match board.health() {
                     Ok(_) => return Ok((origin.clone(), board)),
-                    Err(e) => tried.push(format!("{origin}: {e}")),
+                    Err(e) => tried.push((origin.clone(), e)),
                 }
             }
-            Err(e) => tried.push(format!("{origin}: {e}")),
+            Err(e) => tried.push((origin.clone(), BoardError::Transport(e))),
         }
     }
     Err(MirrorError::Unreachable { tried })
@@ -396,7 +403,7 @@ mod tests {
     use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
 
     use super::*;
-    use crate::http::{Transport, TransportError};
+    use crate::http::{dial_http, Method, Transport, TransportError};
     use crate::parse_address;
 
     fn a(s: &str) -> Address {
@@ -423,8 +430,8 @@ mod tests {
         before: PublicKey,
     }
 
-    impl Transport for Rc<Scripted> {
-        fn exchange(&self, method: &str, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+    impl Transport for Scripted {
+        fn exchange(&self, method: Method, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
             self.asked.borrow_mut().push(format!("{method} {path}"));
             let answer = |v: Value| -> Result<(u16, Vec<u8>), TransportError> { Ok((200, v.to_string().into_bytes())) };
             if let Some(since) = path.strip_prefix("/changes?since=") {
@@ -489,5 +496,30 @@ mod tests {
         let pulls: Vec<String> = board.asked.borrow().iter().filter(|r| r.contains("/changes")).cloned().collect();
         assert_eq!(pulls, ["GET /changes?since=0", "GET /changes?since=6"], "the second pull past the copy's frontier");
         assert_eq!(keys(&mut mirror), [key(3)], "the act read: the live table is the table at the head");
+    }
+
+    /// NO ROOT ANSWERED: every origin the hint names is named beside its own
+    /// error, in the hint's order — an `https` origin a transport this build
+    /// does not hold, an `http` one whose board is down — so a caller tells
+    /// the two apart by type and never by text; and nothing is written.
+    #[test]
+    fn every_origin_tried_is_named_beside_its_own_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").expect("a listener").local_addr().expect("its address");
+        let https = Origin::parse("https://registry.example").unwrap();
+        let down = Origin::parse(&format!("http://{closed}")).unwrap();
+        let genesis = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
+        let hint = RootHint::new(vec![https.clone(), down.clone()], genesis, None).unwrap();
+        let refused = Mirror::open(&hint, dir.path(), &dial_http).unwrap_err();
+        assert!(refused.to_string().starts_with("no root answered: https://registry.example: no transport held for https origins, http://"), "{refused}");
+        let tried = match refused {
+            MirrorError::Unreachable { tried } => tried,
+            other => panic!("no root answers: {other:?}"),
+        };
+        assert_eq!(tried[0], (https, BoardError::Transport(TransportError::NotHeld("https".into()))));
+        assert_eq!(tried[1].0, down);
+        assert!(matches!(tried[1].1, BoardError::Transport(TransportError::Connect(_))), "{:?}", tried[1].1);
+        assert_eq!(tried.len(), 2);
+        assert!(!dir.path().join(FEED_COPY).exists(), "nothing written");
     }
 }

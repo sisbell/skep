@@ -35,6 +35,7 @@ use crate::state::{BindingRecord, EndpointRecord, Judged, Resolution, Verdict};
 
 /// What the guest-reading resolve cost (the investigation §3.1).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct GuestCost {
     /// Candidate bindings the class scan listed: binding-typed links from
     /// every home (REG-3.24).
@@ -70,31 +71,26 @@ pub fn guest_resolve(
     // class.
     let mut links = scan_class(board, t_binding(), None)?;
     cost.candidate_bindings_scanned = links.len() as u64;
-    links.sort_by_key(|a| a.tumbler().iter().cloned().collect::<Vec<_>>());
+    links.sort_unstable();
     for link in &links {
-        if let Some((home, from, to)) = read_link(board, link)? {
-            if let Some(text) = atom_at_head(board, &home, &from)? {
-                cost.atoms_read += 1;
-                if let Ok(record) = parse(BodyKind::Binding, text.as_bytes()) {
-                    if let Body::Binding(b) = record.body {
-                        if let Some(p) = parse_address(&b.prefix) {
-                            ledger.fold_binding(Judged {
-                                position: 0,
-                                link: link.clone(),
-                                home,
-                                record: BindingRecord {
-                                    prefix: p,
-                                    account: to.first().cloned(),
-                                    replaces: b.replaces.as_deref().and_then(parse_address),
-                                    honored: false,
-                                },
-                                verdict: Verdict::UndeterminableHere,
-                            });
-                        }
-                    }
-                }
-            }
-        }
+        let Some((home, from, to)) = read_link(board, link)? else { continue };
+        let Some(text) = atom_at_head(board, &home, &from)? else { continue };
+        cost.atoms_read += 1;
+        let Ok(record) = parse(BodyKind::Binding, text.as_bytes()) else { continue };
+        let Body::Binding(b) = record.body else { continue };
+        let Some(prefix) = parse_address(&b.prefix) else { continue };
+        ledger.fold_binding(Judged {
+            position: 0,
+            link: link.clone(),
+            home,
+            record: BindingRecord {
+                prefix,
+                account: to.first().cloned(),
+                replaces: b.replaces.as_deref().and_then(parse_address),
+                honored: false,
+            },
+            verdict: Verdict::UndeterminableHere,
+        });
     }
     let finish = |cost: &mut GuestCost| {
         cost.reads = board.reads().total() - reads_before;
@@ -112,34 +108,30 @@ pub fn guest_resolve(
     let keys = live_keys(board, &account)?;
     let home = doc_1_of(&account);
     let mut deposits = scan_class(board, t_endpoint(), Some(&home))?;
-    deposits.sort_by_key(|a| a.tumbler().iter().cloned().collect::<Vec<_>>());
+    deposits.sort_unstable();
     for link in &deposits {
-        if let Some((dep_home, from, _)) = read_link(board, link)? {
-            if dep_home != home {
-                continue;
-            }
-            if let Some(text) = atom_at_head(board, &dep_home, &from)? {
-                cost.atoms_read += 1;
-                if let Ok(record) = parse(BodyKind::Endpoint, text.as_bytes()) {
-                    if let Body::Endpoint(e) = record.body {
-                        let honored = ledger.fold_endpoint(Judged {
-                            position: 0,
-                            link: link.clone(),
-                            home: dep_home,
-                            record: EndpointRecord {
-                                origins: e.origins,
-                                replaces: e.replaces.as_deref().and_then(parse_address),
-                                honored: false,
-                                nullified: false,
-                            },
-                            verdict: Verdict::UndeterminableHere,
-                        });
-                        if honored && board.retraction_stands(link)? {
-                            ledger.nullify(link);
-                        }
-                    }
-                }
-            }
+        let Some((dep_home, from, _)) = read_link(board, link)? else { continue };
+        if dep_home != home {
+            continue;
+        }
+        let Some(text) = atom_at_head(board, &dep_home, &from)? else { continue };
+        cost.atoms_read += 1;
+        let Ok(record) = parse(BodyKind::Endpoint, text.as_bytes()) else { continue };
+        let Body::Endpoint(e) = record.body else { continue };
+        let honored = ledger.fold_endpoint(Judged {
+            position: 0,
+            link: link.clone(),
+            home: dep_home,
+            record: EndpointRecord {
+                origins: e.origins,
+                replaces: e.replaces.as_deref().and_then(parse_address),
+                honored: false,
+                nullified: false,
+            },
+            verdict: Verdict::UndeterminableHere,
+        });
+        if honored && board.retraction_stands(link)? {
+            ledger.nullify(link);
         }
     }
     let endpoint = ledger.current_endpoint(&home).cloned();

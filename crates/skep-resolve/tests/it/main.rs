@@ -10,13 +10,16 @@ mod origin;
 mod walk;
 
 use std::collections::HashMap;
+use std::io;
 use std::net::IpAddr;
 use std::path::Path;
 use std::rc::Rc;
 
 use serde_json::Value;
 use skep_address::Address;
-use skep_resolve::{Mirror, NameResolver, Origin, Resolution, RootHint, Transport, TransportError, Transports};
+use skep_resolve::{
+    Method, Mirror, NameResolver, Origin, Resolution, RootHint, Transport, TransportError, Transports,
+};
 
 /// The recording, parsed: the hint it was made under, the two tampered
 /// prefixes, and every exchange keyed by its request.
@@ -57,7 +60,7 @@ const REGENERATE: &str = "regenerate the fixture: SKEP_RESOLVE_FIXTURE_WRITE=1 c
 pub struct Replay(pub Rc<Fixture>);
 
 impl Transport for Replay {
-    fn exchange(&self, method: &str, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+    fn exchange(&self, method: Method, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
         let key = (method.to_string(), path.to_string(), String::from_utf8_lossy(body).into_owned());
         match self.0.exchanges.get(&key) {
             Some((status, response)) => Ok((*status, response.clone().into_bytes())),
@@ -84,7 +87,7 @@ pub fn open_fixture_mirror(dir: &Path) -> (Rc<Fixture>, Mirror) {
 pub struct Names(HashMap<&'static str, Vec<IpAddr>>);
 
 impl NameResolver for Names {
-    fn resolve(&self, host: &str) -> Result<Vec<IpAddr>, String> {
+    fn resolve(&self, host: &str) -> io::Result<Vec<IpAddr>> {
         Ok(self.0.get(host).cloned().unwrap_or_default())
     }
 }

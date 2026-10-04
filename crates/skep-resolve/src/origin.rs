@@ -44,7 +44,9 @@
 //! for the scheme term, re-spelled here because a client links no daemon.
 
 use std::fmt;
+use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
+use std::str::FromStr;
 
 /// One canonical web origin: `scheme://host[:port]`, lowercase, no path, no
 /// trailing slash, the scheme's default port omitted — the daemon's own
@@ -143,6 +145,36 @@ impl fmt::Display for Origin {
     }
 }
 
+/// [`Origin::parse`] refused: the text is not a canonical origin. Carries
+/// no reason — the canonical form is one shape, and enumerating the ways to
+/// miss it here would be a second enumeration to keep in step with
+/// `parse`'s own doc.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NotCanonical;
+
+impl fmt::Display for NotCanonical {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            "not a canonical origin (scheme://host[:port], lowercase, \
+             the scheme's default port omitted)",
+        )
+    }
+}
+
+impl std::error::Error for NotCanonical {}
+
+/// The ecosystem door, as the daemon's own origin has it. [`Origin::parse`]
+/// stays: its `Option` is the predicate form the member checks here use,
+/// and `FromStr` is what a generic caller — a command's argument parser, an
+/// environment reader — can reach.
+impl FromStr for Origin {
+    type Err = NotCanonical;
+
+    fn from_str(s: &str) -> Result<Origin, NotCanonical> {
+        Origin::parse(s).ok_or(NotCanonical)
+    }
+}
+
 /// Host canonicality: lowercase letters, digits, `.`, `-`, and the
 /// bracketed-IPv6 alphabet.
 fn host_is_canonical(host: &str) -> bool {
@@ -194,11 +226,12 @@ fn routable_v6(a: Ipv6Addr) -> bool {
 
 /// THIS RESOLVER'S OWN RESOLUTION OF A NAME (REG-3.35): the addresses a host
 /// name yields, which the host term is then tested at. A trait so a suite
-/// can hold the yield fixed; the shipped resolver is [`SystemResolver`].
-/// `Err` is a resolution that could not run; an empty `Ok` is a name that
-/// yields none — both are the DEAD arm, never a refusal.
+/// can hold the yield fixed; the shipped resolver is [`SystemResolver`]. An
+/// `Err` is a resolution that could not run — std's own `io::Error`, as
+/// `ToSocketAddrs` answers it — and an empty `Ok` a name that yields none:
+/// both are the DEAD arm, never a refusal.
 pub trait NameResolver {
-    fn resolve(&self, host: &str) -> Result<Vec<IpAddr>, String>;
+    fn resolve(&self, host: &str) -> io::Result<Vec<IpAddr>>;
 }
 
 /// The operating system's resolver, over `std::net::ToSocketAddrs`.
@@ -206,9 +239,8 @@ pub trait NameResolver {
 pub struct SystemResolver;
 
 impl NameResolver for SystemResolver {
-    fn resolve(&self, host: &str) -> Result<Vec<IpAddr>, String> {
-        let addrs = (host, 0u16).to_socket_addrs().map_err(|e| e.to_string())?;
-        Ok(addrs.map(|a| a.ip()).collect())
+    fn resolve(&self, host: &str) -> io::Result<Vec<IpAddr>> {
+        Ok((host, 0u16).to_socket_addrs()?.map(|a| a.ip()).collect())
     }
 }
 
@@ -216,7 +248,26 @@ impl NameResolver for SystemResolver {
 /// name (REG-3.34 as RES-28 amends it): a member of a kind whose transport
 /// is not held is NOT DIALED. The default is the frontend's: https held, no
 /// onion transport.
+///
+/// The kinds are not closed — a later kind is one more admitted kind BY
+/// NAME (REG-3.34) — so a set of transports is built from the default and
+/// [`Transports::with`], and asked by [`Transports::holds`], never spelled
+/// whole: a literal naming today's fields would not compile beside the next
+/// kind's. The twin builds and reads what the refusal below it does; the
+/// refusal's one difference is the literal.
+///
+/// ```
+/// use skep_resolve::{MemberKind, Transports};
+/// let held = Transports::default().with(MemberKind::Onion);
+/// assert!(held.holds(MemberKind::Https) && held.holds(MemberKind::Onion));
+/// ```
+/// ```compile_fail,E0639
+/// use skep_resolve::{MemberKind, Transports};
+/// let held = Transports { https: true, onion: true };
+/// assert!(held.holds(MemberKind::Https) && held.holds(MemberKind::Onion));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Transports {
     pub https: bool,
     pub onion: bool,
@@ -228,8 +279,56 @@ impl Default for Transports {
     }
 }
 
+impl Transports {
+    /// Whether the transport of `kind` is held.
+    pub fn holds(&self, kind: MemberKind) -> bool {
+        match kind {
+            MemberKind::Https => self.https,
+            MemberKind::Onion => self.onion,
+        }
+    }
+
+    /// These transports with `kind`'s held besides.
+    pub fn with(self, kind: MemberKind) -> Transports {
+        let mut held = self;
+        match kind {
+            MemberKind::Https => held.https = true,
+            MemberKind::Onion => held.onion = true,
+        }
+        held
+    }
+}
+
 /// The admitted kinds of an endpoint member (REG-3.34), each by its name.
+///
+/// The kinds are not closed: a later kind is one more admitted kind BY NAME
+/// and never a design event (REG-3.34), so a caller's match keeps an arm for
+/// the kinds it does not know. The twin compiles with that arm; the refusal
+/// beside it, its one difference the arm, does not.
+///
+/// ```
+/// use skep_resolve::MemberKind;
+/// fn transport_of(kind: MemberKind) -> &'static str {
+///     match kind {
+///         MemberKind::Https => "tls",
+///         MemberKind::Onion => "tor",
+///         _ => "none held",
+///     }
+/// }
+/// assert_eq!(transport_of(MemberKind::Onion), "tor");
+/// ```
+/// ```compile_fail,E0004
+/// use skep_resolve::MemberKind;
+/// fn transport_of(kind: MemberKind) -> &'static str {
+///     match kind {
+///         MemberKind::Https => "tls",
+///         MemberKind::Onion => "tor",
+///     }
+/// }
+/// assert_eq!(transport_of(MemberKind::Onion), "tor");
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum MemberKind {
     /// An `https` origin.
     Https,
@@ -319,11 +418,7 @@ pub fn judge_member(member: &str, names: &dyn NameResolver, transports: &Transpo
         None if origin.is_https() => MemberKind::Https,
         None => return refused(Term::Scheme),
     };
-    let held = match kind {
-        MemberKind::Https => transports.https,
-        MemberKind::Onion => transports.onion,
-    };
-    if !held {
+    if !transports.holds(kind) {
         return MemberOutcome::NotDialed { origin, kind };
     }
     // The host term: nothing to test at a self-authenticating member.
@@ -352,10 +447,12 @@ pub fn judge_member(member: &str, names: &dyn NameResolver, transports: &Transpo
 /// THE ORDERED WALK over an endpoint's members (REG-3.34's one precedence):
 /// every member judged in the org's order, the first that would dial taken
 /// as the dial; where none would, the dial is `None` and the first member's
-/// outcome is the face's (REG-3.80).
-pub fn walk_members(origins: &[String], names: &dyn NameResolver, transports: &Transports) -> EndpointWalk {
+/// outcome is the face's (REG-3.80). The members are read and never kept:
+/// any slice of text will do — an endpoint record's own `Vec<String>`, a
+/// caller's `&[&str]`.
+pub fn walk_members<S: AsRef<str>>(origins: &[S], names: &dyn NameResolver, transports: &Transports) -> EndpointWalk {
     let outcomes: Vec<MemberOutcome> =
-        origins.iter().map(|m| judge_member(m, names, transports)).collect();
+        origins.iter().map(|m| judge_member(m.as_ref(), names, transports)).collect();
     let dial = outcomes.iter().enumerate().find_map(|(i, o)| match o {
         MemberOutcome::WouldDial { origin, kind, addresses } => Some(EndpointDial {
             member: i,
@@ -373,18 +470,33 @@ mod tests {
     use super::*;
 
     /// The canonical grammar admits the canonical text alone, as the
-    /// daemon's own origin parse does.
+    /// daemon's own origin parse does — through `parse` and `str::parse`
+    /// alike, the second refusing by name.
     #[test]
     fn origins_are_canonical_only() {
         for ok in ["https://acme.example", "https://acme.example:8443", "http://x.onion", "https://[2606:2800:220:1:248:1893:25c8:1946]", "http://127.0.0.1:8642"] {
             let o = Origin::parse(ok).unwrap_or_else(|| panic!("'{ok}' is canonical"));
             assert_eq!(o.as_str(), ok);
+            assert_eq!(ok.parse::<Origin>(), Ok(o), "'{ok}' through str::parse");
         }
         for bad in ["https://acme.example:443", "http://x:80", "HTTPS://x", "https://X.org", "https://x/", "https://x/path", "ftp://x", "https://", "https://x:", "https://x:0", "https://x:08443", "", "acme.example"] {
             assert!(Origin::parse(bad).is_none(), "'{bad}' must not parse");
+            assert_eq!(bad.parse::<Origin>(), Err(NotCanonical), "'{bad}' through str::parse");
         }
         assert_eq!(Origin::parse("https://acme.example").unwrap().port(), 443);
         assert_eq!(Origin::parse("http://acme.example").unwrap().port(), 80);
+    }
+
+    /// The transports held, asked by kind: the default is the frontend's —
+    /// https held, no onion transport — and `with` holds a kind's besides,
+    /// keeping the rest.
+    #[test]
+    fn the_transports_held_are_asked_by_kind() {
+        let default = Transports::default();
+        assert!(default.holds(MemberKind::Https) && !default.holds(MemberKind::Onion));
+        let both = default.with(MemberKind::Onion);
+        assert!(both.holds(MemberKind::Https) && both.holds(MemberKind::Onion));
+        assert_eq!(both.with(MemberKind::Onion), both, "a kind held already");
     }
 
     /// REG-3.35's classes are not routable; a public address is.

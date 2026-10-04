@@ -152,7 +152,7 @@ fn the_faces_of_the_resolvers_own_checks() {
 fn the_onion_transport_held_dials_the_onion_member() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (_, mut mirror) = open_fixture_mirror(dir.path());
-    let transports = Transports { https: true, onion: true };
+    let transports = Transports::default().with(MemberKind::Onion);
     match skep_resolve::resolve(&mut mirror, &addr("1.10"), &names(), &transports).expect("resolve") {
         Resolution::Bound { dial, .. } => {
             assert_eq!((dial.member, dial.kind), (0, MemberKind::Onion));

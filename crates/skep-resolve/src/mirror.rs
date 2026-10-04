@@ -111,9 +111,13 @@ const FEED_FORMAT: &str = "feed-v1";
 
 /// Why the mirror could not be opened or synced.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MirrorError {
-    /// No origin of the hint answered `/health`.
-    Unreachable { tried: Vec<String> },
+    /// No origin of the hint answered `/health`: every origin tried, in the
+    /// hint's order, beside why — the transport's own error where the dial
+    /// failed (an `https` origin this build holds no transport for among
+    /// them), the board's where `/health` did.
+    Unreachable { tried: Vec<(Origin, BoardError)> },
     /// A read the board refused or could not answer.
     Board(BoardError),
     /// The base's provenance refused the source (REG-3.19, REG-3.42).
@@ -132,7 +136,16 @@ pub enum MirrorError {
 impl fmt::Display for MirrorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MirrorError::Unreachable { tried } => write!(f, "no root answered: {}", tried.join(", ")),
+            MirrorError::Unreachable { tried } => {
+                f.write_str("no root answered: ")?;
+                for (i, (origin, e)) in tried.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{origin}: {e}")?;
+                }
+                Ok(())
+            }
             MirrorError::Board(e) => write!(f, "{e}"),
             MirrorError::Refused(r) => write!(f, "{r}"),
             MirrorError::NoClaim => f.write_str("the board is unclaimed: no registry to read"),
@@ -206,6 +219,7 @@ pub enum Opened {
 
 /// What the home's chain walk cost (REG-3.25; the investigation §3.3).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ChainWalkStats {
     /// Atoms recovered by the walk.
     pub atoms: u64,
@@ -222,6 +236,7 @@ pub struct ChainWalkStats {
 
 /// The numbers a mirror reports.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Stats {
     /// Feed rows folded.
     pub rows: u64,
@@ -271,12 +286,22 @@ struct StoredLink {
     to: Vec<Address>,
 }
 
+/// AN EPOCH of an account's credential table: the position of the account's
+/// latest credential act at or below the position a table is read for — 0
+/// before its first act — the key a table is kept under and found by, the
+/// table being constant across an epoch. A type of its own: the epoch a
+/// table is kept under and the position it is read for are both positions
+/// on the feed, and swapped they would keep a table under another epoch's
+/// key and judge records by it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct Epoch(u64);
+
 /// A credential table kept under the epoch it belongs to: the account, the
 /// epoch, the position it was read for, and the enrolled keys.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct KeysAsOf {
     account: Address,
-    epoch: u64,
+    epoch: Epoch,
     at: u64,
     enrolled: Vec<Enrolled>,
 }
@@ -292,7 +317,7 @@ struct KeysAsOf {
 struct Fetched {
     links: BTreeMap<Address, StoredLink>,
     atoms: BTreeMap<Address, String>,
-    keys: BTreeMap<(Address, u64), KeysAsOf>,
+    keys: BTreeMap<(Address, Epoch), KeysAsOf>,
     retracted: BTreeMap<u64, Vec<Address>>,
     board: Option<BoardTerm>,
     claim: Option<(u64, Address)>,
@@ -367,7 +392,7 @@ impl Fetched {
         }
         let line = json!({ "keys": {
             "account": keys.account.to_string(),
-            "epoch": keys.epoch,
+            "epoch": keys.epoch.0,
             "at": keys.at,
             "enrolled": keys.enrolled.iter().map(|e| json!({ "alg": e.key.alg(), "key": e.key.to_hex(), "anchor": e.anchor })).collect::<Vec<_>>(),
         }});
@@ -552,6 +577,23 @@ pub struct Mirror {
     opened: Opened,
 }
 
+/// What a mirror shows of itself: the hint it is scoped to, the root that
+/// answered, its directory, its head, how its base was established, and its
+/// index's counts — never the board it reads, whose transport is the
+/// caller's and shows nothing, nor its rows.
+impl fmt::Debug for Mirror {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Mirror")
+            .field("hint", &self.hint)
+            .field("root", &self.root)
+            .field("dir", &self.dir)
+            .field("head", &self.head)
+            .field("opened", &self.opened)
+            .field("counts", &self.index.counts())
+            .finish_non_exhaustive()
+    }
+}
+
 impl Mirror {
     /// THE INDEX as it stands.
     pub fn index(&self) -> &Index {
@@ -674,15 +716,12 @@ impl Mirror {
 
     // ── the fold ────────────────────────────────────────────────────────────
 
-    /// One feed row, folded (the module doc's fetch-and-fold).
-    fn fold_row(&mut self, row: &Value) -> Result<(), MirrorError> {
-        if let Some((at, link, home)) = link_row(row) {
-            return self.fold_link(at, &link, &home);
-        }
-        let at = position(row).unwrap_or(0);
-        let docs = docs_of(row);
-        match row["op"].as_str() {
-            Some("nullify") => {
+    /// One feed row, folded (the module doc's fetch-and-fold), as
+    /// [`Row::of`] read it.
+    fn fold_row(&mut self, row: Row) -> Result<(), MirrorError> {
+        match row {
+            Row::Link { at, link, home } => self.fold_link(at, &link, &home),
+            Row::Nullify { at, docs } => {
                 for doc in &docs {
                     let candidates: Vec<Address> = self
                         .index
@@ -697,15 +736,16 @@ impl Mirror {
                         }
                     }
                 }
+                Ok(())
             }
-            Some("publish") | Some("version") => {
-                for member in &docs {
+            Row::Chain { members } => {
+                for member in &members {
                     self.chains.learn(member);
                 }
+                Ok(())
             }
-            _ => {}
+            Row::Other => Ok(()),
         }
-        Ok(())
     }
 
     /// One link row: the claim — the realm compared at its row, on every open
@@ -879,19 +919,44 @@ impl Mirror {
     }
 }
 
-/// A LINK ROW — an unattested `make_link`, the row every record deposit and
-/// every credential deposit commits (wire.md §Registry: "the link's row on
-/// `/changes` carries neither `key` nor `attest`, as a credential deposit's
-/// does") — as its position, its link and its home, the first document the
-/// row names; `None` for every other row. The fold and the credential pass
-/// both read a row's link through here.
-fn link_row(row: &Value) -> Option<(u64, Address, Address)> {
-    if row["op"].as_str() != Some("make_link") || row.get("attest").is_some() {
-        return None;
+/// A FEED ROW as the fold reads it — what it takes of a row, read once and
+/// owned, so the held row is lent for the reading and never copied. The
+/// fold and the credential pass both read a row through [`Row::of`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Row {
+    /// A LINK ROW — an unattested `make_link`, the row every record deposit
+    /// and every credential deposit commits (wire.md §Registry: "the link's
+    /// row on `/changes` carries neither `key` nor `attest`, as a credential
+    /// deposit's does") — as its position, its link and its home, the first
+    /// document the row names that is an address.
+    Link { at: u64, link: Address, home: Address },
+    /// A `nullify`: its position, and the documents it names — the homes
+    /// whose deposits a retraction may take off the active view.
+    Nullify { at: u64, docs: Vec<Address> },
+    /// A `publish` or a `version`: the members it names, which the chain
+    /// walk learns.
+    Chain { members: Vec<Address> },
+    /// Every other row — an attested `make_link`, one naming no link or no
+    /// home, a write of another op: nothing the fold takes.
+    Other,
+}
+
+impl Row {
+    /// The row a feed entry is, as the fold reads it.
+    fn of(row: &Value) -> Row {
+        match row["op"].as_str() {
+            Some("make_link") if row.get("attest").is_none() => {
+                let link = row["link"].as_str().and_then(parse_address);
+                match (link, docs_of(row).into_iter().next()) {
+                    (Some(link), Some(home)) => Row::Link { at: position(row).unwrap_or(0), link, home },
+                    _ => Row::Other,
+                }
+            }
+            Some("nullify") => Row::Nullify { at: position(row).unwrap_or(0), docs: docs_of(row) },
+            Some("publish") | Some("version") => Row::Chain { members: docs_of(row) },
+            _ => Row::Other,
+        }
     }
-    let link = row["link"].as_str().and_then(parse_address)?;
-    let home = docs_of(row).into_iter().next()?;
-    Some((position(row).unwrap_or(0), link, home))
 }
 
 /// A feed row's position, where it names one — the one reading of a row's
@@ -929,7 +994,7 @@ fn stored_link_of(l: &Value) -> Option<StoredLink> {
 fn keys_of(k: &Value) -> Option<KeysAsOf> {
     Some(KeysAsOf {
         account: parse_address(k["account"].as_str()?)?,
-        epoch: k["epoch"].as_u64()?,
+        epoch: Epoch(k["epoch"].as_u64()?),
         at: k["at"].as_u64()?,
         enrolled: k["enrolled"].as_array()?.iter().map(enrolled_line_of).collect::<Option<_>>()?,
     })
@@ -976,17 +1041,22 @@ mod tests {
 
     /// A link row is an unattested `make_link` with a link and a home — the
     /// row a record deposit and a credential deposit alike commit; an
-    /// attested one, a row of another op, and one naming no document are
-    /// none.
+    /// attested one and one naming no document are no link row, nothing the
+    /// fold takes. A `nullify` is read as the documents it names, and a
+    /// `publish` as the members it names.
     #[test]
     fn a_link_row_is_an_unattested_make_link() {
         let row = json!({ "at": 7, "op": "make_link", "link": "1.0.2.0.1.0.2.1", "docs": ["not an address", "1.0.2.0.1"] });
-        assert_eq!(link_row(&row), Some((7, a("1.0.2.0.1.0.2.1"), a("1.0.2.0.1"))), "the home is the first document that is an address");
+        let link = Row::Link { at: 7, link: a("1.0.2.0.1.0.2.1"), home: a("1.0.2.0.1") };
+        assert_eq!(Row::of(&row), link, "the home is the first document that is an address");
         let mut attested = row.clone();
         attested["attest"] = json!({});
-        assert_eq!(link_row(&attested), None);
-        assert_eq!(link_row(&json!({ "at": 7, "op": "nullify", "link": "1.0.2.0.1.0.2.1", "docs": ["1.0.2.0.1"] })), None);
-        assert_eq!(link_row(&json!({ "at": 7, "op": "make_link", "link": "1.0.2.0.1.0.2.1", "docs": [] })), None);
+        assert_eq!(Row::of(&attested), Row::Other);
+        assert_eq!(Row::of(&json!({ "at": 7, "op": "make_link", "link": "1.0.2.0.1.0.2.1", "docs": [] })), Row::Other);
+        let nullify = json!({ "at": 8, "op": "nullify", "link": "1.0.2.0.1.0.2.1", "docs": ["1.0.2.0.1"] });
+        assert_eq!(Row::of(&nullify), Row::Nullify { at: 8, docs: vec![a("1.0.2.0.1")] });
+        let publish = json!({ "at": 9, "op": "publish", "docs": ["1.0.2.0.1.1"] });
+        assert_eq!(Row::of(&publish), Row::Chain { members: vec![a("1.0.2.0.1.1")] });
     }
 
     /// THE FETCH CACHE'S FORMAT has one writer and one reader: every kind of
@@ -1009,7 +1079,7 @@ mod tests {
         };
         let keys = KeysAsOf {
             account: a("1.0.2"),
-            epoch: 5,
+            epoch: Epoch(5),
             at: 9,
             enrolled: vec![Enrolled { key: key(3), anchor: true }, Enrolled { key: key(4), anchor: false }],
         };

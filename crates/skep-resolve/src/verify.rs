@@ -44,6 +44,7 @@ use skep_identity::{
 };
 use skep_registry::Record;
 
+use crate::hex_byte;
 use crate::state::Verdict;
 
 /// THE TRIAL's inputs by name — the frame's members beside the candidates.
@@ -79,18 +80,7 @@ pub fn hybrid_blob(sig: &str) -> Option<Vec<u8>> {
     if !rest.is_empty() {
         return None;
     }
-    pairs
-        .iter()
-        .map(|pair| {
-            let nibble = |c: u8| match c {
-                b'0'..=b'9' => Some(c - b'0'),
-                b'a'..=b'f' => Some(c - b'a' + 10),
-                b'A'..=b'F' => Some(c - b'A' + 10),
-                _ => None,
-            };
-            Some((nibble(pair[0])? << 4) | nibble(pair[1])?)
-        })
-        .collect()
+    pairs.iter().map(|pair| hex_byte(*pair)).collect()
 }
 
 /// THE VERDICT on one parsed record under its trial (steps 2 to 5 of the

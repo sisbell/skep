@@ -35,8 +35,8 @@ use serde_json::{json, Value};
 use skep_address::{document_of, Address, Nat};
 use skep_identity::{BoardTerm, Enrolled, PublicKey};
 
-use crate::http::{Transport, TransportError};
-use crate::parse_address;
+use crate::http::{Method, Transport, TransportError};
+use crate::{hex_byte, parse_address};
 
 /// How often a `history_busy` or `scan_busy` answer is retried before the
 /// read is given up — a retry-class refusal, never a queue (wire.md §Reading
@@ -60,6 +60,7 @@ static HEAD_MEMBER_1: LazyLock<Address> =
 /// resolve's cost is stated in (the investigation §3.1). Reads over `/op-at`
 /// are counted under their own kind AND under `op_at`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Reads {
     pub changes: u64,
     pub health: u64,
@@ -106,6 +107,7 @@ impl Reads {
 
 /// Why a typed read could not be answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BoardError {
     /// The board was not reached.
     Transport(TransportError),
@@ -136,7 +138,8 @@ impl fmt::Display for BoardError {
             },
             BoardError::Busy => f.write_str("the board stayed busy past the retries"),
             BoardError::PageTooLarge { fits } => write!(f, "the page passes the byte budget; {fits} rows fit"),
-            BoardError::Reclaimed { floor } => write!(f, "history reclaimed below {floor:?}"),
+            BoardError::Reclaimed { floor: Some(floor) } => write!(f, "history reclaimed below position {floor}"),
+            BoardError::Reclaimed { floor: None } => f.write_str("history reclaimed"),
         }
     }
 }
@@ -163,6 +166,7 @@ pub(crate) struct KeySetAnswer {
 
 /// One page of the feed (wire.md §The change feed).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Page {
     /// The entries, oldest first, each as served.
     pub rows: Vec<Value>,
@@ -182,7 +186,19 @@ pub struct Board {
     feed_bytes: Cell<u64>,
 }
 
+/// What a board shows of itself: the reads made so far, by kind, and the
+/// feed's bytes — the transport is the caller's, and shows nothing.
+impl fmt::Debug for Board {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Board")
+            .field("reads", &self.reads())
+            .field("feed_bytes", &self.feed_bytes())
+            .finish_non_exhaustive()
+    }
+}
+
 impl Board {
+    /// The typed reads over `transport`, every count at zero.
     pub fn new(transport: Box<dyn Transport>) -> Board {
         Board { transport, reads: Cell::new(Reads::default()), feed_bytes: Cell::new(0) }
     }
@@ -211,7 +227,7 @@ impl Board {
     /// `GET /health`: the board's live pair and auth object.
     pub fn health(&self) -> Result<Value, BoardError> {
         self.bump(|r| r.health += 1);
-        let (st, body) = self.transport.exchange("GET", "/health", b"")?;
+        let (st, body) = self.transport.exchange(Method::Get, "/health", b"")?;
         if st != 200 {
             return Err(BoardError::Status { status: st, body: String::from_utf8_lossy(&body).into_owned() });
         }
@@ -225,7 +241,7 @@ impl Board {
             Some(l) => format!("/changes?since={since}&limit={l}"),
             None => format!("/changes?since={since}"),
         };
-        let (st, body) = self.transport.exchange("GET", &path, b"")?;
+        let (st, body) = self.transport.exchange(Method::Get, &path, b"")?;
         let text = || String::from_utf8_lossy(&body).into_owned();
         match st {
             200 => {}
@@ -243,8 +259,13 @@ impl Board {
             _ => return Err(BoardError::Status { status: st, body: text() }),
         }
         self.feed_bytes.set(self.feed_bytes.get() + body.len() as u64);
-        let v = Board::json(&body)?;
-        let rows = v["changes"].as_array().cloned().ok_or_else(|| BoardError::Malformed("no changes".into()))?;
+        let mut v = Board::json(&body)?;
+        // The rows are moved out of the answer, never copied: the answer is
+        // dropped once they are taken.
+        let rows = match v.get_mut("changes").map(Value::take) {
+            Some(Value::Array(rows)) => rows,
+            _ => return Err(BoardError::Malformed("no changes".into())),
+        };
         let last = v["last"].as_u64().ok_or_else(|| BoardError::Malformed("no last".into()))?;
         let more = v["more"].as_bool().ok_or_else(|| BoardError::Malformed("no more".into()))?;
         Ok(Page { rows, last, more, bytes: body.len() as u64 })
@@ -253,9 +274,9 @@ impl Board {
     /// `POST /op` as the guest: the answer as served, a `rejected` included
     /// (a caller that cannot take one asks [`Board::op_ok`]).
     pub fn op(&self, frame: &Value) -> Result<Value, BoardError> {
-        let op = frame["op"].as_str().unwrap_or("").to_string();
-        self.bump(|r| r.count_op(&op));
-        self.post_json("/op", &frame.to_string(), &op)
+        let op = frame["op"].as_str().unwrap_or("");
+        self.bump(|r| r.count_op(op));
+        self.post_json("/op", &frame.to_string(), op)
     }
 
     /// [`Board::op`], a `rejected` answer an error.
@@ -267,13 +288,13 @@ impl Board {
     /// `POST /op-at` as the guest: `frame` answered AS OF `at` (wire.md
     /// §Reading history), `history_busy` retried.
     pub fn op_at(&self, at: u64, frame: &Value) -> Result<Value, BoardError> {
-        let op = frame["op"].as_str().unwrap_or("").to_string();
+        let op = frame["op"].as_str().unwrap_or("");
         self.bump(|r| {
-            r.count_op(&op);
+            r.count_op(op);
             r.op_at += 1;
         });
         let body = format!(r#"{{"at":{at},"frame":{frame}}}"#);
-        self.post_json("/op-at", &body, &op)
+        self.post_json("/op-at", &body, op)
     }
 
     fn not_rejected(v: Value) -> Result<Value, BoardError> {
@@ -291,7 +312,7 @@ impl Board {
     fn post_json(&self, path: &str, body: &str, op: &str) -> Result<Value, BoardError> {
         let mut tries = 0;
         loop {
-            let (st, answer) = self.transport.exchange("POST", path, body.as_bytes())?;
+            let (st, answer) = self.transport.exchange(Method::Post, path, body.as_bytes())?;
             let text = || String::from_utf8_lossy(&answer).into_owned();
             match st {
                 200 => return Board::json(&answer),
@@ -325,7 +346,7 @@ impl Board {
         self.bump(|r| r.chain += 1);
         let mut tries = 0;
         loop {
-            let (st, body) = self.transport.exchange("GET", &format!("/chain?at={at}"), b"")?;
+            let (st, body) = self.transport.exchange(Method::Get, &format!("/chain?at={at}"), b"")?;
             let text = String::from_utf8_lossy(&body).into_owned();
             match st {
                 200 => {
@@ -445,14 +466,17 @@ fn key_set_answer(v: &Value) -> Option<KeySetAnswer> {
     Some(KeySetAnswer { as_of: v["as_of"].as_u64(), enrolled })
 }
 
-/// Sixty-four lowercase hex characters as the chain's thirty-two bytes.
+/// Sixty-four hex characters, either case, as the chain's thirty-two bytes —
+/// read a byte pair at a time ([`hex_byte`]), so text of any other shape,
+/// off the board, a copy or a cache, is no chain and never a panic.
 pub(crate) fn parse_chain(hex: &str) -> Option<[u8; 32]> {
-    if hex.len() != 64 {
+    let (pairs, rest) = hex.as_bytes().as_chunks::<2>();
+    if pairs.len() != 32 || !rest.is_empty() {
         return None;
     }
     let mut out = [0u8; 32];
-    for (i, byte) in out.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).ok()?;
+    for (byte, pair) in out.iter_mut().zip(pairs) {
+        *byte = hex_byte(*pair)?;
     }
     Some(out)
 }
@@ -494,13 +518,15 @@ pub(crate) fn runs_of(answer: &Value) -> Option<Vec<(Address, u64)>> {
 
 /// The V-ordinal `addr` sits at among an `image` answer's runs — each an
 /// I-start and a width, in V-order from ordinal 1 — where a run holds it.
+/// The widths are the board's word, so they are summed checked: an image
+/// whose widths overflow places nothing.
 pub(crate) fn position_in(runs: &[(Address, u64)], addr: &Address) -> Option<u64> {
     let mut pos = 1u64;
     for (start, width) in runs {
         if let Some(k) = offset_within(start, addr, *width) {
-            return Some(pos + k);
+            return pos.checked_add(k);
         }
-        pos += width;
+        pos = pos.checked_add(*width)?;
     }
     None
 }
@@ -554,7 +580,7 @@ mod tests {
     struct Canned(u16, String);
 
     impl Transport for Canned {
-        fn exchange(&self, _: &str, _: &str, _: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+        fn exchange(&self, _: Method, _: &str, _: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
             Ok((self.0, self.1.clone().into_bytes()))
         }
     }
@@ -563,11 +589,17 @@ mod tests {
         Board::new(Box::new(Canned(200, body.to_string())))
     }
 
+    /// A chain is sixty-four hex characters, either case, and nothing else —
+    /// text of any other shape is no chain and never a panic: a multi-byte
+    /// character at sixty-four bytes, a sign `from_str_radix` would read.
     #[test]
     fn chain_hex_parses_at_sixty_four_characters_alone() {
         assert!(parse_chain(&"ab".repeat(32)).is_some());
+        assert_eq!(parse_chain(&"AB".repeat(32)), parse_chain(&"ab".repeat(32)), "either case");
         assert!(parse_chain(&"ab".repeat(31)).is_none());
         assert!(parse_chain(&"zz".repeat(32)).is_none());
+        assert!(parse_chain(&format!("a€{}", "0".repeat(60))).is_none(), "a character across a byte pair");
+        assert!(parse_chain(&"+f".repeat(32)).is_none(), "a sign is no hex digit");
     }
 
     /// The values taken on the board's word are read where the wire spells
@@ -576,11 +608,15 @@ mod tests {
     /// the answer is one this build reads whole — its `as_of` and every entry
     /// beside it; an entry of an algorithm this build holds no row for, an
     /// answer with no list, and an entry with no anchor flag are no table,
-    /// never a smaller one and never an empty one.
+    /// never a smaller one and never an empty one. A board shows the reads
+    /// it made, and a reclaimed read names its floor where the board named
+    /// one.
     #[test]
     fn the_boards_word_is_typed_where_the_wire_spells_it() {
         let chain = "07".repeat(32);
-        assert_eq!(canned(json!({ "log_position": 9, "chain_head": chain })).head_pair(), Ok(Some((9, chain.clone()))));
+        let board = canned(json!({ "log_position": 9, "chain_head": chain }));
+        assert_eq!(board.head_pair(), Ok(Some((9, chain.clone()))));
+        assert!(format!("{board:?}").contains("health: 1"), "a board shows the reads it made: {board:?}");
         assert_eq!(canned(json!({ "log_position": 9, "chain_head": "07" })).head_pair(), Ok(None), "no chain");
         assert_eq!(canned(json!({ "chain_head": chain })).head_pair(), Ok(None), "no position");
         let h1 = json!({ "position": 4, "chain": chain }).to_string();
@@ -605,13 +641,17 @@ mod tests {
         let link = json!({ "resp": "link", "link": { "slots": [[{ "start": "1.0.2.0.1.0.1.1", "width": "0.1" }], [], [{ "start": "1.0.2", "width": "0.1" }]] } });
         assert_eq!(canned(link).link_slots(&a("1.0.2.0.1.0.2.1")), Ok(Some([vec![a("1.0.2.0.1.0.1.1")], vec![], vec![a("1.0.2")]])));
         assert_eq!(canned(json!({ "resp": "link", "link": null })).link_slots(&a("1.0.2.0.1.0.2.1")), Ok(None), "no link stands");
+        let reclaimed = |floor| BoardError::Reclaimed { floor }.to_string();
+        assert_eq!(reclaimed(Some(42)), "history reclaimed below position 42");
+        assert_eq!(reclaimed(None), "history reclaimed", "no floor named, none rendered");
     }
 
     /// The answers both readers of the board read alike: a link's slots, a
     /// document's content extent, an image's runs — whole or not at all —
     /// and an atom's V-ordinal among them, the runs taken in V-order, a gap
-    /// between two runs no position; and a content element's ordinal in its
-    /// own document, never a link element's nor a member's mint.
+    /// between two runs no position, and widths that overflow no position
+    /// either; and a content element's ordinal in its own document, never a
+    /// link element's nor a member's mint.
     #[test]
     fn the_shared_answers_read_one_way() {
         let link = json!({ "link": { "slots": [
@@ -634,6 +674,8 @@ mod tests {
         assert_eq!(position_in(&runs, &a("1.0.1.0.1.0.1.8")), Some(4));
         assert_eq!(position_in(&runs, &a("1.0.1.0.1.0.1.3")), None);
         assert_eq!(position_in(&runs, &a("1.0.1.0.1.0.2.1")), None, "a link element");
+        let overflowing = [(a("1.0.1.0.1.0.2.1"), u64::MAX), (a("1.0.1.0.1.0.1.1"), 1)];
+        assert_eq!(position_in(&overflowing, &a("1.0.1.0.1.0.1.1")), None, "widths that overflow place nothing");
         let torn = json!({ "resp": "runs", "runs": [
             { "i_start": "1.0.1.0.1.0.1.1", "width": "2" },
             { "i_start": "not an address", "width": "4" },

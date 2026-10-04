@@ -35,16 +35,18 @@
 //! of a start wins and nothing is ever evicted, so once a start is memoized
 //! ONE handle answers every later probe of it as it answered the first (a
 //! never-registered start is never memoized, its answer following the
-//! registration). On the disciplined domain (PR-DISC) an entry is moreover a
-//! function of the def's immutable content plus M7's monotone audit slice,
-//! so the fill is unobservable — every handle, warm or cold, answers alike —
-//! and each of these stays a query. Under a breach the design gives that up
-//! on purpose (freeze-on-breach, §Internal 4): a start deposited past the
-//! gate before its referent was registered, and probed in that window, stays
-//! POISONED on the probing handle while a handle that first probes it later
-//! derives it defined; and a reference to breached content may be refused
-//! one way warm and another cold. Every such disagreement is between
-//! refusals, or a refusal and a defined answer — never a wrong `Some`.
+//! registration; nor is an ever-registered start with nothing resident yet,
+//! its answer following the content). On the disciplined domain (PR-DISC) an
+//! entry is moreover a function of the def's immutable content plus M7's
+//! monotone audit slice, so the fill is unobservable — every handle, warm or
+//! cold, answers alike — and each of these stays a query. Under a breach the
+//! design gives that up on purpose (freeze-on-breach, §Internal 4): a start
+//! deposited past the gate before its referent was defined, and probed in
+//! that window, stays POISONED on the probing handle while a handle that
+//! first probes it later derives it defined; and a reference to breached
+//! content may be refused one way warm and another cold. Every such
+//! disagreement is between refusals, or a refusal and a defined answer —
+//! never a wrong `Some`.
 //!
 //! ## Boundary — deliberately NOT owned here
 //!
@@ -89,7 +91,13 @@
 //!   (`PredLayerMarkerType`). A breach degrades per start, as defined
 //!   (`UndisciplinedDef`, freeze-on-breach), but `is_ever_pred`,
 //!   `is_active_pred` and `is_certified_stable` read the classes: nothing in
-//!   M9 can tell a breaching `pd_stable` tuple from a certificate.
+//!   M9 can tell a breaching `pd_stable` tuple from a certificate. What
+//!   bounds a breach is that those probes match a start EXACTLY — a tuple
+//!   whose F names it, the shape the two writes deposit — so a forgery costs
+//!   its writer one tuple per start, and one whose F merely covers starts,
+//!   from a document, an account or the node, forges none of them. PL's
+//!   `is_K` over the two classes matches by coverage (D2), and a rule reading
+//!   either class has no such bound.
 
 #![forbid(unsafe_code)]
 

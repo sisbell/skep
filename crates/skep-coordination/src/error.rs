@@ -286,8 +286,10 @@ impl Error for RegisterError {
 #[non_exhaustive]
 pub enum EvalError {
     NotEverRegistered,
-    /// Ever-registered start whose immutable content fails the PR-ENC
-    /// parse/WT — reachable only under a PR-DISC breach (§Internal 4).
+    /// Ever-registered start whose content is absent, or fails the PR-ENC
+    /// parse/WT — reachable only under a PR-DISC breach (§Internal 4). The
+    /// memo freezes the second (freeze-on-breach) and never the first: a run
+    /// may yet be minted at a start that holds none.
     UndisciplinedDef,
     ArgArityMismatch,
     /// An argument's sort differs from Γ_D's.
@@ -299,7 +301,7 @@ impl fmt::Display for EvalError {
         f.write_str(match self {
             EvalError::NotEverRegistered => "evaluate_def: start is not an ever-registered def",
             EvalError::UndisciplinedDef => {
-                "evaluate_def: the def's content fails the parse/WT (PR-DISC breach)"
+                "evaluate_def: the def's content is absent or fails parse/WT (PR-DISC breach)"
             }
             EvalError::ArgArityMismatch => "evaluate_def: argument count differs from Γ_D's",
             EvalError::ArgSortMismatch => "evaluate_def: an argument's sort differs from Γ_D's",
@@ -319,10 +321,10 @@ impl Error for EvalError {}
 #[non_exhaustive]
 pub enum CertifyError {
     NotEverRegistered,
-    /// Ever-registered start with NO defined signature — the permanent
-    /// poisoned memo entry (PR-DISC breach, §Internal 4); mirrors
-    /// `EvalError`'s variant so CVALID (0)'s two `None` causes surface
-    /// distinctly.
+    /// Ever-registered start with NO defined signature — its content absent,
+    /// or failing the parse/WT, the latter a permanent poisoned memo entry
+    /// (PR-DISC breach, §Internal 4); mirrors `EvalError`'s variant so CVALID
+    /// (0)'s two `None` causes surface distinctly.
     UndisciplinedDef,
     NotBoolean,
     NotActive,
@@ -350,9 +352,9 @@ impl fmt::Display for CertifyError {
             CertifyError::NotEverRegistered => {
                 f.write_str("certify_stable: start is not an ever-registered def")
             }
-            CertifyError::UndisciplinedDef => {
-                f.write_str("certify_stable: the def's content fails the parse/WT (PR-DISC breach)")
-            }
+            CertifyError::UndisciplinedDef => f.write_str(
+                "certify_stable: the def's content is absent or fails parse/WT (PR-DISC breach)",
+            ),
             CertifyError::NotBoolean => f.write_str("certify_stable: the def's codomain is not Bool"),
             CertifyError::NotActive => f.write_str("certify_stable: the def is not actively registered"),
             CertifyError::ExpansionTooLarge => f.write_str(

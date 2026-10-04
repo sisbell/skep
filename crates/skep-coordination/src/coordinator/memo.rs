@@ -5,9 +5,9 @@
 //! and a rebuilt memo answers every question the old one did. A POISONED
 //! entry is the deliberate exception (freeze-on-breach, §Internal 4): it
 //! records a PR-DISC breach as this handle first met it, and a referent not
-//! yet registered at that moment is no fact about the content — a rebuilt
-//! memo may derive the start defined, the safe direction (the crate root
-//! states it).
+//! yet defined at that moment is no fact about the content — a rebuilt memo
+//! may derive the start defined, the safe direction (the crate root states
+//! it).
 
 use std::collections::HashMap;
 use std::sync::{Arc, PoisonError, RwLock};
@@ -17,12 +17,15 @@ use skep_address::{Address, Tumbler};
 use crate::check::TypedTerm;
 
 /// A def-status answer, distinguishing CVALID (0)'s two `None` causes:
-/// `Poisoned` (ever-registered, content undisciplined — PR-DISC breach) and
-/// `NeverRegistered` (never registered at the answering snapshot — the one
-/// status a later registration can change, and so the one never memoized).
-/// A `Defined` answer is the memo's own `Arc` of the def's checked term —
-/// its signature (`params`/`result_sort`) and its `Reg`-expanded evaluable
-/// body.
+/// `Poisoned` (ever-registered, content undisciplined or absent — a PR-DISC
+/// breach) and `NeverRegistered` (never registered at the answering
+/// snapshot). The two answers a later write can change are never memoized:
+/// `NeverRegistered`, which a registration changes, and the `Poisoned` of an
+/// ever-registered start with nothing resident, which an insert changes
+/// (`Coordinator::derive_def`); every other `Poisoned` is a fact about
+/// resident content, and the memo keeps it. A `Defined` answer is the memo's
+/// own `Arc` of the def's checked term — its signature
+/// (`params`/`result_sort`) and its `Reg`-expanded evaluable body.
 #[derive(Debug, Clone)]
 pub(super) enum DefStatus {
     Defined(Arc<TypedTerm>),
@@ -49,8 +52,10 @@ impl From<&MemoEntry> for DefStatus {
     }
 }
 
-/// An ever-registered start whose immutable content fails the PR-ENC parse or
-/// WT — the breach the poison records.
+/// An ever-registered start whose RESIDENT content fails the PR-ENC parse or
+/// WT — the breach the poison records. A start with nothing resident is not
+/// one: no content there has failed anything, and a run may yet be minted
+/// there (`Coordinator::derive_def` answers it unmemoized).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Breach;
 
@@ -65,12 +70,14 @@ pub(super) struct Breach;
 /// one is freeze-on-breach. ADMISSION is the def layer's, and cannot be this
 /// type's: `Coordinator::derive_def` admits on a miss, and
 /// `Coordinator::register_pred` admits the def it has just checked and
-/// registered. At both, only a start that is ever-registered is offered — at
-/// `derive_def`'s pinned snapshot, and at `register_pred` by the emit that
-/// just committed or deduped onto an incumbent (a never-registered start must
-/// surface a later registration) — and only a status about the CONTENT is
-/// filled: a derivation that could not complete at the level it was asked at
-/// fills nothing, that being the asking term's refusal, not the content's.
+/// registered. At both, only a start that is ever-registered and holds
+/// resident content is offered — at `derive_def`'s pinned snapshot, and at
+/// `register_pred` by the emit that just committed or deduped onto an
+/// incumbent, over the run it has just parsed (a never-registered start must
+/// surface a later registration, and one with nothing resident a later
+/// insert) — and only a status about the CONTENT is filled: a derivation that
+/// could not complete at the level it was asked at fills nothing, that being
+/// the asking term's refusal, not the content's.
 ///
 /// A `RwLock`, never a `RefCell`: the `&self` signature/define paths of a
 /// shared `Coordinator` need `Sync`. A poisoned lock is read through: the one

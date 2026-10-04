@@ -1,19 +1,20 @@
 //! M9 contract tests over a real kernel (InMemory), group B — predicate
 //! definitions as content: store/register/evaluate/supersede/certify/
 //! retract, the PR-ENC byte contract as `register_pred` reads it back, the
-//! memo's two permanent statuses and the one it never keeps, and the
-//! class-free registration probes beside the guest-class look. Every
-//! assertion states a claim the design or interface makes — nothing more.
+//! memo's two permanent statuses and the answers it never keeps, and the
+//! registration probes — class-free beside the guest-class look, and exact
+//! where PL's `is_K` matches by coverage. Every assertion states a claim the
+//! design or interface makes — nothing more.
 //!
 //! The claims live in this module's children, one concern each: `lifecycle`
 //! (define, register, retract and supersede, and what each returns), `gates`
 //! (every refusal a def write meets, and the order they speak in), `budgets`
 //! (the resource doors on the stored-bytes path), `resolution` (the memo's
-//! statuses, and the class-free registration probes beside the guest-class
-//! look), `evaluation` (a stored def's denotation, its argument door, and the
-//! source form it is stored as) and `certification` (`certify_stable`'s
-//! legs). The PR-ENC spellings below are what `gates`, `budgets` and
-//! `resolution` forge stored content with.
+//! statuses, and the registration probes: class-free beside the guest-class
+//! look, and matching a start exactly), `evaluation` (a stored def's
+//! denotation, its argument door, and the source form it is stored as) and
+//! `certification` (`certify_stable`'s legs). The PR-ENC spellings below are
+//! what `gates`, `budgets` and `resolution` forge stored content with.
 
 mod budgets;
 mod certification;

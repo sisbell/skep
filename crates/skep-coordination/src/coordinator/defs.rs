@@ -25,6 +25,20 @@
 //! filtered or not. Every read inside a VERDICT — this module's
 //! `evaluate_def` included — goes through `Coordinator::eval_ctx`'s
 //! guest-class view.
+//!
+//! THE DEF LAYER MATCHES A START EXACTLY, where PL's `is_K` matches by
+//! coverage (D2): `register_pred` and `certify_stable` deposit
+//! `enc({start})`, so a def's registration and its certificate are tuples
+//! whose F names the start and nothing else, and every probe of them — the
+//! two registration probes, `is_certified_stable` and `retract_pred`'s
+//! target — asks `tuple_naming`. A tuple whose F merely COVERS an address
+//! names nothing there. On the disciplined domain that refuses only wrong
+//! answers: no def start lies under another, a content address being minted
+//! one ordinal deep (M3's element field `[s_C, n]`), and an address under a
+//! def's start holds no def. Under a breach (PR-DISC) it is what bounds a
+//! forgery to one start per tuple: one tuple at an ancestor — a document, an
+//! account, the node — would otherwise register, endorse and certify every
+//! start beneath it.
 
 use std::collections::HashSet;
 use std::slice::from_ref;
@@ -34,7 +48,7 @@ use skep_address::{Address, Tumbler};
 use skep_arrangement::{Deposit, VPos};
 use skep_content::{ContentStore, Val};
 use skep_kernel::{Seq, Snapshot};
-use skep_links::{Caller, Pattern, ShippedType, Tip, View};
+use skep_links::{Caller, Pattern, ShippedType, Tip, Tuple, View};
 
 use crate::ast::Term;
 use crate::check::{DefSource, TypedTerm, Unresolved};
@@ -52,7 +66,10 @@ use crate::walk::{visit_term, Visit};
 use crate::CoordinationWorld;
 
 /// Why a stored def could not be read back as a signed term: no `Val` at the
-/// start, or bytes the PR-ENC codec rejects.
+/// start, or bytes the PR-ENC codec rejects. The two say different things
+/// about the start: refused bytes are a fact about immutable content, and
+/// nothing resident is not — a run may yet be minted there — so the memo
+/// keeps the first and never the second (`Coordinator::derive_def`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ParseFail {
     NotResident,
@@ -99,31 +116,48 @@ fn direct_referents(t: &Term) -> Vec<Address> {
 }
 
 impl<W: CoordinationWorld> Coordinator<W> {
-    /// `is_K(pdef, start)@audit` off the world `w` of a pinned snapshot —
-    /// through the one `observe`-honors-`Audit` seam, and CLASS-FREE by
-    /// design: a def's registration is not a trigger read, so the guest-class
-    /// view the evaluator looks through does not apply, and a def registered
-    /// into a draft home is ever-registered as it was. Every ever-registration
-    /// question in the crate asks it here (the memo's derivation gate, the
-    /// referent gate of `register_pred`, `evaluate_def`, `is_ever_pred`).
-    fn ever_registered(&self, w: &W, start: &Address) -> bool {
-        !w.links()
+    /// The `ty` tuple at `view` that NAMES `start` — whose F denotes `start`
+    /// and nothing else (`Endset::single_denoted`), the shape `register_pred`
+    /// and `certify_stable` deposit, `enc({start})` — the T1-least if several,
+    /// off the world `w` of a pinned snapshot and CLASS-FREE, as every def
+    /// probe is. The one place the def layer matches a start, and exactly (the
+    /// module doc states why): M7's `observe` matches F by COVERAGE, a sound
+    /// pre-filter — a denoted address is the start of a unit-depth span, which
+    /// covers it — and the scan keeps only a tuple that names `start`.
+    fn tuple_naming(&self, w: &W, ty: ShippedType, start: &Address, view: View) -> Option<Tuple> {
+        w.links()
             .observe(
-                self.catalog.reserved_type(ShippedType::PredDef),
+                self.catalog.reserved_type(ty),
                 Pattern { from: from_ref(start.tumbler()), to: &[] },
-                View::Audit,
+                view,
             )
-            .is_empty()
+            .into_iter()
+            .find(|t| t.from.single_denoted() == Some(start.tumbler()))
     }
 
-    /// `is_K(pdef, start)@active` off the world `w` of a pinned snapshot —
-    /// CLASS-FREE, for [`Coordinator::ever_registered`]'s reason: endorsement
-    /// is a registration question, not a trigger read. The active twin of the
-    /// ever-probe; every actively-registered question in the crate asks it
-    /// here (`register_pred`'s endorsement gate, `is_active_pred`, and through
-    /// it `certify_stable`'s leg).
+    /// Some `pdef` tuple, active or retracted, names `start` — the
+    /// ever-registration probe, [`Coordinator::tuple_naming`] at `Audit` (the
+    /// one `observe`-honors-`Audit` seam) off the world `w` of a pinned
+    /// snapshot, and CLASS-FREE by design: a def's registration is not a
+    /// trigger read, so the guest-class view the evaluator looks through does
+    /// not apply, and a def registered into a draft home is ever-registered as
+    /// it was. Every ever-registration question in the crate asks it here (the
+    /// memo's derivation gate, the referent gate of `register_pred`,
+    /// `evaluate_def`, `is_ever_pred`).
+    fn ever_registered(&self, w: &W, start: &Address) -> bool {
+        self.tuple_naming(w, ShippedType::PredDef, start, View::Audit).is_some()
+    }
+
+    /// An ACTIVE `pdef` tuple names `start` — the endorsement probe, the
+    /// active twin of [`Coordinator::ever_registered`]:
+    /// [`Coordinator::tuple_naming`] at `Active`, off the world `w` of a
+    /// pinned snapshot, and CLASS-FREE for the ever-probe's reason —
+    /// endorsement is a registration question, not a trigger read. Every
+    /// actively-registered question in the crate asks it here
+    /// (`register_pred`'s endorsement gate, `is_active_pred`, and through it
+    /// `certify_stable`'s leg).
     fn actively_registered(&self, w: &W, start: &Address) -> bool {
-        w.links().is_k(self.catalog.reserved_type(ShippedType::PredDef), start.tumbler())
+        self.tuple_naming(w, ShippedType::PredDef, start, View::Active).is_some()
     }
 
     // ───────────── resolution: the DefMemo's memo-or-derive (§Internal 4) ─────────────
@@ -160,14 +194,19 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// refuses it).
     ///
     /// What is memoized is a status of the CONTENT, never of the asking
-    /// term: an ever-registered start whose content fails the parse, or
-    /// fails WT on its own account, fills the memo poisoned —
+    /// term: an ever-registered start whose RESIDENT content fails the
+    /// parse, or fails WT on its own account, fills the memo poisoned —
     /// freeze-on-breach (PR-DISC, §Internal 4), a deliberate policy and not
     /// an immutability consequence: an `UndefinedReference` — to a referent
-    /// not yet registered — could heal on that referent's registration, and
-    /// the freeze declines to re-check (safe — the start merely stays
+    /// not yet defined — could heal on that referent's definition, and the
+    /// freeze declines to re-check (safe — the start merely stays
     /// signature-less, never a wrong `Some`; the crate root states what that
-    /// costs across handles). A nesting refusal ABOVE level 0 is not the
+    /// costs across handles). An ever-registered start with NOTHING resident
+    /// is a breach too — a `pdef` naming no def — but no fact about content:
+    /// a run may yet be minted there, so it answers `Poisoned` and fills
+    /// nothing, as a never-registered start does, and a `pdef` deposited past
+    /// the gate at a home's next content address cannot freeze the def its
+    /// owner defines there. A nesting refusal ABOVE level 0 is not the
     /// content's: every def `register_pred` admits was checked at level 0 and
     /// fits there, and every such consumer's `Ref` charge
     /// (`TypedTerm::reach`) guarantees its referents fit where a cold
@@ -183,7 +222,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
             return Ok(DefStatus::NeverRegistered);
         }
         let derived = match parse_def(w.content(), start) {
-            Err(_) => Err(Breach),
+            // Nothing resident at `start` is no fact about its content: a run
+            // may yet be minted there. Answered as the breach it is and never
+            // memoized — `NeverRegistered`'s reason.
+            Err(ParseFail::NotResident) => return Ok(DefStatus::Poisoned),
+            Err(ParseFail::Malformed) => Err(Breach),
             Ok(signed) => match self.check_signed(signed, depth) {
                 Ok(def) => Ok(def),
                 Err(TypeError::TooDeep) if depth > 0 => return Err(DerivedTooDeep),
@@ -300,13 +343,15 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// answers — UNLESS a probe already froze `start` POISONED, which takes a
     /// PR-DISC breach and which this call does not lift: the memo's first
     /// fill wins and never yields (§Internal 4). The one shape is a
-    /// breach-registered start probed while a referent was still
-    /// unregistered — `UndefinedReference` is the single WT rejection not
-    /// fixed by the immutable content — so the freeze stands, this call still
-    /// returns `Ok`, and `signature(start)` keeps answering `None`. Through
-    /// this gate it cannot arise: (iii) puts every referent's
-    /// ever-registration ahead of the check, and PR2 registers the DAG
-    /// bottom-up.
+    /// breach-registered start probed while a referent's signature was still
+    /// undefined — the referent not yet registered, or registered with
+    /// nothing resident yet — `UndefinedReference` being the single WT
+    /// rejection not fixed by the immutable content; the freeze stands, this
+    /// call still returns `Ok`, and `signature(start)` keeps answering `None`.
+    /// A start probed while nothing was resident at it is no such shape: that
+    /// answer is never memoized (`derive_def`). Through this gate the one
+    /// shape cannot arise: (iii) puts every referent's ever-registration
+    /// ahead of the check, and PR2 registers the DAG bottom-up.
     pub fn register_pred(
         &self,
         home: &Address,
@@ -356,8 +401,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
 
     /// resolve + expand + denote. Refuses, in this order: a start not
     /// EVER-registered (active or not) at the caller's `snap`
-    /// (`NotEverRegistered`); an ever-registered start whose immutable
-    /// content fails the PR-ENC parse/WT — a PR-DISC breach
+    /// (`NotEverRegistered`); an ever-registered start whose content is
+    /// absent or fails the PR-ENC parse/WT — a PR-DISC breach
     /// (`UndisciplinedDef`); an argument count differing from Γ_D's
     /// (`ArgArityMismatch`); an argument at the wrong sort (`ArgSortMismatch`).
     /// `args` bind positionally to Γ_D (= `signature(start).params`). The
@@ -406,22 +451,26 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// `(Γ_D, C_D)` — defined-signature starts only; answered from the
     /// immutable DefMemo. A `Some` is permanent and cacheable forever
     /// (content immutable, ever-registration monotone); a never-registered
-    /// `None` is transient and never memoized; an ever-registered-but-
-    /// undisciplined start answers `None` via a PERMANENT poisoned entry
-    /// (freeze-on-breach, §Internal 4). No snapshot parameter — the miss
-    /// path pins its own. A query: the memo it may fill answers every later
-    /// probe on THIS handle as this one was answered, and every handle alike
-    /// on the disciplined domain (the crate root states the breach exception).
+    /// `None` is transient and never memoized, and so is that of an
+    /// ever-registered start with nothing resident yet; an ever-registered
+    /// start whose resident content is undisciplined answers `None` via a
+    /// PERMANENT poisoned entry (freeze-on-breach, §Internal 4). No snapshot
+    /// parameter — the miss path pins its own. A query: the memo it may fill
+    /// answers every later probe on THIS handle as this one was answered, and
+    /// every handle alike on the disciplined domain (the crate root states the
+    /// breach exception).
     pub fn signature(&self, start: &Address) -> Option<Signature> {
         self.resolve_def_at(start, 0).ok().map(|def| def.signature())
     }
 
-    /// `is_K(pdef, start)@active` — class-free (`actively_registered`).
+    /// An active `pdef` tuple names `start` — matched exactly, never by
+    /// coverage, and class-free (`actively_registered`).
     pub fn is_active_pred(&self, start: &Address, snap: &Snapshot<W>) -> bool {
         self.actively_registered(snap.world(), start)
     }
 
-    /// `is_K(pdef, start)@audit` — through the one observe-honors-Audit seam.
+    /// A `pdef` tuple, active or retracted, names `start` — matched exactly,
+    /// never by coverage, and class-free (`ever_registered`).
     pub fn is_ever_pred(&self, start: &Address, snap: &Snapshot<W>) -> bool {
         self.ever_registered(snap.world(), start)
     }
@@ -549,25 +598,26 @@ impl<W: CoordinationWorld> Coordinator<W> {
         Ok((tuple, seq))
     }
 
-    /// `is_K(pd_stable, start)@active` — class-free, as the def probes are.
-    /// `true` is a CERTIFICATE (CVALID passed by `certify_stable`, over the
-    /// immutable content) only under PR-DISC: a `pd_stable` tuple any other
-    /// write deposited reads `true` here as well, and nothing in M9
-    /// re-validates it (the crate root states the obligation and the surfaces
-    /// it covers).
+    /// An active `pd_stable` tuple names `start` — `tuple_naming`, matched
+    /// exactly, and class-free, as the def probes are. `true` is a CERTIFICATE
+    /// (CVALID passed by `certify_stable`, over the immutable content) only
+    /// under PR-DISC: a `pd_stable` tuple naming `start` that any other write
+    /// deposited reads `true` here as well, and nothing in M9 re-validates it
+    /// — though one whose F merely covers `start`, from an ancestor,
+    /// certifies nothing (the crate root states the obligation and the
+    /// surfaces it covers).
     pub fn is_certified_stable(&self, start: &Address, snap: &Snapshot<W>) -> bool {
-        snap.world()
-            .links()
-            .is_k(self.catalog.reserved_type(ShippedType::PredStable), start.tumbler())
+        self.tuple_naming(snap.world(), ShippedType::PredStable, start, View::Active).is_some()
     }
 
     /// De-register: M7::nullify, from the retracting `home`, on ONE active
-    /// `pdef` tuple at `start` — the first M7 lists, taken by
-    /// `.into_iter().next()`, `NotActive` when there is none (never `[0]` —
-    /// item 8). One tuple per call: beside a second active `pdef` at the same
-    /// start (a twin homed where the guest class could not see it when the
-    /// first was minted), `is_active_pred` stays true until each is
-    /// retracted. `home` must be a registered document —
+    /// `pdef` tuple naming `start` — the T1-least, as `tuple_naming` returns
+    /// it, `NotActive` when there is none (never `[0]` — item 8); a `pdef`
+    /// whose F merely covers `start` is never taken for the def's own. One
+    /// tuple per call: beside a second active `pdef` naming the same start (a
+    /// twin homed where the guest class could not see it when the first was
+    /// minted), `is_active_pred` stays true until each is retracted. `home`
+    /// must be a registered document —
     /// `Nullify(Rejected(HomeNotRegistered))` otherwise, after the `NotActive`
     /// probe. Content untouched; audit retains it; re-registration after
     /// nullify deposits afresh (the idem class is empty again).
@@ -592,15 +642,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     ) -> Result<(Address, Seq), RetractError> {
         let target = {
             let snap = self.kernel.snapshot();
-            snap.world()
-                .links()
-                .observe(
-                    self.catalog.reserved_type(ShippedType::PredDef),
-                    Pattern { from: from_ref(start.tumbler()), to: &[] },
-                    View::Active,
-                )
-                .into_iter()
-                .next()
+            self.tuple_naming(snap.world(), ShippedType::PredDef, start, View::Active)
                 .ok_or(RetractError::NotActive)?
                 .addr
         };

@@ -1,8 +1,10 @@
 //! Resolution: the memo's two permanent statuses — the poisoned one a
 //! per-handle policy, and the answer to every breach a level-0 derivation
-//! meets, a body too deep and a reference cycle included — and the one it
-//! never keeps, and the class-free registration probes beside the guest-class
-//! look.
+//! meets, a body too deep and a reference cycle included — and the two
+//! answers it never keeps, a never-registered start's and that of a start
+//! with nothing resident yet; and the registration probes, class-free beside
+//! the guest-class look, and matching a start exactly where PL's `is_K`
+//! matches by coverage.
 
 use crate::common::*;
 use crate::defs::envelope;
@@ -11,8 +13,8 @@ use crate::terms::*;
 use skep_address::document_of;
 use skep_content::HasContent;
 use skep_coordination::{
-    CertifyError, Coordinator, Dom, EvalError, RegisterError, Rule, RuleError, Sort, Term, Trigger,
-    TypeError, Value, View,
+    CertifyError, Coordinator, DefineError, Dom, EvalError, RegisterError, Rule, RuleError, Sort,
+    Term, Trigger, TypeError, Value, View,
 };
 use skep_links::{Caller, ShippedType, Tip};
 
@@ -242,6 +244,43 @@ fn a_probe_before_registration_does_not_freeze_the_start() {
     def_rule(&mut c).expect("a Def trigger over the now-defined start");
 }
 
+/// A start holding no content yet is no fact about content — a run may still
+/// be minted there — so the memo answers the breach a probe meets at an
+/// ever-registered start with nothing resident and keeps none of it: a `pdef`
+/// deposited past the gate at a home's NEXT content address cannot freeze
+/// the def its owner defines there afterwards. Neither at the top of a
+/// derivation (`c`, probing the start itself) nor below one (`referrer`,
+/// whose only probe is a reference, which derives its referent two levels
+/// down).
+#[test]
+fn a_probe_of_a_start_with_no_content_yet_does_not_freeze_it() {
+    let k = kernel();
+    let c = coord(&k);
+    let referrer = coord(&k);
+    let next = ca(1); // doc1's first content mint
+    link_writer(&k)
+        .emit(Caller::System, &doc1(), &pred_def_ty(), &next, &[])
+        .expect("the breach: a pdef at an address nothing occupies yet");
+    let reference = || Term::Ref { addr: next.clone(), args: vec![] };
+    assert!(c.signature(&next).is_none());
+    assert_eq!(
+        c.evaluate_def(&next, &[], View::Active, &k.snapshot()),
+        Err(EvalError::UndisciplinedDef)
+    );
+    assert!(matches!(
+        referrer.type_check(vec![], reference()),
+        Err(TypeError::UndefinedReference(x)) if x == next
+    ));
+
+    let (start, _) = c
+        .define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("closed True"))
+        .expect("define into the address the breach named");
+    assert_eq!(start, next);
+    assert_eq!(c.signature(&start).map(|s| s.result), Some(Sort::Bool), "the probe froze nothing");
+    assert_eq!(c.evaluate_def(&start, &[], View::Active, &k.snapshot()), Ok(Value::Bool(true)));
+    referrer.type_check(vec![], reference()).expect("nor did the reference's derivation");
+}
+
 /// The def-registration probes are class-free by design, and the
 /// evaluator's look is not: a def registered into a document the guest
 /// predicate refuses is ever-registered, active, signed, evaluable and
@@ -337,4 +376,49 @@ fn a_pdef_hidden_from_the_guest_class_does_not_absorb_a_second_registration() {
     assert_eq!(document_of(&hit), Some(doc2()), "the incumbent, wherever it is homed");
     c.retract_pred(&doc1(), &start).expect("the one pdef retracted");
     assert!(!c.is_active_pred(&start, &k.snapshot()));
+}
+
+/// A def's registration is its START: `register_pred` and `certify_stable`
+/// deposit `enc({start})`, and the def probes match that exactly. On the
+/// disciplined domain that refuses only what coverage answers wrongly — a
+/// def's own `pdef` covers the addresses under its start, and none of them
+/// holds a def. Under a breach it is what bounds a forgery: a tuple whose F
+/// merely COVERS a start — here one at doc1 itself, deposited past the gate,
+/// covering every address in the document — registers, endorses and
+/// certifies nothing, and `retract_pred` never takes it for the def's own.
+/// Matched by coverage, that one tuple would forge all of doc1.
+#[test]
+fn a_registration_probe_matches_its_start_exactly_never_a_covering_tuple() {
+    let k = kernel();
+    let c = coord(&k);
+    let term = c.type_check(vec![], tru()).expect("closed True");
+    let (retracted, _) = c.define_predicate(&doc1(), &term).expect("define");
+    assert_eq!(retracted, ca(1));
+    let under = a(&[1, 0, 1, 0, 1, 0, 1, 1, 7]);
+    assert!(!c.is_ever_pred(&under, &k.snapshot()), "an address under a def's start holds no def");
+    c.retract_pred(&doc1(), &retracted).expect("retract");
+
+    let writer = link_writer(&k);
+    for ty in [pred_def_ty(), pred_stable_ty()] {
+        writer
+            .emit(Caller::System, &doc1(), &ty, &doc1(), &[])
+            .expect("the breach: a tuple over all of doc1");
+    }
+    // Defined after the breach, so the covering pdef holds the lower link
+    // address and is the first M7 lists at the live def's start.
+    let (live, _) = c.define_predicate(&doc1(), &term).expect("define after the breach");
+    let s = k.snapshot();
+    assert!(!c.is_active_pred(&retracted, &s), "a covering pdef re-endorses nothing");
+    assert!(!c.is_certified_stable(&live, &s), "a covering pd_stable certifies nothing");
+    assert!(!c.is_ever_pred(&ca(50), &s), "nor registers an address holding no def");
+    assert_eq!(c.evaluate_def(&ca(50), &[], View::Active, &s), Err(EvalError::NotEverRegistered));
+    let reference = c
+        .type_check(vec![], Term::Ref { addr: retracted.clone(), args: vec![] })
+        .expect("a reference to the retracted def still types");
+    assert!(matches!(
+        c.define_predicate(&doc1(), &reference),
+        Err(DefineError::Register(RegisterError::ReferentNotActive(x))) if x == retracted
+    ));
+    c.retract_pred(&doc1(), &live).expect("retract the live def");
+    assert!(!c.is_active_pred(&live, &k.snapshot()), "its own pdef, never the covering one");
 }

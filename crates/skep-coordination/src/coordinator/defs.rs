@@ -50,7 +50,7 @@ use skep_address::{Address, Tumbler};
 use skep_arrangement::{Deposit, VPos};
 use skep_content::{ContentStore, Val};
 use skep_kernel::{Seq, Snapshot};
-use skep_links::{coverage_class, enc, Caller, Pattern, ShippedType, Tip, Tuple, View};
+use skep_links::{coverage_class, enc, Caller, Endset, Pattern, ShippedType, Tip, Tuple, View};
 
 use crate::ast::Term;
 use crate::check::{DefSource, TypedTerm, Unresolved};
@@ -117,26 +117,44 @@ fn direct_referents(t: &Term) -> Vec<Address> {
     referents.out
 }
 
+/// Does the F slot `from` NAME `start` — have `start`'s coverage class, the
+/// class of `enc({start})`? The F half of the I0 identity M7's idem dedup
+/// keys `register_pred`'s and `certify_stable`'s deposits by (ASN-0128 I0),
+/// and so the def layer's one test of a start: `Coordinator::tuple_naming`
+/// asks it of each candidate tuple.
+///
+/// TOTAL over every F a stored tuple can hold, on this function's own check
+/// rather than on M7's fold having classified the slot first. `enc({start})`
+/// is address-denoting — `enc` spells each address as its own unit-depth
+/// subtree — so only an address-denoting F can share its class, and `from` is
+/// classified only once [`Endset::is_address_denoting`] has admitted it: the
+/// branch of `coverage_class` with no failure path, its other branch panicking
+/// off a level-uniform precondition. An F the check refuses has no
+/// address-denoting class, so the refusal changes no answer: a content extent
+/// covering `start` (an open-surface deposit's resolved slot) names nothing,
+/// and neither does a non-level-uniform slot — one no write door builds, the
+/// shape only a tampered journal or checkpoint could carry (`Endset`
+/// deserializes without validation) — which is refused here, never
+/// classified.
+fn names(from: &Endset, start: &Address) -> bool {
+    from.is_address_denoting() && coverage_class(from) == coverage_class(&enc(from_ref(start)))
+}
+
 impl<W: CoordinationWorld> Coordinator<W> {
-    /// The `ty` tuple at `view` that NAMES `start`: one whose F has `start`'s
-    /// coverage class, `coverage_class(enc({start}))` — the F half of the I0
-    /// identity M7's idem dedup keys `register_pred`'s and `certify_stable`'s
-    /// own deposits by (ASN-0128 I0), so a tuple that absorbs either deposit
-    /// is one this finds — the T1-least if several, off the world `w` of a
-    /// pinned snapshot and AT NO VISIBILITY CLASS, as every def probe is. The
-    /// one place the def layer matches a start, and by coverage class (the
-    /// module doc states why): M7's `observe` matches F by COVERAGE, a sound
-    /// pre-filter — an F of `start`'s class denotes `start`, and a denoted
-    /// address is the start of a unit-depth span, which covers it — and the
-    /// scan keeps that class. An F covering `start` from an ancestor has the
-    /// ancestor's class and names nothing there; one spelling `start` beside
-    /// addresses under it has `start`'s class and names it, as M7's dedup
-    /// counts it. Total: `enc({start})` is address-denoting, and M7's fold
-    /// classified every stored F of these two idem⊤ classes when it indexed
-    /// the tuple's dedup key, so `coverage_class` meets no endset here it
-    /// cannot answer.
+    /// The `ty` tuple at `view` that NAMES `start`: one whose F [`names`] it —
+    /// has `start`'s coverage class, the F half of the I0 identity M7's idem
+    /// dedup keys `register_pred`'s and `certify_stable`'s own deposits by
+    /// (ASN-0128 I0), so a tuple that absorbs either deposit is one this finds
+    /// — the T1-least if several, off the world `w` of a pinned snapshot and
+    /// AT NO VISIBILITY CLASS, as every def probe is. The one place the def
+    /// layer finds a start's tuple, and by coverage class (the module doc
+    /// states why): M7's `observe` matches F by COVERAGE, a sound pre-filter —
+    /// an F of `start`'s class denotes `start`, and a denoted address is the
+    /// start of a unit-depth span, which covers it — and [`names`] keeps that
+    /// class. An F covering `start` from an ancestor has the ancestor's class
+    /// and names nothing there; one spelling `start` beside addresses under it
+    /// has `start`'s class and names it, as M7's dedup counts it.
     fn tuple_naming(&self, w: &W, ty: ShippedType, start: &Address, view: View) -> Option<Tuple> {
-        let named = coverage_class(&enc(from_ref(start)));
         w.links()
             .observe(
                 self.catalog.reserved_type(ty),
@@ -144,7 +162,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 view,
             )
             .into_iter()
-            .find(|t| coverage_class(&t.from) == named)
+            .find(|t| names(&t.from, start))
     }
 
     /// Some `pdef` tuple, active or retracted, names `start` — the
@@ -707,13 +725,49 @@ impl<W: CoordinationWorld> DefSource for Coordinator<W> {
 
 #[cfg(test)]
 mod tests {
+    use std::slice::from_ref;
     use std::sync::Arc;
 
-    use skep_address::Address;
+    use skep_address::{Address, Nat, Span, Tumbler};
+    use skep_links::{enc, Endset};
 
-    use super::direct_referents;
+    use super::{direct_referents, names};
     use crate::ast::{Dom, Term};
     use crate::fixture::{a, v};
+
+    /// [`names`] — the def layer's one test of a start — matches an F by
+    /// `start`'s coverage class, and answers every F a stored tuple can hold
+    /// without panicking. `{start}` and `{start, start·7}` have `start`'s
+    /// class and name it; `{start, ca9}`, an ancestor's F, an F under
+    /// `start`, `⟨⟩` and a content extent covering `start` do not. Nor does
+    /// the non-level-uniform slot `([5,3], [0,2,7])`, on which
+    /// `coverage_class` panics: no write door builds it, but `Endset`
+    /// deserializes without validation, so it is the slot a tampered journal
+    /// or checkpoint could carry — refused here without being classified, and
+    /// a corpus seed for a def-probe fuzz target.
+    #[test]
+    fn an_f_names_a_start_by_its_coverage_class_and_answers_every_slot() {
+        let start = a(&[1, 0, 1, 0, 1, 0, 1, 1]);
+        let under = a(&[1, 0, 1, 0, 1, 0, 1, 1, 7]);
+        let tumbler =
+            |comps: &[u32]| Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty");
+        let span = |s: &[u32], w: &[u32]| Span::new(tumbler(s), tumbler(w)).expect("T12-valid");
+        assert!(names(&enc(from_ref(&start)), &start));
+        assert!(names(&enc(&[start.clone(), under.clone()]), &start));
+        for from in [
+            enc(&[start.clone(), a(&[1, 0, 1, 0, 1, 0, 1, 9])]),
+            enc(&[a(&[1, 0, 1, 0, 1])]),
+            enc(from_ref(&under)),
+            Endset::empty(),
+            // Two element positions wide: level-uniform, covering `start`,
+            // and denoting no address.
+            Endset::from_spans([span(&[1, 0, 1, 0, 1, 0, 1, 1], &[0, 0, 0, 0, 0, 0, 0, 2])]),
+            // Not level-uniform: `#start ≠ #width`.
+            Endset::from_spans([span(&[5, 3], &[0, 2, 7])]),
+        ] {
+            assert!(!names(&from, &start), "{from:?}");
+        }
+    }
 
     /// [`direct_referents`] names each referent ONCE, in first-occurrence
     /// order: `register_pred` runs an M7 slice scan per referent, and the node

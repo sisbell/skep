@@ -3,11 +3,12 @@
 //! the verbatim type-key endset so a lookup both authorizes a `TypeKey` and
 //! yields its PRECOMPUTED `CoverageClass` — the catalog never calls M7's
 //! `coverage_class`, and M9 never classifies a TYPE KEY: each shipped class
-//! is read from the registry's own endset/class pairing (M9's one
-//! `coverage_class` call is the def layer's registration identity, over F
-//! slots — `Coordinator::tuple_naming`), and nothing in M9 consults the
-//! registry after construction: every "which classes, with what behaviors"
-//! question the checker, the evaluator and the analyses ask is answered here.
+//! is read from the registry's own endset/class pairing (M9's one use of
+//! `coverage_class` is the def layer's registration identity, over
+//! address-denoting F slots — `names` in `coordinator/defs.rs`), and nothing
+//! in M9 consults the registry after construction: every "which classes,
+//! with what behaviors" question the checker, the evaluator and the analyses
+//! ask is answered here.
 //! A cached copy of genesis-immutable data (R1): it never goes stale. The
 //! registry's population is the compiled shipped five (owner ruling,
 //! 2026-08-26), so the projection reads everything from the registry itself

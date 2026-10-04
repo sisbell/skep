@@ -5,11 +5,23 @@
 //! ([`Reads`]), since what a resolve costs is one of the numbers this crate
 //! exists to report.
 //!
+//! THE VALUES THE RESOLVER TAKES ON THE BOARD'S WORD — answers no check
+//! after them re-derives — are typed here, each where the wire spells it:
+//! the live head pair off `/health` ([`Board::head_pair`]), the board term
+//! off `H.1` ([`Board::board_term`]), a stored link's three slots
+//! ([`Board::link_slots`]), an account's key set live and as of a position
+//! ([`Board::key_set`], [`Board::key_set_at`]), and whether a retraction
+//! stands ([`Board::retraction_stands`]). What each caller makes of them —
+//! the copy's chain pair, the verdict's frame, the table a record is judged
+//! under — is the caller's. The feed's rows are checked by the base's
+//! provenance and a record's bytes by the verify, so the reads that only
+//! locate those bytes (the span set, `image`, `retrieve_v`) stay with their
+//! callers.
+//!
 //! The wire's spellings that both readers of the board — the mirror and the
-//! guest-reading resolve — read alike are stated here, once: a unit span,
-//! the retraction query ([`Board::retraction_stands`]), a `read_link`
-//! answer's slot, a span-set answer's content extent, an atom's V-ordinal
-//! among an `image` answer's runs, and a `key_set` entry.
+//! guest-reading resolve — read alike are stated here, once: a unit span, a
+//! span-set answer's content extent, an atom's V-ordinal among an `image`
+//! answer's runs, and a one-position `retrieve_v` frame.
 
 use std::cell::Cell;
 use std::fmt;
@@ -19,7 +31,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 use skep_address::{Address, Nat};
-use skep_identity::{Enrolled, PublicKey};
+use skep_identity::{BoardTerm, Enrolled, PublicKey};
 
 use crate::http::{Transport, TransportError};
 use crate::parse_address;
@@ -36,6 +48,10 @@ const BUSY_PAUSE: Duration = Duration::from_millis(25);
 /// a `nullify` deposits (wire.md §Links (writes)).
 static RETRACTION_TYPE: LazyLock<Address> =
     LazyLock::new(|| parse_address("1.1.0.1.0.1.0.1.5").expect("the retraction class's ghost tumbler"));
+
+/// `H.1`'s address — the head document's first chain member, the board
+/// term's carrier (wire.md §The other endpoints).
+const HEAD_MEMBER_1: &str = "1.1.0.1.0.2.1";
 
 /// THE COUNT OF EVERY READ a board was asked, by kind — the fetch count a
 /// resolve's cost is stated in (the investigation §3.1). Reads over `/op-at`
@@ -128,6 +144,16 @@ impl From<TransportError> for BoardError {
     fn from(e: TransportError) -> BoardError {
         BoardError::Transport(e)
     }
+}
+
+/// An account's key set as `key_set` answers it (wire.md §Identity reads).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KeySetAnswer {
+    /// The position the table answers as of — the live read's snapshot;
+    /// `None` where the answer names none.
+    pub(crate) as_of: Option<u64>,
+    /// The enrolled keys.
+    pub(crate) enrolled: Vec<Enrolled>,
 }
 
 /// One page of the feed (wire.md §The change feed).
@@ -332,6 +358,75 @@ impl Board {
         }}))?;
         Ok(v["addrs"].as_array().is_some_and(|a| !a.is_empty()))
     }
+
+    /// `/health`'s live pair (wire.md §The other endpoints): the committed
+    /// head's position and its chain, read off one kernel snapshot — the
+    /// chain as the board spelled it, where it is sixty-four hex characters;
+    /// `None` where either member is absent or malformed.
+    pub(crate) fn head_pair(&self) -> Result<Option<(u64, String)>, BoardError> {
+        let health = self.health()?;
+        let (Some(at), Some(chain)) = (health["log_position"].as_u64(), health["chain_head"].as_str()) else {
+            return Ok(None);
+        };
+        Ok(parse_chain(chain).map(|_| (at, chain.to_string())))
+    }
+
+    /// THE BOARD TERM (D13): `H.1`'s committed pair, off `retrieve_v` at the
+    /// pinned member's first position — the term, and its chain as the board
+    /// spelled it; `None` where the board holds none.
+    pub(crate) fn board_term(&self) -> Result<Option<(BoardTerm, String)>, BoardError> {
+        let v = self.op(&retrieve_frame(HEAD_MEMBER_1, 1))?;
+        let Some(text) = v["items"].as_array().and_then(|i| i.first()).and_then(|i| i["atom"].as_str()) else {
+            return Ok(None);
+        };
+        let Ok(record) = serde_json::from_str::<Value>(text) else { return Ok(None) };
+        let (Some(position), Some(chain)) = (record["position"].as_u64(), record["chain"].as_str()) else {
+            return Ok(None);
+        };
+        Ok(parse_chain(chain).map(|bytes| (BoardTerm { log_position: position, chain: bytes }, chain.to_string())))
+    }
+
+    /// A stored link's three slots off `read_link` — 0 the `from`, 1 the `to`,
+    /// 2 the type — each as the addresses its spans start at; `None` where no
+    /// link stands at `link`.
+    pub(crate) fn link_slots(&self, link: &Address) -> Result<Option<[Vec<Address>; 3]>, BoardError> {
+        let v = self.op_ok(&json!({ "op": "read_link", "a": link.to_string() }))?;
+        if v["link"].is_null() {
+            return Ok(None);
+        }
+        Ok(Some([link_slot(&v, 0), link_slot(&v, 1), link_slot(&v, 2)]))
+    }
+
+    /// `key_set` of `account`, live; `None` where the answer is no `key_set`.
+    pub(crate) fn key_set(&self, account: &Address) -> Result<Option<KeySetAnswer>, BoardError> {
+        Ok(key_set_answer(&self.op(&key_set_frame(account))?))
+    }
+
+    /// `key_set` of `account` AS OF `at` (wire.md §Reading history); `None`
+    /// where the answer is no `key_set`, and a reclaimed position
+    /// [`BoardError::Reclaimed`].
+    pub(crate) fn key_set_at(&self, at: u64, account: &Address) -> Result<Option<KeySetAnswer>, BoardError> {
+        Ok(key_set_answer(&self.op_at(at, &key_set_frame(account))?))
+    }
+}
+
+/// The one-position `retrieve_v` frame: the atom at content ordinal `pos`
+/// of `doc`.
+pub(crate) fn retrieve_frame(doc: &str, pos: u64) -> Value {
+    json!({ "op": "retrieve_v", "specs": [{ "doc": doc, "span": { "start": format!("1.{pos}"), "width": "0.1" } }] })
+}
+
+fn key_set_frame(account: &Address) -> Value {
+    json!({ "op": "key_set", "account": account.to_string() })
+}
+
+/// A `key_set` answer, where the answer is one.
+fn key_set_answer(v: &Value) -> Option<KeySetAnswer> {
+    if v["resp"].as_str() != Some("key_set") {
+        return None;
+    }
+    let enrolled = v["enrolled"].as_array().map(|entries| entries.iter().filter_map(enrolled_of).collect()).unwrap_or_default();
+    Some(KeySetAnswer { as_of: v["as_of"].as_u64(), enrolled })
 }
 
 /// Sixty-four lowercase hex characters as the chain's thirty-two bytes.
@@ -354,7 +449,7 @@ pub(crate) fn unit_span_json(a: &Address) -> Value {
 
 /// Slot `i` of a `read_link` answer — 0 the `from`, 1 the `to`, 2 the type —
 /// as the addresses its spans start at; empty where the slot is absent.
-pub(crate) fn link_slot(answer: &Value, i: usize) -> Vec<Address> {
+fn link_slot(answer: &Value, i: usize) -> Vec<Address> {
     answer["link"]["slots"][i]
         .as_array()
         .map(|spans| spans.iter().filter_map(|s| s["start"].as_str().and_then(parse_address)).collect())
@@ -395,18 +490,35 @@ fn offset_within(start: &Address, addr: &Address, width: u64) -> Option<u64> {
     (a_last >= s_last && a_last - s_last < width).then(|| a_last - s_last)
 }
 
-/// One `key_set` entry as an [`Enrolled`]: `alg`, `key` (hex), `anchor`.
-pub(crate) fn enrolled_of(e: &Value) -> Option<Enrolled> {
+/// One `key_set` entry as an [`Enrolled`]: `alg`, `key` (hex), `anchor` —
+/// the wire's spelling, read by [`Board::key_set`] and [`Board::key_set_at`]
+/// alone.
+fn enrolled_of(e: &Value) -> Option<Enrolled> {
     let key = PublicKey::parse(e["alg"].as_str()?, e["key"].as_str()?).ok()?;
     Some(Enrolled { key, anchor: e["anchor"].as_bool().unwrap_or(false) })
 }
 
 #[cfg(test)]
 mod tests {
+    use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
+
     use super::*;
 
     fn a(s: &str) -> Address {
         parse_address(s).unwrap()
+    }
+
+    /// A board that answers every exchange with one status and one body.
+    struct Canned(u16, String);
+
+    impl Transport for Canned {
+        fn exchange(&self, _: &str, _: &str, _: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+            Ok((self.0, self.1.clone().into_bytes()))
+        }
+    }
+
+    fn canned(body: Value) -> Board {
+        Board::new(Box::new(Canned(200, body.to_string())))
     }
 
     #[test]
@@ -414,6 +526,31 @@ mod tests {
         assert!(parse_chain(&"ab".repeat(32)).is_some());
         assert!(parse_chain(&"ab".repeat(31)).is_none());
         assert!(parse_chain(&"zz".repeat(32)).is_none());
+    }
+
+    /// The values taken on the board's word are read where the wire spells
+    /// them: the head pair only where its chain is a chain, the board term
+    /// off `H.1`'s record with its chain as spelled, and a key set only where
+    /// the answer is one — its `as_of` and its entries beside it.
+    #[test]
+    fn the_boards_word_is_typed_where_the_wire_spells_it() {
+        let chain = "07".repeat(32);
+        assert_eq!(canned(json!({ "log_position": 9, "chain_head": chain })).head_pair(), Ok(Some((9, chain.clone()))));
+        assert_eq!(canned(json!({ "log_position": 9, "chain_head": "07" })).head_pair(), Ok(None), "no chain");
+        assert_eq!(canned(json!({ "chain_head": chain })).head_pair(), Ok(None), "no position");
+        let h1 = json!({ "position": 4, "chain": chain }).to_string();
+        let term = canned(json!({ "resp": "delivery", "items": [{ "atom": h1 }] })).board_term().expect("read");
+        assert_eq!(term, Some((BoardTerm { log_position: 4, chain: [7; 32] }, chain.clone())));
+        assert_eq!(canned(json!({ "resp": "delivery", "items": [] })).board_term(), Ok(None), "no H.1");
+        let key = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[3; 32]).expect("tag 1").public_key().clone();
+        let entry = json!({ "alg": key.alg(), "key": key.to_hex(), "anchor": true });
+        let answer = canned(json!({ "resp": "key_set", "as_of": 12, "enrolled": [entry] })).key_set(&a("1.0.2"));
+        assert_eq!(answer, Ok(Some(KeySetAnswer { as_of: Some(12), enrolled: vec![Enrolled { key, anchor: true }] })));
+        let refused = json!({ "resp": "rejected", "op": "key_set", "code": "no_such_account" });
+        assert_eq!(canned(refused).key_set(&a("1.0.2")), Ok(None), "a refusal is no key set");
+        let link = json!({ "resp": "link", "link": { "slots": [[{ "start": "1.0.2.0.1.0.1.1", "width": "0.1" }], [], [{ "start": "1.0.2", "width": "0.1" }]] } });
+        assert_eq!(canned(link).link_slots(&a("1.0.2.0.1.0.2.1")), Ok(Some([vec![a("1.0.2.0.1.0.1.1")], vec![], vec![a("1.0.2")]])));
+        assert_eq!(canned(json!({ "resp": "link", "link": null })).link_slots(&a("1.0.2.0.1.0.2.1")), Ok(None), "no link stands");
     }
 
     /// The answers both readers of the board read alike: a link's slots, a

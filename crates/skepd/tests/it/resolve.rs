@@ -380,7 +380,7 @@ fn the_fixture_board_resolves_live_and_is_recorded_on_demand() {
     let hint = hint_for(port);
     let mut mirror = Mirror::open(&hint, mdir.path(), &dial).unwrap_or_else(|e| panic!("the mirror: {e}"));
     assert_eq!(mirror.sync().expect("an empty delta"), 0);
-    let suppressed = mirror.index().suppressed.clone();
+    let suppressed = mirror.index().suppressed().to_vec();
     assert_eq!(suppressed.len(), 2, "{suppressed:?}");
     assert!(suppressed.iter().any(|s| s.link == addr(&orgs["1.4"].binding) && s.cause == Cause::Unsigned));
     assert!(suppressed.iter().any(|s| s.link == addr(&orgs["1.14"].binding) && matches!(s.cause, Cause::Malformed(skep_registry::Refusal::NotCanonical))));
@@ -432,7 +432,13 @@ fn the_fixture_board_resolves_live_and_is_recorded_on_demand() {
         }
     }
     let claimant = mirror.claim().map(|(_, c)| c.clone()).expect("the claim");
-    let current: Vec<Fingerprint> = mirror.current_keys(&claimant).expect("read").into_iter().map(|e| Fingerprint::of(&e.key)).collect();
+    let current: Vec<Fingerprint> = mirror
+        .current_keys(&claimant)
+        .expect("read")
+        .expect("the table at the head")
+        .into_iter()
+        .map(|e| Fingerprint::of(&e.key))
+        .collect();
     assert!(!current.contains(&device), "the device key is retired: {current:?}");
     assert!(current.contains(&Fingerprint::of(&public_key_of(&rotated_registrar_key()))));
     // THE RESUME, so the recording holds the check's reads too (REG-3.18):
@@ -526,7 +532,7 @@ fn the_resolvers_verdict_equals_the_daemons_admission_on_every_row() {
     }
     let counts = index.counts();
     assert_eq!((counts.bindings, counts.endpoints), (3, 3));
-    assert!(index.suppressed.is_empty(), "{:?}", index.suppressed);
+    assert!(index.suppressed().is_empty(), "{:?}", index.suppressed());
     assert!(index.bindings().all(|b| b.verdict == Verdict::Signed(Fingerprint::of(&public_key_of(&device_key())))), "every binding the console's key signed");
     for org in &orgs {
         assert!(index.all_endpoints().any(|e| e.home == addr(&org.doc1) && e.verdict == Verdict::Signed(Fingerprint::of(&public_key_of(&org.key)))));
@@ -554,9 +560,9 @@ fn a_tampered_body_is_suppressed_by_the_verifying_resolver() {
     let mut mirror = Mirror::open(&hint_for(port), mdir.path(), &dial).expect("the mirror");
     assert!(matches!(resolve_prefix(&mut mirror, "1.2"), Resolution::Bound { .. }));
     assert!(matches!(resolve_prefix(&mut mirror, "1.3"), Resolution::Unregistered { .. }));
-    assert_eq!(mirror.index().suppressed.len(), 1);
-    assert_eq!(mirror.index().suppressed[0].link, addr(&o3.binding));
-    assert_eq!(mirror.index().suppressed[0].cause, Cause::Unsigned);
+    assert_eq!(mirror.index().suppressed().len(), 1);
+    assert_eq!(mirror.index().suppressed()[0].link, addr(&o3.binding));
+    assert_eq!(mirror.index().suppressed()[0].cause, Cause::Unsigned);
     assert!(mirror.index().bindings().any(|b| b.link == addr(&o2.binding)));
     sd.shutdown();
 }
@@ -786,7 +792,7 @@ fn an_un_arranged_atom_is_recovered_by_the_homes_chain_walk() {
     for org in &orgs {
         assert!(matches!(resolve_prefix(&mut mirror, &org.prefix), Resolution::Bound { .. }), "{}", org.prefix);
     }
-    assert!(mirror.index().suppressed.is_empty());
+    assert!(mirror.index().suppressed().is_empty());
     sd.shutdown();
 }
 
@@ -816,6 +822,7 @@ fn one_org_registered_by_the_console_resolves_from_the_hint_by_a_cold_resolver()
             assert_eq!(standing.history.len(), 1);
             let live = op(port, None, &format!(r#"{{"op":"key_set","account":"{}"}}"#, org.account));
             let live: Vec<String> = live["enrolled"].as_array().unwrap().iter().map(|e| e["fingerprint"].as_str().unwrap().to_string()).collect();
+            let keys = keys.as_ref().expect("the table at the head");
             assert_eq!(keys.iter().map(|e| Fingerprint::of(&e.key).to_hex()).collect::<Vec<_>>(), live, "the key set as the board folds it");
             assert_eq!(endpoint.link, addr(org.endpoint.as_ref().unwrap()));
             assert_eq!(endpoint.verdict, Verdict::Signed(Fingerprint::of(&public_key_of(&org.key))));
@@ -1086,7 +1093,7 @@ fn measure(n: u64, k: usize, chain_walk: bool) {
         secs(cold),
         ms(first_resolve),
         s.copy_bytes,
-        mirror.index().suppressed.len(),
+        mirror.index().suppressed().len(),
     ));
 
     // THE WARM DELTA: one endpoint change, signed by the org's latest key.

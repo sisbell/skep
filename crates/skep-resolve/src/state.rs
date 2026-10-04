@@ -151,6 +151,12 @@ pub enum Unreachable {
 /// THE FACES — every resolution outcome, REG-3.80's table as an enum. The
 /// walk ([`crate::walk::resolve`]) answers the first seven; the last two are
 /// the caller's to fill after the dial it alone makes.
+///
+/// Every face that names a BOUND account carries its key set as `keys`: the
+/// set that opens the account at the position the reader stands at, and
+/// `None` where this reader could not read it — UNDETERMINABLE HERE, as the
+/// verdict beside a record is (REG-1.86 (e)), and never an empty set, which
+/// would say the account holds no key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolution {
     /// A prefix no binding names: unknown is a visible state, never a
@@ -165,7 +171,7 @@ pub enum Resolution {
     /// prefix, its binding and its standing, never a silent absence.
     BoundButUnreachable {
         standing: Standing,
-        keys: Vec<Enrolled>,
+        keys: Option<Vec<Enrolled>>,
         endpoint: Option<Judged<EndpointRecord>>,
         cause: Unreachable,
         members: Vec<MemberOutcome>,
@@ -175,7 +181,7 @@ pub enum Resolution {
     /// RESOLVER's own resolution of a name yielded.
     UnreachableByPolicy {
         standing: Standing,
-        keys: Vec<Enrolled>,
+        keys: Option<Vec<Enrolled>>,
         endpoint: Judged<EndpointRecord>,
         member: String,
         term: Term,
@@ -187,7 +193,7 @@ pub enum Resolution {
     /// unknown to this reader.
     DialNotMade {
         standing: Standing,
-        keys: Vec<Enrolled>,
+        keys: Option<Vec<Enrolled>>,
         endpoint: Judged<EndpointRecord>,
         member: String,
         kind: MemberKind,
@@ -204,7 +210,7 @@ pub enum Resolution {
     /// member beside it (REG-3.34's one precedence).
     Bound {
         standing: Standing,
-        keys: Vec<Enrolled>,
+        keys: Option<Vec<Enrolled>>,
         endpoint: Judged<EndpointRecord>,
         dial: EndpointDial,
         members: Vec<MemberOutcome>,

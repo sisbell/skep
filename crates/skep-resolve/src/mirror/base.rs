@@ -3,12 +3,13 @@
 //! the check — or from a journal copy this mirror already holds, CHECKED
 //! against that same feed before it serves (REG-3.18): the source is read
 //! from genesis and the copy resumes only where every position it holds
-//! comes back identical through its own head, the chain pairs it held
-//! (`/chain?at=N`) answer the same, and the genesis set the realm id is
-//! computed from is the one the copy holds. An image that OMITS, RE-ORDERS or
-//! REPLAYS genuinely signed rows fails that check at the first position that
-//! differs and is REFUSED by provenance, as a signature could never refuse it
-//! (REG-3.13, the courier vector).
+//! comes back identical through its own head and the chain pairs it held
+//! (`/chain?at=N`) answer the same; and the realm is compared at the claim's
+//! row on every open that holds a board, against the genesis set the source
+//! answers. An image that OMITS, RE-ORDERS or REPLAYS genuinely signed rows
+//! fails that check at the first position that differs and is REFUSED by
+//! provenance, as a signature could never refuse it (REG-3.13, the courier
+//! vector).
 //!
 //! THE TWO REFUSALS (REG-3.19), named: a frontier DIVERGING below the
 //! mirror's head ([`Refusal::Diverged`], [`Refusal::ChainDiverged`]) and a
@@ -16,14 +17,16 @@
 //! — the mirror refuses the new address and holds the base it has, saying
 //! so rather than splicing. A root whose genesis set is not the hint's realm
 //! is a LINEAGE CHANGE ([`Refusal::RealmMismatch`]; REG-3.42: the id is
-//! compared at the base). A hint RE-POINTED to another realm re-bootstraps
-//! afresh from the new root's genesis and resumes nothing (REG-3.17): the old
-//! copy is retired beside the new.
+//! compared at the base) — under a held copy as under a fresh base, the
+//! copy's header naming the hint's realm being the copy's word and never
+//! the root's. A hint RE-POINTED to another realm re-bootstraps afresh from
+//! the new root's genesis and resumes nothing (REG-3.17): the old copy is
+//! retired beside the new.
 //!
 //! An `impl Mirror` child of `mirror`: the open, the resume's check, the
-//! sync and the pull, reading the mirror's private state the way a child
-//! does. The fold calls one method here, [`Mirror::realm_check`], at the
-//! claim's row.
+//! realm check, the sync and the pull, reading the mirror's private state
+//! the way a child does. The fold calls one method here,
+//! [`Mirror::realm_check`], at the claim's row.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -44,8 +47,11 @@ impl Mirror {
     /// OPEN the mirror under `dir` against the root `hint` names, through
     /// `dial`: a copy held there is CHECKED and resumed (REG-3.18), a copy of
     /// another realm retired and the base re-established (REG-3.17), no copy
-    /// bootstrapped from genesis (REG-3.12); then the delta synced. The
-    /// refusals are [`Refusal`]'s, each named.
+    /// bootstrapped from genesis (REG-3.12); then the delta synced. On every
+    /// path the realm is compared at the claim's row (REG-3.42), and a base
+    /// whose feed holds no claim through the source's head is
+    /// [`MirrorError::NoClaim`]. The refusals are [`Refusal`]'s, each named,
+    /// and a refused base writes nothing.
     pub fn open(hint: &RootHint, dir: &Path, dial: &Dial<'_>) -> Result<Mirror, MirrorError> {
         fs::create_dir_all(dir).map_err(|e| MirrorError::Copy(format!("{}: {e}", dir.display())))?;
         let (root, board) = dial_root(hint, dial)?;
@@ -72,7 +78,9 @@ impl Mirror {
             mirror.opened = Opened::Rebootstrapped { retired };
             return Ok(mirror);
         }
-        // REG-3.18 — the same lineage: check, rebuild, resume.
+        // REG-3.18 — the same lineage: check, rebuild, resume. The header's
+        // realm is the copy's word: the realm is compared at the claim's row
+        // as on a fresh base, and no line reaches the copy before it is.
         let t = Instant::now();
         let rows: Vec<Value> = held[1..].iter().filter_map(|l| l.get("row").cloned()).collect();
         let heads: Vec<(u64, [u8; 32])> = held[1..]
@@ -85,7 +93,6 @@ impl Mirror {
         mirror.load_cache()?;
         mirror.check_against_source(&rows, &heads)?;
         mirror.stats.resume_check = Some(t.elapsed());
-        mirror.checked = true;
         mirror.feed.bytes = fs::metadata(&feed_path).map(|m| m.len()).unwrap_or(0);
         mirror.cache.bytes = fs::metadata(dir.join(FETCH_CACHE)).map(|m| m.len()).unwrap_or(0);
         let checked_rows = rows.len() as u64;
@@ -93,14 +100,20 @@ impl Mirror {
         mirror.fold_pending()?;
         mirror.opened = Opened::Resumed { checked_rows };
         mirror.sync()?;
+        if !mirror.realm_compared {
+            return Err(MirrorError::NoClaim);
+        }
         Ok(mirror)
     }
 
     /// REBUILD the index from the copy under `dir` alone, no board dialed
     /// (REG-3.25: the rebuild is a re-read of the feed at the deposits' own
     /// positions): every fetch served from the cache; a record whose bytes
-    /// the cache lacks is UNDETERMINABLE HERE. `sync` and the walk's own
-    /// reads refuse [`MirrorError::Offline`] on the mirror this answers.
+    /// the cache lacks is UNDETERMINABLE HERE, and so is a table the walk
+    /// asks for that the cache lacks. Nothing is checked against a source
+    /// and the realm is the one the copy's header names
+    /// ([`Opened::Rebuilt`]); `sync` refuses [`MirrorError::Offline`] on the
+    /// mirror this answers.
     pub fn rebuild_offline(hint: &RootHint, dir: &Path) -> Result<Mirror, MirrorError> {
         let feed_path = dir.join(FEED_COPY);
         let held = Lines::read(&feed_path)?;
@@ -112,10 +125,9 @@ impl Mirror {
         }
         let mut mirror = Mirror::fresh(hint, None, None, dir);
         mirror.load_cache()?;
-        mirror.checked = true;
         mirror.rows = held[1..].iter().filter_map(|l| l.get("row").cloned()).collect();
         mirror.fold_pending()?;
-        mirror.opened = Opened::Resumed { checked_rows: 0 };
+        mirror.opened = Opened::Rebuilt;
         Ok(mirror)
     }
 
@@ -133,9 +145,10 @@ impl Mirror {
             index: Index::new(),
             types: Types::new(),
             rows: Vec::new(),
+            scanned: 0,
             folded: 0,
             head: 0,
-            checked: false,
+            realm_compared: false,
             epochs: BTreeMap::new(),
             members: BTreeMap::new(),
             members_probed: BTreeMap::new(),
@@ -145,10 +158,13 @@ impl Mirror {
         }
     }
 
-    /// From genesis: `since=0` to the head, the realm checked at the claim.
+    /// From genesis: a new copy's header, then `since=0` to the head, the
+    /// realm compared at the claim.
     fn bootstrap(&mut self) -> Result<(), MirrorError> {
+        let header = self.header();
+        self.append_feed(header)?;
         self.pull(0)?;
-        if !self.checked {
+        if !self.realm_compared {
             return Err(MirrorError::NoClaim);
         }
         self.record_head()
@@ -196,13 +212,17 @@ impl Mirror {
             }
         }
         // Every row held before any is folded: the fold's as-of reads lean
-        // on the rows AFTER a record's position (the floor's clause).
+        // on the acts AFTER a record's position (the floor's clause).
         self.fold_pending()
     }
 
-    /// Fold every held row the fold has not consumed, in order.
+    /// Fold every held row the fold has not consumed, in two passes: the
+    /// credential pass first ([`Mirror::scan_credential_acts`]), so every act
+    /// among the held rows is recorded before any record is judged; then each
+    /// row folded, in order.
     fn fold_pending(&mut self) -> Result<(), MirrorError> {
         let t = Instant::now();
+        self.scan_credential_acts()?;
         while self.folded < self.rows.len() {
             let row = self.rows[self.folded].clone();
             self.fold_row(&row)?;
@@ -214,29 +234,25 @@ impl Mirror {
         Ok(())
     }
 
-    /// A chain pair held for the resume's check: `/health`'s live pair, the
-    /// committed head's position and chain read off one kernel snapshot
-    /// (wire.md §The other endpoints) — a pair `/chain?at` later checks the
-    /// source's recomputation against. Read off `/health` rather than
+    /// A chain pair held for the resume's check: the live head pair
+    /// ([`Board::head_pair`]) — a pair `/chain?at` later checks the source's
+    /// recomputation against. Read off `/health` rather than
     /// `/chain?at=head`, which recomputes the chain over the surviving
     /// journal per call.
     fn record_head(&mut self) -> Result<(), MirrorError> {
         if self.head == 0 {
             return Ok(());
         }
-        let health = self.board_ref()?.health()?;
-        let (Some(at), Some(chain)) = (health["log_position"].as_u64(), health["chain_head"].as_str()) else {
-            return Ok(());
-        };
-        if parse_chain(chain).is_none() || at < self.head {
+        let Some((at, chain)) = self.board_ref()?.head_pair()? else { return Ok(()) };
+        if at < self.head {
             return Ok(());
         }
         self.append_feed(json!({ "head": { "at": at, "chain": chain } }))
     }
 
     /// REG-3.18's CHECK: the source read from genesis must answer every held
-    /// row identically through the copy's head, every held chain pair, and
-    /// the genesis set the realm stands on.
+    /// row identically through the copy's head, and every held chain pair
+    /// the same.
     fn check_against_source(&mut self, rows: &[Value], heads: &[(u64, [u8; 32])]) -> Result<(), MirrorError> {
         let held_head = rows.last().and_then(|r| r["at"].as_u64()).unwrap_or(0);
         let mut fresh: Vec<Value> = Vec::new();
@@ -275,34 +291,29 @@ impl Mirror {
                 return Err(MirrorError::Refused(Refusal::ChainDiverged { at: *at }));
             }
         }
-        // The realm at the base (REG-3.42): the genesis set as the source
-        // answers it now, against the hint.
-        if let Some((_, claimant)) = self.fetched.claim.clone() {
-            if let Some(genesis_at) = self.fetched.keys.keys().filter(|(a, _)| *a == claimant).map(|(_, e)| *e).min() {
-                let keys = self.fetch_keys(&claimant, genesis_at)?.ok_or(MirrorError::NoGenesis)?;
-                let found = realm_id(&keys.iter().map(|e| Fingerprint::of(&e.key)).collect::<Vec<_>>());
-                if found != self.hint.realm {
-                    return Err(MirrorError::Refused(Refusal::RealmMismatch { expected: self.hint.realm, found }));
-                }
-            }
-        }
         Ok(())
     }
 
     /// THE REALM CHECK at the base (REG-3.42; REG-3.39): the claimant's
-    /// genesis set — its first credential position — fingerprinted and
-    /// compared to the hint's realm; a mismatch is REG-3.19's refusal.
+    /// genesis set — its table at its first credential position — read off
+    /// the board and never off the fetch cache, fingerprinted and compared to
+    /// the hint's realm; a mismatch is REG-3.19's refusal. Compared, every
+    /// line that waited reaches the copy, and the genesis table is kept where
+    /// the cache does not hold it already.
     pub(super) fn realm_check(&mut self) -> Result<(), MirrorError> {
         let (_, claimant) = self.fetched.claim.clone().ok_or(MirrorError::NoClaim)?;
         let genesis_at = *self.epochs.get(&claimant).and_then(|v| v.first()).ok_or(MirrorError::NoGenesis)?;
-        let keys = self.fetch_keys(&claimant, genesis_at)?.ok_or(MirrorError::NoGenesis)?;
+        let keys = self.read_keys_at(&claimant, genesis_at)?.ok_or(MirrorError::NoGenesis)?;
         let found = realm_id(&keys.iter().map(|e| Fingerprint::of(&e.key)).collect::<Vec<_>>());
         if found != self.hint.realm {
             return Err(MirrorError::Refused(Refusal::RealmMismatch { expected: self.hint.realm, found }));
         }
-        self.checked = true;
-        if self.board.is_some() {
-            self.flush_pending()?;
+        self.realm_compared = true;
+        self.flush_pending()?;
+        // The genesis position is the claimant's first act, so the epoch the
+        // table belongs to is the position itself.
+        if !self.fetched.keys.contains_key(&(claimant.clone(), genesis_at)) {
+            self.keep_keys(&claimant, genesis_at, genesis_at, keys)?;
         }
         Ok(())
     }

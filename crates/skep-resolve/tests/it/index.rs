@@ -2,10 +2,15 @@
 //! REG-2.24; REG-1.10, REG-1.11; rm-2): the verified bindings and endpoints
 //! the fixture board holds, the two tampered records suppressed by cause,
 //! the rebuild from the copy with no wire read, the realm checked at the
-//! base (REG-3.42), and the hint's one line (REG-3.2).
+//! base under a fresh base and a held copy alike (REG-3.42), and the hint's
+//! one line (REG-3.2).
 
+use std::fs;
+
+use serde_json::json;
 use skep_identity::Fingerprint;
-use skep_resolve::{Cause, Mirror, MirrorError, Opened, Refusal, RootHint, Verdict};
+use skep_resolve::{realm_id, Cause, Mirror, MirrorError, Opened, Refusal, RootHint, Verdict, FEED_COPY, FETCH_CACHE};
+use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
 
 use crate::{addr, fixture, open_fixture_mirror, replay_dial};
 
@@ -26,12 +31,12 @@ fn the_index_holds_the_verified_records_and_suppresses_the_tampered() {
     assert_eq!(counts.honored_endpoints, 15, "1.2's third deposit names a stale state: {counts:?}");
     assert!(index.bindings().all(|b| matches!(b.verdict, Verdict::Signed(_))));
     assert!(index.all_endpoints().all(|e| matches!(e.verdict, Verdict::Signed(_))));
-    assert_eq!(index.suppressed.len(), 2, "{:?}", index.suppressed);
-    assert!(index.suppressed.iter().any(|s| s.cause == Cause::Unsigned), "{:?}", index.suppressed);
+    assert_eq!(index.suppressed().len(), 2, "{:?}", index.suppressed());
+    assert!(index.suppressed().iter().any(|s| s.cause == Cause::Unsigned), "{:?}", index.suppressed());
     assert!(
-        index.suppressed.iter().any(|s| matches!(s.cause, Cause::Malformed(skep_registry::Refusal::NotCanonical))),
+        index.suppressed().iter().any(|s| matches!(s.cause, Cause::Malformed(skep_registry::Refusal::NotCanonical))),
         "{:?}",
-        index.suppressed
+        index.suppressed()
     );
     assert!(index.standing(&addr(&fixture.tampered_unsigned)).is_none());
     assert!(index.standing(&addr(&fixture.tampered_malformed)).is_none());
@@ -42,21 +47,27 @@ fn the_index_holds_the_verified_records_and_suppresses_the_tampered() {
 
 /// THE REBUILD (REG-3.25; R5 (h)): the index rebuilt from the copy alone —
 /// no board dialed, every fetch served from the cache — equals the live
-/// one, standing for standing and deposit for deposit; and the copy re-opened
-/// against the source is checked and RESUMED (REG-3.18).
+/// one, standing for standing and deposit for deposit, and names itself a
+/// rebuild, nothing checked against a source; a table the cache never held
+/// — the registrar's own, rotated after every binding — is one it could not
+/// read, never an empty set; and the copy re-opened against the source is
+/// checked and RESUMED (REG-3.18).
 #[test]
 fn the_rebuild_from_the_copy_reads_no_wire_and_equals_the_live_index() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (fixture, live) = open_fixture_mirror(dir.path());
     let rows = live.stats().rows;
-    let offline = Mirror::rebuild_offline(&fixture.hint, dir.path()).expect("rebuilt from the copy");
-    assert_eq!(offline.stats().reads.total(), 0, "no wire read");
+    let mut offline = Mirror::rebuild_offline(&fixture.hint, dir.path()).expect("rebuilt from the copy");
+    assert_eq!(*offline.opened(), Opened::Rebuilt);
     assert_eq!(offline.head(), live.head());
     for prefix in live.index().prefixes() {
         assert_eq!(offline.index().standing(prefix), live.index().standing(prefix), "{prefix}");
     }
     assert_eq!(offline.index().counts(), live.index().counts());
-    assert_eq!(offline.index().suppressed, live.index().suppressed);
+    assert_eq!(offline.index().suppressed(), live.index().suppressed());
+    let claimant = offline.claim().map(|(_, c)| c.clone()).expect("the claim, from the cache");
+    assert_eq!(offline.current_keys(&claimant), Ok(None), "the table at the head was never fetched");
+    assert_eq!(offline.stats().reads.total(), 0, "no wire read");
     drop(live);
     let dial = replay_dial(fixture.clone());
     let resumed = Mirror::open(&fixture.hint, dir.path(), &dial).expect("resumed");
@@ -78,8 +89,46 @@ fn a_hint_naming_another_realm_is_refused_at_the_base() {
         refused,
         Some(MirrorError::Refused(Refusal::RealmMismatch { expected: other, found: fixture.hint.realm }))
     );
-    assert!(!dir.path().join(skep_resolve::FEED_COPY).exists());
-    assert!(!dir.path().join(skep_resolve::FETCH_CACHE).exists());
+    assert!(!dir.path().join(FEED_COPY).exists());
+    assert!(!dir.path().join(FETCH_CACHE).exists());
+}
+
+/// REG-3.42 UNDER A HELD COPY: what the copy says of its realm is the copy's
+/// word, never the root's. A courier's feed copy of this root's journal,
+/// its header rewritten to another realm and shipped with a fetch cache
+/// whose genesis table for the claimant agrees with that realm, matches the
+/// source row for row and chain pair for pair — and is refused at the
+/// claim's row all the same, the realm compared against the genesis set the
+/// source answers and never the cache's; the two realms named, and nothing
+/// written: the feed copy and the cache as they were shipped.
+#[test]
+fn a_held_copy_naming_another_realm_is_refused_at_the_claim() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (fixture, mirror) = open_fixture_mirror(dir.path());
+    let claimant = mirror.claim().map(|(_, c)| c.to_string()).expect("the claim");
+    drop(mirror);
+    let forged = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[9; 32]).expect("tag 1").public_key().clone();
+    let other = realm_id(&[Fingerprint::of(&forged)]);
+    let feed = fs::read_to_string(dir.path().join(FEED_COPY)).expect("the feed copy");
+    let shipped_feed = feed.replacen(&fixture.hint.realm.to_hex(), &other.to_hex(), 1);
+    assert_ne!(shipped_feed, feed, "the header names the realm");
+    fs::write(dir.path().join(FEED_COPY), &shipped_feed).expect("the courier's header");
+    let genesis = json!({ "keys": {
+        "account": claimant, "epoch": 0, "at": 0,
+        "enrolled": [{ "alg": forged.alg(), "key": forged.to_hex(), "anchor": true }],
+    }});
+    let cache = fs::read_to_string(dir.path().join(FETCH_CACHE)).expect("the fetch cache");
+    let shipped_cache = format!("{cache}{genesis}\n");
+    fs::write(dir.path().join(FETCH_CACHE), &shipped_cache).expect("the courier's cache");
+    let hint = RootHint::new(fixture.hint.origins.clone(), other, None).unwrap();
+    let dial = replay_dial(fixture.clone());
+    let refused = Mirror::open(&hint, dir.path(), &dial).err();
+    assert_eq!(
+        refused,
+        Some(MirrorError::Refused(Refusal::RealmMismatch { expected: other, found: fixture.hint.realm }))
+    );
+    assert_eq!(fs::read_to_string(dir.path().join(FEED_COPY)).expect("the feed copy"), shipped_feed, "no line of the copy");
+    assert_eq!(fs::read_to_string(dir.path().join(FETCH_CACHE)).expect("the fetch cache"), shipped_cache, "nor of the cache");
 }
 
 /// THE REPLAY MATRIX at the resolver (REG-2.9, REG-2.10, REG-2.24; REG-1.10,

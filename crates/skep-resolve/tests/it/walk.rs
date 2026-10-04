@@ -21,7 +21,7 @@ fn the_walks_three_answers() {
             assert_eq!(standing.prefix, addr("1.2"));
             assert!(matches!(standing.current.verdict, Verdict::Signed(_)));
             assert_eq!(standing.history.len(), 1);
-            assert_eq!(keys.len(), 1, "the node's one key");
+            assert_eq!(keys.as_ref().map(Vec::len), Some(1), "the node's one key");
             assert!(matches!(endpoint.verdict, Verdict::Signed(_)));
             assert_eq!(endpoint.record.origins, ["https://acme.example.net"]);
             assert_eq!((dial.member, dial.origin.as_str(), dial.kind), (0, "https://acme.example.net", MemberKind::Https));
@@ -176,7 +176,13 @@ fn the_set_as_of_the_position_judges_the_record() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (_, mut mirror) = open_fixture_mirror(dir.path());
     let claimant = mirror.claim().map(|(_, c)| c.clone()).expect("the claim");
-    let current: Vec<Fingerprint> = mirror.current_keys(&claimant).expect("read").iter().map(|e| Fingerprint::of(&e.key)).collect();
+    let current: Vec<Fingerprint> = mirror
+        .current_keys(&claimant)
+        .expect("read")
+        .expect("the table at the head")
+        .iter()
+        .map(|e| Fingerprint::of(&e.key))
+        .collect();
     assert_eq!(current.len(), 2, "the anchor and the rotated key");
     let mut signers = std::collections::BTreeSet::new();
     for prefix in ["1.2", "1.5", "1.6", "1.13"] {

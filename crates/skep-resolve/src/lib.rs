@@ -16,21 +16,26 @@
 //! * `http` — the written-out HTTP/1.1 client (`Transport`, `Http`): plain
 //!   `http` alone, an `https` root a transport this build does not hold.
 //! * `board` — the typed reads over any transport (`Board`: the feed's
-//!   pages, `/op`, `/op-at`, `/chain`), with the count of every read made.
+//!   pages, `/op`, `/op-at`, `/chain`), with the count of every read made,
+//!   and every value the resolver takes on the board's word typed where the
+//!   wire spells it.
 //! * `mirror` — THE MIRROR (REG-3.10 to REG-3.13, REG-3.17 to REG-3.19): a
 //!   `/changes` consumer from the floor that fetches every row's bytes it
 //!   needs and keeps an append-only journal copy from genesis; the base from
-//!   genesis at the root the hint names or a CHECKED image; a root move
-//!   resumed by the byte-identical check; a re-pointed hint re-bootstrapped;
-//!   the two refusals; no TTL and no negative cache.
+//!   genesis at the root the hint names or a CHECKED image, the realm
+//!   compared at the claim's row on either (REG-3.42); a root move resumed
+//!   by the byte-identical check; a re-pointed hint re-bootstrapped; the two
+//!   refusals; no TTL and no negative cache.
 //! * `verify` — THE VERIFY (rm-2; REG-1.86 (e)): the body parsed under the
 //!   canonical rule by `skep_registry::parse`, the record frame rebuilt from
 //!   the row's own members, the signer found in the set that opens the
 //!   home's account as of the record's position, both halves verified.
 //! * `index` — THE INDEX (REG-3.21 to REG-3.26; REG-2.8 to REG-2.11,
 //!   REG-2.24): the position-annotated prefix → binding index over the
-//!   verified bindings, membership the rule's own test, the endpoint's
-//!   currency on the active view (REG-1.10, REG-1.11).
+//!   verified bindings, the mirror's gate its one writer; beneath it the
+//!   ledger of the rules alone — membership the rule's own test, the
+//!   endpoint's currency on the active view (REG-1.10, REG-1.11) — which the
+//!   guest-reading resolve folds into.
 //! * `walk` — THE WALK (REG-3.7 to REG-3.9): `resolve(prefix)` → the binding
 //!   → the account → its key set and its current endpoint; the guest-reading
 //!   resolve with no mirror (REG-3.24, REG-3.33), priced.

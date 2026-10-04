@@ -21,8 +21,8 @@ use std::time::Instant;
 use serde_json::{json, Value};
 use skep_address::{document_of, Address, Nat};
 
-use super::{retrieve_frame, Mirror, MirrorError};
-use crate::board::{content_extent, position_in};
+use super::{Mirror, MirrorError};
+use crate::board::{content_extent, position_in, retrieve_frame};
 use crate::parse_address;
 
 /// A document's or a member's V→I image: its content runs, in V-order.
@@ -113,9 +113,10 @@ impl Mirror {
         Ok(None)
     }
 
+    /// A record's bytes, kept: held, and its line written to the fetch cache.
     fn keep_atom(&mut self, addr: &Address, text: String) -> Result<Option<String>, MirrorError> {
-        self.append_cache(json!({ "atom": { "address": addr.to_string(), "text": text } }))?;
-        self.fetched.atoms.insert(addr.clone(), text.clone());
+        let line = self.fetched.keep_atom(addr.clone(), text.clone());
+        self.append_cache(line)?;
         Ok(Some(text))
     }
 

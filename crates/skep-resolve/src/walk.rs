@@ -7,7 +7,8 @@
 //!
 //! `resolve(prefix)`: the binding from the index — read once at the build,
 //! never derived at the resolve (REG-3.24) — then the account, its key set
-//! as of the mirror's head, and its CURRENT endpoint: the latest honored
+//! as of the mirror's head (or that this reader could not read it, never an
+//! empty set in its place), and its CURRENT endpoint: the latest honored
 //! deposit on the active view of the account's doc 1, a nullified one gone
 //! and the one before it standing (REG-1.10, REG-1.11). The endpoint's
 //! members are then judged in the org's order ([`crate::origin`]) and the
@@ -18,9 +19,9 @@
 //! is the caller's.
 //!
 //! Beneath it, one child: [`guest`], THE GUEST-READING RESOLVE (REG-3.24,
-//! REG-3.33) — a reader with no mirror, scanning the board, its verdicts
-//! UNDETERMINABLE HERE — which renders its answer through this module's
-//! [`face_of`].
+//! REG-3.33) — a reader with no mirror, scanning the board into a ledger of
+//! its own and never into an index, its verdicts UNDETERMINABLE HERE — which
+//! renders its answer through this module's [`face_of`].
 
 mod guest;
 
@@ -60,11 +61,12 @@ pub fn resolve(
     Ok(face_of(standing, keys, endpoint, mirror.index().any_honored_endpoint(&home), names, transports))
 }
 
-/// The face a standing, its keys and its current endpoint render (REG-3.80;
-/// REG-3.34's one precedence over the members).
+/// The face a standing, its keys — `None` where the reader could not read
+/// them — and its current endpoint render (REG-3.80; REG-3.34's one
+/// precedence over the members).
 fn face_of(
     standing: crate::state::Standing,
-    keys: Vec<Enrolled>,
+    keys: Option<Vec<Enrolled>>,
     endpoint: Option<Judged<EndpointRecord>>,
     any_honored: bool,
     names: &dyn NameResolver,

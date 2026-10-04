@@ -6,6 +6,12 @@
 //! verdicts are UNDETERMINABLE HERE. Built here to be PRICED
 //! ([`GuestCost`]), never to be the hot-loop reader. A child of `walk`: its
 //! answer renders through the walk's own faces ([`face_of`]).
+//!
+//! It folds what it reads into a [`Ledger`] — the rules alone — and never
+//! into an [`Index`](crate::index::Index), whose one writer is the mirror's
+//! gate: every binding the class scan lists, FROM EVERY HOME, each
+//! UNDETERMINABLE HERE. Neither the verdict nor the registrar's home
+//! (REG-2.8) admits what this resolve answers from.
 
 use std::time::{Duration, Instant};
 
@@ -15,8 +21,8 @@ use skep_identity::{doc_1_of, Enrolled};
 use skep_registry::{parse, t_binding, t_endpoint, Body, BodyKind};
 
 use super::face_of;
-use crate::board::{content_extent, enrolled_of, link_slot, position_in, unit_span_json, Board};
-use crate::index::Index;
+use crate::board::{content_extent, position_in, unit_span_json, Board};
+use crate::index::Ledger;
 use crate::mirror::MirrorError;
 use crate::origin::{NameResolver, Transports};
 use crate::parse_address;
@@ -52,7 +58,7 @@ pub fn guest_resolve(
     let t = Instant::now();
     let reads_before = board.reads().total();
     let mut cost = GuestCost::default();
-    let mut index = Index::new();
+    let mut ledger = Ledger::default();
     // Every binding link on the board, by its class.
     let mut links = scan_class(board, t_binding(), None)?;
     cost.bindings_scanned = links.len() as u64;
@@ -64,7 +70,7 @@ pub fn guest_resolve(
                 if let Ok(record) = parse(BodyKind::Binding, text.as_bytes()) {
                     if let Body::Binding(b) = record.body {
                         if let Some(p) = parse_address(&b.prefix) {
-                            index.fold_binding(Judged {
+                            ledger.fold_binding(Judged {
                                 position: 0,
                                 link: link.clone(),
                                 home,
@@ -86,7 +92,7 @@ pub fn guest_resolve(
         cost.reads = board.reads().total() - reads_before;
         cost.time = t.elapsed();
     };
-    let Some(standing) = index.standing(prefix) else {
+    let Some(standing) = ledger.standing(prefix) else {
         finish(&mut cost);
         return Ok((Resolution::Unregistered { prefix: prefix.clone() }, cost));
     };
@@ -108,7 +114,7 @@ pub fn guest_resolve(
                 cost.atoms_read += 1;
                 if let Ok(record) = parse(BodyKind::Endpoint, text.as_bytes()) {
                     if let Body::Endpoint(e) = record.body {
-                        let honored = index.fold_endpoint(Judged {
+                        let honored = ledger.fold_endpoint(Judged {
                             position: 0,
                             link: link.clone(),
                             home: dep_home,
@@ -121,15 +127,15 @@ pub fn guest_resolve(
                             verdict: Verdict::UndeterminableHere,
                         });
                         if honored && board.retraction_stands(link)? {
-                            index.nullify(link);
+                            ledger.nullify(link);
                         }
                     }
                 }
             }
         }
     }
-    let endpoint = index.current_endpoint(&home).cloned();
-    let any = index.any_honored_endpoint(&home);
+    let endpoint = ledger.current_endpoint(&home).cloned();
+    let any = ledger.any_honored_endpoint(&home);
     finish(&mut cost);
     Ok((face_of(standing, keys, endpoint, any, names, transports), cost))
 }
@@ -165,13 +171,10 @@ fn scan_class(board: &Board, ty: &Address, home: Option<&Address>) -> Result<Vec
 /// A stored link's home, `from` and `to` — the home from the link's own
 /// address.
 fn read_link(board: &Board, link: &Address) -> Result<Option<(Address, Address, Vec<Address>)>, MirrorError> {
-    let v = board.op_ok(&json!({ "op": "read_link", "a": link.to_string() }))?;
-    if v["link"].is_null() {
-        return Ok(None);
-    }
+    let Some([from, to, _]) = board.link_slots(link)? else { return Ok(None) };
     let Some(home) = skep_address::document_of(link) else { return Ok(None) };
-    let Some(atom) = link_slot(&v, 0).first().cloned() else { return Ok(None) };
-    Ok(Some((home, atom, link_slot(&v, 1))))
+    let Some(atom) = from.first().cloned() else { return Ok(None) };
+    Ok(Some((home, atom, to)))
 }
 
 /// An atom at the head of its home: the append-only guess, else the head's
@@ -209,8 +212,8 @@ fn atom_at_head(board: &Board, home: &Address, addr: &Address) -> Result<Option<
     }
 }
 
-/// The account's live `key_set`.
-fn live_keys(board: &Board, account: &Address) -> Result<Vec<Enrolled>, MirrorError> {
-    let v = board.op(&json!({ "op": "key_set", "account": account.to_string() }))?;
-    Ok(v["enrolled"].as_array().map(|entries| entries.iter().filter_map(enrolled_of).collect()).unwrap_or_default())
+/// The account's live key set ([`Board::key_set`]); `None` where the answer
+/// is no key set — this reader could not read it.
+fn live_keys(board: &Board, account: &Address) -> Result<Option<Vec<Enrolled>>, MirrorError> {
+    Ok(board.key_set(account)?.map(|answer| answer.enrolled))
 }

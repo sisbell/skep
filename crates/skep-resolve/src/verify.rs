@@ -22,12 +22,13 @@
 //!    in its own), `doc` the home, and the five body rows — the link's type
 //!    address, its target as stored (the account bound, or none), the
 //!    `replaces` row EMPTY (the member rides INSIDE the signed body for these
-//!    kinds and no `replaces` link is written with them), the lineage row
-//!    EMPTY (D2: the daemon composes every record grade so at this build),
+//!    kinds and no `replaces` link is written with them), the lineage row the
+//!    trial hands — the lineage the reader's own root hint names (REG-3.45),
+//!    EMPTY at this build (D2: the daemon composes every record grade so) —
 //!    and the SIG-LESS CANONICAL PROJECTION of the body.
 //! 4. THE CANDIDATES — the enrolled keys of THE SET THAT OPENS THE HOME'S
 //!    ACCOUNT as of the record's own position, of the blob's width (the
-//!    mirror reads that set off `key_set` on `/op-at`; anchor grade is never
+//!    mirror supplies that set, `mirror/keys.rs`; anchor grade is never
 //!    asked of a registry record).
 //! 5. THE TRIAL — each candidate, the frame under its own token as `alg`,
 //!    both halves (`skep_signature::verify`); the first that verifies names
@@ -58,6 +59,9 @@ pub struct Trial<'a> {
     pub ty: &'a Address,
     /// The link's target as stored: the account bound, or none.
     pub to: &'a [Address],
+    /// The lineage row: the fork point of the lineage the reader's own root
+    /// hint names (REG-3.45, REG-3.40), `None` for the EMPTY row.
+    pub lineage: Option<&'a Address>,
     /// The set that opens the home's account AS OF the record's position.
     pub keys: &'a [Enrolled],
 }
@@ -105,7 +109,7 @@ pub fn judge(record: &Record, trial: &Trial<'_>) -> Verdict {
         ty: trial.ty,
         to: trial.to,
         replaces: None,
-        lineage_fork_point: None,
+        lineage_fork_point: trial.lineage,
         sigless_canonical_record: canonical.as_bytes(),
     });
     for enrolled in trial.keys {
@@ -142,8 +146,11 @@ mod tests {
     /// A body signed over the record frame by a key of the set is SIGNED
     /// under that key's fingerprint; the same body is UNSIGNED under a set
     /// without the key, under a different board term, under another target,
-    /// with a byte of its `sig` flipped, with a `sig` of no row's width, and
-    /// with no `sig` at all.
+    /// under a lineage row the trial hands where the frame bore none, with a
+    /// byte of its `sig` flipped, with a `sig` of no row's width, and with no
+    /// `sig` at all. A body signed on a forked lineage is SIGNED under the
+    /// trial that hands that fork point alone: the frame is composed with the
+    /// lineage the trial hands.
     #[test]
     fn a_record_is_signed_under_its_own_key_alone() {
         let (board, home, account, ty, to) = trial_parts();
@@ -151,7 +158,7 @@ mod tests {
         let other = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[4; 32]).expect("tag 1");
         let body = Body::Binding(Binding { prefix: "1.5".into(), replaces: None });
         let sigless = encode(&body, None);
-        let frame = |board: BoardTerm, to: &[Address]| {
+        let frame = |board: BoardTerm, to: &[Address], lineage: Option<&Address>| {
             entry_frame(
                 signer.public_key().alg(),
                 board,
@@ -161,21 +168,29 @@ mod tests {
                     ty: &ty,
                     to,
                     replaces: None,
-                    lineage_fork_point: None,
+                    lineage_fork_point: lineage,
                     sigless_canonical_record: sigless.as_bytes(),
                 }),
             )
         };
+        let hex = |bytes: Vec<u8>| -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() };
         let to_slot = [to.clone()];
-        let sig: String = signer.sign(&frame(board, &to_slot)).iter().map(|b| format!("{b:02x}")).collect();
+        let sig = hex(signer.sign(&frame(board, &to_slot, None)));
         let text = encode(&body, Some(&sig));
         let record = parse(BodyKind::Binding, text.as_bytes()).expect("canonical");
         let keys = [Enrolled { key: signer.public_key().clone(), anchor: false }];
         let foreign = [Enrolled { key: other.public_key().clone(), anchor: false }];
         let parts = (home.clone(), account.clone(), ty.clone());
-        let verdict = |record: &Record, keys: &[Enrolled], board: BoardTerm, to: &[Address]| -> Verdict {
-            judge(record, &Trial { board, home: &parts.0, home_account: &parts.1, ty: &parts.2, to, keys })
+        let judged = |record: &Record, keys: &[Enrolled], board: BoardTerm, to: &[Address], lineage: Option<&Address>| -> Verdict {
+            judge(record, &Trial { board, home: &parts.0, home_account: &parts.1, ty: &parts.2, to, lineage, keys })
         };
+        let verdict = |record: &Record, keys: &[Enrolled], board: BoardTerm, to: &[Address]| judged(record, keys, board, to, None);
+        let fork = parse_address("1.0.1.0.1.0.2.9").unwrap();
+        assert_eq!(judged(&record, &keys, board, &to_slot, Some(&fork)), Verdict::Unsigned, "a lineage row the frame bore none of");
+        let forked_sig = hex(signer.sign(&frame(board, &to_slot, Some(&fork))));
+        let forked = parse(BodyKind::Binding, encode(&body, Some(&forked_sig)).as_bytes()).expect("canonical");
+        assert_eq!(judged(&forked, &keys, board, &to_slot, Some(&fork)), Verdict::Signed(Fingerprint::of(signer.public_key())));
+        assert_eq!(verdict(&forked, &keys, board, &to_slot), Verdict::Unsigned, "a forked record under the empty row");
         assert_eq!(verdict(&record, &keys, board, &to_slot), Verdict::Signed(Fingerprint::of(signer.public_key())));
         assert_eq!(verdict(&record, &foreign, board, &to_slot), Verdict::Unsigned, "a key outside the set");
         assert_eq!(verdict(&record, &[], board, &to_slot), Verdict::Unsigned, "an empty set");

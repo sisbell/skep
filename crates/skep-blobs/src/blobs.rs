@@ -143,7 +143,7 @@ pub(crate) fn fsync_dir(dir: &Path) -> io::Result<()> {
 /// The volume's free space at `path`, in bytes — what the floor reads: the
 /// blocks available to an unprivileged writer times the fragment size.
 pub(crate) fn free_space(path: &Path) -> io::Result<u64> {
-    let v = rustix::fs::statvfs(path).map_err(io::Error::from)?;
+    let v = rustix::fs::statvfs(path)?;
     Ok(v.f_bavail.saturating_mul(v.f_frsize))
 }
 

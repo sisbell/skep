@@ -112,22 +112,16 @@ pub(crate) fn open_at(root: &Path, designation: &str, id: &UploadId, offset: u64
     Ok(Handle { file, hasher, written: offset, torn: false })
 }
 
-/// The hasher over the first `len` bytes of `file`, read from its start.
+/// The hasher over the first `len` bytes of `file`, read from its start by
+/// blake3's own reader loop, which retries an interrupted read as `Read`'s
+/// contract asks; a file shorter than `len` answers `UnexpectedEof`.
 fn hash_prefix(file: &mut File, len: u64) -> io::Result<blake3::Hasher> {
+    file.seek(SeekFrom::Start(0))?;
+    let mut prefix = file.take(len);
     let mut hasher = blake3::Hasher::new();
-    if len > 0 {
-        file.seek(SeekFrom::Start(0))?;
-        let mut buf = vec![0u8; 256 * 1024];
-        let mut left = len;
-        while left > 0 {
-            let want = buf.len().min(left as usize);
-            let n = file.read(&mut buf[..want])?;
-            if n == 0 {
-                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "partial short"));
-            }
-            hasher.update(&buf[..n]);
-            left -= n as u64;
-        }
+    hasher.update_reader(&mut prefix)?;
+    if prefix.limit() > 0 {
+        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "partial short"));
     }
     Ok(hasher)
 }

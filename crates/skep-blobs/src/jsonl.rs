@@ -56,29 +56,30 @@ impl Log {
         Ok((Log { path, file, len, lines, stopped: false }, values))
     }
 
-    /// Append `v` as the log's next line — the line and its newline in one
-    /// write, fsynced where `sync`, which a figure that must be durable
-    /// owes, and left to the OS otherwise, for a line whose loss costs
-    /// nothing. A write or sync that FAILS is undone: the file cut back to
-    /// its whole lines and the cut synced, so a failed append leaves the
-    /// file as it found it — what each store's map, moved only after an
-    /// append returns, already assumes. Where the cut fails too, the log
-    /// stops and the append answers its own failure; a stopped log refuses
-    /// every later append.
-    pub fn append(&mut self, v: &Value, sync: bool) -> io::Result<()> {
+    /// Append `v` as the log's next line and fsync it — what a figure that
+    /// must be durable owes. Undone where it fails ([`Log::append_by`]).
+    pub fn append_synced(&mut self, v: &Value) -> io::Result<()> {
         self.append_by(v, |file, line| {
             file.write_all(line)?;
-            if sync {
-                file.sync_all()
-            } else {
-                Ok(())
-            }
+            file.sync_all()
         })
     }
 
-    /// [`Log::append`] with its write and sync handed in as `write` — the
-    /// append's one body, which the unit suite drives with a write that
-    /// fails partway.
+    /// Append `v` as the log's next line, its durability left to the OS —
+    /// for a line whose loss costs nothing. Undone where it fails
+    /// ([`Log::append_by`]).
+    pub fn append_unsynced(&mut self, v: &Value) -> io::Result<()> {
+        self.append_by(v, |file, line| file.write_all(line))
+    }
+
+    /// THE APPEND's ONE BODY, its write — and its sync, where the line owes
+    /// one — handed in as `write`: the line and its newline in one write. A
+    /// write or sync that FAILS is undone: the file cut back to its whole
+    /// lines and the cut synced, so a failed append leaves the file as it
+    /// found it — what each store's map, moved only after an append
+    /// returns, already assumes. Where the cut fails too, the log stops and
+    /// the append answers its own failure; a stopped log refuses every later
+    /// append. The unit suite drives it with a write that fails partway.
     fn append_by(&mut self, v: &Value, write: impl FnOnce(&mut File, &[u8]) -> io::Result<()>) -> io::Result<()> {
         if self.stopped {
             return Err(io::Error::other(format!(
@@ -199,8 +200,8 @@ mod tests {
         let path = dir.path().join("x.log");
         let (mut log, values) = Log::open(path.clone()).unwrap();
         assert!(values.is_empty(), "an absent log holds no line");
-        log.append(&json!({"n": 1}), true).unwrap();
-        log.append(&json!({"n": 2}), false).unwrap();
+        log.append_synced(&json!({"n": 1})).unwrap();
+        log.append_unsynced(&json!({"n": 2})).unwrap();
         drop(log);
         let whole = fs::read_to_string(&path).unwrap();
         assert_eq!(whole, "{\"n\":1}\n{\"n\":2}\n");
@@ -220,14 +221,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("x.log");
         let (mut log, _) = Log::open(path.clone()).unwrap();
-        log.append(&json!({"n": 1}), true).unwrap();
+        log.append_synced(&json!({"n": 1})).unwrap();
         let cut_short = log.append_by(&json!({"n": 2}), |file, line| {
             file.write_all(&line[..4])?;
             Err(io::Error::other("no space left on the device"))
         });
         assert!(cut_short.is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "{\"n\":1}\n", "the torn line is cut back off the file");
-        log.append(&json!({"n": 3}), true).unwrap();
+        log.append_synced(&json!({"n": 3})).unwrap();
         drop(log);
         let (_, values) = Log::open(path.clone()).unwrap();
         assert_eq!(values, vec![json!({"n": 1}), json!({"n": 3})], "the line after the failure stands");
@@ -242,7 +243,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("x.log");
         let (mut log, _) = Log::open(path.clone()).unwrap();
-        log.append(&json!({"n": 1}), true).unwrap();
+        log.append_synced(&json!({"n": 1})).unwrap();
         // A read-only file, as a failing disk leaves the log's: the rest of
         // the write fails at the OS, and so does the cut. The torn bytes land
         // through a second open file, as a write cut short leaves them.
@@ -254,10 +255,10 @@ mod tests {
         });
         assert!(failed.is_err());
         log.file = open_append(&path).unwrap();
-        assert!(log.append(&json!({"n": 3}), true).is_err(), "a stopped log takes no append");
+        assert!(log.append_synced(&json!({"n": 3})).is_err(), "a stopped log takes no append");
         assert_eq!(fs::read_to_string(&path).unwrap(), "{\"n\":1}\n{\"n\"", "the torn line stays the tail");
         log.compact(vec![json!({"n": 1})].into_iter()).unwrap();
-        log.append(&json!({"n": 4}), true).unwrap();
+        log.append_synced(&json!({"n": 4})).unwrap();
         drop(log);
         let (_, values) = Log::open(path.clone()).unwrap();
         assert_eq!(values, vec![json!({"n": 1}), json!({"n": 4})], "compacted whole, the stop lifted");
@@ -275,8 +276,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("x.log");
         let (mut log, _) = Log::open(path.clone()).unwrap();
-        log.append(&json!({"k": "a", "v": 1}), true).unwrap();
-        log.append(&json!({"k": "b", "v": 1}), true).unwrap();
+        log.append_synced(&json!({"k": "a", "v": 1})).unwrap();
+        log.append_synced(&json!({"k": "b", "v": 1})).unwrap();
         // Two lines, two current records: nothing to drop, no rewrite.
         #[cfg(unix)]
         let before = inode(&path);
@@ -284,14 +285,14 @@ mod tests {
         #[cfg(unix)]
         assert_eq!(inode(&path), before, "a log holding only its current records is not rewritten");
         // A third line replacing `a`'s: three lines, two records — rewritten.
-        log.append(&json!({"k": "a", "v": 2}), true).unwrap();
+        log.append_synced(&json!({"k": "a", "v": 2})).unwrap();
         log.compact(vec![json!({"k": "a", "v": 2}), json!({"k": "b", "v": 1})].into_iter()).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "{\"k\":\"a\",\"v\":2}\n{\"k\":\"b\",\"v\":1}\n");
         assert!(!path.with_extension("compact").exists(), "the twin is renamed over the log");
         // The next append lands in the rewritten file, and the count runs
         // on from the rewrite's two lines: three lines, three records, no
         // rewrite.
-        log.append(&json!({"k": "c", "v": 1}), true).unwrap();
+        log.append_synced(&json!({"k": "c", "v": 1})).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 3, "the append landed in the rewritten file");
         #[cfg(unix)]
         let rewritten = inode(&path);

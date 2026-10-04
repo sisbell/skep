@@ -60,7 +60,7 @@ use std::path::Path;
 #[cfg(any(test, feature = "test-hooks"))]
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::{Mutex, RwLock};
 use skep_blobs::{Lease, LeaseState, Store, UploadId};
@@ -231,7 +231,7 @@ impl MediaGate {
     /// the index to the write path and starts the walk that readies it.
     pub(crate) fn open(data_dir: &Path) -> io::Result<MediaGate> {
         let now = wall_clock_ms();
-        let store = Store::open(&data_dir.join("blobs"), now, LEASE_HORIZON_MS)?;
+        let store = Store::open(data_dir.join("blobs"), Duration::from_millis(LEASE_HORIZON_MS), now)?;
         Ok(MediaGate {
             store,
             limits: RwLock::new(Limits::default()),
@@ -325,7 +325,7 @@ impl MediaGate {
     /// figure beside the base.
     pub(crate) fn own_pending(&self, principal: PrincipalId, now_ms: u64) -> u64 {
         let key = Self::key(principal);
-        self.store.pending_bytes(&key, now_ms, &|l| self.lease_pending(l))
+        self.store.pending_bytes(&key, now_ms, |l| self.lease_pending(l))
     }
 
     /// THE VENUE TOTAL at `now_ms`: the sum of every account's own scope —
@@ -333,7 +333,7 @@ impl MediaGate {
     pub(crate) fn venue_total(&self, now_ms: u64) -> u64 {
         self.index
             .total_base()
-            .saturating_add(self.store.pending_total(now_ms, &|l| self.lease_pending(l)))
+            .saturating_add(self.store.pending_total(now_ms, |l| self.lease_pending(l)))
     }
 
     /// Claim an upload for a stream (clause (5)): `false` where another
@@ -586,11 +586,11 @@ mod tests {
         let now = gate.now_ms();
         let store = gate.store();
         let key = MediaGate::key(p);
-        let rec = store.create_upload(&key, DESIGNATION, 9, now, 10_000).unwrap();
+        let rec = store.create_upload(&key, DESIGNATION, 9, Duration::from_millis(10_000), now).unwrap();
         store.resume(&key, &rec.id, 0, now).unwrap();
         store.append(&key, &rec.id, bytes, now).unwrap();
         store.settle(&key, &rec.id, now).unwrap();
-        let fin = store.finish(&key, &rec.id, now, 10_000).unwrap();
+        let fin = store.finish(&key, &rec.id, Duration::from_millis(10_000), now).unwrap();
         assert_eq!(fin.hex, hex_of(&hash));
         assert_eq!(gate.binding(p, &cell), Binding::Admitted);
         assert_eq!(gate.binding(PrincipalId(8), &cell), Binding::Unbound, "another principal holds none");
@@ -601,22 +601,22 @@ mod tests {
         assert_eq!(gate.binding(p, &cell), Binding::Unbound, "past the horizon: no lease");
         // A fresh lease, then the file removed from under it.
         let now = gate.now_ms();
-        let rec = store.create_upload(&key, DESIGNATION, 9, now, 10_000).unwrap();
+        let rec = store.create_upload(&key, DESIGNATION, 9, Duration::from_millis(10_000), now).unwrap();
         store.resume(&key, &rec.id, 0, now).unwrap();
         store.append(&key, &rec.id, bytes, now).unwrap();
         store.settle(&key, &rec.id, now).unwrap();
-        store.finish(&key, &rec.id, now, 10_000).unwrap();
+        store.finish(&key, &rec.id, Duration::from_millis(10_000), now).unwrap();
         assert_eq!(gate.binding(p, &cell), Binding::Admitted);
         std::fs::remove_file(store.blob_path(DESIGNATION, &hex_of(&hash)).unwrap()).unwrap();
         assert_eq!(gate.binding(p, &cell), Binding::Lapsed, "a live lease over no file reads as lapsed");
 
         // THE INDEX ARM. The file re-deposited, the cell entered as p's.
         let now = gate.now_ms();
-        let rec = store.create_upload(&key, DESIGNATION, 9, now, 10_000).unwrap();
+        let rec = store.create_upload(&key, DESIGNATION, 9, Duration::from_millis(10_000), now).unwrap();
         store.resume(&key, &rec.id, 0, now).unwrap();
         store.append(&key, &rec.id, bytes, now).unwrap();
         store.settle(&key, &rec.id, now).unwrap();
-        store.finish(&key, &rec.id, now, 10_000).unwrap();
+        store.finish(&key, &rec.id, Duration::from_millis(10_000), now).unwrap();
         assert_eq!(gate.own_pending(p, now), 9, "no cell names it: the lease counts as pending");
         assert_eq!(gate.own_scope(p, now), 9);
         let at = crate::codec::wire_address("1.0.1.0.2.0.1.1").unwrap();

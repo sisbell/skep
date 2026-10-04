@@ -293,7 +293,7 @@ fn a_pass_sweeps_an_aside_the_deferred_step_did_not_reach() {
     let hex = blob_hex(&right);
     {
         // Planted with the daemon stopped: the wrong bytes at the right name.
-        let store = Store::open(&dir.path().join("blobs"), 0, 1).expect("the store opens");
+        let store = Store::open(dir.path().join("blobs"), Duration::from_millis(1), 0).expect("the store opens");
         store.install("blake3", &hex, b"the wrong bytes under the right name").unwrap();
     }
     let sd = spawn(dir.path());
@@ -338,7 +338,7 @@ fn pruner_drain_keeps_plain_writes_and_a_retirement_inside_e2() {
     let tiers = std::env::var("DRAIN_TIERS").unwrap_or_else(|_| "both".into());
     let dir = tempfile::tempdir().expect("tempdir");
     let free = {
-        let store = Store::open(&dir.path().join("blobs"), 0, 1).expect("the store opens");
+        let store = Store::open(dir.path().join("blobs"), Duration::from_millis(1), 0).expect("the store opens");
         store.free_space().expect("statvfs")
     };
     let cap = 64 * 1024 * 1024usize;
@@ -369,21 +369,21 @@ fn pruner_drain_keeps_plain_writes_and_a_retirement_inside_e2() {
         let seeding = Instant::now();
         {
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
-            let store = Store::open(&dir.path().join("blobs"), now, 30 * 24 * 3600 * 1000).expect("the store opens");
+            let store = Store::open(dir.path().join("blobs"), Duration::from_millis(30 * 24 * 3600 * 1000), now).expect("the store opens");
             let key = CLAIMANT_PRINCIPAL.to_string();
             // Leased an hour out — past the seeding's own duration, so the
             // cadence's first pass finds every lease live and keeps the tail;
             // the test clock lapses them afterward.
-            let lease = 3_600_000u64;
+            let lease = Duration::from_millis(3_600_000);
             let mut buf = seeded_bytes(size, 5);
             for i in 0..n {
                 // One distinct file per lease: the first bytes carry the index.
                 buf[..8].copy_from_slice(&(i as u64).to_le_bytes());
-                let rec = store.create_upload(&key, "blake3", size as u64, now, lease).unwrap();
+                let rec = store.create_upload(&key, "blake3", size as u64, lease, now).unwrap();
                 store.resume(&key, &rec.id, 0, now).unwrap();
                 store.append(&key, &rec.id, &buf, now).unwrap();
                 store.settle(&key, &rec.id, now).unwrap();
-                store.finish(&key, &rec.id, now, lease).unwrap();
+                store.finish(&key, &rec.id, lease, now).unwrap();
             }
         }
         println!("drain {label}: {n} files seeded in {:?}", seeding.elapsed());

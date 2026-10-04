@@ -351,6 +351,8 @@ fn publish_arm(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use skep_arrangement::{Deposit, ShotRun, Run, VPos};
     use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
     use skep_namespace::{head_document, system_account, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL};
@@ -503,25 +505,25 @@ mod tests {
                 }],
             },
         };
-        let deposit = |p: PrincipalId, interval: u64| {
+        let deposit = |p: PrincipalId, interval: Duration| {
             let key = MediaGate::key(p);
             let now = gate.now_ms();
             let store = gate.store();
-            let rec = store.create_upload(&key, "blake3", 5, now, interval).unwrap();
+            let rec = store.create_upload(&key, "blake3", 5, interval, now).unwrap();
             store.resume(&key, &rec.id, 0, now).unwrap();
             store.append(&key, &rec.id, bytes, now).unwrap();
             store.settle(&key, &rec.id, now).unwrap();
-            store.finish(&key, &rec.id, now, interval).unwrap();
+            store.finish(&key, &rec.id, interval, now).unwrap();
         };
         assert_eq!(door(insert(&draft2, real()), SYSTEM_PRINCIPAL), Some(MediaRefusal::UnboundCell));
         assert_eq!(door(shot2(), SYSTEM_PRINCIPAL), Some(MediaRefusal::UnboundCell));
-        deposit(BOOTSTRAP_PRINCIPAL, 1_000_000);
+        deposit(BOOTSTRAP_PRINCIPAL, Duration::from_millis(1_000_000));
         assert_eq!(
             door(insert(&draft2, real()), SYSTEM_PRINCIPAL),
             Some(MediaRefusal::UnboundCell),
             "another principal's deposit admits nothing of this one's"
         );
-        deposit(SYSTEM_PRINCIPAL, 1_000);
+        deposit(SYSTEM_PRINCIPAL, Duration::from_millis(1_000));
         assert_eq!(door(insert(&draft2, real()), SYSTEM_PRINCIPAL), None, "admitted under its own live lease");
         assert_eq!(door(shot2(), SYSTEM_PRINCIPAL), None, "the owner's shot too");
         let wrong_size = format!(r#"{{"type":"{}","hash":"{hex}","size":4}}"#, cell::KIND).into_bytes();

@@ -6,29 +6,37 @@
 //! reconciliation both ways at open, the expiry, the end, and compaction.
 
 use std::fs::{self, OpenOptions};
+use std::time::Duration;
 
-use skep_blobs::{BlobError, UploadId, SYNC_GRAIN};
+use skep_blobs::{BlobError, NotAnUploadId, UploadId, SYNC_GRAIN};
 
-use crate::{every_deposit_unplaced, hex_of, open, standing, INTERVAL};
+use crate::{every_deposit_unplaced, hex_of, open, standing, INTERVAL, INTERVAL_MS};
 
 /// (1) THE IDENTIFIER: 32 lowercase hex of 128 OS bits, never a sequence —
-/// two mints differ; the parse admits exactly the spelling; identifiers
-/// order as their spellings do; and an identifier is answered to its
-/// principal ALONE: another principal's lookup, a resume, an end, an append
-/// and the count of bytes written each answer as for a never-minted
-/// identifier, even while the upload is open in this process (M-I2 (e)).
+/// two mints differ; the parse admits exactly the spelling, through
+/// `UploadId::parse` and through `FromStr` alike, and the spelling is the
+/// identifier's `Display`; identifiers order as their spellings do; and an
+/// identifier is answered to its principal ALONE: another principal's
+/// lookup, a resume, an end, an append and the count of bytes written each
+/// answer as for a never-minted identifier, even while the upload is open
+/// in this process (M-I2 (e)).
 #[test]
 fn the_identifier_is_unpredictable_and_answers_to_its_principal_alone() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = open(&dir.path().join("blobs"), 0);
-    let a = store.create_upload("a", "blake3", 5, 0, INTERVAL).unwrap();
-    let b = store.create_upload("a", "blake3", 5, 0, INTERVAL).unwrap();
+    let a = store.create_upload("a", "blake3", 5, INTERVAL, 0).unwrap();
+    let b = store.create_upload("a", "blake3", 5, INTERVAL, 0).unwrap();
     assert_ne!(a.id, b.id);
     assert_eq!(a.id.to_hex().len(), 32);
     assert!(a.id.to_hex().bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)));
     assert_eq!(UploadId::parse(&a.id.to_hex()), Some(a.id));
     assert_eq!(UploadId::parse(&a.id.to_hex().to_uppercase()), None);
     assert_eq!(UploadId::parse(&a.id.to_hex()[..31]), None);
+    assert_eq!(a.id.to_hex().parse::<UploadId>(), Ok(a.id));
+    assert_eq!(a.id.to_hex().to_uppercase().parse::<UploadId>(), Err(NotAnUploadId));
+    assert_eq!(a.id.to_hex()[..31].parse::<UploadId>(), Err(NotAnUploadId));
+    assert_eq!(a.id.to_string(), a.id.to_hex());
+    assert_eq!(format!("{:?}", a.id), format!("UploadId({})", a.id.to_hex()));
     assert_eq!(a.id < b.id, a.id.to_hex() < b.id.to_hex(), "an identifier orders as its spelling");
     let never = UploadId::parse("00000000000000000000000000000000").unwrap();
     for (principal, id) in [("b", a.id), ("a", never)] {
@@ -61,7 +69,7 @@ fn a_byte_is_received_once_durable_and_a_resume_continues_from_the_records_offse
     let root = dir.path().join("blobs");
     let store = open(&root, 0);
     let length = SYNC_GRAIN + 100;
-    let rec = store.create_upload("k", "blake3", length, 0, INTERVAL).unwrap();
+    let rec = store.create_upload("k", "blake3", length, INTERVAL, 0).unwrap();
     store.resume("k", &rec.id, 0, 10).unwrap();
     // Short of the grain: written, not received.
     store.append("k", &rec.id, &[1u8; 100], 10).unwrap();
@@ -72,7 +80,7 @@ fn a_byte_is_received_once_durable_and_a_resume_continues_from_the_records_offse
     store.append("k", &rec.id, &rest, 20).unwrap();
     let r = store.upload("k", &rec.id, 20).unwrap();
     assert_eq!(r.offset, SYNC_GRAIN);
-    assert_eq!(r.expires, 20 + INTERVAL);
+    assert_eq!(r.expires, 20 + INTERVAL_MS);
     // Written past it, unsettled: the record stands; a resume at the
     // record's offset cuts the tail; one at the written length is refused
     // naming the record's.
@@ -91,12 +99,12 @@ fn a_byte_is_received_once_durable_and_a_resume_continues_from_the_records_offse
     store.append("k", &rec.id, &[4u8; 100], 40).unwrap();
     let r = store.settle("k", &rec.id, 40).unwrap();
     assert_eq!(r.offset, length);
-    assert_eq!(r.expires, 40 + INTERVAL);
+    assert_eq!(r.expires, 40 + INTERVAL_MS);
     // The settle ended that request; the next resumes at the length, and
     // one byte more is refused, nothing written.
     store.resume("k", &rec.id, length, 41).unwrap();
     assert!(matches!(store.append("k", &rec.id, &[5u8], 41), Err(BlobError::Length { .. })));
-    let fin = store.finish("k", &rec.id, 50, INTERVAL).unwrap();
+    let fin = store.finish("k", &rec.id, INTERVAL, 50).unwrap();
     let mut whole = vec![1u8; 100];
     whole.extend(rest);
     whole.extend([4u8; 100]);
@@ -109,28 +117,34 @@ fn a_byte_is_received_once_durable_and_a_resume_continues_from_the_records_offse
 /// handed in then, held in its record and read back at open, and the one
 /// every later byte received re-fixes the expiry by — a later upload's
 /// interval, however different, reaches that upload alone ("a venue's
-/// later record reaches the next upload and never a standing one").
+/// later record reaches the next upload and never a standing one"). An
+/// interval finer than the line's whole milliseconds is held as the line
+/// spells it, so the record open reads back is the record the creation
+/// answered.
 #[test]
 fn the_interval_is_the_uploads_own_from_its_creation() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("blobs");
-    let (first, later) = {
+    let (first, later, fine) = {
         let store = open(&root, 0);
-        let first = store.create_upload("k", "blake3", 10, 0, 1_000).unwrap();
-        assert_eq!((first.interval, first.expires), (1_000, 1_000));
+        let first = store.create_upload("k", "blake3", 10, Duration::from_millis(1_000), 0).unwrap();
+        assert_eq!((first.interval, first.expires), (Duration::from_millis(1_000), 1_000));
         store.resume("k", &first.id, 0, 10).unwrap();
         store.append("k", &first.id, b"a", 10).unwrap();
         assert_eq!(store.settle("k", &first.id, 10).unwrap().expires, 1_010);
         // A later upload, created under another interval: its own alone.
-        let later = store.create_upload("k", "blake3", 10, 10, 5_000).unwrap();
+        let later = store.create_upload("k", "blake3", 10, Duration::from_millis(5_000), 10).unwrap();
         assert_eq!(later.expires, 5_010);
-        (first.id, later.id)
+        let fine = store.create_upload("k", "blake3", 10, Duration::from_micros(2_500), 10).unwrap();
+        assert_eq!((fine.interval, fine.expires), (Duration::from_millis(2), 12), "held in whole milliseconds");
+        (first.id, later.id, fine)
     };
     // Reopened: each interval is read back off its record's line, and each
     // upload's next byte received re-fixes its expiry by its own.
     let store = open(&root, 11);
-    assert_eq!(store.upload("k", &first, 11).unwrap().interval, 1_000);
-    assert_eq!(store.upload("k", &later, 11).unwrap().interval, 5_000);
+    assert_eq!(store.upload("k", &first, 11).unwrap().interval, Duration::from_millis(1_000));
+    assert_eq!(store.upload("k", &later, 11).unwrap().interval, Duration::from_millis(5_000));
+    assert_eq!(store.upload("k", &fine.id, 11), Some(fine), "read back as the creation answered it");
     store.resume("k", &first, 1, 20).unwrap();
     store.append("k", &first, b"b", 20).unwrap();
     assert_eq!(store.settle("k", &first, 20).unwrap().expires, 1_020, "re-fixed by its own interval");
@@ -165,7 +179,7 @@ fn a_record_line_without_its_interval_reads_as_no_upload() {
     assert!(!partial(&without).exists(), "its partial an orphan open removes");
     assert!(matches!(store.resume("k", &without, 3, 1), Err(BlobError::NoUpload)));
     let r = store.upload("k", &with, 1).expect("the line carrying its interval stands");
-    assert_eq!((r.offset, r.interval), (3, 1_000));
+    assert_eq!((r.offset, r.interval), (3, Duration::from_millis(1_000)));
     assert!(partial(&with).is_file());
 }
 
@@ -180,7 +194,7 @@ fn a_record_line_without_its_interval_reads_as_no_upload() {
 fn no_handle_outlives_the_request_that_opened_it() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = open(&dir.path().join("blobs"), 0);
-    let rec = store.create_upload("k", "blake3", 10, 0, INTERVAL).unwrap();
+    let rec = store.create_upload("k", "blake3", 10, INTERVAL, 0).unwrap();
     store.resume("k", &rec.id, 0, 1).unwrap();
     store.append("k", &rec.id, b"first", 1).unwrap();
     assert_eq!(store.handles_open(), 1, "the request streaming holds one");
@@ -192,7 +206,7 @@ fn no_handle_outlives_the_request_that_opened_it() {
     assert!(matches!(store.append("k", &rec.id, b"-", 1), Err(BlobError::NotResumed)));
     store.resume("k", &rec.id, 5, 2).unwrap();
     store.append("k", &rec.id, b"-last", 2).unwrap();
-    let fin = store.finish("k", &rec.id, 2, INTERVAL).unwrap();
+    let fin = store.finish("k", &rec.id, INTERVAL, 2).unwrap();
     assert_eq!(fin.hex, hex_of(b"first-last"));
     assert_eq!(store.handles_open(), 0, "and so does a finish");
     // An end, and a `close_handle` for a request cut short, close theirs too.
@@ -268,7 +282,7 @@ fn open_reconciles_the_partials_and_the_records_both_ways() {
     assert_eq!(store.designations().unwrap(), vec!["blake3".to_string(), "sha256-tree".to_string()], "every directory under the root, the foreign one included");
     let lines_after = fs::read_to_string(root.join("uploads.log")).unwrap().lines().count();
     assert_eq!(lines_after, 3, "compacted to the three current records");
-    assert_eq!(store.pending_bytes("k", now, &every_deposit_unplaced), 4 + 6 + 3);
+    assert_eq!(store.pending_bytes("k", now, every_deposit_unplaced), 4 + 6 + 3);
     // The expired upload's partial would be a resume into nothing; the
     // standing ones resume at their reconciled offsets and finish whole.
     for (rec, head, tail) in [(&kept, b"kept".as_slice(), b"".as_slice()), (&longer, b"longer", b""), (&shorter, b"sho", b"rter")] {
@@ -278,7 +292,7 @@ fn open_reconciles_the_partials_and_the_records_both_ways() {
         store.append("k", &r.id, tail, now).unwrap();
         store.append("k", &r.id, &fill, now).unwrap();
         store.settle("k", &r.id, now).unwrap();
-        let fin = store.finish("k", &r.id, now, INTERVAL).unwrap();
+        let fin = store.finish("k", &r.id, INTERVAL, now).unwrap();
         let mut whole = head.to_vec();
         whole.extend_from_slice(tail);
         whole.extend(fill);
@@ -313,8 +327,8 @@ fn the_expired_uploads_are_listed_and_removed_while_the_store_serves() {
     assert!(!partial(&early.id).exists(), "its partial removed");
     assert!(store.upload("a", &early.id, 1).is_none(), "its record retired, at any clock");
     assert!(!store.expire_upload(&early.id, now).unwrap(), "retired once");
-    assert_eq!(store.pending_bytes("a", 1, &every_deposit_unplaced), 0);
-    assert_eq!(store.pending_bytes("b", now, &every_deposit_unplaced), 4, "the standing one counts");
+    assert_eq!(store.pending_bytes("a", 1, every_deposit_unplaced), 0);
+    assert_eq!(store.pending_bytes("b", now, every_deposit_unplaced), 4, "the standing one counts");
 }
 
 /// (6) THE END keeps nothing: the partial removed, the record retired, the
@@ -330,9 +344,9 @@ fn an_ended_upload_keeps_nothing_and_a_torn_log_tail_is_cut() {
         let store = open(&root, 0);
         let a = standing(&store, "k", 100, b"abc", 1);
         let b = standing(&store, "k", 100, b"def", 1);
-        assert_eq!(store.pending_bytes("k", 2, &every_deposit_unplaced), 6);
+        assert_eq!(store.pending_bytes("k", 2, every_deposit_unplaced), 6);
         store.end_upload("k", &a.id, 2).unwrap();
-        assert_eq!(store.pending_bytes("k", 2, &every_deposit_unplaced), 3);
+        assert_eq!(store.pending_bytes("k", 2, every_deposit_unplaced), 3);
         assert!(!root.join("blake3").join(format!(".upload-{}", a.id.to_hex())).exists());
         assert!(matches!(store.end_upload("k", &a.id, 2), Err(BlobError::NoUpload)));
         assert!(matches!(store.resume("k", &a.id, 0, 2), Err(BlobError::NoUpload)));

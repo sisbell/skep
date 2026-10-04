@@ -7,6 +7,11 @@ use std::io;
 /// differently. I/O failures ride [`BlobError::Io`] verbatim; everything
 /// else is the store's own verdict, and none of them says anything about
 /// another principal's uploads or files (the record's M-I2 (e)).
+///
+/// Deliberately not `#[non_exhaustive]`: the daemon's exhaustive match over
+/// it gives each refusal its wire answer, and a new variant breaks that
+/// match on purpose, where the `_` arm `#[non_exhaustive]` demands of an
+/// outside crate would answer it as whatever that arm answers.
 #[derive(Debug)]
 pub enum BlobError {
     /// The data directory refused I/O — a write, a sync, a rename, a read.

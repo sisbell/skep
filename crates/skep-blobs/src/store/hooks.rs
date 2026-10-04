@@ -3,42 +3,49 @@
 //! SEAM: the gate before each [`Step`] of a finish, where a HOLD runs a
 //! closure (the daemon's SIGKILL harness parks the thread in it and kills
 //! the process) or an injected FAILURE answers an I/O error in the step's
-//! place (the fsync-order suite observes what each failure leaves). And the
-//! four methods only a test calls: [`Store::install`], which plants a file
-//! under a hex its bytes need not hash to; [`Store::written`], the bytes a
-//! request's handle has written, durable or not, answered to its own
-//! principal alone; [`Store::asides_queued`], the deferred unlink's queue;
-//! and [`Store::handles_open`], the handles requests hold. A build without
-//! the feature carries none of it, and its gate before a step is a no-op
-//! (`store.rs`).
+//! place (the fsync-order suite observes what each failure leaves). A hold
+//! runs with none of the seam's own state locked, so it parks its own
+//! finish alone: the finish keeps what any finish holds — the store's lock
+//! on its handles, which runs the finishes one at a time — and nothing of
+//! the seam's. And the four methods only a test calls: [`Store::install`],
+//! which plants a file under a hex its bytes need not hash to;
+//! [`Store::written`], the bytes a request's handle has written, durable or
+//! not, answered to its own principal alone; [`Store::asides_queued`], the
+//! deferred unlink's queue; and [`Store::handles_open`], the handles
+//! requests hold. A build without the feature carries none of it, and its
+//! gate before a step is a no-op (`store.rs`).
 
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::Path;
+use std::sync::Arc;
 
 use super::{Step, Store};
 use crate::blobs::fsync_dir;
 use crate::uploads::UploadId;
 
-/// The hazard seam's state: at most one failure point and one hold.
+/// The hazard seam's state: at most one failure point and one hold — the
+/// hold shared, so the gate takes it out and runs it with this state
+/// unlocked.
 #[derive(Default)]
 pub(super) struct Hooks {
     fail_at: Option<Step>,
-    hold: Option<(Step, Box<dyn Fn() + Send + Sync>)>,
+    hold: Option<(Step, Arc<dyn Fn() + Send + Sync>)>,
 }
 
 impl Store {
     /// The seam's gate before a step of the finish: a hold runs its
     /// closure (which may park the thread for good); an injected failure
-    /// answers an I/O error in the step's place.
+    /// answers an I/O error in the step's place, read once the hold has
+    /// returned. The hold is cloned out and run with the seam unlocked, so
+    /// a hold that parks for good stalls its own finish alone, and one that
+    /// sets the seam does not wait on itself.
     pub(super) fn before(&self, step: Step) -> io::Result<()> {
-        let hooks = self.hooks.lock();
-        if let Some((at, f)) = &hooks.hold {
-            if *at == step {
-                f();
-            }
+        let hold = self.hooks.lock().hold.as_ref().filter(|(at, _)| *at == step).map(|(_, f)| Arc::clone(f));
+        if let Some(f) = hold {
+            f();
         }
-        if hooks.fail_at == Some(step) {
+        if self.hooks.lock().fail_at == Some(step) {
             return Err(io::Error::other(format!("injected failure at {step:?}")));
         }
         Ok(())
@@ -53,9 +60,13 @@ impl Store {
 
     /// TEST HOOK (`test-hooks`): HOLD every later finish before the named
     /// step by calling `f` there — the SIGKILL harness parks the thread in
-    /// it and kills the process.
-    pub fn hold_at(&self, step: Step, f: Box<dyn Fn() + Send + Sync>) {
-        self.hooks.lock().hold = Some((step, f));
+    /// it and kills the process. A hold inside a finish parks that finish
+    /// with the store's lock on its handles held, as every finish holds it,
+    /// so another finish waits on it as on any; one at the deferred
+    /// [`Step::UnlinkAside`] parks the drain that met it. No lock of the
+    /// seam's is held while `f` runs.
+    pub fn hold_at(&self, step: Step, f: impl Fn() + Send + Sync + 'static) {
+        self.hooks.lock().hold = Some((step, Arc::new(f)));
     }
 
     /// TEST HOOK (`test-hooks`): install `bytes` as `<designation>/<hex>`

@@ -97,4 +97,31 @@ pub use error::BlobError;
 pub use lease::{Lease, LeaseState};
 pub use partials::SYNC_GRAIN;
 pub use store::{Finished, Step, Store};
-pub use uploads::{UploadId, UploadRecord, IDENTIFIER_BYTES};
+pub use uploads::{NotAnUploadId, UploadId, UploadRecord, IDENTIFIER_BYTES};
+
+/// What this crate promises without saying so (C-SEND-SYNC, C-GOOD-ERR,
+/// C-COMMON-TRAITS). One `Store` is shared by every worker of the daemon,
+/// whose own `Daemon: Send + Sync` pin rests on this one, and the store's
+/// answers and refusals cross threads with the requests that carry them.
+/// An auto trait is promised by what a type contains, so a private field
+/// that is not `Send` would revoke it with no public name changing; this is
+/// where that fails to compile instead, under both arms of the test seam —
+/// the hold is bounded `Send + Sync` for this reason. And the values a
+/// caller keeps — in a set, as a map key — are held to the traits that let
+/// it, which a caller cannot add itself.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Store>();
+    // The refusals, as an error crossing threads in a `Box<dyn Error>`.
+    fn crossing<T: std::error::Error + Send + Sync + 'static>() {}
+    crossing::<BlobError>();
+    crossing::<NotAnUploadId>();
+    // The values a caller keeps.
+    fn kept<T: Clone + Eq + std::hash::Hash + std::fmt::Debug + Send + Sync>() {}
+    kept::<Finished>();
+    kept::<Lease>();
+    kept::<LeaseState>();
+    kept::<Step>();
+    kept::<UploadId>();
+    kept::<UploadRecord>();
+};

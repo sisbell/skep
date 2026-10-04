@@ -19,6 +19,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io;
 use std::path::Path;
+use std::str::FromStr;
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -29,6 +31,12 @@ pub const IDENTIFIER_BYTES: usize = 16;
 
 /// The log's file name under the root.
 const UPLOADS_LOG: &str = "uploads.log";
+
+/// A span as the whole milliseconds the logs spell and the expiries add —
+/// saturating where it passes `u64`, as every expiry the store fixes does.
+pub(crate) fn millis(span: Duration) -> u64 {
+    u64::try_from(span.as_millis()).unwrap_or(u64::MAX)
+}
 
 /// One upload's identifier — 128 bits from the OS, compared exactly, and
 /// ordered by its bytes, which is the order of its hex spelling.
@@ -44,7 +52,9 @@ impl UploadId {
         Ok(UploadId(raw))
     }
 
-    /// ONLY 32 lowercase hex; anything else is no identifier.
+    /// ONLY 32 lowercase hex; anything else is no identifier. The predicate
+    /// form, which the daemon's path parse uses; [`FromStr`] answers the
+    /// same text with a refusal a generic caller can propagate.
     pub fn parse(s: &str) -> Option<UploadId> {
         let b = s.as_bytes();
         if b.len() != 2 * IDENTIFIER_BYTES {
@@ -62,21 +72,47 @@ impl UploadId {
         Some(UploadId(raw))
     }
 
-    /// The wire and file spelling: 32 lowercase hex.
+    /// The wire and file spelling: 32 lowercase hex, the identifier's
+    /// [`Display`](fmt::Display) as a `String`.
     pub fn to_hex(&self) -> String {
-        self.0.iter().map(|b| format!("{b:02x}")).collect()
+        self.to_string()
     }
 }
 
+/// The spelling, written a byte at a time: 32 lowercase hex.
 impl fmt::Display for UploadId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.to_hex())
+        self.0.iter().try_for_each(|b| write!(f, "{b:02x}"))
     }
 }
 
 impl fmt::Debug for UploadId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "UploadId({})", self.to_hex())
+        write!(f, "UploadId({self})")
+    }
+}
+
+/// [`UploadId::parse`] refused: the text is not 32 lowercase hex. Carries
+/// no reason — the spelling is one shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct NotAnUploadId;
+
+impl fmt::Display for NotAnUploadId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("not an upload identifier (32 lowercase hex)")
+    }
+}
+
+impl std::error::Error for NotAnUploadId {}
+
+/// The ecosystem door beside [`UploadId::parse`]: what a generic caller — an
+/// argument parser, an environment reader — can reach, the same spelling
+/// admitted and anything else refused as [`NotAnUploadId`].
+impl FromStr for UploadId {
+    type Err = NotAnUploadId;
+
+    fn from_str(s: &str) -> Result<UploadId, NotAnUploadId> {
+        UploadId::parse(s).ok_or(NotAnUploadId)
     }
 }
 
@@ -84,7 +120,12 @@ impl fmt::Debug for UploadId {
 /// uploader, the designation, its declared length, the DURABLE offset
 /// (bytes received), the interval fixed at its creation, and the expiry
 /// fixed from the last byte received.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `#[non_exhaustive]`: emitted, never constructed by a caller — field
+/// reads are unaffected, and a further field is an addition rather than a
+/// broken build.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct UploadRecord {
     pub id: UploadId,
     /// The uploader — the principal the upload answers to alone (clause
@@ -93,23 +134,26 @@ pub struct UploadRecord {
     pub designation: String,
     pub length: u64,
     pub offset: u64,
-    /// THE UPLOAD's INTERVAL, in milliseconds — fixed at its creation from
-    /// the limits in force then and held here (clauses (1), (3)): each byte
-    /// received re-fixes `expires` this far past it, and a later limits
-    /// record never reaches a standing upload.
-    pub interval: u64,
+    /// THE UPLOAD's INTERVAL — fixed at its creation from the limits in
+    /// force then and held here (clauses (1), (3)): each byte received
+    /// re-fixes `expires` this far past it, and a later limits record never
+    /// reaches a standing upload. Held in the whole milliseconds its log
+    /// line spells, so the record read back at open is the record answered.
+    pub interval: Duration,
+    /// The instant the upload stops standing, unix milliseconds.
     pub expires: u64,
 }
 
 impl UploadRecord {
     /// The record as its log line's value. The stored format spells the
-    /// principal's member `key`, as the lease log's line does.
+    /// principal's member `key`, as the lease log's line does, and the
+    /// interval in whole milliseconds.
     fn value(&self) -> Value {
         json!({
             "designation": self.designation,
             "expires": self.expires,
             "id": self.id.to_hex(),
-            "interval": self.interval,
+            "interval": millis(self.interval),
             "key": self.principal,
             "length": self.length,
             "offset": self.offset,
@@ -143,7 +187,7 @@ fn parse_line(v: &Value) -> Option<Line> {
         designation: v.get("designation")?.as_str()?.to_string(),
         length: v.get("length")?.as_u64()?,
         offset: v.get("offset")?.as_u64()?,
-        interval: v.get("interval")?.as_u64()?,
+        interval: Duration::from_millis(v.get("interval")?.as_u64()?),
         expires: v.get("expires")?.as_u64()?,
     }))
 }
@@ -252,19 +296,20 @@ impl UploadRecords {
     /// that offset set back at open, and a byte counts as received only
     /// once the partial AND its record's offset are on disk.
     pub fn write(&mut self, record: UploadRecord) -> io::Result<()> {
-        self.log.append(&record.value(), true)?;
+        self.log.append_synced(&record.value())?;
         self.records.insert(record.id, record);
         Ok(())
     }
 
     /// Retire an upload: its line appended, the record dropped. A lost
     /// retirement line costs nothing — a record whose partial is gone is
-    /// retired by open's reconciliation.
+    /// retired by open's reconciliation — so the line's durability is left
+    /// to the OS.
     pub fn retire(&mut self, id: &UploadId) -> io::Result<()> {
         if self.records.remove(id).is_none() {
             return Ok(());
         }
-        self.log.append(&json!({"id": id.to_hex(), "retired": true}), false)
+        self.log.append_unsynced(&json!({"id": id.to_hex(), "retired": true}))
     }
 
     /// Rewrite the log to the current records where any line on disk is

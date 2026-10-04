@@ -28,8 +28,13 @@ use crate::jsonl::Log;
 const LEASES_LOG: &str = "leases.log";
 
 /// One deposit's lease: PRINCIPAL holds `<designation>/<hex>` of `size`
-/// bytes until `expires`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// bytes until `expires`, an instant in unix milliseconds.
+///
+/// `#[non_exhaustive]`: emitted, never constructed by a caller — field
+/// reads are unaffected, and a further field is an addition rather than a
+/// broken build.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct Lease {
     pub principal: String,
     pub designation: String,
@@ -79,7 +84,12 @@ impl Lease {
 /// a live lease over a file absent or not whole reads as lapsed, as the
 /// daemon's binding and deposit read take it (`media.md` Op inventory 1, "A
 /// LIVE LEASE OVER A FILE THAT IS NOT THERE READS AS LAPSED").
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// Deliberately not `#[non_exhaustive]`: the three states are the lease's
+/// whole answer, and a consumer's exhaustive match — the daemon's binding —
+/// gives each its own; a fourth breaks that match on purpose, where the `_`
+/// arm `#[non_exhaustive]` demands of an outside crate would absorb it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum LeaseState {
     Live { size: u64, expires: u64 },
     Lapsed { expires: u64 },
@@ -116,7 +126,7 @@ impl LeaseLog {
     /// Append `lease` as the principal's current lease on the hash and SYNC
     /// it — the PUT answers only after this returns.
     pub fn append_synced(&mut self, lease: Lease) -> io::Result<()> {
-        self.log.append(&lease.value(), true)?;
+        self.log.append_synced(&lease.value())?;
         self.leases.insert((lease.principal.clone(), lease.designation.clone(), lease.hex.clone()), lease);
         Ok(())
     }
@@ -147,7 +157,7 @@ impl LeaseLog {
 
     /// The sizes of the principal's UNPLACED DEPOSITS at `now_ms`, summed:
     /// its live leases `unplaced` admits.
-    pub fn unplaced_of(&self, principal: &str, now_ms: u64, unplaced: &dyn Fn(&Lease) -> bool) -> u64 {
+    pub fn unplaced_of(&self, principal: &str, now_ms: u64, mut unplaced: impl FnMut(&Lease) -> bool) -> u64 {
         self.leases
             .values()
             .filter(|l| l.principal == principal && l.live(now_ms) && unplaced(l))
@@ -156,7 +166,7 @@ impl LeaseLog {
 
     /// The sizes of every unplaced deposit at `now_ms`, summed: every
     /// principal's live leases `unplaced` admits.
-    pub fn unplaced_total(&self, now_ms: u64, unplaced: &dyn Fn(&Lease) -> bool) -> u64 {
+    pub fn unplaced_total(&self, now_ms: u64, mut unplaced: impl FnMut(&Lease) -> bool) -> u64 {
         self.leases
             .values()
             .filter(|l| l.live(now_ms) && unplaced(l))

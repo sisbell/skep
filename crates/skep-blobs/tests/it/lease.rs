@@ -8,10 +8,11 @@
 //! file.
 
 use std::fs;
+use std::time::Duration;
 
 use skep_blobs::LeaseState;
 
-use crate::{every_deposit_unplaced, hex_of, open, put_whole, HORIZON, INTERVAL};
+use crate::{every_deposit_unplaced, hex_of, open, put_whole, HORIZON_MS, INTERVAL, INTERVAL_MS};
 
 /// LIVE within the interval, LAPSED past it within the HORIZON (its expiry
 /// named), NONE past the horizon — and NONE for another principal at every
@@ -22,17 +23,23 @@ fn a_lease_is_live_then_lapsed_within_the_horizon_then_none() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = open(&dir.path().join("blobs"), 0);
     let fin = put_whole(&store, "k", b"bytes", 100);
-    let expires = 100 + INTERVAL;
+    let expires = 100 + INTERVAL_MS;
     assert_eq!(store.lease("k", "blake3", &fin.hex, 100), LeaseState::Live { size: 5, expires });
     assert_eq!(store.lease("k", "blake3", &fin.hex, expires - 1), LeaseState::Live { size: 5, expires });
     assert_eq!(store.lease("k", "blake3", &fin.hex, expires), LeaseState::Lapsed { expires });
-    assert_eq!(store.lease("k", "blake3", &fin.hex, expires + HORIZON - 1), LeaseState::Lapsed { expires });
-    assert_eq!(store.lease("k", "blake3", &fin.hex, expires + HORIZON), LeaseState::None);
-    for now in [100, expires, expires + HORIZON] {
+    assert_eq!(store.lease("k", "blake3", &fin.hex, expires + HORIZON_MS - 1), LeaseState::Lapsed { expires });
+    assert_eq!(store.lease("k", "blake3", &fin.hex, expires + HORIZON_MS), LeaseState::None);
+    for now in [100, expires, expires + HORIZON_MS] {
         assert_eq!(store.lease("other", "blake3", &fin.hex, now), LeaseState::None);
         assert_eq!(store.lease("k", "sha256-tree", &fin.hex, now), LeaseState::None, "the designation is part of the lease's key");
     }
-    assert_eq!(store.live_leases_of("k", 100), vec![skep_blobs::Lease { principal: "k".into(), designation: "blake3".into(), hex: fin.hex.clone(), size: 5, expires }]);
+    let live = store.live_leases_of("k", 100);
+    assert_eq!(live.len(), 1);
+    let l = &live[0];
+    assert_eq!(
+        (l.principal.as_str(), l.designation.as_str(), l.hex.as_str(), l.size, l.expires),
+        ("k", "blake3", fin.hex.as_str(), 5, expires)
+    );
     assert_eq!(store.live_leases_of("k", expires), vec![], "the deposit read lists live leases alone");
     fs::remove_file(store.blob_path("blake3", &fin.hex).unwrap()).unwrap();
     assert_eq!(
@@ -58,15 +65,15 @@ fn the_latest_lease_wins_and_open_compacts_to_it() {
         assert_eq!(fin.hex, hex);
         // The same bytes again with an EARLIER expiry — an interval of
         // nothing: the later line wins.
-        let rec = store.create_upload("k", "blake3", 10, 2_000, INTERVAL).unwrap();
+        let rec = store.create_upload("k", "blake3", 10, INTERVAL, 2_000).unwrap();
         store.resume("k", &rec.id, 0, 2_000).unwrap();
         store.append("k", &rec.id, b"same bytes", 2_000).unwrap();
         store.settle("k", &rec.id, 2_000).unwrap();
-        store.finish("k", &rec.id, 2_000, 0).unwrap();
+        store.finish("k", &rec.id, Duration::ZERO, 2_000).unwrap();
         assert_eq!(store.lease("k", "blake3", &hex, 2_001), LeaseState::Lapsed { expires: 2_000 });
         // And a third time, the latest line again: live once more.
         put_whole(&store, "k", b"same bytes", 3_000);
-        assert_eq!(store.lease("k", "blake3", &hex, 3_001), LeaseState::Live { size: 10, expires: 3_000 + INTERVAL });
+        assert_eq!(store.lease("k", "blake3", &hex, 3_001), LeaseState::Live { size: 10, expires: 3_000 + INTERVAL_MS });
         // Another principal's lease on other bytes, long gone by the reopen
         // below.
         put_whole(&store, "j", b"old", 10);
@@ -75,12 +82,12 @@ fn the_latest_lease_wins_and_open_compacts_to_it() {
     }
     // Reopened past `j`'s horizon but inside `k`'s latest: compacted to one
     // line, k's, which answers LAPSED off that line.
-    let now = 10 + INTERVAL + HORIZON;
+    let now = 10 + INTERVAL_MS + HORIZON_MS;
     let store = open(&root, now);
     let lines = fs::read_to_string(root.join("leases.log")).unwrap().lines().count();
     assert_eq!(lines, 1, "compacted: k's latest line alone");
     assert_eq!(store.lease("j", "blake3", &hex_of(b"old"), now), LeaseState::None);
-    assert_eq!(store.lease("k", "blake3", &hex, now), LeaseState::Lapsed { expires: 3_000 + INTERVAL });
+    assert_eq!(store.lease("k", "blake3", &hex, now), LeaseState::Lapsed { expires: 3_000 + INTERVAL_MS });
 }
 
 /// THE PENDING BYTES (M-I6 (b)): a principal's unplaced deposits' sizes
@@ -98,23 +105,23 @@ fn pending_bytes_are_record_derived_per_principal_and_in_total() {
     put_whole(&store, "b", b"shared", 10);
     put_whole(&store, "a", b"a's own", 10);
     crate::standing(&store, "b", 100, b"partial", 10);
-    assert_eq!(store.pending_bytes("a", 11, &every_deposit_unplaced), 6 + 7);
-    assert_eq!(store.pending_bytes("b", 11, &every_deposit_unplaced), 6 + 7);
+    assert_eq!(store.pending_bytes("a", 11, every_deposit_unplaced), 6 + 7);
+    assert_eq!(store.pending_bytes("b", 11, every_deposit_unplaced), 6 + 7);
     assert_eq!(
-        store.pending_total(11, &every_deposit_unplaced),
+        store.pending_total(11, every_deposit_unplaced),
         6 + 7 + 6 + 7,
         "the sum of own scopes, the shared file counted in each"
     );
-    assert_eq!(store.pending_bytes("c", 11, &every_deposit_unplaced), 0);
+    assert_eq!(store.pending_bytes("c", 11, every_deposit_unplaced), 0);
     let shared = hex_of(b"shared");
     // Both principals' cells name the shared file: placed, in their bases.
     let unplaced = |l: &skep_blobs::Lease| l.hex != shared;
     assert_eq!(store.pending_bytes("a", 11, &unplaced), 7, "a's own lease alone");
     assert_eq!(store.pending_bytes("b", 11, &unplaced), 7, "b's partial alone, counted whole");
     assert_eq!(store.pending_total(11, &unplaced), 7 + 7);
-    let lapsed = 10 + INTERVAL;
-    assert_eq!(store.pending_bytes("a", lapsed, &every_deposit_unplaced), 0, "lapsed leases count nothing");
-    assert_eq!(store.pending_total(lapsed, &every_deposit_unplaced), 0, "and an expired upload neither");
+    let lapsed = 10 + INTERVAL_MS;
+    assert_eq!(store.pending_bytes("a", lapsed, every_deposit_unplaced), 0, "lapsed leases count nothing");
+    assert_eq!(store.pending_total(lapsed, every_deposit_unplaced), 0, "and an expired upload neither");
 }
 
 /// THE ANY-PRINCIPAL READ (the pruner's; M-I5 (b) at its strictest): a
@@ -129,10 +136,10 @@ fn any_live_lease_answers_for_every_principal_together() {
     let fin = put_whole(&store, "a", b"shared", 100);
     put_whole(&store, "b", b"shared", 200);
     assert!(store.any_live_lease("blake3", &fin.hex, 150));
-    let a_lapsed = 100 + INTERVAL;
+    let a_lapsed = 100 + INTERVAL_MS;
     assert!(store.any_live_lease("blake3", &fin.hex, a_lapsed), "b's lease still holds it");
     assert_eq!(store.lease("a", "blake3", &fin.hex, a_lapsed), LeaseState::Lapsed { expires: a_lapsed });
-    let both_lapsed = 200 + INTERVAL;
+    let both_lapsed = 200 + INTERVAL_MS;
     assert!(!store.any_live_lease("blake3", &fin.hex, both_lapsed), "every lease lapsed: held by no principal");
     assert!(!store.any_live_lease("sha256-tree", &fin.hex, 150), "the designation is part of the lease's key");
     assert!(!store.any_live_lease("blake3", &hex_of(b"never"), 150));

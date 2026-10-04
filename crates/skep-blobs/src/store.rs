@@ -51,6 +51,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use parking_lot::Mutex;
 
@@ -58,7 +59,7 @@ use crate::blobs::{self, aside_name, blob_path, designation_ok, fsync_dir, hex_o
 use crate::error::BlobError;
 use crate::lease::{Lease, LeaseLog, LeaseState};
 use crate::partials::{self, Handle, SYNC_GRAIN};
-use crate::uploads::{UploadId, UploadRecord, UploadRecords};
+use crate::uploads::{millis, UploadId, UploadRecord, UploadRecords};
 
 /// The steps of a finish, in order — the points the hazard seam names
 /// (`test-hooks`): a hold or an injected failure is placed BEFORE the step
@@ -66,6 +67,11 @@ use crate::uploads::{UploadId, UploadRecord, UploadRecords};
 /// REPLACE's own and are met only where the name already exists:
 /// [`Step::LinkAside`] inside the finish, [`Step::UnlinkAside`] in the
 /// deferred step after the answer.
+///
+/// Deliberately not `#[non_exhaustive]`: this crate's step-by-step suites
+/// match every step, so a new step is given its crash story there before
+/// the build passes, where the `_` arm `#[non_exhaustive]` demands of an
+/// outside crate would let it through untried.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Step {
     /// The partial's final fsync.
@@ -95,7 +101,12 @@ pub enum Step {
 /// lowercase hex, and its size. One shape whether or not the file was
 /// already here (the record's "NO ANSWER OF THE UPLOAD SAYS WHETHER THE
 /// FILE WAS ALREADY HERE").
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `#[non_exhaustive]`: emitted, never constructed by a caller — field
+/// reads are unaffected, and a further field is an addition rather than a
+/// broken build.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct Finished {
     pub designation: String,
     pub hex: String,
@@ -167,14 +178,16 @@ impl std::fmt::Debug for Store {
 }
 
 impl Store {
-    /// Open the store at `root` (created where absent): the lease log
-    /// opened and compacted under `horizon_ms`, the upload records opened,
-    /// the partials reconciled with them both ways, every aside a crash left
-    /// removed, the records compacted, the root fsynced. Everything here
-    /// completes before the store answers anything.
-    pub fn open(root: &Path, now_ms: u64, horizon_ms: u64) -> io::Result<Store> {
+    /// Open the store at `root` (created where absent) at `now_ms`: the
+    /// lease log opened and compacted under `horizon` — a lease lapsed by
+    /// more than it answers as none, and is dropped — the upload records
+    /// opened, the partials reconciled with them both ways, every aside a
+    /// crash left removed, the records compacted, the root fsynced.
+    /// Everything here completes before the store answers anything.
+    pub fn open(root: impl AsRef<Path>, horizon: Duration, now_ms: u64) -> io::Result<Store> {
+        let root = root.as_ref();
         fs::create_dir_all(root)?;
-        let leases = LeaseLog::open(root, now_ms, horizon_ms)?;
+        let leases = LeaseLog::open(root, now_ms, millis(horizon))?;
         let mut uploads = UploadRecords::open(root)?;
         partials::reconcile(root, &mut uploads, now_ms)?;
         blobs::remove_asides(root)?;
@@ -267,17 +280,18 @@ impl Store {
     /// THE CREATION (clause (1)): mint the identifier — 128 bits from the
     /// OS — create the empty partial in the designation directory, and
     /// write the record, synced: its `principal`, its declared `length`,
-    /// offset 0, and THE UPLOAD's INTERVAL, `interval_ms` — the limits in
+    /// offset 0, and THE UPLOAD's INTERVAL, `interval` — the limits in
     /// force at this creation, held in the record for every expiry the
-    /// upload will have (clause (3)) — its first expiry that interval past
-    /// `now_ms`. Answers the record.
+    /// upload will have (clause (3)), in the whole milliseconds its line
+    /// spells — its first expiry that interval past `now_ms`. Answers the
+    /// record.
     pub fn create_upload(
         &self,
         principal: &str,
         designation: &str,
         length: u64,
+        interval: Duration,
         now_ms: u64,
-        interval_ms: u64,
     ) -> io::Result<UploadRecord> {
         if !designation_ok(designation) {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "designation"));
@@ -287,14 +301,17 @@ impl Store {
         if fresh {
             self.fresh_dirs.lock().insert(designation.to_string());
         }
+        // Held as its line spells it, so the record open reads back is the
+        // record answered here.
+        let interval = Duration::from_millis(millis(interval));
         let record = UploadRecord {
             id,
             principal: principal.to_string(),
             designation: designation.to_string(),
             length,
             offset: 0,
-            interval: interval_ms,
-            expires: expiry(now_ms, interval_ms),
+            interval,
+            expires: expiry(now_ms, interval),
         };
         self.uploads.lock().write(record.clone())?;
         Ok(record)
@@ -415,7 +432,7 @@ impl Store {
     /// partial is renamed onto `<designation>/<hex>` — REPLACE where the
     /// name exists — the designation directory fsynced, the root fsynced
     /// where this process created the directory, the lease for `principal`
-    /// on the hash appended and synced with an expiry `interval_ms` past
+    /// on the hash appended and synced with an expiry `interval` past
     /// `now_ms`, the record retired, and the aside queued for the deferred
     /// unlink. Answers the file's designation, hex and size — one shape
     /// whether or not the file was already here, and in one time: the old
@@ -446,8 +463,8 @@ impl Store {
         &self,
         principal: &str,
         id: &UploadId,
+        interval: Duration,
         now_ms: u64,
-        interval_ms: u64,
     ) -> Result<Finished, BlobError> {
         // Held to the answer: the finishes run one at a time.
         let mut handles = self.handles.lock();
@@ -463,7 +480,7 @@ impl Store {
         self.before(Step::PartialSync)?;
         handle.sync()?;
         let hex = handle.hash().to_hex().to_string();
-        let designation = record.designation.clone();
+        let designation = record.designation;
         let dir = self.root.join(&designation);
         let from = partials::partial_path(&self.root, &designation, id);
         let to = blob_path(&self.root, &designation, &hex);
@@ -495,7 +512,7 @@ impl Store {
             designation: designation.clone(),
             hex: hex.clone(),
             size: record.length,
-            expires: expiry(now_ms, interval_ms),
+            expires: expiry(now_ms, interval),
         })?;
         self.before(Step::RecordRetire)?;
         self.uploads.lock().retire(id)?;
@@ -569,15 +586,15 @@ impl Store {
     /// stands at `now_ms` is left as it is (`Ok(false)`), so a clock moved
     /// between the read and the act costs a standing upload nothing.
     pub fn expire_upload(&self, id: &UploadId, now_ms: u64) -> io::Result<bool> {
-        let record = {
+        let designation = {
             let uploads = self.uploads.lock();
             match uploads.of_any_principal(id) {
-                Some(r) if !r.stands(now_ms) => r.clone(),
+                Some(r) if !r.stands(now_ms) => r.designation.clone(),
                 _ => return Ok(false),
             }
         };
         self.handles.lock().remove(id);
-        partials::remove(&self.root, &record.designation, id)?;
+        partials::remove(&self.root, &designation, id)?;
         self.uploads.lock().retire(id)?;
         Ok(true)
     }
@@ -614,8 +631,11 @@ impl Store {
     /// of its own cells names — plus its standing uploads' bytes received.
     /// Which deposits are unplaced is a fact of cells, and this store reads
     /// none: `unplaced` answers it for each live lease — the daemon off its
-    /// cell index; a caller with no cells, `true`.
-    pub fn pending_bytes(&self, principal: &str, now_ms: u64, unplaced: &dyn Fn(&Lease) -> bool) -> u64 {
+    /// cell index; a caller with no cells, `true`. It runs with the lease
+    /// log locked, so it must not call back into this store, where a read
+    /// of the leases would wait on that lock for good — a rule no type here
+    /// checks.
+    pub fn pending_bytes(&self, principal: &str, now_ms: u64, unplaced: impl FnMut(&Lease) -> bool) -> u64 {
         let unplaced_bytes = self.leases.lock().unplaced_of(principal, now_ms, unplaced);
         let received = self.uploads.lock().received_of(principal, now_ms);
         unplaced_bytes.saturating_add(received)
@@ -623,9 +643,9 @@ impl Store {
 
     /// EVERY principal's pending bytes at `now_ms`, summed — the
     /// record-derived part of the venue total, to which the daemon adds
-    /// every base (M-I6 (f)); `unplaced` answers as it does for
+    /// every base (M-I6 (f)); `unplaced` answers, and runs, as it does for
     /// [`Store::pending_bytes`].
-    pub fn pending_total(&self, now_ms: u64, unplaced: &dyn Fn(&Lease) -> bool) -> u64 {
+    pub fn pending_total(&self, now_ms: u64, unplaced: impl FnMut(&Lease) -> bool) -> u64 {
         let unplaced_bytes = self.leases.lock().unplaced_total(now_ms, unplaced);
         let received = self.uploads.lock().received_total(now_ms);
         unplaced_bytes.saturating_add(received)
@@ -643,13 +663,15 @@ impl Store {
     }
 }
 
-/// THE ONE EXPIRY RULE, for both expiries the store fixes: `interval_ms`
-/// past `now_ms`. An upload's is fixed at its creation from the interval
-/// handed in then, which its record keeps, and at each byte received from
-/// that kept interval (clause (3)); a lease's at its PUT, from the interval
-/// handed to the finish (`media.md` Op inventory 1, "THE LEASE'S STORE,
-/// SCOPE AND EXPIRY, STATED"). No caller computes an expiry the store then
-/// trusts.
-fn expiry(now_ms: u64, interval_ms: u64) -> u64 {
-    now_ms.saturating_add(interval_ms)
+/// THE ONE EXPIRY RULE, for both expiries the store fixes: `interval`
+/// past `now_ms`, saturating. An upload's is fixed at its creation from the
+/// interval handed in then, which its record keeps, and at each byte
+/// received from that kept interval (clause (3)); a lease's at its PUT,
+/// from the interval handed to the finish (`media.md` Op inventory 1, "THE
+/// LEASE'S STORE, SCOPE AND EXPIRY, STATED"). No caller computes an expiry
+/// the store then trusts. An instant is unix milliseconds, the `u64` the
+/// logs and the wire spell; a span is a [`Duration`] — so the clock reading
+/// and an interval never trade places at a call and compile.
+fn expiry(now_ms: u64, interval: Duration) -> u64 {
+    now_ms.saturating_add(millis(interval))
 }

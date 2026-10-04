@@ -60,6 +60,7 @@
 //! the source holds; nothing here ever holds the body whole.
 
 use std::io;
+use std::time::Duration;
 
 use serde_json::Value;
 use skep_blobs::{BlobError, Finished, UploadId, UploadRecord};
@@ -221,7 +222,8 @@ impl Daemon {
         if let Err(scope) = self.media.admit_declared(principal, length, now) {
             return refuse_deposit(scope, false, 0);
         }
-        let record = match self.media.store().create_upload(key, DESIGNATION, length, now, limits.lease_interval_ms) {
+        let interval = Duration::from_millis(limits.lease_interval_ms);
+        let record = match self.media.store().create_upload(key, DESIGNATION, length, interval, now) {
             Ok(r) => r,
             Err(e) => return refuse(TransportError::BlobIo, Some(&e.to_string())),
         };
@@ -391,7 +393,7 @@ impl Daemon {
             let _ = store.end_upload(key, &id, now);
             return with_signal(refuse_upload("unauthenticated"), resolved.closed);
         }
-        match store.finish(key, &id, now, self.media.limits().lease_interval_ms) {
+        match store.finish(key, &id, Duration::from_millis(self.media.limits().lease_interval_ms), now) {
             Ok(finished) => finish_reply(&finished),
             Err(e) => {
                 store.close_handle(&id);
@@ -469,15 +471,12 @@ impl Daemon {
     #[cfg(feature = "test-hooks")]
     #[doc(hidden)]
     pub fn hold_blob_finish_at(&self, step: skep_blobs::Step) {
-        self.media.store().hold_at(
-            step,
-            Box::new(|| {
-                notice::line(Self::BLOB_HOLD_NOTICE);
-                loop {
-                    std::thread::park();
-                }
-            }),
-        );
+        self.media.store().hold_at(step, || {
+            notice::line(Self::BLOB_HOLD_NOTICE);
+            loop {
+                std::thread::park();
+            }
+        });
     }
 
     /// TEST HOOK (the same standing): INSTALL a media limits record — the

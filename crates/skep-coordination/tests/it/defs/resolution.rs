@@ -17,7 +17,7 @@ use skep_coordination::{
     CertifyError, Coordinator, DefineError, Dom, EvalError, RegisterError, Rule, RuleError, Sort,
     Term, Trigger, TypeError, Value, View,
 };
-use skep_links::{Caller, ShippedType, SlotArg, Tip};
+use skep_links::{Caller, HasLinks, ShippedType, SlotArg, Tip};
 
 /// PR-DISC's freeze-on-breach: a `pdef` on content that is no def —
 /// registered past `register_pred`'s gate, through M7 directly — is
@@ -152,57 +152,62 @@ fn a_body_too_deep_at_level_zero_is_a_breach_and_freezes_poisoned() {
 /// level 0, freezes poisoned on its own account — as does the other member,
 /// the root of its own derivation when it is first probed. Asked at a fixed
 /// level, the first probe would recurse without end; a level-0 refusal taken
-/// for the asking term's would reach `def_status`'s `unreachable!`.
+/// for the asking term's would reach `def_status`'s `unreachable!`. The
+/// derivations nest 66 deep, the deepest stack the suite drives, so the probes
+/// run on a thread of the default 2 MiB stack (`on_the_default_stack`).
 #[test]
 fn a_breach_cycle_ends_at_the_nesting_cap_and_freezes_its_root() {
-    let k = kernel();
-    let c = coord(&k);
-    let (p, _) =
-        c.define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("P")).expect("define P");
-    let (q, _) = c
-        .define_predicate(
-            &doc1(),
-            &c.type_check(vec![], Term::Ref { addr: p.clone(), args: vec![] }).expect("Q := P"),
-        )
-        .expect("define Q");
-    assert_eq!((p, q.clone()), (ca(1), ca(2)));
-    let template = k
-        .snapshot()
-        .world()
-        .content()
-        .value_at(q.tumbler())
-        .expect("Q is resident")
-        .as_bytes()
-        .to_vec();
-    let end = template.len();
-    assert_eq!(
-        &template[end - 2..],
-        &[1, 0],
-        "PR-ENC: the referent's last component, then the argument count"
-    );
-    let referring_to = |ordinal: u8| {
-        let mut bytes = template.clone();
-        bytes[end - 2] = ordinal;
-        bytes
-    };
-    let cycle_a = insert_raw(&k, &doc1(), referring_to(4)); // → ca4, landing at ca3
-    let cycle_b = insert_raw(&k, &doc1(), referring_to(3)); // → ca3, landing at ca4
-    assert_eq!((cycle_a.clone(), cycle_b.clone()), (ca(3), ca(4)));
-    for start in [&cycle_a, &cycle_b] {
-        link_writer(&k)
-            .emit(Caller::System, &doc1(), &pred_def_ty(), start, &[])
-            .expect("the breach: a pdef past the gate");
-    }
-    assert!(c.signature(&cycle_a).is_none(), "the cycle ends, its root poisoned");
-    assert_eq!(
-        c.evaluate_def(&cycle_a, &[], View::Active, &k.snapshot()),
-        Err(EvalError::UndisciplinedDef)
-    );
-    assert!(c.signature(&cycle_b).is_none());
-    assert_eq!(
-        c.evaluate_def(&cycle_b, &[], View::Active, &k.snapshot()),
-        Err(EvalError::UndisciplinedDef)
-    );
+    on_the_default_stack(|| {
+        let k = kernel();
+        let c = coord(&k);
+        let (p, _) = c
+            .define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("P"))
+            .expect("define P");
+        let (q, _) = c
+            .define_predicate(
+                &doc1(),
+                &c.type_check(vec![], Term::Ref { addr: p.clone(), args: vec![] }).expect("Q := P"),
+            )
+            .expect("define Q");
+        assert_eq!((p, q.clone()), (ca(1), ca(2)));
+        let template = k
+            .snapshot()
+            .world()
+            .content()
+            .value_at(q.tumbler())
+            .expect("Q is resident")
+            .as_bytes()
+            .to_vec();
+        let end = template.len();
+        assert_eq!(
+            &template[end - 2..],
+            &[1, 0],
+            "PR-ENC: the referent's last component, then the argument count"
+        );
+        let referring_to = |ordinal: u8| {
+            let mut bytes = template.clone();
+            bytes[end - 2] = ordinal;
+            bytes
+        };
+        let cycle_a = insert_raw(&k, &doc1(), referring_to(4)); // → ca4, landing at ca3
+        let cycle_b = insert_raw(&k, &doc1(), referring_to(3)); // → ca3, landing at ca4
+        assert_eq!((cycle_a.clone(), cycle_b.clone()), (ca(3), ca(4)));
+        for start in [&cycle_a, &cycle_b] {
+            link_writer(&k)
+                .emit(Caller::System, &doc1(), &pred_def_ty(), start, &[])
+                .expect("the breach: a pdef past the gate");
+        }
+        assert!(c.signature(&cycle_a).is_none(), "the cycle ends, its root poisoned");
+        assert_eq!(
+            c.evaluate_def(&cycle_a, &[], View::Active, &k.snapshot()),
+            Err(EvalError::UndisciplinedDef)
+        );
+        assert!(c.signature(&cycle_b).is_none());
+        assert_eq!(
+            c.evaluate_def(&cycle_b, &[], View::Active, &k.snapshot()),
+            Err(EvalError::UndisciplinedDef)
+        );
+    });
 }
 
 /// A never-registered start is never memoized: every probe made before the
@@ -346,7 +351,8 @@ fn def_probes_see_what_the_evaluator_s_look_hides() {
 /// runs at (lane 3.3b): a pdef homed where the guest predicate refuses is
 /// invisible to M7's idempotency lookup, so a second registration mints a
 /// fresh tuple beside it — and `is_active_pred`, which reads at no visibility
-/// class, stays true until each of the two is retracted, one per call.
+/// class, stays true until each of the two is retracted, one per call, the
+/// T1-least first: `retract_pred` takes the tuple `tuple_naming` returns.
 #[test]
 fn a_pdef_hidden_from_the_guest_class_does_not_absorb_a_second_registration() {
     let k = kernel();
@@ -365,6 +371,10 @@ fn a_pdef_hidden_from_the_guest_class_does_not_absorb_a_second_registration() {
 
     assert!(c.is_active_pred(&start, &k.snapshot()));
     c.retract_pred(&doc1(), &start).expect("one active pdef retracted");
+    assert!(
+        k.snapshot().world().links().is_nullified(&fresh),
+        "the T1-least of the two — doc1's sorts before the draft's — goes first"
+    );
     assert!(c.is_active_pred(&start, &k.snapshot()), "the twin is still active");
     c.retract_pred(&doc1(), &start).expect("the twin retracted");
     assert!(!c.is_active_pred(&start, &k.snapshot()));

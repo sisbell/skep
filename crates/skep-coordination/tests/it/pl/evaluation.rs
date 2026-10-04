@@ -687,15 +687,22 @@ fn eval_panics_on_an_extra_argument() {
     let _ = c.eval(&tt, &[Value::Addr(ca(1)), Value::Addr(ca(2))], View::Active, &s);
 }
 
+/// `eval`'s ref-free door is the precondition itself, not the evaluator's
+/// `Ref` arm behind it: the reference sits where evaluation never reaches it,
+/// `⊥ ∧ P`, so only the door can refuse the term, and the panic must be the
+/// door's own. (A bare `Ref` cannot tell the two apart: the `Ref` arm's panic
+/// opens "eval precondition violated" too.)
 #[test]
-#[should_panic(expected = "eval precondition")]
+#[should_panic(expected = "eval precondition violated: ref-bearing TypedTerm")]
 fn eval_panics_on_a_ref_bearing_term() {
     let k = kernel();
     let c = coord(&k);
     let (p, _) = c
         .define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("closed True"))
         .expect("define");
-    let tt = c.type_check(vec![], Term::Ref { addr: p, args: vec![] }).expect("ref-bearing checks");
+    let tt = c
+        .type_check(vec![], and(fls(), Term::Ref { addr: p, args: vec![] }))
+        .expect("ref-bearing checks");
     assert!(!tt.is_ref_free());
     let s = k.snapshot();
     let _ = c.eval(&tt, &[], View::Active, &s);

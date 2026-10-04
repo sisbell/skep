@@ -260,6 +260,70 @@ fn the_pd0_rules_hold_over_a_generated_family() {
     assert!(!c.classify(&isk, View::Active).footprint.active_classes().any(|x| *x == retired));
 }
 
+/// PD0's binder rules over a generated family: each binding former over each
+/// of the four lattice atoms as its body, branch, bound or predicate.
+/// `the_pd0_rules_hold_over_a_generated_family` asks every binder over one
+/// body already stable in the direction the binder's rule reads, so a binder
+/// that ignored its body would pass it; here the body varies. The rules: a
+/// step-constant domain passes both directions through; a grow-only one gives
+/// `∃` its body's ⊤-stability and `∀` its body's ⊥-stability and nothing
+/// else; a shrinkable one leaves Neither. `Let` and `IfSome` pass their body
+/// or branches through under a constant bound or guard and leave Neither
+/// under a state-reading one. A `Filter` grows — so `2 ≤ count` of it is
+/// ⊤-stable — over a grow-only base by a ⊤-stable predicate, or over a
+/// step-constant base by a step-constant one. ST⁺ runs these same rules, so a
+/// wrong lattice point here is a def it certifies or refuses wrongly.
+#[test]
+fn the_pd0_binder_rules_hold_over_a_generated_family() {
+    let k = kernel();
+    let c = coord(&k);
+    let pd = || concrete(&pred_def_ty());
+    let lattice = |st: bool, sf: bool| match (st, sf) {
+        (true, true) => Stability::StSf,
+        (true, false) => Stability::StOnly,
+        (false, true) => Stability::SfOnly,
+        (false, false) => Stability::Neither,
+    };
+    // Γ_D binds v9 to a fixed set, so `SetTerm(v9)` is a step-constant domain.
+    let stab = |t: Term| {
+        let tt = c.type_check(vec![(v(9), Sort::AddrSet)], t).expect("checks");
+        c.classify(&tt, View::Audit).stability
+    };
+    let ex = || exists(2, Dom::AuditSlice(pd()), tru());
+    let fixed = || Dom::SetTerm(at(var(9)));
+    let growing = || Dom::AuditSlice(pd());
+    let shrinking = || Dom::ActiveSlice(pd());
+    // (body, ⊤-stable, ⊥-stable, step-constant)
+    let atoms = [
+        (ex(), true, false, false),
+        (not(ex()), false, true, false),
+        (tru(), true, true, true),
+        (exists(2, shrinking(), tru()), false, false, false),
+    ];
+    for (b, st, sf, constant) in atoms {
+        let at_least_two = |d: Dom| nat_le(lit_nat(2), count(filter(d, 5, b.clone())));
+        let state_read = || Term::MaxT1(ad(Dom::LinkDom));
+        for (t, expected) in [
+            (forall(5, fixed(), b.clone()), lattice(st, sf)),
+            (exists(5, fixed(), b.clone()), lattice(st, sf)),
+            (forall(5, growing(), b.clone()), lattice(false, sf)),
+            (exists(5, growing(), b.clone()), lattice(st, false)),
+            (forall(5, shrinking(), b.clone()), lattice(false, false)),
+            (exists(5, shrinking(), b.clone()), lattice(false, false)),
+            (let_(5, lit_nat(1), b.clone()), lattice(st, sf)),
+            (let_(5, ex(), b.clone()), lattice(false, false)),
+            (if_some(bot_addr(), 5, b.clone(), tru()), lattice(st, sf)),
+            (if_some(bot_addr(), 5, tru(), b.clone()), lattice(st, sf)),
+            (if_some(state_read(), 5, b.clone(), b.clone()), lattice(false, false)),
+            (at_least_two(fixed()), lattice(st || constant, constant)),
+            (at_least_two(growing()), lattice(st, false)),
+            (at_least_two(shrinking()), lattice(false, false)),
+        ] {
+            assert_eq!(stab(t.clone()), expected, "{t:?}");
+        }
+    }
+}
+
 /// A `default`-view term charges the BH1 filter slices for exactly the reads
 /// whose denotation moves with the view, and for no others: the collections
 /// the UV rewrite post-filters (`chain`, `succs`) and the view-parameterized
@@ -296,6 +360,67 @@ fn the_default_view_charges_bh1_slices_for_exactly_the_reads_that_move_with_the_
         count(Dom::AuditSlice(concrete(&pred_def_ty()))),
     ] {
         assert!(!charges(&t, View::Default), "reads one slice at every view: {t:?}");
+    }
+}
+
+/// `Footprint` is a SOUND OVER-APPROXIMATION — "every slice the term may read
+/// is recorded" — as a law over every state-reading atom and domain the
+/// catalog admits, at every view: a view-parameterized read records its class
+/// at the slice its view reads (the audit slice at `audit`, the active one at
+/// `active` and `default`), a fixed read at the slice it names whatever the
+/// view says. Five of these reads — `is_filtered` and the four walk atoms —
+/// classify `Neither` whatever their footprint holds, so nothing else watches
+/// what they record; yet a footprint IS the stability of every former that
+/// derives its own from one (`Let`'s bound, `IfSome`'s guard, `def`, a
+/// quantifier's domain), where an unrecorded read is a constant:
+/// `let y = is_filtered(R, x) in y` would be a ⊤-stable, certifiable spelling
+/// of a def the next un-retire falsifies. The last rows put three of the five
+/// under one of those formers.
+#[test]
+fn every_state_reading_form_records_the_slice_it_reads() {
+    let k = kernel();
+    let c = coord(&k);
+    let sup = c.reserved_type(ShippedType::Supersedes).clone();
+    let pd = pred_def_ty();
+    let x = || lit_addr(&ca(1));
+    let analyzed =
+        |t: &Term, view: View| c.classify(&c.type_check(vec![], t.clone()).expect("checks"), view);
+    let (pd_class, sup_class, retired) =
+        (coverage_class(&pd), coverage_class(&sup), coverage_class(&retired_ty()));
+    // (the form, the class it reads, whether its slice follows the term view)
+    let forms = [
+        (is_k(&pd, x()), &pd_class, true),
+        (members(&pd), &pd_class, true),
+        (targets_of(&pd, x()), &pd_class, true),
+        (count(Dom::MembersDom(concrete(&pd))), &pd_class, true),
+        (count(Dom::ActiveSlice(concrete(&pd))), &pd_class, false),
+        (is_filtered(&retired_ty(), x()), &retired, false),
+        (succs(&sup, x()), &sup_class, false),
+        (chain(&sup, x()), &sup_class, false),
+        (tip(&sup, x()), &sup_class, false),
+        (is_in_chain(&sup, x(), x()), &sup_class, false),
+    ];
+    for view in [View::Active, View::Audit, View::Default] {
+        for (t, class, follows_view) in &forms {
+            let fp = analyzed(t, view).footprint;
+            let recorded = if *follows_view && view == View::Audit {
+                fp.audit_classes().any(|read| read == *class)
+            } else {
+                fp.active_classes().any(|read| read == *class)
+            };
+            assert!(recorded, "{t:?} at {view:?}: {fp:?}");
+        }
+        let l_k = analyzed(&count(Dom::AuditSlice(concrete(&pd))), view).footprint;
+        assert!(l_k.audit_classes().any(|read| *read == pd_class), "L_K at {view:?}");
+        assert!(analyzed(&count(Dom::LinkDom), view).footprint.reads_all_audit(), "{view:?}");
+        assert!(analyzed(&is_doc(x()), view).footprint.reads_residence(), "{view:?}");
+    }
+    for t in [
+        let_(3, is_filtered(&retired_ty(), x()), var(3)),
+        let_(3, is_in_chain(&sup, x(), x()), var(3)),
+        def(tip(&sup, x())),
+    ] {
+        assert_eq!(analyzed(&t, View::Audit).stability, Stability::Neither, "{t:?}");
     }
 }
 

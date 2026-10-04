@@ -17,49 +17,57 @@ use skep_coordination::{
 /// hand-forged body one former past it is `ParseFailed`, and one exactly at
 /// it registers and then survives every walk a stored body drives — the
 /// parse and check of a fresh memo, the evaluation, the certification's
-/// expansion and analysis — on this default test thread, whose stack is the
-/// budget the cap is set against. A body at the cap has no room for a
-/// reference to it (`TooDeep`: the reference would derive it deeper than the
-/// cap admits); the deepest body a reference can reach is the cap less the
-/// derivation's own levels, and every walk THROUGH a reference to it — a
-/// cold derivation, the evaluation, the expansion — survives too.
+/// expansion and analysis — on a thread of the default 2 MiB stack
+/// (`on_the_default_stack`), the budget the cap is set against. A body at the
+/// cap has no room for a reference to it (`TooDeep`: the reference would
+/// derive it deeper than the cap admits); the deepest body a reference can
+/// reach is the cap less the derivation's own levels, and every walk THROUGH
+/// a reference to it — a cold derivation, the evaluation, the expansion —
+/// survives too.
 #[test]
 fn a_hand_forged_body_at_the_decode_cap_survives_every_walk() {
-    const CAP: usize = 128;
-    const DERIVATION: usize = 2;
-    let k = kernel();
-    let c = coord(&k);
-    let past = insert_raw(&k, &doc1(), forged_negations(CAP + 1));
-    assert!(matches!(c.register_pred(&doc1(), &past), Err(RegisterError::ParseFailed)));
-    let start = insert_raw(&k, &doc1(), forged_negations(CAP));
-    c.register_pred(&doc1(), &start).expect("a body at the cap registers");
+    on_the_default_stack(|| {
+        const CAP: usize = 128;
+        const DERIVATION: usize = 2;
+        let k = kernel();
+        let c = coord(&k);
+        let past = insert_raw(&k, &doc1(), forged_negations(CAP + 1));
+        assert!(matches!(c.register_pred(&doc1(), &past), Err(RegisterError::ParseFailed)));
+        let start = insert_raw(&k, &doc1(), forged_negations(CAP));
+        c.register_pred(&doc1(), &start).expect("a body at the cap registers");
 
-    // A fresh memo: parse + check + evaluate. `¬^128 True` is `True`.
-    let fresh = coord(&k);
-    assert_eq!(fresh.evaluate_def(&start, &[], View::Active, &k.snapshot()), Ok(Value::Bool(true)));
-    fresh.certify_stable(&doc1(), &start).expect("expand + analyze at the cap");
-    assert!(matches!(
-        fresh.type_check(vec![], Term::Ref { addr: start.clone(), args: vec![] }),
-        Err(TypeError::TooDeep)
-    ));
+        // A fresh memo: parse + check + evaluate. `¬^128 True` is `True`.
+        let fresh = coord(&k);
+        assert_eq!(
+            fresh.evaluate_def(&start, &[], View::Active, &k.snapshot()),
+            Ok(Value::Bool(true))
+        );
+        fresh.certify_stable(&doc1(), &start).expect("expand + analyze at the cap");
+        assert!(matches!(
+            fresh.type_check(vec![], Term::Ref { addr: start.clone(), args: vec![] }),
+            Err(TypeError::TooDeep)
+        ));
 
-    // The deepest referenceable body, and the walks through a reference.
-    let reachable = insert_raw(&k, &doc1(), forged_negations(CAP - DERIVATION));
-    fresh.register_pred(&doc1(), &reachable).expect("a body the derivation's levels below the cap");
-    let through = fresh
-        .type_check(vec![], Term::Ref { addr: reachable.clone(), args: vec![] })
-        .expect("a reference to it");
-    let (r, _) = fresh.define_predicate(&doc1(), &through).expect("define the reference");
-    fresh.certify_stable(&doc1(), &r).expect("expand through the reference at the cap");
-    let one_deeper = insert_raw(&k, &doc1(), forged_negations(CAP - DERIVATION + 1));
-    fresh.register_pred(&doc1(), &one_deeper).expect("registers on its own");
-    assert!(matches!(
-        fresh.type_check(vec![], Term::Ref { addr: one_deeper, args: vec![] }),
-        Err(TypeError::TooDeep)
-    ));
-    let cold = coord(&k);
-    assert_eq!(cold.evaluate_def(&r, &[], View::Active, &k.snapshot()), Ok(Value::Bool(true)));
-    assert_eq!(cold.signature(&r).map(|s| s.result), Some(Sort::Bool));
+        // The deepest referenceable body, and the walks through a reference.
+        let reachable = insert_raw(&k, &doc1(), forged_negations(CAP - DERIVATION));
+        fresh
+            .register_pred(&doc1(), &reachable)
+            .expect("a body the derivation's levels below the cap");
+        let through = fresh
+            .type_check(vec![], Term::Ref { addr: reachable.clone(), args: vec![] })
+            .expect("a reference to it");
+        let (r, _) = fresh.define_predicate(&doc1(), &through).expect("define the reference");
+        fresh.certify_stable(&doc1(), &r).expect("expand through the reference at the cap");
+        let one_deeper = insert_raw(&k, &doc1(), forged_negations(CAP - DERIVATION + 1));
+        fresh.register_pred(&doc1(), &one_deeper).expect("registers on its own");
+        assert!(matches!(
+            fresh.type_check(vec![], Term::Ref { addr: one_deeper, args: vec![] }),
+            Err(TypeError::TooDeep)
+        ));
+        let cold = coord(&k);
+        assert_eq!(cold.evaluate_def(&r, &[], View::Active, &k.snapshot()), Ok(Value::Bool(true)));
+        assert_eq!(cold.signature(&r).map(|s| s.result), Some(Sort::Bool));
+    });
 }
 
 /// A refused reference judges the referring term, never its referent: on a
@@ -199,38 +207,40 @@ fn define_predicate_refuses_a_checked_term_its_codec_cannot_read_back() {
 /// the cap, and the first reference past it is `IllTyped(TooDeep)`. The
 /// chain at the cap then derives COLD on a fresh coordinator — every `Pᵢ`
 /// parsed and checked one derivation inside the last — evaluates through
-/// every reference, and expands and analyzes through every reference, on
-/// this default thread: this test and its argument-free twin below, the
-/// deeper of the two, are the measurements the derivation's level cost is
-/// set against.
+/// every reference, and expands and analyzes through every reference, on a
+/// thread of the default 2 MiB stack (`on_the_default_stack`): this test and
+/// its argument-free twin below, the deeper of the two, are the measurements
+/// the derivation's level cost is set against.
 #[test]
 fn a_reference_chain_at_the_cap_derives_cold_and_one_deeper_is_refused() {
-    let k = kernel();
-    let c = coord(&k);
-    let (mut top, _) = c
-        .define_predicate(&doc1(), &c.type_check(vec![(v(1), Sort::Addr)], tru()).expect("P₀"))
-        .expect("define P₀");
-    let mut references = 0u32;
-    loop {
-        let next = Term::Ref { addr: top.clone(), args: vec![at(var(1))] };
-        match c.type_check(vec![(v(1), Sort::Addr)], next) {
-            Ok(tt) => {
-                top = c.define_predicate(&doc1(), &tt).expect("define Pᵢ").0;
-                references += 1;
+    on_the_default_stack(|| {
+        let k = kernel();
+        let c = coord(&k);
+        let (mut top, _) = c
+            .define_predicate(&doc1(), &c.type_check(vec![(v(1), Sort::Addr)], tru()).expect("P₀"))
+            .expect("define P₀");
+        let mut references = 0u32;
+        loop {
+            let next = Term::Ref { addr: top.clone(), args: vec![at(var(1))] };
+            match c.type_check(vec![(v(1), Sort::Addr)], next) {
+                Ok(tt) => {
+                    top = c.define_predicate(&doc1(), &tt).expect("define Pᵢ").0;
+                    references += 1;
+                }
+                Err(TypeError::TooDeep) => break,
+                Err(other) => panic!("expected TooDeep at the cap, got {other:?}"),
             }
-            Err(TypeError::TooDeep) => break,
-            Err(other) => panic!("expected TooDeep at the cap, got {other:?}"),
         }
-    }
-    assert_eq!(references, 42, "three levels per reference, over a cap of 128");
+        assert_eq!(references, 42, "three levels per reference, over a cap of 128");
 
-    let fresh = coord(&k);
-    assert_eq!(fresh.signature(&top).map(|s| s.result), Some(Sort::Bool));
-    assert_eq!(
-        fresh.evaluate_def(&top, &[Value::Addr(ca(1))], View::Active, &k.snapshot()),
-        Ok(Value::Bool(true))
-    );
-    fresh.certify_stable(&doc1(), &top).expect("expand and analyze through every reference");
+        let fresh = coord(&k);
+        assert_eq!(fresh.signature(&top).map(|s| s.result), Some(Sort::Bool));
+        assert_eq!(
+            fresh.evaluate_def(&top, &[Value::Addr(ca(1))], View::Active, &k.snapshot()),
+            Ok(Value::Bool(true))
+        );
+        fresh.certify_stable(&doc1(), &top).expect("expand and analyze through every reference");
+    });
 }
 
 /// The derivation's level cost measured at its WORST case: references with no
@@ -239,29 +249,36 @@ fn a_reference_chain_at_the_cap_derives_cold_and_one_deeper_is_refused() {
 /// an argument that never nests — so the chain reaches the cap in 64
 /// references and derives 65 deep on a cold memo, against that chain's 43. It
 /// registers to the cap and no further, then derives cold, evaluates and
-/// certifies through every reference on this default thread.
+/// certifies through every reference on a thread of the default 2 MiB stack
+/// (`on_the_default_stack`).
 #[test]
 fn an_argument_free_reference_chain_at_the_cap_derives_cold() {
-    let k = kernel();
-    let c = coord(&k);
-    let (mut top, _) =
-        c.define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("P₀")).expect("define P₀");
-    let mut references = 0u32;
-    loop {
-        match c.type_check(vec![], Term::Ref { addr: top.clone(), args: vec![] }) {
-            Ok(tt) => {
-                top = c.define_predicate(&doc1(), &tt).expect("define Pᵢ").0;
-                references += 1;
+    on_the_default_stack(|| {
+        let k = kernel();
+        let c = coord(&k);
+        let (mut top, _) = c
+            .define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("P₀"))
+            .expect("define P₀");
+        let mut references = 0u32;
+        loop {
+            match c.type_check(vec![], Term::Ref { addr: top.clone(), args: vec![] }) {
+                Ok(tt) => {
+                    top = c.define_predicate(&doc1(), &tt).expect("define Pᵢ").0;
+                    references += 1;
+                }
+                Err(TypeError::TooDeep) => break,
+                Err(other) => panic!("expected TooDeep at the cap, got {other:?}"),
             }
-            Err(TypeError::TooDeep) => break,
-            Err(other) => panic!("expected TooDeep at the cap, got {other:?}"),
         }
-    }
-    assert_eq!(references, 64, "two levels per reference, over a cap of 128");
-    let fresh = coord(&k);
-    assert_eq!(fresh.signature(&top).map(|s| s.result), Some(Sort::Bool));
-    assert_eq!(fresh.evaluate_def(&top, &[], View::Active, &k.snapshot()), Ok(Value::Bool(true)));
-    fresh.certify_stable(&doc1(), &top).expect("expand and analyze through every reference");
+        assert_eq!(references, 64, "two levels per reference, over a cap of 128");
+        let fresh = coord(&k);
+        assert_eq!(fresh.signature(&top).map(|s| s.result), Some(Sort::Bool));
+        assert_eq!(
+            fresh.evaluate_def(&top, &[], View::Active, &k.snapshot()),
+            Ok(Value::Bool(true))
+        );
+        fresh.certify_stable(&doc1(), &top).expect("expand and analyze through every reference");
+    });
 }
 
 /// The expansion budget: `Pᵢ(x) := Pᵢ₋₁(x) ∧ Pᵢ₋₁(x)` is a few nodes per

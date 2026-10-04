@@ -65,6 +65,12 @@ fn a_def_registers_evaluates_retracts_and_re_registers_afresh() {
         c.evaluate_def(&param_def, &[Value::Nat(n(1))], View::Active, &s2),
         Err(EvalError::ArgSortMismatch)
     );
+    // Arity before sort: two arguments, the first mis-sorted, are refused for
+    // their count.
+    assert_eq!(
+        c.evaluate_def(&param_def, &[Value::Nat(n(1)), Value::Nat(n(2))], View::Active, &s2),
+        Err(EvalError::ArgArityMismatch)
+    );
     // A tuple is no Γ_D value: its sort, `Tup`, matches no stored parameter.
     let tuple = Tuple { addr: la(1), from: enc(&[ca(1)]), to: enc(&[ca(2)]) };
     assert_eq!(

@@ -9,7 +9,7 @@ use skep_coordination::{
     Arg, Dom, FireAction, FireError, FireOutcome, Occurrence, Rule, Sort, StepOutcome, Trigger,
     View,
 };
-use skep_links::{Caller, HasLinks, Visibility};
+use skep_links::{Caller, HasLinks, SlotArg, Visibility};
 
 /// The draft boundary (lane 3.3 §5): a fire whose Marker HOME, or whose
 /// bound argument's DOCUMENT, the injected guest predicate answers `false`
@@ -276,4 +276,34 @@ fn the_trigger_s_look_is_filtered_at_guest_class() {
     assert!(in_audit(&l1), "retracted, but homed in the readable doc1: in the audit slice");
     assert!(decide_now(&k, &c, View::Audit, nat_eq(count(Dom::AuditSlice(concrete(&pred_stable_ty()))), lit_nat(1))));
     assert!(!decide_now(&k, &c, View::Active, is_k(&pred_stable_ty(), lit_addr(&ca(2)))));
+}
+
+/// The look covers both of `targets_of`'s matching regimes, which are two read
+/// paths: by COVERAGE at `active`/`default` — the denotation fold `members`
+/// also reads through, which `the_trigger_s_look_is_filtered_at_guest_class`
+/// watches — and by DENOTATION at `audit`, a path of its own
+/// (`GuestLinks::tuples_denoting`, beneath `targets_of_denoting`) that no
+/// other test reaches with a draft-homed tuple. A relation homed in the draft
+/// names no target at any view to a coordinator refusing the draft, and names
+/// it at every view to one over the same store that reads everything — so the
+/// deposit is real and the silence is the look's.
+#[test]
+fn a_draft_homed_relation_names_no_target_at_any_view() {
+    let k = kernel();
+    link_writer(&k)
+        .makelink(
+            Caller::System,
+            &doc2(),
+            SlotArg::Addrs(vec![ca(1)]),
+            SlotArg::Addrs(vec![ca(2)]),
+            SlotArg::Addrs(vec![ra(PRED_STABLE)]),
+        )
+        .expect("a relation homed in the draft");
+    let blind = coord_with_guest(&k, |_, d| *d != doc2());
+    let seeing = coord(&k);
+    let names_ca2 = || set_mem(lit_addr(&ca(2)), targets_of(&pred_stable_ty(), lit_addr(&ca(1))));
+    for view in [View::Active, View::Default, View::Audit] {
+        assert!(!decide_now(&k, &blind, view, names_ca2()), "hidden from the look at {view:?}");
+        assert!(decide_now(&k, &seeing, view, names_ca2()), "a real deposit, seen at {view:?}");
+    }
 }

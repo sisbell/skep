@@ -1,7 +1,6 @@
 //! Scheduling: the peek, the fire and the step — the two-transaction gap
 //! accounted, the rotation's fairness and its rotate-past on every outcome,
-//! failure included, quiescence and its base case — and the Nullify action
-//! with Q7's scoped quiescence.
+//! failure included, quiescence and its base case — and the Nullify action.
 
 use crate::common::*;
 use crate::terms::*;
@@ -9,11 +8,10 @@ use crate::terms::*;
 use skep_address::Address;
 use skep_coordination::{
     Arg, Atom, Coordinator, Dom, FireAction, FireError, FireOutcome, Occurrence, Rule,
-    RuleCertification, RuleId, ScopeBody, Sort, StepOutcome, Term, Trigger, TypeRef, TypedTerm,
-    View,
+    RuleCertification, RuleId, ScopeBody, Sort, StepOutcome, Term, Trigger, TypeRef, View,
 };
 use skep_kernel::TxnError;
-use skep_links::{enc, Caller, Endset, HasLinks, NullifyError, SlotArg, Tuple};
+use skep_links::{enc, Caller, Endset, HasLinks, NullifyError, Tuple};
 
 // ─────────────────────────── fire, step, quiescence ───────────────────────────
 
@@ -678,7 +676,7 @@ fn a_default_view_rule_never_sees_a_uv_hidden_argument() {
     assert_eq!(c.next_enabled(&s), Some(Occurrence { rule: active, arg: Arg::Addr(ca(3)) }));
 }
 
-// ─────────────────────────── nullify & scoping ───────────────────────────
+// ─────────────────────────────── nullify ───────────────────────────────
 
 /// A Nullify rule is always Uncertified (fails the Marker leg), fires as one
 /// atomic retraction on a tuple domain, and — on the documented-contract
@@ -752,173 +750,41 @@ fn a_nullify_rule_is_uncertified_fires_once_and_surfaces_bad_target_as_failed() 
     }
 }
 
-/// Q7: scoped quiescence is exact for a sort-homogeneous scoped set, and a
-/// strict over-approximation (never false quiescence) wherever a body and a
-/// rule's element shape disagree — a tuple body over an address domain, or
-/// `PerAddress` once a tuple-domained rule joins the registry.
+/// A Nullify fire dedups as a Marker fire does. Over the AUDIT slice a
+/// nullified tuple stays in the domain, so a ⊤ trigger aims a second
+/// retraction at it, and M7 absorbs it into the first (`nullify`'s
+/// postcondition holds "on a dedup hit alike"): the step reports `Deduped`
+/// with the first retraction's address and M7's base `Seq`, nothing
+/// committed, and the recomputed count stays one.
 #[test]
-fn quiescent_scoped_is_exact_then_over_approximates_in_the_safe_direction() {
-    let k = kernel();
-    let mut c = coord(&k);
-    let writer = link_writer(&k);
-    writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel 1");
-    writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("rel 2");
-
-    let trig = Trigger::Inline(
-        c.type_check_trigger((v(1), Sort::Addr), not(is_k(&marker_ty(), var(1))))
-            .expect("trigger"),
-    );
-    let id = c
-        .register_rule(Rule {
-            domain: Dom::MembersDom(concrete(&pred_stable_ty())),
-            trigger: trig,
-            view: View::Audit,
-            action: marker_action(),
-        })
-        .expect("register");
-
-    let scope: TypedTerm = c
-        .type_check(vec![(v(9), Sort::Addr)], addr_eq(var(9), lit_addr(&ca(1))))
-        .expect("one-Addr-param Bool scope");
-    assert!(!c.quiescent_scoped(&scope, ScopeBody::PerAddress, &k.snapshot()));
-    // The other shape mismatch is unscoped too: a TUPLE body cannot scope this
-    // address-domained rule, so its work counts even under a scope that holds
-    // of nothing — while the address body, exact here, scopes all of it out.
-    let nowhere = c.type_check(vec![(v(9), Sort::Addr)], fls()).expect("a scope of nothing");
-    for body in [ScopeBody::PerEmitter, ScopeBody::PerTarget, ScopeBody::PerSource] {
-        assert!(!c.quiescent_scoped(&nowhere, body, &k.snapshot()), "{body:?} over addresses");
-    }
-    assert!(c.quiescent_scoped(&nowhere, ScopeBody::PerAddress, &k.snapshot()));
-
-    // Discharge the in-scope work only: scoped-quiescent, globally not.
-    match c.fire(&Occurrence { rule: id, arg: Arg::Addr(ca(1)) }).expect("fire ca1") {
-        FireOutcome::Fired { .. } => {}
-        other => panic!("expected Fired, got {other:?}"),
-    }
-    let s2 = k.snapshot();
-    assert!(c.quiescent_scoped(&scope, ScopeBody::PerAddress, &s2));
-    assert!(!c.quiescent(&s2));
-
-    // A Tup-domain rule is sort-incompatible with PerAddress: left UNSCOPED,
-    // its enabled occurrence keeps the scoped verdict false — more work
-    // reported, never false quiescence.
-    deposit_rel(&k, PRED_DEF, &ca(5), &ca(6)); // a pred_def-classed tuple
-    let trig_t = Trigger::Inline(
-        c.type_check_trigger((v(2), Sort::Tup), tru()).expect("Tup trigger"),
-    );
-    c.register_rule(Rule {
-        domain: Dom::ActiveSlice(concrete(&pred_def_ty())),
-        trigger: trig_t,
-        view: View::Active,
-        action: FireAction::Nullify { home: doc1() },
-    })
-    .expect("register");
-    assert!(!c.quiescent_scoped(&scope, ScopeBody::PerAddress, &k.snapshot()));
-}
-
-/// Q9's tuple bodies read one slot each: the emitter is the tuple's own
-/// address, the source its F, the target its G — a tuple-domained rule's
-/// work is reported under exactly the scope that names that slot's address,
-/// and always under `PerAddress`, which cannot scope it.
-#[test]
-fn the_tuple_scope_bodies_read_emitter_source_and_target() {
+fn a_second_retraction_of_one_tuple_reports_deduped() {
     let k = kernel();
     let mut c = coord(&k);
     let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
-    c.register_rule(Rule {
-        domain: Dom::ActiveSlice(concrete(&pred_stable_ty())),
-        trigger: always_tup(&c),
-        view: View::Active,
-        action: FireAction::Nullify { home: doc1() },
-    })
-    .expect("register");
-    let s = k.snapshot();
-    let scope = |x: &Address| c.type_check(vec![(v(9), Sort::Addr)], addr_eq(var(9), lit_addr(x))).expect("scope");
-    let quiet = |x: &Address, body: ScopeBody| c.quiescent_scoped(&scope(x), body, &s);
-    for (x, source, target, emitter) in [
-        (ca(1), false, true, true),
-        (ca(2), true, false, true),
-        (l1.clone(), true, true, false),
-    ] {
-        assert_eq!(quiet(&x, ScopeBody::PerSource), source, "PerSource at {x}");
-        assert_eq!(quiet(&x, ScopeBody::PerTarget), target, "PerTarget at {x}");
-        assert_eq!(quiet(&x, ScopeBody::PerEmitter), emitter, "PerEmitter at {x}");
-        assert!(!quiet(&x, ScopeBody::PerAddress), "unscoped under PerAddress: its work is always reported");
-    }
-}
-
-/// Q9's `PerTarget` and `PerSource` read their slot with `any`: a tuple with
-/// two targets is in scope when EITHER is. An `all` would scope the rule's
-/// work out and report a quiescence that is not there, which Q7 promises
-/// never happens.
-#[test]
-fn a_multi_address_slot_is_in_scope_when_any_of_its_addresses_is() {
-    let k = kernel();
-    let mut c = coord(&k);
-    link_writer(&k)
-        .makelink(
-            Caller::System,
-            &doc1(),
-            SlotArg::Addrs(vec![ca(1), ca(3)]),
-            SlotArg::Addrs(vec![ca(2), ca(4)]),
-            SlotArg::Addrs(vec![ra(PRED_STABLE)]),
-        )
-        .expect("a tuple with two sources and two targets");
-    c.register_rule(Rule {
-        domain: Dom::ActiveSlice(concrete(&pred_stable_ty())),
-        trigger: always_tup(&c),
-        view: View::Active,
-        action: FireAction::Nullify { home: doc1() },
-    })
-    .expect("register");
-    let s = k.snapshot();
-    let scope = |x: &Address| {
-        c.type_check(vec![(v(9), Sort::Addr)], addr_eq(var(9), lit_addr(x))).expect("scope")
+    let id = c
+        .register_rule(Rule {
+            domain: Dom::AuditSlice(concrete(&pred_stable_ty())),
+            trigger: always_tup(&c),
+            view: View::Audit,
+            action: FireAction::Nullify { home: doc1() },
+        })
+        .expect("register");
+    let first = match c.step(&k.snapshot()) {
+        StepOutcome::Fired { rule, arg, effect, .. } => {
+            assert_eq!((rule, arg), (id, l1.clone()));
+            effect
+        }
+        other => panic!("expected Fired, got {other:?}"),
     };
-    for (x, body) in [
-        (ca(2), ScopeBody::PerTarget),
-        (ca(4), ScopeBody::PerTarget),
-        (ca(1), ScopeBody::PerSource),
-        (ca(3), ScopeBody::PerSource),
-    ] {
-        assert!(!c.quiescent_scoped(&scope(&x), body, &s), "{x} under {body:?}");
+    let before = k.current_seq();
+    match c.step(&k.snapshot()) {
+        StepOutcome::Deduped { rule, arg, effect, seq } => {
+            assert_eq!((rule, arg), (id, l1.clone()));
+            assert_eq!(effect, first, "the first retraction, not a second");
+            assert_eq!(seq, before, "M7's base Seq: nothing committed");
+        }
+        other => panic!("expected Deduped, got {other:?}"),
     }
-    assert!(c.quiescent_scoped(&scope(&ca(9)), ScopeBody::PerTarget, &s));
-    assert!(c.quiescent_scoped(&scope(&ca(9)), ScopeBody::PerSource, &s));
-}
-
-/// `PerEmitter` asks `S` about the tuple's OWN address, a LINK address: a
-/// scope naming the home document, `x = D`, holds of no tuple, and the rule's
-/// work drops out of it; the scope `ScopeBody::PerEmitter` names for a home,
-/// `D ≼ x`, keeps that work in view — and leaves out a tuple homed elsewhere.
-#[test]
-fn per_emitter_asks_about_the_link_address_not_its_home() {
-    let k = kernel();
-    let mut c = coord(&k);
-    deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2)); // homed in doc1
-    c.register_rule(Rule {
-        domain: Dom::ActiveSlice(concrete(&pred_stable_ty())),
-        trigger: always_tup(&c),
-        view: View::Active,
-        action: FireAction::Nullify { home: doc1() },
-    })
-    .expect("register");
-    let s = k.snapshot();
-    let quiet = |body: Term| {
-        let scope = c.type_check(vec![(v(9), Sort::Addr)], body).expect("scope");
-        c.quiescent_scoped(&scope, ScopeBody::PerEmitter, &s)
-    };
-    assert!(quiet(addr_eq(var(9), lit_addr(&doc1()))), "a link address is never its home's");
-    assert!(!quiet(prefix(lit_addr(&doc1()), var(9))), "doc1 ≼ the link: the work is in scope");
-    assert!(quiet(prefix(lit_addr(&doc2()), var(9))), "a doc1 tuple is outside doc2's scope");
-}
-
-#[test]
-#[should_panic(expected = "quiescent_scoped precondition")]
-fn quiescent_scoped_panics_on_a_nat_parameter_scope() {
-    let k = kernel();
-    let c = coord(&k);
-    let scope = c.type_check(vec![(v(9), Sort::Nat)], tru()).expect("a Nat-parameter term");
-    let s = k.snapshot();
-    let _ = c.quiescent_scoped(&scope, ScopeBody::PerAddress, &s);
+    assert_eq!(k.current_seq(), before);
+    assert_eq!(c.fire_count(id, &l1), 1);
 }

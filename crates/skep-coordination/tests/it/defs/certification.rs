@@ -107,12 +107,13 @@ fn certify_stable_refuses_each_cvalid_leg_in_order_and_certifies_through_referen
 
 /// ST⁺ is all that stands between `certify_stable` and a view-INDEPENDENT
 /// Boolean def, and the atoms that pass PR-VIEW while reading state are where
-/// that matters: `is_filtered` and `is_in_chain` read FIXED active slices, so
-/// each can go true → false — the history below makes each do so after its
-/// refusal — and each def is `StabilityUnproven`; `is_doc` reads residence,
-/// which is permanent, and the same gate certifies it. An analyzer arm that
-/// called either of the first two ⊤-stable would stamp a permanent
-/// `pd_stable` claim on a def this history falsifies.
+/// that matters: `is_filtered`, `is_in_chain` and `tip` read FIXED active
+/// slices, so each can go true → false — the history below makes each do so
+/// after its refusal — and each def is `StabilityUnproven`; `is_doc` reads
+/// residence, which is permanent, and the same gate certifies it. An analyzer
+/// arm that called any of the first three ⊤-stable, or forgot the slice `tip`
+/// reads, would stamp a permanent `pd_stable` claim on a def this history
+/// falsifies.
 #[test]
 fn certify_stable_refuses_a_view_independent_def_the_store_can_falsify() {
     let k = kernel();
@@ -141,6 +142,17 @@ fn certify_stable_refuses_a_view_independent_def_the_store_can_falsify() {
     assert!(matches!(c.certify_stable(&doc1(), &chained), Err(CertifyError::StabilityUnproven)));
     writer.nullify(Caller::System, &doc1(), &claim).expect("retract the claim");
     assert_eq!(now(&chained), Ok(Value::Bool(false)), "the falsification refused above");
+
+    // `tip` is the third such read, and the one whose refusal rests on its
+    // FOOTPRINT alone: read through the binder guard it is `IfSome`'s guard,
+    // whose stability is the guard's footprint. With its claim retracted, l1
+    // heads its own lineage — until the next claim.
+    let headed = define(tip_is(&sup, &l1, &l1));
+    assert_eq!(now(&headed), Ok(Value::Bool(true)));
+    assert!(matches!(c.certify_stable(&doc1(), &headed), Err(CertifyError::StabilityUnproven)));
+    let l3 = deposit_rel(&k, PRED_STABLE, &ca(16), &ca(17));
+    writer.assert_sup(Caller::System, &doc1(), &l1, &l3).expect("l1 → l3");
+    assert_eq!(now(&headed), Ok(Value::Bool(false)), "the falsification refused above");
 
     let resident = define(is_doc(lit_addr(&doc1())));
     c.certify_stable(&doc1(), &resident)
@@ -186,4 +198,35 @@ fn st_plus_reads_a_referent_s_universal_as_a_universal() {
         Ok(Value::Bool(false)),
         "the falsification the refusal stood against"
     );
+}
+
+/// A reference WITH arguments reaches ST⁺ as a `let` chain binding them over
+/// the referent's body (PR3a), so the referent's ⊤-stability arrives through
+/// `Let`'s rule. `P(x) := ¬∃t ∈ L_K :: ⊤` holds until the first K tuple, and
+/// so does `R := P(ca1)`: ST⁺ must refuse R as it refuses P. A reference with
+/// no argument builds no `let`, so it cannot tell; a `Let` that passed a
+/// constant bound's body through as ⊤-stable would certify R, which the
+/// deposit below falsifies.
+#[test]
+fn a_reference_with_an_argument_is_as_unproven_as_its_referent() {
+    let k = kernel();
+    let c = coord(&k);
+    // The Retired class: nothing below deposits into it but the falsification.
+    let none_retired = not(exists(2, Dom::AuditSlice(concrete(&retired_ty())), tru()));
+    let p = c.type_check(vec![(v(1), Sort::Addr)], none_retired).expect("P(x)");
+    let (p, _) = c.define_predicate(&doc1(), &p).expect("define P");
+    let r = Term::Ref { addr: p.clone(), args: vec![at(lit_addr(&ca(1)))] };
+    let (r, _) = c
+        .define_predicate(&doc1(), &c.type_check(vec![], r).expect("R := P(ca1)"))
+        .expect("define R");
+    for d in [&p, &r] {
+        assert!(
+            matches!(c.certify_stable(&doc1(), d), Err(CertifyError::StabilityUnproven)),
+            "{d}"
+        );
+    }
+    let now = || c.evaluate_def(&r, &[], View::Audit, &k.snapshot());
+    assert_eq!(now(), Ok(Value::Bool(true)));
+    deposit_rel(&k, RETIRED, &ca(12), &ca(13));
+    assert_eq!(now(), Ok(Value::Bool(false)), "the falsification the refusal stood against");
 }

@@ -312,3 +312,23 @@ pub fn insert_raw(k: &Arc<Kernel<World>>, doc: &Address, bytes: Vec<u8>) -> Addr
         .expect("test content INSERT succeeds");
     start
 }
+
+// ─────────────────────────── the measuring thread ───────────────────────────
+
+/// Runs `test` on a thread whose stack is the DEFAULT 2 MiB, whatever
+/// `RUST_MIN_STACK` gives the harness — the stack `budget::MAX_DEPTH` and its
+/// `DERIVATION_COST` are set against. A test that measures a walk's depth runs
+/// its body here, so a larger configured stack cannot turn the overflow it
+/// exists to catch into a pass, nor a smaller one fail it spuriously
+/// (skep-identity's `a_nesting_bomb_at_the_record_cap_is_bad_record` pins its
+/// parse the same way). An overflow still aborts the test's process; a panic
+/// comes back as the test's own.
+pub fn on_the_default_stack(test: impl FnOnce() + Send + 'static) {
+    let measured = std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(test)
+        .expect("a thread to measure on");
+    if let Err(panic) = measured.join() {
+        std::panic::resume_unwind(panic);
+    }
+}

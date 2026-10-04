@@ -79,13 +79,14 @@ fn type_check_refuses_at_each_gamma_and_catalog_gate() {
     ));
 }
 
-/// The checker's documented edges: a `Ref`'s arity, short and long, the
-/// binder guard's and `Def`'s optional-sort requirement and the branch
-/// agreement, the address-valued-domain requirement of `Reflect`/`MaxT1`, a
-/// bare `Reg` in every position outside ∀/∃/`Count`, and the behavior
-/// guards of the BH1/BH2/BH4 atoms — each its own typed rejection, and an
-/// arity refusal's message naming the referent and both counts, so a caller
-/// holding only the message reads what was wrong.
+/// The checker's documented edges: a `Ref`'s arity, short and long, and its
+/// arguments matched to their formals by position; the binder guard's and
+/// `Def`'s optional-sort requirement and the branch agreement; the
+/// address-valued-domain requirement of `Reflect`/`MaxT1`; a bare `Reg` in
+/// every position outside ∀/∃/`Count`; and the behavior guards of the
+/// BH1/BH2/BH4 atoms — each its own typed rejection, and an arity refusal's
+/// message naming the referent and both counts, so a caller holding only the
+/// message reads what was wrong.
 #[test]
 fn type_check_refuses_each_documented_edge_by_name() {
     let k = kernel();
@@ -113,6 +114,23 @@ fn type_check_refuses_each_documented_edge_by_name() {
             "a reference to {p} passes 0 argument(s) to a def of 1 parameter(s)"
         )),
         "{said}"
+    );
+    // … and arguments meet formals BY POSITION: a referent of two sorts takes
+    // its arguments in its own order and refuses them swapped, at the first.
+    let (two, _) = c
+        .define_predicate(
+            &doc1(),
+            &c.type_check(vec![(v(1), Sort::Addr), (v(2), Sort::Nat)], tru()).expect("R(x, n)"),
+        )
+        .expect("define R");
+    let calling_two = |args: [Term; 2]| {
+        let args = args.into_iter().map(at).collect();
+        c.type_check(vec![], Term::Ref { addr: two.clone(), args })
+    };
+    calling_two([lit_addr(&ca(1)), lit_nat(1)]).expect("each argument at its own formal");
+    assert_eq!(
+        calling_two([lit_nat(1), lit_addr(&ca(1))]).err(),
+        Some(TypeError::SortMismatch { expected: Sort::Addr, found: Sort::Nat })
     );
 
     // The binder guard and `def` take an optional; the two branches agree.
@@ -290,6 +308,109 @@ fn a_binder_s_variable_is_read_only_inside_its_scope() {
         )
         .expect("then reads the guard's v2: Addr; else the parameter v2: Nat");
     assert!(c.decide(&shadowing, &[Value::Nat(n(2))], View::Active, &k.snapshot()));
+}
+
+/// `is_ref_free` is "false iff any `Ref` node survives" — a law over every
+/// position a child term can occupy. The checker computes the flag by hand at
+/// every node it rebuilds, and four doors stand on it: `eval` and
+/// `quiescent_scoped` refuse a ref-bearing term before evaluating it,
+/// `classify` before analyzing it, and `register_rule` answers a ref-bearing
+/// `Inline` trigger or domain with a typed rejection. A position that dropped
+/// its child from the flag would hand the reference past every door — to the
+/// analyzer's `unreachable!` inside `register_rule`, or the evaluator's `Ref`
+/// arm inside a later `step`. Each row puts ONE reference at one position and
+/// must report ref-bearing; the same row over an ordinary term of that sort
+/// must not.
+#[test]
+fn a_reference_at_any_position_makes_the_term_ref_bearing() {
+    fn both(at_position: &dyn Fn(Term) -> Term, leaves: &(Term, Term)) -> (Term, Term) {
+        (at_position(leaves.0.clone()), at_position(leaves.1.clone()))
+    }
+    let k = kernel();
+    let c = coord(&k);
+    let sup = c.reserved_type(ShippedType::Supersedes).clone();
+    let pd = pred_def_ty();
+    let x = || lit_addr(&ca(1));
+    let def_ref = |params: Vec<(VarId, Sort)>, body: Term, args: Vec<Term>| {
+        let tt = c.type_check(params, body).expect("a def of the sort the position asks for");
+        let addr = c.define_predicate(&doc1(), &tt).expect("define").0;
+        Term::Ref { addr, args: args.into_iter().map(at).collect() }
+    };
+    // Per sort a position asks for: an ordinary term, and a reference of that sort.
+    let boolean = (tru(), def_ref(vec![], tru(), vec![]));
+    let address = (x(), def_ref(vec![], x(), vec![]));
+    let set = (members(&pd), def_ref(vec![], members(&pd), vec![]));
+    let nat = (lit_nat(1), def_ref(vec![], lit_nat(1), vec![]));
+    let opt = (bot_addr(), def_ref(vec![], bot_addr(), vec![]));
+    let seq = (chain(&sup, x()), def_ref(vec![], chain(&sup, x()), vec![]));
+    // A map's one source is a `Map` parameter: every row checks under v8: Map.
+    let map = (var(8), def_ref(vec![(v(1), Sort::Map)], var(1), vec![var(8)]));
+    let fixed = |s: Term| Dom::SetTerm(at(s));
+    let rows = [
+        both(&|r| and(r, tru()), &boolean),
+        both(&|r| and(tru(), r), &boolean),
+        both(&|r| or(r, tru()), &boolean),
+        both(&|r| or(tru(), r), &boolean),
+        both(&|r| implies(r, tru()), &boolean),
+        both(&|r| implies(tru(), r), &boolean),
+        both(&|r| iff(r, tru()), &boolean),
+        both(&|r| iff(tru(), r), &boolean),
+        both(&not, &boolean),
+        both(&|r| forall(5, Dom::LinkDom, r), &boolean),
+        both(&|r| exists(5, Dom::LinkDom, r), &boolean),
+        both(&|r| forall(7, Dom::Reg, r), &boolean),
+        both(&|r| let_(5, lit_nat(1), r), &boolean),
+        both(&|r| if_some(bot_addr(), 5, r, tru()), &boolean),
+        both(&|r| if_some(bot_addr(), 5, tru(), r), &boolean),
+        both(&|r| count(filter(Dom::LinkDom, 5, r)), &boolean),
+        both(&|r| let_(5, r, tru()), &nat),
+        both(&|r| nat_eq(r, lit_nat(1)), &nat),
+        both(&|r| nat_eq(lit_nat(1), r), &nat),
+        both(&|r| nat_le(r, lit_nat(1)), &nat),
+        both(&|r| nat_le(lit_nat(1), r), &nat),
+        both(&|r| nat_add(r, lit_nat(1)), &nat),
+        both(&|r| nat_add(lit_nat(1), r), &nat),
+        both(&|r| is_k(&pd, r), &address),
+        both(&|r| targets_of(&pd, r), &address),
+        both(&|r| is_filtered(&retired_ty(), r), &address),
+        both(&|r| succs(&sup, r), &address),
+        both(&|r| chain(&sup, r), &address),
+        both(&|r| tip(&sup, r), &address),
+        both(&|r| is_in_chain(&sup, r, x()), &address),
+        both(&|r| is_in_chain(&sup, x(), r), &address),
+        both(&is_doc, &address),
+        both(&|r| exists(6, Dom::AuditSlice(concrete(&pd)), in_coverage_f(r, 6)), &address),
+        both(&|r| exists(6, Dom::AuditSlice(concrete(&pd)), in_coverage_g(r, 6)), &address),
+        both(&|r| addr_eq(r, x()), &address),
+        both(&|r| addr_eq(x(), r), &address),
+        both(&|r| prefix(r, x()), &address),
+        both(&|r| prefix(x(), r), &address),
+        both(&|r| t1_lt(r, x()), &address),
+        both(&|r| t1_lt(x(), r), &address),
+        both(&|r| set_mem(r, members(&pd)), &address),
+        both(&|r| set_mem(x(), r), &set),
+        both(&|r| set_eq(r, members(&pd)), &set),
+        both(&|r| set_eq(members(&pd), r), &set),
+        both(&is_empty, &set),
+        both(&|r| big_union(Dom::LinkDom, 5, r), &set),
+        both(&|r| big_union(fixed(r), 5, members(&pd)), &set),
+        both(&|r| count(fixed(r)), &set),
+        both(&|r| forall(5, fixed(r), tru()), &set),
+        both(&|r| exists(5, fixed(r), tru()), &set),
+        both(&|r| Term::MaxT1(ad(fixed(r))), &set),
+        both(&|r| Term::MinT1(ad(fixed(r))), &set),
+        both(&|r| reflect(fixed(r)), &set),
+        both(&|r| count(filter(fixed(r), 5, tru())), &set),
+        both(&|r| if_some(r, 5, tru(), tru()), &opt),
+        both(&def, &opt),
+        both(&elems, &seq),
+        both(&|r| map_get(r, &pd), &map),
+    ];
+    let check = |t: &Term| c.type_check(vec![(v(8), Sort::Map)], t.clone()).expect("checks");
+    for (ordinary, referring) in &rows {
+        assert!(check(ordinary).is_ref_free(), "an ordinary term: {ordinary:?}");
+        assert!(!check(referring).is_ref_free(), "a reference at this position: {referring:?}");
+    }
 }
 
 /// V-STAT's behavior guard as a law over every atom that needs one: each

@@ -249,32 +249,35 @@ fn certify_rule_refuses_exactly_what_register_rule_refuses() {
 /// closed-domain judgment, which refuses a node past the cap — the bound
 /// `enum_dom` and `Analyzer::dom` take for a checked domain, having none of
 /// their own. A chain of filters whose innermost `L_dom` sits at the cap
-/// registers, and is linted and enumerated through every level on this
-/// default thread; one filter more is `IllFormedDomain(TooDeep)`.
+/// registers, and is linted and enumerated through every level on a thread
+/// of the default 2 MiB stack (`on_the_default_stack`); one filter more is
+/// `IllFormedDomain(TooDeep)`.
 #[test]
 fn a_rule_domain_is_checked_to_the_nesting_cap() {
-    let k = kernel();
-    let mut c = coord(&k);
-    let (link, _) = link_writer(&k)
-        .emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[])
-        .expect("one cataloged link, so L_dom has an element to pass through");
-    // The outermost filter at level 0, filter k at level k, the innermost
-    // `L_dom` at level n.
-    let filters = |n: usize| (0..n).fold(Dom::LinkDom, |d, _| filter(d, 2, tru()));
-    let rule = |domain: Dom, trigger: Trigger| Rule {
-        domain,
-        trigger,
-        view: View::Audit,
-        action: marker_action(),
-    };
-    let at_cap = rule(filters(128), always_addr(&c));
-    c.certify_rule(&at_cap).expect("the lint analyzes a domain at the cap");
-    c.register_rule(at_cap).expect("a domain at the cap registers");
-    assert_eq!(c.next_enabled(&k.snapshot()).map(|o| o.arg), Some(Arg::Addr(link)));
-    assert!(matches!(
-        c.register_rule(rule(filters(129), always_addr(&c))),
-        Err(RuleError::IllFormedDomain(TypeError::TooDeep))
-    ));
+    on_the_default_stack(|| {
+        let k = kernel();
+        let mut c = coord(&k);
+        let (link, _) = link_writer(&k)
+            .emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[])
+            .expect("one cataloged link, so L_dom has an element to pass through");
+        // The outermost filter at level 0, filter k at level k, the innermost
+        // `L_dom` at level n.
+        let filters = |n: usize| (0..n).fold(Dom::LinkDom, |d, _| filter(d, 2, tru()));
+        let rule = |domain: Dom, trigger: Trigger| Rule {
+            domain,
+            trigger,
+            view: View::Audit,
+            action: marker_action(),
+        };
+        let at_cap = rule(filters(128), always_addr(&c));
+        c.certify_rule(&at_cap).expect("the lint analyzes a domain at the cap");
+        c.register_rule(at_cap).expect("a domain at the cap registers");
+        assert_eq!(c.next_enabled(&k.snapshot()).map(|o| o.arg), Some(Arg::Addr(link)));
+        assert!(matches!(
+            c.register_rule(rule(filters(129), always_addr(&c))),
+            Err(RuleError::IllFormedDomain(TypeError::TooDeep))
+        ));
+    });
 }
 
 /// `FireAction::home` answers the one fact both variants share — the document

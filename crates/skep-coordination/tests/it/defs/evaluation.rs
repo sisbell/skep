@@ -87,7 +87,9 @@ fn a_set_argument_is_bound_as_a_set_of_addresses() {
 
 /// A def's Γ_D is an ORDERED context: it survives the codec round trip, a
 /// cold coordinator reports it in order, and `evaluate_def` binds
-/// positionally — so two same-sorted parameters are not interchangeable.
+/// positionally — so two same-sorted parameters are not interchangeable —
+/// and a reference to the def binds the same way, through the evaluator's own
+/// `Ref` arm.
 #[test]
 fn a_def_s_parameters_are_ordered_and_arguments_bind_positionally() {
     let k = kernel();
@@ -109,6 +111,19 @@ fn a_def_s_parameters_are_ordered_and_arguments_bind_positionally() {
     let swapped = [Value::Addr(ca(2)), Value::Addr(ca(1))];
     assert_eq!(cold.evaluate_def(&start, &ordered, View::Active, &s), Ok(Value::Bool(true)));
     assert_eq!(cold.evaluate_def(&start, &swapped, View::Active, &s), Ok(Value::Bool(false)));
+    // A REFERENCE binds the same way — through the evaluator's own `Ref` arm,
+    // a binding of its own that `evaluate_def`'s does not exercise: a call in
+    // P's order holds, the crossed call does not.
+    let call = |x: Address, y: Address| {
+        let args = vec![at(lit_addr(&x)), at(lit_addr(&y))];
+        let tt =
+            c.type_check(vec![], Term::Ref { addr: start.clone(), args }).expect("a call of P");
+        c.define_predicate(&doc1(), &tt).expect("define the call").0
+    };
+    let (in_order, crossed) = (call(ca(1), ca(2)), call(ca(2), ca(1)));
+    let after = k.snapshot();
+    assert_eq!(cold.evaluate_def(&in_order, &[], View::Active, &after), Ok(Value::Bool(true)));
+    assert_eq!(cold.evaluate_def(&crossed, &[], View::Active, &after), Ok(Value::Bool(false)));
 }
 
 /// A def's PARAMETERS are Codom-only (`TupParameter` refuses a tuple one),

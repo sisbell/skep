@@ -12,7 +12,7 @@ use std::thread;
 
 use skep_blobs::{BlobError, LeaseState, Step};
 
-use crate::{hex_of, open, put_whole, INTERVAL};
+use crate::{every_deposit_unplaced, hex_of, open, put_whole, INTERVAL};
 
 /// THE ORDER, STEP BY STEP (M-I5 (a)): for every step of the finish, a
 /// finish that FAILS at that step — the seeded injection, one trial per
@@ -26,7 +26,7 @@ use crate::{hex_of, open, put_whole, INTERVAL};
 #[test]
 fn a_failure_at_each_step_of_the_finish_leaves_what_the_order_promises() {
     let steps = [
-        Step::TempSync,
+        Step::PartialSync,
         Step::Rename,
         Step::DirSync,
         Step::RootSync,
@@ -44,20 +44,20 @@ fn a_failure_at_each_step_of_the_finish_leaves_what_the_order_promises() {
             store.fail_at(Some(*step));
             let rec = store.create_upload("k", "blake3", bytes.len() as u64, now, INTERVAL).unwrap();
             store.resume("k", &rec.id, 0, now).unwrap();
-            store.append("k", &rec.id, &bytes, now, INTERVAL).unwrap();
-            store.settle("k", &rec.id, now, INTERVAL).unwrap();
+            store.append("k", &rec.id, &bytes, now).unwrap();
+            store.settle("k", &rec.id, now).unwrap();
             let err = store.finish("k", &rec.id, now, INTERVAL).expect_err("the injected failure");
             assert!(matches!(err, BlobError::Io(_)), "{step:?}: {err}");
-            // Before the lease's sync, the key holds NO lease — whatever
-            // the directory holds — and the file is present only from the
-            // rename on.
+            // Before the lease's sync, the principal holds NO lease —
+            // whatever the directory holds — and the file is present only
+            // from the rename on.
             let state = store.lease("k", "blake3", &hex, now);
-            let present = store.blob_len("blake3", &hex).is_some();
+            let present = store.blob_size("blake3", &hex).is_some();
             (rec.id, state, present)
         };
         let (id, state, present) = outcome;
         match step {
-            Step::TempSync | Step::Rename => {
+            Step::PartialSync | Step::Rename => {
                 assert_eq!(state, LeaseState::None, "{step:?}");
                 assert!(!present, "{step:?}: the file is absent before the rename");
             }
@@ -80,19 +80,19 @@ fn a_failure_at_each_step_of_the_finish_leaves_what_the_order_promises() {
         let record = store.upload("k", &id, now + 1);
         let partial = root.join("blake3").join(format!(".upload-{}", id.to_hex()));
         match step {
-            Step::TempSync | Step::Rename => {
+            Step::PartialSync | Step::Rename => {
                 let r = record.expect("{step:?}: the upload stands with its partial");
                 assert_eq!(r.offset, bytes.len() as u64);
                 assert!(partial.is_file());
-                assert_eq!(store.pending_bytes("k", now + 1), bytes.len() as u64);
+                assert_eq!(store.pending_bytes("k", now + 1, &every_deposit_unplaced), bytes.len() as u64);
             }
             _ => {
                 assert!(record.is_none(), "{step:?}: a record with no partial is retired at open");
                 assert!(!partial.exists());
             }
         }
-        for lease in store.leases_of("k", now + 1) {
-            assert_eq!(store.blob_len(&lease.designation, &lease.hex), Some(lease.size), "a lease names a whole file");
+        for lease in store.live_leases_of("k", now + 1) {
+            assert_eq!(store.blob_size(&lease.designation, &lease.hex), Some(lease.size), "a lease names a whole file");
         }
         // The same bytes PUT again, the injection cleared: whole, leased,
         // and the answer the one shape (REPLACE over a file the failed
@@ -106,21 +106,21 @@ fn a_failure_at_each_step_of_the_finish_leaves_what_the_order_promises() {
 }
 
 /// THE REPLACE's ORDER, STEP BY STEP (M-I5 (a); "NO ANSWER OF THE UPLOAD
-/// SAYS WHETHER THE FILE WAS ALREADY HERE" — the old instance retired after
-/// the answer): over a file planted with the WRONG bytes at the right name,
-/// a finish that fails at each step of a replace — the two aside steps
-/// among them — leaves the hash holding the OLD bytes whole before the
-/// rename and the NEW bytes whole after it, never an absent name; the
-/// aside stands from the link until the deferred unlink and is gone or
-/// present, never a third state; a finish that fails past its link queues
-/// no aside, leaving it to the pruner's pass and to open; a failure at the
-/// deferred unlink itself leaves the answer given and the aside queued for
-/// the next drain; and the reopen removes every aside a failure left, the
-/// hash's bytes as the step left them.
+/// SAYS WHETHER THE FILE WAS ALREADY HERE" — the old instance's aside
+/// unlinked after the answer): over a file planted with the WRONG bytes at
+/// the right name, a finish that fails at each step of a replace — the two
+/// aside steps among them — leaves the hash holding the OLD bytes whole
+/// before the rename and the NEW bytes whole after it, never an absent
+/// name; the aside stands from the link until the deferred unlink and is
+/// gone or present, never a third state; a finish that fails past its link
+/// queues no aside, leaving it to the pruner's pass and to open; a failure
+/// at the deferred unlink itself leaves the answer given and the aside
+/// queued for the next drain; and the reopen removes every aside a failure
+/// left, the hash's bytes as the step left them.
 #[test]
 fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
     let steps = [
-        Step::TempSync,
+        Step::PartialSync,
         Step::LinkAside,
         Step::Rename,
         Step::DirSync,
@@ -141,13 +141,13 @@ fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
             store.fail_at(Some(*step));
             let rec = store.create_upload("k", "blake3", right.len() as u64, now, INTERVAL).unwrap();
             store.resume("k", &rec.id, 0, now).unwrap();
-            store.append("k", &rec.id, &right, now, INTERVAL).unwrap();
-            store.settle("k", &rec.id, now, INTERVAL).unwrap();
+            store.append("k", &rec.id, &right, now).unwrap();
+            store.settle("k", &rec.id, now).unwrap();
             let finish = store.finish("k", &rec.id, now, INTERVAL);
             let at_hash = fs::read(store.blob_path("blake3", &hex).unwrap()).expect("the hash is never without a file");
             let asides = store.asides_of("blake3").unwrap();
             match step {
-                Step::TempSync | Step::LinkAside => {
+                Step::PartialSync | Step::LinkAside => {
                     assert!(matches!(finish, Err(BlobError::Io(_))), "{step:?}");
                     assert_eq!(at_hash, wrong, "{step:?}: the old bytes stand before the rename");
                     assert!(asides.is_empty(), "{step:?}: no aside before the link");
@@ -163,7 +163,7 @@ fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
                     assert_eq!(at_hash, right, "{step:?}: the new bytes stand past the rename");
                     assert_eq!(asides.len(), 1, "{step:?}: the aside stands beside them");
                     assert_eq!(
-                        store.asides_pending(),
+                        store.asides_queued(),
                         0,
                         "{step:?}: left to the pruner's pass and to open — only an answered replace is queued"
                     );
@@ -174,11 +174,11 @@ fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
                     assert_eq!(fin.hex, hex);
                     assert_eq!(at_hash, right);
                     assert_eq!(asides.len(), 1);
-                    assert!(store.retire_asides().is_err(), "the injected failure at the deferred step");
-                    assert_eq!(store.asides_pending(), 1, "re-queued for the next drain");
+                    assert!(store.unlink_asides().is_err(), "the injected failure at the deferred step");
+                    assert_eq!(store.asides_queued(), 1, "re-queued for the next drain");
                     assert_eq!(store.asides_of("blake3").unwrap().len(), 1, "present, never a third state");
                     store.fail_at(None);
-                    assert_eq!(store.retire_asides().unwrap(), 1, "the next drain takes it");
+                    assert_eq!(store.unlink_asides().unwrap(), 1, "the next drain takes it");
                     assert!(store.asides_of("blake3").unwrap().is_empty(), "gone");
                     assert_eq!(fs::read(store.blob_path("blake3", &hex).unwrap()).unwrap(), right);
                 }
@@ -191,22 +191,22 @@ fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
         // partial was renamed away is retired.
         let store = open(&root, now + 1);
         assert!(store.asides_of("blake3").unwrap().is_empty(), "{step:?}: open removes the aside ({aside_after:?})");
-        let expected = if matches!(step, Step::TempSync | Step::LinkAside | Step::Rename) { &wrong } else { &right };
+        let expected = if matches!(step, Step::PartialSync | Step::LinkAside | Step::Rename) { &wrong } else { &right };
         assert_eq!(&fs::read(store.blob_path("blake3", &hex).unwrap()).unwrap(), expected, "{step:?}");
-        if matches!(step, Step::TempSync | Step::LinkAside | Step::Rename) {
+        if matches!(step, Step::PartialSync | Step::LinkAside | Step::Rename) {
             assert!(partial.is_file(), "{step:?}: the partial stands with its record");
         } else {
             assert!(!partial.exists(), "{step:?}");
         }
-        for lease in store.leases_of("k", now + 1) {
-            assert_eq!(store.blob_len(&lease.designation, &lease.hex), Some(lease.size), "a lease names a whole file");
+        for lease in store.live_leases_of("k", now + 1) {
+            assert_eq!(store.blob_size(&lease.designation, &lease.hex), Some(lease.size), "a lease names a whole file");
         }
         // A re-PUT of the right bytes with the injection cleared: whole,
         // leased, one answer — a replace of whatever the step left.
         let fin = put_whole(&store, "k", &right, now + 2);
         assert_eq!(fin.hex, hex);
         assert_eq!(fs::read(store.blob_path("blake3", &hex).unwrap()).unwrap(), right);
-        assert_eq!(store.retire_asides().unwrap(), 1, "one aside per replace, whatever the bytes replaced");
+        assert_eq!(store.unlink_asides().unwrap(), 1, "one aside per replace, whatever the bytes replaced");
         assert!(store.asides_of("blake3").unwrap().is_empty());
     }
 }
@@ -241,15 +241,15 @@ fn an_aside_is_queued_only_when_its_finish_answers() {
         // would wait for good on the seam's lock the held finish holds, and
         // a failed assertion here would leave the finish parked, the scope
         // waiting on it.
-        let seen = (store.asides_of("blake3").unwrap().len(), store.asides_pending());
+        let seen = (store.asides_of("blake3").unwrap().len(), store.asides_queued());
         resumed.wait();
         (seen.0, seen.1, finishing.join())
     });
     assert_eq!(linked, 1, "held before its last step, the replace has linked its aside");
     assert_eq!(queued, 0, "and queued nothing before its answer");
     assert_eq!(finished.expect("the held finish answers").hex, hex);
-    assert_eq!(store.asides_pending(), 1, "answered: queued for the drain");
-    assert_eq!(store.retire_asides().unwrap(), 1);
+    assert_eq!(store.asides_queued(), 1, "answered: queued for the drain");
+    assert_eq!(store.unlink_asides().unwrap(), 1);
     assert!(store.asides_of("blake3").unwrap().is_empty());
 }
 
@@ -268,7 +268,7 @@ fn a_finish_that_failed_past_its_rename_leaves_no_handle_on_the_hashs_file() {
     let hex = hex_of(&bytes);
     let rec = store.create_upload("k", "blake3", bytes.len() as u64, 1, INTERVAL).unwrap();
     store.resume("k", &rec.id, 0, 1).unwrap();
-    store.append("k", &rec.id, &bytes, 1, INTERVAL).unwrap();
+    store.append("k", &rec.id, &bytes, 1).unwrap();
     assert_eq!(store.upload("k", &rec.id, 1).unwrap().offset, 0, "short of the grain: written, not received");
     store.fail_at(Some(Step::DirSync));
     assert!(matches!(store.finish("k", &rec.id, 1, INTERVAL), Err(BlobError::Io(_))));
@@ -296,10 +296,10 @@ fn replace_repairs_a_corrupt_file_and_answers_as_a_fresh_put_does() {
     let hex = hex_of(&right);
     // Planted: the right name, the wrong bytes.
     store.install("blake3", &hex, b"garbage under the right name").unwrap();
-    assert_eq!(store.blob_len("blake3", &hex), Some(28));
+    assert_eq!(store.blob_size("blake3", &hex), Some(28));
     let fresh_bytes = b"another picture".to_vec();
     let fresh = put_whole(&store, "k", &fresh_bytes, 10);
-    assert_eq!(store.asides_pending(), 0, "a fresh PUT links nothing aside");
+    assert_eq!(store.asides_queued(), 0, "a fresh PUT links nothing aside");
     let replaced = put_whole(&store, "k", &right, 20);
     assert_eq!(replaced.designation, fresh.designation);
     assert_eq!(replaced.hex, hex);
@@ -311,19 +311,19 @@ fn replace_repairs_a_corrupt_file_and_answers_as_a_fresh_put_does() {
     assert_eq!(asides.len(), 1, "the replace left one aside");
     assert!(asides[0].starts_with(&format!(".retired-{hex}-")), "{}", asides[0]);
     assert_eq!(fs::read(dir.path().join("blobs").join("blake3").join(&asides[0])).unwrap(), b"garbage under the right name");
-    assert_eq!(store.retire_asides().unwrap(), 1);
+    assert_eq!(store.unlink_asides().unwrap(), 1);
     assert!(store.asides_of("blake3").unwrap().is_empty());
-    assert_eq!(store.retire_asides().unwrap(), 0, "nothing queued twice");
+    assert_eq!(store.unlink_asides().unwrap(), 0, "nothing queued twice");
     // And a second PUT of the same bytes over the whole file: the same
     // answer again, the file the same.
     let again = put_whole(&store, "k2", &right, 30);
     assert_eq!(again, replaced);
     assert_eq!(fs::read(store.blob_path("blake3", &hex).unwrap()).unwrap(), right);
-    assert_eq!(store.retire_asides().unwrap(), 1, "one aside per replace, whatever the bytes");
-    // Each key holds its own lease; neither answer named the other's.
+    assert_eq!(store.unlink_asides().unwrap(), 1, "one aside per replace, whatever the bytes");
+    // Each principal holds its own lease; neither answer named the other's.
     assert!(matches!(store.lease("k", "blake3", &hex, 31), LeaseState::Live { .. }));
     assert!(matches!(store.lease("k2", "blake3", &hex, 31), LeaseState::Live { .. }));
-    assert_eq!(store.lease("k3", "blake3", &hex, 31), LeaseState::None, "a third key holds none, whatever the directory holds");
+    assert_eq!(store.lease("k3", "blake3", &hex, 31), LeaseState::None, "a third principal holds none, whatever the directory holds");
     // The directory as the pruner reads it: the one file at its hex name,
     // the two blobs, no aside.
     let mut blobs = store.blobs_of("blake3").unwrap();
@@ -337,22 +337,23 @@ fn replace_repairs_a_corrupt_file_and_answers_as_a_fresh_put_does() {
     assert_eq!(store.blobs_of("blake3").unwrap(), vec![hex]);
 }
 
-/// The size check's read: present with its length, absent as `None`, and a
+/// The size check's read: present with its size, absent as `None`, and a
 /// name that is no hex — a partial's, a path's — as absent too. And the
-/// door it reads through: a path is answered for well-formed names alone,
-/// so no name a caller hands in reaches past its designation directory.
+/// name check it reads through: a path is answered for well-formed names
+/// alone, so no name a caller hands in reaches past its designation
+/// directory.
 #[test]
-fn blob_len_answers_the_files_length_and_nothing_for_a_name_that_is_no_hex() {
+fn blob_size_answers_the_files_size_and_nothing_for_a_name_that_is_no_hex() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("blobs");
     let store = open(&root, 0);
     let fin = put_whole(&store, "k", b"12345", 1);
-    assert_eq!(store.blob_len("blake3", &fin.hex), Some(5));
-    assert_eq!(store.blob_len("blake3", &hex_of(b"other")), None);
-    assert_eq!(store.blob_len("blake3", "../leases.log"), None);
-    assert_eq!(store.blob_len("blake3", "ABCDEF"), None, "uppercase is no hex here");
-    assert_eq!(store.blob_len("BLAKE3", &fin.hex), None, "a designation is lowercase");
-    assert_eq!(store.blob_len("blake3", ".upload-00000000000000000000000000000000"), None);
+    assert_eq!(store.blob_size("blake3", &fin.hex), Some(5));
+    assert_eq!(store.blob_size("blake3", &hex_of(b"other")), None);
+    assert_eq!(store.blob_size("blake3", "../leases.log"), None);
+    assert_eq!(store.blob_size("blake3", "ABCDEF"), None, "uppercase is no hex here");
+    assert_eq!(store.blob_size("BLAKE3", &fin.hex), None, "a designation is lowercase");
+    assert_eq!(store.blob_size("blake3", ".upload-00000000000000000000000000000000"), None);
     assert_eq!(store.blob_path("blake3", &fin.hex), Some(root.join("blake3").join(&fin.hex)));
     assert_eq!(store.blob_path("blake3", "../leases.log"), None, "no path out of the directory");
     assert_eq!(store.blob_path("BLAKE3", &fin.hex), None);

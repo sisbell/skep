@@ -8,12 +8,12 @@
 //!
 //! THE IDENTIFIER (clause (1)): 128 bits drawn from the OS per upload,
 //! never a sequence, spelled as 32 lowercase hex; it answers to the
-//! uploader alone — a lookup takes the asking key, and an identifier whose
-//! record is another key's answers exactly as one that was never minted
-//! (the register M-I2 (e)). The check is [`UploadRecords`]' own: every
-//! lookup it answers takes the asking key, and its one keyless lookup
-//! serves the pruner's expiry, which acts on an expired upload whatever key
-//! minted it.
+//! uploader alone — a lookup takes the asking principal, and an identifier
+//! whose record is another principal's answers exactly as one that was
+//! never minted (the register M-I2 (e)). The check is [`UploadRecords`]'
+//! own: every lookup it answers takes the asking principal, and its one
+//! lookup by identifier alone serves the pruner's expiry, which acts on an
+//! expired upload whatever principal minted it.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -80,27 +80,37 @@ impl fmt::Debug for UploadId {
     }
 }
 
-/// One standing upload's record — the identifier bound to its uploader's
-/// key, the designation, its declared length, the DURABLE offset (bytes
-/// received), and the expiry fixed from the last byte received.
+/// One standing upload's record (clause (1)) — the identifier bound to its
+/// uploader, the designation, its declared length, the DURABLE offset
+/// (bytes received), the interval fixed at its creation, and the expiry
+/// fixed from the last byte received.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UploadRecord {
     pub id: UploadId,
-    pub key: String,
+    /// The uploader — the principal the upload answers to alone (clause
+    /// (1)), as its caller spells it.
+    pub principal: String,
     pub designation: String,
     pub length: u64,
     pub offset: u64,
+    /// THE UPLOAD's INTERVAL, in milliseconds — fixed at its creation from
+    /// the limits in force then and held here (clauses (1), (3)): each byte
+    /// received re-fixes `expires` this far past it, and a later limits
+    /// record never reaches a standing upload.
+    pub interval: u64,
     pub expires: u64,
 }
 
 impl UploadRecord {
-    /// The record as its log line's value.
+    /// The record as its log line's value. The stored format spells the
+    /// principal's member `key`, as the lease log's line does.
     fn value(&self) -> Value {
         json!({
             "designation": self.designation,
             "expires": self.expires,
             "id": self.id.to_hex(),
-            "key": self.key,
+            "interval": self.interval,
+            "key": self.principal,
             "length": self.length,
             "offset": self.offset,
         })
@@ -118,6 +128,10 @@ enum Line {
     Retired(UploadId),
 }
 
+/// A line's value read as a record or a retirement — `None` for a value of
+/// no shape this build reads, a record line lacking any member it carries
+/// (its interval included) among them: the store holds no value of its own
+/// to put in a missing member's place.
 fn parse_line(v: &Value) -> Option<Line> {
     let id = UploadId::parse(v.get("id")?.as_str()?)?;
     if v.get("retired").and_then(Value::as_bool) == Some(true) {
@@ -125,19 +139,20 @@ fn parse_line(v: &Value) -> Option<Line> {
     }
     Some(Line::Record(UploadRecord {
         id,
-        key: v.get("key")?.as_str()?.to_string(),
+        principal: v.get("key")?.as_str()?.to_string(),
         designation: v.get("designation")?.as_str()?.to_string(),
         length: v.get("length")?.as_u64()?,
         offset: v.get("offset")?.as_u64()?,
+        interval: v.get("interval")?.as_u64()?,
         expires: v.get("expires")?.as_u64()?,
     }))
 }
 
 /// The records as held in memory beside their log — answered by the asking
-/// key, as the lease log answers its leases: a record goes only to the key
-/// that minted it, save to the pruner's keyless lookup
-/// ([`UploadRecords::of_any_key`]) and open's walk of every record
-/// ([`UploadRecords::all`]).
+/// principal, as the lease log answers its leases: a record goes only to
+/// the principal that minted it, save to the pruner's lookup by identifier
+/// alone ([`UploadRecords::of_any_principal`]) and open's walk of every
+/// record ([`UploadRecords::all`]).
 pub(crate) struct UploadRecords {
     log: Log,
     records: HashMap<UploadId, UploadRecord>,
@@ -168,69 +183,75 @@ impl UploadRecords {
         Ok(UploadRecords { log, records })
     }
 
-    /// THE KEY's record by identifier, whatever its expiry — `None` for an
-    /// identifier `key`'s records do not name. The appends' and the durable
-    /// point's lookup.
-    pub fn of_key(&self, key: &str, id: &UploadId) -> Option<&UploadRecord> {
-        self.records.get(id).filter(|r| r.key == key)
+    /// THE PRINCIPAL's record by identifier, whatever its expiry — `None`
+    /// for an identifier `principal`'s records do not name. The appends'
+    /// and the durable point's lookup.
+    pub fn of_principal(&self, principal: &str, id: &UploadId) -> Option<&UploadRecord> {
+        self.records.get(id).filter(|r| r.principal == principal)
     }
 
-    /// THE KEY's STANDING record by identifier — `None` for an identifier
-    /// `key`'s records do not name or whose upload has expired at `now_ms`,
-    /// one answer for both (M-I2 (e)).
-    pub fn standing(&self, key: &str, id: &UploadId, now_ms: u64) -> Option<&UploadRecord> {
-        self.of_key(key, id).filter(|r| r.stands(now_ms))
+    /// THE PRINCIPAL's STANDING record by identifier — `None` for an
+    /// identifier `principal`'s records do not name or whose upload has
+    /// expired at `now_ms`, one answer for both (M-I2 (e)).
+    pub fn standing(&self, principal: &str, id: &UploadId, now_ms: u64) -> Option<&UploadRecord> {
+        self.of_principal(principal, id).filter(|r| r.stands(now_ms))
     }
 
-    /// THE KEY's standing uploads at `now_ms`, in identifier order.
-    pub fn standing_of(&self, key: &str, now_ms: u64) -> Vec<UploadRecord> {
-        let mut out: Vec<UploadRecord> =
-            self.records.values().filter(|r| r.key == key && r.stands(now_ms)).cloned().collect();
+    /// THE PRINCIPAL's standing uploads at `now_ms`, in identifier order.
+    pub fn standing_of(&self, principal: &str, now_ms: u64) -> Vec<UploadRecord> {
+        let mut out: Vec<UploadRecord> = self
+            .records
+            .values()
+            .filter(|r| r.principal == principal && r.stands(now_ms))
+            .cloned()
+            .collect();
         out.sort_by_key(|r| r.id);
         out
     }
 
-    /// EVERY key's expired uploads at `now_ms`, in identifier order — the
-    /// pruner's read.
+    /// EVERY principal's expired uploads at `now_ms`, in identifier order —
+    /// the pruner's read.
     pub fn expired(&self, now_ms: u64) -> Vec<UploadRecord> {
         let mut out: Vec<UploadRecord> = self.records.values().filter(|r| !r.stands(now_ms)).cloned().collect();
         out.sort_by_key(|r| r.id);
         out
     }
 
-    /// The sum of the key's standing uploads' durable offsets at `now_ms` —
-    /// its bytes received and not yet finished.
-    pub fn received_of(&self, key: &str, now_ms: u64) -> u64 {
+    /// The sum of the principal's standing uploads' durable offsets at
+    /// `now_ms` — its bytes received and not yet finished.
+    pub fn received_of(&self, principal: &str, now_ms: u64) -> u64 {
         self.records
             .values()
-            .filter(|r| r.key == key && r.stands(now_ms))
+            .filter(|r| r.principal == principal && r.stands(now_ms))
             .fold(0u64, |acc, r| acc.saturating_add(r.offset))
     }
 
-    /// The sum of every key's standing uploads' durable offsets at `now_ms`.
+    /// The sum of every principal's standing uploads' durable offsets at
+    /// `now_ms`.
     pub fn received_total(&self, now_ms: u64) -> u64 {
         self.records.values().filter(|r| r.stands(now_ms)).fold(0u64, |acc, r| acc.saturating_add(r.offset))
     }
 
-    /// ANY key's record by identifier — the one keyless lookup, which serves
-    /// the pruner's expiry alone ([`Store::expire_upload`](crate::Store::expire_upload)):
-    /// that act removes an expired upload whoever minted it, and answers
-    /// nothing of the record.
-    pub fn of_any_key(&self, id: &UploadId) -> Option<&UploadRecord> {
+    /// ANY principal's record by identifier — the one lookup by identifier
+    /// alone, which serves the pruner's expiry alone
+    /// ([`Store::expire_upload`](crate::Store::expire_upload)): that act
+    /// removes an expired upload whoever minted it, and answers nothing of
+    /// the record.
+    pub fn of_any_principal(&self, id: &UploadId) -> Option<&UploadRecord> {
         self.records.get(id)
     }
 
-    /// Every record, every key's — the walk open's reconciliation makes over
-    /// them all, and nothing else.
+    /// Every record, every principal's — the walk open's reconciliation
+    /// makes over them all, and nothing else.
     pub fn all(&self) -> impl Iterator<Item = &UploadRecord> {
         self.records.values()
     }
 
-    /// Append `record` as the upload's current line, SYNCED: a record's
-    /// line carries the upload's birth, the offset received, or that offset
-    /// set back at open, and a byte counts as received only once the
-    /// partial AND its record's offset are on disk.
-    pub fn put(&mut self, record: UploadRecord) -> io::Result<()> {
+    /// WRITE `record` as the upload's current line — appended and SYNCED:
+    /// a record's line carries the upload's birth, the offset received, or
+    /// that offset set back at open, and a byte counts as received only
+    /// once the partial AND its record's offset are on disk.
+    pub fn write(&mut self, record: UploadRecord) -> io::Result<()> {
         self.log.append(&record.value(), true)?;
         self.records.insert(record.id, record);
         Ok(())

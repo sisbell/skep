@@ -4,16 +4,17 @@
 //! the latest-wins re-PUT, the compaction at open, the pending bytes, and
 //! the torn tail. "A LIVE LEASE OVER A FILE THAT IS NOT THERE READS AS
 //! LAPSED" is the daemon's rule, built on this store's `lease` and
-//! `blob_len`; the store's lease answers the record and nothing of the file.
+//! `blob_size`; the store's lease answers the record and nothing of the
+//! file.
 
 use std::fs;
 
 use skep_blobs::LeaseState;
 
-use crate::{hex_of, open, put_whole, HORIZON, INTERVAL};
+use crate::{every_deposit_unplaced, hex_of, open, put_whole, HORIZON, INTERVAL};
 
 /// LIVE within the interval, LAPSED past it within the HORIZON (its expiry
-/// named), NONE past the horizon — and NONE for another key at every
+/// named), NONE past the horizon — and NONE for another principal at every
 /// moment, whatever the directory holds. Each answer is the record's: a
 /// live lease whose file is gone still answers LIVE.
 #[test]
@@ -29,10 +30,10 @@ fn a_lease_is_live_then_lapsed_within_the_horizon_then_none() {
     assert_eq!(store.lease("k", "blake3", &fin.hex, expires + HORIZON), LeaseState::None);
     for now in [100, expires, expires + HORIZON] {
         assert_eq!(store.lease("other", "blake3", &fin.hex, now), LeaseState::None);
-        assert_eq!(store.lease("k", "sha256-tree", &fin.hex, now), LeaseState::None, "the designation is part of the key");
+        assert_eq!(store.lease("k", "sha256-tree", &fin.hex, now), LeaseState::None, "the designation is part of the lease's key");
     }
-    assert_eq!(store.leases_of("k", 100), vec![skep_blobs::Lease { key: "k".into(), designation: "blake3".into(), hex: fin.hex.clone(), size: 5, expires }]);
-    assert_eq!(store.leases_of("k", expires), vec![], "the deposit read lists live leases alone");
+    assert_eq!(store.live_leases_of("k", 100), vec![skep_blobs::Lease { principal: "k".into(), designation: "blake3".into(), hex: fin.hex.clone(), size: 5, expires }]);
+    assert_eq!(store.live_leases_of("k", expires), vec![], "the deposit read lists live leases alone");
     fs::remove_file(store.blob_path("blake3", &fin.hex).unwrap()).unwrap();
     assert_eq!(
         store.lease("k", "blake3", &fin.hex, 100),
@@ -42,9 +43,10 @@ fn a_lease_is_live_then_lapsed_within_the_horizon_then_none() {
 }
 
 /// A re-PUT's lease REPLACES the one before whatever either's expiry: the
-/// key's current lease is its LATEST line — a shortened interval after a
-/// longer one answers the shorter; and open compacts the log to each key's
-/// latest line, dropping every lease past the horizon.
+/// principal's current lease on a hash is its LATEST line there — a
+/// shortened interval after a longer one answers the shorter; and open
+/// compacts the log to the latest line of each, dropping every lease past
+/// the horizon.
 #[test]
 fn the_latest_lease_wins_and_open_compacts_to_it() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -58,14 +60,15 @@ fn the_latest_lease_wins_and_open_compacts_to_it() {
         // nothing: the later line wins.
         let rec = store.create_upload("k", "blake3", 10, 2_000, INTERVAL).unwrap();
         store.resume("k", &rec.id, 0, 2_000).unwrap();
-        store.append("k", &rec.id, b"same bytes", 2_000, INTERVAL).unwrap();
-        store.settle("k", &rec.id, 2_000, INTERVAL).unwrap();
+        store.append("k", &rec.id, b"same bytes", 2_000).unwrap();
+        store.settle("k", &rec.id, 2_000).unwrap();
         store.finish("k", &rec.id, 2_000, 0).unwrap();
         assert_eq!(store.lease("k", "blake3", &hex, 2_001), LeaseState::Lapsed { expires: 2_000 });
         // And a third time, the latest line again: live once more.
         put_whole(&store, "k", b"same bytes", 3_000);
         assert_eq!(store.lease("k", "blake3", &hex, 3_001), LeaseState::Live { size: 10, expires: 3_000 + INTERVAL });
-        // Another key's lease on other bytes, long gone by the reopen below.
+        // Another principal's lease on other bytes, long gone by the reopen
+        // below.
         put_whole(&store, "j", b"old", 10);
         let lines = fs::read_to_string(root.join("leases.log")).unwrap().lines().count();
         assert_eq!(lines, 4, "four appends, one per finish");
@@ -80,42 +83,47 @@ fn the_latest_lease_wins_and_open_compacts_to_it() {
     assert_eq!(store.lease("k", "blake3", &hex, now), LeaseState::Lapsed { expires: 3_000 + INTERVAL });
 }
 
-/// THE PENDING BYTES (M-I6 (b)): a key's live leases' sizes plus its
-/// standing uploads' durable offsets, falling as a lease lapses; the venue
-/// total the sum over every key, never the directory's bytes — one file two
-/// keys both leased counts twice there and once in each key's own. And the
-/// counted form: a lease the caller's predicate leaves out — the daemon's
-/// own scope leaves out one on a hash the key's cells name — counts
-/// nothing, the partials counted whole either way.
+/// THE PENDING BYTES (M-I6 (b)): a principal's unplaced deposits' sizes
+/// plus its standing uploads' durable offsets, falling as a lease lapses;
+/// the venue total the sum over every principal, never the directory's
+/// bytes — one file two principals both leased counts twice there and once
+/// in each principal's own. And a placed deposit — a lease on a hash its
+/// principal's own cells name, which its base counts — is no pending byte;
+/// the partials count whole either way.
 #[test]
-fn pending_bytes_are_record_derived_per_key_and_in_total() {
+fn pending_bytes_are_record_derived_per_principal_and_in_total() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = open(&dir.path().join("blobs"), 0);
     put_whole(&store, "a", b"shared", 10);
     put_whole(&store, "b", b"shared", 10);
     put_whole(&store, "a", b"a's own", 10);
     crate::standing(&store, "b", 100, b"partial", 10);
-    assert_eq!(store.pending_bytes("a", 11), 6 + 7);
-    assert_eq!(store.pending_bytes("b", 11), 6 + 7);
-    assert_eq!(store.pending_total(11), 6 + 7 + 6 + 7, "the sum of own scopes, the shared file counted in each");
-    assert_eq!(store.pending_bytes("c", 11), 0);
+    assert_eq!(store.pending_bytes("a", 11, &every_deposit_unplaced), 6 + 7);
+    assert_eq!(store.pending_bytes("b", 11, &every_deposit_unplaced), 6 + 7);
+    assert_eq!(
+        store.pending_total(11, &every_deposit_unplaced),
+        6 + 7 + 6 + 7,
+        "the sum of own scopes, the shared file counted in each"
+    );
+    assert_eq!(store.pending_bytes("c", 11, &every_deposit_unplaced), 0);
     let shared = hex_of(b"shared");
-    let not_shared = |l: &skep_blobs::Lease| l.hex != shared;
-    assert_eq!(store.pending_bytes_of("a", 11, &not_shared), 7, "a's own lease alone");
-    assert_eq!(store.pending_bytes_of("b", 11, &not_shared), 7, "b's partial alone, counted whole");
-    assert_eq!(store.pending_total_of(11, &not_shared), 7 + 7);
+    // Both principals' cells name the shared file: placed, in their bases.
+    let unplaced = |l: &skep_blobs::Lease| l.hex != shared;
+    assert_eq!(store.pending_bytes("a", 11, &unplaced), 7, "a's own lease alone");
+    assert_eq!(store.pending_bytes("b", 11, &unplaced), 7, "b's partial alone, counted whole");
+    assert_eq!(store.pending_total(11, &unplaced), 7 + 7);
     let lapsed = 10 + INTERVAL;
-    assert_eq!(store.pending_bytes("a", lapsed), 0, "lapsed leases count nothing");
-    assert_eq!(store.pending_total(lapsed), 0, "and an expired upload neither");
+    assert_eq!(store.pending_bytes("a", lapsed, &every_deposit_unplaced), 0, "lapsed leases count nothing");
+    assert_eq!(store.pending_total(lapsed, &every_deposit_unplaced), 0, "and an expired upload neither");
 }
 
-/// THE ANY-KEY READ (the pruner's; M-I5 (b) at its strictest): a file is
-/// held while ANY key's lease on it is live — whoever deposited it — and
-/// not once every lease has lapsed; a lapsed lease within the horizon holds
-/// nothing here, though it answers LAPSED to its own key; the designation
-/// is part of the key.
+/// THE ANY-PRINCIPAL READ (the pruner's; M-I5 (b) at its strictest): a
+/// file is held while ANY principal's lease on it is live — whoever
+/// deposited it — and not once every lease has lapsed; a lapsed lease
+/// within the horizon holds nothing here, though it answers LAPSED to its
+/// own principal; the designation is part of the lease's key.
 #[test]
-fn any_live_lease_answers_for_every_key_together() {
+fn any_live_lease_answers_for_every_principal_together() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = open(&dir.path().join("blobs"), 0);
     let fin = put_whole(&store, "a", b"shared", 100);
@@ -125,8 +133,8 @@ fn any_live_lease_answers_for_every_key_together() {
     assert!(store.any_live_lease("blake3", &fin.hex, a_lapsed), "b's lease still holds it");
     assert_eq!(store.lease("a", "blake3", &fin.hex, a_lapsed), LeaseState::Lapsed { expires: a_lapsed });
     let both_lapsed = 200 + INTERVAL;
-    assert!(!store.any_live_lease("blake3", &fin.hex, both_lapsed), "every lease lapsed: held by no key");
-    assert!(!store.any_live_lease("sha256-tree", &fin.hex, 150), "the designation is part of the key");
+    assert!(!store.any_live_lease("blake3", &fin.hex, both_lapsed), "every lease lapsed: held by no principal");
+    assert!(!store.any_live_lease("sha256-tree", &fin.hex, 150), "the designation is part of the lease's key");
     assert!(!store.any_live_lease("blake3", &hex_of(b"never"), 150));
 }
 

@@ -6,14 +6,14 @@ use std::io;
 /// Why the store refused — one variant per answer a caller acts on
 /// differently. I/O failures ride [`BlobError::Io`] verbatim; everything
 /// else is the store's own verdict, and none of them says anything about
-/// another key's uploads or files (the record's M-I2 (e)).
+/// another principal's uploads or files (the record's M-I2 (e)).
 #[derive(Debug)]
 pub enum BlobError {
     /// The data directory refused I/O — a write, a sync, a rename, a read.
     Io(io::Error),
-    /// The identifier names no upload of THIS key's: expired, retired,
-    /// another key's, or never minted — ONE answer for all four, exactly
-    /// as an expired one answers (the record's clause (1)).
+    /// The identifier names no upload of THIS principal's: expired,
+    /// retired, another principal's, or never minted — ONE answer for all
+    /// four, exactly as an expired one answers (the record's clause (1)).
     NoUpload,
     /// A resume stated an offset other than the record's — the standard
     /// shape's offset conflict — and carries the record's, the one a resume
@@ -41,7 +41,7 @@ impl fmt::Display for BlobError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             BlobError::Io(e) => write!(f, "blob store I/O: {e}"),
-            BlobError::NoUpload => f.write_str("no upload of this key's by that identifier"),
+            BlobError::NoUpload => f.write_str("no upload of this principal's by that identifier"),
             BlobError::Offset { recorded } => {
                 write!(f, "the stated offset is not the record's ({recorded})")
             }

@@ -308,7 +308,7 @@ impl MediaGate {
     /// key's own cells name the hash, which its base already counts
     /// (M-I6 (b)).
     fn lease_pending(&self, lease: &Lease) -> bool {
-        match Self::principal_of_key(&lease.key) {
+        match Self::principal_of_key(&lease.principal) {
             Some(p) => !self.index.names(p, &lease.designation, &lease.hex),
             None => true,
         }
@@ -325,7 +325,7 @@ impl MediaGate {
     /// figure beside the base.
     pub(crate) fn own_pending(&self, principal: PrincipalId, now_ms: u64) -> u64 {
         let key = Self::key(principal);
-        self.store.pending_bytes_of(&key, now_ms, &|l| self.lease_pending(l))
+        self.store.pending_bytes(&key, now_ms, &|l| self.lease_pending(l))
     }
 
     /// THE VENUE TOTAL at `now_ms`: the sum of every account's own scope —
@@ -333,7 +333,7 @@ impl MediaGate {
     pub(crate) fn venue_total(&self, now_ms: u64) -> u64 {
         self.index
             .total_base()
-            .saturating_add(self.store.pending_total_of(now_ms, &|l| self.lease_pending(l)))
+            .saturating_add(self.store.pending_total(now_ms, &|l| self.lease_pending(l)))
     }
 
     /// Claim an upload for a stream (clause (5)): `false` where another
@@ -426,7 +426,7 @@ impl MediaGate {
         let hex = hex_of(&cell.hash);
         if self.index.is_ready() {
             if let Some(named) = self.index.size_named(principal, DESIGNATION, &hex) {
-                return match self.store.blob_len(DESIGNATION, &hex) {
+                return match self.store.blob_size(DESIGNATION, &hex) {
                     Some(len) if len == cell.size => Binding::Admitted,
                     Some(len) if len == named => Binding::Unbound,
                     _ => Binding::Lapsed,
@@ -436,7 +436,7 @@ impl MediaGate {
         match self.store.lease(&key, DESIGNATION, &hex, self.now_ms()) {
             LeaseState::None => Binding::Unbound,
             LeaseState::Lapsed { .. } => Binding::Lapsed,
-            LeaseState::Live { size, .. } => match self.store.blob_len(DESIGNATION, &hex) {
+            LeaseState::Live { size, .. } => match self.store.blob_size(DESIGNATION, &hex) {
                 // The file absent, or not the length the lease recorded:
                 // the deposit is gone.
                 Some(len) if len == size => {
@@ -588,8 +588,8 @@ mod tests {
         let key = MediaGate::key(p);
         let rec = store.create_upload(&key, DESIGNATION, 9, now, 10_000).unwrap();
         store.resume(&key, &rec.id, 0, now).unwrap();
-        store.append(&key, &rec.id, bytes, now, 10_000).unwrap();
-        store.settle(&key, &rec.id, now, 10_000).unwrap();
+        store.append(&key, &rec.id, bytes, now).unwrap();
+        store.settle(&key, &rec.id, now).unwrap();
         let fin = store.finish(&key, &rec.id, now, 10_000).unwrap();
         assert_eq!(fin.hex, hex_of(&hash));
         assert_eq!(gate.binding(p, &cell), Binding::Admitted);
@@ -603,8 +603,8 @@ mod tests {
         let now = gate.now_ms();
         let rec = store.create_upload(&key, DESIGNATION, 9, now, 10_000).unwrap();
         store.resume(&key, &rec.id, 0, now).unwrap();
-        store.append(&key, &rec.id, bytes, now, 10_000).unwrap();
-        store.settle(&key, &rec.id, now, 10_000).unwrap();
+        store.append(&key, &rec.id, bytes, now).unwrap();
+        store.settle(&key, &rec.id, now).unwrap();
         store.finish(&key, &rec.id, now, 10_000).unwrap();
         assert_eq!(gate.binding(p, &cell), Binding::Admitted);
         std::fs::remove_file(store.blob_path(DESIGNATION, &hex_of(&hash)).unwrap()).unwrap();
@@ -614,8 +614,8 @@ mod tests {
         let now = gate.now_ms();
         let rec = store.create_upload(&key, DESIGNATION, 9, now, 10_000).unwrap();
         store.resume(&key, &rec.id, 0, now).unwrap();
-        store.append(&key, &rec.id, bytes, now, 10_000).unwrap();
-        store.settle(&key, &rec.id, now, 10_000).unwrap();
+        store.append(&key, &rec.id, bytes, now).unwrap();
+        store.settle(&key, &rec.id, now).unwrap();
         store.finish(&key, &rec.id, now, 10_000).unwrap();
         assert_eq!(gate.own_pending(p, now), 9, "no cell names it: the lease counts as pending");
         assert_eq!(gate.own_scope(p, now), 9);

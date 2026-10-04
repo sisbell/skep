@@ -6,10 +6,10 @@
 //! place (the fsync-order suite observes what each failure leaves). And the
 //! four methods only a test calls: [`Store::install`], which plants a file
 //! under a hex its bytes need not hash to; [`Store::written`], the bytes a
-//! request's open upload has written, durable or not, answered to its own
-//! key alone; [`Store::asides_pending`], the deferred unlink's queue; and
-//! [`Store::handles_open`], the handles requests hold. A build without the
-//! feature carries none of it, and its gate before a step is a no-op
+//! request's handle has written, durable or not, answered to its own
+//! principal alone; [`Store::asides_queued`], the deferred unlink's queue;
+//! and [`Store::handles_open`], the handles requests hold. A build without
+//! the feature carries none of it, and its gate before a step is a no-op
 //! (`store.rs`).
 
 use std::fs::{self, File};
@@ -74,31 +74,32 @@ impl Store {
         fsync_dir(&self.root)
     }
 
-    /// TEST HOOK (`test-hooks`): the bytes written so far of the upload a
-    /// request has open (durable or not), or the record's offset where no
-    /// request has it open — the suites' read of bytes written and not yet
-    /// received. `None` for an identifier `key`'s records do not name, as
-    /// [`Store::append`] answers it; the daemon takes the count from
-    /// [`Store::append`]'s answer instead.
-    pub fn written(&self, key: &str, id: &UploadId, now_ms: u64) -> Option<u64> {
-        self.uploads.lock().of_key(key, id)?;
-        if let Some(l) = self.live.lock().get(id) {
-            return Some(l.written());
+    /// TEST HOOK (`test-hooks`): the bytes written so far through the handle
+    /// a request has open on the upload (durable or not), or the record's
+    /// offset where no request has one open — the suites' read of bytes
+    /// written and not yet received. `None` for an identifier `principal`'s
+    /// records do not name, as [`Store::append`] answers it; the daemon
+    /// takes the count from [`Store::append`]'s answer instead.
+    pub fn written(&self, principal: &str, id: &UploadId, now_ms: u64) -> Option<u64> {
+        self.uploads.lock().of_principal(principal, id)?;
+        if let Some(handle) = self.handles.lock().get(id) {
+            return Some(handle.written());
         }
-        self.upload(key, id, now_ms).map(|r| r.offset)
+        self.upload(principal, id, now_ms).map(|r| r.offset)
     }
 
-    /// TEST HOOK (`test-hooks`): the asides this process has answered and
-    /// not yet unlinked — what [`Store::retire_asides`] will take.
-    pub fn asides_pending(&self) -> usize {
+    /// TEST HOOK (`test-hooks`): the asides queued — those of replaces this
+    /// process has answered, not yet unlinked — what
+    /// [`Store::unlink_asides`] will take.
+    pub fn asides_queued(&self) -> usize {
         self.asides.lock().len()
     }
 
     /// TEST HOOK (`test-hooks`): the handles this process holds open — one
     /// per upload a request has resumed and not yet settled, finished,
-    /// ended or released.
+    /// ended or closed.
     pub fn handles_open(&self) -> usize {
-        self.live.lock().len()
+        self.handles.lock().len()
     }
 }
 

@@ -24,18 +24,20 @@ story:
   replaced instance is first hard-linked to an aside name
   (`.retired-<hex>-<n>`) so the rename frees nothing, queued for the
   deferred unlink only as the finish answers, and unlinked by that step
-  after the answer (`retire_asides`), on whatever thread drains it — open
+  after the answer (`unlink_asides`), on whatever thread drains it — open
   removes any aside a crash or a failed finish leaves; and no answer of
   the store says whether the file was already here, by its bytes or by
   its time.
 - **The pruner's reads** — the designation directories, the files at hex
-  names, the asides, whether ANY key holds a live lease on a file
+  names, the asides, whether ANY principal holds a live lease on a file
   (`any_live_lease`), the expired uploads and their removal
   (`expired_uploads`, `expire_upload`), the unlink of one file
   (`unlink_blob`) — each one act, so a daemon's pass holds its own lock
-  around exactly one; and the pending bytes counted under a predicate
-  (`pending_bytes_of`, `pending_total_of`), so a daemon leaves out of a
-  key's pending bytes the leases its own cells already count.
+  around exactly one; and the pending bytes (`pending_bytes`,
+  `pending_total`): a principal's unplaced deposits — its live leases on
+  hashes none of its own cells names — and its uploads' bytes received,
+  each read asking its caller which live leases are unplaced, since the
+  store reads no cell.
 - **The partials**, `blobs/<designation>/.upload-<identifier>` — the
   bytes received so far of one standing upload. Fsynced at a grain of
   1 MiB, the record's offset written after each sync, so a byte counts as
@@ -45,36 +47,41 @@ story:
   request is streaming.
 - **The upload records**, `blobs/uploads.log` — one JSON line per change
   of one upload: its identifier (128 bits from the OS, 32 lowercase hex),
-  its uploader's opaque key, its designation, its declared length, its
-  durable offset and its expiry. Append-only, tail-checked at open,
-  compacted at open to each upload's latest line with every retired
-  upload dropped; reconciled with the partials both ways at open — a
-  partial no record names is removed, a record whose partial is gone is
-  retired, and their lengths are set to agree.
+  its uploader (the principal, an opaque string), its designation, its
+  declared length, its durable offset, the interval fixed at its creation
+  and its expiry, which each byte received re-fixes by that interval — a
+  later limits record reaches the next upload, never a standing one.
+  Append-only, tail-checked at open, compacted at open to each upload's
+  latest line with every retired upload dropped; reconciled with the
+  partials both ways at open — a partial no record names is removed, a
+  record whose partial is gone is retired, and their lengths are set to
+  agree.
 - **The lease log**, `blobs/leases.log` — one JSON line per deposit:
-  the key, the designation and hex, the size and the expiry fixed at the
-  PUT. On PATTERNS P22's honest-null arm: append-only, tail-checked, each
-  key's current lease its latest line, compacted at open; a lease lapsed
-  past a HORIZON answers as NONE, so LAPSED is exact within the horizon.
-  A lost lease reads as no lease, cured by a re-PUT.
+  the principal, the designation and hex, the size and the expiry fixed at
+  the PUT. On PATTERNS P22's honest-null arm: append-only, tail-checked,
+  a principal's current lease on a hash its latest line there, compacted
+  at open; a lease lapsed past a HORIZON answers as NONE, so LAPSED is
+  exact within the horizon. A lost lease reads as no lease, cured by a
+  re-PUT.
 
-The crate knows nothing of who a key is, holds no lock a daemon's write
-path takes, and reads no limits record: it answers "is
-`<designation>/<hex>` held under a live lease of KEY?" (off KEY's record
-alone — whether the file is there is the caller's read of `blob_len`),
-"KEY's own uploads and deposits", "KEY's pending bytes", and the
-volume's free space, and nothing of policy. It asks its caller for one
-exclusion: no `unlink_blob` or `remove_aside` while a `finish` runs —
-the daemon keeps it with its credential lock, the finish under the read
-arm and each pruner act under the write arm. The crate's own guarantee
-is the order of its steps and what each leaves behind on a crash.
+The crate knows nothing of who a principal is — an opaque string to it —
+holds no lock a daemon's write path takes, and reads no limits record: it
+answers "is `<designation>/<hex>` held under a live lease of PRINCIPAL?"
+(off PRINCIPAL's record alone — whether the file is there is the caller's
+read of `blob_size`), "PRINCIPAL's own uploads and deposits",
+"PRINCIPAL's pending bytes", and the volume's free space, and nothing of
+policy. It asks its caller for one exclusion: no `unlink_blob` or
+`remove_aside` while a `finish` runs — the daemon keeps it with its
+credential lock, the finish under the read arm and each pruner act under
+the write arm. The crate's own guarantee is the order of its steps and
+what each leaves behind on a crash.
 
 Its `test-hooks` feature (default off) compiles in the test seam,
 `src/store/hooks.rs`: the hazard seam — a hold or an injected failure at
 a named step of the finish, which the crate's own fsync-order tests and
 the daemon's SIGKILL harness drive — and the four methods only a test
 calls: `install`, which plants a file under a hash its bytes need not
-have, `written`, `asides_pending` and `handles_open`. A build without
+have, `written`, `asides_queued` and `handles_open`. A build without
 the feature carries none of it.
 
 ## License

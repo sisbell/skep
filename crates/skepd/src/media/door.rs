@@ -509,8 +509,8 @@ mod tests {
             let store = gate.store();
             let rec = store.create_upload(&key, "blake3", 5, now, interval).unwrap();
             store.resume(&key, &rec.id, 0, now).unwrap();
-            store.append(&key, &rec.id, bytes, now, interval).unwrap();
-            store.settle(&key, &rec.id, now, interval).unwrap();
+            store.append(&key, &rec.id, bytes, now).unwrap();
+            store.settle(&key, &rec.id, now).unwrap();
             store.finish(&key, &rec.id, now, interval).unwrap();
         };
         assert_eq!(door(insert(&draft2, real()), SYSTEM_PRINCIPAL), Some(MediaRefusal::UnboundCell));

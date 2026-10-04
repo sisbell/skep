@@ -26,11 +26,11 @@ use serde_json::Value;
 
 use crate::blobs::fsync_dir;
 
-/// One JSON-lines log: its path, its append handle, the byte length and the
-/// count of the whole lines the file holds, and whether it has stopped. The
-/// length is what a failed append is cut back to and the count the one
-/// figure the compaction reads; this type's own appends and rewrites alone
-/// move them.
+/// One JSON-lines log: its path, its append-mode file, the byte length and
+/// the count of the whole lines the file holds, and whether it has
+/// stopped. The length is what a failed append is cut back to and the
+/// count the one figure the compaction reads; this type's own appends and
+/// rewrites alone move them.
 pub(crate) struct Log {
     path: PathBuf,
     file: File,
@@ -243,9 +243,9 @@ mod tests {
         let path = dir.path().join("x.log");
         let (mut log, _) = Log::open(path.clone()).unwrap();
         log.append(&json!({"n": 1}), true).unwrap();
-        // A read-only handle, as a failing disk leaves the log's: the rest of
+        // A read-only file, as a failing disk leaves the log's: the rest of
         // the write fails at the OS, and so does the cut. The torn bytes land
-        // through a second handle, as a write cut short leaves them.
+        // through a second open file, as a write cut short leaves them.
         log.file = File::open(&path).unwrap();
         let mut other = open_append(&path).unwrap();
         let failed = log.append_by(&json!({"n": 2}), |file, line| {

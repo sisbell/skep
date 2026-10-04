@@ -317,14 +317,13 @@ impl Daemon {
         interim: &[(&str, &str)],
     ) -> Reply {
         let store = self.media.store();
-        let interval = self.media.limits().lease_interval_ms;
         let id = record.id;
         let now = self.media.now_ms();
         if let Err(e) = store.resume(key, &id, offset, now) {
             return blob_refusal(e);
         }
         if body.begin(interim).is_err() {
-            store.release(&id);
+            store.close_handle(&id);
             return refuse(TransportError::MalformedHttp, Some("client went away at 100-continue"));
         }
         let mut written = offset;
@@ -335,8 +334,8 @@ impl Daemon {
                 Err(e) => {
                     // The connection died or stalled: the upload is KEPT at
                     // its durable point — what was written settles.
-                    let _ = store.settle(key, &id, self.media.now_ms(), interval);
-                    store.release(&id);
+                    let _ = store.settle(key, &id, self.media.now_ms());
+                    store.close_handle(&id);
                     return refuse(
                         TransportError::MalformedHttp,
                         Some(&format!("request body not delivered: {e}")),
@@ -349,19 +348,19 @@ impl Daemon {
                 let _ = store.end_upload(key, &id, now);
                 return refuse_deposit(scope, true, written);
             }
-            match store.append(key, &id, chunk, self.media.now_ms(), interval) {
+            match store.append(key, &id, chunk, self.media.now_ms()) {
                 Ok(w) => written = w,
                 Err(e) => {
-                    store.release(&id);
+                    store.close_handle(&id);
                     return blob_refusal(e);
                 }
             }
         }
         if written < record.length {
-            return match store.settle(key, &id, self.media.now_ms(), interval) {
+            return match store.settle(key, &id, self.media.now_ms()) {
                 Ok(r) => progress_reply(&r),
                 Err(e) => {
-                    store.release(&id);
+                    store.close_handle(&id);
                     blob_refusal(e)
                 }
             };
@@ -395,7 +394,7 @@ impl Daemon {
         match store.finish(key, &id, now, self.media.limits().lease_interval_ms) {
             Ok(finished) => finish_reply(&finished),
             Err(e) => {
-                store.release(&id);
+                store.close_handle(&id);
                 blob_refusal(e)
             }
         }
@@ -424,14 +423,14 @@ impl Daemon {
         reply
     }
 
-    /// THE DEFERRED STEP of a replace (the store's `retire_asides`): the
+    /// THE DEFERRED STEP of a replace (the store's `unlink_asides`): the
     /// replaced instance's names unlinked, off the answer's path — the
     /// transport runs it after a blob reply is written; the pruner's pass
     /// sweeps whatever it did not reach. An I/O failure here is the
     /// operator's line, never a client's: the aside stands for the pass or
     /// the next open.
     pub(super) fn retire_asides(&self) {
-        if let Err(e) = self.media.store().retire_asides() {
+        if let Err(e) = self.media.store().unlink_asides() {
             crate::notice::line(format_args!("blob store: a replaced file's aside could not be unlinked: {e}"));
         }
     }

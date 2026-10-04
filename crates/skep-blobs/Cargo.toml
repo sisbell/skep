@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "The blob store (media lane B): the four media stores under one root — the files at blobs/<designation>/<hex>, the partials, the upload records and the lease log — with the PUT's fsync order, REPLACE on a present hash, and the lease's honest-null answer. It knows no principal, no lock and no limits record."
+description = "The blob store (media lane B): the four media stores under one root — the files at blobs/<designation>/<hex>, the partials, the upload records and the lease log — with the PUT's fsync order, REPLACE on a present hash, and the lease's honest-null answer. It knows a principal only as an opaque string, and holds no lock and reads no limits record."
 readme = "README.md"
 
 [features]
@@ -14,7 +14,7 @@ readme = "README.md"
 # FAIL that step with an injected I/O error (the fsync-order test observes
 # what each failure leaves) — and the four methods only a test calls:
 # `install`, which plants a file under a hash its bytes need not have,
-# `written`, `asides_pending` and `handles_open`. DEFAULT-OFF and never
+# `written`, `asides_queued` and `handles_open`. DEFAULT-OFF and never
 # enabled by a shipped build: this crate's own tests turn it on through the
 # self dev-dependency below, skepd's tests on their `skep-blobs` line, and a
 # build that compiles no test compiles none of it — `scripts/gate-full.sh`

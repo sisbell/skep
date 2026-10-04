@@ -36,12 +36,12 @@ pub(crate) fn deposit_read(gate: &MediaGate, principal: PrincipalId) -> Value {
     let now = gate.now_ms();
     let store = gate.store();
     let deposits: Vec<Value> = store
-        .leases_of(&key, now)
+        .live_leases_of(&key, now)
         .into_iter()
         .map(|l| {
             // Exact of what is on disk: a lease over a file that is absent
             // or not whole reads as LAPSED here as at the insert.
-            let whole = store.blob_len(&l.designation, &l.hex) == Some(l.size);
+            let whole = store.blob_size(&l.designation, &l.hex) == Some(l.size);
             obj(vec![
                 ("designation", Value::String(l.designation)),
                 ("expires", Value::Number(l.expires.into())),

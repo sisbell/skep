@@ -88,7 +88,7 @@ impl Daemon {
     /// many asides it unlinked; the socket-free router runs none itself.
     #[doc(hidden)]
     pub fn retire_asides_now(&self) -> usize {
-        self.media.store().retire_asides().expect("the test seam's drain")
+        self.media.store().unlink_asides().expect("the test seam's drain")
     }
 
     /// TEST HOOK (the same standing): the pruner passes this daemon has

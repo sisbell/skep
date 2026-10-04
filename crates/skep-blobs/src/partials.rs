@@ -11,7 +11,7 @@
 //! record's offset where longer, its bytes up to that offset hashed from the
 //! first, so whatever an earlier request left past the offset — a write that
 //! failed partway, bytes synced before a record write that failed — is gone
-//! before another byte lands. No handle outlives its request ([`Live`]).
+//! before another byte lands. No handle outlives its request ([`Handle`]).
 //!
 //! AT OPEN THE TWO ARE RECONCILED BOTH WAYS: a partial no record names is
 //! removed, in every designation directory under the root; a record that
@@ -21,7 +21,7 @@
 //! has its partial removed and its record retired at open too, in the order
 //! the end and the daemon's pruner take while the store serves
 //! ([`Store::expire_upload`](crate::Store::expire_upload) is the pass's
-//! door).
+//! act).
 
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
@@ -36,19 +36,19 @@ use crate::uploads::{UploadId, UploadRecords};
 /// record log per grain (sixty-four of each for a file at the per-file cap).
 pub const SYNC_GRAIN: u64 = 1024 * 1024;
 
-/// One upload open for one request — opened by [`open_at`] at the request's
-/// resume and dropped when that request ends: the partial's open file, the
-/// hasher over every byte written, the count of those bytes, and whether a
-/// write or sync has failed. The fields are this file's alone — only
-/// [`open_at`], [`Live::write`] and [`Live::sync`] move them — and the claim
-/// they keep holds across a failed call: the hasher is the hash of exactly
-/// the bytes written, so the hash a finish names the file by
-/// ([`Live::hash`]) is its bytes' hash. A write or sync that fails marks the
-/// upload TORN — the file may then hold bytes no hasher covers, or bytes
-/// whose durability nothing vouches for — and a torn upload takes no
+/// THE HANDLE: the partial opened for one request — by [`open_at`] at the
+/// request's resume, and dropped when that request ends: the partial's open
+/// file, the hasher over every byte written, the count of those bytes, and
+/// whether a write or sync has failed. The fields are this file's alone —
+/// only [`open_at`], [`Handle::write`] and [`Handle::sync`] move them — and
+/// the claim they keep holds across a failed call: the hasher is the hash
+/// of exactly the bytes written, so the hash a finish names the file by
+/// ([`Handle::hash`]) is its bytes' hash. A write or sync that fails marks
+/// the handle TORN — the file may then hold bytes no hasher covers, or
+/// bytes whose durability nothing vouches for — and a torn handle takes no
 /// further write or sync: the next resume opens the partial afresh at its
 /// record's offset.
-pub(crate) struct Live {
+pub(crate) struct Handle {
     file: File,
     hasher: blake3::Hasher,
     written: u64,
@@ -93,7 +93,7 @@ pub(crate) fn create(root: &Path, designation: &str, id: &UploadId) -> io::Resul
 /// first `offset` bytes. The record's offset never passes the file's length
 /// past open's reconciliation; a shorter file here is a defect, answered as
 /// I/O, and an absent one — a finish's rename took it — is I/O too.
-pub(crate) fn open_at(root: &Path, designation: &str, id: &UploadId, offset: u64) -> io::Result<Live> {
+pub(crate) fn open_at(root: &Path, designation: &str, id: &UploadId, offset: u64) -> io::Result<Handle> {
     let path = partial_path(root, designation, id);
     let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
     let len = file.metadata()?.len();
@@ -109,7 +109,7 @@ pub(crate) fn open_at(root: &Path, designation: &str, id: &UploadId, offset: u64
     }
     let hasher = hash_prefix(&mut file, offset)?;
     file.seek(SeekFrom::End(0))?;
-    Ok(Live { file, hasher, written: offset, torn: false })
+    Ok(Handle { file, hasher, written: offset, torn: false })
 }
 
 /// The hasher over the first `len` bytes of `file`, read from its start.
@@ -132,7 +132,7 @@ fn hash_prefix(file: &mut File, len: u64) -> io::Result<blake3::Hasher> {
     Ok(hasher)
 }
 
-impl Live {
+impl Handle {
     /// The bytes written so far, durable or not — counted by the writes
     /// that succeeded. Past a failed write the file may hold more, which
     /// the next resume cuts off.
@@ -140,14 +140,14 @@ impl Live {
         self.written
     }
 
-    /// The hash of every byte written so far — after [`Live::sync`], of
+    /// The hash of every byte written so far — after [`Handle::sync`], of
     /// every byte on disk.
     pub fn hash(&self) -> blake3::Hash {
         self.hasher.finalize()
     }
 
     /// Write `bytes` at the end and hash them; not yet durable. Refused on
-    /// a torn upload; a write that fails tears it, whatever part of `bytes`
+    /// a torn handle; a write that fails tears it, whatever part of `bytes`
     /// reached the file.
     pub fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
         self.refuse_torn()?;
@@ -161,7 +161,7 @@ impl Live {
     }
 
     /// Make every byte written durable — the one fsync a grain costs.
-    /// Refused on a torn upload; a sync that fails tears it, since a
+    /// Refused on a torn handle; a sync that fails tears it, since a
     /// retried fsync can answer success over pages the failed one dropped,
     /// and no later sync vouches for those bytes.
     pub fn sync(&mut self) -> io::Result<()> {
@@ -173,7 +173,7 @@ impl Live {
         Ok(())
     }
 
-    /// A torn upload's refusal of a write or a sync.
+    /// A torn handle's refusal of a write or a sync.
     fn refuse_torn(&self) -> io::Result<()> {
         if self.torn {
             return Err(io::Error::other(
@@ -218,7 +218,7 @@ pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -
         } else if len < r.offset {
             let mut set_back = r.clone();
             set_back.offset = len;
-            records.put(set_back)?;
+            records.write(set_back)?;
         }
         named.insert((r.designation.clone(), r.id));
     }
@@ -242,9 +242,9 @@ pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -
 mod tests {
     use super::*;
 
-    /// A fresh partial under `root`: its identifier, the upload opened at
+    /// A fresh partial under `root`: its identifier, the handle opened at
     /// offset 0, and its path.
-    fn opened(root: &Path) -> (UploadId, Live, PathBuf) {
+    fn opened(root: &Path) -> (UploadId, Handle, PathBuf) {
         let id = UploadId::parse("0123456789abcdef0123456789abcdef").unwrap();
         create(root, "blake3", &id).unwrap();
         (id, open_at(root, "blake3", &id, 0).unwrap(), partial_path(root, "blake3", &id))
@@ -258,47 +258,47 @@ mod tests {
     #[test]
     fn a_resume_below_what_the_file_holds_hashes_the_file_as_cut_back() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (id, mut live, path) = opened(dir.path());
-        live.write(b"A, synced").unwrap();
-        live.sync().unwrap();
-        live.write(b"B, never synced").unwrap();
-        drop(live);
-        let mut live = open_at(dir.path(), "blake3", &id, 0).unwrap();
-        live.write(b"C").unwrap();
-        live.sync().unwrap();
+        let (id, mut handle, path) = opened(dir.path());
+        handle.write(b"A, synced").unwrap();
+        handle.sync().unwrap();
+        handle.write(b"B, never synced").unwrap();
+        drop(handle);
+        let mut handle = open_at(dir.path(), "blake3", &id, 0).unwrap();
+        handle.write(b"C").unwrap();
+        handle.sync().unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"C");
-        assert_eq!(live.hash(), blake3::hash(b"C"), "the hash is the file's bytes'");
+        assert_eq!(handle.hash(), blake3::hash(b"C"), "the hash is the file's bytes'");
     }
 
-    /// A FAILED WRITE TEARS THE UPLOAD: bytes it left on disk are counted
+    /// A FAILED WRITE TEARS THE HANDLE: bytes it left on disk are counted
     /// by no hasher, so nothing is written or synced through that handle
     /// again; the next request, opened at the record's offset, has them cut
     /// off and continues there, its hash its file's.
     #[test]
-    fn a_failed_write_tears_the_upload_until_the_next_resume() {
+    fn a_failed_write_tears_the_handle_until_the_next_resume() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (id, mut live, path) = opened(dir.path());
-        live.write(b"A").unwrap();
-        live.sync().unwrap();
-        // A read-only handle: the next write fails at the OS, as a full or
+        let (id, mut handle, path) = opened(dir.path());
+        handle.write(b"A").unwrap();
+        handle.sync().unwrap();
+        // A read-only file: the next write fails at the OS, as a full or
         // failing disk's would. The bytes a write cut short leaves land
-        // through a second handle, and the upload's own handle comes back
+        // through a second open file, and the handle's own file comes back
         // past them, where the failed write left its position.
-        live.file = File::open(&path).unwrap();
-        assert!(live.write(b"B").is_err());
+        handle.file = File::open(&path).unwrap();
+        assert!(handle.write(b"B").is_err());
         OpenOptions::new().append(true).open(&path).unwrap().write_all(b"stray").unwrap();
-        live.file = OpenOptions::new().read(true).write(true).open(&path).unwrap();
-        live.file.seek(SeekFrom::End(0)).unwrap();
-        assert!(live.write(b"C").is_err(), "a torn upload takes no write");
-        assert!(live.sync().is_err(), "and no sync");
+        handle.file = OpenOptions::new().read(true).write(true).open(&path).unwrap();
+        handle.file.seek(SeekFrom::End(0)).unwrap();
+        assert!(handle.write(b"C").is_err(), "a torn handle takes no write");
+        assert!(handle.sync().is_err(), "and no sync");
         assert_eq!(fs::read(&path).unwrap(), b"Astray");
-        drop(live);
-        let mut live = open_at(dir.path(), "blake3", &id, 1).unwrap();
+        drop(handle);
+        let mut handle = open_at(dir.path(), "blake3", &id, 1).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"A", "the resume cuts off what no hasher covers");
-        live.write(b"C").unwrap();
-        live.sync().unwrap();
+        handle.write(b"C").unwrap();
+        handle.sync().unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"AC");
-        assert_eq!(live.hash(), blake3::hash(b"AC"));
-        assert_eq!(live.written(), 2);
+        assert_eq!(handle.hash(), blake3::hash(b"AC"));
+        assert_eq!(handle.written(), 2);
     }
 }

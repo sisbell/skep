@@ -261,14 +261,15 @@ fn the_pd0_rules_hold_over_a_generated_family() {
 }
 
 /// A `default`-view term charges the BH1 filter slices for exactly the reads
-/// the evaluator UV-rewrites, and for no others: `chain` and `succs` — the
-/// collections the rewrite post-filters — carry Retired's slice beside their
-/// own class, while `tip` and `is_in_chain`, the verdict/traversal atoms at
-/// the SAME class and the same view, carry only their own; the core
-/// `members`/`targets_of` and an `M_K` domain carry it, the two tuple slices
-/// do not. At `Active` no read carries it, the rewrite not running.
+/// whose denotation moves with the view, and for no others: the collections
+/// the UV rewrite post-filters (`chain`, `succs`) and the view-parameterized
+/// core (`is_K` — never rewritten, charged as a superset — `members`,
+/// `targets_of`, an `M_K` domain) carry Retired's slice beside their own
+/// class; `tip` and `is_in_chain`, the verdict/traversal atoms at the SAME
+/// class and the same view, carry only their own, and the two tuple slices
+/// none. At `Active` no read carries it.
 #[test]
-fn the_default_view_charges_bh1_slices_for_exactly_the_uv_rewritten_reads() {
+fn the_default_view_charges_bh1_slices_for_exactly_the_reads_that_move_with_the_view() {
     let k = kernel();
     let c = coord(&k);
     let sup = c.reserved_type(ShippedType::Supersedes).clone();
@@ -278,14 +279,15 @@ fn the_default_view_charges_bh1_slices_for_exactly_the_uv_rewritten_reads() {
         c.classify(&tt, view).footprint.active_classes().any(|x| *x == retired)
     };
     for t in [
+        is_k(&pred_def_ty(), lit_addr(&ca(1))),
         members(&pred_def_ty()),
         targets_of(&pred_def_ty(), lit_addr(&ca(1))),
         chain(&sup, lit_addr(&ca(1))),
         succs(&sup, lit_addr(&ca(1))),
         count(Dom::MembersDom(concrete(&pred_def_ty()))),
     ] {
-        assert!(charges(&t, View::Default), "UV-rewritten at Default: {t:?}");
-        assert!(!charges(&t, View::Active), "no rewrite at Active: {t:?}");
+        assert!(charges(&t, View::Default), "moves with the view, at Default: {t:?}");
+        assert!(!charges(&t, View::Active), "no BH1 charge at Active: {t:?}");
     }
     for t in [
         tip(&sup, lit_addr(&ca(1))),
@@ -293,7 +295,7 @@ fn the_default_view_charges_bh1_slices_for_exactly_the_uv_rewritten_reads() {
         count(Dom::ActiveSlice(concrete(&pred_def_ty()))),
         count(Dom::AuditSlice(concrete(&pred_def_ty()))),
     ] {
-        assert!(!charges(&t, View::Default), "never UV-rewritten: {t:?}");
+        assert!(!charges(&t, View::Default), "reads one slice at every view: {t:?}");
     }
 }
 

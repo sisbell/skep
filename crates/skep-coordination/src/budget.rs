@@ -17,8 +17,9 @@
 //! type position costs the decoder 37 units, and the decoder reads a
 //! `count(Reg)`'s domain a level below the node the checker folds to a
 //! literal. A checked term can therefore be one the def codec will not read
-//! back, which is why `define_predicate` asks the decoder of its own encoding
-//! before it stores anything (`DefineError::Unstorable`).
+//! back, which is why the codec's writer, `codec::stored_run`, hands back
+//! only a run its decoder reads, and `define_predicate` refuses any other
+//! term before anything is stored (`DefineError::Unstorable`).
 //!
 //! Every walk over a term recurses once per former on the caller's thread and
 //! none is bounded otherwise, so the caps are set against a MEASURED stack and

@@ -268,23 +268,25 @@ impl<W: CoordinationWorld> Coordinator<W> {
 
     // ─────────────────── B. predicate definitions as content ───────────────────
 
-    /// Encode `term`'s COMPACT pre-`Reg`-expansion body (with its Γ_D) to one
-    /// content `Val` (n = 1 — Conflicts §2), write it through M5's placement
-    /// composite (mint + write + place + R, atomically — J0/J1★), then
-    /// validate + register the `pdef`. Returns the def IDENTITY (content
-    /// start address) and the `pdef` EMIT's commit `Seq` — NOT the insert's.
+    /// Store `term`'s COMPACT pre-`Reg`-expansion body (with its Γ_D) as one
+    /// content `Val` — the codec's stored run of it (`codec::stored_run`;
+    /// n = 1 — Conflicts §2) — written through M5's placement composite
+    /// (mint + write + place + R, atomically — J0/J1★), then validate +
+    /// register the `pdef`. Returns the def IDENTITY (content start address)
+    /// and the `pdef` EMIT's commit `Seq` — NOT the insert's.
     ///
     /// The stored-def parameters are Codom-only (ASN-0130 SignedTerm), and no
     /// check is made here: a caller's only route to a `TypedTerm` is
     /// `type_check`, which refuses a `Tup` in Γ_D, and the one checked term
     /// whose parameter may be a tuple is a `TriggerTerm`, no accessor of which
     /// returns its `TypedTerm`. The codec's own `Tup` refusal (it has no tag
-    /// for the sort) is therefore unreachable, in this crate or out of it.
+    /// for the sort) is therefore unreachable, in this crate or out of it —
+    /// `codec::stored_run` states it at its `expect`.
     ///
     /// A CHECKED term is not thereby storable, and that is the one refusal
-    /// made BEFORE any transaction: `Unstorable`, when the def codec would
-    /// not read the encoding back ([`DefineError::Unstorable`] says how a
-    /// checked term gets there). The refusals speak in this order:
+    /// made BEFORE any transaction: `Unstorable`, when the codec has no stored
+    /// run for the term ([`DefineError::Unstorable`] says how a checked term
+    /// gets there). The refusals speak in this order:
     /// `Unstorable`; then the content insert's (`Insert(..)` — M5's door on
     /// `home`, below, among them — nothing committed); then `register_pred`'s
     /// gates over the run just committed (`Register(..)`), the content
@@ -324,19 +326,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
         home: &Address,
         term: &TypedTerm,
     ) -> Result<(Address, Seq), DefineError> {
-        let bytes = codec::encode(term.signed()).expect(
-            "a Codom-only Γ_D: type_check admits no Tup parameter, TypedTerm is built only in \
-             check.rs, and a TriggerTerm yields none",
-        );
-        // The one refusal decided before any transaction (§Internal 4): a run
-        // the def codec would not read back is one `register_pred` refuses
-        // `ParseFailed` whatever the store holds, so storing it would commit
-        // an orphan no registration adopts. The checker's admission does not
-        // settle it — the decoder meters a stored body by its own charges
-        // (`budget.rs`) — so the decoder is asked, of these bytes.
-        if codec::decode(&bytes).is_err() {
-            return Err(DefineError::Unstorable);
-        }
+        // The one refusal decided before any transaction (§Internal 4): a term
+        // the codec has no stored run for is one `register_pred` would refuse
+        // `ParseFailed` whatever the store holds, so storing it would commit an
+        // orphan no registration adopts.
+        let bytes = codec::stored_run(term).map_err(|codec::Unstorable| DefineError::Unstorable)?;
         // Insert position off a snapshot read; M5's insert re-validates
         // against committed state (benign TOCTOU — item 6).
         let content_count = self.kernel.snapshot().world().m5().content_count(home);

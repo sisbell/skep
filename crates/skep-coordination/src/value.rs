@@ -150,12 +150,12 @@ impl From<Arg> for Value {
 }
 
 /// The signed term `(Γ_D, body)` (ASN-0130 SignedTerm): a PL body with its
-/// recorded parameter context — what `define_predicate` encodes, the def
-/// codec parses, and `parse_def` recovers from a run. Unchecked: WT over it
-/// is `Checker::check_signed`'s, whose result carries it as
-/// `TypedTerm::signed`; that check is where Γ_D's names are required
-/// distinct (`DuplicateParameter`), so a checked term's context binds each
-/// name once.
+/// recorded parameter context — what the def codec stores a def as
+/// (`codec::stored_run`) and parses back, and `parse_def` recovers from a
+/// run. Unchecked: WT over it is `Checker::check_signed`'s, whose result
+/// carries it as `TypedTerm::signed`; that check is where Γ_D's names are
+/// required distinct (`DuplicateParameter`), so a checked term's context
+/// binds each name once.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct SignedTerm {
     pub(crate) params: Vec<(VarId, Sort)>,

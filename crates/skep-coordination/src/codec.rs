@@ -23,6 +23,13 @@
 //! arguments — is charged against it BEFORE it is used to size an
 //! allocation, so an untrusted count can size nothing past the budget's
 //! remainder, and a decoded tree's payload is bounded like its node count.
+//!
+//! The crate writes a def through one entry, [`stored_run`], which hands back
+//! a checked term's encoding only if the decoder reads it back. The decoder's
+//! doors meter a stored body by their own charges (`budget.rs`), so a checked
+//! term can be past them, and only the codec knows both halves of the format:
+//! the round trip is kept here, once for every writer, rather than by each
+//! caller that stores a def.
 
 use std::sync::Arc;
 
@@ -31,23 +38,33 @@ use skep_links::Endset;
 
 use crate::ast::{Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId};
 use crate::budget::{Budget, MAX_DEPTH};
+use crate::check::TypedTerm;
 use crate::value::{SignedTerm, Sort};
 
 /// Decode failure — surfaced as `RegisterError::ParseFailed` (and, for an
-/// ever-registered start, the permanent poisoned memo entry), and, asked of
-/// `define_predicate`'s own encoding before anything is stored, as
-/// `DefineError::Unstorable`.
+/// ever-registered start, the permanent poisoned memo entry), and asked by
+/// [`stored_run`] of its own encoding, which it then refuses as
+/// [`Unstorable`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Malformed;
 
+/// Store failure: the checked term has no stored run — its encoding is past
+/// what [`decode`] reads back (`MAX_DEPTH`, or the node budget as the decoder
+/// meters it, which is not how the checker meters — `budget.rs`), so a run of
+/// it is one `register_pred` would refuse `ParseFailed` whatever the store
+/// holds. Surfaced as `DefineError::Unstorable`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Unstorable;
+
 /// Encode failure: the named parameter is `Tup`-sorted, and Γ_D is Codom-only
 /// at encode time as at registration — the sort has no tag in this format at
-/// all. Unreachable from `define_predicate`, whose `TypedTerm` is Codom-only
-/// by type; the codec keeps its own invariant regardless. Named for the
-/// refusal rather than for `TypeError::TupParameter`, the checker's rejection
-/// of the same shape at a different door.
+/// all. Unreachable through [`stored_run`], whose `TypedTerm` is Codom-only by
+/// type; the raw writer keeps its own invariant regardless, and the codec's
+/// tests spell a `Tup` context to see it refused. Named for the refusal rather
+/// than for `TypeError::TupParameter`, the checker's rejection of the same
+/// shape at a different door.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct UnencodableTup(VarId);
+struct UnencodableTup(VarId);
 
 /// The tag table — the ONE statement of the format's discriminants, read by
 /// the encoder and the decoder alike. Each family numbers its own
@@ -152,8 +169,31 @@ mod tag {
 
 // ─────────────────────────────── encoding ───────────────────────────────
 
-/// Encode the signed term, or refuse its Γ_D as [`UnencodableTup`].
-pub(crate) fn encode(signed: &SignedTerm) -> Result<Vec<u8>, UnencodableTup> {
+/// The run a checked def is stored as — its PR-ENC encoding — handed back
+/// only if [`decode`] reads it back. Every run this returns is therefore one
+/// `register_pred` parses, and parses to `term`'s own signed term: decode ∘
+/// encode is the identity on what the decoder accepts, which the round-trip
+/// tests pin over every former. The round trip is the codec's promise to its
+/// writer, kept here because the decoder's doors are the codec's own
+/// knowledge. A checked term is not thereby storable — the checker and the
+/// decoder meter different trees (`budget.rs`) — and one past the doors is
+/// [`Unstorable`].
+pub(crate) fn stored_run(term: &TypedTerm) -> Result<Vec<u8>, Unstorable> {
+    let bytes = encode(term.signed()).expect(
+        "a Codom-only Γ_D: type_check admits no Tup parameter, TypedTerm is built only in \
+         check.rs, and a TriggerTerm yields none",
+    );
+    match decode(&bytes) {
+        Ok(_) => Ok(bytes),
+        Err(Malformed) => Err(Unstorable),
+    }
+}
+
+/// The raw PR-ENC writer beneath [`stored_run`]: encode the signed term, or
+/// refuse its Γ_D as [`UnencodableTup`], with no read-back check — so the
+/// codec's own tests can spell encodings past the decoder's doors. The crate
+/// writes a def through [`stored_run`].
+fn encode(signed: &SignedTerm) -> Result<Vec<u8>, UnencodableTup> {
     let mut payload = Vec::new();
     w_varint(&mut payload, signed.params.len() as u64);
     for (v, s) in &signed.params {

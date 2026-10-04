@@ -131,7 +131,8 @@ mod guest;
 // WT: the type checker, the checked terms only it builds, and the two seams a
 // referent is resolved through (`Resolver`, `DefSource`).
 mod check;
-// PR-ENC: a stored def's byte format, the door for untrusted bytes.
+// PR-ENC: a stored def's byte format — the run a checked def is stored as,
+// and the door for untrusted bytes.
 mod codec;
 // The pure evaluator: one verdict's context and the denotation.
 mod eval;

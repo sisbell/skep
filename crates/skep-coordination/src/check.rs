@@ -36,8 +36,8 @@ use crate::walk::{rewrite_term, Rewrite};
 /// `type_check` hands back, what a stored def's memo entry holds, what a
 /// rule's trigger wraps ([`TriggerTerm`]). Carries the signed term — Γ_D and
 /// the compact pre-`Reg`-expansion body, read back via
-/// [`TypedTerm::params`] / [`TypedTerm::source_body`], the form
-/// `define_predicate` encodes (§Internal 4) — the synthesized codomain
+/// [`TypedTerm::params`] / [`TypedTerm::source_body`], the form the codec
+/// stores (`codec::stored_run`, §Internal 4) — the synthesized codomain
 /// ([`TypedTerm::result_sort`]), the ref-free flag, the Reg-expanded
 /// evaluable projection (every `TypeRef` `Concrete`, no surviving `Reg`
 /// quantifier — `Ref` nodes may remain: see [`TypedTerm::is_ref_free`]), and
@@ -54,9 +54,9 @@ use crate::walk::{rewrite_term, Rewrite};
 /// came through `type_check`, whose Γ_D is Codom-only (ASN-0130
 /// SignedTerm), and a [`TriggerTerm`] — the one checked term whose parameter
 /// may be a tuple — does not yield one, in this crate or out of it. That is
-/// what lets `define_predicate` take a `TypedTerm` and store it without a
-/// tuple check of its own — though not without asking the def codec whether
-/// the encoding reads back (`DefineError::Unstorable`).
+/// what lets the codec's writer, `codec::stored_run`, encode a `TypedTerm`
+/// with no tuple refusal to answer — though a checked term can still be past
+/// the decoder's doors (`DefineError::Unstorable`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypedTerm {
     signed: SignedTerm,
@@ -132,7 +132,8 @@ impl TypedTerm {
     }
 
     /// The signed term `(Γ_D, body)` this term was checked from — the
-    /// compact pre-`Reg`-expansion form `define_predicate` encodes.
+    /// compact pre-`Reg`-expansion form the codec stores
+    /// (`codec::stored_run`).
     pub(crate) fn signed(&self) -> &SignedTerm {
         &self.signed
     }

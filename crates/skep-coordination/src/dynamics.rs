@@ -280,15 +280,16 @@ impl<'a> Analyzer<'a> {
 
     /// The BH1 filter slices a `default`-view term's UV rewrite consults per
     /// element (`EvalCtx::filtered_other`, fixed active); empty at `active`
-    /// and `audit`, where no rewrite runs. Unioned into exactly the reads the
-    /// evaluator UV-rewrites, so which those are is one token per arm.
-    ///
-    /// The atom arms that union it are exactly [`moves_with_view`]'s list,
-    /// which PR-VIEW's scan refuses — for a union of two reasons: the first
-    /// three take `Slice::of(view)`, the rest are UV-rewritten collections,
-    /// and `is_K` is both view-parameterized and charged here deliberately
-    /// though UV never rewrites it. So a change to either list belongs in
-    /// both.
+    /// and `audit`, where no rewrite runs. Charged in one place per family —
+    /// after the arm, in [`Analyzer::atom`] and [`Analyzer::dom`] — to every
+    /// read whose denotation moves with the view ([`moves_with_view`],
+    /// [`dom_moves_with_view`]). That covers every read the evaluator
+    /// UV-rewrites: UV runs only at `default`, so every read it rewrites moves
+    /// with the view. The one read charged beyond them is `is_K`, which moves
+    /// with the view and which UV never rewrites (`EvalCtx::is_k_at` reads the
+    /// active slice at `default`) — deliberately CONSERVATIVE: the footprint
+    /// is read only as a superset (`armed_by`, step-constancy), and the armer
+    /// graph's Default self-loop case is pinned on it.
     fn read_filter_fp(&self) -> Footprint {
         let mut fp = Footprint::default();
         if self.view == View::Default {
@@ -407,44 +408,45 @@ impl<'a> Analyzer<'a> {
         }
     }
 
+    /// The fused FP + PD0 pass over an atom: what its own arm reads, then —
+    /// for an atom whose denotation [`moves_with_view`] — the BH1 filter
+    /// slices ([`Analyzer::read_filter_fp`]), charged once after the match
+    /// rather than in each arm, so the exhaustive classification decides the
+    /// footprint as well as the scan. No arm's `st`/`sf`/`grow_only` reads that
+    /// charge: each turns on the argument's footprint or on the view, so the
+    /// charge moves no stability.
     fn atom(&self, a: &Atom) -> Analysis {
         let view = self.view;
-        match a {
+        let mut analysis = match a {
             // Audit is_K at a step-constant argument is ST (audit membership is
             // monotone); a state-reading argument lands in Neither.
-            //
-            // `is_K` is a verdict atom: UV never rewrites it (`EvalCtx::is_k_at`
-            // reads the active slice at `default`), so the BH1 charge here is
-            // deliberately CONSERVATIVE — the footprint is read only as a
-            // superset (`armed_by`, step-constancy), and the armer graph's
-            // Default self-loop case is pinned on it.
             Atom::IsK(tr, e) => {
                 let ae = self.term(e);
                 let st = view == View::Audit && ae.fp.is_step_constant();
-                let fp = ae.fp.union(self.slice_fp(tr.key(), Slice::of(view))).union(self.read_filter_fp());
+                let fp = ae.fp.union(self.slice_fp(tr.key(), Slice::of(view)));
                 Analysis { st, sf: false, grow_only: false, fp }
             }
             // M_K in an audit-view term is a grow-only set value (V-AUD).
             Atom::Members(tr) => {
-                let fp = self.slice_fp(tr.key(), Slice::of(view)).union(self.read_filter_fp());
+                let fp = self.slice_fp(tr.key(), Slice::of(view));
                 Analysis { grow_only: view == View::Audit, st: false, sf: false, fp }
             }
             Atom::TargetsOf(tr, e) => {
                 let ae = self.term(e);
                 let grow_only = view == View::Audit && ae.fp.is_step_constant();
-                let fp = ae.fp.union(self.slice_fp(tr.key(), Slice::of(view))).union(self.read_filter_fp());
+                let fp = ae.fp.union(self.slice_fp(tr.key(), Slice::of(view)));
                 Analysis { grow_only, st: false, sf: false, fp }
             }
             Atom::IsFiltered(tr, e) => {
                 let ae = self.term(e);
                 state_read(ae.fp.union(self.slice_fp(tr.key(), Slice::Active)))
             }
-            // BH2/BH3 collections: fixed-active reads — Neither — and the
-            // evaluator UV-rewrites them, so a default term's footprint carries
-            // the BH1 slices too.
+            // BH2/BH3 collections: fixed-active reads — Neither — which the
+            // evaluator UV-rewrites at `default`, the BH1 charge following the
+            // match.
             Atom::Succs(tr, e) | Atom::Chain(tr, e) | Atom::SourcesTo(tr, e) => {
                 let ae = self.term(e);
-                state_read(ae.fp.union(self.slice_fp(tr.key(), Slice::Active)).union(self.read_filter_fp()))
+                state_read(ae.fp.union(self.slice_fp(tr.key(), Slice::Active)))
             }
             // Verdict/traversal atoms (tip/is_in_chain) and the single-target
             // projection are never UV-rewritten: fixed active.
@@ -477,8 +479,7 @@ impl<'a> Analyzer<'a> {
             }
             Atom::Stale(tr, e) => {
                 let ae = self.term(e);
-                let mut fp =
-                    ae.fp.union(self.slice_fp(tr.key(), Slice::Active)).union(self.read_filter_fp());
+                let mut fp = ae.fp.union(self.slice_fp(tr.key(), Slice::Active));
                 fp.home_frontier = true;
                 state_read(fp)
             }
@@ -497,7 +498,11 @@ impl<'a> Analyzer<'a> {
                 let ae = self.term(e);
                 step_constant(ae.fp)
             }
+        };
+        if moves_with_view(a) {
+            analysis.fp = analysis.fp.union(self.read_filter_fp());
         }
+        analysis
     }
 
     fn prim(&self, p: &Prim) -> Analysis {
@@ -565,11 +570,14 @@ impl<'a> Analyzer<'a> {
     /// Domain analysis: the footprint and grow-only membership. The grow-only
     /// closure (PD0): `L_K`; `L_dom`; `M_K` in an audit-view term;
     /// `Filter{D, P}` with D grow-only and P ∈ ST per binding; a
-    /// step-constant domain; `SetTerm` of a grow-only set-valued term.
+    /// step-constant domain; `SetTerm` of a grow-only set-valued term. And,
+    /// for a domain whose enumeration moves with the view
+    /// ([`dom_moves_with_view`]), the BH1 filter slices, charged after the arm
+    /// as [`Analyzer::atom`] charges an atom's.
     pub(crate) fn dom(&self, d: &Dom) -> DomAnalysis {
-        match d {
+        let mut analysis = match d {
             Dom::MembersDom(tr) => DomAnalysis {
-                fp: self.slice_fp(tr.key(), Slice::of(self.view)).union(self.read_filter_fp()),
+                fp: self.slice_fp(tr.key(), Slice::of(self.view)),
                 grow_only: self.view == View::Audit,
             },
             Dom::ActiveSlice(tr) => {
@@ -591,7 +599,11 @@ impl<'a> Analyzer<'a> {
                 let grow_only = aset.grow_only || aset.fp.is_step_constant();
                 DomAnalysis { fp: aset.fp, grow_only }
             }
+        };
+        if dom_moves_with_view(d) {
+            analysis.fp = analysis.fp.union(self.read_filter_fp());
         }
+        analysis
     }
 }
 
@@ -609,9 +621,10 @@ impl<'a> Analyzer<'a> {
 /// `pd_stable` tuple is a permanent content-addressed claim, so an atom added
 /// to `ast.rs` must be CLASSIFIED here rather than inherit the certifying
 /// answer by default — and a conservative default would be no better, since it
-/// would silently refuse a legitimate view-independent atom. These are also
-/// exactly the arms [`Analyzer::read_filter_fp`] is unioned into, so a change
-/// here belongs in both.
+/// would silently refuse a legitimate view-independent atom. The same list is
+/// the analyzer's BH1 charge at `default` ([`Analyzer::read_filter_fp`]),
+/// asked of this function rather than restated per arm, so classifying an
+/// atom here classifies its footprint too.
 fn moves_with_view(a: &Atom) -> bool {
     match a {
         Atom::IsK(..)
@@ -636,13 +649,31 @@ fn moves_with_view(a: &Atom) -> bool {
     }
 }
 
-/// The syntactic scan: no atom whose denotation [`moves_with_view`] and no
-/// `M_K` domain (view-parameterized like the core atoms it reflects). The same
-/// answer at every view. Preconditions as the [`Analyzer`]'s — the depth
-/// bound included: this walk has none of its own. Ref-free, in particular,
-/// because a referent's body is the one part a `Ref` node's own spelling
-/// cannot vouch for, so the scan runs over the flat expansion, never around a
-/// `Ref`.
+/// The domains whose enumeration moves with the TERM VIEW, classified
+/// EXHAUSTIVELY for [`moves_with_view`]'s reason: `M_K` alone — D1/V-AUD's
+/// view-selected slice, UV-rewritten at `default`. The rest name a fixed
+/// slice (`A_K`/`L_K`/`L_dom`), carry no state (`Reg`, folded away at
+/// type-check), or are closures whose children a walker reaches on its own.
+/// PR-VIEW's scan refuses these domains, and the analyzer charges them the
+/// BH1 filter slices at `default` ([`Analyzer::dom`]).
+fn dom_moves_with_view(d: &Dom) -> bool {
+    match d {
+        Dom::MembersDom(_) => true,
+        Dom::ActiveSlice(_)
+        | Dom::AuditSlice(_)
+        | Dom::LinkDom
+        | Dom::Reg
+        | Dom::Filter { .. }
+        | Dom::SetTerm(_) => false,
+    }
+}
+
+/// The syntactic scan: no atom and no domain whose denotation moves with the
+/// view ([`moves_with_view`], [`dom_moves_with_view`]). The same answer at
+/// every view. Preconditions as the [`Analyzer`]'s — the depth bound
+/// included: this walk has none of its own. Ref-free, in particular, because
+/// a referent's body is the one part a `Ref` node's own spelling cannot vouch
+/// for, so the scan runs over the flat expansion, never around a `Ref`.
 pub(crate) fn view_independent(t: &Term) -> bool {
     struct ViewScan {
         independent: bool,
@@ -661,22 +692,17 @@ pub(crate) fn view_independent(t: &Term) -> bool {
             }
         }
 
-        /// `M_K` is the one view-parameterized domain; the rest name a fixed
-        /// slice (`A_K`/`L_K`/`L_dom`), carry no state (`Reg`, folded away at
-        /// type-check), or are closures whose children the walk reaches —
-        /// enumerated rather than caught, for [`moves_with_view`]'s reason.
+        /// A domain that moves with the view refuses
+        /// ([`dom_moves_with_view`]); any other is walked into, its children
+        /// being where a moving read can still sit.
         fn dom(&mut self, d: &Dom) {
             if !self.independent {
                 return;
             }
-            match d {
-                Dom::MembersDom(_) => self.independent = false,
-                Dom::ActiveSlice(_)
-                | Dom::AuditSlice(_)
-                | Dom::LinkDom
-                | Dom::Reg
-                | Dom::Filter { .. }
-                | Dom::SetTerm(_) => visit_dom(self, d),
+            if dom_moves_with_view(d) {
+                self.independent = false;
+            } else {
+                visit_dom(self, d);
             }
         }
     }

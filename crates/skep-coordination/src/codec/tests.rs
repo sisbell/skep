@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use super::*;
 use crate::budget::weight;
+use crate::catalog::TypeCatalog;
+use crate::check::{Checker, Unresolved};
 use crate::fixture::{a, every_former, v};
 use crate::walk::{visit_dom, visit_term, Visit};
 
@@ -48,6 +50,38 @@ fn round_trip_is_identity_on_every_former() {
     let signed = every_former();
     let bytes = encode(&signed).expect("Codom-only params encode");
     assert_eq!(decode(&bytes), Ok(signed));
+}
+
+/// The codec's writer keeps the round trip: `stored_run` hands back a CHECKED
+/// term's encoding only where `decode` reads it back. `¬ⁿ(count(Reg) = 5)`
+/// checks for n up to `MAX_DEPTH` − 1 — the checker folds `count(Reg)` to a
+/// literal at the `count`'s own level — but the decoder reads the `Reg`
+/// domain a level below it: at n = `MAX_DEPTH` − 2 there is a run, and it
+/// reads back to the checked term's own signed term; at `MAX_DEPTH` − 1
+/// there is none, where the raw writer hands back bytes the decoder then
+/// refuses.
+#[test]
+fn stored_run_hands_back_only_a_run_the_decoder_reads_back() {
+    let catalog = TypeCatalog::project(skep_links::registry());
+    let resolve =
+        |_: &Address, _: u32| -> Result<Arc<TypedTerm>, Unresolved> { Err(Unresolved::Undefined) };
+    let checked = |negations: u32| {
+        let leaf = Term::Prim(Prim::NatEq(
+            Arc::new(Term::Count(Arc::new(Dom::Reg))),
+            Arc::new(Term::Lit(Lit::Nat(Nat::from(5u32)))),
+        ));
+        let body = (0..negations).fold(leaf, |t, _| Term::Not(Arc::new(t)));
+        Checker::new(&catalog, &resolve)
+            .check_signed(SignedTerm { params: vec![], body }, 0)
+            .expect("the checker folds count(Reg) to a literal at the count's own level")
+    };
+    let within = checked(MAX_DEPTH - 2);
+    let run = stored_run(&within).expect("a run the decoder reads back");
+    assert_eq!(decode(&run), Ok(within.signed().clone()));
+    let past = checked(MAX_DEPTH - 1);
+    assert_eq!(stored_run(&past), Err(Unstorable));
+    let raw = encode(past.signed()).expect("a Codom-only Γ_D");
+    assert_eq!(decode(&raw), Err(Malformed), "the raw writer hands back what the decoder refuses");
 }
 
 /// The decoder never charges less than `weight` prices what it builds: over

@@ -5,7 +5,8 @@
 //! the defaults for the rest. Adding a former to `ast.rs` is one arm in each
 //! of [`rewrite_term`]/[`visit_term`] (or their `Dom` twins) and one in each
 //! match that classifies formers — the SEMANTIC passes (`check`, the codec,
-//! `eval`, the `Analyzer` and, for an atom, `moves_with_view`), the budget's
+//! `eval`, the `Analyzer` and its two view classifications, `moves_with_view`
+//! for an atom and `dom_moves_with_view` for a domain), the budget's
 //! `weight` for a term former or literal, and the flat expansion's
 //! α-renaming, which must know a binder — never a further hand-written
 //! recursion. Each of those matches is exhaustive, so the crate does not

@@ -158,18 +158,19 @@ impl Error for TypeError {
 /// tuple is held in a `TriggerTerm`, which yields none.
 #[derive(Debug)]
 pub enum DefineError {
-    /// The term checked, but the def codec would not read its encoding back,
-    /// so it is refused BEFORE any transaction and nothing is committed —
-    /// `register_pred` would refuse the stored run `ParseFailed` and leave an
-    /// orphan no registration adopts. The checker and the decoder meter
-    /// different trees (`budget.rs`): the decoder charges every count an
-    /// encoding spells — a shipped type key's span and its two nine-component
-    /// tumblers, 37 units, where the checker charges a type position nothing;
-    /// an address literal's components and their limbs, where the checker
-    /// charges the components — so a body of some 1 600 concrete type
-    /// positions outgrows it; and it reads a `count(Reg)`'s domain a level
-    /// below the node the checker folds to a literal, past `MAX_DEPTH` at the
-    /// cap.
+    /// The term checked, but the def codec has no stored run for it
+    /// (`codec::stored_run`) — its encoding is one the decoder would not read
+    /// back — so it is refused BEFORE any transaction and nothing is
+    /// committed: `register_pred` would refuse the stored run `ParseFailed`
+    /// and leave an orphan no registration adopts. The checker and the
+    /// decoder meter different trees (`budget.rs`): the decoder charges every
+    /// count an encoding spells — a shipped type key's span and its two
+    /// nine-component tumblers, 37 units, where the checker charges a type
+    /// position nothing; an address literal's components and their limbs,
+    /// where the checker charges the components — so a body of some 1 600
+    /// concrete type positions outgrows it; and it reads a `count(Reg)`'s
+    /// domain a level below the node the checker folds to a literal, past
+    /// `MAX_DEPTH` at the cap.
     Unstorable,
     Insert(TxnError<InsertError>),
     Register(RegisterError),

@@ -37,7 +37,9 @@ use crate::state::{EndpointRecord, Judged, Resolution, Unreachable};
 /// RESOLVE `prefix` off `mirror` (REG-3.7 to REG-3.9): the walk's answer as
 /// a named state. `names` is this resolver's own resolution of a host name
 /// (REG-3.35) and `transports` what it can dial (REG-3.34 as RES-28 amends
-/// it).
+/// it). It reads the index, and the board only through
+/// [`Mirror::current_keys`] — the one reason it takes `&mut Mirror` — so its
+/// refusals are that read's.
 pub fn resolve(
     mirror: &mut Mirror,
     prefix: &Address,
@@ -64,7 +66,10 @@ pub fn resolve(
 
 /// The face a standing, its keys — `None` where the reader could not read
 /// them — and its current endpoint render (REG-3.80; REG-3.34's one
-/// precedence over the members).
+/// precedence over the members). The caller owes that the endpoint, where
+/// one stands, is a record the canonical rule answered, and so of one member
+/// or more — as every endpoint the mirror's gate and the guest-reading
+/// resolve fold is.
 fn face_of(
     standing: crate::state::Standing,
     keys: Option<Vec<Enrolled>>,
@@ -101,15 +106,10 @@ fn face_of(
             cause: Unreachable::DeadOrigin { member: origin.as_str().to_string() },
             members: walk.outcomes,
         },
-        // A dial would have been taken above; an endpoint body carries at
-        // least one member, so this arm has no population.
-        Some(MemberOutcome::WouldDial { .. }) | None => Resolution::BoundButUnreachable {
-            standing,
-            keys,
-            endpoint: Some(endpoint),
-            cause: Unreachable::NoEndpointYet,
-            members: walk.outcomes,
-        },
+        Some(MemberOutcome::WouldDial { .. }) | None => unreachable!(
+            "walk_members dials the first member that would dial, and every endpoint the index or the guest's \
+             ledger holds is one skep_registry::parse answered, which refuses an endpoint of no origin (EmptyOrigins)"
+        ),
     }
 }
 

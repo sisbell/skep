@@ -150,7 +150,10 @@ impl std::error::Error for HintError {}
 impl RootHint {
     /// A hint from its parts: at least one origin, and the realm id's two
     /// halves — the genesis fingerprint, and the fork point where the lineage
-    /// forked.
+    /// forked. Refused [`HintError::NoOrigin`] with no origin, and then
+    /// [`HintError::BadFork`] where the fork point is one [`parse_address`]
+    /// does not read back as itself — an address past the board's own wire
+    /// caps — so every hint renders a line [`RootHint::parse`] reads back.
     pub fn new(
         origins: Vec<Origin>,
         genesis: Fingerprint,
@@ -158,6 +161,11 @@ impl RootHint {
     ) -> Result<RootHint, HintError> {
         if origins.is_empty() {
             return Err(HintError::NoOrigin);
+        }
+        if let Some(fork) = &fork_point {
+            if parse_address(&fork.to_string()).as_ref() != Some(fork) {
+                return Err(HintError::BadFork(format!("fork:{fork}")));
+            }
         }
         Ok(RootHint { origins, realm: RealmId { genesis, fork_point } })
     }
@@ -175,7 +183,13 @@ impl RootHint {
     }
 
     /// THE ONE LINE, parsed: origins, `realm:<hex>`, and `fork:<address>`
-    /// where the lineage forked, in any order, whitespace-separated.
+    /// where the lineage forked, in any order, whitespace-separated. Where
+    /// several refusals hold, the first term in the line's order that is
+    /// malformed or repeated speaks — [`HintError::BadOrigin`],
+    /// [`HintError::BadRealm`], [`HintError::BadFork`],
+    /// [`HintError::DuplicateRealm`], [`HintError::DuplicateFork`] — and a
+    /// line whose every term reads answers [`HintError::NoRealm`] before
+    /// [`HintError::NoOrigin`].
     pub fn parse(line: &str) -> Result<RootHint, HintError> {
         let mut origins = Vec::new();
         let mut genesis = None;
@@ -276,6 +290,28 @@ mod tests {
             format!("https://r.example realm:{} fork:1.0.1.0.1.0.2.9 fork:1.0.1.0.1.0.2.9", fp(1).to_hex()).parse::<RootHint>(),
             Err(HintError::DuplicateFork)
         );
+    }
+
+    /// WHERE SEVERAL REFUSALS HOLD, ONE SPEAKS: the first term in the line's
+    /// order that is malformed or repeated, and past every term the realm's
+    /// absence before the origins'. From its parts, a hint with no origin is
+    /// refused for that, and one whose fork point the one line cannot carry —
+    /// a component past the board's own wire cap — is refused naming the term
+    /// it would render.
+    #[test]
+    fn where_several_refusals_hold_one_speaks() {
+        assert_eq!(RootHint::parse(""), Err(HintError::NoRealm), "neither a realm nor an origin: the realm speaks");
+        assert_eq!(
+            RootHint::parse("registry.example realm:zz"),
+            Err(HintError::BadOrigin("registry.example".into())),
+            "the first malformed term"
+        );
+        assert_eq!(RootHint::parse("realm:zz registry.example"), Err(HintError::BadRealm("realm:zz".into())), "in the line's order");
+        let deep = format!("1.{}", "9".repeat(4097));
+        let fork = skep_address::validate(skep_address::Tumbler::new(deep.split('.').map(|c| c.parse().unwrap())).unwrap()).unwrap();
+        let origins = vec![Origin::parse("https://r.example").unwrap()];
+        assert_eq!(RootHint::new(origins, fp(1), Some(fork.clone())), Err(HintError::BadFork(format!("fork:{deep}"))));
+        assert_eq!(RootHint::new(Vec::new(), fp(1), Some(fork)), Err(HintError::NoOrigin), "no origin speaks first");
     }
 
     /// THE ONE LINE in any order and any whitespace, as a file or an

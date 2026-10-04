@@ -33,18 +33,22 @@ parts, each under the design rule it realizes:
   genesis under a caller-given directory: `feed.jsonl`, the copy of the
   feed the check covers, and `fetched.jsonl`, the mirror's own fetch cache
   the rebuild reads, both begun afresh by a new base, so a cache that
-  outlived its feed copy is never read as this mirror's own. A sync that
-  fails leaves its rows held, and the next takes them up where it stopped.
-  A key table holding a key this build cannot read is no table, never a
-  smaller one.
+  outlived its feed copy is never read as this mirror's own; a cache line
+  that does not read — a write a crash cut short — is absent, never a
+  refusal. A sync that fails leaves its rows held, and the next takes them
+  up where it stopped. A key table holding a key this build cannot read is
+  no table, never a smaller one.
   The base is from genesis at the root the hint names (REG-3.12); a
   held copy is CHECKED against the source read from genesis and resumed
   only where every held position comes back identical and every held head
   pair answers the same (REG-3.18); on either, the realm id's genesis
-  fingerprint is compared at the claim's row against the genesis set the
-  source answers (REG-3.42), and no line reaches the copy before it is; a
-  hint re-pointed to another genesis re-bootstraps afresh (REG-3.17); the
-  refusals are named (`Refusal`: a diverged frontier, a source behind the
+  fingerprint is compared at the claim's row — for the board's own
+  claimant at the board's own genesis act, never the fetch cache's —
+  against the genesis set the source answers (REG-3.42), the mirror
+  honoring one claim, and no line reaches the copy before it is; a copy
+  rebuilt offline is held to the feed's own order; a hint re-pointed to
+  another genesis re-bootstraps afresh (REG-3.17); the refusals are named
+  (`Refusal`: a diverged frontier, a source behind the
   mirror, a contradicted head pair, a realm mismatch — REG-3.19). An image
   that omits, re-orders or replays genuinely signed rows fails the check at
   the first position that differs (REG-3.13). An atom un-arranged at the
@@ -59,12 +63,14 @@ parts, each under the design rule it realizes:
   refused, as is a limit the feed names and refuses again.
 - **The verify** (`judge`, `Trial`) — the record grade for registry
   records, client-side (rm-2; REG-1.86 (e)): the body parsed under the
-  canonical rule by `skep_registry::parse`, the record frame rebuilt from
-  the row's own members, the signer found in the set that opens the home's
-  account as of the position, both halves verified. The verdict is one of
-  the signed-ops record §3.5's five values (`Verdict`) and stands beside
-  every record the index holds; a record not SIGNED is suppressed and
-  counted (`Index::suppressed`), never consulted at a resolve.
+  canonical rule by `skep_registry::parse` — its address members, of any
+  size, the addresses they name, never judged again — the record frame
+  rebuilt from the row's own members, the signer found in the set that
+  opens the home's account as of the position, both halves verified. The
+  verdict is one of the signed-ops record §3.5's five values (`Verdict`)
+  and stands beside every record the index holds; a record not SIGNED is
+  suppressed and counted (`Index::suppressed`), never consulted at a
+  resolve.
 - **The index** (`Index`) — the position-annotated prefix → binding index
   over the verified bindings (REG-3.21 to REG-3.26), its one writer the
   mirror's gate: a binding from the claimant's doc 1 alone — a
@@ -111,8 +117,9 @@ The board's typed reads (`Board`) run over any `Transport` — that client,
 or a suite's replay of a recording — and count every read by kind
 (`Reads`), reported in `Stats`; every value the resolver takes on the
 board's word (the head pair, the board term, a link's type and slots, a
-key set, a deposit's standing on the active view) is typed there, and an
-`/op` answer past the cap is one no typed read takes. A link's slots are
+key set, a deposit's standing on the active view, a reclaimed read's
+floor, held past the position asked) is typed there, and an `/op` answer
+past the cap is one no typed read takes. A link's slots are
 read only for a link of a type the reader names, its type slot that
 type's unit span exactly.
 

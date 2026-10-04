@@ -88,21 +88,53 @@ pub use walk::{guest_resolve, resolve, GuestCost};
 
 use skep_address::{validate, Address, Nat, Tumbler};
 
-/// An address in its dotted-decimal spelling, as the wire carries one —
-/// `None` where the text is no T4-valid address. Every address this crate
-/// reads off the wire or a hint passes through here, so a leading-zero
-/// spelling names its one address and a malformed one is refused, never
-/// framed.
+/// THE MOST DIGITS one component of an address a board serves carries:
+/// skepd's codec's `MAX_NAT_DIGITS`, the cap the board's own wire holds
+/// every tumbler to, restated here because this crate links no daemon.
+const MAX_COMPONENT_DIGITS: usize = 4096;
+
+/// THE MOST COMPONENTS an address a board serves carries: skepd's codec's
+/// `MAX_TUMBLER_COMPONENTS`, restated here for [`MAX_COMPONENT_DIGITS`]'s
+/// reason.
+const MAX_ADDRESS_COMPONENTS: usize = 256;
+
+/// An address in its dotted-decimal spelling, as the wire carries one — each
+/// component one decimal natural, of any size (wire.md §Value encodings) —
+/// `None` where the text is no T4-valid address, or passes the board's own
+/// wire caps (4096 digits a component, 256 components), which no board
+/// serves. Every address this crate reads off the wire, a copy, a cache or a
+/// hint passes through here, so a leading-zero spelling names its one
+/// address and a malformed one is refused, never framed; an address past the
+/// component cap converts nothing, and a component past the digit cap is
+/// refused before it is converted.
 pub fn parse_address(s: &str) -> Option<Address> {
+    if s.split('.').count() > MAX_ADDRESS_COMPONENTS {
+        return None;
+    }
     let comps: Option<Vec<Nat>> = s
         .split('.')
         .map(|c| {
-            (!c.is_empty() && c.bytes().all(|b| b.is_ascii_digit()))
-                .then(|| c.parse::<u64>().ok().map(Nat::from))
-                .flatten()
+            let decimal = !c.is_empty() && c.len() <= MAX_COMPONENT_DIGITS && c.bytes().all(|b| b.is_ascii_digit());
+            decimal.then(|| c.parse::<Nat>().ok()).flatten()
         })
         .collect();
     validate(Tumbler::new(comps?).ok()?).ok()
+}
+
+/// A record's address member — a binding's `prefix`, either kind's
+/// `replaces` — as the address it names. The member is the canonical rule's
+/// (REG-1.86 (h)): `skep_registry::parse` answers a record only where every
+/// such member is in address form, decimal naturals spelling a T4-valid
+/// address, so this conversion cannot fail and the member is never judged
+/// again here — no wire cap is its, the record's own cap
+/// (`skep_registry::MAX_REGISTRY_RECORD_BYTES`) bounding its digits. The
+/// caller owes that the member came out of a record `parse` answered; the
+/// panics below name the postcondition a member that did not breaks.
+pub(crate) fn record_address(member: &str) -> Address {
+    let comps =
+        member.split('.').map(|c| c.parse::<Nat>().expect("skep_registry::parse answers address members of decimal naturals"));
+    let tumbler = Tumbler::new(comps).expect("skep_registry::parse answers address members of one component or more");
+    validate(tumbler).expect("skep_registry::parse answers address members that are T4-valid addresses")
 }
 
 /// One byte from two hex digits, either case — `None` for any other byte.
@@ -157,3 +189,47 @@ const _: fn() = || {
     hash_key::<RootHint>();
     hash_key::<Verdict>();
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// AN ADDRESS A BOARD SERVES READS WHATEVER ITS COMPONENTS' SIZE (wire.md
+    /// §Value encodings: one decimal natural per component): a component past
+    /// a machine word reads and renders back as itself, and a leading zero
+    /// names its one address; the board's own wire caps bound what reads — at
+    /// each an address reads, and one digit or one component past it none
+    /// does; and text that spells no natural, or no T4-valid address, is none.
+    #[test]
+    fn an_address_reads_at_every_size_a_board_serves() {
+        let past_a_word = parse_address("1.18446744073709551616").expect("a component past u64");
+        assert_eq!(past_a_word.to_string(), "1.18446744073709551616");
+        assert_eq!(parse_address("1.07"), parse_address("1.7"), "a leading zero names its one address");
+        let digits = |n: usize| format!("1.{}", "9".repeat(n));
+        assert!(parse_address(&digits(MAX_COMPONENT_DIGITS)).is_some(), "at the digit cap");
+        assert_eq!(parse_address(&digits(MAX_COMPONENT_DIGITS + 1)), None, "a digit past it");
+        let components = |n: usize| vec!["1"; n].join(".");
+        assert!(parse_address(&components(MAX_ADDRESS_COMPONENTS)).is_some(), "at the component cap");
+        assert_eq!(parse_address(&components(MAX_ADDRESS_COMPONENTS + 1)), None, "a component past it");
+        for none in ["", "1..2", "1.+2", "1._2", "a.1", "1.0", "0.1"] {
+            assert_eq!(parse_address(none), None, "{none:?}");
+        }
+    }
+
+    /// A RECORD'S ADDRESS MEMBER is converted, never judged again: every
+    /// member the canonical rule answers names its address — a component past
+    /// a machine word, and one past the wire's digit cap, which a record's
+    /// own cap bounds instead.
+    #[test]
+    fn a_records_address_member_names_its_address() {
+        assert_eq!(Some(record_address("1.18446744073709551616")), parse_address("1.18446744073709551616"));
+        let past_the_wire = format!("1.{}", "9".repeat(MAX_COMPONENT_DIGITS + 1));
+        let body = skep_registry::encode(
+            &skep_registry::Body::Binding(skep_registry::Binding { prefix: past_the_wire.clone(), replaces: None }),
+            None,
+        );
+        let record = skep_registry::parse(skep_registry::BodyKind::Binding, body.as_bytes()).expect("the canonical rule answers it");
+        let skep_registry::Body::Binding(binding) = record.body else { panic!("a binding") };
+        assert_eq!(record_address(&binding.prefix).to_string(), past_the_wire);
+    }
+}

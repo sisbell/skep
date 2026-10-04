@@ -264,6 +264,30 @@ fn a_page_that_does_not_advance_is_refused() {
     }
 }
 
+/// A RECLAIMED READ NAMES A FLOOR PAST THE POSITION ASKED (wire.md §Reading
+/// history: the floor is the oldest position still answerable): over
+/// `/op-at` and `/chain` alike a floor past the position is
+/// [`BoardError::Reclaimed`], `/chain`'s as `/op-at`'s, and a floor at the
+/// position — which answers it — is no refusal the wire gives, and
+/// malformed. A refusal over `/op` or `/op-at` names its op, whatever the
+/// status.
+#[test]
+fn a_reclaimed_read_names_a_floor_past_the_position_asked() {
+    let reclaimed = || Board::new(Box::new(Canned(410, json!({ "error": "history_reclaimed", "floor": 5 }).to_string())));
+    let frame = key_set_frame(&a("1.0.2"));
+    assert_eq!(reclaimed().op_at(4, &frame), Err(BoardError::Reclaimed { floor: Some(5) }), "/op-at below the floor");
+    assert_eq!(reclaimed().chain_at(4), Err(BoardError::Reclaimed { floor: Some(5) }), "/chain below the floor");
+    assert!(matches!(reclaimed().op_at(5, &frame), Err(BoardError::Malformed(_))), "/op-at at the floor");
+    assert!(matches!(reclaimed().chain_at(5), Err(BoardError::Malformed(_))), "/chain at the floor");
+    let unnamed = Board::new(Box::new(Canned(410, json!({ "error": "history_reclaimed" }).to_string())));
+    assert_eq!(unnamed.op_at(5, &frame), Err(BoardError::Reclaimed { floor: None }), "no floor named, none held to");
+    let down = Board::new(Box::new(Canned(503, "unavailable".into())));
+    let refused = BoardError::Status { status: 503, body: "key_set: unavailable".into() };
+    assert_eq!(down.op_at(5, &frame), Err(refused), "a 503 not busy names its op");
+    let gone = Board::new(Box::new(Canned(404, "no such route".into())));
+    assert_eq!(gone.op(&frame), Err(BoardError::Status { status: 404, body: "key_set: no such route".into() }));
+}
+
 /// A board whose every answer runs past the transport's cap.
 struct Oversized;
 

@@ -10,20 +10,23 @@
 //! the live head pair off `/health` ([`Board::head_pair`]), the board term
 //! off `H.1` ([`Board::board_term`]), a stored link's type and slots
 //! ([`Board::link_slots`]), an account's key set live and as of a position
-//! ([`Board::key_set`], [`Board::key_set_at`]), and whether a deposit stands
-//! on the board's active view ([`Board::stands_active`]). What each caller
-//! makes of them — the copy's head pair, the verdict's frame, the table a
-//! record is judged under — is the caller's. The feed's rows are checked by
+//! ([`Board::key_set`], [`Board::key_set_at`]), whether a deposit stands on
+//! the board's active view ([`Board::stands_active`]), and the floor a
+//! reclaimed read names ([`BoardError::Reclaimed`]). What each caller makes
+//! of them — the copy's head pair, the verdict's frame, the table a record
+//! is judged under — is the caller's. The feed's rows are checked by
 //! the base's provenance and a record's bytes by the verify, so the reads
 //! that only locate those bytes (the span set, `image`, `retrieve_v`) stay
 //! with their callers.
 //!
 //! An answer is held to the shape the wire promises before any caller reads
-//! it: a feed page whose entries do not rise past `since`, or whose `last`
-//! and `more` do not follow them, is refused ([`Board::changes`]), so no row
-//! is held twice and no page asked forever; and an `/op` answer past the
-//! transport's cap ([`TransportError::TooLarge`]) is `null`, which every
-//! typed read takes as its own cannot-read.
+//! it: a feed page whose entries do not rise past `since` — the feed's own
+//! order ([`rises_past`]) — or whose `last` and `more` do not follow them, is
+//! refused ([`Board::changes`]), so no row is held twice and no page asked
+//! forever; a reclaimed read whose floor does not lie past the position
+//! asked is refused ([`Board::op_at`], [`Board::chain_at`]); and an `/op`
+//! answer past the transport's cap ([`TransportError::TooLarge`]) is
+//! `null`, which every typed read takes as its own cannot-read.
 //!
 //! The wire's spellings that both readers of the board — the mirror and the
 //! guest-reading resolve — read alike are stated here, once: a unit span;
@@ -111,11 +114,16 @@ impl Reads {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BoardError {
-    /// The board was not reached.
+    /// The board was not reached, or answered past what the transport reads
+    /// of one.
     Transport(TransportError),
-    /// A status outside the read's shape, with the body.
+    /// A status outside the read's shape: the body as served, prefixed with
+    /// the op's name for a read over `/op` or `/op-at`.
     Status { status: u16, body: String },
-    /// A 200 whose body is not the shape the read expects.
+    /// An answer not the shape the wire promises for its status — a 200
+    /// that is no answer of the read, a refusal whose body is no JSON, a
+    /// reclaimed read whose floor does not lie past the position asked — or
+    /// a feed or a class scan that breaks the paging it promises.
     Malformed(String),
     /// A `rejected` answer: the op, its code and its detail.
     Rejected { op: String, code: String, detail: Option<String> },
@@ -124,7 +132,11 @@ pub enum BoardError {
     /// The feed refused a page past its byte budget, naming the limit that
     /// fits (wire.md §The change feed, Paging).
     PageTooLarge { fits: usize },
-    /// The feed's memory does not reach `since` (`history_reclaimed`).
+    /// `history_reclaimed`: the position asked (`/op-at`, `/chain`) or the
+    /// `since` fence (`/changes`) predates the history the board retains;
+    /// `floor`, where named, the oldest position still answerable — past the
+    /// position asked, which [`Board::op_at`] and [`Board::chain_at`] hold
+    /// it to.
     Reclaimed { floor: Option<u64> },
 }
 
@@ -289,13 +301,9 @@ impl Board {
         };
         let last = v["last"].as_u64().ok_or_else(|| BoardError::Malformed("no last".into()))?;
         let more = v["more"].as_bool().ok_or_else(|| BoardError::Malformed("no more".into()))?;
-        let mut reached = since;
-        for row in &rows {
-            match row["at"].as_u64() {
-                Some(at) if at > reached => reached = at,
-                _ => return Err(BoardError::Malformed(format!("a page from {since} whose entries do not advance"))),
-            }
-        }
+        let Some(reached) = rises_past(since, &rows) else {
+            return Err(BoardError::Malformed(format!("a page from {since} whose entries do not advance")));
+        };
         if last != reached || (more && rows.is_empty()) {
             return Err(BoardError::Malformed(format!("a page from {since} whose last or more does not follow its entries")));
         }
@@ -320,7 +328,8 @@ impl Board {
     }
 
     /// `POST /op-at` as the guest: `frame` answered AS OF `at` (wire.md
-    /// §Reading history), `history_busy` retried.
+    /// §Reading history), `history_busy` retried; a position the board has
+    /// reclaimed is [`BoardError::Reclaimed`], its floor past `at`.
     pub fn op_at(&self, at: u64, frame: &Value) -> Result<Value, BoardError> {
         let op = frame["op"].as_str().unwrap_or("");
         self.bump(|r| {
@@ -328,7 +337,7 @@ impl Board {
             r.op_at += 1;
         });
         let body = format!(r#"{{"at":{at},"frame":{frame}}}"#);
-        self.post_json("/op-at", &body, op)
+        floor_past(at, self.post_json("/op-at", &body, op))
     }
 
     fn not_rejected(v: Value) -> Result<Value, BoardError> {
@@ -370,7 +379,8 @@ impl Board {
                         thread::sleep(BUSY_PAUSE);
                         continue;
                     }
-                    return Err(if busy { BoardError::Busy } else { BoardError::Status { status: st, body: text() } });
+                    let refused = BoardError::Status { status: st, body: format!("{op}: {}", text()) };
+                    return Err(if busy { BoardError::Busy } else { refused });
                 }
                 _ => {
                     return Err(BoardError::Status {
@@ -384,7 +394,8 @@ impl Board {
 
     /// `GET /chain?at=N`: the commit chain's value as of `at`, recomputed by
     /// the board (wire.md §Reading history) — the position the board answers
-    /// as of, and the chain.
+    /// as of, and the chain; a position the board has reclaimed is
+    /// [`BoardError::Reclaimed`], its floor past `at`, as `/op-at`'s is.
     pub fn chain_at(&self, at: u64) -> Result<(u64, [u8; 32]), BoardError> {
         self.bump(|r| r.chain += 1);
         let mut tries = 0;
@@ -398,6 +409,10 @@ impl Board {
                     let hex = v["chain"].as_str().ok_or_else(|| BoardError::Malformed("no chain".into()))?;
                     let chain = parse_chain(hex).ok_or_else(|| BoardError::Malformed(format!("chain {hex}")))?;
                     return Ok((as_of, chain));
+                }
+                410 => {
+                    let v = Board::json(&body)?;
+                    return floor_past(at, Err(BoardError::Reclaimed { floor: v["floor"].as_u64() }));
                 }
                 503 if text.contains("history_busy") && tries < BUSY_RETRIES => {
                     tries += 1;
@@ -454,7 +469,9 @@ impl Board {
 
     /// THE BOARD TERM (D13): `H.1`'s committed pair, off `retrieve_v` at the
     /// pinned member's V-ordinal 1 — the term, and its chain as the board
-    /// spelled it; `None` where the board holds none.
+    /// spelled it; `None` where this reader reads no term off the board: no
+    /// atom at `H.1`, one that is no record of a position and a chain, or an
+    /// answer past the transport's cap.
     pub(crate) fn board_term(&self) -> Result<Option<(BoardTerm, String)>, BoardError> {
         let v = self.op(&retrieve_frame(&HEAD_MEMBER_1, 1))?;
         let Some(text) = v["items"].as_array().and_then(|i| i.first()).and_then(|i| i["atom"].as_str()) else {
@@ -471,7 +488,8 @@ impl Board {
     /// ([`LinkSlots`]): its type where its type slot is one of their unit
     /// spans exactly — compared as served, so no span of another type's
     /// slot is parsed — and then its `from` and `to`; `None` where no link
-    /// stands at `link`.
+    /// stands at `link`, or where its answer runs past the transport's cap —
+    /// a link this reader cannot read, folded as none.
     pub(crate) fn link_slots(&self, link: &Address, types: &[&Address]) -> Result<Option<LinkSlots>, BoardError> {
         let v = self.op_ok(&json!({ "op": "read_link", "a": link.to_string() }))?;
         if v["link"].is_null() {
@@ -518,6 +536,31 @@ pub(crate) fn image_frame(doc: &Address, from: u64, width: u64) -> Value {
 
 fn key_set_frame(account: &Address) -> Value {
     json!({ "op": "key_set", "account": account.to_string() })
+}
+
+/// A reclaimed read's answer held to the wire's shape: the floor, where
+/// named, is the oldest position still answerable (wire.md §Reading
+/// history), so a floor at or below the position asked — `at` itself
+/// answerable — is no refusal the wire gives, and is
+/// [`BoardError::Malformed`]; the floor clause the mirror reads it by
+/// (`mirror/keys.rs`) counts acts in `(at, floor]` and is sound only past
+/// `at`. Every other answer passes as it is.
+fn floor_past<T>(at: u64, answer: Result<T, BoardError>) -> Result<T, BoardError> {
+    match answer {
+        Err(BoardError::Reclaimed { floor: Some(floor) }) if floor <= at => {
+            Err(BoardError::Malformed(format!("a read at {at} refused as reclaimed, its floor {floor} at or below it")))
+        }
+        answer => answer,
+    }
+}
+
+/// THE FEED'S OWN ORDER (wire.md §The change feed, Paging): the position
+/// `rows` reach where each names a position past `since` and past the row
+/// before it — `since` itself where there are none — else `None`. Every page
+/// is held to it ([`Board::changes`]), and every copy an offline rebuild
+/// reads.
+pub(crate) fn rises_past(since: u64, rows: &[Value]) -> Option<u64> {
+    rows.iter().try_fold(since, |reached, row| row["at"].as_u64().filter(|at| *at > reached))
 }
 
 /// A `key_set` answer, where the answer is one this build reads WHOLE —

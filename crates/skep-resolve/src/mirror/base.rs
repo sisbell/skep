@@ -6,10 +6,11 @@
 //! comes back identical through its own head and the head pairs it held
 //! answer the same at the source's recomputation (`/chain?at=N`); and the
 //! realm is compared at the claim's row on every open that holds a board,
-//! against the genesis set the source answers. An image that OMITS,
-//! RE-ORDERS or REPLAYS genuinely signed rows fails that check at the first
-//! position that differs and is REFUSED by provenance, as a signature could
-//! never refuse it (REG-3.13, the courier vector).
+//! for the board's own claimant at the board's own genesis act, against the
+//! genesis set the source answers there. An image that OMITS, RE-ORDERS or
+//! REPLAYS genuinely signed rows fails that check at the first position that
+//! differs and is REFUSED by provenance, as a signature could never refuse
+//! it (REG-3.13, the courier vector).
 //!
 //! THE TWO REFUSALS (REG-3.19), named: a frontier DIVERGING below the
 //! mirror's head ([`Refusal::Diverged`], [`Refusal::ChainDiverged`]) and a
@@ -18,9 +19,11 @@
 //! so rather than splicing. A root whose genesis set does not fingerprint to
 //! the genesis half of the hint's realm id is a LINEAGE CHANGE
 //! ([`Refusal::RealmMismatch`]; REG-3.42's comparison at the base, made on
-//! the id's genesis fingerprint) — under a held copy as under a fresh base,
-//! the copy's header naming the hint's genesis fingerprint being the copy's
-//! word and never the root's. A hint RE-POINTED to another genesis
+//! the id's genesis fingerprint) — under a held copy as under a fresh base:
+//! the copy's header naming the hint's genesis fingerprint is the copy's
+//! word and never the root's, and the claimant and its genesis act are the
+//! board's, never the fetch cache's. A claim row past the one the realm was
+//! compared for moves nothing. A hint RE-POINTED to another genesis
 //! re-bootstraps afresh from the new root's genesis and resumes nothing
 //! (REG-3.17): the old copy is retired beside the new.
 //!
@@ -37,13 +40,14 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use serde_json::{json, Value};
+use skep_address::Address;
 use skep_identity::Fingerprint;
 
 use super::{
     position, Chains, Fetched, Lines, Mirror, MirrorError, Opened, Refusal, Row, Stats, Types, FEED_COPY,
     FEED_FORMAT, FETCH_CACHE,
 };
-use crate::board::{parse_chain, Board, BoardError, Page};
+use crate::board::{parse_chain, rises_past, Board, BoardError, Page};
 use crate::hint::{RealmId, RootHint};
 use crate::http::Dial;
 use crate::index::Index;
@@ -65,8 +69,22 @@ impl Mirror {
     /// (REG-3.17), no copy bootstrapped from genesis (REG-3.12); then the
     /// delta synced. On every path the realm is compared at the claim's row
     /// (REG-3.42), and a base whose feed holds no claim through the source's
-    /// head is [`MirrorError::NoClaim`]. The refusals are [`Refusal`]'s, each
-    /// named, and a refused base writes nothing.
+    /// head is [`MirrorError::NoClaim`].
+    ///
+    /// Its refusals are met in this order: the directory not made
+    /// ([`MirrorError::Copy`]); no root answering
+    /// ([`MirrorError::Unreachable`] — the root is dialed before the copy is
+    /// read, whatever the directory holds); a held copy that does not read
+    /// ([`MirrorError::Copy`]); then the base's own — the check's
+    /// ([`Refusal::SourceBehind`] or [`Refusal::Diverged`], then
+    /// [`Refusal::ChainDiverged`]), the realm's at the claim
+    /// ([`Refusal::RealmMismatch`], [`MirrorError::NoGenesis`]), and a feed
+    /// with no claim ([`MirrorError::NoClaim`]) — with any read the board
+    /// cannot answer ([`MirrorError::Board`]) or any line not written
+    /// ([`MirrorError::Copy`]) along the way. A refused base writes no line
+    /// of either file. The directory is made before the dial, and a copy of
+    /// another genesis is retired before its successor's realm is compared,
+    /// so a refused re-bootstrap leaves it retired.
     pub fn open(hint: &RootHint, dir: &Path, dial: &Dial<'_>) -> Result<Mirror, MirrorError> {
         fs::create_dir_all(dir).map_err(|e| MirrorError::Copy(format!("{}: {e}", dir.display())))?;
         let (root, board) = dial_root(hint, dial)?;
@@ -114,14 +132,21 @@ impl Mirror {
     /// asks for that the cache lacks. Nothing is checked against a source
     /// and the genesis fingerprint is the one the copy's header names
     /// ([`Opened::Rebuilt`]); a copy of no format this build writes is
-    /// refused, as at the open; `sync` refuses [`MirrorError::Offline`] on
-    /// the mirror this answers.
+    /// refused, as at the open, and so is one whose rows do not hold the
+    /// feed's own order — each past the one before (wire.md §The change
+    /// feed, Paging) — which no source check holds them to here: on an open
+    /// the check does, identical rows to the source's rising ones, its
+    /// refusal REG-3.13's named one. `sync` refuses
+    /// [`MirrorError::Offline`] on the mirror this answers.
     pub fn rebuild_offline(hint: &RootHint, dir: &Path) -> Result<Mirror, MirrorError> {
         let Some(held) = read_copy(dir)? else {
             return Err(MirrorError::Copy(format!("{}: no feed copy", dir.join(FEED_COPY).display())));
         };
         if held.genesis != hint.realm().genesis {
             return Err(MirrorError::Copy("the copy is another realm's".into()));
+        }
+        if rises_past(0, &held.rows).is_none() {
+            return Err(MirrorError::Copy(format!("{}: its rows do not rise", dir.join(FEED_COPY).display())));
         }
         let mut mirror = Mirror::fresh(hint, None, None, dir);
         mirror.load_cache()?;
@@ -149,6 +174,8 @@ impl Mirror {
             folded: 0,
             head: 0,
             realm_compared: false,
+            claim: None,
+            geneses: BTreeMap::new(),
             credential_acts: BTreeMap::new(),
             asked: BTreeMap::new(),
             chains: Chains::default(),
@@ -298,16 +325,18 @@ impl Mirror {
         Ok(())
     }
 
-    /// THE REALM CHECK at the base (REG-3.42; REG-3.39): the claimant's
-    /// genesis set ([`Mirror::genesis_keys`], read off the board and never
-    /// off the fetch cache), fingerprinted and compared to the GENESIS
-    /// FINGERPRINT the hint's realm id carries, its first half — the fork
-    /// point is not compared here; a mismatch is REG-3.19's refusal.
+    /// THE REALM CHECK at the base (REG-3.42; REG-3.39), for `claimant` —
+    /// the account the board's own claim link names, the fold having read
+    /// it off the board ([`Mirror::fold_claim`]): its genesis set
+    /// ([`Mirror::genesis_keys`], at the genesis act the board answered,
+    /// read exactly and never off the fetch cache), fingerprinted and
+    /// compared to the GENESIS FINGERPRINT the hint's realm id carries, its
+    /// first half — the fork point is not compared here; a mismatch is
+    /// REG-3.19's refusal, and no genesis to read [`MirrorError::NoGenesis`].
     /// Compared, every line that waited reaches the copy, the genesis
     /// table's among them.
-    pub(super) fn realm_check(&mut self) -> Result<(), MirrorError> {
-        let (_, claimant) = self.fetched.claim.clone().ok_or(MirrorError::NoClaim)?;
-        let keys = self.genesis_keys(&claimant)?.ok_or(MirrorError::NoGenesis)?;
+    pub(super) fn realm_check(&mut self, claimant: &Address) -> Result<(), MirrorError> {
+        let keys = self.genesis_keys(claimant)?.ok_or(MirrorError::NoGenesis)?;
         let found = RealmId::genesis_fingerprint(&keys.iter().map(|e| Fingerprint::of(&e.key)).collect::<Vec<_>>());
         let expected = self.hint.realm().genesis;
         if found != expected {
@@ -322,7 +351,8 @@ impl Mirror {
 /// [`Mirror::header`], [`Mirror::pull`] and [`Mirror::record_head_pair`]
 /// write: `None` where no copy is held (the file absent, or no line in it),
 /// and refused where its header is no feed copy of the format this build
-/// writes. The lines are taken by value, each row moved out of its line.
+/// writes, or a line of it is no JSON. The lines are taken by value, each
+/// row moved out of its line.
 fn read_copy(dir: &Path) -> Result<Option<HeldCopy>, MirrorError> {
     let path = dir.join(FEED_COPY);
     let mut lines = Lines::read(&path)?.into_iter();

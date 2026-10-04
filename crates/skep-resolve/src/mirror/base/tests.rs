@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use skep_address::Address;
@@ -151,6 +152,182 @@ fn a_feed_with_no_claim_opens_no_base_and_writes_nothing() {
     assert_eq!(Mirror::open(&hint(), dir.path(), &dial).unwrap_err(), MirrorError::NoClaim, "a held copy");
     assert_eq!(read(FEED_COPY), held, "the held copy byte for byte");
     assert_eq!(read(FETCH_CACHE), cache, "and the cache");
+}
+
+/// A link's slots as `read_link` serves them: its `from` atom, its `to` as
+/// named, its type's unit span.
+fn slots(from: &str, to: &[&str], ty: &Address) -> Value {
+    json!([[span(from)], to.iter().map(|t| span(t)).collect::<Vec<_>>(), [unit_span_json(ty)]])
+}
+
+/// A CLAIMED BOARD THE SUITE HOLDS FIXED: a `make_link` row per `(at, link,
+/// home, slots)` on its feed, each link served with its slots; an account's
+/// table from a position on per `history` — the latest at or below the
+/// position asked, as of it on `/op-at` and as of the feed's head live.
+/// Every request recorded.
+struct Claimed {
+    rows: Vec<Value>,
+    links: BTreeMap<String, Value>,
+    history: Vec<(&'static str, u64, Vec<PublicKey>)>,
+    asked: RefCell<Vec<String>>,
+}
+
+fn claimed(links: Vec<(u64, &str, &str, Value)>, history: Vec<(&'static str, u64, Vec<PublicKey>)>) -> Rc<Claimed> {
+    let rows = links.iter().map(|(at, link, home, _)| json!({ "at": at, "op": "make_link", "link": link, "docs": [home] })).collect();
+    let links = links.into_iter().map(|(_, link, _, slots)| (link.to_string(), slots)).collect();
+    Rc::new(Claimed { rows, links, history, asked: RefCell::new(Vec::new()) })
+}
+
+impl Transport for Claimed {
+    fn exchange(&self, method: Method, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+        self.asked.borrow_mut().push(format!("{method} {path}"));
+        let head = self.rows.last().and_then(position).unwrap_or(0);
+        if let Some(since) = path.strip_prefix("/changes?since=") {
+            let since: u64 = since.parse().expect("a position");
+            let rows: Vec<&Value> = self.rows.iter().filter(|r| position(r) > Some(since)).collect();
+            let last = rows.last().and_then(|r| position(r)).unwrap_or(since);
+            return answer(json!({ "changes": rows, "last": last, "more": false }));
+        }
+        if path == "/health" {
+            return answer(json!({ "log_position": head, "chain_head": "07".repeat(32) }));
+        }
+        let request: Value = serde_json::from_slice(body).expect("a JSON body");
+        let (frame, at) = if path == "/op-at" { (&request["frame"], request["at"].as_u64()) } else { (&request, None) };
+        match frame["op"].as_str() {
+            Some("read_link") => {
+                let slots = self.links.get(frame["a"].as_str().expect("a link")).expect("a link this board holds");
+                answer(json!({ "resp": "link", "link": { "slots": slots } }))
+            }
+            Some("key_set") => {
+                let as_of = at.unwrap_or(head);
+                let account = frame["account"].as_str().expect("an account");
+                let held = self.history.iter().rev().find(|(acct, from, _)| *acct == account && *from <= as_of);
+                let enrolled: Vec<Value> = held.map(|(_, _, keys)| keys.as_slice()).unwrap_or_default().iter()
+                    .map(|k| json!({ "alg": k.alg(), "key": k.to_hex(), "anchor": true }))
+                    .collect();
+                answer(json!({ "resp": "key_set", "as_of": as_of, "enrolled": enrolled }))
+            }
+            _ => panic!("a read this board does not answer: {path} {request}"),
+        }
+    }
+}
+
+/// The genesis fingerprint of the set holding `key(seed)` alone.
+fn genesis_of(seed: u8) -> Fingerprint {
+    RealmId::genesis_fingerprint(&[Fingerprint::of(&key(seed))])
+}
+
+/// A hint naming `genesis`, at an origin [`claimed_dial`] answers.
+fn hint_of(genesis: Fingerprint) -> RootHint {
+    RootHint::new(vec![Origin::parse("http://127.0.0.1:1").unwrap()], genesis, None).unwrap()
+}
+
+/// A dial that answers every origin with `board`.
+fn claimed_dial(board: &Rc<Claimed>) -> impl Fn(&Origin) -> Result<Box<dyn Transport>, TransportError> {
+    let board = board.clone();
+    move |_: &Origin| -> Result<Box<dyn Transport>, TransportError> { Ok(Box::new(board.clone())) }
+}
+
+/// A copy held under `dir` — its header naming `genesis`, `board`'s rows —
+/// and a fetch cache of `cache`'s lines: both files as written.
+fn hold(dir: &Path, genesis: Fingerprint, board: &Claimed, cache: &[Value]) -> (String, String) {
+    let header = json!({ "skep-resolve": FEED_FORMAT, "realm": genesis.to_hex(), "root": null });
+    let rows = board.rows.iter().map(|row| json!({ "row": row }));
+    let feed: String = std::iter::once(header).chain(rows).map(|line| format!("{line}\n")).collect();
+    let cache: String = cache.iter().map(|line| format!("{line}\n")).collect();
+    fs::write(dir.join(FEED_COPY), &feed).expect("the feed copy");
+    fs::write(dir.join(FETCH_CACHE), &cache).expect("the fetch cache");
+    (feed, cache)
+}
+
+/// The board of the claim cells below: at 1 `1.0.1`'s genesis enroll, at 2
+/// its claim, at 3 `1.0.2`'s genesis enroll, each in its own doc 1; and,
+/// with `rotated`, `1.0.1` enrolling a second key at 4 and retiring its
+/// genesis key at 5 — `1.0.1`'s genesis set `key(1)`, `1.0.2`'s `key(2)`.
+fn claim_board(rotated: bool) -> Rc<Claimed> {
+    let (enroll, retire, claim) = (commons_type(&[1]), commons_type(&[2]), commons_type(&[3]));
+    let mut links = vec![
+        (1, "1.0.1.0.1.0.2.1", "1.0.1.0.1", slots("1.0.1.0.1.0.1.1", &["1.0.1"], &enroll)),
+        (2, "1.0.1.0.1.0.2.2", "1.0.1.0.1", slots("1.0.1", &[], &claim)),
+        (3, "1.0.2.0.1.0.2.1", "1.0.2.0.1", slots("1.0.2.0.1.0.1.1", &["1.0.2"], &enroll)),
+    ];
+    let mut history = vec![("1.0.1", 1, vec![key(1)]), ("1.0.2", 3, vec![key(2)])];
+    if rotated {
+        links.push((4, "1.0.1.0.1.0.2.3", "1.0.1.0.1", slots("1.0.1.0.1.0.1.2", &["1.0.1"], &enroll)));
+        links.push((5, "1.0.1.0.1.0.2.4", "1.0.1.0.1", slots("1.0.1.0.1.0.1.3", &["1.0.1"], &retire)));
+        history.extend([("1.0.1", 4, vec![key(1), key(2)]), ("1.0.1", 5, vec![key(2)])]);
+    }
+    claimed(links, history)
+}
+
+/// THE CLAIMANT IS THE BOARD'S WORD (REG-3.42): a held copy whose fetch
+/// cache names another claimant at the claim's link — `1.0.2`, whose genesis
+/// set the copy's header names, so a realm compared for it would pass — is
+/// refused at the claim, the realm compared for the claimant the board's
+/// own link names; and nothing is written.
+#[test]
+fn a_cache_naming_another_claimant_is_refused_at_the_claim() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = claim_board(false);
+    let claim = StoredLink {
+        at: 2,
+        address: a("1.0.1.0.1.0.2.2"),
+        home: a("1.0.1.0.1"),
+        ty: Some(commons_type(&[3])),
+        from: vec![a("1.0.2")],
+        to: Vec::new(),
+    };
+    let forged = Fetched::default().keep_link(claim).expect("a line");
+    let held = hold(dir.path(), genesis_of(2), &board, &[forged]);
+    let refused = Mirror::open(&hint_of(genesis_of(2)), dir.path(), &claimed_dial(&board)).unwrap_err();
+    assert_eq!(refused, MirrorError::Refused(Refusal::RealmMismatch { expected: genesis_of(2), found: genesis_of(1) }));
+    let read = |name: &str| fs::read_to_string(dir.path().join(name)).expect("a file of the copy");
+    assert_eq!((read(FEED_COPY), read(FETCH_CACHE)), held, "nothing written");
+}
+
+/// THE GENESIS ACT IS THE BOARD'S WORD (REG-3.42; REG-3.39: the genesis set,
+/// never the living one): a held copy whose fetch cache types neither
+/// `1.0.1`'s genesis enroll nor its later one — so the first act of the
+/// claimant it holds is the retire at 5, after which the claimant's living
+/// set is the one the copy's header names — is refused at the claim, the
+/// genesis set read at the genesis act the board answered; and nothing is
+/// written.
+#[test]
+fn a_cache_hiding_the_genesis_act_is_refused_at_the_claim() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = claim_board(true);
+    let untyped = |at: u64, link: &str| StoredLink { at, address: a(link), home: a("1.0.1.0.1"), ty: None, from: Vec::new(), to: Vec::new() };
+    let mut kept = Fetched::default();
+    let hidden = [kept.keep_link(untyped(1, "1.0.1.0.1.0.2.1")), kept.keep_link(untyped(4, "1.0.1.0.1.0.2.3"))].map(|l| l.expect("a line"));
+    let held = hold(dir.path(), genesis_of(2), &board, &hidden);
+    let refused = Mirror::open(&hint_of(genesis_of(2)), dir.path(), &claimed_dial(&board)).unwrap_err();
+    assert_eq!(refused, MirrorError::Refused(Refusal::RealmMismatch { expected: genesis_of(2), found: genesis_of(1) }));
+    let read = |name: &str| fs::read_to_string(dir.path().join(name)).expect("a file of the copy");
+    assert_eq!((read(FEED_COPY), read(FETCH_CACHE)), held, "nothing written");
+}
+
+/// ONE CLAIM (AUTH-2.68: a board admits one, a second `already_claimed`): a
+/// claim row past the one the realm was compared for — `1.0.2`'s, in its own
+/// doc 1 — moves nothing: the claim stays the board's first, its claimant
+/// the binding home, online and in the copy rebuilt offline alike.
+#[test]
+fn a_claim_past_the_one_compared_moves_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (enroll, claim) = (commons_type(&[1]), commons_type(&[3]));
+    let board = claimed(
+        vec![
+            (1, "1.0.1.0.1.0.2.1", "1.0.1.0.1", slots("1.0.1.0.1.0.1.1", &["1.0.1"], &enroll)),
+            (2, "1.0.1.0.1.0.2.2", "1.0.1.0.1", slots("1.0.1", &[], &claim)),
+            (4, "1.0.2.0.1.0.2.2", "1.0.2.0.1", slots("1.0.2", &[], &claim)),
+        ],
+        vec![("1.0.1", 1, vec![key(1)])],
+    );
+    let hint = hint_of(genesis_of(1));
+    let mirror = Mirror::open(&hint, dir.path(), &claimed_dial(&board)).expect("opened");
+    assert_eq!(mirror.claim(), Some((2, &a("1.0.1"))), "the board's first claim");
+    drop(mirror);
+    let offline = Mirror::rebuild_offline(&hint, dir.path()).expect("rebuilt");
+    assert_eq!(offline.claim(), Some((2, &a("1.0.1"))), "and the copy's");
 }
 
 /// A BOARD THAT HAS RECLAIMED POSITION 6 (REG-3.15's floor): `1.0.2`'s live
@@ -357,6 +534,49 @@ fn every_origin_tried_is_named_beside_its_own_error() {
     assert!(!dir.path().join(FEED_COPY).exists(), "nothing written");
 }
 
+/// AN OFFLINE REBUILD HOLDS THE COPY TO THE FEED'S OWN ORDER (wire.md §The
+/// change feed, Paging), which no source check holds it to there: a copy
+/// whose rows re-serve a position, re-order two, or name none is refused,
+/// never folded out of order; rows that rise are rebuilt, the head the last.
+#[test]
+fn an_offline_rebuild_refuses_rows_that_do_not_rise() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let copy = |ats: &[Option<u64>]| {
+        let header = json!({ "skep-resolve": FEED_FORMAT, "realm": hint().realm().genesis.to_hex(), "root": null });
+        let rows = ats.iter().map(|at| {
+            let mut row = json!({ "op": "publish", "docs": [] });
+            if let Some(at) = at {
+                row["at"] = json!(at);
+            }
+            json!({ "row": row })
+        });
+        let feed: String = std::iter::once(header).chain(rows).map(|line| format!("{line}\n")).collect();
+        fs::write(dir.path().join(FEED_COPY), feed).expect("the feed copy");
+        Mirror::rebuild_offline(&hint(), dir.path())
+    };
+    for (ats, case) in [
+        (&[Some(5), Some(5)][..], "a position re-served"),
+        (&[Some(6), Some(5)][..], "two rows re-ordered"),
+        (&[Some(5), None][..], "a row naming none"),
+    ] {
+        assert!(matches!(copy(ats), Err(MirrorError::Copy(_))), "{case}");
+    }
+    assert_eq!(copy(&[Some(5), Some(6)]).map(|mirror| mirror.head()), Ok(6), "rows that rise");
+}
+
+/// THE ROOT BEFORE THE COPY: where no origin answers and the directory holds
+/// a copy that does not read, the open is refused for the root — the root is
+/// dialed before the copy is read — and the copy is left as it was found.
+#[test]
+fn no_root_answering_speaks_before_a_copy_that_does_not_read() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let unstamped = format!("{}\n", json!({ "realm": hint().realm().genesis.to_hex() }));
+    fs::write(dir.path().join(FEED_COPY), &unstamped).expect("a copy of no format");
+    let down = |_: &Origin| -> Result<Box<dyn Transport>, TransportError> { Err(TransportError::Connect("down".into())) };
+    assert!(matches!(Mirror::open(&hint(), dir.path(), &down), Err(MirrorError::Unreachable { .. })));
+    assert_eq!(fs::read_to_string(dir.path().join(FEED_COPY)).expect("the copy"), unstamped, "as it was found");
+}
+
 /// A BOARD WHERE A FORGED RETRACTION STANDS: an account's own link in its
 /// own doc 1, typed `1.1.0.1.0.1.0.1` — a prefix of the retraction class's
 /// address, another class `make_link` admits — and naming the node, so it
@@ -426,18 +646,20 @@ impl Transport for AllStanding {
 /// held before it asks, so the active view's answer stands for the pass —
 /// three `nullify` rows naming a home of three standing deposits ask three
 /// times, never nine — and a later pass, its rows past the answer, asks
-/// afresh.
+/// afresh. The deposits are ones the gate passes: SIGNED, each of an origin.
 #[test]
 fn each_standing_deposit_is_asked_once_a_pass() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut mirror = over(AllStanding, dir.path());
     let home = a("1.0.2.0.1");
     let deposit = |n: u64| a(&format!("1.0.2.0.1.0.2.{n}"));
+    let signed = Verdict::Signed(Fingerprint::parse_hex(&"ab".repeat(32)).unwrap());
     for n in 1..=3 {
         let atom = a(&format!("1.0.2.0.1.0.1.{n}"));
         mirror.fetched.keep_link(StoredLink { at: n, address: deposit(n), home: home.clone(), ty: Some(t_endpoint().clone()), from: vec![atom], to: Vec::new() });
-        let record = EndpointRecord { origins: Vec::new(), replaces: (n > 1).then(|| deposit(n - 1)), honored: false, nullified: false };
-        let judged = Judged { position: n, link: deposit(n), home: home.clone(), record, verdict: Verdict::UndeterminableHere };
+        let origins = vec![format!("https://{n}.example")];
+        let record = EndpointRecord { origins, replaces: (n > 1).then(|| deposit(n - 1)), honored: false, nullified: false };
+        let judged = Judged { position: n, link: deposit(n), home: home.clone(), record, verdict: signed.clone() };
         assert!(mirror.index.fold_endpoint(judged), "deposit {n} honored");
     }
     mirror.rows = (10..13).map(|at| json!({ "at": at, "op": "nullify", "docs": ["1.0.2.0.1"] })).collect();

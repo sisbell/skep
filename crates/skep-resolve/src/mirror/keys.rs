@@ -7,13 +7,14 @@
 //! proof is read by are recorded here too, by the fold's first pass
 //! ([`Mirror::scan_credential_acts`]), before any record is judged; and THE
 //! GENESIS SET the realm is compared against ([`Mirror::genesis_keys`]) is
-//! read here, by the same acts. An `impl Mirror` child of `mirror`, reading
+//! read here — at the genesis act the board itself answered, exactly, and
+//! never off the fetch cache. An `impl Mirror` child of `mirror`, reading
 //! the mirror's private state the way a child does.
 
 use skep_address::{parent, Address, Level};
 use skep_identity::Enrolled;
 
-use super::{Epoch, KeysAsOf, Mirror, MirrorError, Row};
+use super::{Epoch, KeysAsOf, Mirror, MirrorError, Row, StoredLink};
 use crate::board::BoardError;
 
 /// THE DEEPEST PRINCIPAL PREFIX A BOARD MINTS, in components — its node
@@ -40,9 +41,7 @@ impl Mirror {
         while self.scanned < self.rows.len() {
             if let Row::Link { at, link, home } = Row::of(&self.rows[self.scanned]) {
                 if let Some(stored) = self.read_link(at, &link, &home)? {
-                    let credential =
-                        stored.ty.as_ref().is_some_and(|t| *t == self.types.enroll || *t == self.types.retire);
-                    if let (true, Some(subject)) = (credential, stored.to.first()) {
+                    if let Some(subject) = self.credential_subject(&stored) {
                         self.credential_acts.entry(subject.clone()).or_default().push(at);
                     }
                 }
@@ -50,6 +49,23 @@ impl Mirror {
             self.scanned += 1;
         }
         Ok(())
+    }
+
+    /// The account a stored link's CREDENTIAL ACT names — its `to`, where its
+    /// type is an enroll or a retire (wire.md §The claim ceremony and
+    /// credentials) — whatever its home.
+    fn credential_subject<'s>(&self, stored: &'s StoredLink) -> Option<&'s Address> {
+        let ty = stored.ty.as_ref()?;
+        (*ty == self.types.enroll || *ty == self.types.retire).then(|| stored.to.first()).flatten()
+    }
+
+    /// A link at `at` the fold read off the board before the realm was
+    /// compared, kept as its account's genesis (`geneses`) where it is a
+    /// credential act and that account's first.
+    pub(super) fn note_genesis(&mut self, at: u64, stored: &StoredLink) {
+        if let Some(subject) = self.credential_subject(stored) {
+            self.geneses.entry(subject.clone()).or_insert(at);
+        }
     }
 
     /// The EPOCH of `account`'s table as of `at`: its latest credential
@@ -67,8 +83,9 @@ impl Mirror {
 
     /// THE SET THAT OPENS `account` as of `at`: its own table where not
     /// empty, else the nearest keyed account above it (AUTH-4.30 (i)'s walk,
-    /// as the daemon makes it); `None` where the table cannot be read, as it
-    /// cannot for an account deeper than any board mints
+    /// as the daemon makes it), and `Some` of the empty set where no account
+    /// on the walk holds a key; `None` where a table on the walk cannot be
+    /// read, as none can for an account deeper than any board mints
     /// ([`MAX_PRINCIPAL_COMPONENTS`]).
     pub(super) fn keys_opening(&mut self, account: &Address, at: u64) -> Result<Option<Vec<Enrolled>>, MirrorError> {
         if account.tumbler().len() > MAX_PRINCIPAL_COMPONENTS {
@@ -100,16 +117,9 @@ impl Mirror {
     }
 
     /// THE TABLE OF `account` AS OF `at`, off the board: the live table where
-    /// the acts the mirror holds prove it the same, `/op-at` otherwise — or,
-    /// where the board has RECLAIMED the position (REG-3.15's floor: a root
-    /// that cannot answer from genesis), the read at the floor WHERE THE ACTS
-    /// THE MIRROR HOLDS SHOW NONE OF THE ACCOUNT'S BETWEEN THE POSITION AND
-    /// THE FLOOR: the table is constant across an epoch, so the read at the
-    /// floor IS the table as of the position, derived from inputs the mirror
-    /// holds and manufactured from none; where an act does lie between, the
-    /// table as of the position is gone with the journal and the answer is
-    /// `None` — UNDETERMINABLE HERE, as it is with no board held, and as it
-    /// is for a table this build cannot read whole.
+    /// the acts the mirror holds prove it the same, else the exact read
+    /// ([`Mirror::read_keys_exact`]); `None` where no board is held — the
+    /// table UNDETERMINABLE HERE.
     fn read_keys_at(&mut self, account: &Address, at: u64) -> Result<Option<Vec<Enrolled>>, MirrorError> {
         let Some(board) = self.board.as_ref() else { return Ok(None) };
         // The acts are known through the last row the credential pass read;
@@ -122,8 +132,8 @@ impl Mirror {
         // record's position and it, the table has not changed in between
         // and the live answer IS the table as of the record — the mirror's
         // own base is the evidence, and nothing is manufactured. Elsewhere
-        // the historical read below is the only exact one. A reconstruction
-        // costs the board a whole world per call (wire.md §Reading history:
+        // the historical read is the only exact one. A reconstruction costs
+        // the board a whole world per call (wire.md §Reading history:
         // "wrong for a hot loop"), so this is what makes a bootstrap of
         // thousands of homes a matter of seconds and not of hours.
         if let Ok(Some(live)) = board.key_set(account) {
@@ -134,6 +144,22 @@ impl Mirror {
                 }
             }
         }
+        self.read_keys_exact(account, at)
+    }
+
+    /// THE TABLE OF `account` AS OF `at`, READ EXACTLY: `/op-at` at the
+    /// position — or, where the board has RECLAIMED it (REG-3.15's floor: a
+    /// root that cannot answer from genesis), the read at the floor WHERE
+    /// THE ACTS THE MIRROR HOLDS SHOW NONE OF THE ACCOUNT'S BETWEEN THE
+    /// POSITION AND THE FLOOR: the table is constant across an epoch, so the
+    /// read at the floor IS the table as of the position, derived from
+    /// inputs the mirror holds and manufactured from none; where an act does
+    /// lie between, the table as of the position is gone with the journal
+    /// and the answer is `None` — UNDETERMINABLE HERE, as it is with no
+    /// board held, and as it is for a table this build cannot read whole.
+    fn read_keys_exact(&mut self, account: &Address, at: u64) -> Result<Option<Vec<Enrolled>>, MirrorError> {
+        let Some(board) = self.board.as_ref() else { return Ok(None) };
+        let known = self.acts_through();
         let answer = match board.key_set_at(at, account) {
             Ok(answer) => answer,
             Err(BoardError::Reclaimed { floor }) => {
@@ -162,23 +188,37 @@ impl Mirror {
         self.append_cache(line)
     }
 
-    /// THE GENESIS SET of `account`: its table at its first credential act,
-    /// read off the board and never off the fetch cache — the realm is never
-    /// read off the cache (REG-3.42) — and kept under that act's epoch, the
-    /// first act's position being its own epoch; `None` where no act of the
-    /// account is held or the table cannot be read.
+    /// THE GENESIS SET of `account`: its table at the genesis act the board
+    /// answered (`geneses`), read exactly ([`Mirror::read_keys_exact`]) —
+    /// never off the fetch cache, and never off the live table, whose proof
+    /// is a list of acts a resume takes from the cache: the realm is never
+    /// the cache's word (REG-3.42) — and kept under that act's epoch, the
+    /// act's position being its own epoch; `None` where the board answered
+    /// no act of the account before the realm was compared, or the table
+    /// cannot be read. Where the board has reclaimed that position, the
+    /// floor's clause rests on the acts the mirror holds — on a resume, the
+    /// cache's: REG-3.15's residue, for a root that cannot answer from
+    /// genesis.
     pub(super) fn genesis_keys(&mut self, account: &Address) -> Result<Option<Vec<Enrolled>>, MirrorError> {
-        let Some(&genesis_at) = self.credential_acts.get(account).and_then(|acts| acts.first()) else { return Ok(None) };
-        let Some(keys) = self.read_keys_at(account, genesis_at)? else { return Ok(None) };
+        let Some(&genesis_at) = self.geneses.get(account) else { return Ok(None) };
+        let Some(keys) = self.read_keys_exact(account, genesis_at)? else { return Ok(None) };
         self.keep_keys(account, Epoch(genesis_at), genesis_at, keys.clone())?;
         Ok(Some(keys))
     }
 
-    /// THE CURRENT KEYS of `account` as this mirror holds them — the set that
-    /// opens it as of the mirror's HEAD, the position the mirror stands at
-    /// (REG-3.7, REG-3.39's fold): the walk's read of "the current keys",
-    /// the claimant's being the registrar's. `None` where this reader could
-    /// not read the table — UNDETERMINABLE HERE, never an empty set.
+    /// THE CURRENT KEYS of `account` — the set that opens it as of the
+    /// mirror's HEAD, the position the mirror stands at (REG-3.7, REG-3.39's
+    /// fold): the walk's read of "the current keys", the claimant's being the
+    /// registrar's. A query that may complete the mirror's concrete state:
+    /// each table on the walk is the fetch cache's at the head's epoch, else
+    /// read off the board — counted in [`Stats::reads`](super::Stats) — and
+    /// kept, in memory and in the cache's file; asked again before a sync it
+    /// answers alike, a table being constant across its epoch. `Some` of the
+    /// empty set where no account on the walk holds a key; `None` where this
+    /// reader cannot read a table on the walk — UNDETERMINABLE HERE, never an
+    /// empty set. Refused where the board is not reached or answers out of
+    /// the read's shape ([`MirrorError::Board`]), or the cache's line is not
+    /// written ([`MirrorError::Copy`]).
     pub fn current_keys(&mut self, account: &Address) -> Result<Option<Vec<Enrolled>>, MirrorError> {
         let head = self.head;
         self.keys_opening(account, head)

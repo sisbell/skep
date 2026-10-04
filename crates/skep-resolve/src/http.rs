@@ -109,7 +109,9 @@ impl fmt::Display for Method {
 }
 
 /// One exchange with a board: write a request, read the answer whole.
-/// `Err` means the board was not reached or did not answer; an answered
+/// `Err` means the board was not reached or did not answer, or answered past
+/// what the transport reads of one ([`TransportError::TooLarge`]) — the one
+/// `Err` the typed reads take as an answer they cannot read; an answered
 /// refusal is a status and a body.
 pub trait Transport {
     fn exchange(&self, method: Method, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError>;

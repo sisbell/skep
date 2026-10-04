@@ -28,10 +28,9 @@ use crate::board::{
     v_ordinal_in, Board, BoardError,
 };
 use crate::index::Ledger;
-use crate::mirror::MirrorError;
 use crate::origin::{NameResolver, Transports};
-use crate::parse_address;
 use crate::state::{BindingRecord, EndpointRecord, Judged, Resolution, Verdict};
+use crate::{parse_address, record_address};
 
 /// What the guest-reading resolve cost (the investigation §3.1).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -57,13 +56,15 @@ pub struct GuestCost {
 /// over its doc 1; each honored deposit's standing on the board's active
 /// view, as the board itself reads it (REG-1.11). Every verdict
 /// UNDETERMINABLE HERE: no position is held to judge a record as of. Answers
-/// the face and the cost.
+/// the face and the cost; refused only where the board refuses or cannot
+/// answer a read the scan makes, a class scan whose window does not advance
+/// among them ([`BoardError::Malformed`]).
 pub fn guest_resolve(
     board: &Board,
     prefix: &Address,
     names: &dyn NameResolver,
     transports: &Transports,
-) -> Result<(Resolution, GuestCost), MirrorError> {
+) -> Result<(Resolution, GuestCost), BoardError> {
     let t = Instant::now();
     let reads_before = board.reads().total();
     let mut cost = GuestCost::default();
@@ -79,15 +80,16 @@ pub fn guest_resolve(
         cost.atoms_read += 1;
         let Ok(record) = parse(BodyKind::Binding, text.as_bytes()) else { continue };
         let Body::Binding(b) = record.body else { continue };
-        let Some(binding_prefix) = parse_address(&b.prefix) else { continue };
+        // The canonical rule admitted its address members: each is the
+        // address it names, never judged again.
         ledger.fold_binding(Judged {
             position: 0,
             link: link.clone(),
             home,
             record: BindingRecord {
-                prefix: binding_prefix,
+                prefix: record_address(&b.prefix),
                 account: to.first().cloned(),
-                replaces: b.replaces.as_deref().and_then(parse_address),
+                replaces: b.replaces.as_deref().map(record_address),
                 honored: false,
             },
             verdict: Verdict::UndeterminableHere,
@@ -125,7 +127,7 @@ pub fn guest_resolve(
             home: deposit_home,
             record: EndpointRecord {
                 origins: e.origins,
-                replaces: e.replaces.as_deref().and_then(parse_address),
+                replaces: e.replaces.as_deref().map(record_address),
                 honored: false,
                 nullified: false,
             },
@@ -151,7 +153,7 @@ const WINDOW: usize = 256;
 /// last of them (skep-discovery's `Window`; wire.md §Value encodings) — the
 /// one shape that moves the cursor, so any other is refused
 /// [`BoardError::Malformed`] and no board pages a scan forever.
-fn scan_class(board: &Board, ty: &Address, home: Option<&Address>) -> Result<Vec<Address>, MirrorError> {
+fn scan_class(board: &Board, ty: &Address, home: Option<&Address>) -> Result<Vec<Address>, BoardError> {
     let home_spec = match home {
         Some(h) => json!([unit_span_json(h)]),
         None => json!("any"),
@@ -177,7 +179,7 @@ fn scan_class(board: &Board, ty: &Address, home: Option<&Address>) -> Result<Vec
                 && window["next"].as_str().and_then(parse_address).as_ref() == addrs.last()
         });
         let Some(addrs) = full else {
-            return Err(BoardError::Malformed("a window that does not advance past its cursor".into()).into());
+            return Err(BoardError::Malformed("a window that does not advance past its cursor".into()));
         };
         cur = addrs.last().cloned();
         out.extend(addrs);
@@ -187,7 +189,7 @@ fn scan_class(board: &Board, ty: &Address, home: Option<&Address>) -> Result<Vec
 /// A stored link of type `ty` — its home, from the link's own address, its
 /// `from` atom and its `to`; `None` where no link stands there, or one of
 /// another type ([`Board::link_slots`]).
-fn read_link(board: &Board, link: &Address, ty: &Address) -> Result<Option<(Address, Address, Vec<Address>)>, MirrorError> {
+fn read_link(board: &Board, link: &Address, ty: &Address) -> Result<Option<(Address, Address, Vec<Address>)>, BoardError> {
     let Some(slots) = board.link_slots(link, &[ty])? else { return Ok(None) };
     if slots.ty.is_none() {
         return Ok(None);
@@ -199,12 +201,12 @@ fn read_link(board: &Board, link: &Address, ty: &Address) -> Result<Option<(Addr
 
 /// An atom at the head of its home: the append-only guess, else the head's
 /// whole image — an image whose runs do not all read locating nothing.
-fn atom_at_head(board: &Board, home: &Address, addr: &Address) -> Result<Option<String>, MirrorError> {
-    let retrieve = |ordinal: u64| -> Result<Option<String>, MirrorError> {
+fn atom_at_head(board: &Board, home: &Address, addr: &Address) -> Result<Option<String>, BoardError> {
+    let retrieve = |ordinal: u64| -> Result<Option<String>, BoardError> {
         let v = board.op(&retrieve_frame(home, ordinal))?;
         Ok(v["items"].as_array().filter(|i| i.len() == 1).and_then(|i| i[0]["atom"].as_str()).map(str::to_string))
     };
-    let image = |from: u64, width: u64| -> Result<Vec<(Address, u64)>, MirrorError> {
+    let image = |from: u64, width: u64| -> Result<Vec<(Address, u64)>, BoardError> {
         Ok(runs_of(&board.op(&image_frame(home, from, width))?).unwrap_or_default())
     };
     if let Some(n) = content_ordinal_in(home, addr) {
@@ -225,7 +227,7 @@ fn atom_at_head(board: &Board, home: &Address, addr: &Address) -> Result<Option<
 
 /// The account's live key set ([`Board::key_set`]); `None` where the answer
 /// is no key set — this reader could not read it.
-fn live_keys(board: &Board, account: &Address) -> Result<Option<Vec<Enrolled>>, MirrorError> {
+fn live_keys(board: &Board, account: &Address) -> Result<Option<Vec<Enrolled>>, BoardError> {
     Ok(board.key_set(account)?.map(|answer| answer.enrolled))
 }
 
@@ -346,12 +348,12 @@ mod tests {
             ((first.clone(), Some(first[0].clone()), false), "a next that is not its last"),
         ] {
             let (scanned, asked) = scan(vec![window]);
-            assert!(matches!(scanned, Err(MirrorError::Board(BoardError::Malformed(_)))), "{case}");
+            assert!(matches!(scanned, Err(BoardError::Malformed(_))), "{case}");
             assert_eq!(asked, 1, "{case}: never asked again");
         }
         let replayed = vec![(second.clone(), last_of(&second), false), (first.clone(), last_of(&first), false)];
         let (scanned, asked) = scan(replayed);
-        assert!(matches!(scanned, Err(MirrorError::Board(BoardError::Malformed(_)))), "a window behind its cursor");
+        assert!(matches!(scanned, Err(BoardError::Malformed(_))), "a window behind its cursor");
         assert_eq!(asked, 2);
     }
 

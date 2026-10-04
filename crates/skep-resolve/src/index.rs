@@ -50,6 +50,14 @@ use crate::state::{BindingRecord, EndpointRecord, Judged, Standing, Verdict};
 /// Why a record was kept out of the index (rm-2): no record of the slot's
 /// kind at all, or its VERDICT — any of the five but SIGNED, the one that
 /// admits it — carried as judged and never re-worded.
+///
+/// Where several hold, one speaks, in the order the gate meets them: bytes
+/// this reader cannot read — no atom named, no account over the home, no
+/// bytes fetched — are UNDETERMINABLE HERE before any rule is asked; then
+/// the canonical rule, whose refusal is [`Cause::Malformed`]; then the
+/// verdict, a record being judged only once it parses. What the canonical
+/// rule admits is not judged again: a record's address members are the
+/// addresses they name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cause {
     /// The bytes are no record of the slot's kind under the canonical rule.

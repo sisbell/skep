@@ -5,13 +5,15 @@
 //! lacks an input; the rebuild from the copy with no wire read, and the
 //! offline mirror's scope; the base — the realm checked under a fresh base
 //! and a held copy alike (REG-3.42), the held head pairs checked
-//! (REG-3.18), a copy of another genesis retired (REG-3.17), the root the
+//! (REG-3.18), a re-ordered copy refused online by provenance and offline
+//! by its order, a copy of another genesis retired (REG-3.17), the root the
 //! first origin that answers; the copy's two files — begun together, read
-//! back by their format, written once per value — and the hint's one line
-//! (REG-3.2).
+//! back by their format, a cache line cut short holding nothing, written
+//! once per value — and the hint's one line (REG-3.2).
 
 use std::cell::RefCell;
 use std::fs;
+use std::io::Write;
 
 use serde_json::{json, Value};
 use skep_identity::Fingerprint;
@@ -198,6 +200,49 @@ fn a_held_copy_naming_another_realm_is_refused_at_the_claim() {
     );
     assert_eq!(fs::read_to_string(dir.path().join(FEED_COPY)).expect("the feed copy"), shipped_feed, "no line of the copy");
     assert_eq!(fs::read_to_string(dir.path().join(FETCH_CACHE)).expect("the fetch cache"), shipped_cache, "nor of the cache");
+}
+
+/// A CACHE LINE CUT SHORT HOLDS NOTHING: a fetch cache a crash left
+/// mid-line — its last line unterminated, no JSON — is read for every line
+/// that reads, the cut one passed over and never refusing the cache; the
+/// copy resumes against the source, its index the live one's.
+#[test]
+fn a_cache_line_cut_short_holds_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (fixture, live) = open_fixture_mirror(dir.path());
+    let index = live.index().clone();
+    drop(live);
+    let mut cache = fs::OpenOptions::new().append(true).open(dir.path().join(FETCH_CACHE)).expect("the fetch cache");
+    cache.write_all(br#"{"atom":{"addr"#).expect("a line cut short");
+    drop(cache);
+    let dial = replay_dial(fixture.clone());
+    let resumed = Mirror::open(&fixture.hint, dir.path(), &dial).expect("resumed");
+    assert!(matches!(resumed.opened(), Opened::Resumed { .. }), "{:?}", resumed.opened());
+    assert_eq!(*resumed.index(), index, "the index the live one's");
+}
+
+/// THE FEED'S ORDER, HELD ON EACH PATH BY ITS OWNER: a copy two of whose
+/// rows are swapped is refused online by provenance — `Refusal::Diverged` at
+/// the first held position that parts from the source, the later of the
+/// two (REG-3.13, the courier vector) — and offline, where no source
+/// answers, by its own order, never folded.
+#[test]
+fn a_reordered_copy_is_refused_by_provenance_online_and_by_its_order_offline() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (fixture, mirror) = open_fixture_mirror(dir.path());
+    drop(mirror);
+    let feed = fs::read_to_string(dir.path().join(FEED_COPY)).expect("the feed copy");
+    let mut lines: Vec<&str> = feed.lines().collect();
+    let rows: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| l.starts_with(r#"{"row":"#)).map(|(i, _)| i).collect();
+    let mid = rows[rows.len() / 2];
+    assert!(rows.contains(&(mid + 1)), "two rows side by side");
+    lines.swap(mid, mid + 1);
+    let later = serde_json::from_str::<Value>(lines[mid]).expect("a row")["row"]["at"].as_u64().expect("its position");
+    fs::write(dir.path().join(FEED_COPY), lines.join("\n") + "\n").expect("the copy, two rows swapped");
+    let dial = replay_dial(fixture.clone());
+    assert_eq!(Mirror::open(&fixture.hint, dir.path(), &dial).unwrap_err(), MirrorError::Refused(Refusal::Diverged { at: later }));
+    let offline = Mirror::rebuild_offline(&fixture.hint, dir.path()).unwrap_err();
+    assert!(matches!(&offline, MirrorError::Copy(e) if e.contains("do not rise")), "{offline:?}");
 }
 
 /// THE HEAD PAIRS ARE CHECKED (REG-3.18; `Refusal::ChainDiverged`): a copy

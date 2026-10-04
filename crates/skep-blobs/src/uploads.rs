@@ -14,19 +14,18 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::fs::File;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::io;
+use std::path::Path;
 
 use serde_json::{json, Value};
 
-use crate::blobs::{line_of, open_append, read_log, rewrite_log};
+use crate::jsonl::Log;
 
 /// The identifier's width: 128 bits.
 pub const IDENTIFIER_BYTES: usize = 16;
 
 /// The log's file name under the root.
-pub(crate) const UPLOADS_LOG: &str = "uploads.log";
+const UPLOADS_LOG: &str = "uploads.log";
 
 /// One upload's identifier — 128 bits from the OS, compared exactly.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -93,13 +92,6 @@ pub struct UploadRecord {
 }
 
 impl UploadRecord {
-    /// The partial's file name inside the designation directory —
-    /// `.upload-<identifier>`: the dot keeps it apart from any hex name a
-    /// walk of the directory reads as a blob.
-    pub fn partial_name(&self) -> String {
-        partial_name(&self.id)
-    }
-
     /// The record as its log line's value.
     fn value(&self) -> Value {
         json!({
@@ -114,19 +106,9 @@ impl UploadRecord {
     }
 
     /// Whether the upload stands at `now_ms`: unexpired.
-    pub fn stands(&self, now_ms: u64) -> bool {
+    pub(crate) fn stands(&self, now_ms: u64) -> bool {
         now_ms < self.expires
     }
-}
-
-/// The partial's name for an identifier.
-pub(crate) fn partial_name(id: &UploadId) -> String {
-    format!(".upload-{}", id.to_hex())
-}
-
-/// The identifier a partial's file name spells, if it is one.
-pub(crate) fn id_of_partial_name(name: &str) -> Option<UploadId> {
-    name.strip_prefix(".upload-").and_then(UploadId::parse)
 }
 
 /// One log line, read.
@@ -153,11 +135,8 @@ fn parse_line(v: &Value) -> Option<Line> {
 
 /// The records as held in memory beside their log.
 pub(crate) struct UploadRecords {
-    path: PathBuf,
-    file: File,
+    log: Log,
     records: HashMap<UploadId, UploadRecord>,
-    /// Lines on disk, so compaction knows whether anything was dropped.
-    lines_on_disk: usize,
 }
 
 impl UploadRecords {
@@ -166,12 +145,9 @@ impl UploadRecords {
     /// it. Compaction is the caller's, after the reconciliation with the
     /// partials ([`UploadRecords::compact`]).
     pub fn open(root: &Path) -> io::Result<UploadRecords> {
-        let path = root.join(UPLOADS_LOG);
-        let (values, _cut) = read_log(&path)?;
+        let (log, values) = Log::open(root.join(UPLOADS_LOG))?;
         let mut records = HashMap::new();
-        let mut lines_on_disk = 0;
         for v in &values {
-            lines_on_disk += 1;
             match parse_line(v) {
                 Some(Line::Record(r)) => {
                     records.insert(r.id, r);
@@ -185,8 +161,7 @@ impl UploadRecords {
                 None => {}
             }
         }
-        let file = open_append(&path)?;
-        Ok(UploadRecords { path, file, records, lines_on_disk })
+        Ok(UploadRecords { log, records })
     }
 
     pub fn get(&self, id: &UploadId) -> Option<&UploadRecord> {
@@ -201,15 +176,7 @@ impl UploadRecords {
     /// log, which a durable offset owes (the byte is received once the
     /// partial AND its record's offset are on disk).
     pub fn put(&mut self, record: UploadRecord, sync: bool) -> io::Result<()> {
-        let line = line_of(&record.value());
-        self.file.write_all(line.as_bytes())?;
-        self.file.write_all(b"\n")?;
-        if sync {
-            self.file.sync_all()?;
-        } else {
-            self.file.flush()?;
-        }
-        self.lines_on_disk += 1;
+        self.log.append(&record.value(), sync)?;
         self.records.insert(record.id, record);
         Ok(())
     }
@@ -221,26 +188,14 @@ impl UploadRecords {
         if self.records.remove(id).is_none() {
             return Ok(());
         }
-        let line = line_of(&json!({"id": id.to_hex(), "retired": true}));
-        self.file.write_all(line.as_bytes())?;
-        self.file.write_all(b"\n")?;
-        self.file.flush()?;
-        self.lines_on_disk += 1;
-        Ok(())
+        self.log.append(&json!({"id": id.to_hex(), "retired": true}), false)
     }
 
     /// Rewrite the log to the current records where any line on disk is
     /// not one — so the log never grows with the board's upload history.
     pub fn compact(&mut self) -> io::Result<()> {
-        if self.lines_on_disk == self.records.len() {
-            return Ok(());
-        }
         let mut ids: Vec<&UploadId> = self.records.keys().collect();
         ids.sort_by_key(|id| id.to_hex());
-        let lines: Vec<String> =
-            ids.iter().map(|id| line_of(&self.records[*id].value())).collect();
-        self.file = rewrite_log(&self.path, &lines)?;
-        self.lines_on_disk = lines.len();
-        Ok(())
+        self.log.compact(ids.into_iter().map(|id| self.records[id].value()))
     }
 }

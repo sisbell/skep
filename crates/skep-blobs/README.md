@@ -64,9 +64,13 @@ is the caller's to hold around `Store::finish`; the crate's own
 guarantee is the order of its steps and what each leaves behind on a
 crash.
 
-Its `test-hooks` feature (default off) compiles in the hazard seam: a
-hold or an injected failure at a named step of the finish, which the
-crate's own fsync-order tests and the daemon's SIGKILL harness drive.
+Its `test-hooks` feature (default off) compiles in the test seam,
+`src/store/hooks.rs`: the hazard seam — a hold or an injected failure at
+a named step of the finish, which the crate's own fsync-order tests and
+the daemon's SIGKILL harness drive — and the three methods only a test
+calls: `install`, which plants a file under a hash its bytes need not
+have, `written` and `asides_pending`. A build without the feature
+carries none of it.
 
 ## License
 

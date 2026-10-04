@@ -26,7 +26,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use crate::blobs::{designation_ok, fsync_dir, is_aside_name};
-use crate::uploads::{id_of_partial_name, UploadId, UploadRecords};
+use crate::uploads::{UploadId, UploadRecords};
 
 /// THE FSYNC GRAIN of a partial — 1 MiB, INTERIM: the most a dropped
 /// connection re-sends, against one fsync of the partial and one of the
@@ -36,17 +36,33 @@ pub const SYNC_GRAIN: u64 = 1024 * 1024;
 /// One upload open in this process: its partial's handle, the hasher over
 /// every byte written so far, the hasher as it stood at the last durable
 /// point, and the bytes written (the file's length), which may stand past
-/// the record's durable offset until the next sync.
+/// the record's durable offset until the next sync. The fields are this
+/// file's alone — only [`open_at`], [`Live::write`], [`Live::sync`] and
+/// [`Live::cut_back_to`] move them — so the hashers stay the hashes of
+/// exactly the bytes written and the bytes synced, and the hash a finish
+/// names the file by ([`Live::hash`]) is its bytes' hash.
 pub(crate) struct Live {
-    pub file: File,
-    pub hasher: blake3::Hasher,
-    pub hasher_durable: blake3::Hasher,
-    pub written: u64,
+    file: File,
+    hasher: blake3::Hasher,
+    hasher_durable: blake3::Hasher,
+    written: u64,
+}
+
+/// The partial's file name inside its designation directory —
+/// `.upload-<identifier>`: the dot keeps it apart from any hex name a walk
+/// of the directory reads as a blob.
+fn partial_name(id: &UploadId) -> String {
+    format!(".upload-{}", id.to_hex())
+}
+
+/// The identifier a partial's file name spells, if it is one.
+fn id_of_partial_name(name: &str) -> Option<UploadId> {
+    name.strip_prefix(".upload-").and_then(UploadId::parse)
 }
 
 /// The partial's path.
 pub(crate) fn partial_path(root: &Path, designation: &str, id: &UploadId) -> PathBuf {
-    root.join(designation).join(crate::uploads::partial_name(id))
+    root.join(designation).join(partial_name(id))
 }
 
 /// Create an empty partial for a new upload, its designation directory
@@ -102,6 +118,17 @@ pub(crate) fn open_at(root: &Path, designation: &str, id: &UploadId, offset: u64
 }
 
 impl Live {
+    /// The bytes written so far — the file's length, durable or not.
+    pub fn written(&self) -> u64 {
+        self.written
+    }
+
+    /// The hash of every byte written so far — after [`Live::sync`], of
+    /// every byte on disk.
+    pub fn hash(&self) -> blake3::Hash {
+        self.hasher.finalize()
+    }
+
     /// Write `bytes` at the end and hash them; not yet durable.
     pub fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
         self.file.write_all(bytes)?;
@@ -142,14 +169,8 @@ pub(crate) fn remove(root: &Path, designation: &str, id: &UploadId) -> io::Resul
 }
 
 /// THE RECONCILIATION AT OPEN, both ways, in every designation directory
-/// under `root`. Answers the directories found (the designations this
-/// root holds).
-pub(crate) fn reconcile(
-    root: &Path,
-    records: &mut UploadRecords,
-    now_ms: u64,
-) -> io::Result<Vec<String>> {
-    let mut designations = Vec::new();
+/// under `root`.
+pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -> io::Result<()> {
     let mut named: HashSet<(String, UploadId)> = HashSet::new();
     // Records first: expired ones retired; the rest held to their partials.
     let all: Vec<_> = records.all().cloned().collect();
@@ -208,8 +229,6 @@ pub(crate) fn reconcile(
         if removed {
             fsync_dir(&dir)?;
         }
-        designations.push(name);
     }
-    designations.sort();
-    Ok(designations)
+    Ok(())
 }

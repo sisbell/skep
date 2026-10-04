@@ -16,16 +16,15 @@
 //! horizon and the interval are the daemon's constants (D1), handed in.
 
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::io;
+use std::path::Path;
 
 use serde_json::{json, Value};
 
-use crate::blobs::{line_of, open_append, read_log, rewrite_log};
+use crate::jsonl::Log;
 
 /// The log's file name under the root.
-pub(crate) const LEASES_LOG: &str = "leases.log";
+const LEASES_LOG: &str = "leases.log";
 
 /// One deposit's lease: KEY holds `<designation>/<hex>` of `size` bytes
 /// until `expires`.
@@ -60,7 +59,7 @@ impl Lease {
     }
 
     /// Live at `now_ms`?
-    pub fn live(&self, now_ms: u64) -> bool {
+    fn live(&self, now_ms: u64) -> bool {
         now_ms < self.expires
     }
 }
@@ -79,10 +78,8 @@ pub enum LeaseState {
 /// The leases as held in memory beside their log, keyed by
 /// `(key, designation, hex)`.
 pub(crate) struct LeaseLog {
-    path: PathBuf,
-    file: File,
+    log: Log,
     leases: HashMap<(String, String, String), Lease>,
-    lines_on_disk: usize,
     horizon_ms: u64,
 }
 
@@ -91,31 +88,23 @@ impl LeaseLog {
     /// kept, every lease lapsed past the horizon at `now_ms` dropped, and
     /// the log rewritten where anything was dropped.
     pub fn open(root: &Path, now_ms: u64, horizon_ms: u64) -> io::Result<LeaseLog> {
-        let path = root.join(LEASES_LOG);
-        let (values, _cut) = read_log(&path)?;
+        let (log, values) = Log::open(root.join(LEASES_LOG))?;
         let mut leases = HashMap::new();
-        let mut lines_on_disk = 0;
         for v in &values {
-            lines_on_disk += 1;
             if let Some(l) = Lease::parse(v) {
                 leases.insert((l.key.clone(), l.designation.clone(), l.hex.clone()), l);
             }
         }
         leases.retain(|_, l| !past_horizon(l, now_ms, horizon_ms));
-        let file = open_append(&path)?;
-        let mut log = LeaseLog { path, file, leases, lines_on_disk, horizon_ms };
-        log.compact()?;
-        Ok(log)
+        let mut opened = LeaseLog { log, leases, horizon_ms };
+        opened.compact()?;
+        Ok(opened)
     }
 
     /// Append `lease` as the key's current lease on the hash and SYNC it —
     /// the PUT answers only after this returns.
     pub fn append_synced(&mut self, lease: Lease) -> io::Result<()> {
-        let line = line_of(&lease.value());
-        self.file.write_all(line.as_bytes())?;
-        self.file.write_all(b"\n")?;
-        self.file.sync_all()?;
-        self.lines_on_disk += 1;
+        self.log.append(&lease.value(), true)?;
         self.leases.insert((lease.key.clone(), lease.designation.clone(), lease.hex.clone()), lease);
         Ok(())
     }
@@ -174,15 +163,9 @@ impl LeaseLog {
     /// Rewrite the log to the current leases where any line on disk is not
     /// one.
     fn compact(&mut self) -> io::Result<()> {
-        if self.lines_on_disk == self.leases.len() {
-            return Ok(());
-        }
         let mut keys: Vec<&(String, String, String)> = self.leases.keys().collect();
         keys.sort();
-        let lines: Vec<String> = keys.iter().map(|k| line_of(&self.leases[*k].value())).collect();
-        self.file = rewrite_log(&self.path, &lines)?;
-        self.lines_on_disk = lines.len();
-        Ok(())
+        self.log.compact(keys.into_iter().map(|k| self.leases[k].value()))
     }
 }
 

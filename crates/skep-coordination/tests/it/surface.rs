@@ -167,6 +167,7 @@ fn every_wrapping_rejection_yields_its_cause() {
     }
     // A leaf carries none — the same `source` that must answer above.
     let leaves: Vec<Box<dyn Error + Send + Sync>> = vec![
+        Box::new(DefineError::Unstorable),
         Box::new(EvalError::ArgArityMismatch),
         Box::new(RetractError::NotActive),
         Box::new(FireError::HomeNotRegistered),

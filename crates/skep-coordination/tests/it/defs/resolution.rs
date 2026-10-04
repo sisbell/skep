@@ -3,20 +3,21 @@
 //! meets, a body too deep and a reference cycle included — and the two
 //! answers it never keeps, a never-registered start's and that of a start
 //! with nothing resident yet; and the registration probes, class-free beside
-//! the guest-class look, and matching a start exactly where PL's `is_K`
-//! matches by coverage.
+//! the guest-class look, and matching a start by its coverage class — the
+//! identity M7's dedup keys a registration by — where PL's `is_K` matches by
+//! coverage.
 
 use crate::common::*;
-use crate::defs::envelope;
+use crate::defs::{envelope, forged_negations};
 use crate::terms::*;
 
-use skep_address::document_of;
+use skep_address::{document_of, Address};
 use skep_content::HasContent;
 use skep_coordination::{
     CertifyError, Coordinator, DefineError, Dom, EvalError, RegisterError, Rule, RuleError, Sort,
     Term, Trigger, TypeError, Value, View,
 };
-use skep_links::{Caller, ShippedType, Tip};
+use skep_links::{Caller, ShippedType, SlotArg, Tip};
 
 /// PR-DISC's freeze-on-breach: a `pdef` on content that is no def —
 /// registered past `register_pred`'s gate, through M7 directly — is
@@ -378,17 +379,18 @@ fn a_pdef_hidden_from_the_guest_class_does_not_absorb_a_second_registration() {
     assert!(!c.is_active_pred(&start, &k.snapshot()));
 }
 
-/// A def's registration is its START: `register_pred` and `certify_stable`
-/// deposit `enc({start})`, and the def probes match that exactly. On the
-/// disciplined domain that refuses only what coverage answers wrongly — a
-/// def's own `pdef` covers the addresses under its start, and none of them
-/// holds a def. Under a breach it is what bounds a forgery: a tuple whose F
-/// merely COVERS a start — here one at doc1 itself, deposited past the gate,
-/// covering every address in the document — registers, endorses and
+/// A tuple whose F merely COVERS a def's start, from an ancestor, never names
+/// it: the def probes match a start by its coverage class — the class of the
+/// `enc({start})` that `register_pred` and `certify_stable` deposit — and an
+/// ancestor's tuple has the ancestor's class. On the disciplined domain that
+/// refuses only what coverage answers wrongly — a def's own `pdef` covers the
+/// addresses under its start, and none of them holds a def. Under a breach it
+/// is what bounds a forgery: one tuple at doc1 itself, deposited past the
+/// gate and covering every address in the document, registers, endorses and
 /// certifies nothing, and `retract_pred` never takes it for the def's own.
 /// Matched by coverage, that one tuple would forge all of doc1.
 #[test]
-fn a_registration_probe_matches_its_start_exactly_never_a_covering_tuple() {
+fn a_registration_probe_never_takes_a_covering_tuple_for_its_start() {
     let k = kernel();
     let c = coord(&k);
     let term = c.type_check(vec![], tru()).expect("closed True");
@@ -421,4 +423,58 @@ fn a_registration_probe_matches_its_start_exactly_never_a_covering_tuple() {
     ));
     c.retract_pred(&doc1(), &live).expect("retract the live def");
     assert!(!c.is_active_pred(&live, &k.snapshot()), "its own pdef, never the covering one");
+}
+
+/// A def's registration is the identity M7's idem dedup keys its deposit by —
+/// an F of `start`'s coverage class (ASN-0128 I0) — and not one spelling of
+/// it. A `pdef` and a `pd_stable` deposited past the gate through the open
+/// surface, each with F spelled `{start, start·7}`, are coverage-equal to
+/// `enc({start})`, so `register_pred`'s and `certify_stable`'s emits dedup
+/// onto them and commit nothing; every probe then counts them as `start`'s —
+/// ever and active, certified, evaluable, derived alike by a cold handle, a
+/// referent a new def may name, and the tuple `retract_pred` takes. Counted
+/// by any narrower identity, `register_pred` would answer `Ok` over a start
+/// no probe registers, its own memo holding a signature the ever-probe
+/// denies. And a class is the whole identity: a `pdef` spelling `start`
+/// beside an UNRELATED address has a class of its own and names no start —
+/// one tuple names one start at most.
+#[test]
+fn a_registration_is_the_coverage_class_m7_dedups_the_deposit_by() {
+    let k = kernel();
+    let c = coord(&k);
+    let start = insert_raw(&k, &doc1(), forged_negations(0)); // the closed ⊤
+    assert_eq!(start, ca(1));
+    let breach = |from: Vec<Address>, ty: u32| {
+        link_writer(&k)
+            .makelink(
+                Caller::System,
+                &doc1(),
+                SlotArg::Addrs(from),
+                SlotArg::Addrs(vec![]),
+                SlotArg::Addrs(vec![ra(ty)]),
+            )
+            .expect("the breach: a tuple past the gate")
+            .0
+    };
+    breach(vec![start.clone(), ca(9)], PRED_DEF);
+    assert!(!c.is_ever_pred(&start, &k.snapshot()), "{{start, ca9}} names no start");
+    let beside_its_extension = || vec![start.clone(), a(&[1, 0, 1, 0, 1, 0, 1, 1, 7])];
+    let pdef = breach(beside_its_extension(), PRED_DEF);
+    let certificate = breach(beside_its_extension(), PRED_STABLE);
+    let before = k.current_seq();
+    let (registration, _) = c.register_pred(&doc1(), &start).expect("every gate passes");
+    let (certified, _) = c.certify_stable(&doc1(), &start).expect("⊤ is Bool, active and ST⁺");
+    assert_eq!((registration, certified), (pdef, certificate), "the breach absorbed both");
+    assert_eq!(k.current_seq(), before, "and nothing was committed");
+    let s = k.snapshot();
+    assert!(c.is_ever_pred(&start, &s), "the incumbent registers start");
+    assert!(c.is_active_pred(&start, &s));
+    assert!(c.is_certified_stable(&start, &s));
+    assert_eq!(c.evaluate_def(&start, &[], View::Active, &s), Ok(Value::Bool(true)));
+    assert_eq!(coord(&k).signature(&start).map(|sig| sig.result), Some(Sort::Bool));
+    let reference =
+        c.type_check(vec![], Term::Ref { addr: start.clone(), args: vec![] }).expect("types");
+    c.define_predicate(&doc1(), &reference).expect("its referent is registered and active");
+    c.retract_pred(&doc1(), &start).expect("the registration retracted is the incumbent");
+    assert!(!c.is_active_pred(&start, &k.snapshot()));
 }

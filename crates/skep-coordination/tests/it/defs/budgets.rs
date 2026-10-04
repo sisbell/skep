@@ -1,6 +1,7 @@
 //! The resource doors on the stored-bytes path, each at its boundary: the
-//! nesting cap, counted through references; the node budget; and the
-//! expansion budget.
+//! nesting cap, counted through references; the node budget; the expansion
+//! budget; and the def codec's own doors, asked of a checked term before it
+//! is stored.
 
 use crate::common::*;
 use crate::defs::{envelope, forged_negations, varint};
@@ -8,8 +9,8 @@ use crate::terms::*;
 
 use skep_address::Address;
 use skep_coordination::{
-    CertifyError, Dom, Lit, Nat, RegisterError, Rule, RuleError, Sort, Term, Trigger, TypeError,
-    Value, View,
+    CertifyError, DefineError, Dom, Lit, Nat, RegisterError, Rule, RuleError, Sort, Term, Trigger,
+    TypeError, Value, View,
 };
 
 /// The nesting cap defends, and is counted through references: a
@@ -146,6 +147,50 @@ fn register_pred_refuses_a_stored_literal_that_multiplies_past_the_node_budget()
         Err(RegisterError::IllTyped(TypeError::TooLarge))
     ));
     assert!(c.signature(&forged).is_none(), "orphan content, never registered");
+}
+
+/// A checked term is not thereby storable, and `define_predicate` asks the
+/// def codec before it stores anything. The checker and the decoder meter
+/// different trees: a shipped type key costs the checker nothing at its type
+/// position and the decoder 37 units, so a conjunction of 2 048
+/// `is_K(pred_def, x)` atoms checks at 6 144 units and would cost the decoder
+/// 81 920, past its 65 536; and the decoder reads `count(Reg)`'s domain a
+/// level below the node the checker folds to a literal, so that count at the
+/// cap checks and does not decode — its bytes, stored past
+/// `define_predicate`, are a run `register_pred` refuses `ParseFailed`, an
+/// orphan no registration adopts. Each term is refused `Unstorable` with
+/// nothing committed, and the conjunction of half as many atoms, 40 960 units
+/// to the decoder, defines.
+#[test]
+fn define_predicate_refuses_a_checked_term_its_codec_cannot_read_back() {
+    let k = kernel();
+    let c = coord(&k);
+    let conjunction = |leaves: u32| {
+        let mut t = is_k(&pred_def_ty(), var(1));
+        for _ in 0..leaves.trailing_zeros() {
+            t = and(t.clone(), t);
+        }
+        c.type_check(vec![(v(1), Sort::Addr)], t).expect("three checker units a leaf")
+    };
+    let folded = c
+        .type_check(vec![], (0..127).fold(nat_eq(count(Dom::Reg), lit_nat(5)), |t, _| not(t)))
+        .expect("the checker folds count(Reg) to a literal at the cap");
+    let before = k.current_seq();
+    for term in [conjunction(2048), folded] {
+        let refused = c.define_predicate(&doc1(), &term);
+        assert!(matches!(refused, Err(DefineError::Unstorable)), "{refused:?}");
+    }
+    assert_eq!(k.current_seq(), before, "refused before any transaction");
+
+    // The folded count's own bytes, stored past `define_predicate`: the run
+    // `register_pred` would have been handed, and refuses.
+    let mut payload = vec![0u8]; // no parameters
+    payload.extend(std::iter::repeat_n(7u8, 127)); // NOT, per level
+    payload.extend([4u8, 8, 14, 5, 2, 3, 1, 5]); // PRIM NAT_EQ, COUNT REG, LIT NAT 5
+    let forged = insert_raw(&k, &doc1(), envelope(payload));
+    assert!(matches!(c.register_pred(&doc1(), &forged), Err(RegisterError::ParseFailed)));
+
+    c.define_predicate(&doc1(), &conjunction(1024)).expect("40 960 units to the decoder");
 }
 
 /// A reference chain is bounded at registration, not discovered at a cold

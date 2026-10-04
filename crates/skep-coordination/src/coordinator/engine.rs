@@ -631,9 +631,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
         let links = snap.world().links();
         // "This slot denotes `a` and nothing else" — M7's own test, the one
         // `GuestLinks::target_of` applies, so the attribution key's exactness
-        // is asked the same way everywhere. It reads the slot as a SET, so a
-        // slot spelling `a` twice still keys on `{a}`: the recompute
-        // over-counts, as its contract above says, and never under-counts.
+        // is asked one way in both reads that ask it. It reads the slot as a
+        // SET, so a slot spelling `a` twice still keys on `{a}`: the
+        // recompute over-counts, as its contract above says, and never
+        // under-counts.
         let exact = |e: &Endset, a: &Address| -> bool { e.single_denoted() == Some(a.tumbler()) };
         match &rule.action {
             FireAction::Marker { home, ty } => links

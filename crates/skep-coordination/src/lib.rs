@@ -92,12 +92,13 @@
 //!   (`UndisciplinedDef`, freeze-on-breach), but `is_ever_pred`,
 //!   `is_active_pred` and `is_certified_stable` read the classes: nothing in
 //!   M9 can tell a breaching `pd_stable` tuple from a certificate. What
-//!   bounds a breach is that those probes match a start EXACTLY — a tuple
-//!   whose F names it, the shape the two writes deposit — so a forgery costs
-//!   its writer one tuple per start, and one whose F merely covers starts,
-//!   from a document, an account or the node, forges none of them. PL's
-//!   `is_K` over the two classes matches by coverage (D2), and a rule reading
-//!   either class has no such bound.
+//!   bounds a breach is that those probes match a start by its COVERAGE
+//!   CLASS — the F half of the I0 identity M7's dedup keys the two writes'
+//!   deposits by, so one tuple names one start at most — so a forgery costs
+//!   its writer one tuple per start, and one whose F covers starts from a
+//!   document, an account or the node has that ancestor's class and forges
+//!   none of them. PL's `is_K` over the two classes matches by coverage (D2),
+//!   and a rule reading either class has no such bound.
 
 #![forbid(unsafe_code)]
 

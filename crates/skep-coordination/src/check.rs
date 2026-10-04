@@ -55,7 +55,8 @@ use crate::walk::{rewrite_term, Rewrite};
 /// SignedTerm), and a [`TriggerTerm`] — the one checked term whose parameter
 /// may be a tuple — does not yield one, in this crate or out of it. That is
 /// what lets `define_predicate` take a `TypedTerm` and store it without a
-/// tuple check of its own.
+/// tuple check of its own — though not without asking the def codec whether
+/// the encoding reads back (`DefineError::Unstorable`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypedTerm {
     signed: SignedTerm,

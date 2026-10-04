@@ -26,19 +26,21 @@
 //! `evaluate_def` included — goes through `Coordinator::eval_ctx`'s
 //! guest-class view.
 //!
-//! THE DEF LAYER MATCHES A START EXACTLY, where PL's `is_K` matches by
-//! coverage (D2): `register_pred` and `certify_stable` deposit
-//! `enc({start})`, so a def's registration and its certificate are tuples
-//! whose F names the start and nothing else, and every probe of them — the
-//! two registration probes, `is_certified_stable` and `retract_pred`'s
-//! target — asks `tuple_naming`. A tuple whose F merely COVERS an address
-//! names nothing there. On the disciplined domain that refuses only wrong
-//! answers: no def start lies under another, a content address being minted
-//! one ordinal deep (M3's element field `[s_C, n]`), and an address under a
-//! def's start holds no def. Under a breach (PR-DISC) it is what bounds a
-//! forgery to one start per tuple: one tuple at an ancestor — a document, an
-//! account, the node — would otherwise register, endorse and certify every
-//! start beneath it.
+//! THE DEF LAYER MATCHES A START BY ITS COVERAGE CLASS, where PL's `is_K`
+//! matches by coverage (D2): `register_pred` and `certify_stable` deposit
+//! `enc({start})`, and M7's idem dedup absorbs either deposit into any active
+//! tuple of the same I0 identity (ASN-0128 I0) — so a def's registration and
+//! its certificate are the tuples whose F has `start`'s class, and every
+//! probe of them — the two registration probes, `is_certified_stable` and
+//! `retract_pred`'s target — asks `tuple_naming`. A tuple whose F merely
+//! COVERS an address names nothing there. On the disciplined domain that
+//! refuses only wrong answers: no def start lies under another, a content
+//! address being minted one ordinal deep (M3's element field `[s_C, n]`),
+//! and an address under a def's start holds no def. Under a breach (PR-DISC)
+//! it is what bounds a forgery to one start per tuple — a tuple has one
+//! class, and so names one start at most: one tuple at an ancestor — a
+//! document, an account, the node — has that ancestor's class, where matched
+//! by coverage it would register, endorse and certify every start beneath it.
 
 use std::collections::HashSet;
 use std::slice::from_ref;
@@ -48,7 +50,7 @@ use skep_address::{Address, Tumbler};
 use skep_arrangement::{Deposit, VPos};
 use skep_content::{ContentStore, Val};
 use skep_kernel::{Seq, Snapshot};
-use skep_links::{Caller, Pattern, ShippedType, Tip, Tuple, View};
+use skep_links::{coverage_class, enc, Caller, Pattern, ShippedType, Tip, Tuple, View};
 
 use crate::ast::Term;
 use crate::check::{DefSource, TypedTerm, Unresolved};
@@ -116,15 +118,24 @@ fn direct_referents(t: &Term) -> Vec<Address> {
 }
 
 impl<W: CoordinationWorld> Coordinator<W> {
-    /// The `ty` tuple at `view` that NAMES `start` — whose F denotes `start`
-    /// and nothing else (`Endset::single_denoted`), the shape `register_pred`
-    /// and `certify_stable` deposit, `enc({start})` — the T1-least if several,
-    /// off the world `w` of a pinned snapshot and CLASS-FREE, as every def
-    /// probe is. The one place the def layer matches a start, and exactly (the
-    /// module doc states why): M7's `observe` matches F by COVERAGE, a sound
-    /// pre-filter — a denoted address is the start of a unit-depth span, which
-    /// covers it — and the scan keeps only a tuple that names `start`.
+    /// The `ty` tuple at `view` that NAMES `start`: one whose F has `start`'s
+    /// coverage class, `coverage_class(enc({start}))` — the F half of the I0
+    /// identity M7's idem dedup keys `register_pred`'s and `certify_stable`'s
+    /// own deposits by (ASN-0128 I0), so a tuple that absorbs either deposit
+    /// is one this finds — the T1-least if several, off the world `w` of a
+    /// pinned snapshot and CLASS-FREE, as every def probe is. The one place
+    /// the def layer matches a start, and by class (the module doc states
+    /// why): M7's `observe` matches F by COVERAGE, a sound pre-filter — an F
+    /// of `start`'s class denotes `start`, and a denoted address is the start
+    /// of a unit-depth span, which covers it — and the scan keeps that class.
+    /// An F covering `start` from an ancestor has the ancestor's class and
+    /// names nothing there; one spelling `start` beside addresses under it has
+    /// `start`'s class and names it, as M7's dedup counts it. Total:
+    /// `enc({start})` is address-denoting, and M7's fold classified every
+    /// stored F of these two idem⊤ classes when it indexed the tuple's dedup
+    /// key, so `coverage_class` meets no endset here it cannot answer.
     fn tuple_naming(&self, w: &W, ty: ShippedType, start: &Address, view: View) -> Option<Tuple> {
+        let named = coverage_class(&enc(from_ref(start)));
         w.links()
             .observe(
                 self.catalog.reserved_type(ty),
@@ -132,7 +143,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 view,
             )
             .into_iter()
-            .find(|t| t.from.single_denoted() == Some(start.tumbler()))
+            .find(|t| coverage_class(&t.from) == named)
     }
 
     /// Some `pdef` tuple, active or retracted, names `start` — the
@@ -270,6 +281,15 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// returns its `TypedTerm`. The codec's own `Tup` refusal (it has no tag
     /// for the sort) is therefore unreachable, in this crate or out of it.
     ///
+    /// A CHECKED term is not thereby storable, and that is the one refusal
+    /// made BEFORE any transaction: `Unstorable`, when the def codec would
+    /// not read the encoding back ([`DefineError::Unstorable`] says how a
+    /// checked term gets there). The refusals speak in this order:
+    /// `Unstorable`; then the content insert's (`Insert(..)` — M5's door on
+    /// `home`, below, among them — nothing committed); then `register_pred`'s
+    /// gates over the run just committed (`Register(..)`), the content
+    /// staying.
+    ///
     /// `home` must be a registered document that is NOT a published TARGET
     /// (M5's `published_target`: the publication bit of `trunk_of(home)` —
     /// `home` with its version components stripped, so a chain's every member
@@ -283,15 +303,22 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// that means to publish the document holding its predicates defines into
     /// it first.
     ///
-    /// Under concurrency: a concurrent INSERT lands the def mid-document (harmless
-    /// — identity is the returned start); a concurrent DELETE yields a
-    /// retryable `Insert(Rejected(OutOfBounds))` — benign, recompute and
-    /// re-insert (item 6; the design's `BadPosition`, split by the as-built
-    /// M5); a `register_pred`-stage failure leaves harmless orphan content a
-    /// later `register_pred(home, start)` adopts. Borrows the term: the stored
-    /// def is re-derived from its own bytes by `register_pred`, so nothing of
-    /// the caller's value is kept, and the caller goes on evaluating or
-    /// classifying it.
+    /// Of `register_pred`'s refusals, a term checked on the disciplined
+    /// domain meets only two after the insert has committed:
+    /// `ReferentNotActive` — with no concurrency at all when it references a
+    /// def retracted before the call (`type_check` keys on ever-registration,
+    /// gate (iv) on endorsement; `retract_pred` states it), or when one is
+    /// retracted in the gap — and M7's own refusal of the emit (`Emit`).
+    /// Either way the content stays, orphan, and a later
+    /// `register_pred(home, start)` adopts it once the cause is gone.
+    ///
+    /// Under concurrency: a concurrent INSERT lands the def mid-document
+    /// (harmless — identity is the returned start); a concurrent DELETE
+    /// yields a retryable `Insert(Rejected(OutOfBounds))` — benign, recompute
+    /// and re-insert (item 6; the design's `BadPosition`, split by the
+    /// as-built M5). Borrows the term: the stored def is re-derived from its
+    /// own bytes by `register_pred`, so nothing of the caller's value is
+    /// kept, and the caller goes on evaluating or classifying it.
     pub fn define_predicate(
         &self,
         home: &Address,
@@ -301,6 +328,15 @@ impl<W: CoordinationWorld> Coordinator<W> {
             "a Codom-only Γ_D: type_check admits no Tup parameter, TypedTerm is built only in \
              check.rs, and a TriggerTerm yields none",
         );
+        // The one refusal decided before any transaction (§Internal 4): a run
+        // the def codec would not read back is one `register_pred` refuses
+        // `ParseFailed` whatever the store holds, so storing it would commit
+        // an orphan no registration adopts. The checker's admission does not
+        // settle it — the decoder meters a stored body by its own charges
+        // (`budget.rs`) — so the decoder is asked, of these bytes.
+        if codec::decode(&bytes).is_err() {
+            return Err(DefineError::Unstorable);
+        }
         // Insert position off a snapshot read; M5's insert re-validates
         // against committed state (benign TOCTOU — item 6).
         let content_count = self.kernel.snapshot().world().m5().content_count(home);
@@ -464,14 +500,15 @@ impl<W: CoordinationWorld> Coordinator<W> {
         self.resolve_def_at(start, 0).ok().map(|def| def.signature())
     }
 
-    /// An active `pdef` tuple names `start` — matched exactly, never by
-    /// coverage, and class-free (`actively_registered`).
+    /// An active `pdef` tuple names `start` — matched by `start`'s coverage
+    /// class, never by covering it, and class-free (`actively_registered`).
     pub fn is_active_pred(&self, start: &Address, snap: &Snapshot<W>) -> bool {
         self.actively_registered(snap.world(), start)
     }
 
-    /// A `pdef` tuple, active or retracted, names `start` — matched exactly,
-    /// never by coverage, and class-free (`ever_registered`).
+    /// A `pdef` tuple, active or retracted, names `start` — matched by
+    /// `start`'s coverage class, never by covering it, and class-free
+    /// (`ever_registered`).
     pub fn is_ever_pred(&self, start: &Address, snap: &Snapshot<W>) -> bool {
         self.ever_registered(snap.world(), start)
     }
@@ -599,14 +636,14 @@ impl<W: CoordinationWorld> Coordinator<W> {
         Ok((tuple, seq))
     }
 
-    /// An active `pd_stable` tuple names `start` — `tuple_naming`, matched
-    /// exactly, and class-free, as the def probes are. `true` is a CERTIFICATE
-    /// (CVALID passed by `certify_stable`, over the immutable content) only
-    /// under PR-DISC: a `pd_stable` tuple naming `start` that any other write
-    /// deposited reads `true` here as well, and nothing in M9 re-validates it
-    /// — though one whose F merely covers `start`, from an ancestor,
-    /// certifies nothing (the crate root states the obligation and the
-    /// surfaces it covers).
+    /// An active `pd_stable` tuple names `start` — `tuple_naming`, matched by
+    /// `start`'s coverage class, and class-free, as the def probes are. `true`
+    /// is a CERTIFICATE (CVALID passed by `certify_stable`, over the immutable
+    /// content) only under PR-DISC: a `pd_stable` tuple naming `start` that
+    /// any other write deposited reads `true` here as well, and nothing in M9
+    /// re-validates it — though one whose F merely covers `start`, from an
+    /// ancestor, certifies nothing (the crate root states the obligation and
+    /// the surfaces it covers).
     pub fn is_certified_stable(&self, start: &Address, snap: &Snapshot<W>) -> bool {
         self.tuple_naming(snap.world(), ShippedType::PredStable, start, View::Active).is_some()
     }

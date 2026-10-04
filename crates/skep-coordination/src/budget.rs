@@ -11,6 +11,15 @@
 //! exists, so it charges every count it reads (`codec`'s `Rd::charge`) —
 //! never less than [`weight`] charges the node it builds.
 //!
+//! The doors meter different trees — the checker a term and its `Reg`
+//! instances, the decoder a stored body's encoding — so one's admission does
+//! not imply another's: a shipped type key the checker does not charge at its
+//! type position costs the decoder 37 units, and the decoder reads a
+//! `count(Reg)`'s domain a level below the node the checker folds to a
+//! literal. A checked term can therefore be one the def codec will not read
+//! back, which is why `define_predicate` asks the decoder of its own encoding
+//! before it stores anything (`DefineError::Unstorable`).
+//!
 //! Every walk over a term recurses once per former on the caller's thread and
 //! none is bounded otherwise, so the caps are set against a MEASURED stack and
 //! a MEASURED node size rather than chosen, and the suite drives each walk at

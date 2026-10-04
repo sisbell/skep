@@ -146,17 +146,31 @@ impl Error for TypeError {
     }
 }
 
-/// `define_predicate` rejection — its two transactions, the content insert
-/// and the `pdef` registration.
+/// `define_predicate` rejection — its one refusal made before any
+/// transaction, then its two transactions, the content insert and the `pdef`
+/// registration.
 ///
-/// Deliberately exhaustive: its two variants are its two transactions, and
-/// the codec's Codom-only refusal (ASN-0130 SignedTerm) needs none — no
+/// Deliberately exhaustive: its variants are those three steps, and the
+/// codec's Codom-only refusal (ASN-0130 SignedTerm) needs none — no
 /// `TypedTerm` with a `Tup` parameter reaches it, in this crate or out of
 /// it: `type_check` refuses one, a stored def's Γ_D is decoded from a format
 /// with no `Tup` tag, and the one checked term whose parameter may be a
 /// tuple is held in a `TriggerTerm`, which yields none.
 #[derive(Debug)]
 pub enum DefineError {
+    /// The term checked, but the def codec would not read its encoding back,
+    /// so it is refused BEFORE any transaction and nothing is committed —
+    /// `register_pred` would refuse the stored run `ParseFailed` and leave an
+    /// orphan no registration adopts. The checker and the decoder meter
+    /// different trees (`budget.rs`): the decoder charges every count an
+    /// encoding spells — a shipped type key's span and its two nine-component
+    /// tumblers, 37 units, where the checker charges a type position nothing;
+    /// an address literal's components and their limbs, where the checker
+    /// charges the components — so a body of some 1 600 concrete type
+    /// positions outgrows it; and it reads a `count(Reg)`'s domain a level
+    /// below the node the checker folds to a literal, past `MAX_DEPTH` at the
+    /// cap.
+    Unstorable,
     Insert(TxnError<InsertError>),
     Register(RegisterError),
 }
@@ -164,6 +178,10 @@ pub enum DefineError {
 impl fmt::Display for DefineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            DefineError::Unstorable => f.write_str(
+                "define_predicate: the term's encoding is past what the def codec reads back \
+                 (MAX_DEPTH, or the node budget as the decoder meters it); nothing committed",
+            ),
             DefineError::Insert(e) => write!(f, "define_predicate: content insert failed: {e}"),
             DefineError::Register(e) => write!(f, "define_predicate: {e}"),
         }
@@ -173,6 +191,7 @@ impl fmt::Display for DefineError {
 impl Error for DefineError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            DefineError::Unstorable => None,
             DefineError::Insert(e) => Some(e),
             DefineError::Register(e) => Some(e),
         }
@@ -234,6 +253,9 @@ impl Error for SupersedeError {
 #[non_exhaustive]
 pub enum RegisterError {
     NotResident,
+    /// The run at `start` is not a def the PR-ENC codec reads back: a
+    /// malformed encoding, or a well-formed one past the decoder's two doors
+    /// (`MAX_DEPTH`, the node budget as the decoder meters it).
     ParseFailed,
     IllTyped(TypeError),
     ReferentNotEverRegistered(Address),
@@ -246,9 +268,10 @@ impl fmt::Display for RegisterError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RegisterError::NotResident => f.write_str("register_pred: no content Val at start"),
-            RegisterError::ParseFailed => {
-                f.write_str("register_pred: the run at start is not a well-formed def (PR-ENC)")
-            }
+            RegisterError::ParseFailed => f.write_str(
+                "register_pred: the run at start is not a def the PR-ENC codec reads (malformed, \
+                 or past MAX_DEPTH or the node budget)",
+            ),
             RegisterError::IllTyped(e) => write!(f, "register_pred: the def is ill-typed: {e}"),
             RegisterError::ReferentNotEverRegistered(a) => {
                 write!(f, "register_pred: referent {a} is not ever-registered")

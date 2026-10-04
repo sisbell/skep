@@ -1,17 +1,19 @@
 //! §Core data model — the type catalog: a frozen projection of the ONE
 //! engine-built `TypeRegistry` (M9 never rebuilds it — Conflicts §7), keyed by
 //! the verbatim type-key endset so a lookup both authorizes a `TypeKey` and
-//! yields its PRECOMPUTED `CoverageClass` — M9 never calls M7's
-//! `coverage_class` at all: each shipped class is read from the registry's
-//! own endset/class pairing, and nothing in M9 consults the registry after
-//! construction: every "which classes, with what behaviors" question the
-//! checker, the evaluator and the analyses ask is answered here. A cached
-//! copy of genesis-immutable data (R1): it never goes stale. The registry's
-//! population is the compiled shipped five (owner ruling, 2026-08-26 — the
-//! app-decl seam is deleted), so the projection reads everything from the
-//! registry itself — the classes, and the two behavior rules it publishes as
-//! `declares` and `reverse_lookup_classes` — and there is no twice-passed
-//! configuration and no restated rule left to drift.
+//! yields its PRECOMPUTED `CoverageClass` — the catalog never calls M7's
+//! `coverage_class`, and M9 never classifies a TYPE KEY: each shipped class
+//! is read from the registry's own endset/class pairing (M9's one
+//! `coverage_class` call is the def layer's registration identity, over F
+//! slots — `Coordinator::tuple_naming`), and nothing in M9 consults the
+//! registry after construction: every "which classes, with what behaviors"
+//! question the checker, the evaluator and the analyses ask is answered here.
+//! A cached copy of genesis-immutable data (R1): it never goes stale. The
+//! registry's population is the compiled shipped five (owner ruling,
+//! 2026-08-26 — the app-decl seam is deleted), so the projection reads
+//! everything from the registry itself — the classes, and the two behavior
+//! rules it publishes as `declares` and `reverse_lookup_classes` — and there
+//! is no twice-passed configuration and no restated rule left to drift.
 
 use std::collections::HashMap;
 

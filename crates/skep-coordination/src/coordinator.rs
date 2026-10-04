@@ -276,7 +276,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// `Reg`-expansion outgrows the node budget — counted per node AND per
     /// unit of payload, so a large literal under a `Reg` quantifier is
     /// charged for every instance it multiplies into — is `TooLarge`; each
-    /// refused at the bound, not after it. Reads no structural state for a
+    /// refused at the bound, not after it. Passing that door is not
+    /// storability: the def codec meters a stored body by its own charges,
+    /// and `define_predicate` refuses a checked term it would not read back
+    /// (`DefineError::Unstorable`). Reads no structural state for a
     /// ref-free body; consults the def memo for any `Ref`, and on a MISS
     /// derives the referent from its immutable content, pinning its own
     /// snapshot — on the disciplined domain the answer is the same either way

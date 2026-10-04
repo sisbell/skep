@@ -34,7 +34,9 @@ use crate::budget::{Budget, MAX_DEPTH};
 use crate::value::{SignedTerm, Sort};
 
 /// Decode failure — surfaced as `RegisterError::ParseFailed` (and, for an
-/// ever-registered start, the permanent poisoned memo entry).
+/// ever-registered start, the permanent poisoned memo entry), and, asked of
+/// `define_predicate`'s own encoding before anything is stored, as
+/// `DefineError::Unstorable`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Malformed;
 

@@ -20,34 +20,40 @@ use skep_blobs::{BlobError, LeaseState, NotAnUploadId, UploadId, UploadRecord, S
 
 use crate::{every_deposit_unplaced, hex_of, open, put_whole, standing, HORIZON_MS, INTERVAL, INTERVAL_MS};
 
-/// (1) THE IDENTIFIER: 32 lowercase hex of 128 OS bits, never a sequence —
-/// two mints differ; the parse admits exactly the spelling, through
-/// `UploadId::parse` and through `FromStr` alike, and the spelling is the
-/// identifier's `Display`; identifiers order as their spellings do; and an
-/// identifier is answered to its principal ALONE: another principal's
-/// lookup, a resume, an end, an append and the count of bytes written each
-/// answer as for a never-minted identifier, even while the upload is open
-/// in this process (M-I2 (e)).
+/// (1) THE IDENTIFIER: 32 lowercase hex of 128 OS bits — two mints differ
+/// (that no run of mints is a sequence is
+/// `consecutive_identifiers_stand_in_no_order_and_differ_in_most_bits`'s
+/// claim); the parse admits exactly the spelling, through `UploadId::parse`
+/// and through `FromStr` alike, and the spelling is the identifier's
+/// `Display`; identifiers order as their spellings do; and an identifier is
+/// answered to its principal ALONE: another principal's lookup, a resume,
+/// an end, an append and the count of bytes written each answer as for a
+/// never-minted identifier, even while the upload is open in this process
+/// (M-I2 (e)).
 #[test]
-fn the_identifier_is_unpredictable_and_answers_to_its_principal_alone() {
+fn the_identifier_is_32_lowercase_hex_and_answers_to_its_principal_alone() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = open(&dir.path().join("blobs"), 0);
-    let a = store.create_upload("a", "blake3", 5, INTERVAL, 0).unwrap();
-    let b = store.create_upload("a", "blake3", 5, INTERVAL, 0).unwrap();
-    assert_ne!(a.id, b.id);
-    assert_eq!(a.id.to_hex().len(), 32);
-    assert!(a.id.to_hex().bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)));
-    assert_eq!(UploadId::parse(&a.id.to_hex()), Some(a.id));
-    assert_eq!(UploadId::parse(&a.id.to_hex().to_uppercase()), None);
-    assert_eq!(UploadId::parse(&a.id.to_hex()[..31]), None);
-    assert_eq!(a.id.to_hex().parse::<UploadId>(), Ok(a.id));
-    assert_eq!(a.id.to_hex().to_uppercase().parse::<UploadId>(), Err(NotAnUploadId));
-    assert_eq!(a.id.to_hex()[..31].parse::<UploadId>(), Err(NotAnUploadId));
-    assert_eq!(a.id.to_string(), a.id.to_hex());
-    assert_eq!(format!("{:?}", a.id), format!("UploadId({})", a.id.to_hex()));
-    assert_eq!(a.id < b.id, a.id.to_hex() < b.id.to_hex(), "an identifier orders as its spelling");
+    let first = store.create_upload("a", "blake3", 5, INTERVAL, 0).unwrap();
+    let second = store.create_upload("a", "blake3", 5, INTERVAL, 0).unwrap();
+    assert_ne!(first.id, second.id);
+    assert_eq!(first.id.to_hex().len(), 32);
+    assert!(first.id.to_hex().bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)));
+    assert_eq!(UploadId::parse(&first.id.to_hex()), Some(first.id));
+    assert_eq!(UploadId::parse(&first.id.to_hex().to_uppercase()), None);
+    assert_eq!(UploadId::parse(&first.id.to_hex()[..31]), None);
+    assert_eq!(first.id.to_hex().parse::<UploadId>(), Ok(first.id));
+    assert_eq!(first.id.to_hex().to_uppercase().parse::<UploadId>(), Err(NotAnUploadId));
+    assert_eq!(first.id.to_hex()[..31].parse::<UploadId>(), Err(NotAnUploadId));
+    assert_eq!(first.id.to_string(), first.id.to_hex());
+    assert_eq!(format!("{:?}", first.id), format!("UploadId({})", first.id.to_hex()));
+    assert_eq!(
+        first.id < second.id,
+        first.id.to_hex() < second.id.to_hex(),
+        "an identifier orders as its spelling"
+    );
     let never = UploadId::parse("00000000000000000000000000000000").unwrap();
-    for (principal, id) in [("b", a.id), ("a", never)] {
+    for (principal, id) in [("b", first.id), ("a", never)] {
         assert!(store.upload(principal, &id, 1).is_none());
         assert!(matches!(store.resume(principal, &id, 0, 1), Err(BlobError::NoUpload)));
         assert!(matches!(store.end_upload(principal, &id, 1), Err(BlobError::NoUpload)));
@@ -59,10 +65,10 @@ fn the_identifier_is_unpredictable_and_answers_to_its_principal_alone() {
     assert_eq!(listed.len(), 2);
     assert_eq!(listed, ordered, "in identifier order");
     // Open in this process, the upload still answers its own principal alone.
-    store.resume("a", &a.id, 0, 1).unwrap();
-    assert_eq!(store.written("a", &a.id, 1), Some(0));
-    assert_eq!(store.written("b", &a.id, 1), None, "another principal's count is no upload's");
-    assert!(matches!(store.append("b", &a.id, b"x", 1), Err(BlobError::NoUpload)));
+    store.resume("a", &first.id, 0, 1).unwrap();
+    assert_eq!(store.written("a", &first.id, 1), Some(0));
+    assert_eq!(store.written("b", &first.id, 1), None, "another principal's count is no upload's");
+    assert!(matches!(store.append("b", &first.id, b"x", 1), Err(BlobError::NoUpload)));
 }
 
 /// (1) AN IDENTIFIER IS NEVER A SEQUENCE: sixteen consecutive mints stand in
@@ -243,7 +249,7 @@ fn a_request_that_receives_nothing_moves_no_expiry_and_writes_no_record() {
     let fixed = store.settle("k", &rec.id, 10).unwrap().expires;
     assert_eq!(fixed, 10 + INTERVAL_MS, "the last byte received fixes it");
     let lines = || fs::read_to_string(root.join("uploads.log")).unwrap().lines().count();
-    let written = lines();
+    let lines_before = lines();
     store.resume("k", &rec.id, 3, 20).unwrap();
     assert_eq!(store.settle("k", &rec.id, 20).unwrap().expires, fixed, "a resume and its settle with no body");
     store.resume("k", &rec.id, 3, 30).unwrap();
@@ -252,7 +258,7 @@ fn a_request_that_receives_nothing_moves_no_expiry_and_writes_no_record() {
     assert!(matches!(store.append("k", &rec.id, &[0; 8], 40), Err(BlobError::Length { .. })));
     assert_eq!(store.settle("k", &rec.id, 40).unwrap().expires, fixed, "an append refused at the length");
     assert_eq!(store.upload("k", &rec.id, 50).map(|r| r.expires), Some(fixed), "a resume cut short, too");
-    assert_eq!(lines(), written, "none of them wrote a record");
+    assert_eq!(lines(), lines_before, "none of them wrote a record");
 }
 
 /// (3) THE UPLOAD's OWN INTERVAL: fixed at its creation from the interval
@@ -313,7 +319,7 @@ fn an_interval_past_u64_milliseconds_saturates_at_the_last_instant() {
     store.append("k", &rec.id, b"bytes", 8).unwrap();
     assert_eq!(store.settle("k", &rec.id, 8).unwrap().expires, u64::MAX, "re-fixed at the last instant");
     let fin = store.finish("k", &rec.id, forever, 9).unwrap();
-    assert_eq!(store.lease("k", "blake3", &fin.hex, u64::MAX - 1), LeaseState::Live { size: 5, expires: u64::MAX });
+    assert_eq!(store.lease_state("k", "blake3", &fin.hex, u64::MAX - 1), LeaseState::Live { size: 5, expires: u64::MAX });
 }
 
 /// (1) A RECORD LINE WITHOUT ITS INTERVAL IS NO RECORD: the store holds no

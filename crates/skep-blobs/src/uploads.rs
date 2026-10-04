@@ -152,7 +152,7 @@ impl UploadRecord {
     /// The record as its log line's value. The stored format spells the
     /// principal's member `key`, as the lease log's line does, and the
     /// interval in whole milliseconds.
-    fn value(&self) -> Value {
+    fn to_value(&self) -> Value {
         json!({
             "designation": self.designation,
             "expires": self.expires,
@@ -173,7 +173,7 @@ impl UploadRecord {
 /// One log line, read.
 enum Line {
     Record(UploadRecord),
-    Retired(UploadId),
+    Retirement(UploadId),
 }
 
 /// A line's value read as a record or a retirement — `None` for a value of
@@ -189,7 +189,7 @@ enum Line {
 fn parse_line(v: &Value) -> Option<Line> {
     let id = UploadId::parse(v.get("id")?.as_str()?)?;
     if v.get("retired").and_then(Value::as_bool) == Some(true) {
-        return Some(Line::Retired(id));
+        return Some(Line::Retirement(id));
     }
     Some(Line::Record(UploadRecord {
         id,
@@ -225,7 +225,7 @@ impl UploadRecords {
                 Some(Line::Record(r)) => {
                     records.insert(r.id, r);
                 }
-                Some(Line::Retired(id)) => {
+                Some(Line::Retirement(id)) => {
                     records.remove(&id);
                 }
                 // A line of a shape this build does not read: kept on
@@ -306,7 +306,7 @@ impl UploadRecords {
     /// that offset set back at open, and a byte counts as received only
     /// once the partial AND its record's offset are on disk.
     pub fn write(&mut self, record: UploadRecord) -> io::Result<()> {
-        self.log.append_synced(&record.value())?;
+        self.log.append_synced(&record.to_value())?;
         self.records.insert(record.id, record);
         Ok(())
     }
@@ -327,6 +327,6 @@ impl UploadRecords {
     pub fn compact(&mut self) -> io::Result<()> {
         let mut ids: Vec<&UploadId> = self.records.keys().collect();
         ids.sort();
-        self.log.compact(ids.into_iter().map(|id| self.records[id].value()))
+        self.log.compact(ids.into_iter().map(|id| self.records[id].to_value()))
     }
 }

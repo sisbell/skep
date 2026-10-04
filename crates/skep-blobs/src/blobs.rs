@@ -2,7 +2,7 @@
 //! spellings a designation and a hex name must have, the ASIDE name a
 //! replaced file carries until the deferred unlink, the listings of the
 //! directories that hold those names and open's sweep of the asides
-//! ([`remove_asides`]), the removal of a name another remover may have
+//! ([`sweep_asides`]), the removal of a name another remover may have
 //! taken first ([`remove_if_present`]), the directory fsync every install
 //! order under the root ends in (a rename is durable only at its
 //! directory's fsync — `media.md` Op inventory 1; the register M-I5 (a)),
@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 /// The leading dot keeps it apart from any hex name, as the partial's is.
 /// Nothing names an aside — no lease, no cell — so every reader of a
 /// designation directory passes over one, and the pruner's pass and open's
-/// sweep ([`remove_asides`]) remove it.
+/// sweep ([`sweep_asides`]) remove it.
 const ASIDE_PREFIX: &str = ".retired-";
 
 /// The aside name of the `n`th replace of `hex` this process makes.
@@ -99,7 +99,7 @@ pub(crate) fn names_in(
 /// names of replaced files whose deferred unlink a crash between the
 /// finish's answer and that unlink never let run. Nothing names an aside,
 /// so nothing is lost.
-pub(crate) fn remove_asides(root: &Path) -> io::Result<()> {
+pub(crate) fn sweep_asides(root: &Path) -> io::Result<()> {
     for designation in dirs_under(root)? {
         let asides = names_in(root, &designation, |name, _| is_aside_name(name))?;
         let dir = root.join(&designation);
@@ -147,8 +147,11 @@ pub(crate) fn free_space(path: &Path) -> io::Result<u64> {
     Ok(v.f_bavail.saturating_mul(v.f_frsize))
 }
 
-/// The path of a blob under `root`.
-pub(crate) fn blob_path(root: &Path, designation: &str, hex: &str) -> PathBuf {
+/// The path of a blob under `root`, its names UNCHECKED: for names that
+/// have passed [`Store::blob_path`](crate::Store::blob_path)'s check, or
+/// that the store spelled itself (a finish's hash). A caller's name becomes
+/// a path only through that check.
+pub(crate) fn blob_path_unchecked(root: &Path, designation: &str, hex: &str) -> PathBuf {
     root.join(designation).join(hex)
 }
 

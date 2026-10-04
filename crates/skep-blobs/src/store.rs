@@ -55,7 +55,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 
-use crate::blobs::{self, aside_name, blob_path, designation_ok, fsync_dir, hex_ok, is_aside_name};
+use crate::blobs::{self, aside_name, blob_path_unchecked, designation_ok, fsync_dir, hex_ok, is_aside_name};
 use crate::error::BlobError;
 use crate::lease::{Lease, LeaseLog, LeaseState};
 use crate::partials::{self, Handle, SYNC_GRAIN};
@@ -139,8 +139,8 @@ pub struct Finished {
 /// lease line naming a malformed one reads as a lost line does
 /// (`uploads.rs`, `lease.rs`), so a log restored from elsewhere names no
 /// path out of the root, and the leases, holding no malformed name, answer
-/// one as none ([`Store::lease`], [`Store::any_live_lease`]). Inside the
-/// crate a name that has passed this check, or that the store spelled
+/// one as none ([`Store::lease_state`], [`Store::any_live_lease`]). Inside
+/// the crate a name that has passed this check, or that the store spelled
 /// itself (a finish's hash), is trusted.
 pub struct Store {
     root: PathBuf,
@@ -161,17 +161,22 @@ pub struct Store {
     /// the finish a lock of its own. The store takes `uploads` under this
     /// lock where it takes both, never the other way.
     handles: Mutex<HashMap<UploadId, Handle>>,
-    /// Designation directories this process created whose entry in the
-    /// root is not yet fsynced; the first finish into one syncs the root.
-    fresh_dirs: Mutex<HashSet<String>>,
-    /// The aside names answered replaces have left for the deferred unlink
-    /// ([`Store::unlink_asides`]), in the order their finishes answered —
-    /// each queued as its finish answers, never sooner.
-    asides: Mutex<Vec<PathBuf>>,
-    /// The count of asides this process has made — the `<n>` of the aside
-    /// name, so two replaces of one hash before the first's unlink take two
-    /// names.
-    aside_count: AtomicU64,
+    /// THE ROOT's FSYNC OWED: the designation directories this process
+    /// created whose entry in the root no fsync has yet made durable —
+    /// entered by the creation that made the directory, and struck off only
+    /// by a finish into it whose root fsync ([`Step::RootSync`]) has
+    /// succeeded, so a failed one leaves the fsync owed to the next finish.
+    root_sync_owed: Mutex<HashSet<String>>,
+    /// THE ASIDE QUEUE: the aside names answered replaces have left for the
+    /// deferred unlink ([`Store::unlink_asides`]), in the order their
+    /// finishes answered — each queued as its finish answers, never sooner.
+    /// An aside a failed finish left on disk is never among them: the
+    /// pruner's pass and open take that one.
+    aside_queue: Mutex<Vec<PathBuf>>,
+    /// THE ASIDE SERIAL: the `<n>` of the next aside name this process
+    /// makes. It only rises, so two replaces of one hash before the first's
+    /// unlink take two names.
+    aside_serial: AtomicU64,
     #[cfg(feature = "test-hooks")]
     hooks: Mutex<hooks::Hooks>,
 }
@@ -195,7 +200,7 @@ impl Store {
         let leases = LeaseLog::open(root, now_ms, millis(horizon))?;
         let mut uploads = UploadRecords::open(root)?;
         partials::reconcile(root, &mut uploads, now_ms)?;
-        blobs::remove_asides(root)?;
+        blobs::sweep_asides(root)?;
         uploads.compact()?;
         fsync_dir(root)?;
         Ok(Store {
@@ -203,9 +208,9 @@ impl Store {
             uploads: Mutex::new(uploads),
             leases: Mutex::new(leases),
             handles: Mutex::new(HashMap::new()),
-            fresh_dirs: Mutex::new(HashSet::new()),
-            asides: Mutex::new(Vec::new()),
-            aside_count: AtomicU64::new(0),
+            root_sync_owed: Mutex::new(HashSet::new()),
+            aside_queue: Mutex::new(Vec::new()),
+            aside_serial: AtomicU64::new(0),
             #[cfg(feature = "test-hooks")]
             hooks: Mutex::new(hooks::Hooks::default()),
         })
@@ -263,7 +268,7 @@ impl Store {
     /// either name is malformed — the name check (see [`Store`]), which
     /// every act on a file a caller names goes through.
     pub fn blob_path(&self, designation: &str, hex: &str) -> Option<PathBuf> {
-        (designation_ok(designation) && hex_ok(hex)).then(|| blob_path(&self.root, designation, hex))
+        (designation_ok(designation) && hex_ok(hex)).then(|| blob_path_unchecked(&self.root, designation, hex))
     }
 
     /// The size of the file at `<designation>/<hex>`, or `None` where no
@@ -304,7 +309,7 @@ impl Store {
         let id = UploadId::mint()?;
         let fresh = partials::create(&self.root, designation, &id)?;
         if fresh {
-            self.fresh_dirs.lock().insert(designation.to_string());
+            self.root_sync_owed.lock().insert(designation.to_string());
         }
         // Held as its line spells it, so the record open reads back is the
         // record answered here.
@@ -381,7 +386,7 @@ impl Store {
         // the handle's bytes.
         if handle.written().saturating_sub(durable) >= SYNC_GRAIN {
             handle.sync()?;
-            self.record_offset(principal, id, handle.written(), now_ms)?;
+            self.mark_received(principal, id, handle.written(), now_ms)?;
         }
         Ok(handle.written())
     }
@@ -404,7 +409,7 @@ impl Store {
             return Ok(record);
         }
         handle.sync()?;
-        self.record_offset(principal, id, handle.written(), now_ms)?;
+        self.mark_received(principal, id, handle.written(), now_ms)?;
         self.upload(principal, id, now_ms).ok_or(BlobError::NoUpload)
     }
 
@@ -424,9 +429,10 @@ impl Store {
         handles.remove(id)
     }
 
-    /// The record's offset, and its expiry the upload's own interval past
-    /// `now_ms`, written after the partial's sync and synced themselves.
-    fn record_offset(&self, principal: &str, id: &UploadId, offset: u64, now_ms: u64) -> Result<(), BlobError> {
+    /// MARK THE BYTES RECEIVED through `offset`: the record's offset set to
+    /// it and its expiry re-fixed the upload's own interval past `now_ms`,
+    /// written after the partial's sync and synced themselves.
+    fn mark_received(&self, principal: &str, id: &UploadId, offset: u64, now_ms: u64) -> Result<(), BlobError> {
         let mut uploads = self.uploads.lock();
         let mut next = uploads.of_principal(principal, id).ok_or(BlobError::NoUpload)?.clone();
         next.offset = offset;
@@ -493,14 +499,14 @@ impl Store {
         let designation = record.designation;
         let dir = self.root.join(&designation);
         let from = partials::partial_path(&self.root, &designation, id);
-        let to = blob_path(&self.root, &designation, &hex);
+        let to = blob_path_unchecked(&self.root, &designation, &hex);
         let aside = if to.is_file() {
             // THE REPLACE: the old inode keeps a name through the rename, so
             // the rename frees nothing; the aside is unlinked after the
             // answer. A link, not a rename aside: the hash is never without
             // a file, whatever fails next.
             self.before(Step::LinkAside)?;
-            let n = self.aside_count.fetch_add(1, Ordering::Relaxed);
+            let n = self.aside_serial.fetch_add(1, Ordering::Relaxed);
             let aside = dir.join(aside_name(&hex, n));
             fs::hard_link(&to, &aside)?;
             Some(aside)
@@ -511,10 +517,10 @@ impl Store {
         fs::rename(&from, &to)?;
         self.before(Step::DirSync)?;
         fsync_dir(&dir)?;
-        if self.fresh_dirs.lock().contains(&designation) {
+        if self.root_sync_owed.lock().contains(&designation) {
             self.before(Step::RootSync)?;
             fsync_dir(&self.root)?;
-            self.fresh_dirs.lock().remove(&designation);
+            self.root_sync_owed.lock().remove(&designation);
         }
         self.before(Step::LeaseSync)?;
         self.leases.lock().append_synced(Lease {
@@ -533,7 +539,7 @@ impl Store {
         // answer. A finish that fails after its link leaves its aside to the
         // pruner's pass and to open.
         if let Some(aside) = aside {
-            self.asides.lock().push(aside);
+            self.aside_queue.lock().push(aside);
         }
         Ok(Finished { designation, hex, size: record.length })
     }
@@ -566,13 +572,13 @@ impl Store {
     /// rest queued for the next call, and open removes any aside a crash
     /// leaves.
     pub fn unlink_asides(&self) -> io::Result<usize> {
-        let mut queued = std::mem::take(&mut *self.asides.lock()).into_iter();
+        let mut queued = std::mem::take(&mut *self.aside_queue.lock()).into_iter();
         let mut done = 0;
         for aside in queued.by_ref() {
             // Already gone counts as done: the pruner's pass or open took it.
             if let Err(e) = self.before(Step::UnlinkAside).and_then(|()| blobs::remove_if_present(&aside)) {
                 // It, and every one after it, back at the queue's head in order.
-                self.asides.lock().splice(0..0, std::iter::once(aside).chain(queued));
+                self.aside_queue.lock().splice(0..0, std::iter::once(aside).chain(queued));
                 return Err(e);
             }
             done += 1;
@@ -612,25 +618,25 @@ impl Store {
     // ── the leases ───────────────────────────────────────────────────────
 
     /// THE BINDING's read (Op inventory 2, "THEY READ IN ONE ORDER, THE
-    /// PRINCIPAL's OWN RECORD FIRST"): the principal's state on
+    /// PRINCIPAL's OWN RECORD FIRST"): the principal's lease state on
     /// `<designation>/<hex>` at `now_ms` — read off the principal's own
     /// record and never off the file, so [`LeaseState::Live`] says nothing
     /// of the file (see there).
-    pub fn lease(&self, principal: &str, designation: &str, hex: &str, now_ms: u64) -> LeaseState {
+    pub fn lease_state(&self, principal: &str, designation: &str, hex: &str, now_ms: u64) -> LeaseState {
         self.leases.lock().state(principal, designation, hex, now_ms)
     }
 
     /// The principal's LIVE leases at `now_ms`, in hex order — the deposit
     /// read's list. A lease lapsed within the horizon, which
-    /// [`Store::lease`] answers as lapsed, is not among them.
+    /// [`Store::lease_state`] answers as lapsed, is not among them.
     pub fn live_leases_of(&self, principal: &str, now_ms: u64) -> Vec<Lease> {
         self.leases.lock().live_of(principal, now_ms)
     }
 
     /// Whether ANY principal holds a live lease on `<designation>/<hex>` at
     /// `now_ms` — the pruner's read beside the per-principal
-    /// [`Store::lease`]: a file any principal holds live is kept, whoever
-    /// deposited it.
+    /// [`Store::lease_state`]: a file any principal holds live is kept,
+    /// whoever deposited it.
     pub fn any_live_lease(&self, designation: &str, hex: &str, now_ms: u64) -> bool {
         self.leases.lock().any_live(designation, hex, now_ms)
     }
@@ -712,7 +718,7 @@ mod tests {
         store.resume("k", &rec.id, 0, 2).expect("the second request's resume");
         // The settle's second half: its handle's bytes written as the offset.
         first.sync().expect("the first handle's sync");
-        store.record_offset("k", &rec.id, first.written(), 3).expect("the first handle's offset");
+        store.mark_received("k", &rec.id, first.written(), 3).expect("the first handle's offset");
         drop(first);
         assert_eq!(store.upload("k", &rec.id, 3).map(|r| r.offset), Some(4), "the record ahead of the handle");
         assert_eq!(store.append("k", &rec.id, b"x", 4).expect("the append answers"), 1);

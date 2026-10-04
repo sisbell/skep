@@ -5,8 +5,8 @@
 //! compaction at open, the pending bytes, the torn tail, and a line naming
 //! a malformed designation or hex read as no lease. "A LIVE LEASE
 //! OVER A FILE THAT IS NOT THERE READS AS LAPSED" is the daemon's rule,
-//! built on this store's `lease` and `blob_size`; the store's lease answers
-//! the record and nothing of the file.
+//! built on this store's `lease_state` and `blob_size`; the store's lease
+//! state answers the record and nothing of the file.
 
 use std::fs;
 use std::time::Duration;
@@ -25,14 +25,14 @@ fn a_lease_is_live_then_lapsed_within_the_horizon_then_none() {
     let store = open(&dir.path().join("blobs"), 0);
     let fin = put_whole(&store, "k", b"bytes", 100);
     let expires = 100 + INTERVAL_MS;
-    assert_eq!(store.lease("k", "blake3", &fin.hex, 100), LeaseState::Live { size: 5, expires });
-    assert_eq!(store.lease("k", "blake3", &fin.hex, expires - 1), LeaseState::Live { size: 5, expires });
-    assert_eq!(store.lease("k", "blake3", &fin.hex, expires), LeaseState::Lapsed { expires });
-    assert_eq!(store.lease("k", "blake3", &fin.hex, expires + HORIZON_MS - 1), LeaseState::Lapsed { expires });
-    assert_eq!(store.lease("k", "blake3", &fin.hex, expires + HORIZON_MS), LeaseState::None);
+    assert_eq!(store.lease_state("k", "blake3", &fin.hex, 100), LeaseState::Live { size: 5, expires });
+    assert_eq!(store.lease_state("k", "blake3", &fin.hex, expires - 1), LeaseState::Live { size: 5, expires });
+    assert_eq!(store.lease_state("k", "blake3", &fin.hex, expires), LeaseState::Lapsed { expires });
+    assert_eq!(store.lease_state("k", "blake3", &fin.hex, expires + HORIZON_MS - 1), LeaseState::Lapsed { expires });
+    assert_eq!(store.lease_state("k", "blake3", &fin.hex, expires + HORIZON_MS), LeaseState::None);
     for now in [100, expires, expires + HORIZON_MS] {
-        assert_eq!(store.lease("other", "blake3", &fin.hex, now), LeaseState::None);
-        assert_eq!(store.lease("k", "sha256-tree", &fin.hex, now), LeaseState::None, "the designation is part of the lease's key");
+        assert_eq!(store.lease_state("other", "blake3", &fin.hex, now), LeaseState::None);
+        assert_eq!(store.lease_state("k", "sha256-tree", &fin.hex, now), LeaseState::None, "the designation is part of the lease's key");
     }
     let live = store.live_leases_of("k", 100);
     assert_eq!(live.len(), 1);
@@ -44,7 +44,7 @@ fn a_lease_is_live_then_lapsed_within_the_horizon_then_none() {
     assert_eq!(store.live_leases_of("k", expires), vec![], "the deposit read lists live leases alone");
     fs::remove_file(store.blob_path("blake3", &fin.hex).unwrap()).unwrap();
     assert_eq!(
-        store.lease("k", "blake3", &fin.hex, 100),
+        store.lease_state("k", "blake3", &fin.hex, 100),
         LeaseState::Live { size: 5, expires },
         "read off the record alone"
     );
@@ -84,10 +84,10 @@ fn the_latest_lease_wins_and_open_compacts_to_it() {
         store.append("k", &rec.id, b"same bytes", 2_000).unwrap();
         store.settle("k", &rec.id, 2_000).unwrap();
         store.finish("k", &rec.id, Duration::ZERO, 2_000).unwrap();
-        assert_eq!(store.lease("k", "blake3", &hex, 2_001), LeaseState::Lapsed { expires: 2_000 });
+        assert_eq!(store.lease_state("k", "blake3", &hex, 2_001), LeaseState::Lapsed { expires: 2_000 });
         // And a third time, the latest line again: live once more.
         put_whole(&store, "k", b"same bytes", 3_000);
-        assert_eq!(store.lease("k", "blake3", &hex, 3_001), LeaseState::Live { size: 10, expires: 3_000 + INTERVAL_MS });
+        assert_eq!(store.lease_state("k", "blake3", &hex, 3_001), LeaseState::Live { size: 10, expires: 3_000 + INTERVAL_MS });
         // Another principal's lease on other bytes, long gone by the reopen
         // below.
         put_whole(&store, "j", b"old", 10);
@@ -100,8 +100,8 @@ fn the_latest_lease_wins_and_open_compacts_to_it() {
     let store = open(&root, now);
     let lines = fs::read_to_string(root.join("leases.log")).unwrap().lines().count();
     assert_eq!(lines, 1, "compacted: k's latest line alone");
-    assert_eq!(store.lease("j", "blake3", &hex_of(b"old"), now), LeaseState::None);
-    assert_eq!(store.lease("k", "blake3", &hex, now), LeaseState::Lapsed { expires: 3_000 + INTERVAL_MS });
+    assert_eq!(store.lease_state("j", "blake3", &hex_of(b"old"), now), LeaseState::None);
+    assert_eq!(store.lease_state("k", "blake3", &hex, now), LeaseState::Lapsed { expires: 3_000 + INTERVAL_MS });
 }
 
 /// THE PENDING BYTES (M-I6 (b)): a principal's unplaced deposits' sizes
@@ -152,7 +152,7 @@ fn any_live_lease_answers_for_every_principal_together() {
     assert!(store.any_live_lease("blake3", &fin.hex, 150));
     let a_lapsed = 100 + INTERVAL_MS;
     assert!(store.any_live_lease("blake3", &fin.hex, a_lapsed), "b's lease still holds it");
-    assert_eq!(store.lease("a", "blake3", &fin.hex, a_lapsed), LeaseState::Lapsed { expires: a_lapsed });
+    assert_eq!(store.lease_state("a", "blake3", &fin.hex, a_lapsed), LeaseState::Lapsed { expires: a_lapsed });
     let both_lapsed = 200 + INTERVAL_MS;
     assert!(!store.any_live_lease("blake3", &fin.hex, both_lapsed), "every lease lapsed: held by no principal");
     assert!(!store.any_live_lease("sha256-tree", &fin.hex, 150), "the designation is part of the lease's key");
@@ -174,8 +174,8 @@ fn a_torn_lease_tail_reads_as_no_lease() {
     let whole = fs::read_to_string(&log).unwrap();
     fs::write(&log, format!("{whole}{{\"designation\":\"blake3\",\"expires\":9999,\"hex\":\"{}\",\"key\":\"k\",\"si", hex_of(b"torn"))).unwrap();
     let store = open(&root, 2);
-    assert_eq!(store.lease("k", "blake3", &hex_of(b"torn"), 2), LeaseState::None);
-    assert!(matches!(store.lease("k", "blake3", &hex, 2), LeaseState::Live { size: 5, .. }));
+    assert_eq!(store.lease_state("k", "blake3", &hex_of(b"torn"), 2), LeaseState::None);
+    assert!(matches!(store.lease_state("k", "blake3", &hex, 2), LeaseState::Live { size: 5, .. }));
     assert!(fs::read_to_string(&log).unwrap().ends_with('\n'));
 }
 
@@ -211,7 +211,7 @@ fn a_lease_line_naming_a_malformed_name_is_no_lease() {
     fs::write(root.join("leases.log"), log).unwrap();
     let store = open(&root, 1);
     for (d, h) in &malformed {
-        assert_eq!(store.lease("k", d, h, 1), LeaseState::None, "{d:?}/{h:?}");
+        assert_eq!(store.lease_state("k", d, h, 1), LeaseState::None, "{d:?}/{h:?}");
         assert!(!store.any_live_lease(d, h, 1), "{d:?}/{h:?}: live for no principal");
     }
     let listed: Vec<(String, String)> =

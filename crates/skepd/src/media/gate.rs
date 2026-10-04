@@ -433,7 +433,7 @@ impl MediaGate {
                 };
             }
         }
-        match self.store.lease(&key, DESIGNATION, &hex, self.now_ms()) {
+        match self.store.lease_state(&key, DESIGNATION, &hex, self.now_ms()) {
             LeaseState::None => Binding::Unbound,
             LeaseState::Lapsed { .. } => Binding::Lapsed,
             LeaseState::Live { size, .. } => match self.store.blob_size(DESIGNATION, &hex) {

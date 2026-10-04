@@ -27,7 +27,7 @@ pub enum BlobError {
     /// The bytes would pass the upload's declared length: the record's
     /// `length` and the offset the bytes would start at (clause (1)).
     Length { length: u64, offset: u64 },
-    /// A finish asked of an upload whose bytes received fall short of its
+    /// A finish asked of an upload whose bytes written fall short of its
     /// length — a caller's defect, never a wire state: the daemon finishes
     /// only where the offset reaches the length (clause (7)).
     Incomplete { offset: u64, length: u64 },

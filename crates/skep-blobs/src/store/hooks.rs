@@ -103,7 +103,7 @@ impl Store {
     /// process has answered, not yet unlinked — what
     /// [`Store::unlink_asides`] will take.
     pub fn asides_queued(&self) -> usize {
-        self.asides.lock().len()
+        self.aside_queue.lock().len()
     }
 
     /// TEST HOOK (`test-hooks`): the handles this process holds open — one

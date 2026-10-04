@@ -62,7 +62,7 @@ fn a_failure_at_each_step_of_the_finish_leaves_what_the_order_promises() {
             // Before the lease's sync, the principal holds NO lease —
             // whatever the directory holds — and the file is present only
             // from the rename on.
-            let state = store.lease("k", "blake3", &hex, now);
+            let state = store.lease_state("k", "blake3", &hex, now);
             let present = store.blob_size("blake3", &hex).is_some();
             (rec.id, state, present)
         };
@@ -125,7 +125,7 @@ fn a_failure_at_each_step_of_the_finish_leaves_what_the_order_promises() {
         assert_eq!(fin.size, bytes.len() as u64, "{step:?}");
         assert_eq!(fs::read(store.blob_path("blake3", &hex).unwrap()).unwrap(), bytes, "{step:?}: the file whole");
         assert_eq!(
-            store.lease("k", "blake3", &hex, now + 2),
+            store.lease_state("k", "blake3", &hex, now + 2),
             LeaseState::Live { size: bytes.len() as u64, expires: now + 2 + INTERVAL_MS },
             "{step:?}: leased"
         );
@@ -151,7 +151,7 @@ fn the_roots_fsync_is_owed_until_a_finish_pays_it() {
     store.fail_at(Some(Step::RootSync));
     for (bytes, now) in [(b"first".as_slice(), 1), (b"second", 2)] {
         assert!(matches!(put(bytes, now), Err(BlobError::Io(_))), "at {now}: the root's fsync still owed, and met");
-        assert_eq!(store.lease("k", "blake3", &hex_of(bytes), now), LeaseState::None, "at {now}: no lease before it");
+        assert_eq!(store.lease_state("k", "blake3", &hex_of(bytes), now), LeaseState::None, "at {now}: no lease before it");
     }
     store.fail_at(None);
     assert!(put(b"third", 3).is_ok(), "paid");
@@ -181,7 +181,7 @@ fn a_finish_short_of_the_declared_length_is_refused_and_names_nothing() {
     store.settle("k", &rec.id, 2).unwrap();
     assert!(matches!(store.finish("k", &rec.id, INTERVAL, 3), Err(BlobError::Incomplete { offset: 5, length: 10 })));
     assert_eq!(store.blob_size("blake3", &held), None, "no file named by the bytes held");
-    assert_eq!(store.lease("k", "blake3", &held, 3), LeaseState::None, "and no lease");
+    assert_eq!(store.lease_state("k", "blake3", &held, 3), LeaseState::None, "and no lease");
     assert_eq!(store.upload("k", &rec.id, 3).map(|r| r.offset), Some(5), "the upload stands, to be resumed");
     store.resume("k", &rec.id, 5, 4).unwrap();
     store.append("k", &rec.id, b"whole", 4).unwrap();
@@ -219,7 +219,7 @@ fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().join("blobs");
         let now = 1_000 + i as u64;
-        let (aside_after, partial) = {
+        let (asides_after, partial) = {
             let store = open(&root, now);
             store.install("blake3", &hex, &wrong).unwrap();
             store.fail_at(Some(*step));
@@ -275,7 +275,7 @@ fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
         // it; the hash's bytes stand as the step left them; a record whose
         // partial was renamed away is retired.
         let store = open(&root, now + 1);
-        assert!(store.asides_of("blake3").unwrap().is_empty(), "{step:?}: open removes the aside ({aside_after:?})");
+        assert!(store.asides_of("blake3").unwrap().is_empty(), "{step:?}: open removes the aside ({asides_after:?})");
         let expected = if matches!(step, Step::PartialSync | Step::LinkAside | Step::Rename) { &wrong } else { &right };
         assert_eq!(&fs::read(store.blob_path("blake3", &hex).unwrap()).unwrap(), expected, "{step:?}");
         if matches!(step, Step::PartialSync | Step::LinkAside | Step::Rename) {
@@ -300,8 +300,8 @@ fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
     }
 }
 
-/// AN ASIDE NAME IS NEVER TAKEN TWICE (`Store`'s count of its asides: "so
-/// two replaces of one hash before the first's unlink take two names"): a
+/// AN ASIDE NAME IS NEVER TAKEN TWICE (`Store`'s aside serial: "so two
+/// replaces of one hash before the first's unlink take two names"): a
 /// replace linking onto a name an aside already holds would fail — an I/O
 /// error a create never meets — so every replace takes a name of its own,
 /// whether the aside before it is queued or was left on disk by a finish
@@ -576,9 +576,9 @@ fn replace_repairs_a_corrupt_file_and_answers_as_a_fresh_put_does() {
     assert_eq!(fs::read(store.blob_path("blake3", &hex).unwrap()).unwrap(), right);
     assert_eq!(store.unlink_asides().unwrap(), 1, "one aside per replace, whatever the bytes");
     // Each principal holds its own lease; neither answer named the other's.
-    assert!(matches!(store.lease("k", "blake3", &hex, 31), LeaseState::Live { .. }));
-    assert!(matches!(store.lease("k2", "blake3", &hex, 31), LeaseState::Live { .. }));
-    assert_eq!(store.lease("k3", "blake3", &hex, 31), LeaseState::None, "a third principal holds none, whatever the directory holds");
+    assert!(matches!(store.lease_state("k", "blake3", &hex, 31), LeaseState::Live { .. }));
+    assert!(matches!(store.lease_state("k2", "blake3", &hex, 31), LeaseState::Live { .. }));
+    assert_eq!(store.lease_state("k3", "blake3", &hex, 31), LeaseState::None, "a third principal holds none, whatever the directory holds");
     // The directory as the pruner reads it: the one file at its hex name,
     // the two blobs, no aside.
     let mut blobs = store.blobs_of("blake3").unwrap();

@@ -47,7 +47,7 @@ pub struct Lease {
 impl Lease {
     /// The lease as its log line's value. The stored format spells the
     /// principal's member `key`.
-    fn value(&self) -> Value {
+    fn to_value(&self) -> Value {
         json!({
             "designation": self.designation,
             "expires": self.expires,
@@ -135,7 +135,7 @@ impl LeaseLog {
     /// Append `lease` as the principal's current lease on the hash and SYNC
     /// it — the PUT answers only after this returns.
     pub fn append_synced(&mut self, lease: Lease) -> io::Result<()> {
-        self.log.append_synced(&lease.value())?;
+        self.log.append_synced(&lease.to_value())?;
         self.leases.insert((lease.principal.clone(), lease.designation.clone(), lease.hex.clone()), lease);
         Ok(())
     }
@@ -197,7 +197,7 @@ impl LeaseLog {
     fn compact(&mut self) -> io::Result<()> {
         let mut keys: Vec<&(String, String, String)> = self.leases.keys().collect();
         keys.sort();
-        self.log.compact(keys.into_iter().map(|k| self.leases[k].value()))
+        self.log.compact(keys.into_iter().map(|k| self.leases[k].to_value()))
     }
 }
 

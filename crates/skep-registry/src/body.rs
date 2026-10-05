@@ -63,8 +63,9 @@ use crate::rows::Kind;
 /// interim pin confirmed at the registry's review round: a `sig` under
 /// `mldsa65-ed25519` is 6,746 bytes of hex on its own, so a signed binding
 /// is near seven kilobytes and a signed endpoint with a long list of
-/// origins stays under this with room; a body of twice the signature's
-/// width is no record of either kind.
+/// origins stays under this with room. The cap counts every byte, `sig`
+/// included: a body of exactly 16 KiB is a record where it is canonical,
+/// and one byte more is no record of either kind.
 pub const MAX_REGISTRY_RECORD_BYTES: usize = 16 * 1024;
 
 /// The two kinds whose bodies this crate parses — the kind the caller names
@@ -611,11 +612,13 @@ mod tests {
         }
     }
 
-    /// The origins walk as the collection they are, in the org's order: by
-    /// reference, as `for origin in &origins` and `iter` do, and by value.
+    /// The origins walk as the collection they are, in the org's order and
+    /// whole, a repeated origin two entries: by reference, as `for origin in
+    /// &origins` and `iter` do, by value, and whole, as `as_slice` and
+    /// `into_vec` hand them — `into_vec` the list the resolver walks.
     #[test]
     fn origins_walk_in_the_orgs_order() {
-        let order = ["https://b.example", "http://a.onion", "https://a.example"];
+        let order = ["https://b.example", "http://a.onion", "http://a.onion", "https://a.example"];
         let list = origins(&order);
         let mut walked = Vec::new();
         for origin in &list {
@@ -623,12 +626,16 @@ mod tests {
         }
         assert_eq!(walked, order);
         assert!(list.iter().map(String::as_str).eq(order));
+        assert_eq!(list.as_slice(), order);
+        assert_eq!(list.clone().into_vec(), order);
         assert_eq!(list.into_iter().collect::<Vec<String>>(), order);
     }
 
     /// The cap bounds the parse, never a record: a body one byte past it is
-    /// refused before any tree is built, and a binding signed under
-    /// `mldsa65-ed25519` — its `sig` 6,746 hex characters — is well under it.
+    /// refused before any tree is built, a binding signed under
+    /// `mldsa65-ed25519` — its `sig` 6,746 hex characters — is well under
+    /// it, and the `sig` counts inside it: a binding signed up to exactly the
+    /// cap is a record, and one `sig` byte more is past it.
     #[test]
     fn the_cap_bounds_the_parse() {
         assert_eq!(MAX_REGISTRY_RECORD_BYTES, 16_384);
@@ -640,5 +647,13 @@ mod tests {
         assert_eq!(parse(BodyKind::Binding, &past), Err(Refusal::PastCap));
         past.truncate(MAX_REGISTRY_RECORD_BYTES);
         assert_eq!(parse(BodyKind::Binding, &past), Err(Refusal::NotJson), "at the cap: parsed, and no JSON");
+        let unsigned = encode(&binding("1.5", None), Some("")).len();
+        let sig = "a".repeat(MAX_REGISTRY_RECORD_BYTES - unsigned);
+        let at_cap = encode(&binding("1.5", None), Some(&sig));
+        assert_eq!(at_cap.len(), MAX_REGISTRY_RECORD_BYTES);
+        let record = parse(BodyKind::Binding, at_cap.as_bytes()).expect("a record at the cap");
+        assert_eq!(record.sig.as_deref(), Some(sig.as_str()));
+        let one_past = encode(&binding("1.5", None), Some(&format!("{sig}a")));
+        assert_eq!(parse(BodyKind::Binding, one_past.as_bytes()), Err(Refusal::PastCap));
     }
 }

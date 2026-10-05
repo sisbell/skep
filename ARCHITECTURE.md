@@ -379,8 +379,12 @@ Rules that hold across its files:
   the whole domain it can see ahead of every genesis.
 
 Its integration suite is one binary, `tests/it/`: `rows` (the table from
-outside the crate), `check` (the three arms on mutated lists) and `body`
-(the vector set at this parser, the examples' one canonical form).
+outside the crate, and `commons_type`'s panics), `check` (the three arms on
+mutated lists, each of the twelve rows' absence among them) and `body` (the
+vector set at this parser, the examples' one canonical form, the escape
+table at every Unicode scalar value, and the admission sentence and the
+parse's totality as laws over every one-byte mutant of every admitted
+vector).
 
 ## The resolver, `skep-resolve`
 

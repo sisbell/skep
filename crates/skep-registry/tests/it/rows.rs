@@ -2,9 +2,9 @@
 
 use skep_address::{is_prefix, Address};
 use skep_registry::{
-    rows, t_binding, t_disavowal, t_endpoint, t_expulsion_ground, t_policy_link, t_policy_link_own,
-    t_succession_ground, t_succession_policy, t_successor_of, t_takedown_base, t_takedown_lifted,
-    t_takedown_record, Kind, RowOf, Subtype,
+    commons_type, rows, t_binding, t_disavowal, t_endpoint, t_expulsion_ground, t_policy_link,
+    t_policy_link_own, t_succession_ground, t_succession_policy, t_successor_of, t_takedown_base,
+    t_takedown_lifted, t_takedown_record, Kind, RowOf, Subtype,
 };
 
 /// One row's held reader.
@@ -50,4 +50,21 @@ fn the_deposits_column_follows_the_bare_ordinal_test() {
     let none: Vec<String> =
         rows().iter().filter(|r| !r.carries_deposits()).map(|r| r.address.to_string()).collect();
     assert_eq!(none, ["1.1.0.1.0.1.0.3.57", "1.1.0.1.0.1.0.3.58"]);
+}
+
+/// `commons_type` PANICS on no ordinal, as its doc states: the commons' type
+/// subspace itself, above every row, is no row and never answered as one.
+#[test]
+#[should_panic(expected = "a commons row names at least one ordinal")]
+fn commons_type_refuses_an_empty_ordinal_list() {
+    let _ = commons_type(&[]);
+}
+
+/// … and PANICS on a zero among the ordinals: a row is an element at
+/// positive ordinals, and a zero there is a fourth zero component, which no
+/// T4-valid address holds.
+#[test]
+#[should_panic(expected = "a subspace-3 element at positive ordinals is T4-valid")]
+fn commons_type_refuses_a_zero_ordinal() {
+    let _ = commons_type(&[58, 0]);
 }

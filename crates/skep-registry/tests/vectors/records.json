@@ -88,11 +88,32 @@
       "why": "the number scan runs over the whole value ahead of the member set, so a number under an unknown member answers number"
     },
     {
+      "name": "number_inside_a_nested_object",
+      "kind": "binding",
+      "bytes": "{\"type\":\"binding\",\"prefix\":\"1.5\",\"x\":{\"n\":1}}",
+      "parse": "number",
+      "why": "the range is the whole value's at any depth: a number inside an object under an unknown member answers number, as number_beside_the_members does one level up"
+    },
+    {
+      "name": "number_as_sig",
+      "kind": "binding",
+      "bytes": "{\"type\":\"binding\",\"prefix\":\"1.5\",\"sig\":5}",
+      "parse": "number",
+      "why": "the range reaches the reserved member as it reaches every other (REG-1.86 (d)): a number as sig answers number"
+    },
+    {
       "name": "unknown_member",
       "kind": "binding",
       "bytes": "{\"type\":\"binding\",\"prefix\":\"1.5\",\"tier\":\"root\"}",
       "parse": "unknown_member",
       "why": "the members are the row's own, replaces and sig, and nothing else (D13)"
+    },
+    {
+      "name": "binding_carrying_origins",
+      "kind": "binding",
+      "bytes": "{\"type\":\"binding\",\"prefix\":\"1.5\",\"origins\":[\"https://acme.example\"]}",
+      "parse": "unknown_member",
+      "why": "the members are the row's own, replaces and sig: the endpoint's member is none of a binding's"
     },
     {
       "name": "wrong_type_endpoint_body_under_binding",
@@ -135,6 +156,24 @@
       "bytes": "{\"type\":\"endpoint\",\"origins\":[]}",
       "parse": "empty_origins",
       "why": "at least one entry: [] is a body no reader holds"
+    },
+    {
+      "name": "endpoint_with_an_empty_origin",
+      "kind": "endpoint",
+      "bytes": "{\"type\":\"endpoint\",\"origins\":[\"\"]}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"endpoint\",\"origins\":[\"\"]}",
+      "sig": null,
+      "why": "the parse reads an origin's form and never its admissibility: one empty string is one origin"
+    },
+    {
+      "name": "endpoint_with_a_repeated_origin",
+      "kind": "endpoint",
+      "bytes": "{\"type\":\"endpoint\",\"origins\":[\"https://acme.example\",\"https://acme.example\"]}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"endpoint\",\"origins\":[\"https://acme.example\",\"https://acme.example\"]}",
+      "sig": null,
+      "why": "origins is the org's list as written: an origin repeated is two entries, in their order"
     },
     {
       "name": "prefix_twice",
@@ -248,11 +287,46 @@
       "why": "the empty string is no address"
     },
     {
+      "name": "prefix_leading_zero_component",
+      "kind": "binding",
+      "bytes": "{\"type\":\"binding\",\"prefix\":\"0.5\"}",
+      "parse": "not_an_address:prefix",
+      "why": "T4: no address opens on a zero component"
+    },
+    {
+      "name": "prefix_adjacent_zeros",
+      "kind": "binding",
+      "bytes": "{\"type\":\"binding\",\"prefix\":\"1.0.0.5\"}",
+      "parse": "not_an_address:prefix",
+      "why": "T4: no two zero components are adjacent"
+    },
+    {
+      "name": "prefix_over_depth",
+      "kind": "binding",
+      "bytes": "{\"type\":\"binding\",\"prefix\":\"1.0.1.0.1.0.1.0.1\"}",
+      "parse": "not_an_address:prefix",
+      "why": "T4: at most three zero components"
+    },
+    {
+      "name": "prefix_empty_component",
+      "kind": "binding",
+      "bytes": "{\"type\":\"binding\",\"prefix\":\"1..5\"}",
+      "parse": "not_an_address:prefix",
+      "why": "every component a decimal natural, and an empty one is none"
+    },
+    {
       "name": "replaces_not_an_address",
       "kind": "binding",
       "bytes": "{\"type\":\"binding\",\"prefix\":\"1.5\",\"replaces\":\"the one before\"}",
       "parse": "not_an_address:replaces",
       "why": "replaces is the link's address, in address form"
+    },
+    {
+      "name": "replaces_empty",
+      "kind": "binding",
+      "bytes": "{\"type\":\"binding\",\"prefix\":\"1.5\",\"replaces\":\"\"}",
+      "parse": "not_an_address:replaces",
+      "why": "an empty replaces is no address, and never the absence that marks a first record"
     },
     {
       "name": "missing_prefix",
@@ -288,6 +362,13 @@
       "bytes": "{\"type\":\"binding\",\"prefix\":\"1.5\",\"sig\":true}",
       "parse": "not_a_string:sig",
       "why": "sig is a string where present"
+    },
+    {
+      "name": "sig_null",
+      "kind": "binding",
+      "bytes": "{\"type\":\"binding\",\"prefix\":\"1.5\",\"sig\":null}",
+      "parse": "not_a_string:sig",
+      "why": "sig is a string where present: null is a value, never its absence"
     },
     {
       "name": "prefix_not_a_string",
@@ -365,6 +446,73 @@
       "bytes": "{\"type\":\"binding\",\"prefix\":\"\\u0031.5\"}",
       "parse": "not_canonical",
       "why": "a letter spelled as a unicode escape is a longer escape of the same string"
+    },
+    {
+      "name": "strings_take_the_short_escapes_alone",
+      "kind": "endpoint",
+      "bytes": "{\"type\":\"endpoint\",\"origins\":[\"\\\"\\\\\\b\\f\\n\\r\\t\\u0000\\u001f\"]}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"endpoint\",\"origins\":[\"\\\"\\\\\\b\\f\\n\\r\\t\\u0000\\u001f\"]}",
+      "sig": null,
+      "why": "the shortest escapes: the quote, the backslash, the five named C0 controls by their one-letter forms, every other C0 control as \\u00 and two lowercase hex digits"
+    },
+    {
+      "name": "strings_past_ascii_stand_as_themselves",
+      "kind": "endpoint",
+      "bytes": "{\"type\":\"endpoint\",\"origins\":[\"https://b\u00fccher.example\",\"\u007f\u2028\ud83d\ude00\"]}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"endpoint\",\"origins\":[\"https://b\u00fccher.example\",\"\u007f\u2028\ud83d\ude00\"]}",
+      "sig": null,
+      "why": "nothing else is escaped: a letter past ASCII, DEL, the line separator and a character past the BMP stand as their own UTF-8 bytes"
+    },
+    {
+      "name": "escape_long_form_of_a_named_control",
+      "kind": "endpoint",
+      "bytes": "{\"type\":\"endpoint\",\"origins\":[\"\\u000a\"]}",
+      "parse": "not_canonical",
+      "why": "a named control has one spelling, its short form: a line feed is \\n"
+    },
+    {
+      "name": "escape_uppercase_hex",
+      "kind": "endpoint",
+      "bytes": "{\"type\":\"endpoint\",\"origins\":[\"\\u001F\"]}",
+      "parse": "not_canonical",
+      "why": "a control's hex escape is written in lowercase"
+    },
+    {
+      "name": "escape_of_a_letter_past_ascii",
+      "kind": "endpoint",
+      "bytes": "{\"type\":\"endpoint\",\"origins\":[\"https://b\\u00fccher.example\"]}",
+      "parse": "not_canonical",
+      "why": "a letter past ASCII is never escaped"
+    },
+    {
+      "name": "escape_of_an_astral_char",
+      "kind": "endpoint",
+      "bytes": "{\"type\":\"endpoint\",\"origins\":[\"\\ud83d\\ude00\"]}",
+      "parse": "not_canonical",
+      "why": "a character past the BMP is never escaped, as a surrogate pair or otherwise"
+    },
+    {
+      "name": "escape_of_the_line_separator",
+      "kind": "endpoint",
+      "bytes": "{\"type\":\"endpoint\",\"origins\":[\"\\u2028\"]}",
+      "parse": "not_canonical",
+      "why": "U+2028 is never escaped: only the C0 controls, the quote and the backslash are"
+    },
+    {
+      "name": "escape_of_del",
+      "kind": "endpoint",
+      "bytes": "{\"type\":\"endpoint\",\"origins\":[\"\\u007f\"]}",
+      "parse": "not_canonical",
+      "why": "DEL is never escaped: only the C0 controls, the quote and the backslash are"
+    },
+    {
+      "name": "raw_control_in_a_string",
+      "kind": "endpoint",
+      "bytes": "{\"type\":\"endpoint\",\"origins\":[\"\u0001\"]}",
+      "parse": "not_json",
+      "why": "a C0 control inside a string is escaped: unescaped, the text is no JSON"
     },
     {
       "name": "not_utf8",

@@ -142,6 +142,90 @@ fn the_completeness_arm_refuses_a_missing_kind_or_subtype_row() {
     ));
 }
 
+/// REG-1.29 — EVERY row's absence refuses, naming that row: for each of the
+/// twelve, the shipped table without it answers the completeness arm with
+/// exactly that row missing, in the operator's sentence (REG-1.33: the
+/// sentence is what a repair in the image is read off). One sentence per row
+/// of the table, in its order, so a row the table gains (REG-1.19) owes a
+/// line here; and a kind or a subtype the arm's own lists (`Kind::ALL`,
+/// `Subtype::ALL`) leave out answers `Ok` where this test reads a refusal.
+#[test]
+fn the_completeness_arm_names_each_of_the_twelve_rows_missing() {
+    let missing: [(RowOf, &str); 12] = [
+        (RowOf::Kind(Kind::Binding), "completeness: the binding has no row"),
+        (RowOf::Kind(Kind::Endpoint), "completeness: the endpoint has no row"),
+        (RowOf::Kind(Kind::TakedownRecord), "completeness: the takedown record has no row"),
+        (
+            RowOf::Subtype(Subtype::TakedownBase),
+            "completeness: the takedown record's base reading has no row under the takedown \
+             record",
+        ),
+        (
+            RowOf::Subtype(Subtype::TakedownLifted),
+            "completeness: lifted has no row under the takedown record",
+        ),
+        (RowOf::Kind(Kind::PolicyLink), "completeness: the policy link has no row"),
+        (
+            RowOf::Subtype(Subtype::PolicyLinkOwn),
+            "completeness: the policy link's own reading has no row under the policy link",
+        ),
+        (
+            RowOf::Subtype(Subtype::Disavowal),
+            "completeness: the disavowal has no row under the policy link",
+        ),
+        (
+            RowOf::Subtype(Subtype::ExpulsionGround),
+            "completeness: an expulsion's ground record has no row under the policy link",
+        ),
+        (
+            RowOf::Subtype(Subtype::SuccessionGround),
+            "completeness: a succession's ground record has no row under the policy link",
+        ),
+        (
+            RowOf::Subtype(Subtype::SuccessionPolicy),
+            "completeness: the org-chosen succession policy has no row under the policy link",
+        ),
+        (RowOf::Kind(Kind::SuccessorOf), "completeness: successor-of has no row"),
+    ];
+    assert!(
+        rows().iter().map(|r| r.of).eq(missing.iter().map(|(of, _)| *of)),
+        "one sentence per row of the table, in its order"
+    );
+    for (of, sentence) in missing {
+        let refusal = seeding_check(&without(of), std::iter::empty())
+            .expect_err(&format!("the table without {of:?} seeds"));
+        assert_eq!(refusal, SeedingRefusal::Completeness { missing: of }, "{of:?}");
+        assert_eq!(refusal.to_string(), sentence, "{of:?}");
+    }
+}
+
+/// REG-1.20 — a subtype's row is UNDER its kind's row and never AT it: each
+/// of the seven, moved onto its own kind's bare ordinal — the equal case of
+/// "a prefix under", a tumbler being a prefix of itself — is no row of that
+/// subtype, so its deposits never ride an ordinal REG-1.18 keeps bare.
+#[test]
+fn the_completeness_arm_refuses_a_subtype_row_on_its_kinds_own_ordinal() {
+    let subtypes: Vec<Subtype> = rows().iter().filter_map(|r| r.of.subtype()).collect();
+    assert_eq!(subtypes.len(), 7);
+    for subtype in subtypes {
+        let on_its_kind: Vec<Row> = rows()
+            .iter()
+            .map(|r| {
+                let mut r = r.clone();
+                if r.of == RowOf::Subtype(subtype) {
+                    r.address = subtype.kind().row().address.clone();
+                }
+                r
+            })
+            .collect();
+        assert_eq!(
+            seeding_check(&on_its_kind, std::iter::empty()),
+            Err(SeedingRefusal::Completeness { missing: RowOf::Subtype(subtype) }),
+            "{subtype:?} on its kind's own ordinal"
+        );
+    }
+}
+
 /// REG-1.25 — the count arm: a sixth kind row, a kind row at `3.54` — the
 /// reserve's, outside the registry range (REG-1.24) — and two kind rows at
 /// one ordinal.

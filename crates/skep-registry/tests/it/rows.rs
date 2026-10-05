@@ -3,8 +3,8 @@
 use skep_address::{is_prefix, Address};
 use skep_registry::{
     rows, t_binding, t_disavowal, t_endpoint, t_expulsion_ground, t_policy_link, t_policy_link_own,
-    t_succession_ground, t_succession_policy, t_successor_of, t_takedown, t_takedown_base,
-    t_takedown_lifted, Kind, Subtype,
+    t_succession_ground, t_succession_policy, t_successor_of, t_takedown_base, t_takedown_lifted,
+    t_takedown_record, Kind, Subtype,
 };
 
 /// One row's held reader.
@@ -27,7 +27,7 @@ fn the_table_holds_five_kinds_and_seven_subtype_rows() {
     let readers: [(Reader, &str); 12] = [
         (t_binding, "55"),
         (t_endpoint, "56"),
-        (t_takedown, "57"),
+        (t_takedown_record, "57"),
         (t_takedown_base, "57.1"),
         (t_takedown_lifted, "57.2"),
         (t_policy_link, "58"),
@@ -49,7 +49,7 @@ fn the_table_holds_five_kinds_and_seven_subtype_rows() {
 fn the_deposits_column_follows_the_bare_ordinal_test() {
     let none: Vec<String> = rows()
         .iter()
-        .filter(|r| !r.deposits())
+        .filter(|r| !r.carries_deposits())
         .map(|r| r.address.tumbler().to_string())
         .collect();
     assert_eq!(none, ["1.1.0.1.0.1.0.3.57", "1.1.0.1.0.1.0.3.58"]);

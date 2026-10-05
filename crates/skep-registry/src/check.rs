@@ -15,9 +15,9 @@
 //!    a prefix UNDER its own kind's row (REG-1.20); a list missing one
 //!    refuses, so a missing row never surfaces at that subtype's first
 //!    deposit.
-//! 3. THE COUNT (REG-1.25): the kind rows against the reserve's five
+//! 3. THE COUNT (REG-1.25): the kind rows against the registry range's five
 //!    ordinals `3.55`–`3.59` — at most five, each a bare ordinal inside the
-//!    reserve, no two at one ordinal.
+//!    range, no two at one ordinal.
 //!
 //! The arms run in that order and the first to fire names the refusal; a
 //! refusal is a genesis that does not complete — the hand that runs the
@@ -27,7 +27,7 @@ use std::fmt;
 
 use skep_address::{is_prefix, Address};
 
-use crate::rows::{reserve_ordinal, Kind, Row, Subtype, RESERVE};
+use crate::rows::{registry_range_ordinal, Kind, Row, Subtype, REGISTRY_RANGE};
 
 /// The seeding check's refusal, naming its arm.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,9 +38,9 @@ pub enum SeedingRefusal {
     /// The completeness arm: a kind (`subtype` none) or a subtype row the
     /// list does not hold.
     Completeness { kind: Kind, subtype: Option<Subtype> },
-    /// The count arm: more kind rows than the reserve's ordinals, or — with
-    /// `row` named — a kind row that is no bare ordinal inside the reserve,
-    /// or a second kind row at an ordinal already taken.
+    /// The count arm: more kind rows than the registry range's ordinals, or
+    /// — with `row` named — a kind row that is no bare ordinal inside the
+    /// registry range, or a second kind row at an ordinal already taken.
     Count { kind_rows: usize, row: Option<Address> },
 }
 
@@ -60,7 +60,7 @@ impl fmt::Display for SeedingRefusal {
         match self {
             SeedingRefusal::Disjointness { registry, foreign } => write!(
                 f,
-                "disjointness: the registry row {} and the commons row {} meet at the subtree grain",
+                "disjointness: the registry row {} and the foreign commons row {} meet at the subtree grain",
                 registry.tumbler(),
                 foreign.tumbler()
             ),
@@ -75,17 +75,17 @@ impl fmt::Display for SeedingRefusal {
             ),
             SeedingRefusal::Count { kind_rows, row: None } => write!(
                 f,
-                "count: {kind_rows} kind rows against the reserve's {} ordinals 3.{}-3.{}",
-                RESERVE.count(),
-                RESERVE.start(),
-                RESERVE.end()
+                "count: {kind_rows} kind rows against the registry range's {} ordinals 3.{}-3.{}",
+                REGISTRY_RANGE.count(),
+                REGISTRY_RANGE.start(),
+                REGISTRY_RANGE.end()
             ),
             SeedingRefusal::Count { kind_rows, row: Some(row) } => write!(
                 f,
-                "count: of {kind_rows} kind rows, {} is no bare ordinal of the reserve 3.{}-3.{} left to it",
+                "count: of {kind_rows} kind rows, {} is no bare ordinal of the registry range 3.{}-3.{} left to it",
                 row.tumbler(),
-                RESERVE.start(),
-                RESERVE.end()
+                REGISTRY_RANGE.start(),
+                REGISTRY_RANGE.end()
             ),
         }
     }
@@ -134,14 +134,14 @@ pub fn seeding_check<'a>(
             return Err(SeedingRefusal::Completeness { kind, subtype: Some(subtype) });
         }
     }
-    // 3 — THE COUNT: the kind rows against the reserve's ordinals.
+    // 3 — THE COUNT: the kind rows against the registry range's ordinals.
     let kind_rows: Vec<&Row> = rows.iter().filter(|r| r.subtype.is_none()).collect();
-    if kind_rows.len() > RESERVE.count() {
+    if kind_rows.len() > REGISTRY_RANGE.count() {
         return Err(SeedingRefusal::Count { kind_rows: kind_rows.len(), row: None });
     }
     let mut taken: Vec<u32> = Vec::new();
     for r in &kind_rows {
-        match reserve_ordinal(&r.address) {
+        match registry_range_ordinal(&r.address) {
             Some(ordinal) if !taken.contains(&ordinal) => taken.push(ordinal),
             _ => {
                 return Err(SeedingRefusal::Count {

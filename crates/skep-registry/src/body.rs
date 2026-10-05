@@ -8,24 +8,27 @@
 //! at every parser alike.
 //!
 //! THE ENCODING is the credential records' rule applied to a flat object:
-//! `{"type":"<the row's string>"`, then the row's members in the table's
-//! order (`prefix` for the binding, `origins` for the endpoint), then
-//! `replaces` where present, then `sig` where present, `}` — no whitespace
-//! outside strings, strings escaped by the shortest JSON escapes and no
-//! others (`"`, `\`, the five named C0 controls, `\u00xx` lowercase for the
-//! rest; nothing else escaped), no byte after the brace.
+//! `{"type":"<the row's string>"`, then the row's own members in the order
+//! REG-1.86's table lists them (`prefix` for the binding, `origins` for the
+//! endpoint), then `replaces` where present, then `sig` where present, `}` —
+//! no whitespace outside strings, strings escaped by the shortest JSON
+//! escapes and no others (`"`, `\`, the five named C0 controls, `\u00xx`
+//! lowercase for the rest; nothing else escaped), no byte after the brace.
 //!
 //! WHAT THE PARSE CHECKS IS THE FORM, NEVER THE ADMISSIBILITY (REG-1.86
 //! (c), (d), (g)): `type` is the string of the kind THE CALLER NAMES — the
-//! link's slot — and a foreign `type` is refused; NO MEMBER IS A JSON NUMBER,
-//! anywhere in the body; no member stands beside the row's own, `replaces`
-//! and `sig`; `prefix` and `replaces` are addresses in dotted decimal, the
-//! local form; `origins` is a non-empty array of strings. Whether an origin
-//! is https with a routable host is the resolver's question, and whether
-//! `replaces` names the deposit current at the record's position is the
-//! reader's currency rule (REG-1.10, REG-2.24); neither is asked here. `sig`
-//! is answered as the string found, present or absent, beside the SIG-LESS
-//! CANONICAL PROJECTION a verifier frames (REG-1.86 (e)).
+//! link's slot — and any other `type` is refused (`wrong_type`); NO MEMBER IS
+//! A JSON NUMBER, anywhere in the body; no member stands beside the row's
+//! own, `replaces` and `sig`; `prefix` and `replaces` are addresses in their
+//! one dotted-decimal spelling; `origins` is a non-empty array of strings.
+//! Whether an origin is https with a routable host is the resolver's
+//! question; whether an address member is written in the LOCAL FORM of the
+//! board the record is homed on (REG-1.86 (c), (g)) is its writer's — a
+//! global-form address is spelled alike, and no parse tells the two apart;
+//! and whether `replaces` names the deposit current at the record's position
+//! is the reader's currency rule (REG-1.10, REG-2.24). None is asked here.
+//! `sig` is answered as the string found, present or absent, beside the
+//! SIG-LESS CANONICAL PROJECTION a verifier frames (REG-1.86 (e)).
 //!
 //! WHAT THE PARSE CHECKS, THE TYPES CARRY: an address member is the
 //! [`Address`] it spells and the origins are [`Origins`], never empty. So a
@@ -37,14 +40,16 @@
 //! THE CAP, [`MAX_REGISTRY_RECORD_BYTES`]: a body past it is refused before
 //! any tree is built, since a JSON parser builds its whole tree before the
 //! first schema check. A SIGNED body carries its `sig` inside the cap: the
-//! hybrid blob's hex is 6,746 characters under the production row, so a
-//! binding signed is some seven kilobytes though its members are under a
-//! hundred bytes, and an endpoint's a few hundred more.
+//! hybrid blob's hex is 6,746 characters under `mldsa65-ed25519`, the
+//! production hybrid (skep-identity's `SIG_ALGS`, tag 1), so a binding
+//! signed is some seven kilobytes though its members are under a hundred
+//! bytes, and an endpoint's a few hundred more.
 //!
-//! The other five body kinds — the takedown record's base reading, the
-//! disavowal, the two ground records, the org-chosen succession policy —
-//! have rows ([`crate::rows()`]) and no parser here: their schemas are
-//! pinned where their own rules land.
+//! The other five body-bearing rows — the takedown record's base reading,
+//! the disavowal, the two ground records, the org-chosen succession policy,
+//! subtype rows all and none a kind — stand in the table ([`crate::rows()`])
+//! with their `type` strings and have no parser here: their schemas are
+//! pinned where their own rules land (REG-1.86 (h)).
 
 use std::fmt::Write as _;
 
@@ -55,11 +60,11 @@ use crate::rows::Kind;
 
 /// The most bytes a registry record body may carry, `sig` included, a body
 /// past it refused ([`Refusal::PastCap`]) before any parse — 16 KiB, an
-/// interim pin confirmed at the registry's review round: the production
-/// row's `sig` is 6,746 bytes of hex on its own, so a signed binding is
-/// near seven kilobytes and a signed endpoint with a long list of origins
-/// stays under this with room; a body of twice the signature's width is
-/// no record of either kind.
+/// interim pin confirmed at the registry's review round: a `sig` under
+/// `mldsa65-ed25519` is 6,746 bytes of hex on its own, so a signed binding
+/// is near seven kilobytes and a signed endpoint with a long list of
+/// origins stays under this with room; a body of twice the signature's
+/// width is no record of either kind.
 pub const MAX_REGISTRY_RECORD_BYTES: usize = 16 * 1024;
 
 /// The two kinds whose bodies this crate parses — the kind the caller names
@@ -166,9 +171,10 @@ pub struct Record {
 }
 
 impl Record {
-    /// The sig-less canonical projection — [`encode`] of the body with no
-    /// `sig` — the body-bytes row of the `record` grammar a record-grade
-    /// signature ranges over.
+    /// The sig-less canonical projection (REG-1.86 (e)) — [`encode`] of the
+    /// body with no `sig` — the bytes a record-grade signature ranges over,
+    /// framed as the `record` grammar's row (5), skep-identity's
+    /// `RecordRows::sigless_canonical_record`.
     pub fn canonical_sigless(&self) -> String {
         encode(&self.body, None)
     }
@@ -266,9 +272,9 @@ impl std::error::Error for Refusal {}
 ///
 /// THE VALUE STAGE is `serde_json`'s, and it decides two things this parser
 /// adopts as its own: a member spelled twice is read at its LAST occurrence,
-/// so a fault in an earlier one — a number, a foreign `type` — surfaces as
+/// so a fault in an earlier one — a number, a wrong `type` — surfaces as
 /// `not_canonical`; and a value nested more than 127 objects and arrays
-/// deep, the body's own object counted, is no JSON. Every other verdict is
+/// deep, the body's own object counted, is no JSON. Every other refusal is
 /// this schema's.
 pub fn parse(kind: BodyKind, bytes: &[u8]) -> Result<Record, Refusal> {
     if bytes.len() > MAX_REGISTRY_RECORD_BYTES {
@@ -500,6 +506,19 @@ mod tests {
         }
     }
 
+    /// THE PARSE READS A SPELLING, NEVER A FORM (REG-1.86 (c), (f)): Legal's
+    /// prefix in its board's local form, `1.3`, and in the global form,
+    /// `1.5.3`, are each a binding of the address it spells — the local form
+    /// is its writer's to hold, and no parse can see it.
+    #[test]
+    fn the_parse_reads_an_address_spelling_never_its_local_form() {
+        for prefix in ["1.3", "1.5.3"] {
+            let text = format!(r#"{{"type":"binding","prefix":"{prefix}"}}"#);
+            let record = parse(BodyKind::Binding, text.as_bytes()).expect("a binding");
+            assert_eq!(record.body, binding(prefix, None), "{prefix}");
+        }
+    }
+
     /// AN ADDRESS MEMBER IS THE ADDRESS IT SPELLS, at any size the cap
     /// admits (wire.md §Value encodings: a component is one decimal
     /// natural): a component past a machine word, and one of 4,097 digits —
@@ -543,8 +562,8 @@ mod tests {
     }
 
     /// The cap bounds the parse, never a record: a body one byte past it is
-    /// refused before any tree is built, and a binding signed under the
-    /// production row — its `sig` 6,746 hex characters — is well under it.
+    /// refused before any tree is built, and a binding signed under
+    /// `mldsa65-ed25519` — its `sig` 6,746 hex characters — is well under it.
     #[test]
     fn the_cap_bounds_the_parse() {
         assert_eq!(MAX_REGISTRY_RECORD_BYTES, 16_384);

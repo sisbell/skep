@@ -199,7 +199,7 @@ pub fn t_endpoint() -> &'static Address {
 /// ordinal (two readings, REG-1.18); the write path refuses a `nullify` at
 /// it and, by prefix, at both rows under it (REG-1.44).
 pub fn t_takedown() -> &'static Address {
-    skep_registry::t_takedown()
+    skep_registry::t_takedown_record()
 }
 
 /// The takedown record's BASE reading — `1.1.0.1.0.1.0.3.57.1`.

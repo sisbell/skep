@@ -43,14 +43,16 @@ deposits, and the resolver that reads them back — is this crate:
   `replaces` are `Address`es and the origins an `Origins`, never empty, so
   every body a caller builds encodes to a record the parse admits. A body
   past `MAX_REGISTRY_RECORD_BYTES` (16 KiB, interim; a signed body carries
-  its `sig` inside it, near seven kilobytes of hex under the production
-  row) is refused before any parse. The other five body kinds have rows
-  here and no parser: their schemas are pinned where their own rules land.
+  its `sig` inside it, near seven kilobytes of hex under `mldsa65-ed25519`)
+  is refused before any parse. The other five body-bearing rows, subtype
+  rows all and none a kind, stand in the table with their `type` strings
+  and no parser: their schemas are pinned where their own rules land
+  (REG-1.86 (h)).
 - **The seeding check** (`seeding_check`, `SeedingRefusal`) — three arms over
   the registry's rows and every other commons row a build holds:
   DISJOINTNESS at the subtree grain, COMPLETENESS against the kinds' home,
-  and THE COUNT against the reserve's five ordinals (REG-1.28 to REG-1.32).
-  A refusal names its arm; the hand that runs it writes nothing.
+  and THE COUNT against the registry range's five ordinals (REG-1.28 to
+  REG-1.32). A refusal names its arm; the hand that runs it writes nothing.
 - **The vector set**, `tests/vectors/records.json` — the admitted and
   refused bodies, one JSON array, with each refused body's cause and each
   admitted body's sig-less canonical projection. Every parser of the two

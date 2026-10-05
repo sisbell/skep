@@ -2978,10 +2978,10 @@ fresh data dir's genesis and a reopen alike — the daemon runs three arms
 over the twelve rows and every other commons row the build holds (the
 engine's pins, the credential types, the deposit class): DISJOINTNESS at
 the subtree grain, COMPLETENESS against the kinds' home, and THE COUNT
-against the reserve's five ordinals; a refusal is a genesis that does not
-complete — the daemon does not open, naming the arm — so a served board
-never holds a registry row that collides with another row or a subtype
-without a row.
+against the registry range's five ordinals; a refusal is a genesis that
+does not complete — the daemon does not open, naming the arm — so a served
+board never holds a registry row that collides with another row or a
+subtype without a row.
 
 **INTERIM PINS** — confirmed at the registry's review round:
 

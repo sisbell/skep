@@ -3,8 +3,8 @@
 //! REGISTRY'S TWELVE ROWS"), spelled ONCE as one table and read through
 //! held pins, as the engine's commons ledger holds its own.
 //!
-//! Five KINDS on the reserve's five ordinals `3.55`–`3.59` (REG-1.24,
-//! REG-1.25) and seven SUBTYPE rows nested under their kinds by prefix
+//! Five KINDS on the registry range's five ordinals `3.55`–`3.59` (REG-1.23
+//! to REG-1.25) and seven SUBTYPE rows nested under their kinds by prefix
 //! (REG-1.20; L10: hierarchy is prefix), each subtype its own wire type at
 //! the type slot (REG-1.21). THE BARE ORDINAL IS A TEST, NOT A PER-KIND
 //! ANSWER (REG-1.18): a kind that reads ONE way — the binding, the endpoint,
@@ -13,8 +13,8 @@
 //! (two readings), the policy link (five) — carries NONE on its bare
 //! ordinal, every reading a row at a prefix under it. The map's "Deposits"
 //! column is that test, computed off the subtype rows' kinds and never
-//! stored ([`Row::deposits`]), so a kind given a second reading (REG-1.19)
-//! moves its column by the test alone.
+//! stored ([`Row::carries_deposits`]), so a kind given a second reading
+//! (REG-1.19) moves its column by the test alone.
 //!
 //! THE ORDER (the map): the first three kinds in REG-1.14's order at `3.55`,
 //! `3.56`, `3.57`; `successor-of`, REG-1.14's fourth kind, at `3.59` where
@@ -23,10 +23,10 @@
 //! REG-1.15's row order.
 //!
 //! Every address is the ghost home document's subspace-3 element —
-//! `1.1.0.1.0.1 · 0 · 3 · <ordinals>`, the commons' type home, where
+//! `1.1.0.1.0.1 · 0 · 3 · <ordinals>`, the commons' type subspace, where
 //! nothing is ever minted — spelled here from [`COMMONS_TYPE_PREFIX`], read
-//! back here ([`reserve_ordinal`]), and nowhere else in this crate. The
-//! engine's ledger reads these pins, and the daemon's write-path classes
+//! back here ([`registry_range_ordinal`]), and nowhere else in this crate.
+//! The engine's ledger reads these pins, and the daemon's write-path classes
 //! read them through it. Two spellings in shipped code stand outside this
 //! table, each held equal to its pin by the suite that can see both: the
 //! ledger's own `successor-of`, held equal to [`t_successor_of`] by the
@@ -40,7 +40,7 @@ use std::sync::LazyLock;
 
 use skep_address::{validate, Address, Nat, Tumbler};
 
-/// The five KINDS (REG-1.14), in the home's order.
+/// The five KINDS (REG-1.14), in the order its table lists them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Kind {
     /// The BINDING — the registration record itself: prefix → account.
@@ -58,7 +58,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    /// Every kind, in the home's order — the completeness arm's list.
+    /// Every kind, in REG-1.14's order — the completeness arm's list.
     pub const ALL: [Kind; 5] =
         [Kind::Binding, Kind::Endpoint, Kind::TakedownRecord, Kind::SuccessorOf, Kind::PolicyLink];
 
@@ -82,7 +82,7 @@ impl Kind {
     }
 }
 
-/// The seven SUBTYPE rows (REG-1.15), in the home's row order.
+/// The seven SUBTYPE rows (REG-1.15), in the order its table lists them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Subtype {
     /// The takedown record's own BASE reading.
@@ -103,7 +103,8 @@ pub enum Subtype {
 }
 
 impl Subtype {
-    /// Every subtype row, in the home's order — the completeness arm's list.
+    /// Every subtype row, in REG-1.15's row order — the completeness arm's
+    /// list.
     pub const ALL: [Subtype; 7] = [
         Subtype::TakedownBase,
         Subtype::TakedownLifted,
@@ -161,10 +162,12 @@ pub struct Row {
     /// The row's address: the ghost home document's subspace-3 element.
     pub address: Address,
     /// The `type` member's string where the row's record carries a body
-    /// (REG-1.86 (a)); none at the three link-alone rows (lifted, the policy
-    /// link's own reading, `successor-of`), which carry no body at all. The
-    /// binding's and the endpoint's are the strings [`crate::encode`] writes
-    /// and [`crate::parse`] holds a body to.
+    /// (REG-1.86 (a)) — the seven body-bearing rows. None at the other five:
+    /// the three link-alone rows (lifted, the policy link's own reading,
+    /// `successor-of`), which carry no body at all, and the bare ordinals of
+    /// the takedown record and the policy link, which carry no deposit
+    /// (REG-1.18). The binding's and the endpoint's are the strings
+    /// [`crate::encode`] writes and [`crate::parse`] holds a body to.
     pub type_value: Option<&'static str>,
 }
 
@@ -178,7 +181,7 @@ impl Row {
     /// given a SECOND reading (REG-1.19) carries none on its bare ordinal by
     /// the test itself once its subtype joins `Subtype::ALL`, as the
     /// completeness arm requires of every subtype row.
-    pub fn deposits(&self) -> bool {
+    pub fn carries_deposits(&self) -> bool {
         self.subtype.is_some() || !Subtype::ALL.iter().any(|s| s.kind() == self.kind)
     }
 }
@@ -187,9 +190,12 @@ impl Row {
 /// · 3` — the eight components ahead of a row's ordinals, spelled once.
 const COMMONS_TYPE_PREFIX: [u32; 8] = [1, 1, 0, 1, 0, 1, 0, 3];
 
-/// The reserve's five ordinals the kinds take, `3.55`–`3.59` as the ledger
-/// stands (REG-1.24, REG-1.25): the count arm's bound.
-pub(crate) const RESERVE: RangeInclusive<u32> = 55..=59;
+/// THE REGISTRY RANGE — the five ordinals `3.55`–`3.59` the kinds take as
+/// commons-map's allocation ledger stands (REG-1.23, REG-1.24): the count
+/// arm's bound (REG-1.25). Not the reserve commons-map names, `3.51`–`3.59`:
+/// the reserve's name is no range (REG-1.23; REG-1.37 (b)), and its
+/// `3.51`–`3.54` stay unallocated, no ordinal of this one (REG-1.24).
+pub(crate) const REGISTRY_RANGE: RangeInclusive<u32> = 55..=59;
 
 /// A commons type address: the commons' type subspace `1.1.0.1.0.1.0.3`
 /// then `ordinals` — one for a kind's row, the kind's then the subtype's for
@@ -209,12 +215,12 @@ pub fn commons_type(ordinals: &[u32]) -> Address {
     validate(tumbler).expect("a subspace-3 element at positive ordinals is T4-valid")
 }
 
-/// The ordinal of the reserve whose [`commons_type`] `a` IS — a bare
-/// ordinal inside [`RESERVE`], where a kind's row sits — else `None`: what
-/// the seeding check's count arm holds each kind row to.
-pub(crate) fn reserve_ordinal(a: &Address) -> Option<u32> {
-    let mut reserve = RESERVE;
-    reserve.find(|&ordinal| *a == commons_type(&[ordinal]))
+/// The ordinal of the registry range whose [`commons_type`] `a` IS — a bare
+/// ordinal inside [`REGISTRY_RANGE`], where a kind's row sits — else `None`:
+/// what the seeding check's count arm holds each kind row to.
+pub(crate) fn registry_range_ordinal(a: &Address) -> Option<u32> {
+    let mut range = REGISTRY_RANGE;
+    range.find(|&ordinal| *a == commons_type(&[ordinal]))
 }
 
 /// The table's spelling of one row — what [`rows`] builds a [`Row`] from.
@@ -315,7 +321,7 @@ pub fn t_endpoint() -> &'static Address {
 
 /// The TAKEDOWN RECORD's kind — `1.1.0.1.0.1.0.3.57`; no deposit on the bare
 /// ordinal (two readings).
-pub fn t_takedown() -> &'static Address {
+pub fn t_takedown_record() -> &'static Address {
     &Kind::TakedownRecord.row().address
 }
 
@@ -403,7 +409,7 @@ mod tests {
         let readers: [fn() -> &'static Address; 12] = [
             t_binding,
             t_endpoint,
-            t_takedown,
+            t_takedown_record,
             t_takedown_base,
             t_takedown_lifted,
             t_policy_link,
@@ -428,7 +434,8 @@ mod tests {
         for r in rows() {
             let bare_of_a_many_reading_kind =
                 matches!((r.kind, r.subtype), (Kind::TakedownRecord | Kind::PolicyLink, None));
-            assert_eq!(r.deposits(), !bare_of_a_many_reading_kind, "{:?} {:?}", r.kind, r.subtype);
+            let (kind, subtype) = (r.kind, r.subtype);
+            assert_eq!(r.carries_deposits(), !bare_of_a_many_reading_kind, "{kind:?} {subtype:?}");
         }
     }
 
@@ -442,7 +449,7 @@ mod tests {
             let nested = rows().iter().any(|s| {
                 s.address != r.address && is_prefix(r.address.tumbler(), s.address.tumbler())
             });
-            assert_eq!(r.deposits(), !nested, "{}", r.address.tumbler());
+            assert_eq!(r.carries_deposits(), !nested, "{}", r.address.tumbler());
         }
     }
 
@@ -469,8 +476,9 @@ mod tests {
     }
 
     /// The `type` strings are the rules' names lowercased and hyphenated
-    /// (REG-1.86 (a)), present at every body-bearing row and at none of the
-    /// three link-alone rows.
+    /// (REG-1.86 (a)), present at the seven body-bearing rows and at none of
+    /// the other five: the three link-alone rows and the two bare ordinals
+    /// that carry no deposit (REG-1.18).
     #[test]
     fn the_type_strings_stand_at_the_body_bearing_rows_alone() {
         let typed: Vec<(Option<Subtype>, Option<&str>)> =
@@ -494,27 +502,30 @@ mod tests {
         );
     }
 
-    /// The count arm's bound: the reserve's five ordinals (REG-1.25).
+    /// The count arm's bound: the registry range's five ordinals (REG-1.25),
+    /// never the reserve's name (REG-1.24).
     #[test]
-    fn the_reserve_is_the_five_ordinals_the_kinds_take() {
-        assert_eq!(RESERVE, 55..=59);
+    fn the_registry_range_is_the_five_ordinals_the_kinds_take() {
+        assert_eq!(REGISTRY_RANGE, 55..=59);
     }
 
-    /// A bare reserve ordinal of the commons type subspace answers itself;
-    /// an ordinal outside the reserve, a row beneath a kind, a deeper
-    /// address ending in a reserve ordinal and that ordinal in another
-    /// subspace of the ghost home document answer none.
+    /// A bare ordinal of the registry range in the commons type subspace
+    /// answers itself; `3.54` — inside the reserve commons-map names and
+    /// outside the registry range (REG-1.24) — an ordinal past the range, a
+    /// row beneath a kind, a deeper address ending in a range ordinal and
+    /// that ordinal in another subspace of the ghost home document answer
+    /// none.
     #[test]
-    fn the_reserve_ordinal_is_read_off_a_bare_row_inside_the_reserve_alone() {
-        assert_eq!(reserve_ordinal(&commons_type(&[55])), Some(55));
-        assert_eq!(reserve_ordinal(&commons_type(&[59])), Some(59));
-        assert_eq!(reserve_ordinal(&commons_type(&[54])), None);
-        assert_eq!(reserve_ordinal(&commons_type(&[60])), None);
-        assert_eq!(reserve_ordinal(&commons_type(&[57, 1])), None);
-        assert_eq!(reserve_ordinal(&commons_type(&[55, 55])), None);
+    fn the_registry_range_ordinal_is_read_off_a_bare_row_inside_the_range_alone() {
+        assert_eq!(registry_range_ordinal(&commons_type(&[55])), Some(55));
+        assert_eq!(registry_range_ordinal(&commons_type(&[59])), Some(59));
+        assert_eq!(registry_range_ordinal(&commons_type(&[54])), None);
+        assert_eq!(registry_range_ordinal(&commons_type(&[60])), None);
+        assert_eq!(registry_range_ordinal(&commons_type(&[57, 1])), None);
+        assert_eq!(registry_range_ordinal(&commons_type(&[55, 55])), None);
         let subspace_1 = [1u32, 1, 0, 1, 0, 1, 0, 1, 55].map(Nat::from);
         let subspace_1 = validate(Tumbler::new(subspace_1).expect("nonempty")).expect("T4-valid");
-        assert_eq!(reserve_ordinal(&subspace_1), None);
+        assert_eq!(registry_range_ordinal(&subspace_1), None);
     }
 
     /// Each kind and each subtype names its own row of the table, held: a

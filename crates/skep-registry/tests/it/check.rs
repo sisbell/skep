@@ -4,8 +4,8 @@
 
 use skep_address::Address;
 use skep_registry::{
-    commons_type, rows, seeding_check, t_binding, t_policy_link, t_successor_of, t_takedown, Kind,
-    Row, SeedingRefusal, Subtype,
+    commons_type, rows, seeding_check, t_binding, t_policy_link, t_successor_of, t_takedown_record,
+    Kind, Row, SeedingRefusal, Subtype,
 };
 
 /// The rows commons-map's disjointness paragraph lists as built or placed
@@ -79,7 +79,7 @@ fn the_disjointness_arm_refuses_a_foreign_row_inside_above_or_at_a_registry_row(
     for (foreign, registry) in [
         (&[58, 6][..], t_policy_link()),
         (&[55, 1][..], t_binding()),
-        (&[57, 2][..], t_takedown()),
+        (&[57, 2][..], t_takedown_record()),
         (&[59][..], t_successor_of()),
     ] {
         let f = commons_type(foreign);
@@ -101,9 +101,15 @@ fn the_disjointness_arm_refuses_a_foreign_row_inside_above_or_at_a_registry_row(
         seeding_check(rows(), std::iter::once(&subspace)),
         Err(SeedingRefusal::Disjointness { registry: t_binding().clone(), foreign: subspace })
     );
+    // The operator's sentence names the registry's row and the foreign one,
+    // each a commons row.
     let refusal = seeding_check(rows(), std::iter::once(&commons_type(&[58, 6]))).unwrap_err();
     assert_eq!(refusal.arm(), "disjointness");
-    assert!(refusal.to_string().starts_with("disjointness:"), "{refusal}");
+    assert_eq!(
+        refusal.to_string(),
+        "disjointness: the registry row 1.1.0.1.0.1.0.3.58 and the foreign commons row \
+         1.1.0.1.0.1.0.3.58.6 meet at the subtree grain"
+    );
 }
 
 /// REG-1.29 — the completeness arm: a kind with no row, a subtype with no
@@ -136,10 +142,11 @@ fn the_completeness_arm_refuses_a_missing_kind_or_subtype_row() {
     ));
 }
 
-/// REG-1.25 — the count arm: a sixth kind row, a kind row outside the
-/// reserve's five ordinals, and two kind rows at one ordinal.
+/// REG-1.25 — the count arm: a sixth kind row, a kind row at `3.54` — the
+/// reserve's, outside the registry range (REG-1.24) — and two kind rows at
+/// one ordinal.
 #[test]
-fn the_count_arm_holds_the_kind_rows_to_the_reserves_five_ordinals() {
+fn the_count_arm_holds_the_kind_rows_to_the_registry_ranges_five_ordinals() {
     let mut sixth: Vec<Row> = rows().to_vec();
     sixth.push(Row {
         kind: Kind::Binding,
@@ -147,14 +154,21 @@ fn the_count_arm_holds_the_kind_rows_to_the_reserves_five_ordinals() {
         address: commons_type(&[54]),
         type_value: Some("binding"),
     });
+    let refusal = seeding_check(&sixth, std::iter::empty()).unwrap_err();
+    assert_eq!(refusal, SeedingRefusal::Count { kind_rows: 6, row: None });
     assert_eq!(
-        seeding_check(&sixth, std::iter::empty()),
-        Err(SeedingRefusal::Count { kind_rows: 6, row: None })
+        refusal.to_string(),
+        "count: 6 kind rows against the registry range's 5 ordinals 3.55-3.59"
     );
+    // The operator's sentence names the range the row is outside: `3.54`
+    // is the reserve's and no ordinal of the registry range.
     let outside = moved(Kind::Binding, None, &[54]);
+    let refusal = seeding_check(&outside, std::iter::empty()).unwrap_err();
+    assert_eq!(refusal, SeedingRefusal::Count { kind_rows: 5, row: Some(commons_type(&[54])) });
     assert_eq!(
-        seeding_check(&outside, std::iter::empty()),
-        Err(SeedingRefusal::Count { kind_rows: 5, row: Some(commons_type(&[54])) })
+        refusal.to_string(),
+        "count: of 5 kind rows, 1.1.0.1.0.1.0.3.54 is no bare ordinal of the registry range \
+         3.55-3.59 left to it"
     );
     let doubled = moved(Kind::Endpoint, None, &[55]);
     let refusal = seeding_check(&doubled, std::iter::empty()).unwrap_err();

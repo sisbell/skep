@@ -725,7 +725,7 @@ fn doc_states_the_registry_rows_the_bodies_and_the_refusals() {
         r#"{"type":"endpoint","origins":["https://acme.example","https://acme.example.net","http://<acme's onion host>.onion"]}"#,
     ] {
         assert!(
-            vectors.iter().any(|v| v["bytes"].as_str() == Some(example) && v["verdict"] == "ok"),
+            vectors.iter().any(|v| v["bytes"].as_str() == Some(example) && v["parse"] == "ok"),
             "the section's example is an admitted vector: {example}"
         );
     }

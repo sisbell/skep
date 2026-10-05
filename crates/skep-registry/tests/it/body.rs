@@ -1,9 +1,10 @@
 //! THE VECTOR SET at this parser (`tests/vectors/records.json`): every
-//! vector meets the verdict the set pins — a record, or its refusal's cause
-//! — every admitted body is its own re-encoding and a fixpoint, and the set
-//! pins the cap this crate does, so a parser another reader of the bodies
-//! builds reads the pins from the set and not from a second transcription.
-//! (`skep-resolve` builds none: it calls this crate's `parse`.)
+//! vector meets the answer the set pins at the parse — a record, or its
+//! refusal's cause — every admitted body is its own re-encoding and a
+//! fixpoint, and the set pins the cap this crate does, so a parser another
+//! reader of the bodies builds reads the pins from the set and not from a
+//! second transcription. (`skep-resolve` builds none: it calls this crate's
+//! `parse`.)
 
 use std::path::Path;
 
@@ -38,10 +39,10 @@ fn kind_of(vector: &Value) -> BodyKind {
     }
 }
 
-/// Every vector, one verdict; the admitted ones read from both sides of the
-/// canonical rule.
+/// Every vector, one answer at the parse; the admitted ones read from both
+/// sides of the canonical rule.
 #[test]
-fn the_vector_set_meets_one_verdict_at_this_parser() {
+fn the_vector_set_meets_one_answer_at_this_parser() {
     let fixture = fixture();
     assert_eq!(fixture["cap"].as_u64(), Some(MAX_REGISTRY_RECORD_BYTES as u64));
     let vectors = fixture["vectors"].as_array().expect("vectors");
@@ -50,8 +51,8 @@ fn the_vector_set_meets_one_verdict_at_this_parser() {
         let name = vector["name"].as_str().expect("a name");
         let kind = kind_of(vector);
         let bytes = bytes_of(vector);
-        let verdict = vector["verdict"].as_str().expect("a verdict");
-        match (verdict, parse(kind, &bytes)) {
+        let answer = vector["parse"].as_str().expect("the parse's answer");
+        match (answer, parse(kind, &bytes)) {
             ("ok", Ok(record)) => {
                 assert_eq!(record.body.kind(), kind, "{name}: the body's kind is the slot's");
                 assert_eq!(
@@ -61,7 +62,7 @@ fn the_vector_set_meets_one_verdict_at_this_parser() {
                 );
                 assert_eq!(
                     Some(record.canonical_sigless().as_str()),
-                    vector["canonical"].as_str(),
+                    vector["canonical_sigless"].as_str(),
                     "{name}: the sig-less canonical projection"
                 );
                 assert_eq!(record.sig.as_deref(), vector["sig"].as_str(), "{name}: the sig as found");
@@ -156,8 +157,8 @@ fn a_body_answers_the_first_stage_that_faults() {
         ("not_json", &too_deep),
     ];
     for (cause, text) in bindings {
-        let verdict = parse(BodyKind::Binding, text.as_bytes()).map_err(|r| r.token());
-        assert_eq!(verdict, Err(cause.to_owned()), "{text}");
+        let answer = parse(BodyKind::Binding, text.as_bytes()).map_err(|r| r.token());
+        assert_eq!(answer, Err(cause.to_owned()), "{text}");
     }
     let endpoint = parse(BodyKind::Endpoint, br#"{"type":"endpoint","origins":[],"sig":true}"#);
     assert_eq!(endpoint.unwrap_err().token(), "not_a_string:sig", "sig before the row's own");
@@ -178,11 +179,11 @@ fn the_type_member_is_the_string_its_kinds_row_holds() {
         for r in rows() {
             let Some(ty) = r.type_value else { continue };
             let text = format!(r#"{{"type":"{ty}",{member}}}"#);
-            let verdict = parse(body_kind, text.as_bytes()).map_err(|refusal| refusal.token());
+            let answer = parse(body_kind, text.as_bytes()).map_err(|refusal| refusal.token());
             if r == kind.row() {
-                assert_eq!(verdict.map(|record| record.canonical_sigless()), Ok(text), "{kind:?}");
+                assert_eq!(answer.map(|record| record.canonical_sigless()), Ok(text), "{kind:?}");
             } else {
-                assert_eq!(verdict.err().as_deref(), Some("wrong_type"), "{ty} under {kind:?}");
+                assert_eq!(answer.err().as_deref(), Some("wrong_type"), "{ty} under {kind:?}");
             }
         }
     }

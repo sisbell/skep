@@ -201,8 +201,7 @@ fn coverage_class_panics_on_an_off_contract_span() {
     // The design's pinned off-contract behavior: a hand-built
     // non-level-uniform span (T12-valid ([5,3],[0,2,7])) PANICS — never a
     // skipped span, never a coarser class.
-    let s = Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12 admits this span");
-    let _ = coverage_class(&Endset::from_spans([s]));
+    let _ = coverage_class(&skew());
 }
 
 #[test]
@@ -357,8 +356,7 @@ fn is_address_denoting_answers_the_question_the_module_asks_its_callers() {
     assert!(Endset::empty().is_address_denoting()); // vacuous on ⟨⟩
     assert!(enc(&[ca(1), ra(1)]).is_address_denoting());
     assert!(!Endset::from_spans([iext(1, 3)]).is_address_denoting());
-    let skew = Endset::from_spans([Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12-valid")]);
-    assert!(!skew.is_address_denoting());
+    assert!(!skew().is_address_denoting());
 }
 
 #[test]
@@ -383,9 +381,8 @@ fn is_level_uniform_is_coverage_class_s_precondition_and_denotation_is_stronger(
 
     // The one input coverage_class aborts on fails BOTH, so the precondition
     // and its test agree exactly where it matters.
-    let skew = Endset::from_spans([Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12-valid")]);
-    assert!(!skew.is_address_denoting());
-    assert!(!skew.is_level_uniform());
+    assert!(!skew().is_address_denoting());
+    assert!(!skew().is_level_uniform());
 }
 
 #[test]
@@ -494,7 +491,7 @@ fn slots_walks_the_whole_value_in_positional_order() {
     // EVERY slot, and it yields them in the order the positional accessors
     // name — so a caller walking it and a caller indexing `1..=arity` cannot
     // disagree. Stated at the store's own shape and at a wider L3 capacity.
-    let l = Link::new([enc(&[ca(1)]), enc(&[ca(2), ca(3)]), enc(&[unregistered_ta(10)])]).expect("arity 3");
+    let l = Link::triple(enc(&[ca(1)]), enc(&[ca(2), ca(3)]), enc(&[unregistered_ta(10)]));
     let walked: Vec<&Endset> = l.slots().collect();
     assert_eq!(walked, vec![l.from_slot(), l.to_slot(), l.type_slot()]);
     for arity in [3usize, 4] {
@@ -515,7 +512,7 @@ fn carrier_types_survive_the_journal_wire_format() {
     let back: Endset = bincode::deserialize(&bytes).expect("endset deserializes");
     assert_eq!(back, e); // structural round trip, decomposition preserved
 
-    let l = Link::new([enc(&[ca(1)]), enc(&[ca(2)]), enc(&[unregistered_ta(10)])]).expect("arity 3");
+    let l = Link::triple(enc(&[ca(1)]), enc(&[ca(2)]), enc(&[unregistered_ta(10)]));
     let bytes = bincode::serialize(&l).expect("link serializes");
     let back: Link = bincode::deserialize(&bytes).expect("link deserializes");
     assert_eq!(back, l);

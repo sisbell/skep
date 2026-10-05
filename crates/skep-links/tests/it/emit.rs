@@ -15,7 +15,7 @@ use common::*;
 use skep_address::Address;
 use skep_arrangement::HasM5;
 use skep_kernel::TxnError;
-use skep_links::{enc, EmitError, Endset, HasLinks, Pattern, RetractStaleError, View};
+use skep_links::{emit_tuple, enc, EmitError, Endset, HasLinks, Pattern, RetractStaleError, View};
 
 #[test]
 fn emit_deposits_verbatim_reads_back_and_never_seats() {
@@ -34,6 +34,12 @@ fn emit_deposits_verbatim_reads_back_and_never_seats() {
     assert_eq!(link.from_slot(), &enc(&[ca(1)]));
     assert_eq!(link.to_slot(), &Endset::empty());
     assert_eq!(link.type_slot(), &pred_def_ty());
+    // ...which is the tuple the published builder makes — the one the daemon's
+    // entry-frame composer signs over.
+    assert_eq!(
+        *link,
+        emit_tuple(&pred_def_ty(), &ca(1), &[]).expect("within budget")
+    );
     // Emit_K does NOT seat (MAKELINK alone seats).
     assert_eq!(snap.world().m5().link_count(&doc1()), n(0));
     // Observe: the empty pattern is no constraint; exact ⊆-coverage match.
@@ -112,10 +118,9 @@ fn emit_refuses_a_non_level_uniform_ty_without_classifying_it() {
     // check turns a typed refusal into an abort inside the daemon.
     let k = kernel();
     let w = writer(&k);
-    let skew = skep_address::Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12 admits this span");
     let before = k.current_seq();
     assert!(matches!(
-        w.emit(P1, &doc1(), &Endset::from_spans([skew]), &ca(1), &[]),
+        w.emit(P1, &doc1(), &skew(), &ca(1), &[]),
         Err(TxnError::Rejected(EmitError::NonAddressDenotingType))
     ));
     assert_eq!(k.current_seq(), before, "the refusal is pre-deposit");

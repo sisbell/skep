@@ -220,17 +220,12 @@ where
     /// Every `Resolve` spec is wf-checked — a registered source, and a depth-2
     /// content V-position with ordinal displacement — before any slot is
     /// built; `Addrs` names get no wf step, T4 validity being the whole
-    /// precondition and already carried by the `Address` type. EVERY slot,
-    /// in either form, is bounded at [`MAX_SLOT_SPANS`] spans
-    /// (`SlotTooLarge`): a spec's expansion is the source document's
-    /// fragmentation rather than the request's size, and a name's span costs
-    /// order half a kilobyte live against ~19 wire bytes, so neither form's
-    /// live cost is bounded by the request body that carried it. Every
-    /// `Resolve` slot is additionally bounded at [`MAX_SLOT_RESOLVE_STEPS`]
-    /// run-list steps (`SlotTooLarge` again): the resolution's WORK is not
-    /// its result, a spec aimed past its source's arranged end keeping no
-    /// span and walking all of it — and every step runs inside this
-    /// transact, under the applier lock the whole engine writes through.
+    /// precondition and already carried by the `Address` type. Every slot is
+    /// then held, as [`slot_endset`] builds it, to [`MAX_SLOT_SPANS`] spans in
+    /// either form and, for a `Resolve` slot, to [`MAX_SLOT_RESOLVE_STEPS`]
+    /// run-list steps — both refused `SlotTooLarge`, both charged inside this
+    /// transact, under the applier lock the whole engine writes through. The
+    /// two constants say why the request that carried a slot bounds neither.
     ///
     /// The three SOLE-WRITER fences apply here as the first two do on the
     /// managed surface: a resolved type slot in the `[R]` class

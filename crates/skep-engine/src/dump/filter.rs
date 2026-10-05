@@ -315,8 +315,8 @@ pub(super) fn filter_tree(
 /// * `makelink` and `emit` refuse a supersedes-classed type slot outright
 ///   (`MakeLinkError::SupersessionClass`, `EmitError::SupersessionClass`), so
 ///   no caller-shaped slot reaches the class through either open surface;
-/// * `assert_sup` and `editlink` each build their own CLAIM value,
-///   `Link::triple(enc([old]), enc([new]), …)` — one unit-depth span a side,
+/// * `assert_sup` and `editlink` build their CLAIM through one function,
+///   `skep_links::supersession_claim(old, new)` — one unit-depth span a side,
 ///   by construction rather than by a check; and
 /// * `editlink` additionally deposits a SUCCESSOR that is the caller's own
 ///   `Link`, so a supersedes-classed one arrives with caller-shaped

@@ -9,10 +9,11 @@
 /// is held to, whichever form built it: MAKELINK's
 /// [`SlotArg::Resolve`](crate::SlotArg::Resolve) and
 /// [`SlotArg::Addrs`](crate::SlotArg::Addrs) slots
-/// ([`MakeLinkError::SlotTooLarge`](crate::MakeLinkError::SlotTooLarge)), an
-/// `editlink` successor's slots
-/// ([`EditLinkError::SlotTooLarge`](crate::EditLinkError::SlotTooLarge)), and
-/// BOTH of [`emit`](crate::LinkWriter::emit)'s caller-sized slots — `to` and
+/// ([`MakeLinkError::SlotTooLarge`](crate::MakeLinkError::SlotTooLarge)); an
+/// `editlink` successor's slots, which M10 resolves from V-specs and which so
+/// amplify as a `Resolve` slot does
+/// ([`EditLinkError::SlotTooLarge`](crate::EditLinkError::SlotTooLarge)); and
+/// BOTH of [`emit`](crate::LinkWriter::emit)'s caller-sized slots, `to` and
 /// `ty` ([`EmitError::SlotTooLarge`](crate::EmitError::SlotTooLarge)).
 ///
 /// Both slot forms amplify, and differently. A `Resolve` slot's span count is
@@ -21,21 +22,27 @@
 /// document happens to be fragmented, a slot's specs sum those, and the
 /// result is stored VERBATIM (ML1 coverage-exactness forbids coalescing it
 /// away). An address-named slot's span COUNT is linear in the request, but
-/// its BYTES are not: a dotted address is ~19 wire bytes and the span it
-/// becomes is `subtree_of` over it — two 8-component `BigUint` tumblers,
-/// order half a kilobyte live — so a slot bounded only by the request body
-/// would name hundreds of thousands of spans.
+/// its BYTES are not: an eight-component dotted address is ~19 wire bytes,
+/// and the span it becomes is `subtree_of` over it — two `BigUint` tumblers
+/// as deep as the address, order half a kilobyte live at eight components —
+/// so a slot bounded only by the request body would name hundreds of
+/// thousands of spans.
 ///
-/// The budget is the per-slot STORED endset's live memory and permanent store
-/// — the spans a slot KEEPS. `MAX_TXN_BYTES` bounds neither: it is charged
-/// against the ENCODED transaction after the closure returns, and the encoded
-/// form of a span is a
-/// small fraction of the live one. At order half a kilobyte per element-level
-/// span this bound is ~2 MB a slot and ~6 MB across a three-slot MAKELINK:
-/// the order of the request body a caller is allowed to send in the first
-/// place. MAKELINK's three slots are additionally built and held under M2's
-/// applier lock; `emit` builds its value before the transact, and an
-/// `editlink` successor is built entirely by its caller.
+/// The budget is a COUNT — the spans a slot KEEPS — so it bounds what the
+/// stored endset costs, live and for good (the store holds every link in
+/// memory), only through what one span costs, and that is set by the depth of
+/// the span's two tumblers rather than by this crate: order half a kilobyte at
+/// the eight components of a top-level document's element, ~16–20 KB at the
+/// 256 components skepd's codec admits — a depth M5's daughter chains let a
+/// `Resolve` slot reach without naming it. So a slot at budget is ~2 MB live
+/// at the shallow end and ~70 MB at the deep one (~21 MB journaled), and a
+/// three-slot MAKELINK stores up to ~200 MB from a ~6 MB frame; M10's
+/// `Codec::parse` doc carries the arithmetic. `MAX_TXN_BYTES` does not bound
+/// the live figure: it is charged against the ENCODED transaction after the
+/// closure returns, and a span's encoded form is a fraction of its live one,
+/// so the deep three-slot MAKELINK journals inside it. MAKELINK's three slots
+/// are built and held under M2's applier lock; `emit` builds its value before
+/// the transact, and an `editlink` successor is built entirely by its caller.
 ///
 /// It bounds a slot's RESULT and, the resolution being pulled a run at a
 /// time and stopped here, the live peak of building it — and nothing else.

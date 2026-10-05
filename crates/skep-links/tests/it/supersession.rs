@@ -14,7 +14,9 @@ use crate::common;
 use common::*;
 use skep_arrangement::HasM5;
 use skep_kernel::TxnError;
-use skep_links::{enc, AssertSupError, Edit, EditLinkError, Endset, HasLinks, Link, Tip, View};
+use skep_links::{
+    enc, supersession_claim, AssertSupError, Edit, EditLinkError, Endset, HasLinks, Link, Tip, View,
+};
 
 #[test]
 fn assert_sup_claims_dedup_across_homes_and_a_retracted_claim_leaves_the_walk() {
@@ -37,6 +39,12 @@ fn assert_sup_claims_dedup_across_homes_and_a_retracted_claim_leaves_the_walk() 
     {
         let snap = k.snapshot();
         let links = snap.world().links();
+        // The stored claim is the one the published builder makes — the one
+        // the daemon's entry-frame composer signs over.
+        assert_eq!(
+            *links.readlink(&c1).expect("resident"),
+            supersession_claim(&x, &y)
+        );
         assert_eq!(links.succs(&sup, &x), vec![y.clone()]);
         assert_eq!(links.chain(&sup, &x), vec![x.clone(), y.clone()]);
         assert_eq!(links.tip(&sup, &x), Tip::Sink(y.clone()));
@@ -120,10 +128,7 @@ fn the_walk_scope_test_panics_on_an_off_contract_ty_rather_than_reading_as_out_o
     // caller error with a truthful-looking claim about the store.
     let k = kernel();
     let snap = k.snapshot();
-    let skew = Endset::from_spans([
-        skep_address::Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12 admits this span")
-    ]);
-    let _ = snap.world().links().succs(&skew, &la(1));
+    let _ = snap.world().links().succs(&skew(), &la(1));
 }
 
 #[test]
@@ -175,8 +180,7 @@ fn editlink_commits_successor_and_claim_together_and_guards_the_successor_type()
     let (orig, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("orig");
 
     // One atomic composite: fresh successor + claim; original untouched.
-    let successor_value =
-        Link::new([enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30)]).expect("arity 3");
+    let successor_value = Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30));
     let (Edit { successor: s1, claim: c1 }, _) = w
         .editlink(P1, &orig, successor_value.clone(), &doc1(), &doc1())
         .expect("editlink");
@@ -188,6 +192,7 @@ fn editlink_commits_successor_and_claim_together_and_guards_the_successor_type()
         assert_eq!(claim.from_slot(), &enc([&orig])); // F = old
         assert_eq!(claim.to_slot(), &enc([&s1])); // G = new (fresh successor)
         assert_eq!(claim.type_slot(), &sup);
+        assert_eq!(*claim, supersession_claim(&orig, &s1)); // the one claim builder's value
         assert_eq!(links.chain(&sup, &orig), vec![orig.clone(), s1.clone()]);
         // Successor born UNSEATED.
         assert_eq!(snap.world().m5().link_count(&doc1()), n(0));
@@ -195,8 +200,7 @@ fn editlink_commits_successor_and_claim_together_and_guards_the_successor_type()
 
     // Fork permanence: a second edit of the same original yields a distinct
     // successor and a co-visible claim; the walk reports the branch.
-    let fork_value =
-        Link::new([enc(&[ca(5)]), enc(&[ca(6)]), unregistered_ty(31)]).expect("arity 3");
+    let fork_value = Link::triple(enc(&[ca(5)]), enc(&[ca(6)]), unregistered_ty(31));
     let (Edit { successor: s2, claim: c2 }, _) =
         w.editlink(P1, &orig, fork_value, &doc1(), &doc1()).expect("fork");
     {
@@ -219,7 +223,7 @@ fn editlink_commits_successor_and_claim_together_and_guards_the_successor_type()
     // A [K_sup]-typed successor is admitted iff schema-conforming (DC): both
     // endpoints resident, distinct, unit-depth single-addr F/G.
     let (z, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(7), &[]).expect("z");
-    let conforming = Link::new([enc([&orig]), enc([&z]), sup.clone()]).expect("arity 3");
+    let conforming = Link::triple(enc([&orig]), enc([&z]), sup.clone());
     w.editlink(P1, &orig, conforming, &doc1(), &doc1())
         .expect("schema-conforming claim-typed successor");
     {
@@ -228,8 +232,7 @@ fn editlink_commits_successor_and_claim_together_and_guards_the_successor_type()
     }
 
     // Rejections (each leaves no state change by M2's Rejected contract).
-    let valid_successor =
-        Link::new([enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(32)]).expect("arity 3");
+    let valid_successor = Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(32));
     assert!(matches!(
         w.editlink(P1, &la(90), valid_successor.clone(), &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::OriginalNotResident))
@@ -249,18 +252,17 @@ fn editlink_commits_successor_and_claim_together_and_guards_the_successor_type()
         w.editlink(P1, &orig, arity4, &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::IllFormedSuccessor))
     ));
-    let empty_ty = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), Endset::empty()]).expect("arity 3");
+    let empty_ty = Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), Endset::empty());
     assert!(matches!(
         w.editlink(P1, &orig, empty_ty, &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::IllFormedSuccessor))
     ));
-    let retraction_typed =
-        Link::new([enc(&[ca(3)]), enc(&[ca(4)]), retraction.clone()]).expect("arity 3");
+    let retraction_typed = Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), retraction.clone());
     assert!(matches!(
         w.editlink(P1, &orig, retraction_typed, &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::DcViolation))
     ));
-    let self_sup = Link::new([enc([&orig]), enc([&orig]), sup.clone()]).expect("arity 3");
+    let self_sup = Link::triple(enc([&orig]), enc([&orig]), sup.clone());
     assert!(matches!(
         w.editlink(P1, &orig, self_sup, &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::DcViolation))
@@ -280,8 +282,7 @@ fn editlink_deposits_the_successor_in_d_s_and_the_claim_in_d_a() {
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("orig");
     assert_eq!(orig, la(1)); // so doc1's next mint is la(2), doc2's first la2(1)
-    let successor_value =
-        Link::new([enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30)]).expect("arity 3");
+    let successor_value = Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30));
     let (edit, _) = w
         .editlink(P1, &orig, successor_value.clone(), &doc1(), &doc2())
         .expect("P1 owns both homes");
@@ -315,8 +316,7 @@ fn editlink_locks_two_homes_in_one_canonical_order() {
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("orig");
     assert_eq!(orig, la(1)); // doc1's next mint is la(2); doc2's first is la2(1)
-    let successor_value =
-        || Link::new([enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30)]).expect("arity 3");
+    let successor_value = || Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30));
 
     let (edit1, _) = w
         .editlink(P1, &orig, successor_value(), &doc1(), &doc2())
@@ -339,8 +339,7 @@ fn editlink_reports_an_unregistered_home_before_a_non_resident_original() {
     // hoist is observable.
     let k = kernel();
     let w = writer(&k);
-    let successor_value =
-        Link::new([enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30)]).expect("arity 3");
+    let successor_value = Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30));
     assert!(matches!(
         w.editlink(P1, &la(90), successor_value, &a(&[1, 0, 1, 0, 7]), &doc1()),
         Err(TxnError::Rejected(EditLinkError::HomeNotRegistered))
@@ -357,9 +356,7 @@ fn editlink_rejects_a_non_level_uniform_successor_type_slot() {
     let (orig, _) = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("orig");
-    let skew = skep_address::Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12 admits this span");
-    let successor_value =
-        Link::new([enc(&[ca(3)]), enc(&[ca(4)]), Endset::from_spans([skew])]).expect("arity 3");
+    let successor_value = Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), skew());
     assert!(matches!(
         w.editlink(P1, &orig, successor_value, &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::IllFormedSuccessor))
@@ -378,23 +375,21 @@ fn editlink_rejects_a_non_level_uniform_span_in_any_slot() {
     let (orig, _) = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("orig");
-    let skew =
-        || Endset::from_spans([skep_address::Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12")]);
     // `retired` is registered idem⊤, so the fold WOULD build a dedup key
     // over all three slots of this successor.
     let idem_top = enc(&[reserved().retired]);
     for (label, successor_value) in [
         (
             "skew F",
-            Link::new([skew(), enc(&[ca(4)]), idem_top.clone()]).expect("arity 3"),
+            Link::triple(skew(), enc(&[ca(4)]), idem_top.clone()),
         ),
         (
             "skew G",
-            Link::new([enc(&[ca(3)]), skew(), idem_top.clone()]).expect("arity 3"),
+            Link::triple(enc(&[ca(3)]), skew(), idem_top.clone()),
         ),
         (
             "skew TYPE",
-            Link::new([enc(&[ca(3)]), enc(&[ca(4)]), skew()]).expect("arity 3"),
+            Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), skew()),
         ),
     ] {
         let got = w.editlink(P1, &orig, successor_value, &doc1(), &doc1());
@@ -420,7 +415,7 @@ fn editlink_rejects_a_claim_typed_successor_with_a_non_resident_endpoint() {
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("orig");
     let (z, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(7), &[]).expect("z");
-    let ghost_endpoint = Link::new([enc([&la(90)]), enc([&z]), sup.clone()]).expect("arity 3");
+    let ghost_endpoint = Link::triple(enc([&la(90)]), enc([&z]), sup.clone());
     assert!(matches!(
         w.editlink(P1, &orig, ghost_endpoint, &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::DcViolation))
@@ -428,7 +423,7 @@ fn editlink_rejects_a_claim_typed_successor_with_a_non_resident_endpoint() {
     // Residence is required of BOTH endpoints, not only F: the schema check
     // reads `resident(f) && resident(g)`, and a ghost in the `new` position
     // would enter the adjacency as a successor no walk could ever read back.
-    let ghost_new = Link::new([enc([&z]), enc([&la(90)]), sup]).expect("arity 3");
+    let ghost_new = Link::triple(enc([&z]), enc([&la(90)]), sup);
     assert!(matches!(
         w.editlink(P1, &orig, ghost_new, &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::DcViolation))
@@ -449,19 +444,19 @@ fn editlink_rejects_a_claim_typed_successor_whose_endpoint_denotes_several_addre
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("orig");
     let (z, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(7), &[]).expect("z");
-    let multi_f = Link::new([enc([&orig, &z]), enc([&z]), sup.clone()]).expect("arity 3");
+    let multi_f = Link::triple(enc([&orig, &z]), enc([&z]), sup.clone());
     assert!(matches!(
         w.editlink(P1, &orig, multi_f, &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::DcViolation))
     ));
-    let multi_g = Link::new([enc([&orig]), enc([&orig, &z]), sup.clone()]).expect("arity 3");
+    let multi_g = Link::triple(enc([&orig]), enc([&orig, &z]), sup.clone());
     assert!(matches!(
         w.editlink(P1, &orig, multi_g, &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::DcViolation))
     ));
     // ...and the rule turns on DISTINCT: the same address named twice denotes
     // one, so it conforms — and the admitted claim enters the adjacency.
-    let repeated = Link::new([enc([&z, &z]), enc([&orig]), sup.clone()]).expect("arity 3");
+    let repeated = Link::triple(enc([&z, &z]), enc([&orig]), sup.clone());
     let (Edit { successor: s, .. }, _) = w
         .editlink(P1, &orig, repeated, &doc1(), &doc1())
         .expect("one distinct address, named twice");
@@ -486,8 +481,7 @@ fn current_discloses_every_operative_claim_targeting_a_sink() {
     let (orig, _) = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("orig");
-    let successor_value =
-        Link::new([enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30)]).expect("arity 3");
+    let successor_value = Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30));
     let (Edit { successor: s1, claim: c1 }, _) = w
         .editlink(P1, &orig, successor_value, &doc1(), &doc1())
         .expect("editlink");
@@ -525,8 +519,7 @@ fn current_discloses_a_nullified_sink_with_its_own_activity() {
     let (orig, _) = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("orig");
-    let successor_value =
-        Link::new([enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30)]).expect("arity 3");
+    let successor_value = Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30));
     let (Edit { successor: s1, claim: c1 }, _) = w
         .editlink(P1, &orig, successor_value, &doc1(), &doc1())
         .expect("editlink");

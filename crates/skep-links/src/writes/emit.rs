@@ -1,7 +1,8 @@
-//! Emit_K (ASN-0086/0126/0128): [`LinkWriter::emit`], the managed surface's
-//! gated typed-relation emission — its pre-transact fences in firing order,
-//! then the deposit gate's Managed discipline with its idem⊤ dedup at the
-//! caller's visibility class.
+//! Emit_K (ASN-0086/0126/0128): [`emit_tuple`], the tuple an emission
+//! deposits, and [`LinkWriter::emit`], the managed surface's gated
+//! typed-relation emission — its pre-transact fences in firing order, then
+//! the deposit gate's Managed discipline with its idem⊤ dedup at the caller's
+//! visibility class.
 
 use skep_address::Address;
 use skep_arrangement::Caller;
@@ -17,17 +18,45 @@ use crate::registry::{registry, ShippedType};
 use crate::state::LinkRec;
 use crate::LinkWorld;
 
+/// The Emit_K tuple [`LinkWriter::emit`] deposits for `(ty, from, to)` —
+/// `(enc({from}), enc(to), ty)`, `ty` stored VERBATIM as e₃ — or `None` when
+/// either caller-sized slot is past [`MAX_SLOT_SPANS`] spans: `to`'s addresses
+/// or `ty`'s own spans. (`enc({from})` is one span, so `from` needs no
+/// clause.)
+///
+/// `ty` is held to the budget as squarely as `to`: its class collapses
+/// repeated addresses, so a registered class is no bound on the slot naming
+/// it. What the budget prevents differs between the two. An over-budget `to`
+/// could never be stored — no class in this format admits `|G| > 1` — so for
+/// `to` it saves the building of a value the shape gate would refuse. An
+/// over-budget `ty` has no such backstop under any shape: no gate anywhere
+/// reads e₃'s span count, so for `ty` the budget is all that stands between a
+/// request and an arbitrarily wide permanent slot.
+///
+/// It builds the value and judges nothing else — `emit`'s class fences run
+/// before it and its Managed gate after. PUBLIC as
+/// [`slot_endset`](crate::slot_endset) is, for the same caller: `emit` builds
+/// through it and so does the daemon's entry-frame composer (signed ops), so
+/// the row an attestation covers and the link the store deposits agree by
+/// construction.
+pub fn emit_tuple(ty: &Endset, from: &Address, to: &[Address]) -> Option<Link> {
+    if to.len() > MAX_SLOT_SPANS || ty.len() > MAX_SLOT_SPANS {
+        return None;
+    }
+    Some(Link::triple(enc([from]), enc(to), ty.clone()))
+}
+
 impl<'k, W> LinkWriter<'k, W>
 where
     W: LinkWorld,
     W::Record: From<LinkRec> + From<M3Rec>,
 {
-    /// Emit_K (ASN-0086/0126/0128): gated typed-relation emission —
-    /// `value = Link[enc({from}), enc(to), ty]` (`|F| = 1` forced, `to`'s
-    /// SPAN COUNT shape-checked, `ty` stored verbatim as e₃). Does NOT
-    /// seat. idem⊤ ⇒ dedup against the ACTIVE view WITHIN THE CALLER'S
-    /// VISIBILITY CLASS (PUB-6.25); a hit returns the incumbent with the base
-    /// `Seq` and commits NOTHING.
+    /// Emit_K (ASN-0086/0126/0128): gated emission of the typed-relation
+    /// tuple [`emit_tuple`] builds — `Link[enc({from}), enc(to), ty]`,
+    /// `|F| = 1` forced, `to`'s SPAN COUNT shape-checked, `ty` stored verbatim
+    /// as e₃. Does NOT seat. idem⊤ ⇒ dedup against the ACTIVE view WITHIN THE
+    /// CALLER'S VISIBILITY CLASS (PUB-6.25); a hit returns the incumbent with
+    /// the base `Seq` and commits NOTHING.
     ///
     /// The shape gate counts spans, not distinct addresses: `enc(to)` yields
     /// one span per element, so `to = [x, x]` carries `|G| = 2` here and is
@@ -56,11 +85,9 @@ where
     /// `[K_sup]`-writers, the parallel of the `[R]` fence; Conflicts §10);
     /// `ty ~ replaces` (`ReplacesClass` — [`LinkWriter::makelink_replacing`]
     /// is that class's sole writer, [`is_replaces_class`](crate::is_replaces_class);
-    /// PUB-5.15); and either caller-sized slot past [`MAX_SLOT_SPANS`] spans —
-    /// `to`'s addresses or `ty`'s own spans (`SlotTooLarge`, the same
-    /// per-slot budget MAKELINK's slots carry). Ahead of `ShapeViolation`,
-    /// which an over-budget `to` also satisfies under every shape but Multi,
-    /// and which no `ty` can reach: the shape gate never reads e₃'s count.
+    /// PUB-5.15); and either caller-sized slot past [`MAX_SLOT_SPANS`] spans
+    /// (`SlotTooLarge`, [`emit_tuple`]'s budget) — all four ahead of
+    /// `ShapeViolation`, which an over-budget `to` also satisfies.
     /// The lock set is `[dedup_key, link_lock_key(home)]` for a
     /// registered idem⊤ `ty`, else `[link_lock_key(home)]` — the
     /// registration read goes to the module's format registry, race-free
@@ -86,16 +113,7 @@ where
         if class == *replaces_class() {
             return Err(TxnError::Rejected(EmitError::ReplacesClass));
         }
-        // The two managed slots a caller sizes: `enc({from})` is one span,
-        // and `to` and `ty` are the caller's. `ty` is stored VERBATIM as e₃
-        // and its class collapses repeats, so a registered class is no bound
-        // on the slot that carries it. Ahead of the shape gate, which reads
-        // neither count — it admits any finite `|G|` under Multi and never
-        // looks at e₃ at all.
-        if to.len() > MAX_SLOT_SPANS || ty.len() > MAX_SLOT_SPANS {
-            return Err(TxnError::Rejected(EmitError::SlotTooLarge));
-        }
-        let value = Link::triple(enc([from]), enc(to), ty.clone());
+        let value = emit_tuple(ty, from, to).ok_or(TxnError::Rejected(EmitError::SlotTooLarge))?;
         let keys = deposit_lock_set(&value, home);
         // The attested arm (signed ops): `transact` itself where this handle
         // carries no attestation, else the same commit with its marker's

@@ -21,9 +21,7 @@ use crate::common;
 
 use common::*;
 use skep_kernel::TxnError;
-use skep_links::{
-    enc, Endset, HasLinks, NotBh4, Pattern, RetractStaleError, SlotArg, Tuple, View,
-};
+use skep_links::{enc, HasLinks, NotBh4, Pattern, RetractStaleError, SlotArg, Tuple, View};
 
 #[test]
 fn view_defaults_to_the_default_view() {
@@ -672,10 +670,7 @@ fn stale_panics_on_an_off_contract_ty_rather_than_reaching_its_typed_refusal() {
     // sentence is never said about something else.
     let k = kernel();
     let snap = k.snapshot();
-    let skew = Endset::from_spans([
-        skep_address::Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12 admits this span")
-    ]);
-    let _ = snap.world().links().stale(&skew, 0);
+    let _ = snap.world().links().stale(&skew(), 0);
 }
 
 #[test]
@@ -689,8 +684,5 @@ fn retract_stale_panics_on_an_off_contract_ty_rather_than_rejecting_not_bh4() {
     // exactly that about an endset that is not a type at all.
     let k = kernel();
     let w = writer(&k);
-    let skew = Endset::from_spans([
-        skep_address::Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12 admits this span")
-    ]);
-    let _ = w.retract_stale(P1, &doc2(), &skew, 0);
+    let _ = w.retract_stale(P1, &doc2(), &skew(), 0);
 }

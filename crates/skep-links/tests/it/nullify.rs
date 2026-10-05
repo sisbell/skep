@@ -6,7 +6,7 @@ use crate::common;
 
 use common::*;
 use skep_kernel::TxnError;
-use skep_links::{HasLinks, NullifyError, View};
+use skep_links::{retraction_tuple, HasLinks, NullifyError, View};
 
 #[test]
 fn nullify_tombstones_its_target_and_accepts_its_own_fresh_address() {
@@ -34,6 +34,9 @@ fn nullify_tombstones_its_target_and_accepts_its_own_fresh_address() {
         // Active slices exclude the nullified tuple; audit keeps it (R3).
         assert!(!links.type_slice(&pred_def_ty(), View::Active).contains(&target));
         assert!(links.type_slice(&pred_def_ty(), View::Audit).contains(&target));
+        // The retraction is the tuple the published builder makes — the one
+        // the daemon's entry-frame composer signs over.
+        assert_eq!(*links.readlink(&r1).expect("resident"), retraction_tuple(&doc1(), &target));
     }
     // idem⊤: re-retracting the same target from the same home dedups.
     let (r2, _) = w.nullify(P1, &doc1(), &target).expect("re-nullify dedups");

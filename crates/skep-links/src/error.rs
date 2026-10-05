@@ -44,20 +44,15 @@ pub enum MakeLinkError {
     /// s_C ∧ #width = 2 ∧ width₁ = 0`) — the deliberate depth-2 narrowing of
     /// ASN-0120's `#u_j ≥ 2` (Conflicts §12). `Addrs` slots have no wf step.
     IllFormedSpec,
-    /// A slot is over one of the two per-slot budgets. Either it carries more
-    /// than [`crate::MAX_SLOT_SPANS`] spans, in whichever form built it — a
+    /// A slot is over one of the two per-slot budgets: more than
+    /// [`crate::MAX_SLOT_SPANS`] spans in whichever form built it — a
     /// `Resolve` slot resolved past the budget, or an `Addrs` list naming
-    /// more addresses than it — or, for a `Resolve` slot, its specs command
-    /// more than [`crate::MAX_SLOT_RESOLVE_STEPS`] run-list steps.
-    ///
-    /// The bound is on the SLOT, because every form amplifies. A spec's
-    /// expansion is the SOURCE document's fragmentation rather than the
-    /// request's size; a name's span costs order half a kilobyte live against
-    /// ~19 wire bytes; and a spec's WORK is its source's run count whatever
-    /// it keeps, so a slot of specs aimed past an arranged end is unbounded
-    /// in work at zero span count. One rejection for both, because both are
-    /// the same answer to the caller — this slot asks for more than a slot
-    /// may have — and the two are told apart by the `Display` text.
+    /// more addresses than it — or, for a `Resolve` slot, specs commanding
+    /// more than [`crate::MAX_SLOT_RESOLVE_STEPS`] run-list steps. One
+    /// rejection for both, because both are the same answer to the caller —
+    /// this slot asks for more than a slot may have — told apart by the
+    /// `Display` text. Why the request that carried a slot bounds neither is
+    /// the two constants' own account.
     SlotTooLarge,
     /// The type slot is empty as given (ML6 — `e₃ ≠ ∅`): the `Resolve`
     /// spec-set resolved to `⟨⟩`, or the `Addrs` name list was empty.
@@ -130,20 +125,9 @@ pub enum EmitError {
     NonAddressDenotingType,
     /// One of the two caller-sized slots is over the per-slot span budget
     /// [`crate::MAX_SLOT_SPANS`] — `to`'s address count or `ty`'s own span
-    /// count. `ty` earns the bound as squarely as `to`: it is stored VERBATIM
-    /// as e₃, and its class collapses repeated addresses, so a registered
-    /// class is no bound on the slot naming it. (`enc({from})` is one span,
-    /// so `from` needs no clause.) Pre-transact, and so ahead of
+    /// count — as [`crate::emit_tuple`] holds it, which also says why `ty` is
+    /// held to it as squarely as `to`. Pre-transact, and so ahead of
     /// `ShapeViolation`.
-    ///
-    /// The two causes differ in what they PREVENT, not in whether they fire:
-    /// both are pre-transact, so either speaks ahead of `ShapeViolation`, and
-    /// an over-budget `to` is refused under every registered class. What the
-    /// shape gate would otherwise catch is the DEPOSIT — no class in this
-    /// format admits `|G| > 1`, all five shipped classes being Unary or
-    /// Binary, so an over-budget `to` could never have been stored. An
-    /// over-budget `ty` has no such backstop under any shape: no gate anywhere
-    /// reads e₃'s span count.
     SlotTooLarge,
     /// M3's mint failed structurally.
     Mint(MintError),
@@ -193,12 +177,10 @@ pub enum EditLinkError {
     /// The caller is not the effective owner (ω) of the carried home —
     /// `d_s` or `d_a`, whichever failed.
     NotOwner(Address),
-    /// A successor slot carries more than [`crate::MAX_SLOT_SPANS`] spans.
-    /// The successor's slots are built by the CALLER — M10 resolves V-specs
-    /// into them — so a slot's span count is the source document's
-    /// fragmentation rather than the request's size, exactly as a MAKELINK
-    /// `Resolve` slot's is. Checked ahead of `IllFormedSuccessor` because
-    /// every per-span step below it runs inside the transact.
+    /// A successor slot carries more than [`crate::MAX_SLOT_SPANS`] spans, the
+    /// budget every caller-shaped slot is held to. Checked ahead of
+    /// `IllFormedSuccessor`, because every per-span step below it runs inside
+    /// the transact.
     SlotTooLarge,
     /// The supplied successor has arity ≠ 3 (the deliberate narrowing of
     /// EDITop's N ≥ 3 — Conflicts §11), an empty type slot, or a

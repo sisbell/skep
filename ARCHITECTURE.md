@@ -630,6 +630,12 @@ Rules that hold across its files:
 - **One section decision.** Whether a deposit takes M2's dedup section and
   whether the fold keys it are one predicate,
   `TypeRegistry::is_idempotent`, over one key, `DedupKey::of`.
+- **What a write deposits has one statement.** `slot_endset` builds the
+  slots a MAKELINK deposits; `emit_tuple`, `retraction_tuple` and
+  `supersession_claim` build the tuples of `emit`, `nullify` and the two
+  `[K_sup]` writers. Each op builds through its function, and so does
+  `skepd`'s entry-frame composer, so the row an attestation covers is the
+  link the store deposits.
 - **The slice's shape is its format.** Only `links` is serialized, and a
   `Link` decodes through `Link::new`, so a decoded value holds the arity
   floor. Fields and variants are appended, never reordered:

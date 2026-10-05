@@ -61,7 +61,10 @@
 //! transaction's commit marker, and read by no gate, no fold and no index
 //! here. What a signature over one of them covers is the STORED link —
 //! the endset each slot deposits, verbatim — which the daemon's composer
-//! reads off this crate's own [`slot_endset`] ahead of the transaction.
+//! reads off this crate's own builders ahead of the transaction:
+//! [`slot_endset`] for a MAKELINK's slots, [`emit_tuple`],
+//! [`retraction_tuple`] and [`supersession_claim`] for the managed writes'
+//! tuples.
 //!
 //! One commons VALUE is spelled here, beside the fences that read it: the
 //! `replaces` type ([`replaces_type`]; PUB-5.15), the authority successor
@@ -105,7 +108,8 @@ mod error;
 // read surface.
 mod state;
 // `LinkWriter` and what its ops share — `emit_core`, the one deposit gate,
-// the lock set, the `replaces` class; one file per op family beneath.
+// the lock set, the `replaces` class; one file per op family beneath, each
+// with the public function that builds what its ops deposit.
 mod writes;
 
 pub use budget::{MAX_SLOT_RESOLVE_STEPS, MAX_SLOT_SPANS};
@@ -124,7 +128,8 @@ pub use registry::{
 };
 pub use state::{CurrentMember, LinkRec, LinkState, Pattern, Tip, Tuple, View};
 pub use writes::{
-    is_replaces_class, replaces_type, slot_endset, Edit, LinkWriter, SlotArg, Visibility,
+    emit_tuple, is_replaces_class, replaces_type, retraction_tuple, slot_endset,
+    supersession_claim, Edit, LinkWriter, SlotArg, Visibility,
 };
 
 /// The auto traits M7's slice promises without saying. `WorldState` is

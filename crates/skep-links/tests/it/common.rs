@@ -239,6 +239,14 @@ pub fn iext(lo: u32, hi: u32) -> Span {
         .expect("test extents are well-formed")
 }
 
+/// The design's pinned off-contract witness: one span, T12-valid and NOT
+/// level-uniform — `([5,3], [0,2,7])` — as a one-span endset. The one input
+/// `coverage_class` aborts on, so every "panics rather than answers" and
+/// "refuses before it classifies" test hands it where a `ty` or a slot goes.
+pub fn skew() -> Endset {
+    Endset::from_spans([Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12 admits this span")])
+}
+
 /// An open-surface deposit into doc1 by its owner, every slot in the `Addrs`
 /// form — how the read and discovery suites populate a relation. Returns the
 /// link's address; ML0 makes every call a fresh link.

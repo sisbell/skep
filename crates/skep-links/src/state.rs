@@ -165,9 +165,6 @@ pub struct LinkState {
 
 impl LinkState {
     /// The genesis slice: `links = ∅`, read under the format registry.
-    /// Infallible: the retired `GenesisConfig` seam's validate-once-or-fail
-    /// had a caller who chose the input; nothing chooses this one (owner
-    /// ruling, 2026-08-26, second clause).
     pub fn genesis() -> LinkState {
         LinkState {
             links: OrdMap::new(),
@@ -270,8 +267,9 @@ impl LinkState {
     /// take it as fact. Both writers ask it and translate the verdict into
     /// their own vocabulary — `assert_sup` into its two typed rejections,
     /// `editlink`'s DC guard into one — and `editlink`'s own claim meets it by
-    /// construction rather than by asking: both slots built through `enc`,
-    /// one address each; F the original, checked resident against the base;
+    /// construction rather than by asking: built by
+    /// [`supersession_claim`](crate::supersession_claim), one address a side;
+    /// F the original, checked resident against the base;
     /// G the successor minted a line earlier in the same transaction —
     /// resident in the working world, and distinct from every link resident
     /// before it, the original included.

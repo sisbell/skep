@@ -34,16 +34,14 @@
 //!   ruled, ap6-3 and d24-2): a `make_link`'s three slots resolved through
 //!   M7's own [`slot_endset`] over this snapshot — an address-form slot's
 //!   unit spans, a V-spec slot's I-extents — with its `replaces` member,
-//!   absent or the address it names; an `emit`'s `(unit(from), unit(to…),
-//!   ty)` with `ty` the request's spans verbatim; a `nullify`'s
-//!   `(unit(home), unit(target), retraction)` and an `assert_sup`'s
-//!   `(unit(old), unit(new), supersedes)` under M7's own constants for the
-//!   two classes; an `edit_link`'s successor as M10's own
-//!   [`successor_link`] builds it over this snapshot, then `original`'s unit
-//!   span — the composer and the dispatch resolving through ONE function
-//!   each, under the daemon's serialization lock, over the base the
-//!   transaction opens on, so the signed row and the stored endset agree by
-//!   construction; and for `publish` THE COUNT, THE RUNS THE CLIENT PLACED
+//!   absent or the address it names; an `emit`'s, a `nullify`'s and an
+//!   `assert_sup`'s tuple as M7's own [`emit_tuple`], [`retraction_tuple`]
+//!   and [`supersession_claim`] build it; an `edit_link`'s successor as
+//!   M10's own [`successor_link`] builds it over this snapshot, then
+//!   `original`'s unit span — the composer and the dispatch building through
+//!   ONE function each, under the daemon's serialization lock, over the base
+//!   the transaction opens on, so the signed row and the stored endset agree
+//!   by construction; and for `publish` THE COUNT, THE RUNS THE CLIENT PLACED
 //!   IN THE ADDRESS FORM AND THE BASE (the design record §2.5's cell as
 //!   ruled — V, l6-A4, D25; the base MEMBER in the group since round 7,
 //!   bu7-E2 ARM (a)): the runs as the commit will place them, M5's own
@@ -117,7 +115,9 @@ use skep_identity::{
     entry_body_record, entry_frame, unit_span, BoardTerm, ContentFreeOp, DocTerm, EntryBody,
     EntrySlot, LinkSlots, PublishBody, PublishRefusal, RecordRows, ShotBase,
 };
-use skep_links::{registry, slot_endset, Endset, ShippedType, SlotArg, MAX_SLOT_SPANS};
+use skep_links::{
+    emit_tuple, retraction_tuple, slot_endset, supersession_claim, Endset, Link, SlotArg,
+};
 use skep_namespace::{HasM3, PrincipalId};
 
 use crate::write_path::board_term;
@@ -183,7 +183,7 @@ pub(super) enum ComposeFault {
     /// more than `MAX_SLOT_RESOLVE_STEPS` run-list steps — charged here as
     /// M7 charges them inside the write, by M7's own `slot_endset` for a
     /// `make_link`, by M10's own `successor_link` for an `edit_link`, and by
-    /// M7's `emit` arithmetic for an `emit`: a slot the store refuses
+    /// M7's own `emit_tuple` for an `emit`: a slot the store refuses
     /// `slot_too_large`.
     SlotTooLarge,
     /// A `make_link`'s or an `edit_link`'s V-spec names a source document
@@ -218,6 +218,12 @@ impl FrameDoc {
 /// An endset's spans, owned — the slot row's input, as M7 stores the slot.
 fn spans_of(endset: &Endset) -> Vec<Span> {
     endset.spans().cloned().collect()
+}
+
+/// A stored link's three slot rows, owned, in slot order — what an entry
+/// body's [`LinkSlots`] borrows, read off the link as M7 or M10 builds it.
+fn slot_rows(link: &Link) -> (Vec<Span>, Vec<Span>, Vec<Span>) {
+    (spans_of(link.from_slot()), spans_of(link.to_slot()), spans_of(link.type_slot()))
 }
 
 /// ONE `make_link` slot AS THE TRANSACTION WILL STORE IT: M7's own
@@ -305,29 +311,24 @@ pub(super) fn compose(
             (FrameDoc::One(home.clone()), body)
         }
         // THE OTHER LINK WRITES (D24's cells (4)–(6)): the stored tuple's
-        // rows — M7 deposits `(enc([from]), enc(to), ty)`, `(enc([home]),
-        // enc([target]), retraction)` and `(enc([old]), enc([new]),
-        // supersedes)` — each an address-named slot's unit spans, the two
-        // classes' types M7's own reserved endsets, `emit`'s type the
-        // request's spans verbatim.
+        // rows, as M7's own `emit_tuple`, `retraction_tuple` and
+        // `supersession_claim` build the tuple each op deposits — so, as a
+        // `make_link`'s slots through `slot_endset`, the signed row and the
+        // stored link agree by construction.
         Op::Emit { home, ty, from, to } => {
-            // M7's pre-transact budget on the two caller-sized slots.
-            if to.len() > MAX_SLOT_SPANS || ty.len() > MAX_SLOT_SPANS {
-                return Err(ComposeFault::SlotTooLarge);
-            }
-            let (from, to, ty) = ([unit_span(from)], to.iter().map(unit_span).collect::<Vec<_>>(), spans_of(ty));
+            // `None` is M7's own budget on the two caller-sized slots.
+            let tuple = emit_tuple(ty, from, to).ok_or(ComposeFault::SlotTooLarge)?;
+            let (from, to, ty) = slot_rows(&tuple);
             let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
             (FrameDoc::One(home.clone()), entry_body_emit(slots))
         }
         Op::Nullify { home, target } => {
-            let (from, to) = ([unit_span(home)], [unit_span(target)]);
-            let ty = spans_of(registry().reserved_type(ShippedType::Retraction));
+            let (from, to, ty) = slot_rows(&retraction_tuple(home, target));
             let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
             (FrameDoc::One(home.clone()), entry_body_nullify(slots))
         }
         Op::AssertSup { home, old, new } => {
-            let (from, to) = ([unit_span(old)], [unit_span(new)]);
-            let ty = spans_of(registry().reserved_type(ShippedType::Supersedes));
+            let (from, to, ty) = slot_rows(&supersession_claim(old, new));
             let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
             (FrameDoc::One(home.clone()), entry_body_assert_sup(slots))
         }
@@ -347,7 +348,7 @@ pub(super) fn compose(
             }
             let link = successor_link(world.m3(), world.m5(), successor, Judgment::Judged)
                 .map_err(|_| ComposeFault::SuccessorRefused)?;
-            let (from, to, ty) = (spans_of(link.from_slot()), spans_of(link.to_slot()), spans_of(link.type_slot()));
+            let (from, to, ty) = slot_rows(&link);
             let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
             (
                 FrameDoc::Pair { d_s: d_s.clone(), d_a: d_a.clone() },
@@ -558,7 +559,7 @@ impl EntryFrame {
 mod tests {
     use skep_febe::{Codec, OpKind};
     use skep_identity::{entry_body_publish, entry_body_record};
-    use skep_links::enc;
+    use skep_links::{enc, registry, ShippedType};
 
     use super::*;
     use crate::codec::op_name;

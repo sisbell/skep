@@ -1,6 +1,7 @@
-//! Nullify (ASN-0128): [`LinkWriter::nullify`], the sole retraction path,
-//! and the BH4 batch built on it (§7), [`LinkWriter::retract_stale`] — a
-//! sequence of nullifies, each failure lifted into the batch's error space.
+//! Nullify (ASN-0128): [`retraction_tuple`], the `[R]` tuple a retraction
+//! deposits; [`LinkWriter::nullify`], the sole retraction path; and the BH4
+//! batch built on it (§7), [`LinkWriter::retract_stale`] — a sequence of
+//! nullifies, each failure lifted into the batch's error space.
 
 use skep_address::Address;
 use skep_arrangement::Caller;
@@ -27,19 +28,31 @@ fn lift_nullify(e: TxnError<NullifyError>) -> TxnError<RetractStaleError> {
     }
 }
 
+/// The `[R]` tuple [`LinkWriter::nullify`] deposits to retract `target` from
+/// `home` — `(enc({home}), enc({target}), [R])`: Nullify_Binary's canonical
+/// from-fill and unit-depth to-span (ASN-0128), typed the shipped retraction
+/// class. PUBLIC as [`slot_endset`](crate::slot_endset) is: `nullify` builds
+/// through it and so does the daemon's entry-frame composer (signed ops), so
+/// the row an attestation covers and the link the store deposits agree by
+/// construction.
+pub fn retraction_tuple(home: &Address, target: &Address) -> Link {
+    let retraction = registry().reserved_type(ShippedType::Retraction).clone();
+    Link::triple(enc([home]), enc([target]), retraction)
+}
+
 impl<'k, W> LinkWriter<'k, W>
 where
     W: LinkWorld,
     W::Record: From<LinkRec> + From<M3Rec>,
 {
     /// Nullify_Binary (ASN-0128): the SOLE retraction path — an `[R]` tuple
-    /// with canonical from-fill `enc({home})` and unit-depth to-span
-    /// `enc({target})`, idem⊤ WITHIN THE CALLER'S VISIBILITY CLASS
-    /// (PUB-6.25): re-retracting the same target from the same home dedups
-    /// at every visibility class that reads `home`, which a read predicate's
-    /// does ([`Visibility`](crate::Visibility)); a visibility class blind to `home` mints a
-    /// fresh retraction beside the hidden one, and the postcondition below
-    /// holds either way.
+    /// ([`retraction_tuple`]) with canonical from-fill `enc({home})` and
+    /// unit-depth to-span `enc({target})`, idem⊤ WITHIN THE CALLER'S
+    /// VISIBILITY CLASS (PUB-6.25): re-retracting the same target from the
+    /// same home dedups at every visibility class that reads `home`, which a
+    /// read predicate's does ([`Visibility`](crate::Visibility)); a visibility
+    /// class blind to `home` mints a fresh retraction beside the hidden one,
+    /// and the postcondition below holds either way.
     /// P-tgt is a REJECTING precondition against the txn base:
     /// `target` is a resident link OR the address this call's own retraction
     /// tuple would occupy (`a_emit`) — the address the slice reports
@@ -89,8 +102,7 @@ where
         home: &Address,
         target: &Address,
     ) -> Result<(Address, Seq), TxnError<NullifyError>> {
-        let retraction = registry().reserved_type(ShippedType::Retraction).clone();
-        let value = Link::triple(enc([home]), enc([target]), retraction);
+        let value = retraction_tuple(home, target);
         let keys = deposit_lock_set(&value, home);
         // The attested arm (signed ops), as `emit`'s.
         self.kernel.transact_attested(&keys, self.attest, |stg| {

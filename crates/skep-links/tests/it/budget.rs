@@ -136,10 +136,11 @@ fn a_resolve_slot_is_refused_on_the_work_it_commands_not_only_the_spans_it_keeps
 #[test]
 fn an_addrs_slot_past_the_span_budget_is_refused() {
     // The name form's own amplification, and it is not the span COUNT: that
-    // is one per name, linear in the request. It is the BYTES — a dotted
-    // address is ~19 wire bytes and the span it becomes is two 8-component
-    // `BigUint` tumblers, order half a kilobyte live — so a slot bounded only
-    // by the request body would name hundreds of thousands of spans, and
+    // is one per name, linear in the request. It is the BYTES — an
+    // eight-component dotted address, as each name here is, is ~19 wire bytes
+    // and the span it becomes two `BigUint` tumblers, order half a kilobyte
+    // live (more at depth: `MAX_SLOT_SPANS` prices it) — so a slot bounded
+    // only by the request body would name hundreds of thousands of spans, and
     // build them inside the transact under M2's applier lock.
     let k = kernel();
     let w = writer(&k);
@@ -292,8 +293,7 @@ fn editlink_rejects_a_successor_slot_past_the_span_budget() {
     };
     let budget = skep_links::MAX_SLOT_SPANS as u32;
 
-    let at_budget =
-        Link::new([spans(budget), enc(&[ca(1)]), unregistered_ty(30)]).expect("arity 3");
+    let at_budget = Link::triple(spans(budget), enc(&[ca(1)]), unregistered_ty(30));
     let (Edit { successor: s, .. }, _) = w
         .editlink(P1, &orig, at_budget, &doc1(), &doc1())
         .expect("exactly the budget is admitted");
@@ -310,14 +310,14 @@ fn editlink_rejects_a_successor_slot_past_the_span_budget() {
     // One span more, refused before anything is staged — and refused ahead of
     // `IllFormedSuccessor`, which is where the per-span walk lives.
     let before = k.current_seq();
-    let over = Link::new([spans(budget + 1), enc(&[ca(1)]), unregistered_ty(30)]).expect("arity 3");
+    let over = Link::triple(spans(budget + 1), enc(&[ca(1)]), unregistered_ty(30));
     assert!(matches!(
         w.editlink(P1, &orig, over, &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::SlotTooLarge))
     ));
     assert_eq!(k.current_seq(), before, "the refusal is pre-deposit");
     // The bound is on ANY slot, not on the one the DC guard classifies.
-    let over_ty = Link::new([enc(&[ca(1)]), enc(&[ca(2)]), spans(budget + 1)]).expect("arity 3");
+    let over_ty = Link::triple(enc(&[ca(1)]), enc(&[ca(2)]), spans(budget + 1));
     assert!(matches!(
         w.editlink(P1, &orig, over_ty, &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::SlotTooLarge))

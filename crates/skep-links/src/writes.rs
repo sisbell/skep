@@ -27,12 +27,14 @@
 //! Layout: this file is the handle and what its ops share — the visibility
 //! class, the deposit gate [`emit_core`] with its two disciplines and its §2
 //! error tables, the home doorkeeper, the dedup lock set and the `replaces`
-//! class. Each op family is a child module holding one `impl LinkWriter`
-//! block — `writes/makelink.rs`, `writes/emit.rs`, `writes/nullify.rs` and
-//! `writes/supersession.rs` — and sees this file's private items and none of
-//! its siblings'. Each block's bounds name the slices its ops read and the
-//! records they stage: MAKELINK's alone adds `HasM5`, MAKELINK being the one
-//! op that seats.
+//! class. Each op family is a child module — `writes/makelink.rs`,
+//! `writes/emit.rs`, `writes/nullify.rs` and `writes/supersession.rs` —
+//! holding one `impl LinkWriter` block and the public function that builds
+//! what its ops deposit ([`slot_endset`], [`emit_tuple`],
+//! [`retraction_tuple`], [`supersession_claim`]); each sees this file's
+//! private items and none of its siblings'. Each block's bounds name the
+//! slices its ops read and the records they stage: MAKELINK's alone adds
+//! `HasM5`, MAKELINK being the one op that seats.
 
 use std::fmt;
 use std::sync::LazyLock;
@@ -53,16 +55,21 @@ use crate::LinkWorld;
 // MAKELINK in both forms: the slot argument, the endset a slot builds under
 // both budgets, the record half — the one op family that seats.
 mod makelink;
-// Emit_K, the managed surface's gated emission.
+// Emit_K, the managed surface's gated emission, and `emit_tuple`, the tuple
+// it deposits.
 mod emit;
-// Nullify, the sole retraction path, and the BH4 batch built on it.
+// Nullify, the sole retraction path, with `retraction_tuple`, the tuple it
+// deposits, and the BH4 batch built on it.
 mod nullify;
-// The `[K_sup]` writers, `assert_sup` and `editlink`, and the pair an edit
+// The `[K_sup]` writers, `assert_sup` and `editlink`, with
+// `supersession_claim`, the claim both deposit, and the pair an edit
 // deposits.
 mod supersession;
 
+pub use emit::emit_tuple;
 pub use makelink::{slot_endset, SlotArg};
-pub use supersession::Edit;
+pub use nullify::retraction_tuple;
+pub use supersession::{supersession_claim, Edit};
 
 /// The caller's VISIBILITY CLASS (PUB round 2, lane 3.3b; PUB-6.25): `true`
 /// iff the caller a [`LinkWriter`] writes for may READ the document `doc` of
@@ -113,9 +120,8 @@ pub type Visibility<'a, W> = dyn Fn(&W, &Address) -> bool + Send + Sync + 'a;
 /// kernel it deposits through and the caller's [`Visibility`] class, both
 /// borrowed for the handle's lifetime. The registration and reserved-class
 /// reads of §3's pre-transact steps go to the module's format registry
-/// ([`registry`]), a compiled constant: there is no per-handle copy to keep,
-/// so the question of whether a cache agrees with what `emit_core` consults
-/// inside the txn does not arise.
+/// ([`registry`]) — the compiled constant `emit_core` reads inside the
+/// transaction, so the two reads cannot disagree.
 ///
 /// The handle holds no links either. `Σ.L` — the append-only store itself —
 /// is [`crate::LinkState`]'s map, reached through [`crate::HasLinks`], and
@@ -215,8 +221,8 @@ where
 /// and G whenever the open surface deposits into it — so the full condition
 /// is asserted here, at the decision, naming the format constraint that
 /// requires it. Every op that takes a section meets it by construction: `emit`
-/// validates `ty` and builds F and G through `enc`, and `nullify` and
-/// `assert_sup` build all three that way.
+/// validates `ty` and [`emit_tuple`] builds F and G through `enc`, and
+/// [`retraction_tuple`] and [`supersession_claim`] build all three that way.
 fn deposit_lock_set(value: &Link, home: &Address) -> Vec<LockKey> {
     let mut keys: Vec<LockKey> = Vec::with_capacity(2);
     let class = coverage_class(value.type_slot());
@@ -539,12 +545,9 @@ impl From<EmitCoreError> for EditLinkError {
 /// hit AND miss, and because every deposit passes THIS choke point, no
 /// caller can reach the mint ungated.
 ///
-/// Both questions are asked through [`home_gate`] — the one statement of
-/// them — of the WORKING world, where the per-op hoist asked them of the txn
-/// base. The two verdicts agree because the only records a composite stages
-/// in between are M3 element allocations and link deposits, neither of which
-/// touches document registration or ω — so the hoist pins the error order
-/// without the backstop being able to contradict it.
+/// Both questions are asked through [`home_gate`], of the WORKING world; why
+/// that verdict and the per-op hoist's, asked of the base, cannot disagree is
+/// stated there.
 ///
 /// RETURN CONTRACT: [`Deposited`], which distinguishes a freshly minted
 /// address (two records staged) from an idem⊤ INCUMBENT (nothing staged). A

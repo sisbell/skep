@@ -314,13 +314,11 @@ impl TypeRegistry {
     /// PredLayer registration agreement `PredDef = PredStable = Unary/⊤/{}`
     /// (an M9-negotiated constant, §B).
     ///
-    /// Infallible: what was caller-facing input validation under the retired
-    /// `GenesisConfig` seam is now a STARTUP ASSERTION over the constants — a
-    /// sanity check that the five ghost tumblers are element-level content
-    /// positions with pairwise-distinct classes, which can only fail if the
-    /// format constants themselves are edited inconsistently. There is no
-    /// caller who could be handed an `Err`, because there is no caller who
-    /// chooses the input.
+    /// Its checks are a STARTUP ASSERTION over the constants — the five ghost
+    /// tumblers are element-level content positions with pairwise-distinct
+    /// classes — which can fail only if the format constants are edited
+    /// inconsistently; no caller chooses the input, so none is handed an
+    /// `Err`.
     ///
     /// PRIVATE to this file, which is what makes [`registry`] "the ONE
     /// instance" rather than a convention: a second build would be equal by

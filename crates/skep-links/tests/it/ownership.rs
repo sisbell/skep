@@ -42,8 +42,7 @@ fn deposit_ops_reject_a_foreign_home_and_commit_nothing() {
         w.assert_sup(P2, &doc1(), &x, &y),
         Err(TxnError::Rejected(AssertSupError::NotOwner(d))) if d == doc1()
     ));
-    let successor_value =
-        Link::new([enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30)]).expect("arity 3");
+    let successor_value = Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30));
     // Foreign d_s (successor home): the error names d_s.
     assert!(matches!(
         w.editlink(P2, &x, successor_value.clone(), &doc1(), &sib_doc()),
@@ -147,8 +146,7 @@ fn assert_sup_and_editlink_claim_over_links_the_caller_does_not_own() {
 
     // editlink the same way: P2 edits P1's link, depositing into its own
     // homes. What it asserts about `original` needs no ω on `original`.
-    let successor_value =
-        Link::new([enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30)]).expect("arity 3");
+    let successor_value = Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30));
     let (Edit { successor: s, claim }, _) = w
         .editlink(P2, &x, successor_value, &sib_doc(), &sib_doc())
         .expect("ω on d_s and d_a only");

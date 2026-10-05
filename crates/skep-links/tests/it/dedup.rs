@@ -151,8 +151,7 @@ fn editlink_s_acks_land_in_the_caller_s_homes_whatever_the_visibility_class() {
     let (x, _) = all.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
     let (y, _) = all.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
     all.assert_sup(P1, &doc1(), &x, &y).expect("a doc1-homed claim over x");
-    let successor_value =
-        Link::new([enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30)]).expect("arity 3");
+    let successor_value = Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30));
     for w in [&all, &no_doc1] {
         let (edit, _) = w
             .editlink(P1, &x, successor_value.clone(), &doc2(), &doc2())

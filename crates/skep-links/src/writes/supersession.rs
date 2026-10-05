@@ -1,7 +1,8 @@
 //! The `[K_sup]` writers (ASN-0125): [`LinkWriter::assert_sup`], the claim
 //! alone, and [`LinkWriter::editlink`], a fresh successor and its claim in one
 //! composite — the two paths that establish the Df-DISC(ii) schema every
-//! stored claim holds — and [`Edit`], the pair an edit deposits.
+//! stored claim holds — with [`supersession_claim`], the claim both deposit,
+//! and [`Edit`], the pair an edit deposits.
 
 use skep_address::Address;
 use skep_arrangement::Caller;
@@ -33,18 +34,32 @@ pub struct Edit {
     pub claim: Address,
 }
 
+/// The `[K_sup]` claim that `old` is superseded by `new` —
+/// `(enc({old}), enc({new}), [K_sup])`: F the superseded link and G its
+/// successor (Conflicts §2), one denoted address a side by construction. What
+/// [`LinkWriter::assert_sup`] deposits, and the claim [`LinkWriter::editlink`]
+/// deposits beside its successor (`old` the original, `new` the successor it
+/// minted). PUBLIC as [`slot_endset`](crate::slot_endset) is: both writers
+/// build through it and so does the daemon's entry-frame composer for an
+/// `assert_sup` (signed ops), so the row an attestation covers and the link
+/// the store deposits agree by construction.
+pub fn supersession_claim(old: &Address, new: &Address) -> Link {
+    let sup = registry().reserved_type(ShippedType::Supersedes).clone();
+    Link::triple(enc([old]), enc([new]), sup)
+}
+
 /// The claim schema's verdict in `assert_sup`'s vocabulary: residence, then
-/// irreflexivity, the two rejections its contract orders. Its F and G are
-/// built through `enc`, one denoted address each, so the denotation clause
-/// cannot fail there.
+/// irreflexivity, the two rejections its contract orders. Its claim is built
+/// by [`supersession_claim`], one denoted address a side, so the denotation
+/// clause cannot fail there.
 impl From<SupSchemaFault> for AssertSupError {
     fn from(fault: SupSchemaFault) -> Self {
         match fault {
             SupSchemaFault::NotResident => AssertSupError::EndpointNotResident,
             SupSchemaFault::Reflexive => AssertSupError::SelfSupersession,
-            SupSchemaFault::NotSingleDenoted => {
-                unreachable!("assert_sup builds F and G through enc, one denoted address each")
-            }
+            SupSchemaFault::NotSingleDenoted => unreachable!(
+                "assert_sup builds its claim through supersession_claim, one denoted address a side"
+            ),
         }
     }
 }
@@ -54,17 +69,17 @@ where
     W: LinkWorld,
     W::Record: From<LinkRec> + From<M3Rec>,
 {
-    /// assert_sup (ASN-0125/0128): emit "old is superseded by new" —
-    /// `F = enc({old})`, `G = enc({new})`, type `[K_sup]` (slot convention
-    /// per Conflicts §2: F holds the OLD/superseded link; edges run
-    /// old → new). Idem⊤ keyed on `([K_sup], {old}, {new})` — home excluded,
-    /// so a duplicate `(old, new)` even from a different home dedups to the
-    /// first claim (Conflicts §9) — WITHIN THE CALLER'S VISIBILITY CLASS
-    /// (PUB-6.25): a claim homed in a document the caller cannot read is
-    /// invisible to the dedup, and the caller's own claim is minted beside
-    /// it. Requires `home` registered, then the Df-DISC(ii) claim schema as
-    /// `LinkState` answers it — both endpoints resident, then `old ≠ new`;
-    /// checked in that order.
+    /// assert_sup (ASN-0125/0128): emit "old is superseded by new"
+    /// ([`supersession_claim`]) — `F = enc({old})`, `G = enc({new})`, type
+    /// `[K_sup]` (slot convention per Conflicts §2: F holds the OLD/superseded
+    /// link; edges run old → new). Idem⊤ keyed on `([K_sup], {old}, {new})` —
+    /// home excluded, so a duplicate `(old, new)` even from a different home
+    /// dedups to the first claim (Conflicts §9) — WITHIN THE CALLER'S
+    /// VISIBILITY CLASS (PUB-6.25): a claim homed in a document the caller
+    /// cannot read is invisible to the dedup, and the caller's own claim is
+    /// minted beside it. Requires `home` registered, then the Df-DISC(ii) claim
+    /// schema as `LinkState` answers it — both endpoints resident, then
+    /// `old ≠ new`; checked in that order.
     ///
     /// RETURNS `(claim, seq)`: the address of the `[K_sup]` claim — never an
     /// endpoint — or, on a dedup hit, the incumbent claim's, with the base
@@ -84,8 +99,7 @@ where
         old: &Address,
         new: &Address,
     ) -> Result<(Address, Seq), TxnError<AssertSupError>> {
-        let sup = registry().reserved_type(ShippedType::Supersedes).clone();
-        let value = Link::triple(enc([old]), enc([new]), sup);
+        let value = supersession_claim(old, new);
         let keys = deposit_lock_set(&value, home);
         // The attested arm (signed ops), as `emit`'s.
         self.kernel.transact_attested(&keys, self.attest, |stg| {
@@ -110,9 +124,9 @@ where
     /// `assert_sup` CANNOT be called: M2 is non-reentrant). Allocates the
     /// fresh successor (value supplied — M10 builds it via M5 `iter_resolve` +
     /// `Run::iextent` + `Endset::from_spans`/`enc` + `Link::triple`, off any
-    /// prior snapshot — ML8/EL0), then asserts it supersedes `original`.
-    /// Successor born UNSEATED; both writes commit atomically (EL7);
-    /// `original` untouched (L12).
+    /// prior snapshot — ML8/EL0), then asserts it supersedes `original` with
+    /// [`supersession_claim`]`(original, successor)`. Successor born UNSEATED;
+    /// both writes commit atomically (EL7); `original` untouched (L12).
     ///
     /// RETURNS `(edit, seq)`, where [`Edit`] carries the successor's address
     /// and the claim's each under its own name — the successor deposited in
@@ -127,10 +141,8 @@ where
     ///
     /// Rejects (against the txn base): unregistered `d_s`/`d_a`;
     /// non-resident `original`; a successor slot past [`MAX_SLOT_SPANS`]
-    /// spans (`SlotTooLarge` — the slots are the caller's, resolve-built, so
-    /// their span count is a source document's fragmentation rather than the
-    /// request's size, and every per-span step after this one runs inside the
-    /// transact); a successor of arity ≠ 3 (Conflicts §11),
+    /// spans (`SlotTooLarge`, ahead of every per-span verdict below); a
+    /// successor of arity ≠ 3 (Conflicts §11),
     /// empty type slot, or a non-level-uniform span in any slot
     /// (`IllFormedSuccessor` — the last keeps `coverage_class` total for
     /// both the DC guard and the fold's dedup key); DC — a
@@ -164,7 +176,6 @@ where
         let mut keys = vec![M3State::link_lock_key(d_s), M3State::link_lock_key(d_a)];
         keys.sort();
         keys.dedup();
-        let sup = registry().reserved_type(ShippedType::Supersedes).clone();
         let sup_class = registry().shipped_class(ShippedType::Supersedes);
         let r_class = registry().shipped_class(ShippedType::Retraction);
         // The attested arm (signed ops): one attestation over the one
@@ -183,11 +194,7 @@ where
                 // verdict: the level-uniformity walk below, the DC guard's
                 // `coverage_class`, and the fold's dedup key over ALL THREE
                 // slots are each linear in this count, and all three run
-                // inside the transact under M2's applier lock. The slots are
-                // built by the CALLER — M10 resolves V-specs into them — so
-                // the count is the SOURCE document's fragmentation rather
-                // than the request's size, which is the same expansion
-                // MAKELINK's `Resolve` slots are bounded against.
+                // inside the transact under M2's applier lock.
                 if successor_value.slots().any(|e| e.len() > MAX_SLOT_SPANS) {
                     return Err(EditLinkError::SlotTooLarge);
                 }
@@ -227,7 +234,7 @@ where
             let successor =
                 emit_core(stg, self.visibility, caller, d_s, successor_value, Gate::Open)?
                     .minted();
-            let claim_value = Link::triple(enc([original]), enc([&successor]), sup);
+            let claim_value = supersession_claim(original, &successor);
             let claim =
                 emit_core(stg, self.visibility, caller, d_a, claim_value, Gate::Managed)?.minted();
             Ok(Edit { successor, claim })

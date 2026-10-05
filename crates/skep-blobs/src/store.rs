@@ -56,11 +56,11 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 
-use crate::blobs::{self, aside_name, blob_path_unchecked, designation_ok, fsync_dir, hex_ok, is_aside_name};
+use crate::blobs::{self, aside_name, designation_ok, fsync_dir, hex_ok, is_aside_name};
 use crate::error::BlobError;
 use crate::lease::{Lease, LeaseLog, LeaseState};
 use crate::partials::{self, Handle, SYNC_GRAIN};
-use crate::uploads::{millis, UploadId, UploadRecord, UploadRecords};
+use crate::uploads::{expiry, millis, UploadId, UploadRecord, UploadRecords};
 
 /// The steps of a finish, in order — the points the hazard seam names
 /// (`test-hooks`): a hold or an injected failure is placed BEFORE the step
@@ -294,7 +294,7 @@ impl Store {
     /// either name is malformed — the name check (see [`Store`]), which
     /// every act on a file a caller names goes through.
     pub fn blob_path(&self, designation: &str, hex: &str) -> Option<PathBuf> {
-        (designation_ok(designation) && hex_ok(hex)).then(|| blob_path_unchecked(&self.root, designation, hex))
+        blobs::blob_path(&self.root, designation, hex)
     }
 
     /// THE SIZE CHECK's read (M-I5 (c): the deposit record exact of what is
@@ -348,20 +348,7 @@ impl Store {
         }
         let id = UploadId::mint()?;
         partials::create(&self.root, designation, &id)?;
-        // Held as its line spells it, so the record open reads back is the
-        // record answered here.
-        let interval = Duration::from_millis(millis(interval));
-        let record = UploadRecord {
-            id,
-            principal: principal.to_string(),
-            designation: designation.to_string(),
-            length,
-            offset: 0,
-            interval,
-            expires: expiry(now_ms, interval),
-        };
-        self.uploads.lock().write(record.clone())?;
-        Ok(record)
+        self.uploads.lock().create(id, principal, designation, length, interval, now_ms)
     }
 
     /// THE PRINCIPAL's OWN RECORD by identifier — `None` for an identifier
@@ -451,7 +438,7 @@ impl Store {
         // the handle's bytes.
         if handle.written().saturating_sub(durable) >= SYNC_GRAIN {
             handle.sync()?;
-            self.mark_received(principal, id, handle.written(), now_ms)?;
+            self.uploads.lock().mark_received(principal, id, handle.written(), now_ms)?;
         }
         Ok(handle.written())
     }
@@ -479,7 +466,7 @@ impl Store {
             return Ok(record);
         }
         handle.sync()?;
-        self.mark_received(principal, id, handle.written(), now_ms)?;
+        self.uploads.lock().mark_received(principal, id, handle.written(), now_ms)?;
         self.upload(principal, id, now_ms).ok_or(BlobError::NoUpload)
     }
 
@@ -497,18 +484,6 @@ impl Store {
     ) -> Option<Handle> {
         self.uploads.lock().of_principal(principal, id)?;
         handles.remove(id)
-    }
-
-    /// MARK THE BYTES RECEIVED through `offset`: the record's offset set to
-    /// it and its expiry re-fixed the upload's own interval past `now_ms`,
-    /// written after the partial's sync and synced themselves.
-    fn mark_received(&self, principal: &str, id: &UploadId, offset: u64, now_ms: u64) -> Result<(), BlobError> {
-        let mut uploads = self.uploads.lock();
-        let mut next = uploads.of_principal(principal, id).ok_or(BlobError::NoUpload)?.clone();
-        next.offset = offset;
-        next.expires = expiry(now_ms, next.interval);
-        uploads.write(next)?;
-        Ok(())
     }
 
     /// THE FINISH (clause (7); M-I5 (a)). The partial is fsynced; where
@@ -594,7 +569,7 @@ impl Store {
         let designation = record.designation;
         let dir = self.root.join(&designation);
         let from = partials::partial_path(&self.root, &designation, id);
-        let to = blob_path_unchecked(&self.root, &designation, &hex);
+        let to = dir.join(&hex);
         let aside = if to.is_file() {
             // THE REPLACE: the old inode keeps a name through the rename, so
             // the rename frees nothing; the aside is unlinked after the
@@ -800,19 +775,6 @@ impl Store {
     }
 }
 
-/// THE ONE EXPIRY RULE, for both expiries the store fixes: `interval`
-/// past `now_ms`, saturating. An upload's is fixed at its creation from the
-/// interval handed in then, which its record keeps, and at each byte
-/// received from that kept interval (clause (3)); a lease's at its PUT,
-/// from the interval handed to the finish (`media.md` Op inventory 1, "THE
-/// LEASE'S STORE, SCOPE AND EXPIRY, STATED"). No caller computes an expiry
-/// the store then trusts. An instant is unix milliseconds, the `u64` the
-/// logs and the wire spell; a span is a [`Duration`] — so the clock reading
-/// and an interval never trade places at a call and compile.
-fn expiry(now_ms: u64, interval: Duration) -> u64 {
-    now_ms.saturating_add(millis(interval))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -839,7 +801,7 @@ mod tests {
         store.resume("k", &rec.id, 0, 2).expect("the second request's resume");
         // The settle's second half: its handle's bytes written as the offset.
         first.sync().expect("the first handle's sync");
-        store.mark_received("k", &rec.id, first.written(), 3).expect("the first handle's offset");
+        store.uploads.lock().mark_received("k", &rec.id, first.written(), 3).expect("the first handle's offset");
         drop(first);
         assert_eq!(store.upload("k", &rec.id, 3).map(|r| r.offset), Some(4), "the record ahead of the handle");
         assert_eq!(store.append("k", &rec.id, b"x", 4).expect("the append answers"), 1);

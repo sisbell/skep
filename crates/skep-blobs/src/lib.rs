@@ -91,7 +91,8 @@ mod blobs;
 // order.
 mod jsonl;
 // The upload records, `uploads.log`: the records' log, which answers by the
-// asking principal; beneath it, the identifier (`uploads/id.rs`).
+// asking principal and makes every change a record takes, and the one
+// expiry rule; beneath it, the identifier (`uploads/id.rs`).
 mod uploads;
 // The lease log, `leases.log`: the leases, their three states, the horizon.
 mod lease;

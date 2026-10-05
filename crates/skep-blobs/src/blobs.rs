@@ -1,5 +1,6 @@
-//! THE FILES, `<root>/<designation>/<hex>`: where a file lives, the
-//! spellings a designation and a hex name must have, the ASIDE name a
+//! THE FILES, `<root>/<designation>/<hex>`: the spellings a designation and
+//! a hex name must have, where a file lives for names that pass them
+//! ([`blob_path`], which answers none for a malformed one), the ASIDE name a
 //! replaced file carries until the deferred unlink, the listings of the
 //! directories that hold those names and open's sweep of the asides
 //! ([`sweep_asides`]), the removal of a name another remover may have
@@ -147,12 +148,12 @@ pub(crate) fn free_space(path: &Path) -> io::Result<u64> {
     Ok(v.f_bavail.saturating_mul(v.f_frsize))
 }
 
-/// The path of a blob under `root`, its names UNCHECKED: for names that
-/// have passed [`Store::blob_path`](crate::Store::blob_path)'s check, or
-/// that the store spelled itself (a finish's hash). A caller's name becomes
-/// a path only through that check.
-pub(crate) fn blob_path_unchecked(root: &Path, designation: &str, hex: &str) -> PathBuf {
-    root.join(designation).join(hex)
+/// The path of a blob of `designation` and `hex` under `root`, or `None`
+/// where either name is malformed — the name check a caller's names pass
+/// before they become a blob's path
+/// ([`Store::blob_path`](crate::Store::blob_path)).
+pub(crate) fn blob_path(root: &Path, designation: &str, hex: &str) -> Option<PathBuf> {
+    (designation_ok(designation) && hex_ok(hex)).then(|| root.join(designation).join(hex))
 }
 
 #[cfg(test)]

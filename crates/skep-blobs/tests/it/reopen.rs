@@ -1,12 +1,12 @@
 //! WHAT OPEN MAKES OF THE RECORDS AND THE PARTIALS (M-I5 (c); `media.md` the
 //! resumable upload's clauses (1), (4); §The media stores): the
-//! reconciliation both ways at open, and the sweep of the asides beside it;
-//! a partial that cannot be read failing the open and retiring nothing; a
-//! record line read as no record where it lacks its interval, where its
-//! offset passes its length, and where its designation climbs out of the
-//! root, nothing beside the root touched; and the compaction, down to
-//! nothing where nothing stands, over the twin a kill mid-compaction left
-//! beside each log.
+//! reconciliation both ways at open, an offset set back keeping its expiry,
+//! and the sweep of the asides beside it; a partial that cannot be read
+//! failing the open and retiring nothing; a record line read as no record
+//! where it lacks its interval, where its offset passes its length, and
+//! where its designation climbs out of the root, nothing beside the root
+//! touched; and the compaction, down to nothing where nothing stands, over
+//! the twin a kill mid-compaction left beside each log.
 
 use std::fs::{self, OpenOptions};
 use std::time::Duration;
@@ -140,11 +140,11 @@ fn a_record_line_whose_offset_passes_its_length_is_no_record() {
 /// partial no record names is removed, in every designation directory; a
 /// record whose partial is gone is retired; a partial longer than its
 /// record's offset is cut back; a record whose offset passes its partial's
-/// length is set back to the length (a copy that took the partial before
-/// its record); an expired upload is retired and its partial removed; and
-/// the records log is compacted to the current records. Beside them, every
-/// aside a crash left is removed — and a name that only begins as an
-/// aside's is none, and is left.
+/// length is set back to the length, its expiry kept (a copy that took the
+/// partial before its record); an expired upload is retired and its partial
+/// removed; and the records log is compacted to the current records. Beside
+/// them, every aside a crash left is removed — and a name that only begins
+/// as an aside's is none, and is left.
 #[test]
 fn open_reconciles_the_partials_and_the_records_both_ways() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -185,6 +185,7 @@ fn open_reconciles_the_partials_and_the_records_both_ways() {
     assert_eq!(fs::metadata(partial(&longer.id)).unwrap().len(), 6, "cut back to the record's offset");
     let r = store.upload("k", &shorter.id, now).expect("shorter stands");
     assert_eq!(r.offset, 3, "set back to the partial's length");
+    assert_eq!(r.expires, shorter.expires, "its expiry kept: a set-back receives no byte");
     assert!(store.upload("k", &gone.id, now).is_none(), "a record with no partial is retired");
     assert!(store.upload("k", &expired.id, now).is_none(), "an expired upload is retired");
     assert!(!partial(&expired.id).exists(), "and its partial removed");

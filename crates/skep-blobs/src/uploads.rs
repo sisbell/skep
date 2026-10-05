@@ -11,6 +11,16 @@
 //! the root. A record line whose offset passes its length, which no act
 //! writes, reads as lost as well.
 //!
+//! A RECORD CHANGES BY ITS HOLDER's ACTS ALONE (`media.md` §The media
+//! stores, THE UPLOAD RECORDS — written at an upload's creation and after
+//! each durable append, set back at open to a shorter partial's length,
+//! retired): [`UploadRecords::create`], [`UploadRecords::mark_received`],
+//! [`UploadRecords::set_back`] and [`UploadRecords::retire`]. Each moves the
+//! figures its act names and keeps the rest — the expiry fixed by the
+//! creation and re-fixed by a byte received, and moved by nothing else
+//! (clause (3)) — and no caller hands the holder a record: its callers
+//! choose when a record changes, never what the change is.
+//!
 //! AN IDENTIFIER (`uploads/id.rs`) ANSWERS TO ITS UPLOADER ALONE: a lookup
 //! takes the asking principal, and an identifier whose record is another
 //! principal's answers exactly as one that was never minted (the register
@@ -31,6 +41,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::blobs::designation_ok;
+use crate::error::BlobError;
 use crate::jsonl::Log;
 
 pub use id::{NotAnUploadId, UploadId, IDENTIFIER_BYTES};
@@ -44,18 +55,34 @@ pub(crate) fn millis(span: Duration) -> u64 {
     u64::try_from(span.as_millis()).unwrap_or(u64::MAX)
 }
 
+/// THE ONE EXPIRY RULE, for both expiries the store fixes: `interval`
+/// past `now_ms`, saturating. An upload's is fixed at its creation from the
+/// interval handed in then, which its record keeps, and at each byte
+/// received from that kept interval (clause (3); [`UploadRecords::create`],
+/// [`UploadRecords::mark_received`]); a lease's at its PUT, from the
+/// interval handed to the finish ([`Store::finish`](crate::Store::finish);
+/// `media.md` Op inventory 1, "THE LEASE'S STORE, SCOPE AND EXPIRY,
+/// STATED"). No caller computes an expiry the store then trusts. An instant
+/// is unix milliseconds, the `u64` the logs and the wire spell; a span is a
+/// [`Duration`] — so the clock reading and an interval never trade places
+/// at a call and compile.
+pub(crate) fn expiry(now_ms: u64, interval: Duration) -> u64 {
+    now_ms.saturating_add(millis(interval))
+}
+
 /// One standing upload's record (clause (1)) — the identifier bound to its
 /// uploader, the designation, its declared length, the DURABLE offset
 /// (bytes received), the interval fixed at its creation, and the expiry
 /// fixed from the last byte received.
 ///
 /// ITS OFFSET NEVER PASSES ITS LENGTH. Each of the four gates a record
-/// passes keeps it: its creation writes 0; a byte received writes the bytes
-/// a handle holds, and an append refuses past the length; open's
-/// reconciliation sets an offset back to a shorter partial's length; and a
-/// line read back at open whose offset passes its length reads as no record
-/// (`parse_line`). So every standing upload can still reach its length and
-/// be finished.
+/// passes keeps it: its creation (`UploadRecords::create`) writes 0; a byte
+/// received (`UploadRecords::mark_received`) writes the bytes a handle
+/// holds, which [`Store::append`](crate::Store::append) refuses to take past
+/// the length; open's set-back (`UploadRecords::set_back`) only ever lowers
+/// an offset, to a shorter partial's length; and a line read back at open
+/// whose offset passes its length reads as no record (`parse_line`). So
+/// every standing upload can still reach its length and be finished.
 ///
 /// `#[non_exhaustive]`: emitted, never constructed by a caller — field
 /// reads are unaffected, and a further field is an addition rather than a
@@ -144,7 +171,11 @@ fn parse_line(v: &Value) -> Option<Line> {
 /// principal, as the lease log answers its leases: a record goes only to
 /// the principal that minted it, save to the pruner's lookup by identifier
 /// alone ([`UploadRecords::of_any_principal`]) and open's walk of every
-/// record ([`UploadRecords::all`]).
+/// record ([`UploadRecords::all`]). And changed only by its own acts —
+/// [`UploadRecords::create`], [`UploadRecords::mark_received`],
+/// [`UploadRecords::set_back`], [`UploadRecords::retire`] — whose one
+/// append, [`UploadRecords::write`], is private to this file: no record
+/// reaches the map or the log but one an act built.
 pub(crate) struct UploadRecords {
     log: Log,
     records: HashMap<UploadId, UploadRecord>,
@@ -239,11 +270,72 @@ impl UploadRecords {
         self.records.values()
     }
 
-    /// WRITE `record` as the upload's current line — appended and SYNCED:
-    /// a record's line carries the upload's birth, the offset received, or
-    /// that offset set back at open, and a byte counts as received only
-    /// once the partial AND its record's offset are on disk.
-    pub fn write(&mut self, record: UploadRecord) -> io::Result<()> {
+    /// THE RECORD's BIRTH (clause (1)): `principal`'s upload `id` of
+    /// `designation` and declared `length` — offset 0, THE UPLOAD's INTERVAL
+    /// held as its line spells it, in whole milliseconds, so the record open
+    /// reads back is the record answered here, and its first expiry that
+    /// interval past `now_ms` — written, synced and answered. The store
+    /// creates the partial first and hands a designation its name check has
+    /// admitted ([`Store::create_upload`](crate::Store::create_upload)).
+    pub fn create(
+        &mut self,
+        id: UploadId,
+        principal: &str,
+        designation: &str,
+        length: u64,
+        interval: Duration,
+        now_ms: u64,
+    ) -> io::Result<UploadRecord> {
+        let interval = Duration::from_millis(millis(interval));
+        let record = UploadRecord {
+            id,
+            principal: principal.to_string(),
+            designation: designation.to_string(),
+            length,
+            offset: 0,
+            interval,
+            expires: expiry(now_ms, interval),
+        };
+        self.write(record.clone())?;
+        Ok(record)
+    }
+
+    /// MARK THE BYTES RECEIVED through `offset` (clause (3)): the
+    /// principal's record's offset set to it and its expiry re-fixed the
+    /// record's own interval past `now_ms`, written and synced, the rest
+    /// kept. `NoUpload` where `principal`'s records do not name `id`, nothing
+    /// written. The store marks only after the partial's sync, at the bytes
+    /// a handle holds ([`Store::append`](crate::Store::append),
+    /// [`Store::settle`](crate::Store::settle)).
+    pub fn mark_received(&mut self, principal: &str, id: &UploadId, offset: u64, now_ms: u64) -> Result<(), BlobError> {
+        let mut next = self.of_principal(principal, id).ok_or(BlobError::NoUpload)?.clone();
+        next.offset = offset;
+        next.expires = expiry(now_ms, next.interval);
+        self.write(next)?;
+        Ok(())
+    }
+
+    /// SET AN OFFSET BACK at open (clause (4)): the record's offset lowered
+    /// to `offset`, the length of a partial shorter than it, written and
+    /// synced — its expiry KEPT: a set-back receives no byte, and nothing but
+    /// a byte received re-fixes an expiry (clause (3)). It only ever lowers:
+    /// where no record is held, or its offset is not past `offset`, there is
+    /// nothing to set back and nothing is written. Open's reconciliation's
+    /// act (`partials::reconcile`), by identifier alone as its walk is.
+    pub fn set_back(&mut self, id: &UploadId, offset: u64) -> io::Result<()> {
+        let Some(mut next) = self.records.get(id).filter(|r| offset < r.offset).cloned() else {
+            return Ok(());
+        };
+        next.offset = offset;
+        self.write(next)
+    }
+
+    /// WRITE `record` as the upload's current line — appended and SYNCED —
+    /// and hold it: the one append the creation, a byte received and a
+    /// set-back share, each handing it the record its act built. A byte
+    /// counts as received only once the partial AND its record's offset are
+    /// on disk.
+    fn write(&mut self, record: UploadRecord) -> io::Result<()> {
         self.log.append_synced(&record.to_value())?;
         self.records.insert(record.id, record);
         Ok(())
@@ -270,5 +362,47 @@ impl UploadRecords {
         let mut ids: Vec<&UploadId> = self.records.keys().collect();
         ids.sort();
         self.log.compact(ids.into_iter().map(|id| self.records[id].to_value()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    /// EACH ACT MOVES THE FIGURES IT NAMES AND KEEPS THE REST, and writes a
+    /// line only where it changes one: the creation holds its interval as
+    /// the line spells it; a byte received moves the offset and re-fixes the
+    /// expiry the record's own interval past it, for the principal the
+    /// record answers to alone; a set-back lowers the offset and keeps the
+    /// expiry, and raises nothing — the record read back at the next open as
+    /// the last act answered it.
+    #[test]
+    fn each_act_moves_the_figures_it_names_and_keeps_the_rest() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lines = || fs::read_to_string(dir.path().join(UPLOADS_LOG)).unwrap().lines().count();
+        let mut records = UploadRecords::open(dir.path()).unwrap();
+        let id = UploadId::parse("0123456789abcdef0123456789abcdef").unwrap();
+        let born = records.create(id, "k", "blake3", 10, Duration::from_micros(2_500), 100).unwrap();
+        assert_eq!((born.offset, born.interval, born.expires), (0, Duration::from_millis(2), 102), "its birth");
+        assert!(matches!(records.mark_received("other", &id, 5, 200), Err(BlobError::NoUpload)));
+        records.mark_received("k", &id, 6, 200).unwrap();
+        let received = records.of_principal("k", &id).cloned().unwrap();
+        assert_eq!((received.offset, received.expires), (6, 202), "re-fixed its own interval past the byte");
+        assert_eq!((received.interval, received.length), (born.interval, born.length), "the rest kept");
+        assert_eq!(lines(), 2, "a line for the birth and one for the byte, none for another principal's mark");
+        for not_lower in [6, 7] {
+            records.set_back(&id, not_lower).unwrap();
+        }
+        records.set_back(&UploadId::parse("fedcba9876543210fedcba9876543210").unwrap(), 1).unwrap();
+        assert_eq!(records.of_principal("k", &id), Some(&received), "a set-back raises nothing");
+        assert_eq!(lines(), 2, "and writes nothing where it lowers nothing");
+        records.set_back(&id, 4).unwrap();
+        let set_back = records.of_principal("k", &id).cloned().unwrap();
+        assert_eq!((set_back.offset, set_back.expires), (4, 202), "lowered, its expiry kept");
+        drop(records);
+        let reopened = UploadRecords::open(dir.path()).unwrap();
+        assert_eq!(reopened.of_principal("k", &id), Some(&set_back), "read back as the last act answered it");
     }
 }

@@ -212,6 +212,10 @@ Rules that hold across its files:
   request** (`Store::append`, `Store::settle`; `Store`'s doc).
 - **One answer per principal.** `UploadRecords` answers by the asking
   principal; its one lookup by identifier alone serves the pruner's expiry.
+- **A record changes only by its holder's acts.** `UploadRecords` makes
+  every change an upload record takes — its creation, a byte received, its
+  offset set back at open, its retirement — and its write is private to
+  `uploads.rs`: `Store` and `partials::reconcile` choose when, never what.
 - **Pending bytes are the unplaced deposits and the bytes received**
   (`Store::pending_bytes`); which deposits are unplaced is the caller's
   answer, since the store reads no cell.

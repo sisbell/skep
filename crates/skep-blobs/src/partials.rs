@@ -14,14 +14,15 @@
 //! removed, in every designation directory under the root; a record that
 //! names no partial is retired; and their lengths are set to agree — a
 //! longer partial cut back to the record's offset, a record whose offset
-//! passes its partial's length set back to that length. A partial that
-//! cannot be read fails the open, retiring nothing: it is still named, and
-//! a retirement written over it would have the next open remove it as an
-//! orphan (clause (4) retires a record that names no partial, and only
-//! that). An expired upload has its partial removed and its record retired
-//! at open too, in the order the end and the daemon's pruner take while the
-//! store serves ([`Store::expire_upload`](crate::Store::expire_upload) is
-//! the pass's act).
+//! passes its partial's length set back to that length, its expiry kept
+//! (`UploadRecords::set_back`). A partial that cannot be read fails the
+//! open, retiring nothing: it is still named, and a retirement written over
+//! it would have the next open remove it as an orphan (clause (4) retires a
+//! record that names no partial, and only that). An expired upload has its
+//! partial removed and its record retired at open too, in the order the end
+//! and the daemon's pruner take while the store serves
+//! ([`Store::expire_upload`](crate::Store::expire_upload) is the pass's
+//! act).
 
 // The handle a request opens on a partial: its open file, the hash of
 // every byte written, and the tear a failed write or sync leaves.
@@ -110,9 +111,7 @@ pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -
             f.set_len(r.offset)?;
             f.sync_all()?;
         } else if len < r.offset {
-            let mut set_back = r.clone();
-            set_back.offset = len;
-            records.write(set_back)?;
+            records.set_back(&r.id, len)?;
         }
         named.insert((r.designation.clone(), r.id));
     }

@@ -121,22 +121,6 @@ pub fn parse_address(s: &str) -> Option<Address> {
     validate(Tumbler::new(comps?).ok()?).ok()
 }
 
-/// A record's address member — a binding's `prefix`, either kind's
-/// `replaces` — as the address it names. The member is the canonical rule's
-/// (REG-1.86 (h)): `skep_registry::parse` answers a record only where every
-/// such member is in address form, decimal naturals spelling a T4-valid
-/// address, so this conversion cannot fail and the member is never judged
-/// again here — no wire cap is its, the record's own cap
-/// (`skep_registry::MAX_REGISTRY_RECORD_BYTES`) bounding its digits. The
-/// caller owes that the member came out of a record `parse` answered; the
-/// panics below name the postcondition a member that did not breaks.
-pub(crate) fn record_address(member: &str) -> Address {
-    let comps =
-        member.split('.').map(|c| c.parse::<Nat>().expect("skep_registry::parse answers address members of decimal naturals"));
-    let tumbler = Tumbler::new(comps).expect("skep_registry::parse answers address members of one component or more");
-    validate(tumbler).expect("skep_registry::parse answers address members that are T4-valid addresses")
-}
-
 /// One byte from two hex digits, either case — `None` for any other byte.
 /// Every hex string this crate decodes itself — a signature's blob, a chain
 /// — passes through here a byte pair at a time, so text of any content,
@@ -214,22 +198,5 @@ mod tests {
         for none in ["", "1..2", "1.+2", "1._2", "a.1", "1.0", "0.1"] {
             assert_eq!(parse_address(none), None, "{none:?}");
         }
-    }
-
-    /// A RECORD'S ADDRESS MEMBER is converted, never judged again: every
-    /// member the canonical rule answers names its address — a component past
-    /// a machine word, and one past the wire's digit cap, which a record's
-    /// own cap bounds instead.
-    #[test]
-    fn a_records_address_member_names_its_address() {
-        assert_eq!(Some(record_address("1.18446744073709551616")), parse_address("1.18446744073709551616"));
-        let past_the_wire = format!("1.{}", "9".repeat(MAX_COMPONENT_DIGITS + 1));
-        let body = skep_registry::encode(
-            &skep_registry::Body::Binding(skep_registry::Binding { prefix: past_the_wire.clone(), replaces: None }),
-            None,
-        );
-        let record = skep_registry::parse(skep_registry::BodyKind::Binding, body.as_bytes()).expect("the canonical rule answers it");
-        let skep_registry::Body::Binding(binding) = record.body else { panic!("a binding") };
-        assert_eq!(record_address(&binding.prefix).to_string(), past_the_wire);
     }
 }

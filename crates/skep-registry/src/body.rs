@@ -27,6 +27,13 @@
 //! is answered as the string found, present or absent, beside the SIG-LESS
 //! CANONICAL PROJECTION a verifier frames (REG-1.86 (e)).
 //!
+//! WHAT THE PARSE CHECKS, THE TYPES CARRY: an address member is the
+//! [`Address`] it spells and the origins are [`Origins`], never empty. So a
+//! reader takes each member as the value it is and converts or checks
+//! nothing again, and every [`Body`] a caller can build encodes to bytes
+//! [`parse`] admits, the cap aside — a signer never signs a body the daemon
+//! then refuses for its form.
+//!
 //! THE CAP, [`MAX_REGISTRY_RECORD_BYTES`]: a body past it is refused before
 //! any tree is built, since a JSON parser builds its whole tree before the
 //! first schema check. A SIGNED body carries its `sig` inside the cap: the
@@ -42,7 +49,9 @@
 use std::fmt::Write as _;
 
 use serde_json::Value;
-use skep_address::{validate, Nat, Tumbler};
+use skep_address::{validate, Address, Nat, Tumbler};
+
+use crate::rows::{row, Kind};
 
 /// The most bytes a registry record body may carry, `sig` included, a body
 /// past it refused ([`Refusal::PastCap`]) before any parse — 16 KiB, an
@@ -64,34 +73,61 @@ pub enum BodyKind {
 }
 
 impl BodyKind {
-    /// The `type` member's string (REG-1.86 (a)): the kind's name
-    /// lowercased — what [`encode`] writes and [`parse`] holds the member to.
+    /// The `type` member's string (REG-1.86 (a)), read off the kind's own
+    /// row in the table ([`crate::Row::type_value`]) — what [`encode`]
+    /// writes and [`parse`] holds the member to, so the table's column is
+    /// the one spelling and the vector set, pinning the bytes, pins it.
     fn type_value(self) -> &'static str {
-        match self {
-            BodyKind::Binding => "binding",
-            BodyKind::Endpoint => "endpoint",
-        }
+        let kind = match self {
+            BodyKind::Binding => Kind::Binding,
+            BodyKind::Endpoint => Kind::Endpoint,
+        };
+        row(kind, None).type_value.expect("the binding's and the endpoint's rows carry a body")
     }
 }
 
 /// THE BINDING's body (REG-1.86's table; REG-2.19): the prefix in address
 /// form, the binding's one non-address term — the account rides the link's
 /// target and is no member — and `replaces`, the link's address of the
-/// binding this one replaces at that prefix, absent on an allocation.
+/// binding this one replaces at that prefix, absent on an allocation; each
+/// the [`Address`] its member spells.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
-    pub prefix: String,
-    pub replaces: Option<String>,
+    pub prefix: Address,
+    pub replaces: Option<Address>,
 }
 
 /// THE ENDPOINT's body (REG-1.86's table; REG-1.9, REG-1.10): the org's
-/// ordered list of origins, at least one, the order load-bearing at the
-/// resolver's walk, and `replaces`, the link's address of the endpoint
-/// deposit this one replaces in that doc 1, absent on the org's first.
+/// [`Origins`], and `replaces`, the link's address of the endpoint deposit
+/// this one replaces in that doc 1, absent on the org's first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoint {
-    pub origins: Vec<String>,
-    pub replaces: Option<String>,
+    pub origins: Origins,
+    pub replaces: Option<Address>,
+}
+
+/// AN ENDPOINT's ORIGINS (REG-1.9): the org's ordered list, AT LEAST ONE
+/// entry, the order load-bearing at the resolver's walk. Never empty: a list
+/// of no origin is no value of this type, so `[]` — which no reader holds
+/// ([`Refusal::EmptyOrigins`]) — is a body no caller can build.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Origins(Vec<String>);
+
+impl Origins {
+    /// The origins `origins` in their order — `None` where there are none.
+    pub fn new(origins: Vec<String>) -> Option<Origins> {
+        (!origins.is_empty()).then_some(Origins(origins))
+    }
+
+    /// The origins in the org's order.
+    pub fn as_slice(&self) -> &[String] {
+        &self.0
+    }
+
+    /// The origins in the org's order, as the list they are.
+    pub fn into_vec(self) -> Vec<String> {
+        self.0
+    }
 }
 
 /// A body of one of the two kinds.
@@ -111,10 +147,10 @@ impl Body {
     }
 
     /// The `replaces` member, where the body carries one.
-    pub fn replaces(&self) -> Option<&str> {
+    pub fn replaces(&self) -> Option<&Address> {
         match self {
-            Body::Binding(b) => b.replaces.as_deref(),
-            Body::Endpoint(e) => e.replaces.as_deref(),
+            Body::Binding(b) => b.replaces.as_ref(),
+            Body::Endpoint(e) => e.replaces.as_ref(),
         }
     }
 }
@@ -139,27 +175,32 @@ impl Record {
 }
 
 /// Why bytes are no record of the kind named — each its own cause, joined to
-/// the daemon's refusal token by [`Refusal::token`].
+/// the daemon's refusal token by [`Refusal::token`] — listed in the order of
+/// [`parse`]'s stages, the members' causes answered member by member in the
+/// order `parse` states.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
     /// Past [`MAX_REGISTRY_RECORD_BYTES`]: parsed by no reader at all.
     PastCap,
     /// The bytes are no UTF-8 text.
     NotUtf8,
-    /// The text is no JSON value — a trailing non-whitespace byte included.
+    /// The text is no JSON value — a trailing non-whitespace byte included,
+    /// and a value nested deeper than [`parse`]'s value stage reads.
     NotJson,
     /// A JSON value that is no object.
     NotAnObject,
-    /// A JSON number somewhere in the body (REG-1.86 (d)): the whole body's
-    /// range, tested before any member is read.
+    /// A JSON number somewhere in the value the parse read (REG-1.86 (d)):
+    /// the whole value's range, tested before any member is read. A number
+    /// only in an occurrence the value stage did not keep — the earlier of a
+    /// member spelled twice — is answered [`Refusal::NotCanonical`].
     Number,
     /// The `type` member is absent, no string, or not the string of the
     /// kind the caller named: a record of that kind it is not (REG-1.86 (a)).
     WrongType,
-    /// A member the row requires is absent.
-    MissingMember(&'static str),
     /// A member beside the row's own, `replaces` and `sig` ("NOTHING ELSE").
     UnknownMember,
+    /// A member the row requires is absent.
+    MissingMember(&'static str),
     /// A member that must be a string is not: `prefix`, `replaces`, `sig`.
     NotAString(&'static str),
     /// A member that must parse as an address in dotted decimal does not —
@@ -174,7 +215,8 @@ pub enum Refusal {
     EmptyOrigins,
     /// The members each pass and the bytes are still not the canonical
     /// re-encoding of what they spell: whitespace, another member order, a
-    /// member twice, a non-shortest escape, a byte after the brace.
+    /// member twice (the occurrence the value stage kept passing), a
+    /// non-shortest escape, a byte after the brace.
     NotCanonical,
 }
 
@@ -189,8 +231,8 @@ impl Refusal {
             Refusal::NotAnObject => "not_an_object".into(),
             Refusal::Number => "number".into(),
             Refusal::WrongType => "wrong_type".into(),
-            Refusal::MissingMember(m) => format!("missing_member:{m}"),
             Refusal::UnknownMember => "unknown_member".into(),
+            Refusal::MissingMember(m) => format!("missing_member:{m}"),
             Refusal::NotAString(m) => format!("not_a_string:{m}"),
             Refusal::NotAnAddress(m) => format!("not_an_address:{m}"),
             Refusal::OriginsNotStrings => "origins_not_strings".into(),
@@ -211,11 +253,23 @@ impl std::error::Error for Refusal {}
 /// THE ONE PARSER: the record `bytes` spell under the kind the caller names,
 /// under the canonical rule — a record is answered only where `bytes ==
 /// encode(parse(bytes))` — or why they are none. Total over any bytes: no
-/// panic, no tree past the cap, and the JSON parser answers only "is this
-/// JSON, and which"; every verdict is this schema's own. The checks run in
-/// the order the causes are listed on [`Refusal`]: the cap, the text, the
-/// value, the object, the number scan, `type`, the member set, each member's
-/// form, then the canonical compare.
+/// panic, and no tree past the cap.
+///
+/// THE STAGES, the first to fault naming the refusal ([`Refusal`]): the cap;
+/// the text; the value; the object; the number scan; `type`; the member set;
+/// then each member's form, one member at a time — `replaces`, then `sig`,
+/// then the row's own (`prefix` or `origins`), a required member's absence
+/// answered at its own turn; then the canonical compare. So a body with two
+/// faults answers the earlier stage's: `{"type":"binding","tier":"root"}`
+/// is `unknown_member`, and `{"type":"binding","replaces":"x"}`
+/// `not_an_address:replaces`.
+///
+/// THE VALUE STAGE is `serde_json`'s, and it decides two things this parser
+/// adopts as its own: a member spelled twice is read at its LAST occurrence,
+/// so a fault in an earlier one — a number, a foreign `type` — surfaces as
+/// `not_canonical`; and a value nested more than 127 objects and arrays
+/// deep, the body's own object counted, is no JSON. Every other verdict is
+/// this schema's.
 pub fn parse(kind: BodyKind, bytes: &[u8]) -> Result<Record, Refusal> {
     if bytes.len() > MAX_REGISTRY_RECORD_BYTES {
         return Err(Refusal::PastCap);
@@ -246,10 +300,8 @@ pub fn parse(kind: BodyKind, bytes: &[u8]) -> Result<Record, Refusal> {
     let body = match kind {
         BodyKind::Binding => {
             let prefix = required_string(object, "prefix")?;
-            if !address_form(prefix) {
-                return Err(Refusal::NotAnAddress("prefix"));
-            }
-            Body::Binding(Binding { prefix: prefix.to_owned(), replaces })
+            let prefix = address_of(prefix).ok_or(Refusal::NotAnAddress("prefix"))?;
+            Body::Binding(Binding { prefix, replaces })
         }
         BodyKind::Endpoint => {
             let origins = object
@@ -261,9 +313,7 @@ pub fn parse(kind: BodyKind, bytes: &[u8]) -> Result<Record, Refusal> {
                 .iter()
                 .map(|o| o.as_str().map(str::to_owned).ok_or(Refusal::OriginsNotStrings))
                 .collect::<Result<_, _>>()?;
-            if origins.is_empty() {
-                return Err(Refusal::EmptyOrigins);
-            }
+            let origins = Origins::new(origins).ok_or(Refusal::EmptyOrigins)?;
             Body::Endpoint(Endpoint { origins, replaces })
         }
     };
@@ -298,35 +348,31 @@ fn required_string<'o>(
     }
 }
 
-/// An optional member that, where present, is a string in address form.
+/// An optional member that, where present, is a string in address form —
+/// the address it spells.
 fn optional_address(
     object: &serde_json::Map<String, Value>,
     member: &'static str,
-) -> Result<Option<String>, Refusal> {
+) -> Result<Option<Address>, Refusal> {
     match object.get(member) {
         None => Ok(None),
-        Some(Value::String(s)) => {
-            if !address_form(s) {
-                return Err(Refusal::NotAnAddress(member));
-            }
-            Ok(Some(s.clone()))
-        }
+        Some(Value::String(s)) => address_of(s).map(Some).ok_or(Refusal::NotAnAddress(member)),
         Some(_) => Err(Refusal::NotAString(member)),
     }
 }
 
-/// Whether `s` is an address in dotted decimal, in its ONE spelling: every
-/// component a decimal natural with no sign, no separator and no leading
-/// zero, the whole a T4-valid address, and the address's own rendering the
-/// string itself.
-fn address_form(s: &str) -> bool {
+/// The address `s` spells in dotted decimal, where `s` is that address's
+/// ONE spelling: every component a decimal natural with no sign, no
+/// separator and no leading zero, the whole a T4-valid address, and the
+/// address's own rendering the string itself — else `None`. The rendering
+/// is what [`encode`] writes an address member as.
+fn address_of(s: &str) -> Option<Address> {
     let comps: Option<Vec<Nat>> = s
         .split('.')
         .map(|c| (!c.is_empty() && c.bytes().all(|b| b.is_ascii_digit())).then(|| c.parse::<Nat>().ok()).flatten())
         .collect();
-    let Some(comps) = comps else { return false };
-    let Ok(tumbler) = Tumbler::new(comps) else { return false };
-    validate(tumbler).is_ok_and(|address| address.tumbler().to_string() == s)
+    let tumbler = Tumbler::new(comps?).ok()?;
+    validate(tumbler).ok().filter(|address| address.tumbler().to_string() == s)
 }
 
 /// THE CANONICAL FORM — the one byte string a body has, with its `sig` where
@@ -340,11 +386,11 @@ pub fn encode(body: &Body, sig: Option<&str>) -> String {
     match body {
         Body::Binding(b) => {
             out.push_str(",\"prefix\":");
-            escape_json_string(&b.prefix, &mut out);
+            escape_json_string(&b.prefix.tumbler().to_string(), &mut out);
         }
         Body::Endpoint(e) => {
             out.push_str(",\"origins\":[");
-            for (i, origin) in e.origins.iter().enumerate() {
+            for (i, origin) in e.origins.as_slice().iter().enumerate() {
                 if i > 0 {
                     out.push(',');
                 }
@@ -355,7 +401,7 @@ pub fn encode(body: &Body, sig: Option<&str>) -> String {
     }
     if let Some(replaces) = body.replaces() {
         out.push_str(",\"replaces\":");
-        escape_json_string(replaces, &mut out);
+        escape_json_string(&replaces.tumbler().to_string(), &mut out);
     }
     if let Some(sig) = sig {
         out.push_str(",\"sig\":");
@@ -393,8 +439,16 @@ fn escape_json_string(s: &str, out: &mut String) {
 mod tests {
     use super::*;
 
+    fn address(s: &str) -> Address {
+        address_of(s).expect("an address in its one spelling")
+    }
+
     fn binding(prefix: &str, replaces: Option<&str>) -> Body {
-        Body::Binding(Binding { prefix: prefix.into(), replaces: replaces.map(str::to_owned) })
+        Body::Binding(Binding { prefix: address(prefix), replaces: replaces.map(address) })
+    }
+
+    fn origins(list: &[&str]) -> Origins {
+        Origins::new(list.iter().map(|o| o.to_string()).collect()).expect("at least one origin")
     }
 
     /// The canonical rule read from both sides: a body's encoding parses to
@@ -403,8 +457,8 @@ mod tests {
     #[test]
     fn encode_then_parse_is_a_fixpoint() {
         let body = Body::Endpoint(Endpoint {
-            origins: vec!["https://acme.example".into(), "http://x.onion".into()],
-            replaces: Some("1.0.2.0.1.0.2.1".into()),
+            origins: origins(&["https://acme.example", "http://x.onion"]),
+            replaces: Some(address("1.0.2.0.1.0.2.1")),
         });
         for sig in [None, Some("ab"), Some("")] {
             let text = encode(&body, sig);
@@ -424,7 +478,8 @@ mod tests {
     /// spelled with a longer escape of the same string is not canonical.
     #[test]
     fn strings_take_the_shortest_escapes_alone() {
-        let body = Body::Endpoint(Endpoint { origins: vec!["a\"b\\c\n\u{1}/é".into()], replaces: None });
+        let body =
+            Body::Endpoint(Endpoint { origins: origins(&["a\"b\\c\n\u{1}/é"]), replaces: None });
         assert_eq!(
             encode(&body, None),
             "{\"type\":\"endpoint\",\"origins\":[\"a\\\"b\\\\c\\n\\u0001/é\"]}"
@@ -438,10 +493,52 @@ mod tests {
     #[test]
     fn the_address_form_is_one_spelling() {
         for ok in ["1", "1.5", "1.0.1.0.1.0.2.3", "1.1.0.1"] {
-            assert!(address_form(ok), "{ok}");
+            assert!(address_of(ok).is_some(), "{ok}");
         }
         for bad in ["", "+1.5", "1_0.5", "01.5", "1..5", "1.5.", "1.5.0", "a", "1.5 ", "1.-5"] {
-            assert!(!address_form(bad), "{bad}");
+            assert!(address_of(bad).is_none(), "{bad}");
+        }
+    }
+
+    /// AN ADDRESS MEMBER IS THE ADDRESS IT SPELLS, at any size the cap
+    /// admits (wire.md §Value encodings: a component is one decimal
+    /// natural): a component past a machine word, and one of 4,097 digits —
+    /// past the board's wire cap on a component, which a record's own cap
+    /// bounds instead — each reads as the address whose rendering is the
+    /// member, and the body re-encodes byte for byte.
+    #[test]
+    fn an_address_member_is_the_address_it_spells_at_any_size() {
+        for prefix in ["1.18446744073709551616".to_owned(), format!("1.{}", "9".repeat(4097))] {
+            let text = format!(r#"{{"type":"binding","prefix":"{prefix}"}}"#);
+            let record = parse(BodyKind::Binding, text.as_bytes()).expect("canonical");
+            let Body::Binding(b) = &record.body else { panic!("a binding") };
+            assert_eq!(b.prefix.tumbler().to_string(), prefix);
+            assert_eq!(encode(&record.body, None), text);
+        }
+    }
+
+    /// EVERY BODY A CALLER CAN BUILD IS A RECORD: what the parse checks, the
+    /// types carry — an address member an `Address`, the origins one or more
+    /// — so any body, its strings holding every C0 control, a quote, a
+    /// backslash and text past ASCII, with any `sig`, encodes to bytes the
+    /// parse admits as that body; and no `Origins` is empty.
+    #[test]
+    fn every_body_a_caller_builds_encodes_to_a_record() {
+        assert_eq!(Origins::new(Vec::new()), None);
+        let controls: String = (0u8..0x20).map(char::from).collect();
+        let bodies = [
+            binding("1", None),
+            binding("1.18446744073709551616", Some("1.0.1.0.1.0.2.18446744073709551616")),
+            Body::Endpoint(Endpoint {
+                origins: origins(&[&controls, "\"\\/é\u{7f}\u{2028}", ""]),
+                replaces: Some(address("1.0.2.0.1.0.2.1")),
+            }),
+        ];
+        for body in bodies {
+            for sig in [None, Some(""), Some("\u{0}\"ab")] {
+                let record = parse(body.kind(), encode(&body, sig).as_bytes()).expect("a record");
+                assert_eq!((&record.body, record.sig.as_deref()), (&body, sig));
+            }
         }
     }
 

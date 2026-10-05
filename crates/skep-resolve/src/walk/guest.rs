@@ -29,8 +29,8 @@ use crate::board::{
 };
 use crate::index::Ledger;
 use crate::origin::{NameResolver, Transports};
+use crate::parse_address;
 use crate::state::{BindingRecord, EndpointRecord, Judged, Resolution, Verdict};
-use crate::{parse_address, record_address};
 
 /// What the guest-reading resolve cost (the investigation §3.1).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -80,16 +80,14 @@ pub fn guest_resolve(
         cost.atoms_read += 1;
         let Ok(record) = parse(BodyKind::Binding, text.as_bytes()) else { continue };
         let Body::Binding(b) = record.body else { continue };
-        // The canonical rule admitted its address members: each is the
-        // address it names, never judged again.
         ledger.fold_binding(Judged {
             position: 0,
             link: link.clone(),
             home,
             record: BindingRecord {
-                prefix: record_address(&b.prefix),
+                prefix: b.prefix,
                 account: to.first().cloned(),
-                replaces: b.replaces.as_deref().map(record_address),
+                replaces: b.replaces,
                 honored: false,
             },
             verdict: Verdict::UndeterminableHere,
@@ -126,8 +124,8 @@ pub fn guest_resolve(
             link: link.clone(),
             home: deposit_home,
             record: EndpointRecord {
-                origins: e.origins,
-                replaces: e.replaces.as_deref().map(record_address),
+                origins: e.origins.into_vec(),
+                replaces: e.replaces,
                 honored: false,
                 nullified: false,
             },
@@ -239,7 +237,7 @@ mod tests {
     use std::rc::Rc;
 
     use serde_json::Value;
-    use skep_registry::{encode, Binding, Endpoint};
+    use skep_registry::{encode, Binding, Endpoint, Origins};
     use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
 
     use super::*;
@@ -282,11 +280,11 @@ mod tests {
                 ] } }),
                 (Some("image"), _, Some(home)) => json!({ "resp": "runs", "runs": [{ "i_start": format!("{home}.0.1.1"), "width": "1" }] }),
                 (Some("retrieve_v"), _, Some("1.0.1.0.1")) => {
-                    let binding = encode(&Body::Binding(Binding { prefix: "1.2".into(), replaces: None }), None);
+                    let binding = encode(&Body::Binding(Binding { prefix: a("1.2"), replaces: None }), None);
                     json!({ "resp": "delivery", "items": [{ "atom": binding }] })
                 }
                 (Some("retrieve_v"), _, Some("1.0.2.0.1")) => {
-                    let origins = vec!["https://acme.example".to_string()];
+                    let origins = Origins::new(vec!["https://acme.example".to_string()]).expect("one origin");
                     let endpoint = encode(&Body::Endpoint(Endpoint { origins, replaces: None }), None);
                     json!({ "resp": "delivery", "items": [{ "atom": endpoint }] })
                 }

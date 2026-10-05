@@ -8,7 +8,9 @@
 use std::path::Path;
 
 use serde_json::Value;
-use skep_registry::{encode, parse, Body, BodyKind, Record, MAX_REGISTRY_RECORD_BYTES};
+use skep_registry::{
+    encode, parse, row, rows, Body, BodyKind, Kind, Record, MAX_REGISTRY_RECORD_BYTES,
+};
 
 fn fixture() -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/vectors/records.json");
@@ -124,5 +126,66 @@ fn the_spec_examples_have_one_canonical_form_each() {
     let Body::Binding(b) = parse(BodyKind::Binding, binding.as_bytes()).unwrap().body else {
         panic!("a binding")
     };
-    assert_eq!((b.prefix.as_str(), b.replaces), ("1.5", None));
+    assert_eq!((b.prefix.tumbler().to_string(), b.replaces), ("1.5".to_owned(), None));
+}
+
+/// A BODY WITH TWO FAULTS ANSWERS THE EARLIER STAGE's, in the order
+/// `parse`'s doc lists — the object before the number scan, the number scan
+/// before `type`, the member set before any member's form, the members'
+/// forms one member at a time (`replaces`, then `sig`, then the row's own)
+/// — and the value stage's two policies the parser adopts: a member spelled
+/// twice read at its last occurrence, and a value nested past 127 objects
+/// and arrays no JSON. None of these is in the vector set: the set pins
+/// what every parser answers, and these pin this one.
+#[test]
+fn a_body_answers_the_first_stage_that_faults() {
+    let nested = |arrays: usize| {
+        let (open, close) = ("[".repeat(arrays), "]".repeat(arrays));
+        format!(r#"{{"type":"binding","prefix":"1.5","x":{open}{close}}}"#)
+    };
+    let (deep, too_deep) = (nested(126), nested(127));
+    let bindings: [(&str, &str); 11] = [
+        ("not_an_object", "[15]"),
+        ("number", r#"{"type":"endpoint","prefix":15}"#),
+        ("unknown_member", r#"{"type":"binding","tier":"root"}"#),
+        ("not_an_address:replaces", r#"{"type":"binding","replaces":"x"}"#),
+        ("not_an_address:replaces", r#"{"type":"binding","prefix":"x","replaces":"y"}"#),
+        ("not_an_address:replaces", r#"{"type":"binding","prefix":"1","replaces":"x","sig":true}"#),
+        ("not_canonical", r#"{"type":"binding","prefix":15,"prefix":"1.5"}"#),
+        ("number", r#"{"type":"binding","prefix":"1.5","prefix":15}"#),
+        ("not_canonical", r#"{"type":"endpoint","type":"binding","prefix":"1.5"}"#),
+        ("unknown_member", &deep),
+        ("not_json", &too_deep),
+    ];
+    for (cause, text) in bindings {
+        let verdict = parse(BodyKind::Binding, text.as_bytes()).map_err(|r| r.token());
+        assert_eq!(verdict, Err(cause.to_owned()), "{text}");
+    }
+    let endpoint = parse(BodyKind::Endpoint, br#"{"type":"endpoint","origins":[],"sig":true}"#);
+    assert_eq!(endpoint.unwrap_err().token(), "not_a_string:sig", "sig before the row's own");
+}
+
+/// THE `type` MEMBER IS THE STRING ITS KIND's ROW HOLDS (REG-1.86 (a)): a
+/// body spelled under its kind's row's string is a record of that kind, and
+/// under every other row's string is `wrong_type` — so the table's column
+/// is the one spelling the encoder writes and the parse holds a body to,
+/// and the vector set, pinning the bytes, pins the table.
+#[test]
+fn the_type_member_is_the_string_its_kinds_row_holds() {
+    let kinds = [
+        (Kind::Binding, BodyKind::Binding, r#""prefix":"1.5""#),
+        (Kind::Endpoint, BodyKind::Endpoint, r#""origins":["https://acme.example"]"#),
+    ];
+    for (kind, body_kind, member) in kinds {
+        for r in rows() {
+            let Some(ty) = r.type_value else { continue };
+            let text = format!(r#"{{"type":"{ty}",{member}}}"#);
+            let verdict = parse(body_kind, text.as_bytes()).map_err(|refusal| refusal.token());
+            if r == row(kind, None) {
+                assert_eq!(verdict.map(|record| record.canonical_sigless()), Ok(text), "{kind:?}");
+            } else {
+                assert_eq!(verdict.err().as_deref(), Some("wrong_type"), "{ty} under {kind:?}");
+            }
+        }
+    }
 }

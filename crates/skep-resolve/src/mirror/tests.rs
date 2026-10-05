@@ -21,8 +21,8 @@ fn hint() -> RootHint {
 /// A binding of `prefix` naming `to`, deposited in `home` and signed by
 /// `signer` over the record frame the home's account composes under
 /// [`TERM`].
-fn signed_binding(signer: &HybridSigner, home: &Address, prefix: &str, to: &[Address]) -> String {
-    let body = Body::Binding(Binding { prefix: prefix.into(), replaces: None });
+fn signed_binding(signer: &HybridSigner, home: &Address, prefix: &Address, to: &[Address]) -> String {
+    let body = Body::Binding(Binding { prefix: prefix.clone(), replaces: None });
     let sigless = encode(&body, None);
     let rows = RecordRows {
         ty: t_binding(),
@@ -80,8 +80,8 @@ fn a_binding_typed_record_outside_the_claimants_doc_one_binds_nothing() {
         kept.keep_link(stored(1, "1.0.1.0.1.0.2.1", &registry, &commons_type(&[3]), "1.0.1", &[])),
         kept.keep_link(stored(2, "1.0.2.0.1.0.2.1", &own, t_binding(), "1.0.2.0.1.0.1.1", &bound)),
         kept.keep_link(stored(3, "1.0.1.0.1.0.2.2", &registry, t_binding(), "1.0.1.0.1.0.1.1", &bound)),
-        kept.keep_atom(a("1.0.2.0.1.0.1.1"), signed_binding(&org, &own, "1.9", &bound)),
-        kept.keep_atom(a("1.0.1.0.1.0.1.1"), signed_binding(&registrar, &registry, "1.8", &bound)),
+        kept.keep_atom(a("1.0.2.0.1.0.1.1"), signed_binding(&org, &own, &a("1.9"), &bound)),
+        kept.keep_atom(a("1.0.1.0.1.0.1.1"), signed_binding(&registrar, &registry, &a("1.8"), &bound)),
         kept.keep_board(TERM, &"07".repeat(32)),
         kept.keep_keys(table("1.0.1", &registrar)),
         kept.keep_keys(table("1.0.2", &org)),
@@ -111,8 +111,13 @@ fn a_record_naming_an_address_past_a_machine_word_stands_signed() {
     let dir = tempfile::tempdir().expect("tempdir");
     let registrar = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[1; 32]).expect("tag 1");
     let registry = a("1.0.1.0.1");
-    let (word, wide_account) = ("1.18446744073709551616", a("1.0.18446744073709551616"));
-    let past_the_wire = format!("1.{}", "9".repeat(4097));
+    let (word, wide_account) = (a("1.18446744073709551616"), a("1.0.18446744073709551616"));
+    // Past the wire's digit cap, so built from its components: `a` reads
+    // what a board serves, and no board serves it.
+    let past_the_wire = skep_address::validate(
+        Tumbler::new([Nat::from(1u8), "9".repeat(4097).parse().expect("a natural")]).expect("a tumbler"),
+    )
+    .expect("an address");
     let (to_org, to_wide) = ([a("1.0.2")], [wide_account.clone()]);
     let mut kept = Fetched::default();
     let lines: Vec<Value> = [
@@ -120,8 +125,8 @@ fn a_record_naming_an_address_past_a_machine_word_stands_signed() {
         kept.keep_link(stored(2, "1.0.1.0.1.0.2.2", &registry, t_binding(), "1.0.1.0.1.0.1.1", &to_org)),
         kept.keep_link(stored(3, "1.0.1.0.1.0.2.3", &registry, t_binding(), "1.0.1.0.1.0.1.2", &to_wide)),
         kept.keep_link(stored(4, "1.0.1.0.1.0.2.4", &registry, t_binding(), "1.0.1.0.1.0.1.3", &to_org)),
-        kept.keep_atom(a("1.0.1.0.1.0.1.1"), signed_binding(&registrar, &registry, word, &to_org)),
-        kept.keep_atom(a("1.0.1.0.1.0.1.2"), signed_binding(&registrar, &registry, "1.8", &to_wide)),
+        kept.keep_atom(a("1.0.1.0.1.0.1.1"), signed_binding(&registrar, &registry, &word, &to_org)),
+        kept.keep_atom(a("1.0.1.0.1.0.1.2"), signed_binding(&registrar, &registry, &a("1.8"), &to_wide)),
         kept.keep_atom(a("1.0.1.0.1.0.1.3"), signed_binding(&registrar, &registry, &past_the_wire, &to_org)),
         kept.keep_board(TERM, &"07".repeat(32)),
         kept.keep_keys(table("1.0.1", &registrar)),
@@ -138,11 +143,11 @@ fn a_record_naming_an_address_past_a_machine_word_stands_signed() {
     let mirror = rebuilt(dir.path(), &rows, &lines);
     assert!(mirror.index().suppressed().is_empty(), "{:?}", mirror.index().suppressed());
     let signed = Verdict::Signed(Fingerprint::of(registrar.public_key()));
-    let past_a_word = mirror.index().standing(&a(word)).expect("a prefix past a machine word");
+    let past_a_word = mirror.index().standing(&word).expect("a prefix past a machine word");
     assert_eq!(past_a_word.current.verdict, signed);
     let naming = mirror.index().standing(&a("1.8")).expect("a binding naming an account past a machine word");
     assert_eq!((naming.current.verdict, naming.current.record.account), (signed.clone(), Some(wide_account)));
-    let past_the_cap = mirror.index().standing(&record_address(&past_the_wire)).expect("a prefix past the wire's cap");
+    let past_the_cap = mirror.index().standing(&past_the_wire).expect("a prefix past the wire's cap");
     assert_eq!(past_the_cap.current.verdict, signed);
 }
 

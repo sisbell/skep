@@ -27,7 +27,7 @@ use std::fmt;
 
 use skep_address::{is_prefix, Address};
 
-use crate::rows::{Kind, Row, Subtype, COMMONS_TYPE_PREFIX, RESERVE};
+use crate::rows::{reserve_ordinal, Kind, Row, Subtype, RESERVE};
 
 /// The seeding check's refusal, naming its arm.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,16 +154,6 @@ pub fn seeding_check<'a>(
     Ok(())
 }
 
-/// The reserve ordinal a kind's row sits at — `a` is the commons type
-/// prefix then ONE ordinal inside [`RESERVE`] — else `None`.
-fn reserve_ordinal(a: &Address) -> Option<u32> {
-    let spelled = a.tumbler().to_string();
-    let prefix: Vec<String> = COMMONS_TYPE_PREFIX.iter().map(u32::to_string).collect();
-    let tail = spelled.strip_prefix(&format!("{}.", prefix.join(".")))?;
-    let ordinal: u32 = tail.parse().ok()?;
-    RESERVE.contains(&ordinal).then_some(ordinal)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,14 +170,5 @@ mod tests {
             .map(|&o| commons_type(&[o]))
             .collect();
         assert_eq!(seeding_check(rows(), &foreign), Ok(()));
-    }
-
-    #[test]
-    fn the_reserve_ordinal_is_read_off_a_bare_row_inside_the_reserve_alone() {
-        assert_eq!(reserve_ordinal(&commons_type(&[55])), Some(55));
-        assert_eq!(reserve_ordinal(&commons_type(&[59])), Some(59));
-        assert_eq!(reserve_ordinal(&commons_type(&[54])), None);
-        assert_eq!(reserve_ordinal(&commons_type(&[60])), None);
-        assert_eq!(reserve_ordinal(&commons_type(&[57, 1])), None);
     }
 }

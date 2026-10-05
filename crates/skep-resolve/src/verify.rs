@@ -146,7 +146,7 @@ mod tests {
         let (board, home, account, ty, to) = trial_parts();
         let signer = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[3; 32]).expect("tag 1");
         let other = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[4; 32]).expect("tag 1");
-        let body = Body::Binding(Binding { prefix: "1.5".into(), replaces: None });
+        let body = Body::Binding(Binding { prefix: parse_address("1.5").unwrap(), replaces: None });
         let sigless = encode(&body, None);
         let frame = |board: BoardTerm, to: &[Address], lineage: Option<&Address>| {
             entry_frame(
@@ -208,7 +208,7 @@ mod tests {
         let one = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[3; 32]).expect("tag 1");
         let foreign = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[4; 32]).expect("tag 1");
         let three = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &[5; 32]).expect("tag 3");
-        let body = Body::Binding(Binding { prefix: "1.5".into(), replaces: None });
+        let body = Body::Binding(Binding { prefix: parse_address("1.5").unwrap(), replaces: None });
         let sigless = encode(&body, None);
         let to_slot = [to];
         let signed_by = |signer: &HybridSigner| -> Record {

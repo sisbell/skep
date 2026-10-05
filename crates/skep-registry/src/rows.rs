@@ -22,15 +22,16 @@
 //!
 //! Every address is the ghost home document's subspace-3 element —
 //! `1.1.0.1.0.1 · 0 · 3 · <ordinals>`, the commons' type home, where
-//! nothing is ever minted — spelled here from [`COMMONS_TYPE_PREFIX`] and
-//! nowhere else in this crate. The engine's ledger reads these pins, and
-//! the daemon's write-path classes read them through it. Two spellings in
-//! shipped code stand outside this table, each held equal to its pin by the
-//! suite that can see both: the ledger's own `successor-of`, held equal to
-//! [`t_successor_of`] by the ledger's tests, and the insert door's deposit
-//! class (`skep-arrangement`'s `DEPOSIT_CLASS_ORDINALS`), whose `55` and
-//! `56` the daemon's suite (`skepd/tests/it/deposit_class.rs`) holds equal
-//! to [`t_binding`] and [`t_endpoint`].
+//! nothing is ever minted — spelled here from [`COMMONS_TYPE_PREFIX`], read
+//! back here ([`reserve_ordinal`]), and nowhere else in this crate. The
+//! engine's ledger reads these pins, and the daemon's write-path classes
+//! read them through it. Two spellings in shipped code stand outside this
+//! table, each held equal to its pin by the suite that can see both: the
+//! ledger's own `successor-of`, held equal to [`t_successor_of`] by the
+//! ledger's tests, and the insert door's deposit class
+//! (`skep-arrangement`'s `DEPOSIT_CLASS_ORDINALS`), whose `55` and `56` the
+//! daemon's suite (`skepd/tests/it/deposit_class.rs`) holds equal to
+//! [`t_binding`] and [`t_endpoint`].
 
 use std::ops::RangeInclusive;
 use std::sync::LazyLock;
@@ -148,13 +149,15 @@ pub struct Row {
     pub deposits: bool,
     /// The `type` member's string where the row's record carries a body
     /// (REG-1.86 (a)); none at the three link-alone rows (lifted, the policy
-    /// link's own reading, `successor-of`), which carry no body at all.
+    /// link's own reading, `successor-of`), which carry no body at all. The
+    /// binding's and the endpoint's are the strings [`crate::encode`] writes
+    /// and [`crate::parse`] holds a body to.
     pub type_value: Option<&'static str>,
 }
 
 /// The commons' type subspace of the ghost home document, `1.1.0.1.0.1 · 0
 /// · 3` — the eight components ahead of a row's ordinals, spelled once.
-pub(crate) const COMMONS_TYPE_PREFIX: [u32; 8] = [1, 1, 0, 1, 0, 1, 0, 3];
+const COMMONS_TYPE_PREFIX: [u32; 8] = [1, 1, 0, 1, 0, 1, 0, 3];
 
 /// The reserve's five ordinals the kinds take, `3.55`–`3.59` as the ledger
 /// stands (REG-1.24, REG-1.25): the count arm's bound.
@@ -176,6 +179,18 @@ pub fn commons_type(ordinals: &[u32]) -> Address {
     let comps = COMMONS_TYPE_PREFIX.iter().chain(ordinals).map(|&c| Nat::from(c));
     let tumbler = Tumbler::new(comps).expect("the components are nonempty");
     validate(tumbler).expect("a subspace-3 element at positive ordinals is T4-valid")
+}
+
+/// The reserve ordinal a kind's row sits at — `a` is the commons type
+/// prefix then ONE ordinal inside [`RESERVE`] — else `None`: [`commons_type`]
+/// read back at a bare ordinal, what the seeding check's count arm holds
+/// each kind row to.
+pub(crate) fn reserve_ordinal(a: &Address) -> Option<u32> {
+    let spelled = a.tumbler().to_string();
+    let prefix: Vec<String> = COMMONS_TYPE_PREFIX.iter().map(u32::to_string).collect();
+    let tail = spelled.strip_prefix(&format!("{}.", prefix.join(".")))?;
+    let ordinal: u32 = tail.parse().ok()?;
+    RESERVE.contains(&ordinal).then_some(ordinal)
 }
 
 /// The table's spelling of one row — what [`rows`] builds a [`Row`] from.
@@ -487,6 +502,15 @@ mod tests {
     #[test]
     fn the_reserve_is_the_five_ordinals_the_kinds_take() {
         assert_eq!(RESERVE, 55..=59);
+    }
+
+    #[test]
+    fn the_reserve_ordinal_is_read_off_a_bare_row_inside_the_reserve_alone() {
+        assert_eq!(reserve_ordinal(&commons_type(&[55])), Some(55));
+        assert_eq!(reserve_ordinal(&commons_type(&[59])), Some(59));
+        assert_eq!(reserve_ordinal(&commons_type(&[54])), None);
+        assert_eq!(reserve_ordinal(&commons_type(&[60])), None);
+        assert_eq!(reserve_ordinal(&commons_type(&[57, 1])), None);
     }
 
     #[test]

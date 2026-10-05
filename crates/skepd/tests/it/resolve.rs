@@ -231,7 +231,7 @@ fn tamper_delivery(response: &[u8], tamper: &[(String, Tamper)]) -> Vec<u8> {
         let Ok(record) = skep_registry::parse(BodyKind::Binding, text.as_bytes()) else { continue };
         let Body::Binding(b) = &record.body else { continue };
         for (prefix, mode) in tamper {
-            if b.prefix == *prefix {
+            if b.prefix.to_string() == *prefix {
                 let rewritten = match mode {
                     Tamper::ZeroSig => encode(&record.body, Some(&"0".repeat(record.sig.as_deref().map_or(0, str::len)))),
                     Tamper::Space => text.replacen(':', ": ", 1),

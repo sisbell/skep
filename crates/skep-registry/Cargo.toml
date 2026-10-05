@@ -14,6 +14,7 @@ readme = "README.md"
 # `replaces` members must parse as.
 skep-address = { path = "../skep-address" }
 # The one question a body's bytes are asked of a JSON parser — which value
-# they are — with every verdict written here, as the credential records'
-# parser takes it.
+# they are, under the two policies `parse`'s doc names (a member twice read
+# at its last occurrence, a nesting depth past which no value is read) —
+# with every verdict written here, as the credential records' parser takes it.
 serde_json.workspace = true

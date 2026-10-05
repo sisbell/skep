@@ -105,9 +105,9 @@ use crate::board::{parse_chain, Board, BoardError, Reads};
 use crate::hint::RootHint;
 use crate::index::{Cause, Index, Suppressed};
 use crate::origin::Origin;
+use crate::parse_address;
 use crate::state::{BindingRecord, EndpointRecord, Judged, Verdict};
 use crate::verify::{judge, Trial};
-use crate::{parse_address, record_address};
 
 /// The feed copy's file name under the mirror's directory.
 pub const FEED_COPY: &str = "feed.jsonl";
@@ -933,9 +933,6 @@ impl Mirror {
             suppress(self, Cause::Verdict(verdict));
             return Ok(());
         }
-        // The canonical rule admitted the record's address members (`parse`
-        // above): each is the address it names, never judged again.
-        let replaces = record.body.replaces().map(record_address);
         match record.body {
             Body::Binding(b) => {
                 self.index.fold_binding(Judged {
@@ -943,9 +940,9 @@ impl Mirror {
                     link: stored.address.clone(),
                     home: stored.home.clone(),
                     record: BindingRecord {
-                        prefix: record_address(&b.prefix),
+                        prefix: b.prefix,
                         account: stored.to.first().cloned(),
-                        replaces,
+                        replaces: b.replaces,
                         honored: false,
                     },
                     verdict,
@@ -956,7 +953,12 @@ impl Mirror {
                     position: stored.at,
                     link: stored.address.clone(),
                     home: stored.home.clone(),
-                    record: EndpointRecord { origins: e.origins, replaces, honored: false, nullified: false },
+                    record: EndpointRecord {
+                        origins: e.origins.into_vec(),
+                        replaces: e.replaces,
+                        honored: false,
+                        nullified: false,
+                    },
                     verdict,
                 });
             }

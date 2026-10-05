@@ -508,10 +508,11 @@ pub fn hire(
 /// encoder): the prefix in address form, and `replaces` where a later
 /// binding names the link's address of the one it replaces.
 pub fn binding_body(prefix: &str, replaces: Option<&str>) -> String {
+    let address = |s: &str| skep_resolve::parse_address(s).expect("an address");
     skep_registry::encode(
         &skep_registry::Body::Binding(skep_registry::Binding {
-            prefix: prefix.into(),
-            replaces: replaces.map(str::to_owned),
+            prefix: address(prefix),
+            replaces: replaces.map(address),
         }),
         None,
     )
@@ -521,10 +522,11 @@ pub fn binding_body(prefix: &str, replaces: Option<&str>) -> String {
 /// in its own order, and `replaces` where a later deposit names the link's
 /// address of the one it replaces.
 pub fn endpoint_body(origins: &[&str], replaces: Option<&str>) -> String {
+    let origins = origins.iter().map(|o| o.to_string()).collect();
     skep_registry::encode(
         &skep_registry::Body::Endpoint(skep_registry::Endpoint {
-            origins: origins.iter().map(|o| o.to_string()).collect(),
-            replaces: replaces.map(str::to_owned),
+            origins: skep_registry::Origins::new(origins).expect("at least one origin"),
+            replaces: replaces.map(|s| skep_resolve::parse_address(s).expect("an address")),
         }),
         None,
     )

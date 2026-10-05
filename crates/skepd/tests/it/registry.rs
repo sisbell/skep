@@ -132,7 +132,7 @@ fn fold_bindings(port: u16) -> BTreeMap<String, (String, Option<String>)> {
             .expect("a committed binding is a binding under the canonical rule");
         let Body::Binding(binding) = record.body else { unreachable!("a binding") };
         let holder = slot_addrs(&stored, 1).first().cloned();
-        index.entry(binding.prefix).or_insert((address.to_string(), holder));
+        index.entry(binding.prefix.to_string()).or_insert((address.to_string(), holder));
     }
     index
 }

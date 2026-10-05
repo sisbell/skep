@@ -16,10 +16,10 @@
 //! * `rows` — the table ([`rows()`], [`row`], [`Row`], [`Kind`],
 //!   [`Subtype`]), its held readers, `t_binding` … `t_successor_of`, one per
 //!   row, and [`commons_type`], a commons type address at any ordinals;
-//! * `body` — [`Binding`], [`Endpoint`], [`Body`] and [`Record`], the kind
-//!   [`BodyKind`] a parse is named under, the one parser [`parse`] under the
-//!   canonical rule, the encoder [`encode`], the refusals [`Refusal`] and
-//!   the cap [`MAX_REGISTRY_RECORD_BYTES`];
+//! * `body` — [`Binding`], [`Endpoint`] with its [`Origins`], [`Body`] and
+//!   [`Record`], the kind [`BodyKind`] a parse is named under, the one parser
+//!   [`parse`] under the canonical rule, the encoder [`encode`], the refusals
+//!   [`Refusal`] and the cap [`MAX_REGISTRY_RECORD_BYTES`];
 //! * `check` — [`seeding_check`] and its refusal [`SeedingRefusal`], run by
 //!   the daemon ahead of every genesis.
 //!
@@ -34,7 +34,8 @@ mod check;
 mod rows;
 
 pub use body::{
-    encode, parse, Binding, Body, BodyKind, Endpoint, Record, Refusal, MAX_REGISTRY_RECORD_BYTES,
+    encode, parse, Binding, Body, BodyKind, Endpoint, Origins, Record, Refusal,
+    MAX_REGISTRY_RECORD_BYTES,
 };
 pub use check::{seeding_check, SeedingRefusal};
 pub use rows::{

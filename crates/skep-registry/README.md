@@ -28,20 +28,22 @@ deposits, and the resolver that reads them back — is this crate:
   whether a deposit rides its address (REG-1.18: a kind that reads more than
   one way carries none on its bare ordinal) and the `type` string its body
   carries where it has one.
-- **The two bodies** (`Binding`, `Endpoint`, `Body`, `BodyKind`, `parse`,
-  `encode`, `Record`, `Refusal`) — `{"type":"binding","prefix":…}` and
-  `{"type":"endpoint","origins":[…]}`, each with `replaces` where a later
-  record names the one it replaces and `sig` where signed, under THE
+- **The two bodies** (`Binding`, `Endpoint`, `Origins`, `Body`, `BodyKind`,
+  `parse`, `encode`, `Record`, `Refusal`) — `{"type":"binding","prefix":…}`
+  and `{"type":"endpoint","origins":[…]}`, each with `replaces` where a
+  later record names the one it replaces and `sig` where signed, under THE
   CANONICAL RULE: `parse(b)` answers a body only where `b ==
   encode(parse(b))`. The parse checks the FORM of every member — `type` the
   kind the caller names, no JSON number anywhere, no member beside the row's
   own, `prefix` and `replaces` addresses in dotted decimal, `origins`
   non-empty — and never a member's admissibility, which is the resolver's
-  and the reader's. A body past `MAX_REGISTRY_RECORD_BYTES` (16 KiB,
-  interim; a signed body carries its `sig` inside it, near seven kilobytes
-  of hex under the production row) is refused before any parse. The other
-  five body kinds have rows here and no parser: their schemas are pinned
-  where their own rules land.
+  and the reader's. What it checks, the types carry: `prefix` and
+  `replaces` are `Address`es and the origins an `Origins`, never empty, so
+  every body a caller builds encodes to a record the parse admits. A body
+  past `MAX_REGISTRY_RECORD_BYTES` (16 KiB, interim; a signed body carries
+  its `sig` inside it, near seven kilobytes of hex under the production
+  row) is refused before any parse. The other five body kinds have rows
+  here and no parser: their schemas are pinned where their own rules land.
 - **The seeding check** (`seeding_check`, `SeedingRefusal`) — three arms over
   the registry's rows and every other commons row a build holds:
   DISJOINTNESS at the subtree grain, COMPLETENESS against the kinds' home,

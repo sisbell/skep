@@ -346,9 +346,11 @@ reserve's ordinals `3.55`–`3.59` of the ghost home document's type
 subspace and seven subtype rows nested under their kinds by prefix — each
 row with its kind, its subtype, whether a deposit rides its address and
 the `type` string its body carries, read through one held pin per row;
-`body.rs` the binding's and the endpoint's bodies, their one parser under
-the canonical rule, their encoder and the cap; `check.rs` the seeding
-check's three arms and the refusal that names the arm.
+`body.rs` the binding's and the endpoint's bodies — address members typed
+as addresses, origins a non-empty list, each kind's `type` string read off
+its row — their one parser under the canonical rule, their encoder and the
+cap; `check.rs` the seeding check's three arms and the refusal that names
+the arm.
 
 Rules that hold across its files:
 

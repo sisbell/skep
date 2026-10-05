@@ -35,6 +35,14 @@ pub enum HashFunction {
 }
 
 impl HashFunction {
+    /// EVERY FUNCTION THIS STORE COMPUTES — and so the designations this
+    /// build pins: open removes an orphan partial under these alone
+    /// (`media.md` Op inventory 1, the resumable upload (4), "in every
+    /// designation directory under `blobs/` that this build's schemas pin";
+    /// `partials::reconcile`). A variant joins this list as it joins the
+    /// enum; the unit suite walks it.
+    pub(crate) const ALL: [HashFunction; 1] = [HashFunction::Blake3];
+
     /// The function's DESIGNATION — the name its keys spell it by, and the
     /// directory under the root its files live in. Every variant's passes the
     /// store's name check (this file's unit suite holds them to it).
@@ -68,8 +76,9 @@ pub(crate) struct Handle {
 /// offset, where a resume continues: the file cut back to it where longer,
 /// the hasher built over its first `offset` bytes. The record's offset
 /// never passes the file's length past open's reconciliation; a shorter
-/// file here is a defect, answered as I/O, and an absent one — a finish's
-/// rename took it — is I/O too.
+/// file here is no state this store leaves — a disk changed under it, or
+/// two streams of one upload — answered as I/O and never extended, and an
+/// absent one — a finish's rename took it — is I/O too.
 pub(crate) fn open_at(root: &Path, designation: &str, id: &UploadId, offset: u64) -> io::Result<Handle> {
     let path = partial_path(root, designation, id);
     let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
@@ -224,14 +233,16 @@ mod tests {
     }
 
     /// EVERY FUNCTION's DESIGNATION PASSES THE NAME CHECK — a creation files
-    /// under it, and every read takes a name back through that check — and
-    /// BLAKE3's is the cell schema's own, `blake3` (Q-sm1).
+    /// under it, every read takes a name back through that check, and open's
+    /// reconciliation walks the directory of each function on the list this
+    /// build pins (`HashFunction::ALL`) — and BLAKE3's, on that list, is the
+    /// cell schema's own, `blake3` (Q-sm1).
     #[test]
-    #[allow(clippy::single_element_loop)] // every function there is: a second joins the list
     fn every_functions_designation_passes_the_name_check() {
-        for function in [HashFunction::Blake3] {
+        for function in HashFunction::ALL {
             assert!(crate::blobs::designation_ok(function.designation()), "{function:?}");
         }
+        assert!(HashFunction::ALL.contains(&HashFunction::Blake3), "the store computes BLAKE3's hash");
         assert_eq!(HashFunction::Blake3.designation(), "blake3");
     }
 

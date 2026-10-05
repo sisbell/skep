@@ -134,9 +134,14 @@ pub struct Finished {
 /// (5), "A STREAM CLAIMS ITS UPLOAD FIRST"). The store checks neither: a
 /// second stream's resume cuts the partial back under the first's handle,
 /// after which either stream's bytes may land where the other's hasher does
-/// not look, and a finish names the file by a hash its bytes do not have. An
-/// end or an expiry between a stream's acts costs that stream its upload
-/// alone: its later acts answer `NoUpload`.
+/// not look, and a finish names the file by a hash its bytes do not have.
+/// An end ([`Store::end_upload`]), or the pruner's removal of an expired
+/// upload ([`Store::expire_upload`]), between a stream's acts costs that
+/// stream its upload alone: its later acts answer `NoUpload`. The expiry
+/// passing with the upload not yet removed costs it less: its settle and its
+/// finish judge the upload standing and answer `NoUpload`, while its
+/// appends, judged by the record held, go on — a grain re-fixing the expiry
+/// (see [`Stream::append`]).
 ///
 /// THE STORE CHECKS EVERY NAME IT IS HANDED. A designation or a hex a
 /// caller passes in becomes a path only past its spelling's check
@@ -154,6 +159,18 @@ pub struct Finished {
 /// one as none ([`Store::lease_state`], [`Store::any_live_lease`]). Inside
 /// the crate a name that has passed this check, or that the store spelled
 /// itself (a finish's hash), is trusted.
+///
+/// A LOG THAT STOPS STAYS STOPPED FOR THE LIFE OF THE STORE. Each log cuts a
+/// failed append back off its file; where that cut fails too, the log takes
+/// no further append until a compaction completes (`jsonl.rs`), and the
+/// store compacts only at its open, over the logs it has just read — so no
+/// compaction reaches a log stopped while the store serves. Until the store
+/// is dropped, every act that writes that log answers `Io`: on the records'
+/// log a creation, a byte received and a retirement — an end's, an expiry's,
+/// a finish's last step; on the leases' every finish, at its lease's sync,
+/// past its rename (what that leaves: [`Stream::finish`]). The next open
+/// reads the log afresh, its tail check cutting the torn line the failed cut
+/// left ([`Store::open`]).
 pub struct Store {
     root: PathBuf,
     uploads: Mutex<UploadRecords>,
@@ -215,11 +232,16 @@ impl Store {
     /// opened, the partials reconciled with them both ways, every aside
     /// removed — a crash's or a failed finish's, nothing naming either — the
     /// records compacted, the root fsynced. Everything here completes before
-    /// the store answers anything. A partial that cannot be read fails the
-    /// open, retiring nothing (`partials.rs`): an I/O failure is no absence.
-    /// And before any of it, every name the store acts on is held to what
-    /// the store makes: a symbolic link, a special file, or a second link to
-    /// a file the store writes in place fails the open as `InvalidData`,
+    /// the store answers anything. An open that fails partway serves nothing
+    /// and leaves on disk what its acts completed, each one the next open
+    /// makes again: the open is the store's one place of repair — its
+    /// compactions are the store's only ones, and a log a failure stopped
+    /// while an earlier store served is read here afresh, its torn tail cut
+    /// (see [`Store`]). A partial that cannot be read fails the open,
+    /// retiring nothing (`partials.rs`): an I/O failure is no absence. And
+    /// before any of it, every name the store acts on is held to what the
+    /// store makes: a symbolic link, a special file, or a second link to a
+    /// file the store writes in place fails the open as `InvalidData`,
     /// naming it, and nothing is followed or written through it (`blobs.rs`,
     /// `refuse_links_and_special_files`).
     ///
@@ -392,9 +414,13 @@ impl Store {
     /// identifier names no standing upload of `principal`'s — answered
     /// before any figure of the record, so no offset is ever named to
     /// another principal (M-I2 (e)); then `Offset`, carrying the record's
-    /// offset, where `offset` is any other. An `Io` — the partial
-    /// unreadable, or gone because a finish's rename took it — opens no
-    /// stream.
+    /// offset, where `offset` is any other. Neither refusal touches the
+    /// partial. An `Io` opens no stream: the partial unreadable; gone, a
+    /// finish's rename having taken it; or shorter than the record's offset
+    /// — no state this store leaves: a disk changed under it, or two streams
+    /// of one upload (see [`Store`]) — refused and never extended. An `Io`
+    /// past the cut-back has cut only bytes past the durable point, none
+    /// received.
     pub fn resume(&self, principal: &str, id: &UploadId, offset: u64, now_ms: u64) -> Result<Stream<'_>, BlobError> {
         let record = self.upload(principal, id, now_ms).ok_or(BlobError::NoUpload)?;
         if offset != record.offset {
@@ -463,13 +489,14 @@ impl Store {
 
     /// Remove an EXPIRED upload: its partial removed, its record retired —
     /// the pruner's act, whatever principal minted it, after the daemon has
-    /// found no stream holding it. A record that stands at `now_ms` is left
-    /// as it is (`Ok(false)`), so a clock moved between the read and the act
-    /// costs a standing upload nothing. An `Io` removing the partial leaves
-    /// the record standing, expired, for the next pass to take again; one
-    /// writing the retirement leaves it retired in this process, its
-    /// record's line on disk until the next open's reconciliation retires
-    /// it.
+    /// found no stream holding it; `Ok(true)` where one went. `Ok(false)`
+    /// where no record is held by that identifier — an end, a finish or an
+    /// earlier pass took it — or where it stands at `now_ms`, left as it is,
+    /// so a clock moved between the read and the act costs a standing upload
+    /// nothing. An `Io` removing the partial leaves the record standing,
+    /// expired, for the next pass to take again; one writing the retirement
+    /// leaves it retired in this process, its record's line on disk until the
+    /// next open's reconciliation retires it.
     pub fn expire_upload(&self, id: &UploadId, now_ms: u64) -> io::Result<bool> {
         let designation = {
             let uploads = self.uploads.lock();
@@ -569,8 +596,13 @@ impl Store {
 /// partial's file closes with it whatever the request's end — so no file
 /// stays open for an upload no request is streaming, nor past a finish whose
 /// rename made the partial's file the hash's. A write or a sync that fails
-/// tears it: its later acts answer `Io`, and the next resume cuts off
-/// whatever the failure left.
+/// TEARS it: it takes no further write or sync, so a later act that reaches
+/// one answers `Io` — an append past its `NoUpload` and `Length` checks, a
+/// settle with bytes past its durable point to receive, a finish past its
+/// `NoUpload` and its precondition — and the next resume cuts off whatever
+/// the failure left. A failed write counts none of its bytes, so a stream
+/// torn by one, with nothing counted past its durable point, settles as a
+/// stream that wrote nothing: the record answered as it stands.
 pub struct Stream<'s> {
     store: &'s Store,
     principal: String,
@@ -598,14 +630,19 @@ impl Stream<'_> {
     /// far (the partial's length).
     ///
     /// THE REFUSALS, in the order they are judged: `NoUpload` where the
-    /// upload has been retired under the stream — by an end or an expiry
-    /// between its acts — judged by whether its record is held, not by its
-    /// expiry: the resume found the upload standing (clause (5)), and each
-    /// grain received re-fixes its expiry (clause (3)); then `Length` where
-    /// the bytes would pass the declared length, nothing written. An `Io`
-    /// from the write or a grain's sync tears the stream; one from a grain's
-    /// record write leaves the bytes synced and not received, the record's
-    /// offset where it stood for a later grain or the settle to write.
+    /// upload's record has been retired under the stream — an end, or the
+    /// pruner's removal of the expired upload, between its acts — judged by
+    /// whether the record is held, not by its expiry: the resume found the
+    /// upload standing (clause (5)), and each grain received re-fixes its
+    /// expiry (clause (3)); then `Length` where the bytes would pass the
+    /// declared length, nothing written. An `Io` from the write counts none
+    /// of `bytes` — whatever part reached the partial, the next resume cuts
+    /// off — and tears the stream. One from a grain comes after the write, so
+    /// `bytes` count in the stream's bytes written all the same, the figure
+    /// its next answer, its settle and its finish read: a grain's failed sync
+    /// tears the stream; its failed record write leaves the bytes synced and
+    /// not received, the record's offset where it stood for a later grain or
+    /// the settle to write.
     pub fn append(&mut self, bytes: &[u8], now_ms: u64) -> Result<u64, BlobError> {
         self.store.uploads.lock().of_principal(&self.principal, &self.id).ok_or(BlobError::NoUpload)?;
         if self.handle.written().saturating_add(bytes.len() as u64) > self.length {
@@ -624,30 +661,36 @@ impl Stream<'_> {
     /// whatever it answers: the partial fsynced, the record's offset set to
     /// the bytes written and its expiry re-fixed the upload's own interval
     /// past `now_ms`, this last byte received — and moved by nothing else: a
-    /// stream that wrote no byte past its durable point writes no record and
-    /// re-fixes nothing. Answers the record.
+    /// stream with no byte counted past its durable point writes no record
+    /// and re-fixes nothing. Answers the record — the one its receive wrote,
+    /// or, where it received nothing, the one it found standing: the upload
+    /// is judged standing ONCE, before anything is received, so no answer is
+    /// `NoUpload` over bytes this settle has received, whatever expiry their
+    /// mark fixed.
     ///
-    /// THE REFUSALS: `NoUpload` where the upload no longer stands — expired,
-    /// or retired under the stream; `Io` from a torn stream, a failed sync or
-    /// a failed record write. In each case nothing past the durable point is
-    /// received, and the record stands as it was.
+    /// THE REFUSALS, in the order they are judged: `NoUpload` where the
+    /// upload no longer stands at `now_ms` — expired, or retired under the
+    /// stream; then `Io` where bytes past the durable point cannot be
+    /// received — the stream torn, the sync failed, the record write failed.
+    /// In each case nothing past the durable point is received, and the
+    /// record stands as it was.
     pub fn settle(mut self, now_ms: u64) -> Result<UploadRecord, BlobError> {
         let record = self.store.upload(&self.principal, &self.id, now_ms).ok_or(BlobError::NoUpload)?;
         if self.handle.written() == self.offset {
             return Ok(record);
         }
-        self.receive(now_ms)?;
-        self.store.upload(&self.principal, &self.id, now_ms).ok_or(BlobError::NoUpload)
+        self.receive(now_ms)
     }
 
     /// Make the bytes written received — the partial synced, THEN the
     /// record's offset set to them and its expiry re-fixed (clause (3)): the
-    /// one act a grain and the settle share.
-    fn receive(&mut self, now_ms: u64) -> Result<(), BlobError> {
+    /// one act a grain and the settle share. Answers the record written.
+    fn receive(&mut self, now_ms: u64) -> Result<UploadRecord, BlobError> {
         self.handle.sync()?;
-        self.store.uploads.lock().mark_received(&self.principal, &self.id, self.handle.written(), now_ms)?;
+        let record =
+            self.store.uploads.lock().mark_received(&self.principal, &self.id, self.handle.written(), now_ms)?;
         self.offset = self.handle.written();
-        Ok(())
+        Ok(record)
     }
 
     /// THE FINISH (clause (7); M-I5 (a)), the stream consumed whatever it
@@ -668,11 +711,12 @@ impl Stream<'_> {
     ///
     /// PRECONDITION: the stream's bytes written reach the upload's declared
     /// length — which PANICS rather than being refused: a caller's bug, not
-    /// an outcome. The caller knows the figure, from [`Stream::append`]'s
-    /// answer or the offset it resumed at, and the store asserts it here, in
-    /// one place, because a finish past it would name the file by its
-    /// prefix's hash and lease it at a size the file does not have.
-    /// `NoUpload` — the upload expired or retired under the stream — is
+    /// an outcome. The caller knows the figure — the offset it resumed at
+    /// and [`Stream::append`]'s answers, an append whose `Io` came from its
+    /// grain counting its bytes all the same (see there) — and the store
+    /// asserts it here, in one place, because a finish past it would name
+    /// the file by its prefix's hash and lease it at a size the file does not
+    /// have. `NoUpload` — the upload expired or retired under the stream — is
     /// judged first.
     ///
     /// WHAT AN `Io` LEAVES, by where it falls: before the rename, the upload

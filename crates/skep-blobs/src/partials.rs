@@ -11,11 +11,16 @@
 //! A request writes a partial through its stream's handle, opened afresh at
 //! every resume (`partials/handle.rs`: [`Handle`], [`open_at`]).
 //!
-//! AT OPEN THE TWO ARE RECONCILED BOTH WAYS: a partial no record names is
-//! removed, in every designation directory under the root; a record that
-//! names no partial is retired; and their lengths are set to agree — a
-//! longer partial cut back to the record's offset, a record whose offset
-//! passes its partial's length set back to that length, its expiry kept
+//! AT OPEN THE TWO ARE RECONCILED BOTH WAYS: a partial no record names — a
+//! crash's orphan — is removed in every designation directory this build
+//! pins, the directory of each [`HashFunction`] it computes, and in no
+//! other: a directory under another designation is another build's, its
+//! partials its own (clause (4), "in every designation directory under
+//! `blobs/` that this build's schemas pin"; the pruner's unlink pass halts
+//! on such a directory, ms5-T4, D13's carve-out); a record that names no
+//! partial is retired; and their lengths are set to agree — a longer
+//! partial cut back to the record's offset, a record whose offset passes
+//! its partial's length set back to that length, its expiry kept
 //! (`UploadRecords::set_back`). A partial that cannot be read fails the
 //! open, retiring nothing: it is still named, and a retirement written over
 //! it would have the next open remove it as an orphan (clause (4) retires a
@@ -36,7 +41,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::blobs::{dirs_under, fsync_dir, names_in, not_found_as_none, remove_if_present};
+use crate::blobs::{fsync_dir, names_in, not_found_as_none, remove_if_present};
 use crate::uploads::{UploadId, UploadRecords};
 
 pub use handle::HashFunction;
@@ -85,8 +90,9 @@ pub(crate) fn remove(root: &Path, designation: &str, id: &UploadId) -> io::Resul
     Ok(())
 }
 
-/// THE RECONCILIATION AT OPEN, both ways, in every designation directory
-/// under `root`.
+/// THE RECONCILIATION AT OPEN, both ways: every standing record held to its
+/// partial, and every orphan removed under the designations this build pins
+/// alone ([`HashFunction::ALL`]).
 pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -> io::Result<()> {
     // The identifiers the standing records name, by designation directory.
     let mut named: HashMap<String, HashSet<UploadId>> = HashMap::new();
@@ -117,13 +123,17 @@ pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -
         }
         named.entry(r.designation.clone()).or_default().insert(r.id);
     }
-    // Then the directories: every partial no record names is an orphan.
-    for dir_name in dirs_under(root)? {
-        let named_here = named.get(&dir_name);
-        let orphans = names_in(root, &dir_name, |name, _| {
+    // Then the directories this build pins, each function's it computes:
+    // every partial no record names there is an orphan. A directory under
+    // any other designation is another build's, its partials its own, and
+    // is left (clause (4)), as the pruner's pass leaves it.
+    for function in HashFunction::ALL {
+        let designation = function.designation();
+        let named_here = named.get(designation);
+        let orphans = names_in(root, designation, |name, _| {
             id_of_partial_name(name).is_some_and(|id| !named_here.is_some_and(|ids| ids.contains(&id)))
         })?;
-        let dir = root.join(&dir_name);
+        let dir = root.join(designation);
         for name in &orphans {
             fs::remove_file(dir.join(name))?;
         }

@@ -75,10 +75,11 @@ pub(crate) fn expiry(now_ms: u64, interval: Duration) -> u64 {
 /// declared length, the DURABLE offset (bytes received), the interval fixed
 /// at its creation, and the expiry fixed from the last byte received.
 ///
-/// ITS OFFSET NEVER PASSES ITS LENGTH. Each of the four gates a record
-/// passes keeps it: its creation (`UploadRecords::create`) writes 0; a byte
-/// received (`UploadRecords::mark_received`) refuses an offset past the
-/// length, whoever marks — its one caller marking no more than
+/// ITS OFFSET NEVER PASSES ITS LENGTH, in every record the store holds or
+/// answers — the store takes no record back from a caller. Each of the four
+/// gates a record passes keeps it: its creation (`UploadRecords::create`)
+/// writes 0; a byte received (`UploadRecords::mark_received`) asserts it,
+/// its precondition, which its one caller keeps by marking no more than
 /// [`Stream::append`](crate::Stream::append) took within the length; open's
 /// set-back (`UploadRecords::set_back`) only ever lowers an offset, to a
 /// shorter partial's length; and a line read back at open whose offset
@@ -308,24 +309,37 @@ impl UploadRecords {
     /// MARK THE BYTES RECEIVED through `offset` (clause (3)): the
     /// principal's record's offset set to it and its expiry re-fixed the
     /// record's own interval past `now_ms`, written and synced, the rest
-    /// kept. `NoUpload` where `principal`'s records do not name `id`; and
-    /// `Length` where `offset` passes the record's length, naming as an
-    /// append's refusal does the length and the offset the bytes would start
-    /// at — the record's own: the one act that raises an offset keeps
-    /// [`UploadRecord`]'s invariant itself, whoever calls it. Nothing is
-    /// written either way. The store marks only after the partial's sync, at
-    /// the bytes a stream's handle holds
+    /// kept; answers the record written. `NoUpload` where `principal`'s
+    /// records do not name `id`, nothing written. The store marks only after
+    /// the partial's sync, at the bytes a stream's handle holds
     /// ([`Stream::append`](crate::Stream::append),
     /// [`Stream::settle`](crate::Stream::settle)).
-    pub fn mark_received(&mut self, principal: &str, id: &UploadId, offset: u64, now_ms: u64) -> Result<(), BlobError> {
+    ///
+    /// PRECONDITION: `offset` is within the record's length — the one act
+    /// that raises an offset keeps [`UploadRecord`]'s invariant by it, and
+    /// its one caller keeps it, marking only the bytes a stream's append
+    /// took within the length ([`Stream::append`](crate::Stream::append)'s
+    /// `Length`, the one check). A mark past it is a defect of this crate,
+    /// no caller's answer, so it PANICS before anything is written, where a
+    /// refusal would reach a client as `Length` over bytes it never sent.
+    pub fn mark_received(
+        &mut self,
+        principal: &str,
+        id: &UploadId,
+        offset: u64,
+        now_ms: u64,
+    ) -> Result<UploadRecord, BlobError> {
         let mut next = self.of_principal(principal, id).ok_or(BlobError::NoUpload)?.clone();
-        if offset > next.length {
-            return Err(BlobError::Length { length: next.length, offset: next.offset });
-        }
+        assert!(
+            offset <= next.length,
+            "a byte received marked at {offset} past its record's length {}: the store marks only the bytes a \
+             stream's append took within the length (UploadRecords::mark_received's precondition)",
+            next.length,
+        );
         next.offset = offset;
         next.expires = expiry(now_ms, next.interval);
-        self.write(next)?;
-        Ok(())
+        self.write(next.clone())?;
+        Ok(next)
     }
 
     /// SET AN OFFSET BACK at open (clause (4)): the record's offset lowered
@@ -404,8 +418,8 @@ mod tests {
             "its creation"
         );
         assert!(matches!(records.mark_received("other", &id, 5, 200), Err(BlobError::NoUpload)));
-        records.mark_received("k", &id, 6, 200).unwrap();
-        let received = records.of_principal("k", &id).cloned().unwrap();
+        let received = records.mark_received("k", &id, 6, 200).unwrap();
+        assert_eq!(records.of_principal("k", &id), Some(&received), "the act answers the record it wrote");
         assert_eq!((received.offset, received.expires), (6, 202), "re-fixed its own interval past the byte");
         assert_eq!((received.interval, received.length), (created.interval, created.length), "the rest kept");
         assert_eq!(lines(), 2, "a line for the creation and one for the byte, none for another principal's mark");
@@ -424,12 +438,13 @@ mod tests {
     }
 
     /// NO ACT RAISES AN OFFSET PAST ITS LENGTH (`UploadRecord`: "ITS OFFSET
-    /// NEVER PASSES ITS LENGTH"): a mark past the record's length is refused
-    /// `Length`, naming the length and the offset the bytes would start at,
-    /// the record's own, and writes nothing — whoever marks; a mark at the
-    /// length stands.
+    /// NEVER PASSES ITS LENGTH"): a mark past the record's length — no
+    /// caller's answer, a defect of the store's own, its one caller marking
+    /// only what an append took within the length — STOPS, naming the
+    /// precondition it breaks, before anything is written: the record and
+    /// the log stand as they were; a mark at the length stands.
     #[test]
-    fn a_mark_past_the_length_is_refused_and_writes_nothing() {
+    fn a_mark_past_the_length_stops_as_a_defect_and_writes_nothing() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut records = UploadRecords::open(dir.path()).unwrap();
         let id = UploadId::parse("0123456789abcdef0123456789abcdef").unwrap();
@@ -437,9 +452,13 @@ mod tests {
         records.mark_received("k", &id, 4, 1).unwrap();
         let before = fs::read(dir.path().join(UPLOADS_LOG)).unwrap();
         for past in [11, u64::MAX] {
+            let stopped =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| records.mark_received("k", &id, past, 2)));
+            let message =
+                stopped.expect_err("a mark past the length stops").downcast::<String>().map(|m| *m).unwrap_or_default();
             assert!(
-                matches!(records.mark_received("k", &id, past, 2), Err(BlobError::Length { length: 10, offset: 4 })),
-                "a mark at {past}"
+                message.contains("past its record's length 10") && message.contains("precondition"),
+                "a mark at {past}: {message}"
             );
         }
         assert_eq!(records.of_principal("k", &id).map(|r| (r.offset, r.expires)), Some((4, 1_001)), "as it stood");

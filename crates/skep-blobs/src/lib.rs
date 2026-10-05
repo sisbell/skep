@@ -59,7 +59,10 @@
 //!   back off its log, and a log whose cut fails too — or whose compaction
 //!   failed past its rename — takes no further append until a compaction
 //!   completes (`jsonl.rs`), so open's tail check never cuts a whole line
-//!   and no line lands in a file no open reads.
+//!   and no line lands in a file no open reads. The store compacts only at
+//!   its open, so a log stopped while the store serves stays stopped, every
+//!   act that writes it answering `Io`, until the next open reads it afresh
+//!   ([`Store`]).
 //! * OPEN RECONCILES AND COMPACTS: first, nothing at a name it acts on
 //!   followed or shared — a symbolic link, a special file, or a second link
 //!   to a file the store writes in place failing the open, named
@@ -68,12 +71,16 @@
 //!   name check refuses, or an offset past its length, read as no record
 //!   (see [`Store`]), so a log restored from elsewhere names no path out of
 //!   the root; the partials and the records held to each other both ways,
-//!   a partial that cannot be read failing the open rather than reading as
+//!   an orphan partial removed under the designations this build computes
+//!   alone — another build's designation directory left to it — and a
+//!   partial that cannot be read failing the open rather than reading as
 //!   absent (`partials.rs`); every aside removed, a crash's or a failed
 //!   finish's (`blobs.rs`); a lease past the horizon dropped.
 //! * A CALLER's BUG IS NO REFUSAL: a finish short of the declared length
-//!   PANICS, naming the obligation it breaks ([`Stream::finish`]);
-//!   [`BlobError`] carries only answers a caller acts on.
+//!   PANICS, naming the obligation it breaks ([`Stream::finish`]), and so
+//!   does a defect of the store's own — a byte received marked past its
+//!   record's length (`UploadRecords::mark_received`); [`BlobError`] carries
+//!   only answers a caller acts on.
 //! * A KEY NAMES THE FUNCTION THAT MADE IT: the store computes one hash,
 //!   BLAKE3's, and a creation names it by type — [`HashFunction::Blake3`],
 //!   filed under its designation, `blake3` — so no creation can name a

@@ -116,6 +116,13 @@ impl Log {
     /// the file whole, so once it completes it lifts a stop. One that fails
     /// before its rename leaves the log as it was; one that fails past it
     /// stops the log until a compaction completes.
+    ///
+    /// PRECONDITION: `current` is what the log's store folds the log's lines
+    /// to — each value one a line the log holds reads as, none twice — as
+    /// both stores hand their own maps at open: an equal count is read as
+    /// nothing else held, so a different set of that count would never be
+    /// written. A runtime compaction (the pruner's on a log past its size
+    /// trigger, owed — `media.md` §The media stores) hands the same.
     pub fn compact(&mut self, current: impl ExactSizeIterator<Item = Value>) -> io::Result<()> {
         if !self.stopped && current.len() == self.lines {
             return Ok(());

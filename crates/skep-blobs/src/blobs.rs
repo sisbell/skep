@@ -41,8 +41,12 @@ pub(crate) fn is_aside_name(name: &str) -> bool {
     })
 }
 
-/// A designation's spelling: lowercase letters, digits and `-`, nonempty,
-/// never a name a hex could be mistaken for or a path could escape by.
+/// A designation's spelling: 1 to 32 bytes of lowercase letters, digits and
+/// `-` — no `/` and no `.`, so no path climbs out of the root by it, and no
+/// uppercase, so one designation has one spelling on a volume that folds
+/// case. A designation names a directory under the root and a hex a file
+/// inside one, so the two never share a listing — though a short hex
+/// (`beef`) spells a designation too.
 pub(crate) fn designation_ok(designation: &str) -> bool {
     !designation.is_empty()
         && designation.len() <= 32

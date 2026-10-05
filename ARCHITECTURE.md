@@ -228,16 +228,21 @@ Rules that hold across its files:
 - **A torn line is only ever a log's tail** (`jsonl::Log`): a failed
   append is cut back, and a log that cannot cut back, or whose compaction
   failed past its rename, takes no append until a compaction completes.
+  The store compacts only at its open, so a log stopped while the store
+  serves stays stopped until the next open reads it afresh (`Store`).
 - **Open reconciles and compacts before it answers anything.**
   `Store::open` runs each store's act at open — the logs' compactions,
   `partials::reconcile`, `blobs::sweep_asides` — and an I/O failure there,
   as at the size check (`Store::blob_size`), is never read as an absence.
-  Before any act, a symbolic link, a special file, or a second link to a
-  file the store writes in place, at a name it acts on, fails the open
-  (`blobs::refuse_links_and_special_files`): nothing is followed or written
-  through.
-- **A caller's bug is no refusal.** `Stream::finish` panics on a broken
-  precondition; `BlobError` carries only answers.
+  Its orphan removal keeps to the designations this build computes
+  (`HashFunction`); another build's designation directory is left, as the
+  pruner leaves it. Before any act, a symbolic link, a special file, or a
+  second link to a file the store writes in place, at a name it acts on,
+  fails the open (`blobs::refuse_links_and_special_files`): nothing is
+  followed or written through.
+- **A caller's bug is no refusal, nor is the store's own.** `Stream::finish`
+  panics on a broken precondition, and `UploadRecords::mark_received` on an
+  offset past its record's length; `BlobError` carries only answers.
 - **The test seam is a feature.** `test-hooks` (default off) compiles in
   `store/hooks.rs` alone; `scripts/gate-full.sh` builds the library and its
   docs without it.

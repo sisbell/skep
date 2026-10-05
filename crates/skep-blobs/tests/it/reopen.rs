@@ -1,8 +1,9 @@
 //! WHAT OPEN MAKES OF THE RECORDS AND THE PARTIALS (M-I5 (c); `media.md` the
 //! resumable upload's clauses (1), (4); §The media stores): the
-//! reconciliation both ways at open, an offset set back keeping its expiry,
-//! and the sweep of the asides beside it; a partial that cannot be read
-//! failing the open and retiring nothing; a record line read as no record
+//! reconciliation both ways at open, an orphan removed under this build's
+//! designations alone, an offset set back keeping its expiry, and the sweep
+//! of the asides beside it; a partial that cannot be read failing the open
+//! and retiring nothing; a record line read as no record
 //! where it lacks any member, its interval among them, where its offset
 //! passes its length, and where its designation climbs out of the root,
 //! nothing beside the root touched; the compaction, down to nothing where
@@ -160,14 +161,17 @@ fn a_record_line_whose_offset_passes_its_length_is_no_record() {
 }
 
 /// (4) AT OPEN THE TWO ARE RECONCILED BOTH WAYS, and their lengths: a
-/// partial no record names is removed, in every designation directory; a
-/// record whose partial is gone is retired; a partial longer than its
-/// record's offset is cut back; a record whose offset passes its partial's
-/// length is set back to the length, its expiry kept (a copy that took the
-/// partial before its record); an expired upload is retired and its partial
-/// removed; and the records log is compacted to the current records. Beside
-/// them, every aside a crash left is removed — and a name that only begins
-/// as an aside's is none, and is left.
+/// partial no record names is removed in the designation directory this
+/// build pins, and LEFT in one it does not — another build's (clause (4):
+/// "in every designation directory under `blobs/` that this build's schemas
+/// pin"), as the pruner's pass leaves it; a record whose partial is gone is
+/// retired; a partial longer than its record's offset is cut back; a record
+/// whose offset passes its partial's length is set back to the length, its
+/// expiry kept (a copy that took the partial before its record); an expired
+/// upload is retired and its partial removed; and the records log is
+/// compacted to the current records. Beside them, every aside a crash left
+/// is removed — and a name that only begins as an aside's is none, and is
+/// left.
 #[test]
 fn open_reconciles_the_partials_and_the_records_both_ways() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -213,7 +217,11 @@ fn open_reconciles_the_partials_and_the_records_both_ways() {
     assert!(store.upload("k", &expired.id, now).is_none(), "an expired upload is retired");
     assert!(!partial(&expired.id).exists(), "and its partial removed");
     assert!(!root.join("blake3").join(".upload-ffffffffffffffffffffffffffffffff").exists(), "an orphan is removed");
-    assert!(!root.join("sha256-tree").join(".upload-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee").exists(), "in every designation directory");
+    assert_eq!(
+        fs::read(root.join("sha256-tree").join(".upload-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")).unwrap(),
+        b"orphan too",
+        "left under a designation this build pins no function for: another build's (clause (4))"
+    );
     assert!(store.asides_of("blake3").unwrap().is_empty(), "an aside is removed at open");
     assert!(root.join("blake3").join(".retired-x").is_file(), "a name no aside has is left");
     assert!(!store.remove_aside("blake3", ".retired-x").unwrap(), "and is no aside to remove");

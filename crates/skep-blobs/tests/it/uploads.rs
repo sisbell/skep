@@ -9,7 +9,8 @@
 //! interval and saturating at the last instant; one handle per request,
 //! closed with its stream; the expiry, an expired upload's stream appending
 //! nothing, and a stream's append judged by its record and not its expiry;
-//! the end; and the listings in identifier order.
+//! a settle judging its upload once, before it receives; the end; and the
+//! listings in identifier order.
 
 use std::fs;
 use std::time::Duration;
@@ -391,12 +392,13 @@ fn the_expired_uploads_are_listed_and_removed_while_the_store_serves() {
     assert_eq!(store.pending_bytes("b", now, every_deposit_unplaced), 4, "the standing one counts");
 }
 
-/// AN EXPIRY BETWEEN A STREAM's ACTS COSTS IT ITS UPLOAD (`Store`: "An end
-/// or an expiry between a stream's acts costs that stream its upload
-/// alone"): the pruner's act leaves a standing upload, and the stream open
-/// over it, as they are; once it has removed the expired upload, the stream
-/// still open over it appends nothing and finishes nothing, each answering
-/// `NoUpload` — the finish judging that before its length.
+/// THE PRUNER's REMOVAL OF AN EXPIRED UPLOAD COSTS ITS STREAM THE UPLOAD
+/// (`Store`: "An end …, or the pruner's removal of an expired upload …,
+/// between a stream's acts costs that stream its upload alone"): the
+/// pruner's act leaves a standing upload, and the stream open over it, as
+/// they are; once it has removed the expired upload, the stream still open
+/// over it appends nothing and finishes nothing, each answering `NoUpload` —
+/// the finish judging that before its length.
 #[test]
 fn an_expired_uploads_stream_appends_and_finishes_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -432,6 +434,27 @@ fn a_streams_append_is_judged_by_its_record_not_its_expiry() {
     let r = store.upload("k", &rec.id, 2_000).expect("standing again: the grain re-fixed its expiry");
     assert_eq!((r.offset, r.expires), (SYNC_GRAIN, 3_000), "the upload's own interval past the grain's byte");
     assert_eq!(stream.settle(2_500).unwrap().offset, SYNC_GRAIN, "and its settle answers it");
+}
+
+/// THE SETTLE JUDGES ITS UPLOAD ONCE, BEFORE IT RECEIVES (`Stream::settle`:
+/// "the upload is judged standing ONCE, before anything is received"): the
+/// bytes received, it answers the record that took them — never `NoUpload`
+/// over bytes it has just made received. An upload of no interval at all,
+/// resumed by a clock read before its creation's (the store takes its clock
+/// from its caller, and a wall clock steps back), receives bytes whose
+/// re-fixed expiry is that very instant: the settle answers that record,
+/// expired as it is answered, and the expired listing holds it there.
+#[test]
+fn a_settle_answers_the_record_its_receive_wrote() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = open(&dir.path().join("blobs"), 0);
+    let rec = store.create_upload("k", HashFunction::Blake3, 10, Duration::ZERO, 10).unwrap();
+    let mut stream = store.resume("k", &rec.id, 0, 5).expect("standing at 5, its expiry 10");
+    stream.append(b"abc", 5).unwrap();
+    let settled = stream.settle(7).expect("the bytes received, the settle answers their record");
+    assert_eq!((settled.offset, settled.expires), (3, 7), "the record its receive wrote");
+    let expired: Vec<(UploadId, u64)> = store.expired_uploads(7).into_iter().map(|r| (r.id, r.offset)).collect();
+    assert_eq!(expired, vec![(rec.id, 3)], "held at the bytes received, expired at that instant");
 }
 
 /// THE UPLOAD LISTINGS ANSWER IN IDENTIFIER ORDER (`Store::uploads_of`,

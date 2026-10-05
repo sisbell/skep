@@ -12,7 +12,10 @@ use std::io;
 /// PANICS, naming the obligation it breaks
 /// ([`Stream::finish`](crate::Stream::finish)): an honest caller has ruled
 /// it out before it calls, so an answer for it would be an arm every caller
-/// handles for a state it cannot be in.
+/// handles for a state it cannot be in. Nor is a defect of the store's own:
+/// a byte received marked past its record's length panics too
+/// (`UploadRecords::mark_received`), where a `Length` would tell a client of
+/// bytes it never sent.
 ///
 /// Deliberately not `#[non_exhaustive]`: the daemon's exhaustive match over
 /// it gives each refusal its wire answer, and a new variant breaks that
@@ -20,7 +23,13 @@ use std::io;
 /// outside crate would answer it as whatever that arm answers.
 #[derive(Debug)]
 pub enum BlobError {
-    /// The data directory refused I/O — a write, a sync, a rename, a read.
+    /// The data directory refused I/O — a write, a sync, a rename, a read —
+    /// now or earlier, or holds a partial the store cannot continue from: a
+    /// torn stream refuses every later write and sync of its partial, and a
+    /// stopped log every later append, as `Io` (see
+    /// [`Stream`](crate::Stream), [`Store`](crate::Store)); and a resume over
+    /// a partial shorter than its record's offset answers `Io`, the partial
+    /// refused and never extended ([`Store::resume`](crate::Store::resume)).
     Io(io::Error),
     /// The identifier names no upload of THIS principal's: expired,
     /// retired, another principal's, or never minted — ONE answer for all
@@ -34,8 +43,10 @@ pub enum BlobError {
     /// shape's offset conflict — and carries the record's, the one a resume
     /// continues from (clause (5)).
     Offset { recorded: u64 },
-    /// The bytes would pass the upload's declared length: the record's
-    /// `length` and the offset the bytes would start at (clause (1)).
+    /// The bytes would pass the upload's declared length — an append's
+    /// refusal, nothing written ([`Stream::append`](crate::Stream::append)):
+    /// the record's `length` and the offset the bytes would start at (clause
+    /// (1)).
     Length { length: u64, offset: u64 },
 }
 

@@ -63,6 +63,14 @@ pub struct Window {
 /// disclosed from the Audit view yet itself nullified. `old` and `new` carry
 /// no such flag: they are the addresses the claim names, read out as
 /// recorded, and either may itself be a nullified link.
+///
+/// A plain record: its fields are public and a caller may build one freely,
+/// so none of the relations above is a property of this type. They are
+/// postconditions of the reads that return one: a claim
+/// [`crate::in_claims_on`] returns for `y` has `old = y`, one
+/// [`crate::out_claims_on`] returns for `x` has `new = x`, and each has
+/// `old`/`new` read off its F/G, `home = document_of(claim)` and
+/// `active = is_active(claim)` at the read's snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SupClaim {
     pub claim: Address,

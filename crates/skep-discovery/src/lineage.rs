@@ -47,6 +47,16 @@ impl Endpoint {
             },
         }
     }
+
+    /// The address `c` names at this endpoint — its `old` for
+    /// [`Endpoint::Old`], its `new` for [`Endpoint::New`]: ASN-0125's own
+    /// reading of a claim, with no storage convention in it.
+    fn of(self, c: &SupClaim) -> &Address {
+        match self {
+            Endpoint::Old => &c.old,
+            Endpoint::New => &c.new,
+        }
+    }
 }
 
 /// What one `[K_sup]` tuple says, if it is a claim: its two endpoints under
@@ -60,7 +70,11 @@ impl Endpoint {
 /// home. The schema's remaining clauses — the two endpoints distinct, both
 /// resident — M7 holds at its two `[K_sup]` writers (`assert_sup` checks them,
 /// and `editlink`'s DC guard asks them of a caller's successor through a
-/// predicate M7 keeps crate-private), and this read-out does not restate them.
+/// predicate M7 keeps crate-private). Of those the read restates residence
+/// alone, and only for the endpoint a probe names: [`claims_naming`] keeps a
+/// claim only where that endpoint EQUALS a key it has found resident. The
+/// other endpoint's residence, and the two endpoints' distinctness, it never
+/// asks.
 ///
 /// In an edit-disciplined store (EL-DM — every `[K_sup]` tuple born through
 /// those two writers, which schema-conform their emission) every tuple is
@@ -111,17 +125,26 @@ fn endpoint(e: &Endset) -> Option<Address> {
 /// SOURCES rather than the claim and reads the active slice alone, so it
 /// serves neither the read-out nor the `Audit` view.
 ///
-/// **The resident-key gate is what makes the composition compute the right
-/// function**, not a guard against misuse. `observe` matches by COVERAGE —
-/// a claim's F is `enc([old])`, which covers every address BENEATH `old` —
-/// and coverage coincides with denotation only on the `dom(L)`
-/// prefix-antichain (EL4 + R0a): for a non-link `key` lying under some
-/// endpoint, the read would answer *claims whose endpoint lies ABOVE `key`*
-/// rather than *claims whose endpoint IS `key`*. The gate cuts that off, and
-/// `[]` is then the TRUE answer rather than a fallback — a `[K_sup]` endpoint
-/// is `single_denoted` to a resident link address, so a non-link is no
-/// claim's endpoint. Resident, not active: a nullified link is still resident
-/// and remains a legal probe key.
+/// **Denotation, not coverage, decides.** `observe` matches by COVERAGE — a
+/// claim's F is `enc([old])`, which covers every address BENEATH `old` — so
+/// it hands over every claim whose probed endpoint lies AT OR ABOVE `key`,
+/// and the read-out keeps only those whose probed endpoint EQUALS `key`.
+/// That makes `old = y` (resp. `new = x`) a postcondition this function
+/// establishes in every state M7's fold accepts, not a fact it borrows from
+/// the store. On an edit-disciplined store the equality removes nothing:
+/// every endpoint is a resident link, and coverage coincides with denotation
+/// on the `dom(L)` prefix-antichain (EL4 + R0a). On a store a restored
+/// checkpoint or a replayed journal frame folded, a recognized endpoint can
+/// be any T4-valid address — a document's own among them, which lies above
+/// every link the document homes — and the equality is what keeps such a
+/// tuple from being reported as naming `key`.
+///
+/// **The resident-key gate** ahead of the walk holds the schema's residence
+/// clause for the probed endpoint, which the equality makes `key` itself: a
+/// `[K_sup]` endpoint is a resident link (Df-DISC(ii)), so no claim names a
+/// non-link `key`, and `[]` is the TRUE answer rather than a fallback,
+/// reached without walking the class. Resident, not active: a nullified link
+/// is still resident and remains a legal probe key.
 ///
 /// **Two upstream preconditions are discharged here**, and they arrive on
 /// DIFFERENT channels. `observe` FAULTS on a `ty` that is neither
@@ -132,9 +155,10 @@ fn endpoint(e: &Endset) -> Option<Address> {
 /// indistinguishable from a true answer; [`Endpoint::pattern`] builds the
 /// probe out of `key` itself, one tumbler, so it cannot arise.
 ///
-/// [`claim_at`] reads each observed tuple out as a claim or skips it, and the
-/// home rule is then asked of each claim's own address — past the read's
-/// other filters, as the crate header's predicate contract states.
+/// [`claim_at`] reads each observed tuple out as a claim or skips it, the
+/// equality keeps the claims naming `key`, and the home rule is then asked of
+/// each kept claim's own address — past the read's other filters, as the
+/// crate header's predicate contract states.
 ///
 /// It reads the link store alone, so it takes the store, as [`claim_at`]
 /// beside it and `descriptor`'s `candidates` do: the two public reads are its
@@ -148,12 +172,13 @@ fn claims_naming(
     readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<SupClaim> {
     if l.readlink(key).is_none() {
-        return Vec::new(); // resident-key gate (EL4 + R0a)
+        return Vec::new(); // resident-key gate: the probed endpoint's residence (Df-DISC(ii))
     }
     let sup = l.reserved_type(ShippedType::Supersedes);
-    l.observe(sup, endpoint.pattern(key), view) // the [K_sup] claims whose `endpoint` is `key`
+    l.observe(sup, endpoint.pattern(key), view) // the [K_sup] tuples whose probed slot covers `key`
         .into_iter()
         .filter_map(|t| claim_at(l, t)) // a tuple that is no claim is skipped (Df-DISC(ii))
+        .filter(|c| endpoint.of(c) == key) // DENOTATION, not coverage: the endpoint IS `key`
         // The result-set filter (PUB round 2, lane 3.3, §3), asked of each
         // claim's own address. The endpoints (`old`/`new`) stay as recorded:
         // only the CLAIM's home is asked.
@@ -170,6 +195,15 @@ fn claims_naming(
 /// owes no check that `y` is resident before asking. `view = Active` yields
 /// the operative graph (`succ_o`), `Audit` the full history (`succ_h`);
 /// `Default` behaves as `Active` (M7's reads coerce it).
+///
+/// CLAIMS, and `old = y` EXACTLY: a `[K_sup]` tuple whose F and G do not
+/// each denote one T4-valid address is no claim (ASN-0125 Df-DISC(ii)) and is
+/// not returned, and a claim is returned only where its `old` IS `y` — never
+/// where it merely lies above `y`, as a document's address lies above every
+/// link the document homes. On a store M7's two `[K_sup]` writers alone have
+/// written, neither clause removes anything; both hold of the answer in every
+/// state M7's fold accepts, a restored checkpoint or a replayed journal frame
+/// included.
 ///
 /// The view selects which CLAIMS are disclosed, never which endpoints: each
 /// [`SupClaim`]'s `old`/`new` are the addresses the claim names, read out as
@@ -192,8 +226,9 @@ pub fn in_claims_on<W: DiscoveryWorld>(
 }
 
 /// The claims with `new = x` (ASN-0125 EL11b `out(x)`): asks about G (TO)
-/// under the flipped convention. Same key, view, order, endpoint-disclosure
-/// and reader contract (PUB round 2, lane 3.3, §3) as [`in_claims_on`].
+/// under the flipped convention. Same key, view, order, endpoint-disclosure,
+/// exactness and reader contract (PUB round 2, lane 3.3, §3) as
+/// [`in_claims_on`]: every claim returned has `new` EQUAL to `x`.
 pub fn out_claims_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     x: &Address,

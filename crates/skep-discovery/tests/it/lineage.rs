@@ -1,6 +1,7 @@
 //! §7 — archival supersession lineage: the flipped probes behind the
-//! resident-key gate, the class they restrict to, what one claim says, and
-//! the tuples of that class that are no claim.
+//! resident-key gate, the class they restrict to, what one claim says, the
+//! tuples of that class that are no claim, and the claims that only cover a
+//! key they do not name.
 
 use crate::common;
 
@@ -43,11 +44,14 @@ fn lineage_probes_flipped_slots_with_residence_gate() {
     // separates them follows the retraction.
     assert_eq!(reads.in_claims(&e1, View::Default), vec![expected]);
 
-    // Resident-key gate. The claim's F (or G) is `enc([endpoint])`, which
-    // COVERS every address beneath the endpoint, so a non-link key under e1
-    // or e2 is the one the gate exists for: without it the claim would come
-    // back as naming that key. doc1 and ca(1), above and beside the
-    // endpoints, are no claim's endpoint either, and answer [] all the same.
+    // Resident-key gate. A non-link key under e1 or e2 is COVERED by the
+    // claim's F (or G), `enc([endpoint])`, so `observe` reaches the claim
+    // through it, and it answers [] twice over: the gate refuses the key
+    // before the class is walked, and the read-out's equality would refuse
+    // the claim, whose endpoint is not that key. Where the gate ALONE
+    // decides is a tuple whose endpoint IS a non-link key, which no writer
+    // deposits — the forged-tuple test below. doc1 and ca(1), above and
+    // beside the endpoints, reach no claim at all.
     let under_e1 = a(&[1, 0, 1, 0, 1, 0, 2, 1, 1]);
     let under_e2 = a(&[1, 0, 1, 0, 1, 0, 2, 2, 1]);
     assert!(is_prefix(e1.tumbler(), under_e1.tumbler()));
@@ -444,6 +448,134 @@ fn lineage_skips_a_supersession_tuple_that_is_not_a_claim() {
     }
 
     // Asked once, of the reported claim's home — not of the two tuples skipped.
+    let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
+    let recorder = |d: &Address| {
+        asked.borrow_mut().push(d.clone());
+        true
+    };
+    assert_eq!(
+        in_claims_on(&snap, &e1, View::Active, &recorder),
+        only_the_claim
+    );
+    assert_eq!(asked.take(), vec![doc1()]);
+}
+
+/// §7 — a claim is read out only where the endpoint its probe names IS the
+/// key. `observe` matches by COVERAGE, and a `[K_sup]` tuple naming a
+/// DOCUMENT at both ends — one T4-valid address a side, so the read-out
+/// recognizes it — covers every link that document homes. No M7 writer
+/// deposits one, but M7's fold admits one, as a restored checkpoint or a
+/// replayed journal frame reaches it: both probes reach it beside the
+/// conforming claim and answer the claim alone, where a read-out that took
+/// coverage for denotation would report a claim whose `old` and `new` are
+/// doc1. Beside it, a tuple naming a link address no deposit minted is the
+/// resident-key gate's alone to refuse: its endpoint IS the key it is probed
+/// by, and that key is no resident link. The home rule is asked past both, so
+/// only of the claim reported.
+#[test]
+fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
+    let (claim, _) = store
+        .assert_sup(SYS, &doc1(), &e1, &e2)
+        .expect("assert_sup succeeds");
+    let sup = k
+        .snapshot()
+        .world()
+        .links()
+        .reserved_type(ShippedType::Supersedes)
+        .clone();
+
+    // A tuple naming doc1 at both ends: one T4-valid address a side, so the
+    // read-out recognizes it, and above every link doc1 homes, so it COVERS
+    // both endpoints of the conforming claim.
+    let doc = doc1();
+    let above = enc([&doc]);
+    assert_eq!(
+        above.single_denoted(),
+        Some(doc.tumbler()),
+        "one T4-valid address"
+    );
+    fold_decoded_deposit(&k, &la(8), Link::triple(above.clone(), above, sup.clone()));
+    // And a tuple naming, at both ends, a link address no deposit minted.
+    let unminted = la(99);
+    let named = enc([&unminted]);
+    fold_decoded_deposit(&k, &la(9), Link::triple(named.clone(), named, sup.clone()));
+
+    // The premise: each probe of a conforming endpoint reaches the claim AND
+    // the document-naming tuple, and a probe of the unminted address reaches
+    // the tuple naming it, which no deposit made a resident link.
+    let snap = k.snapshot();
+    let links = snap.world().links();
+    let reached = |pattern: Pattern<'_>| -> Vec<Address> {
+        links
+            .observe(&sup, pattern, View::Active)
+            .into_iter()
+            .map(|t| t.addr)
+            .collect()
+    };
+    let old_probe = [e1.tumbler().clone()];
+    let new_probe = [e2.tumbler().clone()];
+    let unminted_probe = [unminted.tumbler().clone()];
+    assert_eq!(
+        reached(Pattern {
+            from: &old_probe,
+            ..Pattern::default()
+        }),
+        vec![claim.clone(), la(8)]
+    );
+    assert_eq!(
+        reached(Pattern {
+            to: &new_probe,
+            ..Pattern::default()
+        }),
+        vec![claim.clone(), la(8)]
+    );
+    assert_eq!(
+        reached(Pattern {
+            from: &unminted_probe,
+            ..Pattern::default()
+        }),
+        vec![la(8), la(9)]
+    );
+    assert!(links.readlink(&unminted).is_none(), "no deposit minted it");
+
+    let only_the_claim = vec![SupClaim {
+        claim,
+        old: e1.clone(),
+        new: e2.clone(),
+        home: doc1(),
+        active: true,
+    }];
+    let reads = Reads(&k);
+    for view in [View::Active, View::Audit] {
+        assert_eq!(
+            reads.in_claims(&e1, view),
+            only_the_claim,
+            "in_claims, {view:?}"
+        );
+        assert_eq!(
+            reads.out_claims(&e2, view),
+            only_the_claim,
+            "out_claims, {view:?}"
+        );
+        assert_eq!(
+            reads.in_claims(&unminted, view),
+            vec![],
+            "in_claims of the unminted address, {view:?}"
+        );
+        assert_eq!(
+            reads.out_claims(&unminted, view),
+            vec![],
+            "out_claims of the unminted address, {view:?}"
+        );
+    }
+
+    // Asked once, of the reported claim's home — the document-naming tuple,
+    // homed in doc1 too, costs no consult.
     let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
     let recorder = |d: &Address| {
         asked.borrow_mut().push(d.clone());

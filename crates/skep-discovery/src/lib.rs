@@ -191,16 +191,18 @@
 //!   `readlink`, which answers `[]` for a non-link key and stops there;
 //!   otherwise one `observe` of the supersession class — a walk of that
 //!   class's typed slice, one coverage test per claim, and no store walk —
-//!   then one `is_active` per claim it reads out, ahead of the home rule.
+//!   then, per tuple it recognizes as a claim, one `is_active` and one
+//!   comparison of the probed endpoint with the key, ahead of the home rule.
 //! * the pointwise pair — no store walk: one `followlink` ([`project_on`]),
 //!   or one `readlink` and one `is_active`
-//!   ([`addressably_discoverable_from_on`]), plus one read of M5's `#runs`
-//!   for the reading surface, which reads no run — and then, for a read the
-//!   budget admits, those runs and ONE JOIN of the link's coverage against
-//!   them, each test rebuilding both spans' endpoints. The touch test's
-//!   product is held at the square of [`MAX_IMAGE_RUNS`] and the
-//!   projection's at [`MAX_ANSWER_SPANS`], for the reasons those constants
-//!   state.
+//!   ([`addressably_discoverable_from_on`]), plus M5's `#runs` for the
+//!   reading surface — one read for its content runs ([`project_on`]), two
+//!   for its content and link runs ([`addressably_discoverable_from_on`]),
+//!   neither reading a run — and then, for a read the budget admits, those
+//!   runs and ONE JOIN of the link's coverage against them, each test
+//!   rebuilding both spans' endpoints. The touch test's product is held at
+//!   the square of [`MAX_IMAGE_RUNS`] and the projection's at
+//!   [`MAX_ANSWER_SPANS`], for the reasons those constants state.
 //!
 //! A window computes its family's whole candidate set before it cuts,
 //! whatever `n` and wherever the cursor: paging bounds the answer, never the

@@ -2,4 +2,5 @@
 //! of this binary. Nothing but module declarations belongs here.
 
 mod body;
+mod check;
 mod rows;

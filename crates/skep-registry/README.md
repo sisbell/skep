@@ -14,8 +14,9 @@ own doc 1, and an org deposits its endpoint into its node account's doc 1.
 What those two halves share — the daemon that verifies and commits the
 deposits, and the resolver that reads them back — is this crate:
 
-- **The twelve rows** (`rows`, `Row`, `Kind`, `Subtype`, and a held reader
-  per row, `t_binding` … `t_successor_of`) — five kinds on the reserve's
+- **The twelve rows** (`rows`, `row`, `Row`, `Kind`, `Subtype`, a held
+  reader per row, `t_binding` … `t_successor_of`, and `commons_type`, a
+  commons type address at any ordinals) — five kinds on the reserve's
   ordinals `3.55`–`3.59` of the ghost home document's type subspace and
   seven subtype rows nested under their kinds by prefix, at the addresses
   commons-map pins (REG-1.14, REG-1.15, REG-1.20, REG-1.24): the binding
@@ -27,8 +28,8 @@ deposits, and the resolver that reads them back — is this crate:
   whether a deposit rides its address (REG-1.18: a kind that reads more than
   one way carries none on its bare ordinal) and the `type` string its body
   carries where it has one.
-- **The two bodies** (`Binding`, `Endpoint`, `parse`, `encode`, `Record`,
-  `Refusal`) — `{"type":"binding","prefix":…}` and
+- **The two bodies** (`Binding`, `Endpoint`, `Body`, `BodyKind`, `parse`,
+  `encode`, `Record`, `Refusal`) — `{"type":"binding","prefix":…}` and
   `{"type":"endpoint","origins":[…]}`, each with `replaces` where a later
   record names the one it replaces and `sig` where signed, under THE
   CANONICAL RULE: `parse(b)` answers a body only where `b ==

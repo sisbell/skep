@@ -1,8 +1,9 @@
 //! THE VECTOR SET at this parser (`tests/vectors/records.json`): every
 //! vector meets the verdict the set pins — a record, or its refusal's cause
 //! — every admitted body is its own re-encoding and a fixpoint, and the set
-//! pins the cap this crate does, so the resolver's parser reads the pins
-//! from the set and not from a second transcription.
+//! pins the cap this crate does, so a parser another reader of the bodies
+//! builds reads the pins from the set and not from a second transcription.
+//! (`skep-resolve` builds none: it calls this crate's `parse`.)
 
 use std::path::Path;
 
@@ -27,9 +28,14 @@ fn bytes_of(vector: &Value) -> Vec<u8> {
         .collect()
 }
 
+/// A vector's `kind`: the kind the caller names, standing in for the link's
+/// type slot.
 fn kind_of(vector: &Value) -> BodyKind {
-    BodyKind::of_type_value(vector["kind"].as_str().expect("a kind"))
-        .unwrap_or_else(|| panic!("{}: an unknown kind", vector["name"]))
+    match vector["kind"].as_str().expect("a kind") {
+        "binding" => BodyKind::Binding,
+        "endpoint" => BodyKind::Endpoint,
+        _ => panic!("{}: an unknown kind", vector["name"]),
+    }
 }
 
 /// Every vector, one verdict; the admitted ones read from both sides of the

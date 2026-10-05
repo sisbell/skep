@@ -23,11 +23,14 @@
 //! Every address is the ghost home document's subspace-3 element —
 //! `1.1.0.1.0.1 · 0 · 3 · <ordinals>`, the commons' type home, where
 //! nothing is ever minted — spelled here from [`COMMONS_TYPE_PREFIX`] and
-//! nowhere else in this crate. The engine's ledger reads these pins and
-//! holds its own `successor-of` equal to [`t_successor_of`]; the daemon's
-//! deposit class and its write-path classes spell `3.55`, `3.56` and the
-//! three audit-view kinds a second time, each held equal to a pin here by
-//! the suite that can see both.
+//! nowhere else in this crate. The engine's ledger reads these pins, and
+//! the daemon's write-path classes read them through it. Two spellings in
+//! shipped code stand outside this table, each held equal to its pin by the
+//! suite that can see both: the ledger's own `successor-of`, held equal to
+//! [`t_successor_of`] by the ledger's tests, and the insert door's deposit
+//! class (`skep-arrangement`'s `DEPOSIT_CLASS_ORDINALS`), whose `55` and
+//! `56` the daemon's suite (`skepd/tests/it/deposit_class.rs`) holds equal
+//! to [`t_binding`] and [`t_endpoint`].
 
 use std::ops::RangeInclusive;
 use std::sync::LazyLock;
@@ -151,18 +154,23 @@ pub struct Row {
 
 /// The commons' type subspace of the ghost home document, `1.1.0.1.0.1 · 0
 /// · 3` — the eight components ahead of a row's ordinals, spelled once.
-pub const COMMONS_TYPE_PREFIX: [u32; 8] = [1, 1, 0, 1, 0, 1, 0, 3];
+pub(crate) const COMMONS_TYPE_PREFIX: [u32; 8] = [1, 1, 0, 1, 0, 1, 0, 3];
 
 /// The reserve's five ordinals the kinds take, `3.55`–`3.59` as the ledger
 /// stands (REG-1.24, REG-1.25): the count arm's bound.
-pub const RESERVE: RangeInclusive<u32> = 55..=59;
+pub(crate) const RESERVE: RangeInclusive<u32> = 55..=59;
 
-/// A commons type address: [`COMMONS_TYPE_PREFIX`] then `ordinals` — one
-/// for a kind's row, the kind's then the subtype's for a subtype row.
+/// A commons type address: the commons' type subspace `1.1.0.1.0.1.0.3`
+/// then `ordinals` — one for a kind's row, the kind's then the subtype's for
+/// a subtype row.
 ///
 /// PANICS on an empty `ordinals` or on a zero among them: a row is an
 /// element at a positive ordinal, and the table below spells none other.
-/// Public so a suite can spell a row at an ordinal the table does not hold.
+/// Public for the readers that name a commons type the table does not hold:
+/// `skep-resolve`, which builds with it the credential types `3.1`–`3.3`
+/// its mirror's fold tells a stored link's kind by, and the suites that
+/// spell a row at an ordinal off the table to prove the seeding check's
+/// arms.
 pub fn commons_type(ordinals: &[u32]) -> Address {
     assert!(!ordinals.is_empty(), "a commons row names at least one ordinal");
     let comps = COMMONS_TYPE_PREFIX.iter().chain(ordinals).map(|&c| Nat::from(c));
@@ -473,6 +481,12 @@ mod tests {
                 (None, None),
             ]
         );
+    }
+
+    /// The count arm's bound: the reserve's five ordinals (REG-1.25).
+    #[test]
+    fn the_reserve_is_the_five_ordinals_the_kinds_take() {
+        assert_eq!(RESERVE, 55..=59);
     }
 
     #[test]

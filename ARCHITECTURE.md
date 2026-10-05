@@ -354,25 +354,29 @@ Rules that hold across its files:
 
 - **One table, one address apiece.** A row's address is spelled once, in
   `rows.rs`'s table, from the commons type prefix and the row's ordinals;
-  the engine's ledger reads the rows through this crate's pins and holds
-  its own `successor-of` equal to the table's, and the daemon's deposit
-  class and write-path classes, which spell a row a second time below
-  this crate, are held equal to it by the daemon's suite.
+  the engine's ledger reads the rows through this crate's pins, and the
+  daemon's write-path classes read them through the ledger. Shipped code
+  spells a row a second time in two places, each held equal to the
+  table's: the ledger's own `successor-of`, by the ledger's tests, and the
+  insert door's deposit class in `skep-arrangement`, which spells the
+  binding `3.55` and the endpoint `3.56`, by the daemon's suite
+  (`skepd/tests/it/deposit_class.rs`).
 - **The canonical rule is the parser.** `body::parse` answers a record
   only where the bytes are the encoder's re-encoding of what they spell,
   `sig` included; it checks the FORM of every member and never a member's
   admissibility, and a body whose `type` is not the kind the caller names
   is no record of that kind. The vector set under `tests/vectors/` is
-  what every other parser of the bodies — a resolver's — is held to; a
-  parser is never derived from another parser.
+  what every parser of the bodies is held to — this crate's, and any
+  other a reader of the bodies builds (`skep-resolve` builds none: it
+  calls `body::parse`); a parser is never derived from another parser.
 - **The check runs on lists.** `seeding_check` takes the registry's rows
   and the foreign rows as lists, so every arm is proved on a list a suite
   builds; the shipped table passes, and the daemon runs the check over
   the whole domain it can see ahead of every genesis.
 
 Its integration suite is one binary, `tests/it/`: `rows` (the table from
-outside the crate and the three arms on mutated lists) and `body` (the
-vector set at this parser, the examples' one canonical form).
+outside the crate), `check` (the three arms on mutated lists) and `body`
+(the vector set at this parser, the examples' one canonical form).
 
 ## The resolver, `skep-resolve`
 

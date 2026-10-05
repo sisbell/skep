@@ -93,7 +93,7 @@ impl fmt::Display for SeedingRefusal {
 
 impl std::error::Error for SeedingRefusal {}
 
-/// THE CHECK: `rows`, the registry's rows as a list — [`crate::rows`] on a
+/// THE CHECK: `rows`, the registry's rows as a list — [`crate::rows()`] on a
 /// shipped build, a list a suite builds to prove an arm — against `foreign`,
 /// every other commons row the hand can see. `Ok` is a genesis that may
 /// complete; `Err` names the first arm to fire.

@@ -36,15 +36,13 @@
 //!
 //! The other five body kinds — the takedown record's base reading, the
 //! disavowal, the two ground records, the org-chosen succession policy —
-//! have rows ([`crate::rows`]) and no parser here: their schemas are pinned
-//! where their own rules land.
+//! have rows ([`crate::rows()`]) and no parser here: their schemas are
+//! pinned where their own rules land.
 
 use std::fmt::Write as _;
 
 use serde_json::Value;
 use skep_address::{validate, Nat, Tumbler};
-
-use crate::rows::Kind;
 
 /// The most bytes a registry record body may carry, `sig` included, a body
 /// past it refused ([`Refusal::PastCap`]) before any parse — 16 KiB, an
@@ -56,7 +54,9 @@ use crate::rows::Kind;
 pub const MAX_REGISTRY_RECORD_BYTES: usize = 16 * 1024;
 
 /// The two kinds whose bodies this crate parses — the kind the caller names
-/// for a parse, read off the link's type slot.
+/// for a parse, read off the link's type slot (REG-1.86 (a)) and never off
+/// the body: the body's own `type` member is what [`parse`] holds AGAINST
+/// the kind named, so nothing here maps a `type` string to a kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BodyKind {
     Binding,
@@ -65,28 +65,11 @@ pub enum BodyKind {
 
 impl BodyKind {
     /// The `type` member's string (REG-1.86 (a)): the kind's name
-    /// lowercased.
-    pub fn type_value(self) -> &'static str {
+    /// lowercased — what [`encode`] writes and [`parse`] holds the member to.
+    fn type_value(self) -> &'static str {
         match self {
             BodyKind::Binding => "binding",
             BodyKind::Endpoint => "endpoint",
-        }
-    }
-
-    /// The row's kind.
-    pub fn kind(self) -> Kind {
-        match self {
-            BodyKind::Binding => Kind::Binding,
-            BodyKind::Endpoint => Kind::Endpoint,
-        }
-    }
-
-    /// The kind a `type` string names, where it names one of the two.
-    pub fn of_type_value(s: &str) -> Option<BodyKind> {
-        match s {
-            "binding" => Some(BodyKind::Binding),
-            "endpoint" => Some(BodyKind::Endpoint),
-            _ => None,
         }
     }
 }

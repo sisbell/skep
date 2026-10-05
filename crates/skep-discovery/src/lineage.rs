@@ -49,55 +49,53 @@ impl Endpoint {
     }
 }
 
-/// What one resident claim says: its two endpoints under the flipped
-/// convention, its home attribution (EL8b), and its own activity.
+/// What one `[K_sup]` tuple says, if it is a claim: its two endpoints under
+/// the flipped convention, its home attribution (EL8b), and its own activity
+/// — or `None` for a tuple that is not one.
 ///
-/// **Schema-conformance reliance (Ŝ^Σ = S^Σ):** the endpoints are read out
-/// with NO per-claim conformance filter, faithful because the assembled
-/// system is edit-disciplined (EL-DM — every `[K_sup]` claim is born through
-/// M7's `assert_sup`/`editlink`, which schema-conform their emission). The
-/// reliance is semantic only, never safety-bearing, and it rests on BOTH
-/// clauses of M7's `[K_sup]` sole-writer fences, since the read-out takes
-/// something from each: every stored tuple carries unit-depth single-address
-/// F and G, so `Endset::single_denoted` answers rather than faulting; and
-/// each denotes a RESIDENT link — `assert_sup` checks residence outright, the
-/// `editlink` guard requires it of a caller-supplied successor, and the two
-/// open deposit paths refuse the class — so the tumbler it denotes is a store
-/// key minted by M3, hence T4-valid, and the address lift cannot fault
-/// either.
+/// RECOGNIZED BEFORE IT IS REPORTED. ASN-0125's archival read ranges over the
+/// schema-conforming claims Ŝ^Σ (Df-DISC(ii)), and a tuple is read out only
+/// where the part of that schema a [`SupClaim`] is built from holds: its F
+/// and its G each denote ONE address, T4-valid, and its own address has a
+/// home. The schema's remaining clauses — the two endpoints distinct, both
+/// resident — M7 holds at its two `[K_sup]` writers (`assert_sup` checks them,
+/// and `editlink`'s DC guard asks them of a caller's successor through a
+/// predicate M7 keeps crate-private), and this read-out does not restate them.
+///
+/// In an edit-disciplined store (EL-DM — every `[K_sup]` tuple born through
+/// those two writers, which schema-conform their emission) every tuple is
+/// recognized, Ŝ^Σ = S^Σ, and nothing is skipped. The recognition is what
+/// keeps the read TOTAL over every state M7's fold accepts, which is wider:
+/// the fold builds the supersession adjacency off every address a slot
+/// denotes, so it admits a slot naming two addresses, or a tumbler that is no
+/// address; and a checkpoint M2 restores, or a frame it replays, decodes
+/// through serde, which checks a link's arity and nothing of this schema.
+/// Such a tuple is no claim of Ŝ^Σ, so skipping it IS the read's answer —
+/// where treating it as one would fail every probe that reaches it, for as
+/// long as it is stored.
 ///
 /// `t` is a tuple M7's `observe` handed over: its address is a key of the
-/// supersession class's typed slice, so resident in `l`, and its slots are the
-/// claim's stored F and G — read once, by `observe`, and not again here.
-fn claim_at(l: &LinkState, t: Tuple) -> SupClaim {
+/// supersession class's typed slice, and its slots are the tuple's stored F
+/// and G — read once, by `observe`, and not again here.
+fn claim_at(l: &LinkState, t: Tuple) -> Option<SupClaim> {
     let Tuple { addr, from, to } = t;
-    let home = home_of(&addr); // EL8b
+    let old = endpoint(&from)?;
+    let new = endpoint(&to)?;
+    let home = home_of(&addr)?; // EL8b
     let active = l.is_active(&addr);
-    SupClaim {
-        old: endpoint(
-            &from,
-            "a [K_sup] F denotes exactly one address (Df-DISC(ii), held by M7's sole-writer fences)",
-        ),
-        new: endpoint(
-            &to,
-            "a [K_sup] G denotes exactly one address (Df-DISC(ii), held by M7's sole-writer fences)",
-        ),
+    Some(SupClaim {
+        claim: addr,
+        old,
+        new,
         home,
         active,
-        claim: addr,
-    }
+    })
 }
 
-/// The single address a claim endpoint denotes. `fence` is the expect
-/// message, naming which of M7's `[K_sup]` sole-writer fences — F or G — this
-/// read-out rests on.
-fn endpoint(e: &Endset, fence: &'static str) -> Address {
-    let t = e.single_denoted().expect(fence).clone();
-    validate(t).expect(
-        "a [K_sup] endpoint denotes a RESIDENT link — assert_sup checks residence, editlink's \
-         DC guard requires it of a caller's successor, and makelink/emit refuse the class — so \
-         it is a minted store key and T4-valid",
-    )
+/// The one T4-valid address an endpoint slot denotes (Df-DISC(ii)), or `None`
+/// where it denotes several, none, or a tumbler that is no address.
+fn endpoint(e: &Endset) -> Option<Address> {
+    validate(e.single_denoted()?.clone()).ok()
 }
 
 /// The shared claim enumeration: the `[K_sup]` claims whose `endpoint` is
@@ -134,8 +132,9 @@ fn endpoint(e: &Endset, fence: &'static str) -> Address {
 /// indistinguishable from a true answer; [`Endpoint::pattern`] builds the
 /// probe out of `key` itself, one tumbler, so it cannot arise.
 ///
-/// The home rule is asked of each claim's own address, and only a claim it
-/// admits is read out by [`claim_at`].
+/// [`claim_at`] reads each observed tuple out as a claim or skips it, and the
+/// home rule is then asked of each claim's own address — past the read's
+/// other filters, as the crate header's predicate contract states.
 ///
 /// It reads the link store alone, so it takes the store, as [`claim_at`]
 /// beside it and `descriptor`'s `candidates` do: the two public reads are its
@@ -154,11 +153,11 @@ fn claims_on(
     let sup = l.reserved_type(ShippedType::Supersedes);
     l.observe(sup, endpoint.pattern(key), view) // the [K_sup] claims whose `endpoint` is `key`
         .into_iter()
-        // The result-set filter (PUB round 2, lane 3.3, §3), asked of the
-        // claim's own address before it is read out. The endpoints
-        // (`old`/`new`) stay as recorded: only the CLAIM's home is asked.
-        .filter(|t| home_readable(readable, &t.addr))
-        .map(|t| claim_at(l, t))
+        .filter_map(|t| claim_at(l, t)) // a tuple that is no claim is skipped (Df-DISC(ii))
+        // The result-set filter (PUB round 2, lane 3.3, §3), asked of each
+        // claim's own address. The endpoints (`old`/`new`) stay as recorded:
+        // only the CLAIM's home is asked.
+        .filter(|c| home_readable(readable, &c.claim))
         .collect()
 }
 

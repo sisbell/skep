@@ -1,14 +1,19 @@
 //! §7 — archival supersession lineage: the flipped probes behind the
-//! resident-key gate, the class they restrict to, and what one claim says.
+//! resident-key gate, the class they restrict to, what one claim says, and
+//! the tuples of that class that are no claim.
 
 use crate::common;
 
+use std::cell::RefCell;
+
 use common::*;
-use skep_address::{is_prefix, Address};
-use skep_discovery::{SupClaim, FROM, TO};
-use skep_kernel::TxnError;
+use serde::Serialize;
+use skep_address::{is_prefix, subtree_of, validate, Address, Tumbler};
+use skep_discovery::{in_claims_on, SupClaim, FROM, TO};
+use skep_kernel::{Kernel, TxnError};
 use skep_links::{
-    enc, EditLinkError, HasLinks, Link, LinkWriter, MakeLinkError, ShippedType, SlotArg, View,
+    enc, EditLinkError, Endset, HasLinks, Link, LinkRec, LinkWriter, MakeLinkError, Pattern,
+    ShippedType, SlotArg, View,
 };
 
 #[test]
@@ -247,16 +252,19 @@ fn lineage_reads_out_supersession_claims_alone_among_the_links_naming_the_key() 
     assert_eq!(reads.out_claims(&e2, View::Active), only_the_claim);
 }
 
-/// §7 — the lineage read-out reports a claim's endpoints with NO per-claim
-/// conformance filter, and cannot fault because every stored `[K_sup]` tuple
-/// carries unit-depth single-address F and G. That is a fence on the WRITE
-/// surface, held at sites M8 cannot see and cannot ask about, so what M8 can
-/// do is pin its own reliance: the two routes by which a caller-shaped tuple
+/// §7 — the lineage read-out reports a `[K_sup]` tuple only as a claim it
+/// recognizes, and what makes it report EVERY claim a writer deposits is a
+/// fence on the WRITE surface: every tuple a writer deposits carries
+/// unit-depth single-address F and G, so Ŝ^Σ = S^Σ and the recognition skips
+/// nothing. That fence is held at sites M8 cannot see and cannot ask about,
+/// so what M8 can do is pin it: the two routes by which a caller-shaped tuple
 /// could reach the `[K_sup]` class are closed, in the build where a change to
-/// either would surface as this test rather than as a panic in `claim_at`.
+/// either would surface as this test rather than as a deposit the lineage
+/// read then skips as no claim.
 ///
 /// The open route is `editlink`, whose successor is the caller's: its DC
-/// guard is the very predicate the read-out applies, so a successor with a
+/// guard asks the whole schema the read-out recognizes a claim by, with the
+/// residence and distinctness clauses beside it, so a successor with a
 /// two-address F is refused rather than deposited. `makelink` refuses the
 /// class outright.
 #[test]
@@ -330,4 +338,145 @@ fn lineage_endpoints_rest_on_a_fence_the_write_surface_keeps() {
             active: true,
         }]
     );
+}
+
+/// §7 — the read-out RECOGNIZES a claim before it reports one: a `[K_sup]`
+/// tuple whose endpoint is not one address is no claim of the
+/// schema-conforming class ASN-0125's read ranges over, and is skipped, never
+/// a fault. No M7 writer deposits one — the fence test above pins that — but
+/// M7's fold admits one, and a restored checkpoint or a replayed journal frame
+/// reaches the fold through serde, which checks a link's arity and nothing of
+/// the schema. So two such tuples are folded here the way a decoded frame
+/// would be, beside one conforming claim: one whose F denotes TWO addresses,
+/// and one whose G denotes doc1's link-subspace PREFIX — a tumbler with a
+/// trailing zero, so no address, whose subtree covers every link of doc1.
+/// Both probes reach all three tuples under both views, and answer the claim
+/// alone; a read-out that took every tuple for a claim would fail each of
+/// these probes for as long as the tuples are stored. The home rule is asked
+/// past the recognition, so only of the claim reported.
+#[test]
+fn lineage_skips_a_supersession_tuple_that_is_not_a_claim() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
+    let (claim, _) = store
+        .assert_sup(SYS, &doc1(), &e1, &e2)
+        .expect("assert_sup succeeds");
+    let sup = k
+        .snapshot()
+        .world()
+        .links()
+        .reserved_type(ShippedType::Supersedes)
+        .clone();
+
+    let two = enc([&e1, &e2]);
+    assert!(two.single_denoted().is_none(), "F denotes two addresses");
+    fold_deposit_frame(&k, &la(8), Link::triple(two, enc([&e2]), sup.clone()));
+    let prefix = t(&[1, 0, 1, 0, 1, 0]);
+    assert!(
+        validate(prefix.clone()).is_err(),
+        "a trailing zero is no address"
+    );
+    let no_address = Endset::from_spans([subtree_of(&prefix)]);
+    assert_eq!(
+        no_address.single_denoted(),
+        Some(&prefix),
+        "G denotes it alone"
+    );
+    fold_deposit_frame(
+        &k,
+        &la(9),
+        Link::triple(enc([&e1]), no_address, sup.clone()),
+    );
+
+    // The premise: each probe reaches the claim AND both tuples, so the
+    // answers below are the recognition's and not the probes'.
+    let snap = k.snapshot();
+    let old_key = [e1.tumbler().clone()];
+    let new_key = [e2.tumbler().clone()];
+    for view in [View::Active, View::Audit] {
+        for pattern in [
+            Pattern {
+                from: &old_key,
+                ..Pattern::default()
+            },
+            Pattern {
+                to: &new_key,
+                ..Pattern::default()
+            },
+        ] {
+            let reached: Vec<Address> = snap
+                .world()
+                .links()
+                .observe(&sup, pattern, view)
+                .into_iter()
+                .map(|t| t.addr)
+                .collect();
+            assert_eq!(
+                reached,
+                vec![claim.clone(), la(8), la(9)],
+                "{pattern:?} under {view:?}"
+            );
+        }
+    }
+
+    let only_the_claim = vec![SupClaim {
+        claim,
+        old: e1.clone(),
+        new: e2.clone(),
+        home: doc1(),
+        active: true,
+    }];
+    let reads = Reads(&k);
+    for view in [View::Active, View::Audit] {
+        assert_eq!(
+            reads.in_claims(&e1, view),
+            only_the_claim,
+            "in_claims, {view:?}"
+        );
+        assert_eq!(
+            reads.out_claims(&e2, view),
+            only_the_claim,
+            "out_claims, {view:?}"
+        );
+    }
+
+    // Asked once, of the reported claim's home — not of the two tuples skipped.
+    let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
+    let recorder = |d: &Address| {
+        asked.borrow_mut().push(d.clone());
+        true
+    };
+    assert_eq!(
+        in_claims_on(&snap, &e1, View::Active, &recorder),
+        only_the_claim
+    );
+    assert_eq!(asked.take(), vec![doc1()]);
+}
+
+/// Fold one `LinkRec::Deposit` of `value` at `addr` into the kernel's world
+/// the way a restored checkpoint or a replayed journal frame reaches M7's
+/// fold: decoded from M2's own bincode bytes, with none of M7's write gates
+/// in between. `LinkRec` is `#[non_exhaustive]`, so no crate but M7 builds
+/// one; its bytes are written here from a local mirror of its one variant —
+/// the same variant index and fields, so the same encoding — and decoded
+/// back as the real record.
+fn fold_deposit_frame(k: &Kernel<World>, addr: &Address, value: Link) {
+    #[derive(Serialize)]
+    enum Frame {
+        Deposit { addr: Tumbler, value: Link },
+    }
+    let frame = Frame::Deposit {
+        addr: addr.tumbler().clone(),
+        value,
+    };
+    let bytes = bincode::serialize(&frame).expect("a deposit frame serializes");
+    let rec: LinkRec = bincode::deserialize(&bytes).expect("M2's bytes decode as a LinkRec");
+    k.transact(&[], |staging| {
+        staging.push(Record::Links(rec));
+        Ok::<(), ()>(())
+    })
+    .expect("the decoded deposit folds");
 }

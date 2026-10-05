@@ -7,11 +7,22 @@
 
 use skep_address::{document_of, Address};
 
-/// `home(a)`: the origin Document of a link address — M1's `document_of`
-/// projection (EL8b), spelled once so the descriptor family's home filter and
-/// the lineage read-out attribute a link the same way.
-pub(crate) fn home_of(a: &Address) -> Address {
-    document_of(a).expect("a link address has zeros = 3, so its origin Document exists")
+/// `home(a)`: the origin Document of `a` — M1's `document_of` projection
+/// (EL8b), spelled once so the descriptor family's home filter, the lineage
+/// read-out and the home rule attribute an address the same way. `None` for
+/// an address with no document field — a node or an account — which lives
+/// under no home.
+///
+/// Every LINK has a home, so on a key of the link store this is always
+/// `Some`; the partiality stays in the type all the same, because the
+/// pointwise pair hands the home rule a CALLER's address before anything
+/// establishes that it is a link, and a projection that assumed one would
+/// fault on the first node or account address a request names. So no read
+/// reaches a home that is not there: each caller states what an absent home
+/// means where it asks — the home rule admits the address, the residence test
+/// places it at no home, and the lineage read-out reports no claim.
+pub(crate) fn home_of(a: &Address) -> Option<Address> {
+    document_of(a)
 }
 
 /// THE HOME RULE (PUB-6.13): may the reader read `a`'s home? The home
@@ -29,5 +40,5 @@ pub(crate) fn home_of(a: &Address) -> Address {
 /// about it stands. Every link has a home, so on a result set this is
 /// exactly `readable(home(a))`.
 pub(crate) fn home_readable(readable: &dyn Fn(&Address) -> bool, a: &Address) -> bool {
-    document_of(a).is_none_or(|home| readable(&home))
+    home_of(a).is_none_or(|home| readable(&home))
 }

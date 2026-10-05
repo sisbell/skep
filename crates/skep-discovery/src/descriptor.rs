@@ -129,14 +129,16 @@ impl FourSet {
     /// (CN-STAB: a reverse-orphaned link still satisfies a home-bounded
     /// query); and the zero admits none, which is FL-EMP for the home slot.
     ///
-    /// Private because it reads `home(a)` unconditionally, which every LINK
-    /// address has: the addresses reaching it come off M7's `match_links` and
-    /// are keys of the link store by construction.
+    /// Total: an address with no home — a node or an account — is at no home
+    /// a `Spans` names, even one whose coverage reaches the address itself.
+    /// Every address reaching it comes off M7's `match_links` and so is a link,
+    /// which has a home; the test answers for the projection's partiality
+    /// rather than assuming it away.
     fn at_home(&self, a: &Address) -> bool {
         match &self.home {
             SlotSpec::Any => true,
             SlotSpec::Empty => false,
-            SlotSpec::Spans(h) => h.covers(home_of(a).tumbler()),
+            SlotSpec::Spans(h) => home_of(a).is_some_and(|home| h.covers(home.tumbler())),
         }
     }
 }
@@ -318,5 +320,34 @@ mod tests {
             q.link_constraints(),
             Some(vec![(FROM, &wide), (TO, &narrow)])
         );
+    }
+
+    /// The residence test is TOTAL on an address with no home — a node or an
+    /// account — which `Any` admits and a `Spans` places at no home, even the
+    /// account's own subtree, which COVERS the account address: the slot is
+    /// matched against `home(a)`, never against `a`. A residence test that
+    /// read a home it assumed would fault here, and one that matched `a`
+    /// itself would admit the account.
+    #[test]
+    fn at_home_places_an_address_with_no_home_at_no_home() {
+        let account = a(&[1, 0, 1]);
+        let under_account = FourSet {
+            home: SlotSpec::Spans(enc([&account])),
+            ..FourSet::any()
+        };
+        assert!(
+            under_account.at_home(&a(&[1, 0, 1, 0, 1, 0, 2, 1])),
+            "a link homed under it"
+        );
+        for homeless in [a(&[1]), account] {
+            assert!(
+                FourSet::any().at_home(&homeless),
+                "{homeless:?}: the unit admits it"
+            );
+            assert!(
+                !under_account.at_home(&homeless),
+                "{homeless:?}: it has no home"
+            );
+        }
     }
 }

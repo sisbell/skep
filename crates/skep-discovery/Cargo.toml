@@ -34,6 +34,10 @@ skep-arrangement = { path = "../skep-arrangement" }
 skep-links = { path = "../skep-links" }
 
 [dev-dependencies]
+# M2's actual wire format: the lineage suite decodes a supersession deposit
+# from bincode bytes, the way a restored checkpoint or a replayed journal
+# frame reaches M7's fold, to place a tuple no M7 writer deposits.
+bincode.workspace = true
 # The assembled test world derives Serialize/Deserialize (M2's WorldState bound).
 serde.workspace = true
 # Lets the test world drive M5's INSERT so the discovery queries have arranged

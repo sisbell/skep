@@ -1321,6 +1321,7 @@ dependencies = [
 name = "skep-discovery"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "im",
  "num-traits",
  "serde",

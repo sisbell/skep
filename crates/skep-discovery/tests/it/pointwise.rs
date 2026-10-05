@@ -297,18 +297,25 @@ fn the_pointwise_reads_apply_the_absence_rule_after_the_document_and_before_resi
         addressably_discoverable_from_on(&snap, &doc2_link, &unregistered_doc(), &cannot_read_doc2),
         Err(QueryError::DocNotRegistered)
     );
-    // An ACCOUNT address has no home: nothing to withhold, even from a reader
-    // who may read nothing, and the store's own answer stands.
-    let account = a(&[1, 0, 1]);
+    // A NODE or an ACCOUNT address has no home: nothing to withhold, even
+    // from a reader who may read nothing, and the store's own answer stands —
+    // under every reader, since a read that took the caller's `a` for a link
+    // and asked its home would fault here rather than answer.
     let no_one = |_: &Address| false;
-    assert_eq!(
-        project_on(&snap, &account, FROM, &doc1(), &no_one),
-        Err(QueryError::NotALink)
-    );
-    assert_eq!(
-        addressably_discoverable_from_on(&snap, &account, &doc1(), &no_one),
-        Err(QueryError::NotALink)
-    );
+    for homeless in [a(&[1]), a(&[1, 0, 1])] {
+        for reader in [&every_home as &dyn Fn(&Address) -> bool, &no_one] {
+            assert_eq!(
+                project_on(&snap, &homeless, FROM, &doc1(), reader),
+                Err(QueryError::NotALink),
+                "project, {homeless:?}"
+            );
+            assert_eq!(
+                addressably_discoverable_from_on(&snap, &homeless, &doc1(), reader),
+                Err(QueryError::NotALink),
+                "addressably_discoverable_from, {homeless:?}"
+            );
+        }
+    }
     // AHEAD of the resident-link read, literally: the predicate is asked the
     // home of an address that names nothing, before anything establishes that
     // it does. A rule moved just behind the read answers every case above

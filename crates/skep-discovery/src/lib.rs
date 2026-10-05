@@ -191,7 +191,7 @@
 //!   `readlink`, which answers `[]` for a non-link key and stops there;
 //!   otherwise one `observe` of the supersession class — a walk of that
 //!   class's typed slice, one coverage test per claim, and no store walk —
-//!   then one `is_active` per claim the home rule admits.
+//!   then one `is_active` per claim it reads out, ahead of the home rule.
 //! * the pointwise pair — no store walk: one `followlink` ([`project_on`]),
 //!   or one `readlink` and one `is_active`
 //!   ([`addressably_discoverable_from_on`]), plus one read of M5's `#runs`

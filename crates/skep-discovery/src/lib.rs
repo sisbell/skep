@@ -162,7 +162,9 @@
 //! states `stab` and `match_links` as scans of the store in v1). A caller
 //! that admission-controls these reads — the daemon's scan pool does —
 //! prices them from this list, and a change to any line is a change to this
-//! interface.
+//! interface. The scan pool links this section by its heading
+//! (`skep_discovery#cost`), an anchor no build checks, so the heading is part
+//! of the interface as well, and `tests/it/consumer.rs` holds it.
 //!
 //! * [`image_on`] — no link-store read; one read of M5's `#runs` for the
 //!   surface's content, which reads no run, and then one M5 `resolve` per
@@ -223,8 +225,12 @@
 //! lock-key space tag; it contributes nothing to the assembled `World` and
 //! names neither `World` nor `Record` — a pure consumer of
 //! [`DiscoveryWorld`], generic over `W` (Engine Composition Contract).
-//! Consumed only by M10, which pins ONE snapshot per request, hands it to
-//! every read, and reports its position as `as_of`.
+//! M10 is the one production caller of its reads: it pins ONE snapshot per
+//! request, hands it to every read, and reports its position as `as_of`.
+//! Three more crates depend on this one — skepd's codec and the conformance
+//! harness's translator name its request and answer values directly, and
+//! skep-engine's cross-store lifecycle test calls [`findlinks_v_on`], as a
+//! dev-dependency — so a change to its surface reaches four crates.
 //!
 //! Every read is a free function over a borrowed `&Snapshot<W>` — the dialect
 //! M1, M4 and M5 use for pure reads over borrowed state, and the one that
@@ -237,8 +243,10 @@
 
 #![forbid(unsafe_code)]
 
-// The modules in dependency order: each names, in code, only modules above
-// it, which `tests/it/tidy.rs` checks.
+// The modules in dependency order, each with a line saying what it holds.
+// Each names, in code, only modules above it, and an item by its home
+// module, never through the re-exports below; `tests/it/tidy.rs` checks
+// that, and that every file under `src/` is declared here with its line.
 
 // The two budgets and their argument: the run budget with its square, and
 // the answer's span budget.

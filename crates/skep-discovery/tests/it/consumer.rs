@@ -1,8 +1,9 @@
 //! The promises M8 makes to a consumer rather than to itself, checked from
 //! outside the crate: reads that answer off the snapshot they are handed,
 //! one named world bound, the standard traits its values carry, a request and
-//! answer vocabulary reachable through this crate alone, and rejection enums
-//! that stay exhaustively matchable.
+//! answer vocabulary reachable through this crate alone, rejection enums that
+//! stay exhaustively matchable, and the `## Cost` heading the daemon's scan
+//! pool links by its anchor.
 
 use crate::common;
 
@@ -260,4 +261,23 @@ fn every_refusal_is_matchable_without_a_catch_all() {
             "{e:?} renders {e}"
         );
     }
+}
+
+/// The daemon's scan pool prices the reads it admits from the crate doc's
+/// `## Cost` section and links that section by its heading's anchor
+/// (`skep_discovery#cost`, in skepd's `src/server/scan.rs`). No build checks
+/// an anchor — renamed, the heading leaves that link pointing at the crate's
+/// front page and nothing fails — so the heading is part of this crate's
+/// interface, and this holds it: a change to it changes skepd's link with it.
+#[test]
+fn the_cost_statement_keeps_the_heading_the_scan_pool_links() {
+    let lib = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
+    )
+    .expect("src/lib.rs is readable");
+    assert!(
+        lib.lines().any(|line| line == "//! ## Cost"),
+        "the crate doc's `## Cost` heading is the anchor skepd's scan pool links \
+         (`skep_discovery#cost`); a renamed heading moves that link too"
+    );
 }

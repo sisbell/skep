@@ -72,7 +72,11 @@ foundation and on the stores above it.
   family), counted and paged; projection and discoverability; the
   delete-orphan preview; supersession lineage. It owns no slice and no
   index, and every link read takes the caller's reader predicate. Its
-  modules are listed in `src/lib.rs` in dependency order, a line each.
+  modules are declared in `src/lib.rs` in dependency order, each with a
+  line saying what it holds; `tests/it/tidy.rs` checks that map and the one
+  rule that crosses its files: only `home.rs` asks the caller's reader
+  predicate, because asked of a link instead of its home it admits every
+  link.
 - `skep-coordination` — predicate definitions and the coordinator.
 - `skep-identity` — credential records, key sets, the identity fold. Pure;
   of the skep crates it depends only on `skep-address`. The engine depends

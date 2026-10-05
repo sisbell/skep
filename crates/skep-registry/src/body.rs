@@ -2,10 +2,11 @@
 //! (REG-1.86's table, its first two rows) — under THE CANONICAL RULE: the
 //! credential records' admission sentence applied to a flat one-object body,
 //! `parse(b)` answering a body only where `b == encode(parse(b))`. So each
-//! body has ONE form, the bytes a record-grade signature ranges over are the
-//! bytes every reader parses, and a body spelled any other way — a space, a
-//! member out of order, a non-shortest escape, a member twice — is no record
-//! at every parser alike.
+//! body has ONE form: the sig-less projection a record-grade signature
+//! ranges over is the one every reader re-derives, byte for byte, from the
+//! bytes it parses, and a body spelled any other way — a space, a member out
+//! of order, a non-shortest escape, a member twice — is no record at every
+//! parser alike.
 //!
 //! THE ENCODING is the credential records' rule applied to a flat object:
 //! `{"type":"<the row's string>"`, then the row's own members in the order
@@ -286,9 +287,12 @@ pub enum ParseRefusal {
     /// reader holds.
     EmptyOrigins,
     /// The members each pass and the bytes are still not the canonical
-    /// re-encoding of what they spell: whitespace, another member order, a
-    /// member twice (the occurrence the value stage kept passing), a
-    /// non-shortest escape, a byte after the brace.
+    /// re-encoding of what they spell: whitespace outside strings, between
+    /// the tokens or around the object; another member order; a member twice
+    /// (the occurrence the value stage kept passing); a non-shortest escape.
+    /// Whitespace is the one thing outside the object the value stage reads
+    /// past: any other byte after the closing brace is
+    /// [`ParseRefusal::NotJson`].
     NotCanonical,
 }
 
@@ -326,6 +330,15 @@ impl std::error::Error for ParseRefusal {}
 /// under the canonical rule — a record is answered only where `bytes ==
 /// encode(parse(bytes))` — or why they are none. Total over any bytes: no
 /// panic, and no tree past the cap.
+///
+/// WHAT A RECORD PROMISES, so its reader checks none of it again: it is of
+/// THE KIND NAMED — `record.body.kind() == kind`, a [`Body::Binding`] under
+/// [`BodyKind::Binding`] and a [`Body::Endpoint`] under
+/// [`BodyKind::Endpoint`], so a caller that named the kind meets no other
+/// variant; `encode(&record.body, record.sig.as_deref())` is `bytes`, byte
+/// for byte; and `bytes` are at most [`MAX_REGISTRY_RECORD_BYTES`]. So bytes
+/// that are a record under one kind are `wrong_type` under the other: a
+/// record under one kind at most.
 ///
 /// THE STAGES, the first to fault naming the refusal ([`ParseRefusal`]): the cap;
 /// the text; the value; the object; the number scan; `type`; the member set;
@@ -454,6 +467,14 @@ fn address_of(s: &str) -> Option<Address> {
 /// THE CANONICAL FORM — the one byte string a body has, with its `sig` where
 /// one is given: what a signer composes (with `None`, then with the `sig` it
 /// made), what a verifier re-spells, and what [`parse`] holds its input to.
+///
+/// TOTAL, AND IT MEASURES NOTHING: every body encodes, with any `sig`, and
+/// the result is a record at [`parse`] — under `body.kind()`, of that body
+/// and that `sig` — exactly where it is at most [`MAX_REGISTRY_RECORD_BYTES`];
+/// one byte past, it is `past_cap`. The measure is the composer's, taken on
+/// the SIGNED bytes before they are deposited: a `sig` under
+/// `mldsa65-ed25519` is 6,746 bytes of hex on its own, so a body whose
+/// sig-less form is far under the cap can be past it signed.
 pub fn encode(body: &Body, sig: Option<&str>) -> String {
     let mut out = String::with_capacity(256);
     out.push_str("{\"type\":\"");
@@ -661,7 +682,8 @@ mod tests {
     /// refused before any tree is built, a binding signed under
     /// `mldsa65-ed25519` — its `sig` 6,746 hex characters — is well under
     /// it, and the `sig` counts inside it: a binding signed up to exactly the
-    /// cap is a record, and one `sig` byte more is past it.
+    /// cap is a record, and one `sig` byte more — which `encode`, measuring
+    /// nothing, writes whole — is past it.
     #[test]
     fn the_cap_bounds_the_parse() {
         assert_eq!(MAX_REGISTRY_RECORD_BYTES, 16_384);
@@ -680,6 +702,7 @@ mod tests {
         let record = parse(BodyKind::Binding, at_cap.as_bytes()).expect("a record at the cap");
         assert_eq!(record.sig.as_deref(), Some(sig.as_str()));
         let one_past = encode(&binding("1.5", None), Some(&format!("{sig}a")));
+        assert_eq!(one_past.len(), MAX_REGISTRY_RECORD_BYTES + 1, "encode measures nothing");
         assert_eq!(parse(BodyKind::Binding, one_past.as_bytes()), Err(ParseRefusal::PastCap));
     }
 }

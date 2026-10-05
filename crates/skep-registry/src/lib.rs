@@ -19,7 +19,7 @@
 //!   [`Subtype`], each naming its own row — [`Kind::row`], [`Subtype::row`]
 //!   — and [`row_at`], the row an address is), its held readers,
 //!   `t_binding` … `t_successor_of`, one per row, and [`commons_type`], a
-//!   commons type address at any ordinals;
+//!   commons type address at one or more positive ordinals;
 //! * `body` — [`Binding`], [`Endpoint`] with its [`Origins`], [`Body`] and
 //!   [`Record`], the kind [`BodyKind`] a parse is named under, the one parser
 //!   [`parse`] under the canonical rule, the encoder [`encode`], the refusals

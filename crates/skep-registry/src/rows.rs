@@ -182,11 +182,15 @@ impl RowOf {
     }
 }
 
-/// One of the twelve rows: the row of a kind or of a subtype, as [`RowOf`]
-/// names it. The fields are public and the type is `Clone` so a suite can
-/// build a list that differs from [`rows`] by one row and hand it to the
-/// seeding check ([`crate::seeding_check`]), whose refusals are proved on
-/// such lists.
+/// A registry row as a value: what it is the row OF ([`RowOf`]), its
+/// address, and the `type` string its body carries where it carries one.
+/// The twelve commons-map pins are [`rows()`]'s, and every `&'static Row`
+/// this crate hands out — [`Kind::row`], [`Subtype::row`], [`row_at`] — is
+/// one of them; a `Row` value as such promises its fields and no more. The
+/// fields are public and the type is `Clone` so a suite can build a list
+/// that differs from [`rows()`] by one row and hand it to the seeding check
+/// ([`crate::seeding_check`]), whose refusals are proved on such lists and
+/// which reads each list as the rows it is given.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
     /// What the row is the row of: a kind, or a subtype under its kind.
@@ -236,8 +240,14 @@ pub(crate) const REGISTRY_RANGE: RangeInclusive<u32> = 55..=59;
 /// then `ordinals` — one for a kind's row, the kind's then the subtype's for
 /// a subtype row.
 ///
-/// PANICS on an empty `ordinals` or on a zero among them: a row is an
-/// element at a positive ordinal, and the table below spells none other.
+/// THE CALLER OWES one or more ordinals, each positive: a row is an element
+/// at positive ordinals — a zero among them would be a fourth zero
+/// component, which no T4-valid address holds — and the table below spells
+/// none other. Each obligation broken PANICS by a check of its own whose
+/// message names it; given both, the address is T4-valid by construction
+/// (the prefix's three zeros, none adjacent, then positive ordinals alone),
+/// the supplier's own guarantee.
+///
 /// Public for the readers that name a commons type the table does not hold:
 /// `skep-resolve`, which builds with it the credential types `3.1`–`3.3`
 /// its mirror's fold tells a stored link's kind by, and the suites that
@@ -245,6 +255,7 @@ pub(crate) const REGISTRY_RANGE: RangeInclusive<u32> = 55..=59;
 /// arms.
 pub fn commons_type(ordinals: &[u32]) -> Address {
     assert!(!ordinals.is_empty(), "a commons row names at least one ordinal");
+    assert!(!ordinals.contains(&0), "a commons row's ordinals are positive");
     let comps = COMMONS_TYPE_PREFIX.iter().chain(ordinals).map(|&c| Nat::from(c));
     let tumbler = Tumbler::new(comps).expect("the components are nonempty");
     validate(tumbler).expect("a subspace-3 element at positive ordinals is T4-valid")
@@ -302,9 +313,15 @@ const SPELLINGS: [Spelling; 12] = [
     Spelling { of: RowOf::Kind(Kind::SuccessorOf), ordinals: &[59], type_value: None },
 ];
 
-/// THE TWELVE ROWS, held once: built from the table at the first read, so a
-/// reader hands back a borrow of one process-wide value and a pin is never
-/// rebuilt per consult.
+/// THE TWELVE ROWS, held once, in THE MAP'S ORDER — ascending in the tumbler
+/// order (T1): the five kinds by ordinal, `3.55` to `3.59`, each followed by
+/// its subtype rows by theirs, so the policy link's `3.58` and its five
+/// readings stand ahead of `successor-of`'s `3.59`, though [`Kind::ALL`]'s
+/// REG-1.14 order lists `successor-of` first. A reader that zips the rows
+/// with a list of its own lists it in this order, and the seeding check,
+/// handed them, names the first a foreign row meets. Built from the table at
+/// the first read, so a reader hands back a borrow of one process-wide value
+/// and a pin is never rebuilt per consult.
 pub fn rows() -> &'static [Row; 12] {
     static ROWS: LazyLock<[Row; 12]> = LazyLock::new(|| {
         SPELLINGS.each_ref().map(|s| Row {
@@ -322,6 +339,12 @@ pub fn rows() -> &'static [Row; 12] {
 /// apart from the commons' others — the seeding check's domain (REG-1.31) —
 /// since a foreign row placed under a kind is what the disjointness arm
 /// exists to catch (REG-1.30), and a prefix test would set it aside unseen.
+/// Equality, for its part, sets aside an address AT a row whoever spelled
+/// it: right for a registry row spelled a second time (the insert door's
+/// deposit class), and never for another allocator's row at that address,
+/// which is REG-1.30's collision AT a row — so a hand filters through this
+/// the second spellings of the registry's own rows alone
+/// ([`crate::seeding_check`]).
 pub fn row_at(a: &Address) -> Option<&'static Row> {
     rows().iter().find(|r| r.address == *a)
 }

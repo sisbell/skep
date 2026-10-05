@@ -94,6 +94,26 @@ impl std::error::Error for SeedingRefusal {}
 /// shipped build, a list a suite builds to prove an arm — against `foreign`,
 /// every other commons row the hand can see. `Ok` is a genesis that may
 /// complete; `Err` names the first arm to fire.
+///
+/// WHICH REFUSAL SPEAKS where several hold — the one sentence the operator
+/// repairs the image from (REG-1.33): the arms in the module's order, and
+/// within an arm its first fault in this order. DISJOINTNESS names the first
+/// entry of `foreign`, in its own order, that meets any row, with the first
+/// row of `rows` it meets. COMPLETENESS names the first kind of
+/// [`Kind::ALL`] with no row, and only where every kind has one, the first
+/// subtype of [`Subtype::ALL`] with no row strictly under its kind's — the
+/// FIRST row that kind has in `rows`. THE COUNT names an excess of kind rows
+/// over the range's ordinals ahead of any one row, then the first kind row
+/// of `rows` that is no bare ordinal of the range or stands at one an
+/// earlier kind row took.
+///
+/// WHAT THE HAND OWES IN `foreign`: REG-1.31's domain, every address in it
+/// read as foreign. A registry row spelled a second time — the insert door's
+/// deposit class spells the binding and the endpoint again — is the hand's
+/// to set apart, by equality ([`row_at`](crate::row_at)), and it sets apart
+/// nothing else: another allocator's row AT a registry row's address is a
+/// collision the disjointness arm names (REG-1.30), so a list of other
+/// allocators' rows is handed over whole, never filtered against the table.
 pub fn seeding_check<'a>(
     rows: &[Row],
     foreign: impl IntoIterator<Item = &'a Address>,

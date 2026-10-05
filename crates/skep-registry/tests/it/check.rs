@@ -281,3 +281,61 @@ fn the_arms_run_in_order() {
     assert_eq!(seeding_check(&faulty, std::iter::once(&foreign)).unwrap_err().arm(), "disjointness");
     assert_eq!(seeding_check(&faulty, std::iter::empty()).unwrap_err().arm(), "completeness");
 }
+
+/// REG-1.33 — WHICH REFUSAL SPEAKS within an arm, as `seeding_check`'s doc
+/// states it, each on a list holding two faults one arm reads: disjointness
+/// names the first entry of `foreign` in its own order; completeness names
+/// a missing kind ahead of a missing subtype and the kinds in `Kind::ALL`'s
+/// order — `successor-of` ahead of the policy link, which the table lists
+/// first — and seeks a subtype's row under the FIRST row its kind has; the
+/// count names an excess of kind rows ahead of any one row, then the first
+/// kind row of the list that is no bare ordinal of the registry range.
+#[test]
+fn within_an_arm_the_first_fault_in_the_stated_order_speaks() {
+    let (inside, under) = (commons_type(&[58, 6]), commons_type(&[55, 1]));
+    for (foreign, registry) in
+        [([&inside, &under], t_policy_link()), ([&under, &inside], t_binding())]
+    {
+        let first = SeedingRefusal::Disjointness {
+            registry: registry.clone(),
+            foreign: foreign[0].clone(),
+        };
+        assert_eq!(seeding_check(rows(), foreign), Err(first));
+    }
+    for other in [RowOf::Kind(Kind::PolicyLink), RowOf::Subtype(Subtype::TakedownBase)] {
+        let mut two_missing = without(RowOf::Kind(Kind::SuccessorOf));
+        two_missing.retain(|r| r.of != other);
+        assert_eq!(
+            seeding_check(&two_missing, std::iter::empty()),
+            Err(SeedingRefusal::Completeness { missing: RowOf::Kind(Kind::SuccessorOf) }),
+            "successor-of and {other:?} missing"
+        );
+    }
+    let second_policy_link =
+        Row { of: RowOf::Kind(Kind::PolicyLink), address: commons_type(&[54]), type_value: None };
+    let mut first = rows().to_vec();
+    first.insert(0, second_policy_link.clone());
+    assert_eq!(
+        seeding_check(&first, std::iter::empty()),
+        Err(SeedingRefusal::Completeness { missing: RowOf::Subtype(Subtype::PolicyLinkOwn) }),
+        "a second policy-link row ahead of the shipped one: its readings are sought under it"
+    );
+    let mut last = rows().to_vec();
+    last.push(second_policy_link);
+    assert_eq!(
+        seeding_check(&last, std::iter::empty()),
+        Err(SeedingRefusal::Count { kind_row_count: 6, row: None }),
+        "the same row after it: the readings stand under the first, and six kind rows count"
+    );
+    let mut two_outside = moved(RowOf::Kind(Kind::Endpoint), &[53]);
+    for r in &mut two_outside {
+        if r.of == RowOf::Kind(Kind::SuccessorOf) {
+            r.address = commons_type(&[54]);
+        }
+    }
+    assert_eq!(
+        seeding_check(&two_outside, std::iter::empty()),
+        Err(SeedingRefusal::Count { kind_row_count: 5, row: Some(commons_type(&[53])) }),
+        "two kind rows outside the range: the first of the list is named"
+    );
+}

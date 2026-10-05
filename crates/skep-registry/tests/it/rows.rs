@@ -60,11 +60,36 @@ fn commons_type_panics_on_an_empty_ordinal_list() {
     let _ = commons_type(&[]);
 }
 
-/// … and PANICS on a zero among the ordinals: a row is an element at
-/// positive ordinals, and a zero there is a fourth zero component, which no
-/// T4-valid address holds.
+/// … and PANICS on a zero among the ordinals, by a check of its own whose
+/// message names the caller's broken obligation: a row is an element at
+/// positive ordinals — a zero there would be a fourth zero component, which
+/// no T4-valid address holds.
 #[test]
-#[should_panic(expected = "a subspace-3 element at positive ordinals is T4-valid")]
+#[should_panic(expected = "a commons row's ordinals are positive")]
 fn commons_type_panics_on_a_zero_ordinal() {
     let _ = commons_type(&[58, 0]);
+}
+
+/// THE MAP'S ORDER, as `rows()` states it: ascending in the tumbler order
+/// (T1), each kind by its ordinal followed by its subtype rows by theirs — so
+/// the policy link and its readings stand ahead of `successor-of`, though
+/// `Kind::ALL`, REG-1.14's order, lists `successor-of` first. A row the table
+/// gains (REG-1.19) takes its place by its address.
+#[test]
+fn the_rows_stand_in_ascending_tumbler_order() {
+    for pair in rows().windows(2) {
+        let (a, b) = (&pair[0].address, &pair[1].address);
+        assert!(a < b, "{a} stands ahead of {b}");
+    }
+    let kinds: Vec<Kind> = rows()
+        .iter()
+        .filter_map(|r| match r.of {
+            RowOf::Kind(kind) => Some(kind),
+            RowOf::Subtype(_) => None,
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [Kind::Binding, Kind::Endpoint, Kind::TakedownRecord, Kind::PolicyLink, Kind::SuccessorOf]
+    );
 }

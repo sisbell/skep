@@ -3,17 +3,19 @@
 //! ([`blob_path`], which answers none for a malformed one), the ASIDE name a
 //! replaced instance carries until the deferred unlink, the listings of the
 //! directories that hold those names and open's sweep of the asides
-//! ([`sweep_asides`]), the removal of a name another remover may have
-//! taken first ([`remove_if_present`]), the absence rule every read of a
-//! name keeps — not found is none, any other failure an answer
-//! ([`not_found_as_none`]) — the directory fsync every install
-//! order under the root ends in (a rename is durable only at its
+//! ([`sweep_asides`]), open's walk that holds every entry it acts on to what
+//! the store makes — no link followed, no file it writes shared, no special
+//! file read ([`refuse_links_and_special_files`]) — the removal of a name
+//! another remover may have taken first ([`remove_if_present`]), the
+//! absence rule every read of a name keeps — not found is none, any other
+//! failure an answer ([`not_found_as_none`]) — the directory fsync every
+//! install order under the root ends in (a rename is durable only at its
 //! directory's fsync — `media.md` Op inventory 1; the register M-I5 (a)),
 //! and the floor's one read of the host, the volume's free space. The order
 //! that installs a file is the store's (`store.rs`); the logs' is
 //! `jsonl.rs`'s.
 
-use std::fs::{self, FileType};
+use std::fs::{self, DirEntry, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -112,6 +114,94 @@ pub(crate) fn sweep_asides(root: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// NOTHING OPEN ACTS ON IS FOLLOWED OR SHARED: every entry under `root`, and
+/// every entry in each designation directory there, is a directory or a
+/// regular file — the two kinds this store makes — and every regular file
+/// has one link, save a file at a hex name and an aside. Open cuts the logs
+/// at their torn tails and the partials past their records, and rewrites the
+/// logs through their compaction twins; while it serves, the store appends
+/// to the logs, writes the partials, and creates, renames over and unlinks
+/// names in the designation directories. Through a symbolic link each of
+/// those acts lands outside the root; through a second hard link the cuts
+/// and writes land in a file that is also another name's — the journal's,
+/// beside `blobs/` on the board's one volume; and on a FIFO open's read of a
+/// log never ends. No build of this store makes any of them, so one standing
+/// here was planted — a compromise's, which the remediation that keeps the
+/// files leaves (`media.md` §Recovery, "A COMPROMISE's REMEDIATION DISCARDS
+/// EVERY MEDIA STORE BUT THE FILES"), or a copy's that was not the board's
+/// own — and it fails the open, named, before any act. The board directory
+/// is one volume (§Recovery, the deployment list's item (2)), so no link
+/// here is the operator's. A file at a hex name and an aside are held to
+/// their kind and never to their count of links: no act writes either in
+/// place — each is renamed onto, linked, unlinked or read — and a replace
+/// gives the replaced instance its aside as a second link, which a crash
+/// between that link and the rename leaves standing beside the hash. Every
+/// other regular file the store makes — a log, a twin, a partial — it
+/// writes in place. The walk enters the directories whose names a
+/// designation can spell, the ones every other walk of the store enters
+/// (`names_in`).
+pub(crate) fn refuse_links_and_special_files(root: &Path) -> io::Result<()> {
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        // Under the root the store makes the designation directories, and
+        // the two logs and their twins, each written in place.
+        refuse_unless_made_here(&entry, true)?;
+        if entry.file_type()?.is_dir() && designation_ok(&entry.file_name().to_string_lossy()) {
+            for inner in fs::read_dir(entry.path())? {
+                let inner = inner?;
+                let name = inner.file_name().to_string_lossy().into_owned();
+                refuse_unless_made_here(&inner, !(hex_ok(&name) || is_aside_name(&name)))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// An entry held to what the store makes: a directory, or a regular file —
+/// one with a single link where the store writes it in place
+/// (`written_in_place`). Its kind is read without following it. Anything
+/// else is refused as `InvalidData`, naming the path and what stands there.
+fn refuse_unless_made_here(entry: &DirEntry, written_in_place: bool) -> io::Result<()> {
+    let kind = entry.file_type()?;
+    let found = if kind.is_dir() {
+        None
+    } else if kind.is_symlink() {
+        Some("a symbolic link".to_string())
+    } else if !kind.is_file() {
+        Some("a special file".to_string())
+    } else if written_in_place {
+        let n = links(&entry.metadata()?);
+        (n > 1).then(|| format!("a regular file of {n} links"))
+    } else {
+        None
+    };
+    match found {
+        None => Ok(()),
+        Some(found) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{} is {found}: the blob store makes directories and regular files of its own alone, and follows \
+                 or shares none",
+                entry.path().display()
+            ),
+        )),
+    }
+}
+
+/// A regular file's count of links — on a non-unix target one, the count
+/// unread; v1 targets unix.
+fn links(meta: &fs::Metadata) -> u64 {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::MetadataExt::nlink(meta)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        1
+    }
 }
 
 /// THE ABSENCE RULE, spelled once: `Ok(Some(value))` where the name stands,

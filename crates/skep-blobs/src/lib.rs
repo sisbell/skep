@@ -60,7 +60,10 @@
 //!   failed past its rename — takes no further append until a compaction
 //!   completes (`jsonl.rs`), so open's tail check never cuts a whole line
 //!   and no line lands in a file no open reads.
-//! * OPEN RECONCILES AND COMPACTS: both logs tail-checked and rewritten to
+//! * OPEN RECONCILES AND COMPACTS: first, nothing at a name it acts on
+//!   followed or shared — a symbolic link, a special file, or a second link
+//!   to a file the store writes in place failing the open, named
+//!   (`blobs.rs`); both logs tail-checked and rewritten to
 //!   their current records, a line naming a designation or hex the store's
 //!   name check refuses, or an offset past its length, read as no record
 //!   (see [`Store`]), so a log restored from elsewhere names no path out of
@@ -89,8 +92,9 @@
 mod error;
 // The files at `<designation>/<hex>`: where one lives, the spellings a
 // designation and a hex name must have, the aside name, the listings of the
-// designation directories and open's sweep of the asides, the directory
-// fsync every install order ends in, and the floor's free-space read.
+// designation directories, open's walk holding every entry it acts on to
+// what the store makes and its sweep of the asides, the directory fsync
+// every install order ends in, and the floor's free-space read.
 mod blobs;
 // The JSON-lines log both record logs are, `Log`: its tail check at open,
 // its append, undone where it fails, and its compaction by the install

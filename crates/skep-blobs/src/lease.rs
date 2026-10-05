@@ -16,7 +16,7 @@
 //! the board's upload history. The horizon and the interval are the
 //! daemon's constants (D1), handed in.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
 use std::time::Duration;
@@ -116,10 +116,15 @@ pub enum LeaseState {
 }
 
 /// The leases as held in memory beside their log, keyed by
-/// `(principal, designation, hex)`.
+/// `(designation, hex, principal)` — the hash first, and ordered, so the
+/// leases on one hash are one range of the map: the pruner's read of a hash
+/// ([`LeaseLog::any_live`]), which its pass makes once per file under the
+/// daemon's exclusive arm, costs that hash's holders and never every lease
+/// on the board, however many deposits a principal makes. The map's order
+/// is also the compacted log's line order.
 pub(crate) struct LeaseLog {
     log: Log,
-    leases: HashMap<(String, String, String), Lease>,
+    leases: BTreeMap<(String, String, String), Lease>,
     horizon: Duration,
 }
 
@@ -130,10 +135,10 @@ impl LeaseLog {
     /// was dropped.
     pub fn open(root: &Path, horizon: Duration, now_ms: u64) -> io::Result<LeaseLog> {
         let (log, values) = Log::open(root.join(LEASES_LOG))?;
-        let mut leases = HashMap::new();
+        let mut leases = BTreeMap::new();
         for v in &values {
             if let Some(l) = Lease::parse(v) {
-                leases.insert((l.principal.clone(), l.designation.clone(), l.hex.clone()), l);
+                leases.insert((l.designation.clone(), l.hex.clone(), l.principal.clone()), l);
             }
         }
         leases.retain(|_, l| !l.past_horizon(horizon, now_ms));
@@ -146,15 +151,13 @@ impl LeaseLog {
     /// it — the PUT answers only after this returns.
     pub fn append_synced(&mut self, lease: Lease) -> io::Result<()> {
         self.log.append_synced(&lease.to_value())?;
-        self.leases.insert((lease.principal.clone(), lease.designation.clone(), lease.hex.clone()), lease);
+        self.leases.insert((lease.designation.clone(), lease.hex.clone(), lease.principal.clone()), lease);
         Ok(())
     }
 
     /// The principal's state on a hash at `now_ms`.
     pub fn state(&self, principal: &str, designation: &str, hex: &str, now_ms: u64) -> LeaseState {
-        let Some(l) =
-            self.leases.get(&(principal.to_string(), designation.to_string(), hex.to_string()))
-        else {
+        let Some(l) = self.leases.get(&(designation.to_string(), hex.to_string(), principal.to_string())) else {
             return LeaseState::None;
         };
         if l.live(now_ms) {
@@ -195,19 +198,22 @@ impl LeaseLog {
 
     /// Whether ANY principal holds a live lease on `<designation>/<hex>` at
     /// `now_ms` — the pruner's read, beside the per-principal
-    /// [`LeaseLog::state`]: a scan of the map, whose key leads with the
-    /// holder.
+    /// [`LeaseLog::state`]: the range of the map holding that hash's leases,
+    /// its key leading with the hash, so the pass that makes this read once
+    /// per file is linear in its files. The range starts at the hash's first
+    /// possible key and ends at the first key naming another hash: a hex the
+    /// asked one begins, or a designation the asked one's begins, sorts
+    /// beside it and is never read as it.
     pub fn any_live(&self, designation: &str, hex: &str, now_ms: u64) -> bool {
         self.leases
-            .values()
-            .any(|l| l.designation == designation && l.hex == hex && l.live(now_ms))
+            .range((designation.to_string(), hex.to_string(), String::new())..)
+            .take_while(|((d, h, _), _)| d == designation && h == hex)
+            .any(|(_, l)| l.live(now_ms))
     }
 
-    /// Rewrite the log to the current leases where any line on disk is not
-    /// one.
+    /// Rewrite the log to the current leases, in the map's order, where any
+    /// line on disk is not one.
     fn compact(&mut self) -> io::Result<()> {
-        let mut keys: Vec<&(String, String, String)> = self.leases.keys().collect();
-        keys.sort();
-        self.log.compact(keys.into_iter().map(|k| self.leases[k].to_value()))
+        self.log.compact(self.leases.values().map(Lease::to_value))
     }
 }

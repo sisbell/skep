@@ -217,6 +217,11 @@ impl Store {
     /// records compacted, the root fsynced. Everything here completes before
     /// the store answers anything. A partial that cannot be read fails the
     /// open, retiring nothing (`partials.rs`): an I/O failure is no absence.
+    /// And before any of it, every name the store acts on is held to what
+    /// the store makes: a symbolic link, a special file, or a second link to
+    /// a file the store writes in place fails the open as `InvalidData`,
+    /// naming it, and nothing is followed or written through it (`blobs.rs`,
+    /// `refuse_links_and_special_files`).
     ///
     /// PRECONDITION: no other `Store` is open over `root` while this one
     /// lives, in this process or another. Its open would act on the root
@@ -235,6 +240,7 @@ impl Store {
     pub fn open(root: impl AsRef<Path>, horizon: Duration, now_ms: u64) -> io::Result<Store> {
         let root = root.as_ref();
         fs::create_dir_all(root)?;
+        blobs::refuse_links_and_special_files(root)?;
         let leases = LeaseLog::open(root, horizon, now_ms)?;
         let mut uploads = UploadRecords::open(root)?;
         partials::reconcile(root, &mut uploads, now_ms)?;
@@ -499,7 +505,9 @@ impl Store {
     /// Whether ANY principal holds a live lease on `<designation>/<hex>` at
     /// `now_ms` — the pruner's read beside the per-principal
     /// [`Store::lease_state`]: a file any principal holds live is kept,
-    /// whoever deposited it.
+    /// whoever deposited it. A range of the lease map, costing that hash's
+    /// holders and never every lease, so the pass that reads it once per file
+    /// under its caller's exclusive arm is linear in its files.
     pub fn any_live_lease(&self, designation: &str, hex: &str, now_ms: u64) -> bool {
         self.leases.lock().any_live(designation, hex, now_ms)
     }

@@ -4,7 +4,8 @@
 //! a principal's live leases in hex order, the latest-wins re-PUT, the
 //! compaction at open, the pending bytes — an upload expired and not yet
 //! removed counted by nothing — the pruner's read of whether any principal
-//! holds a file live, the torn tail, and a line naming a malformed
+//! holds a file live, reading that hash's leases and no other's, at their
+//! cost and never every lease's, the torn tail, and a line naming a malformed
 //! designation or hex, or lacking any member, read as no lease. "A LIVE
 //! LEASE OVER A FILE THAT IS NOT THERE READS AS LAPSED" is the daemon's
 //! rule, built on this store's `lease_state` and `blob_size`; the store's
@@ -165,6 +166,79 @@ fn any_live_lease_answers_for_every_principal_together() {
     assert!(!store.any_live_lease("blake3", &fin.hex, both_lapsed), "every lease lapsed: held by no principal");
     assert!(!store.any_live_lease("sha256-tree", &fin.hex, 150), "the designation is part of the lease's key");
     assert!(!store.any_live_lease("blake3", &hex_of(b"never"), 150));
+}
+
+/// THE PRUNER's READ IS ONE HASH's LEASES AND NO OTHER's
+/// (`Store::any_live_lease`): beside hashes whose leases have all lapsed
+/// stand hashes sorting next to them — a hex the lapsed one begins (`ab`,
+/// `abab`), the same hex under a designation the lapsed one's begins
+/// (`blake3`, `blake3-x`) — each held live; each lapsed hash is held by no
+/// one, each held one is held, and a hash no lease names, sorting among
+/// them, is held by no one.
+#[test]
+fn the_any_principal_read_is_one_hashs_leases_and_no_others() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    fs::create_dir_all(&root).unwrap();
+    let line = |designation: &str, hex: &str, principal: &str, expires: u64| {
+        let v = serde_json::json!({
+            "designation": designation, "expires": expires, "hex": hex, "key": principal, "size": 3,
+        });
+        format!("{v}\n")
+    };
+    let log = [
+        line("blake3", "ab", "k", 0),
+        line("blake3", "abab", "j", 9_999),
+        line("blake3", "cd", "k", 0),
+        line("blake3-x", "cd", "j", 9_999),
+    ]
+    .concat();
+    fs::write(root.join("leases.log"), log).unwrap();
+    let store = open(&root, 1);
+    for (designation, hex, held) in [
+        ("blake3", "ab", false),
+        ("blake3", "abab", true),
+        ("blake3", "cd", false),
+        ("blake3-x", "cd", true),
+        ("blake3", "aa", false),
+        ("blake3", "abaa", false),
+        ("blake3", "ce", false),
+    ] {
+        assert_eq!(store.any_live_lease(designation, hex, 1), held, "{designation}/{hex}");
+    }
+}
+
+/// THE PRUNER's READ COSTS ONE HASH's LEASES, NOT EVERY LEASE
+/// (`Store::any_live_lease`): the pass makes it once per file under the
+/// daemon's exclusive arm, and every principal's deposits count among the
+/// leases — three bytes each, so no byte figure bounds them — so a read that
+/// scanned the leases would make a pass files × leases. Thirty thousand
+/// leases, each its own principal's on its own hash, each read once, answer
+/// inside two seconds; a scan is ~4.5×10⁸ comparisons, which a debug build
+/// does not finish inside it. The bound errs only toward passing.
+#[test]
+fn the_any_principal_read_costs_one_hashs_leases_not_every_lease() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    fs::create_dir_all(&root).unwrap();
+    let hexes: Vec<String> = (0u32..30_000).map(|i| hex_of(&i.to_be_bytes())).collect();
+    let log: String = hexes
+        .iter()
+        .enumerate()
+        .map(|(i, hex)| {
+            let v = serde_json::json!({
+                "designation": "blake3", "expires": 9_999, "hex": hex, "key": format!("p{i}"), "size": 3,
+            });
+            format!("{v}\n")
+        })
+        .collect();
+    fs::write(root.join("leases.log"), log).unwrap();
+    let store = open(&root, 1);
+    let started = std::time::Instant::now();
+    let held = hexes.iter().filter(|hex| store.any_live_lease("blake3", hex, 1)).count();
+    let took = started.elapsed();
+    assert_eq!(held, hexes.len(), "every hash held live");
+    assert!(took < Duration::from_secs(2), "{took:?} for {} reads over as many leases", hexes.len());
 }
 
 /// A torn tail of the lease log is truncated at open — a half-written

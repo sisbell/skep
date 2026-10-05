@@ -206,7 +206,9 @@ Rules that hold across its files:
   (`Store`); and no `unlink_blob` or `remove_aside` while a finish runs
   (`Stream::finish`). The store checks none.
 - **The pruner's acts are one method each**, so the daemon's pass holds
-  its lock around exactly one.
+  its lock around exactly one, and the lease read inside it is one hash's
+  range of the lease map (`LeaseLog`, keyed by the hash first): a pass is
+  linear in its files, whatever the count of leases.
 - **Every name passes one check**, `blobs.rs`'s spellings: a caller's at
   `Store`'s entry points, a log line's at open. No name reaches a path out
   of the root; and a creation names no designation at all, but a
@@ -230,6 +232,10 @@ Rules that hold across its files:
   `Store::open` runs each store's act at open — the logs' compactions,
   `partials::reconcile`, `blobs::sweep_asides` — and an I/O failure there,
   as at the size check (`Store::blob_size`), is never read as an absence.
+  Before any act, a symbolic link, a special file, or a second link to a
+  file the store writes in place, at a name it acts on, fails the open
+  (`blobs::refuse_links_and_special_files`): nothing is followed or written
+  through.
 - **A caller's bug is no refusal.** `Stream::finish` panics on a broken
   precondition; `BlobError` carries only answers.
 - **The test seam is a feature.** `test-hooks` (default off) compiles in

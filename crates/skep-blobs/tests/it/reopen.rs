@@ -5,9 +5,12 @@
 //! failing the open and retiring nothing; a record line read as no record
 //! where it lacks any member, its interval among them, where its offset
 //! passes its length, and where its designation climbs out of the root,
-//! nothing beside the root touched; and the compaction, down to nothing
-//! where nothing stands, over the twin a kill mid-compaction left beside
-//! each log — a twin never read in place of its log.
+//! nothing beside the root touched; the compaction, down to nothing where
+//! nothing stands, over the twin a kill mid-compaction left beside each
+//! log — a twin never read in place of its log; and before any of it, a
+//! link at a name open acts on — symbolic, or a second hard link to a file
+//! the store writes in place — or a special file there failing the open,
+//! nothing it names touched and no open left waiting.
 
 use std::fs::{self, OpenOptions};
 use std::time::Duration;
@@ -265,6 +268,114 @@ fn a_partial_that_cannot_be_read_fails_the_open_and_retires_nothing() {
     let store = open(&root, 3);
     assert_eq!(store.upload("k", &rec.id, 3).map(|r| r.offset), Some(3), "the upload stands where its record left it");
     assert_eq!(fs::read(designation_dir.join(format!(".upload-{}", rec.id.to_hex()))).unwrap(), b"abc", "its partial whole");
+}
+
+/// NOTHING OPEN ACTS ON IS FOLLOWED OR SHARED
+/// (`blobs::refuse_links_and_special_files`; `media.md` §Recovery, "A
+/// COMPROMISE's REMEDIATION DISCARDS EVERY MEDIA STORE BUT THE FILES"): a
+/// link planted at a name open acts on — a symbolic one at a compaction
+/// twin, a log, a partial a record names, a file at a hex name or the
+/// designation directory; a second hard link at a twin, a log or a partial
+/// — fails the open, and the file it names is untouched, where an open
+/// through it would overwrite that file (the twin's rewrite), cut it at its
+/// first line that is no JSON object (a log's tail check) or at the
+/// record's offset (a partial's cut-back), or hand its directory to the
+/// pruner as the designation's; the link gone, the board opens as it stood.
+/// And a file at a hex name sharing its inode with an aside — a crash
+/// between a replace's link and its rename — is the store's own: the open
+/// passes it.
+#[cfg(unix)]
+#[test]
+fn a_link_at_a_name_open_acts_on_fails_the_open_and_touches_nothing() {
+    use std::os::unix::fs::symlink;
+    const UNTOUCHED: &[u8] = b"bytes the store must not touch";
+    // A board of its own per row: a deposit's file and a standing upload,
+    // the records log four lines over one record, so an open past the walk
+    // rewrites that log through its twin.
+    let board = || {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("blobs");
+        let store = open(&root, 0);
+        let hex = put_whole(&store, "k", b"a deposit", 1).hex;
+        let rec = standing(&store, "k", 100, b"abc", 2);
+        drop(store);
+        (dir, root, rec, hex)
+    };
+    for (at, symbolic) in [
+        ("uploads.compact", true),
+        ("leases.log", true),
+        ("a partial a record names", true),
+        ("a hex name", true),
+        ("the designation directory", true),
+        ("uploads.compact", false),
+        ("leases.log", false),
+        ("a partial a record names", false),
+    ] {
+        let (dir, root, rec, hex) = board();
+        let name = match at {
+            "a partial a record names" => root.join("blake3").join(format!(".upload-{}", rec.id.to_hex())),
+            "a hex name" => root.join("blake3").join(&hex),
+            "the designation directory" => root.join("blake3"),
+            log => root.join(log),
+        };
+        let outside = dir.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        let victim = outside.join("victim");
+        fs::write(&victim, UNTOUCHED).unwrap();
+        let moved = dir.path().join("moved");
+        let stood = name.exists();
+        if stood {
+            fs::rename(&name, &moved).unwrap();
+        }
+        let label = format!("a {} link at {at}", if symbolic { "symbolic" } else { "second hard" });
+        if symbolic {
+            symlink(if at == "the designation directory" { &outside } else { &victim }, &name).unwrap();
+        } else {
+            fs::hard_link(&victim, &name).unwrap();
+        }
+        let opened = Store::open(&root, HORIZON, 3).map(drop).map_err(|e| e.kind());
+        assert_eq!(opened, Err(std::io::ErrorKind::InvalidData), "{label}: fails the open");
+        assert_eq!(fs::read(&victim).unwrap(), UNTOUCHED, "{label}: and the file it names is untouched");
+        fs::remove_file(&name).unwrap();
+        if stood {
+            fs::rename(&moved, &name).unwrap();
+        }
+        let store = open(&root, 3);
+        assert_eq!(store.upload("k", &rec.id, 3).map(|r| r.offset), Some(3), "{label} gone: the upload as it stood");
+        assert_eq!(store.blob_size("blake3", &hex).unwrap(), Some(9), "{label} gone: and the deposit's file");
+    }
+    let (_dir, root, _, hex) = board();
+    let designation_dir = root.join("blake3");
+    fs::hard_link(designation_dir.join(&hex), designation_dir.join(format!(".retired-{hex}-0"))).unwrap();
+    let store = open(&root, 3);
+    assert_eq!(store.blob_size("blake3", &hex).unwrap(), Some(9), "a hex name an aside shares is the store's own");
+    assert!(store.asides_of("blake3").unwrap().is_empty(), "and the aside is swept at open");
+}
+
+/// A SPECIAL FILE AT A NAME OPEN ACTS ON FAILS THE OPEN AND NEVER HANGS IT
+/// (`blobs::refuse_links_and_special_files`): a FIFO planted at the lease
+/// log's name — where open's read of the log would wait for good on a writer
+/// that never comes — fails the open as `InvalidData`, naming it, inside a
+/// bounded wait.
+#[cfg(unix)]
+#[test]
+fn a_special_file_at_a_name_open_acts_on_fails_the_open_and_never_hangs_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    drop(open(&root, 0));
+    let log = root.join("leases.log");
+    fs::remove_file(&log).unwrap();
+    let made = std::process::Command::new("mkfifo").arg(&log).status().expect("mkfifo runs");
+    assert!(made.success(), "a FIFO made at the lease log's name");
+    let (tx, rx) = std::sync::mpsc::channel();
+    // On a thread of its own: an open that read the FIFO would wait for good.
+    std::thread::spawn(move || {
+        let _ = tx.send(Store::open(&root, HORIZON, 1).map(drop).map_err(|e| (e.kind(), e.to_string())));
+    });
+    let opened = rx.recv_timeout(Duration::from_secs(5)).expect("the open answers inside a bounded wait");
+    let (kind, message) = opened.expect_err("a FIFO fails the open");
+    assert_eq!(kind, std::io::ErrorKind::InvalidData, "{message}");
+    assert!(message.contains("leases.log") && message.contains("a special file"), "named: {message}");
 }
 
 /// OPEN COMPACTS EACH LOG TO ITS CURRENT RECORDS — NONE AMONG THEM — OVER

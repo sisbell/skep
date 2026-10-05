@@ -8,9 +8,7 @@
 use std::path::Path;
 
 use serde_json::Value;
-use skep_registry::{
-    encode, parse, row, rows, Body, BodyKind, Kind, Record, MAX_REGISTRY_RECORD_BYTES,
-};
+use skep_registry::{encode, parse, rows, Body, BodyKind, Kind, Record, MAX_REGISTRY_RECORD_BYTES};
 
 fn fixture() -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/vectors/records.json");
@@ -181,7 +179,7 @@ fn the_type_member_is_the_string_its_kinds_row_holds() {
             let Some(ty) = r.type_value else { continue };
             let text = format!(r#"{{"type":"{ty}",{member}}}"#);
             let verdict = parse(body_kind, text.as_bytes()).map_err(|refusal| refusal.token());
-            if r == row(kind, None) {
+            if r == kind.row() {
                 assert_eq!(verdict.map(|record| record.canonical_sigless()), Ok(text), "{kind:?}");
             } else {
                 assert_eq!(verdict.err().as_deref(), Some("wrong_type"), "{ty} under {kind:?}");

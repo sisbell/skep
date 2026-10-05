@@ -13,9 +13,11 @@
 //! parse and a resolver that links no daemon read one table and hold one
 //! `b == encode(parse(b))`.
 //!
-//! * `rows` — the table ([`rows()`], [`row`], [`Row`], [`Kind`],
-//!   [`Subtype`]), its held readers, `t_binding` … `t_successor_of`, one per
-//!   row, and [`commons_type`], a commons type address at any ordinals;
+//! * `rows` — the table ([`rows()`], [`Row`] with its computed
+//!   [`Row::deposits`], [`Kind`] and [`Subtype`], each naming its own row —
+//!   [`Kind::row`], [`Subtype::row`] — and [`row_at`], the row an address
+//!   is), its held readers, `t_binding` … `t_successor_of`, one per row, and
+//!   [`commons_type`], a commons type address at any ordinals;
 //! * `body` — [`Binding`], [`Endpoint`] with its [`Origins`], [`Body`] and
 //!   [`Record`], the kind [`BodyKind`] a parse is named under, the one parser
 //!   [`parse`] under the canonical rule, the encoder [`encode`], the refusals
@@ -39,7 +41,7 @@ pub use body::{
 };
 pub use check::{seeding_check, SeedingRefusal};
 pub use rows::{
-    commons_type, row, rows, t_binding, t_disavowal, t_endpoint, t_expulsion_ground, t_policy_link,
-    t_policy_link_own, t_succession_ground, t_succession_policy, t_successor_of, t_takedown,
-    t_takedown_base, t_takedown_lifted, Kind, Row, Subtype,
+    commons_type, row_at, rows, t_binding, t_disavowal, t_endpoint, t_expulsion_ground,
+    t_policy_link, t_policy_link_own, t_succession_ground, t_succession_policy, t_successor_of,
+    t_takedown, t_takedown_base, t_takedown_lifted, Kind, Row, Subtype,
 };

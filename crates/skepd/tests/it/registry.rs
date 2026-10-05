@@ -27,7 +27,9 @@ use serde_json::Value;
 use skep_address::{validate, Address, Nat, Tumbler};
 use skep_arrangement::deposit_class_types;
 use skep_engine::types::pins_outside_the_registry;
-use skep_registry::{rows, seeding_check, Body, BodyKind, Kind, Row, SeedingRefusal, Subtype};
+use skep_registry::{
+    row_at, rows, seeding_check, Body, BodyKind, Kind, Row, SeedingRefusal, Subtype,
+};
 
 /// The node account's principal and its own key's seed, above every other
 /// suite's ids.
@@ -543,12 +545,11 @@ fn the_seeding_check_passes_the_shipped_lists_and_refuses_each_arm_on_a_mutated_
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     assert!(claimed(sd.port()), "the open ran the check and the genesis completed");
-    let registry_row = |a: &Address| rows().iter().any(|r| r.address == *a);
     let domain: Vec<Address> = pins_outside_the_registry()
         .into_iter()
         .cloned()
         .chain([T_ENROLL, T_RETIRE, T_CLAIM].iter().map(|c| addr(c)))
-        .chain(deposit_class_types().iter().filter(|ty| !registry_row(ty)).cloned())
+        .chain(deposit_class_types().iter().filter(|ty| row_at(ty).is_none()).cloned())
         .collect();
     assert_eq!(domain.len(), 8 + 3 + 2);
     assert_eq!(seeding_check(rows(), &domain), Ok(()));
@@ -572,7 +573,6 @@ fn the_seeding_check_passes_the_shipped_lists_and_refuses_each_arm_on_a_mutated_
         kind: Kind::Binding,
         subtype: None,
         address: addr("1.1.0.1.0.1.0.3.54"),
-        deposits: true,
         type_value: Some("binding"),
     });
     let refusal = seeding_check(&sixth, &domain).unwrap_err();

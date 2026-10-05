@@ -12,7 +12,9 @@
 //! subtype row; a kind that reads MORE than one way — the takedown record
 //! (two readings), the policy link (five) — carries NONE on its bare
 //! ordinal, every reading a row at a prefix under it. The map's "Deposits"
-//! column is [`Row::deposits`].
+//! column is that test, computed off the subtype rows' kinds and never
+//! stored ([`Row::deposits`]), so a kind given a second reading (REG-1.19)
+//! moves its column by the test alone.
 //!
 //! THE ORDER (the map): the first three kinds in REG-1.14's order at `3.55`,
 //! `3.56`, `3.57`; `successor-of`, REG-1.14's fourth kind, at `3.59` where
@@ -69,6 +71,14 @@ impl Kind {
             Kind::SuccessorOf => "successor-of",
             Kind::PolicyLink => "the policy link",
         }
+    }
+
+    /// The kind's own row in the table ([`rows()`]), held.
+    pub fn row(self) -> &'static Row {
+        rows()
+            .iter()
+            .find(|r| r.kind == self && r.subtype.is_none())
+            .expect("the table holds every kind's row")
     }
 }
 
@@ -128,6 +138,13 @@ impl Subtype {
             Subtype::SuccessionPolicy => "the org-chosen succession policy",
         }
     }
+
+    /// The subtype's row in the table ([`rows()`]), held — nested under its
+    /// kind's ([`Subtype::kind`]), which the subtype names, so no caller
+    /// names the kind beside it.
+    pub fn row(self) -> &'static Row {
+        rows().iter().find(|r| r.subtype == Some(self)).expect("the table holds every subtype row")
+    }
 }
 
 /// One of the twelve rows: a kind's own row (`subtype` none) or a subtype
@@ -143,16 +160,27 @@ pub struct Row {
     pub subtype: Option<Subtype>,
     /// The row's address: the ghost home document's subspace-3 element.
     pub address: Address,
-    /// The map's "Deposits" column: whether a deposit rides THIS address
-    /// (REG-1.18) — every subtype row and the three one-reading kinds yes,
-    /// the two bare ordinals of the kinds that read more than one way NONE.
-    pub deposits: bool,
     /// The `type` member's string where the row's record carries a body
     /// (REG-1.86 (a)); none at the three link-alone rows (lifted, the policy
     /// link's own reading, `successor-of`), which carry no body at all. The
     /// binding's and the endpoint's are the strings [`crate::encode`] writes
     /// and [`crate::parse`] holds a body to.
     pub type_value: Option<&'static str>,
+}
+
+impl Row {
+    /// The map's "Deposits" column: whether a deposit rides THIS address —
+    /// REG-1.18's test, which every reader of a kind's deposits reads. Every
+    /// subtype row carries deposits; a kind's own row carries them exactly
+    /// where no subtype row nests under the kind, a kind that reads ONE way,
+    /// and none where its readings are rows under it. Computed off
+    /// [`Subtype::ALL`] and [`Subtype::kind`] and never stored, so a kind
+    /// given a SECOND reading (REG-1.19) carries none on its bare ordinal by
+    /// the test itself once its subtype joins `Subtype::ALL`, as the
+    /// completeness arm requires of every subtype row.
+    pub fn deposits(&self) -> bool {
+        self.subtype.is_some() || !Subtype::ALL.iter().any(|s| s.kind() == self.kind)
+    }
 }
 
 /// The commons' type subspace of the ghost home document, `1.1.0.1.0.1 · 0
@@ -181,16 +209,12 @@ pub fn commons_type(ordinals: &[u32]) -> Address {
     validate(tumbler).expect("a subspace-3 element at positive ordinals is T4-valid")
 }
 
-/// The reserve ordinal a kind's row sits at — `a` is the commons type
-/// prefix then ONE ordinal inside [`RESERVE`] — else `None`: [`commons_type`]
-/// read back at a bare ordinal, what the seeding check's count arm holds
-/// each kind row to.
+/// The ordinal of the reserve whose [`commons_type`] `a` IS — a bare
+/// ordinal inside [`RESERVE`], where a kind's row sits — else `None`: what
+/// the seeding check's count arm holds each kind row to.
 pub(crate) fn reserve_ordinal(a: &Address) -> Option<u32> {
-    let spelled = a.tumbler().to_string();
-    let prefix: Vec<String> = COMMONS_TYPE_PREFIX.iter().map(u32::to_string).collect();
-    let tail = spelled.strip_prefix(&format!("{}.", prefix.join(".")))?;
-    let ordinal: u32 = tail.parse().ok()?;
-    RESERVE.contains(&ordinal).then_some(ordinal)
+    let mut reserve = RESERVE;
+    reserve.find(|&ordinal| *a == commons_type(&[ordinal]))
 }
 
 /// The table's spelling of one row — what [`rows`] builds a [`Row`] from.
@@ -198,97 +222,59 @@ struct Spelling {
     kind: Kind,
     subtype: Option<Subtype>,
     ordinals: &'static [u32],
-    deposits: bool,
     type_value: Option<&'static str>,
 }
 
 /// THE TABLE, in the map's order: five kinds, each followed by its subtype
 /// rows where it has any.
 const SPELLINGS: [Spelling; 12] = [
-    Spelling {
-        kind: Kind::Binding,
-        subtype: None,
-        ordinals: &[55],
-        deposits: true,
-        type_value: Some("binding"),
-    },
-    Spelling {
-        kind: Kind::Endpoint,
-        subtype: None,
-        ordinals: &[56],
-        deposits: true,
-        type_value: Some("endpoint"),
-    },
-    Spelling {
-        kind: Kind::TakedownRecord,
-        subtype: None,
-        ordinals: &[57],
-        deposits: false,
-        type_value: None,
-    },
+    Spelling { kind: Kind::Binding, subtype: None, ordinals: &[55], type_value: Some("binding") },
+    Spelling { kind: Kind::Endpoint, subtype: None, ordinals: &[56], type_value: Some("endpoint") },
+    Spelling { kind: Kind::TakedownRecord, subtype: None, ordinals: &[57], type_value: None },
     Spelling {
         kind: Kind::TakedownRecord,
         subtype: Some(Subtype::TakedownBase),
         ordinals: &[57, 1],
-        deposits: true,
         type_value: Some("takedown"),
     },
     Spelling {
         kind: Kind::TakedownRecord,
         subtype: Some(Subtype::TakedownLifted),
         ordinals: &[57, 2],
-        deposits: true,
         type_value: None,
     },
-    Spelling {
-        kind: Kind::PolicyLink,
-        subtype: None,
-        ordinals: &[58],
-        deposits: false,
-        type_value: None,
-    },
+    Spelling { kind: Kind::PolicyLink, subtype: None, ordinals: &[58], type_value: None },
     Spelling {
         kind: Kind::PolicyLink,
         subtype: Some(Subtype::PolicyLinkOwn),
         ordinals: &[58, 1],
-        deposits: true,
         type_value: None,
     },
     Spelling {
         kind: Kind::PolicyLink,
         subtype: Some(Subtype::Disavowal),
         ordinals: &[58, 2],
-        deposits: true,
         type_value: Some("disavowal"),
     },
     Spelling {
         kind: Kind::PolicyLink,
         subtype: Some(Subtype::ExpulsionGround),
         ordinals: &[58, 3],
-        deposits: true,
         type_value: Some("expulsion-ground"),
     },
     Spelling {
         kind: Kind::PolicyLink,
         subtype: Some(Subtype::SuccessionGround),
         ordinals: &[58, 4],
-        deposits: true,
         type_value: Some("succession-ground"),
     },
     Spelling {
         kind: Kind::PolicyLink,
         subtype: Some(Subtype::SuccessionPolicy),
         ordinals: &[58, 5],
-        deposits: true,
         type_value: Some("succession-policy"),
     },
-    Spelling {
-        kind: Kind::SuccessorOf,
-        subtype: None,
-        ordinals: &[59],
-        deposits: true,
-        type_value: None,
-    },
+    Spelling { kind: Kind::SuccessorOf, subtype: None, ordinals: &[59], type_value: None },
 ];
 
 /// THE TWELVE ROWS, held once: built from the table at the first read, so a
@@ -300,88 +286,84 @@ pub fn rows() -> &'static [Row; 12] {
             kind: s.kind,
             subtype: s.subtype,
             address: commons_type(s.ordinals),
-            deposits: s.deposits,
             type_value: s.type_value,
         })
     });
     &ROWS
 }
 
-/// The row of a kind (`subtype` none) or of a subtype row under it.
-pub fn row(kind: Kind, subtype: Option<Subtype>) -> &'static Row {
-    rows()
-        .iter()
-        .find(|r| r.kind == kind && r.subtype == subtype)
-        .expect("the table holds every kind and every subtype row")
-}
-
-/// The row at index `i` of the table — the readers below, each a held pin.
-fn pin(i: usize) -> &'static Address {
-    &rows()[i].address
+/// The row whose address IS `a`, else `None` — by EQUALITY, never by
+/// prefix: an address beneath a row or above one is no row of the table.
+/// The difference is load-bearing where a reader sets the registry's rows
+/// apart from the commons' others — the seeding check's domain (REG-1.31) —
+/// since a foreign row placed under a kind is what the disjointness arm
+/// exists to catch (REG-1.30), and a prefix test would set it aside unseen.
+pub fn row_at(a: &Address) -> Option<&'static Row> {
+    rows().iter().find(|r| r.address == *a)
 }
 
 /// The BINDING — `1.1.0.1.0.1.0.3.55`; deposits ride the bare ordinal.
 pub fn t_binding() -> &'static Address {
-    pin(0)
+    &Kind::Binding.row().address
 }
 
 /// The ENDPOINT — `1.1.0.1.0.1.0.3.56`; deposits ride the bare ordinal, and
 /// no subtype row stands under it (the org row retired).
 pub fn t_endpoint() -> &'static Address {
-    pin(1)
+    &Kind::Endpoint.row().address
 }
 
 /// The TAKEDOWN RECORD's kind — `1.1.0.1.0.1.0.3.57`; no deposit on the bare
 /// ordinal (two readings).
 pub fn t_takedown() -> &'static Address {
-    pin(2)
+    &Kind::TakedownRecord.row().address
 }
 
 /// The takedown record's BASE reading — `1.1.0.1.0.1.0.3.57.1`.
 pub fn t_takedown_base() -> &'static Address {
-    pin(3)
+    &Subtype::TakedownBase.row().address
 }
 
 /// LIFTED — `1.1.0.1.0.1.0.3.57.2`; link-alone.
 pub fn t_takedown_lifted() -> &'static Address {
-    pin(4)
+    &Subtype::TakedownLifted.row().address
 }
 
 /// The POLICY LINK's kind — `1.1.0.1.0.1.0.3.58`; no deposit on the bare
 /// ordinal (five readings).
 pub fn t_policy_link() -> &'static Address {
-    pin(5)
+    &Kind::PolicyLink.row().address
 }
 
 /// The policy link's OWN reading — `1.1.0.1.0.1.0.3.58.1`; link-alone.
 pub fn t_policy_link_own() -> &'static Address {
-    pin(6)
+    &Subtype::PolicyLinkOwn.row().address
 }
 
 /// The DISAVOWAL — `1.1.0.1.0.1.0.3.58.2`.
 pub fn t_disavowal() -> &'static Address {
-    pin(7)
+    &Subtype::Disavowal.row().address
 }
 
 /// An expulsion's GROUND RECORD — `1.1.0.1.0.1.0.3.58.3`.
 pub fn t_expulsion_ground() -> &'static Address {
-    pin(8)
+    &Subtype::ExpulsionGround.row().address
 }
 
 /// A succession's GROUND RECORD — `1.1.0.1.0.1.0.3.58.4`.
 pub fn t_succession_ground() -> &'static Address {
-    pin(9)
+    &Subtype::SuccessionGround.row().address
 }
 
 /// The ORG-CHOSEN SUCCESSION POLICY — `1.1.0.1.0.1.0.3.58.5`.
 pub fn t_succession_policy() -> &'static Address {
-    pin(10)
+    &Subtype::SuccessionPolicy.row().address
 }
 
 /// `successor-of` — `1.1.0.1.0.1.0.3.59`; link-alone, the engine's own pin
 /// held equal to this one.
 pub fn t_successor_of() -> &'static Address {
-    pin(11)
+    &Kind::SuccessorOf.row().address
 }
 
 #[cfg(test)]
@@ -446,7 +428,21 @@ mod tests {
         for r in rows() {
             let bare_of_a_many_reading_kind =
                 matches!((r.kind, r.subtype), (Kind::TakedownRecord | Kind::PolicyLink, None));
-            assert_eq!(r.deposits, !bare_of_a_many_reading_kind, "{:?} {:?}", r.kind, r.subtype);
+            assert_eq!(r.deposits(), !bare_of_a_many_reading_kind, "{:?} {:?}", r.kind, r.subtype);
+        }
+    }
+
+    /// REG-1.18's test read off the table's ADDRESSES: a row carries
+    /// deposits exactly where no other row nests under it — so the column
+    /// computed off the subtypes' kinds agrees with the readings the table
+    /// places under each kind.
+    #[test]
+    fn a_row_carries_deposits_exactly_where_no_reading_nests_under_it() {
+        for r in rows() {
+            let nested = rows().iter().any(|s| {
+                s.address != r.address && is_prefix(r.address.tumbler(), s.address.tumbler())
+            });
+            assert_eq!(r.deposits(), !nested, "{}", r.address.tumbler());
         }
     }
 
@@ -504,6 +500,10 @@ mod tests {
         assert_eq!(RESERVE, 55..=59);
     }
 
+    /// A bare reserve ordinal of the commons type subspace answers itself;
+    /// an ordinal outside the reserve, a row beneath a kind, a deeper
+    /// address ending in a reserve ordinal and that ordinal in another
+    /// subspace of the ghost home document answer none.
     #[test]
     fn the_reserve_ordinal_is_read_off_a_bare_row_inside_the_reserve_alone() {
         assert_eq!(reserve_ordinal(&commons_type(&[55])), Some(55));
@@ -511,12 +511,45 @@ mod tests {
         assert_eq!(reserve_ordinal(&commons_type(&[54])), None);
         assert_eq!(reserve_ordinal(&commons_type(&[60])), None);
         assert_eq!(reserve_ordinal(&commons_type(&[57, 1])), None);
+        assert_eq!(reserve_ordinal(&commons_type(&[55, 55])), None);
+        let subspace_1 = [1u32, 1, 0, 1, 0, 1, 0, 1, 55].map(Nat::from);
+        let subspace_1 = validate(Tumbler::new(subspace_1).expect("nonempty")).expect("T4-valid");
+        assert_eq!(reserve_ordinal(&subspace_1), None);
     }
 
+    /// Each kind and each subtype names its own row of the table, held: a
+    /// kind its bare row, a subtype the row under the kind it names.
     #[test]
-    fn row_answers_each_kind_and_subtype() {
-        assert_eq!(&row(Kind::Binding, None).address, t_binding());
-        assert_eq!(&row(Kind::PolicyLink, Some(Subtype::Disavowal)).address, t_disavowal());
-        assert_eq!(row(Kind::SuccessorOf, None).type_value, None);
+    fn each_kind_and_subtype_names_its_own_row() {
+        for kind in Kind::ALL {
+            let r = kind.row();
+            assert_eq!((r.kind, r.subtype), (kind, None));
+            assert!(std::ptr::eq(r, kind.row()), "{kind:?}");
+        }
+        for subtype in Subtype::ALL {
+            let r = subtype.row();
+            assert_eq!((r.kind, r.subtype), (subtype.kind(), Some(subtype)));
+            assert!(std::ptr::eq(r, subtype.row()), "{subtype:?}");
+        }
+        assert_eq!(&Kind::Binding.row().address, t_binding());
+        assert_eq!(&Subtype::Disavowal.row().address, t_disavowal());
+        assert_eq!(Kind::SuccessorOf.row().type_value, None);
+    }
+
+    /// The row AT an address is answered by equality: every row's own
+    /// address answers that row, held; an address beneath a row, the
+    /// subspace above every row and a foreign row answer none.
+    #[test]
+    fn row_at_answers_a_rows_own_address_alone() {
+        for r in rows() {
+            let found = row_at(&r.address);
+            assert!(found.is_some_and(|f| std::ptr::eq(f, r)), "{}", r.address.tumbler());
+        }
+        let subspace = Tumbler::new(COMMONS_TYPE_PREFIX.map(Nat::from)).expect("nonempty");
+        let subspace = validate(subspace).expect("T4-valid");
+        let beneath = [commons_type(&[58, 6]), commons_type(&[57, 1, 1])];
+        for a in beneath.into_iter().chain([subspace, commons_type(&[12])]) {
+            assert_eq!(row_at(&a), None, "{}", a.tumbler());
+        }
     }
 }

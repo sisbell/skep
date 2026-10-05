@@ -153,22 +153,3 @@ pub fn seeding_check<'a>(
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::rows::{commons_type, rows};
-
-    /// The shipped rows pass against nothing foreign and against the rows
-    /// the map lists as the build's; every arm of the check is proved on a
-    /// list a suite builds, in the crate's integration suite.
-    #[test]
-    fn the_shipped_rows_pass() {
-        assert_eq!(seeding_check(rows(), std::iter::empty()), Ok(()));
-        let foreign: Vec<Address> = [1, 2, 3, 12, 14, 22, 42, 60, 61, 89, 90, 91]
-            .iter()
-            .map(|&o| commons_type(&[o]))
-            .collect();
-        assert_eq!(seeding_check(rows(), &foreign), Ok(()));
-    }
-}

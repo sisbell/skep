@@ -42,7 +42,7 @@ const PINS: [(Reader, &str); 23] = [
 
 /// Whether `a` is a registry row — one of `skep-registry`'s twelve.
 fn is_registry_row(a: &Address) -> bool {
-    skep_registry::rows().iter().any(|r| r.address == *a)
+    skep_registry::row_at(a).is_some()
 }
 
 /// The pairs the registry's own nesting admits (REG-1.20): each subtype
@@ -52,7 +52,7 @@ fn nested_pairs() -> Vec<(&'static Address, &'static Address)> {
         .iter()
         .filter_map(|r| {
             let subtype = r.subtype?;
-            Some((&skep_registry::row(subtype.kind(), None).address, &r.address))
+            Some((&subtype.kind().row().address, &r.address))
         })
         .collect()
 }

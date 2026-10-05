@@ -145,7 +145,6 @@ fn the_count_arm_holds_the_kind_rows_to_the_reserves_five_ordinals() {
         kind: Kind::Binding,
         subtype: None,
         address: commons_type(&[54]),
-        deposits: true,
         type_value: Some("binding"),
     });
     assert_eq!(
@@ -174,7 +173,6 @@ fn the_arms_run_in_order() {
         kind: Kind::Binding,
         subtype: None,
         address: commons_type(&[54]),
-        deposits: true,
         type_value: Some("binding"),
     });
     let foreign = commons_type(&[55, 1]);

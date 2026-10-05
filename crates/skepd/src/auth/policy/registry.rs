@@ -384,12 +384,13 @@ pub(crate) fn registry_admission(
 /// members and the registry's own rows spelled a second time — held EQUAL by
 /// the suite that sees both spellings, and no foreign row here.
 pub(crate) fn seeding_domain() -> Vec<Address> {
-    let registry_row = |a: &Address| skep_registry::rows().iter().any(|r| r.address == *a);
     pins_outside_the_registry()
         .into_iter()
         .chain([t_enroll(), t_retire(), t_claim()])
         .cloned()
-        .chain(deposit_class_types().iter().filter(|ty| !registry_row(ty)).cloned())
+        .chain(
+            deposit_class_types().iter().filter(|ty| skep_registry::row_at(ty).is_none()).cloned(),
+        )
         .collect()
 }
 
@@ -460,7 +461,7 @@ mod tests {
     fn the_shipped_domain_passes_the_seeding_check() {
         let domain = seeding_domain();
         assert_eq!(domain.len(), 8 + 3 + 2);
-        assert!(domain.iter().all(|a| !skep_registry::rows().iter().any(|r| r.address == *a)));
+        assert!(domain.iter().all(|a| skep_registry::row_at(a).is_none()));
         for c in [t_enroll(), t_retire(), t_claim()] {
             assert!(domain.contains(c));
         }

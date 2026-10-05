@@ -14,20 +14,22 @@ own doc 1, and an org deposits its endpoint into its node account's doc 1.
 What those two halves share — the daemon that verifies and commits the
 deposits, and the resolver that reads them back — is this crate:
 
-- **The twelve rows** (`rows`, `row`, `Row`, `Kind`, `Subtype`, a held
-  reader per row, `t_binding` … `t_successor_of`, and `commons_type`, a
-  commons type address at any ordinals) — five kinds on the reserve's
-  ordinals `3.55`–`3.59` of the ghost home document's type subspace and
-  seven subtype rows nested under their kinds by prefix, at the addresses
+- **The twelve rows** (`rows`, `Row`, `Kind` and `Subtype` each naming its
+  own row by `row`, `row_at` for the row an address is, a held reader per
+  row, `t_binding` … `t_successor_of`, and `commons_type`, a commons type
+  address at any ordinals) — five kinds on the reserve's ordinals
+  `3.55`–`3.59` of the ghost home document's type subspace and seven
+  subtype rows nested under their kinds by prefix, at the addresses
   commons-map pins (REG-1.14, REG-1.15, REG-1.20, REG-1.24): the binding
   `3.55`, the endpoint `3.56`, the takedown record `3.57` with its base
   reading `3.57.1` and LIFTED `3.57.2`, the policy link `3.58` with its own
   reading `3.58.1`, the disavowal `3.58.2`, an expulsion's ground record
   `3.58.3`, a succession's ground record `3.58.4` and the org-chosen
-  succession policy `3.58.5`, and `successor-of` `3.59`. Each row says
-  whether a deposit rides its address (REG-1.18: a kind that reads more than
-  one way carries none on its bare ordinal) and the `type` string its body
-  carries where it has one.
+  succession policy `3.58.5`, and `successor-of` `3.59`. Each row holds
+  the `type` string its body carries where it has one, and answers whether
+  a deposit rides its address by REG-1.18's test, computed off the kinds'
+  subtype rows and never stored: a kind that reads more than one way
+  carries none on its bare ordinal.
 - **The two bodies** (`Binding`, `Endpoint`, `Origins`, `Body`, `BodyKind`,
   `parse`, `encode`, `Record`, `Refusal`) — `{"type":"binding","prefix":…}`
   and `{"type":"endpoint","origins":[…]}`, each with `replaces` where a

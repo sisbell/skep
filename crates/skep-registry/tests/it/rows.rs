@@ -2,9 +2,9 @@
 
 use skep_address::{is_prefix, Address};
 use skep_registry::{
-    row, rows, t_binding, t_disavowal, t_endpoint, t_expulsion_ground, t_policy_link,
-    t_policy_link_own, t_succession_ground, t_succession_policy, t_successor_of, t_takedown,
-    t_takedown_base, t_takedown_lifted, Kind, Subtype,
+    rows, t_binding, t_disavowal, t_endpoint, t_expulsion_ground, t_policy_link, t_policy_link_own,
+    t_succession_ground, t_succession_policy, t_successor_of, t_takedown, t_takedown_base,
+    t_takedown_lifted, Kind, Subtype,
 };
 
 /// One row's held reader.
@@ -21,8 +21,7 @@ fn the_table_holds_five_kinds_and_seven_subtype_rows() {
         assert!(rows().iter().any(|r| r.kind == kind && r.subtype.is_none()), "{kind:?}");
     }
     for subtype in Subtype::ALL {
-        let r = row(subtype.kind(), Some(subtype));
-        let k = row(subtype.kind(), None);
+        let (r, k) = (subtype.row(), subtype.kind().row());
         assert!(is_prefix(k.address.tumbler(), r.address.tumbler()), "{subtype:?}");
     }
     let readers: [(Reader, &str); 12] = [
@@ -50,7 +49,7 @@ fn the_table_holds_five_kinds_and_seven_subtype_rows() {
 fn the_deposits_column_follows_the_bare_ordinal_test() {
     let none: Vec<String> = rows()
         .iter()
-        .filter(|r| !r.deposits)
+        .filter(|r| !r.deposits())
         .map(|r| r.address.tumbler().to_string())
         .collect();
     assert_eq!(none, ["1.1.0.1.0.1.0.3.57", "1.1.0.1.0.1.0.3.58"]);

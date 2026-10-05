@@ -344,8 +344,9 @@ verifies and commits a registry deposit, and a resolver that reads it back
 the twelve commons rows the registry allocates — five kinds on the
 reserve's ordinals `3.55`–`3.59` of the ghost home document's type
 subspace and seven subtype rows nested under their kinds by prefix — each
-row with its kind, its subtype, whether a deposit rides its address and
-the `type` string its body carries, read through one held pin per row;
+row with its kind, its subtype and the `type` string its body carries,
+read through one held pin per row, and answering whether a deposit rides
+its address by REG-1.18's test, computed and never stored;
 `body.rs` the binding's and the endpoint's bodies — address members typed
 as addresses, origins a non-empty list, each kind's `type` string read off
 its row — their one parser under the canonical rule, their encoder and the

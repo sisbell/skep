@@ -51,7 +51,7 @@ use std::fmt::Write as _;
 use serde_json::Value;
 use skep_address::{validate, Address, Nat, Tumbler};
 
-use crate::rows::{row, Kind};
+use crate::rows::Kind;
 
 /// The most bytes a registry record body may carry, `sig` included, a body
 /// past it refused ([`Refusal::PastCap`]) before any parse — 16 KiB, an
@@ -82,7 +82,7 @@ impl BodyKind {
             BodyKind::Binding => Kind::Binding,
             BodyKind::Endpoint => Kind::Endpoint,
         };
-        row(kind, None).type_value.expect("the binding's and the endpoint's rows carry a body")
+        kind.row().type_value.expect("the binding's and the endpoint's rows carry a body")
     }
 }
 

@@ -199,10 +199,9 @@ fn the_registrys_twelve_rows_are_the_ledgers_pins_at_the_maps_addresses() {
 /// builds, and the daemon widens the domain by its credential constants.
 #[test]
 fn the_seeding_check_passes_over_what_the_engine_sees() {
-    let registry_rows = |a: &Address| skep_registry::rows().iter().any(|r| r.address == *a);
     let domain: Vec<&Address> = pins_outside_the_registry()
         .into_iter()
-        .chain(deposit_class_types().iter().filter(|ty| !registry_rows(ty)))
+        .chain(deposit_class_types().iter().filter(|ty| skep_registry::row_at(ty).is_none()))
         .collect();
     assert_eq!(domain.len(), 8 + 2, "eight pins and the two credential members of M5's set");
     assert_eq!(skep_registry::seeding_check(skep_registry::rows(), domain), Ok(()));

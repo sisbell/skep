@@ -22,6 +22,12 @@ fn delete_orphans_mirrors_delete_preconditions() {
         reads.delete_orphans(&unregistered_doc(), &vp(1, 1), &n(1)),
         Err(OrphanError::DocNotRegistered)
     );
+    // The document gate is the FIRST act, as in M5's DELETE: an unregistered
+    // `d` names the document fault whatever else the request gets wrong.
+    assert_eq!(
+        reads.delete_orphans(&unregistered_doc(), &vp(2, 1), &n(0)),
+        Err(OrphanError::DocNotRegistered)
+    );
     // A registered-but-empty d is refused for RANGE, never as unregistered:
     // n_C = 0 admits no range, and which variant answers says which fault.
     assert_eq!(
@@ -32,7 +38,8 @@ fn delete_orphans_mirrors_delete_preconditions() {
         reads.delete_orphans(&doc2(), &vp(1, 1), &n(0)),
         Err(OrphanError::EmptyWidth)
     );
-    // Check order mirrors §6: subspace, then width, then the folded bounds.
+    // Check order mirrors §6: the document, then subspace, then width, then
+    // the folded bounds.
     assert_eq!(
         reads.delete_orphans(&doc1(), &vp(2, 1), &n(0)),
         Err(OrphanError::NotContentSubspace)
@@ -79,7 +86,8 @@ fn delete_orphans_reports_active_last_witness_losses() {
     // Deleting position 1 leaves link_a witnessed at position 2 — no orphan.
     let r = reads.delete_orphans(&doc1(), &vp(1, 1), &n(1)).expect("preview");
     assert_eq!(r.orphaned, vec![]);
-    // Deleting everything orphans both (no retained content, no link runs).
+    // Deleting everything orphans both: no content survives, and neither link
+    // touches the link runs a text delete keeps, where makelink seated both.
     let r = reads.delete_orphans(&doc1(), &vp(1, 1), &n(3)).expect("preview");
     assert_eq!(r.orphaned, vec![la(1), la(2)]);
 
@@ -397,36 +405,48 @@ fn delete_orphans_refuses_a_document_past_the_run_budget() {
 }
 
 /// §6 — the preview's budget counts `d`'s LINK runs too, which no text range
-/// splits and which the second stab therefore takes whole. `d` holds exactly
-/// the budget in content runs, so a range that cuts none of them is answered;
-/// seating one link there — one link run, one more query span — carries the
-/// same request past the budget. Every other budget fixture leaves `d`'s link
-/// subspace empty, where the link term is zero and a preview that forgot it
-/// would answer alike.
+/// splits and which the second stab therefore takes whole — and it is the
+/// EXACT count, taken after the range's cut ends resolve, that must hold
+/// them. `d` holds `MAX − 1` content runs, the first of them three positions
+/// wide; seating one link makes `d`'s own `#runs` the budget exactly, which
+/// the pre-check ahead of the resolution admits, so each verdict after the
+/// seat is the exact count's. A range cutting the wide run at one end stabs
+/// `MAX` content pieces: the budget itself with no link run, one past it with
+/// one. A range taking a width-1 run whole stabs `MAX − 1` pieces and the
+/// link run, and is answered. A `d` whose own `#runs` were already past the
+/// budget would be refused by the pre-check first, where an exact count that
+/// forgot the link run answers alike.
 #[test]
 fn the_preview_budget_counts_the_link_runs_the_second_stab_takes() {
     let k = kernel();
-    seed_content(&k, &doc1(), 1);
-    let specs = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS];
+    seed_content(&k, &doc1(), 3); // one run: ca(1..3)
+
+    // doc2: one width-3 run, then `MAX − 2` width-1 runs, none abutting the
+    // next — `MAX − 1` in all.
+    let mut specs = vec![spec(&doc1(), 1, 1, 3)];
+    specs.extend(vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS - 2]);
     Vstream::new(&k)
         .copy(SYS, &doc2(), vp(1, 1), &specs)
         .expect("copy succeeds");
     let reads = Reads(&k);
 
-    // One whole run deleted and every other retained, `MAX` in all — and no
-    // link run yet, the budget met exactly.
+    // No link run yet: position 1 cuts the wide run at one end — `MAX`
+    // pieces, the budget itself.
     let snap = k.snapshot();
-    assert_eq!(snap.world().m5().content_runs(&doc2()).len(), MAX_IMAGE_RUNS);
+    assert_eq!(snap.world().m5().content_runs(&doc2()).len(), MAX_IMAGE_RUNS - 1);
     assert_eq!(snap.world().m5().link_runs(&doc2()).len(), 0);
     assert!(reads.delete_orphans(&doc2(), &vp(1, 1), &n(1)).is_ok());
 
     // One link seated in doc2 — its content untouched, so only the link term
-    // moves, and the same request is past the budget.
+    // moves, and `#runs(d)` is now the budget exactly.
     let store = LinkWriter::new(&k, &EVERYONE);
     link(&store, &doc2(), &[ca(1)], &[ca(101)]);
     let snap = k.snapshot();
-    assert_eq!(snap.world().m5().content_runs(&doc2()).len(), MAX_IMAGE_RUNS);
+    assert_eq!(snap.world().m5().content_runs(&doc2()).len(), MAX_IMAGE_RUNS - 1);
     assert_eq!(snap.world().m5().link_runs(&doc2()).len(), 1);
+    // Position 4, a width-1 run taken whole: `MAX − 1` pieces and the link run.
+    assert!(reads.delete_orphans(&doc2(), &vp(1, 4), &n(1)).is_ok());
+    // The same one-end cut as above: `MAX` pieces and the link run.
     assert_eq!(
         reads.delete_orphans(&doc2(), &vp(1, 1), &n(1)),
         Err(OrphanError::ImageTooLarge)

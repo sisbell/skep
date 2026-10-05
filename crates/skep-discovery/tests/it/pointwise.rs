@@ -4,6 +4,8 @@
 
 use crate::common;
 
+use std::cell::RefCell;
+
 use common::*;
 use skep_address::Address;
 use skep_arrangement::{HasM5, Vstream};
@@ -226,29 +228,43 @@ fn the_pointwise_pair_reads_the_trunk_head_the_region_family_resolves() {
 /// reader may not read is ABSENT — both `project` and
 /// `addressably_discoverable_from` give the non-link's `NotALink`, never the
 /// retracted link's `Ok(false)`, which would tell the reader a link is
-/// there. The absence rule sits where both cards put it: after the
-/// document gate, so an unregistered `d` still names the document fault; and
-/// ahead of the resident-link read, so a refused link and an address naming
-/// nothing under the same unreadable document answer alike — the reader
-/// learns nothing of that document's link chain. An address with no home is
-/// no one's to withhold, so the store answers for it, whatever the reader.
+/// there. The rule sits where both cards put it: after the document gate, so
+/// an unregistered `d` still names the document fault; and ahead of the
+/// resident-link read, so a refused link and an address naming nothing under
+/// the same unreadable document answer alike — the reader learns nothing of
+/// that document's link chain. A RETRACTED link in that home is among the
+/// refused, because it is the address whose answer changes if the rule slips
+/// behind the addressable half. No answer can show the rule ahead of the
+/// resident-link read itself — placed between that read and the addressable
+/// half, it still answers every refused address `NotALink` — so a recording
+/// predicate does: it is asked the home of an address that names nothing. An
+/// address with no home is no one's to withhold, so the store answers for
+/// it, whatever the reader.
 #[test]
 fn the_pointwise_reads_apply_the_absence_rule_after_the_document_and_before_residence() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
     let doc2_link = link(&store, &doc2(), &[ca(1)], &[ca(101)]);
+    // Homed in doc2 as well, reaching position 1 — and then RETRACTED.
+    let retracted = link(&store, &doc2(), &[ca(1)], &[ca(102)]);
+    store.nullify(SYS, &doc2(), &retracted).expect("nullify succeeds");
     let nothing = la2(99); // under doc2, naming no link
     let snap = k.snapshot();
     let cannot_read_doc2 = |d: &Address| *d != doc2();
 
-    // Admitted, the link answers as a link and the non-link as a non-link …
+    // Admitted, the link answers as a link, the retracted link as present and
+    // not active, and the non-link as a non-link …
     assert!(project_on(&snap, &doc2_link, FROM, &doc1(), &every_home)
         .expect("project")
         .denotes(&t(&[1, 1])));
     assert_eq!(
         addressably_discoverable_from_on(&snap, &doc2_link, &doc1(), &every_home),
         Ok(true)
+    );
+    assert_eq!(
+        addressably_discoverable_from_on(&snap, &retracted, &doc1(), &every_home),
+        Ok(false)
     );
     assert_eq!(
         project_on(&snap, &nothing, FROM, &doc1(), &every_home),
@@ -258,8 +274,9 @@ fn the_pointwise_reads_apply_the_absence_rule_after_the_document_and_before_resi
         addressably_discoverable_from_on(&snap, &nothing, &doc1(), &every_home),
         Err(QueryError::NotALink)
     );
-    // … and refused, the two cannot be told apart.
-    for addr in [&doc2_link, &nothing] {
+    // … and refused, the three cannot be told apart — the retracted link
+    // included.
+    for addr in [&doc2_link, &retracted, &nothing] {
         assert_eq!(
             project_on(&snap, addr, FROM, &doc1(), &cannot_read_doc2),
             Err(QueryError::NotALink),
@@ -291,6 +308,33 @@ fn the_pointwise_reads_apply_the_absence_rule_after_the_document_and_before_resi
     assert_eq!(
         addressably_discoverable_from_on(&snap, &account, &doc1(), &no_one),
         Err(QueryError::NotALink)
+    );
+    // AHEAD of the resident-link read, literally: the predicate is asked the
+    // home of an address that names nothing, before anything establishes that
+    // it does. A rule moved just behind the read answers every case above
+    // alike, and asks nothing here.
+    let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
+    let recorder = |d: &Address| {
+        asked.borrow_mut().push(d.clone());
+        true
+    };
+    assert_eq!(
+        project_on(&snap, &nothing, FROM, &doc1(), &recorder),
+        Err(QueryError::NotALink)
+    );
+    assert_eq!(
+        asked.take(),
+        vec![doc2()],
+        "project asks before the resident-link read"
+    );
+    assert_eq!(
+        addressably_discoverable_from_on(&snap, &nothing, &doc1(), &recorder),
+        Err(QueryError::NotALink)
+    );
+    assert_eq!(
+        asked.take(),
+        vec![doc2()],
+        "addressably_discoverable_from asks before the resident-link read"
     );
 }
 

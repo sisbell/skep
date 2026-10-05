@@ -51,6 +51,34 @@ fn retrieve_endsets_withholds_identity_and_ships_whole_endsets_in_pinned_order()
     );
 }
 
+/// §4 — RETRIEVEENDSETS reads out the region family's selection index, which
+/// is addressable-filtered: a retracted link ships no pair, though its
+/// coverage still reaches the region. It stabs the image itself, slot by
+/// slot, rather than reading the set the other three read-outs share, so it
+/// answers to the filter here and not through them. The retracted link's
+/// endset is its own, so the pair it would ship is not one a live link still
+/// carries.
+#[test]
+fn retrieve_endsets_ships_no_pair_for_a_retracted_link() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let reads = Reads(&k);
+    link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    let retracted = link(&store, &doc1(), &[ca(1), ca(102)], &[ca(103)]);
+    let region = [vspan(1, 1, 1)];
+    assert_eq!(
+        reads.retrieve_endsets(&doc1(), &region),
+        Ok(vec![(FROM, enc(&[ca(1)])), (FROM, enc(&[ca(1), ca(102)]))])
+    );
+    // Retracted in doc2, so the retraction's own tuple stays off doc1's content.
+    store.nullify(SYS, &doc2(), &retracted).expect("nullify succeeds");
+    assert_eq!(
+        reads.retrieve_endsets(&doc1(), &region),
+        Ok(vec![(FROM, enc(&[ca(1)]))])
+    );
+}
+
 /// §4 — the pinned order is TOTAL: fourteen FROM endsets that tie on every
 /// key but one — eight sharing their one span's start and differing in its
 /// width, six sharing their first span and differing in the second — come

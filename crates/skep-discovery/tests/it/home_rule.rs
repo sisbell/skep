@@ -255,13 +255,15 @@ fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
     assert_eq!(report.orphaned.len(), 3);
     assert_eq!(sorted(asked.take()), sorted(homes_of(&report.orphaned)));
     // "Past its OTHER filters": under a home-bound descriptor only the
-    // residing candidate costs a consult, in the enumeration and in the
-    // window's lazy key-cut alike.
+    // residing candidate costs a consult, in the enumeration, the count and
+    // the window's lazy key-cut alike.
     let homed_in_doc2 = FourSet {
         home: SlotSpec::Spans(enc(&[doc2()])),
         ..FourSet::any()
     };
     assert_eq!(findlinks_ftt_on(&snap, &homed_in_doc2, &recorder), vec![la2(1)]);
+    assert_eq!(asked.take(), vec![doc2()]);
+    assert_eq!(count_ftt_on(&snap, &homed_in_doc2, &recorder), 1);
     assert_eq!(asked.take(), vec![doc2()]);
     assert_eq!(
         window_ftt_on(&snap, &homed_in_doc2, None, 5, &recorder).batch,
@@ -276,6 +278,35 @@ fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
         Err(QueryError::NotALink)
     );
     assert_eq!(asked.take(), vec![]);
+}
+
+/// §6 — the preview asks the home rule (PUB-6.13) PAST its own filter, the
+/// relative complement — the rule runs AFTER the set identity, in the
+/// preview's own words — so a link the delete leaves witnessed costs no
+/// consult (PUB-7.15, PUB-7.16). The once-per-candidate law's fixture orphans
+/// every link it holds, where asking before the complement and after it ask
+/// alike; here one link survives, homed in a document that is neither `d` nor
+/// the orphan's home, so an ask of its home cannot pass for an ask of `d`.
+#[test]
+fn the_preview_asks_its_predicate_only_of_the_links_it_orphans() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 2);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let orphan = link(&store, &doc1(), &[ca(1)], &[ca(101)]); // la(1): position 1 alone
+    link(&store, &doc2(), &[ca(1)], &[ca(2)]); // la2(1): witnessed at position 2 too
+    let snap = k.snapshot();
+    let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
+    let recorder = |d: &Address| {
+        asked.borrow_mut().push(d.clone());
+        true
+    };
+    let report = delete_orphans_on(&snap, &doc1(), &vp(1, 1), &n(1), &recorder).expect("preview");
+    assert_eq!(report.orphaned, vec![orphan]);
+    assert_eq!(
+        asked.take(),
+        vec![doc1()],
+        "the orphan's home alone — the survivor's, doc2, is never asked"
+    );
 }
 
 /// §4 — PUB-6.15: filtered at link HOME, UNFILTERED at origin. The home rule

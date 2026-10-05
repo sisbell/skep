@@ -91,14 +91,14 @@ fn the_descriptor_states_its_own_zero() {
 
 /// §3 — the conjunction is handed to M7 smallest constraint first, because
 /// M7 drives ONE whole-store scan with the first and narrows the survivors
-/// with the rest. That reordering must move work and not the answer, and the
-/// way it could move the answer is by decoupling an endset from its slot: a
-/// descriptor whose big constraint is FROM and small is TO answers the same
-/// links as it did unsorted, and its MIRROR — the same two endsets in the
-/// other slots — answers different links, not the same ones. A sort that lost
-/// the pairing would make the two agree.
+/// with the rest. That order is cost, and no answer shows it. What an answer
+/// can show is the one way a reordering could move it: by parting an endset
+/// from its slot. A descriptor whose big constraint is FROM and small is TO
+/// answers the links it would answer unsorted, and its MIRROR — the same two
+/// endsets in the other slots — answers different links, not the same ones.
+/// A sort that lost the pairing would make the two agree.
 #[test]
-fn ftt_hands_the_smallest_constraint_first_without_moving_the_answer() {
+fn ftt_orders_its_constraints_without_parting_an_endset_from_its_slot() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
     let store = LinkWriter::new(&k, &EVERYONE);
@@ -206,14 +206,18 @@ fn ftt_home_filter_is_an_address_projection_applied_lazily() {
         assert_eq!(reads.window_ftt(&q, None, 5).batch, vec![]);
     }
 
-    // The home filter is applied lazily during the window walk: pagination
-    // over the home-narrowed set with the same cursor mechanism.
+    // The home filter is applied lazily during the window walk — before the
+    // slice, not after it — so pagination runs over the home-narrowed set
+    // with the same cursor mechanism.
     let w1 = reads.window_ftt(&q_home1, None, 1);
     assert_eq!(w1.batch, vec![la(1)]);
     assert!(!w1.exhausted);
     let w2 = reads.window_ftt(&q_home1, w1.next, 5);
     assert_eq!(w2.batch, vec![la(2)]);
     assert!(w2.exhausted);
+    // doc2's one link sorts after both of doc1's, so a filter applied to a
+    // one-link slice would hand back an empty page here.
+    assert_eq!(reads.window_ftt(&q_home2, None, 1).batch, vec![la2(1)]);
 }
 
 /// §3 — `athome` is PREFIX COVERAGE, not address equality: the constraint's

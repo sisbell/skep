@@ -118,10 +118,11 @@ pub(crate) fn window_over(
     keep: impl Fn(&Address) -> bool,
 ) -> Window {
     let n = n.max(1);
-    let lo = match &cur {
-        None => Unbounded,
-        Some(c) => Excluded(c.clone()),
-    };
+    // The cut BORROWS the cursor — `range` accepts any `RangeBounds`, std's
+    // borrowed `(Bound<&T>, Bound<&T>)` included, as std's ordered maps do —
+    // so the cursor is moved into `next` when the batch is empty and dropped
+    // otherwise, never copied to be cut at.
+    let lo = cur.as_ref().map_or(Unbounded, Excluded);
     let batch: Vec<Address> = candidates
         .range((lo, Unbounded))
         .filter(|&a| keep(a))

@@ -19,9 +19,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   reader predicate and reveals no link homed where that reader
   may not read.
 - **Reads over a snapshot you hold** — every read is a free `*_on`
-  function over an explicit snapshot and the caller's reader
-  predicate, so the caller owns the consistency point and can report
-  as-of positions.
+  function over an explicit snapshot, so the caller owns the
+  consistency point and can report as-of positions.
 
 Presents the link store's matcher — never reimplements it; reads one
 snapshot per operation, the one its caller hands it, and writes nothing.

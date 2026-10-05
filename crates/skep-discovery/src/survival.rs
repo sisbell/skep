@@ -6,7 +6,7 @@
 //! Conflicts #8).
 
 use num_traits::{One, Zero};
-use skep_address::{Address, Nat, Span};
+use skep_address::{Address, Nat};
 use skep_arrangement::{Run, VPos};
 use skep_kernel::Snapshot;
 
@@ -16,17 +16,6 @@ use crate::image::content_vspan;
 use crate::sets::stab_runs;
 use crate::types::{OrphanError, OrphanReport};
 use crate::DiscoveryWorld;
-
-/// [`content_vspan`] at a bare content `ordinal`: `count` positions from it,
-/// built through the query surface's own V-span constructor — so the spans
-/// this hands `resolve` are the shape `resolve` reads and the shape the
-/// region gate accepts. Total where the published constructor is partial: the
-/// subspace is `s_C` here by construction, and the callers' width ≥ 1 guard
-/// excludes `count = 0`, the only other thing declined.
-fn content_vspan_at(ordinal: &Nat, count: &Nat) -> Span {
-    let at = VPos::content(ordinal.clone());
-    content_vspan(&at, count).expect("s_C ∧ width ≥ 1 ⇒ count ≥ 1")
-}
 
 /// Pre-edit what-if (ASN-0117): the links the proposed DELETE `[p, p+width)`
 /// would drop from `d` — read-only, never the edit path.
@@ -68,7 +57,7 @@ fn content_vspan_at(ordinal: &Nat, count: &Nat) -> Span {
 /// slot span of every link, so these runs are the side of that join the
 /// preview supplies, held to the number the region family holds its image
 /// to. The runs counted are `d`'s own, content and link, plus one for each
-/// end of the range that falls INSIDE a run: M5's `resolve` clips a run to
+/// end of the range that falls INSIDE a run: M5's resolution clips a run to
 /// the span asked, so the prefix, the deleted range and the suffix each take
 /// a piece of a run the range cuts. So a `d` whose own runs are past the
 /// budget is refused every range; a `d` that one or two cut runs would carry
@@ -136,26 +125,29 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
         return Err(OrphanError::ImageTooLarge);
     }
 
-    let a_del = w.m5().resolve(d, &content_vspan_at(p_ordinal, width)); // no clipping now (bounds checked)
-    let prefix = if *p_ordinal > Nat::one() {
-        Some(content_vspan_at(&Nat::one(), &(p_ordinal - Nat::one())))
-    } else {
-        None
-    };
-    let suffix = if suffix_start <= n_c {
-        Some(content_vspan_at(
-            &suffix_start,
-            &(&n_c - &suffix_start + Nat::one()),
-        ))
-    } else {
-        None
-    };
-    // The surviving CONTENT runs. `d`'s link runs are retained too — a text
-    // delete never touches links — and are chained onto these where the query
-    // is lifted, so M5's loan of them is read rather than copied.
+    // The three spans partitioning `[1, n_C]`, each built by the query
+    // surface's own V-span constructor, so what M5 resolves is the shape the
+    // region gate accepts. The deleted range is the request's own position,
+    // where the constructor answers because `p` is `s_C` and `width ≥ 1`, both
+    // refused above when not; the bounds are checked, so nothing is clipped.
+    // The prefix `[1, p)` and the suffix `[p + width, n_C]` take the
+    // constructor's own `None` at a zero count as an empty side — no prefix at
+    // `p = 1`, no suffix once the range reaches `n_C` — and neither count can
+    // underflow, the bounds check holding `p ≥ 1` and `p + width ≤ n_C + 1`.
+    let deleted =
+        content_vspan(p, width).expect("p is s_C and width ≥ 1, both refused above when not");
+    let a_del = w.m5().resolve(d, &deleted);
+    let prefix = content_vspan(&VPos::content(Nat::one()), &(p_ordinal - Nat::one()));
+    let suffix_count = &n_c + Nat::one() - &suffix_start;
+    let suffix = content_vspan(&VPos::content(suffix_start), &suffix_count);
+    // The surviving CONTENT runs, pulled off M5's lazy resolution straight into
+    // `retained`, so no side is collected into a vector of its own only to be
+    // drained. `d`'s link runs are retained too — a text delete never touches
+    // links — and are chained onto these where the query is lifted, so M5's
+    // loan of them is read rather than copied.
     let mut retained: Vec<Run> = Vec::new();
     for span in [prefix, suffix].into_iter().flatten() {
-        retained.extend(w.m5().resolve(d, &span));
+        retained.extend(w.m5().iter_resolve(d, &span));
     }
     // The run budget, exactly, on the side of the join the preview supplies:
     // the runs both stabs below take as their query, after every check of the

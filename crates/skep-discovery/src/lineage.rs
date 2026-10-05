@@ -136,14 +136,18 @@ fn endpoint(e: &Endset, fence: &'static str) -> Address {
 ///
 /// The home rule is asked of each claim's own address, and only a claim it
 /// admits is read out by [`claim_at`].
-fn claims_on<W: DiscoveryWorld>(
-    s: &Snapshot<W>,
+///
+/// It reads the link store alone, so it takes the store, as [`claim_at`]
+/// beside it and `descriptor`'s `candidates` do: the two public reads are its
+/// generic shell, and monomorphizing them for a world copies their one call,
+/// never this body.
+fn claims_on(
+    l: &LinkState,
     key: &Address,
     endpoint: Endpoint,
     view: View,
     readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<SupClaim> {
-    let l = s.world().links();
     if l.readlink(key).is_none() {
         return Vec::new(); // resident-key gate (EL4 + R0a)
     }
@@ -185,7 +189,7 @@ pub fn in_claims_on<W: DiscoveryWorld>(
     view: View,
     readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<SupClaim> {
-    claims_on(s, y, Endpoint::Old, view, readable)
+    claims_on(s.world().links(), y, Endpoint::Old, view, readable)
 }
 
 /// The claims with `new = x` (ASN-0125 EL11b `out(x)`): asks about G (TO)
@@ -197,5 +201,5 @@ pub fn out_claims_on<W: DiscoveryWorld>(
     view: View,
     readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<SupClaim> {
-    claims_on(s, x, Endpoint::New, view, readable)
+    claims_on(s.world().links(), x, Endpoint::New, view, readable)
 }

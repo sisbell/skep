@@ -19,8 +19,12 @@ use crate::DiscoveryWorld;
 /// `FROM = old/superseded`, `TO = new/superseding`. The endpoint is
 /// ASN-0125's and fixed; the slot — the SIDE, in ASN-0125's and M7's word
 /// (from-side/to-side, F-side/G-side) — is the storage convention's, and
-/// [`Endpoint::pattern`] is the one place the first is mapped to the
-/// second, so the two probes cannot put the key on the wrong slot.
+/// this type is the one place the first is mapped to the second, in both
+/// directions the read asks: [`Endpoint::pattern`] puts a key in the slot
+/// that holds the endpoint, and [`Endpoint::slot`] reads the endpoint out of
+/// a stored tuple. So a probe, a claim's read-out and the equality
+/// [`claims_naming`] asks between them answer from one mapping, and a change
+/// of convention is an edit to this type alone.
 #[derive(Clone, Copy)]
 enum Endpoint {
     /// `in(y)` — the claims whose `old` is the key, asked of F.
@@ -48,6 +52,20 @@ impl Endpoint {
         }
     }
 
+    /// The slot of a stored `[K_sup]` tuple that holds this endpoint — its F
+    /// for [`Endpoint::Old`], its G for [`Endpoint::New`]: the mapping
+    /// [`Endpoint::pattern`] probes by, read the other way, so a claim's
+    /// endpoints come out of the slots its probe asked about. The destructure
+    /// is exhaustive, so a field M7 adds to [`Tuple`] fails to build here, at
+    /// the one place the mapping lives.
+    fn slot(self, t: &Tuple) -> &Endset {
+        let Tuple { addr: _, from, to } = t;
+        match self {
+            Endpoint::Old => from,
+            Endpoint::New => to,
+        }
+    }
+
     /// The address `c` names at this endpoint — its `old` for
     /// [`Endpoint::Old`], its `new` for [`Endpoint::New`]: ASN-0125's own
     /// reading of a claim, with no storage convention in it.
@@ -59,9 +77,9 @@ impl Endpoint {
     }
 }
 
-/// What one `[K_sup]` tuple says, if it is a claim: its two endpoints under
-/// the flipped convention, its home attribution (EL8b), and its own activity
-/// — or `None` for a tuple that is not one.
+/// What one `[K_sup]` tuple says, if it is a claim: its two endpoints, each
+/// read out of the slot [`Endpoint::slot`] names, its home attribution
+/// (EL8b), and its own activity — or `None` for a tuple that is not one.
 ///
 /// RECOGNIZED BEFORE IT IS REPORTED. ASN-0125's archival read ranges over the
 /// schema-conforming claims Ŝ^Σ (Df-DISC(ii)), and a tuple is read out only
@@ -92,13 +110,12 @@ impl Endpoint {
 /// supersession class's typed slice, and its slots are the tuple's stored F
 /// and G — read once, by `observe`, and not again here.
 fn claim_at(l: &LinkState, t: Tuple) -> Option<SupClaim> {
-    let Tuple { addr, from, to } = t;
-    let old = endpoint(&from)?;
-    let new = endpoint(&to)?;
-    let home = home_of(&addr)?; // EL8b
-    let active = l.is_active(&addr);
+    let old = endpoint(Endpoint::Old.slot(&t))?;
+    let new = endpoint(Endpoint::New.slot(&t))?;
+    let home = home_of(&t.addr)?; // EL8b
+    let active = l.is_active(&t.addr);
     Some(SupClaim {
-        claim: addr,
+        claim: t.addr,
         old,
         new,
         home,

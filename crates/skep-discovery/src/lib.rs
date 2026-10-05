@@ -32,9 +32,11 @@
 //! * [`project_on`] is NOT ADDRESSABLE-FILTERED — coverage reaches it
 //!   through M7's `followlink`, which takes no `View` and reports what is
 //!   recorded, so a retracted link still projects the V-positions it covers.
-//!   That is ASN-0098's `project` unchanged; the addressable-filtered
-//!   question it looks like it answers is
-//!   [`addressably_discoverable_from_on`]'s.
+//!   In that it is ASN-0098's `project`, which knows nothing of retraction;
+//!   it is narrower in what it reads, the content subspace alone, so an empty
+//!   projection is not LP12's "unreachable" either. The question it looks
+//!   like it answers — does a live link reach `d`? — is
+//!   [`addressably_discoverable_from_on`]'s, which reads both subspaces.
 //! * the lineage pair ([`in_claims_on`]/[`out_claims_on`]) takes a `View`,
 //!   so the caller chooses: `Active` yields the operative graph, `Audit` the
 //!   full history including nullified claims, each disclosing its own

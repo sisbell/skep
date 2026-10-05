@@ -68,8 +68,11 @@ fn project_is_content_subspace_i_to_v_with_conflated_not_a_link() {
 /// `addressably_discoverable_from` are two functions, so the case is stated
 /// as the pair answering oppositely off one state. The ∅ cases beside it are
 /// coverage that lands nowhere at all; this is coverage that lands squarely
-/// in `d`, in the other subspace — which the second assertion is what
-/// witnesses.
+/// in `d`, in the other subspace — which the last assertion is what
+/// witnesses. Every slot projects ∅, TYPE included, so `followlink` composed
+/// with `project` calls this live claim unreachable from `d` where LP12 calls
+/// it reachable: the composition is not LP12, and
+/// `addressably_discoverable_from_on`'s card says so.
 #[test]
 fn project_is_content_subspace_only_where_discoverability_reaches_the_link_subspace() {
     let k = kernel();
@@ -86,6 +89,7 @@ fn project_is_content_subspace_only_where_discoverability_reaches_the_link_subsp
 
     assert!(reads.project(&claim, FROM, &doc1()).expect("project").is_empty());
     assert!(reads.project(&claim, TO, &doc1()).expect("project").is_empty());
+    assert!(reads.project(&claim, TYPE, &doc1()).expect("project").is_empty());
     assert_eq!(reads.addressably_discoverable_from(&claim, &doc1()), Ok(true));
 }
 

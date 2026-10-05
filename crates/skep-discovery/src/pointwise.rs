@@ -1,8 +1,9 @@
-//! §5 — pointwise projection & discoverability (content subspace): `project`
-//! (ASN-0098 I→V, through M5's level-class-safe `project`) and
-//! `addressably_discoverable_from` (ASN-0098's LP12 discoverability narrowed
-//! to ASN-0121/0132's addressable population, `dom(L) ∖ nullified`). The two
-//! read the active view differently, and deliberately:
+//! §5 — pointwise projection & discoverability: `project` (ASN-0098 I→V into
+//! the CONTENT subspace alone, through M5's level-class-safe `project`) and
+//! `addressably_discoverable_from` (ASN-0098's LP12 discoverability, read over
+//! BOTH subspaces and narrowed to ASN-0121/0132's addressable population,
+//! `dom(L) ∖ nullified`). The two read the active view differently, and
+//! deliberately:
 //! `addressably_discoverable_from` conjoins `is_active`, while `project`
 //! reports the recorded coverage M7's `followlink` hands over, retracted
 //! links included.
@@ -177,8 +178,11 @@ fn touches(e: &Endset, extents: &[Span]) -> bool {
 /// ASN-0121/0132's population `dom(L) ∖ nullified`. Their conjunction is
 /// STRICTLY stronger than LP12 alone (Conflicts #8) — a nullified-but-
 /// reachable link is discoverable and not addressable, so it answers
-/// `Ok(false)`. Bare LP12, which predates retraction, is M7's `followlink`
-/// composed with M5's `project`.
+/// `Ok(false)`. Bare LP12, which predates retraction, has no read of its own
+/// here, and it is NOT M7's `followlink` composed with M5's `project`: that
+/// composition reads `d`'s content runs alone, so it calls unreachable a link
+/// whose only witness in `d` is a link address `d` seats — which LP12 calls
+/// reachable ([`project_on`] states the restriction).
 ///
 /// Tests LP12's characterisation directly per link —
 /// `∃ i : coverage(Σ.L(a).eᵢ) ∩ ran(M(reading_surface(d))) ≠ ∅` over BOTH

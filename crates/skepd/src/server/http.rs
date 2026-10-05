@@ -8,9 +8,11 @@ use serde_json::Value;
 use skep_kernel::Seq;
 
 use super::blob_routes;
-use super::reply::{reason_phrase, refuse, Reply, TransportError, SESSION_HEADER};
-use super::request::{at_most_once, BodySlot, BodySource, HttpRequest};
 use super::body_cap;
+use super::reply::{
+    reason_phrase, refuse, Fetch, Reply, TransportError, FETCH_CONTENT_TYPE, SESSION_HEADER,
+};
+use super::request::{at_most_once, BodySlot, BodySource, HttpRequest};
 use crate::auth::session::Peer;
 use crate::codec::{obj, to_bytes};
 use crate::limits::{BLOB_IDLE_BOUND, MAX_SMALL_BODY};
@@ -205,13 +207,9 @@ pub(super) fn read_request(
     let request_line = lines.next().unwrap_or("");
     let mut parts = request_line.split(' ');
     let method = parts.next().unwrap_or("").to_string();
-    let target = parts
-        .next()
-        .ok_or_else(|| String::from("request line lacks a target"))?
-        .to_string();
-    let version = parts
-        .next()
-        .ok_or_else(|| String::from("request line lacks an HTTP version"))?;
+    let target =
+        parts.next().ok_or_else(|| String::from("request line lacks a target"))?.to_string();
+    let version = parts.next().ok_or_else(|| String::from("request line lacks an HTTP version"))?;
     if parts.next().is_some() {
         return Err("malformed request line".into());
     }
@@ -235,9 +233,8 @@ pub(super) fn read_request(
         if line.is_empty() {
             continue;
         }
-        let (name, value) = line
-            .split_once(':')
-            .ok_or_else(|| format!("malformed header line '{line}'"))?;
+        let (name, value) =
+            line.split_once(':').ok_or_else(|| format!("malformed header line '{line}'"))?;
         let (name, value) = (name.trim(), value.trim());
         if name.eq_ignore_ascii_case("Content-Length") {
             at_most_once(&content_length, "header", name)?;
@@ -285,7 +282,8 @@ pub(super) fn read_request(
     // the blob family's cap is its two streaming methods' alone: the rest
     // of the family reads a body it never looks at under the small cap.
     let streams = blob_routes::streams_body(&method, &path);
-    let cap = if !streams && blob_routes::is_blob_path(&path) { MAX_SMALL_BODY } else { body_cap(&path) };
+    let cap =
+        if !streams && blob_routes::is_blob_path(&path) { MAX_SMALL_BODY } else { body_cap(&path) };
     if declared > cap {
         return Err(RequestRefusal::BodyTooLarge { declared, cap });
     }
@@ -404,10 +402,18 @@ pub(super) fn response_head(status: u16) -> Vec<u8> {
 /// by [`response_head`], which is also what opens the event stream, so no
 /// response this daemon writes can miss them. A bodiless reply carries no
 /// content headers (RFC 7230's 204).
+///
+/// `head_only` is a `HEAD` request's answer (RFC 9110 §9.3.2): the head the
+/// `GET` would carry — the status, every header, the content pair the body
+/// would be described by — and no byte of the body. HTTP's own rule and so
+/// the transport's: the router answers a `HEAD` with the `GET`'s reply,
+/// and this is where the body stays unwritten. A caller serving replies
+/// over a transport of its own owes the same to a `HEAD` it routes.
 pub(super) fn write_reply(
     stream: &mut TcpStream,
     reply: &Reply,
     deadline: Instant,
+    head_only: bool,
 ) -> io::Result<()> {
     let mut head = response_head(reply.status);
     for (name, value) in &reply.headers {
@@ -432,11 +438,58 @@ pub(super) fn write_reply(
         // session. `set_nodelay` is on, so the cost is the second write
         // call and nothing else.
         write_bounded(stream, &head, deadline)?;
+        if head_only {
+            return Ok(());
+        }
         write_bounded(stream, &body.bytes, deadline)
     } else {
         head.extend_from_slice(b"\r\n");
         write_bounded(stream, &head, deadline)
     }
+}
+
+/// THE FETCH's HEAD (wire.md §Media, THE FETCH): the 200 through
+/// [`response_head`] — so [`UNIVERSAL_HEADERS`] open it as they open every
+/// response — the route's own headers, then the content pair from the
+/// file: [`FETCH_CONTENT_TYPE`] and `Content-Length`, the file's length,
+/// on the `GET` and the `HEAD` alike. Written whole under `deadline`
+/// before any byte of the body.
+pub(super) fn write_fetch_head(
+    stream: &mut TcpStream,
+    fetch: &Fetch<'_>,
+    deadline: Instant,
+) -> io::Result<()> {
+    let mut head = response_head(fetch.status());
+    for (name, value) in fetch.headers() {
+        push_header(&mut head, name, value);
+    }
+    head.extend_from_slice(
+        format!("Content-Type: {FETCH_CONTENT_TYPE}\r\nContent-Length: {}\r\n\r\n", fetch.size())
+            .as_bytes(),
+    );
+    write_bounded(stream, &head, deadline)
+}
+
+/// One chunk of a fetch's body, under the transfer `deadline`; the socket's
+/// own write timeout — the idle bound, set by the stream — bounds a peer
+/// that stops draining.
+pub(super) fn write_chunk(
+    stream: &mut TcpStream,
+    chunk: &[u8],
+    deadline: Instant,
+) -> io::Result<()> {
+    write_bounded(stream, chunk, deadline)
+}
+
+/// THE RESET CLOSE (M-I2 (g)): `SO_LINGER` at zero, so the close that
+/// follows sends a reset and not a clean finish — a stream ended by the
+/// re-check, the idle bound or the transfer bound must not read to its
+/// client as the whole file, and a `Content-Length` already written leaves
+/// no other way to say so. The peer meets `ECONNRESET`, or an end short of
+/// the declared length. Best-effort: a socket that refuses the option is
+/// closed as it stands, which is still short of the length.
+pub(super) fn reset_close(stream: &TcpStream) {
+    let _ = rustix::net::sockopt::set_socket_linger(stream, Some(Duration::ZERO));
 }
 
 /// `event: commit` / `data: {"log_position":N}` / blank — the wire v4

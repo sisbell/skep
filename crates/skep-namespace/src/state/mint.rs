@@ -178,8 +178,7 @@ impl M3State {
         if !self.is_registered_document(home) {
             return Err(MintError::HomeNotRegistered); // P6/C2
         }
-        self.mint_on(&content_ns(home), NO_PUBLICATION_STATE)
-            .map_err(MintError::Gate)
+        self.mint_on(&content_ns(home), NO_PUBLICATION_STATE).map_err(MintError::Gate)
     }
 
     /// Next link address under `home`: namespace `(b_L(home), 1)`, element
@@ -191,8 +190,7 @@ impl M3State {
         if !self.is_registered_document(home) {
             return Err(MintError::HomeNotRegistered); // L1a
         }
-        self.mint_on(&link_ns(home), NO_PUBLICATION_STATE)
-            .map_err(MintError::Gate)
+        self.mint_on(&link_ns(home), NO_PUBLICATION_STATE).map_err(MintError::Gate)
     }
 
     /// Next version identity: namespace `(source, 1)` — the version chain,
@@ -220,8 +218,7 @@ impl M3State {
             // V-WF: registered Document (covers unregistered AND non-document).
             return Err(MintError::SourceNotRegistered);
         }
-        self.mint_on(&version_ns(source), published)
-            .map_err(MintError::Gate)
+        self.mint_on(&version_ns(source), published).map_err(MintError::Gate)
     }
 
     /// Next document identity under an account: namespace `(account, 2)`.
@@ -249,8 +246,7 @@ impl M3State {
             // P8/CND.pre (covers unregistered AND non-account).
             return Err(MintError::NotAnAccount);
         }
-        self.mint_on(&document_ns(account), published)
-            .map_err(MintError::Gate)
+        self.mint_on(&document_ns(account), published).map_err(MintError::Gate)
     }
 
     /// Next account identity under `parent`: namespace `(parent, 2)` under a
@@ -302,5 +298,22 @@ impl M3State {
         self.mint_account(parent)
             .map(|(addr, _)| addr)
             .filter(|addr| addr.tumbler().len() <= MAX_PRINCIPAL_COMPONENTS)
+    }
+
+    /// Peek the content chain's FRONTIER under `home` — the next content
+    /// address [`M3State::mint_content`]`(home)` would issue, whose ordinal is
+    /// the document's mint count plus one (AUTH-6.38, "the home's mint
+    /// frontier at N"): the content-frontier read's answer, the fourth
+    /// chain-end read beside [`M3State::next_account_prefix`] and of its
+    /// shape — the mint without its record, so the value a reader peeks and
+    /// the value the next mint issues come off one chain by one code path.
+    /// Pure frontier read off any snapshot; `None` where `home` is not a
+    /// REGISTERED document (E is append-only, so a `Some` never regresses to
+    /// `None`), which is [`MintError::HomeNotRegistered`]'s one cause read as
+    /// an absence. The ordinal only grows: every value `home` ever minted —
+    /// arranged, deleted, or never placed — lies below it, so the read says
+    /// how many values the document minted and nothing of what they hold.
+    pub fn next_content_address(&self, home: &Address) -> Option<Address> {
+        self.mint_content(home).ok().map(|(addr, _)| addr)
     }
 }

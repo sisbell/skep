@@ -75,8 +75,10 @@
 //!   [`M3State::effective_owner_pair`] for the whole entry, AUTH-6.37) and
 //!   [`M3State::account_seat`], that entry by one lookup wherever the
 //!   address's own account holds it \[ASN-0042 O1–O9\], id→prefix
-//!   resolution, the three chain-end reads — the next-form peek
-//!   [`M3State::next_account_prefix`], the version chain's latest member
+//!   resolution, the four chain-end reads — the next-form peek
+//!   [`M3State::next_account_prefix`], the content chain's frontier
+//!   [`M3State::next_content_address`] (the content-frontier read's answer,
+//!   AUTH-6.38), the version chain's latest member
 //!   [`M3State::latest_version`], and the emptiness of an account's document
 //!   chain [`M3State::has_documents`] — and the publication read
 //!   [`M3State::published`] and its enumeration

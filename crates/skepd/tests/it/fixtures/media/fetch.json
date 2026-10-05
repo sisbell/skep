@@ -1,0 +1,26 @@
+{
+  "note": "THE FETCH's pins, tokens, statuses and headers (media lane D; wire.md section Media, THE FETCH): the one place the suite reads the route's wire so a drift in the daemon's answer or the doc fails here. `path` and the two `methods` are the route; `query` the one parameter; `content_type` and the two `inert_headers` ride the 200 alone; `refusals` the seven transport names with their statuses; `gate_statuses` the HTTP status an M10 rejection takes on this byte route by its code. `pool` and the two intervals are the stream's bounds. Each pin is INTERIM (the board's sm-Q8).",
+  "path": "/blob",
+  "methods": ["GET", "HEAD"],
+  "query": "i",
+  "content_type": "application/octet-stream",
+  "inert_headers": {
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "sandbox"
+  },
+  "refusals": {
+    "no_value": 404,
+    "not_a_cell": 404,
+    "unknown_cell_schema": 404,
+    "blind_cell": 404,
+    "blob_missing": 404,
+    "blob_damaged": 404,
+    "fetch_busy": 503
+  },
+  "gate_statuses": {
+    "withheld": 403
+  },
+  "pool": 2,
+  "recheck_bytes": 1048576,
+  "recheck_interval_ms": 5000
+}

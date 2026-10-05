@@ -10,9 +10,38 @@ use super::{Daemon, DaemonError};
 use crate::auth::AuthOptions;
 use crate::media::index::{Rebuild, WALK_HOLD};
 use crate::media::pruner::PrunePass;
+use crate::media::serve::STREAM_HOLD;
 use crate::permits::Permit;
 
 impl Daemon {
+    /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a
+    /// stable API): hold one FETCH permit exactly as an in-flight fetch
+    /// does, or `None` when all [`MAX_CONCURRENT_FETCHES`](crate::limits::MAX_CONCURRENT_FETCHES)
+    /// are taken. A permit from here is a slot of the fetch pool alone:
+    /// holding every one leaves `/op-at` and the class scans untouched.
+    #[doc(hidden)]
+    #[must_use = "a permit dropped at once holds nothing"]
+    pub fn try_hold_fetch_permit(&self) -> Option<Permit<'_>> {
+        self.fetches.try_hold()
+    }
+
+    /// TEST HOOK (the same standing): HOLD EVERY FETCH STREAM between two
+    /// of its chunks — armed before a suite's request, so the suite can
+    /// close the session or revoke the grant while the stream stands, then
+    /// [`Daemon::release_the_fetch_stream`] and watch the re-check end it.
+    /// A process-wide seam, as the index walk's is.
+    #[doc(hidden)]
+    pub fn hold_the_fetch_stream() {
+        STREAM_HOLD.hold();
+    }
+
+    /// TEST HOOK (the same standing): release every held stream, and hold
+    /// no later one.
+    #[doc(hidden)]
+    pub fn release_the_fetch_stream() {
+        STREAM_HOLD.release();
+    }
+
     /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a
     /// stable API): whether the cell index's walk at open has completed —
     /// what a suite waits on before its first PUT, rather than racing the

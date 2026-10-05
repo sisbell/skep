@@ -17,8 +17,8 @@ use skep_arrangement::{Run, VPos};
 use skep_content::Val;
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_febe::{
-    BirthVersion, Codec, Disposition, EditionClaim, FaultSite, OpKind, ParseError, RejectCode,
-    Rejection, Response, ShotTerms, UniversalGrant,
+    BirthVersion, Codec, Disposition, EditionClaim, FaultSite, IItem, OpKind, ParseError,
+    RejectCode, Rejection, Response, ShotTerms, UniversalGrant,
 };
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link};
@@ -28,8 +28,7 @@ use skepd::JsonCodec;
 
 fn wire_md() -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/wire.md");
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
 }
 
 /// (kind, name, json body) for every marked fenced block.
@@ -66,7 +65,7 @@ fn blocks() -> Vec<(String, String, String)> {
     out
 }
 
-const OP_NAMES: [&str; 43] = [
+const OP_NAMES: [&str; 45] = [
     "create_new_document",
     "delegate",
     "register_node",
@@ -89,6 +88,8 @@ const OP_NAMES: [&str; 43] = [
     "read_link",
     "follow_link",
     "retrieve_v",
+    "retrieve_i",
+    "content_frontier",
     "retrieve_doc_v_span",
     "retrieve_doc_v_span_set",
     "show_origin",
@@ -113,7 +114,7 @@ const OP_NAMES: [&str; 43] = [
 ];
 
 /// Every request example parses, is canonical (re-marshal equals the doc
-/// value), is tagged with the marker's own op name — and all 43 ops appear.
+/// value), is tagged with the marker's own op name — and all 45 ops appear.
 #[test]
 fn doc_request_examples_are_canonical_and_complete() {
     let codec = JsonCodec;
@@ -122,9 +123,9 @@ fn doc_request_examples_are_canonical_and_complete() {
         if kind != "request" {
             continue;
         }
-        let req = codec.parse(body.as_bytes()).unwrap_or_else(|e| {
-            panic!("doc request '{name}' does not parse: {:?}", e.detail)
-        });
+        let req = codec
+            .parse(body.as_bytes())
+            .unwrap_or_else(|e| panic!("doc request '{name}' does not parse: {:?}", e.detail));
         let canonical: Value =
             serde_json::from_slice(&codec.marshal_request(&req)).expect("canonical is JSON");
         let doc: Value = serde_json::from_str(&body).expect("doc block is JSON");
@@ -205,10 +206,22 @@ fn fixture(name: &str) -> Response {
             ]),
             as_of: Seq(9),
         },
-        "span_set" => Response::SpanSet {
-            set: [ispan()].into_iter().collect::<SpanSet>(),
+        // The read by identity (AUTH-6.38–6.40): one item per I-position
+        // asked — a content value at the first, and the null a position the
+        // document never minted takes — never coalesced across positions.
+        "i_delivery" => Response::IDelivery {
+            items: vec![
+                IItem { at: a(&[1, 0, 1, 0, 1, 0, 1, 1]), value: Some(Val::new(vec![b'h'])) },
+                IItem { at: a(&[1, 0, 1, 0, 1, 0, 1, 2]), value: None },
+            ],
             as_of: Seq(9),
         },
+        // The content-frontier read: `next`, the next unminted content
+        // ordinal, a natural as every count rides the wire.
+        "frontier" => Response::Frontier { next: n(5), as_of: Seq(9) },
+        "span_set" => {
+            Response::SpanSet { set: [ispan()].into_iter().collect::<SpanSet>(), as_of: Seq(9) }
+        }
         "addrs" => Response::Addrs { addrs: vec![link1()], as_of: Seq(9) },
         "maybe_addr" => Response::MaybeAddr { addr: Some(a(&[1, 0, 2])), as_of: Seq(9) },
         "maybe_addr_none" => Response::MaybeAddr { addr: None, as_of: Seq(9) },
@@ -254,7 +267,10 @@ fn fixture(name: &str) -> Response {
         },
         "follow_invalid" => Response::Follow { result: Err(Invalid), as_of: Seq(9) },
         "deletions" => Response::Deletions {
-            rep: Deletions { deleted_from_a_with_b: vec![a(&[1, 0, 1, 0, 1, 0, 1, 1])], deleted_from_b_with_a: vec![] },
+            rep: Deletions {
+                deleted_from_a_with_b: vec![a(&[1, 0, 1, 0, 1, 0, 1, 1])],
+                deleted_from_b_with_a: vec![],
+            },
             as_of: Seq(9),
         },
         "compare" => Response::Compare {
@@ -267,10 +283,9 @@ fn fixture(name: &str) -> Response {
             }]),
             as_of: Seq(9),
         },
-        "orphans" => Response::Orphans {
-            report: OrphanReport { orphaned: vec![link1()] },
-            as_of: Seq(9),
-        },
+        "orphans" => {
+            Response::Orphans { report: OrphanReport { orphaned: vec![link1()] }, as_of: Seq(9) }
+        }
         "claims" => Response::Claims {
             claims: vec![SupClaim {
                 claim: a(&[1, 0, 1, 0, 1, 0, 2, 3]),
@@ -349,13 +364,15 @@ fn fixture(name: &str) -> Response {
     }
 }
 
-/// The 23 response shapes every client must decode; each must appear as a
+/// The 25 response shapes every client must decode; each must appear as a
 /// doc marker (variant markers like `follow_invalid` are extra coverage).
-const REQUIRED_SHAPES: [&str; 23] = [
+const REQUIRED_SHAPES: [&str; 25] = [
     "ack",
     "ack_addr",
     "ack_edit",
     "delivery",
+    "i_delivery",
+    "frontier",
     "span_set",
     "addrs",
     "maybe_addr",
@@ -651,6 +668,75 @@ fn doc_states_the_media_cell_and_its_door() {
     );
 }
 
+/// THE BLIND CELL AND THE FETCH (media lane D): §Media states the blind
+/// document's cell beside the picture's — its schema row, its kind's interim
+/// address, its vector set by path — the ONE classification, the door's kind
+/// column (the blind cell admitted with no deposit consulted), and THE FETCH
+/// in full: its path and two methods, its five-step order, the M10 gate's
+/// rejection riding M10's envelope under a byte-route status, the four
+/// 404 "not a file" refusals and `fetch_busy`, the content type, the inert
+/// pair, the pool and the two intervals; and §HTTP status codes carries the
+/// seven. The daemon's answers are pinned end to end in `blob_fetch.rs`;
+/// this pins that the contract says so, and that the blind vector set the
+/// section names pins the same kind and cap the section does.
+#[test]
+fn doc_states_the_blind_cell_and_the_fetch() {
+    let media = prose("\n### Media — the reference cell and its door", &["\n### Links (writes)"]);
+    for fact in [
+        "**The blind document's cell (v1).**",
+        "| `commitment` | string |",
+        "`1.1.0.1.0.1.0.3.88`",
+        "carries NO `size` and NO `hash`",
+        "crates/skepd/tests/it/fixtures/media/blind-cells.json",
+        "ONE CLASSIFICATION reads both kinds",
+        "THE KIND COLUMN",
+        "NEVER `unbound_cell` or `lease_lapsed`",
+        "**THE FETCH**",
+        "`GET /blob?i=<address>`",
+        "`HEAD /blob?i=<address>`",
+        "rides M10's own envelope",
+        "`403` for `withheld`",
+        "`404 no_value`",
+        "`404 not_a_cell`",
+        "`404 unknown_cell_schema`",
+        "`404 blind_cell`",
+        "`404 blob_missing`",
+        "`404 blob_damaged`",
+        "`503 fetch_busy`",
+        "checked before its first byte",
+        "`Content-Type: application/octet-stream`",
+        "RE-RESOLVED MID-STREAM",
+        "the fetch pool, 2",
+        "1 MiB of bytes and 5 s",
+        "the blind document's kind, `1.1.0.1.0.1.0.3.88`",
+        "`X-Content-Type-Options: nosniff`",
+        "`Content-Security-Policy: sandbox`",
+    ] {
+        assert!(media.contains(fact), "§Media says {fact:?}");
+    }
+    let fixture: Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/it/fixtures/media/blind-cells.json"),
+        )
+        .expect("the blind vector set the section names exists"),
+    )
+    .expect("the blind vector set is JSON");
+    assert_eq!(fixture["kind"].as_str(), Some("1.1.0.1.0.1.0.3.88"));
+    assert_eq!(fixture["cap"].as_u64(), Some(1024));
+    let statuses = prose("\n### HTTP status codes", &["\n### Determinism"]);
+    for name in [
+        "no_value",
+        "not_a_cell",
+        "unknown_cell_schema",
+        "blind_cell",
+        "blob_missing",
+        "blob_damaged",
+        "fetch_busy",
+    ] {
+        assert!(statuses.contains(&format!("`{name}`")), "§HTTP status codes lists {name}");
+    }
+}
+
 /// THE REGISTRY SECTION (the registry's stable core): §Registry states the
 /// twelve rows with their addresses and the "Deposits" column, the deposit
 /// class's four members, the two bodies' canonical forms with the spec's
@@ -713,7 +799,8 @@ fn doc_states_the_registry_rows_the_bodies_and_the_refusals() {
     }
     let fixture: Value = serde_json::from_str(
         &std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../skep-registry/tests/vectors/records.json"),
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../skep-registry/tests/vectors/records.json"),
         )
         .expect("the vector set the section names exists"),
     )
@@ -729,7 +816,8 @@ fn doc_states_the_registry_rows_the_bodies_and_the_refusals() {
             "the section's example is an admitted vector: {example}"
         );
     }
-    let credentials = prose("\n### The claim ceremony and credentials", &["\n### Correlation and idempotency"]);
+    let credentials =
+        prose("\n### The claim ceremony and credentials", &["\n### Correlation and idempotency"]);
     assert!(
         credentials.contains("four members, stated once at §Registry"),
         "§The claim ceremony and credentials points at the deposit class's four members"
@@ -747,7 +835,8 @@ fn doc_states_the_registry_rows_the_bodies_and_the_refusals() {
     }
     let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
     assert!(
-        codes.contains("The registry: registry refused") && codes.contains("§Registry under §Operations"),
+        codes.contains("The registry: registry refused")
+            && codes.contains("§Registry under §Operations"),
         "§Rejection codes points at §Registry"
     );
 }
@@ -814,11 +903,27 @@ fn doc_states_the_upload_its_pins_and_its_refusals() {
     }
     let endpoints = prose("\n### Endpoints", &["\n### Transport"]);
     assert!(endpoints.contains("`POST /blob/upload`"), "§Endpoints lists the family");
-    assert!(endpoints.contains("`PATCH /blob/upload/<id>`"), "§Endpoints lists the family's resume");
+    assert!(
+        endpoints.contains("`PATCH /blob/upload/<id>`"),
+        "§Endpoints lists the family's resume"
+    );
     let transport = prose("\n### Transport", &["\n### Identity"]);
-    assert!(transport.contains("**64 MiB** on the blob upload"), "§Transport names the family's cap");
+    assert!(
+        transport.contains("**64 MiB** on the blob upload"),
+        "§Transport names the family's cap"
+    );
     let statuses = prose("\n### HTTP status codes", &["\n### Determinism"]);
-    for name in ["malformed_blob", "upload_refused", "no_upload", "upload_held", "upload_offset", "upload_length", "deposit_refused", "blob_io", "index_rebuilding"] {
+    for name in [
+        "malformed_blob",
+        "upload_refused",
+        "no_upload",
+        "upload_held",
+        "upload_offset",
+        "upload_length",
+        "deposit_refused",
+        "blob_io",
+        "index_rebuilding",
+    ] {
         assert!(statuses.contains(&format!("`{name}`")), "§HTTP status codes lists {name}");
     }
     let fixture: Value = serde_json::from_str(
@@ -881,7 +986,10 @@ fn doc_states_the_cell_index_the_readiness_refusal_and_the_pruner() {
         assert!(media.contains(fact), "§Media says {fact:?}");
     }
     let statuses = prose("\n### HTTP status codes", &["\n### Determinism"]);
-    assert!(statuses.contains("| 503 | `index_rebuilding` |"), "§HTTP status codes carries the token at 503");
+    assert!(
+        statuses.contains("| 503 | `index_rebuilding` |"),
+        "§HTTP status codes carries the token at 503"
+    );
 }
 
 /// Every `op_at` example is the strict `{"at", "frame"}` envelope around a
@@ -898,17 +1006,13 @@ fn doc_op_at_examples_are_canonical() {
         let v: Value = serde_json::from_str(&body)
             .unwrap_or_else(|e| panic!("doc op_at '{name}' is not JSON: {e}"));
         let obj = v.as_object().unwrap_or_else(|| panic!("op_at '{name}' must be an object"));
-        assert_eq!(
-            obj.len(),
-            2,
-            "op_at '{name}' carries exactly 'at' and 'frame': {v}"
-        );
+        assert_eq!(obj.len(), 2, "op_at '{name}' carries exactly 'at' and 'frame': {v}");
         assert!(obj["at"].is_u64(), "op_at '{name}': 'at' is a JSON number");
         let frame = obj.get("frame").expect("op_at envelope carries 'frame'");
         let frame_bytes = serde_json::to_vec(frame).expect("frame re-serializes");
-        let req = codec.parse(&frame_bytes).unwrap_or_else(|e| {
-            panic!("doc op_at '{name}' frame does not parse: {:?}", e.detail)
-        });
+        let req = codec
+            .parse(&frame_bytes)
+            .unwrap_or_else(|e| panic!("doc op_at '{name}' frame does not parse: {:?}", e.detail));
         let canonical: Value =
             serde_json::from_slice(&codec.marshal_request(&req)).expect("canonical is JSON");
         assert_eq!(&canonical, frame, "op_at '{name}' frame is not in canonical form");
@@ -989,8 +1093,8 @@ fn doc_response_examples_match_the_codec() {
         }
         let doc: Value = serde_json::from_str(&body)
             .unwrap_or_else(|e| panic!("doc response '{name}' is not JSON: {e}"));
-        let marshaled: Value = serde_json::from_slice(&codec.marshal(&fixture(&name)))
-            .expect("marshal emits JSON");
+        let marshaled: Value =
+            serde_json::from_slice(&codec.marshal(&fixture(&name))).expect("marshal emits JSON");
         assert_eq!(marshaled, doc, "doc response '{name}' drifted from the codec");
         names.push(name);
     }

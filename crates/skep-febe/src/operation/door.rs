@@ -30,7 +30,7 @@ use skep_namespace::PrincipalId;
 
 use super::{OperationSurface, WriteCtx};
 use crate::reject::{rejection, FaultSite, RejectCode, Rejection};
-use crate::request::Op;
+use crate::request::{ISpanFault, Op};
 use crate::successor::Judgment;
 use crate::world::FebeWorld;
 
@@ -223,13 +223,29 @@ pub(super) fn home_readable(a: &Address, readable: &dyn Fn(&Address) -> bool) ->
 /// two arms it governs, and the result-set filter inside each reader that
 /// applies it.
 ///
+/// THEN THE DERIVED LIST (the media record's "EACH I-SPAN CONFINED TO ONE
+/// DERIVED DOCUMENT"; PUB-6.38; M-I2 (a)): the documents the read DERIVES
+/// rather than names — [`Op::derived_doc_arguments`], the read by identity's
+/// — walked after the named ones under the same predicate, the first
+/// unreadable one answering the same WITHHELD naming it, before dispatch and
+/// never as a per-address item. The derivation refuses the op's SHAPE on its
+/// way — a span with no element position at its start, or of zero width —
+/// which is the one refusal this consult raises that is not `Withheld`: by
+/// address arithmetic on the request alone, before any document is
+/// consulted, so a prober learns nothing a span's shape did not already say
+/// (`NotContentSubspace` for the one, `EmptyWidth` for the other, each with
+/// the span's index as its site, as a malformed RETRIEVEV spec names its
+/// own).
+///
 /// PUBLIC, because two callers must give one request one verdict.
 /// [`OperationSurface::execute`] runs it ahead of every read arm, over the
 /// predicate it binds off the snapshot it pins; a transport answering a
 /// HISTORICAL read runs it over the HEAD's predicate BEFORE it reconstructs
 /// the N-world (PUB-6.49: the head-set check precedes the N-world's
 /// registration check and the history refusals). The list, its order and
-/// the verdict all live here, so the two answers cannot come apart.
+/// the verdict all live here, so the two answers cannot come apart — the
+/// derived list and its shape refusal included, so the historical door reads
+/// a derived home exactly as the live one does.
 ///
 /// Its sibling is the write side's consult, `consult_write`: one obligation
 /// split by path, the two deciding who may read what, so a reader looking
@@ -240,13 +256,32 @@ pub(super) fn home_readable(a: &Address, readable: &dyn Fn(&Address) -> bool) ->
 ///
 /// [`OperationSurface::execute`]: crate::OperationSurface::execute
 pub fn consult_read(op: &Op, readable: &dyn Fn(&Address) -> bool) -> Result<(), Rejection> {
+    let withheld = |doc: &Address| {
+        Rejection::classified(
+            op.kind(),
+            RejectCode::Withheld,
+            Some(FaultSite { addr: Some(doc.clone()), ..FaultSite::default() }),
+        )
+    };
     for doc in op.doc_arguments() {
         if !readable(doc) {
-            return Err(Rejection::classified(
-                op.kind(),
-                RejectCode::Withheld,
-                Some(FaultSite { addr: Some(doc.clone()), ..FaultSite::default() }),
-            ));
+            return Err(withheld(doc));
+        }
+    }
+    let derived = op.derived_doc_arguments().map_err(|(index, fault)| {
+        let code = match fault {
+            ISpanFault::NoElementPosition => RejectCode::NotContentSubspace,
+            ISpanFault::EmptyWidth => RejectCode::EmptyWidth,
+        };
+        Rejection::classified(
+            op.kind(),
+            code,
+            Some(FaultSite { index: Some(index), ..FaultSite::default() }),
+        )
+    })?;
+    for doc in &derived {
+        if !readable(doc) {
+            return Err(withheld(doc));
         }
     }
     Ok(())
@@ -331,6 +366,8 @@ impl Op {
             | Op::ReadLink { .. }
             | Op::FollowLink { .. }
             | Op::RetrieveV { .. }
+            | Op::RetrieveI { .. }
+            | Op::ContentFrontier { .. }
             | Op::RetrieveDocVSpan { .. }
             | Op::RetrieveDocVSpanSet { .. }
             | Op::ShowOrigin { .. }
@@ -401,6 +438,8 @@ impl Op {
             | Op::ReadLink { .. }
             | Op::FollowLink { .. }
             | Op::RetrieveV { .. }
+            | Op::RetrieveI { .. }
+            | Op::ContentFrontier { .. }
             | Op::RetrieveDocVSpan { .. }
             | Op::RetrieveDocVSpanSet { .. }
             | Op::ShowOrigin { .. }
@@ -474,6 +513,8 @@ impl Op {
             | Op::ReadLink { .. }
             | Op::FollowLink { .. }
             | Op::RetrieveV { .. }
+            | Op::RetrieveI { .. }
+            | Op::ContentFrontier { .. }
             | Op::RetrieveDocVSpan { .. }
             | Op::RetrieveDocVSpanSet { .. }
             | Op::ShowOrigin { .. }

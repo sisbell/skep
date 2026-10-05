@@ -101,12 +101,12 @@ mod head;
 pub(crate) use feed::{ChangesAnswer, ChangesQuery, FeedClass};
 pub(crate) use head::board_term;
 
+use self::head::HeadWriter;
+use self::sidecar::OpTerms;
 use crate::codec::op_name;
 use crate::media::index::{names_kind_by_prefix, CellIndex};
 use crate::serial::{Serial, SerialGuard};
 use feed::Feed;
-use self::head::HeadWriter;
-use self::sidecar::OpTerms;
 
 /// The commit stream's wait bound: a subscriber that has heard nothing for
 /// this long is answered [`StreamStep::Keepalive`], which `server.rs` frames
@@ -465,18 +465,15 @@ impl WritePath {
     /// the one whose position is the snapshot's own: an idempotency
     /// replay's memoized ack names an older position, and its cells were
     /// entered when it first committed.
-    fn record(
-        &self,
-        serial: &SerialGuard<'_>,
-        meta: WriteMeta,
-        resp: &Response,
-    ) -> Option<Seq> {
+    fn record(&self, serial: &SerialGuard<'_>, meta: WriteMeta, resp: &Response) -> Option<Seq> {
         let WriteMeta { kind, docs, testimony, signed, terms, minting } = meta;
         let (at, minted) = match resp {
             Response::Ack { at } => (*at, None),
             Response::AckAddr { addr, at } => (*at, Some(addr)),
             Response::AckEdit { at, .. } => (*at, None),
             Response::Delivery { .. }
+            | Response::IDelivery { .. }
+            | Response::Frontier { .. }
             | Response::SpanSet { .. }
             | Response::Addrs { .. }
             | Response::MaybeAddr { .. }
@@ -741,12 +738,12 @@ impl RowTerms {
                 new_id: *new_id,
             }),
             RowTerms::MakeLink => minted.map(|link| OpTerms::MakeLink { link: link.to_string() }),
-            RowTerms::Publish => minted.and_then(|member| post.m5().shot_terms(member)).map(|t| {
-                OpTerms::Publish {
+            RowTerms::Publish => {
+                minted.and_then(|member| post.m5().shot_terms(member)).map(|t| OpTerms::Publish {
                     placed: t.placed.to_string(),
                     base_extent: t.base_extent.as_ref().map(ToString::to_string),
-                }
-            }),
+                })
+            }
         };
         debug_assert!(
             terms.is_some(),
@@ -776,7 +773,7 @@ impl RowTerms {
 /// older position's time AS the head's, the one thing that method's contract
 /// says it does not do. A read classified here as a write is refused from
 /// `/op-at` as `write_at_history`, denying a legitimate historical read.
-/// The two tables agree at 15 writes of 43.
+/// The two tables agree at 15 writes of 45.
 ///
 /// SECOND OBLIGATION, and the one no assertion here can reach:
 /// [`classify::derived_docs`] answers this same question — which
@@ -885,6 +882,8 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
         | Op::ReadLink { .. }
         | Op::FollowLink { .. }
         | Op::RetrieveV { .. }
+        | Op::RetrieveI { .. }
+        | Op::ContentFrontier { .. }
         | Op::RetrieveDocVSpan { .. }
         | Op::RetrieveDocVSpanSet { .. }
         | Op::ShowOrigin { .. }
@@ -1030,7 +1029,11 @@ mod tests {
         let insert = Op::Insert {
             doc: doc.clone(),
             at: VPos::content(Nat::from(1u32)),
-            values: vec![Val::new(b"a".as_slice()), Val::new(cell.as_bytes()), Val::new(b"b".as_slice())],
+            values: vec![
+                Val::new(b"a".as_slice()),
+                Val::new(cell.as_bytes()),
+                Val::new(b"b".as_slice()),
+            ],
             deposit: Deposit::Undeclared,
         };
         let minting = write_meta(&insert).expect("a write").minting;
@@ -1041,10 +1044,18 @@ mod tests {
             values: vec![Val::new(b"ab".as_slice())],
             deposit: Deposit::Undeclared,
         };
-        assert!(matches!(write_meta(&prose).expect("a write").minting, Minting::Insert { naming } if naming.is_empty()));
+        assert!(
+            matches!(write_meta(&prose).expect("a write").minting, Minting::Insert { naming } if naming.is_empty())
+        );
         let publish = Op::Publish { doc, shot: Shot { base: None, draft: None, runs: Vec::new() } };
-        assert!(matches!(write_meta(&publish).expect("a write").minting, Minting::Publish { reinserted: 0 }));
-        assert!(matches!(write_meta(&Op::Fork { published: None }).expect("a write").minting, Minting::None));
+        assert!(matches!(
+            write_meta(&publish).expect("a write").minting,
+            Minting::Publish { reinserted: 0 }
+        ));
+        assert!(matches!(
+            write_meta(&Op::Fork { published: None }).expect("a write").minting,
+            Minting::None
+        ));
     }
 
     /// Each write's arm of the table states the terms its row carries, beside
@@ -1129,9 +1140,6 @@ mod tests {
         );
         stream.shutdown();
         let step = stream.next(Seq(0));
-        assert!(
-            matches!(step, StreamStep::Shutdown),
-            "shutdown outranks a commit: {step:?}"
-        );
+        assert!(matches!(step, StreamStep::Shutdown), "shutdown outranks a commit: {step:?}");
     }
 }

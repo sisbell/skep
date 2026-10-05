@@ -19,8 +19,8 @@ use skep_namespace::{HasM3, M3Rec, M3State, Namespace, PrincipalId};
 use super::*;
 use crate::publication::birth_version;
 use crate::reject::{Disposition, Rejection};
-use crate::request::{Op, ReqId, SuccessorSpec};
-use crate::response::{BirthVersion, CommittedAck};
+use crate::request::{ISpan, Op, ReqId, SuccessorSpec};
+use crate::response::{BirthVersion, CommittedAck, IItem};
 use crate::successor::{successor_link, Judgment};
 
 // ── a minimal assembled world (the composition contract in miniature) ──
@@ -667,11 +667,9 @@ const DRAFT_OWNER: PrincipalId = PrincipalId(7);
 /// and the next joining two I-addresses no run coalesces across, so the draft
 /// ends at `2^(doublings + 1)` runs of one position each.
 fn fragmented_draft(febe: &OperationSurface<World>, doublings: u32) -> Address {
-    let issue = |session: SessionId, op: Op| {
-        match febe.execute(session, Request::from(op)) {
-            Response::Rejected(rej) => panic!("the fixture's requests are answered: {rej}"),
-            answered => answered,
-        }
+    let issue = |session: SessionId, op: Op| match febe.execute(session, Request::from(op)) {
+        Response::Rejected(rej) => panic!("the fixture's requests are answered: {rej}"),
+        answered => answered,
     };
     let boot = febe.bootstrap_session();
     let Response::MaybeAddr { addr: Some(prefix), .. } =
@@ -712,6 +710,138 @@ fn fragmented_draft(febe: &OperationSurface<World>, doublings: u32) -> Address {
         assert!(matches!(issue(owner, copy), Response::Ack { .. }), "the owner doubles its draft");
     }
     doc
+}
+
+/// THE READ BY IDENTITY AND THE CONTENT FRONTIER (AUTH-6.38–6.40; the media
+/// record's "THE READ BY IDENTITY"; M-I2 (a), (h); ms3-1), driven through
+/// `execute` over the draft [`fragmented_draft`] mints — three values, the
+/// middle one DELETED from the arrangement. The owner's read by identity
+/// over the draft's first four I-positions answers every value the draft
+/// minted — the un-arranged middle one included, the reach ruled under no
+/// floor — and `None` at the fourth, never minted; a link position answers
+/// `None` too; the frontier is the mint count plus one, and one past a copy
+/// (which mints nothing) still. THE SHAPE REFUSAL names the span's index
+/// before any consult (a document's own address, a zero width); THE BUDGET
+/// refuses a span past `MAX_DELIVERY_ITEMS` whole, before any address is
+/// expanded; and THE DERIVED CONSULT answers WITHHELD naming the DERIVED
+/// document — never a per-address item — where the supplied predicate
+/// refuses it, the frontier read the same on its NAMED one, and a document
+/// M3 never registered `DocNotRegistered` at the frontier, past the
+/// consult. Every answer reports the snapshot's coordinate.
+#[test]
+fn the_read_by_identity_reaches_every_minted_value_and_withholds_on_the_derived_home() {
+    let febe = surface();
+    let doc = fragmented_draft(&febe, 1);
+    let owner = febe.open_session(DRAFT_OWNER);
+    let head = febe.log_position();
+    let elem = |ordinal: u32| {
+        skep_address::elem_addr(skep_address::ElemPos {
+            doc: doc.clone(),
+            subspace: skep_address::content_subspace(),
+            ordinal: Nat::from(ordinal),
+        })
+        .expect("a content address")
+    };
+    let span = |start: Address, width: u32| ISpan { start, width: Nat::from(width) };
+    let read = |spans: Vec<ISpan>| febe.execute(owner, Request::from(Op::RetrieveI { spans }));
+
+    let Response::IDelivery { items, as_of } = read(vec![span(elem(1), 4)]) else {
+        panic!("the owner's read by identity answers")
+    };
+    assert_eq!(as_of, head, "the snapshot's coordinate");
+    let values: Vec<Option<Vec<u8>>> =
+        items.iter().map(|i| i.value.as_ref().map(|v| v.as_bytes().to_vec())).collect();
+    assert_eq!(
+        values,
+        vec![Some(b"a".to_vec()), Some(b"b".to_vec()), Some(b"c".to_vec()), None],
+        "every minted value, the deleted `b` included; the fourth never minted"
+    );
+    assert_eq!(
+        items.iter().map(|i| i.at.clone()).collect::<Vec<_>>(),
+        (1..=4).map(elem).collect::<Vec<_>>()
+    );
+    // Two spans concatenate in span order; a link position is `None`.
+    let link = skep_address::elem_addr(skep_address::ElemPos {
+        doc: doc.clone(),
+        subspace: skep_address::link_subspace(),
+        ordinal: Nat::from(1u32),
+    })
+    .expect("a link address");
+    let Response::IDelivery { items, .. } = read(vec![span(elem(3), 1), span(link.clone(), 1)])
+    else {
+        panic!("two spans answer")
+    };
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].value.as_ref().map(|v| v.as_bytes().to_vec()), Some(b"c".to_vec()));
+    assert_eq!(
+        items[1],
+        IItem { at: link, value: None },
+        "M4 holds content-subspace elements alone"
+    );
+
+    // The frontier: three minted, so the next ordinal is four — the copy
+    // doubled the arrangement and minted nothing.
+    let Response::Frontier { next, as_of } =
+        febe.execute(owner, Request::from(Op::ContentFrontier { doc: doc.clone() }))
+    else {
+        panic!("the frontier read answers")
+    };
+    assert_eq!((next, as_of), (Nat::from(4u32), head));
+
+    // The shape refusal, by index, before any consult.
+    let shape = rejected(read(vec![span(elem(1), 1), span(doc.clone(), 1)]));
+    assert_eq!(
+        (shape.code, shape.site.as_ref().and_then(|s| s.index)),
+        (RejectCode::NotContentSubspace, Some(1))
+    );
+    let zero = rejected(read(vec![span(elem(1), 0)]));
+    assert_eq!(
+        (zero.code, zero.site.as_ref().and_then(|s| s.index)),
+        (RejectCode::EmptyWidth, Some(0))
+    );
+    // The budget: refused whole, no site.
+    let wide = rejected(read(vec![span(elem(1), skep_retrieval::MAX_DELIVERY_ITEMS as u32 + 1)]));
+    assert_eq!((wide.code, wide.site), (RejectCode::TooManyItems, None));
+    assert!(
+        matches!(
+            read(vec![span(elem(1), skep_retrieval::MAX_DELIVERY_ITEMS as u32)]),
+            Response::IDelivery { .. }
+        ),
+        "a span exactly at the budget is answered"
+    );
+
+    // The derived consult: a supplied predicate refusing the draft answers
+    // WITHHELD naming the DERIVED document, and the frontier read the same
+    // on its named one; a registered document is reached, so the frontier
+    // of one M3 never registered is `DocNotRegistered`, past the consult.
+    let refused = doc.clone();
+    let gated = surface().with_read_predicate(move |_, d: &Address| *d != refused);
+    let gated_doc = fragmented_draft(&gated, 0);
+    assert_eq!(gated_doc, doc, "the two surfaces mint one address sequence");
+    let gated_owner = gated.open_session(DRAFT_OWNER);
+    let withheld = rejected(
+        gated.execute(gated_owner, Request::from(Op::RetrieveI { spans: vec![span(elem(1), 2)] })),
+    );
+    assert_eq!(withheld.code, RejectCode::Withheld);
+    assert_eq!(withheld.disposition, Disposition::Reorder);
+    assert_eq!(
+        withheld.site.as_ref().and_then(|s| s.addr.clone()),
+        Some(doc.clone()),
+        "naming the derived home"
+    );
+    assert!(withheld.detail.is_none());
+    let withheld = rejected(
+        gated.execute(gated_owner, Request::from(Op::ContentFrontier { doc: doc.clone() })),
+    );
+    assert_eq!(
+        (withheld.code, withheld.site.as_ref().and_then(|s| s.addr.clone())),
+        (RejectCode::Withheld, Some(doc.clone()))
+    );
+    let unregistered = addr(&[1, 0, 1, 0, 99]);
+    let rej =
+        rejected(febe.execute(owner, Request::from(Op::ContentFrontier { doc: unregistered })));
+    assert_eq!(rej.code, RejectCode::DocNotRegistered);
+    assert_eq!(febe.log_position(), head, "no read moves the log");
 }
 
 /// §4, the build a DEFERRED write gets: where the door did not judge the
@@ -814,7 +944,11 @@ fn an_unjudged_successor_slot_over_the_work_budget_is_built_for_the_store_to_ref
     assert!(site.index.is_none(), "the slot is at fault, not one spec in it");
     let built_to_fail = successor_link(m3, m5, &over, Judgment::Unjudged)
         .expect("an unjudged build refuses nothing a source decides");
-    assert_eq!(built_to_fail.from_slot().len(), MAX_SLOT_SPANS + 1, "one span past the span budget");
+    assert_eq!(
+        built_to_fail.from_slot().len(),
+        MAX_SLOT_SPANS + 1,
+        "one span past the span budget"
+    );
     assert!(doc.tumbler().len() > 1, "premise: the crossing source is deeper than one component");
     assert!(
         built_to_fail.from_slot().spans().all(|s| s.start().len() == 1 && s.width().len() == 1),
@@ -832,11 +966,12 @@ fn an_unjudged_successor_slot_over_the_work_budget_is_built_for_the_store_to_ref
         &doc,
         &doc,
     );
-    assert!(
-        matches!(attempt, Err(TxnError::Rejected(EditLinkError::SlotTooLarge))),
-        "{attempt:?}"
+    assert!(matches!(attempt, Err(TxnError::Rejected(EditLinkError::SlotTooLarge))), "{attempt:?}");
+    assert_eq!(
+        febe.log_position(),
+        before,
+        "a successor short of what was asked is never deposited"
     );
-    assert_eq!(febe.log_position(), before, "a successor short of what was asked is never deposited");
 
     // The budget exactly: an ordinary slot, whoever answers the budget.
     for judgment in [Judgment::Judged, Judgment::Unjudged] {
@@ -855,11 +990,9 @@ fn an_unjudged_successor_slot_over_the_work_budget_is_built_for_the_store_to_ref
 #[test]
 fn a_version_member_answers_its_trunks_birth_version() {
     let febe = surface();
-    let issue = |session: SessionId, op: Op| {
-        match febe.execute(session, Request::from(op)) {
-            Response::Rejected(rej) => panic!("the fixture's requests are answered: {rej}"),
-            answered => answered,
-        }
+    let issue = |session: SessionId, op: Op| match febe.execute(session, Request::from(op)) {
+        Response::Rejected(rej) => panic!("the fixture's requests are answered: {rej}"),
+        answered => answered,
     };
     let boot = febe.bootstrap_session();
     let Response::MaybeAddr { addr: Some(prefix), .. } =

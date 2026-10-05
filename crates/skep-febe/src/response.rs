@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 
 use skep_address::{Address, Nat, SpanSet};
 use skep_arrangement::{Run, ShotTerms};
+use skep_content::Val;
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link};
@@ -13,6 +14,24 @@ use skep_namespace::PrincipalId;
 use skep_retrieval::{CompareReport, Deletions, Delivery};
 
 use crate::reject::Rejection;
+
+/// One position of the read by identity's answer ([`Response::IDelivery`];
+/// AUTH-6.38–6.40): the I-address asked and the value M4 holds at it, or
+/// `None` — a position the document never minted, or a link position, M4
+/// holding content-subspace elements alone. Its own shape and not M6's
+/// [`DeliveryItem`]: that one carries no address and has no absent arm,
+/// its positions being the arrangement's, where these are the request's.
+/// A value, with the response's derives; `Debug` renders the value by its
+/// byte length, as M4's `Val` does, never a byte.
+///
+/// [`DeliveryItem`]: skep_retrieval::DeliveryItem
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IItem {
+    /// The I-address asked.
+    pub at: Address,
+    /// The value at it, as M4 holds it; `None` where none is.
+    pub value: Option<Val>,
+}
 
 /// One row of the audit-view edition-claim lookup (PUB-8.46, PUB round 2,
 /// lane 3.4 §2): a link of the edition-claim class whose `to` slot OVERLAPS
@@ -159,6 +178,14 @@ pub enum Response {
     AckEdit { successor: Address, claim: Address, at: Seq },
     /// RETRIEVEV delivery.
     Delivery { items: Delivery, as_of: Seq },
+    /// RETRIEVEI — the read by identity (AUTH-6.38–6.40): one [`IItem`] per
+    /// I-position of every span, in span order, the value as M4 holds it
+    /// or `None`. Its own shape, not [`Response::Delivery`]'s, for the reason
+    /// [`IItem`] states.
+    IDelivery { items: Vec<IItem>, as_of: Seq },
+    /// The content-frontier read: `next`, the document's next unminted
+    /// content ordinal — its mint count plus one.
+    Frontier { next: Nat, as_of: Seq },
     /// vspan/vspanset/project.
     SpanSet { set: SpanSet, as_of: Seq },
     /// origins/docs-containing/findlinks.
@@ -301,6 +328,8 @@ impl Response {
         // the two cannot come to classify a shape differently.
         match self {
             Response::Delivery { as_of, .. }
+            | Response::IDelivery { as_of, .. }
+            | Response::Frontier { as_of, .. }
             | Response::SpanSet { as_of, .. }
             | Response::Addrs { as_of, .. }
             | Response::MaybeAddr { as_of, .. }
@@ -334,6 +363,8 @@ impl Response {
     pub fn as_of_mut(&mut self) -> Option<&mut Seq> {
         match self {
             Response::Delivery { as_of, .. }
+            | Response::IDelivery { as_of, .. }
+            | Response::Frontier { as_of, .. }
             | Response::SpanSet { as_of, .. }
             | Response::Addrs { as_of, .. }
             | Response::MaybeAddr { as_of, .. }
@@ -381,6 +412,8 @@ impl Response {
                 at: *at,
             }),
             Response::Delivery { .. }
+            | Response::IDelivery { .. }
+            | Response::Frontier { .. }
             | Response::SpanSet { .. }
             | Response::Addrs { .. }
             | Response::MaybeAddr { .. }

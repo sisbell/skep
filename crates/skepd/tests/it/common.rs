@@ -22,12 +22,12 @@ use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{json, Value};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_identity::{
-    canonical_record, encode_enroll, entry_body_assert_sup, entry_body_edit_link,
-    entry_body_emit, entry_body_empty, entry_body_insert, entry_body_make_link,
-    entry_body_make_link_replacing, entry_body_nullify, entry_body_publish, entry_body_record,
-    entry_frame, framed, parse_record_value, BoardTerm, ContentFreeOp, DocTerm, Enrollment,
-    EntrySlot, Fingerprint, LinkSlots, PublicKey, RecordEntry, RecordRows, ShotBase,
-    ShotSegmentPiece, SigAlgRow, SESSION_TAG, SESSION_TAG_V2,
+    canonical_record, encode_enroll, entry_body_assert_sup, entry_body_edit_link, entry_body_emit,
+    entry_body_empty, entry_body_insert, entry_body_make_link, entry_body_make_link_replacing,
+    entry_body_nullify, entry_body_publish, entry_body_record, entry_frame, framed,
+    parse_record_value, BoardTerm, ContentFreeOp, DocTerm, Enrollment, EntrySlot, Fingerprint,
+    LinkSlots, PublicKey, RecordEntry, RecordRows, ShotBase, ShotSegmentPiece, SigAlgRow,
+    SESSION_TAG, SESSION_TAG_V2,
 };
 use skep_signature::HybridSigner;
 use skepd::{serve, AuthOptions, Daemon, NodePrefix, Origin, Skepd, DEFAULT_WORKERS};
@@ -474,8 +474,14 @@ pub fn hire(
     key: &SigningKey,
 ) -> String {
     let ordinal = next_content_ordinal(port, Some(registrar_signed), registrar_doc1);
-    let atom =
-        signed_atom(port, registrar_signed, registrar_doc1, T_ENROLL, &[agent_account], &enroll_atom(&[key]));
+    let atom = signed_atom(
+        port,
+        registrar_signed,
+        registrar_doc1,
+        T_ENROLL,
+        &[agent_account],
+        &enroll_atom(&[key]),
+    );
     let v = op(
         port,
         Some(registrar_signed),
@@ -579,8 +585,14 @@ pub fn deposit_binding(
     replaces: Option<&str>,
 ) -> String {
     let to: Vec<&str> = to.into_iter().collect();
-    let (_, v) =
-        deposit_registry_record(port, signed, CLAIMANT_DOC1, T_BINDING, &to, &binding_body(prefix, replaces));
+    let (_, v) = deposit_registry_record(
+        port,
+        signed,
+        CLAIMANT_DOC1,
+        T_BINDING,
+        &to,
+        &binding_body(prefix, replaces),
+    );
     assert_eq!(v["resp"].as_str(), Some("ack_addr"), "the binding of {prefix}: {v}");
     acked_addr(&v)
 }
@@ -596,8 +608,14 @@ pub fn deposit_endpoint(
     origins: &[&str],
     replaces: Option<&str>,
 ) -> String {
-    let (_, v) =
-        deposit_registry_record(port, signed, home, T_ENDPOINT, &[], &endpoint_body(origins, replaces));
+    let (_, v) = deposit_registry_record(
+        port,
+        signed,
+        home,
+        T_ENDPOINT,
+        &[],
+        &endpoint_body(origins, replaces),
+    );
     assert_eq!(v["resp"].as_str(), Some("ack_addr"), "the endpoint deposit into {home}: {v}");
     acked_addr(&v)
 }
@@ -695,7 +713,14 @@ pub fn spawn_with_blocked_prefixes(
     blocked_prefixes: Option<&Path>,
     node_prefix: Option<&str>,
 ) -> Skepd {
-    spawn_under(dir, local_trust, blocked_prefixes, node_prefix, None, ALLOW_PREVIEW_KEYS_IN_FIXTURES)
+    spawn_under(
+        dir,
+        local_trust,
+        blocked_prefixes,
+        node_prefix,
+        None,
+        ALLOW_PREVIEW_KEYS_IN_FIXTURES,
+    )
 }
 
 /// THE FIXTURES RUN WITH `allow_preview_keys` ON (AUTH-1.44: "the test
@@ -731,9 +756,8 @@ fn spawn_under(
     salt_seed: Option<u64>,
     allow_preview_keys: bool,
 ) -> Skepd {
-    let node_prefix = node_prefix.map(|text| {
-        text.parse::<NodePrefix>().unwrap_or_else(|e| panic!("'{text}' is {e}"))
-    });
+    let node_prefix = node_prefix
+        .map(|text| text.parse::<NodePrefix>().unwrap_or_else(|e| panic!("'{text}' is {e}")));
     // The reservation is held through the slow open, so only the rebind gap
     // races — and under this suite it DOES: every exchange is one
     // connection, a run leaves some thirty thousand sockets in TIME_WAIT
@@ -986,9 +1010,7 @@ pub fn http_full(
         .unwrap_or_else(|e| panic!("{}: {e}", ctx("write request head")));
     stream.write_all(body).unwrap_or_else(|e| panic!("{}: {e}", ctx("write request body")));
     let mut raw = Vec::new();
-    stream
-        .read_to_end(&mut raw)
-        .unwrap_or_else(|e| panic!("{}: {e}", ctx("read response")));
+    stream.read_to_end(&mut raw).unwrap_or_else(|e| panic!("{}: {e}", ctx("read response")));
     parse_response(&raw, &ctx("response"))
 }
 
@@ -1075,10 +1097,7 @@ pub fn http(
 
 /// Case-insensitive response-header lookup.
 pub fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
-    headers
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case(name))
-        .map(|(_, v)| v.as_str())
+    headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
 }
 
 pub fn options(port: u16, path: &str) -> (u16, Vec<(String, String)>, Vec<u8>) {
@@ -1185,10 +1204,7 @@ impl Sse {
         let mut sse = Sse { stream, buf: Vec::new() };
         let head = sse.read_until(b"\r\n\r\n");
         let head = String::from_utf8(head).expect("ascii stream head");
-        assert!(
-            head.starts_with("HTTP/1.1 200 "),
-            "the event stream must open 200: {head}"
-        );
+        assert!(head.starts_with("HTTP/1.1 200 "), "the event stream must open 200: {head}");
         let lower = head.to_ascii_lowercase();
         assert!(
             lower.contains("content-type: text/event-stream"),
@@ -1427,7 +1443,11 @@ pub fn blob_append(
 }
 
 /// THE PROGRESS: `GET /blob/upload/<id>`.
-pub fn blob_progress(port: u16, token: Option<&str>, id: &str) -> (u16, Vec<(String, String)>, Vec<u8>) {
+pub fn blob_progress(
+    port: u16,
+    token: Option<&str>,
+    id: &str,
+) -> (u16, Vec<(String, String)>, Vec<u8>) {
     blob_exchange(port, "GET", &format!("{BLOB_UPLOAD}/{id}"), token, b"")
 }
 
@@ -1448,7 +1468,11 @@ pub fn put_whole(port: u16, token: &str, bytes: &[u8]) -> Value {
     let (st, _, body) = blob_create(port, Some(token), bytes.len() as u64, bytes);
     assert_eq!(st, 200, "the PUT: {}", String::from_utf8_lossy(&body));
     let v = json(&body);
-    assert_eq!(v["hash"].as_str(), Some(blob_hex(bytes).as_str()), "the daemon's hash is the suite's own: {v}");
+    assert_eq!(
+        v["hash"].as_str(),
+        Some(blob_hex(bytes).as_str()),
+        "the daemon's hash is the suite's own: {v}"
+    );
     assert_eq!(v["size"].as_u64(), Some(bytes.len() as u64));
     assert_eq!(v["designation"].as_str(), Some("blake3"));
     v
@@ -1489,4 +1513,225 @@ pub fn insert_cell(port: u16, token: &str, draft: &str, bytes: &[u8], size: u64)
     })
     .to_string();
     verdict(&op(port, Some(token), &frame))
+}
+
+// ── the blob fetch and the blind cell (media lane D; wire.md §Media) ─────
+
+/// The blob fetch's path, as wire.md §Media pins it: `GET /blob?i=<address>`.
+pub const BLOB_FETCH: &str = "/blob";
+
+/// The blind document's kind, INTERIM (wire.md §Media), as the fixture
+/// `fixtures/media/blind-cells.json` pins it.
+pub const BLIND_KIND: &str = "1.1.0.1.0.1.0.3.88";
+
+/// The canonical blind cell over `commitment` — 32 bytes as 64 lowercase
+/// hex — the one form the daemon's parser admits: a `type` and a
+/// `commitment`, and nothing the board can read a file by.
+pub fn blind_cell_of(commitment: &[u8; 32]) -> String {
+    format!(r#"{{"type":"{BLIND_KIND}","commitment":"{}"}}"#, hex(commitment))
+}
+
+/// An `insert` of ONE composite value `text` into `doc` at `ordinal` — the
+/// write a cell of either kind rides.
+pub fn atom_frame(doc: &str, ordinal: u64, text: &str) -> String {
+    json!({
+        "op": "insert",
+        "doc": doc,
+        "at": {"subspace": "1", "ordinal": ordinal.to_string()},
+        "values": [{"atom": text}],
+    })
+    .to_string()
+}
+
+/// How a fetch's connection ended, as the client saw it: the daemon's
+/// clean close, a RESET (the mid-stream refusal, the idle or transfer
+/// bound), or the client's own read deadline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamEnd {
+    Eof,
+    Reset,
+    Timeout,
+}
+
+/// The request line and head of one fetch — `GET` or `HEAD` of `/blob?i=`
+/// as `token`, with `extra` headers written verbatim (a `Range`, an
+/// `If-None-Match`, a second token).
+fn fetch_request(head: bool, token: Option<&str>, i: &str, extra: &[(&str, &str)]) -> Vec<u8> {
+    let method = if head { "HEAD" } else { "GET" };
+    let mut req =
+        format!("{method} {BLOB_FETCH}?i={i} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n");
+    if let Some(tok) = token {
+        req.push_str(&format!("Skepd-Session: {tok}\r\n"));
+    }
+    for (name, value) in extra {
+        req.push_str(&format!("{name}: {value}\r\n"));
+    }
+    req.push_str("\r\n");
+    req.into_bytes()
+}
+
+/// One fetch exchange, whole: the status, the headers and the body, read to
+/// the connection's end — a reset after the answer ends the read as EOF
+/// does. `head` sends the `HEAD`.
+pub fn fetch_full(
+    port: u16,
+    head: bool,
+    token: Option<&str>,
+    i: &str,
+    extra: &[(&str, &str)],
+) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    let (raw, _) = fetch_bytes(port, &fetch_request(head, token, i, extra));
+    assert!(
+        !raw.is_empty(),
+        "{} {BLOB_FETCH}?i={i}: the daemon closed without answering",
+        if head { "HEAD" } else { "GET" }
+    );
+    parse_response(&raw, &format!("{} {BLOB_FETCH}?i={i}", if head { "HEAD" } else { "GET" }))
+}
+
+/// `GET /blob?i=<i>` as `token`.
+pub fn fetch(port: u16, token: Option<&str>, i: &str) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    fetch_full(port, false, token, i, &[])
+}
+
+/// `HEAD /blob?i=<i>` as `token`.
+pub fn fetch_head(
+    port: u16,
+    token: Option<&str>,
+    i: &str,
+) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    fetch_full(port, true, token, i, &[])
+}
+
+/// Write `raw` and read to the connection's end under a bounded deadline:
+/// the bytes received and how it ended.
+pub fn fetch_bytes(port: u16, raw: &[u8]) -> (Vec<u8>, StreamEnd) {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to skepd");
+    stream.set_read_timeout(Some(Duration::from_secs(60))).expect("read timeout");
+    stream.set_write_timeout(Some(Duration::from_secs(60))).expect("write timeout");
+    stream.write_all(raw).expect("write the fetch");
+    let mut out = Vec::new();
+    let end = read_to_stream_end(&mut stream, &mut out);
+    (out, end)
+}
+
+/// Read `stream` to its end into `out`: how it ended.
+fn read_to_stream_end(stream: &mut TcpStream, out: &mut Vec<u8>) -> StreamEnd {
+    let mut chunk = [0u8; 65536];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => return StreamEnd::Eof,
+            Ok(n) => out.extend_from_slice(&chunk[..n]),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    ErrorKind::ConnectionReset
+                        | ErrorKind::BrokenPipe
+                        | ErrorKind::ConnectionAborted
+                ) =>
+            {
+                return StreamEnd::Reset
+            }
+            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                return StreamEnd::Timeout
+            }
+            Err(e) => panic!("read the fetch: {e}"),
+        }
+    }
+}
+
+/// A fetch read LAZILY, so a suite can act while the stream stands — the
+/// daemon's stream parked at its hold between two chunks — and then read
+/// it to its end and judge how it ended.
+pub struct FetchStream {
+    stream: TcpStream,
+    /// Every byte received so far, the head included.
+    pub raw: Vec<u8>,
+}
+
+impl FetchStream {
+    /// Open the connection and send `GET /blob?i=<i>` as `token`; nothing
+    /// is read yet.
+    pub fn open(port: u16, token: Option<&str>, i: &str) -> FetchStream {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to skepd");
+        stream.set_write_timeout(Some(Duration::from_secs(30))).expect("write timeout");
+        stream.write_all(&fetch_request(false, token, i, &[])).expect("write the fetch");
+        FetchStream { stream, raw: Vec::new() }
+    }
+
+    /// The byte offset of the body: one past the head's terminator, where
+    /// the head has arrived.
+    fn body_at(&self) -> Option<usize> {
+        self.raw.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4)
+    }
+
+    /// Read until the head and at least `body_bytes` of the body have
+    /// arrived, within `within`.
+    pub fn read_until_body(&mut self, body_bytes: usize, within: Duration) {
+        let deadline = Instant::now() + within;
+        self.stream.set_read_timeout(Some(Duration::from_millis(100))).expect("read timeout");
+        loop {
+            if self.body_at().is_some_and(|at| self.raw.len() - at >= body_bytes) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no head and {body_bytes} body bytes within {within:?}; received {} bytes",
+                self.raw.len()
+            );
+            let mut chunk = [0u8; 65536];
+            match self.stream.read(&mut chunk) {
+                Ok(0) => panic!(
+                    "the stream closed before {body_bytes} body bytes; received {}",
+                    self.raw.len()
+                ),
+                Ok(n) => self.raw.extend_from_slice(&chunk[..n]),
+                Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+                Err(e) => panic!("read the fetch: {e}"),
+            }
+        }
+    }
+
+    /// Read to the connection's end: how it ended. The deadline is short —
+    /// a reset or a clean close lands in well under a second over loopback,
+    /// so a stream still silent past it is a cut the client gives up on (a
+    /// reset macOS does not surface promptly after a large drain reads as
+    /// `Timeout`, the file cut all the same), never a wait worth seconds.
+    pub fn read_to_end(&mut self) -> StreamEnd {
+        self.stream.set_read_timeout(Some(Duration::from_secs(10))).expect("read timeout");
+        let mut rest = Vec::new();
+        let end = read_to_stream_end(&mut self.stream, &mut rest);
+        self.raw.extend_from_slice(&rest);
+        end
+    }
+
+    /// The head as received: the status and the headers.
+    pub fn head(&self) -> (u16, Vec<(String, String)>) {
+        let at = self.body_at().expect("the head has arrived");
+        let (status, headers, _) = parse_response(&self.raw[..at], "the fetch's head");
+        (status, headers)
+    }
+
+    /// The body bytes received so far.
+    pub fn body(&self) -> &[u8] {
+        match self.body_at() {
+            Some(at) => &self.raw[at..],
+            None => &[],
+        }
+    }
+}
+
+/// `POST /session/close` with `token`: the binding retired, `204`.
+pub fn close_session(port: u16, token: &str) {
+    let (st, body) = http(port, "POST", "/session/close", Some(token), b"");
+    assert_eq!(st, 204, "the close: {}", String::from_utf8_lossy(&body));
+}
+
+/// REVOKE the grant at `grant` (wire.md §The read predicate: a later grant
+/// whose `from` names an earlier grant's own address revokes it), from the
+/// issuer's signed session `signed`; the revocation's address. The `/op-at`
+/// helper is `common::ops`' own [`op_at`](ops::op_at), which answers the
+/// `(status, document)` pair the history suites read.
+pub fn revoke_grant(port: u16, signed: &str, grant: &str) -> String {
+    acked_addr(&op(port, Some(signed), &typed_link_frame(CLAIMANT_DOC1, &[grant], &[], T_GRANT)))
 }

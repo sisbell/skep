@@ -186,8 +186,8 @@ mod operation;
 pub use codec::{Codec, ParseError};
 pub use operation::{consult_read, OperationSurface, ReadPredicate};
 pub use reject::{Disposition, FaultSite, RejectCode, Rejection};
-pub use request::{Op, OpKind, ReqId, Request, SuccessorSpec, MAX_REQ_ID_BYTES};
-pub use response::{BirthVersion, EditionClaim, Response, UniversalGrant};
+pub use request::{ISpan, ISpanFault, Op, OpKind, ReqId, Request, SuccessorSpec, MAX_REQ_ID_BYTES};
+pub use response::{BirthVersion, EditionClaim, IItem, Response, UniversalGrant};
 pub use session::SessionId;
 // EDITLINK's successor build, for the daemon's composer of its entry frame
 // (signed ops): the one function the dispatch and the composer both resolve
@@ -214,8 +214,8 @@ pub use world::{FebeWorld, PublicationWorld, ReadableWorld, Stores, UniversalInd
 // the element addresses `Op::Emit`'s `from` and `Op::Nullify`'s `target`
 // take.
 pub use skep_address::{
-    elem_addr, validate, Address, ElemError, ElemPos, EmptySequence, Nat, Span, SpanSet, T4Error,
-    T12Clause, Tumbler,
+    elem_addr, validate, Address, ElemError, ElemPos, EmptySequence, Nat, Span, SpanSet, T12Clause,
+    T4Error, Tumbler,
 };
 // M5, the publish shot's three request values included: `Op::Publish` is
 // unbuildable without them, and `Run::new`/`RunError` is the one constructor
@@ -223,8 +223,8 @@ pub use skep_address::{
 // `Op::Insert` carries, so an insert is unbuildable without it.
 pub use skep_arrangement::{Base, Deposit, Run, RunError, Shot, ShotRun, ShotTerms, VPos, VSpec};
 pub use skep_content::Val; // M4
-// M8, `SlotSpec` included: every field of a `FourSet` is one, so the three
-// descriptor ops are unbuildable without it.
+                           // M8, `SlotSpec` included: every field of a `FourSet` is one, so the three
+                           // descriptor ops are unbuildable without it.
 pub use skep_discovery::{Cursor, FourSet, OrphanReport, SlotSpec, SupClaim, Window};
 // M2, `AttestationError` included: `Attestation::new` is the one constructor
 // of the value `Request::attest` carries, and its refusal travels with it —
@@ -233,11 +233,12 @@ pub use skep_discovery::{Cursor, FourSet, OrphanReport, SlotSpec, SupClaim, Wind
 // signature", and a blob wider than M2's slot holds.
 pub use skep_kernel::{Attestation, AttestationError, Seq}; // M2
 pub use skep_namespace::PrincipalId; // M3
-// M6, the two enclosed shapes included: `Delivery` and `CompareReport` are
-// collections of `DeliveryItem` and `CorrPair`, and marshaling either answer
-// means naming the element it yields.
+                                     // M6, the two enclosed shapes included: `Delivery` and `CompareReport` are
+                                     // collections of `DeliveryItem` and `CorrPair`, and marshaling either answer
+                                     // means naming the element it yields.
 pub use skep_retrieval::{
-    CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Operand, RegionSpec, Spec, SpanFault,
+    CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Operand, RegionSpec, SpanFault,
+    Spec,
 };
 // M7, whose slot vocabulary the request model uses directly: `SlotArg` is the
 // two-form endset slot (the 2026-08-16 amendment) naming `Op::MakeLink`'s

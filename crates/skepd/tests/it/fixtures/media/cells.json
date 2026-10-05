@@ -159,6 +159,13 @@
       "why": "a type naming another kind (the enrollment record's) is not the cell's; its own schema reads it"
     },
     {
+      "name": "blind_kind",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.88\",\"commitment\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\"}",
+      "verdict": "no_cell",
+      "names_kind": false,
+      "why": "a type naming the blind document's kind (blind-cells.json) is the blind parser's: the picture parser reads it as not its kind, and the one classification ahead of both hands it to the other schema"
+    },
+    {
       "name": "type_not_a_string",
       "body": "{\"type\":389,\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":5}",
       "verdict": "no_cell",

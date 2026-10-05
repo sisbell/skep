@@ -40,11 +40,18 @@
 //!   this principal deposited under its own live lease; the deposit read.
 //!   The PUT's routes (`server/blob_routes.rs`, the family `/blob/upload`)
 //!   stream a body one chunk at a time into the store and commit nothing
-//!   to the journal (wire.md §Media).
+//!   to the journal (wire.md §Media). And THE FETCH (`media/serve.rs`):
+//!   `GET /blob?i=<address>` serves a picture's whole file, gated by M10's
+//!   read by identity, checked against its cell before its first byte,
+//!   under a permit pool, the requester re-resolved mid-stream; the BLIND
+//!   DOCUMENT's cell (`media/blind.rs`) is the second kind the door and the
+//!   fetch classify beside the picture's, of which the board holds no byte.
 //! * [`Daemon`] — the state and the socket-free router: `GET /challenge`,
 //!   `POST /session`, `POST /session/close`, `POST /op`, `POST /op-at`
 //!   (any READ frame answered as of a committed
 //!   position, served from the journal via the engine's bounded replay),
+//!   `GET /blob?i=` and `HEAD /blob?i=` (the fetch, a stream the accept
+//!   path writes),
 //!   `GET /health` (liveness, position, — wire v6 — `head_time`, — wire v7 —
 //!   the `auth` object the board's mode derives from, and the kernel's
 //!   `chain_head`, the chain AT the position served beside it),
@@ -128,12 +135,10 @@ mod serial;
 #[doc(hidden)]
 pub mod fuzz_support;
 
-pub use auth::{
-    AuthOptions, NodePrefix, NotANodePrefix, NotCanonical, Origin, PortAlreadyBound,
-};
+pub use auth::{AuthOptions, NodePrefix, NotANodePrefix, NotCanonical, Origin, PortAlreadyBound};
 pub use codec::JsonCodec;
 pub use server::{
-    body_cap, serve, Body, Daemon, DaemonError, HttpRequest, Peer, Reply, Routed, Skepd,
+    body_cap, serve, Body, Daemon, DaemonError, Fetch, HttpRequest, Peer, Reply, Routed, Skepd,
     DEFAULT_WORKERS, MIN_WORKERS, UNIVERSAL_HEADERS,
 };
 
@@ -202,7 +207,8 @@ const _: fn() = || {
     assert_send_sync::<Reply>();
     assert_send_sync::<Body>();
     assert_send_sync::<HttpRequest>();
-    assert_send_sync::<Routed>();
+    assert_send_sync::<Routed<'static>>();
+    assert_send_sync::<Fetch<'static>>();
     #[cfg(any(test, feature = "test-hooks"))]
     assert_send_sync::<Permit<'static>>();
     // The AUTH round's arrivals. `AuthOptions` is the value a caller builds

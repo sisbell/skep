@@ -23,6 +23,9 @@ fn q() -> FourSet {
 fn doc() -> Address {
     addr(&[1, 0, 1, 0, 1])
 }
+fn ispan(start: &[u32], width: u32) -> ISpan {
+    ISpan { start: addr(start), width: Nat::from(width) }
+}
 
 /// Every variant, paired with its documented partition side (§1's
 /// `is_read` grouping): `(op, is_read)`. Crate-visible: the dispatch
@@ -52,10 +55,7 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
         (Op::Copy { doc: doc(), at: vpos(), specs: vec![vspec()] }, false),
         (Op::Rearrange { doc: doc(), cuts: vec![vpos()] }, false),
         (Op::Version { d_src: doc(), published: None }, false),
-        (
-            Op::Publish { doc: doc(), shot: Shot { base: None, draft: None, runs: vec![] } },
-            false,
-        ),
+        (Op::Publish { doc: doc(), shot: Shot { base: None, draft: None, runs: vec![] } }, false),
         (
             Op::MakeLink {
                 home: doc(),
@@ -72,7 +72,11 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
         (
             Op::EditLink {
                 original: doc(),
-                successor: SuccessorSpec { from: vec![vspec()], to: vec![vspec()], ty: SlotArg::Addrs(vec![doc()]) },
+                successor: SuccessorSpec {
+                    from: vec![vspec()],
+                    to: vec![vspec()],
+                    ty: SlotArg::Addrs(vec![doc()]),
+                },
                 d_s: doc(),
                 d_a: doc(),
             },
@@ -81,6 +85,8 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
         (Op::ReadLink { a: doc() }, true),
         (Op::FollowLink { a: doc(), slot: 1 }, true),
         (Op::RetrieveV { specs: vec![Spec { doc: doc(), span: vspan() }] }, true),
+        (Op::RetrieveI { spans: vec![ispan(&[1, 0, 1, 0, 1, 0, 1, 1], 2)] }, true),
+        (Op::ContentFrontier { doc: doc() }, true),
         (Op::RetrieveDocVSpan { doc: doc() }, true),
         (Op::RetrieveDocVSpanSet { doc: doc() }, true),
         (Op::ShowOrigin { doc: doc(), span: vspan() }, true),
@@ -92,7 +98,12 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
             },
             true,
         ),
-        (Op::FindDocsContaining { regions: vec![RegionSpec { doc: doc(), spans: vec![vspan()] }] }, true),
+        (
+            Op::FindDocsContaining {
+                regions: vec![RegionSpec { doc: doc(), spans: vec![vspan()] }],
+            },
+            true,
+        ),
         (Op::Image { d: doc(), region: vec![vspan()] }, true),
         (Op::FindLinksV { d: doc(), region: vec![vspan()] }, true),
         (Op::FindLinksFtt { q: q() }, true),
@@ -112,17 +123,19 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
 }
 
 /// §1: the read/write partition is exhaustive and two-sided
-/// (`is_write == !is_read`), with 28 reads and 15 writes (the publish
+/// (`is_write == !is_read`), with 30 reads and 15 writes (the publish
 /// shot joining the fourteen of the design, lane 3.2; the doc-metadata
 /// read and the edition-claim lookup joining the twenty-four reads,
 /// lane 3.4; the owner-of-address read the twenty-seventh, AUTH-6.37;
-/// the any-principal discovery read the twenty-eighth, PUB-8.47).
+/// the any-principal discovery read the twenty-eighth, PUB-8.47; the
+/// read by identity and the content-frontier read the twenty-ninth and
+/// thirtieth, AUTH-6.38–6.40).
 #[test]
 fn partition_matches_the_design_grouping() {
     let ops = all_ops();
-    assert_eq!(ops.len(), 43);
+    assert_eq!(ops.len(), 45);
     let reads = ops.iter().filter(|(_, r)| *r).count();
-    assert_eq!(reads, 28);
+    assert_eq!(reads, 30);
     for (op, expect_read) in &ops {
         assert_eq!(op.is_read(), *expect_read);
         assert_eq!(op.is_write(), !*expect_read);
@@ -144,7 +157,7 @@ fn kind_is_injective_and_never_unparseable() {
         assert_ne!(kind, OpKind::Unparseable);
         assert!(seen.insert(kind), "{kind:?} is produced by two variants");
     }
-    assert_eq!(seen.len(), 43);
+    assert_eq!(seen.len(), 45);
 }
 
 /// [`SuccessorSpec`] is a VALUE, and the comparison macros are what a
@@ -233,11 +246,7 @@ fn doc_arguments_run_in_declaration_order() {
     let op = Op::DocMetadata { doc: d2.clone() };
     assert_eq!(op.doc_arguments(), vec![&d2]);
     let op = Op::EditionClaims { target: d3.clone() };
-    assert_eq!(
-        op.doc_arguments(),
-        vec![&d3],
-        "the target is a named document, not a probe key"
-    );
+    assert_eq!(op.doc_arguments(), vec![&d3], "the target is a named document, not a probe key");
     // AUTH-6.37: the owner-of-address read has NO document argument — its
     // `addr` is a registry probe — so the consult is never asked about it
     // and nothing is withheld, whatever the address names.
@@ -249,6 +258,10 @@ fn doc_arguments_run_in_declaration_order() {
     // PUB-8.47: the any-principal discovery read takes no argument, so
     // there is nothing to consult; its rows are fold-filtered at its arm.
     assert!(Op::UniversalGrants.doc_arguments().is_empty());
+    // AUTH-6.38: the frontier read names its document; the read by identity
+    // names none — its documents are DERIVED (the test below).
+    let op = Op::ContentFrontier { doc: d2.clone() };
+    assert_eq!(op.doc_arguments(), vec![&d2]);
     for (op, is_read) in all_ops() {
         let names_a_document = !op.doc_arguments().is_empty();
         let expects = is_read
@@ -259,6 +272,7 @@ fn doc_arguments_run_in_declaration_order() {
                     | Op::EffectiveOwner { .. }
                     | Op::ReadLink { .. }
                     | Op::FollowLink { .. }
+                    | Op::RetrieveI { .. }
                     | Op::FindLinksFtt { .. }
                     | Op::CountFtt { .. }
                     | Op::WindowFtt { .. }
@@ -267,6 +281,61 @@ fn doc_arguments_run_in_declaration_order() {
                     | Op::UniversalGrants
             );
         assert_eq!(names_a_document, expects, "{:?}: the doc-argument row", op.kind());
+    }
+}
+
+/// THE DERIVED-ARGUMENT LIST (the media record's "EACH I-SPAN CONFINED TO
+/// ONE DERIVED DOCUMENT"; PUB-6.38; M-I2 (a)), pinned over the whole `Op`
+/// domain: the read by identity alone derives documents — `document_of` of
+/// each span's start, in span order, one per span, a version member's
+/// element deriving the member — and every other op, read or write,
+/// derives none. THE SHAPE REFUSAL rides the derivation: a start that is no
+/// element position — a node's, an account's, a document's own — and a zero
+/// width are each refused by the span's INDEX, the first fault in span
+/// order speaking, and the list is never built past it.
+#[test]
+fn only_the_read_by_identity_derives_documents_and_its_shape_is_refused_by_index() {
+    let d1 = addr(&[1, 0, 1, 0, 1]);
+    let d2 = addr(&[1, 0, 1, 0, 2]);
+    let member = addr(&[1, 0, 1, 0, 2, 1]);
+    let op = Op::RetrieveI {
+        spans: vec![
+            ispan(&[1, 0, 1, 0, 2, 0, 1, 7], 3),
+            ispan(&[1, 0, 1, 0, 1, 0, 1, 1], 1),
+            ispan(&[1, 0, 1, 0, 2, 1, 0, 1, 2], 2),
+            // A link position derives its document too: M4 answers `None`
+            // there, but the consult is the document's.
+            ispan(&[1, 0, 1, 0, 1, 0, 2, 1], 1),
+        ],
+    };
+    assert_eq!(
+        op.derived_doc_arguments(),
+        Ok(vec![d2.clone(), d1.clone(), member, d1.clone()]),
+        "one derived document per span, in span order"
+    );
+    for (start, fault) in [
+        (&[1][..], ISpanFault::NoElementPosition),
+        (&[1, 0, 1][..], ISpanFault::NoElementPosition),
+        (&[1, 0, 1, 0, 1][..], ISpanFault::NoElementPosition),
+        (&[1, 0, 1, 0, 2, 1][..], ISpanFault::NoElementPosition),
+    ] {
+        let op =
+            Op::RetrieveI { spans: vec![ispan(&[1, 0, 1, 0, 1, 0, 1, 1], 1), ispan(start, 1)] };
+        assert_eq!(op.derived_doc_arguments(), Err((1, fault)), "{start:?}: by the span's index");
+    }
+    let op = Op::RetrieveI { spans: vec![ispan(&[1, 0, 1, 0, 1, 0, 1, 1], 0)] };
+    assert_eq!(op.derived_doc_arguments(), Err((0, ISpanFault::EmptyWidth)));
+    // The first fault in span order speaks, whichever kind it is.
+    let op = Op::RetrieveI { spans: vec![ispan(&[1, 0, 1, 0, 1, 0, 1, 1], 0), ispan(&[1], 1)] };
+    assert_eq!(op.derived_doc_arguments(), Err((0, ISpanFault::EmptyWidth)));
+    for (op, _) in all_ops() {
+        let derives = !matches!(op.derived_doc_arguments(), Ok(ref v) if v.is_empty());
+        assert_eq!(
+            derives,
+            matches!(op, Op::RetrieveI { .. }),
+            "{:?}: the derived-argument row",
+            op.kind()
+        );
     }
 }
 
@@ -311,11 +380,7 @@ fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
         d_s: d1.clone(),
         d_a: d1.clone(),
     };
-    assert_eq!(
-        op.source_arguments(),
-        vec![&d3, &d2],
-        "edit_link: the successor's slots in order"
-    );
+    assert_eq!(op.source_arguments(), vec![&d3, &d2], "edit_link: the successor's slots in order");
 
     for (op, is_read) in all_ops() {
         let reads_a_source = !op.source_arguments().is_empty();

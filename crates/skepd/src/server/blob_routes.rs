@@ -58,29 +58,59 @@
 //! tests — leaves the slot empty, and the route reads the request's own
 //! `body` through the same type. The arm's whole memory is the one buffer
 //! the source holds; nothing here ever holds the body whole.
+//!
+//! AND THE FETCH — `GET /blob?i=<address>`, with `HEAD` for the head alone
+//! (`media.md` Op inventory 3; the register M-I2 (a)–(d), (g), M-I3 (b),
+//! M-I7 (a), (b); wire.md §Media, THE FETCH): the one path beside the
+//! family, TOKEN-ACCEPTING through [`Daemon::resolve_actor`] like every
+//! method of it, its order THE SERVE's (`media/serve.rs` — the shape, M10's
+//! read by identity as the gate, the classification, the permit, the whole
+//! file checked before its first byte) and its answer the transport's to
+//! stream ([`Routed::Fetch`]), the requester re-resolved between chunks
+//! through [`Daemon::fetch_still_admitted`]. Every refusal is a reply of
+//! this route's own (`reply::refuse_fetch`), class-varying as the family's
+//! are; a `HEAD` is answered as its `GET` is and the transport writes the
+//! head alone. Unlike the family, the fetch meets NO session-layer gate of
+//! its own: a guest reads a published picture as a guest reads its cell,
+//! and what the guest may not read M10's gate withholds (M-I2 (a)).
 
 use std::io;
 use std::time::Duration;
 
 use serde_json::Value;
+use skep_address::Address;
 use skep_blobs::{BlobError, Finished, HashFunction, Stream, UploadId, UploadRecord};
 use skep_identity::HasIdentity;
 use skep_namespace::{HasM3, PrincipalId};
 
 use super::actor::Resolved;
-use super::reply::{refuse, refuse_with, with_signal, Reply, TransportError};
+use super::reply::{
+    class_varying, refuse, refuse_fetch, refuse_with, with_signal, Fetch, Reply, Routed,
+    TransportError,
+};
 use super::request::{at_most_once, query_pairs, BodySource, HttpRequest};
 use super::Daemon;
 use crate::auth::session::Actor;
-use crate::codec::obj;
+use crate::codec::{obj, wire_address};
 use crate::media::deposit_read::deposit_read;
 use crate::media::gate::{MediaGate, Scope};
 use crate::media::pruner::{self, PrunePass};
+use crate::media::serve;
 #[cfg(feature = "test-hooks")]
 use crate::notice;
 
 /// The family's one path.
 const FAMILY: &str = "/blob/upload";
+
+/// THE FETCH's one path — beside the family, never of it: `/blob/upload`
+/// is the family's and `/blob/<anything else>` is unknown.
+const FETCH: &str = "/blob";
+
+/// Whether `path` is the fetch's — the router's `path_is_known` half for
+/// it, and the arm test of its two methods and its preflight.
+pub(super) fn is_fetch_path(path: &str) -> bool {
+    path == FETCH
+}
 
 /// What a path of the family names.
 pub(super) enum BlobPath {
@@ -127,6 +157,54 @@ impl Daemon {
         let resolved = self.resolve_at_head(req);
         let reply = self.blob_dispatch(&resolved, req, body);
         with_signal(reply, resolved.closed)
+    }
+
+    /// THE FETCH's entry — `GET /blob?i=` and `HEAD /blob?i=` (wire.md
+    /// §Media, THE FETCH): the actor resolved against the head, as every
+    /// token-accepting route resolves it — the death arm closing a dead
+    /// token's binding and the signal owed on the answer — then the query's
+    /// shape, then THE SERVE's order (`media/serve.rs`) as the resolved
+    /// session, the guest where none was. An admitted fetch is the
+    /// transport's to stream ([`Routed::Fetch`]), its headers stamped here:
+    /// the class-varying pair — the answer is a function of the presented
+    /// token's class, as `/op`'s is — the inert pair, and the signal. Every
+    /// refusal is an ordinary reply, class-varying and signalled the same.
+    /// A `HEAD` is routed as its `GET` is — the same order, the same answer
+    /// — and the transport writes the head alone (`http::write_reply`, the
+    /// stream's own first step): HTTP's rule, kept in one place.
+    pub(super) fn fetch_route(&self, req: &HttpRequest) -> Routed<'_> {
+        let resolved = self.resolve_at_head(req);
+        let refusal =
+            |reply: Reply| Routed::Reply(class_varying(with_signal(reply, resolved.closed)));
+        let i = match fetch_query(req.query.as_deref()) {
+            Ok(i) => i,
+            Err(detail) => return refusal(refuse(TransportError::MalformedBlob, Some(&detail))),
+        };
+        match serve::fetch(&self.febe, resolved.sid(), &self.media, &self.fetches, &i) {
+            Ok(admitted) => Routed::Fetch(Fetch::new(admitted, resolved.closed)),
+            Err(why) => refusal(refuse_fetch(why)),
+        }
+    }
+
+    /// THE MID-STREAM RE-CHECK (M-I2 (g); s6-E1 (a)): the requester
+    /// re-resolved against the head — a token closed since the stream
+    /// opened resolves dead, and its binding is retired by the same arm —
+    /// and M10's gate run again as the session it now resolves to
+    /// (`serve::gate_admits`): `false` ends the stream by a reset. A guest
+    /// stays a guest and is re-gated as one: a picture unpublished
+    /// mid-stream is withheld from it at the next interval.
+    pub(super) fn fetch_still_admitted(&self, req: &HttpRequest, i: &Address) -> bool {
+        let resolved = self.resolve_at_head(req);
+        if resolved.closed {
+            return false;
+        }
+        serve::gate_admits(&self.febe, resolved.sid(), i)
+    }
+
+    /// The media gate's clock, unix milliseconds — what the stream's time
+    /// interval is judged on, so a suite drives it through the clock seam.
+    pub(super) fn fetch_clock_ms(&self) -> u64 {
+        self.media.now_ms()
     }
 
     /// THE SESSION-LAYER GATE, then THE READINESS, then the method. The gate
@@ -212,13 +290,19 @@ impl Daemon {
         if length > limits.per_file_cap {
             return refuse(
                 TransportError::PayloadTooLarge,
-                Some(&format!("length {length} exceeds the {}-byte per-file cap", limits.per_file_cap)),
+                Some(&format!(
+                    "length {length} exceeds the {}-byte per-file cap",
+                    limits.per_file_cap
+                )),
             );
         }
         if body.declared() as u64 > length {
             return refuse(
                 TransportError::UploadLength,
-                Some(&format!("the body's {} bytes exceed the declared length {length}", body.declared())),
+                Some(&format!(
+                    "the body's {} bytes exceed the declared length {length}",
+                    body.declared()
+                )),
             );
         }
         let now = self.media.now_ms();
@@ -226,7 +310,13 @@ impl Daemon {
             return refuse_deposit(scope, false, 0);
         }
         let interval = Duration::from_millis(limits.lease_interval_ms);
-        let record = match self.media.store().create_upload(key, HashFunction::Blake3, length, interval, now) {
+        let record = match self.media.store().create_upload(
+            key,
+            HashFunction::Blake3,
+            length,
+            interval,
+            now,
+        ) {
             Ok(r) => r,
             Err(e) => return refuse(TransportError::BlobIo, Some(&e.to_string())),
         };
@@ -238,7 +328,8 @@ impl Daemon {
         // pruner's re-read and a racing resume meet the hold.
         self.media.claim(id);
         let hex = id.to_hex();
-        let reply = self.stream_body(principal, key, record, 0, req, body, &[("Upload-Id", hex.as_str())]);
+        let reply =
+            self.stream_body(principal, key, record, 0, req, body, &[("Upload-Id", hex.as_str())]);
         self.media.release(id);
         reply
     }
@@ -385,7 +476,8 @@ impl Daemon {
             let snap = self.engine.kernel().snapshot();
             self.resolve_actor(req, snap.world(), snap.world().identity())
         };
-        let same = matches!(&resolved.actor, Actor::Principal(b) if MediaGate::key(b.principal) == key);
+        let same =
+            matches!(&resolved.actor, Actor::Principal(b) if MediaGate::key(b.principal) == key);
         if !same {
             drop(stream);
             let _ = store.end_upload(key, &id, now);
@@ -428,7 +520,9 @@ impl Daemon {
     /// the next open.
     pub(super) fn retire_asides(&self) {
         if let Err(e) = self.media.store().unlink_asides() {
-            crate::notice::line(format_args!("blob store: a replaced file's aside could not be unlinked: {e}"));
+            crate::notice::line(format_args!(
+                "blob store: a replaced file's aside could not be unlinked: {e}"
+            ));
         }
     }
 
@@ -518,6 +612,29 @@ impl Daemon {
 }
 
 // ── the queries, the answers, the refusals ───────────────────────────────
+
+/// THE FETCH's query: exactly `i=<address>`, the address in the wire's
+/// dotted-decimal form through the codec's own door (`wire_address`), so a
+/// query string's address and a frame's meet one grammar under one budget.
+/// What the address must NAME — an element position of a document — is the
+/// serve's step 0, not this parse's.
+fn fetch_query(query: Option<&str>) -> Result<Address, String> {
+    let query = match query {
+        None | Some("") => return Err("the required parameter is i=<address>".into()),
+        Some(q) => q,
+    };
+    let mut i: Option<Address> = None;
+    for (k, v) in query_pairs(query)? {
+        match k {
+            "i" => {
+                at_most_once(&i, "parameter", "i")?;
+                i = Some(wire_address(v).map_err(|e| format!("i: {e}"))?);
+            }
+            other => return Err(format!("unknown parameter '{other}'")),
+        }
+    }
+    i.ok_or_else(|| "the required parameter is i=<address>".to_string())
+}
 
 /// The creation's query: exactly `length=<bytes>`.
 fn create_query(query: Option<&str>) -> Result<u64, String> {
@@ -623,9 +740,10 @@ fn refuse_deposit(scope: Scope, ended: bool, offset: u64) -> Reply {
 fn blob_refusal(e: BlobError) -> Reply {
     match e {
         BlobError::NoUpload => refuse(TransportError::NoUpload, None),
-        BlobError::Offset { recorded } => {
-            refuse_with(TransportError::UploadOffset, vec![("offset", Value::Number(recorded.into()))])
-        }
+        BlobError::Offset { recorded } => refuse_with(
+            TransportError::UploadOffset,
+            vec![("offset", Value::Number(recorded.into()))],
+        ),
         BlobError::Length { length, offset } => refuse(
             TransportError::UploadLength,
             Some(&format!("the bytes at offset {offset} would pass the declared length {length}")),
@@ -648,13 +766,22 @@ mod tests {
         assert!(matches!(blob_path(&format!("/blob/upload/{id}")), Some(BlobPath::Upload(_))));
         assert!(matches!(blob_path("/blob/upload/"), Some(BlobPath::Malformed)));
         assert!(matches!(blob_path("/blob/upload/xyz"), Some(BlobPath::Malformed)));
-        assert!(matches!(blob_path(&format!("/blob/upload/{}", id.to_uppercase())), Some(BlobPath::Malformed)));
+        assert!(matches!(
+            blob_path(&format!("/blob/upload/{}", id.to_uppercase())),
+            Some(BlobPath::Malformed)
+        ));
         for outside in ["/blob", "/blob/", "/blob/uploads", "/blob/upload2", "/op", "/"] {
             assert!(blob_path(outside).is_none(), "{outside}");
         }
         assert!(streams_body("POST", "/blob/upload"));
         assert!(streams_body("PATCH", &format!("/blob/upload/{id}")));
-        for (m, p) in [("GET", "/blob/upload"), ("DELETE", &format!("/blob/upload/{id}")[..]), ("POST", &format!("/blob/upload/{id}")[..]), ("PATCH", "/blob/upload"), ("POST", "/op")] {
+        for (m, p) in [
+            ("GET", "/blob/upload"),
+            ("DELETE", &format!("/blob/upload/{id}")[..]),
+            ("POST", &format!("/blob/upload/{id}")[..]),
+            ("PATCH", "/blob/upload"),
+            ("POST", "/op"),
+        ] {
             assert!(!streams_body(m, p), "{m} {p}");
         }
         assert_eq!(create_query(Some("length=12")), Ok(12));
@@ -667,5 +794,33 @@ mod tests {
         let r = refuse_rebuilding();
         assert_eq!(r.status, 503);
         assert!(String::from_utf8_lossy(r.bytes()).contains("\"error\":\"index_rebuilding\""));
+        // The fetch's path beside the family, and its query: exactly one
+        // `i`, an address by the codec's grammar; what it names is the
+        // serve's to judge.
+        assert!(is_fetch_path("/blob"));
+        for not in ["/blob/", "/blob/upload", "/blob?i=1", "/Blob", "/blobs"] {
+            assert!(!is_fetch_path(not), "{not}");
+        }
+        assert_eq!(
+            fetch_query(Some("i=1.0.1.0.2.0.1.1")).map(|a| a.tumbler().to_string()),
+            Ok("1.0.1.0.2.0.1.1".into())
+        );
+        assert_eq!(
+            fetch_query(Some("i=1.0.1.0.2")).map(|a| a.tumbler().to_string()),
+            Ok("1.0.1.0.2".into()),
+            "a document: the shape is the serve's"
+        );
+        for bad in [
+            None,
+            Some(""),
+            Some("i="),
+            Some("i=1..2"),
+            Some("i=x"),
+            Some("i=1.1&i=1.2"),
+            Some("at=1.1"),
+            Some("i"),
+        ] {
+            assert!(fetch_query(bad).is_err(), "{bad:?}");
+        }
     }
 }

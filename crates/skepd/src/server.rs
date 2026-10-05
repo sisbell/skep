@@ -188,6 +188,7 @@ use crate::history::History;
 use crate::limits::{MAX_BLOB_BYTES, MAX_REQUEST_BODY, MAX_SMALL_BODY};
 use crate::media::gate::MediaGate;
 use crate::media::index;
+use crate::media::serve::FetchPool;
 use crate::notice;
 use crate::write_path::WritePath;
 use actor::Resolved;
@@ -198,7 +199,7 @@ use scan::ClassScans;
 pub use crate::auth::session::Peer;
 pub use http::UNIVERSAL_HEADERS;
 pub use listen::{serve, Skepd, DEFAULT_WORKERS, MIN_WORKERS};
-pub use reply::{Body, Reply, Routed};
+pub use reply::{Body, Fetch, Reply, Routed};
 pub use request::HttpRequest;
 
 /// Auto-checkpoint cadence: every N commits (M2 evaluates on-commit; no
@@ -323,15 +324,24 @@ impl std::error::Error for DaemonError {
 /// `405`; everything else is the ordinary `404`. The blob upload's path
 /// family (media lane B) is known as a family: `/blob/upload` and
 /// `/blob/upload/<id>`, the latter known for any `<id>` and refused by name
-/// where it is no identifier.
+/// where it is no identifier; the blob fetch's path `/blob` is known beside
+/// it.
 fn path_is_known(path: &str) -> bool {
     matches!(
         path,
-        "/session" | "/session/close" | "/challenge" | "/op" | "/op-at" | "/health" | "/events"
-            | "/changes" | "/chain"
+        "/session"
+            | "/session/close"
+            | "/challenge"
+            | "/op"
+            | "/op-at"
+            | "/health"
+            | "/events"
+            | "/changes"
+            | "/chain"
     ) || (cfg!(feature = "observe") && path == "/dump")
         || (cfg!(feature = "client") && path == "/")
         || blob_routes::is_blob_path(path)
+        || blob_routes::is_fetch_path(path)
 }
 
 // The token ↔ session binding, the handshake, and per-request resolution
@@ -383,6 +393,14 @@ pub struct Daemon {
     /// pass reads it under the credential lock's write arm. It commits
     /// nothing to the journal and takes no `Serial`.
     media: MediaGate,
+    /// The fetch pool behind `GET /blob?i=` (wire.md §Media, THE FETCH;
+    /// M-I7 (b)) — the third instance of [`crate::permits`]'s mechanism,
+    /// disjoint from the reconstruction and class-scan pools by the borrow:
+    /// an admitted fetch holds its whole file from the check to the last
+    /// byte written, so the pool is the route's memory bound, and its count
+    /// is the third term of [`MIN_WORKERS`]. In the serving path like the
+    /// scan pool (D9): the serve is asked or refused, never told.
+    fetches: FetchPool,
     /// The dirty-crash harness's one seam into the claim's step
     /// (`Daemon::hold_between_the_claim_and_its_head`): armed, the
     /// claim-flip tail announces the crash window and parks there, both
@@ -477,10 +495,7 @@ impl Daemon {
     /// A supply file the options name is read HERE, at every start, and the
     /// list installed from it before anything is served
     /// ([`DaemonError::BlockedPrefixes`] where it cannot be).
-    pub fn open_with(
-        data_dir: impl AsRef<Path>,
-        opts: AuthOptions,
-    ) -> Result<Daemon, DaemonError> {
+    pub fn open_with(data_dir: impl AsRef<Path>, opts: AuthOptions) -> Result<Daemon, DaemonError> {
         // THE PRODUCTION SALT (`SKJ4`): OS entropy per transaction, the one
         // source a daemon opens under — a seeded stream is a pure function
         // of the seed and the position, which is exactly the predictability
@@ -575,6 +590,7 @@ impl Daemon {
             history: History::new(),
             scans: ClassScans::new(),
             media,
+            fetches: FetchPool::new(),
             #[cfg(any(test, feature = "test-hooks"))]
             hold_between_claim_and_head: AtomicBool::new(false),
         };
@@ -681,10 +697,12 @@ impl Daemon {
         self.febe.log_position()
     }
 
-    /// The router — the whole HTTP surface, still socket-free: the one
-    /// route that cannot be a request/response `Reply` (`GET /events`, an
-    /// unbounded response) is returned as its own [`Routed`] variant, and
-    /// the accept path owns the socket from there.
+    /// The router — the whole HTTP surface, still socket-free: the two
+    /// routes that cannot be a request/response `Reply` — `GET /events`, an
+    /// unbounded response, and the blob fetch's admitted answer, a file
+    /// streamed with its requester re-resolved between chunks — are returned
+    /// as their own [`Routed`] variants, and the accept path owns the socket
+    /// from there.
     ///
     /// A COMMAND, not a query. `POST /op` commits to the journal, records
     /// the change-feed entry, and announces the commit — and where that
@@ -701,8 +719,9 @@ impl Daemon {
     /// `auth`'s `MAX_LIVE_NONCES` — a GET that is not safe, and
     /// whose eviction can spend another caller's outstanding nonce;
     /// `POST /session/close` retires a binding. And EVERY token-accepting
-    /// route (`/op`, `/op-at`, `/changes`, `/dump`, `/session/close`, and
-    /// `/events` on the accept path) can retire one, because
+    /// route (`/op`, `/op-at`, `/changes`, `/dump`, `/session/close`, the
+    /// blob family and the blob fetch, and `/events` on the accept path)
+    /// can retire one, because
     /// [`Daemon::resolve_actor`]'s death arm closes the binding a dead or
     /// unknown token names — in this daemon's map, in M10, and in the
     /// credential memo. So routing one write frame twice COMMITS TWICE
@@ -748,29 +767,38 @@ impl Daemon {
     /// request is never read by the next, and a request routed twice reads
     /// its own `body`. A caller over its own transport leaves the slot
     /// empty, and the route reads the request's own `body` instead.
-    pub fn route(&self, req: &HttpRequest) -> Routed {
+    ///
+    /// THE BLOB FETCH's ANSWER (wire.md §Media, THE FETCH): `GET /blob?i=`
+    /// and `HEAD /blob?i=` admitted are [`Routed::Fetch`] — the whole file,
+    /// checked, with the fetch pool's permit the value holds — which the
+    /// accept path streams; every refusal of the route is a [`Routed::Reply`].
+    pub fn route(&self, req: &HttpRequest) -> Routed<'_> {
         let parked = req.body_stream.take();
         self.reissue_blocked_prefixes();
         match (req.method.as_str(), req.path.as_str()) {
             ("GET", "/events") => Routed::EventStream,
+            ("GET" | "HEAD", p) if blob_routes::is_fetch_path(p) => self.fetch_route(req),
             _ => Routed::Reply(self.reply(req, parked)),
         }
     }
 
     /// The request/response routes — every method/path pair but the event
-    /// stream, decided in one match. The token-accepting set (AUTH-4.43) is
-    /// the arms wearing [`Daemon::token_route`]: `/op`, `/op-at`,
-    /// `/changes`, `/dump` and `/session/close` here, plus `/events`, which
-    /// the accept path runs by hand because a stream is not a [`Reply`] —
-    /// and the blob upload's family, whose every method resolves its actor
-    /// the same way inside `blob_route` and carries the signal the same.
-    /// `/health`, `/chain`, `/challenge`, `/session` and `/` are token-blind
-    /// by design.
+    /// stream and the fetch's admitted answer, decided in one match. The
+    /// token-accepting set (AUTH-4.43) is the arms wearing
+    /// [`Daemon::token_route`]: `/op`, `/op-at`, `/changes`, `/dump` and
+    /// `/session/close` here, plus `/events`, which the accept path runs by
+    /// hand because a stream is not a [`Reply`] — and the blob upload's
+    /// family and the blob fetch, whose every method resolves its actor the
+    /// same way inside `blob_route` and `fetch_route` and carries the signal
+    /// the same. `/health`, `/chain`, `/challenge`, `/session` and `/` are
+    /// token-blind by design.
     fn reply(&self, req: &HttpRequest, parked: Option<BodySource<'static>>) -> Reply {
         match (req.method.as_str(), req.path.as_str()) {
-            // The blob family's preflight names its own four methods; every
-            // other known path keeps the common preflight, byte-identical.
+            // The blob family's preflight names its own four methods, the
+            // fetch's its own two; every other known path keeps the common
+            // preflight, byte-identical.
             ("OPTIONS", p) if blob_routes::is_blob_path(p) => Reply::preflight_blob(),
+            ("OPTIONS", p) if blob_routes::is_fetch_path(p) => Reply::preflight_fetch(),
             // CORS preflight (wire v4): 204 on any known path; an unknown
             // path falls through to the ordinary 404 below.
             ("OPTIONS", p) if path_is_known(p) => Reply::preflight(),
@@ -791,7 +819,8 @@ impl Daemon {
             // answer is a function of the presented token's class, so each
             // wears [`class_varying`] — `Cache-Control: no-store` and
             // `Vary: Skepd-Session` — on every reply it can give, transport
-            // refusals included.
+            // refusals included. The blob family above and the blob fetch
+            // (`fetch_route`) wear it the same, on the stream's head too.
             ("POST", "/op") => class_varying(self.token_route(req, |r| self.post_op(r, req))),
             ("POST", "/op-at") => {
                 class_varying(self.token_route(req, |r| self.post_op_at(r, &req.body)))
@@ -813,10 +842,9 @@ impl Daemon {
             ("GET", "/") => {
                 Reply::bodied(200, "text/html; charset=utf-8", BOARD_HTML.as_bytes().to_vec())
             }
-            (_, p) if path_is_known(p) => refuse(
-                TransportError::MethodNotAllowed,
-                Some("see wire.md for the endpoint list"),
-            ),
+            (_, p) if path_is_known(p) => {
+                refuse(TransportError::MethodNotAllowed, Some("see wire.md for the endpoint list"))
+            }
             _ => refuse(TransportError::NoSuchEndpoint, Some(&req.path)),
         }
     }

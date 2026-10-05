@@ -191,6 +191,8 @@ pub(crate) fn deposits_credential_link(op: &Op) -> bool {
         | Op::ReadLink { .. }
         | Op::FollowLink { .. }
         | Op::RetrieveV { .. }
+        | Op::RetrieveI { .. }
+        | Op::ContentFrontier { .. }
         | Op::RetrieveDocVSpan { .. }
         | Op::RetrieveDocVSpanSet { .. }
         | Op::ShowOrigin { .. }
@@ -545,7 +547,14 @@ mod tests {
         let disavowal = addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 4]);
         let binding = addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 55]);
         let endpoint = addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 56]);
-        for ty in [t_enroll().clone(), t_retire().clone(), t_claim().clone(), disavowal, binding, endpoint] {
+        for ty in [
+            t_enroll().clone(),
+            t_retire().clone(),
+            t_claim().clone(),
+            disavowal,
+            binding,
+            endpoint,
+        ] {
             let slot = addr_spans(std::slice::from_ref(&ty));
             let folded = IDENTITY_TYPES.kind_of(&slot);
             assert_eq!(
@@ -610,7 +619,9 @@ mod tests {
         // Round 7's two: a sig-less record atom and the system account's
         // credential deposit are PERMANENT — no committed state admits the
         // same bytes (SO-I7 (f)).
-        for refusal in [CredentialRefusal::RecordSigRequired, CredentialRefusal::SystemAccountKeyless] {
+        for refusal in
+            [CredentialRefusal::RecordSigRequired, CredentialRefusal::SystemAccountKeyless]
+        {
             assert_eq!(refusal.disposition(), Permanent, "{}", refusal.token());
         }
         assert_eq!(CredentialRefusal::RecordSigRequired.token(), "record_sig_required");

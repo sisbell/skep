@@ -22,6 +22,7 @@ const ROUTES: &[&str] = &[
     "/chain",
     "/events",
     "/changes",
+    "/blob",
     #[cfg(feature = "observe")]
     "/dump",
     #[cfg(feature = "client")]
@@ -32,8 +33,7 @@ const ROUTES: &[&str] = &[
 /// the set the daemon serves: the point is to DISCOVER which methods
 /// dispatch rather than to restate them, so a method added to
 /// [`Daemon::reply`] is caught here without anyone remembering to add it.
-const PROBE_METHODS: &[&str] =
-    &["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
+const PROBE_METHODS: &[&str] = &["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
 
 /// One route set, five consequences. A known path preflights `204`;
 /// refuses an unsupported method with `405` and never `404`; dispatches
@@ -69,17 +69,29 @@ fn the_route_set_agrees_across_preflight_dispatch_and_refusal() {
     };
     let status = |method: &str, path: &str| match daemon.route(&bare(method, path)) {
         Routed::Reply(r) => r.status,
-        // The one non-reply route; reached only by GET /events, which
-        // this test never asks for.
+        // The non-reply routes: GET /events, which this test never asks
+        // for, and an ADMITTED blob fetch, which a bare `/blob` with no
+        // query never is — its refusal is a reply like any other.
         Routed::EventStream => 200,
+        Routed::Fetch(fetch) => fetch.status(),
     };
-    let allow = Reply::preflight()
-        .headers
-        .iter()
-        .find(|(k, _)| *k == "Access-Control-Allow-Methods")
-        .map(|&(_, v)| v)
-        .expect("the preflight names its allowed methods");
+    // Each path's OWN preflight: the fetch names its two methods, every
+    // other known path the common three — read off the route rather than
+    // restated, so a preflight that drifts from its dispatch is caught here.
+    let allow_for = |path: &str| {
+        let pre = if blob_routes::is_fetch_path(path) {
+            Reply::preflight_fetch()
+        } else {
+            Reply::preflight()
+        };
+        pre.headers
+            .iter()
+            .find(|(k, _)| *k == "Access-Control-Allow-Methods")
+            .map(|&(_, v)| v)
+            .expect("the preflight names its allowed methods")
+    };
     for path in ROUTES {
+        let allow = allow_for(path);
         assert!(path_is_known(path), "{path} is served but not known");
         assert_eq!(status("OPTIONS", path), 204, "{path} must answer the CORS preflight");
         let mut served = false;
@@ -106,7 +118,7 @@ fn the_route_set_agrees_across_preflight_dispatch_and_refusal() {
         assert!(served, "{path} is known but no method dispatches");
         assert!(refused, "{path} serves every probed method; none exercises the 405 arm");
     }
-    for unknown in ["/nope", "/op/", "/Health"] {
+    for unknown in ["/nope", "/op/", "/Health", "/blob/", "/blobs"] {
         assert!(!path_is_known(unknown), "{unknown} must not be known");
         assert_eq!(status("GET", unknown), 404, "{unknown}");
         assert_eq!(status("OPTIONS", unknown), 404, "an unknown path preflights nothing");
@@ -157,12 +169,8 @@ fn a_guest_reads_and_an_unknown_token_is_signalled() {
     // lock — which is `with_signal`'s promise ("once, however many resolution
     // sites observed the death"). Doubled, a client reading the header through
     // `fetch` is handed `closed, closed`, never the `closed` wire.md specifies.
-    let signals: Vec<&str> = write
-        .headers
-        .iter()
-        .filter(|(k, _)| *k == SESSION_HEADER)
-        .map(|&(_, v)| v)
-        .collect();
+    let signals: Vec<&str> =
+        write.headers.iter().filter(|(k, _)| *k == SESSION_HEADER).map(|&(_, v)| v).collect();
     assert_eq!(signals, ["closed"], "an unknown token's write carries Skepd-Session: closed, once");
     // An unparseable header value IS no token (AUTH-4.18): no signal.
     let junk = post(Some("not-a-token"), r#"{"op":"fork"}"#);
@@ -279,6 +287,7 @@ fn only_a_committing_write_announces_and_only_its_own_position() {
     }) {
         Routed::Reply(r) => serde_json::from_slice::<Value>(r.bytes()).expect("json"),
         Routed::EventStream => panic!("POST /op is not the event stream"),
+        Routed::Fetch(_) => panic!("POST /op is not the blob fetch"),
     };
 
     // Commit past the stream without announcing: this is the state a
@@ -314,8 +323,7 @@ fn only_a_committing_write_announces_and_only_its_own_position() {
     // A route-level write that commits pre-claim: the ceremony's own
     // delegate from principal 0 (the pre-claim gate admits it).
     let prefix = read["addr"].as_str().expect("a delegable prefix").to_string();
-    let write =
-        post(&format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":41}}"#));
+    let write = post(&format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":41}}"#));
     let at = write["at"].as_u64().unwrap_or_else(|| panic!("delegate commits: {write}"));
     assert_eq!(
         announced().0,
@@ -377,11 +385,7 @@ fn a_connecting_subscriber_is_told_the_announced_position_not_the_head() {
                 break v["log_position"].as_u64().expect("log_position");
             }
         }
-        assert!(
-            Instant::now() < deadline,
-            "no initial event: {:?}",
-            String::from_utf8_lossy(&buf)
-        );
+        assert!(Instant::now() < deadline, "no initial event: {:?}", String::from_utf8_lossy(&buf));
         let mut chunk = [0u8; 1024];
         match stream.read(&mut chunk) {
             Ok(0) => panic!("the stream closed before its first event"),
@@ -412,7 +416,8 @@ fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_emp
     use skep_engine::{Recovery, SkippedBase};
 
     assert!(recovery_warnings(None).is_empty(), "in memory, nothing to say");
-    let carried = Recovery { start_point: Seq(2048), skipped: vec![], identity_resolved_empty: false };
+    let carried =
+        Recovery { start_point: Seq(2048), skipped: vec![], identity_resolved_empty: false };
     assert!(recovery_warnings(Some(&carried)).is_empty(), "a carried start point: nothing to say");
 
     let stepped_back = Recovery {
@@ -432,20 +437,37 @@ fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_emp
     let two_skipped_one_stood = Recovery {
         start_point: Seq(1024),
         skipped: vec![
-            SkippedBase { seq: Seq(3072), why: "the `identity` slice could not be resolved".into() },
-            SkippedBase { seq: Seq(2048), why: "checkpoint body failed its header checksum".into() },
+            SkippedBase {
+                seq: Seq(3072),
+                why: "the `identity` slice could not be resolved".into(),
+            },
+            SkippedBase {
+                seq: Seq(2048),
+                why: "checkpoint body failed its header checksum".into(),
+            },
         ],
         identity_resolved_empty: false,
     };
     let lines = recovery_warnings(Some(&two_skipped_one_stood));
     assert_eq!(lines.len(), 2, "{lines:?}");
-    assert!(lines[0].contains("checkpoint.3072") && lines[0].contains("resolved from checkpoint.1024"), "{:?}", lines[0]);
-    assert!(lines[1].contains("checkpoint.2048") && lines[1].contains("header checksum"), "{:?}", lines[1]);
+    assert!(
+        lines[0].contains("checkpoint.3072") && lines[0].contains("resolved from checkpoint.1024"),
+        "{:?}",
+        lines[0]
+    );
+    assert!(
+        lines[1].contains("checkpoint.2048") && lines[1].contains("header checksum"),
+        "{:?}",
+        lines[1]
+    );
 
-    let resolved_empty = Recovery { start_point: Seq(1024), skipped: vec![], identity_resolved_empty: true };
+    let resolved_empty =
+        Recovery { start_point: Seq(1024), skipped: vec![], identity_resolved_empty: true };
     let lines = recovery_warnings(Some(&resolved_empty));
     assert_eq!(lines.len(), 1, "{lines:?}");
-    for needle in ["checkpoint.1024", "no identity slice", "RESOLVED EMPTY", "wrote no identity slice"] {
+    for needle in
+        ["checkpoint.1024", "no identity slice", "RESOLVED EMPTY", "wrote no identity slice"]
+    {
         assert!(lines[0].contains(needle), "{needle:?} missing from {:?}", lines[0]);
     }
 }

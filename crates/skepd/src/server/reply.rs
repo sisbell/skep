@@ -2,6 +2,7 @@
 //! decorators.
 
 use serde_json::Value;
+use skep_address::Address;
 use skep_engine::HistoryError;
 use skep_febe::{Codec, Disposition, FaultSite, OpKind, RejectCode, Rejection, Response};
 
@@ -10,6 +11,7 @@ use crate::auth::session::HandshakeRefusal;
 use crate::codec::{credential_refused_reply, obj, op_name, to_bytes, JsonCodec};
 use crate::history::Unavailable;
 use crate::media::door::MediaRefusal;
+use crate::media::serve::{Admitted, CellFace, Refusal as FetchRefusal};
 
 /// Preflight cache lifetime advertised on `OPTIONS` (wire v4).
 const CORS_MAX_AGE_SECS: &str = "86400";
@@ -92,11 +94,7 @@ impl Reply {
 
     /// A reply carrying `bytes` under `content_type`.
     pub(super) fn bodied(status: u16, content_type: &'static str, bytes: Vec<u8>) -> Reply {
-        Reply {
-            status,
-            body: Some(Body { content_type, bytes }),
-            headers: Vec::new(),
-        }
+        Reply { status, body: Some(Body { content_type, bytes }), headers: Vec::new() }
     }
 
     /// A JSON reply at `status` — the success answers, which each name
@@ -147,25 +145,49 @@ impl Reply {
             ],
         }
     }
+
+    /// The CORS preflight of the blob FETCH's path (wire.md §Media, THE
+    /// FETCH): the two methods the route dispatches — `GET`, and `HEAD` for
+    /// the head alone — named, so a browser sends them cross-origin, and
+    /// the two headers every preflight carries.
+    pub(super) fn preflight_fetch() -> Reply {
+        Reply {
+            status: 204,
+            body: None,
+            headers: vec![
+                ("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS"),
+                ("Access-Control-Allow-Headers", "Content-Type, Skepd-Session"),
+                ("Access-Control-Max-Age", CORS_MAX_AGE_SECS),
+            ],
+        }
+    }
 }
 
 /// One routing decision. Almost everything is a complete [`Reply`]; the
 /// event stream is not request/response at all, so it never becomes one —
 /// the accept path spawns a subscriber thread that owns the socket
 /// (`serve_events`), and the type makes reaching it through the plain reply
-/// path unrepresentable.
+/// path unrepresentable — and the blob fetch's admitted answer is a
+/// STREAM of a file the transport writes one chunk at a time, re-resolving
+/// the requester between chunks, so it is its own variant too.
 ///
 /// `#[non_exhaustive]`, because this is one variant per answer the reply
 /// path CANNOT express, which is a category rather than a singleton: a
-/// [`Body`] holds its bytes wholly in memory, and [`crate::limits::MAX_REQUEST_BODY`]
-/// already names a media round that revisits the body cap per route, so a
-/// streaming answer is the natural second member. What it costs a
-/// downstream caller is a `_` arm, and the honest answer there is the one
-/// a socket-free caller already gives [`Routed::EventStream`]: refuse the
-/// route.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// [`Body`] holds its bytes wholly in memory, and the fetch was that
+/// category's second member — [`crate::limits::MAX_REQUEST_BODY`]'s card
+/// anticipated it. What it costs a downstream caller is a `_` arm, and the
+/// honest answer there is the one a socket-free caller already gives
+/// [`Routed::EventStream`]: refuse the route.
+///
+/// The lifetime is the fetch's: an admitted fetch holds a permit of the
+/// daemon's fetch pool for as long as the answer lives, and the permit
+/// borrows the pool — so a `Routed` lives no longer than the daemon it was
+/// routed by, which every caller already holds. Neither `Clone` nor
+/// `PartialEq`: a permit is not a value two answers can share, and nothing
+/// compares two routings.
+#[derive(Debug)]
 #[non_exhaustive]
-pub enum Routed {
+pub enum Routed<'a> {
     Reply(Reply),
     /// `GET /events` — the server-sent commit stream (wire v4).
     ///
@@ -174,7 +196,93 @@ pub enum Routed {
     /// answer this variant only by refusing the route. It is the one
     /// endpoint the socket-free surface names and cannot serve.
     EventStream,
+    /// `GET /blob?i=` and `HEAD /blob?i=` ADMITTED (wire.md §Media, THE
+    /// FETCH): the file checked whole against its cell, held with the
+    /// fetch pool's permit, streamed by [`serve`](super::serve) under the
+    /// idle and transfer bounds with the requester re-resolved between
+    /// chunks. Every refusal of the route is an ordinary [`Routed::Reply`].
+    /// A caller routing by hand holds the whole file in [`Fetch`] and may
+    /// write it over its own transport; what it then owes is the
+    /// re-resolution the daemon's transport runs, or a refusal of the
+    /// route.
+    Fetch(Fetch<'a>),
 }
+
+/// The fetch's admitted answer: a 200 whose body is the file, the status
+/// fixed — the gate's refusals are each a [`Reply`] of their own — and the
+/// headers the route stamped (the class-varying pair, the two inert ones,
+/// the death signal where owed). The `GET`'s and the `HEAD`'s answer alike:
+/// the transport writes the body for the one and the head alone for the
+/// other, HTTP's own rule. The file's bytes are reached by the transport
+/// alone (`serve`'s stream); a caller sees the length.
+pub struct Fetch<'a> {
+    admitted: Admitted<'a>,
+    headers: Vec<(&'static str, &'static str)>,
+}
+
+impl<'a> Fetch<'a> {
+    pub(super) fn new(admitted: Admitted<'a>, closed: bool) -> Fetch<'a> {
+        let mut headers: Vec<(&'static str, &'static str)> = FETCH_INERT_HEADERS.to_vec();
+        headers.extend(CLASS_VARYING_HEADERS);
+        if closed {
+            headers.push((SESSION_HEADER, "closed"));
+        }
+        Fetch { admitted, headers }
+    }
+
+    /// The status: `200`, always — an admitted fetch is the file.
+    pub fn status(&self) -> u16 {
+        200
+    }
+
+    /// The file's length — the cell's `size`, by the check: what the
+    /// `Content-Length` header carries on the `GET` and the `HEAD` alike.
+    pub fn size(&self) -> u64 {
+        self.admitted.size()
+    }
+
+    /// The headers beyond what the transport supplies — the content pair
+    /// from the file, and [`UNIVERSAL_HEADERS`](super::UNIVERSAL_HEADERS).
+    pub fn headers(&self) -> &[(&'static str, &'static str)] {
+        &self.headers
+    }
+
+    /// The address served — the re-check's subject.
+    pub(super) fn i(&self) -> &Address {
+        self.admitted.i()
+    }
+
+    /// The file, whole.
+    pub(super) fn bytes(&self) -> &[u8] {
+        self.admitted.bytes()
+    }
+}
+
+/// The length, never the bytes: a fetch is a whole file.
+impl std::fmt::Debug for Fetch<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Fetch")
+            .field("status", &self.status())
+            .field("size", &self.size())
+            .field("headers", &self.headers)
+            .finish()
+    }
+}
+
+/// THE FETCH's CONTENT TYPE (wire.md §Media, THE FETCH; the ruled v1 cut):
+/// `application/octet-stream` on every admitted answer — the daemon reads
+/// no type off the bytes and declares none it did not read, so a page
+/// rendering the file names the type itself from the cell's kind.
+pub(super) const FETCH_CONTENT_TYPE: &str = "application/octet-stream";
+
+/// THE INERT PAIR every admitted fetch carries (M-I7 (a): THE BYTES ARE
+/// INERT AT THE FETCH): `X-Content-Type-Options: nosniff`, so no browser
+/// reads a type off the bytes the daemon declared none for; and
+/// `Content-Security-Policy: sandbox`, so a file navigated to directly
+/// runs nothing and reaches nothing of the daemon's origin. On the 200
+/// alone — a refusal's body is JSON the daemon composed.
+const FETCH_INERT_HEADERS: [(&str, &str); 2] =
+    [("X-Content-Type-Options", "nosniff"), ("Content-Security-Policy", "sandbox")];
 
 /// The transport's whole error vocabulary — every `{"error": …}` name this
 /// daemon can answer, and the only way one is written. EXHAUSTIVE over the
@@ -246,6 +354,27 @@ pub(super) enum TransportError {
     /// sibling: the request may be perfectly good and the walk momentarily
     /// unfinished. Every other request is served throughout.
     IndexRebuilding,
+    // The blob fetch (wire.md §Media, THE FETCH) — the refusals of the
+    // route's own steps past M10's gate, each a transport refusal: the gate's
+    // own rejection is answered in M10's envelope under its status
+    // ([`refuse_fetch`]), and no other `Op` ran.
+    /// No value is minted at the address.
+    NoValue,
+    /// The value names no media kind.
+    NotACell,
+    /// The value names a media kind under no schema this build reads —
+    /// D13's halt, the door's token on this surface.
+    UnknownCellSchema,
+    /// A blind document's cell: this board holds no byte of its picture.
+    BlindCell,
+    /// The store has no file under the cell's hash; carries `hash` and
+    /// `size`, the cell's.
+    BlobMissing,
+    /// The store's file is not the deposit the cell names; carries `hash`
+    /// and `size`, the cell's.
+    BlobDamaged,
+    /// Every fetch permit is in use: retry-class, `history_busy`'s sibling.
+    FetchBusy,
 }
 
 impl TransportError {
@@ -279,6 +408,13 @@ impl TransportError {
             TransportError::DepositRefused => "deposit_refused",
             TransportError::BlobIo => "blob_io",
             TransportError::IndexRebuilding => "index_rebuilding",
+            TransportError::NoValue => "no_value",
+            TransportError::NotACell => "not_a_cell",
+            TransportError::UnknownCellSchema => "unknown_cell_schema",
+            TransportError::BlindCell => "blind_cell",
+            TransportError::BlobMissing => "blob_missing",
+            TransportError::BlobDamaged => "blob_damaged",
+            TransportError::FetchBusy => "fetch_busy",
         }
     }
 
@@ -301,7 +437,18 @@ impl TransportError {
             | TransportError::MalformedBlob
             | TransportError::UploadLength => 400,
             TransportError::UploadRefused => 403,
-            TransportError::NoSuchEndpoint | TransportError::NoUpload => 404,
+            // The fetch's six "not here" answers are 404 alike: what the
+            // address holds, or the store under it, is not a file to serve
+            // — told apart by name, never by status, so a client renders one
+            // face per token and a cache keeps none (PUB-6.7).
+            TransportError::NoSuchEndpoint
+            | TransportError::NoUpload
+            | TransportError::NoValue
+            | TransportError::NotACell
+            | TransportError::UnknownCellSchema
+            | TransportError::BlindCell
+            | TransportError::BlobMissing
+            | TransportError::BlobDamaged => 404,
             TransportError::MethodNotAllowed => 405,
             // The standard shape's two conflicts: a held upload, a stated
             // offset that is not the record's.
@@ -313,11 +460,13 @@ impl TransportError {
             | TransportError::HistoryCorrupt
             | TransportError::InternalPanic
             | TransportError::BlobIo => 500,
-            // The three retry-class refusals: a pool is momentarily full, or
-            // the cell index's walk at open is momentarily unfinished.
+            // The four retry-class refusals: a pool is momentarily full —
+            // the reconstruction, class-scan or fetch pool — or the cell
+            // index's walk at open is momentarily unfinished.
             TransportError::HistoryBusy
             | TransportError::ScanBusy
-            | TransportError::IndexRebuilding => 503,
+            | TransportError::IndexRebuilding
+            | TransportError::FetchBusy => 503,
             // The gate's: the scope it names has no room for these bytes.
             TransportError::DepositRefused => 507,
         }
@@ -481,10 +630,7 @@ pub(super) fn refuse_scan_busy(kind: OpKind) -> Reply {
     refuse_with(
         TransportError::ScanBusy,
         vec![
-            (
-                "detail",
-                Value::String("all class-scan permits are in use; retry shortly".into()),
-            ),
+            ("detail", Value::String("all class-scan permits are in use; retry shortly".into())),
             ("op", Value::String(crate::codec::op_name(kind).into())),
         ],
     )
@@ -558,11 +704,85 @@ pub(super) fn media_door_refused(kind: OpKind, refusal: MediaRefusal) -> Reply {
             Some(FaultSite { addr: Some(draft), ..FaultSite::default() }),
         ),
         // All three carry a token: answered above.
-        MediaRefusal::UnboundCell
-        | MediaRefusal::UnknownCellSchema
-        | MediaRefusal::LeaseLapsed => unreachable!("a media token rides credential_refused"),
+        MediaRefusal::UnboundCell | MediaRefusal::UnknownCellSchema | MediaRefusal::LeaseLapsed => {
+            unreachable!("a media token rides credential_refused")
+        }
     };
     op_answer(JsonCodec.marshal(&Response::Rejected(rejection)))
+}
+
+/// THE FETCH's REFUSALS (wire.md §Media, THE FETCH), each step's as its
+/// reply — the ONE home of the route's statuses and bodies. The gate's own
+/// rejection — M10's read by identity refused — is answered in M10's own
+/// envelope, the bytes `/op` would answer for the same read (`withheld`
+/// naming the derived home with its `reorder` class, and every other code
+/// as M10 classifies it), under the STATUS the code's class gives it on this
+/// transport route: `403` for `withheld`, `404` for `doc_not_registered`,
+/// `400` for the rest (a malformed span, a width past the budget). A
+/// status chosen HERE and not through [`refuse`], because the body is not
+/// the transport's `{"error"}` shape: no transport error names an M10 code,
+/// and inventing seven would make the store's own vocabulary a second
+/// time. Every other step's refusal is a transport error of this table's,
+/// through [`refuse`] and [`refuse_with`]: the shape `malformed_blob`, the
+/// two "the store did not have it" refusals carrying the cell's `hash` and
+/// `size`, the halt's detail the client's face. A `HEAD`'s refusal is this
+/// same reply: the transport writes its head — the content pair included —
+/// and no byte of its body (`http::write_reply`).
+pub(super) fn refuse_fetch(refusal: FetchRefusal) -> Reply {
+    match refusal {
+        FetchRefusal::Shape(detail) => refuse(TransportError::MalformedBlob, Some(&detail)),
+        FetchRefusal::Rejected(rejection) => {
+            let status = match rejection.code {
+                RejectCode::Withheld => 403,
+                RejectCode::DocNotRegistered => 404,
+                _ => 400,
+            };
+            Reply::bodied(
+                status,
+                "application/json",
+                JsonCodec.marshal(&Response::Rejected(rejection)),
+            )
+        }
+        FetchRefusal::NoValue => {
+            refuse(TransportError::NoValue, Some("no value is minted at this address"))
+        }
+        FetchRefusal::NotACell => {
+            refuse(TransportError::NotACell, Some("the value at this address names no media cell"))
+        }
+        FetchRefusal::UnknownCellSchema => {
+            refuse(TransportError::UnknownCellSchema, Some(UNKNOWN_CELL_SCHEMA_FACE))
+        }
+        FetchRefusal::BlindCell => refuse(TransportError::BlindCell, Some(BLIND_CELL_FACE)),
+        FetchRefusal::BlobMissing(face) => {
+            refuse_with(TransportError::BlobMissing, cell_fields(face))
+        }
+        FetchRefusal::BlobDamaged(face) => {
+            refuse_with(TransportError::BlobDamaged, cell_fields(face))
+        }
+        FetchRefusal::BlobIo(e) => refuse(TransportError::BlobIo, Some(&e.to_string())),
+        FetchRefusal::Busy => {
+            refuse(TransportError::FetchBusy, Some("all fetch permits are in use; retry shortly"))
+        }
+    }
+}
+
+/// The halt's face (wire.md §Media; PUB-6.7): the one prose a client
+/// renders for `unknown_cell_schema`, on the door and on the fetch alike,
+/// naming both kinds the classification reads.
+const UNKNOWN_CELL_SCHEMA_FACE: &str =
+    "this value names a media cell — a picture's or a blind document's — in a form this board \
+     does not read";
+
+/// The blind cell's face: the picture is its owner's, and this board holds
+/// no byte of it.
+const BLIND_CELL_FACE: &str =
+    "this address holds a blind document's cell: its picture is kept by its owner, and this \
+     board holds no byte of it";
+
+/// The cell's own two members on the refusals that name what the store did
+/// not have.
+fn cell_fields(face: CellFace) -> Vec<(&'static str, Value)> {
+    vec![("hash", Value::String(face.hash)), ("size", Value::Number(face.size.into()))]
 }
 
 /// The `410 history_reclaimed` refusal: the position asked for is older
@@ -602,10 +822,9 @@ pub(super) fn refuse_unavailable(e: Unavailable) -> Reply {
         Unavailable::Journal(e) => e,
     };
     match journal {
-        HistoryError::BeyondHead { head } => refuse_with(
-            TransportError::BeyondHead,
-            vec![("head", Value::Number(head.0.into()))],
-        ),
+        HistoryError::BeyondHead { head } => {
+            refuse_with(TransportError::BeyondHead, vec![("head", Value::Number(head.0.into()))])
+        }
         HistoryError::NotABoundary { nearest } => refuse_with(
             TransportError::NotAPosition,
             vec![("nearest", Value::Number(nearest.0.into()))],
@@ -641,10 +860,8 @@ mod tests {
             String::from_utf8(r.bytes().to_vec()).expect("json"),
             r#"{"detail":"too big","error":"payload_too_large"}"#
         );
-        let r = refuse_with(
-            TransportError::BeyondHead,
-            vec![("head", Value::Number(12u64.into()))],
-        );
+        let r =
+            refuse_with(TransportError::BeyondHead, vec![("head", Value::Number(12u64.into()))]);
         assert_eq!(r.status, 400);
         assert_eq!(
             String::from_utf8(r.bytes().to_vec()).expect("json"),
@@ -694,6 +911,13 @@ mod tests {
             (TransportError::DepositRefused, "deposit_refused", 507),
             (TransportError::BlobIo, "blob_io", 500),
             (TransportError::IndexRebuilding, "index_rebuilding", 503),
+            (TransportError::NoValue, "no_value", 404),
+            (TransportError::NotACell, "not_a_cell", 404),
+            (TransportError::UnknownCellSchema, "unknown_cell_schema", 404),
+            (TransportError::BlindCell, "blind_cell", 404),
+            (TransportError::BlobMissing, "blob_missing", 404),
+            (TransportError::BlobDamaged, "blob_damaged", 404),
+            (TransportError::FetchBusy, "fetch_busy", 503),
         ];
         for &(err, name, status) in &table {
             assert_eq!(err.name(), name, "wire name drifted for {err:?}");
@@ -760,10 +984,61 @@ mod tests {
         let common = Reply::preflight();
         let blob = Reply::preflight_blob();
         assert_eq!(common.headers[0], ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"));
-        assert_eq!(blob.headers[0], ("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS"));
+        assert_eq!(
+            blob.headers[0],
+            ("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+        );
         assert_eq!(common.headers[1..], blob.headers[1..]);
         assert_eq!(blob.status, 204);
         assert!(blob.body.is_none());
+    }
+
+    /// The fetch's preflight names its two methods and keeps the other two
+    /// headers the common preflight carries; the fetch's refusals: M10's
+    /// rejection in M10's envelope under the code's status, the store's
+    /// two carrying the cell's members, the halt's face, every other step's
+    /// token under its status.
+    #[test]
+    fn the_fetch_preflight_and_each_refusals_status_and_body() {
+        let fetch = Reply::preflight_fetch();
+        assert_eq!(fetch.headers[0], ("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS"));
+        assert_eq!(fetch.headers[1..], Reply::preflight().headers[1..]);
+        assert_eq!((fetch.status, fetch.body.is_none()), (204, true));
+        let home = crate::codec::wire_address("1.0.1.0.2").expect("a document");
+        let withheld = Rejection::classified(
+            OpKind::RetrieveI,
+            RejectCode::Withheld,
+            Some(FaultSite { addr: Some(home), ..FaultSite::default() }),
+        );
+        let r = refuse_fetch(FetchRefusal::Rejected(withheld));
+        assert_eq!(r.status, 403);
+        assert_eq!(
+            String::from_utf8(r.bytes().to_vec()).expect("json"),
+            r#"{"code":"withheld","disposition":"reorder","op":"retrieve_i","resp":"rejected","site":{"addr":"1.0.1.0.2"}}"#
+        );
+        let unregistered =
+            Rejection::classified(OpKind::RetrieveI, RejectCode::DocNotRegistered, None);
+        assert_eq!(refuse_fetch(FetchRefusal::Rejected(unregistered)).status, 404);
+        let shape = Rejection::classified(OpKind::RetrieveI, RejectCode::TooManyItems, None);
+        assert_eq!(refuse_fetch(FetchRefusal::Rejected(shape)).status, 400);
+        let face = CellFace { hash: "ab".repeat(32), size: 5 };
+        let r = refuse_fetch(FetchRefusal::BlobMissing(face.clone()));
+        assert_eq!(r.status, 404);
+        assert_eq!(
+            String::from_utf8(r.bytes().to_vec()).expect("json"),
+            format!(r#"{{"error":"blob_missing","hash":"{}","size":5}}"#, "ab".repeat(32))
+        );
+        let r = refuse_fetch(FetchRefusal::BlobDamaged(face));
+        assert_eq!(r.status, 404);
+        assert!(String::from_utf8_lossy(r.bytes()).contains(r#""error":"blob_damaged""#));
+        let r = refuse_fetch(FetchRefusal::UnknownCellSchema);
+        let body: Value = serde_json::from_slice(r.bytes()).expect("json");
+        assert_eq!(body["detail"].as_str(), Some(UNKNOWN_CELL_SCHEMA_FACE));
+        assert_eq!(refuse_fetch(FetchRefusal::Busy).status, 503);
+        assert_eq!(refuse_fetch(FetchRefusal::Shape("i: x".into())).status, 400);
+        assert_eq!(refuse_fetch(FetchRefusal::BlindCell).status, 404);
+        assert_eq!(refuse_fetch(FetchRefusal::NoValue).status, 404);
+        assert_eq!(refuse_fetch(FetchRefusal::NotACell).status, 404);
     }
 
     /// The `scan_busy` refusal's exact body: a transport refusal (no `resp`,

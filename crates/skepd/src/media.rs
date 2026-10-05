@@ -25,22 +25,34 @@
 //! exclusive arm one file at a time, unlinks the files no cell names and no
 //! live lease holds, halting on a schema it does not know; and
 //! [`deposit_read`], the one read of a principal's own deposits and uploads,
-//! its base the index's number. Nothing here serves a byte: the fetch route
-//! is owed.
+//! its base the index's number; [`blind`], THE BLIND DOCUMENT's CELL, the
+//! second kind beside the picture's — a commitment and nothing the daemon
+//! can read a file by — under the one classification [`cell`] holds for
+//! both; and [`serve`], THE FETCH's COMPOSED ORDER (Op inventory 3; the
+//! register M-I2 (a)–(d), (g), M-I3 (b), M-I7 (a), (b)): the shape, M10's
+//! read by identity as the gate, the classification, the permit, the whole
+//! file checked against the cell before its first byte, the permit spanning
+//! the answer — what `GET /blob?i=` (`server/blob_routes.rs`) runs and the
+//! transport streams, re-resolving the requester at an interval.
 //!
-//! The gate, the door, the index and the pruner sit at the write path's
-//! layer (`ARCHITECTURE.md` §The daemon), the daemon's second resource
-//! beside it: the door reads the lease store, `blobs/` and the index through
-//! the gate, which no producer of the session layer's admission may, so it
-//! is a step of its own; the write path enters the index at commit, a
-//! sideways step at its own layer; the PUT's routes (`server/blob_routes.rs`)
-//! reach the gate as `op.rs` reaches the write path, and the PUT commits
-//! nothing to the journal and takes no `Serial` — the finish runs under the
-//! credential lock's READ arm from the rename through the lease's sync, the
-//! pruner's unlink under its WRITE arm. The cell is a leaf.
+//! The gate, the door, the index, the pruner and the serve sit at the write
+//! path's layer (`ARCHITECTURE.md` §The daemon), the daemon's second
+//! resource beside it: the door reads the lease store, `blobs/` and the
+//! index through the gate, which no producer of the session layer's
+//! admission may, so it is a step of its own; the write path enters the
+//! index at commit, a sideways step at its own layer; the PUT's routes
+//! (`server/blob_routes.rs`) reach the gate as `op.rs` reaches the write
+//! path, and the PUT commits nothing to the journal and takes no `Serial` —
+//! the finish runs under the credential lock's READ arm from the rename
+//! through the lease's sync, the pruner's unlink under its WRITE arm; the
+//! serve reads a file through the gate's store and consults nothing itself
+//! — its gate is M10's `execute`. The two cells are leaves.
 
-// The cell: its schema, its one parser, its encoder, its designation.
+// The cell: its schema, its one parser, its encoder, its designation — and
+// the one classification of every media kind.
 pub(crate) mod cell;
+// The blind document's cell: the second kind, a commitment and nothing else.
+pub(crate) mod blind;
 // The deposit read: one read of the principal's own records.
 pub(crate) mod deposit_read;
 // The door: the one step, its armed set.
@@ -51,3 +63,6 @@ pub(crate) mod gate;
 pub(crate) mod index;
 // The pruner: the pass, its halts, its cadence.
 pub(crate) mod pruner;
+// The serve: the fetch's composed order, its pool, its answer and refusals,
+// the stream's interval arithmetic.
+pub(crate) mod serve;

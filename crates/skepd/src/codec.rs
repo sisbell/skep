@@ -58,7 +58,7 @@ use skep_arrangement::{Base, Run, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, SlotSpec};
 use skep_febe::{
-    Codec, Deposit, Op, OpKind, ParseError, Rejection, ReqId, Request, Response, SlotArg,
+    Codec, Deposit, ISpan, Op, OpKind, ParseError, Rejection, ReqId, Request, Response, SlotArg,
     SuccessorSpec, MAX_REQ_ID_BYTES,
 };
 use skep_identity::SigAlgRow;
@@ -67,8 +67,8 @@ use skep_links::{Endset, View, MAX_SLOT_SPANS};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{RegionSpec, Spec};
 
-use marshal::{j_response, req_pairs};
 pub(crate) use marshal::{credential_refused_reply, j_attest, key_set_reply, op_name};
+use marshal::{j_response, req_pairs};
 
 /// The most elements one wire array may carry, applied at [`p_list`] — so
 /// every attacker-sized list on the request surface (span regions, spec and
@@ -366,8 +366,13 @@ pub(crate) enum DaemonOp {
     /// the marker slot EMPTY — never with a blob nobody verified, which the
     /// kernel writes opaquely and a reader of the journal takes for an
     /// author's attestation this board ADMITTED.
-    Febe { request: Box<Request>, presented: Option<Attestation> },
-    KeySet { account: Address },
+    Febe {
+        request: Box<Request>,
+        presented: Option<Attestation>,
+    },
+    KeySet {
+        account: Address,
+    },
 }
 
 /// `{"op":"key_set","account":"<address>"}` (+ the optional idempotency
@@ -426,8 +431,7 @@ impl std::fmt::Display for PErr {
 type PResult<T> = Result<T, PErr>;
 
 fn parse_request(frame: &[u8]) -> PResult<Request> {
-    let v: Value =
-        serde_json::from_slice(frame).map_err(|e| PErr(format!("invalid JSON: {e}")))?;
+    let v: Value = serde_json::from_slice(frame).map_err(|e| PErr(format!("invalid JSON: {e}")))?;
     parse_value(v)
 }
 
@@ -510,10 +514,7 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
             specs: fields.vspecs("specs")?,
         },
         "rearrange" => Op::Rearrange { doc: fields.addr("doc")?, cuts: fields.vposes("cuts")? },
-        "version" => Op::Version {
-            d_src: fields.addr("d_src")?,
-            published: fields.published()?,
-        },
+        "version" => Op::Version { d_src: fields.addr("d_src")?, published: fields.published()? },
         "publish" => Op::Publish { doc: fields.addr("doc")?, shot: fields.shot()? },
         "make_link" => Op::MakeLink {
             home: fields.addr("home")?,
@@ -543,6 +544,12 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
         "read_link" => Op::ReadLink { a: fields.addr("a")? },
         "follow_link" => Op::FollowLink { a: fields.addr("a")?, slot: fields.usize("slot")? },
         "retrieve_v" => Op::RetrieveV { specs: fields.specs("specs")? },
+        // The read by identity and the content-frontier read (AUTH-6.38–6.40;
+        // wire.md §Content & provenance reads) — INTERIM grammar (sm-Q8):
+        // a span is `{"start": <address>, "width": <nat>}`, its document
+        // DERIVED, never named; the frontier read names its `doc`.
+        "retrieve_i" => Op::RetrieveI { spans: fields.ispans("spans")? },
+        "content_frontier" => Op::ContentFrontier { doc: fields.addr("doc")? },
         "retrieve_doc_v_span" => Op::RetrieveDocVSpan { doc: fields.addr("doc")? },
         "retrieve_doc_v_span_set" => Op::RetrieveDocVSpanSet { doc: fields.addr("doc")? },
         "show_origin" => Op::ShowOrigin { doc: fields.addr("doc")?, span: fields.span("span")? },
@@ -570,11 +577,9 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
         "retrieve_endsets" => {
             Op::RetrieveEndsets { d: fields.addr("d")?, region: fields.spans("region")? }
         }
-        "project" => Op::Project {
-            a: fields.addr("a")?,
-            slot: fields.usize("slot")?,
-            d: fields.addr("d")?,
-        },
+        "project" => {
+            Op::Project { a: fields.addr("a")?, slot: fields.usize("slot")?, d: fields.addr("d")? }
+        }
         "discoverable_from" => Op::DiscoverableFrom { a: fields.addr("a")?, d: fields.addr("d")? },
         "delete_orphans" => Op::DeleteOrphans {
             d: fields.addr("d")?,
@@ -668,9 +673,7 @@ impl Fields {
     /// up to a whole request body to refuse 257 bytes.
     fn req_id(&mut self) -> PResult<Option<ReqId>> {
         let Some(v) = self.take_opt("id") else { return Ok(None) };
-        let s = v
-            .as_str()
-            .ok_or_else(|| PErr("field 'id': expected a JSON string".into()))?;
+        let s = v.as_str().ok_or_else(|| PErr("field 'id': expected a JSON string".into()))?;
         if s.len() > MAX_REQ_ID_BYTES {
             return Err(PErr(format!(
                 "id is {} bytes, past the {MAX_REQ_ID_BYTES}-byte wire cap",
@@ -759,6 +762,10 @@ impl Fields {
         self.field(k, |v| p_list(v, p_spec))
     }
 
+    fn ispans(&mut self, k: &'static str) -> PResult<Vec<ISpan>> {
+        self.field(k, |v| p_list(v, p_ispan))
+    }
+
     fn regions(&mut self, k: &'static str) -> PResult<Vec<RegionSpec>> {
         self.field(k, |v| p_list(v, p_region))
     }
@@ -808,9 +815,9 @@ impl Fields {
     fn deposit(&mut self) -> PResult<Deposit> {
         match self.0.remove("deposit") {
             None => Ok(Deposit::Undeclared),
-            Some(v) => p_addr(&v)
-                .map(Deposit::Declared)
-                .map_err(|e| PErr(format!("field 'deposit': {e}"))),
+            Some(v) => {
+                p_addr(&v).map(Deposit::Declared).map_err(|e| PErr(format!("field 'deposit': {e}")))
+            }
         }
     }
 
@@ -841,9 +848,7 @@ impl Fields {
     fn opt_addr(&mut self, k: &'static str) -> PResult<Option<Address>> {
         match self.take_opt(k) {
             None => Ok(None),
-            Some(v) => {
-                p_addr(&v).map(Some).map_err(|e| PErr(format!("field '{k}': {e}")))
-            }
+            Some(v) => p_addr(&v).map(Some).map_err(|e| PErr(format!("field '{k}': {e}"))),
         }
     }
 
@@ -1055,10 +1060,7 @@ fn p_list<T>(v: &Value, f: impl Fn(&Value) -> PResult<T>) -> PResult<Vec<T>> {
             arr.len()
         )));
     }
-    arr.iter()
-        .enumerate()
-        .map(|(i, x)| f(x).map_err(|e| PErr(format!("[{i}]: {e}"))))
-        .collect()
+    arr.iter().enumerate().map(|(i, x)| f(x).map_err(|e| PErr(format!("[{i}]: {e}")))).collect()
 }
 
 fn p_span(v: &Value) -> PResult<Span> {
@@ -1113,9 +1115,24 @@ fn p_spec(v: &Value) -> PResult<Spec> {
     Ok(Spec { doc: field(m, "doc", p_addr)?, span: field(m, "span", p_span)? })
 }
 
+/// One I-span of `retrieve_i` (wire.md §Content & provenance reads): an
+/// I-address and a width — through M1's address door and the natural's,
+/// so no malformed address survives the trust boundary. Its SHAPE — an
+/// element position at the start, a width of at least one — is M10's own
+/// refusal (`not_content_subspace`, `empty_width`, by the span's index),
+/// not this parse's: a span is well-formed here whatever document it
+/// derives, and what it derives is M10's to judge.
+fn p_ispan(v: &Value) -> PResult<ISpan> {
+    let m = p_obj(v, &["start", "width"])?;
+    Ok(ISpan { start: field(m, "start", p_addr)?, width: field(m, "width", p_nat)? })
+}
+
 fn p_region(v: &Value) -> PResult<RegionSpec> {
     let m = p_obj(v, &["doc", "spans"])?;
-    Ok(RegionSpec { doc: field(m, "doc", p_addr)?, spans: field(m, "spans", |v| p_list(v, p_span))? })
+    Ok(RegionSpec {
+        doc: field(m, "doc", p_addr)?,
+        spans: field(m, "spans", |v| p_list(v, p_span))?,
+    })
 }
 
 /// The `values` array of `insert`: each element is one of the four write

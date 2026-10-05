@@ -2,7 +2,7 @@
 //! variant per FEBE operation), the [`OpKind`] fieldless echo, and the
 //! read/write partition the lifecycle gates on (§1).
 
-use skep_address::{Address, Nat, Span, Tumbler};
+use skep_address::{document_of, Address, Level, Nat, Span, Tumbler};
 use skep_arrangement::{Deposit, Shot, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{Cursor, FourSet};
@@ -316,6 +316,46 @@ pub enum Op {
     ///
     /// [`Codec::parse`]: crate::Codec::parse
     RetrieveV { specs: Vec<Spec> },
+    /// RETRIEVEI — THE READ BY IDENTITY (AUTH-6.38–6.40; the media record's
+    /// "THE READ BY IDENTITY", fk-B; the register M-I2 (a), (h); the reach
+    /// ruled, ms3-1): the values at I-addresses, one item per position of
+    /// each [`ISpan`] in span order, as M4 holds them — `None` where the
+    /// position was never minted, and `None` at a link position too, M4
+    /// holding content-subspace elements alone. Its reach is EVERY value the
+    /// document minted, arranged or not, under no floor: `value_at` is keyed
+    /// by I-address and blind to arrangement, so a value deleted from a draft
+    /// is read here by a reader the draft admits, however late admitted.
+    ///
+    /// ITS ARGUMENT IS DERIVED (PUB-6.38): no span names a document — each
+    /// derives one, `document_of` of its start, by address arithmetic on the
+    /// op's own fields — so the consult walks [`Op::derived_doc_arguments`]
+    /// after the named list, and the first unreadable DERIVED document
+    /// answers `Withheld` naming it, BEFORE dispatch (PUB-6.5's order,
+    /// PUB-8.4's shape) — never a per-address withheld item, whose count
+    /// would be the extent PUB-6.5 withholds. A span whose start has no
+    /// derived document — a node's, an account's or a document's own address
+    /// — or whose width is zero is refused AT THE OP'S SHAPE, by that same
+    /// arithmetic and before any consult, so the derived list is bounded by
+    /// the span count the parser caps (PATTERNS P29). Each span is confined
+    /// to one derived document by construction: a span advances its start's
+    /// last component alone, and the document prefix never moves.
+    ///
+    /// SIZE: the delivery is the widths summed, request arithmetic, held to
+    /// `skep_retrieval::MAX_DELIVERY_ITEMS` as RETRIEVEV's is and refused
+    /// whole past it (`TooManyItems`), before the first address is expanded.
+    /// The grammar is INTERIM (the media board's sm-Q8); AUTH's docket pins
+    /// the final.
+    RetrieveI { spans: Vec<ISpan> },
+    /// THE CONTENT-FRONTIER READ (AUTH-6.38; the media record's "THE
+    /// FRONTIER READ IS A DOC-ARGUMENT OP OF ITS OWN"): `doc`'s content mint
+    /// frontier — the NEXT unminted content ordinal, a draft's mint count
+    /// plus one — read off M3's content chain for the document. `doc` is a
+    /// DOC-ARGUMENT (PUB-6.1, by PUB-6.12's rule): unreadable ⟹ `withheld`
+    /// before dispatch, so a draft's mint count is never told to a reader
+    /// the draft does not admit; unregistered ⟹ `DocNotRegistered`, M10's
+    /// own refusal, as the doc-metadata read answers it. Served on `/op-at`
+    /// for "as of N" as every read is.
+    ContentFrontier { doc: Address },
     /// RETRIEVEDOCVSPAN (ASN-0112).
     RetrieveDocVSpan { doc: Address },
     /// RETRIEVEDOCVSPANSET (ASN-0113).
@@ -519,6 +559,40 @@ pub struct SuccessorSpec {
     pub ty: SlotArg,
 }
 
+/// One I-span of [`Op::RetrieveI`]: `width` consecutive I-positions from the
+/// I-address `start` — the content-subspace positions a document's mint
+/// issues in order, so a span over them is the chain's own run. A value,
+/// with [`Op`]'s derives and for its reason; `Hash` because its two fields
+/// carry one, so a caller may key a cache by the span it asked.
+///
+/// Its document is DERIVED, never named: `document_of(start)` (PUB-6.38),
+/// which [`Op::derived_doc_arguments`] computes and the consult walks. A
+/// start that is no element position derives none, and the op's shape
+/// refuses it ([`ISpanFault::NoElementPosition`]) ahead of any consult.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ISpan {
+    /// The first I-address of the span — an element position.
+    pub start: Address,
+    /// How many consecutive positions from it, at least one.
+    pub width: Nat,
+}
+
+/// How an [`ISpan`] fails the op's shape — the two faults
+/// [`Op::derived_doc_arguments`] refuses, by address arithmetic on the span's
+/// own fields and before any consult. Named here, beside the list it
+/// refuses, and lowered to its rejection by the consult that walks the
+/// list: the first to `NotContentSubspace`, the second to `EmptyWidth`, each
+/// naming the span's index as its site, as a malformed RETRIEVEV spec names
+/// its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ISpanFault {
+    /// The start names no element position — a node's, an account's or a
+    /// document's own address — so no document derives from it.
+    NoElementPosition,
+    /// The width is zero: a span over no position.
+    EmptyWidth,
+}
+
 /// Fieldless echo of [`Op`] (one unit variant per operation) PLUS
 /// [`OpKind::Unparseable`]. `execute` only ever sees an already-parsed
 /// [`Request`], so a `Codec::parse` failure has produced no `Op`; the
@@ -553,6 +627,8 @@ pub enum OpKind {
     ReadLink,
     FollowLink,
     RetrieveV,
+    RetrieveI,
+    ContentFrontier,
     RetrieveDocVSpan,
     RetrieveDocVSpanSet,
     ShowOrigin,
@@ -608,6 +684,8 @@ impl Op {
             | Op::ReadLink { .. }
             | Op::FollowLink { .. }
             | Op::RetrieveV { .. }
+            | Op::RetrieveI { .. }
+            | Op::ContentFrontier { .. }
             | Op::RetrieveDocVSpan { .. }
             | Op::RetrieveDocVSpanSet { .. }
             | Op::ShowOrigin { .. }
@@ -678,6 +756,8 @@ impl Op {
             Op::ReadLink { .. } => OpKind::ReadLink,
             Op::FollowLink { .. } => OpKind::FollowLink,
             Op::RetrieveV { .. } => OpKind::RetrieveV,
+            Op::RetrieveI { .. } => OpKind::RetrieveI,
+            Op::ContentFrontier { .. } => OpKind::ContentFrontier,
             Op::RetrieveDocVSpan { .. } => OpKind::RetrieveDocVSpan,
             Op::RetrieveDocVSpanSet { .. } => OpKind::RetrieveDocVSpanSet,
             Op::ShowOrigin { .. } => OpKind::ShowOrigin,
@@ -753,10 +833,19 @@ impl Op {
             // key (PUB-8.46; the H1 row: unreadable ⟹ withheld).
             Op::DocMetadata { doc } => vec![doc],
             Op::EditionClaims { target } => vec![target],
+            // The frontier read NAMES its document (the media record: "a
+            // DOC-ARGUMENT OP OF ITS OWN"), and on a draft its answer is the
+            // draft's mint count, so it takes PUB-6.1's row by PUB-6.12's
+            // rule.
+            Op::ContentFrontier { doc } => vec![doc],
             // No named document to withhold (see above); written out rather
             // than wildcarded so a new read variant is classified here on
-            // purpose, never defaulted to "consults nothing".
-            Op::NextAccountPrefix { .. }
+            // purpose, never defaulted to "consults nothing". The read by
+            // identity is among them BY DESIGN: it names no document — each
+            // span DERIVES one, and the derived list is
+            // [`Op::derived_doc_arguments`], walked by the same consult.
+            Op::RetrieveI { .. }
+            | Op::NextAccountPrefix { .. }
             | Op::PrincipalPrefix { .. }
             | Op::EffectiveOwner { .. }
             | Op::ReadLink { .. }
@@ -782,6 +871,94 @@ impl Op {
             | Op::Nullify { .. }
             | Op::AssertSup { .. }
             | Op::EditLink { .. } => Vec::new(),
+        }
+    }
+
+    /// THE DERIVED-ARGUMENT LIST (the media record's "EACH I-SPAN CONFINED
+    /// TO ONE DERIVED DOCUMENT"; PUB-6.38; PATTERNS P29): the documents a read
+    /// consults that it does not NAME but DERIVES by address arithmetic on its
+    /// own fields — [`Op::RetrieveI`]'s, `document_of` of each span's start,
+    /// in span order — which [`consult_read`] walks AFTER
+    /// [`Op::doc_arguments`]'s named ones, so the first unreadable derived
+    /// document answers `Withheld` naming it before dispatch, and the
+    /// historical door walks it the same way (PUB-6.49). OWNED, where the
+    /// named list lends borrows: a derived document is no field of the op.
+    ///
+    /// THE SHAPE REFUSAL rides the derivation: a span whose start names no
+    /// element position — a node's, an account's or a document's own address
+    /// — derives nothing, and one of zero width spans nothing; either is
+    /// refused here, by the span's index, BEFORE any document is consulted
+    /// and before any store is asked, so the list is bounded by the span
+    /// count the parser caps and a prober learns nothing a span's shape did
+    /// not already say. A span never crosses a document: it advances its
+    /// start's last component alone, and the document prefix is invariant
+    /// under that, so confinement holds by construction and no check is
+    /// needed for it.
+    ///
+    /// Every other op answers the empty list, written out with no wildcard
+    /// for [`Op::doc_arguments`]'s reason: a new read decides here whether
+    /// its argument is derived.
+    ///
+    /// [`consult_read`]: crate::consult_read
+    pub fn derived_doc_arguments(&self) -> Result<Vec<Address>, (usize, ISpanFault)> {
+        match self {
+            Op::RetrieveI { spans } => spans
+                .iter()
+                .enumerate()
+                .map(|(index, span)| {
+                    if span.width == Nat::from(0u32) {
+                        return Err((index, ISpanFault::EmptyWidth));
+                    }
+                    if span.start.level() != Level::Element {
+                        return Err((index, ISpanFault::NoElementPosition));
+                    }
+                    document_of(&span.start).ok_or((index, ISpanFault::NoElementPosition))
+                })
+                .collect(),
+            Op::ContentFrontier { .. }
+            | Op::NextAccountPrefix { .. }
+            | Op::PrincipalPrefix { .. }
+            | Op::EffectiveOwner { .. }
+            | Op::ReadLink { .. }
+            | Op::FollowLink { .. }
+            | Op::RetrieveV { .. }
+            | Op::RetrieveDocVSpan { .. }
+            | Op::RetrieveDocVSpanSet { .. }
+            | Op::ShowOrigin { .. }
+            | Op::ShowDeletions { .. }
+            | Op::Compare { .. }
+            | Op::FindDocsContaining { .. }
+            | Op::Image { .. }
+            | Op::FindLinksV { .. }
+            | Op::FindLinksFtt { .. }
+            | Op::CountV { .. }
+            | Op::CountFtt { .. }
+            | Op::WindowV { .. }
+            | Op::WindowFtt { .. }
+            | Op::RetrieveEndsets { .. }
+            | Op::Project { .. }
+            | Op::DiscoverableFrom { .. }
+            | Op::DeleteOrphans { .. }
+            | Op::InClaims { .. }
+            | Op::OutClaims { .. }
+            | Op::DocMetadata { .. }
+            | Op::EditionClaims { .. }
+            | Op::UniversalGrants
+            | Op::CreateNewDocument { .. }
+            | Op::Delegate { .. }
+            | Op::RegisterNode { .. }
+            | Op::Fork { .. }
+            | Op::Insert { .. }
+            | Op::Delete { .. }
+            | Op::Copy { .. }
+            | Op::Rearrange { .. }
+            | Op::Version { .. }
+            | Op::Publish { .. }
+            | Op::MakeLink { .. }
+            | Op::Emit { .. }
+            | Op::Nullify { .. }
+            | Op::AssertSup { .. }
+            | Op::EditLink { .. } => Ok(Vec::new()),
         }
     }
 
@@ -852,6 +1029,8 @@ impl Op {
             | Op::ReadLink { .. }
             | Op::FollowLink { .. }
             | Op::RetrieveV { .. }
+            | Op::RetrieveI { .. }
+            | Op::ContentFrontier { .. }
             | Op::RetrieveDocVSpan { .. }
             | Op::RetrieveDocVSpanSet { .. }
             | Op::ShowOrigin { .. }

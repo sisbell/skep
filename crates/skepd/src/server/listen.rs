@@ -12,60 +12,71 @@ use parking_lot::Mutex;
 
 use super::blob_routes;
 use super::http::{
-    push_header, read_request, refuse_request, response_head, write_commit_event, write_reply,
-    REQUEST_READ_TIMEOUT, TRANSFER_DEADLINE, WRITE_TIMEOUT,
+    push_header, read_request, refuse_request, reset_close, response_head, write_chunk,
+    write_commit_event, write_fetch_head, write_reply, REQUEST_READ_TIMEOUT, TRANSFER_DEADLINE,
+    WRITE_TIMEOUT,
 };
-use super::reply::{refuse, Routed, TransportError, SESSION_HEADER};
+use super::reply::{refuse, Fetch, Routed, TransportError, SESSION_HEADER};
+use super::request::HttpRequest;
 use super::scan::MAX_CONCURRENT_CLASS_SCANS;
 use super::{Daemon, Moment};
 use crate::auth::session::Peer;
-use crate::limits::PRUNE_INTERVAL;
+use crate::limits::{
+    BLOB_CHUNK, BLOB_IDLE_BOUND, BLOB_TRANSFER_BOUND, MAX_CONCURRENT_FETCHES, PRUNE_INTERVAL,
+};
 use crate::media::pruner::{Cadence, Wake};
+use crate::media::serve::Progress;
+#[cfg(feature = "test-hooks")]
+use crate::media::serve::STREAM_HOLD;
 use crate::notice;
 use crate::write_path::StreamStep;
 
 /// The request worker count `skepd` serves with when the operator names
-/// none — held HERE rather than in the binary because it is the THIRD TERM
-/// of a budget the other two are meaningless without.
+/// none — held HERE rather than in the binary because it is the FOURTH TERM
+/// of a budget the other three are meaningless without.
 ///
-/// The two permit pools bound the two expensive read surfaces, and each
-/// card argues its own number against the work that surface commands.
-/// Neither prices the SUM, and the sum is what decides whether the bounds
-/// do the thing they exist for: a caller holding every permit of both pools
-/// is inside both bounds, and if that exhausts the workers the daemon
-/// answers nothing — `/health` and `/session` included — with every
-/// structure inside it healthy. The relation is therefore
-/// `workers >= `[`MIN_WORKERS`], and the assertion below is what keeps it
-/// from being arithmetic a reader has to do across two files.
+/// The three permit pools bound the three expensive surfaces — the
+/// reconstruction, the class scan, and the blob fetch, which holds a whole
+/// file for its answer — and each card argues its own number against the
+/// work that surface commands. None prices the SUM, and the sum is what
+/// decides whether the bounds do the thing they exist for: a caller holding
+/// every permit of all three pools is inside every bound, and if that
+/// exhausts the workers the daemon answers nothing — `/health` and
+/// `/session` included — with every structure inside it healthy. The
+/// relation is therefore `workers >= `[`MIN_WORKERS`], and the assertion
+/// below is what keeps it from being arithmetic a reader has to do across
+/// three files.
 ///
-/// Four pooled slots plus two free is the smallest split that keeps the
-/// liveness probe, the handshake and the write path answerable while both
-/// pools are saturated. Two free suffice because an ordinary request
-/// completes in milliseconds, where a pooled one is a whole-store scan or a
-/// whole-world replay.
+/// Six pooled slots plus two free is the smallest split that keeps the
+/// liveness probe, the handshake and the write path answerable while every
+/// pool is saturated. Two free suffice because an ordinary request
+/// completes in milliseconds, where a pooled one is a whole-store scan, a
+/// whole-world replay or a whole file's transfer.
 ///
 /// An embedder calling [`serve`] with its own count owes the same relation,
 /// and [`MIN_WORKERS`] is the form in which they can evaluate it.
-pub const DEFAULT_WORKERS: usize = 6;
+pub const DEFAULT_WORKERS: usize = 8;
 
 /// The smallest worker count that satisfies [`serve`]'s pooled-permit
-/// obligation: ONE MORE than the slots the two permit pools hold together,
-/// so a caller holding every permit of both still leaves a worker to answer
-/// `/health`, `/session` and the write path.
+/// obligation: ONE MORE than the slots the three permit pools hold
+/// together, so a caller holding every permit of all three still leaves a
+/// worker to answer `/health`, `/session` and the write path.
 ///
 /// PUBLIC because it is the caller's half of an obligation [`serve`] states
-/// and deliberately does not re-check: the two pools' own counts are this
+/// and deliberately does not re-check: the three pools' own counts are this
 /// crate's, so `workers >= MIN_WORKERS` is the only form an embedder naming
-/// its own count can evaluate. DERIVED from the two rather than written
+/// its own count can evaluate. DERIVED from the three rather than written
 /// down, so a pool that moves moves this with it — which is what keeps the
 /// obligation and the check on one number.
-pub const MIN_WORKERS: usize =
-    crate::history::MAX_CONCURRENT_RECONSTRUCTIONS + MAX_CONCURRENT_CLASS_SCANS + 1;
+pub const MIN_WORKERS: usize = crate::history::MAX_CONCURRENT_RECONSTRUCTIONS
+    + MAX_CONCURRENT_CLASS_SCANS
+    + MAX_CONCURRENT_FETCHES
+    + 1;
 
 const _: () = assert!(
     DEFAULT_WORKERS >= MIN_WORKERS,
     "the shipped default must satisfy serve's own pooled-permit obligation: a caller \
-     inside both bounds would otherwise occupy every worker"
+     inside every bound would otherwise occupy every worker"
 );
 
 // ── the wire loop ────────────────────────────────────────────────────────
@@ -132,9 +143,10 @@ impl std::fmt::Debug for Skepd {
 /// also what makes its startup line's worker count honest.
 ///
 /// OBLIGATION the count carries: `workers >= `[`MIN_WORKERS`], which leaves
-/// a worker free of the two permit pools. A caller holding every permit of
-/// both is INSIDE both bounds, so below that count they occupy the whole
-/// pool and the daemon answers nothing, `/health` and `/session` included.
+/// a worker free of the three permit pools. A caller holding every permit of
+/// all three is INSIDE every bound, so below that count they occupy the
+/// whole pool and the daemon answers nothing, `/health` and `/session`
+/// included.
 /// [`DEFAULT_WORKERS`] satisfies it and carries the assertion that holds it;
 /// an embedder naming its own count owes it, and `serve` does NOT re-check —
 /// the obligation is the caller's, and [`MIN_WORKERS`] is how they evaluate
@@ -231,12 +243,16 @@ pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
     let pruner = {
         let daemon = Arc::clone(&daemon);
         let cadence = Arc::clone(&cadence);
-        thread::Builder::new().name("skepd-pruner".into()).spawn(move || prune_on_cadence(&daemon, &cadence))
+        thread::Builder::new()
+            .name("skepd-pruner".into())
+            .spawn(move || prune_on_cadence(&daemon, &cadence))
     };
     let pruner = match pruner {
         Ok(h) => Some(h),
         Err(e) => {
-            notice::line(format_args!("pruner: the OS refused its thread ({e}); no pass runs on this daemon's cadence"));
+            notice::line(format_args!(
+                "pruner: the OS refused its thread ({e}); no pass runs on this daemon's cadence"
+            ));
             None
         }
     };
@@ -386,9 +402,11 @@ impl Drop for Skepd {
 
 /// Serve one connection: read the one request, route it, write the one
 /// reply, close — or, for `GET /events`, hand the socket to a dedicated
-/// subscriber thread and return at once. A handler panic is contained to a
-/// 500 so one bad request cannot take a worker down; the panic still prints
-/// to stderr for the operator.
+/// subscriber thread and return at once — or, for an admitted blob fetch,
+/// stream the file on this worker ([`stream_fetch`]), the fetch pool's
+/// permit held by the answer bounding how many workers do so at once. A
+/// handler panic is contained to a 500 so one bad request cannot take a
+/// worker down; the panic still prints to stderr for the operator.
 fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream: TcpStream) {
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT));
@@ -412,7 +430,7 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
         Ok(None) => return,
         Err(refusal) => {
             let reply = refuse_request(refusal);
-            let _ = write_reply(&mut stream, &reply, Instant::now() + TRANSFER_DEADLINE);
+            let _ = write_reply(&mut stream, &reply, Instant::now() + TRANSFER_DEADLINE, false);
             return;
         }
     };
@@ -450,7 +468,12 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
     };
     match routed {
         Routed::Reply(reply) => {
-            let _ = write_reply(&mut stream, &reply, Instant::now() + TRANSFER_DEADLINE);
+            // A `HEAD`'s answer is the `GET`'s head and no body — HTTP's
+            // rule, kept by the writer (`write_reply`), so the blob fetch's
+            // refusals carry the content headers their `GET` would and no
+            // byte of it.
+            let head_only = req.method == "HEAD";
+            let _ = write_reply(&mut stream, &reply, Instant::now() + TRANSFER_DEADLINE, head_only);
             // THE DEFERRED STEP of a replace: the replaced instance's name
             // unlinked AFTER the answer is on the socket, off the request's
             // path — the blob family's requests alone owe one.
@@ -475,12 +498,68 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
             // reaches `Origin::from_parts`'s debug assert through
             // `bare_origins`. A refusal costs one stream, and dropping the
             // socket is the clean close a budgeted refusal already gives.
-            let Ok(closed) =
-                catch_unwind(AssertUnwindSafe(|| daemon.resolve_at_head(&req).closed))
+            let Ok(closed) = catch_unwind(AssertUnwindSafe(|| daemon.resolve_at_head(&req).closed))
             else {
                 return;
             };
             subscribers.admit(Arc::clone(daemon), stream, closed);
+        }
+        Routed::Fetch(fetch) => {
+            // Contained like the handler: the re-check inside resolves the
+            // actor again, which is the same code the stream above contains
+            // for the same reason. A panic mid-body ends the stream short of
+            // its length, as any failure does; the permit returns with the
+            // unwound frame.
+            let _ =
+                catch_unwind(AssertUnwindSafe(|| stream_fetch(daemon, &req, &mut stream, fetch)));
+        }
+    }
+}
+
+/// THE FETCH's STREAM (wire.md §Media, THE FETCH; the register M-I2 (g);
+/// the rulings s6-E1 (a), s6-leak-b): the head with the file's length, then
+/// — on the `GET`; a `HEAD` is the head alone — the body one [`BLOB_CHUNK`]
+/// at a time, each write under the socket's IDLE BOUND ([`BLOB_IDLE_BOUND`],
+/// renewed by any byte the peer drains and never by silence) and the whole
+/// transfer under [`BLOB_TRANSFER_BOUND`]; and BETWEEN CHUNKS — never before
+/// the first, which the gate's own answer covers — the re-resolution at
+/// whichever of [`Progress`]'s two intervals comes first: the requester
+/// against the head and M10's gate again ([`Daemon::fetch_still_admitted`]).
+/// A stream whose requester died, whose gate now withholds, whose peer
+/// stopped draining or whose transfer passed its bound is ended by THE RESET
+/// ([`reset_close`]): never a clean close, which a client holding the
+/// declared length could read as the whole file. The fetch's permit returns
+/// when `fetch` drops at this function's end, on every path.
+fn stream_fetch(daemon: &Daemon, req: &HttpRequest, stream: &mut TcpStream, fetch: Fetch<'_>) {
+    let _ = stream.set_write_timeout(Some(BLOB_IDLE_BOUND));
+    let deadline = Instant::now() + BLOB_TRANSFER_BOUND;
+    if write_fetch_head(stream, &fetch, deadline).is_err() {
+        reset_close(stream);
+        return;
+    }
+    if req.method == "HEAD" {
+        return;
+    }
+    let mut progress = Progress::new(daemon.fetch_clock_ms());
+    let mut chunks = fetch.bytes().chunks(BLOB_CHUNK).peekable();
+    while let Some(chunk) = chunks.next() {
+        if Instant::now() >= deadline || write_chunk(stream, chunk, deadline).is_err() {
+            reset_close(stream);
+            return;
+        }
+        if chunks.peek().is_none() {
+            return;
+        }
+        progress.advance(chunk.len() as u64);
+        #[cfg(feature = "test-hooks")]
+        STREAM_HOLD.wait();
+        let now = daemon.fetch_clock_ms();
+        if progress.due(now) {
+            if !daemon.fetch_still_admitted(req, fetch.i()) {
+                reset_close(stream);
+                return;
+            }
+            progress.reset(now);
         }
     }
 }

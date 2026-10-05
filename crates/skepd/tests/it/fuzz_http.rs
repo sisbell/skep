@@ -35,8 +35,8 @@ use fuzz_common::{exhaustive, iters, random_bytes, request_frames};
 /// `/health` answers 200 `ok:true` — the liveness + no-thread-leak check the
 /// batches lean on.
 fn assert_health(port: u16) {
-    let resp = http_raw_exchange(port, &build_get("/health"))
-        .expect("daemon reachable for /health");
+    let resp =
+        http_raw_exchange(port, &build_get("/health")).expect("daemon reachable for /health");
     let (status, body) = check_http_response(&resp)
         .unwrap_or_else(|e| panic!("FINDING (http): /health response malformed: {e}"));
     assert_eq!(status, 200, "the daemon must stay up: /health answered {status}");
@@ -74,7 +74,7 @@ fn valid_op_request() -> Vec<u8> {
 /// write to a socket; the daemon must answer each with exactly one
 /// well-formed response.
 fn hostile_request(rng: &mut u64, corpus: &[Vec<u8>]) -> Vec<u8> {
-    match splitmix64(rng) % 9 {
+    match splitmix64(rng) % 10 {
         // Pure garbage — no HTTP shape at all.
         0 => random_bytes(rng, 300),
         // A random method/path/version request line, empty body.
@@ -137,10 +137,30 @@ fn hostile_request(rng: &mut u64, corpus: &[Vec<u8>]) -> Vec<u8> {
             };
             let body = random_bytes(rng, 3000);
             let overstate = splitmix64(rng) % 3 == 0;
-            let declared = body.len() + if overstate { 1 + splitmix64(rng) as usize % 4096 } else { 0 };
-            let mut v = format!("{m} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {declared}\r\n\r\n").into_bytes();
+            let declared =
+                body.len() + if overstate { 1 + splitmix64(rng) as usize % 4096 } else { 0 };
+            let mut v = format!(
+                "{m} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {declared}\r\n\r\n"
+            )
+            .into_bytes();
             v.extend_from_slice(&body);
             v
+        }
+        // The blob FETCH (media lane D) under hostile bytes: a random method
+        // on `/blob` and a junk `i` query — the route meets its query parse,
+        // its M10 gate or its classification and must answer exactly one
+        // well-formed response. `HEAD` is left out: a HEAD answer carries the
+        // GET's `Content-Length` with no body (RFC 9110 §9.3.2), which this
+        // GET-oriented oracle — blind to the request method — reads as a
+        // length/body disagreement; the blob_fetch suite judges HEAD itself.
+        8 => {
+            let methods = ["GET", "POST", "PUT"];
+            let m = methods[splitmix64(rng) as usize % methods.len()];
+            let q: String = String::from_utf8_lossy(&random_bytes(rng, 30))
+                .chars()
+                .filter(|c| !c.is_control() && *c != ' ')
+                .collect();
+            build_request(m, &format!("/blob?i={q}"), "", b"")
         }
         // A junk query on a real GET route.
         _ => {
@@ -209,9 +229,8 @@ fn http_hostile_bytes_single_response_daemon_survives() {
             "FINDING (fuzz_http): a valid frame split at {boundary} was not reassembled: {}",
             String::from_utf8_lossy(body)
         );
-        let v: Value = serde_json::from_slice(body).unwrap_or_else(|e| {
-            panic!("split-write at {boundary}: body is not JSON ({e})")
-        });
+        let v: Value = serde_json::from_slice(body)
+            .unwrap_or_else(|e| panic!("split-write at {boundary}: body is not JSON ({e})"));
         assert!(
             v["resp"].is_string(),
             "split-write at {boundary} must answer an operation response: {v}"
@@ -270,7 +289,10 @@ fn http_slow_loris_read_timeout_fires() {
         Ok(0) => {} // clean close after the timeout
         Ok(n) => {
             // A 400 body is fine — the point is the connection did not hang.
-            assert!(buf[..n].starts_with(b"HTTP/1.1 "), "a stalled connection got a non-HTTP reply");
+            assert!(
+                buf[..n].starts_with(b"HTTP/1.1 "),
+                "a stalled connection got a non-HTTP reply"
+            );
         }
         Err(e) => panic!("FINDING (fuzz_http): slow-loris read errored instead of releasing: {e}"),
     }

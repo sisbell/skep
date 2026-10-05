@@ -763,12 +763,17 @@ that a request is built and a response read through `skep_febe` alone; and
 
 `skepd` owns three decisions of its own: the session layer's gates (who
 may act, and what a credential write may do), the cadence of the published
-head, and the media door (whether a value a write carries is a picture's
-reference cell, and what a write that would mint one is answered — whether
+head, and the media door (whether a value a write carries is a media cell —
+a picture's reference cell or a blind document's — by one classification,
+and what a write that would mint one is answered: for a picture, whether
 its hash is one the caller's own cells already name, or a deposit of the
-caller's own) — with, behind the door, the cell index the base and the
-pruner read, and the pruner's pass. Everything else it delegates to the
-stores through the engine, and the media bytes to `skep-blobs`.
+caller's own; a blind cell, which the board holds no byte of a file for, is
+admitted with no deposit consulted) — with, behind the door, the cell index
+the base and the pruner read, and the pruner's pass. It also SERVES media
+bytes: `GET /blob?i=` reads a picture's whole file by the I-address of its
+cell, gated by M10's read by identity and checked against the cell before
+the first byte. Everything else it delegates to the stores through the
+engine, and the media bytes to `skep-blobs`.
 
 Its modules form six layers. A module names only modules in its own layer
 or below it, never above; `crates/skepd/tests/it/tidy.rs` checks it. A
@@ -794,6 +799,9 @@ write passes down through them in this order:
 │                         record → head writer's turn     │
 │                    /blob/upload: resolve → readiness →  │
 │                         gate → stream → finish → answer │
+│                    /blob?i=: resolve → serve (gate →    │
+│                         classify → permit → check) →    │
+│                         stream, re-resolved mid-stream  │
 │                    the pruner's pass under the arm      │
 ├─────────────────────────────────────────────────────────┤
 │ 3 VOCABULARY       server/reply.rs · request.rs ·       │
@@ -814,17 +822,19 @@ write passes down through them in this order:
 │                    └── classify.rs  a commit's documents│
 │   MEDIA RESOURCE   media.rs · media/door.rs ·           │
 │                    media/gate.rs · media/index.rs ·     │
-│                    media/pruner.rs ·                    │
+│                    media/pruner.rs · media/serve.rs ·   │
 │                    media/deposit_read.rs                │
 │                    the media door · the blob store, the │
 │                    limits, the hold, the scopes, the    │
 │                    binding · the cell index: the base,  │
 │                    the walk at open, the readiness ·    │
 │                    the pruner's pass and its halts ·    │
-│                    the deposit read                     │
+│                    the deposit read · the fetch's       │
+│                    composed order, its pool and stream  │
 ├─────────────────────────────────────────────────────────┤
 │ 6 LEAVES           codec · history · permits · serial · │
-│                    limits · notice · media/cell         │
+│                    limits · notice · media/cell ·       │
+│                    media/blind                          │
 └─────────────────────────────────────────────────────────┘
        │
        ▼
@@ -838,7 +848,13 @@ A read skips the write path: a read route goes from the routes to
 `history` and the engine. The engine sits below the daemon and knows
 nothing of it. A blob upload skips the write path too: the blob route
 goes from the routes to the media resource and `skep-blobs`, commits
-nothing to the journal, and takes no `Serial`. The cell index is entered
+nothing to the journal, and takes no `Serial`. THE BLOB FETCH
+(`GET /blob?i=`) skips it the same way: the route resolves the caller,
+runs the serve's composed order (M10's read by identity as the gate, the
+classification, a permit of the fetch pool, the whole file checked
+against its cell before its first byte), and hands the transport a file
+to stream — re-resolving the caller between chunks and cutting the stream
+by a reset where the entitlement lapsed. The cell index is entered
 by the write path at every commit that mints a cell and read by the
 media resource; the pruner's pass runs from the routes under the session
 layer's lock, on the transport's cadence.
@@ -858,8 +874,10 @@ layer's lock, on the transport's cadence.
    the caller is), `server/session_routes.rs`, `server/read_routes.rs`,
    `server/op.rs`, `server/blob_routes.rs` (the PUT: the path family
    `/blob/upload`, the readiness refusal of the index's three readers,
-   the five methods, the pruner's pass as the daemon runs it), and — in
-   `test-hooks` builds only — `server/hooks.rs`. `/op` runs one of the
+   the five methods, the pruner's pass as the daemon runs it; and THE
+   FETCH `/blob?i=`, beside the family, with its query, its mid-stream
+   re-check and its clock), and — in `test-hooks` builds only —
+   `server/hooks.rs`. `/op` runs one of the
    three write sequences — the plain (AUTH-3.35), the credential
    (AUTH-3.37) or the registry (the record grade for registry records),
    chosen off the op's own type slot before any lock is taken: resolve
@@ -870,7 +888,11 @@ layer's lock, on the transport's cadence.
    one chunk at a time into the store, each chunk gated, and finishes
    under the credential lock's read arm — the requester re-resolved
    there — never under `Serial`. The router takes the streaming body out
-   of the request's slot at the head of every routing.
+   of the request's slot at the head of every routing. `/blob?i=` (with
+   `HEAD`) resolves the caller and runs the serve's composed order; an
+   admitted answer is a file the accept loop streams, the caller
+   re-resolved between chunks and the stream cut by a reset where the
+   entitlement lapsed.
 3. **The daemon's vocabulary** — `server/reply.rs` (the reply and every
    transport refusal), `server/request.rs` (the request, the streaming
    body's source and the slot it rides in, and the rules the request's
@@ -941,7 +963,12 @@ layer's lock, on the transport's cadence.
    and the lease log there; and the cadence the transport's thread waits
    on. `media/deposit_read.rs` — the one read of a principal's own
    deposits and uploads, its base the index's number, served on the
-   upload's own path.
+   upload's own path. `media/serve.rs` — THE FETCH's composed order: the
+   shape, M10's read by identity as the gate, the one classification, the
+   permit of the fetch pool, the whole file checked against its cell
+   before its first byte, the stream's two re-check intervals; what
+   `server/blob_routes.rs` runs for `GET /blob?i=` and the transport
+   streams.
 6. **The leaves** — `codec.rs` with `codec/marshal.rs` (the JSON wire
    format: parse, and marshal), `history.rs` (reading the world at an
    earlier position), `permits.rs` (the counting permit both bounded pools
@@ -949,8 +976,10 @@ layer's lock, on the transport's cadence.
    `limits.rs` (request body caps, and the cell's cap), `notice.rs` (the
    operator's log line), `media/cell.rs` (the picture's reference cell:
    its schema, its one parser under the canonical rule, its encoder, its
-   designation). None of these knows anything about the daemon; a leaf
-   imports only leaves.
+   designation, and THE ONE CLASSIFICATION of every media kind) and
+   `media/blind.rs` (the blind document's cell: the second kind, a
+   commitment the board holds no byte of a file for). None of these knows
+   anything about the daemon; a leaf imports only leaves.
 
 `lib.rs` declares the daemon's modules in layer order, then the fuzz
 harness and the crate's public surface; `main.rs` is the binary.

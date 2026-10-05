@@ -110,6 +110,16 @@ serde_json.workspace = true
 # Deliberately no inventory here — a list in a manifest goes stale in silence
 # while the argument does not.
 parking_lot.workspace = true
+# THE RESET CLOSE of a blob fetch stream (media/serve.rs; server/http.rs):
+# `SO_LINGER` at zero on the one socket option std does not expose, so a
+# stream the mid-stream re-check ends sends a reset and never a clean finish
+# a client could read as the whole file. The `net` feature alone.
+rustix = { version = "1", features = ["net"] }
+# BLAKE3 at the fetch's check (media/serve.rs): the whole file hashed against
+# the cell's `hash` before its first byte is served — the designation the
+# store deposits under; the suites hash with it too, judging the daemon's
+# answer against their own (Q-sm2).
+blake3.workspace = true
 
 [dev-dependencies]
 # This crate itself with `test-hooks` on, so its integration tests
@@ -123,11 +133,9 @@ parking_lot.workspace = true
 skepd = { path = ".", features = ["test-hooks"], default-features = false }
 tempfile.workspace = true
 # The blob store with its hazard seam named, so the SIGKILL harness can name
-# the step it holds a finish at (`skep_blobs::Step`); and BLAKE3 itself, so
-# the suites hash a file they send and judge the daemon's answer against
-# their own hash — the signer's rule (Q-sm2), applied by the tests.
+# the step it holds a finish at (`skep_blobs::Step`). BLAKE3 the suites hash
+# with is the dependency above.
 skep-blobs = { path = "../skep-blobs", features = ["test-hooks"] }
-blake3.workspace = true
 # Test-side keys (the daemon itself only verifies): the suites' fixed seed
 # carriers are `SigningKey::from_bytes` — the 32 bytes that seed each hybrid
 # key (`common::seed_of`); the crate's `Signer`, over a hybrid key's derived

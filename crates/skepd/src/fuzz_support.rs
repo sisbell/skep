@@ -43,17 +43,20 @@ pub fn splitmix64(rng: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// The 23 response shapes every client must decode (wire.md §The response
+/// The 25 response shapes every client must decode (wire.md §The response
 /// envelope + §Rejections); a `/op` answer always carries one of these in
 /// `resp`. `doc_metadata` and `edition_claims` joined at wire v7.6 (PUB
 /// round 2, lane 3.4); `effective_owner` with the owner-of-address read
 /// (AUTH-6.37); `universal_grants` with the any-principal discovery read
-/// (PUB-8.47).
+/// (PUB-8.47); `i_delivery` and `frontier` with the read by identity and
+/// the content chain's frontier (wire.md §Content & provenance reads).
 pub const RESP_SHAPES: &[&str] = &[
     "ack",
     "ack_addr",
     "ack_edit",
     "delivery",
+    "i_delivery",
+    "frontier",
     "span_set",
     "addrs",
     "maybe_addr",
@@ -126,6 +129,16 @@ pub const TRANSPORT_ERRORS: &[&str] = &[
     "deposit_refused",
     "blob_io",
     "index_rebuilding",
+    // The blob fetch's seven (wire.md §Media, THE FETCH): what the address
+    // holds or the store under it is not a file to serve — six 404s told
+    // apart by name — and the fetch pool full, 503, retry-class.
+    "no_value",
+    "not_a_cell",
+    "unknown_cell_schema",
+    "blind_cell",
+    "blob_missing",
+    "blob_damaged",
+    "fetch_busy",
 ];
 
 // ── the codec oracle ─────────────────────────────────────────────────────
@@ -238,10 +251,8 @@ pub fn check_http_response(bytes: &[u8]) -> Result<(u16, &[u8]), String> {
     if bytes.is_empty() {
         return Err("no response bytes (server closed without answering)".into());
     }
-    let sep = bytes
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .ok_or("no CRLFCRLF header terminator")?;
+    let sep =
+        bytes.windows(4).position(|w| w == b"\r\n\r\n").ok_or("no CRLFCRLF header terminator")?;
     let head = std::str::from_utf8(&bytes[..sep]).map_err(|_| "non-UTF-8 response head")?;
     let mut lines = head.split("\r\n");
     let status_line = lines.next().ok_or("empty response head")?;
@@ -263,9 +274,8 @@ pub fn check_http_response(bytes: &[u8]) -> Result<(u16, &[u8]), String> {
         if line.is_empty() {
             continue;
         }
-        let (name, value) = line
-            .split_once(':')
-            .ok_or_else(|| format!("malformed header line: {line:?}"))?;
+        let (name, value) =
+            line.split_once(':').ok_or_else(|| format!("malformed header line: {line:?}"))?;
         let (name, value) = (name.trim(), value.trim());
         if name.eq_ignore_ascii_case("Content-Length") {
             content_length =
@@ -497,11 +507,11 @@ fn junk_first_tumbler(v: &mut Value, rng: &mut u64) -> bool {
     match v {
         Value::String(s) if looks_like_tumbler(s) => {
             *s = match splitmix64(rng) % 5 {
-                0 => format!("{s}."),               // trailing dot ⇒ empty component
+                0 => format!("{s}."),                   // trailing dot ⇒ empty component
                 1 => format!("{s}.{}", "9".repeat(40)), // huge natural
-                2 => format!("{s}.0.0.1"),          // adjacent zeros
-                3 => format!("{s}.-2"),             // minus sign
-                _ => "1..2".to_string(),            // empty interior component
+                2 => format!("{s}.0.0.1"),              // adjacent zeros
+                3 => format!("{s}.-2"),                 // minus sign
+                _ => "1..2".to_string(),                // empty interior component
             };
             true
         }

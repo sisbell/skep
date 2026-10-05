@@ -11,13 +11,13 @@ use skep_arrangement::{Run, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, SlotSpec, SupClaim, Window};
 use skep_febe::{
-    Deposit, Disposition, EditionClaim, FaultSite, Op, OpKind, RejectCode, Rejection, Response,
-    SlotArg, SuccessorSpec, UniversalGrant,
+    Deposit, Disposition, EditionClaim, FaultSite, IItem, ISpan, Op, OpKind, RejectCode, Rejection,
+    Response, SlotArg, SuccessorSpec, UniversalGrant,
 };
 use skep_identity::{KeySet, SigAlgRow};
 use skep_kernel::{Attestation, Seq};
 use skep_links::{Endset, Invalid, Link, View};
-use skep_retrieval::{CorrPair, Deletions, DeliveryItem, Operand, RegionSpec, Spec, SpanFault};
+use skep_retrieval::{CorrPair, Deletions, DeliveryItem, Operand, RegionSpec, SpanFault, Spec};
 
 use super::{hex_string, obj, to_bytes};
 
@@ -103,10 +103,7 @@ pub(crate) fn key_set_reply(as_of: Seq, set: Option<&KeySet>) -> Vec<u8> {
     let retired: Vec<Value> = set
         .retired()
         .map(|(fp, anchor)| {
-            obj(vec![
-                ("anchor", Value::Bool(anchor)),
-                ("fingerprint", Value::String(fp.to_hex())),
-            ])
+            obj(vec![("anchor", Value::Bool(anchor)), ("fingerprint", Value::String(fp.to_hex()))])
         })
         .collect();
     to_bytes(obj(vec![
@@ -200,7 +197,8 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         }
         Op::DocMetadata { doc } => (op_name(OpKind::DocMetadata), vec![("doc", j_addr(doc))]),
         Op::Insert { doc, at, values, deposit } => {
-            let mut pairs = vec![("doc", j_addr(doc)), ("at", j_vpos(at)), ("values", j_values(values))];
+            let mut pairs =
+                vec![("doc", j_addr(doc)), ("at", j_vpos(at)), ("values", j_values(values))];
             // Canonical: the declaration rides only when made, as the class
             // type it names (PUB-2.64) — absent IS `Undeclared` on the wire,
             // so an undeclared insert marshals to no field and
@@ -266,10 +264,9 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
                 ("to", j_addrs(to)),
             ],
         ),
-        Op::Nullify { home, target } => (
-            op_name(OpKind::Nullify),
-            vec![("home", j_addr(home)), ("target", j_addr(target))],
-        ),
+        Op::Nullify { home, target } => {
+            (op_name(OpKind::Nullify), vec![("home", j_addr(home)), ("target", j_addr(target))])
+        }
         Op::AssertSup { home, old, new } => (
             op_name(OpKind::AssertSup),
             vec![("home", j_addr(home)), ("old", j_addr(old)), ("new", j_addr(new))],
@@ -288,6 +285,10 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             (op_name(OpKind::FollowLink), vec![("a", j_addr(a)), ("slot", j_usize(*slot))])
         }
         Op::RetrieveV { specs } => (op_name(OpKind::RetrieveV), vec![("specs", j_specs(specs))]),
+        Op::RetrieveI { spans } => (op_name(OpKind::RetrieveI), vec![("spans", j_ispans(spans))]),
+        Op::ContentFrontier { doc } => {
+            (op_name(OpKind::ContentFrontier), vec![("doc", j_addr(doc))])
+        }
         Op::RetrieveDocVSpan { doc } => {
             (op_name(OpKind::RetrieveDocVSpan), vec![("doc", j_addr(doc))])
         }
@@ -300,20 +301,18 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         Op::ShowDeletions { d_a, d_b } => {
             (op_name(OpKind::ShowDeletions), vec![("d_a", j_addr(d_a)), ("d_b", j_addr(d_b))])
         }
-        Op::Compare { rho1, rho2 } => (
-            op_name(OpKind::Compare),
-            vec![("rho1", j_regions(rho1)), ("rho2", j_regions(rho2))],
-        ),
+        Op::Compare { rho1, rho2 } => {
+            (op_name(OpKind::Compare), vec![("rho1", j_regions(rho1)), ("rho2", j_regions(rho2))])
+        }
         Op::FindDocsContaining { regions } => {
             (op_name(OpKind::FindDocsContaining), vec![("regions", j_regions(regions))])
         }
         Op::Image { d, region } => {
             (op_name(OpKind::Image), vec![("d", j_addr(d)), ("region", j_spans(region))])
         }
-        Op::FindLinksV { d, region } => (
-            op_name(OpKind::FindLinksV),
-            vec![("d", j_addr(d)), ("region", j_spans(region))],
-        ),
+        Op::FindLinksV { d, region } => {
+            (op_name(OpKind::FindLinksV), vec![("d", j_addr(d)), ("region", j_spans(region))])
+        }
         Op::FindLinksFtt { q } => (op_name(OpKind::FindLinksFtt), vec![("q", j_fourset(q))]),
         Op::CountV { d, region } => {
             (op_name(OpKind::CountV), vec![("d", j_addr(d)), ("region", j_spans(region))])
@@ -332,10 +331,9 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             op_name(OpKind::WindowFtt),
             vec![("q", j_fourset(q)), ("cur", j_cursor(cur)), ("n", j_usize(*n))],
         ),
-        Op::RetrieveEndsets { d, region } => (
-            op_name(OpKind::RetrieveEndsets),
-            vec![("d", j_addr(d)), ("region", j_spans(region))],
-        ),
+        Op::RetrieveEndsets { d, region } => {
+            (op_name(OpKind::RetrieveEndsets), vec![("d", j_addr(d)), ("region", j_spans(region))])
+        }
         Op::Project { a, slot, d } => (
             op_name(OpKind::Project),
             vec![("a", j_addr(a)), ("slot", j_usize(*slot)), ("d", j_addr(d))],
@@ -374,6 +372,18 @@ pub(super) fn j_response(r: &Response) -> Value {
         ),
         Response::Delivery { items, as_of } => {
             ("delivery", vec![("items", j_items(&items.0)), ("as_of", j_seq(*as_of))])
+        }
+        // The read by identity (AUTH-6.38–6.40): one object per I-position
+        // asked, `at` the address and `value` the value as the delivery
+        // renders one value — or `null`, a payload option, where the
+        // position holds none.
+        Response::IDelivery { items, as_of } => {
+            ("i_delivery", vec![("items", j_iitems(items)), ("as_of", j_seq(*as_of))])
+        }
+        // The content-frontier read: `next`, the next unminted content
+        // ordinal, a natural as every count rides.
+        Response::Frontier { next, as_of } => {
+            ("frontier", vec![("next", j_nat(next)), ("as_of", j_seq(*as_of))])
         }
         Response::SpanSet { set, as_of } => {
             ("span_set", vec![("set", j_spanset(set)), ("as_of", j_seq(*as_of))])
@@ -436,10 +446,9 @@ pub(super) fn j_response(r: &Response) -> Value {
         Response::Compare { rep, as_of } => {
             ("compare", vec![("pairs", j_corrs(&rep.0)), ("as_of", j_seq(*as_of))])
         }
-        Response::Orphans { report, as_of } => (
-            "orphans",
-            vec![("orphaned", j_addrs(&report.orphaned)), ("as_of", j_seq(*as_of))],
-        ),
+        Response::Orphans { report, as_of } => {
+            ("orphans", vec![("orphaned", j_addrs(&report.orphaned)), ("as_of", j_seq(*as_of))])
+        }
         Response::Claims { claims, as_of } => {
             ("claims", vec![("claims", j_claims(claims)), ("as_of", j_seq(*as_of))])
         }
@@ -478,17 +487,15 @@ pub(super) fn j_response(r: &Response) -> Value {
         ),
         // The audit-view edition-claim lookup (wire v7.6, PUB-8.46): one row
         // per admitted, unsuperseded claim, retracted or not.
-        Response::EditionClaims { claims, as_of } => (
-            "edition_claims",
-            vec![("claims", j_edition_claims(claims)), ("as_of", j_seq(*as_of))],
-        ),
+        Response::EditionClaims { claims, as_of } => {
+            ("edition_claims", vec![("claims", j_edition_claims(claims)), ("as_of", j_seq(*as_of))])
+        }
         // The any-principal discovery read (PUB-8.47): one row per COVERED
         // content prefix with the issuers who granted it, in prefix order;
         // `rows` is always present and EMPTY for the guest — an answer.
-        Response::UniversalGrants { rows, as_of } => (
-            "universal_grants",
-            vec![("rows", j_universal_grants(rows)), ("as_of", j_seq(*as_of))],
-        ),
+        Response::UniversalGrants { rows, as_of } => {
+            ("universal_grants", vec![("rows", j_universal_grants(rows)), ("as_of", j_seq(*as_of))])
+        }
         Response::Rejected(rej) => return j_rejection(rej),
     };
     pairs.push(("resp", Value::String(name.into())));
@@ -633,6 +640,15 @@ fn j_spec(s: &Spec) -> Value {
 
 fn j_specs(ss: &[Spec]) -> Value {
     Value::Array(ss.iter().map(j_spec).collect())
+}
+
+/// [`p_ispan`](super::p_ispan)'s inverse: the span's start address and its width.
+fn j_ispan(s: &ISpan) -> Value {
+    obj(vec![("start", j_addr(&s.start)), ("width", j_nat(&s.width))])
+}
+
+fn j_ispans(ss: &[ISpan]) -> Value {
+    Value::Array(ss.iter().map(j_ispan).collect())
 }
 
 fn j_region(r: &RegionSpec) -> Value {
@@ -788,6 +804,36 @@ fn j_items(items: &[DeliveryItem]) -> Value {
     out.finish()
 }
 
+/// The read by identity's items (wire.md §The response envelope,
+/// `i_delivery`): one object per I-position asked, `at` its address and
+/// `value` the value M4 holds there — rendered as the delivery renders ONE
+/// value, [`ValueItems`]' rule over a run of one: `{"content"}` or `{"hex"}`
+/// for a single-byte value, `{"atom"}` or `{"atom_hex"}` for a composite —
+/// or `null`, a payload option, where the position holds none. Never
+/// coalesced across positions: the items are the request's positions, one
+/// each, so a client reads a value at the address it asked.
+fn j_iitems(items: &[IItem]) -> Value {
+    Value::Array(
+        items
+            .iter()
+            .map(|item| {
+                let value = match &item.value {
+                    Some(v) => {
+                        let mut one = ValueItems::new(|s| obj(vec![("content", Value::String(s))]));
+                        one.value(v);
+                        match one.finish() {
+                            Value::Array(mut rendered) => rendered.remove(0),
+                            other => other,
+                        }
+                    }
+                    None => Value::Null,
+                };
+                obj(vec![("at", j_addr(&item.at)), ("value", value)])
+            })
+            .collect(),
+    )
+}
+
 /// Positional slots, 1-based on the wire as in M7 (slot 1 = FROM, 2 = TO,
 /// 3 = TYPE).
 fn j_link(l: &Link) -> Value {
@@ -893,11 +939,7 @@ fn j_follow_result(r: &Result<SpanSet, Invalid>) -> Value {
 }
 
 fn j_successor(s: &SuccessorSpec) -> Value {
-    obj(vec![
-        ("from", j_vspecs(&s.from)),
-        ("to", j_vspecs(&s.to)),
-        ("ty", j_successor_ty(&s.ty)),
-    ])
+    obj(vec![("from", j_vspecs(&s.from)), ("to", j_vspecs(&s.to)), ("ty", j_successor_ty(&s.ty))])
 }
 
 fn j_successor_ty(t: &SlotArg) -> Value {
@@ -935,6 +977,8 @@ pub(crate) fn op_name(k: OpKind) -> &'static str {
         OpKind::ReadLink => "read_link",
         OpKind::FollowLink => "follow_link",
         OpKind::RetrieveV => "retrieve_v",
+        OpKind::RetrieveI => "retrieve_i",
+        OpKind::ContentFrontier => "content_frontier",
         OpKind::RetrieveDocVSpan => "retrieve_doc_v_span",
         OpKind::RetrieveDocVSpanSet => "retrieve_doc_v_span_set",
         OpKind::ShowOrigin => "show_origin",

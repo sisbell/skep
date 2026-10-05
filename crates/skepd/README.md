@@ -14,14 +14,23 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   reconstructed worlds), `/chain` (the commit chain's value at a
   position), `/changes`, `/dump`, `/events` (commit stream),
   `/health`, the session routes `/challenge`, `/session`,
-  `/session/close`, and the blob upload's family `/blob/upload` — the
+  `/session/close`, the blob upload's family `/blob/upload` — the
   resumable PUT of a picture's bytes, streamed to the blob store
-  ([skep-blobs](../skep-blobs)) one chunk at a time, and the deposit read.
-- **The media door, the gate, the index and the pruner** — a picture's
-  reference cell is parsed by one parser at every `insert` and `publish`
-  and admitted only where its hash is one the caller's own cells already
-  name over a whole file, or a deposit of the caller's own under a live
-  lease; the gate's three scopes (the own scope — the base plus the
+  ([skep-blobs](../skep-blobs)) one chunk at a time, and the deposit read —
+  and `GET /blob?i=` (with `HEAD`), the FETCH: a picture's whole file
+  served by the I-address of its cell, gated by the read, checked against
+  the cell before the first byte, streamed under a permit pool with the
+  requester re-resolved mid-stream.
+- **The media door, the gate, the index, the pruner and the fetch** — a
+  media cell is read by ONE classification at every `insert` and `publish`,
+  over two kinds: a picture's reference cell, admitted only where its hash
+  is one the caller's own cells already name over a whole file, or a deposit
+  of the caller's own under a live lease; and a BLIND document's cell, a
+  commitment the board holds no byte of a file for, admitted with no deposit
+  consulted. THE FETCH (`GET /blob?i=`) serves a picture's whole file by the
+  I-address of its cell, gated by M10's read by identity and checked against
+  the cell before the first byte, under a permit pool, the requester
+  re-resolved mid-stream; the gate's three scopes (the own scope — the base plus the
   pending bytes — the venue total, the floor) bound what a deposit may
   take; the cell index — per hash the cells naming it, per account the
   base — is entered at every commit that mints a cell and rebuilt at

@@ -48,11 +48,14 @@
 //!    uploads") is RETIRED with the store: the face now names the deposit
 //!    the cell lacks.
 //! 4. `unknown_cell_schema` (`credential_refused`, PERMANENT) — a value
-//!    naming the kind that parses under no pinned schema, in the same two
-//!    positions: DOCTRINE D13's carve-out, the halt a reader makes at a
-//!    permanent act on a schema it does not know, so the day a second
-//!    schema is pinned no board holds a cell of it that was never bound
-//!    (the record's H1). The same bytes are never admitted.
+//!    naming EITHER media kind — the picture's or the blind document's —
+//!    that parses under no pinned schema, in the same two positions:
+//!    DOCTRINE D13's carve-out, the halt a reader makes at a permanent act
+//!    on a schema it does not know, so the day a second schema is pinned no
+//!    board holds a cell of it that was never bound (the record's H1). The
+//!    same bytes are never admitted. The face a client renders: "this value
+//!    names a media cell — a picture's or a blind document's — in a form
+//!    this board does not read".
 //! 5. `lease_lapsed` (`credential_refused`, PERMANENT for the request as
 //!    sent) — a cell naming a hash this principal DID deposit, whose lease
 //!    has lapsed within the horizon, or whose lease is live over a file
@@ -63,6 +66,16 @@
 //!    presence beyond that record's live lease (Op inventory 1, "a client
 //!    meeting a LAPSED lease meets its OWN refusal"). Past the horizon the
 //!    record answers no lease and the binding's refusal stands.
+//!
+//! THE KIND COLUMN (`media.md` item 4; the blind-document investigation §5
+//! (i); s6-D3): the arms above are read PER KIND. The picture's cell meets
+//! every arm. THE BLIND DOCUMENT's cell (`media/blind.rs`) meets arms 1, 2
+//! and 4 as the picture's does — `published_target` at a published target,
+//! `not_owner` at a reader's shot, the halt on a malformed body — and
+//! NEVER arms 3 and 5: it is ADMITTED into a draft and at the owner's shot
+//! with no store consulted, there being no deposit to bind (the board holds
+//! no byte of a blind picture) and no lease to lapse. The same door, the
+//! same order, one classification ahead of it.
 //!
 //! THE SHOT'S BINDING: the owner's own shot re-inserting a draft's cell asks
 //! the binding again, as its `insert` did — the whole armed set lands
@@ -96,8 +109,7 @@
 
 use skep_address::{document_of, Address, Nat};
 use skep_arrangement::{
-    published_target, shot_admission, trunk_of, Caller, PlacedSegment, Shot,
-    MAX_REINSERTED_VALUES,
+    published_target, shot_admission, trunk_of, Caller, PlacedSegment, Shot, MAX_REINSERTED_VALUES,
 };
 use skep_content::{HasContent, Val};
 use skep_febe::{Disposition, Op};
@@ -153,26 +165,35 @@ impl MediaRefusal {
     }
 }
 
-/// What a value is to this door: a cell, a value naming the kind under no
-/// pinned schema, or — `None` — nothing it answers.
+/// What a value is to this door, BY KIND (`media.md` item 4, "ONE
+/// CLASSIFICATION"; the blind-document investigation §5): the picture's
+/// cell, which the binding is asked about; the BLIND document's cell, which
+/// the target's and the owner's arms judge as the picture's and the
+/// binding never sees — the board holds no byte of its picture, so there is
+/// no deposit to bind and no gate to ask (`media/blind.rs`); a value naming
+/// either kind under no pinned schema; or — `None` — nothing it answers.
 #[derive(Debug, Clone)]
 enum Named {
     Cell(cell::Cell),
+    Blind,
     UnknownSchema,
 }
 
-/// The one parse, read for what the door acts on.
+/// The one classification, read for what the door acts on.
 fn names_the_kind(value: &Val) -> Option<Named> {
-    match cell::parse(value.as_bytes()) {
-        Ok(c) => Some(Named::Cell(c)),
-        Err(refusal) if refusal.names_kind() => Some(Named::UnknownSchema),
-        Err(_) => None,
+    match cell::classify(value.as_bytes()) {
+        cell::Class::Picture(Ok(c)) => Some(Named::Cell(c)),
+        cell::Class::Blind(Ok(_)) => Some(Named::Blind),
+        cell::Class::Picture(Err(_)) | cell::Class::Blind(Err(_)) => Some(Named::UnknownSchema),
+        cell::Class::None(_) => None,
     }
 }
 
 /// Arms 3, 4 and 5 — the value's own verdict once the target's and the
-/// owner's arms have passed: a cell is asked of THE BINDING at the gate,
-/// `None` where it is admitted.
+/// owner's arms have passed: a picture's cell is asked of THE BINDING at
+/// the gate, `None` where it is admitted; a blind cell is ADMITTED with no
+/// store consulted — the kind's whole deposit story is its owner's, off
+/// this board.
 fn value_arm(named: Named, gate: &MediaGate, principal: PrincipalId) -> Option<MediaRefusal> {
     match named {
         Named::Cell(c) => match gate.binding(principal, &c) {
@@ -180,6 +201,7 @@ fn value_arm(named: Named, gate: &MediaGate, principal: PrincipalId) -> Option<M
             Binding::Lapsed => Some(MediaRefusal::LeaseLapsed),
             Binding::Unbound => Some(MediaRefusal::UnboundCell),
         },
+        Named::Blind => None,
         Named::UnknownSchema => Some(MediaRefusal::UnknownCellSchema),
     }
 }
@@ -227,6 +249,8 @@ pub(crate) fn media_door(
         | Op::ReadLink { .. }
         | Op::FollowLink { .. }
         | Op::RetrieveV { .. }
+        | Op::RetrieveI { .. }
+        | Op::ContentFrontier { .. }
         | Op::RetrieveDocVSpan { .. }
         | Op::RetrieveDocVSpanSet { .. }
         | Op::ShowOrigin { .. }
@@ -353,7 +377,7 @@ fn publish_arm(
 mod tests {
     use std::time::Duration;
 
-    use skep_arrangement::{Deposit, ShotRun, Run, VPos};
+    use skep_arrangement::{Deposit, Run, ShotRun, VPos};
     use skep_blobs::HashFunction;
     use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
     use skep_namespace::{head_document, system_account, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL};
@@ -425,15 +449,41 @@ mod tests {
         let h = head_document();
         let door = |op: Op, p: PrincipalId| media_door(world, &op, p, &gate);
 
-        assert_eq!(door(insert(&draft, canonical()), SYSTEM_PRINCIPAL), Some(MediaRefusal::UnboundCell));
+        assert_eq!(
+            door(insert(&draft, canonical()), SYSTEM_PRINCIPAL),
+            Some(MediaRefusal::UnboundCell)
+        );
         assert_eq!(
             door(insert(&draft, unknown_schema()), SYSTEM_PRINCIPAL),
             Some(MediaRefusal::UnknownCellSchema)
         );
         assert_eq!(door(insert(&draft, b"prose".to_vec()), SYSTEM_PRINCIPAL), None);
         assert_eq!(door(insert(&draft, vec![0x0b, 1, 0, 1, 2]), SYSTEM_PRINCIPAL), None, "a def");
-        assert_eq!(door(insert(&h, canonical()), SYSTEM_PRINCIPAL), Some(MediaRefusal::PublishedTarget));
-        assert_eq!(door(insert(&h, unknown_schema()), SYSTEM_PRINCIPAL), Some(MediaRefusal::PublishedTarget));
+        // THE BLIND KIND's column: admitted into a draft with no store
+        // consulted, `published_target` into H, the halt on its malformed body.
+        let blind =
+            super::super::blind::encode(&super::super::blind::BlindCell { commitment: [0xcd; 32] })
+                .into_bytes();
+        let mut blind_sized = blind.clone();
+        blind_sized.splice(blind.len() - 1.., br#","size":5}"#.iter().copied());
+        assert_eq!(
+            door(insert(&draft, blind.clone()), SYSTEM_PRINCIPAL),
+            None,
+            "a blind cell: admitted, no binding asked"
+        );
+        assert_eq!(door(insert(&h, blind), SYSTEM_PRINCIPAL), Some(MediaRefusal::PublishedTarget));
+        assert_eq!(
+            door(insert(&draft, blind_sized), SYSTEM_PRINCIPAL),
+            Some(MediaRefusal::UnknownCellSchema)
+        );
+        assert_eq!(
+            door(insert(&h, canonical()), SYSTEM_PRINCIPAL),
+            Some(MediaRefusal::PublishedTarget)
+        );
+        assert_eq!(
+            door(insert(&h, unknown_schema()), SYSTEM_PRINCIPAL),
+            Some(MediaRefusal::PublishedTarget)
+        );
         let declared = Op::Insert {
             doc: h.clone(),
             at: VPos::content(Nat::from(1u32)),
@@ -441,7 +491,11 @@ mod tests {
             deposit: Deposit::Declared(skep_engine::types::t_grant().clone()),
         };
         assert_eq!(door(declared, SYSTEM_PRINCIPAL), Some(MediaRefusal::PublishedTarget));
-        assert_eq!(door(insert(&draft, canonical()), BOOTSTRAP_PRINCIPAL), None, "not the owner: the store's");
+        assert_eq!(
+            door(insert(&draft, canonical()), BOOTSTRAP_PRINCIPAL),
+            None,
+            "not the owner: the store's"
+        );
 
         let shot = |draft: Option<Address>| Op::Publish {
             doc: h.clone(),
@@ -454,7 +508,10 @@ mod tests {
                 }],
             },
         };
-        assert_eq!(door(shot(Some(draft.clone())), SYSTEM_PRINCIPAL), Some(MediaRefusal::UnboundCell));
+        assert_eq!(
+            door(shot(Some(draft.clone())), SYSTEM_PRINCIPAL),
+            Some(MediaRefusal::UnboundCell)
+        );
         // The same runs with no draft named: the store's `bad_run` stands
         // (the run's origin is not `H`), and this door answers nothing.
         assert_eq!(door(shot(None), SYSTEM_PRINCIPAL), None);
@@ -476,7 +533,8 @@ mod tests {
         // below the door, as the first was.
         let bytes = b"hello";
         let hex = blake3::hash(bytes).to_hex();
-        let real = || format!(r#"{{"type":"{}","hash":"{hex}","size":5}}"#, cell::KIND).into_bytes();
+        let real =
+            || format!(r#"{{"type":"{}","hash":"{hex}","size":5}}"#, cell::KIND).into_bytes();
         let (draft2, _) = engine
             .namespace()
             .create_new_document(SYSTEM_PRINCIPAL, &system_account(), Some(false))
@@ -515,7 +573,10 @@ mod tests {
             stream.append(bytes, now).unwrap();
             stream.finish(interval, now).unwrap();
         };
-        assert_eq!(door(insert(&draft2, real()), SYSTEM_PRINCIPAL), Some(MediaRefusal::UnboundCell));
+        assert_eq!(
+            door(insert(&draft2, real()), SYSTEM_PRINCIPAL),
+            Some(MediaRefusal::UnboundCell)
+        );
         assert_eq!(door(shot2(), SYSTEM_PRINCIPAL), Some(MediaRefusal::UnboundCell));
         deposit(BOOTSTRAP_PRINCIPAL, Duration::from_millis(1_000_000));
         assert_eq!(
@@ -524,13 +585,29 @@ mod tests {
             "another principal's deposit admits nothing of this one's"
         );
         deposit(SYSTEM_PRINCIPAL, Duration::from_millis(1_000));
-        assert_eq!(door(insert(&draft2, real()), SYSTEM_PRINCIPAL), None, "admitted under its own live lease");
+        assert_eq!(
+            door(insert(&draft2, real()), SYSTEM_PRINCIPAL),
+            None,
+            "admitted under its own live lease"
+        );
         assert_eq!(door(shot2(), SYSTEM_PRINCIPAL), None, "the owner's shot too");
-        let wrong_size = format!(r#"{{"type":"{}","hash":"{hex}","size":4}}"#, cell::KIND).into_bytes();
-        assert_eq!(door(insert(&draft2, wrong_size), SYSTEM_PRINCIPAL), Some(MediaRefusal::UnboundCell), "the size check");
-        assert_eq!(door(insert(&h, real()), SYSTEM_PRINCIPAL), Some(MediaRefusal::PublishedTarget), "the target first, lease or none");
+        let wrong_size =
+            format!(r#"{{"type":"{}","hash":"{hex}","size":4}}"#, cell::KIND).into_bytes();
+        assert_eq!(
+            door(insert(&draft2, wrong_size), SYSTEM_PRINCIPAL),
+            Some(MediaRefusal::UnboundCell),
+            "the size check"
+        );
+        assert_eq!(
+            door(insert(&h, real()), SYSTEM_PRINCIPAL),
+            Some(MediaRefusal::PublishedTarget),
+            "the target first, lease or none"
+        );
         gate.advance_clock_ms(1_000);
-        assert_eq!(door(insert(&draft2, real()), SYSTEM_PRINCIPAL), Some(MediaRefusal::LeaseLapsed));
+        assert_eq!(
+            door(insert(&draft2, real()), SYSTEM_PRINCIPAL),
+            Some(MediaRefusal::LeaseLapsed)
+        );
         assert_eq!(door(shot2(), SYSTEM_PRINCIPAL), Some(MediaRefusal::LeaseLapsed));
         assert_eq!(engine.kernel().current_seq(), snap.seq(), "the door commits nothing");
     }

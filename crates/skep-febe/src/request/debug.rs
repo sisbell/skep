@@ -106,6 +106,10 @@ impl fmt::Debug for Op {
                 f.debug_struct("FollowLink").field("a", a).field("slot", slot).finish()
             }
             Op::RetrieveV { specs } => f.debug_struct("RetrieveV").field("specs", specs).finish(),
+            Op::RetrieveI { spans } => f.debug_struct("RetrieveI").field("spans", spans).finish(),
+            Op::ContentFrontier { doc } => {
+                f.debug_struct("ContentFrontier").field("doc", doc).finish()
+            }
             Op::RetrieveDocVSpan { doc } => {
                 f.debug_struct("RetrieveDocVSpan").field("doc", doc).finish()
             }
@@ -142,21 +146,15 @@ impl fmt::Debug for Op {
                 .field("cur", cur)
                 .field("n", n)
                 .finish(),
-            Op::WindowFtt { q, cur, n } => f
-                .debug_struct("WindowFtt")
-                .field("q", q)
-                .field("cur", cur)
-                .field("n", n)
-                .finish(),
+            Op::WindowFtt { q, cur, n } => {
+                f.debug_struct("WindowFtt").field("q", q).field("cur", cur).field("n", n).finish()
+            }
             Op::RetrieveEndsets { d, region } => {
                 f.debug_struct("RetrieveEndsets").field("d", d).field("region", region).finish()
             }
-            Op::Project { a, slot, d } => f
-                .debug_struct("Project")
-                .field("a", a)
-                .field("slot", slot)
-                .field("d", d)
-                .finish(),
+            Op::Project { a, slot, d } => {
+                f.debug_struct("Project").field("a", a).field("slot", slot).field("d", d).finish()
+            }
             Op::DiscoverableFrom { a, d } => {
                 f.debug_struct("DiscoverableFrom").field("a", a).field("d", d).finish()
             }

@@ -44,19 +44,21 @@ const LAYERS: &[(&str, u8)] = &[
     // 4 — the session layer, the registry sequence's producers among it.
     ("auth", 4),
     ("auth::policy::registry", 4),
-    // 5 — the write path, and the media door, gate, deposit read, cell index
-    // and pruner beside it.
+    // 5 — the write path, and the media door, gate, deposit read, cell index,
+    // pruner and serve beside it.
     ("write_path", 5),
     ("media", 5),
     ("media::deposit_read", 5),
     ("media::gate", 5),
     ("media::index", 5),
     ("media::pruner", 5),
+    ("media::serve", 5),
     // 6 — the leaves.
     ("codec", 6),
     ("history", 6),
     ("limits", 6),
     ("media::cell", 6),
+    ("media::blind", 6),
     ("notice", 6),
     ("permits", 6),
     ("serial", 6),

@@ -43,20 +43,27 @@ acknowledged only after it is durable on disk.
 | `GET /changes`   | The pull delta feed of committed writes, masked at the presented token's class (§The change feed). |
 | `POST /blob/upload` | Create a blob upload — the PUT — declaring its length, with or without its first bytes; `GET` on the same path is the deposit read (§Media). |
 | `PATCH /blob/upload/<id>` | Resume an upload from its offset; `GET` its progress; `DELETE` ends it (§Media). |
+| `GET /blob?i=<address>` | THE FETCH — serve a picture's whole file by the I-address of its cell, gated as the read is; `HEAD` for the head alone (§Media). |
 | `GET /`          | The embedded authoring client, one HTML file (only in `client` builds — the feature is default-off). |
 | `GET /dump`      | Deterministic world dump; `?at=N` for a committed position (only in `observe` builds). |
 
 There are no other routes; every known path additionally answers `OPTIONS`
 — the CORS preflight (§Cross-origin access): the common one names `GET,
-POST, OPTIONS`, and the blob upload's family names its own four methods.
-The daemon listens on **127.0.0.1 only**.
+POST, OPTIONS`, the blob upload's family names its own four methods, and the
+blob fetch `/blob` names its own two (`GET, HEAD, OPTIONS`). The daemon
+listens on **127.0.0.1 only**.
 
 ### Transport
 
 One request per connection: every response carries `Connection: close`, so
 a client opens a fresh connection per call. `GET /events` is the one
 long-lived response — a single unbounded body, ended by the daemon (clean
-close) at shutdown. HTTP/1.0 and 1.1 are accepted; request bodies ride
+close) at shutdown. `GET /blob?i=` is the one response the daemon STREAMS —
+a whole file written chunk by chunk, its `Content-Length` the file's size —
+and the one it may end by a RESET (TCP `SO_LINGER` zero) short of that
+length rather than a clean close: a stream whose requester is re-resolved
+away mid-transfer, or whose idle or transfer bound fires, is cut so no
+client reads a truncated file as the whole (§Media, THE FETCH). HTTP/1.0 and 1.1 are accepted; request bodies ride
 with `Content-Length` (absent means empty; `Transfer-Encoding` is refused
 with `400 malformed_http`); `Expect: 100-continue` is honored. Bodies are
 capped per route — **8 MiB** on the frame routes (`/op`, `/op-at`),
@@ -273,13 +280,19 @@ Every response — every status, every endpoint, rejections and transport
 errors included — carries `Access-Control-Allow-Origin: *` and
 `Access-Control-Expose-Headers: Skepd-Session` (the death signal below
 is not a CORS-safelisted response header; without the exposure a page on
-a configured non-loopback origin could never read it). The four
+a configured non-loopback origin could never read it). The
 CLASS-VARYING routes carry two more:
 `Cache-Control: no-store` and `Vary: Skepd-Session` ride every answer of
-`POST /op`, `POST /op-at`, `GET /changes` and `GET /dump`, because each
-is a function of the presented token's class and so may be neither
-stored nor served to another requester. `GET /health` is class-invariant
-and carries neither; `GET /events` carries its own `Cache-Control:
+`POST /op`, `POST /op-at`, `GET /changes` and `GET /dump`, the blob
+upload's family and the blob fetch `GET /blob?i=` — each a function of the
+presented token's class and so neither stored nor served to another
+requester. The fetch's admitted answer carries two more still, inert ones
+over the bytes it serves: `X-Content-Type-Options: nosniff`, so no browser
+reads a type off bytes the daemon declared none for, and
+`Content-Security-Policy: sandbox`, so a file navigated to directly runs
+nothing and reaches nothing of the daemon's origin (§Media, THE FETCH).
+`GET /health` is class-invariant and carries neither of the varying pair;
+`GET /events` carries its own `Cache-Control:
 no-cache` (§The commit stream). `OPTIONS` on any known path — the
 session endpoints included — answers the preflight:
 
@@ -800,6 +813,13 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 507    | `deposit_refused`           | the gate refused the deposit: `scope` names `own`, `venue` or `floor`, `ended` whether the upload was ended (refused as the body was written) or kept (refused before it), `offset` the bytes received (§Media) |
 | 500    | `blob_io`                   | the blob store refused I/O; the upload stands at its last durable point (§Media) |
 | 503    | `index_rebuilding`          | the cell index is being rebuilt from the board after an open, and this request is one of its three readers — the blob upload's creation or resume, or the deposit read; retry shortly (§Media) |
+| 404    | `no_value`                  | the blob fetch's `i` names an element position the document never minted (§Media, THE FETCH) |
+| 404    | `not_a_cell`                | the fetch's `i` holds a value naming no media cell — prose, a def, a record of another kind (§Media, THE FETCH) |
+| 404    | `unknown_cell_schema`       | the fetch's `i` holds a value naming a media kind under no schema this board reads — D13's halt (§Media, THE FETCH) |
+| 404    | `blind_cell`                | the fetch's `i` holds a BLIND document's cell: its picture is its owner's, and this board holds no byte of it (§Media, THE FETCH) |
+| 404    | `blob_missing`              | the fetch's cell names a hash the store has no file for; carries `hash` and `size`, the cell's (§Media, THE FETCH) |
+| 404    | `blob_damaged`              | the fetch's file is not the deposit the cell names — the wrong length, or the wrong bytes under the right name; carries `hash` and `size` (§Media, THE FETCH) |
+| 503    | `fetch_busy`                | all fetch permits are in use; retry shortly (§Media, THE FETCH) |
 | 410    | `history_reclaimed`         | the position (`/op-at`) or the `since` fence (`/changes`) predates retained history (carries `floor` when known) |
 | 503    | `history_busy`              | all historical-reconstruction permits (`/op-at`, `/dump?at`, `/chain?at`) are in use; retry shortly |
 | 503    | `scan_busy`                 | all class-scan permits are in use — a `find_links_ftt`/`count_ftt`/`window_ftt` on `/op` whose four-set constrains `ty` alone (§Link discovery reads); carries `op`; retry shortly |
@@ -1047,6 +1067,28 @@ withheld item at its own position, never coalesced:
 <!-- wire: response delivery_withheld -->
 ```json
 {"as_of":9,"items":[{"content":"a"},{"withheld":{"origin":"1.0.1.0.2","width":"3"}}],"resp":"delivery"}
+```
+
+**`i_delivery`** — retrieve_i (the read by identity): one item per
+I-position asked, in span order, `at` the address and `value` the value
+M4 holds there rendered as one delivery value (`content`/`hex` for a
+per-byte value, `atom`/`atom_hex` for a composite) — or `null`, a position
+the document never minted or a link position. Never coalesced across
+positions: the items are the request's, one each. This example answers a
+per-byte value at the first position and `null` at the second:
+
+<!-- wire: response i_delivery -->
+```json
+{"as_of":9,"items":[{"at":"1.0.1.0.1.0.1.1","value":{"content":"h"}},{"at":"1.0.1.0.1.0.1.2","value":null}],"resp":"i_delivery"}
+```
+
+**`frontier`** — content_frontier: `next`, the next unminted content
+ordinal under the document — its mint count plus one — a natural as every
+count rides the wire.
+
+<!-- wire: response frontier -->
+```json
+{"as_of":9,"next":"5","resp":"frontier"}
 ```
 
 **`span_set`** — retrieve_doc_v_span / retrieve_doc_v_span_set / project.
@@ -2477,8 +2519,12 @@ resumable PUT, the blob store under `blobs/` in the data dir (the files,
 the partials, the upload records and the lease log), the gate's three
 scopes, and the deposit read — and, beside them, THE CELL INDEX the base
 and the pruner read, THE READINESS REFUSAL of its three readers, and THE
-PRUNER's pass (each below). No fetch route exists yet: nothing here
-serves a byte.
+PRUNER's pass (each below) — and THE FETCH: `GET /blob?i=<address>` serves
+a picture's whole file by the I-address of its cell, gated by the read's
+own predicate, the file checked against the cell before its first byte
+(below). A second cell kind rides beside the picture's: THE BLIND
+DOCUMENT's cell, a commitment the board holds no byte of a file for, read
+by the one classification the door and the fetch run for both (below).
 
 **The cell's schema (v1).** ONE JSON object, three members in THIS
 order, no whitespace, nothing else:
@@ -2521,6 +2567,32 @@ lease, the index, from lane B — the designation and the hex are the key
 together, so a second schema's hash of the same width is never read
 under this one's rule.
 
+**The blind document's cell (v1).** A SECOND KIND beside the picture's,
+for a media document whose picture is kept on its OWNER's own machine: the
+board holds a COMMITMENT to the file and never its bytes. ONE JSON object,
+two members in THIS order, no whitespace, nothing else:
+
+| member | JSON type | value |
+| --- | --- | --- |
+| `type` | string | the blind kind's address — INTERIM `1.1.0.1.0.1.0.3.88` (the pins below) |
+| `commitment` | string | 32 bytes as 64 LOWERCASE hexadecimal characters — a keyed hash the owner's client computes, confirming nothing to a holder of a candidate file |
+
+The blind cell carries NO `size` and NO `hash`: nothing in it names a file,
+and nothing the board does for one reads a file, a lease or an index entry.
+The canonical rule is the picture's — `parse(b)` answers a blind cell only
+where `b == encode(parse(b))` — so a `size` member, a `hash` member, a
+second `commitment`, the members reordered, uppercase hex, 63 or 65 hex
+characters, a space, a trailing byte each is NO CELL, and a body past the
+cap — the SAME 1024-byte cap, one for every media cell kind — is parsed by
+no reader of a cell at all. The blind cell's own vector set,
+`crates/skepd/tests/it/fixtures/media/blind-cells.json`, mirrors the
+picture's and is run by every parser in its own gate.
+
+ONE CLASSIFICATION reads both kinds: a value's `type` is read once, and the
+named kind's own schema check follows — so two kinds cost one JSON tree,
+under one cap. A value naming EITHER kind under no schema this build reads
+is the halt below; a value naming neither kind is ordinary.
+
 **The door.** ONE step of the write path, taken after the plain
 sequence's admission — the mint class, the `replaces` fence, the
 board-state gate and the write-path check (§Credential refusals) all
@@ -2558,14 +2630,25 @@ lease arm alone decides: the door is not one of the index's readers and
 never waits; a cell refused `lease_lapsed` in that window is a refusal
 for the request as sent, its act the re-PUT, and nothing permanent lands.
 
+THE KIND COLUMN: the arms above are read PER KIND. The picture's cell meets
+every arm. THE BLIND DOCUMENT's cell meets `published_target` and
+`not_owner` and the halt as the picture's does — a blind cell into a
+published target is `published_target`, a reader's shot of a draft holding
+one is `not_owner`, a malformed blind body is `unknown_cell_schema` — and
+NEVER `unbound_cell` or `lease_lapsed`: it is ADMITTED into a draft and at
+the owner's own shot with no deposit consulted, the board holding no byte of
+a blind picture and there being no hash to bind. The same door, the same
+order, one classification ahead of it.
+
 The faces (PUB-6.7), the client's to render, the wire carrying the token:
 
 * `unbound_cell` — "this picture's bytes were not deposited here under
   your account: upload the file, then place the cell its answer spells."
   (P10's fence-only face, "this board takes no uploads", is RETIRED with
   the store: the face now names the deposit the cell lacks.)
-* `unknown_cell_schema` — "this value names a picture cell in a form this
-  board does not read."
+* `unknown_cell_schema` — "this value names a media cell — a picture's or a
+  blind document's — in a form this board does not read." (The door's and
+  the fetch's, one face for both kinds.)
 * `lease_lapsed` — "this picture's deposit is gone: upload the file again."
 
 Everything the store and the gates ahead already answer stands, each
@@ -2751,19 +2834,83 @@ deferred step did not reach is removed under the same arm. The pass
 never touches a partial whose upload stands and reads no directory's
 bytes as a scope (M-I6: the scopes stay record-derived).
 
+**THE FETCH** (media lane D; the media record's Op inventory 3; the ruled
+v1 cut — whole-file serving, the hash checked before the first byte):
+`GET /blob?i=<address>`, with `HEAD /blob?i=<address>` for the head alone.
+The one path beside the upload family, TOKEN-ACCEPTING (the session token
+resolved as `/op` resolves it, the death signal carried the same) and
+CLASS-VARYING; its answer the daemon's one streamed response. The query is
+exactly `i=<address>`, the address dotted-decimal. The order, in full:
+
+1. `i` names an ELEMENT position of some document, or `400 malformed_blob`.
+2. THE GATE is the read by identity: `retrieve_i` of the one span `{i, 1}`,
+   run as the presented session (the guest where none was). A rejection it
+   answers rides M10's own envelope — the `{"resp":"rejected"}` document,
+   the bytes `/op` would answer for the same read — under the HTTP status
+   its class takes on this byte route: `403` for `withheld`, the one M10
+   rejection the fetch's `{i, 1}` span reaches — the picture is one you may
+   not read, named by its home. Nothing of a value you may not read is
+   served (M-I2 (a): the fetch is gated by the same predicate as the read).
+   An address the read holds no value at — unminted, or under a document
+   the read minted nothing in — is `no_value` below, never a registration
+   refusal: the gate is the read, which mints nothing.
+3. THE VALUE at `i`, classified by the one classification (above):
+   `404 no_value` where the document minted none; `404 not_a_cell` where it
+   names no media kind; `404 unknown_cell_schema` where it names a media kind
+   under no schema this build reads; `404 blind_cell` where it is a blind
+   document's cell — its picture its owner's, no byte of it here, and no
+   store asked; else the picture's cell, whose `hash` and `size` the file is
+   held to.
+4. THE WHOLE FILE, checked before its first byte: the store's file under the
+   cell's hash, read whole, its length the cell's `size` and its BLAKE3 the
+   cell's `hash`, or `404 blob_missing` (no file) / `404 blob_damaged` (the
+   wrong length, or the wrong bytes under the right name) — each carrying
+   `hash` and `size`, the cell's own, which the requester could read at the
+   address already. One byte of a file the cell does not name is never
+   served, nor one byte of this one before the check completes.
+5. THE PERMIT: a fetch holds its whole file from the check to the last byte,
+   so the route admits at most a POOL of answers at once — `503 fetch_busy`,
+   retry-class as `history_busy` is, past the pool (M-I7 (b): bounded by a
+   pool, never a queue). The pool is the route's memory bound, the per-file
+   cap times the pool.
+
+The admitted answer is `200` streaming the file: `Content-Type:
+application/octet-stream` (the daemon reads no type off the bytes and
+declares none it did not read; a page names the type from the cell's kind),
+`Content-Length` the file's size, the two inert headers (§Cross-origin
+access), and the body the file's bytes one chunk at a time. A `HEAD` is that
+head and no body. The requester is RE-RESOLVED MID-STREAM (M-I2 (g)): between
+chunks, at a byte interval or a time interval, whichever comes first, the
+token is resolved against the head again and the gate re-run — a stream whose
+requester died or whose gate now withholds is ended by a RESET, short of the
+declared length, never a clean close (§Transport). A `HEAD`'s or a refusal's
+body is JSON; only the `200` streams.
+
 **INTERIM PINS** — the subsystem design's, carried by the build and each
 confirmed at the media round (the board's sm-Q8):
 
 * the cell kind's address, `1.1.0.1.0.1.0.3.89` — INTERIM, a TEST-ONLY
   address under the commons media range 3.80–3.89, which is unallocated;
   the allocation lands by one constant;
+* the blind document's kind, `1.1.0.1.0.1.0.3.88` — INTERIM, TEST-ONLY,
+  beside the picture's in the same range; and its `commitment`, 32 bytes as
+  64 lowercase hex, the only member beside `type`;
 * the designation, `blake3` — INTERIM in name, the hash itself ruled
   (BLAKE3-256, 32 bytes as 64 lowercase hex);
 * the cell's cap, 1024 bytes — INTERIM; a canonical cell is under 140
   bytes, and the cap bounds the JSON tree a hostile body naming the kind
-  can command before it is refused;
+  can command before it is refused — one cap for every media cell kind;
 * the three refusal tokens, `unbound_cell`, `unknown_cell_schema` and
   `lease_lapsed`, and their class, PERMANENT for the request as sent;
+* the fetch's spellings — the path `/blob?i=<address>`, its two methods
+  (`GET`, `HEAD`), its query `i`, its seven refusal names with their
+  statuses above, the content type `application/octet-stream`, and the two
+  inert headers `X-Content-Type-Options: nosniff` and
+  `Content-Security-Policy: sandbox`;
+* the fetch pool, 2 — the most whole-file answers held at once, the memory
+  bound the per-file cap times it (128 MiB); and the mid-stream re-check's
+  two intervals, 1 MiB of bytes and 5 s on the media gate's clock,
+  whichever comes first;
 * the route's spellings — the family `/blob/upload`, its five method/path
   pairs, the queries `length` and `offset`, the interim header
   `Upload-Id`, the answers' members, and the nine refusal names with
@@ -2806,11 +2953,14 @@ cell says nothing of whether another account deposited the file — a
 stranger's cell over a deposited hash is `unbound_cell`, as over any
 other.
 
-What this build does NOT carry, by name: the fetch route and the read by
-identity — nothing here serves a byte; a cell is placed, indexed, counted
-and kept, and its bytes are read by no route yet. The door's armed set
-above is whole, so no later addition moves one state's answer from one
-code to another (PATTERNS P6).
+What this build does NOT carry, by name: the UPLOAD-SIDE SWEEP of the two
+kinds across the gate and the index — a default per-file blind-cell count,
+the past-cap classification by prefix at the door and the index (a body past
+the cap that opens with a kind's prefix is ordinary bytes to this build, not
+a halt), the operator's tools over the two kinds, and the upload pool — all
+owed; the video-era `extent` member (ms5-D2); and any media kind past the
+two. The door's armed set and the fetch's are each whole, so no later
+addition moves one state's answer from one code to another (PATTERNS P6).
 
 ### Registry — the twelve rows, the two bodies and the record grade
 
@@ -3283,6 +3433,38 @@ submitted order. → `delivery`. A delivery past `MAX_DELIVERY_ITEMS` =
 {"op":"retrieve_v","specs":[{"doc":"1.0.1.0.1","span":{"start":"1.1","width":"0.11"}}]}
 ```
 
+**`retrieve_i`** — THE READ BY IDENTITY (AUTH-6.38–6.40): deliver the
+values at the I-ADDRESSES the `spans` name, each `{start, width}` a run of
+`width` content positions from the element address `start`, in span order.
+`start` is a T4-valid ELEMENT address of a document's content subspace and
+`width` a natural; a span whose `start` is any other level is
+`not_content_subspace` and an empty `width` is `empty_width`, each by index
+(§Rejection codes). → `i_delivery`, one item per position — the value M4
+holds there, or `null` where the document minted none (a position never
+minted, or a link position). The read is gated by the SAME predicate the
+arrangement reads take (§The read predicate): each span's document is
+DERIVED from its `start` and consulted before the read, so a span into a
+document you may not read is `withheld` naming that document, and nothing
+of a value you may not read is delivered. A delivery past
+`MAX_DELIVERY_ITEMS` = 131072 items is refused whole (`too_many_items`).
+
+<!-- wire: request retrieve_i -->
+```json
+{"op":"retrieve_i","spans":[{"start":"1.0.1.0.1.0.1.1","width":"5"}]}
+```
+
+**`content_frontier`** — the next unminted content ordinal under `doc` —
+its mint count plus one, the home's content chain peeked and not advanced
+(AUTH-6.38). `doc` is a document argument: unreadable is `withheld`,
+unregistered is `doc_not_registered`. → `frontier`. Every value `doc` ever
+minted — arranged, deleted, or never placed — lies below the frontier, so
+the read says how many it minted and nothing of what they hold.
+
+<!-- wire: request content_frontier -->
+```json
+{"doc":"1.0.1.0.1","op":"content_frontier"}
+```
+
 **`retrieve_doc_v_span`** — the single V-span covering `doc`'s
 arrangement. → `span_set`.
 
@@ -3711,12 +3893,14 @@ cut answers `beyond_head` or a different value. Below the floor nothing
 answers, and the answer is the serving daemon's word, as every answer
 here is.
 
-Routed, not yet in the protocol: an I-ADDRESSED value read as of a
-position — the home's mint frontier at N plus the values under it, a
-fact no arrangement-addressed read composes (an address minted and
-later un-arranged answers like one never minted). Named here because
-this document owns it when it lands; its consumers are the mirror fold
-and realm verification. No such op exists today.
+The I-ADDRESSED value read lands here: `retrieve_i` (the read by identity)
+and `content_frontier` (the home's mint frontier) are reads like any other,
+so `/op-at` answers each as of a committed position — the frontier at N plus
+the values under it, a fact no arrangement-addressed read composes (an
+address minted and later un-arranged answers like one never minted). Their
+consumers are the mirror fold and realm verification, and the blob fetch's
+own gate (§Media). The live forms are on `/op` (§Content & provenance
+reads).
 
 ## The commit stream
 

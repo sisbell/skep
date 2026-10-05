@@ -61,6 +61,39 @@ pub(crate) const BLOB_CHUNK: usize = 64 * 1024;
 /// connection keeps its upload until the expiry).
 pub(crate) const BLOB_IDLE_BOUND: Duration = Duration::from_secs(30);
 
+/// THE FETCH POOL (the media record's Op inventory 3: "EVERY v1 ANSWER
+/// THEREFORE READS ITS WHOLE FILE BEFORE ITS FIRST BYTE, AND THE ROUTE ADMITS
+/// AT MOST A PERMIT POOL OF ANSWERS AT ONCE"; PATTERNS P29) — 2, INTERIM
+/// (sm-Q8): the most `GET /blob?i=` answers held whole at once. Each holds
+/// its file in memory from the check to the last byte written (`media/
+/// serve.rs`), so what the route commands is at most [`MAX_BLOB_BYTES`]
+/// times this, 128 MiB; a fetch past the pool is refused `503 fetch_busy`,
+/// retry-class as `history_busy` is, and faced PENDING by a client. Counted
+/// into `MIN_WORKERS` beside the reconstruction and class-scan pools
+/// (`server/listen.rs`), so a caller holding every permit of all three still
+/// leaves a worker free. The reconstruction pool's own number, for its
+/// reason: two keep a page of figures serviceable without letting a
+/// stranger's fetches occupy the worker pool.
+pub(crate) const MAX_CONCURRENT_FETCHES: usize = 2;
+
+/// THE BYTE INTERVAL of a fetch (the media record's Op inventory 3, "AT A
+/// BYTE INTERVAL THE SUBSYSTEM DESIGN PINS WITH THE ROUTE"; the register
+/// M-I2 (g); the ruling s6-E1 (a)) — 1 MiB, INTERIM: the most bytes a
+/// stream writes between two re-resolutions of its requester and its gate,
+/// so a session killed or a grant revoked mid-transfer fetches no draft
+/// byte past the interval in flight. Sixteen chunks of [`BLOB_CHUNK`]; the
+/// re-check is one `authenticate` and one `retrieve_i` of the span, cheap
+/// for a published origin and a guest, the gate's one re-read for a draft's
+/// grantee.
+pub(crate) const FETCH_RECHECK_BYTES: u64 = 1024 * 1024;
+
+/// THE TIME INTERVAL beside it (the record's "OR AT A TIME INTERVAL PINNED
+/// BESIDE IT, WHICHEVER COMES FIRST"; s6-leak-b) — 5 s, INTERIM: a reader
+/// draining at a trickle holds no interval open past this; the re-check
+/// runs at whichever of the two bounds comes first, judged on the media
+/// gate's clock so a suite drives it through the clock seam.
+pub(crate) const FETCH_RECHECK_INTERVAL: Duration = Duration::from_secs(5);
+
 /// THE PRUNER's CADENCE — one hour, INTERIM (D1: a daemon constant for a
 /// cadence, as the nonce TTL is): the interval between two passes of the
 /// pruner over `blobs/` (`media/pruner.rs`), the first pass running once

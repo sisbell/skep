@@ -1,0 +1,189 @@
+{
+  "note": "THE ONE VECTOR SET of the blind document's cell (media.md item 4, TWO SCHEMAS, TWO VECTOR SETS, ONE CLASSIFICATION, ONE CAP; the blind-document investigation section 5 (i); the rulings s6-D3, bd-D1, bd-D3; PATTERNS P5): the mirror of cells.json for the second kind, run by every parser of the cell -- skepd's media/blind.rs, the shell's, the browser page's -- in its own gate. The rule is the arbiter: parse(b) answers a blind cell only where b == encode(parse(b)). `verdict` is `cell` (admitted: the body IS the canonical form) or `no_cell`; `names_kind` says whether the body's `type` member names THIS kind, which is what a reader whose null permits a permanent act halts on (DOCTRINE D13's carve-out) -- the daemon's write door refuses such a value by name (unknown_cell_schema) and the fetch route answers it by the same name; a body naming the picture's kind is the picture parser's and names nothing to this one. A blind cell carries a commitment and nothing else: no size (bd-D3), no hash -- nothing the board can read a file by. The cap is the picture kind's, one for every media cell kind. Each pin here is INTERIM (the board's sm-Q8).",
+  "kind": "1.1.0.1.0.1.0.3.88",
+  "cap": 1024,
+  "vectors": [
+    {
+      "name": "canonical",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.88\",\"commitment\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\"}",
+      "verdict": "cell",
+      "names_kind": true,
+      "why": "the one form: type, commitment in that order, no whitespace, 64 lowercase hex, nothing else"
+    },
+    {
+      "name": "canonical_zero_commitment",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.88\",\"commitment\":\"0000000000000000000000000000000000000000000000000000000000000000\"}",
+      "verdict": "cell",
+      "names_kind": true,
+      "why": "a commitment is 32 bytes of the owner's choosing; the schema judges form, the owner's client judges the key"
+    },
+    {
+      "name": "size_member",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.88\",\"commitment\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"size\":5}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "the blind cell carries no size (bd-D3): a size discloses the file's length, which the board must not learn"
+    },
+    {
+      "name": "hash_member",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.88\",\"commitment\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\"}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "a hash would let a holder of a candidate file confirm it against the board (M-I2 (i)); the commitment is keyed so it cannot"
+    },
+    {
+      "name": "two_commitment_members",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.88\",\"commitment\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"commitment\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "the two-commitment body: a parser could bind one and a reader check the other; refused by the canonical rule at every parser"
+    },
+    {
+      "name": "member_order",
+      "body": "{\"commitment\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"type\":\"1.1.0.1.0.1.0.3.88\"}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "the members in any other order round-trip to different bytes"
+    },
+    {
+      "name": "uppercase_hex",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.88\",\"commitment\":\"CDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCD\"}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "the commitment is 64 LOWERCASE hex characters; uppercase re-encodes lowercase and fails the compare"
+    },
+    {
+      "name": "hex_63",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.88\",\"commitment\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdc\"}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "63 hex characters are no 32-byte commitment"
+    },
+    {
+      "name": "hex_65",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.88\",\"commitment\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd0\"}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "65 hex characters are no 32-byte commitment"
+    },
+    {
+      "name": "hex_not_hex",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.88\",\"commitment\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcg\"}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "a non-hex character in the commitment"
+    },
+    {
+      "name": "whitespace",
+      "body": "{\"type\": \"1.1.0.1.0.1.0.3.88\", \"commitment\": \"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\"}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "parses to the same cell and re-encodes to different bytes: b != encode(parse(b))"
+    },
+    {
+      "name": "trailing_byte",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.88\",\"commitment\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\"}\n",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "a trailing byte: JSON admits it, the canonical rule does not"
+    },
+    {
+      "name": "extent_member",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.88\",\"commitment\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"extent\":{\"count\":87340,\"unit\":\"frames\"}}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "the v1 cell carries no extent member (ms5-D2): a video-era member is a second schema"
+    },
+    {
+      "name": "designation_member",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.88\",\"commitment\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"commitment_alg\":\"blake3-keyed\"}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "H1: a value naming the kind under a second schema's form parses under no pinned schema; the daemon halts on it, never admits it as absent"
+    },
+    {
+      "name": "empty_commitment",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.88\",\"commitment\":\"\"}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "an empty string is no 32-byte commitment"
+    },
+    {
+      "name": "commitment_not_a_string",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.88\",\"commitment\":5}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "the commitment is a string"
+    },
+    {
+      "name": "missing_commitment",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.88\"}",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "the arity is closed: two members, each present"
+    },
+    {
+      "name": "picture_kind",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.89\",\"commitment\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\"}",
+      "verdict": "no_cell",
+      "names_kind": false,
+      "why": "a type naming the picture's kind is the picture parser's, which reads it under its own schema (and halts on it there: a commitment is no picture cell); it names nothing to this one"
+    },
+    {
+      "name": "another_kind",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.1\",\"commitment\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\"}",
+      "verdict": "no_cell",
+      "names_kind": false,
+      "why": "a type naming another kind (the enrollment record's) is not the cell's; its own schema reads it"
+    },
+    {
+      "name": "no_type",
+      "body": "{\"commitment\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\"}",
+      "verdict": "no_cell",
+      "names_kind": false,
+      "why": "no type member names no kind (D13: every record body names its type)"
+    },
+    {
+      "name": "prose",
+      "body": "a blind document's caption",
+      "verdict": "no_cell",
+      "names_kind": false,
+      "why": "prose is no JSON object"
+    },
+    {
+      "name": "not_json",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.88\",\"commitment\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\"",
+      "verdict": "no_cell",
+      "names_kind": false,
+      "why": "not JSON at all (unterminated): every schema is JSON, so nothing names the kind here"
+    },
+    {
+      "name": "json_array",
+      "body": "[{\"type\":\"1.1.0.1.0.1.0.3.88\",\"commitment\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\"}]",
+      "verdict": "no_cell",
+      "names_kind": false,
+      "why": "a cell inside an array is no cell: the value is one object"
+    },
+    {
+      "name": "round_trips_to_other_bytes",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.88\",\"commitment\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\" }",
+      "verdict": "no_cell",
+      "names_kind": true,
+      "why": "one space before the closing brace: the same cell under JSON, other bytes under the rule"
+    },
+    {
+      "name": "past_the_cap",
+      "body": "{\"type\":\"1.1.0.1.0.1.0.3.88\",\"commitment\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+      "verdict": "no_cell",
+      "names_kind": false,
+      "why": "a body past the cell's cap (1024 bytes, the picture kind's and every media kind's) opens with the kind's canonical prefix and is parsed by no reader of a cell all the same, so it names nothing: the past-cap classification by prefix at the door and the index is the upload-side sweep's (part 2) and this build reads such a body as ordinary bytes"
+    },
+    {
+      "name": "past_the_cap_not_naming",
+      "body": "{\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"type\":\"1.1.0.1.0.1.0.3.88\"}",
+      "verdict": "no_cell",
+      "names_kind": false,
+      "why": "a body past the cap that opens with no kind's prefix: parsed by no reader of a cell, naming nothing at every parser, part 2's sweep included"
+    }
+  ]
+}

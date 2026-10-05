@@ -9,6 +9,7 @@
 // `FebeWorld` names the accessor bound set, and its supertraits carry the
 // `m3()`/`m5()`/`links()` methods the read arms call, so no accessor trait
 // is imported here by name.
+use skep_address::{ordinal, shift, validate, Nat};
 use skep_arrangement::{published_target, trunk_of, M5Rec};
 use skep_content::ContentWrite;
 use skep_discovery::{
@@ -19,7 +20,7 @@ use skep_discovery::{
 use skep_kernel::Attestation;
 use skep_links::{Invalid, LinkRec};
 use skep_namespace::{M3Rec, PrincipalId};
-use skep_retrieval::Query;
+use skep_retrieval::{Query, MAX_DELIVERY_ITEMS};
 
 use super::door::{consult_read, home_readable};
 use super::{OperationSurface, WriteCtx};
@@ -27,7 +28,7 @@ use crate::lower::{lower_read, lower_txn};
 use crate::publication::{birth_version, covered_universal_grants, require_registered_document};
 use crate::reject::{rejection, RejectCode, Rejection};
 use crate::request::Op;
-use crate::response::Response;
+use crate::response::{IItem, Response};
 use crate::successor::successor_link;
 use crate::world::FebeWorld;
 
@@ -119,11 +120,8 @@ where
             // gate applied, uniformly (§6) — and it is the whole authority
             // check this path gets, here or in M3 (see `Op::RegisterNode`).
             Op::RegisterNode { addr } => {
-                let (addr, at) = self
-                    .stores
-                    .namespace()
-                    .register_node(addr)
-                    .map_err(|e| lower_txn(kind, e))?;
+                let (addr, at) =
+                    self.stores.namespace().register_node(addr).map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             // Fork ≠ Version (§3): mints an EMPTY account-tier document,
@@ -290,6 +288,8 @@ where
             | Op::ReadLink { .. }
             | Op::FollowLink { .. }
             | Op::RetrieveV { .. }
+            | Op::RetrieveI { .. }
+            | Op::ContentFrontier { .. }
             | Op::RetrieveDocVSpan { .. }
             | Op::RetrieveDocVSpanSet { .. }
             | Op::ShowOrigin { .. }
@@ -385,10 +385,8 @@ where
             // — the allocation test included — is `Op::EffectiveOwner`'s
             // contract.
             Op::EffectiveOwner { addr } => {
-                let owner = world
-                    .m3()
-                    .effective_owner_pair(&addr)
-                    .map(|(prefix, id)| (prefix.clone(), id));
+                let owner =
+                    world.m3().effective_owner_pair(&addr).map(|(prefix, id)| (prefix.clone(), id));
                 Ok(Response::EffectiveOwner { owner, as_of })
             }
             // ── raw link reads (→ M7, §2): no driver handle — straight off
@@ -429,6 +427,56 @@ where
                     .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Delivery { items, as_of })
             }
+            // THE READ BY IDENTITY (AUTH-6.38–6.40; M-I2 (a), (h); ms3-1):
+            // every span's derived document passed the consult above — its
+            // shape too, so each start is an element position and each width
+            // at least one — and what remains is M4's point read per position,
+            // keyed by I-address and blind to arrangement. THE BUDGET FIRST
+            // (P29): the widths summed are the delivery's size, request
+            // arithmetic, refused whole past `MAX_DELIVERY_ITEMS` before the
+            // first address is expanded, as RETRIEVEV's delivery is held to the
+            // same number.
+            Op::RetrieveI { spans } => {
+                let total = spans.iter().try_fold(0u64, |sum, span| {
+                    u64::try_from(&span.width).ok().and_then(|w| sum.checked_add(w))
+                });
+                if total.is_none_or(|n| n > MAX_DELIVERY_ITEMS as u64) {
+                    return Err(rejection(kind, RejectCode::TooManyItems));
+                }
+                let content = world.content();
+                let one = Nat::from(1u32);
+                let mut items = Vec::new();
+                for span in &spans {
+                    let mut at = span.start.tumbler().clone();
+                    let mut left = span.width.clone();
+                    while left > Nat::from(0u32) {
+                        // The ordinal advanced keeps the address T4-valid: an
+                        // element position's last component is at least one
+                        // and only grows, and the document prefix is untouched.
+                        let addr = validate(at.clone())
+                            .expect("a shifted element ordinal stays a T4-valid address");
+                        items.push(IItem { at: addr, value: content.value_at(&at).cloned() });
+                        at = shift(&at, &one);
+                        left -= &one;
+                    }
+                }
+                Ok(Response::IDelivery { items, as_of })
+            }
+            // THE CONTENT FRONTIER (AUTH-6.38): `doc` passed the consult
+            // above, so a draft's mint count is told to no reader the draft
+            // does not admit; registration is M10's own refusal, as the
+            // doc-metadata read's is, since the chain's peek answers nothing
+            // for a document M3 never registered. The peek is M3's content
+            // chain's — the next address the mint would issue, read and not
+            // staged — and its ordinal is the frontier plus one.
+            Op::ContentFrontier { doc } => {
+                let m3 = world.m3();
+                require_registered_document(m3, kind, &doc)?;
+                let next = m3
+                    .next_content_address(&doc)
+                    .expect("a registered document's content chain has a next address");
+                Ok(Response::Frontier { next: ordinal(next.tumbler()).clone(), as_of })
+            }
             Op::RetrieveDocVSpan { doc } => {
                 let set = Query::new(&snap).doc_vspan(&doc).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::SpanSet { set, as_of })
@@ -438,13 +486,15 @@ where
                 Ok(Response::SpanSet { set, as_of })
             }
             Op::ShowOrigin { doc, span } => {
-                let addrs =
-                    Query::new(&snap).show_origin_v(&doc, &span).map_err(|e| lower_read(kind, e))?;
+                let addrs = Query::new(&snap)
+                    .show_origin_v(&doc, &span)
+                    .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Addrs { addrs, as_of })
             }
             Op::ShowDeletions { d_a, d_b } => {
-                let rep =
-                    Query::new(&snap).show_deletions(&d_a, &d_b).map_err(|e| lower_read(kind, e))?;
+                let rep = Query::new(&snap)
+                    .show_deletions(&d_a, &d_b)
+                    .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Deletions { rep, as_of })
             }
             Op::Compare { rho1, rho2 } => {
@@ -480,8 +530,8 @@ where
                 Ok(Response::Addrs { addrs, as_of })
             }
             Op::CountV { d, region } => {
-                let n = count_v_on(&snap, &d, &region, &readable)
-                    .map_err(|e| lower_read(kind, e))?;
+                let n =
+                    count_v_on(&snap, &d, &region, &readable).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Count { n, as_of })
             }
             Op::CountFtt { q } => {
@@ -511,8 +561,8 @@ where
             // is UNFILTERED at origin (PUB-6.15); an admitted `a` that is
             // retracted answers `discoverable_from` `false`.
             Op::Project { a, slot, d } => {
-                let set = project_on(&snap, &a, slot, &d, &readable)
-                    .map_err(|e| lower_read(kind, e))?;
+                let set =
+                    project_on(&snap, &a, slot, &d, &readable).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::SpanSet { set, as_of })
             }
             Op::DiscoverableFrom { a, d } => {

@@ -19,7 +19,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   names, gap-free and monotone behind M1's structural-validity gate.
   Over-allocation is harmless, and an address is never reused given
   the caller's half — the mint reads the frontier, the record it
-  hands back advances it. The five reserved type addresses (the ghost
+  hands back advances it. Two chains publish their frontier as a
+  peek — the mint without its record — for a reader: the account
+  chain's next delegable prefix, and the content chain's next
+  address, whose ordinal is a document's mint count plus one (the
+  content-frontier read's answer). The five reserved type addresses (the ghost
   tumblers — content addresses 1–5 of doc 1 of the system account
   `1.1.0.1`, which genesis seeds) are never issued at all: their
   chain's frontier is floored past them as compiled format.

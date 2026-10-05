@@ -26,7 +26,9 @@ use skep_engine::types::{
     pins_outside_the_registry, t_binding, t_claim, t_endpoint, t_enroll, t_retire,
 };
 use skep_febe::{Disposition, Op};
-use skep_identity::{record_bytes, single_address, Fingerprint, IdentityState, Inert, PayloadError};
+use skep_identity::{
+    record_bytes, single_address, Fingerprint, IdentityState, Inert, PayloadError,
+};
 use skep_links::SlotArg;
 use skep_namespace::HasM3;
 use skep_registry::{BodyKind, SeedingRefusal};
@@ -70,7 +72,9 @@ impl RegistryKind {
 /// check's exemption of the record's atom, the pre-claim gate's refusal of
 /// a registry-kind deposit into the system account, and the route of its
 /// link to the registry sequence — stated once so the readers cannot part.
-pub(crate) fn registry_deposit_kind<'s>(ty: impl IntoIterator<Item = &'s Span>) -> Option<RegistryKind> {
+pub(crate) fn registry_deposit_kind<'s>(
+    ty: impl IntoIterator<Item = &'s Span>,
+) -> Option<RegistryKind> {
     let named = single_address(ty)?;
     if named == *t_binding() {
         Some(RegistryKind::Binding)
@@ -124,6 +128,8 @@ pub(crate) fn deposits_registry_link(op: &Op) -> bool {
         | Op::ReadLink { .. }
         | Op::FollowLink { .. }
         | Op::RetrieveV { .. }
+        | Op::RetrieveI { .. }
+        | Op::ContentFrontier { .. }
         | Op::RetrieveDocVSpan { .. }
         | Op::RetrieveDocVSpanSet { .. }
         | Op::ShowOrigin { .. }
@@ -196,10 +202,14 @@ impl RegistryRefusal {
     pub fn token(&self) -> String {
         match self {
             RegistryRefusal::ClaimFirst => CredentialRefusal::ClaimFirst.token(),
-            RegistryRefusal::SignedSessionRequired => CredentialRefusal::SignedSessionRequired.token(),
+            RegistryRefusal::SignedSessionRequired => {
+                CredentialRefusal::SignedSessionRequired.token()
+            }
             RegistryRefusal::NotDocOne => Inert::NotDocOne.detail(),
             RegistryRefusal::Form => "registry_form".into(),
-            RegistryRefusal::MalformedRecord(cause) => format!("malformed_record:{}", cause.token()),
+            RegistryRefusal::MalformedRecord(cause) => {
+                format!("malformed_record:{}", cause.token())
+            }
             RegistryRefusal::AttestationRequired => CredentialRefusal::AttestationRequired.token(),
             RegistryRefusal::AttestationInvalid(fault) => {
                 CredentialRefusal::AttestationInvalid(*fault).token()
@@ -321,10 +331,8 @@ pub(crate) fn registry_admission(
     match (dep.kind, &dep.to) {
         (RegistryKind::Binding, None) => {}
         (RegistryKind::Binding, Some(account)) => {
-            let seated = world
-                .m3()
-                .account_seat(account)
-                .is_some_and(|(prefix, _)| prefix == account);
+            let seated =
+                world.m3().account_seat(account).is_some_and(|(prefix, _)| prefix == account);
             if !seated {
                 return Err(RegistryRefusal::Form);
             }
@@ -423,7 +431,8 @@ mod tests {
     #[test]
     fn the_registry_set_and_the_credential_set_are_disjoint() {
         let doc = addr_of(&[1, 0, 1, 0, 1]);
-        let mut types: Vec<Address> = skep_registry::rows().iter().map(|r| r.address.clone()).collect();
+        let mut types: Vec<Address> =
+            skep_registry::rows().iter().map(|r| r.address.clone()).collect();
         types.extend([
             t_enroll().clone(),
             t_retire().clone(),
@@ -495,7 +504,11 @@ mod tests {
             ),
         ];
         for (refusal, token, class) in cases {
-            assert_eq!((refusal.token(), refusal.disposition()), (token.to_string(), class), "{refusal:?}");
+            assert_eq!(
+                (refusal.token(), refusal.disposition()),
+                (token.to_string(), class),
+                "{refusal:?}"
+            );
         }
     }
 }

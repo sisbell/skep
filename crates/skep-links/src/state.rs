@@ -3,6 +3,12 @@
 //! compiled format constant, not carried state), the one journal delta
 //! [`LinkRec`], the pure fold [`LinkState::apply_link`], and the load-time
 //! [`LinkState::rebuild_derived`].
+//!
+//! Beneath it, `state/reads.rs` holds the read surface (§E/§F/§G). It is this
+//! file's child so that the map, the hints and their edges stay private to
+//! the two: the rest of the crate asks the slice the four questions the write
+//! surface needs — residence, the claim schema, the next link address and
+//! the dedup incumbent — and no other file reaches the map.
 
 use std::collections::BTreeSet;
 
@@ -12,9 +18,17 @@ use skep_address::{
     document_of, elem_addr, link_subspace, validate, Address, ElemPos, Nat, Tumbler,
 };
 
+use crate::class::{coverage_class, CoverageClass};
 use crate::dedup::DedupKey;
-use crate::endset::{coverage_class, CoverageClass, Link};
+use crate::endset::Link;
 use crate::registry::{registry, ShippedType};
+
+// The read surface over this slice — the raw reads, the typed observers and
+// the discovery primitives — as this file's child, so that the map and the
+// hints stay private to the two.
+mod reads;
+
+pub use reads::{CurrentMember, Pattern, Tip, Tuple, View};
 
 /// The ONE authoritative delta. Every write — MAKELINK link, Emit_K tuple,
 /// retraction tuple, supersession claim, editlink successor, pdef/pd_stable
@@ -47,9 +61,9 @@ pub enum LinkRec {
 /// field order, making the set's iteration — and therefore `succs`' output
 /// order — the claimed-successor order the walk reads.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct SupEdge {
-    pub(crate) new: Tumbler,
-    pub(crate) claim: Tumbler,
+struct SupEdge {
+    new: Tumbler,
+    claim: Tumbler,
 }
 
 /// The recomputable hints — pure functions of `links` (+ `registry`),
@@ -57,26 +71,26 @@ pub(crate) struct SupEdge {
 /// [`LinkState::rebuild_derived`]. The journal (via M2) is truth; lose any
 /// hint and replay rebuilds it, never wrong.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct Hints {
+struct Hints {
     /// Typed slices `L_K` (Observe / type-match, L8) — audit; active is
     /// derived at query time as `audit ∖ nullified`.
-    pub(crate) type_slices: HashMap<CoverageClass, OrdSet<Tumbler>>,
+    type_slices: HashMap<CoverageClass, OrdSet<Tumbler>>,
     /// Resident retraction roots — the tombstone set (active = audit ∖ this).
     /// Monotone (R3/R6a). Membership is EXACT (`contains`), never
     /// prefix-closed: a root tombstones the one address it denotes and
     /// nothing beneath it. BH1's filter roots are the prefix-closed ones
     /// ([`crate::LinkState::is_filtered`]), and the two regimes must not be
     /// read across.
-    pub(crate) nullified: OrdSet<Tumbler>,
+    nullified: OrdSet<Tumbler>,
     /// I0-class → addrs (audit; active-filtered at the check) — registered
     /// idem⊤ classes only (I1).
-    pub(crate) dedup: HashMap<DedupKey, OrdSet<Tumbler>>,
+    dedup: HashMap<DedupKey, OrdSet<Tumbler>>,
     /// BH2 adjacency: `old` → its [`SupEdge`] set; `[K_sup]` only in v1 (§5).
-    pub(crate) sup_fwd: HashMap<Tumbler, OrdSet<SupEdge>>,
+    sup_fwd: HashMap<Tumbler, OrdSet<SupEdge>>,
     /// `f_d^Σ` — home document → its chain-frontier index, equal to M3's
     /// frontier by construction (Conflicts §7). The next emission lands at
     /// `chain_d(f_d^Σ)`, and BH4 age is measured back from it.
-    pub(crate) home_frontier: HashMap<Tumbler, u64>,
+    home_frontier: HashMap<Tumbler, u64>,
 }
 
 /// M7's slice of the engine's `WorldState`, reached via
@@ -128,10 +142,10 @@ pub(crate) struct Hints {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinkState {
     /// ── AUTHORITATIVE ── append-only, immutable values.
-    pub(crate) links: OrdMap<Tumbler, Link>,
+    links: OrdMap<Tumbler, Link>,
     /// ── RECOMPUTABLE ── rebuilt from `links` under the format registry.
     #[serde(skip)]
-    pub(crate) hints: Hints,
+    hints: Hints,
 }
 
 impl LinkState {
@@ -224,7 +238,7 @@ impl LinkState {
     /// (R3/R6a). EXACT membership, never a prefix test: a root tombstones
     /// the one address it denotes, so nothing beneath a nullified document
     /// or account is nullified by it. The public form is `is_nullified`.
-    pub(crate) fn nullified(&self, t: &Tumbler) -> bool {
+    fn nullified(&self, t: &Tumbler) -> bool {
         self.hints.nullified.contains(t)
     }
 
@@ -248,7 +262,7 @@ impl LinkState {
     /// `f_d^Σ` — the home's chain-frontier hint, 0 for a home holding no
     /// links yet. The one reading of it: `next_link_address` mints at
     /// `1 + this`, BH4 `age` counts back from it.
-    pub(crate) fn home_frontier(&self, home: &Address) -> u64 {
+    fn home_frontier(&self, home: &Address) -> u64 {
         self.hints
             .home_frontier
             .get(home.tumbler())
@@ -262,7 +276,7 @@ impl LinkState {
     /// absence is corruption rather than a miss, and fail-stops here instead
     /// of reading downstream as an empty answer. `readlink` is the fallible
     /// form, for an address a caller supplies.
-    pub(crate) fn link_at(&self, t: &Tumbler) -> &Link {
+    fn link_at(&self, t: &Tumbler) -> &Link {
         self.links
             .get(t)
             .expect("an index key names a resident link: the fold indexes only what it inserts")
@@ -329,7 +343,7 @@ impl LinkState {
 /// Borrows, because an index key belongs to the store and the read only looks
 /// at it — the ownership counterpart of the read surface's `lift_denoted`,
 /// whose argument the read produced and is about to drop.
-pub(crate) fn lift(t: &Tumbler) -> Address {
+fn lift(t: &Tumbler) -> Address {
     validate(t.clone()).expect("every stored link key is T4-valid by M3's mint")
 }
 
@@ -340,7 +354,7 @@ pub(crate) fn lift(t: &Tumbler) -> Address {
 ///
 /// Class recognition and every write-path guard evaluate the SAME pure
 /// [`coverage_class`] — the shipped classes this fold recognizes are that
-/// function's own verdicts, fixed once at [`TypeRegistry::build`]. No second
+/// function's own verdicts, fixed once at `TypeRegistry::build`. No second
 /// classifier exists anywhere in M7 (class coherence, §Core data model). The
 /// registry it recognizes them through is the module's compiled constant, so
 /// this stays a pure function of `(hints, addr, value)`: the same three

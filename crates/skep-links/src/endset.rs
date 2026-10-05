@@ -1,15 +1,13 @@
 //! §Core data model — M7's readable carrier types: [`Endset`] (the verbatim
-//! span decomposition), [`Link`] (a positional sequence of endsets), the
-//! canonical address-set encoding [`enc`], and the one pure coverage
-//! classifier [`coverage_class`] with its [`CoverageClass`] key.
+//! span decomposition), [`Link`] (a positional sequence of endsets) and the
+//! canonical address-set encoding [`enc`]. Their type identity — the class
+//! every type, dedup and fence question compares — is `class.rs`'s.
 
 use std::fmt;
 
-use im::{OrdMap, OrdSet, Vector};
+use im::Vector;
 use serde::{Deserialize, Serialize};
-use skep_address::{
-    canonical_key, is_prefix, subtree_of, Address, CanonicalForm, Span, SpanSet, Tumbler,
-};
+use skep_address::{subtree_of, Address, Span, SpanSet, Tumbler};
 
 /// M7-OWNED endset — a READABLE finite span sequence, the as-created
 /// decomposition held VERBATIM (observable via raw read-back — ML2/RL1). NOT
@@ -17,12 +15,12 @@ use skep_address::{
 /// projection ([`Endset::covers`]); the sequence is read through
 /// [`Endset::spans`]/[`Endset::addrs`] and folds to a `SpanSet` only at an
 /// M1-call boundary — the crate-internal whole-endset fold FOLLOWLINK's read
-/// and [`coverage_class`]'s content-extent partition perform.
+/// and [`coverage_class`](crate::coverage_class)'s content-extent partition perform.
 ///
 /// Derived `PartialEq`/`Eq`/`Hash` are STRUCTURAL (decomposition- and
 /// span-order-sensitive) — serde/container plumbing only, NEVER identity
 /// (§Core data model structural-derives contract): link identity is the store
-/// address (L11b), type/dedup identity is [`coverage_class`]. They are VALUE
+/// address (L11b), type/dedup identity is [`coverage_class`](crate::coverage_class). They are VALUE
 /// identity — same spans, same order — which is the right relation for
 /// deduplicating stored endset values; they are not TYPE identity, so nothing
 /// that means a type (a registration, a type index, a catalog key) may key on
@@ -57,8 +55,8 @@ impl Endset {
 
     /// Verbatim construction — the spans are stored exactly as given, never
     /// normalized at rest (ML2/RL1): M1's canonical form is a query-time key
-    /// ([`coverage_class`]), never the stored shape. MAKELINK and M10 content
-    /// successors build here.
+    /// ([`coverage_class`](crate::coverage_class)), never the stored shape.
+    /// MAKELINK and M10 content successors build here.
     pub fn from_spans(spans: impl IntoIterator<Item = Span>) -> Endset {
         Endset(spans.into_iter().collect())
     }
@@ -102,18 +100,18 @@ impl Endset {
     }
 
     /// Every span unit-depth — the address-denoting test, vacuously true for
-    /// `⟨⟩`. Selects [`coverage_class`]'s exact denoted branch, and is
+    /// `⟨⟩`. Selects [`coverage_class`](crate::coverage_class)'s exact denoted branch, and is
     /// verbatim the admission rule of the managed surface's `ty`
     /// (`NonAddressDenotingType`), so a caller can ask before it is refused.
     /// STRICTLY STRONGER than [`Endset::is_level_uniform`], which is what
-    /// [`coverage_class`] itself requires.
+    /// [`coverage_class`](crate::coverage_class) itself requires.
     pub fn is_address_denoting(&self) -> bool {
         self.spans().all(is_unit_depth)
     }
 
     /// Every span level-uniform (`#start = #width`) — EXACTLY
-    /// [`coverage_class`]'s precondition, and the test a caller applies to an
-    /// endset of its own making. Implied by
+    /// [`coverage_class`](crate::coverage_class)'s precondition, and the test a
+    /// caller applies to an endset of its own making. Implied by
     /// [`Endset::is_address_denoting`] (a unit-depth span is its own start's
     /// subtree, so start and width share a length) and strictly weaker than
     /// it: a content endset of M5 `Run::iextent`s passes this and fails that,
@@ -148,8 +146,8 @@ impl Endset {
 
     /// INTERNAL — the one WHOLE-ENDSET fold to a `SpanSet` (concatenation,
     /// order-preserving, exactly M1's singleton+union): where an endset meets
-    /// M1's set algebra — FOLLOWLINK's (F1/F3) read and [`coverage_class`]'s
-    /// partition of a content extent.
+    /// M1's set algebra — FOLLOWLINK's (F1/F3) read and
+    /// [`coverage_class`](crate::coverage_class)'s partition of a content extent.
     pub(crate) fn to_spanset(&self) -> SpanSet {
         self.0.iter().cloned().collect()
     }
@@ -376,121 +374,4 @@ impl Link {
 /// array `[addr]` all read the same at the call.
 pub fn enc<'a>(addrs: impl IntoIterator<Item = &'a Address>) -> Endset {
     Endset::from_spans(addrs.into_iter().map(|a| subtree_of(a.tumbler())))
-}
-
-/// Type / I0 identity of an endset — coverage equality, NEVER decomposition
-/// (§Core data model). An address-denoting endset's class is exact (the
-/// ≼-minimal denoted antichain, I0a); a content extent's is the conservative
-/// per-endpoint-length canonical partition (over-discriminates across
-/// lengths, never merges distinct classes — the safe direction for
-/// type-matching and dedup).
-///
-/// OPAQUE, and that is what makes it an identity: [`coverage_class`] is the
-/// only constructor, so holding one of these is a FACT about some endset
-/// rather than an assertion a caller can make. A hand-assembled non-minimal
-/// antichain would be the class of no endset — unregistered by accident
-/// rather than by fact, and forgeable as a key of the map
-/// [`crate::LinkState::targets_keyed`] returns.
-/// [`CoverageClass::denoted`] is the one observation of the representation.
-///
-/// NOT `Serialize`: the extent case wraps M1's non-`Serialize`
-/// `CanonicalForm` — this type lives only in the skip-serialized
-/// registry/hints, and every idem⊤ dedup `LockKey` serializes a denoted
-/// class only (§Core data model).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CoverageClass(Class);
-
-/// The two coverage regimes, private so the representation stays M7's: the
-/// extent partition is a documented over-discrimination the design reserves
-/// the right to tighten, which it can only do while nothing outside this
-/// crate can name it.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum Class {
-    /// ≼-minimal antichain — address-denoting endsets (exact).
-    Addrs(OrdSet<Tumbler>),
-    /// Per-length canonical coverage — content extents (safe, conservative).
-    Extents(OrdMap<usize, CanonicalForm>),
-}
-
-impl CoverageClass {
-    /// The ≼-minimal denoted antichain (I0a) of an address-denoting endset's
-    /// class; `None` for a content-extent class, whose partition is
-    /// conservative and carries no denotation. Read-only: there is no
-    /// constructor taking one, so a caller can inspect the identity without
-    /// being able to state one.
-    pub fn denoted(&self) -> Option<&OrdSet<Tumbler>> {
-        match &self.0 {
-            Class::Addrs(set) => Some(set),
-            Class::Extents(_) => None,
-        }
-    }
-}
-
-/// PURE coverage CLASS of an endset (no store state, hence no `&self`) — the
-/// ONE constructor of [`CoverageClass`].
-///
-/// Address-denoting endset (every span unit-depth) ⇒ its ≼-minimal denoted
-/// antichain (I0a, exact, readable through [`CoverageClass::denoted`]);
-/// general level-uniform content endset ⇒ M1's per-`#start` partition of the
-/// whole-endset fold ([`SpanSet::by_level_class`]), each part
-/// `canonical_key`d — the composition M1's `canonical_key` names as M7's,
-/// cross-length canonicalization being absent from the source algebra.
-/// PUBLIC so M9 can key `targets_keyed`'s map via `coverage_class(ty)`.
-///
-/// TOTAL ON LEVEL-UNIFORM INPUT — which is all it ever receives: managed
-/// paths validate address-denoting, content paths are `iextent`-level-uniform
-/// by M5's construction, and read-side `ty` arguments are registered
-/// address-denoting types by caller contract (§Core data model totality).
-/// [`Endset::is_level_uniform`] is the test a caller applies to discharge the
-/// precondition on an endset of its own making — one hop from here;
-/// [`Endset::is_address_denoting`] is the stronger condition the managed
-/// paths establish, sufficient but not necessary.
-/// OFF-CONTRACT INPUT PANICS: a hand-built non-level-uniform span (e.g. the
-/// T12-valid `([5,3],[0,2,7])`) hits M1's `LevelMismatch` inside
-/// `canonical_key`, surfaced as a panic naming the precondition — NEVER a
-/// skipped span or a coarser class, either of which would silently corrupt
-/// type/dedup identity.
-pub fn coverage_class(e: &Endset) -> CoverageClass {
-    if e.is_address_denoting() {
-        // I0a: dedup, then drop every address with a distinct denoted prefix
-        // — in ONE ascending pass, comparing each candidate only against the
-        // last address retained.
-        //
-        // Sound because T1's order is lexicographic prefix-smaller, which
-        // makes a retained address's extensions CONTIGUOUS: if `y ≼ t` and
-        // `y < z < t`, then `y ≼ z`, since a `z` diverging from `y` at some
-        // position `i < #y` would need `z_i > y_i = t_i` and so would sort
-        // above `t`. So the shortest denoted prefix of `t` is itself
-        // retained, and every element between it and `t` is skipped, leaving
-        // it as `last` when `t` is reached. One prefix test per address
-        // instead of |denoted|² — the count is caller-chosen, and the class
-        // of a stored type slot is recomputed for every link at every replay.
-        let denoted: OrdSet<Tumbler> = e.spans().map(|s| s.start().clone()).collect();
-        let mut minimal: OrdSet<Tumbler> = OrdSet::new();
-        let mut last: Option<&Tumbler> = None;
-        for t in denoted.iter() {
-            if last.is_some_and(|y| is_prefix(y, t)) {
-                continue; // t extends the retained ≼-minimal y
-            }
-            minimal.insert(t.clone());
-            last = Some(t);
-        }
-        CoverageClass(Class::Addrs(minimal))
-    } else {
-        // M1's partition of the whole-endset fold, one `canonical_key` per
-        // part: cross-length canonicalization is absent from the source
-        // algebra, so the class is the composition of per-length keys, and
-        // the partition is M1's to state. An `OrdMap`, because a class is a
-        // hint key cloned at every fold and every replay.
-        let mut extents: OrdMap<usize, CanonicalForm> = OrdMap::new();
-        for (start_len, part) in e.to_spanset().by_level_class() {
-            let canonical = canonical_key(&part).expect(
-                "coverage_class precondition violated: every span must be level-uniform \
-                 (#start == #width); an off-contract hand-built span is a caller error, \
-                 never skipped and never coarsened (§Core data model)",
-            );
-            extents.insert(start_len, canonical);
-        }
-        CoverageClass(Class::Extents(extents))
-    }
 }

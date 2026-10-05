@@ -65,7 +65,11 @@ foundation and on the stores above it.
   its suite in release.
 - `skep-arrangement` — documents as arrangements of content, versions,
   provenance. Its modules and rules: §The arrangement.
-- `skep-links` — typed links, supersession, retraction.
+- `skep-links` — the link store: `LinkState`, the append-only map from a
+  link's address to its value and the hints folded from it; `LinkWriter`,
+  whose every deposit passes one gate; the raw and typed reads and the
+  matcher `skep-discovery` composes; the type registry, a compiled
+  constant. Its modules and rules: §The link store.
 - `skep-retrieval` — content and provenance queries.
 - `skep-discovery` — the link reads: which links reach a document's content
   (the region family) or match a four-set description (the descriptor
@@ -582,6 +586,60 @@ Rules that hold across its files:
 Its integration suite is one binary, `tests/it/`: one file per surface over
 the shared `common` world, and `tidy`, which checks the module order and the
 first rule.
+
+## The link store, `skep-links`
+
+`skep-links` owns the links: one slice, `LinkState` — the append-only map
+from a link's address to its value, and the hints folded from it — and one
+writer, `LinkWriter`, whose every deposit passes one gate. Nothing is
+updated or removed: a retraction is a link of the `[R]` class, and the
+tombstone set is a hint folded from those links. The type registry is a
+compiled constant, not state: the five shipped classes over the ghost
+tumblers `skep-namespace` reserves, built once per process.
+
+Its modules are declared in `src/lib.rs` in dependency order, each with a
+line saying what it holds; each names in code only the modules above it,
+and an item by its home module, never through the root's re-exports.
+`tests/it/tidy.rs` checks that, and that every file under `src/` and
+`tests/it/` is declared. `state.rs` is the slice and the fold; beneath it,
+`state/reads.rs` holds the read surface. `writes.rs` is the handle and what
+its ops share; beneath it, `writes/makelink.rs`, `writes/emit.rs`,
+`writes/nullify.rs` and `writes/supersession.rs` each hold one op family's
+`impl` block.
+
+Rules that hold across its files:
+
+- **One door to the mint.** `emit_core`, in `writes.rs`, stages every
+  deposit: it asks whether the home is registered and owned, of the
+  working world, ahead of every gate and every dedup short-circuit, and it
+  is the crate's one caller of M3's `mint_link`. `tests/it/tidy.rs` checks
+  the last.
+- **One insertion point, one fold.** The map and the hints are private to
+  `state.rs` and its `reads` child; `apply_link` is the one insertion and
+  asserts the address is fresh, and it and `rebuild_derived` fold through
+  the one `fold_hints`.
+- **Type identity is a class.** Every comparison of types goes through
+  `coverage_class` of a slot, never an `Endset`'s derived equality, and
+  `class.rs` is the one place a `CoverageClass` is built.
+- **The fences stand on every surface.** The fold recognizes a deposit by
+  its type slot's class alone, so each sole-writer class is refused on
+  every surface but its writers': `[R]` is written only by `nullify`,
+  `[K_sup]` only by `assert_sup` and `editlink`, which hold its claim
+  schema, and `replaces` only by `makelink_replacing`.
+- **One section decision.** Whether a deposit takes M2's dedup section and
+  whether the fold keys it are one predicate,
+  `TypeRegistry::is_idempotent`, over one key, `DedupKey::of`.
+- **The slice's shape is its format.** Only `links` is serialized, and a
+  `Link` decodes through `Link::new`, so a decoded value holds the arity
+  floor. Fields and variants are appended, never reordered:
+  `skep-kernel`'s golden fixture deposits links, so its pinned bytes cover
+  them.
+
+Its integration suite is one binary, `tests/it/`: one file per op family,
+per gate that crosses them and per part of the read surface, over the
+shared `common` world; `carrier`, the contracts that need no kernel;
+`recovery`, the hints a checkpoint must rebuild; and `tidy`, which checks
+the module map and the first rule.
 
 ## The link reads, `skep-discovery`
 

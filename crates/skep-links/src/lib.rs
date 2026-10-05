@@ -74,15 +74,43 @@
 use skep_kernel::WorldState;
 use skep_namespace::HasM3;
 
-mod dedup;
+// The modules in dependency order, each with a line saying what it holds.
+// Each names, in code, only modules above it, and an item by its home
+// module, never through the re-exports below — `LinkWorld`, defined in this
+// file, is the one exception. `tests/it/tidy.rs` checks that, and that every
+// file under `src/` is declared with its line. The rules that hold across
+// them are in the workspace's ARCHITECTURE.md, §The link store.
+
+// The stored value's carriers: `Endset`, the verbatim span sequence, with its
+// two walks and `enc`; `Link`, a positional sequence of endsets, with its
+// serde door.
 mod endset;
-mod error;
-mod reads;
+// Type identity: `CoverageClass` and `coverage_class`, the one classifier
+// every type, dedup and fence question asks.
+mod class;
+// The type registry: the five shipped classes over the ghost-tumbler
+// constants, their registrations and declarations, `sh_conf`, and
+// `registry()`, the one instance.
 mod registry;
+// The idempotence identity `DedupKey` and the M2 lock section it encodes.
+mod dedup;
+// The two per-slot budgets: the spans a slot keeps, the resolve steps it
+// commands.
+mod budget;
+// The typed rejections, each enum in its op's precedence order, and
+// FOLLOWLINK's ⊥.
+mod error;
+// M7's slice: `LinkState` (the authoritative map and the hints folded from
+// it), the one delta `LinkRec`, the fold; beneath it `state/reads.rs`, the
+// read surface.
 mod state;
+// `LinkWriter` and what its ops share — `emit_core`, the one deposit gate,
+// the lock set, the `replaces` class; one file per op family beneath.
 mod writes;
 
-pub use endset::{coverage_class, enc, CoverageClass, Endset, IntoSpans, Link, Spans};
+pub use budget::{MAX_SLOT_RESOLVE_STEPS, MAX_SLOT_SPANS};
+pub use class::{coverage_class, CoverageClass};
+pub use endset::{enc, Endset, IntoSpans, Link, Spans};
 // The ONE caller-identity type of the write-surface ownership gate
 // (as amended 2026-08-16) — defined beside M5's edit ops, re-exported here
 // because M7's five deposit ops take it too.
@@ -91,14 +119,12 @@ pub use error::{
     AssertSupError, EditLinkError, EmitError, Invalid, MakeLinkError, NotBh4, NullifyError,
     RetractStaleError,
 };
-pub use reads::{CurrentMember, Pattern, Tip, Tuple, View};
 pub use registry::{
     registry, Behavior, Registration, ReservedAddrs, Shape, ShippedType, TypeRegistry,
 };
-pub use state::{LinkRec, LinkState};
+pub use state::{CurrentMember, LinkRec, LinkState, Pattern, Tip, Tuple, View};
 pub use writes::{
     is_replaces_class, replaces_type, slot_endset, Edit, LinkWriter, SlotArg, Visibility,
-    MAX_SLOT_RESOLVE_STEPS, MAX_SLOT_SPANS,
 };
 
 /// The auto traits M7's slice promises without saying. `WorldState` is

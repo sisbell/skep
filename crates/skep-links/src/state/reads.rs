@@ -10,10 +10,11 @@ use skep_address::{
     Tumbler,
 };
 
-use crate::endset::{coverage_class, CoverageClass, Endset, Link};
+use super::{lift, LinkState};
+use crate::class::{coverage_class, CoverageClass};
+use crate::endset::{Endset, Link};
 use crate::error::{Invalid, NotBh4};
 use crate::registry::{registry, Behavior, ShippedType};
-use crate::state::{lift, LinkState};
 
 /// Read view (ASN-0128). `Default` (active ∖ filtered) is meaningful only on
 /// `members`/`targets_of`; on `observe` and the §G index primitives it reads

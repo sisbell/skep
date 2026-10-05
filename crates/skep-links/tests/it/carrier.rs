@@ -9,10 +9,11 @@
 //! it with), the five shipped registrations §B pins over the compiled
 //! ghost-tumbler constants (owner ruling, 2026-08-26 — the decl rejection
 //! matrix went with the retired `GenesisConfig` seam), the module registry
-//! every assembler shares, and the serde/journal round trips. (The fold's
-//! freshness gate is watched from inside the crate: the one store invariant
-//! that would otherwise fail silently is witnessed by a deposit no foreign
-//! crate can construct.)
+//! every assembler shares, the rejection family's `Display`/`source`
+//! chaining, and the serde/journal round trips. (The fold's freshness gate is
+//! watched from inside the crate: the one store invariant that would
+//! otherwise fail silently is witnessed by a deposit no foreign crate can
+//! construct.)
 
 use crate::common;
 
@@ -21,8 +22,8 @@ use std::collections::BTreeSet;
 use common::*;
 use skep_address::Span;
 use skep_links::{
-    coverage_class, enc, Behavior, CoverageClass, Endset, Link, LinkState, Registration, Shape,
-    ShippedType, FROM, TO, TYPE,
+    coverage_class, enc, Behavior, CoverageClass, Endset, Invalid, Link, LinkState, NotBh4,
+    NullifyError, Registration, RetractStaleError, Shape, ShippedType, FROM, TO, TYPE,
 };
 
 #[test]
@@ -639,3 +640,31 @@ fn coverage_class_partitions_a_mixed_length_endset_by_start_length() {
     assert_eq!(class, coverage_class(&Endset::from_spans([deep, shallow])));
 }
 
+#[test]
+fn the_wrapped_rejections_chain_through_source_and_display() {
+    // Every rejection promises `Display` + `Error`, and `source()` where a
+    // cause exists — a promise nothing exercises, in a family where exactly
+    // this went wrong once (a cause rendered through `Debug` and missing
+    // from the chain). `RetractStaleError::Nullify` is the one wrapping a
+    // caller can construct through M7's public surface.
+    use std::error::Error;
+    let inner = NullifyError::BadTarget;
+    let outer: RetractStaleError = inner.clone().into();
+    assert!(
+        outer.to_string().contains(&inner.to_string()),
+        "the wrapper renders its cause through Display, never Debug"
+    );
+    assert!(
+        Error::source(&outer).is_some(),
+        "and a chain walker reaches it"
+    );
+    assert!(
+        Error::source(&inner).is_none(),
+        "a leaf rejection carries no cause"
+    );
+    // The two unit markers are errors in their own right, so a caller can
+    // box either without losing its sentence.
+    assert!(!Invalid.to_string().is_empty());
+    assert!(!NotBh4.to_string().is_empty());
+    assert!(Error::source(&Invalid).is_none());
+}

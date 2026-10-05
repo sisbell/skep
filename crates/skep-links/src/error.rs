@@ -270,8 +270,8 @@ impl fmt::Display for MakeLinkError {
             MakeLinkError::SlotTooLarge => write!(
                 f,
                 "makelink: a slot carries more than {} spans, or its specs command more than {} resolve steps",
-                crate::MAX_SLOT_SPANS,
-                crate::MAX_SLOT_RESOLVE_STEPS
+                crate::budget::MAX_SLOT_SPANS,
+                crate::budget::MAX_SLOT_RESOLVE_STEPS
             ),
             MakeLinkError::EmptyTypeResolution => {
                 f.write_str("makelink: the type slot is empty as given (ML6)")
@@ -328,7 +328,7 @@ impl fmt::Display for EmitError {
             EmitError::SlotTooLarge => write!(
                 f,
                 "emit: to or ty carries more than {} spans",
-                crate::MAX_SLOT_SPANS
+                crate::budget::MAX_SLOT_SPANS
             ),
             EmitError::Mint(e) => write!(f, "emit: mint failed: {e}"),
         }
@@ -411,7 +411,7 @@ impl fmt::Display for EditLinkError {
             EditLinkError::SlotTooLarge => write!(
                 f,
                 "editlink: a successor slot carries more than {} spans",
-                crate::MAX_SLOT_SPANS
+                crate::budget::MAX_SLOT_SPANS
             ),
             EditLinkError::IllFormedSuccessor => f.write_str(
                 "editlink: successor arity ≠ 3, empty type slot, or a non-level-uniform span in some slot (Conflicts §11)",

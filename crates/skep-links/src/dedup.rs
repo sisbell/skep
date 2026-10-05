@@ -4,17 +4,19 @@
 
 use skep_kernel::{LockKey, Space};
 
-use crate::endset::{coverage_class, CoverageClass, Link};
+use crate::class::{coverage_class, CoverageClass};
+use crate::endset::Link;
 
 /// The idempotence identity `I0 = (cov(F), cov(G))` within a type class
 /// (ASN-0128 I0/I1) — the dedup hint key, the in-txn check's lookup and,
 /// serialized, the `LockKey`'s payload. Crate-internal: it never crosses a
-/// seam (the interface exposes only the opaque `LockKey` bytes).
+/// seam (the interface exposes only the opaque `LockKey` bytes). Its fields
+/// are private to this file, so [`DedupKey::of`] is the only way to make one.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct DedupKey {
-    pub(crate) ty: CoverageClass,
-    pub(crate) from: CoverageClass,
-    pub(crate) to: CoverageClass,
+    ty: CoverageClass,
+    from: CoverageClass,
+    to: CoverageClass,
 }
 
 impl DedupKey {

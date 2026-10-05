@@ -13,7 +13,8 @@ use std::sync::{Arc, LazyLock};
 use skep_address::{content_subspace, Address, Level};
 use skep_namespace::ghost_position;
 
-use crate::endset::{coverage_class, enc, CoverageClass, Endset, Link};
+use crate::class::{coverage_class, CoverageClass};
+use crate::endset::{enc, Endset, Link};
 
 /// A registered type's tuple shape (ASN-0126 P3): conformance counts the
 /// stored decomposition's spans — one FROM span always, and per shape no TO
@@ -258,19 +259,19 @@ impl Shipped {
 /// [`CoverageClass`], so it never rides a checkpoint, and carrying no sealed
 /// configuration, because none exists.
 ///
-/// INVARIANT, established by the crate-internal `TypeRegistry::build`, its
-/// sole constructor: the five shipped classes are pairwise distinct, each is
-/// registered, and `shipped_class(t)` is the class of `reserved_type(t)`.
+/// INVARIANT, established by `TypeRegistry::build`, its sole constructor and
+/// private to this file: the five shipped classes are pairwise distinct, each
+/// is registered, and `shipped_class(t)` is the class of `reserved_type(t)`.
 /// Every guard that recognizes a deposit by its class, and every read that
 /// compares one against a shipped class, leans on all three. That
-/// constructor is the one way to make one and it is not reachable from
-/// outside this crate, so every `TypeRegistry` a caller can hold is
-/// [`registry`] — a FACT the startup assertion established rather than a
-/// value anyone can state.
+/// constructor is the one way to make one and nothing outside this file can
+/// reach it, so every `TypeRegistry` a caller can hold is [`registry`] — a
+/// FACT the startup assertion established rather than a value anyone can
+/// state.
 ///
 /// An ENTITY, defined by that identity and not by its contents: the type is
 /// deliberately not `Clone`, because a copy would be a second registry equal
-/// by value and distinct by identity — the very thing the crate-internal
+/// by value and distinct by identity — the very thing the private
 /// constructor exists to make unconstructible — and the workspace asserts
 /// the identity as `Arc::ptr_eq`. Every holder shares the one instance
 /// through the `Arc` [`registry`] hands out or a borrow of it.
@@ -321,14 +322,14 @@ impl TypeRegistry {
     /// caller who could be handed an `Err`, because there is no caller who
     /// chooses the input.
     ///
-    /// CRATE-INTERNAL, which is what makes [`registry`] "the ONE instance"
-    /// rather than a convention: a second build would be equal by value and
-    /// distinct by identity, and the property this module publishes — that an
-    /// assembler shares the instance the fold runs against — is an
-    /// `Arc::ptr_eq`. A caller outside the crate has no reason to want a
-    /// second: `build` takes nothing, so [`registry`] answers every question
-    /// it could.
-    pub(crate) fn build() -> TypeRegistry {
+    /// PRIVATE to this file, which is what makes [`registry`] "the ONE
+    /// instance" rather than a convention: a second build would be equal by
+    /// value and distinct by identity, and the property this module publishes
+    /// — that an assembler shares the instance the fold runs against — is an
+    /// `Arc::ptr_eq`. No caller has reason to want a second: `build` takes
+    /// nothing, so [`registry`] answers every question it could. Its one other
+    /// caller is the unit suite beside it, which tests the build itself.
+    fn build() -> TypeRegistry {
         let reserved = ReservedAddrs::format();
         // Each shipped type's endset and its class are built together, so the
         // class this registry hands out for a `ShippedType` is that type's own

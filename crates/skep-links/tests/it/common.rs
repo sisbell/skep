@@ -7,8 +7,6 @@
 //! registry's population is exactly the shipped five, so a managed emit
 //! lands on a shipped Unary idem⊤ class and anything else is unregistered.
 
-#![allow(dead_code)] // each integration test binary uses a subset
-
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{Deposit, HasM5, M5Rec, M5State, VPos, VSpec};

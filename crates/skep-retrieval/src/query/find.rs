@@ -48,8 +48,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// and the filter is one `arranges_any` per candidate, each at worst
     /// `#runs(d) · |coverage|` pair tests in the CANDIDATE's own fragmentation
     /// — a factor the request never names and M6 never sees — and each
-    /// holding nothing: it asks M5 whether the footprint is empty rather than
-    /// building it.
+    /// holding nothing.
     ///
     /// Only `|spans|` and `|coverage|` are the request's, and both are capped
     /// at [`MAX_FIND_COVERAGE_SPANS`] (`TooMuchCoverage`, refused AS THE
@@ -136,10 +135,6 @@ impl<W: RetrievalWorld> Query<'_, W> {
                 // spans are counted beside the coverage, and why a span M5
                 // folds to nothing at once counts all the same.
                 spans_handed.admit(1).map_err(over)?;
-                // The coverage budget, refused AS THE COVERAGE IS PRODUCED —
-                // one run at a time off M5's lazy resolution, so a span over a
-                // heavily fragmented document stops its walk at the budget
-                // rather than resolving whole and then being measured.
                 for run in m5.iter_resolve(&r.doc, span) {
                     coverage_produced.admit(1).map_err(over)?;
                     coverage_spans.push(run.iextent());
@@ -168,8 +163,6 @@ impl<W: RetrievalWorld> Query<'_, W> {
             // pair scan. Its registered-only precondition (PUB-6.37) holds by
             // construction — R records placements in registered documents
             // alone — so nothing is re-checked here.
-            // `arranges_any` is `!project(d, coverage).is_empty()`, answered
-            // without building the footprint; M5's law test pins the two alike.
             .filter(|d| readable(d) && m5.arranges_any(d, &coverage))
             .collect())
     }

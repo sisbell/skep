@@ -636,7 +636,8 @@ Rules that hold across its files:
   budget and refuses a batch that would pass it before it lands, so no
   producer spells that boundary itself — and rendered by `error.rs`; a
   request past one gets its rejection and no partial answer.
-  `tests/it/tidy.rs` checks that no other file compares a count to a budget.
+  `tests/it/tidy.rs` refuses any other file's code line that names a budget
+  beside a comparison — the spelling a hand-written guard takes.
 - **The rejections are part of the wire.** `skep-febe`'s `lower.rs` maps
   each variant of the six error enums to a `RejectCode` with no wildcard
   arm, so a new variant fails to compile there. `docs/wire.md` names each

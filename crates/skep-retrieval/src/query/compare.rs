@@ -232,33 +232,13 @@ impl<'a> Block<'a> {
 
 /// The operand region a spec-set denotes, as blocks: resolve every region's
 /// spans to their I-run blocks, reconstructing each run's V-start by
-/// accumulation. `Err(OverBudget)` when the operand's resolution would pass
-/// [`MAX_COMPARE_OPERAND_BLOCKS`] on EITHER of its two counts — MORE spans
-/// handed to M5, or MORE blocks built, than the budget. Exactly the budget of
-/// either is answered; the span past it is refused BEFORE ITS WALK and the
-/// block past it AS THE BLOCKS ARE PRODUCED, so an over-budget operand stops
-/// resolving rather than resolving whole and then being measured.
-///
-/// Both counts are [`MAX_COMPARE_OPERAND_BLOCKS`]'s, whose card says why
-/// there are two, what each refuses, and what the counts stop within one span
-/// and what they do not. Here the span count is taken as the span is handed to
-/// M5 — before the reader's let-else, so a declined span counts — and the
-/// block count as M5's lazy `iter_resolve` produces each run, so the walk of a
-/// span that crosses the budget stops where it crosses. Each is a [`Count`],
-/// whose card says where the boundary falls.
-///
-/// V-RECONSTRUCTION (load-bearing for X12-R1 soundness): `iter_resolve` yields
-/// `resolve`'s runs in `resolve`'s order, and `resolve` PROMISES that they
-/// tile V contiguously from the first run's `max(ordinal, 1)`, each next run
-/// beginning where the previous one ends — which is precisely what lets a
-/// caller recover every run's V-start by accumulating widths from the span's
-/// own ordinal, with no V-gaps to skip and no second question asked. That
-/// promise rests on D-SEQ★ (ASN-0047), a subspace's arranged positions being
-/// its dense prefix, and D-SEQ★ is what the per-run assertion tripwires.
-/// Asserting on EVERY run (not first-run-only) localizes a future
-/// M5 regression to the EXACT mis-aligning run instead of letting a
-/// mid-document V-gap slip past a first-run check and silently mis-set a later
-/// block's `v_start`.
+/// accumulation. `Err(OverBudget)` when the operand would pass
+/// [`MAX_COMPARE_OPERAND_BLOCKS`] on either of its two counts, each a
+/// [`Count`]: the span count, taken as each span is handed to M5 — before the
+/// reader's let-else below, so a span M5 declines is counted too — and the
+/// block count, taken as `iter_resolve` produces each run. The budget's card
+/// says why there are two and what they stop within one span; `Count`'s says
+/// where the boundary falls.
 ///
 /// REQUIRES A GATED SPEC-SET: every region's document REGISTERED, and every
 /// span content-subspace-started and `gate_vspan`-clean — which
@@ -281,17 +261,8 @@ impl<'a> Block<'a> {
 /// may name — the operand region this builds is a content region because the
 /// gate admits nothing else.
 ///
-/// The cursor is opened from M5's own reading of the span — the shape M5's
-/// resolution folds every span through — so the let-else below is LIVE rather
-/// than the total form of a settled fact: a well-formed but depth-incompatible
-/// (`#start ≥ 3`) span is exactly the one M5's reader declines, and it opens
-/// no cursor, asks nothing, and contributes no blocks — the same answer M5's
-/// resolution gives the same span, which is no runs.
-///
 /// The blocks borrow the REGIONS, not `m3` or `m5`: each carries a reference
-/// to the document of the region that named it, so the lifetime is written out
-/// rather than elided — three input lifetimes and no `&self` leave nothing for
-/// elision to pick.
+/// to the document of the region that named it.
 ///
 /// EACH REGION'S READING SURFACE IS ASKED HERE, of M3, at the point it is
 /// consumed (crate doc, *Which arrangement an operation answers from*): the
@@ -316,25 +287,38 @@ fn resolve_blocks<'a>(
             // its walk; MAX_COMPARE_OPERAND_BLOCKS's card says why spans are
             // counted beside blocks.
             spans_handed.admit(1)?;
-            // M5's own shape reader: a span it declines (well-formed but
-            // depth-incompatible) contributes no blocks, as the resolution
-            // would have yielded no runs for it.
+            // M5's own shape reader, the one its resolution folds every span
+            // through — so this let-else is LIVE: a span it declines
+            // (well-formed but depth-incompatible, `#start ≥ 3`) opens no
+            // cursor and contributes no blocks, as the resolution would have
+            // yielded no runs for it.
             let Some(shape) = as_ordinal_vspan(span) else {
                 continue;
             };
+            // V-RECONSTRUCTION (load-bearing for X12-R1 soundness):
+            // `iter_resolve` yields `resolve`'s runs in `resolve`'s order, and
+            // `resolve` PROMISES that they tile V contiguously from the first
+            // run's `max(ordinal, 1)`, each next run beginning where the
+            // previous one ends — which is precisely what lets this loop
+            // recover every run's V-start by accumulating widths from the
+            // span's own ordinal, with no V-gaps to skip and no second
+            // question asked. That promise rests on D-SEQ★ (ASN-0047), a
+            // subspace's arranged positions being its dense prefix, and D-SEQ★
+            // is what the per-run assertion tripwires. Asserting on EVERY run
+            // (not first-run-only) localizes a future M5 regression to the
+            // EXACT mis-aligning run instead of letting a mid-document V-gap
+            // slip past a first-run check and silently mis-set a later
+            // block's `v_start`.
             let mut cursor = VPos {
                 subspace: shape.subspace.clone(),
                 ordinal: shape.ordinal.clone(),
             };
-            // Pulled a run at a time, so the block budget below stops the
-            // walk rather than measuring a resolution already built whole.
             for run in m5.iter_resolve(&surface, span) {
-                blocks_built.admit(1)?; // the operand's budget, refused as produced
+                blocks_built.admit(1)?;
                 debug_assert!(
                     m5.point(&surface, &cursor).as_ref() == Some(run.i_start()),
                     "D-SEQ★: each content run must begin at the V-cursor (gap-free tiling)"
                 );
-                // Accumulate the V offset by run width (no V-gaps in content).
                 let next = &cursor.ordinal + run.width();
                 out.push(Block::new(&r.doc, cursor.clone(), run));
                 cursor.ordinal = next;
@@ -409,26 +393,21 @@ fn overlap_pair(pb: &Block<'_>, qb: &Block<'_>) -> Option<CorrPair> {
 /// on address. One vocabulary — see the design's Open build decisions
 /// (canonical statement).
 ///
-/// `Err(OverBudget)` when the report would run to MORE THAN
-/// [`MAX_COMPARE_PAIRS`] correspondences — a report of exactly the budget is
-/// answered, and the pair past it is refused AS THE PAIRS ARE PRODUCED. That
-/// budget is on the REPORT, not on the join's shape: a sweep changes how many
-/// candidate pairs are TESTED and not how many are EMITTED, so the same cap
-/// stands whichever join ships, and it is the only one that sees a fan-out.
-/// The successor holds it exactly as this join does, because the pairs are
-/// admitted through a [`Count`], which refuses a batch that would pass the
-/// budget before it lands: a sweep or an interval tree emits one event point's
-/// pairs TOGETHER and admits them as one batch, where a guard comparing the
-/// accumulator to the budget before the batch lands — `>=` as much as `==` —
-/// would admit the batch that crosses it, and answer past the budget when that
-/// batch is the last.
+/// `Err(OverBudget)` when the report would pass [`MAX_COMPARE_PAIRS`]
+/// correspondences, each pair admitted through a [`Count`] as it is produced.
+/// That budget is on the REPORT, not on the join's shape: a sweep changes how
+/// many candidate pairs are TESTED and not how many are EMITTED, so the same
+/// cap stands whichever join ships, and it is the only one that sees a
+/// fan-out. A successor that emits one event point's pairs together admits
+/// them as one batch through the same `Count`, whose card says why a batch
+/// cannot cross the budget.
 fn interval_join(p: &[Block<'_>], q: &[Block<'_>]) -> Result<Vec<CorrPair>, OverBudget> {
     let mut out = Vec::new();
     let mut pairs_produced = Count::against(MAX_COMPARE_PAIRS);
     for pb in p {
         for qb in q {
             if let Some(c) = overlap_pair(pb, qb) {
-                pairs_produced.admit(1)?; // the report's budget, refused as produced
+                pairs_produced.admit(1)?;
                 out.push(c);
             }
         }

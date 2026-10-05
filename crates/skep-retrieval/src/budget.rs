@@ -24,7 +24,7 @@
 /// What it refuses is the two shapes no wire cap prices, and the two counts
 /// are what refuse them. The NESTED region×span product, whose region-set
 /// cost model the transport leaves to M6, is refused by the SPAN count: every
-/// span costs one `resolve` walk, `Θ(#runs(doc))` whether or not it yields a
+/// span costs one resolution walk, `Θ(#runs(doc))` whether or not it yields a
 /// block — a span opening past the arranged extent is walked to the end and
 /// yields none — so a block count alone would admit any number of
 /// empty-resolving spans and the walks with them, from a request the body cap
@@ -59,10 +59,9 @@ pub const MAX_COMPARE_OPERAND_BLOCKS: usize = 1 << 12;
 /// order 64 MiB of report; it is also M5's `MAX_PLACED_RUNS`, the substrate's
 /// existing answer to how many runs one operation may materialize.
 ///
-/// With [`MAX_COMPARE_OPERAND_BLOCKS`] it bounds what the query holds live:
-/// the two operands' block lists and this report, every span's resolution
-/// being pulled a run at a time off M5's lazy `iter_resolve` and stopped at
-/// the block budget (that card says what the operand counts stop).
+/// With [`MAX_COMPARE_OPERAND_BLOCKS`] it bounds what the query holds live —
+/// the two operands' block lists and this report; that card says what the
+/// operand counts stop within one span.
 ///
 /// [`MAX_COMPARE_OPERAND_BLOCKS`] cannot stand in for it: two operands at that
 /// budget whose spans all resolve to ONE shared I-address report the SQUARE of
@@ -103,14 +102,13 @@ pub const MAX_FIND_COVERAGE_SPANS: usize = MAX_COMPARE_OPERAND_BLOCKS;
 /// until its budget is spent and refuses any that would pass it, BEFORE they
 /// are kept: exactly the budget is admitted, and a batch that would pass it is
 /// refused whole, admitting none of itself. So a producer that hands its items
-/// over together — the successor join `interval_join` names, which emits one
-/// event point's pairs at once — is held to the budget exactly as one that
-/// hands them over singly; a guard comparing the accumulator to the budget
-/// before a batch lands would admit the batch that crosses it.
+/// over in batches is held to the budget exactly as one that hands them over
+/// singly; a guard comparing the accumulator to the budget before a batch
+/// lands — `>=` as much as `==` — would admit the batch that crosses it, and
+/// answer past the budget when that batch is the last.
 ///
-/// `tests/it/tidy.rs` holds the assignment: no code line under `src/` but
-/// this file compares anything to a budget, so a producer cannot spell the
-/// boundary for itself.
+/// `tests/it/tidy.rs` refuses any code line outside this file that names a
+/// `MAX_` budget beside a comparison — the spelling a hand-written guard takes.
 #[derive(Debug)]
 pub(crate) struct Count {
     budget: usize,

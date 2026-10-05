@@ -557,6 +557,12 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
 /// comparison at it — a `>=` refuses the admitted half, a smaller square
 /// refuses it too, and a larger one admits the refused half.
 ///
+/// Each span there reaches exactly the run count, so the two sides of
+/// `min(run_count, e − 1)` are one number and the `− 1` decides nothing. One
+/// run more, and the run count passes every reach: the same region is priced
+/// at its reach alone — the square still — and admitted, where a price that
+/// dropped the `− 1` would charge each span a step more and refuse it.
+///
 /// The RUN budget is deliberately left slack: half as many spans as it admits,
 /// each resolving one run, so the verdicts below are the walk budget's alone.
 #[test]
@@ -603,6 +609,65 @@ fn the_walk_budget_admits_the_square_itself_and_refuses_one_step_past_it() {
             Some(QueryError::ImageTooLarge),
             "{name}: one step past the square is refused, not truncated"
         );
+    }
+
+    // One run more, at the front and abutting nothing, and the run count
+    // passes every span's reach: each span is priced now at
+    // `min(2 × MAX + 1, 2 × MAX)`, its reach `e − 1`, where above the two were
+    // one number — and the region is priced at the square still, and admitted.
+    Vstream::new(&k)
+        .copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, WIDTH)])
+        .expect("copy succeeds");
+    assert_eq!(
+        k.snapshot().world().m5().content_runs(&doc2()).len(),
+        run_count + 1
+    );
+    for (name, refusal) in &region_entry_points(reads) {
+        assert_eq!(
+            refusal(&doc2(), &at_square),
+            None,
+            "{name}: priced at each span's reach — the square, still"
+        );
+    }
+}
+
+/// §1 — the walk is priced on the arrangement it WALKS: `d`'s reading
+/// surface, which for a published document with a head is the head, not the
+/// document's own frozen arrangement (HEAD-FLOAT, PUB-2.53). Every other walk
+/// fixture is a private document, where the two are one arrangement, and
+/// `published_world` holds one run on either side, so a walk priced off the
+/// address NAMED — the count the delete preview takes, which reads `d`
+/// because the preview does not float — passes them all. Here pdoc's own
+/// arrangement holds one run and its head `MAX + 1`: `MAX` spans past the
+/// head's end walk `MAX × (MAX + 1)` runs and are refused, asked of pdoc as of
+/// the head itself, where a price off pdoc's one run would admit them and M5
+/// would walk the head's whole run-list per span for an empty answer. A
+/// published document is one a guest may read, and the daemon runs `image`
+/// with no scan permit on the strength of this price.
+#[test]
+fn the_walk_is_priced_on_the_trunk_head_a_published_address_reads() {
+    let k = fragmented_head_world(MAX_IMAGE_RUNS + 1);
+    let snap = k.snapshot();
+    assert_eq!(
+        snap.world().m5().content_runs(&phead()).len(),
+        MAX_IMAGE_RUNS + 1
+    );
+    assert_eq!(snap.world().m5().content_runs(&pdoc()).len(), 1);
+    let reads = Reads(&k);
+    let past_end: Vec<Span> = vec![vspan(1, MAX_IMAGE_RUNS as u32 + 2, 1); MAX_IMAGE_RUNS];
+    for (name, refusal) in &region_entry_points(reads) {
+        for d in [pdoc(), phead()] {
+            assert_eq!(
+                refusal(&d, &past_end),
+                Some(QueryError::ImageTooLarge),
+                "{name} at {d:?}: priced on the head's MAX + 1 runs"
+            );
+            assert_eq!(
+                refusal(&d, &past_end[..1]),
+                None,
+                "{name} at {d:?}: one walk is never refused for its reach"
+            );
+        }
     }
 }
 

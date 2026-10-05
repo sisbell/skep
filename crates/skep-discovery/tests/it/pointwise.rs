@@ -36,6 +36,8 @@ fn project_is_content_subspace_i_to_v_with_conflated_not_a_link() {
     // NotALink covers BOTH a non-link `a` AND an out-of-range slot.
     assert_eq!(reads.project(&ca(1), FROM, &doc1()), Err(QueryError::NotALink));
     assert_eq!(reads.project(&e1, 4, &doc1()), Err(QueryError::NotALink));
+    // Slot numerals are 1-based: 0 is as far out of range below as 4 is above.
+    assert_eq!(reads.project(&e1, 0, &doc1()), Err(QueryError::NotALink));
     // The doc gate comes first.
     assert_eq!(
         reads.project(&e1, FROM, &unregistered_doc()),
@@ -270,10 +272,9 @@ fn the_pointwise_gates_settle_the_document_before_the_address() {
 /// the pointwise pair and the region family agree about which links reach it
 /// — every link `findlinks_v` finds through `pdoc` is one
 /// `addressably_discoverable_from` calls reachable from `pdoc`, and `project`
-/// answers in the head's positions. Every other fixture in this suite is a
-/// private document, where the float is inert and reading `d`'s own
-/// arrangement is reading the right one; here a link reaching only the head's
-/// positions tells them apart.
+/// answers in the head's positions. On a private document the float is inert
+/// and reading `d`'s own arrangement is reading the right one; here a link
+/// reaching only the head's positions tells them apart.
 #[test]
 fn the_pointwise_pair_reads_the_trunk_head_the_region_family_resolves() {
     let k = published_world();
@@ -311,6 +312,53 @@ fn the_pointwise_pair_reads_the_trunk_head_the_region_family_resolves() {
             reads.addressably_discoverable_from(a, &phead())
         );
         assert_eq!(reads.project(a, FROM, &pdoc()), reads.project(a, FROM, &phead()));
+    }
+}
+
+/// §5 — HEAD-FLOAT on discoverability's LINK half. LP12 ranges over both
+/// subspaces of `d`'s reading surface, and the head-float law above meets
+/// only the content half: every link there reaches the head through content.
+/// A link HOMED in the head is seated in the head's own link subspace — a link
+/// is seated in its home document alone (ASN-0047 CL-OWN), and a link write
+/// is outside a published document's edit refusal (PUB-2.12) — so a link
+/// naming it, with no witness in content in any slot, reaches the published
+/// address exactly as it reaches the head. A read that floated the content
+/// runs and took the link runs off pdoc's own frozen arrangement — which
+/// seats no link — would call it unreachable from pdoc, and no other fixture
+/// here can tell the two apart.
+#[test]
+fn discoverability_reaches_a_published_address_through_its_heads_link_subspace() {
+    let k = published_world();
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let seated = link(&store, &phead(), &[ca(101)], &[ca(102)]); // homed, so seated, in the head
+    let naming = link(&store, &doc1(), std::slice::from_ref(&seated), &[ca(103)]);
+    let snap = k.snapshot();
+    assert_eq!(
+        snap.world().m5().link_runs(&phead()).len(),
+        1,
+        "seated in the head"
+    );
+    assert_eq!(
+        snap.world().m5().link_runs(&pdoc()).len(),
+        0,
+        "and in none of pdoc's own"
+    );
+    let reads = Reads(&k);
+    for d in [pdoc(), phead()] {
+        for slot in [FROM, TO, TYPE] {
+            assert!(
+                reads
+                    .project(&naming, slot, &d)
+                    .expect("project")
+                    .is_empty(),
+                "{d:?}: slot {slot} has no witness in content"
+            );
+        }
+        assert_eq!(
+            reads.addressably_discoverable_from(&naming, &d),
+            Ok(true),
+            "{d:?}: reached through the head's link subspace"
+        );
     }
 }
 
@@ -531,6 +579,82 @@ fn the_pointwise_pair_holds_one_run_constant_over_two_quantities() {
     );
 }
 
+/// §5 — both pointwise budgets count the runs of `d`'s READING SURFACE, the
+/// arrangement each read joins against, never the document named
+/// (HEAD-FLOAT, PUB-2.53). The test above holds the run constant on a private
+/// document, where the two are one arrangement, and `published_world` holds
+/// one run on either side, so a count taken off the address named — the count
+/// the delete preview takes, which reads `d` because the preview does not
+/// float — passes every other test. Here pdoc's own arrangement holds one
+/// run and its head `MAX`, and the steps are that test's: at `MAX` content
+/// runs both reads answer; one link seated in the head puts
+/// `addressably_discoverable_from`, which counts both subspaces, past its
+/// budget while `project`, which counts content alone, answers; one declared
+/// deposit on the head puts both past it. Each verdict is asked of pdoc and
+/// of the head, which must agree. These are reads the daemon runs with no
+/// scan permit, on documents a guest may read.
+#[test]
+fn the_pointwise_budgets_count_the_trunk_heads_runs_not_the_address_named() {
+    let k = fragmented_head_world(MAX_IMAGE_RUNS);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let e1 = link(&store, &doc1(), &[pca(1)], &[ca(101)]); // touches every run of the head
+    let reads = Reads(&k);
+    let snap = k.snapshot();
+    assert_eq!(
+        snap.world().m5().content_runs(&phead()).len(),
+        MAX_IMAGE_RUNS
+    );
+    assert_eq!(snap.world().m5().content_runs(&pdoc()).len(), 1);
+    for d in [pdoc(), phead()] {
+        assert!(
+            reads.project(&e1, FROM, &d).is_ok(),
+            "{d:?}: MAX content runs"
+        );
+        assert_eq!(
+            reads.addressably_discoverable_from(&e1, &d),
+            Ok(true),
+            "{d:?}"
+        );
+    }
+
+    // One link HOMED in the head, so seated in the head's own link subspace
+    // (ASN-0047 CL-OWN), and in none of pdoc's.
+    link(&store, &phead(), &[pca(1)], &[ca(102)]);
+    let snap = k.snapshot();
+    assert_eq!(snap.world().m5().link_runs(&phead()).len(), 1);
+    assert_eq!(snap.world().m5().link_runs(&pdoc()).len(), 0);
+    for d in [pdoc(), phead()] {
+        assert!(
+            reads.project(&e1, FROM, &d).is_ok(),
+            "{d:?}: content alone, still MAX"
+        );
+        assert_eq!(
+            reads.addressably_discoverable_from(&e1, &d),
+            Err(QueryError::ImageTooLarge),
+            "{d:?}: both subspaces, MAX + 1"
+        );
+    }
+
+    // One declared deposit, which lands on the head as a run of its own.
+    seed_published_content(&k, &pdoc(), 1);
+    assert_eq!(
+        k.snapshot().world().m5().content_runs(&phead()).len(),
+        MAX_IMAGE_RUNS + 1
+    );
+    for d in [pdoc(), phead()] {
+        assert_eq!(
+            reads.project(&e1, FROM, &d),
+            Err(QueryError::ImageTooLarge),
+            "{d:?}"
+        );
+        assert_eq!(
+            reads.addressably_discoverable_from(&e1, &d),
+            Err(QueryError::ImageTooLarge),
+            "{d:?}"
+        );
+    }
+}
+
 /// §5 — the touch test's JOIN, which the run count cannot see:
 /// `addressably_discoverable_from` tests every span of a link's WHOLE
 /// coverage against every run of `d`'s surface, and each of a link's three
@@ -620,6 +744,11 @@ fn project_holds_its_product_to_the_answer_budget() {
     let proj = reads
         .project(&at_budget, FROM, &doc2())
         .expect("at the answer budget");
+    assert_eq!(
+        proj.len(),
+        1,
+        "normalized — the 2^16 spans M5 built are one"
+    );
     assert!(proj.denotes(&t(&[1, 1])));
     assert!(proj.denotes(&t(&[1, MAX_IMAGE_RUNS as u32])));
     assert!(!proj.denotes(&t(&[1, MAX_IMAGE_RUNS as u32 + 1])));

@@ -262,6 +262,13 @@ fn ftt_home_is_prefix_coverage_not_address_equality() {
 /// read-out that evaluated the candidates instead of `sat` would answer wide
 /// here and nowhere else — and a residence post-filter applied after the
 /// window's slice would come back with a short page claiming more to come.
+///
+/// A RETRACTED link, homed in doc1 and naming ca(1), sits in the fixture as
+/// one sits in the region family's law: the law is the ACTIVE view's, and a
+/// read-out answering over the audit slice — the window is already spelled
+/// apart from `sat`, and a size-only shortcut is the count's to take — would
+/// answer wide here, where no other test asks the count or the window across a
+/// retraction.
 #[test]
 fn ftt_count_enumeration_and_window_read_out_one_sat() {
     let k = kernel();
@@ -271,6 +278,18 @@ fn ftt_count_enumeration_and_window_read_out_one_sat() {
     link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     link(&store, &doc1(), &[ca(2)], &[ca(101)]);
     link(&store, &doc2(), &[ca(1)], &[ca(102)]);
+    // … and one RETRACTED link, homed in doc1 and naming ca(1), so it would
+    // satisfy every descriptor below but the doc2-homed one and the zero. Its
+    // retraction is homed in doc2.
+    let dead = link(&store, &doc1(), &[ca(1)], &[ca(103)]);
+    store
+        .nullify(SYS, &doc2(), &dead)
+        .expect("nullify succeeds");
+    let snap = k.snapshot();
+    assert!(
+        snap.world().links().readlink(&dead).is_some() && !snap.world().links().is_active(&dead),
+        "retracted, and still resident"
+    );
 
     for q in [
         FourSet::any(),
@@ -293,6 +312,10 @@ fn ftt_count_enumeration_and_window_read_out_one_sat() {
         },
     ] {
         let enumerated = reads.findlinks_ftt(&q);
+        assert!(
+            !enumerated.contains(&dead),
+            "a nullified link never surfaces: {q:?}"
+        );
         assert_eq!(reads.count_ftt(&q), enumerated.len(), "count = |enum| for {q:?}");
 
         // The same set again, drained through the cursor at every batch size

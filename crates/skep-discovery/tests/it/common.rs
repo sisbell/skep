@@ -14,7 +14,8 @@ use std::cell::RefCell;
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{
-    deposit_class_types, reading_surface, Deposit, HasM5, M5Rec, M5State, Run, VPos, VSpec,
+    deposit_class_types, reading_surface, Deposit, HasM5, M5Rec, M5State, Run, Shot, ShotRun, VPos,
+    VSpec,
 };
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_discovery::{
@@ -412,8 +413,8 @@ pub fn seed_published_content(k: &Kernel<World>, doc: &Address, count: u32) {
         .expect("a declared deposit at the fresh end is admitted into a published document");
 }
 
-/// The published fixture, and the one shape where head-float decides an
-/// answer: `pdoc` takes two positions while memberless — they land in its
+/// The published fixture, where head-float decides which positions an answer
+/// reads: `pdoc` takes two positions while memberless — they land in its
 /// OWN arrangement — then VERSION mints its head member, which shares that
 /// arrangement, and two more deposits land in the HEAD alone. So pdoc's own
 /// arrangement is frozen at its pre-chain state (`pca(1..=2)`) while every
@@ -426,6 +427,36 @@ pub fn published_world() -> Kernel<World> {
         .expect("the owner versions its published document");
     assert_eq!(head, phead(), "the chain's first member");
     seed_published_content(&k, &pdoc(), 2); // the head's V 3..4, and nowhere else
+    k
+}
+
+/// The published fixture with its head FRAGMENTED where its own arrangement
+/// is not — the one shape where a count taken of the address named and a
+/// count taken of its reading surface part. `pdoc` takes two positions while
+/// memberless (`pca(1..=2)`, one run of its own); the BIRTH shot (PUB-2.33,
+/// PUB-2.34) then mints the head from `runs` copies of the first, placed by
+/// reference to pdoc's own I-space (PUB-2.40), each a width-1 run that abuts
+/// nothing. One declared deposit after it lands on the head as a run of its
+/// own — the atom it mints, `pca(3)`, abuts no `pca(1)` run — which is how a
+/// test grows the head by exactly one run.
+pub fn fragmented_head_world(runs: usize) -> Kernel<World> {
+    let k = kernel();
+    seed_published_content(&k, &pdoc(), 2); // memberless: pdoc's own V 1..2, one run
+    let birth = Shot {
+        base: None,
+        draft: None,
+        runs: vec![
+            ShotRun {
+                origin: pdoc(),
+                run: run(&pca(1), 1),
+            };
+            runs
+        ],
+    };
+    let (head, _) = skep_arrangement::Vstream::new(&k)
+        .publish(SYS, &pdoc(), &birth, &EVERYONE)
+        .expect("the birth shot commits");
+    assert_eq!(head, phead(), "the chain's first member");
     k
 }
 

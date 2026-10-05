@@ -1,8 +1,10 @@
-//! §1 — the region's shape and its V→I resolution: `image`, the one door the
-//! region family reads through. It resolves a region through `d`'s reading
-//! surface behind the document gate, the region gate and the two budgets that
-//! price what the region asks of M5; it names no link and stabs nothing, so
-//! it is the family's door and not a member.
+//! §1 — the region's shape and its V→I resolution: `image`, ASN-0127's
+//! REGION RESOLVER — the first phase of every region-family read, which
+//! chains it into M7's matcher (`findlinks ∘ image`). It resolves a region
+//! through `d`'s reading surface behind the document gate, the region gate
+//! and the two budgets that price what the region asks of M5; it names no
+//! link, stabs nothing and asks no reader, so it is the family's resolver
+//! and not a member.
 //!
 //! The shape a request must have lives here too, as the constructor/gate pair
 //! [`content_vspan`]/`check_region` — the module that judges a region is the

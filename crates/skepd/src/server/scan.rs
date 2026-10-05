@@ -124,7 +124,7 @@ impl ClassScans {
 ///   STORE walk is the same walk, and it is strictly dearer per link than the
 ///   all-`"any"` query above;
 /// * `in_claims`, `out_claims` — no store walk: M8 asks M7's typed `observe`
-///   of the supersession class, a walk of that class's hint behind a
+///   of the supersession class, a walk of that class's typed slice behind a
 ///   residence gate, one coverage test per claim (the same statement). The
 ///   class is the world's, not the request's — every supersession claim in
 ///   the docuverse is in it — so the walk is world-sized as the store's is.

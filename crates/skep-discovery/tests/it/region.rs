@@ -235,16 +235,16 @@ fn image_dedups_on_a_runs_whole_identity_not_its_start() {
     );
 }
 
-/// §1 — the query endset every run-anchored read hands M7 is MIXED-LENGTH
-/// wherever `d` transcludes content from a document at another depth: each
-/// run's I-extent starts at its origin's length, and nothing partitions them.
-/// That is sound because the endset's one consumer is M7's `classify_spans`
-/// overlap, which is total across lengths; a level-gated step added to the
-/// lift — normalizing the query, keying a cache on `canonical_key` — would
-/// fault on this image and on no other fixture's, every other document here
-/// minting eight-component content. So each read that lifts the runs is asked
-/// over it: the region family's stab, the pointwise touch test, and the
-/// preview's two stabs.
+/// §1 — the query endset a read lifts from a document's runs and hands M7 is
+/// MIXED-LENGTH wherever `d` transcludes content from a document at another
+/// depth: each run's I-extent starts at its origin's length, and nothing
+/// partitions them. That is sound because the endset's one consumer is M7's
+/// `classify_spans` overlap, which is total across lengths; a level-gated step
+/// added to the lift — normalizing the query, keying a cache on
+/// `canonical_key` — would fault on this image and on no other fixture's,
+/// every other document here minting eight-component content. So each read
+/// that lifts the runs is asked over it: the region family's stab, the
+/// pointwise touch test, and the preview's two stabs.
 #[test]
 fn the_region_family_answers_over_an_image_that_mixes_address_lengths() {
     let k = kernel();

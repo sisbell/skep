@@ -190,7 +190,7 @@
 //! * the lineage pair ([`in_claims_on`], [`out_claims_on`]) — one
 //!   `readlink`, which answers `[]` for a non-link key and stops there;
 //!   otherwise one `observe` of the supersession class — a walk of that
-//!   class's typed hint, one coverage test per claim, and no store walk —
+//!   class's typed slice, one coverage test per claim, and no store walk —
 //!   then one `is_active` per claim the home rule admits.
 //! * the pointwise pair — no store walk: one `followlink` ([`project_on`]),
 //!   or one `readlink` and one `is_active`
@@ -265,7 +265,8 @@ mod types;
 // window combinator, and the rule every read walks a set by.
 mod sets;
 // A region's shape — its constructor and its gate — and `image_on`, its V→I
-// resolution: the door the region family reads through.
+// resolution: the region resolver every region-family read chains into M7's
+// matcher.
 mod image;
 // The region family: `findlinks_v`, `count_v`, `window_v` and
 // RETRIEVEENDSETS, read out of one selection index.
@@ -290,10 +291,10 @@ pub use survival::delete_orphans_on;
 pub use types::{Cursor, OrphanError, OrphanReport, QueryError, SupClaim, Window};
 // The 1-based standard slot numerals every query here indexes by, and the two
 // M7 types M8's own surface is written in: a descriptor slot's `Endset` (with
-// `enc`, the address lift that builds one) and the lineage pair's `View`.
-// Re-exported from the store that owns them so M8 and M7 name one set of
-// values, and so a caller holding this crate alone can construct M8's requests
-// and read its answers.
+// `enc`, M7's canonical address-set encoding, which builds one) and the
+// lineage pair's `View`. Re-exported from the store that owns them so M8 and
+// M7 name one set of values, and so a caller holding this crate alone can
+// construct M8's requests and read its answers.
 pub use skep_links::{enc, Endset, View, FROM, TO, TYPE};
 // M5's two, on the same rule: the runs `image_on` answers with, and the
 // V-position the region constructor and the delete preview are asked at.
@@ -312,10 +313,10 @@ use skep_namespace::HasM3;
 /// Blanket-implemented, so an engine that implements the accessors gets it
 /// for free.
 ///
-/// Every read here carries the whole bound, the descriptor and lineage
-/// families included, though those reach only the link store: M8 declares ONE
-/// dependency surface, so widening a read later is an edit inside this crate
-/// rather than a break for a caller who wrote the narrower form.
+/// Every read here carries the whole bound, the descriptor family and the
+/// lineage pair included, though those reach only the link store: M8 declares
+/// ONE dependency surface, so widening a read later is an edit inside this
+/// crate rather than a break for a caller who wrote the narrower form.
 pub trait DiscoveryWorld: WorldState + HasLinks + HasM5 + HasM3 {}
 impl<W: WorldState + HasLinks + HasM5 + HasM3> DiscoveryWorld for W {}
 

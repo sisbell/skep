@@ -1,9 +1,9 @@
 //! §Internal design — M7's link sets as every read here builds and walks
 //! them: the run-set stab that turns arrangement runs into the links touching
 //! them — one stab per v1 slot, kept apart for slot attribution and OR'd into
-//! the selection index — and the one windowing combinator that pages such a
-//! set by key. All pure over borrowed state; nothing here snapshots (callers
-//! thread ONE snapshot per operation).
+//! ASN-0127's disjunctive `findlinks` over them — and the one windowing
+//! combinator that pages such a set by key. All pure over borrowed state;
+//! nothing here snapshots (callers thread ONE snapshot per operation).
 //!
 //! Every read walks M7's `OrdSet`s by reference — `iter`, `range`,
 //! `contains` — and clones only the addresses it hands back. `im` 15's
@@ -82,8 +82,10 @@ pub(crate) fn union_slots(by_slot: &[(usize, OrdSet<Address>); 3]) -> OrdSet<Add
 }
 
 /// `findlinks(coverage of runs)` ∩ the active view, as M7's native
-/// `OrdSet<Address>` (address order — ASN-0108's permanent enumeration key):
-/// the selection index every run-anchored family reads.
+/// `OrdSet<Address>` (address order — ASN-0108's permanent enumeration key).
+/// Over a region's image it is the region family's selection index (ASN-0131's
+/// `sel`); over the deleted and the retained runs it is the two sides of the
+/// preview's last-witness identity (ASN-0117).
 pub(crate) fn stab_runs<'r>(
     l: &LinkState,
     runs: impl IntoIterator<Item = &'r Run>,

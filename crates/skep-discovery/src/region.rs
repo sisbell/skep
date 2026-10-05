@@ -1,10 +1,11 @@
 //! §1/§2/§4 — the content-region discovery family (V-anchored, present-tense,
 //! doc-gated, disjunctive over slots) — `findlinks_v`, `count_v`, `window_v`
-//! and RETRIEVEENDSETS — each reading through [`image_on`], the family's
-//! door, which lives in `image`. Every result is ASN-0131's selection index
-//! `sel = findlinks_V ∩ addressable`, read out four ways — nullified links
-//! never surface (Conflicts #8, a deliberate divergence from ASN-0127/0108's
-//! `findlinks_V`/`Match`, which no addressability filter narrows).
+//! and RETRIEVEENDSETS — each ASN-0127's two-phase query: [`image_on`], the
+//! region resolver that lives in `image`, chained into M7's matcher. Every
+//! result is ASN-0131's selection index `sel = findlinks_V ∩ addressable`,
+//! read out four ways — nullified links never surface (Conflicts #8, a
+//! deliberate divergence from ASN-0127/0108's `findlinks_V`/`Match`, which no
+//! addressability filter narrows).
 
 use std::collections::HashSet;
 
@@ -20,16 +21,16 @@ use crate::sets::{stab_runs, stab_runs_by_slot, union_slots, window_over};
 use crate::types::{Cursor, QueryError, Window};
 use crate::DiscoveryWorld;
 
-/// The shared selection index of the V-anchored family: the disjunctive
-/// ASN-0127 `findlinks(image(W,d))` ∩ the active view (View::Active internally
-/// == addressable == `dom(L)` ∖ nullified), as M7's native `OrdSet<Address>`
+/// The region family's shared selection index: the disjunctive ASN-0127
+/// `findlinks(image(W,d))` ∩ the active view (View::Active internally ==
+/// addressable == `dom(L)` ∖ nullified), as M7's native `OrdSet<Address>`
 /// (address order — ASN-0108's permanent enumeration key).
 fn findlinks_v_set_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
     region: &[Span],
 ) -> Result<OrdSet<Address>, QueryError> {
-    let image = image_on(s, d, region)?; // gate + region-check + resolve, on THIS snap
+    let image = image_on(s, d, region)?; // document gate + region gate + resolve, on THIS snap
     Ok(stab_runs(s.world().links(), &image))
 }
 
@@ -121,7 +122,7 @@ pub fn window_v_on<W: DiscoveryWorld>(
     n: usize,
     readable: &dyn Fn(&Address) -> bool,
 ) -> Result<Window, QueryError> {
-    let sel = findlinks_v_set_on(s, d, region)?; // gate + region-check inside
+    let sel = findlinks_v_set_on(s, d, region)?; // document gate + region gate inside
     Ok(window_over(&sel, cur, n, |a| home_readable(readable, a)))
 }
 
@@ -162,7 +163,7 @@ pub fn retrieve_endsets_on<W: DiscoveryWorld>(
     readable: &dyn Fn(&Address) -> bool,
 ) -> Result<Vec<(usize, Endset)>, QueryError> {
     let w = s.world();
-    let image = image_on(s, d, region)?; // gate + region-check inside, on THIS snap
+    let image = image_on(s, d, region)?; // document gate + region gate inside, on THIS snap
     let by_slot = stab_runs_by_slot(w.links(), &image); // KEPT SEPARATE — slot i of a touches iff a ∈ its set
     let sel = union_slots(&by_slot);
     // Dedup by structural Eq, keyed on borrows into the store's endsets — a

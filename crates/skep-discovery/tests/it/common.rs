@@ -2,7 +2,7 @@
 //! contract's assembler role, in miniature) over M3 + M4 + M5 + M7 — exactly
 //! the bound M8 queries under, plus M4 so INSERT can arrange content — its
 //! address/type fixtures, the suite's reads of its current state, and the
-//! window law and wide endset more than one family reads. Addresses follow
+//! window law and wide endset more than one suite reads. Addresses follow
 //! M3's minted shapes: account
 //! `[1,0,1]`, documents `[1,0,1,0,d]`, content elements `[doc·0·1·k]`, link
 //! elements `[doc·0·2·k]`; the five reserved type addresses are the compiled

@@ -175,12 +175,13 @@ fn the_pointwise_gates_settle_the_document_before_the_address() {
 
 /// §5 — HEAD-FLOAT on the pointwise pair: a bare PUBLISHED address is read
 /// through its trunk head, the pin the region family resolves through, so
-/// the two families agree about which links reach it — every link
-/// `findlinks_v` finds through `pdoc` is one `addressably_discoverable_from`
-/// calls reachable from `pdoc`, and `project` answers in the head's
-/// positions. Every other fixture in this suite is a private document, where
-/// the float is inert and reading `d`'s own arrangement is reading the right
-/// one; here a link reaching only the head's positions tells them apart.
+/// the pointwise pair and the region family agree about which links reach it
+/// — every link `findlinks_v` finds through `pdoc` is one
+/// `addressably_discoverable_from` calls reachable from `pdoc`, and `project`
+/// answers in the head's positions. Every other fixture in this suite is a
+/// private document, where the float is inert and reading `d`'s own
+/// arrangement is reading the right one; here a link reaching only the head's
+/// positions tells them apart.
 #[test]
 fn the_pointwise_pair_reads_the_trunk_head_the_region_family_resolves() {
     let k = published_world();

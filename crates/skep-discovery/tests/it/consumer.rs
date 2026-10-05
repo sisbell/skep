@@ -147,12 +147,13 @@ fn the_value_surface_is_hashable_and_keys_by_representation() {
 }
 
 /// Every type M8's own signatures name is reachable under `skep_discovery`:
-/// the descriptor slot's `Endset` and the lift that builds one, the lineage
-/// pair's `View`, the runs `image_on` answers with, and the `VPos` the region
-/// constructor and the delete preview are asked at. So a caller that depends
-/// on this crate can build M8's requests and name its answers without also
-/// naming the store each type came from — only M1's value calculus is left
-/// out, which every consumer of any store crate already holds.
+/// the descriptor slot's `Endset` and `enc`, the canonical address-set
+/// encoding that builds one, the lineage pair's `View`, the runs `image_on`
+/// answers with, and the `VPos` the region constructor and the delete preview
+/// are asked at. So a caller that depends on this crate can build M8's
+/// requests and name its answers without also naming the store each type came
+/// from — only M1's value calculus is left out, which every consumer of any
+/// store crate already holds.
 ///
 /// The check is the BUILD: every path below is spelled `m8::`, so dropping a
 /// re-export fails to compile rather than leaving a signature a caller cannot
@@ -173,8 +174,8 @@ fn m8s_request_and_answer_types_are_reachable_through_this_crate() {
     let snap = k.snapshot();
 
     // A descriptor narrowed past the wildcard: the slot's endset, and the
-    // address lift that builds one. Under the flipped storage convention the
-    // claim is the one link naming `e1` at FROM.
+    // canonical address-set encoding that builds one. Under the flipped
+    // storage convention the claim is the one link naming `e1` at FROM.
     let from_e1: m8::Endset = m8::enc([&e1]);
     let q = m8::FourSet {
         from: m8::SlotSpec::Spans(from_e1),

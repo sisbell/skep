@@ -383,8 +383,10 @@ fn scan(pred: impl Fn(&str) -> bool) -> Vec<(PathBuf, String)> {
 }
 
 /// The code of `text`, line by line: a comment line is not code, and neither
-/// is a line's trailing comment.
-fn code_lines(text: &str) -> impl Iterator<Item = &str> {
+/// is a line's trailing comment. `consumer.rs` reads `src/lib.rs`'s
+/// re-exports through it too, so the crate's two source checks agree on what
+/// code is.
+pub(super) fn code_lines(text: &str) -> impl Iterator<Item = &str> {
     text.lines()
         .filter(|line| !line.trim_start().starts_with("//"))
         .map(|line| {

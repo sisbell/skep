@@ -4,8 +4,6 @@
 
 use crate::common;
 
-use std::cell::RefCell;
-
 use common::*;
 use skep_address::{document_of, Address};
 use skep_discovery::{
@@ -196,11 +194,8 @@ fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
         link(&store, &home, &[ca(1)], &[ca(1)]); // la(1), la(2), la2(1)
     }
     let snap = k.snapshot();
-    let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
-    let recorder = |d: &Address| {
-        asked.borrow_mut().push(d.clone());
-        true
-    };
+    let asked = Asked::default();
+    let recorder = asked.recorder();
     let homes_of = |links: &[Address]| -> Vec<Address> {
         links
             .iter()
@@ -295,11 +290,8 @@ fn the_preview_asks_its_predicate_only_of_the_links_it_orphans() {
     let orphan = link(&store, &doc1(), &[ca(1)], &[ca(101)]); // la(1): position 1 alone
     link(&store, &doc2(), &[ca(1)], &[ca(2)]); // la2(1): witnessed at position 2 too
     let snap = k.snapshot();
-    let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
-    let recorder = |d: &Address| {
-        asked.borrow_mut().push(d.clone());
-        true
-    };
+    let asked = Asked::default();
+    let recorder = asked.recorder();
     let report = delete_orphans_on(&snap, &doc1(), &vp(1, 1), &n(1), &recorder).expect("preview");
     assert_eq!(report.orphaned, vec![orphan]);
     assert_eq!(

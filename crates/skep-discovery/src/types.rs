@@ -54,10 +54,11 @@ pub struct Window {
     pub exhausted: bool,
 }
 
-/// One supersession claim from the archival lineage (ASN-0125 EL11b), read
-/// off M7's FLIPPED storage convention: `old` = the FROM slot (superseded),
-/// `new` = the TO slot (superseding). `home` is the pure M1 `document_of`
-/// attribution (EL8b).
+/// One supersession claim from the archival lineage (ASN-0125 EL11b): `old`
+/// is the link it records as superseded and `new` the link it records as
+/// superseding. Which stored slot holds which endpoint is M7's convention,
+/// stated on its `assert_sup`; this record carries the endpoints and never
+/// the slots. `home` is the pure M1 `document_of` attribution (EL8b).
 ///
 /// `active` is the CLAIM's own — M7's `is_active(claim)`, so a claim may be
 /// disclosed from the Audit view yet itself nullified. `old` and `new` carry
@@ -69,8 +70,9 @@ pub struct Window {
 /// postconditions of the reads that return one: a claim
 /// [`crate::in_claims_on`] returns for `y` has `old = y`, one
 /// [`crate::out_claims_on`] returns for `x` has `new = x`, and each has
-/// `old`/`new` read off its F/G, `home = document_of(claim)` and
-/// `active = is_active(claim)` at the read's snapshot.
+/// `old`/`new` the superseded and superseding links its stored tuple records,
+/// `home = document_of(claim)` and `active = is_active(claim)` at the read's
+/// snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SupClaim {
     pub claim: Address,

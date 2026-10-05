@@ -2,11 +2,13 @@
 //! contract's assembler role, in miniature) over M3 + M4 + M5 + M7 — exactly
 //! the bound M8 queries under, plus M4 so INSERT can arrange content — its
 //! address/type fixtures, the suite's reads of its current state, and the
-//! window law and wide endset more than one suite reads. Addresses follow
-//! M3's minted shapes: account
+//! window law, wide endset and recording reader more than one suite reads.
+//! Addresses follow M3's minted shapes: account
 //! `[1,0,1]`, documents `[1,0,1,0,d]`, content elements `[doc·0·1·k]`, link
 //! elements `[doc·0·2·k]`; the five reserved type addresses are the compiled
 //! ghost tumblers (`ReservedAddrs::format` — owner ruling, 2026-08-26).
+
+use std::cell::RefCell;
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
@@ -53,6 +55,30 @@ fn every_document(_: &World, _: &Address) -> bool {
 /// alone.
 pub fn every_home(_: &Address) -> bool {
     true
+}
+
+/// The documents a reader predicate was asked about, in order — the
+/// instrument behind the predicate contract the crate header states: asked
+/// only of homes, at most once per candidate, and only past a read's other
+/// filters.
+#[derive(Default)]
+pub struct Asked(RefCell<Vec<Address>>);
+
+impl Asked {
+    /// A reader that admits every home and records each document it is asked
+    /// about.
+    pub fn recorder(&self) -> impl Fn(&Address) -> bool + '_ {
+        move |d: &Address| {
+            self.0.borrow_mut().push(d.clone());
+            true
+        }
+    }
+
+    /// What was asked since the last `take`, in order, leaving the record
+    /// empty.
+    pub fn take(&self) -> Vec<Address> {
+        self.0.take()
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]

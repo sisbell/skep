@@ -5,8 +5,6 @@
 
 use crate::common;
 
-use std::cell::RefCell;
-
 use common::*;
 use serde::Serialize;
 use skep_address::{is_prefix, subtree_of, validate, Address, Tumbler};
@@ -448,11 +446,8 @@ fn lineage_skips_a_supersession_tuple_that_is_not_a_claim() {
     }
 
     // Asked once, of the reported claim's home — not of the two tuples skipped.
-    let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
-    let recorder = |d: &Address| {
-        asked.borrow_mut().push(d.clone());
-        true
-    };
+    let asked = Asked::default();
+    let recorder = asked.recorder();
     assert_eq!(
         in_claims_on(&snap, &e1, View::Active, &recorder),
         only_the_claim
@@ -576,11 +571,8 @@ fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
 
     // Asked once, of the reported claim's home — the document-naming tuple,
     // homed in doc1 too, costs no consult.
-    let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
-    let recorder = |d: &Address| {
-        asked.borrow_mut().push(d.clone());
-        true
-    };
+    let asked = Asked::default();
+    let recorder = asked.recorder();
     assert_eq!(
         in_claims_on(&snap, &e1, View::Active, &recorder),
         only_the_claim

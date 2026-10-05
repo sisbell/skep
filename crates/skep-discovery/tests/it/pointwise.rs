@@ -1,19 +1,18 @@
-//! §5 — projection and addressable discoverability: what each answers,
-//! the order their refusals speak in, the trunk head both read, the
-//! absence rule both apply, and the run budget and join square that hold them.
+//! §5 — projection and addressable discoverability: what each answers, the
+//! overlap discoverability shares with the region family's stab, the order
+//! their refusals speak in, the trunk head both read, the absence rule both
+//! apply, and the run budget and join square that hold them.
 
 use crate::common;
 
-use std::cell::RefCell;
-
 use common::*;
-use skep_address::Address;
+use skep_address::{classify_spans, Address, Span, SpanRel};
 use skep_arrangement::{HasM5, Vstream};
 use skep_discovery::{
     addressably_discoverable_from_on, project_on, QueryError, FROM, MAX_ANSWER_SPANS,
     MAX_IMAGE_RUNS, TO, TYPE,
 };
-use skep_links::{LinkWriter, SlotArg};
+use skep_links::{HasLinks, LinkWriter, SlotArg};
 
 #[test]
 fn project_is_content_subspace_i_to_v_with_conflated_not_a_link() {
@@ -145,6 +144,93 @@ fn addressably_discoverable_from_is_lp12_and_addressable_over_both_subspaces() {
         reads.addressably_discoverable_from(&e1, &unregistered_doc()),
         Err(QueryError::DocNotRegistered)
     );
+}
+
+/// §5 — `addressably_discoverable_from` tests its touch by a second statement
+/// of M7's per-link overlap, which M7 keeps private, so the two must give one
+/// answer: a live link is discoverable from `d` exactly when the region
+/// family's stab finds it through `d`'s content, on every relation
+/// `classify_spans` draws. doc1 arranges one run and seats no link, and six
+/// links meet that run at FROM under the five relations — Equal, Containment
+/// from either side, ProperOverlap, Adjacent, Separated — while their TO and
+/// TYPE meet nothing doc1 arranges. Every other discoverability fixture meets
+/// a run Equal or contained, so a touch test that dropped ProperOverlap, or
+/// took Adjacent for a touch, would pass them all and part from M7 here.
+#[test]
+fn discoverability_agrees_with_the_region_familys_stab_on_every_span_relation() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 4); // one run: V 1..4 → ca(1..4)
+    let store = LinkWriter::new(&k, &EVERYONE);
+    // Homed in doc2, so doc1 seats none of them and its one content run is all
+    // `addressably_discoverable_from` tests a link against.
+    let from_positions = |at: u32, count: u32| {
+        store
+            .makelink(
+                SYS,
+                &doc2(),
+                SlotArg::Resolve(vec![spec(&doc1(), 1, at, count)]),
+                SlotArg::Addrs(vec![ca(101)]),
+                SlotArg::Addrs(vec![rel()]),
+            )
+            .expect("makelink succeeds")
+            .0
+    };
+    let equal = from_positions(1, 3); // [ca(1), ca(4))
+    let containing = from_positions(1, 4); // [ca(1), ca(5))
+    let straddling = from_positions(3, 2); // [ca(3), ca(5))
+    let contained = link(&store, &doc2(), &[ca(2)], &[ca(101)]); // [ca(2), ca(3))
+    let adjacent = link(&store, &doc2(), &[ca(4)], &[ca(101)]); // [ca(4), ca(5))
+    let separated = link(&store, &doc2(), &[ca(9)], &[ca(101)]); // [ca(9), ca(10))
+
+    // Position 4 leaves doc1, which then arranges `[ca(1), ca(4))` alone.
+    Vstream::new(&k)
+        .delete(SYS, &doc1(), vp(1, 4), n(1))
+        .expect("delete succeeds");
+    let reads = Reads(&k);
+    let region = [vspan(1, 1, 3)];
+    assert_eq!(reads.image(&doc1(), &region), Ok(vec![run(&ca(1), 3)]));
+    let cases = [
+        (&equal, SpanRel::Equal),
+        (&containing, SpanRel::Containment),
+        (&straddling, SpanRel::ProperOverlap),
+        (&contained, SpanRel::Containment),
+        (&adjacent, SpanRel::Adjacent),
+        (&separated, SpanRel::Separated),
+    ];
+
+    // The premise: each link's FROM meets that run under the relation it is
+    // paired with.
+    let arranged = run(&ca(1), 3).iextent();
+    let snap = k.snapshot();
+    for &(addr, relation) in &cases {
+        let from = snap
+            .world()
+            .links()
+            .readlink(addr)
+            .expect("a deposited link")
+            .from_slot();
+        let spans: Vec<&Span> = from.spans().collect();
+        assert_eq!(spans.len(), 1, "{addr:?}: one FROM span");
+        assert_eq!(classify_spans(spans[0], &arranged), relation, "{addr:?}");
+    }
+
+    let found = reads.findlinks_v(&doc1(), &region).expect("findlinks_v");
+    assert_eq!(
+        found,
+        vec![
+            equal.clone(),
+            containing.clone(),
+            straddling.clone(),
+            contained.clone()
+        ]
+    );
+    for &(addr, _) in &cases {
+        assert_eq!(
+            reads.addressably_discoverable_from(addr, &doc1()),
+            Ok(found.contains(addr)),
+            "{addr:?}: discoverable from doc1 exactly where the stab finds it"
+        );
+    }
 }
 
 /// §5 — the precedence between the two gates, on the call that is faulty in
@@ -324,11 +410,8 @@ fn the_pointwise_reads_apply_the_absence_rule_after_the_document_and_before_resi
     // home of an address that names nothing, before anything establishes that
     // it does. A rule moved just behind the read answers every case above
     // alike, and asks nothing here.
-    let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
-    let recorder = |d: &Address| {
-        asked.borrow_mut().push(d.clone());
-        true
-    };
+    let asked = Asked::default();
+    let recorder = asked.recorder();
     assert_eq!(
         project_on(&snap, &nothing, FROM, &doc1(), &recorder),
         Err(QueryError::NotALink)

@@ -24,7 +24,8 @@ use crate::DiscoveryWorld;
 /// that holds the endpoint, and [`Endpoint::slot`] reads the endpoint out of
 /// a stored tuple. So a probe, a claim's read-out and the equality
 /// [`claims_naming`] asks between them answer from one mapping, and a change
-/// of convention is an edit to this type alone.
+/// of convention is an edit to this type alone. The convention itself is
+/// M7's, stated on its `assert_sup`.
 #[derive(Clone, Copy)]
 enum Endpoint {
     /// `in(y)` — the claims whose `old` is the key, asked of F.
@@ -142,19 +143,19 @@ fn endpoint(e: &Endset) -> Option<Address> {
 /// SOURCES rather than the claim and reads the active slice alone, so it
 /// serves neither the read-out nor the `Audit` view.
 ///
-/// **Denotation, not coverage, decides.** `observe` matches by COVERAGE — a
-/// claim's F is `enc([old])`, which covers every address BENEATH `old` — so
-/// it hands over every claim whose probed endpoint lies AT OR ABOVE `key`,
-/// and the read-out keeps only those whose probed endpoint EQUALS `key`.
-/// That makes `old = y` (resp. `new = x`) a postcondition this function
-/// establishes in every state M7's fold accepts, not a fact it borrows from
-/// the store. On an edit-disciplined store the equality removes nothing:
-/// every endpoint is a resident link, and coverage coincides with denotation
-/// on the `dom(L)` prefix-antichain (EL4 + R0a). On a store a restored
-/// checkpoint or a replayed journal frame folded, a recognized endpoint can
-/// be any T4-valid address — a document's own among them, which lies above
-/// every link the document homes — and the equality is what keeps such a
-/// tuple from being reported as naming `key`.
+/// **Denotation, not coverage, decides.** `observe` matches by COVERAGE — the
+/// probed slot holds `enc([endpoint])`, which covers every address BENEATH
+/// that endpoint — so it hands over every claim whose probed endpoint lies AT
+/// OR ABOVE `key`, and the read-out keeps only those whose probed endpoint
+/// EQUALS `key`. That makes `old = y` (resp. `new = x`) a postcondition this
+/// function establishes in every state M7's fold accepts, not a fact it
+/// borrows from the store. On an edit-disciplined store the equality removes
+/// nothing: every endpoint is a resident link, and coverage coincides with
+/// denotation on the `dom(L)` prefix-antichain (EL4 + R0a). On a store a
+/// restored checkpoint or a replayed journal frame folded, a recognized
+/// endpoint can be any T4-valid address — a document's own among them, which
+/// lies above every link the document homes — and the equality is what keeps
+/// such a tuple from being reported as naming `key`.
 ///
 /// **The resident-key gate** ahead of the walk holds the schema's residence
 /// clause for the probed endpoint, which the equality makes `key` itself: a
@@ -203,9 +204,8 @@ fn claims_naming(
         .collect()
 }
 
-/// The claims with `old = y` (ASN-0125 EL11b `in(y)`): asks about F (FROM)
-/// under the flipped convention, in ASCENDING CLAIM-ADDRESS order — the same
-/// permanent key both query families page by, read off M7's own index.
+/// The claims with `old = y` (ASN-0125 EL11b `in(y)`), in ASCENDING
+/// CLAIM-ADDRESS order — the same permanent key both query families page by.
 ///
 /// TOTAL: every `Address` is admitted, and a `y` that is no resident link is
 /// no claim's `old`, so `[]` is the answer rather than a refusal — a caller
@@ -242,10 +242,10 @@ pub fn in_claims_on<W: DiscoveryWorld>(
     claims_naming(s.world().links(), y, Endpoint::Old, view, readable)
 }
 
-/// The claims with `new = x` (ASN-0125 EL11b `out(x)`): asks about G (TO)
-/// under the flipped convention. Same key, view, order, endpoint-disclosure,
-/// exactness and reader contract (PUB round 2, lane 3.3, §3) as
-/// [`in_claims_on`]: every claim returned has `new` EQUAL to `x`.
+/// The claims with `new = x` (ASN-0125 EL11b `out(x)`). Same key, view,
+/// order, endpoint-disclosure, exactness and reader contract (PUB round 2,
+/// lane 3.3, §3) as [`in_claims_on`]: every claim returned has `new` EQUAL
+/// to `x`.
 pub fn out_claims_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     x: &Address,

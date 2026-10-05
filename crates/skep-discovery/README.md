@@ -22,8 +22,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   function over an explicit snapshot, so the caller owns the
   consistency point and can report as-of positions.
 
-Presents the link store's matcher — never reimplements it; reads one
-snapshot per operation, the one its caller hands it, and writes nothing.
+Presents the link store's matcher and keeps no index of its own; reads
+one snapshot per operation, the one its caller hands it, and writes
+nothing.
 
 ## License
 

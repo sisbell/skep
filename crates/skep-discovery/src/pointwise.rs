@@ -151,8 +151,11 @@ pub fn project_on<W: DiscoveryWorld>(
     Ok(w.m5().project(&surface, &coverage)) // I→V, content subspace, level-class-safe inside M5
 }
 
-/// `coverage(e) ∩ ⋃ extents ≠ ∅` — pointwise, mirroring M7's stab overlap
-/// relations (ProperOverlap | Containment | Equal, never Adjacent).
+/// `coverage(e) ∩ ⋃ extents ≠ ∅` — pointwise, by M7's stab overlap relation
+/// (ProperOverlap | Containment | Equal, never Adjacent). M7 keeps its own
+/// statement of that relation private, so this is a second one and the two
+/// change together; `tests/it/pointwise.rs` holds discoverability to the
+/// region family's stab on every relation `classify_spans` draws.
 /// `classify_spans` is a pure, level-gate-free order relation, total on
 /// cross-length spans (a link-address span against a content run classifies
 /// by plain tumbler order — no fault), so the cross-subspace cases just work.

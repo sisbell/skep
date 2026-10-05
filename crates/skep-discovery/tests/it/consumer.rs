@@ -6,6 +6,7 @@
 //! under the heading the daemon's scan pool links by its anchor.
 
 use crate::common;
+use crate::tidy::code_lines;
 
 use std::collections::HashSet;
 
@@ -327,16 +328,19 @@ fn lib_source() -> String {
 }
 
 /// The names `src/lib.rs` re-exports: every `pub use path::{a, b};` and
-/// `pub use path::a;` statement, wrapped across lines or not. A comment line
-/// is not code.
+/// `pub use path::a;` statement, wrapped across lines or not, with an
+/// attribute ahead of it or not. The code is read through tidy's
+/// [`code_lines`], so a comment — a whole line or a line's tail — is never
+/// taken for code, and never hides the statement after it.
 fn root_reexports(lib: &str) -> Vec<String> {
-    let code: Vec<&str> = lib
-        .lines()
-        .filter(|line| !line.trim_start().starts_with("//"))
-        .collect();
+    let code: Vec<&str> = code_lines(lib).collect();
     code.join("\n")
         .split(';')
-        .filter_map(|statement| statement.trim().strip_prefix("pub use "))
+        .filter_map(|statement| {
+            statement
+                .split_once("pub use ")
+                .map(|(_, path)| path.trim())
+        })
         .flat_map(|path| match path.split_once('{') {
             Some((_, group)) => group.trim_end_matches('}').split(',').collect::<Vec<_>>(),
             None => vec![path.rsplit("::").next().unwrap_or(path)],

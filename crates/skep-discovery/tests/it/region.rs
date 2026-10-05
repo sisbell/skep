@@ -316,7 +316,7 @@ fn the_region_family_answers_over_an_image_that_mixes_address_lengths() {
 /// the number its doc gives it, which a symbolic boundary cannot see: the
 /// largest FLAT region the transport admits — one span per wire slot, each
 /// resolving to one run — is admitted unchanged over a document within the
-/// run budget, as this one is. Deep in a document past the budget the walk
+/// run budget, as this one is. Far along a document past the budget the walk
 /// decides, and the walk's own test pins that.
 #[test]
 fn the_region_family_refuses_an_image_past_the_run_budget() {
@@ -433,13 +433,13 @@ fn image_counts_the_runs_a_span_resolves_not_the_positions_it_names() {
 /// is held to that budget's square, ahead of the first pull: `MAX` spans
 /// past the end of a document one run over the budget walk `MAX × (MAX + 1)`
 /// runs and are refused on every entry point, while the same region over a
-/// one-run document — the same depth, a different run count — is answered,
+/// one-run document — the same reach, a different run count — is answered,
 /// because the walk is priced in runs and never in positions. Beside those:
-/// one span that deep over the fragmented document is one walk and answered;
+/// one span that far over the fragmented document is one walk and answered;
 /// a flat region at its front is the run budget's own case and answered,
-/// while a FLAT region deep in the surface — each span resolving one run, so
-/// the run count admits it — is the walk's to refuse; and the region gate
-/// still speaks first.
+/// while a FLAT region at the end of the surface — each span resolving one
+/// run, so the run count admits it — is the walk's to refuse; and the region
+/// gate still speaks first.
 ///
 /// Two further shapes, each one a price nothing else here asks for.
 ///
@@ -468,25 +468,24 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
     let reads = Reads(&k);
 
     // Every span one past doc2's arranged end, and past doc1's.
-    let past_the_end = MAX_IMAGE_RUNS as u32 + 2;
-    let deep: Vec<Span> = vec![vspan(1, past_the_end, 1); MAX_IMAGE_RUNS];
-    let deep_then_malformed: Vec<Span> =
-        deep.iter().cloned().chain([vspan(2, 1, 1)]).collect();
+    let past_end: Vec<Span> = vec![vspan(1, MAX_IMAGE_RUNS as u32 + 2, 1); MAX_IMAGE_RUNS];
+    let past_end_then_malformed: Vec<Span> =
+        past_end.iter().cloned().chain([vspan(2, 1, 1)]).collect();
     let flat: Vec<Span> = vec![vspan(1, 1, 1); MAX_IMAGE_RUNS];
-    // A FLAT region deep in the fragmented surface: every span names doc2's
-    // last position and resolves exactly one run, so the run count admits it;
-    // the walk — MAX × (MAX + 1) runs — does not.
-    let flat_deep: Vec<Span> = vec![vspan(1, MAX_IMAGE_RUNS as u32 + 1, 1); MAX_IMAGE_RUNS];
+    // A FLAT region at the end of the fragmented surface: every span names
+    // doc2's last position and resolves exactly one run, so the run count
+    // admits it; the walk — MAX × (MAX + 1) runs — does not.
+    let flat_at_end: Vec<Span> = vec![vspan(1, MAX_IMAGE_RUNS as u32 + 1, 1); MAX_IMAGE_RUNS];
     // Spans whose reach ordinal is past `usize`, so no price can be read off
     // it — and which resolve nothing, so no run budget stands behind them.
     let past_usize: Vec<Span> = vec![vspan_reaching_past_usize(1); MAX_IMAGE_RUNS];
-    assert_eq!(reads.image(&doc2(), &flat_deep[..1]), Ok(vec![run(&ca(1), 1)]));
+    assert_eq!(reads.image(&doc2(), &flat_at_end[..1]), Ok(vec![run(&ca(1), 1)]));
     assert_eq!(
-        reads.image(&doc2(), &deep[..1]),
+        reads.image(&doc2(), &past_end[..1]),
         Ok(vec![]),
         "a span past the end resolves no run, whatever it walks"
     );
-    assert_eq!(reads.image(&doc1(), &deep), Ok(vec![]));
+    assert_eq!(reads.image(&doc1(), &past_end), Ok(vec![]));
     assert_eq!(
         reads.image(&doc2(), &past_usize[..1]),
         Ok(vec![]),
@@ -495,24 +494,24 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
 
     for (name, refusal) in &region_entry_points(reads) {
         assert_eq!(
-            refusal(&doc2(), &deep),
+            refusal(&doc2(), &past_end),
             Some(QueryError::ImageTooLarge),
             "{name}: a walk past the square is refused though it resolves nothing"
         );
         assert_eq!(
-            refusal(&doc2(), &deep_then_malformed),
+            refusal(&doc2(), &past_end_then_malformed),
             Some(QueryError::BadRegion),
             "{name}: the whole region is judged before the walk is priced"
         );
         assert_eq!(
-            refusal(&doc1(), &deep),
+            refusal(&doc1(), &past_end),
             None,
-            "{name}: priced in runs — the same depth over one run is answered"
+            "{name}: priced in runs — the same reach over one run is answered"
         );
         assert_eq!(
-            refusal(&doc2(), &deep[..1]),
+            refusal(&doc2(), &past_end[..1]),
             None,
-            "{name}: one walk is never refused for its depth"
+            "{name}: one walk is never refused for its reach"
         );
         assert_eq!(
             refusal(&doc2(), &flat),
@@ -520,9 +519,9 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
             "{name}: a flat region at the front is the run budget's own case"
         );
         assert_eq!(
-            refusal(&doc2(), &flat_deep),
+            refusal(&doc2(), &flat_at_end),
             Some(QueryError::ImageTooLarge),
-            "{name}: a flat region deep in a surface past the run budget is the walk's to refuse"
+            "{name}: a flat region at the end of a surface past the run budget is the walk's to refuse"
         );
         assert_eq!(
             refusal(&doc2(), &past_usize),

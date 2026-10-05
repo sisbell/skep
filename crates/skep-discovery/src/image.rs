@@ -105,8 +105,8 @@ fn run_list_walk(region: &[Span], run_count: usize) -> usize {
 /// the surface's content run-list from its first run (M5 states that walk on
 /// `iter_resolve`'s card), so a span reaching `e` passes at most
 /// `min(#runs, e − 1)` runs whatever it returns, and the sum over the region
-/// is what is priced — in RUNS, so a deep read of a long document holding few
-/// runs is never refused for its depth.
+/// is what is priced — in RUNS, so a span reaching far into a long document
+/// that holds few runs is never refused for its reach.
 ///
 /// Then refuses past [`MAX_IMAGE_RUNS`] with `ImageTooLarge`, counted over the
 /// runs the region RESOLVES — summed across its spans, never the distinct

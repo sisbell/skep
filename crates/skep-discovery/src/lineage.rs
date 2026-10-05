@@ -78,15 +78,17 @@ impl Endpoint {
     }
 }
 
-/// What one `[K_sup]` tuple says, if it is a claim: its two endpoints, each
-/// read out of the slot [`Endpoint::slot`] names, its home attribution
-/// (EL8b), and its own activity — or `None` for a tuple that is not one.
+/// What one `[K_sup]` claim reads out as: its `old` and `new` — ASN-0125
+/// EL4's accessors, each read off the slot [`Endpoint::slot`] names — its home
+/// attribution (EL8b), and its own activity; or `None` for a claim on which
+/// `old`, `new` or its home is undefined.
 ///
-/// RECOGNIZED BEFORE IT IS REPORTED. ASN-0125's archival read ranges over the
-/// schema-conforming claims Ŝ^Σ (Df-DISC(ii)), and a tuple is read out only
-/// where the part of that schema a [`SupClaim`] is built from holds: its F
-/// and its G each denote ONE address, T4-valid, and its own address has a
-/// home. The schema's remaining clauses — the two endpoints distinct, both
+/// READ OUT ONLY WHERE `old` AND `new` ARE DEFINED. ASN-0125's archival read
+/// ranges over the schema-conforming claims Ŝ^Σ (Df-DISC(ii)), and a claim is
+/// read out only where the part of that schema a [`SupClaim`] is built from
+/// holds: its F and its G each denote ONE address, T4-valid — the part on
+/// which EL4's `old` and `new` are defined — and its own address has a home
+/// (EL8b). The schema's remaining clauses — the two endpoints distinct, both
 /// resident — M7 holds at its two `[K_sup]` writers (`assert_sup` checks them,
 /// and `editlink`'s DC guard asks them of a caller's successor through a
 /// predicate M7 keeps crate-private). Of those the read restates residence
@@ -95,22 +97,22 @@ impl Endpoint {
 /// other endpoint's residence, and the two endpoints' distinctness, it never
 /// asks.
 ///
-/// In an edit-disciplined store (EL-DM — every `[K_sup]` tuple born through
-/// those two writers, which schema-conform their emission) every tuple is
-/// recognized, Ŝ^Σ = S^Σ, and nothing is skipped. The recognition is what
-/// keeps the read TOTAL over every state M7's fold accepts, which is wider:
-/// the fold builds the supersession adjacency off every address a slot
-/// denotes, so it admits a slot naming two addresses, or a tumbler that is no
-/// address; and a checkpoint M2 restores, or a frame it replays, decodes
-/// through serde, which checks a link's arity and nothing of this schema.
-/// Such a tuple is no claim of Ŝ^Σ, so skipping it IS the read's answer —
-/// where treating it as one would fail every probe that reaches it, for as
-/// long as it is stored.
+/// In an edit-disciplined store (EL-DM — every `[K_sup]` claim born through
+/// those two writers, which schema-conform their emission) every claim
+/// conforms, Ŝ^Σ = S^Σ, and nothing is skipped. The check is what keeps the
+/// read TOTAL over every state M7's fold accepts, which is wider: the fold
+/// builds the supersession adjacency off every address a slot denotes, so it
+/// admits a slot naming two addresses, or a tumbler that is no address; and a
+/// checkpoint M2 restores, or a frame it replays, decodes through serde, which
+/// checks a link's arity and nothing of this schema. Such a claim is a
+/// NON-CONFORMER — in S^Σ, outside Ŝ^Σ (EL4) — with no `old` or no `new` to
+/// read out, so skipping it IS the read's answer, where reading it out would
+/// fail every probe that reaches it, for as long as it is stored.
 ///
-/// `t` is a tuple M7's `observe` handed over: its address is a key of the
-/// supersession class's typed slice, and its slots are the tuple's stored F
-/// and G — read once, by `observe`, and not again here.
-fn claim_at(l: &LinkState, t: Tuple) -> Option<SupClaim> {
+/// `t` is a claim M7's `observe` handed over as a [`Tuple`]: its address is a
+/// key of the supersession class's typed slice, and its slots are the claim's
+/// stored F and G — read once, by `observe`, and not again here.
+fn sup_claim(l: &LinkState, t: Tuple) -> Option<SupClaim> {
     let old = endpoint(Endpoint::Old.slot(&t))?;
     let new = endpoint(Endpoint::New.slot(&t))?;
     let home = home_of(&t.addr)?; // EL8b
@@ -124,8 +126,10 @@ fn claim_at(l: &LinkState, t: Tuple) -> Option<SupClaim> {
     })
 }
 
-/// The one T4-valid address an endpoint slot denotes (Df-DISC(ii)), or `None`
-/// where it denotes several, none, or a tumbler that is no address.
+/// The one T4-valid address an endpoint slot denotes — EL4's `old` or `new`,
+/// read off the slot that holds it — or `None` where it denotes several, none,
+/// or a tumbler that is no address: where that accessor is undefined
+/// (Df-DISC(ii)).
 fn endpoint(e: &Endset) -> Option<Address> {
     validate(e.single_denoted()?.clone()).ok()
 }
@@ -152,17 +156,17 @@ fn endpoint(e: &Endset) -> Option<Address> {
 /// borrows from the store. On an edit-disciplined store the equality removes
 /// nothing: every endpoint is a resident link, and coverage coincides with
 /// denotation on the `dom(L)` prefix-antichain (EL4 + R0a). On a store a
-/// restored checkpoint or a replayed journal frame folded, a recognized
+/// restored checkpoint or a replayed journal frame folded, a defined
 /// endpoint can be any T4-valid address — a document's own among them, which
 /// lies above every link the document homes — and the equality is what keeps
-/// such a tuple from being reported as naming `key`.
+/// such a claim from being reported as naming `key`.
 ///
 /// **The resident-key gate** ahead of the walk holds the schema's residence
 /// clause for the probed endpoint, which the equality makes `key` itself: a
-/// `[K_sup]` endpoint is a resident link (Df-DISC(ii)), so no claim names a
-/// non-link `key`, and `[]` is the TRUE answer rather than a fallback,
-/// reached without walking the class. Resident, not active: a nullified link
-/// is still resident and remains a legal probe key.
+/// schema-conforming claim's endpoint is a resident link (Df-DISC(ii)), so no
+/// conforming claim names a non-link `key`, and `[]` is the TRUE answer
+/// rather than a fallback, reached without walking the class. Resident, not
+/// active: a nullified link is still resident and remains a legal probe key.
 ///
 /// **Two upstream preconditions are discharged here**, and they arrive on
 /// DIFFERENT channels. `observe` FAULTS on a `ty` that is neither
@@ -173,12 +177,12 @@ fn endpoint(e: &Endset) -> Option<Address> {
 /// indistinguishable from a true answer; [`Endpoint::pattern`] builds the
 /// probe out of `key` itself, one tumbler, so it cannot arise.
 ///
-/// [`claim_at`] reads each observed tuple out as a claim or skips it, the
-/// equality keeps the claims naming `key`, and the home rule is then asked of
-/// each kept claim's own address — past the read's other filters, as the
-/// crate header's predicate contract states.
+/// [`sup_claim`] reads each observed claim out, or skips it where its `old`,
+/// `new` or home is undefined; the equality keeps the claims naming `key`; and
+/// the home rule is then asked of each kept claim's own address — past the
+/// read's other filters, as the crate header's predicate contract states.
 ///
-/// It reads the link store alone, so it takes the store, as [`claim_at`]
+/// It reads the link store alone, so it takes the store, as [`sup_claim`]
 /// beside it and `descriptor`'s `candidates` do: the two public reads are its
 /// generic shell, and monomorphizing them for a world copies their one call,
 /// never this body.
@@ -195,7 +199,7 @@ fn claims_naming(
     let sup = l.reserved_type(ShippedType::Supersedes);
     l.observe(sup, endpoint.pattern(key), view) // the [K_sup] tuples whose probed slot covers `key`
         .into_iter()
-        .filter_map(|t| claim_at(l, t)) // a tuple that is no claim is skipped (Df-DISC(ii))
+        .filter_map(|t| sup_claim(l, t)) // a claim with no `old` or `new` is skipped (Df-DISC(ii))
         .filter(|c| endpoint.of(c) == key) // DENOTATION, not coverage: the endpoint IS `key`
         // The result-set filter (PUB round 2, lane 3.3, §3), asked of each
         // claim's own address. The endpoints (`old`/`new`) stay as recorded:
@@ -208,18 +212,20 @@ fn claims_naming(
 /// CLAIM-ADDRESS order — the same permanent key both query families page by.
 ///
 /// TOTAL: every `Address` is admitted, and a `y` that is no resident link is
-/// no claim's `old`, so `[]` is the answer rather than a refusal — a caller
-/// owes no check that `y` is resident before asking. `view = Active` yields
-/// the operative graph (`succ_o`), `Audit` the full history (`succ_h`);
-/// `Default` behaves as `Active` (M7's reads coerce it).
+/// no schema-conforming claim's `old` (Df-DISC(ii)), so `[]` is the answer
+/// rather than a refusal — a caller owes no check that `y` is resident before
+/// asking. `view = Active` yields the operative graph (`succ_o`), `Audit` the
+/// full history (`succ_h`); `Default` behaves as `Active` (M7's reads coerce
+/// it).
 ///
-/// CLAIMS, and `old = y` EXACTLY: a `[K_sup]` tuple whose F and G do not
-/// each denote one T4-valid address is no claim (ASN-0125 Df-DISC(ii)) and is
-/// not returned, and a claim is returned only where its `old` IS `y` — never
-/// where it merely lies above `y`, as a document's address lies above every
-/// link the document homes. On a store M7's two `[K_sup]` writers alone have
-/// written, neither clause removes anything; both hold of the answer in every
-/// state M7's fold accepts, a restored checkpoint or a replayed journal frame
+/// CLAIMS WHOSE `old` AND `new` ARE DEFINED, and `old = y` EXACTLY: a claim
+/// whose F and G do not each denote one T4-valid address has no `old` or no
+/// `new` (ASN-0125 EL4 — a non-conformer to Df-DISC(ii)) and is not returned,
+/// and a claim is returned only where its `old` IS `y` — never where it merely
+/// lies above `y`, as a document's address lies above every link the
+/// document homes. On a store M7's two `[K_sup]` writers alone have written,
+/// neither clause removes anything; both hold of the answer in every state
+/// M7's fold accepts, a restored checkpoint or a replayed journal frame
 /// included.
 ///
 /// The view selects which CLAIMS are disclosed, never which endpoints: each

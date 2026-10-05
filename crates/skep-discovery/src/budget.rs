@@ -55,7 +55,7 @@
 /// one run — the largest region the transport admits — passes the run count
 /// unchanged. It passes the walk (below) too over any reading surface of at
 /// most 4096 content runs; over a more fragmented surface the walk decides,
-/// and it refuses such a region when its spans lie deep in the run-list.
+/// and it refuses such a region when its spans reach far along the run-list.
 ///
 /// What it refuses is the shape no wire cap prices: the region×image product,
 /// where each admitted span resolves to the whole of a fragmented document.

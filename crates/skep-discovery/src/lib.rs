@@ -195,8 +195,9 @@
 //!   `readlink`, which answers `[]` for a non-link key and stops there;
 //!   otherwise one `observe` of the supersession class — a walk of that
 //!   class's typed slice, one coverage test per claim, and no store walk —
-//!   then, per tuple it recognizes as a claim, one `is_active` and one
-//!   comparison of the probed endpoint with the key, ahead of the home rule.
+//!   then, per observed claim whose `old`, `new` and home are defined, one
+//!   `is_active` and one comparison of the probed endpoint with the key,
+//!   ahead of the home rule.
 //! * the pointwise pair — no store walk: one `followlink` ([`project_on`]),
 //!   or one `readlink` and one `is_active`
 //!   ([`addressably_discoverable_from_on`]), plus M5's `#runs` for the

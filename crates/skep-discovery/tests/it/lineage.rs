@@ -1,7 +1,7 @@
 //! §7 — archival supersession lineage: the flipped probes behind the
 //! resident-key gate, the class they restrict to, what one claim says, the
-//! tuples of that class that are no claim, and the claims that only cover a
-//! key they do not name.
+//! claims of that class with an undefined endpoint, and the claims that only
+//! cover a key they do not name.
 
 use crate::common;
 
@@ -254,19 +254,19 @@ fn lineage_reads_out_supersession_claims_alone_among_the_links_naming_the_key() 
     assert_eq!(reads.out_claims(&e2, View::Active), only_the_claim);
 }
 
-/// §7 — the lineage read-out reports a `[K_sup]` tuple only as a claim it
-/// recognizes, and what makes it report EVERY claim a writer deposits is a
-/// fence on the WRITE surface: every tuple a writer deposits carries
-/// unit-depth single-address F and G, so Ŝ^Σ = S^Σ and the recognition skips
-/// nothing. That fence is held at sites M8 cannot see and cannot ask about,
-/// so what M8 can do is pin it: the two routes by which a caller-shaped tuple
-/// could reach the `[K_sup]` class are closed, in the build where a change to
-/// either would surface as this test rather than as a deposit the lineage
-/// read then skips as no claim.
+/// §7 — the lineage read-out reports a `[K_sup]` claim only where its `old`
+/// and `new` are defined, and what makes it report EVERY claim a writer
+/// deposits is a fence on the WRITE surface: every claim a writer deposits
+/// carries unit-depth single-address F and G, so Ŝ^Σ = S^Σ and the read-out
+/// skips nothing. That fence is held at sites M8 cannot see and cannot ask
+/// about, so what M8 can do is pin it: the two routes by which a caller-shaped
+/// tuple could reach the `[K_sup]` class are closed, in the build where a
+/// change to either would surface as this test rather than as a deposit the
+/// lineage read then skips.
 ///
 /// The open route is `editlink`, whose successor is the caller's: its DC
-/// guard asks the part of the schema the read-out recognizes a claim by, and
-/// the schema's remaining clauses beside it — the two endpoints distinct,
+/// guard asks the part of the schema EL4's `old` and `new` are defined by,
+/// and the schema's remaining clauses beside it — the two endpoints distinct,
 /// both resident — so a successor with a two-address F is refused rather
 /// than deposited. `makelink` refuses the class outright.
 #[test]
@@ -342,22 +342,23 @@ fn lineage_endpoints_rest_on_a_fence_the_write_surface_keeps() {
     );
 }
 
-/// §7 — the read-out RECOGNIZES a claim before it reports one: a `[K_sup]`
-/// tuple whose endpoint is not one address is no claim of the
-/// schema-conforming class ASN-0125's read ranges over, and is skipped, never
-/// a fault. No M7 writer deposits one — the fence test above pins that — but
-/// M7's fold admits one, and a restored checkpoint or a replayed journal frame
-/// reaches the fold through serde, which checks a link's arity and nothing of
-/// the schema. So two such tuples are folded here the way a decoded frame
-/// would be, beside one conforming claim: one whose F denotes TWO addresses,
-/// and one whose G denotes doc1's link-subspace PREFIX — a tumbler with a
-/// trailing zero, so no address, whose subtree covers every link of doc1.
-/// Both probes reach all three tuples under both views, and answer the claim
-/// alone; a read-out that took every tuple for a claim would fail each of
-/// these probes for as long as the tuples are stored. The home rule is asked
-/// past the recognition, so only of the claim reported.
+/// §7 — the read-out reports a claim only where its `old` and `new` are
+/// defined: a `[K_sup]` claim whose endpoint is not one address is a
+/// non-conformer — in S^Σ, outside the schema-conforming claims Ŝ^Σ ASN-0125's
+/// read ranges over — and is skipped, never a fault. No M7 writer deposits one
+/// — the fence test above pins that — but M7's fold admits one, and a restored
+/// checkpoint or a replayed journal frame reaches the fold through serde,
+/// which checks a link's arity and nothing of the schema. So two such claims
+/// are folded here the way a decoded frame would be, beside one conforming
+/// claim: one whose F denotes TWO addresses, and one whose G denotes doc1's
+/// link-subspace PREFIX — a tumbler with a trailing zero, so no address, whose
+/// subtree covers every link of doc1. Both probes reach all three claims under
+/// both views, and answer the conforming one alone; a read-out that took every
+/// claim's endpoints for defined would fail each of these probes for as long
+/// as the non-conformers are stored. The home rule is asked past that check,
+/// so only of the claim reported.
 #[test]
-fn lineage_skips_a_supersession_tuple_that_is_not_a_claim() {
+fn lineage_skips_a_supersession_claim_with_an_undefined_endpoint() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
@@ -393,8 +394,8 @@ fn lineage_skips_a_supersession_tuple_that_is_not_a_claim() {
         Link::triple(enc([&e1]), no_address, sup.clone()),
     );
 
-    // The premise: each probe reaches the claim AND both tuples, so the
-    // answers below are the recognition's and not the probes'.
+    // The premise: each probe reaches all three claims, so the answers
+    // below are the read-out's and not the probes'.
     let snap = k.snapshot();
     let old_probe = [e1.tumbler().clone()];
     let new_probe = [e2.tumbler().clone()];
@@ -445,7 +446,8 @@ fn lineage_skips_a_supersession_tuple_that_is_not_a_claim() {
         );
     }
 
-    // Asked once, of the reported claim's home — not of the two tuples skipped.
+    // Asked once, of the reported claim's home — not of the two non-conformers
+    // skipped.
     let asked = Asked::default();
     let recorder = asked.recorder();
     assert_eq!(
@@ -456,17 +458,17 @@ fn lineage_skips_a_supersession_tuple_that_is_not_a_claim() {
 }
 
 /// §7 — a claim is read out only where the endpoint its probe names IS the
-/// key. `observe` matches by COVERAGE, and a `[K_sup]` tuple naming a
-/// DOCUMENT at both ends — one T4-valid address a side, so the read-out
-/// recognizes it — covers every link that document homes. No M7 writer
+/// key. `observe` matches by COVERAGE, and a `[K_sup]` claim naming a
+/// DOCUMENT at both ends — one T4-valid address a side, so its `old` and
+/// `new` are defined — covers every link that document homes. No M7 writer
 /// deposits one, but M7's fold admits one, as a restored checkpoint or a
 /// replayed journal frame reaches it: both probes reach it beside the
-/// conforming claim and answer the claim alone, where a read-out that took
-/// coverage for denotation would report a claim whose `old` and `new` are
-/// doc1. Beside it, a tuple naming a link address no deposit minted is the
-/// resident-key gate's alone to refuse: its endpoint IS the key it is probed
-/// by, and that key is no resident link. The home rule is asked past both, so
-/// only of the claim reported.
+/// conforming claim and answer the conforming claim alone, where a read-out
+/// that took coverage for denotation would report a claim whose `old` and
+/// `new` are doc1. Beside it, a claim naming a link address no deposit
+/// minted is the resident-key gate's alone to refuse: its endpoint IS the key
+/// it is probed by, and that key is no resident link. The home rule is asked
+/// past both, so only of the claim reported.
 #[test]
 fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
     let k = kernel();
@@ -484,9 +486,9 @@ fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
         .reserved_type(ShippedType::Supersedes)
         .clone();
 
-    // A tuple naming doc1 at both ends: one T4-valid address a side, so the
-    // read-out recognizes it, and above every link doc1 homes, so it COVERS
-    // both endpoints of the conforming claim.
+    // A claim naming doc1 at both ends: one T4-valid address a side, so its
+    // `old` and `new` are defined, and above every link doc1 homes, so it
+    // COVERS both endpoints of the conforming claim.
     let doc = doc1();
     let above = enc([&doc]);
     assert_eq!(
@@ -495,14 +497,14 @@ fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
         "one T4-valid address"
     );
     fold_decoded_deposit(&k, &la(8), Link::triple(above.clone(), above, sup.clone()));
-    // And a tuple naming, at both ends, a link address no deposit minted.
+    // And a claim naming, at both ends, a link address no deposit minted.
     let unminted = la(99);
     let named = enc([&unminted]);
     fold_decoded_deposit(&k, &la(9), Link::triple(named.clone(), named, sup.clone()));
 
-    // The premise: each probe of a conforming endpoint reaches the claim AND
-    // the document-naming tuple, and a probe of the unminted address reaches
-    // the tuple naming it, which no deposit made a resident link.
+    // The premise: each probe of a conforming endpoint reaches the conforming
+    // claim AND the document-naming one, and a probe of the unminted address
+    // reaches the claim naming it, which no deposit made a resident link.
     let snap = k.snapshot();
     let links = snap.world().links();
     let reached = |pattern: Pattern<'_>| -> Vec<Address> {
@@ -569,8 +571,8 @@ fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
         );
     }
 
-    // Asked once, of the reported claim's home — the document-naming tuple,
-    // homed in doc1 too, costs no consult.
+    // Asked once, of the reported claim's home — the document-naming claim,
+    // homed in doc1 too, adds no second ask.
     let asked = Asked::default();
     let recorder = asked.recorder();
     assert_eq!(

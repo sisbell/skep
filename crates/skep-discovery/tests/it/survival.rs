@@ -80,7 +80,7 @@ fn delete_orphans_reports_active_last_witness_losses() {
     let _link_a = link(&store, &doc1(), &[ca(1)], &[ca(2)]);
     let link_b = link(&store, &doc1(), &[ca(3)], &[ca(3)]);
 
-    // Deleting position 3 drops link_b's last witness in d.
+    // Deleting position 3 takes link_b's last witness in d.
     let r = reads.delete_orphans(&doc1(), &vp(1, 3), &n(1)).expect("preview");
     assert_eq!(r.orphaned, vec![la(2)]);
     // Deleting position 1 leaves link_a witnessed at position 2 — no orphan.
@@ -131,7 +131,7 @@ fn survival_world() -> Kernel<World> {
 /// never touches — is load-bearing only at particular `(p, width)`, and the
 /// suite's hand-picked cases left two of the three unwatched.
 #[test]
-fn delete_orphans_previews_exactly_what_the_delete_drops() {
+fn delete_orphans_previews_exactly_what_the_delete_orphans() {
     let mut ever_orphaned = false;
     for p in 1..=4u32 {
         for width in 1..=(5 - p) {
@@ -154,12 +154,12 @@ fn delete_orphans_previews_exactly_what_the_delete_drops() {
                 .delete(SYS, &doc1(), vp(1, p), n(width))
                 .expect("the request the preview accepted");
 
-            let dropped: Vec<Address> = before
+            let orphaned_by_delete: Vec<Address> = before
                 .into_iter()
                 .filter(|a| reads.addressably_discoverable_from(a, &doc1()) == Ok(false))
                 .collect();
             assert_eq!(
-                preview.orphaned, dropped,
+                preview.orphaned, orphaned_by_delete,
                 "preview of DELETE [{p}, {p}+{width}) on doc1"
             );
         }
@@ -292,7 +292,7 @@ fn the_preview_answers_a_request_the_delete_refuses_for_ownership() {
     // its effective owner — the ω gate's own verdict, not a registration one.
     let stranger = Caller::Principal(PrincipalId(2));
 
-    // The preview accepts, naming the links the delete would drop …
+    // The preview accepts, naming the links the delete would orphan …
     assert!(delete_orphans_on(&k.snapshot(), &doc1(), &vp(1, 1), &n(1), &every_home).is_ok());
     // … and the DELETE it previews refuses this caller outright.
     assert!(matches!(

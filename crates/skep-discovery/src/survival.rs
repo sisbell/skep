@@ -1,5 +1,10 @@
-//! §6 — the pre-edit link-survival check (ASN-0117): a pure what-if over the
-//! snapshot — it never calls M5's delete — built on the F-UDIST set identity
+//! §6 — the pre-edit link-survival check (ASN-0117), which the crate calls
+//! the delete-orphan preview: which links a proposed DELETE would ORPHAN from
+//! `d`. The survival it checks is a link's discoverability from `d`, the one
+//! thing ASN-0117 lets a delete take: ASN-0117's own LINK SURVIVAL — the link
+//! and its coverage outlasting every DELETE — holds by construction, and no
+//! read checks it. A pure what-if over the snapshot — it never calls M5's
+//! delete — built on the F-UDIST set identity
 //! `orphaned = findlinks(A_del) ∖ findlinks(retained)` over the ACTIVE
 //! view (a nullified link that lost its last witness in `d` is NOT reported —
 //! a deliberate divergence from ASN-0117's `D(d,Σ)` over `dom(L)`,
@@ -18,7 +23,7 @@ use crate::types::{OrphanError, OrphanReport};
 use crate::DiscoveryWorld;
 
 /// Pre-edit what-if (ASN-0117): the links the proposed DELETE `[p, p+width)`
-/// would drop from `d` — read-only, never the edit path.
+/// would orphan from `d` — read-only, never the edit path.
 ///
 /// Refuses the requests DELETE refuses on its checks of the REQUEST — its
 /// target's registration and its range's shape — so the preview is of the

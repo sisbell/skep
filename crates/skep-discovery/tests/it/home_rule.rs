@@ -250,7 +250,7 @@ fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
     assert_eq!(report.orphaned.len(), 3);
     assert_eq!(sorted(asked.take()), sorted(homes_of(&report.orphaned)));
     // "Past its OTHER filters": under a home-bound descriptor only the
-    // residing candidate costs a consult, in the enumeration, the count and
+    // residing candidate's home is asked, in the enumeration, the count and
     // the window's lazy key-cut alike.
     let homed_in_doc2 = FourSet {
         home: SlotSpec::Spans(enc(&[doc2()])),
@@ -277,11 +277,12 @@ fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
 
 /// §6 — the preview asks the home rule (PUB-6.13) PAST its own filter, the
 /// relative complement — the rule runs AFTER the set identity, in the
-/// preview's own words — so a link the delete leaves witnessed costs no
-/// consult (PUB-7.15, PUB-7.16). The once-per-candidate law's fixture orphans
-/// every link it holds, where asking before the complement and after it ask
-/// alike; here one link survives, homed in a document that is neither `d` nor
-/// the orphan's home, so an ask of its home cannot pass for an ask of `d`.
+/// preview's own words — so the home of a link the delete leaves witnessed is
+/// never asked (PUB-7.15, PUB-7.16). The once-per-candidate law's fixture
+/// orphans every link it holds, where asking before the complement and after
+/// it ask alike; here one link survives, homed in a document that is neither
+/// `d` nor the orphan's home, so an ask of its home cannot pass for an ask of
+/// `d`.
 #[test]
 fn the_preview_asks_its_predicate_only_of_the_links_it_orphans() {
     let k = kernel();

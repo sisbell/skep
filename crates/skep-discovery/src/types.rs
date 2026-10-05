@@ -83,7 +83,7 @@ pub struct SupClaim {
 }
 
 /// The pre-edit survival report (ASN-0117): the links the proposed DELETE
-/// would drop from `d` — the PER-DOCUMENT orphan set over the ACTIVE view (a
+/// would orphan from `d` — the PER-DOCUMENT orphan set over the ACTIVE view (a
 /// nullified link that lost its last witness in `d` is NOT reported). The
 /// global-ghost / LP17 escalation is M6 territory, not computed here.
 ///
@@ -97,7 +97,8 @@ pub struct OrphanReport {
     pub orphaned: Vec<Address>,
 }
 
-/// The typed rejection of the QUERY surface — the region family and the
+/// The typed rejection of the QUERY surface — the region resolver
+/// [`crate::image_on`], the region family that reads through it, and the
 /// pointwise pair. Exactly these five arise on the surface as a whole, so a
 /// caller matching the whole surface — as M10's lowering does — writes no
 /// unreachable arm. Each read states which of them it raises, and a match
@@ -112,11 +113,12 @@ pub struct OrphanReport {
 /// `Permanent`); whether a caller can reshape its way past one depends on
 /// the read:
 ///
-/// * a region-family `ImageTooLarge` splits: the budgets are per call, so
-///   the region can be asked in parts, down to single positions, and the
-///   parts recomposed by UNION — a count by counting the union, never by
-///   adding counts. A single position is refused only over a reading surface
-///   of more than `MAX_IMAGE_RUNS²` content runs;
+/// * a region's `ImageTooLarge` — the resolver's, which the region family
+///   inherits — splits: the budgets are per call, so the region can be asked
+///   in parts, down to single positions, and the parts recomposed by UNION —
+///   a count by counting the union, never by adding counts. A single
+///   position is refused only over a reading surface of more than
+///   `MAX_IMAGE_RUNS²` content runs;
 /// * a pointwise `ImageTooLarge` — a fact about `d`'s runs and `a`'s
 ///   coverage — and an `EndsetsTooLarge` over one position do not: those
 ///   questions cannot be answered through this surface at this state.

@@ -20,7 +20,7 @@ use skep_address::{document_of, Address};
 /// fault on the first node or account address a request names. So no read
 /// reaches a home that is not there: each caller states what an absent home
 /// means where it asks — the home rule admits the address, the residence test
-/// places it at no home, and the lineage read-out reports no claim.
+/// places it at no home, and the lineage read-out skips a claim homed nowhere.
 pub(crate) fn home_of(a: &Address) -> Option<Address> {
     document_of(a)
 }

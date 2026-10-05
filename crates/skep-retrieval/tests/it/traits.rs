@@ -277,7 +277,8 @@ fn the_answer_collections_behave_like_std_collections() {
     let round: CompareReport = rep.clone().into_iter().collect();
     assert_eq!(round, rep);
     assert!(CompareReport::default().is_empty());
-    // A report of two documents that share no address IS the default.
+    // A report whose second operand names no span — so the two regions share
+    // no address — IS the default.
     let empty = ok_of(q.compare(
         &[region_spec(doc1(), vec![vspan(1, 1, 3)])],
         &[region_spec(doc1(), vec![])],

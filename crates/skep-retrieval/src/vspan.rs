@@ -241,6 +241,10 @@ mod tests {
 
     #[test]
     fn gate_vspan_rejects_each_fault_in_documented_order() {
+        // Every fault, and for each ADJACENT pair of the ladder one span that
+        // fails BOTH — so swapping any two neighbouring checks changes a
+        // verdict here, where `SpanFault`'s card says the order is tested.
+        //
         // Level-uniformity is checked before ordinal-level: a [1]-width on a
         // depth-2 start fails BOTH, and NotLevelUniform wins.
         assert_eq!(
@@ -252,9 +256,23 @@ mod tests {
             gate_vspan(&span(&[1, 1], &[1, 0])),
             Err(SpanFault::NotOrdinalLevel)
         );
+        // Ordinal-level is checked before zero-freedom: a level-uniform
+        // depth-3 span whose width acts at component 2 AND whose start
+        // carries a separator fails BOTH, and NotOrdinalLevel wins.
+        assert_eq!(
+            gate_vspan(&span(&[1, 0, 1], &[0, 1, 0])),
+            Err(SpanFault::NotOrdinalLevel)
+        );
         // Ordinal-level and uniform, but the start carries a separator.
         assert_eq!(
             gate_vspan(&span(&[1, 0, 1], &[0, 0, 1])),
+            Err(SpanFault::StartNotZeroFree)
+        );
+        // Zero-freedom is checked before depth: the one-component start `0`
+        // — a legal endpoint, T12 asking only that the width be positive and
+        // act within the start — fails BOTH, and StartNotZeroFree wins.
+        assert_eq!(
+            gate_vspan(&span(&[0], &[1])),
             Err(SpanFault::StartNotZeroFree)
         );
         // Everything else passes, but #start = 1 < 2.

@@ -1,11 +1,13 @@
 //! §A RETRIEVEV (ASN-0115): exact per-position delivery in submitted order,
-//! R6's silent degradations, the whole-request gate, and the masked form's
+//! each stored value delivered itself and never a copy of its bytes, R6's
+//! silent degradations, the whole-request gate, and the masked form's
 //! per-origin consult, asked once per run.
 
 use std::cell::RefCell;
 
 use skep_address::{Address, Span};
 use skep_arrangement::{seat_link, Deposit};
+use skep_content::HasContent;
 use skep_namespace::PrincipalId;
 use skep_retrieval::{Delivery, DeliveryItem, Query, RetrieveError, SpanFault};
 
@@ -132,6 +134,40 @@ fn retrieve_v_delivers_every_run_of_a_multi_block_document_in_v_order() {
 }
 
 #[test]
+fn retrieve_v_delivers_each_stored_value_itself_and_never_a_copy_of_its_bytes() {
+    // §A's cost argument: a content item is an `Arc` clone of the value M4
+    // stores — one pointer per item however many bytes the value holds — so
+    // a delivery naming one value many times (R8: no dedup) costs its item
+    // count and not the bytes repeated. `Val::as_bytes` borrows the value's
+    // one allocation, so the value itself and a copy are told apart by
+    // address, which no `==` on a delivery can do.
+    let k = mem_kernel();
+    three_runs(&k); // ca1 sits at doc1's V1 and at doc2's V2 and V4
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let stored = s
+        .world()
+        .content()
+        .value_at(ca(1).tumbler())
+        .expect("ca1 is stored");
+    let delivery = ok_of(q.retrieve_v(&[
+        spec(doc1(), vspan(1, 1, 1)),
+        spec(doc2(), vspan(1, 2, 1)),
+        spec(doc2(), vspan(1, 4, 1)),
+    ]));
+    assert_eq!(delivery.len(), 3);
+    for item in &delivery {
+        let DeliveryItem::Content(v) = item else {
+            panic!("ca1 is content, delivered as {item:?}");
+        };
+        assert!(
+            std::ptr::eq(v.as_bytes(), stored.as_bytes()),
+            "a delivered {v:?} is a copy of the stored value's bytes, not the value"
+        );
+    }
+}
+
+#[test]
 fn retrieve_v_delivers_content_a_source_document_has_deleted() {
     // §Invariants: delivered content is permanent and faithful — M4 has no
     // delete, so a position a source document dropped still delivers its
@@ -203,8 +239,9 @@ fn retrieve_v_masked_withholds_each_unreadable_run_at_its_own_position() {
     );
     // The width withheld is the WINDOW's share of the run, not the run's
     // whole: positions 3..4 cut the second run to one position.
+    let window = ok_of(q.retrieve_v_masked(&[spec(doc2(), vspan(1, 3, 2))], &not_doc1));
     assert_eq!(
-        ok_of(q.retrieve_v_masked(&[spec(doc2(), vspan(1, 3, 2))], &not_doc1)),
+        window,
         Delivery(vec![
             DeliveryItem::Withheld {
                 origin: doc1(),
@@ -215,6 +252,13 @@ fn retrieve_v_masked_withholds_each_unreadable_run_at_its_own_position() {
                 width: n(1)
             },
         ])
+    );
+    // Every run of that window is masked, so it delivers nothing — and is
+    // NOT empty: `is_empty` asks whether the delivery carries any item, and
+    // each withheld run is one (`Delivery::is_empty`'s card).
+    assert!(
+        !window.is_empty(),
+        "an all-masked delivery carries its withheld items: {window:?}"
     );
     // A delivery counts a withheld run ONCE, however many positions it spans.
     assert_eq!(

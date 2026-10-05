@@ -158,8 +158,8 @@ fn the_request_gate_reports_the_first_fault_in_request_order() {
     // its kind — which is what makes `index` / `(region, index)` /
     // `(operand, region, index)` localization mean anything. Within ONE spec
     // the registry check precedes the span gate; ACROSS specs, request order
-    // decides. Each request below carries two faults of DIFFERENT kinds, so
-    // only the ordering can explain which is reported.
+    // decides. Each request below carries two faults that would be reported
+    // differently, so only the ordering can explain which is reported.
     let k = mem_kernel();
     insert3(&k);
     let s = k.snapshot();
@@ -204,6 +204,54 @@ fn the_request_gate_reports_the_first_fault_in_request_order() {
             fault: SpanFault::NotOrdinalLevel
         }
     ));
+    // Within ONE operand, request order runs across its regions and their
+    // spans too, not only from ρ₁ to ρ₂: region 0's malformed span outranks
+    // region 1's unregistered document, and a malformed span outranks a
+    // link-started span listed after it — so a gate that checked an
+    // operand's documents, or a region's residences, in a pass of their own
+    // would speak for the later fault.
+    assert_eq!(
+        err_of(q.compare(
+            &[
+                region_spec(doc1(), vec![not_ordinal_level_span()]),
+                region_spec(unregistered(), vec![vspan(1, 1, 1)]),
+            ],
+            &[],
+        )),
+        CompareError::MalformedSpan {
+            operand: Operand::First,
+            region: 0,
+            index: 0,
+            fault: SpanFault::NotOrdinalLevel
+        }
+    );
+    assert_eq!(
+        err_of(q.compare(
+            &[region_spec(
+                doc1(),
+                vec![not_ordinal_level_span(), vspan(2, 1, 1)]
+            )],
+            &[],
+        )),
+        CompareError::MalformedSpan {
+            operand: Operand::First,
+            region: 0,
+            index: 0,
+            fault: SpanFault::NotOrdinalLevel
+        }
+    );
+    // …and within one FINDDOCSCONTAINING region, the first malformed span
+    // speaks, not the last.
+    let zeroed = Span::new(t(&[1, 0, 1]), t(&[0, 0, 1])).expect("T12-legal");
+    let two_malformed = [region_spec(doc1(), vec![zeroed, not_ordinal_level_span()])];
+    assert_eq!(
+        err_of(q.find_docs_containing(&two_malformed)),
+        FindError::MalformedSpan {
+            region: 0,
+            index: 0,
+            fault: SpanFault::StartNotZeroFree
+        }
+    );
     // ρ₂'s documents are gated too, after ρ₁'s — the operand-2 registry
     // check no single-operand request can reach.
     assert!(matches!(

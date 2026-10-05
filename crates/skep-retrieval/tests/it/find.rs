@@ -1,6 +1,6 @@
-//! §E FINDDOCSCONTAINING (ASN-0124): present-tense containers, the union of
-//! a region's spans, the container filter and its consult, the gate, and the
-//! coverage budget.
+//! §E FINDDOCSCONTAINING (ASN-0124): present-tense containers, at chosen
+//! requests and as a law over every window; the union of a region's spans;
+//! the container filter and its consult; the gate; and the coverage budget.
 
 use std::cell::RefCell;
 
@@ -107,6 +107,73 @@ fn find_docs_containing_unions_every_span_of_a_region() {
     );
     // An empty request names no coverage and finds nothing.
     assert_eq!(ok_of(q.find_docs_containing(&[])), Vec::<Address>::new());
+}
+
+#[test]
+fn find_docs_containing_answers_exactly_the_documents_holding_a_covered_address_now() {
+    // ASN-0124 FD-SOUND and FD-COMPLETE together say the answer IS the set of
+    // documents that currently hold some address the regions resolve to — a
+    // law over every request, asked here of every window of both documents,
+    // in T1 order. The oracle reads each document's positions off M5's
+    // `point` alone, so it shares nothing with the coverage M6 builds, R, its
+    // reverse index or the present-tense filter.
+    //
+    // The world is chosen so that a container can hold a run's SECOND
+    // address and not its first: doc1 drops ca1 and keeps ca2, so it
+    // contains doc2's run [ca1, ca2] through ca2 alone — the container a
+    // coverage cut short of a run's whole extent would drop — and R, which
+    // never shrinks, still names doc1 for ca1, so doc2's ca1 windows meet a
+    // ghost the present-tense filter must drop.
+    let k = mem_kernel();
+    let vs = three_runs(&k); // doc1 = [ca1, ca2, ca3]; doc2 = [doc2_ca1][ca1, ca2][ca1]
+    vs.delete(P1, &doc1(), vp(1, 1), n(1))
+        .expect("delete commits"); // doc1 = [ca2, ca3]
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let m5 = s.world().m5();
+    // Every address `d`'s content arrangement binds now, position by position.
+    let held = |d: &Address| -> Vec<Address> {
+        let count = m5.content_count(d);
+        (1u32..)
+            .take_while(|&o| n(o) <= count)
+            .map(|o| m5.point(d, &vp(1, o)).expect("D-SEQ★: [1, n_C] is bound"))
+            .collect()
+    };
+    // The premise. doc1 and doc2 are the only documents the fixture
+    // arranges, so they are every container the oracle can name.
+    assert_eq!(held(&doc1()), vec![ca(2), ca(3)]);
+    assert_eq!(held(&doc2()), vec![doc2_ca(1), ca(1), ca(2), ca(1)]);
+    assert!(
+        m5.docs_ever_containing(&m5.image(&doc2(), &vspan(1, 2, 1)))
+            .contains(&doc1()),
+        "the premise: R still names doc1 for ca1, which it no longer holds"
+    );
+    let documents = [doc1(), doc2()];
+    for doc in &documents {
+        let positions = u32::try_from(held(doc).len()).expect("a small world");
+        // Every start up to one past the last position, at every width up to
+        // one more than the document holds: windows that open past the end
+        // and windows that run over it are met as well as the ones inside.
+        for start in 1..=positions + 1 {
+            for width in 1..=positions + 1 {
+                let window = vspan(1, start, width);
+                let covered: Vec<Address> = (start..start + width)
+                    .filter_map(|o| m5.point(doc, &vp(1, o)))
+                    .collect();
+                let want: Vec<Address> = documents
+                    .iter()
+                    .filter(|&d| held(d).iter().any(|a| covered.contains(a)))
+                    .cloned()
+                    .collect();
+                let request = [region_spec(doc.clone(), vec![window.clone()])];
+                assert_eq!(
+                    ok_of(q.find_docs_containing(&request)),
+                    want,
+                    "the containers of {doc}'s window {window:?}"
+                );
+            }
+        }
+    }
 }
 
 #[test]

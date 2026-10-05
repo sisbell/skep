@@ -637,7 +637,13 @@ Rules that hold across its files:
   producer spells that boundary itself — and rendered by `error.rs`; a
   request past one gets its rejection and no partial answer.
   `tests/it/tidy.rs` refuses any other file's code line that names a budget
-  beside a comparison — the spelling a hand-written guard takes.
+  beside a comparison — the spelling a hand-written guard takes. Both
+  producers pull `skep-arrangement`'s lazy `iter_resolve` and count each run
+  as it arrives, so a request past its budget stops there rather than
+  materializing a document's every run, and FINDDOCSCONTAINING's filter asks
+  `arranges_any` rather than building a candidate's footprint; `tidy`
+  refuses either file the eager twins — `resolve`, `image`, `project` —
+  which answer the same.
 - **The rejections are part of the wire.** `skep-febe`'s `lower.rs` maps
   each variant of the six error enums to a `RejectCode` with no wildcard
   arm, so a new variant fails to compile there. `docs/wire.md` names each

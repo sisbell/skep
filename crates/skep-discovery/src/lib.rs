@@ -164,7 +164,9 @@
 //! prices them from this list, and a change to any line is a change to this
 //! interface. The scan pool links this section by its heading
 //! (`skep_discovery#cost`), an anchor no build checks, so the heading is part
-//! of the interface as well, and `tests/it/consumer.rs` holds it.
+//! of the interface as well. `tests/it/consumer.rs` holds the heading, and
+//! holds this list to naming every read the crate publishes; what a line says
+//! a read walks, no test can check.
 //!
 //! * [`image_on`] — no link-store read; one read of M5's `#runs` for the
 //!   surface's content, which reads no run, and then, per region span, one
@@ -252,7 +254,9 @@
 // The modules in dependency order, each with a line saying what it holds.
 // Each names, in code, only modules above it, and an item by its home
 // module, never through the re-exports below; `tests/it/tidy.rs` checks
-// that, and that every file under `src/` is declared here with its line.
+// that, and that every file under `src/` is declared here with its line. The
+// rules that hold across them are in the workspace's ARCHITECTURE.md, §The
+// link reads.
 
 // The two budgets and their argument: the run budget with its square, and
 // the answer's span budget.

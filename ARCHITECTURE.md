@@ -72,11 +72,7 @@ foundation and on the stores above it.
   family), counted and paged; projection and discoverability; the
   delete-orphan preview; supersession lineage. It owns no slice and no
   index, and every link read takes the caller's reader predicate. Its
-  modules are declared in `src/lib.rs` in dependency order, each with a
-  line saying what it holds; `tests/it/tidy.rs` checks that map and the one
-  rule that crosses its files: only `home.rs` asks the caller's reader
-  predicate, because asked of a link instead of its home it admits every
-  link.
+  modules and rules: §The link reads.
 - `skep-coordination` — predicate definitions and the coordinator.
 - `skep-identity` — credential records, key sets, the identity fold. Pure;
   of the skep crates it depends only on `skep-address`. The engine depends
@@ -586,6 +582,52 @@ Rules that hold across its files:
 Its integration suite is one binary, `tests/it/`: one file per surface over
 the shared `common` world, and `tidy`, which checks the module order and the
 first rule.
+
+## The link reads, `skep-discovery`
+
+`skep-discovery` holds the link reads the code map lists, and owns nothing:
+no slice, no journal record, no fold, no index. Every read is a free
+function over the `&Snapshot` its caller hands it, composed from
+`skep-links`' matcher and typed reads, `skep-arrangement`'s reading surface
+and run counts, and `skep-namespace`'s registry; every read but `image_on`
+also takes the caller's reader predicate. `skep-febe`'s dispatch is its one
+production caller.
+
+Its modules are declared in `src/lib.rs` in dependency order, each with a
+line saying what it holds; each names in code only the modules above it,
+and an item by its home module, never through the root's re-exports.
+`tests/it/tidy.rs` checks that, and that every file under `src/` and
+`tests/it/` is declared. `budget.rs`, `home.rs`, `types.rs` and `sets.rs`
+are what the reads share; `image.rs` is the region resolver every
+region-family read chains into the link store's matcher; `region.rs`,
+`descriptor.rs`, `pointwise.rs`, `survival.rs` and `lineage.rs` each hold
+one family, pair or read.
+
+Rules that hold across its files:
+
+- **The home rule has one address.** Under `src/`, only `home.rs` projects
+  a link's home or calls the caller's reader predicate; every other file
+  there goes through its `home_of` and `home_readable`. The predicate
+  answers about a document, and asked of a link instead of its home it
+  admits every link. `tests/it/tidy.rs` checks it.
+- **`_on` marks a snapshot.** A function under `src/` ends its name in `_on`
+  exactly when its first parameter is the `&Snapshot` it reads; a helper
+  over one store carries no suffix. `tests/it/tidy.rs` checks it.
+- **A read's cost is part of its interface, outside the crate too.**
+  `skepd`'s class-scan pool decides on the crate doc's `## Cost` section
+  which of these reads to bound. It links the section by its anchor,
+  `skep_discovery#cost`, and restates on its own card — `is_class_scan`, in
+  `crates/skepd/src/server/scan.rs` — what each read walks and which walk
+  the link store at all. A change to what a read walks, or a new read,
+  changes that section and that card in the same commit.
+  `tests/it/consumer.rs` checks the section's heading and that it names
+  every read the crate publishes; nothing checks what a line says a read
+  walks, or skepd's card.
+
+Its integration suite is one binary, `tests/it/`: one file per part of the
+read surface over the shared `common` world; `home_rule` and `consumer`,
+the laws that cross them; and `tidy`, which checks the module map and the
+first two rules.
 
 ## The operation surface, `skep-febe`
 

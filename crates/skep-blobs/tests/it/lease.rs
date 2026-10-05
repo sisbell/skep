@@ -81,10 +81,9 @@ fn the_latest_lease_wins_and_open_compacts_to_it() {
         // The same bytes again with an EARLIER expiry — an interval of
         // nothing: the later line wins.
         let rec = store.create_upload("k", "blake3", 10, INTERVAL, 2_000).unwrap();
-        store.resume("k", &rec.id, 0, 2_000).unwrap();
-        store.append("k", &rec.id, b"same bytes", 2_000).unwrap();
-        store.settle("k", &rec.id, 2_000).unwrap();
-        store.finish("k", &rec.id, Duration::ZERO, 2_000).unwrap();
+        let mut stream = store.resume("k", &rec.id, 0, 2_000).unwrap();
+        stream.append(b"same bytes", 2_000).unwrap();
+        stream.finish(Duration::ZERO, 2_000).unwrap();
         assert_eq!(store.lease_state("k", "blake3", &hex, 2_001), LeaseState::Lapsed { expires: 2_000 });
         // And a third time, the latest line again: live once more.
         put_whole(&store, "k", b"same bytes", 3_000);

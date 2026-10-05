@@ -60,7 +60,7 @@ pub(crate) fn millis(span: Duration) -> u64 {
 /// interval handed in then, which its record keeps, and at each byte
 /// received from that kept interval (clause (3); [`UploadRecords::create`],
 /// [`UploadRecords::mark_received`]); a lease's at its PUT, from the
-/// interval handed to the finish ([`Store::finish`](crate::Store::finish);
+/// interval handed to the finish ([`Stream::finish`](crate::Stream::finish);
 /// `media.md` Op inventory 1, "THE LEASE'S STORE, SCOPE AND EXPIRY,
 /// STATED"). No caller computes an expiry the store then trusts. An instant
 /// is unix milliseconds, the `u64` the logs and the wire spell; a span is a
@@ -78,11 +78,11 @@ pub(crate) fn expiry(now_ms: u64, interval: Duration) -> u64 {
 /// ITS OFFSET NEVER PASSES ITS LENGTH. Each of the four gates a record
 /// passes keeps it: its creation (`UploadRecords::create`) writes 0; a byte
 /// received (`UploadRecords::mark_received`) writes the bytes a handle
-/// holds, which [`Store::append`](crate::Store::append) refuses to take past
-/// the length; open's set-back (`UploadRecords::set_back`) only ever lowers
-/// an offset, to a shorter partial's length; and a line read back at open
-/// whose offset passes its length reads as no record (`parse_line`). So
-/// every standing upload can still reach its length and be finished.
+/// holds, which [`Stream::append`](crate::Stream::append) refuses to take
+/// past the length; open's set-back (`UploadRecords::set_back`) only ever
+/// lowers an offset, to a shorter partial's length; and a line read back at
+/// open whose offset passes its length reads as no record (`parse_line`).
+/// So every standing upload can still reach its length and be finished.
 ///
 /// `#[non_exhaustive]`: emitted, never constructed by a caller — field
 /// reads are unaffected, and a further field is an addition rather than a
@@ -140,7 +140,7 @@ enum Line {
 /// it carries (its interval included): the store holds no value of its own
 /// to put in a missing member's place. And a record line naming a
 /// designation the store's name check refuses (`designation_ok`, the check
-/// [`Store::create_upload`](crate::Store::create_upload) makes): no creation
+/// every name a caller hands [`Store`](crate::Store) meets): no creation
 /// writes one, but a log restored from elsewhere (`media.md` §Recovery) may,
 /// and read, its designation would be the directory open's reconciliation
 /// cuts a partial back in or removes one from — above the root through
@@ -207,8 +207,8 @@ impl UploadRecords {
     }
 
     /// THE PRINCIPAL's record by identifier, whatever its expiry — `None`
-    /// for an identifier `principal`'s records do not name. The appends'
-    /// and the durable point's lookup.
+    /// for an identifier `principal`'s records do not name. A stream's
+    /// appends' lookup, and a byte received's.
     pub fn of_principal(&self, principal: &str, id: &UploadId) -> Option<&UploadRecord> {
         self.records.get(id).filter(|r| r.principal == principal)
     }
@@ -275,8 +275,8 @@ impl UploadRecords {
     /// held as its line spells it, in whole milliseconds, so the record open
     /// reads back is the record answered here, and its first expiry that
     /// interval past `now_ms` — written, synced and answered. The store
-    /// creates the partial first and hands a designation its name check has
-    /// admitted ([`Store::create_upload`](crate::Store::create_upload)).
+    /// creates the partial first and hands the one designation it admits,
+    /// its hash's ([`Store::create_upload`](crate::Store::create_upload)).
     pub fn create(
         &mut self,
         id: UploadId,
@@ -305,8 +305,8 @@ impl UploadRecords {
     /// record's own interval past `now_ms`, written and synced, the rest
     /// kept. `NoUpload` where `principal`'s records do not name `id`, nothing
     /// written. The store marks only after the partial's sync, at the bytes
-    /// a handle holds ([`Store::append`](crate::Store::append),
-    /// [`Store::settle`](crate::Store::settle)).
+    /// a stream's handle holds ([`Stream::append`](crate::Stream::append),
+    /// [`Stream::settle`](crate::Stream::settle)).
     pub fn mark_received(&mut self, principal: &str, id: &UploadId, offset: u64, now_ms: u64) -> Result<(), BlobError> {
         let mut next = self.of_principal(principal, id).ok_or(BlobError::NoUpload)?.clone();
         next.offset = offset;

@@ -50,10 +50,10 @@ fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
             store.install("blake3", &hex, &wrong).unwrap();
             store.fail_at(Some(*step));
             let rec = store.create_upload("k", "blake3", right.len() as u64, INTERVAL, now).unwrap();
-            store.resume("k", &rec.id, 0, now).unwrap();
-            store.append("k", &rec.id, &right, now).unwrap();
-            store.settle("k", &rec.id, now).unwrap();
-            let finish = store.finish("k", &rec.id, INTERVAL, now);
+            let mut stream = store.resume("k", &rec.id, 0, now).unwrap();
+            stream.append(&right, now).unwrap();
+            stream.settle(now).unwrap();
+            let finish = store.resume("k", &rec.id, right.len() as u64, now).unwrap().finish(INTERVAL, now);
             let at_hash = fs::read(store.blob_path("blake3", &hex).unwrap())
                 .unwrap_or_else(|e| panic!("{step:?}: the hash is never without a file: {e}"));
             let asides = store.asides_of("blake3").unwrap();
@@ -140,9 +140,9 @@ fn every_replace_of_a_hash_takes_an_aside_name_of_its_own() {
     put_whole(&store, "a", &bytes, 1);
     store.fail_at(Some(Step::DirSync));
     let rec = store.create_upload("b", "blake3", bytes.len() as u64, INTERVAL, 2).unwrap();
-    store.resume("b", &rec.id, 0, 2).unwrap();
-    store.append("b", &rec.id, &bytes, 2).unwrap();
-    assert!(matches!(store.finish("b", &rec.id, INTERVAL, 2), Err(BlobError::Io(_))));
+    let mut stream = store.resume("b", &rec.id, 0, 2).unwrap();
+    stream.append(&bytes, 2).unwrap();
+    assert!(matches!(stream.finish(INTERVAL, 2), Err(BlobError::Io(_))));
     store.fail_at(None);
     assert_eq!((store.asides_of("blake3").unwrap().len(), store.asides_queued()), (1, 0), "left on disk, never queued");
     put_whole(&store, "c", &bytes, 3);

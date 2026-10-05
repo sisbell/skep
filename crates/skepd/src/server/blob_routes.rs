@@ -63,7 +63,7 @@ use std::io;
 use std::time::Duration;
 
 use serde_json::Value;
-use skep_blobs::{BlobError, Finished, UploadId, UploadRecord};
+use skep_blobs::{BlobError, Finished, Stream, UploadId, UploadRecord};
 use skep_identity::HasIdentity;
 use skep_namespace::{HasM3, PrincipalId};
 
@@ -324,11 +324,11 @@ impl Daemon {
         let store = self.media.store();
         let id = record.id;
         let now = self.media.now_ms();
-        if let Err(e) = store.resume(key, &id, offset, now) {
-            return blob_refusal(e);
-        }
+        let mut stream = match store.resume(key, &id, offset, now) {
+            Ok(stream) => stream,
+            Err(e) => return blob_refusal(e),
+        };
         if body.begin(interim).is_err() {
-            store.close_handle(&id);
             return refuse(TransportError::MalformedHttp, Some("client went away at 100-continue"));
         }
         let mut written = offset;
@@ -339,8 +339,7 @@ impl Daemon {
                 Err(e) => {
                     // The connection died or stalled: the upload is KEPT at
                     // its durable point — what was written settles.
-                    let _ = store.settle(key, &id, self.media.now_ms());
-                    store.close_handle(&id);
+                    let _ = stream.settle(self.media.now_ms());
                     return refuse(
                         TransportError::MalformedHttp,
                         Some(&format!("request body not delivered: {e}")),
@@ -350,29 +349,24 @@ impl Daemon {
             let n = chunk.len() as u64;
             if let Err(scope) = self.media.admit_bytes(principal, &id, written, n, now) {
                 // REFUSED IS ENDED (clause (6)): nothing kept.
+                drop(stream);
                 let _ = store.end_upload(key, &id, now);
                 return refuse_deposit(scope, true, written);
             }
-            match store.append(key, &id, chunk, self.media.now_ms()) {
+            match stream.append(chunk, self.media.now_ms()) {
                 Ok(w) => written = w,
-                Err(e) => {
-                    store.close_handle(&id);
-                    return blob_refusal(e);
-                }
+                Err(e) => return blob_refusal(e),
             }
         }
-        // `Store::finish`'s precondition, discharged here: the bytes written
+        // `Stream::finish`'s precondition, discharged here: the bytes written
         // reach the length, or the request settles instead of finishing.
         if written < record.length {
-            return match store.settle(key, &id, self.media.now_ms()) {
+            return match stream.settle(self.media.now_ms()) {
                 Ok(r) => progress_reply(&r),
-                Err(e) => {
-                    store.close_handle(&id);
-                    blob_refusal(e)
-                }
+                Err(e) => blob_refusal(e),
             };
         }
-        self.blob_finish(key, record, req)
+        self.blob_finish(key, id, stream, req)
     }
 
     /// THE FINISH (clause (7); M-I5 (a)), under the credential lock's READ
@@ -383,9 +377,8 @@ impl Daemon {
     /// requester is re-resolved against the head under it: a session killed
     /// mid-transfer is dead at its rename, its upload ended, nothing kept
     /// (clause (6); M-I2 (g)).
-    fn blob_finish(&self, key: &str, record: UploadRecord, req: &HttpRequest) -> Reply {
+    fn blob_finish(&self, key: &str, id: UploadId, stream: Stream<'_>, req: &HttpRequest) -> Reply {
         let store = self.media.store();
-        let id = record.id;
         let _credential_lock = self.auth.credential_lock.read();
         let now = self.media.now_ms();
         let resolved = {
@@ -394,15 +387,13 @@ impl Daemon {
         };
         let same = matches!(&resolved.actor, Actor::Principal(b) if MediaGate::key(b.principal) == key);
         if !same {
+            drop(stream);
             let _ = store.end_upload(key, &id, now);
             return with_signal(refuse_upload("unauthenticated"), resolved.closed);
         }
-        match store.finish(key, &id, Duration::from_millis(self.media.limits().lease_interval_ms), now) {
+        match stream.finish(Duration::from_millis(self.media.limits().lease_interval_ms), now) {
             Ok(finished) => finish_reply(&finished),
-            Err(e) => {
-                store.close_handle(&id);
-                blob_refusal(e)
-            }
+            Err(e) => blob_refusal(e),
         }
     }
 

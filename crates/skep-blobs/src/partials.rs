@@ -2,13 +2,14 @@
 //! received so far of one standing upload, a temp file in its target's own
 //! designation directory (`media.md` Op inventory 1, the resumable upload
 //! (1), (3), (4); §The media stores). A BYTE IS RECEIVED ONCE IT IS DURABLE
-//! IN THE PARTIAL: the file is fsynced at [`SYNC_GRAIN`] and at every
-//! request's end, the record's offset and expiry written after each sync,
-//! so the offset a resume continues from, the bytes received the deposit
-//! read answers and the byte the expiry is fixed from are one figure.
+//! IN THE PARTIAL: the file is fsynced at [`SYNC_GRAIN`] and at the settle
+//! or finish that ends a request, the record's offset and expiry written
+//! after each sync, so the offset a resume continues from, the bytes
+//! received the deposit read answers and the byte the expiry is fixed from
+//! are one figure.
 //!
-//! A request writes a partial through its handle, opened afresh at every
-//! resume (`partials/handle.rs`: [`Handle`], [`open_at`]).
+//! A request writes a partial through its stream's handle, opened afresh at
+//! every resume (`partials/handle.rs`: [`Handle`], [`open_at`]).
 //!
 //! AT OPEN THE TWO ARE RECONCILED BOTH WAYS: a partial no record names is
 //! removed, in every designation directory under the root; a record that
@@ -25,7 +26,8 @@
 //! act).
 
 // The handle a request opens on a partial: its open file, the hash of
-// every byte written, and the tear a failed write or sync leaves.
+// every byte written and the designation that hash files under, and the
+// tear a failed write or sync leaves.
 mod handle;
 
 use std::collections::HashSet;
@@ -36,7 +38,7 @@ use std::path::{Path, PathBuf};
 use crate::blobs::{dirs_under, fsync_dir, names_in, remove_if_present};
 use crate::uploads::{UploadId, UploadRecords};
 
-pub(crate) use handle::{open_at, Handle};
+pub(crate) use handle::{open_at, Handle, HASH_DESIGNATION};
 
 /// THE FSYNC GRAIN of a partial — 1 MiB, INTERIM: the most a dropped
 /// connection re-sends, against one fsync of the partial and one of the

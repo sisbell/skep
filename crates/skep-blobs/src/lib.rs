@@ -10,14 +10,15 @@
 //! PRINCIPAL only as the opaque string its caller spells it as, compared
 //! exactly and never read; it takes NO lock of its caller's — its own keep
 //! its records whole and run its finishes one at a time ([`Store`]) — and
-//! asks its caller for two exclusions: no second store over its root while
-//! one is open ([`Store::open`]), and no [`Store::unlink_blob`] or
-//! [`Store::remove_aside`] while a [`Store::finish`] runs (see there); and
+//! asks its caller for three exclusions: no second store over its root
+//! while one is open ([`Store::open`]); at most one stream of an upload at a
+//! time, its acts serialized ([`Store`]); and no [`Store::unlink_blob`] or
+//! [`Store::remove_aside`] while a [`Stream::finish`] runs (see there); and
 //! it reads NO limits record (it answers pending bytes and the volume's free
 //! space; what bounds them is policy, the daemon's). What it promises is the
 //! ORDER of its own acts and what each leaves behind on a crash:
 //!
-//! * THE PUT's ORDER ([`Store::finish`]): the partial fsynced; where the
+//! * THE PUT's ORDER ([`Stream::finish`]): the partial fsynced; where the
 //!   name exists, the old file LINKED ASIDE (a second name no hex spells,
 //!   so the rename frees nothing); the partial RENAMED onto
 //!   `<designation>/<hex>` — REPLACE where the name exists, never a no-op —
@@ -39,15 +40,16 @@
 //!   [`Store::remove_aside`]) — each one act, so the daemon's pass holds its
 //!   own lock around exactly one.
 //! * A BYTE IS RECEIVED ONCE IT IS DURABLE: the partial is fsynced at
-//!   [`SYNC_GRAIN`] and at [`Store::settle`], and the record's offset and
+//!   [`SYNC_GRAIN`] and at [`Stream::settle`], and the record's offset and
 //!   expiry are written after each sync, the expiry re-fixed from the
 //!   interval the record took at the upload's creation — so a later limits
 //!   record reaches the next upload and never a standing one (clause (3)).
-//!   A HANDLE LIVES FOR ONE REQUEST: every resume opens the partial afresh
-//!   at the record's offset, cutting off whatever an earlier request left
-//!   past it, and the settle, finish or end that closes the request closes
-//!   the handle — so no file stays open for an upload no request is
-//!   streaming.
+//!   A STREAM IS ONE REQUEST's: [`Store::resume`] answers a [`Stream`], the
+//!   partial opened afresh at the record's offset — cutting off whatever an
+//!   earlier request left past it — which the request appends through and
+//!   ends by [`Stream::settle`] or [`Stream::finish`], or drops; the
+//!   partial's file closes with it, so the store holds no file open between
+//!   requests.
 //! * ONE ANSWER PER PRINCIPAL: an identifier the asking principal's
 //!   records do not name is [`BlobError::NoUpload`] whoever minted it (the
 //!   upload records answer by principal); a hash the principal holds no
@@ -66,16 +68,18 @@
 //!   a partial that cannot be read failing the open rather than reading as
 //!   absent (`partials.rs`); every aside removed, a crash's or a failed
 //!   finish's (`blobs.rs`); a lease past the horizon dropped.
-//! * A CALLER's BUG IS NO REFUSAL: an append with no handle open and a
-//!   finish short of the declared length PANIC, naming the obligation they
-//!   break ([`Store::append`], [`Store::finish`]); [`BlobError`] carries
-//!   only answers a caller acts on.
+//! * A CALLER's BUG IS NO REFUSAL: a finish short of the declared length
+//!   PANICS, naming the obligation it breaks ([`Stream::finish`]);
+//!   [`BlobError`] carries only answers a caller acts on.
+//! * A KEY NAMES THE FUNCTION THAT MADE IT: the store computes one hash,
+//!   BLAKE3's, and a creation names its designation, `blake3`, or is
+//!   refused ([`Store::create_upload`]; `media.md` §The design, item 4).
 //!
 //! The `test-hooks` feature compiles in the test seam (`store/hooks.rs`):
 //! the hazard seam — a hold or an injected failure at a named [`Step`] of
-//! the finish — and the four methods only a test calls, `Store::install`,
-//! `Store::written`, `Store::asides_queued` and `Store::handles_open`. A
-//! build without it carries none of them.
+//! the finish — and the three methods only a test calls, `Store::install`,
+//! `Stream::written` and `Store::asides_queued`. A build without it carries
+//! none of them.
 
 #![forbid(unsafe_code)]
 
@@ -99,32 +103,35 @@ mod lease;
 // The partials, `.upload-<identifier>`: their name, and the walk at open
 // that reconciles them with the records; beneath them, the handle a request
 // opens on one (`partials/handle.rs`: `Handle`, the bytes written and their
-// hash, kept true across a failed write).
+// hash, kept true across a failed write, and the designation that hash
+// files under).
 mod partials;
-// `Store`, the four opened as one, and the order of its acts: the finish
-// and its steps, the resume and the durable point, the pruner's acts, the
-// leases' reads; under `test-hooks`, its test seam (`store/hooks.rs`).
+// `Store`, the four opened as one, and `Stream`, an upload open for one
+// request: the order of their acts — the resume, the durable point, the
+// finish and its steps, the pruner's acts, the leases' reads; under
+// `test-hooks`, the test seam (`store/hooks.rs`).
 mod store;
 
 pub use error::BlobError;
 pub use lease::{Lease, LeaseState};
 pub use partials::SYNC_GRAIN;
-pub use store::{Finished, Step, Store};
+pub use store::{Finished, Step, Store, Stream};
 pub use uploads::{NotAnUploadId, UploadId, UploadRecord, IDENTIFIER_BYTES};
 
 /// What this crate promises without saying so (C-SEND-SYNC, C-GOOD-ERR,
 /// C-COMMON-TRAITS). One `Store` is shared by every worker of the daemon,
-/// whose own `Daemon: Send + Sync` pin rests on this one, and the store's
-/// answers and refusals cross threads with the requests that carry them.
-/// An auto trait is promised by what a type contains, so a private field
-/// that is not `Send` would revoke it with no public name changing; this is
-/// where that fails to compile instead, under both arms of the test seam —
-/// the hold is bounded `Send + Sync` for this reason. And the values a
-/// caller keeps — in a set, as a map key — are held to the traits that let
-/// it, which a caller cannot add itself.
+/// whose own `Daemon: Send + Sync` pin rests on this one; a request's
+/// `Stream`, and the store's answers and refusals, cross threads with the
+/// requests that carry them. An auto trait is promised by what a type
+/// contains, so a private field that is not `Send` would revoke it with no
+/// public name changing; this is where that fails to compile instead, under
+/// both arms of the test seam — the hold is bounded `Send + Sync` for this
+/// reason. And the values a caller keeps — in a set, as a map key — are
+/// held to the traits that let it, which a caller cannot add itself.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Store>();
+    assert_send_sync::<Stream<'static>>();
     // The refusals, as an error crossing threads in a `Box<dyn Error>`.
     fn crossing<T: std::error::Error + Send + Sync + 'static>() {}
     crossing::<BlobError>();

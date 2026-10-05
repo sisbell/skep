@@ -15,7 +15,7 @@ use std::sync::{mpsc, Arc, Barrier};
 use std::thread;
 use std::time::Duration;
 
-use skep_blobs::{BlobError, LeaseState, Step};
+use skep_blobs::{BlobError, LeaseState, Step, Stream};
 
 use crate::{every_deposit_unplaced, hex_of, open, panic_message, put_whole, standing, INTERVAL, INTERVAL_MS};
 
@@ -48,10 +48,11 @@ fn a_failure_at_each_step_of_the_finish_leaves_what_the_order_promises() {
             let store = open(&root, now);
             store.fail_at(Some(*step));
             let rec = store.create_upload("k", "blake3", bytes.len() as u64, INTERVAL, now).unwrap();
-            store.resume("k", &rec.id, 0, now).unwrap();
-            store.append("k", &rec.id, &bytes, now).unwrap();
-            store.settle("k", &rec.id, now).unwrap();
-            let err = store.finish("k", &rec.id, INTERVAL, now).expect_err("the injected failure");
+            let mut stream = store.resume("k", &rec.id, 0, now).unwrap();
+            stream.append(&bytes, now).unwrap();
+            stream.settle(now).unwrap();
+            let stream = store.resume("k", &rec.id, bytes.len() as u64, now).unwrap();
+            let err = stream.finish(INTERVAL, now).expect_err("the injected failure");
             assert!(matches!(err, BlobError::Io(_)), "{step:?}: {err}");
             // Before the lease's sync, the principal holds NO lease —
             // whatever the directory holds — and the file is present only
@@ -138,9 +139,9 @@ fn the_roots_fsync_is_owed_until_a_finish_pays_it() {
     let store = open(&dir.path().join("blobs"), 0);
     let put = |bytes: &[u8], now: u64| {
         let rec = store.create_upload("k", "blake3", bytes.len() as u64, INTERVAL, now).unwrap();
-        store.resume("k", &rec.id, 0, now).unwrap();
-        store.append("k", &rec.id, bytes, now).unwrap();
-        store.finish("k", &rec.id, INTERVAL, now)
+        let mut stream = store.resume("k", &rec.id, 0, now).unwrap();
+        stream.append(bytes, now).unwrap();
+        stream.finish(INTERVAL, now)
     };
     store.fail_at(Some(Step::RootSync));
     for (bytes, now) in [(b"first".as_slice(), 1), (b"second", 2)] {
@@ -167,9 +168,9 @@ fn a_designation_directory_made_after_the_open_owes_the_roots_fsync_whatever_mad
     fs::create_dir(root.join("blake3")).unwrap();
     store.fail_at(Some(Step::RootSync));
     let rec = store.create_upload("k", "blake3", 5, INTERVAL, 1).unwrap();
-    store.resume("k", &rec.id, 0, 1).unwrap();
-    store.append("k", &rec.id, b"bytes", 1).unwrap();
-    assert!(matches!(store.finish("k", &rec.id, INTERVAL, 1), Err(BlobError::Io(_))), "the root's fsync owed, and met");
+    let mut stream = store.resume("k", &rec.id, 0, 1).unwrap();
+    stream.append(b"bytes", 1).unwrap();
+    assert!(matches!(stream.finish(INTERVAL, 1), Err(BlobError::Io(_))), "the root's fsync owed, and met");
     assert_eq!(store.lease_state("k", "blake3", &hex_of(b"bytes"), 1), LeaseState::None, "no lease before it");
     drop(store);
     let store = open(&root, 2);
@@ -177,40 +178,39 @@ fn a_designation_directory_made_after_the_open_owes_the_roots_fsync_whatever_mad
     assert_eq!(put_whole(&store, "k", b"bytes", 3).hex, hex_of(b"bytes"), "a directory standing at the open owes none");
 }
 
-/// (7) A FINISH IS OWED THE WHOLE LENGTH (`Store::finish`'s precondition: the
-/// upload's bytes written reach its declared length): short of it — with the
-/// request's handle open over unsettled bytes, and with none over a settled
-/// short offset — the finish STOPS as its caller's bug, a panic naming the
-/// bytes held, the length and the obligation, never a refusal an honest
-/// caller would have to answer; its handle is gone all the same, nothing is
-/// named — no file at the hash of the bytes held, no lease — and the upload
-/// stands to be resumed; the bytes that complete it finish it whole.
+/// (7) A FINISH IS OWED THE WHOLE LENGTH (`Stream::finish`'s precondition:
+/// the stream's bytes written reach the upload's declared length): short of
+/// it — over unsettled bytes, and on a stream resumed at a settled short
+/// offset — the finish STOPS as its caller's bug, a panic naming the bytes
+/// held, the length and the obligation, never a refusal an honest caller
+/// would have to answer; its stream dropped with the panic, nothing is named
+/// — no file at the hash of the bytes held, no lease — and the upload stands
+/// to be resumed; the bytes that complete it finish it whole.
 #[test]
 fn a_finish_short_of_the_declared_length_stops_as_its_callers_bug_and_names_nothing() {
+    fn short_finish(stream: Stream<'_>, now: u64) -> String {
+        let stopped = catch_unwind(AssertUnwindSafe(move || stream.finish(INTERVAL, now)));
+        panic_message(stopped.expect_err("a short finish stops"))
+    }
     let dir = tempfile::tempdir().expect("tempdir");
     let store = open(&dir.path().join("blobs"), 0);
     let rec = store.create_upload("k", "blake3", 10, INTERVAL, 1).unwrap();
     let held = hex_of(b"half-");
-    let short_finish = |now: u64| {
-        let stopped = catch_unwind(AssertUnwindSafe(|| store.finish("k", &rec.id, INTERVAL, now)));
-        panic_message(stopped.expect_err("a short finish stops"))
-    };
-    store.resume("k", &rec.id, 0, 1).unwrap();
-    store.append("k", &rec.id, b"half-", 1).unwrap();
-    let stopped = short_finish(1);
+    let mut stream = store.resume("k", &rec.id, 0, 1).unwrap();
+    stream.append(b"half-", 1).unwrap();
+    let stopped = short_finish(stream, 1);
     assert!(stopped.contains("at 5 of its 10 bytes") && stopped.contains("precondition"), "{stopped}");
-    assert_eq!(store.handles_open(), 0, "the handle left with the stopped finish");
-    store.resume("k", &rec.id, 0, 2).unwrap();
-    store.append("k", &rec.id, b"half-", 2).unwrap();
-    store.settle("k", &rec.id, 2).unwrap();
-    let stopped = short_finish(3);
-    assert!(stopped.contains("at 5 of its 10 bytes"), "with no handle open: {stopped}");
+    let mut stream = store.resume("k", &rec.id, 0, 2).unwrap();
+    stream.append(b"half-", 2).unwrap();
+    stream.settle(2).unwrap();
+    let stopped = short_finish(store.resume("k", &rec.id, 5, 3).unwrap(), 3);
+    assert!(stopped.contains("at 5 of its 10 bytes"), "resumed at the settled offset: {stopped}");
     assert_eq!(store.blob_size("blake3", &held).unwrap(), None, "no file named by the bytes held");
     assert_eq!(store.lease_state("k", "blake3", &held, 3), LeaseState::None, "and no lease");
     assert_eq!(store.upload("k", &rec.id, 3).map(|r| r.offset), Some(5), "the upload stands, to be resumed");
-    store.resume("k", &rec.id, 5, 4).unwrap();
-    store.append("k", &rec.id, b"whole", 4).unwrap();
-    let fin = store.finish("k", &rec.id, INTERVAL, 4).unwrap();
+    let mut stream = store.resume("k", &rec.id, 5, 4).unwrap();
+    stream.append(b"whole", 4).unwrap();
+    let fin = stream.finish(INTERVAL, 4).unwrap();
     assert_eq!((fin.hex, fin.size), (hex_of(b"half-whole"), 10));
 }
 
@@ -251,15 +251,15 @@ fn a_hold_parks_its_own_finish_and_nothing_else() {
     assert!(store.asides_of("blake3").unwrap().is_empty());
 }
 
-/// THE FINISHES RUN ONE AT A TIME (`Store`'s lock on its handles, "held
-/// through the whole of a finish … so two finishes of one hash never
-/// interleave the replace's check, link and rename"): with one replace held
-/// between its link and its rename, a second finish of the same hash meets
-/// none of its gates until the first has answered. The seam runs a hold
-/// with none of its own state locked, so only the store's lock — or a lock
-/// of the finish's own, were that one narrowed — keeps the second out. A
-/// finish not held back meets its gate within milliseconds and the window
-/// here is half a second, so this test can err only toward passing.
+/// THE FINISHES RUN ONE AT A TIME (`Store`'s finish lock, held by every
+/// finish from its first act to its answer, "so two finishes of one hash
+/// never interleave the replace's check, link and rename"): with one replace
+/// held between its link and its rename, a second finish of the same hash
+/// meets none of its gates until the first has answered. The seam runs a
+/// hold with none of its own state locked, so only the store's finish lock
+/// keeps the second out. A finish not held back meets its gate within
+/// milliseconds and the window here is half a second, so this test can err
+/// only toward passing.
 #[test]
 fn the_finishes_run_one_at_a_time() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -269,6 +269,8 @@ fn the_finishes_run_one_at_a_time() {
     store.install("blake3", &hex, b"garbage under the right name").unwrap();
     let first = standing(&store, "a", bytes.len() as u64, &bytes, 1);
     let second = standing(&store, "b", bytes.len() as u64, &bytes, 1);
+    let stream_a = store.resume("a", &first.id, first.offset, 1).unwrap();
+    let stream_b = store.resume("b", &second.id, second.offset, 1).unwrap();
     let parked = Arc::new(Barrier::new(2));
     let resumed = Arc::new(Barrier::new(2));
     let (met_tx, met_rx) = mpsc::channel();
@@ -281,11 +283,10 @@ fn the_finishes_run_one_at_a_time() {
             let _ = met_tx.send(());
         }
     });
-    let store = &store;
     let (met, a, b) = thread::scope(|s| {
-        let a = s.spawn(|| store.finish("a", &first.id, INTERVAL, 2));
+        let a = s.spawn(move || stream_a.finish(INTERVAL, 2));
         parked.wait();
-        let b = s.spawn(|| store.finish("b", &second.id, INTERVAL, 2));
+        let b = s.spawn(move || stream_b.finish(INTERVAL, 2));
         // No assertion while the first finish is held: a failed one would
         // leave it parked, the scope waiting on it.
         let met = met_rx.recv_timeout(Duration::from_millis(500));
@@ -302,13 +303,13 @@ fn the_finishes_run_one_at_a_time() {
     assert_eq!(store.asides_queued(), 2, "each a replace, each queued its aside at its answer");
 }
 
-/// A FINISH THAT FAILED PAST ITS RENAME CLOSES ITS HANDLE (clause (7)): from
-/// the rename on, the partial's open file IS the hash's file, so a handle
-/// kept there would let the next resume cut the hash's bytes back to the
-/// record's offset and stream the next request's bytes into them. The
-/// bytes here were never settled — the record's offset stands at 0 — and
-/// the resume after the failure finds no partial, answering I/O, the
-/// hash's bytes untouched.
+/// A FINISH THAT FAILED PAST ITS RENAME TAKES ITS HANDLE WITH IT (clause
+/// (7)): from the rename on, the partial's open file IS the hash's file, so
+/// a handle kept there would let the next resume cut the hash's bytes back
+/// to the record's offset and stream the next request's bytes into them.
+/// The finish consumes its stream, handle and all; the bytes here were
+/// never settled — the record's offset stands at 0 — and the resume after
+/// the failure finds no partial, answering I/O, the hash's bytes untouched.
 #[test]
 fn a_finish_that_failed_past_its_rename_leaves_no_handle_on_the_hashs_file() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -316,16 +317,14 @@ fn a_finish_that_failed_past_its_rename_leaves_no_handle_on_the_hashs_file() {
     let bytes = b"the bytes the rename named".to_vec();
     let hex = hex_of(&bytes);
     let rec = store.create_upload("k", "blake3", bytes.len() as u64, INTERVAL, 1).unwrap();
-    store.resume("k", &rec.id, 0, 1).unwrap();
-    store.append("k", &rec.id, &bytes, 1).unwrap();
+    let mut stream = store.resume("k", &rec.id, 0, 1).unwrap();
+    stream.append(&bytes, 1).unwrap();
     assert_eq!(store.upload("k", &rec.id, 1).unwrap().offset, 0, "short of the grain: written, not received");
     store.fail_at(Some(Step::DirSync));
-    assert!(matches!(store.finish("k", &rec.id, INTERVAL, 1), Err(BlobError::Io(_))));
-    assert_eq!(store.handles_open(), 0, "the finish's handle closed with its failure");
+    assert!(matches!(stream.finish(INTERVAL, 1), Err(BlobError::Io(_))));
     let at_hash = store.blob_path("blake3", &hex).unwrap();
     assert_eq!(fs::read(&at_hash).unwrap(), bytes, "the rename named the bytes");
     store.fail_at(None);
     assert!(matches!(store.resume("k", &rec.id, 0, 2), Err(BlobError::Io(_))), "the partial was renamed away");
-    assert_eq!(store.handles_open(), 0);
     assert_eq!(fs::read(&at_hash).unwrap(), bytes, "the hash's file untouched");
 }

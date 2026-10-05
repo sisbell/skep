@@ -97,9 +97,9 @@ pub(crate) fn names_in(
 
 /// OPEN's SWEEP OF THE ASIDES: every aside in every designation directory
 /// under `root` removed, each directory fsynced where one went — the second
-/// names of replaced files whose deferred unlink a crash between the
-/// finish's answer and that unlink never let run. Nothing names an aside,
-/// so nothing is lost.
+/// names a replace left that its deferred unlink never took: a crash's
+/// between the finish's answer and that unlink, or a finish's that failed
+/// past its link. Nothing names an aside, so nothing is lost.
 pub(crate) fn sweep_asides(root: &Path) -> io::Result<()> {
     for designation in dirs_under(root)? {
         let asides = names_in(root, &designation, |name, _| is_aside_name(name))?;

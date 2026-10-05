@@ -31,14 +31,13 @@ pub fn open(root: &Path, now: u64) -> Store {
 }
 
 /// One whole upload by `principal` of `bytes` at `now`: created under
-/// `INTERVAL`, resumed at 0, appended whole, settled, finished with a lease
-/// `INTERVAL` past `now`. Answers the finish.
+/// `INTERVAL`, resumed at 0, appended whole and finished through its
+/// stream, with a lease `INTERVAL` past `now`. Answers the finish.
 pub fn put_whole(store: &Store, principal: &str, bytes: &[u8], now: u64) -> skep_blobs::Finished {
     let rec = store.create_upload(principal, "blake3", bytes.len() as u64, INTERVAL, now).expect("create");
-    store.resume(principal, &rec.id, 0, now).expect("resume");
-    store.append(principal, &rec.id, bytes, now).expect("append");
-    store.settle(principal, &rec.id, now).expect("settle");
-    store.finish(principal, &rec.id, INTERVAL, now).expect("finish")
+    let mut stream = store.resume(principal, &rec.id, 0, now).expect("resume");
+    stream.append(bytes, now).expect("append");
+    stream.finish(INTERVAL, now).expect("finish")
 }
 
 /// BLAKE3 of `bytes` as the hex the store answers.
@@ -49,11 +48,11 @@ pub fn hex_of(bytes: &[u8]) -> String {
 /// A standing upload of `principal` with `bytes` received, left unfinished.
 pub fn standing(store: &Store, principal: &str, length: u64, bytes: &[u8], now: u64) -> UploadRecord {
     let rec = store.create_upload(principal, "blake3", length, INTERVAL, now).expect("create");
-    store.resume(principal, &rec.id, 0, now).expect("resume");
+    let mut stream = store.resume(principal, &rec.id, 0, now).expect("resume");
     if !bytes.is_empty() {
-        store.append(principal, &rec.id, bytes, now).expect("append");
+        stream.append(bytes, now).expect("append");
     }
-    store.settle(principal, &rec.id, now).expect("settle")
+    stream.settle(now).expect("settle")
 }
 
 /// THE SUITES' CELLS: none. This crate reads no cell, so in its suites

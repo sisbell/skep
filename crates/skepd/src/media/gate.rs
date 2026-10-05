@@ -590,10 +590,9 @@ mod tests {
         let store = gate.store();
         let key = MediaGate::key(p);
         let rec = store.create_upload(&key, DESIGNATION, 9, Duration::from_millis(10_000), now).unwrap();
-        store.resume(&key, &rec.id, 0, now).unwrap();
-        store.append(&key, &rec.id, bytes, now).unwrap();
-        store.settle(&key, &rec.id, now).unwrap();
-        let fin = store.finish(&key, &rec.id, Duration::from_millis(10_000), now).unwrap();
+        let mut stream = store.resume(&key, &rec.id, 0, now).unwrap();
+        stream.append(bytes, now).unwrap();
+        let fin = stream.finish(Duration::from_millis(10_000), now).unwrap();
         assert_eq!(fin.hex, hex_of(&hash));
         assert_eq!(gate.binding(p, &cell), Binding::Admitted);
         assert_eq!(gate.binding(PrincipalId(8), &cell), Binding::Unbound, "another principal holds none");
@@ -605,10 +604,9 @@ mod tests {
         // A fresh lease, then the file removed from under it.
         let now = gate.now_ms();
         let rec = store.create_upload(&key, DESIGNATION, 9, Duration::from_millis(10_000), now).unwrap();
-        store.resume(&key, &rec.id, 0, now).unwrap();
-        store.append(&key, &rec.id, bytes, now).unwrap();
-        store.settle(&key, &rec.id, now).unwrap();
-        store.finish(&key, &rec.id, Duration::from_millis(10_000), now).unwrap();
+        let mut stream = store.resume(&key, &rec.id, 0, now).unwrap();
+        stream.append(bytes, now).unwrap();
+        stream.finish(Duration::from_millis(10_000), now).unwrap();
         assert_eq!(gate.binding(p, &cell), Binding::Admitted);
         std::fs::remove_file(store.blob_path(DESIGNATION, &hex_of(&hash)).unwrap()).unwrap();
         assert_eq!(gate.binding(p, &cell), Binding::Lapsed, "a live lease over no file reads as lapsed");
@@ -616,10 +614,9 @@ mod tests {
         // THE INDEX ARM. The file re-deposited, the cell entered as p's.
         let now = gate.now_ms();
         let rec = store.create_upload(&key, DESIGNATION, 9, Duration::from_millis(10_000), now).unwrap();
-        store.resume(&key, &rec.id, 0, now).unwrap();
-        store.append(&key, &rec.id, bytes, now).unwrap();
-        store.settle(&key, &rec.id, now).unwrap();
-        store.finish(&key, &rec.id, Duration::from_millis(10_000), now).unwrap();
+        let mut stream = store.resume(&key, &rec.id, 0, now).unwrap();
+        stream.append(bytes, now).unwrap();
+        stream.finish(Duration::from_millis(10_000), now).unwrap();
         assert_eq!(gate.own_pending(p, now), 9, "no cell names it: the lease counts as pending");
         assert_eq!(gate.own_scope(p, now), 9);
         let at = crate::codec::wire_address("1.0.1.0.2.0.1.1").unwrap();

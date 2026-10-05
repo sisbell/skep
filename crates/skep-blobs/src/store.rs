@@ -1,10 +1,11 @@
 //! THE STORE: the four media stores under the root, opened as one — the
-//! files, the partials, the upload records and the lease log — and the
-//! ORDER of its acts: an upload's creation, resume and durable point, the
-//! PUT's finish and the deferred step after its answer, the pruner's acts
-//! one at a time, the leases' reads. [`Step`] names the steps of a finish
-//! the hazard seam can hold or fail; [`Finished`] is a finish's answer.
-//! Under `test-hooks`, the child `store/hooks.rs` holds the test seam.
+//! files, the partials, the upload records and the lease log — and
+//! [`Stream`], one upload open for one request; and the ORDER of their acts:
+//! an upload's creation and resume, a stream's durable point and the PUT's
+//! finish, the deferred step after its answer, the pruner's acts one at a
+//! time, the leases' reads. [`Step`] names the steps of a finish the hazard
+//! seam can hold or fail; [`Finished`] is a finish's answer. Under
+//! `test-hooks`, the child `store/hooks.rs` holds the test seam.
 //!
 //! THE ORDER (`media.md` Op inventory 1, "THE PUT's DISPOSITION ON A HASH
 //! ALREADY PRESENT IS REPLACE, NOT NO-OP"; the register M-I5 (a)): a rename
@@ -47,7 +48,7 @@
 #[cfg(feature = "test-hooks")]
 mod hooks;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -59,7 +60,7 @@ use parking_lot::Mutex;
 use crate::blobs::{self, aside_name, designation_ok, fsync_dir, hex_ok, is_aside_name};
 use crate::error::BlobError;
 use crate::lease::{Lease, LeaseLog, LeaseState};
-use crate::partials::{self, Handle, SYNC_GRAIN};
+use crate::partials::{self, Handle, HASH_DESIGNATION, SYNC_GRAIN};
 use crate::uploads::{expiry, millis, UploadId, UploadRecord, UploadRecords};
 
 /// The steps of a finish, in order — the points the hazard seam names
@@ -99,10 +100,10 @@ pub enum Step {
     UnlinkAside,
 }
 
-/// A finished upload's answer: the file's designation, its hash as
-/// lowercase hex, and its size. One shape whether or not the file was
-/// already here (the record's "NO ANSWER OF THE UPLOAD SAYS WHETHER THE
-/// FILE WAS ALREADY HERE").
+/// A finished upload's answer: the file's designation, its hash — BLAKE3's,
+/// the function its designation names — as lowercase hex, and its size. One
+/// shape whether or not the file was already here (the record's "NO ANSWER
+/// OF THE UPLOAD SAYS WHETHER THE FILE WAS ALREADY HERE").
 ///
 /// `#[non_exhaustive]`: emitted, never constructed by a caller — field
 /// reads are unaffected, and a further field is an addition rather than a
@@ -115,20 +116,26 @@ pub struct Finished {
     pub size: u64,
 }
 
-/// The store: one root, the four stores under it, and the handles requests
-/// have open in this process. Every method takes `&self`; the caller
-/// serializes the acts of ONE upload (the daemon's hold on an upload's
-/// identifier while a stream owns it), and the store's own locks keep its
-/// records whole across uploads.
+/// The store: one root and the four stores under it. Every method takes
+/// `&self`, and the store's own locks keep its records whole across uploads.
 ///
-/// A HANDLE LIVES FOR ONE REQUEST. [`Store::resume`] opens the partial for
-/// the request that resumes it — an open file and the hash of the bytes in
-/// it — and the [`Store::settle`], [`Store::finish`] or
-/// [`Store::end_upload`] that ends the request closes it, whatever it
-/// answers. A request cut short before any of them — its client gone —
-/// owes a [`Store::close_handle`]: the store cannot tell a request that
-/// stopped from one still streaming, and a handle no request closes holds
-/// an open file until the upload's next resume, its end or its expiry.
+/// A STREAM IS ONE REQUEST's. [`Store::resume`] answers a [`Stream`] — the
+/// partial opened afresh at the record's offset, with the hash of its bytes
+/// — and the request that resumed owns it: it appends through it and ends
+/// it by [`Stream::settle`] or [`Stream::finish`], each of which consumes
+/// it, or, cut short, drops it. The partial's file closes with the stream,
+/// so the store holds no file for a request that has ended, and no request
+/// reaches another's.
+///
+/// ONE STREAM OF AN UPLOAD AT A TIME, ITS ACTS SERIALIZED — the caller's to
+/// keep, as the daemon keeps it with its hold on an upload's identifier
+/// while a stream owns it (`media.md` Op inventory 1, the resumable upload
+/// (5), "A STREAM CLAIMS ITS UPLOAD FIRST"). The store checks neither: a
+/// second stream's resume cuts the partial back under the first's handle,
+/// after which either stream's bytes may land where the other's hasher does
+/// not look, and a finish names the file by a hash its bytes do not have. An
+/// end or an expiry between a stream's acts costs that stream its upload
+/// alone: its later acts answer `NoUpload`.
 ///
 /// THE STORE CHECKS EVERY NAME IT IS HANDED. A designation or a hex a
 /// caller passes in becomes a path only past its spelling's check
@@ -136,7 +143,8 @@ pub struct Finished {
 /// answered as absent by every read and act — [`Store::blob_path`],
 /// [`Store::blob_size`], [`Store::blobs_of`], [`Store::asides_of`],
 /// [`Store::unlink_blob`], [`Store::remove_aside`] — and refused as
-/// `InvalidInput` by [`Store::create_upload`]. A name read back off a log
+/// `InvalidInput` by [`Store::create_upload`], which admits only the
+/// designation of the hash the store computes. A name read back off a log
 /// at open meets the same check where it enters from disk: a record or
 /// lease line naming a malformed one reads as a lost line does
 /// (`uploads.rs`, `lease.rs`), so a log restored from elsewhere names no
@@ -148,21 +156,14 @@ pub struct Store {
     root: PathBuf,
     uploads: Mutex<UploadRecords>,
     leases: Mutex<LeaseLog>,
-    /// THE HANDLES requests have open in this process (`Handle`: the
-    /// partial's open file and its hasher), at most one per upload, each
-    /// for one request: a resume opens it afresh, and the settle, finish or
-    /// end that closes the request takes it out — a
-    /// [`Store::close_handle`], for a request cut short — so no file stays
-    /// open for an upload no request is streaming, nor past a finish whose
-    /// rename made the partial's file the hash's. The lock does three jobs:
-    /// it keeps the map whole; it gives one call sole use of a handle; and,
-    /// held through the whole of a finish, it runs the finishes one at a
-    /// time — so two finishes of one hash never interleave the replace's
-    /// check, link and rename, which would let the second rename free the
-    /// first file's blocks inside its own answer. A narrower lock here owes
-    /// the finish a lock of its own. The store takes `uploads` under this
-    /// lock where it takes both, never the other way.
-    handles: Mutex<HashMap<UploadId, Handle>>,
+    /// THE FINISHES RUN ONE AT A TIME: every [`Stream::finish`] holds this
+    /// from its first act to its answer, so two finishes of one hash never
+    /// interleave the replace's check, link and rename — which would let the
+    /// second rename free the first file's blocks inside its own answer. No
+    /// other act takes it, so no append waits on another upload's finish;
+    /// the store's other locks are taken under it, briefly, and it under
+    /// none.
+    finishing: Mutex<()>,
     /// THE ROOT's FSYNC PAID: the designation directories whose entry in the
     /// root an fsync has made durable — every directory under the root when
     /// the open's own root fsync ran, and each one a finish's root fsync
@@ -233,7 +234,7 @@ impl Store {
             root: root.to_path_buf(),
             uploads: Mutex::new(uploads),
             leases: Mutex::new(leases),
-            handles: Mutex::new(HashMap::new()),
+            finishing: Mutex::new(()),
             root_synced: Mutex::new(root_synced),
             aside_queue: Mutex::new(Vec::new()),
             aside_serial: AtomicU64::new(0),
@@ -271,7 +272,7 @@ impl Store {
     /// where a file went, `Ok(false)` where none stood. The directory is not
     /// fsynced: a crash that reverts the unlink leaves a file the next pass
     /// re-judges, which costs nothing. Call it holding the lock that keeps
-    /// every [`Store::finish`] out (see there), after reading under that
+    /// every [`Stream::finish`] out (see there), after reading under that
     /// same hold that no live lease holds the file ([`Store::any_live_lease`])
     /// and nothing of the caller's names it.
     pub fn unlink_blob(&self, designation: &str, hex: &str) -> io::Result<bool> {
@@ -280,7 +281,7 @@ impl Store {
 
     /// Remove one aside by name — the pruner's housekeeping where the
     /// deferred step did not run. `Ok(false)` where none stood, and for a
-    /// name no aside has. Under the same exclusion from [`Store::finish`]
+    /// name no aside has. Under the same exclusion from [`Stream::finish`]
     /// as [`Store::unlink_blob`]: an aside stands from its finish's link,
     /// before the rename.
     pub fn remove_aside(&self, designation: &str, name: &str) -> io::Result<bool> {
@@ -329,12 +330,16 @@ impl Store {
     /// force at this creation, held in the record for every expiry the
     /// upload will have (clause (3)), in the whole milliseconds its line
     /// spells — its first expiry that interval past `now_ms`. Answers the
-    /// record. A designation the name check refuses is `InvalidInput`,
-    /// refused before anything is minted. An `Io` — the OS refusing entropy,
-    /// the partial's creation, the record's write — leaves no upload: at most
-    /// an empty partial, which the next open removes as an orphan, and a
-    /// designation directory made here, whose entry in the root the next
-    /// finish into it fsyncs as it would had the creation succeeded.
+    /// record. A designation other than the one naming the hash this store
+    /// computes — `blake3` (`partials/handle.rs`), the one a finish can file
+    /// a file under, since a key names the function that made it (`media.md`
+    /// §The design, item 4, "EVERY SIDECAR KEY NAMES ITS FUNCTION") — is
+    /// `InvalidInput`, refused before anything is minted; a malformed one is
+    /// among them. An `Io` — the OS refusing entropy, the partial's
+    /// creation, the record's write — leaves no upload: at most an empty
+    /// partial, which the next open removes as an orphan, and a designation
+    /// directory made here, whose entry in the root the next finish into it
+    /// fsyncs as it would had the creation succeeded.
     pub fn create_upload(
         &self,
         principal: &str,
@@ -343,8 +348,11 @@ impl Store {
         interval: Duration,
         now_ms: u64,
     ) -> io::Result<UploadRecord> {
-        if !designation_ok(designation) {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "designation"));
+        if designation != HASH_DESIGNATION {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("the designation {designation:?} names no hash this store computes"),
+            ));
         }
         let id = UploadId::mint()?;
         partials::create(&self.root, designation, &id)?;
@@ -364,284 +372,49 @@ impl Store {
     }
 
     /// THE RESUME (clauses (3), (5)): open the principal's upload for this
-    /// request at `offset`, the record's durable offset — the partial opened
-    /// afresh, cut back to `offset` where it is longer and its first `offset`
-    /// bytes hashed (at most its declared length), under no lock another
-    /// upload waits on. The handle lives until this request's settle, finish
-    /// or end, or its [`Store::close_handle`]; one an earlier request left
-    /// open closes first. Answers the record as it stands.
+    /// request at `offset`, the record's durable offset, and answer its
+    /// [`Stream`] — the partial opened afresh, cut back to `offset` where it
+    /// is longer and its first `offset` bytes hashed (at most its declared
+    /// length), under no lock another upload waits on. One stream of an
+    /// upload at a time is the caller's to keep (see [`Store`]).
     ///
     /// THE REFUSALS, in the order they are judged: `NoUpload` where the
     /// identifier names no standing upload of `principal`'s — answered
     /// before any figure of the record, so no offset is ever named to
     /// another principal (M-I2 (e)); then `Offset`, carrying the record's
-    /// offset, where `offset` is any other. Neither moves a handle. An `Io`
-    /// — the partial unreadable, or gone because a finish's rename took it —
-    /// leaves the earlier request's handle closed and none opened.
-    pub fn resume(&self, principal: &str, id: &UploadId, offset: u64, now_ms: u64) -> Result<UploadRecord, BlobError> {
+    /// offset, where `offset` is any other. An `Io` — the partial
+    /// unreadable, or gone because a finish's rename took it — opens no
+    /// stream.
+    pub fn resume(&self, principal: &str, id: &UploadId, offset: u64, now_ms: u64) -> Result<Stream<'_>, BlobError> {
         let record = self.upload(principal, id, now_ms).ok_or(BlobError::NoUpload)?;
         if offset != record.offset {
             return Err(BlobError::Offset { recorded: record.offset });
         }
-        // An earlier request's handle closes before the partial is cut back,
-        // so the partial is never open through two handles.
-        self.handles.lock().remove(id);
         let handle = partials::open_at(&self.root, &record.designation, id, offset)?;
-        self.handles.lock().insert(*id, handle);
-        Ok(record)
+        Ok(Stream {
+            store: self,
+            principal: record.principal,
+            id: record.id,
+            designation: record.designation,
+            length: record.length,
+            offset,
+            handle,
+        })
     }
 
-    /// Append `bytes` to the upload this request resumed — written and
-    /// hashed, made durable at every [`SYNC_GRAIN`] (the record's offset
-    /// then written, its expiry re-fixed the upload's own interval past
-    /// `now_ms`). Answers the bytes written so far (the file's length).
-    ///
-    /// PRECONDITION: this request's [`Store::resume`] opened the upload's
-    /// handle, and no settle, finish, end or [`Store::close_handle`] has
-    /// closed it since — which PANICS rather than being refused: a caller's
-    /// bug, not an outcome. The daemon appends only between its own resume
-    /// and the act that ends the request, under its hold on the upload.
-    ///
-    /// THE REFUSALS, in the order they are judged: `NoUpload` where
-    /// `principal`'s records do not name the upload — judged by principal
-    /// alone, not by expiry: the request's resume found the upload standing
-    /// (clause (5)), and each grain received re-fixes its expiry (clause
-    /// (3)) — judged before the precondition, so an identifier the caller
-    /// does not hold stays an outcome; then `Length` where the bytes would
-    /// pass the declared length, nothing written. An `Io` from the write or
-    /// from a grain's sync tears the handle: every later append and this
-    /// request's settle answer `Io`, and the next resume cuts off whatever
-    /// the failure left. An `Io` from a grain's record write leaves the
-    /// bytes synced and not received, the record's offset where it stood for
-    /// a later grain or the settle to write.
-    pub fn append(&self, principal: &str, id: &UploadId, bytes: &[u8], now_ms: u64) -> Result<u64, BlobError> {
-        let (length, durable) = {
-            let uploads = self.uploads.lock();
-            let r = uploads.of_principal(principal, id).ok_or(BlobError::NoUpload)?;
-            (r.length, r.offset)
-        };
-        let mut handles = self.handles.lock();
-        let Some(handle) = handles.get_mut(id) else {
-            panic!(
-                "an append to upload {id} with no handle open: a request appends only between its resume and \
-                 the settle, finish, end or close_handle that ends it (Store::append's precondition)"
-            );
-        };
-        if handle.written().saturating_add(bytes.len() as u64) > length {
-            return Err(BlobError::Length { length, offset: handle.written() });
-        }
-        handle.write(bytes)?;
-        // Saturating: the record's offset passes the bytes this handle holds
-        // only where a settle raced a resume of the upload — a caller not
-        // serializing one upload's acts (see `Store`) — and the grain is then
-        // measured from none, until the request's settle sets the record to
-        // the handle's bytes.
-        if handle.written().saturating_sub(durable) >= SYNC_GRAIN {
-            handle.sync()?;
-            self.uploads.lock().mark_received(principal, id, handle.written(), now_ms)?;
-        }
-        Ok(handle.written())
-    }
-
-    /// THE DURABLE POINT at a request's end (clause (3)): the partial
-    /// fsynced, the record's offset set to the bytes written and its expiry
-    /// re-fixed the upload's own interval past `now_ms`, this last byte
-    /// received — and moved by nothing else: a request that received no
-    /// byte past the durable point writes no record and re-fixes nothing.
-    /// The request's handle closes here whatever the settle answers; with
-    /// none open, the request received nothing and the record is answered
-    /// as it stands. Answers the record.
-    ///
-    /// THE REFUSALS: `NoUpload` where the identifier names no standing
-    /// upload of `principal`'s; `Io` from a torn handle, a failed sync or a
-    /// failed record write. In each case nothing past the durable point is
-    /// received, and the record stands as it was.
-    pub fn settle(&self, principal: &str, id: &UploadId, now_ms: u64) -> Result<UploadRecord, BlobError> {
-        let handle = self.take_handle(&mut self.handles.lock(), principal, id);
-        let record = self.upload(principal, id, now_ms).ok_or(BlobError::NoUpload)?;
-        let Some(mut handle) = handle else {
-            return Ok(record);
-        };
-        if handle.written() == record.offset {
-            return Ok(record);
-        }
-        handle.sync()?;
-        self.uploads.lock().mark_received(principal, id, handle.written(), now_ms)?;
-        self.upload(principal, id, now_ms).ok_or(BlobError::NoUpload)
-    }
-
-    /// The handle a request has open on `principal`'s upload, taken out of
-    /// `handles` — closed when the caller drops it. `None` where no request
-    /// has one open, or where `principal`'s records do not name the
-    /// identifier: a handle is closed only for the principal whose request
-    /// opened it. Called with `handles` held, so `uploads` is taken under
-    /// it.
-    fn take_handle(
-        &self,
-        handles: &mut HashMap<UploadId, Handle>,
-        principal: &str,
-        id: &UploadId,
-    ) -> Option<Handle> {
-        self.uploads.lock().of_principal(principal, id)?;
-        handles.remove(id)
-    }
-
-    /// THE FINISH (clause (7); M-I5 (a)). The partial is fsynced; where
-    /// `<designation>/<hex>` already holds a file, that file is LINKED ASIDE
-    /// — a second name, `.retired-<hex>-<n>`, so the rename below frees no
-    /// blocks; the partial is renamed onto `<designation>/<hex>` — REPLACE
-    /// where the name exists — the designation directory fsynced, the root
-    /// fsynced where no root fsync since the open has made the directory's
-    /// entry durable, the lease for `principal` on the hash appended and
-    /// synced with an expiry `interval` past `now_ms`, the record retired,
-    /// and the aside queued for the deferred unlink. Answers the file's
-    /// designation, hex and size — one shape whether or not the file was
-    /// already here, and in one time: the old instance's unlink waits for
-    /// [`Store::unlink_asides`], after the answer, and a finish that fails
-    /// past its link queues nothing, leaving its aside to the pruner's pass
-    /// and to open.
-    ///
-    /// PRECONDITION: the upload's bytes written reach its declared length —
-    /// which PANICS rather than being refused: a caller's bug, not an
-    /// outcome. The caller knows the figure, from [`Store::append`]'s answer
-    /// or the record's offset, and the store asserts it here, in one place,
-    /// because a finish past it would name the file by its prefix's hash and
-    /// lease it at a size the file does not have. `NoUpload` — the
-    /// identifier names no standing upload of `principal`'s — is judged
-    /// first, and so is an `Io` opening the partial where no handle is open.
-    ///
-    /// WHAT AN `Io` LEAVES, by where it falls: before the rename, the upload
-    /// stands over its partial at its record's offset, to be resumed there
-    /// and finished; past the rename and before the lease's sync, the file
-    /// stands with no lease, unreferenced and prunable, and the record stands
-    /// in this process over a partial the rename took — a resume answers
-    /// `Io` — until the upload is ended, expires, or the next open retires
-    /// it; past the lease's sync, the deposit is made though the finish
-    /// answered an error, and what of the record's retirement did not
-    /// complete, the next open completes — its reconciliation retires a
-    /// record whose partial is gone.
-    ///
-    /// The request's handle leaves at the finish's first act, whatever the
-    /// finish answers: past the rename its file is the hash's. With no
-    /// handle open — the caller settled first — the partial is opened as
-    /// the record's offset left it, read and hashed whole under the lock
-    /// every finish holds. That lock, the store's own on its handles, is
-    /// held from the first act to the answer, so finishes run one at a time
-    /// and two of one hash never interleave the replace's check, link and
-    /// rename.
-    ///
-    /// THE CALLER's EXCLUSION AROUND A FINISH: hold, around the whole call, a
-    /// lock that keeps [`Store::unlink_blob`] and [`Store::remove_aside`]
-    /// out — the second of the two the store asks, the first being
-    /// [`Store::open`]'s. An unlink between the rename and the lease's sync
-    /// leaves a lease naming bytes that are not there. An unlink between the
-    /// replace's check and its link fails the link, an I/O error a create
-    /// never meets — a second way of saying the file was here. An aside
-    /// removed between its link and the rename lets the rename free the old
-    /// file inside the answer. The store sees no lock of its caller's and
-    /// checks none of this; the daemon keeps it with its credential lock, the
-    /// finish under the read arm and each pruner act under the write arm.
-    pub fn finish(
-        &self,
-        principal: &str,
-        id: &UploadId,
-        interval: Duration,
-        now_ms: u64,
-    ) -> Result<Finished, BlobError> {
-        // Held to the answer: the finishes run one at a time.
-        let mut handles = self.handles.lock();
-        let handle = self.take_handle(&mut handles, principal, id);
-        let record = self.upload(principal, id, now_ms).ok_or(BlobError::NoUpload)?;
-        let mut handle = match handle {
-            Some(handle) => handle,
-            None => partials::open_at(&self.root, &record.designation, id, record.offset)?,
-        };
-        assert!(
-            handle.written() == record.length,
-            "a finish at {} of its {} bytes: the caller finishes an upload only where its bytes written reach its \
-             declared length (Store::finish's precondition, clause (7))",
-            handle.written(),
-            record.length,
-        );
-        self.before(Step::PartialSync)?;
-        handle.sync()?;
-        let hex = handle.hash().to_hex().to_string();
-        let designation = record.designation;
-        let dir = self.root.join(&designation);
-        let from = partials::partial_path(&self.root, &designation, id);
-        let to = dir.join(&hex);
-        let aside = if to.is_file() {
-            // THE REPLACE: the old inode keeps a name through the rename, so
-            // the rename frees nothing; the aside is unlinked after the
-            // answer. A link, not a rename aside: the hash is never without
-            // a file, whatever fails next.
-            self.before(Step::LinkAside)?;
-            let n = self.aside_serial.fetch_add(1, Ordering::Relaxed);
-            let aside = dir.join(aside_name(&hex, n));
-            fs::hard_link(&to, &aside)?;
-            Some(aside)
-        } else {
-            None
-        };
-        self.before(Step::Rename)?;
-        fs::rename(&from, &to)?;
-        self.before(Step::DirSync)?;
-        fsync_dir(&dir)?;
-        if !self.root_synced.lock().contains(&designation) {
-            self.before(Step::RootSync)?;
-            fsync_dir(&self.root)?;
-            self.root_synced.lock().insert(designation.clone());
-        }
-        self.before(Step::LeaseSync)?;
-        self.leases.lock().append_synced(Lease {
-            principal: principal.to_string(),
-            designation: designation.clone(),
-            hex: hex.clone(),
-            size: record.length,
-            expires: expiry(now_ms, interval),
-        })?;
-        self.before(Step::RecordRetire)?;
-        self.uploads.lock().retire(id)?;
-        // QUEUED ONLY NOW, the finish answering: the queue is drained on
-        // whichever thread asks (the daemon's transport, after every blob
-        // reply), and a drain that took this aside before the rename would
-        // leave the old file one link for the rename to free inside this
-        // answer. A finish that fails after its link leaves its aside to the
-        // pruner's pass and to open.
-        if let Some(aside) = aside {
-            self.aside_queue.lock().push(aside);
-        }
-        Ok(Finished { designation, hex, size: record.length })
-    }
-
-    /// THE END (clause (6), the termination): the request's handle closed,
-    /// the partial removed, the record retired, nothing kept. `NoUpload`
-    /// where the principal holds none by that identifier at `now_ms`. An
-    /// `Io` removing the partial leaves the upload standing at its record's
-    /// offset, the handle closed; one writing the retirement leaves it
-    /// retired in this process, its record's line on disk until the next
-    /// open's reconciliation, which finds no partial and retires it.
+    /// THE END (clause (6), the termination): the partial removed, the
+    /// record retired, nothing kept. `NoUpload` where the principal holds
+    /// none by that identifier at `now_ms`. A stream of the upload still open
+    /// receives nothing more: its acts answer `NoUpload`. An `Io` removing
+    /// the partial leaves the upload standing at its record's offset; one
+    /// writing the retirement leaves it retired in this process, its
+    /// record's line on disk until the next open's reconciliation, which
+    /// finds no partial and retires it.
     pub fn end_upload(&self, principal: &str, id: &UploadId, now_ms: u64) -> Result<(), BlobError> {
-        drop(self.take_handle(&mut self.handles.lock(), principal, id));
         let record = self.upload(principal, id, now_ms).ok_or(BlobError::NoUpload)?;
         partials::remove(&self.root, &record.designation, id)?;
         self.uploads.lock().retire(id)?;
         Ok(())
-    }
-
-    /// CLOSE THE HANDLE a request opened and leaves without a settle, a
-    /// finish or an end — a request cut short. The upload stands at its
-    /// record's offset and the next resume reopens the partial; until then
-    /// the handle holds one open file.
-    ///
-    /// PRECONDITION: `id` names an upload THIS request resumed. The store
-    /// takes no principal here, as the acts that end a request do, and
-    /// checks nothing: the caller's hold on the upload is what makes the
-    /// handle its own. A close of another request's handle costs that
-    /// request its next append, which then breaks [`Store::append`]'s
-    /// precondition.
-    pub fn close_handle(&self, id: &UploadId) {
-        self.handles.lock().remove(id);
     }
 
     /// THE DEFERRED STEP of every replace this process has answered since
@@ -677,15 +450,15 @@ impl Store {
         self.uploads.lock().expired(now_ms)
     }
 
-    /// Remove an EXPIRED upload: its handle closed, its partial removed,
-    /// its record retired — the pruner's act, whatever principal minted it,
-    /// after the daemon has found no stream holding it. A record that
-    /// stands at `now_ms` is left as it is (`Ok(false)`), so a clock moved
-    /// between the read and the act costs a standing upload nothing. An
-    /// `Io` removing the partial leaves the record standing, expired, for the
-    /// next pass to take again; one writing the retirement leaves it retired
-    /// in this process, its record's line on disk until the next open's
-    /// reconciliation retires it.
+    /// Remove an EXPIRED upload: its partial removed, its record retired —
+    /// the pruner's act, whatever principal minted it, after the daemon has
+    /// found no stream holding it. A record that stands at `now_ms` is left
+    /// as it is (`Ok(false)`), so a clock moved between the read and the act
+    /// costs a standing upload nothing. An `Io` removing the partial leaves
+    /// the record standing, expired, for the next pass to take again; one
+    /// writing the retirement leaves it retired in this process, its
+    /// record's line on disk until the next open's reconciliation retires
+    /// it.
     pub fn expire_upload(&self, id: &UploadId, now_ms: u64) -> io::Result<bool> {
         let designation = {
             let uploads = self.uploads.lock();
@@ -694,7 +467,6 @@ impl Store {
                 _ => return Ok(false),
             }
         };
-        self.handles.lock().remove(id);
         partials::remove(&self.root, &designation, id)?;
         self.uploads.lock().retire(id)?;
         Ok(true)
@@ -775,43 +547,239 @@ impl Store {
     }
 }
 
+/// AN UPLOAD OPEN FOR ONE REQUEST — "the stream" of the resumable upload's
+/// clause (5), "A STREAM CLAIMS ITS UPLOAD FIRST" — what [`Store::resume`]
+/// answers: the partial's handle, opened afresh at the record's offset with
+/// the hash of its bytes so far, and the figures the request's acts need.
+/// The request appends through it and ends it by [`Stream::settle`] or
+/// [`Stream::finish`], each consuming it, or, cut short, drops it; the
+/// partial's file closes with it whatever the request's end — so no file
+/// stays open for an upload no request is streaming, nor past a finish whose
+/// rename made the partial's file the hash's. A write or a sync that fails
+/// tears it: its later acts answer `Io`, and the next resume cuts off
+/// whatever the failure left.
+pub struct Stream<'s> {
+    store: &'s Store,
+    principal: String,
+    id: UploadId,
+    designation: String,
+    length: u64,
+    /// The record's offset as this stream has marked it — its resume's, then
+    /// each grain's and its settle's: moved only to its own bytes written,
+    /// so it never passes them, whatever another stream did.
+    offset: u64,
+    handle: Handle,
+}
+
+impl std::fmt::Debug for Stream<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Stream").field("id", &self.id).field("offset", &self.offset).finish_non_exhaustive()
+    }
+}
+
+impl Stream<'_> {
+    /// Append `bytes` — written and hashed, made durable at every
+    /// [`SYNC_GRAIN`] (the record's offset then written, its expiry re-fixed
+    /// the upload's own interval past `now_ms`). Answers the bytes written so
+    /// far (the partial's length).
+    ///
+    /// THE REFUSALS, in the order they are judged: `NoUpload` where the
+    /// upload has been retired under the stream — by an end or an expiry
+    /// between its acts — judged by whether its record is held, not by its
+    /// expiry: the resume found the upload standing (clause (5)), and each
+    /// grain received re-fixes its expiry (clause (3)); then `Length` where
+    /// the bytes would pass the declared length, nothing written. An `Io`
+    /// from the write or a grain's sync tears the stream; one from a grain's
+    /// record write leaves the bytes synced and not received, the record's
+    /// offset where it stood for a later grain or the settle to write.
+    pub fn append(&mut self, bytes: &[u8], now_ms: u64) -> Result<u64, BlobError> {
+        self.store.uploads.lock().of_principal(&self.principal, &self.id).ok_or(BlobError::NoUpload)?;
+        if self.handle.written().saturating_add(bytes.len() as u64) > self.length {
+            return Err(BlobError::Length { length: self.length, offset: self.handle.written() });
+        }
+        self.handle.write(bytes)?;
+        // The stream's own offset moves only to its own bytes written, so
+        // the grain is measured in range whatever the record says.
+        if self.handle.written() - self.offset >= SYNC_GRAIN {
+            self.receive(now_ms)?;
+        }
+        Ok(self.handle.written())
+    }
+
+    /// THE DURABLE POINT at the request's end (clause (3)), the stream
+    /// consumed whatever it answers: the partial fsynced, the record's offset
+    /// set to the bytes written and its expiry re-fixed the upload's own
+    /// interval past `now_ms`, this last byte received — and moved by nothing
+    /// else: a stream that wrote no byte past its durable point writes no
+    /// record and re-fixes nothing. Answers the record.
+    ///
+    /// THE REFUSALS: `NoUpload` where the upload no longer stands — expired,
+    /// or retired under the stream; `Io` from a torn stream, a failed sync or
+    /// a failed record write. In each case nothing past the durable point is
+    /// received, and the record stands as it was.
+    pub fn settle(mut self, now_ms: u64) -> Result<UploadRecord, BlobError> {
+        let record = self.store.upload(&self.principal, &self.id, now_ms).ok_or(BlobError::NoUpload)?;
+        if self.handle.written() == self.offset {
+            return Ok(record);
+        }
+        self.receive(now_ms)?;
+        self.store.upload(&self.principal, &self.id, now_ms).ok_or(BlobError::NoUpload)
+    }
+
+    /// Make the bytes written received — the partial synced, THEN the
+    /// record's offset set to them and its expiry re-fixed (clause (3)): the
+    /// one act a grain and the settle share.
+    fn receive(&mut self, now_ms: u64) -> Result<(), BlobError> {
+        self.handle.sync()?;
+        self.store.uploads.lock().mark_received(&self.principal, &self.id, self.handle.written(), now_ms)?;
+        self.offset = self.handle.written();
+        Ok(())
+    }
+
+    /// THE FINISH (clause (7); M-I5 (a)), the stream consumed whatever it
+    /// answers. The partial is fsynced; where `<designation>/<hex>` already
+    /// holds a file, that file is LINKED ASIDE — a second name,
+    /// `.retired-<hex>-<n>`, so the rename below frees no blocks; the partial
+    /// is renamed onto `<designation>/<hex>` — REPLACE where the name exists
+    /// — the designation directory fsynced, the root fsynced where no root
+    /// fsync since the open has made the directory's entry durable, the
+    /// lease for the upload's principal on the hash appended and synced with
+    /// an expiry `interval` past `now_ms`, the record retired, and the aside
+    /// queued for the deferred unlink. Answers the file's designation, hex
+    /// and size — one shape whether or not the file was already here, and in
+    /// one time: the old instance's unlink waits for
+    /// [`Store::unlink_asides`], after the answer, and a finish that fails
+    /// past its link queues nothing, leaving its aside to the pruner's pass
+    /// and to open.
+    ///
+    /// PRECONDITION: the stream's bytes written reach the upload's declared
+    /// length — which PANICS rather than being refused: a caller's bug, not
+    /// an outcome. The caller knows the figure, from [`Stream::append`]'s
+    /// answer or the offset it resumed at, and the store asserts it here, in
+    /// one place, because a finish past it would name the file by its
+    /// prefix's hash and lease it at a size the file does not have.
+    /// `NoUpload` — the upload expired or retired under the stream — is
+    /// judged first.
+    ///
+    /// WHAT AN `Io` LEAVES, by where it falls: before the rename, the upload
+    /// stands over its partial at its record's offset, to be resumed there
+    /// and finished; past the rename and before the lease's sync, the file
+    /// stands with no lease, unreferenced and prunable, and the record stands
+    /// in this process over a partial the rename took — a resume answers
+    /// `Io` — until the upload is ended, expires, or the next open retires
+    /// it; past the lease's sync, the deposit is made though the finish
+    /// answered an error, and what of the record's retirement did not
+    /// complete, the next open completes — its reconciliation retires a
+    /// record whose partial is gone.
+    ///
+    /// The stream is consumed whatever the finish answers: past the rename
+    /// its file is the hash's, and it closes with the stream. The store's
+    /// finish lock is held from the first act to the answer, so finishes run
+    /// one at a time and two of one hash never interleave the replace's
+    /// check, link and rename. A request whose bytes a settle already
+    /// received finishes through a stream resumed at the length.
+    ///
+    /// THE CALLER's EXCLUSION AROUND A FINISH: hold, around the whole call, a
+    /// lock that keeps [`Store::unlink_blob`] and [`Store::remove_aside`]
+    /// out. An unlink between the rename and the lease's sync leaves a lease
+    /// naming bytes that are not there. An unlink between the replace's
+    /// check and its link fails the link, an I/O error a create never meets
+    /// — a second way of saying the file was here. An aside removed between
+    /// its link and the rename lets the rename free the old file inside the
+    /// answer. The store sees no lock of its caller's and checks none of
+    /// this; the daemon keeps it with its credential lock, the finish under
+    /// the read arm and each pruner act under the write arm.
+    pub fn finish(mut self, interval: Duration, now_ms: u64) -> Result<Finished, BlobError> {
+        let store = self.store;
+        // Held to the answer: the finishes run one at a time.
+        let _finishing = store.finishing.lock();
+        store.upload(&self.principal, &self.id, now_ms).ok_or(BlobError::NoUpload)?;
+        assert!(
+            self.handle.written() == self.length,
+            "a finish at {} of its {} bytes: the caller finishes an upload only where its bytes written reach its \
+             declared length (Stream::finish's precondition, clause (7))",
+            self.handle.written(),
+            self.length,
+        );
+        store.before(Step::PartialSync)?;
+        self.handle.sync()?;
+        let hex = self.handle.hash().to_hex().to_string();
+        let dir = store.root.join(&self.designation);
+        let from = partials::partial_path(&store.root, &self.designation, &self.id);
+        let to = dir.join(&hex);
+        let aside = if to.is_file() {
+            // THE REPLACE: the old inode keeps a name through the rename, so
+            // the rename frees nothing; the aside is unlinked after the
+            // answer. A link, not a rename aside: the hash is never without
+            // a file, whatever fails next.
+            store.before(Step::LinkAside)?;
+            let n = store.aside_serial.fetch_add(1, Ordering::Relaxed);
+            let aside = dir.join(aside_name(&hex, n));
+            fs::hard_link(&to, &aside)?;
+            Some(aside)
+        } else {
+            None
+        };
+        store.before(Step::Rename)?;
+        fs::rename(&from, &to)?;
+        store.before(Step::DirSync)?;
+        fsync_dir(&dir)?;
+        if !store.root_synced.lock().contains(&self.designation) {
+            store.before(Step::RootSync)?;
+            fsync_dir(&store.root)?;
+            store.root_synced.lock().insert(self.designation.clone());
+        }
+        store.before(Step::LeaseSync)?;
+        store.leases.lock().append_synced(Lease {
+            principal: self.principal.clone(),
+            designation: self.designation.clone(),
+            hex: hex.clone(),
+            size: self.length,
+            expires: expiry(now_ms, interval),
+        })?;
+        store.before(Step::RecordRetire)?;
+        store.uploads.lock().retire(&self.id)?;
+        // QUEUED ONLY NOW, the finish answering: the queue is drained on
+        // whichever thread asks (the daemon's transport, after every blob
+        // reply), and a drain that took this aside before the rename would
+        // leave the old file one link for the rename to free inside this
+        // answer. A finish that fails after its link leaves its aside to the
+        // pruner's pass and to open.
+        if let Some(aside) = aside {
+            store.aside_queue.lock().push(aside);
+        }
+        Ok(Finished { designation: self.designation, hex, size: self.length })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// AN APPEND MEASURES ITS GRAIN IN RANGE WHATEVER THE RECORD SAYS: a
-    /// settle that raced a resume of the same upload — its handle taken out,
-    /// the resume reopening the partial at the record's offset behind it,
-    /// then the settle's own offset written past the new handle's bytes —
-    /// leaves the record ahead of the handle, the state a caller that does
-    /// not serialize one upload's acts (`Store`) can reach. Played here
-    /// through the settle's own two halves, step by step: the append over it
-    /// answers, neither panicking nor wrapping, and the request's settle sets
-    /// the record to the bytes its handle holds.
+    /// AN APPEND MEASURES ITS GRAIN FROM ITS OWN STREAM's OFFSET, WHATEVER
+    /// THE RECORD SAYS: two streams of one upload — what a caller that does
+    /// not keep one stream of an upload at a time (`Store`) can reach — the
+    /// first settling after the second's resume cut the partial back, so the
+    /// record stands ahead of the second's bytes: the second's append
+    /// answers, neither panicking nor wrapping, writing no record, and its
+    /// settle sets the record to the bytes it holds.
     #[test]
     fn an_append_after_a_settle_raced_its_resume_answers() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = Store::open(dir.path(), Duration::from_secs(1), 0).expect("the store opens");
         let rec = store.create_upload("k", "blake3", 10, Duration::from_secs(60), 0).expect("create");
-        store.resume("k", &rec.id, 0, 1).expect("the first request's resume");
-        store.append("k", &rec.id, b"abcd", 1).expect("the first request's bytes");
-        // The first request's settle, its first half: its handle taken out.
-        let mut first = store.take_handle(&mut store.handles.lock(), "k", &rec.id).expect("its handle");
-        // The second request's resume, at the record's offset as it stands.
-        store.resume("k", &rec.id, 0, 2).expect("the second request's resume");
-        // The settle's second half: its handle's bytes written as the offset.
-        first.sync().expect("the first handle's sync");
-        store.uploads.lock().mark_received("k", &rec.id, first.written(), 3).expect("the first handle's offset");
-        drop(first);
-        assert_eq!(store.upload("k", &rec.id, 3).map(|r| r.offset), Some(4), "the record ahead of the handle");
-        assert_eq!(store.append("k", &rec.id, b"x", 4).expect("the append answers"), 1);
+        let mut first = store.resume("k", &rec.id, 0, 1).expect("the first request's resume");
+        first.append(b"abcd", 1).expect("the first request's bytes");
+        let mut second = store.resume("k", &rec.id, 0, 2).expect("the second request's resume");
+        assert_eq!(first.settle(3).expect("the first settle").offset, 4, "the record ahead of the second stream");
+        assert_eq!(second.append(b"x", 4).expect("the append answers"), 1);
         assert_eq!(
             store.upload("k", &rec.id, 4).map(|r| r.offset),
             Some(4),
-            "the grain measured from none: no sync and no record written, where a wrapped measure takes both"
+            "the grain measured from the stream's own offset: no sync and no record written, where a measure \
+             wrapped from the record's takes both"
         );
-        let settled = store.settle("k", &rec.id, 5).expect("the settle answers");
-        assert_eq!(settled.offset, 1, "the record set to the bytes the handle holds");
+        assert_eq!(second.settle(5).expect("the settle answers").offset, 1, "the record set to the second's bytes");
         assert_eq!(fs::read(partials::partial_path(dir.path(), "blake3", &rec.id)).unwrap(), b"x");
     }
 }

@@ -202,12 +202,11 @@ fn open_reconciles_the_partials_and_the_records_both_ways() {
     // standing ones resume at their reconciled offsets and finish whole.
     for (rec, head, tail) in [(&kept, b"kept".as_slice(), b"".as_slice()), (&longer, b"longer", b""), (&shorter, b"sho", b"rter")] {
         let r = store.upload("k", &rec.id, now).unwrap();
-        store.resume("k", &r.id, r.offset, now).unwrap();
+        let mut stream = store.resume("k", &r.id, r.offset, now).unwrap();
         let fill = vec![b'x'; 100 - head.len() - tail.len()];
-        store.append("k", &r.id, tail, now).unwrap();
-        store.append("k", &r.id, &fill, now).unwrap();
-        store.settle("k", &r.id, now).unwrap();
-        let fin = store.finish("k", &r.id, INTERVAL, now).unwrap();
+        stream.append(tail, now).unwrap();
+        stream.append(&fill, now).unwrap();
+        let fin = stream.finish(INTERVAL, now).unwrap();
         let mut whole = head.to_vec();
         whole.extend_from_slice(tail);
         whole.extend(fill);

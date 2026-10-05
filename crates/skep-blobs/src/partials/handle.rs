@@ -12,18 +12,28 @@ use std::path::Path;
 use super::partial_path;
 use crate::uploads::UploadId;
 
+/// THE DESIGNATION OF THE HASH A HANDLE COMPUTES — `blake3`: BLAKE3's
+/// default hash of the file's bytes, 32 bytes spelled as 64 lowercase hex,
+/// the name the cell's schema gives it (`media.md` §The design, item 4,
+/// "THE HASH IS BLAKE3"; Q-sm1). A key names the function that made it
+/// ("EVERY SIDECAR KEY NAMES ITS FUNCTION, FROM THE FIRST FILE"), so this is
+/// the one designation a finish can file a file under, and the one a
+/// creation admits; a second schema's hash would be a second function here,
+/// under its own name.
+pub(crate) const HASH_DESIGNATION: &str = "blake3";
+
 /// THE HANDLE: the partial opened for one request — by [`open_at`] at the
-/// request's resume, and dropped when that request ends: the partial's open
-/// file, the hasher over every byte written, the count of those bytes, and
-/// whether a write or sync has failed. The fields are this file's alone —
-/// only [`open_at`], [`Handle::write`] and [`Handle::sync`] move them — and
-/// the claim they keep holds across a failed call: the hasher is the hash
-/// of exactly the bytes written, so the hash a finish names the file by
-/// ([`Handle::hash`]) is its bytes' hash. A write or sync that fails marks
-/// the handle TORN — the file may then hold bytes no hasher covers, or
-/// bytes whose durability nothing vouches for — and a torn handle takes no
-/// further write or sync: the next resume opens the partial afresh at its
-/// record's offset.
+/// request's resume, and dropped with its [`Stream`](crate::Stream): the
+/// partial's open file, the hasher over every byte written, the count of
+/// those bytes, and whether a write or sync has failed. The fields are this
+/// file's alone — only [`open_at`], [`Handle::write`] and [`Handle::sync`]
+/// move them — and the claim they keep holds across a failed call: the
+/// hasher is the hash of exactly the bytes written, so the hash a finish
+/// names the file by ([`Handle::hash`]) is its bytes' hash. A write or sync
+/// that fails marks the handle TORN — the file may then hold bytes no hasher
+/// covers, or bytes whose durability nothing vouches for — and a torn handle
+/// takes no further write or sync: the next resume opens the partial afresh
+/// at its record's offset.
 pub(crate) struct Handle {
     file: File,
     hasher: blake3::Hasher,
@@ -32,11 +42,11 @@ pub(crate) struct Handle {
 }
 
 /// Open a partial for one request at `offset` — the record's durable
-/// offset, where a resume continues and a finish with no handle open reads
-/// to: the file cut back to it where longer, the hasher built over its
-/// first `offset` bytes. The record's offset never passes the file's length
-/// past open's reconciliation; a shorter file here is a defect, answered as
-/// I/O, and an absent one — a finish's rename took it — is I/O too.
+/// offset, where a resume continues: the file cut back to it where longer,
+/// the hasher built over its first `offset` bytes. The record's offset
+/// never passes the file's length past open's reconciliation; a shorter
+/// file here is a defect, answered as I/O, and an absent one — a finish's
+/// rename took it — is I/O too.
 pub(crate) fn open_at(root: &Path, designation: &str, id: &UploadId, offset: u64) -> io::Result<Handle> {
     let path = partial_path(root, designation, id);
     let mut file = OpenOptions::new().read(true).write(true).open(&path)?;

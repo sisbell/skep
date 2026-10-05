@@ -510,10 +510,9 @@ mod tests {
             let now = gate.now_ms();
             let store = gate.store();
             let rec = store.create_upload(&key, "blake3", 5, interval, now).unwrap();
-            store.resume(&key, &rec.id, 0, now).unwrap();
-            store.append(&key, &rec.id, bytes, now).unwrap();
-            store.settle(&key, &rec.id, now).unwrap();
-            store.finish(&key, &rec.id, interval, now).unwrap();
+            let mut stream = store.resume(&key, &rec.id, 0, now).unwrap();
+            stream.append(bytes, now).unwrap();
+            stream.finish(interval, now).unwrap();
         };
         assert_eq!(door(insert(&draft2, real()), SYSTEM_PRINCIPAL), Some(MediaRefusal::UnboundCell));
         assert_eq!(door(shot2(), SYSTEM_PRINCIPAL), Some(MediaRefusal::UnboundCell));

@@ -191,25 +191,29 @@ names: the files, `<root>/<designation>/<hex>`; the partials,
 are declared in `src/lib.rs` in dependency order, each with a line saying
 what it holds, and the crate doc there states the store's guarantees, each
 linked to the item that keeps it. `Store` (`store.rs`) is the four opened
-as one; beneath it, `store/hooks.rs` is the test seam.
+as one, and `Stream` beside it an upload open for one request; beneath
+them, `store/hooks.rs` is the test seam.
 
 Rules that hold across its files:
 
-- **The PUT's order.** `Store::finish` is the one path from a partial to a
-  file: durable before named, leased before answered, a present name
+- **The PUT's order.** `Stream::finish` is the one path from a partial to
+  a file: durable before named, leased before answered, a present name
   REPLACED and its old file's aside unlinked only after the answer
   (`Store::unlink_asides`). A crash leaves at worst a file with no lease,
   a record open retires, or an aside open removes.
-- **Two exclusions are the caller's.** One `Store` per root
-  (`Store::open`), and no `unlink_blob` or `remove_aside` while a `finish`
-  runs (`Store::finish`); the store checks neither.
+- **Three exclusions are the caller's.** One `Store` per root
+  (`Store::open`); one stream of an upload at a time, its acts serialized
+  (`Store`); and no `unlink_blob` or `remove_aside` while a finish runs
+  (`Stream::finish`). The store checks none.
 - **The pruner's acts are one method each**, so the daemon's pass holds
   its lock around exactly one.
 - **Every name passes one check**, `blobs.rs`'s spellings: a caller's at
   `Store`'s entry points, a log line's at open. No name reaches a path out
-  of the root.
-- **A byte is received once it is durable, and a handle lives for one
-  request** (`Store::append`, `Store::settle`; `Store`'s doc).
+  of the root; and a creation names the designation of the one hash the
+  store computes (`Store::create_upload`).
+- **A byte is received once it is durable, and a stream is one
+  request's** (`Store::resume`, `Stream`): the partial's file closes with
+  it.
 - **One answer per principal.** `UploadRecords` answers by the asking
   principal; its one lookup by identifier alone serves the pruner's expiry.
 - **A record changes only by its holder's acts.** `UploadRecords` makes
@@ -226,8 +230,8 @@ Rules that hold across its files:
   `Store::open` runs each store's act at open — the logs' compactions,
   `partials::reconcile`, `blobs::sweep_asides` — and an I/O failure there,
   as at the size check (`Store::blob_size`), is never read as an absence.
-- **A caller's bug is no refusal.** `Store::append` and `Store::finish`
-  panic on a broken precondition; `BlobError` carries only answers.
+- **A caller's bug is no refusal.** `Stream::finish` panics on a broken
+  precondition; `BlobError` carries only answers.
 - **The test seam is a feature.** `test-hooks` (default off) compiles in
   `store/hooks.rs` alone; `scripts/gate-full.sh` builds the library and its
   docs without it.

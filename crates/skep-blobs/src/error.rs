@@ -8,12 +8,11 @@ use std::io;
 /// else is the store's own verdict, and none of them says anything about
 /// another principal's uploads or files (the record's M-I2 (e)).
 ///
-/// A caller's bug is none of these. An append with no handle open and a
-/// finish short of the declared length PANIC, naming the obligation they
-/// break ([`Store::append`](crate::Store::append),
-/// [`Store::finish`](crate::Store::finish)): an honest caller has ruled
-/// both out before it calls, so an answer for either would be an arm every
-/// caller handles for a state it cannot be in.
+/// A caller's bug is none of these. A finish short of the declared length
+/// PANICS, naming the obligation it breaks
+/// ([`Stream::finish`](crate::Stream::finish)): an honest caller has ruled
+/// it out before it calls, so an answer for it would be an arm every caller
+/// handles for a state it cannot be in.
 ///
 /// Deliberately not `#[non_exhaustive]`: the daemon's exhaustive match over
 /// it gives each refusal its wire answer, and a new variant breaks that
@@ -27,8 +26,9 @@ pub enum BlobError {
     /// retired, another principal's, or never minted — ONE answer for all
     /// four, exactly as an expired one answers (the record's clause (1)).
     /// Every act that judges a standing upload answers it for all four;
-    /// [`Store::append`](crate::Store::append), whose request's resume
-    /// judged the upload standing, judges the principal alone.
+    /// [`Stream::append`](crate::Stream::append), whose resume judged the
+    /// upload standing, judges only that its record has not been retired
+    /// under it.
     NoUpload,
     /// A resume stated an offset other than the record's — the standard
     /// shape's offset conflict — and carries the record's, the one a resume

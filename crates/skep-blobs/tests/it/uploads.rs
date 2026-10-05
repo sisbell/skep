@@ -6,18 +6,16 @@
 //! every act answers for an identifier the asker does not hold; the durable
 //! offset, the cut-back, and every other offset refused; one expiry, moved
 //! by a byte received and by nothing else, fixed from the upload's own
-//! interval and saturating at the last instant; one handle per request, an
-//! append past its request's end stopped as its caller's bug; the expiry,
-//! an expired upload's handle closed with it; the end; and the listings in
-//! identifier order.
+//! interval and saturating at the last instant; one handle per request,
+//! closed with its stream; the expiry, an expired upload's stream appending
+//! nothing; the end; and the listings in identifier order.
 
 use std::fs;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::time::Duration;
 
 use skep_blobs::{BlobError, LeaseState, NotAnUploadId, UploadId, UploadRecord, SYNC_GRAIN};
 
-use crate::{every_deposit_unplaced, hex_of, open, panic_message, standing, INTERVAL, INTERVAL_MS};
+use crate::{every_deposit_unplaced, hex_of, open, standing, INTERVAL, INTERVAL_MS};
 
 /// (1) THE IDENTIFIER: 32 lowercase hex of 128 OS bits — two mints differ
 /// (that no run of mints is a sequence is
@@ -25,10 +23,10 @@ use crate::{every_deposit_unplaced, hex_of, open, panic_message, standing, INTER
 /// claim); the parse admits exactly the spelling, through `UploadId::parse`
 /// and through `FromStr` alike, and the spelling is the identifier's
 /// `Display`; identifiers order as their spellings do; and an identifier is
-/// answered to its principal ALONE: another principal's lookup, a resume,
-/// an end, an append and the count of bytes written each answer as for a
-/// never-minted identifier, even while the upload is open in this process
-/// (M-I2 (e)).
+/// answered to its principal ALONE: another principal's lookup, resume and
+/// end each answer as for a never-minted identifier — no stream of the
+/// upload ever reaching another principal — even while the upload is open
+/// in this process (M-I2 (e)).
 #[test]
 fn the_identifier_is_32_lowercase_hex_and_answers_to_its_principal_alone() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -64,10 +62,10 @@ fn the_identifier_is_32_lowercase_hex_and_answers_to_its_principal_alone() {
     assert_eq!(listed.len(), 2);
     assert_eq!(listed, ordered, "in identifier order");
     // Open in this process, the upload still answers its own principal alone.
-    store.resume("a", &first.id, 0, 1).unwrap();
-    assert_eq!(store.written("a", &first.id, 1), Some(0));
-    assert_eq!(store.written("b", &first.id, 1), None, "another principal's count is no upload's");
-    assert!(matches!(store.append("b", &first.id, b"x", 1), Err(BlobError::NoUpload)));
+    let stream = store.resume("a", &first.id, 0, 1).unwrap();
+    assert_eq!(stream.written(), 0);
+    assert!(matches!(store.resume("b", &first.id, 0, 1), Err(BlobError::NoUpload)), "while it is open here");
+    assert!(matches!(store.end_upload("b", &first.id, 1), Err(BlobError::NoUpload)), "and its end");
 }
 
 /// (1) AN IDENTIFIER IS NEVER A SEQUENCE: sixteen consecutive mints stand in
@@ -125,9 +123,11 @@ fn the_parse_admits_exactly_the_spelling_and_identifiers_order_as_spelled() {
 /// (e)): for every way an identifier can fail to name the asking
 /// principal's standing upload, every act answers that one "no upload" —
 /// the read, the listing, a resume stating an offset not the record's (so a
-/// leaked offset would show), a settle, a finish, an end — and moves
-/// nothing. The upload behind the first and third causes is whole and
-/// settled, so a principal-blind or expiry-blind finish would land it.
+/// leaked offset would show), an end — and a stream opened while the upload
+/// stood answers it at the expiry, at its settle and its finish alike; and
+/// nothing moves. The upload behind the first and third causes is whole and
+/// settled, so a principal-blind resume would open it to another principal
+/// and an expiry-blind finish would land it.
 #[test]
 fn every_act_answers_no_upload_for_every_identifier_the_asker_does_not_hold() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -135,15 +135,15 @@ fn every_act_answers_no_upload_for_every_identifier_the_asker_does_not_hold() {
     let store = open(&root, 0);
     let whole = |bytes: &[u8]| {
         let rec = store.create_upload("a", "blake3", bytes.len() as u64, Duration::from_millis(1_000), 0).unwrap();
-        store.resume("a", &rec.id, 0, 0).unwrap();
-        store.append("a", &rec.id, bytes, 0).unwrap();
-        store.settle("a", &rec.id, 0).unwrap()
+        let mut stream = store.resume("a", &rec.id, 0, 0).unwrap();
+        stream.append(bytes, 0).unwrap();
+        stream.settle(0).unwrap()
     };
     let held = whole(b"held by a");
     let ended = whole(b"ended by a");
     store.end_upload("a", &ended.id, 1).unwrap();
     let finished = whole(b"finished by a");
-    store.finish("a", &finished.id, INTERVAL, 1).unwrap();
+    store.resume("a", &finished.id, finished.offset, 1).unwrap().finish(INTERVAL, 1).unwrap();
     let never = UploadId::parse("00000000000000000000000000000000").unwrap();
     for (cause, asker, id, now) in [
         ("another principal's", "b", held.id, 1),
@@ -155,10 +155,12 @@ fn every_act_answers_no_upload_for_every_identifier_the_asker_does_not_hold() {
         assert_eq!(store.upload(asker, &id, now), None, "{cause}: the read");
         assert!(store.uploads_of(asker, now).iter().all(|r| r.id != id), "{cause}: the listing");
         assert!(matches!(store.resume(asker, &id, 3, now), Err(BlobError::NoUpload)), "{cause}: the resume");
-        assert!(matches!(store.settle(asker, &id, now), Err(BlobError::NoUpload)), "{cause}: the settle");
-        assert!(matches!(store.finish(asker, &id, INTERVAL, now), Err(BlobError::NoUpload)), "{cause}: the finish");
         assert!(matches!(store.end_upload(asker, &id, now), Err(BlobError::NoUpload)), "{cause}: the end");
     }
+    let stream = store.resume("a", &held.id, held.offset, 1).unwrap();
+    assert!(matches!(stream.settle(held.expires), Err(BlobError::NoUpload)), "expired under its stream: the settle");
+    let stream = store.resume("a", &held.id, held.offset, 1).unwrap();
+    assert!(matches!(stream.finish(INTERVAL, held.expires), Err(BlobError::NoUpload)), "and the finish");
     assert_eq!(store.upload("a", &held.id, 1), Some(held.clone()), "the held upload stands as it was");
     assert!(root.join("blake3").join(format!(".upload-{}", held.id.to_hex())).is_file(), "its partial on disk");
     assert_eq!(store.blob_size("blake3", &hex_of(b"held by a")).unwrap(), None, "no finish named its bytes");
@@ -181,23 +183,23 @@ fn a_byte_is_received_once_durable_and_a_resume_continues_from_the_records_offse
     let store = open(&root, 0);
     let length = SYNC_GRAIN + 100;
     let rec = store.create_upload("k", "blake3", length, INTERVAL, 0).unwrap();
-    store.resume("k", &rec.id, 0, 10).unwrap();
+    let mut stream = store.resume("k", &rec.id, 0, 10).unwrap();
     // Short of the grain: written, not received.
-    store.append("k", &rec.id, &[1u8; 100], 10).unwrap();
+    stream.append(&[1u8; 100], 10).unwrap();
     assert_eq!(store.upload("k", &rec.id, 10).unwrap().offset, 0);
-    assert_eq!(store.written("k", &rec.id, 10), Some(100));
+    assert_eq!(stream.written(), 100);
     // Up to the grain: received, the expiry re-fixed from this byte.
     let rest = vec![2u8; SYNC_GRAIN as usize - 100];
-    store.append("k", &rec.id, &rest, 20).unwrap();
+    stream.append(&rest, 20).unwrap();
     let r = store.upload("k", &rec.id, 20).unwrap();
     assert_eq!(r.offset, SYNC_GRAIN);
     assert_eq!(r.expires, 20 + INTERVAL_MS);
     // Written past it, unsettled: the record stands; a resume stating any
     // offset but the record's — below it, past it, at the bytes written —
     // is refused naming the record's and cuts nothing; one at the record's
-    // offset cuts the tail.
-    store.append("k", &rec.id, &[3u8; 50], 30).unwrap();
-    assert_eq!(store.written("k", &rec.id, 30), Some(SYNC_GRAIN + 50));
+    // offset, the request before it cut short, cuts the tail.
+    stream.append(&[3u8; 50], 30).unwrap();
+    assert_eq!(stream.written(), SYNC_GRAIN + 50);
     let partial = root.join("blake3").join(format!(".upload-{}", rec.id.to_hex()));
     for stated in [0, 1, SYNC_GRAIN - 1, SYNC_GRAIN + 1, SYNC_GRAIN + 50, length, u64::MAX] {
         assert!(
@@ -206,24 +208,25 @@ fn a_byte_is_received_once_durable_and_a_resume_continues_from_the_records_offse
         );
     }
     assert_eq!(fs::metadata(&partial).unwrap().len(), SYNC_GRAIN + 50, "no refusal cut the partial");
-    store.resume("k", &rec.id, SYNC_GRAIN, 30).unwrap();
-    assert_eq!(store.written("k", &rec.id, 30), Some(SYNC_GRAIN));
+    drop(stream);
+    let mut stream = store.resume("k", &rec.id, SYNC_GRAIN, 30).unwrap();
+    assert_eq!(stream.written(), SYNC_GRAIN);
     assert_eq!(fs::metadata(&partial).unwrap().len(), SYNC_GRAIN);
     // The last bytes, settled at the request's end: received, the length
     // reached, the hash the whole file's.
-    store.append("k", &rec.id, &[4u8; 100], 40).unwrap();
-    let r = store.settle("k", &rec.id, 40).unwrap();
+    stream.append(&[4u8; 100], 40).unwrap();
+    let r = stream.settle(40).unwrap();
     assert_eq!(r.offset, length);
     assert_eq!(r.expires, 40 + INTERVAL_MS);
     // The settle ended that request; the next resumes at the length, and
     // one byte more is refused, naming the length and the offset it would
     // start at, nothing written.
-    store.resume("k", &rec.id, length, 41).unwrap();
+    let mut stream = store.resume("k", &rec.id, length, 41).unwrap();
     assert!(matches!(
-        store.append("k", &rec.id, &[5u8], 41),
+        stream.append(&[5u8], 41),
         Err(BlobError::Length { length: l, offset: o }) if (l, o) == (length, length)
     ));
-    let fin = store.finish("k", &rec.id, INTERVAL, 50).unwrap();
+    let fin = stream.finish(INTERVAL, 50).unwrap();
     let mut whole = vec![1u8; 100];
     whole.extend(rest);
     whole.extend([4u8; 100]);
@@ -243,19 +246,18 @@ fn a_request_that_receives_nothing_moves_no_expiry_and_writes_no_record() {
     let root = dir.path().join("blobs");
     let store = open(&root, 0);
     let rec = store.create_upload("k", "blake3", 10, INTERVAL, 0).unwrap();
-    store.resume("k", &rec.id, 0, 10).unwrap();
-    store.append("k", &rec.id, b"abc", 10).unwrap();
-    let fixed = store.settle("k", &rec.id, 10).unwrap().expires;
+    let mut stream = store.resume("k", &rec.id, 0, 10).unwrap();
+    stream.append(b"abc", 10).unwrap();
+    let fixed = stream.settle(10).unwrap().expires;
     assert_eq!(fixed, 10 + INTERVAL_MS, "the last byte received fixes it");
     let lines = || fs::read_to_string(root.join("uploads.log")).unwrap().lines().count();
     let lines_before = lines();
-    store.resume("k", &rec.id, 3, 20).unwrap();
-    assert_eq!(store.settle("k", &rec.id, 20).unwrap().expires, fixed, "a resume and its settle with no body");
-    store.resume("k", &rec.id, 3, 30).unwrap();
-    store.close_handle(&rec.id);
-    store.resume("k", &rec.id, 3, 40).unwrap();
-    assert!(matches!(store.append("k", &rec.id, &[0; 8], 40), Err(BlobError::Length { .. })));
-    assert_eq!(store.settle("k", &rec.id, 40).unwrap().expires, fixed, "an append refused at the length");
+    let stream = store.resume("k", &rec.id, 3, 20).unwrap();
+    assert_eq!(stream.settle(20).unwrap().expires, fixed, "a resume and its settle with no body");
+    drop(store.resume("k", &rec.id, 3, 30).unwrap());
+    let mut stream = store.resume("k", &rec.id, 3, 40).unwrap();
+    assert!(matches!(stream.append(&[0; 8], 40), Err(BlobError::Length { .. })));
+    assert_eq!(stream.settle(40).unwrap().expires, fixed, "an append refused at the length");
     assert_eq!(store.upload("k", &rec.id, 50).map(|r| r.expires), Some(fixed), "a resume cut short, too");
     assert_eq!(lines(), lines_before, "none of them wrote a record");
 }
@@ -276,9 +278,9 @@ fn the_interval_is_the_uploads_own_from_its_creation() {
         let store = open(&root, 0);
         let first = store.create_upload("k", "blake3", 10, Duration::from_millis(1_000), 0).unwrap();
         assert_eq!((first.interval, first.expires), (Duration::from_millis(1_000), 1_000));
-        store.resume("k", &first.id, 0, 10).unwrap();
-        store.append("k", &first.id, b"a", 10).unwrap();
-        assert_eq!(store.settle("k", &first.id, 10).unwrap().expires, 1_010);
+        let mut stream = store.resume("k", &first.id, 0, 10).unwrap();
+        stream.append(b"a", 10).unwrap();
+        assert_eq!(stream.settle(10).unwrap().expires, 1_010);
         // A later upload, created under another interval: its own alone.
         let later = store.create_upload("k", "blake3", 10, Duration::from_millis(5_000), 10).unwrap();
         assert_eq!(later.expires, 5_010);
@@ -292,12 +294,12 @@ fn the_interval_is_the_uploads_own_from_its_creation() {
     assert_eq!(store.upload("k", &first, 11).unwrap().interval, Duration::from_millis(1_000));
     assert_eq!(store.upload("k", &later, 11).unwrap().interval, Duration::from_millis(5_000));
     assert_eq!(store.upload("k", &fine.id, 11), Some(fine), "read back as the creation answered it");
-    store.resume("k", &first, 1, 20).unwrap();
-    store.append("k", &first, b"b", 20).unwrap();
-    assert_eq!(store.settle("k", &first, 20).unwrap().expires, 1_020, "re-fixed by its own interval");
-    store.resume("k", &later, 0, 30).unwrap();
-    store.append("k", &later, b"c", 30).unwrap();
-    assert_eq!(store.settle("k", &later, 30).unwrap().expires, 5_030, "and the later upload by its own");
+    let mut stream = store.resume("k", &first, 1, 20).unwrap();
+    stream.append(b"b", 20).unwrap();
+    assert_eq!(stream.settle(20).unwrap().expires, 1_020, "re-fixed by its own interval");
+    let mut stream = store.resume("k", &later, 0, 30).unwrap();
+    stream.append(b"c", 30).unwrap();
+    assert_eq!(stream.settle(30).unwrap().expires, 5_030, "and the later upload by its own");
 }
 
 /// THE ONE EXPIRY RULE SATURATES: an interval past what a `u64` of
@@ -314,54 +316,41 @@ fn an_interval_past_u64_milliseconds_saturates_at_the_last_instant() {
     assert_eq!((rec.interval, rec.expires), (Duration::from_millis(u64::MAX), u64::MAX));
     let store = open(&root, u64::MAX - 1);
     assert_eq!(store.upload("k", &rec.id, u64::MAX - 1), Some(rec.clone()), "read back as answered, standing");
-    store.resume("k", &rec.id, 0, 8).unwrap();
-    store.append("k", &rec.id, b"bytes", 8).unwrap();
-    assert_eq!(store.settle("k", &rec.id, 8).unwrap().expires, u64::MAX, "re-fixed at the last instant");
-    let fin = store.finish("k", &rec.id, forever, 9).unwrap();
+    let mut stream = store.resume("k", &rec.id, 0, 8).unwrap();
+    stream.append(b"bytes", 8).unwrap();
+    assert_eq!(stream.settle(8).unwrap().expires, u64::MAX, "re-fixed at the last instant");
+    let fin = store.resume("k", &rec.id, 5, 9).unwrap().finish(forever, 9).unwrap();
     assert_eq!(store.lease_state("k", "blake3", &fin.hex, u64::MAX - 1), LeaseState::Live { size: 5, expires: u64::MAX });
 }
 
-/// (3) ONE HANDLE PER REQUEST: a resume opens the partial for the request
-/// that resumes it, and the request's end closes it — a settle short of the
-/// length, a finish, an end, a `close_handle` for a request cut short — so
-/// no file stays open for an upload no request is streaming. Another
-/// principal's settle closes nothing of this principal's; and an append
-/// past its request's settle, before the next resume opens the partial
-/// again, STOPS as its caller's bug (`Store::append`'s precondition), a
-/// panic naming the obligation, nothing written.
+/// (3) ONE HANDLE PER REQUEST: the handle is its request's stream's, closed
+/// with the request's end — a settle short of the length, a finish, or a
+/// request cut short dropping it — and the next request resumes at the
+/// offset the last received, its finish hashing both requests' bytes; a
+/// request cut short receives nothing past the durable point; and an upload
+/// ended under a stream still open answers that stream's append and finish
+/// `NoUpload`, its finish judging that before its length.
 #[test]
 fn no_handle_outlives_the_request_that_opened_it() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = open(&dir.path().join("blobs"), 0);
     let rec = store.create_upload("k", "blake3", 10, INTERVAL, 0).unwrap();
-    store.resume("k", &rec.id, 0, 1).unwrap();
-    store.append("k", &rec.id, b"first", 1).unwrap();
-    assert_eq!(store.handles_open(), 1, "the request streaming holds one");
-    assert!(matches!(store.settle("other", &rec.id, 1), Err(BlobError::NoUpload)));
-    assert_eq!(store.handles_open(), 1, "another principal's settle closes nothing of this principal's");
-    let r = store.settle("k", &rec.id, 1).unwrap();
-    assert_eq!(r.offset, 5);
-    assert_eq!(store.handles_open(), 0, "a settle short of the length closes it");
-    let past_its_end = catch_unwind(AssertUnwindSafe(|| store.append("k", &rec.id, b"-", 1)));
-    let stopped = panic_message(past_its_end.expect_err("an append past its request's settle stops"));
-    assert!(stopped.contains("no handle open") && stopped.contains("precondition"), "{stopped}");
-    assert_eq!(store.written("k", &rec.id, 1), Some(5), "and wrote nothing");
-    store.resume("k", &rec.id, 5, 2).unwrap();
-    store.append("k", &rec.id, b"-last", 2).unwrap();
-    let fin = store.finish("k", &rec.id, INTERVAL, 2).unwrap();
-    assert_eq!(fin.hex, hex_of(b"first-last"));
-    assert_eq!(store.handles_open(), 0, "and so does a finish");
-    // An end, and a `close_handle` for a request cut short, close theirs too.
-    let ended = standing(&store, "k", 10, b"", 3);
-    store.resume("k", &ended.id, 0, 3).unwrap();
-    store.end_upload("k", &ended.id, 3).unwrap();
-    assert_eq!(store.handles_open(), 0, "an end closes it");
+    let mut first = store.resume("k", &rec.id, 0, 1).unwrap();
+    first.append(b"first", 1).unwrap();
+    assert_eq!(first.settle(1).unwrap().offset, 5, "a settle short of the length receives the request's bytes");
+    let mut second = store.resume("k", &rec.id, 5, 2).unwrap();
+    second.append(b"-last", 2).unwrap();
+    assert_eq!(second.finish(INTERVAL, 2).unwrap().hex, hex_of(b"first-last"));
     let cut = standing(&store, "k", 10, b"", 3);
-    store.resume("k", &cut.id, 0, 3).unwrap();
-    store.append("k", &cut.id, b"cut", 3).unwrap();
-    store.close_handle(&cut.id);
-    assert_eq!(store.handles_open(), 0, "a close_handle closes it");
-    assert_eq!(store.upload("k", &cut.id, 3).unwrap().offset, 0, "unsettled: nothing received");
+    let mut stream = store.resume("k", &cut.id, 0, 3).unwrap();
+    stream.append(b"cut", 3).unwrap();
+    drop(stream);
+    assert_eq!(store.upload("k", &cut.id, 3).unwrap().offset, 0, "cut short: nothing received");
+    let ended = standing(&store, "k", 10, b"", 3);
+    let mut stream = store.resume("k", &ended.id, 0, 3).unwrap();
+    store.end_upload("k", &ended.id, 3).unwrap();
+    assert!(matches!(stream.append(b"x", 3), Err(BlobError::NoUpload)), "an upload ended under its stream");
+    assert!(matches!(stream.finish(INTERVAL, 3), Err(BlobError::NoUpload)), "answers its finish too");
 }
 
 /// (4) REMOVED ON EXPIRY, while the store serves — the pruner's act:
@@ -395,22 +384,24 @@ fn the_expired_uploads_are_listed_and_removed_while_the_store_serves() {
     assert_eq!(store.pending_bytes("b", now, every_deposit_unplaced), 4, "the standing one counts");
 }
 
-/// AN EXPIRED UPLOAD's HANDLE CLOSES WITH IT (`Store::expire_upload`: "its
-/// handle closed, its partial removed, its record retired"): a request cut
-/// short with no `close_handle` leaves its handle open; the pruner's act
-/// leaves a standing upload's as it is and closes an expired one's — after
-/// which no resume, end or expiry finds the upload to close it.
+/// AN EXPIRY BETWEEN A STREAM's ACTS COSTS IT ITS UPLOAD (`Store`: "An end
+/// or an expiry between a stream's acts costs that stream its upload
+/// alone"): the pruner's act leaves a standing upload, and the stream open
+/// over it, as they are; once it has removed the expired upload, the stream
+/// still open over it appends nothing and finishes nothing, each answering
+/// `NoUpload` — the finish judging that before its length.
 #[test]
-fn an_expired_uploads_handle_closes_with_it() {
+fn an_expired_uploads_stream_appends_and_finishes_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = open(&dir.path().join("blobs"), 0);
     let rec = store.create_upload("k", "blake3", 10, INTERVAL, 0).unwrap();
-    store.resume("k", &rec.id, 0, 1).unwrap();
-    store.append("k", &rec.id, b"abc", 1).unwrap();
-    assert!(!store.expire_upload(&rec.id, rec.expires - 1).unwrap());
-    assert_eq!(store.handles_open(), 1, "a standing upload's handle left as it is");
+    let mut stream = store.resume("k", &rec.id, 0, 1).unwrap();
+    stream.append(b"abc", 1).unwrap();
+    assert!(!store.expire_upload(&rec.id, rec.expires - 1).unwrap(), "a standing upload is left as it is");
+    assert_eq!(stream.append(b"def", 1).unwrap(), 6, "and its stream with it");
     assert!(store.expire_upload(&rec.id, rec.expires).unwrap());
-    assert_eq!(store.handles_open(), 0, "the expired upload's handle closed with it");
+    assert!(matches!(stream.append(b"ghi", rec.expires), Err(BlobError::NoUpload)), "it appends nothing");
+    assert!(matches!(stream.finish(INTERVAL, rec.expires), Err(BlobError::NoUpload)), "and finishes nothing");
 }
 
 /// THE UPLOAD LISTINGS ANSWER IN IDENTIFIER ORDER (`Store::uploads_of`,

@@ -1,8 +1,8 @@
 //! THE FILES (`media.md` §The media stores; M-I5 (c)): the size check's
 //! read, a size that cannot be read answered as a failure and never as an
-//! absence; the name check at every entry point; the directory listings,
-//! each naming its own class in name order; and the floor's read of the
-//! space available on the volume.
+//! absence; the name check at every entry point, and the one designation a
+//! creation may name; the directory listings, each naming its own class in
+//! name order; and the floor's read of the space available on the volume.
 
 use std::fs;
 use std::io;
@@ -177,6 +177,25 @@ fn every_entry_point_answers_a_malformed_name_as_absent_and_touches_nothing() {
     for (d, h) in [("a".repeat(32), "ab".to_string()), ("-".to_string(), "a".repeat(128))] {
         assert_eq!(store.blob_path(&d, &h), Some(root.join(&d).join(&h)), "{d:?}/{h:?}: well-formed at its bound");
     }
+}
+
+/// A KEY NAMES THE FUNCTION THAT MADE IT (`media.md` §The design, item 4,
+/// "EVERY SIDECAR KEY NAMES ITS FUNCTION"; `Store::create_upload`): the
+/// store computes one hash, BLAKE3's, under one designation, `blake3`, so a
+/// creation under any other — however well spelled — is refused as
+/// `InvalidInput` before anything is minted, nothing under the root touched;
+/// the one it computes is admitted.
+#[test]
+fn a_creation_under_another_hashs_designation_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = open(&dir.path().join("blobs"), 0);
+    let before = tree(dir.path());
+    for d in ["sha256-tree", "sha256", "blake3-xof"] {
+        let created = store.create_upload("k", d, 1, INTERVAL, 1).map(|r| r.id).map_err(|e| e.kind());
+        assert_eq!(created, Err(io::ErrorKind::InvalidInput), "{d}");
+    }
+    assert_eq!(tree(dir.path()), before, "no directory, partial or record line made");
+    assert!(store.create_upload("k", "blake3", 1, INTERVAL, 1).is_ok());
 }
 
 /// THE FLOOR's ONE READ OF THE HOST: the space available on the volume at

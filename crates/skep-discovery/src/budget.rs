@@ -18,13 +18,13 @@
 ///
 /// * [`crate::image_on`] counts the runs the REGION resolves, which is a
 ///   request-shaped multiple of `#runs(d)`, so whether a `d` is refused
-///   depends on the region asked and not on `d` alone — counted as M5's lazy
-///   resolution is pulled, so the run past the budget is refused before the
-///   next is built (the granularity note below);
+///   depends on the region asked and not on `d` alone — counted a run at a
+///   time as M5's lazy resolution is pulled, the granularity M6's coverage
+///   budget counts at, and that read's card states what the count leaves M8
+///   holding;
 /// * [`crate::project_on`] counts `#content_runs(d)`, because M5's `project`
-///   joins the coverage against the content runs alone; its PRODUCT is the
-///   one this constant's square does not hold, that join's pairs being the
-///   answer it builds ([`MAX_ANSWER_SPANS`]);
+///   joins the coverage against the content runs alone; its product is held
+///   at [`MAX_ANSWER_SPANS`], not at this constant's square;
 /// * [`crate::addressably_discoverable_from_on`] counts
 ///   `#content_runs(d) + #link_runs(d)`, because LP12 ranges over both
 ///   subspaces and every one of those extents is tested;
@@ -78,16 +78,7 @@
 ///   coverage is up to `MAX_SLOT_SPANS` a slot, so the run count alone admits
 ///   three times the square. Its product is WORK and only work — a boolean
 ///   `any` that allocates nothing and stops at its first overlap — which is
-///   what the square prices. The one join of the same shape it does not hold
-///   is [`crate::project_on`]'s, whose product is the answer it builds and so
-///   belongs to [`MAX_ANSWER_SPANS`].
-///
-/// THE GRANULARITY IS A RUN, as M6's coverage budget's is: [`crate::image_on`]
-/// counts the runs as M5's lazy `iter_resolve` hands them over and refuses at
-/// the run past the budget, so an over-budget request never resolves a span,
-/// let alone a region, whole and then is measured. What one request makes M8
-/// hold is the budget and the run that trips it, never the whole of a
-/// fragmented document — the DOCUMENT's size rather than the request's shape.
+///   what the square prices.
 ///
 /// `#runs(d)` and `|links|` are the WORLD's, and no number here reaches them:
 /// they stay with request rate and concurrency, which are M10's as the
@@ -123,12 +114,13 @@ pub(crate) const MAX_JOIN_STEPS: usize = MAX_IMAGE_RUNS * MAX_IMAGE_RUNS;
 /// while `2^16` admits some twenty thousand ordinary small-endset links
 /// through one region.
 ///
-/// Nor `MAX_JOIN_STEPS`, at [`crate::project_on`]: M5's `project` pushes one
-/// V-span per overlapping (run, coverage span) pair into a vector BEFORE it
-/// normalizes, so that join's product is its answer's pre-normalization size
-/// and not merely its step count, and a square's worth of pairs is a square's
-/// worth of spans held live. An answer budget bounds an answer; the pointwise
-/// join whose product is only work keeps the square.
+/// Nor `MAX_JOIN_STEPS`, at [`crate::project_on`]: M5's `project` builds its
+/// footprint whole before it normalizes — one V-span per overlapping (run,
+/// coverage span) pair, as the HEAP note on its card states — so that join's
+/// product is its answer's pre-normalization size and not merely its step
+/// count: a square's worth of pairs is a square's worth of spans held live.
+/// An answer budget bounds an answer; the pointwise join whose product is
+/// only work keeps the square.
 ///
 /// WHAT IT DOES NOT BOUND: `|links|` and any one link's endset size are the
 /// WORLD's, so the candidate walk this budget rides on is world-sized whatever

@@ -543,18 +543,17 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
 }
 
 /// §1 — the walk budget AT its boundary: the square itself is admitted, and
-/// one step past it is refused. Both halves need the two tiers to AGREE, so
-/// the admitted half is the expensive one to state: a span pays
-/// `min(run_count, e − 1)`, and a region priced at the square normally walks
-/// the square it is priced at. It does not here, because the runs are WIDE —
-/// the price counts ORDINALS and the walk counts RUNS, so spans reaching
-/// `2 × MAX` over runs `MAX / 2` positions wide price the run count apiece
-/// and walk four runs. That is the one shape where the equal case is
-/// affordable.
+/// one step past it is refused. The admitted half is the expensive one to
+/// state: a span pays `min(run_count, e − 1)`, and a region priced at the
+/// square normally walks the square it is priced at. It does not here,
+/// because the runs are WIDE — the price counts ORDINALS and the walk counts
+/// RUNS, so spans reaching `2 × MAX` over runs `MAX / 2` positions wide price
+/// the run count apiece and walk four runs. That is the one shape where the
+/// equal case is affordable.
 ///
 /// It takes both halves to pin the constant, and neither alone does much: a
-/// region refused with room to spare pins only an upper bound, and one
-/// admitted over a sparse document is rescued by the second tier whatever the
+/// region refused with room to spare pins only an upper bound, and one over a
+/// sparse document is priced at its few runs, so it is admitted whatever the
 /// constant says. Together they pin the square to its value AND the
 /// comparison at it — a `>=` refuses the admitted half, a smaller square
 /// refuses it too, and a larger one admits the refused half.
@@ -580,8 +579,8 @@ fn the_walk_budget_admits_the_square_itself_and_refuses_one_step_past_it() {
     );
     let reads = Reads(&k);
 
-    // `MAX / 2` spans each reaching `2 × MAX + 1`: both tiers price
-    // `min(2 × MAX, 2 × MAX)` apiece, for `MAX × MAX` — the square exactly.
+    // `MAX / 2` spans each reaching `2 × MAX + 1`, each priced at
+    // `min(2 × MAX, 2 × MAX)`, for `MAX × MAX` — the square exactly.
     let at_square: Vec<Span> = vec![vspan(1, run_count as u32, 1); MAX_IMAGE_RUNS / 2];
     // One span pricing 1 more. Widening a span cannot do it: the run count
     // caps what any one span pays.

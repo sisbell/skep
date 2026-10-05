@@ -118,11 +118,9 @@ fn run_list_walk(region: &[Span], run_count: usize) -> usize {
 ///
 /// So the accepted set is the image's: a region is answered when its walk is
 /// within the square and its spans resolve at most [`MAX_IMAGE_RUNS`] runs,
-/// whatever positions they name. A single position is answered over any
-/// surface the WALK admits; [`QueryError::ImageTooLarge`] states that limit (a
-/// single position is refused only over a reading surface of more than
-/// `MAX_IMAGE_RUNS²` content runs). A region past the budget is asked in
-/// parts, which is the recourse [`QueryError`] states.
+/// whatever positions they name. A single position is refused only over a
+/// reading surface of more than `MAX_IMAGE_RUNS²` content runs, so a region
+/// past the budget can be asked in parts — the recourse [`QueryError`] states.
 ///
 /// HEAD-FLOAT (PUB round 2, lane 3.2; PUB-2.49, PUB-2.50, PUB-2.53): the
 /// arrangement resolved is `d`'s READING SURFACE — M5's `reading_surface`,
@@ -142,17 +140,10 @@ pub fn image_on<W: DiscoveryWorld>(
     check_region(region)?;
     let surface = reading_surface(w.m3(), d);
     // The surface's run count, off M5's own `#runs` — one map lookup, reading
-    // no run — because the walk below is priced against it: M5's card on
+    // no run — because the walk is priced against it: M5's card on
     // `iter_resolve` names `#runs` that walk's ceiling.
     let run_count = w.m5().content_run_count(&surface);
-    // The walk, priced against a run-list of unbounded length first — its
-    // reach in positions — and in the surface's runs only past that. A region
-    // whose reach in positions is within the square walks within it whatever
-    // the document, so the ordinary request is admitted without the region
-    // being walked a second time.
-    if run_list_walk(region, usize::MAX) > MAX_JOIN_STEPS
-        && run_list_walk(region, run_count) > MAX_JOIN_STEPS
-    {
+    if run_list_walk(region, run_count) > MAX_JOIN_STEPS {
         return Err(QueryError::ImageTooLarge);
     }
     let mut runs: Vec<Run> = Vec::new();

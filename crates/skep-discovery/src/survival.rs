@@ -76,17 +76,6 @@ fn content_vspan_at(ordinal: &Nat, count: &Nat) -> Span {
 /// that cut that many; and every other `d` is answered for every range. A
 /// faulty request names its own fault first.
 ///
-/// The exact count includes the pieces the range's two ends cut out of runs,
-/// which no count M5 publishes shows, so it is taken once the content has
-/// resolved — but `d`'s own run counts are a LOWER bound on it, since the
-/// three spans partition `[1, n_C]` and every run contributes at least one
-/// piece, so they are read first, off M5's `#runs`, which reads no run. That
-/// pre-check refuses nothing the exact one would admit; what it buys is that
-/// a `d` past the budget however the range falls never has its arrangement
-/// resolved into a vector, and the exact check decides only the band of two
-/// runs the pre-check leaves. So a refused preview has paid for two map
-/// lookups, or for resolving the surviving content, and for no stab.
-///
 /// The accepted set is M5's DELETE admission minus those two gates, and minus
 /// every request whose runs, as its range splits them, are past the run
 /// budget. Two LABELS differ within it, both where M5 would say `NotArranged`
@@ -168,10 +157,12 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
     for span in [prefix, suffix].into_iter().flatten() {
         retained.extend(w.m5().resolve(d, &span));
     }
-    // The run budget, on the side of the join the preview supplies: the runs
-    // both stabs below take as their query, after every check of the request.
-    // The link runs are counted off M5's own `#runs`, which reads no run, so
-    // an over-budget `d` is refused without their being touched at all.
+    // The run budget, exactly, on the side of the join the preview supplies:
+    // the runs both stabs below take as their query, after every check of the
+    // request. The content is counted RESOLVED because the exact count holds
+    // the pieces the range's two ends cut out of runs, which no count M5
+    // publishes shows; the link runs, which no text range cuts, are counted
+    // off M5's own `#runs`, so they are never touched to be counted.
     if a_del.len() + retained.len() + w.m5().link_run_count(d) > MAX_IMAGE_RUNS {
         return Err(OrphanError::ImageTooLarge);
     }

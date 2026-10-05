@@ -138,11 +138,10 @@ pub enum QueryError {
     /// [`crate::MAX_IMAGE_RUNS`] admits, or exceed the product its own join is
     /// held to: the square for the run-list walk behind the region family and
     /// for the touch test of a link's whole coverage, and
-    /// [`crate::MAX_ANSWER_SPANS`] for the projection, whose product is the
-    /// span set it builds. Each of the three reads that hold it counts the
-    /// runs its own work multiplies, which the constant states. The runs are
-    /// the side of a join the request supplies; what they are joined against
-    /// is the world's.
+    /// [`crate::MAX_ANSWER_SPANS`] for the projection. Each of the three reads
+    /// that hold it counts the runs its own work multiplies, which the
+    /// constant states. The runs are the side of a join the request supplies;
+    /// what they are joined against is the world's.
     ImageTooLarge,
     /// The RETRIEVEENDSETS answer would carry more spans than
     /// [`crate::MAX_ANSWER_SPANS`] — the pairs the store hands back, not
@@ -202,14 +201,11 @@ pub enum OrphanError {
     /// Out-of-range `(p, width)` — folds M5's `NotArranged` (start outside
     /// the arranged content) and `OutOfBounds` (range overrun).
     OutOfBounds,
-    /// The runs the preview's two stabs would join — `d`'s own arrangement as
-    /// the range splits it, at most two runs more than `d` holds — are past
-    /// [`crate::MAX_IMAGE_RUNS`]: the query surface's run budget
-    /// ([`QueryError::ImageTooLarge`]), held on the preview's own work and
-    /// named as the query surface names it. So a `d` whose own runs are past
-    /// the budget is refused every range, and a `d` at the budget or one run
-    /// under it only the ranges whose ends cut enough runs to carry the count
-    /// past it.
+    /// The runs the preview's two stabs would join are past
+    /// [`crate::MAX_IMAGE_RUNS`] — the query surface's run budget
+    /// ([`QueryError::ImageTooLarge`]), held on the preview's own work and named
+    /// as the query surface names it. [`crate::delete_orphans_on`] states which
+    /// runs it counts, and so which documents and ranges it refuses.
     ImageTooLarge,
 }
 

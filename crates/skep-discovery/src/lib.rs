@@ -184,7 +184,9 @@
 //!   narrows nothing M7 walks.
 //! * [`delete_orphans_on`] — six `stab`s: three over the deleted runs, three
 //!   over the retained (none when nothing is retained), and none at all for a
-//!   request past the run budget.
+//!   request past the run budget, which has paid for two reads of M5's
+//!   `#runs` when `d` alone is past it and for resolving `d`'s content
+//!   otherwise.
 //! * the lineage pair ([`in_claims_on`], [`out_claims_on`]) — one
 //!   `readlink`, which answers `[]` for a non-link key and stops there;
 //!   otherwise one `observe` of the supersession class — a walk of that
@@ -195,11 +197,10 @@
 //!   ([`addressably_discoverable_from_on`]), plus one read of M5's `#runs`
 //!   for the reading surface, which reads no run — and then, for a read the
 //!   budget admits, those runs and ONE JOIN of the link's coverage against
-//!   them, each test rebuilding both spans' endpoints. The two products are
-//!   held at different numbers because they buy different things: the touch
-//!   test of every slot's every span against every run is work alone, at
-//!   `MAX_IMAGE_RUNS²`, while M5's `project` of one slot against the content
-//!   runs builds one V-span per overlapping pair, at `MAX_ANSWER_SPANS`.
+//!   them, each test rebuilding both spans' endpoints. The touch test's
+//!   product is held at the square of [`MAX_IMAGE_RUNS`] and the
+//!   projection's at [`MAX_ANSWER_SPANS`], for the reasons those constants
+//!   state.
 //!
 //! A window computes its family's whole candidate set before it cuts,
 //! whatever `n` and wherever the cursor: paging bounds the answer, never the

@@ -350,16 +350,14 @@ impl fmt::Display for CompareError {
             ),
             CompareError::TooManyBlocks { operand } => write!(
                 f,
-                "compare: {operand} resolves past the operand budget of {} spans or {} blocks \
-                 (MAX_COMPARE_OPERAND_BLOCKS); narrow its spans or split the request",
-                MAX_COMPARE_OPERAND_BLOCKS,
-                MAX_COMPARE_OPERAND_BLOCKS
+                "compare: {operand} resolves past the operand budget of \
+                 {MAX_COMPARE_OPERAND_BLOCKS} spans or {MAX_COMPARE_OPERAND_BLOCKS} blocks \
+                 (MAX_COMPARE_OPERAND_BLOCKS); narrow its spans or split the request"
             ),
             CompareError::TooManyPairs => write!(
                 f,
-                "compare: the join runs past the pair budget of {} correspondences \
-                 (MAX_COMPARE_PAIRS); narrow the two operands",
-                MAX_COMPARE_PAIRS
+                "compare: the join runs past the pair budget of {MAX_COMPARE_PAIRS} \
+                 correspondences (MAX_COMPARE_PAIRS); narrow the two operands"
             ),
         }
     }
@@ -382,10 +380,9 @@ impl fmt::Display for FindError {
             ),
             FindError::TooMuchCoverage => write!(
                 f,
-                "find_docs_containing: the request resolves past the coverage budget of {} spans \
-                 or {} coverage spans (MAX_FIND_COVERAGE_SPANS); narrow its spans or split the \
-                 request",
-                MAX_FIND_COVERAGE_SPANS, MAX_FIND_COVERAGE_SPANS
+                "find_docs_containing: the request resolves past the coverage budget of \
+                 {MAX_FIND_COVERAGE_SPANS} spans or {MAX_FIND_COVERAGE_SPANS} coverage spans \
+                 (MAX_FIND_COVERAGE_SPANS); narrow its spans or split the request"
             ),
         }
     }

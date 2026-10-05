@@ -2,9 +2,9 @@
 //! document's extents, read off M5's counts, and the D-SEQ★ tripwire the
 //! counts stand on.
 
-use num_traits::{One, Zero};
+use num_traits::Zero;
 use skep_address::{Address, Nat, Span, SpanSet};
-use skep_arrangement::{ordinal_vspan, reading_surface, M5State, Run, VPos};
+use skep_arrangement::{ordinal_vspan, reading_surface, M5State, Run};
 
 use super::{Query, RetrievalWorld};
 use crate::error::ExtentError;
@@ -14,10 +14,11 @@ use crate::vspan::Subspace;
 /// (ASN-0113 W2/W4: a count fixes an extent under sequential positions), or
 /// `None` for an unoccupied subspace (`n_S = 0`), which has no extent — so
 /// nothing in [`Query::doc_vspanset`]'s answer, which is `⟨⟩` when both
-/// subspaces are unoccupied. The anchor `[S, 1]` — ASN-0113's `start_S` — is
-/// written ONCE, here, never absorbed into a confluent summary, which is how
-/// the hazard ASN-0112 OQ5 records against its bounding-span start `origin_d`
-/// (a POSITION, not ASN-0077's origin) is designed out.
+/// subspaces are unoccupied. Each extent starts at its subspace's own anchor
+/// `[S, 1]` ([`Subspace::anchor`], ASN-0113's `start_S`), never absorbed into
+/// a confluent summary, which is how the hazard ASN-0112 OQ5 records against
+/// its bounding-span start `origin_d` (a POSITION, not ASN-0077's origin) is
+/// designed out.
 ///
 /// Built with M5's `ordinal_vspan`, so the extent M6 REPORTS is the shape M5's
 /// `resolve` READS: the constructor and the recognizer every request span is
@@ -31,13 +32,7 @@ use crate::vspan::Subspace;
 /// since a swap here builds a well-formed span naming a subspace that selects
 /// nothing and reports as emptiness far downstream.
 fn ext_span(s: Subspace, n: &Nat) -> Option<Span> {
-    ordinal_vspan(
-        &VPos {
-            subspace: s.numeral().clone(),
-            ordinal: Nat::one(),
-        },
-        n,
-    )
+    ordinal_vspan(&s.anchor(), n)
 }
 
 /// D-SEQ★ defense-in-depth for the extent queries (open build decision,
@@ -56,7 +51,7 @@ fn ext_span(s: Subspace, n: &Nat) -> Option<Span> {
 /// read the counts directly.
 fn debug_assert_sequential_positions(m5: &M5State, doc: &Address) {
     if cfg!(debug_assertions) {
-        for sub in [Subspace::Content, Subspace::Link] {
+        for sub in Subspace::ALL {
             // Each subspace asks M5 for its OWN count and runs, so the two
             // reads compared below cannot be paired across subspaces.
             let (count, runs) = (sub.count(m5, doc), sub.runs(m5, doc));
@@ -66,16 +61,7 @@ fn debug_assert_sequential_positions(m5: &M5State, doc: &Address) {
                 "D-SEQ★: a subspace's run widths must sum to its count"
             );
             debug_assert!(
-                count.is_zero()
-                    || m5
-                        .point(
-                            doc,
-                            &VPos {
-                                subspace: sub.numeral().clone(),
-                                ordinal: Nat::one(),
-                            },
-                        )
-                        .is_some(),
+                count.is_zero() || m5.point(doc, &sub.anchor()).is_some(),
                 "D-MIN★: an occupied subspace must anchor at ordinal 1"
             );
         }
@@ -163,9 +149,10 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // `ext_span(count, subspace)` does not compile, and an unoccupied
         // subspace is `ext_span`'s own `None`. The occupied ones are
         // `collect`ed through M1's `FromIterator<Span>`, which collects AS
-        // GIVEN — preserving the already-disjoint, content-before-link normal
-        // form asserted below; no invented M1 constructor.
-        let extents: SpanSet = [Subspace::Content, Subspace::Link]
+        // GIVEN — so `Subspace::ALL`'s order, content before link, IS the
+        // already-disjoint normal form asserted below; no invented M1
+        // constructor.
+        let extents: SpanSet = Subspace::ALL
             .into_iter()
             .filter_map(|s| ext_span(s, &s.count(m5, &surface)))
             .collect();

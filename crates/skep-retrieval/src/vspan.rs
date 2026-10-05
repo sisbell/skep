@@ -1,23 +1,26 @@
 //! §Internal design — how M6 reads one request V-span: which subspace its
 //! start names, and whether it is well-formed. The two-subspace
-//! vocabulary a classification lands in ([`Subspace`]) reads itself off a
-//! span's start or a numeral, writes its own numeral (M1's), and asks M5 for
-//! its count and runs — so no site re-derives which subspace a start names,
-//! and none pairs a subspace with a numeral, a count or a run-list by hand.
+//! vocabulary a classification lands in ([`Subspace`]) lists both
+//! subspaces, reads itself off a span's start or a numeral, writes its own
+//! numeral (M1's) and anchor, and asks M5 for its count and runs — so no
+//! site re-derives which subspace a start names, lists the two, or pairs a
+//! subspace with a numeral, an anchor, a count or a run-list by hand.
 
 use std::sync::LazyLock;
 
+use num_traits::One;
 use skep_address::{action_point, content_subspace, link_subspace, zeros, Address, Nat, Span};
-use skep_arrangement::{M5State, Runs};
+use skep_arrangement::{M5State, Runs, VPos};
 
 use crate::error::SpanFault;
 
 // Content (s_C) / link (s_L) subspace numerals. M1 owns T7 and names them
 // ([`content_subspace`]/[`link_subspace`]); M6 memoizes what M1 names, because
 // `Nat = BigUint` cannot be `const` and a bare call would re-allocate a fresh
-// `BigUint` on every reference. [`Subspace::of_numeral`] only COMPARES against
-// them — by reference, with no allocation — while the O(1)-per-query
-// construction sites clone through [`Subspace::numeral`].
+// `BigUint` on every reference. [`Subspace::numeral`] is the one place they
+// are named: [`Subspace::of_numeral`] compares against them through it — by
+// reference, with no allocation — and the O(1)-per-query construction sites,
+// [`Subspace::anchor`] among them, clone through it.
 //
 // Private, which is the point of [`Subspace`] carrying both directions: no
 // file but this one names a raw subspace numeral, so a numeral cannot be
@@ -31,14 +34,15 @@ static S_L: LazyLock<Nat> = LazyLock::new(link_subspace);
 
 /// One of a document's two subspaces (T7; ASN-0047) — the vocabulary every
 /// site that must tell content from link matches on, and the one type that
-/// answers for every direction of it. It reads itself off a numeral
-/// ([`Subspace::of_numeral`]) or off a request span's start
-/// ([`Subspace::of_span`]), writes the numeral M1 names it by
-/// ([`Subspace::numeral`]), and asks M5 for its own count and runs
+/// answers for every direction of it. It lists both ([`Subspace::ALL`]),
+/// reads itself off a numeral ([`Subspace::of_numeral`]) or off a request
+/// span's start ([`Subspace::of_span`]), writes the numeral M1 names it by
+/// ([`Subspace::numeral`]) and the anchor its extent starts at
+/// ([`Subspace::anchor`]), and asks M5 for its own count and runs
 /// ([`Subspace::count`], [`Subspace::runs`]). A site therefore matches on
 /// the classification instead of re-deriving the comparison chain and
-/// carrying its own fall-through, and never pairs a subspace with a numeral,
-/// a count or a run-list by hand.
+/// carrying its own fall-through, and never lists the two, or pairs a
+/// subspace with a numeral, an anchor, a count or a run-list, by hand.
 ///
 /// `pub(crate)`, because M1 owns T7 and a second published subspace
 /// vocabulary is exactly what memoizing M1's numerals avoids.
@@ -49,20 +53,24 @@ pub(crate) enum Subspace {
 }
 
 impl Subspace {
-    /// Which subspace a numeral names, or `None` for a foreign one — the
-    /// reading direction of [`Subspace::numeral`], which writes one. `Nat`
-    /// cannot appear in a pattern, so this is the ONE place the two
-    /// comparisons are written, by reference against the memoized statics
-    /// with no allocation; every site that must tell content from link
-    /// matches on the answer instead.
+    /// Both subspaces, ONCE — content, then link: their numerals' order
+    /// (`s_C < s_L`, T7), and so the T1 order of the per-subspace extents
+    /// `doc_vspanset` collects AS GIVEN into W13's normal form. Every walk
+    /// over the two reads it here, [`Subspace::of_numeral`] included; a second
+    /// copy is how a walk comes to miss one, or to list them out of that
+    /// order.
+    pub(crate) const ALL: [Subspace; 2] = [Subspace::Content, Subspace::Link];
+
+    /// Which subspace a numeral names, or `None` for a foreign one —
+    /// [`Subspace::numeral`] read backwards: the subspace in [`Subspace::ALL`]
+    /// whose numeral it is. `Nat` cannot appear in a pattern, so the pairing
+    /// of each subspace with its numeral is written ONCE, in `numeral`'s
+    /// exhaustive match, and this inverts it rather than spelling it again —
+    /// comparing by reference against the memoized statics, with no
+    /// allocation. Every site that must tell content from link matches on the
+    /// answer instead.
     fn of_numeral(s: &Nat) -> Option<Subspace> {
-        if *s == *S_C {
-            Some(Subspace::Content)
-        } else if *s == *S_L {
-            Some(Subspace::Link)
-        } else {
-            None
-        }
+        Subspace::ALL.into_iter().find(|sub| sub.numeral() == s)
     }
 
     /// The subspace a V-span's start names — position 1 of the start, read
@@ -84,10 +92,11 @@ impl Subspace {
     }
 
     /// The numeral M1 names this subspace by (T7) — the writing direction of
-    /// [`Subspace::of_numeral`], which reads one. The two sit together for the
-    /// reason M5 keeps `ordinal_vspan` beside `is_ordinal_vspan`: a
-    /// classification and the value it stands for are one definition read two
-    /// ways, and they cannot come apart if neither is spelled anywhere else.
+    /// [`Subspace::of_numeral`], which reads one. Its match is the one place
+    /// a subspace is paired with its numeral, and [`Subspace::of_numeral`]
+    /// inverts it, so the two directions are one definition read two ways —
+    /// the reason M5 keeps `ordinal_vspan` beside `is_ordinal_vspan` — and
+    /// cannot come apart.
     ///
     /// Borrowed from the memoized static, so a caller that must own one
     /// clones at the O(1)-per-query site rather than on every comparison.
@@ -95,6 +104,17 @@ impl Subspace {
         match self {
             Subspace::Content => &S_C,
             Subspace::Link => &S_L,
+        }
+    }
+
+    /// The subspace's ANCHOR `[S, 1]` — ASN-0113's `start_S`, the position an
+    /// occupied subspace's dense prefix begins at (D-MIN★) — written ONCE,
+    /// here: the start of every extent `ext_span` builds, and the position the
+    /// D-SEQ★ tripwire asks M5 to find bound.
+    pub(crate) fn anchor(self) -> VPos {
+        VPos {
+            subspace: self.numeral().clone(),
+            ordinal: Nat::one(),
         }
     }
 
@@ -177,12 +197,22 @@ mod tests {
         // from M1 and memoized here, never restated.
         assert_eq!(*Subspace::Content.numeral(), content_subspace());
         assert_eq!(*Subspace::Link.numeral(), link_subspace());
-        // Writing a subspace and reading it back is the identity, which is
-        // what makes `numeral` and `of_numeral` one definition rather than
-        // two that happen to agree.
-        for s in [Subspace::Content, Subspace::Link] {
+        // Writing a subspace and reading it back is the identity. `of_numeral`
+        // inverts `numeral` over `ALL`, so this holds exactly when no two
+        // subspaces share a numeral — the one way the inversion could answer
+        // for the wrong subspace.
+        for s in Subspace::ALL {
             assert_eq!(Subspace::of_numeral(s.numeral()), Some(s));
         }
+    }
+
+    #[test]
+    fn all_lists_both_subspaces_in_their_numerals_order() {
+        // `doc_vspanset` collects one extent per subspace AS GIVEN, so ALL's
+        // order is W13's normal form exactly when it is the numerals' order —
+        // and a strictly increasing pair is two DIFFERENT subspaces, so both.
+        let [first, second] = Subspace::ALL;
+        assert!(first.numeral() < second.numeral());
     }
 
     #[test]

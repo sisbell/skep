@@ -129,14 +129,15 @@ fn a_window_resumes_past_a_cursor_its_state_never_minted() {
     );
     let region = [vspan(1, 1, 1)];
 
-    let head = window_v_on(&k.snapshot(), &doc1(), &region, None, 2, &every_home).expect("window");
-    assert_eq!(head.batch, vec![first, later]);
-    let resumed = window_v_on(&earlier, &doc1(), &region, head.next.clone(), 5, &every_home)
+    let head_page =
+        window_v_on(&k.snapshot(), &doc1(), &region, None, 2, &every_home).expect("window");
+    assert_eq!(head_page.batch, vec![first, later]);
+    let resumed = window_v_on(&earlier, &doc1(), &region, head_page.next.clone(), 5, &every_home)
         .expect("any Address is a legal cursor");
     assert_eq!(resumed.batch, vec![theirs.clone()]);
     assert!(resumed.exhausted);
     assert_eq!(
-        window_ftt_on(&earlier, &FourSet::any(), head.next, 5, &every_home).batch,
+        window_ftt_on(&earlier, &FourSet::any(), head_page.next, 5, &every_home).batch,
         vec![theirs.clone()]
     );
     // A cursor that is no link at all cuts the same way: doc2's own address

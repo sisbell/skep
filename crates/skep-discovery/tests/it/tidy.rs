@@ -1,8 +1,8 @@
 //! THE MODULE MAP, CHECKED: `src/lib.rs` declares this crate's modules in
 //! dependency order, each with a line saying what it holds and each naming
 //! in code only the modules above it, and this is that sentence as tests —
-//! together with the one rule about the reader's predicate that no compiler
-//! error reports.
+//! together with two rules no compiler error reports, one about the reader's
+//! predicate and one about a name's suffix.
 //!
 //! The tree's shape: every file under `src/`, and under the test target's
 //! `tests/it/`, is a module its parent declares — the compiler never reads
@@ -21,10 +21,12 @@
 //! paths it reads between modules, so a reader gone blind fails rather than
 //! passing a clean tree.
 //!
-//! The rule is held over every code line under `src/`, tests included: only
-//! `home.rs` projects a home or asks the reader's predicate. The scan also
-//! asserts that it found the sites the rule allows, so a scan that matches
-//! nothing fails rather than passing a clean tree.
+//! The two rules are held over every code line under `src/`, tests included:
+//! only `home.rs` projects a home or asks the reader's predicate, and a
+//! function ends its name in `_on` exactly when its first parameter is the
+//! `&Snapshot` it reads. Each scan also asserts that it found what its rule
+//! is about, so a scan that matches nothing fails rather than passing a clean
+//! tree.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -162,6 +164,97 @@ fn projects_a_home_or_asks_the_reader(code: &str) -> bool {
                     && (!called || after.starts_with('('))
             })
         })
+}
+
+/// THE `_on` SUFFIX MARKS A SNAPSHOT: a function under `src/` ends its name
+/// in `_on` exactly when its first parameter is the `&Snapshot` it reads —
+/// every read, and the region family's private `findlinks_v_set_on` — while a
+/// helper over one store, `candidates` or `claims_naming`, carries no suffix.
+/// A reader who has learned the suffix reads every call by it, so one
+/// exception is one call read wrong. The scan also asserts that it found
+/// functions of both kinds, so a reader gone blind to signatures fails rather
+/// than passing a clean tree.
+#[test]
+fn the_on_suffix_marks_exactly_the_functions_over_a_snapshot() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    let (mut faults, mut with_snapshot, mut without_snapshot) = (Vec::new(), 0, 0);
+    for file in files {
+        let text = std::fs::read_to_string(&file).expect("a source file is readable");
+        let shown = file.strip_prefix(&src).expect("under src").display();
+        let code: Vec<&str> = code_lines(&text).collect();
+        for (name, takes_snapshot) in signatures(&code.join("\n")) {
+            if takes_snapshot {
+                with_snapshot += 1;
+            } else {
+                without_snapshot += 1;
+            }
+            if name.ends_with("_on") != takes_snapshot {
+                let wrong = if takes_snapshot {
+                    "takes a `&Snapshot` first and does not end in `_on`"
+                } else {
+                    "ends in `_on` and takes no `&Snapshot` first"
+                };
+                faults.push(format!("{shown}: `{name}` {wrong}"));
+            }
+        }
+    }
+    assert!(
+        with_snapshot > 0 && without_snapshot > 0,
+        "this check read no signature of one kind: the forms it reads have moved"
+    );
+    assert!(
+        faults.is_empty(),
+        "a function ends in `_on` exactly when its first parameter is the `&Snapshot` it \
+         reads — name it for what it reads:\n{}",
+        faults.join("\n")
+    );
+}
+
+/// Every function `code` declares — the code of one file, comments stripped —
+/// as its name and whether its first parameter is a `&Snapshot`.
+fn signatures(code: &str) -> Vec<(String, bool)> {
+    let mut found = Vec::new();
+    for (i, _) in code.match_indices("fn ") {
+        if code[..i].ends_with(is_ident_char) {
+            continue; // the tail of an identifier, not the keyword
+        }
+        let rest = &code[i + "fn ".len()..];
+        let name: String = rest.chars().take_while(|&c| is_ident_char(c)).collect();
+        let Some(parameters) = after_generics(&rest[name.len()..]).strip_prefix('(') else {
+            continue;
+        };
+        let takes_snapshot = parameters.split_once(':').is_some_and(|(binding, ty)| {
+            binding.trim().chars().all(is_ident_char) && ty.trim_start().starts_with("&Snapshot<")
+        });
+        found.push((name, takes_snapshot));
+    }
+    found
+}
+
+/// What follows the generic list `<…>` at the head of `rest`, or `rest`
+/// itself when it opens none. The `>` of a `->`, from an `Fn(…) -> T` bound
+/// inside the list, closes nothing.
+fn after_generics(rest: &str) -> &str {
+    if !rest.starts_with('<') {
+        return rest;
+    }
+    let (mut depth, mut previous) = (0, '<');
+    for (i, c) in rest.char_indices() {
+        match c {
+            '<' => depth += 1,
+            '>' if previous != '-' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &rest[i + 1..];
+                }
+            }
+            _ => {}
+        }
+        previous = c;
+    }
+    rest
 }
 
 fn is_ident_char(c: char) -> bool {

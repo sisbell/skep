@@ -4,11 +4,11 @@
 //! composition contract prescribes and the fixtures every suite shares;
 //! `tidy` checks the module map `src/lib.rs` declares, that every file of
 //! this tree and of `src/` is declared — a suite file no `mod` line names
-//! never runs — and that `home.rs` alone asks the reader's predicate; each
-//! other module is one § of the read surface — a family, a pair, the preview
-//! — or one law that crosses them (`home_rule`, `consumer`), and the module
-//! names are the table of contents. Nothing but module declarations belongs
-//! here.
+//! never runs — that `home.rs` alone asks the reader's predicate, and that
+//! the `_on` suffix marks exactly the functions over a snapshot; each other
+//! module is one § of the read surface — a family, a pair, the preview — or
+//! one law that crosses them (`home_rule`, `consumer`), and the module names
+//! are the table of contents. Nothing but module declarations belongs here.
 
 mod common;
 

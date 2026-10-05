@@ -140,7 +140,7 @@ fn endpoint(e: &Endset) -> Option<Address> {
 /// beside it and `descriptor`'s `candidates` do: the two public reads are its
 /// generic shell, and monomorphizing them for a world copies their one call,
 /// never this body.
-fn claims_on(
+fn claims_naming(
     l: &LinkState,
     key: &Address,
     endpoint: Endpoint,
@@ -188,7 +188,7 @@ pub fn in_claims_on<W: DiscoveryWorld>(
     view: View,
     readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<SupClaim> {
-    claims_on(s.world().links(), y, Endpoint::Old, view, readable)
+    claims_naming(s.world().links(), y, Endpoint::Old, view, readable)
 }
 
 /// The claims with `new = x` (ASN-0125 EL11b `out(x)`): asks about G (TO)
@@ -200,5 +200,5 @@ pub fn out_claims_on<W: DiscoveryWorld>(
     view: View,
     readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<SupClaim> {
-    claims_on(s.world().links(), x, Endpoint::New, view, readable)
+    claims_naming(s.world().links(), x, Endpoint::New, view, readable)
 }

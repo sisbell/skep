@@ -263,10 +263,10 @@ fn lineage_reads_out_supersession_claims_alone_among_the_links_naming_the_key() 
 /// read then skips as no claim.
 ///
 /// The open route is `editlink`, whose successor is the caller's: its DC
-/// guard asks the whole schema the read-out recognizes a claim by, with the
-/// residence and distinctness clauses beside it, so a successor with a
-/// two-address F is refused rather than deposited. `makelink` refuses the
-/// class outright.
+/// guard asks the part of the schema the read-out recognizes a claim by, and
+/// the schema's remaining clauses beside it — the two endpoints distinct,
+/// both resident — so a successor with a two-address F is refused rather
+/// than deposited. `makelink` refuses the class outright.
 #[test]
 fn lineage_endpoints_rest_on_a_fence_the_write_surface_keeps() {
     let k = kernel();
@@ -373,7 +373,7 @@ fn lineage_skips_a_supersession_tuple_that_is_not_a_claim() {
 
     let two = enc([&e1, &e2]);
     assert!(two.single_denoted().is_none(), "F denotes two addresses");
-    fold_deposit_frame(&k, &la(8), Link::triple(two, enc([&e2]), sup.clone()));
+    fold_decoded_deposit(&k, &la(8), Link::triple(two, enc([&e2]), sup.clone()));
     let prefix = t(&[1, 0, 1, 0, 1, 0]);
     assert!(
         validate(prefix.clone()).is_err(),
@@ -385,7 +385,7 @@ fn lineage_skips_a_supersession_tuple_that_is_not_a_claim() {
         Some(&prefix),
         "G denotes it alone"
     );
-    fold_deposit_frame(
+    fold_decoded_deposit(
         &k,
         &la(9),
         Link::triple(enc([&e1]), no_address, sup.clone()),
@@ -394,16 +394,16 @@ fn lineage_skips_a_supersession_tuple_that_is_not_a_claim() {
     // The premise: each probe reaches the claim AND both tuples, so the
     // answers below are the recognition's and not the probes'.
     let snap = k.snapshot();
-    let old_key = [e1.tumbler().clone()];
-    let new_key = [e2.tumbler().clone()];
+    let old_probe = [e1.tumbler().clone()];
+    let new_probe = [e2.tumbler().clone()];
     for view in [View::Active, View::Audit] {
         for pattern in [
             Pattern {
-                from: &old_key,
+                from: &old_probe,
                 ..Pattern::default()
             },
             Pattern {
-                to: &new_key,
+                to: &new_probe,
                 ..Pattern::default()
             },
         ] {
@@ -460,19 +460,19 @@ fn lineage_skips_a_supersession_tuple_that_is_not_a_claim() {
 /// the way a restored checkpoint or a replayed journal frame reaches M7's
 /// fold: decoded from M2's own bincode bytes, with none of M7's write gates
 /// in between. `LinkRec` is `#[non_exhaustive]`, so no crate but M7 builds
-/// one; its bytes are written here from a local mirror of its one variant —
-/// the same variant index and fields, so the same encoding — and decoded
-/// back as the real record.
-fn fold_deposit_frame(k: &Kernel<World>, addr: &Address, value: Link) {
+/// one; its bytes are written here from `RawLinkRec`, a local mirror of its
+/// one variant — the same variant index and fields, so the same encoding —
+/// and decoded back as the real record.
+fn fold_decoded_deposit(k: &Kernel<World>, addr: &Address, value: Link) {
     #[derive(Serialize)]
-    enum Frame {
+    enum RawLinkRec {
         Deposit { addr: Tumbler, value: Link },
     }
-    let frame = Frame::Deposit {
+    let raw = RawLinkRec::Deposit {
         addr: addr.tumbler().clone(),
         value,
     };
-    let bytes = bincode::serialize(&frame).expect("a deposit frame serializes");
+    let bytes = bincode::serialize(&raw).expect("the raw deposit serializes");
     let rec: LinkRec = bincode::deserialize(&bytes).expect("M2's bytes decode as a LinkRec");
     k.transact(&[], |staging| {
         staging.push(Record::Links(rec));

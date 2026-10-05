@@ -187,12 +187,12 @@ fn ftt_home_filter_is_an_address_projection_applied_lazily() {
     assert_eq!(reads.findlinks_ftt(&q_home2), vec![la2(1)]);
 
     // home composes conjunctively with slot constraints.
-    let q_h2_from = FourSet {
+    let q_home2_from = FourSet {
         home: SlotSpec::Spans(enc(&[doc2()])),
         from: SlotSpec::Spans(enc(&[ca(1)])),
         ..FourSet::any()
     };
-    assert_eq!(reads.findlinks_ftt(&q_h2_from), vec![la2(1)]);
+    assert_eq!(reads.findlinks_ftt(&q_home2_from), vec![la2(1)]);
 
     // The home slot's zero admits nothing — FL-EMP for a slot that is never
     // carried into M7's conjunction, so the descriptor answers it alone.

@@ -56,9 +56,9 @@ fn project_is_content_subspace_i_to_v_with_conflated_not_a_link() {
     // conjoins is_active, flips: the two answer different questions about one
     // link.
     store.nullify(SYS, &doc2(), &e1).expect("nullify succeeds");
-    let retracted = reads.project(&e1, FROM, &doc1()).expect("project");
-    assert_eq!(retracted, proj);
-    assert!(retracted.denotes(&t(&[1, 2])));
+    let after_retraction = reads.project(&e1, FROM, &doc1()).expect("project");
+    assert_eq!(after_retraction, proj);
+    assert!(after_retraction.denotes(&t(&[1, 2])));
     assert_eq!(reads.addressably_discoverable_from(&e1, &doc1()), Ok(false));
 }
 

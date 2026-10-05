@@ -89,6 +89,8 @@ use std::fmt;
 use serde::Serialize;
 use skep_address::Address;
 
+use crate::budget::{MAX_COMPARE_OPERAND_BLOCKS, MAX_COMPARE_PAIRS, MAX_FIND_COVERAGE_SPANS};
+
 /// Span well-formedness faults (ASN-0115): the four ways a request span fails
 /// the span half of the V-spec gate. `StartTooShallow` is `#start < 2`; a
 /// well-formed `#start ≥ 3` span is NOT a fault here — depth-compatibility is
@@ -207,14 +209,10 @@ pub enum CompareError {
     /// whatever it yields — or more blocks built, than the budget. The join is
     /// `|P|·|Q|`, so a per-operand budget is what bounds it; refused as the
     /// operand resolves and before the join runs, with ρ₁ resolved first.
-    ///
-    /// [`MAX_COMPARE_OPERAND_BLOCKS`]: crate::MAX_COMPARE_OPERAND_BLOCKS
     TooManyBlocks { operand: Operand },
     /// The join runs to more than [`MAX_COMPARE_PAIRS`] correspondences. The
     /// block budget cannot see this one: two small operands resolving to the
     /// same I-address fan out to their product.
-    ///
-    /// [`MAX_COMPARE_PAIRS`]: crate::MAX_COMPARE_PAIRS
     TooManyPairs,
 }
 
@@ -241,8 +239,6 @@ pub enum FindError {
     /// multiplier it applies to two world-sized scans. Refused BEFORE the
     /// candidate scan runs; a refusal, never a truncation, so FD-COMPLETE
     /// holds verbatim for every request answered.
-    ///
-    /// [`MAX_FIND_COVERAGE_SPANS`]: crate::MAX_FIND_COVERAGE_SPANS
     TooMuchCoverage,
 }
 
@@ -356,14 +352,14 @@ impl fmt::Display for CompareError {
                 f,
                 "compare: {operand} resolves past the operand budget of {} spans or {} blocks \
                  (MAX_COMPARE_OPERAND_BLOCKS); narrow its spans or split the request",
-                crate::MAX_COMPARE_OPERAND_BLOCKS,
-                crate::MAX_COMPARE_OPERAND_BLOCKS
+                MAX_COMPARE_OPERAND_BLOCKS,
+                MAX_COMPARE_OPERAND_BLOCKS
             ),
             CompareError::TooManyPairs => write!(
                 f,
                 "compare: the report passes {} correspondences (MAX_COMPARE_PAIRS); \
                  narrow the two operands",
-                crate::MAX_COMPARE_PAIRS
+                MAX_COMPARE_PAIRS
             ),
         }
     }
@@ -389,8 +385,7 @@ impl fmt::Display for FindError {
                 "find_docs_containing: the request resolves past the coverage budget of {} spans \
                  or {} coverage spans (MAX_FIND_COVERAGE_SPANS); narrow its spans or split the \
                  request",
-                crate::MAX_FIND_COVERAGE_SPANS,
-                crate::MAX_FIND_COVERAGE_SPANS
+                MAX_FIND_COVERAGE_SPANS, MAX_FIND_COVERAGE_SPANS
             ),
         }
     }

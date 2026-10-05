@@ -70,7 +70,14 @@ foundation and on the stores above it.
   whose every deposit passes one gate; the raw and typed reads and the
   matcher `skep-discovery` composes; the type registry, a compiled
   constant. Its modules and rules: §The link store.
-- `skep-retrieval` — content and provenance queries.
+- `skep-retrieval` — the content and provenance queries: delivery by
+  V-span (RETRIEVEV), a document's extents, the origins of a span
+  (SHOWORIGIN), what one document deleted that another still holds
+  (SHOWDELETIONS), the shared content of two regions (COMPARE), and the
+  documents holding some content now (FINDDOCSCONTAINING). It owns no
+  slice and no index and writes nothing; delivery and containment each
+  have a door that takes the caller's reader predicate. Its modules and
+  rules: §The content queries.
 - `skep-discovery` — the link reads: which links reach a document's content
   (the region family) or match a four-set description (the descriptor
   family), counted and paged; projection and discoverability; the
@@ -582,6 +589,64 @@ per gate that crosses them and per part of the read surface, over the
 shared `common` world and the kernels it opens; `carrier`, the contracts
 that need no kernel; `recovery`, the hints a checkpoint must rebuild; and
 `tidy`, which checks the module map and the first rule.
+
+## The content queries, `skep-retrieval`
+
+`skep-retrieval` holds the seven queries the code map lists, and owns
+nothing: no slice, no journal record, no fold, no index. Each is a method
+on `Query`, which borrows the one `&Snapshot` its caller pins and holds
+nothing else — no `Kernel` — so nothing here writes. The queries compose
+`skep-namespace`'s registry, `skep-arrangement`'s reading surface,
+resolutions and provenance reads, and, for RETRIEVEV alone,
+`skep-content`'s values. Two of them take the caller's reader predicate at
+a door of their own: RETRIEVEV's `retrieve_v_masked`, asked of each run's
+origin, and FINDDOCSCONTAINING's `find_docs_containing_filtered`, of each
+container. `skep-febe`'s dispatch is the one production caller; `skepd`'s
+codec and the conformance harness name the request and answer types.
+
+Its modules are declared in `src/lib.rs` in dependency order, each with a
+line saying what it holds, and `src/query.rs` declares its six children
+the same way, a line each; each module names in code only the modules
+above it, and an item by its home module, never through the root's
+re-exports. `tests/it/tidy.rs` checks that, and that every file under
+`src/` and `tests/it/` is declared. `budget.rs`, `error.rs`, `types.rs`
+and `vspan.rs` are what the queries share. `query.rs` is the `Query`
+handle and the two projections more than one query asks; beneath it,
+`query/retrieve.rs`, `query/extent.rs`, `query/origin.rs`,
+`query/deletions.rs`, `query/compare.rs` and `query/find.rs` each hold one
+query's `impl` block — `extent.rs` the two extent queries' — and the
+helpers no other query uses.
+
+Rules that hold across its files:
+
+- **One file reads values.** Only `query/retrieve.rs` names
+  `skep-content`'s store: `HasContent` bounds RETRIEVEV's `impl` block and
+  no other, so the other six queries answer from addresses, counts and
+  provenance alone. `types.rs` names that crate's `Val`, the item a
+  delivery carries, and nothing else of it. `tests/it/tidy.rs` checks that
+  no other file names the store.
+- **Gate the address named, then ask the surface.** Every query refuses an
+  unregistered document before it reads an arrangement — the precondition
+  `skep-arrangement`'s `reading_surface` states. RETRIEVEV, the two extent
+  queries, SHOWORIGIN and COMPARE then read that function's answer;
+  SHOWDELETIONS and FINDDOCSCONTAINING read the address named.
+- **The budgets are `budget.rs`'s, and they refuse.** COMPARE's two and
+  FINDDOCSCONTAINING's one are consulted by `query/compare.rs` and
+  `query/find.rs` and rendered by `error.rs`; a request past one gets its
+  rejection and no partial answer.
+- **The rejections are part of the wire.** `skep-febe`'s `lower.rs` maps
+  each variant of the six error enums to a `RejectCode` with no wildcard
+  arm, so a new variant fails to compile there. `docs/wire.md` names each
+  code and restates the three budgets' values and what each counts; a
+  change to a variant, or to a number or a count in `budget.rs`, changes
+  that document in the same commit. Nothing checks the document.
+
+Its integration suite is one binary, `tests/it/`: one file per query
+surface over the shared `common` world — `retrieve`, `extent`, `origin`,
+`deletions`, `compare` with its refusals in `compare_refusals`, and
+`find`; `query`, `head_float` and `traits`, what crosses the queries (the
+handle and the gate's precedence, the published-address float, the derive
+policy); and `tidy`, which checks the module map and the first rule.
 
 ## The link reads, `skep-discovery`
 

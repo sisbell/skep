@@ -136,8 +136,10 @@
 
 #![forbid(unsafe_code)]
 
-// The modules in dependency order: each names, in code, only modules above
-// it, which `tests/it/tidy.rs` checks.
+// The modules, in dependency order, each with a line saying what it holds.
+// Each names, in code, only modules above it, and an item by its home module
+// rather than through the re-exports below; `tests/it/tidy.rs` checks all of
+// it.
 
 // The three request budgets and their argument: COMPARE's operand and pair
 // budgets, FINDDOCSCONTAINING's coverage budget.

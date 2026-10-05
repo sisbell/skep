@@ -4,10 +4,11 @@
 //! interface makes (§-references inline), in a name that reads as the claim,
 //! so a failure names the broken promise. `common` is the minimal engine
 //! assembly the composition contract prescribes and the fixtures every suite
-//! shares; `tidy` checks the module order `src/lib.rs` declares and that one
-//! file alone names the content store; each other module is one surface, and
-//! the module names are the table of contents. Nothing but module
-//! declarations belongs here.
+//! shares; `tidy` checks the module map — every file declared, each `src/`
+//! declaration with its line, the order, and each item named by its home
+//! module — and that one file alone names the content store; each other
+//! module is one surface, and the module names are the table of contents.
+//! Nothing but module declarations belongs here.
 
 mod common;
 

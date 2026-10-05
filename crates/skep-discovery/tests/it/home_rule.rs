@@ -152,8 +152,6 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
     );
 
     // The lineage pair: the doc2-homed claim goes, from both probes.
-    let claims_of =
-        |found: Vec<SupClaim>| -> Vec<Address> { found.into_iter().map(|c| c.claim).collect() };
     let all = claims_of(in_claims_on(&snap, &m0, View::Active, &every_home));
     assert_eq!(all, vec![kept.clone(), dropped.clone()]);
     assert_eq!(
@@ -391,8 +389,6 @@ fn the_lineage_pair_asks_the_home_rule_of_the_claim_and_reads_its_endpoints_as_r
         .assert_sup(SYS, &doc2(), &e1, &e2)
         .expect("assert_sup succeeds");
     let snap = k.snapshot();
-    let claims_of =
-        |found: Vec<SupClaim>| -> Vec<Address> { found.into_iter().map(|c| c.claim).collect() };
     assert_eq!(
         claims_of(in_claims_on(&snap, &e1, View::Active, &every_home)),
         vec![kept.clone(), refused.clone()]

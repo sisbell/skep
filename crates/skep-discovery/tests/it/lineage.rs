@@ -149,13 +149,7 @@ fn a_live_claim_names_a_nullified_endpoint_and_a_nullified_key_still_probes() {
     );
     // A nullified link is resident, so it is still a legal probe key: the
     // gate asks resident, not active.
-    assert_eq!(
-        reads.out_claims(&e2, View::Active)
-            .into_iter()
-            .map(|c| c.claim)
-            .collect::<Vec<_>>(),
-        vec![claim]
-    );
+    assert_eq!(claims_of(reads.out_claims(&e2, View::Active)), vec![claim]);
 }
 
 /// §7 — the lineage read-out is in ascending CLAIM-address order, the same
@@ -187,16 +181,12 @@ fn lineage_reads_out_in_claim_address_order() {
         .expect("assert_sup succeeds");
     assert!(c1 < c2 && c2 < c3, "later claims mint later addresses");
 
-    let claims: Vec<Address> = reads
-        .in_claims(&made[0], View::Active)
-        .into_iter()
-        .map(|c| c.claim)
-        .collect();
-    assert_eq!(claims, vec![c1.clone(), c2.clone()]);
+    assert_eq!(
+        claims_of(reads.in_claims(&made[0], View::Active)),
+        vec![c1.clone(), c2.clone()]
+    );
     // out() reads the same order off the TO probe: made[2] is `new` to two
     // claims, made[1] to one.
-    let claims_of =
-        |found: Vec<SupClaim>| -> Vec<Address> { found.into_iter().map(|c| c.claim).collect() };
     assert_eq!(
         claims_of(reads.out_claims(&made[2], View::Active)),
         vec![c2, c3]

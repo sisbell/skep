@@ -2,7 +2,8 @@
 //! contract's assembler role, in miniature) over M3 + M4 + M5 + M7 — exactly
 //! the bound M8 queries under, plus M4 so INSERT can arrange content — its
 //! address/type fixtures, the suite's reads of its current state, and the
-//! window law, wide endset and recording reader more than one suite reads.
+//! window law, wide endset, recording reader and lineage claim addresses
+//! more than one suite reads.
 //! Addresses follow M3's minted shapes: account
 //! `[1,0,1]`, documents `[1,0,1,0,d]`, content elements `[doc·0·1·k]`, link
 //! elements `[doc·0·2·k]`; the five reserved type addresses are the compiled
@@ -385,14 +386,18 @@ pub fn seed_content(k: &Kernel<World>, doc: &Address, count: u32) {
 /// (PUB-2.66). The atoms are minted under `doc`'s own content chain either
 /// way; only the placement floats. The declaration names ENROLL's type, the
 /// first member of M5's set (PUB-2.11, RES-261): the bytes are prose —
-/// PUB-2.60's residue — which the door admits on the type alone.
+/// PUB-2.60's residue — which the door admits on the type alone. They cycle
+/// through `p`..`y`, as [`seed_content`]'s do, so the helper is total at any
+/// `count`.
 pub fn seed_published_content(k: &Kernel<World>, doc: &Address, count: u32) {
     let fresh = {
         let snap = k.snapshot();
         let w = snap.world();
         w.m5().content_count(&reading_surface(w.m3(), doc)) + n(1)
     };
-    let vals: Vec<Val> = (0..count).map(|i| Val::new(vec![b'p' + i as u8])).collect();
+    let vals: Vec<Val> = (0..count)
+        .map(|i| Val::new(vec![b'p' + (i % 10) as u8]))
+        .collect();
     skep_arrangement::Vstream::new(k)
         .insert(
             SYS,
@@ -505,6 +510,14 @@ impl Reads<'_> {
     pub fn out_claims(&self, x: &Address, view: View) -> Vec<SupClaim> {
         out_claims_on(&self.0.snapshot(), x, view, &every_home)
     }
+}
+
+/// The claim addresses of a lineage answer, in the order the read returned
+/// them — what a lineage assertion compares when the claims' endpoints are
+/// not its subject. It consumes the answer, so each address moves out rather
+/// than being cloned.
+pub fn claims_of(found: Vec<SupClaim>) -> Vec<Address> {
+    found.into_iter().map(|c| c.claim).collect()
 }
 
 // ───────────────────── the window law and a wide endset ─────────────────────

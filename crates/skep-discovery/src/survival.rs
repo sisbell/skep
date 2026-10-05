@@ -111,12 +111,12 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
         return Err(OrphanError::NotContentSubspace); // s_C only (mirror M5 DeleteError)
     }
     let p_ordinal = &p.ordinal;
-    let n_c = w.m5().content_count(d);
     if width.is_zero() {
         return Err(OrphanError::EmptyWidth); // mirror M5 EmptyWidth
     }
     let suffix_start = p_ordinal + width; // the first position past the deleted range
-    if *p_ordinal < Nat::one() || suffix_start > &n_c + Nat::one() {
+    let content_end = w.m5().content_count(d) + Nat::one(); // n_C + 1, past the arranged content
+    if p_ordinal.is_zero() || suffix_start > content_end {
         return Err(OrphanError::OutOfBounds); // folds M5's NotArranged + OutOfBounds (width ≥ 1)
     }
     // The run budget as `d` alone already settles it, off M5's own `#runs`,
@@ -126,7 +126,8 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
     // would admit. What it buys is that a `d` past the budget however the
     // range falls is refused without its arrangement being resolved into a
     // vector first.
-    if w.m5().content_run_count(d) + w.m5().link_run_count(d) > MAX_IMAGE_RUNS {
+    let link_run_count = w.m5().link_run_count(d);
+    if w.m5().content_run_count(d) + link_run_count > MAX_IMAGE_RUNS {
         return Err(OrphanError::ImageTooLarge);
     }
 
@@ -143,7 +144,7 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
         content_vspan(p, width).expect("p is s_C and width ≥ 1, both refused above when not");
     let a_del = w.m5().resolve(d, &deleted);
     let prefix = content_vspan(&VPos::content(Nat::one()), &(p_ordinal - Nat::one()));
-    let suffix_count = &n_c + Nat::one() - &suffix_start;
+    let suffix_count = &content_end - &suffix_start;
     let suffix = content_vspan(&VPos::content(suffix_start), &suffix_count);
     // The surviving CONTENT runs, pulled off M5's lazy resolution straight into
     // `retained`, so no side is collected into a vector of its own only to be
@@ -159,8 +160,9 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
     // request. The content is counted RESOLVED because the exact count holds
     // the pieces the range's two ends cut out of runs, which no count M5
     // publishes shows; the link runs, which no text range cuts, are counted
-    // off M5's own `#runs`, so they are never touched to be counted.
-    if a_del.len() + retained.len() + w.m5().link_run_count(d) > MAX_IMAGE_RUNS {
+    // off M5's own `#runs` — the count the pre-check read — so they are never
+    // touched to be counted.
+    if a_del.len() + retained.len() + link_run_count > MAX_IMAGE_RUNS {
         return Err(OrphanError::ImageTooLarge);
     }
     let touching_deleted = stab_runs(w.links(), &a_del);

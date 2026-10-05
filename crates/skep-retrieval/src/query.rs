@@ -15,6 +15,7 @@
 //! operation uses; it sees this file's private items — the snapshot a
 //! `Query` holds among them — and none of its siblings'.
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use skep_address::{document_of, Address};
@@ -133,22 +134,34 @@ fn run_origin(run: &Run) -> Address {
 ///
 /// Identity and order are both `Address`'s own — its `Eq` is tumbler equality
 /// (the level is a function of the tumbler) and its `Ord` IS the T1 tumbler
-/// order — so sorting and deduplicating is exactly dedup-by-tumbler, with no
-/// `.tumbler()` detour and no key clone.
+/// order — so the set those two keep is exactly the tumbler-deduplicated,
+/// T1-ordered one, with no `.tumbler()` detour and no key clone.
+///
+/// BUILT AS THE STREAM ARRIVES. SHOWDELETIONS hands this a document's
+/// positions WITH multiplicity, and a document's extent is virtual — M5 caps
+/// the runs a placing request stores and no position count — so the stream
+/// can be `N·W` items for a set of `W`. Each item is inserted as it arrives
+/// and a duplicate is dropped on arrival, so what is held live is the set and
+/// the item in hand, never the stream. Not `collect::<BTreeSet<_>>()`: std's
+/// `FromIterator` buffers the whole stream into a `Vec` to build the tree in
+/// bulk, and collecting into a `Vec` to sort and dedup holds it the same way.
 ///
 /// Used for origin DOCUMENTS (SHOWORIGIN_V) and content I-ADDRESSES
 /// (SHOWDELETIONS) alike — both are `Address`, so one neutral helper serves
 /// either (the name says "addr", not "doc", because what the SHOWDELETIONS
-/// site dedups is content addresses, not documents).
-fn sorted_addr_set(it: impl IntoIterator<Item = Address>) -> Vec<Address> {
-    let mut out: Vec<Address> = it.into_iter().collect();
-    out.sort_unstable(); // T1 order; the dedup below makes stability unobservable
-    out.dedup();
-    out
+/// site dedups is content addresses, not documents). Generic over the item
+/// only so the suite can count what it holds live; both callers instantiate
+/// it at `Address`.
+fn sorted_addr_set<A: Ord>(it: impl IntoIterator<Item = A>) -> Vec<A> {
+    let mut set = BTreeSet::new();
+    set.extend(it); // one insert per item: `Extend`, never `FromIterator`
+    set.into_iter().collect()
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
     use skep_address::{validate, Nat, Tumbler};
 
@@ -164,6 +177,37 @@ mod tests {
         let d1 = a(&[1, 0, 1, 0, 1]);
         let got = sorted_addr_set(vec![d2.clone(), d1.clone(), d2.clone(), d1.clone()]);
         assert_eq!(got, vec![d1, d2]);
-        assert!(sorted_addr_set(std::iter::empty()).is_empty());
+        assert!(sorted_addr_set(std::iter::empty::<Address>()).is_empty());
+    }
+
+    #[test]
+    fn sorted_addr_set_holds_the_set_live_and_never_the_stream() {
+        // SHOWDELETIONS hands this a stream whose multiplicity a few placing
+        // requests choose, so a duplicate must be dropped as it arrives: the
+        // peak is the set and the item in hand, whatever the stream's length.
+        thread_local! {
+            static LIVE: Cell<usize> = const { Cell::new(0) };
+            static PEAK: Cell<usize> = const { Cell::new(0) };
+        }
+        #[derive(PartialEq, Eq, PartialOrd, Ord)]
+        struct Counted(u32);
+        impl Counted {
+            fn new(v: u32) -> Counted {
+                LIVE.with(|live| {
+                    live.set(live.get() + 1);
+                    PEAK.with(|peak| peak.set(peak.get().max(live.get())));
+                });
+                Counted(v)
+            }
+        }
+        impl Drop for Counted {
+            fn drop(&mut self) {
+                LIVE.with(|live| live.set(live.get() - 1));
+            }
+        }
+        let set = sorted_addr_set((0..10_000u32).map(|i| Counted::new(i % 2)));
+        assert_eq!(set.iter().map(|c| c.0).collect::<Vec<_>>(), [0, 1]);
+        let peak = PEAK.with(Cell::get);
+        assert!(peak <= 3, "held {peak} live for a two-item set");
     }
 }

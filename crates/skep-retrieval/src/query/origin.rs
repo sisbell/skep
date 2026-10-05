@@ -3,7 +3,7 @@
 
 use num_traits::Zero;
 use skep_address::{Address, Nat, Span};
-use skep_arrangement::{as_ordinal_vspan, reading_surface, Run};
+use skep_arrangement::{as_ordinal_vspan, reading_surface};
 
 use super::{run_origin, sorted_addr_set, Query, RetrievalWorld};
 use crate::error::OriginError;
@@ -77,18 +77,24 @@ impl<W: RetrievalWorld> Query<'_, W> {
         let Some(shape) = as_ordinal_vspan(span) else {
             return Err(OriginError::DepthIncompatible);
         };
-        // Span now depth-2 (≥ 3 rejected above); resolve may still be partial
-        // if the span overruns the bound prefix.
-        let runs = m5.resolve(&surface, span);
-        let resolved_width: Nat = runs.iter().map(Run::width).sum();
+        // Span now depth-2 (≥ 3 rejected above); the resolution may still be
+        // partial if the span overruns the bound prefix. One pass over M5's
+        // lazy resolution: each run's width summed for (vi), its origin taken
+        // into the set as it arrives — the answer and the run in hand held
+        // live, never the span's run list.
+        let mut resolved_width = Nat::zero();
+        let origins = sorted_addr_set(m5.iter_resolve(&surface, span).map(|run| {
+            resolved_width += run.width();
+            run_origin(&run)
+        }));
         // `shape.count` is the span's NOMINAL EXTENT — ASN-0115's name for the
         // width's deepest component, the count the span names — read off M5's
-        // reading rather than by index, the same part `resolve` read;
+        // reading rather than by index, the same part the resolution read;
         // `resolved_width` is `|act|`, and (vi) is the corpus's nominal-extent
         // attainment failing: `|act| < ℓ_{#ℓ}`.
         if &resolved_width < shape.count {
             return Err(OriginError::RangeNotPresent); // (vi): reject, never clip (O13)
         }
-        Ok(sorted_addr_set(runs.iter().map(run_origin)))
+        Ok(origins)
     }
 }

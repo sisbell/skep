@@ -237,10 +237,12 @@ pub enum RejectCode {
     IllFormedSuccessor,
     DcViolation,
     // ── M6 content/provenance read (MalformedSpan also covers
-    //    RetrieveError::MalformedSpec; the last three are M6's own budget
-    //    refusals — two for COMPARE, whose join squares in the request, and
-    //    one for FINDDOCSCONTAINING, whose coverage is the multiplier it
-    //    applies to two world-sized scans) ──
+    //    RetrieveError::MalformedSpec; the last four are M6's own budget
+    //    refusals — two for COMPARE, whose join squares in the request, one
+    //    for FINDDOCSCONTAINING, whose coverage is the multiplier it applies
+    //    to two world-sized scans, and one for RETRIEVEV, whose delivery is
+    //    sized by a virtual extent no request field prices; each also refuses
+    //    its operation's run-list walk past M6's walk budget) ──
     NoSuchSubspace,
     EmptySubspace,
     DepthIncompatible,
@@ -249,6 +251,7 @@ pub enum RejectCode {
     TooManyBlocks,
     TooManyPairs,
     TooMuchCoverage,
+    TooManyItems,
     // ── M8 link discovery read (the last two are M8's own budget refusals —
     //    one for the arrangement runs a request materializes or joins
     //    against, one for the spans a RETRIEVEENDSETS answer carries) ──

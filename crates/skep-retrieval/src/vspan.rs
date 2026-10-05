@@ -1,16 +1,17 @@
 //! §Internal design — how M6 reads one request V-span: which subspace its
-//! start names, and whether it is well-formed. The two-subspace
-//! vocabulary a classification lands in ([`Subspace`]) lists both
-//! subspaces, reads itself off a span's start or a numeral, writes its own
-//! numeral (M1's) and anchor, and asks M5 for its count and runs — so no
-//! site re-derives which subspace a start names, lists the two, or pairs a
-//! subspace with a numeral, an anchor, a count or a run-list by hand.
+//! start names, whether it is well-formed, and how far M5's resolution of it
+//! can walk. The two-subspace vocabulary a classification lands in
+//! ([`Subspace`]) lists both subspaces, reads itself off a span's start or a
+//! numeral, writes its own numeral (M1's) and anchor, and asks M5 for its
+//! count, runs and run count — so no site re-derives which subspace a start
+//! names, lists the two, or pairs a subspace with a numeral, an anchor, a
+//! count, a run-list or a run count by hand.
 
 use std::sync::LazyLock;
 
-use num_traits::One;
+use num_traits::{One, ToPrimitive};
 use skep_address::{action_point, content_subspace, link_subspace, zeros, Address, Nat, Span};
-use skep_arrangement::{M5State, Runs, VPos};
+use skep_arrangement::{as_ordinal_vspan, M5State, Runs, VPos};
 
 use crate::error::SpanFault;
 
@@ -38,11 +39,12 @@ static S_L: LazyLock<Nat> = LazyLock::new(link_subspace);
 /// reads itself off a numeral ([`Subspace::of_numeral`]) or off a request
 /// span's start ([`Subspace::of_span`]), writes the numeral M1 names it by
 /// ([`Subspace::numeral`]) and the anchor its extent starts at
-/// ([`Subspace::anchor`]), and asks M5 for its own count and runs
-/// ([`Subspace::count`], [`Subspace::runs`]). A site therefore matches on
-/// the classification instead of re-deriving the comparison chain and
-/// carrying its own fall-through, and never lists the two, or pairs a
-/// subspace with a numeral, an anchor, a count or a run-list, by hand.
+/// ([`Subspace::anchor`]), and asks M5 for its own count, runs and run count
+/// ([`Subspace::count`], [`Subspace::runs`], [`Subspace::run_count`]). A
+/// site therefore matches on the classification instead of re-deriving the
+/// comparison chain and carrying its own fall-through, and never lists the
+/// two, or pairs a subspace with a numeral, an anchor, a count, a run-list or
+/// a run count, by hand.
 ///
 /// `pub(crate)`, because M1 owns T7 and a second published subspace
 /// vocabulary is exactly what memoizing M1's numerals avoids.
@@ -141,6 +143,46 @@ impl Subspace {
             Subspace::Link => m5.link_runs(doc),
         }
     }
+
+    /// `#runs` of this subspace's run list in `doc` — how many runs
+    /// [`Subspace::runs`] would hand back, without handing them back: M5's
+    /// own count, one map lookup reading no run, selected as `count` and
+    /// `runs` are. The quantity a resolution's walk is priced in
+    /// ([`walk_ceiling`]).
+    pub(crate) fn run_count(self, m5: &M5State, doc: &Address) -> usize {
+        match self {
+            Subspace::Content => m5.content_run_count(doc),
+            Subspace::Link => m5.link_run_count(doc),
+        }
+    }
+}
+
+/// The most run-list steps M5's resolution of `span` against `doc` can take,
+/// read before the walk from M5's O(1) run counts — what each span is charged
+/// against the walk budget (`MAX_WALK_STEPS`).
+///
+/// M5 reaches a span by walking the selected run list from its first run, and
+/// stops at the first run opening at or past the span's reach ordinal `e`
+/// (`ordinal + count`). Every run is at least one position wide, so at most
+/// `e − 1` runs open before `e`, and the walk examines those and the one that
+/// stops it: `min(#runs, e)` steps, `#runs` for a span opening past the
+/// arranged end.
+///
+/// UPPER BOUNDS WHERE THE READING CANNOT SAY MORE. A start in neither subspace
+/// is priced at both lists, and a span M5's reader declines, or whose reach
+/// does not fit a `usize`, at the whole of its list: read off M6's own
+/// classification and M5's own reader, never off a restatement of which spans
+/// M5 folds to nothing, so the price errs only toward refusing.
+pub(crate) fn walk_ceiling(m5: &M5State, doc: &Address, span: &Span) -> usize {
+    let runs = match Subspace::of_span(span) {
+        Some(sub) => sub.run_count(m5, doc),
+        None => Subspace::ALL.into_iter().fold(0, |runs: usize, sub| {
+            runs.saturating_add(sub.run_count(m5, doc))
+        }),
+    };
+    as_ordinal_vspan(span)
+        .and_then(|shape| (shape.ordinal + shape.count).to_usize())
+        .map_or(runs, |reach| reach.min(runs))
 }
 
 /// The SPAN half of ASN-0115's V-spec well-formedness: zero-free,

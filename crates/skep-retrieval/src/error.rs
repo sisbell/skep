@@ -17,11 +17,11 @@
 //! ii/iv, iii, v, vi in sequence with no request-order clause to compose
 //! against.
 //!
-//! THE BUDGET REFUSALS CARRY NO COORDINATE. `TooManyBlocks`, `TooManyPairs`
-//! and `TooMuchCoverage` can fire only after their operation's gate has
-//! completed over the WHOLE request, so a gate fault always outranks a budget
-//! refusal — which is also their declaration order, the budget variants being
-//! declared last.
+//! THE BUDGET REFUSALS CARRY NO COORDINATE. `TooManyItems`, `TooManyBlocks`,
+//! `TooManyPairs` and `TooMuchCoverage` can fire only after their operation's
+//! gate has completed over the WHOLE request, so a gate fault always outranks
+//! a budget refusal — which is also their declaration order, the budget
+//! variants being declared last.
 //!
 //! The first two clauses compose, and the composition is what a caller reads
 //! precedence by: a request whose FIRST spec has a malformed span and whose
@@ -89,7 +89,10 @@ use std::fmt;
 use serde::Serialize;
 use skep_address::Address;
 
-use crate::budget::{MAX_COMPARE_OPERAND_BLOCKS, MAX_COMPARE_PAIRS, MAX_FIND_COVERAGE_SPANS};
+use crate::budget::{
+    MAX_COMPARE_OPERAND_BLOCKS, MAX_COMPARE_PAIRS, MAX_DELIVERY_ITEMS, MAX_FIND_COVERAGE_SPANS,
+    MAX_WALK_STEPS,
+};
 
 /// Span well-formedness faults (ASN-0115): the four ways a request span fails
 /// the span half of the V-spec gate. `StartTooShallow` is `#start < 2`; a
@@ -136,10 +139,24 @@ pub enum Operand {
 
 /// RETRIEVEV rejection (ASN-0115): a malformed spec rejects the WHOLE request
 /// (well-formedness precondition); `index` names the offending spec.
+///
+/// The last is the budget refusal, and the only rejection here that names
+/// nothing the gate faults — only the request's size. It names both budgets
+/// it refuses at, so a client learns what to narrow.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum RetrieveError {
     DocNotRegistered(Address),
-    MalformedSpec { index: usize, fault: SpanFault },
+    MalformedSpec {
+        index: usize,
+        fault: SpanFault,
+    },
+    /// The delivery exceeds [`MAX_DELIVERY_ITEMS`] items — refused as it is
+    /// produced, a delivered run's positions as one batch — or the spec-set's
+    /// resolution would walk more than `2^24` run-list steps, priced before
+    /// its first spec is walked. A document's extent is virtual, so one spec
+    /// may name a delivery no request field prices; a refusal, never a
+    /// truncation, so R3, R5 and R8 hold verbatim for every delivery answered.
+    TooManyItems,
 }
 
 /// RETRIEVEDOCVSPAN / RETRIEVEDOCVSPANSET rejection (ASN-0113 W-pre; ASN-0112's
@@ -206,9 +223,11 @@ pub enum CompareError {
     },
     /// The operand's resolution exceeds [`MAX_COMPARE_OPERAND_BLOCKS`] on
     /// either of its two counts: more spans handed to M5 — one walk apiece,
-    /// whatever it yields — or more blocks built, than the budget. The join is
-    /// `|P|·|Q|`, so a per-operand budget is what bounds it; refused as the
-    /// operand resolves and before the join runs, with ρ₁ resolved first.
+    /// whatever it yields — or more blocks built, than the budget; or its
+    /// spans would walk more than `2^24` run-list steps, priced before the
+    /// operand's first span is walked. The join is `|P|·|Q|`, so a
+    /// per-operand budget is what bounds it; refused as the operand resolves
+    /// and before the join runs, with ρ₁ resolved first.
     TooManyBlocks { operand: Operand },
     /// The join runs to more than [`MAX_COMPARE_PAIRS`] correspondences. The
     /// operand budget cannot see this one: two small operands resolving to the
@@ -234,11 +253,13 @@ pub enum FindError {
     },
     /// The request's resolution exceeds [`MAX_FIND_COVERAGE_SPANS`] on either
     /// of its two counts: more spans handed to M5 — one walk apiece, whatever
-    /// it yields — or more coverage spans produced, than the budget. That is
-    /// the one factor of this operation's cost that the request owns, and the
-    /// multiplier it applies to two world-sized scans. Refused BEFORE the
-    /// candidate scan runs; a refusal, never a truncation, so FD-COMPLETE
-    /// holds verbatim for every request answered.
+    /// it yields — or more coverage spans produced, than the budget; or its
+    /// spans would walk more than `2^24` run-list steps, priced before its
+    /// first span is walked. That is the one factor of this operation's cost
+    /// that the request owns, and the multiplier it applies to two
+    /// world-sized scans. Refused BEFORE the candidate scan runs; a refusal,
+    /// never a truncation, so FD-COMPLETE holds verbatim for every request
+    /// answered.
     TooMuchCoverage,
 }
 
@@ -272,6 +293,12 @@ impl fmt::Display for RetrieveError {
             RetrieveError::MalformedSpec { index, fault } => {
                 write!(f, "retrieve_v: spec {index} is malformed: {fault}")
             }
+            RetrieveError::TooManyItems => write!(
+                f,
+                "retrieve_v: the delivery runs past the delivery budget of \
+                 {MAX_DELIVERY_ITEMS} items (MAX_DELIVERY_ITEMS), or its specs walk past \
+                 {MAX_WALK_STEPS} run-list steps; narrow its spans or split the request"
+            ),
         }
     }
 }
@@ -352,7 +379,8 @@ impl fmt::Display for CompareError {
                 f,
                 "compare: {operand} resolves past the operand budget of \
                  {MAX_COMPARE_OPERAND_BLOCKS} spans or {MAX_COMPARE_OPERAND_BLOCKS} blocks \
-                 (MAX_COMPARE_OPERAND_BLOCKS); narrow its spans or split the request"
+                 (MAX_COMPARE_OPERAND_BLOCKS), or its spans walk past {MAX_WALK_STEPS} \
+                 run-list steps; narrow its spans or split the request"
             ),
             CompareError::TooManyPairs => write!(
                 f,
@@ -382,7 +410,8 @@ impl fmt::Display for FindError {
                 f,
                 "find_docs_containing: the request resolves past the coverage budget of \
                  {MAX_FIND_COVERAGE_SPANS} spans or {MAX_FIND_COVERAGE_SPANS} coverage spans \
-                 (MAX_FIND_COVERAGE_SPANS); narrow its spans or split the request"
+                 (MAX_FIND_COVERAGE_SPANS), or its spans walk past {MAX_WALK_STEPS} run-list \
+                 steps; narrow its spans or split the request"
             ),
         }
     }

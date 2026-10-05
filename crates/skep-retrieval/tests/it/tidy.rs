@@ -1,8 +1,8 @@
 //! THE MODULE MAP, CHECKED: `src/lib.rs` declares this crate's modules in
 //! dependency order, each with a line saying what it holds and each naming
 //! in code only the modules above it, and this is that sentence as tests —
-//! together with three rules no compiler error reports, one about M4 and two
-//! about the budgets.
+//! together with three rules no compiler error reports: one about M4, one
+//! about the budgets, and one about which of M5's reads a query may ask.
 //!
 //! The tree's shape: every file under `src/`, and under the test target's
 //! `tests/it/`, is a module its parent declares — the compiler never reads
@@ -30,11 +30,11 @@
 //! spell by hand. That scan too asserts it read the budgets' uses, and that it
 //! still recognizes the guards it exists to refuse.
 //!
-//! The budgets' second rule is held the same way: the two files that count
-//! against a budget ask M5 only its lazy reads — `iter_resolve` for their
-//! runs, and `arranges_any` for FINDDOCSCONTAINING's filter — whose eager
-//! twins answer the same and materialize what the lazy ones hold back. That
-//! scan asserts it found each lazy read where it belongs.
+//! The read rule is held the same way: no code line under `src/` asks M5 an
+//! eager read — every query that resolves a span pulls `iter_resolve`, and
+//! FINDDOCSCONTAINING's filter asks `arranges_any` — because the eager twins
+//! answer the same and materialize what the lazy ones hold back. That scan
+//! asserts it found each lazy read where it belongs.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -206,45 +206,46 @@ fn compares(code: &str) -> bool {
         .any(|op| code.contains(op))
 }
 
-/// The two files that count against a budget stop their walks AT the budget,
-/// and FINDDOCSCONTAINING's present-tense filter holds no footprint, because
-/// each asks M5 its LAZY read: `query/compare.rs` and `query/find.rs` pull
-/// `iter_resolve` a run at a time and count each run as it arrives, and
-/// `query/find.rs` asks `arranges_any` whether a footprint is empty rather
-/// than building one (`MAX_COMPARE_OPERAND_BLOCKS`'s card; the COST paragraph
-/// of `find_docs_containing`). M5 publishes the eager twin of each —
-/// `resolve`, `image`, `project` — and they answer exactly the same, so no
-/// behavioural test can tell a producer that stops from one that
-/// materializes a document's every run and is refused afterwards. Neither
-/// file calls an eager read in code, and the scan asserts it found each lazy
-/// one where it belongs, so a scan gone blind fails rather than passing a
-/// clean tree.
+/// Every query that resolves a span holds what it counts or keeps and never
+/// the span's whole resolution, because each asks M5 its LAZY read:
+/// `query/compare.rs`, `query/find.rs` and `query/retrieve.rs` pull
+/// `iter_resolve` a run at a time and count each run against their budgets
+/// as it arrives, so an over-budget request stops its walk at the budget
+/// (`MAX_COMPARE_OPERAND_BLOCKS`' and `MAX_DELIVERY_ITEMS`' cards);
+/// `query/origin.rs` pulls it the same way and keeps each run's origin, so
+/// SHOWORIGIN holds its answer and the run in hand rather than a span's run
+/// list; and `query/find.rs` asks `arranges_any` whether a footprint is empty
+/// rather than building one (the COST paragraph of `find_docs_containing`).
+/// M5 publishes the eager twin of each — `resolve`, `image`, `project` — and
+/// they answer exactly the same, so no behavioural test can tell a query that
+/// stops from one that materializes a document's every run and is refused
+/// afterwards. No code line under `src/` calls an eager read, and the scan
+/// asserts it found each lazy one where it belongs, so a scan gone blind
+/// fails rather than passing a clean tree.
 #[test]
-fn the_budgeted_producers_ask_m5_only_its_lazy_reads() {
+fn every_query_asks_m5_only_its_lazy_reads() {
     assert!(
         calls("for run in m5.resolve(&surface, span) {", "resolve")
             && calls("!M5State::project(m5, d, &coverage).is_empty()", "project")
             && !calls("for run in m5.iter_resolve(&surface, span) {", "resolve"),
         "`calls` no longer tells a call of an eager read from the lazy one named after it"
     );
-    let budgeted = [Path::new("query/compare.rs"), Path::new("query/find.rs")];
-    let eager: Vec<_> = scan(|code| {
+    let eager = scan(|code| {
         ["resolve", "image", "project"]
             .iter()
             .any(|read| calls(code, read))
-    })
-    .into_iter()
-    .filter(|(file, _)| budgeted.contains(&file.as_path()))
-    .collect();
+    });
     assert!(
         eager.is_empty(),
-        "a budgeted producer asks M5 an eager read, which materializes what its budget \
-         exists to stop:\n{}",
+        "a query asks M5 an eager read, which materializes what its budget exists to stop \
+         or what its answer never needs:\n{}",
         render(&eager)
     );
     for (file, read) in [
         ("query/compare.rs", "iter_resolve"),
         ("query/find.rs", "iter_resolve"),
+        ("query/retrieve.rs", "iter_resolve"),
+        ("query/origin.rs", "iter_resolve"),
         ("query/find.rs", "arranges_any"),
     ] {
         assert!(

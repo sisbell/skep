@@ -4,10 +4,10 @@
 use skep_address::{Address, Span, SpanSet};
 
 use super::{Query, RetrievalWorld};
-use crate::budget::{Count, OverBudget, MAX_FIND_COVERAGE_SPANS};
+use crate::budget::{Count, OverBudget, MAX_FIND_COVERAGE_SPANS, MAX_WALK_STEPS};
 use crate::error::FindError;
 use crate::types::RegionSpec;
-use crate::vspan::gate_vspan;
+use crate::vspan::{gate_vspan, walk_ceiling};
 
 impl<W: RetrievalWorld> Query<'_, W> {
     /// FINDDOCSCONTAINING (ASN-0124 `finddocs`) — the documents that CURRENTLY
@@ -56,16 +56,19 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// walk, the coverage past it as it is produced — so an over-budget request
     /// stops resolving rather than resolving whole and then being measured; why
     /// both are counted, and what the counts stop within one span and what
-    /// they do not, are on the budget's card). That is a REFUSAL, never a
-    /// truncation: a request past the budget gets a typed rejection and no
-    /// answer, so FD-COMPLETE holds verbatim for every request this operation
-    /// answers — a truncated coverage would silently drop containers, which is
-    /// the hazard the operation names. A caller wanting more splits the
-    /// request.
+    /// they do not, are on the budget's card). The walk behind each span — up
+    /// to `#runs(doc)` steps, whatever the span covers — is held, summed over
+    /// the request, to the walk budget of `2^24` run-list steps
+    /// (`TooMuchCoverage` too, priced before the first span is walked). Each
+    /// is a REFUSAL, never a truncation: a request past either gets a typed
+    /// rejection and no answer, so FD-COMPLETE holds verbatim for every request
+    /// this operation answers — a truncated coverage would silently drop
+    /// containers, which is the hazard the operation names. A caller wanting
+    /// more splits the request.
     ///
-    /// `|R|` and `#runs(d)` are the WORLD's and no number here reaches them:
-    /// they stay with request rate and concurrency, which are M10's as the
-    /// request lifecycle's owner.
+    /// `|R|` and a candidate's `#runs(d)` are the WORLD's and no number here
+    /// reaches them: they stay with request rate and concurrency, which are
+    /// M10's as the request lifecycle's owner.
     pub fn find_docs_containing(&self, regions: &[RegionSpec]) -> Result<Vec<Address>, FindError> {
         // The UNFILTERED containers — every one readable. M10's dispatch
         // calls [`Query::find_docs_containing_filtered`] with the predicate it
@@ -89,8 +92,8 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// where RETRIEVEV's masked form needs one, and adding one would be a
     /// second check of a discharged obligation. The predicate is asked of
     /// each candidate FIRST, before `arranges_any` is paid (PUB-6.17), and only
-    /// after the gate and both counts of the coverage budget have passed the
-    /// whole request.
+    /// after the gate, the walk budget and both counts of the coverage budget
+    /// have passed the whole request.
     pub fn find_docs_containing_filtered(
         &self,
         regions: &[RegionSpec],
@@ -112,6 +115,17 @@ impl<W: RetrievalWorld> Query<'_, W> {
                 })?;
             }
         }
+        let over = |OverBudget| FindError::TooMuchCoverage;
+        // The walk budget, priced over the whole request before its first
+        // span is walked, against the address named (MAX_WALK_STEPS' card).
+        let mut walk_steps = Count::against(MAX_WALK_STEPS);
+        for r in regions {
+            for span in &r.spans {
+                walk_steps
+                    .admit(walk_ceiling(m5, &r.doc, span))
+                    .map_err(over)?;
+            }
+        }
         // Phase 1: resolve to content I-coverage — the union of every region
         // span's image, each resolved run lifted by `Run::iextent`, raw and
         // possibly mixed-length: M5's `docs_ever_containing`/`arranges_any`
@@ -127,7 +141,6 @@ impl<W: RetrievalWorld> Query<'_, W> {
         let mut coverage_spans: Vec<Span> = Vec::new();
         let mut spans_handed = Count::against(MAX_FIND_COVERAGE_SPANS);
         let mut coverage_produced = Count::against(MAX_FIND_COVERAGE_SPANS);
-        let over = |OverBudget| FindError::TooMuchCoverage;
         for r in regions {
             for span in &r.spans {
                 // The span count, taken as the span is handed and refused

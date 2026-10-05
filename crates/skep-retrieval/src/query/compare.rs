@@ -9,10 +9,10 @@
 //! report, fully conforming under R1–R3).
 //!
 //! COMPARE is the one M6 operation whose cost is SUPERLINEAR in its request —
-//! `|P|·|Q|` over two block lists a caller sizes independently — so it is the
-//! one that carries budgets of its own: [`MAX_COMPARE_OPERAND_BLOCKS`] per
+//! `|P|·|Q|` over two block lists a caller sizes independently — and that is
+//! what its two budgets of its own price: [`MAX_COMPARE_OPERAND_BLOCKS`] per
 //! operand and [`MAX_COMPARE_PAIRS`] per report, each a refusal rather than a
-//! truncation.
+//! truncation, beside the walk budget each operand's spans are priced against.
 
 use std::cmp;
 
@@ -23,10 +23,12 @@ use skep_arrangement::{as_ordinal_vspan, reading_surface, M5State, Run, VPos};
 use skep_namespace::M3State;
 
 use super::{Query, RetrievalWorld};
-use crate::budget::{Count, OverBudget, MAX_COMPARE_OPERAND_BLOCKS, MAX_COMPARE_PAIRS};
+use crate::budget::{
+    Count, OverBudget, MAX_COMPARE_OPERAND_BLOCKS, MAX_COMPARE_PAIRS, MAX_WALK_STEPS,
+};
 use crate::error::{CompareError, Operand};
 use crate::types::{CompareReport, CorrPair, RegionSpec};
-use crate::vspan::{gate_vspan, Subspace};
+use crate::vspan::{gate_vspan, walk_ceiling, Subspace};
 
 impl<W: RetrievalWorld> Query<'_, W> {
     /// COMPARE (ASN-0122): two content-subspace spec-sets `ρ₁, ρ₂`, each a set
@@ -72,23 +74,25 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// told `TooManyBlocks { operand: First }` knows ρ₂ was examined too and
     /// found well-formed.
     ///
-    /// COST, AND THE TWO BUDGETS THAT BOUND IT. The join is `|P|·|Q|`
-    /// candidate tests over the two operands' blocks, and BOTH factors are the
+    /// COST, AND THE BUDGETS THAT BOUND IT. The join is `|P|·|Q|` candidate
+    /// tests over the two operands' blocks, and BOTH factors are the
     /// request's: a region names a span list and a spec-set names a region
     /// list, so their product is the caller's to choose and squares in it. So
     /// each operand is held to the operand budget,
     /// [`MAX_COMPARE_OPERAND_BLOCKS`] — on the spans it hands to M5, each one
     /// `Θ(#runs(doc))` walk whatever it yields, and on the blocks it resolves
     /// to (`TooManyBlocks`, refused AS THE OPERAND RESOLVES and before the join
-    /// runs, ρ₁ resolved first) — and the report to the pair budget,
+    /// runs, ρ₁ resolved first) — and its spans' walks to the walk budget of
+    /// `2^24` run-list steps (`TooManyBlocks` too, priced over the operand
+    /// before its first span is walked); and the report to the pair budget,
     /// [`MAX_COMPARE_PAIRS`] correspondences (`TooManyPairs`, refused AS THE
     /// PAIRS ARE PRODUCED, so an over-budget fan-out stops accumulating rather
     /// than being built and then measured).
     ///
-    /// Both are REFUSALS, never truncations: a request past either gets a
-    /// typed rejection and no report, so X12 R1–R2 hold verbatim for every
-    /// request COMPARE answers. A caller wanting more splits the request,
-    /// exactly as an over-budget transaction is split.
+    /// All are REFUSALS, never truncations: a request past any gets a typed
+    /// rejection and no report, so X12 R1–R2 hold verbatim for every request
+    /// COMPARE answers. A caller wanting more splits the request, exactly as
+    /// an over-budget transaction is split.
     pub fn compare(
         &self,
         rho1: &[RegionSpec],
@@ -239,7 +243,11 @@ impl<'a> Block<'a> {
 /// let-else on M5's span reader below, so a span M5 declines is counted too —
 /// and the block count, taken as `iter_resolve` produces each run. The
 /// budget's card says why there are two and what they stop within one span;
-/// `Count`'s says where the boundary falls.
+/// `Count`'s says where the boundary falls. And `Err(OverBudget)` when its
+/// spans would walk past [`MAX_WALK_STEPS`], priced over the whole operand
+/// before its first span is walked, each span at its [`walk_ceiling`] — a
+/// declined span too, priced at its whole list, so the price stays an upper
+/// bound whatever this walk hands M5.
 ///
 /// REQUIRES A GATED SPEC-SET: every region's document REGISTERED, and every
 /// span content-subspace-started and `gate_vspan`-clean — which
@@ -278,6 +286,15 @@ fn resolve_blocks<'a>(
     m5: &M5State,
     regions: &'a [RegionSpec],
 ) -> Result<Vec<Block<'a>>, OverBudget> {
+    // The walk budget, priced over the whole operand before its first span is
+    // walked (MAX_WALK_STEPS' card).
+    let mut walk_steps = Count::against(MAX_WALK_STEPS);
+    for r in regions {
+        let surface = reading_surface(m3, &r.doc);
+        for span in &r.spans {
+            walk_steps.admit(walk_ceiling(m5, &surface, span))?;
+        }
+    }
     let mut out = Vec::new();
     let mut spans_handed = Count::against(MAX_COMPARE_OPERAND_BLOCKS);
     let mut blocks_built = Count::against(MAX_COMPARE_OPERAND_BLOCKS);

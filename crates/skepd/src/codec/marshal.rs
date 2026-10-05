@@ -1070,6 +1070,7 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::TooManyBlocks => "too_many_blocks",
         RejectCode::TooManyPairs => "too_many_pairs",
         RejectCode::TooMuchCoverage => "too_much_coverage",
+        RejectCode::TooManyItems => "too_many_items",
         RejectCode::NotALink => "not_a_link",
         RejectCode::BadRegion => "bad_region",
         RejectCode::ImageTooLarge => "image_too_large",

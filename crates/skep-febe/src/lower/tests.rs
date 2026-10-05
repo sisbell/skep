@@ -395,6 +395,7 @@ fn flat_variants_lower_to_the_same_named_code() {
         RetrieveError::MalformedSpec { index: 0, fault: SpanFault::NotOrdinalLevel },
         RejectCode::MalformedSpan,
     );
+    same_name(RetrieveError::TooManyItems);
     same_name(ExtentError::DocNotRegistered);
     same_name(OriginError::DocNotRegistered);
     same_name(OriginError::NoSuchSubspace);

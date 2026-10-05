@@ -412,6 +412,10 @@ impl Lower for RetrieveError {
                 RejectCode::MalformedSpan,
                 Some(FaultSite { index: Some(index), fault: Some(fault), ..FaultSite::default() }),
             ),
+            // The delivery budget names the request's whole shape and no
+            // position in it, so it carries no site — `TooMuchCoverage`'s
+            // position exactly.
+            RetrieveError::TooManyItems => (RejectCode::TooManyItems, None),
         }
     }
 }

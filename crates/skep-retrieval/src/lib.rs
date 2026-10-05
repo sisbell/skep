@@ -70,16 +70,16 @@
 //!
 //! ## What M6 refuses for size, and what it does not
 //!
-//! Five of the seven operations cost what their answer costs, or what the
+//! Four of the seven operations cost what their answer costs, or what the
 //! documents they name cost, and M6 bounds neither: capping request size,
 //! rate and concurrency for a route carrying a read is M10's, as the request
-//! lifecycle's owner. Two of the five say so on their own cards, and they are
-//! different cases: the one operation whose cost OUTRUNS its answer —
-//! `|R↾d| log |R↾d|` paid in full to return two empty halves — is
-//! [`Query::show_deletions`], and the one whose answer is itself a PRODUCT of
-//! the request the operation may not narrow is [`Query::retrieve_v`].
+//! lifecycle's owner. One of the four says so on its own card, because its
+//! cost OUTRUNS its answer and the request names nothing that narrows it: a
+//! two-address [`Query::show_deletions`] pays a membership pass over each
+//! document's whole extent, which a few placing requests can make far larger
+//! than anything stored, to return two halves that may be empty.
 //!
-//! Two carry budgets of their own, each for a factor no upstream gate can
+//! Three carry budgets of their own, each for a factor no upstream gate can
 //! price. COMPARE's cost is SUPERLINEAR in its request — the join is `|P|·|Q|`
 //! over two block lists the caller sizes independently, so a byte cap on the
 //! request buys the square of what it bounds — and it carries an operand
@@ -89,16 +89,25 @@
 //! EXPANDS: a region set nests two wire caps whose product only a body cap
 //! bounds, and one span over a fragmented document resolves to many coverage
 //! spans from a single span on the wire — so it carries a coverage budget,
-//! [`MAX_FIND_COVERAGE_SPANS`]. The operand budget and the coverage budget are
-//! each counted twice, on the spans handed to M5 and on what they produce;
-//! [`MAX_COMPARE_OPERAND_BLOCKS`]'s card says why.
+//! [`MAX_FIND_COVERAGE_SPANS`]. RETRIEVEV's answer is sized by stored state
+//! the request does not see — a document's extent is virtual, so one spec may
+//! name more positions than the store holds values — and the delivery is
+//! built whole before any caller holds it, so it carries a delivery budget,
+//! [`MAX_DELIVERY_ITEMS`]. The operand budget and the coverage budget are each
+//! counted twice, on the spans handed to M5 and on what they produce;
+//! [`MAX_COMPARE_OPERAND_BLOCKS`]'s card says why. And all three operations
+//! hold the run-list walk their spans ask of M5 — up to a document's whole run
+//! list per span, whatever the span yields — to one walk budget of `2^24`
+//! steps, priced before the first span is walked.
 //!
-//! All three are published, so a caller sizes a request against the number
-//! rather than transcribing it, and all three are refusals rather than
-//! truncations, so every request either operation answers is answered
-//! completely. What no number here bounds is the WORLD's own size — `|R|`, a
-//! candidate's fragmentation, the provenance record behind a two-address
-//! SHOWDELETIONS — which stays with rate and concurrency, M10's.
+//! The four numbers are published, so a caller sizes a request against them
+//! rather than transcribing them; the walk budget is not — as M8's is not, no
+//! answer here reporting the run counts it prices — and its refusal renders
+//! it. All of them are refusals rather than truncations, so every request
+//! these three operations answer is answered completely. What no number here
+//! bounds is the WORLD's own size — `|R|`, a candidate's fragmentation, the
+//! provenance record and the extents behind a two-address SHOWDELETIONS —
+//! which stays with rate and concurrency, M10's.
 //!
 //! ## SHOWORIGIN's I-arity — de-scoped (ruling)
 //!
@@ -142,9 +151,10 @@
 // rather than through the re-exports below; `tests/it/tidy.rs` checks all of
 // it.
 
-// The three request budgets and their argument — COMPARE's operand and pair
-// budgets, FINDDOCSCONTAINING's coverage budget — and the `Count` that takes
-// every count against them.
+// The request budgets and their argument — COMPARE's operand and pair
+// budgets, FINDDOCSCONTAINING's coverage budget, RETRIEVEV's delivery budget,
+// and the walk budget all three price their spans against — and the `Count`
+// that takes every count against them.
 mod budget;
 // The typed rejections, one enum per operation, and the two fault
 // vocabularies they carry.
@@ -156,7 +166,9 @@ mod vspan;
 // `Query` and what its operations share; one file per operation beneath.
 mod query;
 
-pub use budget::{MAX_COMPARE_OPERAND_BLOCKS, MAX_COMPARE_PAIRS, MAX_FIND_COVERAGE_SPANS};
+pub use budget::{
+    MAX_COMPARE_OPERAND_BLOCKS, MAX_COMPARE_PAIRS, MAX_DELIVERY_ITEMS, MAX_FIND_COVERAGE_SPANS,
+};
 pub use error::{
     CompareError, DeletionsError, ExtentError, FindError, Operand, OriginError, RetrieveError,
     SpanFault,

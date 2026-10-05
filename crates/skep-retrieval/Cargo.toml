@@ -10,7 +10,8 @@ readme = "README.md"
 
 [dependencies]
 # Nat::zero()/one()/is_zero()/checked_sub() are trait fns the ordinal math
-# keeps in scope.
+# keeps in scope, and to_usize() the one door a width or a reach takes into
+# the budgets' machine counts.
 num-traits.workspace = true
 serde.workspace = true
 # M1 — origin projection (document_of), the subspace numerals
@@ -31,10 +32,11 @@ skep-namespace = { path = "../skep-namespace" }
 # exactly one operation and unspellable in the other six.
 skep-content = { path = "../skep-content" }
 # M5 — the workhorse: reading_surface, the one function that decides WHICH
-# arrangement a floating operation answers from (head-float); then resolve/
-# iter_resolve/point/counts/runs/arranges_any/docs_ever_containing/deletions,
-# the reads that answer for whatever address they are handed — iter_resolve
-# being the lazy form the operand and coverage budgets stop a walk with, and
+# arrangement a floating operation answers from (head-float); then
+# iter_resolve/point/counts/run counts/runs/arranges_any/docs_ever_containing/
+# deletions, the reads that answer for whatever address they are handed —
+# iter_resolve being the lazy form every resolving query pulls and its budgets
+# stop a walk with, the run counts what the walk budget prices a walk in, and
 # arranges_any the present-tense filter; Run, which answers for its own
 # positions; and VPos, the position a correspondence's feet carry. Both halves
 # of the ordinal-vspan shape come from here too — ordinal_vspan builds the

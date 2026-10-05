@@ -20,7 +20,8 @@ use crate::types::Deletions;
 ///
 /// `CURRENT` is a set and this is an enumeration WITH MULTIPLICITY: an
 /// address placed at two V-positions of `d` by intra-document transclusion is
-/// yielded twice, so callers dedup.
+/// yielded twice, so the caller dedups as the stream arrives
+/// (`sorted_addr_set`).
 ///
 /// LAZY, and that is the point rather than a style: `d`'s arrangement binds
 /// `n_C(d)` content positions — one per value placed, however many bytes it
@@ -73,28 +74,42 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// The operation's domain is what confines it, not this implementation's
     /// choice of walk.
     ///
-    /// TIME IS UNBOUNDED AND M6 DOES NOT BOUND IT — and unlike RETRIEVEV's,
-    /// it is not bounded by the answer either. No span narrows the request, so
-    /// both documents are enumerated WHOLE: the work is
-    /// `|R↾d_a| log |R↾d_a| + |R↾d_b| log |R↾d_b|`, the two `M5State::deletions`
-    /// calls that build the halves (each rebuilds and SORTS the document's
-    /// whole provenance record — M5 states this cost where it is paid), plus
-    /// `n_C(d_a)·|deletions(d_b)| + n_C(d_b)·|deletions(d_a)|` for the
-    /// membership pass, all paid in full even when the two share nothing and
-    /// both halves come back empty. THE FIRST TERM USUALLY DOMINATES, and it
-    /// is the one a document's current size does not reveal: R never shrinks,
-    /// so a document that has deleted far more than it holds carries a
-    /// record far larger than its arrangement. M6 owns no admission control
-    /// and no refusal for any of it: capping request rate and concurrency for
-    /// a route carrying this read is M10's, as the request lifecycle's owner —
-    /// and a request-size cap is no help here, this request being two
-    /// addresses whatever the documents behind them hold.
+    /// TIME IS UNBOUNDED AND M6 DOES NOT BOUND IT — and it is not bounded by
+    /// the answer either. No span narrows the request, so both documents are
+    /// enumerated WHOLE, and two terms are paid in full even when the two
+    /// share nothing and both halves come back empty:
     ///
-    /// MEMORY IS THE ANSWER'S. The enumeration streams, so what is held live
-    /// is the deduped halves and one address at a time, not a materialized
-    /// copy of either document's position list. The worst case is therefore
-    /// the honest one: two documents where each has deleted what the other
-    /// still holds, whose answer genuinely is that many addresses.
+    /// * `|R↾d_a| log |R↾d_a| + |R↾d_b| log |R↾d_b|` for the two
+    ///   `M5State::deletions` calls that build the covers — each rebuilds and
+    ///   SORTS the document's whole provenance record, M5 stating the cost
+    ///   where it is paid; R never shrinks, so a document that has deleted far
+    ///   more than it holds carries a record far larger than its arrangement.
+    /// * `n_C(d_b)·|deletions(d_a)| + n_C(d_a)·|deletions(d_b)|` for the
+    ///   membership pass — one `denotes` test, a linear scan of the cover, per
+    ///   enumerated position. THIS TERM DOMINATES, and it needs nothing
+    ///   stored: `n_C` is VIRTUAL, M5 capping the runs a placing request stores
+    ///   and no position count, so one COPY of 4096 specs places a run 4096
+    ///   times and a copy of a document onto its own tail doubles its extent.
+    ///   A few placing requests set it, not anything written.
+    ///
+    /// M6 owns no admission control and no refusal for any of it, and has no
+    /// number to refuse at: the request is two addresses, so no request-size
+    /// cap sees it, and a budget on the pass would deny the operation on any
+    /// ordinary large document. Rate and concurrency bound how many workers
+    /// such requests hold — M10's, as the request lifecycle's owner — and not
+    /// how long one request holds one. What bounds that is computing each half
+    /// from intervals — one document's deleted cover intersected, level class
+    /// by level class, with the other's current image — which needs the
+    /// level-class discipline M5 owns and has not published as a read.
+    ///
+    /// MEMORY IS THE ANSWER'S. The enumeration streams and each half is built
+    /// as the set it denotes — every address inserted as it arrives and a
+    /// duplicate dropped on arrival — so what is held live is the deduped
+    /// halves and the address in hand, never a materialized copy of either
+    /// document's position list, however many times its extent repeats an
+    /// address. The worst case is therefore the honest one: two documents
+    /// where each has deleted what the other still holds, whose answer
+    /// genuinely is that many addresses.
     pub fn show_deletions(
         &self,
         d_a: &Address,

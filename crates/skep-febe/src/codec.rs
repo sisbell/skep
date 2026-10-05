@@ -77,16 +77,16 @@ pub trait Codec {
     /// therefore `Σᵢ |specᵢ's span ∩ the arranged extent|`, set by stored
     /// state a prior request grew geometrically rather than by this request's
     /// size — so a cap on `specs` bounds the MULTIPLIER and leaves the
-    /// per-spec term, and a SINGLE spec naming one document is unbounded.
-    /// Nor does a response-size cap at marshal close it: M6 materializes the
-    /// whole delivery before this trait sees a `Response`, so such a cap
-    /// refuses one allocation too late. M6 declines the cap on semantic
-    /// grounds — its exactness, per-spec order and no-dedup clauses are what
-    /// ASN-0115 specifies — and names this layer: `Query::retrieve_v`'s COST
-    /// paragraph ends "the only cap that closes it is a spec-count or
-    /// response-size cap on the route, which is M10's as the request
-    /// lifecycle's owner". What closes it is a cap on that sum, taken here,
-    /// before the first address is expanded.
+    /// per-spec term, and a SINGLE spec naming one document names a delivery
+    /// no field of the frame prices. M6 holds it: the delivery is refused past
+    /// `skep_retrieval::MAX_DELIVERY_ITEMS` items as it is produced, before
+    /// the first address past the budget is expanded, and the spec-set's
+    /// run-list walk is priced ahead of it (`RejectCode::TooManyItems`). What
+    /// that leaves this layer is what the items RENDER to — each content
+    /// item's bytes, which one large value placed at many positions multiplies
+    /// — and the delivery it renders arrives bounded and whole, so a
+    /// response-size cap here can sum its items' lengths before it builds a
+    /// byte of the rendering.
     ///
     /// The FTT descriptor family ([`Op::FindLinksFtt`] and its two siblings)
     /// has NO FIELD TO CAP. A four-set of `Any` slots constrains nothing M7

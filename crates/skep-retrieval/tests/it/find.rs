@@ -1,13 +1,16 @@
 //! §E FINDDOCSCONTAINING (ASN-0124): present-tense containers, at chosen
 //! requests and as a law over every window; the union of a region's spans;
-//! the container filter and its consult; the gate; and the coverage budget.
+//! the container filter and its consult; the gate; and the coverage and walk
+//! budgets.
 
 use std::cell::RefCell;
 
 use skep_address::{Address, Span};
 use skep_arrangement::{seat_link, HasM5, VSpec};
 use skep_namespace::PrincipalId;
-use skep_retrieval::{FindError, Query, RegionSpec, SpanFault, MAX_FIND_COVERAGE_SPANS};
+use skep_retrieval::{
+    FindError, Query, RegionSpec, SpanFault, MAX_COMPARE_OPERAND_BLOCKS, MAX_FIND_COVERAGE_SPANS,
+};
 
 use crate::common::*;
 
@@ -425,6 +428,38 @@ fn find_docs_containing_refuses_a_request_whose_spans_outnumber_the_budget_thoug
             Vec::<Address>::new()
         );
     }
+}
+
+#[test]
+fn find_docs_containing_refuses_a_request_whose_spans_would_walk_past_the_walk_budget() {
+    // The walk budget: M5 reaches a span by walking the run list from its
+    // first run, so a span opening past the end of a fragmented document walks
+    // every run and covers nothing — and with no coverage the candidate scan
+    // is free, so the walk is the request's whole bill. The walk budget is the
+    // operand budget's square, so over doc2's 8192 runs one span more than
+    // `MAX_COMPARE_OPERAND_BLOCKS² / 8192` such spans is past it, and the
+    // request is refused before any span is walked.
+    let k = mem_kernel();
+    fragmented_doc2(&k); // doc2 = 8192 one-position runs, every one ca1
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let runs = s.world().m5().content_run_count(&doc2());
+    assert_eq!(runs, 8192, "the premise: doc2 is 8192 runs");
+    let past_budget = MAX_COMPARE_OPERAND_BLOCKS * MAX_COMPARE_OPERAND_BLOCKS / runs + 1;
+    assert_eq!(
+        err_of(
+            q.find_docs_containing(&[region_spec(doc2(), vec![vspan(1, 8193, 1); past_budget])])
+        ),
+        FindError::TooMuchCoverage
+    );
+    // The control: a span at doc2's first position walks two runs and is
+    // answered — kept to a few, since the candidate scan behind it runs the
+    // coverage against all of R, which holds a span for every run this
+    // fixture placed.
+    assert_eq!(
+        ok_of(q.find_docs_containing(&[region_spec(doc2(), vec![vspan(1, 1, 1); 16])])),
+        vec![doc1(), doc2()]
+    );
 }
 
 #[test]

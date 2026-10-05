@@ -630,26 +630,30 @@ Rules that hold across its files:
   `skep-arrangement`'s `reading_surface` states. RETRIEVEV, the two extent
   queries, SHOWORIGIN and COMPARE then read that function's answer;
   SHOWDELETIONS and FINDDOCSCONTAINING read the address named.
-- **The budgets are `budget.rs`'s, and they refuse.** COMPARE's two and
-  FINDDOCSCONTAINING's one are counted by `query/compare.rs` and
-  `query/find.rs` through `budget.rs`'s `Count` — which admits exactly a
+- **The budgets are `budget.rs`'s, and they refuse.** COMPARE's two,
+  FINDDOCSCONTAINING's one and RETRIEVEV's delivery budget — and the walk
+  budget all three price their spans' run-list walks against, before the
+  first walk — are counted by `query/compare.rs`, `query/find.rs` and
+  `query/retrieve.rs` through `budget.rs`'s `Count`, which admits exactly a
   budget and refuses a batch that would exceed it before it lands, so no
-  producer spells that boundary itself — and rendered by `error.rs`; a
+  producer spells that boundary itself; `error.rs` renders them, and a
   request past one gets its rejection and no partial answer.
   `tests/it/tidy.rs` refuses any other file's code line that names a budget
-  beside a comparison — the spelling a hand-written guard takes. Both
-  producers pull `skep-arrangement`'s lazy `iter_resolve` and count each run
-  as it arrives, so a request past its budget stops there rather than
-  materializing a document's every run, and FINDDOCSCONTAINING's filter asks
-  `arranges_any` rather than building a candidate's footprint; `tidy`
-  refuses either file the eager twins — `resolve`, `image`, `project` —
-  which answer the same.
+  beside a comparison — the spelling a hand-written guard takes. Every
+  query that resolves a span pulls `skep-arrangement`'s lazy
+  `iter_resolve` — the three producers counting each run as it arrives, so
+  a request past its budget stops there rather than materializing a
+  document's every run, and SHOWORIGIN keeping only each run's origin — and
+  FINDDOCSCONTAINING's filter asks `arranges_any` rather than building a
+  candidate's footprint; `tidy` refuses any file the eager twins —
+  `resolve`, `image`, `project` — which answer the same.
 - **The rejections are part of the wire.** `skep-febe`'s `lower.rs` maps
   each variant of the six error enums to a `RejectCode` with no wildcard
   arm, so a new variant fails to compile there. `docs/wire.md` names each
-  code and restates the three budgets' values and what each counts; a
-  change to a variant, or to a number or a count in `budget.rs`, changes
-  that document in the same commit. Nothing checks the document.
+  code and restates the four budgets' values, the walk budget's, and what
+  each counts; a change to a variant, or to a number or a count in
+  `budget.rs`, changes that document in the same commit. Nothing checks the
+  document.
 
 Its integration suite is one binary, `tests/it/`: one file per query
 surface over the shared `common` world — `retrieve`, `extent`, `origin`,

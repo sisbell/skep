@@ -22,7 +22,7 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   the caller's predicate cannot read.
 
 Read-only by construction: no transaction, no lock, no write path —
-every query pins one immutable snapshot. `compare` and
+every query pins one immutable snapshot. `retrieve_v`, `compare` and
 `find_docs_containing` refuse a request past their published budgets
 rather than answer part of it.
 

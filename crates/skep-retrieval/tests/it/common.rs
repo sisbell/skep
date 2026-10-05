@@ -322,6 +322,24 @@ pub fn three_runs(k: &Kernel<World>) -> Vstream<'_, World> {
     vs
 }
 
+/// doc1 = `[a, b, c]`; doc2 = 8192 one-position runs, every one holding ca1 —
+/// two COPY commits of 4096 specs, the wire's per-array cap. They never
+/// coalesce (each reaches ca2, and the next opens at ca1), so doc2 is the
+/// fragmented surface a walk over its runs is priced against, built from one
+/// stored value.
+pub fn fragmented_doc2(k: &Kernel<World>) -> Vstream<'_, World> {
+    let vs = insert3(k);
+    let ca1 = VSpec {
+        source: doc1(),
+        span: vspan(1, 1, 1),
+    };
+    for at in [1, 4097] {
+        vs.copy(P1, &doc2(), vp(1, at), &vec![ca1.clone(); 4096])
+            .expect("copy commits");
+    }
+    vs
+}
+
 /// doc1 = `[a, b, c]`; doc2 = `[ca1][ca1][own "a"]` — ca1 placed twice, then
 /// doc2's own content whose BYTES equal doc1's ca1 at a different address.
 /// The fan-out and value-blindness fixture.

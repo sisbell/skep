@@ -1428,7 +1428,7 @@ permanent — no retry shrinks a slot).
 
 Content/provenance reads: `no_such_subspace`, `empty_subspace`,
 `depth_incompatible`, `range_not_present`, `malformed_span`, and M6's
-three budgets — `too_many_blocks` (a compare operand passes
+four budget refusals — `too_many_blocks` (a compare operand passes
 `MAX_COMPARE_OPERAND_BLOCKS` = 4096 on either of its two counts: more
 spans handed to the arrangement, one resolution walk apiece whatever it
 yields, or more blocks resolved; refused as the operand resolves, ρ₁
@@ -1437,7 +1437,19 @@ exceed `MAX_COMPARE_PAIRS` = 65536 correspondences), `too_much_coverage`
 (the find family's request passes `MAX_FIND_COVERAGE_SPANS` = 4096 on
 either of its two counts: more region spans handed to the arrangement or
 more coverage spans produced; refused as the request resolves, before
-the candidate scan runs); all permanent — no retry shrinks the request.
+the candidate scan runs), `too_many_items` (a retrieve-v delivery would
+exceed `MAX_DELIVERY_ITEMS` = 131072 items — one per delivered position,
+one per withheld run; refused as the delivery is produced, a delivered
+run's positions admitted as one batch, so a single spec naming a document
+whose extent transclusion has multiplied is refused rather than built).
+Each of the three operations also answers its own code — the compare
+operand's `too_many_blocks`, the find request's `too_much_coverage`, the
+retrieve-v spec-set's `too_many_items` — when the run-list walk its spans
+ask of the arrangement would exceed `MAX_COMPARE_OPERAND_BLOCKS`² =
+16777216 steps: each span is priced, before the first is walked, at the
+most its walk can take — up to the document's whole run count, for a
+span opening past the arranged end, whatever it yields. All permanent —
+no retry shrinks the request.
 
 Link-discovery reads: `not_a_link`, `bad_region`, `image_too_large` (a
 read past M8's run budget `MAX_IMAGE_RUNS` = 4096, or past the product
@@ -3262,7 +3274,9 @@ the two links' own addresses.
 ### Content & provenance reads
 
 **`retrieve_v`** — deliver the content of the given (doc, span) specs, in
-submitted order. → `delivery`.
+submitted order. → `delivery`. A delivery past `MAX_DELIVERY_ITEMS` =
+131072 items is refused whole, never truncated (`too_many_items`,
+§Rejection codes).
 
 <!-- wire: request retrieve_v -->
 ```json

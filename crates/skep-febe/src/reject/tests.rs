@@ -248,6 +248,7 @@ fn documented_disposition(c: RejectCode) -> Disposition {
         | RejectCode::TooManyBlocks
         | RejectCode::TooManyPairs
         | RejectCode::TooMuchCoverage
+        | RejectCode::TooManyItems
         | RejectCode::NotALink
         | RejectCode::BadRegion
         | RejectCode::ImageTooLarge
@@ -258,7 +259,7 @@ fn documented_disposition(c: RejectCode) -> Disposition {
 /// Every code, in declaration order — the domain the policy is total
 /// over. A newly added code lands here and in
 /// [`documented_disposition`].
-const ALL_CODES: [RejectCode; 78] = [
+const ALL_CODES: [RejectCode; 79] = [
     RejectCode::Unauthenticated,
     RejectCode::Malformed,
     RejectCode::Durability,
@@ -333,6 +334,7 @@ const ALL_CODES: [RejectCode; 78] = [
     RejectCode::TooManyBlocks,
     RejectCode::TooManyPairs,
     RejectCode::TooMuchCoverage,
+    RejectCode::TooManyItems,
     RejectCode::NotALink,
     RejectCode::BadRegion,
     RejectCode::ImageTooLarge,

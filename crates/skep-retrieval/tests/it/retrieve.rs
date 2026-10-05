@@ -1,15 +1,18 @@
 //! §A RETRIEVEV (ASN-0115): exact per-position delivery in submitted order,
 //! each stored value delivered itself and never a copy of its bytes, R6's
-//! silent degradations, the whole-request gate, and the masked form's
-//! per-origin consult, asked once per run.
+//! silent degradations, the whole-request gate, the delivery and walk
+//! budgets, and the masked form's per-origin consult, asked once per run.
 
 use std::cell::RefCell;
 
 use skep_address::{Address, Span};
-use skep_arrangement::{seat_link, Deposit};
+use skep_arrangement::{seat_link, Deposit, HasM5, VSpec, Vstream};
 use skep_content::HasContent;
 use skep_namespace::PrincipalId;
-use skep_retrieval::{Delivery, DeliveryItem, Query, RetrieveError, SpanFault};
+use skep_retrieval::{
+    Delivery, DeliveryItem, Query, RetrieveError, SpanFault, MAX_COMPARE_OPERAND_BLOCKS,
+    MAX_DELIVERY_ITEMS,
+};
 
 use crate::common::*;
 
@@ -455,4 +458,79 @@ fn retrieve_v_rejects_the_whole_request_on_any_malformed_spec() {
             fault: SpanFault::StartTooShallow
         }
     ));
+}
+
+#[test]
+fn retrieve_v_refuses_a_delivery_past_its_item_budget_whole() {
+    // `MAX_DELIVERY_ITEMS`' card: a document's extent is VIRTUAL — one COPY
+    // of 4096 specs places a 64-position run 4096 times, 2^18 positions from
+    // 64 stored values — so ONE spec names a delivery the request's size says
+    // nothing about. Exactly the budget is delivered, completely; one
+    // position more is refused whole, never truncated (R3).
+    let k = mem_kernel();
+    let vs = Vstream::new(&k);
+    vs.insert(
+        P1,
+        &doc1(),
+        vp(1, 1),
+        vec![val(b"x"); 64],
+        Deposit::Undeclared,
+    )
+    .expect("insert commits");
+    let whole = VSpec {
+        source: doc1(),
+        span: vspan(1, 1, 64),
+    };
+    vs.copy(P1, &doc2(), vp(1, 1), &vec![whole; 4096])
+        .expect("copy commits");
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    assert_eq!(
+        s.world().m5().content_count(&doc2()),
+        n(1 << 18),
+        "the premise: 2^18 positions, past the budget, from 64 stored values"
+    );
+    let budget = u32::try_from(MAX_DELIVERY_ITEMS).expect("the budget fits a u32");
+    assert_eq!(
+        ok_of(q.retrieve_v(&[spec(doc2(), vspan(1, 1, budget))])).len(),
+        MAX_DELIVERY_ITEMS
+    );
+    let e = err_of(q.retrieve_v(&[spec(doc2(), vspan(1, 1, budget + 1))]));
+    assert_eq!(e, RetrieveError::TooManyItems);
+    // The refusal names its budget, so a client narrows against the number.
+    assert!(e.to_string().contains(&MAX_DELIVERY_ITEMS.to_string()));
+    // The budget counts ITEMS, and a withheld run is one item however many
+    // positions it spans: the whole document, every run masked, is 4096
+    // items and is answered.
+    assert_eq!(
+        ok_of(q.retrieve_v_masked(&[spec(doc2(), vspan(1, 1, 1 << 18))], &|d| *d != doc1())).len(),
+        4096
+    );
+}
+
+#[test]
+fn retrieve_v_refuses_a_spec_set_whose_spans_would_walk_past_the_walk_budget() {
+    // The walk budget: M5 reaches a span by walking the run list from its
+    // first run, so a spec opening past the end of a fragmented document walks
+    // every run and delivers nothing — a cost the item count never sees. The
+    // walk budget is the operand budget's square, so over doc2's 8192 runs one
+    // spec more than `MAX_COMPARE_OPERAND_BLOCKS² / 8192` such specs is past
+    // it, and the spec-set is refused before any spec is walked.
+    let k = mem_kernel();
+    fragmented_doc2(&k); // doc2 = 8192 one-position runs
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let runs = s.world().m5().content_run_count(&doc2());
+    assert_eq!(runs, 8192, "the premise: doc2 is 8192 runs");
+    let past_budget = MAX_COMPARE_OPERAND_BLOCKS * MAX_COMPARE_OPERAND_BLOCKS / runs + 1;
+    assert_eq!(
+        err_of(q.retrieve_v(&vec![spec(doc2(), vspan(1, 8193, 1)); past_budget])),
+        RetrieveError::TooManyItems
+    );
+    // The control: a spec at doc2's first position walks two runs, so the
+    // wire's whole 4096 are priced well inside the budget and delivered.
+    assert_eq!(
+        ok_of(q.retrieve_v(&vec![spec(doc2(), vspan(1, 1, 1)); 4096])).len(),
+        4096
+    );
 }

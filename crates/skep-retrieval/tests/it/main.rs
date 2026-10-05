@@ -7,10 +7,10 @@
 //! shares; `tidy` checks the module map — every file declared, each `src/`
 //! declaration with its line, the order, and each item named by its home
 //! module — that one file alone names the content store, that one alone
-//! compares a count to a budget, and that the two budgeted files ask M5 only
-//! its lazy reads; each other module holds the claims about one operation, or
-//! about one rule that crosses the operations, and the module names are the
-//! table of contents.
+//! compares a count to a budget, and that no query asks M5 an eager read;
+//! each other module holds the claims about one operation, or about one rule
+//! that crosses the operations, and the module names are the table of
+//! contents.
 //! Nothing but module declarations belongs here.
 
 mod common;

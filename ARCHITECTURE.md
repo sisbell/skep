@@ -382,9 +382,10 @@ Its integration suite is one binary, `tests/it/`: `rows` (the table from
 outside the crate, and `commons_type`'s panics), `check` (the three arms on
 mutated lists, each of the twelve rows' absence among them) and `body` (the
 vector set at this parser, the examples' one canonical form, the escape
-table at every Unicode scalar value, and the admission sentence and the
+table at every Unicode scalar value, the admission sentence and the
 parse's totality as laws over every one-byte mutant of every admitted
-vector).
+vector, and every law of the parse at once on seeded hostile bodies
+several edits from the vectors, met at every refusal the parse answers).
 
 ## The resolver, `skep-resolve`
 

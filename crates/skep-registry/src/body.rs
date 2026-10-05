@@ -66,6 +66,23 @@ use crate::rows::Kind;
 /// origins stays under this with room. The cap counts every byte, `sig`
 /// included: a body of exactly 16 KiB is a record where it is canonical,
 /// and one byte more is no record of either kind.
+///
+/// WHAT IT BOUNDS UNDER ATTACK, measured on a release build (Apple M1 Max):
+/// the tree `serde_json` builds before the first schema check — at worst
+/// some 125 times the body, a chain of one-member objects holding a
+/// 632-byte B-tree leaf per five bytes, 2 MB at this cap — and the decimal
+/// conversions of an address member, superlinear in one component's
+/// digits: [`parse`] reads a component once and renders it twice, and a
+/// verifier's [`Record::canonical_sigless`] renders it a third time, each
+/// doubling of the digits multiplying a read by four (num-bigint's decimal
+/// read is QUADRATIC) and a rendering by under three. One component filling
+/// this cap, 16,352 digits, costs [`parse`] 1.1 ms and the verifier 0.45 ms
+/// more, where a `sig` filling it costs [`parse`] 0.04 ms. A reader that
+/// parses under a lock holds it that long per body — the daemon does, under
+/// its serialization lock at a declared `insert` (skepd's
+/// `declared_record_atom`), before the write's `attest` is asked for — so
+/// the cap prices that lock: at the credential records' 128 KiB the same
+/// three conversions cost 34 ms, some thirty times this cap's.
 pub const MAX_REGISTRY_RECORD_BYTES: usize = 16 * 1024;
 
 /// The two kinds whose bodies this crate parses — the kind the caller names
@@ -572,13 +589,19 @@ mod tests {
 
     /// AN ADDRESS MEMBER IS THE ADDRESS IT SPELLS, at any size the cap
     /// admits (wire.md §Value encodings: a component is one decimal
-    /// natural): a component past a machine word, and one of 4,097 digits —
+    /// natural): a component past a machine word, one of 4,097 digits —
     /// past the board's wire cap on a component, which a record's own cap
-    /// bounds instead — each reads as the address whose rendering is the
-    /// member, and the body re-encodes byte for byte.
+    /// bounds instead — and one of 16,352, the body exactly the cap, which
+    /// [`MAX_REGISTRY_RECORD_BYTES`] prices: each reads as the address whose
+    /// rendering is the member, and the body re-encodes byte for byte.
     #[test]
     fn an_address_member_is_the_address_it_spells_at_any_size() {
-        for prefix in ["1.18446744073709551616".to_owned(), format!("1.{}", "9".repeat(4097))] {
+        let filling = format!("1.{}", "9".repeat(16_352));
+        let filled = format!(r#"{{"type":"binding","prefix":"{filling}"}}"#);
+        assert_eq!(filled.len(), MAX_REGISTRY_RECORD_BYTES, "the priced body fills the cap");
+        let prefixes =
+            ["1.18446744073709551616".to_owned(), format!("1.{}", "9".repeat(4097)), filling];
+        for prefix in prefixes {
             let text = format!(r#"{{"type":"binding","prefix":"{prefix}"}}"#);
             let record = parse(BodyKind::Binding, text.as_bytes()).expect("canonical");
             let Body::Binding(b) = &record.body else { panic!("a binding") };

@@ -42,10 +42,15 @@ cargo nextest run -p skep-content --release --profile full || exit $?
 
 # skep-blobs' library without `test-hooks` — every test build turns it on
 # (the crate's self dev-dependency, and skepd's), so this is the build that
-# shows the store compiles without its test seam (`src/store/hooks.rs`): no
-# hold, no injected failure, no `install`, `written`, `asides_queued` or
-# `handles_open`.
+# shows the store compiles without its test seam (`src/store/hooks.rs`).
 cargo check -p skep-blobs --lib || exit $?
+
+# skep-blobs' docs as they ship, without `test-hooks`: the intra-doc check
+# below builds with `--all-features`, where a shipped doc's link to a
+# test-only item resolves; here it does not, so the crate names one by code
+# span, never by link.
+RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
+    cargo doc -p skep-blobs --lib --no-deps --document-private-items || exit $?
 
 # skep-resolve's library without the signer — every test build turns
 # skep-signature's `sign` on (the crate's own dev-dependency, and in the

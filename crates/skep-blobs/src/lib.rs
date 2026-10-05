@@ -8,11 +8,12 @@
 //! `<root>/leases.log`. The daemon hands this crate `blobs/` inside the
 //! board's data directory and nothing else of itself: the crate knows a
 //! PRINCIPAL only as the opaque string its caller spells it as, compared
-//! exactly and never read; it holds NO lock — it asks its caller for two
-//! exclusions: no second store over its root while one is open
-//! ([`Store::open`]), and no [`Store::unlink_blob`] or
-//! [`Store::remove_aside`] while a [`Store::finish`] runs (see there) — and
-//! reads NO limits record (it answers pending bytes and the volume's free
+//! exactly and never read; it takes NO lock of its caller's — its own keep
+//! its records whole and run its finishes one at a time ([`Store`]) — and
+//! asks its caller for two exclusions: no second store over its root while
+//! one is open ([`Store::open`]), and no [`Store::unlink_blob`] or
+//! [`Store::remove_aside`] while a [`Store::finish`] runs (see there); and
+//! it reads NO limits record (it answers pending bytes and the volume's free
 //! space; what bounds them is policy, the daemon's). What it promises is the
 //! ORDER of its own acts and what each leaves behind on a crash:
 //!
@@ -89,15 +90,15 @@ mod blobs;
 // its append, undone where it fails, and its compaction by the install
 // order.
 mod jsonl;
-// The upload records, `uploads.log`: the identifier and the records' log,
-// which answers by the asking principal.
+// The upload records, `uploads.log`: the records' log, which answers by the
+// asking principal; beneath it, the identifier (`uploads/id.rs`).
 mod uploads;
 // The lease log, `leases.log`: the leases, their three states, the horizon.
 mod lease;
-// The partials, `.upload-<identifier>`: their name, the handle a request
-// opens on one (`Handle`, the bytes written and their hash, kept true
-// across a failed write), and the walk at open that reconciles them with
-// the records.
+// The partials, `.upload-<identifier>`: their name, and the walk at open
+// that reconciles them with the records; beneath them, the handle a request
+// opens on one (`partials/handle.rs`: `Handle`, the bytes written and their
+// hash, kept true across a failed write).
 mod partials;
 // `Store`, the four opened as one, and the order of its acts: the finish
 // and its steps, the resume and the durable point, the pruner's acts, the

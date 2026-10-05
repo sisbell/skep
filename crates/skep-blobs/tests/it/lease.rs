@@ -2,8 +2,9 @@
 //! 1, "EACH KEY's CURRENT RECORD IS ITS LATEST, AND OPEN COMPACTS BOTH
 //! STORES"): the three states and the horizon, read off the record alone,
 //! a principal's live leases in hex order, the latest-wins re-PUT, the
-//! compaction at open, the pending bytes, the torn tail, and a line naming
-//! a malformed designation or hex read as no lease. "A LIVE LEASE
+//! compaction at open, the pending bytes, the pruner's read of whether any
+//! principal holds a file live, the torn tail, and a line naming a
+//! malformed designation or hex read as no lease. "A LIVE LEASE
 //! OVER A FILE THAT IS NOT THERE READS AS LAPSED" is the daemon's rule,
 //! built on this store's `lease_state` and `blob_size`; the store's lease
 //! state answers the record and nothing of the file.

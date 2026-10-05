@@ -44,10 +44,10 @@ above it.
   a present hash, and the lease's honest-null answer. It depends on no
   other skep crate, knows a principal only as an opaque string, holds no
   lock the daemon's write path takes, and reads no limits record. One
-  feature, default off: `test-hooks` compiles in the test seam — the hold
-  and the injected failure at a step of the finish, and `install`,
-  `written`, `asides_queued` and `handles_open`. `scripts/gate-full.sh`
-  checks the library without it. Its modules and rules: §The blob store.
+  feature, default off: `test-hooks` compiles in the test seam,
+  `store/hooks.rs` — a hold or an injected failure at a step of the
+  finish, and the methods only tests call. `scripts/gate-full.sh` builds
+  the library and its docs without it. Its modules and rules: §The blob store.
 
 **The stores** — each owns one slice of the world and depends only on the
 foundation and on the stores above it.
@@ -188,153 +188,56 @@ board's data directory — holding the four media stores the media record
 names: the files, `<root>/<designation>/<hex>`; the partials,
 `<root>/<designation>/.upload-<identifier>`; the upload records,
 `<root>/uploads.log`; and the lease log, `<root>/leases.log`. Its modules
-are declared in `src/lib.rs` in dependency order, a line each: `error.rs`
-the refusals; `blobs.rs` the files — where one lives, the designation's
-and the hex's spellings, the aside name, the listings of the designation
-directories and open's sweep of the asides, the directory fsync and the
-free-space read; `jsonl.rs` the JSON-lines log both record logs are
-(`Log`, which owns the file, the length and count of its whole lines,
-and its stop: the tail check at open, the append — an append that fails
-cut back off the file — and the compaction, one that fails past its
-rename stopping the log until one completes); `uploads.rs` the
-identifier and the records' log, which answers by the asking principal
-and holds every record's offset within its length; `lease.rs`
-the leases' log; `partials.rs` the partial files, the handle a request
-opens on one (`Handle`, whose fields are its own and whose hash holds
-across a failed write or sync) and the reconciliation at open; `store.rs`
-the `Store`, the four opened as one, with the finish's order and its
-steps (`Step`), and beneath it `store/hooks.rs`, the test seam.
+are declared in `src/lib.rs` in dependency order, each with a line saying
+what it holds, and the crate doc there states the store's guarantees, each
+linked to the item that keeps it. `Store` (`store.rs`) is the four opened
+as one; beneath it, `store/hooks.rs` is the test seam.
 
 Rules that hold across its files:
 
 - **The PUT's order.** `Store::finish` is the one path from a partial to a
-  file: the partial fsynced; where the name already holds a file, that
-  file hard-linked to an aside name (`.retired-<hex>-<n>`, so the rename
-  frees no blocks); the partial renamed onto `<designation>/<hex>`
-  (REPLACE where the name exists, never a no-op), the designation
-  directory fsynced, the root fsynced where no root fsync since the open
-  has made the directory durable — whatever made it, a creation that
-  failed past its mkdir included — THEN the lease appended and synced,
-  THEN the record retired,
-  THEN the answer — the aside queued for the deferred unlink only as the
-  finish answers, and unlinked AFTER the answer (`Store::unlink_asides`,
-  the deferred step the daemon's transport runs once the reply is
-  written, on whichever worker served it). Nothing names a file before it
-  is durable, nothing ever names an aside, and a crash leaves at worst a
-  file with no lease, a record open's reconciliation retires, or an aside
-  open removes.
-- **The pruner's reads are one act each.** The designation directories,
-  the files at hex names, the asides, whether any principal holds a live
-  lease on a file, the expired uploads and their removal, the unlink of one
-  file — each a method of the store doing one thing, so the daemon's pass
-  holds its own lock around exactly one.
-- **Two exclusions are the caller's.** No second `Store` open over its
-  root while one is — its open would cut back, remove and rewrite under a
-  store that serves — which the daemon keeps by opening the store only
-  after its kernel has taken the exclusive lock on the data directory
-  (`Daemon::open`'s precondition), so a second daemon fails there; and no
-  `unlink_blob` or `remove_aside` while a `finish` runs, which the daemon
-  keeps with its credential lock, the finish under the read arm and each
-  pruner act under the write arm. The store sees no lock of its caller's
-  and checks neither.
-- **A caller's bug is no refusal.** An `append` with no handle open and a
-  `finish` short of the declared length PANIC, naming the obligation they
-  break; `BlobError` carries only answers a caller acts on. The daemon
-  appends only between its own resume and the act that ends the request,
-  and finishes only where the bytes written reach the length, so it has
-  no arm for either.
-- **A byte is received once it is durable.** The partial is fsynced at a
-  grain and at every request's end (`Store::settle`), and the record's
-  offset and expiry are written after each sync, the expiry re-fixed from
-  the interval the record took at the upload's creation, so a later
-  limits record never reaches a standing upload; a resume continues from
-  the record's offset, the partial cut back to it where longer. A handle
-  lives for one request: every resume opens the partial afresh, and the
-  settle, finish or end that closes the request closes the handle — a
-  request cut short owes a `close_handle` — so no file stays open for an
-  upload no request is streaming, nor past a finish whose rename made the
-  partial's file the hash's.
-- **One answer per principal.** An identifier the asking principal's
-  records do not name is `NoUpload` whoever minted it; a hash the
-  principal holds no lease on is `LeaseState::None` whatever the
-  directory holds; a finish answers one shape whether or not the file was
-  already here. The principal check is `UploadRecords`' own; its one
-  lookup by identifier alone serves the pruner's expiry.
-- **Every name passes one check.** A designation or a hex becomes a path
-  only past its spelling's check (`blobs.rs`): a caller's at every entry
-  point of `Store`, where a malformed one is answered as absent or
-  refused; a log's at open, where a record or lease line naming a
-  malformed one reads as a lost line does. So no name — handed in, or read
-  back off a log restored from elsewhere — names a path out of the root.
-- **Pending bytes are the unplaced deposits and the bytes received.**
-  `Store::pending_bytes` and `Store::pending_total` count a live lease
-  only where the caller's `unplaced` answers that no cell of its
-  principal's names the hash — which the store, reading no cell, cannot
-  know — so a placed file is counted once, in the base, never again in
-  the pending bytes.
-- **A torn line is only ever a log's tail.** An append that fails is cut
-  back off its log, and a log whose cut fails too takes no further
-  append, so open's tail check — which cuts everything from the first
-  torn line on — never cuts a whole line; nor does a log whose
-  compaction failed past its rename, whose open file is the one the
-  rewrite replaced, until a compaction completes.
-- **Open reconciles and compacts.** Both logs are tail-checked and
-  rewritten to their current records, a record line whose offset passes
-  its length read as no record; the partials and the records are held to
-  each other both ways, a partial that cannot be read failing the open
-  rather than reading as absent; every aside is removed, a crash's or a
-  failed finish's; a lease past the horizon is dropped — all before the
-  store answers anything. An I/O failure is no absence here or at the
-  size check (`Store::blob_size`), which answers it.
+  file: durable before named, leased before answered, a present name
+  REPLACED and its old file's aside unlinked only after the answer
+  (`Store::unlink_asides`). A crash leaves at worst a file with no lease,
+  a record open retires, or an aside open removes.
+- **Two exclusions are the caller's.** One `Store` per root
+  (`Store::open`), and no `unlink_blob` or `remove_aside` while a `finish`
+  runs (`Store::finish`); the store checks neither.
+- **The pruner's acts are one method each**, so the daemon's pass holds
+  its lock around exactly one.
+- **Every name passes one check**, `blobs.rs`'s spellings: a caller's at
+  `Store`'s entry points, a log line's at open. No name reaches a path out
+  of the root.
+- **A byte is received once it is durable, and a handle lives for one
+  request** (`Store::append`, `Store::settle`; `Store`'s doc).
+- **One answer per principal.** `UploadRecords` answers by the asking
+  principal; its one lookup by identifier alone serves the pruner's expiry.
+- **Pending bytes are the unplaced deposits and the bytes received**
+  (`Store::pending_bytes`); which deposits are unplaced is the caller's
+  answer, since the store reads no cell.
+- **A torn line is only ever a log's tail** (`jsonl::Log`): a failed
+  append is cut back, and a log that cannot cut back, or whose compaction
+  failed past its rename, takes no append until a compaction completes.
+- **Open reconciles and compacts before it answers anything.**
+  `Store::open` runs each store's act at open — the logs' compactions,
+  `partials::reconcile`, `blobs::sweep_asides` — and an I/O failure there,
+  as at the size check (`Store::blob_size`), is never read as an absence.
+- **A caller's bug is no refusal.** `Store::append` and `Store::finish`
+  panic on a broken precondition; `BlobError` carries only answers.
 - **The test seam is a feature.** `test-hooks` (default off) compiles in
-  `store/hooks.rs` alone: the hazard seam — the hold and the injected
-  failure at a named `Step` of the finish, the hold run with none of the
-  seam's own state locked, so it parks its own finish alone — and the
-  four methods only a test calls: `install`, the one way to name a file
-  by a hash its bytes do not have, `written`, `asides_queued` and
-  `handles_open`. The shipped build carries none of it;
-  `scripts/gate-full.sh` checks the library without the feature.
+  `store/hooks.rs` alone; `scripts/gate-full.sh` builds the library and its
+  docs without it.
 
-Its integration suite is one binary, `tests/it/`: `blobs` (the order under
-a seeded failure injection at each step, the root's fsync owed until a
-finish pays it, by every designation directory made after the open
-whatever made it, a finish short of its length stopped as its caller's
-bug, the finishes run one at a time, a hold parking its own finish alone,
-REPLACE's repair and its one answer, an aside name of its own for every
-replace, the aside queued only at the answer, the drain counting an aside
-already gone and leaving a failed one and every one after it queued, no
-handle left on the hash's file past a failed finish, a size that cannot
-be read answered as a failure and never as an absence, the name check at
-every entry point, the directory listings each naming its own class in
-name order, the floor's read of the space available), `uploads` (the
-identifier — never a sequence, its two parses exact over a family of near
-spellings, its order — and one "no upload" from every act for every
-identifier the asker does not hold, the durable offset and every other
-offset refused, nothing but a byte received moving the expiry, the
-upload's own interval held as its line spells it and saturating at the
-last instant, one handle per request and an append past its request's end
-stopped as its caller's bug, the reconciliation, a partial that cannot be
-read failing the open and retiring nothing, a record line whose
-designation climbs out of the root read as no record with nothing beside
-the root touched, a record line whose offset passes its length read as no
-record, the compaction down to nothing over a stale twin, the expiry and
-an expired upload's handle, the listings in identifier order, the end),
-`lease` (the three states and the horizon read off the record alone, a
-principal's live leases in hex order, latest-wins, the compaction, the
-pending bytes and the unplaced deposits, a line naming a malformed
-designation or hex read as no lease). Four unit suites sit beside their
-code: `store.rs`'s holds an append's measure of its grain in range where a
-settle that raced a resume of the same upload left the record's offset
-past the new handle's bytes; `jsonl.rs`'s, in `jsonl/tests.rs`, holds
-`Log` to its own line count and to an append that fails — the torn tail,
-trust ending at the first torn line whatever tore it, the failed append
-cut back to exactly its whole lines whatever opened or rewrote the log,
-the stop where the cut fails too and where a compaction fails past its
-rename, and the compaction the count decides; `partials.rs`'s holds
-`Handle`'s hash to its file's bytes across a resume below what the file
-holds and a failed write, and the open to refusing a partial shorter than
-its record's offset; `blobs.rs`'s holds the aside name to its exact
-spelling.
+Its integration suite is one binary, `tests/it/`: `finish` (the PUT's order
+under an injected failure at each step, and the finishes run one at a
+time), `replace` (REPLACE and its asides), `blobs` (the name check, the
+listings, the size check, the floor's read), `uploads` (an upload's life
+while the store serves, and its identifier), `reopen` (what open makes of
+the records and partials a crash or a restore left) and `lease` (the
+leases' states, their compaction and the pending bytes); each module's doc
+lists its claims. Four unit suites sit beside their code: `store.rs`'s,
+`partials/handle.rs`'s, `blobs.rs`'s and `jsonl.rs`'s, the last in
+`jsonl/tests.rs`.
 
 ## The registry rows and bodies, `skep-registry`
 

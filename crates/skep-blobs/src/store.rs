@@ -43,7 +43,7 @@
 //! aside it finds, and the pruner's pass one the deferred step did not.
 
 // The test seam — `test-hooks` builds only: the hazard seam's state and its
-// gate before each step, and the four methods only a test calls.
+// gate before each step, and the methods only a test calls.
 #[cfg(feature = "test-hooks")]
 mod hooks;
 

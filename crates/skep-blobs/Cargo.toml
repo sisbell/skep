@@ -5,20 +5,15 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "The blob store (media lane B): the four media stores under one root — the files at blobs/<designation>/<hex>, the partials, the upload records and the lease log — with the PUT's fsync order, REPLACE on a present hash, and the lease's honest-null answer. It knows a principal only as an opaque string, and holds no lock and reads no limits record."
+description = "The blob store (media lane B): the four media stores under one root — the files at blobs/<designation>/<hex>, the partials, the upload records and the lease log — with the PUT's fsync order, REPLACE on a present hash, and the lease's honest-null answer. It knows a principal only as an opaque string, takes no lock of its caller's, and reads no limits record."
 readme = "README.md"
 
 [features]
-# The test seam, `src/store/hooks.rs`: the hazard seam — HOLD the finish at
-# a named step (the SIGKILL harness parks there and kills the process) or
-# FAIL that step with an injected I/O error (the fsync-order test observes
-# what each failure leaves) — and the four methods only a test calls:
-# `install`, which plants a file under a hash its bytes need not have,
-# `written`, `asides_queued` and `handles_open`. DEFAULT-OFF and never
-# enabled by a shipped build: this crate's own tests turn it on through the
-# self dev-dependency below, skepd's tests on their `skep-blobs` line, and a
-# build that compiles no test compiles none of it — `scripts/gate-full.sh`
-# checks the library without it.
+# The test seam, `src/store/hooks.rs` (its module doc says what it holds).
+# DEFAULT-OFF and never enabled by a shipped build: this crate's own tests
+# turn it on through the self dev-dependency below, skepd's tests on their
+# `skep-blobs` line, and a build that compiles no test compiles none of it —
+# `scripts/gate-full.sh` builds the library and its docs without it.
 test-hooks = []
 
 [dependencies]

@@ -3,7 +3,10 @@
 //! belongs here.
 
 mod blobs;
+mod finish;
 mod lease;
+mod reopen;
+mod replace;
 mod uploads;
 
 use std::any::Any;

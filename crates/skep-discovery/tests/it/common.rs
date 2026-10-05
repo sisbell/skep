@@ -434,12 +434,12 @@ pub fn published_world() -> Kernel<World> {
 /// is not — the one shape where a count taken of the address named and a
 /// count taken of its reading surface part. `pdoc` takes two positions while
 /// memberless (`pca(1..=2)`, one run of its own); the BIRTH shot (PUB-2.33,
-/// PUB-2.34) then mints the head from `runs` copies of the first, placed by
-/// reference to pdoc's own I-space (PUB-2.40), each a width-1 run that abuts
-/// nothing. One declared deposit after it lands on the head as a run of its
-/// own — the atom it mints, `pca(3)`, abuts no `pca(1)` run — which is how a
-/// test grows the head by exactly one run.
-pub fn fragmented_head_world(runs: usize) -> Kernel<World> {
+/// PUB-2.34) then mints the head from `run_count` copies of the first, placed
+/// by reference to pdoc's own I-space (PUB-2.40), each a width-1 run that
+/// abuts nothing. One declared deposit after it lands on the head as a run of
+/// its own — the atom it mints, `pca(3)`, abuts no `pca(1)` run — which is how
+/// a test grows the head by exactly one run.
+pub fn fragmented_head_world(run_count: usize) -> Kernel<World> {
     let k = kernel();
     seed_published_content(&k, &pdoc(), 2); // memberless: pdoc's own V 1..2, one run
     let birth = Shot {
@@ -450,7 +450,7 @@ pub fn fragmented_head_world(runs: usize) -> Kernel<World> {
                 origin: pdoc(),
                 run: run(&pca(1), 1),
             };
-            runs
+            run_count
         ],
     };
     let (head, _) = skep_arrangement::Vstream::new(&k)

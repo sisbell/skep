@@ -66,10 +66,10 @@ fn lineage_probes_flipped_slots_with_residence_gate() {
     // `out_claims` here asks `Active` or `Default`, which coerces to it.
     store.nullify(SYS, &doc2(), &claim).expect("nullify succeeds");
     assert_eq!(reads.in_claims(&e1, View::Active), vec![]);
-    let audit = reads.in_claims(&e1, View::Audit);
-    assert_eq!(audit.len(), 1);
-    assert_eq!(audit[0].claim, claim);
-    assert!(!audit[0].active);
+    let in_audit = reads.in_claims(&e1, View::Audit);
+    assert_eq!(in_audit.len(), 1);
+    assert_eq!(in_audit[0].claim, claim);
+    assert!(!in_audit[0].active);
     assert_eq!(reads.out_claims(&e2, View::Active), vec![]);
     let out_audit = reads.out_claims(&e2, View::Audit);
     assert_eq!(out_audit.len(), 1);

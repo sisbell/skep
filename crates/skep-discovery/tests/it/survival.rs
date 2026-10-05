@@ -117,8 +117,8 @@ fn survival_world() -> Kernel<World> {
         link(&store, &doc1(), &[ca(1)], &[ca(4)]); // la(3): positions 1 and 4 — witnesses on both sides
         link(&store, &doc1(), &[ca(2)], &[la(1)]); // la(4): position 2, and doc1's LINK subspace
         link(&store, &doc1(), &[ca(101)], &[ca(102)]); // la(5): reaches nothing doc1 arranges
-        let dead = link(&store, &doc1(), &[ca(3)], &[ca(3)]); // la(6): position 3 …
-        store.nullify(SYS, &doc2(), &dead).expect("nullify succeeds"); // … then retracted
+        let retracted = link(&store, &doc1(), &[ca(3)], &[ca(3)]); // la(6): position 3 …
+        store.nullify(SYS, &doc2(), &retracted).expect("nullify succeeds"); // … then retracted
     }
     k
 }

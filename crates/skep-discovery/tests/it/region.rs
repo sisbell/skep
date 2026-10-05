@@ -39,10 +39,10 @@ fn region_family_gates_doc_then_region_then_defines_empty() {
     let deep = skep_address::Span::new(t(&[1, 1, 1]), t(&[0, 0, 1])).expect("T12-valid");
     assert!(!skep_arrangement::is_ordinal_vspan(&deep));
     assert_eq!(reads.count_v(&doc1(), &[deep]), Err(QueryError::BadRegion));
-    let level_uniform = skep_address::Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-valid");
-    assert!(!skep_arrangement::is_ordinal_vspan(&level_uniform));
+    let action_point_1 = skep_address::Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-valid");
+    assert!(!skep_arrangement::is_ordinal_vspan(&action_point_1));
     assert_eq!(
-        reads.count_v(&doc1(), &[level_uniform]),
+        reads.count_v(&doc1(), &[action_point_1]),
         Err(QueryError::BadRegion)
     );
     // One bad span anywhere in the region rejects the whole request.

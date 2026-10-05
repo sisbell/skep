@@ -202,8 +202,8 @@ fn region_count_enumeration_and_window_read_out_one_selection_index() {
     }
     // … and one retracted link reaching position 2, which no read-out may
     // surface.
-    let dead = link(&store, &doc1(), &[ca(2)], &[ca(102)]);
-    store.nullify(SYS, &doc2(), &dead).expect("nullify succeeds");
+    let retracted = link(&store, &doc1(), &[ca(2)], &[ca(102)]);
+    store.nullify(SYS, &doc2(), &retracted).expect("nullify succeeds");
 
     // The law is not vacuous: the wide region selects all four live links and
     // none of the retracted one.
@@ -221,7 +221,7 @@ fn region_count_enumeration_and_window_read_out_one_selection_index() {
     ] {
         let enumerated = reads.findlinks_v(&doc1(), &region).expect("findlinks_v");
         assert!(
-            !enumerated.contains(&dead),
+            !enumerated.contains(&retracted),
             "a nullified link never surfaces: {region:?}"
         );
         assert_eq!(

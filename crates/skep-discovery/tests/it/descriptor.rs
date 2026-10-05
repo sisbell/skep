@@ -281,13 +281,14 @@ fn ftt_count_enumeration_and_window_read_out_one_sat() {
     // … and one RETRACTED link, homed in doc1 and naming ca(1), so it would
     // satisfy every descriptor below but the doc2-homed one and the zero. Its
     // retraction is homed in doc2.
-    let dead = link(&store, &doc1(), &[ca(1)], &[ca(103)]);
+    let retracted = link(&store, &doc1(), &[ca(1)], &[ca(103)]);
     store
-        .nullify(SYS, &doc2(), &dead)
+        .nullify(SYS, &doc2(), &retracted)
         .expect("nullify succeeds");
     let snap = k.snapshot();
     assert!(
-        snap.world().links().readlink(&dead).is_some() && !snap.world().links().is_active(&dead),
+        snap.world().links().readlink(&retracted).is_some()
+            && !snap.world().links().is_active(&retracted),
         "retracted, and still resident"
     );
 
@@ -313,7 +314,7 @@ fn ftt_count_enumeration_and_window_read_out_one_sat() {
     ] {
         let enumerated = reads.findlinks_ftt(&q);
         assert!(
-            !enumerated.contains(&dead),
+            !enumerated.contains(&retracted),
             "a nullified link never surfaces: {q:?}"
         );
         assert_eq!(reads.count_ftt(&q), enumerated.len(), "count = |enum| for {q:?}");

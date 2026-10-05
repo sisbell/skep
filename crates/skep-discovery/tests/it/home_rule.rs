@@ -385,17 +385,17 @@ fn the_lineage_pair_asks_the_home_rule_of_the_claim_and_reads_its_endpoints_as_r
         .assert_sup(SYS, &doc1(), &e1, &theirs)
         .expect("assert_sup succeeds");
     // … and homed in doc2, naming only doc1 links.
-    let (refused, _) = store
+    let (dropped, _) = store
         .assert_sup(SYS, &doc2(), &e1, &e2)
         .expect("assert_sup succeeds");
     let snap = k.snapshot();
     assert_eq!(
         claims_of(in_claims_on(&snap, &e1, View::Active, &every_home)),
-        vec![kept.clone(), refused.clone()]
+        vec![kept.clone(), dropped.clone()]
     );
     assert_eq!(
         claims_of(out_claims_on(&snap, &e2, View::Active, &every_home)),
-        vec![refused]
+        vec![dropped]
     );
 
     let cannot_read_doc2 = |d: &Address| *d != doc2();

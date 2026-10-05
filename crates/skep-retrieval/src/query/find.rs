@@ -4,7 +4,7 @@
 use skep_address::{Address, Span, SpanSet};
 
 use super::{Query, RetrievalWorld};
-use crate::budget::MAX_FIND_COVERAGE_SPANS;
+use crate::budget::{Count, OverBudget, MAX_FIND_COVERAGE_SPANS};
 use crate::error::FindError;
 use crate::types::RegionSpec;
 use crate::vspan::gate_vspan;
@@ -34,10 +34,11 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// WHICH REFUSAL SPEAKS. The gate walks the regions in submitted order and
     /// each region's spans in submitted order, reporting the FIRST fault
     /// whatever its kind; within one region the registry check precedes the
-    /// span gate. It also completes over the WHOLE request before any `image`
-    /// is taken, so a rejected request costs `O(spans)` and nothing upstream,
-    /// `(region, index)` promises that every region and span before the named
-    /// one is clean, and a gate fault always outranks the budget refusal below.
+    /// span gate. It also completes over the WHOLE request before any span is
+    /// handed to M5, so a rejected request costs `O(spans)` and nothing
+    /// upstream, `(region, index)` promises that every region and span before
+    /// the named one is clean, and a gate fault always outranks the budget
+    /// refusal below.
     ///
     /// COST, IN THREE FACTORS OF WHICH ONE IS THE REQUEST'S. The work is
     /// `|spans| · #runs(doc) + |candidates| · #runs(d) · |coverage|`: the
@@ -125,25 +126,22 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // every span, and the budget below would then bound a quantity that
         // costs its own square to produce.
         let mut coverage_spans: Vec<Span> = Vec::new();
-        let mut spans_handed = 0usize;
+        let mut spans_handed = Count::against(MAX_FIND_COVERAGE_SPANS);
+        let mut coverage_produced = Count::against(MAX_FIND_COVERAGE_SPANS);
+        let over = |OverBudget| FindError::TooMuchCoverage;
         for r in regions {
             for span in &r.spans {
-                // The span count, taken as the span is handed and before its
-                // walk; MAX_COMPARE_OPERAND_BLOCKS's card says why spans are
-                // counted beside the coverage, and why a span M5 folds to
-                // nothing at once counts all the same.
-                if spans_handed >= MAX_FIND_COVERAGE_SPANS {
-                    return Err(FindError::TooMuchCoverage); // refused before the walk
-                }
-                spans_handed += 1;
+                // The span count, taken as the span is handed and refused
+                // before its walk; MAX_COMPARE_OPERAND_BLOCKS's card says why
+                // spans are counted beside the coverage, and why a span M5
+                // folds to nothing at once counts all the same.
+                spans_handed.admit(1).map_err(over)?;
                 // The coverage budget, refused AS THE COVERAGE IS PRODUCED —
                 // one run at a time off M5's lazy resolution, so a span over a
                 // heavily fragmented document stops its walk at the budget
                 // rather than resolving whole and then being measured.
                 for run in m5.iter_resolve(&r.doc, span) {
-                    if coverage_spans.len() == MAX_FIND_COVERAGE_SPANS {
-                        return Err(FindError::TooMuchCoverage);
-                    }
+                    coverage_produced.admit(1).map_err(over)?;
                     coverage_spans.push(run.iextent());
                 }
             }

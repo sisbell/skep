@@ -6,8 +6,9 @@
 //! assembly the composition contract prescribes and the fixtures every suite
 //! shares; `tidy` checks the module map — every file declared, each `src/`
 //! declaration with its line, the order, and each item named by its home
-//! module — and that one file alone names the content store; each other
-//! module is one surface, and the module names are the table of contents.
+//! module — that one file alone names the content store, and that one alone
+//! compares a count to a budget; each other module is one surface, and the
+//! module names are the table of contents.
 //! Nothing but module declarations belongs here.
 
 mod common;

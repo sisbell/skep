@@ -23,7 +23,7 @@ use skep_arrangement::{as_ordinal_vspan, reading_surface, M5State, Run, VPos};
 use skep_namespace::M3State;
 
 use super::{Query, RetrievalWorld};
-use crate::budget::{MAX_COMPARE_OPERAND_BLOCKS, MAX_COMPARE_PAIRS};
+use crate::budget::{Count, OverBudget, MAX_COMPARE_OPERAND_BLOCKS, MAX_COMPARE_PAIRS};
 use crate::error::{CompareError, Operand};
 use crate::types::{CompareReport, CorrPair, RegionSpec};
 use crate::vspan::{gate_vspan, Subspace};
@@ -100,15 +100,15 @@ impl<W: RetrievalWorld> Query<'_, W> {
         gate_spec_set(m3, Operand::Second, rho2)?;
         // p = R_Σ(ρ₁), q = R_Σ(ρ₂), as blocks — each region against its
         // reading surface, each operand within its own block budget.
-        let p = resolve_blocks(m3, m5, rho1).ok_or(CompareError::TooManyBlocks {
+        let p = resolve_blocks(m3, m5, rho1).map_err(|OverBudget| CompareError::TooManyBlocks {
             operand: Operand::First,
         })?;
-        let q = resolve_blocks(m3, m5, rho2).ok_or(CompareError::TooManyBlocks {
+        let q = resolve_blocks(m3, m5, rho2).map_err(|OverBudget| CompareError::TooManyBlocks {
             operand: Operand::Second,
         })?;
         // Cross-product per overlap (`corr` is a comprehension over `P × Q`),
         // within the report budget.
-        let pairs = interval_join(&p, &q).ok_or(CompareError::TooManyPairs)?;
+        let pairs = interval_join(&p, &q).map_err(|OverBudget| CompareError::TooManyPairs)?;
         Ok(CompareReport(deterministic_presentation(pairs))) // R1–R3 (X12)
     }
 }
@@ -232,7 +232,7 @@ impl<'a> Block<'a> {
 
 /// The operand region a spec-set denotes, as blocks: resolve every region's
 /// spans to their I-run blocks, reconstructing each run's V-start by
-/// accumulation. `None` when the operand's resolution would pass
+/// accumulation. `Err(OverBudget)` when the operand's resolution would pass
 /// [`MAX_COMPARE_OPERAND_BLOCKS`] on EITHER of its two counts — MORE spans
 /// handed to M5, or MORE blocks built, than the budget. Exactly the budget of
 /// either is answered; the span past it is refused BEFORE ITS WALK and the
@@ -244,7 +244,8 @@ impl<'a> Block<'a> {
 /// and what they do not. Here the span count is taken as the span is handed to
 /// M5 — before the reader's let-else, so a declined span counts — and the
 /// block count as M5's lazy `iter_resolve` produces each run, so the walk of a
-/// span that crosses the budget stops where it crosses.
+/// span that crosses the budget stops where it crosses. Each is a [`Count`],
+/// whose card says where the boundary falls.
 ///
 /// V-RECONSTRUCTION (load-bearing for X12-R1 soundness): `iter_resolve` yields
 /// `resolve`'s runs in `resolve`'s order, and `resolve` PROMISES that they
@@ -304,19 +305,17 @@ fn resolve_blocks<'a>(
     m3: &M3State,
     m5: &M5State,
     regions: &'a [RegionSpec],
-) -> Option<Vec<Block<'a>>> {
+) -> Result<Vec<Block<'a>>, OverBudget> {
     let mut out = Vec::new();
-    let mut spans_handed = 0usize;
+    let mut spans_handed = Count::against(MAX_COMPARE_OPERAND_BLOCKS);
+    let mut blocks_built = Count::against(MAX_COMPARE_OPERAND_BLOCKS);
     for r in regions {
         let surface = reading_surface(m3, &r.doc);
         for span in &r.spans {
-            // The span count, taken as the span is handed and before its
-            // walk; MAX_COMPARE_OPERAND_BLOCKS's card says why spans are
+            // The span count, taken as the span is handed and refused before
+            // its walk; MAX_COMPARE_OPERAND_BLOCKS's card says why spans are
             // counted beside blocks.
-            if spans_handed >= MAX_COMPARE_OPERAND_BLOCKS {
-                return None; // the operand's budget, refused before the walk
-            }
-            spans_handed += 1;
+            spans_handed.admit(1)?;
             // M5's own shape reader: a span it declines (well-formed but
             // depth-incompatible) contributes no blocks, as the resolution
             // would have yielded no runs for it.
@@ -330,9 +329,7 @@ fn resolve_blocks<'a>(
             // Pulled a run at a time, so the block budget below stops the
             // walk rather than measuring a resolution already built whole.
             for run in m5.iter_resolve(&surface, span) {
-                if out.len() >= MAX_COMPARE_OPERAND_BLOCKS {
-                    return None; // the operand's budget, refused as produced
-                }
+                blocks_built.admit(1)?; // the operand's budget, refused as produced
                 debug_assert!(
                     m5.point(&surface, &cursor).as_ref() == Some(run.i_start()),
                     "D-SEQ★: each content run must begin at the V-cursor (gap-free tiling)"
@@ -344,7 +341,7 @@ fn resolve_blocks<'a>(
             }
         }
     }
-    Some(out)
+    Ok(out)
 }
 
 // ── COMPARE helpers ──
@@ -412,29 +409,31 @@ fn overlap_pair(pb: &Block<'_>, qb: &Block<'_>) -> Option<CorrPair> {
 /// on address. One vocabulary — see the design's Open build decisions
 /// (canonical statement).
 ///
-/// `None` when the report would run to MORE THAN [`MAX_COMPARE_PAIRS`]
-/// correspondences — a report of exactly the budget is answered, and the pair
-/// past it is refused AS THE PAIRS ARE PRODUCED. That budget is on the REPORT,
-/// not on the join's shape: a sweep changes how many candidate pairs are
-/// TESTED and not how many are EMITTED, so the same cap stands whichever join
-/// ships, and it is the only one that sees a fan-out. The guard is written
-/// `>=` for that reason and not as an equality on the accumulator: a sweep or
-/// an interval tree emits one event point's pairs TOGETHER, so a cap that can
-/// only see the counter land exactly on the budget is a cap the successor join
-/// steps over.
-fn interval_join(p: &[Block<'_>], q: &[Block<'_>]) -> Option<Vec<CorrPair>> {
+/// `Err(OverBudget)` when the report would run to MORE THAN
+/// [`MAX_COMPARE_PAIRS`] correspondences — a report of exactly the budget is
+/// answered, and the pair past it is refused AS THE PAIRS ARE PRODUCED. That
+/// budget is on the REPORT, not on the join's shape: a sweep changes how many
+/// candidate pairs are TESTED and not how many are EMITTED, so the same cap
+/// stands whichever join ships, and it is the only one that sees a fan-out.
+/// The successor holds it exactly as this join does, because the pairs are
+/// admitted through a [`Count`], which refuses a batch that would pass the
+/// budget before it lands: a sweep or an interval tree emits one event point's
+/// pairs TOGETHER and admits them as one batch, where a guard comparing the
+/// accumulator to the budget before the batch lands — `>=` as much as `==` —
+/// would admit the batch that crosses it, and answer past the budget when that
+/// batch is the last.
+fn interval_join(p: &[Block<'_>], q: &[Block<'_>]) -> Result<Vec<CorrPair>, OverBudget> {
     let mut out = Vec::new();
+    let mut pairs_produced = Count::against(MAX_COMPARE_PAIRS);
     for pb in p {
         for qb in q {
             if let Some(c) = overlap_pair(pb, qb) {
-                if out.len() >= MAX_COMPARE_PAIRS {
-                    return None; // the report's budget, refused as produced
-                }
+                pairs_produced.admit(1)?; // the report's budget, refused as produced
                 out.push(c);
             }
         }
     }
-    Some(out)
+    Ok(out)
 }
 
 /// The one presentation X12 R3 requires the implementation to fix, over the

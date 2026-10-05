@@ -141,8 +141,9 @@
 // rather than through the re-exports below; `tests/it/tidy.rs` checks all of
 // it.
 
-// The three request budgets and their argument: COMPARE's operand and pair
-// budgets, FINDDOCSCONTAINING's coverage budget.
+// The three request budgets and their argument — COMPARE's operand and pair
+// budgets, FINDDOCSCONTAINING's coverage budget — and the `Count` that takes
+// every count against them.
 mod budget;
 // The typed rejections, one enum per operation, and the two fault
 // vocabularies they carry.

@@ -61,8 +61,9 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
         // The masked form under the all-true predicate: its only `Withheld`
         // items are unregistered-origin runs (PUB-6.37; RES-162). The daemon's
         // read surface calls [`Query::retrieve_v_masked`] with its per-request
-        // predicate; this delegate serves the principal-free callers (the
-        // engine's own lifecycle read, the suites) unchanged.
+        // predicate; this delegate serves the callers that read for no
+        // principal — this crate's suite and skep-engine's cross-store
+        // lifecycle suite — unchanged.
         self.retrieve_v_masked(specs, &|_| true)
     }
 

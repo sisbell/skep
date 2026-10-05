@@ -1,11 +1,13 @@
 //! The three request budgets, each a REFUSAL rather than a truncation:
 //! COMPARE's [`MAX_COMPARE_OPERAND_BLOCKS`] per operand and
 //! [`MAX_COMPARE_PAIRS`] per report, and FINDDOCSCONTAINING's
-//! [`MAX_FIND_COVERAGE_SPANS`]. The two operations consult them and the
-//! rejections render them, so the numbers and their argument live here, apart
-//! from all three. [`MAX_COMPARE_OPERAND_BLOCKS`]'s card is the one statement
-//! of why an operand-side budget is counted twice; the coverage budget is
-//! defined as that one.
+//! [`MAX_FIND_COVERAGE_SPANS`] — and the [`Count`] every count against them is
+//! taken through. The two operations count against them and the rejections
+//! render them, so the numbers, their argument and the count that enforces
+//! them live here, apart from all three. [`MAX_COMPARE_OPERAND_BLOCKS`]'s card
+//! is the one statement of why an operand-side budget is counted twice, and the
+//! coverage budget is defined as that one; [`Count`]'s card is the one
+//! statement of where a count's boundary falls.
 
 /// The most blocks one COMPARE operand may resolve to, and the most spans it
 /// may hand to M5 — ONE budget on an operand's resolution, counted twice, on
@@ -94,3 +96,77 @@ pub const MAX_COMPARE_PAIRS: usize = 1 << 16;
 ///
 /// [`Query::show_deletions`]: crate::Query::show_deletions
 pub const MAX_FIND_COVERAGE_SPANS: usize = MAX_COMPARE_OPERAND_BLOCKS;
+
+/// One count taken against one of the budgets above — the spans a request
+/// side hands to M5, the blocks or coverage they produce, or the pairs a join
+/// emits — and the one place a count's boundary is spelled. It admits items
+/// until its budget is spent and refuses any that would pass it, BEFORE they
+/// are kept: exactly the budget is admitted, and a batch that would pass it is
+/// refused whole, admitting none of itself. So a producer that hands its items
+/// over together — the successor join `interval_join` names, which emits one
+/// event point's pairs at once — is held to the budget exactly as one that
+/// hands them over singly; a guard comparing the accumulator to the budget
+/// before a batch lands would admit the batch that crosses it.
+///
+/// `tests/it/tidy.rs` holds the assignment: no code line under `src/` but
+/// this file compares anything to a budget, so a producer cannot spell the
+/// boundary for itself.
+#[derive(Debug)]
+pub(crate) struct Count {
+    budget: usize,
+    admitted: usize,
+}
+
+/// A count would pass its budget. The request is refused whole: the operation
+/// answers with its own typed rejection and no partial answer.
+#[derive(Debug)]
+pub(crate) struct OverBudget;
+
+impl Count {
+    /// A count against `budget`, nothing yet admitted.
+    pub(crate) fn against(budget: usize) -> Count {
+        Count {
+            budget,
+            admitted: 0,
+        }
+    }
+
+    /// Admits `items` more, or — if they would pass the budget — refuses them
+    /// all and admits none. Asked before the items are kept, and for a span
+    /// before its walk.
+    pub(crate) fn admit(&mut self, items: usize) -> Result<(), OverBudget> {
+        // `admitted ≤ budget` holds from construction on, so this cannot wrap.
+        if items > self.budget - self.admitted {
+            return Err(OverBudget);
+        }
+        self.admitted += items;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_count_admits_exactly_its_budget_and_refuses_the_item_past_it() {
+        let mut count = Count::against(3);
+        assert!((0..3).all(|_| count.admit(1).is_ok()));
+        assert!(count.admit(1).is_err());
+    }
+
+    #[test]
+    fn a_count_refuses_a_batch_that_would_pass_its_budget_whole() {
+        // The form `interval_join`'s successor needs: a guard comparing the
+        // accumulator to the budget before a batch lands admits the batch
+        // that crosses it; a count refuses it before it lands.
+        let mut count = Count::against(4);
+        assert!(count.admit(3).is_ok());
+        assert!(count.admit(2).is_err(), "3 + 2 would pass 4");
+        assert!(
+            count.admit(1).is_ok(),
+            "the refused batch admitted none of itself"
+        );
+        assert!(count.admit(1).is_err());
+    }
+}

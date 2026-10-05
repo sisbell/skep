@@ -631,9 +631,12 @@ Rules that hold across its files:
   queries, SHOWORIGIN and COMPARE then read that function's answer;
   SHOWDELETIONS and FINDDOCSCONTAINING read the address named.
 - **The budgets are `budget.rs`'s, and they refuse.** COMPARE's two and
-  FINDDOCSCONTAINING's one are consulted by `query/compare.rs` and
-  `query/find.rs` and rendered by `error.rs`; a request past one gets its
-  rejection and no partial answer.
+  FINDDOCSCONTAINING's one are counted by `query/compare.rs` and
+  `query/find.rs` through `budget.rs`'s `Count` — which admits exactly a
+  budget and refuses a batch that would pass it before it lands, so no
+  producer spells that boundary itself — and rendered by `error.rs`; a
+  request past one gets its rejection and no partial answer.
+  `tests/it/tidy.rs` checks that no other file compares a count to a budget.
 - **The rejections are part of the wire.** `skep-febe`'s `lower.rs` maps
   each variant of the six error enums to a `RejectCode` with no wildcard
   arm, so a new variant fails to compile there. `docs/wire.md` names each
@@ -646,7 +649,8 @@ surface over the shared `common` world — `retrieve`, `extent`, `origin`,
 `deletions`, `compare` with its refusals in `compare_refusals`, and
 `find`; `query`, `head_float` and `traits`, what crosses the queries (the
 handle and the gate's precedence, the published-address float, the derive
-policy); and `tidy`, which checks the module map and the first rule.
+policy); and `tidy`, which checks the module map, the first rule and the
+third.
 
 ## The link reads, `skep-discovery`
 

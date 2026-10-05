@@ -1,7 +1,8 @@
 //! THE MODULE MAP, CHECKED: `src/lib.rs` declares this crate's modules in
 //! dependency order, each with a line saying what it holds and each naming
 //! in code only the modules above it, and this is that sentence as tests —
-//! together with the one rule about M4 that no compiler error reports.
+//! together with two rules no compiler error reports, one about M4 and one
+//! about the budgets.
 //!
 //! The tree's shape: every file under `src/`, and under the test target's
 //! `tests/it/`, is a module its parent declares — the compiler never reads
@@ -22,6 +23,12 @@
 //! only `query/retrieve.rs` names the content store. The scan also asserts
 //! that it found the site the rule allows, so a scan that matches nothing
 //! fails rather than passing a clean tree.
+//!
+//! The budget rule is held the same way: every count is taken through
+//! `budget.rs`'s `Count`, so no code line under `src/` but `budget.rs`
+//! compares anything to a `MAX_` budget — the guard a producer would otherwise
+//! spell by hand. That scan too asserts it read the budgets' uses, and that it
+//! still recognizes the guards it exists to refuse.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -149,6 +156,48 @@ fn names_the_content_store(code: &str) -> bool {
 
 fn is_ident_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
+}
+
+/// Every count is taken through `budget.rs`'s `Count`, which admits exactly a
+/// budget and refuses a batch that would pass it before it lands. No compiler
+/// error reports a producer that spells that boundary itself — a length
+/// compared to a budget by hand — so no code line under `src/` but
+/// `budget.rs` compares anything to a `MAX_` budget. The scan asserts it read
+/// the budgets' uses and that its reader still recognizes the two guards this
+/// crate's producers have spelled by hand, so a scan gone blind fails rather
+/// than passing a clean tree.
+#[test]
+fn only_budget_compares_a_count_to_a_budget() {
+    assert!(
+        compares("if out.len() >= MAX_COMPARE_PAIRS {")
+            && compares("if coverage_spans.len() == MAX_FIND_COVERAGE_SPANS {"),
+        "the comparison reader no longer recognizes a budget guard spelled by hand"
+    );
+    let uses: Vec<_> = scan(|code| code.contains("MAX_"))
+        .into_iter()
+        .filter(|(file, _)| file != Path::new("budget.rs"))
+        .collect();
+    assert!(
+        !uses.is_empty(),
+        "the operations name the budgets they count against, so a scan that finds no use is broken"
+    );
+    let compared: Vec<_> = uses
+        .into_iter()
+        .filter(|(_, code)| compares(code))
+        .collect();
+    assert!(
+        compared.is_empty(),
+        "only `budget.rs` compares a count to a budget; a producer admits through its \
+         `Count`:\n{}",
+        render(&compared)
+    );
+}
+
+/// Whether `code` compares one value to another.
+fn compares(code: &str) -> bool {
+    [">=", "<=", "==", "!=", " > ", " < "]
+        .iter()
+        .any(|op| code.contains(op))
 }
 
 /// The module a line declares — `mod key;`, with or without a visibility —

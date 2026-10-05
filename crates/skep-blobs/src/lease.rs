@@ -82,9 +82,11 @@ impl Lease {
 }
 
 /// What a principal holds on a hash: a live lease with its size and
-/// expiry, a lease lapsed within the horizon (its expiry named, so a
-/// client's resume can be written against it), or none — the one answer
-/// for "never deposited", "lapsed past the horizon" and "another
+/// expiry; a lease lapsed within the horizon, its expiry named — the
+/// deposit gone and the act a re-PUT of the bytes, told apart from a hash
+/// never deposited (`media.md` Op inventory 1, "THE LEASE'S STORE, SCOPE
+/// AND EXPIRY, STATED"; `docs/wire.md`'s `lease_lapsed`); or none — the one
+/// answer for "never deposited", "lapsed past the horizon" and "another
 /// principal's" alike.
 ///
 /// Read off the principal's record alone: `Live` says the record holds,

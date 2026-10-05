@@ -94,7 +94,7 @@ pub(crate) fn pass<G>(gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result
     // (b) THE HALTS, before the first unlink.
     let halt = {
         let foreign = store
-            .designations()?
+            .designation_dirs()?
             .into_iter()
             .find(|name| !PINNED_DESIGNATIONS.contains(&name.as_str()));
         match (foreign, index.first_halt()) {

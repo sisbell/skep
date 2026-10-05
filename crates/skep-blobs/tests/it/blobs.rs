@@ -12,11 +12,14 @@ use crate::{hex_of, open, put_whole, standing, INTERVAL};
 
 /// THE DIRECTORY LISTINGS NAME EACH CLASS ALONE, IN NAME ORDER
 /// (`Store::blobs_of`: "the files at HEX NAMES …, in name order — … a
-/// partial or an aside excluded by its name"; `Store::asides_of`,
-/// `Store::designations`: "in name order"): beside eight files at hex names
-/// stand eight asides, eight partials, a directory at a hex name and eight
-/// more designation directories; each listing names its own class alone,
-/// sorted — eight names in a random order fall sorted once in 40,320.
+/// partial or an aside excluded by its name"; `Store::asides_of`: "in name
+/// order"; `Store::designation_dirs`: "every directory there, whatever its
+/// name, by name, in name order"): beside eight files at hex names stand
+/// eight asides, eight partials and a directory at a hex name, and beside
+/// `blake3` nine more designation directories, one under a name no
+/// designation spells; each listing names its own class alone, sorted — the
+/// designation directories every directory under the root, whatever its
+/// name — and eight names in a random order fall sorted once in 40,320.
 #[test]
 fn the_directory_listings_name_each_class_alone_in_name_order() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -32,14 +35,16 @@ fn the_directory_listings_name_each_class_alone_in_name_order() {
         fs::create_dir(root.join(format!("d{i}"))).unwrap();
     }
     fs::create_dir(designation_dir.join(hex_of(b"a directory"))).unwrap();
+    let foreign = "not_a_designation";
+    fs::create_dir(root.join(foreign)).unwrap();
     hexes.sort();
     assert_eq!(store.blobs_of("blake3").unwrap(), hexes, "the files at hex names alone, sorted");
     let asides = store.asides_of("blake3").unwrap();
     assert_eq!(asides.len(), 8, "the asides alone: {asides:?}");
     assert!(asides.windows(2).all(|w| w[0] < w[1]), "sorted: {asides:?}");
-    let mut dirs: Vec<String> = (0..8).map(|i| format!("d{i}")).chain(["blake3".to_string()]).collect();
+    let mut dirs: Vec<String> = (0..8).map(|i| format!("d{i}")).chain(["blake3", foreign].map(String::from)).collect();
     dirs.sort();
-    assert_eq!(store.designations().unwrap(), dirs, "every directory under the root, sorted");
+    assert_eq!(store.designation_dirs().unwrap(), dirs, "every directory under the root, whatever its name, sorted");
 }
 
 /// The size check's read: present with its size, absent as `None`, and a

@@ -1,17 +1,18 @@
 //! THE TEST SEAM — compiled only with `test-hooks`, which this crate's own
 //! suites and the daemon's turn on and no shipped build does. The HAZARD
-//! SEAM: the gate before each [`Step`] of a finish, where a HOLD runs a
+//! SEAM: the hook before each [`Step`] of a finish, where a HOLD runs a
 //! closure (the daemon's SIGKILL harness parks the thread in it and kills
 //! the process) or an injected FAILURE answers an I/O error in the step's
-//! place (the fsync-order suite observes what each failure leaves). A hold
-//! runs with none of the seam's own state locked, so it parks its own
-//! finish alone: the finish keeps what any finish holds — the store's finish
-//! lock, which runs the finishes one at a time — and nothing of the seam's.
-//! And the three methods only a test calls: [`Store::install`], which plants
-//! a file under a hex its bytes need not hash to; [`Stream::written`], the
-//! bytes a stream has written, durable or not; and [`Store::asides_queued`],
-//! the deferred unlink's queue. A build without the feature carries none of
-//! it, and its gate before a step is a no-op (`store.rs`).
+//! place (the `finish` and `replace` suites observe what each failure
+//! leaves). A hold runs with none of the seam's own state locked, so it
+//! parks its own finish alone: the finish keeps what any finish holds — the
+//! store's finish lock, which runs the finishes one at a time — and nothing
+//! of the seam's. And the three methods only a test calls:
+//! [`Store::install`], which plants a file under a hex its bytes need not
+//! hash to; [`Stream::written`], the bytes a stream has written, durable or
+//! not; and [`Store::asides_queued`], the deferred unlink's queue. A build
+//! without the feature carries none of it, and its hook before a step is a
+//! no-op (`store.rs`).
 
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -22,7 +23,7 @@ use super::{Step, Store, Stream};
 use crate::blobs::fsync_dir;
 
 /// The hazard seam's state: at most one failure point and one hold — the
-/// hold shared, so the gate takes it out and runs it with this state
+/// hold shared, so the hook takes it out and runs it with this state
 /// unlocked.
 #[derive(Default)]
 pub(super) struct Hooks {
@@ -31,7 +32,7 @@ pub(super) struct Hooks {
 }
 
 impl Store {
-    /// The seam's gate before a step of the finish: a hold runs its
+    /// The seam's hook before a step of the finish: a hold runs its
     /// closure (which may park the thread for good); an injected failure
     /// answers an I/O error in the step's place, read once the hold has
     /// returned. The hold is cloned out and run with the seam unlocked, so
@@ -49,9 +50,9 @@ impl Store {
     }
 
     /// TEST HOOK (`test-hooks`): FAIL the named step of every later finish
-    /// with an I/O error, or `None` to fail nothing — the fsync-order test's
-    /// seeded injection. At [`Step::UnlinkAside`] it fails the deferred drain
-    /// ([`Store::unlink_asides`]), never a finish.
+    /// with an I/O error, or `None` to fail nothing — the `finish` and
+    /// `replace` suites' seeded injection. At [`Step::UnlinkAside`] it fails
+    /// the deferred unlink ([`Store::unlink_asides`]), never a finish.
     pub fn fail_at(&self, step: Option<Step>) {
         self.hooks.lock().fail_at = step;
     }
@@ -60,9 +61,9 @@ impl Store {
     /// step by calling `f` there — the SIGKILL harness parks the thread in
     /// it and kills the process. A hold inside a finish parks that finish
     /// with the store's finish lock held, as every finish holds it, so
-    /// another finish waits on it as on any; one at the deferred
-    /// [`Step::UnlinkAside`] parks the drain that met it. No lock of the
-    /// seam's is held while `f` runs.
+    /// another finish waits on it as on any; one at [`Step::UnlinkAside`]
+    /// parks the deferred unlink that met it. No lock of the seam's is held
+    /// while `f` runs.
     pub fn hold_at(&self, step: Step, f: impl Fn() + Send + Sync + 'static) {
         self.hooks.lock().hold = Some((step, Arc::new(f)));
     }

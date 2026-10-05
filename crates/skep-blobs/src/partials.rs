@@ -1,5 +1,5 @@
 //! THE PARTIALS, `<root>/<designation>/.upload-<identifier>` — the bytes
-//! received so far of one standing upload, a temp file in its target's own
+//! received so far of one upload, a temp file in its target's own
 //! designation directory (`media.md` Op inventory 1, the resumable upload
 //! (1), (3), (4); §The media stores). A BYTE IS RECEIVED ONCE IT IS DURABLE
 //! IN THE PARTIAL: the file is fsynced at [`SYNC_GRAIN`] and at the settle

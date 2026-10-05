@@ -19,8 +19,8 @@
 //! ORDER of its own acts and what each leaves behind on a crash:
 //!
 //! * THE PUT's ORDER ([`Stream::finish`]): the partial fsynced; where the
-//!   name exists, the old file LINKED ASIDE (a second name no hex spells,
-//!   so the rename frees nothing); the partial RENAMED onto
+//!   name exists, the replaced instance LINKED ASIDE (a second name no hex
+//!   spells, so the rename frees nothing); the partial RENAMED onto
 //!   `<designation>/<hex>` — REPLACE where the name exists, never a no-op —
 //!   that directory fsynced, the root fsynced where no root fsync since the
 //!   open has made the designation directory durable, THEN the lease
@@ -32,13 +32,13 @@
 //!   leased file, or an aside open removes, and never a lease naming bytes
 //!   the restart does not hold.
 //! * THE PRUNER's READS AND ACTS: the designation directories, the files at
-//!   hex names and the asides ([`Store::designations`], [`Store::blobs_of`],
-//!   [`Store::asides_of`]), whether ANY principal holds a live lease on a
-//!   file ([`Store::any_live_lease`]), the expired uploads and their removal
-//!   ([`Store::expired_uploads`], [`Store::expire_upload`]), and the unlink
-//!   of one file or one aside ([`Store::unlink_blob`],
-//!   [`Store::remove_aside`]) — each one act, so the daemon's pass holds its
-//!   own lock around exactly one.
+//!   hex names and the asides ([`Store::designation_dirs`],
+//!   [`Store::blobs_of`], [`Store::asides_of`]), whether ANY principal holds
+//!   a live lease on a file ([`Store::any_live_lease`]), the expired uploads
+//!   and their removal ([`Store::expired_uploads`],
+//!   [`Store::expire_upload`]), and the unlink of one file or one aside
+//!   ([`Store::unlink_blob`], [`Store::remove_aside`]) — each one act, so
+//!   the daemon's pass holds its own lock around exactly one.
 //! * A BYTE IS RECEIVED ONCE IT IS DURABLE: the partial is fsynced at
 //!   [`SYNC_GRAIN`] and at [`Stream::settle`], and the record's offset and
 //!   expiry are written after each sync, the expiry re-fixed from the
@@ -107,8 +107,8 @@ mod lease;
 // files under).
 mod partials;
 // `Store`, the four opened as one, and `Stream`, an upload open for one
-// request: the order of their acts — the resume, the durable point, the
-// finish and its steps, the pruner's acts, the leases' reads; under
+// request: the order of their acts — the resume, the settle, the finish
+// and its steps, the pruner's acts, the leases' reads; under
 // `test-hooks`, the test seam (`store/hooks.rs`).
 mod store;
 

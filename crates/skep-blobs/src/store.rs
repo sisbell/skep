@@ -1,11 +1,11 @@
 //! THE STORE: the four media stores under the root, opened as one — the
 //! files, the partials, the upload records and the lease log — and
 //! [`Stream`], one upload open for one request; and the ORDER of their acts:
-//! an upload's creation and resume, a stream's durable point and the PUT's
-//! finish, the deferred step after its answer, the pruner's acts one at a
-//! time, the leases' reads. [`Step`] names the steps of a finish the hazard
-//! seam can hold or fail; [`Finished`] is a finish's answer. Under
-//! `test-hooks`, the child `store/hooks.rs` holds the test seam.
+//! an upload's creation and resume, a stream's settle and the PUT's finish,
+//! the deferred unlink after its answer, the pruner's acts one at a time,
+//! the leases' reads. [`Step`] names the steps of a finish the hazard seam
+//! can hold or fail; [`Finished`] is a finish's answer. Under `test-hooks`,
+//! the child `store/hooks.rs` holds the test seam.
 //!
 //! THE ORDER (`media.md` Op inventory 1, "THE PUT's DISPOSITION ON A HASH
 //! ALREADY PRESENT IS REPLACE, NOT NO-OP"; the register M-I5 (a)): a rename
@@ -26,25 +26,26 @@
 //! rename over a name whose inode holds its last link frees that inode's
 //! blocks inside the rename, which at the per-file cap costs the replace
 //! arm hundreds of milliseconds a create never pays. So where the name
-//! exists the finish first gives the old inode a SECOND NAME — a hard link
-//! at an ASIDE name no hex spells, `.retired-<hex>-<n>` in the same
-//! directory — then renames the partial onto the hash: the old inode keeps
-//! a link, the rename frees nothing, and the aside is unlinked AFTER the
-//! answer has been written ([`Store::unlink_asides`]), where the freeing's
-//! cost lands off the request's path. The finish QUEUES its aside for that
-//! unlink only as it answers: the queue is drained on whichever thread
-//! asks, and an aside drained between the link and the answer would leave
-//! the old inode one link for the rename to free, or free it beside the
-//! syncs that follow the rename — inside the answer either way. A link
-//! rather than a rename aside, so the hash is never without a file: a
-//! failure at the rename leaves the old bytes at the hash and the aside
-//! beside them, never an absent name. Nothing names an aside, so one the
-//! deferred step never takes — a crash between the answer and the unlink,
-//! a finish that failed past its link — costs nothing: open removes every
-//! aside it finds, and the pruner's pass one the deferred step did not.
+//! exists the finish first gives the replaced instance a SECOND NAME — a
+//! hard link at an ASIDE name no hex spells, `.retired-<hex>-<n>` in the
+//! same directory — then renames the partial onto the hash: the replaced
+//! instance keeps a link, the rename frees nothing, and the aside is
+//! unlinked AFTER the answer has been written — THE DEFERRED UNLINK
+//! ([`Store::unlink_asides`]) — where the freeing's cost lands off the
+//! request's path. The finish QUEUES its aside for that unlink only as it
+//! answers: the queue is drained on whichever thread asks, and an aside
+//! unlinked between the link and the answer would leave the replaced
+//! instance one link for the rename to free, or free it beside the syncs
+//! that follow the rename — inside the answer either way. A link rather
+//! than a rename aside, so the hash is never without a file: a failure at
+//! the rename leaves the old bytes at the hash and the aside beside them,
+//! never an absent name. Nothing names an aside, so one the deferred
+//! unlink never takes — a crash between the answer and the unlink, a
+//! finish that failed past its link — costs nothing: open removes every
+//! aside it finds, and the pruner's pass one the deferred unlink did not.
 
 // The test seam — `test-hooks` builds only: the hazard seam's state and its
-// gate before each step, and the methods only a test calls.
+// hook before each step, and the methods only a test calls.
 #[cfg(feature = "test-hooks")]
 mod hooks;
 
@@ -68,7 +69,7 @@ use crate::uploads::{expiry, millis, UploadId, UploadRecord, UploadRecords};
 /// it names, after every step before it has completed. Two are the
 /// REPLACE's own and are met only where the name already exists:
 /// [`Step::LinkAside`] inside the finish, [`Step::UnlinkAside`] in the
-/// deferred step after the answer.
+/// deferred unlink after the answer.
 ///
 /// Deliberately not `#[non_exhaustive]`: this crate's step-by-step suites
 /// match every step, so a new step is given its crash story there before
@@ -78,8 +79,9 @@ use crate::uploads::{expiry, millis, UploadId, UploadRecord, UploadRecords};
 pub enum Step {
     /// The partial's final fsync.
     PartialSync,
-    /// The hard link of the old file at `<designation>/<hex>` to its aside
-    /// name — taken only where the name exists.
+    /// The hard link of the replaced instance, the file at
+    /// `<designation>/<hex>`, to its aside name — taken only where the name
+    /// exists.
     LinkAside,
     /// The rename of the partial onto `<designation>/<hex>`.
     Rename,
@@ -94,16 +96,16 @@ pub enum Step {
     LeaseSync,
     /// The upload record's retirement — the last act before the answer.
     RecordRetire,
-    /// The unlink of a replaced file's aside name — the deferred step, run
-    /// after the answer ([`Store::unlink_asides`]) and never inside a
-    /// finish; met only on a finish that replaced a present name.
+    /// The unlink of the replaced instance's aside name — run after the
+    /// answer by the deferred unlink ([`Store::unlink_asides`]) and never
+    /// inside a finish; met only on a finish that replaced a present name.
     UnlinkAside,
 }
 
 /// A finished upload's answer: the file's designation, its hash — BLAKE3's,
 /// the function its designation names — as lowercase hex, and its size. One
-/// shape whether or not the file was already here (the record's "NO ANSWER
-/// OF THE UPLOAD SAYS WHETHER THE FILE WAS ALREADY HERE").
+/// shape whether or not the file was already here (`media.md` Op inventory
+/// 1, "NO ANSWER OF THE UPLOAD SAYS WHETHER THE FILE WAS ALREADY HERE").
 ///
 /// `#[non_exhaustive]`: emitted, never constructed by a caller — field
 /// reads are unaffected, and a further field is an addition rather than a
@@ -211,7 +213,7 @@ impl Store {
     /// zeros on disk and the finish names the file by a hash its bytes do not
     /// have; remove the partials created since its read as orphans; remove
     /// the asides of finishes between their link and their rename, so those
-    /// renames free the replaced files inside their answers; and rename a
+    /// renames free the replaced instances inside their answers; and rename a
     /// compacted log over each file this store appends to, so every lease
     /// and offset it answers as durable afterwards lands in a file no open
     /// reads. The store takes no lock for it and checks nothing: the daemon
@@ -245,12 +247,13 @@ impl Store {
 
     // ── the directory, as the pruner reads it ────────────────────────────
 
-    /// Every DIRECTORY under the root, by name, in name order — the
-    /// designation directories this root holds, whatever their names: the
-    /// pruner's pass reads the set against the designations it knows and
-    /// halts on one it does not. Files under the root (the two logs, their
-    /// compaction twins) are not among them.
-    pub fn designations(&self) -> io::Result<Vec<String>> {
+    /// Every DESIGNATION DIRECTORY under the root — every directory there,
+    /// whatever its name, by name, in name order: the pruner's pass reads the
+    /// set against the designations its build pins and halts on a foreign one
+    /// (`media.md` §The media stores, "the halts on a foreign designation
+    /// directory"). Files under the root (the two logs, their compaction
+    /// twins) are not among them.
+    pub fn designation_dirs(&self) -> io::Result<Vec<String>> {
         blobs::dirs_under(&self.root)
     }
 
@@ -280,7 +283,7 @@ impl Store {
     }
 
     /// Remove one aside by name — the pruner's housekeeping where the
-    /// deferred step did not run. `Ok(false)` where none stood, and for a
+    /// deferred unlink did not run. `Ok(false)` where none stood, and for a
     /// name no aside has. Under the same exclusion from [`Stream::finish`]
     /// as [`Store::unlink_blob`]: an aside stands from its finish's link,
     /// before the rename.
@@ -417,8 +420,8 @@ impl Store {
         Ok(())
     }
 
-    /// THE DEFERRED STEP of every replace this process has answered since
-    /// the last call: each aside name unlinked, in order — the old
+    /// THE DEFERRED UNLINK of every replace this process has answered since
+    /// the last call: each aside name unlinked, in order — the replaced
     /// instance's blocks freed here, after its answer, and never on the
     /// request's path. Safe on any thread at any time: no aside is queued
     /// before its finish answers. Answers the count unlinked, an aside
@@ -537,9 +540,9 @@ impl Store {
 
     // ── the hazard seam ──────────────────────────────────────────────────
 
-    /// The seam's gate before a step of the finish — in a build without
+    /// The seam's hook before a step of the finish — in a build without
     /// `test-hooks`, nothing: no hold and no injected failure. With the
-    /// feature, the gate is the test seam's (`store/hooks.rs`).
+    /// feature, the hook is the test seam's (`store/hooks.rs`).
     #[cfg(not(feature = "test-hooks"))]
     #[inline]
     fn before(&self, _step: Step) -> io::Result<()> {
@@ -564,9 +567,10 @@ pub struct Stream<'s> {
     id: UploadId,
     designation: String,
     length: u64,
-    /// The record's offset as this stream has marked it — its resume's, then
-    /// each grain's and its settle's: moved only to its own bytes written,
-    /// so it never passes them, whatever another stream did.
+    /// The record's offset as this stream has marked it — its DURABLE POINT:
+    /// its resume's, then each grain's and its settle's, moved only to its
+    /// own bytes written, so it never passes them, whatever another stream
+    /// did.
     offset: u64,
     handle: Handle,
 }
@@ -606,12 +610,12 @@ impl Stream<'_> {
         Ok(self.handle.written())
     }
 
-    /// THE DURABLE POINT at the request's end (clause (3)), the stream
-    /// consumed whatever it answers: the partial fsynced, the record's offset
-    /// set to the bytes written and its expiry re-fixed the upload's own
-    /// interval past `now_ms`, this last byte received — and moved by nothing
-    /// else: a stream that wrote no byte past its durable point writes no
-    /// record and re-fixes nothing. Answers the record.
+    /// THE SETTLE at the request's end (clause (3)), the stream consumed
+    /// whatever it answers: the partial fsynced, the record's offset set to
+    /// the bytes written and its expiry re-fixed the upload's own interval
+    /// past `now_ms`, this last byte received — and moved by nothing else: a
+    /// stream that wrote no byte past its durable point writes no record and
+    /// re-fixes nothing. Answers the record.
     ///
     /// THE REFUSALS: `NoUpload` where the upload no longer stands — expired,
     /// or retired under the stream; `Io` from a torn stream, a failed sync or
@@ -647,7 +651,7 @@ impl Stream<'_> {
     /// an expiry `interval` past `now_ms`, the record retired, and the aside
     /// queued for the deferred unlink. Answers the file's designation, hex
     /// and size — one shape whether or not the file was already here, and in
-    /// one time: the old instance's unlink waits for
+    /// one time: the replaced instance's unlink waits for
     /// [`Store::unlink_asides`], after the answer, and a finish that fails
     /// past its link queues nothing, leaving its aside to the pruner's pass
     /// and to open.
@@ -685,10 +689,10 @@ impl Stream<'_> {
     /// naming bytes that are not there. An unlink between the replace's
     /// check and its link fails the link, an I/O error a create never meets
     /// — a second way of saying the file was here. An aside removed between
-    /// its link and the rename lets the rename free the old file inside the
-    /// answer. The store sees no lock of its caller's and checks none of
-    /// this; the daemon keeps it with its credential lock, the finish under
-    /// the read arm and each pruner act under the write arm.
+    /// its link and the rename lets the rename free the replaced instance
+    /// inside the answer. The store sees no lock of its caller's and checks
+    /// none of this; the daemon keeps it with its credential lock, the
+    /// finish under the read arm and each pruner act under the write arm.
     pub fn finish(mut self, interval: Duration, now_ms: u64) -> Result<Finished, BlobError> {
         let store = self.store;
         // Held to the answer: the finishes run one at a time.
@@ -708,10 +712,10 @@ impl Stream<'_> {
         let from = partials::partial_path(&store.root, &self.designation, &self.id);
         let to = dir.join(&hex);
         let aside = if to.is_file() {
-            // THE REPLACE: the old inode keeps a name through the rename, so
-            // the rename frees nothing; the aside is unlinked after the
-            // answer. A link, not a rename aside: the hash is never without
-            // a file, whatever fails next.
+            // THE REPLACE: the replaced instance keeps a name through the
+            // rename, so the rename frees nothing; the aside is unlinked after
+            // the answer. A link, not a rename aside: the hash is never
+            // without a file, whatever fails next.
             store.before(Step::LinkAside)?;
             let n = store.aside_serial.fetch_add(1, Ordering::Relaxed);
             let aside = dir.join(aside_name(&hex, n));
@@ -741,10 +745,10 @@ impl Stream<'_> {
         store.uploads.lock().retire(&self.id)?;
         // QUEUED ONLY NOW, the finish answering: the queue is drained on
         // whichever thread asks (the daemon's transport, after every blob
-        // reply), and a drain that took this aside before the rename would
-        // leave the old file one link for the rename to free inside this
-        // answer. A finish that fails after its link leaves its aside to the
-        // pruner's pass and to open.
+        // reply), and a deferred unlink that took this aside before the
+        // rename would leave the replaced instance one link for the rename to
+        // free inside this answer. A finish that fails after its link leaves
+        // its aside to the pruner's pass and to open.
         if let Some(aside) = aside {
             store.aside_queue.lock().push(aside);
         }

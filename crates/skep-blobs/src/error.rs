@@ -6,7 +6,7 @@ use std::io;
 /// Why the store refused — one variant per answer a caller acts on
 /// differently. I/O failures ride [`BlobError::Io`] verbatim; everything
 /// else is the store's own verdict, and none of them says anything about
-/// another principal's uploads or files (the record's M-I2 (e)).
+/// another principal's uploads or files (the register M-I2 (e)).
 ///
 /// A caller's bug is none of these. A finish short of the declared length
 /// PANICS, naming the obligation it breaks
@@ -24,11 +24,11 @@ pub enum BlobError {
     Io(io::Error),
     /// The identifier names no upload of THIS principal's: expired,
     /// retired, another principal's, or never minted — ONE answer for all
-    /// four, exactly as an expired one answers (the record's clause (1)).
-    /// Every act that judges a standing upload answers it for all four;
-    /// [`Stream::append`](crate::Stream::append), whose resume judged the
-    /// upload standing, judges only that its record has not been retired
-    /// under it.
+    /// four, exactly as an expired one answers (`media.md` Op inventory 1,
+    /// the resumable upload (1)). Every act that judges a standing upload
+    /// answers it for all four; [`Stream::append`](crate::Stream::append),
+    /// whose resume judged the upload standing, judges only that its record
+    /// has not been retired under it.
     NoUpload,
     /// A resume stated an offset other than the record's — the standard
     /// shape's offset conflict — and carries the record's, the one a resume

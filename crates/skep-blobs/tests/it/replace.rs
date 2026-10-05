@@ -16,7 +16,7 @@ use skep_blobs::{BlobError, LeaseState, Step};
 use crate::{hex_of, open, put_whole, INTERVAL};
 
 /// THE REPLACE's ORDER, STEP BY STEP (M-I5 (a); "NO ANSWER OF THE UPLOAD
-/// SAYS WHETHER THE FILE WAS ALREADY HERE" — the old instance's aside
+/// SAYS WHETHER THE FILE WAS ALREADY HERE" — the replaced instance's aside
 /// unlinked after the answer): over a file planted with the WRONG bytes at
 /// the right name, a finish that fails at each step of a replace — the two
 /// aside steps among them — leaves the hash holding the OLD bytes whole
@@ -25,7 +25,7 @@ use crate::{hex_of, open, put_whole, INTERVAL};
 /// gone or present, never a third state; a finish that fails past its link
 /// queues no aside, leaving it to the pruner's pass and to open; a failure
 /// at the deferred unlink itself leaves the answer given and the aside
-/// queued for the next drain; and the reopen removes every aside a failure
+/// queued for the next one; and the reopen removes every aside a failure
 /// left, the hash's bytes as the step left them.
 #[test]
 fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
@@ -81,15 +81,15 @@ fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
                 }
                 Step::UnlinkAside => {
                     // The finish ANSWERS: the unlink is no step of it.
-                    let fin = finish.expect("the deferred step fails nothing of the finish");
+                    let fin = finish.expect("the deferred unlink fails nothing of the finish");
                     assert_eq!(fin.hex, hex);
                     assert_eq!(at_hash, right);
                     assert_eq!(asides.len(), 1);
-                    assert!(store.unlink_asides().is_err(), "the injected failure at the deferred step");
-                    assert_eq!(store.asides_queued(), 1, "re-queued for the next drain");
+                    assert!(store.unlink_asides().is_err(), "the injected failure at the deferred unlink");
+                    assert_eq!(store.asides_queued(), 1, "re-queued for the next deferred unlink");
                     assert_eq!(store.asides_of("blake3").unwrap().len(), 1, "present, never a third state");
                     store.fail_at(None);
-                    assert_eq!(store.unlink_asides().unwrap(), 1, "the next drain takes it");
+                    assert_eq!(store.unlink_asides().unwrap(), 1, "the next deferred unlink takes it");
                     assert!(store.asides_of("blake3").unwrap().is_empty(), "gone");
                     assert_eq!(fs::read(store.blob_path("blake3", &hex).unwrap()).unwrap(), right);
                 }
@@ -155,9 +155,10 @@ fn every_replace_of_a_hash_takes_an_aside_name_of_its_own() {
 /// AN ASIDE IS QUEUED ONLY WHEN ITS FINISH ANSWERS ("NO ANSWER OF THE
 /// UPLOAD SAYS WHETHER THE FILE WAS ALREADY HERE"): the queue is drained on
 /// whichever thread asks, so an aside it held between the link and the
-/// answer could be unlinked there, leaving the old file one link for the
-/// rename to free inside the answer. A replace held before its last step
-/// has linked its aside and queued nothing; answered, it has queued the one.
+/// answer could be unlinked there, leaving the replaced instance one link
+/// for the rename to free inside the answer. A replace held before its last
+/// step has linked its aside and queued nothing; answered, it has queued the
+/// one.
 #[test]
 fn an_aside_is_queued_only_when_its_finish_answers() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -185,19 +186,19 @@ fn an_aside_is_queued_only_when_its_finish_answers() {
     assert_eq!(linked, 1, "held before its last step, the replace has linked its aside");
     assert_eq!(queued, 0, "and queued nothing before its answer");
     assert_eq!(finished.expect("the held finish answers").hex, hex);
-    assert_eq!(store.asides_queued(), 1, "answered: queued for the drain");
+    assert_eq!(store.asides_queued(), 1, "answered: queued for the deferred unlink");
     assert_eq!(store.unlink_asides().unwrap(), 1);
     assert!(store.asides_of("blake3").unwrap().is_empty());
 }
 
-/// THE DRAIN COUNTS AN ASIDE ALREADY GONE AS UNLINKED
+/// THE DEFERRED UNLINK COUNTS AN ASIDE ALREADY GONE AS UNLINKED
 /// (`Store::unlink_asides`: "an aside already gone counted with them"): the
-/// pruner's pass holds the finish's exclusion and not the drain's, so it
-/// may take a queued aside first; the drain then answers it done and leaves
-/// nothing queued — where a failure would leave it at the queue's head for
-/// every later drain.
+/// pruner's pass holds the finish's exclusion and not the deferred
+/// unlink's, so it may take a queued aside first; the deferred unlink then
+/// answers it done and leaves nothing queued — where a failure would leave
+/// it at the queue's head for every later one.
 #[test]
-fn an_aside_the_pass_took_first_is_done_for_the_drain() {
+fn an_aside_the_pass_took_first_is_done_for_the_deferred_unlink() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = open(&dir.path().join("blobs"), 0);
     let right = b"the picture's bytes".to_vec();
@@ -205,7 +206,7 @@ fn an_aside_the_pass_took_first_is_done_for_the_drain() {
     put_whole(&store, "k", &right, 1);
     let aside = store.asides_of("blake3").unwrap().pop().expect("the replace's aside");
     assert!(store.remove_aside("blake3", &aside).unwrap(), "the pass's act takes it first");
-    assert_eq!(store.unlink_asides().map_err(|e| e.kind()), Ok(1), "the drain counts it unlinked");
+    assert_eq!(store.unlink_asides().map_err(|e| e.kind()), Ok(1), "the deferred unlink counts it unlinked");
     assert_eq!(store.asides_queued(), 0, "and leaves nothing queued");
 }
 
@@ -213,8 +214,9 @@ fn an_aside_the_pass_took_first_is_done_for_the_drain() {
 /// (`Store::unlink_asides`: "A failure leaves that aside and the rest queued
 /// for the next call"): three answered replaces queue three asides; the
 /// second made un-removable — a directory at its name, which no unlink
-/// removes — the drain unlinks the first, fails at the second and leaves the
-/// third, two queued; with the obstacle gone, the next drain takes both.
+/// removes — the deferred unlink takes the first, fails at the second and
+/// leaves the third, two queued; with the obstacle gone, the next takes
+/// both.
 #[test]
 fn a_failed_unlink_leaves_that_aside_and_every_one_after_it_queued() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -231,12 +233,16 @@ fn a_failed_unlink_leaves_that_aside_and_every_one_after_it_queued() {
     }
     fs::remove_file(&asides[1]).unwrap();
     fs::create_dir(&asides[1]).unwrap();
-    assert!(store.unlink_asides().is_err(), "the drain fails at the second");
+    assert!(store.unlink_asides().is_err(), "the deferred unlink fails at the second");
     assert_eq!(store.asides_queued(), 2, "that aside and the one after it stay queued");
     assert!(!asides[0].exists(), "the first, before the failure, is unlinked");
     assert!(asides[2].is_file(), "the third waits behind the second");
     fs::remove_dir(&asides[1]).unwrap();
-    assert_eq!(store.unlink_asides().map_err(|e| e.kind()), Ok(2), "the next drain takes both, the second already gone");
+    assert_eq!(
+        store.unlink_asides().map_err(|e| e.kind()),
+        Ok(2),
+        "the next deferred unlink takes both, the second already gone"
+    );
     assert!(store.asides_of("blake3").unwrap().is_empty());
 }
 
@@ -244,10 +250,9 @@ fn a_failed_unlink_leaves_that_aside_and_every_one_after_it_queued() {
 /// under the right name — the corrupt case — is repaired by a PUT of the
 /// right bytes, and the PUT's answer is the very answer a PUT of the same
 /// bytes gives where no file stood: the same designation, hex and size, one
-/// shape; no answer of the store says whether the file was here. The old
-/// instance's name goes with the deferred step, after the answer: the
-/// finish leaves it as an aside the drain unlinks, and a fresh PUT leaves
-/// none.
+/// shape; no answer of the store says whether the file was here. The
+/// replaced instance's last name, its aside, goes with the deferred unlink,
+/// after the answer; a fresh PUT leaves no aside.
 #[test]
 fn replace_repairs_a_corrupt_file_and_answers_as_a_fresh_put_does() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -270,8 +275,8 @@ fn replace_repairs_a_corrupt_file_and_answers_as_a_fresh_put_does() {
     assert_eq!(replaced.hex, hex);
     assert_eq!(replaced.size, right.len() as u64);
     assert_eq!(fs::read(store.blob_path("blake3", &hex).unwrap()).unwrap(), right, "repaired");
-    // The old instance's second name stands until the deferred step, and
-    // holds the old bytes; the drain unlinks it.
+    // The replaced instance's second name holds the old bytes until the
+    // deferred unlink takes it.
     let asides = store.asides_of("blake3").unwrap();
     assert_eq!(asides.len(), 1, "the replace left one aside");
     assert!(asides[0].starts_with(&format!(".retired-{hex}-")), "{}", asides[0]);
@@ -296,7 +301,7 @@ fn replace_repairs_a_corrupt_file_and_answers_as_a_fresh_put_does() {
     let mut want = vec![hex.clone(), hex_of(&fresh_bytes)];
     want.sort();
     assert_eq!(blobs, want);
-    assert_eq!(store.designations().unwrap(), vec!["blake3".to_string()]);
+    assert_eq!(store.designation_dirs().unwrap(), vec!["blake3".to_string()]);
     assert!(store.unlink_blob("blake3", &hex_of(&fresh_bytes)).unwrap());
     assert!(!store.unlink_blob("blake3", &hex_of(&fresh_bytes)).unwrap(), "absent: nothing to unlink");
     assert_eq!(store.blobs_of("blake3").unwrap(), vec![hex]);

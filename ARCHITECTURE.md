@@ -198,7 +198,7 @@ Rules that hold across its files:
 
 - **The PUT's order.** `Stream::finish` is the one path from a partial to
   a file: durable before named, leased before answered, a present name
-  REPLACED and its old file's aside unlinked only after the answer
+  REPLACED and the replaced instance's aside unlinked only after the answer
   (`Store::unlink_asides`). A crash leaves at worst a file with no lease,
   a record open retires, or an aside open removes.
 - **Three exclusions are the caller's.** One `Store` per root
@@ -243,9 +243,9 @@ listings, the size check, the floor's read), `uploads` (an upload's life
 while the store serves, and its identifier), `reopen` (what open makes of
 the records and partials a crash or a restore left) and `lease` (the
 leases' states, their compaction and the pending bytes); each module's doc
-lists its claims. Four unit suites sit beside their code: `store.rs`'s,
-`partials/handle.rs`'s, `blobs.rs`'s and `jsonl.rs`'s, the last in
-`jsonl/tests.rs`.
+lists its claims. Five unit suites sit beside their code: `store.rs`'s,
+`uploads.rs`'s, `partials/handle.rs`'s, `blobs.rs`'s and `jsonl.rs`'s, the
+last in `jsonl/tests.rs`.
 
 ## The registry rows and bodies, `skep-registry`
 

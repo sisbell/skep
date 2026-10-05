@@ -24,7 +24,8 @@ blake3.workspace = true
 # behind serde_json's objects is sorted, so a line's member order is fixed.
 serde_json.workspace = true
 # The upload identifier: 128 bits from the OS per upload, never a sequence
-# (the record's clause (1); AUTH-4.13's standard for a token).
+# (`media.md` Op inventory 1, the resumable upload (1); AUTH-4.13's standard
+# for a token).
 getrandom = "0.3"
 # The floor's one read of the host: the volume's free space at the root
 # (`statvfs`), safe Rust — this crate forbids `unsafe` as every crate of the

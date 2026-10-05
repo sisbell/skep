@@ -215,10 +215,10 @@ fn a_finish_short_of_the_declared_length_stops_as_its_callers_bug_and_names_noth
 }
 
 /// A HOLD PARKS ITS OWN FINISH AND NOTHING ELSE: the seam runs a hold with
-/// none of its own state locked, so while one finish is parked a drain on
-/// another thread — which passes the seam's gate before each unlink —
-/// meets no lock of the seam's and unlinks the aside an answered replace
-/// queued; the held finish then answers.
+/// none of its own state locked, so while one finish is parked a deferred
+/// unlink on another thread — which passes the seam's hook before each
+/// aside — meets no lock of the seam's and unlinks the aside an answered
+/// replace queued; the held finish then answers.
 #[test]
 fn a_hold_parks_its_own_finish_and_nothing_else() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -235,18 +235,18 @@ fn a_hold_parks_its_own_finish_and_nothing_else() {
         after.wait();
     });
     let store = &store;
-    let (drained, finished) = thread::scope(|s| {
+    let (unlinked, finished) = thread::scope(|s| {
         let finishing = s.spawn(|| put_whole(store, "k", b"other bytes", 10));
         parked.wait();
         let (tx, rx) = mpsc::channel();
         s.spawn(move || tx.send(store.unlink_asides().map_err(|e| e.to_string())));
         // No assertion while the finish is held: a failed one would leave it
         // parked, the scope waiting on it.
-        let drained = rx.recv_timeout(Duration::from_secs(5));
+        let unlinked = rx.recv_timeout(Duration::from_secs(5));
         resumed.wait();
-        (drained, finishing.join())
+        (unlinked, finishing.join())
     });
-    assert_eq!(drained, Ok(Ok(1)), "the drain met no lock of the seam's while a finish was parked");
+    assert_eq!(unlinked, Ok(Ok(1)), "the deferred unlink met no lock of the seam's while a finish was parked");
     assert_eq!(finished.expect("the held finish answers").hex, hex_of(b"other bytes"));
     assert!(store.asides_of("blake3").unwrap().is_empty());
 }
@@ -255,11 +255,11 @@ fn a_hold_parks_its_own_finish_and_nothing_else() {
 /// finish from its first act to its answer, "so two finishes of one hash
 /// never interleave the replace's check, link and rename"): with one replace
 /// held between its link and its rename, a second finish of the same hash
-/// meets none of its gates until the first has answered. The seam runs a
-/// hold with none of its own state locked, so only the store's finish lock
-/// keeps the second out. A finish not held back meets its gate within
-/// milliseconds and the window here is half a second, so this test can err
-/// only toward passing.
+/// meets none of the seam's hooks until the first has answered. The seam
+/// runs a hold with none of its own state locked, so only the store's finish
+/// lock keeps the second out. A finish not held back meets its first hook
+/// within milliseconds and the window here is half a second, so this test
+/// can err only toward passing.
 #[test]
 fn the_finishes_run_one_at_a_time() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -296,7 +296,7 @@ fn the_finishes_run_one_at_a_time() {
     assert_eq!(
         met,
         Err(mpsc::RecvTimeoutError::Timeout),
-        "the second finish met its gate while the first was held inside its replace"
+        "the second finish met a seam hook while the first was held inside its replace"
     );
     assert_eq!(a.expect("the first thread").expect("the first finish answers").hex, hex);
     assert_eq!(b.expect("the second thread").expect("the second finish answers, after it").hex, hex);

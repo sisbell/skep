@@ -70,10 +70,10 @@ pub(crate) fn expiry(now_ms: u64, interval: Duration) -> u64 {
     now_ms.saturating_add(millis(interval))
 }
 
-/// One standing upload's record (clause (1)) — the identifier bound to its
-/// uploader, the designation, its declared length, the DURABLE offset
-/// (bytes received), the interval fixed at its creation, and the expiry
-/// fixed from the last byte received.
+/// One upload's record (clause (1)), standing or expired and not yet
+/// removed — the identifier bound to its uploader, the designation, its
+/// declared length, the DURABLE offset (bytes received), the interval fixed
+/// at its creation, and the expiry fixed from the last byte received.
 ///
 /// ITS OFFSET NEVER PASSES ITS LENGTH. Each of the four gates a record
 /// passes keeps it: its creation (`UploadRecords::create`) writes 0; a byte
@@ -270,7 +270,7 @@ impl UploadRecords {
         self.records.values()
     }
 
-    /// THE RECORD's BIRTH (clause (1)): `principal`'s upload `id` of
+    /// THE RECORD's CREATION (clause (1)): `principal`'s upload `id` of
     /// `designation` and declared `length` — offset 0, THE UPLOAD's INTERVAL
     /// held as its line spells it, in whole milliseconds, so the record open
     /// reads back is the record answered here, and its first expiry that
@@ -384,14 +384,18 @@ mod tests {
         let lines = || fs::read_to_string(dir.path().join(UPLOADS_LOG)).unwrap().lines().count();
         let mut records = UploadRecords::open(dir.path()).unwrap();
         let id = UploadId::parse("0123456789abcdef0123456789abcdef").unwrap();
-        let born = records.create(id, "k", "blake3", 10, Duration::from_micros(2_500), 100).unwrap();
-        assert_eq!((born.offset, born.interval, born.expires), (0, Duration::from_millis(2), 102), "its birth");
+        let created = records.create(id, "k", "blake3", 10, Duration::from_micros(2_500), 100).unwrap();
+        assert_eq!(
+            (created.offset, created.interval, created.expires),
+            (0, Duration::from_millis(2), 102),
+            "its creation"
+        );
         assert!(matches!(records.mark_received("other", &id, 5, 200), Err(BlobError::NoUpload)));
         records.mark_received("k", &id, 6, 200).unwrap();
         let received = records.of_principal("k", &id).cloned().unwrap();
         assert_eq!((received.offset, received.expires), (6, 202), "re-fixed its own interval past the byte");
-        assert_eq!((received.interval, received.length), (born.interval, born.length), "the rest kept");
-        assert_eq!(lines(), 2, "a line for the birth and one for the byte, none for another principal's mark");
+        assert_eq!((received.interval, received.length), (created.interval, created.length), "the rest kept");
+        assert_eq!(lines(), 2, "a line for the creation and one for the byte, none for another principal's mark");
         for not_lower in [6, 7] {
             records.set_back(&id, not_lower).unwrap();
         }

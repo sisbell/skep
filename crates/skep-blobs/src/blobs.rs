@@ -1,7 +1,7 @@
 //! THE FILES, `<root>/<designation>/<hex>`: the spellings a designation and
 //! a hex name must have, where a file lives for names that pass them
 //! ([`blob_path`], which answers none for a malformed one), the ASIDE name a
-//! replaced file carries until the deferred unlink, the listings of the
+//! replaced instance carries until the deferred unlink, the listings of the
 //! directories that hold those names and open's sweep of the asides
 //! ([`sweep_asides`]), the removal of a name another remover may have
 //! taken first ([`remove_if_present`]), the directory fsync every install
@@ -16,11 +16,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 /// The prefix of an aside name: `.retired-<hex>-<n>`, the second name a
-/// replaced file carries from the finish's link until the deferred unlink.
-/// The leading dot keeps it apart from any hex name, as the partial's is.
-/// Nothing names an aside — no lease, no cell — so every reader of a
-/// designation directory passes over one, and the pruner's pass and open's
-/// sweep ([`sweep_asides`]) remove it.
+/// replaced instance carries from the finish's link until the deferred
+/// unlink. The leading dot keeps it apart from any hex name, as the
+/// partial's is. Nothing names an aside — no lease, no cell — so every
+/// reader of a designation directory passes over one, and the pruner's pass
+/// and open's sweep ([`sweep_asides`]) remove it.
 const ASIDE_PREFIX: &str = ".retired-";
 
 /// The aside name of the `n`th replace of `hex` this process makes.

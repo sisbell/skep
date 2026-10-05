@@ -194,7 +194,11 @@ fn open_reconciles_the_partials_and_the_records_both_ways() {
     assert!(store.asides_of("blake3").unwrap().is_empty(), "an aside is removed at open");
     assert!(root.join("blake3").join(".retired-x").is_file(), "a name no aside has is left");
     assert!(!store.remove_aside("blake3", ".retired-x").unwrap(), "and is no aside to remove");
-    assert_eq!(store.designations().unwrap(), vec!["blake3".to_string(), "sha256-tree".to_string()], "every directory under the root, the foreign one included");
+    assert_eq!(
+        store.designation_dirs().unwrap(),
+        vec!["blake3".to_string(), "sha256-tree".to_string()],
+        "every directory under the root, the foreign one included"
+    );
     let lines_after = fs::read_to_string(root.join("uploads.log")).unwrap().lines().count();
     assert_eq!(lines_after, 3, "compacted to the three current records");
     assert_eq!(store.pending_bytes("k", now, every_deposit_unplaced), 4 + 6 + 3);

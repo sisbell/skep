@@ -56,7 +56,7 @@ fn the_deposits_column_follows_the_bare_ordinal_test() {
 /// subspace itself, above every row, is no row and never answered as one.
 #[test]
 #[should_panic(expected = "a commons row names at least one ordinal")]
-fn commons_type_refuses_an_empty_ordinal_list() {
+fn commons_type_panics_on_an_empty_ordinal_list() {
     let _ = commons_type(&[]);
 }
 
@@ -65,6 +65,6 @@ fn commons_type_refuses_an_empty_ordinal_list() {
 /// T4-valid address holds.
 #[test]
 #[should_panic(expected = "a subspace-3 element at positive ordinals is T4-valid")]
-fn commons_type_refuses_a_zero_ordinal() {
+fn commons_type_panics_on_a_zero_ordinal() {
     let _ = commons_type(&[58, 0]);
 }

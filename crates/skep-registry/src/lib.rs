@@ -23,7 +23,7 @@
 //! * `body` — [`Binding`], [`Endpoint`] with its [`Origins`], [`Body`] and
 //!   [`Record`], the kind [`BodyKind`] a parse is named under, the one parser
 //!   [`parse`] under the canonical rule, the encoder [`encode`], the refusals
-//!   [`Refusal`] with the [`Member`] a refusal names, and the cap
+//!   [`ParseRefusal`] with the [`Member`] a refusal names, and the cap
 //!   [`MAX_REGISTRY_RECORD_BYTES`];
 //! * `check` — [`seeding_check`] and its refusal [`SeedingRefusal`], run by
 //!   the daemon ahead of every genesis.
@@ -39,7 +39,7 @@ mod check;
 mod rows;
 
 pub use body::{
-    encode, parse, Binding, Body, BodyKind, Endpoint, Member, Origins, Record, Refusal,
+    encode, parse, Binding, Body, BodyKind, Endpoint, Member, Origins, ParseRefusal, Record,
     MAX_REGISTRY_RECORD_BYTES,
 };
 pub use check::{seeding_check, SeedingRefusal};

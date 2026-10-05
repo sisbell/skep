@@ -238,7 +238,7 @@ fn the_count_arm_holds_the_kind_rows_to_the_registry_ranges_five_ordinals() {
         type_value: Some("binding"),
     });
     let refusal = seeding_check(&sixth, std::iter::empty()).unwrap_err();
-    assert_eq!(refusal, SeedingRefusal::Count { kind_rows: 6, row: None });
+    assert_eq!(refusal, SeedingRefusal::Count { kind_row_count: 6, row: None });
     assert_eq!(
         refusal.to_string(),
         "count: 6 kind rows against the registry range's 5 ordinals 3.55-3.59"
@@ -247,7 +247,10 @@ fn the_count_arm_holds_the_kind_rows_to_the_registry_ranges_five_ordinals() {
     // is the reserve's and no ordinal of the registry range.
     let outside = moved(RowOf::Kind(Kind::Binding), &[54]);
     let refusal = seeding_check(&outside, std::iter::empty()).unwrap_err();
-    assert_eq!(refusal, SeedingRefusal::Count { kind_rows: 5, row: Some(commons_type(&[54])) });
+    assert_eq!(
+        refusal,
+        SeedingRefusal::Count { kind_row_count: 5, row: Some(commons_type(&[54])) }
+    );
     assert_eq!(
         refusal.to_string(),
         "count: of 5 kind rows, 1.1.0.1.0.1.0.3.54 is no bare ordinal of the registry range \
@@ -255,7 +258,10 @@ fn the_count_arm_holds_the_kind_rows_to_the_registry_ranges_five_ordinals() {
     );
     let doubled = moved(RowOf::Kind(Kind::Endpoint), &[55]);
     let refusal = seeding_check(&doubled, std::iter::empty()).unwrap_err();
-    assert_eq!(refusal, SeedingRefusal::Count { kind_rows: 5, row: Some(commons_type(&[55])) });
+    assert_eq!(
+        refusal,
+        SeedingRefusal::Count { kind_row_count: 5, row: Some(commons_type(&[55])) }
+    );
     assert_eq!(refusal.arm(), "count");
     assert!(refusal.to_string().starts_with("count:"), "{refusal}");
 }

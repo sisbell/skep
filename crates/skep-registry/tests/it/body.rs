@@ -21,11 +21,12 @@ use std::path::Path;
 
 use serde_json::Value;
 use skep_registry::{
-    encode, parse, rows, Body, BodyKind, Endpoint, Kind, Member, Origins, Record, Refusal,
+    encode, parse, rows, Body, BodyKind, Endpoint, Kind, Member, Origins, ParseRefusal, Record,
     MAX_REGISTRY_RECORD_BYTES,
 };
 
-fn fixture() -> Value {
+/// The vector set, `tests/vectors/records.json`, as the JSON it is.
+fn vector_set() -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/vectors/records.json");
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
@@ -57,9 +58,9 @@ fn kind_of(vector: &Value) -> BodyKind {
 /// sides of the canonical rule.
 #[test]
 fn the_vector_set_meets_one_answer_at_this_parser() {
-    let fixture = fixture();
-    assert_eq!(fixture["cap"].as_u64(), Some(MAX_REGISTRY_RECORD_BYTES as u64));
-    let vectors = fixture["vectors"].as_array().expect("vectors");
+    let set = vector_set();
+    assert_eq!(set["cap"].as_u64(), Some(MAX_REGISTRY_RECORD_BYTES as u64));
+    let vectors = set["vectors"].as_array().expect("vectors");
     let (mut admitted, mut refused) = (0, 0);
     for vector in vectors {
         let name = vector["name"].as_str().expect("a name");
@@ -85,12 +86,12 @@ fn the_vector_set_meets_one_answer_at_this_parser() {
                 admitted += 1;
             }
             ("ok", Err(refusal)) => panic!("{name}: the set admits it, the parser refuses {refusal}"),
-            (expected, Err(refusal)) => {
-                assert_eq!(refusal.token(), expected, "{name}");
+            (_, Err(refusal)) => {
+                assert_eq!(refusal.token(), answer, "{name}");
                 refused += 1;
             }
-            (expected, Ok(record)) => {
-                panic!("{name}: the set refuses it ({expected}), the parser admits {record:?}")
+            (_, Ok(record)) => {
+                panic!("{name}: the set refuses it ({answer}), the parser admits {record:?}")
             }
         }
     }
@@ -112,8 +113,8 @@ fn the_vector_set_meets_one_answer_at_this_parser() {
         "at_the_cap_with_sig",
         "one_past_the_cap_with_sig",
         "past_the_cap",
-        "with_sig",
-        "strings_take_the_short_escapes_alone",
+        "binding_with_sig",
+        "strings_take_the_shortest_escapes_alone",
         "strings_past_ascii_stand_as_themselves",
         "escape_long_form_of_a_named_control",
         "escape_uppercase_hex",
@@ -173,22 +174,26 @@ fn the_spec_examples_have_one_canonical_form_each() {
 #[test]
 fn a_refusal_names_the_member_that_faulted() {
     let cases = [
-        (BodyKind::Binding, r#"{"type":"binding"}"#, Refusal::MissingMember(Member::Prefix)),
-        (BodyKind::Endpoint, r#"{"type":"endpoint"}"#, Refusal::MissingMember(Member::Origins)),
+        (BodyKind::Binding, r#"{"type":"binding"}"#, ParseRefusal::MissingMember(Member::Prefix)),
+        (
+            BodyKind::Endpoint,
+            r#"{"type":"endpoint"}"#,
+            ParseRefusal::MissingMember(Member::Origins),
+        ),
         (
             BodyKind::Binding,
             r#"{"type":"binding","prefix":true}"#,
-            Refusal::NotAString(Member::Prefix),
+            ParseRefusal::NotAString(Member::Prefix),
         ),
         (
             BodyKind::Binding,
             r#"{"type":"binding","prefix":"1","replaces":"x"}"#,
-            Refusal::NotAnAddress(Member::Replaces),
+            ParseRefusal::NotAnAddress(Member::Replaces),
         ),
         (
             BodyKind::Binding,
             r#"{"type":"binding","prefix":"1","sig":null}"#,
-            Refusal::NotAString(Member::Sig),
+            ParseRefusal::NotAString(Member::Sig),
         ),
     ];
     for (kind, text, refusal) in cases {
@@ -235,7 +240,11 @@ fn a_body_answers_the_first_stage_that_faults() {
     let endpoint = parse(BodyKind::Endpoint, br#"{"type":"endpoint","origins":[],"sig":true}"#);
     assert_eq!(endpoint.unwrap_err().token(), "not_a_string:sig", "sig before the row's own");
     let past = vec![0xff_u8; MAX_REGISTRY_RECORD_BYTES + 1];
-    assert_eq!(parse(BodyKind::Binding, &past), Err(Refusal::PastCap), "the cap before the text");
+    assert_eq!(
+        parse(BodyKind::Binding, &past),
+        Err(ParseRefusal::PastCap),
+        "the cap before the text"
+    );
 }
 
 /// THE `type` MEMBER IS THE STRING ITS KIND's ROW HOLDS (REG-1.86 (a)): a
@@ -344,35 +353,35 @@ fn every_scalar_value_in_a_string_encodes_to_a_record() {
     }
 }
 
-/// The bytes the admitted vectors' one-byte mutants are drawn with: the
-/// whitespace JSON skips, its structure and escape letters, digits and
-/// signs, two hex letters in capitals, NUL, DEL, a lone continuation byte,
-/// and a byte no UTF-8 holds.
-const SUBSTITUTES: &[u8] = b" \t\n\"\\/{}[]:,.+-019eAFbnu\x00\x7f\x80\xff";
+/// The alphabet a one-byte mutant writes, inserting a byte or writing one
+/// over another: the whitespace JSON skips, its structure and escape
+/// letters, digits and signs, two hex letters in capitals, NUL, DEL, a lone
+/// continuation byte, and a byte no UTF-8 holds.
+const MUTANT_ALPHABET: &[u8] = b" \t\n\"\\/{}[]:,.+-019eAFbnu\x00\x7f\x80\xff";
 
 /// The longest admitted vector the one-byte mutants are drawn from: the
 /// set's vectors at the cap are pinned whole by their own answers, and the
 /// one-byte mutants of one would be some 930,000 bodies of 16 KiB.
-const MUTANT_SOURCE_MAX: usize = 1024;
+const MAX_MUTANT_SOURCE_BYTES: usize = 1024;
 
-/// Every one-byte mutant of every admitted vector of at most
-/// [`MUTANT_SOURCE_MAX`] bytes, under its kind: each byte deleted, each
-/// SUBSTITUTE written over it, and each inserted before it and after the
-/// last. An admitted vector of at most `MUTANT_SOURCE_MAX` bytes added later
+/// Every one-byte mutant of every admitted vector no longer than
+/// [`MAX_MUTANT_SOURCE_BYTES`], under its kind: each byte deleted, each
+/// byte of [`MUTANT_ALPHABET`] written over it, and each inserted before it
+/// and after the last. An admitted vector within that bound added later
 /// joins without an edit here.
 fn one_byte_mutants() -> Vec<(BodyKind, Vec<u8>)> {
-    let fixture = fixture();
+    let set = vector_set();
     let mut mutants = Vec::new();
-    for vector in fixture["vectors"].as_array().expect("vectors") {
+    for vector in set["vectors"].as_array().expect("vectors") {
         if vector["parse"] != "ok" {
             continue;
         }
         let (kind, bytes) = (kind_of(vector), bytes_of(vector));
-        if bytes.len() > MUTANT_SOURCE_MAX {
+        if bytes.len() > MAX_MUTANT_SOURCE_BYTES {
             continue;
         }
         for i in 0..=bytes.len() {
-            for &b in SUBSTITUTES {
+            for &b in MUTANT_ALPHABET {
                 let mut inserted = bytes.clone();
                 inserted.insert(i, b);
                 mutants.push((kind, inserted));
@@ -381,7 +390,7 @@ fn one_byte_mutants() -> Vec<(BodyKind, Vec<u8>)> {
                 let mut deleted = bytes.clone();
                 deleted.remove(i);
                 mutants.push((kind, deleted));
-                for &b in SUBSTITUTES {
+                for &b in MUTANT_ALPHABET {
                     let mut written = bytes.clone();
                     written[i] = b;
                     mutants.push((kind, written));
@@ -426,17 +435,18 @@ fn every_admitted_one_byte_mutant_is_its_own_canonical_encoding() {
             BodyKind::Binding => BodyKind::Endpoint,
             BodyKind::Endpoint => BodyKind::Binding,
         };
-        assert_eq!(parse(other, &bytes), Err(Refusal::WrongType), "{shown:?}");
+        assert_eq!(parse(other, &bytes), Err(ParseRefusal::WrongType), "{shown:?}");
         admitted += 1;
     }
     assert!(admitted > 100 && refused > 100, "{admitted} admitted, {refused} refused");
 }
 
-/// splitmix64 — the seed the hostile bodies are drawn from, so every run
-/// tries the same bodies and a failure names the one that broke.
-struct Seed(u64);
+/// splitmix64 — the generator the hostile bodies are drawn from, seeded
+/// with one constant, so every run tries the same bodies and a failure
+/// names the one that broke.
+struct SplitMix64(u64);
 
-impl Seed {
+impl SplitMix64 {
     fn next(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
@@ -569,17 +579,17 @@ fn other_values() -> Vec<String> {
 /// [`OWN_VALUES`], three times in four under a value of its own and else
 /// under one of [`other_values`], in the order drawn, joined canonically or,
 /// one time in ten, with a space after each comma.
-fn composed_body(seed: &mut Seed, others: &[String]) -> Vec<u8> {
+fn composed_body(rng: &mut SplitMix64, others: &[String]) -> Vec<u8> {
     let mut members = Vec::new();
-    if seed.below(5) != 0 {
-        members.push(format!(r#""type":{}"#, seed.pick(&[r#""binding""#, r#""endpoint""#])));
+    if rng.below(5) != 0 {
+        members.push(format!(r#""type":{}"#, rng.pick(&[r#""binding""#, r#""endpoint""#])));
     }
-    for _ in 0..=seed.below(4) {
-        let (name, own) = seed.pick(&OWN_VALUES);
-        let value = if seed.below(4) != 0 { *seed.pick(own) } else { seed.pick(others).as_str() };
+    for _ in 0..=rng.below(4) {
+        let (name, own) = rng.pick(&OWN_VALUES);
+        let value = if rng.below(4) != 0 { *rng.pick(own) } else { rng.pick(others).as_str() };
         members.push(format!(r#""{name}":{value}"#));
     }
-    let comma = if seed.below(10) == 0 { ", " } else { "," };
+    let comma = if rng.below(10) == 0 { ", " } else { "," };
     format!("{{{}}}", members.join(comma)).into_bytes()
 }
 
@@ -589,34 +599,34 @@ fn composed_body(seed: &mut Seed, others: &[String]) -> Vec<u8> {
 /// a range of up to 24 bytes cut, enough for a whole member; a range of up
 /// to 16 doubled; a range of up to 32 carried over from an admitted vector;
 /// or the whole body wrapped in an array.
-fn edit(seed: &mut Seed, body: &mut Vec<u8>, sources: &[Vec<u8>], fragments: &[Vec<u8>]) {
-    let at = seed.below(body.len() + 1);
-    match seed.below(6) {
+fn edit(rng: &mut SplitMix64, body: &mut Vec<u8>, sources: &[Vec<u8>], fragments: &[Vec<u8>]) {
+    let at = rng.below(body.len() + 1);
+    match rng.below(6) {
         0 => {
             let seams: Vec<usize> =
                 (0..body.len()).filter(|&i| b"{[,".contains(&body[i])).map(|i| i + 1).collect();
-            let at = if seams.is_empty() { at } else { *seed.pick(&seams) };
-            let mut fragment = seed.pick(fragments).clone();
+            let at = if seams.is_empty() { at } else { *rng.pick(&seams) };
+            let mut fragment = rng.pick(fragments).clone();
             fragment.push(b',');
             body.splice(at..at, fragment);
         }
         1 => {
-            let fragment = seed.pick(fragments);
+            let fragment = rng.pick(fragments);
             body.splice(at..at, fragment.iter().copied());
         }
         2 => {
-            let end = body.len().min(at + 1 + seed.below(24));
+            let end = body.len().min(at + 1 + rng.below(24));
             body.drain(at..end);
         }
         3 => {
-            let end = body.len().min(at + 1 + seed.below(16));
+            let end = body.len().min(at + 1 + rng.below(16));
             let doubled = body[at..end].to_vec();
             body.splice(end..end, doubled);
         }
         4 => {
-            let other = seed.pick(sources);
-            let from = seed.below(other.len());
-            let end = other.len().min(from + 1 + seed.below(32));
+            let other = rng.pick(sources);
+            let from = rng.below(other.len());
+            let end = other.len().min(from + 1 + rng.below(32));
             body.splice(at..at, other[from..end].iter().copied());
         }
         _ => {
@@ -631,28 +641,28 @@ fn edit(seed: &mut Seed, body: &mut Vec<u8>, sources: &[Vec<u8>], fragments: &[V
 /// carried past it — and half the time a [`composed_body`], one time in
 /// four carried an edit from itself.
 fn hostile_body(
-    seed: &mut Seed,
+    rng: &mut SplitMix64,
     sources: &[Vec<u8>],
     fragments: &[Vec<u8>],
     others: &[String],
 ) -> Vec<u8> {
-    let (mut body, edits) = if seed.below(2) == 0 {
-        (seed.pick(sources).clone(), 1 + seed.below(4))
+    let (mut body, edits) = if rng.below(2) == 0 {
+        (rng.pick(sources).clone(), 1 + rng.below(4))
     } else {
-        (composed_body(seed, others), usize::from(seed.below(4) == 0))
+        (composed_body(rng, others), usize::from(rng.below(4) == 0))
     };
     for _ in 0..edits {
-        edit(seed, &mut body, sources, fragments);
+        edit(rng, &mut body, sources, fragments);
     }
     body
 }
 
-/// The parse's laws at one body, under each kind in turn: an answer and no
-/// panic; `past_cap` exactly where the body is past the cap; a record only
+/// Asserts the parse's laws at one body, under each kind in turn: an answer
+/// and no panic; `past_cap` exactly where the body is past the cap; a record only
 /// where the body is its own canonical encoding, of the kind named, its
 /// sig-less projection a fixpoint; and a record under one kind at most.
 /// Answers each kind's refusal, `None` where the kind admitted the body.
-fn the_laws_hold_at(body: &[u8]) -> [Option<Refusal>; 2] {
+fn assert_the_laws_at(body: &[u8]) -> [Option<ParseRefusal>; 2] {
     let shown = || {
         let head: String = String::from_utf8_lossy(body).chars().take(240).collect();
         format!("{head:?} ({} bytes)", body.len())
@@ -665,14 +675,19 @@ fn the_laws_hold_at(body: &[u8]) -> [Option<Refusal>; 2] {
             Ok(record) => {
                 assert!(!past, "{kind:?}: a record past the cap: {}", shown());
                 assert_eq!(record.body.kind(), kind, "{}", shown());
-                let spelled = encode(&record.body, record.sig.as_deref());
-                assert!(spelled.as_bytes() == body, "{kind:?}: not its own encoding: {}", shown());
+                let encoded = encode(&record.body, record.sig.as_deref());
+                assert!(encoded.as_bytes() == body, "{kind:?}: not its own encoding: {}", shown());
                 let again = parse(kind, record.canonical_sigless().as_bytes());
                 assert_eq!(again, Ok(Record { body: record.body, sig: None }), "{}", shown());
                 None
             }
             Err(refusal) => {
-                assert_eq!(refusal == Refusal::PastCap, past, "{kind:?}: {refusal}: {}", shown());
+                assert_eq!(
+                    refusal == ParseRefusal::PastCap,
+                    past,
+                    "{kind:?}: {refusal}: {}",
+                    shown()
+                );
                 Some(refusal)
             }
         }
@@ -715,19 +730,20 @@ const EVERY_CAUSE: [&str; 17] = [
     "not_canonical",
 ];
 
-/// THE PARSE's LAWS ON SEEDED HOSTILE BODIES: every body the seed draws —
-/// an admitted vector up to four edits from itself, or an object composed
-/// member by member — meets [`the_laws_hold_at`] under both kinds. A
-/// one-byte mutant stays one byte from a vector; these reach a member
-/// beside the row's own holding a nested value, a run of escapes, an array
-/// at the depth limit, a member doubled, cut or out of its order, a string
-/// in a spelling the canonical form never writes, and the vector at the cap
-/// carried past it. The run meets records and every refusal the parse
-/// answers, and no other: each law is tried at every stage.
+/// THE PARSE's LAWS ON SEEDED HOSTILE BODIES: every body the generator
+/// draws — an admitted vector up to four edits from itself, or an object
+/// composed member by member — meets the parse's laws under both kinds
+/// ([`assert_the_laws_at`]). A one-byte mutant stays one byte from a
+/// vector; these reach a member beside the row's own holding a nested
+/// value, a run of escapes, an array at the depth limit, a member doubled,
+/// cut or out of its order, a string in a spelling the canonical form never
+/// writes, and the vector at the cap carried past it. The run meets records
+/// and every refusal the parse answers, and no other: each law is tried at
+/// every stage.
 #[test]
 fn the_parse_laws_hold_on_seeded_hostile_bodies() {
-    let fixture = fixture();
-    let sources: Vec<Vec<u8>> = fixture["vectors"]
+    let set = vector_set();
+    let sources: Vec<Vec<u8>> = set["vectors"]
         .as_array()
         .expect("vectors")
         .iter()
@@ -735,14 +751,14 @@ fn the_parse_laws_hold_on_seeded_hostile_bodies() {
         .map(bytes_of)
         .collect();
     let (fragments, others) = (fragments(), other_values());
-    let mut seed = Seed(0x5EED_2E61_5781_0D1E);
-    let mut records = 0;
+    let mut rng = SplitMix64(0x5EED_2E61_5781_0D1E);
+    let mut admitted = 0;
     let mut causes = std::collections::BTreeSet::new();
     for _ in 0..hostile_rounds() {
-        let body = hostile_body(&mut seed, &sources, &fragments, &others);
-        for answer in the_laws_hold_at(&body) {
+        let body = hostile_body(&mut rng, &sources, &fragments, &others);
+        for answer in assert_the_laws_at(&body) {
             match answer {
-                None => records += 1,
+                None => admitted += 1,
                 Some(refusal) => {
                     causes.insert(refusal.token());
                 }
@@ -754,5 +770,5 @@ fn the_parse_laws_hold_on_seeded_hostile_bodies() {
     let unlisted: Vec<&String> =
         causes.iter().filter(|c| !EVERY_CAUSE.contains(&c.as_str())).collect();
     assert!(unlisted.is_empty(), "causes the list does not name: {unlisted:?}");
-    assert!(records > 100, "{records} records");
+    assert!(admitted > 100, "{admitted} admitted");
 }

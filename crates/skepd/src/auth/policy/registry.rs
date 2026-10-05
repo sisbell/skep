@@ -181,7 +181,7 @@ pub(crate) enum RegistryRefusal {
     /// THE RECORD VALUE: the atom's bytes are no record of the kind the slot
     /// names, under the canonical rule — the parser's cause joined. Token
     /// `malformed_record:<cause>`, PERMANENT.
-    MalformedRecord(skep_registry::Refusal),
+    MalformedRecord(skep_registry::ParseRefusal),
     /// NO `sig` at all (§4.5 (4)) — the fence with no population, as the
     /// credential's: a sig-less record-kind atom is refused at its `insert`.
     /// Token `attestation_required`, REORDER.
@@ -337,7 +337,7 @@ pub(crate) fn registry_admission(
     let bytes = match record_bytes(world, &dep.home, &dep.from) {
         Ok(bytes) => bytes,
         Err(PayloadError::TooLarge) => {
-            return Err(RegistryRefusal::MalformedRecord(skep_registry::Refusal::PastCap))
+            return Err(RegistryRefusal::MalformedRecord(skep_registry::ParseRefusal::PastCap))
         }
         Err(_) => return Err(RegistryRefusal::Form),
     };
@@ -478,7 +478,7 @@ mod tests {
             (RegistryRefusal::NotDocOne, "not_doc_one", Permanent),
             (RegistryRefusal::Form, "registry_form", Permanent),
             (
-                RegistryRefusal::MalformedRecord(skep_registry::Refusal::WrongType),
+                RegistryRefusal::MalformedRecord(skep_registry::ParseRefusal::WrongType),
                 "malformed_record:wrong_type",
                 Permanent,
             ),

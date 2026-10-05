@@ -2870,8 +2870,8 @@ The daemon checks the FORM of every member and never its admissibility:
 `type` is the string of the kind the link's type slot names, and a body
 whose `type` is another kind's is no record of the slot's kind; NO member
 is a JSON number, anywhere in the body; `prefix` and `replaces` parse as
-addresses in their one spelling (no sign, no leading zero, the whole
-T4-valid); `origins` is non-empty. Whether an origin is https with a
+addresses in their one spelling (no sign, no zero-padded component, the
+whole T4-valid); `origins` is non-empty. Whether an origin is https with a
 routable host is the resolver's check, and whether `replaces` names the
 deposit current at the record's position is the reader's currency rule —
 a later record naming one that is no longer current COMMITS and is inert

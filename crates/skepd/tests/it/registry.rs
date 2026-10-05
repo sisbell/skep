@@ -578,7 +578,7 @@ fn the_seeding_check_passes_the_shipped_lists_and_refuses_each_arm_on_a_mutated_
         type_value: Some("binding"),
     });
     let refusal = seeding_check(&sixth, &domain).unwrap_err();
-    assert_eq!(refusal, SeedingRefusal::Count { kind_rows: 6, row: None });
+    assert_eq!(refusal, SeedingRefusal::Count { kind_row_count: 6, row: None });
     assert_eq!(refusal.arm(), "count");
     sd.shutdown();
 }

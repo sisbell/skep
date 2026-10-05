@@ -61,7 +61,7 @@ use crate::state::{BindingRecord, EndpointRecord, Judged, Standing, Verdict};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cause {
     /// The bytes are no record of the slot's kind under the canonical rule.
-    Malformed(skep_registry::Refusal),
+    Malformed(skep_registry::ParseRefusal),
     /// The record's verdict, any but SIGNED.
     Verdict(Verdict),
 }

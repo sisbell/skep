@@ -59,7 +59,7 @@ use skep_address::{validate, Address, Nat, Tumbler};
 use crate::rows::Kind;
 
 /// The most bytes a registry record body may carry, `sig` included, a body
-/// past it refused ([`Refusal::PastCap`]) before any parse — 16 KiB, an
+/// past it refused ([`ParseRefusal::PastCap`]) before any parse — 16 KiB, an
 /// interim pin confirmed at the registry's review round: a `sig` under
 /// `mldsa65-ed25519` is 6,746 bytes of hex on its own, so a signed binding
 /// is near seven kilobytes and a signed endpoint with a long list of
@@ -132,7 +132,7 @@ pub struct Endpoint {
 /// AN ENDPOINT's ORIGINS (REG-1.9): the org's ordered list, AT LEAST ONE
 /// entry, the order load-bearing at the resolver's walk. Never empty: a list
 /// of no origin is no value of this type, so `[]` — which no reader holds
-/// ([`Refusal::EmptyOrigins`]) — is a body no caller can build.
+/// ([`ParseRefusal::EmptyOrigins`]) — is a body no caller can build.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Origins(Vec<String>);
 
@@ -220,7 +220,7 @@ impl Record {
 }
 
 /// A body member a refusal names (REG-1.86's table) — `type` aside, whose
-/// every fault is [`Refusal::WrongType`].
+/// every fault is [`ParseRefusal::WrongType`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Member {
     /// `prefix` — the binding's own member.
@@ -247,11 +247,11 @@ impl Member {
 }
 
 /// Why bytes are no record of the kind named — each its own cause, joined to
-/// the daemon's refusal token by [`Refusal::token`] — listed in the order of
+/// the daemon's refusal token by [`ParseRefusal::token`] — listed in the order of
 /// [`parse`]'s stages, the members' causes answered member by member in the
 /// order `parse` states.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Refusal {
+pub enum ParseRefusal {
     /// Past [`MAX_REGISTRY_RECORD_BYTES`]: parsed by no reader at all.
     PastCap,
     /// The bytes are no UTF-8 text.
@@ -264,7 +264,7 @@ pub enum Refusal {
     /// A JSON number somewhere in the value the parse read (REG-1.86 (d)):
     /// the whole value's range, tested before any member is read. A number
     /// only in an occurrence the value stage did not keep — the earlier of a
-    /// member spelled twice — is answered [`Refusal::NotCanonical`].
+    /// member spelled twice — is answered [`ParseRefusal::NotCanonical`].
     Number,
     /// The `type` member is absent, no string, or not the string of the
     /// kind the caller named: a record of that kind it is not (REG-1.86 (a)).
@@ -277,8 +277,8 @@ pub enum Refusal {
     NotAString(Member),
     /// A member that must parse as an address in dotted decimal does not —
     /// `prefix`, `replaces` — the one spelling of that address included
-    /// (no leading zero, no sign, every component a decimal natural, the
-    /// whole T4-valid).
+    /// (no zero-padded component, no sign, every component a decimal
+    /// natural, the whole T4-valid).
     NotAnAddress(Member),
     /// `origins` is no array of strings.
     OriginsNotStrings,
@@ -292,42 +292,42 @@ pub enum Refusal {
     NotCanonical,
 }
 
-impl Refusal {
+impl ParseRefusal {
     /// The machine token: the cause's own name, a member name joined after
     /// a colon where the cause names one.
     pub fn token(&self) -> String {
         match self {
-            Refusal::PastCap => "past_cap".into(),
-            Refusal::NotUtf8 => "not_utf8".into(),
-            Refusal::NotJson => "not_json".into(),
-            Refusal::NotAnObject => "not_an_object".into(),
-            Refusal::Number => "number".into(),
-            Refusal::WrongType => "wrong_type".into(),
-            Refusal::UnknownMember => "unknown_member".into(),
-            Refusal::MissingMember(m) => format!("missing_member:{}", m.name()),
-            Refusal::NotAString(m) => format!("not_a_string:{}", m.name()),
-            Refusal::NotAnAddress(m) => format!("not_an_address:{}", m.name()),
-            Refusal::OriginsNotStrings => "origins_not_strings".into(),
-            Refusal::EmptyOrigins => "empty_origins".into(),
-            Refusal::NotCanonical => "not_canonical".into(),
+            ParseRefusal::PastCap => "past_cap".into(),
+            ParseRefusal::NotUtf8 => "not_utf8".into(),
+            ParseRefusal::NotJson => "not_json".into(),
+            ParseRefusal::NotAnObject => "not_an_object".into(),
+            ParseRefusal::Number => "number".into(),
+            ParseRefusal::WrongType => "wrong_type".into(),
+            ParseRefusal::UnknownMember => "unknown_member".into(),
+            ParseRefusal::MissingMember(m) => format!("missing_member:{}", m.name()),
+            ParseRefusal::NotAString(m) => format!("not_a_string:{}", m.name()),
+            ParseRefusal::NotAnAddress(m) => format!("not_an_address:{}", m.name()),
+            ParseRefusal::OriginsNotStrings => "origins_not_strings".into(),
+            ParseRefusal::EmptyOrigins => "empty_origins".into(),
+            ParseRefusal::NotCanonical => "not_canonical".into(),
         }
     }
 }
 
-impl std::fmt::Display for Refusal {
+impl std::fmt::Display for ParseRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.token())
     }
 }
 
-impl std::error::Error for Refusal {}
+impl std::error::Error for ParseRefusal {}
 
 /// THE ONE PARSER: the record `bytes` spell under the kind the caller names,
 /// under the canonical rule — a record is answered only where `bytes ==
 /// encode(parse(bytes))` — or why they are none. Total over any bytes: no
 /// panic, and no tree past the cap.
 ///
-/// THE STAGES, the first to fault naming the refusal ([`Refusal`]): the cap;
+/// THE STAGES, the first to fault naming the refusal ([`ParseRefusal`]): the cap;
 /// the text; the value; the object; the number scan; `type`; the member set;
 /// then each member's form, one member at a time — `replaces`, then `sig`,
 /// then the row's own (`prefix` or `origins`), a required member's absence
@@ -342,26 +342,26 @@ impl std::error::Error for Refusal {}
 /// `not_canonical`; and a value nested more than 127 objects and arrays
 /// deep, the body's own object counted, is no JSON. Every other refusal is
 /// this schema's.
-pub fn parse(kind: BodyKind, bytes: &[u8]) -> Result<Record, Refusal> {
+pub fn parse(kind: BodyKind, bytes: &[u8]) -> Result<Record, ParseRefusal> {
     if bytes.len() > MAX_REGISTRY_RECORD_BYTES {
-        return Err(Refusal::PastCap);
+        return Err(ParseRefusal::PastCap);
     }
-    let text = std::str::from_utf8(bytes).map_err(|_| Refusal::NotUtf8)?;
-    let value: Value = serde_json::from_str(text).map_err(|_| Refusal::NotJson)?;
-    let Value::Object(mut object) = value else { return Err(Refusal::NotAnObject) };
+    let text = std::str::from_utf8(bytes).map_err(|_| ParseRefusal::NotUtf8)?;
+    let value: Value = serde_json::from_str(text).map_err(|_| ParseRefusal::NotJson)?;
+    let Value::Object(mut object) = value else { return Err(ParseRefusal::NotAnObject) };
     if object.values().any(holds_a_number) {
-        return Err(Refusal::Number);
+        return Err(ParseRefusal::Number);
     }
     if object.get("type").and_then(Value::as_str) != Some(kind.type_value()) {
-        return Err(Refusal::WrongType);
+        return Err(ParseRefusal::WrongType);
     }
     let own = match kind {
         BodyKind::Binding => Member::Prefix,
         BodyKind::Endpoint => Member::Origins,
     };
-    let members = [own, Member::Replaces, Member::Sig];
-    if object.keys().any(|k| k != "type" && !members.iter().any(|m| m.name() == k)) {
-        return Err(Refusal::UnknownMember);
+    let known = [own, Member::Replaces, Member::Sig];
+    if object.keys().any(|k| k != "type" && !known.iter().any(|m| m.name() == k)) {
+        return Err(ParseRefusal::UnknownMember);
     }
     // The strings the record keeps — `sig` and the origins — are moved out of
     // the tree the parse owns; an address member is read where it stands.
@@ -369,27 +369,29 @@ pub fn parse(kind: BodyKind, bytes: &[u8]) -> Result<Record, Refusal> {
     let sig = match object.remove(Member::Sig.name()) {
         None => None,
         Some(Value::String(s)) => Some(s),
-        Some(_) => return Err(Refusal::NotAString(Member::Sig)),
+        Some(_) => return Err(ParseRefusal::NotAString(Member::Sig)),
     };
     let body = match kind {
         BodyKind::Binding => {
             let prefix = required_string(&object, Member::Prefix)?;
-            let prefix = address_of(prefix).ok_or(Refusal::NotAnAddress(Member::Prefix))?;
+            let prefix = address_of(prefix).ok_or(ParseRefusal::NotAnAddress(Member::Prefix))?;
             Body::Binding(Binding { prefix, replaces })
         }
         BodyKind::Endpoint => {
             let origins = object
                 .remove(Member::Origins.name())
-                .ok_or(Refusal::MissingMember(Member::Origins))?;
-            let Value::Array(origins) = origins else { return Err(Refusal::OriginsNotStrings) };
+                .ok_or(ParseRefusal::MissingMember(Member::Origins))?;
+            let Value::Array(origins) = origins else {
+                return Err(ParseRefusal::OriginsNotStrings);
+            };
             let origins = origins
                 .into_iter()
                 .map(|o| match o {
                     Value::String(s) => Ok(s),
-                    _ => Err(Refusal::OriginsNotStrings),
+                    _ => Err(ParseRefusal::OriginsNotStrings),
                 })
                 .collect::<Result<_, _>>()?;
-            let origins = Origins::new(origins).ok_or(Refusal::EmptyOrigins)?;
+            let origins = Origins::new(origins).ok_or(ParseRefusal::EmptyOrigins)?;
             Body::Endpoint(Endpoint { origins, replaces })
         }
     };
@@ -397,7 +399,7 @@ pub fn parse(kind: BodyKind, bytes: &[u8]) -> Result<Record, Refusal> {
     // re-encoding of what it spells — by the public encoder itself, the
     // function a signer composes with, `sig` included.
     if encode(&body, sig.as_deref()) != text {
-        return Err(Refusal::NotCanonical);
+        return Err(ParseRefusal::NotCanonical);
     }
     Ok(Record { body, sig })
 }
@@ -416,11 +418,11 @@ fn holds_a_number(v: &Value) -> bool {
 fn required_string(
     object: &serde_json::Map<String, Value>,
     member: Member,
-) -> Result<&str, Refusal> {
+) -> Result<&str, ParseRefusal> {
     match object.get(member.name()) {
-        None => Err(Refusal::MissingMember(member)),
+        None => Err(ParseRefusal::MissingMember(member)),
         Some(Value::String(s)) => Ok(s.as_str()),
-        Some(_) => Err(Refusal::NotAString(member)),
+        Some(_) => Err(ParseRefusal::NotAString(member)),
     }
 }
 
@@ -429,11 +431,11 @@ fn required_string(
 fn optional_address(
     object: &serde_json::Map<String, Value>,
     member: Member,
-) -> Result<Option<Address>, Refusal> {
+) -> Result<Option<Address>, ParseRefusal> {
     match object.get(member.name()) {
         None => Ok(None),
-        Some(Value::String(s)) => address_of(s).map(Some).ok_or(Refusal::NotAnAddress(member)),
-        Some(_) => Err(Refusal::NotAString(member)),
+        Some(Value::String(s)) => address_of(s).map(Some).ok_or(ParseRefusal::NotAnAddress(member)),
+        Some(_) => Err(ParseRefusal::NotAString(member)),
     }
 }
 
@@ -441,7 +443,7 @@ fn optional_address(
 /// ONE spelling — its own rendering, the one [`encode`] writes an address
 /// member as — else `None`. The rendering compare is the whole test: a
 /// component is read by `Nat`'s parse, which admits a sign, `_` separators
-/// and leading zeros, and a rendering writes none of them; T4 validity is
+/// and zero padding, and a rendering writes none of them; T4 validity is
 /// `validate`'s.
 fn address_of(s: &str) -> Option<Address> {
     let comps: Option<Vec<Nat>> = s.split('.').map(|c| c.parse::<Nat>().ok()).collect();
@@ -559,11 +561,12 @@ mod tests {
             "{\"type\":\"endpoint\",\"origins\":[\"a\\\"b\\\\c\\n\\u0001/é\"]}"
         );
         let longer = "{\"type\":\"endpoint\",\"origins\":[\"a\\\"b\\\\c\\n\\u0001\\/é\"]}";
-        assert_eq!(parse(BodyKind::Endpoint, longer.as_bytes()), Err(Refusal::NotCanonical));
+        assert_eq!(parse(BodyKind::Endpoint, longer.as_bytes()), Err(ParseRefusal::NotCanonical));
     }
 
-    /// The address form is one spelling: a sign, a separator, a leading
-    /// zero, an empty component and a T4-invalid tumbler are each refused.
+    /// The address form is one spelling: a sign, a separator, a zero-padded
+    /// component, an empty component and a T4-invalid tumbler are each
+    /// refused.
     #[test]
     fn the_address_form_is_one_spelling() {
         for ok in ["1", "1.5", "1.0.1.0.1.0.2.3", "1.1.0.1"] {
@@ -667,16 +670,16 @@ mod tests {
         assert!(parse(BodyKind::Binding, signed.as_bytes()).is_ok());
         let mut past = b"{".to_vec();
         past.resize(MAX_REGISTRY_RECORD_BYTES + 1, b' ');
-        assert_eq!(parse(BodyKind::Binding, &past), Err(Refusal::PastCap));
+        assert_eq!(parse(BodyKind::Binding, &past), Err(ParseRefusal::PastCap));
         past.truncate(MAX_REGISTRY_RECORD_BYTES);
-        assert_eq!(parse(BodyKind::Binding, &past), Err(Refusal::NotJson), "at the cap: parsed, and no JSON");
-        let unsigned = encode(&binding("1.5", None), Some("")).len();
-        let sig = "a".repeat(MAX_REGISTRY_RECORD_BYTES - unsigned);
+        assert_eq!(parse(BodyKind::Binding, &past), Err(ParseRefusal::NotJson), "at the cap: parsed, and no JSON");
+        let around_the_sig = encode(&binding("1.5", None), Some("")).len();
+        let sig = "a".repeat(MAX_REGISTRY_RECORD_BYTES - around_the_sig);
         let at_cap = encode(&binding("1.5", None), Some(&sig));
         assert_eq!(at_cap.len(), MAX_REGISTRY_RECORD_BYTES);
         let record = parse(BodyKind::Binding, at_cap.as_bytes()).expect("a record at the cap");
         assert_eq!(record.sig.as_deref(), Some(sig.as_str()));
         let one_past = encode(&binding("1.5", None), Some(&format!("{sig}a")));
-        assert_eq!(parse(BodyKind::Binding, one_past.as_bytes()), Err(Refusal::PastCap));
+        assert_eq!(parse(BodyKind::Binding, one_past.as_bytes()), Err(ParseRefusal::PastCap));
     }
 }

@@ -384,7 +384,7 @@ fn the_fixture_board_resolves_live_and_is_recorded_on_demand() {
     let suppressed = mirror.index().suppressed().to_vec();
     assert_eq!(suppressed.len(), 2, "{suppressed:?}");
     assert!(suppressed.iter().any(|s| s.link == addr(&orgs["1.4"].binding) && s.cause == Cause::Verdict(Verdict::Unsigned)));
-    assert!(suppressed.iter().any(|s| s.link == addr(&orgs["1.14"].binding) && matches!(s.cause, Cause::Malformed(skep_registry::Refusal::NotCanonical))));
+    assert!(suppressed.iter().any(|s| s.link == addr(&orgs["1.14"].binding) && matches!(s.cause, Cause::Malformed(skep_registry::ParseRefusal::NotCanonical))));
     let faces: Vec<(&str, Resolution)> =
         FIXTURE_PREFIXES.iter().map(|p| (*p, resolve_prefix(&mut mirror, p))).collect();
     for (prefix, face) in &faces {

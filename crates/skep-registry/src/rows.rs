@@ -470,13 +470,16 @@ mod tests {
         }
     }
 
-    /// Each subtype row is a PREFIX under its own kind's row (REG-1.20) and
-    /// under no other; the kind rows are pairwise prefix-free.
+    /// Every row nests under its own kind's row alone: a subtype row is a
+    /// PREFIX under its own kind's row (REG-1.20) and under no other kind's,
+    /// and a kind's own row is that row itself, under no other kind's — the
+    /// kind rows are pairwise prefix-free.
     #[test]
-    fn every_subtype_row_nests_under_its_own_kind_alone() {
-        let kinds: Vec<&Row> = rows().iter().filter(|r| matches!(r.of, RowOf::Kind(_))).collect();
-        for (i, a) in kinds.iter().enumerate() {
-            for b in &kinds[i + 1..] {
+    fn every_row_nests_under_its_own_kinds_row_alone() {
+        let kind_rows: Vec<&Row> =
+            rows().iter().filter(|r| matches!(r.of, RowOf::Kind(_))).collect();
+        for (i, a) in kind_rows.iter().enumerate() {
+            for b in &kind_rows[i + 1..] {
                 assert!(
                     !is_prefix(a.address.tumbler(), b.address.tumbler())
                         && !is_prefix(b.address.tumbler(), a.address.tumbler())
@@ -484,7 +487,7 @@ mod tests {
             }
         }
         for r in rows().iter().filter(|r| matches!(r.of, RowOf::Subtype(_))) {
-            for k in &kinds {
+            for k in &kind_rows {
                 let nested = is_prefix(k.address.tumbler(), r.address.tumbler());
                 assert_eq!(nested, k.of.kind() == r.of.kind(), "{:?} under {:?}", r.of, k.of);
             }

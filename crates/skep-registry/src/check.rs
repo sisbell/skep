@@ -41,7 +41,7 @@ pub enum SeedingRefusal {
     /// The count arm: more kind rows than the registry range's ordinals, or
     /// — with `row` named — a kind row that is no bare ordinal inside the
     /// registry range, or a second kind row at an ordinal already taken.
-    Count { kind_rows: usize, row: Option<Address> },
+    Count { kind_row_count: usize, row: Option<Address> },
 }
 
 impl SeedingRefusal {
@@ -71,16 +71,16 @@ impl fmt::Display for SeedingRefusal {
                 subtype.name(),
                 subtype.kind().name()
             ),
-            SeedingRefusal::Count { kind_rows, row: None } => write!(
+            SeedingRefusal::Count { kind_row_count, row: None } => write!(
                 f,
-                "count: {kind_rows} kind rows against the registry range's {} ordinals 3.{}-3.{}",
+                "count: {kind_row_count} kind rows against the registry range's {} ordinals 3.{}-3.{}",
                 REGISTRY_RANGE.count(),
                 REGISTRY_RANGE.start(),
                 REGISTRY_RANGE.end()
             ),
-            SeedingRefusal::Count { kind_rows, row: Some(row) } => write!(
+            SeedingRefusal::Count { kind_row_count, row: Some(row) } => write!(
                 f,
-                "count: of {kind_rows} kind rows, {row} is no bare ordinal of the registry range 3.{}-3.{} left to it",
+                "count: of {kind_row_count} kind rows, {row} is no bare ordinal of the registry range 3.{}-3.{} left to it",
                 REGISTRY_RANGE.start(),
                 REGISTRY_RANGE.end()
             ),
@@ -119,12 +119,12 @@ pub fn seeding_check<'a>(
         }
     }
     for subtype in Subtype::ALL {
-        let under =
+        let kind_row =
             row_of(RowOf::Kind(subtype.kind())).expect("every kind's row stands, checked above");
         let present = rows.iter().any(|r| {
             r.of == RowOf::Subtype(subtype)
-                && r.address != under.address
-                && is_prefix(under.address.tumbler(), r.address.tumbler())
+                && r.address != kind_row.address
+                && is_prefix(kind_row.address.tumbler(), r.address.tumbler())
         });
         if !present {
             return Err(SeedingRefusal::Completeness { missing: RowOf::Subtype(subtype) });
@@ -133,7 +133,7 @@ pub fn seeding_check<'a>(
     // 3 — THE COUNT: the kind rows against the registry range's ordinals.
     let kind_rows: Vec<&Row> = rows.iter().filter(|r| matches!(r.of, RowOf::Kind(_))).collect();
     if kind_rows.len() > REGISTRY_RANGE.count() {
-        return Err(SeedingRefusal::Count { kind_rows: kind_rows.len(), row: None });
+        return Err(SeedingRefusal::Count { kind_row_count: kind_rows.len(), row: None });
     }
     let mut taken: Vec<u32> = Vec::new();
     for r in &kind_rows {
@@ -141,7 +141,7 @@ pub fn seeding_check<'a>(
             Some(ordinal) if !taken.contains(&ordinal) => taken.push(ordinal),
             _ => {
                 return Err(SeedingRefusal::Count {
-                    kind_rows: kind_rows.len(),
+                    kind_row_count: kind_rows.len(),
                     row: Some(r.address.clone()),
                 })
             }

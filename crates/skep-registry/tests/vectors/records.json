@@ -1,5 +1,5 @@
 {
-  "note": "THE ONE VECTOR SET of the registry's two bodies, the binding's and the endpoint's (REG-1.86; the canonical rule): every parser of the bodies -- skep-registry's, and any other a reader of the bodies builds (skep-resolve builds none: it calls skep-registry's parse) -- runs these in its own gate. The rule is the arbiter: parse(b) answers a record only where b == encode(parse(b)). `kind` is the kind the caller names, the link's type slot; `parse` is the parse's answer, `ok` (admitted: the bytes ARE the canonical form) or the refusal's cause as skep-registry's Refusal::token spells it, which the daemon joins to its malformed_record token; on an admitted body `canonical_sigless` is the sig-less canonical projection a record-grade signature ranges over and `sig` the sig member as found (null where absent). A body carried as `bytes_hex` is bytes that are no UTF-8 string. The cap, 16 KiB with the sig member inside it, counted in the body's UTF-8 bytes and never its characters, is interim, confirmed at the registry's review round.",
+  "note": "THE ONE VECTOR SET of the registry's two bodies, the binding's and the endpoint's (REG-1.86; the canonical rule): every parser of the bodies -- skep-registry's, and any other a reader of the bodies builds (skep-resolve builds none: it calls skep-registry's parse) -- runs these in its own gate. The rule is the arbiter: parse(b) answers a record only where b == encode(parse(b)). `kind` is the kind the caller names, the link's type slot; `parse` is the parse's answer, `ok` (admitted: the bytes ARE the canonical form) or the refusal's cause as skep-registry's ParseRefusal::token spells it, which the daemon joins to its malformed_record token; on an admitted body `canonical_sigless` is the sig-less canonical projection a record-grade signature ranges over and `sig` the sig member as found (null where absent). A body carried as `bytes_hex` is bytes that are no UTF-8 string. The cap, 16 KiB with the sig member inside it, counted in the body's UTF-8 bytes and never its characters, is interim, confirmed at the registry's review round.",
   "cap": 16384,
   "vectors": [
     {
@@ -137,11 +137,11 @@
       "why": "a body naming no kind is a record of none"
     },
     {
-      "name": "type_another_kind",
+      "name": "type_of_a_subtype_row",
       "kind": "binding",
       "bytes": "{\"type\":\"takedown\",\"prefix\":\"1.5\"}",
       "parse": "wrong_type",
-      "why": "a third kind's string under a binding slot"
+      "why": "a subtype row's type string -- the takedown record's base reading's, a body-bearing row and no kind -- under a binding slot"
     },
     {
       "name": "type_not_a_string",
@@ -220,7 +220,7 @@
       "why": "a body past 16 KiB is refused before any tree is built; the cap holds a signed body, whose sig alone is 6,746 hex characters under mldsa65-ed25519"
     },
     {
-      "name": "with_sig",
+      "name": "binding_with_sig",
       "kind": "binding",
       "bytes": "{\"type\":\"binding\",\"prefix\":\"1.5\",\"sig\":\"abcd\"}",
       "parse": "ok",
@@ -229,7 +229,7 @@
       "why": "the reserved sig member, canonically last, answered as the string found; the sig-less canonical projection is the body without it"
     },
     {
-      "name": "with_empty_sig",
+      "name": "binding_with_empty_sig",
       "kind": "binding",
       "bytes": "{\"type\":\"binding\",\"prefix\":\"1.5\",\"sig\":\"\"}",
       "parse": "ok",
@@ -268,11 +268,11 @@
       "why": "type opens the object"
     },
     {
-      "name": "prefix_leading_zero",
+      "name": "prefix_zero_padded_component",
       "kind": "binding",
       "bytes": "{\"type\":\"binding\",\"prefix\":\"01.5\"}",
       "parse": "not_an_address:prefix",
-      "why": "an address has one spelling: no leading zero"
+      "why": "an address has one spelling: no component is padded with a zero"
     },
     {
       "name": "prefix_not_an_address",
@@ -303,7 +303,7 @@
       "why": "the empty string is no address"
     },
     {
-      "name": "prefix_leading_zero_component",
+      "name": "prefix_leading_zero",
       "kind": "binding",
       "bytes": "{\"type\":\"binding\",\"prefix\":\"0.5\"}",
       "parse": "not_an_address:prefix",
@@ -450,21 +450,21 @@
       "why": "a JSON null"
     },
     {
-      "name": "escaped_solidus",
+      "name": "escape_of_the_solidus",
       "kind": "endpoint",
       "bytes": "{\"type\":\"endpoint\",\"origins\":[\"https:\\/\\/acme.example\"]}",
       "parse": "not_canonical",
       "why": "the shortest escapes and no others: a solidus is not escaped"
     },
     {
-      "name": "unicode_escape_of_a_letter",
+      "name": "escape_of_a_digit",
       "kind": "binding",
       "bytes": "{\"type\":\"binding\",\"prefix\":\"\\u0031.5\"}",
       "parse": "not_canonical",
-      "why": "a letter spelled as a unicode escape is a longer escape of the same string"
+      "why": "a digit spelled as a unicode escape is a longer escape of the same string"
     },
     {
-      "name": "strings_take_the_short_escapes_alone",
+      "name": "strings_take_the_shortest_escapes_alone",
       "kind": "endpoint",
       "bytes": "{\"type\":\"endpoint\",\"origins\":[\"\\\"\\\\\\b\\f\\n\\r\\t\\u0000\\u001f\"]}",
       "parse": "ok",

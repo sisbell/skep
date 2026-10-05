@@ -45,7 +45,10 @@ fn the_index_holds_the_verified_records_and_suppresses_the_tampered() {
     assert_eq!(index.suppressed().len(), 2, "{:?}", index.suppressed());
     assert!(index.suppressed().iter().any(|s| s.cause == Cause::Verdict(Verdict::Unsigned)), "{:?}", index.suppressed());
     assert!(
-        index.suppressed().iter().any(|s| matches!(s.cause, Cause::Malformed(skep_registry::Refusal::NotCanonical))),
+        index
+            .suppressed()
+            .iter()
+            .any(|s| matches!(s.cause, Cause::Malformed(skep_registry::ParseRefusal::NotCanonical))),
         "{:?}",
         index.suppressed()
     );

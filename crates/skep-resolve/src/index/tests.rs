@@ -208,7 +208,7 @@ fn the_index_counts_what_the_gate_kept_out_beside_the_ledger() {
     index.suppress(out(12, Cause::Verdict(Verdict::UndeterminableHere)));
     index.suppress(out(13, Cause::Verdict(Verdict::Disavowed)));
     index.suppress(out(14, Cause::Verdict(Verdict::BeforeAttestation)));
-    index.suppress(out(15, Cause::Malformed(skep_registry::Refusal::NotCanonical)));
+    index.suppress(out(15, Cause::Malformed(skep_registry::ParseRefusal::NotCanonical)));
     assert_eq!(index.suppressed().iter().map(|s| s.position).collect::<Vec<_>>(), [11, 12, 13, 14, 15]);
     let c = index.counts();
     assert_eq!((c.prefixes, c.bindings, c.honored_bindings), (1, 1, 1));

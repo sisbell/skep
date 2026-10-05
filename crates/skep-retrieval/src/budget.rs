@@ -1,12 +1,13 @@
 //! The three request budgets, each a REFUSAL rather than a truncation:
-//! COMPARE's [`MAX_COMPARE_OPERAND_BLOCKS`] per operand and
-//! [`MAX_COMPARE_PAIRS`] per report, and FINDDOCSCONTAINING's
-//! [`MAX_FIND_COVERAGE_SPANS`] — and the [`Count`] every count against them is
-//! taken through. The two operations count against them and the rejections
-//! render them, so the numbers, their argument and the count that enforces
-//! them live here, apart from all three. [`MAX_COMPARE_OPERAND_BLOCKS`]'s card
-//! is the one statement of why an operand-side budget is counted twice, and the
-//! coverage budget is defined as that one; [`Count`]'s card is the one
+//! COMPARE's operand budget, [`MAX_COMPARE_OPERAND_BLOCKS`] per operand, and
+//! pair budget, [`MAX_COMPARE_PAIRS`] per report, and FINDDOCSCONTAINING's
+//! coverage budget, [`MAX_FIND_COVERAGE_SPANS`] — and the [`Count`] every count
+//! against them is taken through. The two operations count against them and
+//! the rejections render them, so the numbers, their argument and the count
+//! that enforces them live here, apart from all three.
+//! [`MAX_COMPARE_OPERAND_BLOCKS`]'s card is the one statement of why the
+//! operand budget is counted twice, and of why the coverage budget, which
+//! takes its number by definition, is too; [`Count`]'s card is the one
 //! statement of where a count's boundary falls.
 
 /// The most blocks one COMPARE operand may resolve to, and the most spans it
@@ -41,7 +42,7 @@
 /// WHAT THE COUNTS STOP, AND WHAT THEY DO NOT. Both are consulted as M5's lazy
 /// `iter_resolve` produces each run — the block count at COMPARE, the coverage
 /// count at FINDDOCSCONTAINING — so a span over a heavily fragmented document
-/// stops its walk at the budget, and what one span makes M6 hold live passes
+/// stops its walk at the budget, and what one span makes M6 hold live exceeds
 /// the budget by at most the run that trips it: each count bounds the LIST —
 /// the join's factor, the scans' multiplier — and the peak heap of building
 /// it. Neither bounds `#runs(doc)`, the document's own fragmentation: each
@@ -76,12 +77,12 @@ pub const MAX_COMPARE_PAIRS: usize = 1 << 16;
 /// — and so the ceiling on the multiplier the REQUEST applies to the two
 /// world-sized scans behind it.
 ///
-/// ONE join-side budget, not a second. `docs_ever_containing` joins this
-/// coverage against the whole of R, and `arranges_any` runs it against each
-/// candidate's runs, so the coverage is one side of a join exactly as a
-/// COMPARE operand is — and it takes that operand's budget BY DEFINITION,
-/// counted the same two ways (the spans handed to M5's lazy `iter_resolve`,
-/// and the coverage they produce) and priced on
+/// THE OPERAND BUDGET'S NUMBER, not a second. `docs_ever_containing` joins
+/// this coverage against the whole of R, and `arranges_any` runs it against
+/// each candidate's runs, so the coverage is one side of a join exactly as a
+/// COMPARE operand is — and it takes the operand budget's number BY
+/// DEFINITION, is counted the same two ways (the spans handed to M5's lazy
+/// `iter_resolve`, and the coverage they produce), and is priced on
 /// [`MAX_COMPARE_OPERAND_BLOCKS`]'s card, which also says why the count is
 /// two, what each count refuses, and what the counts stop within one span and
 /// what they do not. Pricing the two apart is a deliberate edit of this line,
@@ -96,16 +97,17 @@ pub const MAX_COMPARE_PAIRS: usize = 1 << 16;
 /// [`Query::show_deletions`]: crate::Query::show_deletions
 pub const MAX_FIND_COVERAGE_SPANS: usize = MAX_COMPARE_OPERAND_BLOCKS;
 
-/// One count taken against one of the budgets above — the spans a request
-/// side hands to M5, the blocks or coverage they produce, or the pairs a join
-/// emits — and the one place a count's boundary is spelled. It admits items
-/// until its budget is spent and refuses any that would pass it, BEFORE they
-/// are kept: exactly the budget is admitted, and a batch that would pass it is
-/// refused whole, admitting none of itself. So a producer that hands its items
-/// over in batches is held to the budget exactly as one that hands them over
-/// singly; a guard comparing the accumulator to the budget before a batch
-/// lands — `>=` as much as `==` — would admit the batch that crosses it, and
-/// answer past the budget when that batch is the last.
+/// One count taken against one of the budgets above — the spans a COMPARE
+/// operand or a FINDDOCSCONTAINING request hands to M5, the blocks or coverage
+/// they produce, or the pairs a join emits — and the one place a count's
+/// boundary is spelled. It admits items until its budget is spent and refuses
+/// any that would exceed it, BEFORE they are kept: exactly the budget is
+/// admitted, and a batch that would exceed it is refused whole, admitting none
+/// of itself. So a producer that hands its items over in batches is held to
+/// the budget exactly as one that hands them over singly; a guard comparing
+/// the accumulator to the budget before a batch lands — `>=` as much as `==` —
+/// would admit the batch that crosses it, and answer past the budget when that
+/// batch is the last.
 ///
 /// `tests/it/tidy.rs` refuses any code line outside this file that names a
 /// `MAX_` budget beside a comparison — the spelling a hand-written guard takes.
@@ -115,8 +117,8 @@ pub(crate) struct Count {
     admitted: usize,
 }
 
-/// A count would pass its budget. The request is refused whole: the operation
-/// answers with its own typed rejection and no partial answer.
+/// A count would exceed its budget. The request is refused whole: the
+/// operation answers with its own typed rejection and no partial answer.
 #[derive(Debug)]
 pub(crate) struct OverBudget;
 
@@ -129,7 +131,7 @@ impl Count {
         }
     }
 
-    /// Admits `items` more, or — if they would pass the budget — refuses them
+    /// Admits `items` more, or — if they would exceed the budget — refuses them
     /// all and admits none. Asked before the items are kept, and for a span
     /// before its walk.
     pub(crate) fn admit(&mut self, items: usize) -> Result<(), OverBudget> {
@@ -154,13 +156,13 @@ mod tests {
     }
 
     #[test]
-    fn a_count_refuses_a_batch_that_would_pass_its_budget_whole() {
+    fn a_count_refuses_a_batch_that_would_exceed_its_budget_whole() {
         // The form `interval_join`'s successor needs: a guard comparing the
         // accumulator to the budget before a batch lands admits the batch
         // that crosses it; a count refuses it before it lands.
         let mut count = Count::against(4);
         assert!(count.admit(3).is_ok());
-        assert!(count.admit(2).is_err(), "3 + 2 would pass 4");
+        assert!(count.admit(2).is_err(), "3 + 2 would exceed 4");
         assert!(
             count.admit(1).is_ok(),
             "the refused batch admitted none of itself"

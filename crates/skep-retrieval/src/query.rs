@@ -51,7 +51,7 @@ mod find;
 pub trait RetrievalWorld: WorldState + HasM3 + HasM5 {}
 impl<W: WorldState + HasM3 + HasM5> RetrievalWorld for W {}
 
-/// Stateless reader over ONE pinned snapshot. Owns nothing; holds a borrow.
+/// Stateless observer over ONE pinned snapshot. Owns nothing; holds a borrow.
 ///
 /// The caller (M10) takes the snapshot (`Kernel::snapshot()`) and constructs
 /// the handle over it. The obligation is on the SNAPSHOT, not the handle: take

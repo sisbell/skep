@@ -248,8 +248,8 @@ fn show_deletions_enumerates_the_address_named_and_does_not_float() {
         .expect("delete commits"); // DELETED(vca1, doc1)
     let s = k.snapshot();
     let q = Query::new(&s);
-    // The premise: a floating reader delivers the head's fourth byte under
-    // pdoc's name.
+    // The premise: a floating operation delivers the value at the head's
+    // fourth position under pdoc's name.
     assert_eq!(
         ok_of(q.retrieve_v(&[spec(pdoc(), vspan(1, 4, 1))])),
         Delivery(vec![DeliveryItem::Content(val(b"z"))])

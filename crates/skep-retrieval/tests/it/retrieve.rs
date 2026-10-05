@@ -1,6 +1,6 @@
 //! §A RETRIEVEV (ASN-0115): exact per-position delivery in submitted order,
 //! R6's silent degradations, the whole-request gate, and the masked form's
-//! per-run consult.
+//! per-origin consult, asked once per run.
 
 use std::cell::RefCell;
 

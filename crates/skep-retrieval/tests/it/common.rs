@@ -175,10 +175,10 @@ pub fn val(b: &[u8]) -> Val {
 }
 
 /// The deposit declaration every declared fixture and test carries: ENROLL's
-/// type, the first member of M5's set (PUB-2.11, RES-261). What they deposit
-/// is prose (`b"a"`, `b"z"`) — PUB-2.60's residue, bytes of the depositor's
-/// choosing under a declared class type — which the door admits on the type
-/// alone.
+/// type, the first of M5's deposit class types (PUB-2.11, RES-261). What they
+/// deposit is prose (`b"a"`, `b"z"`) — PUB-2.60's residue, bytes of the
+/// depositor's choosing under a declared class type — which the door admits
+/// on the type alone.
 pub fn declared() -> Deposit {
     Deposit::Declared(deposit_class_types()[0].clone())
 }

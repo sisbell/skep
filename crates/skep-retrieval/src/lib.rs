@@ -1,6 +1,6 @@
 //! # skep-retrieval — M6: Content Retrieval & Query
 //!
-//! M6 is the system's **read-only observer surface over documents**. It owns
+//! M6 is the system's **read-only observer over documents**. It owns
 //! the seven content/provenance queries — RETRIEVEV [ASN-0115],
 //! RETRIEVEDOCVSPAN [ASN-0112], RETRIEVEDOCVSPANSET [ASN-0113], SHOWORIGIN
 //! (V-arity) [ASN-0077], SHOWDELETIONS [ASN-0075], COMPARE [ASN-0122],
@@ -82,15 +82,16 @@
 //! Two carry budgets of their own, each for a factor no upstream gate can
 //! price. COMPARE's cost is SUPERLINEAR in its request — the join is `|P|·|Q|`
 //! over two block lists the caller sizes independently, so a byte cap on the
-//! request buys the square of what it bounds — and it carries
-//! [`MAX_COMPARE_OPERAND_BLOCKS`] per operand and [`MAX_COMPARE_PAIRS`] per
-//! report. FINDDOCSCONTAINING's request is the multiplier on two world-sized
-//! scans, and the request-to-coverage step EXPANDS: a region set nests two
-//! wire caps whose product only a body cap bounds, and one span over a
-//! fragmented document resolves to many coverage spans from a single span on
-//! the wire — so it carries [`MAX_FIND_COVERAGE_SPANS`]. Each operand-side
-//! budget is counted twice, on the spans handed to M5 and on what they
-//! produce; [`MAX_COMPARE_OPERAND_BLOCKS`]'s card says why.
+//! request buys the square of what it bounds — and it carries an operand
+//! budget, [`MAX_COMPARE_OPERAND_BLOCKS`] per operand, and a pair budget,
+//! [`MAX_COMPARE_PAIRS`] per report. FINDDOCSCONTAINING's request is the
+//! multiplier on two world-sized scans, and the request-to-coverage step
+//! EXPANDS: a region set nests two wire caps whose product only a body cap
+//! bounds, and one span over a fragmented document resolves to many coverage
+//! spans from a single span on the wire — so it carries a coverage budget,
+//! [`MAX_FIND_COVERAGE_SPANS`]. The operand budget and the coverage budget are
+//! each counted twice, on the spans handed to M5 and on what they produce;
+//! [`MAX_COMPARE_OPERAND_BLOCKS`]'s card says why.
 //!
 //! All three are published, so a caller sizes a request against the number
 //! rather than transcribing it, and all three are refusals rather than

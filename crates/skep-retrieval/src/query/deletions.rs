@@ -23,15 +23,15 @@ use crate::types::Deletions;
 /// yielded twice, so callers dedup.
 ///
 /// LAZY, and that is the point rather than a style: `d`'s arrangement binds
-/// one content position per byte the document was written with, and each
-/// position enumerated is an OWNED `Address` — a `Vec<Nat>` of element
-/// components, order hundreds of bytes and a handful of allocations. Handing
-/// back a `Vec` would make the peak live heap of a two-document combine the
-/// size of both documents, from a request naming two addresses and nothing
-/// else; streaming makes it the size of the part the caller's filter keeps.
-/// Each run's positions are enumerated by the run that owns them —
-/// `Run::addrs`, over M5's lent run-list, so no run is cloned to be walked and
-/// the stream holds one cursor into the snapshot's arrangement.
+/// `n_C(d)` content positions — one per value placed, however many bytes it
+/// holds — and each position enumerated is an OWNED `Address`: a `Vec<Nat>`
+/// of element components, order hundreds of bytes and a handful of
+/// allocations. Handing back a `Vec` would make the peak live heap of a
+/// two-document combine the size of both documents, from a request naming two
+/// addresses and nothing else; streaming makes it the size of the part the
+/// caller's filter keeps. Each run's positions are enumerated by the run that
+/// owns them — `Run::addrs`, over M5's lent run-list, so no run is cloned to
+/// be walked and the stream holds one cursor into the snapshot's arrangement.
 ///
 /// Enumerating the content runs alone therefore loses nothing AND needs no
 /// filter behind it: `DELETED(a, d)` requires `(a, d) ∈ R`, and R is appended

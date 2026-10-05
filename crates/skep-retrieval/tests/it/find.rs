@@ -365,7 +365,7 @@ fn find_docs_containing_gates_the_whole_request_before_its_budget_can_refuse() {
     // §Errors, the budget clause: TooMuchCoverage fires only after the gate
     // has completed over the WHOLE request, so a gate fault outranks it
     // wherever it sits — here in a second region behind a first that alone
-    // passes the budget. COMPARE's twin is pinned; this is
+    // exceeds the budget. COMPARE's twin is pinned; this is
     // FINDDOCSCONTAINING's.
     let k = mem_kernel();
     insert3(&k);

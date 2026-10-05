@@ -201,8 +201,8 @@ fn the_fault_vocabularies_key_a_map_a_consumer_could_not_key_itself() {
     // §Errors derive policy: SpanFault and Operand carry `Hash` because a
     // consumer keying by one cannot supply the impl — both the trait and the
     // type are foreign to it. A per-(operand, fault) counter is the shape a
-    // transport instruments this surface with, and until M10 derives `Hash` on
-    // `FaultSite` this is the only thing standing between the derive and a
+    // transport instruments M6's rejections with, and until M10 derives `Hash`
+    // on `FaultSite` this is the only thing standing between the derive and a
     // cleanup that removes it as unused.
     let mut counts: HashMap<(Operand, SpanFault), usize> = HashMap::new();
     for site in [

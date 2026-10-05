@@ -141,10 +141,10 @@ fn compare_refuses_an_operand_past_its_budget() {
             operand: Operand::First
         }
     );
-    // The cap refuses only what is PAST it, and refuses the request WHOLE:
-    // at the budget the same shape still answers, and answers completely
-    // (one pair per block — a truncating cap would answer with fewer and
-    // break X12 R2).
+    // The budget refuses only what is PAST it, and refuses the request
+    // WHOLE: at the budget the same shape still answers, and answers
+    // completely (one pair per block — a truncating budget would answer with
+    // fewer and break X12 R2).
     let at = vec![region_spec(
         doc1(),
         vec![vspan(1, 1, 1); MAX_COMPARE_OPERAND_BLOCKS],
@@ -287,7 +287,7 @@ fn compare_refuses_an_operand_whose_spans_outnumber_the_budget_though_they_resol
 
 #[test]
 fn compare_refuses_a_fanout_past_its_pair_budget() {
-    // 257 × 257 = 66,049 pairs from 514 blocks — an operand count the block
+    // 257 × 257 = 66,049 pairs from 514 blocks — a block count the operand
     // budget admits many times over. Fan-out is bounded ONLY by counting the
     // pairs as they are produced, which is why the second budget exists and
     // why the first cannot stand in for it.
@@ -298,11 +298,11 @@ fn compare_refuses_a_fanout_past_its_pair_budget() {
     let side = |count: usize| vec![region_spec(doc1(), vec![vspan(1, 1, 1); count])];
     let e = err_of(q.compare(&side(257), &side(257)));
     assert_eq!(e, CompareError::TooManyPairs);
-    // The refusal names its own budget, as the block refusal does, so a client
-    // narrows against the number rather than guessing it.
+    // The refusal names its own budget, as the operand budget's refusal does,
+    // so a client narrows against the number rather than guessing it.
     assert!(e.to_string().contains(&MAX_COMPARE_PAIRS.to_string()));
     // Under the budget, the same shape reports the FULL cross-product
-    // (X12 R2): the cap refuses, and never thins a report it admits.
+    // (X12 R2): the budget refuses, and never thins a report it admits.
     assert_eq!(ok_of(q.compare(&side(16), &side(16))).len(), 256);
     // The EQUAL case, where the two budgets must agree: a report of exactly
     // the budget is answered and only the pair PAST it refused. The premise is

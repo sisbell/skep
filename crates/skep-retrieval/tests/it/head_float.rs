@@ -44,7 +44,8 @@ fn a_published_address_answers_from_its_trunk_head_once_it_has_one() {
         ok_of(q.doc_vspan(&pdoc())),
         SpanSet::singleton(vspan(1, 1, 4))
     );
-    // The delivery: the head's fourth byte, delivered under pdoc's name.
+    // The delivery: the value at the head's fourth position, delivered under
+    // pdoc's name.
     assert_eq!(
         ok_of(q.retrieve_v(&[spec(pdoc(), vspan(1, 1, 4))])),
         Delivery(vec![

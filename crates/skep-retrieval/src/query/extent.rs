@@ -100,7 +100,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// that must observe a CONTENT-COUNT change asks for the extents, not the
     /// box. Neither reports run structure: under D-SEQ★ both are functions of
     /// `n_C` and `n_L` alone, and a document's fragmentation is M5's
-    /// `content_runs`, which is not part of M6's surface.
+    /// `content_runs`, which no M6 operation reports.
     ///
     /// σ_d IS the hull of the per-subspace extents [`Query::doc_vspanset`]
     /// reports: the first extent's start to the last extent's reach.

@@ -46,9 +46,9 @@
 //! decision order is stated on the type itself), and a derived `Ord` would
 //! publish the declaration order as a comparison. What DOES pin the declared
 //! list is the derived `Serialize`: serde's derived form names each variant
-//! and bincode numbers them by position, so reordering the variants is
-//! observable to a serde consumer — a promise the derive makes whether or not
-//! one exists, and none ships (the marshaling clause below). Not `Hash` on
+//! and bincode numbers them in declaration order, so reordering the variants
+//! is observable to a serde consumer — a promise the derive makes whether or
+//! not one exists, and none ships (the marshaling clause below). Not `Hash` on
 //! the six either — no consumer keys by a rejection, and M10 converts each to
 //! its own `Rejection` at the seam.
 //!
@@ -188,7 +188,7 @@ pub enum DeletionsError {
 ///
 /// The last two are the budget refusals COMPARE's superlinear join needs, and
 /// are the only rejections here that name nothing the gate faults — only the
-/// request's size. Both name the budget they passed, so a client learns which
+/// request's size. Both name the budget they exceeded, so a client learns which
 /// dimension to narrow.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum CompareError {
@@ -204,14 +204,14 @@ pub enum CompareError {
         index: usize,
         fault: SpanFault,
     },
-    /// The operand's resolution passes [`MAX_COMPARE_OPERAND_BLOCKS`] on
+    /// The operand's resolution exceeds [`MAX_COMPARE_OPERAND_BLOCKS`] on
     /// either of its two counts: more spans handed to M5 — one walk apiece,
     /// whatever it yields — or more blocks built, than the budget. The join is
     /// `|P|·|Q|`, so a per-operand budget is what bounds it; refused as the
     /// operand resolves and before the join runs, with ρ₁ resolved first.
     TooManyBlocks { operand: Operand },
     /// The join runs to more than [`MAX_COMPARE_PAIRS`] correspondences. The
-    /// block budget cannot see this one: two small operands resolving to the
+    /// operand budget cannot see this one: two small operands resolving to the
     /// same I-address fan out to their product.
     TooManyPairs,
 }
@@ -223,7 +223,7 @@ pub enum CompareError {
 ///
 /// The last is the budget refusal, and the only rejection here that names
 /// nothing the gate faults — only the request's size. It names the budget it
-/// passed, so a client learns what to narrow.
+/// exceeded, so a client learns what to narrow.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum FindError {
     DocNotRegistered(Address),
@@ -232,7 +232,7 @@ pub enum FindError {
         index: usize,
         fault: SpanFault,
     },
-    /// The request's resolution passes [`MAX_FIND_COVERAGE_SPANS`] on either
+    /// The request's resolution exceeds [`MAX_FIND_COVERAGE_SPANS`] on either
     /// of its two counts: more spans handed to M5 — one walk apiece, whatever
     /// it yields — or more coverage spans produced, than the budget. That is
     /// the one factor of this operation's cost that the request owns, and the
@@ -357,8 +357,8 @@ impl fmt::Display for CompareError {
             ),
             CompareError::TooManyPairs => write!(
                 f,
-                "compare: the report passes {} correspondences (MAX_COMPARE_PAIRS); \
-                 narrow the two operands",
+                "compare: the join runs past the pair budget of {} correspondences \
+                 (MAX_COMPARE_PAIRS); narrow the two operands",
                 MAX_COMPARE_PAIRS
             ),
         }

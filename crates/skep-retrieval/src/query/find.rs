@@ -50,11 +50,11 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// — a factor the request never names and M6 never sees — and each
     /// holding nothing.
     ///
-    /// Only `|spans|` and `|coverage|` are the request's, and both are capped
-    /// at [`MAX_FIND_COVERAGE_SPANS`] (`TooMuchCoverage`, refused AS THE
-    /// REQUEST RESOLVES — the span past the budget before its walk, the
-    /// coverage past it as it is produced — so an over-budget request stops
-    /// resolving rather than resolving whole and then being measured; why
+    /// Only `|spans|` and `|coverage|` are the request's, and both are held to
+    /// the coverage budget, [`MAX_FIND_COVERAGE_SPANS`] (`TooMuchCoverage`,
+    /// refused AS THE REQUEST RESOLVES — the span past the budget before its
+    /// walk, the coverage past it as it is produced — so an over-budget request
+    /// stops resolving rather than resolving whole and then being measured; why
     /// both are counted, and what the counts stop within one span and what
     /// they do not, are on the budget's card). That is a REFUSAL, never a
     /// truncation: a request past the budget gets a typed rejection and no
@@ -67,9 +67,9 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// they stay with request rate and concurrency, which are M10's as the
     /// request lifecycle's owner.
     pub fn find_docs_containing(&self, regions: &[RegionSpec]) -> Result<Vec<Address>, FindError> {
-        // The UNFILTERED containers — every one readable. The daemon's read
-        // surface calls [`Query::find_docs_containing_filtered`] with its
-        // per-request predicate.
+        // The UNFILTERED containers — every one readable. M10's dispatch
+        // calls [`Query::find_docs_containing_filtered`] with the predicate it
+        // threads in per request.
         self.find_docs_containing_filtered(regions, &|_| true)
     }
 

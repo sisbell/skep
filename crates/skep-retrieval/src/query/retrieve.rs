@@ -59,16 +59,16 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     /// cap on the route, which is M10's as the request lifecycle's owner.
     pub fn retrieve_v(&self, specs: &[Spec]) -> Result<Delivery, RetrieveError> {
         // The masked form under the all-true predicate: its only `Withheld`
-        // items are unregistered-origin runs (PUB-6.37; RES-162). The daemon's
-        // read surface calls [`Query::retrieve_v_masked`] with its per-request
-        // predicate; this delegate serves the callers that read for no
-        // principal — this crate's suite and skep-engine's cross-store
+        // items are unregistered-origin runs (PUB-6.37; RES-162). M10's
+        // dispatch calls [`Query::retrieve_v_masked`] with the predicate it
+        // threads in per request; this delegate serves the callers that read
+        // for no principal — this crate's suite and skep-engine's cross-store
         // lifecycle suite — unchanged.
         self.retrieve_v_masked(specs, &|_| true)
     }
 
-    /// RETRIEVEV with the source consult (PUB round 2, lane 3.3, §2/§4): the
-    /// same delivery, but each RUN is tested per PUB-6.41 against its origin
+    /// RETRIEVEV with the per-origin consult (PUB-6.41; PUB round 2, lane 3.3,
+    /// §2/§4): the same delivery, but each RUN is tested against its origin
     /// DOCUMENT (M1's `document_of` of the run's I-start, which block
     /// uniformity makes the origin of every position in it) through
     /// `readable`, and a masked run — its origin unreadable to the reading
@@ -118,15 +118,15 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
             let sub = Subspace::of_span(&spec.span);
             let surface = reading_surface(m3, &spec.doc);
             for run in m5.resolve(&surface, &spec.span) {
-                // The per-run source consult (PUB-6.41): the run's origin
-                // DOCUMENT, tested BEFORE the run is expanded. The registry
-                // check first is the predicate's precondition (PUB-6.37:
-                // registered documents only), M6's to discharge at this site
-                // because the gate saw the named document and not the origin;
-                // an unregistered origin (RES-162) is withheld without the
-                // predicate being asked. Either way the WHOLE run is masked as
-                // one withheld item at its own position — never coalesced with
-                // a neighbour (PUB-6.58).
+                // The per-origin consult (PUB-6.41), asked once per run: the
+                // run's origin DOCUMENT, tested BEFORE the run is expanded.
+                // The registry check first is the predicate's precondition
+                // (PUB-6.37: registered documents only), M6's to discharge at
+                // this site because the gate saw the named document and not
+                // the origin; an unregistered origin (RES-162) is withheld
+                // without the predicate being asked. Either way the WHOLE run
+                // is masked as one withheld item at its own position — never
+                // coalesced with a neighbour (PUB-6.58).
                 let origin = run_origin(&run);
                 if !m3.is_registered_document(&origin) || !readable(&origin) {
                     out.push(DeliveryItem::Withheld { origin, width: run.width().clone() });

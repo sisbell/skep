@@ -32,8 +32,8 @@
 //! [`Delivery`] and [`CompareReport`] are COLLECTIONS, and behave like std's:
 //! `len`/`is_empty`/`iter`/`as_slice`, `IntoIterator` owned and borrowed,
 //! `FromIterator`, and `Default` for the empty answer each genuinely returns.
-//! A reader walks an answer without naming its representation, which the
-//! orphan rule would otherwise forbid a consumer from arranging for itself.
+//! A consumer walks an answer without naming its representation, which the
+//! orphan rule would otherwise forbid it from arranging for itself.
 //! Not `Extend`: these are answers produced whole, never grown in place, and
 //! the narrower promise is the honest one.
 

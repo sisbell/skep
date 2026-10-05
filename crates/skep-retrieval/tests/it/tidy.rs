@@ -17,7 +17,7 @@
 //! module (`crate::budget::MAX_COMPARE_PAIRS`). A module's children name
 //! their parent through `super::`, which is the tree itself and not an edge
 //! between modules. The check counts the paths it reads between modules, so
-//! a reader gone blind fails rather than passing a clean tree.
+//! a check gone blind fails rather than passing a clean tree.
 //!
 //! The M4 rule is held over every code line under `src/`, tests included:
 //! only `query/retrieve.rs` names the content store. The scan also asserts
@@ -159,19 +159,19 @@ fn is_ident_char(c: char) -> bool {
 }
 
 /// Every count is taken through `budget.rs`'s `Count`, which admits exactly a
-/// budget and refuses a batch that would pass it before it lands. No compiler
+/// budget and refuses a batch that would exceed it before it lands. No compiler
 /// error reports a producer that spells that boundary itself — a length
 /// compared to a budget by hand — so no code line under `src/` but
 /// `budget.rs` compares anything to a `MAX_` budget. The scan asserts it read
-/// the budgets' uses and that its reader still recognizes the two guards this
-/// crate's producers have spelled by hand, so a scan gone blind fails rather
-/// than passing a clean tree.
+/// the budgets' uses and that it still recognizes the two guards this crate's
+/// producers have spelled by hand, so a scan gone blind fails rather than
+/// passing a clean tree.
 #[test]
 fn only_budget_compares_a_count_to_a_budget() {
     assert!(
         compares("if out.len() >= MAX_COMPARE_PAIRS {")
             && compares("if coverage_spans.len() == MAX_FIND_COVERAGE_SPANS {"),
-        "the comparison reader no longer recognizes a budget guard spelled by hand"
+        "`compares` no longer recognizes a budget guard spelled by hand"
     );
     let uses: Vec<_> = scan(|code| code.contains("MAX_"))
         .into_iter()

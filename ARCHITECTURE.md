@@ -633,7 +633,7 @@ Rules that hold across its files:
 - **The budgets are `budget.rs`'s, and they refuse.** COMPARE's two and
   FINDDOCSCONTAINING's one are counted by `query/compare.rs` and
   `query/find.rs` through `budget.rs`'s `Count` — which admits exactly a
-  budget and refuses a batch that would pass it before it lands, so no
+  budget and refuses a batch that would exceed it before it lands, so no
   producer spells that boundary itself — and rendered by `error.rs`; a
   request past one gets its rejection and no partial answer.
   `tests/it/tidy.rs` refuses any other file's code line that names a budget

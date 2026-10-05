@@ -76,11 +76,12 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// candidate tests over the two operands' blocks, and BOTH factors are the
     /// request's: a region names a span list and a spec-set names a region
     /// list, so their product is the caller's to choose and squares in it. So
-    /// each operand is capped at [`MAX_COMPARE_OPERAND_BLOCKS`] — on the spans
-    /// it hands to M5, each one `Θ(#runs(doc))` walk whatever it yields, and on
-    /// the blocks it resolves to (`TooManyBlocks`, refused AS THE OPERAND
-    /// RESOLVES and before the join runs, ρ₁ resolved first) — and the report
-    /// at [`MAX_COMPARE_PAIRS`] correspondences (`TooManyPairs`, refused AS THE
+    /// each operand is held to the operand budget,
+    /// [`MAX_COMPARE_OPERAND_BLOCKS`] — on the spans it hands to M5, each one
+    /// `Θ(#runs(doc))` walk whatever it yields, and on the blocks it resolves
+    /// to (`TooManyBlocks`, refused AS THE OPERAND RESOLVES and before the join
+    /// runs, ρ₁ resolved first) — and the report to the pair budget,
+    /// [`MAX_COMPARE_PAIRS`] correspondences (`TooManyPairs`, refused AS THE
     /// PAIRS ARE PRODUCED, so an over-budget fan-out stops accumulating rather
     /// than being built and then measured).
     ///
@@ -99,7 +100,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
         gate_spec_set(m3, Operand::First, rho1)?;
         gate_spec_set(m3, Operand::Second, rho2)?;
         // p = R_Σ(ρ₁), q = R_Σ(ρ₂), as blocks — each region against its
-        // reading surface, each operand within its own block budget.
+        // reading surface, each operand within the operand budget.
         let p = resolve_blocks(m3, m5, rho1).map_err(|OverBudget| CompareError::TooManyBlocks {
             operand: Operand::First,
         })?;
@@ -107,7 +108,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
             operand: Operand::Second,
         })?;
         // Cross-product per overlap (`corr` is a comprehension over `P × Q`),
-        // within the report budget.
+        // within the pair budget.
         let pairs = interval_join(&p, &q).map_err(|OverBudget| CompareError::TooManyPairs)?;
         Ok(CompareReport(deterministic_presentation(pairs))) // R1–R3 (X12)
     }
@@ -232,13 +233,13 @@ impl<'a> Block<'a> {
 
 /// The operand region a spec-set denotes, as blocks: resolve every region's
 /// spans to their I-run blocks, reconstructing each run's V-start by
-/// accumulation. `Err(OverBudget)` when the operand would pass
+/// accumulation. `Err(OverBudget)` when the operand would exceed
 /// [`MAX_COMPARE_OPERAND_BLOCKS`] on either of its two counts, each a
 /// [`Count`]: the span count, taken as each span is handed to M5 — before the
-/// reader's let-else below, so a span M5 declines is counted too — and the
-/// block count, taken as `iter_resolve` produces each run. The budget's card
-/// says why there are two and what they stop within one span; `Count`'s says
-/// where the boundary falls.
+/// let-else on M5's span reader below, so a span M5 declines is counted too —
+/// and the block count, taken as `iter_resolve` produces each run. The
+/// budget's card says why there are two and what they stop within one span;
+/// `Count`'s says where the boundary falls.
 ///
 /// REQUIRES A GATED SPEC-SET: every region's document REGISTERED, and every
 /// span content-subspace-started and `gate_vspan`-clean — which
@@ -393,11 +394,11 @@ fn overlap_pair(pb: &Block<'_>, qb: &Block<'_>) -> Option<CorrPair> {
 /// on address. One vocabulary — see the design's Open build decisions
 /// (canonical statement).
 ///
-/// `Err(OverBudget)` when the report would pass [`MAX_COMPARE_PAIRS`]
+/// `Err(OverBudget)` when the report would exceed [`MAX_COMPARE_PAIRS`]
 /// correspondences, each pair admitted through a [`Count`] as it is produced.
 /// That budget is on the REPORT, not on the join's shape: a sweep changes how
 /// many candidate pairs are TESTED and not how many are EMITTED, so the same
-/// cap stands whichever join ships, and it is the only one that sees a
+/// budget stands whichever join ships, and it is the only one that sees a
 /// fan-out. A successor that emits one event point's pairs together admits
 /// them as one batch through the same `Count`, whose card says why a batch
 /// cannot cross the budget.

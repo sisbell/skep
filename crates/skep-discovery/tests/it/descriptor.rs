@@ -5,6 +5,7 @@
 use crate::common;
 
 use common::*;
+use skep_address::Address;
 use skep_arrangement::Vstream;
 use skep_discovery::{FourSet, SlotSpec};
 use skep_links::{enc, Endset, HasLinks, LinkWriter};
@@ -253,6 +254,37 @@ fn ftt_home_is_prefix_coverage_not_address_equality() {
     };
     assert!(!under.is_unsatisfiable(), "the request names something");
     assert_eq!(reads.findlinks_ftt(&under), vec![]);
+}
+
+/// §3 — the home slot's coverage reaches a document's VERSION MEMBERS, as
+/// `FourSet` states: a member's address extends its document's, so the
+/// subtree span `enc` builds for the document covers the member, and a link
+/// homed in the member satisfies a home slot naming the document
+/// (ASN-0121's `athome`, `home(a) ∈ coverage(H)`). Naming the member admits
+/// the member's links alone. The other home tests name private documents,
+/// which have no members, so a residence test that read a link's home as its
+/// trunk, or matched documents by equality, would pass them all.
+#[test]
+fn ftt_home_coverage_reaches_a_documents_version_members() {
+    let k = published_world();
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let in_pdoc = link(&store, &pdoc(), &[ca(101)], &[ca(102)]);
+    let in_head = link(&store, &phead(), &[ca(101)], &[ca(103)]);
+    let reads = Reads(&k);
+    let homed_in = |d: &Address| FourSet {
+        home: SlotSpec::Spans(enc([d])),
+        ..FourSet::any()
+    };
+    assert_eq!(
+        reads.findlinks_ftt(&homed_in(&pdoc())),
+        vec![in_pdoc, in_head.clone()],
+        "the document's span admits its member's link too"
+    );
+    assert_eq!(
+        reads.findlinks_ftt(&homed_in(&phead())),
+        vec![in_head],
+        "the member's span admits its own links alone"
+    );
 }
 
 /// §3 — CN-ENUM: one `sat` consumed by every read-out, so the count, the

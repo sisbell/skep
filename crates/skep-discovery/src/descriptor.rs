@@ -42,9 +42,27 @@ pub enum SlotSpec {
 /// SLOT, which ASN-0132 calls structurally different from the three link
 /// slots: it is matched against `home(a)` — an M1 `document_of` address
 /// projection — so it is NOT a link slot (it never reaches M7's AND-of-ORs;
-/// `FourSet::at_home` answers it) and NOT an arrangement-presence test
+/// M8 tests it on each link M7 returns) and NOT an arrangement-presence test
 /// (ASN-0132 CN-STAB: a reverse-orphaned link still satisfies a home-bounded
 /// query).
+///
+/// WHAT SATISFIES IT (ASN-0121's `sat`): a link `a` satisfies `q` when every
+/// slot holds — `Any` always (FL-WILD), the zero never (FL-EMP):
+///
+/// * `from`, `to` or `ty` holding `Spans(e)` holds when `a`'s stored endset
+///   at that slot OVERLAPS `e` — some span of one properly overlaps, contains
+///   or equals some span of the other, never merely abutting (M7's `stab`;
+///   ASN-0121's `touch`) — so a link whose endset there is empty never meets
+///   it;
+/// * `home` holding `Spans(h)` holds when `h`'s coverage CONTAINS the address
+///   `home(a)` (ASN-0121's `athome`): membership, not overlap, and one way
+///   only — a span naming an account or a document admits every link whose
+///   home lies at or beneath it, version members included, and an address
+///   beneath a document admits none of that document's links.
+///
+/// The reads ask it of the ADDRESSABLE links alone — the active view, so a
+/// nullified link is never returned, whatever it satisfies — and the reader's
+/// home rule then narrows what they return.
 ///
 /// `Eq`/`Hash` are REPRESENTATIONAL, not semantic: [`SlotSpec::Empty`] and a
 /// `Spans` naming nothing are one query — [`FourSet::is_unsatisfiable`]

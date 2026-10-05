@@ -19,8 +19,9 @@ use skep_address::{document_of, Address};
 /// establishes that it is a link, and a projection that assumed one would
 /// fault on the first node or account address a request names. So no read
 /// reaches a home that is not there: each caller states what an absent home
-/// means where it asks — the home rule admits the address, the residence test
-/// places it at no home, and the lineage read-out skips a claim homed nowhere.
+/// means where it asks — the home rule admits the address and the residence
+/// test places it at no home, while the lineage read-out, which projects only
+/// keys of M7's store, asserts the home M7's invariant gives every key.
 pub(crate) fn home_of(a: &Address) -> Option<Address> {
     document_of(a)
 }

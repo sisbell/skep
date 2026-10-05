@@ -81,21 +81,28 @@ impl Endpoint {
 /// What one `[K_sup]` claim reads out as: its `old` and `new` — ASN-0125
 /// EL4's accessors, each read off the slot [`Endpoint::slot`] names — its home
 /// attribution (EL8b), and its own activity; or `None` for a claim on which
-/// `old`, `new` or its home is undefined.
+/// `old` or `new` is undefined.
 ///
 /// READ OUT ONLY WHERE `old` AND `new` ARE DEFINED. ASN-0125's archival read
 /// ranges over the schema-conforming claims Ŝ^Σ (Df-DISC(ii)), and a claim is
 /// read out only where the part of that schema a [`SupClaim`] is built from
 /// holds: its F and its G each denote ONE address, T4-valid — the part on
-/// which EL4's `old` and `new` are defined — and its own address has a home
-/// (EL8b). The schema's remaining clauses — the two endpoints distinct, both
-/// resident — M7 holds at its two `[K_sup]` writers (`assert_sup` checks them,
-/// and `editlink`'s DC guard asks them of a caller's successor through a
-/// predicate M7 keeps crate-private). Of those the read restates residence
-/// alone, and only for the endpoint a probe names: [`claims_naming`] keeps a
-/// claim only where that endpoint EQUALS a key it has found resident. The
-/// other endpoint's residence, and the two endpoints' distinctness, it never
-/// asks.
+/// which EL4's `old` and `new` are defined. The schema's remaining clauses —
+/// the two endpoints distinct, both resident — M7 holds at its two `[K_sup]`
+/// writers (`assert_sup` checks them, and `editlink`'s DC guard asks them of a
+/// caller's successor through a predicate M7 keeps crate-private). Of those
+/// the read restates residence alone, and only for the endpoint a probe
+/// names: [`claims_naming`] keeps a claim only where that endpoint EQUALS a
+/// key it has found resident. The other endpoint's residence, and the two
+/// endpoints' distinctness, it never asks.
+///
+/// THE HOME IS M7's, NOT A CONDITION. `t.addr` is a key of M7's store, and
+/// every key there has a home (EL8b): `LinkState`'s invariant, gated by the
+/// fold that admits a deposit and by the one that rebuilds a restored
+/// checkpoint, each of which fail-stops on a key with none, and
+/// `tests/it/lineage.rs` pins that fence. So `home(claim)` always exists, and
+/// the read asserts it rather than testing it: a skip would hide M7's fault
+/// as a missing answer.
 ///
 /// In an edit-disciplined store (EL-DM — every `[K_sup]` claim born through
 /// those two writers, which schema-conform their emission) every claim
@@ -115,7 +122,8 @@ impl Endpoint {
 fn sup_claim(l: &LinkState, t: Tuple) -> Option<SupClaim> {
     let old = endpoint(Endpoint::Old.slot(&t))?;
     let new = endpoint(Endpoint::New.slot(&t))?;
-    let home = home_of(&t.addr)?; // EL8b
+    let home = home_of(&t.addr)
+        .expect("M7's fold admits no link key without a home, so every claim has one (EL8b)");
     let active = l.is_active(&t.addr);
     Some(SupClaim {
         claim: t.addr,
@@ -177,10 +185,10 @@ fn endpoint(e: &Endset) -> Option<Address> {
 /// indistinguishable from a true answer; [`Endpoint::pattern`] builds the
 /// probe out of `key` itself, one tumbler, so it cannot arise.
 ///
-/// [`sup_claim`] reads each observed claim out, or skips it where its `old`,
-/// `new` or home is undefined; the equality keeps the claims naming `key`; and
-/// the home rule is then asked of each kept claim's own address — past the
-/// read's other filters, as the crate header's predicate contract states.
+/// [`sup_claim`] reads each observed claim out, or skips it where its `old` or
+/// `new` is undefined; the equality keeps the claims naming `key`; and the
+/// home rule is then asked of each kept claim's own address — past the read's
+/// other filters, as the crate header's predicate contract states.
 ///
 /// It reads the link store alone, so it takes the store, as [`sup_claim`]
 /// beside it and `descriptor`'s `candidates` do: the two public reads are its
@@ -234,11 +242,14 @@ fn claims_naming(
 /// caller that needs the endpoints' activity asks M7's `is_active` for them.
 ///
 /// The result-set filter (PUB round 2, lane 3.3, §3): claims homed in a
-/// document `readable` refuses are dropped. The KEY takes no rule: `y` is a
-/// filter value, never consulted (PUB-6.12), so a `y` homed where `readable`
-/// refuses is answered with every claim naming it that the rule admits. The
-/// pointwise pair, asked about the same address as an argument, reads it as
-/// absent (PUB-6.6).
+/// document `readable` refuses are dropped, and a claim the rule admits is
+/// returned WHOLE (PUB-6.13) — the rule, like the view, selects CLAIMS and
+/// never endpoints, so a returned claim's `old` or `new` can name a link
+/// homed where `readable` refuses. The KEY takes no rule: `y` is a filter
+/// value, never consulted (PUB-6.12), so a `y` homed where `readable` refuses
+/// is answered with every claim naming it that the rule admits. The pointwise
+/// pair, asked about the same address as an argument, reads it as absent
+/// (PUB-6.6).
 pub fn in_claims_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     y: &Address,

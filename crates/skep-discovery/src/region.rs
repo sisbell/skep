@@ -135,8 +135,10 @@ pub fn window_v_on<W: DiscoveryWorld>(
 /// surfaces iff `a ∈ stab(i, query, Active)` — so M7's overlap verdict
 /// (ProperOverlap | Containment | Equal, never Adjacent) is the ONLY touch
 /// test and cross-subspace disjointness (RE-NCD) is discharged by M7. Output
-/// order is pinned (slot, then lexicographic span-sequence), and so
-/// deterministic at a snapshot.
+/// order is pinned — ascending slot, then the endsets' span sequences
+/// compared lexicographically, each span by its `(start, width)` in tumbler
+/// order (`Span` has no order of its own) — and so deterministic at a
+/// snapshot.
 ///
 /// Refuses past [`MAX_ANSWER_SPANS`] with `EndsetsTooLarge`, accumulated over
 /// the spans of the pairs actually KEPT — what the answer carries is what the

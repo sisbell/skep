@@ -62,8 +62,10 @@ pub struct Window {
 ///
 /// `active` is the CLAIM's own — M7's `is_active(claim)`, so a claim may be
 /// disclosed from the Audit view yet itself nullified. `old` and `new` carry
-/// no such flag: they are the addresses the claim names, read out as
-/// recorded, and either may itself be a nullified link.
+/// no such flag and take no home rule: they are the addresses the claim
+/// names, read out as recorded, and either may itself be a nullified link,
+/// or one homed where the reader may not read (only the claim's home
+/// filters, PUB-6.13).
 ///
 /// A plain record: its fields are public and a caller may build one freely,
 /// so none of the relations above is a property of this type. They are
@@ -131,8 +133,11 @@ pub struct OrphanReport {
 /// suite matches it from outside the crate so the promise is checked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QueryError {
-    /// `d` is not a registered document (M3) — distinct from a
-    /// registered-but-empty `d`, which yields a defined empty result.
+    /// `d` is not a registered document (M3) — distinct from a registered `d`
+    /// whose reading surface arranges nothing, which yields a defined empty
+    /// answer. The emptiness is the surface's and not `d`'s own: a published
+    /// `d` with a head answers from the head, whatever its own arrangement
+    /// holds.
     DocNotRegistered,
     /// `a ∉ dom(L)`. Two further cases answer the same. On both pointwise
     /// reads, a link homed in a document the reader may not read — absent to

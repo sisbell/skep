@@ -1,13 +1,16 @@
 //! §7 — archival supersession lineage: the flipped probes behind the
 //! resident-key gate, the class they restrict to, what one claim says, the
-//! claims of that class with an undefined endpoint, and the claims that only
-//! cover a key they do not name.
+//! claims of that class with an undefined endpoint, the claims that only
+//! cover a key they do not name, and the home every claim has, which the
+//! store's fold guarantees.
 
 use crate::common;
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
 use common::*;
 use serde::Serialize;
-use skep_address::{is_prefix, subtree_of, validate, Address, Tumbler};
+use skep_address::{document_of, is_prefix, subtree_of, validate, Address, Tumbler};
 use skep_discovery::{in_claims_on, SupClaim, FROM, TO};
 use skep_kernel::{Kernel, TxnError};
 use skep_links::{
@@ -570,6 +573,73 @@ fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
         only_the_claim
     );
     assert_eq!(asked.take(), vec![doc1()]);
+}
+
+/// §7 — a claim's HOME is the store's to guarantee, and the read-out asserts
+/// it rather than testing it: every key of M7's store has a home (EL8b),
+/// because the fold that admits a deposit — the one a replayed journal frame
+/// reaches, beside the one that rebuilds a restored checkpoint — fail-stops
+/// on a key with none. So a `[K_sup]` claim decoded from M2's bytes at an
+/// ACCOUNT address, which has no document field, is refused by the fold
+/// itself and never becomes a claim the read-out could meet homeless, and the
+/// store is left as it was; the same claim keyed at a link address of doc1
+/// folds and reads out, so the key's home is all the fold refused. This is
+/// the fence the read-out's assertion rests on, pinned where a change to it
+/// surfaces as this test rather than as that assertion firing on a probe.
+#[test]
+fn lineage_asserts_the_home_m7s_fold_gives_every_claim() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
+    let (claim, _) = store
+        .assert_sup(SYS, &doc1(), &e1, &e2)
+        .expect("assert_sup succeeds");
+    let sup = k
+        .snapshot()
+        .world()
+        .links()
+        .reserved_type(ShippedType::Supersedes)
+        .clone();
+    let value = Link::triple(enc([&e1]), enc([&e2]), sup);
+
+    let account = a(&[1, 0, 1]);
+    assert_eq!(document_of(&account), None, "an account has no home");
+    let folded = catch_unwind(AssertUnwindSafe(|| {
+        fold_decoded_deposit(&k, &account, value.clone())
+    }));
+    assert!(folded.is_err(), "the fold refuses a key with no home");
+
+    // The store is as it was: both probes, under both views, answer the
+    // conforming claim alone.
+    let only_the_claim = vec![SupClaim {
+        claim: claim.clone(),
+        old: e1.clone(),
+        new: e2.clone(),
+        home: doc1(),
+        active: true,
+    }];
+    let reads = Reads(&k);
+    for view in [View::Active, View::Audit] {
+        assert_eq!(
+            reads.in_claims(&e1, view),
+            only_the_claim,
+            "in_claims, {view:?}"
+        );
+        assert_eq!(
+            reads.out_claims(&e2, view),
+            only_the_claim,
+            "out_claims, {view:?}"
+        );
+    }
+
+    // The same claim keyed at a link address of doc1 folds, and reads out.
+    fold_decoded_deposit(&k, &la(8), value);
+    assert_eq!(
+        claims_of(reads.in_claims(&e1, View::Active)),
+        vec![claim, la(8)]
+    );
 }
 
 /// Fold one `LinkRec::Deposit` of `value` at `addr` into the kernel's world

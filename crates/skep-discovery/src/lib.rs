@@ -65,13 +65,17 @@
 //! ## The home rule
 //!
 //! A second narrowing, by READER where the first is by view: THE HOME RULE
-//! (PUB round 2, lane 3.3; PUB-6.13) — a link is shown only if the reader
-//! may read its HOME. M8 takes the reader as the caller's DOCUMENT
-//! predicate, `readable`, and never sees a principal, a grant or the read
-//! predicate's clauses. It composes that predicate with the home projection
-//! in ONE crate-internal element, `home_readable`, because asked of a link
-//! instead of its home the predicate answers true and the rule admits every
-//! link.
+//! (PUB round 2, lane 3.3; PUB-6.13) — a link enters an answer only if the
+//! reader may read its HOME, whether it would be returned, be counted,
+//! contribute its endsets or be found present when an argument names it.
+//! What a returned item CARRIES is not narrowed: a claim's `old`/`new` and an
+//! endset's spans come back whole, unfiltered at origin (PUB-6.13,
+//! PUB-6.14), so an answer can name a link homed where its reader may not
+//! read. M8 takes the reader as the caller's DOCUMENT predicate, `readable`,
+//! and never sees a principal, a grant or the read predicate's clauses. It
+//! composes that predicate with the home projection in ONE crate-internal
+//! element, `home_readable`, because asked of a link instead of its home the
+//! predicate answers true and the rule admits every link.
 //!
 //! It is orthogonal to `View::Active`, and to the descriptor's own `home`
 //! slot, which is a COVERAGE constraint (CN-STAB) and not an authorization.
@@ -95,10 +99,12 @@
 //! withholds in place; nothing here applies it. [`image_on`] alone takes no
 //! predicate: its answer names I-runs and no link. The division of labour: a
 //! NAMED document's own readability is the caller's consult, before
-//! dispatch; the homes of the links M8 names, and of the pointwise pair's
-//! `a`, are M8's; and the lineage pair's KEY is neither — `y`/`x` is a
-//! filter VALUE, never consulted (PUB-6.12), so a key homed where the reader
-//! may not read is answered with every claim naming it that the rule admits.
+//! dispatch; the homes of the links an answer is built from — each link whose
+//! contribution it carries, an address, a count or an endset alike
+//! (PUB-6.14) — and of the pointwise pair's `a`, are M8's; and the lineage
+//! pair's KEY is neither: `y`/`x` is a filter VALUE, never consulted
+//! (PUB-6.12), so a key homed where the reader may not read is answered with
+//! every claim naming it that the rule admits.
 //!
 //! THE PREDICATE'S CONTRACT. M8 asks `readable` only about DOCUMENT
 //! addresses: the home of each candidate link a result-set read admits past
@@ -195,7 +201,7 @@
 //!   `readlink`, which answers `[]` for a non-link key and stops there;
 //!   otherwise one `observe` of the supersession class — a walk of that
 //!   class's typed slice, one coverage test per claim, and no store walk —
-//!   then, per observed claim whose `old`, `new` and home are defined, one
+//!   then, per observed claim whose `old` and `new` are defined, one
 //!   `is_active` and one comparison of the probed endpoint with the key,
 //!   ahead of the home rule.
 //! * the pointwise pair — no store walk: one `followlink` ([`project_on`]),

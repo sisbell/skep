@@ -16,8 +16,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   strand from a document; the supersession claims naming a link
   (one hop — the walks are the link store's).
 - **Answers for a reader** — every link read takes the caller's
-  reader predicate and reveals no link homed where that reader
-  may not read.
+  reader predicate and returns no link homed where that reader may
+  not read. What a surviving link contributes — its endsets, a
+  supersession claim's endpoints — comes back whole, as the
+  publication rules require, and may name such a link.
 - **Reads over a snapshot you hold** — every read is a free `*_on`
   function over an explicit snapshot, so the caller owns the
   consistency point and can report as-of positions.

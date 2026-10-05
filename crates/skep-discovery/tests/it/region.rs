@@ -742,3 +742,41 @@ fn every_region_read_resolves_a_published_document_through_its_trunk_head() {
         Ok(vec![(FROM, enc(&[pca(3)]))])
     );
 }
+
+/// §1 — the empty answer the document gate draws apart from
+/// `DocNotRegistered` is the READING SURFACE's, not the address named's: a
+/// published document versioned while it arranges nothing takes every later
+/// deposit on its head, so its own arrangement stays empty while every reader
+/// of it sees the head. Each read here answers from the head, and a caller
+/// that skipped one because `d` itself arranges nothing — the count the
+/// delete preview reads, which does not float — would miss what it answers.
+/// The other published fixtures arrange something of pdoc's own, where a read
+/// that took `d`'s own emptiness for its surface's would answer alike.
+#[test]
+fn a_published_document_whose_own_arrangement_is_empty_answers_from_its_head() {
+    let k = kernel();
+    let (head, _) = Vstream::new(&k)
+        .version(PrincipalId(1), &pdoc(), None)
+        .expect("the owner versions its empty published document");
+    assert_eq!(head, phead(), "the chain's first member");
+    seed_published_content(&k, &pdoc(), 2); // lands on the head alone
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let e1 = link(&store, &doc1(), &[pca(1)], &[ca(101)]);
+    let snap = k.snapshot();
+    assert_eq!(
+        snap.world().m5().content_count(&pdoc()),
+        n(0),
+        "pdoc arranges nothing of its own"
+    );
+    assert_eq!(snap.world().m5().content_count(&phead()), n(2));
+
+    let reads = Reads(&k);
+    let region = [vspan(1, 1, 2)];
+    assert_eq!(reads.image(&pdoc(), &region), Ok(vec![run(&pca(1), 2)]));
+    assert_eq!(reads.findlinks_v(&pdoc(), &region), Ok(vec![e1.clone()]));
+    assert!(reads
+        .project(&e1, FROM, &pdoc())
+        .expect("project")
+        .denotes(&t(&[1, 1])));
+    assert_eq!(reads.addressably_discoverable_from(&e1, &pdoc()), Ok(true));
+}

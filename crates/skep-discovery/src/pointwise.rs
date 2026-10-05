@@ -9,9 +9,10 @@
 //! links included.
 //!
 //! Both are DOC-GATED, as the region family is: `d` must be M3-registered,
-//! and that is the first act of each — a registered-but-empty `d` yields a
-//! defined answer (∅ / `Ok(false)`), an unregistered one yields
-//! `DocNotRegistered`, and drawing those apart is the gate's whole purpose.
+//! and that is the first act of each — a registered `d` whose reading
+//! surface arranges nothing yields a defined answer (∅ / `Ok(false)`), an
+//! unregistered one yields `DocNotRegistered`, and drawing those apart is
+//! the gate's whole purpose.
 //! Each read states its own refusal order, since a call can be faulty in `d`
 //! and in `a` at once and only one verdict speaks.
 //!
@@ -228,9 +229,9 @@ fn touches(e: &Endset, extents: &[Span]) -> bool {
 /// A *nullified* link is still a link: it is still resident, so the
 /// resident-link read admits it, and it returns `Ok(false)` through the
 /// `is_active` conjunct — distinguishing "not a link" from "a retracted
-/// link". A registered-but-empty `d` yields `Ok(false)` — nothing is
-/// reachable — and never `DocNotRegistered`, which is the distinction the
-/// document gate exists to draw.
+/// link". A registered `d` whose reading surface arranges nothing yields
+/// `Ok(false)` — nothing is reachable — and never `DocNotRegistered`, which
+/// is the distinction the document gate exists to draw.
 ///
 /// `Err(ImageTooLarge)` when the join is past budget: the runs of
 /// `ran(M(reading_surface(d)))` are lifted into an I-extent apiece and every

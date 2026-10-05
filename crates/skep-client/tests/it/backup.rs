@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use skep_client::ceremony::backup::{anchor_file_name, backup_moment, BackupOptions, Venue};
 use skep_client::person::scripted::{Script, Scripted};
-use skep_client::person::{Abandoned, Confirmation, Consent, Destination, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
+use skep_client::person::{Abandoned, Confirmation, Consent, Custody, Destination, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
 use skep_client::sheet::{Facts, KeyFile};
 use skep_client::store::Label;
 use skep_client::Origin;
@@ -101,6 +101,12 @@ impl Person for Vanisher {
     }
     fn confirm(&mut self, m: Consent<Confirmation>) -> Result<bool, Abandoned> {
         self.inner.confirm(m)
+    }
+    fn import(&mut self, m: Secret<Import>) -> Result<Imported, Abandoned> {
+        self.inner.import(m)
+    }
+    fn custody(&mut self, m: Secret<KeptOrPlaced>) -> Result<Custody, Abandoned> {
+        self.inner.custody(m)
     }
 }
 

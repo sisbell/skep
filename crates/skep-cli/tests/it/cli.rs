@@ -16,25 +16,17 @@ use skep_signature::HybridSigner;
 use crate::common::{origin, skep, spawn};
 
 const SEVEN: [&str; 7] = ["keygen", "claim", "session", "fingerprint", "verify", "health", "bind"];
-const SIX: [&str; 6] = ["enroll", "recover", "retire", "rotate", "handoff", "accept"];
 
 fn s(p: &Path) -> &str {
     p.to_str().unwrap()
 }
 
 #[test]
-fn help_lists_the_seven_and_the_six_not_in_this_build_exit_2_by_name() {
+fn help_lists_the_first_seven_and_refuses_the_flag_shapes() {
     let run = skep(&["--help"], &[], None);
     assert_eq!(run.code, 0, "{run:?}");
     for c in SEVEN {
         assert!(run.out.contains(&format!("\n  {c} ")), "{c} listed:\n{}", run.out);
-    }
-    assert!(run.out.contains("not in this build"));
-    for c in SIX {
-        assert!(run.out.contains(c), "{c} named");
-        let r = skep(&[c], &[], None);
-        assert_eq!(r.code, 2, "{c}: {r:?}");
-        assert!(r.err.contains("not in this build") && !r.err.contains("unknown"), "{c}: {}", r.err);
     }
     let r = skep(&["frobnicate"], &[], None);
     assert_eq!(r.code, 2);
@@ -180,12 +172,12 @@ fn the_loop_through_the_binary() {
 
     // session: CONTENT scope, the token on stdout. After `bind` the store
     // holds TWO bindings at this board — the account's and the agent
-    // space's persist-first line — so `--principal` cannot be omitted
-    // (§3.5: omitted only where the board has exactly one binding), and
-    // omitting it is a face, never a pick.
+    // space's persist-first line — and `--principal` MAY be omitted all the
+    // same (§3.5 as RULED 2026-10-04: the agent space's line does not count).
     let r = skep(&["session", "--board", &board, "--dir", s(&store)], &[], None);
-    assert_eq!(r.code, 3, "{r:?}");
-    assert!(r.err.contains("bindings for several principals"), "{}", r.err);
+    assert_eq!(r.code, 0, "the one-binding test ignores the agent space's line: {r:?}");
+    let r = skep(&["session", "--close", "-", "--board", &board], &[], Some(r.out.trim().as_bytes()));
+    assert_eq!(r.code, 0, "{r:?}");
     let r = skep(&["session", "--board", &board, "--dir", s(&store), "--principal", "1"], &[], None);
     assert_eq!(r.code, 0, "{r:?}");
     let token = r.out.trim().to_string();

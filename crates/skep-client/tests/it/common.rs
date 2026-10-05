@@ -156,3 +156,154 @@ pub fn files_in(dir: &Path) -> Vec<PathBuf> {
     v.sort();
     v
 }
+
+// ── THE WIRE TRANSCRIPT, re-driven: another hand's acts ──────────────────
+//
+// A "thief" or "another hand" in a test is the daemon's own helper's shape
+// (`open_signed_session_as`, `hire`, the retire helpers of skepd's suite) run
+// from the test over the board's raw frames — never a client ceremony.
+
+use skep_client::board::{acked_addr, frames, Answer, Opened, Scope, SessionBody, Token, T_ENROLL, T_RETIRE};
+use skep_client::ceremony::deposit::next_content_ordinal;
+use skep_client::derive::records::record_frame;
+use skep_client::person::{Abandoned, Confirmation, Consent, Custody, Destination, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
+use skep_client::sheet::KeyFile;
+use skep_client::sign::{session_payload, sig_hex, Signer};
+use skep_identity::{canonical_record, Enrollment, RecordEntry};
+use skep_signature::HybridSigner;
+
+/// A FULL signed session under `signer` for `principal`, as skepd's
+/// `open_signed_session_as` opens one: the challenge, the v1 bytes signed,
+/// the body posted.
+pub fn wire_session(board: &Board, principal: u64, signer: &HybridSigner) -> Token {
+    let challenge = board.challenge(principal).expect("challenge");
+    let payload = session_payload(&board.signed, &challenge.nonce, principal, Scope::Full);
+    let sig = sig_hex(&HybridSigner::sign(signer, &payload));
+    match board.session_open(SessionBody::Signed { principal, nonce: &challenge.nonce, sig_hex: &sig, scope: Scope::Full }).expect("session") {
+        Opened::Token(t) => t,
+        other => panic!("the wire session answered {other:?}"),
+    }
+}
+
+/// A credential record SIGNED at the record grade by `hand` (skepd's
+/// `signed_atom`), inserted DECLARED at `home`'s next free content ordinal
+/// and linked to `subject` under `ty` — the daemon's `hire` shape. Answers
+/// the link's address, or the refusal's token.
+fn wire_deposit<T: RecordEntry>(board: &Board, token: &Token, hand: &HybridSigner, home: &str, subject: &str, ty: &str, entries: &[T]) -> Result<String, String> {
+    let term = board.board_term().expect("term").expect("H.1");
+    let home_account = board.effective_owner(home).expect("owner").expect("owned").prefix;
+    let sigless = canonical_record(entries, None);
+    let alg = HybridSigner::public_key(hand).alg().to_string();
+    let frame = record_frame(&alg, term, &home_account, home, ty, &[subject], sigless.as_bytes()).expect("frame");
+    let text = canonical_record(entries, Some(&sig_hex(&HybridSigner::sign(hand, &frame))));
+    let ordinal = next_content_ordinal(board, Some(token), home).expect("ordinal");
+    let Answer::Document(v) = board.op(Some(token), &frames::insert_atom(home, ordinal, &text, ty, None)).expect("insert") else { return Err("closed".into()) };
+    let Some(atom) = acked_addr(&v).map(str::to_string) else { return Err(v.to_string()) };
+    let Answer::Document(v) = board.op(Some(token), &frames::make_link(home, &[&atom], &[subject], ty, None)).expect("link") else { return Err("closed".into()) };
+    acked_addr(&v).map(str::to_string).ok_or_else(|| v.to_string())
+}
+
+/// Another hand ENROLLS `entries` at `subject`, homed in `home`.
+pub fn wire_enroll(board: &Board, token: &Token, hand: &HybridSigner, home: &str, subject: &str, entries: &[Enrollment]) -> Result<String, String> {
+    wire_deposit(board, token, hand, home, subject, T_ENROLL, entries)
+}
+
+/// Another hand RETIRES `fps` at `subject`, homed in `home`.
+pub fn wire_retire(board: &Board, token: &Token, hand: &HybridSigner, home: &str, subject: &str, fps: &[Fingerprint]) -> Result<String, String> {
+    wire_deposit(board, token, hand, home, subject, T_RETIRE, fps)
+}
+
+/// A `delegate` from `token`'s session.
+pub fn wire_delegate(board: &Board, token: &Token, new_prefix: &str, new_id: u64) -> Result<String, String> {
+    let Answer::Document(v) = board.op(Some(token), &frames::delegate(new_prefix, new_id, None)).expect("delegate") else { return Err("closed".into()) };
+    acked_addr(&v).map(str::to_string).ok_or_else(|| v.to_string())
+}
+
+/// Whether `token` is dead: a write under it answers `unauthenticated` with
+/// the death signal.
+pub fn token_dead(board: &Board, token: &Token) -> bool {
+    matches!(board.op(Some(token), &frames::span_set("1.0.1.0.1")), Ok(Answer::Closed))
+}
+
+/// A device-key entry for a store key.
+pub fn entry_of(file: &KeyFile, label: &str) -> Enrollment {
+    Enrollment::new(file.public.clone(), false, Some(label.into())).expect("a label in the domain")
+}
+
+/// The store's one key file.
+pub fn key_file(store: &FileStore, fp: &Fingerprint) -> KeyFile {
+    store.load(&store.key_path(fp)).expect("the key file")
+}
+
+/// The anchor file under `anchors/<which>`, parsed.
+pub fn anchor_file(anchors: &Path, which: &str) -> (PathBuf, KeyFile) {
+    let files = files_in(&anchors.join(which));
+    assert_eq!(files.len(), 1, "one anchor file under {which}");
+    let file = KeyFile::parse(&std::fs::read(&files[0]).unwrap()).expect("an anchor file");
+    (files[0].clone(), file)
+}
+
+/// THE HOOKED PERSON: the scripted person with a hand that acts at a moment
+/// — `on_confirm` fires with the confirmation's index before it is answered,
+/// `on_say` with every statement's rule and text — so a test can plant a
+/// key between a walk's rounds, or pull a file from under its read-back.
+pub struct Hooked {
+    pub inner: Scripted,
+    pub confirms: usize,
+    pub on_confirm: Box<dyn FnMut(usize, &str)>,
+    pub on_say: Box<dyn FnMut(&str, &str)>,
+}
+
+impl Hooked {
+    pub fn new(script: Vec<Script>) -> Hooked {
+        Hooked { inner: Scripted::new(script), confirms: 0, on_confirm: Box::new(|_, _| {}), on_say: Box::new(|_, _| {}) }
+    }
+}
+
+impl Person for Hooked {
+    fn say(&mut self, m: Public<Statement>) {
+        (self.on_say)(m.0.rule, &m.0.text);
+        self.inner.say(m);
+    }
+    fn label(&mut self, m: Public<LabelBox>) -> Result<String, Abandoned> {
+        self.inner.label(m)
+    }
+    fn ask(&mut self, m: Public<Question>) -> Result<String, Abandoned> {
+        self.inner.ask(m)
+    }
+    fn yes_no(&mut self, m: Public<Question>) -> Result<bool, Abandoned> {
+        self.inner.yes_no(m)
+    }
+    fn sheet(&mut self, m: Secret<Sheet>) -> Result<(), Abandoned> {
+        self.inner.sheet(m)
+    }
+    fn dismiss(&mut self) {
+        self.inner.dismiss()
+    }
+    fn retype(&mut self, m: Secret<Retype>) -> Result<Retyped, Abandoned> {
+        self.inner.retype(m)
+    }
+    fn destination(&mut self, m: Secret<Destination>) -> Result<PathBuf, Abandoned> {
+        self.inner.destination(m)
+    }
+    fn confirm(&mut self, m: Consent<Confirmation>) -> Result<bool, Abandoned> {
+        self.inner.confirm(m)
+    }
+    fn confirm_typed(&mut self, m: Consent<Confirmation>) -> Result<String, Abandoned> {
+        let i = self.confirms;
+        self.confirms += 1;
+        (self.on_confirm)(i, &m.0.text);
+        self.inner.confirm_typed(m)
+    }
+    fn import(&mut self, m: Secret<Import>) -> Result<Imported, Abandoned> {
+        self.inner.import(m)
+    }
+    fn custody(&mut self, m: Secret<KeptOrPlaced>) -> Result<Custody, Abandoned> {
+        self.inner.custody(m)
+    }
+}
+
+/// `Signer::fingerprint` on a hybrid signer, disambiguated.
+pub fn fp_of(signer: &HybridSigner) -> Fingerprint {
+    Signer::fingerprint(signer)
+}

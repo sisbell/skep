@@ -82,7 +82,7 @@ pub struct Record {
     pub sigless: String,
     /// The `sig` member, where the record carries one.
     pub sig: Option<String>,
-    /// An enrolment's entries.
+    /// An enrollment's entries.
     pub enrolled: Vec<Enrollment>,
     /// A retirement's fingerprints.
     pub retired: Vec<Fingerprint>,
@@ -92,7 +92,7 @@ pub struct Record {
     pub base: Option<u64>,
     /// The hand.
     pub hand: Hand,
-    /// Whether the act is ANCHOR-GRADE: an anchor-flagged enrolment, a
+    /// Whether the act is ANCHOR-GRADE: an anchor-flagged enrollment, a
     /// retirement naming an anchor (the `anchor_session_required` cases).
     pub anchor_grade: bool,
 }
@@ -460,6 +460,14 @@ pub fn credential_records(board: &Board, account: &str, own: &[(Fingerprint, Pub
         for link in links_of(board, ty, account)? {
             let Some(home) = document_of(&link) else { continue };
             let Answer::Document(lv) = board.op(None, &frames::read_link(&link))? else { continue };
+            // The four-set query matches by span OVERLAP, so a link naming an
+            // account ABOVE this one (its subtree covering this address)
+            // answers too: the record is this account's only where the link's
+            // own `to` names it (AUTH-2.113's residence read is per subject).
+            let to = lv["link"]["slots"].as_array().and_then(|s| s.get(1)).and_then(Value::as_array).and_then(|t| t.first()).and_then(|span| span["start"].as_str());
+            if to != Some(account) {
+                continue;
+            }
             let Some(atom) = lv["link"]["slots"].as_array().and_then(|s| s.first()).and_then(|from| from.as_array()).and_then(|f| f.first()).and_then(|span| span["start"].as_str()) else { continue };
             if !inversions.contains_key(&home) {
                 inversions.insert(home.clone(), inversion(board, &home)?);
@@ -525,7 +533,7 @@ pub fn credential_records(board: &Board, account: &str, own: &[(Fingerprint, Pub
     }
 
     // Genesis-first, then by position, then link-address order (AUTH-5.69's
-    // position-free arm): the genesis is the enrolment homed in the genesis
+    // position-free arm): the genesis is the enrollment homed in the genesis
     // registry's doc 1 — another account's, or the own doc 1's lowest link.
     records.sort_by(|a, b| {
         let genesis = |r: &Record| (r.kind == Kind::Enroll && r.home_account != account) as u8;

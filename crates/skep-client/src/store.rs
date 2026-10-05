@@ -128,7 +128,7 @@ impl<'a> KeySelector<'a> {
     }
 }
 
-/// What a selected key is to be used for: SIGNING (or enrolment as a device
+/// What a selected key is to be used for: SIGNING (or enrollment as a device
 /// key), where an anchor file is REFUSED whichever arm selected it (§2.2's
 /// selection test, P11); or a READ of its public facts (`fingerprint
 /// --key`, `verify`), where it is not.
@@ -139,14 +139,14 @@ pub enum Purpose {
 }
 
 /// ONE LINE of the bindings file, IN EITHER OF ITS TWO FORMS AND NO THIRD
-/// (§3.5): the enrolment line `origin principal account fingerprint`
+/// (§3.5): the enrollment line `origin principal account fingerprint`
 /// (AUTH-5.76's retention), and the `signed <dialed-origin> <signed-origin>`
 /// line a frontend at its own bind-override node writes (AUTH-4.57 (a)'s
 /// client half). The two are told apart by the first field — a canonical
 /// origin carries `://`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Binding {
-    Enrolment { origin: Origin, principal: u64, account: String, fingerprint: Fingerprint },
+    Enrollment { origin: Origin, principal: u64, account: String, fingerprint: Fingerprint },
     Signed { dialed: Origin, signed: Origin },
 }
 
@@ -154,7 +154,7 @@ impl Binding {
     /// The line, without its newline.
     pub fn line(&self) -> String {
         match self {
-            Binding::Enrolment { origin, principal, account, fingerprint } => {
+            Binding::Enrollment { origin, principal, account, fingerprint } => {
                 format!("{origin} {principal} {account} {fingerprint}")
             }
             Binding::Signed { dialed, signed } => format!("signed {dialed} {signed}"),
@@ -167,7 +167,7 @@ impl Binding {
         let fields: Vec<&str> = line.split_whitespace().collect();
         match fields.as_slice() {
             ["signed", dialed, signed] => Some(Binding::Signed { dialed: Origin::parse(dialed)?, signed: Origin::parse(signed)? }),
-            [origin, principal, account, fingerprint] if origin.contains("://") => Some(Binding::Enrolment {
+            [origin, principal, account, fingerprint] if origin.contains("://") => Some(Binding::Enrollment {
                 origin: Origin::parse(origin)?,
                 principal: principal.parse().ok()?,
                 account: account.to_string(),
@@ -444,27 +444,44 @@ impl FileStore {
         Ok(complete.lines().filter_map(Binding::parse_line).collect())
     }
 
-    /// The LAST enrolment line for (`origin`, `principal`) — the newest
+    /// The LAST enrollment line for (`origin`, `principal`) — the newest
     /// wins (§3.5 arm 2).
-    pub fn enrolment_for(&self, origin: &Origin, principal: u64) -> Result<Option<(String, Fingerprint)>, StoreError> {
+    pub fn enrollment_for(&self, origin: &Origin, principal: u64) -> Result<Option<(String, Fingerprint)>, StoreError> {
         Ok(self.all_bindings()?.into_iter().rev().find_map(|b| match b {
-            Binding::Enrolment { origin: o, principal: p, account, fingerprint } if &o == origin && p == principal => {
+            Binding::Enrollment { origin: o, principal: p, account, fingerprint } if &o == origin && p == principal => {
                 Some((account, fingerprint))
             }
             _ => None,
         }))
     }
 
-    /// The principals bound at `origin`, newest first, each once — the
-    /// "exactly one binding" test that lets `--principal` be omitted.
+    /// The principals bound at `origin`, newest first, each once — THE
+    /// ONE-BINDING TEST that lets `--principal` be omitted (`client.md`
+    /// §3.5, as RULED 2026-10-04: "`--principal` may be omitted where the
+    /// board has exactly one binding in the store, the agent space's line
+    /// not counting: §4.3's persist-first line binds the account's first
+    /// child (`inc(account, 1)`), so a claimed board always holds that line
+    /// beside the account's, and the one-binding test excludes every line
+    /// whose account is the first child of another line's account at the
+    /// same board"). The exclusion is ONE condition: a line is dropped where
+    /// its account is [`crate::derive::first_child`] of another line's
+    /// account at this origin.
     pub fn principals_at(&self, origin: &Origin) -> Result<Vec<u64>, StoreError> {
+        let lines: Vec<(u64, String)> = self
+            .all_bindings()?
+            .into_iter()
+            .filter_map(|b| match b {
+                Binding::Enrollment { origin: o, principal, account, .. } if &o == origin => Some((principal, account)),
+                _ => None,
+            })
+            .collect();
         let mut out: Vec<u64> = Vec::new();
-        for b in self.all_bindings()?.into_iter().rev() {
-            if let Binding::Enrolment { origin: o, principal, .. } = b {
-                if &o == origin && !out.contains(&principal) {
-                    out.push(principal);
-                }
+        for (principal, account) in lines.iter().rev() {
+            let agent_space = lines.iter().any(|(_, other)| crate::derive::first_child(other) == *account);
+            if agent_space || out.contains(principal) {
+                continue;
             }
+            out.push(*principal);
         }
         Ok(out)
     }
@@ -501,7 +518,7 @@ impl FileStore {
                     }
                 };
                 if let Some(p) = principal {
-                    if let Some((_, fp)) = self.enrolment_for(origin, p)? {
+                    if let Some((_, fp)) = self.enrollment_for(origin, p)? {
                         let path = self.key_path(&fp);
                         if !path.is_file() {
                             return Err(StoreError::MissingKey { path, fingerprint: fp });
@@ -599,7 +616,7 @@ impl KeyStore for FileStore {
             .all_bindings()?
             .into_iter()
             .filter(|b| match b {
-                Binding::Enrolment { origin: o, .. } => o == origin,
+                Binding::Enrollment { origin: o, .. } => o == origin,
                 Binding::Signed { dialed, .. } => dialed == origin,
             })
             .collect())

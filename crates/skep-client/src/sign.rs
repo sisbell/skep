@@ -21,7 +21,7 @@ pub use crate::board::Scope;
 use crate::origin::Origin;
 
 /// The production kind's marker tag — `mldsa65-ed25519`, tag 1, the kind
-/// every served board enrols (wire.md §The claim ceremony and credentials).
+/// every served board enrolls (wire.md §The claim ceremony and credentials).
 pub const PRODUCTION_TAG: u8 = skep_signature::TAG_MLDSA65_ED25519;
 
 /// THE SIGNER SEAM (§1.4): a custody rung is an implementation of this

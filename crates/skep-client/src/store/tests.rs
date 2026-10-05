@@ -115,8 +115,8 @@ fn the_lookup_takes_its_four_arms_in_order() {
         Err(StoreError::NoSelection { keys }) if keys.len() == 2
     ));
     // Arm 2: the binding, and the LAST line wins.
-    store.bind(&Binding::Enrolment { origin: origin.clone(), principal: 1, account: "1.0.1".into(), fingerprint: first.0 }).unwrap();
-    store.bind(&Binding::Enrolment { origin: origin.clone(), principal: 1, account: "1.0.1".into(), fingerprint: second.0 }).unwrap();
+    store.bind(&Binding::Enrollment { origin: origin.clone(), principal: 1, account: "1.0.1".into(), fingerprint: first.0 }).unwrap();
+    store.bind(&Binding::Enrollment { origin: origin.clone(), principal: 1, account: "1.0.1".into(), fingerprint: second.0 }).unwrap();
     let sel = store.select(&KeySelector::Binding { origin: &origin, principal: Some(1) }, Purpose::Sign).unwrap();
     assert_eq!(sel.file.fingerprint, second.0, "the newest line wins");
     // `--principal` omitted where the board has exactly one binding.
@@ -143,18 +143,18 @@ fn the_bindings_file_has_two_line_forms() {
     let dialed = Origin::parse("http://127.0.0.1:8642").unwrap();
     let signed = Origin::parse("https://board.example").unwrap();
     let fp = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
-    let enrol = Binding::Enrolment { origin: dialed.clone(), principal: 7, account: "1.0.1".into(), fingerprint: fp };
-    assert_eq!(enrol.line(), format!("http://127.0.0.1:8642 7 1.0.1 {}", "ab".repeat(32)));
-    assert_eq!(Binding::parse_line(&enrol.line()), Some(enrol.clone()));
+    let enroll = Binding::Enrollment { origin: dialed.clone(), principal: 7, account: "1.0.1".into(), fingerprint: fp };
+    assert_eq!(enroll.line(), format!("http://127.0.0.1:8642 7 1.0.1 {}", "ab".repeat(32)));
+    assert_eq!(Binding::parse_line(&enroll.line()), Some(enroll.clone()));
     let sline = Binding::Signed { dialed: dialed.clone(), signed: signed.clone() };
     assert_eq!(sline.line(), "signed http://127.0.0.1:8642 https://board.example");
     assert_eq!(Binding::parse_line(&sline.line()), Some(sline.clone()));
     assert_eq!(Binding::parse_line("retired abab"), None, "no third form");
-    store.bind(&enrol).unwrap();
+    store.bind(&enroll).unwrap();
     store.bind(&sline).unwrap();
     assert_eq!(store.bindings(&dialed).unwrap().len(), 2);
     assert_eq!(store.signed_origin_for(&dialed).unwrap(), Some(signed));
-    assert_eq!(store.enrolment_for(&dialed, 7).unwrap(), Some(("1.0.1".to_string(), fp)));
+    assert_eq!(store.enrollment_for(&dialed, 7).unwrap(), Some(("1.0.1".to_string(), fp)));
     // A torn final line is ignored.
     let path = store.root().join("bindings");
     let mut text = fs::read_to_string(&path).unwrap();
@@ -179,13 +179,34 @@ fn a_read_only_store_warns_with_the_line() {
     fs::set_permissions(store.root(), fs::Permissions::from_mode(0o500)).unwrap();
     let origin = Origin::parse("http://127.0.0.1:8642").unwrap();
     let fp = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
-    let b = Binding::Enrolment { origin, principal: 1, account: "1.0.1".into(), fingerprint: fp };
+    let b = Binding::Enrollment { origin, principal: 1, account: "1.0.1".into(), fingerprint: fp };
     let err = store.bind(&b).unwrap_err();
     fs::set_permissions(store.root(), fs::Permissions::from_mode(0o700)).unwrap();
     match err {
         StoreError::ReadOnly { line, .. } => assert_eq!(line, b.line()),
         other => panic!("not a warning: {other}"),
     }
+}
+
+/// §3.5 as RULED (2026-10-04) — THE ONE-BINDING TEST ignores the agent
+/// space's persist-first line: a claimed board's two lines (the account's
+/// and its first child's) let `--principal` be omitted; a second ACCOUNT
+/// bound at the same board makes the omission a halt. MUTATION 1: with the
+/// first-child exclusion removed the two lines count as two principals.
+#[test]
+fn the_one_binding_test_ignores_the_agent_spaces_line() {
+    let (_dir, store) = store();
+    let origin = Origin::parse("http://127.0.0.1:8642").unwrap();
+    let fp = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
+    store.bind(&Binding::Enrollment { origin: origin.clone(), principal: 1, account: "1.0.1".into(), fingerprint: fp }).unwrap();
+    store.bind(&Binding::Enrollment { origin: origin.clone(), principal: 424_242, account: "1.0.1.1".into(), fingerprint: fp }).unwrap();
+    assert_eq!(store.principals_at(&origin).unwrap(), vec![1], "the agent space's line does not count");
+    // A second account at the same board: two principals, the omission a halt.
+    store.bind(&Binding::Enrollment { origin: origin.clone(), principal: 7, account: "1.0.2".into(), fingerprint: fp }).unwrap();
+    assert_eq!(store.principals_at(&origin).unwrap(), vec![7, 1]);
+    // Another board's lines never count here.
+    let other = Origin::parse("http://127.0.0.1:9").unwrap();
+    assert!(store.principals_at(&other).unwrap().is_empty());
 }
 
 /// §3.4 — a path inside the store is recognised.

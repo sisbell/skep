@@ -1,15 +1,26 @@
-//! THE SEVEN COMMANDS, each exactly as `client.md` §2.2 writes it — one
+//! THE THIRTEEN COMMANDS, each exactly as `client.md` §2.2 writes it — one
 //! function per command, every walk a library call, stdout DATA and stderr
 //! TALK (§2.4), §2.3's exit codes. A halt is one block on stderr: the
 //! state, its cause, the one act (AUTH-5.66; AUTH-5.67's key-file cell
-//! naming the path and the state).
+//! naming the path and the state). THE PERSON DOORS — `claim`'s notebook
+//! arm, `keygen --anchors`, `enroll`'s comparison, `recover`, `retire`,
+//! `rotate`, `handoff` with `--payload`, `accept` without `--reprint` —
+//! refuse without a controlling terminal through the CLI's `Person` (§2.4:
+//! the CLI's check, never the walk's).
 
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use skep_client::board::{Board, KeySetAnswer, Scope, Token};
+use skep_client::ceremony::accept::{self as accept_walk, AcceptOptions};
 use skep_client::ceremony::backup::{backup_moment, BackupOptions, Venue};
 use skep_client::ceremony::claim::{self, ClaimOutcome, HostedOutcome, NotebookOptions};
+use skep_client::ceremony::enroll::{self as enroll_walk, EnrollOptions};
+use skep_client::ceremony::handoff::{self as handoff_walk, HandoffOptions, HandoffOutcome};
+use skep_client::ceremony::recover::{self as recover_walk, RecoverOptions};
+use skep_client::ceremony::retire::{self as retire_walk, RetireEnd, RetireOptions};
+use skep_client::ceremony::rotate::{self as rotate_walk, RotateOptions};
+use skep_client::person::{Person, Public, Question};
 use skep_client::ceremony::first_session::{first_session, FirstSessionReads};
 use skep_client::ceremony::handshake::{handshake, key_face, Site};
 use skep_client::derive::records::{compare_whole_set, credential_records, Difference, Held};
@@ -112,7 +123,7 @@ fn custody_line(path: &Path) -> String {
         "key file written: {} — the seed rests in this file and the filesystem's modes are its whole protection (0600 under 0700): a \
          same-user process reads it and a disk image carries it; your anchors, where the account this key joins holds them, are what \
          its loss recovers from (`skep recover`); an account founded from this key's own one-key record holds none, and there the one \
-         way back is the enrol hop from another signed-in device",
+         way back is the enroll hop from another signed-in device",
         path.display()
     )
 }
@@ -209,7 +220,7 @@ pub fn keygen(c: &Command) -> i32 {
         // The record FIRST (§2.2): one canonical JSON object.
         data(encode_enroll(&entries));
         if anchors {
-            talk("this three-key payload serves ONE door, the hosted signup — never the enrol hop, whose `skep enroll` refuses every anchor-flagged entry at the paste");
+            talk("this three-key payload serves ONE door, the hosted signup — never the enroll hop, whose `skep enroll` refuses every anchor-flagged entry at the paste");
         } else {
             talk(outstanding_act_line());
         }
@@ -270,7 +281,7 @@ pub fn claim(c: &Command) -> i32 {
                 ));
                 data("second act: in your first signed session the setup act runs — `skep claim --board <origin> --dir <store>` from that device performs it: creating your account also creates a space for your agents beneath it, and its home");
                 if reply.anchorless {
-                    data("this account holds no anchor: no anchor act on it is ever possible, and the enrol hop from another signed-in device is its one recovery");
+                    data("this account holds no anchor: no anchor act on it is ever possible, and the enroll hop from another signed-in device is its one recovery");
                 }
                 0
             }
@@ -440,14 +451,14 @@ pub fn fingerprint(c: &Command) -> i32 {
             Err(e) => return halt(claim::store_halt(e)),
         }
     };
-    let any_binding = bindings.iter().any(|b| matches!(b, Binding::Enrolment { .. }));
+    let any_binding = bindings.iter().any(|b| matches!(b, Binding::Enrollment { .. }));
     let mut json_rows = Vec::new();
     for (path, file) in &files {
         let fp = file.fingerprint;
         let bound: Vec<String> = bindings
             .iter()
             .filter_map(|b| match b {
-                Binding::Enrolment { origin, principal, account, fingerprint } if *fingerprint == fp => Some(format!("{origin} principal {principal} account {account}")),
+                Binding::Enrollment { origin, principal, account, fingerprint } if *fingerprint == fp => Some(format!("{origin} principal {principal} account {account}")),
                 _ => None,
             })
             .collect();
@@ -496,16 +507,18 @@ pub fn fingerprint(c: &Command) -> i32 {
 
 // ── verify ──────────────────────────────────────────────────────────────
 
-/// What this device HOLDS for the whole-set compare: the payload's entries,
-/// and the anchor files' public members beside the store's device key.
-fn held_set(c: &Command, store: &FileStore, device: Option<&KeyFile>) -> Result<Option<Vec<Held>>, Halt> {
+/// What this device HOLDS for the whole-set compare: the payload's entries
+/// (at `verify`, where `--payload` is the RECORD this device printed; at
+/// `bind` it is the REPLY and never read here), and the anchor files'
+/// public members beside the store's device key.
+fn held_set(c: &Command, store: &FileStore, device: Option<&KeyFile>, payload_is_record: bool) -> Result<Option<Vec<Held>>, Halt> {
     let mut held = Vec::new();
     let mut any = false;
-    if let Some(arg) = c.value("--payload", None) {
+    if let Some(arg) = c.value("--payload", None).filter(|_| payload_is_record) {
         any = true;
         let bytes = read_payload(&arg)?;
         let text = std::str::from_utf8(&bytes).map_err(|_| Halt::face("the payload is not UTF-8", "a canonical record is UTF-8 text", "re-take the payload"))?.trim();
-        let entries = skep_identity::parse_enroll(text.as_bytes()).map_err(|e| Halt::face("the payload is not a canonical enrolment record", e.to_string(), "re-take it from the device that printed it"))?;
+        let entries = skep_identity::parse_enroll(text.as_bytes()).map_err(|e| Halt::face("the payload is not a canonical enrollment record", e.to_string(), "re-take it from the device that printed it"))?;
         for e in entries {
             held.push(Held { fingerprint: Fingerprint::of(&e.key), anchor: e.anchor, label: e.label().map(str::to_string) });
         }
@@ -534,7 +547,7 @@ fn difference_lines(diffs: &[Difference]) -> Vec<String> {
             Difference::Added { fingerprint, anchor, label } => format!(
                 "a key you did not send stands in the genesis: {fingerprint} anchor={anchor} label={} — {}",
                 label.as_deref().map(render_inert).unwrap_or_else(|| "(none)".into()),
-                if *anchor { "an anchor planted: the remedy is your OWN anchor where the flags survived (AUTH-4.56), and the state is PERMANENT where they did not" } else { "a device key planted: retire it from this device's own session (`skep retire`, the next lane)" }
+                if *anchor { "an anchor planted: the remedy is your OWN anchor where the flags survived (AUTH-4.56), and the state is PERMANENT where they did not" } else { "a device key planted: retire it from this device's own session (`skep retire --fingerprint <prefix>`)" }
             ),
             Difference::Missing { fingerprint, anchor, label } => format!(
                 "a key you sent is missing from the genesis: {fingerprint} anchor={anchor} label={}",
@@ -595,7 +608,7 @@ pub fn verify(c: &Command) -> i32 {
     // THE WHOLE-SET COMPARE, where the person holds what this device
     // composed (AUTH-4.58's detection; P25).
     let mut later_lines = Vec::new();
-    let held = match held_set(c, &store, Some(&file)) {
+    let held = match held_set(c, &store, Some(&file), true) {
         Ok(h) => h,
         Err(h) => return halt(h),
     };
@@ -606,7 +619,7 @@ pub fn verify(c: &Command) -> i32 {
             Err(h) => return halt(h),
         };
         match compare_whole_set(&records, &pre.walk.set, &held) {
-            None => return halt(Halt::face("the account has no genesis record to compare against", "the admitted read found no enrolment record naming the account", "this is a board fault, or the account is not the one the facts name")),
+            None => return halt(Halt::face("the account has no genesis record to compare against", "the admitted read found no enrollment record naming the account", "this is a board fault, or the account is not the one the facts name")),
             Some(whole) => {
                 if !whole.differences.is_empty() {
                     let lines = difference_lines(&whole.differences);
@@ -776,7 +789,7 @@ pub fn bind(c: &Command) -> i32 {
     }
     // At a HANDOFF LANDING the set is compared WHOLE, ahead of
     // `first_session` and any session (AUTH-4.58's detection).
-    let records_for_compare = match held_set(c, &store, Some(&file)) {
+    let records_for_compare = match held_set(c, &store, Some(&file), false) {
         Ok(h) => h,
         Err(h) => return halt(h),
     };
@@ -839,7 +852,7 @@ pub fn bind(c: &Command) -> i32 {
     } else {
         talk("nothing is owed at this account's first signed session: no session is opened and no record is written");
     }
-    let line = Binding::Enrolment { origin: board.dialed.clone(), principal, account: account.clone(), fingerprint: file.fingerprint };
+    let line = Binding::Enrollment { origin: board.dialed.clone(), principal, account: account.clone(), fingerprint: file.fingerprint };
     match store.bind(&line) {
         Ok(()) => {}
         Err(StoreError::ReadOnly { line, .. }) => talk(format!("the store is read-only; record this binding line yourself: {line}")),
@@ -860,5 +873,329 @@ fn enrolled_of(answer: &KeySetAnswer) -> Vec<Fingerprint> {
     match answer {
         KeySetAnswer::Set(s) => s.enrolled.iter().map(|e| e.fingerprint).collect(),
         KeySetAnswer::NotAnAccount => Vec::new(),
+    }
+}
+
+/// The three facts, DATA on stdout, in the form `bind --payload` reads.
+fn facts(f: &skep_client::sheet::Facts) {
+    data(format!("account {}", f.account));
+    data(format!("principal {}", f.principal));
+    data(format!("origin {}", f.origin));
+}
+
+// ── enroll ──────────────────────────────────────────────────────────────
+
+pub fn enroll(c: &Command) -> i32 {
+    let board = match board_of(c) {
+        Ok(b) => b,
+        Err(u) => return usage(u),
+    };
+    let store = match store_of(c) {
+        Ok(s) => s,
+        Err(u) => return usage(u),
+    };
+    let principal = match principal_or_bound(c, &store, &board) {
+        Ok(p) => p,
+        Err(h) => return halt(h),
+    };
+    // `--reply`: the three facts re-derived, no write — not a person door.
+    if let Some(prefix) = c.value("--reply", None) {
+        return match enroll_walk::reply(&board, principal, &prefix) {
+            Err(h) => halt(h),
+            Ok(e) => {
+                talk(format!("the reply, offered again (AUTH-5.32): {} stands ENROLLED at {}", e.fingerprints[0], e.facts.account));
+                facts(&e.facts);
+                0
+            }
+        };
+    }
+    if !has_terminal() {
+        return no_terminal("enroll");
+    }
+    let Some(payload_arg) = c.value("--payload", None) else { return usage(Usage("--payload <file|-> is required (or --reply <fp-prefix>)".into())) };
+    let payload = match read_payload(&payload_arg) {
+        Ok(p) => p,
+        Err(h) => return halt(h),
+    };
+    if let Some(w) = plaintext_non_loopback_warning(&board.dialed) {
+        talk(w);
+    }
+    let mut person = Terminal::new();
+    match enroll_walk::enroll(&board, &store, &mut person, &EnrollOptions { principal, payload }) {
+        Err(h) => halt(h),
+        Ok(e) => {
+            for w in &e.warnings {
+                talk(w);
+            }
+            if e.reconciled {
+                talk("reconciled: every key of the payload already stands enrolled (AUTH-5.17) — nothing was written, and the three facts are the reply");
+            }
+            facts(&e.facts);
+            0
+        }
+    }
+}
+
+// ── recover ─────────────────────────────────────────────────────────────
+
+pub fn recover(c: &Command) -> i32 {
+    let board = match board_of(c) {
+        Ok(b) => b,
+        Err(u) => return usage(u),
+    };
+    let store = match store_of(c) {
+        Ok(s) => s,
+        Err(u) => return usage(u),
+    };
+    if !has_terminal() {
+        return no_terminal("recover");
+    }
+    let principal = match principal_or_bound(c, &store, &board) {
+        Ok(p) => p,
+        Err(h) => return halt(h),
+    };
+    if let Some(w) = plaintext_non_loopback_warning(&board.dialed) {
+        talk(w);
+    }
+    // `--key`/`SKEP_KEY` is NOT consulted here: the new device key is the
+    // STORE's, as at `claim` (§2.2).
+    let (host, date) = host_and_date();
+    let opts = RecoverOptions {
+        principal,
+        anchor: c.all("--anchor").first().map(PathBuf::from),
+        lost: c.all("--lost"),
+        stolen: c.switch("--stolen").then_some(true),
+        anchor_lost: c.switch("--anchor-lost"),
+        anchor_out: c.all("--anchor-out").into_iter().map(PathBuf::from).collect(),
+        paper: c.switch("--paper"),
+        host,
+        date,
+    };
+    let mut person = Terminal::new();
+    match recover_walk::recover(&board, &store, &mut person, &opts) {
+        Err(h) => halt(h),
+        Ok(r) => {
+            for w in &r.warnings {
+                talk(w);
+            }
+            for l in &r.report {
+                talk(format!("[report] {l}"));
+            }
+            if let Some(line) = &r.binding_line {
+                talk(format!("binding: {line}"));
+            }
+            facts(&r.facts);
+            for fp in &r.enrolled {
+                data(format!("enrolled {fp}"));
+            }
+            for fp in &r.retired {
+                data(format!("retired {fp}"));
+            }
+            0
+        }
+    }
+}
+
+// ── retire ──────────────────────────────────────────────────────────────
+
+pub fn retire(c: &Command) -> i32 {
+    let board = match board_of(c) {
+        Ok(b) => b,
+        Err(u) => return usage(u),
+    };
+    let store = match store_of(c) {
+        Ok(s) => s,
+        Err(u) => return usage(u),
+    };
+    let Some(fingerprint) = c.value("--fingerprint", None) else { return usage(Usage("--fingerprint <fp-prefix> is required".into())) };
+    if !has_terminal() {
+        return no_terminal("retire");
+    }
+    let principal = match principal_or_bound(c, &store, &board) {
+        Ok(p) => p,
+        Err(h) => return halt(h),
+    };
+    if let Some(w) = plaintext_non_loopback_warning(&board.dialed) {
+        talk(w);
+    }
+    let mut person = Terminal::new();
+    match retire_walk::retire(&board, &store, &mut person, &RetireOptions { principal, fingerprint }) {
+        Err(h) => halt(h),
+        Ok(r) => {
+            data(format!("retired {} at {}", r.fingerprint, r.account));
+            if let RetireEnd::OwnKey { another_held } = r.end {
+                talk(if another_held { "next: `skep session` with the key you still hold" } else { "next: `skep keygen`, then `skep recover` with a paper" });
+            }
+            0
+        }
+    }
+}
+
+// ── rotate ──────────────────────────────────────────────────────────────
+
+pub fn rotate(c: &Command) -> i32 {
+    let board = match board_of(c) {
+        Ok(b) => b,
+        Err(u) => return usage(u),
+    };
+    let store = match store_of(c) {
+        Ok(s) => s,
+        Err(u) => return usage(u),
+    };
+    if !has_terminal() {
+        return no_terminal("rotate");
+    }
+    let principal = match principal_or_bound(c, &store, &board) {
+        Ok(p) => p,
+        Err(h) => return halt(h),
+    };
+    let payload = match c.value("--payload", None) {
+        Some(arg) => match read_payload(&arg) {
+            Ok(p) => Some(p),
+            Err(h) => return halt(h),
+        },
+        None => None,
+    };
+    if let Some(w) = plaintext_non_loopback_warning(&board.dialed) {
+        talk(w);
+    }
+    let mut person = Terminal::new();
+    match rotate_walk::rotate(&board, &store, &mut person, &RotateOptions { principal, label: c.value("--label", None), payload }) {
+        Err(h) => halt(h),
+        Ok(r) => {
+            for w in &r.warnings {
+                talk(w);
+            }
+            if let Some(line) = &r.binding_line {
+                talk(format!("binding: {line}"));
+            }
+            facts(&r.facts);
+            data(format!("old {}", r.old));
+            data(format!("new {}", r.new));
+            data(format!("trail {}", r.trail));
+            0
+        }
+    }
+}
+
+// ── handoff ─────────────────────────────────────────────────────────────
+
+pub fn handoff(c: &Command) -> i32 {
+    let board = match board_of(c) {
+        Ok(b) => b,
+        Err(u) => return usage(u),
+    };
+    let store = match store_of(c) {
+        Ok(s) => s,
+        Err(u) => return usage(u),
+    };
+    let Some(account) = c.value("--account", None) else { return usage(Usage("--account <address> is required".into())) };
+    let payload = match c.value("--payload", None) {
+        Some(arg) => match read_payload(&arg) {
+            Ok(p) => Some(p),
+            Err(h) => return halt(h),
+        },
+        None => None,
+    };
+    // The comparison and the confirmation make the `--payload` invocation a
+    // person door; beat (a) alone is not one.
+    if payload.is_some() && !has_terminal() {
+        return no_terminal("handoff --payload");
+    }
+    let principal = match principal_or_bound(c, &store, &board) {
+        Ok(p) => p,
+        Err(h) => return halt(h),
+    };
+    if let Some(w) = plaintext_non_loopback_warning(&board.dialed) {
+        talk(w);
+    }
+    let mut person = Terminal::new();
+    let opts = HandoffOptions { principal, account, payload, anchor: c.all("--anchor").first().map(PathBuf::from) };
+    match handoff_walk::handoff(&board, &store, &mut person, &opts) {
+        Err(h) => halt(h),
+        Ok(HandoffOutcome::Delegated { account, seat, already }) => {
+            talk(if already { "beat (a) stands done: the address is printed again" } else { "beat (a) done: hand the address to the recipient; they run `skep accept --board <origin> --account <address>` and return their record for `skep handoff --payload`" });
+            data(format!("account {account}"));
+            data(format!("principal {seat}"));
+            data(format!("origin {}", board.dialed));
+            0
+        }
+        Ok(HandoffOutcome::Seeded { facts: f, grade, reconciled, warnings }) => {
+            for w in &warnings {
+                talk(w);
+            }
+            talk(format!("the genesis is written at the {grade:?} grade{}; return the three facts below to the recipient for `skep bind`", if reconciled { " (reconciled from the records)" } else { "" }));
+            facts(&f);
+            0
+        }
+    }
+}
+
+// ── accept ──────────────────────────────────────────────────────────────
+
+pub fn accept(c: &Command) -> i32 {
+    let store = match store_of(c) {
+        Ok(s) => s,
+        Err(u) => return usage(u),
+    };
+    // `--reprint`: the record from the artifacts' public members — not a
+    // person door.
+    if c.switch("--reprint") {
+        let anchors: Vec<PathBuf> = c.all("--anchor").into_iter().map(PathBuf::from).collect();
+        let board = c.board().ok();
+        return match accept_walk::reprint(&store, c.key().as_deref(), &anchors, board.as_ref()) {
+            Err(h) => halt(h),
+            Ok(record) => {
+                data(record);
+                0
+            }
+        };
+    }
+    if !has_terminal() {
+        return no_terminal("accept");
+    }
+    let mut person = Terminal::new();
+    // `--board` and `--account` REQUIRED: a run missing either ASKS and
+    // generates nothing (AUTH RES-162).
+    let board = match c.board() {
+        Ok(o) => Board::new(o, Box::new(PlainHttp::new())),
+        Err(_) => {
+            let Ok(text) = person.ask(Public(Question { text: "the board the account is on (a canonical origin, from the giver): ".into() })) else { return halt(Halt::face("no board was named", "the beat asks and generates nothing", "re-run with --board")) };
+            match text.trim().parse::<skep_client::Origin>() {
+                Ok(o) => Board::new(o, Box::new(PlainHttp::new())),
+                Err(e) => return usage(Usage(format!("--board: '{}' is {e}", text.trim()))),
+            }
+        }
+    };
+    let account = match c.value("--account", None) {
+        Some(a) => a,
+        None => match person.ask(Public(Question { text: "the address the giver handed you (--account): ".into() })) {
+            Ok(a) if !a.trim().is_empty() => a.trim().to_string(),
+            _ => return halt(Halt::face("no address was named", "AUTH RES-162: the beat holds the address before the keys are made, and generates nothing without it", "ask the giver for the address and re-run with --account")),
+        },
+    };
+    if let Some(w) = plaintext_non_loopback_warning(&board.dialed) {
+        talk(w);
+    }
+    let (host, date) = host_and_date();
+    let opts = AcceptOptions {
+        account,
+        label: c.value("--label", None),
+        anchor_out: c.all("--anchor-out").into_iter().map(PathBuf::from).collect(),
+        paper: c.switch("--paper"),
+        no_anchors: c.switch("--no-anchors"),
+        hosted: None,
+        host,
+        date,
+    };
+    match accept_walk::accept(&board, &store, &mut person, &opts) {
+        Err(h) => halt(h),
+        Ok(a) => {
+            // The record FIRST (DATA for the giver), then the device key's
+            // fingerprint.
+            data(a.record);
+            data(a.device.to_hex());
+            0
+        }
     }
 }

@@ -61,6 +61,13 @@ pub enum Site {
     Setup,
     /// The hosted customer's first signed session, the detection H6 names.
     Hosted,
+    /// The recovery's anchor session (§4a.2 R2) and the loss arm's: the key
+    /// is an IMPORTED anchor, so neither list is the WRONG SHEET (AUTH-5.25
+    /// (iii)) — another account's or another board's paper.
+    Recover,
+    /// The giver's session at the handoff door (§4c.2), the one it opens
+    /// BY REFERENCE as the giving account included.
+    Giver,
 }
 
 /// THE THREE-STATE KEY FACE (`client.md` §2.2 `verify`), ONE diagnosis shared
@@ -104,10 +111,19 @@ pub fn key_face(board: &Board, pre: &PreCheck, fp: &Fingerprint, own: &[(Fingerp
             let act = match site {
                 Site::Session | Site::Tail => format!(
                     "at a board this store claimed, the key on your paper is not the key in the set (the wrong sheet, \
-                     AUTH-5.25 (i)/(iii)); at a board this store is keyless for, either enrol this key from a device of yours \
+                     AUTH-5.25 (i)/(iii)); at a board this store is keyless for, either enroll this key from a device of yours \
                      still signed in (`skep keygen --payload` here, `skep enroll` there, `skep bind` back here) or recover \
-                     from a paper anchor (`skep keygen` here, then `skep recover` — not in this build); the set the walk \
-                     reached is {}'s",
+                     from a paper anchor (`skep keygen` here, then `skep recover`); the set the walk reached is {}'s",
+                    pre.walk.set_account
+                ),
+                Site::Recover => format!(
+                    "THE WRONG SHEET (AUTH-5.25 (iii)): the key on this paper is not a key of the set at {} — another account's \
+                     or another board's paper; check the three facts it carries against the board and the principal you named",
+                    pre.walk.set_account
+                ),
+                Site::Giver => format!(
+                    "the giver's key stands in neither list of the set that opens the giving account ({}); a handoff is made \
+                     by a key of the set that opens the account above the subdivision (AUTH-5.90)",
                     pre.walk.set_account
                 ),
                 Site::Claim => "the genesis recorded a pubkey this key does not match; AUTH-5.25 (iii)'s act is a pinned order — \

@@ -76,8 +76,13 @@ signatures. A person acts from the `skep` command (`crates/skep-cli`:
 from the bundled app, whose page acts through the shell's bridge over
 `skep-client`. The claim's backup moment writes two anchor FILES by default
 — to directories you name, never under the key store — and prints a sheet
-only under `--paper`; `skep recover` (a later build) is the way back in from
-a kept file or a print, and no one else holds a reset.
+only under `--paper`; `skep recover` is the way back in from
+a kept file or a print, and no one else holds a reset. The later gestures
+are commands too: `skep enroll` adds a device from one already signed in,
+`skep retire` and `skep rotate` retire and replace a device key after a
+previewed, typed confirmation, `skep recover --anchor-lost` replaces a lost
+paper under the surviving one, and `skep handoff` with `skep accept` give a
+subdivision to another party.
 
 ---
 

@@ -74,11 +74,11 @@ fn the_loop_claims_the_board_and_a_second_run_is_the_ours_tail() {
     assert!(set.enrolled(&fp).is_some_and(|e| !e.anchor));
     // The bindings: the account's line, and the agent space's persisted id.
     let bindings = store.all_bindings().unwrap();
-    assert!(bindings.iter().any(|b| matches!(b, Binding::Enrolment { principal: 1, account, fingerprint, .. } if account == "1.0.1" && *fingerprint == fp)));
+    assert!(bindings.iter().any(|b| matches!(b, Binding::Enrollment { principal: 1, account, fingerprint, .. } if account == "1.0.1" && *fingerprint == fp)));
     let space_id = bindings
         .iter()
         .find_map(|b| match b {
-            Binding::Enrolment { account, principal, .. } if account == "1.0.1.1" => Some(*principal),
+            Binding::Enrollment { account, principal, .. } if account == "1.0.1.1" => Some(*principal),
             _ => None,
         })
         .expect("the agent space's binding line");
@@ -243,7 +243,7 @@ fn the_persisted_new_id_is_read_back_and_the_space_is_delegated_under_it() {
     // The persisted line, as an interrupted run leaves it: the id chosen,
     // the frame never sent.
     let chosen: u64 = 424_242;
-    store.bind(&Binding::Enrolment { origin: board.dialed.clone(), principal: chosen, account: "1.0.1.1".into(), fingerprint: fp }).unwrap();
+    store.bind(&Binding::Enrollment { origin: board.dialed.clone(), principal: chosen, account: "1.0.1.1".into(), fingerprint: fp }).unwrap();
     assert_eq!(board.principal_prefix(chosen).unwrap(), None, "not yet delegated");
     // The tail resumes and delegates UNDER THE PERSISTED ID.
     let mut person = Scripted::new(vec![]);
@@ -252,7 +252,7 @@ fn the_persisted_new_id_is_read_back_and_the_space_is_delegated_under_it() {
     assert_eq!(done.agent_space.as_deref(), Some("1.0.1.1"));
     assert_eq!(board.principal_prefix(chosen).unwrap().as_deref(), Some("1.0.1.1"), "the persisted id seats the space");
     let lines = store.all_bindings().unwrap();
-    assert_eq!(lines.iter().filter(|b| matches!(b, Binding::Enrolment { account, .. } if account == "1.0.1.1")).count(), 1, "no second id was minted for the space");
+    assert_eq!(lines.iter().filter(|b| matches!(b, Binding::Enrollment { account, .. } if account == "1.0.1.1")).count(), 1, "no second id was minted for the space");
     // And the space's home stands.
     assert!(skep_client::ceremony::first_session::document_present(&board, "1.0.1.1.0.1").unwrap());
 }

@@ -142,9 +142,10 @@ pub fn arm4_face(store: &FileStore, keys: &[crate::store::KeyFacts], mode: Mode,
                 format!("the key store {} is keyless for this claimed board", store.root().display()),
                 "a wiped profile, a lost store, or a second machine (AUTH-5.32)",
                 format!(
-                    "either: generate a key here and enrol it from a device you are still signed in on (`skep keygen --payload` here, \
-                     `skep enroll` there, `skep bind` back here); or import a paper anchor (`skep keygen` here, then `skep recover`) — \
-                     both acts are later builds' here. Where NEITHER is available — no signed-in device and both anchors gone — no \
+                    "either: generate a key here and enroll it from a device you are still signed in on (`skep keygen --payload` here, \
+                     `skep enroll` there, `skep bind` back here); or import a paper anchor (`skep keygen` here, then `skep recover`, \
+                     which enrolls the new key from the anchor's session and retires the lost one). Where NEITHER is available — no \
+                     signed-in device and both anchors gone — no \
                      key opens this account and none ever will, and what exists is a fresh board: {residue}; either way total key \
                      loss freezes the mint. And everything this account shared STAYS SHARED: every grant it issued stands forever, \
                      only this account could withdraw it, and the fresh board carries none of it back."
@@ -352,7 +353,7 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
     // S9 NAME: collected and held; the write deferred.
     let display_name = s9_name(person, opts)?;
     // S10 RETAIN: the binding, the close, the three facts.
-    let line = Binding::Enrolment { origin: board.dialed.clone(), principal, account: account.clone(), fingerprint: device_fp };
+    let line = Binding::Enrollment { origin: board.dialed.clone(), principal, account: account.clone(), fingerprint: device_fp };
     if let Err(e) = store.bind(&line) {
         warnings.push(format!("the store could not be appended ({e}); record this binding line yourself: {}", line.line()));
     }
@@ -461,8 +462,8 @@ fn tail_or_stranger(board: &Board, store: &FileStore, person: &mut dyn Person, o
         warnings.push("the board is CLAIMED-PERMISSIVE: any loopback party may still write drafts as any principal".into());
     }
     let display_name = s9_name(person, opts)?;
-    let line = Binding::Enrolment { origin: board.dialed.clone(), principal, account: claimant.clone(), fingerprint: file.fingerprint };
-    let bound = store.enrolment_for(&board.dialed, principal).map_err(store_halt)?.is_some_and(|(_, fp)| fp == file.fingerprint);
+    let line = Binding::Enrollment { origin: board.dialed.clone(), principal, account: claimant.clone(), fingerprint: file.fingerprint };
+    let bound = store.enrollment_for(&board.dialed, principal).map_err(store_halt)?.is_some_and(|(_, fp)| fp == file.fingerprint);
     if !bound {
         if let Err(e) = store.bind(&line) {
             warnings.push(format!("the store could not be appended ({e}); record this binding line yourself: {}", line.line()));
@@ -540,7 +541,7 @@ pub fn hosted(board: &Board, payload: &[u8], principal: u64) -> Result<HostedOut
         if e.key.alg() != skep_identity::ALG_MLDSA65_ED25519 {
             return Err(Halt::face(
                 format!("the payload names a PREVIEW-kind key: {} ({})", fp, e.key.alg()),
-                "refused by this client as a preview kind; the board's own setting not consulted — a hosted board is a served board, which enrols the production kind alone",
+                "refused by this client as a preview kind; the board's own setting not consulted — a hosted board is a served board, which enrolls the production kind alone",
                 "the customer re-takes the payload from a client generating the production kind (`mldsa65-ed25519`)",
             ));
         }
@@ -548,7 +549,7 @@ pub fn hosted(board: &Board, payload: &[u8], principal: u64) -> Result<HostedOut
     }
     let anchorless = !entries.iter().any(|e| e.anchor);
     if anchorless {
-        log.push("this payload carries no anchor-flagged entry: the account it founds is ANCHORLESS PERMANENTLY — no anchor act on it is ever possible, `skep recover` is unavailable forever, the only remaining path being the enrol hop from another signed-in device; a captured token is the account (AUTH-5.16's second arm; AUTH-5.62; AUTH-4.53)".into());
+        log.push("this payload carries no anchor-flagged entry: the account it founds is ANCHORLESS PERMANENTLY — no anchor act on it is ever possible, `skep recover` is unavailable forever, the only remaining path being the enroll hop from another signed-in device; a captured token is the account (AUTH-5.16's second arm; AUTH-5.62; AUTH-4.53)".into());
     }
     // H3: bare 0 → delegate; bare N → the mint.
     let account = "1.0.1".to_string();
@@ -615,7 +616,7 @@ pub fn hosted(board: &Board, payload: &[u8], principal: u64) -> Result<HostedOut
 
 fn payload_face(why: &str) -> Halt {
     Halt::face(
-        "the payload is not a canonical enrolment record",
+        "the payload is not a canonical enrollment record",
         format!("`parse_enroll` admits the canonical encoding and nothing else (AUTH-2.130): {why}"),
         "the customer re-takes the payload from the device that generated it (`skep keygen --payload` or `--anchors`); nothing was written",
     )

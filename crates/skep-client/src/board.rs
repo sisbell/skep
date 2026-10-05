@@ -36,6 +36,12 @@ pub const T_ENROLL: &str = "1.1.0.1.0.1.0.3.1";
 pub const T_RETIRE: &str = "1.1.0.1.0.1.0.3.2";
 pub const T_CLAIM: &str = "1.1.0.1.0.1.0.3.3";
 
+/// The SUPERSEDES class's reserved ghost tumbler — the type slot of the
+/// claim an `assert_sup` deposits (wire.md §Links (writes)): the one unit
+/// span its entry body's type row carries, and the type the supersession
+/// trail's resume read discovers by (AUTH-5.59 step 2).
+pub const T_SUPERSEDES: &str = "1.1.0.1.0.1.0.1.4";
+
 /// The published head document `H` (wire.md §The other endpoints,
 /// PUB-6.65) and its first version member `H.1`, pinned forever: the board
 /// term every entry frame names (D13) is read off it, once per board.
@@ -810,9 +816,31 @@ pub mod frames {
         json!({"op": "find_links_ftt", "q": {"home": "any", "from": "any", "to": unit_span(to), "ty": unit_span(ty)}})
     }
 
-    /// `find_links_ftt` over `ty` and `from` — the claim link's shape.
+    /// `find_links_ftt` over `ty` and `from` — the claim link's shape, and
+    /// the supersession trail's resume read (`from` the OLD enroll link).
     pub fn find_links_ftt_from(ty: &str, from: &str) -> Value {
         json!({"op": "find_links_ftt", "q": {"home": "any", "from": unit_span(from), "to": "any", "ty": unit_span(ty)}})
+    }
+
+    /// `find_links_ftt` over `ty` and `home` — every deposit of `ty` HOMED in
+    /// one document, the head invariant's enumeration read (AUTH-5.59's
+    /// head: "every account whose honored genesis stands in the doc 1 of an
+    /// account the enumeration already holds"). Two slots constrained, so no
+    /// class scan.
+    pub fn find_links_ftt_home(ty: &str, home: &str) -> Value {
+        json!({"op": "find_links_ftt", "q": {"home": unit_span(home), "from": "any", "to": "any", "ty": unit_span(ty)}})
+    }
+
+    /// `{"op":"assert_sup","home":…,"old":…,"new":…}` — the supersession
+    /// trail (AUTH-5.59 step 2; wire.md §Links (writes)), with its `attest`
+    /// member where the caller composed one (signed ops: publish-class into
+    /// a published doc 1 from a signed session).
+    pub fn assert_sup(home: &str, old: &str, new: &str, attest: Option<Value>, id: Option<&str>) -> Value {
+        let mut frame = with_id(json!({"op": "assert_sup", "home": home, "old": old, "new": new}), id);
+        if let Some(a) = attest {
+            frame["attest"] = a;
+        }
+        frame
     }
 
     fn with_id(mut frame: Value, id: Option<&str>) -> Value {

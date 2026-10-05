@@ -12,7 +12,7 @@
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 
-use skep_client::person::{Abandoned, Confirmation, Consent, Destination, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
+use skep_client::person::{Abandoned, Confirmation, Consent, Custody, Destination, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
 
 /// Whether a controlling terminal stands at both ends of a prompt.
 pub fn has_terminal() -> bool {
@@ -134,6 +134,52 @@ impl Person for Terminal {
         eprintln!("{}", m.0.text);
         let a = self.line(&format!("type `{}` to confirm: ", m.0.expected))?;
         Ok(a.trim() == m.0.expected)
+    }
+
+    fn confirm_typed(&mut self, m: Consent<Confirmation>) -> Result<String, Abandoned> {
+        eprintln!("{}", m.0.text);
+        let a = self.line(&format!("type `{}` to confirm, or `no`: ", m.0.expected))?;
+        Ok(a.trim().to_string())
+    }
+
+    /// The import: a line that is `neither`, a path, or 64 hex (spaces
+    /// allowed) followed by the fingerprint's first group on a second line.
+    fn import(&mut self, m: Secret<Import>) -> Result<Imported, Abandoned> {
+        eprintln!("{}", m.0.prompt);
+        loop {
+            let prompt = if m.0.file_allowed { "anchor (a file path, the 64 hex from the print, or `neither`): " } else { "anchor (the 64 hex from the print, or `neither`): " };
+            let a = self.line(prompt)?;
+            let text = a.trim();
+            if text.is_empty() {
+                eprintln!("an answer is required: a path, the hex, or `neither`");
+                continue;
+            }
+            if text.eq_ignore_ascii_case("neither") {
+                return Ok(Imported::Neither);
+            }
+            let compact: String = text.split_whitespace().collect();
+            if compact.len() == 64 && compact.bytes().all(|b| b.is_ascii_hexdigit()) {
+                let prefix = self.line("fingerprint prefix from the print (at least the first 8 hex): ")?;
+                return Ok(Imported::Typed { seed_hex: compact.to_ascii_lowercase(), fingerprint_prefix: prefix.trim().to_ascii_lowercase() });
+            }
+            if !m.0.file_allowed {
+                eprintln!("a file was already named by the flag; type the hex, or `neither`");
+                continue;
+            }
+            return Ok(Imported::File(PathBuf::from(text)));
+        }
+    }
+
+    fn custody(&mut self, m: Secret<KeptOrPlaced>) -> Result<Custody, Abandoned> {
+        eprintln!("{}", m.0.text);
+        loop {
+            let a = self.line(&format!("is {} the KEPT artifact (k) or a PLACED copy (p)? ", m.0.path.display()))?;
+            match a.trim().to_ascii_lowercase().as_str() {
+                "k" | "kept" => return Ok(Custody::Kept),
+                "p" | "placed" => return Ok(Custody::Placed),
+                _ => eprintln!("answer k or p"),
+            }
+        }
     }
 }
 

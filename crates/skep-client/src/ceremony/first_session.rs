@@ -123,7 +123,7 @@ impl FirstSessionReads {
         let persisted_new_id = match store {
             Some(store) => store.all_bindings().ok().and_then(|lines| {
                 lines.into_iter().rev().find_map(|b| match b {
-                    Binding::Enrolment { origin: o, account: a, principal, .. } if &o == origin && a == space => Some(principal),
+                    Binding::Enrollment { origin: o, account: a, principal, .. } if &o == origin && a == space => Some(principal),
                     _ => None,
                 })
             }),
@@ -255,6 +255,31 @@ pub fn first_session(
     Ok(done)
 }
 
+/// THE FIRST STATE ALONE — the doc-1 mint by its own resume read and
+/// NEVER the setup state: the recovery's R3 on the answer "an agent's"
+/// (`client.md` §4a.2 R3; RULED 2026-10-04), where R4's containment insert
+/// homes in the agent's doc 1 too, while AUTH-5.87 excludes an agent's
+/// account BY NAME ("an agent holds no agent space; its first child is its
+/// first worker") so ops (1) and (3) would delegate the agent's first child
+/// from the owner's anchor session, permanently. Answers whether the home
+/// was minted here.
+pub fn mint_home(board: &Board, reads: &FirstSessionReads, session: &Session) -> Result<bool, Halt> {
+    if document_present(board, &reads.home)? {
+        return Ok(false);
+    }
+    let v = match session.op(board, &frames::create_home(&reads.account, Some(&format!("first-session.mint.{}", reads.account))))? {
+        Answer::Closed => return Err(closed()),
+        Answer::Document(v) => v,
+    };
+    match Rejection::of(&v) {
+        None => Ok(true),
+        Some(r) if r.detail.as_deref() == Some("mint_home_public") => {
+            Err(Halt::face("the home mint was refused as a draft", r.token(), "this client passes `published: true`; this is its own fault"))
+        }
+        Some(r) => Err(r.refused(&v)),
+    }
+}
+
 fn closed() -> Halt {
     Halt::face(
         "the session ended during the first signed session's acts",
@@ -285,7 +310,7 @@ fn delegate_space(
             let id = fresh_principal_id();
             // PERSIST-FIRST (§4.3; AUTH-5.20): the line BEFORE the frame.
             if let Some(store) = store {
-                let line = Binding::Enrolment {
+                let line = Binding::Enrollment {
                     origin: board.dialed.clone(),
                     principal: id,
                     account: reads.space.clone(),
@@ -315,7 +340,7 @@ fn delegate_space(
             Some(seat) => {
                 // Correct the persisted line to the read principal.
                 if let Some(store) = store {
-                    let line = Binding::Enrolment {
+                    let line = Binding::Enrollment {
                         origin: board.dialed.clone(),
                         principal: seat,
                         account: reads.space.clone(),

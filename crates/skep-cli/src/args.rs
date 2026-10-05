@@ -30,19 +30,21 @@ pub struct Command {
     switches: Vec<String>,
 }
 
-/// The seven commands, and the six named as not in this build.
+/// THE THIRTEEN COMMANDS (`client.md` §2.1's IN set).
 const COMMANDS: [&str; 13] = [
     "keygen", "claim", "session", "fingerprint", "verify", "health", "bind", "enroll", "recover", "retire", "rotate", "handoff", "accept",
 ];
 
-/// The flags that take a value.
-const VALUED: [&str; 14] = [
+/// The flags that take a value; `--anchor`, `--anchor-out`, `--anchor-label`
+/// and `--lost` are REPEATABLE (every value kept, in order).
+const VALUED: [&str; 17] = [
     "--board", "--dir", "--key", "--principal", "--label", "--anchor-label", "--anchor-out", "--name", "--hosted", "--close", "--select",
-    "--payload", "--anchor", "--account",
+    "--payload", "--anchor", "--account", "--lost", "--fingerprint", "--reply",
 ];
 
-/// The switches.
-const SWITCHES: [&str; 3] = ["--json", "--anchors", "--paper"];
+/// The switches. `--yes` does not exist: a retirement's confirmation is a
+/// typed answer at the terminal, never a flag (AUTH-5.46).
+const SWITCHES: [&str; 7] = ["--json", "--anchors", "--paper", "--stolen", "--anchor-lost", "--no-anchors", "--reprint"];
 
 /// `--payload` takes a value at `claim --hosted`'s sibling, `verify` and
 /// `bind`, and is a SWITCH at `keygen` and `fingerprint`.
@@ -146,8 +148,10 @@ mod tests {
         assert!(parse(argv(&["session", "--board"])).is_err(), "a flag without its value is refused");
         assert!(parse(argv(&["health", "--frob"])).is_err(), "an unknown flag is refused");
         assert!(matches!(parse(argv(&["--help"])).unwrap(), Parsed::Help));
-        let Parsed::Command(c) = parse(argv(&["enroll"])).unwrap() else { panic!() };
-        assert_eq!(c.command, "enroll", "the six parse as commands, and the dispatcher names them as not in this build");
+        let Parsed::Command(c) = parse(argv(&["recover", "--lost", "ab", "--lost", "cd", "--stolen", "--anchor", "/a"])).unwrap() else { panic!() };
+        assert_eq!(c.all("--lost"), ["ab", "cd"], "--lost is repeatable");
+        assert!(c.switch("--stolen"));
+        assert!(parse(argv(&["retire", "--yes"])).is_err(), "--yes does not exist: a typed answer, never a flag");
         let Parsed::Command(c) = parse(argv(&["keygen", "--payload"])).unwrap() else { panic!() };
         assert!(c.switch("--payload"), "a switch at keygen");
         let Parsed::Command(c) = parse(argv(&["verify", "--payload", "-", "--board", "HTTP://x"])).unwrap() else { panic!() };

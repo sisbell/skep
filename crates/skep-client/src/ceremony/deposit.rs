@@ -29,9 +29,9 @@ use crate::sign::{sig_hex, Signer};
 /// What the deposit records.
 #[derive(Debug, Clone)]
 pub enum DepositKind {
-    /// An enrolment of these entries, composed here (`encode_enroll`).
+    /// An enrollment of these entries, composed here (`encode_enroll`).
     Enroll(Vec<Enrollment>),
-    /// An enrolment whose canonical bytes arrived from another device and
+    /// An enrollment whose canonical bytes arrived from another device and
     /// are kept VERBATIM as the sig-less body (AUTH-4.58; §4.5 H2, `enroll`'s
     /// paste) — admitted by `parse_enroll` ahead of any frame.
     EnrollVerbatim(String),
@@ -143,7 +143,7 @@ pub fn deposit(board: &Board, token: &Token, d: &Deposit<'_>) -> Result<DepositO
         DepositKind::EnrollVerbatim(text) => {
             let entries = parse_enroll(text.as_bytes()).map_err(|e| {
                 Halt::face(
-                    "the payload is not a canonical enrolment record",
+                    "the payload is not a canonical enrollment record",
                     format!("`parse_enroll` refused it: {e} (AUTH-2.130 admits the canonical encoding and nothing else)"),
                     "re-take the payload from the device that generated it; never edit it here (AUTH-5.57 step 3's echo-back)",
                 )
@@ -348,8 +348,8 @@ fn reconcile_or_face(board: &Board, d: &Deposit<'_>, r: &Rejection, v: &Value, e
         }
         "too_many_enrolled" => Err(Halt::face(
             format!("the set at {} is full", d.subject),
-            "too_many_enrolled: the enrolled-set cap (16) binds this enrolment",
-            "retire a key from this set first (`skep retire` — not in this build), then re-run the act (AUTH-5.13: the act, never the count)",
+            "too_many_enrolled: the enrolled-set cap (16) binds this enrollment",
+            "retire a key from this set first — `skep retire --fingerprint <prefix>` from this same signed session — then re-run the act (AUTH-5.13: the act, never the count)",
         )),
         "content_session" => Err(Halt::face(
             "this session was opened for content only",
@@ -365,9 +365,9 @@ fn reconcile_or_face(board: &Board, d: &Deposit<'_>, r: &Rejection, v: &Value, e
             let has_anchor = matches!(board.key_set(d.subject)?, KeySetAnswer::Set(s) if s.has_anchor());
             Err(Halt::face(
                 "this act needs a session an ANCHOR of the account established",
-                "anchor_session_required: an anchor retirement or a post-genesis anchor-flagged enrolment needs an anchor session (AUTH-3.20/3.22)",
+                "anchor_session_required: an anchor retirement or a post-genesis anchor-flagged enrollment needs an anchor session (AUTH-3.20/3.22)",
                 if has_anchor {
-                    "import a paper anchor of this account and run the walk that takes one — `skep recover` (not in this build)"
+                    "import a paper anchor of this account and run the walk that takes one — `skep recover` (the loss arm, `--anchor-lost`, where a paper was lost)"
                 } else {
                     "no anchor is enrolled on this account: the act is impossible on this account permanently (AUTH-5.16's second arm)"
                 },
@@ -379,9 +379,9 @@ fn reconcile_or_face(board: &Board, d: &Deposit<'_>, r: &Rejection, v: &Value, e
             "run `skep claim` on this board first",
         )),
         "preview_key" => Err(Halt::face(
-            "this is a PREVIEW key, and this board enrols no preview keys",
+            "this is a PREVIEW key, and this board enrolls no preview keys",
             "preview_key: the record names a key of the preview kind (`fndsa512-preview-ed25519`) on a daemon launched without `--allow-preview-keys`",
-            "make a key with a released client — the production kind, `mldsa65-ed25519` — and enrol that",
+            "make a key with a released client — the production kind, `mldsa65-ed25519` — and enroll that",
         )),
         "not_doc_one" | "unpublished" | "published_target" | "record_sig_required" | "system_account_keyless" | "replaces_not_credential" | "resolved_from" | "emit_not_make_link" | "malformed_shape" => Err(Halt::face(
             "the board refused this client's frame",

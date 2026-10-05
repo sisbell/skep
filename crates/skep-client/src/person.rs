@@ -92,11 +92,50 @@ pub struct Destination {
     pub which: usize,
 }
 
-/// A typed confirmation gating a permanent act — CONSENT.
+/// A typed confirmation gating a permanent act — CONSENT: the person types
+/// `expected` (the ROW — a fingerprint's first R42 group — where a row is
+/// what the act names, AUTH-5.46) or `no`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Confirmation {
     pub text: String,
     pub expected: String,
+}
+
+/// THE ANCHOR IMPORT (`client.md` §4a.2 R1) — SECRET: the artifact handed
+/// in, a FILE picked from disk, the 64 hex TYPED from a print with a
+/// fingerprint prefix of at least one R42 group (§9 item 35), or "I hold
+/// NEITHER" — an ANSWER and never an error (AUTH-5.16's no-artifact arm).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Import {
+    pub prompt: String,
+    /// Whether a file may be named at this moment (the flag already named
+    /// one where false).
+    pub file_allowed: bool,
+}
+
+/// The import's answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Imported {
+    File(PathBuf),
+    Typed { seed_hex: String, fingerprint_prefix: String },
+    Neither,
+}
+
+/// KEPT OR PLACED (AUTH-5.54 step 3's file arm) — SECRET: whether the
+/// handed path is the KEPT artifact (retained) or a PLACED copy (destroyed
+/// when the ceremony ends); "kept-or-placed is not a filesystem-readable
+/// property of a path", so the person answers what no read can.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeptOrPlaced {
+    pub path: PathBuf,
+    pub text: String,
+}
+
+/// The custody answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Custody {
+    Kept,
+    Placed,
 }
 
 /// The person left: an EOF, a Ctrl-C, a window closed — the walk takes its
@@ -130,8 +169,22 @@ pub trait Person {
     fn retype(&mut self, m: Secret<Retype>) -> Result<Retyped, Abandoned>;
     /// One anchor file's destination (SECRET).
     fn destination(&mut self, m: Secret<Destination>) -> Result<PathBuf, Abandoned>;
-    /// A typed confirmation (CONSENT).
+    /// A typed confirmation (CONSENT): `true` iff the person typed
+    /// `expected`.
     fn confirm(&mut self, m: Consent<Confirmation>) -> Result<bool, Abandoned>;
+    /// A typed confirmation ANSWERED IN TEXT (CONSENT), so a walk can tell
+    /// `no` from a wrong row and re-ask the row (AUTH-5.46: "the wrong row
+    /// is the mistake stress produces"). The default answers `expected` or
+    /// `no` off [`Person::confirm`]; an embedder that reads the text answers
+    /// it verbatim.
+    fn confirm_typed(&mut self, m: Consent<Confirmation>) -> Result<String, Abandoned> {
+        let expected = m.0.expected.clone();
+        Ok(if self.confirm(m)? { expected } else { "no".to_string() })
+    }
+    /// THE ANCHOR IMPORT (SECRET): a file, the typed hex, or neither.
+    fn import(&mut self, m: Secret<Import>) -> Result<Imported, Abandoned>;
+    /// KEPT OR PLACED (SECRET): the handed file's custody.
+    fn custody(&mut self, m: Secret<KeptOrPlaced>) -> Result<Custody, Abandoned>;
 }
 
 pub mod scripted {
@@ -167,6 +220,19 @@ pub mod scripted {
         RetypeDeclined,
         /// An anchor file's destination.
         Destination(PathBuf),
+        /// A typed confirmation answered in TEXT — a wrong row, on purpose.
+        Typed(String),
+        /// The import: a file.
+        ImportFile(PathBuf),
+        /// The import: the hex typed off the n-th sheet shown, with its
+        /// fingerprint's first group.
+        ImportFromSheet(usize),
+        /// The import: this hex and this prefix, as typed.
+        ImportTyped { seed_hex: String, fingerprint_prefix: String },
+        /// The import: "I hold neither".
+        ImportNeither,
+        /// Kept or placed.
+        Custody(Custody),
         /// The person leaves at this moment.
         Abandon,
     }
@@ -275,7 +341,43 @@ pub mod scripted {
             self.transcript.push(format!("CONSENT confirm: {}", m.0.text));
             match self.next("confirm")? {
                 Script::Confirm(b) => Ok(b),
+                Script::Typed(t) => Ok(t == m.0.expected),
                 other => panic!("the script answered a confirmation with {other:?}"),
+            }
+        }
+
+        fn confirm_typed(&mut self, m: Consent<Confirmation>) -> Result<String, Abandoned> {
+            self.transcript.push(format!("CONSENT confirm: {}", m.0.text));
+            match self.next("confirm")? {
+                Script::Confirm(true) => Ok(m.0.expected),
+                Script::Confirm(false) => Ok("no".into()),
+                Script::Typed(t) => Ok(t),
+                other => panic!("the script answered a confirmation with {other:?}"),
+            }
+        }
+
+        fn import(&mut self, m: Secret<Import>) -> Result<Imported, Abandoned> {
+            self.transcript.push(format!("SECRET import: {}", m.0.prompt));
+            match self.next("import")? {
+                Script::ImportFile(p) => Ok(Imported::File(p)),
+                Script::ImportFromSheet(n) => {
+                    let sheet = self.sheets.get(n).expect("that sheet was shown before the import");
+                    Ok(Imported::Typed {
+                        seed_hex: sheet.seed_grouped.split_whitespace().collect(),
+                        fingerprint_prefix: sheet.fingerprint_hex[..8].to_string(),
+                    })
+                }
+                Script::ImportTyped { seed_hex, fingerprint_prefix } => Ok(Imported::Typed { seed_hex, fingerprint_prefix }),
+                Script::ImportNeither => Ok(Imported::Neither),
+                other => panic!("the script answered an import with {other:?}"),
+            }
+        }
+
+        fn custody(&mut self, m: Secret<KeptOrPlaced>) -> Result<Custody, Abandoned> {
+            self.transcript.push(format!("SECRET custody of {}: {}", m.0.path.display(), m.0.text));
+            match self.next("custody")? {
+                Script::Custody(c) => Ok(c),
+                other => panic!("the script answered kept-or-placed with {other:?}"),
             }
         }
     }

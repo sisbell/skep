@@ -112,15 +112,20 @@ foundation and on the stores above it.
   `client.md`): the one outbound dialer, bare and signed sessions behind
   AUTH-5.65's pre-check, the key store, the signing seam over the hybrid
   key, the reader's verifier over the signature-filtered set, the claim
-  ceremony and the compositions every later ceremony runs over. Of the
+  ceremony, the compositions every later ceremony runs over, and the
+  ceremonies over them — the retirement preview with its reach, the anchor
+  import, the device and loss arms of recovery, retirement, rotation with
+  its supersession trail, and the handoff door's two walks. Of the
   skep crates it depends on `skep-address`, `skep-identity`,
   `skep-signature` and `skep-resolve` alone — never `skepd`, which does
   not depend on it either (its suite spawns the daemon as a
   dev-dependency). Two features: `acting` (default on) gates everything
   that signs or holds a key; `tls` (default off) the `https://` arm.
-- `skep-cli` — the `skep` command over `skep-client`: `keygen`, `claim`,
-  `session`, `fingerprint`, `verify`, `health`, `bind`; flag parsing by
-  hand, a `Person` over the terminal, stdout data and stderr talk.
+- `skep-cli` — the `skep` command over `skep-client`, thirteen commands:
+  `keygen`, `claim`, `session`, `fingerprint`, `verify`, `health`, `bind`,
+  `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`; flag
+  parsing by hand, a `Person` over the terminal, stdout data and stderr
+  talk.
 - `skep-conformance` — a differential harness against `udanax-green`'s
   goldens.
 

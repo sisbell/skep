@@ -3,7 +3,7 @@
 //! ENTRY's BASE (AUTH-2.94; P12 — never the head, at which every entry
 //! signed by a key since retired would read as forged) — and that set is
 //! THE SIGNATURE-FILTERED ONE, NEVER THE FOLD's (D14): the fold honours an
-//! enrolment whatever its `sig` holds (AUTH-2.13), so `key_set` over `/op-at`
+//! enrollment whatever its `sig` holds (AUTH-2.13), so `key_set` over `/op-at`
 //! fixes a position and never this input's members.
 //!
 //! THE FILTER, derived from the account's credential records and their
@@ -232,7 +232,7 @@ mod tests {
         crate::sign::signer_from_seed(&[b; 32])
     }
 
-    fn enrol(signer: &HybridSigner, anchor: bool, label: &str) -> Enrollment {
+    fn enroll(signer: &HybridSigner, anchor: bool, label: &str) -> Enrollment {
         Enrollment::new(HybridSigner::public_key(signer).clone(), anchor, Some(label.into())).unwrap()
     }
 
@@ -281,7 +281,7 @@ mod tests {
     /// D14 — THE FILTER, NEVER THE FOLD: a key PLANTED into doc 1 by a record
     /// whose `sig` no key of the set verifies is inert here, and an entry it
     /// signs reads UNSIGNED, never SIGNED — where the fold (and the served
-    /// `key_set`) would honour the enrolment whatever its `sig` holds.
+    /// `key_set`) would honour the enrollment whatever its `sig` holds.
     /// MUTATION 4's neighbour: a verifier that took the served set would
     /// answer `Signed` here.
     #[test]
@@ -292,20 +292,20 @@ mod tests {
         let genesis = record(
             Kind::Enroll,
             "1.0.1.0.1.0.2.1",
-            &[enrol(&anchor, true, "paper-a"), enrol(&device, false, "notebook")],
+            &[enroll(&anchor, true, "paper-a"), enroll(&device, false, "notebook")],
             &[],
             None,
             Some(9),
             true,
         );
         // The plant: self-signed by the planted key, which stands in no set.
-        let plant_entries = [enrol(&plant, false, "plant")];
+        let plant_entries = [enroll(&plant, false, "plant")];
         let plant_sigless = canonical_record(&plant_entries, None);
         let plant_sig = sign_record(&plant, crate::board::T_ENROLL, &plant_sigless);
         let planted = record(Kind::Enroll, "1.0.1.0.1.0.2.3", &plant_entries, &[], Some(plant_sig), Some(20), false);
         // A legitimate second device, signed by the enrolled device key.
         let second = signer(4);
-        let second_entries = [enrol(&second, false, "phone")];
+        let second_entries = [enroll(&second, false, "phone")];
         let second_sigless = canonical_record(&second_entries, None);
         let second_sig = sign_record(&device, crate::board::T_ENROLL, &second_sigless);
         let enrolled_second = record(Kind::Enroll, "1.0.1.0.1.0.2.4", &second_entries, &[], Some(second_sig), Some(24), false);

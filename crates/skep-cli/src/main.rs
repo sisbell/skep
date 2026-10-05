@@ -4,11 +4,9 @@
 //! stderr TALK (§2.4), §2.3's exit codes. It holds no ceremony logic: every
 //! walk is a library call with the terminal as its `Person`.
 //!
-//! THE SEVEN COMMANDS of this build: `keygen`, `claim`, `session`,
-//! `fingerprint`, `verify`, `health`, `bind`. The six the design names and
-//! the next lane builds — `enroll`, `recover`, `retire`, `rotate`,
-//! `handoff`, `accept` — answer "not in this build", exit 2, never
-//! "unknown".
+//! THE THIRTEEN COMMANDS: `keygen`, `claim`, `session`, `fingerprint`,
+//! `verify`, `health`, `bind` — and the ceremonies over 5.1a's seams:
+//! `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`.
 
 #![forbid(unsafe_code)]
 
@@ -20,13 +18,13 @@ use std::process::exit;
 
 use args::{Parsed, Usage};
 
-/// The help text: the seven, and the six named as not in this build.
+/// The help text: the thirteen commands, each as the design writes it.
 pub fn usage() -> String {
     "\
 usage: skep <command> [flags]
 
   keygen       generate one DEVICE key into the store; --payload prints its
-               enrolment record; --anchors runs the door-side backup moment
+               enrollment record; --anchors runs the door-side backup moment
   claim        claim a board: the notebook walk (a person door), or
                --hosted <payload|-> the dark claim for a hosted customer
   session      open a CONTENT-scoped signed session and print the token;
@@ -36,20 +34,33 @@ usage: skep <command> [flags]
   verify       the pre-check as a command: the origin arm, the key arm, and
                with --payload/--anchor the whole-set compare; exit 0/3
   health       GET /health verbatim on stdout; the derived mode on stderr
-  bind         land the three facts of an enrol hop on this device and
+  bind         land the three facts of an enroll hop on this device and
                run the account's first signed session where one is owed
-
-not in this build (the next lane): enroll, recover, retire, rotate,
-handoff, accept — each exits 2 by name.
+  enroll       the hop's signed-in half: enroll another device's payload
+               from a full session this command opens (a person door);
+               --reply <fp-prefix> re-prints the three facts, no write
+  recover      the recovery ceremony (a person door): import one anchor,
+               enroll this store's device key, retire the lost one;
+               --stolen the thief copy; --anchor-lost the paper-loss arm
+  retire       retire a device key from a full session this command opens,
+               after the preview and a typed answer (a person door)
+  rotate       replace this device's key in one gesture: enroll the new
+               key, write the trail, retire the old (a person door)
+  handoff      the giver's walk: --account delegates and prints the
+               address; with --payload the genesis (a person door)
+  accept       the recipient's beat at a handed-off address: the device
+               key and the anchor pair, the record for the giver (a
+               person door); --reprint re-composes the record, no write
 
 flags:
   --board <origin>      the board, a canonical origin (env SKEP_BOARD)
   --dir <path>          the key store (env SKEP_KEYSTORE; default ~/.skep)
   --key <path>          one key file, bypassing the store's lookup
                         (env SKEP_KEY); an anchor file is refused where the
-                        key signs
-  --principal <n>       the principal (env SKEP_PRINCIPAL)
-  --label <text>        a byline (keygen)
+                        key signs; not consulted at claim and recover
+  --principal <n>       the principal (env SKEP_PRINCIPAL); may be omitted
+                        where the store holds one binding at the board
+  --label <text>        a byline (keygen, rotate, accept)
   --json                one JSON document on stdout (verify, health,
                         fingerprint)
   keygen:   --payload  --anchors  --anchor-label <l> (twice)
@@ -60,9 +71,18 @@ flags:
   fingerprint: --select <fp-prefix|label>  --payload
   verify:   --payload <file|->  --anchor <path> (once per anchor)
   bind:     --account <address>  --payload <reply|->  --anchor <path>
+  enroll:   --payload <file|->  [--reply <fp-prefix>]
+  recover:  [--anchor <path>]  [--lost <fp-prefix>]...  [--stolen]
+            [--anchor-lost [--anchor-out <dir>] [--paper]]
+  retire:   --fingerprint <fp-prefix>
+  rotate:   [--label <l>]  [--payload <file|->]
+  handoff:  --account <address>  [--payload <file|->]  [--anchor <path>]
+  accept:   --account <address>  [--label <l>]  [--anchor-out <dir>]
+            [--paper]  [--no-anchors]  [--reprint [--anchor <path>]...]
 
 exit codes: 0 done, 1 the board refused, 2 usage, 3 halt and surface,
-4 transport. stdout carries data; stderr carries talk.
+4 transport. stdout carries data; stderr carries talk. No --yes exists:
+a retirement's confirmation is typed at the terminal.
 "
     .to_string()
 }
@@ -87,8 +107,14 @@ fn main() {
         "verify" => commands::verify(&parsed),
         "health" => commands::health(&parsed),
         "bind" => commands::bind(&parsed),
+        "enroll" => commands::enroll(&parsed),
+        "recover" => commands::recover(&parsed),
+        "retire" => commands::retire(&parsed),
+        "rotate" => commands::rotate(&parsed),
+        "handoff" => commands::handoff(&parsed),
+        "accept" => commands::accept(&parsed),
         other => {
-            eprintln!("skep: `{other}` is not in this build — it is the next lane's (recovery, rotation, retirement, the enrol hop's signed-in half and the handoff door)");
+            eprintln!("skep: unknown command `{other}`\n\n{}", usage());
             2
         }
     };

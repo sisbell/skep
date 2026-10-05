@@ -51,7 +51,7 @@ fn the_hosted_arm_claims_from_the_payload_verbatim_and_is_idempotent() {
 
     // Refused ahead of H3: not canonical; a preview-kind key.
     let err = hosted(&board, b"{\"not\":\"a record\"}", 1).expect_err("garbage");
-    assert!(err.to_string().contains("not a canonical enrolment record"), "{err}");
+    assert!(err.to_string().contains("not a canonical enrollment record"), "{err}");
     let preview = signer_from_seed_under(TAG_FNDSA512_PREVIEW_ED25519, &[3; 32]).expect("tag 3 is a row");
     let preview_payload = encode_enroll(&[Enrollment::new(HybridSigner::public_key(&preview).clone(), false, Some("preview".into())).unwrap()]);
     let err = hosted(&board, preview_payload.as_bytes(), 1).expect_err("preview kind");
@@ -176,7 +176,7 @@ fn first_session_owes_the_setup_act_once_and_nothing_after() {
     assert!(document_present(&board, "1.0.1.1.0.1").unwrap(), "the agents' home");
     assert!(seat >= 2 && seat <= (1u64 << 53) - 1, "a client-minted id in the domain (AUTH-5.20)");
     let persisted = store.all_bindings().unwrap().into_iter().find_map(|b| match b {
-        Binding::Enrolment { account, principal, fingerprint, .. } if account == "1.0.1.1" => Some((principal, fingerprint)),
+        Binding::Enrollment { account, principal, fingerprint, .. } if account == "1.0.1.1" => Some((principal, fingerprint)),
         _ => None,
     });
     assert_eq!(persisted, Some((seat, fp)), "the persist-first line names the id and the key");

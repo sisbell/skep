@@ -87,7 +87,7 @@ fn a_retired_key_is_diagnosed_with_its_hand_read_from_the_records() {
     let second_fp = Fingerprint::of(HybridSigner::public_key(&second));
 
     let full = handshake(&board, Scope::Full, &device, 1, Site::Session).expect("a full session");
-    // ENROL the second key, device grade, the device key's hand.
+    // ENROLL the second key, device grade, the device key's hand.
     let out = deposit(
         &board,
         &full.token,
@@ -100,7 +100,7 @@ fn a_retired_key_is_diagnosed_with_its_hand_read_from_the_records() {
             id: "test.enroll",
         },
     )
-    .expect("the enrolment");
+    .expect("the enrollment");
     let DepositOutcome::Deposited { at: enrolled_at, .. } = out else { panic!("{out:?}") };
     let KeySetAnswer::Set(set) = board.key_set("1.0.1").unwrap() else { panic!() };
     assert!(set.enrolled(&second_fp).is_some(), "enrolled");

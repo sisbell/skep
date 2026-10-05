@@ -39,6 +39,20 @@ pub enum Venue {
     /// the artifact lacks the address, the principal AND the origin, and
     /// the line is AUTH-5.44's create-org arm.
     DoorSide,
+    /// `accept`'s beat (`client.md` §4c.1): the RECIPIENT's own facts —
+    /// the artifact carries the address, the principal and the origin
+    /// (AUTH-5.38; AUTH RES-162) — statement (a) carrying THE RECIPIENT'S
+    /// BEAT'S OWN operator sentence per A4 cell, rendered ONCE (`operator`;
+    /// AUTH RES-156), the anchor boxes' consequence keyed to this door (the
+    /// label rides the genesis into the GIVER's doc 1, AUTH-5.42), the line
+    /// AUTH-5.44's HANDOFF form verbatim, the org-door artifact line DROPPED.
+    Handoff { facts: Facts, operator: String },
+    /// `recover --anchor-lost`'s L3 (`client.md` §4a.6): AUTH-5.54 steps 1–3
+    /// CITED, not inherited — the statements NOT re-rendered save (b) in its
+    /// file-venue form, the boxes answered at L1 (given as `labels`), the
+    /// export and the DROP, and NO read-back here: L5 re-imports each anchor
+    /// from its artifact after L4's enroll ([`reimport_anchor`]).
+    LossArm { facts: Facts },
 }
 
 /// The moment's inputs.
@@ -96,18 +110,24 @@ fn abandoned(e: Abandoned) -> Halt {
 /// this run takes and to the venue.
 fn statements(person: &mut dyn Person, venue: &Venue, paper: bool) {
     let operator = match venue {
-        Venue::Notebook { .. } => String::new(),
+        Venue::Notebook { .. } | Venue::LossArm { .. } => String::new(),
         Venue::DoorSide => " — on the board you are joining another party runs the daemon: it can read what you write there before you publish it and withhold or delay it; anything it writes in your name carries no signature of yours, and the app you install shows it as unsigned; it never learns your keys and can never act as you anywhere else; on that board it can still retire your keys and continue as you, which every copy that checks signatures will show was not you; your way back is a fresh account, and the board is portable (AUTH-5.43's create-org sibling; AUTH-4.54)".to_string(),
+        Venue::Handoff { operator, .. } => format!(" — {operator}"),
     };
-    say(
-        person,
-        "AUTH-5.54 (a)",
-        format!(
-            "(a) THIS KEY SET IS THIS IDENTITY AND THERE IS NO RESET: no one holds a re-key power over this account and nothing \
-             in the protocol restores it to a person who holds none of its keys — there is no reset to ask an operator, host, \
-             officer or registrar for, the rules giving none of them a channel{operator}."
-        ),
-    );
+    // The LOSS arm re-renders statement (b) ALONE (§4a.6 L3): this person
+    // has just lost an anchor and is one artifact from AUTH-5.16's
+    // both-unheld state, which is the exact loss (b) is about.
+    if !matches!(venue, Venue::LossArm { .. }) {
+        say(
+            person,
+            "AUTH-5.54 (a)",
+            format!(
+                "(a) THIS KEY SET IS THIS IDENTITY AND THERE IS NO RESET: no one holds a re-key power over this account and nothing \
+                 in the protocol restores it to a person who holds none of its keys — there is no reset to ask an operator, host, \
+                 officer or registrar for, the rules giving none of them a channel{operator}."
+            ),
+        );
+    }
     let b = if paper {
         "(b) PRINT TWO, KEEP THEM APART: the pair is two papers so that one place that burns, floods or is searched cannot take \
          both — two papers, kept in two places ONCE THIS IS FINISHED; you will need both here in a moment."
@@ -116,6 +136,9 @@ fn statements(person: &mut dyn Person, venue: &Venue, paper: bool) {
          take both — two files, in two places you control ONCE THIS IS FINISHED; you will need both here in a moment."
     };
     say(person, "AUTH-5.54 (b)", b);
+    if matches!(venue, Venue::LossArm { .. }) {
+        return;
+    }
     say(
         person,
         "AUTH-5.54 (c)",
@@ -132,8 +155,9 @@ fn statements(person: &mut dyn Person, venue: &Venue, paper: bool) {
 /// (§4.2 step 2); the domain test at the box, re-asked on a refusal.
 fn anchor_box(person: &mut dyn Person, venue: &Venue, which: &str, default: String) -> Result<Label, Halt> {
     let consequence = match venue {
-        Venue::Notebook { .. } => "at this notebook the name is readable by anything on the machine (AUTH-5.85's reader clause)",
+        Venue::Notebook { .. } | Venue::LossArm { .. } => "at this notebook the name is readable by anything on the machine (AUTH-5.85's reader clause)",
         Venue::DoorSide => "at the door this payload serves the name rides onto a public thread, approved or DENIED, forever",
+        Venue::Handoff { .. } => "at this door the name rides the genesis record into the GIVER's own doc 1, on a board you may not be able to read, under a byline you can never correct (AUTH-5.42)",
     };
     let statements = vec![
         "This names the SHEET and never where you keep it — the one human-navigable field on an otherwise machine-facing paper, so you can tell the two sheets apart.".to_string(),
@@ -223,7 +247,7 @@ pub fn backup_moment(person: &mut dyn Person, venue: &Venue, opts: &BackupOption
         labels.push(label);
     }
     let facts = match venue {
-        Venue::Notebook { facts } => Some(facts),
+        Venue::Notebook { facts } | Venue::Handoff { facts, .. } | Venue::LossArm { facts } => Some(facts),
         Venue::DoorSide => None,
     };
     for attempt in 0..3 {
@@ -282,6 +306,24 @@ fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels
     if opts.paper {
         person.dismiss();
     }
+    // THE LOSS ARM stops at the DROP: the re-import is L5's, run from each
+    // artifact AFTER L4's enroll with a probe handshake (AUTH-5.59 step 3),
+    // so the artifacts are answered now, read back by nothing yet.
+    if matches!(venue, Venue::LossArm { .. }) {
+        let anchors = paths
+            .iter()
+            .enumerate()
+            .map(|(i, path)| AnchorArtifact {
+                public: publics[i].0.clone(),
+                fingerprint: publics[i].1,
+                label: labels[i].clone(),
+                file: Some(path.clone()),
+                print_verified: false,
+                print_unverified: opts.paper,
+            })
+            .collect();
+        return Ok(Some(BackupOutcome { anchors, one_place }));
+    }
     // Steps 7–9: RE-IMPORT, fingerprint first, the client-local verify.
     let mut anchors = Vec::new();
     for (i, path) in paths.iter().enumerate() {
@@ -290,43 +332,17 @@ fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels
         let mut print_unverified = false;
         let mut from_file = true;
         if opts.paper {
-            loop {
-                let typed = person
-                    .retype(Secret(Retype {
-                        prompt: format!("type the 64 hex of the SEED from the sheet for anchor {} (`{}`), then the first 8 hex of its fingerprint", if i == 0 { "a" } else { "b" }, labels[i]),
-                    }))
-                    .map_err(abandoned)?;
-                match typed {
-                    Retyped::Declined => {
-                        print_unverified = true;
-                        break;
-                    }
-                    Retyped::Typed { seed_hex, fingerprint_prefix } => {
-                        let seed = crate::hex::decode32(seed_hex.trim());
-                        let signer = seed.map(|s| crate::sign::signer_from_seed(&s));
-                        let derived = signer.as_ref().map(|s| Signer::fingerprint(s));
-                        let prefix_ok = fingerprint_prefix.len() >= 8 && fp.to_hex().starts_with(fingerprint_prefix.trim());
-                        if derived == Some(*fp) && prefix_ok {
-                            if !local_verify(signer.as_ref().expect("derived")) {
-                                return Err(Halt::face("the typed seed derives the right key and still does not sign", "the client-local sign-and-verify failed", "this is this client's fault"));
-                            }
-                            print_verified = true;
-                            from_file = false;
-                            break;
-                        }
-                        say(person, "AUTH-5.39", "this is not the key on this paper — re-scan");
-                    }
+            match retype_from_print(person, &labels[i], i, fp)? {
+                Some(_) => {
+                    print_verified = true;
+                    from_file = false;
                 }
+                None => print_unverified = true,
             }
         }
         if from_file {
             // The file read back from the path it wrote — the disk channel.
-            let read = std::fs::read(path).ok().and_then(|b| KeyFile::parse(&b).ok());
-            let ok = match &read {
-                Some(file) => file.fingerprint == *fp && file.public == *public && local_verify(&file.signer()),
-                None => false,
-            };
-            if !ok {
+            if read_back_from_file(path, public, fp).is_none() {
                 say(person, "§4.1 S3", format!("the anchor file {} did not read back as the key it names; it is destroyed (never a verified artifact) and the moment re-runs (attempt {})", path.display(), attempt + 1));
                 for p in &paths {
                     let _ = std::fs::remove_file(p);
@@ -359,7 +375,7 @@ fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels
             "AUTH-5.44 (notebook)",
             format!(
                 "keep the {noun} apart — they are the way back into account {} on this board if you lose this device's key, \
-                 through `skep recover` (not in this build) from a wiped profile or a restored volume; AND copy this board's \
+                 through `skep recover` from a wiped profile or a restored volume; AND copy this board's \
                  data directory off this machine: a restored volume meets a keyless person unless the papers were kept, and \
                  the papers open nothing on a fresh install — with no copy of this board's volume, a fresh install is a fresh \
                  board. A copy of the board carries its credential records AS OF THE COPY: a restore predating a retirement \
@@ -378,13 +394,89 @@ fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels
                  they live permanently: keep it with the papers."
             ),
         ),
+        // THE HANDOFF FORM, verbatim (AUTH-5.44; `client.md` §4c.1): the
+        // RECIPIENT's own facts, the only site where the papers' holder is not
+        // the party running the door — beside the operator sentence
+        // statement (a) carried, never against it (AUTH RES-156).
+        Venue::Handoff { facts, .. } => say(
+            person,
+            "AUTH-5.44 (handoff)",
+            format!(
+                "keep the papers — they are the way back into {} if you lose the device you sign in on, and the rules give nobody \
+                 a channel to re-key this account for you: not the person who gave it to you, not an operator, host, officer or \
+                 registrar (AUTH-5.54 (a)); lose both and no anchor act on this account is ever possible again.",
+                facts.account
+            ),
+        ),
+        Venue::LossArm { .. } => {}
     }
     Ok(Some(BackupOutcome { anchors, one_place }))
 }
 
+/// The paper re-type for anchor `i` (AUTH-5.41: "the 64 hex typed once"),
+/// fingerprint FIRST (AUTH-5.39) — a wrong re-type says "re-scan" and asks
+/// again; `Some(signer)` where the print passed, `None` where the person
+/// declined.
+pub fn retype_from_print(person: &mut dyn Person, label: &Label, i: usize, fp: &Fingerprint) -> Result<Option<HybridSigner>, Halt> {
+    loop {
+        let typed = person
+            .retype(Secret(Retype {
+                prompt: format!("type the 64 hex of the SEED from the sheet for anchor {} (`{}`), then the first 8 hex of its fingerprint", if i == 0 { "a" } else { "b" }, label),
+            }))
+            .map_err(abandoned)?;
+        match typed {
+            Retyped::Declined => return Ok(None),
+            Retyped::Typed { seed_hex, fingerprint_prefix } => {
+                let seed = crate::hex::decode32(seed_hex.trim());
+                let signer = seed.map(|s| crate::sign::signer_from_seed(&s));
+                let derived = signer.as_ref().map(Signer::fingerprint);
+                let prefix_ok = fingerprint_prefix.len() >= 8 && fp.to_hex().starts_with(fingerprint_prefix.trim());
+                if derived == Some(*fp) && prefix_ok {
+                    let signer = signer.expect("derived");
+                    if !local_verify(&signer) {
+                        return Err(Halt::face("the typed seed derives the right key and still does not sign", "the client-local sign-and-verify failed", "this is this client's fault"));
+                    }
+                    return Ok(Some(signer));
+                }
+                say(person, "AUTH-5.39", "this is not the key on this paper — re-scan");
+            }
+        }
+    }
+}
+
+/// The file read back from the path it was written to — the disk channel
+/// AUTH-5.41 names as the pinned order's own — fingerprint first, then the
+/// client-local sign-and-verify; `None` where it does not read back as the
+/// key it names.
+pub fn read_back_from_file(path: &Path, public: &PublicKey, fp: &Fingerprint) -> Option<HybridSigner> {
+    let file = KeyFile::parse(&std::fs::read(path).ok()?).ok()?;
+    if file.fingerprint != *fp || file.public != *public {
+        return None;
+    }
+    let signer = file.signer();
+    local_verify(&signer).then_some(signer)
+}
+
+/// THE RE-IMPORT of one exported anchor from ITS artifact (AUTH-5.54 step
+/// 4, "over a channel whose ABSENCE breaks it"; AUTH-5.59 step 3 cites it):
+/// under `paper` the 64 hex typed from the print (a declined re-type falls
+/// to the file), else the file read back from the path it was written to;
+/// fingerprint FIRST (AUTH-5.39), then the client-local sign/verify. `None`
+/// is step 3's FAILURE ARM — an enrolled anchor whose private half exists
+/// nowhere — which the caller faces as that rule says.
+pub fn reimport_anchor(person: &mut dyn Person, artifact: &AnchorArtifact, paper: bool, i: usize) -> Result<Option<HybridSigner>, Halt> {
+    if paper {
+        if let Some(signer) = retype_from_print(person, &artifact.label, i, &artifact.fingerprint)? {
+            return Ok(Some(signer));
+        }
+    }
+    let Some(path) = &artifact.file else { return Ok(None) };
+    Ok(read_back_from_file(path, &artifact.public, &artifact.fingerprint))
+}
+
 /// Step 5's client-local check: sign and verify against the pubkey about
 /// to be enrolled — no daemon machinery.
-fn local_verify(signer: &HybridSigner) -> bool {
+pub fn local_verify(signer: &HybridSigner) -> bool {
     let msg = b"skep backup moment: client-local verify";
     let blob = HybridSigner::sign(signer, msg);
     skep_signature::verify(Signer::tag(signer), HybridSigner::public_key(signer), msg, &blob).is_ok()

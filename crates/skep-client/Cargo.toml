@@ -1,0 +1,52 @@
+[package]
+name = "skep-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "The library every acting skep client embeds: the one outbound dialer, bare and signed sessions, the key store, the signing seam over the hybrid key, the reader's verifier, the claim ceremony and the compositions every later ceremony runs over (client.md)"
+readme = "README.md"
+
+[features]
+# `acting` — the ACTING half (client.md §1.1's graph): `sign`, `store`,
+# `ceremony`, `person`, `sheet`, the reader's `verify` and the `skep-resolve`
+# edge. DEFAULT ON. It alone turns `skep-signature`'s `sign` on; a daemon
+# that embeds this crate's dialer takes it with `default-features = false`,
+# so its build graph holds no signer (AUTH-2.2 under feature unification).
+default = ["acting"]
+acting = ["skep-signature/sign", "dep:skep-resolve", "dep:getrandom"]
+# `tls` — `https://` through rustls and the platform verifier (§9 item 12).
+# OFF here; the `skep` binary and the frontend's shell turn it on. The
+# sidecar image builds the binary `--no-default-features`.
+tls = ["dep:rustls", "dep:rustls-platform-verifier"]
+
+[dependencies]
+# M1 — the address vocabulary the entry frame and the walks spell addresses
+# in; every address this crate names is parsed to one before it is framed.
+skep-address = { path = "../skep-address" }
+# The record schemas and their canonical encoders, the framing tags, the key
+# and fingerprint types, the entry frame and its body builders (AUTH-5.67).
+skep-identity = { path = "../skep-identity" }
+# The signature ARITHMETIC: verify in every build; keygen from a seed and
+# signing under `sign`, which `acting` turns on. The one crate that links the
+# signature libraries — linked THROUGH it, never here (AUTH-2.2; RES-62).
+skep-signature = { path = "../skep-signature" }
+# The registry walk, over this crate's one dialer: the shell dials the board
+# the registry names (P25). Behind `acting`; no cycle, no second trait.
+skep-resolve = { path = "../skep-resolve", optional = true }
+# The wire frames and the key file.
+serde_json.workspace = true
+# OS entropy: seeds, the backup moment's per-run token, `new_id`.
+getrandom = { workspace = true, optional = true }
+# The `tls` arm.
+rustls = { workspace = true, optional = true }
+rustls-platform-verifier = { workspace = true, optional = true }
+
+[dev-dependencies]
+# The real daemon, in-process on an ephemeral port over a temp data dir, as
+# skep-mcp's suite takes it: `test-hooks` is what that suite enables too.
+skepd = { path = "../skepd", features = ["test-hooks"] }
+tempfile.workspace = true
+# The suite signs attests of its own to judge against the reader's verifier.
+skep-signature = { path = "../skep-signature", features = ["sign"] }

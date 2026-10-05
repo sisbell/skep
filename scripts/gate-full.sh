@@ -54,6 +54,15 @@ cargo check -p skep-blobs --lib || exit $?
 # compiles with no signer in it.
 cargo check -p skep-resolve --lib || exit $?
 
+# skep-client's two halves and the sidecar's binary, none of which the full
+# run below makes: the READING half alone (`acting` off — no signer, no
+# store, no ceremony: what a daemon embedding the dialer would take), the
+# ACTING half explicitly, and the `skep` binary without `tls` (the sidecar
+# image's build).
+cargo check -p skep-client --lib --no-default-features || exit $?
+cargo check -p skep-client --lib --features acting || exit $?
+cargo check -p skep-cli --bins --no-default-features || exit $?
+
 # The feature edges the full run below never compiles: `client` is
 # default-off, and `observe` is on in every test build. The notebook build
 # (`client` on); the build without the dump route (`observe` off), its

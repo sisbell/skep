@@ -15,15 +15,16 @@ and exported here as they converge.
 
 ## Workspace
 
-Eighteen crates; the boundaries are the architecture. Fourteen domain
+Twenty-one crates; the boundaries are the architecture. Fourteen domain
 crates realize the spec's converged designs (the M1–M10 modules, the
 AUTH identity layer, signed ops, the registry and the blob store) and
 encode the composition contract's
 layering in the dependency graph itself — the
 compiler enforces what the design ruled (no store depends on the engine,
 type-only edges stay type-only, nothing depends on the engine but a
-binary). Above them, one assembler and the transport adapters; beside
-them, the differential-conformance harness.
+binary). Above them, one assembler, the transport adapters, the
+verifying registry resolver, the client library and the `skep`
+command; beside them, the differential-conformance harness.
 
 | crate | role |
 |---|---|
@@ -44,6 +45,9 @@ them, the differential-conformance harness.
 | `skep-engine` | the one assembler: `World`, genesis, recovery, `world_at` |
 | `skepd` | the daemon: HTTP/JSON wire v4, sessions, history, SSE |
 | `skep-mcp` | stdio MCP adapter for agent harnesses |
+| `skep-resolve` | the verifying registry resolver: a library a client embeds (no engine, no store, never `skepd`) |
+| `skep-client` | the library every acting client embeds: the dialer, sessions, the key store, signing, the reader's verifier, the claim ceremony |
+| `skep-cli` | the `skep` command over `skep-client`: keygen, claim, session, fingerprint, verify, health, bind |
 | `skep-conformance` | differential harness vs. `udanax-green` goldens + ratchet |
 
 Conventions: shared metadata and external-dependency versions live in
@@ -55,6 +59,25 @@ publish to crates.io as they stabilize (`skep-address` first). The wire contract
 `docs/wire.md` — the contract as it stands; versioning begins at the first
 release, independent of crate versions. License: MIT OR Apache-2.0 (dual, the Rust convention).
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the commit convention.
+
+**Keys and the claim.** The client you install IS the board: `skepd` on
+your machine is the notebook, and stopping before `skep claim` leaves
+nothing behind — no board, no account, no key. Once claimed, every edit to
+your notebook, including what you later remove, is kept; its history is
+permanent, and it is local: no mirror holds it and this board can never be
+made public. The records it holds — your keys, your claim, the grants you
+issue — stand as records of their own, so removing the text one names does
+not remove it. This notebook is local forever; public work happens in an
+org, and that venue is not reachable on any board today — this board can
+never become one when they open. The page `skepd` serves is a READER: it
+holds no keys, opens no sessions, writes nothing, and does not verify
+signatures. A person acts from the `skep` command (`crates/skep-cli`:
+`skep keygen` makes the device key, `skep claim` runs the ceremony) or
+from the bundled app, whose page acts through the shell's bridge over
+`skep-client`. The claim's backup moment writes two anchor FILES by default
+— to directories you name, never under the key store — and prints a sheet
+only under `--paper`; `skep recover` (a later build) is the way back in from
+a kept file or a print, and no one else holds a reset.
 
 ---
 

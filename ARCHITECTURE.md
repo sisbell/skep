@@ -21,7 +21,7 @@ position in the journal.
 
 ## Code map
 
-The workspace is nineteen crates under `crates/`. Dependencies point
+The workspace is twenty-one crates under `crates/`. Dependencies point
 downward in the list below: a crate may depend only on crates listed
 above it.
 
@@ -108,6 +108,19 @@ foundation and on the stores above it.
   alone — no engine, no store, and never `skepd`, which never depends on
   it (the daemon's own suite takes it as a dev-dependency, where boards
   are spawned). Its modules and rules: §The resolver.
+- `skep-client` — the library every ACTING client embeds (the design's
+  `client.md`): the one outbound dialer, bare and signed sessions behind
+  AUTH-5.65's pre-check, the key store, the signing seam over the hybrid
+  key, the reader's verifier over the signature-filtered set, the claim
+  ceremony and the compositions every later ceremony runs over. Of the
+  skep crates it depends on `skep-address`, `skep-identity`,
+  `skep-signature` and `skep-resolve` alone — never `skepd`, which does
+  not depend on it either (its suite spawns the daemon as a
+  dev-dependency). Two features: `acting` (default on) gates everything
+  that signs or holds a key; `tls` (default off) the `https://` arm.
+- `skep-cli` — the `skep` command over `skep-client`: `keygen`, `claim`,
+  `session`, `fingerprint`, `verify`, `health`, `bind`; flag parsing by
+  hand, a `Person` over the terminal, stdout data and stderr talk.
 - `skep-conformance` — a differential harness against `udanax-green`'s
   goldens.
 
@@ -833,6 +846,17 @@ imports it.
   and `skepd`'s on `skep-resolve`, whose end-to-end cells and measurements
   run where boards are spawned — the daemon's library never depends on
   the resolver.
+- **The client reproduces the daemon's grammars under their rules, never
+  its code.** `skep-client` holds its own `Origin::parse`, held to the
+  daemon's vector set by a test and never imported from `skepd`; the
+  signed origin it frames is the one it dials (AUTH-4.8); every
+  `/challenge` it fetches follows the pre-check's two reads (AUTH-5.65);
+  `Skepd-Session: closed` has one reader, the board's authenticated
+  exchange; a halt names the state, its cause and the one act (AUTH-5.66),
+  and a refusal the client's state machine does not arm is surfaced, never
+  retried. The person doors — the claim's notebook arm and
+  `keygen --anchors` — require a `Person`; the terminal check is the CLI's
+  implementation of that seam, never the walk's.
 - **Inside `skepd`, imports point down.** A module names only modules in
   its own layer or below it, never above: the transport calls the router,
   and nothing below the router calls the transport; a leaf imports only

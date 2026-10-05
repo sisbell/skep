@@ -20,6 +20,8 @@ members = [
     "crates/skep-blobs",
     "crates/skep-registry",
     "crates/skep-resolve",
+    "crates/skep-client",
+    "crates/skep-cli",
 ]
 # The nightly libFuzzer crate (hardening H2, tier 2) is deliberately NOT a
 # member: it needs nightly (its own rust-toolchain.toml) and is built only by
@@ -60,3 +62,13 @@ rustc-hash = "2"
 once_cell = "1"
 tempfile = "3"
 proptest = "1"
+# getrandom — OS entropy for the client's seeds, its per-run tokens and the
+# agent space's client-minted `new_id` (skep-client; AUTH-5.20). The daemon
+# and skep-signature name the same version on their own lines.
+getrandom = "0.3"
+# rustls + the platform verifier — the `https://` arm of the client's one
+# dialer behind its `tls` feature (client.md §9 item 12): pure Rust, the OS
+# trust store on each platform, no OpenSSL. `ring` is the one crypto
+# provider; aws-lc-rs, rustls's default, is left off (a C build).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = "0.7"

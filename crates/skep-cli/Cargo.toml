@@ -1,0 +1,34 @@
+[package]
+name = "skep-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "skep — the command over skep-client: keygen, claim, session, fingerprint, verify, health, bind. Flag parsing by hand, one function per command, a Person over the terminal, stdout DATA and stderr TALK (client.md §1.2, §2)"
+readme = "README.md"
+
+[[bin]]
+name = "skep"
+path = "src/main.rs"
+
+[features]
+# `tls` ON by default in the binary (client.md §9 item 12): the `skep`
+# command dials a hosted board over `https://` directly. The sidecar image
+# builds `--no-default-features`.
+default = ["tls"]
+tls = ["skep-client/tls"]
+
+[dependencies]
+# The library, its acting half on: every command is a library call.
+skep-client = { path = "../skep-client" }
+skep-identity = { path = "../skep-identity" }
+skep-address = { path = "../skep-address" }
+serde_json.workspace = true
+
+[dev-dependencies]
+# The real daemon in-process, as skep-mcp's suite takes it, driving the
+# built `skep` binary through its argv, stdin and stdout.
+skepd = { path = "../skepd", features = ["test-hooks"] }
+tempfile.workspace = true
+skep-signature = { path = "../skep-signature", features = ["sign"] }

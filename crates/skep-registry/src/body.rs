@@ -133,6 +133,27 @@ impl Origins {
     pub fn into_vec(self) -> Vec<String> {
         self.0
     }
+
+    /// Borrowed origins in the org's order — the iterator `&Origins` walks.
+    pub fn iter(&self) -> std::slice::Iter<'_, String> {
+        self.0.iter()
+    }
+}
+
+impl IntoIterator for Origins {
+    type Item = String;
+    type IntoIter = std::vec::IntoIter<String>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a Origins {
+    type Item = &'a String;
+    type IntoIter = std::slice::Iter<'a, String>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
 }
 
 /// A body of one of the two kinds.
@@ -180,6 +201,33 @@ impl Record {
     }
 }
 
+/// A body member a refusal names (REG-1.86's table) — `type` aside, whose
+/// every fault is [`Refusal::WrongType`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Member {
+    /// `prefix` — the binding's own member.
+    Prefix,
+    /// `origins` — the endpoint's own member.
+    Origins,
+    /// `replaces` — the link's address of the record this one replaces.
+    Replaces,
+    /// `sig` — the signature, where the record is signed.
+    Sig,
+}
+
+impl Member {
+    /// The member's name as a body spells it — the tail of its refusal's
+    /// token.
+    pub fn name(self) -> &'static str {
+        match self {
+            Member::Prefix => "prefix",
+            Member::Origins => "origins",
+            Member::Replaces => "replaces",
+            Member::Sig => "sig",
+        }
+    }
+}
+
 /// Why bytes are no record of the kind named — each its own cause, joined to
 /// the daemon's refusal token by [`Refusal::token`] — listed in the order of
 /// [`parse`]'s stages, the members' causes answered member by member in the
@@ -205,15 +253,15 @@ pub enum Refusal {
     WrongType,
     /// A member beside the row's own, `replaces` and `sig` ("NOTHING ELSE").
     UnknownMember,
-    /// A member the row requires is absent.
-    MissingMember(&'static str),
+    /// A member the row requires is absent: `prefix` or `origins`.
+    MissingMember(Member),
     /// A member that must be a string is not: `prefix`, `replaces`, `sig`.
-    NotAString(&'static str),
+    NotAString(Member),
     /// A member that must parse as an address in dotted decimal does not —
     /// `prefix`, `replaces` — the one spelling of that address included
     /// (no leading zero, no sign, every component a decimal natural, the
     /// whole T4-valid).
-    NotAnAddress(&'static str),
+    NotAnAddress(Member),
     /// `origins` is no array of strings.
     OriginsNotStrings,
     /// `origins` is empty: "AT LEAST ONE entry", and `[]` is a body no
@@ -238,9 +286,9 @@ impl Refusal {
             Refusal::Number => "number".into(),
             Refusal::WrongType => "wrong_type".into(),
             Refusal::UnknownMember => "unknown_member".into(),
-            Refusal::MissingMember(m) => format!("missing_member:{m}"),
-            Refusal::NotAString(m) => format!("not_a_string:{m}"),
-            Refusal::NotAnAddress(m) => format!("not_an_address:{m}"),
+            Refusal::MissingMember(m) => format!("missing_member:{}", m.name()),
+            Refusal::NotAString(m) => format!("not_a_string:{}", m.name()),
+            Refusal::NotAnAddress(m) => format!("not_an_address:{}", m.name()),
             Refusal::OriginsNotStrings => "origins_not_strings".into(),
             Refusal::EmptyOrigins => "empty_origins".into(),
             Refusal::NotCanonical => "not_canonical".into(),
@@ -280,44 +328,48 @@ pub fn parse(kind: BodyKind, bytes: &[u8]) -> Result<Record, Refusal> {
     if bytes.len() > MAX_REGISTRY_RECORD_BYTES {
         return Err(Refusal::PastCap);
     }
-    let text = core::str::from_utf8(bytes).map_err(|_| Refusal::NotUtf8)?;
+    let text = std::str::from_utf8(bytes).map_err(|_| Refusal::NotUtf8)?;
     let value: Value = serde_json::from_str(text).map_err(|_| Refusal::NotJson)?;
-    let object = value.as_object().ok_or(Refusal::NotAnObject)?;
-    if holds_a_number(&value) {
+    let Value::Object(mut object) = value else { return Err(Refusal::NotAnObject) };
+    if object.values().any(holds_a_number) {
         return Err(Refusal::Number);
     }
     if object.get("type").and_then(Value::as_str) != Some(kind.type_value()) {
         return Err(Refusal::WrongType);
     }
-    let own: &[&str] = match kind {
-        BodyKind::Binding => &["prefix"],
-        BodyKind::Endpoint => &["origins"],
+    let own = match kind {
+        BodyKind::Binding => Member::Prefix,
+        BodyKind::Endpoint => Member::Origins,
     };
-    if object.keys().any(|k| k != "type" && k != "replaces" && k != "sig" && !own.contains(&k.as_str()))
-    {
+    let members = [own, Member::Replaces, Member::Sig];
+    if object.keys().any(|k| k != "type" && !members.iter().any(|m| m.name() == k)) {
         return Err(Refusal::UnknownMember);
     }
-    let replaces = optional_address(object, "replaces")?;
-    let sig = match object.get("sig") {
+    // The strings the record keeps — `sig` and the origins — are moved out of
+    // the tree the parse owns; an address member is read where it stands.
+    let replaces = optional_address(&object, Member::Replaces)?;
+    let sig = match object.remove(Member::Sig.name()) {
         None => None,
-        Some(Value::String(s)) => Some(s.as_str()),
-        Some(_) => return Err(Refusal::NotAString("sig")),
+        Some(Value::String(s)) => Some(s),
+        Some(_) => return Err(Refusal::NotAString(Member::Sig)),
     };
     let body = match kind {
         BodyKind::Binding => {
-            let prefix = required_string(object, "prefix")?;
-            let prefix = address_of(prefix).ok_or(Refusal::NotAnAddress("prefix"))?;
+            let prefix = required_string(&object, Member::Prefix)?;
+            let prefix = address_of(prefix).ok_or(Refusal::NotAnAddress(Member::Prefix))?;
             Body::Binding(Binding { prefix, replaces })
         }
         BodyKind::Endpoint => {
             let origins = object
-                .get("origins")
-                .ok_or(Refusal::MissingMember("origins"))?
-                .as_array()
-                .ok_or(Refusal::OriginsNotStrings)?;
-            let origins: Vec<String> = origins
-                .iter()
-                .map(|o| o.as_str().map(str::to_owned).ok_or(Refusal::OriginsNotStrings))
+                .remove(Member::Origins.name())
+                .ok_or(Refusal::MissingMember(Member::Origins))?;
+            let Value::Array(origins) = origins else { return Err(Refusal::OriginsNotStrings) };
+            let origins = origins
+                .into_iter()
+                .map(|o| match o {
+                    Value::String(s) => Ok(s),
+                    _ => Err(Refusal::OriginsNotStrings),
+                })
                 .collect::<Result<_, _>>()?;
             let origins = Origins::new(origins).ok_or(Refusal::EmptyOrigins)?;
             Body::Endpoint(Endpoint { origins, replaces })
@@ -326,10 +378,10 @@ pub fn parse(kind: BodyKind, bytes: &[u8]) -> Result<Record, Refusal> {
     // THE ADMISSION SENTENCE: admit only where the input is the canonical
     // re-encoding of what it spells — by the public encoder itself, the
     // function a signer composes with, `sig` included.
-    if encode(&body, sig) != text {
+    if encode(&body, sig.as_deref()) != text {
         return Err(Refusal::NotCanonical);
     }
-    Ok(Record { body, sig: sig.map(str::to_owned) })
+    Ok(Record { body, sig })
 }
 
 /// Whether any value in the tree is a JSON number (REG-1.86 (d)).
@@ -343,11 +395,11 @@ fn holds_a_number(v: &Value) -> bool {
 }
 
 /// A required string member.
-fn required_string<'o>(
-    object: &'o serde_json::Map<String, Value>,
-    member: &'static str,
-) -> Result<&'o str, Refusal> {
-    match object.get(member) {
+fn required_string(
+    object: &serde_json::Map<String, Value>,
+    member: Member,
+) -> Result<&str, Refusal> {
+    match object.get(member.name()) {
         None => Err(Refusal::MissingMember(member)),
         Some(Value::String(s)) => Ok(s.as_str()),
         Some(_) => Err(Refusal::NotAString(member)),
@@ -358,9 +410,9 @@ fn required_string<'o>(
 /// the address it spells.
 fn optional_address(
     object: &serde_json::Map<String, Value>,
-    member: &'static str,
+    member: Member,
 ) -> Result<Option<Address>, Refusal> {
-    match object.get(member) {
+    match object.get(member.name()) {
         None => Ok(None),
         Some(Value::String(s)) => address_of(s).map(Some).ok_or(Refusal::NotAnAddress(member)),
         Some(_) => Err(Refusal::NotAString(member)),
@@ -368,17 +420,15 @@ fn optional_address(
 }
 
 /// The address `s` spells in dotted decimal, where `s` is that address's
-/// ONE spelling: every component a decimal natural with no sign, no
-/// separator and no leading zero, the whole a T4-valid address, and the
-/// address's own rendering the string itself — else `None`. The rendering
-/// is what [`encode`] writes an address member as.
+/// ONE spelling — its own rendering, the one [`encode`] writes an address
+/// member as — else `None`. The rendering compare is the whole test: a
+/// component is read by `Nat`'s parse, which admits a sign, `_` separators
+/// and leading zeros, and a rendering writes none of them; T4 validity is
+/// `validate`'s.
 fn address_of(s: &str) -> Option<Address> {
-    let comps: Option<Vec<Nat>> = s
-        .split('.')
-        .map(|c| (!c.is_empty() && c.bytes().all(|b| b.is_ascii_digit())).then(|| c.parse::<Nat>().ok()).flatten())
-        .collect();
+    let comps: Option<Vec<Nat>> = s.split('.').map(|c| c.parse::<Nat>().ok()).collect();
     let tumbler = Tumbler::new(comps?).ok()?;
-    validate(tumbler).ok().filter(|address| address.tumbler().to_string() == s)
+    validate(tumbler).ok().filter(|address| address.to_string() == s)
 }
 
 /// THE CANONICAL FORM — the one byte string a body has, with its `sig` where
@@ -392,11 +442,11 @@ pub fn encode(body: &Body, sig: Option<&str>) -> String {
     match body {
         Body::Binding(b) => {
             out.push_str(",\"prefix\":");
-            escape_json_string(&b.prefix.tumbler().to_string(), &mut out);
+            escape_json_string(&b.prefix.to_string(), &mut out);
         }
         Body::Endpoint(e) => {
             out.push_str(",\"origins\":[");
-            for (i, origin) in e.origins.as_slice().iter().enumerate() {
+            for (i, origin) in e.origins.iter().enumerate() {
                 if i > 0 {
                     out.push(',');
                 }
@@ -407,7 +457,7 @@ pub fn encode(body: &Body, sig: Option<&str>) -> String {
     }
     if let Some(replaces) = body.replaces() {
         out.push_str(",\"replaces\":");
-        escape_json_string(&replaces.tumbler().to_string(), &mut out);
+        escape_json_string(&replaces.to_string(), &mut out);
     }
     if let Some(sig) = sig {
         out.push_str(",\"sig\":");
@@ -531,7 +581,7 @@ mod tests {
             let text = format!(r#"{{"type":"binding","prefix":"{prefix}"}}"#);
             let record = parse(BodyKind::Binding, text.as_bytes()).expect("canonical");
             let Body::Binding(b) = &record.body else { panic!("a binding") };
-            assert_eq!(b.prefix.tumbler().to_string(), prefix);
+            assert_eq!(b.prefix.to_string(), prefix);
             assert_eq!(encode(&record.body, None), text);
         }
     }
@@ -559,6 +609,21 @@ mod tests {
                 assert_eq!((&record.body, record.sig.as_deref()), (&body, sig));
             }
         }
+    }
+
+    /// The origins walk as the collection they are, in the org's order: by
+    /// reference, as `for origin in &origins` and `iter` do, and by value.
+    #[test]
+    fn origins_walk_in_the_orgs_order() {
+        let order = ["https://b.example", "http://a.onion", "https://a.example"];
+        let list = origins(&order);
+        let mut walked = Vec::new();
+        for origin in &list {
+            walked.push(origin.as_str());
+        }
+        assert_eq!(walked, order);
+        assert!(list.iter().map(String::as_str).eq(order));
+        assert_eq!(list.into_iter().collect::<Vec<String>>(), order);
     }
 
     /// The cap bounds the parse, never a record: a body one byte past it is

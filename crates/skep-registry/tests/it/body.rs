@@ -9,7 +9,9 @@
 use std::path::Path;
 
 use serde_json::Value;
-use skep_registry::{encode, parse, rows, Body, BodyKind, Kind, Record, MAX_REGISTRY_RECORD_BYTES};
+use skep_registry::{
+    encode, parse, rows, Body, BodyKind, Kind, Member, Record, Refusal, MAX_REGISTRY_RECORD_BYTES,
+};
 
 fn fixture() -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/vectors/records.json");
@@ -125,7 +127,37 @@ fn the_spec_examples_have_one_canonical_form_each() {
     let Body::Binding(b) = parse(BodyKind::Binding, binding.as_bytes()).unwrap().body else {
         panic!("a binding")
     };
-    assert_eq!((b.prefix.tumbler().to_string(), b.replaces), ("1.5".to_owned(), None));
+    assert_eq!((b.prefix.to_string(), b.replaces), ("1.5".to_owned(), None));
+}
+
+/// A REFUSAL NAMES THE MEMBER THAT FAULTED AS A VALUE: each member-bearing
+/// cause carries its [`Member`], so a caller branches on the member it
+/// matches and never on the token's text — every member, and every cause
+/// that names one, here; the tokens are the vector set's.
+#[test]
+fn a_refusal_names_the_member_that_faulted() {
+    let cases = [
+        (BodyKind::Binding, r#"{"type":"binding"}"#, Refusal::MissingMember(Member::Prefix)),
+        (BodyKind::Endpoint, r#"{"type":"endpoint"}"#, Refusal::MissingMember(Member::Origins)),
+        (
+            BodyKind::Binding,
+            r#"{"type":"binding","prefix":true}"#,
+            Refusal::NotAString(Member::Prefix),
+        ),
+        (
+            BodyKind::Binding,
+            r#"{"type":"binding","prefix":"1","replaces":"x"}"#,
+            Refusal::NotAnAddress(Member::Replaces),
+        ),
+        (
+            BodyKind::Binding,
+            r#"{"type":"binding","prefix":"1","sig":null}"#,
+            Refusal::NotAString(Member::Sig),
+        ),
+    ];
+    for (kind, text, refusal) in cases {
+        assert_eq!(parse(kind, text.as_bytes()), Err(refusal), "{text}");
+    }
 }
 
 /// A BODY WITH TWO FAULTS ANSWERS THE EARLIER STAGE's, in the order

@@ -75,10 +75,7 @@ impl Kind {
 
     /// The kind's own row in the table ([`rows()`]), held.
     pub fn row(self) -> &'static Row {
-        rows()
-            .iter()
-            .find(|r| r.kind == self && r.subtype.is_none())
-            .expect("the table holds every kind's row")
+        rows().iter().find(|r| r.of == RowOf::Kind(self)).expect("the table holds every kind's row")
     }
 }
 
@@ -144,21 +141,56 @@ impl Subtype {
     /// kind's ([`Subtype::kind`]), which the subtype names, so no caller
     /// names the kind beside it.
     pub fn row(self) -> &'static Row {
-        rows().iter().find(|r| r.subtype == Some(self)).expect("the table holds every subtype row")
+        rows()
+            .iter()
+            .find(|r| r.of == RowOf::Subtype(self))
+            .expect("the table holds every subtype row")
     }
 }
 
-/// One of the twelve rows: a kind's own row (`subtype` none) or a subtype
-/// row under its kind. The fields are public and the type is `Clone` so a
-/// suite can build a list that differs from [`rows`] by one row and hand it
-/// to the seeding check ([`crate::seeding_check`]), whose refusals are proved
-/// on such lists.
+/// What a row is the row OF: a kind, whose own row sits at its bare
+/// ordinal, or a subtype, whose row nests under the row of the kind it
+/// names (REG-1.20). A subtype row's kind is read off its subtype
+/// ([`RowOf::kind`]), so a row whose kind and subtype disagree is no value
+/// of this type. The inverse of [`Kind::row`] and [`Subtype::row`]:
+/// `kind.row().of == RowOf::Kind(kind)`, and `subtype.row().of ==
+/// RowOf::Subtype(subtype)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RowOf {
+    /// A kind's own row, at its bare ordinal.
+    Kind(Kind),
+    /// A subtype row, under its kind's.
+    Subtype(Subtype),
+}
+
+impl RowOf {
+    /// The kind the row belongs to — its own, or the one its subtype nests
+    /// under ([`Subtype::kind`]).
+    pub fn kind(self) -> Kind {
+        match self {
+            RowOf::Kind(kind) => kind,
+            RowOf::Subtype(subtype) => subtype.kind(),
+        }
+    }
+
+    /// The subtype, for a subtype row; `None` for a kind's own row.
+    pub fn subtype(self) -> Option<Subtype> {
+        match self {
+            RowOf::Kind(_) => None,
+            RowOf::Subtype(subtype) => Some(subtype),
+        }
+    }
+}
+
+/// One of the twelve rows: the row of a kind or of a subtype, as [`RowOf`]
+/// names it. The fields are public and the type is `Clone` so a suite can
+/// build a list that differs from [`rows`] by one row and hand it to the
+/// seeding check ([`crate::seeding_check`]), whose refusals are proved on
+/// such lists.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
-    /// The kind the row belongs to — its own, or its subtype's.
-    pub kind: Kind,
-    /// `Some` for a subtype row, `None` for a kind's own row.
-    pub subtype: Option<Subtype>,
+    /// What the row is the row of: a kind, or a subtype under its kind.
+    pub of: RowOf,
     /// The row's address: the ghost home document's subspace-3 element.
     pub address: Address,
     /// The `type` member's string where the row's record carries a body
@@ -182,7 +214,10 @@ impl Row {
     /// the test itself once its subtype joins `Subtype::ALL`, as the
     /// completeness arm requires of every subtype row.
     pub fn carries_deposits(&self) -> bool {
-        self.subtype.is_some() || !Subtype::ALL.iter().any(|s| s.kind() == self.kind)
+        match self.of {
+            RowOf::Subtype(_) => true,
+            RowOf::Kind(kind) => !Subtype::ALL.iter().any(|s| s.kind() == kind),
+        }
     }
 }
 
@@ -225,8 +260,7 @@ pub(crate) fn registry_range_ordinal(a: &Address) -> Option<u32> {
 
 /// The table's spelling of one row — what [`rows`] builds a [`Row`] from.
 struct Spelling {
-    kind: Kind,
-    subtype: Option<Subtype>,
+    of: RowOf,
     ordinals: &'static [u32],
     type_value: Option<&'static str>,
 }
@@ -234,53 +268,38 @@ struct Spelling {
 /// THE TABLE, in the map's order: five kinds, each followed by its subtype
 /// rows where it has any.
 const SPELLINGS: [Spelling; 12] = [
-    Spelling { kind: Kind::Binding, subtype: None, ordinals: &[55], type_value: Some("binding") },
-    Spelling { kind: Kind::Endpoint, subtype: None, ordinals: &[56], type_value: Some("endpoint") },
-    Spelling { kind: Kind::TakedownRecord, subtype: None, ordinals: &[57], type_value: None },
+    Spelling { of: RowOf::Kind(Kind::Binding), ordinals: &[55], type_value: Some("binding") },
+    Spelling { of: RowOf::Kind(Kind::Endpoint), ordinals: &[56], type_value: Some("endpoint") },
+    Spelling { of: RowOf::Kind(Kind::TakedownRecord), ordinals: &[57], type_value: None },
     Spelling {
-        kind: Kind::TakedownRecord,
-        subtype: Some(Subtype::TakedownBase),
+        of: RowOf::Subtype(Subtype::TakedownBase),
         ordinals: &[57, 1],
         type_value: Some("takedown"),
     },
+    Spelling { of: RowOf::Subtype(Subtype::TakedownLifted), ordinals: &[57, 2], type_value: None },
+    Spelling { of: RowOf::Kind(Kind::PolicyLink), ordinals: &[58], type_value: None },
+    Spelling { of: RowOf::Subtype(Subtype::PolicyLinkOwn), ordinals: &[58, 1], type_value: None },
     Spelling {
-        kind: Kind::TakedownRecord,
-        subtype: Some(Subtype::TakedownLifted),
-        ordinals: &[57, 2],
-        type_value: None,
-    },
-    Spelling { kind: Kind::PolicyLink, subtype: None, ordinals: &[58], type_value: None },
-    Spelling {
-        kind: Kind::PolicyLink,
-        subtype: Some(Subtype::PolicyLinkOwn),
-        ordinals: &[58, 1],
-        type_value: None,
-    },
-    Spelling {
-        kind: Kind::PolicyLink,
-        subtype: Some(Subtype::Disavowal),
+        of: RowOf::Subtype(Subtype::Disavowal),
         ordinals: &[58, 2],
         type_value: Some("disavowal"),
     },
     Spelling {
-        kind: Kind::PolicyLink,
-        subtype: Some(Subtype::ExpulsionGround),
+        of: RowOf::Subtype(Subtype::ExpulsionGround),
         ordinals: &[58, 3],
         type_value: Some("expulsion-ground"),
     },
     Spelling {
-        kind: Kind::PolicyLink,
-        subtype: Some(Subtype::SuccessionGround),
+        of: RowOf::Subtype(Subtype::SuccessionGround),
         ordinals: &[58, 4],
         type_value: Some("succession-ground"),
     },
     Spelling {
-        kind: Kind::PolicyLink,
-        subtype: Some(Subtype::SuccessionPolicy),
+        of: RowOf::Subtype(Subtype::SuccessionPolicy),
         ordinals: &[58, 5],
         type_value: Some("succession-policy"),
     },
-    Spelling { kind: Kind::SuccessorOf, subtype: None, ordinals: &[59], type_value: None },
+    Spelling { of: RowOf::Kind(Kind::SuccessorOf), ordinals: &[59], type_value: None },
 ];
 
 /// THE TWELVE ROWS, held once: built from the table at the first read, so a
@@ -289,8 +308,7 @@ const SPELLINGS: [Spelling; 12] = [
 pub fn rows() -> &'static [Row; 12] {
     static ROWS: LazyLock<[Row; 12]> = LazyLock::new(|| {
         SPELLINGS.each_ref().map(|s| Row {
-            kind: s.kind,
-            subtype: s.subtype,
+            of: s.of,
             address: commons_type(s.ordinals),
             type_value: s.type_value,
         })
@@ -382,7 +400,7 @@ mod tests {
     /// at the ordinals the map pins, spelled as a client spells it.
     #[test]
     fn the_twelve_rows_sit_at_the_maps_addresses() {
-        let spelled: Vec<String> = rows().iter().map(|r| r.address.tumbler().to_string()).collect();
+        let spelled: Vec<String> = rows().iter().map(|r| r.address.to_string()).collect();
         assert_eq!(
             spelled,
             [
@@ -421,8 +439,8 @@ mod tests {
             t_successor_of,
         ];
         for (read, row) in readers.iter().zip(rows()) {
-            assert!(std::ptr::eq(read(), &row.address), "{}", row.address.tumbler());
-            assert!(std::ptr::eq(read(), read()), "{}: rebuilt per read", row.address.tumbler());
+            assert!(std::ptr::eq(read(), &row.address), "{}", row.address);
+            assert!(std::ptr::eq(read(), read()), "{}: rebuilt per read", row.address);
         }
     }
 
@@ -433,9 +451,8 @@ mod tests {
     fn the_bare_ordinal_carries_deposits_exactly_where_the_kind_reads_one_way() {
         for r in rows() {
             let bare_of_a_many_reading_kind =
-                matches!((r.kind, r.subtype), (Kind::TakedownRecord | Kind::PolicyLink, None));
-            let (kind, subtype) = (r.kind, r.subtype);
-            assert_eq!(r.carries_deposits(), !bare_of_a_many_reading_kind, "{kind:?} {subtype:?}");
+                matches!(r.of, RowOf::Kind(Kind::TakedownRecord | Kind::PolicyLink));
+            assert_eq!(r.carries_deposits(), !bare_of_a_many_reading_kind, "{:?}", r.of);
         }
     }
 
@@ -449,7 +466,7 @@ mod tests {
             let nested = rows().iter().any(|s| {
                 s.address != r.address && is_prefix(r.address.tumbler(), s.address.tumbler())
             });
-            assert_eq!(r.carries_deposits(), !nested, "{}", r.address.tumbler());
+            assert_eq!(r.carries_deposits(), !nested, "{}", r.address);
         }
     }
 
@@ -457,7 +474,7 @@ mod tests {
     /// under no other; the kind rows are pairwise prefix-free.
     #[test]
     fn every_subtype_row_nests_under_its_own_kind_alone() {
-        let kinds: Vec<&Row> = rows().iter().filter(|r| r.subtype.is_none()).collect();
+        let kinds: Vec<&Row> = rows().iter().filter(|r| matches!(r.of, RowOf::Kind(_))).collect();
         for (i, a) in kinds.iter().enumerate() {
             for b in &kinds[i + 1..] {
                 assert!(
@@ -466,12 +483,11 @@ mod tests {
                 );
             }
         }
-        for r in rows().iter().filter(|r| r.subtype.is_some()) {
+        for r in rows().iter().filter(|r| matches!(r.of, RowOf::Subtype(_))) {
             for k in &kinds {
                 let nested = is_prefix(k.address.tumbler(), r.address.tumbler());
-                assert_eq!(nested, k.kind == r.kind, "{:?} under {:?}", r.subtype, k.kind);
+                assert_eq!(nested, k.of.kind() == r.of.kind(), "{:?} under {:?}", r.of, k.of);
             }
-            assert_eq!(r.subtype.map(Subtype::kind), Some(r.kind));
         }
     }
 
@@ -482,7 +498,7 @@ mod tests {
     #[test]
     fn the_type_strings_stand_at_the_body_bearing_rows_alone() {
         let typed: Vec<(Option<Subtype>, Option<&str>)> =
-            rows().iter().map(|r| (r.subtype, r.type_value)).collect();
+            rows().iter().map(|r| (r.of.subtype(), r.type_value)).collect();
         assert_eq!(
             typed,
             [
@@ -529,17 +545,19 @@ mod tests {
     }
 
     /// Each kind and each subtype names its own row of the table, held: a
-    /// kind its bare row, a subtype the row under the kind it names.
+    /// kind its bare row, a subtype the row under the kind it names — and
+    /// the row's [`RowOf`] reads back the kind and the subtype it is of.
     #[test]
     fn each_kind_and_subtype_names_its_own_row() {
         for kind in Kind::ALL {
             let r = kind.row();
-            assert_eq!((r.kind, r.subtype), (kind, None));
+            assert_eq!((r.of, r.of.kind(), r.of.subtype()), (RowOf::Kind(kind), kind, None));
             assert!(std::ptr::eq(r, kind.row()), "{kind:?}");
         }
         for subtype in Subtype::ALL {
             let r = subtype.row();
-            assert_eq!((r.kind, r.subtype), (subtype.kind(), Some(subtype)));
+            let of = (r.of, r.of.kind(), r.of.subtype());
+            assert_eq!(of, (RowOf::Subtype(subtype), subtype.kind(), Some(subtype)));
             assert!(std::ptr::eq(r, subtype.row()), "{subtype:?}");
         }
         assert_eq!(&Kind::Binding.row().address, t_binding());
@@ -554,13 +572,13 @@ mod tests {
     fn row_at_answers_a_rows_own_address_alone() {
         for r in rows() {
             let found = row_at(&r.address);
-            assert!(found.is_some_and(|f| std::ptr::eq(f, r)), "{}", r.address.tumbler());
+            assert!(found.is_some_and(|f| std::ptr::eq(f, r)), "{}", r.address);
         }
         let subspace = Tumbler::new(COMMONS_TYPE_PREFIX.map(Nat::from)).expect("nonempty");
         let subspace = validate(subspace).expect("T4-valid");
         let beneath = [commons_type(&[58, 6]), commons_type(&[57, 1, 1])];
         for a in beneath.into_iter().chain([subspace, commons_type(&[12])]) {
-            assert_eq!(row_at(&a), None, "{}", a.tumbler());
+            assert_eq!(row_at(&a), None, "{a}");
         }
     }
 }

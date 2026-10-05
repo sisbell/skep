@@ -51,7 +51,7 @@ fn nested_pairs() -> Vec<(&'static Address, &'static Address)> {
     skep_registry::rows()
         .iter()
         .filter_map(|r| {
-            let subtype = r.subtype?;
+            let subtype = r.of.subtype()?;
             Some((&subtype.kind().row().address, &r.address))
         })
         .collect()

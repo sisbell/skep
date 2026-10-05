@@ -4,7 +4,7 @@ use skep_address::{is_prefix, Address};
 use skep_registry::{
     rows, t_binding, t_disavowal, t_endpoint, t_expulsion_ground, t_policy_link, t_policy_link_own,
     t_succession_ground, t_succession_policy, t_successor_of, t_takedown_base, t_takedown_lifted,
-    t_takedown_record, Kind, Subtype,
+    t_takedown_record, Kind, RowOf, Subtype,
 };
 
 /// One row's held reader.
@@ -15,10 +15,10 @@ type Reader = fn() -> &'static Address;
 #[test]
 fn the_table_holds_five_kinds_and_seven_subtype_rows() {
     assert_eq!(rows().len(), 12);
-    assert_eq!(rows().iter().filter(|r| r.subtype.is_none()).count(), 5);
-    assert_eq!(rows().iter().filter(|r| r.subtype.is_some()).count(), 7);
+    assert_eq!(rows().iter().filter(|r| matches!(r.of, RowOf::Kind(_))).count(), 5);
+    assert_eq!(rows().iter().filter(|r| matches!(r.of, RowOf::Subtype(_))).count(), 7);
     for kind in Kind::ALL {
-        assert!(rows().iter().any(|r| r.kind == kind && r.subtype.is_none()), "{kind:?}");
+        assert!(rows().iter().any(|r| r.of == RowOf::Kind(kind)), "{kind:?}");
     }
     for subtype in Subtype::ALL {
         let (r, k) = (subtype.row(), subtype.kind().row());
@@ -39,7 +39,7 @@ fn the_table_holds_five_kinds_and_seven_subtype_rows() {
         (t_successor_of, "59"),
     ];
     for (read, tail) in readers {
-        assert_eq!(read().tumbler().to_string(), format!("1.1.0.1.0.1.0.3.{tail}"));
+        assert_eq!(read().to_string(), format!("1.1.0.1.0.1.0.3.{tail}"));
     }
 }
 
@@ -47,10 +47,7 @@ fn the_table_holds_five_kinds_and_seven_subtype_rows() {
 /// subtype row carry deposits; `3.57` and `3.58` carry none.
 #[test]
 fn the_deposits_column_follows_the_bare_ordinal_test() {
-    let none: Vec<String> = rows()
-        .iter()
-        .filter(|r| !r.carries_deposits())
-        .map(|r| r.address.tumbler().to_string())
-        .collect();
+    let none: Vec<String> =
+        rows().iter().filter(|r| !r.carries_deposits()).map(|r| r.address.to_string()).collect();
     assert_eq!(none, ["1.1.0.1.0.1.0.3.57", "1.1.0.1.0.1.0.3.58"]);
 }

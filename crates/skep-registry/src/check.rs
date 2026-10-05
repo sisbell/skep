@@ -27,7 +27,7 @@ use std::fmt;
 
 use skep_address::{is_prefix, Address};
 
-use crate::rows::{registry_range_ordinal, Kind, Row, Subtype, REGISTRY_RANGE};
+use crate::rows::{registry_range_ordinal, Kind, Row, RowOf, Subtype, REGISTRY_RANGE};
 
 /// The seeding check's refusal, naming its arm.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,9 +35,9 @@ pub enum SeedingRefusal {
     /// The disjointness arm: a registry row and a foreign row whose
     /// subtrees meet.
     Disjointness { registry: Address, foreign: Address },
-    /// The completeness arm: a kind (`subtype` none) or a subtype row the
-    /// list does not hold.
-    Completeness { kind: Kind, subtype: Option<Subtype> },
+    /// The completeness arm: the row the list does not hold — a kind's own,
+    /// or a subtype's under the kind its subtype names.
+    Completeness { missing: RowOf },
     /// The count arm: more kind rows than the registry range's ordinals, or
     /// — with `row` named — a kind row that is no bare ordinal inside the
     /// registry range, or a second kind row at an ordinal already taken.
@@ -60,18 +60,16 @@ impl fmt::Display for SeedingRefusal {
         match self {
             SeedingRefusal::Disjointness { registry, foreign } => write!(
                 f,
-                "disjointness: the registry row {} and the foreign commons row {} meet at the subtree grain",
-                registry.tumbler(),
-                foreign.tumbler()
+                "disjointness: the registry row {registry} and the foreign commons row {foreign} meet at the subtree grain"
             ),
-            SeedingRefusal::Completeness { kind, subtype: None } => {
+            SeedingRefusal::Completeness { missing: RowOf::Kind(kind) } => {
                 write!(f, "completeness: {} has no row", kind.name())
             }
-            SeedingRefusal::Completeness { kind, subtype: Some(subtype) } => write!(
+            SeedingRefusal::Completeness { missing: RowOf::Subtype(subtype) } => write!(
                 f,
                 "completeness: {} has no row under {}",
                 subtype.name(),
-                kind.name()
+                subtype.kind().name()
             ),
             SeedingRefusal::Count { kind_rows, row: None } => write!(
                 f,
@@ -82,8 +80,7 @@ impl fmt::Display for SeedingRefusal {
             ),
             SeedingRefusal::Count { kind_rows, row: Some(row) } => write!(
                 f,
-                "count: of {kind_rows} kind rows, {} is no bare ordinal of the registry range 3.{}-3.{} left to it",
-                row.tumbler(),
+                "count: of {kind_rows} kind rows, {row} is no bare ordinal of the registry range 3.{}-3.{} left to it",
                 REGISTRY_RANGE.start(),
                 REGISTRY_RANGE.end()
             ),
@@ -115,27 +112,26 @@ pub fn seeding_check<'a>(
     }
     // 2 — COMPLETENESS: every kind's own row, then every subtype's row at a
     // prefix under its kind's.
-    let kind_row = |kind: Kind| rows.iter().find(|r| r.kind == kind && r.subtype.is_none());
+    let row_of = |of: RowOf| rows.iter().find(|r| r.of == of);
     for kind in Kind::ALL {
-        if kind_row(kind).is_none() {
-            return Err(SeedingRefusal::Completeness { kind, subtype: None });
+        if row_of(RowOf::Kind(kind)).is_none() {
+            return Err(SeedingRefusal::Completeness { missing: RowOf::Kind(kind) });
         }
     }
     for subtype in Subtype::ALL {
-        let kind = subtype.kind();
-        let under = kind_row(kind).expect("every kind's row stands, checked above");
+        let under =
+            row_of(RowOf::Kind(subtype.kind())).expect("every kind's row stands, checked above");
         let present = rows.iter().any(|r| {
-            r.kind == kind
-                && r.subtype == Some(subtype)
+            r.of == RowOf::Subtype(subtype)
                 && r.address != under.address
                 && is_prefix(under.address.tumbler(), r.address.tumbler())
         });
         if !present {
-            return Err(SeedingRefusal::Completeness { kind, subtype: Some(subtype) });
+            return Err(SeedingRefusal::Completeness { missing: RowOf::Subtype(subtype) });
         }
     }
     // 3 — THE COUNT: the kind rows against the registry range's ordinals.
-    let kind_rows: Vec<&Row> = rows.iter().filter(|r| r.subtype.is_none()).collect();
+    let kind_rows: Vec<&Row> = rows.iter().filter(|r| matches!(r.of, RowOf::Kind(_))).collect();
     if kind_rows.len() > REGISTRY_RANGE.count() {
         return Err(SeedingRefusal::Count { kind_rows: kind_rows.len(), row: None });
     }

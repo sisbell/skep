@@ -5,7 +5,7 @@
 use skep_address::Address;
 use skep_registry::{
     commons_type, rows, seeding_check, t_binding, t_policy_link, t_successor_of, t_takedown_record,
-    Kind, Row, SeedingRefusal, Subtype,
+    Kind, Row, RowOf, SeedingRefusal, Subtype,
 };
 
 /// The rows commons-map's disjointness paragraph lists as built or placed
@@ -42,12 +42,12 @@ fn the_maps_other_rows() -> Vec<Address> {
 }
 
 /// The shipped table with one row's address moved.
-fn moved(kind: Kind, subtype: Option<Subtype>, to: &[u32]) -> Vec<Row> {
+fn moved(of: RowOf, to: &[u32]) -> Vec<Row> {
     rows()
         .iter()
         .map(|r| {
             let mut r = r.clone();
-            if r.kind == kind && r.subtype == subtype {
+            if r.of == of {
                 r.address = commons_type(to);
             }
             r
@@ -56,8 +56,8 @@ fn moved(kind: Kind, subtype: Option<Subtype>, to: &[u32]) -> Vec<Row> {
 }
 
 /// The shipped table without one row.
-fn without(kind: Kind, subtype: Option<Subtype>) -> Vec<Row> {
-    rows().iter().filter(|r| !(r.kind == kind && r.subtype == subtype)).cloned().collect()
+fn without(of: RowOf) -> Vec<Row> {
+    rows().iter().filter(|r| r.of != of).cloned().collect()
 }
 
 /// REG-1.24, REG-1.30, REG-1.31 — the shipped rows against the rows the map
@@ -86,8 +86,7 @@ fn the_disjointness_arm_refuses_a_foreign_row_inside_above_or_at_a_registry_row(
         assert_eq!(
             seeding_check(rows(), std::iter::once(&f)),
             Err(SeedingRefusal::Disjointness { registry: registry.clone(), foreign: f.clone() }),
-            "{}",
-            f.tumbler()
+            "{f}"
         );
     }
     // Above the block: the subspace itself contains every row; the first
@@ -118,27 +117,28 @@ fn the_disjointness_arm_refuses_a_foreign_row_inside_above_or_at_a_registry_row(
 #[test]
 fn the_completeness_arm_refuses_a_missing_kind_or_subtype_row() {
     assert_eq!(
-        seeding_check(&without(Kind::Binding, None), std::iter::empty()),
-        Err(SeedingRefusal::Completeness { kind: Kind::Binding, subtype: None })
+        seeding_check(&without(RowOf::Kind(Kind::Binding)), std::iter::empty()),
+        Err(SeedingRefusal::Completeness { missing: RowOf::Kind(Kind::Binding) })
     );
     assert_eq!(
-        seeding_check(&without(Kind::PolicyLink, Some(Subtype::Disavowal)), std::iter::empty()),
-        Err(SeedingRefusal::Completeness { kind: Kind::PolicyLink, subtype: Some(Subtype::Disavowal) })
+        seeding_check(&without(RowOf::Subtype(Subtype::Disavowal)), std::iter::empty()),
+        Err(SeedingRefusal::Completeness { missing: RowOf::Subtype(Subtype::Disavowal) })
     );
-    let misplaced = moved(Kind::PolicyLink, Some(Subtype::Disavowal), &[57, 9]);
+    let misplaced = moved(RowOf::Subtype(Subtype::Disavowal), &[57, 9]);
     let refusal = seeding_check(&misplaced, std::iter::empty()).unwrap_err();
     assert_eq!(
         refusal,
-        SeedingRefusal::Completeness { kind: Kind::PolicyLink, subtype: Some(Subtype::Disavowal) }
+        SeedingRefusal::Completeness { missing: RowOf::Subtype(Subtype::Disavowal) }
     );
     assert_eq!(refusal.arm(), "completeness");
     assert!(refusal.to_string().contains("the disavowal has no row under the policy link"), "{refusal}");
     // A kind's row moved under another kind is caught too: the subtype rows
     // under it lose their kind's prefix.
-    let moved_kind = moved(Kind::PolicyLink, None, &[57, 5]);
+    let moved_kind = moved(RowOf::Kind(Kind::PolicyLink), &[57, 5]);
     assert!(matches!(
         seeding_check(&moved_kind, std::iter::empty()),
-        Err(SeedingRefusal::Completeness { kind: Kind::PolicyLink, subtype: Some(_) })
+        Err(SeedingRefusal::Completeness { missing: RowOf::Subtype(s) })
+            if s.kind() == Kind::PolicyLink
     ));
 }
 
@@ -149,8 +149,7 @@ fn the_completeness_arm_refuses_a_missing_kind_or_subtype_row() {
 fn the_count_arm_holds_the_kind_rows_to_the_registry_ranges_five_ordinals() {
     let mut sixth: Vec<Row> = rows().to_vec();
     sixth.push(Row {
-        kind: Kind::Binding,
-        subtype: None,
+        of: RowOf::Kind(Kind::Binding),
         address: commons_type(&[54]),
         type_value: Some("binding"),
     });
@@ -162,7 +161,7 @@ fn the_count_arm_holds_the_kind_rows_to_the_registry_ranges_five_ordinals() {
     );
     // The operator's sentence names the range the row is outside: `3.54`
     // is the reserve's and no ordinal of the registry range.
-    let outside = moved(Kind::Binding, None, &[54]);
+    let outside = moved(RowOf::Kind(Kind::Binding), &[54]);
     let refusal = seeding_check(&outside, std::iter::empty()).unwrap_err();
     assert_eq!(refusal, SeedingRefusal::Count { kind_rows: 5, row: Some(commons_type(&[54])) });
     assert_eq!(
@@ -170,7 +169,7 @@ fn the_count_arm_holds_the_kind_rows_to_the_registry_ranges_five_ordinals() {
         "count: of 5 kind rows, 1.1.0.1.0.1.0.3.54 is no bare ordinal of the registry range \
          3.55-3.59 left to it"
     );
-    let doubled = moved(Kind::Endpoint, None, &[55]);
+    let doubled = moved(RowOf::Kind(Kind::Endpoint), &[55]);
     let refusal = seeding_check(&doubled, std::iter::empty()).unwrap_err();
     assert_eq!(refusal, SeedingRefusal::Count { kind_rows: 5, row: Some(commons_type(&[55])) });
     assert_eq!(refusal.arm(), "count");
@@ -182,10 +181,9 @@ fn the_count_arm_holds_the_kind_rows_to_the_registry_ranges_five_ordinals() {
 /// completeness.
 #[test]
 fn the_arms_run_in_order() {
-    let mut faulty = without(Kind::PolicyLink, Some(Subtype::Disavowal));
+    let mut faulty = without(RowOf::Subtype(Subtype::Disavowal));
     faulty.push(Row {
-        kind: Kind::Binding,
-        subtype: None,
+        of: RowOf::Kind(Kind::Binding),
         address: commons_type(&[54]),
         type_value: Some("binding"),
     });

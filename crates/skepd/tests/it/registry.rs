@@ -28,7 +28,7 @@ use skep_address::{validate, Address, Nat, Tumbler};
 use skep_arrangement::deposit_class_types;
 use skep_engine::types::pins_outside_the_registry;
 use skep_registry::{
-    row_at, rows, seeding_check, Body, BodyKind, Kind, Row, SeedingRefusal, Subtype,
+    row_at, rows, seeding_check, Body, BodyKind, Kind, Row, RowOf, SeedingRefusal, Subtype,
 };
 
 /// The node account's principal and its own key's seed, above every other
@@ -560,18 +560,20 @@ fn the_seeding_check_passes_the_shipped_lists_and_refuses_each_arm_on_a_mutated_
     assert!(matches!(refusal, SeedingRefusal::Disjointness { .. }), "{refusal}");
     assert!(refusal.to_string().contains("1.1.0.1.0.1.0.3.58.6"), "{refusal}");
 
-    let incomplete: Vec<Row> =
-        rows().iter().filter(|r| r.subtype != Some(Subtype::TakedownLifted)).cloned().collect();
+    let incomplete: Vec<Row> = rows()
+        .iter()
+        .filter(|r| r.of != RowOf::Subtype(Subtype::TakedownLifted))
+        .cloned()
+        .collect();
     let refusal = seeding_check(&incomplete, &domain).unwrap_err();
     assert_eq!(
         refusal,
-        SeedingRefusal::Completeness { kind: Kind::TakedownRecord, subtype: Some(Subtype::TakedownLifted) }
+        SeedingRefusal::Completeness { missing: RowOf::Subtype(Subtype::TakedownLifted) }
     );
 
     let mut sixth: Vec<Row> = rows().to_vec();
     sixth.push(Row {
-        kind: Kind::Binding,
-        subtype: None,
+        of: RowOf::Kind(Kind::Binding),
         address: addr("1.1.0.1.0.1.0.3.54"),
         type_value: Some("binding"),
     });

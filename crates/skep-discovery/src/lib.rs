@@ -4,8 +4,8 @@
 //! a content region it answers *which links touch here*; given a four-set
 //! descriptor it answers *which links match*; and it counts, paginates,
 //! projects, retrieves endsets, previews delete-orphaning, and traces
-//! supersession lineage — all by composing M7's spanfilade and behavior atoms
-//! (`stab`/`match_links`/`type_slice`), M5's arrangement, and M3's registry
+//! supersession lineage — all by composing M7's spanfilade and typed reads
+//! (`stab`/`match_links`/`observe`), M5's arrangement, and M3's registry
 //! over ONE M2 snapshot per operation. One thing well: **turn upstream
 //! link/arrangement/registry state into the answers readers ask, owning no
 //! authoritative state and no index** — every answer is recomputed from
@@ -167,10 +167,12 @@
 //! of the interface as well, and `tests/it/consumer.rs` holds it.
 //!
 //! * [`image_on`] — no link-store read; one read of M5's `#runs` for the
-//!   surface's content, which reads no run, and then one M5 `resolve` per
-//!   region span the per-span ceiling admits, each a walk of the reading
-//!   surface's run-list from its first run, the region's whole walk held to
-//!   `MAX_IMAGE_RUNS²` and each span's own image to `MAX_IMAGE_RUNS`.
+//!   surface's content, which reads no run, and then, per region span, one
+//!   M5 `iter_resolve` pulled lazily — a walk of the reading surface's
+//!   run-list from its first run — whose runs are counted as they arrive: the
+//!   region's whole walk held to `MAX_IMAGE_RUNS²` ahead of the first pull,
+//!   and the runs it pulls to `MAX_IMAGE_RUNS`, the one past that refused
+//!   before the next is built.
 //! * the region family ([`findlinks_v_on`], [`count_v_on`], [`window_v_on`],
 //!   [`retrieve_endsets_on`]) — three `stab`s, one per v1 slot, over the
 //!   image's runs; none when the image is empty. [`retrieve_endsets_on`]
@@ -185,8 +187,9 @@
 //!   request past the run budget.
 //! * the lineage pair ([`in_claims_on`], [`out_claims_on`]) — one
 //!   `readlink`, which answers `[]` for a non-link key and stops there;
-//!   otherwise one `match_links` at a one-span query and one `type_slice`,
-//!   then one `readlink` and one `is_active` per claim the home rule admits.
+//!   otherwise one `observe` of the supersession class — a walk of that
+//!   class's typed hint, one coverage test per claim, and no store walk —
+//!   then one `is_active` per claim the home rule admits.
 //! * the pointwise pair — no store walk: one `followlink` ([`project_on`]),
 //!   or one `readlink` and one `is_active`
 //!   ([`addressably_discoverable_from_on`]), plus one read of M5's `#runs`
@@ -204,8 +207,8 @@
 //!
 //! ## Boundary — deliberately NOT owned here
 //!
-//! * the spanfilade / coverage index, the per-slot matcher, and the
-//!   AND-of-ORs combiner — M7's `stab`/`match_links`/`type_slice`
+//! * the spanfilade / coverage index, the per-slot matcher, the AND-of-ORs
+//!   combiner and the typed observation — M7's `stab`/`match_links`/`observe`
 //!   (Conflicts #1); `coverage(a, i)` is NOT re-exposed — it is exactly M7's
 //!   `followlink(a, i)`;
 //! * content bytes (M4); provenance R and every R-keyed query —

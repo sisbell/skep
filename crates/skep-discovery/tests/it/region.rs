@@ -360,28 +360,28 @@ fn the_region_family_refuses_an_image_past_the_run_budget() {
     }
 }
 
-/// §1 — the run budget bounds what a request makes M8 MATERIALIZE and not
-/// only what it returns: M5 hands one span's whole image back in a single
-/// `Vec`, so each span is held to the budget ahead of its own resolution,
-/// against the most it could yield — `min(count, #runs(surface))`.
+/// §1 — the run budget counts the runs a region RESOLVES, pulled one at a
+/// time from M5's lazy resolution, and never the positions its spans name.
+/// The surface is one wide run followed by `MAX` width-1 runs: a span from its
+/// first position naming `MAX + 1` positions resolves ONE run — answered, over
+/// a surface holding more runs than the budget — a span of `2 × MAX`
+/// positions resolves `MAX` runs and is answered at the budget exactly, and
+/// one position more resolves `MAX + 1` and is refused, not truncated. The
+/// budget-exact span keeps two distinct runs, so the count is of runs
+/// resolved, never of runs kept.
 ///
-/// The refused region below would answer ONE run, which is what makes this a
-/// ceiling rather than a measurement: no count of runs RETURNED can refuse
-/// it, and the same span over a one-run surface is answered, with that one
-/// run, while the same surface one position narrower is answered too. What
-/// the ceiling refuses is a span naming more positions than the budget over a
-/// surface holding more runs than it — the request whose whole image is small
-/// only because the two happen to line up, which the caller chooses and M8
-/// cannot know before M5 has built it.
+/// What no verdict shows is what M8 HOLDS while it counts: that the run past
+/// the budget is refused before the next is built rests on the pull, and
+/// `image_on` states it.
 #[test]
-fn image_holds_one_spans_materialization_to_the_run_budget() {
-    let wide = MAX_IMAGE_RUNS as u32 + 1;
+fn image_counts_the_runs_a_span_resolves_not_the_positions_it_names() {
+    let max = MAX_IMAGE_RUNS as u32;
+    let wide = max + 1;
     let k = kernel();
     seed_content(&k, &doc1(), wide); // one run, `MAX + 1` positions
     let vstream = Vstream::new(&k);
     // doc2: that whole run transcluded, then `MAX` width-1 runs behind it,
-    // none abutting the next — so the surface holds `MAX + 1` runs, and its
-    // first `MAX + 1` positions are one of them.
+    // none abutting the next — `MAX + 1` runs over `2 × MAX + 1` positions.
     vstream.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, wide)])
         .expect("copy succeeds");
     vstream.copy(
@@ -397,24 +397,31 @@ fn image_holds_one_spans_materialization_to_the_run_budget() {
     );
     let reads = Reads(&k);
 
-    // At the ceiling: `MAX` positions of that surface, resolving to one run
-    // clipped to the span.
     assert_eq!(
-        reads.image(&doc2(), &[vspan(1, 1, MAX_IMAGE_RUNS as u32)]),
-        Ok(vec![run(&ca(1), MAX_IMAGE_RUNS as u32)])
+        reads.image(&doc2(), &[vspan(1, 1, wide)]),
+        Ok(vec![run(&ca(1), wide)]),
+        "`MAX + 1` positions, one run resolved"
     );
-    // What the refused region would ANSWER, read off a surface whose run
-    // count admits it: one run. So the refusal below is about what the
-    // resolution could build, and nothing that counts the answer can reach it.
     assert_eq!(
-        reads.image(&doc1(), &[vspan(1, 1, wide)]),
-        Ok(vec![run(&ca(1), wide)])
+        reads.image(&doc2(), &[vspan(1, 1, 2 * max)]),
+        Ok(vec![run(&ca(1), wide), run(&ca(1), 1)]),
+        "`MAX` runs resolved, two kept"
     );
     for (name, refusal) in &region_entry_points(reads) {
         assert_eq!(
             refusal(&doc2(), &[vspan(1, 1, wide)]),
+            None,
+            "{name}: one run resolved is answered, whatever the span names"
+        );
+        assert_eq!(
+            refusal(&doc2(), &[vspan(1, 1, 2 * max)]),
+            None,
+            "{name}: one span resolving the budget exactly is answered"
+        );
+        assert_eq!(
+            refusal(&doc2(), &[vspan(1, 1, 2 * max + 1)]),
             Some(QueryError::ImageTooLarge),
-            "{name}: a span that could resolve past the budget is refused before it resolves"
+            "{name}: one run more is refused, not truncated"
         );
     }
 }
@@ -423,7 +430,7 @@ fn image_holds_one_spans_materialization_to_the_run_budget() {
 /// span by walking the surface's run-list from its first run, so a span past
 /// the end of a fragmented document walks every run and returns none, and a
 /// region of such spans resolves no run for the run budget to count. The walk
-/// is held to that budget's square, ahead of the first `resolve`: `MAX` spans
+/// is held to that budget's square, ahead of the first pull: `MAX` spans
 /// past the end of a document one run over the budget walk `MAX × (MAX + 1)`
 /// runs and are refused on every entry point, while the same region over a
 /// one-run document — the same depth, a different run count — is answered,

@@ -234,7 +234,8 @@ fn every_link_store_walking_read_takes_a_scan_permit() {
         ("retrieve_endsets", retrieve_endsets(CLAIMANT_DOC1), true),
         // Six scans, and no owner gate: every asker reaches it.
         ("delete_orphans", delete_orphans(CLAIMANT_DOC1), true),
-        // One scan apiece, at a single-span query, behind a residence gate.
+        // A walk of the whole supersession class apiece, behind a residence
+        // gate.
         ("in_claims", in_claims(&board.grant), true),
         ("out_claims", out_claims(&board.grant), true),
         // …and the reads that walk no link store, which is what keeps the

@@ -4,7 +4,7 @@
 use crate::common;
 
 use common::*;
-use skep_address::Address;
+use skep_address::{is_prefix, Address};
 use skep_discovery::{SupClaim, FROM, TO};
 use skep_kernel::TxnError;
 use skep_links::{
@@ -33,14 +33,22 @@ fn lineage_probes_flipped_slots_with_residence_gate() {
     assert_eq!(reads.out_claims(&e2, View::Active), vec![expected.clone()]);
     assert_eq!(reads.in_claims(&e2, View::Active), vec![]);
     assert_eq!(reads.out_claims(&e1, View::Active), vec![]);
-    // Default behaves as Active (M7's §G primitives coerce it) — asserted
-    // here while the claim is live, where Audit answers the same; the
-    // assertion that separates them follows the retraction.
+    // Default behaves as Active (M7's reads coerce it) — asserted here while
+    // the claim is live, where Audit answers the same; the assertion that
+    // separates them follows the retraction.
     assert_eq!(reads.in_claims(&e1, View::Default), vec![expected]);
 
-    // Resident-key gate: a non-link key returns [] — without it, doc1's
-    // prefix coverage would over-match the claim (whose endpoints live under
-    // doc1).
+    // Resident-key gate. The claim's F (or G) is `enc([endpoint])`, which
+    // COVERS every address beneath the endpoint, so a non-link key under e1
+    // or e2 is the one the gate exists for: without it the claim would come
+    // back as naming that key. doc1 and ca(1), above and beside the
+    // endpoints, are no claim's endpoint either, and answer [] all the same.
+    let under_e1 = a(&[1, 0, 1, 0, 1, 0, 2, 1, 1]);
+    let under_e2 = a(&[1, 0, 1, 0, 1, 0, 2, 2, 1]);
+    assert!(is_prefix(e1.tumbler(), under_e1.tumbler()));
+    assert!(is_prefix(e2.tumbler(), under_e2.tumbler()));
+    assert_eq!(reads.in_claims(&under_e1, View::Active), vec![]);
+    assert_eq!(reads.out_claims(&under_e2, View::Active), vec![]);
     assert_eq!(reads.in_claims(&doc1(), View::Active), vec![]);
     assert_eq!(reads.in_claims(&ca(1), View::Active), vec![]);
 
@@ -189,13 +197,13 @@ fn lineage_reads_out_in_claim_address_order() {
     assert_eq!(claims_of(reads.out_claims(&made[1], View::Active)), vec![c1]);
 }
 
-/// §7 — the enumeration reads out SUPERSESSION claims alone. M7's probe finds
-/// every link naming the key at the slot, whatever its type, and the
-/// `[K_sup]` class is what narrows it — so an ordinary link naming `e1` at
-/// FROM and `e2` at TO, which both probes reach, must never come back as a
-/// claim. It is the one shape that tells a read restricting to the class from
-/// one reading out every hit: every other lineage fixture's endpoints are
-/// named by supersession claims alone, where the two agree.
+/// §7 — the enumeration reads out SUPERSESSION claims alone. A type-blind
+/// probe of the key — M7's `match_links`, which the premise below asks —
+/// reaches every link naming it at the slot, whatever its type, so an
+/// ordinary link naming `e1` at FROM and `e2` at TO is there for a read that
+/// asked the store instead of the class. It is the one shape that tells the
+/// two apart: every other lineage fixture's endpoints are named by
+/// supersession claims alone, where they agree.
 #[test]
 fn lineage_reads_out_supersession_claims_alone_among_the_links_naming_the_key() {
     let k = kernel();
@@ -215,8 +223,9 @@ fn lineage_reads_out_supersession_claims_alone_among_the_links_naming_the_key() 
         .assert_sup(SYS, &doc1(), &e1, &e2)
         .expect("assert_sup succeeds");
 
-    // The premise: both probes reach the ordinary link as well as the claim,
-    // so the restriction has something to drop.
+    // The premise: a type-blind probe reaches the ordinary link as well as
+    // the claim, so a read that asked the store rather than the class would
+    // have it to return.
     let snap = k.snapshot();
     let links = snap.world().links();
     for (slot, key) in [(FROM, &e1), (TO, &e2)] {

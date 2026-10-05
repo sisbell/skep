@@ -1,16 +1,49 @@
 //! §7 — archival supersession/edit lineage (ASN-0125 EL11b, the archival,
 //! arrangement-independent half of the decomposed scope): raw claim
-//! enumeration over M7's `match_links ∩ type_slice(Supersedes)` composition —
-//! distinct from M7's own `succs`/`chain`/`tip`/`current` walks, which stay
-//! M7's. Contextual discovery (EL11a) is out of scope and composed above M8.
+//! enumeration through M7's typed `observe` of the supersession class — the
+//! typed index M7's BH3 reverse read walks, over that class alone — distinct
+//! from M7's own `succs`/`chain`/`tip`/`current` walks, which stay M7's.
+//! Contextual discovery (EL11a) is out of scope and composed above M8.
 
 use skep_address::{validate, Address};
 use skep_kernel::Snapshot;
-use skep_links::{enc, Endset, LinkState, ShippedType, View, FROM, TO};
+use skep_links::{Endset, LinkState, Pattern, ShippedType, Tuple, View};
 
 use crate::home::{home_of, home_readable};
 use crate::types::SupClaim;
 use crate::DiscoveryWorld;
+
+/// Which side of a claim a probe key names, under the FLIPPED storage
+/// convention (the M7→M8 seam, diverging from ASN-0125's textual Df-DIR):
+/// `FROM = old/superseded`, `TO = new/superseding`. The one place that
+/// convention is spelled — [`Side::pattern`] — so the two probes cannot put
+/// the key on the wrong slot.
+#[derive(Clone, Copy)]
+enum Side {
+    /// `in(y)` — the claims whose `old` is the key, asked of F.
+    Old,
+    /// `out(x)` — the claims whose `new` is the key, asked of G.
+    New,
+}
+
+impl Side {
+    /// ASN-0086's pattern asking for `key` on this side, and nothing of the
+    /// other: the probe IS the key, one tumbler, so it is never the empty side
+    /// `observe` reads as no constraint.
+    fn pattern(self, key: &Address) -> Pattern<'_> {
+        let probe = std::slice::from_ref(key.tumbler());
+        match self {
+            Side::Old => Pattern {
+                from: probe,
+                ..Pattern::default()
+            },
+            Side::New => Pattern {
+                to: probe,
+                ..Pattern::default()
+            },
+        }
+    }
+}
 
 /// What one resident claim says: its two endpoints under the flipped
 /// convention, its home attribution (EL8b), and its own activity.
@@ -29,22 +62,25 @@ use crate::DiscoveryWorld;
 /// key minted by M3, hence T4-valid, and the address lift cannot fault
 /// either.
 ///
-/// `c` is a claim resident in `l`, as every address the enumeration hands
-/// over comes off M7's own index keys.
-fn claim_at(l: &LinkState, c: &Address) -> SupClaim {
-    let link = l.readlink(c).expect("hit keys are resident links");
+/// `t` is a tuple M7's `observe` handed over: its address is a key of the
+/// supersession class's typed hint, so resident in `l`, and its slots are the
+/// claim's stored F and G — read once, by `observe`, and not again here.
+fn claim_at(l: &LinkState, t: Tuple) -> SupClaim {
+    let Tuple { addr, from, to } = t;
+    let home = home_of(&addr); // EL8b
+    let active = l.is_active(&addr);
     SupClaim {
         old: endpoint(
-            link.from_slot(),
+            &from,
             "a [K_sup] F denotes exactly one address (Df-DISC(ii), held by M7's sole-writer fences)",
         ),
         new: endpoint(
-            link.to_slot(),
+            &to,
             "a [K_sup] G denotes exactly one address (Df-DISC(ii), held by M7's sole-writer fences)",
         ),
-        home: home_of(c), // EL8b
-        active: l.is_active(c),
-        claim: c.clone(),
+        home,
+        active,
+        claim: addr,
     }
 }
 
@@ -60,46 +96,46 @@ fn endpoint(e: &Endset, fence: &'static str) -> Address {
     )
 }
 
-/// The shared claim enumeration: claims naming `key` at `slot`, restricted to
-/// the `[K_sup]` class. TOTAL on every address — the obligations below are
-/// all this function's own, discharged here and owed by no caller.
+/// The shared claim enumeration: the `[K_sup]` claims whose `side` names
+/// `key`. TOTAL on every address — the obligations below are all this
+/// function's own, discharged here and owed by no caller.
 ///
-/// **Flipped storage convention** (the M7→M8 seam, diverging from ASN-0125's
-/// textual Df-DIR): `FROM = old/superseded`, `TO = new/superseding` — so
-/// `in(y)` (old = y) probes FROM and `out(x)` (new = x) probes TO.
+/// **Asked of the class, never of the store.** M7's `observe` — ASN-0086's
+/// Observe, over the same typed index M7's BH3 reverse read walks — visits
+/// the supersession class alone under `view`, tests each claim's F or G for
+/// coverage of `key`, and hands back the matches in ascending claim-address
+/// order with their slots: no store scan, no class materialized, no claim
+/// read twice. BH3's own reverse read, `sources_to`, answers a claim's
+/// SOURCES rather than the claim and reads the active slice alone, so it
+/// serves neither the read-out nor the `Audit` view.
 ///
 /// **The resident-key gate is what makes the composition compute the right
-/// function**, not a guard against misuse. `enc([key])` matches by prefix
-/// COVERAGE, and coverage coincides with denotation only on the `dom(L)`
-/// prefix-antichain (EL4 + R0a): for a non-link `key`, its coverage could
-/// reach a prefix-comparable claim, and the read would answer *claims whose
-/// endpoint lies UNDER `key`* rather than *claims whose endpoint IS `key`*.
-/// The gate cuts that off, and `[]` is then the TRUE answer rather than a
-/// fallback — a `[K_sup]` endpoint is `single_denoted` to a resident link
-/// address, so a non-link is no claim's endpoint. Resident, not active: a
-/// nullified link is still resident and remains a legal probe key.
+/// function**, not a guard against misuse. `observe` matches by COVERAGE —
+/// a claim's F is `enc([old])`, which covers every address BENEATH `old` —
+/// and coverage coincides with denotation only on the `dom(L)`
+/// prefix-antichain (EL4 + R0a): for a non-link `key` lying under some
+/// endpoint, the read would answer *claims whose endpoint lies ABOVE `key`*
+/// rather than *claims whose endpoint IS `key`*. The gate cuts that off, and
+/// `[]` is then the TRUE answer rather than a fallback — a `[K_sup]` endpoint
+/// is `single_denoted` to a resident link address, so a non-link is no
+/// claim's endpoint. Resident, not active: a nullified link is still resident
+/// and remains a legal probe key.
 ///
-/// **Two upstream preconditions are discharged here**, in the one place they
-/// are established, and they arrive on DIFFERENT channels. `type_slice`
-/// FAULTS on a `ty` that is neither address-denoting nor `iextent`-built,
-/// and `sup` comes from `reserved_type`, which is address-denoting by
-/// construction. `match_links`' requirement that no constraint carry an
-/// empty endset is SEMANTIC and not panicking — M7 folds `stab(slot, ⟨⟩, ·)`
-/// to ∅, which empties the AND — so a violation would answer `[]` for every
-/// key, indistinguishable from the true `[]` the gate above returns;
-/// `enc([key])` is one span, so it cannot arise.
+/// **Two upstream preconditions are discharged here**, and they arrive on
+/// DIFFERENT channels. `observe` FAULTS on a `ty` that is neither
+/// address-denoting nor `iextent`-built, and `sup` comes from
+/// `reserved_type`, which is address-denoting by construction. `observe`
+/// reads an EMPTY pattern side as no constraint — SEMANTICALLY, not by
+/// panicking — so a probe built empty would answer every claim of the class,
+/// indistinguishable from a true answer; [`Side::pattern`] builds the probe
+/// out of `key` itself, one tumbler, so it cannot arise.
 ///
-/// **Walked from the hits, and filtered before it is read out.** The claims
-/// naming `key` at `slot` are walked in address order and the `[K_sup]` slice
-/// — the store's whole supersession class under `view` — is only probed, so
-/// the large side is never the walked one (`im`'s `intersection` walks its
-/// argument through its copying consuming iterator). The home rule is asked of
-/// each claim's own address, and only a claim it admits is read out by
-/// [`claim_at`].
+/// The home rule is asked of each claim's own address, and only a claim it
+/// admits is read out by [`claim_at`].
 fn claims_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
-    slot: usize,
     key: &Address,
+    side: Side,
     view: View,
     readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<SupClaim> {
@@ -108,22 +144,19 @@ fn claims_on<W: DiscoveryWorld>(
         return Vec::new(); // resident-key gate (EL4 + R0a)
     }
     let sup = l.reserved_type(ShippedType::Supersedes);
-    let named = enc([key]); // bound: M7 borrows a constraint's query
-    let hits = l.match_links(&[(slot, &named)], view); // claims naming `key` at `slot`
-    let sup_slice = l.type_slice(sup, view); // the [K_sup] class under `view`
-    hits.iter()
-        .filter(|&c| sup_slice.contains(c)) // restrict to supersession claims (Ŝ^Σ = S^Σ)
+    l.observe(sup, side.pattern(key), view) // the [K_sup] claims naming `key` on `side`
+        .into_iter()
         // The result-set filter (PUB round 2, lane 3.3, §3), asked of the
         // claim's own address before it is read out. The endpoints
         // (`old`/`new`) stay as recorded: only the CLAIM's home is asked.
-        .filter(|&c| home_readable(readable, c))
-        .map(|c| claim_at(l, c))
+        .filter(|t| home_readable(readable, &t.addr))
+        .map(|t| claim_at(l, t))
         .collect()
 }
 
-/// The claims with `old = y` (ASN-0125 EL11b `in(y)`): probes FROM under the
-/// flipped convention, in ASCENDING CLAIM-ADDRESS order — the same permanent
-/// key the enumeration families page by, read off M7's own index.
+/// The claims with `old = y` (ASN-0125 EL11b `in(y)`): asks about F (FROM)
+/// under the flipped convention, in ASCENDING CLAIM-ADDRESS order — the same
+/// permanent key the enumeration families page by, read off M7's own index.
 ///
 /// TOTAL: every `Address` is admitted, and a `y` that is no resident link is
 /// no claim's `old`, so `[]` is the answer rather than a refusal — a caller
@@ -148,17 +181,17 @@ pub fn in_claims_on<W: DiscoveryWorld>(
     view: View,
     readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<SupClaim> {
-    claims_on(s, FROM, y, view, readable)
+    claims_on(s, y, Side::Old, view, readable)
 }
 
-/// The claims with `new = x` (ASN-0125 EL11b `out(x)`): probes TO under the
-/// flipped convention. Same key, view, order, endpoint-disclosure and reader
-/// contract (PUB round 2, lane 3.3, §3) as [`in_claims_on`].
+/// The claims with `new = x` (ASN-0125 EL11b `out(x)`): asks about G (TO)
+/// under the flipped convention. Same key, view, order, endpoint-disclosure
+/// and reader contract (PUB round 2, lane 3.3, §3) as [`in_claims_on`].
 pub fn out_claims_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     x: &Address,
     view: View,
     readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<SupClaim> {
-    claims_on(s, TO, x, view, readable)
+    claims_on(s, x, Side::New, view, readable)
 }

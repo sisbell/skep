@@ -86,7 +86,8 @@
 //! **The class-scan bound (wire v7.9; PUB-8.36, PUB-8.37 — PUB round 2,
 //! lane 3.7)**: `/op` admits at most [`MAX_CONCURRENT_CLASS_SCANS`](scan::MAX_CONCURRENT_CLASS_SCANS)
 //! CLASS-SCAN-shaped reads at once — the reads that walk the LINK STORE END
-//! TO END, which as M7 is built is every link-discovery read there is
+//! TO END, or the lineage pair the whole supersession class, which as M7 is
+//! built is every link-discovery read there is
 //! (`scan::is_class_scan` enumerates them and states why the shape of a
 //! query does not narrow one). [`ClassScans`] is the whole bound on one card — the
 //! op test, the pool, and the admission that takes the permit after the

@@ -18,9 +18,9 @@
 ///
 /// * [`crate::image_on`] counts the runs the REGION resolves, which is a
 ///   request-shaped multiple of `#runs(d)`, so whether a `d` is refused
-///   depends on the region asked and not on `d` alone — and holds each span
-///   to the same number ahead of its own resolution, against the most that
-///   span could yield (the granularity note below);
+///   depends on the region asked and not on `d` alone — counted as M5's lazy
+///   resolution is pulled, so the run past the budget is refused before the
+///   next is built (the granularity note below);
 /// * [`crate::project_on`] counts `#content_runs(d)`, because M5's `project`
 ///   joins the coverage against the content runs alone; its PRODUCT is the
 ///   one this constant's square does not hold, that join's pairs being the
@@ -66,12 +66,13 @@
 /// second of one worker.
 ///
 /// * The RUN-LIST WALK behind [`crate::image_on`]. M5 reaches a span by
-///   walking the run-list from its first run — in M5's own cost note,
-///   resolving the last position of an `n`-run list costs `n` steps however
-///   narrow the answer — so a region walks up to `|region| × #runs(d)` runs,
-///   and a span past the end of a fragmented document walks every run and
-///   returns none. The count above prices runs RETURNED and never sees that
-///   walk; the square prices it, ahead of the first `resolve`.
+///   walking the run-list from its first run — as M5 states on
+///   `iter_resolve`'s card, one call passes every run left of the span's
+///   opening ordinal whatever it yields — so a region walks up to
+///   `|region| × #runs(d)` runs, and a span past the end of a fragmented
+///   document walks every run and returns none. The count above prices runs
+///   RETURNED and never sees that walk; the square prices it, ahead of the
+///   first pull.
 /// * The TOUCH TEST behind [`crate::addressably_discoverable_from_on`]: every
 ///   span of a link's coverage against every run, where a link's WHOLE
 ///   coverage is up to `MAX_SLOT_SPANS` a slot, so the run count alone admits
@@ -81,18 +82,12 @@
 ///   is [`crate::project_on`]'s, whose product is the answer it builds and so
 ///   belongs to [`MAX_ANSWER_SPANS`].
 ///
-/// THE GRANULARITY IS A REGION SPAN, as M6's coverage budget's is: the
-/// resolution stops at the first span whose image carries the accumulator
-/// past the budget, so an over-budget request stops resolving rather than
-/// resolving whole and then being measured. Within one span it bounds the
-/// MATERIALIZATION and not merely the count: M5's `resolve` answers a span
-/// whole, in one vector, so [`crate::image_on`] holds each span to this
-/// number ahead of the call, against the most that span could yield —
-/// `min(count, #runs(surface))`, since the resolution is clipped to the span
-/// and every run of it is at least one position wide. Otherwise the number
-/// would bound what a request RETURNS while a single span made M8 hold the
-/// whole of a fragmented document, which is the DOCUMENT's size rather than
-/// the request's shape.
+/// THE GRANULARITY IS A RUN, as M6's coverage budget's is: [`crate::image_on`]
+/// counts the runs as M5's lazy `iter_resolve` hands them over and refuses at
+/// the run past the budget, so an over-budget request never resolves a span,
+/// let alone a region, whole and then is measured. What one request makes M8
+/// hold is the budget and the run that trips it, never the whole of a
+/// fragmented document — the DOCUMENT's size rather than the request's shape.
 ///
 /// `#runs(d)` and `|links|` are the WORLD's, and no number here reaches them:
 /// they stay with request rate and concurrency, which are M10's as the

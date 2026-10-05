@@ -7,9 +7,10 @@ use crate::permits::{Permit, Permits};
 /// Concurrent CLASS SCANS admitted at `/op` at once (wire v7.9; PUB-8.36,
 /// PUB-8.37): the link-discovery reads [`is_class_scan`] enumerates, each of
 /// which walks the LINK STORE END TO END — M7's `stab` is "a brute scan of
-/// `links`" and `match_links` drives its first constraint through it — and
-/// pays a span comparison per link whose count the REQUEST sizes, repeatable
-/// at will from any unauthenticated peer.
+/// `links`" and `match_links` drives its first constraint through it — or,
+/// the lineage pair, the whole supersession class, and pays a span
+/// comparison per link whose count the REQUEST sizes, repeatable at will from
+/// any unauthenticated peer.
 ///
 /// The reconstruction pool's own number
 /// ([`crate::history::MAX_CONCURRENT_RECONSTRUCTIONS`]), for the same reason
@@ -118,11 +119,15 @@ impl ClassScans {
 ///   over the retained (the same statement), and the dearest read on the
 ///   surface: it takes no owner gate by design, so every asker reaches it on
 ///   any registered document;
-/// * `in_claims`, `out_claims`, `edition_claims` — ONE each, a `match_links`
-///   at a single-span query, behind a residence or registration gate. The
-///   query span count is not the request's, but the STORE walk is the same
-///   walk, and it is strictly dearer per link than the all-`"any"` query
-///   above.
+/// * `edition_claims` — ONE, a `match_links` at a single-span query, behind
+///   a registration gate. The query span count is not the request's, but the
+///   STORE walk is the same walk, and it is strictly dearer per link than the
+///   all-`"any"` query above;
+/// * `in_claims`, `out_claims` — no store walk: M8 asks M7's typed `observe`
+///   of the supersession class, a walk of that class's hint behind a
+///   residence gate, one coverage test per claim (the same statement). The
+///   class is the world's, not the request's — every supersession claim in
+///   the docuverse is in it — so the walk is world-sized as the store's is.
 ///
 /// NOTHING ELSE IS BOUNDED, and each absence is a fact about the read rather
 /// than a judgement: `image`, `project` and `discoverable_from` walk no link
@@ -131,9 +136,10 @@ impl ClassScans {
 /// its cost statement records: the square of
 /// [`skep_discovery::MAX_IMAGE_RUNS`] for the walk and for the boolean touch
 /// test, and [`skep_discovery::MAX_ANSWER_SPANS`] for the projection, whose
-/// join builds the span set it answers with. Each span of an `image` region
-/// is held to [`skep_discovery::MAX_IMAGE_RUNS`] ahead of its resolution as
-/// well, so no one of them materializes a fragmented document whole;
+/// join builds the span set it answers with. An `image` region's runs are
+/// counted as M8 pulls them from M5's lazy resolution and refused at the one
+/// past [`skep_discovery::MAX_IMAGE_RUNS`], so no region materializes a
+/// fragmented document whole;
 /// `read_link` and `follow_link` are lookups; the M6 family
 /// (`retrieve_v`, `compare`, `show_deletions`, `find_docs_containing`,
 /// `show_origin`) and the M3 reads touch no link store at all.
@@ -170,8 +176,9 @@ mod tests {
     use crate::codec::JsonCodec;
 
     /// THE CLASS-SCAN TEST, over the OP and not over the query's slots: as
-    /// M7 is built every link-discovery read walks the store end to end, so
-    /// the eleven bounded ops are bounded whatever their slots hold — a
+    /// M7 is built every link-discovery read walks the store end to end, or —
+    /// the lineage pair — the whole supersession class, so the eleven bounded
+    /// ops are bounded whatever their slots hold — a
     /// second constrained slot, an annihilating `"empty"`, a narrow region —
     /// and the reads that walk no link store are bounded by nothing.
     ///
@@ -227,7 +234,8 @@ mod tests {
             // Six scans, and no owner gate: the dearest read on the surface.
             r#"{"d":"1.0.1.0.1","op":"delete_orphans","p":{"subspace":"1","ordinal":"1"},"width":"1"}"#
                 .to_string(),
-            // One scan apiece, at a single-span query.
+            // A walk of the supersession class apiece, and one store scan at
+            // a single-span query.
             r#"{"op":"in_claims","y":"1.0.1.0.1.0.2.1","view":"default"}"#.to_string(),
             r#"{"op":"out_claims","x":"1.0.1.0.1.0.2.1","view":"default"}"#.to_string(),
             r#"{"op":"edition_claims","target":"1.0.1.0.1"}"#.to_string(),

@@ -1,9 +1,11 @@
 //! THE FILES (`media.md` §The media stores; M-I5 (c)): the size check's
 //! read, a size that cannot be read answered as a failure and never as an
 //! absence; the name check at every entry point, and the designation a
-//! creation's function files under; the directory listings, each naming its
-//! own class in name order; and the floor's read of the space available on
-//! the volume.
+//! creation's function files under; a well-formed name with nothing behind
+//! it — no directory yet, an aside another remover took, an entry that is
+//! no file — absent to every read and act; the directory listings, each
+//! naming its own class in name order; and the floor's read of the space
+//! available on the volume.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -182,6 +184,39 @@ fn every_entry_point_answers_a_malformed_name_as_absent_and_touches_nothing() {
     for (d, h) in [("a".repeat(32), "ab".to_string()), ("-".to_string(), "a".repeat(128))] {
         assert_eq!(store.blob_path(&d, &h), Some(root.join(&d).join(&h)), "{d:?}/{h:?}: well-formed at its bound");
     }
+}
+
+/// A WELL-FORMED NAME WITH NOTHING BEHIND IT IS ABSENT TO EVERY READ AND ACT
+/// (`Store::blobs_of`: "An absent directory holds none"; `Store::remove_aside`:
+/// "`Ok(false)` where none stood"; `Store::blob_size`: `Ok(None)` for "no
+/// entry, an entry that is no file"; `blobs::remove_if_present`: "a name
+/// another remover took first … leaves nothing to do"): on a fresh store,
+/// whose designation directory no upload has made — the pruner's pass reads
+/// the pinned designation all the same — every listing is empty and every
+/// act finds nothing; once the deferred unlink has taken a replace's aside,
+/// the pass's own removal of it finds none and says so; and a directory
+/// standing at a hex name is no file to the size check.
+#[test]
+fn a_well_formed_name_with_nothing_behind_it_is_absent_to_every_read_and_act() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let store = open(&root, 0);
+    let bytes = b"the picture's bytes";
+    let hex = hex_of(bytes);
+    assert!(!root.join("blake3").exists(), "no upload has made the designation directory");
+    assert_eq!(store.blobs_of("blake3").unwrap(), Vec::<String>::new(), "no directory: no blob");
+    assert_eq!(store.asides_of("blake3").unwrap(), Vec::<String>::new(), "no directory: no aside");
+    assert_eq!(store.blob_size("blake3", &hex).unwrap(), None, "no directory: no size");
+    assert!(!store.unlink_blob("blake3", &hex).unwrap(), "no directory: nothing to unlink");
+    assert!(!store.remove_aside("blake3", &format!(".retired-{hex}-0")).unwrap(), "no directory: no aside");
+    store.install("blake3", &hex, b"garbage under the right name").unwrap();
+    put_whole(&store, "k", bytes, 1);
+    let aside = store.asides_of("blake3").unwrap().pop().expect("the replace's aside");
+    assert_eq!(store.unlink_asides().unwrap(), 1, "the deferred unlink takes it first");
+    assert!(!store.remove_aside("blake3", &aside).unwrap(), "the pass's removal finds none, and says so");
+    let not_a_file = hex_of(b"a directory at a hex name");
+    fs::create_dir(root.join("blake3").join(&not_a_file)).unwrap();
+    assert_eq!(store.blob_size("blake3", &not_a_file).unwrap(), None, "an entry that is no file is no blob");
 }
 
 /// A KEY NAMES THE FUNCTION THAT MADE IT (`media.md` §The design, item 4,

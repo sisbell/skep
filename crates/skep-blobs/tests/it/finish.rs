@@ -4,9 +4,11 @@
 //! never a mock of the filesystem — and what each failure leaves; the root's
 //! fsync owed until a finish pays it, by every designation directory made
 //! after the open whatever made it; a finish short of its length stopped as
-//! its caller's bug; the finishes run one at a time, and a hold parking its
-//! own finish alone; and no handle left on the hash's file past a finish
-//! that failed after its rename.
+//! its caller's bug; the finishes run one at a time, a hold parking its own
+//! finish alone, and a held finish keeping no other upload's acts waiting;
+//! and past a finish that failed after its rename, no handle left on the
+//! hash's file, and the record it leaves over no partial leaving by its
+//! end, its expiry and the next open past it.
 
 use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -251,6 +253,55 @@ fn a_hold_parks_its_own_finish_and_nothing_else() {
     assert!(store.asides_of("blake3").unwrap().is_empty());
 }
 
+/// A HELD FINISH KEEPS NO OTHER UPLOAD's ACTS WAITING (`Store`'s finish lock:
+/// "No other shipped act takes it, so no append waits on another upload's
+/// finish; the store's other locks are taken under it, briefly"): one finish
+/// parked past its rename — where its syncs fall, the slowest stretch of any
+/// PUT — another principal's creation, resume, append and settle answer,
+/// and so do the reads beside them. (The deferred unlink's freedom from the
+/// seam is `a_hold_parks_its_own_finish_and_nothing_else`'s claim.)
+#[test]
+fn a_held_finish_keeps_no_other_uploads_acts_waiting() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = open(&dir.path().join("blobs"), 0);
+    let held = b"the held finish's bytes";
+    let rec = store.create_upload("a", HashFunction::Blake3, held.len() as u64, INTERVAL, 1).unwrap();
+    let mut stream = store.resume("a", &rec.id, 0, 1).unwrap();
+    stream.append(held, 1).unwrap();
+    let parked = Arc::new(Barrier::new(2));
+    let resumed = Arc::new(Barrier::new(2));
+    let (at_hold, after) = (parked.clone(), resumed.clone());
+    store.hold_at(Step::DirSync, move || {
+        at_hold.wait();
+        after.wait();
+    });
+    let store = &store;
+    let (others, finished) = thread::scope(|s| {
+        let finishing = s.spawn(move || stream.finish(INTERVAL, 2));
+        parked.wait();
+        let (tx, rx) = mpsc::channel();
+        s.spawn(move || {
+            let settled = standing(store, "b", 10, b"abc", 2);
+            tx.send((
+                store.upload("b", &settled.id, 2).map(|r| r.offset),
+                store.pending_bytes("b", 2, every_deposit_unplaced),
+                store.lease_state("a", "blake3", &hex_of(held), 2),
+            ))
+        });
+        // No assertion while the finish is held: a failed one would leave it
+        // parked, the scope waiting on it.
+        let others = rx.recv_timeout(Duration::from_secs(5));
+        resumed.wait();
+        (others, finishing.join())
+    });
+    assert_eq!(
+        others,
+        Ok((Some(3), 3, LeaseState::None)),
+        "another upload's acts, or the reads beside them, waited on the held finish"
+    );
+    assert_eq!(finished.expect("the held finish's thread").expect("the held finish answers").hex, hex_of(held));
+}
+
 /// THE FINISHES RUN ONE AT A TIME (`Store`'s finish lock, held by every
 /// finish from its first act to its answer, "so two finishes of one hash
 /// never interleave the replace's check, link and rename"): with one replace
@@ -327,4 +378,52 @@ fn a_finish_that_failed_past_its_rename_leaves_no_handle_on_the_hashs_file() {
     store.fail_at(None);
     assert!(matches!(store.resume("k", &rec.id, 0, 2), Err(BlobError::Io(_))), "the partial was renamed away");
     assert_eq!(fs::read(&at_hash).unwrap(), bytes, "the hash's file untouched");
+}
+
+/// A RECORD OVER THE PARTIAL A FAILED FINISH TOOK LEAVES BY EVERY EXIT ITS
+/// DOC NAMES (`Stream::finish`, what an `Io` leaves past the rename: "the
+/// record stands in this process over a partial the rename took … until the
+/// upload is ended, expires, or the next open retires it"; `partials::remove`:
+/// "absent is fine"): three finishes fail past their renames, each record
+/// left standing over no partial — the first ended, as a client's
+/// termination ends it; the second expired by the pruner's act at its
+/// expiry; the third outliving its expiry to the next open, as a crash
+/// leaves a retirement line the OS never wrote beside a partial already
+/// gone. Each exit answers as it would over a partial — the end `Ok`, the
+/// expiry `true`, the open whole — and leaves no record, every file a rename
+/// named standing.
+#[test]
+fn a_record_over_the_partial_a_failed_finish_took_leaves_by_every_exit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let store = open(&root, 0);
+    store.fail_at(Some(Step::DirSync));
+    let mut failed = Vec::new();
+    for exit in ["ended", "expired", "reopened"] {
+        let bytes = format!("the {exit} upload's bytes").into_bytes();
+        let rec = store.create_upload("k", HashFunction::Blake3, bytes.len() as u64, INTERVAL, 1).unwrap();
+        let mut stream = store.resume("k", &rec.id, 0, 1).unwrap();
+        stream.append(&bytes, 1).unwrap();
+        assert!(matches!(stream.finish(INTERVAL, 1), Err(BlobError::Io(_))), "{exit}: failed past its rename");
+        assert!(
+            matches!(store.resume("k", &rec.id, 0, 1), Err(BlobError::Io(_))),
+            "{exit}: its record stands over no partial"
+        );
+        failed.push((rec, hex_of(&bytes)));
+    }
+    store.fail_at(None);
+    let (ended, expired, reopened) = (&failed[0].0, &failed[1].0, &failed[2].0);
+    store.end_upload("k", &ended.id, 2).expect("the end answers over no partial");
+    assert_eq!(store.upload("k", &ended.id, 2), None, "ended: retired");
+    let removed = store.expire_upload(&expired.id, expired.expires).expect("the pruner's act answers over no partial");
+    assert!(removed, "expired: removed");
+    assert!(store.expired_uploads(expired.expires).iter().all(|r| r.id != expired.id), "expired: retired");
+    drop(store);
+    // The third exit's check is the open itself: the helper panics where it fails.
+    let store = open(&root, reopened.expires);
+    assert_eq!(store.expired_uploads(reopened.expires), vec![], "the next open retired the record left over nothing");
+    assert_eq!(fs::read_to_string(root.join("uploads.log")).unwrap(), "", "and compacted every record away");
+    for (_, hex) in &failed {
+        assert!(store.blob_size("blake3", hex).unwrap().is_some(), "{hex}: the file its rename named stands");
+    }
 }

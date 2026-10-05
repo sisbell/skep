@@ -37,6 +37,26 @@ fn trust_ends_at_the_first_torn_line_whatever_tore_it() {
     }
 }
 
+/// A WHOLE OBJECT WITHOUT ITS NEWLINE IS A TORN TAIL, NOT A LINE (`Log::open`:
+/// trust ends "at the first line that is no JSON object or that lacks its
+/// newline"): a crash that kept every byte of the last line but its newline
+/// leaves a tail that parses — read as a line, the next append would land on
+/// it, the two run together, and the next open would cut them both, the
+/// appended line answered as durable among them. Open cuts it instead, and
+/// the next append lands on a whole line and reads back.
+#[test]
+fn a_whole_object_without_its_newline_is_a_torn_tail() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("x.log");
+    fs::write(&path, "{\"n\":1}\n{\"n\":2}").unwrap();
+    let (mut log, values) = Log::open(path.clone()).unwrap();
+    assert_eq!(values, vec![json!({"n": 1})], "the unterminated object is no line");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "{\"n\":1}\n", "and is cut off the file");
+    log.append_synced(&json!({"n": 3})).unwrap();
+    drop(log);
+    assert_eq!(Log::open(path).unwrap().1, vec![json!({"n": 1}), json!({"n": 3})], "the next append stands");
+}
+
 /// AN APPEND THAT FAILS is cut back off the file: a write cut short —
 /// part of the line on disk, then an error, as a full disk gives —
 /// leaves the file at its whole lines, the next append lands on a whole
@@ -166,6 +186,30 @@ fn a_compaction_that_fails_past_its_rename_stops_the_log() {
     drop(log);
     let (_, values) = Log::open(path).unwrap();
     assert_eq!(values, vec![json!({"n": 2}), json!({"n": 4})], "a completed compaction lifts the stop");
+}
+
+/// A COMPACTION THAT FAILS BEFORE ITS RENAME LEAVES THE LOG AS IT WAS
+/// (`Log::compact`: "One that fails before its rename leaves the log as it
+/// was"): the twin cannot be written — a directory stands at its name, as a
+/// full disk leaves no room for one — so the file, its count and its appends
+/// are the ones the log had, and it is not stopped: the next append lands
+/// and reads back, and a later compaction, the obstacle gone, rewrites the
+/// file whole.
+#[test]
+fn a_compaction_that_fails_before_its_rename_leaves_the_log_as_it_was() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("x.log");
+    let (mut log, _) = Log::open(path.clone()).unwrap();
+    log.append_synced(&json!({"n": 1})).unwrap();
+    log.append_synced(&json!({"n": 2})).unwrap();
+    fs::create_dir(path.with_extension("compact")).unwrap();
+    assert!(log.compact(vec![json!({"n": 2})].into_iter()).is_err(), "no twin can be written");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "{\"n\":1}\n{\"n\":2}\n", "the log as it was");
+    log.append_synced(&json!({"n": 3})).expect("a log whose compaction failed before its rename takes an append");
+    fs::remove_dir(path.with_extension("compact")).unwrap();
+    log.compact(vec![json!({"n": 2}), json!({"n": 3})].into_iter()).unwrap();
+    drop(log);
+    assert_eq!(Log::open(path).unwrap().1, vec![json!({"n": 2}), json!({"n": 3})], "rewritten whole");
 }
 
 /// THE COMPACTION reads the log's own count of its lines: a log holding

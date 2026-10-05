@@ -3,46 +3,66 @@
 //! reconciliation both ways at open, an offset set back keeping its expiry,
 //! and the sweep of the asides beside it; a partial that cannot be read
 //! failing the open and retiring nothing; a record line read as no record
-//! where it lacks its interval, where its offset passes its length, and
-//! where its designation climbs out of the root, nothing beside the root
-//! touched; and the compaction, down to nothing where nothing stands, over
-//! the twin a kill mid-compaction left beside each log.
+//! where it lacks any member, its interval among them, where its offset
+//! passes its length, and where its designation climbs out of the root,
+//! nothing beside the root touched; and the compaction, down to nothing
+//! where nothing stands, over the twin a kill mid-compaction left beside
+//! each log — a twin never read in place of its log.
 
 use std::fs::{self, OpenOptions};
 use std::time::Duration;
 
-use skep_blobs::{BlobError, Store, UploadId};
+use skep_blobs::{BlobError, LeaseState, Store, UploadId};
 
 use crate::{every_deposit_unplaced, hex_of, open, put_whole, standing, HORIZON, HORIZON_MS, INTERVAL, INTERVAL_MS};
 
-/// (1) A RECORD LINE WITHOUT ITS INTERVAL IS NO RECORD: the store holds no
-/// interval of its own to put in its place, so the line reads as a lost
-/// record does — no upload, its partial an orphan open removes, the resume
-/// starting afresh — while the same line carrying its interval stands.
+/// (1) A RECORD LINE LACKING ANY MEMBER IT CARRIES IS NO RECORD
+/// (`parse_line`: "the store holds no value of its own to put in a missing
+/// member's place"): for each member in turn — the interval among them — a
+/// creation's line lacking it reads as a lost record does: no upload, its
+/// partial an orphan open removes whatever principal the line would answer
+/// to, the resume starting afresh; while the whole line stands, and the
+/// compaction keeps it alone. The lines are a creation's, at offset 0, so a
+/// missing length a default filled with 0 would make a record that stands:
+/// past offset 0, the offset check would refuse the line itself and hide the
+/// default.
 #[test]
-fn a_record_line_without_its_interval_reads_as_no_upload() {
+fn a_record_line_lacking_any_member_reads_as_no_upload() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("blobs");
-    let without = UploadId::parse("0123456789abcdef0123456789abcdef").unwrap();
-    let with = UploadId::parse("fedcba9876543210fedcba9876543210").unwrap();
+    let members = ["designation", "expires", "interval", "key", "length", "offset"];
+    let id_of = |n: usize| UploadId::parse(&hex_of(&[n as u8])[..32]).expect("32 lowercase hex");
     let partial = |id: &UploadId| root.join("blake3").join(format!(".upload-{}", id.to_hex()));
-    fs::create_dir_all(root.join("blake3")).unwrap();
-    fs::write(partial(&without), b"abc").unwrap();
-    fs::write(partial(&with), b"abc").unwrap();
-    let line = |id: &UploadId, interval: &str| {
-        format!(
-            "{{\"designation\":\"blake3\",\"expires\":9999,\"id\":\"{}\",{interval}\"key\":\"k\",\"length\":10,\"offset\":3}}\n",
-            id.to_hex()
-        )
+    let line = |id: &UploadId, lacking: Option<&str>| {
+        let mut v = serde_json::json!({
+            "designation": "blake3", "expires": 9_999, "id": id.to_hex(),
+            "interval": 1_000, "key": "k", "length": 10, "offset": 0,
+        });
+        if let Some(member) = lacking {
+            v.as_object_mut().expect("a record line is an object").remove(member);
+        }
+        format!("{v}\n")
     };
-    fs::write(root.join("uploads.log"), line(&without, "") + &line(&with, "\"interval\":1000,")).unwrap();
+    fs::create_dir_all(root.join("blake3")).unwrap();
+    let whole = id_of(members.len());
+    let mut log = String::new();
+    for (n, &member) in members.iter().enumerate() {
+        fs::write(partial(&id_of(n)), b"").unwrap();
+        log += &line(&id_of(n), Some(member));
+    }
+    fs::write(partial(&whole), b"").unwrap();
+    log += &line(&whole, None);
+    fs::write(root.join("uploads.log"), log).unwrap();
     let store = open(&root, 1);
-    assert!(store.upload("k", &without, 1).is_none(), "no interval, no record");
-    assert!(!partial(&without).exists(), "its partial an orphan open removes");
-    assert!(matches!(store.resume("k", &without, 3, 1), Err(BlobError::NoUpload)));
-    let r = store.upload("k", &with, 1).expect("the line carrying its interval stands");
-    assert_eq!((r.offset, r.interval), (3, Duration::from_millis(1_000)));
-    assert!(partial(&with).is_file());
+    for (n, &member) in members.iter().enumerate() {
+        assert_eq!(store.upload("k", &id_of(n), 1), None, "lacking {member}: no record");
+        assert!(!partial(&id_of(n)).exists(), "lacking {member}: its partial an orphan open removes");
+        assert!(matches!(store.resume("k", &id_of(n), 0, 1), Err(BlobError::NoUpload)), "lacking {member}: no resume");
+    }
+    let r = store.upload("k", &whole, 1).expect("the whole line stands");
+    assert_eq!((r.offset, r.length, r.interval), (0, 10, Duration::from_millis(1_000)));
+    assert!(partial(&whole).is_file(), "its partial kept");
+    assert_eq!(fs::read_to_string(root.join("uploads.log")).unwrap().lines().count(), 1, "compacted to the whole line");
 }
 
 /// (4) A RECORD LINE WHOSE DESIGNATION CLIMBS OUT OF THE ROOT IS NO RECORD
@@ -251,7 +271,10 @@ fn a_partial_that_cannot_be_read_fails_the_open_and_retires_nothing() {
 /// WHAT A KILL MID-COMPACTION LEFT BESIDE IT: a board whose uploads have all
 /// finished or ended and whose every lease has lapsed past the horizon
 /// reopens to two empty logs, and a half-written `.compact` twin a kill left
-/// beside each is read by nothing and written over.
+/// beside each is written over and renamed onto its log. (That open never
+/// reads such a twin in place of its log — which, where nothing stands,
+/// would answer the same nothing — is
+/// `a_half_written_compaction_twin_is_never_read_in_place_of_its_log`'s claim.)
 #[test]
 fn open_compacts_both_logs_to_nothing_over_a_stale_compaction_twin() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -274,4 +297,39 @@ fn open_compacts_both_logs_to_nothing_over_a_stale_compaction_twin() {
         assert!(!root.join(twin).exists(), "{twin}: written over and renamed onto its log");
     }
     assert_eq!((store.uploads_of("k", now), store.live_leases_of("k", now)), (vec![], vec![]));
+}
+
+/// A KILL MID-COMPACTION LEAVES THE OLD LOG WHOLE, AND OPEN READS THE LOG —
+/// NEVER THE TWIN BESIDE IT (`jsonl.rs`: "a crash mid-compaction leaves the
+/// old log whole or the new one, never a mix"): beside each log holding a
+/// current record — a standing upload at its offset, a live lease that
+/// replaced an earlier line — stands the half-written `.compact` twin a kill
+/// left; the reopen answers what the logs hold, each compacted from itself,
+/// where a twin read or renamed in place of its log would answer neither.
+#[test]
+fn a_half_written_compaction_twin_is_never_read_in_place_of_its_log() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let (rec, hex) = {
+        let store = open(&root, 0);
+        put_whole(&store, "k", b"leased", 1);
+        let hex = put_whole(&store, "k", b"leased", 2).hex; // a re-PUT: two lease lines, one current
+        (standing(&store, "k", 10, b"abc", 3), hex)
+    };
+    for twin in ["uploads.compact", "leases.compact"] {
+        fs::write(root.join(twin), b"{\"half\":\"writ").unwrap();
+    }
+    let store = open(&root, 4);
+    assert_eq!(store.upload("k", &rec.id, 4).map(|r| r.offset), Some(3), "the standing upload, as its log held it");
+    assert_eq!(
+        store.lease_state("k", "blake3", &hex, 4),
+        LeaseState::Live { size: 6, expires: 2 + INTERVAL_MS },
+        "the live lease, as its log held it"
+    );
+    for log in ["uploads.log", "leases.log"] {
+        assert_eq!(fs::read_to_string(root.join(log)).unwrap().lines().count(), 1, "{log}: compacted from itself");
+    }
+    for twin in ["uploads.compact", "leases.compact"] {
+        assert!(!root.join(twin).exists(), "{twin}: written over and renamed onto its log");
+    }
 }

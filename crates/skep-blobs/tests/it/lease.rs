@@ -2,12 +2,13 @@
 //! 1, "EACH KEY's CURRENT RECORD IS ITS LATEST, AND OPEN COMPACTS BOTH
 //! STORES"): the three states and the horizon, read off the record alone,
 //! a principal's live leases in hex order, the latest-wins re-PUT, the
-//! compaction at open, the pending bytes, the pruner's read of whether any
-//! principal holds a file live, the torn tail, and a line naming a
-//! malformed designation or hex read as no lease. "A LIVE LEASE
-//! OVER A FILE THAT IS NOT THERE READS AS LAPSED" is the daemon's rule,
-//! built on this store's `lease_state` and `blob_size`; the store's lease
-//! state answers the record and nothing of the file.
+//! compaction at open, the pending bytes — an upload expired and not yet
+//! removed counted by nothing — the pruner's read of whether any principal
+//! holds a file live, the torn tail, and a line naming a malformed
+//! designation or hex, or lacking any member, read as no lease. "A LIVE
+//! LEASE OVER A FILE THAT IS NOT THERE READS AS LAPSED" is the daemon's
+//! rule, built on this store's `lease_state` and `blob_size`; the store's
+//! lease state answers the record and nothing of the file.
 
 use std::fs;
 use std::time::Duration;
@@ -105,12 +106,14 @@ fn the_latest_lease_wins_and_open_compacts_to_it() {
 }
 
 /// THE PENDING BYTES (M-I6 (b)): a principal's unplaced deposits' sizes
-/// plus its standing uploads' durable offsets, falling as a lease lapses;
-/// the venue total the sum over every principal, never the directory's
-/// bytes — one file two principals both leased counts twice there and once
-/// in each principal's own. And a placed deposit — a lease on a hash its
-/// principal's own cells name, which its base counts — is no pending byte;
-/// the partials count whole either way.
+/// plus its standing uploads' durable offsets, falling to nothing as its
+/// leases lapse and its upload expires — an expired upload counted by
+/// nothing, though no pass has removed it yet; the venue total the sum over
+/// every principal, never the directory's bytes — one file two principals
+/// both leased counts twice there and once in each principal's own. And a
+/// placed deposit — a lease on a hash its principal's own cells name, which
+/// its base counts — is no pending byte; the partials count whole either
+/// way.
 #[test]
 fn pending_bytes_are_record_derived_per_principal_and_in_total() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -135,6 +138,11 @@ fn pending_bytes_are_record_derived_per_principal_and_in_total() {
     assert_eq!(store.pending_total(11, &unplaced), 7 + 7);
     let lapsed = 10 + INTERVAL_MS;
     assert_eq!(store.pending_bytes("a", lapsed, every_deposit_unplaced), 0, "lapsed leases count nothing");
+    assert_eq!(
+        store.pending_bytes("b", lapsed, every_deposit_unplaced),
+        0,
+        "b's lapsed lease nothing, nor its upload, expired and not yet removed"
+    );
     assert_eq!(store.pending_total(lapsed, every_deposit_unplaced), 0, "and an expired upload neither");
 }
 
@@ -218,5 +226,38 @@ fn a_lease_line_naming_a_malformed_name_is_no_lease() {
         store.live_leases_of("k", 1).into_iter().map(|l| (l.designation, l.hex)).collect();
     assert_eq!(listed, vec![("blake3".to_string(), hex.clone())], "the well-formed line's lease alone");
     assert_eq!(store.pending_bytes("k", 1, every_deposit_unplaced), 7, "its size alone");
+    assert_eq!(fs::read_to_string(root.join("leases.log")).unwrap().lines().count(), 1, "compacted to it");
+}
+
+/// A LEASE LINE LACKING ANY MEMBER IS NO LEASE (`Lease::parse`: `None` "for a
+/// value of no shape this build reads: a member missing"): the store holds
+/// no value of its own for a member a line lacks, so for each member in
+/// turn, a line lacking it — a log restored from elsewhere — reads as a lost
+/// lease does: live for no principal and kept by no compaction, while the
+/// whole line stands alone.
+#[test]
+fn a_lease_line_lacking_any_member_is_no_lease() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    fs::create_dir_all(&root).unwrap();
+    let members = ["designation", "expires", "hex", "key", "size"];
+    let hex_n = |n: usize| hex_of(&[n as u8]);
+    let line = |hex: &str, lacking: Option<&str>| {
+        let mut v = serde_json::json!({"designation": "blake3", "expires": 9_999, "hex": hex, "key": "k", "size": 7});
+        if let Some(member) = lacking {
+            v.as_object_mut().expect("a lease line is an object").remove(member);
+        }
+        format!("{v}\n")
+    };
+    let whole = hex_n(members.len());
+    let log: String =
+        members.iter().enumerate().map(|(n, &m)| line(&hex_n(n), Some(m))).chain([line(&whole, None)]).collect();
+    fs::write(root.join("leases.log"), log).unwrap();
+    let store = open(&root, 1);
+    for (n, member) in members.iter().enumerate() {
+        assert!(!store.any_live_lease("blake3", &hex_n(n), 1), "lacking {member}: live for no principal");
+    }
+    let listed: Vec<String> = store.live_leases_of("k", 1).into_iter().map(|l| l.hex).collect();
+    assert_eq!(listed, vec![whole], "the whole line's lease alone");
     assert_eq!(fs::read_to_string(root.join("leases.log")).unwrap().lines().count(), 1, "compacted to it");
 }

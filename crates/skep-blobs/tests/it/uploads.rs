@@ -8,7 +8,8 @@
 //! by a byte received and by nothing else, fixed from the upload's own
 //! interval and saturating at the last instant; one handle per request,
 //! closed with its stream; the expiry, an expired upload's stream appending
-//! nothing; the end; and the listings in identifier order.
+//! nothing, and a stream's append judged by its record and not its expiry;
+//! the end; and the listings in identifier order.
 
 use std::fs;
 use std::time::Duration;
@@ -331,7 +332,7 @@ fn an_interval_past_u64_milliseconds_saturates_at_the_last_instant() {
 /// offset the last received, its finish hashing both requests' bytes; a
 /// request cut short receives nothing past the durable point; and an upload
 /// ended under a stream still open answers that stream's append and finish
-/// `NoUpload`, its finish judging that before its length.
+/// `NoUpload`, each judging that before its length.
 #[test]
 fn no_handle_outlives_the_request_that_opened_it() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -352,6 +353,10 @@ fn no_handle_outlives_the_request_that_opened_it() {
     let mut stream = store.resume("k", &ended.id, 0, 3).unwrap();
     store.end_upload("k", &ended.id, 3).unwrap();
     assert!(matches!(stream.append(b"x", 3), Err(BlobError::NoUpload)), "an upload ended under its stream");
+    assert!(
+        matches!(stream.append(&[0; 11], 3), Err(BlobError::NoUpload)),
+        "judged before the length: bytes past it answer the same"
+    );
     assert!(matches!(stream.finish(INTERVAL, 3), Err(BlobError::NoUpload)), "answers its finish too");
 }
 
@@ -404,6 +409,29 @@ fn an_expired_uploads_stream_appends_and_finishes_nothing() {
     assert!(store.expire_upload(&rec.id, rec.expires).unwrap());
     assert!(matches!(stream.append(b"ghi", rec.expires), Err(BlobError::NoUpload)), "it appends nothing");
     assert!(matches!(stream.finish(INTERVAL, rec.expires), Err(BlobError::NoUpload)), "and finishes nothing");
+}
+
+/// A STREAM's APPEND IS JUDGED BY ITS RECORD, NOT ITS EXPIRY (`Stream::append`:
+/// `NoUpload` "judged by whether its record is held, not by its expiry: the
+/// resume found the upload standing (clause (5)), and each grain received
+/// re-fixes its expiry (clause (3))"): a stream whose upload's expiry passes
+/// mid-request, the pruner not yet come, goes on taking bytes, though the
+/// upload no longer stands to a read; the grain it then receives re-fixes the
+/// expiry the upload's own interval past that byte, and the upload stands
+/// again, its settle answering it.
+#[test]
+fn a_streams_append_is_judged_by_its_record_not_its_expiry() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = open(&dir.path().join("blobs"), 0);
+    let rec = store.create_upload("k", HashFunction::Blake3, SYNC_GRAIN + 10, Duration::from_millis(1_000), 0).unwrap();
+    let mut stream = store.resume("k", &rec.id, 0, 1).unwrap();
+    assert_eq!(stream.append(&[1u8; 10], rec.expires).unwrap(), 10, "taken at its expiry, its record held");
+    assert_eq!(store.upload("k", &rec.id, rec.expires), None, "though it no longer stands to a read");
+    let rest = vec![2u8; SYNC_GRAIN as usize - 10];
+    stream.append(&rest, 2_000).unwrap();
+    let r = store.upload("k", &rec.id, 2_000).expect("standing again: the grain re-fixed its expiry");
+    assert_eq!((r.offset, r.expires), (SYNC_GRAIN, 3_000), "the upload's own interval past the grain's byte");
+    assert_eq!(stream.settle(2_500).unwrap().offset, SYNC_GRAIN, "and its settle answers it");
 }
 
 /// THE UPLOAD LISTINGS ANSWER IN IDENTIFIER ORDER (`Store::uploads_of`,

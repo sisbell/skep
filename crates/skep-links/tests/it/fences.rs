@@ -6,15 +6,11 @@ use crate::common;
 
 use common::*;
 use skep_arrangement::HasM5;
-use skep_kernel::{
-    Attestation, BurnedSeqPolicy, CheckpointPolicy, Durability, HistoryError, Kernel, KernelConfig,
-    SaltSource, Seq, TxnError,
-};
+use skep_kernel::{Attestation, HistoryError, Seq, TxnError};
 use skep_links::{
     enc, is_replaces_class, replaces_type, EditLinkError, EmitError, Endset, HasLinks, Link,
     LinkWriter, MakeLinkError, SlotArg, View,
 };
-use tempfile::tempdir;
 
 // ---- the sole-writer fences, on the open surface ----
 
@@ -201,17 +197,7 @@ fn makelink_cannot_forge_an_authority_successor() {
 /// below it is interior — no boundary a reader could stop between them at.
 #[test]
 fn makelink_replacing_commits_record_and_link_together() {
-    let dir = tempdir().expect("tempdir");
-    let cfg = KernelConfig {
-        durability: Durability::Fsync {
-            journal_path: dir.path().to_path_buf(),
-            retain_checkpoints: 1,
-            burned_seq: BurnedSeqPolicy::Rollback,
-        },
-        checkpoint: CheckpointPolicy::Manual,
-        salt: SaltSource::Seeded(0),
-    };
-    let k = Kernel::open(cfg, genesis_world()).expect("journaled open");
+    let k = journaled();
     seed_content(&k, &doc1(), 2);
     let tag1 = Attestation::new(1, vec![0x22; 3_373]).expect("tag 1");
     let w = LinkWriter::attested(&k, &ALL_VISIBLE, Some(&tag1));

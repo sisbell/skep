@@ -6,24 +6,8 @@
 
 use crate::common::*;
 
-use skep_kernel::{
-    Attestation, BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource,
-};
+use skep_kernel::Attestation;
 use skep_links::{LinkWriter, SlotArg};
-use tempfile::tempdir;
-
-fn journaled(dir: &std::path::Path) -> Kernel<World> {
-    let cfg = KernelConfig {
-        durability: Durability::Fsync {
-            journal_path: dir.to_path_buf(),
-            retain_checkpoints: 1,
-            burned_seq: BurnedSeqPolicy::Rollback,
-        },
-        checkpoint: CheckpointPolicy::Manual,
-        salt: SaltSource::Seeded(0),
-    };
-    Kernel::open(cfg, genesis_world()).expect("journaled open")
-}
 
 /// Every link write of the attested writer fills its own transaction's slot
 /// — the `makelink` and the `nullify` here, the other three being driven
@@ -32,8 +16,7 @@ fn journaled(dir: &std::path::Path) -> Kernel<World> {
 /// the claim is signed).
 #[test]
 fn an_attested_writer_fills_the_slot_of_each_of_its_own_link_writes() {
-    let dir = tempdir().expect("tempdir");
-    let k = journaled(dir.path());
+    let k = journaled();
     seed_content(&k, &doc1(), 4);
     let tag1 = Attestation::new(1, vec![0x11; 3_373]).expect("tag 1");
 

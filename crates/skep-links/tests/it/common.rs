@@ -6,17 +6,24 @@
 //! ghost tumblers (`ReservedAddrs::format` — owner ruling, 2026-08-26); the
 //! registry's population is exactly the shipped five, so a managed emit
 //! lands on a shipped Unary idem⊤ class and anything else is unregistered.
+//! The suite's kernels are here too: [`kernel`] and [`kernel_over`] in
+//! memory, and [`journaled`], the one kind that writes commit markers.
+
+use std::ops::Deref;
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{Deposit, HasM5, M5Rec, M5State, VPos, VSpec};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
-use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, WorldState};
+use skep_kernel::{
+    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, WorldState,
+};
 use skep_links::{
     enc, Caller, Endset, HasLinks, LinkRec, LinkState, LinkWriter, ReservedAddrs, SlotArg,
     Visibility,
 };
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
+use tempfile::{tempdir, TempDir};
 
 /// The seeded owner of doc1/doc2 — every pre-ruling op runs under it, so
 /// the ω gate is exercised on every path, not skipped.
@@ -357,12 +364,54 @@ pub fn genesis_world() -> World {
 /// An in-memory kernel over the seeded genesis world (MIC-faithful; no
 /// journal, no recovery).
 pub fn kernel() -> Kernel<World> {
+    kernel_over(genesis_world())
+}
+
+/// An in-memory kernel over `world` — the genesis world for [`kernel`], or a
+/// world a suite decoded and reopens.
+pub fn kernel_over(world: World) -> Kernel<World> {
     let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
         salt: SaltSource::Seeded(0),
     };
-    Kernel::open(cfg, genesis_world()).expect("in-memory open cannot fail")
+    Kernel::open(cfg, world).expect("in-memory open cannot fail")
+}
+
+/// A journaled kernel and the temporary directory its journal lives in, held
+/// together so the directory cannot be removed while the kernel still writes
+/// there: the fields are private and the kernel is declared first, so it
+/// drops before the directory does. Derefs to the kernel, so a test uses it
+/// as one.
+pub struct Journaled {
+    kernel: Kernel<World>,
+    _dir: TempDir,
+}
+
+impl Deref for Journaled {
+    type Target = Kernel<World>;
+    fn deref(&self) -> &Kernel<World> {
+        &self.kernel
+    }
+}
+
+/// A journaled kernel over the seeded genesis world, its journal in a fresh
+/// temporary directory. Only a journaled kernel writes commit markers, so a
+/// suite that reads an attestation back with `Kernel::attestation_at` opens
+/// this one — an in-memory kernel refuses that read as `Unjournaled`.
+pub fn journaled() -> Journaled {
+    let dir = tempdir().expect("a temporary journal directory");
+    let cfg = KernelConfig {
+        durability: Durability::Fsync {
+            journal_path: dir.path().to_path_buf(),
+            retain_checkpoints: 1,
+            burned_seq: BurnedSeqPolicy::Rollback,
+        },
+        checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
+    };
+    let kernel = Kernel::open(cfg, genesis_world()).expect("journaled open");
+    Journaled { kernel, _dir: dir }
 }
 
 /// Seed `count` one-byte content values into `doc`'s content subspace via

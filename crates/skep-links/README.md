@@ -1,24 +1,34 @@
 # skep-links
 
-The link store: typed, first-class, bidirectional links over
-span-sets — the relation layer of the docuverse.
+The link store: typed, first-class, bidirectional links whose ends are
+spans of the address space — the relation layer of the docuverse.
 
 Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substrate in the Project Xanadu lineage.
 
-- **Links as records** — each link is homed in a document and carries
-  three endsets (from / to / type) as span-sets over the address
-  space; links are values in ordinary address space, not metadata.
-- **Typed by address** — a link's type is itself a document address,
-  so type vocabularies are content and extensible by publication.
-- **Emit and dedup** — link creation with a canonical coverage-class
-  key: denotationally identical links deduplicate to one identity.
-- **Supersession** — asserted successor relations with reserved
-  classes; readers can follow "what replaced this".
-- **Queries** — `readlink`, `followlink`, stab and match over active
-  and audit views (a nullified link is invisible to readers, present
-  to auditors).
+- **Links as records** — each link has a permanent address in its home
+  document, so a link can name another link, and carries three endsets
+  (from / to / type), each a span sequence stored exactly as deposited.
+  Nothing stored is ever updated or removed.
+- **Typed by address** — a type is matched by the addresses its slot
+  names, never by their contents, so any address can type a link. Five
+  shipped types, at ghost addresses where nothing is ever minted, carry
+  the substrate's own meaning; every other type means what the client
+  reading it says it means, and no document defines one.
+- **Two write surfaces** — `makelink` deposits a link of any type but
+  three fenced classes and always mints a fresh one; `emit`, `nullify`
+  and `assert_sup` admit only registered types, check each type's
+  shape, and answer a duplicate with the earliest incumbent the caller
+  can read.
+- **Retraction and supersession** — `nullify` deposits a retraction
+  link: its target leaves every active view and stays in the audit
+  view and in `readlink`. `assert_sup` and `editlink` record what
+  replaced a link; the walk follows the chain and stops at a fork
+  rather than choosing.
+- **Queries** — `readlink`, `followlink`, the typed reads over active
+  and audit views, and the overlap matcher
+  [skep-discovery](../skep-discovery) presents.
 
-State rides the kernel; endset algebra comes from
+State rides the kernel; span algebra comes from
 [skep-address](../skep-address).
 
 ## License

@@ -637,9 +637,9 @@ Rules that hold across its files:
 
 Its integration suite is one binary, `tests/it/`: one file per op family,
 per gate that crosses them and per part of the read surface, over the
-shared `common` world; `carrier`, the contracts that need no kernel;
-`recovery`, the hints a checkpoint must rebuild; and `tidy`, which checks
-the module map and the first rule.
+shared `common` world and the kernels it opens; `carrier`, the contracts
+that need no kernel; `recovery`, the hints a checkpoint must rebuild; and
+`tidy`, which checks the module map and the first rule.
 
 ## The link reads, `skep-discovery`
 

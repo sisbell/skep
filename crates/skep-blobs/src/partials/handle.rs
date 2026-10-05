@@ -4,6 +4,9 @@
 //! whatever an earlier request left past the offset — a write that failed
 //! partway, bytes synced before a record write that failed — is gone before
 //! another byte lands. No handle outlives its request ([`Handle`]).
+//!
+//! Beside the handle, the function its hasher computes ([`HashFunction`])
+//! and the designation that function's files are filed under.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -12,15 +15,35 @@ use std::path::Path;
 use super::partial_path;
 use crate::uploads::UploadId;
 
-/// THE DESIGNATION OF THE HASH A HANDLE COMPUTES — `blake3`: BLAKE3's
-/// default hash of the file's bytes, 32 bytes spelled as 64 lowercase hex,
-/// the name the cell's schema gives it (`media.md` §The design, item 4,
-/// "THE HASH IS BLAKE3"; Q-sm1). A key names the function that made it
-/// ("EVERY SIDECAR KEY NAMES ITS FUNCTION, FROM THE FIRST FILE"), so this is
-/// the one designation a finish can file a file under, and the one a
-/// creation admits; a second schema's hash would be a second function here,
-/// under its own name.
-pub(crate) const HASH_DESIGNATION: &str = "blake3";
+/// THE HASH FUNCTIONS A HANDLE COMPUTES — one: BLAKE3's default hash of the
+/// file's bytes, 32 bytes spelled as 64 lowercase hex, the hash the cell's
+/// schema names (`media.md` §The design, item 4, "THE HASH IS BLAKE3";
+/// Q-sm1). A key names the function that made it ("EVERY SIDECAR KEY NAMES
+/// ITS FUNCTION, FROM THE FIRST FILE"), so a creation names one of these
+/// ([`Store::create_upload`](crate::Store::create_upload)), and its partial,
+/// record, file and lease are filed under its designation; a second
+/// schema's hash is a second variant here, beside its own hasher.
+///
+/// `#[non_exhaustive]`: a caller names a variant and has no match to make
+/// over them, so a further function is an addition rather than a broken
+/// build; this crate's own matches see every variant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum HashFunction {
+    /// BLAKE3's default hash, designated `blake3`.
+    Blake3,
+}
+
+impl HashFunction {
+    /// The function's DESIGNATION — the name its keys spell it by, and the
+    /// directory under the root its files live in. Every variant's passes the
+    /// store's name check (this file's unit suite holds them to it).
+    pub const fn designation(self) -> &'static str {
+        match self {
+            HashFunction::Blake3 => "blake3",
+        }
+    }
+}
 
 /// THE HANDLE: the partial opened for one request — by [`open_at`] at the
 /// request's resume, and dropped with its [`Stream`](crate::Stream): the
@@ -198,6 +221,18 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"AC");
         assert_eq!(handle.hash(), blake3::hash(b"AC"));
         assert_eq!(handle.written(), 2);
+    }
+
+    /// EVERY FUNCTION's DESIGNATION PASSES THE NAME CHECK — a creation files
+    /// under it, and every read takes a name back through that check — and
+    /// BLAKE3's is the cell schema's own, `blake3` (Q-sm1).
+    #[test]
+    #[allow(clippy::single_element_loop)] // every function there is: a second joins the list
+    fn every_functions_designation_passes_the_name_check() {
+        for function in [HashFunction::Blake3] {
+            assert!(crate::blobs::designation_ok(function.designation()), "{function:?}");
+        }
+        assert_eq!(HashFunction::Blake3.designation(), "blake3");
     }
 
     /// A PARTIAL SHORTER THAN ITS RECORD's OFFSET IS REFUSED, NEVER EXTENDED:

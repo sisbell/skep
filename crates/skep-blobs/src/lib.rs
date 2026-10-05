@@ -72,8 +72,10 @@
 //!   PANICS, naming the obligation it breaks ([`Stream::finish`]);
 //!   [`BlobError`] carries only answers a caller acts on.
 //! * A KEY NAMES THE FUNCTION THAT MADE IT: the store computes one hash,
-//!   BLAKE3's, and a creation names its designation, `blake3`, or is
-//!   refused ([`Store::create_upload`]; `media.md` §The design, item 4).
+//!   BLAKE3's, and a creation names it by type — [`HashFunction::Blake3`],
+//!   filed under its designation, `blake3` — so no creation can name a
+//!   function the store does not compute ([`Store::create_upload`];
+//!   `media.md` §The design, item 4).
 //!
 //! The `test-hooks` feature compiles in the test seam (`store/hooks.rs`):
 //! the hazard seam — a hold or an injected failure at a named [`Step`] of
@@ -103,8 +105,8 @@ mod lease;
 // The partials, `.upload-<identifier>`: their name, and the walk at open
 // that reconciles them with the records; beneath them, the handle a request
 // opens on one (`partials/handle.rs`: `Handle`, the bytes written and their
-// hash, kept true across a failed write, and the designation that hash
-// files under).
+// hash, kept true across a failed write, and `HashFunction`, the function
+// that hash is and the designation it files under).
 mod partials;
 // `Store`, the four opened as one, and `Stream`, an upload open for one
 // request: the order of their acts — the resume, the settle, the finish
@@ -114,7 +116,7 @@ mod store;
 
 pub use error::BlobError;
 pub use lease::{Lease, LeaseState};
-pub use partials::SYNC_GRAIN;
+pub use partials::{HashFunction, SYNC_GRAIN};
 pub use store::{Finished, Step, Store, Stream};
 pub use uploads::{NotAnUploadId, UploadId, UploadRecord, IDENTIFIER_BYTES};
 
@@ -139,6 +141,7 @@ const _: fn() = || {
     // The values a caller keeps.
     fn kept<T: Clone + Eq + std::hash::Hash + std::fmt::Debug + Send + Sync>() {}
     kept::<Finished>();
+    kept::<HashFunction>();
     kept::<Lease>();
     kept::<LeaseState>();
     kept::<Step>();

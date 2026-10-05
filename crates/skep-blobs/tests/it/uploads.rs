@@ -13,7 +13,7 @@
 use std::fs;
 use std::time::Duration;
 
-use skep_blobs::{BlobError, LeaseState, NotAnUploadId, UploadId, UploadRecord, SYNC_GRAIN};
+use skep_blobs::{BlobError, HashFunction, LeaseState, NotAnUploadId, UploadId, UploadRecord, SYNC_GRAIN};
 
 use crate::{every_deposit_unplaced, hex_of, open, standing, INTERVAL, INTERVAL_MS};
 
@@ -31,8 +31,8 @@ use crate::{every_deposit_unplaced, hex_of, open, standing, INTERVAL, INTERVAL_M
 fn the_identifier_is_32_lowercase_hex_and_answers_to_its_principal_alone() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = open(&dir.path().join("blobs"), 0);
-    let first = store.create_upload("a", "blake3", 5, INTERVAL, 0).unwrap();
-    let second = store.create_upload("a", "blake3", 5, INTERVAL, 0).unwrap();
+    let first = store.create_upload("a", HashFunction::Blake3, 5, INTERVAL, 0).unwrap();
+    let second = store.create_upload("a", HashFunction::Blake3, 5, INTERVAL, 0).unwrap();
     assert_ne!(first.id, second.id);
     assert_eq!(first.id.to_hex().len(), 32);
     assert!(first.id.to_hex().bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)));
@@ -79,7 +79,7 @@ fn consecutive_identifiers_stand_in_no_order_and_differ_in_most_bits() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = open(&dir.path().join("blobs"), 0);
     let ids: Vec<UploadId> =
-        (0..16).map(|_| store.create_upload("k", "blake3", 1, INTERVAL, 0).unwrap().id).collect();
+        (0..16).map(|_| store.create_upload("k", HashFunction::Blake3, 1, INTERVAL, 0).unwrap().id).collect();
     assert!(!ids.windows(2).all(|w| w[0] < w[1]), "the mints rise: {ids:?}");
     assert!(!ids.windows(2).all(|w| w[0] > w[1]), "the mints fall: {ids:?}");
     let bits = |id: &UploadId| u128::from_str_radix(&id.to_hex(), 16).expect("32 hex");
@@ -134,7 +134,9 @@ fn every_act_answers_no_upload_for_every_identifier_the_asker_does_not_hold() {
     let root = dir.path().join("blobs");
     let store = open(&root, 0);
     let whole = |bytes: &[u8]| {
-        let rec = store.create_upload("a", "blake3", bytes.len() as u64, Duration::from_millis(1_000), 0).unwrap();
+        let rec = store
+            .create_upload("a", HashFunction::Blake3, bytes.len() as u64, Duration::from_millis(1_000), 0)
+            .unwrap();
         let mut stream = store.resume("a", &rec.id, 0, 0).unwrap();
         stream.append(bytes, 0).unwrap();
         stream.settle(0).unwrap()
@@ -182,7 +184,7 @@ fn a_byte_is_received_once_durable_and_a_resume_continues_from_the_records_offse
     let root = dir.path().join("blobs");
     let store = open(&root, 0);
     let length = SYNC_GRAIN + 100;
-    let rec = store.create_upload("k", "blake3", length, INTERVAL, 0).unwrap();
+    let rec = store.create_upload("k", HashFunction::Blake3, length, INTERVAL, 0).unwrap();
     let mut stream = store.resume("k", &rec.id, 0, 10).unwrap();
     // Short of the grain: written, not received.
     stream.append(&[1u8; 100], 10).unwrap();
@@ -245,7 +247,7 @@ fn a_request_that_receives_nothing_moves_no_expiry_and_writes_no_record() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("blobs");
     let store = open(&root, 0);
-    let rec = store.create_upload("k", "blake3", 10, INTERVAL, 0).unwrap();
+    let rec = store.create_upload("k", HashFunction::Blake3, 10, INTERVAL, 0).unwrap();
     let mut stream = store.resume("k", &rec.id, 0, 10).unwrap();
     stream.append(b"abc", 10).unwrap();
     let fixed = stream.settle(10).unwrap().expires;
@@ -276,15 +278,15 @@ fn the_interval_is_the_uploads_own_from_its_creation() {
     let root = dir.path().join("blobs");
     let (first, later, fine) = {
         let store = open(&root, 0);
-        let first = store.create_upload("k", "blake3", 10, Duration::from_millis(1_000), 0).unwrap();
+        let first = store.create_upload("k", HashFunction::Blake3, 10, Duration::from_millis(1_000), 0).unwrap();
         assert_eq!((first.interval, first.expires), (Duration::from_millis(1_000), 1_000));
         let mut stream = store.resume("k", &first.id, 0, 10).unwrap();
         stream.append(b"a", 10).unwrap();
         assert_eq!(stream.settle(10).unwrap().expires, 1_010);
         // A later upload, created under another interval: its own alone.
-        let later = store.create_upload("k", "blake3", 10, Duration::from_millis(5_000), 10).unwrap();
+        let later = store.create_upload("k", HashFunction::Blake3, 10, Duration::from_millis(5_000), 10).unwrap();
         assert_eq!(later.expires, 5_010);
-        let fine = store.create_upload("k", "blake3", 10, Duration::from_micros(2_500), 10).unwrap();
+        let fine = store.create_upload("k", HashFunction::Blake3, 10, Duration::from_micros(2_500), 10).unwrap();
         assert_eq!((fine.interval, fine.expires), (Duration::from_millis(2), 12), "held in whole milliseconds");
         (first.id, later.id, fine)
     };
@@ -312,7 +314,7 @@ fn an_interval_past_u64_milliseconds_saturates_at_the_last_instant() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("blobs");
     let forever = Duration::from_secs(u64::MAX);
-    let rec = open(&root, 0).create_upload("k", "blake3", 5, forever, 7).unwrap();
+    let rec = open(&root, 0).create_upload("k", HashFunction::Blake3, 5, forever, 7).unwrap();
     assert_eq!((rec.interval, rec.expires), (Duration::from_millis(u64::MAX), u64::MAX));
     let store = open(&root, u64::MAX - 1);
     assert_eq!(store.upload("k", &rec.id, u64::MAX - 1), Some(rec.clone()), "read back as answered, standing");
@@ -334,7 +336,7 @@ fn an_interval_past_u64_milliseconds_saturates_at_the_last_instant() {
 fn no_handle_outlives_the_request_that_opened_it() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = open(&dir.path().join("blobs"), 0);
-    let rec = store.create_upload("k", "blake3", 10, INTERVAL, 0).unwrap();
+    let rec = store.create_upload("k", HashFunction::Blake3, 10, INTERVAL, 0).unwrap();
     let mut first = store.resume("k", &rec.id, 0, 1).unwrap();
     first.append(b"first", 1).unwrap();
     assert_eq!(first.settle(1).unwrap().offset, 5, "a settle short of the length receives the request's bytes");
@@ -394,7 +396,7 @@ fn the_expired_uploads_are_listed_and_removed_while_the_store_serves() {
 fn an_expired_uploads_stream_appends_and_finishes_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = open(&dir.path().join("blobs"), 0);
-    let rec = store.create_upload("k", "blake3", 10, INTERVAL, 0).unwrap();
+    let rec = store.create_upload("k", HashFunction::Blake3, 10, INTERVAL, 0).unwrap();
     let mut stream = store.resume("k", &rec.id, 0, 1).unwrap();
     stream.append(b"abc", 1).unwrap();
     assert!(!store.expire_upload(&rec.id, rec.expires - 1).unwrap(), "a standing upload is left as it is");
@@ -412,8 +414,9 @@ fn an_expired_uploads_stream_appends_and_finishes_nothing() {
 fn the_upload_listings_answer_in_identifier_order() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = open(&dir.path().join("blobs"), 0);
-    let mut ids: Vec<UploadId> =
-        (0..8).map(|_| store.create_upload("k", "blake3", 1, Duration::from_millis(10), 0).unwrap().id).collect();
+    let mut ids: Vec<UploadId> = (0..8)
+        .map(|_| store.create_upload("k", HashFunction::Blake3, 1, Duration::from_millis(10), 0).unwrap().id)
+        .collect();
     ids.sort();
     let listed = |records: Vec<UploadRecord>| records.into_iter().map(|r| r.id).collect::<Vec<_>>();
     assert_eq!(listed(store.uploads_of("k", 5)), ids, "standing");
@@ -439,7 +442,11 @@ fn an_ended_upload_keeps_nothing_and_a_torn_log_tail_is_cut() {
         assert!(!root.join("blake3").join(format!(".upload-{}", a.id.to_hex())).exists());
         assert!(matches!(store.end_upload("k", &a.id, 2), Err(BlobError::NoUpload)));
         assert!(matches!(store.resume("k", &a.id, 0, 2), Err(BlobError::NoUpload)));
-        assert_ne!(store.create_upload("k", "blake3", 100, INTERVAL, 2).unwrap().id, a.id, "never minted again");
+        assert_ne!(
+            store.create_upload("k", HashFunction::Blake3, 100, INTERVAL, 2).unwrap().id,
+            a.id,
+            "never minted again"
+        );
         b.id
     };
     // A torn line appended to the log: the next open cuts it and reads the

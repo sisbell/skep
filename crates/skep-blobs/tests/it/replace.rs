@@ -11,7 +11,7 @@ use std::fs;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
-use skep_blobs::{BlobError, LeaseState, Step};
+use skep_blobs::{BlobError, HashFunction, LeaseState, Step};
 
 use crate::{hex_of, open, put_whole, INTERVAL};
 
@@ -49,7 +49,7 @@ fn a_failure_at_each_step_of_a_replace_leaves_the_new_bytes_past_the_rename() {
             let store = open(&root, now);
             store.install("blake3", &hex, &wrong).unwrap();
             store.fail_at(Some(*step));
-            let rec = store.create_upload("k", "blake3", right.len() as u64, INTERVAL, now).unwrap();
+            let rec = store.create_upload("k", HashFunction::Blake3, right.len() as u64, INTERVAL, now).unwrap();
             let mut stream = store.resume("k", &rec.id, 0, now).unwrap();
             stream.append(&right, now).unwrap();
             stream.settle(now).unwrap();
@@ -139,7 +139,7 @@ fn every_replace_of_a_hash_takes_an_aside_name_of_its_own() {
     let bytes = b"the same bytes, again and again".to_vec();
     put_whole(&store, "a", &bytes, 1);
     store.fail_at(Some(Step::DirSync));
-    let rec = store.create_upload("b", "blake3", bytes.len() as u64, INTERVAL, 2).unwrap();
+    let rec = store.create_upload("b", HashFunction::Blake3, bytes.len() as u64, INTERVAL, 2).unwrap();
     let mut stream = store.resume("b", &rec.id, 0, 2).unwrap();
     stream.append(&bytes, 2).unwrap();
     assert!(matches!(stream.finish(INTERVAL, 2), Err(BlobError::Io(_))));

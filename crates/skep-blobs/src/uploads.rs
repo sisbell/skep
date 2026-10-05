@@ -94,6 +94,10 @@ pub struct UploadRecord {
     /// The uploader — the principal the upload answers to alone (clause
     /// (1)), as its caller spells it.
     pub principal: String,
+    /// The designation the upload's line spells: its creation's function's
+    /// ([`HashFunction::designation`](crate::HashFunction::designation)), or,
+    /// off a log restored from elsewhere, any designation the name check
+    /// admits — a name read from disk, so a string and not the type.
     pub designation: String,
     pub length: u64,
     pub offset: u64,
@@ -275,8 +279,8 @@ impl UploadRecords {
     /// held as its line spells it, in whole milliseconds, so the record open
     /// reads back is the record answered here, and its first expiry that
     /// interval past `now_ms` — written, synced and answered. The store
-    /// creates the partial first and hands the one designation it admits,
-    /// its hash's ([`Store::create_upload`](crate::Store::create_upload)).
+    /// creates the partial first and hands the designation of the function
+    /// the creation named ([`Store::create_upload`](crate::Store::create_upload)).
     pub fn create(
         &mut self,
         id: UploadId,

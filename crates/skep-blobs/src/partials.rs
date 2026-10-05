@@ -26,19 +26,21 @@
 //! act).
 
 // The handle a request opens on a partial: its open file, the hash of
-// every byte written and the designation that hash files under, and the
-// tear a failed write or sync leaves.
+// every byte written, and the tear a failed write or sync leaves; and
+// `HashFunction`, the functions that hash can be, each with the
+// designation it files under.
 mod handle;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::blobs::{dirs_under, fsync_dir, names_in, remove_if_present};
+use crate::blobs::{dirs_under, fsync_dir, names_in, not_found_as_none, remove_if_present};
 use crate::uploads::{UploadId, UploadRecords};
 
-pub(crate) use handle::{open_at, Handle, HASH_DESIGNATION};
+pub use handle::HashFunction;
+pub(crate) use handle::{open_at, Handle};
 
 /// THE FSYNC GRAIN of a partial — 1 MiB, INTERIM: the most a dropped
 /// connection re-sends, against one fsync of the partial and one of the
@@ -49,7 +51,7 @@ pub const SYNC_GRAIN: u64 = 1024 * 1024;
 /// `.upload-<identifier>`: the dot keeps it apart from any hex name a walk
 /// of the directory reads as a blob.
 fn partial_name(id: &UploadId) -> String {
-    format!(".upload-{}", id.to_hex())
+    format!(".upload-{id}")
 }
 
 /// The identifier a partial's file name spells, if it is one.
@@ -86,7 +88,8 @@ pub(crate) fn remove(root: &Path, designation: &str, id: &UploadId) -> io::Resul
 /// THE RECONCILIATION AT OPEN, both ways, in every designation directory
 /// under `root`.
 pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -> io::Result<()> {
-    let mut named: HashSet<(String, UploadId)> = HashSet::new();
+    // The identifiers the standing records name, by designation directory.
+    let mut named: HashMap<String, HashSet<UploadId>> = HashMap::new();
     // Records first: expired ones removed as the end and the pruner remove
     // one, the partial before the record; the rest held to their partials.
     let all: Vec<_> = records.all().cloned().collect();
@@ -100,14 +103,11 @@ pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -
         // Absent is the one answer that retires: a record naming a partial
         // that cannot be read still names one, so that failure fails the
         // open, and nothing is retired for a later open to remove as orphan.
-        let len = match fs::metadata(&path) {
-            Ok(meta) => meta.len(),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                records.retire(&r.id)?;
-                continue;
-            }
-            Err(e) => return Err(e),
+        let Some(meta) = not_found_as_none(fs::metadata(&path))? else {
+            records.retire(&r.id)?;
+            continue;
         };
+        let len = meta.len();
         if len > r.offset {
             let f = OpenOptions::new().write(true).open(&path)?;
             f.set_len(r.offset)?;
@@ -115,12 +115,13 @@ pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -
         } else if len < r.offset {
             records.set_back(&r.id, len)?;
         }
-        named.insert((r.designation.clone(), r.id));
+        named.entry(r.designation.clone()).or_default().insert(r.id);
     }
     // Then the directories: every partial no record names is an orphan.
     for designation in dirs_under(root)? {
+        let named_here = named.get(&designation);
         let orphans = names_in(root, &designation, |name, _| {
-            id_of_partial_name(name).is_some_and(|id| !named.contains(&(designation.clone(), id)))
+            id_of_partial_name(name).is_some_and(|id| !named_here.is_some_and(|ids| ids.contains(&id)))
         })?;
         let dir = root.join(&designation);
         for name in &orphans {

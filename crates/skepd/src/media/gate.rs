@@ -522,13 +522,17 @@ pub(crate) fn wall_clock_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use skep_blobs::HashFunction;
+
     use super::*;
 
-    /// The gate deposits under the cell schema's own designation: the two
-    /// spellings are one.
+    /// The gate deposits under the cell schema's own designation: the three
+    /// spellings — the cell schema's, this gate's and the store's
+    /// function's — are one.
     #[test]
     fn the_designation_is_the_cell_schemas() {
         assert_eq!(DESIGNATION, super::super::cell::DESIGNATION);
+        assert_eq!(DESIGNATION, HashFunction::Blake3.designation(), "the store files every deposit under it");
     }
 
     /// The daemon's defaults: nothing bound but the per-file cap, the lease
@@ -589,7 +593,7 @@ mod tests {
         let now = gate.now_ms();
         let store = gate.store();
         let key = MediaGate::key(p);
-        let rec = store.create_upload(&key, DESIGNATION, 9, Duration::from_millis(10_000), now).unwrap();
+        let rec = store.create_upload(&key, HashFunction::Blake3, 9, Duration::from_millis(10_000), now).unwrap();
         let mut stream = store.resume(&key, &rec.id, 0, now).unwrap();
         stream.append(bytes, now).unwrap();
         let fin = stream.finish(Duration::from_millis(10_000), now).unwrap();
@@ -603,7 +607,7 @@ mod tests {
         assert_eq!(gate.binding(p, &cell), Binding::Unbound, "past the horizon: no lease");
         // A fresh lease, then the file removed from under it.
         let now = gate.now_ms();
-        let rec = store.create_upload(&key, DESIGNATION, 9, Duration::from_millis(10_000), now).unwrap();
+        let rec = store.create_upload(&key, HashFunction::Blake3, 9, Duration::from_millis(10_000), now).unwrap();
         let mut stream = store.resume(&key, &rec.id, 0, now).unwrap();
         stream.append(bytes, now).unwrap();
         stream.finish(Duration::from_millis(10_000), now).unwrap();
@@ -613,7 +617,7 @@ mod tests {
 
         // THE INDEX ARM. The file re-deposited, the cell entered as p's.
         let now = gate.now_ms();
-        let rec = store.create_upload(&key, DESIGNATION, 9, Duration::from_millis(10_000), now).unwrap();
+        let rec = store.create_upload(&key, HashFunction::Blake3, 9, Duration::from_millis(10_000), now).unwrap();
         let mut stream = store.resume(&key, &rec.id, 0, now).unwrap();
         stream.append(bytes, now).unwrap();
         stream.finish(Duration::from_millis(10_000), now).unwrap();

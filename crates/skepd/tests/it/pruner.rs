@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use skep_blobs::Store;
+use skep_blobs::{HashFunction, Store};
 use skep_identity::{encode_retire, Fingerprint};
 
 use crate::common;
@@ -379,7 +379,7 @@ fn pruner_drain_keeps_plain_writes_and_a_retirement_inside_e2() {
             for i in 0..n {
                 // One distinct file per lease: the first bytes carry the index.
                 buf[..8].copy_from_slice(&(i as u64).to_le_bytes());
-                let rec = store.create_upload(&key, "blake3", size as u64, lease, now).unwrap();
+                let rec = store.create_upload(&key, HashFunction::Blake3, size as u64, lease, now).unwrap();
                 let mut stream = store.resume(&key, &rec.id, 0, now).unwrap();
                 stream.append(&buf, now).unwrap();
                 stream.finish(lease, now).unwrap();

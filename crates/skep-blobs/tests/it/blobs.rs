@@ -1,12 +1,14 @@
 //! THE FILES (`media.md` §The media stores; M-I5 (c)): the size check's
 //! read, a size that cannot be read answered as a failure and never as an
-//! absence; the name check at every entry point, and the one designation a
-//! creation may name; the directory listings, each naming its own class in
-//! name order; and the floor's read of the space available on the volume.
+//! absence; the name check at every entry point, and the designation a
+//! creation's function files under; the directory listings, each naming its
+//! own class in name order; and the floor's read of the space available on
+//! the volume.
 
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
+
+use skep_blobs::HashFunction;
 
 use crate::{hex_of, open, put_whole, standing, INTERVAL};
 
@@ -93,7 +95,7 @@ fn an_unreadable_size_is_a_failure_never_an_absence() {
     if unreadable == Ok(Some(5)) {
         return; // a privileged process searches any directory: nothing to inject
     }
-    assert_eq!(unreadable, Err(io::ErrorKind::PermissionDenied), "the failure answered, never an absence");
+    assert_eq!(unreadable, Err(std::io::ErrorKind::PermissionDenied), "the failure answered, never an absence");
     assert_eq!(store.blob_size("blake3", &fin.hex).unwrap(), Some(5), "readable again, the file answers its size");
 }
 
@@ -119,12 +121,12 @@ fn tree(at: &Path) -> Vec<(PathBuf, Option<Vec<u8>>)> {
 }
 
 /// THE STORE CHECKS EVERY NAME IT IS HANDED (`Store`: "a malformed one is
-/// answered as absent by every read and act … and refused as
-/// `InvalidInput` by `create_upload`"): over families of malformed names —
-/// escapes that reach a file that stands, the wrong case, each length just
-/// past its bound, a partial's, a blob's and near-aside spellings where an
-/// aside's belongs — every entry point answers absent and nothing under the
-/// root or beside it is touched; the names AT each bound are well-formed.
+/// answered as absent by every read and act" — `create_upload` takes no
+/// name): over families of malformed names — escapes that reach a file that
+/// stands, the wrong case, each length just past its bound, a partial's, a
+/// blob's and near-aside spellings where an aside's belongs — every entry
+/// point answers absent and nothing under the root or beside it is touched;
+/// the names AT each bound are well-formed.
 #[test]
 fn every_entry_point_answers_a_malformed_name_as_absent_and_touches_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -150,8 +152,6 @@ fn every_entry_point_answers_a_malformed_name_as_absent_and_touches_nothing() {
         assert!(matches!(store.asides_of(&d).as_deref(), Ok([])), "{d:?}: listed");
         assert!(matches!(store.unlink_blob(&d, &blob), Ok(false)), "{d:?}: unlinked");
         assert!(matches!(store.remove_aside(&d, &aside), Ok(false)), "{d:?}: removed");
-        let created = store.create_upload("k", &d, 1, INTERVAL, 4).map(|r| r.id).map_err(|e| e.kind());
-        assert_eq!(created, Err(io::ErrorKind::InvalidInput), "{d:?}: created");
     }
     let hexes = ["", "a", "abc", "gg", "..", "../leases.log", "../uploads.log"].map(String::from).into_iter().chain([
         blob.to_uppercase(),
@@ -185,22 +185,22 @@ fn every_entry_point_answers_a_malformed_name_as_absent_and_touches_nothing() {
 }
 
 /// A KEY NAMES THE FUNCTION THAT MADE IT (`media.md` §The design, item 4,
-/// "EVERY SIDECAR KEY NAMES ITS FUNCTION"; `Store::create_upload`): the
-/// store computes one hash, BLAKE3's, under one designation, `blake3`, so a
-/// creation under any other — however well spelled — is refused as
-/// `InvalidInput` before anything is minted, nothing under the root touched;
-/// the one it computes is admitted.
+/// "EVERY SIDECAR KEY NAMES ITS FUNCTION"; `Store::create_upload`): a
+/// creation names a function the store computes — a `HashFunction`, so no
+/// other can be spelled — and is filed under its designation, `blake3`: the
+/// record, the partial's directory and the finish's answer all name it.
 #[test]
-fn a_creation_under_another_hashs_designation_is_refused() {
+fn a_creation_is_filed_under_its_functions_designation() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let store = open(&dir.path().join("blobs"), 0);
-    let before = tree(dir.path());
-    for d in ["sha256-tree", "sha256", "blake3-xof"] {
-        let created = store.create_upload("k", d, 1, INTERVAL, 1).map(|r| r.id).map_err(|e| e.kind());
-        assert_eq!(created, Err(io::ErrorKind::InvalidInput), "{d}");
-    }
-    assert_eq!(tree(dir.path()), before, "no directory, partial or record line made");
-    assert!(store.create_upload("k", "blake3", 1, INTERVAL, 1).is_ok());
+    let root = dir.path().join("blobs");
+    let store = open(&root, 0);
+    let rec = store.create_upload("k", HashFunction::Blake3, 5, INTERVAL, 1).unwrap();
+    assert_eq!(rec.designation, HashFunction::Blake3.designation());
+    assert_eq!(rec.designation, "blake3", "the cell schema's own");
+    assert!(root.join("blake3").join(format!(".upload-{}", rec.id)).is_file(), "its partial in that directory");
+    let mut stream = store.resume("k", &rec.id, 0, 1).unwrap();
+    stream.append(b"bytes", 1).unwrap();
+    assert_eq!(stream.finish(INTERVAL, 1).unwrap().designation, "blake3", "and the finish answers it");
 }
 
 /// THE FLOOR's ONE READ OF THE HOST: the space available on the volume at

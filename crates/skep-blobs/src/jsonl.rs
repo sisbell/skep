@@ -22,12 +22,12 @@
 //! (`uploads.rs`, `lease.rs`).
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::blobs::fsync_dir;
+use crate::blobs::{fsync_dir, not_found_as_none};
 
 /// One JSON-lines log: its path, its append-mode file, the byte length and
 /// the count of the whole lines the file holds, and whether it has
@@ -152,37 +152,26 @@ impl Log {
 /// torn tail cut off the file there ([`Log::open`]'s read). An absent log
 /// holds none.
 fn read_log(path: &Path) -> io::Result<(Vec<Value>, u64)> {
-    let mut bytes = Vec::new();
-    match File::open(path) {
-        Ok(mut f) => {
-            f.read_to_end(&mut bytes)?;
-        }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
-        Err(e) => return Err(e),
-    }
+    let Some(bytes) = not_found_as_none(fs::read(path))? else {
+        return Ok((Vec::new(), 0));
+    };
     let mut values = Vec::new();
-    let mut good = 0usize;
-    let mut cut = false;
-    let mut at = 0usize;
-    while at < bytes.len() {
-        let Some(nl) = bytes[at..].iter().position(|&b| b == b'\n') else {
-            cut = true; // no newline: a line being written when the process died
+    let mut good = 0;
+    for line in bytes.split_inclusive(|&b| b == b'\n') {
+        // Trust ends at the first torn line — one with no newline, being
+        // written when the process died, or one that is no JSON object —
+        // and nothing past it is read.
+        let Some(v) = line
+            .strip_suffix(b"\n")
+            .and_then(|body| serde_json::from_slice::<Value>(body).ok())
+            .filter(Value::is_object)
+        else {
             break;
         };
-        let line = &bytes[at..at + nl];
-        match serde_json::from_slice::<Value>(line) {
-            Ok(v) if v.is_object() => {
-                values.push(v);
-                at += nl + 1;
-                good = at;
-            }
-            _ => {
-                cut = true;
-                break;
-            }
-        }
+        values.push(v);
+        good += line.len();
     }
-    if cut {
+    if good < bytes.len() {
         OpenOptions::new().write(true).open(path)?.set_len(good as u64)?;
     }
     Ok((values, good as u64))

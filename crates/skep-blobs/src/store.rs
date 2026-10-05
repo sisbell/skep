@@ -53,7 +53,6 @@ use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -61,8 +60,8 @@ use parking_lot::Mutex;
 use crate::blobs::{self, aside_name, designation_ok, fsync_dir, hex_ok, is_aside_name};
 use crate::error::BlobError;
 use crate::lease::{Lease, LeaseLog, LeaseState};
-use crate::partials::{self, Handle, HASH_DESIGNATION, SYNC_GRAIN};
-use crate::uploads::{expiry, millis, UploadId, UploadRecord, UploadRecords};
+use crate::partials::{self, Handle, HashFunction, SYNC_GRAIN};
+use crate::uploads::{expiry, UploadId, UploadRecord, UploadRecords};
 
 /// The steps of a finish, in order — the points the hazard seam names
 /// (`test-hooks`): a hold or an injected failure is placed BEFORE the step
@@ -144,9 +143,10 @@ pub struct Finished {
 /// (`blobs.rs`), made here, where a caller's name enters: a malformed one is
 /// answered as absent by every read and act — [`Store::blob_path`],
 /// [`Store::blob_size`], [`Store::blobs_of`], [`Store::asides_of`],
-/// [`Store::unlink_blob`], [`Store::remove_aside`] — and refused as
-/// `InvalidInput` by [`Store::create_upload`], which admits only the
-/// designation of the hash the store computes. A name read back off a log
+/// [`Store::unlink_blob`], [`Store::remove_aside`] — while
+/// [`Store::create_upload`] is handed no name at all: it takes a
+/// [`HashFunction`], whose designation is the crate's own spelling, held to
+/// that check by `partials/handle.rs`'s unit suite. A name read back off a log
 /// at open meets the same check where it enters from disk: a record or
 /// lease line naming a malformed one reads as a lost line does
 /// (`uploads.rs`, `lease.rs`), so a log restored from elsewhere names no
@@ -161,11 +161,30 @@ pub struct Store {
     /// THE FINISHES RUN ONE AT A TIME: every [`Stream::finish`] holds this
     /// from its first act to its answer, so two finishes of one hash never
     /// interleave the replace's check, link and rename — which would let the
-    /// second rename free the first file's blocks inside its own answer. No
-    /// other act takes it, so no append waits on another upload's finish;
-    /// the store's other locks are taken under it, briefly, and it under
-    /// none.
-    finishing: Mutex<()>,
+    /// second rename free the first file's blocks inside its own answer. It
+    /// holds the finishes' own state ([`FinishState`]), so nothing reads or
+    /// moves that unheld. No other shipped act takes it, so no append waits
+    /// on another upload's finish; the store's other locks are taken under
+    /// it, briefly, and it under none.
+    finishing: Mutex<FinishState>,
+    /// THE ASIDE QUEUE: the aside names answered replaces have left for the
+    /// deferred unlink ([`Store::unlink_asides`]), in the order their
+    /// finishes answered — each queued as its finish answers, never sooner.
+    /// An aside a failed finish left on disk is never among them: the
+    /// pruner's pass and open take that one. Beside the finish lock and not
+    /// in it: the deferred unlink takes the queue on any thread and never
+    /// waits on a finish.
+    aside_queue: Mutex<Vec<PathBuf>>,
+    #[cfg(feature = "test-hooks")]
+    hooks: Mutex<hooks::Hooks>,
+}
+
+/// The finishes' own state, held inside the lock that runs them one at a
+/// time (`Store`'s `finishing`) — read and moved by a finish alone in a
+/// shipped build, and by the test seam's `install` under the same lock: a
+/// finish's check and its update of either are one critical section by
+/// construction.
+struct FinishState {
     /// THE ROOT's FSYNC PAID: the designation directories whose entry in the
     /// root an fsync has made durable — every directory under the root when
     /// the open's own root fsync ran, and each one a finish's root fsync
@@ -175,19 +194,12 @@ pub struct Store {
     /// names a file in it, whatever made it: a creation that failed past its
     /// directory's mkdir leaves the directory standing and its entry owed,
     /// exactly as one that succeeded does.
-    root_synced: Mutex<HashSet<String>>,
-    /// THE ASIDE QUEUE: the aside names answered replaces have left for the
-    /// deferred unlink ([`Store::unlink_asides`]), in the order their
-    /// finishes answered — each queued as its finish answers, never sooner.
-    /// An aside a failed finish left on disk is never among them: the
-    /// pruner's pass and open take that one.
-    aside_queue: Mutex<Vec<PathBuf>>,
+    root_synced: HashSet<String>,
     /// THE ASIDE SERIAL: the `<n>` of the next aside name this process
     /// makes. It only rises, so two replaces of one hash before the first's
-    /// unlink take two names.
-    aside_serial: AtomicU64,
-    #[cfg(feature = "test-hooks")]
-    hooks: Mutex<hooks::Hooks>,
+    /// unlink take two names — a plain count, the lock it lives in being
+    /// what keeps each one a finish's own.
+    aside_serial: u64,
 }
 
 impl std::fmt::Debug for Store {
@@ -223,7 +235,7 @@ impl Store {
     pub fn open(root: impl AsRef<Path>, horizon: Duration, now_ms: u64) -> io::Result<Store> {
         let root = root.as_ref();
         fs::create_dir_all(root)?;
-        let leases = LeaseLog::open(root, now_ms, millis(horizon))?;
+        let leases = LeaseLog::open(root, horizon, now_ms)?;
         let mut uploads = UploadRecords::open(root)?;
         partials::reconcile(root, &mut uploads, now_ms)?;
         blobs::sweep_asides(root)?;
@@ -236,10 +248,8 @@ impl Store {
             root: root.to_path_buf(),
             uploads: Mutex::new(uploads),
             leases: Mutex::new(leases),
-            finishing: Mutex::new(()),
-            root_synced: Mutex::new(root_synced),
+            finishing: Mutex::new(FinishState { root_synced, aside_serial: 0 }),
             aside_queue: Mutex::new(Vec::new()),
-            aside_serial: AtomicU64::new(0),
             #[cfg(feature = "test-hooks")]
             hooks: Mutex::new(hooks::Hooks::default()),
         })
@@ -312,11 +322,7 @@ impl Store {
         let Some(path) = self.blob_path(designation, hex) else {
             return Ok(None);
         };
-        match fs::metadata(path) {
-            Ok(m) => Ok(m.is_file().then_some(m.len())),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e),
-        }
+        Ok(blobs::not_found_as_none(fs::metadata(path))?.filter(fs::Metadata::is_file).map(|m| m.len()))
     }
 
     /// The volume's free space at the root, in bytes — the floor's read.
@@ -327,36 +333,31 @@ impl Store {
     // ── the upload records ───────────────────────────────────────────────
 
     /// THE CREATION (clause (1)): mint the identifier — 128 bits from the
-    /// OS — create the empty partial in the designation directory, and
-    /// write the record, synced: its `principal`, its declared `length`,
-    /// offset 0, and THE UPLOAD's INTERVAL, `interval` — the limits in
-    /// force at this creation, held in the record for every expiry the
-    /// upload will have (clause (3)), in the whole milliseconds its line
-    /// spells — its first expiry that interval past `now_ms`. Answers the
-    /// record. A designation other than the one naming the hash this store
-    /// computes — `blake3` (`partials/handle.rs`), the one a finish can file
-    /// a file under, since a key names the function that made it (`media.md`
-    /// §The design, item 4, "EVERY SIDECAR KEY NAMES ITS FUNCTION") — is
-    /// `InvalidInput`, refused before anything is minted; a malformed one is
-    /// among them. An `Io` — the OS refusing entropy, the partial's
-    /// creation, the record's write — leaves no upload: at most an empty
-    /// partial, which the next open removes as an orphan, and a designation
-    /// directory made here, whose entry in the root the next finish into it
-    /// fsyncs as it would had the creation succeeded.
+    /// OS — create the empty partial in the directory of `function`'s
+    /// designation, and write the record, synced: its `principal`, that
+    /// designation, its declared `length`, offset 0, and THE UPLOAD's
+    /// INTERVAL, `interval` — the limits in force at this creation, held in
+    /// the record for every expiry the upload will have (clause (3)), in the
+    /// whole milliseconds its line spells — its first expiry that interval
+    /// past `now_ms`. Answers the record. The creation names the function
+    /// its finish computes, as a type, since a key names the function that
+    /// made it (`media.md` §The design, item 4, "EVERY SIDECAR KEY NAMES ITS
+    /// FUNCTION"): no creation can name one this store does not compute,
+    /// and every error here is the disk's. An `Io` — the OS refusing
+    /// entropy, the partial's creation, the record's write — leaves no
+    /// upload: at most an empty partial, which the next open removes as an
+    /// orphan, and a designation directory made here, whose entry in the
+    /// root the next finish into it fsyncs as it would had the creation
+    /// succeeded.
     pub fn create_upload(
         &self,
         principal: &str,
-        designation: &str,
+        function: HashFunction,
         length: u64,
         interval: Duration,
         now_ms: u64,
     ) -> io::Result<UploadRecord> {
-        if designation != HASH_DESIGNATION {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("the designation {designation:?} names no hash this store computes"),
-            ));
-        }
+        let designation = function.designation();
         let id = UploadId::mint()?;
         partials::create(&self.root, designation, &id)?;
         self.uploads.lock().create(id, principal, designation, length, interval, now_ms)
@@ -414,8 +415,9 @@ impl Store {
     /// record's line on disk until the next open's reconciliation, which
     /// finds no partial and retires it.
     pub fn end_upload(&self, principal: &str, id: &UploadId, now_ms: u64) -> Result<(), BlobError> {
-        let record = self.upload(principal, id, now_ms).ok_or(BlobError::NoUpload)?;
-        partials::remove(&self.root, &record.designation, id)?;
+        let designation =
+            self.uploads.lock().standing(principal, id, now_ms).ok_or(BlobError::NoUpload)?.designation.clone();
+        partials::remove(&self.root, &designation, id)?;
         self.uploads.lock().retire(id)?;
         Ok(())
     }
@@ -695,9 +697,10 @@ impl Stream<'_> {
     /// finish under the read arm and each pruner act under the write arm.
     pub fn finish(mut self, interval: Duration, now_ms: u64) -> Result<Finished, BlobError> {
         let store = self.store;
-        // Held to the answer: the finishes run one at a time.
-        let _finishing = store.finishing.lock();
-        store.upload(&self.principal, &self.id, now_ms).ok_or(BlobError::NoUpload)?;
+        // Held to the answer: the finishes run one at a time, and what they
+        // alone touch is read and moved under it.
+        let mut finishing = store.finishing.lock();
+        store.uploads.lock().standing(&self.principal, &self.id, now_ms).ok_or(BlobError::NoUpload)?;
         assert!(
             self.handle.written() == self.length,
             "a finish at {} of its {} bytes: the caller finishes an upload only where its bytes written reach its \
@@ -717,7 +720,8 @@ impl Stream<'_> {
             // the answer. A link, not a rename aside: the hash is never
             // without a file, whatever fails next.
             store.before(Step::LinkAside)?;
-            let n = store.aside_serial.fetch_add(1, Ordering::Relaxed);
+            let n = finishing.aside_serial;
+            finishing.aside_serial += 1;
             let aside = dir.join(aside_name(&hex, n));
             fs::hard_link(&to, &aside)?;
             Some(aside)
@@ -728,14 +732,14 @@ impl Stream<'_> {
         fs::rename(&from, &to)?;
         store.before(Step::DirSync)?;
         fsync_dir(&dir)?;
-        if !store.root_synced.lock().contains(&self.designation) {
+        if !finishing.root_synced.contains(&self.designation) {
             store.before(Step::RootSync)?;
             fsync_dir(&store.root)?;
-            store.root_synced.lock().insert(self.designation.clone());
+            finishing.root_synced.insert(self.designation.clone());
         }
         store.before(Step::LeaseSync)?;
         store.leases.lock().append_synced(Lease {
-            principal: self.principal.clone(),
+            principal: self.principal,
             designation: self.designation.clone(),
             hex: hex.clone(),
             size: self.length,
@@ -771,7 +775,7 @@ mod tests {
     fn an_append_after_a_settle_raced_its_resume_answers() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = Store::open(dir.path(), Duration::from_secs(1), 0).expect("the store opens");
-        let rec = store.create_upload("k", "blake3", 10, Duration::from_secs(60), 0).expect("create");
+        let rec = store.create_upload("k", HashFunction::Blake3, 10, Duration::from_secs(60), 0).expect("create");
         let mut first = store.resume("k", &rec.id, 0, 1).expect("the first request's resume");
         first.append(b"abcd", 1).expect("the first request's bytes");
         let mut second = store.resume("k", &rec.id, 0, 2).expect("the second request's resume");

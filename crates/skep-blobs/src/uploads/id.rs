@@ -39,15 +39,16 @@ impl UploadId {
             _ => None,
         };
         let mut raw = [0u8; IDENTIFIER_BYTES];
-        for (slot, pair) in raw.iter_mut().zip(b.chunks(2)) {
-            *slot = (nibble(pair[0])? << 4) | nibble(pair[1])?;
+        for (slot, &[hi, lo]) in raw.iter_mut().zip(b.as_chunks::<2>().0) {
+            *slot = (nibble(hi)? << 4) | nibble(lo)?;
         }
         Some(UploadId(raw))
     }
 
     /// The wire and file spelling: 32 lowercase hex, the identifier's
-    /// [`Display`](fmt::Display) as a `String`.
-    pub fn to_hex(&self) -> String {
+    /// [`Display`](fmt::Display) as a `String` — by value, as a `Copy`
+    /// type's `to_` conversion takes it (C-CONV).
+    pub fn to_hex(self) -> String {
         self.to_string()
     }
 }

@@ -12,7 +12,7 @@
 use std::fs;
 use std::time::Duration;
 
-use skep_blobs::LeaseState;
+use skep_blobs::{HashFunction, LeaseState};
 
 use crate::{every_deposit_unplaced, hex_of, open, put_whole, HORIZON_MS, INTERVAL, INTERVAL_MS};
 
@@ -80,7 +80,7 @@ fn the_latest_lease_wins_and_open_compacts_to_it() {
         assert_eq!(fin.hex, hex);
         // The same bytes again with an EARLIER expiry — an interval of
         // nothing: the later line wins.
-        let rec = store.create_upload("k", "blake3", 10, INTERVAL, 2_000).unwrap();
+        let rec = store.create_upload("k", HashFunction::Blake3, 10, INTERVAL, 2_000).unwrap();
         let mut stream = store.resume("k", &rec.id, 0, 2_000).unwrap();
         stream.append(b"same bytes", 2_000).unwrap();
         stream.finish(Duration::ZERO, 2_000).unwrap();

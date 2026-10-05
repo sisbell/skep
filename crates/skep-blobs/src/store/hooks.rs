@@ -63,7 +63,8 @@ impl Store {
     /// with the store's finish lock held, as every finish holds it, so
     /// another finish waits on it as on any; one at [`Step::UnlinkAside`]
     /// parks the deferred unlink that met it. No lock of the seam's is held
-    /// while `f` runs.
+    /// while `f` runs. A hold must not call [`Store::install`], which takes
+    /// the finish lock too.
     pub fn hold_at(&self, step: Step, f: impl Fn() + Send + Sync + 'static) {
         self.hooks.lock().hold = Some((step, Arc::new(f)));
     }
@@ -74,16 +75,19 @@ impl Store {
     /// paid for the designation directory as a finish's is — with no
     /// upload, no lease, and the hex NOT checked against the bytes: a
     /// test's way to plant a file, the corrupt one a REPLACE repairs
-    /// included. It is the one way to name a file by a hash its bytes do
-    /// not have, so only the seam carries it; the operator's pull
+    /// included. It holds the finish lock throughout, as a finish does, so
+    /// its rename onto a hash's name never falls between a finish's check,
+    /// link and rename. It is the one way to name a file by a hash its bytes
+    /// do not have, so only the seam carries it; the operator's pull
     /// (`media.md` §Recovery) re-hashes what it installs and opens no store.
     pub fn install(&self, designation: &str, hex: &str, bytes: &[u8]) -> io::Result<()> {
         let Some(path) = self.blob_path(designation, hex) else {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "designation or hex"));
         };
+        let mut finishing = self.finishing.lock();
         install_whole(&path, bytes)?;
         fsync_dir(&self.root)?;
-        self.root_synced.lock().insert(designation.to_string());
+        finishing.root_synced.insert(designation.to_string());
         Ok(())
     }
 

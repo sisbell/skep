@@ -209,8 +209,8 @@ Rules that hold across its files:
   its lock around exactly one.
 - **Every name passes one check**, `blobs.rs`'s spellings: a caller's at
   `Store`'s entry points, a log line's at open. No name reaches a path out
-  of the root; and a creation names the designation of the one hash the
-  store computes (`Store::create_upload`).
+  of the root; and a creation names no designation at all, but a
+  `HashFunction` the store computes (`Store::create_upload`).
 - **A byte is received once it is durable, and a stream is one
   request's** (`Store::resume`, `Stream`): the partial's file closes with
   it.

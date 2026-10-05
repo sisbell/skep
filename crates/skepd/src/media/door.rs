@@ -354,6 +354,7 @@ mod tests {
     use std::time::Duration;
 
     use skep_arrangement::{Deposit, ShotRun, Run, VPos};
+    use skep_blobs::HashFunction;
     use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
     use skep_namespace::{head_document, system_account, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL};
 
@@ -509,7 +510,7 @@ mod tests {
             let key = MediaGate::key(p);
             let now = gate.now_ms();
             let store = gate.store();
-            let rec = store.create_upload(&key, "blake3", 5, interval, now).unwrap();
+            let rec = store.create_upload(&key, HashFunction::Blake3, 5, interval, now).unwrap();
             let mut stream = store.resume(&key, &rec.id, 0, now).unwrap();
             stream.append(bytes, now).unwrap();
             stream.finish(interval, now).unwrap();

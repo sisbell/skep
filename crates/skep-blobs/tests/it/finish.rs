@@ -15,7 +15,7 @@ use std::sync::{mpsc, Arc, Barrier};
 use std::thread;
 use std::time::Duration;
 
-use skep_blobs::{BlobError, LeaseState, Step, Stream};
+use skep_blobs::{BlobError, HashFunction, LeaseState, Step, Stream};
 
 use crate::{every_deposit_unplaced, hex_of, open, panic_message, put_whole, standing, INTERVAL, INTERVAL_MS};
 
@@ -47,7 +47,7 @@ fn a_failure_at_each_step_of_the_finish_leaves_what_the_order_promises() {
         let outcome = {
             let store = open(&root, now);
             store.fail_at(Some(*step));
-            let rec = store.create_upload("k", "blake3", bytes.len() as u64, INTERVAL, now).unwrap();
+            let rec = store.create_upload("k", HashFunction::Blake3, bytes.len() as u64, INTERVAL, now).unwrap();
             let mut stream = store.resume("k", &rec.id, 0, now).unwrap();
             stream.append(&bytes, now).unwrap();
             stream.settle(now).unwrap();
@@ -138,7 +138,7 @@ fn the_roots_fsync_is_owed_until_a_finish_pays_it() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = open(&dir.path().join("blobs"), 0);
     let put = |bytes: &[u8], now: u64| {
-        let rec = store.create_upload("k", "blake3", bytes.len() as u64, INTERVAL, now).unwrap();
+        let rec = store.create_upload("k", HashFunction::Blake3, bytes.len() as u64, INTERVAL, now).unwrap();
         let mut stream = store.resume("k", &rec.id, 0, now).unwrap();
         stream.append(bytes, now).unwrap();
         stream.finish(INTERVAL, now)
@@ -167,7 +167,7 @@ fn a_designation_directory_made_after_the_open_owes_the_roots_fsync_whatever_mad
     let store = open(&root, 0);
     fs::create_dir(root.join("blake3")).unwrap();
     store.fail_at(Some(Step::RootSync));
-    let rec = store.create_upload("k", "blake3", 5, INTERVAL, 1).unwrap();
+    let rec = store.create_upload("k", HashFunction::Blake3, 5, INTERVAL, 1).unwrap();
     let mut stream = store.resume("k", &rec.id, 0, 1).unwrap();
     stream.append(b"bytes", 1).unwrap();
     assert!(matches!(stream.finish(INTERVAL, 1), Err(BlobError::Io(_))), "the root's fsync owed, and met");
@@ -194,7 +194,7 @@ fn a_finish_short_of_the_declared_length_stops_as_its_callers_bug_and_names_noth
     }
     let dir = tempfile::tempdir().expect("tempdir");
     let store = open(&dir.path().join("blobs"), 0);
-    let rec = store.create_upload("k", "blake3", 10, INTERVAL, 1).unwrap();
+    let rec = store.create_upload("k", HashFunction::Blake3, 10, INTERVAL, 1).unwrap();
     let held = hex_of(b"half-");
     let mut stream = store.resume("k", &rec.id, 0, 1).unwrap();
     stream.append(b"half-", 1).unwrap();
@@ -316,7 +316,7 @@ fn a_finish_that_failed_past_its_rename_leaves_no_handle_on_the_hashs_file() {
     let store = open(&dir.path().join("blobs"), 0);
     let bytes = b"the bytes the rename named".to_vec();
     let hex = hex_of(&bytes);
-    let rec = store.create_upload("k", "blake3", bytes.len() as u64, INTERVAL, 1).unwrap();
+    let rec = store.create_upload("k", HashFunction::Blake3, bytes.len() as u64, INTERVAL, 1).unwrap();
     let mut stream = store.resume("k", &rec.id, 0, 1).unwrap();
     stream.append(&bytes, 1).unwrap();
     assert_eq!(store.upload("k", &rec.id, 1).unwrap().offset, 0, "short of the grain: written, not received");

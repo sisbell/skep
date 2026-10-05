@@ -19,11 +19,13 @@
 use std::collections::HashMap;
 use std::io;
 use std::path::Path;
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
 use crate::blobs::{designation_ok, hex_ok};
 use crate::jsonl::Log;
+use crate::uploads::millis;
 
 /// The log's file name under the root.
 const LEASES_LOG: &str = "leases.log";
@@ -79,6 +81,12 @@ impl Lease {
     fn live(&self, now_ms: u64) -> bool {
         now_ms < self.expires
     }
+
+    /// Past the horizon at `now_ms`: lapsed by more than `horizon` — none,
+    /// no longer LAPSED, and dropped at open.
+    fn past_horizon(&self, horizon: Duration, now_ms: u64) -> bool {
+        now_ms >= self.expires.saturating_add(millis(horizon))
+    }
 }
 
 /// What a principal holds on a hash: a live lease with its size and
@@ -112,15 +120,15 @@ pub enum LeaseState {
 pub(crate) struct LeaseLog {
     log: Log,
     leases: HashMap<(String, String, String), Lease>,
-    horizon_ms: u64,
+    horizon: Duration,
 }
 
 impl LeaseLog {
     /// Open the log under `root`: the tail checked, the latest line of each
     /// principal's lease on each hash kept, every lease lapsed past the
-    /// horizon at `now_ms` dropped, and the log rewritten where anything
+    /// `horizon` at `now_ms` dropped, and the log rewritten where anything
     /// was dropped.
-    pub fn open(root: &Path, now_ms: u64, horizon_ms: u64) -> io::Result<LeaseLog> {
+    pub fn open(root: &Path, horizon: Duration, now_ms: u64) -> io::Result<LeaseLog> {
         let (log, values) = Log::open(root.join(LEASES_LOG))?;
         let mut leases = HashMap::new();
         for v in &values {
@@ -128,8 +136,8 @@ impl LeaseLog {
                 leases.insert((l.principal.clone(), l.designation.clone(), l.hex.clone()), l);
             }
         }
-        leases.retain(|_, l| !past_horizon(l, now_ms, horizon_ms));
-        let mut opened = LeaseLog { log, leases, horizon_ms };
+        leases.retain(|_, l| !l.past_horizon(horizon, now_ms));
+        let mut opened = LeaseLog { log, leases, horizon };
         opened.compact()?;
         Ok(opened)
     }
@@ -151,7 +159,7 @@ impl LeaseLog {
         };
         if l.live(now_ms) {
             LeaseState::Live { size: l.size, expires: l.expires }
-        } else if past_horizon(l, now_ms, self.horizon_ms) {
+        } else if l.past_horizon(self.horizon, now_ms) {
             LeaseState::None
         } else {
             LeaseState::Lapsed { expires: l.expires }
@@ -202,9 +210,4 @@ impl LeaseLog {
         keys.sort();
         self.log.compact(keys.into_iter().map(|k| self.leases[k].to_value()))
     }
-}
-
-/// Past the horizon: lapsed by more than `horizon_ms`.
-fn past_horizon(l: &Lease, now_ms: u64, horizon_ms: u64) -> bool {
-    now_ms >= l.expires.saturating_add(horizon_ms)
 }

@@ -4,7 +4,9 @@
 //! replaced instance carries until the deferred unlink, the listings of the
 //! directories that hold those names and open's sweep of the asides
 //! ([`sweep_asides`]), the removal of a name another remover may have
-//! taken first ([`remove_if_present`]), the directory fsync every install
+//! taken first ([`remove_if_present`]), the absence rule every read of a
+//! name keeps — not found is none, any other failure an answer
+//! ([`not_found_as_none`]) — the directory fsync every install
 //! order under the root ends in (a rename is durable only at its
 //! directory's fsync — `media.md` Op inventory 1; the register M-I5 (a)),
 //! and the floor's one read of the host, the volume's free space. The order
@@ -49,7 +51,7 @@ pub(crate) fn designation_ok(designation: &str) -> bool {
 pub(crate) fn hex_ok(hex: &str) -> bool {
     hex.len() >= 2
         && hex.len() <= 128
-        && hex.len() % 2 == 0
+        && hex.len().is_multiple_of(2)
         && hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
@@ -79,10 +81,8 @@ pub(crate) fn names_in(
     if !designation_ok(designation) {
         return Ok(out);
     }
-    let entries = match fs::read_dir(root.join(designation)) {
-        Ok(d) => d,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(out),
-        Err(e) => return Err(e),
+    let Some(entries) = not_found_as_none(fs::read_dir(root.join(designation)))? else {
+        return Ok(out);
     };
     for entry in entries {
         let entry = entry?;
@@ -114,16 +114,23 @@ pub(crate) fn sweep_asides(root: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// THE ABSENCE RULE, spelled once: `Ok(Some(value))` where the name stands,
+/// `Ok(None)` where nothing does (`NotFound`), and every other failure
+/// answered — an I/O failure is no absence (the register M-I5 (c)).
+pub(crate) fn not_found_as_none<T>(result: io::Result<T>) -> io::Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// Remove the file at `path`: `Ok(true)` where a file went, `Ok(false)`
 /// where none stood — a name another remover took first (the pruner's
 /// pass, open's sweep, the deferred unlink) leaves nothing to do — and any
 /// other failure answered.
 pub(crate) fn remove_if_present(path: &Path) -> io::Result<bool> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(true),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(e),
-    }
+    Ok(not_found_as_none(fs::remove_file(path))?.is_some())
 }
 
 /// Fsync a directory, so entry creations, removals and renames inside it

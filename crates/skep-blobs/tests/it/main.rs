@@ -13,7 +13,7 @@ use std::any::Any;
 use std::path::Path;
 use std::time::Duration;
 
-use skep_blobs::{Lease, Store, UploadRecord};
+use skep_blobs::{HashFunction, Lease, Store, UploadRecord};
 
 /// The interval every suite hands the store — each upload's at its
 /// creation, each lease's at its finish — and the horizon every suite opens
@@ -34,7 +34,7 @@ pub fn open(root: &Path, now: u64) -> Store {
 /// `INTERVAL`, resumed at 0, appended whole and finished through its
 /// stream, with a lease `INTERVAL` past `now`. Answers the finish.
 pub fn put_whole(store: &Store, principal: &str, bytes: &[u8], now: u64) -> skep_blobs::Finished {
-    let rec = store.create_upload(principal, "blake3", bytes.len() as u64, INTERVAL, now).expect("create");
+    let rec = store.create_upload(principal, HashFunction::Blake3, bytes.len() as u64, INTERVAL, now).expect("create");
     let mut stream = store.resume(principal, &rec.id, 0, now).expect("resume");
     stream.append(bytes, now).expect("append");
     stream.finish(INTERVAL, now).expect("finish")
@@ -47,7 +47,7 @@ pub fn hex_of(bytes: &[u8]) -> String {
 
 /// A standing upload of `principal` with `bytes` received, left unfinished.
 pub fn standing(store: &Store, principal: &str, length: u64, bytes: &[u8], now: u64) -> UploadRecord {
-    let rec = store.create_upload(principal, "blake3", length, INTERVAL, now).expect("create");
+    let rec = store.create_upload(principal, HashFunction::Blake3, length, INTERVAL, now).expect("create");
     let mut stream = store.resume(principal, &rec.id, 0, now).expect("resume");
     if !bytes.is_empty() {
         stream.append(bytes, now).expect("append");

@@ -63,7 +63,7 @@ use std::io;
 use std::time::Duration;
 
 use serde_json::Value;
-use skep_blobs::{BlobError, Finished, Stream, UploadId, UploadRecord};
+use skep_blobs::{BlobError, Finished, HashFunction, Stream, UploadId, UploadRecord};
 use skep_identity::HasIdentity;
 use skep_namespace::{HasM3, PrincipalId};
 
@@ -74,7 +74,7 @@ use super::Daemon;
 use crate::auth::session::Actor;
 use crate::codec::obj;
 use crate::media::deposit_read::deposit_read;
-use crate::media::gate::{MediaGate, Scope, DESIGNATION};
+use crate::media::gate::{MediaGate, Scope};
 use crate::media::pruner::{self, PrunePass};
 #[cfg(feature = "test-hooks")]
 use crate::notice;
@@ -226,7 +226,7 @@ impl Daemon {
             return refuse_deposit(scope, false, 0);
         }
         let interval = Duration::from_millis(limits.lease_interval_ms);
-        let record = match self.media.store().create_upload(key, DESIGNATION, length, interval, now) {
+        let record = match self.media.store().create_upload(key, HashFunction::Blake3, length, interval, now) {
             Ok(r) => r,
             Err(e) => return refuse(TransportError::BlobIo, Some(&e.to_string())),
         };

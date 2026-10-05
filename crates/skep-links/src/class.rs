@@ -67,7 +67,12 @@ impl CoverageClass {
 /// ([`SpanSet::by_level_class`](skep_address::SpanSet::by_level_class)), each part
 /// `canonical_key`d — the composition M1's `canonical_key` names as M7's,
 /// cross-length canonicalization being absent from the source algebra.
-/// PUBLIC so M9 can key `targets_keyed`'s map via `coverage_class(ty)`.
+///
+/// PUBLIC because a caller may ask type identity of endsets of its own: two
+/// endsets are one type exactly when their classes are equal (M9's def layer
+/// asks it of an F slot and a start). A caller holding a shipped type asks
+/// [`TypeRegistry::shipped_class`](crate::TypeRegistry::shipped_class)
+/// instead of classifying the endset it reports.
 ///
 /// TOTAL ON LEVEL-UNIFORM INPUT — which is all it ever receives: managed
 /// paths validate address-denoting, content paths are `iextent`-level-uniform

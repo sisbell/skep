@@ -320,9 +320,9 @@ pub(super) fn filter_tree(
 ///   by construction rather than by a check; and
 /// * `editlink` additionally deposits a SUCCESSOR that is the caller's own
 ///   `Link`, so a supersedes-classed one arrives with caller-shaped
-///   endpoints. `LinkState::conforms_to_sup_schema` is the door that shapes
-///   it — `single_denoted` on each endpoint slot — refusing as
-///   `EditLinkError::DcViolation`.
+///   endpoints. `LinkState::check_sup_schema` is the door that shapes it —
+///   `single_denoted` on each endpoint slot — and `editlink` refuses its
+///   verdict as `EditLinkError::DcViolation`.
 ///
 /// Those three are what make the cross product below 1 × 1 per claim rather
 /// than a product of two slot widths, and

@@ -117,10 +117,13 @@ pub type Visibility<'a, W> = dyn Fn(&W, &Address) -> bool + Send + Sync + 'a;
 /// so the question of whether a cache agrees with what `emit_core` consults
 /// inside the txn does not arise.
 ///
-/// The handle holds no links either. `Σ.L` — the append-only store itself — is
-/// [`crate::LinkState`]'s map, reached through [`crate::HasLinks`] and read
-/// by `readlink`; this type is the write half, and M8's `*_on` reads, each
-/// naming its reader, are the query half.
+/// The handle holds no links either. `Σ.L` — the append-only store itself —
+/// is [`crate::LinkState`]'s map, reached through [`crate::HasLinks`], and
+/// the store's reads are `LinkState`'s own, at no visibility class:
+/// `readlink` and the rest of its read surface. This type is the write half,
+/// run at the caller's visibility class; the reads that run at a reader's
+/// visibility class are composed over `LinkState` outside this crate — M8's
+/// `*_on` reads, each naming its reader, and M9's guest-class look.
 ///
 /// A `LinkWriter` with NO visibility class does not exist: every
 /// construction names the visibility class its writes run at
@@ -640,12 +643,12 @@ where
 /// is untouched, as it is by every commons type, and no sixth shipped class
 /// exists.
 ///
-/// M7's OWN spelling, where its two readers here can read it — the
-/// sole-writer fences ([`is_replaces_class`]) and the one write that mints
-/// the class ([`LinkWriter::makelink_replacing`]) — M7 sitting below the
-/// engine, whose commons ledger pins the same address again
-/// (`skep_engine::types::t_replaces`) and whose ledger test holds the two
-/// spellings EQUAL. Held, not built per call: the fences ask on every
+/// M7's OWN spelling, where its two readers here can read it — the class
+/// the sole-writer fences compare against (`replaces_class`, below) and the
+/// one write that mints the class ([`LinkWriter::makelink_replacing`]) — M7
+/// sitting below the engine, whose commons ledger pins the same address
+/// again (`skep_engine::types::t_replaces`) and whose ledger test holds the
+/// two spellings EQUAL. Held, not built per call: the fences ask on every
 /// MAKELINK, `emit` and `editlink`.
 pub fn replaces_type() -> &'static Address {
     static ADDR: LazyLock<Address> = LazyLock::new(|| {
@@ -667,19 +670,23 @@ fn replaces_class() -> &'static CoverageClass {
     &CLASS
 }
 
-/// Whether the type slot `ty` lands in the `replaces` class — THE ONE
-/// STATEMENT of the class's sole-writer fence (PUB-5.15, RES-309/310): M7's
-/// three open writes refuse exactly the slots this answers `true` for
-/// (`makelink` [`MakeLinkError::ReplacesClass`], `emit`
-/// [`EmitError::ReplacesClass`], an `editlink` successor
-/// [`EditLinkError::DcViolation`]), and the daemon asks it of a request
-/// ahead of the transaction, so the wire's code
+/// Whether the type slot `ty` lands in the `replaces` class — the class's
+/// sole-writer fence (PUB-5.15, RES-309/310) as a TOTAL predicate, for a
+/// caller holding an endset whose shape it has not checked: the daemon asks
+/// it of a request ahead of the transaction, so the wire's code
 /// (`replaces_not_standalone`) and the store's refusal fall on the same
-/// slots. Coverage-class EQUALITY, the `[K_sup]` fence's rule: a slot naming
-/// the type, alone or beside its own subtypes, is the class; a slot naming a
+/// slots. Every write that takes a caller's type slot refuses exactly the
+/// slots this answers `true` for — MAKELINK in both forms
+/// ([`MakeLinkError::ReplacesClass`]), `emit` ([`EmitError::ReplacesClass`])
+/// and an `editlink` successor ([`EditLinkError::DcViolation`]) — each
+/// comparing the class it already holds with the same class, inside its own
+/// checked region.
+///
+/// Coverage-class EQUALITY, the `[K_sup]` fence's rule: a slot naming the
+/// type, alone or beside its own subtypes, is the class; a slot naming a
 /// subtype alone, or the type beside another class, is not — and the grant
-/// fold, which reads a `replaces` link by its type slot denoting EXACTLY this
-/// address, reads no slot this fence admits.
+/// fold, which reads a `replaces` link by its type slot denoting EXACTLY
+/// this address, reads no slot this fence admits.
 ///
 /// Total over every endset: only an ADDRESS-DENOTING slot can name the type
 /// (a `Resolve` slot resolves to content, never to a ghost address), so any

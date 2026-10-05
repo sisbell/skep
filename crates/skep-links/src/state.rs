@@ -66,6 +66,21 @@ struct SupEdge {
     claim: Tumbler,
 }
 
+/// The clause of the `[K_sup]` claim schema (Df-DISC(ii)) a value fails —
+/// the verdict [`LinkState::check_sup_schema`] answers, declared in the order
+/// it asks. Each writer of a claim translates it into its own vocabulary, so
+/// the schema is stated once and refused in as many ways as there are
+/// writers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SupSchemaFault {
+    /// F or G is not a unit-depth single denoted address.
+    NotSingleDenoted,
+    /// F or G names a link that is not resident.
+    NotResident,
+    /// F and G name the same link — irreflexivity.
+    Reflexive,
+}
+
 /// The recomputable hints — pure functions of `links` (+ `registry`),
 /// maintained incrementally by [`LinkState::apply_link`] and re-seeded by
 /// [`LinkState::rebuild_derived`]. The journal (via M2) is truth; lose any
@@ -243,20 +258,37 @@ impl LinkState {
     }
 
     /// Df-DISC(ii): the `[K_sup]` claim schema — F and G each a unit-depth
-    /// single denoted address, the two distinct, both resident. The one
-    /// statement of the invariant every stored claim holds, and the whole
-    /// reason `assert_sup`/`editlink` are the sole `[K_sup]` writers: the
-    /// supersession adjacency, the walk family and M8's lineage reads all
-    /// take it as fact, so what admits a claim states it here rather than
-    /// inline at the gate that happens to be checking one.
-    pub(crate) fn conforms_to_sup_schema(&self, value: &Link) -> bool {
-        match (
+    /// single denoted address, both resident, the two distinct — answered as
+    /// the FIRST clause the value fails, asked in that order: denotation
+    /// first, because residence and irreflexivity are questions about the
+    /// addresses F and G denote, then residence before irreflexivity, the
+    /// precedence `assert_sup` publishes.
+    ///
+    /// The one statement of the invariant every stored claim holds, and the
+    /// whole reason `assert_sup`/`editlink` are the sole `[K_sup]` writers:
+    /// the supersession adjacency, the walk family and M8's lineage reads all
+    /// take it as fact. Both writers ask it and translate the verdict into
+    /// their own vocabulary — `assert_sup` into its two typed rejections,
+    /// `editlink`'s DC guard into one — and `editlink`'s own claim meets it by
+    /// construction rather than by asking: both slots built through `enc`,
+    /// one address each; F the original, checked resident against the base;
+    /// G the successor minted a line earlier in the same transaction —
+    /// resident in the working world, and distinct from every link resident
+    /// before it, the original included.
+    pub(crate) fn check_sup_schema(&self, value: &Link) -> Result<(), SupSchemaFault> {
+        let (Some(f), Some(g)) = (
             value.from_slot().single_denoted(),
             value.to_slot().single_denoted(),
-        ) {
-            (Some(f), Some(g)) => f != g && self.resident(f) && self.resident(g),
-            _ => false,
+        ) else {
+            return Err(SupSchemaFault::NotSingleDenoted);
+        };
+        if !self.resident(f) || !self.resident(g) {
+            return Err(SupSchemaFault::NotResident);
         }
+        if f == g {
+            return Err(SupSchemaFault::Reflexive);
+        }
+        Ok(())
     }
 
     /// `f_d^Σ` — the home's chain-frontier hint, 0 for a home holding no
@@ -439,7 +471,7 @@ mod tests {
     use skep_address::Nat;
 
     use super::*;
-    use crate::endset::enc;
+    use crate::endset::{enc, Endset};
 
     /// doc1's content element `k`.
     fn ca(k: u32) -> Address {
@@ -474,5 +506,58 @@ mod tests {
         };
         let once = state.apply_link(&rec);
         let _twice = once.apply_link(&rec); // corruption, not a live error path
+    }
+
+    #[test]
+    fn the_claim_schema_answers_the_first_clause_a_value_fails() {
+        // The verdict both `[K_sup]` writers translate. `assert_sup` can only
+        // ever meet two of its clauses and `editlink` folds all three into one
+        // rejection, so neither op's surface shows which clause a value fails
+        // or the order they are asked in; this is where both are watched.
+        let deposit = |at: Address, k: u32| LinkRec::Deposit {
+            addr: at.tumbler().clone(),
+            value: Link::triple(enc([&ca(k)]), Endset::empty(), enc([&ca(9)])),
+        };
+        let state = LinkState::genesis()
+            .apply_link(&deposit(la(1), 1))
+            .apply_link(&deposit(la(2), 2));
+        let sup = registry().reserved_type(ShippedType::Supersedes).clone();
+        let check = |f: &[&Address], g: &[&Address]| {
+            state.check_sup_schema(&Link::triple(
+                enc(f.iter().copied()),
+                enc(g.iter().copied()),
+                sup.clone(),
+            ))
+        };
+
+        assert_eq!(check(&[&la(1)], &[&la(2)]), Ok(()));
+        // One DISTINCT address a side, however many times a slot names it.
+        assert_eq!(check(&[&la(1), &la(1)], &[&la(2)]), Ok(()));
+        // Each clause on its own.
+        assert_eq!(
+            check(&[&la(1), &la(2)], &[&la(2)]),
+            Err(SupSchemaFault::NotSingleDenoted)
+        );
+        assert_eq!(
+            check(&[&la(1)], &[&la(9)]),
+            Err(SupSchemaFault::NotResident)
+        );
+        assert_eq!(
+            check(&[&la(9)], &[&la(1)]),
+            Err(SupSchemaFault::NotResident)
+        );
+        assert_eq!(check(&[&la(1)], &[&la(1)]), Err(SupSchemaFault::Reflexive));
+        // The order, on values failing two clauses at once: a ghost named on
+        // both sides is non-resident before it is reflexive — the precedence
+        // `assert_sup` publishes — and a two-ghost F is not one denoted
+        // address before any of its addresses is asked for residence.
+        assert_eq!(
+            check(&[&la(9)], &[&la(9)]),
+            Err(SupSchemaFault::NotResident)
+        );
+        assert_eq!(
+            check(&[&la(8), &la(9)], &[&la(9)]),
+            Err(SupSchemaFault::NotSingleDenoted)
+        );
     }
 }

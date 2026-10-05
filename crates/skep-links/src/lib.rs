@@ -66,8 +66,8 @@
 //! One commons VALUE is spelled here, beside the fences that read it: the
 //! `replaces` type ([`replaces_type`]; PUB-5.15), the authority successor
 //! whose one writer is [`LinkWriter::makelink_replacing`] — a type no
-//! registration holds, which the three open writes refuse by the one test
-//! [`is_replaces_class`] states.
+//! registration holds, which every write that takes a caller's type slot
+//! refuses: exactly the slots [`is_replaces_class`] answers `true` for.
 
 #![forbid(unsafe_code)]
 

@@ -14,7 +14,7 @@ use crate::class::coverage_class;
 use crate::endset::{enc, Endset, Link};
 use crate::error::{AssertSupError, EditLinkError};
 use crate::registry::{registry, ShippedType};
-use crate::state::LinkRec;
+use crate::state::{LinkRec, SupSchemaFault};
 use crate::LinkWorld;
 
 /// What an edit deposited (ASN-0125 EDITop): the fresh successor, and the
@@ -33,6 +33,22 @@ pub struct Edit {
     pub claim: Address,
 }
 
+/// The claim schema's verdict in `assert_sup`'s vocabulary: residence, then
+/// irreflexivity, the two rejections its contract orders. Its F and G are
+/// built through `enc`, one denoted address each, so the denotation clause
+/// cannot fail there.
+impl From<SupSchemaFault> for AssertSupError {
+    fn from(fault: SupSchemaFault) -> Self {
+        match fault {
+            SupSchemaFault::NotResident => AssertSupError::EndpointNotResident,
+            SupSchemaFault::Reflexive => AssertSupError::SelfSupersession,
+            SupSchemaFault::NotSingleDenoted => {
+                unreachable!("assert_sup builds F and G through enc, one denoted address each")
+            }
+        }
+    }
+}
+
 impl<'k, W> LinkWriter<'k, W>
 where
     W: LinkWorld,
@@ -46,8 +62,9 @@ where
     /// first claim (Conflicts §9) — WITHIN THE CALLER'S VISIBILITY CLASS
     /// (PUB-6.25): a claim homed in a document the caller cannot read is
     /// invisible to the dedup, and the caller's own claim is minted beside
-    /// it. Requires `home` registered, both
-    /// endpoints resident, `old ≠ new` (Df-DISC(ii)); checked in that order.
+    /// it. Requires `home` registered, then the Df-DISC(ii) claim schema as
+    /// `LinkState` answers it — both endpoints resident, then `old ≠ new`;
+    /// checked in that order.
     ///
     /// RETURNS `(claim, seq)`: the address of the `[K_sup]` claim — never an
     /// endpoint — or, on a dedup hit, the incumbent claim's, with the base
@@ -74,14 +91,11 @@ where
         self.kernel.transact_attested(&keys, self.attest, |stg| {
             {
                 let base = stg.base();
-                // P0 then ω on home, before the endpoint verdicts.
+                // P0 then ω on home, before the schema's verdicts.
                 home_gate(base.m3(), caller, &[home])?;
-                if !base.links().resident(old.tumbler()) || !base.links().resident(new.tumbler()) {
-                    return Err(AssertSupError::EndpointNotResident);
-                }
-                if old == new {
-                    return Err(AssertSupError::SelfSupersession); // irreflexive
-                }
+                // Df-DISC(ii), asked of the store: residence, then
+                // irreflexivity.
+                base.links().check_sup_schema(&value)?;
             }
             Ok(emit_core(stg, self.visibility, caller, home, value, Gate::Managed)?.address())
         })
@@ -201,7 +215,7 @@ where
                     return Err(EditLinkError::DcViolation);
                 }
                 if successor_class == *sup_class
-                    && !base.links().conforms_to_sup_schema(&successor_value)
+                    && base.links().check_sup_schema(&successor_value).is_err()
                 {
                     return Err(EditLinkError::DcViolation);
                 }

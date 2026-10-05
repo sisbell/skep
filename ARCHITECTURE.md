@@ -624,8 +624,9 @@ Rules that hold across its files:
 - **The fences stand on every surface.** The fold recognizes a deposit by
   its type slot's class alone, so each sole-writer class is refused on
   every surface but its writers': `[R]` is written only by `nullify`,
-  `[K_sup]` only by `assert_sup` and `editlink`, which hold its claim
-  schema, and `replaces` only by `makelink_replacing`.
+  `[K_sup]` only by `assert_sup` and `editlink`, which both ask its claim
+  schema of `LinkState::check_sup_schema`, and `replaces` only by
+  `makelink_replacing`.
 - **One section decision.** Whether a deposit takes M2's dedup section and
   whether the fold keys it are one predicate,
   `TypeRegistry::is_idempotent`, over one key, `DedupKey::of`.

@@ -396,11 +396,13 @@ impl LinkState {
         self.target_of_class(&coverage_class(ty), source)
     }
 
-    /// BH3 join (§7): `target_of` across EVERY BH3-registered Binary type,
-    /// keyed by the public [`coverage_class`] (M9 indexes with
-    /// `coverage_class(ty)`). M7 composes the join because the enumeration it
-    /// walks is crate-internal — which classes declare BH3 is the registry's
-    /// own knowledge, and the registry publishes a lookup, not a scan.
+    /// BH3 join (§7): [`LinkState::target_of`] across every class the
+    /// registry's
+    /// [`TypeRegistry::reverse_lookup_classes`](crate::TypeRegistry::reverse_lookup_classes)
+    /// names — the registered Binary classes declaring BH3 — each answered
+    /// over its own active typed slice and keyed by its class. Which classes
+    /// those are is the registry's rule, read here rather than restated; in
+    /// this format it names none, so the map is empty for every source.
     pub fn targets_keyed(&self, source: &Address) -> im::HashMap<CoverageClass, Address> {
         let mut out = im::HashMap::new();
         for class in registry().reverse_lookup_classes() {

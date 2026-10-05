@@ -647,8 +647,8 @@ fn a_mixed_subject_slot_keys_the_member_it_denotes_as_members_does() {
 /// * `editlink` deposits a caller-supplied SUCCESSOR beside its own
 ///   claim, so a supersedes-classed successor is a caller-shaped slot
 ///   arriving in the class through the MANAGED surface. M7's
-///   `conforms_to_sup_schema` is what shapes it, and a two-address
-///   endpoint is refused there.
+///   `check_sup_schema` is what shapes it, and a two-address endpoint
+///   is refused there.
 ///
 /// The derivation would still be faithful without any of the three — it
 /// mirrors `fold_hints`' own unguarded read, so the two agree whatever a
@@ -706,9 +706,9 @@ fn no_door_admits_a_wide_endpoint_into_the_supersession_class() {
     // The THIRD door, and the one no open surface guards: `editlink`
     // deposits the caller's own successor beside its claim, so a
     // supersedes-classed successor carries a CALLER-SHAPED endpoint into
-    // the class. M7's `conforms_to_sup_schema` refuses a slot that
-    // denotes more than one address, and that refusal is what keeps the
-    // walk's cross product at 1 × 1.
+    // the class. M7's `check_sup_schema` refuses a slot that denotes
+    // more than one address, and that refusal is what keeps the walk's
+    // cross product at 1 × 1.
     let wide = Link::triple(enc([&old, &new]), enc([&new]), enc([&sup_addr]));
     assert!(
         matches!(
@@ -721,7 +721,7 @@ fn no_door_admits_a_wide_endpoint_into_the_supersession_class() {
     // …while the same successor narrowed to ONE address a side is
     // ADMITTED, which is what makes the refusal above the WIDTH's rather
     // than the successor's shape or its endpoints' residence — the two
-    // other ways `conforms_to_sup_schema` can answer no. Its endpoints run
+    // other ways `check_sup_schema` can refuse it. Its endpoints run
     // the other way round from the managed claim below so that the two are
     // distinct VALUES: `assert_sup` deposits through the managed gate,
     // which dedups on the value, and an identical successor sitting in the

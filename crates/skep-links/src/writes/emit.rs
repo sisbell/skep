@@ -8,7 +8,7 @@ use skep_arrangement::Caller;
 use skep_kernel::{Seq, TxnError};
 use skep_namespace::M3Rec;
 
-use super::{deposit_lock_set, emit_core, is_replaces_class, Gate, LinkWriter};
+use super::{deposit_lock_set, emit_core, replaces_class, Gate, LinkWriter};
 use crate::budget::MAX_SLOT_SPANS;
 use crate::class::coverage_class;
 use crate::endset::{enc, Endset, Link};
@@ -55,8 +55,8 @@ where
     /// [K_sup]` (`SupersessionClass` — assert_sup/editlink are the sole
     /// `[K_sup]`-writers, the parallel of the `[R]` fence; Conflicts §10);
     /// `ty ~ replaces` (`ReplacesClass` — [`LinkWriter::makelink_replacing`]
-    /// is that class's sole writer, [`is_replaces_class`]; PUB-5.15);
-    /// and either caller-sized slot past [`MAX_SLOT_SPANS`] spans —
+    /// is that class's sole writer, [`is_replaces_class`](crate::is_replaces_class);
+    /// PUB-5.15); and either caller-sized slot past [`MAX_SLOT_SPANS`] spans —
     /// `to`'s addresses or `ty`'s own spans (`SlotTooLarge`, the same
     /// per-slot budget MAKELINK's slots carry). Ahead of `ShapeViolation`,
     /// which an over-budget `to` also satisfies under every shape but Multi,
@@ -83,7 +83,7 @@ where
         if class == *registry().shipped_class(ShippedType::Supersedes) {
             return Err(TxnError::Rejected(EmitError::SupersessionClass));
         }
-        if is_replaces_class(ty) {
+        if class == *replaces_class() {
             return Err(TxnError::Rejected(EmitError::ReplacesClass));
         }
         // The two managed slots a caller sizes: `enc({from})` is one span,

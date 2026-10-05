@@ -46,7 +46,7 @@ fn a_failure_at_each_step_of_the_finish_leaves_what_the_order_promises() {
         let now = 1_000 + i as u64;
         let bytes = format!("file for step {step:?}").into_bytes();
         let hex = hex_of(&bytes);
-        let outcome = {
+        let (id, state, present) = {
             let store = open(&root, now);
             store.fail_at(Some(*step));
             let rec = store.create_upload("k", HashFunction::Blake3, bytes.len() as u64, INTERVAL, now).unwrap();
@@ -63,7 +63,6 @@ fn a_failure_at_each_step_of_the_finish_leaves_what_the_order_promises() {
             let present = store.blob_size("blake3", &hex).unwrap_or_else(|e| panic!("{step:?}: {e}")).is_some();
             (rec.id, state, present)
         };
-        let (id, state, present) = outcome;
         match step {
             Step::PartialSync | Step::Rename => {
                 assert_eq!(state, LeaseState::None, "{step:?}");
@@ -197,18 +196,18 @@ fn a_finish_short_of_the_declared_length_stops_as_its_callers_bug_and_names_noth
     let dir = tempfile::tempdir().expect("tempdir");
     let store = open(&dir.path().join("blobs"), 0);
     let rec = store.create_upload("k", HashFunction::Blake3, 10, INTERVAL, 1).unwrap();
-    let held = hex_of(b"half-");
+    let held_hex = hex_of(b"half-");
     let mut stream = store.resume("k", &rec.id, 0, 1).unwrap();
     stream.append(b"half-", 1).unwrap();
-    let stopped = short_finish(stream, 1);
-    assert!(stopped.contains("at 5 of its 10 bytes") && stopped.contains("precondition"), "{stopped}");
+    let message = short_finish(stream, 1);
+    assert!(message.contains("at 5 of its 10 bytes") && message.contains("precondition"), "{message}");
     let mut stream = store.resume("k", &rec.id, 0, 2).unwrap();
     stream.append(b"half-", 2).unwrap();
     stream.settle(2).unwrap();
-    let stopped = short_finish(store.resume("k", &rec.id, 5, 3).unwrap(), 3);
-    assert!(stopped.contains("at 5 of its 10 bytes"), "resumed at the settled offset: {stopped}");
-    assert_eq!(store.blob_size("blake3", &held).unwrap(), None, "no file named by the bytes held");
-    assert_eq!(store.lease_state("k", "blake3", &held, 3), LeaseState::None, "and no lease");
+    let message = short_finish(store.resume("k", &rec.id, 5, 3).unwrap(), 3);
+    assert!(message.contains("at 5 of its 10 bytes"), "resumed at the settled offset: {message}");
+    assert_eq!(store.blob_size("blake3", &held_hex).unwrap(), None, "no file named by the bytes held");
+    assert_eq!(store.lease_state("k", "blake3", &held_hex, 3), LeaseState::None, "and no lease");
     assert_eq!(store.upload("k", &rec.id, 3).map(|r| r.offset), Some(5), "the upload stands, to be resumed");
     let mut stream = store.resume("k", &rec.id, 5, 4).unwrap();
     stream.append(b"whole", 4).unwrap();

@@ -158,14 +158,14 @@ pub struct Store {
     root: PathBuf,
     uploads: Mutex<UploadRecords>,
     leases: Mutex<LeaseLog>,
-    /// THE FINISHES RUN ONE AT A TIME: every [`Stream::finish`] holds this
-    /// from its first act to its answer, so two finishes of one hash never
-    /// interleave the replace's check, link and rename — which would let the
-    /// second rename free the first file's blocks inside its own answer. It
-    /// holds the finishes' own state ([`FinishState`]), so nothing reads or
-    /// moves that unheld. No other shipped act takes it, so no append waits
-    /// on another upload's finish; the store's other locks are taken under
-    /// it, briefly, and it under none.
+    /// THE FINISH LOCK, which runs the finishes one at a time: every
+    /// [`Stream::finish`] holds this from its first act to its answer, so two
+    /// finishes of one hash never interleave the replace's check, link and
+    /// rename — which would let the second rename free the first file's
+    /// blocks inside its own answer. It holds the finishes' own state
+    /// ([`FinishState`]), so nothing reads or moves that unheld. No other
+    /// shipped act takes it, so no append waits on another upload's finish;
+    /// the store's other locks are taken under it, briefly, and it under none.
     finishing: Mutex<FinishState>,
     /// THE ASIDE QUEUE: the aside names answered replaces have left for the
     /// deferred unlink ([`Store::unlink_asides`]), in the order their
@@ -277,7 +277,7 @@ impl Store {
     /// the directory holds, a partial or an aside excluded by its name. An
     /// absent directory holds none.
     pub fn blobs_of(&self, designation: &str) -> io::Result<Vec<String>> {
-        blobs::names_in(&self.root, designation, |name, ty| hex_ok(name) && ty.is_file())
+        blobs::names_in(&self.root, designation, |name, kind| hex_ok(name) && kind.is_file())
     }
 
     /// The ASIDE names in `<designation>/` — the second names replaces left
@@ -780,7 +780,7 @@ mod tests {
     /// answers, neither panicking nor wrapping, writing no record, and its
     /// settle sets the record to the bytes it holds.
     #[test]
-    fn an_append_after_a_settle_raced_its_resume_answers() {
+    fn an_append_measures_its_grain_from_its_own_streams_offset() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = Store::open(dir.path(), Duration::from_secs(1), 0).expect("the store opens");
         let rec = store.create_upload("k", HashFunction::Blake3, 10, Duration::from_secs(60), 0).expect("create");

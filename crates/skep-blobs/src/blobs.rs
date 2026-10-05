@@ -72,7 +72,7 @@ pub(crate) fn dirs_under(root: &Path) -> io::Result<Vec<String>> {
 }
 
 /// The names in `<root>/<designation>/` that `keep` accepts, handed each
-/// name and its entry's type, in name order — none where the designation
+/// name and its entry's kind, in name order — none where the designation
 /// is malformed or its directory absent.
 pub(crate) fn names_in(
     root: &Path,
@@ -103,9 +103,9 @@ pub(crate) fn names_in(
 /// between the finish's answer and that unlink, or a finish's that failed
 /// past its link. Nothing names an aside, so nothing is lost.
 pub(crate) fn sweep_asides(root: &Path) -> io::Result<()> {
-    for designation in dirs_under(root)? {
-        let asides = names_in(root, &designation, |name, _| is_aside_name(name))?;
-        let dir = root.join(&designation);
+    for dir_name in dirs_under(root)? {
+        let asides = names_in(root, &dir_name, |name, _| is_aside_name(name))?;
+        let dir = root.join(&dir_name);
         for name in &asides {
             fs::remove_file(dir.join(name))?;
         }
@@ -152,7 +152,8 @@ pub(crate) fn refuse_links_and_special_files(root: &Path) -> io::Result<()> {
             for inner in fs::read_dir(entry.path())? {
                 let inner = inner?;
                 let name = inner.file_name().to_string_lossy().into_owned();
-                refuse_unless_made_here(&inner, !(hex_ok(&name) || is_aside_name(&name)))?;
+                let written_in_place = !(hex_ok(&name) || is_aside_name(&name));
+                refuse_unless_made_here(&inner, written_in_place)?;
             }
         }
     }
@@ -172,7 +173,7 @@ fn refuse_unless_made_here(entry: &DirEntry, written_in_place: bool) -> io::Resu
     } else if !kind.is_file() {
         Some("a special file".to_string())
     } else if written_in_place {
-        let n = links(&entry.metadata()?);
+        let n = link_count(&entry.metadata()?);
         (n > 1).then(|| format!("a regular file of {n} links"))
     } else {
         None
@@ -192,7 +193,7 @@ fn refuse_unless_made_here(entry: &DirEntry, written_in_place: bool) -> io::Resu
 
 /// A regular file's count of links — on a non-unix target one, the count
 /// unread; v1 targets unix.
-fn links(meta: &fs::Metadata) -> u64 {
+fn link_count(meta: &fs::Metadata) -> u64 {
     #[cfg(unix)]
     {
         std::os::unix::fs::MetadataExt::nlink(meta)

@@ -165,7 +165,7 @@ mod tests {
 
     /// A fresh partial under `root`: its identifier, the handle opened at
     /// offset 0, and its path.
-    fn opened(root: &Path) -> (UploadId, Handle, PathBuf) {
+    fn fresh_partial(root: &Path) -> (UploadId, Handle, PathBuf) {
         let id = UploadId::parse("0123456789abcdef0123456789abcdef").unwrap();
         create(root, "blake3", &id).unwrap();
         (id, open_at(root, "blake3", &id, 0).unwrap(), partial_path(root, "blake3", &id))
@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn a_resume_below_what_the_file_holds_hashes_the_file_as_cut_back() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (id, mut handle, path) = opened(dir.path());
+        let (id, mut handle, path) = fresh_partial(dir.path());
         handle.write(b"A, synced").unwrap();
         handle.sync().unwrap();
         handle.write(b"B, never synced").unwrap();
@@ -198,7 +198,7 @@ mod tests {
     #[test]
     fn a_failed_write_tears_the_handle_until_the_next_resume() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (id, mut handle, path) = opened(dir.path());
+        let (id, mut handle, path) = fresh_partial(dir.path());
         handle.write(b"A").unwrap();
         handle.sync().unwrap();
         // A read-only file: the next write fails at the OS, as a full or
@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn a_partial_shorter_than_its_offset_is_refused_and_never_extended() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (id, mut handle, path) = opened(dir.path());
+        let (id, mut handle, path) = fresh_partial(dir.path());
         handle.write(b"abc").unwrap();
         handle.sync().unwrap();
         drop(handle);

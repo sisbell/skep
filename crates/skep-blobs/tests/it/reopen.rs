@@ -95,7 +95,7 @@ fn a_record_line_whose_designation_climbs_out_of_the_root_is_no_record() {
         (absolute.clone(), elsewhere.clone(), 9_999),
         (absolute, elsewhere.clone(), 5),
     ];
-    let id = |n: usize| UploadId::parse(&hex_of(&[n as u8])[..32]).expect("32 lowercase hex");
+    let id_of = |n: usize| UploadId::parse(&hex_of(&[n as u8])[..32]).expect("32 lowercase hex");
     let line = |id: &UploadId, designation: &str, expires: u64| {
         let v = serde_json::json!({
             "designation": designation, "expires": expires, "id": id.to_hex(),
@@ -105,21 +105,21 @@ fn a_record_line_whose_designation_climbs_out_of_the_root_is_no_record() {
     };
     let mut log = String::new();
     for (n, (designation, at, expires)) in escapes.iter().enumerate() {
-        fs::write(at.join(format!(".upload-{}", id(n).to_hex())), b"beside the root").unwrap();
-        log += &line(&id(n), designation, *expires);
+        fs::write(at.join(format!(".upload-{}", id_of(n).to_hex())), b"beside the root").unwrap();
+        log += &line(&id_of(n), designation, *expires);
     }
-    let kept = id(escapes.len());
+    let kept = id_of(escapes.len());
     fs::write(root.join("blake3").join(format!(".upload-{}", kept.to_hex())), b"abc").unwrap();
     log += &line(&kept, "blake3", 9_999);
     fs::write(root.join("uploads.log"), log).unwrap();
     let store = open(&root, 10);
     for (n, (designation, at, _)) in escapes.iter().enumerate() {
         assert_eq!(
-            fs::read(at.join(format!(".upload-{}", id(n).to_hex()))).ok().as_deref(),
+            fs::read(at.join(format!(".upload-{}", id_of(n).to_hex()))).ok().as_deref(),
             Some(b"beside the root".as_slice()),
             "{designation:?}: the file beside the root neither cut back nor removed"
         );
-        assert_eq!(store.upload("k", &id(n), 10), None, "{designation:?}: no record");
+        assert_eq!(store.upload("k", &id_of(n), 10), None, "{designation:?}: no record");
     }
     let stand: Vec<UploadId> = store.uploads_of("k", 10).into_iter().map(|r| r.id).collect();
     assert_eq!(stand, vec![kept], "the line naming a designation a creation admits stands alone");
@@ -316,7 +316,7 @@ fn a_link_at_a_name_open_acts_on_fails_the_open_and_touches_nothing() {
             "a partial a record names" => root.join("blake3").join(format!(".upload-{}", rec.id.to_hex())),
             "a hex name" => root.join("blake3").join(&hex),
             "the designation directory" => root.join("blake3"),
-            log => root.join(log),
+            root_file => root.join(root_file),
         };
         let outside = dir.path().join("outside");
         fs::create_dir(&outside).unwrap();

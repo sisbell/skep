@@ -118,12 +118,12 @@ pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -
         named.entry(r.designation.clone()).or_default().insert(r.id);
     }
     // Then the directories: every partial no record names is an orphan.
-    for designation in dirs_under(root)? {
-        let named_here = named.get(&designation);
-        let orphans = names_in(root, &designation, |name, _| {
+    for dir_name in dirs_under(root)? {
+        let named_here = named.get(&dir_name);
+        let orphans = names_in(root, &dir_name, |name, _| {
             id_of_partial_name(name).is_some_and(|id| !named_here.is_some_and(|ids| ids.contains(&id)))
         })?;
-        let dir = root.join(&designation);
+        let dir = root.join(&dir_name);
         for name in &orphans {
             fs::remove_file(dir.join(name))?;
         }

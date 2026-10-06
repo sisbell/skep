@@ -11,8 +11,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 The registry is a skep board under the account law: a registrar's console
 binds a prefix to a node account by a signed deposit into the registrar's
 own doc 1, and an org deposits its endpoint into its node account's doc 1.
-What those two halves share — the daemon that verifies and commits the
-deposits, and the resolver that reads them back — is this crate:
+What the registry's two halves share — the daemon that verifies and
+commits the deposits, and the client's half, the resolver that reads them
+back — is this crate:
 
 - **The twelve rows** (`rows`, `Row` with the `RowOf` it is the row of,
   `Kind` and `Subtype` each naming its own row by `row`, `row_at` for the

@@ -20,8 +20,9 @@
 //! (c), (d), (g)): `type` is the string of the kind THE CALLER NAMES — the
 //! link's slot — and any other `type` is refused (`wrong_type`); NO MEMBER IS
 //! A JSON NUMBER, anywhere in the body; no member stands beside the row's
-//! own, `replaces` and `sig`; `prefix` and `replaces` are addresses in their
-//! one dotted-decimal spelling; `origins` is a non-empty array of strings.
+//! own, `replaces` and `sig`; the ADDRESS MEMBERS — `prefix` and `replaces`,
+//! the members written in address form — each spell an address in its one
+//! dotted-decimal spelling; `origins` is a non-empty array of strings.
 //! Whether an origin is https with a routable host is the resolver's
 //! question; whether an address member is written in the LOCAL FORM of the
 //! board the record is homed on (REG-1.86 (c), (g)) is its writer's — a
@@ -108,11 +109,13 @@ impl BodyKind {
     }
 }
 
-/// THE BINDING's body (REG-1.86's table; REG-2.19): the prefix in address
-/// form, the binding's one non-address term — the account rides the link's
-/// target and is no member — and `replaces`, the link's address of the
-/// binding this one replaces at that prefix, absent on an allocation; each
-/// the [`Address`] its member spells.
+/// THE BINDING's body (REG-1.86's table; REG-2.19): the prefix, written in
+/// address form, and `replaces`, the link's address of the binding this one
+/// replaces at that prefix, absent on an allocation — each the [`Address`]
+/// its member spells. The prefix is what REG-2.19 calls the binding's "one
+/// non-address term": the one term no slot of the link carries, written in
+/// address form all the same; the account the binding binds it to rides the
+/// link's target and is no member.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
     pub prefix: Address,
@@ -121,7 +124,7 @@ pub struct Binding {
 
 /// THE ENDPOINT's body (REG-1.86's table; REG-1.9, REG-1.10): the org's
 /// [`Origins`], and `replaces`, the link's address of the endpoint deposit
-/// this one replaces in that doc 1, absent on the org's first.
+/// this one replaces in the org's doc 1, absent on the org's first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoint {
     pub origins: Origins,
@@ -600,10 +603,11 @@ mod tests {
         }
     }
 
-    /// THE PARSE READS A SPELLING, NEVER A FORM (REG-1.86 (c), (f)): Legal's
-    /// prefix in its board's local form, `1.3`, and in the global form,
-    /// `1.5.3`, are each a binding of the address it spells — the local form
-    /// is its writer's to hold, and no parse can see it.
+    /// THE PARSE READS A SPELLING, NEVER WHICH FORM — LOCAL OR GLOBAL — IT IS
+    /// WRITTEN IN (REG-1.86 (c), (f)): Legal's prefix in its board's local
+    /// form, `1.3`, and in the global form, `1.5.3`, are each a binding of the
+    /// address it spells — which form a member takes is its writer's to hold,
+    /// and no parse can see it.
     #[test]
     fn the_parse_reads_an_address_spelling_never_its_local_form() {
         for prefix in ["1.3", "1.5.3"] {

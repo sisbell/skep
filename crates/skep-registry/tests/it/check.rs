@@ -11,10 +11,11 @@ use skep_registry::{
 /// The rows commons-map's disjointness paragraph lists as built or placed
 /// beside the registry's: the credentials `3.1`–`3.3`, the comment type
 /// `3.5` with a subtype, `replaces` `3.12`, the edition `3.14` with its test
-/// subtype, the mail type `3.15`, the journal designation `3.22`, endorse
-/// `3.42` with a subtype, the rail record `3.60`, the steward classification
-/// `3.61`, media's cell kind `3.89`, the grant `3.90` with its test subtype
-/// and the consumption marker `3.91`.
+/// subtype, the mail type `3.15`, the journal designation `3.22`, the media
+/// `place` type `3.29`, endorse `3.42` with a subtype, the rail record
+/// `3.60`, the steward classification `3.61`, media's blind cell kind `3.88`
+/// and picture cell kind `3.89`, the grant `3.90` with its test subtype and
+/// the consumption marker `3.91`.
 fn the_maps_other_rows() -> Vec<Address> {
     [
         &[1][..],
@@ -27,10 +28,12 @@ fn the_maps_other_rows() -> Vec<Address> {
         &[14, 2],
         &[15],
         &[22],
+        &[29],
         &[42],
         &[42, 2],
         &[60],
         &[61],
+        &[88],
         &[89],
         &[90],
         &[90, 1],
@@ -146,7 +149,7 @@ fn the_completeness_arm_refuses_a_missing_kind_or_subtype_row() {
 /// twelve, the shipped table without it answers the completeness arm with
 /// exactly that row missing, in the operator's sentence (REG-1.33: the
 /// sentence is what a repair in the image is read off). One sentence per row
-/// of the table, in its order, so a row the table gains (REG-1.19) owes a
+/// of the table, in its order, so a row the table gains (REG-1.15) owes a
 /// line here; and a kind or a subtype the arm's own lists (`Kind::ALL`,
 /// `Subtype::ALL`) leave out answers `Ok` where this test reads a refusal.
 #[test]

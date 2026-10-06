@@ -25,7 +25,7 @@
       "parse": "ok",
       "canonical_sigless": "{\"type\":\"binding\",\"prefix\":\"1.5\",\"replaces\":\"1.0.1.0.1.0.2.3\"}",
       "sig": null,
-      "why": "a later binding names the link's address of the one it replaces, in the local form"
+      "why": "a later binding names the link's address of the one it replaces, in address form"
     },
     {
       "name": "binding_spec_later_example_spaced",

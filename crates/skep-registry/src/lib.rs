@@ -1,10 +1,11 @@
 //! # skep-registry — the registry's stable core, as values
 //!
-//! What the registry's daemon half and its FRONTEND half both read and
-//! neither owns: THE TWELVE ROWS the registry allocates in the commons —
-//! five kinds and seven subtype rows at the addresses commons-map pins
-//! (REG-1.14, REG-1.15, REG-1.24) — THE TWO BODIES parsed at the record
-//! grade (REG-1.86 (a)), the binding's and the endpoint's, under ONE
+//! What the registry's two halves — the daemon that verifies and commits a
+//! registry deposit, and the client's half, a resolver that reads it back —
+//! both read and neither owns: THE TWELVE ROWS the registry allocates in the
+//! commons — five kinds and seven subtype rows at the addresses commons-map
+//! pins (REG-1.14, REG-1.15, REG-1.24) — THE TWO BODIES parsed at the
+//! record grade (REG-1.86 (a)), the binding's and the endpoint's, under ONE
 //! canonical rule (REG-1.86 (h)), THE SEEDING CHECK's three arms (REG-1.28
 //! to REG-1.32), and THE VECTOR SET every parser of the bodies is held to
 //! (`tests/vectors/records.json`).

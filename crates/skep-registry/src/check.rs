@@ -7,9 +7,11 @@
 //!    AT a foreign row's address included, each containing the other. The
 //!    domain is the PARENT's, every commons row the registry does not
 //!    itself allocate (REG-1.31): the credential ordinals are the instance
-//!    the arm was minted on and never its bound, and the sharpest case is a
-//!    foreign type placed inside the policy link's kind. The registry's own
-//!    subtype rows nest under their kinds by design and are no collision.
+//!    the arm was minted on and never its bound, and the sharpest
+//!    non-credential case is a foreign row placed inside the policy link's
+//!    kind — the mail type's, were an allocation to put it there. The
+//!    registry's own subtype rows nest under their kinds by design and are
+//!    no collision.
 //! 2. COMPLETENESS (REG-1.29): every kind and every subtype the kinds' home
 //!    names (REG-1.14, REG-1.15) has a row — a subtype's row being a row at
 //!    a prefix UNDER its own kind's row (REG-1.20); a list missing one

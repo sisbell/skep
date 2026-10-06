@@ -29,7 +29,11 @@ struct MapLine {
 /// the table, kept as the engine's ledger tests keep their `PINS`: every
 /// question the map answers of a row is asked of every line at once
 /// (`the_table_is_the_maps_line_by_line`), so a row the table gains
-/// (REG-1.19) owes one line here and meets every question where it joins.
+/// (REG-1.15) owes one line here and meets every question where it joins.
+/// No line already here changes its Deposits: a new reading row joins under
+/// the takedown record or the policy link, whose bare ordinals carry no
+/// deposit already (REG-1.19), and a kind that reads one way takes none
+/// (REG-1.86, HOW A FORM CHANGES LATER).
 const THE_MAP: [MapLine; 12] = [
     MapLine {
         of: RowOf::Kind(Kind::Binding),
@@ -130,7 +134,12 @@ fn the_table_is_the_maps_line_by_line() {
         assert_eq!(r.of, of);
         assert_eq!(r.address.to_string(), format!("1.1.0.1.0.1.0.3.{}", line.ordinals), "{of:?}");
         assert_eq!(r.type_value, line.type_value, "{of:?}");
-        assert_eq!(r.carries_deposits(), line.carries_deposits, "{of:?}");
+        assert_eq!(
+            r.carries_deposits(),
+            line.carries_deposits,
+            "{of:?}: no line's Deposits moves — a kind that reads one way takes no reading row \
+             (REG-1.86, HOW A FORM CHANGES LATER)"
+        );
         assert!(std::ptr::eq(read(), &r.address), "{of:?}: the reader is the row's own address");
         assert!(std::ptr::eq(read(), read()), "{of:?}: rebuilt per read");
     }
@@ -211,7 +220,7 @@ fn commons_type_panics_on_a_zero_ordinal() {
 
 /// THE MAP'S ORDER as a law, whatever the table's lines: `rows()` ascends in
 /// the tumbler order (T1), as its doc states, so a row the table gains
-/// (REG-1.19) takes its place by its address. The instance — the policy link
+/// (REG-1.15) takes its place by its address. The instance — the policy link
 /// and its readings ahead of `successor-of`, though `Kind::ALL`, REG-1.14's
 /// order, lists `successor-of` first — is [`THE_MAP`]'s line order.
 #[test]

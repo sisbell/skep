@@ -13,8 +13,14 @@
 //! (two readings), the policy link (five) — carries NONE on its bare
 //! ordinal, every reading a row at a prefix under it. The map's "Deposits"
 //! column is that test, computed off the subtype rows' kinds and never
-//! stored ([`Row::carries_deposits`]), so a kind given a second reading
-//! (REG-1.19) moves its column by the test alone.
+//! stored ([`Row::carries_deposits`]), so a reading row the table gains
+//! (REG-1.15) joins the column by the test alone and no row already in it
+//! moves: a new reading is the takedown record's or the policy link's, which
+//! take one at no cost, their bare ordinals carrying no deposit already
+//! (REG-1.19). A kind that reads ONE way never takes one — its deposits
+//! already ride its bare ordinal, and none is rewritten (REG-1.60) — so its
+//! later form is the MEMBER form and never a reading row (REG-1.86, HOW A
+//! FORM CHANGES LATER).
 //!
 //! THE ORDER (the map): the first three kinds in REG-1.14's order at `3.55`,
 //! `3.56`, `3.57`; `successor-of`, REG-1.14's fourth kind, at `3.59` where
@@ -40,20 +46,35 @@ use std::sync::LazyLock;
 
 use skep_address::{validate, Address, Nat, Tumbler};
 
-/// The five KINDS (REG-1.14), in the order its table lists them.
+/// The five KINDS (REG-1.14), in the order its table lists them, each
+/// reading as many ways as its table's last column gives it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Kind {
-    /// The BINDING — the registration record itself: prefix → account.
+    /// The BINDING — the registration record itself: prefix → account. It
+    /// reads one way, its deposits riding its bare ordinal.
     Binding,
-    /// The ENDPOINT — the org's own endpoint deposit (REG-1.9).
+    /// The ENDPOINT — the org's own endpoint deposit (REG-1.9). It reads one
+    /// way, its deposits riding its bare ordinal.
     Endpoint,
-    /// The TAKEDOWN RECORD — the operator's serving-layer instrument, with
-    /// its LIFTED subtype.
+    /// The TAKEDOWN RECORD's kind — the operator's serving-layer instrument
+    /// and LIFTED, its reversal. It reads two ways, each a subtype row under
+    /// this one: the BASE reading, the instrument itself
+    /// ([`Subtype::TakedownBase`]; REG-1.86: this kind's row and that reading
+    /// "being one record"), and LIFTED ([`Subtype::TakedownLifted`]). No
+    /// deposit rides this kind's bare ordinal (REG-1.18;
+    /// [`Row::carries_deposits`]).
     TakedownRecord,
-    /// `successor-of` — the succession claim, at the fork's seat alone.
+    /// `successor-of` — the succession claim, at the fork's seat alone. It
+    /// reads one way, its deposits riding its bare ordinal.
     SuccessorOf,
-    /// The POLICY LINK — the link naming the published policy document,
-    /// with the four records that ride under it as subtypes.
+    /// The POLICY LINK's kind — the link naming the published policy
+    /// document, and the records that ride under it. It reads five ways,
+    /// each a subtype row under this one: the link's OWN reading, the link
+    /// itself ([`Subtype::PolicyLinkOwn`]; REG-1.86: this kind's row and that
+    /// reading "being one record"), the disavowal, an expulsion's and a
+    /// succession's ground records, and the org-chosen succession policy. No
+    /// deposit rides this kind's bare ordinal (REG-1.18;
+    /// [`Row::carries_deposits`]).
     PolicyLink,
 }
 
@@ -82,11 +103,12 @@ impl Kind {
 /// The seven SUBTYPE rows (REG-1.15), in the order its table lists them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Subtype {
-    /// The takedown record's own BASE reading.
+    /// The takedown record's BASE reading — the operator's instrument itself.
     TakedownBase,
     /// LIFTED — the takedown record's reversal.
     TakedownLifted,
-    /// The policy link's OWN reading.
+    /// The policy link's OWN reading — the link itself, naming the published
+    /// policy document; link-alone.
     PolicyLinkOwn,
     /// The DISAVOWAL — the one type of it, an author's in their own doc 1
     /// or an officer's at the policy home.
@@ -213,10 +235,15 @@ impl Row {
     /// subtype row carries deposits; a kind's own row carries them exactly
     /// where no subtype row nests under the kind, a kind that reads ONE way,
     /// and none where its readings are rows under it. Computed off
-    /// [`Subtype::ALL`] and [`Subtype::kind`] and never stored, so a kind
-    /// given a SECOND reading (REG-1.19) carries none on its bare ordinal by
-    /// the test itself once its subtype joins `Subtype::ALL`, as the
-    /// completeness arm requires of every subtype row.
+    /// [`Subtype::ALL`] and [`Subtype::kind`] and never stored, so a reading
+    /// row added under the takedown record or the policy link (REG-1.15,
+    /// REG-1.19) carries deposits by the test itself once its subtype joins
+    /// `Subtype::ALL`, as the completeness arm requires of every subtype row.
+    /// The test never moves a kind's own row: a kind that reads ONE way takes
+    /// no reading row, since a subtype under it would leave the deposits
+    /// already on its bare ordinal, which no rewrite reaches (REG-1.60), on
+    /// an ordinal this test reads as carrying none (REG-1.86, HOW A FORM
+    /// CHANGES LATER).
     pub fn carries_deposits(&self) -> bool {
         match self.of {
             RowOf::Subtype(_) => true,

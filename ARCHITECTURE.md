@@ -345,7 +345,8 @@ Rules that hold across its files:
   is no record of that kind. The vector set under `tests/vectors/` is
   what every parser of the bodies is held to — this crate's, and any
   other a reader of the bodies builds (`skep-resolve` builds none: it
-  calls `body::parse`); a parser is never derived from another parser.
+  calls `skep_registry::parse`); a parser is never derived from another
+  parser.
 - **The check runs on lists.** `seeding_check` takes the registry's rows
   and the foreign rows as lists, so every arm is proved on a list a suite
   builds; the shipped table passes, and the daemon runs the check over
@@ -354,11 +355,13 @@ Rules that hold across its files:
 Its integration suite is one binary, `tests/it/`: `rows` (the table from
 outside the crate, and `commons_type`'s panics), `check` (the three arms on
 mutated lists, each of the twelve rows' absence among them) and `body` (the
-vector set at this parser, the examples' one canonical form, the escape
-table at every Unicode scalar value, the admission sentence and the
-parse's totality as laws over every one-byte mutant of every admitted
-vector, and every law of the parse at once on seeded hostile bodies
-several edits from the vectors, met at every refusal the parse answers).
+vector set at this parser, the examples' one canonical form, and the cases
+that pin this parser alone — a refusal's member, the first stage to fault,
+the `type` member read off its kind's row), with its child `body/laws.rs`
+(the escape table at every Unicode scalar value, the admission sentence and
+the parse's totality over every one-byte mutant of every admitted vector,
+and every law of the parse at once on seeded hostile bodies several edits
+from the vectors, met at every refusal the parse answers).
 
 ## The resolver, `skep-resolve`
 

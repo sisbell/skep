@@ -184,9 +184,8 @@ pub(crate) fn bare_origins(cfg: &AuthConfig) -> BTreeSet<Origin> {
 /// The SIGNED arm's origin set: `configured` ALONE once claimed — the
 /// claim-time drop that closes the cross-board relay — else the bare set
 /// (AUTH-4.3). `claimed` is the mode boundary (CLAIMED-PERMISSIVE and
-/// ENFORCING alike), read from the identity fold beside the engine — the
-/// spec's `&World` argument presumes the slice rides in the world, which
-/// this build keeps beside it (see the build report).
+/// ENFORCING alike), read off the World's identity slice by the caller,
+/// which hands over the one bit this function reads.
 pub(crate) fn signed_origins(cfg: &AuthConfig, claimed: bool) -> BTreeSet<Origin> {
     if claimed {
         cfg.configured.clone()

@@ -594,10 +594,10 @@ impl CommitsLog {
     /// what the reconstruction learned. Returns the replayed log and the
     /// walk's classified positions for the feed's derived structures.
     ///
-    /// COST — this walk is part of the feed's open, one of the two steps of
-    /// daemon startup [`crate::server::Daemon::open`] names as costing more
-    /// than O(1) in the data dir (the identity fold's rebuild is the other):
-    /// reconstruction spends one whole-world `Engine::world_at` per uncovered
+    /// COST — this walk is part of the feed's open, the one step of daemon
+    /// startup [`crate::server::Daemon::open`] names as costing more than
+    /// O(1) in the data dir beyond the engine's own recovery: reconstruction
+    /// spends one whole-world `Engine::world_at` per uncovered
     /// boundary — a checkpoint deserialize plus a journal fold each — plus
     /// one world diff per boundary for its classification (`derived_docs`
     /// states that cost), so a dir with NO coverage (a

@@ -126,8 +126,6 @@ use crate::media::deposit_read::deposit_read;
 use crate::media::gate::{MediaGate, Scope};
 use crate::media::pruner::{self, PrunePass};
 use crate::media::serve;
-#[cfg(feature = "test-hooks")]
-use crate::notice;
 
 /// The family's one path.
 const FAMILY: &str = "/blob/upload";
@@ -605,98 +603,6 @@ impl Daemon {
     /// pruner's loop waits on before its first pass.
     pub(super) fn index_is_ready_for_pruning(&self) -> bool {
         self.media.index_ready()
-    }
-
-    /// The line [`Daemon::hold_blob_finish_at`]'s hold writes on the
-    /// operator stream as it parks — what the harness watches the child's
-    /// stderr for before it kills.
-    #[cfg(feature = "test-hooks")]
-    #[doc(hidden)]
-    pub const BLOB_HOLD_NOTICE: &'static str =
-        "test seam: held inside a blob finish; kill this process";
-
-    /// TEST HOOK (the standing of every hook in `server/hooks.rs`:
-    /// `#[doc(hidden)]`, not a stable API): HOLD every later finish of the
-    /// blob store before the named step — writing
-    /// [`Daemon::BLOB_HOLD_NOTICE`] on the operator stream and parking
-    /// the request's thread for good — so the dirty-crash harness
-    /// (`tests/it/hazard.rs`) can SIGKILL the process THERE and judge the
-    /// reopen over exactly the directory a crash at that step leaves. Held
-    /// at the deferred `UnlinkAside` step, the hold parks the TRANSPORT's
-    /// thread after the reply is written, the answer already given. Not
-    /// disarmable.
-    #[cfg(feature = "test-hooks")]
-    #[doc(hidden)]
-    pub fn hold_blob_finish_at(&self, step: skep_blobs::Step) {
-        self.media.store().hold_at(step, || {
-            notice::line(Self::BLOB_HOLD_NOTICE);
-            loop {
-                std::thread::park();
-            }
-        });
-    }
-
-    /// TEST HOOK (the same standing): the volume's capacity the media gate
-    /// read once at the open — the default per-account limit's source — so
-    /// a suite judges the deposit read's `per_account` against the same
-    /// read; `None` where the host answered none.
-    #[cfg(any(test, feature = "test-hooks"))]
-    #[doc(hidden)]
-    pub fn media_capacity(&self) -> Option<u64> {
-        self.media.capacity()
-    }
-
-    /// TEST HOOK (the same standing): FAIL every later finish of the blob
-    /// store at the named step with an I/O error, or `None` to fail nothing
-    /// — the store's own injection (`skep-blobs`'s `fail_at`), so a suite
-    /// drives a finish cut before its rename over the wire and judges the
-    /// empty resume that finishes it.
-    #[cfg(feature = "test-hooks")]
-    #[doc(hidden)]
-    pub fn fail_blob_finish_at(&self, step: Option<skep_blobs::Step>) {
-        self.media.store().fail_at(step);
-    }
-
-    /// TEST HOOK (the same standing): INSTALL a media limits record — the
-    /// serving layer's channel (AUTH-4.70) in a suite's hand until that
-    /// channel lands: the per-account limit, the venue's total, the lease
-    /// interval (`None` keeps the daemon's default) and the record's
-    /// address the deposit read echoes.
-    #[cfg(any(test, feature = "test-hooks"))]
-    #[doc(hidden)]
-    pub fn install_media_limits(
-        &self,
-        per_account: Option<u64>,
-        venue_total: Option<u64>,
-        lease_interval_ms: Option<u64>,
-        address: Option<String>,
-    ) {
-        use crate::media::gate::{Limits, LEASE_INTERVAL_DEFAULT_MS};
-        self.media.install(Limits {
-            per_account,
-            venue_total,
-            lease_interval_ms: lease_interval_ms.unwrap_or(LEASE_INTERVAL_DEFAULT_MS),
-            per_file_cap: crate::limits::MAX_BLOB_BYTES,
-            address,
-        });
-    }
-
-    /// TEST HOOK (the same standing): advance the media gate's clock by
-    /// `ms` — every upload expiry and lease is judged against it — so a
-    /// suite drives an expiration through a seam rather than a `sleep`.
-    #[cfg(any(test, feature = "test-hooks"))]
-    #[doc(hidden)]
-    pub fn advance_media_clock_ms(&self, ms: u64) {
-        self.media.advance_clock_ms(ms);
-    }
-
-    /// TEST HOOK (the same standing): the floor reads `bytes` as the
-    /// volume's free space (`None`: the host's again), so a suite reaches
-    /// the floor's refusal without filling a disk.
-    #[cfg(any(test, feature = "test-hooks"))]
-    #[doc(hidden)]
-    pub fn set_media_free_space(&self, bytes: Option<u64>) {
-        self.media.set_free_space(bytes);
     }
 }
 

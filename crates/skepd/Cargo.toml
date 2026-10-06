@@ -68,9 +68,9 @@ skep-arrangement = { path = "../skep-arrangement" }
 skep-retrieval = { path = "../skep-retrieval" }
 skep-links = { path = "../skep-links" }
 skep-discovery = { path = "../skep-discovery" }
-# The AUTH identity fold (credential data model, key sets, the classify
-# oracle). skepd composes the fold BESIDE the engine — derived state rebuilt
-# from the recovered world, never persisted here.
+# The AUTH identity vocabulary: the credential data model, key sets, the
+# classify oracle and the entry frame's rows. The fold itself is the
+# engine's — the World's identity slice (AUTH-2.79) — which skepd reads.
 skep-identity = { path = "../skep-identity" }
 # THE REGISTRY'S CORE AS VALUES: the twelve commons rows, the binding and
 # endpoint bodies under one canonical rule, and the seeding check — read

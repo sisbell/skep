@@ -14,7 +14,7 @@ use super::reply::{
 };
 use super::request::{at_most_once, query_pairs};
 use super::Daemon;
-use crate::auth::fold::key_set_of;
+use crate::auth::key_set_of;
 use crate::codec::{check_keys, key_set_reply, obj, DaemonOp};
 use crate::limits::{DEFAULT_CHANGES_LIMIT, MAX_CHANGES_LIMIT};
 use crate::write_path::{ChangesAnswer, ChangesQuery, FeedClass};

@@ -849,7 +849,7 @@ fn forked_seat<'a>(seat: Option<&'a Address>, identity: &IdentityState) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::fold::addr_of;
+    use crate::auth::policy::addr_of;
 
     /// The seat carve is SILENT wherever its comparison has no referent: with
     /// no header field, and — the cell the rule does not speak to — on an

@@ -47,14 +47,14 @@ use crate::World;
 /// any type outside the deposit class is, and a bare `make_link` typed one
 /// is an ordinary link write on the plain path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RegistryKind {
+pub(super) enum RegistryKind {
     Binding,
     Endpoint,
 }
 
 impl RegistryKind {
     /// The body this kind's record carries, the parse's own kind.
-    pub(crate) fn body_kind(self) -> BodyKind {
+    pub(super) fn body_kind(self) -> BodyKind {
         match self {
             RegistryKind::Binding => BodyKind::Binding,
             RegistryKind::Endpoint => BodyKind::Endpoint,
@@ -72,7 +72,7 @@ impl RegistryKind {
 /// check's exemption of the record's atom, the pre-claim gate's refusal of
 /// a registry-kind deposit into the system account, and the route of its
 /// link to the registry sequence — stated once so the readers cannot part.
-pub(crate) fn registry_deposit_kind<'s>(
+pub(super) fn registry_deposit_kind<'s>(
     ty: impl IntoIterator<Item = &'s Span>,
 ) -> Option<RegistryKind> {
     let named = single_address(ty)?;
@@ -391,7 +391,7 @@ pub(crate) fn registry_admission(
 /// a second time. The binding and the endpoint are M5's third and fourth
 /// members and the registry's own rows spelled a second time — held EQUAL by
 /// the suite that sees both spellings, and no foreign row here.
-pub(crate) fn seeding_domain() -> Vec<Address> {
+fn seeding_domain() -> Vec<Address> {
     pins_outside_the_registry()
         .into_iter()
         .chain([t_enroll(), t_retire(), t_claim()])
@@ -419,7 +419,7 @@ mod tests {
     use skep_febe::Disposition::{Permanent, Reorder};
 
     use super::*;
-    use crate::auth::fold::addr_of;
+    use crate::auth::policy::addr_of;
     use crate::auth::policy::{deposits_credential_link, record_deposit_kind};
 
     /// THE TWO SETS ARE DISJOINT BY CONSTRUCTION: over every registry row,

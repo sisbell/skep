@@ -64,7 +64,7 @@ fn daemon_rejected(r: DaemonRejection<'_>) -> Vec<u8> {
 /// channel's shapes are rendered (the codec's module doc draws the line,
 /// and the transport's own shapes sit on the other side of it).
 ///
-/// `set` is [`crate::auth::fold::key_set_of`]'s answer over the world the
+/// `set` is [`crate::auth::key_set_of`]'s answer over the world the
 /// route holds and the identity slice that world carries: `None` is the
 /// not-an-account case and answers the EXISTING code `not_an_account`; a
 /// keyless account answers empty lists. Entries ride in the key set's own

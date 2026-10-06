@@ -18,7 +18,7 @@ use super::reply::{
 use super::request::HttpRequest;
 use super::scan::ScanBusy;
 use super::{Daemon, Moment};
-use crate::auth::fold::key_set_of;
+use crate::auth::key_set_of;
 use crate::auth::policy::{
     deposits_credential_link, deposits_registry_link, op_shape_refusal, plain_admission,
     registry_admission, CredentialRefusal, DepositSpans, RecordSig,

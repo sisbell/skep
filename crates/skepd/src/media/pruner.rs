@@ -53,7 +53,8 @@ use std::time::Duration;
 
 use parking_lot::{Condvar, Mutex};
 
-use super::gate::{MediaGate, DESIGNATION};
+use super::cell::DESIGNATION;
+use super::gate::MediaGate;
 use crate::limits::{COMPACTION_MIN_LINES, COMPACTION_TRIGGER};
 use crate::notice;
 

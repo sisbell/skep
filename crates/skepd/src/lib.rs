@@ -23,9 +23,10 @@
 //!   producers it scopes, the signed-ops write-path check and the ENTRY
 //!   frame it verifies a presented `attest` over (the hybrid signature's
 //!   rules are `skep-signature`'s, the one crate that links the signature
-//!   libraries; skepd calls its verify), and the identity fold this daemon
-//!   composes BESIDE the engine (derived state, rebuilt at open, never
-//!   persisted here).
+//!   libraries; skepd calls its verify), and the readers of the World's
+//!   identity slice — the key table the engine folds at each credential
+//!   commit and checkpoints with the world (AUTH-2.79), which the daemon
+//!   reads off the snapshot it holds and never rebuilds.
 //! * `write_path/` — the ONE ordering every write rides (commit, record,
 //!   announce, under one serialization guard) and, behind it, the
 //!   PUBLISHED HEAD writer: `H` = `1.1.0.1.0.2` written as a new published
@@ -149,8 +150,8 @@ pub use auth::{AuthOptions, NodePrefix, NotANodePrefix, NotCanonical, Origin, Po
 pub use codec::JsonCodec;
 pub use media::MediaOptions;
 pub use server::{
-    body_cap, serve, Body, Daemon, DaemonError, Fetch, HttpRequest, Peer, Reply, Routed, Skepd,
-    DEFAULT_WORKERS, MIN_WORKERS, UNIVERSAL_HEADERS,
+    body_cap, serve, Body, BodySlot, Daemon, DaemonError, Fetch, HttpRequest, Peer, Reply, Routed,
+    Skepd, DEFAULT_WORKERS, MIN_WORKERS, UNIVERSAL_HEADERS,
 };
 
 /// The engine types this crate's public surface hands out: the world
@@ -172,7 +173,10 @@ pub use server::{
 /// takes, `Address`, which [`NodePrefix::address`] answers, and
 /// `Attestation`, which the doc-hidden test hook `Daemon::attestation_at`
 /// answers, are `skep-namespace`'s, `skep-address`'s and `skep-kernel`'s,
-/// and reach a client through `skep-febe`'s own re-exports. No signature
+/// and reach a client through `skep-febe`'s own re-exports. And
+/// `serde_json::Value`, which [`tools::inventory`] answers, is
+/// `serde_json`'s — the crate a caller reading the daemon's JSON already
+/// holds, named at the major version this workspace pins. No signature
 /// library's type is among them: `skep-signature` is the one crate that
 /// links the signature libraries; skepd calls its verify.
 pub use skep_engine::{EngineError, HistoryError, OpenError, World};
@@ -219,6 +223,7 @@ const _: fn() = || {
     assert_send_sync::<Reply>();
     assert_send_sync::<Body>();
     assert_send_sync::<HttpRequest>();
+    assert_send_sync::<BodySlot>();
     assert_send_sync::<Routed<'static>>();
     assert_send_sync::<Fetch<'static>>();
     #[cfg(any(test, feature = "test-hooks"))]
@@ -234,4 +239,8 @@ const _: fn() = || {
     assert_send_sync::<NotANodePrefix>();
     assert_send_sync::<PortAlreadyBound>();
     assert_send_sync::<Peer>();
+    // The operator's tools' answers: what a pull installed, and the refusal
+    // both tools share.
+    assert_send_sync::<tools::Pulled>();
+    assert_send_sync::<tools::ToolError>();
 };

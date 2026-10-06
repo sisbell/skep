@@ -34,9 +34,11 @@ mod registry;
 pub(crate) use credential::{op_shape_refusal, precheck, DepositSpans, RecordSig};
 pub(crate) use plain::plain_admission;
 pub(crate) use registry::{
-    deposits_registry_link, genesis_seeding_check, registry_admission, registry_deposit_kind,
-    RegistryRefusal,
+    deposits_registry_link, genesis_seeding_check, registry_admission, RegistryRefusal,
 };
+// The registry's record-deposit set: read by this module's children alone,
+// through `super::`, as `record_deposit_kind` is.
+use registry::registry_deposit_kind;
 
 use skep_address::{Address, Span};
 use skep_febe::{Disposition, Op};
@@ -81,10 +83,19 @@ fn addr_spans(addrs: &[Address]) -> Vec<Span> {
     enc(addrs.iter()).spans().cloned().collect()
 }
 
+/// A T4-valid address from its components — the policy suites' one spelling
+/// of a test address.
+#[cfg(test)]
+fn addr_of(comps: &[u32]) -> Address {
+    use skep_address::{validate, Nat, Tumbler};
+    let t = Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("test tumblers are nonempty");
+    validate(t).expect("test addresses are T4-valid by construction")
+}
+
 /// A slot's spans in M7's own deposited form: [`addr_spans`] for the
 /// address form; `None` for `Resolve` — a resolved slot can never name a
-/// credential type (the allocation in [`super::fold`]), so classification never
-/// resolves.
+/// credential type (the subspace-3 allocation the engine's pins state,
+/// [`skep_engine::types`]), so classification never resolves.
 fn slotarg_kind(s: &SlotArg) -> Option<CredentialKind> {
     match s {
         SlotArg::Addrs(addrs) => record_deposit_kind(&addr_spans(addrs)),
@@ -524,12 +535,11 @@ impl CredentialRefusal {
 
 #[cfg(test)]
 mod tests {
+    use skep_address::{subtree_of, Nat};
     use skep_febe::SuccessorSpec;
 
     use super::*;
     use skep_engine::types::{t_claim, t_enroll, t_retire};
-
-    use crate::auth::fold::addr_of;
 
     /// THE RECORD-DEPOSIT SET IS THE FOLD'S KINDS, and every arm of the route
     /// reads it: over the three credential kinds, the disavowal's released
@@ -626,5 +636,70 @@ mod tests {
         }
         assert_eq!(CredentialRefusal::RecordSigRequired.token(), "record_sig_required");
         assert_eq!(CredentialRefusal::SystemAccountKeyless.token(), "system_account_keyless");
+    }
+
+    /// The five reserved subtree spans overlap nothing the credential types
+    /// name: the identity types live in subspace 3 while the shipped classes
+    /// sit at content positions 1..=5 — pinned so a change to either
+    /// allocation fails here rather than in a fold. The table is the
+    /// engine's one instance, which the fold hook and this daemon's
+    /// classifiers all read.
+    #[test]
+    fn identity_types_are_distinct_and_recognized() {
+        let enroll_span = subtree_of(t_enroll().tumbler());
+        assert_eq!(IDENTITY_TYPES.kind_of(&[enroll_span]), Some(CredentialKind::Enroll));
+        let retire_span = subtree_of(t_retire().tumbler());
+        assert_eq!(IDENTITY_TYPES.kind_of(&[retire_span]), Some(CredentialKind::Retire));
+        let claim_span = subtree_of(t_claim().tumbler());
+        assert_eq!(IDENTITY_TYPES.kind_of(&[claim_span]), Some(CredentialKind::Claim));
+        // A shipped reserved type (ghost position 1, the content subspace)
+        // is NOT a credential type.
+        let shipped_span = subtree_of(addr_of(&[1, 1, 0, 1, 0, 1, 0, 1, 1]).tumbler());
+        assert_eq!(IDENTITY_TYPES.kind_of(&[shipped_span]), None);
+    }
+
+    /// AUTH-3.70's conformance expression in miniature: a content-I-span
+    /// type slot answers no credential kind — a resolved span's start is a
+    /// mintable content position, never a subspace-3 name.
+    #[test]
+    fn a_content_span_ty_is_never_credential() {
+        // Content position 1 of some ordinary doc: <doc>.0.1.1.
+        let content = subtree_of(addr_of(&[1, 0, 1, 0, 1, 0, 1, 1]).tumbler());
+        assert_eq!(IDENTITY_TYPES.kind_of(&[content]), None);
+    }
+
+    /// The class types a `deposit` field can usefully carry are SPELLED
+    /// TWICE — M5's set, which its insert door tests a declaration against
+    /// and which sits below this crate and the engine, and the engine's
+    /// credential pins, which the fold hook classifies the pair's
+    /// `make_link` by — and the two are pinned EQUAL here, member for member
+    /// in the set's order, ENROLL then RETIRE (PUB-2.11, PUB-2.63; RES-249,
+    /// RES-261), the set's two further members being the registry's binding
+    /// and endpoint, the engine ledger's rows, which the registry sequence
+    /// classifies by (REG-1.37 as the record grade for registry records
+    /// re-reads it). The engine's own ledger holds the same equality; this
+    /// is the daemon's reading of it, at the door where a declared type
+    /// enters: if this fails, an enrollment a client declares as the fold
+    /// will classify it is refused `published_target` at the store — or
+    /// admitted there and typed as nothing the fold honors.
+    #[test]
+    fn the_deposit_class_types_are_the_engines_enroll_and_retire_pins() {
+        let spelled: Vec<Vec<Nat>> = skep_arrangement::deposit_class_types()
+            .iter()
+            .map(|ty| ty.tumbler().iter().cloned().collect())
+            .collect();
+        let row = |a: &Address| -> Vec<Nat> { a.tumbler().iter().cloned().collect() };
+        assert_eq!(
+            spelled,
+            [
+                row(t_enroll()),
+                row(t_retire()),
+                row(skep_engine::types::t_binding()),
+                row(skep_engine::types::t_endpoint()),
+            ]
+        );
+        assert_eq!(t_enroll().tumbler().to_string(), "1.1.0.1.0.1.0.3.1");
+        assert_eq!(t_retire().tumbler().to_string(), "1.1.0.1.0.1.0.3.2");
+        assert_eq!(t_claim().tumbler().to_string(), "1.1.0.1.0.1.0.3.3");
     }
 }

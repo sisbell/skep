@@ -384,7 +384,7 @@ mod tests {
     use skep_engine::types::{t_claim, t_enroll, t_retire};
 
     use super::*;
-    use crate::auth::fold::addr_of;
+    use crate::auth::policy::addr_of;
 
     /// The check's arms no wire test can reach, on a board with no `H.1` —
     /// the genesis world. A3: a home the SYSTEM ACCOUNT owns by ω is exempt,

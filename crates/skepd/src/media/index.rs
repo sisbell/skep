@@ -64,8 +64,8 @@ use skep_engine::{Engine, World};
 use skep_kernel::Snapshot;
 use skep_namespace::{HasM3, PrincipalId};
 
-use super::cell::{self, names_kind_by_prefix, Cell};
-use super::gate::{hex_of, DESIGNATION};
+use super::cell::{self, names_kind_by_prefix, Cell, DESIGNATION};
+use super::gate::hex_of;
 use crate::notice;
 
 /// A hash as every sidecar keys it: its function's designation and its hex.

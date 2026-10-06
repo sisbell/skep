@@ -12,8 +12,8 @@
 //!   crate composes rather than delegates, the caps, `preview_key` and
 //!   `undecodable_key`, the credential idempotency memo (kind-BLIND, the
 //!   one point it differs from M10's), `key_set` on `/op` and `/op-at`, and
-//!   restart carrying the identity fold back (recovery = the canonical
-//!   rebuild);
+//!   restart carrying the identity table back (the World's own slice,
+//!   recovered with it);
 //! - `blocked_prefixes` — the blocked-prefix list and the two accessors;
 //! - `slot6` — slot (6) whole: the anchor gate's HANDOFF exception, told by
 //!   address at the walk's terminus (AUTH-3.21) with the seat carve's one

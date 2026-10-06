@@ -66,8 +66,8 @@ use skep_content::Val;
 use skep_engine::World;
 use skep_febe::{ISpan, Op, OperationSurface, Rejection, Request, Response, SessionId};
 
-use super::cell::{self, Class};
-use super::gate::{hex_of, MediaGate, DESIGNATION};
+use super::cell::{self, Class, DESIGNATION};
+use super::gate::{hex_of, MediaGate};
 use crate::limits::{
     FETCH_RECHECK_BYTES, FETCH_RECHECK_INTERVAL, MAX_BLOB_BYTES, MAX_CONCURRENT_FETCHES,
 };

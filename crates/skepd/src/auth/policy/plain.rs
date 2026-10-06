@@ -23,7 +23,6 @@ use skep_namespace::{
 
 use super::attestation::attestation_check;
 use super::{addr_spans, record_deposit_kind, registry_deposit_kind, CredentialRefusal};
-use crate::auth::fold::published_unprojected;
 use crate::auth::LockRead;
 use crate::World;
 
@@ -335,16 +334,16 @@ fn replaces_refusal(
 /// it IS its account's doc 1) answered off address arithmetic what the set
 /// now answers off M3's bit.
 ///
-/// The AUTH fold reads [`published_unprojected`] — the same membership
-/// lookup WITHOUT this projection, which is the one step the two differ by;
-/// the fold's own card states the cell where that is observable.
+/// The AUTH fold — the engine's, through its `FoldCtx for World` (AUTH-2.34)
+/// — reads the same lookup WITHOUT this projection, the one step the two
+/// differ by; the fold's own card states the cell where that is observable.
 ///
 /// CONTRACT — `doc` is a REGISTERED document (PUB-6.37): a membership miss
 /// is also what an unregistered address answers, so every caller below tests
 /// registration first and an unregistered argument takes the registration
 /// refusal, never `signed_session_required`.
 fn published(world: &World, doc: &Address) -> bool {
-    published_unprojected(world, &trunk_of(doc))
+    world.published(&trunk_of(doc))
 }
 
 /// The plain path's ADMISSION at the two board-state gates, dispatched on
@@ -717,7 +716,7 @@ mod tests {
     use skep_engine::types::t_enroll;
 
     use super::*;
-    use crate::auth::fold::addr_of;
+    use crate::auth::policy::addr_of;
 
     /// PUB-2.15's projection is address arithmetic and total: a version
     /// member answers its document, a document answers itself, a member of

@@ -314,11 +314,9 @@ impl JsonCodec {
     }
 
     /// The daemon-level parse: the `key_set` frame — served by the daemon's
-    /// own dispatcher because the identity slice rides beside the engine's
-    /// `World` in this build (the authorized M10 row is unusable until the
-    /// slice is seated; see the build report) — or the ordinary M10 frame.
-    /// One grammar discipline for both: internally tagged, unknown fields
-    /// refused.
+    /// own dispatcher because M10 carries no `key_set` row (AUTH-6.18–6.20)
+    /// — or the ordinary M10 frame. One grammar discipline for both:
+    /// internally tagged, unknown fields refused.
     pub(crate) fn parse_daemon(&self, frame: &[u8]) -> Result<DaemonOp, ParseError> {
         let v: Value = match serde_json::from_slice(frame) {
             Ok(v) => v,

@@ -210,7 +210,7 @@ pub use crate::auth::session::Peer;
 pub use http::UNIVERSAL_HEADERS;
 pub use listen::{serve, Skepd, DEFAULT_WORKERS, MIN_WORKERS};
 pub use reply::{Body, Fetch, Reply, Routed};
-pub use request::HttpRequest;
+pub use request::{BodySlot, HttpRequest};
 
 /// Auto-checkpoint cadence, the commit half: every N commits (M2 evaluates
 /// on-commit; the daemon's checkpoint thread waits on the kernel's due flag,
@@ -413,7 +413,7 @@ pub struct Daemon {
     febe: OperationSurface<World>,
     codec: JsonCodec,
     /// The AUTH session layer: config, the challenge and session stores,
-    /// the credential write lock, the identity fold, the credential memo.
+    /// the credential write lock, the credential memo.
     auth: AuthState,
     /// The write path: the serialization point, the commit-metadata sidecar
     /// behind `GET /changes` and `head_time` (wire v6), the commit stream
@@ -725,7 +725,7 @@ impl Daemon {
     /// the two states in which the check's `board_unavailable` would
     /// otherwise answer every attested write until the cadence's next head.
     /// Closed HERE, at open and before anything is served: a claimed board
-    /// (the recovered fold's claimant present) whose head writer resumed no
+    /// (its identity slice naming a claimant) whose head writer resumed no
     /// head writes `H.1` now ([`WritePath::write_first_head`]) under the write
     /// path's own lock, naming the committed pair as it stands — the claim's
     /// own position where the crash was the split, and the last commit's on a
@@ -1063,20 +1063,6 @@ impl Daemon {
                 "blocked-prefix list: reissue REFUSED — {e}; the list in force stands"
             )),
         }
-    }
-}
-
-impl Daemon {
-    /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a
-    /// stable API): what the engine's open found in the data dir — the start
-    /// point, the retained checkpoints it passed over and whether a
-    /// slice-less start point resolved empty — the account the open's two
-    /// warnings are rendered from (`recovery_warnings`), so a suite can pin
-    /// what the daemon LOGGED against the report it logged it from.
-    #[cfg(any(test, feature = "test-hooks"))]
-    #[doc(hidden)]
-    pub fn recovery(&self) -> Option<&Recovery> {
-        self.engine.recovery()
     }
 }
 

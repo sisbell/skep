@@ -31,7 +31,6 @@
 //! supplies.
 
 // What the rest of the daemon reaches.
-pub(crate) mod fold;
 pub(crate) mod policy;
 pub(crate) mod session;
 
@@ -40,6 +39,7 @@ mod blocked;
 mod entropy;
 mod entry;
 mod lock;
+mod memo;
 mod options;
 mod origin;
 mod prefix;
@@ -59,12 +59,14 @@ use std::io;
 use std::path::Path;
 
 use serde_json::Value;
+use skep_address::Address;
 use skep_febe::{ReqId, SessionId};
-use skep_identity::{HasIdentity, IdentityState};
+use skep_identity::{HasIdentity, IdentityState, KeySet};
+use skep_namespace::HasM3;
 
 use crate::codec::obj;
 use crate::World;
-use fold::CredMemo;
+use memo::CredMemo;
 use session::{Challenges, Sessions};
 
 // Names this module and its own files use: its children reach them as
@@ -278,4 +280,25 @@ impl AuthState {
         }
         before.claimant().is_none() && after.claimant().is_some()
     }
+}
+
+// ── the key_set read's identity half (AUTH-6.18–6.20) ────────────────────
+
+/// The key set one `(world, identity)` pair holds for an address, or
+/// `None` when the address is not an account — the ONE account-hood test
+/// both `/op` (the head snapshot) and `/op-at` (the reconstructed world)
+/// call, so the two routes cannot diverge on it. Both hand the slice the
+/// SAME world carries, so the account-hood and the table stand on one
+/// committed state (AUTH-6.20: "`/op-at` on the reconstructed World, the
+/// slice riding in it"). The rendering is [`crate::codec::key_set_reply`]'s,
+/// where every wire shape this crate emits is rendered.
+pub(crate) fn key_set_of<'a>(
+    world: &World,
+    identity: &'a IdentityState,
+    account: &Address,
+) -> Option<&'a KeySet> {
+    world
+        .m3()
+        .is_registered_account(account)
+        .then(|| identity.key_set(account))
 }

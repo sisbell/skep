@@ -65,7 +65,8 @@ use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, S
 use skep_namespace::{HasM3, PrincipalId};
 
 use crate::codec::obj;
-use crate::media::gate::{wall_clock_ms, MediaGate, DESIGNATION};
+use crate::media::cell::DESIGNATION;
+use crate::media::gate::{wall_clock_ms, MediaGate};
 use crate::media::index::{self, CellIndex};
 use crate::media::pruner::PINNED_DESIGNATIONS;
 

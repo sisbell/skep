@@ -184,7 +184,7 @@ enum Conn<'a> {
 /// the declared length, the `Expect: 100-continue` the transport deferred to
 /// the route, and the transfer bound; the socket's own read deadline is the
 /// idle bound, set by the transport.
-pub struct BodySource<'a> {
+pub(super) struct BodySource<'a> {
     conn: Conn<'a>,
     early: Vec<u8>,
     early_at: usize,

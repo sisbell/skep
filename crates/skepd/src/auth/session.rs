@@ -500,9 +500,9 @@ fn session_account(
 
 /// AUTH-4.28 — the pure `Lookup` → `Actor` map at this snapshot. The
 /// CALLER performs the one map lookup and passes the value; `resolve`
-/// takes no store and holds no store guard. The identity state rides
-/// beside the world (the fold-beside-engine build; the spec reads it off
-/// `world.identity()`).
+/// takes no store and holds no store guard. `identity` is `world`'s own
+/// slice, `world.identity()`, which every caller hands in off the one
+/// snapshot it took.
 ///
 /// A `Found` binding meets THE BLOCK first (AUTH-4.63's second trigger):
 /// where the installed list covers the session's OWN account — step 4b's

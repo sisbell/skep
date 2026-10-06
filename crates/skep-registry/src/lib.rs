@@ -22,8 +22,9 @@
 //!   commons type address at one or more positive ordinals;
 //! * `body` — [`Binding`], [`Endpoint`] with its [`Origins`], [`Body`] and
 //!   [`Record`], the kind [`BodyKind`] a parse is named under, the one parser
-//!   [`parse`] under the canonical rule, the encoder [`encode`], the refusals
-//!   [`ParseRefusal`] with the [`Member`] a refusal names, and the cap
+//!   [`parse`] under the canonical rule, the encoder [`encode`], [`Member`] —
+//!   each member's one name, which the parse and the encoder spell it by and
+//!   a refusal names — the refusals [`ParseRefusal`], and the cap
 //!   [`MAX_REGISTRY_RECORD_BYTES`];
 //! * `check` — [`seeding_check`] and its refusal [`SeedingRefusal`], run by
 //!   the daemon ahead of every genesis.

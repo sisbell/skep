@@ -33,7 +33,8 @@ deposits, and the resolver that reads them back — is this crate:
   kinds' subtype rows and never stored: a kind that reads more than one way
   carries none on its bare ordinal.
 - **The two bodies** (`Binding`, `Endpoint`, `Origins`, `Body`, `BodyKind`,
-  `parse`, `encode`, `Record`, `ParseRefusal` with the `Member` a refusal
+  `parse`, `encode`, `Record`, `ParseRefusal`, and `Member`, each member's
+  one name, which the parse and the encoder spell it by and a refusal
   names) — `{"type":"binding","prefix":…}`
   and `{"type":"endpoint","origins":[…]}`, each with `replaces` where a
   later record names the one it replaces and `sig` where signed, under THE

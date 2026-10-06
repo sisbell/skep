@@ -220,8 +220,10 @@ impl Record {
     }
 }
 
-/// A body member a refusal names (REG-1.86's table) — `type` aside, whose
-/// every fault is [`ParseRefusal::WrongType`].
+/// A body member beside `type` (REG-1.86's table), by the one name a body
+/// spells it under: the name [`parse`] reads the member by, [`encode`]
+/// writes it under, and a refusal names — `type` aside, which opens every
+/// body and whose every fault is [`ParseRefusal::WrongType`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Member {
     /// `prefix` — the binding's own member.
@@ -235,8 +237,9 @@ pub enum Member {
 }
 
 impl Member {
-    /// The member's name as a body spells it — the tail of its refusal's
-    /// token.
+    /// The member's name as a body spells it: what [`parse`] reads the
+    /// member by, what [`encode`] writes it under, and the tail of its
+    /// refusal's token.
     pub fn name(self) -> &'static str {
         match self {
             Member::Prefix => "prefix",
@@ -482,11 +485,12 @@ pub fn encode(body: &Body, sig: Option<&str>) -> String {
     out.push('"');
     match body {
         Body::Binding(b) => {
-            out.push_str(",\"prefix\":");
+            push_member_name(Member::Prefix, &mut out);
             escape_json_string(&b.prefix.to_string(), &mut out);
         }
         Body::Endpoint(e) => {
-            out.push_str(",\"origins\":[");
+            push_member_name(Member::Origins, &mut out);
+            out.push('[');
             for (i, origin) in e.origins.iter().enumerate() {
                 if i > 0 {
                     out.push(',');
@@ -497,15 +501,25 @@ pub fn encode(body: &Body, sig: Option<&str>) -> String {
         }
     }
     if let Some(replaces) = body.replaces() {
-        out.push_str(",\"replaces\":");
+        push_member_name(Member::Replaces, &mut out);
         escape_json_string(&replaces.to_string(), &mut out);
     }
     if let Some(sig) = sig {
-        out.push_str(",\"sig\":");
+        push_member_name(Member::Sig, &mut out);
         escape_json_string(sig, &mut out);
     }
     out.push('}');
     out
+}
+
+/// A member's opening in the canonical form (REG-1.86 (h)), `,"<name>":` —
+/// the comma ahead of it and its name as [`Member::name`] spells it, the
+/// name [`parse`] reads the member by — so the two sides of the canonical
+/// rule spell every member alike.
+fn push_member_name(member: Member, out: &mut String) {
+    out.push_str(",\"");
+    out.push_str(member.name());
+    out.push_str("\":");
 }
 
 /// A JSON string in the canonical escaping — the credential records' rule:

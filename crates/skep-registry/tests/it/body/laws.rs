@@ -104,9 +104,10 @@ fn every_scalar_value_in_a_string_encodes_to_a_record() {
 /// its sig-less projection a fixpoint (REG-1.86 (e)); and a record under one
 /// kind at most, `wrong_type` under the other (REG-1.86 (a)). The one-byte
 /// mutants and the hostile bodies below both drive it, so a law joins here
-/// once and every input meets it. Answers each kind's refusal, `None` where
-/// the kind admitted the body.
-fn assert_the_laws_at(body: &[u8]) -> [Option<ParseRefusal>; 2] {
+/// once and every input meets it. Hands back, under each kind, the parse's
+/// answer with its record set aside: `Ok(())` where the kind admitted the
+/// body, the refusal where it did not.
+fn assert_the_laws_at(body: &[u8]) -> [Result<(), ParseRefusal>; 2] {
     let shown = || {
         let head: String = String::from_utf8_lossy(body).chars().take(240).collect();
         format!("{head:?} ({} bytes)", body.len())
@@ -123,7 +124,7 @@ fn assert_the_laws_at(body: &[u8]) -> [Option<ParseRefusal>; 2] {
                 assert!(encoded.as_bytes() == body, "{kind:?}: not its own encoding: {}", shown());
                 let again = parse(kind, record.canonical_sigless().as_bytes());
                 assert_eq!(again, Ok(Record { body: record.body, sig: None }), "{}", shown());
-                None
+                Ok(())
             }
             Err(refusal) => {
                 assert_eq!(
@@ -132,19 +133,19 @@ fn assert_the_laws_at(body: &[u8]) -> [Option<ParseRefusal>; 2] {
                     "{kind:?}: {refusal}: {}",
                     shown()
                 );
-                Some(refusal)
+                Err(refusal)
             }
         }
     });
     match &answers {
-        [None, None] => panic!("a record under both kinds: {}", shown()),
-        [None, Some(other)] | [Some(other), None] => assert_eq!(
+        [Ok(()), Ok(())] => panic!("a record under both kinds: {}", shown()),
+        [Ok(()), Err(other)] | [Err(other), Ok(())] => assert_eq!(
             *other,
             ParseRefusal::WrongType,
             "a record under one kind, and the other's cause: {}",
             shown()
         ),
-        [Some(_), Some(_)] => {}
+        [Err(_), Err(_)] => {}
     }
     answers
 }
@@ -207,7 +208,7 @@ fn the_parse_laws_hold_on_every_one_byte_mutant() {
     assert!(mutants.len() > 10_000, "{} mutants", mutants.len());
     let (mut admitted, mut refused) = (0, 0);
     for bytes in &mutants {
-        if assert_the_laws_at(bytes).contains(&None) {
+        if assert_the_laws_at(bytes).iter().any(Result::is_ok) {
             admitted += 1;
         } else {
             refused += 1;
@@ -222,7 +223,7 @@ fn the_parse_laws_hold_on_every_one_byte_mutant() {
 struct SplitMix64(u64);
 
 impl SplitMix64 {
-    fn next(&mut self) -> u64 {
+    fn next_u64(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -232,7 +233,7 @@ impl SplitMix64 {
 
     /// A draw below `n`, which is positive.
     fn below(&mut self, n: usize) -> usize {
-        (self.next() % n as u64) as usize
+        (self.next_u64() % n as u64) as usize
     }
 
     /// One of `items`, which hold at least one.
@@ -349,19 +350,49 @@ fn other_values() -> Vec<String> {
     values
 }
 
+/// What the hostile bodies are drawn from, each list under its own name, so
+/// no draw takes one list for another.
+struct Corpus {
+    /// The admitted vectors whole, the one at the cap among them: what half
+    /// the bodies start from, and what an edit carries a range over from.
+    sources: Vec<Vec<u8>>,
+    /// The fragments an edit writes ([`fragments`]).
+    fragments: Vec<Vec<u8>>,
+    /// The values a composed body writes under a name not their own
+    /// ([`other_values`]).
+    others: Vec<String>,
+}
+
+impl Corpus {
+    /// The corpus every run draws from: the set's admitted vectors, the
+    /// fragments and the other values.
+    fn new() -> Corpus {
+        let set = vector_set();
+        let sources = set["vectors"]
+            .as_array()
+            .expect("vectors")
+            .iter()
+            .filter(|v| v["parse"] == "ok")
+            .map(bytes_of)
+            .collect();
+        Corpus { sources, fragments: fragments(), others: other_values() }
+    }
+}
+
 /// A composed body: an object of up to five members — most often `type`
 /// first, under one of the two kinds' strings — the rest each a name of
 /// [`OWN_VALUES`], three times in four under a value of its own and else
 /// under one of [`other_values`], in the order drawn, joined canonically or,
 /// one time in ten, with a space after each comma.
-fn composed_body(rng: &mut SplitMix64, others: &[String]) -> Vec<u8> {
+fn composed_body(rng: &mut SplitMix64, corpus: &Corpus) -> Vec<u8> {
     let mut members = Vec::new();
     if rng.below(5) != 0 {
         members.push(format!(r#""type":{}"#, rng.pick(&[r#""binding""#, r#""endpoint""#])));
     }
     for _ in 0..=rng.below(4) {
         let (name, own) = rng.pick(&OWN_VALUES);
-        let value = if rng.below(4) != 0 { *rng.pick(own) } else { rng.pick(others).as_str() };
+        let value =
+            if rng.below(4) != 0 { *rng.pick(own) } else { rng.pick(&corpus.others).as_str() };
         members.push(format!(r#""{name}":{value}"#));
     }
     let comma = if rng.below(10) == 0 { ", " } else { "," };
@@ -374,19 +405,19 @@ fn composed_body(rng: &mut SplitMix64, others: &[String]) -> Vec<u8> {
 /// a range of up to 24 bytes cut, enough for a whole member; a range of up
 /// to 16 doubled; a range of up to 32 carried over from an admitted vector;
 /// or the whole body wrapped in an array.
-fn edit(rng: &mut SplitMix64, body: &mut Vec<u8>, sources: &[Vec<u8>], fragments: &[Vec<u8>]) {
+fn edit(rng: &mut SplitMix64, body: &mut Vec<u8>, corpus: &Corpus) {
     let at = rng.below(body.len() + 1);
     match rng.below(6) {
         0 => {
             let seams: Vec<usize> =
                 (0..body.len()).filter(|&i| b"{[,".contains(&body[i])).map(|i| i + 1).collect();
             let at = if seams.is_empty() { at } else { *rng.pick(&seams) };
-            let mut fragment = rng.pick(fragments).clone();
+            let mut fragment = rng.pick(&corpus.fragments).clone();
             fragment.push(b',');
             body.splice(at..at, fragment);
         }
         1 => {
-            let fragment = rng.pick(fragments);
+            let fragment = rng.pick(&corpus.fragments);
             body.splice(at..at, fragment.iter().copied());
         }
         2 => {
@@ -399,7 +430,7 @@ fn edit(rng: &mut SplitMix64, body: &mut Vec<u8>, sources: &[Vec<u8>], fragments
             body.splice(end..end, doubled);
         }
         4 => {
-            let other = rng.pick(sources);
+            let other = rng.pick(&corpus.sources);
             let from = rng.below(other.len());
             let end = other.len().min(from + 1 + rng.below(32));
             body.splice(at..at, other[from..end].iter().copied());
@@ -415,19 +446,14 @@ fn edit(rng: &mut SplitMix64, body: &mut Vec<u8>, sources: &[Vec<u8>], fragments
 /// [`edit`]s from itself — the vector at the cap among them, so a body is
 /// carried past it — and half the time a [`composed_body`], one time in
 /// four carried an edit from itself.
-fn hostile_body(
-    rng: &mut SplitMix64,
-    sources: &[Vec<u8>],
-    fragments: &[Vec<u8>],
-    others: &[String],
-) -> Vec<u8> {
+fn hostile_body(rng: &mut SplitMix64, corpus: &Corpus) -> Vec<u8> {
     let (mut body, edits) = if rng.below(2) == 0 {
-        (rng.pick(sources).clone(), 1 + rng.below(4))
+        (rng.pick(&corpus.sources).clone(), 1 + rng.below(4))
     } else {
-        (composed_body(rng, others), usize::from(rng.below(4) == 0))
+        (composed_body(rng, corpus), usize::from(rng.below(4) == 0))
     };
     for _ in 0..edits {
-        edit(rng, &mut body, sources, fragments);
+        edit(rng, &mut body, corpus);
     }
     body
 }
@@ -478,24 +504,16 @@ const EVERY_CAUSE: [&str; 17] = [
 /// every stage.
 #[test]
 fn the_parse_laws_hold_on_seeded_hostile_bodies() {
-    let set = vector_set();
-    let sources: Vec<Vec<u8>> = set["vectors"]
-        .as_array()
-        .expect("vectors")
-        .iter()
-        .filter(|v| v["parse"] == "ok")
-        .map(bytes_of)
-        .collect();
-    let (fragments, others) = (fragments(), other_values());
+    let corpus = Corpus::new();
     let mut rng = SplitMix64(0x5EED_2E61_5781_0D1E);
     let mut admitted = 0;
     let mut causes = std::collections::BTreeSet::new();
     for _ in 0..hostile_rounds() {
-        let body = hostile_body(&mut rng, &sources, &fragments, &others);
+        let body = hostile_body(&mut rng, &corpus);
         for answer in assert_the_laws_at(&body) {
             match answer {
-                None => admitted += 1,
-                Some(refusal) => {
+                Ok(()) => admitted += 1,
+                Err(refusal) => {
                     causes.insert(refusal.token());
                 }
             }

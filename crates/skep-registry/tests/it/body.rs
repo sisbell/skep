@@ -80,7 +80,7 @@ fn the_vector_set_meets_one_answer_at_this_parser() {
                 );
                 assert_eq!(record.sig.as_deref(), vector["sig"].as_str(), "{name}: the sig as found");
                 let again = parse(kind, record.canonical_sigless().as_bytes()).expect("a fixpoint");
-                assert_eq!(again, Record { body: record.body.clone(), sig: None }, "{name}");
+                assert_eq!(again, Record { body: record.body, sig: None }, "{name}");
                 admitted += 1;
             }
             ("ok", Err(refusal)) => panic!("{name}: the set admits it, the parser refuses {refusal}"),

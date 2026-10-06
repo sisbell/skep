@@ -513,9 +513,10 @@ each ceremony:
   set that opens an account, the key diagnosis, the `closed` predicate.
 - Under `acting`. `sign.rs` the `Signer` seam and the bytes a signer signs
   (the session payload, a credential record's frame); `sheet.rs` the key
-  file's one spelling and its refusals; `store.rs` the `FileStore` — key
-  files, the bindings file, the lock — and the halts its refusals render
-  as, its unit suite in `store/tests.rs`; `person.rs` the `Person` seam,
+  file's one spelling and its refusals, the byline `Label` and the `Seed`
+  every secret is born into; `store.rs` the `FileStore` — key files, the
+  bindings file, the lock — and the halts its refusals render as, its unit
+  suite in `store/tests.rs`; `person.rs` the `Person` seam,
   and under `test-hooks` `person/scripted.rs`, the scripted person a suite
   drives; `derive/records.rs` the one admitted read of an account's
   credential records, their positions and hands; `verify.rs` the reader's
@@ -543,16 +544,21 @@ Rules that hold across its files:
   reads it on its own `204` as the token already dead (AUTH-4.47).
 - **One home per composition.** Every signed session opens through
   `handshake.rs`, its pre-check's reads ahead of the `/challenge`
-  (AUTH-5.65); every credential record is written by `deposit.rs`; an
-  account's first signed session runs `first_session.rs`'s two states. A
-  walk states only what its site adds.
+  (AUTH-5.65), and owns its end: closed, ended by its own commit, or handed
+  out — and closed on its drop where a halt took none of the three; every
+  credential record is written by `deposit.rs`, which answers the armed arm
+  that stopped it (`DepositHalt`) beside its face; an account's first signed
+  session runs `first_session.rs`'s two states, and every persist-first
+  `delegate` its one form. A walk states only what its site adds.
 - **The ceremony is layered.** Nothing outside `ceremony/` names it;
   inside, a walk names compositions and never another walk, and a
   composition names no walk. `tests/it/tidy.rs` checks it.
 - **Key material is written once, and no anchor rests in the store.**
   `FileStore::write_once` — `O_CREAT|O_EXCL`, mode `0600` at creation —
   writes every key file and every anchor file; a path inside the store is
-  refused as an anchor's destination and as its source (§3.4).
+  refused as an anchor's destination and as its source (§3.4). The store is
+  a stored key's custodian: a lookup answers public facts, and the seed
+  leaves the store only as the signer `KeyStore::signer` derives (§3a).
 - **No journal.** Every walk resumes by reading the board (P4); the one
   kind of line written ahead of a frame is the persist-first `new_id`
   binding line (§4.3; AUTH-5.20).

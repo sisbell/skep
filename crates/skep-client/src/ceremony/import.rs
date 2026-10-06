@@ -34,7 +34,7 @@ use crate::derive::records::{Hand, Records};
 use crate::derive::KeyDiagnosis;
 use crate::halt::Halt;
 use crate::person::{Custody, Import, Imported, KeptOrPlaced, Person, Public, Question, Secret};
-use crate::sheet::{render_inert, KeyFile};
+use crate::sheet::{render_inert, KeyFile, Seed};
 use crate::sign::Signer;
 use crate::store::FileStore;
 
@@ -148,11 +148,11 @@ fn compare_facts(file: &KeyFile, cx: &ImportContext<'_>) -> Result<(), Halt> {
 /// the position and the retiring hand's label where readable, neither
 /// asserted below the floor; the act off the anchor flags.
 fn retired_sheet(cx: &ImportContext<'_>, fp: &Fingerprint) -> Halt {
-    let label = cx.records.label_of(fp).filter(|l| !l.is_empty()).map(|l| render_inert(&l)).unwrap_or_else(|| "(no label recorded)".into());
+    let label = cx.records.label_of(fp).map(|l| render_inert(&l)).unwrap_or_else(|| "(no label recorded)".into());
     let cause = match cx.records.retirement_of(fp) {
         Some(rec) => match (&rec.hand, rec.position) {
             (Hand::Key(hand), Some(at)) => {
-                let hand_label = cx.records.label_of(hand).filter(|l| !l.is_empty()).map(|l| render_inert(&l)).unwrap_or_default();
+                let hand_label = cx.records.label_of(hand).map(|l| render_inert(&l)).unwrap_or_default();
                 let whose = if cx.own.iter().any(|(f, _)| f == hand) { "this store's own key (AUTH-5.28)" } else { "ANOTHER hand (AUTH-5.77)" };
                 format!("retired at position {at} by {hand} {hand_label} — {whose}")
             }
@@ -245,11 +245,11 @@ pub fn import_anchor(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<
                 Imported::Neither => return Ok(ImportOutcome::Neither),
                 Imported::File(path) => break import_file(person, cx, &path)?,
                 Imported::Typed { seed_hex, fingerprint_prefix } => {
-                    let Some(seed) = crate::hex::decode32(seed_hex.trim()) else {
+                    let Some(seed) = Seed::from_hex(seed_hex.trim()) else {
                         say(person, "AUTH-5.41", "that is not 64 hex — type the seed from the print again");
                         continue;
                     };
-                    let signer = crate::sign::signer_from_seed(&seed);
+                    let signer = crate::sign::signer_from_seed(seed.bytes());
                     let fp = Signer::fingerprint(&signer);
                     let prefix = fingerprint_prefix.trim().to_ascii_lowercase();
                     if prefix.len() < 8 || !fp.to_hex().starts_with(&prefix) {
@@ -271,7 +271,7 @@ pub fn import_anchor(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<
                             "name the board and principal the paper carries",
                         ));
                     }
-                    break (signer, cx.records.label_of(&fp).filter(|l| !l.is_empty()), None, Custody::Kept, Some(fp));
+                    break (signer, cx.records.label_of(&fp), None, Custody::Kept, Some(fp));
                 }
             }
         },

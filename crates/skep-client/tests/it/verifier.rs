@@ -56,16 +56,16 @@ fn the_verdict_follows_the_daemons_admission_and_an_unattested_entry_reads_unsig
     let frame = entry_frame(device.public_key().alg(), term, &account, DocTerm::One(&account), &entry_body_empty(ContentFreeOp::CreateNewDocument));
     let sig = device.sign(&frame);
     let op = json!({"op": "create_new_document", "account": done.account, "published": true, "attest": {"alg": device.public_key().alg(), "sig": hex(&sig)}});
-    let Answer::Document(v) = full.op(&board, &op).unwrap() else { panic!("closed") };
+    let Answer::Document(v) = full.op(&op).unwrap() else { panic!("closed") };
     let minted = acked_addr(&v).unwrap_or_else(|| panic!("the attested mint: {v}")).to_string();
     let attested_at = acked_at(&v).expect("the position");
     // The same mint WITHOUT the attest is refused: the daemon judges the
     // class the same way this reader will.
-    let Answer::Document(r) = full.op(&board, &json!({"op": "create_new_document", "account": done.account, "published": true})).unwrap() else { panic!() };
+    let Answer::Document(r) = full.op(&json!({"op": "create_new_document", "account": done.account, "published": true})).unwrap() else { panic!() };
     assert!(r.to_string().contains("attestation_required"), "{r}");
     // An op OUTSIDE the publish class from the same signed session: a draft
     // mint, which takes no attest and commits unsigned in its marker.
-    let Answer::Document(d) = full.op(&board, &json!({"op": "create_new_document", "account": done.account})).unwrap() else { panic!() };
+    let Answer::Document(d) = full.op(&json!({"op": "create_new_document", "account": done.account})).unwrap() else { panic!() };
     let draft_at = acked_at(&d).unwrap_or_else(|| panic!("{d}"));
 
     // The feed's rows, read as the owner: the attested one carries `attest`
@@ -80,7 +80,7 @@ fn the_verdict_follows_the_daemons_admission_and_an_unattested_entry_reads_unsig
     let draft_row = row_at(&board, &full.token, draft_at);
     assert_eq!(draft_row["key"].as_str(), Some(fp.to_hex().as_str()), "{draft_row}");
     assert!(draft_row.get("attest").is_none());
-    full.close(&board).unwrap();
+    full.close().unwrap();
 
     // THE READER: the filtered table over the admitted read, as of the
     // entry's base; the frame re-composed from the row and the parent.

@@ -17,7 +17,8 @@ use skep_client::board::Board;
 use skep_client::ceremony::claim::{self, ClaimOutcome, Claimed, NotebookOptions};
 use skep_client::dial::{DialError, Dialer, Headers, PlainHttp, Request, RequestHead, Response, StreamedResponse};
 use skep_client::person::scripted::{Script, Scripted};
-use skep_client::store::{FileStore, KeyStore, Label};
+use skep_client::sheet::Label;
+use skep_client::store::{FileStore, KeyStore};
 use skep_client::Origin;
 use skep_identity::Fingerprint;
 use skepd::{serve, AuthOptions, Daemon, Skepd, DEFAULT_WORKERS};
@@ -284,9 +285,6 @@ impl Person for Hooked {
     }
     fn destination(&mut self, m: Secret<Destination>) -> Result<PathBuf, Abandoned> {
         self.inner.destination(m)
-    }
-    fn confirm(&mut self, m: Consent<Confirmation>) -> Result<bool, Abandoned> {
-        self.inner.confirm(m)
     }
     fn confirm_typed(&mut self, m: Consent<Confirmation>) -> Result<String, Abandoned> {
         let i = self.confirms;

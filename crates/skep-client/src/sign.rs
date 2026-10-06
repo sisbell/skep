@@ -87,15 +87,8 @@ pub fn signer_from_seed_under(tag: u8, seed: &[u8; 32]) -> Option<HybridSigner> 
     HybridSigner::from_seed(tag, seed)
 }
 
-/// A fresh 32-byte seed from the OS random source (`getrandom`, a
-/// `CryptoRng`), fail-stop: no seed from anything weaker.
-pub fn fresh_seed() -> [u8; 32] {
-    let mut seed = [0u8; 32];
-    getrandom::fill(&mut seed).expect("OS entropy unavailable");
-    seed
-}
-
-/// `n` fresh bytes from the OS random source.
+/// `n` fresh bytes from the OS random source — never a seed, which is drawn
+/// into its own zeroing value (`sheet::Seed::fresh`).
 pub fn fresh_bytes(n: usize) -> Vec<u8> {
     let mut out = vec![0u8; n];
     getrandom::fill(&mut out).expect("OS entropy unavailable");

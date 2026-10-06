@@ -1,10 +1,13 @@
 //! The field set, their order and the grouping (`client.md` §1.1's `sheet`
 //! row): the key file's ONE JSON spelling and its reader with its refusals,
-//! [`KeyFileError`] (§3.2, RULED), the R42 grouping (AUTH-5.1: eight groups
-//! of eight hex, a single space between groups, four groups to a line, for
-//! a fingerprint wherever one is displayed and for the exported anchor SEED
-//! on the sheet alike), and the sheet's field list (AUTH-5.38) — the
-//! DRAWING is each embedder's (§5.2). No scannable form (§9 item 13).
+//! [`KeyFileError`] (§3.2, RULED); the byline a key carries, [`Label`], one
+//! domain test (AUTH-1.24) wherever a label is made — a box — or read — a
+//! file; the [`Seed`] every key's secret is born into; the R42 grouping
+//! (AUTH-5.1: eight groups of eight hex, a single space between groups, four
+//! groups to a line, for a fingerprint wherever one is displayed and for the
+//! exported anchor SEED on the sheet alike), and the sheet's field list
+//! (AUTH-5.38) — the DRAWING is each embedder's (§5.2). No scannable form
+//! (§9 item 13).
 
 use std::fmt;
 
@@ -49,17 +52,36 @@ pub fn render_inert(label: &str) -> String {
 
 /// The 32-byte seed — the paper backup's 64 hex — zeroed on drop, best
 /// effort: this crate takes no zeroizing dependency and forbids unsafe code,
-/// so the overwrite is a plain store the compiler is free to elide. The
-/// signer derived from it wipes its Ed25519 half on drop and releases the
-/// ML-DSA-65 half unwiped (`skep_signature::HybridSigner`'s doc): the DROP
-/// AUTH-5.54 step 3 owes is OPEN WORK for that half, reported and not
-/// claimed.
+/// so the overwrite is a plain store the compiler is free to elide. Every
+/// seed the crate makes is BORN in this value — drawn by [`Seed::fresh`],
+/// decoded by [`Seed::from_hex`] — so no bare copy outlives the DROP
+/// AUTH-5.54 step 3 owes. The signer derived from it wipes its Ed25519 half
+/// on drop and releases the ML-DSA-65 half unwiped
+/// (`skep_signature::HybridSigner`'s doc): the DROP is OPEN WORK for that
+/// half, reported and not claimed.
 pub struct Seed([u8; 32]);
 
 impl Seed {
     /// A seed from its bytes.
     pub fn new(bytes: [u8; 32]) -> Seed {
         Seed(bytes)
+    }
+
+    /// A fresh seed from the OS random source (`getrandom`, a `CryptoRng`),
+    /// fail-stop — no seed from anything weaker — drawn straight into the
+    /// value that zeroes it.
+    pub fn fresh() -> Seed {
+        let mut seed = Seed([0u8; 32]);
+        getrandom::fill(&mut seed.0).expect("OS entropy unavailable");
+        seed
+    }
+
+    /// A seed from its 64 hex, either case — a print's re-type, a key file's
+    /// member — decoded straight into the value that zeroes it; `None` for
+    /// any other text.
+    pub fn from_hex(text: &str) -> Option<Seed> {
+        let mut seed = Seed([0u8; 32]);
+        hex::decode_into(text, &mut seed.0).then_some(seed)
     }
 
     /// The bytes.
@@ -82,6 +104,84 @@ impl Drop for Seed {
 impl fmt::Debug for Seed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Seed(…)")
+    }
+}
+
+/// A byline in AUTH-1.24's DOMAIN, never empty (AUTH-5.42): non-empty, no
+/// `\n`, at most 128 BYTES of UTF-8 counted as `Enrollment::new` counts.
+/// Every box applies the domain test ITSELF, before anything is made from a
+/// label (P13; `client.md` §2.2 `keygen`), and [`KeyFile::parse`] admits a
+/// file's `label` member by the same test.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Label(String);
+
+/// Why a label is outside the domain — faced at the box, with the byte
+/// count named where the limit is the fault (AUTH-1.25's `TooLong` and
+/// `Newline`, and the empty label AUTH-5.42 faces).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LabelFault {
+    Empty,
+    Newline,
+    TooLong { bytes: usize },
+}
+
+impl fmt::Display for LabelFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LabelFault::Empty => f.write_str("the label is empty — a name is required here"),
+            LabelFault::Newline => f.write_str("the label holds a line break, which a label cannot"),
+            LabelFault::TooLong { bytes } => write!(
+                f,
+                "the label is {bytes} bytes of UTF-8 and the limit is 128 bytes — counted in bytes, not characters"
+            ),
+        }
+    }
+}
+
+impl Label {
+    /// The domain test (AUTH-1.24), the newline read before the length as
+    /// `Enrollment::new` reads it (AUTH-1.25).
+    pub fn new(text: &str) -> Result<Label, LabelFault> {
+        if text.contains('\n') {
+            return Err(LabelFault::Newline);
+        }
+        if text.len() > 128 {
+            return Err(LabelFault::TooLong { bytes: text.len() });
+        }
+        if text.is_empty() {
+            return Err(LabelFault::Empty);
+        }
+        Ok(Label(text.to_string()))
+    }
+
+    /// The text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The label as a path component: ASCII alphanumerics kept, every other
+    /// character a `-`, runs collapsed — the slug the anchor file's name
+    /// takes (§6).
+    pub fn slug(&self) -> String {
+        let mut out = String::new();
+        let mut dash = false;
+        for c in self.0.chars() {
+            if c.is_ascii_alphanumeric() {
+                out.push(c.to_ascii_lowercase());
+                dash = false;
+            } else if !dash {
+                out.push('-');
+                dash = true;
+            }
+        }
+        let trimmed = out.trim_matches('-').to_string();
+        if trimmed.is_empty() { "key".to_string() } else { trimmed }
+    }
+}
+
+impl fmt::Display for Label {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
     }
 }
 
@@ -165,7 +265,10 @@ pub struct Facts {
 /// `public` — the seed and the fingerprint grouped (AUTH-5.1), the label
 /// inert (AUTH-5.2), the three facts where they exist. A rendering of the
 /// fields and never of the file's bytes; read by a person, parsed by nothing.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Its `Debug` prints every field but the seed, which shows as `…`: the
+/// sheet is a SECRET moment's payload (§1.1's `person` row), and a debug
+/// log of moments is an ordinary embedder's.
+#[derive(Clone, PartialEq, Eq)]
 pub struct SheetFields {
     pub anchor: bool,
     pub alg: String,
@@ -200,6 +303,22 @@ impl SheetFields {
             out.push(("origin".to_string(), o.clone()));
         }
         out
+    }
+}
+
+impl fmt::Debug for SheetFields {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SheetFields")
+            .field("anchor", &self.anchor)
+            .field("alg", &self.alg)
+            .field("label", &self.label)
+            .field("fingerprint_hex", &self.fingerprint_hex)
+            .field("fingerprint_grouped", &self.fingerprint_grouped)
+            .field("seed_grouped", &format_args!("…"))
+            .field("account", &self.account)
+            .field("principal", &self.principal)
+            .field("origin", &self.origin)
+            .finish()
     }
 }
 
@@ -335,7 +454,7 @@ impl KeyFile {
             return Err(schema("alg"));
         }
         let seed_hex = obj.get("seed").and_then(Value::as_str).ok_or_else(|| schema("seed"))?;
-        let seed = Seed(hex::decode32(seed_hex).ok_or_else(|| schema("seed"))?);
+        let seed = Seed::from_hex(seed_hex).ok_or_else(|| schema("seed"))?;
         let public_hex = obj.get("public").and_then(Value::as_str).ok_or_else(|| schema("public"))?;
         let public = PublicKey::parse(alg, public_hex).map_err(|_| schema("public"))?;
         let fingerprint = obj
@@ -345,7 +464,7 @@ impl KeyFile {
             .ok_or_else(|| schema("fingerprint"))?;
         let label = match obj.get("label") {
             None => None,
-            Some(Value::String(s)) if !s.is_empty() && !s.contains('\n') && s.len() <= 128 => Some(s.clone()),
+            Some(Value::String(s)) if Label::new(s).is_ok() => Some(s.clone()),
             Some(_) => return Err(schema("label")),
         };
         let account = match obj.get("account") {
@@ -399,6 +518,35 @@ mod tests {
         assert_eq!(render_inert("a\u{202E}b\u{07}"), "a<U+202E>b<U+0007>");
     }
 
+    /// AUTH-1.24/1.25 at the box: 128 bytes admitted, 129 refused with the byte
+    /// count named (AUTH-2.96's vector row), a newline refused, the empty label
+    /// faced (AUTH-5.42).
+    #[test]
+    fn the_label_domain_is_tested_at_the_box() {
+        assert!(Label::new(&"a".repeat(128)).is_ok());
+        assert_eq!(Label::new(&"a".repeat(129)).unwrap_err(), LabelFault::TooLong { bytes: 129 });
+        assert_eq!(Label::new("two\nlines").unwrap_err(), LabelFault::Newline);
+        assert_eq!(Label::new("").unwrap_err(), LabelFault::Empty);
+        assert!(Label::new("my phone ").is_ok(), "a trailing space is in the domain");
+        assert_eq!(Label::new("Paper A / 2026").unwrap().slug(), "paper-a-2026");
+        // Bytes, not characters: 43 three-byte characters are 129 bytes.
+        assert_eq!(Label::new(&"€".repeat(43)).unwrap_err(), LabelFault::TooLong { bytes: 129 });
+    }
+
+    /// A seed is born in its zeroing value: drawn fresh, or decoded from its
+    /// 64 hex in either case — any other text is no seed; and the sheet
+    /// prints every field but the seed.
+    #[test]
+    fn a_seed_is_drawn_or_decoded_into_its_value_and_the_sheet_hides_it() {
+        assert_ne!(Seed::fresh().bytes(), Seed::fresh().bytes());
+        assert_eq!(Seed::from_hex(&"AB".repeat(32)).map(|s| *s.bytes()), Some([0xab; 32]));
+        assert!(Seed::from_hex(&"ab".repeat(31)).is_none() && Seed::from_hex(&"zz".repeat(32)).is_none());
+        let file = KeyFile::new(Seed::new([4u8; 32]), true, Some("paper".into()), None);
+        let printed = format!("{:?}", file.sheet());
+        assert!(printed.contains(&file.fingerprint.to_hex()) && printed.contains("seed_grouped: …"), "{printed}");
+        assert!(!printed.contains(&file.seed_hex()[..8]), "the seed never prints: {printed}");
+    }
+
     /// §3.2 — one spelling written, a standard parser reading it back:
     /// whitespace and member order admitted, the refusals the store's own.
     #[test]
@@ -426,9 +574,12 @@ mod tests {
         let mut extra = v.clone();
         extra["custody"] = Value::from("x");
         assert_eq!(KeyFile::parse(extra.to_string().as_bytes()).unwrap_err(), KeyFileError::Schema { member: "custody".into() });
-        let mut empty_label = v.clone();
-        empty_label["label"] = Value::from("");
-        assert_eq!(KeyFile::parse(empty_label.to_string().as_bytes()).unwrap_err(), KeyFileError::Schema { member: "label".into() });
+        // The file's `label` member is held to the box's own domain test.
+        for bad in [String::new(), "two\nlines".into(), "a".repeat(129)] {
+            let mut bad_label = v.clone();
+            bad_label["label"] = Value::from(bad);
+            assert_eq!(KeyFile::parse(bad_label.to_string().as_bytes()).unwrap_err(), KeyFileError::Schema { member: "label".into() });
+        }
         let mut bad_seed = v.clone();
         bad_seed["seed"] = Value::from("00".repeat(32));
         assert_eq!(KeyFile::parse(bad_seed.to_string().as_bytes()).unwrap_err(), KeyFileError::Disagrees);

@@ -31,7 +31,7 @@ use serde_json::Value;
 use skep_identity::{canonical_record, parse_record_value, BoardTerm, Enrollment, Fingerprint, PublicKey};
 
 use crate::address::{document_of, parent_account};
-use crate::board::{frames, Answer, AtAnswer, Board, ChangeKey, KeySet, KeySetAnswer, T_CLAIM, T_ENROLL, T_RETIRE};
+use crate::board::{frames, AtAnswer, Board, ChangeKey, KeySet, KeySetAnswer, T_CLAIM, T_ENROLL, T_RETIRE};
 use crate::halt::Halt;
 use crate::sign::record_frame;
 
@@ -122,11 +122,14 @@ impl Records {
     }
 
     /// AUTH-5.69 — the label carried by the record that FIRST enrolled
-    /// `fp`; every later mention is informational.
+    /// `fp`, `None` where that record carried none (a label is never empty,
+    /// AUTH-1.24); every later mention is informational.
     pub fn label_of(&self, fp: &Fingerprint) -> Option<String> {
-        self.records.iter().filter(|r| r.kind == Kind::Enroll).find_map(|r| {
-            r.enrolled.iter().find(|e| Fingerprint::of(&e.key) == *fp).map(|e| e.label().unwrap_or("").to_string())
-        })
+        self.records
+            .iter()
+            .filter(|r| r.kind == Kind::Enroll)
+            .find_map(|r| r.enrolled.iter().find(|e| Fingerprint::of(&e.key) == *fp))
+            .and_then(|e| e.label().map(str::to_string))
     }
 
     /// The retirement record naming `fp`, where one stands.
@@ -138,7 +141,7 @@ impl Records {
     /// first enrolled (AUTH-5.69).
     pub fn label_of_hand(&self, hand: &Hand) -> Option<String> {
         match hand {
-            Hand::Key(fp) => self.label_of(fp).filter(|l| !l.is_empty()),
+            Hand::Key(fp) => self.label_of(fp),
             _ => None,
         }
     }
@@ -207,7 +210,7 @@ pub fn compare_whole_set(records: &Records, current: &KeySet, held: &[Held]) -> 
         .enrolled
         .iter()
         .filter(|e| !genesis_entries.iter().any(|g| g.fingerprint == e.fingerprint))
-        .map(|e| Held { fingerprint: e.fingerprint, anchor: e.anchor, label: records.label_of(&e.fingerprint).filter(|l| !l.is_empty()) })
+        .map(|e| Held { fingerprint: e.fingerprint, anchor: e.anchor, label: records.label_of(&e.fingerprint) })
         .collect();
     Some(WholeSet { differences, later })
 }
@@ -254,7 +257,7 @@ fn probe(board: &Board, at: u64, frame: &Value, link: &str) -> Result<Probe, Hal
             AtAnswer::HistoryReclaimed { floor } => return Ok(Probe::Reclaimed { floor }),
             AtAnswer::NotAPosition { nearest } => return Ok(Probe::NotAPosition { nearest }),
             AtAnswer::BeyondHead { .. } => return Ok(Probe::Absent),
-            AtAnswer::Closed => return Ok(Probe::Absent),
+            AtAnswer::Closed => unreachable!("a token-free `op_at` halts on the death signal and never answers it"),
             AtAnswer::Busy => thread::sleep(Duration::from_millis(20 * (attempt + 1))),
         }
     }
@@ -353,7 +356,7 @@ fn set_opening_at(board: &Board, account: &str, at: u64) -> Result<Option<KeySet
 /// `image`.
 fn inversion(board: &Board, home: &str) -> Result<HashMap<String, u64>, Halt> {
     let mut map = HashMap::new();
-    let Answer::Document(set) = board.op(None, &frames::span_set(home))? else { return Ok(map) };
+    let set = board.guest(&frames::span_set(home))?;
     let extent: u64 = set["set"]
         .as_array()
         .and_then(|s| s.iter().find(|x| x["start"].as_str() == Some("1.1")))
@@ -362,7 +365,7 @@ fn inversion(board: &Board, home: &str) -> Result<HashMap<String, u64>, Halt> {
     if extent == 0 {
         return Ok(map);
     }
-    let Answer::Document(image) = board.op(None, &frames::image(home, 1, extent))? else { return Ok(map) };
+    let image = board.guest(&frames::image(home, 1, extent))?;
     let mut ordinal: u64 = 1;
     for run in image["runs"].as_array().into_iter().flatten() {
         let (Some(start), Some(width)) = (run["i_start"].as_str(), run["width"].as_str().and_then(|w| w.parse::<u64>().ok())) else { continue };
@@ -379,7 +382,7 @@ fn inversion(board: &Board, home: &str) -> Result<HashMap<String, u64>, Halt> {
 /// The record atom's bytes at `atom` in `home`, through the inversion.
 fn atom_bytes(board: &Board, home: &str, inv: &HashMap<String, u64>, atom: &str) -> Result<Option<Vec<u8>>, Halt> {
     let Some(ordinal) = inv.get(atom) else { return Ok(None) };
-    let Answer::Document(v) = board.op(None, &frames::retrieve_v(home, *ordinal, 1))? else { return Ok(None) };
+    let v = board.guest(&frames::retrieve_v(home, *ordinal, 1))?;
     let Some(item) = v["items"].as_array().and_then(|i| i.first()) else { return Ok(None) };
     if let Some(text) = item["atom"].as_str() {
         return Ok(Some(text.as_bytes().to_vec()));
@@ -392,7 +395,7 @@ fn atom_bytes(board: &Board, home: &str, inv: &HashMap<String, u64>, atom: &str)
 
 /// The deposit's link addresses of `ty` naming `account`, in address order.
 fn links_of(board: &Board, ty: &str, account: &str) -> Result<Vec<String>, Halt> {
-    let Answer::Document(v) = board.op(None, &frames::find_links_ftt(ty, account))? else { return Ok(Vec::new()) };
+    let v = board.guest(&frames::find_links_ftt(ty, account))?;
     let mut links: Vec<String> =
         v["addrs"].as_array().into_iter().flatten().filter_map(|a| a.as_str().map(str::to_string)).collect();
     links.sort_by(address_order);
@@ -421,12 +424,11 @@ pub fn credential_records(board: &Board, account: &str, own: &[(Fingerprint, Pub
     if claimed {
         if let Some(claimant) = health.claimant() {
             let frame = frames::find_links_ftt_from(T_CLAIM, claimant);
-            if let Answer::Document(v) = board.op(None, &frame)? {
-                if let Some(link) = v["addrs"].as_array().and_then(|a| a.first()).and_then(Value::as_str) {
-                    let (pos, f) = position_of(board, &frame, link, head)?;
-                    claim_entry = pos;
-                    floor = floor.or(f);
-                }
+            let v = board.guest(&frame)?;
+            if let Some(link) = v["addrs"].as_array().and_then(|a| a.first()).and_then(Value::as_str) {
+                let (pos, f) = position_of(board, &frame, link, head)?;
+                claim_entry = pos;
+                floor = floor.or(f);
             }
         }
     }
@@ -437,7 +439,7 @@ pub fn credential_records(board: &Board, account: &str, own: &[(Fingerprint, Pub
     for (kind, ty) in [(Kind::Enroll, T_ENROLL), (Kind::Retire, T_RETIRE)] {
         for link in links_of(board, ty, account)? {
             let Some(home) = document_of(&link) else { continue };
-            let Answer::Document(lv) = board.op(None, &frames::read_link(&link))? else { continue };
+            let lv = board.guest(&frames::read_link(&link))?;
             // The four-set query matches by span OVERLAP, so a link naming an
             // account ABOVE this one (its subtree covering this address)
             // answers too: the record is this account's only where the link's
@@ -569,6 +571,8 @@ fn hand_of(board: &Board, record: &Record, term: Option<BoardTerm>, own: &[(Fing
 
 #[cfg(test)]
 mod tests {
+    use skep_signature::HybridSigner;
+
     use super::*;
 
     #[test]
@@ -576,5 +580,51 @@ mod tests {
         let mut v = vec!["1.0.1.0.1.0.2.10".to_string(), "1.0.1.0.1.0.2.2".to_string()];
         v.sort_by(address_order);
         assert_eq!(v, ["1.0.1.0.1.0.2.2", "1.0.1.0.1.0.2.10"]);
+    }
+
+    /// An enrollment record of `entries` at `link`.
+    fn enrollment(link: &str, entries: Vec<Enrollment>) -> Record {
+        let sigless = canonical_record(&entries, None);
+        Record {
+            kind: Kind::Enroll,
+            link: link.into(),
+            home: "1.0.1.0.1".into(),
+            home_account: "1.0.1".into(),
+            subject: "1.0.1".into(),
+            atom: format!("{link}.1"),
+            bytes: sigless.clone().into_bytes(),
+            sigless,
+            sig: None,
+            enrolled: entries,
+            retired: Vec::new(),
+            position: None,
+            base: None,
+            hand: Hand::Bare,
+            anchor_grade: false,
+        }
+    }
+
+    /// AUTH-5.69 — a key's label is the one on the record that FIRST enrolled
+    /// it, and `None` — never an empty string — where that record carried
+    /// none, whatever a later record names it.
+    #[test]
+    fn a_label_is_the_first_enrolling_records_and_none_where_it_carried_none() {
+        let key = |b: u8| HybridSigner::public_key(&crate::sign::signer_from_seed(&[b; 32])).clone();
+        let (labelled, bare) = (key(1), key(2));
+        let records = Records {
+            account: "1.0.1".into(),
+            records: vec![
+                enrollment("1.0.1.0.1.0.2.1", vec![Enrollment::new(labelled.clone(), true, Some("paper".into())).unwrap(), Enrollment::new(bare.clone(), false, None).unwrap()]),
+                enrollment("1.0.1.0.1.0.2.2", vec![Enrollment::new(bare.clone(), false, Some("named later".into())).unwrap()]),
+            ],
+            head: 9,
+            floor: None,
+            claim_entry: None,
+            claimed: false,
+        };
+        assert_eq!(records.label_of(&Fingerprint::of(&labelled)).as_deref(), Some("paper"));
+        assert_eq!(records.label_of(&Fingerprint::of(&bare)), None);
+        assert_eq!(records.label_of_hand(&Hand::Key(Fingerprint::of(&bare))), None);
+        assert_eq!(records.label_of(&Fingerprint::of(&key(3))), None, "a key no record enrolled");
     }
 }

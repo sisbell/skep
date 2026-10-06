@@ -26,7 +26,7 @@ use crate::sign::{sig_hex, Signer};
 /// address, else `None`. Where `new` is given the claim must name it as its
 /// `to`.
 pub fn trail_present(board: &Board, old: &str, new: Option<&str>) -> Result<Option<String>, Halt> {
-    let Answer::Document(v) = board.op(None, &frames::find_links_ftt_from(T_SUPERSEDES, old))? else { return Ok(None) };
+    let v = board.guest(&frames::find_links_ftt_from(T_SUPERSEDES, old))?;
     for claim in v["addrs"].as_array().into_iter().flatten().filter_map(|a| a.as_str()) {
         match new {
             None => return Ok(Some(claim.to_string())),
@@ -45,7 +45,7 @@ pub fn trail_present(board: &Board, old: &str, new: Option<&str>) -> Result<Opti
 /// the session's account, `doc` the home, the body `entry_body_assert_sup`'s
 /// four rows (the supersedes class's unit span, `old`'s, `new`'s, the
 /// `replaces` row empty) — signed by `signer`. Answers the claim's address.
-pub fn write_trail(board: &Board, session: &Session, signer: &dyn Signer, home: &str, old: &str, new: &str, id: &str) -> Result<String, Halt> {
+pub fn write_trail(board: &Board, session: &Session<'_>, signer: &dyn Signer, home: &str, old: &str, new: &str, id: &str) -> Result<String, Halt> {
     let Some(term) = board.board_term()? else {
         return Err(Halt::face("this board has no H.1 yet", "the trail's `attest` names `H.1`'s pair as its board term and the board answers no head", "retry once the board has written its head; nothing was written"));
     };
@@ -60,7 +60,7 @@ pub fn write_trail(board: &Board, session: &Session, signer: &dyn Signer, home: 
     let alg = signer.public_key().alg().to_string();
     let bytes = entry_frame(&alg, term, &account, DocTerm::One(&home_addr), &body);
     let attest = json!({"alg": alg, "sig": sig_hex(&signer.sign(&bytes))});
-    let v = match session.op(board, &frames::assert_sup(home, old, new, Some(attest), Some(id)))? {
+    let v = match session.op(&frames::assert_sup(home, old, new, Some(attest), Some(id)))? {
         Answer::Closed => {
             return Err(Halt::face(
                 "the session ended while writing the supersession trail",

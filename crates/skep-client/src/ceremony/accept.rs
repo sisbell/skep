@@ -36,8 +36,8 @@ use crate::ceremony::reads::A4Cell;
 use crate::derive::{principal_of, walk_to_set, Mode};
 use crate::halt::Halt;
 use crate::person::{Confirmation, Consent, LabelBox, Person, Public, Question};
-use crate::sheet::{render_inert, Facts, KeyFile};
-use crate::store::{store_halt, Binding, FileStore, KeySelector, KeyStore, Label, Purpose};
+use crate::sheet::{render_inert, Facts, Label};
+use crate::store::{store_halt, Binding, FileStore, KeyFacts, KeySelector, KeyStore, Purpose};
 
 /// The beat's inputs.
 #[derive(Debug, Clone)]
@@ -161,7 +161,7 @@ pub fn accept(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         },
     };
     let id = store.generate(Some(label.clone())).map_err(store_halt)?;
-    let device = store.load(&store.key_path(&id.0)).map_err(store_halt)?;
+    let device = store.select(&KeySelector::Path(&store.key_path(&id.0)), Purpose::Read).map_err(store_halt)?;
     say(person, "§3a", format!("key file written: {} — the seed rests in this file and the filesystem's modes are its whole protection (0600 under 0700); your anchors are what its loss recovers from", store.key_path(&id.0).display()));
     let facts = Facts { account: account.clone(), principal: seat, origin: board.dialed.clone() };
     let operator = operator_sentence(&cell, &giver, hosted);
@@ -251,14 +251,14 @@ pub fn reprint(store: &FileStore, key: Option<&Path>, anchors: &[PathBuf], board
                 "re-run `skep accept` under a fresh pair, the dead one disposed of as the abandonment exit says",
             ));
         }
-        let file = store.select(&KeySelector::Path(path), Purpose::Read).map_err(store_halt)?.file;
-        if !file.anchor {
+        let artifact = store.select(&KeySelector::Path(path), Purpose::Read).map_err(store_halt)?;
+        if !artifact.anchor {
             return Err(Halt::face(format!("{} is a device key's file", path.display()), "`--anchor` names an anchor file", "pass the anchor files the beat wrote"));
         }
-        entries.push(Enrollment::new(file.public.clone(), true, file.label.clone()).expect("a stored label"));
+        entries.push(Enrollment::new(artifact.public.clone(), true, artifact.label.clone()).expect("a stored label"));
     }
-    let device: KeyFile = match key {
-        Some(path) => store.select(&KeySelector::Path(path), Purpose::Read).map_err(store_halt)?.file,
+    let device: KeyFacts = match key {
+        Some(path) => store.select(&KeySelector::Path(path), Purpose::Read).map_err(store_halt)?,
         None => {
             let bound: Vec<Fingerprint> = store
                 .all_bindings()
@@ -272,7 +272,7 @@ pub fn reprint(store: &FileStore, key: Option<&Path>, anchors: &[PathBuf], board
             let keys = store.list().map_err(store_halt)?;
             let unbound: Vec<_> = keys.iter().filter(|k| !k.anchor && !bound.contains(&k.fingerprint)).collect();
             match unbound.as_slice() {
-                [one] => store.load(&one.path).map_err(store_halt)?,
+                [one] => (*one).clone(),
                 [] => return Err(Halt::face("no unbound device key stands in this store", "the beat's device key is bound at no board until `skep bind` lands the reply", "name the key with `--key <path>`")),
                 many => {
                     return Err(Halt::face(

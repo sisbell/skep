@@ -34,9 +34,9 @@ use skep_identity::{Fingerprint, PublicKey};
 use super::say;
 use crate::address::{doc_1_of, first_child, parent_account};
 use crate::board::{acked_addr, frames, Answer, Board, KeySetAnswer, Rejection, Scope};
-use crate::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome, Grade};
+use crate::ceremony::deposit::{deposit, Deposit, DepositHalt, DepositKind, DepositOutcome};
 use crate::ceremony::enumerate::by_reference_cone;
-use crate::ceremony::first_session::document_present;
+use crate::ceremony::first_session::{delegate_persisted, document_present, persisted, Delegated};
 use crate::ceremony::handshake::{handshake, key_face, Session, Site};
 use crate::ceremony::import::{dispose, import_anchor, ImportContext, ImportOutcome, ImportedAnchor, Whose};
 use crate::ceremony::payload::{compare_payload, parse_payload, payload_text};
@@ -46,8 +46,8 @@ use crate::derive::{precheck, principal_of, walk_to_set, Mode};
 use crate::halt::Halt;
 use crate::person::{Confirmation, Consent, Person};
 use crate::sheet::Facts;
-use crate::sign::{fresh_principal_id, Signer};
-use crate::store::{arm4_face, store_halt, Binding, FileStore, KeySelector, KeyStore, Purpose, StoreError};
+use crate::sign::Signer;
+use crate::store::{arm4_face, store_halt, FileStore, KeyFacts, KeySelector, KeyStore, Purpose, StoreError};
 
 /// The command's inputs.
 #[derive(Debug, Clone)]
@@ -60,6 +60,16 @@ pub struct HandoffOptions {
     /// `--anchor <path>`: the giver's anchor file, where the act is
     /// anchor-grade.
     pub anchor: Option<PathBuf>,
+}
+
+/// The genesis's GRADE (AUTH-3.21's exception): ANCHOR-grade wherever the
+/// set that opens the subdivision holds an anchor — the giver's paper
+/// anchor imported to sign it — DEVICE-grade where that set holds none. G0
+/// reads it off the set; the hand the deposit signs with carries it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Grade {
+    Device,
+    Anchor,
 }
 
 /// What the walk did.
@@ -75,8 +85,8 @@ pub enum HandoffOutcome {
 /// G0's payload-free reads.
 struct G0 {
     giver_account: String,
-    giver_fp: Fingerprint,
-    giver_file: crate::sheet::KeyFile,
+    /// The giver's device key, its public facts — its signer is the store's.
+    giver_key: KeyFacts,
     /// The account the subdivision hangs from.
     giving: String,
     /// The seat at `--account`, where beat (a) stands done.
@@ -99,16 +109,16 @@ fn g0(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &HandoffO
             "hand off a SUBDIVISION of your own account (`<your account>.2` and beyond)",
         ));
     };
-    let file = match store.select(&KeySelector::Binding { origin: &board.dialed, principal: Some(opts.principal) }, Purpose::Sign) {
-        Ok(sel) => sel.file,
+    let key = match store.select(&KeySelector::Binding { origin: &board.dialed, principal: Some(opts.principal) }, Purpose::Sign) {
+        Ok(key) => key,
         Err(StoreError::NoSelection { keys }) => {
             let health = board.health()?;
             return Err(arm4_face(store, &keys, Mode::of(&health), health.local_trust()));
         }
         Err(e) => return Err(store_halt(e)),
     };
-    let pre = precheck(board, opts.principal, &file.fingerprint)?;
-    key_face(board, &pre, &file.fingerprint, &[(file.fingerprint, file.public.clone())], Site::Giver)?;
+    let pre = precheck(board, opts.principal, &key.fingerprint)?;
+    key_face(board, &pre, &key.fingerprint, &[(key.fingerprint, key.public.clone())], Site::Giver)?;
     let giver_account = pre.account.clone();
     if !account.starts_with(&format!("{giver_account}.")) {
         return Err(Halt::face(format!("{account} is not in your subtree"), format!("your account is {giver_account}; a handoff gives away a subdivision beneath it"), "name an address beneath your account"));
@@ -147,57 +157,37 @@ fn g0(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &HandoffO
             _ => "THE PRECONDITION: the board must be one the recipient's client can dial — every beat of theirs (the sign-in, the doc-1 mint, the setup act, the reply's use) is a request to this board",
         },
     );
-    Ok(G0 { giver_account, giver_fp: file.fingerprint, giver_file: file, giving, seat, set: walk.set, set_account: walk.set_account, grade, cell, health })
+    Ok(G0 { giver_account, giver_key: key, giving, seat, set: walk.set, set_account: walk.set_account, grade, cell, health })
 }
 
-/// G2 = beat (a): the delegate under a persisted id, idempotent by the
-/// seat's read.
-fn g2(board: &Board, store: &FileStore, person: &mut dyn Person, g: &G0, session: &Session, account: &str) -> Result<(u64, bool), Halt> {
+/// G2 = beat (a): the delegate under a persisted id — §4.3's persist-first
+/// form, `first_session`'s own (§4c.2 G2: "the same rule, the same form,
+/// not a second one") — idempotent by the seat's read; what is the site's
+/// is the address said on a delegate sent, and the face where the address
+/// is no delegable child.
+fn g2(board: &Board, store: &FileStore, person: &mut dyn Person, g: &G0, session: &Session<'_>, account: &str) -> Result<(u64, bool), Halt> {
     if let Some(seat) = g.seat {
         say(person, "AUTH-5.90 (a)", format!("beat (a) stands done: {account} is seated (principal {seat}) — found by reading, no second delegate is sent"));
         return Ok((seat, true));
     }
-    // The persisted id, read back (AUTH-5.19), or minted and PERSISTED
-    // BEFORE THE FRAME.
-    let persisted = store.all_bindings().map_err(store_halt)?.into_iter().rev().find_map(|b| match b {
-        Binding::Enrollment { origin, account: a, principal, .. } if origin == board.dialed && a == account => Some(principal),
-        _ => None,
-    });
-    let new_id = match persisted {
-        Some(id) => {
-            if board.principal_prefix(id)?.as_deref() == Some(account) {
-                return Ok((id, true));
-            }
-            id
-        }
-        None => {
-            let id = fresh_principal_id();
-            let line = Binding::Enrollment { origin: board.dialed.clone(), principal: id, account: account.to_string(), fingerprint: g.giver_fp };
-            if let Err(e) = store.bind(&line) {
-                say(person, "§4.3", format!("the persist-first line could not be written ({e}); record it yourself: {}", line.line()));
-            }
-            id
-        }
-    };
-    let v = match session.op(board, &frames::delegate(account, new_id, Some(&format!("handoff.delegate.{account}"))))? {
-        Answer::Closed => return Err(Halt::face("the session ended at the delegate", "closed", "re-run; beat (a) resumes by reading the seat")),
-        Answer::Document(v) => v,
-    };
-    if acked_addr(&v).is_some() {
-        say(person, "AUTH-5.90 (a)", format!("beat (a): {account} delegated (principal {new_id}); hand this ADDRESS to the recipient over the out-of-band channel the keys come back on — they run `skep accept --board {} --account {account}`", board.dialed));
-        return Ok((new_id, false));
+    let mut warnings = Vec::new();
+    let cached = persisted(Some(store), &board.dialed, account);
+    let outcome = delegate_persisted(board, session, Some(store), cached, account, &g.giver_key.fingerprint, &format!("handoff.delegate.{account}"), &mut warnings);
+    for w in warnings {
+        say(person, "§4.3", w);
     }
-    let Some(r) = Rejection::of(&v) else { return Err(Halt::face("the delegate answered a shape this client does not know", v.to_string(), "this is a fault in this client or the board")) };
-    match r.code.as_str() {
-        "not_authorized" => match principal_of(board, account)? {
-            Some(seat) => Ok((seat, true)),
-            None => Err(Halt::face(
-                format!("`delegate` of {account} was refused `not_authorized`"),
-                "the address is not the next delegable child of its parent (children are contiguous: obtain the address from `next_account_prefix`), or the parent is not yours",
-                format!("the next delegable address under {} is what `next_account_prefix` answers; name that", g.giving),
-            )),
-        },
-        _ => Err(r.refused(&v)),
+    match outcome? {
+        Delegated::Committed { id, sent: true } => {
+            say(person, "AUTH-5.90 (a)", format!("beat (a): {account} delegated (principal {id}); hand this ADDRESS to the recipient over the out-of-band channel the keys come back on — they run `skep accept --board {} --account {account}`", board.dialed));
+            Ok((id, false))
+        }
+        Delegated::Committed { id, sent: false } => Ok((id, true)),
+        Delegated::Seated(seat) => Ok((seat, true)),
+        Delegated::NotAuthorized => Err(Halt::face(
+            format!("`delegate` of {account} was refused `not_authorized`"),
+            "the address is not the next delegable child of its parent (children are contiguous: obtain the address from `next_account_prefix`), or the parent is not yours",
+            format!("the next delegable address under {} is what `next_account_prefix` answers; name that", g.giving),
+        )),
     }
 }
 
@@ -205,7 +195,7 @@ fn g2(board: &Board, store: &FileStore, person: &mut dyn Person, g: &G0, session
 pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &HandoffOptions) -> Result<HandoffOutcome, Halt> {
     let account = opts.account.trim().to_string();
     let g = g0(board, store, person, opts)?;
-    let device = g.giver_file.signer();
+    let device = store.signer(&KeySelector::Path(&g.giver_key.path)).map_err(store_halt)?;
     // The session acts AS the giving account: the giver's own at depth 1,
     // BY REFERENCE below it (AUTH-4.30 (i)) — for beat (a)'s delegate (only
     // the owner of the parent delegates under it) and for beat (c)'s
@@ -216,9 +206,9 @@ pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
         if let Some(seat) = g.seat {
             return Ok(HandoffOutcome::Delegated { account, seat, already: true });
         }
-        let session = handshake(board, Scope::Full, &device, session_principal, Site::Giver)?;
+        let session = handshake(board, Scope::Full, &*device, session_principal, Site::Giver)?;
         let out = g2(board, store, person, &g, &session, &account);
-        let _ = session.close(board);
+        let _ = session.close();
         let (seat, already) = out?;
         return Ok(HandoffOutcome::Delegated { account, seat, already });
     };
@@ -306,13 +296,13 @@ pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
     };
     let hand: &dyn Signer = match &anchor {
         Some(a) => &a.signer,
-        None => &device,
+        None => &*device,
     };
     let session = handshake(board, Scope::Full, hand, session_principal, Site::Giver)?;
     let result = (|| -> Result<HandoffOutcome, Halt> {
         // G3 = beat (b): the giving account's home mint, idempotent by reading.
         if !document_present(board, &giving_home)? {
-            let v = match session.op(board, &frames::create_home(&g.giving, Some(&format!("handoff.mint.{}", g.giving))))? {
+            let v = match session.op(&frames::create_home(&g.giving, Some(&format!("handoff.mint.{}", g.giving))))? {
                 Answer::Closed => return Err(Halt::face("the session ended at the home mint", "closed", "re-run; beat (b) resumes by reading")),
                 Answer::Document(v) => v,
             };
@@ -325,26 +315,26 @@ pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
         // G4 = beat (c): THE GENESIS, verbatim, homed in the giving account's
         // doc 1, at the grade G0 read.
         let id = format!("handoff.genesis.{account}");
-        let outcome = deposit(board, &session.token, &Deposit { home: &giving_home, subject: &account, kind: DepositKind::EnrollVerbatim(text.clone()), grade: g.grade, hand: Some(hand), id: &id });
+        let outcome = deposit(board, &session.token, &Deposit { home: &giving_home, subject: &account, kind: DepositKind::EnrollVerbatim(text.clone()), hand: Some(hand), id: &id });
         let reconciled = match outcome {
             Ok(DepositOutcome::Deposited { .. }) => false,
             Ok(DepositOutcome::Committed { reason }) => {
                 say(person, "AUTH-5.18", format!("beat (d): {reason}"));
                 true
             }
-            Err(h) if h.to_string().contains("not_genesis_registry") => {
+            Err(DepositHalt::NotGenesisRegistry(_)) => {
                 return Err(Halt::face(
                     format!("this IS where {account}'s first keys go — but not these"),
                     format!("`not_genesis_registry` at {giving_home}, the doc 1 of the account the subdivision hangs from, with none of the payload's keys contained in the set: a key of the payload already opens the account above (AUTH-2.71's latch; AUTH-3.56's split row)"),
                     "ask the recipient for a NEW key made for this account (string (ii)); where the home above is wrong, this is this client's frame",
                 ))
             }
-            Err(h) => return Err(h),
+            Err(other) => return Err(other.into()),
         };
         Ok(HandoffOutcome::Seeded { facts: Facts { account: account.clone(), principal: seat, origin: board.dialed.clone() }, grade: g.grade, reconciled, warnings: Vec::new() })
     })();
     // G6: the mirror's close.
-    let _ = session.close(board);
+    let _ = session.close();
     if let Some(a) = &anchor {
         dispose(person, a);
     }

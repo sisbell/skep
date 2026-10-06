@@ -32,6 +32,10 @@
 //! is (`bind`'s two arms). THE DOC-1 READ ALONE IS NOT THE SELECTOR: it is
 //! the first state's own resume read. The COPY — AUTH-5.87's
 //! account-creation sentence — is the DOOR's and not this composition's.
+//!
+//! Op (1)'s persist-first `delegate` is `delegate_persisted`, the ONE form
+//! of §4.3's rule, which the handoff's beat (a) runs too (§4c.2 G2: "the
+//! same rule, the same form, not a second one").
 
 use skep_identity::Fingerprint;
 
@@ -92,13 +96,11 @@ impl FirstSessionReads {
 /// boundary 2): `retrieve_doc_v_span_set` answers a span set, or
 /// `doc_not_registered`.
 pub fn document_present(board: &Board, doc: &str) -> Result<bool, Halt> {
-    match board.op(None, &frames::span_set(doc))? {
-        Answer::Closed => Ok(false),
-        Answer::Document(v) => match Rejection::of(&v) {
-            None => Ok(true),
-            Some(r) if r.code == "doc_not_registered" => Ok(false),
-            Some(r) => Err(r.refused(&v)),
-        },
+    let v = board.guest(&frames::span_set(doc))?;
+    match Rejection::of(&v) {
+        None => Ok(true),
+        Some(r) if r.code == "doc_not_registered" => Ok(false),
+        Some(r) => Err(r.refused(&v)),
     }
 }
 
@@ -121,15 +123,7 @@ impl FirstSessionReads {
         let space = first_child(account);
         let space_seat = principal_of(board, &space)?;
         let space_home_present = document_present(board, &doc_1_of(&space))?;
-        let persisted_new_id = match store {
-            Some(store) => store.all_bindings().ok().and_then(|lines| {
-                lines.into_iter().rev().find_map(|b| match b {
-                    Binding::Enrollment { origin: o, account: a, principal, .. } if &o == origin && a == space => Some(principal),
-                    _ => None,
-                })
-            }),
-            None => None,
-        };
+        let persisted_new_id = persisted(store, origin, &space);
         let key_opens_space = if set_nonempty {
             // AUTH-4.30 (i): the space opens BY REFERENCE to the set that
             // opens its account — its own set is empty at birth, and before
@@ -176,13 +170,21 @@ pub struct FirstSessionDone {
     pub warnings: Vec<String>,
 }
 
+/// The `new_id` a persist-first line cached for `account` at `origin`,
+/// where the store holds one. The line is a CACHE and never a source
+/// (§4.3): the seat itself is read off the board, so a store whose bindings
+/// cannot be read answers none, and the delegate goes out under a fresh id.
+pub(crate) fn persisted(store: Option<&FileStore>, origin: &Origin, account: &str) -> Option<u64> {
+    store.and_then(|s| s.persisted_id(origin, account).ok().flatten())
+}
+
 /// THE COMPOSITION over `reads` the caller took ahead of `session`; `key`
 /// the session's own key, which op (3) opens under; `store` for the
 /// persist-first line (a read-only one degrades to a warning, §3.7).
 pub fn first_session(
     board: &Board,
     reads: &FirstSessionReads,
-    session: &Session,
+    session: &Session<'_>,
     key: &dyn Signer,
     store: Option<&FileStore>,
 ) -> Result<FirstSessionDone, Halt> {
@@ -195,19 +197,7 @@ pub fn first_session(
         warnings: Vec::new(),
     };
     // (1) THE DOC-1 MINT, resumed by the doc-1 read.
-    if !document_present(board, &reads.home)? {
-        let v = match session.op(board, &frames::create_home(&reads.account, Some(&format!("first-session.mint.{}", reads.account))))? {
-            Answer::Closed => return Err(closed()),
-            Answer::Document(v) => v,
-        };
-        match Rejection::of(&v) {
-            None => done.minted_home = true,
-            Some(r) if r.detail.as_deref() == Some("mint_home_public") => {
-                return Err(Halt::face("the home mint was refused as a draft", r.token(), "this client passes `published: true`; this is its own fault"))
-            }
-            Some(r) => return Err(r.refused(&v)),
-        }
-    }
+    done.minted_home = mint_home(board, reads, session)?;
     // (2) THE SETUP ACT, where the account holds a set of its own.
     if !reads.set_nonempty {
         return Ok(done);
@@ -236,8 +226,8 @@ pub fn first_session(
     // key opening it by reference; idempotent by reading; closed at the end.
     if !document_present(board, &doc_1_of(&reads.space))? {
         let as_space = handshake(board, Scope::Content, key, seat, Site::Setup)?;
-        let outcome = as_space.op(board, &frames::create_home(&reads.space, Some(&format!("first-session.space-mint.{}", reads.space))));
-        let _ = as_space.close(board);
+        let outcome = as_space.op(&frames::create_home(&reads.space, Some(&format!("first-session.space-mint.{}", reads.space))));
+        let _ = as_space.close();
         match outcome? {
             Answer::Closed => return Err(closed()),
             Answer::Document(v) => match Rejection::of(&v) {
@@ -264,11 +254,11 @@ pub fn first_session(
 /// first worker") so ops (1) and (3) would delegate the agent's first child
 /// from the owner's anchor session, permanently. Answers whether the home
 /// was minted here.
-pub fn mint_home(board: &Board, reads: &FirstSessionReads, session: &Session) -> Result<bool, Halt> {
+pub fn mint_home(board: &Board, reads: &FirstSessionReads, session: &Session<'_>) -> Result<bool, Halt> {
     if document_present(board, &reads.home)? {
         return Ok(false);
     }
-    let v = match session.op(board, &frames::create_home(&reads.account, Some(&format!("first-session.mint.{}", reads.account))))? {
+    let v = match session.op(&frames::create_home(&reads.account, Some(&format!("first-session.mint.{}", reads.account))))? {
         Answer::Closed => return Err(closed()),
         Answer::Document(v) => v,
     };
@@ -289,92 +279,124 @@ fn closed() -> Halt {
     )
 }
 
-/// Op (1): `delegate(inc(account, 1), new_id)` under a persisted id.
+/// Op (1): `delegate(inc(account, 1), new_id)` by the persist-first form;
+/// what is its own is the SEEDED stop and the no-seat contradiction.
 fn delegate_space(
     board: &Board,
     reads: &FirstSessionReads,
-    session: &Session,
+    session: &Session<'_>,
     key: &dyn Signer,
     store: Option<&FileStore>,
     done: &mut FirstSessionDone,
 ) -> Result<u64, Halt> {
-    // The persisted id, read back (AUTH-5.19): `principal_prefix(new_id)` ⇒
-    // the delegate committed; else the SAME id is sent.
-    let new_id = match reads.persisted_new_id {
-        Some(id) => {
-            if board.principal_prefix(id)?.as_deref() == Some(reads.space.as_str()) {
-                return Ok(id);
-            }
-            id
-        }
-        None => {
-            let id = fresh_principal_id();
-            // PERSIST-FIRST (§4.3; AUTH-5.20): the line BEFORE the frame.
-            if let Some(store) = store {
-                let line = Binding::Enrollment {
-                    origin: board.dialed.clone(),
-                    principal: id,
-                    account: reads.space.clone(),
-                    fingerprint: key.fingerprint(),
-                };
-                if let Err(e) = store.bind(&line) {
-                    done.warnings.push(format!("the agents' home's binding line could not be written ({e}); record it yourself: {}", line.line()));
+    let id = format!("first-session.delegate.{}", reads.space);
+    match delegate_persisted(board, session, store, reads.persisted_new_id, &reads.space, &key.fingerprint(), &id, &mut done.warnings)? {
+        Delegated::Committed { id, .. } => Ok(id),
+        Delegated::Seated(seat) => {
+            // AUTH-5.90 (iii): a first child already SEEDED by another party
+            // is a permanent fact — the act stops where its set is not the
+            // account's own.
+            match board.key_set(&reads.space)? {
+                KeySetAnswer::Set(s) if !s.enrolled.is_empty() => {
+                    done.setup_stopped_seeded = true;
+                    done.space_seat = Some(seat);
                 }
+                _ => {}
             }
-            id
+            Ok(seat)
+        }
+        Delegated::NotAuthorized => Err(Halt::face(
+            format!("`delegate` of {} was refused `not_authorized` and the address has no seat", reads.space),
+            "ω answers the seat above an unallocated address; this contradiction is this client's to report",
+            "re-run; the setup act resumes by reading",
+        )),
+    }
+}
+
+/// What the persist-first `delegate` answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Delegated {
+    /// The `delegate` stands committed under `id`: `sent` by this call, or
+    /// found committed by the persisted id's read-back (AUTH-5.19).
+    Committed { id: u64, sent: bool },
+    /// `not_authorized` at an address ALREADY A SEAT — its principal read off
+    /// `effective_owner` (AUTH-6.37), the persisted line corrected to it.
+    Seated(u64),
+    /// `not_authorized` at an address that is no seat: the site faces it.
+    NotAuthorized,
+}
+
+/// THE PERSIST-FIRST `delegate` of `address` (§4.3, P4's one named
+/// exception; AUTH-5.20; AUTH-5.19) — the one form of the rule: the
+/// persisted id READ BACK by `principal_prefix` — this address ⇒ committed;
+/// no address ⇒ the delegate never landed, the SAME id sent again; ANOTHER
+/// address ⇒ the id is spent and a FRESH one is minted, never a resume onto
+/// it — a fresh id PERSISTED AS A BINDING LINE BEFORE THE FRAME (`key` the
+/// line's fingerprint; a store that cannot append is a warning carrying the
+/// line, §3.7); `not_authorized` resolved by the seat's own read and never
+/// a re-peek of the frontier (AUTH-5.87); `duplicate_id` faced.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn delegate_persisted(
+    board: &Board,
+    session: &Session<'_>,
+    store: Option<&FileStore>,
+    persisted: Option<u64>,
+    address: &str,
+    key: &Fingerprint,
+    id: &str,
+    warnings: &mut Vec<String>,
+) -> Result<Delegated, Halt> {
+    let mut persist = |principal: u64| {
+        let Some(store) = store else { return };
+        let line = Binding::Enrollment { origin: board.dialed.clone(), principal, account: address.to_string(), fingerprint: *key };
+        if let Err(e) = store.bind(&line) {
+            warnings.push(format!("the binding line for {address} could not be written ({e}); record it yourself: {}", line.line()));
         }
     };
-    let v = match session.op(board, &frames::delegate(&reads.space, new_id, Some(&format!("first-session.delegate.{}", reads.space))))? {
+    let new_id = match persisted {
+        Some(spent_or_sent) => match board.principal_prefix(spent_or_sent)? {
+            Some(seated) if seated == address => return Ok(Delegated::Committed { id: spent_or_sent, sent: false }),
+            None => spent_or_sent,
+            Some(_) => {
+                let fresh = fresh_principal_id();
+                persist(fresh);
+                fresh
+            }
+        },
+        None => {
+            let fresh = fresh_principal_id();
+            persist(fresh);
+            fresh
+        }
+    };
+    let v = match session.op(&frames::delegate(address, new_id, Some(id)))? {
         Answer::Closed => return Err(closed()),
         Answer::Document(v) => v,
     };
     if acked_addr(&v).is_some() {
-        return Ok(new_id);
+        return Ok(Delegated::Committed { id: new_id, sent: true });
     }
     let Some(r) = Rejection::of(&v) else {
         return Err(Halt::face("the delegate answered a shape this client does not know", v.to_string(), "this is a fault in this client or the board"));
     };
     match r.code.as_str() {
-        // The address is ALREADY A SEAT: read the seat, never re-peek the
-        // frontier (AUTH-5.87).
-        "not_authorized" => match principal_of(board, &reads.space)? {
+        "not_authorized" => match principal_of(board, address)? {
             Some(seat) => {
-                // Correct the persisted line to the read principal.
-                if let Some(store) = store {
-                    let line = Binding::Enrollment {
-                        origin: board.dialed.clone(),
-                        principal: seat,
-                        account: reads.space.clone(),
-                        fingerprint: key.fingerprint(),
-                    };
-                    if let Err(e) = store.bind(&line) {
-                        done.warnings.push(format!("the corrected binding line could not be written ({e}); record it yourself: {}", line.line()));
-                    }
-                }
-                // AUTH-5.90 (iii): a first child already SEEDED by another
-                // party is a permanent fact — the act stops where its set is
-                // not the account's own.
-                match board.key_set(&reads.space)? {
-                    KeySetAnswer::Set(s) if !s.enrolled.is_empty() => {
-                        done.setup_stopped_seeded = true;
-                        done.space_seat = Some(seat);
-                    }
-                    _ => {}
-                }
-                Ok(seat)
+                persist(seat);
+                Ok(Delegated::Seated(seat))
             }
-            None => Err(Halt::face(
-                format!("`delegate` of {} was refused `not_authorized` and the address has no seat", reads.space),
-                "ω answers the seat above an unallocated address; this contradiction is this client's to report",
-                "re-run; the setup act resumes by reading",
-            )),
+            None => Ok(Delegated::NotAuthorized),
         },
         "duplicate_id" => Err(Halt::face(
             "the client-minted principal id is already registered",
             format!("{}: `new_id` {new_id} collided", r.token()),
-            "re-run: a FRESH id is minted (AUTH-5.20), never a resume onto the colliding one",
+            "re-run: the read-back finds the id registered to another address, and a FRESH id is minted (AUTH-5.20), never a resume onto the colliding one",
         )),
-        "claim_first" => Err(Halt::face("the board is unclaimed", "claim_first on the agents' home's delegate: the claim did not land", "re-run `skep claim`")),
+        "claim_first" => Err(Halt::face(
+            "the board is unclaimed",
+            format!("claim_first at the delegate of {address}: the board admits the claim ceremony's own shape alone until the claim lands (AUTH-3.82)"),
+            "re-run `skep claim`",
+        )),
         _ => Err(r.refused(&v)),
     }
 }

@@ -11,7 +11,9 @@
 //! does; AUTH-5.46 as RES-142 re-instated it; AUTH-5.59's head); the rows
 //! LABELLED from the admitted read (AUTH-5.69), rendered inert (AUTH-5.2);
 //! the LAST-DEVICE line forked on the same read's ANCHOR FLAGS (§4a.4 — the
-//! NO-ANCHOR arm UNWRITABLE, `would_empty`, taking no confirmation); the
+//! NO-ANCHOR arm UNWRITABLE, `would_empty`, taking no confirmation) at every
+//! site but a rotation's, whose retire-old follows its replacement's
+//! enrollment (AUTH-5.59 steps 1 and 4); the
 //! LAST-ANCHOR line with RES-177's downgrade, armed; and the TYPED ANSWER
 //! through `Person::confirm_typed`, never a flag — no `--yes` exists,
 //! because "the wrong row is the mistake stress produces". The library takes
@@ -49,7 +51,7 @@ impl Row {
         Row {
             fingerprint: *fp,
             anchor: set.enrolled(fp).is_some_and(|e| e.anchor),
-            label: records.and_then(|r| r.label_of(fp)).filter(|l| !l.is_empty()),
+            label: records.and_then(|r| r.label_of(fp)),
             held: held.contains(fp),
             session_key: session_key == Some(fp),
             enrolled_since: since,
@@ -170,7 +172,10 @@ pub fn preview(person: &mut dyn Person, p: &Preview<'_>) -> Result<Previewed, Ha
             "this retires your LAST ANCHOR — no anchor can ever be enrolled on this account again (AUTH-3.20/3.22); AND THE DOWNGRADE: every subdivision this account opens by reference — those it holds now and any it delegates later, their drafts with them — becomes takeable at a handoff genesis by any device key of this set alone, an act only an anchor session could perform while an anchor stood (AUTH-3.21; RES-177); no later act restores the grade",
         );
     }
-    if remaining_devices == 0 && p.rows.iter().any(|r| !r.anchor) {
+    // A rotation's retire-old never leaves the set keyless: T2 enrolls the
+    // replacement before T4 retires the old key in the same session
+    // (AUTH-5.59 steps 1 and 4), so the fork is no rotation's.
+    if p.site != PreviewSite::Rotate && remaining_devices == 0 && p.rows.iter().any(|r| !r.anchor) {
         if anchors_remaining > 0 {
             say(
                 person,
@@ -229,4 +234,41 @@ pub fn declined(what: &str) -> Halt {
         "the typed answer was `no`",
         "re-run when ready; every state of this walk resumes by reading the board (P4)",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::board::EnrolledKey;
+    use crate::ceremony::enumerate::Admitted;
+    use crate::person::scripted::{Script, Scripted};
+    use crate::sign::{signer_from_seed, Signer};
+
+    /// One account's set of ONE device key and no anchor, and the preview of
+    /// retiring that key at `site`.
+    fn lone_key_preview(site: PreviewSite) -> (Previewed, Scripted) {
+        let key = Signer::public_key(&signer_from_seed(&[12; 32]));
+        let fp = Fingerprint::of(&key);
+        let set = KeySet { enrolled: vec![EnrolledKey { alg: key.alg().into(), fingerprint: fp, key, anchor: false }], ..KeySet::default() };
+        let closure = Closure { accounts: vec![Admitted { account: "1.0.1".into(), set: set.clone(), genesis_home: "1.0.1.0.1".into() }], reads: 1 };
+        let rows = [Row::of(&fp, &set, None, &[fp], Some(&fp), false)];
+        let mut person = Scripted::new(vec![Script::Confirm(true)]);
+        let answer = preview(&mut person, &Preview { account: "1.0.1", set: &set, rows: &rows, closure: &closure, held: &[fp], site, own_board: true }).expect("the preview");
+        (answer, person)
+    }
+
+    /// The LAST-DEVICE fork is no rotation's: retiring an anchorless
+    /// account's only device key is unwritable at `retire` and takes no
+    /// confirmation, while a rotation's retire-old — its replacement
+    /// enrolled at T2 first — reads the set it names and asks for the row.
+    #[test]
+    fn the_last_device_fork_is_no_rotations() {
+        let (answer, person) = lone_key_preview(PreviewSite::Retire);
+        assert_eq!(answer, Previewed::Unwritable);
+        assert!(person.said("THIS RETIREMENT CANNOT BE WRITTEN AT ALL") && !person.said("CONSENT confirm"), "{}", person.transcript.join("\n"));
+        let (answer, person) = lone_key_preview(PreviewSite::Rotate);
+        assert_eq!(answer, Previewed::Confirmed);
+        assert!(!person.said("CANNOT BE WRITTEN") && !person.said("THE LAST DEVICE KEY"), "{}", person.transcript.join("\n"));
+        assert!(person.said("AUTH-5.59 step 4") && person.said("CONSENT confirm"), "{}", person.transcript.join("\n"));
+    }
 }

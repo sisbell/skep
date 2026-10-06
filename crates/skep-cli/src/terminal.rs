@@ -130,12 +130,6 @@ impl Person for Terminal {
         }
     }
 
-    fn confirm(&mut self, m: Consent<Confirmation>) -> Result<bool, Abandoned> {
-        eprintln!("{}", m.0.text);
-        let a = self.line(&format!("type `{}` to confirm: ", m.0.expected))?;
-        Ok(a.trim() == m.0.expected)
-    }
-
     fn confirm_typed(&mut self, m: Consent<Confirmation>) -> Result<String, Abandoned> {
         eprintln!("{}", m.0.text);
         let a = self.line(&format!("type `{}` to confirm, or `no`: ", m.0.expected))?;

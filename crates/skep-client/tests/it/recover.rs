@@ -6,15 +6,20 @@
 //! and `claimant == null` halts; the agent's containment act — and THE
 //! STOLEN ARM with its re-read rounds and the recovery read.
 
+use std::sync::{Arc, Mutex};
+
 use skep_client::board::{KeySetAnswer, Scope};
+use skep_client::ceremony::accept::{accept, AcceptOptions};
 use skep_client::ceremony::claim::{hosted, HostedOutcome};
+use skep_client::ceremony::first_session::document_present;
+use skep_client::ceremony::handoff::{handoff, HandoffOptions, HandoffOutcome};
 use skep_client::ceremony::handshake::{handshake, Site};
 use skep_client::ceremony::recover::{recover, RecoverOptions};
 use skep_client::derive::principal_of;
 use skep_client::person::scripted::{Script, Scripted};
 use skep_client::person::Custody;
 use skep_client::sheet::{Facts, KeyFile, Seed};
-use skep_client::sign::{fresh_seed, signer_from_seed};
+use skep_client::sign::signer_from_seed;
 use skep_client::store::FileStore;
 use skep_identity::{encode_enroll, Enrollment, Fingerprint};
 use skep_signature::HybridSigner;
@@ -99,7 +104,7 @@ fn the_device_recovery_enrolls_the_new_key_retires_the_lost_one_and_resumes_at_r
     assert_eq!(l.store.enrollment_for(&board.dialed, 1).unwrap().map(|(_, fp)| fp), Some(l.new_fp));
     assert!(person.said("THE EXPECTED END: sign in with the new key"), "{t}");
     // The new key signs in.
-    handshake(&board, Scope::Content, &key_file(&l.store, &l.new_fp).signer(), 1, Site::Session).expect("the new key").close(&board).unwrap();
+    handshake(&board, Scope::Content, &key_file(&l.store, &l.new_fp).signer(), 1, Site::Session).expect("the new key").close().unwrap();
 
     // THE RESUME: a second board, the new key enrolled by hand (R3 done),
     // the walk re-run resumes at R4.
@@ -160,7 +165,7 @@ fn the_import_halts_name_their_state_and_spend_no_nonce() {
     let l = lose_the_device();
     let (board, log) = recording_board(crate::common::origin_of(l.sd.port()));
     // Another board's anchor file.
-    let other = KeyFile::new(Seed::new(fresh_seed()), true, Some("elsewhere".into()), Some(&Facts { account: "1.0.1".into(), principal: 9, origin: skep_client::Origin::parse("http://127.0.0.1:9").unwrap() }));
+    let other = KeyFile::new(Seed::fresh(), true, Some("elsewhere".into()), Some(&Facts { account: "1.0.1".into(), principal: 9, origin: skep_client::Origin::parse("http://127.0.0.1:9").unwrap() }));
     let other_path = l.dir.path().join("other.skep-key");
     std::fs::write(&other_path, other.to_json()).unwrap();
     let mut person = Scripted::new(vec![Script::YesNo(true), Script::Custody(Custody::Kept)]);
@@ -220,8 +225,8 @@ fn an_agents_account_takes_the_containment_act_and_enrolls_nothing() {
     // A hosted account: two custody anchors and a working device key, no
     // agent space (the hosted cascade runs none).
     let working = signer_from_seed(&[31; 32]);
-    let a = KeyFile::new(Seed::new(fresh_seed()), true, Some("custody a".into()), None);
-    let b = KeyFile::new(Seed::new(fresh_seed()), true, Some("custody b".into()), None);
+    let a = KeyFile::new(Seed::fresh(), true, Some("custody a".into()), None);
+    let b = KeyFile::new(Seed::fresh(), true, Some("custody b".into()), None);
     let payload = encode_enroll(&[
         Enrollment::new(a.public.clone(), true, Some("custody a".into())).unwrap(),
         Enrollment::new(b.public.clone(), true, Some("custody b".into())).unwrap(),
@@ -311,4 +316,59 @@ fn the_stolen_arm_retires_what_the_thief_enrolls_between_rounds() {
     assert!(person.inner.said("THE BOUNDARY LINE"), "{t}");
     assert!(done.report.iter().any(|l| l.contains("NO REPORT at a loopback-bound notebook")), "{:?}", done.report);
     assert!(!done.report.iter().any(|l| l.contains("1.0.1.2 (genesis in")), "the marked handoff is not reported: {:?}", done.report);
+}
+
+/// THE STOLEN ARM at a handoff's recipient who never ran `skep bind`, so no
+/// doc 1 stands at the account (AUTH-5.90 (iii)): LOST or STOLEN is asked at
+/// the walk's HEAD, ahead of every read (§4a.1), and `first_session` runs
+/// AHEAD OF R4's FIRST RETIREMENT — the walk's first credential write on
+/// this arm, homed in A's doc 1 (§4a.2 R4). MUTATION: with `first_session`
+/// left beside R3's enrollment alone, R4's retirement aims at a document the
+/// board does not hold and the walk halts.
+#[test]
+fn the_stolen_arm_mints_the_recipients_doc_one_ahead_of_its_first_retirement() {
+    let dir = tempfile::tempdir().unwrap();
+    let sd = spawn(&dir.path().join("board"), false);
+    let board = board(sd.port());
+    // The giver hands 1.0.1.2 off; the recipient accepts and is seeded, and
+    // never runs `skep bind`.
+    let giver = FileStore::open(dir.path().join("giver"));
+    keygen(&giver, "notebook");
+    let anchors = dir.path().join("anchors");
+    claim(&board, &giver, &anchors);
+    let give = |payload: Option<String>, anchor: Option<std::path::PathBuf>| HandoffOptions { principal: 1, account: "1.0.1.2".into(), payload: payload.map(|p| format!("{p}\n").into_bytes()), anchor };
+    let HandoffOutcome::Delegated { seat, .. } = handoff(&board, &giver, &mut Scripted::new(vec![]), &give(None, None)).unwrap() else { panic!("beat (a)") };
+    let recipient = FileStore::open(dir.path().join("recipient"));
+    let papers = dir.path().join("papers");
+    let take = AcceptOptions { account: "1.0.1.2".into(), label: None, anchor_out: vec![papers.join("ra"), papers.join("rb")], paper: false, no_anchors: false, hosted: None, host: "testhost".into(), date: "2026-10-04".into() };
+    let taken = accept(&board, &recipient, &mut Scripted::new(vec![Script::Label("phone".into()), Script::LabelDefault, Script::LabelDefault]), &take).unwrap();
+    let (kept, _) = anchor_file(&anchors, "a");
+    let mut p = Scripted::new(vec![Script::Confirm(true), Script::Typed("1.0.1.2".into()), Script::Custody(Custody::Kept), Script::YesNo(true)]);
+    let HandoffOutcome::Seeded { .. } = handoff(&board, &giver, &mut p, &give(Some(taken.record.clone()), Some(kept))).unwrap_or_else(|h| panic!("{h}\n{}", p.transcript.join("\n"))) else { panic!("the genesis") };
+    assert!(!document_present(&board, "1.0.1.2.0.1").unwrap(), "no doc 1 at the recipient's account");
+    // The recipient's device is stolen: its key gone from the store, a fresh one made.
+    std::fs::remove_file(recipient.key_path(&taken.device)).unwrap();
+    let fresh = keygen(&recipient, "phone again");
+    let (paper, _) = anchor_file(&papers, "ra");
+    let (rb, log) = recording_board(board.dialed.clone());
+    let dialed_at_the_choice = Arc::new(Mutex::new(None));
+    let (seen, dialed) = (dialed_at_the_choice.clone(), log.clone());
+    let script = vec![Script::YesNo(true), Script::YesNo(true), Script::Custody(Custody::Kept), Script::YesNo(true), Script::Confirm(true), Script::Confirm(true)];
+    let mut person = Hooked::new(script);
+    person.on_say = Box::new(move |rule, _| {
+        if rule == "AUTH-5.60 step 1" {
+            *seen.lock().unwrap() = Some(dialed.lock().unwrap().len());
+        }
+    });
+    let opts = RecoverOptions { principal: seat, anchor: Some(paper), lost: vec![], stolen: None, anchor_lost: false, anchor_out: vec![], paper: false, host: "testhost".into(), date: "2026-10-04".into() };
+    let done = recover(&rb, &recipient, &mut person, &opts).unwrap_or_else(|h| panic!("{h}\n{}", person.inner.transcript.join("\n")));
+    assert_eq!(*dialed_at_the_choice.lock().unwrap(), Some(0), "LOST or STOLEN is chosen ahead of every read");
+    assert_eq!((done.retired.clone(), done.enrolled.clone()), (vec![taken.device], vec![fresh]));
+    let lines = log.lock().unwrap().clone();
+    let mint = lines.iter().position(|l| l == "POST /op create_new_document").expect("the doc-1 mint");
+    let insert = lines.iter().position(|l| l == "POST /op insert").expect("R4's insert");
+    assert!(mint < insert, "first_session ahead of R4's first retirement: {lines:?}");
+    assert!(document_present(&board, "1.0.1.2.0.1").unwrap());
+    let KeySetAnswer::Set(set) = board.key_set("1.0.1.2").unwrap() else { panic!() };
+    assert!(set.retired(&taken.device).is_some() && set.enrolled(&fresh).is_some());
 }

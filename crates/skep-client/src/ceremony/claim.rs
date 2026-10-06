@@ -12,14 +12,15 @@ use super::say;
 use crate::address::doc_1_of;
 use crate::board::{acked_addr, frames, Answer, Board, KeySetAnswer, Rejection, Scope, SessionBody, Opened, Token, T_CLAIM};
 use crate::ceremony::backup::{backup_moment, BackupOptions, Venue};
-use crate::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome, Grade};
+use crate::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome};
 use crate::ceremony::first_session::{document_present, first_session, FirstSessionReads};
 use crate::ceremony::handshake::{handshake, handshake_prechecked, Site};
 use crate::derive::{precheck, principal_of, Mode};
 use crate::halt::Halt;
 use crate::person::{Person, Public, Question};
 use crate::sheet::Facts;
-use crate::store::{arm4_face, store_halt, Binding, FileStore, KeySelector, KeyStore, Purpose, StoreError};
+use crate::sign::Signer;
+use crate::store::{arm4_face, store_halt, Binding, FileStore, KeyFacts, KeySelector, KeyStore, Purpose, StoreError};
 
 mod hosted;
 
@@ -110,10 +111,14 @@ fn statements_s0(person: &mut dyn Person, local_trust: bool) {
 
 /// The store's device key for this walk (§2.2 `claim`: `--dir` alone, `--key`
 /// not consulted; §3.5's lookup): the binding for (board, N), else the lone
-/// device key, else arm 4's fork.
-fn device_key(store: &FileStore, board: &Board, principal: u64, mode: Mode, local_trust: bool) -> Result<(PathBuf, crate::sheet::KeyFile), Halt> {
+/// device key, else arm 4's fork — its public facts, and its signer from the
+/// store that holds its seed (§3a).
+fn device_key(store: &FileStore, board: &Board, principal: u64, mode: Mode, local_trust: bool) -> Result<(KeyFacts, Box<dyn Signer>), Halt> {
     match store.select(&KeySelector::Binding { origin: &board.dialed, principal: Some(principal) }, Purpose::Sign) {
-        Ok(sel) => Ok((sel.path, sel.file)),
+        Ok(key) => {
+            let signer = store.signer(&KeySelector::Path(&key.path)).map_err(store_halt)?;
+            Ok((key, signer))
+        }
         Err(StoreError::NoSelection { keys }) => Err(arm4_face(store, &keys, mode, local_trust)),
         Err(e) => Err(store_halt(e)),
     }
@@ -136,11 +141,10 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
         other => return Err(residue_halt(other)),
     };
     // The device key, from `--dir` alone.
-    let (_key_path, key_file) = device_key(store, board, principal, mode, local_trust)?;
-    let device = key_file.signer();
-    let device_fp = key_file.fingerprint;
-    let device_public = key_file.public.clone();
-    let device_label = key_file.label.clone();
+    let (key, device) = device_key(store, board, principal, mode, local_trust)?;
+    let device_fp = key.fingerprint;
+    let device_public = key.public.clone();
+    let device_label = key.label.clone();
 
     // S0′ STATEMENTS before step 1 (RES-97).
     statements_s0(person, local_trust);
@@ -234,7 +238,7 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
         let outcome = deposit(
             board,
             &owner_bare,
-            &Deposit { home: &home, subject: &account, kind: DepositKind::Enroll(entries), grade: Grade::Anchor, hand: None, id: "claim.genesis" },
+            &Deposit { home: &home, subject: &account, kind: DepositKind::Enroll(entries), hand: None, id: "claim.genesis" },
         )?;
         if let DepositOutcome::Committed { reason } = &outcome {
             say(person, "AUTH-5.17", format!("the genesis stands: {reason}"));
@@ -244,9 +248,9 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
     // S5 CLAIM (SIGNED, FULL): the pre-check first (both reads live), the
     // challenge, the claim link.
     let pre = precheck(board, principal, &device_fp)?;
-    let signed = handshake_prechecked(board, Scope::Full, &device, principal, &pre, Site::Claim)?;
+    let signed = handshake_prechecked(board, Scope::Full, &*device, principal, &pre, Site::Claim)?;
     let claim_frame = frames::make_link(&home, &[&account], &[], T_CLAIM, Some("claim.claim"));
-    let v = match signed.op(board, &claim_frame)? {
+    let v = match signed.op(&claim_frame)? {
         Answer::Closed => return Err(Halt::face("the signed session ended at the claim", "closed", "re-run `skep claim`")),
         Answer::Document(v) => v,
     };
@@ -272,7 +276,7 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
     // S5a–S5b: the agent-space act in this session, after the claim commits.
     say(person, "AUTH-5.87", "creating your account also creates a space for your agents beneath it, and its home");
     let reads = FirstSessionReads::take(board, &account, &device_fp, Some(store), &board.dialed)?;
-    let done = first_session(board, &reads, &signed, &device, Some(store))?;
+    let done = first_session(board, &reads, &signed, &*device, Some(store))?;
     let mut warnings = done.warnings.clone();
     // S7 CLOSE the bare sessions (idempotent 204; dead at the flip into
     // ENFORCING, alive in CLAIMED-PERMISSIVE).
@@ -295,7 +299,7 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
     if let Err(e) = store.bind(&line) {
         warnings.push(format!("the store could not be appended ({e}); record this binding line yourself: {}", line.line()));
     }
-    let _ = signed.close(board);
+    let _ = signed.close();
     Ok(ClaimOutcome::Ours(Claimed {
         account,
         principal,
@@ -384,13 +388,13 @@ fn tail_or_stranger(board: &Board, store: &FileStore, person: &mut dyn Person, o
     let Some(principal) = principal_of(board, &claimant)? else {
         return Err(Halt::face(format!("{claimant} has no seat"), "`effective_owner` answered no allocated seat for the claimant", "this is a board fault"));
     };
-    let file = store.load(&ours.path).map_err(store_halt)?;
-    let device = file.signer();
+    let fingerprint = ours.fingerprint;
+    let device = store.signer(&KeySelector::Path(&ours.path)).map_err(store_halt)?;
     say(person, "§4.3", format!("this board is already yours (claimant {claimant}, principal {principal}); finishing whatever of the tail is unfinished"));
-    let session = handshake(board, Scope::Content, &device, principal, Site::Tail)?;
+    let session = handshake(board, Scope::Content, &*device, principal, Site::Tail)?;
     say(person, "AUTH-5.87", "creating your account also creates a space for your agents beneath it, and its home");
-    let reads = FirstSessionReads::take(board, &claimant, &file.fingerprint, Some(store), &board.dialed)?;
-    let done = first_session(board, &reads, &session, &device, Some(store))?;
+    let reads = FirstSessionReads::take(board, &claimant, &fingerprint, Some(store), &board.dialed)?;
+    let done = first_session(board, &reads, &session, &*device, Some(store))?;
     let mut warnings = done.warnings.clone();
     let after = board.health()?;
     if after.signed_origins().is_empty() {
@@ -400,18 +404,18 @@ fn tail_or_stranger(board: &Board, store: &FileStore, person: &mut dyn Person, o
         warnings.push("the board is CLAIMED-PERMISSIVE: any loopback party may still write drafts as any principal".into());
     }
     let display_name = s9_name(person, opts)?;
-    let line = Binding::Enrollment { origin: board.dialed.clone(), principal, account: claimant.clone(), fingerprint: file.fingerprint };
-    let bound = store.enrollment_for(&board.dialed, principal).map_err(store_halt)?.is_some_and(|(_, fp)| fp == file.fingerprint);
+    let line = Binding::Enrollment { origin: board.dialed.clone(), principal, account: claimant.clone(), fingerprint };
+    let bound = store.enrollment_for(&board.dialed, principal).map_err(store_halt)?.is_some_and(|(_, fp)| fp == fingerprint);
     if !bound {
         if let Err(e) = store.bind(&line) {
             warnings.push(format!("the store could not be appended ({e}); record this binding line yourself: {}", line.line()));
         }
     }
-    let _ = session.close(board);
+    let _ = session.close();
     Ok(ClaimOutcome::Ours(Claimed {
         account: claimant,
         principal,
-        fingerprint: file.fingerprint,
+        fingerprint,
         agent_space: done.space_seat.map(|_| reads.space.clone()),
         binding_line: line.line(),
         warnings,

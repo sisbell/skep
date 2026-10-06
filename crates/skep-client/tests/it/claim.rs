@@ -1,18 +1,21 @@
 //! THE CLAIM against the real daemon (`client.md` §4; the build brief §3):
 //! THE LOOP, RESUME BY READING at AUTH-5.56's boundaries, the residue halt
-//! that delegates nothing, and the persisted `new_id` read back.
+//! that delegates nothing, and the persisted `new_id` read back — or, spent
+//! on another address, replaced.
 
-use skep_client::board::{acked_addr, frames, Answer, KeySetAnswer, Opened, Scope, SessionBody, Token, T_CLAIM};
+use std::path::Path;
+
+use skep_client::board::{acked_addr, frames, Answer, Board, KeySetAnswer, Opened, Scope, SessionBody, Token, T_CLAIM};
 use skep_client::ceremony::backup::{backup_moment, BackupOptions, Venue};
 use skep_client::ceremony::claim::{self, ClaimOutcome};
-use skep_client::ceremony::deposit::{deposit, Deposit, DepositKind, Grade};
+use skep_client::ceremony::deposit::{deposit, Deposit, DepositKind};
 use skep_client::ceremony::handshake::{handshake, key_face, Site};
-use skep_client::derive::{precheck, KeyDiagnosis, Mode};
+use skep_client::derive::{precheck, principal_of, KeyDiagnosis, Mode};
 use skep_client::person::scripted::{Script, Scripted};
 use skep_client::sheet::{Facts, KeyFile};
 use skep_client::sign::signer_from_seed;
 use skep_client::store::{Binding, FileStore, KeyStore};
-use skep_identity::Enrollment;
+use skep_identity::{Enrollment, Fingerprint};
 use skep_signature::HybridSigner;
 
 use crate::common::{board, claim, files_in, keygen, opts, spawn};
@@ -107,7 +110,6 @@ fn the_loop_claims_the_board_and_a_second_run_is_the_ours_tail() {
             home: "1.0.1.0.1",
             subject: "1.0.1",
             kind: DepositKind::Enroll(vec![Enrollment::new(HybridSigner::public_key(&extra).clone(), false, Some("second".into())).unwrap()]),
-            grade: Grade::Device,
             hand: Some(&device),
             id: "test.enroll-under-content",
         },
@@ -118,7 +120,7 @@ fn the_loop_claims_the_board_and_a_second_run_is_the_ours_tail() {
     let pre = precheck(&board, 1, &fp).expect("pre-check");
     assert_eq!(pre.diagnosis, KeyDiagnosis::Enrolled { anchor: false });
     key_face(&board, &pre, &fp, &[(fp, file.public.clone())], Site::Session).expect("enrolled");
-    session.close(&board).expect("close");
+    session.close().expect("close");
 }
 
 /// AUTH-5.56 boundary 1: a walk interrupted after S1 (the delegate landed,
@@ -199,7 +201,7 @@ fn a_claim_interrupted_after_s4_resumes_at_s5_off_key_set() {
     .expect("the backup moment");
     let mut entries: Vec<Enrollment> = backup.anchors.iter().map(|a| Enrollment::new(a.public.clone(), true, Some(a.label.as_str().into())).unwrap()).collect();
     entries.push(Enrollment::new(file.public.clone(), false, Some("notebook".into())).unwrap());
-    deposit(&board, &owner, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(entries), grade: Grade::Anchor, hand: None, id: "test.genesis" }).expect("the genesis");
+    deposit(&board, &owner, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(entries), hand: None, id: "test.genesis" }).expect("the genesis");
     let KeySetAnswer::Set(set) = board.key_set("1.0.1").unwrap() else { panic!() };
     assert_eq!(set.enrolled.len(), 3);
     assert_eq!(board.health().unwrap().claimant(), None, "still unclaimed");
@@ -215,19 +217,16 @@ fn a_claim_interrupted_after_s4_resumes_at_s5_off_key_set() {
     assert_eq!(set.enrolled.len(), 3, "no second genesis");
 }
 
-/// The persist-first `new_id` (§4.3; AUTH-5.20): a binding line written
-/// BEFORE the delegate is READ BACK by `principal_prefix(new_id)` and the
-/// same id is sent — never a fresh one.
-#[test]
-fn the_persisted_new_id_is_read_back_and_the_space_is_delegated_under_it() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(&dir.path().join("board"), false);
+/// S1–S5 by hand, through the library's own compositions: the claim lands
+/// under the store's one device key, and the tail — the agent space — does
+/// not run.
+fn claimed_without_its_tail(dir: &Path) -> (skepd::Skepd, Board, FileStore, Fingerprint) {
+    let sd = spawn(&dir.join("board"), false);
     let board = board(sd.port());
-    let store = FileStore::open(dir.path().join("store"));
+    let store = FileStore::open(dir.join("store"));
     let fp = keygen(&store, "notebook");
     let file = store.load(&store.key_path(&fp)).unwrap();
     let device = file.signer();
-    // S1–S5 by hand: the claim lands, the tail does not run.
     let boot = bare(&board, 0);
     let Answer::Document(v) = board.op(Some(&boot), &frames::delegate("1.0.1", 1, None)).unwrap() else { panic!() };
     assert_eq!(acked_addr(&v), Some("1.0.1"));
@@ -235,11 +234,22 @@ fn the_persisted_new_id_is_read_back_and_the_space_is_delegated_under_it() {
     let Answer::Document(v) = board.op(Some(&owner), &frames::create_home("1.0.1", None)).unwrap() else { panic!() };
     assert_eq!(acked_addr(&v), Some("1.0.1.0.1"));
     let entries = vec![Enrollment::new(file.public.clone(), false, Some("notebook".into())).unwrap()];
-    deposit(&board, &owner, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(entries), grade: Grade::Anchor, hand: None, id: "test.genesis" }).expect("genesis");
+    deposit(&board, &owner, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(entries), hand: None, id: "test.genesis" }).expect("genesis");
     let signed = handshake(&board, Scope::Full, &device, 1, Site::Claim).expect("the claim's session");
-    let Answer::Document(v) = signed.op(&board, &frames::make_link("1.0.1.0.1", &["1.0.1"], &[], T_CLAIM, None)).unwrap() else { panic!() };
+    let Answer::Document(v) = signed.op(&frames::make_link("1.0.1.0.1", &["1.0.1"], &[], T_CLAIM, None)).unwrap() else { panic!() };
     assert!(acked_addr(&v).is_some(), "the claim: {v}");
+    let _ = signed.close();
     assert_eq!(board.health().unwrap().claimant(), Some("1.0.1"));
+    (sd, board, store, fp)
+}
+
+/// The persist-first `new_id` (§4.3; AUTH-5.20): a binding line written
+/// BEFORE the delegate is READ BACK by `principal_prefix(new_id)` and the
+/// same id is sent — never a fresh one.
+#[test]
+fn the_persisted_new_id_is_read_back_and_the_space_is_delegated_under_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (_sd, board, store, fp) = claimed_without_its_tail(dir.path());
     // The persisted line, as an interrupted run leaves it: the id chosen,
     // the frame never sent.
     let chosen: u64 = 424_242;
@@ -255,4 +265,25 @@ fn the_persisted_new_id_is_read_back_and_the_space_is_delegated_under_it() {
     assert_eq!(lines.iter().filter(|b| matches!(b, Binding::Enrollment { account, .. } if account == "1.0.1.1")).count(), 1, "no second id was minted for the space");
     // And the space's home stands.
     assert!(skep_client::ceremony::first_session::document_present(&board, "1.0.1.1.0.1").unwrap());
+}
+
+/// A persisted id SPENT on another address (§4.3; AUTH-5.20): its read-back
+/// finds it registered to an account that is not this space, so a FRESH id
+/// is minted, persisted ahead of the frame, and seats the space — never a
+/// resume onto the spent id, whose `duplicate_id` would answer every re-run.
+/// MUTATION: with the spent id sent again, the tail halts `duplicate_id`.
+#[test]
+fn a_persisted_id_spent_on_another_address_is_replaced_by_a_fresh_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (_sd, board, store, fp) = claimed_without_its_tail(dir.path());
+    // The cached line names principal 1 — registered, at 1.0.1.
+    store.bind(&Binding::Enrollment { origin: board.dialed.clone(), principal: 1, account: "1.0.1.1".into(), fingerprint: fp }).unwrap();
+    let mut person = Scripted::new(vec![]);
+    let outcome = claim::notebook(&board, &store, &mut person, &opts(&dir.path().join("anchors"))).unwrap_or_else(|h| panic!("{h}"));
+    let ClaimOutcome::Ours(done) = outcome else { panic!("{outcome:?}") };
+    assert_eq!(done.agent_space.as_deref(), Some("1.0.1.1"));
+    let seat = principal_of(&board, "1.0.1.1").unwrap().expect("the space is seated");
+    assert_ne!(seat, 1, "never the spent id");
+    assert_eq!(board.principal_prefix(1).unwrap().as_deref(), Some("1.0.1"), "the spent id's own account is untouched");
+    assert_eq!(store.persisted_id(&board.dialed, "1.0.1.1").unwrap(), Some(seat), "the fresh id persisted, the newest line");
 }

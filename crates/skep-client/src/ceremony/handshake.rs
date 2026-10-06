@@ -11,7 +11,8 @@
 //! malformed_session_request`, this client's own framing, surfaced verbatim.
 //! The one re-challenge completes before the composition returns, so a
 //! caller holding key material may drop it on return where nothing after
-//! signs with it. The SCOPE is the walk's, passed once.
+//! signs with it. The SCOPE is the walk's, passed once. The [`Session`] it
+//! answers owns its own END.
 
 use skep_identity::Fingerprint;
 
@@ -21,9 +22,21 @@ use crate::derive::{precheck, KeyDiagnosis, PreCheck};
 use crate::halt::{Blocked, Halt};
 use crate::sign::{session_payload, sig_hex, Signer};
 
-/// One open signed session: the token and what it was opened as.
-#[derive(Debug, Clone)]
-pub struct Session {
+/// One open signed session: the token, what it was opened as and the board
+/// it stands at — and THE OWNER OF ITS OWN END. Exactly one of three acts
+/// ends it, each consuming it: [`Session::close`], `POST /session/close`
+/// (AUTH-4.47; AUTH-5.54 step 3's mirror takes "the SESSION and not the
+/// material alone"); [`Session::ended_by_commit`], where the act's own
+/// commit ended it — the session's own key retired (AUTH-4.63) — and no
+/// close is owed; and [`Session::into_token`], the token handed out live. A
+/// session dropped by none of them — every halt a walk takes after its
+/// handshake — sends the close on the drop, best effort, so no exit leaves
+/// a session standing at the daemon until its restart (§4a.3's residue).
+#[derive(Debug)]
+pub struct Session<'b> {
+    board: &'b Board,
+    /// One of the three ends ran: the drop sends nothing.
+    ended: bool,
     pub token: Token,
     pub principal: u64,
     pub scope: Scope,
@@ -33,15 +46,41 @@ pub struct Session {
     pub fingerprint: Fingerprint,
 }
 
-impl Session {
-    /// One frame under this session's token.
-    pub fn op(&self, board: &Board, frame: &serde_json::Value) -> Result<Answer, Halt> {
-        board.op(Some(&self.token), frame)
+impl Session<'_> {
+    /// One frame under this session's token, at the board it stands at.
+    pub fn op(&self, frame: &serde_json::Value) -> Result<Answer, Halt> {
+        self.board.op(Some(&self.token), frame)
     }
 
-    /// `POST /session/close` (AUTH-4.47).
-    pub fn close(&self, board: &Board) -> Result<Closed, Halt> {
-        board.session_close(&self.token)
+    /// `POST /session/close` (AUTH-4.47) — the session's ordinary end.
+    pub fn close(mut self) -> Result<Closed, Halt> {
+        self.ended = true;
+        self.board.session_close(&self.token)
+    }
+
+    /// The end where the act's own commit ended the session (AUTH-4.63: a
+    /// retirement of the key that opened it kills its sessions at the
+    /// commit): nothing is sent — the `closed` any later request would meet
+    /// is the act's EXPECTED END (AUTH-5.28). Called only after that commit
+    /// answered; a retirement that did not commit leaves the session live,
+    /// and its drop closes it.
+    pub fn ended_by_commit(mut self) {
+        self.ended = true;
+    }
+
+    /// The end where the session outlives this process: its token handed
+    /// out LIVE — `skep session`'s one datum (§2.2), which the holder closes.
+    pub fn into_token(mut self) -> Token {
+        self.ended = true;
+        self.token.clone()
+    }
+}
+
+impl Drop for Session<'_> {
+    fn drop(&mut self) {
+        if !self.ended {
+            let _ = self.board.session_close(&self.token);
+        }
     }
 }
 
@@ -83,7 +122,7 @@ pub fn key_face(board: &Board, pre: &PreCheck, fp: &Fingerprint, own: &[(Fingerp
             // The hand and the position, from the admitted read (RULED, owner
             // 2026-09-22 "i"); the read made only on this failing path.
             let records = credential_records(board, &pre.walk.set_account, own).ok();
-            let label = records.as_ref().and_then(|r| r.label_of(fp)).filter(|l| !l.is_empty());
+            let label = records.as_ref().and_then(|r| r.label_of(fp));
             let named = match &label {
                 Some(l) => format!("{fp} ({})", crate::sheet::render_inert(l)),
                 None => fp.to_string(),
@@ -150,7 +189,7 @@ pub fn key_face(board: &Board, pre: &PreCheck, fp: &Fingerprint, own: &[(Fingerp
 }
 
 /// THE COMPOSITION: the pre-check, then the handshake.
-pub fn handshake(board: &Board, scope: Scope, signer: &dyn Signer, principal: u64, site: Site) -> Result<Session, Halt> {
+pub fn handshake<'b>(board: &'b Board, scope: Scope, signer: &dyn Signer, principal: u64, site: Site) -> Result<Session<'b>, Halt> {
     let fp = signer.fingerprint();
     let pre = precheck(board, principal, &fp)?;
     handshake_prechecked(board, scope, signer, principal, &pre, site)
@@ -158,7 +197,7 @@ pub fn handshake(board: &Board, scope: Scope, signer: &dyn Signer, principal: u6
 
 /// The handshake over reads the caller already made (the claim's S5, whose
 /// `principal_prefix` and `key_set` reads are live).
-pub fn handshake_prechecked(board: &Board, scope: Scope, signer: &dyn Signer, principal: u64, pre: &PreCheck, site: Site) -> Result<Session, Halt> {
+pub fn handshake_prechecked<'b>(board: &'b Board, scope: Scope, signer: &dyn Signer, principal: u64, pre: &PreCheck, site: Site) -> Result<Session<'b>, Halt> {
     let fp = signer.fingerprint();
     let own = [(fp, signer.public_key())];
     key_face(board, pre, &fp, &own, site)?;
@@ -176,7 +215,7 @@ pub fn handshake_prechecked(board: &Board, scope: Scope, signer: &dyn Signer, pr
         let sig = sig_hex(&signer.sign(&payload));
         match board.session_open(SessionBody::Signed { principal, nonce: &challenge.nonce, sig_hex: &sig, scope })? {
             Opened::Token(token) => {
-                return Ok(Session { token, principal, scope, account: pre.account.clone(), fingerprint: fp });
+                return Ok(Session { board, ended: false, token, principal, scope, account: pre.account.clone(), fingerprint: fp });
             }
             Opened::Rejected => {
                 if rejected_once {
@@ -209,10 +248,7 @@ pub fn handshake_prechecked(board: &Board, scope: Scope, signer: &dyn Signer, pr
 /// prefix covers this account and its home is that board's doc 1 are stated
 /// in the face as what was and was not read.
 fn read_ground(board: &Board, record: &str) -> Option<String> {
-    let v = match board.op(None, &frames::retrieve_v(record, 1, 1)) {
-        Ok(Answer::Document(v)) => v,
-        _ => return None,
-    };
+    let v = board.guest(&frames::retrieve_v(record, 1, 1)).ok()?;
     if v["resp"].as_str() != Some("delivery") {
         return None;
     }

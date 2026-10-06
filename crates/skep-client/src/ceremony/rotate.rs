@@ -29,11 +29,11 @@
 use skep_identity::{Enrollment, Fingerprint, PublicKey};
 
 use super::say;
-use crate::board::{Board, KeySetAnswer, Scope};
-use crate::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome, Grade};
+use crate::board::{Board, Scope};
+use crate::ceremony::deposit::{deposit, Deposit, DepositHalt, DepositKind, DepositOutcome};
 use crate::ceremony::enumerate::head_closure;
 use crate::ceremony::first_session::{first_session, FirstSessionReads};
-use crate::ceremony::handshake::{handshake, Session, Site};
+use crate::ceremony::handshake::{handshake, Site};
 use crate::ceremony::payload::{compare_payload, parse_payload, payload_text, refuse_anchor_flagged};
 use crate::ceremony::preview::{declined, preview, Preview, PreviewSite, Previewed, Row};
 use crate::ceremony::reads::{r0, A4Cell, Reads};
@@ -42,8 +42,8 @@ use crate::derive::records::{credential_records, Hand, Kind, Records};
 use crate::derive::Mode;
 use crate::halt::Halt;
 use crate::person::{LabelBox, Person, Public};
-use crate::sheet::{render_inert, Facts, KeyFile};
-use crate::store::{arm4_face, store_halt, Binding, FileStore, KeySelector, KeyStore, Label, Purpose, StoreError};
+use crate::sheet::{render_inert, Facts, Label};
+use crate::store::{arm4_face, store_halt, Binding, FileStore, KeyFacts, KeySelector, KeyStore, Purpose, StoreError};
 
 /// The command's inputs.
 #[derive(Debug, Clone)]
@@ -94,16 +94,16 @@ fn closed_before_t4(board: &Board, reads: &Reads, old: &Fingerprint, own: &[(Fin
 /// THE WALK.
 pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &RotateOptions) -> Result<Rotated, Halt> {
     // The OLD key: the store's binding for (board, n).
-    let old_file: KeyFile = match store.select(&KeySelector::Binding { origin: &board.dialed, principal: Some(opts.principal) }, Purpose::Sign) {
-        Ok(sel) => sel.file,
+    let old_key: KeyFacts = match store.select(&KeySelector::Binding { origin: &board.dialed, principal: Some(opts.principal) }, Purpose::Sign) {
+        Ok(key) => key,
         Err(StoreError::NoSelection { keys }) => {
             let health = board.health()?;
             return Err(arm4_face(store, &keys, Mode::of(&health), health.local_trust()));
         }
         Err(e) => return Err(store_halt(e)),
     };
-    let old = old_file.signer();
-    let old_fp = old_file.fingerprint;
+    let old = store.signer(&KeySelector::Path(&old_key.path)).map_err(store_halt)?;
+    let old_fp = old_key.fingerprint;
     let keys = store.list().map_err(store_halt)?;
     let own: Vec<(Fingerprint, PublicKey)> = keys.iter().filter(|k| !k.anchor).map(|k| (k.fingerprint, k.public.clone())).collect();
     // The payload arm's parse, at the door.
@@ -131,26 +131,23 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     };
     let closure = head_closure(board, person, &account, &old_fp)?;
     // The NEW key's resume read (T2 by `key_set`): on the payload arm its
-    // fingerprint enrolled; on the generate arm an UNBOUND device key of
-    // this store enrolled beside the old one.
+    // fingerprint enrolled (`payload_enrolled`); on the generate arm an
+    // UNBOUND device key of this store enrolled beside the old one.
     let bound: Vec<Fingerprint> = store.all_bindings().map_err(store_halt)?.into_iter().filter_map(|b| match b {
         Binding::Enrollment { origin, fingerprint, .. } if origin == board.dialed => Some(fingerprint),
         _ => None,
     }).collect();
-    let resumed_new: Option<KeyFile> = match &payload {
-        Some((_, entries)) => {
-            let fp = Fingerprint::of(&entries[0].key);
-            reads.walk.set.enrolled(&fp).is_some().then(|| None).flatten()
-        }
+    let resumed_new: Option<KeyFacts> = match &payload {
+        Some(_) => None,
         None => keys
             .iter()
             .find(|k| !k.anchor && k.fingerprint != old_fp && !bound.contains(&k.fingerprint) && reads.walk.set.enrolled(&k.fingerprint).is_some())
-            .and_then(|k| store.load(&k.path).ok()),
+            .cloned(),
     };
     let payload_enrolled = payload.as_ref().is_some_and(|(_, e)| reads.walk.set.enrolled(&Fingerprint::of(&e[0].key)).is_some());
     // T1: the box, PREFILLED from the retiring key's label — or the payload's
     // label shown uncorrectable beside the comparison.
-    let old_label = reads.records.label_of(&old_fp).filter(|l| !l.is_empty()).or_else(|| old_file.label.clone());
+    let old_label = reads.records.label_of(&old_fp).or_else(|| old_key.label.clone());
     let new_label: Option<Label> = match (&payload, &resumed_new) {
         (Some((_, entries)), _) => {
             say(person, "AUTH-5.42", format!("on the payload arm the label rides inside the record — `{}` — uncorrectable once enrolled", entries[0].label().map(render_inert).unwrap_or_else(|| "(none)".into())));
@@ -192,42 +189,35 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     let held: Vec<Fingerprint> = own.iter().map(|(f, _)| *f).collect();
     let rows = [Row::of(&old_fp, &reads.walk.set, Some(&reads.records), &held, Some(&old_fp), false)];
     let own_board = matches!(reads.cell, A4Cell::LoopbackNotebook | A4Cell::BindOverrideNotebook);
-    // The retirement's reach is stated over the set AS IT WILL STAND after
-    // T2 (the new key enrolled), so the last-device fork never fires here.
-    let mut after_t2 = reads.walk.set.clone();
-    if !after_t2.enrolled.iter().any(|e| !e.anchor && e.fingerprint != old_fp) {
-        // Represent the key T2 enrolls so the preview reads the set as T4 will.
-        after_t2.enrolled.push(crate::board::EnrolledKey { alg: old_file.alg.clone(), fingerprint: Fingerprint::parse_hex(&"0".repeat(64)).expect("64 hex"), key: old_file.public.clone(), anchor: false });
-    }
-    match preview(person, &Preview { account: &account, set: &after_t2, rows: &rows, closure: &closure, held: &held, site: PreviewSite::Rotate, own_board })? {
+    match preview(person, &Preview { account: &account, set: &reads.walk.set, rows: &rows, closure: &closure, held: &held, site: PreviewSite::Rotate, own_board })? {
         Previewed::Confirmed => {}
         Previewed::Declined => return Err(declined("rotation")),
         Previewed::Unwritable => return Err(Halt::face("the rotation's retire-old would empty the set", "`would_empty` armed", "this is this client's frame")),
     }
-    // T2: the OLD key's FULL session; `first_session` first; the enrollment.
-    let session: Session = handshake(board, Scope::Full, &old, opts.principal, Site::Session)?;
+    // T2: the OLD key's FULL session — closed on every halt below by its own
+    // drop, ended at T4 by T4's commit; `first_session` first; the enrollment.
+    let session = handshake(board, Scope::Full, &*old, opts.principal, Site::Session)?;
     let fs_reads = FirstSessionReads::take(board, &account, &old_fp, Some(store), &board.dialed)?;
-    if let Err(h) = first_session(board, &fs_reads, &session, &old, Some(store)) {
-        let _ = session.close(board);
+    if let Err(h) = first_session(board, &fs_reads, &session, &*old, Some(store)) {
         return Err(closed_before_t4(board, &reads, &old_fp, &own, h));
     }
     let home = fs_reads.home.clone();
     let mut warnings = Vec::new();
-    let (new_fp, new_file, new_link): (Fingerprint, Option<KeyFile>, String) = {
-        let kind_and_file: (DepositKind, Option<KeyFile>, Fingerprint) = match (&payload, &resumed_new, &new_label) {
+    let (new_fp, new_key, new_link): (Fingerprint, Option<KeyFacts>, String) = {
+        let kind_and_key: (DepositKind, Option<KeyFacts>, Fingerprint) = match (&payload, &resumed_new, &new_label) {
             (Some((text, entries)), _, _) => (DepositKind::EnrollVerbatim(text.clone()), None, Fingerprint::of(&entries[0].key)),
-            (None, Some(resumed), _) => (DepositKind::Enroll(vec![Enrollment::new(resumed.public.clone(), false, resumed.label.clone()).expect("a stored label")]), Some(store.load(&store.key_path(&resumed.fingerprint)).map_err(store_halt)?), resumed.fingerprint),
+            (None, Some(resumed), _) => (DepositKind::Enroll(vec![Enrollment::new(resumed.public.clone(), false, resumed.label.clone()).expect("a stored label")]), Some(resumed.clone()), resumed.fingerprint),
             (None, None, Some(label)) => {
                 let id = store.generate(Some(label.clone())).map_err(store_halt)?;
-                let file = store.load(&store.key_path(&id.0)).map_err(store_halt)?;
-                say(person, "§3a", format!("key file written: {} — the seed rests in this file and the filesystem's modes are its whole protection", store.key_path(&id.0).display()));
-                (DepositKind::Enroll(vec![Enrollment::new(file.public.clone(), false, Some(label.as_str().to_string())).expect("a label the box admitted")]), Some(file), id.0)
+                let key = store.select(&KeySelector::Path(&store.key_path(&id.0)), Purpose::Read).map_err(store_halt)?;
+                say(person, "§3a", format!("key file written: {} — the seed rests in this file and the filesystem's modes are its whole protection", key.path.display()));
+                (DepositKind::Enroll(vec![Enrollment::new(key.public.clone(), false, Some(label.as_str().to_string())).expect("a label the box admitted")]), Some(key), id.0)
             }
             (None, None, None) => unreachable!("a label stands where no payload and no resumed key do"),
         };
-        let (kind, file, fp) = kind_and_file;
+        let (kind, key, fp) = kind_and_key;
         let id = format!("rotate.enroll.{}", &fp.to_hex()[..8]);
-        let outcome = deposit(board, &session.token, &Deposit { home: &home, subject: &account, kind, grade: Grade::Device, hand: Some(&old), id: &id });
+        let outcome = deposit(board, &session.token, &Deposit { home: &home, subject: &account, kind, hand: Some(&*old), id: &id });
         let link = match outcome {
             Ok(DepositOutcome::Deposited { link, .. }) => link,
             Ok(DepositOutcome::Committed { reason }) => {
@@ -235,23 +225,17 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
                 let records = credential_records(board, &account, &own)?;
                 enroll_link_of(&records, &fp).ok_or_else(|| Halt::face("the new key's enroll link was not found", "the record read after a reconciled enrollment names no link for it", "re-run; the walk resumes by reading"))?
             }
-            Err(h) => {
-                let text = h.to_string();
-                let _ = session.close(board);
-                if text.contains("too_many_enrolled") {
-                    return Err(Halt::face(
-                        format!("the set at {account} is full (`too_many_enrolled`), and this rotation enrolls before it retires"),
-                        "AUTH-5.13: the face names the act, never the count — and retire-first of THIS key is not the act here, since T4's retirement of the old key follows in this same session",
-                        "retire a key you no longer hold first (`skep retire --fingerprint <prefix>`), then re-run `skep rotate`",
-                    ));
-                }
-                if text.contains("session ended") || text.contains("closed") {
-                    return Err(closed_before_t4(board, &reads, &old_fp, &own, h));
-                }
-                return Err(h);
+            Err(DepositHalt::SetFull(_)) => {
+                return Err(Halt::face(
+                    format!("the set at {account} is full (`too_many_enrolled`), and this rotation enrolls before it retires"),
+                    "AUTH-5.13: the face names the act, never the count — and retire-first of THIS key is not the act here, since T4's retirement of the old key follows in this same session",
+                    "retire a key you no longer hold first (`skep retire --fingerprint <prefix>`), then re-run `skep rotate`",
+                ));
             }
+            Err(DepositHalt::SessionClosed(h)) => return Err(closed_before_t4(board, &reads, &old_fp, &own, h)),
+            Err(other) => return Err(other.into()),
         };
-        (fp, file, link)
+        (fp, key, link)
     };
     // T3: THE TRAIL, resumed by reading its presence.
     let trail = match trail_present(board, &old_link, Some(&new_link))? {
@@ -259,29 +243,29 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
             say(person, "AUTH-5.59 step 3", format!("the trail already stands at {claim} (from {old_link} to {new_link}): resumed by reading, no second trail is written"));
             claim
         }
-        None => match write_trail(board, &session, &old, &home, &old_link, &new_link, "rotate.trail") {
+        None => match write_trail(board, &session, &*old, &home, &old_link, &new_link, "rotate.trail") {
             Ok(claim) => {
                 say(person, "AUTH-5.59 step 2", format!("the supersession trail is written at {claim}: `assert_sup` from the old enroll link {old_link} to the new {new_link}, homed in {home}, attested by the old key"));
                 claim
             }
-            Err(h) => {
-                let _ = session.close(board);
-                return Err(closed_before_t4(board, &reads, &old_fp, &own, h));
-            }
+            Err(h) => return Err(closed_before_t4(board, &reads, &old_fp, &own, h)),
         },
     };
     // T4: the retire-old — THE LAST WRITE; no close sent.
     let id = format!("rotate.retire.{}", &old_fp.to_hex()[..8]);
-    match deposit(board, &session.token, &Deposit { home: &home, subject: &account, kind: DepositKind::Retire(vec![old_fp]), grade: Grade::Device, hand: Some(&old), id: &id }) {
+    match deposit(board, &session.token, &Deposit { home: &home, subject: &account, kind: DepositKind::Retire(vec![old_fp]), hand: Some(&*old), id: &id }) {
         Ok(DepositOutcome::Deposited { .. }) => {}
         Ok(DepositOutcome::Committed { reason }) => say(person, "AUTH-5.17", format!("T4 stands: {reason}")),
-        Err(h) => return Err(closed_before_t4(board, &reads, &old_fp, &own, h)),
+        Err(DepositHalt::SessionClosed(h)) => return Err(closed_before_t4(board, &reads, &old_fp, &own, h)),
+        Err(other) => return Err(other.into()),
     }
+    // AUTH-4.63: T4's commit ended the old key's session.
+    session.ended_by_commit();
     say(person, "AUTH-5.28", "ROTATION'S EXPECTED END: the commit ended the old key's session (AUTH-4.63) and no close is sent; the `closed` any later request would meet is this end and never a death face — the last step is a sign-in with the new key");
     // T5: the binding for the new key where it is THIS store's.
-    let binding_line = match &new_file {
-        Some(file) => {
-            let line = Binding::Enrollment { origin: board.dialed.clone(), principal: opts.principal, account: account.clone(), fingerprint: file.fingerprint };
+    let binding_line = match &new_key {
+        Some(key) => {
+            let line = Binding::Enrollment { origin: board.dialed.clone(), principal: opts.principal, account: account.clone(), fingerprint: key.fingerprint };
             match store.bind(&line) {
                 Ok(()) => {}
                 Err(StoreError::ReadOnly { line: text, .. }) => warnings.push(format!("the store is read-only; record this binding line yourself: {text}")),
@@ -295,9 +279,5 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         }
     };
     say(person, "§9 item 36", format!("the retired key's file {} is left in place; its deletion is your act", store.key_path(&old_fp).display()));
-    let _ = match board.key_set(&account)? {
-        KeySetAnswer::Set(s) => s,
-        KeySetAnswer::NotAnAccount => Default::default(),
-    };
     Ok(Rotated { facts: Facts { account, principal: opts.principal, origin: board.dialed.clone() }, old: old_fp, new: new_fp, trail, binding_line, warnings })
 }

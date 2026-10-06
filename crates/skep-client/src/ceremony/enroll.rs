@@ -27,7 +27,7 @@ use skep_identity::Fingerprint;
 
 use super::say;
 use crate::board::{Board, Scope};
-use crate::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome, Grade};
+use crate::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome};
 use crate::ceremony::first_session::{first_session, FirstSessionReads};
 use crate::ceremony::handshake::{handshake, Site};
 use crate::ceremony::payload::{compare_payload, parse_payload, payload_text, refuse_anchor_flagged};
@@ -35,7 +35,7 @@ use crate::derive::{precheck, principal_of, walk_to_set, Mode};
 use crate::halt::Halt;
 use crate::person::Person;
 use crate::sheet::Facts;
-use crate::store::{arm4_face, store_halt, FileStore, KeySelector, Purpose, StoreError};
+use crate::store::{arm4_face, store_halt, FileStore, KeySelector, KeyStore, Purpose, StoreError};
 
 /// The command's inputs.
 #[derive(Debug, Clone)]
@@ -64,14 +64,14 @@ pub fn enroll(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     let fps: Vec<Fingerprint> = entries.iter().map(|e| Fingerprint::of(&e.key)).collect();
     // The store's ENROLLED device key for (board, n) — §3.5's lookup.
     let key = match store.select(&KeySelector::Binding { origin: &board.dialed, principal: Some(opts.principal) }, Purpose::Sign) {
-        Ok(sel) => sel.file,
+        Ok(key) => key,
         Err(StoreError::NoSelection { keys }) => {
             let health = board.health()?;
             return Err(arm4_face(store, &keys, Mode::of(&health), health.local_trust()));
         }
         Err(e) => return Err(store_halt(e)),
     };
-    let signer = key.signer();
+    let signer = store.signer(&KeySelector::Path(&key.path)).map_err(store_halt)?;
     // The reads: the pre-check (the origin arm, `principal_prefix`, the walk).
     let pre = precheck(board, opts.principal, &key.fingerprint)?;
     if pre.walk.by_reference() {
@@ -89,25 +89,18 @@ pub fn enroll(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         return Err(Halt::face("the comparison was declined: nothing was written", "the typed answer was `no`", "re-take the payload from the generating device and compare again"));
     }
     // THE FULL SESSION this command opens.
-    let session = handshake(board, Scope::Full, &signer, opts.principal, Site::Session)?;
+    let session = handshake(board, Scope::Full, &*signer, opts.principal, Site::Session)?;
     // `first_session` AHEAD of the insert.
     let reads = FirstSessionReads::take(board, &account, &key.fingerprint, Some(store), &board.dialed)?;
-    let done = first_session(board, &reads, &session, &signer, Some(store));
-    let done = match done {
-        Ok(d) => d,
-        Err(h) => {
-            let _ = session.close(board);
-            return Err(h);
-        }
-    };
+    let done = first_session(board, &reads, &session, &*signer, Some(store))?;
     let mut warnings = done.warnings.clone();
     if done.minted_home {
         warnings.push(format!("the home {} was minted ahead of the enrollment (AUTH-5.90 (iii): the first signed session's first act)", reads.home));
     }
     // THE DEPOSIT: the pasted bytes VERBATIM as the sig-less body.
     let id = format!("enroll.{}", &fps[0].to_hex()[..8]);
-    let outcome = deposit(board, &session.token, &Deposit { home: &reads.home, subject: &account, kind: DepositKind::EnrollVerbatim(text.clone()), grade: Grade::Device, hand: Some(&signer), id: &id });
-    let _ = session.close(board);
+    let outcome = deposit(board, &session.token, &Deposit { home: &reads.home, subject: &account, kind: DepositKind::EnrollVerbatim(text.clone()), hand: Some(&*signer), id: &id });
+    let _ = session.close();
     let outcome = outcome?;
     let reconciled = match &outcome {
         DepositOutcome::Deposited { .. } => false,

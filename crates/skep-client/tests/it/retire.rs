@@ -7,7 +7,7 @@
 
 use skep_client::board::{KeySetAnswer, Scope};
 use skep_client::ceremony::claim::{hosted, HostedOutcome};
-use skep_client::ceremony::deposit::{deposit, Deposit, DepositKind, Grade};
+use skep_client::ceremony::deposit::{deposit, Deposit, DepositKind};
 use skep_client::ceremony::handshake::{handshake, Site};
 use skep_client::ceremony::retire::{retire, RetireEnd, RetireOptions};
 use skep_client::person::scripted::{Script, Scripted};
@@ -37,8 +37,8 @@ fn retire_another_devices_key_then_the_sessions_own_without_a_close() {
     let store_b = FileStore::open(dir.path().join("b"));
     let fp_b = keygen(&store_b, "phone");
     let full = handshake(&plain, Scope::Full, &a, 1, Site::Session).unwrap();
-    deposit(&plain, &full.token, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(vec![entry_of(&key_file(&store_b, &fp_b), "phone")]), grade: Grade::Device, hand: Some(&a), id: "test.enroll-b" }).unwrap();
-    full.close(&plain).unwrap();
+    deposit(&plain, &full.token, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(vec![entry_of(&key_file(&store_b, &fp_b), "phone")]), hand: Some(&a), id: "test.enroll-b" }).unwrap();
+    full.close().unwrap();
     let snapshot = store_snapshot(&store);
 
     // An ambiguous prefix: every match listed, never a pick.
@@ -111,8 +111,8 @@ fn the_own_key_fork_names_session_where_another_key_is_held_and_an_anchorless_ac
     let a = key_file(&store, &fp).signer();
     let fp2 = keygen(&store, "second laptop");
     let full = handshake(&board, Scope::Full, &a, 1, Site::Session).unwrap();
-    deposit(&board, &full.token, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(vec![entry_of(&key_file(&store, &fp2), "second laptop")]), grade: Grade::Device, hand: Some(&a), id: "test.enroll-2" }).unwrap();
-    full.close(&board).unwrap();
+    deposit(&board, &full.token, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(vec![entry_of(&key_file(&store, &fp2), "second laptop")]), hand: Some(&a), id: "test.enroll-2" }).unwrap();
+    full.close().unwrap();
     let mut person = Scripted::new(vec![Script::Confirm(true)]);
     let done = retire(&board, &store, &mut person, &opts(&fp.to_hex()[..8])).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n")));
     assert_eq!(done.end, RetireEnd::OwnKey { another_held: true });

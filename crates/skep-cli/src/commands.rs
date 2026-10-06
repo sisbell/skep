@@ -27,8 +27,8 @@ use skep_client::derive::records::{compare_whole_set, credential_records, Differ
 use skep_client::derive::{origin_arm, precheck, principal_of, walk_to_set, KeyDiagnosis, Mode};
 use skep_client::dial::{plaintext_non_loopback_warning, PlainHttp};
 use skep_client::halt::Halt;
-use skep_client::sheet::{group_hex, render_inert, KeyFile};
-use skep_client::store::{arm4_face, store_halt, Binding, FileStore, KeySelector, KeyStore, Label, Purpose, StoreError};
+use skep_client::sheet::{group_hex, render_inert, Label};
+use skep_client::store::{arm4_face, store_halt, Binding, FileStore, KeyFacts, KeySelector, KeyStore, Purpose, StoreError};
 use skep_identity::{encode_enroll, Enrollment, Fingerprint};
 
 use crate::args::{Command, Usage};
@@ -180,8 +180,8 @@ pub fn keygen(c: &Command) -> i32 {
         Err(e) => return halt(store_halt(e)),
     };
     let path = store.key_path(&id.0);
-    let file = match store.load(&path) {
-        Ok(f) => f,
+    let key = match store.select(&KeySelector::Path(&path), Purpose::Read) {
+        Ok(k) => k,
         Err(e) => return halt(store_halt(e)),
     };
     talk(custody_line(&path));
@@ -215,7 +215,7 @@ pub fn keygen(c: &Command) -> i32 {
             entries.push(Enrollment::new(a.public.clone(), true, Some(a.label.as_str().to_string())).expect("a label the box admitted"));
         }
     }
-    entries.push(Enrollment::new(file.public.clone(), false, Some(label.as_str().to_string())).expect("a label the box admitted"));
+    entries.push(Enrollment::new(key.public.clone(), false, Some(label.as_str().to_string())).expect("a label the box admitted"));
     if c.switch("--payload") || anchors {
         // The record FIRST (§2.2): one canonical JSON object.
         data(encode_enroll(&entries));
@@ -226,8 +226,8 @@ pub fn keygen(c: &Command) -> i32 {
         }
     }
     // The fingerprint LAST, flat and grouped — never the bare public key.
-    data(file.fingerprint.to_hex());
-    data(group_hex(&file.fingerprint.to_hex()));
+    data(key.fingerprint.to_hex());
+    data(group_hex(&key.fingerprint.to_hex()));
     0
 }
 
@@ -333,14 +333,15 @@ pub fn claim(c: &Command) -> i32 {
 // ── session ─────────────────────────────────────────────────────────────
 
 /// The store's key for this board and principal (§3.5's lookup, `--key`
-/// first), the arm-4 face forked on the claimant.
-fn select_key(c: &Command, store: &FileStore, board: &Board, principal: Option<u64>) -> Result<(PathBuf, KeyFile), Halt> {
+/// first), its public facts — its signer is the store's (`KeyStore::signer`)
+/// — the arm-4 face forked on the claimant.
+fn select_key(c: &Command, store: &FileStore, board: &Board, principal: Option<u64>) -> Result<KeyFacts, Halt> {
     let sel = match c.key() {
         Some(path) => store.select(&KeySelector::Path(&path), Purpose::Sign),
         None => store.select(&KeySelector::Binding { origin: &board.dialed, principal }, Purpose::Sign),
     };
     match sel {
-        Ok(s) => Ok((s.path, s.file)),
+        Ok(key) => Ok(key),
         Err(StoreError::NoSelection { keys }) => {
             let health = board.health()?;
             Err(arm4_face(store, &keys, Mode::of(&health), health.local_trust()))
@@ -406,20 +407,22 @@ pub fn session(c: &Command) -> i32 {
         Ok(p) => p,
         Err(h) => return halt(h),
     };
-    let (_path, file) = match select_key(c, &store, &board, Some(principal)) {
+    let key = match select_key(c, &store, &board, Some(principal)) {
         Ok(k) => k,
         Err(h) => return halt(h),
     };
-    // CONTENT scope only (§9 item 45; RES-63).
-    let signer = file.signer();
-    match handshake(&board, Scope::Content, &signer, principal, Site::Session) {
-        Err(h) => halt(h),
-        Ok(session) => {
-            talk("the token reads, holds its draft visibility and writes content; a credential act under it answers content_session. It is live until `skep session --close -`, the key's retirement, or a daemon restart (AUTH-4.53: a captured token is this principal's content capability for that long)");
-            data(session.token.as_str());
-            0
-        }
-    }
+    let signer = match store.signer(&KeySelector::Path(&key.path)) {
+        Ok(s) => s,
+        Err(e) => return halt(store_halt(e)),
+    };
+    // CONTENT scope only (§9 item 45; RES-63); the token handed out LIVE.
+    let session = match handshake(&board, Scope::Content, &*signer, principal, Site::Session) {
+        Ok(s) => s,
+        Err(h) => return halt(h),
+    };
+    talk("the token reads, holds its draft visibility and writes content; a credential act under it answers content_session. It is live until `skep session --close -`, the key's retirement, or a daemon restart (AUTH-4.53: a captured token is this principal's content capability for that long)");
+    data(session.into_token().as_str());
+    0
 }
 
 // ── fingerprint ─────────────────────────────────────────────────────────
@@ -430,14 +433,14 @@ pub fn fingerprint(c: &Command) -> i32 {
         Err(u) => return usage(u),
     };
     let bindings = store.all_bindings().unwrap_or_default();
-    let files: Vec<(PathBuf, KeyFile)> = if let Some(path) = c.key() {
+    let keys: Vec<KeyFacts> = if let Some(path) = c.key() {
         match store.select(&KeySelector::Path(&path), Purpose::Read) {
-            Ok(s) => vec![(s.path, s.file)],
+            Ok(k) => vec![k],
             Err(e) => return halt(store_halt(e)),
         }
     } else if let Some(select) = c.value("--select", None) {
         match store.select(&KeySelector::select(&select), Purpose::Read) {
-            Ok(s) => vec![(s.path, s.file)],
+            Ok(k) => vec![k],
             Err(StoreError::Ambiguous { keys }) => {
                 let list: Vec<String> = keys.iter().map(|k| format!("{} {}", k.fingerprint, k.label.as_deref().map(render_inert).unwrap_or_default())).collect();
                 return halt(Halt::face(format!("`{select}` matches more than one key"), format!("neither a fingerprint prefix nor a label is unique by rule (AUTH-5.3):\n  {}", list.join("\n  ")), "give a longer prefix; never a pick"));
@@ -447,14 +450,14 @@ pub fn fingerprint(c: &Command) -> i32 {
         }
     } else {
         match store.list() {
-            Ok(keys) => keys.into_iter().filter_map(|k| store.load(&k.path).ok().map(|f| (k.path, f))).collect(),
+            Ok(keys) => keys,
             Err(e) => return halt(store_halt(e)),
         }
     };
     let any_binding = bindings.iter().any(|b| matches!(b, Binding::Enrollment { .. }));
     let mut json_rows = Vec::new();
-    for (path, file) in &files {
-        let fp = file.fingerprint;
+    for key in &keys {
+        let fp = key.fingerprint;
         let bound: Vec<String> = bindings
             .iter()
             .filter_map(|b| match b {
@@ -465,22 +468,22 @@ pub fn fingerprint(c: &Command) -> i32 {
         let unbound = bound.is_empty();
         if c.switch("--json") {
             json_rows.push(serde_json::json!({
-                "alg": file.alg,
+                "alg": key.alg,
                 "fingerprint": fp.to_hex(),
-                "label": file.label,
-                "anchor": file.anchor,
-                "path": path.display().to_string(),
+                "label": key.label,
+                "anchor": key.anchor,
+                "path": key.path.display().to_string(),
                 "bindings": bound,
                 "unbound": unbound,
-                "payload": c.switch("--payload").then(|| encode_enroll(&[Enrollment::new(file.public.clone(), file.anchor, file.label.clone()).expect("a stored label is in the domain")])),
+                "payload": c.switch("--payload").then(|| encode_enroll(&[Enrollment::new(key.public.clone(), key.anchor, key.label.clone()).expect("a stored label is in the domain")])),
             }));
             continue;
         }
-        data(format!("{} {}", file.alg, file.public.to_hex()));
+        data(format!("{} {}", key.alg, key.public.to_hex()));
         data(fp.to_hex());
         data(group_hex(&fp.to_hex()));
-        data(format!("label {}", file.label.as_deref().map(render_inert).unwrap_or_else(|| "(none)".into())));
-        if file.anchor {
+        data(format!("label {}", key.label.as_deref().map(render_inert).unwrap_or_else(|| "(none)".into())));
+        if key.anchor {
             data("ANCHOR — a paper's file, never a device key");
         }
         for b in &bound {
@@ -496,7 +499,7 @@ pub fn fingerprint(c: &Command) -> i32 {
             });
         }
         if c.switch("--payload") {
-            data(encode_enroll(&[Enrollment::new(file.public.clone(), file.anchor, file.label.clone()).expect("a stored label is in the domain")]));
+            data(encode_enroll(&[Enrollment::new(key.public.clone(), key.anchor, key.label.clone()).expect("a stored label is in the domain")]));
         }
     }
     if c.switch("--json") {
@@ -511,7 +514,7 @@ pub fn fingerprint(c: &Command) -> i32 {
 /// (at `verify`, where `--payload` is the RECORD this device printed; at
 /// `bind` it is the REPLY and never read here), and the anchor files'
 /// public members beside the store's device key.
-fn held_set(c: &Command, store: &FileStore, device: Option<&KeyFile>, payload_is_record: bool) -> Result<Option<Vec<Held>>, Halt> {
+fn held_set(c: &Command, store: &FileStore, device: Option<&KeyFacts>, payload_is_record: bool) -> Result<Option<Vec<Held>>, Halt> {
     let mut held = Vec::new();
     let mut any = false;
     if let Some(arg) = c.value("--payload", None).filter(|_| payload_is_record) {
@@ -527,11 +530,10 @@ fn held_set(c: &Command, store: &FileStore, device: Option<&KeyFile>, payload_is
     if !anchors.is_empty() {
         any = true;
         for path in anchors {
-            // The file's `public`, `fingerprint`, `anchor` and `label`
-            // members read AND NOTHING ELSE: no seed is loaded past the
-            // parse's own re-derivation, no session, nothing written.
-            let file = store.select(&KeySelector::Path(Path::new(&path)), Purpose::Read).map_err(store_halt)?.file;
-            held.push(Held { fingerprint: file.fingerprint, anchor: file.anchor, label: file.label.clone() });
+            // The file's PUBLIC facts and nothing else — the lookup hands out
+            // no seed; no session, nothing written.
+            let artifact = store.select(&KeySelector::Path(Path::new(&path)), Purpose::Read).map_err(store_halt)?;
+            held.push(Held { fingerprint: artifact.fingerprint, anchor: artifact.anchor, label: artifact.label.clone() });
         }
         if let Some(d) = device {
             held.push(Held { fingerprint: d.fingerprint, anchor: false, label: d.label.clone() });
@@ -586,9 +588,9 @@ pub fn verify(c: &Command) -> i32 {
         Ok(p) => p,
         Err(h) => return halt(h),
     };
-    let (_path, file) = match c.key() {
+    let key = match c.key() {
         Some(path) => match store.select(&KeySelector::Path(&path), Purpose::Read) {
-            Ok(s) => (s.path, s.file),
+            Ok(k) => k,
             Err(e) => return halt(store_halt(e)),
         },
         None => match select_key(c, &store, &board, Some(principal)) {
@@ -596,19 +598,19 @@ pub fn verify(c: &Command) -> i32 {
             Err(h) => return halt(h),
         },
     };
-    let pre = match precheck(&board, principal, &file.fingerprint) {
+    let pre = match precheck(&board, principal, &key.fingerprint) {
         Ok(p) => p,
         Err(h) => return halt(h),
     };
     checks.push("key_set");
-    let own = [(file.fingerprint, file.public.clone())];
-    if let Err(h) = key_face(&board, &pre, &file.fingerprint, &own, Site::Session) {
+    let own = [(key.fingerprint, key.public.clone())];
+    if let Err(h) = key_face(&board, &pre, &key.fingerprint, &own, Site::Session) {
         return halt(h);
     }
     // THE WHOLE-SET COMPARE, where the person holds what this device
     // composed (AUTH-4.58's detection; P25).
     let mut later_lines = Vec::new();
-    let held = match held_set(c, &store, Some(&file), true) {
+    let held = match held_set(c, &store, Some(&key), true) {
         Ok(h) => h,
         Err(h) => return halt(h),
     };
@@ -646,7 +648,7 @@ pub fn verify(c: &Command) -> i32 {
             "checks": checks,
             "account": pre.account,
             "set_account": pre.walk.set_account,
-            "fingerprint": file.fingerprint.to_hex(),
+            "fingerprint": key.fingerprint.to_hex(),
             "state": "enrolled",
             "mode": pre.mode.name(),
             "limit": "a block is invisible to these reads",
@@ -774,7 +776,7 @@ pub fn bind(c: &Command) -> i32 {
         }
         Err(h) => return halt(h),
     }
-    let (_path, file) = match select_key(c, &store, &board, Some(principal)) {
+    let key = match select_key(c, &store, &board, Some(principal)) {
         Ok(k) => k,
         Err(h) => return halt(h),
     };
@@ -782,14 +784,14 @@ pub fn bind(c: &Command) -> i32 {
         Ok(w) => w,
         Err(h) => return halt(h),
     };
-    let own = [(file.fingerprint, file.public.clone())];
-    let pre = skep_client::derive::PreCheck { health: health.clone(), mode: Mode::of(&health), account: account.clone(), walk: walk.clone(), diagnosis: KeyDiagnosis::of(&walk.set, &file.fingerprint) };
-    if let Err(h) = key_face(&board, &pre, &file.fingerprint, &own, Site::Tail) {
+    let own = [(key.fingerprint, key.public.clone())];
+    let pre = skep_client::derive::PreCheck { health: health.clone(), mode: Mode::of(&health), account: account.clone(), walk: walk.clone(), diagnosis: KeyDiagnosis::of(&walk.set, &key.fingerprint) };
+    if let Err(h) = key_face(&board, &pre, &key.fingerprint, &own, Site::Tail) {
         return halt(h);
     }
     // At a HANDOFF LANDING the set is compared WHOLE, ahead of
     // `first_session` and any session (AUTH-4.58's detection).
-    let records_for_compare = match held_set(c, &store, Some(&file), false) {
+    let records_for_compare = match held_set(c, &store, Some(&key), false) {
         Ok(h) => h,
         Err(h) => return halt(h),
     };
@@ -815,7 +817,7 @@ pub fn bind(c: &Command) -> i32 {
         }
     }
     // THE TWO ARMS, selected by `first_session`'s own reads (§2.2).
-    let reads = match FirstSessionReads::take(&board, &account, &file.fingerprint, Some(&store), &board.dialed) {
+    let reads = match FirstSessionReads::take(&board, &account, &key.fingerprint, Some(&store), &board.dialed) {
         Ok(r) => r,
         Err(h) => return halt(h),
     };
@@ -824,13 +826,16 @@ pub fn bind(c: &Command) -> i32 {
         if let Some(w) = plaintext_non_loopback_warning(&board.dialed) {
             talk(w);
         }
-        let signer = file.signer();
-        let session = match handshake(&board, Scope::Content, &signer, principal, Site::Tail) {
+        let signer = match store.signer(&KeySelector::Path(&key.path)) {
+            Ok(s) => s,
+            Err(e) => return halt(store_halt(e)),
+        };
+        let session = match handshake(&board, Scope::Content, &*signer, principal, Site::Tail) {
             Ok(s) => s,
             Err(h) => return halt(h),
         };
-        let done = first_session(&board, &reads, &session, &signer, Some(&store));
-        let _ = session.close(&board);
+        let done = first_session(&board, &reads, &session, &*signer, Some(&store));
+        let _ = session.close();
         match done {
             Err(h) => return halt(h),
             Ok(done) => {
@@ -852,7 +857,7 @@ pub fn bind(c: &Command) -> i32 {
     } else {
         talk("nothing is owed at this account's first signed session: no session is opened and no record is written");
     }
-    let line = Binding::Enrollment { origin: board.dialed.clone(), principal, account: account.clone(), fingerprint: file.fingerprint };
+    let line = Binding::Enrollment { origin: board.dialed.clone(), principal, account: account.clone(), fingerprint: key.fingerprint };
     match store.bind(&line) {
         Ok(()) => {}
         Err(StoreError::ReadOnly { line, .. }) => talk(format!("the store is read-only; record this binding line yourself: {line}")),

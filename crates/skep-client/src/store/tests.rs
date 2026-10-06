@@ -17,21 +17,6 @@ fn mode(path: &Path) -> u32 {
     fs::metadata(path).unwrap().permissions().mode() & 0o777
 }
 
-/// AUTH-1.24/1.25 at the box: 128 bytes admitted, 129 refused with the byte
-/// count named (AUTH-2.96's vector row), a newline refused, the empty label
-/// faced (AUTH-5.42).
-#[test]
-fn the_label_domain_is_tested_at_the_box() {
-    assert!(Label::new(&"a".repeat(128)).is_ok());
-    assert_eq!(Label::new(&"a".repeat(129)).unwrap_err(), LabelFault::TooLong { bytes: 129 });
-    assert_eq!(Label::new("two\nlines").unwrap_err(), LabelFault::Newline);
-    assert_eq!(Label::new("").unwrap_err(), LabelFault::Empty);
-    assert!(Label::new("my phone ").is_ok(), "a trailing space is in the domain");
-    assert_eq!(Label::new("Paper A / 2026").unwrap().slug(), "paper-a-2026");
-    // Bytes, not characters: 43 three-byte characters are 129 bytes.
-    assert_eq!(Label::new(&"€".repeat(43)).unwrap_err(), LabelFault::TooLong { bytes: 129 });
-}
-
 /// §3.3 — the directory `0700`, the file `0600`; §3.7 — a second `keygen`
 /// makes a second file under `O_EXCL` and never rewrites the first.
 #[test]
@@ -107,7 +92,7 @@ fn the_lookup_takes_its_four_arms_in_order() {
     // Arm 3: exactly one device key.
     let first = store.generate(Some(Label::new("one").unwrap())).unwrap();
     let sel = store.select(&KeySelector::Binding { origin: &origin, principal: Some(1) }, Purpose::Sign).unwrap();
-    assert_eq!(sel.file.fingerprint, first.0);
+    assert_eq!(sel.fingerprint, first.0);
     // Two keys, no binding: arm 4 lists both.
     let second = store.generate(Some(Label::new("two").unwrap())).unwrap();
     assert!(matches!(
@@ -118,21 +103,62 @@ fn the_lookup_takes_its_four_arms_in_order() {
     store.bind(&Binding::Enrollment { origin: origin.clone(), principal: 1, account: "1.0.1".into(), fingerprint: first.0 }).unwrap();
     store.bind(&Binding::Enrollment { origin: origin.clone(), principal: 1, account: "1.0.1".into(), fingerprint: second.0 }).unwrap();
     let sel = store.select(&KeySelector::Binding { origin: &origin, principal: Some(1) }, Purpose::Sign).unwrap();
-    assert_eq!(sel.file.fingerprint, second.0, "the newest line wins");
+    assert_eq!(sel.fingerprint, second.0, "the newest line wins");
     // `--principal` omitted where the board has exactly one binding.
     let sel = store.select(&KeySelector::Binding { origin: &origin, principal: None }, Purpose::Sign).unwrap();
-    assert_eq!(sel.file.fingerprint, second.0);
+    assert_eq!(sel.fingerprint, second.0);
     // Arm 1: a path, no lookup.
     let sel = store.select(&KeySelector::Path(&store.key_path(&first.0)), Purpose::Sign).unwrap();
-    assert_eq!(sel.file.fingerprint, first.0);
+    assert_eq!(sel.fingerprint, first.0);
     // `--select` by shape: a prefix, a label, an ambiguity listed and never
     // picked.
     let prefix = &first.0.to_hex()[..12];
-    assert_eq!(store.select(&KeySelector::select(prefix), Purpose::Read).unwrap().file.fingerprint, first.0);
-    assert_eq!(store.select(&KeySelector::select("two"), Purpose::Read).unwrap().file.fingerprint, second.0);
+    assert_eq!(store.select(&KeySelector::select(prefix), Purpose::Read).unwrap().fingerprint, first.0);
+    assert_eq!(store.select(&KeySelector::select("two"), Purpose::Read).unwrap().fingerprint, second.0);
     assert!(matches!(store.select(&KeySelector::select("zz"), Purpose::Read), Err(StoreError::NotFound { .. })));
     store.generate(Some(Label::new("two").unwrap())).unwrap();
     assert!(matches!(store.select(&KeySelector::select("two"), Purpose::Read), Err(StoreError::Ambiguous { keys }) if keys.len() == 2));
+}
+
+/// §3a — the store is the seed's custodian: a lookup answers public facts,
+/// and the key signs through `KeyStore::signer` over the same lookup — the
+/// bound key's signer is that key's, an anchor's file is refused at it as at
+/// every signing selection.
+#[test]
+fn a_stored_key_signs_through_the_store_and_an_anchor_never_does() {
+    let (dir, store) = store();
+    let origin = Origin::parse("http://127.0.0.1:8642").unwrap();
+    let id = store.generate(Some(Label::new("notebook").unwrap())).unwrap();
+    store.generate(None).unwrap();
+    store.bind(&Binding::Enrollment { origin: origin.clone(), principal: 1, account: "1.0.1".into(), fingerprint: id.0 }).unwrap();
+    let bound = KeySelector::Binding { origin: &origin, principal: Some(1) };
+    let facts = store.select(&bound, Purpose::Sign).unwrap();
+    assert_eq!((facts.fingerprint, facts.label.as_deref(), facts.path.clone()), (id.0, Some("notebook"), store.key_path(&id.0)));
+    let signer = store.signer(&bound).unwrap();
+    assert_eq!((signer.fingerprint(), signer.public_key()), (facts.fingerprint, facts.public.clone()));
+    let blob = signer.sign(b"bytes the library framed");
+    assert!(skep_signature::verify(signer.tag(), &facts.public, b"bytes the library framed", &blob).is_ok());
+    let anchor = KeyFile::new(Seed::new([6u8; 32]), true, Some("paper-b".into()), None);
+    let anchor_path = dir.path().join("anchor.skep-key");
+    FileStore::write_once(&anchor_path, anchor.to_json().as_bytes()).unwrap();
+    assert!(matches!(store.signer(&KeySelector::Path(&anchor_path)), Err(StoreError::KeyFile { error: KeyFileError::AnchorAtSigningCommand, .. })));
+}
+
+/// §4.3 — the persist-first line read back: the LAST line naming the
+/// account at the board answers its id; another account's or another
+/// board's lines answer nothing.
+#[test]
+fn the_persisted_id_is_the_last_line_naming_the_account() {
+    let (_dir, store) = store();
+    let origin = Origin::parse("http://127.0.0.1:8642").unwrap();
+    let fp = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
+    assert_eq!(store.persisted_id(&origin, "1.0.1.1").unwrap(), None);
+    store.bind(&Binding::Enrollment { origin: origin.clone(), principal: 1, account: "1.0.1".into(), fingerprint: fp }).unwrap();
+    store.bind(&Binding::Enrollment { origin: origin.clone(), principal: 424_242, account: "1.0.1.1".into(), fingerprint: fp }).unwrap();
+    store.bind(&Binding::Enrollment { origin: origin.clone(), principal: 525_252, account: "1.0.1.1".into(), fingerprint: fp }).unwrap();
+    assert_eq!(store.persisted_id(&origin, "1.0.1.1").unwrap(), Some(525_252), "the newest line wins");
+    assert_eq!(store.persisted_id(&origin, "1.0.1.2").unwrap(), None);
+    assert_eq!(store.persisted_id(&Origin::parse("http://127.0.0.1:9").unwrap(), "1.0.1.1").unwrap(), None);
 }
 
 /// §3.5 — the two line forms and no third; §3.7 — a final line without

@@ -27,8 +27,9 @@
 //!   with §2.3's exit codes as the binary's mapping (AUTH-5.66).
 //! * [`board`] — `Board { dialed, signed, dialer }`: the wire's endpoints,
 //!   every token-bearing dial through ONE `authed` exchange, the one reader
-//!   of `Skepd-Session: closed` (P28), and `H.1`'s pair read once per board
-//!   (D13); its child `frames` spells every frame this crate sends.
+//!   of `Skepd-Session: closed` (P28), every token-free read through
+//!   `Board::guest`, which halts on that signal, and `H.1`'s pair read once
+//!   per board (D13); its child `frames` spells every frame this crate sends.
 //! * [`derive`](mod@derive) — the pure derivations over board reads: the
 //!   MODE off `/health`'s pair (AUTH-5.86), AUTH-5.65's pre-check, the
 //!   three-state key diagnosis at the set AUTH-5.21's walk reaches
@@ -44,13 +45,17 @@
 //!   the bytes a signer signs: the session payload under `SESSION_TAG` /
 //!   `SESSION_TAG_V2` (AUTH-6.4) and a credential record's `record` frame.
 //! * [`sheet`] — the key file's one JSON spelling and its refusals,
-//!   `KeyFileError` (§3.2), the R42 grouping (AUTH-5.1) and the sheet's
-//!   field list (AUTH-5.38).
-//! * [`store`] — the `KeyStore` seam and `FileStore` (§3), and the halts the
-//!   store's refusals render as (AUTH-5.67).
+//!   `KeyFileError` (§3.2), the byline `Label` and its domain (AUTH-1.24),
+//!   the `Seed` every secret is born into, the R42 grouping (AUTH-5.1) and
+//!   the sheet's field list (AUTH-5.38).
+//! * [`store`] — the `KeyStore` seam and `FileStore` (§3), the seed's
+//!   custodian: a lookup answers a key's public facts and a stored key signs
+//!   through `KeyStore::signer` alone (§3a); and the halts the store's
+//!   refusals render as (AUTH-5.67).
 //! * [`person`] — the `Person` seam: the human moments in three classes,
-//!   SECRET, CONSENT and PUBLIC, as types; behind `test-hooks`,
-//!   `person::scripted`, the scripted person a test drives.
+//!   SECRET, CONSENT and PUBLIC, as types — a SECRET payload printing no key
+//!   material; behind `test-hooks`, `person::scripted`, the scripted person
+//!   a test drives.
 //! * [`verify`] — the READER's verifier: a committed signature judged against
 //!   the signature-FILTERED key set as of the entry's base (AUTH-2.94;
 //!   D14), a pure function of its caller's reads.

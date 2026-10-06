@@ -1,18 +1,18 @@
 //! THE BACKUP MOMENT (`client.md` §4.2; AUTH-5.54's order) — no daemon: the
 //! file path's read-back FROM THE FILE, the re-run from step 1 when the file
-//! is gone, the paper path's re-type and dismissal, the label domain at the
-//! box, the one-place sentence, the store refused as a destination.
+//! is gone and the act named by venue when the runs run out, the paper path's
+//! re-type and dismissal, the label domain at the box, the one-place
+//! sentence, the store refused as a destination.
 
 use std::path::{Path, PathBuf};
 
 use skep_client::ceremony::backup::{anchor_file_name, backup_moment, BackupOptions, Venue};
 use skep_client::person::scripted::{Script, Scripted};
 use skep_client::person::{Abandoned, Confirmation, Consent, Custody, Destination, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
-use skep_client::sheet::{Facts, KeyFile};
-use skep_client::store::Label;
+use skep_client::sheet::{Facts, KeyFile, Label};
 use skep_client::Origin;
 
-use crate::common::files_in;
+use crate::common::{files_in, Hooked};
 
 fn options(destinations: Vec<PathBuf>, paper: bool, store: Option<PathBuf>) -> BackupOptions {
     BackupOptions { labels: vec![], destinations, paper, store, host: "testhost".into(), date: "2026-10-04".into() }
@@ -99,8 +99,8 @@ impl Person for Vanisher {
     fn destination(&mut self, m: Secret<Destination>) -> Result<PathBuf, Abandoned> {
         self.inner.destination(m)
     }
-    fn confirm(&mut self, m: Consent<Confirmation>) -> Result<bool, Abandoned> {
-        self.inner.confirm(m)
+    fn confirm_typed(&mut self, m: Consent<Confirmation>) -> Result<String, Abandoned> {
+        self.inner.confirm_typed(m)
     }
     fn import(&mut self, m: Secret<Import>) -> Result<Imported, Abandoned> {
         self.inner.import(m)
@@ -133,6 +133,30 @@ fn a_file_gone_before_its_read_back_re_runs_the_moment_from_step_one() {
     assert_eq!(files_in(&b).len(), 1, "the first run's b was destroyed with its pair");
     assert_eq!(person.inner.transcript.iter().filter(|l| l.contains("AUTH-5.40")).count(), 4, "two exports per run, two runs");
     assert_eq!(person.inner.transcript.iter().filter(|l| l.contains("AUTH-5.54 (a)")).count(), 1, "the statements are said once, at the head");
+}
+
+/// A moment whose read-back fails run after run names the command that
+/// re-runs it AT ITS VENUE (§4.2; §4c.1) — the recipient's beat its own and
+/// the door-side form its own, never the claim's.
+#[test]
+fn a_moment_whose_runs_run_out_names_its_venues_own_command() {
+    let handoff = Venue::Handoff { facts: Facts { account: "1.0.1.2".into(), principal: 7, origin: Origin::parse("http://127.0.0.1:8642").unwrap() }, operator: "the giver runs this board".into() };
+    for (venue, command) in [(handoff, "`skep accept`"), (Venue::DoorSide, "`skep keygen --anchors`"), (notebook_venue(), "`skep claim`")] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut person = Hooked::new(vec![Script::LabelDefault, Script::LabelDefault]);
+        // Every run's anchor a is gone before its read-back.
+        person.on_say = Box::new(|rule, text| {
+            if rule == "AUTH-5.40" {
+                let path = text.strip_prefix("anchor file written: ").and_then(|t| t.split(" — ").next()).map(PathBuf::from).expect("the path in the ladder words");
+                if path.file_name().is_some_and(|n| n.to_string_lossy().contains("-a-")) {
+                    std::fs::remove_file(&path).expect("remove anchor a");
+                }
+            }
+        });
+        let err = backup_moment(&mut person, &venue, &options(vec![dir.path().join("a"), dir.path().join("b")], false, None)).expect_err("every read-back fails");
+        let text = err.to_string();
+        assert!(text.contains("could not complete") && text.contains(&format!("re-run {command}")), "{command}: {text}");
+    }
 }
 
 /// THE PAPER PATH (`--paper`): the sheets shown after the export, DISMISSED

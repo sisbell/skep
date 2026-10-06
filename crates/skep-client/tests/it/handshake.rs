@@ -1,10 +1,10 @@
 //! THE HANDSHAKE against the real daemon: AUTH-5.65's pre-check AHEAD OF
-//! EVERY `/challenge` (both arms; the recording dialer pins the order), and
-//! the key arm's three states — the retired state's hand read from the
-//! records written at the RECORD GRADE.
+//! EVERY `/challenge` (both arms; the recording dialer pins the order), the
+//! key arm's three states — the retired state's hand read from the records
+//! written at the RECORD GRADE — and the session's own end.
 
 use skep_client::board::{KeySetAnswer, Scope};
-use skep_client::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome, Grade};
+use skep_client::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome};
 use skep_client::ceremony::handshake::{handshake, key_face, Site};
 use skep_client::derive::records::{credential_records, Hand, Kind};
 use skep_client::derive::{precheck, KeyDiagnosis};
@@ -14,7 +14,7 @@ use skep_client::Origin;
 use skep_identity::{Enrollment, Fingerprint};
 use skep_signature::HybridSigner;
 
-use crate::common::{board, claim, keygen, recording_board, spawn};
+use crate::common::{board, claim, keygen, recording_board, spawn, token_dead};
 
 /// AUTH-5.65: the pre-check's two reads run AHEAD of the `/challenge`, and a
 /// key in neither list — or an origin the signed list lacks — fetches NO
@@ -41,7 +41,7 @@ fn the_pre_check_runs_ahead_of_every_challenge_and_a_failing_arm_spends_no_nonce
     assert!(at("POST /op key_set") < at("GET /challenge"), "the reads AHEAD of the challenge: {lines:?}");
     assert!(at("GET /challenge") < at("POST /session"), "{lines:?}");
     assert_eq!(lines.iter().filter(|l| l.starts_with("GET /challenge")).count(), 1, "one challenge, one session");
-    session.close(&rb).unwrap();
+    session.close().unwrap();
 
     // The key arm's third state: a key in neither list — no challenge.
     let stranger = signer_from_seed(&[77; 32]);
@@ -95,7 +95,6 @@ fn a_retired_key_is_diagnosed_with_its_hand_read_from_the_records() {
             home: "1.0.1.0.1",
             subject: "1.0.1",
             kind: DepositKind::Enroll(vec![Enrollment::new(HybridSigner::public_key(&second).clone(), false, Some("second device".into())).unwrap()]),
-            grade: Grade::Device,
             hand: Some(&device),
             id: "test.enroll",
         },
@@ -106,14 +105,14 @@ fn a_retired_key_is_diagnosed_with_its_hand_read_from_the_records() {
     assert!(set.enrolled(&second_fp).is_some(), "enrolled");
     // The second key opens a session now.
     let as_second = handshake(&board, Scope::Content, &second, 1, Site::Session).expect("the second key signs in");
-    as_second.close(&board).unwrap();
+    as_second.close().unwrap();
     // RETIRE it.
-    let out = deposit(&board, &full.token, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Retire(vec![second_fp]), grade: Grade::Device, hand: Some(&device), id: "test.retire" }).expect("the retirement");
+    let out = deposit(&board, &full.token, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Retire(vec![second_fp]), hand: Some(&device), id: "test.retire" }).expect("the retirement");
     let DepositOutcome::Deposited { at: retired_at, .. } = out else { panic!("{out:?}") };
     assert!(retired_at > enrolled_at);
     let KeySetAnswer::Set(set) = board.key_set("1.0.1").unwrap() else { panic!() };
     assert!(set.retired(&second_fp).is_some() && set.enrolled(&second_fp).is_none(), "retired");
-    full.close(&board).unwrap();
+    full.close().unwrap();
 
     // The pre-check's diagnosis and the face.
     let pre = precheck(&board, 1, &second_fp).unwrap();
@@ -144,4 +143,39 @@ fn a_retired_key_is_diagnosed_with_its_hand_read_from_the_records() {
     let retire = &records.records[2];
     assert_eq!((retire.hand.clone(), retire.position, retire.retired.clone()), (Hand::Key(fp), Some(retired_at), vec![second_fp]));
     assert_eq!(records.label_of(&second_fp).as_deref(), Some("second device"));
+}
+
+/// A session OWNS ITS END (AUTH-4.47; AUTH-5.54 step 3's mirror): dropped
+/// where a halt took it, it closes itself and its token is dead; handed out
+/// by `into_token` it stays live and sends nothing; ended by its own commit
+/// (AUTH-4.63) it sends nothing; and `close` closes. MUTATION: with the drop
+/// sending no close, the dropped session's token stays live.
+#[test]
+fn a_session_closes_on_its_drop_and_never_where_it_was_handed_out_or_ended_by_its_commit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), false);
+    let plain = board(sd.port());
+    let store = FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&plain, &store, &dir.path().join("anchors"));
+    let device = store.load(&store.key_path(&fp)).unwrap().signer();
+    let (rb, log) = recording_board(plain.dialed.clone());
+    let closes = || log.lock().unwrap().iter().filter(|l| *l == "POST /session/close").count();
+    // Dropped: closed, its token dead.
+    let dropped = handshake(&rb, Scope::Content, &device, 1, Site::Session).expect("a session");
+    let token = dropped.token.clone();
+    drop(dropped);
+    assert_eq!(closes(), 1, "the drop sends the close");
+    assert!(token_dead(&plain, &token), "the dropped session's token is dead");
+    // Handed out: live, nothing sent.
+    let live = handshake(&rb, Scope::Content, &device, 1, Site::Session).expect("a session").into_token();
+    assert_eq!(closes(), 1, "a handed-out token is never closed here");
+    assert!(!token_dead(&plain, &live), "the handed-out token stays live");
+    plain.session_close(&live).unwrap();
+    // Ended by its own commit: nothing sent.
+    handshake(&rb, Scope::Content, &device, 1, Site::Session).expect("a session").ended_by_commit();
+    assert_eq!(closes(), 1, "a commit's end sends no close");
+    // Closed: the one close.
+    handshake(&rb, Scope::Content, &device, 1, Site::Session).expect("a session").close().expect("204");
+    assert_eq!(closes(), 2);
 }

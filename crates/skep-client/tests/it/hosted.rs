@@ -10,7 +10,7 @@ use skep_client::ceremony::handshake::{handshake, Site};
 use skep_client::derive::records::{compare_whole_set, credential_records, Difference, Held};
 use skep_client::derive::principal_of;
 use skep_client::sheet::{KeyFile, Seed};
-use skep_client::sign::{fresh_seed, signer_from_seed, signer_from_seed_under};
+use skep_client::sign::{signer_from_seed, signer_from_seed_under};
 use skep_client::store::{Binding, FileStore};
 use skep_identity::{encode_enroll, Enrollment, Fingerprint};
 use skep_signature::{HybridSigner, TAG_FNDSA512_PREVIEW_ED25519};
@@ -22,8 +22,8 @@ use crate::common::{board, keygen, spawn};
 fn customer_material(store: &FileStore) -> (Vec<Enrollment>, Fingerprint, KeyFile) {
     let fp = keygen(store, "customer notebook");
     let device = store.load(&store.key_path(&fp)).unwrap();
-    let a = KeyFile::new(Seed::new(fresh_seed()), true, Some("paper a".into()), None);
-    let b = KeyFile::new(Seed::new(fresh_seed()), true, Some("paper b".into()), None);
+    let a = KeyFile::new(Seed::fresh(), true, Some("paper a".into()), None);
+    let b = KeyFile::new(Seed::fresh(), true, Some("paper b".into()), None);
     let entries = vec![
         Enrollment::new(a.public.clone(), true, Some("paper a".into())).unwrap(),
         Enrollment::new(b.public.clone(), true, Some("paper b".into())).unwrap(),
@@ -76,7 +76,7 @@ fn the_hosted_arm_claims_from_the_payload_verbatim_and_is_idempotent() {
     // The customer signs in from their own device.
     let session = handshake(&board, Scope::Content, &device.signer(), 1, Site::Hosted).expect("the customer's session");
     assert_eq!(session.fingerprint, fp);
-    session.close(&board).unwrap();
+    session.close().unwrap();
 
     // ANCHORLESS: a device-only payload founds an anchorless account, said.
     let dir2 = tempfile::tempdir().unwrap();
@@ -167,7 +167,7 @@ fn first_session_owes_the_setup_act_once_and_nothing_after() {
 
     let session = handshake(&board, Scope::Content, &signer, 1, Site::Tail).unwrap();
     let done = first_session(&board, &reads, &session, &signer, Some(&store)).expect("the composition");
-    session.close(&board).unwrap();
+    session.close().unwrap();
     assert!(!done.minted_home);
     let seat = done.space_seat.expect("the space is seated");
     assert!(done.minted_space_home && done.setup_skipped.is_none() && !done.setup_stopped_seeded);

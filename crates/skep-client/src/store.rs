@@ -4,7 +4,12 @@
 //! ONCE under `O_EXCL` at mode `0600` in a `0700` directory (§3.3), the
 //! append-only `bindings` file in its TWO line forms (§3.5) under the
 //! advisory lock `<store>/lock` (§3.7), and NO anchor under the store, ever
-//! (§3.4; AUTH-5.54 step 3). The refusals are the store's own faces
+//! (§3.4; AUTH-5.54 step 3). The store is the seed's CUSTODIAN (§3a:
+//! "signing and key lookup behind `Signer` and `KeyStore`"): a lookup
+//! answers a key's PUBLIC facts, [`KeyFacts`], and the seed leaves the store
+//! only as the signer [`KeyStore::signer`] derives from it — so a later
+//! custody rung is a different signer behind that one method, never a
+//! rewrite of a walk (§1.4). The refusals are the store's own faces
 //! ([`StoreError`], [`KeyFileError`]), never wire tokens, each rendered by
 //! [`store_halt`] as AUTH-5.67's halt naming the path and the state; a
 //! lookup that selects no key is §3.5 arm 4's fork, [`arm4_face`].
@@ -20,88 +25,11 @@ use crate::address::first_child;
 use crate::derive::Mode;
 use crate::halt::Halt;
 use crate::origin::Origin;
-use crate::sheet::{render_inert, KeyFile, KeyFileError, Seed};
-use crate::sign::{fresh_seed, Signer};
+use crate::sheet::{render_inert, KeyFile, KeyFileError, Label, Seed};
+use crate::sign::Signer;
 
 #[cfg(test)]
 mod tests;
-
-/// A byline in AUTH-1.24's DOMAIN, never empty (AUTH-5.42): non-empty, no
-/// `\n`, at most 128 BYTES of UTF-8 counted as `Enrollment::new` counts.
-/// Every box applies the domain test ITSELF, before anything is made from a
-/// label (P13; `client.md` §2.2 `keygen`).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Label(String);
-
-/// Why a label is outside the domain — faced at the box, with the byte
-/// count named where the limit is the fault (AUTH-1.25's `TooLong` and
-/// `Newline`, and the empty label AUTH-5.42 faces).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LabelFault {
-    Empty,
-    Newline,
-    TooLong { bytes: usize },
-}
-
-impl fmt::Display for LabelFault {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LabelFault::Empty => f.write_str("the label is empty — a name is required here"),
-            LabelFault::Newline => f.write_str("the label holds a line break, which a label cannot"),
-            LabelFault::TooLong { bytes } => write!(
-                f,
-                "the label is {bytes} bytes of UTF-8 and the limit is 128 bytes — counted in bytes, not characters"
-            ),
-        }
-    }
-}
-
-impl Label {
-    /// The domain test (AUTH-1.24), the newline read before the length as
-    /// `Enrollment::new` reads it (AUTH-1.25).
-    pub fn new(text: &str) -> Result<Label, LabelFault> {
-        if text.contains('\n') {
-            return Err(LabelFault::Newline);
-        }
-        if text.len() > 128 {
-            return Err(LabelFault::TooLong { bytes: text.len() });
-        }
-        if text.is_empty() {
-            return Err(LabelFault::Empty);
-        }
-        Ok(Label(text.to_string()))
-    }
-
-    /// The text.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// The label as a path component: ASCII alphanumerics kept, every other
-    /// character a `-`, runs collapsed — the slug the anchor file's name
-    /// takes (§6).
-    pub fn slug(&self) -> String {
-        let mut out = String::new();
-        let mut dash = false;
-        for c in self.0.chars() {
-            if c.is_ascii_alphanumeric() {
-                out.push(c.to_ascii_lowercase());
-                dash = false;
-            } else if !dash {
-                out.push('-');
-                dash = true;
-            }
-        }
-        let trimmed = out.trim_matches('-').to_string();
-        if trimmed.is_empty() { "key".to_string() } else { trimmed }
-    }
-}
-
-impl fmt::Display for Label {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
 
 /// A key's identity in the store — its FINGERPRINT, the file's name (§3.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -182,8 +110,9 @@ impl Binding {
     }
 }
 
-/// The public facts of one key in the store — what `fingerprint --dir`
-/// lists and what a lookup's halt names.
+/// The public facts of one key in the store — what a lookup answers, what
+/// `fingerprint --dir` lists and what a lookup's halt names. No seed: a key
+/// signs through [`KeyStore::signer`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyFacts {
     pub path: PathBuf,
@@ -192,6 +121,20 @@ pub struct KeyFacts {
     pub public: PublicKey,
     pub label: Option<String>,
     pub anchor: bool,
+}
+
+impl KeyFacts {
+    /// A loaded file's public facts, at `path`.
+    fn of(path: PathBuf, file: &KeyFile) -> KeyFacts {
+        KeyFacts {
+            path,
+            alg: file.alg.clone(),
+            fingerprint: file.fingerprint,
+            public: file.public.clone(),
+            label: file.label.clone(),
+            anchor: file.anchor,
+        }
+    }
 }
 
 /// What the store could not do.
@@ -312,7 +255,9 @@ pub trait KeyStore {
     /// One DEVICE key of the production kind from a fresh OS seed, its file
     /// written once; the fingerprint names it.
     fn generate(&self, label: Option<Label>) -> Result<KeyId, StoreError>;
-    /// The signer `sel` names, an anchor refused (§2.2's selection test).
+    /// The signer `sel` names, an anchor refused (§2.2's selection test) —
+    /// THE ONE WAY a stored key signs: every walk takes a stored key's signer
+    /// here, and its public facts from the lookup.
     fn signer(&self, sel: &KeySelector<'_>) -> Result<Box<dyn Signer>, StoreError>;
     /// Every binding line for `origin`, in file order (the newest last).
     fn bindings(&self, origin: &Origin) -> Result<Vec<Binding>, StoreError>;
@@ -326,12 +271,6 @@ pub fn default_store_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(|home| PathBuf::from(home).join(".skep"))
-}
-
-/// A key selected by the lookup: its file and its path.
-pub struct Selected {
-    pub path: PathBuf,
-    pub file: KeyFile,
 }
 
 /// Rung 1: plain files with modes (§3.1–§3.7).
@@ -419,7 +358,9 @@ impl FileStore {
     }
 
     /// One key file loaded and judged (§3.2's reader; AUTH-5.67's halt names
-    /// the path).
+    /// the path) — the seed with it. The store's own reader, and a suite's
+    /// for a key another party holds; a walk reads [`FileStore::select`]'s
+    /// facts and signs through [`KeyStore::signer`].
     pub fn load(&self, path: &Path) -> Result<KeyFile, StoreError> {
         let bytes = fs::read(path).map_err(|error| StoreError::Io { path: path.to_path_buf(), error })?;
         KeyFile::parse(&bytes).map_err(|error| StoreError::KeyFile { path: path.to_path_buf(), error })
@@ -444,14 +385,7 @@ impl FileStore {
 
     fn facts_of(&self, path: &Path) -> Result<KeyFacts, StoreError> {
         let file = self.load(path)?;
-        Ok(KeyFacts {
-            path: path.to_path_buf(),
-            alg: file.alg.clone(),
-            fingerprint: file.fingerprint,
-            public: file.public.clone(),
-            label: file.label.clone(),
-            anchor: file.anchor,
-        })
+        Ok(KeyFacts::of(path.to_path_buf(), &file))
     }
 
     /// Every binding line, in file order; a final line without `\n` ignored
@@ -477,6 +411,17 @@ impl FileStore {
             Binding::Enrollment { origin: o, principal: p, account, fingerprint } if &o == origin && p == principal => {
                 Some((account, fingerprint))
             }
+            _ => None,
+        }))
+    }
+
+    /// The `new_id` a persist-first line recorded for `account` at `origin`
+    /// — the principal of the LAST enrollment line naming that account —
+    /// where one stands (§4.3; AUTH-5.20): the id an interrupted `delegate`
+    /// was sent under, or was about to be.
+    pub fn persisted_id(&self, origin: &Origin, account: &str) -> Result<Option<u64>, StoreError> {
+        Ok(self.all_bindings()?.into_iter().rev().find_map(|b| match b {
+            Binding::Enrollment { origin: o, principal, account: a, .. } if &o == origin && a == account => Some(principal),
             _ => None,
         }))
     }
@@ -524,14 +469,23 @@ impl FileStore {
     /// binding for (origin, principal); (3) no binding and exactly one
     /// device key in the store; (4) otherwise `NoSelection` with the keys
     /// listed, for the caller's fork on `claimant`. Under `Purpose::Sign`
-    /// an anchor file is refused at every arm (§2.2's selection test).
-    pub fn select(&self, sel: &KeySelector<'_>, purpose: Purpose) -> Result<Selected, StoreError> {
-        let judged = |path: PathBuf| -> Result<Selected, StoreError> {
+    /// an anchor file is refused at every arm (§2.2's selection test). The
+    /// answer is the selected key's PUBLIC facts; its signer is
+    /// [`KeyStore::signer`]'s, over the same lookup.
+    pub fn select(&self, sel: &KeySelector<'_>, purpose: Purpose) -> Result<KeyFacts, StoreError> {
+        let (path, file) = self.selected(sel, purpose)?;
+        Ok(KeyFacts::of(path, &file))
+    }
+
+    /// The lookup's one body: the selected key's path and its file, the seed
+    /// with it — private, so the seed leaves the store only as a signer.
+    fn selected(&self, sel: &KeySelector<'_>, purpose: Purpose) -> Result<(PathBuf, KeyFile), StoreError> {
+        let judged = |path: PathBuf| -> Result<(PathBuf, KeyFile), StoreError> {
             let file = self.load(&path)?;
             if purpose == Purpose::Sign && file.anchor {
                 return Err(StoreError::KeyFile { path, error: KeyFileError::AnchorAtSigningCommand });
             }
-            Ok(Selected { path, file })
+            Ok((path, file))
         };
         match sel {
             KeySelector::Path(path) => judged(path.to_path_buf()),
@@ -562,26 +516,21 @@ impl FileStore {
             KeySelector::Prefix(prefix) => {
                 let keys = self.list()?;
                 let matches: Vec<&KeyFacts> = keys.iter().filter(|k| k.fingerprint.to_hex().starts_with(prefix)).collect();
-                self.one_of(matches, &keys, prefix, purpose)
+                judged(Self::one_of(&matches, prefix)?)
             }
             KeySelector::Label(label) => {
                 let keys = self.list()?;
                 let matches: Vec<&KeyFacts> = keys.iter().filter(|k| k.label.as_deref() == Some(*label)).collect();
-                self.one_of(matches, &keys, label, purpose)
+                judged(Self::one_of(&matches, label)?)
             }
         }
     }
 
-    fn one_of(&self, matches: Vec<&KeyFacts>, _all: &[KeyFacts], select: &str, purpose: Purpose) -> Result<Selected, StoreError> {
-        match matches.as_slice() {
+    /// The one match's path; none, or more than one listed and never a pick.
+    fn one_of(matches: &[&KeyFacts], select: &str) -> Result<PathBuf, StoreError> {
+        match matches {
             [] => Err(StoreError::NotFound { select: select.to_string() }),
-            [one] => {
-                let file = self.load(&one.path)?;
-                if purpose == Purpose::Sign && file.anchor {
-                    return Err(StoreError::KeyFile { path: one.path.clone(), error: KeyFileError::AnchorAtSigningCommand });
-                }
-                Ok(Selected { path: one.path.clone(), file })
-            }
+            [one] => Ok(one.path.clone()),
             many => Err(StoreError::Ambiguous { keys: many.iter().map(|k| (*k).clone()).collect() }),
         }
     }
@@ -626,15 +575,15 @@ impl FileStore {
 impl KeyStore for FileStore {
     fn generate(&self, label: Option<Label>) -> Result<KeyId, StoreError> {
         self.ensure_dirs()?;
-        let file = KeyFile::new(Seed::new(fresh_seed()), false, label.map(|l| l.0), None);
+        let file = KeyFile::new(Seed::fresh(), false, label.map(|l| l.as_str().to_string()), None);
         let path = self.key_path(&file.fingerprint);
         Self::write_once(&path, file.to_json().as_bytes()).map_err(|error| StoreError::Io { path, error })?;
         Ok(KeyId(file.fingerprint))
     }
 
     fn signer(&self, sel: &KeySelector<'_>) -> Result<Box<dyn Signer>, StoreError> {
-        let selected = self.select(sel, Purpose::Sign)?;
-        Ok(Box::new(selected.file.signer()))
+        let (_, file) = self.selected(sel, Purpose::Sign)?;
+        Ok(Box::new(file.signer()))
     }
 
     fn bindings(&self, origin: &Origin) -> Result<Vec<Binding>, StoreError> {

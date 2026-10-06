@@ -33,9 +33,17 @@ pub mod scripted;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Public<T>(pub T);
 
-/// A SECRET moment's payload: carries, or asks for, key material.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A SECRET moment's payload: carries, or asks for, key material — and so
+/// prints as `Secret(…)` whatever it holds: an embedder that logs moments
+/// with `{:?}` writes no seed into its log.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Secret<T>(pub T);
+
+impl<T> fmt::Debug for Secret<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Secret(…)")
+    }
+}
 
 /// A CONSENT moment's payload: public data gating a permanent credential
 /// act, answered in the embedder's own hands.
@@ -80,11 +88,23 @@ pub struct Retype {
 }
 
 /// The re-type's answer: the hex and a fingerprint prefix of at least one
-/// R42 group (§9 item 35), or the re-type DECLINED (§4.2 step 9).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// R42 group (§9 item 35), or the re-type DECLINED (§4.2 step 9). Its
+/// `Debug` shows the seed as `…`.
+#[derive(Clone, PartialEq, Eq)]
 pub enum Retyped {
     Typed { seed_hex: String, fingerprint_prefix: String },
     Declined,
+}
+
+impl fmt::Debug for Retyped {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Retyped::Typed { fingerprint_prefix, .. } => {
+                f.debug_struct("Typed").field("seed_hex", &format_args!("…")).field("fingerprint_prefix", fingerprint_prefix).finish()
+            }
+            Retyped::Declined => f.write_str("Declined"),
+        }
+    }
 }
 
 /// Where to write one anchor file (§4.2 step 4; §6): asked once per
@@ -117,12 +137,24 @@ pub struct Import {
     pub file_allowed: bool,
 }
 
-/// The import's answer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The import's answer. Its `Debug` shows a typed seed as `…`.
+#[derive(Clone, PartialEq, Eq)]
 pub enum Imported {
     File(PathBuf),
     Typed { seed_hex: String, fingerprint_prefix: String },
     Neither,
+}
+
+impl fmt::Debug for Imported {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Imported::File(path) => f.debug_tuple("File").field(path).finish(),
+            Imported::Typed { fingerprint_prefix, .. } => {
+                f.debug_struct("Typed").field("seed_hex", &format_args!("…")).field("fingerprint_prefix", fingerprint_prefix).finish()
+            }
+            Imported::Neither => f.write_str("Neither"),
+        }
+    }
 }
 
 /// KEPT OR PLACED (AUTH-5.54 step 3's file arm) — SECRET: whether the
@@ -173,18 +205,11 @@ pub trait Person {
     fn retype(&mut self, m: Secret<Retype>) -> Result<Retyped, Abandoned>;
     /// One anchor file's destination (SECRET).
     fn destination(&mut self, m: Secret<Destination>) -> Result<PathBuf, Abandoned>;
-    /// A typed confirmation (CONSENT): `true` iff the person typed
-    /// `expected`.
-    fn confirm(&mut self, m: Consent<Confirmation>) -> Result<bool, Abandoned>;
-    /// A typed confirmation ANSWERED IN TEXT (CONSENT), so a walk can tell
-    /// `no` from a wrong row and re-ask the row (AUTH-5.46: "the wrong row
-    /// is the mistake stress produces"). The default answers `expected` or
-    /// `no` off [`Person::confirm`]; an embedder that reads the text answers
-    /// it verbatim.
-    fn confirm_typed(&mut self, m: Consent<Confirmation>) -> Result<String, Abandoned> {
-        let expected = m.0.expected.clone();
-        Ok(if self.confirm(m)? { expected } else { "no".to_string() })
-    }
+    /// A typed confirmation (CONSENT), answered with THE TEXT THE PERSON
+    /// TYPED, verbatim — never reduced to a yes or a no, so a walk tells `no`
+    /// from a wrong row and re-asks the row (AUTH-5.46: "the wrong row is the
+    /// mistake stress produces"). The one confirmation every walk asks.
+    fn confirm_typed(&mut self, m: Consent<Confirmation>) -> Result<String, Abandoned>;
     /// THE ANCHOR IMPORT (SECRET): a file, the typed hex, or neither.
     fn import(&mut self, m: Secret<Import>) -> Result<Imported, Abandoned>;
     /// KEPT OR PLACED (SECRET): the handed file's custody.
@@ -208,5 +233,20 @@ mod tests {
         assert_eq!(p.ask(Public(Question { text: "name".into() })), Err(Abandoned));
         assert!(p.said("PUBLIC say [AUTH-5.74]"));
         assert!(p.said("ABANDON at ask"));
+    }
+
+    /// The SECRET class prints no key material: the marker prints as
+    /// `Secret(…)` whatever it holds, and a typed seed shows as `…` beside
+    /// its public prefix.
+    #[test]
+    fn a_secret_moment_prints_no_seed() {
+        let seed_hex = "5e".repeat(32);
+        let retyped = Retyped::Typed { seed_hex: seed_hex.clone(), fingerprint_prefix: "0123abcd".into() };
+        let imported = Imported::Typed { seed_hex: seed_hex.clone(), fingerprint_prefix: "0123abcd".into() };
+        for printed in [format!("{:?}", Secret(retyped.clone())), format!("{retyped:?}"), format!("{imported:?}"), format!("{:?}", Secret(Retype { prompt: "type the seed".into() }))] {
+            assert!(!printed.contains("5e5e5e5e"), "{printed}");
+        }
+        assert_eq!(format!("{:?}", Secret(imported)), "Secret(…)");
+        assert!(format!("{retyped:?}").contains("0123abcd"));
     }
 }

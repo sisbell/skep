@@ -150,7 +150,7 @@ fn resolve(module: &str, named_path: &str) -> Option<String> {
 /// Every in-crate path the code names, with the line it starts on: each
 /// `crate::…`, `super::…` and `self::…` token — a maximal run of identifier
 /// characters and `:` — and, where one ends at a brace group (`use
-/// crate::ceremony::{deposit::Grade, claim::hosted};`, on one line or across
+/// crate::ceremony::{deposit::DepositKind, claim::hosted};`, on one line or across
 /// several), each member of the group joined to it, a nested group's
 /// likewise. The token alone is not enough there: `crate::` names no module
 /// and `super::` only the parent, so a group would hide every module its

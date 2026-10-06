@@ -23,7 +23,7 @@ use skep_identity::Fingerprint;
 
 use super::say;
 use crate::board::{Board, KeySetAnswer, Scope};
-use crate::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome, Grade};
+use crate::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome};
 use crate::ceremony::enumerate::head_closure;
 use crate::ceremony::first_session::{first_session, FirstSessionReads};
 use crate::ceremony::handshake::{handshake, Site};
@@ -32,7 +32,7 @@ use crate::ceremony::reads::{r0, A4Cell};
 use crate::halt::Halt;
 use crate::person::Person;
 use crate::sheet::render_inert;
-use crate::store::{store_halt, FileStore, KeySelector, Purpose, StoreError};
+use crate::store::{store_halt, FileStore, KeySelector, KeyStore, Purpose, StoreError};
 
 /// The command's inputs.
 #[derive(Debug, Clone)]
@@ -69,7 +69,7 @@ pub fn retire(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     // The store's key for (board, n); the NOTEBOOK-AT-LOSS face where none
     // opens a session here (§4a.1).
     let key = match store.select(&KeySelector::Binding { origin: &board.dialed, principal: Some(opts.principal) }, Purpose::Sign) {
-        Ok(sel) => sel.file,
+        Ok(key) => key,
         Err(StoreError::NoSelection { keys }) => {
             return Err(Halt::face(
                 format!("this store holds no key that opens a session at {} ({} key(s) in it, none bound to principal {})", board.dialed, keys.len(), opts.principal),
@@ -79,7 +79,7 @@ pub fn retire(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         }
         Err(e) => return Err(store_halt(e)),
     };
-    let signer = key.signer();
+    let signer = store.signer(&KeySelector::Path(&key.path)).map_err(store_halt)?;
     let own: Vec<(Fingerprint, skep_identity::PublicKey)> = store.list().map_err(store_halt)?.iter().filter(|k| !k.anchor).map(|k| (k.fingerprint, k.public.clone())).collect();
     // R0's reads; a retirement at a by-reference account is redirected.
     let reads = r0(board, person, opts.principal, false, &own)?;
@@ -120,15 +120,13 @@ pub fn retire(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
             "its walks: `skep recover --anchor-lost` where the paper was lost (the lost paper retired under the surviving one), and the anchor REPLACEMENT rotation, LATER with the attendant campaign",
         ));
     }
-    let label = reads.records.label_of(&target.fingerprint).filter(|l| !l.is_empty());
-    // THE FULL SESSION, as the set account's principal.
-    let session = handshake(board, Scope::Full, &signer, reads.set_principal, Site::Session)?;
+    let label = reads.records.label_of(&target.fingerprint);
+    // THE FULL SESSION, as the set account's principal — closed on every
+    // halt below by its own drop.
+    let session = handshake(board, Scope::Full, &*signer, reads.set_principal, Site::Session)?;
     // `first_session` FIRST.
     let fs_reads = FirstSessionReads::take(board, &set_account, &key.fingerprint, Some(store), &board.dialed)?;
-    if let Err(h) = first_session(board, &fs_reads, &session, &signer, Some(store)) {
-        let _ = session.close(board);
-        return Err(h);
-    }
+    first_session(board, &fs_reads, &session, &*signer, Some(store))?;
     // The enumeration and the preview.
     let closure = head_closure(board, person, &set_account, &target.fingerprint)?;
     let held: Vec<Fingerprint> = own.iter().map(|(f, _)| *f).collect();
@@ -137,12 +135,8 @@ pub fn retire(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     let answer = preview(person, &Preview { account: &set_account, set: &reads.walk.set, rows: &rows, closure: &closure, held: &held, site: PreviewSite::Retire, own_board })?;
     match answer {
         Previewed::Confirmed => {}
-        Previewed::Declined => {
-            let _ = session.close(board);
-            return Err(declined("retirement"));
-        }
+        Previewed::Declined => return Err(declined("retirement")),
         Previewed::Unwritable => {
-            let _ = session.close(board);
             return Err(Halt::face(
                 format!("the retirement of {} cannot be written: it would empty the set at {set_account}", target.fingerprint),
                 "`would_empty`: no anchor stands and this is the account's only device key — the preview said so and took no confirmation (§4a.4)",
@@ -153,16 +147,9 @@ pub fn retire(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     // ONE retirement.
     let own_key = target.fingerprint == key.fingerprint;
     let id = format!("retire.{}", &target.fingerprint.to_hex()[..8]);
-    let outcome = deposit(board, &session.token, &Deposit { home: &fs_reads.home, subject: &set_account, kind: DepositKind::Retire(vec![target.fingerprint]), grade: Grade::Device, hand: Some(&signer), id: &id });
-    let outcome = match outcome {
-        Ok(o) => o,
-        Err(h) => {
-            if !own_key {
-                let _ = session.close(board);
-            }
-            return Err(h);
-        }
-    };
+    // A retirement that did not commit leaves the session live, and its drop
+    // closes it — the own key's included.
+    let outcome = deposit(board, &session.token, &Deposit { home: &fs_reads.home, subject: &set_account, kind: DepositKind::Retire(vec![target.fingerprint]), hand: Some(&*signer), id: &id })?;
     let reconciled = matches!(outcome, DepositOutcome::Committed { .. });
     if let DepositOutcome::Committed { reason } = &outcome {
         say(person, "AUTH-5.17", format!("reconciled: {reason}"));
@@ -170,6 +157,7 @@ pub fn retire(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     say(person, "§9 item 36", "the store is unchanged: the key file stays where it was, written once and never rewritten; the board's `retired` list is what the pre-check reads at the next `session` here, and the file's deletion is your act");
     let end = if own_key {
         // AUTH-4.63: the commit ended this session; no close is sent.
+        session.ended_by_commit();
         let another_held = match board.key_set(&set_account)? {
             KeySetAnswer::Set(s) => own.iter().any(|(f, _)| *f != key.fingerprint && s.enrolled(f).is_some_and(|e| !e.anchor)),
             KeySetAnswer::NotAnAccount => false,
@@ -185,7 +173,7 @@ pub fn retire(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         );
         RetireEnd::OwnKey { another_held }
     } else {
-        let _ = session.close(board);
+        let _ = session.close();
         RetireEnd::Closed
     };
     Ok(Retired { account: set_account, fingerprint: target.fingerprint, label, end, reconciled })

@@ -3,10 +3,11 @@
 //! answered and NO binding appended at A; `--reply` re-derives them with no
 //! write; an anchor-flagged payload refused at the paste; a retired key's
 //! payload I4's halt; the same payload twice reconciled; `too_many_enrolled`
-//! faced with `skep retire` named; the by-reference halt.
+//! faced with `skep retire` named, and answered by `deposit` as its armed arm;
+//! the by-reference halt.
 
 use skep_client::board::{KeySetAnswer, Scope};
-use skep_client::ceremony::deposit::{deposit, Deposit, DepositKind, Grade};
+use skep_client::ceremony::deposit::{deposit, Deposit, DepositHalt, DepositKind};
 use skep_client::ceremony::enroll::{enroll, reply, EnrollOptions};
 use skep_client::ceremony::handshake::{handshake, Site};
 use skep_client::person::scripted::{Script, Scripted};
@@ -58,7 +59,7 @@ fn the_hop_enrolls_another_devices_payload_from_a_full_session_and_appends_no_bi
     assert!(rec.sig.is_some(), "the writing hand's sig at the record grade");
     // B signs in with it.
     let b = key_file(&store_b, &fp_b).signer();
-    handshake(&board, Scope::Content, &b, 1, Site::Session).expect("B's session").close(&board).unwrap();
+    handshake(&board, Scope::Content, &b, 1, Site::Session).expect("B's session").close().unwrap();
 
     // `--reply`: the facts re-derived, no write.
     let before = board.health().unwrap().log_position();
@@ -88,8 +89,8 @@ fn the_hop_enrolls_another_devices_payload_from_a_full_session_and_appends_no_bi
     // A retired key's payload: I4's halt, exit 3.
     let a = key_file(&store_a, &fp_a).signer();
     let full = handshake(&board, Scope::Full, &a, 1, Site::Session).unwrap();
-    deposit(&board, &full.token, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Retire(vec![fp_b]), grade: Grade::Device, hand: Some(&a), id: "test.retire-b" }).expect("retired");
-    full.close(&board).unwrap();
+    deposit(&board, &full.token, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Retire(vec![fp_b]), hand: Some(&a), id: "test.retire-b" }).expect("retired");
+    full.close().unwrap();
     let mut person = Scripted::new(vec![Script::Confirm(true)]);
     let err = enroll(&board, &store_a, &mut person, &opts(&payload)).expect_err("I4");
     assert!(err.to_string().contains("RETIRED") && err.to_string().contains("I4 (AUTH-2.98)"), "{err}");
@@ -110,8 +111,10 @@ fn the_hop_enrolls_another_devices_payload_from_a_full_session_and_appends_no_bi
     assert!(err.to_string().contains("re-take the payload"), "{err}");
 }
 
-/// `too_many_enrolled` faced with THE ACT, `skep retire` (AUTH-5.13); and the
-/// by-reference halt at an account that holds no keys of its own (AUTH-6.37).
+/// `too_many_enrolled` faced with THE ACT, `skep retire` (AUTH-5.13) — and
+/// answered by `deposit` AS ITS ARM, as is a dead token's death signal, so a
+/// walk acts on the arm and never on a face's words; and the by-reference
+/// halt at an account that holds no keys of its own (AUTH-6.37).
 #[test]
 fn the_cap_names_the_act_and_a_by_reference_account_halts_in_the_reads() {
     let dir = tempfile::tempdir().unwrap();
@@ -128,11 +131,18 @@ fn the_cap_names_the_act_and_a_by_reference_account_halts_in_the_reads() {
     let mut k = 20u8;
     while n < 16 {
         let s = signer_from_seed(&[k; 32]);
-        deposit(&board, &full.token, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(vec![Enrollment::new(HybridSigner::public_key(&s).clone(), false, Some(format!("filler {k}"))).unwrap()]), grade: Grade::Device, hand: Some(&a), id: &format!("test.fill.{k}") }).expect("filler");
+        deposit(&board, &full.token, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(vec![Enrollment::new(HybridSigner::public_key(&s).clone(), false, Some(format!("filler {k}"))).unwrap()]), hand: Some(&a), id: &format!("test.fill.{k}") }).expect("filler");
         n += 1;
         k += 1;
     }
-    full.close(&board).unwrap();
+    let extra = signer_from_seed(&[99; 32]);
+    let over = || DepositKind::Enroll(vec![Enrollment::new(HybridSigner::public_key(&extra).clone(), false, Some("one too many".into())).unwrap()]);
+    let at_cap = deposit(&board, &full.token, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: over(), hand: Some(&a), id: "test.over-cap" });
+    assert!(matches!(at_cap, Err(DepositHalt::SetFull(_))), "{at_cap:?}");
+    let dead = full.token.clone();
+    full.close().unwrap();
+    let after = deposit(&board, &dead, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: over(), hand: Some(&a), id: "test.dead" });
+    assert!(matches!(after, Err(DepositHalt::SessionClosed(_))), "{after:?}");
     let store_b = FileStore::open(dir.path().join("b"));
     let fp_b = keygen(&store_b, "phone");
     let payload = encode_enroll(&[entry_of(&key_file(&store_b, &fp_b), "phone")]);

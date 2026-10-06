@@ -16,7 +16,7 @@ use skep_identity::{Enrollment, Fingerprint, PublicKey};
 use super::{abandoned, reread, retire_one, row_text, RecoverOptions, Recovered};
 use crate::board::{Board, Scope};
 use crate::ceremony::backup::{backup_moment, reimport_anchor, AnchorArtifact, BackupOptions, Venue};
-use crate::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome, Grade};
+use crate::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome};
 use crate::ceremony::first_session::{first_session, FirstSessionReads};
 use crate::ceremony::handshake::{handshake, Site};
 use crate::ceremony::import::{dispose, import_anchor, no_artifact_face, whose_account, ImportContext, ImportOutcome, ImportedAnchor, Whose};
@@ -27,8 +27,8 @@ use crate::ceremony::trail::{trail_present, write_trail};
 use crate::derive::records::{credential_records, Hand, Kind};
 use crate::halt::Halt;
 use crate::person::{LabelBox, Person, Public, Question};
-use crate::sheet::{render_inert, Facts, KeyFile};
-use crate::store::{store_halt, FileStore, Label};
+use crate::sheet::{render_inert, Facts, KeyFile, Label};
+use crate::store::{store_halt, FileStore};
 
 /// THE LOSS ARM, L0–L7 (`client.md` §4a.6; AUTH-5.59's LOSS arm; AUTH-5.47).
 pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &RecoverOptions) -> Result<Recovered, Halt> {
@@ -98,7 +98,7 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
             }
         }
     };
-    let lost_label = reads.records.label_of(&lost_fp).filter(|l| !l.is_empty());
+    let lost_label = reads.records.label_of(&lost_fp);
     let surviving_fp_expected: Option<Fingerprint> = anchors.iter().find(|f| **f != lost_fp).copied();
     let surviving_label = surviving_peek.as_ref().and_then(|s| s.label.clone()).or_else(|| surviving_fp_expected.and_then(|f| reads.records.label_of(&f)));
     // THE FINDER QUESTION (P27).
@@ -161,7 +161,7 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
             first_session(board, &fs_reads, &session, &surviving.signer, Some(store))?;
             let entries: Vec<Enrollment> = backup.anchors.iter().map(|a| Enrollment::new(a.public.clone(), true, Some(a.label.as_str().to_string())).expect("a label the box admitted")).collect();
             let id = format!("recover.loss.enroll.{}", &backup.anchors[0].fingerprint.to_hex()[..8]);
-            let link = match deposit(board, &session.token, &Deposit { home: &fs_reads.home, subject: &account, kind: DepositKind::Enroll(entries), grade: Grade::Anchor, hand: Some(&surviving.signer), id: &id })? {
+            let link = match deposit(board, &session.token, &Deposit { home: &fs_reads.home, subject: &account, kind: DepositKind::Enroll(entries), hand: Some(&surviving.signer), id: &id })? {
                 DepositOutcome::Deposited { link, .. } => link,
                 DepositOutcome::Committed { .. } => {
                     let records = credential_records(board, &account, &own)?;
@@ -176,7 +176,7 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
                 match reimport_anchor(person, artifact, opts.paper, i)? {
                     Some(fresh) => {
                         let probe = handshake(board, Scope::Content, &fresh, opts.principal, Site::Recover)?;
-                        let _ = probe.close(board);
+                        let _ = probe.close();
                         drop(fresh);
                         say(person, "AUTH-5.59 step 3", format!("anchor {} ({}): re-imported from its artifact, fingerprint first, verified locally, a probe session opened and closed, its token presented nowhere; the seed wiped", artifact.fingerprint, artifact.label));
                     }
@@ -254,7 +254,7 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
         Ok((trail, artifacts))
     })();
     // L7: the close; the end face.
-    let _ = session.close(board);
+    let _ = session.close();
     dispose(person, &surviving);
     drop(surviving.signer);
     let (trail, artifacts) = result?;

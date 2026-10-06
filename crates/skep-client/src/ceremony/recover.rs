@@ -14,13 +14,15 @@
 //! containment act OFFERED from the session R2 holds (AUTH-5.64: retire the
 //! non-anchor set, enroll nothing; `first_session`'s FIRST STATE ALONE —
 //! RULED 2026-10-04), then on "my own" the ENROLLMENT PREVIEW with a typed
-//! confirmation, then `first_session(A, R2's session, the imported
-//! anchor)`, then `DepositKind::Enroll` of the store's device key under
-//! `Grade::Anchor`; R4 — `--lost` against `enrolled`'s NON-ANCHOR entries,
-//! the DEFAULT the one enrolled non-anchor fingerprint this store does not
-//! hold, a list picked by fingerprint WITH LABELS otherwise, each
+//! confirmation, then `DepositKind::Enroll` of the store's device key under
+//! the imported anchor's hand (the anchor grade); `first_session(A, R2's
+//! session, the imported anchor)` AHEAD OF THE WALK'S FIRST CREDENTIAL WRITE
+//! — R3's enrollment on the LOST arm, R4's first retirement on the STOLEN
+//! arm (§4a.2 R3, R4); R4 — `--lost` against `enrolled`'s NON-ANCHOR
+//! entries, the DEFAULT the one enrolled non-anchor fingerprint this store
+//! does not hold, a list picked by fingerprint WITH LABELS otherwise, each
 //! `preview(removed)` + a typed answer + `DepositKind::Retire` under the
-//! anchor grade; the `closed` path's ONE ARM PER E2 TRIGGER (AUTH-5.27); R5
+//! anchor's hand; the `closed` path's ONE ARM PER E2 TRIGGER (AUTH-5.27); R5
 //! the mirror's close (AUTH-5.54 step 3); R6 the binding appended, the
 //! three facts, and on the STOLEN arm AUTH-5.89's RECOVERY READ over the
 //! closure and the cone (every returned genesis shown with its hand and
@@ -36,7 +38,7 @@ use skep_signature::HybridSigner;
 use super::say;
 use crate::address::{doc_1_of, first_child};
 use crate::board::{Board, KeySet, KeySetAnswer, Scope};
-use crate::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome, Grade};
+use crate::ceremony::deposit::{deposit, Deposit, DepositHalt, DepositKind, DepositOutcome};
 use crate::ceremony::enumerate::{by_reference_cone, enroll_links_homed, head_closure};
 use crate::ceremony::first_session::{first_session, mint_home, FirstSessionReads};
 use crate::ceremony::handshake::{handshake, Session, Site};
@@ -46,8 +48,8 @@ use crate::ceremony::reads::{r0, A4Cell, Reads};
 use crate::derive::records::{credential_records, Hand, Records};
 use crate::halt::Halt;
 use crate::person::{Confirmation, Consent, Person, Public, Question};
-use crate::sheet::{group_hex, render_inert, Facts, KeyFile};
-use crate::store::{store_halt, Binding, FileStore, KeyStore, StoreError};
+use crate::sheet::{group_hex, render_inert, Facts};
+use crate::store::{store_halt, Binding, FileStore, KeyFacts, KeyStore, StoreError};
 
 mod loss;
 
@@ -93,12 +95,11 @@ fn abandoned() -> Halt {
     Halt::face("the walk was abandoned", "the person left", "re-run when ready; every state resumes by reading (P4)")
 }
 
-/// The store's device key for this walk (§2.2 `recover`: the STORE's, never
-/// `--key`): the one ENROLLED at the set (a resume), else the one FRESH
-/// device key; the KEYLESS face where the store holds none.
-fn device_key_for(store: &FileStore, board: &Board) -> Result<Vec<KeyFile>, Halt> {
-    let keys = store.list().map_err(store_halt)?;
-    let devices: Vec<KeyFile> = keys.iter().filter(|k| !k.anchor).filter_map(|k| store.load(&k.path).ok()).collect();
+/// The store's device keys for this walk (§2.2 `recover`: the STORE's,
+/// never `--key`), their public facts — the walk enrolls one by its public
+/// key and signs with none; the KEYLESS face where the store holds none.
+fn device_key_for(store: &FileStore) -> Result<Vec<KeyFacts>, Halt> {
+    let devices: Vec<KeyFacts> = store.list().map_err(store_halt)?.into_iter().filter(|k| !k.anchor).collect();
     if devices.is_empty() {
         return Err(Halt::face(
             format!("the key store {} holds no device key for this walk", store.root().display()),
@@ -106,11 +107,11 @@ fn device_key_for(store: &FileStore, board: &Board) -> Result<Vec<KeyFile>, Halt
             format!("run `skep keygen --dir {}` here, then `skep recover` again", store.root().display()),
         ));
     }
-    let _ = board;
     Ok(devices)
 }
 
-fn pick_device(devices: Vec<KeyFile>, set: &KeySet) -> Result<(KeyFile, bool), Halt> {
+/// The one ENROLLED at the set (a resume), else the one FRESH device key.
+fn pick_device(devices: Vec<KeyFacts>, set: &KeySet) -> Result<(KeyFacts, bool), Halt> {
     if let Some(enrolled) = devices.iter().position(|d| set.enrolled(&d.fingerprint).is_some()) {
         let mut devices = devices;
         return Ok((devices.swap_remove(enrolled), true));
@@ -139,7 +140,7 @@ fn pick_device(devices: Vec<KeyFile>, set: &KeySet) -> Result<(KeyFile, bool), H
 
 /// A fingerprint's row for a face: grouped, labelled.
 fn row_text(fp: &Fingerprint, records: &Records) -> String {
-    format!("{} ({})", fp, records.label_of(fp).filter(|l| !l.is_empty()).map(|l| render_inert(&l)).unwrap_or_else(|| "no label recorded".into()))
+    format!("{} ({})", fp, records.label_of(fp).map(|l| render_inert(&l)).unwrap_or_else(|| "no label recorded".into()))
 }
 
 /// The current set at `account`.
@@ -215,9 +216,9 @@ fn targets(person: &mut dyn Person, set: &KeySet, records: &Records, held: &[Fin
 }
 
 /// ONE retirement under the anchor session: `preview(removed)`, the typed
-/// answer, `DepositKind::Retire` under the anchor grade.
+/// answer, `DepositKind::Retire` under the anchor's hand.
 #[allow(clippy::too_many_arguments)]
-fn retire_one(board: &Board, person: &mut dyn Person, session: &Session, hand: &HybridSigner, reads: &Reads, set: &KeySet, records: &Records, fp: &Fingerprint, held: &[Fingerprint], since: bool, site: PreviewSite) -> Result<bool, Halt> {
+fn retire_one(board: &Board, person: &mut dyn Person, session: &Session<'_>, hand: &HybridSigner, reads: &Reads, set: &KeySet, records: &Records, fp: &Fingerprint, held: &[Fingerprint], since: bool, site: PreviewSite) -> Result<bool, Halt> {
     let closure = head_closure(board, person, &reads.walk.set_account, fp)?;
     let rows = [Row::of(fp, set, Some(records), held, None, since)];
     let own_board = matches!(reads.cell, A4Cell::LoopbackNotebook | A4Cell::BindOverrideNotebook);
@@ -227,26 +228,25 @@ fn retire_one(board: &Board, person: &mut dyn Person, session: &Session, hand: &
         Previewed::Unwritable => return Err(Halt::face("the retirement would empty the set", "`would_empty` armed: unreachable under an anchor session, the anchor standing enrolled", "this is this client's frame")),
     }
     let id = format!("recover.retire.{}", &fp.to_hex()[..8]);
-    match deposit(board, &session.token, &Deposit { home: &reads.home, subject: &reads.walk.set_account, kind: DepositKind::Retire(vec![*fp]), grade: Grade::Anchor, hand: Some(hand), id: &id }) {
+    match deposit(board, &session.token, &Deposit { home: &reads.home, subject: &reads.walk.set_account, kind: DepositKind::Retire(vec![*fp]), hand: Some(hand), id: &id }) {
         Ok(DepositOutcome::Deposited { .. }) => Ok(true),
         Ok(DepositOutcome::Committed { reason }) => {
             say(person, "AUTH-5.17", format!("reconciled: {reason}"));
             Ok(false)
         }
-        Err(h) => Err(closed_arm(board, reads, h)),
+        Err(DepositHalt::SessionClosed(_)) => Err(closed_arm(board, reads)),
+        Err(other) => Err(other.into()),
     }
 }
 
-/// The `closed` path's ONE ARM PER E2 TRIGGER (AUTH-5.27; AUTH-4.63): the
-/// anchor retired by another hand (AUTH-5.77, the hand from the records),
-/// the daemon's restart (AUTH-5.31; its re-open meeting a block is the
-/// block's arm), the SEEDED arm arising only by reference — derived from
-/// `key_set`, `/health` and the records, never a silent re-import.
-fn closed_arm(board: &Board, reads: &Reads, h: Halt) -> Halt {
-    let text = h.to_string();
-    if !text.contains("session ended") && !text.contains("closed") {
-        return h;
-    }
+/// The `closed` path's ONE ARM PER E2 TRIGGER (AUTH-5.27; AUTH-4.63), taken
+/// where a deposit under the anchor session met the death signal
+/// ([`DepositHalt::SessionClosed`]): the anchor retired by another hand
+/// (AUTH-5.77, the hand from the records), the daemon's restart (AUTH-5.31;
+/// its re-open meeting a block is the block's arm), the SEEDED arm arising
+/// only by reference — derived from `key_set`, `/health` and the records,
+/// never a silent re-import.
+fn closed_arm(board: &Board, reads: &Reads) -> Halt {
     let anchor_fp = reads.walk.set.enrolled.iter().find(|e| e.anchor).map(|e| e.fingerprint);
     if let (Ok(records), Some(afp)) = (credential_records(board, &reads.walk.set_account, &[]), anchor_fp) {
         if let Ok(KeySetAnswer::Set(now)) = board.key_set(&reads.walk.set_account) {
@@ -383,13 +383,11 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
         return loss_arm(board, store, person, opts);
     }
     // The STORE holds a device key for this walk — ahead of every read.
-    let devices = device_key_for(store, board)?;
+    let devices = device_key_for(store)?;
     let own: Vec<(Fingerprint, PublicKey)> = devices.iter().map(|d| (d.fingerprint, d.public.clone())).collect();
     let held: Vec<Fingerprint> = own.iter().map(|(f, _)| *f).collect();
-    // R0.
-    let reads = r0(board, person, opts.principal, true, &own)?;
-    let account = reads.account.clone();
-    // LOST or STOLEN, at the head (§4a.1).
+    // LOST or STOLEN, at the walk's head ahead of every read (§4a.1; §4a.2
+    // R6: the stolen arm's recovery read is priced at the choice).
     let stolen = match opts.stolen {
         Some(s) => s,
         None => person.yes_no(Public(Question { text: "was the device STOLEN (yes), or LOST (no)? Only the stolen arm walks what the thief holds, and it costs the recovery read".into() })).map_err(|_| abandoned())?,
@@ -397,6 +395,9 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
     if stolen {
         say(person, "AUTH-5.60 step 1", "STOLEN: what the thief holds — the machine, the loopback board and the key store, so the enrolled device key and sessions as you on the thief's own copy, and every draft ever written at a venue whose only confidentiality is locality; a retirement written here reaches the thief's copy not at all; R4 runs AHEAD of R3 and repeats against a re-read `key_set`");
     }
+    // R0.
+    let reads = r0(board, person, opts.principal, true, &own)?;
+    let account = reads.account.clone();
     // NO anchor flagged ⇒ AUTH-5.16's second arm.
     if !reads.walk.set.has_anchor() {
         return Err(Halt::face(
@@ -406,7 +407,6 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
         ));
     }
     let (device, resumed) = pick_device(devices, &reads.walk.set)?;
-    let device_signer = device.signer();
     if resumed {
         say(person, "AUTH-5.56", format!("resumed: the device key {} is already enrolled at {} — R3 stands done, read off `key_set`; the walk continues at R4", device.fingerprint, reads.walk.set_account));
     }
@@ -491,10 +491,17 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
             }
         };
         if stolen {
+            // `first_session` AHEAD OF THE WALK'S FIRST CREDENTIAL WRITE, which
+            // on this arm is R4's first retirement, homed in A's doc 1 (§4a.2
+            // R4) — a doc 1 that may not stand at a handoff's recipient who
+            // never ran `skep bind` (AUTH-5.90 (iii)).
+            let done = first_session(board, &fs_reads, &session, &anchor.signer, Some(store))?;
+            warnings.extend(done.warnings.clone());
             r4(person, &mut set, &mut records, picked.clone(), &mut retired)?;
         }
-        // R3: THE ENROLLMENT PREVIEW and its typed confirmation, then
-        // `first_session`, then the enrollment under the anchor grade.
+        // R3: THE ENROLLMENT PREVIEW and its typed confirmation, then — on the
+        // LOST arm, whose first credential write it is — `first_session`, then
+        // the enrollment under the anchor's hand.
         if !resumed {
             say(
                 person,
@@ -515,24 +522,27 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
             if typed.trim().to_ascii_lowercase() != expected {
                 return Err(Halt::face("the enrollment was declined at the preview: nothing was enrolled", "the typed answer was not the row", "re-run when ready; the walk resumes by reading"));
             }
-            let done = first_session(board, &fs_reads, &session, &anchor.signer, Some(store))?;
-            warnings.extend(done.warnings.clone());
+            if !stolen {
+                let done = first_session(board, &fs_reads, &session, &anchor.signer, Some(store))?;
+                warnings.extend(done.warnings.clone());
+            }
             let id = format!("recover.enroll.{}", &device.fingerprint.to_hex()[..8]);
             let entry = Enrollment::new(device.public.clone(), false, device.label.clone()).expect("a stored label");
-            let outcome = deposit(board, &session.token, &Deposit { home: &fs_reads.home, subject: &account, kind: DepositKind::Enroll(vec![entry]), grade: Grade::Anchor, hand: Some(&anchor.signer), id: &id });
+            let outcome = deposit(board, &session.token, &Deposit { home: &fs_reads.home, subject: &account, kind: DepositKind::Enroll(vec![entry]), hand: Some(&anchor.signer), id: &id });
             match outcome {
                 Ok(DepositOutcome::Deposited { .. }) => say(person, "AUTH-5.59 step 1", format!("the device key {} is enrolled from the anchor's session", device.fingerprint)),
                 Ok(DepositOutcome::Committed { reason }) => say(person, "AUTH-5.17", format!("R3 stands: {reason}")),
-                Err(h) if h.to_string().contains("too_many_enrolled") => {
+                Err(DepositHalt::SetFull(_)) => {
                     // The PERSON-CLASS inversion: R4 first, then R3.
                     say(person, "AUTH-5.13", "the set is full: retire a key you no longer hold first, then this device is enrolled — R4 runs ahead of R3 under this same session");
                     r4(person, &mut set, &mut records, picked.clone(), &mut retired)?;
-                    let outcome = deposit(board, &session.token, &Deposit { home: &fs_reads.home, subject: &account, kind: DepositKind::Enroll(vec![Enrollment::new(device.public.clone(), false, device.label.clone()).expect("a stored label")]), grade: Grade::Anchor, hand: Some(&anchor.signer), id: &id })?;
+                    let outcome = deposit(board, &session.token, &Deposit { home: &fs_reads.home, subject: &account, kind: DepositKind::Enroll(vec![Enrollment::new(device.public.clone(), false, device.label.clone()).expect("a stored label")]), hand: Some(&anchor.signer), id: &id })?;
                     if let DepositOutcome::Committed { reason } = outcome {
                         say(person, "AUTH-5.17", format!("R3 stands: {reason}"));
                     }
                 }
-                Err(h) => return Err(closed_arm(board, &reads, h)),
+                Err(DepositHalt::SessionClosed(_)) => return Err(closed_arm(board, &reads)),
+                Err(other) => return Err(other.into()),
             }
         }
         if !stolen {
@@ -545,7 +555,7 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
         Ok(Recovered { facts: Facts { account: account.clone(), principal: opts.principal, origin: board.dialed.clone() }, enrolled: vec![device.fingerprint], retired: retired.clone(), binding_line: None, containment: false, report: Vec::new(), warnings: warnings.clone() })
     })();
     // R5: the mirror's close — the session, and the placed copy destroyed.
-    let _ = session.close(board);
+    let _ = session.close();
     dispose(person, &anchor);
     let seed_gone = anchor.signer;
     drop(seed_gone);
@@ -562,7 +572,6 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
         Err(e) => return Err(store_halt(e)),
     }
     done.binding_line = Some(line.line());
-    let _ = &device_signer;
     if stolen {
         let stolen_fps: Vec<Fingerprint> = if done.retired.is_empty() { Vec::new() } else { done.retired.clone() };
         done.report = recovery_read(board, person, &reads, &stolen_fps, &own)?;
@@ -575,6 +584,7 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
 mod tests {
     use super::*;
     use crate::board::EnrolledKey;
+    use crate::sheet::{KeyFile, Seed};
 
     fn set(fps: &[(u8, bool)]) -> KeySet {
         let mut s = KeySet::default();
@@ -586,17 +596,25 @@ mod tests {
         s
     }
 
-    /// The store's device key for the walk: the enrolled one resumes; one
-    /// fresh key is the key; a retired-only store is I4's halt.
+    /// A device key's public facts, as the store's lookup answers them.
+    fn facts(seed: u8) -> KeyFacts {
+        let file = KeyFile::new(Seed::new([seed; 32]), false, Some(format!("device {seed}")), None);
+        KeyFacts { path: format!("{seed}.key").into(), alg: file.alg.clone(), fingerprint: file.fingerprint, public: file.public.clone(), label: file.label.clone(), anchor: false }
+    }
+
+    /// The store's device key for the walk, picked off its public facts: the
+    /// enrolled one resumes; one fresh key is the key; a retired-only store
+    /// is I4's halt.
     #[test]
     fn the_device_key_is_picked_by_its_diagnosis() {
-        let fresh = KeyFile::new(crate::sheet::Seed::new([1; 32]), false, Some("fresh".into()), None);
-        let s = set(&[(9, true)]);
-        let (picked, resumed) = pick_device(vec![KeyFile::new(crate::sheet::Seed::new([1; 32]), false, None, None)], &s).unwrap();
+        let fresh = facts(1);
+        let (picked, resumed) = pick_device(vec![fresh.clone()], &set(&[(9, true)])).unwrap();
         assert_eq!((picked.fingerprint, resumed), (fresh.fingerprint, false));
+        let (picked, resumed) = pick_device(vec![fresh.clone(), facts(2)], &set(&[(9, true), (2, false)])).unwrap();
+        assert_eq!((picked.fingerprint, resumed), (facts(2).fingerprint, true), "the enrolled key resumes");
         let mut retired = set(&[(9, true)]);
         retired.retired.push(crate::board::RetiredKey { fingerprint: fresh.fingerprint, anchor: false });
-        let err = pick_device(vec![KeyFile::new(crate::sheet::Seed::new([1; 32]), false, None, None)], &retired).unwrap_err();
+        let err = pick_device(vec![fresh], &retired).unwrap_err();
         assert!(err.to_string().contains("I4 (AUTH-2.98)"), "{err}");
     }
 }

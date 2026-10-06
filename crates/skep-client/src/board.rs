@@ -9,7 +9,11 @@
 //! [`Board::authed`] (P28): the token in `Skepd-Session`, the request through
 //! the one `Dialer`, a `Skepd-Session: closed` on the answer's head returned
 //! as [`Authed::Closed`] for AUTH-5.66's `closed` arm — THE ONE READER of the
-//! death signal (wire.md §Sessions).
+//! death signal (wire.md §Sessions). A request that presents NO token cannot
+//! meet that signal, and the board settles it once: [`Board::guest`], every
+//! token-free read's door, and the token-free answers of `op_at` and
+//! `changes_key` HALT on it as a fault of the board or the transport, so no
+//! reader of a guest answer decides what a `closed` would mean.
 //!
 //! The three principal-free registry reads — `principal_prefix`,
 //! `effective_owner`, `key_set` — are `/op` frames carried as methods because
@@ -184,7 +188,8 @@ pub enum Authed {
 }
 
 /// `POST /op`'s answer: the response document — an ack or a `rejected` —
-/// or the death signal.
+/// or, under a token, the death signal; a token-free frame is read through
+/// [`Board::guest`], which answers the document alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer {
     Document(Value),
@@ -192,11 +197,13 @@ pub enum Answer {
 }
 
 /// `POST /op-at`'s answers (wire.md §Reading history): the position's own
-/// document, the three position faults, the reconstruction bound, the death
-/// signal.
+/// document, the three position faults, the reconstruction bound, and —
+/// under a token alone — the death signal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AtAnswer {
     Document(Value),
+    /// The death signal on a token-bearing read; a token-free read halts on
+    /// it instead (the module's doc).
     Closed,
     /// `410 history_reclaimed` — the position predates retained history;
     /// `floor` where known. An ANSWER, never an exit (`client.md` §2.3).
@@ -519,20 +526,23 @@ impl Board {
         }
     }
 
-    /// A token-free READ frame whose answer must be a document and not a
-    /// rejection — the registry reads' shape; a rejection is the board's
-    /// refusal.
-    fn read(&self, frame: &Value) -> Result<Value, Halt> {
+    /// A GUEST read — one frame presenting no token — answered as its
+    /// response document, a rejection included; the death signal, which no
+    /// tokenless request can meet, halts here (the module's doc).
+    pub fn guest(&self, frame: &Value) -> Result<Value, Halt> {
         match self.op(None, frame)? {
-            Answer::Closed => Err(Halt::face(
-                "a token-free read met the death signal",
-                "the board answered `Skepd-Session: closed` to a request that presented no token",
-                "this is a fault in the board or the transport, not in your keys; nothing was written",
-            )),
-            Answer::Document(v) => match Rejection::of(&v) {
-                Some(r) => Err(r.refused(&v)),
-                None => Ok(v),
-            },
+            Answer::Closed => Err(guest_closed()),
+            Answer::Document(v) => Ok(v),
+        }
+    }
+
+    /// A guest READ whose answer must be a document and not a rejection —
+    /// the registry reads' shape; a rejection is the board's refusal.
+    fn read(&self, frame: &Value) -> Result<Value, Halt> {
+        let v = self.guest(frame)?;
+        match Rejection::of(&v) {
+            Some(r) => Err(r.refused(&v)),
+            None => Ok(v),
         }
     }
 
@@ -543,6 +553,7 @@ impl Board {
         let body = json!({"at": at, "frame": frame});
         let req = Request::post("/op-at", body.to_string().into_bytes());
         match self.authed(token, req)? {
+            Authed::Closed(_) if token.is_none() => Err(guest_closed()),
             Authed::Closed(_) => Ok(AtAnswer::Closed),
             Authed::Response(resp) => {
                 let v: Value = serde_json::from_slice(&resp.body).unwrap_or(Value::Null);
@@ -565,6 +576,7 @@ impl Board {
         let since = at.saturating_sub(1);
         let req = Request::get(format!("/changes?since={since}&limit=1"));
         match self.authed(token, req)? {
+            Authed::Closed(_) if token.is_none() => Err(guest_closed()),
             Authed::Closed(_) => Ok(ChangeKey::NoEntry),
             Authed::Response(resp) => {
                 let v: Value = serde_json::from_slice(&resp.body).unwrap_or(Value::Null);
@@ -622,10 +634,7 @@ impl Board {
     /// `key_set(account)` (AUTH-6.18) at the head: the set, or
     /// `not_an_account` (AUTH-6.19) as an answer.
     pub fn key_set(&self, account: &str) -> Result<KeySetAnswer, Halt> {
-        match self.op(None, &frames::key_set(account))? {
-            Answer::Closed => Ok(KeySetAnswer::NotAnAccount),
-            Answer::Document(v) => key_set_of(&v),
-        }
+        key_set_of(&self.guest(&frames::key_set(account))?)
     }
 
     /// `key_set(account)` AS OF `at` (AUTH-2.94's base read, P12).
@@ -654,10 +663,7 @@ impl Board {
     }
 
     fn read_board_term(&self) -> Result<Option<BoardTerm>, Halt> {
-        let v = match self.op(None, &frames::retrieve_v(HEAD_MEMBER_1, 1, 1))? {
-            Answer::Closed => return Ok(None),
-            Answer::Document(v) => v,
-        };
+        let v = self.guest(&frames::retrieve_v(HEAD_MEMBER_1, 1, 1))?;
         if v["resp"].as_str() != Some("delivery") {
             return Ok(None);
         }
@@ -676,6 +682,16 @@ impl Board {
         };
         Ok(Some(BoardTerm { log_position: position, chain }))
     }
+}
+
+/// The death signal on a request that presented no token — no session's
+/// answer, so a fault of the board or the transport (wire.md §Sessions).
+fn guest_closed() -> Halt {
+    Halt::face(
+        "a token-free read met the death signal",
+        "the board answered `Skepd-Session: closed` to a request that presented no token",
+        "this is a fault in the board or the transport, not in your keys; nothing was written",
+    )
 }
 
 /// A `key_set` document decoded (AUTH-6.18), or `not_an_account`.
@@ -738,5 +754,42 @@ mod tests {
         assert_eq!(f["at"]["ordinal"], "1");
         let r = Rejection::of(&json!({"code":"credential_refused","detail":"content_session","disposition":"permanent","op":"make_link","resp":"rejected"})).unwrap();
         assert_eq!(r.token(), "credential_refused:content_session");
+    }
+
+    /// A board that answers every request with the death signal.
+    struct AlwaysClosed;
+
+    impl Dialer for AlwaysClosed {
+        fn exchange(&self, _origin: &Origin, _req: &Request) -> Result<Response, crate::dial::DialError> {
+            let headers = crate::dial::Headers(vec![("Skepd-Session".into(), "closed".into())]);
+            Ok(Response { status: 200, headers, body: br#"{"resp":"key_set","as_of":1,"enrolled":[],"retired":[]}"#.to_vec() })
+        }
+
+        fn stream(
+            &self,
+            _origin: &Origin,
+            _head: &crate::dial::RequestHead,
+            _body: &mut dyn std::io::Read,
+            _on_interim: &mut dyn FnMut(&crate::dial::Headers),
+        ) -> Result<crate::dial::StreamedResponse, crate::dial::DialError> {
+            unreachable!("no read of the board streams")
+        }
+    }
+
+    /// The death signal is the board's to settle: under a token it is the
+    /// session's answer; on a token-free read it is a fault, halted at the
+    /// door — never an empty set, an absent row or a missing head.
+    #[test]
+    fn a_guest_read_halts_on_the_death_signal_and_a_session_reads_it() {
+        let board = Board::new(Origin::parse("http://127.0.0.1:8642").unwrap(), Box::new(AlwaysClosed));
+        let token = Token::parse("9f3a6c21d4b8e07a5c1b2d4e6f708192").unwrap();
+        let fault = |h: Halt| assert!(h.to_string().contains("a token-free read met the death signal"), "{h}");
+        fault(board.guest(&frames::key_set("1.0.1")).unwrap_err());
+        fault(board.key_set("1.0.1").unwrap_err());
+        fault(board.board_term().unwrap_err());
+        fault(board.op_at(None, 3, &frames::key_set("1.0.1")).unwrap_err());
+        fault(board.changes_key(None, 3).unwrap_err());
+        assert_eq!(board.op(Some(&token), &frames::key_set("1.0.1")).unwrap(), Answer::Closed);
+        assert_eq!(board.op_at(Some(&token), 3, &frames::key_set("1.0.1")).unwrap(), AtAnswer::Closed);
     }
 }

@@ -24,7 +24,7 @@ pub enum Script {
     Answer(String),
     /// A yes-or-no.
     YesNo(bool),
-    /// A confirmation.
+    /// A confirmation: `true` types the row asked for, `false` types `no`.
     Confirm(bool),
     /// The re-type, read off the n-th sheet shown (the paper), counted
     /// from zero.
@@ -149,15 +149,6 @@ impl Person for Scripted {
         match self.next("destination")? {
             Script::Destination(p) => Ok(p),
             other => panic!("the script answered a destination with {other:?}"),
-        }
-    }
-
-    fn confirm(&mut self, m: Consent<Confirmation>) -> Result<bool, Abandoned> {
-        self.transcript.push(format!("CONSENT confirm: {}", m.0.text));
-        match self.next("confirm")? {
-            Script::Confirm(b) => Ok(b),
-            Script::Typed(t) => Ok(t == m.0.expected),
-            other => panic!("the script answered a confirmation with {other:?}"),
         }
     }
 

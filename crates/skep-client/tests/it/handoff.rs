@@ -9,9 +9,8 @@
 use skep_client::board::{KeySetAnswer, Scope};
 use skep_client::ceremony::accept::{accept, reprint, AcceptOptions};
 use skep_client::ceremony::first_session::{document_present, first_session, FirstSessionReads};
-use skep_client::ceremony::handoff::{handoff, HandoffOptions, HandoffOutcome};
+use skep_client::ceremony::handoff::{handoff, Grade, HandoffOptions, HandoffOutcome};
 use skep_client::ceremony::handshake::{handshake, Site};
-use skep_client::ceremony::deposit::Grade;
 use skep_client::derive::records::{credential_records, Hand};
 use skep_client::derive::principal_of;
 use skep_client::person::scripted::{Script, Scripted};
@@ -148,7 +147,7 @@ fn the_door_delegates_idempotently_the_recipient_accepts_the_giver_seeds_and_bin
     assert!(reads.mint_owed() && reads.setup_owed());
     let session = handshake(&board, Scope::Content, &device.signer(), seat, Site::Tail).unwrap();
     let done = first_session(&board, &reads, &session, &device.signer(), Some(&recipient)).unwrap();
-    session.close(&board).unwrap();
+    session.close().unwrap();
     assert!(done.minted_home && done.space_seat.is_some() && done.minted_space_home);
     assert!(document_present(&board, "1.0.1.2.0.1").unwrap());
     assert!(principal_of(&board, "1.0.1.2.1").unwrap().is_some(), "inc(X.2, 1) seated");
@@ -210,7 +209,7 @@ fn a_depth_two_genesis_is_homed_in_the_giving_accounts_doc_one_and_the_decline_a
     assert_eq!(set.enrolled.len(), 1);
     // The recipient signs in at the depth-2 account.
     let device = key_file(&recipient, &taken.device);
-    handshake(&board, Scope::Content, &device.signer(), seat31, Site::Tail).expect("the recipient's session").close(&board).unwrap();
+    handshake(&board, Scope::Content, &device.signer(), seat31, Site::Tail).expect("the recipient's session").close().unwrap();
 
     // A DEVICE-GRADE giver: an anchorless hosted account hands off a
     // subdivision with its device key alone.
@@ -228,7 +227,7 @@ fn a_depth_two_genesis_is_homed_in_the_giving_accounts_doc_one_and_the_decline_a
     let reads = FirstSessionReads::take(&board2, "1.0.1", &fp2, Some(&giver2), &board2.dialed).unwrap();
     let setup = handshake(&board2, Scope::Content, &lone, 1, Site::Tail).unwrap();
     first_session(&board2, &reads, &setup, &lone, Some(&giver2)).unwrap();
-    setup.close(&board2).unwrap();
+    setup.close().unwrap();
     let mut p = Scripted::new(vec![]);
     let HandoffOutcome::Delegated { seat: s2, .. } = handoff(&board2, &giver2, &mut p, &give("1.0.1.2", None, None)).unwrap_or_else(|h| panic!("{h}")) else { panic!() };
     let recipient2 = FileStore::open(dir2.path().join("recipient"));

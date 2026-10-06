@@ -13,9 +13,8 @@ use skep_client::ceremony::claim::{self, ClaimOutcome, NotebookOptions};
 use skep_client::ceremony::enroll::{enroll, EnrollOptions};
 use skep_client::dial::PlainHttp;
 use skep_client::person::scripted::{Script, Scripted};
-use skep_client::sheet::{KeyFile, Seed};
-use skep_client::sign::fresh_seed;
-use skep_client::store::{FileStore, KeyStore, Label};
+use skep_client::sheet::{KeyFile, Label, Seed};
+use skep_client::store::{FileStore, KeyStore};
 use skep_client::Origin;
 use skep_identity::parse_enroll;
 
@@ -195,8 +194,8 @@ fn handoff_beat_a_prints_the_address_twice_and_reprint_composes_from_the_files()
     let recipient = dir.path().join("recipient");
     let r = skep(&["keygen", "--label", "tablet", "--dir", s(&recipient)], &[], None);
     assert_eq!(r.code, 0);
-    let a = KeyFile::new(Seed::new(fresh_seed()), true, Some("sheet a".into()), None);
-    let b = KeyFile::new(Seed::new(fresh_seed()), true, Some("sheet b".into()), None);
+    let a = KeyFile::new(Seed::fresh(), true, Some("sheet a".into()), None);
+    let b = KeyFile::new(Seed::fresh(), true, Some("sheet b".into()), None);
     let (pa, pb) = (dir.path().join("a.skep-key"), dir.path().join("b.skep-key"));
     std::fs::write(&pa, a.to_json()).unwrap();
     std::fs::write(&pb, b.to_json()).unwrap();

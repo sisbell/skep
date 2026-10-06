@@ -10,7 +10,7 @@ use skep_identity::Fingerprint;
 use super::foreign_claimant;
 use crate::address::doc_1_of;
 use crate::board::{acked_addr, frames, Answer, Board, Opened, Rejection, SessionBody, Token, T_CLAIM};
-use crate::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome, Grade};
+use crate::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome};
 use crate::ceremony::first_session::document_present;
 use crate::halt::Halt;
 
@@ -111,7 +111,7 @@ pub fn hosted(board: &Board, payload: &[u8], principal: u64) -> Result<HostedOut
     let outcome = deposit(
         board,
         &owner,
-        &Deposit { home: &home, subject: &account, kind: DepositKind::EnrollVerbatim(text.clone()), grade: Grade::Anchor, hand: None, id: "hosted.genesis" },
+        &Deposit { home: &home, subject: &account, kind: DepositKind::EnrollVerbatim(text.clone()), hand: None, id: "hosted.genesis" },
     )?;
     if let DepositOutcome::Committed { reason } = outcome {
         log.push(format!("the genesis stands: {reason}"));

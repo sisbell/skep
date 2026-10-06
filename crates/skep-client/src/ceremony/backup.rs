@@ -24,9 +24,9 @@ use skep_signature::HybridSigner;
 use super::say;
 use crate::halt::Halt;
 use crate::person::{Abandoned, Destination, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet};
-use crate::sheet::{Facts, KeyFile, Seed};
-use crate::sign::{fresh_bytes, fresh_seed, Signer};
-use crate::store::{FileStore, Label};
+use crate::sheet::{Facts, KeyFile, Label, Seed};
+use crate::sign::{fresh_bytes, Signer};
+use crate::store::FileStore;
 
 /// The venue the moment runs at — the copy is keyed by it (P7).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,19 +253,28 @@ pub fn backup_moment(person: &mut dyn Person, venue: &Venue, opts: &BackupOption
             None => say(person, "§4.1 S3", "the moment re-runs from step 1 under a fresh pair"),
         }
     }
+    // The command that re-runs the moment is its VENUE's: the claim, the
+    // door-side form, the recipient's beat. The LOSS arm stops at the DROP and
+    // never reads back here (its re-import is L5's), so it never exhausts.
+    let rerun = match venue {
+        Venue::Notebook { .. } => "`skep claim`",
+        Venue::DoorSide => "`skep keygen --anchors`",
+        Venue::Handoff { .. } => "`skep accept`",
+        Venue::LossArm { .. } => "`skep recover --anchor-lost`",
+    };
     Err(Halt::face(
         "the backup moment could not complete",
         "three runs in a row failed their read-back",
-        "check the destination media and re-run `skep claim`; every artifact written names no live pair and opens nothing",
+        format!("check the destination media and re-run {rerun}; every artifact written names no live pair and opens nothing"),
     ))
 }
 
 /// Steps 3–10 for one pair; `None` where the file path's read-back failed
 /// and the moment re-runs.
 fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels: &[Label], facts: Option<&Facts>, attempt: usize) -> Result<Option<BackupOutcome>, Halt> {
-    // Step 3: generate the pair.
-    let seeds: Vec<[u8; 32]> = (0..2).map(|_| fresh_seed()).collect();
-    let mut files: Vec<KeyFile> = seeds.iter().zip(labels).map(|(s, l)| KeyFile::new(Seed::new(*s), true, Some(l.as_str().to_string()), facts)).collect();
+    // Step 3: generate the pair, each seed born in its file's own zeroing
+    // value — no copy of it outlives step 5's DROP.
+    let mut files: Vec<KeyFile> = labels.iter().map(|l| KeyFile::new(Seed::fresh(), true, Some(l.as_str().to_string()), facts)).collect();
     let publics: Vec<(PublicKey, Fingerprint)> = files.iter().map(|f| (f.public.clone(), f.fingerprint)).collect();
     // Step 4: EXPORT — the file, each to its own destination.
     let mut paths: Vec<PathBuf> = Vec::new();
@@ -424,8 +433,8 @@ fn retype_from_print(person: &mut dyn Person, label: &Label, i: usize, fp: &Fing
         match typed {
             Retyped::Declined => return Ok(None),
             Retyped::Typed { seed_hex, fingerprint_prefix } => {
-                let seed = crate::hex::decode32(seed_hex.trim());
-                let signer = seed.map(|s| crate::sign::signer_from_seed(&s));
+                let seed = Seed::from_hex(seed_hex.trim());
+                let signer = seed.as_ref().map(|s| crate::sign::signer_from_seed(s.bytes()));
                 let derived = signer.as_ref().map(Signer::fingerprint);
                 let prefix_ok = fingerprint_prefix.len() >= 8 && fp.to_hex().starts_with(fingerprint_prefix.trim());
                 if derived == Some(*fp) && prefix_ok {

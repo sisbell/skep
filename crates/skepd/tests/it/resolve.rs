@@ -26,7 +26,6 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use common::*;
-use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
 use skep_address::Address;
 use skep_identity::{canonical_record, Fingerprint};
@@ -36,6 +35,7 @@ use skep_resolve::{
     NameResolver, Opened, Origin, RealmId, Refusal, Resolution, RootHint, Term, Transport,
     TransportError, Transports, Unreachable, Verdict,
 };
+use skep_signature::Ed25519SigningKey as SigningKey;
 
 /// The orgs' principals, above every other suite's ids; an org's key seed is
 /// its own number.

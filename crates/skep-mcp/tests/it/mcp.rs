@@ -14,10 +14,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::Duration;
 
-use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
 use skep_identity::{encode_enroll, framed, Enrollment, PublicKey, SESSION_TAG};
-use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
+use skep_signature::{Ed25519SigningKey as SigningKey, HybridSigner, TAG_MLDSA65_ED25519};
 use skepd::{serve, Daemon, Skepd, DEFAULT_WORKERS};
 
 // ── a self-owned temp dir (kept dependency-free) ────────────────────────

@@ -1427,16 +1427,37 @@ Registration/residence: `home_not_registered`, `doc_not_registered`,
 `source_not_registered`, `parent_not_registered`, `not_registered`,
 `original_not_resident`, `endpoint_not_resident`.
 
-Namespace/authority: `not_owner`, `not_an_account`, `gate`,
-`delegator_unknown`, `duplicate_id`, `not_ancestor`, `not_authorized`,
-`not_account_tier`, `not_top_down`, `not_next_form`, `not_valid`,
-`not_node`, `too_deep`, `not_descendant_of_bootstrap`, `not_fresh`.
+Namespace/authority: `not_owner`, `not_an_account`, `gate` (M3's inc
+gate, which every op that mints an address lowers — create-new-document,
+fork, insert, version, publish and the five link writes — with a fixed
+`detail` naming an operator condition, a corrupted frontier: M3
+documents the gate as defensive, so no well-formed request against a
+healthy store reaches it), `delegator_unknown`, `duplicate_id`,
+`not_ancestor`, `not_authorized`, `not_account_tier` (delegate: the new
+prefix is not account-tier — its zero component must be exactly one),
+`not_top_down` (delegate: a principal already sits strictly under the
+new prefix), `not_next_form`, `not_valid` (delegate: the new prefix is
+not T4-valid; register-node: the address is not), `not_node`,
+`too_deep`, `not_descendant_of_bootstrap` (register-node: the address is
+not a descendant of the bootstrap node, 1), `not_fresh`.
 
-Arrangement: `empty_content`, `content`, `empty_source`,
-`not_ordinal_vspan`, `dangling_source`, `empty_result`, `not_arranged`,
-`out_of_bounds`, `empty_width`, `bad_cut_count`, `not_ascending`,
-`empty_content_subspace`, `not_a_principal`, `node_tier_cross_owner`,
-`not_home_link`, `already_seated`, `not_content_subspace`,
+Arrangement: `empty_content`, `content` (insert and publish: M4 refused
+the content write because a value is already stored at the address M3
+just minted — an upstream invariant no sound store breaks, so, like
+`gate`, a defence rather than a well-formed request's refusal),
+`empty_source`, `not_ordinal_vspan`, `dangling_source`, `empty_result`
+(copy: the net placement is empty once the specs are clipped),
+`not_arranged` (delete: the position's ordinal names no arranged content
+position), `out_of_bounds`, `empty_width`, `bad_cut_count`,
+`not_ascending`, `empty_content_subspace` (rearrange: the document's
+content subspace is empty), `not_a_principal` (version: the caller's id
+names no principal), `node_tier_cross_owner` (version of a document the
+caller does not own: a cross-owner version takes an account-tier forker,
+never a node-tier one), `not_home_link`, `already_seated` (both
+make-link's seat step, with `not_link_address` below: the link it seats
+in the home's link subspace is not that home's own, or is seated there
+already — defences on a link the same transaction just minted there,
+never a well-formed request's refusal), `not_content_subspace`,
 `published_target`, `private_version_of_published`,
 `private_source_versionless` (the version-chain model's three write-path
 refusals — §The version-chain refusals below), and the publish shot's
@@ -1446,8 +1467,11 @@ source gate, and every READ's document-argument consult
 reorder, carrying `site.addr` (the document) and never a `detail` —
 `bad_run`, `base_not_in_chain`, `base_superseded`,
 `base_extent_too_large`; and three more of M5's — `not_link_address`
-(the seat op's link argument names a full element position rather
-than a link address; M5 §8), `too_many_runs` (a placement past M5's
+(make-link's seat step, M5 §8: the address it is to seat is not a full
+element position in the home's link subspace — with `not_home_link` and
+`already_seated` above, a defence on the link the same transaction just
+minted, never a well-formed request's refusal), `too_many_runs` (a
+placement past M5's
 `MAX_PLACED_RUNS` = 65536 runs — permanent; the publish table below
 carries it too) and `too_many_values` (a shot whose draft-native runs
 re-insert more than M5's `MAX_REINSERTED_VALUES` = 131072 values, their
@@ -1456,7 +1480,9 @@ and ahead of existence; permanent, a shot cannot be split to meet it;
 the publish table carries it too).
 
 Links: `ill_formed_spec`, `empty_type_resolution`, `shape_violation`,
-`retraction_class`, `non_address_denoting_type`, `bad_target`,
+`retraction_class` (make-link and emit: the type resolves into the
+retraction class, which only nullify writes — M7's K ≁ R fence),
+`non_address_denoting_type`, `bad_target`,
 `self_supersession`, `ill_formed_successor`, `dc_violation`,
 `slot_too_large` (a slot past either of M7's two per-slot budgets: more
 than `MAX_SLOT_SPANS` = 4096 spans, in either form — the three slots of a
@@ -1499,9 +1525,12 @@ read past M8's run budget `MAX_IMAGE_RUNS` = 4096, or past the product
 its own join is held to — each read counting the runs its own work
 multiplies: on the region family — image, find-links-v, count-v,
 window-v, retrieve-endsets — the run-list walk the region asks of the
-arrangement past `MAX_IMAGE_RUNS`² = 16777216 steps, or the runs the
-region's spans could yield, priced ahead of each span's resolution, past
-4096; on the project read, the reading surface's content runs past 4096,
+arrangement past `MAX_IMAGE_RUNS`² = 16777216 steps, held ahead of the
+first pull, or the runs its spans resolve, summed across the spans and
+counted as M5's lazy resolution pulls them — the run past the budget
+refused as it is pulled, before the next is built, so no region
+materializes a fragmented surface whole — past 4096; on the project
+read, the reading surface's content runs past 4096,
 or the coverage × run product — the answer's pre-normalization size —
 past `MAX_ANSWER_SPANS` = 65536; on the discoverable-from read, the
 reading surface's content and link runs past 4096, or the link's whole
@@ -2139,7 +2168,11 @@ flagless mint — the home — is outside the publish class and takes no
 principal `new_id` as its owner, atomically. Obtain `new_prefix` from
 `next_account_prefix`; only the owner of the parent may delegate under it. A
 principal prefix names a delegation path, so it is capped at 64 components —
-deeper is `too_deep`. → `ack_addr` (the minted account address).
+deeper is `too_deep`. → `ack_addr` (the minted account address). A
+`new_prefix` that is not T4-valid is `not_valid`; one that is not
+account-tier (its zero component must be exactly one) is
+`not_account_tier`; one with a principal already registered strictly
+under it, `not_top_down`.
 
 `new_id` is bounded at the parse: a value above **2^53 − 1**
 (`9007199254740991`) is refused as any malformed frame is — the
@@ -2161,7 +2194,9 @@ random draws it inside the range — 53 random bits, never a full `u64`.
 **`register_node`** — admit a provisioned node address (bootstrap
 provisioning; the address is supplied, not minted). A node address names a
 provisioning path, so it is capped at 32 components — deeper is `too_deep`.
-→ `ack_addr`.
+→ `ack_addr`. An `addr` that is not T4-valid is `not_valid`; one that is
+not a descendant of the bootstrap node `1` is
+`not_descendant_of_bootstrap`.
 
 <!-- wire: request register_node -->
 ```json
@@ -2312,8 +2347,10 @@ declared deposit into the chain lands in the head member's arrangement
 
 **`insert`** — insert content into `doc` at V-position `at`; each element
 of `values` is a §Content values write form. → `ack_addr` (the first
-minted I-address). This example inserts **eleven single-byte values at
-eleven positions** — the string form is per-byte:
+minted I-address). `content` and `gate` are defences (§Rejection codes):
+M4's no-overwrite and M3's inc gate, which no well-formed request
+against a healthy store reaches. This example inserts **eleven
+single-byte values at eleven positions** — the string form is per-byte:
 
 <!-- wire: request insert -->
 ```json
@@ -2386,6 +2423,7 @@ second position:
 ```
 
 **`delete`** — remove `width` positions of `doc` starting at `p`. → `ack`.
+A `p` whose ordinal names no arranged content position is `not_arranged`.
 
 <!-- wire: request delete -->
 ```json
@@ -2393,7 +2431,8 @@ second position:
 ```
 
 **`copy`** — transclude the given source spans into `doc` at `at` (shared
-identity, not copied bytes). → `ack`.
+identity, not copied bytes). → `ack`. A net placement that is empty once
+the specs are clipped is `empty_result`.
 
 <!-- wire: request copy -->
 ```json
@@ -2401,7 +2440,8 @@ identity, not copied bytes). → `ack`.
 ```
 
 **`rearrange`** — pivot/swap `doc`'s content about the cut positions.
-→ `ack`.
+→ `ack`. A `doc` whose content subspace is empty is
+`empty_content_subspace`.
 
 <!-- wire: request rearrange -->
 ```json
@@ -2409,7 +2449,10 @@ identity, not copied bytes). → `ack`.
 ```
 
 **`version`** — the content-sharing, copy-on-write fork of `d_src`.
-→ `ack_addr` (the new version's address).
+→ `ack_addr` (the new version's address). A caller id that names no
+principal is `not_a_principal`; a cross-owner `version` by a node-tier
+principal is `node_tier_cross_owner` — an account-tier forker is
+required.
 
 <!-- wire: request version -->
 ```json
@@ -2498,7 +2541,8 @@ terms and its address, with no request in hand (§Namespace,
 its own commit left no longer the head, so the store's rule mints that
 base's DAUGHTER, never the trunk's next: the document's current text does
 not move.
-→ `ack_addr` (the member's address). This example publishes a draft
+→ `ack_addr` (the member's address). `content` and `gate` are defences,
+as at `insert` (§Rejection codes). This example publishes a draft
 staged off the second member: the edition's own three positions by
 reference and the draft's two as fresh identity:
 
@@ -3441,7 +3485,12 @@ path and carries no `attest` — the record's own `sig` covers it, and
 above the claim the daemon verifies that `sig` at this very deposit
 (§The claim ceremony and credentials) — and no `replaces` member
 (`replaces_not_credential`, §Credential refusals).
-→ `ack_addr` (the link's address).
+→ `ack_addr` (the link's address). A `ty` that resolves into the
+retraction class is `retraction_class` — retraction writes only through
+`nullify`. The seat step's `not_link_address`, `not_home_link` and
+`already_seated`, and M3's `gate`, are defences on the link the
+transaction just minted, never a well-formed request's refusal
+(§Rejection codes).
 
 <!-- wire: request make_link -->
 ```json
@@ -3481,7 +3530,9 @@ re-emitting an existing tuple acks the EARLIEST incumbent the caller's
 class can read — an incumbent homed in a document the caller may not
 read is invisible to the gate, so the re-emit mints afresh, and
 value-identical tuples may coexist across the visibility boundary.
-→ `ack_addr`. The example retires `1.0.1.0.2` under the shipped Retired
+→ `ack_addr`. A `ty` that resolves into the retraction class is
+`retraction_class` — retraction writes only through `nullify`. The
+example retires `1.0.1.0.2` under the shipped Retired
 class at its reserved ghost tumbler `1.1.0.1.0.1.0.1.3`: Unary, so `to`
 is empty. On a CLAIMED board an `emit` into a published home carries the
 optional top-level `attest` member (signed ops): the entry signature over
@@ -4569,15 +4620,19 @@ re-chained journal cannot pass while the byte compare of an untouched
 in is a private document of the system account, masked at every class.
 
 **`GET /`** (only in builds with the `client` feature — **default-off**
-by ruling (AUTH-4.57(e); R89, the client rule): the served
-page ACTS — it generates keys and opens sessions — so the safe failure
-is a notebook build that forgot the flag serving no UI, never a hosted
-image serving a key-generating page by omission; notebook packagings
-opt in deliberately) → `200 text/html`: the authoring client, one
-self-contained HTML file embedded in the binary at build. There are no
-other static routes and no asset pipeline — the client is one file by
-design. Without the feature, `/` is an unknown path (the usual 404
-shape).
+by ruling (AUTH-4.57(e); R89, the client rule): a board-served page is
+never an acting client — it is the GUEST READER, which generates no
+key, opens no session and runs no ceremony; the acting client is the
+holder's own installed frontend. So the safe failure is a notebook build
+that forgot the flag serving no page, never a hosted image serving a
+page by omission; notebook packagings opt in deliberately) → `200
+text/html`: the embedded reader, one self-contained HTML file embedded
+in the binary at build. It presents no token on any route it dials, so
+it reads the published world as the guest — read frames to `POST /op`
+and `POST /op-at`, the head off `GET /health` and `GET /events` — and
+acts on nothing. There are no other static routes and no asset pipeline
+— the reader is one file by design. Without the feature, `/` is an
+unknown path (the usual 404 shape).
 
 **`GET /dump`** (only in builds with the `observe` feature; absent
 otherwise, so a plain build answers 404) → `200 text/plain`: the engine's

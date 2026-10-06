@@ -25,13 +25,14 @@
 use crate::common;
 
 use common::*;
-use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde_json::Value;
 use skep_identity::{
     encode_enroll, encode_retire, Enrollment, Fingerprint, PublicKey, ALG_FNDSA512_PREVIEW_ED25519,
     ALG_MLDSA65_ED25519, MAX_RECORD_BYTES,
 };
-use skep_signature::HybridSigner;
+use skep_signature::{
+    Ed25519SigningKey as SigningKey, Ed25519VerifyingKey as VerifyingKey, HybridSigner,
+};
 
 mod blocked_prefixes;
 mod credentials;

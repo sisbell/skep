@@ -72,8 +72,10 @@
 //!   `sign`, and on the crate's surface only as a test hook.
 //! * `signer.rs` — keygen from a seed and signing, per tag (`HybridSigner`),
 //!   under `sign`, which skepd leaves off: used by the suites' test signer
-//!   and by the goldens that pin each tag's rule. Its two hooks, the Ed25519
-//!   key and `sign_with_rng`, sit beside the private fields they read, each
+//!   and by the goldens that pin each tag's rule. Its hooks — the Ed25519
+//!   half and `sign_with_rng`, beside the private fields they read, and the
+//!   suites' classical pair, `Ed25519SigningKey` and `Ed25519VerifyingKey`,
+//!   the one door a suite has to `ed25519-dalek`'s key types — are each
 //!   gated on `test-hooks`.
 //! * `hooks.rs` — the fixtures' other hooks, the seeded stream and the widths
 //!   the sizes pin reads; under `test-hooks`, which implies `sign`.
@@ -104,6 +106,12 @@ pub use kdf::{derive_half_seeds, HalfSeeds};
 #[cfg(feature = "test-hooks")]
 #[doc(hidden)]
 pub use hooks::{pq_widths, PqWidths, SeededRng06};
+/// TEST HOOK (the same standing) — the suites' classical pair: the seed
+/// carrier the fixtures key each principal with and the point decode they
+/// find an undecodable key by, so no suite links `ed25519-dalek` itself.
+#[cfg(feature = "test-hooks")]
+#[doc(hidden)]
+pub use signer::{Ed25519SigningKey, Ed25519VerifyingKey};
 
 /// The marker tag of the PRODUCTION row, `mldsa65-ed25519` (ML-DSA-65 +
 /// Ed25519).
@@ -163,6 +171,11 @@ const _: fn() = || {
     assert_send_sync::<hooks::SeededRng06>();
     #[cfg(feature = "test-hooks")]
     assert_send_sync::<hooks::PqWidths>();
+    // The suites' seed carriers, shared across the threads a fixture spawns.
+    #[cfg(feature = "test-hooks")]
+    assert_send_sync::<signer::Ed25519SigningKey>();
+    #[cfg(feature = "test-hooks")]
+    assert_send_sync::<signer::Ed25519VerifyingKey>();
 };
 
 #[cfg(test)]

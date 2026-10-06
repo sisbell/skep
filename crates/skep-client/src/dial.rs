@@ -601,6 +601,33 @@ mod tests {
         assert_eq!(read_to_close(&mut &[7u8; 11][..], 10).unwrap(), None);
     }
 
+    /// One whole request off `s`: the head to its blank line, then exactly
+    /// the body its `Content-Length` declares. The dialer writes the head
+    /// and the body in two calls, so a single `read` may answer with the
+    /// head alone and the body still in flight.
+    fn read_request(s: &mut TcpStream) -> String {
+        let mut got = Vec::new();
+        let mut buf = [0u8; 4096];
+        let body_at = loop {
+            let n = s.read(&mut buf).unwrap();
+            assert!(n > 0, "the peer closed before the head's blank line");
+            got.extend_from_slice(&buf[..n]);
+            if let Some(i) = got.windows(4).position(|w| w == b"\r\n\r\n") {
+                break i + 4;
+            }
+        };
+        let declared: usize = String::from_utf8_lossy(&got[..body_at])
+            .lines()
+            .find_map(|l| l.strip_prefix("Content-Length: ").map(|v| v.trim().parse().unwrap()))
+            .unwrap_or(0);
+        while got.len() < body_at + declared {
+            let n = s.read(&mut buf).unwrap();
+            assert!(n > 0, "the peer closed before the declared body was in");
+            got.extend_from_slice(&buf[..n]);
+        }
+        String::from_utf8_lossy(&got).to_string()
+    }
+
     /// One request, one connection, `Connection: close`, the `Host` the
     /// authority with brackets kept, no redirect followed — against a
     /// listener that answers a redirect and a short body.
@@ -615,9 +642,7 @@ mod tests {
                 "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n{}".to_string(),
             ] {
                 let (mut s, _) = listener.accept().unwrap();
-                let mut buf = vec![0u8; 4096];
-                let n = s.read(&mut buf).unwrap();
-                heads.push(String::from_utf8_lossy(&buf[..n]).to_string());
+                heads.push(read_request(&mut s));
                 s.write_all(answer.as_bytes()).unwrap();
             }
             heads

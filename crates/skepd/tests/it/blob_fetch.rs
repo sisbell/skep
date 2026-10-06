@@ -1,5 +1,5 @@
 //! MEDIA LANE D — THE FETCH over the wire (`media.md` Op inventory 3; the
-//! register M-I2 (a)–(d), (g), M-I3 (b), M-I7 (a), (b); the ruled v1 cut,
+//! register M-I2 (a)–(d), (g), M-I3 (b), M-I5 (f), M-I7 (a); the ruled v1 cut,
 //! whole-file serving): `GET /blob?i=` and `HEAD /blob?i=` serve a picture's
 //! whole file by the I-address of its cell, gated by the read's own
 //! predicate, checked against the cell before the first byte, under a permit
@@ -9,7 +9,7 @@
 //! Each test names the register's clause it holds: M-I2 (a) GATED BY THE
 //! READ's PREDICATE; M-I2 (g) THE ENTITLEMENT RE-RESOLVED MID-STREAM; M-I3
 //! (b) THE BYTES SERVED ARE THE BYTES THE CELL NAMES; M-I7 (a) THE BYTES
-//! INERT AT THE FETCH; M-I7 (b) BOUNDED BY A POOL, NEVER A QUEUE.
+//! INERT AT THE FETCH; M-I5 (f) BOUNDED BY A POOL, NEVER A QUEUE.
 
 use std::path::Path;
 use std::time::Duration;
@@ -341,7 +341,7 @@ fn a_blind_cell_is_named_and_an_unknown_schema_halts() {
     sd.shutdown();
 }
 
-/// M-I7 (b) — BOUNDED BY A POOL: with every fetch permit held through the
+/// M-I5 (f) — BOUNDED BY A POOL: with every fetch permit held through the
 /// test hook, a fetch of a published picture — past its gate and
 /// classification — is `503 fetch_busy`, retry-class; a permit released, it
 /// is served.

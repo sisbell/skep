@@ -4,11 +4,14 @@
 //! preview draws through: the exact bytes its keygen is fed (the KDF's half
 //! seed) and the OS draw a signature's seed comes from. Compiled under
 //! `sign`, which skepd leaves off, so the daemon's build holds none of it.
-//! The signer's own two test hooks sit here, beside the private fields they
-//! read, each gated on `test-hooks`.
+//! The signer's own test hooks sit here — the two beside the private fields
+//! they read, and the suites' classical pair, [`Ed25519SigningKey`] and
+//! [`Ed25519VerifyingKey`] — each gated on `test-hooks`.
 
 use std::fmt;
 
+#[cfg(feature = "test-hooks")]
+use ed25519_dalek::VerifyingKey as EdVerifyingKey;
 use ed25519_dalek::{Signer as _, SigningKey as EdSigningKey};
 use fn_dsa::{
     signature_size, sign_key_size, vrfy_key_size, KeyPairGenerator, KeyPairGeneratorStandard,
@@ -16,6 +19,7 @@ use fn_dsa::{
 };
 use ml_dsa::{Keypair as _, MlDsa65, Signer as _};
 use skep_identity::{PublicKey, SigAlgRow};
+use zeroize::Zeroizing;
 
 use crate::kdf::derive_half_seeds;
 use crate::Rule;
@@ -97,8 +101,9 @@ enum PqSigner {
     /// its `f`, `g`, `F` and the hashed verifying key, which
     /// `sizes_and_timings_per_tag` pins), decoded afresh for each signature
     /// because the crate's `sign` takes `&mut self`. The decoded key wipes
-    /// itself on drop; these stored bytes do not (see [`HybridSigner`]).
-    FnDsa512Preview(Vec<u8>),
+    /// itself on drop (`fn-dsa`'s own), and so do these stored bytes
+    /// (`Zeroizing`; see [`HybridSigner`]).
+    FnDsa512Preview(Zeroizing<Vec<u8>>),
 }
 
 impl PqSigner {
@@ -120,7 +125,7 @@ impl PqSigner {
             }
             Rule::FnDsa512PreviewEd25519 => {
                 let mut rng = ExactBytes { bytes: half_seed, drawn: 0 };
-                let mut sk = vec![0u8; sign_key_size(FN_DSA_LOGN_512)];
+                let mut sk = Zeroizing::new(vec![0u8; sign_key_size(FN_DSA_LOGN_512)]);
                 let mut pk = vec![0u8; vrfy_key_size(FN_DSA_LOGN_512)];
                 KeyPairGeneratorStandard::default().keygen(
                     FN_DSA_LOGN_512,
@@ -160,15 +165,20 @@ impl PqSigner {
 /// one concatenated raw value (wire.md). Holds private-key material and
 /// prints none of it.
 ///
-/// Of the key material it holds, dropping it wipes the Ed25519 key alone
-/// (`ed25519-dalek`'s default `zeroize` feature). The ML-DSA-65 key
-/// (`ml-dsa` is built without its `zeroize` feature) and the stored
-/// FN-DSA-512 encoding are released without being overwritten, and so are
-/// the half seeds [`HybridSigner::from_seed`] derives and drops, and the
-/// `hkdf` state it derives them through — keyed by a PRK from which every
-/// tag's half seeds derive, so as good as the seed itself. This crate
-/// overwrites no key material itself: what is wiped, its libraries' own
-/// types wipe.
+/// DROPPING IT WIPES EVERY KEY IT HOLDS: the Ed25519 key (`ed25519-dalek`'s
+/// default `zeroize` feature); the ML-DSA-65 key — ξ and the expanded key
+/// beside it (`ml-dsa`'s `zeroize` feature); and the stored FN-DSA-512
+/// encoding (a `Zeroizing` vector — the key each tag-3 signature decodes
+/// from it wipes itself, `fn-dsa`'s own). The half seeds
+/// [`HybridSigner::from_seed`] derives are wiped as they go out of scope
+/// inside it, once each half has been handed to its keygen (`HalfSeeds`).
+/// WHAT IS NOT WIPED, by name: the `hkdf` state the KDF derives each half
+/// seed through — `hmac` 0.12's HMAC core keyed by the PRK, which neither
+/// `hkdf` 0.12 nor `hmac` 0.12 overwrites and this crate cannot reach; it
+/// lives for one derivation and never past `from_seed`. And the caveat
+/// every wipe carries: a copy the compiler makes when a value is moved is
+/// beyond any crate's reach. The signer's wiping test holds this paragraph
+/// to the build, type by type.
 pub struct HybridSigner {
     ed: EdSigningKey,
     pq: PqSigner,
@@ -221,13 +231,13 @@ impl HybridSigner {
     /// fixtures check that it differs from the raw seed and matches the
     /// enrolled key's Ed25519 half, and the suites' negative vector — a
     /// 64-byte Ed25519-only `sig`, the classical layout no served board
-    /// admits — is made with it. Hidden because its type is
-    /// `ed25519-dalek`'s: a caller holding one names that crate at this
-    /// crate's version.
+    /// admits — is made with it. Handed out as the suites' own
+    /// [`Ed25519SigningKey`] — a copy of the half, wiped on drop as the
+    /// original is — so no caller names `ed25519-dalek`'s type.
     #[cfg(feature = "test-hooks")]
     #[doc(hidden)]
-    pub fn ed25519_signing_key(&self) -> &EdSigningKey {
-        &self.ed
+    pub fn ed25519_signing_key(&self) -> Ed25519SigningKey {
+        Ed25519SigningKey(self.ed.clone())
     }
 
     /// TEST HOOK (the same standing) — [`HybridSigner::sign`] with tag 3's
@@ -275,6 +285,88 @@ impl HybridSigner {
     }
 }
 
+/// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a stable
+/// API) — THE SUITES' SEED CARRIER: an Ed25519 signing key from 32 bytes.
+/// The fixtures hold one per principal and read its bytes back as the seed
+/// of that principal's hybrid key ([`HybridSigner::from_seed`] over
+/// [`Ed25519SigningKey::to_bytes`]); [`HybridSigner::ed25519_signing_key`]
+/// hands the hybrid's derived Ed25519 half out as one too. It signs the
+/// 64-byte classical blob — the suites' one negative vector, the
+/// Ed25519-only layout no served board admits — and names its verifying
+/// key, so a suite names this crate and never `ed25519-dalek`, which this
+/// crate alone links. Private-key material: prints none of itself, wiped on
+/// drop (`ed25519-dalek`'s own).
+#[cfg(feature = "test-hooks")]
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct Ed25519SigningKey(EdSigningKey);
+
+#[cfg(feature = "test-hooks")]
+impl Ed25519SigningKey {
+    /// The key `bytes` seed (`ed25519-dalek`'s `SigningKey::from_bytes`).
+    pub fn from_bytes(bytes: &[u8; 32]) -> Ed25519SigningKey {
+        Ed25519SigningKey(EdSigningKey::from_bytes(bytes))
+    }
+
+    /// The seed back — the 32 bytes the key was made from.
+    pub fn to_bytes(&self) -> [u8; 32] {
+        self.0.to_bytes()
+    }
+
+    /// The classical Ed25519 signature over `msg`: 64 bytes, this half
+    /// alone — never a hybrid blob, which [`HybridSigner::sign`] makes.
+    pub fn sign(&self, msg: &[u8]) -> [u8; 64] {
+        self.0.sign(msg).to_bytes()
+    }
+
+    /// This key's verifying key.
+    pub fn verifying_key(&self) -> Ed25519VerifyingKey {
+        Ed25519VerifyingKey(self.0.verifying_key())
+    }
+}
+
+#[cfg(feature = "test-hooks")]
+impl fmt::Debug for Ed25519SigningKey {
+    /// A signing key is private-key material: never printed.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Ed25519SigningKey(..)")
+    }
+}
+
+/// TEST HOOK (the same standing) — an Ed25519 verifying key: the 32 bytes
+/// of a key's public half, or the point decode's refusal of 32 bytes that
+/// are no point — how a suite finds the undecodable key it enrolls to draw
+/// the daemon's own refusal, from the verifier's answer rather than a
+/// hard-coded string.
+#[cfg(feature = "test-hooks")]
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ed25519VerifyingKey(EdVerifyingKey);
+
+#[cfg(feature = "test-hooks")]
+impl Ed25519VerifyingKey {
+    /// The key `bytes` encode, or
+    /// [`HybridFault::Signature`](crate::HybridFault::Signature) where they
+    /// decode to no point — the decode [`verify`](crate::verify) runs on an
+    /// Ed25519 half, and the fault it answers under a half that does not
+    /// decode ([`key_decodes`](crate::key_decodes) answers `false` there).
+    pub fn from_bytes(bytes: &[u8; 32]) -> Result<Ed25519VerifyingKey, crate::HybridFault> {
+        EdVerifyingKey::from_bytes(bytes)
+            .map(Ed25519VerifyingKey)
+            .map_err(|_| crate::HybridFault::Signature)
+    }
+
+    /// The key's 32 bytes, borrowed.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        self.0.as_bytes()
+    }
+
+    /// The key's 32 bytes.
+    pub fn to_bytes(&self) -> [u8; 32] {
+        self.0.to_bytes()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,7 +402,7 @@ mod tests {
                 signer.ed.to_bytes().to_vec(),
             ];
             if let PqSigner::FnDsa512Preview(sk) = &signer.pq {
-                secrets.push(sk.clone());
+                secrets.push(sk.to_vec());
             }
             for printed in [format!("{halves:?}"), format!("{signer:?}")] {
                 for secret in &secrets {
@@ -385,12 +477,14 @@ mod tests {
 
     /// WHAT A DROPPED SIGNER WIPES, as [`HybridSigner`]'s doc states it, read
     /// off each type's `ZeroizeOnDrop` in this very build: the Ed25519 signing
-    /// key wipes itself, as does the FN-DSA key each tag-3 signature decodes;
-    /// the ML-DSA-65 key, the KDF's half seeds and the `hkdf` state the KDF
-    /// derives them through do not. A feature line or a derive that moves any
-    /// of the five fails here, so the doc moves with it.
+    /// key, the FN-DSA key each tag-3 signature decodes, the stored FN-DSA
+    /// encoding it decodes from, the ML-DSA-65 key and the KDF's half seeds
+    /// wipe themselves; the `hkdf` state the KDF derives the half seeds
+    /// through does not — the one residue, named in the doc. A feature line,
+    /// a derive or a field type that moves any of the six fails here, so the
+    /// doc moves with it.
     #[test]
-    fn a_dropped_signer_wipes_the_ed25519_key_alone() {
+    fn a_dropped_signer_wipes_both_keys_and_the_half_seeds_but_not_the_kdf_state() {
         use std::marker::PhantomData;
         use zeroize::ZeroizeOnDrop;
         /// `Probe::<T>::WIPES` is `true` exactly where `T: ZeroizeOnDrop`: the
@@ -404,18 +498,58 @@ mod tests {
         impl<T: ZeroizeOnDrop> Probe<T> {
             const WIPES: bool = true;
         }
+        // The stored encoding's type, read off a tag-3 signer's own field:
+        // a field typed otherwise fails to compile here, so the probe below
+        // asks about the type the signer holds.
+        let tag3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &[0x42; 32]).unwrap();
+        let _: &Zeroizing<Vec<u8>> = match &tag3.pq {
+            PqSigner::FnDsa512Preview(stored) => stored,
+            PqSigner::MlDsa65(_) => panic!("tag 3 stores its FN-DSA key as bytes"),
+        };
         assert_eq!(
             [
                 Probe::<EdSigningKey>::WIPES,
                 Probe::<SigningKeyStandard>::WIPES,
+                Probe::<Zeroizing<Vec<u8>>>::WIPES,
                 Probe::<ml_dsa::SigningKey<MlDsa65>>::WIPES,
                 Probe::<crate::kdf::HalfSeeds>::WIPES,
                 Probe::<hkdf::Hkdf<sha2::Sha256>>::WIPES,
             ],
-            [true, true, false, false, false],
-            "wiped on drop: the Ed25519 key and the decoded FN-DSA key; not the ML-DSA-65 key \
-             (`ml-dsa` is built without `zeroize`), nor the half seeds, nor the `hkdf` state — \
-             `HybridSigner`'s doc"
+            [true, true, true, true, true, false],
+            "wiped on drop: the Ed25519 key, the decoded FN-DSA key and its stored encoding, the \
+             ML-DSA-65 key and the half seeds; not the `hkdf` state, which no crate in this build \
+             overwrites — `HybridSigner`'s doc"
         );
+    }
+
+    /// THE ONE CRATE THAT LINKS `ed25519-dalek`, read off the workspace's
+    /// resolved graph: every package `Cargo.lock` lists as depending on it —
+    /// dev-dependencies included, since the lock does not tell them apart —
+    /// is this crate and no other. The suites reach the classical pair
+    /// through [`Ed25519SigningKey`] and [`Ed25519VerifyingKey`] instead, so
+    /// a manifest that names the library again lands in the lock and fails
+    /// here, the way `cargo tree -i ed25519-dalek --workspace` would show it.
+    #[test]
+    fn ed25519_dalek_is_linked_by_this_crate_alone() {
+        let lock = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock"))
+            .expect("the workspace's Cargo.lock");
+        let names_dalek = |entry: &str| {
+            // A dependency entry is `"name"` or `"name version"` when more
+            // than one version of it is resolved.
+            let entry = entry.trim().trim_end_matches(',').trim_matches('"');
+            entry == "ed25519-dalek" || entry.starts_with("ed25519-dalek ")
+        };
+        let dependents: Vec<&str> = lock
+            .split("[[package]]")
+            .skip(1)
+            .filter(|package| package.lines().any(names_dalek))
+            .map(|package| {
+                package
+                    .lines()
+                    .find_map(|line| line.strip_prefix("name = \"")?.strip_suffix('"'))
+                    .expect("every package in the lock has a name")
+            })
+            .collect();
+        assert_eq!(dependents, ["skep-signature"], "the packages the lock resolves `ed25519-dalek` for");
     }
 }

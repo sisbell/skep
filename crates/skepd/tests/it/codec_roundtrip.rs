@@ -12,9 +12,9 @@ use skep_arrangement::{Base, Run, RunError, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, OrphanReport, SlotSpec, SupClaim, Window};
 use skep_febe::{
-    BirthVersion, Codec, Deposit, Disposition, EditionClaim, FaultSite, Op, OpKind, ParseError,
-    RejectCode, Rejection, ReqId, Request, Response, ShotTerms, SlotArg, SuccessorSpec,
-    UniversalGrant,
+    BirthVersion, Codec, Deposit, Disposition, EditionClaim, FaultSite, ISpan, Op, OpKind,
+    ParseError, RejectCode, Rejection, ReqId, Request, Response, ShotTerms, SlotArg,
+    SuccessorSpec, UniversalGrant,
 };
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link, View, MAX_SLOT_SPANS};
@@ -269,6 +269,9 @@ fn all_requests() -> Vec<Request> {
         rq(None, Op::ReadLink { a: link1() }),
         rq(None, Op::FollowLink { a: link1(), slot: 2 }),
         rq(None, Op::RetrieveV { specs: vec![Spec { doc: d1(), span: cspan(1, 11) }] }),
+        // The I-space retrieve over one element span, and the content frontier.
+        rq(None, Op::RetrieveI { spans: vec![ISpan { start: a(&[1, 0, 1, 0, 1, 0, 1, 1]), width: n(3) }] }),
+        rq(None, Op::ContentFrontier { doc: d1() }),
         rq(None, Op::RetrieveDocVSpan { doc: d1() }),
         rq(None, Op::RetrieveDocVSpanSet { doc: d1() }),
         rq(None, Op::ShowOrigin { doc: d1(), span: cspan(1, 5) }),
@@ -322,7 +325,14 @@ fn all_requests() -> Vec<Request> {
     ]
 }
 
-const OP_NAMES: [&str; 43] = [
+/// Every op name the wire publishes, one per `Op` variant, in the order
+/// `OpKind` declares them. Its length IS the enum's variant count, with no
+/// number written here to drift: [`op_index`] holds every `OpKind` to a
+/// place in this list by an exhaustive match, and
+/// [`every_op_round_trips_canonically`] holds every place to a request that
+/// exercises it — so the enum cannot grow without this list, nor this list
+/// without a request.
+const OP_NAMES: &[&str] = &[
     "create_new_document",
     "delegate",
     "register_node",
@@ -330,7 +340,6 @@ const OP_NAMES: [&str; 43] = [
     "next_account_prefix",
     "principal_prefix",
     "effective_owner",
-    "doc_metadata",
     "insert",
     "delete",
     "copy",
@@ -345,6 +354,8 @@ const OP_NAMES: [&str; 43] = [
     "read_link",
     "follow_link",
     "retrieve_v",
+    "retrieve_i",
+    "content_frontier",
     "retrieve_doc_v_span",
     "retrieve_doc_v_span_set",
     "show_origin",
@@ -364,16 +375,75 @@ const OP_NAMES: [&str; 43] = [
     "delete_orphans",
     "in_claims",
     "out_claims",
+    "doc_metadata",
     "edition_claims",
     "universal_grants",
 ];
 
+/// Each `OpKind`'s place in [`OP_NAMES`] — an exhaustive match, so a new
+/// `Op` variant fails to compile here until it is placed, and its place is
+/// then held to a request by the coverage check in
+/// [`every_op_round_trips_canonically`]. `Unparseable` is no op: `Op::kind`
+/// never answers it.
+fn op_index(kind: OpKind) -> usize {
+    match kind {
+        OpKind::CreateNewDocument => 0,
+        OpKind::Delegate => 1,
+        OpKind::RegisterNode => 2,
+        OpKind::Fork => 3,
+        OpKind::NextAccountPrefix => 4,
+        OpKind::PrincipalPrefix => 5,
+        OpKind::EffectiveOwner => 6,
+        OpKind::Insert => 7,
+        OpKind::Delete => 8,
+        OpKind::Copy => 9,
+        OpKind::Rearrange => 10,
+        OpKind::Version => 11,
+        OpKind::Publish => 12,
+        OpKind::MakeLink => 13,
+        OpKind::Emit => 14,
+        OpKind::Nullify => 15,
+        OpKind::AssertSup => 16,
+        OpKind::EditLink => 17,
+        OpKind::ReadLink => 18,
+        OpKind::FollowLink => 19,
+        OpKind::RetrieveV => 20,
+        OpKind::RetrieveI => 21,
+        OpKind::ContentFrontier => 22,
+        OpKind::RetrieveDocVSpan => 23,
+        OpKind::RetrieveDocVSpanSet => 24,
+        OpKind::ShowOrigin => 25,
+        OpKind::ShowDeletions => 26,
+        OpKind::Compare => 27,
+        OpKind::FindDocsContaining => 28,
+        OpKind::Image => 29,
+        OpKind::FindLinksV => 30,
+        OpKind::FindLinksFtt => 31,
+        OpKind::CountV => 32,
+        OpKind::CountFtt => 33,
+        OpKind::WindowV => 34,
+        OpKind::WindowFtt => 35,
+        OpKind::RetrieveEndsets => 36,
+        OpKind::Project => 37,
+        OpKind::DiscoverableFrom => 38,
+        OpKind::DeleteOrphans => 39,
+        OpKind::InClaims => 40,
+        OpKind::OutClaims => 41,
+        OpKind::DocMetadata => 42,
+        OpKind::EditionClaims => 43,
+        OpKind::UniversalGrants => 44,
+        OpKind::Unparseable => unreachable!("`Op::kind` never answers `Unparseable`"),
+    }
+}
+
 /// parse ∘ marshal_request is the identity on canonical frames, for every
-/// variant; and the emitted op-name set is exactly the documented 43.
+/// variant; and the emitted op names are exactly [`OP_NAMES`], each at the
+/// place [`op_index`] gives its kind and every place exercised — which is
+/// what holds the list's length to the enum's variant count.
 #[test]
 fn every_op_round_trips_canonically() {
     let codec = JsonCodec;
-    let mut seen: Vec<String> = Vec::new();
+    let mut exercised = vec![false; OP_NAMES.len()];
     for req in all_requests() {
         let bytes = codec.marshal_request(&req);
         let parsed = parse_ok(&codec, &bytes);
@@ -385,13 +455,17 @@ fn every_op_round_trips_canonically() {
             String::from_utf8_lossy(&bytes)
         );
         let v: Value = serde_json::from_slice(&bytes).expect("canonical frame is JSON");
-        seen.push(v["op"].as_str().expect("op tag").to_string());
+        let place = op_index(req.op.kind());
+        assert_eq!(
+            OP_NAMES.get(place).copied(),
+            v["op"].as_str(),
+            "the op name at place {place} drifted from the frame's"
+        );
+        exercised[place] = true;
     }
-    seen.sort();
-    seen.dedup();
-    let mut expected: Vec<&str> = OP_NAMES.to_vec();
-    expected.sort();
-    assert_eq!(seen, expected, "op-name coverage drifted");
+    let missing: Vec<&str> =
+        OP_NAMES.iter().zip(&exercised).filter(|(_, hit)| !**hit).map(|(name, _)| *name).collect();
+    assert!(missing.is_empty(), "op-name coverage drifted: no request exercises {missing:?}");
 }
 
 /// The publish shot's base travels with the extent its copy took, or not at

@@ -11,6 +11,7 @@ use std::fmt;
 use hkdf::Hkdf;
 use sha2::Sha256;
 use skep_identity::SigAlgRow;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::Rule;
 
@@ -23,11 +24,14 @@ const HALF_LABEL_MLDSA65: &[u8] = b"ml-dsa-65";
 const HALF_LABEL_FNDSA512: &[u8] = b"fn-dsa-512";
 
 /// The two half seeds one 32-byte seed derives under one tag —
-/// private-key material, so `Clone` and nothing more: not `Copy`, which
-/// could never be taken back and would bar a `Drop` that zeroizes; and no
-/// derived `PartialEq`, whose comparison stops at the first differing byte.
-/// Either can be added later without breaking a caller; neither could be
-/// removed.
+/// private-key material: WIPED ON DROP, both halves overwritten as the
+/// value goes out of scope (`Zeroize`, `ZeroizeOnDrop`), which inside
+/// `HybridSigner::from_seed` is once each half has been handed to its
+/// keygen. So `Clone` and nothing more: not `Copy`, which a `Drop` impl
+/// rules out and could never be taken back; and no derived `PartialEq`,
+/// whose comparison stops at the first differing byte. A constant-time
+/// equality could be added later without breaking a caller; nothing here
+/// could be removed.
 #[derive(Clone)]
 pub struct HalfSeeds {
     /// The Ed25519 half's seed (`ed25519-dalek`'s `SigningKey::from_bytes`).
@@ -44,8 +48,33 @@ impl fmt::Debug for HalfSeeds {
     }
 }
 
+impl Zeroize for HalfSeeds {
+    fn zeroize(&mut self) {
+        self.ed25519.zeroize();
+        self.pq.zeroize();
+    }
+}
+
+/// The wipe on drop the type's doc states; `ZeroizeOnDrop` below is the
+/// marker the signer's wiping test reads it off.
+impl Drop for HalfSeeds {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for HalfSeeds {}
+
 /// HKDF-SHA-256 as the KDF PIN states it: `salt = KDF_SALT`, `IKM = seed`,
 /// `info = token ‖ 0x00 ‖ half_label`, 32 bytes out.
+///
+/// THE ONE UNWIPED RESIDUE of a signer's keygen, by name: the `Hkdf` state —
+/// `hmac` 0.12's HMAC core, keyed by the PRK every half seed of a tag
+/// derives from, so as good as the seed itself — lives for this one call
+/// and is released before the half seed is handed back, but released as it
+/// is: neither `hkdf` 0.12 nor `hmac` 0.12 offers a wipe, and its fields
+/// are theirs to reach, not this crate's. The signer's wiping test pins
+/// exactly this.
 fn derive_half_seed(seed: &[u8; 32], token: &str, half_label: &[u8]) -> [u8; 32] {
     let hk = Hkdf::<Sha256>::new(Some(KDF_SALT), seed);
     let mut out = [0u8; 32];

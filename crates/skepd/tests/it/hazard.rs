@@ -90,7 +90,7 @@ pub(crate) fn spawn_skepd(dir: &Path) -> (Child, u16) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_skepd"))
         .arg("--data-dir")
         .arg(dir)
-        .args(["--port", "0", "--workers", "4"])
+        .args(["--port", "0", "--workers", &skepd::DEFAULT_WORKERS.to_string()])
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()

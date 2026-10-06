@@ -37,7 +37,6 @@
 
 use crate::common::*;
 
-use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
 use skep_address::Span;
 use skep_febe::Codec;
@@ -49,7 +48,7 @@ use skep_identity::{
     Enrollment, EntryBody, EntrySlot, Fingerprint, LinkSlots, PublicKey, RecordRows, RecordValue,
     ShotBase, ShotSegmentPiece, SigAlgRow, ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519,
 };
-use skep_signature::HybridSigner;
+use skep_signature::{Ed25519SigningKey as SigningKey, HybridSigner};
 use skepd::{JsonCodec, Seq};
 use tempfile::tempdir;
 

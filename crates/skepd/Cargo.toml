@@ -136,16 +136,15 @@ tempfile.workspace = true
 # the step it holds a finish at (`skep_blobs::Step`). BLAKE3 the suites hash
 # with is the dependency above.
 skep-blobs = { path = "../skep-blobs", features = ["test-hooks"] }
-# Test-side keys (the daemon itself only verifies): the suites' fixed seed
-# carriers are `SigningKey::from_bytes` — the 32 bytes that seed each hybrid
-# key (`common::seed_of`); the crate's `Signer`, over a hybrid key's derived
-# Ed25519 half, makes the one Ed25519-only blob the suites send as a negative
-# vector; and its point decode finds the non-point an undecodable key
-# carries. No rand feature — seeds are fixed.
-ed25519-dalek = "2"
-# The TEST SIGNER and its fixture hooks: the suites derive each seed
-# carrier's hybrid key (`HybridSigner::from_seed`), sign sessions and entries
-# with it, and reach the seeded RNG and the Ed25519 half through the hooks.
+# The TEST SIGNER and its fixture hooks (the daemon itself only verifies):
+# the suites' fixed seed carriers are its `Ed25519SigningKey` — the 32 bytes
+# that seed each hybrid key (`common::seed_of`), derived through
+# `HybridSigner::from_seed`, which signs sessions and entries; the seeded
+# RNG and the Ed25519 half come through the hooks, and the half's own
+# `sign` makes the one Ed25519-only blob the suites send as a negative
+# vector; its `Ed25519VerifyingKey` decode finds the non-point an
+# undecodable key carries. `skep-signature` is the one crate that links the
+# signature libraries, so no suite names `ed25519-dalek`.
 skep-signature = { path = "../skep-signature", features = ["test-hooks"] }
 # H4 property-based op sequences (tests/it/properties.rs): random-but-valid
 # plans with shrinking; failure seeds persist to proptest-regressions/

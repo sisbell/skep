@@ -20,11 +20,11 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ed25519_dalek::SigningKey;
 use serde_json::Value;
 use skep_engine::{Engine, Seq};
 use skep_identity::{encode_retire, Fingerprint};
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
+use skep_signature::Ed25519SigningKey as SigningKey;
 use skepd::{Daemon, DaemonError, EngineError, OpenError};
 
 use crate::common;

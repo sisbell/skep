@@ -19,7 +19,7 @@ readme = "README.md"
 # keygen from a seed per tag (`HybridSigner::from_seed`), signing
 # (`HybridSigner::sign`) and the signer's OS draw — for a signer, and for the
 # suites that sign their fixtures.
-sign = ["dep:rand_core_06", "dep:hkdf", "dep:sha2", "dep:getrandom"]
+sign = ["dep:rand_core_06", "dep:hkdf", "dep:sha2", "dep:getrandom", "dep:zeroize"]
 # `test-hooks` compiles in the fixtures' hooks — the seeded RNG
 # (`SeededRng06`), `HybridSigner::sign_with_rng`, the Ed25519 half's signing
 # key, the KDF's half seeds (`derive_half_seeds`) and the widths the sizes pin
@@ -52,10 +52,12 @@ ed25519-dalek = "2"
 # change that ships as a NEW tag, never as an edit to an old one.
 # Tag 1 (PRODUCTION): ML-DSA-65 + Ed25519 — RustCrypto `ml-dsa`, pure Rust,
 # final FIPS 204 with the seed entry point `SigningKey::from_seed`. Built
-# without its `zeroize` feature: `HybridSigner`'s doc states which key
-# material a dropped signer wipes, and the signer's
-# `a_dropped_signer_wipes_the_ed25519_key_alone` holds that doc to this line.
-ml-dsa = { version = "=0.1.1", default-features = false, features = ["alloc"] }
+# WITH its `zeroize` feature, so a dropped signing key overwrites ξ and the
+# expanded key it holds: `HybridSigner`'s doc states which key material a
+# dropped signer wipes, and the signer's
+# `a_dropped_signer_wipes_both_keys_and_the_half_seeds_but_not_the_kdf_state`
+# holds that doc to this line.
+ml-dsa = { version = "=0.1.1", default-features = false, features = ["alloc", "zeroize"] }
 # Tag 3 (PREVIEW): FN-DSA-512 + Ed25519 — Thomas Pornin's pure-Rust `fn-dsa`,
 # a "best guess" at the FN-DSA draft; its 0.4.0 keygen and format ARE tag 3's
 # frozen rule (the final FIPS 206 is a later tag; tag 2 stays free for it).
@@ -78,6 +80,12 @@ sha2 = { workspace = true, optional = true }
 # The signer's OS draw: a tag-3 signature's per-signature seed outside a
 # seeded fixture, fail-stop — never a seed from anything weaker.
 getrandom = { version = "0.3", optional = true }
+# THE WIPE of what the signer holds itself: `Zeroize` and `ZeroizeOnDrop` for
+# the KDF's half seeds, and `Zeroizing` around the stored FN-DSA-512 key
+# encoding. The two key libraries wipe their own keys through their own
+# `zeroize` features (`ed25519-dalek`'s default, `ml-dsa`'s above); the
+# signer's wiping test asks every key type about `ZeroizeOnDrop`.
+zeroize = { version = "1", optional = true }
 
 [dev-dependencies]
 # This crate itself with `test-hooks` on, so its integration tests
@@ -89,9 +97,6 @@ skep-signature = { path = ".", features = ["test-hooks"] }
 skep-address = { path = "../skep-address" }
 # The goldens' digests (`sha_hex`): each pin is a key's or a blob's SHA-256.
 sha2.workspace = true
-# `ZeroizeOnDrop`, the trait the signer's wiping test asks each key type
-# about: which key material a dropped `HybridSigner` wipes.
-zeroize = "1"
 # THE DIFFERENTIAL ORACLE for tag 1 (the PQ investigation §8.4 (4), §8.5 (ii)):
 # a second pure-Rust FIPS 204 implementation the golden checks `ml-dsa`'s
 # keys-from-seed and signatures byte-equal against — the gate every future

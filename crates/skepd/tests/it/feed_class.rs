@@ -46,9 +46,9 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 use common::*;
-use ed25519_dalek::SigningKey;
 use serde_json::{Map, Value};
 use skep_identity::Fingerprint;
+use skep_signature::Ed25519SigningKey as SigningKey;
 
 /// One write the fixture made, as the `docs` convention states it — and the
 /// members beyond `at`/`op`/`docs`/`time` its row carries, as the fixture
@@ -265,7 +265,7 @@ fn hire_logged(
     claimant_signed: &str,
     agent_account: &str,
     agent_id: u64,
-    key: &ed25519_dalek::SigningKey,
+    key: &SigningKey,
 ) -> String {
     let ordinal = next_content_ordinal(port, Some(claimant_signed), CLAIMANT_DOC1);
     // The record signed for its deposit (2a), as `common::hire` signs it —

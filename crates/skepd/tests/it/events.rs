@@ -94,9 +94,10 @@ fn open_streams_do_not_starve_the_op_surface() {
     let sd = spawn(dir.path());
     let port = sd.port();
 
-    // More open streams than the daemon has op workers (spawn uses 4):
-    // if a stream held a worker, the ops below could never all answer.
-    let mut streams: Vec<Sse> = (0..6).map(|_| Sse::connect(port)).collect();
+    // More open streams than the daemon has op workers (`spawn` serves with
+    // `DEFAULT_WORKERS`): if a stream held a worker, the ops below could
+    // never all answer.
+    let mut streams: Vec<Sse> = (0..skepd::DEFAULT_WORKERS + 2).map(|_| Sse::connect(port)).collect();
     for s in &mut streams {
         s.expect_commit();
     }

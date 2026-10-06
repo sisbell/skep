@@ -863,7 +863,7 @@ write passes down through them in this order:
 │ 5 WRITE PATH       write_path.rs  (one write at a time) │
 │                    ├── head.rs      the head writer     │
 │                    ├── feed.rs      change feed, indexes│
-│                    │                 the attest store    │
+│                    │                the attest store    │
 │                    ├── sidecar.rs   commits.log         │
 │                    └── classify.rs  a commit's documents│
 │   MEDIA RESOURCE   media.rs · media/door.rs ·           │

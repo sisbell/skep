@@ -18,7 +18,6 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{json, Value};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_identity::{
@@ -29,7 +28,7 @@ use skep_identity::{
     LinkSlots, PublicKey, RecordEntry, RecordRows, ShotBase, ShotSegmentPiece, SigAlgRow,
     SESSION_TAG, SESSION_TAG_V2,
 };
-use skep_signature::HybridSigner;
+use skep_signature::{Ed25519SigningKey as SigningKey, HybridSigner};
 use skepd::{serve, AuthOptions, Daemon, MediaOptions, NodePrefix, Origin, Skepd, DEFAULT_WORKERS};
 
 mod ops;
@@ -191,7 +190,7 @@ pub fn sign_session_ed25519_half_alone(
     principal: u64,
 ) -> String {
     let payload = session_bytes_v1(origin, nonce, principal);
-    hex(&hybrid_signer(sk).ed25519_signing_key().sign(&payload).to_bytes())
+    hex(&hybrid_signer(sk).ed25519_signing_key().sign(&payload))
 }
 
 /// [`sign_session`]'s SCOPED variant — the v2 bytes (AUTH-6.4):

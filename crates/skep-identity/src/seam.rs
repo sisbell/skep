@@ -4,8 +4,8 @@
 //! (AUTH-2.31). The crate stays generic over the world-fact abstraction —
 //! it never names a concrete `World` (composition contract); the fold's host
 //! implements [`Values`] and [`FoldCtx`] for its assembled world — the
-//! engine in AUTH-2.79's cast, skepd's `WorldCtx` as built (the crate-level
-//! composition note) — and a mirror for its projection. A host holding its
+//! engine, in AUTH-2.79's cast (the crate-level composition note says where
+//! the build seats it) — and a mirror for its projection. A host holding its
 //! world behind a reference or a box — `&dyn FoldCtx`, `Box<dyn FoldCtx>` —
 //! writes no impl of its own: both traits forward through `&T` and `Box<T>`,
 //! as std's own traits do. What the fold derives from those facts — its ω

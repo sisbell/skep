@@ -24,8 +24,9 @@ serde_json.workspace = true
 skepd = { path = "../skepd", features = ["test-hooks"] }
 # The ceremony's record grammar and session-payload framing.
 skep-identity = { path = "../skep-identity" }
-# The ceremony's signer: each seed carrier's hybrid key (`HybridSigner`) and
-# the session blobs it signs — `sign`, and no fixture hook.
-skep-signature = { path = "../skep-signature", features = ["sign"] }
-# Test-side signing for the ceremony's claim step (the daemon only verifies).
-ed25519-dalek = "2"
+# The ceremony's signer: each seed carrier (`Ed25519SigningKey`, a
+# `test-hooks` door — the one place a suite reaches a classical key type,
+# since `skep-signature` alone links the signature libraries) and its hybrid
+# key (`HybridSigner`), which signs the session blobs; the daemon only
+# verifies.
+skep-signature = { path = "../skep-signature", features = ["test-hooks"] }

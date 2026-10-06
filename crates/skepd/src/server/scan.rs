@@ -144,9 +144,11 @@ impl ClassScans {
 /// (`retrieve_v`, `compare`, `show_deletions`, `find_docs_containing`,
 /// `show_origin`) and the M3 reads touch no link store at all.
 ///
-/// NOT exhaustive over `Op` (43 variants against 11), so a new READ that
-/// walks the link store must be added by hand — `write_meta`'s table, which
-/// the compiler does force, reaches writes alone. Nothing about a query is
+/// NOT exhaustive over `Op` (45 variants against 11 — the first moves with
+/// `Op`, whose count the codec suite's op-name table is held to; the second
+/// moves only by hand, here), so a new READ that walks the link store must
+/// be added by hand — `write_meta`'s table, which the compiler does force,
+/// reaches writes alone. Nothing about a query is
 /// read here: not the class, not the cursor, not the slots, and not whether
 /// M8 would answer it off its own descriptor (a `ty` of `"empty"`
 /// annihilates before M7 is asked; it is bounded all the same, and its

@@ -229,8 +229,10 @@ impl History {
 /// write that did not happen, carrying a position that names nothing
 /// ([`stamp_as_of`] leaves acks alone). The route's own guard restates M10's
 /// read/write partition, which `crate::write_path::write_meta` records as
-/// agreeing at 15 writes of 43 and warns can drift — so the assert below is
-/// what makes this premise loud for the reader auditing exactly that drift.
+/// agreeing at 15 writes of 45 — the enum's variant count, which moves with
+/// `Op` and which the codec suite's op-name table is held to — and warns
+/// can drift; so the assert below is what makes this premise loud for the
+/// reader auditing exactly that drift.
 ///
 /// THE TWO-WORLD SHAPE (PUB-6.48, PUB-6.61): the CONTENT answered is the
 /// N-world's, the PREDICATE it is answered through is the HEAD's. The

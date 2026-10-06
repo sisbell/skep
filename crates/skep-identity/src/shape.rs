@@ -104,9 +104,9 @@ impl TypeAddrs {
 
 /// AUTH-2.23 — the fold's view of one link deposit. Exactly TWO constructors
 /// build it, neither inventing a field: the fold hook
-/// (`home = document_of(addr)`, computed once — AUTH-2.82; the engine's in
-/// the spec's cast, skepd's canonical rebuild as built) and skepd's precheck
-/// (the frame's `home`). Address-form slots are constructed via M7's `enc`
+/// (`home = document_of(addr)`, computed once — AUTH-2.82) in the host that
+/// folds, and the precheck a frame passes ahead of its commit (the frame's
+/// `home`). Address-form slots are constructed via M7's `enc`
 /// on ALL THREE slots (AUTH-2.24); `from` is in ENDSET ORDER and stays that
 /// way — no constructor may sort, dedup, or normalize it (AUTH-2.25).
 ///

@@ -504,7 +504,8 @@ impl<'de> IntoDeserializer<'de, CanonError> for TreeDe<'de> {
 impl<'de> Deserializer<'de> for TreeDe<'de> {
     type Error = CanonError;
 
-    /// The way in answered `false` ([`TreeSer::is_human_readable`]), so
+    /// The way in answered `false` ([`TreeSer`]'s
+    /// [`is_human_readable`](serde::Serializer::is_human_readable)), so
     /// a `Deserialize` impl that branches reads the branch the tree holds.
     fn is_human_readable(&self) -> bool {
         false

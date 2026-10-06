@@ -352,16 +352,17 @@ Rules that hold across its files:
   builds; the shipped table passes, and the daemon runs the check over
   the whole domain it can see ahead of every genesis.
 
-Its integration suite is one binary, `tests/it/`: `rows` (the table from
-outside the crate, and `commons_type`'s panics), `check` (the three arms on
-mutated lists, each of the twelve rows' absence among them) and `body` (the
-vector set at this parser, the examples' one canonical form, and the cases
-that pin this parser alone — a refusal's member, the first stage to fault,
-the `type` member read off its kind's row), with its child `body/laws.rs`
-(the escape table at every Unicode scalar value, the admission sentence and
-the parse's totality over every one-byte mutant of every admitted vector,
-and every law of the parse at once on seeded hostile bodies several edits
-from the vectors, met at every refusal the parse answers).
+Its integration suite is one binary, `tests/it/`: `rows` (commons-map's
+table transcribed once and asked every question line by line, the laws the
+table holds whatever its lines, and `commons_type`'s panics), `check` (the
+three arms on mutated lists, each of the twelve rows' absence among them)
+and `body` (the vector set at this parser, the examples' one canonical
+form, and the cases that pin this parser alone — a refusal's member, the
+first stage to fault, the `type` member read off its kind's row), with its
+child `body/laws.rs` (the escape table at every Unicode scalar value, and
+the parse's laws, stated once and met on every one-byte mutant of every
+admitted vector and on seeded hostile bodies several edits from the
+vectors, at every refusal the parse answers).
 
 ## The resolver, `skep-resolve`
 

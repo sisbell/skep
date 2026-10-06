@@ -9,9 +9,9 @@
 //! Beside the set, the spec's two examples in their one canonical form and
 //! the cases that pin this parser alone: a refusal's member as a value, the
 //! first stage to fault where two do, and the `type` member read off its
-//! kind's row. The laws on inputs no hand chose are the child `laws`; what
-//! both use — the set's readers `vector_set`, `bytes_of` and `kind_of` —
-//! lives here.
+//! kind's row. The laws on inputs no hand chose are the child `laws`. The
+//! set's readers live here — `vector_set`, `bytes_of` and `kind_of` — and
+//! the child reads the set through the first two.
 
 use std::path::Path;
 

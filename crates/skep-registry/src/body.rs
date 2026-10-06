@@ -38,13 +38,11 @@
 //! [`parse`] admits, the cap aside — a signer never signs a body the daemon
 //! then refuses for its form.
 //!
-//! THE CAP, [`MAX_REGISTRY_RECORD_BYTES`]: a body past it is refused before
-//! any tree is built, since a JSON parser builds its whole tree before the
-//! first schema check. A SIGNED body carries its `sig` inside the cap: the
-//! hybrid blob's hex is 6,746 characters under `mldsa65-ed25519`, the
-//! production hybrid (skep-identity's `SIG_ALGS`, tag 1), so a binding
-//! signed is some seven kilobytes though its members are under a hundred
-//! bytes, and an endpoint's a few hundred more.
+//! THE CAP, [`MAX_REGISTRY_RECORD_BYTES`], counts every byte, `sig`
+//! included: a body past it is refused before any tree is built, since a
+//! JSON parser builds its whole tree before the first schema check. What it
+//! is priced against — a signed body's size, and what a hostile body costs a
+//! reader — the constant's own doc states.
 //!
 //! The other five body-bearing rows — the takedown record's base reading,
 //! the disavowal, the two ground records, the org-chosen succession policy,
@@ -381,7 +379,7 @@ pub fn parse(kind: BodyKind, bytes: &[u8]) -> Result<Record, ParseRefusal> {
     }
     // The strings the record keeps — `sig` and the origins — are moved out of
     // the tree the parse owns; an address member is read where it stands.
-    let replaces = optional_address(&object, Member::Replaces)?;
+    let replaces = address_member(&object, Member::Replaces)?;
     let sig = match object.remove(Member::Sig.name()) {
         None => None,
         Some(Value::String(s)) => Some(s),
@@ -389,8 +387,8 @@ pub fn parse(kind: BodyKind, bytes: &[u8]) -> Result<Record, ParseRefusal> {
     };
     let body = match kind {
         BodyKind::Binding => {
-            let prefix = required_string(&object, Member::Prefix)?;
-            let prefix = address_of(prefix).ok_or(ParseRefusal::NotAnAddress(Member::Prefix))?;
+            let prefix = address_member(&object, Member::Prefix)?
+                .ok_or(ParseRefusal::MissingMember(Member::Prefix))?;
             Body::Binding(Binding { prefix, replaces })
         }
         BodyKind::Endpoint => {
@@ -430,21 +428,11 @@ fn holds_a_number(v: &Value) -> bool {
     }
 }
 
-/// A required string member.
-fn required_string(
-    object: &serde_json::Map<String, Value>,
-    member: Member,
-) -> Result<&str, ParseRefusal> {
-    match object.get(member.name()) {
-        None => Err(ParseRefusal::MissingMember(member)),
-        Some(Value::String(s)) => Ok(s.as_str()),
-        Some(_) => Err(ParseRefusal::NotAString(member)),
-    }
-}
-
-/// An optional member that, where present, is a string in address form —
-/// the address it spells.
-fn optional_address(
+/// An address member: the [`Address`] its string spells in its one
+/// spelling ([`address_of`]), `None` where the body carries no such member.
+/// Whether that absence is a fault is the caller's, as REG-1.86's table
+/// makes it: `prefix` is required, `replaces` is not.
+fn address_member(
     object: &serde_json::Map<String, Value>,
     member: Member,
 ) -> Result<Option<Address>, ParseRefusal> {
@@ -475,9 +463,9 @@ fn address_of(s: &str) -> Option<Address> {
 /// the result is a record at [`parse`] — under `body.kind()`, of that body
 /// and that `sig` — exactly where it is at most [`MAX_REGISTRY_RECORD_BYTES`];
 /// one byte past, it is `past_cap`. The measure is the composer's, taken on
-/// the SIGNED bytes before they are deposited: a `sig` under
-/// `mldsa65-ed25519` is 6,746 bytes of hex on its own, so a body whose
-/// sig-less form is far under the cap can be past it signed.
+/// the SIGNED bytes before they are deposited: the `sig` counts inside the
+/// cap (the cap's doc prices a signed body), so a body whose sig-less form
+/// is far under the cap can be past it signed.
 pub fn encode(body: &Body, sig: Option<&str>) -> String {
     let mut out = String::with_capacity(256);
     out.push_str("{\"type\":\"");

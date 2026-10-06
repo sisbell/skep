@@ -1,20 +1,20 @@
 //! THE LAWS `src/body.rs` states for every input, each tried on inputs no
 //! hand chose: THE ESCAPE TABLE at every Unicode scalar value — each
-//! spelled exactly as the table states, and each read back as itself — THE
-//! ADMISSION SENTENCE with the parse's totality over every one-byte mutant
-//! of every admitted vector: a mutant the parse admits is its own canonical
-//! encoding, and no mutant makes the parse panic — and EVERY LAW AT ONCE on
-//! seeded hostile bodies several edits from any vector: an answer and no
+//! spelled exactly as the table states, and each read back as itself — and
+//! THE PARSE'S LAWS, stated once ([`assert_the_laws_at`]): an answer and no
 //! panic, `past_cap` exactly past the cap, a record only where the body is
-//! its own encoding, and under one kind at most, met at every refusal the
-//! parse answers. The vector set and its readers are the parent's.
+//! its own encoding, of the kind named, its sig-less projection a fixpoint,
+//! and a record under one kind at most, `wrong_type` under the other. Every
+//! one-byte mutant of every admitted vector meets them, and so do seeded
+//! hostile bodies several edits from any vector, at every refusal the parse
+//! answers. The vector set and its readers are the parent's.
 
 use skep_registry::{
     encode, parse, Body, BodyKind, Endpoint, Origins, ParseRefusal, Record,
     MAX_REGISTRY_RECORD_BYTES,
 };
 
-use super::{bytes_of, kind_of, vector_set};
+use super::{bytes_of, vector_set};
 
 /// The escape table as `src/body.rs`'s encoding paragraph states it (REG-1.86
 /// (h)), written from the table and never from the encoder: the quote and
@@ -97,6 +97,58 @@ fn every_scalar_value_in_a_string_encodes_to_a_record() {
     }
 }
 
+/// THE PARSE'S LAWS, stated once — what `parse` promises of every input,
+/// asked at one body under each kind in turn: an answer and no panic;
+/// `past_cap` exactly where the body is past the cap; a record only where
+/// the body is its own canonical encoding (REG-1.86 (h)), of the kind named,
+/// its sig-less projection a fixpoint (REG-1.86 (e)); and a record under one
+/// kind at most, `wrong_type` under the other (REG-1.86 (a)). The one-byte
+/// mutants and the hostile bodies below both drive it, so a law joins here
+/// once and every input meets it. Answers each kind's refusal, `None` where
+/// the kind admitted the body.
+fn assert_the_laws_at(body: &[u8]) -> [Option<ParseRefusal>; 2] {
+    let shown = || {
+        let head: String = String::from_utf8_lossy(body).chars().take(240).collect();
+        format!("{head:?} ({} bytes)", body.len())
+    };
+    let past = body.len() > MAX_REGISTRY_RECORD_BYTES;
+    let answers = [BodyKind::Binding, BodyKind::Endpoint].map(|kind| {
+        let answer = std::panic::catch_unwind(|| parse(kind, body))
+            .unwrap_or_else(|_| panic!("{kind:?}: the parse panicked on {}", shown()));
+        match answer {
+            Ok(record) => {
+                assert!(!past, "{kind:?}: a record past the cap: {}", shown());
+                assert_eq!(record.body.kind(), kind, "{}", shown());
+                let encoded = encode(&record.body, record.sig.as_deref());
+                assert!(encoded.as_bytes() == body, "{kind:?}: not its own encoding: {}", shown());
+                let again = parse(kind, record.canonical_sigless().as_bytes());
+                assert_eq!(again, Ok(Record { body: record.body, sig: None }), "{}", shown());
+                None
+            }
+            Err(refusal) => {
+                assert_eq!(
+                    refusal == ParseRefusal::PastCap,
+                    past,
+                    "{kind:?}: {refusal}: {}",
+                    shown()
+                );
+                Some(refusal)
+            }
+        }
+    });
+    match &answers {
+        [None, None] => panic!("a record under both kinds: {}", shown()),
+        [None, Some(other)] | [Some(other), None] => assert_eq!(
+            *other,
+            ParseRefusal::WrongType,
+            "a record under one kind, and the other's cause: {}",
+            shown()
+        ),
+        [Some(_), Some(_)] => {}
+    }
+    answers
+}
+
 /// The alphabet a one-byte mutant writes, inserting a byte or writing one
 /// over another: the whitespace JSON skips, its structure and escape
 /// letters, digits and signs, two hex letters in capitals, NUL, DEL, a lone
@@ -109,18 +161,19 @@ const MUTANT_ALPHABET: &[u8] = b" \t\n\"\\/{}[]:,.+-019eAFbnu\x00\x7f\x80\xff";
 const MAX_MUTANT_SOURCE_BYTES: usize = 1024;
 
 /// Every one-byte mutant of every admitted vector no longer than
-/// [`MAX_MUTANT_SOURCE_BYTES`], under its kind: each byte deleted, each
-/// byte of [`MUTANT_ALPHABET`] written over it, and each inserted before it
-/// and after the last. An admitted vector within that bound added later
-/// joins without an edit here.
-fn one_byte_mutants() -> Vec<(BodyKind, Vec<u8>)> {
+/// [`MAX_MUTANT_SOURCE_BYTES`]: each byte deleted, each byte of
+/// [`MUTANT_ALPHABET`] written over it, and each inserted before it and
+/// after the last. A mutant carries no kind of its own: the laws ask it
+/// under both. An admitted vector within that bound added later joins
+/// without an edit here.
+fn one_byte_mutants() -> Vec<Vec<u8>> {
     let set = vector_set();
     let mut mutants = Vec::new();
     for vector in set["vectors"].as_array().expect("vectors") {
         if vector["parse"] != "ok" {
             continue;
         }
-        let (kind, bytes) = (kind_of(vector), bytes_of(vector));
+        let bytes = bytes_of(vector);
         if bytes.len() > MAX_MUTANT_SOURCE_BYTES {
             continue;
         }
@@ -128,16 +181,16 @@ fn one_byte_mutants() -> Vec<(BodyKind, Vec<u8>)> {
             for &b in MUTANT_ALPHABET {
                 let mut inserted = bytes.clone();
                 inserted.insert(i, b);
-                mutants.push((kind, inserted));
+                mutants.push(inserted);
             }
             if i < bytes.len() {
                 let mut deleted = bytes.clone();
                 deleted.remove(i);
-                mutants.push((kind, deleted));
+                mutants.push(deleted);
                 for &b in MUTANT_ALPHABET {
                     let mut written = bytes.clone();
                     written[i] = b;
-                    mutants.push((kind, written));
+                    mutants.push(written);
                 }
             }
         }
@@ -145,42 +198,20 @@ fn one_byte_mutants() -> Vec<(BodyKind, Vec<u8>)> {
     mutants
 }
 
-/// THE PARSE IS TOTAL: it answers every one-byte mutant of every admitted
-/// vector — a record or a refusal — and panics on none.
+/// THE PARSE'S LAWS ON EVERY ONE-BYTE MUTANT of every admitted vector
+/// ([`assert_the_laws_at`]) — the inputs no hand chose that stand nearest
+/// the records. The counts show the laws were tried on both sides.
 #[test]
-fn the_parse_answers_every_one_byte_mutant_without_a_panic() {
+fn the_parse_laws_hold_on_every_one_byte_mutant() {
     let mutants = one_byte_mutants();
     assert!(mutants.len() > 10_000, "{} mutants", mutants.len());
-    for (kind, bytes) in &mutants {
-        let answered = std::panic::catch_unwind(|| parse(*kind, bytes));
-        assert!(answered.is_ok(), "the parse panicked on {:?}", String::from_utf8_lossy(bytes));
-    }
-}
-
-/// THE ADMISSION SENTENCE AS A LAW (REG-1.86 (h)): a mutant the parse admits
-/// is the canonical re-encoding of what it spells, byte for byte, and a
-/// record of the kind named alone — under the other kind its `type` is
-/// wrong. The counts show the law was tried on both sides.
-#[test]
-fn every_admitted_one_byte_mutant_is_its_own_canonical_encoding() {
     let (mut admitted, mut refused) = (0, 0);
-    for (kind, bytes) in one_byte_mutants() {
-        let Ok(record) = parse(kind, &bytes) else {
+    for bytes in &mutants {
+        if assert_the_laws_at(bytes).contains(&None) {
+            admitted += 1;
+        } else {
             refused += 1;
-            continue;
-        };
-        let shown = String::from_utf8_lossy(&bytes);
-        assert_eq!(
-            encode(&record.body, record.sig.as_deref()).as_bytes(),
-            bytes.as_slice(),
-            "admitted, and not its own encoding: {shown:?}"
-        );
-        let other = match kind {
-            BodyKind::Binding => BodyKind::Endpoint,
-            BodyKind::Endpoint => BodyKind::Binding,
-        };
-        assert_eq!(parse(other, &bytes), Err(ParseRefusal::WrongType), "{shown:?}");
-        admitted += 1;
+        }
     }
     assert!(admitted > 100 && refused > 100, "{admitted} admitted, {refused} refused");
 }
@@ -399,45 +430,6 @@ fn hostile_body(
         edit(rng, &mut body, sources, fragments);
     }
     body
-}
-
-/// Asserts the parse's laws at one body, under each kind in turn: an answer
-/// and no panic; `past_cap` exactly where the body is past the cap; a record only
-/// where the body is its own canonical encoding, of the kind named, its
-/// sig-less projection a fixpoint; and a record under one kind at most.
-/// Answers each kind's refusal, `None` where the kind admitted the body.
-fn assert_the_laws_at(body: &[u8]) -> [Option<ParseRefusal>; 2] {
-    let shown = || {
-        let head: String = String::from_utf8_lossy(body).chars().take(240).collect();
-        format!("{head:?} ({} bytes)", body.len())
-    };
-    let past = body.len() > MAX_REGISTRY_RECORD_BYTES;
-    let answers = [BodyKind::Binding, BodyKind::Endpoint].map(|kind| {
-        let answer = std::panic::catch_unwind(|| parse(kind, body))
-            .unwrap_or_else(|_| panic!("{kind:?}: the parse panicked on {}", shown()));
-        match answer {
-            Ok(record) => {
-                assert!(!past, "{kind:?}: a record past the cap: {}", shown());
-                assert_eq!(record.body.kind(), kind, "{}", shown());
-                let encoded = encode(&record.body, record.sig.as_deref());
-                assert!(encoded.as_bytes() == body, "{kind:?}: not its own encoding: {}", shown());
-                let again = parse(kind, record.canonical_sigless().as_bytes());
-                assert_eq!(again, Ok(Record { body: record.body, sig: None }), "{}", shown());
-                None
-            }
-            Err(refusal) => {
-                assert_eq!(
-                    refusal == ParseRefusal::PastCap,
-                    past,
-                    "{kind:?}: {refusal}: {}",
-                    shown()
-                );
-                Some(refusal)
-            }
-        }
-    });
-    assert!(answers.iter().any(Option::is_some), "a record under both kinds: {}", shown());
-    answers
 }
 
 /// How many hostile bodies a run draws: 20,000 in the gate, forty times as

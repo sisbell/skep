@@ -59,10 +59,22 @@
 //!   back off its log, and a log whose cut fails too — or whose compaction
 //!   failed past its rename — takes no further append until a compaction
 //!   completes (`jsonl.rs`), so open's tail check never cuts a whole line
-//!   and no line lands in a file no open reads. The store compacts only at
-//!   its open, so a log stopped while the store serves stays stopped, every
-//!   act that writes it answering `Io`, until the next open reads it afresh
-//!   ([`Store`]).
+//!   and no line lands in a file no open reads. The store compacts at its
+//!   open and at its caller's runtime compaction
+//!   ([`Store::compact_logs_if_past`] — the daemon's pruner, once a log has
+//!   passed a size trigger, under the store's lock on that log's appends
+//!   alone), which rewrites a stopped log whatever its count; between the
+//!   two a stopped log answers `Io` to every act that writes it ([`Store`]).
+//! * THE OPERATOR's TWO DOORS OPEN THE STORE AS THE DAEMON DOES NOT
+//!   (`media.md` §Recovery): [`Store::inspect`] reads the four stores as
+//!   they stand — the logs' torn tails cut in memory alone, nothing
+//!   reconciled, compacted, swept, synced or created — and
+//!   [`Store::install_file`] writes one file by the PUT's own order and
+//!   nothing else, no lease and no record, beside a serving daemon or a
+//!   stopped one; and [`Store::rename_aside`] is the pruner's act in the
+//!   unlink's place: the file renamed to an aside name under the caller's
+//!   arm, the aside removed after it under none, so the arm is never held
+//!   across the freeing of a file's blocks.
 //! * OPEN RECONCILES AND COMPACTS: first, nothing at a name it acts on
 //!   followed or shared — a symbolic link, a special file, or a second link
 //!   to a file the store writes in place failing the open, named
@@ -128,7 +140,7 @@ mod store;
 pub use error::BlobError;
 pub use lease::{Lease, LeaseState};
 pub use partials::{HashFunction, SYNC_GRAIN};
-pub use store::{Finished, Step, Store, Stream};
+pub use store::{Finished, Inspection, Step, Store, Stream};
 pub use uploads::{NotAnUploadId, UploadId, UploadRecord, IDENTIFIER_BYTES};
 
 /// What this crate promises without saying so (C-SEND-SYNC, C-GOOD-ERR,
@@ -151,6 +163,7 @@ const _: fn() = || {
     crossing::<NotAnUploadId>();
     // The values a caller keeps.
     fn kept<T: Clone + Eq + std::hash::Hash + std::fmt::Debug + Send + Sync>() {}
+    assert_send_sync::<Inspection>();
     kept::<Finished>();
     kept::<HashFunction>();
     kept::<Lease>();

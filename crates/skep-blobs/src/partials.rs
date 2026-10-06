@@ -54,13 +54,15 @@ pub const SYNC_GRAIN: u64 = 1024 * 1024;
 
 /// The partial's file name inside its designation directory —
 /// `.upload-<identifier>`: the dot keeps it apart from any hex name a walk
-/// of the directory reads as a blob.
-fn partial_name(id: &UploadId) -> String {
+/// of the directory reads as a blob. The operator's pull names its temp
+/// file so too (`Store::install_file`), with a fresh identifier no record
+/// names, so an open that meets it mid-pull removes it as the orphan it is.
+pub(crate) fn partial_name(id: &UploadId) -> String {
     format!(".upload-{id}")
 }
 
 /// The identifier a partial's file name spells, if it is one.
-fn id_of_partial_name(name: &str) -> Option<UploadId> {
+pub(crate) fn id_of_partial_name(name: &str) -> Option<UploadId> {
     name.strip_prefix(".upload-").and_then(UploadId::parse)
 }
 

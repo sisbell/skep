@@ -250,6 +250,15 @@ pub(crate) fn free_space(path: &Path) -> io::Result<u64> {
     Ok(v.f_bavail.saturating_mul(v.f_frsize))
 }
 
+/// The volume's CAPACITY at `path`, in bytes — the same `statvfs` read as
+/// [`free_space`]'s, its total blocks times the fragment size: what the
+/// daemon's default per-account limit is a share of, read once at its
+/// start.
+pub(crate) fn capacity(path: &Path) -> io::Result<u64> {
+    let v = rustix::fs::statvfs(path)?;
+    Ok(v.f_blocks.saturating_mul(v.f_frsize))
+}
+
 /// The path of a blob of `designation` and `hex` under `root`, or `None`
 /// where either name is malformed — the name check a caller's names pass
 /// before they become a blob's path

@@ -33,9 +33,17 @@
 //! guard, the gate reads under the credential lock's read arm, the pruner
 //! under its write arm, the walk under neither — so the index sits behind
 //! a `parking_lot::RwLock` taken innermost and held across no other lock.
-//! The cheap PREFIX TEST ([`names_kind_by_prefix`]) stands before every
-//! parse, so a walk over a prose board's million one-byte values costs a
-//! byte compare apiece and a parse for the cells alone.
+//! The cheap PREFIX TEST (`cell::names_kind_by_prefix`, the picture kind's
+//! canonical opening) stands before every parse, so a walk over a prose
+//! board's million one-byte values costs a byte compare apiece and a parse
+//! for the cells alone.
+//!
+//! THE INVENTORY's READS ([`CellIndex::references`], [`CellIndex::accounts`],
+//! [`CellIndex::halts`]; `media.md` §Recovery, "THE OPERATOR CAN LIST THE
+//! HOLES"): the operator's tool walks a copy's world into a fresh index
+//! through the same [`walk`] and reads it whole — every reference with the
+//! cells naming it and the size they name, every account's base, every halt
+//! mark — recording nothing (D9).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -56,7 +64,7 @@ use skep_engine::{Engine, World};
 use skep_kernel::Snapshot;
 use skep_namespace::{HasM3, PrincipalId};
 
-use super::cell::{self, Cell};
+use super::cell::{self, names_kind_by_prefix, Cell};
 use super::gate::{hex_of, DESIGNATION};
 use crate::notice;
 
@@ -95,11 +103,26 @@ pub(crate) struct HaltMark {
     pub fault: String,
 }
 
+/// One REFERENCE as the inventory reads it: a hash, the cells naming it,
+/// and the size they name it at — the largest any names, as the base
+/// counts it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reference {
+    pub designation: String,
+    pub hex: String,
+    pub size: u64,
+    /// The cells naming the hash, by address, in address order.
+    pub cells: Vec<Tumbler>,
+}
+
 /// The entries, behind the index's lock.
 #[derive(Default)]
 struct Entries {
     /// Per hash, the cells naming it — the pruner's reference test.
     by_hash: BTreeMap<HashKey, BTreeSet<Tumbler>>,
+    /// Per hash, the largest size any cell names it at — the inventory's
+    /// length test, kept for a cell under no seat too.
+    sizes: BTreeMap<HashKey, u64>,
     /// Per account (the principal seated at it, ω of the cell's document),
     /// the hashes its cells name at their size — the base.
     by_account: BTreeMap<PrincipalId, Account>,
@@ -194,6 +217,8 @@ impl CellIndex {
             return false;
         }
         entries.by_hash.entry(key.clone()).or_default().insert(at.tumbler().clone());
+        let named = entries.sizes.entry(key.clone()).or_insert(0);
+        *named = (*named).max(cell.size);
         if let Some(owner) = owner {
             let account = entries.by_account.entry(owner).or_default();
             // One size per hash per account, order-independent — the LARGEST
@@ -269,12 +294,40 @@ impl CellIndex {
         (e.cells.len(), e.by_hash.len(), e.halts.len())
     }
 
+    /// EVERY REFERENCE — the inventory's read: per hash, the cells naming
+    /// it and the size they name, in hash order.
+    pub(crate) fn references(&self) -> Vec<Reference> {
+        let e = self.entries.read();
+        e.by_hash
+            .iter()
+            .map(|(key, cells)| Reference {
+                designation: key.designation.clone(),
+                hex: key.hex.clone(),
+                size: e.sizes.get(key).copied().unwrap_or(0),
+                cells: cells.iter().cloned().collect(),
+            })
+            .collect()
+    }
+
+    /// EVERY ACCOUNT's BASE — the inventory's read: the principal seated at
+    /// the account and its base, in principal order.
+    pub(crate) fn accounts(&self) -> Vec<(PrincipalId, u64)> {
+        self.entries.read().by_account.iter().map(|(p, a)| (*p, a.base)).collect()
+    }
+
+    /// EVERY HALT MARK standing, by address — the inventory's read.
+    pub(crate) fn halts(&self) -> Vec<HaltMark> {
+        self.entries.read().halts.values().cloned().collect()
+    }
+
     /// THE ONE ENTRY PATH for a value past the prefix test, at `at` in
     /// `world`: the one parser's verdict — a cell is entered under ω of the
     /// cell's document (M3's one walk, read once per cell); a value naming
-    /// the kind under no schema is entered as a halt mark; a value the
-    /// parser reads as no cell of the kind — past the cap, malformed past
-    /// the prefix — is nothing, as it is to the door.
+    /// the kind under no schema is entered as a halt mark — a body past the
+    /// cap that opens as the picture kind among them, since the cap bounds
+    /// the parse and never the classification; a value the parser reads as
+    /// no cell of the kind — malformed past the prefix, or past the cap and
+    /// opening as no kind — is nothing, as it is to the door.
     pub(crate) fn enter_value(&self, world: &World, at: &Address, bytes: &[u8]) -> Entered {
         match cell::parse(bytes) {
             Ok(cell) => {
@@ -338,23 +391,6 @@ impl CellIndex {
             }
         }
     }
-}
-
-/// THE CHEAP PREFIX TEST, ahead of every parse: past leading JSON
-/// whitespace, the bytes open `{"type":"<the kind's address>"` — the
-/// canonical spelling every pinned schema puts first (D13: one JSON object
-/// naming its kind), so a value that names the kind in that form costs a
-/// parse and every other value a byte compare. A value naming the kind in
-/// a spelling no canonical schema produces — the member reordered, a space
-/// inside the object — is read as no cell here, as the door refuses it.
-pub(crate) fn names_kind_by_prefix(bytes: &[u8]) -> bool {
-    let start = bytes
-        .iter()
-        .position(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
-        .unwrap_or(bytes.len());
-    let Some(rest) = bytes[start..].strip_prefix(b"{\"type\":\"") else { return false };
-    let kind = cell::KIND.as_bytes();
-    rest.len() > kind.len() && rest.starts_with(kind) && rest[kind.len()] == b'"'
 }
 
 /// THE WALK AT OPEN: every value of the world `snapshot` holds, through the
@@ -447,27 +483,8 @@ impl WalkHold {
 mod tests {
     use super::*;
 
-    const HASH: &str = "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262";
-
     fn addr(s: &str) -> Address {
         crate::codec::wire_address(s).expect("a test address")
-    }
-
-    /// The prefix test admits the canonical opening — past JSON whitespace —
-    /// and refuses prose, another kind, a longer address sharing the kind's
-    /// digits, and a value naming the kind in a spelling no schema produces.
-    #[test]
-    fn the_prefix_test_reads_the_canonical_opening_alone() {
-        let canonical = format!(r#"{{"type":"{}","hash":"{HASH}","size":5}}"#, cell::KIND);
-        assert!(names_kind_by_prefix(canonical.as_bytes()));
-        assert!(names_kind_by_prefix(format!(" \n{canonical}").as_bytes()));
-        assert!(names_kind_by_prefix(format!(r#"{{"type":"{}","hash_alg":"x"}}"#, cell::KIND).as_bytes()), "a second schema's form");
-        assert!(!names_kind_by_prefix(b"prose"));
-        assert!(!names_kind_by_prefix(b"{\"type\":\"1.1.0.1.0.1.0.3.1\"}"), "another kind");
-        assert!(!names_kind_by_prefix(format!(r#"{{"type":"{}1"}}"#, cell::KIND).as_bytes()), "a longer address");
-        assert!(!names_kind_by_prefix(format!(r#"{{ "type":"{}"}}"#, cell::KIND).as_bytes()), "a space inside");
-        assert!(!names_kind_by_prefix(b""));
-        assert!(!names_kind_by_prefix(b"   "));
     }
 
     /// The two maps and the base: an entry is idempotent per address; two
@@ -513,6 +530,14 @@ mod tests {
         assert_eq!(mark.kind, cell::KIND);
         assert_eq!(index.counts(), (6, 2, 1));
         assert_eq!(index.total_base(), 22, "a halt mark counts in no base");
+        // The inventory's reads: every reference at the largest size named,
+        // its cells in address order; every account's base; the halt marks.
+        let refs = index.references();
+        assert_eq!(refs.len(), 2);
+        assert_eq!((refs[0].hex.as_str(), refs[0].size, refs[0].cells.len()), (hex.as_str(), 12, 5));
+        assert_eq!((refs[1].size, refs[1].cells.len()), (4, 1), "a cell under no seat: named, sized");
+        assert_eq!(index.accounts(), vec![(a, 12), (b, 10)]);
+        assert_eq!(index.halts().len(), 1);
         index.complete(Rebuild { values: 0, cells: 0, halts: 0, walk: Duration::ZERO, parse: Duration::ZERO });
         assert!(index.is_ready());
         assert_eq!(index.rebuild_report().map(|r| r.values), Some(0));

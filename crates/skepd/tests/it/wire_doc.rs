@@ -642,13 +642,18 @@ fn doc_states_the_media_cell_and_its_door() {
         "| `not_owner`, `site.addr` the draft | `publish` | permanent |",
         "| `credential_refused`, `detail` `unbound_cell` |",
         "| `credential_refused`, `detail` `unknown_cell_schema` |",
-        "this picture's bytes were not deposited here under your account",
+        "no deposit of yours here is this picture's cell as written",
+        "never that none was made",
         "the face now names the deposit the cell lacks",
         "INTERIM PINS",
         "What this build does NOT carry, by name",
     ] {
         assert!(media.contains(fact), "§Media says {fact:?}");
     }
+    assert!(
+        !media.contains("this picture's bytes were not deposited here under your account"),
+        "the face that said none was made is gone"
+    );
     let fixture: Value = serde_json::from_str(
         &std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/it/fixtures/media/cells.json"),
@@ -663,7 +668,7 @@ fn doc_states_the_media_cell_and_its_door() {
     assert!(codes.contains("Media (lanes A and B"), "§Rejection codes points at §Media");
     let refusals = prose("\n### Credential refusals", &["\n## Operations"]);
     assert!(
-        refusals.contains("**The media door's three tokens**"),
+        refusals.contains("**The media door's four tokens**"),
         "§Credential refusals points at §Media"
     );
 }
@@ -880,7 +885,7 @@ fn doc_states_the_upload_its_pins_and_its_refusals() {
         "| 507 | `deposit_refused` |",
         "| 500 | `blob_io` |",
         "| 503 | `index_rebuilding` |",
-        "{\"base\":<bytes>,\"deposits\":[…],\"limits\":null,\"pending\":<bytes>,\"uploads\":[…]}",
+        "{\"base\":<bytes>,\"deposits\":[…],\"limits\":null,\"pending\":<bytes>,\"per_account\":<bytes>,\"uploads\":[…]}",
         "`credential_refused`, `detail` `lease_lapsed`",
         "a hash this principal did not deposit under its own lease",
         "NO ANSWER OF THE UPLOAD SAYS WHETHER THE FILE WAS ALREADY HERE",
@@ -940,6 +945,96 @@ fn doc_states_the_upload_its_pins_and_its_refusals() {
     assert_eq!(fixture["refusals"]["index_rebuilding"].as_u64(), Some(503));
 }
 
+/// THE UPLOAD SETTING, THE DEFAULT LIMIT, THE CREATION's GATE, THE WINDOW,
+/// THE PRUNER's RENAME-ASIDE AND COMPACTION, AND THE OPERATOR's TOOLS (the
+/// owner's ruling on the default limit; sweep 6's rows s6-lam-a, b, c, e,
+/// f, s6-op-a, b, d, g, h; the register M-I5 (b), (c), (d), (e), (f), M-I6
+/// (b), (d), (f), (h), M-I7 (e)): §Media states the setting with its flag,
+/// its variable and its `/health` echo; the default per-account limit's
+/// figure, its floor, its echo as `per_account` and the record that
+/// overrides it; the creation's two new refusals, `floor` on no length and
+/// `standing` with its face; the window's retry-class answer with its
+/// code; the past-cap classification; the pruner's rename aside under the
+/// arm and the compaction on its trigger; the empty resume; the H1 timing
+/// rows and the K2 residue by name; the INTERIM pins each; and a subsection
+/// of its own for the two tools, naming what neither writes. §The other
+/// endpoints carries the `media` object beside `auth`; §Credential refusals
+/// the fourth token and its class. The daemon's answers are pinned in
+/// `blob_routes.rs`, `media.rs`, `pruner.rs`, `hazard.rs` and `tools.rs`;
+/// this pins that the contract says so, and that the vector set names the
+/// same pins.
+#[test]
+fn doc_states_the_upload_setting_the_default_limit_the_creations_gate_and_the_tools() {
+    let media = prose("\n### Media — the reference cell and its door", &["\n### Links (writes)"]);
+    for fact in [
+        "**The upload setting.**",
+        "`--no-uploads`",
+        "SKEPD_UPLOADS=false",
+        "`media.uploads`",
+        "`uploads_closed`",
+        "one eighth of the volume's capacity",
+        "never below 256 MiB",
+        "`per_account`",
+        "the venue total unset",
+        "| 403 | `upload_refused` | `detail` `unauthenticated`, `claim_first`, `node_tier` or `uploads_closed`",
+        "`scope` `floor` AT THE CREATION",
+        "`scope` `standing`",
+        "the end of one of them",
+        "`credential_refused`, `detail` `index_rebuilding` |",
+        "| retry |",
+        "the cap bounds the parse and never the classification",
+        "RENAMED ASIDE",
+        "the aside UNLINKED AFTER, under no arm",
+        "(d) THE COMPACTION",
+        "an EMPTY resume",
+        "in the same time",
+        "named residue",
+        "the standing-uploads bound, 8",
+        "the compaction trigger, four times",
+        "1,024 lines",
+        "**The operator's tools.**",
+        "`skepd inventory --data-dir <dir> [--no-rehash]`",
+        "`skepd pull --data-dir <dir> [--hash <hex>] <file>`",
+        "writes nothing under `blobs/`",
+        "no lease, no record, no journal entry",
+        "What this build does NOT carry, by name",
+        "the upload permit pool",
+    ] {
+        assert!(media.contains(fact), "§Media says {fact:?}");
+    }
+    let health = prose("\n## The other endpoints", &["\n## A first board, end to end"]);
+    for fact in ["`media`", "`media.uploads`", "\"media\":{\"uploads\":true}"] {
+        assert!(health.contains(fact), "§The other endpoints says {fact:?}");
+    }
+    let refusals = prose("\n### Credential refusals", &["\n## Operations"]);
+    assert!(refusals.contains("**The media door's four tokens**"), "§Credential refusals names the four");
+    assert!(refusals.contains("`index_rebuilding`"), "§Credential refusals names the window's token");
+    let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
+    assert!(codes.contains("four tokens"), "§Rejection codes counts four");
+    let fixture: Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/it/fixtures/media/uploads.json"),
+        )
+        .expect("the vector set exists"),
+    )
+    .expect("the vector set is JSON");
+    assert_eq!(fixture["pins"]["max_standing_uploads"].as_u64(), Some(8));
+    assert_eq!(fixture["pins"]["default_limit_share"].as_u64(), Some(8));
+    assert_eq!(fixture["pins"]["default_limit_floor_bytes"].as_u64(), Some(256 * 1024 * 1024));
+    assert_eq!(fixture["pins"]["compaction_trigger"].as_u64(), Some(4));
+    assert_eq!(fixture["pins"]["compaction_min_lines"].as_u64(), Some(1024));
+    assert_eq!(fixture["pins"]["uploads_closed_detail"].as_str(), Some("uploads_closed"));
+    let cells: Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/it/fixtures/media/cells.json"),
+        )
+        .expect("the cell vector set exists"),
+    )
+    .expect("JSON");
+    let past = cells["vectors"].as_array().unwrap().iter().find(|v| v["name"] == "past_the_cap").expect("the vector");
+    assert_eq!(past["names_kind"].as_bool(), Some(true), "a past-cap body opening as the kind names it");
+}
+
 /// THE CELL INDEX, THE READINESS REFUSAL AND THE PRUNER (the register
 /// M-I5 (b), (f), M-I6 (a), (b); the rulings ms5-R and ms5-T4): §Media
 /// states the index — what it holds, the entry at commit and the walk at
@@ -982,6 +1077,8 @@ fn doc_states_the_cell_index_the_readiness_refusal_and_the_pruner() {
         "the time an answer takes is part of",
         "the readiness token, `index_rebuilding`, 503, retry-class",
         "the pruner's cadence, one hour between passes",
+        "RENAMED ASIDE",
+        "(d) THE COMPACTION",
     ] {
         assert!(media.contains(fact), "§Media says {fact:?}");
     }

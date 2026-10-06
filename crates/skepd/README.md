@@ -36,10 +36,32 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   base — is entered at every commit that mints a cell and rebuilt at
   every open on a thread, its three readers (the upload's creation and
   resume, the deposit read) answered `503 index_rebuilding` until the
-  walk completes and every other request served meanwhile; the pruner's
-  pass removes expired partials and, under the credential lock's
-  exclusive arm one file at a time, unlinks the files no cell names and
-  no live lease holds, halting on a schema it does not know.
+  walk completes and every other request served meanwhile, the door
+  answering the same token retry-class where its lease arm alone would
+  refuse in that window; the pruner's pass removes expired partials,
+  renames aside — under the credential lock's exclusive arm one file at
+  a time — the files no cell names and no live lease holds and unlinks
+  each aside after under no arm, halting on a schema it does not know,
+  and compacts the two logs once past their trigger. A per-account
+  limit is ALWAYS in force: the daemon's default, one eighth of the
+  volume's capacity read once at start and never below 256 MiB, until a
+  limits record is installed, echoed by the deposit read as a written
+  limit is; a principal holds at most eight standing uploads, and the
+  floor is read at the creation on no declared length.
+- **The upload setting and the operator's tools** — `--no-uploads`
+  (`SKEPD_UPLOADS=false`) closes the upload family, the creation and the
+  resume refused `uploads_closed` before any body byte, echoed on
+  `/health` as `media.uploads`; open by default. And two subcommands of
+  this binary, run over a board directory with no server: `skepd
+  inventory --data-dir <dir> [--no-rehash]` lists the holes — every
+  picture cell whose file is absent, of another length or of other
+  bytes — each account's base and pending bytes and the venue total, the
+  standing and expired uploads, the halt marks and any foreign
+  designation directory, recording no read and writing nothing under
+  `blobs/`; `skepd pull --data-dir <dir> [--hash <hex>] <file>` restores
+  a file a committed cell names by the PUT's own install order, no lease
+  and no record written, beside a serving daemon when held to the
+  inventory's hash.
 - **Deterministic JSON codec** — key-sorted marshalling so wire bytes
   never depend on map iteration order.
 - **Durability is configuration** — fsync policy and checkpoint

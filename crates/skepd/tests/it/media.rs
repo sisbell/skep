@@ -144,6 +144,17 @@ fn assert_token(v: &Value, op: &str, token: &str) {
     );
 }
 
+/// THE WINDOW's whole shape: `credential_refused`, `index_rebuilding` as
+/// `detail`, RETRY — the one retry-class token of the door's armed set —
+/// the op, no `site`, and nothing else.
+fn assert_rebuilding(v: &Value, op: &str) {
+    assert_eq!(
+        v,
+        &json!({"code": "credential_refused", "detail": "index_rebuilding", "disposition": "retry", "op": op, "resp": "rejected"}),
+        "the window's whole shape"
+    );
+}
+
 /// `published_target`: permanent, no detail, no site (§The version-chain
 /// refusals) — the same bytes M5 answers an undeclared insert.
 fn assert_published_target(v: &Value, op: &str) {
@@ -344,9 +355,10 @@ fn a_cell_whose_hash_the_caller_deposited_under_its_own_lease_is_admitted() {
 /// the deposit read answer `503 index_rebuilding`; the progress read and
 /// the termination are served (no upload: `404 no_upload`), every text
 /// read and write is served, `/changes` is served, and the door's own
-/// binding arm answers off the lease arm alone (`unbound_cell` for a cell
-/// no lease covers). The walk released, the creation is admitted and the
-/// deposit read answers.
+/// binding arm answers off the lease arm alone — a cell no lease covers
+/// answered the window's retry-class `index_rebuilding`, never a permanent
+/// token, the index arm unread (s6-lam-b). The walk released, the creation
+/// is admitted and the deposit read answers.
 #[test]
 fn the_three_readers_refuse_index_rebuilding_and_nothing_else_does() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -373,7 +385,7 @@ fn the_three_readers_refuse_index_rebuilding_and_nothing_else_does() {
     assert_eq!(text_of(port, Some(&bare), &draft, 1, 3), "abc", "a text read is served");
     let (st, _) = get(port, "/changes?since=0");
     assert_eq!(st, 200, "/changes is served");
-    assert_token(&op(port, Some(&bare), &cell_frame(&draft, 4, &canonical_cell(), None)), "insert", "unbound_cell");
+    assert_rebuilding(&op(port, Some(&bare), &cell_frame(&draft, 4, &canonical_cell(), None)), "insert");
     assert!(!sd.daemon().index_is_ready(), "nothing above readied the index");
     release_the_walk(&sd);
     assert!(sd.daemon().index_is_ready());
@@ -384,12 +396,13 @@ fn the_three_readers_refuse_index_rebuilding_and_nothing_else_does() {
     sd.shutdown();
 }
 
-/// ms5-R, THE DOOR NEVER WAITS — THE WINDOW's ANSWER: a cell whose lease
-/// lapsed, named by the owner's own cell already, is refused
-/// `lease_lapsed` while the walk runs — the index arm skipped, the lease
-/// arm alone — a refusal for the request as sent, its act the re-PUT, and
+/// ms5-R, THE DOOR NEVER WAITS — THE WINDOW's ANSWER (s6-lam-b; the
+/// register M-I5 (b)): a cell whose lease lapsed, named by the owner's own
+/// cell already, its file whole, is answered `index_rebuilding` RETRY-CLASS
+/// while the walk runs — the index arm skipped, the lease arm alone would
+/// refuse, and the door answers the state and never a permanent token —
 /// nothing permanent lands; the walk done, the same insert is admitted
-/// (the index arm) and the owner's shot too.
+/// (the index arm) and the owner's shot too, with no re-PUT.
 #[test]
 fn the_binding_reads_the_lease_arm_alone_until_the_walk_completes() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -412,21 +425,132 @@ fn the_binding_reads_the_lease_arm_alone_until_the_walk_completes() {
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let d2 = owner_draft(port, &bare);
-    let before = head_position(port);
-    assert_token(&op(port, Some(&bare), &cell_frame(&d2, 1, &cell, None)), "insert", "lease_lapsed");
     let edition = published_edition(port, &signed);
+    let before = head_position(port);
+    assert_rebuilding(&op(port, Some(&bare), &cell_frame(&d2, 1, &cell, None)), "insert");
     let v = op(port, Some(&signed), &publish_frame(&edition, None, Some(&d1), &[run(&d1, &format!("{d1}.0.1.1"), 1)]));
-    assert_token(&v, "publish", "lease_lapsed");
+    assert_rebuilding(&v, "publish");
+    // A cell no lease covers and none of the owner's cells names: the same
+    // state in the window, the permanent `unbound_cell` once the walk is
+    // done.
+    let never = cell_of(b"never deposited here", 20);
+    assert_rebuilding(&op(port, Some(&bare), &cell_frame(&d2, 1, &never, None)), "insert");
     assert_eq!(content_extent(port, Some(&bare), &d2), 0, "nothing permanent landed");
     assert_eq!(content_extent(port, None, &edition), 0);
-    let _ = before;
+    assert_eq!(head_position(port), before, "a retry-class refusal commits nothing");
     release_the_walk(&sd);
     assert_eq!(sd.daemon().index_counts(), (1, 1, 0), "the walk found d1's cell");
+    assert_eq!(deposits_of(port, &bare), vec![], "no re-PUT: the lease stays lapsed");
     expect_resp(&op(port, Some(&bare), &cell_frame(&d2, 1, &cell, None)), "ack_addr");
     let m = acked_addr(&op(port, Some(&signed), &publish_frame(&edition, None, Some(&d1), &[run(&d1, &format!("{d1}.0.1.1"), 1)])));
-    assert_eq!(delivery(port, None, &m, 1, 1), json!([{"atom": cell}]), "the owner's shot after the lapse");
+    assert_eq!(delivery(port, None, &m, 1, 1), json!([{"atom": cell}]), "the owner's shot after the lapse, no re-PUT");
+    assert_token(&op(port, Some(&bare), &cell_frame(&owner_draft(port, &bare), 1, &never, None)), "insert", "unbound_cell");
     assert_eq!(sd.daemon().index_counts(), (3, 1, 0), "the insert's and the shot's cells entered at commit");
     sd.shutdown();
+}
+
+/// The quantiles of a sorted sample, in milliseconds — the timing rows'
+/// one rendering.
+fn quantiles_ms(sorted: &[Duration]) -> (f64, f64, f64) {
+    let q = |p: f64| sorted[((sorted.len() - 1) as f64 * p).round() as usize].as_secs_f64() * 1e3;
+    (q(0.5), q(0.9), q(0.99))
+}
+
+/// THE INDEX ARM's H1 TIMING ROW (M-I2 (e); s6-leak-c; the gate's timing
+/// partition — REPORTED, NEVER ASSERTED, sm-Q4): a stranger's cell over a
+/// hash another account's cell names, that account's lease lapsed, answers
+/// `unbound_cell` in the same TIME as the same cell over a hash no cell
+/// names — the binding's index arm is read at the requester's OWN account's
+/// hashes and never at the per-hash list, so another account's cell is
+/// never consulted. Two boards: one where the owner deposited the bytes,
+/// placed the cell and let the lease lapse, one where nobody deposited
+/// anything; the stranger's insert refused `unbound_cell` on both, N trials
+/// apiece, the distributions printed beside K2's rows. `H1_TRIALS` narrows
+/// the count.
+#[test]
+#[ignore = "timing test - gate-full only"]
+fn h1_a_strangers_cell_over_another_accounts_named_hash_answers_in_the_same_time() {
+    let trials: usize = std::env::var("H1_TRIALS").ok().and_then(|s| s.parse().ok()).unwrap_or(300);
+    let bytes = seeded_bytes(100_000, 0x11);
+    let cell = cell_of(&bytes, bytes.len() as u64);
+    let mut rows = Vec::new();
+    for (label, placed) in [("named by another account's cell, its lease lapsed", true), ("named by no cell", false)] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let bare = open_session(port, CLAIMANT_PRINCIPAL);
+        if placed {
+            put_whole(port, &bare, &bytes);
+            assert_eq!(insert_cell(port, &bare, &owner_draft(port, &bare), &bytes, bytes.len() as u64), "ok");
+            sd.daemon().advance_media_clock_ms(LEASE_MS);
+            assert_eq!(deposits_of(port, &bare), vec![], "the lease lapsed");
+        }
+        let stranger = seat_stranger(port, 971);
+        let d = create_doc(port, &stranger.session, &stranger.account);
+        let frame = cell_frame(&d, 1, &cell, None);
+        let mut latencies: Vec<Duration> = Vec::with_capacity(trials);
+        for _ in 0..trials {
+            let started = Instant::now();
+            let v = op(port, Some(&stranger.session), &frame);
+            latencies.push(started.elapsed());
+            assert_token(&v, "insert", "unbound_cell");
+        }
+        latencies.sort();
+        let (p50, p90, p99) = quantiles_ms(&latencies);
+        println!("H1 index arm, {label}: {trials} trials, unbound_cell p50 {p50:.3} ms p90 {p90:.3} ms p99 {p99:.3} ms");
+        rows.push((p50, p99));
+        sd.shutdown();
+    }
+    println!(
+        "H1 index arm: the gap (named − unnamed) at p50 {:+.3} ms, p99 {:+.3} ms — reported, not asserted (sm-Q4); K2's residue stands beside it",
+        rows[0].0 - rows[1].0,
+        rows[0].1 - rows[1].1
+    );
+}
+
+/// THE BLIND KIND's H1 TIMING ROW (M-I2 (e); the door's blind row, s6-bd-b;
+/// the gate's timing partition — REPORTED, NEVER ASSERTED, sm-Q4): the
+/// door's answer to a blind cell is ADMITTED, and its TIME one, with and
+/// without a file deposited under a lease whose hex equals the commitment's
+/// hex — the binding is never asked for the kind, so no deposit of the
+/// board's is consulted. Two boards, N trials apiece, the distributions
+/// printed beside the index arm's.
+#[test]
+#[ignore = "timing test - gate-full only"]
+fn h1_a_blind_cells_answer_takes_the_same_time_with_and_without_a_deposit_under_its_hex() {
+    let trials: usize = std::env::var("H1_TRIALS").ok().and_then(|s| s.parse().ok()).unwrap_or(300);
+    let bytes = seeded_bytes(100_000, 0x12);
+    let commitment: [u8; 32] = *blake3::hash(&bytes).as_bytes();
+    let blind = blind_cell_of(&commitment);
+    let mut rows = Vec::new();
+    for (label, deposited) in [("a file deposited under the commitment's hex", true), ("no deposit", false)] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let bare = open_session(port, CLAIMANT_PRINCIPAL);
+        if deposited {
+            put_whole(port, &bare, &bytes);
+        }
+        let d = owner_draft(port, &bare);
+        let mut latencies: Vec<Duration> = Vec::with_capacity(trials);
+        for i in 0..trials {
+            let frame = common::atom_frame(&d, i as u64 + 1, &blind);
+            let started = Instant::now();
+            let v = op(port, Some(&bare), &frame);
+            latencies.push(started.elapsed());
+            expect_resp(&v, "ack_addr");
+        }
+        latencies.sort();
+        let (p50, p90, p99) = quantiles_ms(&latencies);
+        println!("H1 blind row, {label}: {trials} trials, admitted p50 {p50:.3} ms p90 {p90:.3} ms p99 {p99:.3} ms");
+        rows.push((p50, p99));
+        sd.shutdown();
+    }
+    println!(
+        "H1 blind row: the gap (deposited − none) at p50 {:+.3} ms, p99 {:+.3} ms — reported, not asserted (sm-Q4)",
+        rows[0].0 - rows[1].0,
+        rows[0].1 - rows[1].1
+    );
 }
 
 /// THE COMPOSITION CLAUSE (M-I5 (b); `media.md` Op inventory 1, "THE WALK's

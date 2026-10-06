@@ -55,15 +55,25 @@
 //! picture's opening alone; the door and the fetch route read
 //! [`classify`].
 //!
-//! THE CAP. A body past [`MAX_CELL_BYTES`] parses as no cell and names
-//! nothing: `serde_json` builds its whole tree before the first schema check
-//! (the record cap's reason, `skep-identity`'s `payload.rs`), and a canonical
-//! cell is under 140 bytes. The cap is the KIND's, every schema's under it —
-//! a schema never raises it — so a body past it is no cell of any schema and
-//! D13's halt has nothing to halt on. Every pin here is INTERIM (the board's
-//! sm-Q8), confirmed at the media round; the kind's address is TEST-ONLY
-//! under the commons media range 3.80–3.89, unallocated as of this lane, and
-//! the allocation lands by this one constant and the fixture's `kind`.
+//! THE CAP BOUNDS THE PARSE AND NEVER THE CLASSIFICATION (`media.md` item
+//! 4; the register M-I3 (a)). A body past [`MAX_CELL_BYTES`] is parsed by
+//! no reader of a cell: `serde_json` builds its whole tree before the first
+//! schema check (the record cap's reason, `skep-identity`'s `payload.rs`),
+//! and a canonical cell is under 140 bytes, so the cap bounds the tree a
+//! hostile body can command. But a value NAMES THE KIND by its `type`
+//! member, read by the parse within the cap and, past it, by THE CANONICAL
+//! OPENING every schema's canonical form writes first,
+//! `{"type":"<the kind's address>"` ([`names_kind_by_prefix`], [`opens_as`];
+//! D13: the carrier goes first in JSON) — so a past-cap value that opens as
+//! a kind is [`Refusal::UnknownSchema`] of that kind, refused
+//! `unknown_cell_schema` at the door and, for the picture's kind, entered a
+//! halt mark by the index, whatever cap a later build pins; and one that
+//! opens as neither is [`Refusal::PastCap`], no cell of any schema and no
+//! entry. The cap is the KIND's, every schema's under it — a schema never
+//! raises it. Every pin here is INTERIM (the board's sm-Q8), confirmed at
+//! the media round; the kind's address is TEST-ONLY under the commons media
+//! range 3.80–3.89, unallocated as of this lane, and the allocation lands by
+//! this one constant and the fixture's `kind`.
 
 use std::fmt::Write as _;
 
@@ -121,7 +131,10 @@ pub(crate) struct Cell {
 /// every media kind's: a blind cell's parser answers the same three.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Refusal {
-    /// Past [`MAX_CELL_BYTES`]: parsed by no reader of a cell, naming nothing.
+    /// Past [`MAX_CELL_BYTES`] and opening as no kind: parsed by no reader
+    /// of a cell, naming nothing. A past-cap body that opens as a kind is
+    /// never this: it names the kind by its canonical opening and is
+    /// [`Refusal::UnknownSchema`] of that kind.
     PastCap,
     /// Not a JSON object whose `type` member is the parser's kind: prose, a
     /// predicate def, a record of another kind — the other media kind among
@@ -160,11 +173,21 @@ pub(crate) enum Class {
 /// `type` member read ONCE, then the named kind's own canonical check — so
 /// two kinds cost one JSON tree, and the cap is the KIND's, one for every
 /// media cell kind, since a classification by `type` must parse before it
-/// knows the kind. Total over any bytes, as [`parse`] is: no panic, no
-/// allocation past the cap's tree, and `serde_json` answers only "is this
-/// JSON, and which" (AUTH-2.1's discipline) — every verdict a schema's own.
+/// knows the kind. PAST THE CAP the classification reads the canonical
+/// opening alone, one byte compare per kind ([`opens_as`]): a body opening
+/// as a kind names it under no schema this build reads, and one opening as
+/// neither names nothing. Total over any bytes, as [`parse`] is: no panic,
+/// no allocation past the cap's tree, and `serde_json` answers only "is
+/// this JSON, and which" (AUTH-2.1's discipline) — every verdict a schema's
+/// own.
 pub(crate) fn classify(bytes: &[u8]) -> Class {
     if bytes.len() > MAX_CELL_BYTES {
+        if opens_as(KIND, bytes) {
+            return Class::Picture(Err(Refusal::UnknownSchema));
+        }
+        if opens_as(blind::KIND, bytes) {
+            return Class::Blind(Err(Refusal::UnknownSchema));
+        }
         return Class::None(Refusal::PastCap);
     }
     // A JSON object opens with `{` past any leading whitespace (RFC 8259's
@@ -231,6 +254,34 @@ fn parse_picture(object: &Map<String, Value>, bytes: &[u8]) -> Result<Cell, Refu
         return Err(unknown);
     }
     Ok(cell)
+}
+
+/// THE CHEAP PREFIX TEST of the PICTURE kind, ahead of every parse the
+/// cell index makes (`media/index.rs`'s walk and entries, `write_path.rs`'s
+/// prefix test ahead of a commit): past leading JSON whitespace, the bytes
+/// open `{"type":"<the kind's address>"` — the canonical spelling every
+/// pinned schema puts first (D13: one JSON object naming its kind), so a
+/// value that names the kind in that form costs a parse and every other
+/// value a byte compare. A value naming the kind in a spelling no canonical
+/// schema produces — the member reordered, a space inside the object — is
+/// read as no cell here, as the door refuses it. The picture's alone: the
+/// blind kind makes no index entry.
+pub(crate) fn names_kind_by_prefix(bytes: &[u8]) -> bool {
+    opens_as(KIND, bytes)
+}
+
+/// Whether `bytes` open as the kind at `kind` — past leading JSON
+/// whitespace (RFC 8259's four), exactly `{"type":"<kind>"` — the one
+/// reading of the canonical opening both the prefix test and the past-cap
+/// classification make, so the two cannot disagree on what names a kind.
+pub(crate) fn opens_as(kind: &str, bytes: &[u8]) -> bool {
+    let start = bytes
+        .iter()
+        .position(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+        .unwrap_or(bytes.len());
+    let Some(rest) = bytes[start..].strip_prefix(b"{\"type\":\"") else { return false };
+    let kind = kind.as_bytes();
+    rest.len() > kind.len() && rest.starts_with(kind) && rest[kind.len()] == b'"'
 }
 
 /// The hash member's 32 bytes, from exactly 64 LOWERCASE hex characters;
@@ -351,11 +402,63 @@ mod tests {
             "another_kind",
             "second_designation",
             "past_the_cap",
+            "past_the_cap_not_naming",
             "whitespace",
             "blind_kind",
         ] {
             assert!(vectors.iter().any(|v| v["name"] == required), "the set names {required}");
         }
+    }
+
+    /// THE PREFIX TEST reads the canonical opening alone — past JSON
+    /// whitespace — and refuses prose, another kind, a longer address sharing
+    /// the kind's digits, and a value naming the kind in a spelling no
+    /// schema produces; `opens_as` reads the blind kind's opening the same
+    /// way, and neither reads the other's.
+    #[test]
+    fn the_prefix_test_reads_the_canonical_opening_alone() {
+        let hash = "ab".repeat(32);
+        let canonical = format!(r#"{{"type":"{KIND}","hash":"{hash}","size":5}}"#);
+        assert!(names_kind_by_prefix(canonical.as_bytes()));
+        assert!(names_kind_by_prefix(format!(" \n{canonical}").as_bytes()));
+        assert!(names_kind_by_prefix(format!(r#"{{"type":"{KIND}","hash_alg":"x"}}"#).as_bytes()), "a second schema's form");
+        assert!(!names_kind_by_prefix(b"prose"));
+        assert!(!names_kind_by_prefix(b"{\"type\":\"1.1.0.1.0.1.0.3.1\"}"), "another kind");
+        assert!(!names_kind_by_prefix(format!(r#"{{"type":"{KIND}1"}}"#).as_bytes()), "a longer address");
+        assert!(!names_kind_by_prefix(format!(r#"{{ "type":"{KIND}"}}"#).as_bytes()), "a space inside");
+        assert!(!names_kind_by_prefix(b""));
+        assert!(!names_kind_by_prefix(b"   "));
+        let blind_cell = blind::encode(&BlindCell { commitment: [0xcd; blind::COMMITMENT_BYTES] });
+        assert!(!names_kind_by_prefix(blind_cell.as_bytes()), "the blind kind makes no index entry");
+        assert!(opens_as(blind::KIND, blind_cell.as_bytes()));
+        assert!(!opens_as(blind::KIND, canonical.as_bytes()));
+    }
+
+    /// THE CAP BOUNDS THE PARSE AND NEVER THE CLASSIFICATION (M-I3 (a);
+    /// `media.md` item 4): a body past the cap that opens as the picture
+    /// kind is `Picture(Err(UnknownSchema))` — the door's `unknown_cell_schema`
+    /// and the index's halt mark, `names_kind` true through the picture's
+    /// parser — one opening as the blind kind `Blind(Err(UnknownSchema))`,
+    /// which the picture's parser reads as not its kind (no halt mark), and
+    /// one opening as neither — the kind named later in the body, or no kind
+    /// — `None(PastCap)`, naming nothing; and no tree is built for any of
+    /// the three.
+    #[test]
+    fn past_the_cap_the_canonical_opening_names_the_kind_and_nothing_else_does() {
+        let pad = "x".repeat(MAX_CELL_BYTES);
+        let picture = format!(r#"{{"type":"{KIND}","hash":"{}","size":5,"pad":"{pad}"}}"#, "ab".repeat(32));
+        assert!(picture.len() > MAX_CELL_BYTES);
+        assert_eq!(classify(picture.as_bytes()), Class::Picture(Err(Refusal::UnknownSchema)));
+        assert_eq!(parse(picture.as_bytes()), Err(Refusal::UnknownSchema), "the picture's parser halts on it");
+        let blind_past = format!(r#"{{"type":"{}","commitment":"{}","pad":"{pad}"}}"#, blind::KIND, "cd".repeat(32));
+        assert_eq!(classify(blind_past.as_bytes()), Class::Blind(Err(Refusal::UnknownSchema)));
+        assert_eq!(parse(blind_past.as_bytes()), Err(Refusal::NotTheKind), "not the picture's: no halt mark");
+        let later = format!(r#"{{"pad":"{pad}","type":"{KIND}"}}"#);
+        assert_eq!(classify(later.as_bytes()), Class::None(Refusal::PastCap), "the kind named past the opening");
+        assert_eq!(parse(later.as_bytes()), Err(Refusal::PastCap));
+        let spaced = format!(r#"{{ "type":"{KIND}","pad":"{pad}"}}"#);
+        assert_eq!(classify(spaced.as_bytes()), Class::None(Refusal::PastCap), "a spelling no schema produces");
+        assert!(!Refusal::PastCap.names_kind());
     }
 
     /// THE ONE CLASSIFICATION (`media.md` item 4; the investigation §5 (i)):

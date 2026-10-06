@@ -49,6 +49,7 @@ mod scan_bound;
 mod signed_ops;
 mod source_gate;
 mod tidy;
+mod tools;
 mod transport;
 mod universal_grants;
 mod vectors;

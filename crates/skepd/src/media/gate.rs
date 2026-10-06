@@ -11,43 +11,67 @@
 //!
 //! THE THREE SCOPES, in the order they are read — the requester's own
 //! record first (M-I2 (e)): THE OWN SCOPE, the principal's BASE plus its
-//! PENDING BYTES, against the venue's per-account limit (M-I6 (b)) — the
-//! base the cell index's number for the account, the sum of the distinct
-//! hashes its cells name at their size (M-I6 (a)); the pending bytes its
-//! live leases on hashes none of its cells names, plus its standing
-//! uploads' bytes received — refused on the declared total BEFORE the body
-//! and re-checked as the body is written; THE VENUE TOTAL, the sum of every
-//! account's own scope — every base, every pending — record-derived and
-//! never the directory's bytes, enforced ONLY as the body is written (a
-//! pre-body yes-or-no would show the board-wide figure free of charge; as
-//! written, its refusal's offset is that figure PRICED at the headroom's
-//! transfer — ms4-E1, accepted and named); THE FLOOR, the volume's free
-//! space held above [`FLOOR_BYTES`] so a deposit never takes the journal's
-//! last bytes, read off the host and showing no figure. The own scope and
-//! the venue total read the base, so the creation and the resume are two
-//! of the index's three readers: refused `index_rebuilding` until the walk
-//! at open completes (ms5-R).
+//! PENDING BYTES, against the per-account limit (M-I6 (b)) — the base the
+//! cell index's number for the account, the sum of the distinct hashes its
+//! cells name at their size (M-I6 (a)); the pending bytes its live leases
+//! on hashes none of its cells names, plus its standing uploads' bytes
+//! received — refused on the declared total BEFORE the body and re-checked
+//! as the body is written; THE VENUE TOTAL, the sum of every account's own
+//! scope — every base, every pending — record-derived and never the
+//! directory's bytes, enforced ONLY as the body is written (a pre-body
+//! yes-or-no would show the board-wide figure free of charge; as written,
+//! its refusal's offset is that figure PRICED at the headroom's transfer —
+//! ms4-E1, accepted and named); THE FLOOR, the volume's free space held
+//! above [`FLOOR_BYTES`] so a deposit never takes the journal's last bytes,
+//! read off the host and showing no figure — AT THE CREATION, on no
+//! declared length, before the partial and the record, and per chunk as
+//! the body is written ([`MediaGate::admit_creation`], [`MediaGate::admit_bytes`];
+//! M-I5 (f): every record, lease and retirement the store appends descends
+//! from a creation or a body byte the floor admitted). Beside the own
+//! scope, THE STANDING-UPLOADS BOUND ([`MediaGate::admit_creation`]; the
+//! wire's fourth scope, `standing`): a principal holds at most
+//! `MAX_STANDING_UPLOADS` standing uploads, counted off its own records, a
+//! creation past it refused before its partial and its record, its face
+//! naming the end of one of them (P13, P29). The own scope and the venue
+//! total read the base, so the creation and the resume are two of the
+//! index's three readers: refused `index_rebuilding` until the walk at open
+//! completes (ms5-R).
 //!
 //! THE BINDING reads THE INDEX FIRST ([`MediaGate::binding`]): a hash the
 //! requester's own cells already name is a REFERENCE, kept by no lease —
 //! admitted where the file is on disk whole at the cell's size, the deposit
 //! gone where it is not — and only then the lease arm. Until the walk
-//! completes the index arm is skipped and the lease arm alone decides: the
+//! completes the index arm is skipped and the lease arm alone ADMITS: the
 //! door is not one of the three readers and never waits (ms5-R, "for
-//! nothing else"); a cell refused in that window is a refusal for the
-//! request as sent, its act the re-PUT, and nothing permanent lands.
+//! nothing else"); and where that arm alone would REFUSE, the answer is
+//! [`Binding::Rebuilding`] — the index arm it has not read may admit the
+//! cell — which the door answers RETRY-CLASS, as the readiness refusal
+//! does, and never a permanent token.
 //!
-//! THE LIMITS RECORD (§Recovery: "ONE published, attributed, supersedable
-//! record … installed in the daemon by the serving layer as AUTH-4.70's
-//! list is"): its kind, schema and install channel are AUTH's docket's
-//! (RES-208; the investigation's STOP 5) — OWED. What stands in: a DAEMON
-//! DEFAULT (D1, as the nonce TTL is: a per-account limit of NONE, a venue
-//! total of NONE, the lease interval [`LEASE_INTERVAL_DEFAULT_MS`], the
-//! per-file cap `MAX_BLOB_BYTES`, no address) and an INSTALL HOOK
-//! ([`MediaGate::install`]) the serving layer's channel will call; the
-//! startup log names the record in force or that none is. The venue total
-//! and the per-account limit are testable against an installed record
-//! alone until the channel lands.
+//! THE LIMITS IN FORCE ([`Limits`]; the register M-I6 (b), (d)): A
+//! PER-ACCOUNT LIMIT IS ALWAYS IN FORCE. THE DAEMON's DEFAULT (the owner's
+//! ruling; `media.md` Op inventory 1, "UPLOADS ARE OPEN BY DEFAULT, WITH A
+//! DEFAULT PER-ACCOUNT LIMIT IN FORCE FROM START") is ONE EIGHTH OF THE
+//! VOLUME's CAPACITY, read once at the open off the same `statvfs` the
+//! floor reads ([`skep_blobs::Store::capacity`]) and never below 256 MiB —
+//! `DEFAULT_LIMIT_SHARE`, `DEFAULT_LIMIT_FLOOR_BYTES` (D1) — the whole
+//! default being the floor on a host that cannot answer its capacity; the
+//! venue total UNSET; the lease interval [`LEASE_INTERVAL_DEFAULT_MS`]; the
+//! per-file cap `MAX_BLOB_BYTES`; no address. The deposit read ECHOES the
+//! limit in force as `per_account`, whatever its source, beside the
+//! record's address or `null` (P37: a boundary setting is echoed for the
+//! faces that key on it; R68's read-before-refusal holds under the
+//! default). THE LIMITS RECORD (§Recovery: "ONE published, attributed,
+//! supersedable record … installed in the daemon by the serving layer as
+//! AUTH-4.70's list is") — its kind, schema and install channel AUTH's
+//! docket's (RES-208), OWED — OVERRIDES the default WHOLE through the
+//! INSTALL HOOK ([`MediaGate::install`]) the serving layer's channel will
+//! call; the startup log names the record in force, or the default and its
+//! source.
+//!
+//! THE UPLOAD SETTING ([`crate::media::MediaOptions`]) rides here as the
+//! resource's configuration — the switch the routes read
+//! ([`MediaGate::uploads_open`]) and `/health` echoes ([`MediaGate::health_object`]).
 //!
 //! THE LEASE INTERVAL and ITS HORIZON (Op inventory 1, "THE INTERVAL HAS A
 //! DEFAULT, A GATE CONSTANT OF THE DAEMON's"; "a lease lapsed past a
@@ -63,12 +87,17 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::{Mutex, RwLock};
+use serde_json::Value;
 use skep_blobs::{Lease, LeaseState, Store, UploadId};
 use skep_namespace::PrincipalId;
 
 use super::cell::{Cell, HASH_BYTES};
 use super::index::CellIndex;
-use crate::limits::MAX_BLOB_BYTES;
+use super::MediaOptions;
+use crate::codec::obj;
+use crate::limits::{
+    DEFAULT_LIMIT_FLOOR_BYTES, DEFAULT_LIMIT_SHARE, MAX_BLOB_BYTES, MAX_STANDING_UPLOADS,
+};
 #[cfg(any(test, feature = "test-hooks"))]
 use crate::notice;
 
@@ -101,13 +130,16 @@ pub(crate) const LEASE_HORIZON_MS: u64 = 30 * 24 * 3600 * 1000;
 pub(crate) const FLOOR_BYTES: u64 = 256 * 1024 * 1024;
 
 /// The limits in force: the venue's record, or the daemon's defaults where
-/// none is installed.
+/// none is installed ([`Limits::defaults_for`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Limits {
-    /// The per-account limit on the own scope; `None` binds nothing.
+    /// The per-account limit on the own scope — the daemon's default, or
+    /// the record's. `None` binds nothing: a written record's own say, never
+    /// the daemon's default (M-I6 (b): a per-account limit is always in
+    /// force where none is installed).
     pub per_account: Option<u64>,
     /// The venue's total over every account's own scope; `None` binds
-    /// nothing.
+    /// nothing — the default.
     pub venue_total: Option<u64>,
     /// The lease interval and the upload's expiry interval.
     pub lease_interval_ms: u64,
@@ -118,21 +150,27 @@ pub(crate) struct Limits {
     pub address: Option<String>,
 }
 
-impl Default for Limits {
-    fn default() -> Limits {
+impl Limits {
+    /// THE DAEMON's DEFAULTS, for a volume of `capacity` bytes (`None`: a
+    /// host that could not answer its capacity): the per-account limit one
+    /// eighth of the capacity and never below 256 MiB — the floor alone
+    /// where the host answered nothing — the venue total unset, the lease
+    /// interval and the per-file cap the daemon's, no address.
+    pub(crate) fn defaults_for(capacity: Option<u64>) -> Limits {
+        let share = capacity.map_or(0, |c| c / DEFAULT_LIMIT_SHARE);
         Limits {
-            per_account: None,
+            per_account: Some(share.max(DEFAULT_LIMIT_FLOOR_BYTES)),
             venue_total: None,
             lease_interval_ms: LEASE_INTERVAL_DEFAULT_MS,
             per_file_cap: MAX_BLOB_BYTES,
             address: None,
         }
     }
-}
 
-impl Limits {
-    /// The line the startup log names the record in force by.
-    pub(crate) fn log_line(&self) -> String {
+    /// The line the startup log names the limits in force by: the record,
+    /// or the default and its source — the capacity read, or the floor on a
+    /// host that answered none.
+    pub(crate) fn log_line(&self, capacity: Option<u64>) -> String {
         let scope = |v: Option<u64>| v.map_or("none".to_string(), |n| n.to_string());
         match &self.address {
             Some(a) => format!(
@@ -143,11 +181,25 @@ impl Limits {
                 self.lease_interval_ms,
                 self.per_file_cap
             ),
-            None => format!(
-                "media limits: no record installed — the daemon's defaults stand: per-account \
-                 none, venue total none, lease interval {} ms, per-file cap {}",
-                self.lease_interval_ms, self.per_file_cap
-            ),
+            None => {
+                let source = match capacity {
+                    Some(c) => format!(
+                        "one eighth of the volume's capacity of {c} bytes, never below {} bytes",
+                        DEFAULT_LIMIT_FLOOR_BYTES
+                    ),
+                    None => format!(
+                        "the {} byte floor alone, the host answering no capacity",
+                        DEFAULT_LIMIT_FLOOR_BYTES
+                    ),
+                };
+                format!(
+                    "media limits: no record installed — the daemon's default stands: per-account \
+                     {} ({source}), venue total none, lease interval {} ms, per-file cap {}",
+                    scope(self.per_account),
+                    self.lease_interval_ms,
+                    self.per_file_cap
+                )
+            }
         }
     }
 }
@@ -163,6 +215,9 @@ pub(crate) enum Scope {
     Venue,
     /// The host's floor.
     Floor,
+    /// The principal's standing uploads, at the bound — an addition to the
+    /// armed set (P6), answered at the creation alone.
+    Standing,
 }
 
 impl Scope {
@@ -172,6 +227,7 @@ impl Scope {
             Scope::Own => "own",
             Scope::Venue => "venue",
             Scope::Floor => "floor",
+            Scope::Standing => "standing",
         }
     }
 }
@@ -196,12 +252,25 @@ pub(crate) enum Binding {
     /// one whose size the cell contradicts: no deposit of this principal's
     /// is the cell as written.
     Unbound,
+    /// THE WINDOW's ANSWER: the index's walk at open has not completed, and
+    /// the lease arm alone would answer [`Binding::Lapsed`] or
+    /// [`Binding::Unbound`] — the index arm it has not read may admit the
+    /// cell (a hash the principal's own cells name, its file whole), so the
+    /// state is answered retry-class and never a permanent token. A cell the
+    /// lease arm admits in the window is admitted as it is at any time.
+    Rebuilding,
 }
 
 /// The daemon's media resource.
 pub(crate) struct MediaGate {
     store: Store,
     limits: RwLock<Limits>,
+    /// The upload setting, as the operator supplied it.
+    options: MediaOptions,
+    /// The volume's capacity as read once at the open — the default limit's
+    /// source, kept for the startup line; `None` where the host answered
+    /// none.
+    capacity: Option<u64>,
     /// THE HOLD (clause (5)): the uploads a stream owns right now, in
     /// skepd's memory and no store — a PUT naming one is refused while it
     /// is held; the hold ends with the stream's connection.
@@ -226,15 +295,21 @@ pub(crate) struct MediaGate {
 
 impl MediaGate {
     /// Open the blob store under `data_dir/blobs` — its reconciliation and
-    /// compaction complete before this returns — with the daemon's default
-    /// limits in force and an EMPTY, NOT-READY cell index: the daemon hands
-    /// the index to the write path and starts the walk that readies it.
-    pub(crate) fn open(data_dir: &Path) -> io::Result<MediaGate> {
+    /// compaction complete before this returns — under `options`, with the
+    /// daemon's default limits in force (the volume's capacity read ONCE
+    /// here, off the opened store; a host that cannot answer it leaves the
+    /// default at its floor) and an EMPTY, NOT-READY cell index: the daemon
+    /// hands the index to the write path and starts the walk that readies
+    /// it.
+    pub(crate) fn open_with(data_dir: &Path, options: MediaOptions) -> io::Result<MediaGate> {
         let now = wall_clock_ms();
         let store = Store::open(data_dir.join("blobs"), Duration::from_millis(LEASE_HORIZON_MS), now)?;
+        let capacity = store.capacity().ok();
         Ok(MediaGate {
             store,
-            limits: RwLock::new(Limits::default()),
+            limits: RwLock::new(Limits::defaults_for(capacity)),
+            options,
+            capacity,
             held: Mutex::new(HashSet::new()),
             index: Arc::new(CellIndex::new()),
             #[cfg(any(test, feature = "test-hooks"))]
@@ -246,6 +321,13 @@ impl MediaGate {
             #[cfg(any(test, feature = "test-hooks"))]
             passes_completed: AtomicU64::new(0),
         })
+    }
+
+    /// [`MediaGate::open_with`] under the default options — the unit
+    /// suites' open, where the setting is not what is under test.
+    #[cfg(test)]
+    pub(crate) fn open(data_dir: &Path) -> io::Result<MediaGate> {
+        Self::open_with(data_dir, MediaOptions::default())
     }
 
     pub(crate) fn store(&self) -> &Store {
@@ -267,6 +349,33 @@ impl MediaGate {
     /// The limits in force.
     pub(crate) fn limits(&self) -> Limits {
         self.limits.read().clone()
+    }
+
+    /// The line the startup log names the limits in force by — the record,
+    /// or the default and the capacity it was read from.
+    pub(crate) fn startup_line(&self) -> String {
+        self.limits.read().log_line(self.capacity)
+    }
+
+    /// TEST SEAM: the volume's capacity as read at the open — what the
+    /// default limit was computed from, so a suite judges the echoed figure
+    /// against the same read.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(crate) fn capacity(&self) -> Option<u64> {
+        self.capacity
+    }
+
+    /// THE UPLOAD SETTING: whether the upload family is open — the creation
+    /// and the resume admitted.
+    pub(crate) fn uploads_open(&self) -> bool {
+        self.options.uploads
+    }
+
+    /// `/health`'s `media` object — the boundary setting's one echo (P37),
+    /// built where its state lives through the codec's own key-sorting
+    /// object: `{"uploads": <bool>}`.
+    pub(crate) fn health_object(&self) -> Value {
+        obj(vec![("uploads", Value::Bool(self.options.uploads))])
     }
 
     /// THE INSTALL HOOK (AUTH-4.70's channel, owed): replace the limits in
@@ -365,6 +474,25 @@ impl MediaGate {
         Ok(())
     }
 
+    /// THE GATE AT THE CREATION, after the own scope's read of the declared
+    /// total ([`MediaGate::admit_declared`]) and before the partial and the
+    /// record (P13; M-I5 (f), M-I6 (b)): THE STANDING-UPLOADS BOUND first —
+    /// the principal's own record, counted off its standing uploads — then
+    /// THE FLOOR, read on no declared length: the volume's free space
+    /// already below [`FLOOR_BYTES`] refuses the creation that would append
+    /// a record no scope counts. The resume reads neither: it creates
+    /// nothing.
+    pub(crate) fn admit_creation(&self, principal: PrincipalId, now_ms: u64) -> Result<(), Scope> {
+        let key = Self::key(principal);
+        if self.store.uploads_of(&key, now_ms).len() >= MAX_STANDING_UPLOADS {
+            return Err(Scope::Standing);
+        }
+        if self.free_space() < FLOOR_BYTES {
+            return Err(Scope::Floor);
+        }
+        Ok(())
+    }
+
     /// THE GATE AS THE BODY IS WRITTEN: would the next `n` bytes of the
     /// upload `id`, of which `written` are already in its partial, pass the
     /// own scope, the venue's total, or the floor — in that order? The own
@@ -419,12 +547,14 @@ impl MediaGate {
     /// written); the deposit gone — LAPSED — where the file is absent or
     /// not whole — then the principal's own lease record, the file only
     /// where that record names the hash under a live lease. Until the walk
-    /// completes the index arm is skipped: the door never waits on the
-    /// index.
+    /// completes the index arm is skipped — the door never waits on the
+    /// index — and where the lease arm alone would refuse, the answer is
+    /// [`Binding::Rebuilding`]: the arm not yet read may admit the cell.
     pub(crate) fn binding(&self, principal: PrincipalId, cell: &Cell) -> Binding {
         let key = Self::key(principal);
         let hex = hex_of(&cell.hash);
-        if self.index.is_ready() {
+        let ready = self.index.is_ready();
+        if ready {
             if let Some(named) = self.index.size_named(principal, DESIGNATION, &hex) {
                 // A size that cannot be read is read as no file: the
                 // binding has no I/O answer of its own, and a deposit whose
@@ -436,7 +566,7 @@ impl MediaGate {
                 };
             }
         }
-        match self.store.lease_state(&key, DESIGNATION, &hex, self.now_ms()) {
+        let lease_arm = match self.store.lease_state(&key, DESIGNATION, &hex, self.now_ms()) {
             LeaseState::None => Binding::Unbound,
             LeaseState::Lapsed { .. } => Binding::Lapsed,
             LeaseState::Live { size, .. } => match self.store.blob_size(DESIGNATION, &hex).ok().flatten() {
@@ -454,6 +584,14 @@ impl MediaGate {
                 }
                 _ => Binding::Lapsed,
             },
+        };
+        match lease_arm {
+            Binding::Admitted => Binding::Admitted,
+            // THE WINDOW (ms5-R; the door never waits): a refusal off the
+            // lease arm alone, the index arm unread, is the state and no
+            // permanent verdict.
+            _ if !ready => Binding::Rebuilding,
+            refused => refused,
         }
     }
 
@@ -475,11 +613,12 @@ impl MediaGate {
     /// parks — what the dirty-crash harness watches for before it kills.
     #[cfg(any(test, feature = "test-hooks"))]
     pub(crate) const PRUNE_HOLD_NOTICE: &'static str =
-        "test seam: held inside the pruner's pass after an unlink; kill this process";
+        "test seam: held inside the pruner's pass after a rename aside; kill this process";
 
     /// TEST SEAM: arm the hold inside the pruner's pass — after the next
-    /// unlink, the arm released, the pass writes [`MediaGate::PRUNE_HOLD_NOTICE`]
-    /// and parks its thread for good. Not disarmable.
+    /// rename aside, the arm released and the aside not yet unlinked, the
+    /// pass writes [`MediaGate::PRUNE_HOLD_NOTICE`] and parks its thread
+    /// for good. Not disarmable.
     #[cfg(any(test, feature = "test-hooks"))]
     pub(crate) fn arm_prune_hold(&self) {
         self.prune_hold.store(true, Ordering::Relaxed);
@@ -487,7 +626,7 @@ impl MediaGate {
 
     /// The pass's side of the seam: park here where the hold is armed.
     #[cfg(any(test, feature = "test-hooks"))]
-    pub(crate) fn hold_after_unlink_if_armed(&self) {
+    pub(crate) fn hold_after_rename_if_armed(&self) {
         if self.prune_hold.load(Ordering::Relaxed) {
             notice::line(Self::PRUNE_HOLD_NOTICE);
             loop {
@@ -535,20 +674,51 @@ mod tests {
         assert_eq!(DESIGNATION, HashFunction::Blake3.designation(), "the store files every deposit under it");
     }
 
-    /// The daemon's defaults: nothing bound but the per-file cap, the lease
-    /// interval seven days, the horizon thirty; an installed record's cap
-    /// is held at the route's own.
+    /// A ready index, built by hand: the walk's door, with nothing walked.
+    fn ready(gate: &MediaGate) {
+        gate.index().complete(super::super::index::Rebuild {
+            values: 0,
+            cells: 0,
+            halts: 0,
+            walk: std::time::Duration::ZERO,
+            parse: std::time::Duration::ZERO,
+        });
+    }
+
+    /// THE DAEMON's DEFAULTS (M-I6 (b), (d); the owner's ruling): a
+    /// per-account limit is ALWAYS in force — one eighth of the volume's
+    /// capacity as the opened store reads it, never below 256 MiB, the floor
+    /// alone where no capacity is answered — the venue total unset, the
+    /// lease interval seven days, the horizon thirty, the per-file cap the
+    /// route's; the startup line names the default and its source; an
+    /// installed record overrides the default whole, its cap held at the
+    /// route's own; and the upload setting rides the gate, open by default
+    /// and echoed as the `media` object.
     #[test]
-    fn the_defaults_bind_nothing_but_the_cap_and_an_install_is_held_to_the_route() {
+    fn the_default_limit_is_a_share_of_the_capacity_and_an_install_overrides_it_whole() {
+        assert_eq!(Limits::defaults_for(None).per_account, Some(DEFAULT_LIMIT_FLOOR_BYTES), "no capacity: the floor");
+        assert_eq!(Limits::defaults_for(Some(1 << 30)).per_account, Some(DEFAULT_LIMIT_FLOOR_BYTES), "a small volume: the floor");
+        assert_eq!(Limits::defaults_for(Some(16 << 30)).per_account, Some(2 << 30), "one eighth");
+        assert_eq!(Limits::defaults_for(Some(16 << 30)).venue_total, None, "the venue total unset");
+        assert!(Limits::defaults_for(None).log_line(None).contains("the host answering no capacity"));
         let dir = tempfile::tempdir().expect("tempdir");
-        let gate = MediaGate::open(dir.path()).expect("the store opens");
-        assert_eq!(gate.limits(), Limits::default());
+        let gate = MediaGate::open_with(dir.path(), MediaOptions::default()).expect("the store opens");
+        let capacity = gate.store().capacity().expect("statvfs answers");
+        assert_eq!(gate.capacity(), Some(capacity), "read once at the open");
+        let limit = (capacity / DEFAULT_LIMIT_SHARE).max(DEFAULT_LIMIT_FLOOR_BYTES);
+        assert_eq!(gate.limits(), Limits::defaults_for(Some(capacity)));
+        assert_eq!(gate.limits().per_account, Some(limit));
         assert_eq!(LEASE_INTERVAL_DEFAULT_MS, 7 * 24 * 3600 * 1000);
         assert_eq!(LEASE_HORIZON_MS, 30 * 24 * 3600 * 1000);
         assert_eq!(FLOOR_BYTES, 256 * 1024 * 1024);
+        let line = gate.startup_line();
+        assert!(line.contains("one eighth of the volume's capacity") && line.contains(&limit.to_string()), "{line}");
         let now = gate.now_ms();
         let p = PrincipalId(1);
-        assert_eq!(gate.admit_declared(p, u64::MAX / 2, now), Ok(()), "no per-account limit binds");
+        assert_eq!(gate.admit_declared(p, limit + 1, now), Err(Scope::Own), "the default binds");
+        assert_eq!(gate.admit_declared(p, limit, now), Ok(()));
+        assert!(gate.uploads_open());
+        assert_eq!(gate.health_object(), serde_json::json!({"uploads": true}));
         gate.install(Limits {
             per_account: Some(10),
             venue_total: Some(100),
@@ -562,29 +732,112 @@ mod tests {
         assert!(!gate.index_ready(), "an opened gate's index is not ready until the walk");
         assert_eq!(MediaGate::principal_of_key(&MediaGate::key(p)), Some(p));
         assert_eq!(MediaGate::principal_of_key("k"), None);
-        assert!(gate.limits().log_line().contains("1.0.1.0.3.1"));
+        assert!(gate.startup_line().contains("1.0.1.0.3.1"));
         // The hold: one stream at a time.
         let id = UploadId::parse("0123456789abcdef0123456789abcdef").unwrap();
         assert!(gate.claim(id));
         assert!(!gate.claim(id));
         gate.release(id);
         assert!(gate.claim(id));
+        let mut closed = MediaOptions::default();
+        closed.uploads = false;
+        let gate = MediaGate::open_with(tempfile::tempdir().expect("tempdir").path(), closed).expect("the store opens");
+        assert!(!gate.uploads_open());
+        assert_eq!(gate.health_object(), serde_json::json!({"uploads": false}));
     }
 
-    /// The binding's three answers off the store: no lease is UNBOUND; a
-    /// live lease over a whole file whose length the cell names is
-    /// ADMITTED; the same lease with the cell's size wrong is UNBOUND; the
-    /// file removed under the live lease is LAPSED; the lease lapsed is
-    /// LAPSED within the horizon and UNBOUND past it. Then THE INDEX ARM:
-    /// a cell the principal's own cells already name is ADMITTED past every
-    /// lapse while the file is whole at the cell's size, LAPSED where it is
-    /// not, and skipped while the index is not ready; another principal's
+    /// THE GATE AT THE CREATION (M-I6 (b), (f); M-I5 (f); P13): the
+    /// standing-uploads bound, read off the principal's own records first —
+    /// the ninth creation refused `standing`, an end making room — then the
+    /// floor, read on no declared length; a creation refused at either
+    /// makes no partial and no record. The resume's own scope reads
+    /// neither. Another principal's uploads count in nothing here.
+    #[test]
+    fn the_creation_is_refused_at_the_standing_bound_and_at_the_floor_before_any_record() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let gate = MediaGate::open_with(dir.path(), MediaOptions::default()).expect("the store opens");
+        let now = gate.now_ms();
+        let (p, q) = (PrincipalId(3), PrincipalId(4));
+        let store = gate.store();
+        assert_eq!(MAX_STANDING_UPLOADS, 8);
+        let mut standing = Vec::new();
+        for _ in 0..MAX_STANDING_UPLOADS {
+            assert_eq!(gate.admit_creation(p, now), Ok(()));
+            standing.push(store.create_upload(&MediaGate::key(p), HashFunction::Blake3, 10, Duration::from_secs(60), now).unwrap().id);
+        }
+        assert_eq!(gate.admit_creation(p, now), Err(Scope::Standing), "the bound, off the principal's own records");
+        assert_eq!(gate.admit_creation(q, now), Ok(()), "another principal's uploads count in nothing here");
+        store.end_upload(&MediaGate::key(p), &standing[0], now).unwrap();
+        assert_eq!(gate.admit_creation(p, now), Ok(()), "an end makes room");
+        gate.set_free_space(Some(FLOOR_BYTES - 1));
+        assert_eq!(gate.admit_creation(p, now), Err(Scope::Floor), "the floor, on no declared length");
+        assert_eq!(gate.admit_declared(p, 0, now), Ok(()), "the declared total's read is the own scope's alone");
+        gate.set_free_space(Some(FLOOR_BYTES));
+        assert_eq!(gate.admit_creation(p, now), Ok(()));
+        store.create_upload(&MediaGate::key(p), HashFunction::Blake3, 10, Duration::from_secs(60), now).unwrap();
+        gate.set_free_space(Some(0));
+        assert_eq!(gate.admit_creation(p, now), Err(Scope::Standing), "the bound is read first, the own record before the host's state");
+        assert_eq!(Scope::Standing.token(), "standing");
+    }
+
+    /// THE WINDOW (ms5-R; the register M-I5 (b)): while the index is not
+    /// ready, a cell no lease covers, one whose lease lapsed, and one whose
+    /// live lease stands over no file each answer REBUILDING — the index
+    /// arm unread may admit them — while a live lease over a whole file
+    /// ADMITS as at any time; the walk complete, the same cells answer their
+    /// permanent verdicts, and a cell the principal's own cells name is
+    /// admitted off the index arm.
+    #[test]
+    fn the_window_answers_rebuilding_where_the_lease_arm_alone_would_refuse() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let gate = MediaGate::open_with(dir.path(), MediaOptions::default()).expect("the store opens");
+        let p = PrincipalId(5);
+        let bytes = b"a picture in the window";
+        let hash: [u8; HASH_BYTES] = *blake3::hash(bytes).as_bytes();
+        let cell = Cell { hash, size: bytes.len() as u64 };
+        assert!(!gate.index_ready());
+        assert_eq!(gate.binding(p, &cell), Binding::Rebuilding, "no lease, the index unread");
+        let key = MediaGate::key(p);
+        let store = gate.store();
+        let deposit = |interval: u64| {
+            let now = gate.now_ms();
+            let rec = store.create_upload(&key, HashFunction::Blake3, bytes.len() as u64, Duration::from_millis(interval), now).unwrap();
+            let mut stream = store.resume(&key, &rec.id, 0, now).unwrap();
+            stream.append(bytes, now).unwrap();
+            stream.finish(Duration::from_millis(interval), now).unwrap();
+        };
+        deposit(10_000);
+        assert_eq!(gate.binding(p, &cell), Binding::Admitted, "a live lease over a whole file admits in the window");
+        assert_eq!(gate.binding(p, &Cell { hash, size: 1 }), Binding::Rebuilding, "the size contradicted: the state, not unbound");
+        gate.advance_clock_ms(10_000);
+        assert_eq!(gate.binding(p, &cell), Binding::Rebuilding, "lapsed: the state, not lease_lapsed");
+        deposit(10_000);
+        std::fs::remove_file(store.blob_path(DESIGNATION, &hex_of(&hash)).unwrap()).unwrap();
+        assert_eq!(gate.binding(p, &cell), Binding::Rebuilding, "a live lease over no file: the state");
+        let at = crate::codec::wire_address("1.0.1.0.2.0.1.1").unwrap();
+        gate.index().enter(&at, Some(p), &cell);
+        ready(&gate);
+        assert_eq!(gate.binding(p, &cell), Binding::Lapsed, "named, the file gone: the permanent verdict");
+        deposit(10_000);
+        assert_eq!(gate.binding(p, &cell), Binding::Admitted, "named, the file whole: the index arm");
+        assert_eq!(gate.binding(PrincipalId(6), &cell), Binding::Unbound, "another principal, ready: permanent");
+    }
+
+    /// The binding's three answers off the store, the index ready and
+    /// holding nothing of the hash: no lease is UNBOUND; a live lease over
+    /// a whole file whose length the cell names is ADMITTED; the same lease
+    /// with the cell's size wrong is UNBOUND; the file removed under the
+    /// live lease is LAPSED; the lease lapsed is LAPSED within the horizon
+    /// and UNBOUND past it. Then THE INDEX ARM: a cell the principal's own
+    /// cells already name is ADMITTED past every lapse while the file is
+    /// whole at the cell's size, LAPSED where it is not; another principal's
     /// cells admit nothing of this one's; and the own scope counts a named
     /// hash in the base and not in the pending bytes.
     #[test]
     fn the_binding_reads_the_principals_own_lease_first_and_the_file_only_under_it() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let gate = MediaGate::open(dir.path()).expect("the store opens");
+        let gate = MediaGate::open_with(dir.path(), MediaOptions::default()).expect("the store opens");
+        ready(&gate);
         let p = PrincipalId(7);
         let bytes = b"a picture";
         let hash: [u8; HASH_BYTES] = *blake3::hash(bytes).as_bytes();
@@ -628,14 +881,7 @@ mod tests {
         assert_eq!(gate.own_pending(p, now), 0, "a named hash counts in the base, not the pending");
         assert_eq!(gate.own_scope(p, now), 9, "the own scope is one number either way");
         assert_eq!(gate.venue_total(now), 9);
-        assert_eq!(gate.binding(p, &cell), Binding::Admitted, "not ready: the lease arm alone, live");
-        gate.index().complete(super::super::index::Rebuild {
-            values: 0,
-            cells: 0,
-            halts: 0,
-            walk: std::time::Duration::ZERO,
-            parse: std::time::Duration::ZERO,
-        });
+        assert_eq!(gate.binding(p, &cell), Binding::Admitted, "named by p's own cell, the file whole");
         assert!(gate.index_ready());
         gate.advance_clock_ms(10_000 + LEASE_HORIZON_MS);
         assert_eq!(gate.binding(p, &cell), Binding::Admitted, "named by p's own cell: admitted past the lease's horizon");

@@ -44,9 +44,15 @@
 //!    the cell contradicts is this refusal too — no deposit of this
 //!    principal's is the cell as written. PERMANENT for the request as
 //!    sent: the act that exists is a PUT of the bytes, then the cell the
-//!    PUT's answer spells. P10's fence-only face ("this board takes no
-//!    uploads") is RETIRED with the store: the face now names the deposit
-//!    the cell lacks.
+//!    PUT's answer spells. THE FACE (M-I7 (e)) says that NO DEPOSIT OF THE
+//!    PERSON's HERE IS THE CELL AS WRITTEN, and never that none was made —
+//!    it is the answer too to a person who did deposit, past the horizon or
+//!    at an operator's honest nulls: "no deposit of yours here is this
+//!    picture's cell as written: upload the file, then place the cell its
+//!    answer spells." P10's fence-only face ("this board takes no
+//!    uploads") is RETIRED with the store at this arm: on a board whose
+//!    uploads are CLOSED the client keys that face off `/health`'s echo
+//!    before this token's face speaks.
 //! 4. `unknown_cell_schema` (`credential_refused`, PERMANENT) — a value
 //!    naming EITHER media kind — the picture's or the blind document's —
 //!    that parses under no pinned schema, in the same two positions:
@@ -66,6 +72,16 @@
 //!    presence beyond that record's live lease (Op inventory 1, "a client
 //!    meeting a LAPSED lease meets its OWN refusal"). Past the horizon the
 //!    record answers no lease and the binding's refusal stands.
+//! 6. `index_rebuilding` (`credential_refused`, RETRY) — THE WINDOW's
+//!    answer, in the binding's position and during the walk alone: the
+//!    index's rebuild at open has not completed, and the lease arm alone
+//!    would have answered `unbound_cell` or `lease_lapsed` — a verdict the
+//!    index arm, unread, may overturn (a hash the principal's own cells
+//!    name, its file whole). The readiness token re-used, its class the
+//!    readiness refusal's: the request as sent may be perfectly good, and
+//!    the walk momentarily unfinished (ms5-R: the door never waits; P22; the
+//!    register M-I5 (b)). A cell the lease arm ADMITS in the window is
+//!    admitted. The one arm of the armed set that is not PERMANENT.
 //!
 //! THE KIND COLUMN (`media.md` item 4; the blind-document investigation §5
 //! (i); s6-D3): the arms above are read PER KIND. The picture's cell meets
@@ -85,9 +101,10 @@
 //! cell was admitted is admitted after the lease lapsed, while the file is
 //! whole at the cell's size, and `lease_lapsed` where it is not. Until the
 //! index's walk at open completes the index arm is skipped and the lease
-//! arm alone decides, so a lease lapsed between the insert and the shot
-//! answers `lease_lapsed` in that window until the bytes are re-PUT: the
-//! door never waits on the index.
+//! arm alone ADMITS, so a lease lapsed between the insert and the shot
+//! answers `index_rebuilding` in that window — retry-class — and the shot
+//! is admitted after the walk with no re-PUT: the door never waits on the
+//! index.
 //!
 //! WHAT STANDS AHEAD. The plain sequence's producers — the mint class, the
 //! `replaces` fence, the board-state gate with the write-path check behind
@@ -121,7 +138,7 @@ use crate::World;
 
 /// The door's answer — one variant per arm of the armed set, in the
 /// module's order. Two are M10's own codes, raised here on the daemon's
-/// channel with M10's classification; three are the daemon's tokens, riding
+/// channel with M10's classification; four are the daemon's tokens, riding
 /// `credential_refused` as every daemon-side refusal does (AUTH-3.53's
 /// family; wire.md §Credential refusals).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,10 +156,14 @@ pub(crate) enum MediaRefusal {
     /// Arm 5: the binding's LAPSED arm — token `lease_lapsed`: the deposit
     /// is gone, re-PUT the bytes. INTERIM in spelling (the board's sm-Q8).
     LeaseLapsed,
+    /// Arm 6: THE WINDOW — token `index_rebuilding`, the readiness token
+    /// re-used, RETRY-CLASS: the index's walk at open is not done and the
+    /// lease arm alone would have refused. INTERIM in spelling (sm-Q8).
+    IndexRebuilding,
 }
 
 impl MediaRefusal {
-    /// The `detail` token of the three refusals that ride
+    /// The `detail` token of the four refusals that ride
     /// `credential_refused`; `None` for the two that are M10's own codes.
     /// Spelled here and only here.
     pub(crate) fn token(&self) -> Option<&'static str> {
@@ -151,17 +172,23 @@ impl MediaRefusal {
             MediaRefusal::UnboundCell => Some("unbound_cell"),
             MediaRefusal::UnknownCellSchema => Some("unknown_cell_schema"),
             MediaRefusal::LeaseLapsed => Some("lease_lapsed"),
+            MediaRefusal::IndexRebuilding => Some("index_rebuilding"),
         }
     }
 
-    /// The class of the three tokens: PERMANENT, the family's — for the
-    /// request AS SENT no act admits it: a value under an unknown schema is
-    /// never admitted, and an unbound or lapsed cell is admitted only after
-    /// a PUT, which is another act (the lease re-taken by it), never a
-    /// retry of this one. The two M10 codes take M10's own classification,
-    /// `RejectCode::disposition`, where the reply is built.
+    /// The class of the tokens: PERMANENT for three — for the request AS
+    /// SENT no act admits it: a value under an unknown schema is never
+    /// admitted, and an unbound or lapsed cell is admitted only after a
+    /// PUT, which is another act (the lease re-taken by it), never a retry
+    /// of this one — and RETRY for the window's answer alone, the class the
+    /// reply layer gives the readiness refusal: the same request may be
+    /// admitted once the walk completes. The two M10 codes take M10's own
+    /// classification, `RejectCode::disposition`, where the reply is built.
     pub(crate) fn disposition(&self) -> Disposition {
-        Disposition::Permanent
+        match self {
+            MediaRefusal::IndexRebuilding => Disposition::Retry,
+            _ => Disposition::Permanent,
+        }
     }
 }
 
@@ -189,17 +216,18 @@ fn names_the_kind(value: &Val) -> Option<Named> {
     }
 }
 
-/// Arms 3, 4 and 5 — the value's own verdict once the target's and the
+/// Arms 3, 4, 5 and 6 — the value's own verdict once the target's and the
 /// owner's arms have passed: a picture's cell is asked of THE BINDING at
-/// the gate, `None` where it is admitted; a blind cell is ADMITTED with no
-/// store consulted — the kind's whole deposit story is its owner's, off
-/// this board.
+/// the gate, `None` where it is admitted, the window's state retry-class; a
+/// blind cell is ADMITTED with no store consulted — the kind's whole
+/// deposit story is its owner's, off this board.
 fn value_arm(named: Named, gate: &MediaGate, principal: PrincipalId) -> Option<MediaRefusal> {
     match named {
         Named::Cell(c) => match gate.binding(principal, &c) {
             Binding::Admitted => None,
             Binding::Lapsed => Some(MediaRefusal::LeaseLapsed),
             Binding::Unbound => Some(MediaRefusal::UnboundCell),
+            Binding::Rebuilding => Some(MediaRefusal::IndexRebuilding),
         },
         Named::Blind => None,
         Named::UnknownSchema => Some(MediaRefusal::UnknownCellSchema),
@@ -407,12 +435,14 @@ mod tests {
     /// Over the genesis world, as the system principal — the one principal
     /// genesis seats with documents: the head document `H` (published, its
     /// own) and a private draft it mints — the insert arms: a cell into a
-    /// draft `unbound_cell` while the principal holds no lease on its hash,
-    /// a value under an unknown schema `unknown_cell_schema`, prose and a
-    /// def nothing; into `H` `published_target` whatever the value's form
-    /// and whatever the declaration; and a caller who does not own the
-    /// draft meets nothing here (the store's `not_owner` stands). Then the
-    /// shot: the owner's own shot of the draft holding a cell is refused
+    /// draft `index_rebuilding` while the index's walk is not done and
+    /// `unbound_cell` once it is, the principal holding no lease on its
+    /// hash; a value under an unknown schema `unknown_cell_schema` — a body
+    /// past the cap opening as the kind among them — prose and a def
+    /// nothing; into `H` `published_target` whatever the value's form and
+    /// whatever the declaration; and a caller who does not own the draft
+    /// meets nothing here (the store's `not_owner` stands). Then the shot:
+    /// the owner's own shot of the draft holding a cell is refused
     /// `unbound_cell` the same, a shot naming no draft meets nothing, and
     /// nothing commits. Then THE BINDING MADE REAL (lane B): the bytes
     /// deposited under the principal's own lease, the same insert and the
@@ -422,7 +452,7 @@ mod tests {
     #[test]
     fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let gate = MediaGate::open(dir.path()).expect("the store opens");
+        let gate = MediaGate::open_with(dir.path(), crate::media::MediaOptions::default()).expect("the store opens");
         let engine = skep_engine::Engine::open(KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
@@ -449,6 +479,21 @@ mod tests {
         let h = head_document();
         let door = |op: Op, p: PrincipalId| media_door(world, &op, p, &gate);
 
+        // THE WINDOW: the walk not done, the lease arm alone would refuse —
+        // the state, retry-class, and never the permanent token.
+        assert!(!gate.index_ready());
+        assert_eq!(
+            door(insert(&draft, canonical()), SYSTEM_PRINCIPAL),
+            Some(MediaRefusal::IndexRebuilding)
+        );
+        assert_eq!(MediaRefusal::IndexRebuilding.disposition(), Disposition::Retry);
+        gate.index().complete(super::super::index::Rebuild {
+            values: 0,
+            cells: 0,
+            halts: 0,
+            walk: Duration::ZERO,
+            parse: Duration::ZERO,
+        });
         assert_eq!(
             door(insert(&draft, canonical()), SYSTEM_PRINCIPAL),
             Some(MediaRefusal::UnboundCell)
@@ -456,6 +501,14 @@ mod tests {
         assert_eq!(
             door(insert(&draft, unknown_schema()), SYSTEM_PRINCIPAL),
             Some(MediaRefusal::UnknownCellSchema)
+        );
+        let mut past_cap = canonical();
+        past_cap.truncate(past_cap.len() - 1);
+        past_cap.extend_from_slice(format!(r#","pad":"{}"}}"#, "x".repeat(crate::limits::MAX_CELL_BYTES)).as_bytes());
+        assert_eq!(
+            door(insert(&draft, past_cap), SYSTEM_PRINCIPAL),
+            Some(MediaRefusal::UnknownCellSchema),
+            "past the cap, opening as the kind: the halt"
         );
         assert_eq!(door(insert(&draft, b"prose".to_vec()), SYSTEM_PRINCIPAL), None);
         assert_eq!(door(insert(&draft, vec![0x0b, 1, 0, 1, 2]), SYSTEM_PRINCIPAL), None, "a def");
@@ -526,6 +579,7 @@ mod tests {
             assert_eq!(refusal.token(), token);
             assert_eq!(refusal.disposition(), Disposition::Permanent);
         }
+        assert_eq!(MediaRefusal::IndexRebuilding.token(), Some("index_rebuilding"));
 
         // THE BINDING MADE REAL: five real bytes, the cell naming THEIR
         // hash — the fixture's `HASH` above is the empty input's, which no

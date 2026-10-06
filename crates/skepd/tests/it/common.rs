@@ -30,7 +30,7 @@ use skep_identity::{
     SESSION_TAG, SESSION_TAG_V2,
 };
 use skep_signature::HybridSigner;
-use skepd::{serve, AuthOptions, Daemon, NodePrefix, Origin, Skepd, DEFAULT_WORKERS};
+use skepd::{serve, AuthOptions, Daemon, MediaOptions, NodePrefix, Origin, Skepd, DEFAULT_WORKERS};
 
 mod ops;
 mod signer;
@@ -961,6 +961,23 @@ pub fn spawn(dir: &Path) -> Skepd {
 /// salts make every board's chain its own.
 pub fn spawn_seeded(dir: &Path, seed: u64) -> Skepd {
     let sd = spawn_under(dir, true, None, None, Some(seed), ALLOW_PREVIEW_KEYS_IN_FIXTURES);
+    claim_board(sd.port());
+    sd
+}
+
+/// [`spawn`] with the UPLOAD SETTING CLOSED — `--no-uploads` (wire.md
+/// §Media, THE UPLOAD SETTING): the board claimed, every other option the
+/// fixtures' default; the creation and the resume answer `uploads_closed`
+/// before any body byte, `/health` echoes `media.uploads` false.
+pub fn spawn_uploads_closed(dir: &Path) -> Skepd {
+    let mut opts = AuthOptions::default();
+    opts.allow_preview_keys = ALLOW_PREVIEW_KEYS_IN_FIXTURES;
+    let mut media = MediaOptions::default();
+    media.uploads = false;
+    let daemon = Daemon::open_configured(dir, opts, media).expect("daemon open (genesis or recover)");
+    let sd = serve(daemon, 0, DEFAULT_WORKERS).expect("bind an ephemeral port");
+    forget_port(sd.port());
+    wait_for_the_index(&sd);
     claim_board(sd.port());
     sd
 }

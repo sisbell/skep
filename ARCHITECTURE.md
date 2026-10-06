@@ -41,13 +41,16 @@ above it.
 - `skep-blobs` — the blob store (media lane B): the four media stores
   under one root — the files at `blobs/<designation>/<hex>`, the partials,
   the upload records and the lease log — the PUT's fsync order, REPLACE on
-  a present hash, and the lease's honest-null answer. It depends on no
-  other skep crate, knows a principal only as an opaque string, holds no
-  lock the daemon's write path takes, and reads no limits record. One
-  feature, default off: `test-hooks` compiles in the test seam,
-  `store/hooks.rs` — a hold or an injected failure at a step of the
-  finish, and the methods only tests call. `scripts/gate-full.sh` builds
-  the library and its docs without it. Its modules and rules: §The blob store.
+  a present hash, the lease's honest-null answer, the pruner's rename
+  aside, the logs' runtime compaction on a trigger, the volume's capacity
+  read, and the operator's two doors — the read-only inspection and the
+  pull's install by the PUT's order. It depends on no other skep crate,
+  knows a principal only as an opaque string, holds no lock the daemon's
+  write path takes, and reads no limits record. One feature, default off:
+  `test-hooks` compiles in the test seam, `store/hooks.rs` — a hold or an
+  injected failure at a step of the finish, and the methods only tests
+  call. `scripts/gate-full.sh` builds the library and its docs without it.
+  Its modules and rules: §The blob store.
 
 **The stores** — each owns one slice of the world and depends only on the
 foundation and on the stores above it.
@@ -106,7 +109,9 @@ foundation and on the stores above it.
   `skep-kernel`.
 
 **The programs**
-- `skepd` — the daemon (below).
+- `skepd` — the daemon (below), and the operator's two tools over a board
+  directory — the inventory and the pull — two subcommands of the one
+  binary, run with no server.
 - `skep-mcp` — a stdio adapter for agent harnesses.
 - `skep-resolve` — the verifying registry resolver, a LIBRARY a client
   embeds (the frontend, the `skep` command, a node's federation
@@ -198,8 +203,11 @@ names: the files, `<root>/<designation>/<hex>`; the partials,
 are declared in `src/lib.rs` in dependency order, each with a line saying
 what it holds, and the crate doc there states the store's guarantees, each
 linked to the item that keeps it. `Store` (`store.rs`) is the four opened
-as one, and `Stream` beside it an upload open for one request; beneath
-them, `store/hooks.rs` is the test seam.
+as one, and `Stream` beside it an upload open for one request; `Inspection`
+the four read as they stand (`Store::inspect`), the operator's inventory's
+open, which writes nothing; `Store::install_file` the operator's pull's
+install, one file by the PUT's order and nothing else; beneath them,
+`store/hooks.rs` is the test seam.
 
 Rules that hold across its files:
 
@@ -215,7 +223,22 @@ Rules that hold across its files:
 - **The pruner's acts are one method each**, so the daemon's pass holds
   its lock around exactly one, and the lease read inside it is one hash's
   range of the lease map (`LeaseLog`, keyed by the hash first): a pass is
-  linear in its files, whatever the count of leases.
+  linear in its files, whatever the count of leases. A file is taken in
+  two acts — `Store::rename_aside` under the caller's arm, the aside
+  removed after it under none (`Store::remove_aside`) — so the arm is
+  never held across the freeing of a file's blocks; `Store::unlink_blob`
+  is the one-act form, which the daemon's pass no longer takes.
+- **The logs' compaction has a trigger.** `Store::compact_logs_if_past`
+  rewrites either log to its current records where its lines have passed
+  a multiple of those records and a minimum — both the caller's figures,
+  the daemon's pins — under the store's lock on that log's appends alone;
+  an append during the rewrite waits and lands in the new file, and a
+  stopped log is rewritten whatever its count (`Store::stopped_logs` says
+  which has stopped).
+- **The capacity is one read with the free space** (`Store::capacity`,
+  `Store::free_space`): the same `statvfs`, the total blocks and the
+  available ones; what the daemon's default per-account limit and its
+  floor are read from.
 - **Every name passes one check**, `blobs.rs`'s spellings: a caller's at
   `Store`'s entry points, a log line's at open. No name reaches a path out
   of the root; and a creation names no designation at all, but a
@@ -235,18 +258,29 @@ Rules that hold across its files:
 - **A torn line is only ever a log's tail** (`jsonl::Log`): a failed
   append is cut back, and a log that cannot cut back, or whose compaction
   failed past its rename, takes no append until a compaction completes.
-  The store compacts only at its open, so a log stopped while the store
-  serves stays stopped until the next open reads it afresh (`Store`).
-- **Open reconciles and compacts before it answers anything.**
-  `Store::open` runs each store's act at open — the logs' compactions,
-  `partials::reconcile`, `blobs::sweep_asides` — and an I/O failure there,
-  as at the size check (`Store::blob_size`), is never read as an absence.
-  Its orphan removal keeps to the designations this build computes
-  (`HashFunction`); another build's designation directory is left, as the
-  pruner leaves it. Before any act, a symbolic link, a special file, or a
-  second link to a file the store writes in place, at a name it acts on,
-  fails the open (`blobs::refuse_links_and_special_files`): nothing is
-  followed or written through.
+  The store compacts at its open and at the caller's runtime compaction,
+  so a log stopped while the store serves stays stopped until the next
+  pass's compaction or the next open reads it afresh (`Store`).
+- **Open reconciles and compacts before it answers anything; the
+  inspection does neither.** `Store::open` runs each store's act at open —
+  the logs' compactions, `partials::reconcile`, `blobs::sweep_asides` —
+  and an I/O failure there, as at the size check (`Store::blob_size`), is
+  never read as an absence. Its orphan removal keeps to the designations
+  this build computes (`HashFunction`); another build's designation
+  directory is left, as the pruner leaves it. Before any act, a symbolic
+  link, a special file, or a second link to a file the store writes in
+  place, at a name it acts on, fails the open
+  (`blobs::refuse_links_and_special_files`): nothing is followed or
+  written through. `Store::inspect` reads the same four stores as they
+  stand — each log's lines read through `Log::read_as_found`, its torn
+  tail cut in memory alone — and creates, cuts, renames and syncs nothing,
+  so it can run over a backup or beside a serving daemon's store.
+- **The pull's install is the PUT's order with no record** —
+  `Store::install_file`: the bytes streamed into a temp file named as a
+  partial is (so an open that meets it removes it as an orphan), hashed as
+  they are copied, fsynced, renamed onto the hash name, the directory and
+  the root fsynced; held to an expected hash where one is given, nothing
+  installed otherwise; no lease, no record, no lock.
 - **A caller's bug is no refusal, nor is the store's own.** `Stream::finish`
   panics on a broken precondition, and `UploadRecords::mark_received` on an
   offset past its record's length; `BlobError` carries only answers.
@@ -257,11 +291,14 @@ Rules that hold across its files:
 Its integration suite is one binary, `tests/it/`: `finish` (the PUT's order
 under an injected failure at each step, and the finishes run one at a
 time), `replace` (REPLACE and its asides), `blobs` (the name check, the
-listings, the size check, the floor's read), `uploads` (an upload's life
-while the store serves, and its identifier), `reopen` (what open makes of
-the records and partials a crash or a restore left) and `lease` (the
-leases' states, their compaction and the pending bytes); each module's doc
-lists its claims. Five unit suites sit beside their code: `store.rs`'s,
+listings, the size check, the floor's and the capacity's reads, the rename
+aside, the pull's install), `uploads` (an upload's life while the store
+serves, its identifier, and the records' log's runtime compaction),
+`reopen` (what open makes of the records and partials a crash or a
+restore left, the inspection that touches none of it, and the copy order
+a live copy follows) and `lease` (the leases' states, their compaction at
+open and by the trigger, and the pending bytes); each module's doc lists
+its claims. Five unit suites sit beside their code: `store.rs`'s,
 `uploads.rs`'s, `partials/handle.rs`'s, `blobs.rs`'s and `jsonl.rs`'s, the
 last in `jsonl/tests.rs`.
 
@@ -765,15 +802,17 @@ that a request is built and a response read through `skep_febe` alone; and
 may act, and what a credential write may do), the cadence of the published
 head, and the media door (whether a value a write carries is a media cell —
 a picture's reference cell or a blind document's — by one classification,
-and what a write that would mint one is answered: for a picture, whether
-its hash is one the caller's own cells already name, or a deposit of the
-caller's own; a blind cell, which the board holds no byte of a file for, is
-admitted with no deposit consulted) — with, behind the door, the cell index
-the base and the pruner read, and the pruner's pass. It also SERVES media
-bytes: `GET /blob?i=` reads a picture's whole file by the I-address of its
-cell, gated by M10's read by identity and checked against the cell before
-the first byte. Everything else it delegates to the stores through the
-engine, and the media bytes to `skep-blobs`.
+the cap bounding the parse and never the classification, and what a write
+that would mint one is answered: for a picture, whether its hash is one the
+caller's own cells already name, or a deposit of the caller's own; a blind
+cell, which the board holds no byte of a file for, is admitted with no
+deposit consulted) — with, behind the door, the cell index the base and
+the pruner read, and the pruner's pass. It also SERVES media bytes: `GET
+/blob?i=` reads a picture's whole file by the I-address of its cell, gated
+by M10's read by identity and checked against the cell before the first
+byte. And it carries the operator's two tools over a board directory, the
+inventory and the pull, run with no server. Everything else it delegates
+to the stores through the engine, and the media bytes to `skep-blobs`.
 
 Its modules form six layers. A module names only modules in its own layer
 or below it, never above; `crates/skepd/tests/it/tidy.rs` checks it. A
@@ -788,7 +827,8 @@ write passes down through them in this order:
 │                    accept · read request · write reply  │
 │                    serve the event stream · carry a     │
 │                    streaming body in the request · the  │
-│                    pruner's cadence · a replace's       │
+│                    pruner's cadence, the logs'          │
+│                    compaction by its pass · a replace's │
 │                    deferred unlink after the reply      │
 ├─────────────────────────────────────────────────────────┤
 │ 2 ROUTES           server.rs (router) · actor.rs        │
@@ -797,12 +837,18 @@ write passes down through them in this order:
 │                    hooks (test-hooks builds only)       │
 │                    /op: resolve → check → commit →      │
 │                         record → head writer's turn     │
-│                    /blob/upload: resolve → readiness →  │
-│                         gate → stream → finish → answer │
+│                    /blob/upload: resolve → setting →    │
+│                         readiness → gate (the declared  │
+│                         total; at the creation the      │
+│                         bound and the floor on no       │
+│                         length) → stream → finish →     │
+│                         answer                          │
 │                    /blob?i=: resolve → serve (gate →    │
 │                         classify → permit → check) →    │
 │                         stream, re-resolved mid-stream  │
 │                    the pruner's pass under the arm      │
+│   TOOLS            tools.rs                             │
+│                    inventory · pull — no server         │
 ├─────────────────────────────────────────────────────────┤
 │ 3 VOCABULARY       server/reply.rs · request.rs ·       │
 │                    scan.rs                              │
@@ -824,11 +870,14 @@ write passes down through them in this order:
 │                    media/gate.rs · media/index.rs ·     │
 │                    media/pruner.rs · media/serve.rs ·   │
 │                    media/deposit_read.rs                │
-│                    the media door · the blob store, the │
-│                    limits, the hold, the scopes, the    │
-│                    binding · the cell index: the base,  │
+│                    the upload setting · the media door  │
+│                    · the blob store, the limits and     │
+│                    their default, the hold, the scopes  │
+│                    and the bound, the binding and its   │
+│                    window · the cell index: the base,   │
 │                    the walk at open, the readiness ·    │
-│                    the pruner's pass and its halts ·    │
+│                    the pruner's pass, its halts, its    │
+│                    rename aside and its compaction ·    │
 │                    the deposit read · the fetch's       │
 │                    composed order, its pool and stream  │
 ├─────────────────────────────────────────────────────────┤
@@ -857,12 +906,18 @@ to stream — re-resolving the caller between chunks and cutting the stream
 by a reset where the entitlement lapsed. The cell index is entered
 by the write path at every commit that mints a cell and read by the
 media resource; the pruner's pass runs from the routes under the session
-layer's lock, on the transport's cadence.
+layer's lock, on the transport's cadence. THE TOOLS (`tools.rs`, beside
+the routes) run no server at all: the inventory opens the journal through
+the engine's open, walks the world into a fresh cell index through the
+media resource's walk and reads the store's inspection; the pull reads the
+same index or the hash the operator hands it, and writes one file through
+the store's install — nothing above their own layer.
 
 1. **The transport** — `server/listen.rs` (sockets, worker threads, the
    event streams' loop and budget, the pruner's cadence thread — the pass
-   once the cell index is ready and then hourly — and, after a blob
-   reply is written, the replaced file's deferred unlink) and
+   once the cell index is ready and then hourly, the logs' compaction on
+   its trigger among its acts — and, after a blob reply is written, the
+   replaced file's deferred unlink) and
    `server/http.rs` (the HTTP bytes: the request reader, the reply
    writer, the event framing — and the streaming arm: for the blob
    upload's two body-carrying methods the reader takes the head alone
@@ -882,17 +937,27 @@ layer's lock, on the transport's cadence.
    (AUTH-3.37) or the registry (the record grade for registry records),
    chosen off the op's own type slot before any lock is taken: resolve
    the caller, run the checks, commit, record, then give the head writer
-   its turn. `/blob/upload` resolves the caller, refuses the creation,
-   the resume and the deposit read `index_rebuilding` until the index's
-   walk at open completes, gates the declared total, streams the body
-   one chunk at a time into the store, each chunk gated, and finishes
-   under the credential lock's read arm — the requester re-resolved
-   there — never under `Serial`. The router takes the streaming body out
-   of the request's slot at the head of every routing. `/blob?i=` (with
-   `HEAD`) resolves the caller and runs the serve's composed order; an
-   admitted answer is a file the accept loop streams, the caller
-   re-resolved between chunks and the stream cut by a reset where the
-   entitlement lapsed.
+   its turn. `/blob/upload` resolves the caller, refuses the creation and
+   the resume `uploads_closed` on a board launched with `--no-uploads`,
+   refuses the creation, the resume and the deposit read
+   `index_rebuilding` until the index's walk at open completes, gates the
+   declared total and — at the creation, before the partial and the
+   record — the standing-uploads bound and the floor on no length,
+   streams the body one chunk at a time into the store, each chunk gated,
+   and finishes under the credential lock's read arm — the requester
+   re-resolved there — never under `Serial`. The router takes the
+   streaming body out of the request's slot at the head of every routing.
+   `/blob?i=` (with `HEAD`) resolves the caller and runs the serve's
+   composed order; an admitted answer is a file the accept loop streams,
+   the caller re-resolved between chunks and the stream cut by a reset
+   where the entitlement lapsed. Beside the routes, `tools.rs` — THE
+   OPERATOR's TOOLS: the inventory over a stopped board or a copy (the
+   holes, each account's base and pending bytes, the venue total, the
+   standing and expired uploads, the halt marks, a foreign designation
+   directory; recording no read, writing nothing under `blobs/`) and the
+   pull (a file a committed cell names restored by the store's install,
+   no lease and no record; beside a serving daemon held to the inventory's
+   hash), the two subcommands `main.rs` parses as a leading verb.
 3. **The daemon's vocabulary** — `server/reply.rs` (the reply and every
    transport refusal), `server/request.rs` (the request, the streaming
    body's source and the slot it rides in, and the rules the request's
@@ -935,18 +1000,24 @@ layer's lock, on the transport's cadence.
    where its hash is one the principal's own cells already name over a
    file whole at the cell's size (the index's arm, read first once the
    index is ready), or one this principal deposited under its own live
-   lease over a whole file; refused `unbound_cell` otherwise and
-   `lease_lapsed` where the deposit is gone. It reads the op's values and,
-   for a shot, the staging draft's own runs off the locked snapshot,
-   through M5's and M4's public reads, and the index, the lease and the
-   file through the gate — which is why it is a step of its own and never
-   a producer of the session layer's admission. `media/gate.rs` — THE
-   GATE: the blob store (`skep-blobs`) opened under `blobs/` in the data
-   dir, the limits in force (the daemon's defaults and the install hook
-   the serving layer's channel will call), the hold a stream has on its
-   upload, the three scopes a deposit is refused on (the own scope — the
-   base plus the pending bytes — the venue total, the floor — in that
-   order, the requester's own record first), and the binding's read.
+   lease over a whole file; refused `unbound_cell` otherwise,
+   `lease_lapsed` where the deposit is gone, and `index_rebuilding`,
+   retry-class, where the lease arm alone would refuse while the index's
+   walk at open runs. It reads the op's values and, for a shot, the
+   staging draft's own runs off the locked snapshot, through M5's and
+   M4's public reads, and the index, the lease and the file through the
+   gate — which is why it is a step of its own and never a producer of
+   the session layer's admission. `media.rs` holds `MediaOptions`, the
+   upload setting the routes read and `/health` echoes. `media/gate.rs` —
+   THE GATE: the blob store (`skep-blobs`) opened under `blobs/` in the
+   data dir, the limits in force (the daemon's default — one eighth of
+   the volume's capacity read once at the open, never below 256 MiB — and
+   the install hook the serving layer's channel will call), the hold a
+   stream has on its upload, the three scopes a deposit is refused on
+   (the own scope — the base plus the pending bytes — the venue total,
+   the floor — in that order, the requester's own record first), the
+   creation's gate (the standing-uploads bound, the floor on no length),
+   and the binding's read with its window.
    `media/index.rs` — THE CELL INDEX: per hash the cells naming it, per
    account the distinct hashes its cells name at their size (the base);
    entered by `write_path.rs`'s `record` at every commit that mints a cell
@@ -957,13 +1028,15 @@ layer's lock, on the transport's cadence.
    naming the kind under no pinned schema stands in it as a halt mark.
    `media/pruner.rs` — THE PRUNER's PASS: the expired partials removed off
    the record's expiry and the hold; the halts on a foreign designation
-   directory or a halt mark; the unreferenced files unlinked under an
-   exclusive arm the caller hands in (the credential lock's write arm —
-   named nowhere here), one file per acquisition, re-reading the index
-   and the lease log there; and the cadence the transport's thread waits
-   on. `media/deposit_read.rs` — the one read of a principal's own
-   deposits and uploads, its base the index's number, served on the
-   upload's own path. `media/serve.rs` — THE FETCH's composed order: the
+   directory or a halt mark; the unreferenced files renamed aside under
+   an exclusive arm the caller hands in (the credential lock's write arm
+   — named nowhere here), one file per acquisition, re-reading the index
+   and the lease log there, each aside unlinked after under no arm; the
+   two logs compacted on their trigger under no arm; and the cadence the
+   transport's thread waits on. `media/deposit_read.rs` — the one read of
+   a principal's own deposits and uploads, its base the index's number
+   and the limit in force echoed beside it, served on the upload's own
+   path. `media/serve.rs` — THE FETCH's composed order: the
    shape, M10's read by identity as the gate, the one classification, the
    permit of the fetch pool, the whole file checked against its cell
    before its first byte, the stream's two re-check intervals; what
@@ -982,7 +1055,9 @@ layer's lock, on the transport's cadence.
    anything about the daemon; a leaf imports only leaves.
 
 `lib.rs` declares the daemon's modules in layer order, then the fuzz
-harness and the crate's public surface; `main.rs` is the binary.
+harness and the crate's public surface; `main.rs` is the binary — the
+daemon's flags, and the two tools' lines, a leading verb parsed before any
+flag.
 `fuzz_support.rs` (in `test-hooks` builds only) serves the fuzz targets and
 the tests: it stands above the transport, and nothing in the daemon
 imports it.
@@ -1033,9 +1108,10 @@ imports it.
   credential lock's READ arm, the arm the plain write sequence holds
   across the media door, so the door's read of the lease and the finish's
   write of it never interleave with a credential write; the requester is
-  re-resolved under it at the rename. The pruner's unlink holds that
-  lock's WRITE arm, one file per acquisition, so the door's check and the
-  commit it guards are one interval no unlink enters.
+  re-resolved under it at the rename. The pruner's rename aside holds
+  that lock's WRITE arm, one file per acquisition, so the door's check
+  and the commit it guards are one interval no removal of a name enters;
+  the aside's unlink and the logs' compaction hold no arm of it.
 - **The cell index has one lock of its own, taken innermost.** The write
   path enters it under `Serial`, the gate reads it under the credential
   lock's read arm, the pruner under its write arm, the walk at open under

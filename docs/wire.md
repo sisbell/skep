@@ -1411,9 +1411,9 @@ declaration; a shot re-inserting one from a draft the caller does not own
 answers `not_owner` naming the draft; in a draft, and at the owner's own
 shot, a cell is ADMITTED where its hash is one this principal deposited
 under its own live lease and otherwise answers `credential_refused` with
-one of the media door's three tokens — unbound cell, unknown cell schema,
-and lease lapsed — `permanent` all three, spelled and tabled in §Media
-under §Operations.
+one of the media door's four tokens — unbound cell, unknown cell schema,
+and lease lapsed, `permanent` all three, and the window's index
+rebuilding, retry-class — spelled and tabled in §Media under §Operations.
 
 The registry: registry refused — the registry sequence's one code, the
 credential family's shape under a code of its own, always carrying a
@@ -1841,12 +1841,14 @@ like the family's, each naming the act that exists):
   no credential deposits and never meet it. The act that exists is an
   enrolment under an account of your own.
 
-**The media door's three tokens** (media lanes A and B; §Media under
+**The media door's four tokens** (media lanes A and B; §Media under
 §Operations): `unbound_cell`, `unknown_cell_schema` and `lease_lapsed`,
-PERMANENT like the family's, answered at the write path's media step —
-behind every gate above and ahead of the store — to a value naming the
-picture cell's kind in a draft, or at the owner's own shot; stated with
-their faces and their interim standing at their own section.
+PERMANENT like the family's, and `index_rebuilding`, RETRY — the window's
+answer while the cell index is rebuilt at open, in the binding's position
+alone — answered at the write path's media step — behind every gate above
+and ahead of the store — to a value naming the picture cell's kind in a
+draft, or at the owner's own shot; stated with their faces and their
+interim standing at their own section.
 
 **The registry sequence's family** (§Registry under §Operations): a
 `make_link` typed the registry's binding or endpoint takes a sequence of
@@ -2551,13 +2553,17 @@ every parser of the cell runs in its own gate; a parser is never derived
 from another parser.
 
 A value NAMES THE KIND when its `type` member is the kind's address,
-whatever the rest of it holds. A value naming the kind that is no v1
-cell — a second schema's form, a malformed one, the two-hash body — is
-one the daemon HALTS on at a permanent act, naming it (D13's carve-out),
-never one it admits as absent: admitted, it would stand unbound the day a
-second schema is pinned. A value that does not name the kind — prose, a
-predicate def, a record of another kind, a body past the cap — is an
-ordinary value and meets nothing here.
+whatever the rest of it holds — read by the parse within the cap and,
+past it, by THE CANONICAL OPENING every schema's canonical form writes
+first, `{"type":"<the kind's address>"`: the cap bounds the parse and
+never the classification. A value naming the kind that is no v1 cell — a
+second schema's form, a malformed one, the two-hash body, a body past the
+cap that opens as the kind — is one the daemon HALTS on at a permanent
+act, naming it (D13's carve-out), never one it admits as absent: admitted,
+it would stand unbound the day a second schema is pinned, whatever cap a
+later build pins. A value that does not name the kind — prose, a predicate
+def, a record of another kind, a body past the cap that opens as no kind
+— is an ordinary value and meets nothing here.
 
 **The designation.** The cell's schema names its hash function
 `blake3`, and the hash is FROZEN as an algorithm tag is: a change is a
@@ -2612,6 +2618,7 @@ every value naming the kind, in this order:
 | `credential_refused`, `detail` `unbound_cell` | `insert` into a draft; the owner's own `publish` | permanent | the value is a cell naming a hash this principal did not deposit under its own lease — THE BINDING's refusal (lane B), read off this principal's own lease record first and never off the file's presence: never deposited, lapsed past the horizon, another account's deposit of the same bytes, or a deposit whole on disk whose length the cell's `size` contradicts (the size check, at the same door); permanent for the request as sent — the act that exists is a PUT of the bytes, then the cell the PUT's answer spells |
 | `credential_refused`, `detail` `unknown_cell_schema` | `insert` into a draft; the owner's own `publish` | permanent | the value names the kind and parses under no schema this board reads — D13's halt at a permanent act, so no second schema ever finds an unbound cell planted under this one; the same bytes are never admitted, and the act that exists is a cell in the form above |
 | `credential_refused`, `detail` `lease_lapsed` | `insert` into a draft; the owner's own `publish` | permanent | the value is a cell naming a hash this principal DID deposit, and the deposit is gone: the lease lapsed within the horizon, or is live over a file that is not there or not whole — the binding's LAPSED arm, told apart from `unbound_cell` so a resume can be written against it; the act is a re-PUT of the bytes, which re-takes the lease |
+| `credential_refused`, `detail` `index_rebuilding` | `insert` into a draft; the owner's own `publish` | retry | THE WINDOW: the cell index's rebuild at open has not completed, and the lease arm alone would have answered `unbound_cell` or `lease_lapsed` — a verdict the index arm, unread, may overturn; the readiness token re-used in the binding's position, during the walk alone, retry-class as the readiness refusal is: the same request may be admitted once the walk completes. A cell the lease arm admits in the window is admitted |
 
 A cell naming a hash this principal holds a LIVE lease on, over a whole
 file whose length the cell's `size` names, is ADMITTED: the insert commits
@@ -2621,14 +2628,20 @@ lease — admitted where the file is on disk whole at the cell's `size`,
 `unbound_cell` where the file is whole at the size those cells name and
 this cell contradicts it (the size check), `lease_lapsed` where the file
 is absent or not whole (the deposit is gone; the act is the PUT) — and
-only then the principal's own lease. So the owner's own `publish` of a
-draft holding an admitted cell is admitted after the lease lapsed, the
-cell's file standing, and a re-PUT of a file the account's cells name is
-charged nothing at its own scope. Until the index's rebuild at open
-completes (THE READINESS REFUSAL, below) the index arm is skipped and the
-lease arm alone decides: the door is not one of the index's readers and
-never waits; a cell refused `lease_lapsed` in that window is a refusal
-for the request as sent, its act the re-PUT, and nothing permanent lands.
+only then the principal's own lease. The index arm is read at the
+requester's OWN account's hashes and never at the per-hash list of cells,
+so its answer and its time are the same whether or not another account's
+cell names the hash. So the owner's own `publish` of a draft holding an
+admitted cell is admitted after the lease lapsed, the cell's file
+standing, and a re-PUT of a file the account's cells name is charged
+nothing at its own scope. Until the index's rebuild at open completes
+(THE READINESS REFUSAL, below) the index arm is skipped and the lease arm
+alone ADMITS: the door is not one of the index's readers and never waits;
+where that arm alone would refuse, the door answers THE WINDOW's state —
+`credential_refused` with `detail` `index_rebuilding`, `disposition`
+`retry` — never a permanent token, so the owner's shot of a draft whose
+lease lapsed, its file whole, made during the walk, is answered
+retry-class and admitted after the walk with no re-PUT.
 
 THE KIND COLUMN: the arms above are read PER KIND. The picture's cell meets
 every arm. THE BLIND DOCUMENT's cell meets `published_target` and
@@ -2642,14 +2655,23 @@ order, one classification ahead of it.
 
 The faces (PUB-6.7), the client's to render, the wire carrying the token:
 
-* `unbound_cell` — "this picture's bytes were not deposited here under
-  your account: upload the file, then place the cell its answer spells."
-  (P10's fence-only face, "this board takes no uploads", is RETIRED with
-  the store: the face now names the deposit the cell lacks.)
+* `unbound_cell` — "no deposit of yours here is this picture's cell as
+  written: upload the file, then place the cell its answer spells." The
+  face says that NO DEPOSIT OF THE PERSON's HERE IS THE CELL AS WRITTEN,
+  and never that none was made: it is the answer too to a person who did
+  deposit — past the horizon, or at an operator's honest nulls, a lease
+  store the remediation discarded or a restore brought back older than its
+  files. (P10's fence-only face, "this board takes no uploads", is RETIRED
+  with the store at this arm: the face now names the deposit the cell
+  lacks; on a board whose uploads are CLOSED the client keys the fence face
+  off `/health`'s echo before this face speaks — THE UPLOAD SETTING,
+  below.)
 * `unknown_cell_schema` — "this value names a media cell — a picture's or a
   blind document's — in a form this board does not read." (The door's and
   the fetch's, one face for both kinds.)
 * `lease_lapsed` — "this picture's deposit is gone: upload the file again."
+* `index_rebuilding` — the readiness face, retried: "this board is still
+  rebuilding its picture index after a start; try again shortly."
 
 Everything the store and the gates ahead already answer stands, each
 BEFORE this door: a stranger's `insert` into the owner's draft is
@@ -2684,11 +2706,11 @@ nothing to the journal and takes no `Serial`:
 
 | method & path | the act | answers |
 | --- | --- | --- |
-| `POST /blob/upload?length=<N>` | THE CREATION: `length` the upload's declared total in bytes, held against the per-file cap and the own scope BEFORE any body byte; the identifier minted and the record written. The body is optional: empty, the two-step shape; the first `K ≤ N` bytes, the standard's creation-with-upload, the identifier riding the `100 Continue` as `Upload-Id` where the client asked `Expect: 100-continue`, so it reaches the uploader before the first body byte and is persisted before the bytes that spend it | `200 {"expires":<unix ms>,"length":N,"offset":K,"upload":"<32 hex>"}` — the record, where the body stops short of `N`; the finish's answer where it reaches it |
+| `POST /blob/upload?length=<N>` | THE CREATION: `length` the upload's declared total in bytes, held against the per-file cap and the own scope BEFORE any body byte; then, before the partial and the record, THE STANDING-UPLOADS BOUND — the principal's standing uploads counted off its own records, a creation past the bound refused `507 deposit_refused` with `scope` `standing`, its `detail` naming the end of one of them as the act — and THE FLOOR read on NO declared length: the volume's free space already below the floor refuses the creation `scope` `floor`, an empty upload's and a creation-and-end loop's alike, so no record no scope counts is appended under the floor; the identifier minted and the record written. The body is optional: empty, the two-step shape; the first `K ≤ N` bytes, the standard's creation-with-upload, the identifier riding the `100 Continue` as `Upload-Id` where the client asked `Expect: 100-continue`, so it reaches the uploader before the first body byte and is persisted before the bytes that spend it | `200 {"expires":<unix ms>,"length":N,"offset":K,"upload":"<32 hex>"}` — the record, where the body stops short of `N`; the finish's answer where it reaches it |
 | `PATCH /blob/upload/<id>?offset=<K>` | THE RESUME: the bytes from `K`, which must be the record's offset; `K` plus the body's length at most `N`; the own scope on what the upload leaves past `K` BEFORE the body (refused there, the upload is kept) | the record where the body stops short; the finish's answer — `200 {"designation":"blake3","hash":"<64 hex>","size":N}` — where the offset reaches the length, after the file is durable, the lease synced and the record retired |
 | `GET /blob/upload/<id>` | THE PROGRESS: the upload's record — the offset a resume continues from | `200 {"expires":…,"length":N,"offset":K,"upload":"<id>"}` |
 | `DELETE /blob/upload/<id>` | THE TERMINATION: the upload ended, nothing kept | `204` |
-| `GET /blob/upload` | THE DEPOSIT READ — no surface of its own (m-Q10): the requester's own standing deposits (hash, size, expiry, and `lapsed` where a live lease stands over a file that is not there or not whole), its standing uploads (identifier, offset, length, expiry), its usage as two figures — the BASE, the cell index's number for its account (the distinct hashes its cells name, at their size), and its PENDING bytes (its live leases on hashes none of its cells names, and its uploads' bytes received) — and the limits record's address as installed; refused `503 index_rebuilding` until the index's rebuild at open completes | `200 {"base":<bytes>,"deposits":[…],"limits":null,"pending":<bytes>,"uploads":[…]}` |
+| `GET /blob/upload` | THE DEPOSIT READ — no surface of its own (m-Q10): the requester's own standing deposits (hash, size, expiry, and `lapsed` where a live lease stands over a file that is not there or not whole), its standing uploads (identifier, offset, length, expiry), its usage as two figures — the BASE, the cell index's number for its account (the distinct hashes its cells name, at their size), and its PENDING bytes (its live leases on hashes none of its cells names, and its uploads' bytes received) — the limits record's address as installed, and `per_account`, THE PER-ACCOUNT LIMIT IN FORCE in bytes whatever its source: the daemon's default where no record is installed, echoed as a written limit is, so a client reads the figure its own scope is held to before any refusal (R68); `null` only where a written record sets none; refused `503 index_rebuilding` until the index's rebuild at open completes | `200 {"base":<bytes>,"deposits":[…],"limits":null,"pending":<bytes>,"per_account":<bytes>,"uploads":[…]}` |
 
 The seven clauses, as the wire keeps them: (1) THE IDENTIFIER — 128 bits
 from the OS per upload, 32 lowercase hex, answered before any body byte
@@ -2717,42 +2739,75 @@ upload (`ended: false`), resumable once there is room; its uploader may
 end it. (7) FINISHED, THE LEASE TAKES OVER — the file renamed onto its
 hash, the lease written and synced, the record retired, THEN the answer;
 a finished upload whose `insert` never landed is kept by the lease until
-its expiry.
+its expiry. A finish cut BEFORE ITS RENAME — a failure there, a crash —
+leaves the upload standing over its partial, cut back at the next open to
+its record's offset, which the last byte received marked at the grain: an
+ordinary resume at that offset finishes it, re-sending at most a grain,
+and where the offset is already the length the progress read says so and
+an EMPTY resume at it — `PATCH` with no body — finishes and binds, no byte
+re-sent.
 
 The family's refusals, each a transport refusal (no `Op` ran):
 
 | status | error | when |
 | --- | --- | --- |
 | 400 | `malformed_blob` | the query, the identifier or the method's shape |
-| 403 | `upload_refused` | `detail` `unauthenticated`, `claim_first` or `node_tier` — the session-layer gate, before any body byte |
+| 403 | `upload_refused` | `detail` `unauthenticated`, `claim_first`, `node_tier` or `uploads_closed` — the session-layer gate, then the upload setting (below), each before any body byte; `uploads_closed` at the creation and the resume alone, the upload kept where one stood |
 | 404 | `no_upload` | an identifier the requester's own records do not name |
 | 409 | `upload_held` | another stream holds the upload |
 | 409 | `upload_offset` | the stated offset is not the record's; carries `offset` |
 | 400 | `upload_length` | the request's bytes would pass the declared length |
 | 413 | `payload_too_large` | the declared `length`, or a request's `Content-Length`, past the per-file cap |
-| 507 | `deposit_refused` | the gate: `scope`, `ended`, `offset` |
+| 507 | `deposit_refused` | the gate: `scope` — `own`, `venue`, `floor` or `standing` — `ended`, `offset`; at `standing` a `detail` naming the act |
 | 500 | `blob_io` | the store refused I/O; the upload stands at its last durable point |
 | 503 | `index_rebuilding` | the creation, the resume or the deposit read while the cell index is being rebuilt from the board after an open — retry-class, as `history_busy` is; the progress read, the termination and every other request are served meanwhile |
 
 THE GATE's THREE SCOPES, in the order read — the requester's own record
 first: THE OWN SCOPE, the principal's BASE plus its PENDING BYTES against
-the venue's per-account limit — the base the cell index's number for its
-account, the pending bytes its live leases on hashes none of its cells
-names plus its uploads' bytes received, so a hash a cell names moves from
-the pending to the base and the scope is one number either way — refused
-on the declared total before the body and re-checked as the body is
-written; THE VENUE TOTAL, the sum of every account's own scope — every
-base, every pending — record-derived and never the directory's bytes,
-enforced ONLY as the body is written; THE FLOOR, the volume's free space
-held above the floor below, read off the host and showing no figure. The
-refusal names the scope and reports no headroom. THE LIMITS RECORD —
-the per-account limit, the venue's total, the lease interval, a per-file
-cap at or below the route's — is installed by the serving layer as
-AUTH-4.70's list is; its kind, schema and channel are AUTH's docket's
-(OWED), and until the channel lands the daemon's defaults stand: no
-per-account limit, no venue total, the lease interval below, the route's
-cap, no address — the startup log names the record in force or that none
-is, and the deposit read echoes its address or `null`.
+the per-account limit — the base the cell index's number for its account,
+the pending bytes its live leases on hashes none of its cells names plus
+its uploads' bytes received, so a hash a cell names moves from the pending
+to the base and the scope is one number either way — refused on the
+declared total before the body and re-checked as the body is written; THE
+VENUE TOTAL, the sum of every account's own scope — every base, every
+pending — record-derived and never the directory's bytes, enforced ONLY
+as the body is written; THE FLOOR, the volume's free space held above the
+floor below, read off the host and showing no figure — read AT THE
+CREATION on no declared length, before the partial and the record
+(`scope` `floor` AT THE CREATION, `ended: false`, no upload made), and per
+chunk as the body is written, so every record, lease and retirement the
+store appends descends from a creation or a body byte the floor admitted.
+Beside the own scope, THE STANDING-UPLOADS BOUND: a principal holds at
+most a pinned count of standing uploads (the pins below), counted off its
+own records at the creation, a creation past it refused `scope` `standing`
+before its partial and its record, its `detail` naming the end of one of
+them as the act the person holds. The refusal names the scope and reports
+no headroom. THE LIMITS RECORD — the per-account limit, the venue's total,
+the lease interval, a per-file cap at or below the route's — is installed
+by the serving layer as AUTH-4.70's list is; its kind, schema and channel
+are AUTH's docket's (OWED). UNTIL A RECORD IS INSTALLED THE DAEMON's
+DEFAULT STANDS, AND A PER-ACCOUNT LIMIT IS ALWAYS IN FORCE: the default
+per-account limit is ONE EIGHTH OF THE VOLUME's CAPACITY, read once at the
+daemon's start off the same read as the floor's, never below 256 MiB —
+the floor alone on a host that answers no capacity; the venue total
+unset; the lease interval below; the route's cap; no address. The deposit
+read echoes the limit in force as `per_account`, whatever its source, and
+the record's address or `null`; a written record overrides the default
+whole; the startup log names the record in force, or the default and the
+capacity it was read from.
+
+**The upload setting.** A boundary setting of the daemon's, echoed as
+`--local-trust` is: `--no-uploads` (`SKEPD_UPLOADS=false`) CLOSES the
+upload family, and OPEN is the default, the default per-account limit in
+force from start. `GET /health` echoes it as `media.uploads`, the `media`
+object beside `auth` — `{"uploads": true}` — the setting's one read, which
+a client makes BEFORE any face or statement that names an upload speaks: on a
+closed board the faces that named an upload name the operator's pull
+where they show a hole and elsewhere the acts that exist, or none. Where
+CLOSED the creation and the resume answer `403 upload_refused` with
+`detail` `uploads_closed` before any body byte, the upload kept where one
+stood; the progress read, the termination, the deposit read, the door's
+binding and the pruner's pass are served as before.
 
 THE ORDER OF ONE FINISH (M-I5 (a)): the partial fsynced; where the name
 already holds a file, that file LINKED ASIDE — a second name no hex
@@ -2826,13 +2881,27 @@ removal running regardless and the halt re-evaluated at the next pass;
 designation, UNDER THE CREDENTIAL LOCK's EXCLUSIVE ARM, ONE FILE PER
 ACQUISITION: the index re-read (no cell names the hash, and no halt mark
 stands), the lease log re-read (no key holds a live lease on it,
-whoever deposited it), the file unlinked, the arm released. A file a
-cell names or any live lease holds is KEPT (M-I5 (b): no housekeeping act
-creates a hole); the arm is held one file at a time, so a retirement
-never queues behind a drain's I/O (M-I5 (f)); a replace's aside the
-deferred step did not reach is removed under the same arm. The pass
-never touches a partial whose upload stands and reads no directory's
-bytes as a scope (M-I6: the scopes stay record-derived).
+whoever deposited it), the file RENAMED ASIDE to `.retired-<hex>-<n>`,
+the REPLACE's own aside name, the arm released — and the aside UNLINKED
+AFTER, under no arm, where the file's blocks are freed. A file a cell
+names or any live lease holds is KEPT (M-I5 (b): no housekeeping act
+creates a hole; a crash between the rename and the unlink leaves an aside
+the next open removes); the arm is held one re-read and one rename and
+never across an unlink, so a retirement never queues behind a drain's
+freeing (M-I5 (f)); a replace's aside the deferred step did not reach is
+removed under the same arm at the pass's end. (d) THE COMPACTION — each
+of the two logs, `uploads.log` and `leases.log`, rewritten to its current
+records as open rewrites it, where its lines have passed the compaction
+trigger (the pins below: a multiple of its current records, and never
+under a minimum, so a small log is not rewritten per pass), under the
+store's own lock on THAT log's appends alone and NO arm of the credential
+lock: an append that arrives during the rewrite waits on that lock and
+lands in the new file; a compaction that fails past its rename STOPS its
+log — it takes no append until a compaction completes, the next pass's,
+which rewrites a stopped log whatever its count — and the pass's line
+names the stopped log. The pass never touches a partial whose upload
+stands and reads no directory's bytes as a scope (M-I6: the scopes stay
+record-derived).
 
 **THE FETCH** (media lane D; the media record's Op inventory 3; the ruled
 v1 cut — whole-file serving, the hash checked before the first byte):
@@ -2900,8 +2969,10 @@ confirmed at the media round (the board's sm-Q8):
 * the cell's cap, 1024 bytes — INTERIM; a canonical cell is under 140
   bytes, and the cap bounds the JSON tree a hostile body naming the kind
   can command before it is refused — one cap for every media cell kind;
-* the three refusal tokens, `unbound_cell`, `unknown_cell_schema` and
-  `lease_lapsed`, and their class, PERMANENT for the request as sent;
+* the four refusal tokens of the door — `unbound_cell`,
+  `unknown_cell_schema` and `lease_lapsed`, PERMANENT for the request as
+  sent, and `index_rebuilding` in the binding's position during the walk
+  alone, RETRY — and the `unbound_cell` face's words;
 * the fetch's spellings — the path `/blob?i=<address>`, its two methods
   (`GET`, `HEAD`), its query `i`, its seven refusal names with their
   statuses above, the content type `application/octet-stream`, and the two
@@ -2928,16 +2999,32 @@ confirmed at the media round (the board's sm-Q8):
   lapsed lease answers `lease_lapsed` and past which it answers as none;
 * the idle bound, 30 s, and the transfer bound, 10 minutes, on a streamed
   body;
-* the floor, 256 MiB of the volume's free space;
-* the limits record's defaults above, and its install channel (AUTH-4.70),
-  owed;
+* the floor, 256 MiB of the volume's free space, read at the creation on
+  no length and per chunk;
+* the default per-account limit, one eighth of the volume's capacity read
+  once at start and never below 256 MiB, the venue total unset; the
+  deposit read's `per_account`; the limits record's install channel
+  (AUTH-4.70), owed;
+* the standing-uploads bound, 8 per principal, its scope token `standing`
+  and its face's act;
+* the upload setting, `--no-uploads` (`SKEPD_UPLOADS=false`), open by
+  default; its `/health` echo, the `media` object `{"uploads": <bool>}`;
+  and the creation's and the resume's refusal on a closed board,
+  `upload_refused` with `detail` `uploads_closed`;
 * the readiness token, `index_rebuilding`, 503, retry-class — the one
-  refusal of the cell index's three readers;
+  refusal of the cell index's three readers — re-used at the door for the
+  window's answer;
 * the pruner's cadence, one hour between passes, the first once the index
-  is ready; the pinned designation set, `blake3` alone;
+  is ready; the pinned designation set, `blake3` alone; the compaction
+  trigger, four times a log's current records, and its minimum, 1,024
+  lines;
 * the aside name, `.retired-<hex>-<n>` in the designation directory — a
   replaced file's second name from the finish's link to the deferred
-  unlink, never read by anything.
+  unlink, and a pruned file's from the pass's rename to its unlink — never
+  read by anything;
+* the operator's tools' spellings — `skepd inventory --data-dir <dir> [--no-rehash]`
+  and `skepd pull --data-dir <dir> [--hash <hex>] <file>` — and the
+  inventory's object (below).
 
 The set's second file, `crates/skepd/tests/it/fixtures/media/uploads.json`,
 carries these pins, the refusals, and the seven clauses as vectors over the
@@ -2951,16 +3038,72 @@ deposit; an identifier another account's records name answers
 `no_upload` as a never-minted one does; and the write door's answer to a
 cell says nothing of whether another account deposited the file — a
 stranger's cell over a deposited hash is `unbound_cell`, as over any
-other.
+other, and over a hash another account's CELL names, that account's lease
+lapsed, in the same time: the index arm is read at the requester's own
+account's hashes and never at the per-hash list, and the timing row that
+measures it is reported and never asserted; the door's answer to a blind
+cell takes the same time with and without a file deposited under a lease
+whose hex equals the commitment's, the binding never asked for the kind.
+THE K2 RESIDUE: the time a PUT's answer takes at the common picture's
+size carries the presence fact until the cause is found — the 1 MB gap
+measured at +10.4 ms p50 and +64.0 ms p99 between a REPLACE and a create
+— carried here as a named residue beside dedup's two, reported by the
+timing row that measures it and never asserted.
 
-What this build does NOT carry, by name: the UPLOAD-SIDE SWEEP of the two
-kinds across the gate and the index — a default per-file blind-cell count,
-the past-cap classification by prefix at the door and the index (a body past
-the cap that opens with a kind's prefix is ordinary bytes to this build, not
-a halt), the operator's tools over the two kinds, and the upload pool — all
-owed; the video-era `extent` member (ms5-D2); and any media kind past the
-two. The door's armed set and the fetch's are each whole, so no later
-addition moves one state's answer from one code to another (PATTERNS P6).
+**The operator's tools.** Two subcommands of the `skepd` binary, run over
+a board DIRECTORY with no server — no port, no session, no `/health`, no
+log line of the daemon's — and both the ORIGIN cell's: at a replica the
+reference cells are foreign and their bytes a cache's, which neither
+reads. Neither opens the store as the daemon does. `skepd inventory
+--data-dir <dir> [--no-rehash]` — over a directory no daemon serves: a
+stopped board, a backup, one moment's copy — opens the journal through
+the engine's ordinary open (a directory a daemon serves is refused at the
+kernel's exclusion lock; a torn tail is cut as every open cuts it, and
+nothing else of the daemon's is written: no checkpoint, no commit, no
+head, no feed sidecar), rebuilds the cell index in memory from the
+replayed world as the daemon's open does, reads the blob store's four
+stores AS THEY STAND — the logs' torn tails cut in memory alone, nothing
+reconciled, compacted, swept, synced or created — and prints ONE JSON
+object to stdout, its members in sorted order: `holes`, every reference
+cell (the picture kind's; a blind cell is never a hole) whose file is
+absent at its hex (`fault` `absent`), present at a length other than the
+cell's `size` (`length`), or present and re-hashing to another hash
+(`hash` — one whole read per file, skipped by `--no-rehash`), each with
+its `hash`, `size`, `designation` and the `cells` naming it; `accounts`,
+per account its `principal`, its `account` address, its `base` (the
+index's number) and its `pending` bytes (its live leases on hashes none
+of its cells names plus its standing uploads' bytes received), and
+`venue_total`, their sum — the figures the limits record is written
+against; `standing_uploads` and `expired_uploads` by count; `halts`, the
+halt marks, each with `at`, `kind` and `fault`; `foreign_designations`;
+`orphan_partials` and `asides`; `references`, `cells` and
+`values_walked`; `journal`, the `log_position`, the `start_point` and the
+`skipped_checkpoints`; and `rehashed`. It writes nothing under `blobs/`
+and RECORDS NO READ anywhere (D9). `skepd pull --data-dir <dir> [--hash
+<hex>] <file>` takes a FILE, hashes it (BLAKE3) and INSTALLS it at
+`blobs/blake3/<hex>` as the PUT's order installs one — the temp file in
+the designation directory, named as a partial is so an open that meets
+it mid-pull removes it as an orphan, fsynced, renamed onto the hash name,
+REPLACE where a file stands, which ends any hole, the directory fsynced —
+ONLY WHERE A COMMITTED REFERENCE CELL NAMES THAT HASH: a restore, never a
+deposit, writing no lease, no record, no journal entry and no log line of
+the daemon's. Without `--hash` the board's journal is read as the
+inventory reads it and a file no committed cell names is REFUSED with one
+line; with `--hash <hex>` — the inventory's listing — the file is held to
+that hash, a file whose bytes hash to another refused with nothing
+installed, and the journal left unopened: the form that runs BESIDE A
+SERVING DAEMON holding none of its gates, the daemon's fetch serving the
+restored file at its next read. The subcommands' spellings and the
+inventory's object are INTERIM pins.
+
+What this build does NOT carry, by name: the upload permit pool — an
+upload admitted at most a pool at once beside the fetch pool, counted in
+the worker minimum, a creation past it refused retry-class — owed to its
+own lane; the floor's scaling with the newest checkpoint and the
+cadence's byte bound beside it, owed; the video-era `extent` member
+(ms5-D2); and any media kind past the two. The door's armed set and the
+fetch's are each whole, so no later addition moves one state's answer
+from one code to another (PATTERNS P6).
 
 ### Registry — the twelve rows, the two bodies and the record grade
 
@@ -4335,12 +4478,12 @@ the other — and every such reading corrects itself on the next probe.
 The forward rule the change feed states for its own members (§The change
 feed: "a client MUST ignore an entry member it does not know … a consumer
 written to today's members must not treat a later one as a protocol
-violation") holds here too: a consumer written to these five members must
-not treat a sixth as a violation. A claimed board configured with one
+violation") holds here too: a consumer written to these six members must
+not treat a seventh as a violation. A claimed board configured with one
 origin answers, illustratively:
 
 ```json
-{"auth":{"claimant":"1.0.1","local_trust":true,"origins":["http://127.0.0.1:8642","http://[::1]:8642","http://localhost:8642","https://board.example"],"signed_origins":["https://board.example"]},"chain_head":"a65b74b44f6e7c4338342b8a6a8760b6d73e753b57492fc43b3ab2599f7b75b7","head_time":1786838400047,"log_position":24,"ok":true}
+{"auth":{"claimant":"1.0.1","local_trust":true,"origins":["http://127.0.0.1:8642","http://[::1]:8642","http://localhost:8642","https://board.example"],"signed_origins":["https://board.example"]},"chain_head":"a65b74b44f6e7c4338342b8a6a8760b6d73e753b57492fc43b3ab2599f7b75b7","head_time":1786838400047,"log_position":24,"media":{"uploads":true},"ok":true}
 ```
 
 `auth.claimant` is the claiming account's address, `null` while
@@ -4352,6 +4495,11 @@ loopback defaults, in every mode), `signed_origins` the SIGNED arm's
 (configured alone once claimed; the bare set before) — the two differ
 exactly on a claimed board. There is deliberately NO `mode` field:
 derive the mode from the `(claimant, local_trust)` pair (§Identity).
+`media` is the media resource's settings as the daemon was launched with,
+daemon config like `auth.local_trust` and never board state:
+`media.uploads` echoes the upload setting (§Media, THE UPLOAD SETTING —
+`--no-uploads` closes the upload family), the one read a client makes
+before any face that names an upload speaks.
 
 **The published head document** — `1.1.0.1.0.2`, the version-chain document
 `H` (PUB-6.65). The board's OWN daemon writes `H` as

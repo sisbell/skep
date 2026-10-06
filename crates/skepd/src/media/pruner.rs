@@ -3,11 +3,14 @@
 //! index … ONLY UNDER THE DESIGNATIONS THIS BUILD's SCHEMAS PIN, a value
 //! naming the cell's kind that parses under no schema this build knows
 //! HALTING THE PRUNER's UNLINK OF AN UNREFERENCED FILE"; Op inventory 2 —
-//! "the PRUNER UNLINKS ONLY UNDER THE GATE's EXCLUSIVE ARM, `gate.write()`,
-//! re-reading the cell index and the lease there, ONE FILE PER ACQUISITION
-//! — re-read, unlink, release"; the register M-I5 (b), (f); the rulings
-//! ms5-R, ms5-T4 — D13's carve-out): THE PASS, run once the index is ready
-//! and then on a cadence ([`crate::limits::PRUNE_INTERVAL`]).
+//! "the PRUNER TAKES A FILE's NAME ONLY UNDER THE GATE's EXCLUSIVE ARM,
+//! `gate.write()`, re-reading the cell index and the lease there, ONE FILE
+//! PER ACQUISITION — re-read, rename aside, release, the aside unlinked
+//! after under no arm"; §The media stores — "the pruner's pass rewrites
+//! either store the same way once its log has passed a size trigger"; the
+//! register M-I5 (b), (f); the rulings ms5-R, ms5-T4 — D13's carve-out):
+//! THE PASS, run once the index is ready and then on a cadence
+//! ([`crate::limits::PRUNE_INTERVAL`]).
 //!
 //! Each pass, in order: (a) THE EXPIRED PARTIALS — every upload record past
 //! its expiry and held by no stream is retired and its partial removed,
@@ -19,14 +22,26 @@
 //! hex name under the pinned designation, under the credential lock's
 //! EXCLUSIVE ARM taken for that one file: the index re-read (no cell names
 //! the hash, and no halt mark stands), the lease log re-read (no key holds
-//! a live lease on it), the file unlinked, the arm released. A file a cell
-//! names or any live lease holds is KEPT (M-I5 (b): no housekeeping act
-//! creates a hole); the arm is held one file at a time (M-I5 (f): a
-//! retirement never queues behind a drain's I/O); a replace's aside the
-//! deferred step did not reach is removed under the same arm, nothing
-//! naming it. The pass never touches a partial whose upload stands, and
-//! reads no directory's bytes as a scope (M-I6: the scopes stay
-//! record-derived).
+//! a live lease on it), the file RENAMED ASIDE to `.retired-<hex>-<n>` —
+//! the REPLACE's own aside name — the arm released; and the aside UNLINKED
+//! AFTER, under no arm, which is where the file's blocks are freed. A file
+//! a cell names or any live lease holds is KEPT (M-I5 (b): no housekeeping
+//! act creates a hole — the re-read and the rename are one interval under
+//! the arm, and a crash between the rename and the unlink leaves an aside
+//! open removes); the arm is held one re-read and one rename, never across
+//! an unlink (M-I5 (f): a retirement never queues behind a drain's I/O —
+//! at the per-file cap an unlink held every write on the board for the
+//! freeing's time); a replace's aside the deferred step did not reach is
+//! removed at the pass's end, as before. Then (d) THE LOGS' COMPACTION —
+//! each of the two logs rewritten to its current records where its lines
+//! have passed [`crate::limits::COMPACTION_TRIGGER`] times those records
+//! (never under [`crate::limits::COMPACTION_MIN_LINES`]), under the store's
+//! own lock on that log's appends alone and NO arm of the credential lock
+//! (P22: the honest-null arm compacted by its reclaimer); a log that has
+//! STOPPED — a compaction failed past its rename — takes no append until a
+//! compaction completes, and the pass's line names it. The pass never
+//! touches a partial whose upload stands, and reads no directory's bytes
+//! as a scope (M-I6: the scopes stay record-derived).
 //!
 //! THE ARM IS THE SESSION LAYER's and is handed in: this module sits
 //! beside the write path and names nothing above it, so the pass takes the
@@ -39,6 +54,7 @@ use std::time::Duration;
 use parking_lot::{Condvar, Mutex};
 
 use super::gate::{MediaGate, DESIGNATION};
+use crate::limits::{COMPACTION_MIN_LINES, COMPACTION_TRIGGER};
 use crate::notice;
 
 /// What one pass did — the test hook's answer, and the operator's line's
@@ -47,15 +63,57 @@ use crate::notice;
 pub struct PrunePass {
     /// Expired uploads retired, their partials removed.
     pub expired_partials: usize,
-    /// Files at hex names unlinked.
+    /// Files at hex names taken — renamed aside under the arm and unlinked
+    /// after it.
     pub unlinked: usize,
     /// Files at hex names kept — named by a cell or held by a live lease.
     pub kept: usize,
-    /// Asides removed — the deferred step's leftovers.
+    /// Asides removed at the pass's end — the deferred step's leftovers,
+    /// and a pass's own aside a crash left behind.
     pub asides: usize,
     /// Why the unlink pass halted before its first unlink, if it did — the
     /// operator line's reason, naming the directory or the schema.
     pub halted: Option<String>,
+    /// Whether the upload records' log was compacted by this pass.
+    pub compacted_uploads: bool,
+    /// Whether the lease log was compacted by this pass.
+    pub compacted_leases: bool,
+    /// Why a compaction failed, if one did — the operator line's reason;
+    /// the logs then stopped are named beside it.
+    pub compaction_failed: Option<String>,
+    /// The logs STOPPED after this pass — `(uploads, leases)`: each takes
+    /// no append until a compaction completes.
+    pub stopped: (bool, bool),
+}
+
+impl PrunePass {
+    /// The operator's line for this pass — its figures, the halt, the
+    /// compaction and any stopped log.
+    pub fn line(&self) -> String {
+        let mut line = format!(
+            "pruner: {} expired partials removed, {} files unlinked, {} kept, {} asides removed",
+            self.expired_partials, self.unlinked, self.kept, self.asides
+        );
+        if let Some(why) = &self.halted {
+            line.push_str(&format!(" — the unlink pass halted: {why}"));
+        }
+        match (self.compacted_uploads, self.compacted_leases) {
+            (true, true) => line.push_str("; uploads.log and leases.log compacted"),
+            (true, false) => line.push_str("; uploads.log compacted"),
+            (false, true) => line.push_str("; leases.log compacted"),
+            (false, false) => {}
+        }
+        if let Some(why) = &self.compaction_failed {
+            line.push_str(&format!("; a compaction FAILED: {why}"));
+        }
+        match self.stopped {
+            (true, true) => line.push_str("; STOPPED: uploads.log and leases.log take no append until a compaction completes"),
+            (true, false) => line.push_str("; STOPPED: uploads.log takes no append until a compaction completes"),
+            (false, true) => line.push_str("; STOPPED: leases.log takes no append until a compaction completes"),
+            (false, false) => {}
+        }
+        line
+    }
 }
 
 /// THE PINNED DESIGNATION SET: the designations this build's schemas pin
@@ -66,8 +124,9 @@ pub(crate) const PINNED_DESIGNATIONS: &[&str] = &[DESIGNATION];
 
 /// ONE PASS over `gate`'s store and index, `exclusive` the acquisition of
 /// the credential lock's write arm — called once per file, its guard held
-/// across that file's re-read and unlink and dropped before the next.
-/// `None` where the index is not ready: the pass does not start (ms5-R).
+/// across that file's re-read and rename aside and dropped before the
+/// aside's unlink and before the next. `None` where the index is not
+/// ready: the pass does not start (ms5-R).
 pub(crate) fn pass<G>(gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result<Option<PrunePass>> {
     let index = gate.index();
     if !index.is_ready() {
@@ -75,8 +134,17 @@ pub(crate) fn pass<G>(gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result
     }
     let store = gate.store();
     let now = gate.now_ms();
-    let mut report =
-        PrunePass { expired_partials: 0, unlinked: 0, kept: 0, asides: 0, halted: None };
+    let mut report = PrunePass {
+        expired_partials: 0,
+        unlinked: 0,
+        kept: 0,
+        asides: 0,
+        halted: None,
+        compacted_uploads: false,
+        compacted_leases: false,
+        compaction_failed: None,
+        stopped: (false, false),
+    };
 
     // (a) THE EXPIRED PARTIALS — the store's own read of expiry, the gate's
     // hold; no reference read, no arm.
@@ -115,6 +183,7 @@ pub(crate) fn pass<G>(gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result
             report.expired_partials
         ));
         report.halted = Some(reason);
+        compact_logs(store, &mut report);
         #[cfg(any(test, feature = "test-hooks"))]
         gate.note_pass_completed();
         return Ok(Some(report));
@@ -124,7 +193,7 @@ pub(crate) fn pass<G>(gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result
     // designations alone.
     for designation in PINNED_DESIGNATIONS {
         for hex in store.blobs_of(designation)? {
-            let unlinked = {
+            let aside = {
                 let _arm = exclusive();
                 // THE RE-READ under the arm: a cell committed since the
                 // listing, a halt mark entered since, a lease taken since.
@@ -133,23 +202,22 @@ pub(crate) fn pass<G>(gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result
                     || store.any_live_lease(designation, &hex, gate.now_ms());
                 if referenced {
                     report.kept += 1;
-                    false
+                    None
                 } else {
-                    let went = store.unlink_blob(designation, &hex)?;
-                    if went {
-                        report.unlinked += 1;
-                    }
-                    went
+                    // THE RENAME ASIDE, the arm's one act: the name is taken
+                    // here and the blocks freed below, the arm released.
+                    store.rename_aside(designation, &hex)?
                 }
             };
-            // The arm released, the next acquisition not yet taken: the
-            // dirty-crash harness's seam, after an unlink.
+            let Some(aside) = aside else { continue };
+            report.unlinked += 1;
+            // The arm released, the aside not yet unlinked: the dirty-crash
+            // harness's seam — a crash here leaves an aside open removes.
             #[cfg(any(test, feature = "test-hooks"))]
-            if unlinked {
-                gate.hold_after_unlink_if_armed();
-            }
-            #[cfg(not(any(test, feature = "test-hooks")))]
-            let _ = unlinked;
+            gate.hold_after_rename_if_armed();
+            // THE UNLINK AFTER, under no arm: the freeing's cost lands on
+            // this thread alone.
+            store.remove_aside(designation, &aside)?;
         }
         for aside in store.asides_of(designation)? {
             let _arm = exclusive();
@@ -158,9 +226,27 @@ pub(crate) fn pass<G>(gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result
             }
         }
     }
+    // (d) THE LOGS' COMPACTION, under no arm.
+    compact_logs(store, &mut report);
     #[cfg(any(test, feature = "test-hooks"))]
     gate.note_pass_completed();
     Ok(Some(report))
+}
+
+/// (d) THE LOGS' COMPACTION: each log rewritten where it has passed the
+/// trigger, under the store's lock on that log's appends alone — no arm of
+/// the credential lock is held here — and the stopped logs read after it.
+/// A failure is the report's and never the pass's: the next pass tries
+/// again, and a stopped log is rewritten then whatever its count.
+fn compact_logs(store: &skep_blobs::Store, report: &mut PrunePass) {
+    match store.compact_logs_if_past(COMPACTION_TRIGGER, COMPACTION_MIN_LINES) {
+        Ok((uploads, leases)) => {
+            report.compacted_uploads = uploads;
+            report.compacted_leases = leases;
+        }
+        Err(e) => report.compaction_failed = Some(e.to_string()),
+    }
+    report.stopped = store.stopped_logs();
 }
 
 /// THE CADENCE: the pruner thread's clock and stop, one condvar — a wait of

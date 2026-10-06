@@ -140,6 +140,11 @@ impl Daemon {
         // direction the straddle above describes.
         let auth = self.auth.auth_object(self.engine.kernel().snapshot().world().identity());
         let (log_position, chain_head) = self.febe.head_coordinate();
+        // The media object (wire.md §Media, THE UPLOAD SETTING): the upload
+        // switch echoed where its state lives (`MediaGate::health_object`),
+        // a boundary setting read once by the client before any face that
+        // names an upload speaks (P37) — daemon config, never board state,
+        // so no snapshot and no straddle.
         Reply::json(
             200,
             obj(vec![
@@ -147,6 +152,7 @@ impl Daemon {
                 ("chain_head", Value::String(crate::codec::hex_string(&chain_head))),
                 ("head_time", head_time),
                 ("log_position", Value::Number(log_position.0.into())),
+                ("media", self.media.health_object()),
                 ("ok", Value::Bool(true)),
             ]),
         )

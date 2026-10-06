@@ -18,6 +18,36 @@ use skep_blobs::{HashFunction, LeaseState};
 
 use crate::{every_deposit_unplaced, hex_of, open, put_whole, HORIZON_MS, INTERVAL, INTERVAL_MS};
 
+/// THE LEASE LOG's RUNTIME COMPACTION (P22; `Store::compact_logs_if_past`):
+/// one file re-PUT ten times is ten lines over one lease — past a trigger
+/// of four at a minimum of eight — rewritten to the one line, the lease
+/// standing as it was, its latest expiry kept; under the minimum the log
+/// is left alone; the records' log, twenty lines over no record, is
+/// rewritten beside it to nothing.
+#[test]
+fn the_lease_log_past_its_trigger_is_compacted_to_the_latest_lease() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let lines = |name: &str| fs::read_to_string(root.join(name)).unwrap().lines().count();
+    let store = open(&root, 0);
+    let mut fin = None;
+    for i in 0..10u64 {
+        fin = Some(put_whole(&store, "k", b"the same bytes", i));
+    }
+    let fin = fin.unwrap();
+    assert_eq!(lines("leases.log"), 10);
+    assert_eq!(lines("uploads.log"), 20, "a creation and a retirement per PUT");
+    assert_eq!(store.compact_logs_if_past(4, 64).unwrap(), (false, false), "under the minimum");
+    assert_eq!(store.compact_logs_if_past(4, 8).unwrap(), (true, true));
+    assert_eq!(lines("leases.log"), 1, "the latest line alone");
+    assert_eq!(lines("uploads.log"), 0, "no record stands");
+    assert_eq!(store.lease_state("k", "blake3", &fin.hex, 9), LeaseState::Live { size: 14, expires: 9 + INTERVAL_MS }, "the latest expiry");
+    assert_eq!(store.stopped_logs(), (false, false));
+    drop(store);
+    let reopened = open(&root, 9);
+    assert_eq!(reopened.lease_state("k", "blake3", &fin.hex, 9), LeaseState::Live { size: 14, expires: 9 + INTERVAL_MS });
+}
+
 /// LIVE within the interval, LAPSED past it within the HORIZON (its expiry
 /// named), NONE past the horizon — and NONE for another principal at every
 /// moment, whatever the directory holds. Each answer is the record's: a

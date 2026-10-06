@@ -9,6 +9,7 @@ use skep_kernel::{Attestation, SaltSource, Seq};
 use super::{Daemon, DaemonError};
 use crate::auth::AuthOptions;
 use crate::media::index::{Rebuild, WALK_HOLD};
+use crate::media::MediaOptions;
 use crate::media::pruner::PrunePass;
 use crate::media::serve::STREAM_HOLD;
 use crate::permits::Permit;
@@ -102,13 +103,14 @@ impl Daemon {
     #[doc(hidden)]
     pub const PRUNE_HOLD_NOTICE: &'static str = crate::media::gate::MediaGate::PRUNE_HOLD_NOTICE;
 
-    /// TEST HOOK (the same standing): HOLD THE PASS after its next unlink —
-    /// the arm released, the next file's acquisition not yet taken — writing
-    /// [`Daemon::PRUNE_HOLD_NOTICE`] and parking the pass's thread for good,
-    /// so the dirty-crash harness can SIGKILL the process between an unlink
-    /// and the next acquisition and judge the reopen. Not disarmable.
+    /// TEST HOOK (the same standing): HOLD THE PASS after its next rename
+    /// aside — the arm released, the aside not yet unlinked, the next file's
+    /// acquisition not yet taken — writing [`Daemon::PRUNE_HOLD_NOTICE`] and
+    /// parking the pass's thread for good, so the dirty-crash harness can
+    /// SIGKILL the process between the rename and the unlink and judge the
+    /// reopen: an aside open removes. Not disarmable.
     #[doc(hidden)]
-    pub fn hold_the_prune_pass_after_an_unlink(&self) {
+    pub fn hold_the_prune_pass_after_a_rename(&self) {
         self.media.arm_prune_hold();
     }
 
@@ -228,7 +230,7 @@ impl Daemon {
         opts: AuthOptions,
         seed: u64,
     ) -> Result<Daemon, DaemonError> {
-        Self::open_under(data_dir.as_ref(), opts, SaltSource::Seeded(seed))
+        Self::open_under(data_dir.as_ref(), opts, MediaOptions::default(), SaltSource::Seeded(seed))
     }
 
     /// TEST HOOK (the same standing): take a KERNEL checkpoint now — the real

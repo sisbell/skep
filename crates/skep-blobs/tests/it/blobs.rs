@@ -51,6 +51,100 @@ fn the_directory_listings_name_each_class_alone_in_name_order() {
     assert_eq!(store.designation_dirs().unwrap(), dirs, "every directory under the root, whatever its name, sorted");
 }
 
+/// THE PRUNER's RENAME ASIDE (M-I5 (b), (f); `Store::rename_aside`: "the
+/// file renamed to an aside name of its own, the REPLACE's own name and
+/// serial"): a leased file renamed aside stands under `.retired-<hex>-<n>`
+/// and no longer at its hex — absent to the size check, listed among the
+/// asides — and is removed after by the pass's own act; a second rename
+/// aside of the absent name is `None`, as is one of a malformed name; the
+/// renames and a replace's link draw on one rising serial — a rename of an
+/// absent name spends one too — so no two asides ever share a name.
+#[test]
+fn rename_aside_takes_the_name_under_the_replaces_serial_and_the_aside_is_removed_after() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let store = open(&root, 0);
+    let first = put_whole(&store, "k", b"the first file", 1);
+    let second = put_whole(&store, "k", b"the second file", 1);
+    let aside = store.rename_aside("blake3", &first.hex).unwrap().expect("a file went aside");
+    assert!(aside.starts_with(&format!(".retired-{}-", first.hex)), "{aside}");
+    assert_eq!(store.blob_size("blake3", &first.hex).unwrap(), None, "absent at its hex");
+    assert!(root.join("blake3").join(&aside).is_file(), "standing at the aside name");
+    assert_eq!(store.asides_of("blake3").unwrap(), vec![aside.clone()]);
+    assert_eq!(store.rename_aside("blake3", &first.hex).unwrap(), None, "nothing stands: none");
+    assert_eq!(store.rename_aside("blake3", "../leases.log").unwrap(), None, "a malformed name: none");
+    assert_eq!(store.rename_aside("BLAKE3", &second.hex).unwrap(), None);
+    let other = store.rename_aside("blake3", &second.hex).unwrap().expect("the second file went aside");
+    assert_ne!(aside, other, "two serials");
+    assert_eq!(store.blobs_of("blake3").unwrap(), Vec::<String>::new(), "both gone from their names");
+    // The unlink after, under no arm: the pass's own act.
+    assert!(store.remove_aside("blake3", &aside).unwrap());
+    assert!(store.remove_aside("blake3", &other).unwrap());
+    assert!(store.asides_of("blake3").unwrap().is_empty());
+    // A replace's aside draws on the same serial, past every rename's.
+    let third = put_whole(&store, "k", b"the third file", 2);
+    put_whole(&store, "k", b"the third file", 3);
+    let replaced = store.asides_of("blake3").unwrap();
+    assert_eq!(replaced.len(), 1, "{replaced:?}");
+    assert!(replaced[0].starts_with(&format!(".retired-{}-", third.hex)));
+    let serial = |name: &str| name.rsplit('-').next().unwrap().parse::<u64>().unwrap();
+    assert_eq!(serial(&aside), 0, "the first rename's serial");
+    assert!(serial(&aside) < serial(&other) && serial(&other) < serial(&replaced[0]), "one rising serial: {aside} {other} {}", replaced[0]);
+}
+
+/// THE CAPACITY READ (the daemon's default per-account limit's source;
+/// `Store::capacity`): the volume's capacity off the same `statvfs` as the
+/// floor's free space — a figure, and never below the free space.
+#[test]
+fn the_capacity_is_the_volumes_and_never_below_its_free_space() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = open(&dir.path().join("blobs"), 0);
+    let capacity = store.capacity().expect("statvfs answers");
+    let free = store.free_space().expect("statvfs answers");
+    assert!(capacity > 0);
+    assert!(capacity >= free, "capacity {capacity} below free {free}");
+}
+
+/// THE PULL's INSTALL (M-I5 (d); `Store::install_file`: "the bytes of
+/// `source` streamed into a temp file … hashed as they are copied … renamed
+/// onto `<designation>/<hex>` — REPLACE where a file stands"): a file is
+/// installed under its own hash with no record and no lease, the store
+/// opened beside answering it as a plain file; a file whose bytes are not
+/// the expected hash's is refused, nothing installed and no temp file
+/// left; a corrupt file at the name is REPLACED by the install of the
+/// right bytes; and an absent source is the file's own error.
+#[test]
+fn install_file_installs_by_the_puts_order_replaces_and_refuses_another_hash() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let bytes = b"the picture's bytes, restored".to_vec();
+    let hex = hex_of(&bytes);
+    let source = dir.path().join("source");
+    fs::write(&source, &bytes).unwrap();
+    let partials = |root: &Path| -> usize {
+        fs::read_dir(root.join("blake3")).map(|d| d.filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with(".upload-")).count()).unwrap_or(0)
+    };
+    let fin = skep_blobs::Store::install_file(&root, HashFunction::Blake3, &source, None).unwrap();
+    assert_eq!((fin.designation.as_str(), fin.hex.as_str(), fin.size), ("blake3", hex.as_str(), bytes.len() as u64));
+    assert_eq!(fs::read(root.join("blake3").join(&hex)).unwrap(), bytes);
+    assert_eq!(partials(&root), 0, "no temp file left");
+    let wrong = hex_of(b"other bytes");
+    let err = skep_blobs::Store::install_file(&root, HashFunction::Blake3, &source, Some(&wrong)).expect_err("refused");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{err}");
+    assert!(err.to_string().contains(&wrong) && err.to_string().contains(&hex), "{err}");
+    assert_eq!(partials(&root), 0, "nothing left behind");
+    assert!(skep_blobs::Store::install_file(&root, HashFunction::Blake3, dir.path().join("absent"), None).is_err());
+    let store = open(&root, 0);
+    assert_eq!(store.blob_size("blake3", &hex).unwrap(), Some(bytes.len() as u64), "a plain file to the store");
+    assert_eq!(store.lease_state("k", "blake3", &hex, 0), skep_blobs::LeaseState::None, "no lease");
+    assert!(store.uploads_of("k", 0).is_empty(), "no record");
+    store.install("blake3", &hex, b"corrupt bytes under the right name").unwrap();
+    let fin = skep_blobs::Store::install_file(&root, HashFunction::Blake3, &source, Some(&hex)).unwrap();
+    assert_eq!(fin.hex, hex);
+    assert_eq!(fs::read(root.join("blake3").join(&hex)).unwrap(), bytes, "replaced");
+    assert_eq!(partials(&root), 0);
+}
+
 /// The size check's read: present with its size, absent as `None`, and a
 /// name that is no hex — a partial's, a path's — as absent too. And the
 /// name check it reads through: a path is answered for well-formed names

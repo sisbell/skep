@@ -25,28 +25,41 @@
 //!
 //! THE ORDER OF ONE REQUEST THAT CARRIES BYTES: the session-layer gate
 //! (a guest, an unclaimed board, a node-tier principal: refused before
-//! anything — D12, PUB-6.35's I10, P13); THE READINESS — the creation and
-//! the resume read the own scope, whose base is the cell index's number,
-//! so until the index's walk at open completes both are refused
-//! `index_rebuilding`, 503, retry-class, as the deposit read is (ms5-R:
-//! the index's three readers wait, and nothing else — the progress read,
-//! the termination, every text read and write, the door's own binding arm
-//! are served throughout); the request's shape; the per-file cap and the
-//! own scope on the DECLARED total, before the body — refused there, the
-//! upload is KEPT (clause (6)); the hold (clause (5)); then the body, chunk
-//! by chunk through the one buffer, each chunk gated — the own scope, the
-//! venue's total, the floor, in that order — and refused there the upload
-//! is ENDED, nothing kept, the refusal naming the scope and the bytes it
-//! had taken (ms4-E1, the venue total's priced residue); then, where the
-//! offset reaches the length, THE FINISH under the credential lock's READ
-//! arm and never `Serial`: the requester re-resolved against the head (dead
-//! there, the upload is ended), the store's rename through the lease's
-//! sync, the record retired, THEN the answer — one shape whether or not the
-//! file was already here (M-I5 (a); "NO ANSWER OF THE UPLOAD SAYS WHETHER
-//! THE FILE WAS ALREADY HERE") — and one TIME: the replaced instance's
-//! unlink is the store's deferred step, run by the transport after the
-//! reply is written ([`Daemon::retire_asides`]) and swept by the pruner's
-//! pass where that did not run.
+//! anything — D12, PUB-6.35's I10, P13); THE UPLOAD SETTING — on a board
+//! whose uploads are CLOSED (`--no-uploads`, echoed on `/health` as
+//! `media.uploads`) the creation and the resume answer `403
+//! upload_refused` with `detail` `uploads_closed` before any body byte,
+//! the upload kept where one stood, and every read and the termination
+//! are served (`media.md` Op inventory 1, "ONLY ON A BOARD WHOSE UPLOADS
+//! ARE OPEN"; M-I7 (e)); THE READINESS — the creation and the resume read
+//! the own scope, whose base is the cell index's number, so until the
+//! index's walk at open completes both are refused `index_rebuilding`,
+//! 503, retry-class, as the deposit read is (ms5-R: the index's three
+//! readers wait, and nothing else — the progress read, the termination,
+//! every text read and write, the door's own binding arm are served
+//! throughout); the request's shape; the per-file cap and the own scope on
+//! the DECLARED total, before the body — refused there, the upload is KEPT
+//! (clause (6)); AT THE CREATION, before its partial and its record, THE
+//! STANDING-UPLOADS BOUND and THE FLOOR read on no declared length (P13,
+//! P29; M-I5 (f), M-I6 (b): a creation refused `standing` or `floor` makes
+//! no upload, its face naming the end of one of them where the bound
+//! fired); the hold (clause (5)); then the body, chunk by chunk through
+//! the one buffer, each chunk gated — the own scope, the venue's total, the
+//! floor, in that order — and refused there the upload is ENDED, nothing
+//! kept, the refusal naming the scope and the bytes it had taken (ms4-E1,
+//! the venue total's priced residue); then, where the offset reaches the
+//! length, THE FINISH under the credential lock's READ arm and never
+//! `Serial`: the requester re-resolved against the head (dead there, the
+//! upload is ended), the store's rename through the lease's sync, the
+//! record retired, THEN the answer — one shape whether or not the file was
+//! already here (M-I5 (a); "NO ANSWER OF THE UPLOAD SAYS WHETHER THE FILE
+//! WAS ALREADY HERE") — and one TIME: the replaced instance's unlink is the
+//! store's deferred step, run by the transport after the reply is written
+//! ([`Daemon::retire_asides`]) and swept by the pruner's pass where that
+//! did not run. A finish cut before its rename — a failure there, a crash
+//! — leaves the upload standing over its partial at its record's offset:
+//! an ordinary resume finishes it, an EMPTY one where that offset is its
+//! length (clause (7); M-I5 (c)).
 //!
 //! THE TRANSPORT SEAM. The transport reads the request head and, for the
 //! two body-carrying methods of this family, reads NO body: it leaves a
@@ -246,6 +259,15 @@ impl Daemon {
         if !account_tier {
             return refuse_upload("node_tier");
         }
+        // THE UPLOAD SETTING: the two acts that take bytes, refused before
+        // any body byte on a closed board; the reads and the end served.
+        let takes_bytes = matches!(
+            (req.method.as_str(), &target),
+            ("POST", BlobPath::Create) | ("PATCH", BlobPath::Upload(_))
+        );
+        if takes_bytes && !self.media.uploads_open() {
+            return refuse_upload("uploads_closed");
+        }
         let reads_the_index = matches!(
             (req.method.as_str(), &target),
             ("POST", BlobPath::Create) | ("GET", BlobPath::Create) | ("PATCH", BlobPath::Upload(_))
@@ -272,9 +294,12 @@ impl Daemon {
     }
 
     /// THE CREATION (clause (1)): `length=<N>`, the per-file cap on it, the
-    /// own scope on it BEFORE the body, the identifier minted and the record
-    /// written; with no body the answer is the record; with one — the
-    /// creation-with-upload — the identifier is held and the body streamed.
+    /// own scope on it BEFORE the body, then the standing-uploads bound and
+    /// the floor on no declared length (`MediaGate::admit_creation`) — each
+    /// refusal before the partial and the record, no upload made — the
+    /// identifier minted and the record written; with no body the answer is
+    /// the record; with one — the creation-with-upload — the identifier is
+    /// held and the body streamed.
     fn blob_create(
         &self,
         principal: PrincipalId,
@@ -307,6 +332,9 @@ impl Daemon {
         }
         let now = self.media.now_ms();
         if let Err(scope) = self.media.admit_declared(principal, length, now) {
+            return refuse_deposit(scope, false, 0);
+        }
+        if let Err(scope) = self.media.admit_creation(principal, now) {
             return refuse_deposit(scope, false, 0);
         }
         let interval = Duration::from_millis(limits.lease_interval_ms);
@@ -568,6 +596,27 @@ impl Daemon {
         });
     }
 
+    /// TEST HOOK (the same standing): the volume's capacity the media gate
+    /// read once at the open — the default per-account limit's source — so
+    /// a suite judges the deposit read's `per_account` against the same
+    /// read; `None` where the host answered none.
+    #[cfg(any(test, feature = "test-hooks"))]
+    #[doc(hidden)]
+    pub fn media_capacity(&self) -> Option<u64> {
+        self.media.capacity()
+    }
+
+    /// TEST HOOK (the same standing): FAIL every later finish of the blob
+    /// store at the named step with an I/O error, or `None` to fail nothing
+    /// — the store's own injection (`skep-blobs`'s `fail_at`), so a suite
+    /// drives a finish cut before its rename over the wire and judges the
+    /// empty resume that finishes it.
+    #[cfg(feature = "test-hooks")]
+    #[doc(hidden)]
+    pub fn fail_blob_finish_at(&self, step: Option<skep_blobs::Step>) {
+        self.media.store().fail_at(step);
+    }
+
     /// TEST HOOK (the same standing): INSTALL a media limits record — the
     /// serving layer's channel (AUTH-4.70) in a suite's hand until that
     /// channel lands: the per-account limit, the venue's total, the lease
@@ -724,16 +773,27 @@ fn refuse_rebuilding() -> Reply {
 }
 
 /// The gate's refusal: the scope it fired on, whether the upload was ended
-/// or kept, and the bytes received — no headroom (M-I6 (h)).
+/// or kept, and the bytes received — no headroom (M-I6 (h)); at the
+/// standing-uploads bound, a `detail` naming the end of one of them as the
+/// act the person holds (M-I7 (e)) — the count the bound pins, which the
+/// same principal's deposit read lists upload by upload.
 fn refuse_deposit(scope: Scope, ended: bool, offset: u64) -> Reply {
-    refuse_with(
-        TransportError::DepositRefused,
-        vec![
-            ("ended", Value::Bool(ended)),
-            ("offset", Value::Number(offset.into())),
-            ("scope", Value::String(scope.token().into())),
-        ],
-    )
+    let mut fields = vec![
+        ("ended", Value::Bool(ended)),
+        ("offset", Value::Number(offset.into())),
+        ("scope", Value::String(scope.token().into())),
+    ];
+    if scope == Scope::Standing {
+        fields.push((
+            "detail",
+            Value::String(format!(
+                "this account holds {} standing uploads, the most this board keeps: end one of them, \
+                 then create again",
+                crate::limits::MAX_STANDING_UPLOADS
+            )),
+        ));
+    }
+    refuse_with(TransportError::DepositRefused, fields)
 }
 
 /// The store's refusal as the wire's.

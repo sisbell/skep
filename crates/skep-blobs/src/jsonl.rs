@@ -20,6 +20,12 @@
 //! which no open reads. [`Log`] owns the file, the length and the count of
 //! its whole lines, and the stop; what a line means is its store's
 //! (`uploads.rs`, `lease.rs`).
+//!
+//! THE LOG IS READ TWO WAYS: [`Log::open`] cuts the torn tail off the file
+//! and opens it for appending — the store's open; [`Log::read_as_found`]
+//! reads the same lines and touches nothing — the inspection's, over a
+//! backup or a directory a daemon serves, where a cut would be a write to a
+//! log this reader does not own.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -60,6 +66,35 @@ impl Log {
         let file = open_append(&path)?;
         let lines = values.len();
         Ok((Log { path, file, len, lines, stopped: false }, values))
+    }
+
+    /// THE LOG AS FOUND: the values of its whole lines, trust ending at the
+    /// first torn line as [`Log::open`]'s read ends it — and the file left
+    /// exactly as it was: no cut, no append-mode open, no file created where
+    /// none stands. The inspection's read, over a copy or beside a daemon
+    /// that holds the log. Answers the values and the count of the lines on
+    /// disk, torn tail included.
+    pub fn read_as_found(path: &Path) -> io::Result<(Vec<Value>, usize)> {
+        let Some(bytes) = not_found_as_none(fs::read(path))? else {
+            return Ok((Vec::new(), 0));
+        };
+        let on_disk = bytes.iter().filter(|&&b| b == b'\n').count();
+        let (values, _) = whole_lines(&bytes);
+        Ok((values, on_disk))
+    }
+
+    /// The count of whole lines the log holds — what the compaction's
+    /// trigger is measured against: every append adds one, and the rewrite
+    /// resets it to the current records.
+    pub fn lines(&self) -> usize {
+        self.lines
+    }
+
+    /// Whether the log has STOPPED: an append's cut-back failed, or a
+    /// compaction failed past its rename; it takes no append until a
+    /// compaction completes.
+    pub fn stopped(&self) -> bool {
+        self.stopped
     }
 
     /// Append `v` as the log's next line and fsync it — what a figure that
@@ -119,10 +154,15 @@ impl Log {
     ///
     /// PRECONDITION: `current` is what the log's store folds the log's lines
     /// to — each value one a line the log holds reads as, none twice — as
-    /// both stores hand their own maps at open: an equal count is read as
-    /// nothing else held, so a different set of that count would never be
-    /// written. A runtime compaction (the pruner's on a log past its size
-    /// trigger, owed — `media.md` §The media stores) hands the same.
+    /// both stores hand their own maps at open and at the pass's compaction
+    /// (`Store::compact_logs_if_past`, the runtime compaction the pruner's
+    /// pass runs once a log has passed its size trigger — `media.md` §The
+    /// media stores): an equal count is read as nothing else held, so a
+    /// different set of that count would never be written. The runtime
+    /// compaction runs under the store's lock on THIS log's appends alone,
+    /// which is what makes the count it reads and the records it writes one
+    /// state: an append that arrives during the rewrite waits on that lock
+    /// and lands in the new file once the install order has completed.
     pub fn compact(&mut self, current: impl ExactSizeIterator<Item = Value>) -> io::Result<()> {
         if !self.stopped && current.len() == self.lines {
             return Ok(());
@@ -162,12 +202,22 @@ fn read_log(path: &Path) -> io::Result<(Vec<Value>, u64)> {
     let Some(bytes) = not_found_as_none(fs::read(path))? else {
         return Ok((Vec::new(), 0));
     };
+    let (values, good) = whole_lines(&bytes);
+    if good < bytes.len() {
+        OpenOptions::new().write(true).open(path)?.set_len(good as u64)?;
+    }
+    Ok((values, good as u64))
+}
+
+/// The values of `bytes`' whole lines in order and the byte length they
+/// span — trust ending at the first torn line: one with no newline, being
+/// written when the process died, or one that is no JSON object — and
+/// nothing past it read. The one reading both [`read_log`] and
+/// [`Log::read_as_found`] make; whether the tail is then cut is theirs.
+fn whole_lines(bytes: &[u8]) -> (Vec<Value>, usize) {
     let mut values = Vec::new();
     let mut good = 0;
     for line in bytes.split_inclusive(|&b| b == b'\n') {
-        // Trust ends at the first torn line — one with no newline, being
-        // written when the process died, or one that is no JSON object —
-        // and nothing past it is read.
         let Some(v) = line
             .strip_suffix(b"\n")
             .and_then(|body| serde_json::from_slice::<Value>(body).ok())
@@ -178,10 +228,7 @@ fn read_log(path: &Path) -> io::Result<(Vec<Value>, u64)> {
         values.push(v);
         good += line.len();
     }
-    if good < bytes.len() {
-        OpenOptions::new().write(true).open(path)?.set_len(good as u64)?;
-    }
-    Ok((values, good as u64))
+    (values, good)
 }
 
 /// Open the log at `path` for appending, creating it where absent.

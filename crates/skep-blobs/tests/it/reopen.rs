@@ -14,11 +14,210 @@
 //! nothing it names touched and no open left waiting.
 
 use std::fs::{self, OpenOptions};
+use std::path::Path;
+use std::sync::{Arc, Barrier};
+use std::thread;
 use std::time::Duration;
 
-use skep_blobs::{BlobError, LeaseState, Store, UploadId};
+use skep_blobs::{BlobError, HashFunction, LeaseState, Step, Store, UploadId};
 
 use crate::{every_deposit_unplaced, hex_of, open, put_whole, standing, HORIZON, HORIZON_MS, INTERVAL, INTERVAL_MS};
+
+/// THE INSPECTION READS THE STORES AS THEY STAND (M-I5 (e); `Store::inspect`:
+/// "reconciles nothing, compacts nothing, sweeps nothing, fsyncs nothing,
+/// creates nothing"): over a root holding a standing upload, a retired
+/// one's lines, two leases — one lapsed — a torn tail on each log, an
+/// orphan partial and an aside, the inspection answers every record and
+/// every lease the logs fold to, the lines on disk torn tail included, the
+/// listings by class — and leaves every byte and every file as found,
+/// where the open cuts the tails, drops the retired lines, removes the
+/// orphan and the aside and rewrites both logs; a root that is no
+/// directory is `NotFound`, and nothing is created for it.
+#[test]
+fn the_inspection_reads_the_stores_as_they_stand_and_writes_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let (kept, lapsed_hex, live_hex) = {
+        let store = open(&root, 0);
+        let kept = standing(&store, "k", 10, b"hello", 0);
+        let ended = store.create_upload("k", HashFunction::Blake3, 10, INTERVAL, 0).unwrap();
+        store.end_upload("k", &ended.id, 0).unwrap();
+        let lapsed = put_whole(&store, "k", b"lapsed later", 0);
+        let live = put_whole(&store, "j", b"live", INTERVAL_MS + 10);
+        (kept, lapsed.hex, live.hex)
+    };
+    // Planted after the store closed: a torn tail on each log, an orphan
+    // partial, an aside.
+    for log in ["uploads.log", "leases.log"] {
+        let mut text = fs::read_to_string(root.join(log)).unwrap();
+        text.push_str("{\"torn");
+        fs::write(root.join(log), text).unwrap();
+    }
+    fs::write(root.join("blake3").join(".upload-00000000000000000000000000000000"), b"orphan").unwrap();
+    fs::write(root.join("blake3").join(format!(".retired-{live_hex}-7")), b"aside").unwrap();
+    let snapshot = |root: &Path| -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        for entry in fs::read_dir(root).unwrap().chain(fs::read_dir(root.join("blake3")).unwrap()) {
+            let path = entry.unwrap().path();
+            if path.is_file() {
+                out.push((path.display().to_string(), fs::read(&path).unwrap()));
+            }
+        }
+        out.sort();
+        out
+    };
+    let before = snapshot(&root);
+    let now = INTERVAL_MS + 10;
+    let inspection = Store::inspect(&root).expect("the inspection");
+    assert_eq!(snapshot(&root), before, "every file as found");
+    assert_eq!(inspection.root(), root.as_path());
+    let uploads = inspection.uploads();
+    assert_eq!(uploads.len(), 1, "the standing record, the retired one folded away: {uploads:?}");
+    assert_eq!((uploads[0].id, uploads[0].offset), (kept.id, 5));
+    let mut leases: Vec<(String, String)> = inspection.leases().iter().map(|l| (l.principal.clone(), l.hex.clone())).collect();
+    leases.sort();
+    assert_eq!(leases, vec![("j".into(), live_hex.clone()), ("k".into(), lapsed_hex.clone())], "every lease, lapsed ones too");
+    let lapsed = inspection.leases().iter().find(|l| l.hex == lapsed_hex).unwrap();
+    assert!(now >= lapsed.expires, "lapsed by the reader's own judgment of the expiry");
+    // Lines on disk: the standing record's creation and byte received, the
+    // ended one's creation and retirement, each whole PUT's creation and
+    // retirement, and the torn tail (no newline: not a line); two leases
+    // and the torn tail.
+    assert_eq!(inspection.log_lines(), (8, 2));
+    assert_eq!(inspection.designation_dirs().unwrap(), vec!["blake3"]);
+    let mut blobs = inspection.blobs_of("blake3").unwrap();
+    blobs.sort();
+    let mut want = vec![lapsed_hex.clone(), live_hex.clone()];
+    want.sort();
+    assert_eq!(blobs, want);
+    assert_eq!(inspection.asides_of("blake3").unwrap(), vec![format!(".retired-{live_hex}-7")]);
+    let mut partials = inspection.partials_of("blake3").unwrap();
+    partials.sort();
+    let mut want = vec![kept.id, UploadId::parse("00000000000000000000000000000000").unwrap()];
+    want.sort();
+    assert_eq!(partials, want, "the standing one's and the orphan");
+    assert_eq!(inspection.blob_size("blake3", &live_hex).unwrap(), Some(4));
+    assert_eq!(inspection.blob_size("blake3", &hex_of(b"absent")).unwrap(), None);
+    assert_eq!(inspection.blob_path("blake3", &live_hex), Some(root.join("blake3").join(&live_hex)));
+    assert_eq!(snapshot(&root), before, "still as found");
+    let absent = dir.path().join("absent");
+    assert_eq!(Store::inspect(&absent).expect_err("no directory").kind(), std::io::ErrorKind::NotFound);
+    assert!(!absent.exists(), "nothing created");
+    // The open, for contrast: the tails cut, the retired lines dropped, the
+    // orphan and the aside removed.
+    let store = open(&root, now);
+    assert_ne!(snapshot(&root), before, "the open writes");
+    assert!(store.asides_of("blake3").unwrap().is_empty());
+    assert!(!root.join("blake3").join(".upload-00000000000000000000000000000000").exists());
+}
+
+/// THE COPY ORDER (M-I5 (e); `media.md` §Recovery, the deployment list's
+/// items (3) and (4): "within `blobs/` the designation directories, then
+/// the upload records, then the lease log"; s6-op-c): a live copy taken in
+/// that order while a finish lands BEFORE its first take, BETWEEN its
+/// first and second, BETWEEN its second and third, and AFTER its third —
+/// the finish held at its first step and released at each point — opens,
+/// reconciled, to the deposit AS ITSELF (the file whole under its live
+/// lease), as LAPSED (a live lease over a file the copy's directories do
+/// not hold, the partial an orphan), or as a STANDING UPLOAD (its record
+/// over its partial at the offset) — and NEVER as a file with no lease and
+/// no record, the one state an order that copied the lease log first could
+/// leave: a file the pruner would take from under an acked deposit.
+#[test]
+fn a_live_copy_taken_in_the_order_restores_a_deposit_as_itself_as_lapsed_or_as_a_standing_upload() {
+    let bytes = b"the deposit a live copy catches mid-finish".to_vec();
+    let hex = hex_of(&bytes);
+    for landing in 0..=3usize {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("blobs");
+        let copy = dir.path().join("copy");
+        fs::create_dir_all(&copy).unwrap();
+        let store = open(&root, 0);
+        let rec = standing(&store, "k", bytes.len() as u64, &bytes, 1);
+        assert_eq!(rec.offset, bytes.len() as u64);
+        let at_hold = Arc::new(Barrier::new(2));
+        let go = Arc::new(Barrier::new(2));
+        {
+            let (at_hold, go) = (Arc::clone(&at_hold), Arc::clone(&go));
+            store.hold_at(Step::PartialSync, move || {
+                at_hold.wait();
+                go.wait();
+            });
+        }
+        // The three takes, in the order the record states.
+        let take = |what: usize| match what {
+            0 => {
+                let from = root.join("blake3");
+                let to = copy.join("blake3");
+                fs::create_dir_all(&to).unwrap();
+                for entry in fs::read_dir(&from).unwrap() {
+                    let entry = entry.unwrap();
+                    fs::copy(entry.path(), to.join(entry.file_name())).unwrap();
+                }
+            }
+            1 => {
+                let _ = fs::copy(root.join("uploads.log"), copy.join("uploads.log"));
+            }
+            _ => {
+                let _ = fs::copy(root.join("leases.log"), copy.join("leases.log"));
+            }
+        };
+        thread::scope(|s| {
+            let mut finish = Some(s.spawn(|| store.resume("k", &rec.id, bytes.len() as u64, 2).unwrap().finish(INTERVAL, 2)));
+            at_hold.wait();
+            for what in 0..3 {
+                if landing == what {
+                    go.wait();
+                    finish.take().unwrap().join().expect("the finish thread").expect("the finish");
+                }
+                take(what);
+            }
+            if let Some(h) = finish.take() {
+                go.wait();
+                h.join().expect("the finish thread").expect("the finish");
+            }
+        });
+        drop(store);
+        let restored = open(&copy, 3);
+        let file = restored.blob_size("blake3", &hex).unwrap();
+        let lease = restored.lease_state("k", "blake3", &hex, 3);
+        let record = restored.upload("k", &rec.id, 3);
+        let ctx = format!("the finish landing {}", ["before every take", "between the directories and the records", "between the records and the leases", "after every take"][landing]);
+        assert!(
+            !(file.is_some() && lease == LeaseState::None && record.is_none()),
+            "FINDING ({ctx}): a file with no lease and no record — the pruner's to take from under an acked deposit"
+        );
+        match landing {
+            0 => {
+                assert_eq!(file, Some(bytes.len() as u64), "{ctx}: itself, whole");
+                assert!(matches!(lease, LeaseState::Live { .. }), "{ctx}: under its live lease");
+                assert!(record.is_none(), "{ctx}: its record retired");
+            }
+            1 => {
+                assert_eq!(file, None, "{ctx}: the directories copied before the rename");
+                assert!(matches!(lease, LeaseState::Live { .. }), "{ctx}: a live lease over no file — LAPSED to the daemon's reading");
+                assert!(record.is_none(), "{ctx}: the records copied after the retirement");
+            }
+            2 => {
+                assert_eq!(file, None, "{ctx}");
+                assert!(matches!(lease, LeaseState::Live { .. }), "{ctx}: the lease log copied after the lease");
+                assert_eq!(record.map(|r| r.offset), Some(bytes.len() as u64), "{ctx}: a standing upload at its offset");
+            }
+            _ => {
+                assert_eq!(file, None, "{ctx}");
+                assert_eq!(lease, LeaseState::None, "{ctx}: no lease yet");
+                assert_eq!(record.map(|r| r.offset), Some(bytes.len() as u64), "{ctx}: a standing upload, resumable");
+            }
+        }
+        // Whatever the copy holds, no partial stands that no record names,
+        // and a standing upload's partial is its offset long.
+        let partial = copy.join("blake3").join(format!(".upload-{}", rec.id.to_hex()));
+        match restored.upload("k", &rec.id, 3) {
+            Some(r) => assert_eq!(fs::metadata(&partial).unwrap().len(), r.offset, "{ctx}"),
+            None => assert!(!partial.exists(), "{ctx}: an orphan partial is removed at open"),
+        }
+    }
+}
 
 /// (1) A RECORD LINE LACKING ANY MEMBER IT CARRIES IS NO RECORD
 /// (`parse_line`: "the store holds no value of its own to put in a missing

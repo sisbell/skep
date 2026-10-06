@@ -194,22 +194,17 @@ impl UploadRecords {
     /// partials ([`UploadRecords::compact`]).
     pub fn open(root: &Path) -> io::Result<UploadRecords> {
         let (log, values) = Log::open(root.join(UPLOADS_LOG))?;
-        let mut records = HashMap::new();
-        for v in &values {
-            match parse_line(v) {
-                Some(Line::Record(r)) => {
-                    records.insert(r.id, r);
-                }
-                Some(Line::Retirement(id)) => {
-                    records.remove(&id);
-                }
-                // A line of a shape this build does not read: kept on
-                // disk (compaction drops it, honestly: it named no record
-                // this build holds).
-                None => {}
-            }
-        }
-        Ok(UploadRecords { log, records })
+        Ok(UploadRecords { log, records: fold(&values) })
+    }
+
+    /// THE LOG AS FOUND, folded (`Log::read_as_found`): the current records
+    /// and the count of lines on disk — the inspection's read, which cuts
+    /// no tail, opens nothing for appending and creates no file.
+    pub fn read_as_found(root: &Path) -> io::Result<(Vec<UploadRecord>, usize)> {
+        let (values, lines) = Log::read_as_found(&root.join(UPLOADS_LOG))?;
+        let mut records: Vec<UploadRecord> = fold(&values).into_values().collect();
+        records.sort_by_key(|r| r.id);
+        Ok((records, lines))
     }
 
     /// THE PRINCIPAL's record by identifier, whatever its expiry — `None`
@@ -390,6 +385,54 @@ impl UploadRecords {
         ids.sort();
         self.log.compact(ids.into_iter().map(|id| self.records[id].to_value()))
     }
+
+    /// THE RUNTIME COMPACTION's TRIGGER (the pruner's pass): rewrite the log
+    /// as [`UploadRecords::compact`] does where it has STOPPED, or where its
+    /// whole lines number at least `min_lines` and more than `trigger` times
+    /// the current records — so a small log is never rewritten per pass, and
+    /// a log past its trigger is. Answers whether a rewrite ran. The caller
+    /// holds this type's lock, which is the lock on this log's appends alone.
+    pub fn compact_if_past(&mut self, trigger: usize, min_lines: usize) -> io::Result<bool> {
+        if !past_trigger(&self.log, self.records.len(), trigger, min_lines) {
+            return Ok(false);
+        }
+        self.compact()?;
+        Ok(true)
+    }
+
+    /// Whether the log has stopped (`Log::stopped`): it takes no append
+    /// until a compaction completes.
+    pub fn log_stopped(&self) -> bool {
+        self.log.stopped()
+    }
+}
+
+/// Fold a log's lines into the records they leave: a record line replacing
+/// the one before it, a retirement dropping it, a line of a shape this build
+/// does not read kept on disk and folded to nothing (compaction drops it,
+/// honestly: it named no record this build holds).
+fn fold(values: &[Value]) -> HashMap<UploadId, UploadRecord> {
+    let mut records = HashMap::new();
+    for v in values {
+        match parse_line(v) {
+            Some(Line::Record(r)) => {
+                records.insert(r.id, r);
+            }
+            Some(Line::Retirement(id)) => {
+                records.remove(&id);
+            }
+            None => {}
+        }
+    }
+    records
+}
+
+/// THE ONE TRIGGER RULE both logs read: a stopped log is rewritten
+/// whatever its count, since only a completed compaction lifts the stop;
+/// otherwise a log is rewritten once its whole lines number at least
+/// `min_lines` and more than `trigger` times its `current` records.
+pub(crate) fn past_trigger(log: &Log, current: usize, trigger: usize, min_lines: usize) -> bool {
+    log.stopped() || (log.lines() >= min_lines && log.lines() > trigger.saturating_mul(current))
 }
 
 #[cfg(test)]

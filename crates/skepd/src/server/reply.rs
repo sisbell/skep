@@ -686,10 +686,11 @@ fn disposition_token(d: Disposition) -> &'static str {
 /// `published_target`, and `not_owner` naming the draft — are built as M10
 /// builds them, [`Rejection::classified`] over the flat code (its
 /// disposition and standing detail M10's own, so the bytes are the store's
-/// bytes) and marshaled by the one codec; the three that are the daemon's
+/// bytes) and marshaled by the one codec; the four that are the daemon's
 /// tokens ride `credential_refused` as every daemon-side refusal does
 /// ([`credential_refused`]'s row), the token and the class the refusal's
-/// own ([`MediaRefusal::token`], [`MediaRefusal::disposition`]).
+/// own ([`MediaRefusal::token`], [`MediaRefusal::disposition`]) — the
+/// window's `index_rebuilding` the one retry-class token among them.
 pub(super) fn media_door_refused(kind: OpKind, refusal: MediaRefusal) -> Reply {
     if let Some(token) = refusal.token() {
         return op_answer(credential_refused_reply(kind, token.to_string(), refusal.disposition()));
@@ -703,8 +704,11 @@ pub(super) fn media_door_refused(kind: OpKind, refusal: MediaRefusal) -> Reply {
             RejectCode::NotOwner,
             Some(FaultSite { addr: Some(draft), ..FaultSite::default() }),
         ),
-        // All three carry a token: answered above.
-        MediaRefusal::UnboundCell | MediaRefusal::UnknownCellSchema | MediaRefusal::LeaseLapsed => {
+        // All four carry a token: answered above.
+        MediaRefusal::UnboundCell
+        | MediaRefusal::UnknownCellSchema
+        | MediaRefusal::LeaseLapsed
+        | MediaRefusal::IndexRebuilding => {
             unreachable!("a media token rides credential_refused")
         }
     };

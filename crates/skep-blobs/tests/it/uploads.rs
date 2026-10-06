@@ -13,11 +13,64 @@
 //! listings in identifier order.
 
 use std::fs;
+use std::thread;
 use std::time::Duration;
 
 use skep_blobs::{BlobError, HashFunction, LeaseState, NotAnUploadId, UploadId, UploadRecord, SYNC_GRAIN};
 
 use crate::{every_deposit_unplaced, hex_of, open, standing, INTERVAL, INTERVAL_MS};
+
+/// THE RUNTIME COMPACTION (P22; M-I5 (f); `Store::compact_logs_if_past`:
+/// "each log rewritten to its current records … where its whole lines
+/// number at least `min_lines` and more than `trigger` times its current
+/// records"): a records' log of 1,025 lines over three standing uploads is
+/// rewritten to three lines under a trigger of four and a minimum of
+/// 1,024, while twenty creations race it from another thread — each
+/// waiting on the store's own lock and landing in the new file, so the
+/// reopen lists all twenty-three; a log under the minimum is left alone
+/// whatever its ratio, and a log at the minimum over nothing is rewritten
+/// to nothing; no log has stopped.
+#[test]
+fn a_log_past_its_trigger_is_compacted_and_appends_during_the_rewrite_land_in_the_new_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let lines = |name: &str| fs::read_to_string(root.join(name)).unwrap().lines().count();
+    let store = open(&root, 0);
+    let mut standing_ids = Vec::new();
+    for _ in 0..3 {
+        standing_ids.push(store.create_upload("k", HashFunction::Blake3, 10, INTERVAL, 0).unwrap().id);
+    }
+    for _ in 0..511 {
+        let rec = store.create_upload("k", HashFunction::Blake3, 10, INTERVAL, 0).unwrap();
+        store.end_upload("k", &rec.id, 0).unwrap();
+    }
+    assert_eq!(lines("uploads.log"), 3 + 1_022);
+    assert_eq!(store.compact_logs_if_past(4, 2_000).unwrap(), (false, false), "under the minimum: left alone");
+    assert_eq!(lines("uploads.log"), 1_025);
+    let raced: Vec<UploadId> = thread::scope(|s| {
+        let appends = s.spawn(|| (0..20).map(|_| store.create_upload("k", HashFunction::Blake3, 10, INTERVAL, 0).unwrap().id).collect::<Vec<_>>());
+        let compacted = store.compact_logs_if_past(4, 1_024).unwrap();
+        assert_eq!(compacted, (true, false), "the records' log past its trigger, the lease log empty");
+        appends.join().expect("the appending thread")
+    });
+    assert_eq!(store.stopped_logs(), (false, false));
+    assert_eq!(lines("uploads.log"), 3 + 20, "the current records and the raced appends, in the one file");
+    assert_eq!(store.compact_logs_if_past(4, 1_024).unwrap(), (false, false), "under the minimum after");
+    drop(store);
+    let reopened = open(&root, 0);
+    let mut listed: Vec<UploadId> = reopened.uploads_of("k", 0).into_iter().map(|r| r.id).collect();
+    listed.sort();
+    let mut want: Vec<UploadId> = standing_ids.into_iter().chain(raced).collect();
+    want.sort();
+    assert_eq!(listed, want, "every record, the raced ones among them, read back");
+    // At the minimum over nothing: rewritten to nothing.
+    for id in &want {
+        reopened.end_upload("k", id, 0).unwrap();
+    }
+    assert_eq!(lines("uploads.log"), 23 + 23);
+    assert_eq!(reopened.compact_logs_if_past(4, 46).unwrap(), (true, false));
+    assert_eq!(lines("uploads.log"), 0);
+}
 
 /// (1) THE IDENTIFIER: 32 lowercase hex of 128 OS bits — two mints differ
 /// (that no run of mints is a sequence is

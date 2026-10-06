@@ -1,30 +1,37 @@
 //! MEDIA LANE B — THE PUT over the wire: the resumable upload's seven
 //! clauses as vectors (`fixtures/media/uploads.json`, the vector set's
 //! second file, PATTERNS P5 — one set, run here against the daemon and by
-//! a client suite against its own implementation of the shape), the H1
-//! presence cells, the identifier on the one request, a dropped
-//! connection's kept upload, the fence before the claim, the RSS bound
+//! a client suite against its own implementation of the shape) — the
+//! default per-account limit's echo, the floor at the creation and the
+//! standing-uploads bound, the finish's empty resume and the closed board
+//! among them — the H1 presence cells, the identifier on the one request,
+//! a dropped connection's kept upload, the fence before the claim, the
+//! closed board's kept upload, the upload family's log, the RSS bound
 //! under a PUT at the cap, and ms4-K2's timing — reported, not asserted
 //! (the board's sm-Q4).
 //!
 //! Every test names the register's clause it holds: M-I2 (e) THE
 //! REQUESTER'S OWN RECORD BEFORE ANY SHARED FACT; M-I5 (a) DURABLE BEFORE
 //! NAMED, ANSWERED AFTER RECORDED; M-I5 (c) THE DEPOSIT RECORD IS THE
-//! PRINCIPAL'S, READABLE, EXACT; M-I6 (a) at its ZERO BASE; M-I6 (b) THE
-//! OWN SCOPE BOUNDS THE DISK; M-I6 (e) REFUSED BEFORE THE BYTES MOVE;
-//! M-I6 (f) THE FLOOR IS THE HOST'S.
+//! PRINCIPAL'S, READABLE, EXACT; M-I5 (f) PICTURES NEVER STARVE OR STALL
+//! THE JOURNAL; M-I6 (a) at its ZERO BASE; M-I6 (b) THE OWN SCOPE BOUNDS
+//! THE DISK; M-I6 (d) THE LIMITS ARE ONE PUBLISHED RECORD; M-I6 (e)
+//! REFUSED BEFORE THE BYTES MOVE; M-I6 (f) THE FLOOR IS THE HOST'S; M-I6
+//! (h) THE REFUSAL'S FACE; M-I7 (e) A FACE NAMES AN ACT THE PERSON HOLDS;
+//! D9 at the upload family's log.
 
 use std::collections::{BTreeSet, HashMap};
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
+use skep_blobs::Step;
 
 use crate::common;
 use common::*;
@@ -36,17 +43,45 @@ fn fixture() -> Value {
     serde_json::from_str(&text).expect("the fixture is JSON")
 }
 
-/// A step's body: a string's UTF-8, seeded bytes, or none.
+/// A step's body: a string's UTF-8, seeded bytes — from an offset `from`
+/// where one is named, the tail a resume re-sends — or none.
 fn body_of(v: &Value) -> Vec<u8> {
     match v {
         Value::Null => Vec::new(),
         Value::String(s) => s.as_bytes().to_vec(),
-        Value::Object(o) => seeded_bytes(
-            o["bytes"].as_u64().expect("bytes") as usize,
-            o["seed"].as_u64().expect("seed"),
-        ),
-        other => panic!("a body is a string or {{bytes, seed}}: {other}"),
+        Value::Object(o) => {
+            let whole = seeded_bytes(
+                o["bytes"].as_u64().expect("bytes") as usize,
+                o["seed"].as_u64().expect("seed"),
+            );
+            let from = o.get("from").and_then(Value::as_u64).unwrap_or(0) as usize;
+            whole[from..].to_vec()
+        }
+        other => panic!("a body is a string or {{bytes, seed[, from]}}: {other}"),
     }
+}
+
+/// A finish step by the fixture's name — the store's own seam.
+fn finish_step(name: &str) -> Step {
+    match name {
+        "partial_sync" => Step::PartialSync,
+        "link_aside" => Step::LinkAside,
+        "rename" => Step::Rename,
+        "dir_sync" => Step::DirSync,
+        "root_sync" => Step::RootSync,
+        "lease_sync" => Step::LeaseSync,
+        "record_retire" => Step::RecordRetire,
+        "unlink_aside" => Step::UnlinkAside,
+        other => panic!("no finish step named {other}"),
+    }
+}
+
+/// THE DEFAULT PER-ACCOUNT LIMIT as the fixture's `per_account: "default"`
+/// expects it: one eighth of the capacity the daemon read at its open,
+/// never below 256 MiB — the suite's own arithmetic over the same read.
+fn default_limit(sd: &skepd::Skepd) -> u64 {
+    let floor = 256 * 1024 * 1024;
+    sd.daemon().media_capacity().map_or(floor, |c| (c / 8).max(floor))
 }
 
 /// THE PRINCIPALS a vector acts as: the claimant, a stranger seated as an
@@ -96,6 +131,8 @@ struct Scene {
     bytes: HashMap<String, Vec<u8>>,
     expires: HashMap<String, u64>,
     streams: HashMap<String, (TcpStream, String)>,
+    /// The default per-account limit the daemon under test computed.
+    default_limit: u64,
 }
 
 impl Scene {
@@ -115,6 +152,13 @@ fn judge(step: &Value, name: &str, scene: &mut Scene, status: u16, body: &[u8], 
     let v: Value = if body.is_empty() { Value::Null } else { json(body) };
     if let Some(error) = expect["error"].as_str() {
         assert_eq!(v["error"].as_str(), Some(error), "{name}: {text}");
+    }
+    if let Some(per_account) = expect.get("per_account") {
+        let want = match per_account {
+            Value::String(s) if s == "default" => Value::Number(scene.default_limit.into()),
+            other => other.clone(),
+        };
+        assert_eq!(v["per_account"], want, "{name}: the limit in force, echoed: {text}");
     }
     if let Some(detail) = expect["detail"].as_str() {
         assert_eq!(v["detail"].as_str(), Some(detail), "{name}: {text}");
@@ -206,14 +250,19 @@ fn stream_open(port: u16, token: &str, id: &str, offset: u64, declare: usize, se
     s
 }
 
-/// Run one vector of the set against a fresh claimed board.
+/// Run one vector of the set against a fresh claimed board — its uploads
+/// CLOSED where the vector's `board` says so.
 fn run_vector(vector: &Value) {
     let name = vector["name"].as_str().expect("a name");
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = match vector["board"].as_str() {
+        Some("uploads_closed") => spawn_uploads_closed(dir.path()),
+        None => spawn(dir.path()),
+        Some(other) => panic!("{name}: no board named {other}"),
+    };
     let port = sd.port();
     let cast = Cast::new(port);
-    let mut scene = Scene::default();
+    let mut scene = Scene { default_limit: default_limit(&sd), ..Scene::default() };
     for (i, step) in vector["steps"].as_array().expect("steps").iter().enumerate() {
         let at = format!("{name} step {i}");
         if let Some(s) = step.get("create") {
@@ -235,9 +284,17 @@ fn run_vector(vector: &Value) {
             let body = body_of(&s["body"]);
             let offset = s["offset"].as_u64().expect("offset");
             let (st, _, resp) = blob_append(port, token, &id, offset, &body);
-            let whole = if st == 200 {
+            // The bytes count as the upload's where the answer took them:
+            // a 200, or a finish that failed past them (`blob_io`, the
+            // seam's injection), the upload standing over the partial.
+            let taken = st == 200 || step["expect"]["error"].as_str() == Some("blob_io");
+            let whole = if taken {
                 let name = s["upload"].as_str().unwrap();
                 let w = scene.bytes.entry(name.to_string()).or_default();
+                // A resume continues from the record's offset: whatever an
+                // earlier request left past it is cut back, as the daemon
+                // cuts the partial.
+                w.truncate(offset as usize);
                 w.extend_from_slice(&body);
                 w.clone()
             } else {
@@ -271,6 +328,10 @@ fn run_vector(vector: &Value) {
             );
         } else if let Some(f) = step.get("free_space") {
             sd.daemon().set_media_free_space(f.as_u64());
+        } else if let Some(f) = step.get("fail_finish_at") {
+            // The store's seam: every later finish fails at the named step
+            // — `null` fails nothing again.
+            sd.daemon().fail_blob_finish_at(f.as_str().map(finish_step));
         } else if let Some(s) = step.get("insert_cell") {
             let who = s["as"].as_str().expect("as");
             let token = cast.token(who).expect("a principal");
@@ -320,12 +381,17 @@ fn run_vector(vector: &Value) {
     sd.shutdown();
 }
 
-/// THE SEVEN CLAUSES AS VECTORS (M-I2 (e); M-I5 (a), (c); M-I6 (a), (b),
-/// (e), (f)): every vector of `uploads.json` runs against a fresh claimed
-/// board and meets its expectations step by step — the deposit read's
-/// `base` the index's number, moving as a cell lands; the fixture pins the
-/// same constants the daemon does, and names every refusal the family
-/// answers with its status, the readiness refusal among them.
+/// THE SEVEN CLAUSES AS VECTORS (M-I2 (e); M-I5 (a), (c), (f); M-I6 (a),
+/// (b), (d), (e), (f), (h); M-I7 (e)): every vector of `uploads.json` runs
+/// against a fresh claimed board and meets its expectations step by step —
+/// the deposit read's `base` the index's number, moving as a cell lands;
+/// its `per_account` the default limit the daemon computed from the
+/// volume, a written record moving it; the floor at the creation and the
+/// standing-uploads bound, each before any partial or record; the finish's
+/// empty resume after a finish cut before its rename; the closed board's
+/// two refusals before any byte — and the fixture pins the same constants
+/// the daemon does, and names every refusal the family answers with its
+/// status, the readiness refusal among them.
 #[test]
 fn the_seven_clauses_as_vectors_over_the_wire() {
     let fixture = fixture();
@@ -339,6 +405,11 @@ fn the_seven_clauses_as_vectors_over_the_wire() {
     assert_eq!(pins["lease_interval_ms"].as_u64(), Some(7 * 24 * 3600 * 1000));
     assert_eq!(pins["lease_horizon_ms"].as_u64(), Some(30 * 24 * 3600 * 1000));
     assert_eq!(pins["floor_bytes"].as_u64(), Some(256 * 1024 * 1024));
+    assert_eq!(pins["max_standing_uploads"].as_u64(), Some(8));
+    assert_eq!(pins["default_limit_share"].as_u64(), Some(8));
+    assert_eq!(pins["default_limit_floor_bytes"].as_u64(), Some(256 * 1024 * 1024));
+    assert_eq!(pins["compaction_trigger"].as_u64(), Some(4));
+    assert_eq!(pins["compaction_min_lines"].as_u64(), Some(1024));
     let refusals = fixture["refusals"].as_object().expect("refusals");
     for (name, status) in [
         ("malformed_blob", 400),
@@ -355,10 +426,158 @@ fn the_seven_clauses_as_vectors_over_the_wire() {
         assert_eq!(refusals[name].as_u64(), Some(status), "{name}");
     }
     let vectors = fixture["vectors"].as_array().expect("vectors");
-    assert!(vectors.len() >= 13, "{} vectors", vectors.len());
+    assert!(vectors.len() >= 18, "{} vectors", vectors.len());
+    for required in [
+        "the_default_limit_is_echoed_and_a_written_record_moves_it",
+        "the_floor_at_the_creation",
+        "the_standing_uploads_bound",
+        "clause_7_the_empty_resume_after_a_finish_cut_before_its_rename",
+        "the_closed_board",
+    ] {
+        assert!(vectors.iter().any(|v| v["name"] == required), "the set names {required}");
+    }
     for vector in vectors {
         run_vector(vector);
     }
+}
+
+/// THE CLOSED BOARD KEEPS A STANDING UPLOAD AND SERVES ITS READS (M-I7
+/// (e); wire.md §Media, THE UPLOAD SETTING): an upload created while the
+/// board was open stands when the board is reopened with `--no-uploads` —
+/// its progress read answers its offset, the deposit read lists it, its
+/// resume is refused `uploads_closed` before any body byte and the upload
+/// is KEPT, and its termination is served; `/health` echoes
+/// `media.uploads` false on the closed board and true on the open one.
+#[test]
+fn a_closed_board_keeps_a_standing_upload_and_serves_its_reads() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let standing = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        assert_eq!(json(&get(port, "/health").1)["media"], serde_json::json!({"uploads": true}), "open by default, echoed");
+        let token = open_session(port, CLAIMANT_PRINCIPAL);
+        let (st, _, resp) = blob_create(port, Some(&token), 10, b"hello");
+        assert_eq!(st, 200, "{}", String::from_utf8_lossy(&resp));
+        let id = json(&resp)["upload"].as_str().expect("upload").to_string();
+        sd.shutdown();
+        id
+    };
+    let sd = spawn_uploads_closed(dir.path());
+    let port = sd.port();
+    assert_eq!(json(&get(port, "/health").1)["media"], serde_json::json!({"uploads": false}), "closed, echoed");
+    let token = open_session(port, CLAIMANT_PRINCIPAL);
+    let (st, _, resp) = blob_progress(port, Some(&token), &standing);
+    assert_eq!((st, json(&resp)["offset"].as_u64()), (200, Some(5)), "the progress read is served");
+    let (st, _, resp) = blob_read(port, Some(&token));
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&resp));
+    assert_eq!(json(&resp)["uploads"].as_array().map(Vec::len), Some(1), "the deposit read lists it");
+    let (st, _, resp) = blob_append(port, Some(&token), &standing, 5, b"world");
+    let v = json(&resp);
+    assert_eq!((st, v["error"].as_str(), v["detail"].as_str()), (403, Some("upload_refused"), Some("uploads_closed")), "{}", String::from_utf8_lossy(&resp));
+    let (st, _, resp) = blob_progress(port, Some(&token), &standing);
+    assert_eq!((st, json(&resp)["offset"].as_u64()), (200, Some(5)), "the refused resume kept the upload at its offset");
+    let (st, _, _) = blob_end(port, Some(&token), &standing);
+    assert_eq!(st, 204, "the termination is served");
+    let (st, _, resp) = blob_progress(port, Some(&token), &standing);
+    assert_eq!((st, json(&resp)["error"].as_str()), (404, Some("no_upload")));
+    sd.shutdown();
+}
+
+/// THE UPLOAD FAMILY's LOG (D9; s6-op-h; `media.md` §Recovery, the restore
+/// face's clause: skepd's log of the upload family records at most the path
+/// and the status and never the principal): the real binary, its stderr
+/// piped, runs the creation, a resume, the deposit read and an end under a
+/// SIGNED session; the lines it writes during them are NONE — no request
+/// line is written for the family at all — and its whole stderr carries
+/// neither the session's token nor an upload's identifier, nor the
+/// principal's number as a word of its own.
+#[test]
+fn the_upload_familys_log_names_no_principal_no_token_and_no_upload() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("data");
+    // A signed session on a claimed board needs a CONFIGURED origin, and an
+    // origin carries the port: reserve one, release it, and launch the
+    // binary on it with that origin — the shape a served board is launched
+    // in. A lost rebind race costs one more attempt on a fresh port.
+    let mut child = None;
+    for _ in 0..12 {
+        let reserved = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("reserve a port");
+        let port = reserved.local_addr().expect("the port").port();
+        drop(reserved);
+        let mut spawned = Command::new(env!("CARGO_BIN_EXE_skepd"))
+            .arg("--data-dir")
+            .arg(&dir)
+            .args(["--port", &port.to_string(), "--workers", "8", "--origin", &format!("http://127.0.0.1:{port}")])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn the skepd binary");
+        thread::sleep(Duration::from_millis(300));
+        match spawned.try_wait().expect("the child's state") {
+            Some(_) => continue,
+            None => {
+                child = Some(spawned);
+                break;
+            }
+        }
+    }
+    let mut child = child.expect("the binary bound its reserved port");
+    let stdout = child.stdout.take().expect("skepd stdout");
+    let stderr = child.stderr.take().expect("skepd stderr");
+    let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let reader = {
+        let lines = Arc::clone(&lines);
+        thread::spawn(move || {
+            for line in BufReader::new(stderr).lines() {
+                let Ok(line) = line else { break };
+                lines.lock().expect("the lines").push(line);
+            }
+        })
+    };
+    let mut line = String::new();
+    BufReader::new(stdout).read_line(&mut line).expect("read skepd startup line");
+    let port = line
+        .split_once("http://127.0.0.1:")
+        .and_then(|(_, rest)| rest.split('/').next())
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or_else(|| panic!("no port in skepd startup line {line:?}"));
+    claim_board(port);
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    // The cadence's first pass writes its line once the index is ready —
+    // before the family's requests, so its line is never among theirs.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !lines.lock().expect("the lines").iter().any(|l| l.contains("pruner:")) {
+        assert!(Instant::now() < deadline, "the first pass's line never came");
+        thread::sleep(Duration::from_millis(20));
+    }
+    let before = lines.lock().expect("the lines").len();
+    let (st, _, resp) = blob_create(port, Some(&signed), 10, b"hello");
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&resp));
+    let created = json(&resp)["upload"].as_str().expect("upload").to_string();
+    let (st, _, _) = blob_append(port, Some(&signed), &created, 5, b"world");
+    assert_eq!(st, 200);
+    let (st, _, _) = blob_read(port, Some(&signed));
+    assert_eq!(st, 200);
+    let (st, _, resp) = blob_create(port, Some(&signed), 10, b"");
+    assert_eq!(st, 200);
+    let ended = json(&resp)["upload"].as_str().expect("upload").to_string();
+    let (st, _, _) = blob_end(port, Some(&signed), &ended);
+    assert_eq!(st, 204);
+    thread::sleep(Duration::from_millis(300));
+    let _ = child.kill();
+    let _ = child.wait();
+    reader.join().expect("stderr reader thread");
+    let lines = lines.lock().expect("the lines").clone();
+    let during: Vec<&String> = lines[before..].iter().collect();
+    assert!(during.is_empty(), "FINDING (D9): the upload family wrote lines: {during:?}");
+    let whole = lines.join("\n");
+    assert!(!whole.contains(&signed), "FINDING (D9): the token is in the log");
+    assert!(!whole.contains(&created) && !whole.contains(&ended), "FINDING (D9): an upload's identifier is in the log");
+    let principal = CLAIMANT_PRINCIPAL.to_string();
+    assert!(
+        !whole.split(|c: char| !c.is_ascii_digit()).any(|word| word == principal),
+        "FINDING (D9): the principal's number is in the log as a word of its own: {whole}"
+    );
 }
 
 /// (1) THE IDENTIFIER REACHES THE UPLOADER BEFORE THE UPLOAD's FIRST BODY

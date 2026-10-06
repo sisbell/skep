@@ -104,7 +104,8 @@ pub(crate) use head::board_term;
 use self::head::HeadWriter;
 use self::sidecar::OpTerms;
 use crate::codec::op_name;
-use crate::media::index::{names_kind_by_prefix, CellIndex};
+use crate::media::cell::names_kind_by_prefix;
+use crate::media::index::CellIndex;
 use crate::serial::{Serial, SerialGuard};
 use feed::Feed;
 

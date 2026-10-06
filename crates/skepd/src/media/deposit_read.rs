@@ -8,8 +8,12 @@
 //! length, the expiry), its usage as two figures — the BASE, the cell
 //! index's number for its account (the distinct hashes its cells name, at
 //! their size), and its PENDING bytes (its live leases on hashes none of
-//! its cells names, and its uploads' bytes received) — and the limits
-//! record's address as installed, or `null` where none is.
+//! its cells names, and its uploads' bytes received) — the limits
+//! record's address as installed, or `null` where none is — and THE
+//! PER-ACCOUNT LIMIT IN FORCE, `per_account`, whatever its source: the
+//! daemon's default where no record is installed, echoed as a written
+//! limit is, so R68's read-before-refusal holds under the default (P37; the
+//! register M-I6 (b), (d)); `null` only where a written record sets none.
 //!
 //! NO SURFACE OF ITS OWN (m-Q10, RULED): it is the resumable PUT's own
 //! state made readable, served on the upload's path family (`GET
@@ -71,6 +75,9 @@ pub(crate) fn deposit_read(gate: &MediaGate, principal: PrincipalId) -> Value {
         ("deposits", Value::Array(deposits)),
         ("limits", limits.address.map_or(Value::Null, Value::String)),
         ("pending", Value::Number(gate.own_pending(principal, now).into())),
+        // The limit in force, the default or the record's — the echo R68's
+        // read keys on.
+        ("per_account", limits.per_account.map_or(Value::Null, |n| Value::Number(n.into()))),
         ("uploads", Value::Array(uploads)),
     ])
 }

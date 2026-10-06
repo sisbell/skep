@@ -25,7 +25,7 @@ use serde_json::{json, Value};
 
 use crate::blobs::{designation_ok, hex_ok};
 use crate::jsonl::Log;
-use crate::uploads::millis;
+use crate::uploads::{millis, past_trigger};
 
 /// The log's file name under the root.
 const LEASES_LOG: &str = "leases.log";
@@ -135,16 +135,21 @@ impl LeaseLog {
     /// was dropped.
     pub fn open(root: &Path, horizon: Duration, now_ms: u64) -> io::Result<LeaseLog> {
         let (log, values) = Log::open(root.join(LEASES_LOG))?;
-        let mut leases = BTreeMap::new();
-        for v in &values {
-            if let Some(l) = Lease::parse(v) {
-                leases.insert((l.designation.clone(), l.hex.clone(), l.principal.clone()), l);
-            }
-        }
+        let mut leases = fold(&values);
         leases.retain(|_, l| !l.past_horizon(horizon, now_ms));
         let mut opened = LeaseLog { log, leases, horizon };
         opened.compact()?;
         Ok(opened)
+    }
+
+    /// THE LOG AS FOUND, folded (`Log::read_as_found`): each principal's
+    /// latest lease on each hash, in the map's order, no horizon applied —
+    /// every lease the log holds, lapsed ones included — and the count of
+    /// lines on disk. The inspection's read, which cuts no tail, opens
+    /// nothing for appending and creates no file.
+    pub fn read_as_found(root: &Path) -> io::Result<(Vec<Lease>, usize)> {
+        let (values, lines) = Log::read_as_found(&root.join(LEASES_LOG))?;
+        Ok((fold(&values).into_values().collect(), lines))
     }
 
     /// Append `lease` as the principal's current lease on the hash and SYNC
@@ -216,4 +221,35 @@ impl LeaseLog {
     fn compact(&mut self) -> io::Result<()> {
         self.log.compact(self.leases.values().map(Lease::to_value))
     }
+
+    /// THE RUNTIME COMPACTION's TRIGGER (the pruner's pass), the upload
+    /// records' rule (`uploads::past_trigger`) over this log: rewritten
+    /// where stopped, or where its whole lines number at least `min_lines`
+    /// and more than `trigger` times the current leases. Answers whether a
+    /// rewrite ran. The caller holds this type's lock — the lock on this
+    /// log's appends alone.
+    pub fn compact_if_past(&mut self, trigger: usize, min_lines: usize) -> io::Result<bool> {
+        if !past_trigger(&self.log, self.leases.len(), trigger, min_lines) {
+            return Ok(false);
+        }
+        self.compact()?;
+        Ok(true)
+    }
+
+    /// Whether the log has stopped (`Log::stopped`).
+    pub fn log_stopped(&self) -> bool {
+        self.log.stopped()
+    }
+}
+
+/// Fold a log's lines into the leases they leave: each principal's latest
+/// line on each hash, a line of no shape this build reads folded to nothing.
+fn fold(values: &[Value]) -> BTreeMap<(String, String, String), Lease> {
+    let mut leases = BTreeMap::new();
+    for v in values {
+        if let Some(l) = Lease::parse(v) {
+            leases.insert((l.designation.clone(), l.hex.clone(), l.principal.clone()), l);
+        }
+    }
+    leases
 }

@@ -44,12 +44,56 @@
 //! (`server/blob_routes.rs`) reach the gate as `op.rs` reaches the write
 //! path, and the PUT commits nothing to the journal and takes no `Serial` —
 //! the finish runs under the credential lock's READ arm from the rename
-//! through the lease's sync, the pruner's unlink under its WRITE arm; the
-//! serve reads a file through the gate's store and consults nothing itself
-//! — its gate is M10's `execute`. The two cells are leaves.
+//! through the lease's sync, the pruner's rename-aside under its WRITE arm;
+//! the serve reads a file through the gate's store and consults nothing
+//! itself — its gate is M10's `execute`. The two cells are leaves.
+//!
+//! THE UPLOAD SETTING ([`MediaOptions`]; `media.md` Op inventory 1, "ONLY
+//! ON A BOARD WHOSE UPLOADS ARE OPEN"; the register M-I7 (e)): a boundary
+//! setting of the daemon's, as `--local-trust` is (PATTERNS P37), carried
+//! on the media resource and ECHOED on `/health` as the `media` object, so
+//! a client keys the fence-only face off the echo before any face that
+//! names an upload speaks. OPEN by default (the owner's ruling), with the
+//! default per-account limit in force from start; OFF, the upload's
+//! creation and its resume are refused `upload_refused` with `detail`
+//! `uploads_closed` before any body byte, the upload kept where one stood,
+//! and every read, the termination, the door's binding and the pruner's
+//! pass are served as before.
+
+/// The media resource's configuration, as the operator supplies it — the
+/// upload setting, `--no-uploads` (`SKEPD_UPLOADS=false`): `uploads` OPEN
+/// by default. `#[non_exhaustive]` and paired with [`Default`] for the
+/// reason [`crate::AuthOptions`] is: a caller starts from the defaults and
+/// sets what it means to change, so a knob added later arrives at its
+/// default rather than breaking every construction. Daemon config, never
+/// board state: in no record, journal, sidecar or fold; `/health` echoes it
+/// as `media.uploads`.
+///
+/// ```
+/// use skepd::MediaOptions;
+///
+/// let mut media = MediaOptions::default();
+/// media.uploads = false;
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MediaOptions {
+    /// Whether the upload family is OPEN: the creation and the resume
+    /// admitted. OFF, both answer `403 upload_refused` with `detail`
+    /// `uploads_closed` before any body byte; nothing else of the family or
+    /// the door moves.
+    pub uploads: bool,
+}
+
+impl Default for MediaOptions {
+    fn default() -> MediaOptions {
+        MediaOptions { uploads: true }
+    }
+}
 
 // The cell: its schema, its one parser, its encoder, its designation — and
-// the one classification of every media kind.
+// the one classification of every media kind, the canonical opening read
+// past the cap among it.
 pub(crate) mod cell;
 // The blind document's cell: the second kind, a commitment and nothing else.
 pub(crate) mod blind;

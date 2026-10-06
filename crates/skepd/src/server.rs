@@ -189,6 +189,7 @@ use crate::limits::{MAX_BLOB_BYTES, MAX_REQUEST_BODY, MAX_SMALL_BODY};
 use crate::media::gate::MediaGate;
 use crate::media::index;
 use crate::media::serve::FetchPool;
+use crate::media::MediaOptions;
 use crate::notice;
 use crate::write_path::WritePath;
 use actor::Resolved;
@@ -496,25 +497,38 @@ impl Daemon {
     /// list installed from it before anything is served
     /// ([`DaemonError::BlockedPrefixes`] where it cannot be).
     pub fn open_with(data_dir: impl AsRef<Path>, opts: AuthOptions) -> Result<Daemon, DaemonError> {
+        Self::open_configured(data_dir, opts, MediaOptions::default())
+    }
+
+    /// [`Daemon::open_with`] with the MEDIA resource's configuration named
+    /// beside the session layer's: the upload setting (`--no-uploads`,
+    /// wire.md §Media), echoed on `/health` as the `media` object. The two
+    /// doors above delegate here, so all three carry one contract.
+    pub fn open_configured(
+        data_dir: impl AsRef<Path>,
+        opts: AuthOptions,
+        media: MediaOptions,
+    ) -> Result<Daemon, DaemonError> {
         // THE PRODUCTION SALT (`SKJ4`): OS entropy per transaction, the one
         // source a daemon opens under — a seeded stream is a pure function
         // of the seed and the position, which is exactly the predictability
         // the salt exists to deny a reader of `/chain?at=N`. The seeded
         // source reaches a daemon through the test seam alone
         // (`Daemon::open_seeded`, compiled only under `test-hooks`).
-        Self::open_under(data_dir.as_ref(), opts, SaltSource::Os)
+        Self::open_under(data_dir.as_ref(), opts, media, SaltSource::Os)
     }
 
-    /// The one open, under a named salt source — [`Daemon::open_with`]'s
+    /// The one open, under a named salt source — [`Daemon::open_configured`]'s
     /// body, which that door reaches with [`SaltSource::Os`] and the test
     /// seam `Daemon::open_seeded` with a seeded stream. Private, so no
-    /// third caller can name a source; and over `&Path`, so the two public
+    /// fourth caller can name a source; and over `&Path`, so the public
     /// doors are the generic shims and this body is compiled ONCE whatever
     /// path type a caller holds — the split std keeps, `File::open` over its
     /// inner `&Path`.
     fn open_under(
         data_dir: &Path,
         opts: AuthOptions,
+        media_opts: MediaOptions,
         salt: SaltSource,
     ) -> Result<Daemon, DaemonError> {
         let cfg = KernelConfig {
@@ -546,12 +560,18 @@ impl Daemon {
         // reconciliation and compaction complete here, before anything is
         // served (the record: "OPEN's PASSES OVER BOTH STORES … COMPLETE
         // BEFORE THE DAEMON SERVES ITS FIRST REQUEST"). The limits in force
-        // — the daemon's defaults until the serving layer's channel installs
-        // a record (AUTH-4.70, owed) — are named on the operator stream.
-        // Opened AHEAD of the write path, which takes the gate's cell index
-        // to enter at every commit from here on.
-        let media = MediaGate::open(data_dir).map_err(DaemonError::Media)?;
-        notice::line(media.limits().log_line());
+        // — the daemon's default, one eighth of the volume's capacity read
+        // once here, until the serving layer's channel installs a record
+        // (AUTH-4.70, owed) — are named on the operator stream with their
+        // source, and the upload setting beside them. Opened AHEAD of the
+        // write path, which takes the gate's cell index to enter at every
+        // commit from here on.
+        let media = MediaGate::open_with(data_dir, media_opts).map_err(DaemonError::Media)?;
+        notice::line(media.startup_line());
+        notice::line(format_args!(
+            "media uploads: {}",
+            if media.uploads_open() { "open (the default)" } else { "CLOSED (--no-uploads): the creation and the resume are refused uploads_closed" }
+        ));
         let writes = WritePath::open(data_dir, &engine, Arc::clone(media.index()))
             .map_err(DaemonError::Sidecar)?;
         // THE READ PREDICATE (PUB-1.31; PUB-6.39's one-per-request shape;

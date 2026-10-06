@@ -1,6 +1,8 @@
-//! The `skepd` binary: flags/env → [`Daemon::open`] → [`serve`] → wait.
-//! Crash-stop is the shutdown story (M2's WAL recovers), so there is no
-//! signal handling to get wrong.
+//! The `skepd` binary: flags/env → [`Daemon::open_configured`] → [`serve`] →
+//! wait. Crash-stop is the shutdown story (M2's WAL recovers), so there is
+//! no signal handling to get wrong. And THE OPERATOR's TWO TOOLS over a
+//! board directory, run with no server — `skepd inventory` and `skepd pull`
+//! (`skepd::tools`) — a leading verb parsed before any flag.
 
 use std::path::PathBuf;
 use std::process::exit;
@@ -8,7 +10,7 @@ use std::process::exit;
 // `DEFAULT_WORKERS` is the LIBRARY's, not this binary's: it is the third
 // term of a relation whose other two are the daemon's permit pools, and the
 // library holds the assertion that keeps the three in step.
-use skepd::{serve, AuthOptions, Daemon, NodePrefix, Origin, DEFAULT_WORKERS};
+use skepd::{serve, tools, AuthOptions, Daemon, MediaOptions, NodePrefix, Origin, DEFAULT_WORKERS};
 
 const DEFAULT_PORT: u16 = 8642;
 
@@ -26,6 +28,9 @@ const SKEPD_PORT: EnvSetting = EnvSetting { var: "SKEPD_PORT", expected: "a port
 const SKEPD_WORKERS: EnvSetting = EnvSetting { var: "SKEPD_WORKERS", expected: "a count" };
 const SKEPD_LOCAL_TRUST: EnvSetting =
     EnvSetting { var: "SKEPD_LOCAL_TRUST", expected: "true or false" };
+/// The upload setting's variable (wire.md §Media, THE UPLOAD SETTING):
+/// `false` closes the upload family, as `--no-uploads` does.
+const SKEPD_UPLOADS: EnvSetting = EnvSetting { var: "SKEPD_UPLOADS", expected: "true or false" };
 
 /// The data dir's variable, a bare name rather than an [`EnvSetting`]: its
 /// value is a PATH, which is whatever bytes the platform says and never owes
@@ -65,8 +70,11 @@ fn usage() -> String {
         "\
 usage: skepd --data-dir <DIR> [--port <PORT>] [--workers <N>]
              [--local-trust | --no-local-trust] [--allow-preview-keys]
+             [--uploads | --no-uploads]
              [--origin <ORIGIN>]... [--blocked-prefixes <FILE>]
              [--node-prefix <PREFIX>]
+       skepd inventory --data-dir <DIR> [--no-rehash]
+       skepd pull --data-dir <DIR> [--hash <HEX>] <FILE>
 
   --data-dir <DIR>   journal/checkpoint directory (env: SKEPD_DATA_DIR);
                      created if absent, recovered if populated
@@ -81,6 +89,14 @@ usage: skepd --data-dir <DIR> [--port <PORT>] [--workers <N>]
                      pass --no-local-trust affirmatively)
   --no-local-trust   refuse every bare session once the board is claimed
                      (env: SKEPD_LOCAL_TRUST=true|false)
+  --uploads          admit the blob upload family (the default), under a
+                     per-account limit of one eighth of the volume's
+                     capacity, never below 256 MiB, until a limits record
+                     is installed; echoed on /health as media.uploads
+  --no-uploads       refuse the upload's creation and resume before any
+                     body byte (403 upload_refused, detail uploads_closed);
+                     the reads, the termination, the door and the pruner
+                     serve as before (env: SKEPD_UPLOADS=true|false)
   --allow-preview-keys
                      a DEV setting: admit the ENROLLMENT of PREVIEW keys
                      (the tag-3 row, fndsa512-preview-ed25519). Off — the
@@ -120,8 +136,40 @@ usage: skepd --data-dir <DIR> [--port <PORT>] [--workers <N>]
                      hosted board must supply one
   --help             this text
 
+The operator's two tools run over a board directory with NO server — no
+port, no session — and write no log line of the daemon's:
+
+  skepd inventory --data-dir <DIR> [--no-rehash]
+                     over a directory no daemon serves (a stopped board, a
+                     backup, one moment's copy): one JSON object on stdout
+                     — the holes (every picture cell whose file is absent,
+                     of another length, or — re-hashed, one whole read per
+                     file, skipped by --no-rehash — of other bytes), each
+                     account's base and pending bytes and the venue total,
+                     the standing and expired uploads, the halt marks and
+                     any foreign designation directory. Recording no read.
+                     The journal is opened as the daemon opens it: a
+                     directory a daemon serves is refused at the kernel's
+                     lock; a torn tail is cut as every open cuts it
+  skepd pull --data-dir <DIR> [--hash <HEX>] <FILE>
+                     restore <FILE> at blobs/blake3/<its hash> by the PUT's
+                     own install order — REPLACE where a file stands — with
+                     no lease, no record and no journal entry: a restore,
+                     never a deposit. Without --hash the board's journal is
+                     read and a file no committed cell names is refused;
+                     with --hash <HEX> (the inventory's listing) the file is
+                     held to that hash and the journal left unopened, the
+                     form that runs beside a serving daemon
+
 The wire protocol is specified in skep/docs/wire.md."
     )
+}
+
+/// What the command line asked for: the daemon, or one of the two tools.
+enum Command {
+    Serve(Args),
+    Inventory { data_dir: PathBuf, rehash: bool },
+    Pull { data_dir: PathBuf, hash: Option<String>, file: PathBuf },
 }
 
 struct Args {
@@ -129,6 +177,9 @@ struct Args {
     port: u16,
     workers: usize,
     local_trust: bool,
+    /// `--uploads` / `--no-uploads` (wire.md §Media): the upload family's
+    /// switch, OPEN by default.
+    uploads: bool,
     /// `--allow-preview-keys` (AUTH-1.44): a flag, no environment variable —
     /// a dev setting a served board never sets, so nothing can turn it on in
     /// silence from the image's environment.
@@ -159,13 +210,70 @@ fn from_env<T: std::str::FromStr>(setting: EnvSetting) -> Result<Option<T>, Stri
     }
 }
 
-/// The command line, or `None` when the caller asked for the usage text.
-/// Parsing decides what was asked for; ending the process is [`main`]'s.
+/// The command line, or `None` when the caller asked for the usage text:
+/// a leading verb names a tool, read before any flag; anything else is the
+/// daemon's own line. Parsing decides what was asked for; ending the
+/// process is [`main`]'s.
+fn parse_command(argv: impl Iterator<Item = String>) -> Result<Option<Command>, String> {
+    let mut it = argv.peekable();
+    match it.peek().map(String::as_str) {
+        Some("inventory") => {
+            it.next();
+            parse_tool(it, false)
+        }
+        Some("pull") => {
+            it.next();
+            parse_tool(it, true)
+        }
+        _ => Ok(parse_args(it)?.map(Command::Serve)),
+    }
+}
+
+/// A tool's line: `--data-dir <DIR>` (or the variable), `--no-rehash` for
+/// the inventory, `--hash <HEX>` and the one positional `<FILE>` for the
+/// pull; `--help` the usage text.
+fn parse_tool(mut it: impl Iterator<Item = String>, pull: bool) -> Result<Option<Command>, String> {
+    let verb = if pull { "pull" } else { "inventory" };
+    let mut data_dir = std::env::var_os(SKEPD_DATA_DIR).map(PathBuf::from);
+    let mut rehash = true;
+    let mut hash: Option<String> = None;
+    let mut file: Option<PathBuf> = None;
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--data-dir" => {
+                let v = it.next().ok_or("--data-dir needs a value")?;
+                data_dir = Some(PathBuf::from(v));
+            }
+            "--no-rehash" if !pull => rehash = false,
+            "--hash" if pull => {
+                let v = it.next().ok_or("--hash needs a value")?;
+                hash = Some(v);
+            }
+            "--help" | "-h" => return Ok(None),
+            other if pull && !other.starts_with("--") && file.is_none() => {
+                file = Some(PathBuf::from(other));
+            }
+            other => return Err(format!("{verb}: unknown argument '{other}'")),
+        }
+    }
+    let data_dir =
+        data_dir.ok_or_else(|| format!("{verb}: --data-dir (or {SKEPD_DATA_DIR}) is required"))?;
+    Ok(Some(if pull {
+        let file = file.ok_or("pull: the file to restore is required")?;
+        Command::Pull { data_dir, hash, file }
+    } else {
+        Command::Inventory { data_dir, rehash }
+    }))
+}
+
+/// The daemon's own command line, or `None` when the caller asked for the
+/// usage text.
 fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
     let mut data_dir = std::env::var_os(SKEPD_DATA_DIR).map(PathBuf::from);
     let mut port: Option<u16> = from_env(SKEPD_PORT)?;
     let mut workers: Option<usize> = from_env(SKEPD_WORKERS)?;
     let mut local_trust: Option<bool> = from_env(SKEPD_LOCAL_TRUST)?;
+    let mut uploads: Option<bool> = from_env(SKEPD_UPLOADS)?;
     // The one setting [`from_env`] cannot carry, being a LIST — so the
     // two rules that helper holds are restated here and nowhere else: a
     // variable set to bytes that are not text is refused rather than read
@@ -208,6 +316,8 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
             }
             "--local-trust" => local_trust = Some(true),
             "--no-local-trust" => local_trust = Some(false),
+            "--uploads" => uploads = Some(true),
+            "--no-uploads" => uploads = Some(false),
             "--allow-preview-keys" => allow_preview_keys = true,
             "--origin" => {
                 let v = it.next().ok_or("--origin needs a value")?;
@@ -246,6 +356,9 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
         // Phase A default ON (AUTH-1.45): a hosted image must set the flag
         // AFFIRMATIVELY false — abstention keeps the notebook behavior.
         local_trust: local_trust.unwrap_or(true),
+        // OPEN by default (the owner's ruling), the default per-account
+        // limit in force from start; the off switch is affirmative.
+        uploads: uploads.unwrap_or(true),
         allow_preview_keys,
         origins,
         blocked_prefixes,
@@ -254,8 +367,30 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
 }
 
 fn main() {
-    let args = match parse_args(std::env::args().skip(1)) {
-        Ok(Some(a)) => a,
+    let args = match parse_command(std::env::args().skip(1)) {
+        Ok(Some(Command::Serve(a))) => a,
+        // THE TOOLS: one object or one line on stdout, one line on stderr
+        // where refused, no server bound.
+        Ok(Some(Command::Inventory { data_dir, rehash })) => match tools::inventory(&data_dir, rehash) {
+            Ok(v) => {
+                println!("{}", serde_json::to_string_pretty(&v).expect("a JSON value renders"));
+                exit(0);
+            }
+            Err(e) => {
+                eprintln!("skepd inventory: {e}");
+                exit(1);
+            }
+        },
+        Ok(Some(Command::Pull { data_dir, hash, file })) => match tools::pull(&data_dir, &file, hash.as_deref()) {
+            Ok(pulled) => {
+                println!("pulled {} ({} bytes) into {}", pulled.hex, pulled.size, pulled.path.display());
+                exit(0);
+            }
+            Err(e) => {
+                eprintln!("skepd pull: {e}");
+                exit(1);
+            }
+        },
         Ok(None) => {
             println!("{}", usage());
             exit(0);
@@ -285,7 +420,11 @@ fn main() {
     // every start and never journaled — a fresh one is this binary
     // relaunched (REG-1.70). `serve` names it, or its absence, at start.
     opts.node_prefix = args.node_prefix;
-    let daemon = match Daemon::open_with(&args.data_dir, opts) {
+    // The media resource's setting (wire.md §Media): the upload switch,
+    // open unless `--no-uploads` closed it.
+    let mut media = MediaOptions::default();
+    media.uploads = args.uploads;
+    let daemon = match Daemon::open_configured(&args.data_dir, opts, media) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("skepd: {e}");
@@ -326,7 +465,74 @@ mod tests {
         for flag in ["--help", "-h"] {
             let parsed = parse_args(argv(&[flag])).expect("--help is not an error");
             assert!(parsed.is_none(), "{flag} asks for usage, not a run");
+            assert!(parse_command(argv(&["inventory", flag])).expect("usage").is_none());
+            assert!(parse_command(argv(&["pull", flag])).expect("usage").is_none());
         }
+    }
+
+    /// THE UPLOAD SETTING (wire.md §Media): OPEN unless `--no-uploads` is
+    /// given, `--uploads` the affirmative default, and the usage text names
+    /// both with the variable.
+    #[test]
+    fn the_upload_setting_is_open_unless_closed() {
+        let absent = parse_args(argv(&["--data-dir", "/tmp/x"])).expect("valid").expect("a run");
+        assert!(absent.uploads, "open by default");
+        let closed = parse_args(argv(&["--data-dir", "/tmp/x", "--no-uploads"])).expect("valid").expect("a run");
+        assert!(!closed.uploads);
+        let open = parse_args(argv(&["--data-dir", "/tmp/x", "--no-uploads", "--uploads"])).expect("valid").expect("a run");
+        assert!(open.uploads, "the last flag wins, as --local-trust's pair does");
+        let text = usage();
+        for named in ["--no-uploads", "SKEPD_UPLOADS", "skepd inventory", "skepd pull", "--no-rehash", "--hash"] {
+            assert!(text.contains(named), "the usage names {named}");
+        }
+    }
+
+    /// THE TOOLS' LINES: a leading verb names the tool before any flag; the
+    /// inventory takes its directory and `--no-rehash`, the pull its
+    /// directory, an optional `--hash` and one file; a missing directory or
+    /// file, an unknown flag and a daemon flag under a tool are refused by
+    /// name; and a line with no verb is the daemon's own.
+    #[test]
+    fn the_tools_parse_a_leading_verb_before_their_flags() {
+        match parse_command(argv(&["inventory", "--data-dir", "/tmp/b"])).expect("valid").expect("a tool") {
+            Command::Inventory { data_dir, rehash } => {
+                assert_eq!(data_dir, PathBuf::from("/tmp/b"));
+                assert!(rehash, "re-hashed by default");
+            }
+            _ => panic!("the inventory"),
+        }
+        match parse_command(argv(&["inventory", "--no-rehash", "--data-dir", "/tmp/b"])).expect("valid").expect("a tool") {
+            Command::Inventory { rehash, .. } => assert!(!rehash),
+            _ => panic!("the inventory"),
+        }
+        match parse_command(argv(&["pull", "--data-dir", "/tmp/b", "/tmp/picture"])).expect("valid").expect("a tool") {
+            Command::Pull { data_dir, hash, file } => {
+                assert_eq!((data_dir, hash, file), (PathBuf::from("/tmp/b"), None, PathBuf::from("/tmp/picture")));
+            }
+            _ => panic!("the pull"),
+        }
+        let hex = "ab".repeat(32);
+        match parse_command(argv(&["pull", "--hash", &hex, "/tmp/picture", "--data-dir", "/tmp/b"])).expect("valid").expect("a tool") {
+            Command::Pull { hash, file, .. } => {
+                assert_eq!((hash, file), (Some(hex.clone()), PathBuf::from("/tmp/picture")));
+            }
+            _ => panic!("the pull"),
+        }
+        for bad in [
+            &["inventory"][..],
+            &["pull", "--data-dir", "/tmp/b"],
+            &["pull", "--data-dir", "/tmp/b", "a", "b"],
+            &["inventory", "--data-dir", "/tmp/b", "--hash", "x"],
+            &["pull", "--data-dir", "/tmp/b", "--no-rehash", "f"],
+            &["inventory", "--data-dir", "/tmp/b", "--port", "1"],
+            &["inventory", "--data-dir"],
+        ] {
+            assert!(parse_command(argv(bad)).is_err(), "{bad:?} is refused");
+        }
+        assert!(matches!(
+            parse_command(argv(&["--data-dir", "/tmp/x"])).expect("valid"),
+            Some(Command::Serve(_))
+        ));
     }
 
     /// Flags are read as given; a missing data dir and an unknown argument

@@ -43,6 +43,21 @@
 //! unlink never takes — a crash between the answer and the unlink, a
 //! finish that failed past its link — costs nothing: open removes every
 //! aside it finds, and the pruner's pass one the deferred unlink did not.
+//!
+//! THE PRUNER's RENAME ASIDE takes the same name for the same reason
+//! ([`Store::rename_aside`]; `media.md` Op inventory 2, "ONE FILE PER
+//! ACQUISITION — re-read, rename aside, release, the aside unlinked after
+//! under no arm"): an unlink frees the file's blocks inside the call, so a
+//! pass holding the board's exclusive arm across one held every write for
+//! the unlink's time; renamed aside under the arm and unlinked after it, the
+//! arm is held one re-read and one rename, and a crash between the two
+//! leaves an aside open removes.
+//!
+//! THE INSPECTION ([`Store::inspect`]) and THE PULL's INSTALL
+//! ([`Store::install_file`]) are the operator's two doors, and neither opens
+//! the store as the daemon does: the inspection reads the four stores as
+//! they stand and writes nothing; the install writes one file by the PUT's
+//! order and nothing else.
 
 // The test seam — `test-hooks` builds only: the hazard seam's state and its
 // hook before each step, and the methods only a test calls.
@@ -160,12 +175,13 @@ pub struct Finished {
 /// the crate a name that has passed this check, or that the store spelled
 /// itself (a finish's hash), is trusted.
 ///
-/// A LOG THAT STOPS STAYS STOPPED FOR THE LIFE OF THE STORE. Each log cuts a
-/// failed append back off its file; where that cut fails too, the log takes
-/// no further append until a compaction completes (`jsonl.rs`), and the
-/// store compacts only at its open, over the logs it has just read — so no
-/// compaction reaches a log stopped while the store serves. Until the store
-/// is dropped, every act that writes that log answers `Io`: on the records'
+/// A LOG THAT STOPS STAYS STOPPED UNTIL A COMPACTION COMPLETES. Each log
+/// cuts a failed append back off its file; where that cut fails too, the
+/// log takes no further append until a compaction completes (`jsonl.rs`).
+/// The store compacts at its open, over the logs it has just read, and at
+/// its caller's runtime compaction ([`Store::compact_logs_if_past`] — the
+/// pruner's pass, which rewrites a stopped log whatever its count); between
+/// the two every act that writes a stopped log answers `Io`: on the records'
 /// log a creation, a byte received and a retirement — an end's, an expiry's,
 /// a finish's last step; on the leases' every finish, at its lease's sync,
 /// past its rename (what that leaves: [`Stream::finish`]). The next open
@@ -308,16 +324,53 @@ impl Store {
         blobs::names_in(&self.root, designation, |name, _| is_aside_name(name))
     }
 
-    /// UNLINK the file at `<designation>/<hex>` — the pruner's one act per
-    /// acquisition, after its re-read of the index and the lease. `Ok(true)`
-    /// where a file went, `Ok(false)` where none stood. The directory is not
+    /// UNLINK the file at `<designation>/<hex>` in one act — the direct
+    /// form, which frees the file's blocks inside the call. `Ok(true)` where
+    /// a file went, `Ok(false)` where none stood. The directory is not
     /// fsynced: a crash that reverts the unlink leaves a file the next pass
     /// re-judges, which costs nothing. Call it holding the lock that keeps
     /// every [`Stream::finish`] out (see there), after reading under that
     /// same hold that no live lease holds the file ([`Store::any_live_lease`])
-    /// and nothing of the caller's names it.
+    /// and nothing of the caller's names it. The daemon's pass takes a file
+    /// in two acts instead — [`Store::rename_aside`] under its arm, the aside
+    /// removed after it — so the arm is never held across the freeing.
     pub fn unlink_blob(&self, designation: &str, hex: &str) -> io::Result<bool> {
         self.blob_path(designation, hex).map_or(Ok(false), |path| blobs::remove_if_present(&path))
+    }
+
+    /// RENAME ASIDE the file at `<designation>/<hex>` — the pruner's one act
+    /// per acquisition after its re-read of the index and the lease, in the
+    /// unlink's place (`media.md` Op inventory 2, "re-read, rename aside,
+    /// release, the aside unlinked after under no arm"): the file renamed to
+    /// an aside name of its own, `.retired-<hex>-<n>`, the REPLACE's own
+    /// name and serial, so the arm the caller holds is released after one
+    /// rename and never across the unlink that frees the file's blocks —
+    /// hundreds of milliseconds at the per-file cap — which
+    /// [`Store::remove_aside`] runs AFTER, under no arm. `Ok(Some(name))`
+    /// with the aside's name where a file went aside, `Ok(None)` where none
+    /// stood. The directory is not fsynced: a crash that reverts the rename
+    /// leaves a file the next pass re-judges, one that keeps it leaves an
+    /// aside the next open removes, nothing naming either. Call it holding
+    /// the lock that keeps every [`Stream::finish`] out, as
+    /// [`Store::unlink_blob`] is called: a finish of the same hash after the
+    /// release finds no file at the name and installs afresh.
+    pub fn rename_aside(&self, designation: &str, hex: &str) -> io::Result<Option<String>> {
+        let Some(path) = self.blob_path(designation, hex) else {
+            return Ok(None);
+        };
+        // The serial is the finishes', under their lock, so two names of one
+        // hash — a replace's and a pass's — are never one name.
+        let name = {
+            let mut finishing = self.finishing.lock();
+            let n = finishing.aside_serial;
+            finishing.aside_serial += 1;
+            aside_name(hex, n)
+        };
+        match fs::rename(&path, path.with_file_name(&name)) {
+            Ok(()) => Ok(Some(name)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// Remove one aside by name — the pruner's housekeeping where the
@@ -356,6 +409,138 @@ impl Store {
     /// The volume's free space at the root, in bytes — the floor's read.
     pub fn free_space(&self) -> io::Result<u64> {
         blobs::free_space(&self.root)
+    }
+
+    /// The volume's CAPACITY at the root, in bytes — the same `statvfs`
+    /// read as [`Store::free_space`]'s: what the daemon's default
+    /// per-account limit is a share of, read once at its start.
+    pub fn capacity(&self) -> io::Result<u64> {
+        blobs::capacity(&self.root)
+    }
+
+    /// THE RUNTIME COMPACTION (the pruner's pass, after its unlink pass;
+    /// `media.md` §The media stores, "the pruner's pass rewrites either store
+    /// the same way once its log has passed a size trigger"): each log
+    /// rewritten to its current records as open rewrites it, where its whole
+    /// lines number at least `min_lines` and more than `trigger` times its
+    /// current records — or where it has STOPPED, whatever its count, since
+    /// only a completed compaction lifts a stop — under this store's lock on
+    /// THAT log's appends alone and no lock of the caller's. An append that
+    /// arrives during the rewrite waits on that lock and lands in the new
+    /// file once the install order has completed, so the records it answers
+    /// durable afterwards are in the file the next open reads. Both logs are
+    /// tried; the answer is `(uploads, leases)`, whether each was rewritten,
+    /// and a failure the first that failed: one past its rename leaves its
+    /// log stopped ([`Store::stopped_logs`]) for the next pass to rewrite.
+    pub fn compact_logs_if_past(&self, trigger: usize, min_lines: usize) -> io::Result<(bool, bool)> {
+        let uploads = self.uploads.lock().compact_if_past(trigger, min_lines);
+        let leases = self.leases.lock().compact_if_past(trigger, min_lines);
+        Ok((uploads?, leases?))
+    }
+
+    /// Which logs have STOPPED — `(uploads, leases)`: an append's cut-back
+    /// or a compaction failed past its rename, and the log takes no append
+    /// until a compaction completes; the pass's line names one.
+    pub fn stopped_logs(&self) -> (bool, bool) {
+        (self.uploads.lock().log_stopped(), self.leases.lock().log_stopped())
+    }
+
+    /// THE INSPECTION — the operator's inventory's open (`media.md`
+    /// §Recovery, "NEITHER OPENS THE STORE AS skepd DOES — the inventory
+    /// reads a copy's stores as they stand"): the four stores under `root`
+    /// read as they stand, which reconciles nothing, compacts nothing,
+    /// sweeps nothing, fsyncs nothing, creates nothing and holds nothing
+    /// open afterwards — the logs read as the open reads them, trust ending
+    /// at a torn tail cut IN MEMORY alone, every record and every lease they
+    /// hold folded to its latest line, standing or not; the files, partials
+    /// and asides listed by name on demand. It takes no lock and needs no
+    /// exclusion: it can stand beside a serving daemon's store, each of its
+    /// readings one moment's of one file. A `root` that is no directory is
+    /// `NotFound`.
+    pub fn inspect(root: impl AsRef<Path>) -> io::Result<Inspection> {
+        let root = root.as_ref();
+        if !root.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{} is no blob store: no such directory", root.display()),
+            ));
+        }
+        let (uploads, upload_lines) = UploadRecords::read_as_found(root)?;
+        let (leases, lease_lines) = LeaseLog::read_as_found(root)?;
+        Ok(Inspection { root: root.to_path_buf(), uploads, upload_lines, leases, lease_lines })
+    }
+
+    /// THE PULL's INSTALL — the operator's restore (`media.md` §Recovery,
+    /// "installs the file as the PUT's order installs one, beside a serving
+    /// daemon holding none of its gates"): the bytes of `source` streamed
+    /// into a temp file in the designation directory of `function` under
+    /// `root`, hashed as they are copied, the temp file fsynced, renamed
+    /// onto `<designation>/<hex>` — REPLACE where a file stands, which ends
+    /// any hole under the name — the directory fsynced, then the root. The
+    /// temp file is named as a partial is, `.upload-<a fresh identifier>`
+    /// no record names, so a daemon's open that meets it mid-pull removes
+    /// it as an orphan and the pull is run again. NO lease, NO record, NO
+    /// lock: a restore of bytes a committed cell already names — which is
+    /// the caller's to have read — never a deposit. Where `expected` names
+    /// a hex and the bytes hash to another, nothing is installed: the temp
+    /// file is removed and the mismatch answered as `InvalidData`, naming
+    /// both. Answers the file's designation, hex and size.
+    ///
+    /// Beside a serving daemon: its finishes take the store's own locks and
+    /// never this call's, so a finish of the same hash racing this rename is
+    /// a REPLACE either way, and the name is never without a file; the
+    /// daemon's fetch reads the file under the name at its next request.
+    pub fn install_file(
+        root: impl AsRef<Path>,
+        function: HashFunction,
+        source: impl AsRef<Path>,
+        expected: Option<&str>,
+    ) -> io::Result<Finished> {
+        let root = root.as_ref();
+        let designation = function.designation();
+        let dir = root.join(designation);
+        fs::create_dir_all(&dir)?;
+        let mut from = fs::File::open(source.as_ref())?;
+        let temp = partials::partial_path(root, designation, &UploadId::mint()?);
+        let (hex, size) = {
+            let mut out = fs::File::create(&temp)?;
+            let mut hasher = blake3::Hasher::new();
+            let mut buf = [0u8; 64 * 1024];
+            let mut size = 0u64;
+            let copied = loop {
+                let n = match io::Read::read(&mut from, &mut buf) {
+                    Ok(0) => break Ok(()),
+                    Ok(n) => n,
+                    Err(e) => break Err(e),
+                };
+                hasher.update(&buf[..n]);
+                if let Err(e) = io::Write::write_all(&mut out, &buf[..n]) {
+                    break Err(e);
+                }
+                size += n as u64;
+            };
+            if let Err(e) = copied.and_then(|()| out.sync_all()) {
+                let _ = blobs::remove_if_present(&temp);
+                return Err(e);
+            }
+            (hasher.finalize().to_hex().to_string(), size)
+        };
+        if let Some(expected) = expected {
+            if expected != hex {
+                let _ = blobs::remove_if_present(&temp);
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("the file's bytes hash to {hex}, not the {expected} the cell names: nothing installed"),
+                ));
+            }
+        }
+        if let Err(e) = fs::rename(&temp, dir.join(&hex)) {
+            let _ = blobs::remove_if_present(&temp);
+            return Err(e);
+        }
+        fsync_dir(&dir)?;
+        fsync_dir(root)?;
+        Ok(Finished { designation: designation.to_string(), hex, size })
     }
 
     // ── the upload records ───────────────────────────────────────────────
@@ -584,6 +769,90 @@ impl Store {
     #[inline]
     fn before(&self, _step: Step) -> io::Result<()> {
         Ok(())
+    }
+}
+
+/// THE FOUR STORES AS THEY STAND — what [`Store::inspect`] answers: the
+/// upload records and the leases the logs hold, folded to their latest
+/// lines and never reconciled, expired, lapsed or compacted; and the
+/// listings of the directory on demand. Every read here is a read and
+/// nothing else: no file is created, cut, renamed or synced through it.
+#[derive(Debug)]
+pub struct Inspection {
+    root: PathBuf,
+    uploads: Vec<UploadRecord>,
+    upload_lines: usize,
+    leases: Vec<Lease>,
+    lease_lines: usize,
+}
+
+impl Inspection {
+    /// The root inspected.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Every DESIGNATION DIRECTORY under the root, as [`Store::designation_dirs`]
+    /// lists them.
+    pub fn designation_dirs(&self) -> io::Result<Vec<String>> {
+        blobs::dirs_under(&self.root)
+    }
+
+    /// The files at HEX NAMES in `<designation>/`, as [`Store::blobs_of`]
+    /// lists them.
+    pub fn blobs_of(&self, designation: &str) -> io::Result<Vec<String>> {
+        blobs::names_in(&self.root, designation, |name, kind| hex_ok(name) && kind.is_file())
+    }
+
+    /// The ASIDE names in `<designation>/`, as [`Store::asides_of`] lists
+    /// them.
+    pub fn asides_of(&self, designation: &str) -> io::Result<Vec<String>> {
+        blobs::names_in(&self.root, designation, |name, _| is_aside_name(name))
+    }
+
+    /// The PARTIALS in `<designation>/`, by the identifier each name
+    /// spells, in name order — a standing upload's, an expired one's, or an
+    /// orphan's that no record names.
+    pub fn partials_of(&self, designation: &str) -> io::Result<Vec<UploadId>> {
+        let names = blobs::names_in(&self.root, designation, |name, kind| {
+            kind.is_file() && partials::id_of_partial_name(name).is_some()
+        })?;
+        Ok(names.iter().filter_map(|name| partials::id_of_partial_name(name)).collect())
+    }
+
+    /// EVERY upload record the log holds, folded to its latest line and
+    /// never reconciled: standing and expired alike, in identifier order.
+    /// Which stand at a moment is the reader's to judge ([`UploadRecord::expires`]).
+    pub fn uploads(&self) -> &[UploadRecord] {
+        &self.uploads
+    }
+
+    /// EVERY lease the log holds, each principal's latest on each hash, no
+    /// horizon applied: live and lapsed alike. Which are live at a moment is
+    /// the reader's to judge ([`Lease::expires`]).
+    pub fn leases(&self) -> &[Lease] {
+        &self.leases
+    }
+
+    /// The count of lines each log holds on disk — `(uploads, leases)`,
+    /// torn tail included — beside the records they fold to.
+    pub fn log_lines(&self) -> (usize, usize) {
+        (self.upload_lines, self.lease_lines)
+    }
+
+    /// The path a blob of `designation` and `hex` has, as [`Store::blob_path`]
+    /// answers it.
+    pub fn blob_path(&self, designation: &str, hex: &str) -> Option<PathBuf> {
+        blobs::blob_path(&self.root, designation, hex)
+    }
+
+    /// The size of the file at `<designation>/<hex>`, as [`Store::blob_size`]
+    /// answers it: `Ok(None)` where none stands, an I/O failure answered.
+    pub fn blob_size(&self, designation: &str, hex: &str) -> io::Result<Option<u64>> {
+        let Some(path) = self.blob_path(designation, hex) else {
+            return Ok(None);
+        };
+        Ok(blobs::not_found_as_none(fs::metadata(path))?.filter(fs::Metadata::is_file).map(|m| m.len()))
     }
 }
 

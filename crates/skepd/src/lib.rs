@@ -104,6 +104,12 @@
 // The transport, the routes and their vocabulary.
 mod server;
 
+// Beside the routes, at their layer: the operator's two tools over a board
+// directory — the inventory and the pull — which run with no server, reading
+// the media resource's index and the store's inspection and nothing above
+// themselves.
+pub mod tools;
+
 // The session layer.
 mod auth;
 
@@ -137,6 +143,7 @@ pub mod fuzz_support;
 
 pub use auth::{AuthOptions, NodePrefix, NotANodePrefix, NotCanonical, Origin, PortAlreadyBound};
 pub use codec::JsonCodec;
+pub use media::MediaOptions;
 pub use server::{
     body_cap, serve, Body, Daemon, DaemonError, Fetch, HttpRequest, Peer, Reply, Routed, Skepd,
     DEFAULT_WORKERS, MIN_WORKERS, UNIVERSAL_HEADERS,
@@ -215,6 +222,7 @@ const _: fn() = || {
     // and hands to `Daemon::open_with`, plausibly across a thread boundary;
     // the rest ride in and out of that surface.
     assert_send_sync::<AuthOptions>();
+    assert_send_sync::<MediaOptions>();
     assert_send_sync::<Origin>();
     assert_send_sync::<NotCanonical>();
     assert_send_sync::<NodePrefix>();

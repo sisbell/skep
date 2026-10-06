@@ -102,9 +102,12 @@ fn a_pass_unlinks_the_lapsed_unreferenced_files_alone() {
     assert_eq!(pass.unlinked, 1, "{pass:?}");
     assert_eq!(pass.kept, 2, "{pass:?}");
     assert_eq!(pass.halted, None, "{pass:?}");
+    assert_eq!(pass.asides, 0, "the pass's own aside is unlinked after the arm, counted as the file's unlink: {pass:?}");
+    assert!(pass.line().starts_with("pruner: 0 expired partials removed, 1 files unlinked, 2 kept, 0 asides removed"), "{}", pass.line());
     let blobs = blobs_dir(dir.path());
     assert!(blobs.join(blob_hex(&referenced)).is_file(), "named by a cell: kept past its lease");
     assert!(!blobs.join(blob_hex(&unreferenced)).exists(), "lapsed and unreferenced: gone");
+    assert!(!fs::read_dir(&blobs).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".retired-")), "renamed aside under the arm, unlinked after it: no aside stands");
     assert!(blobs.join(blob_hex(&live)).is_file(), "held by a live lease: kept");
     let again = sd.daemon().prune_now().expect("the index is ready");
     assert_eq!((again.unlinked, again.kept), (0, 2), "{again:?}");
@@ -318,6 +321,74 @@ fn a_pass_sweeps_an_aside_the_deferred_step_did_not_reach() {
     assert!(!aside_stands(), "swept by the pass");
     assert_eq!(fs::read(blobs.join(&hex)).unwrap(), right);
     assert_eq!(deposits_of(port, &token), vec![(hex.clone(), 1_234, false)]);
+    sd.shutdown();
+}
+
+/// THE LOGS' COMPACTION BY THE PASS (P22; M-I5 (f); `media.md` §The media
+/// stores, "the pruner's pass rewrites either store the same way once its
+/// log has passed a size trigger"; s6-lam-f): one file re-PUT 1,030 times
+/// leaves a lease log of 1,030 lines over one lease (each line replacing
+/// the last) and a records' log of 2,063 lines over 3 standing uploads
+/// (each PUT a creation and a retirement) — both past 1,024 and past four
+/// times their records — and the next pass rewrites each to its current
+/// records, under no arm, its line naming both; a record appended after
+/// the rewrite lands in the new file, so the reopen lists every standing
+/// upload; a log under the minimum is left alone by the pass after,
+/// whatever its ratio; and no log has stopped.
+#[test]
+fn a_pass_compacts_a_log_past_its_trigger_and_leaves_a_small_one_alone() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let logs = dir.path().join("blobs");
+    let lines = |name: &str| fs::read_to_string(logs.join(name)).unwrap().lines().count();
+    let standing: Vec<String> = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let token = open_session(port, CLAIMANT_PRINCIPAL);
+        let mut standing = Vec::new();
+        for _ in 0..3 {
+            let (st, _, resp) = blob_create(port, Some(&token), 10, b"");
+            assert_eq!(st, 200);
+            standing.push(json(&resp)["upload"].as_str().unwrap().to_string());
+        }
+        // One file re-PUT 1,030 times: 1,030 lease lines over one lease,
+        // and 2,060 record lines — each PUT's creation and retirement —
+        // that fold to nothing.
+        let bytes = seeded_bytes(100, 5);
+        for _ in 0..1_030 {
+            put_whole(port, &token, &bytes);
+        }
+        assert_eq!(lines("uploads.log"), 3 + 2 * 1_030, "the records' log before the pass");
+        assert_eq!(lines("leases.log"), 1_030, "the lease log before the pass");
+        let pass = sd.daemon().prune_now().expect("ready");
+        assert!(pass.compacted_uploads && pass.compacted_leases, "{pass:?}");
+        assert_eq!(pass.compaction_failed, None, "{pass:?}");
+        assert_eq!(pass.stopped, (false, false), "{pass:?}");
+        assert!(pass.line().ends_with("; uploads.log and leases.log compacted"), "{}", pass.line());
+        assert_eq!(lines("uploads.log"), 3, "rewritten to the standing records");
+        assert_eq!(lines("leases.log"), 1, "rewritten to the one lease");
+        // An append after the rewrite lands in the new file.
+        let (st, _, resp) = blob_create(port, Some(&token), 10, b"");
+        assert_eq!(st, 200);
+        standing.push(json(&resp)["upload"].as_str().unwrap().to_string());
+        assert_eq!(lines("uploads.log"), 4);
+        let again = sd.daemon().prune_now().expect("ready");
+        assert!(!again.compacted_uploads && !again.compacted_leases, "under the minimum, left alone: {again:?}");
+        assert!(!again.line().contains("compacted"), "{}", again.line());
+        assert_eq!(deposits_of(port, &token).len(), 1);
+        sd.shutdown();
+        standing
+    };
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let token = open_session(port, CLAIMANT_PRINCIPAL);
+    let (st, _, body) = blob_read(port, Some(&token));
+    assert_eq!(st, 200);
+    let listed: Vec<String> = json(&body)["uploads"].as_array().unwrap().iter().map(|u| u["upload"].as_str().unwrap().to_string()).collect();
+    let mut want = standing.clone();
+    want.sort();
+    let mut got = listed;
+    got.sort();
+    assert_eq!(got, want, "every standing upload, the one appended after the rewrite among them, listed after the reopen");
     sd.shutdown();
 }
 

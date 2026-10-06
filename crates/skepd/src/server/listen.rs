@@ -369,14 +369,9 @@ fn prune_on_cadence(daemon: &Daemon, cadence: &Cadence) {
     loop {
         if daemon.index_is_ready_for_pruning() {
             match daemon.prune_pass() {
-                Ok(Some(pass)) => notice::line(format_args!(
-                    "pruner: {} expired partials removed, {} files unlinked, {} kept, {} asides removed{}",
-                    pass.expired_partials,
-                    pass.unlinked,
-                    pass.kept,
-                    pass.asides,
-                    pass.halted.as_deref().map_or(String::new(), |why| format!(" — the unlink pass halted: {why}"))
-                )),
+                // The pass's own line: its figures, the halt, the logs'
+                // compaction and any log that has stopped.
+                Ok(Some(pass)) => notice::line(pass.line()),
                 Ok(None) => {}
                 Err(e) => notice::line(format_args!("pruner: the pass failed: {e}")),
             }

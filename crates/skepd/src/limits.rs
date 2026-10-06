@@ -1,7 +1,10 @@
 //! The three request-body caps the wire promises (wire.md §Transport), the
 //! change feed's three page bounds (wire.md §The change feed), the picture
 //! cell's cap, and the blob route's own bounds — the per-file cap, the
-//! streaming arm's chunk, and its two deadlines (wire.md §Media).
+//! streaming arm's chunk, its two deadlines, the fetch pool and its two
+//! intervals, the pruner's cadence, the default per-account limit's share
+//! and floor, the standing-uploads bound and the logs' compaction trigger
+//! (wire.md §Media).
 
 use std::num::NonZeroUsize;
 use std::time::Duration;
@@ -103,6 +106,46 @@ pub(crate) const FETCH_RECHECK_INTERVAL: Duration = Duration::from_secs(5);
 /// is nothing a scope reads (the scopes are record-derived and count
 /// neither) and a pass over a quiet board costs one directory listing.
 pub(crate) const PRUNE_INTERVAL: Duration = Duration::from_secs(3600);
+
+/// THE DEFAULT PER-ACCOUNT LIMIT's SHARE — one eighth of the volume's
+/// capacity (the owner's ruling, "1/8 is fine"; `media.md` Op inventory 1,
+/// "UPLOADS ARE OPEN BY DEFAULT, WITH A DEFAULT PER-ACCOUNT LIMIT IN FORCE
+/// FROM START"; the register M-I6 (b): a per-account limit is ALWAYS in
+/// force): the divisor applied to the capacity the daemon reads off the
+/// volume once at its start (`media/gate.rs`, `Limits::defaults_for`). D1,
+/// a daemon constant; a written limits record overrides the figure whole.
+pub(crate) const DEFAULT_LIMIT_SHARE: u64 = 8;
+
+/// THE DEFAULT PER-ACCOUNT LIMIT's FLOOR — 256 MiB, the least the default
+/// is, whatever the volume's capacity (the owner's ruling: "never below 256
+/// MiB"); and the whole default on a host that cannot answer its capacity.
+pub(crate) const DEFAULT_LIMIT_FLOOR_BYTES: u64 = 256 * 1024 * 1024;
+
+/// THE STANDING-UPLOADS BOUND — 8 per principal, INTERIM (sm-Q8;
+/// `media.md` Op inventory 1, "A PRINCIPAL's STANDING UPLOADS ARE BOUNDED
+/// IN NUMBER, a gate constant the subsystem design pins"; PATTERNS P13,
+/// P29): the most standing uploads one principal holds, counted off its own
+/// records at the creation, a creation past it refused BEFORE its partial
+/// and its record — `507 deposit_refused`, `scope` `standing`, the face
+/// naming the end of one of them as the act. What it bounds is what the
+/// pending bytes cannot: a creation with no body counts nothing, so without
+/// it a principal held any number of empty partials, each an inode the
+/// floor never reads and a record every open and every pass walks.
+pub(crate) const MAX_STANDING_UPLOADS: usize = 8;
+
+/// THE LOGS' COMPACTION TRIGGER — 4×, INTERIM (sm-Q8; `media.md` §The
+/// media stores, "the pruner's pass rewrites either store the same way once
+/// its log has passed a size trigger, a multiple of its current records the
+/// subsystem design pins"; PATTERNS P22): the pruner's pass rewrites
+/// `uploads.log` or `leases.log` to its current records once its lines
+/// number more than this many times those records — so between restarts
+/// neither log grows past the trigger plus one pass interval's appends.
+pub(crate) const COMPACTION_TRIGGER: usize = 4;
+
+/// THE COMPACTION's MINIMUM — 1,024 lines, INTERIM: a log under it is
+/// never rewritten by a pass, whatever its ratio, so a small board's logs
+/// are not rewritten per pass for a handful of retirements.
+pub(crate) const COMPACTION_MIN_LINES: usize = 1024;
 
 /// THE TRANSFER BOUND of one blob request — 10 minutes, INTERIM: the
 /// deadline on SLOWNESS the idle bound cannot give (a peer pacing one byte

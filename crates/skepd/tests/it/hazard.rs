@@ -1192,11 +1192,30 @@ fn e_blob_trial(trial: u64) -> (usize, usize) {
 const BLOB_CRASH_DIR: &str = "SKEP_HAZARD_BLOB_CRASH_DIR";
 const BLOB_CRASH_STEP: &str = "SKEP_HAZARD_BLOB_CRASH_STEP";
 
-/// The bytes the held PUT carries.
+/// The bytes the held PUT carries at the steps past the rename, and at the
+/// replace's link.
 const HELD_BYTES: &[u8] = b"the bytes a crash inside the finish leaves behind";
+
+/// The bytes the held PUT carries at `step`: at the two holds BEFORE THE
+/// RENAME the body is sized to the partial's fsync grain, so the record's
+/// offset — marked at the grain — stands where the crash story says it
+/// does: exactly the length at `rename` (the finish's precondition met, the
+/// EMPTY resume's case), and one grain short of the bytes written at
+/// `partial_sync` (the last 100 bytes unmarked, an ordinary resume's
+/// case); everywhere else the short fixture.
+fn held_bytes(step: &str) -> Vec<u8> {
+    match step {
+        "rename" => seeded_bytes(skep_blobs::SYNC_GRAIN as usize, 0xE1),
+        "partial_sync" => seeded_bytes(skep_blobs::SYNC_GRAIN as usize + 100, 0xE2),
+        _ => HELD_BYTES.to_vec(),
+    }
+}
 
 fn blob_step(name: &str) -> Step {
     match name {
+        "partial_sync" => Step::PartialSync,
+        "link_aside" => Step::LinkAside,
+        "rename" => Step::Rename,
         "dir_sync" => Step::DirSync,
         "root_sync" => Step::RootSync,
         "record_retire" => Step::RecordRetire,
@@ -1207,22 +1226,24 @@ fn blob_step(name: &str) -> Step {
 
 /// The child: a fresh board served in-process and claimed, the store's
 /// hold seam armed at `step`, one whole PUT — whose finish parks at the
-/// hold, announced on stderr for the parent to kill. At the deferred
-/// step, `unlink_aside`, the name is put once beforehand so the held PUT
-/// is a REPLACE: its answer is written and the transport's thread parks in
-/// the deferred unlink after it, so the child waits to be killed rather
-/// than reporting the answer. Never returns.
+/// hold, announced on stderr for the parent to kill. At the two replace
+/// steps, `link_aside` and the deferred `unlink_aside`, the name is put
+/// once beforehand so the held PUT is a REPLACE; at the deferred step its
+/// answer is written and the transport's thread parks in the deferred
+/// unlink after it, so the child waits to be killed rather than reporting
+/// the answer. Never returns.
 fn blob_crash_child(dir: &Path, step: &str) -> ! {
     let sd = spawn_unclaimed(dir);
     let port = sd.port();
     claim_board(port);
     let token = open_session(port, CLAIMANT_PRINCIPAL);
-    if step == "unlink_aside" {
-        let first = try_put(port, &token, HELD_BYTES).expect("the first PUT, the name's");
-        assert_eq!(first["hash"].as_str(), Some(blob_hex(HELD_BYTES).as_str()));
+    let bytes = held_bytes(step);
+    if step == "unlink_aside" || step == "link_aside" {
+        let first = try_put(port, &token, &bytes).expect("the first PUT, the name's");
+        assert_eq!(first["hash"].as_str(), Some(blob_hex(&bytes).as_str()));
     }
     sd.daemon().hold_blob_finish_at(blob_step(step));
-    let answered = try_put(port, &token, HELD_BYTES);
+    let answered = try_put(port, &token, &bytes);
     if step == "unlink_aside" {
         // The replace answered — the hold is past the answer — and the
         // transport's worker parks; this thread waits for the kill.
@@ -1235,32 +1256,46 @@ fn blob_crash_child(dir: &Path, step: &str) -> ! {
 }
 
 /// H′ — A CRASH INSIDE THE FINISH REOPENS TO WHAT THE ORDER PROMISES
-/// (M-I5 (a); `media.md` Op inventory 1, the lease's crash story: "a crash
-/// leaves at worst a blob with no lease, unreferenced and prunable, and
-/// never a lease naming bytes that are not there"; clause (7): "a crash
-/// anywhere in the finish leaves at worst a record that open's
-/// reconciliation retires, beside a file the lease holds or the pruner may
-/// take"; mb-K2, the replaced instance retired after the answer). Four
-/// children, each killed at a named hold — BEFORE THE DIRECTORY FSYNC
-/// (between the rename and the directory's sync), BEFORE THE ROOT FSYNC
-/// (after the first rename into a designation directory this process
+/// (M-I5 (a); M-I5 (c), the finish cut before its rename; `media.md` Op
+/// inventory 1, the lease's crash story: "a crash leaves at worst a blob
+/// with no lease, unreferenced and prunable, and never a lease naming bytes
+/// that are not there"; clause (7): "a crash anywhere in the finish leaves
+/// at worst a record that open's reconciliation retires, beside a file the
+/// lease holds or the pruner may take" — and before the rename, "the
+/// upload standing over its partial, which a resume at its record's offset
+/// finishes, an empty one where that offset is its total"; mb-K2, the
+/// replaced instance retired after the answer). Seven children, each
+/// killed at a named hold — BEFORE THE PARTIAL's FSYNC (the body one grain
+/// and a hundred bytes, the record's offset at the grain), BEFORE THE
+/// REPLACE's LINK (the name present), BEFORE THE RENAME (the body exactly
+/// one grain, the record's offset at the length), BEFORE THE DIRECTORY
+/// FSYNC (between the rename and the directory's sync), BEFORE THE ROOT
+/// FSYNC (after the first rename into a designation directory this process
 /// created), BEFORE THE RECORD's RETIREMENT (after the lease's sync), and
 /// at THE DEFERRED UNLINK of a replace's aside, after the answer — and the
-/// reopen judged: at the first two the un-acked PUT is ABSENT from its
-/// principal's view (no lease, the file on disk leaseless and prunable,
-/// its cell refused `unbound_cell`, its record retired by the
-/// reconciliation), and a re-PUT of the bytes answers and binds; at the
-/// third the lease stands over a whole file — the finish's one residue —
-/// listed, its cell admitted, its record retired; at the fourth the
-/// reopen removes the aside, and the hash answers whole under its lease.
-/// No partial stands after any of the four.
+/// reopen judged: at the three before the rename the upload STANDS over
+/// its partial, cut back to its record's offset — at `rename` the offset
+/// IS the length, the progress read says so, and an EMPTY resume at it
+/// finishes and binds with no byte re-sent; at `partial_sync` the offset
+/// lags one grain and an ordinary resume re-sends the hundred bytes past
+/// it; at `link_aside` the first instance stands whole under its lease and
+/// the held PUT's resume replaces it — at the two past the rename the
+/// un-acked PUT is ABSENT from its principal's view (no lease, the file on
+/// disk leaseless and prunable, its cell refused `unbound_cell`, its record
+/// retired by the reconciliation), and a re-PUT of the bytes answers and
+/// binds; at the retirement the lease stands over a whole file — the
+/// finish's one residue — listed, its cell admitted, its record retired; at
+/// the deferred unlink the reopen removes the aside, and the hash answers
+/// whole under its lease. No partial stands after any of the seven once
+/// the resumes have finished.
 #[test]
 fn h_a_crash_inside_the_blob_finish_reopens_to_what_the_order_promises() {
     if let (Some(dir), Ok(step)) = (std::env::var_os(BLOB_CRASH_DIR), std::env::var(BLOB_CRASH_STEP)) {
         blob_crash_child(Path::new(&dir), &step);
     }
-    let hex = blob_hex(HELD_BYTES);
-    for step in ["dir_sync", "root_sync", "record_retire", "unlink_aside"] {
+    for step in ["partial_sync", "link_aside", "rename", "dir_sync", "root_sync", "record_retire", "unlink_aside"] {
+        let bytes = held_bytes(step);
+        let hex = blob_hex(&bytes);
         let tmp = tempfile::tempdir().expect("tempdir");
         let dir = tmp.path().join("data");
         fs::create_dir_all(&dir).expect("data dir");
@@ -1312,18 +1347,69 @@ fn h_a_crash_inside_the_blob_finish_reopens_to_what_the_order_promises() {
         let token = route_session(&d, CLAIMANT_PRINCIPAL);
         let file = dir.join("blobs").join("blake3").join(&hex);
         let (deposits, uploads) = deposit_read(&d, &token);
-        assert!(uploads.is_empty(), "FINDING ({ctx}): the record whose partial was renamed away is retired at open: {uploads:?}");
         let draft = acked_addr(&route_op(&d, Some(&token), &create_frame(CLAIMANT_ACCOUNT, Some(false))));
         let insert = |d: &Daemon| {
             let frame = serde_json::json!({
                 "op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"},
-                "values": [{"atom": cell_of(HELD_BYTES, HELD_BYTES.len() as u64)}],
+                "values": [{"atom": cell_of(&bytes, bytes.len() as u64)}],
             })
             .to_string();
             verdict(&route_op(d, Some(&token), &frame))
         };
+        // The resume of a standing upload from `offset` with `body`: the
+        // finish's answer where the offset reaches the length.
+        let resume = |d: &Daemon, id: &str, offset: u64, body: &[u8]| -> Value {
+            let r = route_raw(d, "PATCH", &format!("{BLOB_UPLOAD}/{id}"), Some(&format!("offset={offset}")), Some(&token), body);
+            assert_eq!(r.status, 200, "{ctx}: the resume at {offset}: {}", String::from_utf8_lossy(r.bytes()));
+            json(r.bytes())
+        };
         match step {
+            "partial_sync" | "rename" | "link_aside" => {
+                // BEFORE THE RENAME: the upload stands over its partial at
+                // its record's offset (M-I5 (c)), no lease of this PUT's
+                // names the hash, and the resume at that offset finishes.
+                let [(id, offset)] = uploads.as_slice() else {
+                    panic!("FINDING ({ctx}): the upload stands over its partial after a crash before the rename: {uploads:?}")
+                };
+                let partial = dir.join("blobs").join("blake3").join(format!(".upload-{id}"));
+                assert_eq!(fs::metadata(&partial).expect("the partial").len(), *offset, "{ctx}: the partial cut back to the record's offset");
+                let r = route_raw(&d, "GET", &format!("{BLOB_UPLOAD}/{id}"), None, Some(&token), b"");
+                assert_eq!(json(r.bytes())["offset"].as_u64(), Some(*offset), "{ctx}: the progress read answers the offset");
+                let (expected_offset, before) = match step {
+                    // The record's offset IS the length: the EMPTY resume.
+                    "rename" => (bytes.len() as u64, deposits.len()),
+                    // One grain marked, a hundred bytes past it unmarked.
+                    "partial_sync" => (skep_blobs::SYNC_GRAIN, deposits.len()),
+                    // The replace's held PUT: nothing marked (the body is
+                    // under a grain); the first instance stands leased.
+                    _ => {
+                        assert!(file.is_file(), "{ctx}: the first instance stands at the name");
+                        assert_eq!(deposits.get(&hex), Some(&(bytes.len() as u64, false)), "{ctx}: the first PUT's lease stands: {deposits:?}");
+                        (0, deposits.len())
+                    }
+                };
+                assert_eq!(*offset, expected_offset, "FINDING ({ctx}): the record's offset is where the grain marked it");
+                if step != "link_aside" {
+                    assert!(!file.is_file(), "{ctx}: no file at the hash before the rename");
+                    assert!(deposits.is_empty(), "FINDING ({ctx}): a lease names bytes the rename never installed: {deposits:?}");
+                    assert_eq!(insert(&d), "credential_refused:unbound_cell", "{ctx}: absent from the principal's view");
+                }
+                let remaining = &bytes[*offset as usize..];
+                let answer = resume(&d, id, *offset, remaining);
+                assert_eq!(answer["hash"].as_str(), Some(hex.as_str()), "FINDING ({ctx}): the resume of {} bytes finishes with the whole file's hash: {answer}", remaining.len());
+                if step == "rename" {
+                    assert!(remaining.is_empty(), "{ctx}: the empty resume re-sent nothing");
+                }
+                let (deposits, uploads) = deposit_read(&d, &token);
+                assert!(uploads.is_empty(), "{ctx}: finished, the record is retired");
+                assert_eq!(deposits.get(&hex), Some(&(bytes.len() as u64, false)), "{ctx}: leased: {deposits:?}");
+                assert_eq!(deposits.len(), before.max(1), "{ctx}: one deposit per hash per account");
+                assert_eq!(fs::read(&file).expect("the file"), bytes, "{ctx}: the file whole");
+                assert!(!partial.exists(), "{ctx}: the partial renamed away");
+                assert_eq!(insert(&d), "ok", "{ctx}: bound by the resume");
+            }
             "dir_sync" | "root_sync" => {
+                assert!(uploads.is_empty(), "FINDING ({ctx}): the record whose partial was renamed away is retired at open: {uploads:?}");
                 // The rename survives a SIGKILL (the page cache holds it);
                 // what the order promises is that nothing NAMES it.
                 assert!(file.is_file(), "{ctx}: the renamed file stands on disk, leaseless");
@@ -1331,17 +1417,18 @@ fn h_a_crash_inside_the_blob_finish_reopens_to_what_the_order_promises() {
                 assert_eq!(insert(&d), "credential_refused:unbound_cell", "{ctx}: absent from the principal's view");
                 // The repair: a re-PUT of the bytes through the socket-free
                 // route answers the hash and binds.
-                let r = route_raw(&d, "POST", BLOB_UPLOAD, Some(&format!("length={}", HELD_BYTES.len())), Some(&token), HELD_BYTES);
+                let r = route_raw(&d, "POST", BLOB_UPLOAD, Some(&format!("length={}", bytes.len())), Some(&token), &bytes);
                 assert_eq!(r.status, 200, "{ctx}: the re-PUT: {}", String::from_utf8_lossy(r.bytes()));
                 assert_eq!(json(r.bytes())["hash"].as_str(), Some(hex.as_str()));
                 let (deposits, _) = deposit_read(&d, &token);
-                assert_eq!(deposits.get(&hex), Some(&(HELD_BYTES.len() as u64, false)));
+                assert_eq!(deposits.get(&hex), Some(&(bytes.len() as u64, false)));
                 assert_eq!(insert(&d), "ok", "{ctx}: bound by the re-PUT");
             }
             "unlink_aside" => {
+                assert!(uploads.is_empty(), "FINDING ({ctx}): the replace's record is retired: {uploads:?}");
                 assert!(file.is_file(), "{ctx}: the hash stands");
-                assert_eq!(fs::read(&file).expect("the file"), HELD_BYTES, "FINDING ({ctx}): the hash answers the new bytes whole");
-                assert_eq!(deposits.get(&hex), Some(&(HELD_BYTES.len() as u64, false)), "FINDING ({ctx}): the replace's lease stands: {deposits:?}");
+                assert_eq!(fs::read(&file).expect("the file"), bytes, "FINDING ({ctx}): the hash answers the new bytes whole");
+                assert_eq!(deposits.get(&hex), Some(&(bytes.len() as u64, false)), "FINDING ({ctx}): the replace's lease stands: {deposits:?}");
                 let asides = fs::read_dir(dir.join("blobs").join("blake3"))
                     .expect("the designation directory")
                     .filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with(".retired-"))
@@ -1350,8 +1437,9 @@ fn h_a_crash_inside_the_blob_finish_reopens_to_what_the_order_promises() {
                 assert_eq!(insert(&d), "ok", "{ctx}: the cell is admitted under the lease");
             }
             _ => {
+                assert!(uploads.is_empty(), "FINDING ({ctx}): the record whose partial was renamed away is retired at open: {uploads:?}");
                 assert!(file.is_file(), "{ctx}: the leased file stands");
-                assert_eq!(deposits.get(&hex), Some(&(HELD_BYTES.len() as u64, false)), "FINDING ({ctx}): the lease that synced before the kill stands over a whole file: {deposits:?}");
+                assert_eq!(deposits.get(&hex), Some(&(bytes.len() as u64, false)), "FINDING ({ctx}): the lease that synced before the kill stands over a whole file: {deposits:?}");
                 assert_eq!(insert(&d), "ok", "{ctx}: the finish's one residue is a bound deposit");
             }
         }
@@ -1397,7 +1485,7 @@ fn prune_crash_child(dir: &Path) -> ! {
     sd.daemon().install_media_limits(None, None, None, None);
     try_put(port, &token, &live).expect("a PUT on a healthy daemon");
     thread::sleep(Duration::from_millis(1_200));
-    sd.daemon().hold_the_prune_pass_after_an_unlink();
+    sd.daemon().hold_the_prune_pass_after_a_rename();
     let daemon: &'static Daemon = unsafe_leak(sd);
     thread::spawn(move || {
         let _ = daemon.prune_now();
@@ -1415,14 +1503,16 @@ fn unsafe_leak(sd: skepd::Skepd) -> &'static Daemon {
     sd.daemon()
 }
 
-/// P′ — A CRASH INSIDE THE PRUNER's PASS, between an unlink and the next
-/// acquisition (M-I5 (b); Op inventory 2, "ONE FILE PER ACQUISITION"): the
-/// child is killed with its pass parked after its first unlink; the
-/// reopen's index and store agree — the file a cell names stands and its
-/// base counts it, the file under a live lease stands and is listed, of
-/// the two lapsed and unreferenced files at most one is gone, no partial
-/// stands — and no acked PUT a lease holds is lost; the reopened daemon's
-/// own pass then takes the other lapsed file and keeps the two.
+/// P′ — A CRASH INSIDE THE PRUNER's PASS, between a rename aside and its
+/// unlink (M-I5 (b); Op inventory 2, "ONE FILE PER ACQUISITION — re-read,
+/// rename aside, release, the aside unlinked after under no arm"): the
+/// child is killed with its pass parked after its first rename aside — the
+/// arm released, the aside standing, nothing naming it; the reopen removes
+/// the aside, and its index and store agree — the file a cell names stands
+/// and its base counts it, the file under a live lease stands and is
+/// listed, of the two lapsed and unreferenced files at most one is gone, no
+/// partial stands — and no acked PUT a lease holds is lost; the reopened
+/// daemon's own pass then takes the other lapsed file and keeps the two.
 #[test]
 fn p_a_crash_inside_the_pruners_pass_reopens_to_an_index_and_a_store_that_agree() {
     if let Some(dir) = std::env::var_os(PRUNE_CRASH_DIR) {
@@ -1471,13 +1561,24 @@ fn p_a_crash_inside_the_pruners_pass_reopens_to_an_index_and_a_store_that_agree(
     let _ = child.wait();
     reader.join().expect("stderr reader thread");
 
+    // THE ASIDE the kill left: the pass renamed one lapsed file aside under
+    // the arm and parked before unlinking it.
+    let blobs = dir.join("blobs").join("blake3");
+    let asides = || -> usize {
+        fs::read_dir(&blobs)
+            .expect("the designation directory")
+            .filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with(".retired-"))
+            .count()
+    };
+    assert_eq!(asides(), 1, "FINDING (P′): the pass parked after its rename aside leaves exactly that aside");
+
     // THE REOPEN, judged.
     let ctx = "P′";
     let d = timed_daemon_open(&dir, ctx);
     await_the_index(&d, ctx);
+    assert_eq!(asides(), 0, "FINDING (P′): the reopen removes the aside the crash left");
     let token = route_session(&d, CLAIMANT_PRINCIPAL);
     let [referenced, lapsed_a, lapsed_b, live] = prune_crash_files();
-    let blobs = dir.join("blobs").join("blake3");
     assert!(blobs.join(blob_hex(&referenced)).is_file(), "FINDING ({ctx}): the file a cell names was unlinked");
     assert!(blobs.join(blob_hex(&live)).is_file(), "FINDING ({ctx}): the file under a live lease was unlinked");
     let standing = [&lapsed_a, &lapsed_b].iter().filter(|b| blobs.join(blob_hex(b)).is_file()).count();

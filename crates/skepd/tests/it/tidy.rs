@@ -34,9 +34,11 @@ const LAYERS: &[(&str, u8)] = &[
     // 1 — the transport.
     ("server::http", 1),
     ("server::listen", 1),
-    // 2 — the routes.
+    // 2 — the routes, and beside them the operator's tools, which read the
+    // media resource and the store and nothing above themselves.
     ("server", 2),
     ("server::blob_routes", 2),
+    ("tools", 2),
     // 3 — the daemon's vocabulary.
     ("server::reply", 3),
     ("server::request", 3),

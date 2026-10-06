@@ -720,6 +720,14 @@ fn index_rebuild_at_open_scales_with_the_world() {
         let seeding = Instant::now();
         {
             let sd = spawn(dir.path());
+            // The seeding under a byte bound no insert reaches: each 100,000
+            // byte insert is ~28 MB of journal, so the daemon's own bound
+            // (24 MiB) would have its checkpoint thread checkpoint the
+            // growing world after every insert and, in a debug build where
+            // one takes tens of seconds, the backstop run the next inline —
+            // the measure here is the open's cost over ONE checkpoint taken
+            // below, which is the fixture this test was written for.
+            sd.daemon().set_checkpoint_bytes_bound(1 << 60);
             let port = sd.port();
             let bare = open_session(port, CLAIMANT_PRINCIPAL);
             put_whole(port, &bare, bytes);

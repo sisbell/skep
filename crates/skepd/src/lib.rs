@@ -76,10 +76,14 @@
 //!   on dedicated threads off the op pool, fed by write-path notification
 //!   — no polling anywhere.
 //!
-//! Durability lives in M2 and is *configured* here (`Durability::Fsync`,
-//! every-1024-commits checkpoints, two retained): genesis on a fresh data
-//! dir, recovery on an existing one. The only files this crate writes
-//! itself are the change feed's: `commits.log` — the wire-v6
+//! Durability lives in M2 and is *configured* here (`Durability::Fsync`;
+//! checkpoints every 1024 commits or a byte bound — a quarter of the newest
+//! checkpoint's size, never below 24 MiB, re-read as each lands —
+//! whichever first, DEFERRED to the daemon's own checkpoint thread, which
+//! runs them off the write path's guard, says a failure once, and compacts
+//! the change feed's files after each landing; two retained): genesis on a
+//! fresh data dir, recovery on an existing one. The only files this crate
+//! writes itself are the change feed's: `commits.log` — the wire-v6
 //! commit-metadata sidecar — its four derived sidecars (`feed-index.log`,
 //! `feed-offsets.log`, `feed-masked.log`, `feed-streams.log`; wire v7.8,
 //! PUB-7.19), the attest store `feed-attest.log` (wire v7.11; signed ops),

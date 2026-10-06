@@ -1,12 +1,285 @@
 //! Checkpoints (§6): their failures and what each leaves behind, retention
-//! and the reclamation floor, and the on-commit trigger's discipline.
+//! and the reclamation floor, the on-commit trigger's discipline, and the
+//! deferred arm — the due flag, the thread's call that clears it first, and
+//! the backstop.
 
+use std::num::NonZeroU64;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Barrier};
+use std::thread;
 use std::time::Duration;
 
 use super::*;
 use crate::mutilate::{ckpt_file, flip_byte, seg_file};
 use skep_kernel::CheckpointError;
 use tempfile::tempdir;
+
+/// The daemon's shape of the deferred policy — a commit count beside a byte
+/// bound, the crossing deferred — at a count a test can reach.
+fn deferred_every(n: u64) -> CheckpointPolicy {
+    CheckpointPolicy::Deferred(Box::new(CheckpointPolicy::EitherOf(
+        Box::new(CheckpointPolicy::EveryN(n)),
+        Box::new(CheckpointPolicy::JournalBytes(u64::MAX)),
+    )))
+}
+
+/// A crossing under the deferred arm SETS THE DUE FLAG and runs nothing on
+/// the committing thread; the caller's own call to `checkpoint()` runs it,
+/// the file lands, and the flag reads false after (M-I5 (f): the cadence's
+/// window is bounded, and the checkpoint that bounds it is off the
+/// committing thread). A caller's checkpoint with no flag set runs as any
+/// call does and clears nothing it needs to.
+#[test]
+fn a_deferred_crossing_sets_the_due_flag_and_the_callers_checkpoint_services_it() {
+    let dir = tempdir().unwrap();
+    let mut cfg = cfg_retain(dir.path(), 4);
+    cfg.checkpoint = deferred_every(2);
+    let k = Kernel::open(cfg, genesis()).unwrap();
+    assert!(!k.checkpoint_due(), "nothing has crossed");
+    commit(&k, 1);
+    assert!(!k.checkpoint_due(), "1 of 2");
+    commit(&k, 2);
+    assert!(k.checkpoint_due(), "the crossing set the flag");
+    assert_eq!(checkpoint_count(dir.path()), 0, "…and ran nothing on the committing thread");
+
+    assert_eq!(k.checkpoint().unwrap(), Seq(2), "the caller's thread runs it");
+    assert!(ckpt_file(dir.path(), 2).exists());
+    assert!(!k.checkpoint_due(), "the flag reads false after the run");
+
+    // The next window is the same again: no file at 3, the flag at 4.
+    commit(&k, 3);
+    assert!(!k.checkpoint_due());
+    commit(&k, 4);
+    assert!(k.checkpoint_due());
+    assert_eq!(checkpoint_count(dir.path()), 1, "still the one the caller took");
+}
+
+/// THE BACKSTOP: a second crossing that finds the flag still set — no caller
+/// serviced the first — runs the checkpoint INLINE on the committing thread,
+/// as the inline arms do, and clears the flag; the crossing after that is a
+/// deferred one again. So a caller that never services the flag gets a
+/// checkpoint at every SECOND crossing: the journal between checkpoints is
+/// bounded by two windows, never unbounded (M-I5 (f), the grace of one
+/// window).
+#[test]
+fn a_second_crossing_with_the_flag_set_runs_inline_as_the_backstop() {
+    let dir = tempdir().unwrap();
+    let mut cfg = cfg_retain(dir.path(), 8);
+    cfg.checkpoint = deferred_every(2);
+    let k = Kernel::open(cfg, genesis()).unwrap();
+    for x in 1..=8u64 {
+        commit(&k, x);
+    }
+    // Crossings at 2, 4, 6, 8: the first and third deferred (nobody
+    // services them), the second and fourth the backstop's, inline.
+    assert!(!ckpt_file(dir.path(), 2).exists(), "the first crossing was deferred");
+    assert!(ckpt_file(dir.path(), 4).exists(), "the second ran inline: the backstop");
+    assert!(!ckpt_file(dir.path(), 6).exists(), "the third was deferred again");
+    assert!(ckpt_file(dir.path(), 8).exists(), "the fourth ran inline");
+    assert_eq!(checkpoint_count(dir.path()), 2);
+    assert!(!k.checkpoint_due(), "an inline run clears the flag it was the backstop for");
+    commit(&k, 9);
+    commit(&k, 10);
+    assert!(k.checkpoint_due(), "…and the next crossing is deferred");
+    assert_eq!(checkpoint_count(dir.path()), 2);
+}
+
+/// A world whose serialize PARKS at a gate, once: the checkpointing thread
+/// enters the gate inside `checkpoint()`, the test commits a crossing while
+/// it stands there, then releases it. bincode walks a value twice — once to
+/// size it, once to write it — so the gate arms for the first walk alone.
+#[derive(Clone)]
+struct GatedWorld {
+    items: Vec<u64>,
+    gate: Option<Arc<Gate>>,
+}
+
+struct Gate {
+    armed: AtomicBool,
+    entered: Barrier,
+    release: Barrier,
+}
+
+impl Gate {
+    fn new() -> Arc<Gate> {
+        Arc::new(Gate {
+            armed: AtomicBool::new(true),
+            entered: Barrier::new(2),
+            release: Barrier::new(2),
+        })
+    }
+}
+
+impl Serialize for GatedWorld {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        if let Some(gate) = &self.gate {
+            if gate.armed.swap(false, Ordering::AcqRel) {
+                gate.entered.wait();
+                gate.release.wait();
+            }
+        }
+        self.items.serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for GatedWorld {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Vec::<u64>::deserialize(d).map(|items| GatedWorld { items, gate: None })
+    }
+}
+
+impl WorldState for GatedWorld {
+    type Record = u64;
+
+    fn apply(&self, record: &u64) -> Self {
+        let mut next = self.clone();
+        next.items.push(*record);
+        next
+    }
+}
+
+/// THE FLAG IS CLEARED BEFORE THE RUN, not after it: a checkpoint started
+/// with the flag set clears it at its start, so a crossing DURING the run
+/// finds it clear, sets it again and runs nothing inline — the thread
+/// services it with one more call after this one returns. Cleared after the
+/// run, every crossing during a long checkpoint would meet the backstop: an
+/// inline checkpoint queued on the committing thread behind this one's
+/// mutex, the writer's wait doubled. The checkpoint embodies the root it
+/// loaded, at or below the head the crossing moved.
+#[test]
+fn the_flag_is_cleared_before_the_run_so_a_crossing_during_it_leaves_it_set_after() {
+    let dir = tempdir().unwrap();
+    let mut cfg = cfg_retain(dir.path(), 4);
+    cfg.checkpoint = deferred_every(2);
+    let gate = Gate::new();
+    let k = Arc::new(Kernel::open(cfg, GatedWorld { items: vec![], gate: Some(gate.clone()) }).unwrap());
+    let commit = |x: u64| {
+        k.transact(&[], |stg| {
+            stg.push(x);
+            Ok::<(), ()>(())
+        })
+        .unwrap()
+        .1
+    };
+    commit(1);
+    commit(2);
+    assert!(k.checkpoint_due(), "the first crossing");
+
+    // The thread's call: it clears the flag, loads the root and parks
+    // inside the serialize.
+    let checkpointer = {
+        let k = Arc::clone(&k);
+        thread::spawn(move || k.checkpoint())
+    };
+    gate.entered.wait();
+    assert!(!k.checkpoint_due(), "cleared at the run's start, the serialize still in flight");
+
+    // A crossing DURING the run: it finds the flag clear, sets it, and runs
+    // nothing inline — an inline run here would wait on the checkpoint
+    // mutex the parked thread holds, which is the doubled wait the order
+    // exists to avoid.
+    commit(3);
+    assert_eq!(commit(4), Seq(4));
+    assert!(k.checkpoint_due(), "the crossing during the run set the flag again");
+    assert_eq!(checkpoint_count(dir.path()), 0, "…and nothing ran inline");
+
+    gate.release.wait();
+    assert_eq!(checkpointer.join().unwrap().unwrap(), Seq(2), "the root it loaded, not the head");
+    assert!(ckpt_file(dir.path(), 2).exists());
+    assert!(k.checkpoint_due(), "set after the run: the thread's next call services it");
+    assert_eq!(k.checkpoint().unwrap(), Seq(4), "…which embodies the crossing's head");
+    assert!(!k.checkpoint_due());
+    assert_eq!(checkpoint_count(dir.path()), 2);
+}
+
+/// THE COMPOSITE crosses on whichever half crosses first — the commit count
+/// or the byte bound — and one crossing resets both windows: the count's
+/// after a byte crossing, the bytes' after a count crossing. Inline here, so
+/// the files are the witness.
+#[test]
+fn either_of_crosses_on_the_count_or_the_bytes_whichever_first_and_resets_both() {
+    let dir = tempdir().unwrap();
+    let mut cfg = cfg_retain(dir.path(), 8);
+    cfg.checkpoint = CheckpointPolicy::EitherOf(
+        Box::new(CheckpointPolicy::EveryN(3)),
+        Box::new(CheckpointPolicy::JournalBytes(4096)),
+    );
+    let k = Kernel::open(cfg, genesis()).unwrap();
+    assert_eq!(commit_blob(&k), Seq(1)); // one commit, far past the byte bound
+    assert!(ckpt_file(dir.path(), 1).exists(), "the BYTES crossed first");
+    for x in 2..=3u64 {
+        commit(&k, x); // 1 and 2 of 3: the count's window restarted at 1
+    }
+    assert_eq!(checkpoint_count(dir.path()), 1, "a byte crossing reset the count's window too");
+    commit(&k, 4);
+    assert!(ckpt_file(dir.path(), 4).exists(), "the COUNT crossed: 3 of 3 since 1");
+    for x in 5..=6u64 {
+        commit(&k, x); // 1 and 2 of 3, a few dozen bytes each
+    }
+    assert_eq!(checkpoint_count(dir.path()), 2);
+    assert_eq!(commit_blob(&k), Seq(7));
+    assert!(ckpt_file(dir.path(), 7).exists(), "the bytes crossed again, at 3 of 3 as well");
+    assert_eq!(checkpoint_count(dir.path()), 3);
+}
+
+/// The byte bound MOVES in a running kernel: `set_cadence_bytes` replaces the
+/// threshold under the applier lock, wherever the arms nest it, and the next
+/// commit tests the new bound against the window as it stands — the figure
+/// a caller sizes from the newest checkpoint's length, re-read as each
+/// lands. A policy holding no byte bound answers that nothing moved.
+#[test]
+fn set_cadence_bytes_moves_the_byte_bound_of_a_running_kernel() {
+    let dir = tempdir().unwrap();
+    let mut cfg = cfg_retain(dir.path(), 4);
+    cfg.checkpoint = deferred_every(1024);
+    let k = Kernel::open(cfg, genesis()).unwrap();
+    for x in 1..=3u64 {
+        commit(&k, x);
+    }
+    assert!(!k.checkpoint_due(), "3 of 1024, a few dozen bytes of u64::MAX");
+    assert!(k.set_cadence_bytes(NonZeroU64::new(1).unwrap()), "the policy held a bound");
+    commit(&k, 4);
+    assert!(k.checkpoint_due(), "the moved bound: one byte, crossed by the next commit");
+    assert_eq!(k.checkpoint().unwrap(), Seq(4));
+    let newest = k.newest_checkpoint().expect("the base just written");
+    assert_eq!(newest.seq, Seq(4));
+    assert_eq!(
+        newest.len,
+        fs::metadata(ckpt_file(dir.path(), 4)).unwrap().len(),
+        "the length a caller sizes the next bound by"
+    );
+    // Sized by it, as the daemon does — a bound no small commit reaches.
+    assert!(k.set_cadence_bytes(NonZeroU64::new(newest.len * 1024).unwrap()));
+    for x in 5..=8u64 {
+        commit(&k, x);
+    }
+    assert!(!k.checkpoint_due(), "the bound re-read: nothing crosses");
+
+    let bare = Kernel::open(cfg_retain(&dir.path().join("manual"), 2), genesis()).unwrap();
+    assert!(!bare.set_cadence_bytes(NonZeroU64::new(1).unwrap()), "Manual holds no bound");
+}
+
+/// A checkpoint that fails PAST its temp file's creation — the rename
+/// refused by a directory at the checkpoint's own name — leaves no
+/// `checkpoint.tmp`, answers the write's own failure, poisons nothing, and
+/// lands on the retry once the name is clear: the kernel removes its own
+/// temp file (M-I5 (f): a failed checkpoint keeps no room on the volume).
+#[test]
+fn a_checkpoint_that_fails_past_its_temp_files_creation_leaves_no_tmp() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    commit(&k, 10);
+    fs::create_dir(ckpt_file(dir.path(), 1)).unwrap();
+    let err = k.checkpoint().expect_err("the rename onto a directory is refused");
+    assert!(matches!(err, CheckpointError::Io(_)), "got {err:?}");
+    assert!(!dir.path().join("checkpoint.tmp").exists(), "the temp file was removed");
+    assert!(!k.is_poisoned());
+    assert!(!k.checkpoint_due(), "a failed call clears the flag like a landed one");
+    fs::remove_dir(ckpt_file(dir.path(), 1)).unwrap();
+    assert_eq!(k.checkpoint().unwrap(), Seq(1));
+    assert!(ckpt_file(dir.path(), 1).exists());
+    assert!(!dir.path().join("checkpoint.tmp").exists());
+}
 
 #[test]
 fn checkpoint_surfaces_the_serializers_account_of_an_unencodable_world() {

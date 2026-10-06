@@ -52,7 +52,13 @@
 //!   alone excepted, each of its lines synced before its record step
 //!   returns ([`LineFile::append_synced`]; SO-I5 (d), which `attest.rs`
 //!   states); a rewrite goes to `<file>.compact` and is renamed over the
-//!   original — whole old file or whole new one, never half of either.
+//!   original — whole old file or whole new one, never half of either. A
+//!   rewrite runs at open and, since the reclaim floor moves at a checkpoint
+//!   and at no other moment, after each checkpoint the daemon's checkpoint
+//!   thread lands; one that fails PAST its rename while serving leaves the
+//!   handle naming the replaced file, so it STOPS the file as a failed
+//!   append does, said once (P22: a slower answer at the next open, never
+//!   an outage).
 //!
 //! Loss unmasks nothing: no derived file is consulted for WHAT an entry
 //! says (that is `commits.log`'s) or for WHETHER a class may see it (that
@@ -66,7 +72,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
-use super::super::sidecar::line_bytes;
+use super::super::sidecar::{line_bytes, RewriteFail};
 use crate::codec::obj;
 
 // Each file below is named BESIDE the field its records carry, because this
@@ -116,18 +122,22 @@ pub(super) struct LineFile {
     name: &'static str,
     coverage: u64,
     /// Set by the first FAILED [`LineFile::append`] of this uptime — or
-    /// failed [`LineFile::sync`] — after which this file takes no further
-    /// APPEND and no FENCE.
+    /// failed [`LineFile::sync`], or a [`LineFile::rewrite`] that failed
+    /// PAST its rename — after which this file takes no further APPEND and
+    /// no FENCE.
     ///
-    /// [`LineFile::rewrite`] is EXEMPT and needs no guard, on two counts.
-    /// It writes the file WHOLE from the resident twin and fences at the
-    /// coverage it has just made true, so it CLOSES a gap rather than
-    /// claiming over one — which is the opposite of what this flag guards
-    /// against. And it is unreachable past a stop in any case: every
-    /// [`LineFile::append`] an open makes — [`super::Feed::open`]'s, and
-    /// [`super::attest::AttestStore::open`]'s inside it — is `?`-propagated
-    /// into `DaemonError::Sidecar`, so a failure there returns before any
-    /// rewrite runs, and no rewrite happens at commit time at all.
+    /// [`LineFile::rewrite`] is not GUARDED by it: it writes the file WHOLE
+    /// from the resident twin and fences at the coverage it has just made
+    /// true, so it CLOSES a gap rather than claiming over one — the opposite
+    /// of what this flag guards against — and a stopped file rewritten
+    /// whole is right on disk again while the flag stands for the uptime.
+    /// What a rewrite can do is SET it. At open every rewrite's failure is
+    /// fatal — `?`-propagated into `DaemonError::Sidecar` before any append
+    /// — so the flag is moot there; but the checkpoint thread's compaction
+    /// runs the same rewrite while serving, and one that fails past its
+    /// rename leaves this handle naming the REPLACED file, which no open
+    /// reads: the file stops, said once, and the next open re-derives from
+    /// the rewritten file's own fence.
     ///
     /// COVERAGE IS A CLAIM, and a gap beneath it is the one loss the check
     /// cannot close: a position at or below coverage with no record reads as
@@ -145,6 +155,12 @@ pub(super) struct LineFile {
     /// no `sync_data` covered.
     #[cfg(any(test, feature = "test-hooks"))]
     synced: u64,
+    /// The test seam behind `crate::Daemon::fail_the_feeds_next_rewrite_past_rename`:
+    /// the next [`LineFile::rewrite`] fails at the reopen of the file it has
+    /// just renamed into place, so the stop that arm carries is reachable
+    /// without a disk that fails on cue.
+    #[cfg(any(test, feature = "test-hooks"))]
+    fail_next_rewrite_past_rename: bool,
 }
 
 /// The ENTRIES a line file replays — the position-carrying records its
@@ -216,6 +232,8 @@ impl LineFile {
             stopped: false,
             #[cfg(any(test, feature = "test-hooks"))]
             synced: 0,
+            #[cfg(any(test, feature = "test-hooks"))]
+            fail_next_rewrite_past_rename: false,
         };
         if foreign {
             // Purge what is not this journal's, once, so it cannot come back.
@@ -343,6 +361,21 @@ impl LineFile {
         Ok(())
     }
 
+    /// The test seam behind `crate::Daemon::fail_the_feeds_next_rewrite_past_rename`:
+    /// the next [`LineFile::rewrite`] fails past its rename, at the reopen.
+    /// Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn fail_next_rewrite_past_rename(&mut self) {
+        self.fail_next_rewrite_past_rename = true;
+    }
+
+    /// The test seam's reading of the stop: whether this file takes no
+    /// further line. Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn is_stopped(&self) -> bool {
+        self.stopped
+    }
+
     /// Append the coverage fence `{"covered":N}` — a no-op when the file
     /// already covers `covered`, and a no-op on a stopped file, whose
     /// coverage claim must stay below the position it lost.
@@ -356,11 +389,23 @@ impl LineFile {
     }
 
     /// Rewrite the whole file as `records` behind a fence at `covered`,
-    /// through a temp file renamed over the original (the open's compaction
-    /// from the twins). `records` are whole record objects already carrying
-    /// their `at`; [`super::super::sidecar::line_bytes`] is what makes each a
+    /// through a temp file renamed over the original — the compaction from
+    /// the twins, at open and after each checkpoint the daemon's thread
+    /// lands. `records` are whole record objects already carrying their
+    /// `at`; [`super::super::sidecar::line_bytes`] is what makes each a
     /// line.
-    pub fn rewrite(&mut self, records: Vec<Value>, covered: u64) -> io::Result<()> {
+    ///
+    /// Which side of the rename a failure fell on travels as
+    /// [`RewriteFail`], since the two leave different files behind: BEFORE
+    /// it the old file stands whole and this handle still names it, nothing
+    /// lost, the next checkpoint's compaction trying again; PAST it the new
+    /// file is in place and this handle names the REPLACED one, which no
+    /// open reads, so the file is STOPPED for the uptime as a failed append
+    /// stops it — said once, here — its coverage the fence the new file
+    /// carries, which the next open re-derives from. At open either side is
+    /// fatal; while serving the caller reports the before-rename arm and
+    /// moves on.
+    pub fn rewrite(&mut self, records: Vec<Value>, covered: u64) -> Result<(), RewriteFail> {
         let path = self.dir.join(self.name);
         let tmp = self.dir.join(format!("{}.compact", self.name));
         let mut out = Vec::new();
@@ -368,14 +413,38 @@ impl LineFile {
             out.extend_from_slice(&line_bytes(record));
         }
         out.extend_from_slice(&fence_line(covered));
-        let mut f = File::create(&tmp)?;
-        f.write_all(&out)?;
-        f.sync_all()?;
-        drop(f);
-        std::fs::rename(&tmp, &path)?;
-        self.file = OpenOptions::new().create(true).read(true).append(true).open(&path)?;
+        let renamed = (|| -> io::Result<()> {
+            let mut f = File::create(&tmp)?;
+            f.write_all(&out)?;
+            f.sync_all()?;
+            drop(f);
+            std::fs::rename(&tmp, &path)
+        })();
+        renamed.map_err(RewriteFail::BeforeRename)?;
+        #[cfg(any(test, feature = "test-hooks"))]
+        let reopened = if std::mem::take(&mut self.fail_next_rewrite_past_rename) {
+            Err(io::Error::other("test seam: the rewritten file's reopen refused"))
+        } else {
+            OpenOptions::new().create(true).read(true).append(true).open(&path)
+        };
+        #[cfg(not(any(test, feature = "test-hooks")))]
+        let reopened = OpenOptions::new().create(true).read(true).append(true).open(&path);
         self.coverage = covered;
-        Ok(())
+        match reopened {
+            Ok(file) => {
+                self.file = file;
+                Ok(())
+            }
+            Err(e) => {
+                self.stopped = true;
+                crate::notice::line(format_args!(
+                    "{} rewrite failed past its rename: {e}; this file takes no further line, so \
+                     the next open re-derives from its fence",
+                    self.name
+                ));
+                Err(RewriteFail::PastRename(e))
+            }
+        }
     }
 
     /// Rewrite the file without another journal's lines — every ENTRY line
@@ -446,7 +515,15 @@ impl LineFile {
         let path = dir.join(name);
         File::create(&path).expect("create the file to be opened read-only");
         let file = File::open(&path).expect("a read-only handle");
-        LineFile { file, dir: dir.to_path_buf(), name, coverage, stopped: false, synced: 0 }
+        LineFile {
+            file,
+            dir: dir.to_path_buf(),
+            name,
+            coverage,
+            stopped: false,
+            synced: 0,
+            fail_next_rewrite_past_rename: false,
+        }
     }
 }
 
@@ -612,6 +689,64 @@ mod tests {
             Vec::<u8>::new(),
             "nothing reached the file after the failure"
         );
+    }
+
+    /// A rewrite that fails PAST its rename — the new file in place, the
+    /// handle naming the replaced one — STOPS the file (P22; the settled
+    /// disposition for `record`: reported, never failing an op): the next
+    /// append and the next fence are no-ops, the on-disk file is the
+    /// rewritten whole one and nothing after, and the next open replays it
+    /// and re-derives from its fence. One that fails BEFORE its rename stops
+    /// nothing: the old file stands and the handle still appends to it.
+    #[test]
+    fn a_rewrite_failed_past_its_rename_stops_the_file_and_one_failed_before_it_does_not() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(MASKED_FILE);
+        let (mut f, _) = LineFile::open(dir.path(), MASKED_FILE, 20, |_| true).expect("open");
+        f.append(3, vec![]).expect("append");
+        f.append(7, vec![]).expect("append");
+
+        // BEFORE the rename: a directory on the temp file's name refuses
+        // the create, so nothing moved and nothing stopped.
+        let tmp = dir.path().join(format!("{MASKED_FILE}.compact"));
+        std::fs::create_dir(&tmp).expect("a directory on the temp's name");
+        let refused = f
+            .rewrite(vec![record_object(7, vec![])], 9)
+            .expect_err("the temp file's create is refused");
+        assert!(matches!(refused, RewriteFail::BeforeRename(_)), "{refused:?}");
+        assert!(!f.is_stopped(), "the old file stands and the handle names it");
+        f.append(8, vec![]).expect("…so it still takes a line");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            "{\"at\":3}\n{\"at\":7}\n{\"at\":8}\n",
+            "the old file, whole, with the append after the refused rewrite"
+        );
+        std::fs::remove_dir(&tmp).expect("clear the name");
+
+        // PAST the rename: the seam refuses the reopen. The new file is in
+        // place; the handle names the replaced one; the file stops.
+        f.fail_next_rewrite_past_rename();
+        let refused = f
+            .rewrite(vec![record_object(7, vec![]), record_object(8, vec![])], 9)
+            .expect_err("the reopen is refused");
+        assert!(matches!(refused, RewriteFail::PastRename(_)), "{refused:?}");
+        assert!(f.is_stopped(), "the file is stopped for the uptime");
+        assert_eq!(f.coverage(), 9, "the fence the rewritten file carries");
+        f.append(10, vec![]).expect("a stopped file answers Ok and writes nothing");
+        f.append_or_report(11, vec![]);
+        f.fence(20).expect("a fence on a stopped file is a no-op");
+        assert_eq!(f.coverage(), 9, "the claim never rises past the stop");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            "{\"at\":7}\n{\"at\":8}\n{\"covered\":9}\n",
+            "the rewritten file, whole, and nothing after it"
+        );
+        drop(f);
+        let (reopened, entries) =
+            LineFile::open(dir.path(), MASKED_FILE, 20, |_| true).expect("reopen");
+        assert_eq!(entries.iter().map(|(at, _)| *at).collect::<Vec<_>>(), vec![7, 8]);
+        assert_eq!(reopened.coverage(), 9, "the next open re-derives from 10");
+        assert!(!reopened.is_stopped());
     }
 
     /// The attest store's append (SO-I5 (d)) is synced through its own line,

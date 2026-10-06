@@ -910,6 +910,10 @@ fn doc_states_the_upload_its_pins_and_its_refusals() {
         "the idle bound, 30 s",
         "the transfer bound, 10 minutes",
         "the floor, 256 MiB",
+        "CONSTANT HALF",
+        "twice the newest checkpoint's size plus one maximal segment",
+        "re-read as each checkpoint lands",
+        "the cadence's byte bound",
         "AUTH-4.70",
         "takes no `Serial`",
         "crates/skepd/tests/it/fixtures/media/uploads.json",
@@ -959,6 +963,52 @@ fn doc_states_the_upload_its_pins_and_its_refusals() {
     assert_eq!(fixture["refusals"]["deposit_refused"].as_u64(), Some(507));
     assert_eq!(fixture["refusals"]["index_rebuilding"].as_u64(), Some(503));
     assert_eq!(fixture["refusals"]["upload_busy"].as_u64(), Some(503));
+}
+
+/// THE `durability` FACE AND THE FEED's COMPACTION AT THE CHECKPOINT (P10:
+/// no face names a retry that cannot succeed; jw-R3, jw-R4): §Rejections'
+/// `retry` row says what a retry-class answer at a full volume means — the
+/// operation did nothing, no reissue succeeds until the operator frees the
+/// room, the operator stream names it, the person's act is to tell the
+/// operator — and §Rejection codes' `durability` entry says the same of the
+/// code, the disposition staying `retry`; the old "durability hiccup" is
+/// gone from both. §The change feed says the five feed files are compacted
+/// after each checkpoint the daemon's thread lands, while serving, with the
+/// stop a rewrite failed past its rename carries. The daemon's words are
+/// pinned in `changes.rs`; this pins that the contract says so.
+#[test]
+fn doc_states_the_durability_faces_words_and_the_compaction_at_the_checkpoint() {
+    let rejections = prose("\n## Rejections", &["\n### Rejection codes"]);
+    for fact in [
+        "`\"retry\"` — the operation did nothing",
+        "where the cause is the volume's room",
+        "NO reissue succeeds until the operator frees it",
+        "the operator stream names it",
+        "never to reissue blindly",
+    ] {
+        assert!(rejections.contains(fact), "§Rejections says {fact:?}");
+    }
+    assert!(!rejections.contains("hiccup"), "the retry row names no hiccup");
+    let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
+    for fact in [
+        "`durability` (the",
+        "the operation did nothing — retry",
+        "FULL VOLUME",
+        "no retry succeeds before it",
+    ] {
+        assert!(codes.contains(fact), "§Rejection codes says {fact:?}");
+    }
+    assert!(!codes.contains("hiccup"));
+    let feed = prose("\n## The change feed", &["\n## The other endpoints"]);
+    for fact in [
+        "COMPACTED to the journal's reclaim floor",
+        "after each checkpoint the daemon's own",
+        "checkpoint thread lands, while serving",
+        "STOPS that file for the uptime",
+        "fails no write",
+    ] {
+        assert!(feed.contains(fact), "§The change feed says {fact:?}");
+    }
 }
 
 /// THE UPLOAD SETTING, THE DEFAULT LIMIT, THE CREATION's GATE, THE WINDOW,

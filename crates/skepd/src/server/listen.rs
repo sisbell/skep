@@ -30,7 +30,7 @@ use crate::media::serve::Progress;
 #[cfg(feature = "test-hooks")]
 use crate::media::serve::STREAM_HOLD;
 use crate::notice;
-use crate::write_path::StreamStep;
+use crate::write_path::{CheckpointSignal, StreamStep, Woken};
 
 /// The request worker count `skepd` serves with when the operator names
 /// none — held HERE rather than in the binary because it is the FIFTH TERM
@@ -114,6 +114,11 @@ pub struct Skepd {
     /// at once, and the shutdown joins it.
     pruner: Option<JoinHandle<()>>,
     cadence: Arc<Cadence>,
+    /// THE CHECKPOINT THREAD: waits on the write path's signal, runs the
+    /// checkpoint the kernel's deferred cadence calls for, off the guard
+    /// ([`checkpoint_on_due`]); the stop wakes it at once, and the shutdown
+    /// joins it — a run in flight is let finish.
+    checkpointer: Option<JoinHandle<()>>,
     port: u16,
 }
 
@@ -139,6 +144,20 @@ impl std::fmt::Debug for Skepd {
 /// `accept` at once, so open streams never occupy the op pool. The
 /// [`Skepd`] it answers IS the running server: dropping it stops the server,
 /// which is why the type is `#[must_use]`.
+///
+/// TWO THREADS OF THE DAEMON's OWN run beside the workers: the pruner's,
+/// on its cadence, and THE CHECKPOINT THREAD, which waits on the write
+/// path's signal and runs the checkpoint the kernel's DEFERRED cadence
+/// calls for — every 1024 commits or the byte bound, whichever first — off
+/// the write path's guard, so no write waits for it; it re-reads the byte
+/// bound and the media floor from the checkpoint that landed, compacts the
+/// change feed's files to the journal's reclaim floor, and says a failure
+/// once (`Daemon::service_the_checkpoint`). A served daemon's: an EMBEDDER
+/// ROUTING BY HAND through [`Daemon::route`] gets no thread and services
+/// the flag itself — `Daemon::checkpoint_now` through the test seam, or its
+/// own call to the kernel's `checkpoint` — or takes the kernel's backstop,
+/// which runs the checkpoint inline on the committing thread at every second
+/// crossing and never lets the window grow unbounded.
 ///
 /// PRECONDITION: `workers >= 1`. A count of zero asks for a server that
 /// serves nothing, which is a caller's bug rather than an outcome, so it
@@ -262,6 +281,27 @@ pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
             None
         }
     };
+    // THE CHECKPOINT THREAD, in the pruner's form: spawned fallibly, named,
+    // waiting on the write path's signal, stopped and joined at shutdown. A
+    // refused thread costs the deferral and nothing of the serving — the
+    // kernel's backstop then runs the checkpoint inline at every second
+    // crossing — and is said.
+    let checkpointer = {
+        let daemon = Arc::clone(&daemon);
+        thread::Builder::new()
+            .name("skepd-checkpoint".into())
+            .spawn(move || checkpoint_on_due(&daemon, daemon.writes.checkpoint_signal()))
+    };
+    let checkpointer = match checkpointer {
+        Ok(h) => Some(h),
+        Err(e) => {
+            notice::line(format_args!(
+                "checkpoint thread: the OS refused it ({e}); the kernel's backstop runs each \
+                 second crossing's checkpoint inline on the committing thread instead"
+            ));
+            None
+        }
+    };
     let server = Skepd {
         daemon,
         _listener: listener,
@@ -270,6 +310,7 @@ pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
         stop,
         pruner,
         cadence,
+        checkpointer,
         port,
     };
     match refused {
@@ -333,6 +374,11 @@ impl Skepd {
     /// Calling it is how a caller learns the stop *finished*; a server that
     /// is merely dropped stops the same way, so a panic between [`serve`]
     /// and here cannot leak the threads or strand the lock.
+    ///
+    /// The checkpoint thread is stopped and joined last: a checkpoint in
+    /// flight is LET FINISH — the data directory is the beneficiary, a
+    /// landed base in place of a `.tmp` the next open would remove — and no
+    /// further one begins once the stop is asked.
     pub fn shutdown(mut self) {
         self.stop_and_join();
     }
@@ -363,6 +409,32 @@ impl Skepd {
         self.cadence.stop();
         if let Some(h) = self.pruner.take() {
             let _ = h.join();
+        }
+        // The checkpoint thread: woken out of its wait at once, joined — a
+        // checkpoint in flight let finish, no further one begun.
+        self.daemon.writes.checkpoint_signal().stop();
+        if let Some(h) = self.checkpointer.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+/// THE CHECKPOINT THREAD's LOOP: while the kernel's due flag stands and no
+/// stop has been asked, run the checkpoint the cadence calls for with its
+/// consequences (`Daemon::service_the_checkpoint`) — again where a crossing
+/// during the run set the flag anew — then wait on the write path's signal
+/// for the next crossing, or the stop. A flag set before the thread existed
+/// (a crossing inside the open's own commits) is read at the first pass,
+/// before any wait. A failure is the operator's line, once, and the next
+/// crossing's to retry: the kernel clears the flag as it starts, so a
+/// kernel that cannot checkpoint is not asked again until a commit crosses.
+fn checkpoint_on_due(daemon: &Daemon, signal: &CheckpointSignal) {
+    loop {
+        while !signal.is_stopped() && daemon.checkpoint_is_due() {
+            daemon.service_the_checkpoint();
+        }
+        if signal.wait() == Woken::Stop {
+            return;
         }
     }
 }

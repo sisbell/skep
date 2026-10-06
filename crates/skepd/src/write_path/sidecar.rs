@@ -76,12 +76,17 @@
 //!
 //! The file — and the entries replayed from it — are bounded by the
 //! journal's own retention, not by the world's age. Positions the journal has
-//! reclaimed are unanswerable across the whole history surface, so at open
-//! the sidecar drops its entries below that floor and rewrites itself
-//! around them (see [`CommitsLog::open`]). Without that the feed's memory
-//! would be the only structure in the daemon that grows with total commits
-//! ever made rather than with commits still reachable, and it is fully
-//! resident.
+//! reclaimed are unanswerable across the whole history surface, so the
+//! sidecar drops its entries below that floor and rewrites itself around
+//! them — at open (see [`CommitsLog::open`]) and, the floor moving at a
+//! checkpoint and at no other moment, after each checkpoint the daemon's
+//! checkpoint thread lands ([`CommitsLog::compact_to`], under the feed's
+//! lock). Without that the feed's memory would be the only structure in the
+//! daemon that grows with total commits ever made rather than with commits
+//! still reachable, and it is fully resident. A rewrite that fails PAST its
+//! rename while serving leaves the append handle naming the replaced file,
+//! so it STOPS this file for the uptime as a failed append does — said once,
+//! the next open re-deriving — and never fails an op (P22).
 //!
 //! The sidecar is written under the write path's serialization lock — held
 //! by `write_path/`, which takes that lock and calls the feed's `record`
@@ -94,7 +99,7 @@
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
@@ -492,6 +497,8 @@ pub(super) struct Walked {
 /// the fence, and the bookkeeping the feed's derived structures key on.
 pub(super) struct CommitsLog {
     file: File,
+    /// The data dir the file lives in — what a rewrite re-creates it under.
+    dir: PathBuf,
     /// Every enumerable position above `min_since`, in order — and every one
     /// of them this file stands behind: `Recorded` means testimony whose
     /// document names this daemon has PARSED, [`demote_malformed_names`]
@@ -551,7 +558,9 @@ pub(super) struct CommitsLog {
     last_time: u64,
     /// The file's length — the offset the next appended line lands at.
     len: u64,
-    /// Set by the first FAILED append of this uptime, after which this file
+    /// Set by the first FAILED append of this uptime — or a compaction's
+    /// rewrite failed PAST its rename ([`CommitsLog::compact_to`]), after
+    /// which the handle names a file no open reads — after which this file
     /// takes no further line.
     ///
     /// THE REOPEN WALK CANNOT REACH AN INTERIOR LOSS. [`CommitsLog::open`]
@@ -569,6 +578,12 @@ pub(super) struct CommitsLog {
     /// append, so this uptime answers with full testimony; what stops is
     /// what the next open reads.
     stopped: bool,
+    /// The test seam behind `crate::Daemon::fail_the_feeds_next_rewrite_past_rename`:
+    /// the next compaction's rewrite fails AFTER its rename, at the reopen
+    /// of the new file, so the stop that failure carries is reachable
+    /// without a disk that fails on cue.
+    #[cfg(any(test, feature = "test-hooks"))]
+    fail_next_rewrite_past_rename: bool,
 }
 
 impl CommitsLog {
@@ -697,38 +712,113 @@ impl CommitsLog {
         // the feed's memory that does not depend on the journal, and
         // discarding it over a floor nobody can locate would lose the only
         // record of those commits that still exists.
-        if let Some(floor) = retention_floor(engine) {
-            min_since = min_since.max(floor.saturating_sub(1));
-        }
-        // The rewrite is unconditional under a discarded fence, so a journal
-        // that later grows past that number cannot resurrect it from the
-        // file.
-        let mut rewritten = false;
-        if stale_fence || entries.keys().next().is_some_and(|&oldest| oldest <= min_since) {
-            entries = entries.split_off(&min_since.saturating_add(1));
-            (file, offsets, len) = rewrite(dir, &entries, min_since)?;
-            rewritten = true;
-            walked.retain(|w| w.at > min_since);
+        let floor_fence = retention_floor(engine).map(|floor| floor.saturating_sub(1));
+        let mut log = CommitsLog {
+            file,
+            dir: dir.to_path_buf(),
+            entries,
+            offsets,
+            min_since,
+            open_head: head,
+            rewritten: false,
+            last_time: 0,
+            len,
+            stopped: false,
+            #[cfg(any(test, feature = "test-hooks"))]
+            fail_next_rewrite_past_rename: false,
+        };
+        // The compaction is the same rewrite the thread runs after each
+        // checkpoint, through the same method; at open a failure is fatal
+        // either side of the rename. The rewrite is unconditional under a
+        // discarded fence, so a journal that later grows past that number
+        // cannot resurrect it from the file — the one forcing the thread's
+        // compaction never makes, since a fence above the head is a thing
+        // only an open meets.
+        log.compact_inner(floor_fence.unwrap_or(0), stale_fence).map_err(RewriteFail::into_io)?;
+        if log.rewritten {
+            walked.retain(|w| w.at > log.min_since);
         }
         // The entries are final here, and this is where they become ones this
         // file stands behind: a line whose document names are malformed is
-        // testimony this daemon cannot repeat, and it answers BARE.
-        demote_malformed_names(&mut entries);
-        let last_time = entries.values().filter_map(CommitMeta::time).max().unwrap_or(0);
-        Ok((
-            CommitsLog {
-                file,
-                entries,
-                offsets,
-                min_since,
-                open_head: head,
-                rewritten,
-                last_time,
-                len,
-                stopped: false,
-            },
-            walked,
-        ))
+        // testimony this daemon cannot repeat, and it answers BARE — in
+        // memory alone, AFTER any rewrite above, which writes the line as it
+        // was read: this file is the sole surviving record of those commits.
+        demote_malformed_names(&mut log.entries);
+        log.last_time = log.entries.values().filter_map(CommitMeta::time).max().unwrap_or(0);
+        Ok((log, walked))
+    }
+
+    /// COMPACT the log to the reclaim floor's fence: drop every entry at or
+    /// below `min_since` and rewrite the file around the survivors behind
+    /// that fence — `true` when anything was dropped, `false` when the file
+    /// already stood above the fence and nothing was written. The ONE
+    /// rewrite the log has, run at two moments by one method: at
+    /// [`CommitsLog::open`], where the reclaim floor is probed once and a
+    /// failure is fatal, and after each checkpoint the daemon's checkpoint
+    /// thread lands, under the feed's lock, where the floor has just moved
+    /// and a failure is the thread's to report. The fence never recedes: a
+    /// `min_since` below the one in force is the floor as it was, and drops
+    /// nothing.
+    ///
+    /// THE STOP, carried in from the open where it was moot: a rewrite that
+    /// fails BEFORE its rename leaves the old file whole and this handle
+    /// naming it — nothing lost, the next checkpoint's compaction tries
+    /// again; one that fails PAST its rename leaves this handle naming the
+    /// REPLACED file, which no open reads, so the file is STOPPED for the
+    /// uptime as a failed append stops it — the resident entries are
+    /// trimmed all the same and serve this uptime, and the next open
+    /// re-derives from the rewritten file's own fence. Said once, here, as
+    /// the append's stop is said at the append.
+    pub(super) fn compact_to(&mut self, min_since: u64) -> Result<bool, RewriteFail> {
+        self.compact_inner(min_since, false)
+    }
+
+    /// [`CommitsLog::compact_to`], with the open's one extra: `force` writes
+    /// the file even where nothing is dropped — a fence that described
+    /// another journal has been discarded from memory and must leave the
+    /// file too. The fence in force never recedes, and may ADVANCE past a
+    /// run of positions nobody recorded: a fence below the oldest entry
+    /// drops nothing, writes nothing unforced, and is kept as the smallest
+    /// `since` the feed honors.
+    fn compact_inner(&mut self, min_since: u64, force: bool) -> Result<bool, RewriteFail> {
+        let fence = min_since.max(self.min_since);
+        let drops = self.entries.keys().next().is_some_and(|&oldest| oldest <= fence);
+        self.min_since = fence;
+        if !force && !drops {
+            return Ok(false);
+        }
+        self.entries = self.entries.split_off(&fence.saturating_add(1));
+        self.rewrite_whole()?;
+        Ok(true)
+    }
+
+    /// Rewrite the whole file from the resident entries behind the fence in
+    /// force ([`rewrite`]), the handle, the offsets and the length moving
+    /// with it; the stop on a failure past the rename.
+    fn rewrite_whole(&mut self) -> Result<(), RewriteFail> {
+        #[cfg(any(test, feature = "test-hooks"))]
+        let fail_past_rename = std::mem::take(&mut self.fail_next_rewrite_past_rename);
+        #[cfg(not(any(test, feature = "test-hooks")))]
+        let fail_past_rename = false;
+        match rewrite(&self.dir, &self.entries, self.min_since, fail_past_rename) {
+            Ok((file, offsets, len)) => {
+                self.file = file;
+                self.offsets = offsets;
+                self.len = len;
+                self.rewritten = true;
+            }
+            Err(RewriteFail::PastRename(e)) => {
+                self.stopped = true;
+                self.rewritten = true;
+                crate::notice::line(format_args!(
+                    "commits.log rewrite failed past its rename: {e}; this file takes no further \
+                     line, so the next open re-derives from its fence as bare entries"
+                ));
+                return Err(RewriteFail::PastRename(e));
+            }
+            Err(before) => return Err(before),
+        }
+        Ok(())
     }
 
     /// Record one committed write at ack time; `Some` — the [`LineOffset`]
@@ -922,7 +1012,7 @@ impl CommitsLog {
 
 /// The oldest position the journal can still answer, or `None` when it can
 /// still answer genesis (nothing has been reclaimed) — the bound the feed's
-/// retention follows.
+/// retention follows, at open and after each checkpoint alike.
 ///
 /// Asked by probing position 0 through the same public replay everything
 /// else here uses. The probe is free either way: genesis IS the base a
@@ -931,10 +1021,46 @@ impl CommitsLog {
 /// before touching a segment. Every other refusal — corrupt, I/O,
 /// unjournaled — reports no floor, so the feed keeps what it has rather
 /// than discarding entries over a fault that may be transient.
-fn retention_floor(engine: &Engine) -> Option<u64> {
+pub(super) fn retention_floor(engine: &Engine) -> Option<u64> {
     match engine.world_at(Seq(0)) {
         Err(HistoryError::Reclaimed { floor, .. }) => Some(floor.map(|f| f.0).unwrap_or(0)),
         _ => None,
+    }
+}
+
+/// How a feed file's REWRITE failed — on which side of the rename, which is
+/// the whole of what the caller acts on. The rename is the one atomic step:
+/// before it the old file stands whole and the handle still names it, so
+/// nothing is lost and the next compaction tries again; past it the new
+/// file is in place and the handle names the REPLACED one, which no open
+/// reads, so the file is STOPPED for the uptime ([`CommitsLog::compact_to`],
+/// `LineFile::rewrite`). At open either side is fatal, through
+/// [`RewriteFail::into_io`]; while serving the thread reports and moves on.
+#[derive(Debug)]
+pub(super) enum RewriteFail {
+    /// The temp file's creation, write or sync, or the rename itself: the
+    /// old file is whole and still the one the handle names.
+    BeforeRename(io::Error),
+    /// The reopen of the renamed file: the new file is in place and whole,
+    /// and the handle names the one it replaced.
+    PastRename(io::Error),
+}
+
+impl RewriteFail {
+    /// The failure as the open reports it — the I/O error, either side.
+    pub(super) fn into_io(self) -> io::Error {
+        match self {
+            RewriteFail::BeforeRename(e) | RewriteFail::PastRename(e) => e,
+        }
+    }
+}
+
+impl std::fmt::Display for RewriteFail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RewriteFail::BeforeRename(e) => write!(f, "before its rename: {e}"),
+            RewriteFail::PastRename(e) => write!(f, "past its rename: {e}"),
+        }
     }
 }
 
@@ -948,18 +1074,25 @@ fn retention_floor(engine: &Engine) -> Option<u64> {
 /// The alternative — truncating in place — has a window in which the file
 /// says the feed remembers nothing, and a crash there would cost the
 /// surviving metadata for no reason, since it is exactly the metadata the
-/// journal can no longer reconstruct.
+/// journal can no longer reconstruct. Which side of the rename a failure
+/// fell on travels as [`RewriteFail`], since the two leave different files
+/// behind.
 ///
 /// The temp is `commits.log.compact`, a fixed name — safe because
 /// [`crate::server::Daemon::open`]'s precondition admits one live kernel
 /// per data dir. It is not cleaned up: a crash or an I/O failure between
 /// the create and the rename leaves it until the next compaction truncates
 /// it, which is the price of the rename being the only atomic step.
+///
+/// `fail_past_rename` is the test seam: the reopen refused, so the
+/// past-rename arm is reachable without a disk that fails on cue; `false`
+/// outside a test build.
 fn rewrite(
     dir: &Path,
     entries: &BTreeMap<u64, CommitMeta>,
     min_since: u64,
-) -> io::Result<(File, BTreeMap<u64, LineOffset>, u64)> {
+    fail_past_rename: bool,
+) -> Result<(File, BTreeMap<u64, LineOffset>, u64), RewriteFail> {
     let path = dir.join(SIDECAR_FILE);
     let tmp = dir.join(format!("{SIDECAR_FILE}.compact"));
     let mut out = Vec::new();
@@ -969,12 +1102,25 @@ fn rewrite(
         offsets.insert(*at, LineOffset(out.len() as u64));
         out.extend_from_slice(&entry_line(*at, meta));
     }
-    let mut f = File::create(&tmp)?;
-    f.write_all(&out)?;
-    f.sync_all()?;
-    drop(f);
-    std::fs::rename(&tmp, &path)?;
-    let file = OpenOptions::new().create(true).read(true).append(true).open(&path)?;
+    let renamed = (|| -> io::Result<()> {
+        let mut f = File::create(&tmp)?;
+        f.write_all(&out)?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, &path)
+    })();
+    renamed.map_err(RewriteFail::BeforeRename)?;
+    if fail_past_rename {
+        return Err(RewriteFail::PastRename(io::Error::other(
+            "test seam: the rewritten file's reopen refused",
+        )));
+    }
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .append(true)
+        .open(&path)
+        .map_err(RewriteFail::PastRename)?;
     Ok((file, offsets, out.len() as u64))
 }
 
@@ -1330,6 +1476,7 @@ impl CommitsLog {
         let file = File::open(&path).expect("a read-only handle");
         CommitsLog {
             file,
+            dir: dir.to_path_buf(),
             entries: BTreeMap::new(),
             offsets: BTreeMap::new(),
             min_since: 0,
@@ -1338,7 +1485,26 @@ impl CommitsLog {
             last_time: 0,
             len: 0,
             stopped: false,
+            fail_next_rewrite_past_rename: false,
         }
+    }
+}
+
+impl CommitsLog {
+    /// The test seam behind `crate::Daemon::fail_the_feeds_next_rewrite_past_rename`:
+    /// the next compaction's rewrite fails at the reopen of the file it has
+    /// just renamed into place — the past-rename arm, and the stop it
+    /// carries. Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(super) fn fail_next_rewrite_past_rename(&mut self) {
+        self.fail_next_rewrite_past_rename = true;
+    }
+
+    /// The test seam's reading of the stop: whether this file takes no
+    /// further line. Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(super) fn is_stopped(&self) -> bool {
+        self.stopped
     }
 }
 

@@ -22,12 +22,15 @@
 //! yes-or-no would show the board-wide figure free of charge; as written,
 //! its refusal's offset is that figure PRICED at the headroom's transfer —
 //! ms4-E1, accepted and named); THE FLOOR, the volume's free space held
-//! above [`FLOOR_BYTES`] so a deposit never takes the journal's last bytes,
-//! read off the host and showing no figure — AT THE CREATION, on no
-//! declared length, before the partial and the record, and per chunk as
-//! the body is written ([`MediaGate::admit_creation`], [`MediaGate::admit_bytes`];
-//! M-I5 (f): every record, lease and retirement the store appends descends
-//! from a creation or a body byte the floor admitted). Beside the own
+//! above the floor IN FORCE — the larger of the constant [`FLOOR_BYTES`]
+//! and twice the newest checkpoint's size plus one maximal segment, re-read
+//! as each checkpoint lands ([`MediaGate::floor_in_force`]) — so a deposit
+//! never takes the journal's last bytes, read off the host and showing no
+//! figure — AT THE CREATION, on no declared length, before the partial and
+//! the record, and per chunk as the body is written
+//! ([`MediaGate::admit_creation`], [`MediaGate::admit_bytes`]; M-I5 (f):
+//! every record, lease and retirement the store appends descends from a
+//! creation or a body byte the floor admitted). Beside the own
 //! scope, THE STANDING-UPLOADS BOUND ([`MediaGate::admit_creation`]; the
 //! wire's fourth scope, `standing`): a principal holds at most
 //! `MAX_STANDING_UPLOADS` standing uploads, counted off its own records, a
@@ -82,13 +85,15 @@ use std::collections::HashSet;
 use std::io;
 use std::path::Path;
 #[cfg(any(test, feature = "test-hooks"))]
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::{Mutex, RwLock};
 use serde_json::Value;
 use skep_blobs::{Lease, LeaseState, Store, UploadId};
+use skep_kernel::MAX_SEGMENT_LEN;
 use skep_namespace::PrincipalId;
 
 use super::cell::{Cell, HASH_BYTES};
@@ -123,10 +128,33 @@ pub(crate) const LEASE_INTERVAL_DEFAULT_MS: u64 = 7 * 24 * 3600 * 1000;
 /// compacts it away at open.
 pub(crate) const LEASE_HORIZON_MS: u64 = 30 * 24 * 3600 * 1000;
 
-/// THE FLOOR — 256 MiB of the volume's free space, INTERIM: the room the
-/// journal's next segments and checkpoints are kept, which no deposit may
-/// take; a PUT is refused as its body is written once a chunk would take the
-/// volume below it. The floor reads the host and shows no figure.
+/// THE FLOOR's CONSTANT HALF — 256 MiB of the volume's free space, INTERIM
+/// (`media.md` Op inventory 1, "THE LARGER OF 256 MiB AND TWICE THE NEWEST
+/// CHECKPOINT's SIZE PLUS ONE MAXIMAL SEGMENT"; the register M-I5 (f)): the
+/// least room the journal's next segments and checkpoints are kept, which
+/// no deposit may take. THE FLOOR IN FORCE is the larger of this and the
+/// scaling half — twice the newest checkpoint's size plus one maximal
+/// segment ([`MAX_SEGMENT_LEN`]) — re-read as each checkpoint lands
+/// ([`MediaGate::floor_in_force`]; the daemon's checkpoint thread sets it
+/// through [`MediaGate::set_floor`], and the open reads it once off the
+/// newest checkpoint on disk): a checkpoint is written WHOLE beside the two
+/// retained before the oldest is pruned, and the segment in flight is
+/// written beside it. A PUT is refused at its creation where the free space
+/// already stands below the floor in force, and as its body is written once
+/// a chunk would take the volume below it. The floor reads the host and
+/// shows no figure (M-I6 (h)).
+///
+/// THE GUARANTEE's CONDITION: the floor holds the journal writable THROUGH
+/// ITS NEXT CHECKPOINT only beside a cadence that bounds the journal's BYTES
+/// between checkpoints — the daemon's, at a quarter of the newest checkpoint
+/// and no less than 24 MiB (`server.rs`'s `CHECKPOINT_BYTES_SHARE` and
+/// `CHECKPOINT_BYTES_FLOOR`), with ONE WINDOW OF GRACE: the cadence is
+/// deferred to the checkpoint thread, and a second crossing before the
+/// thread has serviced the first runs inline as the backstop, so the journal
+/// between two checkpoints is at most two windows. Below the crossover
+/// (a checkpoint under ~64 MiB, where the constant half is the larger)
+/// the constant covers the next checkpoint, two windows and a segment with
+/// room; above it the scaling half does.
 pub(crate) const FLOOR_BYTES: u64 = 256 * 1024 * 1024;
 
 /// The limits in force: the venue's record, or the daemon's defaults where
@@ -271,6 +299,13 @@ pub(crate) struct MediaGate {
     /// source, kept for the startup line; `None` where the host answered
     /// none.
     capacity: Option<u64>,
+    /// THE FLOOR IN FORCE ([`FLOOR_BYTES`]'s card): the larger of the
+    /// constant and twice the newest checkpoint's size plus one maximal
+    /// segment — set at the open off the newest checkpoint on disk and by
+    /// the checkpoint thread as each lands, read at every creation and every
+    /// chunk. An atomic rather than a lock: one load per read, and a store
+    /// that lands whole.
+    floor: AtomicU64,
     /// THE HOLD (clause (5)): the uploads a stream owns right now, in
     /// skepd's memory and no store — a PUT naming one is refused while it
     /// is held; the hold ends with the stream's connection.
@@ -310,6 +345,7 @@ impl MediaGate {
             limits: RwLock::new(Limits::defaults_for(capacity)),
             options,
             capacity,
+            floor: AtomicU64::new(FLOOR_BYTES),
             held: Mutex::new(HashSet::new()),
             index: Arc::new(CellIndex::new()),
             #[cfg(any(test, feature = "test-hooks"))]
@@ -352,9 +388,51 @@ impl MediaGate {
     }
 
     /// The line the startup log names the limits in force by — the record,
-    /// or the default and the capacity it was read from.
+    /// or the default and the capacity it was read from — and the floor in
+    /// force beside them, with its two halves.
     pub(crate) fn startup_line(&self) -> String {
-        self.limits.read().log_line(self.capacity)
+        format!("{}; {}", self.limits.read().log_line(self.capacity), self.floor_line())
+    }
+
+    /// THE FLOOR IN FORCE for a newest checkpoint of `newest_checkpoint_len`
+    /// bytes (`None`: no checkpoint yet): the larger of [`FLOOR_BYTES`] and
+    /// twice that size plus one maximal segment — the room the next
+    /// checkpoint takes written whole beside the two retained, and the
+    /// segment in flight beside it (`media.md` Op inventory 1; M-I5 (f)).
+    /// Saturating: a length no volume could hold answers a floor no volume
+    /// could clear, which refuses every deposit rather than admitting one
+    /// the arithmetic wrapped.
+    pub(crate) fn floor_in_force(newest_checkpoint_len: Option<u64>) -> u64 {
+        let scaled = newest_checkpoint_len
+            .map_or(0, |c| c.saturating_mul(2).saturating_add(MAX_SEGMENT_LEN));
+        FLOOR_BYTES.max(scaled)
+    }
+
+    /// The floor in force, as [`MediaGate::admit_creation`] and
+    /// [`MediaGate::admit_bytes`] read it.
+    pub(crate) fn floor(&self) -> u64 {
+        self.floor.load(Ordering::Acquire)
+    }
+
+    /// Set the floor in force — the daemon's, at the open off the newest
+    /// checkpoint on disk and by the checkpoint thread as each lands
+    /// ([`MediaGate::floor_in_force`] computes it). The next creation and
+    /// the next chunk read it.
+    pub(crate) fn set_floor(&self, bytes: u64) {
+        self.floor.store(bytes, Ordering::Release);
+    }
+
+    /// The floor's half of the startup line: the floor in force and the
+    /// constant it is never below.
+    fn floor_line(&self) -> String {
+        format!(
+            "the floor in force {} bytes of the volume's free space (never below the constant {} \
+             bytes; twice the newest checkpoint's size plus one maximal segment of {} bytes \
+             above it, re-read as each checkpoint lands)",
+            self.floor(),
+            FLOOR_BYTES,
+            MAX_SEGMENT_LEN
+        )
     }
 
     /// TEST SEAM: the volume's capacity as read at the open — what the
@@ -479,15 +557,15 @@ impl MediaGate {
     /// record (P13; M-I5 (f), M-I6 (b)): THE STANDING-UPLOADS BOUND first —
     /// the principal's own record, counted off its standing uploads — then
     /// THE FLOOR, read on no declared length: the volume's free space
-    /// already below [`FLOOR_BYTES`] refuses the creation that would append
-    /// a record no scope counts. The resume reads neither: it creates
-    /// nothing.
+    /// already below the floor in force ([`MediaGate::floor`], never the
+    /// constant alone) refuses the creation that would append a record no
+    /// scope counts. The resume reads neither: it creates nothing.
     pub(crate) fn admit_creation(&self, principal: PrincipalId, now_ms: u64) -> Result<(), Scope> {
         let key = Self::key(principal);
         if self.store.uploads_of(&key, now_ms).len() >= MAX_STANDING_UPLOADS {
             return Err(Scope::Standing);
         }
-        if self.free_space() < FLOOR_BYTES {
+        if self.free_space() < self.floor() {
             return Err(Scope::Floor);
         }
         Ok(())
@@ -495,9 +573,9 @@ impl MediaGate {
 
     /// THE GATE AS THE BODY IS WRITTEN: would the next `n` bytes of the
     /// upload `id`, of which `written` are already in its partial, pass the
-    /// own scope, the venue's total, or the floor — in that order? The own
-    /// scope and the total count this upload at its bytes written (the
-    /// record holds its durable offset, which lags by at most a grain).
+    /// own scope, the venue's total, or the floor in force — in that order?
+    /// The own scope and the total count this upload at its bytes written
+    /// (the record holds its durable offset, which lags by at most a grain).
     pub(crate) fn admit_bytes(
         &self,
         principal: PrincipalId,
@@ -521,7 +599,7 @@ impl MediaGate {
                 return Err(Scope::Venue);
             }
         }
-        if self.free_space().saturating_sub(n) < FLOOR_BYTES {
+        if self.free_space().saturating_sub(n) < self.floor() {
             return Err(Scope::Floor);
         }
         Ok(())
@@ -778,6 +856,67 @@ mod tests {
         gate.set_free_space(Some(0));
         assert_eq!(gate.admit_creation(p, now), Err(Scope::Standing), "the bound is read first, the own record before the host's state");
         assert_eq!(Scope::Standing.token(), "standing");
+    }
+
+    /// THE FLOOR IN FORCE (M-I5 (f), the floor sized to keep the journal
+    /// writable THROUGH ITS NEXT CHECKPOINT; M-I6 (f), (h)): never below the
+    /// constant, and never below twice the newest checkpoint's size plus one
+    /// maximal segment — the constant alone with no checkpoint and under a
+    /// small one, the scaling half above the crossover — saturating on a
+    /// length no volume holds. A gate opens at the constant; the floor set
+    /// from a 300 MiB checkpoint refuses a creation and a chunk the constant
+    /// would admit, naming the scope and no figure; a landed checkpoint
+    /// small again moves it back. The startup line names the floor in force
+    /// beside the default limit.
+    #[test]
+    fn the_floor_in_force_scales_with_the_newest_checkpoint_and_never_below_the_constant() {
+        let mib = 1024 * 1024;
+        assert_eq!(MediaGate::floor_in_force(None), FLOOR_BYTES, "no checkpoint: the constant");
+        assert_eq!(MediaGate::floor_in_force(Some(0)), FLOOR_BYTES);
+        assert_eq!(MediaGate::floor_in_force(Some(16 * mib)), FLOOR_BYTES, "a small checkpoint");
+        assert_eq!(MAX_SEGMENT_LEN, 128 * mib, "one maximal segment, the journal's reader ceiling");
+        let crossover = (FLOOR_BYTES - MAX_SEGMENT_LEN) / 2;
+        assert_eq!(MediaGate::floor_in_force(Some(crossover)), FLOOR_BYTES, "at the crossover, equal");
+        assert_eq!(
+            MediaGate::floor_in_force(Some(crossover + 1)),
+            FLOOR_BYTES + 2,
+            "one byte past it, the scaling half"
+        );
+        assert_eq!(
+            MediaGate::floor_in_force(Some(300 * mib)),
+            600 * mib + MAX_SEGMENT_LEN,
+            "twice the newest checkpoint plus one maximal segment"
+        );
+        assert_eq!(MediaGate::floor_in_force(Some(u64::MAX)), u64::MAX, "saturating, never wrapped");
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let gate = MediaGate::open_with(dir.path(), MediaOptions::default()).expect("the store opens");
+        assert_eq!(gate.floor(), FLOOR_BYTES, "a gate opens at the constant");
+        let now = gate.now_ms();
+        let p = PrincipalId(9);
+        let id = UploadId::parse("0123456789abcdef0123456789abcdef").unwrap();
+        gate.set_free_space(Some(400 * mib));
+        assert_eq!(gate.admit_creation(p, now), Ok(()), "400 MiB free clears the constant");
+        assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024, now), Ok(()));
+        gate.set_floor(MediaGate::floor_in_force(Some(300 * mib)));
+        assert_eq!(gate.floor(), 600 * mib + MAX_SEGMENT_LEN);
+        assert_eq!(gate.admit_creation(p, now), Err(Scope::Floor), "the floor in force refuses it");
+        assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024, now), Err(Scope::Floor), "…and a chunk");
+        assert_eq!(Scope::Floor.token(), "floor", "the scope, and no figure");
+        gate.set_free_space(Some(600 * mib + MAX_SEGMENT_LEN + 64 * 1024));
+        assert_eq!(gate.admit_creation(p, now), Ok(()), "room above the floor in force admits");
+        assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024, now), Ok(()), "a chunk that leaves it at the floor");
+        assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024 + 1, now), Err(Scope::Floor), "one byte more");
+        gate.set_floor(MediaGate::floor_in_force(Some(1 * mib)));
+        assert_eq!(gate.floor(), FLOOR_BYTES, "a small checkpoint landed: the constant again");
+        gate.set_free_space(Some(400 * mib));
+        assert_eq!(gate.admit_creation(p, now), Ok(()));
+        let line = gate.startup_line();
+        assert!(
+            line.contains("the floor in force") && line.contains(&FLOOR_BYTES.to_string()),
+            "the startup line names the floor in force beside the limit: {line}"
+        );
+        assert!(line.contains("one eighth of the volume's capacity"), "…beside the default: {line}");
     }
 
     /// THE WINDOW (ms5-R; the register M-I5 (b)): while the index is not

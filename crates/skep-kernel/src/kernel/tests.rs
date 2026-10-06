@@ -301,10 +301,16 @@ fn newest_checkpoint_is_none_then_what_its_header_claims() {
         <[u8; 32]>::from(<sha2::Sha256 as sha2::Digest>::digest(&full[88..])),
         "the body hash is the SHA-256 of the body written"
     );
+    assert_eq!(
+        newest.len,
+        full.len() as u64,
+        "the length is the file's: the header plus the body_len it claims"
+    );
 
     // Read off the header ALONE: cut to its first 88 bytes, the file
-    // claims the same — where a read through `load` would read, hash and
-    // decode a body that is no longer there, and refuse.
+    // claims the same — the length included, the header's claim and not a
+    // `stat` — where a read through `load` would read, hash and decode a
+    // body that is no longer there, and refuse.
     fs::write(&path, &full[..88]).unwrap();
     assert_eq!(
         kernel.newest_checkpoint(),
@@ -1151,6 +1157,47 @@ fn an_interval_restarts_its_window_at_the_crossing() {
         !cadence.charge_commit(0),
         "the crossing did not restart the window"
     );
+}
+
+/// The composite crosses on EITHER half, whichever first, and one crossing
+/// resets EVERY counter — the count's and the bytes' — so the half that did
+/// not cross starts its window afresh too; and the deferred arm crosses
+/// exactly when its inner policy does, the deferral being the caller's to
+/// read beside it, never a change to the test. Driven directly, so the
+/// counters are read rather than inferred from files.
+#[test]
+fn either_of_crosses_on_either_half_and_resets_both_and_deferred_crosses_as_its_inner() {
+    let either = CheckpointPolicy::EitherOf(
+        Box::new(CheckpointPolicy::EveryN(3)),
+        Box::new(CheckpointPolicy::JournalBytes(100)),
+    );
+    let mut cadence = Cadence::new(either.clone());
+    assert!(!cadence.charge_commit(10), "1 of 3, 10 of 100");
+    assert!(!cadence.charge_commit(10), "2 of 3, 20 of 100");
+    assert!(cadence.charge_commit(10), "the COUNT crosses first");
+    assert_eq!((cadence.commits_since_reset, cadence.bytes_since_reset), (0, 0), "both reset");
+    assert!(!cadence.charge_commit(50), "1 of 3, 50 of 100: a fresh byte window");
+    assert!(cadence.charge_commit(60), "the BYTES cross first, at 2 of 3");
+    assert_eq!((cadence.commits_since_reset, cadence.bytes_since_reset), (0, 0), "both reset");
+    assert!(!cadence.policy.deferred(), "a composite alone runs inline");
+
+    let mut deferred = Cadence::new(CheckpointPolicy::Deferred(Box::new(either)));
+    assert!(deferred.policy.deferred());
+    assert!(!deferred.charge_commit(10));
+    assert!(!deferred.charge_commit(10));
+    assert!(deferred.charge_commit(10), "the inner policy's crossing, exactly");
+    assert_eq!((deferred.commits_since_reset, deferred.bytes_since_reset), (0, 0));
+    assert!(deferred.charge_commit(100), "…and its byte half, 1 of 3 but 100 of 100");
+
+    // The byte bound moved under a running cadence: tested at the next
+    // commit against the counters as they stand, the window not re-charged.
+    let mut moved = Cadence::new(CheckpointPolicy::Deferred(Box::new(CheckpointPolicy::EitherOf(
+        Box::new(CheckpointPolicy::EveryN(1024)),
+        Box::new(CheckpointPolicy::JournalBytes(1_000_000)),
+    ))));
+    assert!(!moved.charge_commit(500));
+    assert!(moved.policy.set_bytes(std::num::NonZeroU64::new(600).unwrap()));
+    assert!(moved.charge_commit(100), "500 + 100 ≥ 600: the moved bound crosses");
 }
 
 #[test]

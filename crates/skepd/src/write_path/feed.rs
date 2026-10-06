@@ -32,7 +32,12 @@
 //! and held resident as its twin; and, in their line shape under a class of
 //! its own, the ATTEST STORE ([`AttestStore`], `attest.rs`, which states the
 //! class), whose slot for a position the page renders as the entry's `attest`
-//! member (`CommitMeta::entry`). The four twins:
+//! member (`CommitMeta::entry`). The five files `commits.log` and the four
+//! derived hold are COMPACTED to the journal's reclaim floor — at open, and
+//! after each checkpoint the daemon's checkpoint thread lands, the floor
+//! moving at a checkpoint and at no other moment ([`Feed::compact_below_reclaim_floor`],
+//! one rewrite for both moments, under this feed's lock); the attest store
+//! never (its class). The four twins:
 //!
 //! * the per-document POSITION INDEX (`index`: document → positions, keyed
 //!   by tumbler, so an account's documents and any content-prefix are one
@@ -111,7 +116,10 @@ use self::derived::{
     LineFile, INDEX_DOCS, INDEX_FILE, MASKED_FILE, OFFSETS_FILE, OFFSETS_OFFSET, STREAMS_FILE,
     STREAMS_OWNERS,
 };
-use super::sidecar::{report_malformed_names, Carrier, CommitMeta, CommitsLog, LineOffset, OpTerms};
+use super::sidecar::{
+    report_malformed_names, retention_floor, Carrier, CommitMeta, CommitsLog, LineOffset,
+    OpTerms, RewriteFail,
+};
 use super::classify::{classify, derived_docs, parse_dotted, Doc};
 use super::Signed;
 use crate::codec::to_bytes;
@@ -571,9 +579,9 @@ impl Feed {
         // ── the offset array, checked against the log's own replay ──
         //
         // `!log.rewritten()` is this file's half of COMPACTION as well as its
-        // agreement test: a compacted log moved every offset, so the branch
-        // below rewrites — which is why `feed-offsets.log` is absent from
-        // the compaction block that follows.
+        // agreement test: a compacted log moved every offset, so the file is
+        // rewritten below — with the other three where the log compacted,
+        // alone where the log stands and its offsets merely disagree.
         let offsets_agree = !log.rewritten()
             && offset_entries.iter().all(|(at, m)| {
                 m.get(OFFSETS_OFFSET).and_then(Value::as_u64)
@@ -584,73 +592,135 @@ impl Feed {
                 f_offsets.append(at, vec![(OFFSETS_OFFSET, Value::Number(offset.0.into()))])?;
             }
             f_offsets.fence(head)?;
-        } else {
-            f_offsets.rewrite(
-                log.offsets()
-                    .iter()
-                    .map(|(at, o)| {
-                        derived::record_object(
-                            *at,
-                            vec![(OFFSETS_OFFSET, Value::Number(o.0.into()))],
-                        )
-                    })
-                    .collect(),
-                head,
-            )?;
         }
 
         // ── the attest store, on its own card ──
         let attest = AttestStore::open(dir, engine, &log)?;
 
         // ── compaction: the log dropped what the journal reclaimed, so the
-        //    derived files drop it too, rewritten from the twins. THREE of
-        //    the four — `feed-offsets.log` took its rewrite above, on the
-        //    same `log.rewritten()`. A fifth DERIVED file belongs HERE; the
-        //    attest store is not one, and `Files` does not hold it. ──
-        if log.rewritten() {
-            f_index.rewrite(
-                docs.iter()
-                    .map(|(at, ds)| derived::record_object(*at, vec![(INDEX_DOCS, doc_strings(ds))]))
-                    .collect(),
-                head,
-            )?;
-            f_masked.rewrite(
-                masked.iter().map(|at| derived::record_object(*at, Vec::new())).collect(),
-                head,
-            )?;
-            f_streams.rewrite(
-                docs.iter()
-                    .filter_map(|(at, ds)| {
-                        let owners = owners_of(ds);
-                        (!owners.is_empty()).then(|| {
-                            derived::record_object(
-                                *at,
-                                vec![(STREAMS_OWNERS, addr_strings(&owners))],
-                            )
-                        })
-                    })
-                    .collect(),
-                head,
-            )?;
+        //    derived files drop it too, rewritten from the twins — the SAME
+        //    rewrite the checkpoint thread runs after each checkpoint lands
+        //    (`Feed::compact_below_reclaim_floor`), through the same method,
+        //    the four files at once; or the offset array alone, where the
+        //    log stands and its offsets disagree. A fifth DERIVED file
+        //    belongs in that method; the attest store is not one, and
+        //    `Files` does not hold it. Fatal here, either side of a rename:
+        //    nothing is served yet. ──
+        let compacted = log.rewritten();
+        let mut inner = Inner {
+            log,
+            docs,
+            index,
+            masked,
+            published,
+            streams,
+            attest,
+            files: Files {
+                index: f_index,
+                offsets: f_offsets,
+                masked: f_masked,
+                streams: f_streams,
+            },
+        };
+        let failures = if compacted {
+            inner.rewrite_derived_files(head)
+        } else if !offsets_agree {
+            inner.rewrite_offsets_file(head)
+        } else {
+            Vec::new()
+        };
+        if let Some((_, failed)) = failures.into_iter().next() {
+            return Err(failed.into_io());
         }
+        Ok(Feed { inner: Mutex::new(inner) })
+    }
 
-        Ok(Feed {
-            inner: Mutex::new(Inner {
-                log,
-                docs,
-                index,
-                masked,
-                published,
-                streams,
-                attest,
-                files: Files {
-                    index: f_index,
-                    offsets: f_offsets,
-                    masked: f_masked,
-                    streams: f_streams,
-                },
-            }),
-        })
+    /// COMPACT THE FIVE FILES TO THE JOURNAL's RECLAIM FLOOR, while serving —
+    /// what the daemon's checkpoint thread runs after each checkpoint lands,
+    /// under this feed's lock, which is the one lock the record step and the
+    /// page take: the same rewrite [`Feed::open`] runs, the fence found by
+    /// the same probe ([`retention_floor`]). `commits.log` drops every entry
+    /// at or below the fence just under the floor and rewrites itself around
+    /// the survivors ([`CommitsLog::compact_to`]); the four twins drop the
+    /// same positions and the four derived files are rewritten from them
+    /// whole, fenced at the last recorded position; the attest store is
+    /// untouched (its class: below the floor its lines are primary). Answers
+    /// the fence compacted to, or `None` where the floor has not moved past
+    /// the oldest entry — the ordinary answer between reclaiming checkpoints
+    /// — and nothing is written.
+    ///
+    /// THE DISPOSITION while serving is the record step's own (the settled
+    /// rule for `record`): reported on the operator stream, never failing an
+    /// op. A rewrite that fails BEFORE its rename leaves that file whole and
+    /// standing and is said here, the next checkpoint's compaction trying
+    /// again; one that fails PAST its rename stops its file for the uptime
+    /// and is said by the file itself, once — the resident twins are trimmed
+    /// either way and serve this uptime, and the next open re-derives (P22).
+    pub(super) fn compact_below_reclaim_floor(&self, engine: &Engine) -> Option<u64> {
+        let fence = retention_floor(engine)?.saturating_sub(1);
+        let mut inner = self.inner.lock();
+        let dropped = match inner.log.compact_to(fence) {
+            Ok(dropped) => dropped,
+            // The file said its own stop; the entries are trimmed all the
+            // same, and the twins follow them below.
+            Err(RewriteFail::PastRename(_)) => true,
+            Err(before) => {
+                crate::notice::line(format_args!(
+                    "commits.log compaction below the reclaim floor failed {before}; the file \
+                     stands as it was, and the next checkpoint's compaction tries again"
+                ));
+                true
+            }
+        };
+        if !dropped {
+            return None;
+        }
+        inner.drop_at_or_below(fence);
+        let covered = inner.log.entries().keys().next_back().copied().unwrap_or(fence);
+        for (name, failed) in inner.rewrite_derived_files(covered) {
+            if let RewriteFail::BeforeRename(e) = failed {
+                crate::notice::line(format_args!(
+                    "{name} compaction below the reclaim floor failed before its rename: {e}; \
+                     the file stands as it was, and the next checkpoint's compaction tries again"
+                ));
+            }
+        }
+        Some(fence)
+    }
+
+    /// The test seam behind `crate::Daemon::fail_the_feeds_next_rewrite_past_rename`:
+    /// the next rewrite of each of the five files fails past its rename.
+    /// Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(super) fn fail_next_rewrite_past_rename(&self) {
+        let mut inner = self.inner.lock();
+        inner.log.fail_next_rewrite_past_rename();
+        inner.files.index.fail_next_rewrite_past_rename();
+        inner.files.offsets.fail_next_rewrite_past_rename();
+        inner.files.masked.fail_next_rewrite_past_rename();
+        inner.files.streams.fail_next_rewrite_past_rename();
+    }
+
+    /// The test seam behind `crate::Daemon::stopped_feed_files`: the names
+    /// of the five files that take no further line. Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(super) fn stopped_files(&self) -> Vec<&'static str> {
+        let inner = self.inner.lock();
+        let mut stopped = Vec::new();
+        if inner.log.is_stopped() {
+            stopped.push("commits.log");
+        }
+        for (name, file) in [
+            (INDEX_FILE, &inner.files.index),
+            (OFFSETS_FILE, &inner.files.offsets),
+            (MASKED_FILE, &inner.files.masked),
+            (STREAMS_FILE, &inner.files.streams),
+        ] {
+            if file.is_stopped() {
+                stopped.push(name);
+            }
+        }
+        stopped
     }
 
     /// Record one committed write at ack time — under the write-serialization
@@ -815,6 +885,97 @@ struct Visible<'a> {
 }
 
 impl Inner {
+    /// Drop every position at or below `min_since` from the four twins —
+    /// the positions the log has just dropped ([`CommitsLog::compact_to`]),
+    /// unreachable by every route — so the twins and the log name one set
+    /// of positions, and a rewrite from the twins writes that set.
+    fn drop_at_or_below(&mut self, min_since: u64) {
+        let keep_from = min_since.saturating_add(1);
+        self.docs = self.docs.split_off(&keep_from);
+        self.masked = self.masked.split_off(&keep_from);
+        self.published = self.published.split_off(&keep_from);
+        self.index.retain(|_, (_, positions)| {
+            positions.retain(|&at| at > min_since);
+            !positions.is_empty()
+        });
+        self.streams.retain(|_, positions| {
+            positions.retain(|&at| at > min_since);
+            !positions.is_empty()
+        });
+    }
+
+    /// Rewrite the FOUR derived files whole from the twins, each fenced at
+    /// `covered` — the compaction's rewrite, at open and after a checkpoint
+    /// alike — answering each file that failed with how
+    /// ([`RewriteFail`]), every file attempted whatever the one before it
+    /// answered. A fifth derived structure owes a line here, beside its
+    /// fold and its replay.
+    fn rewrite_derived_files(&mut self, covered: u64) -> Vec<(&'static str, RewriteFail)> {
+        let mut failures = Vec::new();
+        let records = self.index_records();
+        if let Err(failed) = self.files.index.rewrite(records, covered) {
+            failures.push((INDEX_FILE, failed));
+        }
+        let records = self.masked_records();
+        if let Err(failed) = self.files.masked.rewrite(records, covered) {
+            failures.push((MASKED_FILE, failed));
+        }
+        let records = self.stream_records();
+        if let Err(failed) = self.files.streams.rewrite(records, covered) {
+            failures.push((STREAMS_FILE, failed));
+        }
+        failures.extend(self.rewrite_offsets_file(covered));
+        failures
+    }
+
+    /// Rewrite the offset array alone from the log's offsets — the open's
+    /// answer where the log stands and the file's offsets disagree with it,
+    /// and the fourth file of [`Inner::rewrite_derived_files`].
+    fn rewrite_offsets_file(&mut self, covered: u64) -> Vec<(&'static str, RewriteFail)> {
+        let records = self.offset_records();
+        match self.files.offsets.rewrite(records, covered) {
+            Ok(()) => Vec::new(),
+            Err(failed) => vec![(OFFSETS_FILE, failed)],
+        }
+    }
+
+    /// The index file's records, from the classification map.
+    fn index_records(&self) -> Vec<Value> {
+        self.docs
+            .iter()
+            .map(|(at, ds)| derived::record_object(*at, vec![(INDEX_DOCS, doc_strings(ds))]))
+            .collect()
+    }
+
+    /// The bitmap's records, from the masked set.
+    fn masked_records(&self) -> Vec<Value> {
+        self.masked.iter().map(|at| derived::record_object(*at, Vec::new())).collect()
+    }
+
+    /// The streams file's records, from the classification map's owners.
+    fn stream_records(&self) -> Vec<Value> {
+        self.docs
+            .iter()
+            .filter_map(|(at, ds)| {
+                let owners = owners_of(ds);
+                (!owners.is_empty()).then(|| {
+                    derived::record_object(*at, vec![(STREAMS_OWNERS, addr_strings(&owners))])
+                })
+            })
+            .collect()
+    }
+
+    /// The offset array's records, from the log's offsets.
+    fn offset_records(&self) -> Vec<Value> {
+        self.log
+            .offsets()
+            .iter()
+            .map(|(at, o)| {
+                derived::record_object(*at, vec![(OFFSETS_OFFSET, Value::Number(o.0.into()))])
+            })
+            .collect()
+    }
+
     /// Fold one classified position into the four twins and append its
     /// lines — and, where `attest` is the marker slot this write filled,
     /// mirror it into the attest store ([`AttestStore::record`]) — the ONE
@@ -825,7 +986,8 @@ impl Inner {
     /// structure owes all three: this fold; [`Feed::open`]'s
     /// replay-then-derive, where the file is the authority for a position at
     /// or below its coverage and the classification for one above it; and the
-    /// compaction rewrite that renders the twin back to lines. A structure
+    /// compaction rewrite that renders the twin back to lines
+    /// ([`Inner::rewrite_derived_files`], with the trim before it). A structure
     /// wired here alone is empty from every open until the next commit, with
     /// its file's fence reporting it covered — which is a short candidate set
     /// claiming completeness, not the silent incompleteness the coverage

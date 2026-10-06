@@ -327,6 +327,93 @@ fn a_checkpoint_moves_the_head_once_and_a_quiet_board_writes_none() {
     sd.shutdown();
 }
 
+/// THE DEFERRED CADENCE, SERVICED BY THE CHECKPOINT THREAD (M-I5 (f): the
+/// journal's bytes between checkpoints are bounded by the cadence, and the
+/// checkpoint that bounds them runs off the committing thread; PUB-6.65:
+/// a checkpoint landing asynchronously is named by the next head, once).
+/// The byte bound moved to one byte through its seam, the next commit
+/// crosses the cadence: its answer comes back with NO checkpoint taken on
+/// its thread, and the daemon's checkpoint thread lands one with no further
+/// commit — the newest checkpoint stands at or above the crossing commit's
+/// position and the due flag reads false once the thread is done. The
+/// bound set back wide (the thread re-reads it from the landing too — 24
+/// MiB for a small checkpoint — but a commit in the window before that
+/// re-read would cross the one-byte bound again, which the kernel's
+/// backstop answers inline; the kernel suite pins the re-read), a later
+/// small commit crosses nothing and moves no checkpoint. The next commit's
+/// turn names the landed checkpoint as its head's `base`, trigger (b), and
+/// the quiet commits after it write none.
+#[test]
+fn a_crossing_of_the_deferred_cadence_is_serviced_by_the_checkpoint_thread() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let mut clock = clock_origin();
+    force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
+    assert!(sd.daemon().newest_checkpoint().is_none(), "no checkpoint yet: well inside 1024");
+    assert!(!sd.daemon().checkpoint_is_due_now());
+
+    // One byte: the next commit crosses, sets the flag, and runs nothing on
+    // its own thread — its ack returns before any checkpoint exists.
+    sd.daemon().set_checkpoint_bytes_bound(1);
+    let crossing = commit(port, &owner, CLAIMANT_ACCOUNT);
+
+    // The thread services it: the newest checkpoint lands at or above the
+    // crossing commit (the head writer's own commits may follow it, each
+    // crossing the one-byte bound until the thread re-reads it), and the
+    // flag reads false once the thread has nothing left to service.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let newest = loop {
+        if let Some(newest) = sd.daemon().newest_checkpoint() {
+            if newest.seq.0 >= crossing && !sd.daemon().checkpoint_is_due_now() {
+                break newest;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the checkpoint thread did not land the crossing commit's checkpoint"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    assert!(newest.seq.0 >= crossing, "at or above the crossing: {newest:?}");
+    assert!(newest.seq.0 <= health(port).0, "and never above the head: {newest:?}");
+    assert!(newest.len > 88, "the header's length is the file's: {newest:?}");
+
+    // The bound wide again — set here, ahead of the thread's own re-read
+    // of it, so no commit below meets the one-byte bound — a small commit
+    // crosses nothing: the newest checkpoint stands and the flag stays
+    // false. (The head writer's turn may write a head for the landed base
+    // here, trigger (b); its commits are small too.)
+    sd.daemon().set_checkpoint_bytes_bound(1 << 40);
+    let settled = sd.daemon().newest_checkpoint().expect("the landed base").seq;
+    let at = commit(port, &owner, CLAIMANT_ACCOUNT);
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(!sd.daemon().checkpoint_is_due_now(), "a small commit under 24 MiB crosses nothing");
+    assert_eq!(
+        sd.daemon().newest_checkpoint().map(|h| h.seq),
+        Some(settled),
+        "…and the thread took no further checkpoint"
+    );
+    // Trigger (b): the landed checkpoint is named by a head, once — by the
+    // crossing commit's own turn where the thread had already landed it, or
+    // by this commit's turn otherwise — and the quiet commits after name it
+    // no further.
+    let rec = expect_latest_head(port);
+    assert_eq!(rec["base"]["seq"].as_u64(), Some(settled.0), "the head names the thread's base: {rec}");
+    assert!(rec["position"].as_u64().unwrap() <= at);
+    let naming = rec["position"].as_u64().unwrap();
+    for i in 1..=3 {
+        commit(port, &owner, CLAIMANT_ACCOUNT);
+        assert_eq!(
+            head_record(port, H).unwrap()["position"].as_u64().unwrap(),
+            naming,
+            "a base the last head named moves no further head (commit {i} after it)"
+        );
+    }
+    sd.shutdown();
+}
+
 /// (i) — the time bound writes one at the next commit and never a duplicate: a
 /// second commit with the clock unchanged and the position moved writes no
 /// second head for it.

@@ -1340,8 +1340,11 @@ Fields:
   * `"reorder"` — a *future* committed state may satisfy the precondition
     (e.g. the document it names isn't registered *yet*); reissue after the
     state you're waiting on commits;
-  * `"retry"` — transient (durability hiccup); the operation did nothing;
-    reissue as-is;
+  * `"retry"` — the operation did nothing. A transient fault may clear on
+    reissue; but where the cause is the volume's room — `durability` at a
+    full volume, below — NO reissue succeeds until the operator frees it,
+    and the operator stream names it. The person's act is to tell the
+    operator, never to reissue blindly;
   * `"halt"` — the board has stopped accepting writes (operator
     condition): its kernel halted, or the daemon's attest store failed a
     signature's line (`poisoned`, below); reads still work.
@@ -1388,8 +1391,12 @@ address…) is answered on the same channel:
 
 ### Rejection codes
 
-Transport/lifecycle: `unauthenticated`, `malformed`, `durability`,
-`txn_unencodable` (a record the operation staged could not be encoded
+Transport/lifecycle: `unauthenticated`, `malformed`, `durability` (the
+commit's durability barrier failed and the operation did nothing — retry
+class, since the code is one many transient faults share; where the cause
+is a FULL VOLUME the same request fails the same way until the operator
+frees room, which the operator stream says, so the act is the operator's
+and no retry succeeds before it), `txn_unencodable` (a record the operation staged could not be encoded
 into a journal frame at all — permanent; reissuing the same request
 stages the same record), `txn_over_budget` (the request's records all
 encode, but the transaction as a whole exceeds the kernel's
@@ -3070,8 +3077,15 @@ confirmed at the media round (the board's sm-Q8):
   lapsed lease answers `lease_lapsed` and past which it answers as none;
 * the idle bound, 30 s, and the transfer bound, 10 minutes, on a streamed
   body;
-* the floor, 256 MiB of the volume's free space, read at the creation on
-  no length and per chunk;
+* the floor, 256 MiB of the volume's free space as its CONSTANT HALF, the
+  floor IN FORCE the larger of that and twice the newest checkpoint's size
+  plus one maximal segment (128 MiB, the journal's reader ceiling), re-read
+  as each checkpoint lands — read once at the open off the newest checkpoint
+  on disk, named on the startup line beside the default limit — at the
+  creation on no length and per chunk; a guarantee that the journal stays
+  writable through its next checkpoint beside the cadence's byte bound (a
+  quarter of the newest checkpoint and no less than 24 MiB, with one window
+  of grace), which the daemon carries;
 * the default per-account limit, one eighth of the volume's capacity read
   once at start and never below 256 MiB, the venue total unset; the
   deposit read's `per_account`; the limits record's install channel
@@ -4500,7 +4514,13 @@ sidecars in the data dir — `feed-index.log` (document → positions),
 `feed-masked.log` (the positions masked at commit) and `feed-streams.log`
 (position → the owner accounts whose drafts it names) — appended at
 commit outside the journal transaction, tail-checked against the head at
-open and rebuilt from `commits.log` and the journal on loss. They persist
+open and rebuilt from `commits.log` and the journal on loss. The five are
+COMPACTED to the journal's reclaim floor — their entries below it dropped
+and each file rewritten whole — at open and, the floor moving at a
+checkpoint and at no other moment, after each checkpoint the daemon's own
+checkpoint thread lands, while serving; a rewrite that fails past its
+rename there STOPS that file for the uptime, said once on the operator
+stream, the next open re-deriving it, and fails no write. They persist
 nothing about the world and decide nothing about what you may see: an
 entry's class is the read predicate's, re-applied per rendered entry. A
 fifth file in their shape has a class of its own: `feed-attest.log`, THE
@@ -4508,7 +4528,7 @@ ATTEST STORE (position → the marker slot's `alg` tag and `sig` hex, one
 line per attested commit), appended at commit from the very value the
 write-path check admitted and rebuilt from the journal's markers above
 the reclaim floor. Below the floor — where `commits.log` and the four
-drop their entries at open (Retention, above) — it KEEPS its lines: the
+drop their entries (Retention, above) — it KEEPS its lines: the
 checkpoint holds no marker, so a line there is an entry signature's only
 copy at the origin, primary state and not a projection, backed up with
 the board directory as `blobs/` is; a line lost there is served as

@@ -209,7 +209,9 @@ impl<W: WorldState> fmt::Debug for Staging<W> {
 /// tested ON COMMIT, there is no timer thread — and only the policy is the
 /// open knob. Lives in the applier-locked state and is advanced, tested and
 /// reset only from there, so a caller-invoked `checkpoint()` cannot disturb
-/// the cadence it never asked for (§6).
+/// the cadence it never asked for (§6). The one part of it a running kernel
+/// moves is the byte bound ([`Kernel::set_cadence_bytes`]), replaced under
+/// the same lock.
 struct Cadence {
     policy: CheckpointPolicy,
     commits_since_reset: u64,
@@ -231,23 +233,36 @@ impl Cadence {
 
     /// Charge one commit of `bytes` journal bytes and answer whether it
     /// crossed the threshold. A crossing resets the counters, so the next
-    /// window starts at this commit. A quiescent kernel — nothing new to
-    /// charge — correctly never crosses, `Interval` included (§6).
+    /// window starts at this commit — every counter, whichever half of a
+    /// composite crossed. A quiescent kernel — nothing new to charge —
+    /// correctly never crosses, `Interval` included (§6).
     fn charge_commit(&mut self, bytes: u64) -> bool {
         self.commits_since_reset += 1;
         self.bytes_since_reset += bytes;
-        let crossed = match self.policy {
-            CheckpointPolicy::EveryN(every) => self.commits_since_reset >= every,
-            CheckpointPolicy::JournalBytes(threshold) => self.bytes_since_reset >= threshold,
-            CheckpointPolicy::Interval(window) => self.last_reset.elapsed() >= window,
-            CheckpointPolicy::Manual => false,
-        };
+        let crossed = self.crossed(&self.policy);
         if crossed {
             self.commits_since_reset = 0;
             self.bytes_since_reset = 0;
             self.last_reset = Instant::now();
         }
         crossed
+    }
+
+    /// The crossing test of `policy` against the counters as they stand —
+    /// a read of them, never an advance, so a composite tests both halves
+    /// against the same figures and the order of the two tests cannot
+    /// matter: `EitherOf` crosses when either does, and `Deferred` crosses
+    /// exactly when its inner policy does (WHERE the checkpoint then runs is
+    /// [`Kernel::transact`]'s to decide, off [`CheckpointPolicy::deferred`]).
+    fn crossed(&self, policy: &CheckpointPolicy) -> bool {
+        match policy {
+            CheckpointPolicy::EveryN(every) => self.commits_since_reset >= *every,
+            CheckpointPolicy::JournalBytes(threshold) => self.bytes_since_reset >= *threshold,
+            CheckpointPolicy::Interval(window) => self.last_reset.elapsed() >= *window,
+            CheckpointPolicy::Manual => false,
+            CheckpointPolicy::EitherOf(a, b) => self.crossed(a) || self.crossed(b),
+            CheckpointPolicy::Deferred(inner) => self.crossed(inner),
+        }
     }
 }
 
@@ -348,9 +363,27 @@ struct Journaled<W> {
     /// What the open found: the start point and the bases it passed over
     /// ([`Kernel::recovery`]).
     recovery: Recovery,
+    /// The `checkpoint.tmp` the open REMOVED, by its length in bytes — a
+    /// checkpoint a crash or a failed write left half-written, which the
+    /// kernel's own directory contract makes the kernel's to delete
+    /// ([`Kernel::stray_checkpoint_removed`]); `None` where none stood.
+    stray_checkpoint_removed: Option<u64>,
     /// The `open()`-held exclusive advisory lock, kept for its `Drop`: the
     /// flock releases when this file closes (Lifecycle).
     _lock: File,
+}
+
+/// What a journaled recovery hands [`Kernel::open`]: the root it commits
+/// from, the live appender, the exclusion lock, the account of the open, and
+/// the stray `checkpoint.tmp` it removed — five values one call produces,
+/// named so the open reads each by what it is rather than by its place in a
+/// tuple.
+struct Recovered<W> {
+    root: Committed<W>,
+    journal: Journal,
+    lock: File,
+    recovery: Recovery,
+    stray_checkpoint_removed: Option<u64>,
 }
 
 /// The transactional kernel over an engine-supplied `W` (§Public interface).
@@ -372,6 +405,14 @@ pub struct Kernel<W: WorldState> {
     /// slow fsync.
     checkpoint_mutex: Mutex<()>,
     poisoned: AtomicBool,
+    /// THE DUE FLAG (§6, the deferred arm): set by a crossing under
+    /// [`CheckpointPolicy::Deferred`] in place of an inline checkpoint, read
+    /// lock-free by [`Kernel::checkpoint_due`], and CLEARED FIRST by every
+    /// [`Kernel::checkpoint`]. Its one other reader is the crossing itself:
+    /// a crossing that finds it already set runs the checkpoint inline, the
+    /// backstop. The `poisoned` flag's shape, and like it never a gate — a
+    /// flag read false may be set by the next commit.
+    checkpoint_due: AtomicBool,
     cfg: KernelConfig,
     /// The journaled half, or `None` under [`Durability::InMemory`]: every
     /// path that touches files asks here, so the mode question is one question
@@ -391,6 +432,7 @@ impl<W: WorldState> fmt::Debug for Kernel<W> {
         f.debug_struct("Kernel")
             .field("seq", &self.current_seq())
             .field("poisoned", &self.is_poisoned())
+            .field("checkpoint_due", &self.checkpoint_due())
             .field("cfg", &self.cfg)
             .finish_non_exhaustive()
     }
@@ -572,17 +614,17 @@ impl<W: WorldState> Kernel<W> {
                 retain_checkpoints,
                 ..
             } => {
-                let (root, journal, lock, recovery) =
-                    Self::recover(journal_path, &genesis, cfg.salt)?;
+                let recovered = Self::recover(journal_path, &genesis, cfg.salt)?;
                 (
-                    root,
-                    journal,
+                    recovered.root,
+                    recovered.journal,
                     Some(Journaled {
                         dir: journal_path.clone(),
                         retain_checkpoints: *retain_checkpoints,
                         genesis,
-                        recovery,
-                        _lock: lock,
+                        recovery: recovered.recovery,
+                        stray_checkpoint_removed: recovered.stray_checkpoint_removed,
+                        _lock: recovered.lock,
                     }),
                 )
             }
@@ -594,15 +636,21 @@ impl<W: WorldState> Kernel<W> {
     /// appender — handed `salt_source`, the configured [`SaltSource`] every
     /// transaction it commits draws from (`SKJ4`); recovery itself draws
     /// nothing, reading each salt off its marker — the exclusion lock the
-    /// kernel holds for its lifetime, and the account of the base it stood
-    /// on and the bases it passed over (§7).
-    fn recover(
-        dir: &Path,
-        genesis: &W,
-        salt_source: SaltSource,
-    ) -> Result<(Committed<W>, Journal, File, Recovery), OpenError> {
+    /// kernel holds for its lifetime, the account of the base it stood on
+    /// and the bases it passed over (§7), and the stray `checkpoint.tmp` it
+    /// removed, if one stood ([`Recovered`]).
+    fn recover(dir: &Path, genesis: &W, salt_source: SaltSource) -> Result<Recovered<W>, OpenError> {
         fs::create_dir_all(dir)?;
         let lock = journal::acquire_journal_lock(dir)?;
+        // THE STRAY TEMP FILE, removed under the flock before anything is
+        // listed: a checkpoint a crash or a failed write left half-written
+        // under the fixed temp name is no base (`checkpoint::list` would skip
+        // it by name) and keeps its room on the volume — which, after a
+        // write the volume's room failed, is the room the next checkpoint
+        // needs. The directory is the kernel's alone, so the file is the
+        // kernel's to delete; the caller is told it was, and how large it
+        // was, through [`Kernel::stray_checkpoint_removed`].
+        let stray_checkpoint_removed = checkpoint::remove_stray_tmp(dir)?;
         let segs = journal::list_segments(dir)?;
         let checkpoints = checkpoint::list(dir)?;
 
@@ -702,16 +750,17 @@ impl<W: WorldState> Kernel<W> {
         journal::truncate_tail(dir, &scan)?;
 
         let writer = JournalWriter::open_active(dir, next_seq, chain_head, salt_source)?;
-        Ok((
-            Committed {
+        Ok(Recovered {
+            root: Committed {
                 seq: Seq(committed_head),
                 world,
                 chain: chain_head,
             },
-            Journal::Segments(writer),
+            journal: Journal::Segments(writer),
             lock,
             recovery,
-        ))
+            stray_checkpoint_removed,
+        })
     }
 
     fn assemble(
@@ -720,7 +769,7 @@ impl<W: WorldState> Kernel<W> {
         journal: Journal,
         journaled: Option<Journaled<W>>,
     ) -> Self {
-        let cadence = Cadence::new(cfg.checkpoint);
+        let cadence = Cadence::new(cfg.checkpoint.clone());
         let sequencer = Sequencer::recovered(root.seq, cfg.durability.burned_seq_policy());
         Kernel {
             root: ArcSwap::from_pointee(root),
@@ -731,6 +780,7 @@ impl<W: WorldState> Kernel<W> {
             }),
             checkpoint_mutex: Mutex::new(()),
             poisoned: AtomicBool::new(false),
+            checkpoint_due: AtomicBool::new(false),
             cfg,
             journaled,
         }
@@ -838,15 +888,21 @@ impl<W: WorldState> Kernel<W> {
     ///
     /// A committing call may additionally take a checkpoint before it
     /// returns: the §6 on-commit trigger is evaluated under the applier lock
-    /// and, when it crosses, [`Kernel::checkpoint`] runs to completion on
-    /// this thread — serializing `W`, writing and fsyncing a file, applying
-    /// retention, reclaiming segments — after the commit is durable and
-    /// installed. Its failure is DISCARDED: the transaction is already
-    /// acknowledged, so there is no sound path for that error through
-    /// [`TxnError`], and v1 has no logging seam. A caller who needs to know
-    /// whether checkpointing is succeeding must call [`Kernel::checkpoint`]
-    /// itself and read the result; a kernel that has stopped checkpointing
-    /// goes on committing and says nothing.
+    /// and, when it crosses under an INLINE arm of the policy,
+    /// [`Kernel::checkpoint`] runs to completion on this thread —
+    /// serializing `W`, writing and fsyncing a file, applying retention,
+    /// reclaiming segments — after the commit is durable and installed. Its
+    /// failure is DISCARDED: the transaction is already acknowledged, so
+    /// there is no sound path for that error through [`TxnError`], and v1
+    /// has no logging seam. Under [`CheckpointPolicy::Deferred`] the
+    /// crossing SETS THE DUE FLAG instead ([`Kernel::checkpoint_due`]) and
+    /// this thread runs nothing — the caller's own thread runs
+    /// [`Kernel::checkpoint`] and reads the result — unless the flag is
+    /// ALREADY set, the last crossing unserviced, when the checkpoint runs
+    /// inline here after all, the backstop that keeps the window bounded. A
+    /// caller who needs to know whether checkpointing is succeeding must call
+    /// [`Kernel::checkpoint`] itself and read the result; a kernel that has
+    /// stopped checkpointing inline goes on committing and says nothing.
     ///
     /// A panic out of `f` propagates with nothing of the transaction
     /// surviving, and needs no guard to do so: no `Seq` was drawn and nothing
@@ -1039,17 +1095,34 @@ impl<W: WorldState> Kernel<W> {
             }
             Ok(Ok(bytes)) => {
                 // §6 on-commit trigger: charged and tested under the applier
-                // lock; checkpoint() never touches the cadence.
+                // lock, and whether its crossing is deferred read beside it;
+                // checkpoint() never touches the cadence.
                 let crossed = state.cadence.charge_commit(bytes);
+                let deferred = state.cadence.policy.deferred();
                 drop(applier);
                 if crossed {
-                    // §3/§6: the auto-triggered checkpoint's error is
-                    // logged-and-dropped, never failing the already-committed
-                    // txn. v1 has no logging seam (the design's dependency
-                    // list), so "dropped" is the whole of it; safe by §6's
-                    // crash argument (at most an ignored .tmp and an
-                    // unreclaimed journal).
-                    let _ = self.checkpoint();
+                    // THE DEFERRED ARM: the crossing sets the due flag for the
+                    // caller's thread to service, and runs nothing here —
+                    // unless the flag was ALREADY set, the last crossing not
+                    // yet serviced, when THE BACKSTOP runs the checkpoint
+                    // inline exactly as the inline arms do: a caller that
+                    // never services the flag, or a board whose writes outrun
+                    // its checkpointer, gets a checkpoint at every second
+                    // crossing and never an unbounded window. `checkpoint()`
+                    // clears the flag first, so the inline run leaves it
+                    // clear and the next crossing is a deferred one again.
+                    let run_inline =
+                        !deferred || self.checkpoint_due.swap(true, Ordering::AcqRel);
+                    if run_inline {
+                        // §3/§6: the auto-triggered checkpoint's error is
+                        // logged-and-dropped, never failing the
+                        // already-committed txn. v1 has no logging seam (the
+                        // design's dependency list), so "dropped" is the whole
+                        // of it; safe by §6's crash argument (at most a .tmp
+                        // the write or the next open removes, and an
+                        // unreclaimed journal).
+                        let _ = self.checkpoint();
+                    }
                 }
                 Ok((value, Seq(last))) // commit-before-acknowledge (A7, MIC-3)
             }
@@ -1121,6 +1194,67 @@ impl<W: WorldState> Kernel<W> {
         self.poisoned.load(Ordering::Acquire)
     }
 
+    /// Whether a checkpoint is DUE (§6, the deferred arm): a commit has
+    /// crossed the cadence under [`CheckpointPolicy::Deferred`] since the last
+    /// [`Kernel::checkpoint`] began, and the checkpoint it calls for has not
+    /// been started. Lock-free and infallible, like [`Kernel::is_poisoned`]:
+    /// the caller's checkpoint thread reads it to decide whether to run
+    /// [`Kernel::checkpoint`], which clears it FIRST and then runs — so a
+    /// `true` read after that call returns is a crossing during the run,
+    /// which the thread services by running once more. Never set under any
+    /// other arm, whose crossings run inline; never a gate, since the next
+    /// commit may set it; and never cleared by anything but a call to
+    /// `checkpoint`, so a caller that reads it true and runs nothing leaves
+    /// the next crossing to the backstop ([`Kernel::transact`]).
+    pub fn checkpoint_due(&self) -> bool {
+        self.checkpoint_due.load(Ordering::Acquire)
+    }
+
+    /// Move the cadence's BYTE BOUND — every [`CheckpointPolicy::JournalBytes`]
+    /// threshold the policy holds, wherever its arms nest one — to `bytes`,
+    /// answering whether the policy held one to move. The one knob of the
+    /// cadence a running kernel changes, for a caller that sizes the bound by
+    /// the newest checkpoint and re-reads it as each lands
+    /// ([`Kernel::newest_checkpoint`] answers the size). Taken under the
+    /// applier lock, where the cadence lives and is tested: the next commit
+    /// tests the new bound against the counters as they stand — the window
+    /// in progress is neither reset nor re-charged — and a crossing it makes
+    /// resets them as any crossing does. `n ≥ 1` is the type's, so the rule
+    /// [`Kernel::open`] validates holds after every call. Never from inside a
+    /// [`Kernel::transact`] closure, which holds the lock this takes.
+    pub fn set_cadence_bytes(&self, bytes: NonZeroU64) -> bool {
+        let mut applier = self.applier.acquire();
+        applier.cadence.policy.set_bytes(bytes)
+    }
+
+    /// Move the cadence's COMMIT BOUND — every [`CheckpointPolicy::EveryN`]
+    /// count the policy holds, wherever its arms nest one — to `commits`,
+    /// answering whether the policy held one to move: [`Kernel::set_cadence_bytes`]'s
+    /// twin, under the same lock and the same rules (the window in progress
+    /// is neither reset nor re-charged; never from inside a transact
+    /// closure). A caller that moves BOTH bounds past any count it will
+    /// commit holds the cadence off for its life, which is what a suite
+    /// measuring a board that must reclaim nothing does.
+    pub fn set_cadence_commits(&self, commits: NonZeroU64) -> bool {
+        let mut applier = self.applier.acquire();
+        applier.cadence.policy.set_commits(commits)
+    }
+
+    /// The `checkpoint.tmp` this kernel's [`Kernel::open`] FOUND AND REMOVED,
+    /// by its length in bytes — a checkpoint a crash or a failed write left
+    /// half-written under the fixed temp name, which is no base and keeps its
+    /// room on the volume until something deletes it; the directory belongs
+    /// to the kernel alone, so that something is the open, under the flock.
+    /// `None` where none stood, and under [`Durability::InMemory`], which
+    /// opens no directory. Fixed at `open`, like [`Kernel::recovery`], and
+    /// kept apart from it: the report is of the directory as found, not of
+    /// the derivation, and the daemon above renders it as its own startup
+    /// line. A `.tmp` a FAILED [`Kernel::checkpoint`] leaves is removed by
+    /// that call itself, best-effort, and never reaches here.
+    pub fn stray_checkpoint_removed(&self) -> Option<u64> {
+        self.journaled.as_ref().and_then(|journaled| journaled.stray_checkpoint_removed)
+    }
+
     /// Persist a checkpoint embodying all records with `Seq ≤ s`, keep the
     /// journal's `retain_checkpoints` most recent, and reclaim whole *closed*
     /// journal segments lying wholly BELOW the OLDEST retained checkpoint
@@ -1140,8 +1274,23 @@ impl<W: WorldState> Kernel<W> {
     /// either mode. Under [`Durability::InMemory`] and unpoisoned it is a
     /// no-op returning [`current_seq`].
     ///
+    /// THE DUE FLAG IS CLEARED FIRST, before any of that — whichever caller
+    /// this is, the deferred arm's thread, the backstop or a caller of its
+    /// own ([`Kernel::checkpoint_due`]): a crossing during the run then sets
+    /// it again and the thread runs once more after, where a flag cleared
+    /// after the run would send every crossing during it to the backstop,
+    /// an inline checkpoint queued behind this one's mutex. A failure clears
+    /// it the same, so the next attempt is the next crossing's: a kernel
+    /// that cannot checkpoint is not asked again until there is something
+    /// new to persist.
+    ///
+    /// A failed write leaves NO `checkpoint.tmp`: the file is removed before
+    /// the error is answered, best-effort, the removal's own failure folded
+    /// into the account ([`CheckpointError::Io`]).
+    ///
     /// [`current_seq`]: Kernel::current_seq
     pub fn checkpoint(&self) -> Result<Seq, CheckpointError> {
+        self.checkpoint_due.store(false, Ordering::Release);
         if self.poisoned.load(Ordering::Acquire) {
             return Err(CheckpointError::Poisoned);
         }
@@ -1184,15 +1333,18 @@ impl<W: WorldState> Kernel<W> {
     }
 
     /// What the NEWEST RETAINED checkpoint's `SKC4` header claims — its
-    /// coordinate, the commit chain's value there and its body's hash, as a
-    /// [`CheckpointHeader`] — or `None` under [`Durability::InMemory`] and
-    /// before the first checkpoint. ADDITIVE
+    /// coordinate, the commit chain's value there, its body's hash and its
+    /// file's length, as a [`CheckpointHeader`] — or `None` under
+    /// [`Durability::InMemory`] and before the first checkpoint. ADDITIVE
     /// (QUEUE item 10 piece 2, the PUBLISHED HEAD): what a head record's `base`
     /// member names (PUB-6.65), so a peer that copies a checkpoint file has its
     /// coordinate confirmed, a full replica verifies the base's canonical body
     /// by `body_hash`, and the coordinate survives the retention
     /// (`retain_checkpoints`) that drops the file — the base is the one durable
-    /// record of a reclaimed checkpoint's coordinate.
+    /// record of a reclaimed checkpoint's coordinate. The length is the
+    /// figure a caller SIZES by: the room the next checkpoint takes on the
+    /// volume, and the byte bound a cadence relative to it holds the journal
+    /// to ([`Kernel::set_cadence_bytes`]).
     ///
     /// Reads the newest file's HEADER ALONE — its fixed 88 bytes, never the
     /// body, which is the whole serialized world — so it costs one directory

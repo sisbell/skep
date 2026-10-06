@@ -63,6 +63,20 @@
 //! `None` for precisely those — an equivalence it asserts against the
 //! partition rather than assumes.
 //!
+//! AND THE CHECKPOINT THREAD's SIGNAL AND COMPACTION. The kernel's cadence
+//! is DEFERRED: a commit that crosses it sets the kernel's due flag and runs
+//! no checkpoint on the committing thread, and the daemon's checkpoint
+//! thread (`server/listen.rs`) runs it off the guard. This card is where the
+//! two meet: after each commit's record step
+//! ([`WritePath::commit_recorded`]) the flag is read and, where it stands,
+//! the thread is woken through [`CheckpointSignal`] — after the record step
+//! and never before it, so a checkpoint the thread begins never runs beside
+//! the attest line of the commit that triggered it (`feed/attest.rs`'s
+//! premise). And after a checkpoint lands the thread compacts the feed's
+//! five files to the journal's reclaim floor through
+//! [`WritePath::compact_feed_below_reclaim_floor`] — the feed's own rewrite,
+//! the one the open runs, under the feed's lock and no guard.
+//!
 //! AND THE CELL INDEX's ENTRY (`media.md` Op inventory 1: "EACH ENTRY IS
 //! ENTERED IN skepd's MEMORY AT EVERY COMMIT THAT MINTS A CELL, whichever
 //! op minted it … before that commit's guard drops"). [`WritePath::record`]
@@ -170,6 +184,10 @@ pub(crate) struct WritePath {
     /// Set and read under the serialization guard alone, so the guard is
     /// what orders it, and the atomic only what makes the field `Sync`.
     halted: AtomicBool,
+    /// THE CHECKPOINT THREAD's SIGNAL (the module doc): raised after the
+    /// record step of a commit whose crossing set the kernel's due flag,
+    /// waited on by the thread `serve` spawns, stopped at shutdown.
+    checkpoint_signal: CheckpointSignal,
 }
 
 impl WritePath {
@@ -204,7 +222,44 @@ impl WritePath {
             head_writer,
             index,
             halted: AtomicBool::new(false),
+            checkpoint_signal: CheckpointSignal::new(),
         })
+    }
+
+    /// THE CHECKPOINT THREAD's SIGNAL: what the thread `serve` spawns waits
+    /// on, and what the shutdown stops. Raised by [`WritePath::commit_recorded`]
+    /// after the record step of every commit that finds the kernel's due
+    /// flag set; the thread reads the flag itself and runs the checkpoint.
+    pub fn checkpoint_signal(&self) -> &CheckpointSignal {
+        &self.checkpoint_signal
+    }
+
+    /// COMPACT THE FEED's FIVE FILES to the journal's reclaim floor — what
+    /// the checkpoint thread runs after each checkpoint lands, the floor
+    /// having moved: `commits.log` and the four derived files rewritten
+    /// around the positions the journal reclaimed, under the feed's lock and
+    /// no guard, the attest store untouched. The feed's own rewrite, the one
+    /// its open runs ([`Feed::compact_below_reclaim_floor`] states the
+    /// disposition, which fails no op). Answers the fence compacted to, or
+    /// `None` where nothing lay below the floor.
+    pub fn compact_feed_below_reclaim_floor(&self, engine: &Engine) -> Option<u64> {
+        self.feed.compact_below_reclaim_floor(engine)
+    }
+
+    /// The test seam behind `crate::Daemon::fail_the_feeds_next_rewrite_past_rename`:
+    /// the next compaction's rewrite of each of the feed's five files fails
+    /// past its rename, the stop that arm carries then reachable. Not a
+    /// stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(crate) fn fail_the_feeds_next_rewrite_past_rename(&self) {
+        self.feed.fail_next_rewrite_past_rename();
+    }
+
+    /// The test seam behind `crate::Daemon::stopped_feed_files`: the feed
+    /// files that take no further line this uptime. Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(crate) fn stopped_feed_files(&self) -> Vec<&'static str> {
+        self.feed.stopped_files()
     }
 
     /// The test seam behind `crate::Daemon::set_head_writer_clock_millis`:
@@ -378,6 +433,15 @@ impl WritePath {
         let resp = execute();
         if let Some(at) = self.record(serial, meta, &resp) {
             self.commit_stream.announce(at);
+        }
+        // THE CHECKPOINT THREAD's WAKE, after the record step (the module
+        // doc): a crossing inside the execute set the kernel's due flag and
+        // ran nothing; the thread runs it. One atomic load per commit, and
+        // a wake only where the flag stands — once per crossing, a second
+        // while the thread is still on its way coalescing into the one
+        // wait.
+        if self.stores.kernel().checkpoint_due() {
+            self.checkpoint_signal.raise();
         }
         resp
     }
@@ -913,6 +977,84 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
         "the change-feed table and M10's read/write partition disagree about this op"
     );
     answer
+}
+
+// ── the checkpoint thread's signal ───────────────────────────────────────
+
+/// THE CHECKPOINT THREAD's SIGNAL: a pending bit and the stop under one
+/// mutex, one condvar — the pruner's cadence's shape, with a wake in place
+/// of an interval. [`WritePath::commit_recorded`] RAISES it after the record
+/// step of a commit that finds the kernel's due flag set; the thread
+/// [`serve`](crate::server::serve) spawns WAITS on it, runs the checkpoint
+/// and returns to wait; the shutdown STOPS it, so a wait ends at once and no
+/// thread blocks a stop. A wake while no thread waits is kept as the pending
+/// bit, so a crossing is never lost to a thread that was busy; two wakes
+/// before one wait coalesce into one, since the thread reads the kernel's
+/// flag and not a count. Costs one mutex lock per wake and one per wait —
+/// once per crossing of the cadence, never per commit.
+pub(crate) struct CheckpointSignal {
+    state: Mutex<SignalState>,
+    cond: Condvar,
+}
+
+struct SignalState {
+    pending: bool,
+    stopped: bool,
+}
+
+/// What a wait on the [`CheckpointSignal`] ended with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Woken {
+    /// The signal was raised: a checkpoint may be due.
+    Due,
+    /// The stop was asked.
+    Stop,
+}
+
+impl CheckpointSignal {
+    fn new() -> CheckpointSignal {
+        CheckpointSignal {
+            state: Mutex::new(SignalState { pending: false, stopped: false }),
+            cond: Condvar::new(),
+        }
+    }
+
+    /// Raise: the next wait, or the one in progress, answers [`Woken::Due`].
+    pub(crate) fn raise(&self) {
+        let mut state = self.state.lock();
+        state.pending = true;
+        self.cond.notify_one();
+    }
+
+    /// Wait for a raise, or the stop — whichever comes first, the stop
+    /// outranking a raise once asked. A raise that came before this wait is
+    /// answered at once.
+    pub(crate) fn wait(&self) -> Woken {
+        let mut state = self.state.lock();
+        loop {
+            if state.stopped {
+                return Woken::Stop;
+            }
+            if state.pending {
+                state.pending = false;
+                return Woken::Due;
+            }
+            self.cond.wait(&mut state);
+        }
+    }
+
+    /// Stop: every wait answers [`Woken::Stop`], now and forever.
+    pub(crate) fn stop(&self) {
+        self.state.lock().stopped = true;
+        self.cond.notify_all();
+    }
+
+    /// Whether the stop has been asked — what the thread reads between two
+    /// checkpoints of one servicing, so a run in flight is let finish and no
+    /// further one begins.
+    pub(crate) fn is_stopped(&self) -> bool {
+        self.state.lock().stopped
+    }
 }
 
 // ── the commit stream (wire v4) ──────────────────────────────────────────

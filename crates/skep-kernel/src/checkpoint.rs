@@ -7,8 +7,10 @@
 //!
 //! Layout (`SKC4`): `[magic 4][seq u64 LE][crc32c(body) u32 LE][body_len u64 LE]
 //! [chain_head 32][body_hash 32][body]`, at `checkpoint.<S>`; the fixed temp
-//! name `checkpoint.tmp` is ignored by recovery (a crash mid-checkpoint leaves
-//! at most an ignored `.tmp` — §6). `chain_head` is the commit chain's value
+//! name `checkpoint.tmp` is no base — recovery REMOVES it (a crash
+//! mid-checkpoint leaves at most a `.tmp` the next open deletes, and a failed
+//! write deletes its own before answering — §6; the directory is the
+//! kernel's alone, so the file is the kernel's to delete). `chain_head` is the commit chain's value
 //! at `seq` — the marker that held it may be reclaimed, and this is where a
 //! replay above the base continues the chain from; `body_hash` is SHA-256 over
 //! the body, meaningful because the body is CANONICAL under `SKC4` —
@@ -99,11 +101,12 @@ struct Header {
 /// What a checkpoint's `SKC4` header CLAIMS, read without its body: the
 /// coordinate the checkpoint embodies, the commit chain's value there, and
 /// SHA-256 over its canonical body — the three a published head names a base
-/// by ([`crate::Kernel::newest_checkpoint`]). Only this crate makes one, and
-/// only under every check a header can pass without its body: this build's
-/// stamp, and a seq the file's name agrees with. The body is NOT verified —
-/// its checksum and hash need the body — and `body_hash` is what a party
-/// holding the file verifies it by.
+/// by ([`crate::Kernel::newest_checkpoint`]) — and the file's length, the
+/// figure a caller sizes a floor or a byte bound by. Only this crate makes
+/// one, and only under every check a header can pass without its body: this
+/// build's stamp, and a seq the file's name agrees with. The body is NOT
+/// verified — its checksum and hash need the body — and `body_hash` is what
+/// a party holding the file verifies it by.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct CheckpointHeader {
@@ -114,6 +117,15 @@ pub struct CheckpointHeader {
     pub chain_head: [u8; 32],
     /// SHA-256 over the checkpoint's canonical body.
     pub body_hash: [u8; 32],
+    /// The file's length in bytes AS THE HEADER CLAIMS IT: the fixed header
+    /// plus the `body_len` it carries — parsed from what the file already
+    /// holds, no field of the layout added for it, so a checkpoint written
+    /// before this member reads the same. The length `load` holds the file
+    /// to, so for every checkpoint that is a base it IS the file's size; a
+    /// header whose claim the file contradicts is no base, and `load` refuses
+    /// it before a byte of its body is read. Saturating at `u64::MAX` for a
+    /// claim no file could hold.
+    pub len: u64,
 }
 
 /// The one parse of a checkpoint header, for [`CheckpointMeta::load`] and
@@ -293,8 +305,34 @@ impl CheckpointMeta {
             seq: Seq(self.seq),
             chain_head: header.chain_head,
             body_hash: header.body_hash,
+            len: (HEADER_LEN as u64).saturating_add(header.body_len),
         })
     }
+}
+
+/// The fixed temp name a checkpoint is built through, in `dir`.
+fn tmp_path(dir: &Path) -> PathBuf {
+    dir.join("checkpoint.tmp")
+}
+
+/// Remove a stray `checkpoint.tmp` from `dir` — a checkpoint a crash or a
+/// failed write left half-written under the fixed temp name — answering its
+/// length in bytes, or `None` where none stood. The open's act, under the
+/// flock ([`crate::Kernel::open`]): the file is no base ([`list`] skips the
+/// name) and keeps its room on the volume, which after a write the volume's
+/// room failed is the room the next checkpoint needs; the directory is the
+/// kernel's alone, so the deletion is the kernel's. A file that is there and
+/// cannot be removed fails the open as the I/O condition it is.
+pub(crate) fn remove_stray_tmp(dir: &Path) -> io::Result<Option<u64>> {
+    let tmp = tmp_path(dir);
+    let len = match fs::metadata(&tmp) {
+        Ok(meta) => meta.len(),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    fs::remove_file(&tmp)?;
+    fsync_dir(dir)?;
+    Ok(Some(len))
 }
 
 /// The one file name the checkpoint embodying `Seq ≤ seq` has:
@@ -369,9 +407,11 @@ pub(crate) enum WriteFail {
     /// could not encode. Nothing was written, not even the temp file: the
     /// encode precedes the first file operation.
     Serialize(Cause),
-    /// A file operation failed. At most an ignored `checkpoint.tmp` survives —
-    /// the rename is what publishes a checkpoint, so a failure before it
-    /// leaves no base, and one after it leaves a whole one (§6).
+    /// A file operation failed. No `checkpoint.tmp` survives it: the rename
+    /// is what publishes a checkpoint, so a failure before it leaves no base
+    /// and the temp file is removed before this is answered — best-effort,
+    /// its own failure folded into the account — and one after it leaves a
+    /// whole one (§6).
     Io(io::Error),
 }
 
@@ -406,6 +446,15 @@ impl From<io::Error> for WriteFail {
 /// is ever served, but the base is then useless — and under the documented
 /// `N = 1` retention it is the only one. [`crate::Kernel::checkpoint`]'s
 /// checkpoint mutex is the one place that obligation is discharged.
+///
+/// A failure past the temp file's creation and before its rename — the
+/// write, the sync or the rename itself — REMOVES the temp file before it is
+/// answered: a half-written checkpoint under the fixed name is no base and
+/// would keep its room on the volume, and after a write the volume's room
+/// failed that is exactly the room the next attempt needs. Best-effort: the
+/// removal's own failure is folded into the account beside the write's and
+/// never masks it. A crash in the same window leaves the file for the next
+/// open to remove ([`remove_stray_tmp`]).
 pub(crate) fn write<W: Serialize>(
     dir: &Path,
     seq: u64,
@@ -413,7 +462,7 @@ pub(crate) fn write<W: Serialize>(
     chain_head: &[u8; 32],
 ) -> Result<(), WriteFail> {
     let body = codec().serialize(world).map_err(|e| WriteFail::Serialize(e))?;
-    let tmp = dir.join("checkpoint.tmp");
+    let tmp = tmp_path(dir);
     let mut f = File::create(&tmp)?;
     let mut header = Vec::with_capacity(HEADER_LEN);
     header.extend_from_slice(&MAGIC);
@@ -423,10 +472,30 @@ pub(crate) fn write<W: Serialize>(
     header.extend_from_slice(chain_head);
     header.extend_from_slice(&body_hash(&body));
     debug_assert_eq!(header.len(), HEADER_LEN);
-    f.write_all(&header)?;
-    f.write_all(&body)?;
-    f.sync_all()?;
-    fs::rename(&tmp, checkpoint_path(dir, seq))?;
+    // The window the temp file exists in: its creation above succeeded, and
+    // the rename below is what publishes it. A failure inside answers with
+    // the file removed.
+    let published = (|| -> io::Result<()> {
+        f.write_all(&header)?;
+        f.write_all(&body)?;
+        f.sync_all()?;
+        drop(f);
+        fs::rename(&tmp, checkpoint_path(dir, seq))
+    })();
+    if let Err(failed) = published {
+        let removal = match fs::remove_file(&tmp) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        };
+        return Err(WriteFail::Io(match removal {
+            Ok(()) => failed,
+            Err(not_removed) => io::Error::new(
+                failed.kind(),
+                format!("{failed}; and checkpoint.tmp could not be removed after it: {not_removed}"),
+            ),
+        }));
+    }
     fsync_dir(dir)?;
     Ok(())
 }

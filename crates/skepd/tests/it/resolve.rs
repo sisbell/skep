@@ -1053,6 +1053,14 @@ fn generate_board(port: u16, console: &str, n: u64, k: usize) -> Vec<Org> {
 fn measure(n: u64, k: usize, chain_walk: bool) {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
+    // The measure is a COLD mirror opened from genesis over `n` commits, so
+    // the board must reclaim nothing while they land: past 1,024 commits or
+    // 24 MiB of journal the daemon's cadence lands a checkpoint, the journal
+    // reclaims below it and the feed's files compact below the reclaim
+    // floor, which `Mirror::open` from genesis meets as `history_reclaimed`.
+    // The cadence is parked for the measure's life; a mirror that opens
+    // from the reclaim floor is skep-resolve's own gap.
+    sd.daemon().park_the_cadence();
     let port = sd.port();
     let console = console(port);
     let t = Instant::now();

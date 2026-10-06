@@ -510,6 +510,45 @@ fn open_creates_the_journal_directory_it_was_pointed_at() {
     assert_eq!(items(&k), vec![1]);
 }
 
+/// A `checkpoint.tmp` a crash left — no base, and room kept on the volume —
+/// is REMOVED by the open, under the flock, and the fact reported with its
+/// size for the daemon's startup line: the directory is the kernel's alone,
+/// so the file is the kernel's to delete, and the operator's acts at the
+/// floor stay two. Fixed at the open: a reopen with none standing answers
+/// `None`, as the in-memory mode, which opens no directory, always does.
+/// The bases beside it stand, and the world recovers whole (M-I5 (f);
+/// the checkpoint's safety: the `.tmp` is never a base).
+#[test]
+fn an_open_removes_a_stray_checkpoint_tmp_and_answers_its_size() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(k.stray_checkpoint_removed(), None, "a fresh directory holds none");
+    commit(&k, 1);
+    assert_eq!(k.checkpoint().unwrap(), Seq(1));
+    commit(&k, 2);
+    drop(k);
+    let junk = b"\xFF\x00a checkpoint a crash left half-written";
+    let tmp = dir.path().join("checkpoint.tmp");
+    fs::write(&tmp, junk).unwrap();
+
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(
+        k.stray_checkpoint_removed(),
+        Some(junk.len() as u64),
+        "the open found it and removed it, reporting its size"
+    );
+    assert!(!tmp.exists(), "…and it is gone");
+    assert_eq!(items(&k), vec![1, 2], "the base beside it stood and the tail replayed");
+    assert!(ckpt_file(dir.path(), 1).exists(), "the real base is untouched");
+    assert_eq!(k.checkpoint().unwrap(), Seq(2), "the next checkpoint builds through the name again");
+    drop(k);
+
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(k.stray_checkpoint_removed(), None, "a report of this open, not of the last");
+    let in_memory = Kernel::open(cfg_in_memory(), genesis()).unwrap();
+    assert_eq!(in_memory.stray_checkpoint_removed(), None, "no directory, no temp file");
+}
+
 #[test]
 fn a_journal_admits_one_live_kernel_at_a_time() {
     let dir = tempdir().unwrap();

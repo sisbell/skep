@@ -148,13 +148,19 @@ foundation and on the stores above it.
 ## The kernel, `skep-kernel`
 
 The kernel owns one directory: the journal's segments (`seg-<n>.wal`), the
-checkpoints (`checkpoint.<n>`, each written through `checkpoint.tmp`) and
-the exclusion lock (`kernel.lock`). One applier lock serializes every
+checkpoints (`checkpoint.<n>`, each written through `checkpoint.tmp` — a
+temp file the kernel alone deletes: a failed write removes its own before
+answering, and `Kernel::open` removes one a crash left, reporting its size)
+and the exclusion lock (`kernel.lock`). One applier lock serializes every
 write; a write is appended, fsynced, and only then installed as the root
-that lock-free readers load. The world is a type parameter: the kernel
-folds records through `WorldState::apply` and never reads them. Its
-modules are declared in `src/lib.rs` in dependency order, each with a line
-saying what it holds.
+that lock-free readers load. The checkpoint cadence is tested on commit
+under that lock and never by a timer; under its deferred arm a crossing
+sets a due flag the caller's own thread services — `Kernel::checkpoint`
+clears it first, then runs — and a second crossing with the flag still set
+runs the checkpoint inline as the backstop. The world is a type parameter:
+the kernel folds records through `WorldState::apply` and never reads them.
+Its modules are declared in `src/lib.rs` in dependency order, each with a
+line saying what it holds.
 
 Rules that hold across its files:
 
@@ -828,8 +834,13 @@ write passes down through them in this order:
 │                    serve the event stream · carry a     │
 │                    streaming body in the request · the  │
 │                    pruner's cadence, the logs'          │
-│                    compaction by its pass · a replace's │
-│                    deferred unlink after the reply      │
+│                    compaction by its pass · the         │
+│                    checkpoint thread: the kernel's      │
+│                    deferred trigger serviced, the byte  │
+│                    bound and the floor re-read, the     │
+│                    feed compacted, a failure said · a   │
+│                    replace's deferred unlink after the  │
+│                    reply                                │
 ├─────────────────────────────────────────────────────────┤
 │ 2 ROUTES           server.rs (router) · actor.rs        │
 │                    session_routes · read_routes · op ·  │
@@ -921,8 +932,14 @@ the store's install — nothing above their own layer.
    upload — the
    event streams' loop and budget, the pruner's cadence thread — the pass
    once the cell index is ready and then hourly, the logs' compaction on
-   its trigger among its acts — and, after a blob reply is written, the
-   replaced file's deferred unlink) and
+   its trigger among its acts — THE CHECKPOINT THREAD — the kernel's
+   deferred trigger serviced off the write path's guard: the checkpoint
+   every 1024 commits or the byte bound, whichever first, its result on
+   the operator stream, a failure said once, and after a landing the byte
+   bound and the media floor re-read from the checkpoint's size and the
+   change feed's five files compacted to the journal's reclaim floor —
+   and, after a blob reply is written, the replaced file's deferred
+   unlink) and
    `server/http.rs` (the HTTP bytes: the request reader, the reply
    writer, the event framing — and the streaming arm: for the blob
    upload's two body-carrying methods the reader takes the head alone
@@ -987,10 +1004,13 @@ the store's install — nothing above their own layer.
    passes through, one at a time, and the head writer
    (`write_path/head.rs`, which commits through the write path's own
    door). Beneath it, and reachable only from it:
-   - `write_path/feed.rs` — the change feed; beneath it,
-     `write_path/feed/derived.rs` keeps the feed's derived index files and
-     `write_path/feed/attest.rs` the attest store, the marker slot
-     mirrored per attested commit;
+   - `write_path/feed.rs` — the change feed, and the one compaction of its
+     five files to the journal's reclaim floor, run at open and by the
+     checkpoint thread after each landing; beneath it,
+     `write_path/feed/derived.rs` keeps the feed's derived index files —
+     a rewrite that fails past its rename stops its file for the uptime,
+     said once — and `write_path/feed/attest.rs` the attest store, the
+     marker slot mirrored per attested commit, never compacted;
    - `write_path/sidecar.rs` — `commits.log`, the daemon's record of what
      it committed, for whom, and whether the entry was signed — and, on a
      bare line, the journal's answer for the row's op and terms;
@@ -1027,6 +1047,9 @@ the store's install — nothing above their own layer.
    (the own scope — the base plus the pending bytes — the venue total,
    the floor — in that order, the requester's own record first), the
    creation's gate (the standing-uploads bound, the floor on no length),
+   THE FLOOR IN FORCE — the larger of the constant 256 MiB and twice the
+   newest checkpoint's size plus one maximal segment, read at open off the
+   newest checkpoint and set by the checkpoint thread as each lands —
    and the binding's read with its window.
    `media/index.rs` — THE CELL INDEX: per hash the cells naming it, per
    account the distinct hashes its cells name at their size (the base);
@@ -1143,15 +1166,19 @@ imports it.
   session layer's admission reads a value's bytes for the cell, and no
   route serves one.
 - **The daemon writes only its own files.** The journal and checkpoints
-  are the kernel's. The daemon's own files are `commits.log` — its
+  are the kernel's — its `checkpoint.tmp` included, which the kernel
+  removes at open. The daemon's own files are `commits.log` — its
   testimony about what it committed, for whom, and whether the entry was
   signed — the feed's derived index files, projections of that testimony
-  and the journal, rebuilt from them on loss, and `feed-attest.log`, the
-  attest store: each attested commit's marker slot, mirrored at commit
-  from the value the write path admitted, rebuilt from the journal above
-  the reclaim floor, and the one daemon file that is not a projection —
-  below the floor the checkpoint holds no marker, so its line there is
-  the entry signature's only copy at the origin, kept and never compacted,
+  and the journal, rebuilt from them on loss — `commits.log` and the four
+  compact to the journal's reclaim floor at open and after each checkpoint
+  the checkpoint thread lands, the floor moving then and at no other
+  moment — and `feed-attest.log`, the attest store: each attested commit's
+  marker slot, mirrored at commit from the value the write path admitted,
+  rebuilt from the journal above the reclaim floor, and the one daemon
+  file that is not a projection — below the floor the checkpoint holds no
+  marker, so its line there is the entry signature's only copy at the
+  origin, kept and never compacted, its one cut the open's tail check,
   backed up with the board directory as the kernel's own files are. And,
   through `skep-blobs`, the media stores under `blobs/`: the deposited
   files (PRIMARY — neither prunable nor rebuildable beyond the unreferenced

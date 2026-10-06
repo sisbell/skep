@@ -1604,6 +1604,201 @@ fn the_sidecar_compacts_to_the_journals_retention() {
     sd.shutdown();
 }
 
+/// The five feed files' positions as an operator reads them off the data
+/// dir: for each, the `at` of every entry line, and `commits.log`'s
+/// `min_since` fence and the four derived files' `covered` fence.
+fn feed_files_positions(dir: &Path) -> BTreeMap<&'static str, (Vec<u64>, Option<u64>)> {
+    [
+        "commits.log",
+        "feed-index.log",
+        "feed-offsets.log",
+        "feed-masked.log",
+        "feed-streams.log",
+    ]
+    .into_iter()
+    .map(|name| {
+        let text = std::fs::read_to_string(dir.join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let (mut ats, mut fence) = (Vec::new(), None);
+        for line in text.lines() {
+            let v: Value = serde_json::from_str(line).unwrap_or_else(|e| panic!("{name}: {line}: {e}"));
+            if let Some(at) = v.get("at").and_then(Value::as_u64) {
+                ats.push(at);
+            }
+            if let Some(f) = v.get("min_since").or_else(|| v.get("covered")).and_then(Value::as_u64) {
+                fence = Some(f);
+            }
+        }
+        (name, (ats, fence))
+    })
+    .collect()
+}
+
+/// One small committing write as `session` into `doc` — a one-byte prepend —
+/// answering its position.
+fn small_commit(port: u16, session: &str, doc: &str) -> u64 {
+    let v = op(
+        port,
+        Some(session),
+        &format!(r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["q"]}}"#),
+    );
+    acked_at(&v)
+}
+
+/// COMPACTION AT THE CHECKPOINT, WHILE SERVING (jw-R3 (i); M-I5 (f); P22):
+/// the reclaim floor moves at a checkpoint and at no other moment, so the
+/// checkpoint thread compacts the five feed files after each landing — the
+/// SAME rewrite the open runs, mid-uptime, under the feed's lock. A board
+/// whose journal has rotated past a segment: the thread's act (through its
+/// seam, on this thread) lands the checkpoint, the journal reclaims the
+/// closed segment below it, and `commits.log` and the four derived files
+/// shrink to the retained window — the open's own assertions, now with the
+/// daemon serving: the fence recorded, no entry at or below it, the derived
+/// files fenced at the head — while the attest store keeps its line below
+/// the floor. The feed refuses below the fence with the floor and serves
+/// from it to the head; a commit after the compaction lands in the
+/// rewritten files, which are whole and take it.
+#[test]
+fn the_checkpoint_threads_landing_compacts_the_five_feed_files_while_serving() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let doc = seed_flow(port);
+    let s1 = open_session(port, 1);
+    let early = entry_ats(&changes_ok(port, Some(&s1), "since=0"));
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let (signed_at, signed_attest) = signed_ghost_link(port, &signed, 1);
+    rotate_a_segment(port, &s1, &doc);
+    let head = head(port);
+    assert!(sd.daemon().newest_checkpoint().is_none(), "no checkpoint yet");
+    let before = feed_files_positions(dir.path());
+    assert!(before["commits.log"].0.contains(&early[0]), "the oldest position is recorded");
+    // The seeded insert names a document, so the index file holds it (the
+    // ceremony's delegate at `early[0]` names none and never enters it).
+    assert!(before["feed-index.log"].0.contains(&SEEDED_ATS[3]));
+
+    // THE THREAD's ACT: the checkpoint lands at the head, reclaims the
+    // closed segments below it, and the compaction follows.
+    sd.daemon().service_the_checkpoint_now();
+    let newest = sd.daemon().newest_checkpoint().expect("the thread's checkpoint landed");
+    assert_eq!(newest.seq.0, head, "at the head, no commit between");
+    assert!(sd.daemon().stopped_feed_files().is_empty(), "every file took its rewrite");
+
+    let after = feed_files_positions(dir.path());
+    let (ref ats, fence) = after["commits.log"];
+    let fence = fence.expect("compaction records the fence it compacted to");
+    assert!(fence >= early[0], "the fence advanced past the oldest recorded position");
+    assert!(ats.iter().all(|&at| at > fence), "no entry at or below the fence: {ats:?}");
+    assert!(ats.contains(&head), "the head's entry survives: {ats:?}");
+    for name in ["feed-index.log", "feed-offsets.log", "feed-masked.log", "feed-streams.log"] {
+        let (ref ats, covered) = after[name];
+        assert!(ats.iter().all(|&at| at > fence), "{name}: no entry at or below the fence: {ats:?}");
+        assert_eq!(covered, Some(head), "{name}: fenced at the head after the rewrite");
+    }
+    assert_eq!(after["feed-offsets.log"].0, after["commits.log"].0, "one position set, the log's");
+    // THE ATTEST STORE keeps its line below the floor (BW-01): primary there.
+    assert!(signed_at <= fence, "the signed write lies below the fence: {signed_at} <= {fence}");
+    let lines = attest_store_lines(dir.path());
+    let (_, sig) = lines
+        .get(&signed_at)
+        .unwrap_or_else(|| panic!("feed-attest.log keeps position {signed_at}'s line: {lines:?}"));
+    assert_eq!(sig, signed_attest["sig"].as_str().expect("sig"));
+
+    // The feed refuses below the fence with the floor and serves from it.
+    let (st, body) = changes_raw(port, Some(&s1), "since=0");
+    assert_eq!(st, 410, "below the fence: {}", text(&body));
+    let floor = json(&body)["floor"].as_u64().expect("the floor");
+    assert_eq!(floor, fence + 1, "the floor is the first position above the fence");
+    let v = changes_ok(port, Some(&s1), &format!("since={fence}"));
+    assert_eq!(entry_ats(&v).first(), Some(&floor));
+    assert_eq!(entry_ats(&v).last(), Some(&head));
+    // A commit after the compaction lands in the rewritten files (the head
+    // writer's own commits may follow it: the landed checkpoint is a base
+    // the next head names, trigger (b)).
+    let at = small_commit(port, &s1, &doc);
+    let later = feed_files_positions(dir.path());
+    assert!(later["commits.log"].0.contains(&at), "the rewritten log takes the next line");
+    assert!(later["feed-offsets.log"].0.contains(&at), "…and so does each derived file");
+    assert!(later["feed-index.log"].0.contains(&at));
+    let served = entry_ats(&changes_ok(port, Some(&s1), &format!("since={head}")));
+    assert_eq!(served.first(), Some(&at), "served: {served:?}");
+    assert!(sd.daemon().stopped_feed_files().is_empty());
+
+    // Nothing lies below the floor now, so a second landing compacts nothing
+    // and the files stand.
+    sd.daemon().service_the_checkpoint_now();
+    assert_eq!(feed_files_positions(dir.path()), later, "no segment was reclaimed: nothing moved");
+    sd.shutdown();
+}
+
+/// THE STOP, carried into the compaction's rewrite (jw-R3 (i); P22; the
+/// settled disposition for `record`: reported, never failing an op): a
+/// rewrite that fails PAST its rename — the new file in place, the handle
+/// naming the replaced one — STOPS its file for the uptime, said once, and
+/// the next append is a no-op; the write it followed is acked and served
+/// this uptime from the resident entries; the next open re-derives the
+/// unrecorded position as a bare entry. Driven through the seam that refuses
+/// the reopen of each of the five files.
+#[test]
+fn a_feed_rewrite_failed_past_its_rename_stops_the_file_and_fails_no_op() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let doc = seed_flow(port);
+    let s1 = open_session(port, 1);
+    rotate_a_segment(port, &s1, &doc);
+    let head = head(port);
+    sd.daemon().fail_the_feeds_next_rewrite_past_rename();
+    sd.daemon().service_the_checkpoint_now();
+    assert_eq!(sd.daemon().newest_checkpoint().map(|h| h.seq.0), Some(head), "the checkpoint landed");
+    assert_eq!(
+        sd.daemon().stopped_feed_files(),
+        vec!["commits.log", "feed-index.log", "feed-offsets.log", "feed-masked.log", "feed-streams.log"],
+        "each file's rewrite failed past its rename: every one is stopped"
+    );
+    // The rewritten files are whole and in place: the fence recorded, the
+    // positions trimmed.
+    let after = feed_files_positions(dir.path());
+    let fence = after["commits.log"].1.expect("the rewritten file carries the fence");
+    assert!(after["commits.log"].0.iter().all(|&at| at > fence));
+    let lengths: BTreeMap<&str, u64> = after
+        .keys()
+        .map(|name| (*name, std::fs::metadata(dir.path().join(name)).unwrap().len()))
+        .collect();
+
+    // THE NEXT APPEND IS A NO-OP on every stopped file, and the write it
+    // followed is acked and served this uptime.
+    let at = small_commit(port, &s1, &doc);
+    for (name, len) in &lengths {
+        assert_eq!(
+            std::fs::metadata(dir.path().join(name)).unwrap().len(),
+            *len,
+            "{name}: a stopped file takes no line"
+        );
+    }
+    // Served this uptime from the resident entries, with full testimony —
+    // the head writer's own commits may follow it (trigger (b), the landed
+    // base), each a stopped file took no line of either.
+    let v = changes_ok(port, Some(&s1), &format!("since={head}"));
+    assert_eq!(entry_ats(&v).first(), Some(&at), "the write is served this uptime: {v}");
+    assert!(v["changes"][0]["op"].is_string(), "with full testimony: {v}");
+    sd.shutdown();
+
+    // THE NEXT OPEN re-derives: the unrecorded position is a bare entry, and
+    // the files take lines again.
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let s1 = open_session(port, 1);
+    let v = changes_ok(port, Some(&s1), &format!("since={head}"));
+    let entries = v["changes"].as_array().expect("changes");
+    assert!(entries.iter().any(|e| e["at"].as_u64() == Some(at)), "re-derived: {v}");
+    let bare = entries.iter().find(|e| e["at"].as_u64() == Some(at)).unwrap();
+    assert!(bare["docs"].is_null() && bare["time"].is_null(), "bare, never invented: {bare}");
+    assert!(sd.daemon().stopped_feed_files().is_empty(), "a fresh open stops nothing");
+    let again = small_commit(port, &s1, &doc);
+    assert!(feed_files_positions(dir.path())["commits.log"].0.contains(&again));
+    sd.shutdown();
+}
+
 /// The crash child's environment: its data dir, and the point it is killed
 /// after — `append`, the signed write acked, or `checkpoint`, the reclaiming
 /// checkpoint returned. Set by the parent alone; their presence IS child mode.

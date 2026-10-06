@@ -50,6 +50,59 @@ fn checkpoint_header_layout_is_magic_seq_crc_body_len_chain_head_and_body_hash()
     assert_eq!(list(dir.path()).unwrap().len(), 1);
 }
 
+/// A write that fails PAST the temp file's creation — here at the rename,
+/// refused because a directory stands at the checkpoint's own name — leaves
+/// no `checkpoint.tmp`: the temp file is removed before the failure is
+/// answered, and the failure answered is the write's own, the rename's
+/// refusal. The one the write's directory contract makes the kernel's
+/// (M-I5 (f): a failed checkpoint leaves the journal whole and unreclaimed,
+/// and keeps no room of its own on the volume).
+#[test]
+fn a_write_that_fails_past_the_temp_files_creation_removes_it() {
+    let dir = tempdir().unwrap();
+    fs::create_dir(checkpoint_path(dir.path(), 7)).unwrap();
+    let refused = write(dir.path(), 7, &world(), &CHAIN_HEAD).expect_err("the rename is refused");
+    assert!(matches!(refused, WriteFail::Io(_)), "the write's own failure: {refused:?}");
+    assert!(!dir.path().join("checkpoint.tmp").exists(), "the temp file is gone");
+    let listed = list(dir.path()).unwrap();
+    assert_eq!(listed.len(), 1, "the directory at the name is listed, as any name is");
+    assert!(listed[0].load::<Vec<u64>>().is_err(), "…and is no base");
+    // The failure answered names the rename, not the removal.
+    let text = match refused {
+        WriteFail::Io(e) => e.to_string(),
+        WriteFail::Serialize(_) => unreachable!("the world serializes"),
+    };
+    assert!(!text.contains("could not be removed"), "the removal succeeded: {text}");
+
+    // The name cleared, the same write lands whole.
+    fs::remove_dir(checkpoint_path(dir.path(), 7)).unwrap();
+    write(dir.path(), 7, &world(), &CHAIN_HEAD).expect("the retry lands");
+    assert!(!dir.path().join("checkpoint.tmp").exists());
+    assert_eq!(list(dir.path()).unwrap()[0].load::<Vec<u64>>().unwrap().world, world());
+}
+
+/// A stray `checkpoint.tmp` — a crash's leftover — is the kernel's to remove
+/// at the open: `remove_stray_tmp` answers its size and deletes it, answers
+/// `None` where none stands, and leaves every base beside it untouched.
+#[test]
+fn a_stray_temp_file_is_removed_with_its_size_answered_and_the_bases_untouched() {
+    let dir = tempdir().unwrap();
+    assert_eq!(remove_stray_tmp(dir.path()).unwrap(), None, "nothing to remove");
+    write(dir.path(), 3, &world(), &CHAIN_HEAD).expect("a base");
+    let junk = b"\xFF\x00garbage, not a checkpoint";
+    fs::write(dir.path().join("checkpoint.tmp"), junk).unwrap();
+    assert_eq!(
+        remove_stray_tmp(dir.path()).unwrap(),
+        Some(junk.len() as u64),
+        "the stray's size, as an operator line reports it"
+    );
+    assert!(!dir.path().join("checkpoint.tmp").exists(), "…and it is gone");
+    assert_eq!(remove_stray_tmp(dir.path()).unwrap(), None, "once");
+    let listed = list(dir.path()).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].load::<Vec<u64>>().unwrap().world, world(), "the base stands");
+}
+
 #[test]
 fn a_flipped_body_byte_refuses_the_base() {
     // The header checksum is what `load` validates before trusting a base,
@@ -200,11 +253,19 @@ fn a_header_reads_without_its_body_under_the_checks_a_header_holds() {
         seq: Seq(7),
         chain_head: CHAIN_HEAD,
         body_hash: written_hash,
+        len: data.len() as u64,
     };
-    assert_eq!(header, claimed, "the coordinate, the chain there, the body's hash");
+    assert_eq!(header, claimed, "the coordinate, the chain there, the body's hash, the length");
+    assert_eq!(
+        header.len,
+        fs::metadata(&path).unwrap().len(),
+        "the length the header claims is the file's, for a checkpoint that is a base"
+    );
 
     // Cut to its header: nothing after it is read, so the answer is the
-    // same — and the body `load` must verify is no longer there.
+    // same — the length included, which is the HEADER's claim and not a
+    // `stat` of the file — and the body `load` must verify is no longer
+    // there.
     fs::write(&path, &data[..HEADER_LEN]).unwrap();
     let header = header_of(dir.path()).expect("the header reads without its body");
     assert_eq!(header, claimed);

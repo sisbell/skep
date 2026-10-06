@@ -60,8 +60,12 @@ pub enum Disposition {
     /// The referent the request named may yet arrive: a client that raced its
     /// own prerequisite may reissue once that prerequisite commits.
     Reorder,
-    /// The fault was transient — an I/O hiccup, and the operation did
-    /// nothing — so this same request may succeed unchanged.
+    /// The operation did nothing, and the code is one many transient faults
+    /// share, so this same request MAY succeed unchanged — but where the
+    /// cause is the volume's room (a durability barrier failed on a full
+    /// volume) no reissue succeeds until the operator frees it, which the
+    /// operator stream names; the client's act is then to say so, never to
+    /// reissue blindly.
     Retry,
     /// The kernel stopped accepting writes. Reads are still served.
     Halt,

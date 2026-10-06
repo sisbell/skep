@@ -30,9 +30,15 @@
 //!
 //! **Durability is configuration, not code**: [`Daemon::open`] opens M2's
 //! kernel on a real directory with `Durability::Fsync` (rollback burned-seq
-//! policy), an every-1024-commits checkpoint cadence, and two retained
-//! checkpoints — genesis on a fresh store, recovery on an existing one, both
-//! inside `Engine::open`. The only files this crate writes itself are the
+//! policy), a checkpoint cadence of every 1024 commits OR a byte bound,
+//! whichever first — the bound a quarter of the newest checkpoint's size
+//! and never below 24 MiB, re-read as each checkpoint lands — DEFERRED to
+//! the daemon's own checkpoint thread (`server/listen.rs`), which runs the
+//! checkpoint off the write path's guard, says a failure once on the
+//! operator stream, and compacts the change feed's files to the journal's
+//! reclaim floor after each landing; and two retained checkpoints — genesis
+//! on a fresh store, recovery on an existing one, both inside
+//! `Engine::open`. The only files this crate writes itself are the
 //! change feed's: the commit-metadata sidecar `commits.log`, its four
 //! derived sidecars (`feed-index.log`, `feed-offsets.log`, `feed-masked.log`,
 //! `feed-streams.log`), the attest store `feed-attest.log` — the marker slot
@@ -169,6 +175,7 @@ mod reply;
 mod request;
 mod scan;
 
+use std::num::NonZeroU64;
 use std::path::Path;
 #[cfg(any(test, feature = "test-hooks"))]
 use std::sync::atomic::AtomicBool;
@@ -176,7 +183,9 @@ use std::sync::atomic::AtomicBool;
 use skep_engine::{Engine, EngineError, HistoryError, Recovery, World};
 use skep_febe::OperationSurface;
 use skep_identity::HasIdentity;
-use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource, Seq};
+use skep_kernel::{
+    BurnedSeqPolicy, CheckpointError, CheckpointPolicy, Durability, KernelConfig, SaltSource, Seq,
+};
 #[cfg(feature = "observe")]
 use skep_namespace::PrincipalId;
 
@@ -203,12 +212,54 @@ pub use listen::{serve, Skepd, DEFAULT_WORKERS, MIN_WORKERS};
 pub use reply::{Body, Fetch, Reply, Routed};
 pub use request::HttpRequest;
 
-/// Auto-checkpoint cadence: every N commits (M2 evaluates on-commit; no
-/// timer thread exists anywhere in this daemon). Together with
-/// [`RETAINED_CHECKPOINTS`] this sets the sidecar's reconstruction ceiling
-/// at open (see `CommitsLog::open`): raising either lengthens startup on a
-/// data dir whose commit metadata is missing.
+/// Auto-checkpoint cadence, the commit half: every N commits (M2 evaluates
+/// on-commit; the daemon's checkpoint thread waits on the kernel's due flag,
+/// not on a timer — no timer thread exists anywhere in this daemon).
+/// Together with [`RETAINED_CHECKPOINTS`] this sets the sidecar's
+/// reconstruction ceiling at open (see `CommitsLog::open`): raising either
+/// lengthens startup on a data dir whose commit metadata is missing. The
+/// byte half beside it — [`CHECKPOINT_BYTES_FLOOR`], [`CHECKPOINT_BYTES_SHARE`]
+/// — crosses first on a board of large commits, where this count alone would
+/// let the journal outrun the floor.
 const CHECKPOINT_EVERY_COMMITS: u64 = 1024;
+
+/// THE CADENCE's BYTE BOUND, its FLOOR — 24 MiB, INTERIM (D1; the
+/// journal-writes investigation §3.2, the owner's ruling jw-R1): the least
+/// the byte bound B is, whatever the newest checkpoint's size. The bound is
+/// what makes the media floor a guarantee: the floor must hold the next
+/// checkpoint, the journal appended until it lands and the daemon's own
+/// lines for those commits, which holds iff B·(1 + g + d) ≤ C — C the
+/// newest checkpoint's size, g the checkpoint's growth per journal byte, d
+/// the daemon's lines per journal byte, 1 + g + d measured from 1.35 (bulk
+/// prose) to ≈ 3.0 (tiny attested commits). Below the floor's crossover
+/// the constant half of the media floor covers C + 3·B + one segment at
+/// 24 MiB with room; above it [`CHECKPOINT_BYTES_SHARE`] holds. The grace
+/// of the deferred cadence (one window, the backstop's) doubles the window
+/// the floor must cover, which the share's slack absorbs.
+const CHECKPOINT_BYTES_FLOOR: u64 = 24 * 1024 * 1024;
+
+/// THE CADENCE's BYTE BOUND, its SHARE — 4, INTERIM (D1; jw-R1): the byte
+/// bound B is the newest checkpoint's size divided by this, never below
+/// [`CHECKPOINT_BYTES_FLOOR`], re-read as each checkpoint lands. A quarter
+/// holds the inequality above at every measured regime with slack of at
+/// least C/4 — a half holds prose and 1 KiB values alone, a third every
+/// unsigned size and the signed tiny case at its edge — at a checkpoint I/O
+/// of about four bytes of checkpoint per byte of journal on bulk inserts.
+/// The owner may move the divisor; the bound stays RELATIVE to the newest
+/// checkpoint, never a constant: a constant sized for a small board lets a
+/// large one's journal outrun its floor, and one sized for a large board
+/// checkpoints a small one at every few megabytes.
+const CHECKPOINT_BYTES_SHARE: u64 = 4;
+
+/// THE BYTE BOUND for a newest checkpoint of `newest_checkpoint_len` bytes
+/// (`None`: none yet, the floor alone): `max(CHECKPOINT_BYTES_FLOOR, C /
+/// CHECKPOINT_BYTES_SHARE)`. Non-zero by the floor, which is what the
+/// kernel's setter takes.
+fn cadence_bytes_for(newest_checkpoint_len: Option<u64>) -> NonZeroU64 {
+    let share = newest_checkpoint_len.map_or(0, |c| c / CHECKPOINT_BYTES_SHARE);
+    NonZeroU64::new(share.max(CHECKPOINT_BYTES_FLOOR))
+        .expect("the byte bound's floor is a non-zero constant")
+}
 
 /// Retained checkpoints: two, so `BadCheckpoint` recovery can fall back to
 /// the older base instead of a full-journal replay from genesis. The other
@@ -541,13 +592,23 @@ impl Daemon {
         media_opts: MediaOptions,
         salt: SaltSource,
     ) -> Result<Daemon, DaemonError> {
+        // THE CADENCE (jw-R1, jw-R2): every `CHECKPOINT_EVERY_COMMITS` OR the
+        // byte bound, whichever first, DEFERRED — a crossing sets the
+        // kernel's due flag and the checkpoint thread runs it off the write
+        // path's guard; a second crossing before the thread has serviced the
+        // first runs inline as the kernel's backstop. The byte bound opens at
+        // its floor and is re-read off the newest checkpoint below, once the
+        // engine has opened, and by the thread as each one lands.
         let cfg = KernelConfig {
             durability: Durability::Fsync {
                 journal_path: data_dir.to_path_buf(),
                 retain_checkpoints: RETAINED_CHECKPOINTS,
                 burned_seq: BurnedSeqPolicy::Rollback,
             },
-            checkpoint: CheckpointPolicy::EveryN(CHECKPOINT_EVERY_COMMITS),
+            checkpoint: CheckpointPolicy::Deferred(Box::new(CheckpointPolicy::EitherOf(
+                Box::new(CheckpointPolicy::EveryN(CHECKPOINT_EVERY_COMMITS)),
+                Box::new(CheckpointPolicy::JournalBytes(CHECKPOINT_BYTES_FLOOR)),
+            ))),
             salt,
         };
         // THE SEEDING CHECK, THIS DAEMON ITS HAND (REG-1.28, REG-1.32): the
@@ -566,6 +627,22 @@ impl Daemon {
         for warning in recovery_warnings(engine.recovery()) {
             notice::line(format_args!("warning (at open): {warning}"));
         }
+        // THE STRAY TEMP FILE (jw-R4; AUTH-2.86's family of startup reports):
+        // a checkpoint a crash or a full volume left half-written, which the
+        // kernel's open found and removed — said here, the kernel answering
+        // the fact, so the operator's acts at the floor stay two.
+        if let Some(bytes) = engine.kernel().stray_checkpoint_removed() {
+            notice::line(format_args!(
+                "checkpoint.tmp found ({bytes} bytes) and removed: a checkpoint a crash or the \
+                 journal's own full volume left half-written, no base, its room on the volume \
+                 reclaimed by the open"
+            ));
+        }
+        // THE NEWEST CHECKPOINT's SIZE, read once here: the byte bound of
+        // the cadence and the floor in force both scale by it, and the
+        // thread re-reads it as each checkpoint lands.
+        let newest_checkpoint_len = engine.kernel().newest_checkpoint().map(|header| header.len);
+        engine.kernel().set_cadence_bytes(cadence_bytes_for(newest_checkpoint_len));
         // THE BLOB STORE, opened under `blobs/` beside the journal: its
         // reconciliation and compaction complete here, before anything is
         // served (the record: "OPEN's PASSES OVER BOTH STORES … COMPLETE
@@ -573,10 +650,11 @@ impl Daemon {
         // — the daemon's default, one eighth of the volume's capacity read
         // once here, until the serving layer's channel installs a record
         // (AUTH-4.70, owed) — are named on the operator stream with their
-        // source, and the upload setting beside them. Opened AHEAD of the
-        // write path, which takes the gate's cell index to enter at every
-        // commit from here on.
+        // source, the floor in force at start beside them, and the upload
+        // setting after. Opened AHEAD of the write path, which takes the
+        // gate's cell index to enter at every commit from here on.
         let media = MediaGate::open_with(data_dir, media_opts).map_err(DaemonError::Media)?;
+        media.set_floor(MediaGate::floor_in_force(newest_checkpoint_len));
         notice::line(media.startup_line());
         notice::line(format_args!(
             "media uploads: {}",
@@ -999,6 +1077,76 @@ impl Daemon {
     #[doc(hidden)]
     pub fn recovery(&self) -> Option<&Recovery> {
         self.engine.recovery()
+    }
+}
+
+// ── the checkpoint thread's work ─────────────────────────────────────────
+//
+// What the thread `listen.rs` spawns runs, as `Daemon` methods at the routes'
+// layer: the kernel's flag read, and the checkpoint with its consequences —
+// the byte bound and the floor re-read, the feed compacted, the failure said.
+impl Daemon {
+    /// Whether the kernel's cadence has crossed since the last checkpoint
+    /// began (`Kernel::checkpoint_due`) — what the checkpoint thread reads
+    /// before each run, and after one, since a crossing during a run sets
+    /// the flag again.
+    pub(crate) fn checkpoint_is_due(&self) -> bool {
+        self.engine.kernel().checkpoint_due()
+    }
+
+    /// RUN THE CHECKPOINT THE CADENCE CALLS FOR, on the calling thread —
+    /// the checkpoint thread's one act (jw-R2 (c)), off the write path's
+    /// guard: `Kernel::checkpoint`, which clears the due flag first and
+    /// takes its own mutex and no applier lock, so every write proceeds
+    /// beside it. On a LANDING: the newest checkpoint's size re-read and the
+    /// cadence's byte bound ([`cadence_bytes_for`]) and the media floor
+    /// (`MediaGate::floor_in_force`) set from it, then the change feed's
+    /// five files compacted to the journal's reclaim floor
+    /// (`WritePath::compact_feed_below_reclaim_floor`), and one line naming
+    /// all of it. On a FAILURE: ONE line in the operator's terms — the
+    /// position the checkpoint was taken at, the cause with the I/O text (a
+    /// full volume says so), that the journal is NOT reclaimed, and that the
+    /// next attempt is at the cadence's next crossing — never twice for one
+    /// failure, since the flag it cleared is set again only by a crossing.
+    /// The kernel removes its own temp file before answering the failure.
+    pub(crate) fn service_the_checkpoint(&self) {
+        let at = self.engine.kernel().current_seq();
+        match self.engine.kernel().checkpoint() {
+            Ok(landed) => {
+                let newest = self.engine.kernel().newest_checkpoint().map(|header| header.len);
+                let bytes_bound = cadence_bytes_for(newest);
+                self.engine.kernel().set_cadence_bytes(bytes_bound);
+                let floor = MediaGate::floor_in_force(newest);
+                self.media.set_floor(floor);
+                let compacted = self.writes.compact_feed_below_reclaim_floor(&self.engine);
+                notice::line(format_args!(
+                    "checkpoint at position {landed} landed ({} bytes): the cadence's byte bound \
+                     {bytes_bound}, the media floor in force {floor}; the change feed's files {}",
+                    newest.map_or_else(|| "size unread".to_string(), |len| len.to_string()),
+                    match compacted {
+                        Some(fence) => format!("compacted below position {}", fence + 1),
+                        None => "hold nothing below the reclaim floor".to_string(),
+                    }
+                ));
+            }
+            Err(e) => {
+                // A full volume is named in the operator's own words beside
+                // the I/O text, which carries the OS's: it is the one cause
+                // whose act — room freed on the volume — is the operator's
+                // alone.
+                let cause = match &e {
+                    CheckpointError::Io(io) if io.kind() == std::io::ErrorKind::StorageFull => {
+                        format!("the volume is full ({io})")
+                    }
+                    other => other.to_string(),
+                };
+                notice::line(format_args!(
+                    "checkpoint at position {at} FAILED: {cause}; the journal is not reclaimed \
+                     and holds every commit, and the next attempt is at the cadence's next \
+                     crossing"
+                ));
+            }
+        }
     }
 }
 

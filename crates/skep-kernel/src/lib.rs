@@ -22,6 +22,24 @@
 //! return. The `transact`/`snapshot` signatures and the `LockKey` seam are
 //! invariant across the deferred per-key/CAS realizations.
 //!
+//! ## Checkpoints, inline or deferred
+//!
+//! The §6 cadence is tested on commit under the applier lock, never by a
+//! timer. Under its inline arms the crossing commit runs the checkpoint on
+//! its own thread and discards the result; under
+//! [`CheckpointPolicy::Deferred`] it SETS THE DUE FLAG instead
+//! ([`Kernel::checkpoint_due`], lock-free) and the caller's own thread runs
+//! [`Kernel::checkpoint`] — which clears the flag FIRST, then runs — and
+//! reads the result. A crossing that finds the flag already set runs the
+//! checkpoint inline after all, THE BACKSTOP: a caller that services no flag
+//! gets a checkpoint at every second crossing and never an unbounded
+//! window. [`CheckpointPolicy::EitherOf`] crosses on a commit count or a
+//! byte bound, whichever first, and [`Kernel::set_cadence_bytes`] moves the
+//! byte bound in a running kernel; [`CheckpointHeader::len`] is the figure a
+//! caller sizes it by. The fixed `checkpoint.tmp` is the kernel's to remove:
+//! a failed write removes its own, and [`Kernel::open`] removes one a crash
+//! left, reporting its size as [`Kernel::stray_checkpoint_removed`].
+//!
 //! ## Boundary — deliberately NOT owned here
 //!
 //! * address, frontier, or coverage-class computation (M1/M3/M7 — keys and
@@ -124,7 +142,7 @@ mod kernel;
 pub use checkpoint::CheckpointHeader;
 pub use config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
 pub use error::{CheckpointError, HistoryError, OpenError, RebuildError, TxnError};
-pub use journal::{Attestation, AttestationError, MAX_SIG_BYTES, MAX_TXN_BYTES};
+pub use journal::{Attestation, AttestationError, MAX_SEGMENT_LEN, MAX_SIG_BYTES, MAX_TXN_BYTES};
 pub use kernel::{Kernel, Recovery, Snapshot, Staging};
 pub use replay::SkippedBase;
 

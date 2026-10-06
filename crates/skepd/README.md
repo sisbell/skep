@@ -72,7 +72,13 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **Deterministic JSON codec** — key-sorted marshalling so wire bytes
   never depend on map iteration order.
 - **Durability is configuration** — fsync policy and checkpoint
-  cadence are chosen here, not baked into the kernel.
+  cadence are chosen here, not baked into the kernel: a checkpoint every
+  1024 commits or a byte bound — a quarter of the newest checkpoint's
+  size, never below 24 MiB, re-read as each lands — whichever first, run
+  by the daemon's own checkpoint thread off the write path's guard so no
+  write waits for it, a failure said once on the operator stream, and the
+  change feed's files compacted to the journal's reclaim floor after each
+  landing.
 
 A library and a binary. The binary runs against a data directory and
 serves a board; the library (`Daemon`, `serve`) is the same daemon for

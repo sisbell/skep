@@ -34,11 +34,15 @@
 //!
 //! DURABLE BEFORE THE NEXT COMMIT, AND A FAILED LINE HALTS WRITES (SO-I5 (d):
 //! no signature the board keeps is lost by a crash, a power loss or a failed
-//! write). The checkpoint that reclaims a position's journal segment runs
-//! inside a LATER commit than the position's own — the kernel checkpoints
-//! from within a commit, and reclaims only below the oldest checkpoint it
-//! retains — and every commit opens after the previous write's record step,
-//! under the write path's serialization lock. So [`AttestStore::record`]
+//! write). The checkpoint that reclaims a position's journal segment is
+//! TRIGGERED by a LATER commit than the position's own and runs on the
+//! daemon's checkpoint thread — the kernel's cadence crosses within a
+//! commit and sets the flag that thread services, the thread notified after
+//! that commit's record step, and the backstop running inline within the
+//! later commit itself — and it reclaims only below the oldest checkpoint
+//! the kernel retains, which is strictly below the root it embodies; and
+//! every commit opens after the previous write's record step, under the
+//! write path's serialization lock. So [`AttestStore::record`]
 //! SYNCS the line before it returns ([`LineFile::append_synced`]), and the
 //! line is on disk before any commit that could take the journal's copy away
 //! can begin; the open syncs what it rebuilt before the first commit, for the

@@ -2,6 +2,7 @@
 //! selects, carried on [`KernelConfig`] (§Public interface).
 
 use std::io;
+use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -20,12 +21,18 @@ pub struct KernelConfig {
     /// durability modes: under [`Durability::InMemory`] the trigger still
     /// evaluates and the `checkpoint()` it fires is a no-op.
     ///
-    /// A checkpoint the trigger fires runs on the committing thread, after
-    /// that commit is durable and installed, and its failure is DISCARDED —
-    /// the transaction is already acknowledged, so the error has no sound
-    /// path out (§3/§6). A caller who needs to know whether checkpointing is
-    /// succeeding calls [`crate::Kernel::checkpoint`] itself and reads the
-    /// result.
+    /// Under every arm but [`CheckpointPolicy::Deferred`], a checkpoint the
+    /// trigger fires runs INLINE on the committing thread, after that commit
+    /// is durable and installed, and its failure is DISCARDED — the
+    /// transaction is already acknowledged, so the error has no sound path
+    /// out (§3/§6). Under the deferred arm the crossing SETS THE DUE FLAG
+    /// ([`crate::Kernel::checkpoint_due`]) and runs nothing; the caller's own
+    /// thread runs [`crate::Kernel::checkpoint`] and reads the result — and a
+    /// second crossing that finds the flag still set runs the checkpoint
+    /// inline as the backstop, so the window never grows unbounded. A caller
+    /// who needs to know whether checkpointing is succeeding calls
+    /// [`crate::Kernel::checkpoint`] itself and reads the result, under
+    /// either arm.
     pub checkpoint: CheckpointPolicy,
     /// Where the commit chain's per-transaction SALT comes from (`SKJ4`):
     /// [`SaltSource::Os`] for every deployment, [`SaltSource::Seeded`] for
@@ -227,9 +234,13 @@ pub enum BurnedSeqPolicy {
 /// Auto-checkpoint cadence policy — evaluated on-commit inside `transact`
 /// (§6); there is no timer thread. The *mechanism* (on-commit trigger,
 /// counters in the applier-locked state, reset by the triggering commit) is
-/// fixed; only the variant/threshold is the open knob.
+/// fixed; the variant/threshold is the open knob, and — under
+/// [`CheckpointPolicy::Deferred`] alone — WHERE the checkpoint a crossing
+/// calls for runs. Two arms hold policies of their own, so the type is
+/// `Clone` and not `Copy`: a configuration is built once and cloned where
+/// the kernel keeps it.
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CheckpointPolicy {
     /// Checkpoint after every `n` commits, `n ≥ 1`. [`Manual`] is how the
     /// auto-trigger is disabled; `0` is refused at [`crate::Kernel::open`].
@@ -245,23 +256,64 @@ pub enum CheckpointPolicy {
     /// auto-trigger reset, `n ≥ 1` (always zero under
     /// [`Durability::InMemory`], which journals nothing). [`Manual`] is how
     /// the auto-trigger is disabled; `0` is refused at
-    /// [`crate::Kernel::open`].
+    /// [`crate::Kernel::open`]. The one threshold a running kernel can MOVE:
+    /// [`crate::Kernel::set_cadence_bytes`] replaces it in place, wherever
+    /// this arm sits inside the policy, so a caller sizing the bound from the
+    /// newest checkpoint re-reads it as each one lands.
     ///
     /// [`Manual`]: CheckpointPolicy::Manual
     JournalBytes(u64),
     /// No auto-trigger — the caller drives `checkpoint()` from its own loop.
     Manual,
+    /// Checkpoint when EITHER policy crosses, whichever first — a commit
+    /// count beside a byte bound is the shape it exists for, `EveryN(n)` and
+    /// `JournalBytes(b)`, so the journal between two checkpoints is bounded
+    /// in commits AND in bytes. One crossing resets EVERY counter, for both
+    /// halves: the next window starts at the commit that crossed. Each half
+    /// is held to its own rule at [`crate::Kernel::open`], and neither half
+    /// may be [`Deferred`], which is the outermost arm alone.
+    ///
+    /// [`Deferred`]: CheckpointPolicy::Deferred
+    EitherOf(Box<CheckpointPolicy>, Box<CheckpointPolicy>),
+    /// The inner policy's crossing DEFERRED to the caller's own thread. A
+    /// commit that crosses resets the counters as every crossing does and
+    /// SETS THE DUE FLAG ([`crate::Kernel::checkpoint_due`]) in place of
+    /// running the checkpoint: nothing runs on the committing thread. The
+    /// caller's thread reads the flag — lock-free — and runs
+    /// [`crate::Kernel::checkpoint`], which CLEARS THE FLAG FIRST and then
+    /// runs, so a crossing during the run sets it again and that thread runs
+    /// once more after; the result the inline arms discard is that thread's
+    /// to read and report.
+    ///
+    /// THE BACKSTOP, the kernel's own and thread-free: a crossing that finds
+    /// the flag ALREADY SET — the last crossing not yet serviced — runs the
+    /// checkpoint INLINE on the committing thread, as the inner policy alone
+    /// would at every crossing. So a caller that never services the flag,
+    /// and a board whose writes outrun its checkpointer, get a checkpoint at
+    /// every second crossing and never an unbounded window: the journal
+    /// between two checkpoints is bounded by TWO windows of the inner policy
+    /// — one of grace — where the inner policy alone bounds it by one. The
+    /// outermost arm alone: a `Deferred` inside another arm is refused at
+    /// [`crate::Kernel::open`]. A [`Manual`] inside crosses never and defers
+    /// nothing.
+    ///
+    /// [`Manual`]: CheckpointPolicy::Manual
+    Deferred(Box<CheckpointPolicy>),
 }
 
 impl CheckpointPolicy {
-    /// The rule this policy must satisfy: `n ≥ 1` on either threshold. A
-    /// violation is surfaced rather than silently clamped — a threshold of
-    /// `0` asks for a checkpoint after every zero commits, a caller's mistake
-    /// and not a mode this kernel offers. Clamping would be the worse charity:
-    /// `0` reads as "disabled" in most configurations, and the nearest meaning
-    /// here is [`CheckpointPolicy::Manual`]'s opposite — a whole checkpoint on
-    /// the committing thread at every commit, whose failure
-    /// [`crate::Kernel::transact`] discards.
+    /// The rule this policy must satisfy: `n ≥ 1` on either threshold, in
+    /// every arm a composite holds, and [`CheckpointPolicy::Deferred`] the
+    /// outermost arm alone. A violation is surfaced rather than silently
+    /// clamped — a threshold of `0` asks for a checkpoint after every zero
+    /// commits, a caller's mistake and not a mode this kernel offers.
+    /// Clamping would be the worse charity: `0` reads as "disabled" in most
+    /// configurations, and the nearest meaning here is
+    /// [`CheckpointPolicy::Manual`]'s opposite — a whole checkpoint on the
+    /// committing thread at every commit, whose failure
+    /// [`crate::Kernel::transact`] discards. A `Deferred` nested inside an
+    /// arm would make one half of a composite deferred and the other inline,
+    /// a shape with no reading, so it is refused as the mistake it is.
     ///
     /// [`CheckpointPolicy::Interval`] is deliberately NOT refused at
     /// [`Duration::ZERO`]: an always-elapsed window is a coherent reading of a
@@ -270,7 +322,7 @@ impl CheckpointPolicy {
     ///
     /// Spelled out variant by variant, for the reason
     /// [`Durability::validate`]'s is.
-    pub(crate) fn validate(self) -> Result<(), &'static str> {
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
         match self {
             CheckpointPolicy::EveryN(0) => {
                 Err("CheckpointPolicy::EveryN requires n >= 1; Manual disables the auto-trigger")
@@ -282,6 +334,77 @@ impl CheckpointPolicy {
             | CheckpointPolicy::JournalBytes(_)
             | CheckpointPolicy::Interval(_)
             | CheckpointPolicy::Manual => Ok(()),
+            CheckpointPolicy::EitherOf(a, b) => {
+                a.validate_inner()?;
+                b.validate_inner()
+            }
+            CheckpointPolicy::Deferred(inner) => inner.validate_inner(),
+        }
+    }
+
+    /// [`CheckpointPolicy::validate`] for a policy held INSIDE another arm,
+    /// where [`CheckpointPolicy::Deferred`] is refused: the outermost arm is
+    /// the one place the deferral is read.
+    fn validate_inner(&self) -> Result<(), &'static str> {
+        match self {
+            CheckpointPolicy::Deferred(_) => {
+                Err("CheckpointPolicy::Deferred is the outermost arm alone; it wraps the others")
+            }
+            other => other.validate(),
+        }
+    }
+
+    /// Whether a crossing of this policy is DEFERRED to the caller's thread
+    /// — the outermost arm is [`CheckpointPolicy::Deferred`] — rather than
+    /// run inline on the committing one. Read once per crossing, under the
+    /// applier lock, beside the crossing test.
+    pub(crate) fn deferred(&self) -> bool {
+        matches!(self, CheckpointPolicy::Deferred(_))
+    }
+
+    /// Replace the byte bound — every [`CheckpointPolicy::JournalBytes`]
+    /// threshold this policy holds, wherever an arm nests it — with `bytes`,
+    /// answering whether one was there to replace. The one threshold a
+    /// running kernel moves ([`crate::Kernel::set_cadence_bytes`]); `n ≥ 1`
+    /// is the type's, so the rule [`CheckpointPolicy::validate`] holds at
+    /// `open` holds after every replacement too.
+    /// Replace the commit bound — every [`CheckpointPolicy::EveryN`] count
+    /// this policy holds, wherever an arm nests it — with `commits`,
+    /// answering whether one was there to replace; `set_bytes`'s twin for
+    /// the other arm ([`crate::Kernel::set_cadence_commits`]).
+    pub(crate) fn set_commits(&mut self, commits: NonZeroU64) -> bool {
+        match self {
+            CheckpointPolicy::EveryN(every) => {
+                *every = commits.get();
+                true
+            }
+            CheckpointPolicy::EitherOf(a, b) => {
+                let in_a = a.set_commits(commits);
+                let in_b = b.set_commits(commits);
+                in_a || in_b
+            }
+            CheckpointPolicy::Deferred(inner) => inner.set_commits(commits),
+            CheckpointPolicy::JournalBytes(_)
+            | CheckpointPolicy::Interval(_)
+            | CheckpointPolicy::Manual => false,
+        }
+    }
+
+    pub(crate) fn set_bytes(&mut self, bytes: NonZeroU64) -> bool {
+        match self {
+            CheckpointPolicy::JournalBytes(threshold) => {
+                *threshold = bytes.get();
+                true
+            }
+            CheckpointPolicy::EitherOf(a, b) => {
+                let in_a = a.set_bytes(bytes);
+                let in_b = b.set_bytes(bytes);
+                in_a || in_b
+            }
+            CheckpointPolicy::Deferred(inner) => inner.set_bytes(bytes),
+            CheckpointPolicy::EveryN(_)
+            | CheckpointPolicy::Interval(_)
+            | CheckpointPolicy::Manual => false,
         }
     }
 }
@@ -439,9 +562,110 @@ mod tests {
             CheckpointPolicy::Manual,
         ] {
             assert!(
-                with(policy).validate().is_ok(),
+                with(policy.clone()).validate().is_ok(),
                 "{policy:?} is a mode this offers"
             );
+        }
+    }
+
+    /// The two arms that hold policies of their own are held to the same
+    /// rules, arm by arm: a zero threshold inside either is refused with the
+    /// inner arm's own sentence, and `Deferred` is the outermost arm alone —
+    /// inside a composite, or inside itself, it is refused by name. The
+    /// shapes the daemon opens under validate: a deferred composite of a
+    /// commit count and a byte bound, and each half alone under `Deferred`.
+    #[test]
+    fn the_composite_and_the_deferred_arm_hold_their_halves_to_the_rules() {
+        let either = |a: CheckpointPolicy, b: CheckpointPolicy| {
+            CheckpointPolicy::EitherOf(Box::new(a), Box::new(b))
+        };
+        let deferred = |inner: CheckpointPolicy| CheckpointPolicy::Deferred(Box::new(inner));
+        let with = |checkpoint| KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint,
+            salt: SaltSource::Os,
+        };
+        for policy in [
+            deferred(either(CheckpointPolicy::EveryN(1024), CheckpointPolicy::JournalBytes(1))),
+            either(CheckpointPolicy::EveryN(1), CheckpointPolicy::JournalBytes(1)),
+            deferred(CheckpointPolicy::EveryN(1)),
+            deferred(CheckpointPolicy::JournalBytes(1)),
+            deferred(CheckpointPolicy::Interval(Duration::ZERO)),
+            deferred(CheckpointPolicy::Manual),
+            either(CheckpointPolicy::Interval(Duration::ZERO), CheckpointPolicy::Manual),
+        ] {
+            assert!(with(policy.clone()).validate().is_ok(), "{policy:?} is a mode this offers");
+        }
+        assert_eq!(
+            with(either(CheckpointPolicy::EveryN(0), CheckpointPolicy::JournalBytes(1)))
+                .validate()
+                .unwrap_err(),
+            "CheckpointPolicy::EveryN requires n >= 1; Manual disables the auto-trigger"
+        );
+        assert_eq!(
+            with(either(CheckpointPolicy::EveryN(1), CheckpointPolicy::JournalBytes(0)))
+                .validate()
+                .unwrap_err(),
+            "CheckpointPolicy::JournalBytes requires n >= 1; Manual disables the auto-trigger"
+        );
+        assert_eq!(
+            with(deferred(CheckpointPolicy::JournalBytes(0))).validate().unwrap_err(),
+            "CheckpointPolicy::JournalBytes requires n >= 1; Manual disables the auto-trigger"
+        );
+        let nested = "CheckpointPolicy::Deferred is the outermost arm alone; it wraps the others";
+        assert_eq!(
+            with(deferred(deferred(CheckpointPolicy::EveryN(1)))).validate().unwrap_err(),
+            nested
+        );
+        assert_eq!(
+            with(either(deferred(CheckpointPolicy::EveryN(1)), CheckpointPolicy::Manual))
+                .validate()
+                .unwrap_err(),
+            nested
+        );
+        assert_eq!(
+            with(deferred(either(CheckpointPolicy::Manual, deferred(CheckpointPolicy::Manual))))
+                .validate()
+                .unwrap_err(),
+            nested
+        );
+    }
+
+    /// The deferral is read off the outermost arm alone, and the byte bound
+    /// moves wherever the arms nest it — in a bare `JournalBytes`, inside a
+    /// composite, inside a deferred composite — while a policy holding none
+    /// answers that nothing moved and stays as it was.
+    #[test]
+    fn the_byte_bound_moves_in_place_and_the_deferral_is_the_outermost_arms() {
+        let bound = NonZeroU64::new(7).unwrap();
+        let mut bare = CheckpointPolicy::JournalBytes(1);
+        assert!(bare.set_bytes(bound));
+        assert_eq!(bare, CheckpointPolicy::JournalBytes(7));
+        assert!(!bare.deferred());
+
+        let mut composite = CheckpointPolicy::Deferred(Box::new(CheckpointPolicy::EitherOf(
+            Box::new(CheckpointPolicy::EveryN(1024)),
+            Box::new(CheckpointPolicy::JournalBytes(1)),
+        )));
+        assert!(composite.deferred());
+        assert!(composite.set_bytes(bound));
+        assert_eq!(
+            composite,
+            CheckpointPolicy::Deferred(Box::new(CheckpointPolicy::EitherOf(
+                Box::new(CheckpointPolicy::EveryN(1024)),
+                Box::new(CheckpointPolicy::JournalBytes(7)),
+            )))
+        );
+
+        for mut unmoved in [
+            CheckpointPolicy::EveryN(3),
+            CheckpointPolicy::Interval(Duration::ZERO),
+            CheckpointPolicy::Manual,
+            CheckpointPolicy::Deferred(Box::new(CheckpointPolicy::EveryN(3))),
+        ] {
+            let before = unmoved.clone();
+            assert!(!unmoved.set_bytes(bound), "{before:?} holds no byte bound");
+            assert_eq!(unmoved, before, "…and is left as it was");
         }
     }
 }

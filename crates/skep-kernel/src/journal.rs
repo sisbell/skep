@@ -130,7 +130,7 @@ pub const MAX_TXN_BYTES: u64 = MAX_FRAME_LEN as u64;
 /// (§1).
 const SEGMENT_ROTATE_BYTES: u64 = 1024 * 1024;
 /// The longest segment this module READS: twice the transaction budget. The
-/// writer appends only to a segment under [`SEGMENT_ROTATE_BYTES`], and a
+/// writer appends only to a segment under `SEGMENT_ROTATE_BYTES`, and a
 /// transaction is at most [`MAX_TXN_BYTES`] plus its slot's blob, at most
 /// [`MAX_SIG_BYTES`], so no segment this journal's writer produces reaches it
 /// (asserted below); a file past it is damage, or not this writer's, and
@@ -139,7 +139,12 @@ const SEGMENT_ROTATE_BYTES: u64 = 1024 * 1024;
 /// reader as well as the writer. Twice the budget rather than the writer's
 /// exact maximum, so a later build that lowers the rotation threshold never
 /// refuses a segment an earlier one wrote: this moves only with the format.
-const MAX_SEGMENT_LEN: u64 = 2 * MAX_TXN_BYTES;
+///
+/// PUBLIC as the one figure for "one maximal segment": a caller holding a
+/// volume's free space above a floor reserves this much for the segment in
+/// flight beside the next checkpoint, and reads it from here rather than
+/// transcribing it.
+pub const MAX_SEGMENT_LEN: u64 = 2 * MAX_TXN_BYTES;
 // …which holds only while a segment under the threshold, plus one whole
 // transaction at the budget, plus its slot at the cap, fits under it: the
 // writer appends to a segment under SEGMENT_ROTATE_BYTES, and the slot sits

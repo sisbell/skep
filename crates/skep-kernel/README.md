@@ -19,7 +19,15 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   (atomically installed immutable worlds).
 - **Checkpoints** — periodic serialized worlds with a fallback chain
   at load: a checkpoint that fails to resolve steps back to an older
-  one, or to genesis, and replays forward.
+  one, or to genesis, and replays forward. The cadence is tested on
+  commit — a count, a byte bound, or either, whichever first — and runs
+  inline on the committing thread or, under the deferred form, sets a
+  due flag the caller's own thread services (`checkpoint` clears it
+  first, then runs; a second crossing with the flag still set runs
+  inline as the backstop). The header carries the file's length, the
+  figure a floor or a byte bound is sized by, and the kernel removes
+  its own `checkpoint.tmp`: a failed write before answering, the open
+  one a crash left.
 - **Keyed critical sections** — every write names the `LockKey`s it
   would hold. Under the v1 single applier one lock serializes all writes,
   and the keys are the seam a per-key realization will use without

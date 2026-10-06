@@ -1,10 +1,11 @@
 //! The test hooks and `CLAIM_HOLD_NOTICE` (`#[doc(hidden)]` items of `Daemon`).
 
+use std::num::NonZeroU64;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 
 use skep_engine::HistoryError;
-use skep_kernel::{Attestation, SaltSource, Seq};
+use skep_kernel::{Attestation, CheckpointHeader, SaltSource, Seq};
 
 use super::{Daemon, DaemonError};
 use crate::auth::AuthOptions;
@@ -248,9 +249,14 @@ impl Daemon {
     }
 
     /// TEST HOOK (the same standing): take a KERNEL checkpoint now — the real
-    /// one, with every consequence a checkpoint has (`Kernel::checkpoint`).
-    /// It becomes the newest retained checkpoint, which is what the head
-    /// suite drives the head's trigger (b) with, without committing a whole
+    /// one, with every consequence a checkpoint has (`Kernel::checkpoint`),
+    /// on the calling thread and off the write path's guard, which is
+    /// exactly what the daemon's checkpoint thread does when the cadence's
+    /// flag is due (that thread adds the byte bound's and the floor's
+    /// re-read and the feed's compaction, which
+    /// [`Daemon::service_the_checkpoint_now`] runs). It becomes the newest
+    /// retained checkpoint, which is what the head suite drives the head's
+    /// trigger (b) with, without committing a whole
     /// `CHECKPOINT_EVERY_COMMITS` window; and it counts toward the two this
     /// daemon retains, reclaiming the closed journal below the oldest, so a
     /// test that takes more than two can find an old position answering
@@ -260,6 +266,94 @@ impl Daemon {
     #[doc(hidden)]
     pub fn checkpoint_now(&self) {
         self.engine.kernel().checkpoint().expect("the test seam's checkpoint");
+    }
+
+    /// TEST HOOK (the same standing): what THE CHECKPOINT THREAD runs when
+    /// the cadence's flag is due, on the calling thread — the checkpoint,
+    /// and on a landing the byte bound and the media floor re-read from it
+    /// and the change feed's five files compacted to the reclaim floor; on a
+    /// failure the operator's one line — so a suite drives the thread's whole
+    /// act without waiting on the thread.
+    #[doc(hidden)]
+    pub fn service_the_checkpoint_now(&self) {
+        self.service_the_checkpoint();
+    }
+
+    /// TEST HOOK (the same standing): whether the kernel's cadence has
+    /// crossed since the last checkpoint began — the due flag the thread
+    /// services (`Kernel::checkpoint_due`).
+    #[doc(hidden)]
+    pub fn checkpoint_is_due_now(&self) -> bool {
+        self.checkpoint_is_due()
+    }
+
+    /// TEST HOOK (the same standing): move the cadence's BYTE BOUND to
+    /// `bytes` — `Kernel::set_cadence_bytes`, under the applier lock — so a
+    /// suite makes the next commit cross the cadence without committing a
+    /// window of 1024 or the bound's 24 MiB, and watches the thread service
+    /// the flag. The thread re-reads the bound from the checkpoint that
+    /// lands, so one crossing is what a suite buys. PANICS on zero, which
+    /// the bound's type refuses.
+    #[doc(hidden)]
+    pub fn set_checkpoint_bytes_bound(&self, bytes: u64) {
+        let bound = NonZeroU64::new(bytes).expect("the test seam's byte bound is non-zero");
+        self.engine.kernel().set_cadence_bytes(bound);
+    }
+
+    /// TEST HOOK (the same standing): PARK THE CADENCE — both of its bounds,
+    /// the commit count and the bytes, moved past any total a suite commits
+    /// (`Kernel::set_cadence_commits`, `Kernel::set_cadence_bytes`), so no
+    /// checkpoint lands on this daemon's own trigger for its life, the
+    /// journal reclaims nothing and the feed's files compact nothing. For a
+    /// suite whose subject is a board that must stay WHOLE from genesis —
+    /// a cold mirror opened over it, a measure of the open's cost — and
+    /// nothing else: `checkpoint_now` still takes a checkpoint on demand.
+    /// The checkpoint thread re-reads the BYTE bound only after a landing,
+    /// and none lands, so the parked bounds hold.
+    #[doc(hidden)]
+    pub fn park_the_cadence(&self) {
+        let past_any = NonZeroU64::new(u64::MAX).expect("u64::MAX is non-zero");
+        let kernel = self.engine.kernel();
+        kernel.set_cadence_commits(past_any);
+        kernel.set_cadence_bytes(past_any);
+    }
+
+    /// TEST HOOK (the same standing): the newest retained checkpoint's
+    /// header — its seq, chain, body hash and length
+    /// (`Kernel::newest_checkpoint`) — or `None` before the first, so a
+    /// suite pins which checkpoint the thread landed and the size the floor
+    /// and the byte bound were re-read from.
+    #[doc(hidden)]
+    pub fn newest_checkpoint(&self) -> Option<CheckpointHeader> {
+        self.engine.kernel().newest_checkpoint()
+    }
+
+    /// TEST HOOK (the same standing): the media floor IN FORCE — the larger
+    /// of the constant and twice the newest checkpoint plus one maximal
+    /// segment, as the gate reads it at every creation and every chunk — so
+    /// a suite pins the open's reading and the thread's re-reading of it.
+    #[doc(hidden)]
+    pub fn media_floor_in_force(&self) -> u64 {
+        self.media.floor()
+    }
+
+    /// TEST HOOK (the same standing): FAIL THE FEED's NEXT REWRITE PAST ITS
+    /// RENAME — each of the five files' next compaction rewrite refused at
+    /// the reopen of the file it has just renamed into place — so a suite
+    /// reaches the stop that arm carries: the file takes no further line
+    /// this uptime, said once, the next open re-deriving. Disarms itself at
+    /// the one rewrite it fails.
+    #[doc(hidden)]
+    pub fn fail_the_feeds_next_rewrite_past_rename(&self) {
+        self.writes.fail_the_feeds_next_rewrite_past_rename();
+    }
+
+    /// TEST HOOK (the same standing): the feed files STOPPED this uptime —
+    /// `commits.log` and the four derived files that take no further line —
+    /// by name.
+    #[doc(hidden)]
+    pub fn stopped_feed_files(&self) -> Vec<&'static str> {
+        self.writes.stopped_feed_files()
     }
 
     /// TEST HOOK (the same standing: `#[doc(hidden)]`, not a stable API):

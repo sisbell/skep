@@ -1,8 +1,9 @@
 //! A counting permit pool — a try-acquire with no queue and no blocking,
 //! whose guard returns its slot on drop — the ONE mechanism behind the
-//! daemon's two bounded pools: the reconstruction budget (`history.rs`) and
-//! the class-scan pool (`server/scan.rs`). A permit is a slot of the pool that
-//! minted it, so neither bound can spend the other's.
+//! daemon's four bounded pools: the reconstruction budget (`history.rs`),
+//! the class-scan pool (`server/scan.rs`), the fetch pool (`media/serve.rs`)
+//! and the upload pool (`media.rs`). A permit is a slot of the pool that
+//! minted it, so no bound can spend another's.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -12,10 +13,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 ///
 /// The bound behind
 /// [`MAX_CONCURRENT_RECONSTRUCTIONS`](crate::history::MAX_CONCURRENT_RECONSTRUCTIONS),
-/// and — as a second, separate instance — behind `server/scan.rs`'s
-/// `MAX_CONCURRENT_CLASS_SCANS` (wire v7.9): one mechanism, two pools. A
-/// permit belongs to the pool it came from, so the two bounds cannot spend
-/// each other's slots.
+/// and — as further, separate instances — behind `server/scan.rs`'s
+/// `MAX_CONCURRENT_CLASS_SCANS` (wire v7.9), `media/serve.rs`'s fetch pool
+/// and `media.rs`'s upload pool: one mechanism, four pools. A permit
+/// belongs to the pool it came from, so no bound can spend another's slots.
 #[derive(Debug)]
 pub(crate) struct Permits {
     available: AtomicUsize,
@@ -26,7 +27,7 @@ pub(crate) struct Permits {
 /// can store it, borrow it, and read what it is — the standing every guard
 /// in `std` has, `#[must_use]` included: a permit taken and dropped in one
 /// statement licenses nothing. Public only to be the return type of the
-/// daemon's two test hooks, and `#[doc(hidden)]` for the same reason.
+/// daemon's four test hooks, and `#[doc(hidden)]` for the same reason.
 #[doc(hidden)]
 #[derive(Debug)]
 #[must_use = "a permit dropped at once returns its slot at once: bind it for as long as the \

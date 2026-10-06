@@ -189,7 +189,7 @@ use crate::limits::{MAX_BLOB_BYTES, MAX_REQUEST_BODY, MAX_SMALL_BODY};
 use crate::media::gate::MediaGate;
 use crate::media::index;
 use crate::media::serve::FetchPool;
-use crate::media::MediaOptions;
+use crate::media::{MediaOptions, UploadPool};
 use crate::notice;
 use crate::write_path::WritePath;
 use actor::Resolved;
@@ -395,13 +395,23 @@ pub struct Daemon {
     /// nothing to the journal and takes no `Serial`.
     media: MediaGate,
     /// The fetch pool behind `GET /blob?i=` (wire.md §Media, THE FETCH;
-    /// M-I7 (b)) — the third instance of [`crate::permits`]'s mechanism,
+    /// M-I5 (f)) — the third instance of [`crate::permits`]'s mechanism,
     /// disjoint from the reconstruction and class-scan pools by the borrow:
     /// an admitted fetch holds its whole file from the check to the last
     /// byte written, so the pool is the route's memory bound, and its count
     /// is the third term of [`MIN_WORKERS`]. In the serving path like the
     /// scan pool (D9): the serve is asked or refused, never told.
     fetches: FetchPool,
+    /// The upload pool behind the PUT's two body-carrying methods — the
+    /// creation and the resume of `/blob/upload` (wire.md §Media, THE
+    /// PERMIT; M-I5 (f)) — the fourth instance of [`crate::permits`]'s
+    /// mechanism and the fetch pool's twin, disjoint from the three others
+    /// by the borrow: an admitted creation or resume holds its worker from
+    /// the permit to its finish, so the pool is the family's bound on worker
+    /// occupancy, and its count is the fourth term of [`MIN_WORKERS`]. In
+    /// the serving path like the fetch pool (D9): the family is asked or
+    /// refused, never told.
+    uploads: UploadPool,
     /// The dirty-crash harness's one seam into the claim's step
     /// (`Daemon::hold_between_the_claim_and_its_head`): armed, the
     /// claim-flip tail announces the crash window and parks there, both
@@ -611,6 +621,7 @@ impl Daemon {
             scans: ClassScans::new(),
             media,
             fetches: FetchPool::new(),
+            uploads: UploadPool::new(),
             #[cfg(any(test, feature = "test-hooks"))]
             hold_between_claim_and_head: AtomicBool::new(false),
         };

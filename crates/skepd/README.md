@@ -9,14 +9,19 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   framework, no async runtime: the kernel's single applier already
   serializes writes, so worker threads are the whole concurrency
   story, and the commit stream needs flush-at-commit semantics
-  pull-based servers cannot give.
+  pull-based servers cannot give. Four permit pools bound the surfaces
+  that hold a worker long — the reconstruction, the class scan, the
+  fetch and the upload — each refusing retry-class past its count, never
+  queueing, and the default worker count is sized one above their sum,
+  so a daemon whose every pool is saturated still answers.
 - **The wire** — `/op` (execute), `/op-at` (historical reads over
   reconstructed worlds), `/chain` (the commit chain's value at a
   position), `/changes`, `/dump`, `/events` (commit stream),
   `/health`, the session routes `/challenge`, `/session`,
   `/session/close`, the blob upload's family `/blob/upload` — the
   resumable PUT of a picture's bytes, streamed to the blob store
-  ([skep-blobs](../skep-blobs)) one chunk at a time, and the deposit read —
+  ([skep-blobs](../skep-blobs)) one chunk at a time under a permit pool,
+  and the deposit read —
   and `GET /blob?i=` (with `HEAD`), the FETCH: a picture's whole file
   served by the I-address of its cell, gated by the read, checked against
   the cell before the first byte, streamed under a permit pool with the
@@ -30,7 +35,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   consulted. THE FETCH (`GET /blob?i=`) serves a picture's whole file by the
   I-address of its cell, gated by M10's read by identity and checked against
   the cell before the first byte, under a permit pool, the requester
-  re-resolved mid-stream; the gate's three scopes (the own scope — the base plus the
+  re-resolved mid-stream — the upload's creation and resume under a permit
+  pool of their own, the fetch's twin, so a handful of slow uploads never
+  holds every worker; the gate's three scopes (the own scope — the base plus the
   pending bytes — the venue total, the floor) bound what a deposit may
   take; the cell index — per hash the cells naming it, per account the
   base — is entered at every commit that mints a cell and rebuilt at

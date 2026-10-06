@@ -1,5 +1,5 @@
 {
-  "note": "THE VECTOR SET of the resumable upload (media lane B; media.md Op inventory 1, THE RESUMABLE UPLOAD IS THE STANDARD SHAPE, its seven clauses, the default per-account limit, the floor at the creation and the standing-uploads bound, the upload setting; the register M-I2 (e), M-I5 (a), (c), (f), M-I6 (b), (d), (e), (f), (h), M-I7 (e); PATTERNS P5): the second file of the media vector set beside cells.json. `pins` are the build's INTERIM pins (the board's sm-Q8), stated once in wire.md section Media and held here so a client's implementation of the shape — the FRONTEND's shell — reads them from the set and not from a transcription; `refusals` the family's error names and statuses; `vectors` the clauses as scenarios over the wire, each a list of steps the daemon's suite (tests/it/blob_routes.rs) drives and a client suite drives the same way. A step is one act under `as` (a: the board's claimant, b: a stranger seated as an account, boot: principal 0, guest: no session) with its expectation; a body is a string (its UTF-8 bytes) or {\"bytes\": n, \"seed\": k} (SplitMix64 bytes; with \"from\": o the tail from offset o, what a resume re-sends); `bind` names a created upload for later steps; `clock` advances the daemon's media clock; `limits` installs a limits record through the serving layer's channel (the test seam until AUTH-4.70's lands); `free_space` sets the floor's reading; `fail_finish_at` fails every later finish at a named step of the store's order (the seam), null failing nothing again; a vector's `board` names the daemon's setting — `uploads_closed`, launched with --no-uploads — where it is not the open default. An expected `per_account` of \"default\" is the daemon's default per-account limit: one eighth of the volume's capacity, never below `default_limit_floor_bytes`, the suite's own arithmetic over the capacity the daemon read.",
+  "note": "THE VECTOR SET of the resumable upload (media lane B; media.md Op inventory 1, THE RESUMABLE UPLOAD IS THE STANDARD SHAPE, its seven clauses, the default per-account limit, the floor at the creation and the standing-uploads bound, the upload setting; the register M-I2 (e), M-I5 (a), (c), (f), M-I6 (b), (d), (e), (f), (h), M-I7 (e); PATTERNS P5): the second file of the media vector set beside cells.json. `pins` are the build's INTERIM pins (the board's sm-Q8), stated once in wire.md section Media and held here so a client's implementation of the shape — the FRONTEND's shell — reads them from the set and not from a transcription; `refusals` the family's error names and statuses; `vectors` the clauses as scenarios over the wire, each a list of steps the daemon's suite (tests/it/blob_routes.rs) drives and a client suite drives the same way. A step is one act under `as` (a: the board's claimant, b: a stranger seated as an account, boot: principal 0, guest: no session) with its expectation; a body is a string (its UTF-8 bytes) or {\"bytes\": n, \"seed\": k} (SplitMix64 bytes; with \"from\": o the tail from offset o, what a resume re-sends); `bind` names a created upload for later steps; `clock` advances the daemon's media clock; `limits` installs a limits record through the serving layer's channel (the test seam until AUTH-4.70's lands); `free_space` sets the floor's reading; `fail_finish_at` fails every later finish at a named step of the store's order (the seam), null failing nothing again; a vector's `board` names the daemon's setting — `uploads_closed`, launched with --no-uploads — where it is not the open default. An expected `per_account` of \"default\" is the daemon's default per-account limit: one eighth of the volume's capacity, never below `default_limit_floor_bytes`, the suite's own arithmetic over the capacity the daemon read. `hold` holds every permit of THE UPLOAD PERMIT POOL through the daemon's hook (\"upload_pool\"), as in-flight creations and resumes hold them, and `null` releases them all: the pool's count is `pins.upload_pool`, counted into the daemon's worker minimum `pins.min_workers` beside the reconstruction, class-scan and fetch pools, the default worker count `pins.default_workers` one above it; a creation or a resume past the pool is refused `upload_busy`, retry-class, before any body byte — the creation making no upload, the resume keeping its upload where it stood (M-I5 (f)).",
   "pins": {
     "family": "/blob/upload",
     "designation": "blake3",
@@ -16,6 +16,9 @@
     "floor_bytes": 268435456,
     "interim_header": "Upload-Id",
     "max_standing_uploads": 8,
+    "upload_pool": 4,
+    "min_workers": 11,
+    "default_workers": 12,
     "default_limit_share": 8,
     "default_limit_floor_bytes": 268435456,
     "compaction_trigger": 4,
@@ -35,7 +38,8 @@
     "payload_too_large": 413,
     "deposit_refused": 507,
     "blob_io": 500,
-    "index_rebuilding": 503
+    "index_rebuilding": 503,
+    "upload_busy": 503
   },
   "vectors": [
     {
@@ -337,6 +341,25 @@
         {"raw": {"as": "a", "method": "PATCH", "path": "/blob/upload/{u1}", "body": "abc"}, "expect": {"status": 400, "error": "malformed_blob"}},
         {"raw": {"as": "a", "method": "PATCH", "path": "/blob/upload/{u1}?offset=0&limit=1", "body": "abc"}, "expect": {"status": 400, "error": "malformed_blob"}},
         {"raw": {"as": "a", "method": "GET", "path": "/blob/nope"}, "expect": {"status": 404, "error": "no_such_endpoint"}}
+      ]
+    },
+    {
+      "name": "the_upload_permit_pool",
+      "clause": "M-I5 (f) PICTURES NEVER STARVE OR STALL THE JOURNAL (P29; M-I6 (h); M-I7 (e)): an upload is admitted at most THE UPLOAD PERMIT POOL at once — the fetch pool's twin, counted into the worker minimum — a creation or a resume past it refused 503 upload_busy, retry-class, before any body byte: the creation makes no upload, the resume keeps its upload where it stood, the detail naming the retry and no figure; the progress read, the deposit read and the termination take no permit and are served meanwhile; the permits released, both are served",
+      "steps": [
+        {"create": {"as": "a", "length": 10, "body": "hello"}, "bind": "u1", "expect": {"status": 200, "offset": 5, "upload": true}},
+        {"create": {"as": "a", "length": 10}, "bind": "u2", "expect": {"status": 200, "offset": 0, "upload": true}},
+        {"hold": "upload_pool"},
+        {"create": {"as": "a", "length": 10}, "expect": {"status": 503, "error": "upload_busy", "detail": "all upload permits are in use; retry shortly"}},
+        {"create": {"as": "a", "length": 5, "body": "hello"}, "expect": {"status": 503, "error": "upload_busy"}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "uploads": ["u1", "u2"], "pending": 5}},
+        {"append": {"as": "a", "upload": "u1", "offset": 5, "body": "world"}, "expect": {"status": 503, "error": "upload_busy", "detail": "all upload permits are in use; retry shortly"}},
+        {"progress": {"as": "a", "upload": "u1"}, "expect": {"status": 200, "offset": 5}},
+        {"end": {"as": "a", "upload": "u2"}, "expect": {"status": 204}},
+        {"read": {"as": "a"}, "expect": {"status": 200, "uploads": ["u1"], "pending": 5}},
+        {"hold": null},
+        {"create": {"as": "a", "length": 10}, "expect": {"status": 200, "offset": 0, "upload": true}},
+        {"append": {"as": "a", "upload": "u1", "offset": 5, "body": "world"}, "expect": {"status": 200, "finish": true}}
       ]
     }
   ]

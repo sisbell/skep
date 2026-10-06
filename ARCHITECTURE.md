@@ -838,9 +838,9 @@ write passes down through them in this order:
 │                    /op: resolve → check → commit →      │
 │                         record → head writer's turn     │
 │                    /blob/upload: resolve → setting →    │
-│                         readiness → gate (the declared  │
-│                         total; at the creation the      │
-│                         bound and the floor on no       │
+│                         readiness → permit → gate (the  │
+│                         declared total; at the creation │
+│                         the bound and the floor on no   │
 │                         length) → stream → finish →     │
 │                         answer                          │
 │                    /blob?i=: resolve → serve (gate →    │
@@ -880,6 +880,7 @@ write passes down through them in this order:
 │                    rename aside and its compaction ·    │
 │                    the deposit read · the fetch's       │
 │                    composed order, its pool and stream  │
+│                    · the upload pool, the fetch's twin  │
 ├─────────────────────────────────────────────────────────┤
 │ 6 LEAVES           codec · history · permits · serial · │
 │                    limits · notice · media/cell ·       │
@@ -896,7 +897,8 @@ write passes down through them in this order:
 A read skips the write path: a read route goes from the routes to
 `history` and the engine. The engine sits below the daemon and knows
 nothing of it. A blob upload skips the write path too: the blob route
-goes from the routes to the media resource and `skep-blobs`, commits
+goes from the routes to the media resource and `skep-blobs`, under a
+permit of the upload pool held for the body's whole stream, commits
 nothing to the journal, and takes no `Serial`. THE BLOB FETCH
 (`GET /blob?i=`) skips it the same way: the route resolves the caller,
 runs the serve's composed order (M10's read by identity as the gate, the
@@ -913,7 +915,10 @@ media resource's walk and reads the store's inspection; the pull reads the
 same index or the hash the operator hands it, and writes one file through
 the store's install — nothing above their own layer.
 
-1. **The transport** — `server/listen.rs` (sockets, worker threads, the
+1. **The transport** — `server/listen.rs` (sockets, worker threads — the
+   default count and the minimum, one more than the four permit pools'
+   slots together: the reconstruction, the class scan, the fetch and the
+   upload — the
    event streams' loop and budget, the pruner's cadence thread — the pass
    once the cell index is ready and then hourly, the logs' compaction on
    its trigger among its acts — and, after a blob reply is written, the
@@ -940,7 +945,9 @@ the store's install — nothing above their own layer.
    its turn. `/blob/upload` resolves the caller, refuses the creation and
    the resume `uploads_closed` on a board launched with `--no-uploads`,
    refuses the creation, the resume and the deposit read
-   `index_rebuilding` until the index's walk at open completes, gates the
+   `index_rebuilding` until the index's walk at open completes, admits
+   the creation and the resume under a permit of the upload pool — past
+   it `upload_busy`, retry-class, before any body byte — gates the
    declared total and — at the creation, before the partial and the
    record — the standing-uploads bound and the floor on no length,
    streams the body one chunk at a time into the store, each chunk gated,
@@ -1008,7 +1015,10 @@ the store's install — nothing above their own layer.
    M4's public reads, and the index, the lease and the file through the
    gate — which is why it is a step of its own and never a producer of
    the session layer's admission. `media.rs` holds `MediaOptions`, the
-   upload setting the routes read and `/health` echoes. `media/gate.rs` —
+   upload setting the routes read and `/health` echoes, and THE UPLOAD
+   POOL, the fetch pool's twin — the permit the creation and the resume
+   hold for a body's whole stream, counted into the worker minimum beside
+   the three other pools. `media/gate.rs` —
    THE GATE: the blob store (`skep-blobs`) opened under `blobs/` in the
    data dir, the limits in force (the daemon's default — one eighth of
    the volume's capacity read once at the open, never below 256 MiB — and
@@ -1044,9 +1054,11 @@ the store's install — nothing above their own layer.
    streams.
 6. **The leaves** — `codec.rs` with `codec/marshal.rs` (the JSON wire
    format: parse, and marshal), `history.rs` (reading the world at an
-   earlier position), `permits.rs` (the counting permit both bounded pools
-   use), `serial.rs` (the write-serialization lock and its guard),
-   `limits.rs` (request body caps, and the cell's cap), `notice.rs` (the
+   earlier position), `permits.rs` (the counting permit the four bounded
+   pools use), `serial.rs` (the write-serialization lock and its guard),
+   `limits.rs` (request body caps, the cell's cap, and the blob route's
+   bounds — the fetch pool's and the upload pool's counts among them),
+   `notice.rs` (the
    operator's log line), `media/cell.rs` (the picture's reference cell:
    its schema, its one parser under the canonical rule, its encoder, its
    designation, and THE ONE CLASSIFICATION of every media kind) and

@@ -29,11 +29,16 @@
 //! second kind beside the picture's — a commitment and nothing the daemon
 //! can read a file by — under the one classification [`cell`] holds for
 //! both; and [`serve`], THE FETCH's COMPOSED ORDER (Op inventory 3; the
-//! register M-I2 (a)–(d), (g), M-I3 (b), M-I7 (a), (b)): the shape, M10's
-//! read by identity as the gate, the classification, the permit, the whole
-//! file checked against the cell before its first byte, the permit spanning
-//! the answer — what `GET /blob?i=` (`server/blob_routes.rs`) runs and the
-//! transport streams, re-resolving the requester at an interval.
+//! register M-I2 (a)–(d), (g), M-I3 (b), M-I5 (f), M-I7 (a), (b)): the
+//! shape, M10's read by identity as the gate, the classification, the
+//! permit, the whole file checked against the cell before its first byte,
+//! the permit spanning the answer — what `GET /blob?i=`
+//! (`server/blob_routes.rs`) runs and the transport streams, re-resolving
+//! the requester at an interval. And beside the fetch's pool, THE UPLOAD
+//! POOL ([`UploadPool`]; Op inventory 1, "AN UPLOAD IS ADMITTED AT MOST AN
+//! UPLOAD PERMIT POOL AT ONCE"; M-I5 (f)): the fetch pool's twin, whose
+//! permit the PUT's creation and resume hold for a body's whole stream,
+//! counted into the worker budget beside the three other pools.
 //!
 //! The gate, the door, the index, the pruner and the serve sit at the write
 //! path's layer (`ARCHITECTURE.md` §The daemon), the daemon's second
@@ -59,6 +64,9 @@
 //! `uploads_closed` before any body byte, the upload kept where one stood,
 //! and every read, the termination, the door's binding and the pruner's
 //! pass are served as before.
+
+use crate::limits::MAX_CONCURRENT_UPLOADS;
+use crate::permits::{Permit, Permits};
 
 /// The media resource's configuration, as the operator supplies it — the
 /// upload setting, `--no-uploads` (`SKEPD_UPLOADS=false`): `uploads` OPEN
@@ -88,6 +96,40 @@ pub struct MediaOptions {
 impl Default for MediaOptions {
     fn default() -> MediaOptions {
         MediaOptions { uploads: true }
+    }
+}
+
+/// THE UPLOAD POOL — the fourth instance of [`crate::permits`]'s mechanism
+/// and the fetch pool's twin ([`serve::FetchPool`]), disjoint from the
+/// reconstruction, class-scan and fetch pools by the borrow: a [`Permit`]
+/// names the pool that issued it, so no upload spends a slot of theirs and
+/// none of them spends one of these. [`MAX_CONCURRENT_UPLOADS`] slots, one
+/// per creation or resume of `/blob/upload` for the request's whole life —
+/// the body's stream, the finish included (`server/blob_routes.rs`, THE
+/// PERMIT) — so what the pool bounds is how many workers the family holds
+/// at once (M-I5 (f): PICTURES NEVER STARVE OR STALL THE JOURNAL — bounded
+/// by a pool, never a queue). A drained pool REFUSES, never queues (ms5-R:
+/// nothing of the family waits), and is asked or refused, never told (D9).
+pub(crate) struct UploadPool(Permits);
+
+impl UploadPool {
+    pub(crate) fn new() -> UploadPool {
+        UploadPool(Permits::new(MAX_CONCURRENT_UPLOADS))
+    }
+
+    /// One permit for a whole request, or `None` right now — never blocks.
+    #[must_use = "a permit dropped at once returns its slot at once: bind it for the request's \
+                  whole life"]
+    pub(crate) fn admit(&self) -> Option<Permit<'_>> {
+        self.0.try_acquire()
+    }
+
+    /// TEST HOOK, reached through `Daemon::try_hold_upload_permit`: hold one
+    /// permit exactly as an in-flight creation or resume does.
+    #[cfg(any(test, feature = "test-hooks"))]
+    #[must_use = "a permit dropped at once holds nothing"]
+    pub(crate) fn try_hold(&self) -> Option<Permit<'_>> {
+        self.0.try_acquire()
     }
 }
 

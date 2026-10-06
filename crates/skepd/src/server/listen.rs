@@ -22,7 +22,8 @@ use super::scan::MAX_CONCURRENT_CLASS_SCANS;
 use super::{Daemon, Moment};
 use crate::auth::session::Peer;
 use crate::limits::{
-    BLOB_CHUNK, BLOB_IDLE_BOUND, BLOB_TRANSFER_BOUND, MAX_CONCURRENT_FETCHES, PRUNE_INTERVAL,
+    BLOB_CHUNK, BLOB_IDLE_BOUND, BLOB_TRANSFER_BOUND, MAX_CONCURRENT_FETCHES,
+    MAX_CONCURRENT_UPLOADS, PRUNE_INTERVAL,
 };
 use crate::media::pruner::{Cadence, Wake};
 use crate::media::serve::Progress;
@@ -32,45 +33,50 @@ use crate::notice;
 use crate::write_path::StreamStep;
 
 /// The request worker count `skepd` serves with when the operator names
-/// none — held HERE rather than in the binary because it is the FOURTH TERM
-/// of a budget the other three are meaningless without.
+/// none — held HERE rather than in the binary because it is the FIFTH TERM
+/// of a budget the other four are meaningless without.
 ///
-/// The three permit pools bound the three expensive surfaces — the
-/// reconstruction, the class scan, and the blob fetch, which holds a whole
-/// file for its answer — and each card argues its own number against the
-/// work that surface commands. None prices the SUM, and the sum is what
+/// The four permit pools bound the four expensive surfaces — the
+/// reconstruction, the class scan, the blob fetch, which holds a whole file
+/// for its answer, and the blob upload, which holds its worker for a whole
+/// file's transfer (M-I5 (f)) — and each card argues its own number against
+/// the work that surface commands. None prices the SUM, and the sum is what
 /// decides whether the bounds do the thing they exist for: a caller holding
-/// every permit of all three pools is inside every bound, and if that
+/// every permit of all four pools is inside every bound, and if that
 /// exhausts the workers the daemon answers nothing — `/health` and
 /// `/session` included — with every structure inside it healthy. The
 /// relation is therefore `workers >= `[`MIN_WORKERS`], and the assertion
 /// below is what keeps it from being arithmetic a reader has to do across
-/// three files.
+/// four files.
 ///
-/// Six pooled slots plus two free is the smallest split that keeps the
+/// Ten pooled slots plus two free is the smallest split that keeps the
 /// liveness probe, the handshake and the write path answerable while every
-/// pool is saturated. Two free suffice because an ordinary request
+/// pool is saturated — the slack the default kept over the minimum before
+/// the upload pool, kept. Two free suffice because an ordinary request
 /// completes in milliseconds, where a pooled one is a whole-store scan, a
-/// whole-world replay or a whole file's transfer.
+/// whole-world replay or a whole file's transfer — the fetch's, which
+/// streams the file out, or the upload's, which streams it in: "a whole
+/// file's transfer" reads both ways, and each holds its worker to the end.
 ///
 /// An embedder calling [`serve`] with its own count owes the same relation,
 /// and [`MIN_WORKERS`] is the form in which they can evaluate it.
-pub const DEFAULT_WORKERS: usize = 8;
+pub const DEFAULT_WORKERS: usize = 12;
 
 /// The smallest worker count that satisfies [`serve`]'s pooled-permit
-/// obligation: ONE MORE than the slots the three permit pools hold
-/// together, so a caller holding every permit of all three still leaves a
+/// obligation: ONE MORE than the slots the four permit pools hold
+/// together, so a caller holding every permit of all four still leaves a
 /// worker to answer `/health`, `/session` and the write path.
 ///
 /// PUBLIC because it is the caller's half of an obligation [`serve`] states
-/// and deliberately does not re-check: the three pools' own counts are this
+/// and deliberately does not re-check: the four pools' own counts are this
 /// crate's, so `workers >= MIN_WORKERS` is the only form an embedder naming
-/// its own count can evaluate. DERIVED from the three rather than written
+/// its own count can evaluate. DERIVED from the four rather than written
 /// down, so a pool that moves moves this with it — which is what keeps the
 /// obligation and the check on one number.
 pub const MIN_WORKERS: usize = crate::history::MAX_CONCURRENT_RECONSTRUCTIONS
     + MAX_CONCURRENT_CLASS_SCANS
     + MAX_CONCURRENT_FETCHES
+    + MAX_CONCURRENT_UPLOADS
     + 1;
 
 const _: () = assert!(
@@ -143,8 +149,8 @@ impl std::fmt::Debug for Skepd {
 /// also what makes its startup line's worker count honest.
 ///
 /// OBLIGATION the count carries: `workers >= `[`MIN_WORKERS`], which leaves
-/// a worker free of the three permit pools. A caller holding every permit of
-/// all three is INSIDE every bound, so below that count they occupy the
+/// a worker free of the four permit pools. A caller holding every permit of
+/// all four is INSIDE every bound, so below that count they occupy the
 /// whole pool and the daemon answers nothing, `/health` and `/session`
 /// included.
 /// [`DEFAULT_WORKERS`] satisfies it and carries the assertion that holds it;

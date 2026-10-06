@@ -820,6 +820,7 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 404    | `blob_missing`              | the fetch's cell names a hash the store has no file for; carries `hash` and `size`, the cell's (§Media, THE FETCH) |
 | 404    | `blob_damaged`              | the fetch's file is not the deposit the cell names — the wrong length, or the wrong bytes under the right name; carries `hash` and `size` (§Media, THE FETCH) |
 | 503    | `fetch_busy`                | all fetch permits are in use; retry shortly (§Media, THE FETCH) |
+| 503    | `upload_busy`               | all upload permits are in use — the blob upload's creation or resume past the upload pool, before any body byte; retry shortly (§Media, THE PERMIT) |
 | 410    | `history_reclaimed`         | the position (`/op-at`) or the `since` fence (`/changes`) predates retained history (carries `floor` when known) |
 | 503    | `history_busy`              | all historical-reconstruction permits (`/op-at`, `/dump?at`, `/chain?at`) are in use; retry shortly |
 | 503    | `scan_busy`                 | all class-scan permits are in use — a `find_links_ftt`/`count_ftt`/`window_ftt` on `/op` whose four-set constrains `ty` alone (§Link discovery reads); carries `op`; retry shortly |
@@ -2706,8 +2707,8 @@ nothing to the journal and takes no `Serial`:
 
 | method & path | the act | answers |
 | --- | --- | --- |
-| `POST /blob/upload?length=<N>` | THE CREATION: `length` the upload's declared total in bytes, held against the per-file cap and the own scope BEFORE any body byte; then, before the partial and the record, THE STANDING-UPLOADS BOUND — the principal's standing uploads counted off its own records, a creation past the bound refused `507 deposit_refused` with `scope` `standing`, its `detail` naming the end of one of them as the act — and THE FLOOR read on NO declared length: the volume's free space already below the floor refuses the creation `scope` `floor`, an empty upload's and a creation-and-end loop's alike, so no record no scope counts is appended under the floor; the identifier minted and the record written. The body is optional: empty, the two-step shape; the first `K ≤ N` bytes, the standard's creation-with-upload, the identifier riding the `100 Continue` as `Upload-Id` where the client asked `Expect: 100-continue`, so it reaches the uploader before the first body byte and is persisted before the bytes that spend it | `200 {"expires":<unix ms>,"length":N,"offset":K,"upload":"<32 hex>"}` — the record, where the body stops short of `N`; the finish's answer where it reaches it |
-| `PATCH /blob/upload/<id>?offset=<K>` | THE RESUME: the bytes from `K`, which must be the record's offset; `K` plus the body's length at most `N`; the own scope on what the upload leaves past `K` BEFORE the body (refused there, the upload is kept) | the record where the body stops short; the finish's answer — `200 {"designation":"blake3","hash":"<64 hex>","size":N}` — where the offset reaches the length, after the file is durable, the lease synced and the record retired |
+| `POST /blob/upload?length=<N>` | THE CREATION: admitted under the upload permit pool (THE PERMIT, below) — past it, `503 upload_busy`, retry-class, before any body byte, and NO upload is made; then `length` the upload's declared total in bytes, held against the per-file cap and the own scope BEFORE any body byte; then, before the partial and the record, THE STANDING-UPLOADS BOUND — the principal's standing uploads counted off its own records, a creation past the bound refused `507 deposit_refused` with `scope` `standing`, its `detail` naming the end of one of them as the act — and THE FLOOR read on NO declared length: the volume's free space already below the floor refuses the creation `scope` `floor`, an empty upload's and a creation-and-end loop's alike, so no record no scope counts is appended under the floor; the identifier minted and the record written. The body is optional: empty, the two-step shape; the first `K ≤ N` bytes, the standard's creation-with-upload, the identifier riding the `100 Continue` as `Upload-Id` where the client asked `Expect: 100-continue`, so it reaches the uploader before the first body byte and is persisted before the bytes that spend it | `200 {"expires":<unix ms>,"length":N,"offset":K,"upload":"<32 hex>"}` — the record, where the body stops short of `N`; the finish's answer where it reaches it |
+| `PATCH /blob/upload/<id>?offset=<K>` | THE RESUME: admitted under the upload permit pool — past it, `503 upload_busy`, retry-class, before any body byte, the upload KEPT where it stood; then the bytes from `K`, which must be the record's offset; `K` plus the body's length at most `N`; the own scope on what the upload leaves past `K` BEFORE the body (refused there, the upload is kept) | the record where the body stops short; the finish's answer — `200 {"designation":"blake3","hash":"<64 hex>","size":N}` — where the offset reaches the length, after the file is durable, the lease synced and the record retired |
 | `GET /blob/upload/<id>` | THE PROGRESS: the upload's record — the offset a resume continues from | `200 {"expires":…,"length":N,"offset":K,"upload":"<id>"}` |
 | `DELETE /blob/upload/<id>` | THE TERMINATION: the upload ended, nothing kept | `204` |
 | `GET /blob/upload` | THE DEPOSIT READ — no surface of its own (m-Q10): the requester's own standing deposits (hash, size, expiry, and `lapsed` where a live lease stands over a file that is not there or not whole), its standing uploads (identifier, offset, length, expiry), its usage as two figures — the BASE, the cell index's number for its account (the distinct hashes its cells name, at their size), and its PENDING bytes (its live leases on hashes none of its cells names, and its uploads' bytes received) — the limits record's address as installed, and `per_account`, THE PER-ACCOUNT LIMIT IN FORCE in bytes whatever its source: the daemon's default where no record is installed, echoed as a written limit is, so a client reads the figure its own scope is held to before any refusal (R68); `null` only where a written record sets none; refused `503 index_rebuilding` until the index's rebuild at open completes | `200 {"base":<bytes>,"deposits":[…],"limits":null,"pending":<bytes>,"per_account":<bytes>,"uploads":[…]}` |
@@ -2761,6 +2762,26 @@ The family's refusals, each a transport refusal (no `Op` ran):
 | 507 | `deposit_refused` | the gate: `scope` — `own`, `venue`, `floor` or `standing` — `ended`, `offset`; at `standing` a `detail` naming the act |
 | 500 | `blob_io` | the store refused I/O; the upload stands at its last durable point |
 | 503 | `index_rebuilding` | the creation, the resume or the deposit read while the cell index is being rebuilt from the board after an open — retry-class, as `history_busy` is; the progress read, the termination and every other request are served meanwhile |
+| 503 | `upload_busy` | the creation or the resume past the upload permit pool — every permit in use; retry-class, as `fetch_busy` and `history_busy` are, before any body byte: a creation makes no upload, a resume keeps its upload where it stood; the progress read, the deposit read, the termination and every other request are served meanwhile |
+
+THE PERMIT — the fetch's step 5's twin (M-I5 (f): bounded by a pool, never
+a queue; PATTERNS P29, P13): the creation and the resume, the two acts of
+the family that take bytes and no other, are admitted at most the upload
+permit pool at once, the permit taken after the session-layer gate, the
+upload setting and the readiness — the cheaper refusals, which spend none
+— and before the shape, the cap and every gate read, and held for the
+request's whole life, the body's stream and the finish included. Past the
+pool the answer is `503 upload_busy`, retry-class as `fetch_busy` and
+`history_busy` are, before any body byte, any record and any partial: a
+creation makes no upload and a resume keeps its upload where it stood; the
+refusal names the retry and no headroom and no holder. The progress read,
+the deposit read and the termination take no permit. What the pool bounds
+is worker occupancy — an admitted stream holds its worker to its end, up
+to the transfer bound, where a fetch's permit bounds the memory its whole
+file takes — and it is counted into the daemon's worker minimum beside the
+reconstruction, class-scan and fetch pools (the pins below), so a daemon
+whose every pool is saturated still answers `/health`, `/session` and the
+write path.
 
 THE GATE's THREE SCOPES, in the order read — the requester's own record
 first: THE OWN SCOPE, the principal's BASE plus its PENDING BYTES against
@@ -2939,7 +2960,7 @@ exactly `i=<address>`, the address dotted-decimal. The order, in full:
    served, nor one byte of this one before the check completes.
 5. THE PERMIT: a fetch holds its whole file from the check to the last byte,
    so the route admits at most a POOL of answers at once — `503 fetch_busy`,
-   retry-class as `history_busy` is, past the pool (M-I7 (b): bounded by a
+   retry-class as `history_busy` is, past the pool (M-I5 (f): bounded by a
    pool, never a queue). The pool is the route's memory bound, the per-file
    cap times the pool.
 
@@ -2984,8 +3005,14 @@ confirmed at the media round (the board's sm-Q8):
   whichever comes first;
 * the route's spellings — the family `/blob/upload`, its five method/path
   pairs, the queries `length` and `offset`, the interim header
-  `Upload-Id`, the answers' members, and the nine refusal names with
+  `Upload-Id`, the answers' members, and the ten refusal names with
   their statuses above;
+* the upload pool, 4 (`MAX_CONCURRENT_UPLOADS`) — the most creations and
+  resumes streaming a body at once, a bound on worker occupancy and not
+  memory (a stream holds one chunk, where a fetch holds its whole file);
+  counted into the worker minimum, `MIN_WORKERS`, 11 — one more than the
+  four pools' slots together — and the default worker count,
+  `DEFAULT_WORKERS`, 12, one above it;
 * the per-file cap, 64 MiB — the route's own, a venue's below it; sized
   for v1's images (ms5-V1) and bounding disk and transfer, never memory;
 * the chunk, 64 KiB — the streaming arm's one buffer per in-flight upload;
@@ -3096,14 +3123,12 @@ SERVING DAEMON holding none of its gates, the daemon's fetch serving the
 restored file at its next read. The subcommands' spellings and the
 inventory's object are INTERIM pins.
 
-What this build does NOT carry, by name: the upload permit pool — an
-upload admitted at most a pool at once beside the fetch pool, counted in
-the worker minimum, a creation past it refused retry-class — owed to its
-own lane; the floor's scaling with the newest checkpoint and the
-cadence's byte bound beside it, owed; the video-era `extent` member
-(ms5-D2); and any media kind past the two. The door's armed set and the
-fetch's are each whole, so no later addition moves one state's answer
-from one code to another (PATTERNS P6).
+What this build does NOT carry, by name: the floor's scaling with the
+newest checkpoint and the cadence's byte bound beside it, owed; the
+video-era `extent` member (ms5-D2); and any media kind past the two. The
+door's armed set, the fetch's and the upload family's are each whole, so
+no later addition moves one state's answer from one code to another
+(PATTERNS P6).
 
 ### Registry — the twelve rows, the two bodies and the record grade
 

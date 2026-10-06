@@ -846,17 +846,20 @@ fn doc_states_the_registry_rows_the_bodies_and_the_refusals() {
     );
 }
 
-/// THE UPLOAD (media lane B; the record's clauses, the H1 rows): §Media
-/// states the PUT's path family and its five method/path pairs, the
-/// identifier's two carriers, the seven clauses each by number, the nine
-/// refusals of the family with their statuses, the deposit read's members,
-/// the binding's three answers at the door with `lease_lapsed` the third
-/// token, the INTERIM pins the build carries — the cap, the chunk, the
-/// grain, the identifier's bits, the partial's name, the lease interval and
-/// the horizon, the idle and transfer bounds, the floor, the limits record's
-/// default and its owed channel — and the H1 rows; §Endpoints lists the
-/// family, §Transport the family's cap, §HTTP status codes the nine; and the
-/// vector set the section names pins the same constants.
+/// THE UPLOAD (media lane B; the record's clauses, the H1 rows; the upload
+/// permit pool, M-I5 (f)): §Media states the PUT's path family and its five
+/// method/path pairs, the identifier's two carriers, the seven clauses each
+/// by number, the ten refusals of the family with their statuses — the
+/// permit's `upload_busy` among them — THE PERMIT in the creation's and the
+/// resume's rows, the deposit read's members, the binding's three answers
+/// at the door with `lease_lapsed` the third token, the INTERIM pins the
+/// build carries — the cap, the chunk, the grain, the identifier's bits,
+/// the partial's name, the lease interval and the horizon, the idle and
+/// transfer bounds, the floor, the limits record's default and its owed
+/// channel, the upload pool's count and the two worker counts it is
+/// counted into — and the H1 rows; §Endpoints lists the family, §Transport
+/// the family's cap, §HTTP status codes the ten; and the vector set the
+/// section names pins the same constants.
 #[test]
 fn doc_states_the_upload_its_pins_and_its_refusals() {
     let media = prose("\n### Media — the reference cell and its door", &["\n### Links (writes)"]);
@@ -885,6 +888,14 @@ fn doc_states_the_upload_its_pins_and_its_refusals() {
         "| 507 | `deposit_refused` |",
         "| 500 | `blob_io` |",
         "| 503 | `index_rebuilding` |",
+        "| 503 | `upload_busy` |",
+        "admitted under the upload permit pool",
+        "`503 upload_busy`",
+        "THE PERMIT",
+        "bounded by a pool, never a queue",
+        "the upload pool, 4",
+        "`MIN_WORKERS`, 11",
+        "`DEFAULT_WORKERS`, 12",
         "{\"base\":<bytes>,\"deposits\":[…],\"limits\":null,\"pending\":<bytes>,\"per_account\":<bytes>,\"uploads\":[…]}",
         "`credential_refused`, `detail` `lease_lapsed`",
         "a hash this principal did not deposit under its own lease",
@@ -928,6 +939,7 @@ fn doc_states_the_upload_its_pins_and_its_refusals() {
         "deposit_refused",
         "blob_io",
         "index_rebuilding",
+        "upload_busy",
     ] {
         assert!(statuses.contains(&format!("`{name}`")), "§HTTP status codes lists {name}");
     }
@@ -941,8 +953,12 @@ fn doc_states_the_upload_its_pins_and_its_refusals() {
     assert_eq!(fixture["pins"]["per_file_cap"].as_u64(), Some(64 * 1024 * 1024));
     assert_eq!(fixture["pins"]["lease_interval_ms"].as_u64(), Some(7 * 24 * 3600 * 1000));
     assert_eq!(fixture["pins"]["lease_horizon_ms"].as_u64(), Some(30 * 24 * 3600 * 1000));
+    assert_eq!(fixture["pins"]["upload_pool"].as_u64(), Some(4));
+    assert_eq!(fixture["pins"]["min_workers"].as_u64(), Some(11));
+    assert_eq!(fixture["pins"]["default_workers"].as_u64(), Some(12));
     assert_eq!(fixture["refusals"]["deposit_refused"].as_u64(), Some(507));
     assert_eq!(fixture["refusals"]["index_rebuilding"].as_u64(), Some(503));
+    assert_eq!(fixture["refusals"]["upload_busy"].as_u64(), Some(503));
 }
 
 /// THE UPLOAD SETTING, THE DEFAULT LIMIT, THE CREATION's GATE, THE WINDOW,
@@ -998,10 +1014,20 @@ fn doc_states_the_upload_setting_the_default_limit_the_creations_gate_and_the_to
         "writes nothing under `blobs/`",
         "no lease, no record, no journal entry",
         "What this build does NOT carry, by name",
-        "the upload permit pool",
     ] {
         assert!(media.contains(fact), "§Media says {fact:?}");
     }
+    // The upload permit pool is CARRIED (M-I5 (f)), so the list of what the
+    // build does not carry no longer names it.
+    let not_carried = media
+        .split("What this build does NOT carry, by name")
+        .nth(1)
+        .and_then(|rest| rest.split("\n\n").next())
+        .expect("the paragraph of what is not carried");
+    assert!(
+        !not_carried.contains("permit pool"),
+        "the upload permit pool is carried, and the list of what is not names it still: {not_carried}"
+    );
     let health = prose("\n## The other endpoints", &["\n## A first board, end to end"]);
     for fact in ["`media`", "`media.uploads`", "\"media\":{\"uploads\":true}"] {
         assert!(health.contains(fact), "§The other endpoints says {fact:?}");

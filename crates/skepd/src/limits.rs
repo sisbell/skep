@@ -2,9 +2,9 @@
 //! change feed's three page bounds (wire.md §The change feed), the picture
 //! cell's cap, and the blob route's own bounds — the per-file cap, the
 //! streaming arm's chunk, its two deadlines, the fetch pool and its two
-//! intervals, the pruner's cadence, the default per-account limit's share
-//! and floor, the standing-uploads bound and the logs' compaction trigger
-//! (wire.md §Media).
+//! intervals, the upload pool, the pruner's cadence, the default
+//! per-account limit's share and floor, the standing-uploads bound and the
+//! logs' compaction trigger (wire.md §Media).
 
 use std::num::NonZeroUsize;
 use std::time::Duration;
@@ -78,6 +78,27 @@ pub(crate) const BLOB_IDLE_BOUND: Duration = Duration::from_secs(30);
 /// reason: two keep a page of figures serviceable without letting a
 /// stranger's fetches occupy the worker pool.
 pub(crate) const MAX_CONCURRENT_FETCHES: usize = 2;
+
+/// THE UPLOAD POOL (the media record's Op inventory 1: "AN UPLOAD IS
+/// ADMITTED AT MOST AN UPLOAD PERMIT POOL AT ONCE, counted in `MIN_WORKERS`
+/// beside the reconstruction and class-scan pools — the fetch pool's twin
+/// — a creation past it refused retry-class"; the register M-I5 (f);
+/// PATTERNS P29) — 4, INTERIM (sm-Q8): the most creations and resumes of
+/// `/blob/upload` streaming a body at once. What it bounds is WORKER
+/// OCCUPANCY and not memory: an admitted stream holds its worker from the
+/// permit to its finish — up to [`BLOB_TRANSFER_BOUND`], each byte inside
+/// [`BLOB_IDLE_BOUND`] — while its memory is one [`BLOB_CHUNK`] and a
+/// hasher's state, so the fetch pool's 2, a memory figure over whole files,
+/// is not this pool's to copy. A board's uploads are its account holders'
+/// and v1's media are images alone (ms5-V1), so four streams at once are
+/// four people on slow links, or one person's batch; a fifth meets `503
+/// upload_busy`, retry-class as `fetch_busy` and `history_busy` are, before
+/// any body byte — faced PENDING by a client, where without the pool it met
+/// a daemon that answered nothing. Counted into `MIN_WORKERS` beside the
+/// three other pools (`server/listen.rs`), so a caller holding every permit
+/// of all four still leaves a worker free; the pool is asked or refused,
+/// never told (D9).
+pub(crate) const MAX_CONCURRENT_UPLOADS: usize = 4;
 
 /// THE BYTE INTERVAL of a fetch (the media record's Op inventory 3, "AT A
 /// BYTE INTERVAL THE SUBSYSTEM DESIGN PINS WITH THE ROUTE"; the register

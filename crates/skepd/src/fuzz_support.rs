@@ -116,10 +116,12 @@ pub const TRANSPORT_ERRORS: &[&str] = &[
     "history_io",
     "history_corrupt",
     "no_journal",
-    // The blob upload's nine (wire.md §Media): the PUT's path family
+    // The blob upload's ten (wire.md §Media): the PUT's path family
     // answers transport refusals alone — no `Op` runs there — the ninth
     // the readiness refusal of the cell index's three readers, 503,
-    // retry-class as `history_busy` is.
+    // retry-class as `history_busy` is, and the tenth the upload pool's:
+    // a creation or a resume past the pool's permits, 503, retry-class as
+    // `fetch_busy` is, before any body byte.
     "malformed_blob",
     "upload_refused",
     "no_upload",
@@ -129,6 +131,7 @@ pub const TRANSPORT_ERRORS: &[&str] = &[
     "deposit_refused",
     "blob_io",
     "index_rebuilding",
+    "upload_busy",
     // The blob fetch's seven (wire.md §Media, THE FETCH): what the address
     // holds or the store under it is not a file to serve — six 404s told
     // apart by name — and the fetch pool full, 503, retry-class.

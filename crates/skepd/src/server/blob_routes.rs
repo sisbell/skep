@@ -37,9 +37,26 @@
 //! 503, retry-class, as the deposit read is (ms5-R: the index's three
 //! readers wait, and nothing else — the progress read, the termination,
 //! every text read and write, the door's own binding arm are served
-//! throughout); the request's shape; the per-file cap and the own scope on
-//! the DECLARED total, before the body — refused there, the upload is KEPT
-//! (clause (6)); AT THE CREATION, before its partial and its record, THE
+//! throughout); THE PERMIT — the creation and the resume, the two acts that
+//! take bytes and no other, are admitted at most the UPLOAD POOL at once
+//! ([`UploadPool`](crate::media::UploadPool),
+//! [`MAX_CONCURRENT_UPLOADS`](crate::limits::MAX_CONCURRENT_UPLOADS) slots;
+//! `media.md` Op inventory 1, "AN UPLOAD IS ADMITTED AT MOST AN UPLOAD PERMIT POOL AT
+//! ONCE"; M-I5 (f): bounded by a pool, never a queue; P29, the budget
+//! refuses at the layer whose work the stream multiplies — the worker each
+//! stream holds to its end; P13), taken AFTER the three cheaper refusals
+//! above and BEFORE the shape, the cap and every gate read, so a request
+//! past the pool is refused `503 upload_busy`, retry-class as `fetch_busy`
+//! and `history_busy` are, before any body byte, any record and any
+//! partial: a creation refused here makes NO upload, a resume refused here
+//! leaves its upload KEPT where it stood; the permit is held for the
+//! request's whole life, the body's stream and the finish included, and
+//! returns as the reply is composed — the progress read, the deposit read
+//! and the termination take none, and the refusal names no headroom and no
+//! holder (M-I6 (h); D9); the request's shape; the per-file cap and the
+//! own scope on the DECLARED total, before the body — refused there, the
+//! upload is KEPT (clause (6)); AT THE CREATION, before its partial and its
+//! record, THE
 //! STANDING-UPLOADS BOUND and THE FLOOR read on no declared length (P13,
 //! P29; M-I5 (f), M-I6 (b): a creation refused `standing` or `floor` makes
 //! no upload, its face naming the end of one of them where the bound
@@ -74,7 +91,7 @@
 //!
 //! AND THE FETCH — `GET /blob?i=<address>`, with `HEAD` for the head alone
 //! (`media.md` Op inventory 3; the register M-I2 (a)–(d), (g), M-I3 (b),
-//! M-I7 (a), (b); wire.md §Media, THE FETCH): the one path beside the
+//! M-I5 (f), M-I7 (a), (b); wire.md §Media, THE FETCH): the one path beside the
 //! family, TOKEN-ACCEPTING through [`Daemon::resolve_actor`] like every
 //! method of it, its order THE SERVE's (`media/serve.rs` — the shape, M10's
 //! read by identity as the gate, the classification, the permit, the whole
@@ -220,17 +237,21 @@ impl Daemon {
         self.media.now_ms()
     }
 
-    /// THE SESSION-LAYER GATE, then THE READINESS, then the method. The gate
-    /// (D12; PUB-6.35's I10; sweep-5 media-leak
-    /// `upload-admitted-where-no-op-would-be`): a guest is refused; before
-    /// the claim every act of the upload and the deposit read answers
-    /// `claim_first`; a NODE-TIER principal — principal 0 of this node or of
-    /// a sub-node, which owns no documents — is refused before any body
-    /// byte, so no deposit stands that no account's scope counts. The
-    /// readiness (ms5-R): the creation, the resume and the deposit read —
-    /// the index's three readers at this family — are refused
-    /// `index_rebuilding` until the walk at open completes; the progress
-    /// read and the termination read no base and are served.
+    /// THE SESSION-LAYER GATE, then THE UPLOAD SETTING, then THE READINESS,
+    /// then THE PERMIT, then the method. The gate (D12; PUB-6.35's I10;
+    /// sweep-5 media-leak `upload-admitted-where-no-op-would-be`): a guest
+    /// is refused; before the claim every act of the upload and the deposit
+    /// read answers `claim_first`; a NODE-TIER principal — principal 0 of
+    /// this node or of a sub-node, which owns no documents — is refused
+    /// before any body byte, so no deposit stands that no account's scope
+    /// counts. The readiness (ms5-R): the creation, the resume and the
+    /// deposit read — the index's three readers at this family — are
+    /// refused `index_rebuilding` until the walk at open completes; the
+    /// progress read and the termination read no base and are served. The
+    /// permit (M-I5 (f); P29, P13): the creation and the resume take one of
+    /// the upload pool's or are refused `upload_busy` — after the three
+    /// refusals above, which spend no permit, and before any byte, record
+    /// or partial; held for the request's life.
     fn blob_dispatch(
         &self,
         resolved: &Resolved,
@@ -275,6 +296,25 @@ impl Daemon {
         if reads_the_index && !self.media.index_ready() {
             return refuse_rebuilding();
         }
+        // THE PERMIT (M-I5 (f); P29, P13): the two acts that take bytes are
+        // admitted at most the upload pool at once — taken here, after the
+        // cheaper refusals above and before the shape, the cap and every
+        // gate read, so a request past the pool is refused before any body
+        // byte, any record and any partial: a creation refused here makes
+        // no upload, a resume refused here leaves its upload where it
+        // stood. Bound to this frame, so it spans the body's whole stream
+        // and the finish, and returns as the reply is composed — a bodiless
+        // creation holds it for the milliseconds its record takes; the
+        // finish's deferred step (`retire_asides`) runs after the reply and
+        // outside it. The reads and the termination take none.
+        let _permit = if takes_bytes {
+            let Some(permit) = self.uploads.admit() else {
+                return refuse_upload_busy();
+            };
+            Some(permit)
+        } else {
+            None
+        };
         let key = MediaGate::key(principal);
         match (req.method.as_str(), target) {
             ("POST", BlobPath::Create) => self.blob_create(principal, &key, req, body),
@@ -772,6 +812,14 @@ fn refuse_rebuilding() -> Reply {
     )
 }
 
+/// THE PERMIT's REFUSAL (M-I5 (f); P29): every upload permit is in use, and
+/// this request is the creation or the resume — the fetch's `fetch_busy`
+/// twin, its `detail` naming the one act the person holds, the retry
+/// (M-I7 (e)), and no headroom and no holder (M-I6 (h); D9).
+fn refuse_upload_busy() -> Reply {
+    refuse(TransportError::UploadBusy, Some("all upload permits are in use; retry shortly"))
+}
+
 /// The gate's refusal: the scope it fired on, whether the upload was ended
 /// or kept, and the bytes received — no headroom (M-I6 (h)); at the
 /// standing-uploads bound, a `detail` naming the end of one of them as the
@@ -854,6 +902,13 @@ mod tests {
         let r = refuse_rebuilding();
         assert_eq!(r.status, 503);
         assert!(String::from_utf8_lossy(r.bytes()).contains("\"error\":\"index_rebuilding\""));
+        // The permit's refusal (M-I5 (f)): retry-class, its detail naming
+        // the retry and no figure.
+        let r = refuse_upload_busy();
+        assert_eq!(r.status, 503);
+        let text = String::from_utf8_lossy(r.bytes()).to_string();
+        assert!(text.contains("\"error\":\"upload_busy\""), "{text}");
+        assert!(text.contains("retry") && !text.chars().any(|c| c.is_ascii_digit()), "{text}");
         // The fetch's path beside the family, and its query: exactly one
         // `i`, an address by the codec's grammar; what it names is the
         // serve's to judge.

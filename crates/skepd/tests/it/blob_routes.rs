@@ -3,18 +3,20 @@
 //! second file, PATTERNS P5 — one set, run here against the daemon and by
 //! a client suite against its own implementation of the shape) — the
 //! default per-account limit's echo, the floor at the creation and the
-//! standing-uploads bound, the finish's empty resume and the closed board
-//! among them — the H1 presence cells, the identifier on the one request,
-//! a dropped connection's kept upload, the fence before the claim, the
-//! closed board's kept upload, the upload family's log, the RSS bound
-//! under a PUT at the cap, and ms4-K2's timing — reported, not asserted
-//! (the board's sm-Q4).
+//! standing-uploads bound, the finish's empty resume, the closed board and
+//! the upload permit pool among them — the H1 presence cells, the
+//! identifier on the one request, a dropped connection's kept upload, the
+//! fence before the claim, the closed board's kept upload, the upload pool
+//! bounding the family and the liveness it keeps under trickling streams,
+//! the upload family's log, the RSS bound under a PUT at the cap, and
+//! ms4-K2's timing — reported, not asserted (the board's sm-Q4).
 //!
 //! Every test names the register's clause it holds: M-I2 (e) THE
 //! REQUESTER'S OWN RECORD BEFORE ANY SHARED FACT; M-I5 (a) DURABLE BEFORE
 //! NAMED, ANSWERED AFTER RECORDED; M-I5 (c) THE DEPOSIT RECORD IS THE
 //! PRINCIPAL'S, READABLE, EXACT; M-I5 (f) PICTURES NEVER STARVE OR STALL
-//! THE JOURNAL; M-I6 (a) at its ZERO BASE; M-I6 (b) THE OWN SCOPE BOUNDS
+//! THE JOURNAL — the floor, and the upload pool counted into the worker
+//! budget; M-I6 (a) at its ZERO BASE; M-I6 (b) THE OWN SCOPE BOUNDS
 //! THE DISK; M-I6 (d) THE LIMITS ARE ONE PUBLISHED RECORD; M-I6 (e)
 //! REFUSED BEFORE THE BYTES MOVE; M-I6 (f) THE FLOOR IS THE HOST'S; M-I6
 //! (h) THE REFUSAL'S FACE; M-I7 (e) A FACE NAMES AN ACT THE PERSON HOLDS;
@@ -123,26 +125,30 @@ impl Cast {
 
 /// The interpreter's state across one vector's steps: the identifiers
 /// bound by name, the bytes each upload has received (the whole file the
-/// finish's hash covers), the expiries bound by name, and the open
-/// streams.
+/// finish's hash covers), the expiries bound by name, the open streams,
+/// and the upload permits a `hold` step holds.
 #[derive(Default)]
-struct Scene {
+struct Scene<'a> {
     uploads: HashMap<String, String>,
     bytes: HashMap<String, Vec<u8>>,
     expires: HashMap<String, u64>,
     streams: HashMap<String, (TcpStream, String)>,
     /// The default per-account limit the daemon under test computed.
     default_limit: u64,
+    /// The upload pool's permits a `hold` step holds through the daemon's
+    /// hook — every one of the pool, as in-flight streams would hold them —
+    /// released whole by `hold: null`.
+    held: Vec<skepd::Permit<'a>>,
 }
 
-impl Scene {
+impl Scene<'_> {
     fn id(&self, name: &str) -> String {
         self.uploads.get(name).cloned().unwrap_or_else(|| name.to_string())
     }
 }
 
 /// Judge one exchange against a step's `expect`.
-fn judge(step: &Value, name: &str, scene: &mut Scene, status: u16, body: &[u8], sent: &[u8]) {
+fn judge(step: &Value, name: &str, scene: &mut Scene<'_>, status: u16, body: &[u8], sent: &[u8]) {
     let expect = &step["expect"];
     if expect.is_null() {
         return;
@@ -254,6 +260,7 @@ fn stream_open(port: u16, token: &str, id: &str, offset: u64, declare: usize, se
 /// CLOSED where the vector's `board` says so.
 fn run_vector(vector: &Value) {
     let name = vector["name"].as_str().expect("a name");
+    let pool = fixture()["pins"]["upload_pool"].as_u64().expect("upload_pool") as usize;
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = match vector["board"].as_str() {
         Some("uploads_closed") => spawn_uploads_closed(dir.path()),
@@ -332,6 +339,22 @@ fn run_vector(vector: &Value) {
             // The store's seam: every later finish fails at the named step
             // — `null` fails nothing again.
             sd.daemon().fail_blob_finish_at(f.as_str().map(finish_step));
+        } else if let Some(h) = step.get("hold") {
+            // The upload pool's seam (M-I5 (f)): every permit held through
+            // the daemon's hook, as in-flight streams would hold them —
+            // their count the fixture's pin — or, `null`, every one
+            // released.
+            match h {
+                Value::String(pool_name) if pool_name == "upload_pool" => {
+                    scene.held = std::iter::repeat_with(|| sd.daemon().try_hold_upload_permit())
+                        .take_while(Option::is_some)
+                        .flatten()
+                        .collect();
+                    assert_eq!(scene.held.len(), pool, "{at}: the pool's whole count held");
+                }
+                Value::Null => scene.held.clear(),
+                other => panic!("{at}: no pool named {other}"),
+            }
         } else if let Some(s) = step.get("insert_cell") {
             let who = s["as"].as_str().expect("as");
             let token = cast.token(who).expect("a principal");
@@ -378,6 +401,8 @@ fn run_vector(vector: &Value) {
             panic!("{at}: an unknown step {step}");
         }
     }
+    // The scene borrows the daemon through any permit it still holds.
+    drop(scene);
     sd.shutdown();
 }
 
@@ -389,9 +414,11 @@ fn run_vector(vector: &Value) {
 /// volume, a written record moving it; the floor at the creation and the
 /// standing-uploads bound, each before any partial or record; the finish's
 /// empty resume after a finish cut before its rename; the closed board's
-/// two refusals before any byte — and the fixture pins the same constants
-/// the daemon does, and names every refusal the family answers with its
-/// status, the readiness refusal among them.
+/// two refusals before any byte; the upload pool's refusal before any byte
+/// with the upload kept — and the fixture pins the same constants the
+/// daemon does — the pool's count and the two worker counts among them —
+/// and names every refusal the family answers with its status, the
+/// readiness refusal and the pool's among them.
 #[test]
 fn the_seven_clauses_as_vectors_over_the_wire() {
     let fixture = fixture();
@@ -410,6 +437,12 @@ fn the_seven_clauses_as_vectors_over_the_wire() {
     assert_eq!(pins["default_limit_floor_bytes"].as_u64(), Some(256 * 1024 * 1024));
     assert_eq!(pins["compaction_trigger"].as_u64(), Some(4));
     assert_eq!(pins["compaction_min_lines"].as_u64(), Some(1024));
+    // The upload pool and the worker budget it is counted into: the pool's
+    // count is pinned against the daemon by `the_upload_pool_bounds_the_family`
+    // (the hook's drain), the two worker counts against the library here.
+    assert_eq!(pins["upload_pool"].as_u64(), Some(4));
+    assert_eq!(pins["min_workers"].as_u64(), Some(skepd::MIN_WORKERS as u64));
+    assert_eq!(pins["default_workers"].as_u64(), Some(skepd::DEFAULT_WORKERS as u64));
     let refusals = fixture["refusals"].as_object().expect("refusals");
     for (name, status) in [
         ("malformed_blob", 400),
@@ -422,17 +455,19 @@ fn the_seven_clauses_as_vectors_over_the_wire() {
         ("deposit_refused", 507),
         ("blob_io", 500),
         ("index_rebuilding", 503),
+        ("upload_busy", 503),
     ] {
         assert_eq!(refusals[name].as_u64(), Some(status), "{name}");
     }
     let vectors = fixture["vectors"].as_array().expect("vectors");
-    assert!(vectors.len() >= 18, "{} vectors", vectors.len());
+    assert!(vectors.len() >= 19, "{} vectors", vectors.len());
     for required in [
         "the_default_limit_is_echoed_and_a_written_record_moves_it",
         "the_floor_at_the_creation",
         "the_standing_uploads_bound",
         "clause_7_the_empty_resume_after_a_finish_cut_before_its_rename",
         "the_closed_board",
+        "the_upload_permit_pool",
     ] {
         assert!(vectors.iter().any(|v| v["name"] == required), "the set names {required}");
     }
@@ -507,7 +542,7 @@ fn the_upload_familys_log_names_no_principal_no_token_and_no_upload() {
         let mut spawned = Command::new(env!("CARGO_BIN_EXE_skepd"))
             .arg("--data-dir")
             .arg(&dir)
-            .args(["--port", &port.to_string(), "--workers", "8", "--origin", &format!("http://127.0.0.1:{port}")])
+            .args(["--port", &port.to_string(), "--workers", &skepd::DEFAULT_WORKERS.to_string(), "--origin", &format!("http://127.0.0.1:{port}")])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -705,6 +740,191 @@ fn every_act_of_the_upload_answers_claim_first_before_the_claim() {
     expect_resp(&op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT)), "ack_addr");
     put_whole(port, &claimant, b"hello");
     assert_eq!(deposits_of(port, &claimant).len(), 1);
+    sd.shutdown();
+}
+
+/// THE UPLOAD POOL BOUNDS THE FAMILY (M-I5 (f) PICTURES NEVER STARVE OR
+/// STALL THE JOURNAL — "an upload at most an UPLOAD PERMIT POOL at once …
+/// a creation past it refused retry-class"; P29; M-I6 (h) THE REFUSAL'S
+/// FACE names no headroom and no holder; M-I7 (e) the face names the act
+/// the person holds, the retry), the fetch pool's test's twin: with every
+/// upload permit held through the hook — their count the fixture's pin — a
+/// creation with no body answers `503 upload_busy`, its `detail` naming the
+/// retry and no figure, and a creation-with-upload the same before any body
+/// byte, the principal's deposit read listing no new upload (none was
+/// made); a standing upload resumed answers the same and its progress read
+/// answers the offset it stood at (KEPT); the progress read, the deposit
+/// read and the termination are served while every permit is held; the
+/// permits released, the creation and the resume are served.
+#[test]
+fn the_upload_pool_bounds_the_family() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let token = open_session(port, CLAIMANT_PRINCIPAL);
+    // Two standing uploads before the hold: one to resume, one to end.
+    let (st, _, resp) = blob_create(port, Some(&token), 10, b"hello");
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&resp));
+    let standing = json(&resp)["upload"].as_str().expect("upload").to_string();
+    let (st, _, resp) = blob_create(port, Some(&token), 10, b"");
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&resp));
+    let ending = json(&resp)["upload"].as_str().expect("upload").to_string();
+    let held: Vec<_> = std::iter::repeat_with(|| sd.daemon().try_hold_upload_permit())
+        .take_while(Option::is_some)
+        .flatten()
+        .collect();
+    assert_eq!(
+        held.len(),
+        fixture()["pins"]["upload_pool"].as_u64().expect("upload_pool") as usize,
+        "the pool's whole count held"
+    );
+    // The creation past the pool: refused before any record, no upload made.
+    let (st, _, resp) = blob_create(port, Some(&token), 10, b"");
+    let v = json(&resp);
+    assert_eq!((st, v["error"].as_str()), (503, Some("upload_busy")), "{}", String::from_utf8_lossy(&resp));
+    let detail = v["detail"].as_str().expect("the refusal names the act");
+    assert!(detail.contains("retry"), "{detail}");
+    assert!(!detail.chars().any(|c| c.is_ascii_digit()), "no headroom and no count of holders: {detail}");
+    // A creation-with-upload past the pool: the same, before any body byte.
+    let (st, _, resp) = blob_create(port, Some(&token), 5, b"hello");
+    assert_eq!((st, json(&resp)["error"].as_str()), (503, Some("upload_busy")), "{}", String::from_utf8_lossy(&resp));
+    let (st, _, resp) = blob_read(port, Some(&token));
+    assert_eq!(st, 200, "the deposit read takes no permit: {}", String::from_utf8_lossy(&resp));
+    let listed: BTreeSet<String> = json(&resp)["uploads"]
+        .as_array()
+        .expect("uploads")
+        .iter()
+        .map(|u| u["upload"].as_str().expect("upload").to_string())
+        .collect();
+    assert_eq!(listed, [standing.clone(), ending.clone()].into_iter().collect(), "no upload was made past the pool");
+    // The resume past the pool: refused, the upload KEPT where it stood.
+    let (st, _, resp) = blob_append(port, Some(&token), &standing, 5, b"world");
+    let v = json(&resp);
+    assert_eq!((st, v["error"].as_str()), (503, Some("upload_busy")), "{}", String::from_utf8_lossy(&resp));
+    assert!(v["detail"].as_str().is_some_and(|d| d.contains("retry")));
+    let (st, _, resp) = blob_progress(port, Some(&token), &standing);
+    assert_eq!(
+        (st, json(&resp)["offset"].as_u64()),
+        (200, Some(5)),
+        "the progress read takes no permit, and the refused resume kept the upload at its offset"
+    );
+    let (st, _, _) = blob_end(port, Some(&token), &ending);
+    assert_eq!(st, 204, "the termination takes no permit");
+    drop(held);
+    let (st, _, resp) = blob_create(port, Some(&token), 10, b"");
+    assert_eq!(st, 200, "a released permit serves the creation: {}", String::from_utf8_lossy(&resp));
+    let (st, _, resp) = blob_append(port, Some(&token), &standing, 5, b"world");
+    assert_eq!(st, 200, "a released permit serves the resume: {}", String::from_utf8_lossy(&resp));
+    assert_eq!(json(&resp)["hash"].as_str(), Some(blob_hex(b"helloworld").as_str()));
+    sd.shutdown();
+}
+
+/// Read a response head off `s` up to its blank line — the interim `100
+/// Continue` a client that asked for one is sent before the body is
+/// invited.
+fn read_interim(s: &mut TcpStream) -> String {
+    let mut raw = Vec::new();
+    let mut chunk = [0u8; 1024];
+    while !raw.windows(4).any(|w| w == b"\r\n\r\n") {
+        let n = s.read(&mut chunk).expect("the interim");
+        assert!(n > 0, "closed before the interim: {}", String::from_utf8_lossy(&raw));
+        raw.extend_from_slice(&chunk[..n]);
+    }
+    String::from_utf8_lossy(&raw).to_string()
+}
+
+/// Read a connection to its end — the daemon's close, or the reset it
+/// answers a body left unread with — the bytes before it the answer.
+fn read_to_any_end(s: &mut TcpStream) -> Vec<u8> {
+    let mut raw = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match s.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => raw.extend_from_slice(&chunk[..n]),
+        }
+    }
+    raw
+}
+
+/// THE LIVENESS UNDER TRICKLING UPLOADS (M-I5 (f) PICTURES NEVER STARVE OR
+/// STALL THE JOURNAL: "an upload at most an UPLOAD PERMIT POOL at once
+/// beside it, counted in the same budget, a creation past it refused
+/// retry-class"; P29; M-I7 (e)) — the intake's vector as a real transfer,
+/// and the one test that pins worker OCCUPANCY: the daemon served
+/// in-process with ONE worker more than the pool holds, so the streams the
+/// pool admits hold every worker but the one that answers. As many
+/// creations-with-upload as the pool holds, each declaring two bytes, each
+/// admitted — the interim `100 Continue` carrying its identifier is the
+/// proof that the permit was taken and the record made — each sending its
+/// first byte and then holding its socket open inside the idle bound for
+/// as long as these assertions take; one more creation on a fresh
+/// connection, sent no body byte, answers `503 upload_busy` before any; and
+/// WHILE THE STREAMS STAND `GET /health` answers `ok`, `POST /session`
+/// answers a session and a write on `/op` under the claimant's session is
+/// acked — the three surfaces the record names. Then each stream sends its
+/// last byte and is answered the finish, and a fresh creation is served:
+/// the pool's count is the number of streams admitted, no more and no
+/// fewer.
+#[test]
+fn trickling_uploads_fill_the_pool_and_never_the_daemon() {
+    let pool = fixture()["pins"]["upload_pool"].as_u64().expect("upload_pool") as usize;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_with_workers(dir.path(), pool + 1);
+    let port = sd.port();
+    let token = open_session(port, CLAIMANT_PRINCIPAL);
+    let creation = |expect_continue: bool| {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        s.set_read_timeout(Some(Duration::from_secs(30))).expect("timeout");
+        let expect = if expect_continue { "Expect: 100-continue\r\n" } else { "" };
+        let head = format!(
+            "POST {BLOB_UPLOAD}?length=2 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
+             Content-Length: 2\r\n{expect}Skepd-Session: {token}\r\n\r\n"
+        );
+        s.write_all(head.as_bytes()).expect("head");
+        s
+    };
+    // The streams: a creation-with-upload each, admitted — the interim
+    // says so — then holding a worker and a permit past its first byte.
+    let mut streams: Vec<(TcpStream, [u8; 2])> = Vec::with_capacity(pool);
+    for n in 0..pool {
+        let body = [b'0' + n as u8, b'!'];
+        let mut s = creation(true);
+        let interim = read_interim(&mut s);
+        assert!(interim.starts_with("HTTP/1.1 100 Continue\r\n"), "stream {n} admitted: {interim}");
+        assert!(interim.contains("Upload-Id: "), "stream {n}'s record made: {interim}");
+        s.write_all(&body[..1]).expect("the first byte");
+        s.flush().ok();
+        streams.push((s, body));
+    }
+    // One more, on a fresh connection, sent no body byte: refused before
+    // any — on the one worker the streams leave free.
+    let mut past = creation(false);
+    let raw = read_to_any_end(&mut past);
+    let (st, _, resp) = parse_response(&raw, "the creation past the pool");
+    let v = json(&resp);
+    assert_eq!((st, v["error"].as_str()), (503, Some("upload_busy")), "{}", String::from_utf8_lossy(&resp));
+    assert!(v["detail"].as_str().is_some_and(|d| d.contains("retry")), "{}", String::from_utf8_lossy(&resp));
+    // While the streams stand: the three surfaces the record names.
+    let (st, body) = get(port, "/health");
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(json(&body)["ok"].as_bool(), Some(true), "/health answers ok with every permit held");
+    let fresh = open_session(port, CLAIMANT_PRINCIPAL);
+    assert!(!fresh.is_empty(), "POST /session answers a session with every permit held");
+    let draft = owner_draft(port, &token);
+    assert!(!draft.is_empty(), "a write on /op is acked with every permit held");
+    // Each stream's last byte: the finish.
+    for (n, (mut s, body)) in streams.into_iter().enumerate() {
+        s.write_all(&body[1..]).expect("the last byte");
+        s.shutdown(Shutdown::Write).ok();
+        let raw = read_to_any_end(&mut s);
+        let (st, _, resp) = parse_response(&raw, "the finish");
+        assert_eq!(st, 200, "stream {n}'s finish: {}", String::from_utf8_lossy(&resp));
+        assert_eq!(json(&resp)["hash"].as_str(), Some(blob_hex(&body).as_str()));
+    }
+    // The permits returned with the streams: a fresh creation is served.
+    let (st, _, resp) = blob_create(port, Some(&token), 2, b"");
+    assert_eq!(st, 200, "the pool is whole again: {}", String::from_utf8_lossy(&resp));
     sd.shutdown();
 }
 

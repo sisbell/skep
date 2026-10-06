@@ -26,6 +26,20 @@ impl Daemon {
         self.fetches.try_hold()
     }
 
+    /// TEST HOOK (the same standing): hold one UPLOAD permit exactly as an
+    /// in-flight creation or resume of `/blob/upload` does, or `None` when
+    /// all [`MAX_CONCURRENT_UPLOADS`](crate::limits::MAX_CONCURRENT_UPLOADS)
+    /// are taken (M-I5 (f)). A permit from here is a slot of the upload pool
+    /// alone: holding every one leaves the fetch, `/op-at` and the class
+    /// scans untouched — and holds no worker, so a suite that pins the
+    /// pool's count drains it here and a suite that pins worker OCCUPANCY
+    /// holds real streams instead.
+    #[doc(hidden)]
+    #[must_use = "a permit dropped at once holds nothing"]
+    pub fn try_hold_upload_permit(&self) -> Option<Permit<'_>> {
+        self.uploads.try_hold()
+    }
+
     /// TEST HOOK (the same standing): HOLD EVERY FETCH STREAM between two
     /// of its chunks — armed before a suite's request, so the suite can
     /// close the session or revoke the grant while the stream stands, then

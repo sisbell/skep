@@ -7,9 +7,9 @@
 use std::path::PathBuf;
 use std::process::exit;
 
-// `DEFAULT_WORKERS` is the LIBRARY's, not this binary's: it is the third
-// term of a relation whose other two are the daemon's permit pools, and the
-// library holds the assertion that keeps the three in step.
+// `DEFAULT_WORKERS` is the LIBRARY's, not this binary's: it is the fifth
+// term of a relation whose other four are the daemon's permit pools, and the
+// library holds the assertion that keeps the five in step.
 use skepd::{serve, tools, AuthOptions, Daemon, MediaOptions, NodePrefix, Origin, DEFAULT_WORKERS};
 
 const DEFAULT_PORT: u16 = 8642;

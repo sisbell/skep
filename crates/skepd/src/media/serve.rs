@@ -4,7 +4,8 @@
 //! ADMITS AT MOST A PERMIT POOL OF ANSWERS AT ONCE", "AT A BYTE INTERVAL
 //! THE SUBSYSTEM DESIGN PINS WITH THE ROUTE … OR AT A TIME INTERVAL PINNED
 //! BESIDE IT, WHICHEVER COMES FIRST"; the register M-I2 (a)–(d), (g), M-I3
-//! (b), M-I7 (a), (b); the rulings s6-E1 (a), s6-leak-b; PATTERNS P29): what
+//! (b), M-I5 (f), M-I7 (a), (b); the rulings s6-E1 (a), s6-leak-b; PATTERNS
+//! P29): what
 //! `GET /blob?i=` and its `HEAD` run (`server/blob_routes.rs`), and what the
 //! transport then streams (`server/listen.rs`). ONE order, stated once:
 //!
@@ -30,7 +31,7 @@
 //! 5. THE PERMIT — one of [`MAX_CONCURRENT_FETCHES`], or the retry-class
 //!    refusal: a fetch holds its whole file from the check to the last
 //!    byte written, so the pool is the route's memory bound,
-//!    [`MAX_BLOB_BYTES`] × the pool (M-I7 (b): BOUNDED BY A POOL, NEVER BY A
+//!    [`MAX_BLOB_BYTES`] × the pool (M-I5 (f): BOUNDED BY A POOL, NEVER BY A
 //!    QUEUE).
 //! 6. THE WHOLE FILE, CHECKED BEFORE ITS FIRST BYTE (M-I3 (b): THE BYTES
 //!    SERVED ARE THE BYTES THE CELL NAMES; the ruled v1 cut, whole-file

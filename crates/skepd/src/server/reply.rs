@@ -354,6 +354,13 @@ pub(super) enum TransportError {
     /// sibling: the request may be perfectly good and the walk momentarily
     /// unfinished. Every other request is served throughout.
     IndexRebuilding,
+    /// THE PERMIT's REFUSAL (M-I5 (f); PATTERNS P29): every upload permit is
+    /// in use, and this is the creation or the resume — refused before any
+    /// body byte, a creation making no upload, a resume keeping its upload
+    /// where it stood. Retry-class, `fetch_busy`'s and `history_busy`'s
+    /// sibling; the progress read, the deposit read and the termination
+    /// take no permit and are served throughout.
+    UploadBusy,
     // The blob fetch (wire.md §Media, THE FETCH) — the refusals of the
     // route's own steps past M10's gate, each a transport refusal: the gate's
     // own rejection is answered in M10's envelope under its status
@@ -408,6 +415,7 @@ impl TransportError {
             TransportError::DepositRefused => "deposit_refused",
             TransportError::BlobIo => "blob_io",
             TransportError::IndexRebuilding => "index_rebuilding",
+            TransportError::UploadBusy => "upload_busy",
             TransportError::NoValue => "no_value",
             TransportError::NotACell => "not_a_cell",
             TransportError::UnknownCellSchema => "unknown_cell_schema",
@@ -460,12 +468,13 @@ impl TransportError {
             | TransportError::HistoryCorrupt
             | TransportError::InternalPanic
             | TransportError::BlobIo => 500,
-            // The four retry-class refusals: a pool is momentarily full —
-            // the reconstruction, class-scan or fetch pool — or the cell
-            // index's walk at open is momentarily unfinished.
+            // The five retry-class refusals: a pool is momentarily full —
+            // the reconstruction, class-scan, fetch or upload pool — or the
+            // cell index's walk at open is momentarily unfinished.
             TransportError::HistoryBusy
             | TransportError::ScanBusy
             | TransportError::IndexRebuilding
+            | TransportError::UploadBusy
             | TransportError::FetchBusy => 503,
             // The gate's: the scope it names has no room for these bytes.
             TransportError::DepositRefused => 507,
@@ -915,6 +924,7 @@ mod tests {
             (TransportError::DepositRefused, "deposit_refused", 507),
             (TransportError::BlobIo, "blob_io", 500),
             (TransportError::IndexRebuilding, "index_rebuilding", 503),
+            (TransportError::UploadBusy, "upload_busy", 503),
             (TransportError::NoValue, "no_value", 404),
             (TransportError::NotACell, "not_a_cell", 404),
             (TransportError::UnknownCellSchema, "unknown_cell_schema", 404),

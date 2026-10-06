@@ -187,10 +187,11 @@ pub use skep_engine::dump::WorldDump;
 /// types above are.
 pub use skep_kernel::Seq;
 
-/// The permit the daemon's two test hooks hand out — one slot of the
-/// reconstruction pool or of the class-scan pool (wire v7.9), the same guard
-/// type for both. Public only because those hooks' return type must be
-/// nameable; not a stable API.
+/// The permit the daemon's four test hooks hand out — one slot of the
+/// reconstruction pool, of the class-scan pool (wire v7.9), of the fetch
+/// pool or of the upload pool (wire.md §Media), the same guard type for all
+/// four. Public only because those hooks' return type must be nameable; not
+/// a stable API.
 #[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
 pub use permits::Permit;

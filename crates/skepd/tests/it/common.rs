@@ -982,6 +982,23 @@ pub fn spawn_uploads_closed(dir: &Path) -> Skepd {
     sd
 }
 
+/// [`spawn`] serving with `workers` threads in place of [`DEFAULT_WORKERS`]
+/// — the board claimed, every other option the fixtures' default. The one
+/// spawn whose count is the suite's own: the upload pool's liveness vector
+/// serves ONE worker more than the pool holds, so the streams the pool
+/// admits hold every worker but the one that answers (M-I5 (f)). `serve`
+/// re-checks no minimum, so the count is the caller's to justify.
+pub fn spawn_with_workers(dir: &Path, workers: usize) -> Skepd {
+    let mut opts = AuthOptions::default();
+    opts.allow_preview_keys = ALLOW_PREVIEW_KEYS_IN_FIXTURES;
+    let daemon = Daemon::open_with(dir, opts).expect("daemon open (genesis or recover)");
+    let sd = serve(daemon, 0, workers).expect("bind an ephemeral port");
+    forget_port(sd.port());
+    wait_for_the_index(&sd);
+    claim_board(sd.port());
+    sd
+}
+
 /// Spawn without claiming — the AUTH suites drive the window itself. The
 /// fixtures' preview-key setting is on here as everywhere (AUTH-1.44); every
 /// other option is the default's.

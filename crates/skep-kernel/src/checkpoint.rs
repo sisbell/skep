@@ -364,6 +364,17 @@ fn parse_checkpoint_name(name: &str) -> Option<u64> {
     (name == checkpoint_name(seq)).then_some(seq)
 }
 
+/// What the NEWEST checkpoint in `dir` claims, by its header alone
+/// ([`CheckpointMeta::header`]) — or `None` where none stands, the directory
+/// cannot be listed, or the header refuses. FAIL-QUIET, for the two readers
+/// that must never fail over it: [`crate::Kernel::newest_checkpoint`], whose
+/// head writer writes `base: null` instead, and [`fn@write`], which sizes a
+/// buffer by the length. [`list`] is ascending by seq (§6), so the last entry
+/// is the newest.
+pub(crate) fn newest_header(dir: &Path) -> Option<CheckpointHeader> {
+    list(dir).ok()?.pop()?.header().ok()
+}
+
 /// All checkpoints in `dir`, ascending by seq. `checkpoint.tmp` and foreign
 /// names fail the name parse and are skipped.
 pub(crate) fn list(dir: &Path) -> io::Result<Vec<CheckpointMeta>> {
@@ -455,13 +466,32 @@ impl From<io::Error> for WriteFail {
 /// removal's own failure is folded into the account beside the write's and
 /// never masks it. A crash in the same window leaves the file for the next
 /// open to remove ([`remove_stray_tmp`]).
+///
+/// ONE PASS over the world. The body is serialized with the codec's
+/// `serialize_into` into a buffer, never with its `serialize`: bincode 1's
+/// `serialize` walks the value twice, once to size the buffer it then fills,
+/// and `serialize_into` repeats that size pass only under a byte limit, which
+/// [`codec`] sets none of. In the size pass's place the buffer is sized by a
+/// HINT: the length the newest checkpoint in `dir` claims, read off its
+/// header alone ([`newest_header`] — one directory listing and one short
+/// read, fail-quiet: none before the first, and the buffer then grows as any
+/// `Vec` does), which the next body outgrows by one window's growth at most.
+/// A hint, never a promise: a length the process cannot reserve is dropped,
+/// and the header is built from the finished body — its checksum, its hash,
+/// its length — so the hint is no part of the bytes.
 pub(crate) fn write<W: Serialize>(
     dir: &Path,
     seq: u64,
     world: &W,
     chain_head: &[u8; 32],
 ) -> Result<(), WriteFail> {
-    let body = codec().serialize(world).map_err(|e| WriteFail::Serialize(e))?;
+    let hint = newest_header(dir).map_or(0, |header| header.len);
+    let mut body = Vec::new();
+    // Reserved fallibly: a hint the process cannot grant — a header claiming
+    // more than any volume holds — is dropped, never a capacity panic in
+    // place of a checkpoint.
+    let _ = body.try_reserve_exact(usize::try_from(hint).unwrap_or(usize::MAX));
+    codec().serialize_into(&mut body, world).map_err(|e| WriteFail::Serialize(e))?;
     let tmp = tmp_path(dir);
     let mut f = File::create(&tmp)?;
     let mut header = Vec::with_capacity(HEADER_LEN);

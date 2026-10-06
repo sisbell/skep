@@ -356,7 +356,11 @@ enum FramePayload {
 ///   inner value with nothing added, an array a tuple with no prefix;
 /// * LITTLE-ENDIAN;
 /// * NO byte limit (the frame cap and the transaction budget bound the bytes
-///   before the codec sees them);
+///   before the codec sees them) — and the checkpoint body streams in ONE
+///   pass because of it: bincode 1's `serialize_into` walks a value a first
+///   time, to size it, only where a limit is set, so a limit added here would
+///   bring that size pass back over the whole world at every checkpoint
+///   (`checkpoint::write`), which is why there is none;
 /// * TRAILING BYTES REJECTED on decode — the decoder accepts exactly the
 ///   encoder's output, so a frame payload, record or checkpoint body carrying
 ///   bytes past its value is a decode refusal (`Corruption` at replay, a

@@ -1,30 +1,12 @@
 //! §A/§B and the pure half of §C — the slice, the record, the fold, the two
 //! point queries, and the composable write step.
 
-use std::hash::BuildHasherDefault;
-
-use rustc_hash::FxHasher;
 use serde::{Deserialize, Serialize};
 use skep_address::{Address, Tumbler};
 
 use crate::error::ContentError;
 use crate::routing::debug_assert_content_address_routing;
 use crate::value::Val;
-
-/// Fixed-seed deterministic build-hasher (§Core data model: keys are trusted
-/// internal tumblers, not adversarial input, so flooding-resistance buys
-/// nothing). Checkpoint bytes do not depend on it — the `Serialize` below
-/// sorts — so it is picked for cost: a fixed hasher is cheaper than a
-/// randomized one. MUST be `BuildHasher + Default + Send + Sync + 'static`:
-/// the first two so [`ContentStore`]'s derives hold (im's map asks no more
-/// of its hasher for any of them); the last three because `ContentStore`
-/// becomes a field of the engine's `W`, and M2's `WorldState` bound requires
-/// `Send + Sync + 'static` — checked at the crate root (`lib.rs`), so a pick
-/// missing one fails this library's own build. The *specific* hasher is Open
-/// build decision #5; this alias is the one place it is named —
-/// `BuildHasherDefault<FxHasher>` (rustc-hash), the design's placeholder
-/// pick, taken as the default.
-type FixedHasher = BuildHasherDefault<FxHasher>;
 
 /// M4's authoritative folded slice: `dom(C) ↦ Val` — the only state M4 owns
 /// (§A; §Core data model). The journal of [`ContentWrite`] records (held by
@@ -52,40 +34,44 @@ type FixedHasher = BuildHasherDefault<FxHasher>;
 ///
 /// Cheap to keep many of: `clone` is O(1), and
 /// [`apply_write`](ContentStore::apply_write) returns a new slice in
-/// O(log₃₂ n), sharing all untouched structure with the old one, which stays
+/// O(log n), sharing all untouched structure with the old one, which stays
 /// as it was — so a snapshot pinning an old `World` costs next to nothing.
 /// Its serialized form is canonical, a function of the contents alone (the
 /// `Serialize` impl below says who reads it).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 pub struct ContentStore {
-    // A persistent HAMT, not `im::OrdMap`: the reads are point lookups, plus
-    // ONE enumeration — `ContentStore::iter`, the walk the daemon's
-    // cell-index rebuild makes at open, which reads every entry once and asks
-    // no order of them — so only `Eq + Hash` is relied on — no query needs
-    // ordered iteration, range or prefix scans (the allocator's
-    // max-under-prefix reads M3's own frontier, never M4: Conflicts #3) — and
-    // the two whole-store readers, the checkpoint and the engine's world
-    // dump, take their order from the sort in `Serialize`. Its decode is
-    // `entry_by_entry`'s, not `im`'s own visitor, which reserves the count
-    // the bytes declare; it takes each key through M1's `Address` door.
+    // A persistent ORDERED map — `im::OrdMap`, a B-tree keyed by `Tumbler`'s
+    // `Ord` — not `im::HashMap`. The reads are point lookups and the writes
+    // single inserts, O(log n) here against the HAMT's O(log₃₂ n), and no
+    // query asks the order of it: no range or prefix scan is built on it
+    // (the allocator's max-under-prefix reads M3's own frontier, never M4:
+    // Conflicts #3), and `ContentStore::iter`, the one enumeration — the
+    // walk the daemon's cell-index rebuild makes at open — asks none. What
+    // the order buys is the checkpoint: a whole-store reader that needs
+    // every entry in `Tumbler` order at every cadence crossing (the
+    // canonical bytes, `Serialize` below), which the ordered map's walk
+    // gives for free where a hash map's had to be collected and sorted at
+    // every checkpoint. Its decode is `entry_by_entry`'s, not `im`'s own
+    // visitor, which reserves the count the bytes declare; it takes each key
+    // through M1's `Address` door.
     #[serde(deserialize_with = "entry_by_entry")]
-    map: im::HashMap<Tumbler, Val, FixedHasher>,
+    map: im::OrdMap<Tumbler, Val>,
 }
 
 /// CANONICAL SERIALIZATION: the serde form `#[derive(Serialize)]` would give
-/// — a struct with the one field `map`, the map as a map with its length —
-/// but its entries emitted in `Tumbler` order rather than in the HAMT's
-/// iteration order, which is a function of the hasher crate's version and
-/// the platform's word size (`BigUint` hashes its digit vector, whose digit
-/// is `u32` on 32-bit and `u64` on 64-bit targets) and not of the contents.
+/// — a struct with the one field `map`, the map as a map with its length,
+/// its entries in the order the map walks them — spelled by this crate
+/// rather than left to `im`'s own impl, because the form is a FORMAT (below)
+/// and what a dependency writes is its choice. The order is `Tumbler` order:
+/// the map is ordered by its key's `Ord`, so its walk is a function of the
+/// contents alone and not of a hasher's version or the platform's word size.
 /// So two writes of one store, on two processes or two machines, yield one
 /// byte string, and M2's checkpoint header can commit to its body by hash.
 /// `Deserialize` stays derived, its one field decoded by `entry_by_entry`
-/// below: each key re-enters M1's `Address` door, the HAMT is rebuilt from
+/// below: each key re-enters M1's `Address` door, the map is rebuilt from
 /// the entries whatever order they arrive in, and nothing is reserved for a
-/// count the bytes have not carried. Cost:
-/// one O(n log n) sort of the entry set per checkpoint, on top of the O(n)
-/// serialization the checkpoint already pays.
+/// count the bytes have not carried. Cost: the O(n) walk the checkpoint
+/// already pays, and no sort.
 ///
 /// THE FORM IS A FORMAT, read by three collaborators, none with a compiler
 /// edge back to this impl. M2's checkpoint hashes it (above), and decodes it
@@ -119,16 +105,15 @@ impl Serialize for ContentStore {
     }
 }
 
-/// The content map as a serde map in `Tumbler` order — the sorting half of
-/// [`ContentStore`]'s `Serialize`, kept apart so the struct's own shape above
-/// reads as the derive's.
-struct InTumblerOrder<'a>(&'a im::HashMap<Tumbler, Val, FixedHasher>);
+/// The content map as a serde map in `Tumbler` order — the map's own walk,
+/// which is that order — the emitting half of [`ContentStore`]'s
+/// `Serialize`, kept apart so the struct's own shape above reads as the
+/// derive's, and so the bytes are this crate's spelling and not `im`'s.
+struct InTumblerOrder<'a>(&'a im::OrdMap<Tumbler, Val>);
 
 impl Serialize for InTumblerOrder<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut entries: Vec<(&Tumbler, &Val)> = self.0.iter().collect();
-        entries.sort_unstable_by_key(|&(addr, _)| addr);
-        serializer.collect_map(entries)
+        serializer.collect_map(self.0.iter())
     }
 }
 
@@ -146,20 +131,20 @@ impl Serialize for InTumblerOrder<'_> {
 /// invariants); and it takes the entries in whatever order they arrive.
 fn entry_by_entry<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
-) -> Result<im::HashMap<Tumbler, Val, FixedHasher>, D::Error> {
+) -> Result<im::OrdMap<Tumbler, Val>, D::Error> {
     use serde::de::{MapAccess, Visitor};
 
     struct MapVisitor;
 
     impl<'de> Visitor<'de> for MapVisitor {
-        type Value = im::HashMap<Tumbler, Val, FixedHasher>;
+        type Value = im::OrdMap<Tumbler, Val>;
 
         fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str("a map from content address to value")
         }
 
         fn visit_map<A: MapAccess<'de>>(self, mut entries: A) -> Result<Self::Value, A::Error> {
-            let mut map: im::HashMap<Tumbler, Val, FixedHasher> = im::HashMap::default();
+            let mut map = im::OrdMap::new();
             while let Some((addr, val)) = entries.next_entry::<Address, Val>()? {
                 map.insert(Tumbler::from(addr), val);
             }
@@ -249,18 +234,15 @@ impl ContentStore {
     }
 
     /// THE ONE ENUMERATION of the slice: every `(address, value)` pair it
-    /// holds, each exactly once, in the map's own order — a function of the
-    /// hasher and the platform's word size, not of the contents (which is why
-    /// the checkpoint's `Serialize` above sorts, and this does not). Its one
+    /// holds, each exactly once, in the map's own order — `Tumbler` order,
+    /// the order the checkpoint's `Serialize` above walks too. Its one
     /// consumer is the daemon's cell-index rebuild at open, which walks the
     /// world's whole content once over a pinned snapshot, reading every
-    /// value's leading bytes and asking no order of them: a sort of the
-    /// entry set would cost that walk more than the walk itself at the
-    /// scale it exists for, and would buy a determinism no reader of the
-    /// index can observe. Over a pinned snapshot the walk is immutable while
-    /// commits proceed on later roots (the persistent map's structural
-    /// sharing). Exact-size, as the map's own walk is. No range, no prefix
-    /// and no ordered form is offered beside it; the reads stay point reads.
+    /// value's leading bytes and asking no order of them. Over a pinned
+    /// snapshot the walk is immutable while commits proceed on later roots
+    /// (the persistent map's structural sharing). Exact-size, as the map's
+    /// own walk is. No range and no prefix read is offered beside it; the
+    /// reads stay point reads.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (&Tumbler, &Val)> + '_ {
         self.map.iter()
     }

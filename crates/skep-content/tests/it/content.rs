@@ -287,7 +287,7 @@ fn iter_visits_every_entry_exactly_once_and_promises_no_order() {
     assert_eq!(c0.iter().len(), 0);
     assert!(c0.iter().next().is_none());
     let mut c = c0.clone();
-    let n = 257u32; // past one HAMT node, so the walk crosses levels
+    let n = 257u32; // past one B-tree node, so the walk crosses levels
     for i in 1..=n {
         let rec = stage_write(&c, &ca(i), val(format!("v{i}").as_bytes())).expect("fresh");
         c = c.apply_write(&rec);
@@ -441,9 +441,9 @@ fn the_slice_serializes_as_its_map_alone_in_tumbler_order() {
     // length then its entries (exactly a `Vec` of pairs' bytes), the entries
     // in Tumbler order, each value its length then its raw bytes (bincode's
     // form for a sequence of `u8`, which `Val` and `Vec<u8>` both serialize
-    // as). Sixty-four entries over four documents, so the HAMT's own
-    // iteration order is not Tumbler order by accident, and five more below,
-    // where Tumbler order parts from other orders.
+    // as). Sixty-four entries over four documents, written out of order, so
+    // the order of writing is not Tumbler order by accident, and five more
+    // below, where Tumbler order parts from other orders.
     let mut c = ContentStore::default();
     let mut entries: Vec<(Tumbler, Vec<u8>)> = Vec::new();
     for k in 0..64u32 {
@@ -642,10 +642,10 @@ fn the_record_and_the_slice_refuse_a_key_that_is_no_address() {
 #[test]
 fn the_slice_decodes_its_entries_in_whatever_order_they_arrive() {
     // store.rs and M4's interface: `Serialize` writes the entries in Tumbler
-    // order, and `Deserialize` takes them in any order — the HAMT is rebuilt
-    // from whatever arrives, so a body whose entries come in the HAMT's own
-    // order, or any other, loads. Bytes carrying the entries in REVERSE
-    // Tumbler order decode to the slice that holds them.
+    // order, and `Deserialize` takes them in any order — the map is rebuilt
+    // from whatever arrives, one entry at a time, so a body whose entries
+    // come in any order loads. Bytes carrying the entries in REVERSE Tumbler
+    // order decode to the slice that holds them.
     let mut c = ContentStore::default();
     let mut reversed: Vec<(Tumbler, Vec<u8>)> = Vec::new();
     for ordinal in 1..=8u32 {

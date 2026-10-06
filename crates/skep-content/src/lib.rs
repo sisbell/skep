@@ -78,14 +78,14 @@
 //!   allocation discipline and computed structurally by M1's `document_of`
 //!   (surfaced as SHOWORIGIN in M6); M4 stores only `address → Val`, so no
 //!   redundant origin field can diverge;
-//! * ordered iteration, range, prefix-scan, max-under-prefix — the reads
-//!   rely only on `Eq + Hash`; `Tumbler`'s `Ord` is used once, by the
-//!   serializer's sort (`store.rs`), whose output — M2's checkpoint body and
-//!   the engine's world dump — is the only ordered whole-store enumeration
-//!   M4 offers; the ordered-map rationale belongs to M3's frontier, not
-//!   here. The ONE enumeration beside the point reads,
-//!   [`ContentStore::iter`], is unordered and exists for one consumer: the
-//!   daemon's cell-index rebuild, which walks every value once at open;
+//! * range, prefix-scan, max-under-prefix — the reads are point reads. The
+//!   map is ordered by `Tumbler`'s `Ord` so that the checkpoint, a
+//!   whole-store reader at every cadence crossing, walks it in address order
+//!   with no sort (`store.rs`), and no range or prefix read is built on that
+//!   order: the allocator's max-under-prefix reads M3's own frontier, never
+//!   M4. The ONE enumeration beside the point reads, [`ContentStore::iter`],
+//!   exists for one consumer: the daemon's cell-index rebuild, which walks
+//!   every value once at open and asks no order of it;
 //! * concurrency — none of M4's own: no locks, no threads, no interior
 //!   mutability. Content writes ride M5's composite under the
 //!   per-(document, content-subspace) lock key; every content address is
@@ -158,12 +158,11 @@ pub trait HasContent {
 /// signature in this crate mentions; [`Val`] rides M10's `Request` across the
 /// daemon's workers; and [`ContentError`] travels inside M5's `InsertError`
 /// and `PublishError`. They are kept by what the private fields contain — the
-/// `im` map, its hasher, the `Arc` under `Val` — so a field that revoked one
-/// (the `Rc`-backed `im-rc` for `im`, an `Rc` under `Val`, a `Cell` in the
-/// hasher) would compile here and fail a crate away, never naming the field.
-/// Asserted in the library rather than the suite, because that is the build
-/// a manifest change is made in, and it is this crate's manifest that names
-/// `im` and the hasher.
+/// `im` map, the `Arc` under `Val` — so a field that revoked one (the
+/// `Rc`-backed `im-rc` for `im`, an `Rc` under `Val`) would compile here and
+/// fail a crate away, never naming the field. Asserted in the library rather
+/// than the suite, because that is the build a manifest change is made in,
+/// and it is this crate's manifest that names `im`.
 const _: fn() = || {
     fn owed<T: Send + Sync + 'static>() {}
     owed::<ContentStore>(); // the `WorldState` bound reaches this through the engine

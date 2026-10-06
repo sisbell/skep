@@ -50,6 +50,55 @@ fn checkpoint_header_layout_is_magic_seq_crc_body_len_chain_head_and_body_hash()
     assert_eq!(list(dir.path()).unwrap().len(), 1);
 }
 
+/// A checkpoint is serialized in ONE pass into a buffer sized by a hint — the
+/// newest checkpoint's length — where bincode's `serialize` walks the world
+/// twice, and the bytes do not depend on the hint. The three hints a
+/// directory gives: none (no checkpoint yet), one SHORT of the body (the
+/// world grew, as it does) and one PAST it (a world written smaller than the
+/// last) — and under each the body on disk is the two-pass `serialize`'s
+/// bytes exactly, under a header built from it. A fourth, which no process
+/// can reserve — a header claiming every byte a `u64` counts — is dropped,
+/// and the checkpoint lands.
+#[test]
+fn a_checkpoint_written_in_one_pass_is_the_two_pass_serializes_bytes_whatever_the_hint() {
+    let dir = tempdir().unwrap();
+    let small: Vec<u64> = (0..100).collect();
+    let large: Vec<u64> = (0..100_000).collect();
+    let two_pass = |world: &Vec<u64>| codec().serialize(world).unwrap();
+    let the_file_holds = |seq: u64, world: &Vec<u64>| {
+        let body = two_pass(world);
+        let data = fs::read(checkpoint_path(dir.path(), seq)).unwrap();
+        assert_eq!(&data[HEADER_LEN..], body.as_slice(), "seq {seq}: the body is the serialize's");
+        let claimed = u64::from_le_bytes(data[BODY_LEN_AT..BODY_LEN_AT + 8].try_into().unwrap());
+        assert_eq!(claimed, body.len() as u64, "seq {seq}: the header's length is the body's");
+        let crc = u32::from_le_bytes(data[CRC_AT..CRC_AT + 4].try_into().unwrap());
+        assert_eq!(crc, crc32c::crc32c(&body), "seq {seq}: the header's checksum is the body's");
+        assert_eq!(&data[BODY_HASH_AT..BODY_HASH_AT + 32], &body_hash(&body), "seq {seq}: hash");
+    };
+
+    assert_eq!(newest_header(dir.path()), None, "no checkpoint yet: no hint");
+    write(dir.path(), 1, &small, &CHAIN_HEAD).expect("the first checkpoint");
+    the_file_holds(1, &small);
+
+    let hint = newest_header(dir.path()).expect("the first is the newest").len;
+    assert!(hint < two_pass(&large).len() as u64, "a hint short of the body");
+    write(dir.path(), 2, &large, &CHAIN_HEAD).expect("a body past its hint");
+    the_file_holds(2, &large);
+
+    let hint = newest_header(dir.path()).expect("the second is the newest").len;
+    assert!(hint > two_pass(&small).len() as u64, "a hint past the body");
+    write(dir.path(), 3, &small, &CHAIN_HEAD).expect("a body short of its hint");
+    the_file_holds(3, &small);
+
+    let path = checkpoint_path(dir.path(), 3);
+    let mut overclaimed = fs::read(&path).unwrap();
+    overclaimed[BODY_LEN_AT..BODY_LEN_AT + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+    fs::write(&path, &overclaimed).unwrap();
+    assert_eq!(newest_header(dir.path()).map(|h| h.len), Some(u64::MAX), "the claim saturates");
+    write(dir.path(), 4, &small, &CHAIN_HEAD).expect("a hint the process cannot grant is dropped");
+    the_file_holds(4, &small);
+}
+
 /// A write that fails PAST the temp file's creation — here at the rename,
 /// refused because a directory stands at the checkpoint's own name — leaves
 /// no `checkpoint.tmp`: the temp file is removed before the failure is

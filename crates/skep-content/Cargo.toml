@@ -19,18 +19,15 @@ readme = "README.md"
 test-hooks = ["dep:skep-kernel", "dep:skep-namespace"]
 
 [dependencies]
-# The design's mandated slice shape (§Core data model): a persistent HAMT for
-# the address→value map — apply_write shares all untouched structure with the
-# prior slice, so live snapshots pinning old Worlds are nearly free. The slice
-# is fully serialized in checkpoints (no skip-serialize), through serde impls
-# of M4's own — the sorting `Serialize` and `entry_by_entry` (src/store.rs) —
-# so none of im's feature-gated serde impls is used here.
+# The design's mandated slice shape (§Core data model), the map ORDERED: a
+# persistent map keyed by the address's `Ord` (`im::OrdMap`) for the
+# address→value map — apply_write shares all untouched structure with the
+# prior slice, so live snapshots pinning old Worlds are nearly free, and the
+# checkpoint walks the entries in address order with no sort. The slice is
+# fully serialized in checkpoints (no skip-serialize), through serde impls of
+# M4's own — the walking `Serialize` and `entry_by_entry` (src/store.rs) — so
+# none of im's feature-gated serde impls is used here.
 im.workspace = true
-# Open build decision #5: the FixedHasher alias's concrete pick —
-# BuildHasherDefault<FxHasher>, fixed-seed and deterministic. Checkpoint bytes
-# do not depend on it (the slice's Serialize sorts its entries); it stays for
-# its cost and its bounds (the alias in src/store.rs says which).
-rustc-hash.workspace = true
 # rc for the Arc<[u8]> impls behind Val (§Types & errors).
 serde = { workspace = true, features = ["rc"] }
 # M1 — Tumbler/Address; Level and content_subspace for the routing assertion

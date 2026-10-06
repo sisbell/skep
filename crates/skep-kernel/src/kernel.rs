@@ -1363,8 +1363,7 @@ impl<W: WorldState> Kernel<W> {
     /// torn one (a checkpoint is renamed into place whole).
     pub fn newest_checkpoint(&self) -> Option<CheckpointHeader> {
         let journaled = self.journaled.as_ref()?;
-        // `list` is ascending by seq (§6), so the last entry is the newest.
-        checkpoint::list(&journaled.dir).ok()?.pop()?.header().ok()
+        checkpoint::newest_header(&journaled.dir)
     }
 
     /// Shutdown/checkpoint hook. Under per-commit `Fsync` every commit

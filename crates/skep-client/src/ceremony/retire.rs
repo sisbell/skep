@@ -21,8 +21,8 @@
 
 use skep_identity::Fingerprint;
 
+use super::say;
 use crate::board::{Board, KeySetAnswer, Scope};
-use crate::ceremony::claim::store_halt;
 use crate::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome, Grade};
 use crate::ceremony::enumerate::head_closure;
 use crate::ceremony::first_session::{first_session, FirstSessionReads};
@@ -30,9 +30,9 @@ use crate::ceremony::handshake::{handshake, Site};
 use crate::ceremony::preview::{declined, preview, Preview, PreviewSite, Previewed, Row};
 use crate::ceremony::reads::{r0, A4Cell};
 use crate::halt::Halt;
-use crate::person::{Person, Public, Statement};
+use crate::person::Person;
 use crate::sheet::render_inert;
-use crate::store::{FileStore, KeySelector, Purpose, StoreError};
+use crate::store::{store_halt, FileStore, KeySelector, Purpose, StoreError};
 
 /// The command's inputs.
 #[derive(Debug, Clone)]
@@ -62,10 +62,6 @@ pub struct Retired {
     pub label: Option<String>,
     pub end: RetireEnd,
     pub reconciled: bool,
-}
-
-fn say(person: &mut dyn Person, rule: &'static str, text: impl Into<String>) {
-    person.say(Public(Statement { rule, text: text.into() }));
 }
 
 /// THE WALK.

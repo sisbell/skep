@@ -22,9 +22,8 @@ use serde_json::Value;
 use skep_identity::{canonical_record, parse_enroll, Enrollment, Fingerprint};
 
 use crate::board::{acked_addr, frames, Answer, Board, KeySetAnswer, Rejection, Token, T_ENROLL, T_RETIRE};
-use crate::derive::records::record_frame;
 use crate::halt::Halt;
-use crate::sign::{sig_hex, Signer};
+use crate::sign::{record_frame, sig_hex, Signer};
 
 /// What the deposit records.
 #[derive(Debug, Clone)]

@@ -18,11 +18,12 @@
 use serde_json::Value;
 use skep_identity::Fingerprint;
 
+use super::say;
+use crate::address::{doc_1_of, document_of};
 use crate::board::{frames, Answer, Board, KeySet, KeySetAnswer, T_ENROLL};
-use crate::derive::records::document_of;
-use crate::derive::{doc_1_of, principal_of};
+use crate::derive::principal_of;
 use crate::halt::Halt;
-use crate::person::{Person, Public, Statement};
+use crate::person::Person;
 
 /// `skep-namespace`'s `MAX_PRINCIPAL_COMPONENTS`, reproduced: a principal
 /// prefix names a delegation path and is capped at 64 components — deeper
@@ -48,10 +49,6 @@ pub struct Closure {
     pub accounts: Vec<Admitted>,
     /// The board reads made.
     pub reads: usize,
-}
-
-fn say(person: &mut dyn Person, rule: &'static str, text: impl Into<String>) {
-    person.say(Public(Statement { rule, text: text.into() }));
 }
 
 /// The `to` slot's first address of a link, off `read_link`.

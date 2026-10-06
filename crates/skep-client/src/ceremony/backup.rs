@@ -21,8 +21,9 @@ use std::path::{Path, PathBuf};
 use skep_identity::{Fingerprint, PublicKey};
 use skep_signature::HybridSigner;
 
+use super::say;
 use crate::halt::Halt;
-use crate::person::{Abandoned, Destination, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
+use crate::person::{Abandoned, Destination, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet};
 use crate::sheet::{Facts, KeyFile, Seed};
 use crate::sign::{fresh_bytes, fresh_seed, Signer};
 use crate::store::{FileStore, Label};
@@ -92,10 +93,6 @@ pub struct BackupOutcome {
     pub anchors: Vec<AnchorArtifact>,
     /// Both files landed in one place — (b)'s file-venue words were said.
     pub one_place: bool,
-}
-
-fn say(person: &mut dyn Person, rule: &'static str, text: impl Into<String>) {
-    person.say(Public(Statement { rule, text: text.into() }));
 }
 
 fn abandoned(e: Abandoned) -> Halt {
@@ -417,7 +414,7 @@ fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels
 /// fingerprint FIRST (AUTH-5.39) — a wrong re-type says "re-scan" and asks
 /// again; `Some(signer)` where the print passed, `None` where the person
 /// declined.
-pub fn retype_from_print(person: &mut dyn Person, label: &Label, i: usize, fp: &Fingerprint) -> Result<Option<HybridSigner>, Halt> {
+fn retype_from_print(person: &mut dyn Person, label: &Label, i: usize, fp: &Fingerprint) -> Result<Option<HybridSigner>, Halt> {
     loop {
         let typed = person
             .retype(Secret(Retype {
@@ -448,7 +445,7 @@ pub fn retype_from_print(person: &mut dyn Person, label: &Label, i: usize, fp: &
 /// AUTH-5.41 names as the pinned order's own — fingerprint first, then the
 /// client-local sign-and-verify; `None` where it does not read back as the
 /// key it names.
-pub fn read_back_from_file(path: &Path, public: &PublicKey, fp: &Fingerprint) -> Option<HybridSigner> {
+fn read_back_from_file(path: &Path, public: &PublicKey, fp: &Fingerprint) -> Option<HybridSigner> {
     let file = KeyFile::parse(&std::fs::read(path).ok()?).ok()?;
     if file.fingerprint != *fp || file.public != *public {
         return None;

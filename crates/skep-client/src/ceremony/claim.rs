@@ -1,24 +1,29 @@
 //! THE CLAIM (`client.md` §4): AUTH-5.55 as a state machine — P4, one state
 //! per AUTH-5.56 boundary, every state RESUMED BY READING the board (§4.4;
-//! RULED: the claim journal retired) — and the hosted arm (§4.5; AUTH-5.55
-//! step 8), every session bare, no `Person` call anywhere.
+//! RULED: the claim journal retired) — and, in its child `hosted`, the
+//! hosted arm (§4.5; AUTH-5.55 step 8), every session bare, no `Person` call
+//! anywhere.
 
-use skep_identity::{Enrollment, Fingerprint, PublicKey};
+use std::path::PathBuf;
 
+use skep_identity::{Enrollment, Fingerprint};
+
+use super::say;
+use crate::address::doc_1_of;
 use crate::board::{acked_addr, frames, Answer, Board, KeySetAnswer, Rejection, Scope, SessionBody, Opened, Token, T_CLAIM};
 use crate::ceremony::backup::{backup_moment, BackupOptions, Venue};
 use crate::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome, Grade};
 use crate::ceremony::first_session::{document_present, first_session, FirstSessionReads};
 use crate::ceremony::handshake::{handshake, handshake_prechecked, Site};
-use crate::derive::{doc_1_of, precheck, principal_of, Mode};
+use crate::derive::{precheck, principal_of, Mode};
 use crate::halt::Halt;
-use crate::person::{Person, Public, Question, Statement};
+use crate::person::{Person, Public, Question};
 use crate::sheet::Facts;
-use crate::store::{Binding, FileStore, KeySelector, KeyStore, Purpose, StoreError};
+use crate::store::{arm4_face, store_halt, Binding, FileStore, KeySelector, KeyStore, Purpose, StoreError};
 
-fn say(person: &mut dyn Person, rule: &'static str, text: impl Into<String>) {
-    person.say(Public(Statement { rule, text: text.into() }));
-}
+mod hosted;
+
+pub use hosted::{hosted, HostedOutcome, HostedReply};
 
 /// The notebook arm's inputs.
 #[derive(Debug, Clone)]
@@ -34,8 +39,6 @@ pub struct NotebookOptions {
     pub host: String,
     pub date: String,
 }
-
-use std::path::PathBuf;
 
 /// The three facts and what the walk retained (S10).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,71 +116,6 @@ fn device_key(store: &FileStore, board: &Board, principal: u64, mode: Mode, loca
         Ok(sel) => Ok((sel.path, sel.file)),
         Err(StoreError::NoSelection { keys }) => Err(arm4_face(store, &keys, mode, local_trust)),
         Err(e) => Err(store_halt(e)),
-    }
-}
-
-/// §3.5 arm 4's three forks on `claimant`.
-pub fn arm4_face(store: &FileStore, keys: &[crate::store::KeyFacts], mode: Mode, local_trust: bool) -> Halt {
-    match (mode, keys.is_empty()) {
-        (Mode::Unclaimed, true) => Halt::face(
-            format!("the key store {} holds no key, and this board is unclaimed", store.root().display()),
-            "`skep claim` generates no device key: the notebook door is two commands",
-            "run `skep keygen` first, then `skep claim` again",
-        ),
-        (_, false) => {
-            let list: Vec<String> = keys.iter().map(|k| format!("{} {}", k.fingerprint, k.label.as_deref().map(crate::sheet::render_inert).unwrap_or_default())).collect();
-            Halt::face(
-                "more than one key is in this store and none is bound to this board and principal",
-                format!("the store holds:\n  {}", list.join("\n  ")),
-                "name the key with `--key <path>` (`skep fingerprint --dir` lists them); never a pick",
-            )
-        }
-        (_, true) => {
-            let residue = if local_trust {
-                "in CLAIMED-PERMISSIVE bare sessions still open on loopback and still write drafts, so that board is DRAFT-ONLY FOREVER: every draft stays readable and writable, and material can be carried across by re-authoring before a fresh board is minted"
-            } else {
-                "in ENFORCING it is READ-ONLY FOREVER"
-            };
-            Halt::face(
-                format!("the key store {} is keyless for this claimed board", store.root().display()),
-                "a wiped profile, a lost store, or a second machine (AUTH-5.32)",
-                format!(
-                    "either: generate a key here and enroll it from a device you are still signed in on (`skep keygen --payload` here, \
-                     `skep enroll` there, `skep bind` back here); or import a paper anchor (`skep keygen` here, then `skep recover`, \
-                     which enrolls the new key from the anchor's session and retires the lost one). Where NEITHER is available — no \
-                     signed-in device and both anchors gone — no \
-                     key opens this account and none ever will, and what exists is a fresh board: {residue}; either way total key \
-                     loss freezes the mint. And everything this account shared STAYS SHARED: every grant it issued stands forever, \
-                     only this account could withdraw it, and the fresh board carries none of it back."
-                ),
-            )
-        }
-    }
-}
-
-/// A store refusal as AUTH-5.67's halt naming the path and the state.
-pub fn store_halt(e: StoreError) -> Halt {
-    match e {
-        StoreError::KeyFile { path, error } => Halt::face(
-            format!("the key file {} is refused: {error}", path.display()),
-            "the file's own contents decide this (client.md §3.2)",
-            match error {
-                crate::store::KeyFileError::AnchorAtSigningCommand => "select a device key; the one walk that imports an anchor is `skep recover`",
-                crate::store::KeyFileError::Newer { .. } => "upgrade skep, or select a key this version wrote",
-                _ => "point `--key` at a key file `skep keygen` wrote, or run `skep keygen`",
-            },
-        ),
-        StoreError::Io { path, error } => Halt::face(
-            format!("the key file {} is missing, unreadable or mis-pathed: {error}", path.display()),
-            "AUTH-5.67: a key file missing, unreadable or mis-pathed is HALT AND SURFACE, never a fallback to a bare bind",
-            "check the path (`--key`, `SKEP_KEY`, `--dir`)",
-        ),
-        StoreError::MissingKey { path, fingerprint } => Halt::face(
-            format!("the bindings name key {fingerprint} and the store holds no file at {}", path.display()),
-            "the key file was removed from the store after the binding was written",
-            "restore the file, or re-run the hop that binds another key",
-        ),
-        other => Halt::face("the key store refused", other.to_string(), "see the store's state above"),
     }
 }
 
@@ -479,167 +417,4 @@ fn tail_or_stranger(board: &Board, store: &FileStore, person: &mut dyn Person, o
         warnings,
         display_name,
     }))
-}
-
-/// THE HOSTED ARM's reply (§4.5 H6): DATA for the hosting flow's message.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HostedReply {
-    pub claimant: String,
-    pub account: String,
-    pub principal: u64,
-    pub origin: String,
-    /// The operator's log lines — TALK.
-    pub log: Vec<String>,
-    /// Whether the payload carried no anchor-flagged entry (AUTH-5.16's
-    /// second arm, for the reply's own sentence).
-    pub anchorless: bool,
-}
-
-/// What the hosted arm answered.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HostedOutcome {
-    Claimed(HostedReply),
-    /// Idempotent: already claimed, exit 0.
-    AlreadyClaimed { claimant: String },
-}
-
-/// THE HOSTED ARM, H0–H6: every session bare, nothing generated, nothing
-/// asked; the payload the customer's canonical record, inserted verbatim.
-pub fn hosted(board: &Board, payload: &[u8], principal: u64) -> Result<HostedOutcome, Halt> {
-    let mut log = Vec::new();
-    // H0
-    let health = board.health()?;
-    if let Some(c) = health.claimant() {
-        return Ok(HostedOutcome::AlreadyClaimed { claimant: c.to_string() });
-    }
-    let local_trust = health.local_trust();
-    if local_trust {
-        log.push("warning: this daemon runs with local trust ON, so the flip will be into CLAIMED-PERMISSIVE: any party reaching its loopback — every process in the container's namespace, this sidecar included — reads every draft this customer writes, writes drafts as them, and mints permanent dead accounts under their prefix, with `key: \"bare\"` testimony and no key anywhere in it (AUTH-4.52; AUTH-4.57 pin (i) is the image's obligation)".into());
-    }
-    let loopback: Vec<&str> = health.origins().into_iter().filter(|o| crate::origin::Origin::parse(o).is_some_and(|x| x.names_loopback_host() && !x.is_https())).collect();
-    let configured: Vec<&str> = health.origins().into_iter().filter(|o| !loopback.contains(o)).collect();
-    if configured.is_empty() {
-        log.push("warning: this board is configured with no origin — once claimed its signed set is EMPTY and every signed session will be refused until the daemon is relaunched with `--origin` (wire.md §The claim ceremony and credentials)".into());
-    }
-    // H1
-    match board.next_account_prefix("1")?.as_deref() {
-        Some("1.0.1") => {}
-        other => {
-            return Err(Halt::face(
-                format!("this board carries pre-claim residue (next_account_prefix answers {})", other.unwrap_or("null")),
-                "the claim would refuse `claim_residue`; the image's cure is a fresh data directory",
-                "start the daemon on a fresh data directory and run the hosted claim again",
-            ))
-        }
-    }
-    // H2: the payload parsed, canonical only; a preview-kind entry refused
-    // here, ahead of H3's every frame (P13).
-    let text = std::str::from_utf8(payload).map_err(|_| payload_face("not UTF-8"))?.trim_end_matches(['\n', '\r']).to_string();
-    let entries = skep_identity::parse_enroll(text.as_bytes()).map_err(|e| payload_face(&e.to_string()))?;
-    for e in &entries {
-        let fp = Fingerprint::of(&e.key);
-        if e.key.alg() != skep_identity::ALG_MLDSA65_ED25519 {
-            return Err(Halt::face(
-                format!("the payload names a PREVIEW-kind key: {} ({})", fp, e.key.alg()),
-                "refused by this client as a preview kind; the board's own setting not consulted — a hosted board is a served board, which enrolls the production kind alone",
-                "the customer re-takes the payload from a client generating the production kind (`mldsa65-ed25519`)",
-            ));
-        }
-        log.push(format!("payload entry: {fp} anchor={} label={}", e.anchor, e.label().map(crate::sheet::render_inert).unwrap_or_else(|| "(none)".into())));
-    }
-    let anchorless = !entries.iter().any(|e| e.anchor);
-    if anchorless {
-        log.push("this payload carries no anchor-flagged entry: the account it founds is ANCHORLESS PERMANENTLY — no anchor act on it is ever possible, `skep recover` is unavailable forever, the only remaining path being the enroll hop from another signed-in device; a captured token is the account (AUTH-5.16's second arm; AUTH-5.62; AUTH-4.53)".into());
-    }
-    // H3: bare 0 → delegate; bare N → the mint.
-    let account = "1.0.1".to_string();
-    let boot = hosted_bare(board, 0)?;
-    let v = match board.op(Some(&boot), &frames::delegate(&account, principal, Some("hosted.delegate")))? {
-        Answer::Closed => return Err(Halt::face("the bootstrap session ended", "closed", "re-run")),
-        Answer::Document(v) => v,
-    };
-    if acked_addr(&v).is_none() {
-        let r = Rejection::of(&v).map(|r| r.token()).unwrap_or_else(|| v.to_string());
-        return Err(Halt::face(format!("the delegate was refused: {r}"), "H3", "re-run the hosted claim on a fresh data directory"));
-    }
-    let owner = hosted_bare(board, principal)?;
-    let home = doc_1_of(&account);
-    if !document_present(board, &home)? {
-        let v = match board.op(Some(&owner), &frames::create_home(&account, Some("hosted.mint")))? {
-            Answer::Closed => return Err(Halt::face("the owner's bare session ended", "closed", "re-run")),
-            Answer::Document(v) => v,
-        };
-        if acked_addr(&v).is_none() {
-            let r = Rejection::of(&v).map(|r| r.token()).unwrap_or_else(|| v.to_string());
-            return Err(Halt::face(format!("the home mint was refused: {r}"), "H3", "re-run the hosted claim"));
-        }
-    }
-    // H4: the record VERBATIM, declared, from N's bare session.
-    let outcome = deposit(
-        board,
-        &owner,
-        &Deposit { home: &home, subject: &account, kind: DepositKind::EnrollVerbatim(text.clone()), grade: Grade::Anchor, hand: None, id: "hosted.genesis" },
-    )?;
-    if let DepositOutcome::Committed { reason } = outcome {
-        log.push(format!("the genesis stands: {reason}"));
-    }
-    // H5: the claim from N's BARE session (testimony `key: "bare"`).
-    let v = match board.op(Some(&owner), &frames::make_link(&home, &[&account], &[], T_CLAIM, Some("hosted.claim")))? {
-        Answer::Closed => return Err(Halt::face("the owner's bare session ended at the claim", "closed", "re-run; H6 reads /health.auth.claimant for the answer")),
-        Answer::Document(v) => v,
-    };
-    if acked_addr(&v).is_none() {
-        if let Some(r) = Rejection::of(&v) {
-            match r.detail.as_deref().unwrap_or("") {
-                "already_claimed" => {}
-                "claim_residue" => return Err(Halt::face("this board carries pre-claim residue", "claim_residue at the claim", "a fresh data directory")),
-                _ => return Err(r.refused(&v)),
-            }
-        }
-    }
-    // H6: the ANSWER off /health.auth.claimant, never "the claim failed".
-    let after = board.health()?;
-    let claimant = after.claimant().map(str::to_string);
-    match claimant {
-        Some(c) if c == account => {}
-        Some(c) => return Err(foreign_claimant(&c)),
-        None => return Err(Halt::face("the board is still unclaimed after the claim", "the claim link was acked and /health shows no claimant", "re-run; this is a board fault")),
-    }
-    // THE CLOSE IS CONDITIONED ON H0's OWN READ: under local_trust the bare
-    // sessions survive the flip and are closed here; under false they died.
-    if local_trust {
-        let _ = board.session_close(&boot);
-        let _ = board.session_close(&owner);
-    }
-    Ok(HostedOutcome::Claimed(HostedReply { claimant: account.clone(), account, principal, origin: board.dialed.as_str().to_string(), log, anchorless }))
-}
-
-fn payload_face(why: &str) -> Halt {
-    Halt::face(
-        "the payload is not a canonical enrollment record",
-        format!("`parse_enroll` admits the canonical encoding and nothing else (AUTH-2.130): {why}"),
-        "the customer re-takes the payload from the device that generated it (`skep keygen --payload` or `--anchors`); nothing was written",
-    )
-}
-
-fn hosted_bare(board: &Board, principal: u64) -> Result<Token, Halt> {
-    match board.session_open(SessionBody::Bare { principal })? {
-        Opened::Token(t) => Ok(t),
-        Opened::Rejected => Err(Halt::face(
-            format!("the bare bind as principal {principal} was refused"),
-            "a Remote peer — the sidecar is not in the daemon's network namespace — or a claimed board",
-            "run the sidecar with `--network container:<daemon>`",
-        )),
-        Opened::Blocked { record } => Err(Halt::Blocked(crate::halt::Blocked { record, named_by: board.dialed.as_str().to_string(), ground: None })),
-    }
-}
-
-/// The payload's own fingerprints, for a reply.
-pub fn payload_fingerprints(entries: &[Enrollment]) -> Vec<(Fingerprint, bool, Option<String>)> {
-    entries.iter().map(|e| (Fingerprint::of(&e.key), e.anchor, e.label().map(str::to_string))).collect()
-}
-
-/// The public key of a record entry.
-pub fn entry_key(e: &Enrollment) -> &PublicKey {
-    &e.key
 }

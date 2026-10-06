@@ -35,9 +35,10 @@
 
 use skep_identity::Fingerprint;
 
+use crate::address::{doc_1_of, first_child};
 use crate::board::{acked_addr, frames, Answer, Board, KeySetAnswer, Rejection, Scope};
 use crate::ceremony::handshake::{handshake, Session, Site};
-use crate::derive::{doc_1_of, first_child, principal_of, walk_to_set, KeyDiagnosis};
+use crate::derive::{principal_of, walk_to_set, KeyDiagnosis};
 use crate::halt::Halt;
 use crate::origin::Origin;
 use crate::sign::{fresh_principal_id, Signer};

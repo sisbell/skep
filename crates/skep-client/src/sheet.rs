@@ -1,10 +1,10 @@
 //! The field set, their order and the grouping (`client.md` §1.1's `sheet`
-//! row): the key file's ONE JSON spelling and its reader (§3.2, RULED), the
-//! R42 grouping (AUTH-5.1: eight groups of eight hex, a single space between
-//! groups, four groups to a line, for a fingerprint wherever one is displayed
-//! and for the exported anchor SEED on the sheet alike), and the sheet's
-//! field list (AUTH-5.38) — the DRAWING is each embedder's (§5.2). No
-//! scannable form (§9 item 13).
+//! row): the key file's ONE JSON spelling and its reader with its refusals,
+//! [`KeyFileError`] (§3.2, RULED), the R42 grouping (AUTH-5.1: eight groups
+//! of eight hex, a single space between groups, four groups to a line, for
+//! a fingerprint wherever one is displayed and for the exported anchor SEED
+//! on the sheet alike), and the sheet's field list (AUTH-5.38) — the
+//! DRAWING is each embedder's (§5.2). No scannable form (§9 item 13).
 
 use std::fmt;
 
@@ -12,10 +12,10 @@ use serde_json::Value;
 use skep_identity::{Fingerprint, PublicKey, SigAlgRow, ALGS};
 use skep_signature::HybridSigner;
 
+use crate::address::is_address_text;
 use crate::hex;
 use crate::origin::Origin;
 use crate::sign::signer_from_seed_under;
-use crate::store::KeyFileError;
 
 /// AUTH-5.1 — 64 hex as EIGHT GROUPS OF EIGHT, a single space between
 /// groups, FOUR GROUPS TO A LINE (R42; RES-62 item 9, pick A).
@@ -112,6 +112,45 @@ impl fmt::Debug for KeyFile {
         write!(f, "KeyFile({}, anchor {}, fingerprint {})", self.alg, self.anchor, self.fingerprint)
     }
 }
+
+/// A KEY FILE'S REFUSALS (§3.2) — the store's own faces and never wire
+/// tokens, each read off the FILE's own contents: a state, rendered as
+/// AUTH-5.67's halt naming the path and the state
+/// ([`store_halt`](crate::store::store_halt)); all exit 3 (§1.1's `halt` row).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyFileError {
+    /// Not JSON, or `type` is not `skep-key`.
+    NotKeyFile,
+    /// `v` above 1: "this file was written by a newer skep than this one",
+    /// never "not a key file".
+    Newer { v: u64 },
+    /// A member missing, of the wrong type, out of its domain, or unknown.
+    Schema { member: String },
+    /// `public` or `fingerprint` does not re-derive from the seed: "this is
+    /// not the key this file names" (AUTH-5.39).
+    Disagrees,
+    /// An anchor file where a key was selected to SIGN or to be enrolled as a
+    /// device key (§2.2's selection test): the one walk that imports an
+    /// anchor is `skep recover`.
+    AnchorAtSigningCommand,
+}
+
+impl fmt::Display for KeyFileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            KeyFileError::NotKeyFile => f.write_str("this is not a skep key file"),
+            KeyFileError::Newer { v } => write!(f, "this file was written by a newer skep than this one (v {v})"),
+            KeyFileError::Schema { member } => write!(f, "the file's `{member}` member is missing, of the wrong type or outside its domain"),
+            KeyFileError::Disagrees => f.write_str("this is not the key this file names: its public key and fingerprint do not re-derive from its seed"),
+            KeyFileError::AnchorAtSigningCommand => f.write_str(
+                "this is an ANCHOR's file, and an anchor is refused wherever a key is selected to sign or to be \
+                 enrolled as a device key — the one walk that imports an anchor is `skep recover`",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for KeyFileError {}
 
 /// The three AUTH-5.38 facts an artifact carries where the account exists
 /// at export (the notebook: `delegate` runs ahead of the backup moment).
@@ -336,15 +375,6 @@ impl KeyFile {
         }
         Ok(KeyFile { anchor, alg: alg.to_string(), seed, public, fingerprint, label, account, principal, origin })
     }
-}
-
-/// An address in its one spelling: dotted decimal naturals, no sign, no
-/// leading zero, at least one component.
-pub fn is_address_text(s: &str) -> bool {
-    !s.is_empty()
-        && s.split('.').all(|c| {
-            !c.is_empty() && c.bytes().all(|b| b.is_ascii_digit()) && (c == "0" || !c.starts_with('0'))
-        })
 }
 
 #[cfg(test)]

@@ -165,10 +165,9 @@ pub fn files_in(dir: &Path) -> Vec<PathBuf> {
 
 use skep_client::board::{acked_addr, frames, Answer, Opened, Scope, SessionBody, Token, T_ENROLL, T_RETIRE};
 use skep_client::ceremony::deposit::next_content_ordinal;
-use skep_client::derive::records::record_frame;
 use skep_client::person::{Abandoned, Confirmation, Consent, Custody, Destination, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
 use skep_client::sheet::KeyFile;
-use skep_client::sign::{session_payload, sig_hex, Signer};
+use skep_client::sign::{record_frame, session_payload, sig_hex, Signer};
 use skep_identity::{canonical_record, Enrollment, RecordEntry};
 use skep_signature::HybridSigner;
 

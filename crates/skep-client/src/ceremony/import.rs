@@ -26,14 +26,15 @@ use std::path::{Path, PathBuf};
 use skep_identity::{Fingerprint, PublicKey};
 use skep_signature::HybridSigner;
 
+use super::say;
 use crate::board::{Board, KeySet};
 use crate::ceremony::backup::local_verify;
 use crate::ceremony::reads::A4Cell;
 use crate::derive::records::{Hand, Records};
 use crate::derive::KeyDiagnosis;
 use crate::halt::Halt;
-use crate::person::{Custody, Import, Imported, KeptOrPlaced, Person, Public, Question, Secret, Statement};
-use crate::sheet::{group_hex, render_inert, KeyFile};
+use crate::person::{Custody, Import, Imported, KeptOrPlaced, Person, Public, Question, Secret};
+use crate::sheet::{render_inert, KeyFile};
 use crate::sign::Signer;
 use crate::store::FileStore;
 
@@ -47,11 +48,10 @@ pub enum Whose {
 }
 
 /// The imported anchor: the signer (the SEED, held to §4a.3's bound), its
-/// public facts, and the artifact's custody.
+/// fingerprint and label, and the artifact's custody.
 pub struct ImportedAnchor {
     pub signer: HybridSigner,
     pub fingerprint: Fingerprint,
-    pub public: PublicKey,
     pub label: Option<String>,
     /// The file, where the artifact was one.
     pub file: Option<PathBuf>,
@@ -93,10 +93,6 @@ pub struct ImportContext<'a> {
     pub anchor_path: Option<&'a Path>,
     pub whose: Whose,
     pub cell: &'a A4Cell,
-}
-
-fn say(person: &mut dyn Person, rule: &'static str, text: impl Into<String>) {
-    person.say(Public(Statement { rule, text: text.into() }));
 }
 
 fn abandoned() -> Halt {
@@ -332,7 +328,7 @@ pub fn import_anchor(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<
             );
         }
     }
-    Ok(ImportOutcome::Anchor(Box::new(ImportedAnchor { fingerprint: fp, public: Signer::public_key(&signer), label, file, custody, signer })))
+    Ok(ImportOutcome::Anchor(Box::new(ImportedAnchor { fingerprint: fp, label, file, custody, signer })))
 }
 
 /// The FILE arm: the path inside the store refused ahead of the question;
@@ -385,9 +381,4 @@ pub fn dispose(person: &mut dyn Person, anchor: &ImportedAnchor) {
         (Some(path), Custody::Kept) => say(person, "AUTH-5.54 step 3", format!("the kept artifact {} is retained", path.display())),
         (None, _) => say(person, "AUTH-5.54 step 3", "the paper stays the kept artifact; nothing of the seed remains in this client"),
     }
-}
-
-/// A fingerprint and its label, grouped, for a face.
-pub fn named(fp: &Fingerprint, label: Option<&str>) -> String {
-    format!("{} ({})\n    {}", fp, label.map(render_inert).unwrap_or_else(|| "(no label)".into()), group_hex(&fp.to_hex()).replace('\n', "\n    "))
 }

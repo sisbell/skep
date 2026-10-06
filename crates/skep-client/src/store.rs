@@ -5,8 +5,9 @@
 //! append-only `bindings` file in its TWO line forms (§3.5) under the
 //! advisory lock `<store>/lock` (§3.7), and NO anchor under the store, ever
 //! (§3.4; AUTH-5.54 step 3). The refusals are the store's own faces
-//! ([`KeyFileError`]), never wire tokens, each rendered as AUTH-5.67's halt
-//! naming the path and the state.
+//! ([`StoreError`], [`KeyFileError`]), never wire tokens, each rendered by
+//! [`store_halt`] as AUTH-5.67's halt naming the path and the state; a
+//! lookup that selects no key is §3.5 arm 4's fork, [`arm4_face`].
 
 use std::fmt;
 use std::fs::{self, OpenOptions};
@@ -15,8 +16,11 @@ use std::path::{Path, PathBuf};
 
 use skep_identity::{Fingerprint, PublicKey};
 
+use crate::address::first_child;
+use crate::derive::Mode;
+use crate::halt::Halt;
 use crate::origin::Origin;
-use crate::sheet::{KeyFile, Seed};
+use crate::sheet::{render_inert, KeyFile, KeyFileError, Seed};
 use crate::sign::{fresh_seed, Signer};
 
 #[cfg(test)]
@@ -178,44 +182,6 @@ impl Binding {
     }
 }
 
-/// THE STORE'S OWN REFUSALS (§3.2), faces and never wire tokens, each
-/// read off the FILE's own contents — a state, rendered as AUTH-5.67's halt
-/// naming the path and the state; all exit 3 (§1.1's `halt` row).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum KeyFileError {
-    /// Not JSON, or `type` is not `skep-key`.
-    NotKeyFile,
-    /// `v` above 1: "this file was written by a newer skep than this one",
-    /// never "not a key file".
-    Newer { v: u64 },
-    /// A member missing, of the wrong type, out of its domain, or unknown.
-    Schema { member: String },
-    /// `public` or `fingerprint` does not re-derive from the seed: "this is
-    /// not the key this file names" (AUTH-5.39).
-    Disagrees,
-    /// An anchor file where a key was selected to SIGN or to be enrolled as a
-    /// device key (§2.2's selection test): the one walk that imports an
-    /// anchor is `skep recover`.
-    AnchorAtSigningCommand,
-}
-
-impl fmt::Display for KeyFileError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            KeyFileError::NotKeyFile => f.write_str("this is not a skep key file"),
-            KeyFileError::Newer { v } => write!(f, "this file was written by a newer skep than this one (v {v})"),
-            KeyFileError::Schema { member } => write!(f, "the file's `{member}` member is missing, of the wrong type or outside its domain"),
-            KeyFileError::Disagrees => f.write_str("this is not the key this file names: its public key and fingerprint do not re-derive from its seed"),
-            KeyFileError::AnchorAtSigningCommand => f.write_str(
-                "this is an ANCHOR's file, and an anchor is refused wherever a key is selected to sign or to be \
-                 enrolled as a device key — the one walk that imports an anchor is `skep recover`",
-            ),
-        }
-    }
-}
-
-impl std::error::Error for KeyFileError {}
-
 /// The public facts of one key in the store — what `fingerprint --dir`
 /// lists and what a lookup's halt names.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -271,6 +237,71 @@ impl fmt::Display for StoreError {
 }
 
 impl std::error::Error for StoreError {}
+
+/// A store refusal as AUTH-5.67's halt naming the path and the state.
+pub fn store_halt(e: StoreError) -> Halt {
+    match e {
+        StoreError::KeyFile { path, error } => Halt::face(
+            format!("the key file {} is refused: {error}", path.display()),
+            "the file's own contents decide this (client.md §3.2)",
+            match error {
+                KeyFileError::AnchorAtSigningCommand => "select a device key; the one walk that imports an anchor is `skep recover`",
+                KeyFileError::Newer { .. } => "upgrade skep, or select a key this version wrote",
+                _ => "point `--key` at a key file `skep keygen` wrote, or run `skep keygen`",
+            },
+        ),
+        StoreError::Io { path, error } => Halt::face(
+            format!("the key file {} is missing, unreadable or mis-pathed: {error}", path.display()),
+            "AUTH-5.67: a key file missing, unreadable or mis-pathed is HALT AND SURFACE, never a fallback to a bare bind",
+            "check the path (`--key`, `SKEP_KEY`, `--dir`)",
+        ),
+        StoreError::MissingKey { path, fingerprint } => Halt::face(
+            format!("the bindings name key {fingerprint} and the store holds no file at {}", path.display()),
+            "the key file was removed from the store after the binding was written",
+            "restore the file, or re-run the hop that binds another key",
+        ),
+        other => Halt::face("the key store refused", other.to_string(), "see the store's state above"),
+    }
+}
+
+/// §3.5 arm 4's three forks on `claimant`.
+pub fn arm4_face(store: &FileStore, keys: &[KeyFacts], mode: Mode, local_trust: bool) -> Halt {
+    match (mode, keys.is_empty()) {
+        (Mode::Unclaimed, true) => Halt::face(
+            format!("the key store {} holds no key, and this board is unclaimed", store.root().display()),
+            "`skep claim` generates no device key: the notebook door is two commands",
+            "run `skep keygen` first, then `skep claim` again",
+        ),
+        (_, false) => {
+            let list: Vec<String> = keys.iter().map(|k| format!("{} {}", k.fingerprint, k.label.as_deref().map(render_inert).unwrap_or_default())).collect();
+            Halt::face(
+                "more than one key is in this store and none is bound to this board and principal",
+                format!("the store holds:\n  {}", list.join("\n  ")),
+                "name the key with `--key <path>` (`skep fingerprint --dir` lists them); never a pick",
+            )
+        }
+        (_, true) => {
+            let residue = if local_trust {
+                "in CLAIMED-PERMISSIVE bare sessions still open on loopback and still write drafts, so that board is DRAFT-ONLY FOREVER: every draft stays readable and writable, and material can be carried across by re-authoring before a fresh board is minted"
+            } else {
+                "in ENFORCING it is READ-ONLY FOREVER"
+            };
+            Halt::face(
+                format!("the key store {} is keyless for this claimed board", store.root().display()),
+                "a wiped profile, a lost store, or a second machine (AUTH-5.32)",
+                format!(
+                    "either: generate a key here and enroll it from a device you are still signed in on (`skep keygen --payload` here, \
+                     `skep enroll` there, `skep bind` back here); or import a paper anchor (`skep keygen` here, then `skep recover`, \
+                     which enrolls the new key from the anchor's session and retires the lost one). Where NEITHER is available — no \
+                     signed-in device and both anchors gone — no \
+                     key opens this account and none ever will, and what exists is a fresh board: {residue}; either way total key \
+                     loss freezes the mint. And everything this account shared STAYS SHARED: every grant it issued stands forever, \
+                     only this account could withdraw it, and the fresh board carries none of it back."
+                ),
+            )
+        }
+    }
+}
 
 /// THE SEAM (§1.4): rung 2's `generate` mints the keychain item the file
 /// then indexes, which no `Signer` can do — the trait's one non-signing job
@@ -423,11 +454,6 @@ impl FileStore {
         })
     }
 
-    /// Whether the store holds a key file for `fp`.
-    pub fn holds(&self, fp: &Fingerprint) -> bool {
-        self.key_path(fp).is_file()
-    }
-
     /// Every binding line, in file order; a final line without `\n` ignored
     /// (§3.7: a torn append is never a torn record).
     pub fn all_bindings(&self) -> Result<Vec<Binding>, StoreError> {
@@ -464,8 +490,8 @@ impl FileStore {
     /// beside the account's, and the one-binding test excludes every line
     /// whose account is the first child of another line's account at the
     /// same board"). The exclusion is ONE condition: a line is dropped where
-    /// its account is [`crate::derive::first_child`] of another line's
-    /// account at this origin.
+    /// its account is [`first_child`] of another line's account at this
+    /// origin.
     pub fn principals_at(&self, origin: &Origin) -> Result<Vec<u64>, StoreError> {
         let lines: Vec<(u64, String)> = self
             .all_bindings()?
@@ -477,7 +503,7 @@ impl FileStore {
             .collect();
         let mut out: Vec<u64> = Vec::new();
         for (principal, account) in lines.iter().rev() {
-            let agent_space = lines.iter().any(|(_, other)| crate::derive::first_child(other) == *account);
+            let agent_space = lines.iter().any(|(_, other)| first_child(other) == *account);
             if agent_space || out.contains(principal) {
                 continue;
             }

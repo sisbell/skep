@@ -9,6 +9,7 @@
 
 use skep_identity::Fingerprint;
 
+use crate::address::parent_account;
 use crate::board::{Board, Health, KeySet, KeySetAnswer};
 use crate::halt::Halt;
 use crate::origin::Origin;
@@ -46,28 +47,6 @@ impl Mode {
             Mode::Enforcing => "ENFORCING",
         }
     }
-}
-
-/// The parent ACCOUNT of an account address, by the address grammar: strip
-/// the last component; where what remains ends at the account separator
-/// (`…0`) the address was top-level and no account stands above it.
-pub fn parent_account(account: &str) -> Option<String> {
-    let (head, _) = account.rsplit_once('.')?;
-    if head.ends_with(".0") || !head.contains(".0.") {
-        return None;
-    }
-    Some(head.to_string())
-}
-
-/// The first child of an account — `inc(X, 1)`, the agents' home
-/// (AUTH-5.87: the layout the fold and the handshake already compute).
-pub fn first_child(account: &str) -> String {
-    format!("{account}.1")
-}
-
-/// An account's doc 1 at its computable address (AUTH-2.109; M3's pin).
-pub fn doc_1_of(account: &str) -> String {
-    format!("{account}.0.1")
 }
 
 /// THE WALK (AUTH-5.21; AUTH-4.30 (i)'s client sentence): `key_set` at the
@@ -266,18 +245,6 @@ mod tests {
         assert_eq!(Mode::of(&health(None, false, &[])), Mode::Unclaimed);
         assert_eq!(Mode::of(&health(Some("1.0.1"), true, &[])), Mode::ClaimedPermissive);
         assert_eq!(Mode::of(&health(Some("1.0.1"), false, &[])), Mode::Enforcing);
-    }
-
-    /// The address grammar's parent: a sub-account's parent is an account,
-    /// a top-level account's is none.
-    #[test]
-    fn the_parent_account_stops_at_the_top_level() {
-        assert_eq!(parent_account("1.0.1.1"), Some("1.0.1".into()));
-        assert_eq!(parent_account("1.0.1.2.3"), Some("1.0.1.2".into()));
-        assert_eq!(parent_account("1.0.1"), None);
-        assert_eq!(parent_account("1.3.0.7"), None);
-        assert_eq!(first_child("1.0.1"), "1.0.1.1");
-        assert_eq!(doc_1_of("1.0.1"), "1.0.1.0.1");
     }
 
     /// AUTH-5.24/5.36 — the origin arm names the ORIGIN STATE, never a

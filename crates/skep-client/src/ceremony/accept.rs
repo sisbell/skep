@@ -27,16 +27,17 @@ use std::path::{Path, PathBuf};
 
 use skep_identity::{encode_enroll, Enrollment, Fingerprint};
 
+use super::say;
+use crate::address::{first_child, parent_account};
 use crate::board::{Board, KeySetAnswer};
 use crate::ceremony::backup::{backup_moment, AnchorArtifact, BackupOptions, Venue};
-use crate::ceremony::claim::store_halt;
 use crate::ceremony::enumerate::by_reference_cone;
 use crate::ceremony::reads::A4Cell;
-use crate::derive::{first_child, parent_account, principal_of, walk_to_set, Mode};
+use crate::derive::{principal_of, walk_to_set, Mode};
 use crate::halt::Halt;
-use crate::person::{Confirmation, Consent, LabelBox, Person, Public, Question, Statement};
+use crate::person::{Confirmation, Consent, LabelBox, Person, Public, Question};
 use crate::sheet::{render_inert, Facts, KeyFile};
-use crate::store::{Binding, FileStore, KeySelector, KeyStore, Label, Purpose};
+use crate::store::{store_halt, Binding, FileStore, KeySelector, KeyStore, Label, Purpose};
 
 /// The beat's inputs.
 #[derive(Debug, Clone)]
@@ -62,10 +63,6 @@ pub struct Accepted {
     pub device: Fingerprint,
     pub anchors: Vec<AnchorArtifact>,
     pub declined_pair: bool,
-}
-
-fn say(person: &mut dyn Person, rule: &'static str, text: impl Into<String>) {
-    person.say(Public(Statement { rule, text: text.into() }));
 }
 
 fn abandoned() -> Halt {

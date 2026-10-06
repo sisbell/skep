@@ -6,7 +6,7 @@
 //! retry; the giver's session as the given account dead; the recipient's
 //! `bind`; the top-level halt; the anchorless line.
 
-use skep_client::board::{frames, Answer, KeySetAnswer, Scope};
+use skep_client::board::{KeySetAnswer, Scope};
 use skep_client::ceremony::accept::{accept, reprint, AcceptOptions};
 use skep_client::ceremony::first_session::{document_present, first_session, FirstSessionReads};
 use skep_client::ceremony::handoff::{handoff, HandoffOptions, HandoffOutcome};
@@ -238,6 +238,4 @@ fn a_depth_two_genesis_is_homed_in_the_giving_accounts_doc_one_and_the_decline_a
     let HandoffOutcome::Seeded { grade, facts, .. } = handoff(&board2, &giver2, &mut p, &give("1.0.1.2", Some(taken2.record.clone()), None)).unwrap_or_else(|h| panic!("{h}\n{}", p.transcript.join("\n"))) else { panic!() };
     assert_eq!((grade, facts.principal), (Grade::Device, s2));
     assert!(!p.said("Handing this off is an anchor act") && !p.said("SECRET custody"), "no import at the device grade");
-    let _ = frames::span_set("1.0.1.0.1");
-    let _: Option<Answer> = None;
 }

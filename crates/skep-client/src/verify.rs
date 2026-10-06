@@ -28,7 +28,7 @@
 
 use skep_identity::{BoardTerm, Fingerprint, PublicKey, SigAlgRow};
 
-use crate::derive::records::{trial, Hand, Kind, Records};
+use crate::derive::records::{trial, Kind, Records};
 
 /// One admission of the FILTERED table: a key, from the record that admitted
 /// it, until the record that retired it — positions where known.
@@ -162,12 +162,6 @@ impl FilteredTable {
     pub fn current(&self) -> Vec<&Admission> {
         self.admissions.iter().filter(|a| a.until.is_none()).collect()
     }
-
-    /// The hands this table names for the records, for a face: the record's
-    /// hand as the read named it, position where known.
-    pub fn hand_of(records: &Records, fp: &Fingerprint) -> Option<(Hand, Option<u64>)> {
-        records.retirement_of(fp).map(|r| (r.hand.clone(), r.position))
-    }
 }
 
 /// One committed ENTRY under trial: its position, the frame its caller
@@ -224,7 +218,9 @@ pub fn verdict(entry: &Entry<'_>, table: &FilteredTable, boundary: Option<u64>, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::derive::records::Record;
+    use crate::address::parse_address;
+    use crate::derive::records::{Hand, Record};
+    use crate::sign::record_frame;
     use skep_identity::{canonical_record, entry_body_make_link, entry_frame, unit_span, DocTerm, Enrollment, EntrySlot, LinkSlots};
     use skep_signature::HybridSigner;
 
@@ -265,7 +261,7 @@ mod tests {
     }
 
     fn sign_record(signer: &HybridSigner, ty: &str, sigless: &str) -> String {
-        let frame = crate::derive::records::record_frame(
+        let frame = record_frame(
             HybridSigner::public_key(signer).alg(),
             board(),
             "1.0.1",
@@ -325,15 +321,15 @@ mod tests {
         assert_eq!(table.inert.len(), 1);
 
         // An entry at 28, signed by the plant: UNSIGNED here.
-        let home = crate::derive::records::parse_address("1.0.1.0.1").unwrap();
-        let ty = [unit_span(&crate::derive::records::parse_address("1.1.0.1.0.1.0.3.90").unwrap())];
-        let from = [unit_span(&crate::derive::records::parse_address("1.0.1.0.2").unwrap())];
+        let home = parse_address("1.0.1.0.1").unwrap();
+        let ty = [unit_span(&parse_address("1.1.0.1.0.1.0.3.90").unwrap())];
+        let from = [unit_span(&parse_address("1.0.1.0.2").unwrap())];
         let to: [skep_address::Span; 0] = [];
         let body = entry_body_make_link(LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) });
         let frame = entry_frame(
             HybridSigner::public_key(&plant).alg(),
             board(),
-            &crate::derive::records::parse_address("1.0.1").unwrap(),
+            &parse_address("1.0.1").unwrap(),
             DocTerm::One(&home),
             &body,
         );

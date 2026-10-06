@@ -14,12 +14,14 @@
 
 use skep_identity::{Fingerprint, PublicKey};
 
+use super::say;
+use crate::address::{doc_1_of, parent_account};
 use crate::board::{Board, Health};
 use crate::ceremony::first_session::document_present;
 use crate::derive::records::{credential_records, Records};
-use crate::derive::{doc_1_of, origin_arm, parent_account, principal_of, walk_to_set, Mode, Walk};
+use crate::derive::{origin_arm, principal_of, walk_to_set, Mode, Walk};
 use crate::halt::Halt;
-use crate::person::{Person, Public, Statement};
+use crate::person::Person;
 
 /// AUTH-5.60 step 4's A4 cell, as the recovering party stands in it:
 /// SERVED, a LOOPBACK-BOUND notebook, a BIND-OVERRIDE notebook — and, by
@@ -54,40 +56,23 @@ impl A4Cell {
         }
         A4Cell::Served
     }
-
-    pub fn name(&self) -> String {
-        match self {
-            A4Cell::Served => "a SERVED board".into(),
-            A4Cell::LoopbackNotebook => "a LOOPBACK-BOUND notebook".into(),
-            A4Cell::BindOverrideNotebook => "a BIND-OVERRIDE notebook".into(),
-            A4Cell::HandoffRecipient { giver } => format!("a handed-off subdivision at {giver}'s board"),
-        }
-    }
 }
 
-/// R0's answer.
+/// R0's answer: what the walks after it act on.
 #[derive(Debug, Clone)]
 pub struct Reads {
-    pub health: Health,
-    pub mode: Mode,
     /// `principal_prefix(n)` — the account A.
     pub account: String,
-    pub principal: u64,
     /// AUTH-5.21's walk from A.
     pub walk: Walk,
     /// The principal seated at the set account — the one a session there
     /// is opened as (A's own where A holds its own set).
     pub set_principal: u64,
-    /// A's own doc 1 and whether it stands.
+    /// A's own doc 1 — the home `recover`'s retirements are written to.
     pub home: String,
-    pub home_present: bool,
     /// The admitted read at the set account, made once.
     pub records: Records,
     pub cell: A4Cell,
-}
-
-fn say(person: &mut dyn Person, rule: &'static str, text: impl Into<String>) {
-    person.say(Public(Statement { rule, text: text.into() }));
 }
 
 /// R0, in its order. `enrolls` names a walk whose act is an ENROLLMENT
@@ -139,7 +124,10 @@ pub fn r0(board: &Board, person: &mut dyn Person, principal: u64, enrolls: bool,
         ));
     }
     let home = doc_1_of(&account);
-    let home_present = document_present(board, &home)?;
+    // A's own doc 1, read in R0's order: a home the board will not answer for
+    // halts here, ahead of the import. The walk that mints it reads it again
+    // where it acts (`FirstSessionReads`).
+    document_present(board, &home)?;
     // THE ADMITTED READ, once, priced here (§4a.2 R0; §1.1's cost).
     say(
         person,
@@ -154,13 +142,5 @@ pub fn r0(board: &Board, person: &mut dyn Person, principal: u64, enrolls: bool,
     let records = credential_records(board, &walk.set_account, own)?;
     say(person, "AUTH-5.68 (cost)", format!("read {} credential records at {}", records.records.len(), walk.set_account));
     let cell = A4Cell::of(board, &health, &account, &walk);
-    Ok(Reads { health, mode, account, principal, walk, set_principal, home, home_present, records, cell })
-}
-
-/// An account's own doc 1 (`first_session`'s first state's resume read,
-/// taken at R0 so R3's call has it).
-pub fn home_of(board: &Board, account: &str) -> Result<(String, bool), Halt> {
-    let home = doc_1_of(account);
-    let present = document_present(board, &home)?;
-    Ok((home, present))
+    Ok(Reads { account, walk, set_principal, home, records, cell })
 }

@@ -20,11 +20,12 @@
 
 use skep_identity::Fingerprint;
 
+use super::say;
 use crate::board::KeySet;
 use crate::ceremony::enumerate::Closure;
 use crate::derive::records::Records;
 use crate::halt::Halt;
-use crate::person::{Confirmation, Consent, Person, Public, Statement};
+use crate::person::{Confirmation, Consent, Person};
 use crate::sheet::{group_hex, render_inert};
 
 /// One row of the preview: a fingerprint to retire, labelled.
@@ -109,10 +110,6 @@ pub enum Previewed {
     Declined,
     /// The write is unreachable (`would_empty`): no confirmation was taken.
     Unwritable,
-}
-
-fn say(person: &mut dyn Person, rule: &'static str, text: impl Into<String>) {
-    person.say(Public(Statement { rule, text: text.into() }));
 }
 
 /// THE PREVIEW.

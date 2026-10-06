@@ -28,22 +28,22 @@
 
 use skep_identity::{Enrollment, Fingerprint, PublicKey};
 
+use super::say;
 use crate::board::{Board, KeySetAnswer, Scope};
-use crate::ceremony::claim::{arm4_face, store_halt};
 use crate::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome, Grade};
-use crate::ceremony::enroll::{compare_payload, parse_payload, payload_text, refuse_anchor_flagged};
 use crate::ceremony::enumerate::head_closure;
 use crate::ceremony::first_session::{first_session, FirstSessionReads};
 use crate::ceremony::handshake::{handshake, Session, Site};
+use crate::ceremony::payload::{compare_payload, parse_payload, payload_text, refuse_anchor_flagged};
 use crate::ceremony::preview::{declined, preview, Preview, PreviewSite, Previewed, Row};
 use crate::ceremony::reads::{r0, A4Cell, Reads};
 use crate::ceremony::trail::{trail_present, write_trail};
 use crate::derive::records::{credential_records, Hand, Kind, Records};
 use crate::derive::Mode;
 use crate::halt::Halt;
-use crate::person::{LabelBox, Person, Public, Statement};
+use crate::person::{LabelBox, Person, Public};
 use crate::sheet::{render_inert, Facts, KeyFile};
-use crate::store::{Binding, FileStore, KeySelector, KeyStore, Label, Purpose, StoreError};
+use crate::store::{arm4_face, store_halt, Binding, FileStore, KeySelector, KeyStore, Label, Purpose, StoreError};
 
 /// The command's inputs.
 #[derive(Debug, Clone)]
@@ -67,10 +67,6 @@ pub struct Rotated {
     /// The binding appended for the new key, where it is this store's.
     pub binding_line: Option<String>,
     pub warnings: Vec<String>,
-}
-
-fn say(person: &mut dyn Person, rule: &'static str, text: impl Into<String>) {
-    person.say(Public(Statement { rule, text: text.into() }));
 }
 
 /// The OLD key's enroll link — at the notebook the genesis link's — from

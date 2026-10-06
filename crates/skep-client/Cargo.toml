@@ -20,6 +20,15 @@ acting = ["skep-signature/sign", "dep:skep-resolve", "dep:getrandom"]
 # OFF here; the `skep` binary and the frontend's shell turn it on. The
 # sidecar image builds the binary `--no-default-features`.
 tls = ["dep:rustls", "dep:rustls-platform-verifier"]
+# `test-hooks` compiles in the test support: `person::scripted`, the scripted
+# person a suite drives through a walk — and implies `acting`, the half that
+# holds the `Person` seam. DEFAULT-OFF, and no shipped build enables it: this
+# crate's own tests turn it on through the self dev-dependency below, and
+# skep-cli's tests on their `skep-client` line, so a build that compiles no
+# test compiles none of it. `scripts/gate-full.sh`'s `--features acting`
+# check builds the library without it, and `tests/it/tidy.rs` checks the
+# gate on the module's `mod` line.
+test-hooks = ["acting"]
 
 [dependencies]
 # M1 — the address vocabulary the entry frame and the walks spell addresses
@@ -44,6 +53,13 @@ rustls = { workspace = true, optional = true }
 rustls-platform-verifier = { workspace = true, optional = true }
 
 [dev-dependencies]
+# This crate itself with `test-hooks` on, so its integration tests
+# (tests/it, outside this library's `cfg(test)`) drive the walks through the
+# scripted person under a plain `cargo test` or workspace run, no flag added.
+# A build that compiles no test never reads this table. `default-features =
+# false`, so this line adds `test-hooks` (and the `acting` it implies) and
+# nothing else.
+skep-client = { path = ".", features = ["test-hooks"], default-features = false }
 # The real daemon, in-process on an ephemeral port over a temp data dir, as
 # skep-mcp's suite takes it: `test-hooks` is what that suite enables too.
 skepd = { path = "../skepd", features = ["test-hooks"] }

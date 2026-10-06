@@ -7,17 +7,24 @@
 //! versioned layouts under `SESSION_TAG` and `SESSION_TAG_V2` — the
 //! REFERENCE layout for every signer, REPRODUCIBLE FROM THE RULE WITH NO
 //! DAEMON CRATE LINKED (AUTH-5.67; AUTH RES-61), the daemon's
-//! `session_payload` the arbiter (P5).
+//! `session_payload` the arbiter (P5); and `record_frame`, the bytes a
+//! credential record's `sig` is made over at the record grade, which a
+//! deposit signs and the admitted read's trial verifies.
 //!
 //! A `Signer` knows nothing of the wire: it signs bytes the library framed.
 //! Of the key material a dropped `HybridSigner` holds, the Ed25519 half is
 //! wiped and the ML-DSA-65 half released unwiped (its own doc) — AUTH-5.54
 //! step 3's DROP is OPEN WORK for that half, reported and not claimed here.
 
-use skep_identity::{framed, Fingerprint, PublicKey, SESSION_TAG, SESSION_TAG_V2};
+use skep_address::Address;
+use skep_identity::{
+    entry_body_record, entry_frame, framed, BoardTerm, DocTerm, Fingerprint, PublicKey, RecordRows, SESSION_TAG,
+    SESSION_TAG_V2,
+};
 use skep_signature::HybridSigner;
 
-pub use crate::board::Scope;
+use crate::address::parse_address;
+use crate::board::Scope;
 use crate::origin::Origin;
 
 /// The production kind's marker tag — `mldsa65-ed25519`, tag 1, the kind
@@ -120,6 +127,21 @@ pub fn session_payload(origin: &Origin, nonce: &str, principal: u64, scope: Scop
             &[origin.as_str().as_bytes(), nonce.as_bytes(), principal.as_bytes(), b"content"],
         ),
     }
+}
+
+/// THE RECORD FRAME a credential record's `sig` is made over (the record
+/// grade; wire.md §The claim ceremony and credentials): `framed("skep-entry-v1",
+/// [alg, board, account, doc, "record", body])` — `alg` the signing key's
+/// token, `board` `H.1`'s pair, `account` the HOME's account, `doc` the home,
+/// the body the five rows over the sig-less canonical record. Composed by
+/// `skep_identity::entry_frame`, spelled by nobody here.
+pub fn record_frame(alg: &str, board: BoardTerm, home_account: &str, home: &str, ty: &str, to: &[&str], sigless: &[u8]) -> Option<Vec<u8>> {
+    let account = parse_address(home_account)?;
+    let home = parse_address(home)?;
+    let ty = parse_address(ty)?;
+    let to: Vec<Address> = to.iter().map(|a| parse_address(a)).collect::<Option<_>>()?;
+    let body = entry_body_record(RecordRows { ty: &ty, to: &to, replaces: None, lineage_fork_point: None, sigless_canonical_record: sigless });
+    Some(entry_frame(alg, board, &account, DocTerm::One(&home), &body))
 }
 
 /// The blob as the wire carries it — lowercase hex (6,746 characters at

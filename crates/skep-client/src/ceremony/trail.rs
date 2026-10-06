@@ -14,10 +14,10 @@
 use serde_json::json;
 use skep_identity::{entry_body_assert_sup, entry_frame, unit_span, DocTerm, EntrySlot, LinkSlots};
 
+use crate::address::parse_address;
 use crate::board::{acked_addr, frames, Answer, Board, Rejection, T_SUPERSEDES};
 use crate::ceremony::enumerate::link_subject;
 use crate::ceremony::handshake::Session;
-use crate::derive::records::parse_address;
 use crate::halt::Halt;
 use crate::sign::{sig_hex, Signer};
 

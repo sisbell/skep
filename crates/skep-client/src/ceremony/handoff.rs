@@ -31,22 +31,23 @@ use std::path::PathBuf;
 
 use skep_identity::{Fingerprint, PublicKey};
 
+use super::say;
+use crate::address::{doc_1_of, first_child, parent_account};
 use crate::board::{acked_addr, frames, Answer, Board, KeySetAnswer, Rejection, Scope};
-use crate::ceremony::claim::{arm4_face, store_halt};
 use crate::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome, Grade};
-use crate::ceremony::enroll::{compare_payload, parse_payload, payload_text};
 use crate::ceremony::enumerate::by_reference_cone;
 use crate::ceremony::first_session::document_present;
 use crate::ceremony::handshake::{handshake, key_face, Session, Site};
 use crate::ceremony::import::{dispose, import_anchor, ImportContext, ImportOutcome, ImportedAnchor, Whose};
+use crate::ceremony::payload::{compare_payload, parse_payload, payload_text};
 use crate::ceremony::reads::A4Cell;
 use crate::derive::records::credential_records;
-use crate::derive::{doc_1_of, first_child, parent_account, precheck, principal_of, walk_to_set, Mode};
+use crate::derive::{precheck, principal_of, walk_to_set, Mode};
 use crate::halt::Halt;
-use crate::person::{Confirmation, Consent, Person, Public, Statement};
-use crate::sheet::{render_inert, Facts};
+use crate::person::{Confirmation, Consent, Person};
+use crate::sheet::Facts;
 use crate::sign::{fresh_principal_id, Signer};
-use crate::store::{Binding, FileStore, KeySelector, KeyStore, Purpose, StoreError};
+use crate::store::{arm4_face, store_halt, Binding, FileStore, KeySelector, KeyStore, Purpose, StoreError};
 
 /// The command's inputs.
 #[derive(Debug, Clone)]
@@ -69,10 +70,6 @@ pub enum HandoffOutcome {
     Delegated { account: String, seat: u64, already: bool },
     /// Beats (b)–(d): the genesis written; the three facts for the reply.
     Seeded { facts: Facts, grade: Grade, reconciled: bool, warnings: Vec<String> },
-}
-
-fn say(person: &mut dyn Person, rule: &'static str, text: impl Into<String>) {
-    person.say(Public(Statement { rule, text: text.into() }));
 }
 
 /// G0's payload-free reads.
@@ -361,6 +358,5 @@ pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
             board.dialed
         ),
     );
-    let _ = render_inert;
     Ok(out)
 }

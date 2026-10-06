@@ -136,8 +136,10 @@ foundation and on the stores above it.
   skep crates it depends on `skep-address`, `skep-identity`,
   `skep-signature` and `skep-resolve` alone — never `skepd`, which does
   not depend on it either (its suite spawns the daemon as a
-  dev-dependency). Two features: `acting` (default on) gates everything
-  that signs or holds a key; `tls` (default off) the `https://` arm.
+  dev-dependency). Three features: `acting` (default on) gates everything
+  that signs or holds a key; `tls` (default off) the `https://` arm;
+  `test-hooks` (default off) the scripted person a suite drives. Its
+  modules and rules: §The client.
 - `skep-cli` — the `skep` command over `skep-client`, thirteen commands:
   `keygen`, `claim`, `session`, `fingerprint`, `verify`, `health`, `bind`,
   `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`; flag
@@ -487,6 +489,84 @@ the unit suites over boards they hold fixed, each beside the code it
 pins, the mirror's suites sharing the fixtures in `mirror/testing.rs`.
 The end-to-end cells and the measurements run in
 `crates/skepd/tests/it/resolve.rs`.
+
+## The client, `skep-client`
+
+`skep-client` is what an ACTING client embeds — the `skep` command, the
+frontend's shell — to claim a board, open signed sessions, keep its keys
+and run the credential ceremonies; with its `acting` feature off it is the
+reading half alone, which holds no signer and no key. It links no daemon
+and no engine: it speaks the wire as `docs/wire.md` states it and
+reproduces the daemon's grammars under their rules. Its modules, bottom-up
+— `src/lib.rs`'s doc gives each top-level one a line, `src/ceremony.rs`'s
+each ceremony:
+
+- The reading half, in every build. `origin.rs` the canonical origin;
+  `address.rs` the address grammar over the wire's dotted spelling (an
+  account's parent, first child and doc 1, the document an address lies
+  in, the parse); `hex.rs` (private) lowercase hex; `dial.rs` the one
+  outbound `Dialer`, its plain-HTTP arm and, under `tls`, the `https://`
+  arm; `halt.rs` the one error family and its exit codes; `board.rs` the
+  wire's endpoints over a dialer, `H.1`'s pair, and `board/frames.rs`,
+  which spells every frame the crate sends; `derive.rs` the pure
+  derivations over board reads — the mode, the pre-check, the walk to the
+  set that opens an account, the key diagnosis, the `closed` predicate.
+- Under `acting`. `sign.rs` the `Signer` seam and the bytes a signer signs
+  (the session payload, a credential record's frame); `sheet.rs` the key
+  file's one spelling and its refusals; `store.rs` the `FileStore` — key
+  files, the bindings file, the lock — and the halts its refusals render
+  as, its unit suite in `store/tests.rs`; `person.rs` the `Person` seam,
+  and under `test-hooks` `person/scripted.rs`, the scripted person a suite
+  drives; `derive/records.rs` the one admitted read of an account's
+  credential records, their positions and hands; `verify.rs` the reader's
+  verifier over the signature-filtered set; `resolve.rs` the registry
+  walk's `Transport` over a dialer.
+- `ceremony.rs` and `ceremony/`, in two layers. The COMPOSITIONS, each the
+  one home of its frames, reads and refusals: `handshake.rs` the session
+  open, `deposit.rs` the credential write, `first_session.rs` an account's
+  first signed session, `backup.rs` the backup moment, `payload.rs` the
+  paste door, `preview.rs` the retirement preview, `enumerate.rs` the head
+  invariant's closure and the by-reference cone, `trail.rs` the
+  supersession trail, `import.rs` the anchor import, `reads.rs` R0's reads
+  and the A4 cell. The WALKS over them, one gesture each: `claim.rs` the
+  notebook walk, its hosted arm in `claim/hosted.rs`; `enroll.rs`;
+  `recover.rs` the device arm, its loss arm in `recover/loss.rs`;
+  `retire.rs`; `rotate.rs`; `handoff.rs` the giver's walk; `accept.rs`
+  the recipient's beat.
+
+Rules that hold across its files:
+
+- **One dialer.** Every request the crate makes goes through a `Dialer`:
+  the one a `Board` holds, or the one `resolve.rs`'s transport wraps.
+  Every token-bearing request but the close rides `Board::authed`, which
+  answers the death signal as `Authed::Closed` (P28); `Board::session_close`
+  reads it on its own `204` as the token already dead (AUTH-4.47).
+- **One home per composition.** Every signed session opens through
+  `handshake.rs`, its pre-check's reads ahead of the `/challenge`
+  (AUTH-5.65); every credential record is written by `deposit.rs`; an
+  account's first signed session runs `first_session.rs`'s two states. A
+  walk states only what its site adds.
+- **The ceremony is layered.** Nothing outside `ceremony/` names it;
+  inside, a walk names compositions and never another walk, and a
+  composition names no walk. `tests/it/tidy.rs` checks it.
+- **Key material is written once, and no anchor rests in the store.**
+  `FileStore::write_once` — `O_CREAT|O_EXCL`, mode `0600` at creation —
+  writes every key file and every anchor file; a path inside the store is
+  refused as an anchor's destination and as its source (§3.4).
+- **No journal.** Every walk resumes by reading the board (P4); the one
+  kind of line written ahead of a frame is the persist-first `new_id`
+  binding line (§4.3; AUTH-5.20).
+
+| Feature | Default | Adds | Compiled by the gate |
+|---|---|---|---|
+| `acting` | on | `sign`, `sheet`, `store`, `person`, `derive::records`, `verify`, `resolve`, `ceremony`; `skep-signature`'s `sign` | every default build; `scripts/gate-full.sh` checks the library without it (the reading half) and with it alone |
+| `tls` | off | the dialer's `https://` arm over rustls and the platform verifier | `skep-cli`'s default build; `scripts/gate-full.sh` checks the `skep` binary without it |
+| `test-hooks` | off | implies `acting`; `person::scripted` | every test build (the crate's self dev-dependency, and `skep-cli`'s dev-dependency); `scripts/gate-full.sh`'s `--features acting` check builds the library without it, and `tests/it/tidy.rs` checks its gate |
+
+Its integration suite is one binary, `tests/it/`: the walks driven through
+the scripted person against a daemon spawned in-process, another hand's
+acts re-driven over the wire (`common::wire_*`) and never by a ceremony;
+`backup`, the moment with no daemon; and `tidy`, the arrangement above.
 
 ## The name space, `skep-namespace`
 

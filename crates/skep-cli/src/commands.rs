@@ -28,7 +28,7 @@ use skep_client::derive::{origin_arm, precheck, principal_of, walk_to_set, KeyDi
 use skep_client::dial::{plaintext_non_loopback_warning, PlainHttp};
 use skep_client::halt::Halt;
 use skep_client::sheet::{group_hex, render_inert, KeyFile};
-use skep_client::store::{Binding, FileStore, KeySelector, KeyStore, Label, Purpose, StoreError};
+use skep_client::store::{arm4_face, store_halt, Binding, FileStore, KeySelector, KeyStore, Label, Purpose, StoreError};
 use skep_identity::{encode_enroll, Enrollment, Fingerprint};
 
 use crate::args::{Command, Usage};
@@ -177,12 +177,12 @@ pub fn keygen(c: &Command) -> i32 {
     };
     let id = match store.generate(Some(label.clone())) {
         Ok(id) => id,
-        Err(e) => return halt(claim::store_halt(e)),
+        Err(e) => return halt(store_halt(e)),
     };
     let path = store.key_path(&id.0);
     let file = match store.load(&path) {
         Ok(f) => f,
-        Err(e) => return halt(claim::store_halt(e)),
+        Err(e) => return halt(store_halt(e)),
     };
     talk(custody_line(&path));
     let mut entries = Vec::new();
@@ -343,9 +343,9 @@ fn select_key(c: &Command, store: &FileStore, board: &Board, principal: Option<u
         Ok(s) => Ok((s.path, s.file)),
         Err(StoreError::NoSelection { keys }) => {
             let health = board.health()?;
-            Err(claim::arm4_face(store, &keys, Mode::of(&health), health.local_trust()))
+            Err(arm4_face(store, &keys, Mode::of(&health), health.local_trust()))
         }
-        Err(e) => Err(claim::store_halt(e)),
+        Err(e) => Err(store_halt(e)),
     }
 }
 
@@ -354,7 +354,7 @@ fn principal_or_bound(c: &Command, store: &FileStore, board: &Board) -> Result<u
     if let Ok(Some(p)) = c.principal() {
         return Ok(p);
     }
-    let ps = store.principals_at(&board.dialed).map_err(claim::store_halt)?;
+    let ps = store.principals_at(&board.dialed).map_err(store_halt)?;
     match ps.as_slice() {
         [one] => Ok(*one),
         [] => Err(Halt::face("no principal", "--principal (or SKEP_PRINCIPAL) is absent and the store holds no binding for this board", "pass --principal")),
@@ -433,7 +433,7 @@ pub fn fingerprint(c: &Command) -> i32 {
     let files: Vec<(PathBuf, KeyFile)> = if let Some(path) = c.key() {
         match store.select(&KeySelector::Path(&path), Purpose::Read) {
             Ok(s) => vec![(s.path, s.file)],
-            Err(e) => return halt(claim::store_halt(e)),
+            Err(e) => return halt(store_halt(e)),
         }
     } else if let Some(select) = c.value("--select", None) {
         match store.select(&KeySelector::select(&select), Purpose::Read) {
@@ -443,12 +443,12 @@ pub fn fingerprint(c: &Command) -> i32 {
                 return halt(Halt::face(format!("`{select}` matches more than one key"), format!("neither a fingerprint prefix nor a label is unique by rule (AUTH-5.3):\n  {}", list.join("\n  ")), "give a longer prefix; never a pick"));
             }
             Err(StoreError::NotFound { select }) => return halt(Halt::face(format!("no key in the store matches `{select}`"), "the store's keys are listed by `skep fingerprint --dir`", "check the selector")),
-            Err(e) => return halt(claim::store_halt(e)),
+            Err(e) => return halt(store_halt(e)),
         }
     } else {
         match store.list() {
             Ok(keys) => keys.into_iter().filter_map(|k| store.load(&k.path).ok().map(|f| (k.path, f))).collect(),
-            Err(e) => return halt(claim::store_halt(e)),
+            Err(e) => return halt(store_halt(e)),
         }
     };
     let any_binding = bindings.iter().any(|b| matches!(b, Binding::Enrollment { .. }));
@@ -530,7 +530,7 @@ fn held_set(c: &Command, store: &FileStore, device: Option<&KeyFile>, payload_is
             // The file's `public`, `fingerprint`, `anchor` and `label`
             // members read AND NOTHING ELSE: no seed is loaded past the
             // parse's own re-derivation, no session, nothing written.
-            let file = store.select(&KeySelector::Path(Path::new(&path)), Purpose::Read).map_err(claim::store_halt)?.file;
+            let file = store.select(&KeySelector::Path(Path::new(&path)), Purpose::Read).map_err(store_halt)?.file;
             held.push(Held { fingerprint: file.fingerprint, anchor: file.anchor, label: file.label.clone() });
         }
         if let Some(d) = device {
@@ -589,7 +589,7 @@ pub fn verify(c: &Command) -> i32 {
     let (_path, file) = match c.key() {
         Some(path) => match store.select(&KeySelector::Path(&path), Purpose::Read) {
             Ok(s) => (s.path, s.file),
-            Err(e) => return halt(claim::store_halt(e)),
+            Err(e) => return halt(store_halt(e)),
         },
         None => match select_key(c, &store, &board, Some(principal)) {
             Ok(k) => k,
@@ -723,7 +723,7 @@ fn facts_of(c: &Command, board: &Board) -> Result<(String, u64), Halt> {
         }
     };
     let principal = principal.ok_or_else(|| Halt::face("no principal", "--principal (or SKEP_PRINCIPAL), or a `principal` line in the reply, is required", "pass --principal <n>"))?;
-    if account.is_empty() || !skep_client::sheet::is_address_text(&account) {
+    if account.is_empty() || !skep_client::address::is_address_text(&account) {
         return Err(Halt::face(format!("`{account}` is not an account address"), "an address is dotted decimal", "pass --account <address>"));
     }
     Ok((account, principal))
@@ -856,7 +856,7 @@ pub fn bind(c: &Command) -> i32 {
     match store.bind(&line) {
         Ok(()) => {}
         Err(StoreError::ReadOnly { line, .. }) => talk(format!("the store is read-only; record this binding line yourself: {line}")),
-        Err(e) => return halt(claim::store_halt(e)),
+        Err(e) => return halt(store_halt(e)),
     }
     data(format!("account {account}"));
     data(format!("principal {principal}"));

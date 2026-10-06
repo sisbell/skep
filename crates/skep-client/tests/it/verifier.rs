@@ -52,7 +52,7 @@ fn the_verdict_follows_the_daemons_admission_and_an_unattested_entry_reads_unsig
     // entry signature over the frame whose `doc` is the parent account and
     // whose body is EMPTY (wire.md §Operations).
     let full = handshake(&board, Scope::Full, &device, 1, Site::Session).unwrap();
-    let account = skep_client::derive::records::parse_address(&done.account).unwrap();
+    let account = skep_client::address::parse_address(&done.account).unwrap();
     let frame = entry_frame(device.public_key().alg(), term, &account, DocTerm::One(&account), &entry_body_empty(ContentFreeOp::CreateNewDocument));
     let sig = device.sign(&frame);
     let op = json!({"op": "create_new_document", "account": done.account, "published": true, "attest": {"alg": device.public_key().alg(), "sig": hex(&sig)}});

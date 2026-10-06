@@ -27,6 +27,10 @@ skep-address = { path = "../skep-address" }
 serde_json.workspace = true
 
 [dev-dependencies]
+# The library with its test support on: the ceremonies suite drives a walk
+# in-process through the scripted person (`person::scripted`), where no
+# terminal can answer it.
+skep-client = { path = "../skep-client", features = ["test-hooks"] }
 # The real daemon in-process, as skep-mcp's suite takes it, driving the
 # built `skep` binary through its argv, stdin and stdout.
 skepd = { path = "../skepd", features = ["test-hooks"] }

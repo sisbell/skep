@@ -219,14 +219,3 @@ fn read_ground(board: &Board, record: &str) -> Option<String> {
     let item = v["items"].as_array()?.first()?;
     item["atom"].as_str().or_else(|| item["content"].as_str()).map(str::to_string)
 }
-
-impl crate::derive::records::Records {
-    /// The label of a hand, where the hand is a key this account's records
-    /// first enrolled (AUTH-5.69).
-    pub fn label_of_hand(&self, hand: &Hand) -> Option<String> {
-        match hand {
-            Hand::Key(fp) => self.label_of(fp).filter(|l| !l.is_empty()),
-            _ => None,
-        }
-    }
-}

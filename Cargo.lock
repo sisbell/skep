@@ -1261,6 +1261,7 @@ dependencies = [
  "rustls-platform-verifier",
  "serde_json",
  "skep-address",
+ "skep-client",
  "skep-identity",
  "skep-resolve",
  "skep-signature",

@@ -20,21 +20,20 @@
 //! (AUTH-5.69).
 //!
 //! `H.1`'s pair is the record frame's `board` term and every entry frame's
-//! (cs6-2), read once per board by [`Board::board_term`].
+//! (cs6-2), read once per board by [`Board::board_term`]; the frame itself is
+//! [`record_frame`]'s, the bytes the writing hand signed.
 
 use std::collections::HashMap;
 use std::thread;
 use std::time::Duration;
 
 use serde_json::Value;
-use skep_address::{validate, Address, Nat, Tumbler};
-use skep_identity::{
-    canonical_record, entry_body_record, entry_frame, parse_record_value, BoardTerm, DocTerm, Enrollment,
-    Fingerprint, PublicKey, RecordRows,
-};
+use skep_identity::{canonical_record, parse_record_value, BoardTerm, Enrollment, Fingerprint, PublicKey};
 
+use crate::address::{document_of, parent_account};
 use crate::board::{frames, Answer, AtAnswer, Board, ChangeKey, KeySet, KeySetAnswer, T_CLAIM, T_ENROLL, T_RETIRE};
 use crate::halt::Halt;
+use crate::sign::record_frame;
 
 /// A credential record's kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,6 +133,15 @@ impl Records {
     pub fn retirement_of(&self, fp: &Fingerprint) -> Option<&Record> {
         self.records.iter().find(|r| r.kind == Kind::Retire && r.retired.contains(fp))
     }
+
+    /// The label of a hand, where the hand is a key this account's records
+    /// first enrolled (AUTH-5.69).
+    pub fn label_of_hand(&self, hand: &Hand) -> Option<String> {
+        match hand {
+            Hand::Key(fp) => self.label_of(fp).filter(|l| !l.is_empty()),
+            _ => None,
+        }
+    }
 }
 
 /// One entry the person HOLDS — the payload this device composed, or an
@@ -202,36 +210,6 @@ pub fn compare_whole_set(records: &Records, current: &KeySet, held: &[Held]) -> 
         .map(|e| Held { fingerprint: e.fingerprint, anchor: e.anchor, label: records.label_of(&e.fingerprint).filter(|l| !l.is_empty()) })
         .collect();
     Some(WholeSet { differences, later })
-}
-
-/// Parse an address in its dotted-decimal spelling.
-pub fn parse_address(s: &str) -> Option<Address> {
-    let comps: Option<Vec<Nat>> = s.split('.').map(|c| c.parse::<u64>().ok().map(Nat::from)).collect();
-    validate(Tumbler::new(comps?).ok()?).ok()
-}
-
-/// The document an element or link address lies in: the components through
-/// the one after the SECOND `0` separator.
-pub fn document_of(addr: &str) -> Option<String> {
-    let comps: Vec<&str> = addr.split('.').collect();
-    let mut zeros = comps.iter().enumerate().filter(|(_, c)| **c == "0").map(|(i, _)| i);
-    let (_first, second) = (zeros.next()?, zeros.next()?);
-    (second + 1 < comps.len()).then(|| comps[..=second + 1].join("."))
-}
-
-/// THE RECORD FRAME a credential record's `sig` is made over (the record
-/// grade; wire.md §The claim ceremony and credentials): `framed("skep-entry-v1",
-/// [alg, board, account, doc, "record", body])` — `alg` the signing key's
-/// token, `board` `H.1`'s pair, `account` the HOME's account, `doc` the home,
-/// the body the five rows over the sig-less canonical record. Composed by
-/// `skep_identity::entry_frame`, spelled by nobody here.
-pub fn record_frame(alg: &str, board: BoardTerm, home_account: &str, home: &str, ty: &str, to: &[&str], sigless: &[u8]) -> Option<Vec<u8>> {
-    let account = parse_address(home_account)?;
-    let home = parse_address(home)?;
-    let ty = parse_address(ty)?;
-    let to: Vec<Address> = to.iter().map(|a| parse_address(a)).collect::<Option<_>>()?;
-    let body = entry_body_record(RecordRows { ty: &ty, to: &to, replaces: None, lineage_fork_point: None, sigless_canonical_record: sigless });
-    Some(entry_frame(alg, board, &account, DocTerm::One(&home), &body))
 }
 
 /// THE TRIAL: the first candidate under whose own row both halves of `blob`
@@ -361,7 +339,7 @@ fn set_opening_at(board: &Board, account: &str, at: u64) -> Result<Option<KeySet
     loop {
         match board.key_set_at(&acc, at)? {
             Some(KeySetAnswer::Set(set)) if !set.is_empty() => return Ok(Some(set)),
-            Some(KeySetAnswer::Set(_)) => match super::parent_account(&acc) {
+            Some(KeySetAnswer::Set(_)) => match parent_account(&acc) {
                 Some(p) => acc = p,
                 None => return Ok(Some(KeySet::default())),
             },
@@ -592,14 +570,6 @@ fn hand_of(board: &Board, record: &Record, term: Option<BoardTerm>, own: &[(Fing
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_document_of_a_link_or_element_address() {
-        assert_eq!(document_of("1.0.1.0.1.0.2.3"), Some("1.0.1.0.1".into()));
-        assert_eq!(document_of("1.0.1.0.1.0.1.1"), Some("1.0.1.0.1".into()));
-        assert_eq!(document_of("1.0.1.1.0.1.0.2.1"), Some("1.0.1.1.0.1".into()));
-        assert_eq!(document_of("1.0.1"), None);
-    }
 
     #[test]
     fn addresses_order_by_component() {

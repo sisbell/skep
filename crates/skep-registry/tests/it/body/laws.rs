@@ -7,10 +7,15 @@
 //! and a record under one kind at most, `wrong_type` under the other. Every
 //! one-byte mutant of every admitted vector meets them, and so do seeded
 //! hostile bodies several edits from any vector, at every refusal the parse
-//! answers. The vector set and its readers are the parent's.
+//! answers. Those laws hold what the parse admits and never see it refuse a
+//! body it owes, so THE ENCODER'S LAW stands beside them: every body a caller
+//! builds — any number of origins, address members of any level and length,
+//! any `sig` string — is the record its encoding spells up to the cap, and
+//! `past_cap` past it. The vector set and its readers are the parent's.
 
+use skep_address::{validate, Address, Nat, Tumbler};
 use skep_registry::{
-    encode, parse, Body, BodyKind, Endpoint, Origins, ParseRefusal, Record,
+    encode, parse, Binding, Body, BodyKind, Endpoint, Origins, ParseRefusal, Record,
     MAX_REGISTRY_RECORD_BYTES,
 };
 
@@ -458,15 +463,15 @@ fn hostile_body(rng: &mut SplitMix64, corpus: &Corpus) -> Vec<u8> {
     body
 }
 
-/// How many hostile bodies a run draws: 20,000 in the gate, forty times as
-/// many under `FUZZ_EXHAUSTIVE=1`, the workspace's deep sweep of its tier-1
-/// fuzz suites.
-fn hostile_rounds() -> usize {
+/// How many draws a seeded law takes: `in_the_gate` in the gate, forty times
+/// as many under `FUZZ_EXHAUSTIVE=1`, the workspace's deep sweep of its
+/// tier-1 fuzz suites.
+fn rounds(in_the_gate: usize) -> usize {
     let deep = std::env::var_os("FUZZ_EXHAUSTIVE").is_some_and(|v| v == "1");
     if deep {
-        20_000 * 40
+        in_the_gate * 40
     } else {
-        20_000
+        in_the_gate
     }
 }
 
@@ -508,7 +513,7 @@ fn the_parse_laws_hold_on_seeded_hostile_bodies() {
     let mut rng = SplitMix64(0x5EED_2E61_5781_0D1E);
     let mut admitted = 0;
     let mut causes = std::collections::BTreeSet::new();
-    for _ in 0..hostile_rounds() {
+    for _ in 0..rounds(20_000) {
         let body = hostile_body(&mut rng, &corpus);
         for answer in assert_the_laws_at(&body) {
             match answer {
@@ -525,4 +530,143 @@ fn the_parse_laws_hold_on_seeded_hostile_bodies() {
         causes.iter().filter(|c| !EVERY_CAUSE.contains(&c.as_str())).collect();
     assert!(unlisted.is_empty(), "causes the list does not name: {unlisted:?}");
     assert!(admitted > 100, "{admitted} admitted");
+}
+
+/// The components an address member is built of: one digit, two, a byte's
+/// last value and one past it, a machine word's last value and one past it,
+/// and forty digits — each positive, so a zero stands only between two
+/// fields.
+const COMPONENTS: [&str; 8] = [
+    "1",
+    "9",
+    "10",
+    "255",
+    "256",
+    "18446744073709551615",
+    "18446744073709551616",
+    "1234567890123456789012345678901234567890",
+];
+
+/// How many components a field holds: one — twice as often as any other
+/// count — two, three, eight, and one past each cap skep-namespace sets on a
+/// component count, a node's 32 and a principal prefix's 64. An `Address` a
+/// caller builds holds any count, and in a body the record's cap alone
+/// bounds it.
+const FIELD_LENGTHS: [usize; 7] = [1, 1, 2, 3, 8, 33, 65];
+
+/// An address of any level a caller builds: one to four fields of
+/// [`FIELD_LENGTHS`] [`COMPONENTS`], a zero between each two — T4-valid by
+/// construction, no zero leading, trailing or beside another, and at most
+/// three.
+fn any_address(rng: &mut SplitMix64) -> Address {
+    let mut comps: Vec<Nat> = Vec::new();
+    for field in 0..=rng.below(4) {
+        if field > 0 {
+            comps.push(Nat::from(0u8));
+        }
+        for _ in 0..*rng.pick(&FIELD_LENGTHS) {
+            comps.push(rng.pick(&COMPONENTS).parse().expect("a decimal natural"));
+        }
+    }
+    validate(Tumbler::new(comps).expect("one field at least")).expect("T4-valid by construction")
+}
+
+/// The characters an origin or a `sig` is drawn from: an origin's own
+/// letters and punctuation; the whitespace a trim takes at an end — a space,
+/// a tab, a line feed, a no-break space, the line separator; and the rest of
+/// the escape table's cases — the quote and the backslash, a control in hex,
+/// and DEL, a letter past ASCII and a character past the BMP as themselves.
+const CHARACTERS: [char; 20] = [
+    'h', 't', 'p', 's', ':', '/', '.', '-', '0', ' ', '\t', '\n', '\u{a0}', '\u{2028}', '"', '\\',
+    '\u{1}', '\u{7f}', 'é', '😀',
+];
+
+/// A string of up to `longest` [`CHARACTERS`], the empty one among them.
+fn any_string(rng: &mut SplitMix64, longest: usize) -> String {
+    (0..rng.below(longest + 1)).map(|_| *rng.pick(&CHARACTERS)).collect()
+}
+
+/// How many origins an endpoint lists: one — twice as often as any other
+/// count — two, the spec example's three, one past it, seventeen, three
+/// hundred, and a thousand, which carries the body past the cap.
+const ORIGIN_COUNTS: [usize; 8] = [1, 1, 2, 3, 4, 17, 300, 1000];
+
+/// An endpoint's origins: [`ORIGIN_COUNTS`] strings of up to 24 characters.
+fn any_origins(rng: &mut SplitMix64) -> Origins {
+    let count = *rng.pick(&ORIGIN_COUNTS);
+    Origins::new((0..count).map(|_| any_string(rng, 24)).collect()).expect("one origin at least")
+}
+
+/// A `sig` as a caller hands one: none, the empty string, a string of up to
+/// 64 [`CHARACTERS`] — odd lengths, whitespace at an end and text past ASCII
+/// among them, none of which the parse vets — or 6,746 hex characters, the
+/// width `mldsa65-ed25519` writes.
+fn any_sig(rng: &mut SplitMix64) -> Option<String> {
+    match rng.below(4) {
+        0 => None,
+        1 => Some(String::new()),
+        2 => Some(any_string(rng, 64)),
+        _ => Some("ab".repeat(3373)),
+    }
+}
+
+/// A body of either kind as a caller builds one: a binding of any prefix or
+/// an endpoint of any origins, half the time with a `replaces` of any
+/// address.
+fn any_body(rng: &mut SplitMix64) -> Body {
+    let replaces = (rng.below(2) == 0).then(|| any_address(rng));
+    if rng.below(2) == 0 {
+        Body::Binding(Binding { prefix: any_address(rng), replaces })
+    } else {
+        Body::Endpoint(Endpoint { origins: any_origins(rng), replaces })
+    }
+}
+
+/// THE ENCODER'S LAW — every body a caller builds is a record, up to the cap
+/// (`src/body.rs`: "every `Body` a caller can build encodes to bytes `parse`
+/// admits, the cap aside — a signer never signs a body the daemon then
+/// refuses for its form"), on bodies no hand chose: endpoints of any number
+/// of origins, address members of any level and any count of components,
+/// and any `sig` string, which the parse answers as found and never vets
+/// (REG-1.86 (e): a test of the BODY'S FORM, never of that member's own
+/// value). Under the cap each encoding parses to exactly the body and the
+/// `sig` it was built from; past it, `past_cap`. The parse's laws above hold
+/// what it admits and cannot see it refuse a body it owes; this law can. The
+/// counts show the draws reached past the spec example's three origins, past
+/// skep-namespace's component caps, `sig`s a trim would change, and the cap.
+#[test]
+fn every_body_a_caller_builds_is_a_record_up_to_the_cap() {
+    let mut rng = SplitMix64(0xB0D1_E5B0_D1E5_B0D1);
+    let (mut past, mut many_origins, mut long_addresses, mut sigs_a_trim_changes) = (0, 0, 0, 0);
+    for _ in 0..rounds(1_000) {
+        let body = any_body(&mut rng);
+        let sig = any_sig(&mut rng);
+        let text = encode(&body, sig.as_deref());
+        let answer = parse(body.kind(), text.as_bytes());
+        if text.len() > MAX_REGISTRY_RECORD_BYTES {
+            assert_eq!(answer, Err(ParseRefusal::PastCap), "{} bytes", text.len());
+            past += 1;
+            continue;
+        }
+        if let Body::Endpoint(e) = &body {
+            many_origins += usize::from(e.origins.as_slice().len() > 3);
+        }
+        let prefix = match &body {
+            Body::Binding(b) => Some(&b.prefix),
+            Body::Endpoint(_) => None,
+        };
+        let long = prefix.into_iter().chain(body.replaces()).any(|a| a.tumbler().len() > 64);
+        long_addresses += usize::from(long);
+        sigs_a_trim_changes += usize::from(sig.as_deref().is_some_and(|s| s.trim() != s));
+        let head: String = text.chars().take(240).collect();
+        assert_eq!(answer, Ok(Record { body, sig }), "{head:?} ({} bytes)", text.len());
+    }
+    assert!(past > 10, "{past} past the cap");
+    for (count, what) in [
+        (many_origins, "endpoints of more than three origins"),
+        (long_addresses, "bodies with an address member of more than 64 components"),
+        (sigs_a_trim_changes, "sigs a trim would change"),
+    ] {
+        assert!(count > 50, "{count} {what} admitted");
+    }
 }

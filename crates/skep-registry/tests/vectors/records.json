@@ -345,6 +345,13 @@
       "why": "an empty replaces is no address, and never the absence that marks a first record"
     },
     {
+      "name": "replaces_zero_padded_component",
+      "kind": "binding",
+      "bytes": "{\"type\":\"binding\",\"prefix\":\"1.5\",\"replaces\":\"1.0.1.0.1.0.2.03\"}",
+      "parse": "not_an_address:replaces",
+      "why": "replaces is held to an address's one spelling as prefix is: no component padded with a zero"
+    },
+    {
       "name": "missing_prefix",
       "kind": "binding",
       "bytes": "{\"type\":\"binding\"}",

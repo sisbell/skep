@@ -230,8 +230,8 @@ fn the_completeness_arm_refuses_a_subtype_row_on_its_kinds_own_ordinal() {
 }
 
 /// REG-1.25 — the count arm: a sixth kind row, a kind row at `3.54` — the
-/// reserve's, outside the registry range (REG-1.24) — and two kind rows at
-/// one ordinal.
+/// reserve's, outside the registry range (REG-1.24) — a kind row beneath its
+/// own ordinal, `3.55.1`, and two kind rows at one ordinal.
 #[test]
 fn the_count_arm_holds_the_kind_rows_to_the_registry_ranges_five_ordinals() {
     let mut sixth: Vec<Row> = rows().to_vec();
@@ -258,6 +258,13 @@ fn the_count_arm_holds_the_kind_rows_to_the_registry_ranges_five_ordinals() {
         refusal.to_string(),
         "count: of 5 kind rows, 1.1.0.1.0.1.0.3.54 is no bare ordinal of the registry range \
          3.55-3.59 left to it"
+    );
+    // A kind row BENEATH its own ordinal — inside the range, and no bare
+    // ordinal of it: the count reads the bare ordinal, never a prefix.
+    let beneath = moved(RowOf::Kind(Kind::Binding), &[55, 1]);
+    assert_eq!(
+        seeding_check(&beneath, std::iter::empty()),
+        Err(SeedingRefusal::Count { kind_row_count: 5, row: Some(commons_type(&[55, 1])) })
     );
     let doubled = moved(RowOf::Kind(Kind::Endpoint), &[55]);
     let refusal = seeding_check(&doubled, std::iter::empty()).unwrap_err();
@@ -341,4 +348,51 @@ fn within_an_arm_the_first_fault_in_the_stated_order_speaks() {
         Err(SeedingRefusal::Count { kind_row_count: 5, row: Some(commons_type(&[53])) }),
         "two kind rows outside the range: the first of the list is named"
     );
+}
+
+/// REG-1.14's five kinds and REG-1.15's seven subtype rows in the rules' own
+/// order — every kind ahead of any subtype, as the completeness arm reads
+/// them — transcribed from the rules and never read off `Kind::ALL` or
+/// `Subtype::ALL`.
+const IN_THE_RULES_ORDER: [RowOf; 12] = [
+    RowOf::Kind(Kind::Binding),
+    RowOf::Kind(Kind::Endpoint),
+    RowOf::Kind(Kind::TakedownRecord),
+    RowOf::Kind(Kind::SuccessorOf),
+    RowOf::Kind(Kind::PolicyLink),
+    RowOf::Subtype(Subtype::TakedownBase),
+    RowOf::Subtype(Subtype::TakedownLifted),
+    RowOf::Subtype(Subtype::PolicyLinkOwn),
+    RowOf::Subtype(Subtype::Disavowal),
+    RowOf::Subtype(Subtype::ExpulsionGround),
+    RowOf::Subtype(Subtype::SuccessionGround),
+    RowOf::Subtype(Subtype::SuccessionPolicy),
+];
+
+/// REG-1.33 — WHICH ROW COMPLETENESS NAMES, over every pair a list can miss:
+/// the earlier of the two in the rules' order, so the operator's one
+/// sentence names the same row whatever else the image lacks. Every row of
+/// the table owes a line here (REG-1.15). `within_an_arm_…` holds the two
+/// pairs a table-order reading gets wrong; this holds all sixty-six.
+#[test]
+fn the_completeness_arm_names_the_earlier_of_any_two_missing_rows() {
+    assert!(
+        rows().len() == IN_THE_RULES_ORDER.len()
+            && rows().iter().all(|r| IN_THE_RULES_ORDER.contains(&r.of)),
+        "one line per row of the table"
+    );
+    let mut pairs = 0;
+    for (i, first) in IN_THE_RULES_ORDER.iter().enumerate() {
+        for second in &IN_THE_RULES_ORDER[i + 1..] {
+            let list: Vec<Row> =
+                rows().iter().filter(|r| r.of != *first && r.of != *second).cloned().collect();
+            assert_eq!(
+                seeding_check(&list, std::iter::empty()),
+                Err(SeedingRefusal::Completeness { missing: *first }),
+                "{first:?} and {second:?} missing"
+            );
+            pairs += 1;
+        }
+    }
+    assert_eq!(pairs, 66, "every pair of the twelve, once");
 }

@@ -640,11 +640,13 @@ mod tests {
         }
     }
 
-    /// EVERY BODY A CALLER CAN BUILD IS A RECORD: what the parse checks, the
-    /// types carry — an address member an `Address`, the origins one or more
-    /// — so any body, its strings holding every C0 control, a quote, a
-    /// backslash and text past ASCII, with any `sig`, encodes to bytes the
-    /// parse admits as that body; and no `Origins` is empty.
+    /// EVERY BODY A CALLER CAN BUILD IS A RECORD, at bodies a hand chose:
+    /// what the parse checks, the types carry — an address member an
+    /// `Address`, the origins one or more — so these bodies, their strings
+    /// holding every C0 control, a quote, a backslash and text past ASCII,
+    /// each with each of three `sig`s, encode to bytes the parse admits as
+    /// that body; and no `Origins` is empty. The law over bodies no hand
+    /// chose is the integration suite's (`tests/it/body/laws.rs`).
     #[test]
     fn every_body_a_caller_builds_encodes_to_a_record() {
         assert_eq!(Origins::new(Vec::new()), None);

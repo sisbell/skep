@@ -4,3 +4,4 @@
 mod body;
 mod check;
 mod rows;
+mod tidy;

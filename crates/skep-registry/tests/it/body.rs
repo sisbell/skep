@@ -31,12 +31,14 @@ fn vector_set() -> Value {
     serde_json::from_str(&text).expect("the vector set is JSON")
 }
 
-/// A vector's bytes: its `bytes` string, or its `bytes_hex`.
+/// A vector's bytes: its `bytes` string, or its `bytes_hex`, whole bytes
+/// alone — a digit left over is a fault of the set, never a byte dropped.
 fn bytes_of(vector: &Value) -> Vec<u8> {
     if let Some(text) = vector["bytes"].as_str() {
         return text.as_bytes().to_vec();
     }
     let hex = vector["bytes_hex"].as_str().expect("a vector carries bytes or bytes_hex");
+    assert!(hex.len().is_multiple_of(2), "bytes_hex holds whole bytes: {hex}");
     (0..hex.len() / 2)
         .map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).expect("hex"))
         .collect()
@@ -52,16 +54,20 @@ fn kind_of(vector: &Value) -> BodyKind {
     }
 }
 
-/// Every vector, one answer at the parse; the admitted ones read from both
-/// sides of the canonical rule.
+/// Every vector, under its own name, one answer at the parse; the admitted
+/// ones read from both sides of the canonical rule. A name two vectors
+/// shared would let a required name below match the wrong one, and a
+/// failure that names it would point at two.
 #[test]
 fn the_vector_set_meets_one_answer_at_this_parser() {
     let set = vector_set();
     assert_eq!(set["cap"].as_u64(), Some(MAX_REGISTRY_RECORD_BYTES as u64));
     let vectors = set["vectors"].as_array().expect("vectors");
     let (mut admitted, mut refused) = (0, 0);
+    let mut names = std::collections::BTreeSet::new();
     for vector in vectors {
         let name = vector["name"].as_str().expect("a name");
+        assert!(names.insert(name), "{name}: the set names two vectors so");
         let kind = kind_of(vector);
         let bytes = bytes_of(vector);
         let answer = vector["parse"].as_str().expect("the parse's answer");
@@ -93,7 +99,7 @@ fn the_vector_set_meets_one_answer_at_this_parser() {
             }
         }
     }
-    assert!(admitted >= 12 && refused >= 61, "{admitted} admitted, {refused} refused");
+    assert!(admitted >= 12 && refused >= 62, "{admitted} admitted, {refused} refused");
     // The vectors the lane names, the cap's two sides and the escape table's,
     // each present by name.
     for required in [

@@ -195,6 +195,17 @@ pub use skep_engine::dump::WorldDump;
 /// types above are.
 pub use skep_kernel::Seq;
 
+/// The refusal [`DaemonError::Registry`] carries — the registry's seeding
+/// check's, naming the arm that fired (REG-1.28 to REG-1.32) — re-exported
+/// for the reason the engine types above are: a caller matching that arm, or
+/// naming its payload in a signature of its own, would otherwise depend on
+/// `skep-registry` itself, and one that took it at another version would hold
+/// a DIFFERENT `SeedingRefusal` from the one inside the error. Its `arm()`
+/// names the arm that fired; the row a completeness refusal names is
+/// `skep-registry`'s own vocabulary (`RowOf`), which a caller matching that
+/// far takes from that crate.
+pub use skep_registry::SeedingRefusal;
+
 /// The permit the daemon's four test hooks hand out — one slot of the
 /// reconstruction pool, of the class-scan pool (wire v7.9), of the fetch
 /// pool or of the upload pool (wire.md §Media), the same guard type for all
@@ -211,7 +222,8 @@ pub use permits::Permit;
 ///
 /// Every type this crate DEFINES and exports is listed. The ones it
 /// re-exports — [`World`], [`Seq`], [`EngineError`], [`HistoryError`],
-/// [`OpenError`], and (under `observe`) the world dump — are not: those
+/// [`OpenError`], [`SeedingRefusal`], and (under `observe`) the world dump —
+/// are not: those
 /// promises are upstream's to keep, and `Daemon: Send + Sync` already pins
 /// the ones this crate transitively rests on.
 const _: fn() = || {
@@ -238,8 +250,9 @@ const _: fn() = || {
     assert_send_sync::<NotANodePrefix>();
     assert_send_sync::<PortAlreadyBound>();
     assert_send_sync::<Peer>();
-    // The operator's tools' answers: what a pull installed, and the refusal
-    // both tools share.
+    // The operator's tools' surface: the inventory's check, what a pull
+    // installed, and the refusal both tools share.
+    assert_send_sync::<tools::HoleCheck>();
     assert_send_sync::<tools::Pulled>();
     assert_send_sync::<tools::ToolError>();
 };

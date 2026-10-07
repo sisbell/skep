@@ -103,7 +103,7 @@ fn a_pass_unlinks_the_lapsed_unreferenced_files_alone() {
     assert_eq!(pass.kept, 2, "{pass:?}");
     assert_eq!(pass.halted, None, "{pass:?}");
     assert_eq!(pass.asides, 0, "the pass's own aside is unlinked after the arm, counted as the file's unlink: {pass:?}");
-    assert!(pass.line().starts_with("pruner: 0 expired partials removed, 1 files unlinked, 2 kept, 0 asides removed"), "{}", pass.line());
+    assert!(pass.to_string().starts_with("pruner: 0 expired partials removed, 1 files unlinked, 2 kept, 0 asides removed"), "{pass}");
     let blobs = blobs_dir(dir.path());
     assert!(blobs.join(blob_hex(&referenced)).is_file(), "named by a cell: kept past its lease");
     assert!(!blobs.join(blob_hex(&unreferenced)).exists(), "lapsed and unreferenced: gone");
@@ -363,7 +363,7 @@ fn a_pass_compacts_a_log_past_its_trigger_and_leaves_a_small_one_alone() {
         assert!(pass.compacted_uploads && pass.compacted_leases, "{pass:?}");
         assert_eq!(pass.compaction_failed, None, "{pass:?}");
         assert_eq!(pass.stopped, (false, false), "{pass:?}");
-        assert!(pass.line().ends_with("; uploads.log and leases.log compacted"), "{}", pass.line());
+        assert!(pass.to_string().ends_with("; uploads.log and leases.log compacted"), "{pass}");
         assert_eq!(lines("uploads.log"), 3, "rewritten to the standing records");
         assert_eq!(lines("leases.log"), 1, "rewritten to the one lease");
         // An append after the rewrite lands in the new file.
@@ -373,7 +373,7 @@ fn a_pass_compacts_a_log_past_its_trigger_and_leaves_a_small_one_alone() {
         assert_eq!(lines("uploads.log"), 4);
         let again = sd.daemon().prune_now().expect("ready");
         assert!(!again.compacted_uploads && !again.compacted_leases, "under the minimum, left alone: {again:?}");
-        assert!(!again.line().contains("compacted"), "{}", again.line());
+        assert!(!again.to_string().contains("compacted"), "{again}");
         assert_eq!(deposits_of(port, &token).len(), 1);
         sd.shutdown();
         standing

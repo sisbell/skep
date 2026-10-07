@@ -117,13 +117,16 @@ const SIDECAR_FILE: &str = "commits.log";
 
 /// The wall-clock reading a commit's `time` is stamped with — unix
 /// milliseconds, the wire's unit (wire.md §The change feed), `0` for a clock
-/// set before the epoch. The crate's ONE reading of that clock because two
-/// readers must agree on it: [`CommitsLog::record`] stamps every commit with
-/// it, and the published head writer measures its hour FROM such a stamp —
-/// its resume takes the last head's time off the head's own entry — against
-/// its own reading. Two copies of this expression would agree only until one
-/// was edited or seamed, and the head's hour would then subtract one clock
-/// from another with nothing to say so.
+/// set before the epoch. The write path's ONE reading of that clock because
+/// two readers must agree on it: [`CommitsLog::record`] stamps every commit
+/// with it, and the published head writer measures its hour FROM such a
+/// stamp — its resume takes the last head's time off the head's own entry —
+/// against its own reading. Two copies of this expression would agree only
+/// until one was edited or seamed, and the head's hour would then subtract
+/// one clock from another with nothing to say so. The media gate reads the
+/// wall clock for itself (`media::gate::wall_clock_ms`, seamed apart for its
+/// leases and expiries), and no reading of the one is ever compared with a
+/// reading of the other.
 pub(super) fn wall_clock_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1435,7 +1438,7 @@ fn entry_line(at: u64, meta: &CommitMeta) -> Vec<u8> {
             }
         }
     }
-    line_bytes(obj(pairs))
+    line_bytes(&obj(pairs))
 }
 
 /// `{"min_since":N}` — the smallest `since` the feed can honor from here
@@ -1443,7 +1446,7 @@ fn entry_line(at: u64, meta: &CommitMeta) -> Vec<u8> {
 /// oldest position still ANSWERABLE — a different number, and one an
 /// operator reading this file beside a `410` body would otherwise conflate.
 fn min_since_line(min_since: u64) -> Vec<u8> {
-    line_bytes(obj(vec![("min_since", Value::Number(min_since.into()))]))
+    line_bytes(&obj(vec![("min_since", Value::Number(min_since.into()))]))
 }
 
 /// One line carrying document names this daemon cannot parse — the notice
@@ -1460,7 +1463,7 @@ pub(super) fn report_malformed_names(file: &str, at: u64, dropped: usize) {
 /// One newline-terminated file line — the codec's serializer, so a line is
 /// the same bytes whatever backs serde_json's map and the "cannot fail"
 /// argument is the one written there rather than a second copy of it.
-pub(super) fn line_bytes(v: Value) -> Vec<u8> {
+pub(super) fn line_bytes(v: &Value) -> Vec<u8> {
     let mut b = to_bytes(v);
     b.push(b'\n');
     b

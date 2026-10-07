@@ -211,7 +211,7 @@ impl Daemon {
             Ok(i) => i,
             Err(detail) => return refusal(refuse(TransportError::MalformedBlob, Some(&detail))),
         };
-        match serve::fetch(&self.febe, resolved.sid(), &self.media, &self.fetches, &i) {
+        match serve::fetch(&self.febe, resolved.sid(), &self.media, &self.fetches, i) {
             Ok(admitted) => Routed::Fetch(Fetch::new(admitted, resolved.closed)),
             Err(why) => refusal(refuse_fetch(why)),
         }
@@ -356,10 +356,10 @@ impl Daemon {
         }
         let now = self.media.now_ms();
         if let Err(scope) = self.media.admit_declared(principal, length, now) {
-            return refuse_deposit(scope, false, 0);
+            return refuse_deposit(scope, RefusedAt::BeforeTheBody, 0);
         }
         if let Err(scope) = self.media.admit_creation(principal, now) {
-            return refuse_deposit(scope, false, 0);
+            return refuse_deposit(scope, RefusedAt::BeforeTheBody, 0);
         }
         let interval = Duration::from_millis(limits.lease_interval_ms);
         let record = match self.media.store().create_upload(
@@ -438,7 +438,7 @@ impl Daemon {
         }
         let now = self.media.now_ms();
         if let Err(scope) = self.media.admit_declared(principal, record.length - offset, now) {
-            return refuse_deposit(scope, false, record.offset);
+            return refuse_deposit(scope, RefusedAt::BeforeTheBody, record.offset);
         }
         self.stream_body(principal, record, req, body, &[])
     }
@@ -490,7 +490,7 @@ impl Daemon {
                 // REFUSED IS ENDED (clause (6)): nothing kept.
                 drop(stream);
                 let _ = store.end_upload(&key, &id, now);
-                return refuse_deposit(scope, true, written);
+                return refuse_deposit(scope, RefusedAt::AsTheBodyIsWritten, written);
             }
             match stream.append(chunk, self.media.now_ms()) {
                 Ok(w) => written = w,
@@ -677,14 +677,26 @@ fn refuse_upload_busy() -> Reply {
     refuse(TransportError::UploadBusy, Some("all upload permits are in use; retry shortly"))
 }
 
-/// The gate's refusal: the scope it fired on, whether the upload was ended
-/// or kept, and the bytes received — no headroom (M-I6 (h)); at the
-/// standing-uploads bound, a `detail` naming the end of one of them as the
-/// act the person holds (M-I7 (e)) — the count the bound pins, which the
-/// same principal's deposit read lists upload by upload.
-fn refuse_deposit(scope: DepositScope, ended: bool, offset: u64) -> Reply {
+/// Where the media gate refused a deposit — clause (6)'s two cases, each
+/// with what it leaves of the upload, which the refusal's `ended` reports.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RefusedAt {
+    /// Before the body, on the declared total or at the creation: the upload
+    /// is KEPT (none made, at a creation).
+    BeforeTheBody,
+    /// As the body is written: the upload is ENDED, nothing kept.
+    AsTheBodyIsWritten,
+}
+
+/// The media gate's refusal: the scope it fired on, where — and so whether
+/// the upload was ended or kept ([`RefusedAt`]) — and the bytes received; no
+/// headroom (M-I6 (h)). At the standing-uploads bound, a `detail` naming the
+/// end of one of them as the act the person holds (M-I7 (e)) — the count the
+/// bound pins, which the same principal's deposit read lists upload by
+/// upload.
+fn refuse_deposit(scope: DepositScope, at: RefusedAt, offset: u64) -> Reply {
     let mut fields = vec![
-        ("ended", Value::Bool(ended)),
+        ("ended", Value::Bool(at == RefusedAt::AsTheBodyIsWritten)),
         ("offset", Value::Number(offset.into())),
         ("scope", Value::String(scope.token().into())),
     ];

@@ -284,7 +284,7 @@ fn negative_and_fractional_numbers_are_not_integers() {
 fn obj_is_order_insensitive() {
     let a = obj(vec![("b", Value::from(2u64)), ("a", Value::from(1u64))]);
     let b = obj(vec![("a", Value::from(1u64)), ("b", Value::from(2u64))]);
-    assert_eq!(to_bytes(a), to_bytes(b));
+    assert_eq!(to_bytes(&a), to_bytes(&b));
 }
 
 /// The duplicate-key rule [`obj`] states and `refuse_with` leans on: the
@@ -295,7 +295,7 @@ fn obj_is_order_insensitive() {
 fn obj_keeps_the_last_of_duplicate_keys() {
     let v = obj(vec![("k", Value::from(1u64)), ("a", Value::from(9u64)), ("k", Value::from(2u64))]);
     assert_eq!(v["k"], Value::from(2u64), "the last pair given wins");
-    assert_eq!(to_bytes(v), br#"{"a":9,"k":2}"#.to_vec(), "and the keys still sort");
+    assert_eq!(to_bytes(&v), br#"{"a":9,"k":2}"#.to_vec(), "and the keys still sort");
 }
 
 /// THE DOOR splits the presented `attest` from the request: on the

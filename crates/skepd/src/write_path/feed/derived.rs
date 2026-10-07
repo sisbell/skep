@@ -273,7 +273,7 @@ impl LineFile {
         if self.stopped {
             return Ok(());
         }
-        if let Err(e) = self.file.write_all(&line_bytes(record_object(at, fields))) {
+        if let Err(e) = self.file.write_all(&line_bytes(&record_object(at, fields))) {
             self.stopped = true;
             return Err(e);
         }
@@ -409,7 +409,7 @@ impl LineFile {
         let path = self.dir.join(self.name);
         let tmp = self.dir.join(format!("{}.compact", self.name));
         let mut out = Vec::new();
-        for record in records {
+        for record in &records {
             out.extend_from_slice(&line_bytes(record));
         }
         out.extend_from_slice(&fence_line(covered));
@@ -491,7 +491,7 @@ pub(super) fn record_object(at: u64, fields: Vec<(&'static str, Value)>) -> Valu
 }
 
 fn fence_line(covered: u64) -> Vec<u8> {
-    line_bytes(obj(vec![("covered", Value::Number(covered.into()))]))
+    line_bytes(&obj(vec![("covered", Value::Number(covered.into()))]))
 }
 
 /// One line's record — the line without its newline: a fence, or an entry

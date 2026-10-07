@@ -1,6 +1,7 @@
 use skep_blobs::HashFunction;
 
 use super::*;
+use crate::media::cell::HASH_BYTES;
 
 /// The gate deposits under the cell schema's own designation: the two
 /// spellings — the cell schema's and the store's function's — are one.
@@ -226,7 +227,7 @@ fn the_rebuild_window_answers_rebuilding_where_the_lease_arm_alone_would_refuse(
     gate.advance_clock_ms(10_000);
     assert_eq!(gate.binding(p, &cell), Binding::Rebuilding, "lapsed: the state, not lease_lapsed");
     deposit(10_000);
-    std::fs::remove_file(store.blob_path(DESIGNATION, &hex_of(&hash)).unwrap()).unwrap();
+    std::fs::remove_file(store.blob_path(DESIGNATION, &hex_string(&hash)).unwrap()).unwrap();
     assert_eq!(gate.binding(p, &cell), Binding::Rebuilding, "a live lease over no file: the state");
     let at = crate::codec::wire_address("1.0.1.0.2.0.1.1").unwrap();
     gate.index().enter(&at, Some(p), &cell);
@@ -264,7 +265,7 @@ fn the_binding_reads_the_principals_own_lease_first_and_the_file_only_under_it()
     let mut stream = store.resume(&key, &rec.id, 0, now).unwrap();
     stream.append(bytes, now).unwrap();
     let fin = stream.finish(Duration::from_millis(10_000), now).unwrap();
-    assert_eq!(fin.hex, hex_of(&hash));
+    assert_eq!(fin.hex, hex_string(&hash));
     assert_eq!(gate.binding(p, &cell), Binding::Admitted);
     assert_eq!(gate.binding(PrincipalId(8), &cell), Binding::Unbound, "another principal holds none");
     assert_eq!(gate.binding(p, &Cell { hash, size: 8 }), Binding::Unbound, "the size contradicts the deposit");
@@ -279,7 +280,7 @@ fn the_binding_reads_the_principals_own_lease_first_and_the_file_only_under_it()
     stream.append(bytes, now).unwrap();
     stream.finish(Duration::from_millis(10_000), now).unwrap();
     assert_eq!(gate.binding(p, &cell), Binding::Admitted);
-    std::fs::remove_file(store.blob_path(DESIGNATION, &hex_of(&hash)).unwrap()).unwrap();
+    std::fs::remove_file(store.blob_path(DESIGNATION, &hex_string(&hash)).unwrap()).unwrap();
     assert_eq!(gate.binding(p, &cell), Binding::Lapsed, "a live lease over no file reads as lapsed");
 
     // THE INDEX ARM. The file re-deposited, the cell entered as p's.
@@ -301,7 +302,7 @@ fn the_binding_reads_the_principals_own_lease_first_and_the_file_only_under_it()
     assert_eq!(gate.binding(p, &cell), Binding::Admitted, "named by p's own cell: admitted past the lease's horizon");
     assert_eq!(gate.binding(p, &Cell { hash, size: 8 }), Binding::Unbound, "named, the file whole at the named size, the cell contradicting it: the size check's answer");
     assert_eq!(gate.binding(PrincipalId(8), &cell), Binding::Unbound, "another principal's cells admit nothing of this one's");
-    let path = store.blob_path(DESIGNATION, &hex_of(&hash)).unwrap();
+    let path = store.blob_path(DESIGNATION, &hex_string(&hash)).unwrap();
     std::fs::write(&path, b"a pictur").unwrap();
     assert_eq!(gate.binding(p, &cell), Binding::Lapsed, "named, the file not whole: the deposit is gone");
     std::fs::remove_file(&path).unwrap();

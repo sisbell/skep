@@ -66,7 +66,7 @@ use skep_kernel::Snapshot;
 use skep_namespace::{HasM3, PrincipalId};
 
 use super::cell::{self, names_kind_by_prefix, Cell, DESIGNATION};
-use super::gate::hex_of;
+use crate::codec::hex_string;
 use crate::notice;
 
 /// A hash as every sidecar keys it: its function's designation and its hex.
@@ -78,7 +78,7 @@ pub(crate) struct HashKey {
 
 impl HashKey {
     fn of(cell: &Cell) -> HashKey {
-        HashKey { designation: DESIGNATION.to_string(), hex: hex_of(&cell.hash) }
+        HashKey { designation: DESIGNATION.to_string(), hex: hex_string(&cell.hash) }
     }
 
     fn named(designation: &str, hex: &str) -> HashKey {
@@ -499,7 +499,7 @@ mod tests {
         assert!(!index.is_ready());
         let hash = [7u8; 32];
         let cell = Cell { hash, size: 10 };
-        let hex = hex_of(&hash);
+        let hex = hex_string(&hash);
         let (a, b) = (PrincipalId(1), PrincipalId(2));
         assert!(index.enter(&addr("1.0.1.0.2.0.1.1"), Some(a), &cell));
         assert!(!index.enter(&addr("1.0.1.0.2.0.1.1"), Some(a), &cell), "idempotent per address");
@@ -517,7 +517,7 @@ mod tests {
         // A cell under no seat: named for the pruner, counted for nobody.
         let other = Cell { hash: [9u8; 32], size: 4 };
         assert!(index.enter(&addr("1.0.9.0.1.0.1.1"), None, &other));
-        assert!(index.referenced(DESIGNATION, &hex_of(&other.hash)));
+        assert!(index.referenced(DESIGNATION, &hex_string(&other.hash)));
         assert_eq!(index.total_base(), 20);
         // The larger size wins per hash per account, whatever the order.
         assert!(index.enter(&addr("1.0.1.0.4.0.1.1"), Some(a), &Cell { hash, size: 12 }));

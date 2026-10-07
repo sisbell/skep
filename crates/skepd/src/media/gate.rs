@@ -96,10 +96,10 @@ use skep_blobs::{Lease, LeaseState, Store, UploadId};
 use skep_kernel::MAX_SEGMENT_LEN;
 use skep_namespace::PrincipalId;
 
-use super::cell::{Cell, DESIGNATION, HASH_BYTES};
+use super::cell::{Cell, DESIGNATION};
 use super::index::CellIndex;
 use super::MediaOptions;
-use crate::codec::obj;
+use crate::codec::{hex_string, obj};
 use crate::limits::{
     DEFAULT_LIMIT_FLOOR_BYTES, DEFAULT_LIMIT_SHARE, MAX_BLOB_BYTES, MAX_STANDING_UPLOADS,
 };
@@ -649,7 +649,7 @@ impl MediaGate {
     /// [`Binding::Rebuilding`]: the arm not yet read may admit the cell.
     pub(crate) fn binding(&self, principal: PrincipalId, cell: &Cell) -> Binding {
         let key = Self::key(principal);
-        let hex = hex_of(&cell.hash);
+        let hex = hex_string(&cell.hash);
         let ready = self.index.is_ready();
         if ready {
             if let Some(named) = self.index.size_named(principal, DESIGNATION, &hex) {
@@ -744,11 +744,6 @@ impl MediaGate {
     pub(crate) fn passes_completed(&self) -> u64 {
         self.passes_completed.load(Ordering::Acquire)
     }
-}
-
-/// A hash's 64 lowercase hex.
-pub(crate) fn hex_of(hash: &[u8; HASH_BYTES]) -> String {
-    hash.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// The wall clock, unix milliseconds; `0` for a clock set before the epoch.

@@ -22,12 +22,13 @@
 //! cell is never a hole, nothing of its kind naming a file) whose file is
 //! absent at its hex, present at a length other than the cell's `size`,
 //! or present and re-hashing to another hash — the re-hash one whole read
-//! per file, skipped by `--no-rehash`; PER ACCOUNT its base (the index's
-//! number) and its pending bytes (its live leases on hashes none of its
-//! cells names, plus its standing uploads' bytes received), the UNATTRIBUTED
-//! bytes no account's scope holds (a live lease's or a standing upload's
-//! whose key spells no principal of this build), and THE VENUE TOTAL they
-//! all sum to — the gate's own figure, under the gate's own pending rule
+//! per file, skipped under [`HoleCheck::LengthOnly`] (`--no-rehash`); PER
+//! ACCOUNT its base (the index's number) and its pending bytes (its live
+//! leases on hashes none of its cells names, plus its standing uploads'
+//! bytes received), the UNATTRIBUTED bytes no account's scope holds (a
+//! live lease's or a standing upload's whose key spells no principal of
+//! this build), and THE VENUE TOTAL they all sum to — the gate's own
+//! figure, under the gate's own pending rule
 //! (`MediaGate::counts_as_pending`), which the limits record is written
 //! against; the standing uploads and the expired ones by count; the halt
 //! marks and any foreign designation directory. It RECORDS NO READ anywhere
@@ -69,8 +70,8 @@ use skep_engine::{Engine, EngineError};
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
 use skep_namespace::{HasM3, PrincipalId};
 
-use crate::codec::obj;
-use crate::media::cell::DESIGNATION;
+use crate::codec::{obj, parse_lower_hex};
+use crate::media::cell::{DESIGNATION, HASH_BYTES};
 use crate::media::gate::{wall_clock_ms, MediaGate};
 use crate::media::index::{self, CellIndex};
 use crate::media::pruner::PINNED_DESIGNATIONS;
@@ -154,10 +155,23 @@ pub struct Pulled {
     pub path: PathBuf,
 }
 
+/// What the inventory holds a referenced file's bytes to: its length alone,
+/// or its length and — one whole read per file — its hash (`--no-rehash`
+/// asks for the first).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum HoleCheck {
+    /// Length and hash: a file of the cell's length holding other bytes is a
+    /// hole, found by reading it whole.
+    Rehash,
+    /// Length alone: no referenced file is read.
+    LengthOnly,
+}
+
 /// THE INVENTORY over the board at `data_dir` (the module doc): one JSON
-/// object, its members in sorted order, the holes re-hashed where `rehash`
-/// — one whole read per referenced file.
-pub fn inventory(data_dir: &Path, rehash: bool) -> Result<Value, ToolError> {
+/// object, its members in sorted order, the holes found under `check` —
+/// re-hashed, one whole read per referenced file, where it is
+/// [`HoleCheck::Rehash`].
+pub fn inventory(data_dir: &Path, check: HoleCheck) -> Result<Value, ToolError> {
     require_board(data_dir)?;
     let engine = open_journal(data_dir)?;
     let snapshot = engine.kernel().snapshot();
@@ -177,7 +191,7 @@ pub fn inventory(data_dir: &Path, rehash: bool) -> Result<Value, ToolError> {
             Some(s) => match s.blob_size(&r.designation, &r.hex)? {
                 None => Some("absent"),
                 Some(len) if len != r.size => Some("length"),
-                Some(_) if rehash => {
+                Some(_) if check == HoleCheck::Rehash => {
                     let path = s.blob_path(&r.designation, &r.hex).expect("a listed reference's names are well-formed");
                     (hash_file(&path)? != r.hex).then_some("hash")
                 }
@@ -301,7 +315,7 @@ pub fn inventory(data_dir: &Path, rehash: bool) -> Result<Value, ToolError> {
         ),
         ("orphan_partials", Value::Number((orphan_partials as u64).into())),
         ("references", Value::Number((references.len() as u64).into())),
-        ("rehashed", Value::Bool(rehash)),
+        ("rehashed", Value::Bool(check == HoleCheck::Rehash)),
         ("standing_uploads", Value::Number((standing_uploads as u64).into())),
         ("unattributed", Value::Number(unattributed.into())),
         ("values_walked", Value::Number((report.values as u64).into())),
@@ -315,7 +329,7 @@ pub fn inventory(data_dir: &Path, rehash: bool) -> Result<Value, ToolError> {
 pub fn pull(data_dir: &Path, file: &Path, expected: Option<&str>) -> Result<Pulled, ToolError> {
     let hex = match expected {
         Some(hex) => {
-            if !is_hex64(hex) {
+            if parse_lower_hex::<HASH_BYTES>(hex).is_none() {
                 return Err(ToolError::NotAHash(hex.to_string()));
             }
             hex.to_string()
@@ -410,11 +424,6 @@ fn hash_file(path: &Path) -> io::Result<String> {
     Ok(hasher.finalize().to_hex().to_string())
 }
 
-/// 64 lowercase hexadecimal characters — the hash's one spelling.
-fn is_hex64(hex: &str) -> bool {
-    hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -423,19 +432,25 @@ mod tests {
     /// directory with no board meets: nothing is created for it.
     #[test]
     fn the_hash_spelling_the_file_hash_and_a_directory_with_no_board() {
-        assert!(is_hex64(&"ab".repeat(32)));
-        assert!(!is_hex64(&"AB".repeat(32)));
-        assert!(!is_hex64(&"ab".repeat(31)));
         let dir = tempfile::tempdir().expect("tempdir");
         let file = dir.path().join("picture");
         fs::write(&file, b"the bytes").unwrap();
         assert_eq!(hash_file(&file).unwrap(), blake3::hash(b"the bytes").to_hex().to_string());
         let empty = dir.path().join("empty");
         fs::create_dir(&empty).unwrap();
-        assert!(matches!(inventory(&empty, true), Err(ToolError::NoBoard(_))));
+        assert!(matches!(inventory(&empty, HoleCheck::Rehash), Err(ToolError::NoBoard(_))));
         assert!(matches!(pull(&empty, &file, None), Err(ToolError::NoBoard(_))));
         assert!(fs::read_dir(&empty).unwrap().next().is_none(), "nothing created where no board stands");
-        assert!(matches!(pull(&empty, &file, Some("xyz")), Err(ToolError::NotAHash(_))));
-        assert!(matches!(inventory(&dir.path().join("absent"), true), Err(ToolError::NoBoard(_))));
+        for not_a_hash in ["xyz".to_string(), "AB".repeat(32), "ab".repeat(31)] {
+            assert!(
+                matches!(pull(&empty, &file, Some(not_a_hash.as_str())), Err(ToolError::NotAHash(_))),
+                "{not_a_hash}"
+            );
+        }
+        assert!(fs::read_dir(&empty).unwrap().next().is_none(), "and a hash refused creates nothing");
+        assert!(matches!(
+            inventory(&dir.path().join("absent"), HoleCheck::Rehash),
+            Err(ToolError::NoBoard(_))
+        ));
     }
 }

@@ -20,7 +20,7 @@ use std::process::Command;
 use std::time::SystemTime;
 
 use serde_json::Value;
-use skepd::tools::{self, ToolError};
+use skepd::tools::{self, HoleCheck, ToolError};
 
 use crate::common;
 use crate::media::{seed_pre_fence_draft, unknown_schema_value};
@@ -119,7 +119,10 @@ fn the_inventory_lists_the_holes_the_accounts_and_the_venue_total_and_writes_not
         assert_eq!(st, 200);
         std::thread::sleep(std::time::Duration::from_millis(500));
         // Beside the serving daemon: refused at the kernel's lock.
-        assert!(matches!(tools::inventory(dir.path(), true), Err(ToolError::JournalHeld(_))), "held by the daemon");
+        assert!(
+            matches!(tools::inventory(dir.path(), HoleCheck::Rehash), Err(ToolError::JournalHeld(_))),
+            "held by the daemon"
+        );
         sd.shutdown();
     }
     let blobs = dir.path().join("blobs");
@@ -157,7 +160,7 @@ fn the_inventory_lists_the_holes_the_accounts_and_the_venue_total_and_writes_not
     let stray = dir.path().join("checkpoint.tmp");
     fs::write(&stray, [0u8; 37]).unwrap();
 
-    let v = tools::inventory(dir.path(), true).expect("the inventory");
+    let v = tools::inventory(dir.path(), HoleCheck::Rehash).expect("the inventory");
     assert_eq!(tree(&blobs), before, "nothing under blobs/ written: every file's bytes and mtime as found");
     assert_eq!(segments(dir.path()), segments_before, "a cleanly closed journal's bytes are read and left as found");
     assert!(!stray.exists(), "the open removed the stray checkpoint");
@@ -195,7 +198,7 @@ fn the_inventory_lists_the_holes_the_accounts_and_the_venue_total_and_writes_not
 
     // Without the re-hash the hash hole is not found, and the cost is one
     // read per file fewer.
-    let quick = tools::inventory(dir.path(), false).expect("the inventory");
+    let quick = tools::inventory(dir.path(), HoleCheck::LengthOnly).expect("the inventory");
     let without_rehash: Vec<(String, String)> = expected_holes.iter().filter(|(_, fault)| fault != "hash").cloned().collect();
     assert_eq!(holes_of(&quick), without_rehash, "{quick}");
     assert_eq!(quick["rehashed"].as_bool(), Some(false));
@@ -204,7 +207,7 @@ fn the_inventory_lists_the_holes_the_accounts_and_the_venue_total_and_writes_not
 
     // A halt mark, planted as another build's writing: listed.
     seed_pre_fence_draft(dir.path(), CLAIMANT_PRINCIPAL, CLAIMANT_ACCOUNT, unknown_schema_value().as_bytes());
-    let v = tools::inventory(dir.path(), false).expect("the inventory");
+    let v = tools::inventory(dir.path(), HoleCheck::LengthOnly).expect("the inventory");
     let halts = v["halts"].as_array().expect("halts");
     assert_eq!(halts.len(), 1, "{v}");
     assert_eq!(halts[0]["fault"].as_str(), Some("unknown_cell_schema"));

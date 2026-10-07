@@ -33,22 +33,24 @@
 //! under no schema this build reads is [`CellRefusal::UnknownSchema`] — the
 //! door's `unknown_cell_schema`, the fetch route's halt face — never admitted
 //! as ordinary bytes (D13's carve-out, one strictness at every parser). The
-//! `type` is read ONCE, by [`cell::classify`], which hands this parser the
-//! object it built; [`parse_object`] is that classification's blind arm, and
-//! [`CellRefusal::NotTheKind`] for the picture kind's `type` as the picture's
-//! parser is for this kind's. A malformed blind body makes NO HALT MARK at
-//! the cell index: the index's prefix test reads the picture kind's opening
-//! alone, and the halt exists because the pruner's null is a permission to
-//! unlink — nothing of this kind can name a file.
+//! `type` is read ONCE, by [`cell::classify`](super::cell::classify), which
+//! hands this parser the object it built; [`parse_object`] is that
+//! classification's blind arm, and [`CellRefusal::NotTheKind`] for the
+//! picture kind's `type` as the picture's parser is for this kind's. A
+//! malformed blind body makes NO HALT MARK at the cell index: the index's
+//! prefix test reads the picture kind's opening alone, and the halt exists
+//! because the pruner's null is a permission to unlink — nothing of this kind
+//! can name a file.
 //!
 //! Every pin here is INTERIM (sm-Q8): the kind's address is TEST-ONLY, the
 //! commons media range's allocation beside the picture's `3.89`.
 
-use std::fmt::Write as _;
-
 use serde_json::{Map, Value};
 
-use super::cell::{self, CellRefusal, HASH_BYTES};
+#[cfg(test)]
+use super::cell;
+use super::cell::{CellRefusal, HASH_BYTES};
+use crate::codec::{hex_string, parse_lower_hex};
 
 /// The blind kind's address — INTERIM, TEST-ONLY: the commons media range's
 /// allocation beside the picture's `3.89` under the ghost document's type
@@ -101,8 +103,11 @@ pub(super) fn parse_object(
     if object.len() != 2 {
         return Err(unknown);
     }
-    let commitment =
-        object.get("commitment").and_then(Value::as_str).and_then(cell::hash_of).ok_or(unknown)?;
+    let commitment = object
+        .get("commitment")
+        .and_then(Value::as_str)
+        .and_then(parse_lower_hex::<COMMITMENT_BYTES>)
+        .ok_or(unknown)?;
     let blind = BlindCell { commitment };
     if encode(&blind).as_bytes() != bytes {
         return Err(unknown);
@@ -120,9 +125,7 @@ pub(crate) fn encode(blind: &BlindCell) -> String {
     out.push_str("{\"type\":\"");
     out.push_str(KIND);
     out.push_str("\",\"commitment\":\"");
-    for byte in blind.commitment {
-        let _ = write!(out, "{byte:02x}");
-    }
+    out.push_str(&hex_string(&blind.commitment));
     out.push_str("\"}");
     out
 }

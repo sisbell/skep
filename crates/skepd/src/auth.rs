@@ -179,13 +179,14 @@ impl AuthState {
     /// The look itself is [`BlockedSupply::reissue`]'s — the file's identity
     /// is that type's own knowledge. What this half owns is the INSTALL, which
     /// takes a lock the channel knows nothing about, and the claimant it
-    /// compares against is read through `head_identity` UNDER that lock —
-    /// the head's slice as it stands once no credential write can land — so
-    /// the comparands an install resolves are the ones in force at its own
-    /// position, as they were when the daemon held a fold of its own.
+    /// compares against is read through `head_identity` — called at most
+    /// ONCE, UNDER that lock, and not at all where nothing moved or the
+    /// re-read failed — the head's slice as it stands once no credential
+    /// write can land, so the comparands an install resolves are the ones in
+    /// force at its own position.
     pub fn reissue_blocked_prefixes(
         &self,
-        head_identity: impl Fn() -> IdentityState,
+        head_identity: impl FnOnce() -> IdentityState,
     ) -> Option<Reissue> {
         self.blocked_supply.as_ref()?.reissue(|issue| {
             let lock = self.credential_lock.write();

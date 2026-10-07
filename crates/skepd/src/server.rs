@@ -297,10 +297,10 @@ pub fn body_cap(method: &str, path: &str) -> usize {
 const BOARD_HTML: &str = include_str!("../../../clients/board.html");
 
 /// `Daemon::open` failure — WHICH SUBSYSTEM refused, and not a disposition:
-/// two of the three are uniform operator-intervention conditions (report and
+/// four of the five are uniform operator-intervention conditions (report and
 /// stop, never retry) and `Engine` is not. A caller that means to RETRY reads
-/// the wrapped error and never this enum alone, which cannot tell the two
-/// apart.
+/// the wrapped error and never this enum alone, which cannot tell a failure a
+/// retry clears from one it does not.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum DaemonError {
@@ -344,6 +344,8 @@ pub enum DaemonError {
     /// complete: nothing is written and no engine is opened. A BUILD fault,
     /// never a data dir's: the rows and the domain are compiled constants,
     /// so the condition is operator intervention at the build and no retry.
+    /// The payload is re-exported as [`SeedingRefusal`](crate::SeedingRefusal),
+    /// so a caller names it through this crate alone.
     Registry(skep_registry::SeedingRefusal),
 }
 

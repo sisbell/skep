@@ -15,7 +15,7 @@
 use std::collections::BTreeSet;
 use std::str::FromStr;
 
-use skep_address::{document_of, validate, Address, Nat, Tumbler};
+use skep_address::{document_of, ordinal, validate, Address, Nat, Tumbler};
 use skep_arrangement::{trunk_of, HasM5};
 use skep_engine::World;
 use skep_links::{is_replaces_class, HasLinks, ShippedType, View};
@@ -323,9 +323,9 @@ fn chain_member(next: &Address, k: &Nat) -> Option<Address> {
 }
 
 /// The ordinal of the chain's NEXT slot — `m + 1` for a chain of `m`
-/// members.
+/// members: the frontier's last component, read by M1's own [`ordinal`].
 fn next_ordinal(next: &Address) -> Nat {
-    components(next).last().cloned().unwrap_or_else(|| Nat::from(0u32))
+    ordinal(next.tumbler()).clone()
 }
 
 /// Every member of the chain whose next slot is `next`, ascending.

@@ -243,7 +243,7 @@ impl Codec for JsonCodec {
     }
 
     fn marshal(&self, resp: &Response) -> Vec<u8> {
-        to_bytes(j_response(resp))
+        to_bytes(&j_response(resp))
     }
 }
 
@@ -312,7 +312,7 @@ impl JsonCodec {
             pairs.push(("attest", j_attest(a)));
         }
         pairs.push(("op", Value::String(name.into())));
-        to_bytes(obj(pairs))
+        to_bytes(&obj(pairs))
     }
 
     /// The daemon-level parse: the `key_set` frame — served by the daemon's
@@ -395,9 +395,11 @@ fn parse_key_set(v: Value) -> PResult<DaemonOp> {
 /// holds everywhere it is used: wire responses, transport-error bodies, the
 /// commit stream's event payloads, and the sidecar's own file lines are all
 /// trees built HERE, out of [`obj`] and the leaf marshalers, which means
-/// string keys only and no foreign `Serialize` impl to fault.
-pub(crate) fn to_bytes(v: Value) -> Vec<u8> {
-    serde_json::to_vec(&v).expect("serializing a serde_json::Value with string keys cannot fail")
+/// string keys only and no foreign `Serialize` impl to fault. The tree is
+/// borrowed: serializing reads it, so a caller that still needs the value —
+/// the change feed measuring a row it then serves — keeps it without a copy.
+pub(crate) fn to_bytes(v: &Value) -> Vec<u8> {
+    serde_json::to_vec(v).expect("serializing a serde_json::Value with string keys cannot fail")
 }
 
 /// Build a JSON object with keys sorted — THE determinism device. Every
@@ -1230,10 +1232,8 @@ fn p_val_form(v: &Value, out: &mut Vec<Val>) -> PResult<()> {
 fn p_hex(s: &str) -> PResult<Vec<u8>> {
     // The odd-length refusal comes FIRST, because `chunks_exact` below
     // drops a trailing half-byte in silence — exactly the reading this
-    // check exists to refuse. (`% 2` and not `is_multiple_of`: the
-    // workspace MSRV is 1.85 and that stabilized in 1.87 —
-    // clippy::incompatible_msrv.)
-    if s.len() % 2 != 0 {
+    // check exists to refuse.
+    if !s.len().is_multiple_of(2) {
         return Err(PErr("hex string has odd length".into()));
     }
     s.as_bytes()
@@ -1248,11 +1248,12 @@ fn p_hex(s: &str) -> PResult<Vec<u8>> {
 /// CASE IS POLICY and stays with each parser, which is the whole of what
 /// the three differ by: [`hex_digit`] folds it and names the offending
 /// character; [`parse_lower_hex`] REFUSES it, admitting only what
-/// [`hex_string`] emits — the parse behind the nonce, the session token and
-/// the published head's hashes, so an uppercase nonce is a syntax fault
-/// whose nonce survives rather than a burned credential; and the session's
-/// signature parser (`auth::session::parse_case_free_hex`) folds it, the
-/// signature being decoded and never framed. None of them owns the table.
+/// [`hex_string`] emits — the parse behind the nonce, the session token, the
+/// published head's hashes and the media cells' hashes, so an uppercase nonce
+/// is a syntax fault whose nonce survives rather than a burned credential,
+/// and an uppercase cell hash spells no cell; and the session's signature
+/// parser (`auth::session::parse_case_free_hex`) folds it, the signature
+/// being decoded and never framed. None of them owns the table.
 pub(crate) fn hex_nibble(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),
@@ -1264,11 +1265,15 @@ pub(crate) fn hex_nibble(b: u8) -> Option<u8> {
 /// Exactly `N` bytes of LOWERCASE hex, or `None` — [`hex_string`]'s exact
 /// inverse at a fixed width, and the parse of every value this crate reads
 /// back only as its own emitter wrote it: the handshake nonce and the
-/// session token (AUTH-4.15, AUTH-4.17), and the published head's hashes.
-/// Each admits only what `hex_string` produced, so an uppercase value — or
-/// a signed pair, which a radix parse would read — is refused rather than
-/// normalized; what the refusal costs is stated on each caller. The REFUSAL
-/// is this function's own, in the byte it hands [`hex_nibble`].
+/// session token (AUTH-4.15, AUTH-4.17), the published head's hashes, a
+/// picture cell's `hash` and a blind cell's `commitment` (`media/cell.rs`,
+/// `media/blind.rs`: the canonical rule admits only what `encode` writes,
+/// M-I3 (a)), and the hash an operator copies from the inventory's listing
+/// into the pull (`tools::pull`). Each admits only what `hex_string`
+/// produced, so an uppercase value — or a signed pair, which a radix parse
+/// would read — is refused rather than normalized; what the refusal costs is
+/// stated on each caller. The REFUSAL is this function's own, in the byte it
+/// hands [`hex_nibble`].
 pub(crate) fn parse_lower_hex<const N: usize>(s: &str) -> Option<[u8; N]> {
     if s.len() != N * 2 {
         return None;
@@ -1287,7 +1292,7 @@ pub(crate) fn parse_lower_hex<const N: usize>(s: &str) -> Option<[u8; N]> {
 /// refused ahead of the pairing, so no trailing half-byte is dropped in
 /// silence.
 pub(crate) fn parse_lower_hex_bytes(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     s.as_bytes()

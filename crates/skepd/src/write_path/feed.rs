@@ -852,7 +852,7 @@ impl Feed {
             }
             // The entry's marshaled length — key order moves no byte of it
             // — and the comma that joins it to the one before.
-            bytes += to_bytes(entry.clone()).len() + usize::from(!entries.is_empty());
+            bytes += to_bytes(&entry).len() + usize::from(!entries.is_empty());
             if bytes > MAX_CHANGES_PAGE_BYTES {
                 return ChangesAnswer::OverBudget {
                     budget: MAX_CHANGES_PAGE_BYTES,

@@ -483,7 +483,7 @@ pub(super) fn reset_close(stream: &TcpStream) {
 /// else rather than whatever a format string happened to spell.
 pub(super) fn write_commit_event(stream: &mut TcpStream, at: Seq) -> std::io::Result<()> {
     let mut event = b"event: commit\ndata: ".to_vec();
-    event.extend_from_slice(&to_bytes(obj(vec![("log_position", Value::Number(at.0.into()))])));
+    event.extend_from_slice(&to_bytes(&obj(vec![("log_position", Value::Number(at.0.into()))])));
     event.extend_from_slice(b"\n\n");
     stream.write_all(&event)
 }

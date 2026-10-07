@@ -80,6 +80,7 @@ use std::fmt::Write as _;
 use serde_json::{Map, Value};
 
 use super::blind::{self, BlindCell};
+use crate::codec::{hex_string, parse_lower_hex};
 use crate::limits::MAX_CELL_BYTES;
 
 /// The cell kind's address — INTERIM, TEST-ONLY: the last ordinal of the
@@ -231,7 +232,14 @@ fn parse_picture(object: &Map<String, Value>, bytes: &[u8]) -> Result<Cell, Cell
     if object.len() != 3 {
         return Err(unknown);
     }
-    let hash = object.get("hash").and_then(Value::as_str).and_then(hash_of).ok_or(unknown)?;
+    // The hash member: exactly 64 LOWERCASE hex, the codec's own parse of
+    // what `hex_string` writes — the rule stated where the member is read,
+    // ahead of the re-encoding compare that holds the whole body to it.
+    let hash = object
+        .get("hash")
+        .and_then(Value::as_str)
+        .and_then(parse_lower_hex::<HASH_BYTES>)
+        .ok_or(unknown)?;
     // `as_u64` is `None` for a fraction, an exponent form and a negative.
     let size = object.get("size").and_then(Value::as_u64).ok_or(unknown)?;
     if size > MAX_SIZE {
@@ -241,8 +249,8 @@ fn parse_picture(object: &Map<String, Value>, bytes: &[u8]) -> Result<Cell, Cell
     // THE ADMISSION SENTENCE: admit only where the input is the canonical
     // re-encoding of what it spells — by the public encoder itself, the
     // function a signer composes with. A second `hash` member (the generic
-    // parse keeps one), whitespace, a trailing byte, uppercase hex each fail
-    // here.
+    // parse keeps one), whitespace and a trailing byte each fail here; an
+    // uppercase hash has failed the member's read above.
     if encode(&cell).as_bytes() != bytes {
         return Err(unknown);
     }
@@ -277,28 +285,6 @@ pub(crate) fn opens_as(kind: &str, bytes: &[u8]) -> bool {
     rest.len() > kind.len() && rest.starts_with(kind) && rest[kind.len()] == b'"'
 }
 
-/// The hash member's 32 bytes, from exactly 64 LOWERCASE hex characters;
-/// `None` for any other string. Lowercase is demanded here as well as by the
-/// re-encoding compare, so the rule is stated where the member is read. The
-/// blind kind's commitment is read through it too: the same width, the same
-/// spelling (`media/blind.rs`).
-pub(super) fn hash_of(hex: &str) -> Option<[u8; HASH_BYTES]> {
-    let digits = hex.as_bytes();
-    if digits.len() != 2 * HASH_BYTES {
-        return None;
-    }
-    let nibble = |d: u8| match d {
-        b'0'..=b'9' => Some(d - b'0'),
-        b'a'..=b'f' => Some(d - b'a' + 10),
-        _ => None,
-    };
-    let mut out = [0u8; HASH_BYTES];
-    for (slot, pair) in out.iter_mut().zip(digits.chunks(2)) {
-        *slot = (nibble(pair[0])? << 4) | nibble(pair[1])?;
-    }
-    Some(out)
-}
-
 /// THE CANONICAL FORM — the one byte string a cell has:
 /// `{"type":"<KIND>","hash":"<64 lowercase hex>","size":<count>}`, no
 /// whitespace, the members in that order, nothing after the brace. What a
@@ -309,9 +295,7 @@ pub(crate) fn encode(cell: &Cell) -> String {
     out.push_str("{\"type\":\"");
     out.push_str(KIND);
     out.push_str("\",\"hash\":\"");
-    for byte in cell.hash {
-        let _ = write!(out, "{byte:02x}");
-    }
+    out.push_str(&hex_string(&cell.hash));
     let _ = write!(out, "\",\"size\":{}}}", cell.size);
     out
 }

@@ -103,7 +103,7 @@ impl Reply {
     /// their own code. A refusal names a [`TransportError`] instead and
     /// takes its status from there.
     pub(super) fn json(status: u16, v: Value) -> Reply {
-        Reply::bodied(status, "application/json", to_bytes(v))
+        Reply::bodied(status, "application/json", to_bytes(&v))
     }
 
     /// The CORS preflight answer (wire v4): 204, no body, the fixed method
@@ -195,18 +195,25 @@ pub enum Routed<'a> {
     ///
     /// Serviceable only through [`serve`](super::serve): following the stream is
     /// `write_path/`'s and crate-private, so a caller routing by hand can
-    /// answer this variant only by refusing the route. It is the one
-    /// endpoint the socket-free surface names and cannot serve.
+    /// answer this variant only by refusing the route. It and the admitted
+    /// fetch ([`Routed::Fetch`]) are the answers the socket-free surface
+    /// names and cannot serve.
     EventStream,
     /// `GET /blob?i=` and `HEAD /blob?i=` ADMITTED (wire.md §Media, THE
-    /// FETCH): the file checked whole against its cell, held with the
-    /// fetch pool's permit, streamed by [`serve`](super::serve) under the
-    /// idle and transfer bounds with the requester re-resolved between
-    /// chunks. Every refusal of the route is an ordinary [`Routed::Reply`].
-    /// A caller routing by hand holds the whole file in [`Fetch`] and may
-    /// write it over its own transport; what it then owes is the
-    /// re-resolution the daemon's transport runs, or a refusal of the
-    /// route.
+    /// FETCH): the file checked whole against its cell, held with the fetch
+    /// pool's permit, streamed by [`serve`](super::serve) under the idle and
+    /// transfer bounds with the requester re-resolved between chunks
+    /// (M-I2 (g)). Every refusal of the route is an ordinary
+    /// [`Routed::Reply`].
+    ///
+    /// Serviceable only through [`serve`](super::serve), as
+    /// [`Routed::EventStream`] is: the file's bytes and the mid-stream
+    /// re-resolution are the daemon's transport's alone, so a caller routing
+    /// by hand can answer this variant only by refusing the route —
+    /// [`Fetch`]'s accessors describe the answer the transport writes and
+    /// carry no byte of the file. Dropping the value returns its permit to
+    /// the fetch pool, which is small (a fetch past it answers
+    /// `503 fetch_busy`), so a caller that refuses drops the value at once.
     Fetch(Fetch<'a>),
 }
 

@@ -232,15 +232,15 @@ impl RegistryRefusal {
 }
 
 /// THE REGISTRY DEPOSIT as the sequence reads it off an address-form
-/// `make_link`: the kind the type slot names, the home, the `from` slot's
-/// spans (the record read's input), the one target or none, and the type
-/// address the frame names.
-struct RegistryDeposit {
+/// `make_link`, BORROWED from the op: the kind the type slot names, the
+/// home, the `from` slot's spans (the record read's input, the one member
+/// built), the one target or none, and the type address the frame names.
+struct RegistryDeposit<'a> {
     kind: RegistryKind,
-    home: Address,
+    home: &'a Address,
     from: Vec<Span>,
-    to: Option<Address>,
-    ty: Address,
+    to: Option<&'a Address>,
+    ty: &'a Address,
 }
 
 /// The home an op the route sends here names, for the home pin ahead of
@@ -257,7 +257,7 @@ fn home_of(op: &Op) -> Option<&Address> {
 /// THE FORM'S SHAPE HALF: an address-form `make_link` with no `replaces`
 /// member, `from` ONE address, `to` empty or ONE address, typed a registry
 /// kind — else `None`.
-fn deposit_of(op: &Op) -> Option<RegistryDeposit> {
+fn deposit_of(op: &Op) -> Option<RegistryDeposit<'_>> {
     let Op::MakeLink { home, from, to, ty, replaces: None } = op else { return None };
     let (SlotArg::Addrs(from), SlotArg::Addrs(to), SlotArg::Addrs(ty)) = (from, to, ty) else {
         return None;
@@ -267,10 +267,10 @@ fn deposit_of(op: &Op) -> Option<RegistryDeposit> {
     let [_atom] = from.as_slice() else { return None };
     let to = match to.as_slice() {
         [] => None,
-        [one] => Some(one.clone()),
+        [one] => Some(one),
         _ => return None,
     };
-    Some(RegistryDeposit { kind, home: home.clone(), from: addr_spans(from), to, ty: ty.clone() })
+    Some(RegistryDeposit { kind, home, from: addr_spans(from), to, ty })
 }
 
 /// THE REGISTRY ADMISSION — the sequence's ordered producers, under the
@@ -327,7 +327,7 @@ pub(crate) fn registry_admission(
     }
     // 2 — the form: the shape, then the target by kind.
     let dep = deposit_of(op).ok_or(RegistryRefusal::Form)?;
-    match (dep.kind, &dep.to) {
+    match (dep.kind, dep.to) {
         (RegistryKind::Binding, None) => {}
         (RegistryKind::Binding, Some(account)) => {
             let seated =
@@ -341,7 +341,7 @@ pub(crate) fn registry_admission(
     }
     // 3 — the record value, by the kind the slot names, read over the world
     // as the fold's ctx (the engine's `FoldCtx for World`).
-    let bytes = match record_bytes(world, &dep.home, &dep.from) {
+    let bytes = match record_bytes(world, dep.home, &dep.from) {
         Ok(bytes) => bytes,
         Err(PayloadError::TooLarge) => {
             return Err(RegistryRefusal::MalformedRecord(skep_registry::ParseRefusal::PastCap))
@@ -357,19 +357,18 @@ pub(crate) fn registry_admission(
     // 5 — the trial under the set that opens the home's account. The home
     // has an owner — the home pin found its doc 1 by ω — so an absence is a
     // premise broken, answered fail-closed and asserted.
-    let Some(home_account) = world.m3().effective_owner_prefix(&dep.home) else {
+    let Some(home_account) = world.m3().effective_owner_prefix(dep.home) else {
         debug_assert!(false, "the home pin found a doc 1 under an owner");
         return Err(RegistryRefusal::AttestationInvalid(AttestFault::NotEnrolledAtPosition));
     };
-    let to: Vec<Address> = dep.to.iter().cloned().collect();
     let canonical = record.canonical_sigless();
     verify_record_sig(
         world,
         RecordTrial {
-            home: &dep.home,
+            home: dep.home,
             home_account,
-            ty: &dep.ty,
-            to: &to,
+            ty: dep.ty,
+            to: dep.to.map(std::slice::from_ref).unwrap_or(&[]),
             canonical: canonical.as_bytes(),
             sig,
             anchor_grade: false,

@@ -67,7 +67,8 @@ use skep_engine::World;
 use skep_febe::{ISpan, Op, OperationSurface, Rejection, Request, Response, SessionId};
 
 use super::cell::{self, Class, DESIGNATION};
-use super::gate::{hex_of, MediaGate};
+use super::gate::MediaGate;
+use crate::codec::hex_string;
 use crate::limits::{
     FETCH_RECHECK_BYTES, FETCH_RECHECK_INTERVAL, MAX_BLOB_BYTES, MAX_CONCURRENT_FETCHES,
 };
@@ -178,24 +179,25 @@ pub(crate) enum FetchRefusal {
 /// ([`SessionId::GUEST`] where none was presented); `media_gate` is the
 /// media gate, the daemon's media resource the file is read through; `pool`
 /// the fetch pool the answer's permit comes from, which the [`Admitted`]
-/// holds for as long as it lives.
+/// holds for as long as it lives; `i` the address asked for, taken by value
+/// because the [`Admitted`] keeps it as the mid-stream re-check's subject.
 pub(crate) fn fetch<'a>(
     febe: &OperationSurface<World>,
     session: SessionId,
     media_gate: &MediaGate,
     pool: &'a FetchPool,
-    i: &Address,
+    i: Address,
 ) -> Result<Admitted<'a>, FetchRefusal> {
     // 0 — the shape: an element position of some document, or nothing is
     // asked of any store.
-    if i.level() != Level::Element || document_of(i).is_none() {
+    if i.level() != Level::Element || document_of(&i).is_none() {
         return Err(FetchRefusal::Shape(format!(
             "i: '{}' names no element position of a document",
             i.tumbler()
         )));
     }
     // 1–3 — the gate: M10's read by identity, as the presented session.
-    let value = read_by_identity(febe, session, i).map_err(FetchRefusal::Rejected)?;
+    let value = read_by_identity(febe, session, &i).map_err(FetchRefusal::Rejected)?;
     let Some(value) = value else {
         return Err(FetchRefusal::NoValue);
     };
@@ -213,7 +215,7 @@ pub(crate) fn fetch<'a>(
     // 6 — the whole file, checked against the cell before any byte of it
     // is answered.
     let bytes = read_whole(media_gate, &cell)?;
-    Ok(Admitted { i: i.clone(), bytes, _permit: permit })
+    Ok(Admitted { i, bytes, _permit: permit })
 }
 
 /// THE RE-CHECK's gate (M-I2 (g)): the read by identity run again as
@@ -255,7 +257,7 @@ fn read_by_identity(
 /// [`MAX_BLOB_BYTES`]; one byte past that length is asked for, so a file
 /// grown under the open reads as not the deposit either.
 fn read_whole(media_gate: &MediaGate, cell: &cell::Cell) -> Result<Vec<u8>, FetchRefusal> {
-    let hex = hex_of(&cell.hash);
+    let hex = hex_string(&cell.hash);
     let named = || NamedBlob { hash: hex.clone(), size: cell.size };
     let Some(path) = media_gate.store().blob_path(DESIGNATION, &hex) else {
         return Err(FetchRefusal::BlobMissing(named()));
@@ -414,7 +416,7 @@ mod tests {
         let media_gate = MediaGate::open(dir.path()).expect("the store opens");
         let bytes = b"the picture's bytes";
         let cell = cell::Cell { hash: *blake3::hash(bytes).as_bytes(), size: bytes.len() as u64 };
-        let named = NamedBlob { hash: hex_of(&cell.hash), size: cell.size };
+        let named = NamedBlob { hash: hex_string(&cell.hash), size: cell.size };
         assert!(
             matches!(
                 read_whole(&media_gate, &cell),

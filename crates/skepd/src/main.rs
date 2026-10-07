@@ -169,8 +169,26 @@ The wire protocol is specified in skep/docs/wire.md."
 /// What the command line asked for: the daemon, or one of the two tools.
 enum Command {
     Serve(Args),
-    Inventory { data_dir: PathBuf, rehash: bool },
+    Inventory { data_dir: PathBuf, check: tools::HoleCheck },
     Pull { data_dir: PathBuf, hash: Option<String>, file: PathBuf },
+}
+
+/// Which of the operator's two tools a line names — read off its leading
+/// verb, and what the tool's own flags are admitted by.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tool {
+    Inventory,
+    Pull,
+}
+
+impl Tool {
+    /// The tool's verb, as the line spells it and every refusal names it.
+    fn verb(self) -> &'static str {
+        match self {
+            Tool::Inventory => "inventory",
+            Tool::Pull => "pull",
+        }
+    }
 }
 
 struct Args {
@@ -220,23 +238,24 @@ fn parse_command(argv: impl Iterator<Item = String>) -> Result<Option<Command>, 
     match it.peek().map(String::as_str) {
         Some("inventory") => {
             it.next();
-            parse_tool(it, false)
+            parse_tool(it, Tool::Inventory)
         }
         Some("pull") => {
             it.next();
-            parse_tool(it, true)
+            parse_tool(it, Tool::Pull)
         }
         _ => Ok(parse_args(it)?.map(Command::Serve)),
     }
 }
 
-/// A tool's line: `--data-dir <DIR>` (or the variable), `--no-rehash` for
-/// the inventory, `--hash <HEX>` and the one positional `<FILE>` for the
-/// pull; `--help` the usage text.
-fn parse_tool(mut it: impl Iterator<Item = String>, pull: bool) -> Result<Option<Command>, String> {
-    let verb = if pull { "pull" } else { "inventory" };
+/// The line of `tool`, its verb already read: `--data-dir <DIR>` (or the
+/// variable), `--no-rehash` for the inventory, `--hash <HEX>` and the one
+/// positional `<FILE>` for the pull; `--help` the usage text. A flag of the
+/// other tool's is an unknown argument here, refused naming this tool.
+fn parse_tool(mut it: impl Iterator<Item = String>, tool: Tool) -> Result<Option<Command>, String> {
+    let verb = tool.verb();
     let mut data_dir = std::env::var_os(SKEPD_DATA_DIR).map(PathBuf::from);
-    let mut rehash = true;
+    let mut check = tools::HoleCheck::Rehash;
     let mut hash: Option<String> = None;
     let mut file: Option<PathBuf> = None;
     while let Some(arg) = it.next() {
@@ -245,13 +264,13 @@ fn parse_tool(mut it: impl Iterator<Item = String>, pull: bool) -> Result<Option
                 let v = it.next().ok_or("--data-dir needs a value")?;
                 data_dir = Some(PathBuf::from(v));
             }
-            "--no-rehash" if !pull => rehash = false,
-            "--hash" if pull => {
+            "--no-rehash" if tool == Tool::Inventory => check = tools::HoleCheck::LengthOnly,
+            "--hash" if tool == Tool::Pull => {
                 let v = it.next().ok_or("--hash needs a value")?;
                 hash = Some(v);
             }
             "--help" | "-h" => return Ok(None),
-            other if pull && !other.starts_with("--") && file.is_none() => {
+            other if tool == Tool::Pull && !other.starts_with("--") && file.is_none() => {
                 file = Some(PathBuf::from(other));
             }
             other => return Err(format!("{verb}: unknown argument '{other}'")),
@@ -259,11 +278,12 @@ fn parse_tool(mut it: impl Iterator<Item = String>, pull: bool) -> Result<Option
     }
     let data_dir =
         data_dir.ok_or_else(|| format!("{verb}: --data-dir (or {SKEPD_DATA_DIR}) is required"))?;
-    Ok(Some(if pull {
-        let file = file.ok_or("pull: the file to restore is required")?;
-        Command::Pull { data_dir, hash, file }
-    } else {
-        Command::Inventory { data_dir, rehash }
+    Ok(Some(match tool {
+        Tool::Pull => {
+            let file = file.ok_or("pull: the file to restore is required")?;
+            Command::Pull { data_dir, hash, file }
+        }
+        Tool::Inventory => Command::Inventory { data_dir, check },
     }))
 }
 
@@ -372,7 +392,7 @@ fn main() {
         Ok(Some(Command::Serve(a))) => a,
         // THE TOOLS: one object or one line on stdout, one line on stderr
         // where refused, no server bound.
-        Ok(Some(Command::Inventory { data_dir, rehash })) => match tools::inventory(&data_dir, rehash) {
+        Ok(Some(Command::Inventory { data_dir, check })) => match tools::inventory(&data_dir, check) {
             Ok(v) => {
                 println!("{}", serde_json::to_string_pretty(&v).expect("a JSON value renders"));
                 exit(0);
@@ -496,14 +516,14 @@ mod tests {
     #[test]
     fn the_tools_parse_a_leading_verb_before_their_flags() {
         match parse_command(argv(&["inventory", "--data-dir", "/tmp/b"])).expect("valid").expect("a tool") {
-            Command::Inventory { data_dir, rehash } => {
+            Command::Inventory { data_dir, check } => {
                 assert_eq!(data_dir, PathBuf::from("/tmp/b"));
-                assert!(rehash, "re-hashed by default");
+                assert_eq!(check, tools::HoleCheck::Rehash, "re-hashed by default");
             }
             _ => panic!("the inventory"),
         }
         match parse_command(argv(&["inventory", "--no-rehash", "--data-dir", "/tmp/b"])).expect("valid").expect("a tool") {
-            Command::Inventory { rehash, .. } => assert!(!rehash),
+            Command::Inventory { check, .. } => assert_eq!(check, tools::HoleCheck::LengthOnly),
             _ => panic!("the inventory"),
         }
         match parse_command(argv(&["pull", "--data-dir", "/tmp/b", "/tmp/picture"])).expect("valid").expect("a tool") {

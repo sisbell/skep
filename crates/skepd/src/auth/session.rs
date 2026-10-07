@@ -622,7 +622,7 @@ fn hybrid_sig_widths() -> String {
 /// Case-free hex of an even length the caller has checked, or `None` on a
 /// non-hex byte.
 fn parse_case_free_hex(s: &str) -> Option<Box<[u8]>> {
-    debug_assert_eq!(s.len() % 2, 0);
+    debug_assert!(s.len().is_multiple_of(2));
     s.as_bytes()
         .chunks_exact(2)
         .map(|pair| {

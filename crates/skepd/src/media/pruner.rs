@@ -51,6 +51,7 @@
 //! acquisition as a closure and holds whatever guard it answers for
 //! exactly one file.
 
+use std::fmt;
 use std::io;
 use std::time::Duration;
 
@@ -61,8 +62,8 @@ use super::gate::MediaGate;
 use crate::limits::{COMPACTION_MIN_LINES, COMPACTION_TRIGGER};
 use crate::notice;
 
-/// What one pass did — the test hook's answer, and the operator's line's
-/// figures.
+/// What one pass did — the test hook's answer, and, rendered through its
+/// [`fmt::Display`], the operator's line.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrunePass {
     /// Expired uploads retired, their partials removed.
@@ -90,33 +91,41 @@ pub struct PrunePass {
     pub stopped: (bool, bool),
 }
 
-impl PrunePass {
-    /// The operator's line for this pass — its figures, the halt, the
-    /// compaction and any stopped log.
-    pub fn line(&self) -> String {
-        let mut line = format!(
+/// The operator's line for this pass — its figures, the halt, the
+/// compaction and any stopped log — written to the formatter as it is
+/// composed, so the notice that carries it ([`notice::line`]) builds no
+/// string of its own.
+impl fmt::Display for PrunePass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
             "pruner: {} expired partials removed, {} files unlinked, {} kept, {} asides removed",
             self.expired_partials, self.unlinked, self.kept, self.asides
-        );
+        )?;
         if let Some(why) = &self.halted {
-            line.push_str(&format!(" — the unlink pass halted: {why}"));
+            write!(f, " — the unlink pass halted: {why}")?;
         }
         match (self.compacted_uploads, self.compacted_leases) {
-            (true, true) => line.push_str("; uploads.log and leases.log compacted"),
-            (true, false) => line.push_str("; uploads.log compacted"),
-            (false, true) => line.push_str("; leases.log compacted"),
+            (true, true) => f.write_str("; uploads.log and leases.log compacted")?,
+            (true, false) => f.write_str("; uploads.log compacted")?,
+            (false, true) => f.write_str("; leases.log compacted")?,
             (false, false) => {}
         }
         if let Some(why) = &self.compaction_failed {
-            line.push_str(&format!("; a compaction FAILED: {why}"));
+            write!(f, "; a compaction FAILED: {why}")?;
         }
         match self.stopped {
-            (true, true) => line.push_str("; STOPPED: uploads.log and leases.log take no append until a compaction completes"),
-            (true, false) => line.push_str("; STOPPED: uploads.log takes no append until a compaction completes"),
-            (false, true) => line.push_str("; STOPPED: leases.log takes no append until a compaction completes"),
-            (false, false) => {}
+            (true, true) => f.write_str(
+                "; STOPPED: uploads.log and leases.log take no append until a compaction completes",
+            ),
+            (true, false) => {
+                f.write_str("; STOPPED: uploads.log takes no append until a compaction completes")
+            }
+            (false, true) => {
+                f.write_str("; STOPPED: leases.log takes no append until a compaction completes")
+            }
+            (false, false) => Ok(()),
         }
-        line
     }
 }
 

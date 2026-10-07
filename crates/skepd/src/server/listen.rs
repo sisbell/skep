@@ -449,7 +449,7 @@ fn prune_on_cadence(daemon: &Daemon, cadence: &Cadence) {
             match daemon.prune_pass() {
                 // The pass's own line: its figures, the halt, the logs'
                 // compaction and any log that has stopped.
-                Ok(Some(pass)) => notice::line(pass.line()),
+                Ok(Some(pass)) => notice::line(pass),
                 Ok(None) => {}
                 Err(e) => notice::line(format_args!("pruner: the pass failed: {e}")),
             }

@@ -58,7 +58,7 @@ fn daemon_rejected(r: DaemonRejection<'_>) -> Vec<u8> {
     if let Some(d) = r.detail {
         pairs.push(("detail", Value::String(d)));
     }
-    to_bytes(obj(pairs))
+    to_bytes(&obj(pairs))
 }
 
 /// The `key_set` answer (AUTH-6.18–6.20) — the daemon's own
@@ -109,7 +109,7 @@ pub(crate) fn key_set_reply(as_of: Seq, set: Option<&KeySet>) -> Vec<u8> {
             obj(vec![("anchor", Value::Bool(anchor)), ("fingerprint", Value::String(fp.to_hex()))])
         })
         .collect();
-    to_bytes(obj(vec![
+    to_bytes(&obj(vec![
         ("as_of", Value::Number(as_of.0.into())),
         ("enrolled", Value::Array(enrolled)),
         ("resp", Value::String("key_set".into())),

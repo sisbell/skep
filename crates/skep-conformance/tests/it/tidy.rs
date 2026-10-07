@@ -17,14 +17,17 @@
 //! it reads between modules, so a check gone blind fails rather than passing
 //! a clean tree.
 //!
-//! Two rules no compiler error reports are held the same way. Every scenario
-//! document is created by `Rig::create_private_document`, so no code line
-//! under `src/` but `rig.rs` builds a CREATENEWDOCUMENT request. And the
-//! play pass changes the golden-side world only through the `Cx`
-//! world-change methods, so no code line in `play/` or `runner.rs`
-//! mutates the shadow's documents or links. Each scan asserts it found the
-//! owner's own lines, so a scan that matches nothing fails rather than
-//! passing a clean tree.
+//! Three rules no compiler error reports are held the same way. Every
+//! request reaches skep through the rig's door, `rig::execute`, which names
+//! a panic raised inside skep as skep's, so exactly one code line under
+//! `src/` calls `OperationSurface::execute`, and it is in `rig.rs`. Every
+//! scenario document is created by `Rig::create_private_document`, so no
+//! code line under `src/` but `rig.rs` builds a CREATENEWDOCUMENT request.
+//! And the play pass changes the golden-side world only through the `Cx`
+//! world-change methods, so no code line in `play/` or `runner.rs` mutates
+//! the shadow's documents or links. Each scan asserts it found the owner's
+//! own lines, so a scan that matches nothing fails rather than passing a
+//! clean tree.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -113,6 +116,22 @@ fn every_module_names_only_itself_and_modules_declared_above_it() {
         "a module names one declared below it, or an item through the root — move the item, \
          reorder src/lib.rs, or name the item's home module:\n{}",
         faults.join("\n")
+    );
+}
+
+/// Every request reaches skep through `rig::execute`, the one call of
+/// `OperationSurface::execute`, which resumes a panic raised inside skep as
+/// skep's own (`rig::EnginePanic`). A call made anywhere else would let such
+/// a panic report as the harness's — a failure of skep's totality read as a
+/// harness bug — so exactly one code line under `src/` calls `.execute(`,
+/// and it is in `rig.rs`.
+#[test]
+fn only_the_rig_door_executes_a_request() {
+    let calls = scan(|code| code.contains(".execute("));
+    assert!(
+        matches!(calls.as_slice(), [(file, _)] if file == Path::new("rig.rs")),
+        "exactly one code line, the door in `rig.rs`, calls `OperationSurface::execute`:\n{}",
+        render(&calls)
     );
 }
 

@@ -65,6 +65,19 @@ fn a_single_vspec_dict_is_a_vcopy_source() {
     );
 }
 
+/// A vcopy source described at the top of the range grounds as recorded,
+/// outside every extent — its end saturating, never overflowing.
+#[test]
+fn a_described_source_at_the_top_of_the_range_grounds_without_overflow() {
+    let mut shadow = Shadow::new();
+    shadow.create_doc("1.1.0.1.0.1", Some("source"));
+    shadow.insert("1.1.0.1.0.1", 1, b"hello world");
+    let op = json!({"op": "vcopy", "from": "1.18446744073709551615 for 0.5"});
+    let region = VRegion { sub: 1, ord: u64::MAX, width: 5 };
+    let source = CopySource { doc: "1.1.0.1.0.1".into(), region };
+    assert_eq!(vcopy_sources(&op, &shadow, &mut Vec::new()), Ok(vec![source]));
+}
+
 /// An explicit document reference that resolves to nothing — "version"
 /// before any version is made — is never the register; a bare op is, and a
 /// reference that resolves becomes it.
@@ -102,13 +115,19 @@ fn only_a_zero_width_recorded_span_is_dropped() {
 }
 
 /// Neither a golden address nor a recording-client repr is document text,
-/// wherever it stands in a reply.
+/// wherever it stands in a reply; text that merely looks dotted or
+/// bracketed is.
 #[test]
 fn neither_an_address_nor_a_client_repr_is_document_text() {
     let text = |ss: &[&str]| as_text(&ss.iter().map(|s| s.to_string()).collect::<Vec<_>>());
     assert_eq!(text(&["AB", "CD"]).as_deref(), Some("ABCD"));
     assert_eq!(text(&["<VSpan in 1.1.0.1.0.1 at 0 for 0>"]), None);
+    assert_eq!(text(&["<SpecSet []>"]), None);
     assert_eq!(text(&["AB", "1.1.0.1.0.1.0.2.1"]), None);
+    assert_eq!(text(&["1.1.0.1.0.1"]), None);
+    assert_eq!(text(&["2.5"]).as_deref(), Some("2.5"));
+    assert_eq!(text(&["0123456789.1"]).as_deref(), Some("0123456789.1"));
+    assert_eq!(text(&["<b>"]).as_deref(), Some("<b>"));
 }
 
 /// A meta-named op that carries an observation — a string array under a

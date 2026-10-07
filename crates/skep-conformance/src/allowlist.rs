@@ -3,9 +3,13 @@
 //! `allowlisted`; without one it stays `divergent`. The harness itself never
 //! adds entries.
 //!
-//! The file is a restricted TOML subset, parsed here directly so the harness
-//! carries no TOML dependency: `[[allow]]` blocks of `key = value` lines
-//! (string / integer values), `#` comments, blank lines. Keys:
+//! The file is a TOML-like format, not TOML, parsed here directly so the
+//! harness carries no TOML dependency: `[[allow]]` blocks of `key = value`
+//! lines (quoted-string / integer values), `#` comments, blank lines. A
+//! quoted value is everything between the line's first and last `"`, taken
+//! verbatim — no escapes, no trailing comment — so a signature can hold the
+//! `"`s of a rendered expected value as they stand (lines a TOML reader
+//! rejects). Each key is set at most once per block. Keys:
 //!
 //! * `scenario`  (required) — the golden scenario's key, `category/name`
 //!   (`outcome::ScenarioKey`) — a bare name is refused where it is read,
@@ -17,13 +21,14 @@
 //!   keeps holds what classification uses;
 //! * `count_delta`     (optional) — declared count adjustment (golden+delta);
 //! * `width_tolerance` (optional) — declared span-width tolerance;
-//! * `expected_matches` (optional) — a substring of the op's rendered
-//!   EXPECTED value. When present the entry applies to any DISAGREED op of
-//!   the scenario whose expected value contains it (op_index, if also
-//!   present, must match too) — a signature key that survives op-index
-//!   shifts across harness rounds. Signature entries classify only; their
-//!   `count_delta`/`width_tolerance` never apply (adjustments run before
-//!   comparison, when the expected value is not yet known).
+//! * `expected_matches` (optional) — a nonempty substring of the op's
+//!   rendered EXPECTED value. When present the entry applies to any
+//!   DISAGREED op of the scenario whose expected value contains it
+//!   (op_index, if also present, must match too) — a signature key that
+//!   survives op-index shifts across harness rounds; an empty one, which
+//!   every expected value contains, is refused. Signature entries classify
+//!   only; their `count_delta`/`width_tolerance` never apply (adjustments
+//!   run before comparison, when the expected value is not yet known).
 //!
 //! An entry applies twice. Before an op runs, [`Allowlist::adjustments`]
 //! hands its comparators the adjustments the op's entries declare; after, a
@@ -166,7 +171,7 @@ impl Allowlist {
 pub enum AllowlistError {
     /// The file is there and could not be read.
     Read { path: PathBuf, source: io::Error },
-    /// Line `line` (1-based) lies outside the TOML subset, as `problem` says.
+    /// Line `line` (1-based) lies outside the format, as `problem` says.
     Syntax { line: usize, problem: String },
     /// The entry whose block ends near line `line` lacks its scenario, or a
     /// nonempty class or rationale.
@@ -217,8 +222,11 @@ struct PartialEntry {
     expected_matches: Option<String>,
 }
 
-/// Parse the restricted subset. Unknown keys are a hard error — an entry
-/// that silently half-applies would be a quiet comparator widening.
+/// Parse the format. Unknown keys are a hard error — an entry that silently
+/// half-applies would be a quiet comparator widening — and so is a key set
+/// twice in one block, whose second value would silently move the entry to
+/// another scenario or its ruling to another op, and an empty signature,
+/// which would cover every disagreement in its scope.
 pub fn load(path: &Path) -> Result<Allowlist, AllowlistError> {
     let raw = match fs::read_to_string(path) {
         Ok(r) => r,
@@ -256,27 +264,29 @@ pub fn load(path: &Path) -> Result<Allowlist, AllowlistError> {
             let v = v.strip_prefix('"').and_then(|x| x.strip_suffix('"'));
             v.map(str::to_string).ok_or_else(|| syntax("expected quoted string"))
         };
+        let twice = || syntax(&format!("`{k}` set twice in one entry"));
+        let integer = |_| syntax(&format!("{k} must be an integer"));
         match k {
             "scenario" => {
                 let key = quoted(v)?
                     .parse()
                     .map_err(|source| AllowlistError::NotAKey { line: line_no, source })?;
-                e.scenario = Some(key);
+                set_once(&mut e.scenario, key, twice)?;
             }
-            "class" => e.class = Some(quoted(v)?),
-            "rationale" => e.rationale = Some(quoted(v)?),
-            "op_index" => {
-                e.op_index = Some(v.parse().map_err(|_| syntax("op_index must be an integer"))?)
-            }
-            "count_delta" => {
-                e.count_delta =
-                    Some(v.parse().map_err(|_| syntax("count_delta must be an integer"))?)
-            }
+            "class" => set_once(&mut e.class, quoted(v)?, twice)?,
+            "rationale" => set_once(&mut e.rationale, quoted(v)?, twice)?,
+            "op_index" => set_once(&mut e.op_index, v.parse().map_err(integer)?, twice)?,
+            "count_delta" => set_once(&mut e.count_delta, v.parse().map_err(integer)?, twice)?,
             "width_tolerance" => {
-                e.width_tolerance =
-                    Some(v.parse().map_err(|_| syntax("width_tolerance must be an integer"))?)
+                set_once(&mut e.width_tolerance, v.parse().map_err(integer)?, twice)?
             }
-            "expected_matches" => e.expected_matches = Some(quoted(v)?),
+            "expected_matches" => {
+                let signature = quoted(v)?;
+                if signature.is_empty() {
+                    return Err(syntax("empty expected_matches: it would cover every disagreement"));
+                }
+                set_once(&mut e.expected_matches, signature, twice)?;
+            }
             other => return Err(syntax(&format!("unknown key `{other}`"))),
         }
     }
@@ -284,6 +294,21 @@ pub fn load(path: &Path) -> Result<Allowlist, AllowlistError> {
         out.entries.push(finish(e, raw.lines().count() + 1)?);
     }
     Ok(out)
+}
+
+/// `value` into the block's `slot` — once: a key set twice in one block is
+/// the `twice` error, never a second value silently moving the entry to
+/// another scenario or its ruling to another op.
+fn set_once<T>(
+    slot: &mut Option<T>,
+    value: T,
+    twice: impl FnOnce() -> AllowlistError,
+) -> Result<(), AllowlistError> {
+    if slot.is_some() {
+        return Err(twice());
+    }
+    *slot = Some(value);
+    Ok(())
 }
 
 /// The entry a block ending near `line` declares: its scenario, a nonempty
@@ -408,13 +433,15 @@ mod tests {
         assert!(matches!(unreadable, Some(AllowlistError::Read { .. })), "{unreadable:?}");
     }
 
-    /// The subset refuses what it does not speak, each refusal at its line:
+    /// The format refuses what it does not speak, each refusal at its line:
     /// an unknown key — a misspelled adjustment would otherwise widen a
-    /// comparator unseen — a key outside a block, an unquoted string; an
+    /// comparator unseen — a key outside a block, an unquoted string, a key
+    /// set twice in one block, whose second value would move the ruling,
+    /// and an empty signature, which every expected value contains; an
     /// empty class leaves its entry incomplete.
     #[test]
-    fn a_line_outside_the_subset_is_refused() {
-        let scratch = format!("skep-allowlist-subset-{}", std::process::id());
+    fn a_line_outside_the_format_is_refused() {
+        let scratch = format!("skep-allowlist-format-{}", std::process::id());
         let dir = std::env::temp_dir().join(scratch);
         fs::create_dir_all(&dir).expect("a scratch directory");
         let path = dir.join("allowlist.toml");
@@ -427,14 +454,20 @@ mod tests {
         let outside = refusal("class = \"c\"\n");
         let unquoted = refusal("[[allow]]\nscenario = cat/s\n");
         let unclassed = refusal("[[allow]]\nscenario = \"cat/s\"\nclass = \"\"\nrationale = \"r\"");
+        let moved = refusal(&format!("{entry}op_index = 2\nop_index = 7\n"));
+        let unsigned = refusal(&format!("{entry}expected_matches = \"\"\n"));
         fs::remove_dir_all(&dir).expect("the scratch directory is removed");
-        let named = |p: &str| p.contains("widht_tolerance");
-        let at_line_5 = |e: &AllowlistError| {
-            matches!(e, AllowlistError::Syntax { line: 5, problem } if named(problem))
+        let syntax_at = |line: usize, key: &'static str| {
+            move |e: &AllowlistError| match e {
+                AllowlistError::Syntax { line: l, problem } => *l == line && problem.contains(key),
+                _ => false,
+            }
         };
-        assert!(misspelled.as_ref().is_some_and(at_line_5), "{misspelled:?}");
+        assert!(misspelled.as_ref().is_some_and(syntax_at(5, "widht_tolerance")), "{misspelled:?}");
         assert!(matches!(outside, Some(AllowlistError::Syntax { line: 1, .. })), "{outside:?}");
         assert!(matches!(unquoted, Some(AllowlistError::Syntax { line: 2, .. })), "{unquoted:?}");
         assert!(matches!(unclassed, Some(AllowlistError::Incomplete { .. })), "{unclassed:?}");
+        assert!(moved.as_ref().is_some_and(syntax_at(6, "op_index")), "{moved:?}");
+        assert!(unsigned.as_ref().is_some_and(syntax_at(5, "expected_matches")), "{unsigned:?}");
     }
 }

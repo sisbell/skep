@@ -7,7 +7,7 @@
 //! explicit — which is M1's own `Display`, so a skep value renders back for
 //! the report through `Display` and nothing here restates it.
 
-use skep_address::{validate, Address, Nat, Span, Tumbler};
+use skep_address::{classify, validate, Address, Class, Nat, Span, Tumbler};
 use skep_arrangement::{ordinal_vspan, VPos};
 
 /// Parse "1.1.0.1" → component vector. `None` on empty or non-numeric
@@ -125,6 +125,16 @@ pub fn is_link_address(s: &str) -> bool {
     link_home_docid(s).is_some()
 }
 
+/// Is `s` a golden ADDRESS — dotted decimal that M1 classifies as an
+/// account, a document or an element? A decimal ("2.5", "0123456789.1")
+/// is a node tumbler or no address at all, so document text that happens
+/// to be dotted is never mistaken for one.
+pub fn is_golden_address(s: &str) -> bool {
+    parse_dotted(s).is_some_and(|comps| {
+        matches!(classify(&tum(&comps)), Class::Account | Class::Document | Class::Element)
+    })
+}
+
 /// Render a skep V-span back to the golden `{start, width}` string pair.
 pub fn span_strings(s: &Span) -> (String, String) {
     (s.start().to_string(), s.width().to_string())
@@ -197,5 +207,17 @@ mod tests {
         assert_eq!(span_strings(&span), ("2.3".to_string(), "0.4".to_string()));
         assert_eq!(at.region(4).at(), at);
         assert_eq!(at.region(0).span(), None);
+    }
+
+    /// A golden address is an account, a document or an element; a dotted
+    /// decimal is no address, and neither is a malformed tumbler.
+    #[test]
+    fn only_an_account_a_document_or_an_element_is_a_golden_address() {
+        for address in ["1.1.0.1", "1.1.0.1.0.1", "1.1.0.1.0.1.0.2.1"] {
+            assert!(is_golden_address(address), "{address}");
+        }
+        for text in ["2.5", "0123456789.1", "1.1", "0.5", "1.0", "1..2", "x", ""] {
+            assert!(!is_golden_address(text), "{text}");
+        }
     }
 }

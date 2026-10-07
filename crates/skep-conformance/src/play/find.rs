@@ -12,8 +12,8 @@ use skep_links::{enc, Endset};
 use skep_retrieval::RegionSpec;
 
 use super::{
-    compared_nothing, elem_range, inexpressible, marker_type_name, parse_set_spans, refusal,
-    settle_accepted, settle_unaccepted, side_specs, Cx, SetSpan, Tally,
+    clamp_query, compared_nothing, elem_range, inexpressible, marker_type_name, parse_set_spans,
+    refusal, settle_accepted, settle_unaccepted, side_specs, Cx, SetSpan, Tally,
 };
 use crate::allowlist::Adjustments;
 use crate::compare::{compare_addr_sets, compare_count};
@@ -603,22 +603,9 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 let spans: Vec<skep_address::Span> = asked
                     .iter()
                     .filter_map(|r| {
-                        if r.width == 0 {
-                            return None;
-                        }
-                        if r.sub == 1 {
-                            if r.ord > text_len {
-                                clamped = true;
-                                return None;
-                            }
-                            let end = (r.ord + r.width - 1).min(text_len);
-                            if end < r.ord + r.width - 1 {
-                                clamped = true;
-                            }
-                            VRegion { width: end + 1 - r.ord, ..*r }.span()
-                        } else {
-                            r.span()
-                        }
+                        let (live, cut) = clamp_query(*r, text_len);
+                        clamped |= cut;
+                        live?.span()
                     })
                     .collect();
                 if clamped {

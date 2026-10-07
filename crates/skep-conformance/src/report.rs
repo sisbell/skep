@@ -136,9 +136,9 @@ fn publish(path: &Path, body: &str) -> Result<(), ReportError> {
 
 /// The category × verdict table, as printed to summary.md and stderr.
 pub fn render_table(records: &[ScenarioRecord]) -> String {
-    let mut by_cat: BTreeMap<&str, [usize; 5]> = BTreeMap::new();
+    let mut by_cat: BTreeMap<String, [usize; 5]> = BTreeMap::new();
     for r in records {
-        let row = by_cat.entry(r.category.as_str()).or_default();
+        let row = by_cat.entry(line(&r.category)).or_default();
         let i = match r.verdict {
             Verdict::Pass => 0,
             Verdict::Allowlisted => 1,
@@ -170,15 +170,33 @@ pub fn render_table(records: &[ScenarioRecord]) -> String {
     s
 }
 
+/// `s` as one summary line: every control character escaped (`\n`,
+/// `\u{1b}`…), so text a golden carries — a detail, a note, an error, an
+/// op's, a scenario's or a category's name — never starts a line, or a
+/// section, of its own.
+fn line(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_control() {
+            out.extend(c.escape_default());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// At most `n` bytes of `s`, cut at a char boundary, as one summary
+/// [`line`].
 fn trunc(s: &str, n: usize) -> String {
     if s.len() <= n {
-        s.to_string()
+        line(s)
     } else {
         let mut cut = n;
         while cut > 0 && !s.is_char_boundary(cut) {
             cut -= 1;
         }
-        format!("{}…", &s[..cut])
+        format!("{}…", line(&s[..cut]))
     }
 }
 
@@ -191,6 +209,8 @@ fn render_summary(records: &[ScenarioRecord]) -> String {
     s.push_str("## Category × verdict\n\n");
     s.push_str(&render_table(records));
 
+    // A scenario's key and an op's name, each as one summary line.
+    let key = |r: &ScenarioRecord| line(r.key().as_str());
     s.push_str("\n## Divergent scenarios (first disagreement)\n\n");
     let mut any = false;
     for r in records {
@@ -200,14 +220,13 @@ fn render_summary(records: &[ScenarioRecord]) -> String {
         any = true;
         match &r.first_finding {
             Some(f) => s.push_str(&format!(
-                "- `{}/{}` — op {} `{}`: {}\n",
-                r.category,
-                r.name,
+                "- `{}` — op {} `{}`: {}\n",
+                key(r),
                 f.index,
-                f.op_name,
+                line(&f.op_name),
                 trunc(&f.detail, 300)
             )),
-            None => s.push_str(&format!("- `{}/{}`\n", r.category, r.name)),
+            None => s.push_str(&format!("- `{}`\n", key(r))),
         }
     }
     if !any {
@@ -232,11 +251,10 @@ fn render_summary(records: &[ScenarioRecord]) -> String {
             n => format!(" (+{} more)", n - 1),
         };
         s.push_str(&format!(
-            "- `{}/{}` — op {} `{}`: {}{more}\n",
-            r.category,
-            r.name,
+            "- `{}` — op {} `{}`: {}{more}\n",
+            key(r),
             first.index,
-            first.op_name,
+            line(&first.op_name),
             trunc(&first.detail(), 300)
         ));
     }
@@ -268,7 +286,7 @@ fn render_summary(records: &[ScenarioRecord]) -> String {
             s.push_str(analysis);
             s.push_str("\n\nAffected scenarios:\n\n");
             for r in &affected {
-                s.push_str(&format!("- `{}/{}`\n", r.category, r.name));
+                s.push_str(&format!("- `{}`\n", key(r)));
             }
         }
     }
@@ -288,18 +306,20 @@ fn render_summary(records: &[ScenarioRecord]) -> String {
                 format!(
                     "op {} `{}`: {}",
                     o.index,
-                    o.op_name,
+                    line(&o.op_name),
                     trunc(o.note.as_deref().unwrap_or("-"), 200)
                 )
             })
             .unwrap_or_default();
-        s.push_str(&format!("- `{}/{}` — {first}\n", r.category, r.name));
+        s.push_str(&format!("- `{}` — {first}\n", key(r)));
     }
     if !any {
         s.push_str("(none)\n");
     }
 
-    s.push_str("\n## Harness errors\n\n");
+    // Each error names what stopped its scenario: skep panicking inside an
+    // op, the harness panicking, or a rig that would not bootstrap.
+    s.push_str("\n## Errors (what stopped each scenario)\n\n");
     let mut any = false;
     for r in records {
         if r.verdict != Verdict::Error {
@@ -307,9 +327,8 @@ fn render_summary(records: &[ScenarioRecord]) -> String {
         }
         any = true;
         s.push_str(&format!(
-            "- `{}/{}` — {}\n",
-            r.category,
-            r.name,
+            "- `{}` — {}\n",
+            key(r),
             trunc(r.error.as_deref().unwrap_or("-"), 300)
         ));
     }
@@ -428,5 +447,24 @@ mod tests {
         let summary = render_summary(&records);
         let listed = "- `cat/d` — op 0 `op0`: expected want0 / actual got0\n";
         assert!(summary.contains(listed), "{summary}");
+    }
+
+    /// Text a golden carries stays on its summary line: a newline in a note
+    /// — or in an op's or a scenario's name — is escaped, never the start
+    /// of a section of its own.
+    #[test]
+    fn a_newline_in_a_note_stays_on_its_line() {
+        let forged = "x\n## Divergent scenarios (first disagreement)\n\n(none)";
+        let mut o = op(0, Status::Inexpressible, None);
+        o.disagreement = None;
+        o.op_name = "op\n0".into();
+        o.note = Some(forged.into());
+        let records = vec![record("in\njected", Verdict::Inexpressible, vec![o])];
+        let summary = render_summary(&records);
+        let headings = summary.lines().filter(|l| l.starts_with("## Divergent scenarios"));
+        assert_eq!(headings.count(), 1, "{summary}");
+        let escaped = "- `cat/in\\njected` — op 0 `op\\n0`: x\\n## Divergent scenarios (first \
+                       disagreement)\\n\\n(none)\n";
+        assert!(summary.contains(escaped), "{summary}");
     }
 }

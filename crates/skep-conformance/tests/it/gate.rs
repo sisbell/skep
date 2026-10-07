@@ -1,10 +1,11 @@
-//! The gate: three tests over the golden sweep.
+//! The gate: three tests over the golden sweep, and one over the ratchet
+//! file's own reading.
 //!
 //! * `harness_integrity` — the instrument works: the goldens all load, every
-//!   op yields exactly one outcome, no scenario panics the harness, and the
-//!   report and summary are written. It judges no verdict: the verdicts are
-//!   the sweep's *product*, and they reach the operators through
-//!   target/conformance/report.jsonl and summary.md.
+//!   op yields exactly one outcome, no scenario is stopped by a panic — skep's
+//!   or the harness's — and the report and summary are written. It judges no
+//!   verdict: the verdicts are the sweep's *product*, and they reach the
+//!   operators through target/conformance/report.jsonl and summary.md.
 //! * `report_is_deterministic` — every scenario replays to byte-identical
 //!   report records, so a re-run is the archive.
 //! * `conformance_ratchet` — conformance, enforced: a `divergent` or `error`
@@ -12,7 +13,11 @@
 //!   a scenario `conformance/ratchet.toml` does not freeze in that section,
 //!   and a frozen key no golden scenario carries; a `[pending]` scenario is
 //!   exempt, and reported while it does not pass. Every scenario is named
-//!   by its key, `category/name` — two goldens can share a name.
+//!   by its key, `category/name` — two goldens can share a name — and named
+//!   once: a key the file lists twice is refused as the file is read, which
+//!   `a_key_the_ratchet_lists_twice_is_refused` holds.
+
+use std::collections::HashSet;
 
 use skep_conformance::outcome::{ScenarioKey, Verdict};
 use skep_conformance::runner::run_all;
@@ -76,15 +81,18 @@ fn harness_integrity() {
         }
     }
 
-    // No scenario panics the harness. A failure here is a harness bug to
-    // fix — never a conformance finding.
+    // No scenario is stopped by a panic. Each error names who panicked: one
+    // naming skep is a failure in skep's operation surface, which must
+    // answer every request it is handed (M10's totality); any other is a
+    // harness bug. Neither is a conformance finding the allowlist could
+    // cover.
     let errors: Vec<String> = out
         .records
         .iter()
         .filter(|r| r.verdict == Verdict::Error)
         .map(|r| format!("{}: {}", r.key(), r.error.as_deref().unwrap_or("?")))
         .collect();
-    assert!(errors.is_empty(), "harness errors (harness bugs, fix them): {errors:#?}");
+    assert!(errors.is_empty(), "scenarios stopped short (skep's or the harness's): {errors:#?}");
 
     // The report and summary exist and are non-empty.
     let report = std::fs::metadata(&out.jsonl).expect("report.jsonl written");
@@ -119,8 +127,12 @@ fn report_is_deterministic() {
 /// adjudication complete: decisions.md rulings 1–15, zero divergent).
 ///
 /// `conformance/ratchet.toml` freezes the expected non-pass set, each
-/// scenario named by its key — a line naming no key is refused as the file
-/// is read. This test FAILS on any scenario that is
+/// scenario named by its key, once — a line naming no key is refused as the
+/// file is read, and so is a key already listed, in its section or another:
+/// a key copied rather than moved between sections would let it take either
+/// section's verdict, and `[pending]` exempts it from both, so the copy
+/// would widen what the gate permits with no line saying so. This test
+/// FAILS on any scenario that is
 /// `Divergent` or `Error`, on any `Allowlisted`/`Inexpressible` scenario not
 /// in the frozen lists, and on a frozen key no golden scenario carries (a
 /// renamed or removed golden would otherwise leave a line that guards
@@ -130,34 +142,10 @@ fn report_is_deterministic() {
 /// this test green.
 #[test]
 fn conformance_ratchet() {
-    use std::collections::HashSet;
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../conformance/ratchet.toml");
     let raw = std::fs::read_to_string(&path).expect("ratchet.toml must exist");
-    let mut section = String::new();
-    let (mut allow, mut inexpr, mut pending): (
-        HashSet<ScenarioKey>,
-        HashSet<ScenarioKey>,
-        HashSet<ScenarioKey>,
-    ) = Default::default();
-    for line in raw.lines() {
-        let l = line.trim();
-        if l.starts_with('#') || l.is_empty() {
-            continue;
-        } else if let Some(s) = l.strip_prefix('[').and_then(|x| x.strip_suffix(']')) {
-            section = s.to_string();
-        } else if let Some(v) = l.strip_prefix("scenario = \"").and_then(|x| x.strip_suffix('"')) {
-            let key: ScenarioKey = v.parse().unwrap_or_else(|e| panic!("ratchet.toml: {e}"));
-            match section.as_str() {
-                "allowlisted" => allow.insert(key),
-                "inexpressible" => inexpr.insert(key),
-                "pending" => pending.insert(key),
-                other => panic!("ratchet.toml: unknown section [{other}]"),
-            };
-        } else {
-            panic!("ratchet.toml: unparseable line: {l}");
-        }
-    }
+    let Frozen { allowlisted: allow, inexpressible: inexpr, pending } = frozen(&raw);
 
     let _report = report_guard();
     let out = run_all().expect("sweep must run");
@@ -208,4 +196,49 @@ fn conformance_ratchet() {
              (adjudication/decisions.md) before the frozen set may grow, and a frozen \
              key no golden carries guards nothing until it is corrected:\n{}",
             violations.join("\n"));
+}
+
+/// The verdicts `ratchet.toml` freezes: each section's keys.
+#[derive(Debug, Default)]
+struct Frozen {
+    allowlisted: HashSet<ScenarioKey>,
+    inexpressible: HashSet<ScenarioKey>,
+    pending: HashSet<ScenarioKey>,
+}
+
+/// `ratchet.toml`'s text, read into its sections — refusing, by the gate's
+/// own failure, a line it does not speak: an unknown section, a line naming
+/// no key, and a key already listed, in its section or another.
+fn frozen(raw: &str) -> Frozen {
+    let mut frozen = Frozen::default();
+    let mut section = String::new();
+    let mut listed: HashSet<ScenarioKey> = HashSet::new();
+    for line in raw.lines() {
+        let l = line.trim();
+        if l.starts_with('#') || l.is_empty() {
+            continue;
+        } else if let Some(s) = l.strip_prefix('[').and_then(|x| x.strip_suffix(']')) {
+            section = s.to_string();
+        } else if let Some(v) = l.strip_prefix("scenario = \"").and_then(|x| x.strip_suffix('"')) {
+            let key: ScenarioKey = v.parse().unwrap_or_else(|e| panic!("ratchet.toml: {e}"));
+            assert!(listed.insert(key.clone()), "ratchet.toml: `{key}` is listed twice");
+            match section.as_str() {
+                "allowlisted" => frozen.allowlisted.insert(key),
+                "inexpressible" => frozen.inexpressible.insert(key),
+                "pending" => frozen.pending.insert(key),
+                other => panic!("ratchet.toml: unknown section [{other}]"),
+            };
+        } else {
+            panic!("ratchet.toml: unparseable line: {l}");
+        }
+    }
+    frozen
+}
+
+/// A key copied between sections rather than moved is refused as the file
+/// is read: kept, it would take either section's verdict, or none.
+#[test]
+#[should_panic(expected = "ratchet.toml: `cat/a` is listed twice")]
+fn a_key_the_ratchet_lists_twice_is_refused() {
+    frozen("[allowlisted]\nscenario = \"cat/a\"\n\n[pending]\nscenario = \"cat/a\"\n");
 }

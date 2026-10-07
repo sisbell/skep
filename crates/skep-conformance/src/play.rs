@@ -732,23 +732,9 @@ impl Cx<'_> {
         let region: Vec<Span> = regions
             .iter()
             .filter_map(|r| {
-                if r.width == 0 {
-                    return None;
-                }
-                let r = if r.sub == 1 {
-                    if r.ord > text_len {
-                        clamped = true;
-                        return None;
-                    }
-                    let end = (r.ord + r.width - 1).min(text_len);
-                    if end < r.ord + r.width - 1 {
-                        clamped = true;
-                    }
-                    VRegion { width: end + 1 - r.ord, ..*r }
-                } else {
-                    *r
-                };
-                r.span()
+                let (live, cut) = clamp_query(*r, text_len);
+                clamped |= cut;
+                live?.span()
             })
             .collect();
         if region.is_empty() {
@@ -799,6 +785,27 @@ impl Cx<'_> {
             .map(|row| (row.v_ord, row.i.width))
             .collect()
     }
+}
+
+/// A recorded QUERY region narrowed to a document's live content extent of
+/// `text_len` positions (policy `query-clamped-to-extent`): what of it is
+/// live — `None` for a zero width, or a start past the extent — and whether
+/// the extent cut it. The end saturates, so a recorded width at the top of
+/// the range clamps rather than overflows. A link-subspace region passes as
+/// recorded. The one reading every query clamp in the play pass shares.
+fn clamp_query(r: VRegion, text_len: u64) -> (Option<VRegion>, bool) {
+    if r.width == 0 {
+        return (None, false);
+    }
+    if r.sub != 1 {
+        return (Some(r), false);
+    }
+    if r.ord > text_len {
+        return (None, true);
+    }
+    let last = r.ord.saturating_add(r.width - 1);
+    let end = last.min(text_len);
+    (Some(VRegion { width: end + 1 - r.ord, ..r }), end < last)
 }
 
 /// A contiguous element-level span as numbers: the I-prefix its elements
@@ -1605,5 +1612,19 @@ mod tests {
             assert_eq!(Rearrangement::with_cuts(shape.cuts()), Some(shape));
         }
         assert_eq!(Rearrangement::with_cuts(2), None);
+    }
+
+    /// A query region clamps to the live extent without overflowing, a
+    /// width at the top of the range included; a region past the extent is
+    /// cut away whole, and a link-subspace region passes as recorded.
+    #[test]
+    fn a_query_region_clamps_without_overflow() {
+        let content = |ord: u64, width: u64| VPoint::content(ord).region(width);
+        assert_eq!(clamp_query(content(2, u64::MAX), 5), (Some(content(2, 4)), true));
+        assert_eq!(clamp_query(content(2, 3), 5), (Some(content(2, 3)), false));
+        assert_eq!(clamp_query(content(2, 0), 5), (None, false));
+        assert_eq!(clamp_query(content(6, 1), 5), (None, true));
+        let link = VPoint { sub: 2, ord: 9 }.region(u64::MAX);
+        assert_eq!(clamp_query(link, 5), (Some(link), false));
     }
 }

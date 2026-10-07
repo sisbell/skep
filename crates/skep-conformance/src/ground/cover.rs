@@ -7,55 +7,45 @@
 
 use serde_json::Value;
 
-use super::SetupStep;
+use super::{held_range, SetupStep};
 use crate::fields::{field, insert_text, reads_whole_content, span_dict, str_field, verb_of, Verb};
 use crate::shadow::Shadow;
 use crate::tum::VRegion;
 
-/// Greedy cover of `expected` by substrings of the sources (copies, ≥ 4
-/// chars) with literal fillers between — the reconstruction of an
-/// unrecorded insert/vcopy interleaving. Verified downstream by the
+/// The shortest run a cover copies: a shared run below it is filler text.
+const MIN_COPY: usize = 4;
+
+/// Greedy cover of `expected` by substrings of the sources (copies, ≥
+/// [`MIN_COPY`] chars) with literal fillers between — the reconstruction of
+/// an unrecorded insert/vcopy interleaving. Verified downstream by the
 /// scenario's own compare/find ops. A matched copy never keeps trailing
 /// whitespace (round-3: content/vcopy_from_multiple_documents's own
 /// comparisons record width 8 "Source A" where the greedy match took
 /// "Source A " — the scripts copied word-shaped regions and joined with
 /// literal separators), so the maximal match is trimmed back to its last
-/// non-space byte before it drops below the copy floor.
+/// non-space byte before it drops below the copy floor. Each source's text
+/// is rendered once for the whole cover.
 pub(super) fn cover_with_sources(
     shadow: &Shadow,
     dest: &str,
     sources: &[String],
     expected: &str,
 ) -> Vec<SetupStep> {
-    const MIN_COPY: usize = 4;
     let e = expected.as_bytes();
+    let texts: Vec<(&String, String)> =
+        sources.iter().map(|src| (src, shadow.text_string(src))).collect();
     let mut steps: Vec<SetupStep> = Vec::new();
     let mut filler: Vec<u8> = Vec::new();
     let mut i = 0usize;
     while i < e.len() {
         let mut best: Option<(String, u64, usize)> = None; // (src, ord, len)
-        for src in sources {
-            let text = shadow.text_string(src);
-            let t = text.as_bytes();
-            let hi = (e.len() - i).min(t.len());
-            let mut found: Option<(u64, usize)> = None;
-            let mut lo = MIN_COPY;
-            while lo <= hi {
-                let needle = &e[i..i + lo];
-                match t.windows(lo).position(|w| w == needle) {
-                    Some(p) => {
-                        found = Some((p as u64 + 1, lo));
-                        lo += 1;
-                    }
-                    None => break,
-                }
-            }
-            if let Some((ord, mut len)) = found {
+        for (src, text) in &texts {
+            if let Some((ord, mut len)) = longest_occurring_prefix(text.as_bytes(), &e[i..]) {
                 while len > MIN_COPY && e[i + len - 1].is_ascii_whitespace() {
                     len -= 1;
                 }
                 if best.as_ref().is_none_or(|(_, _, bl)| len > *bl) {
-                    best = Some((src.clone(), ord, len));
+                    best = Some(((*src).clone(), ord, len));
                 }
             }
         }
@@ -80,6 +70,30 @@ pub(super) fn cover_with_sources(
         steps.push(SetupStep::Insert { doc: dest.to_string(), bytes: filler });
     }
     steps
+}
+
+/// The longest prefix of `needle`, [`MIN_COPY`] bytes or more, that occurs
+/// in `text`, as (the 1-based ordinal of its first occurrence, its length).
+/// Whether a prefix occurs is monotone in its length — every prefix of an
+/// occurring prefix occurs — so the length is found by bisection, each
+/// probe one scan of `text`.
+fn longest_occurring_prefix(text: &[u8], needle: &[u8]) -> Option<(u64, usize)> {
+    let first = |len: usize| text.windows(len).position(|w| *w == needle[..len]);
+    let (mut lo, mut hi) = (MIN_COPY, needle.len().min(text.len()));
+    if hi < lo {
+        return None;
+    }
+    first(lo)?;
+    // `lo` occurs; the longest prefix that does lies in [lo, hi].
+    while lo < hi {
+        let mid = lo + (hi - lo).div_ceil(2);
+        if first(mid).is_some() {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    first(lo).map(|p| (p as u64 + 1, lo))
 }
 
 /// Does a later vcopy/copy op (before `dest`'s next content probe) also
@@ -291,22 +305,70 @@ pub(super) fn cover_from_comparisons(
     let mut steps: Vec<SetupStep> = Vec::new();
     let mut at = 0usize; // 0-based cursor into expected
     for SharedPair { dest_ord, src, src_ord, width, .. } in pairs {
-        let (t0, w) = ((dest_ord - 1) as usize, width as usize);
-        if t0 < at || t0 + w > e.len() {
-            return None; // overlapping or out-of-range evidence
-        }
+        // Out-of-range evidence — an ordinal 0, an end past the probe's —
+        // or a region overlapping the last abandons the evidence path.
+        let landed = held_range(e.len(), dest_ord, width).filter(|r| r.start >= at)?;
         let src_bytes = shadow.slice(&src, src_ord, width);
-        if src_bytes != e[t0..t0 + w] {
+        if src_bytes != e[landed.clone()] {
             return None; // evidence disagrees with the probe text
         }
-        if t0 > at {
-            steps.push(SetupStep::Insert { doc: dest.to_string(), bytes: e[at..t0].to_vec() });
+        if landed.start > at {
+            let filler = e[at..landed.start].to_vec();
+            steps.push(SetupStep::Insert { doc: dest.to_string(), bytes: filler });
         }
         steps.push(SetupStep::Copy { doc: dest.to_string(), src, ord: src_ord, width });
-        at = t0 + w;
+        at = landed.end;
     }
     if at < e.len() {
         steps.push(SetupStep::Insert { doc: dest.to_string(), bytes: e[at..].to_vec() });
     }
     Some(steps)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every string over {A, B} up to `max` bytes, shortest first.
+    fn strings(max: usize) -> Vec<Vec<u8>> {
+        let mut all = vec![Vec::new()];
+        for len in 1..=max {
+            for bits in 0..1u32 << len {
+                all.push((0..len).map(|k| if bits >> k & 1 == 0 { b'A' } else { b'B' }).collect());
+            }
+        }
+        all
+    }
+
+    /// The prefix search grown one byte at a time, each length a scan of
+    /// `text` — the reference the bisection must reproduce.
+    fn grown(text: &[u8], needle: &[u8]) -> Option<(u64, usize)> {
+        let hi = needle.len().min(text.len());
+        let mut found = None;
+        let mut lo = MIN_COPY;
+        while lo <= hi {
+            match text.windows(lo).position(|w| *w == needle[..lo]) {
+                Some(p) => {
+                    found = Some((p as u64 + 1, lo));
+                    lo += 1;
+                }
+                None => break,
+            }
+        }
+        found
+    }
+
+    /// Bisection finds the longest occurring prefix, and its first
+    /// occurrence, exactly where growing it a byte at a time does — for
+    /// every text and needle over {A, B} short enough to enumerate.
+    #[test]
+    fn bisection_finds_the_prefix_growth_finds() {
+        let (texts, needles) = (strings(7), strings(6));
+        for text in &texts {
+            for needle in &needles {
+                let (t, n) = (text.as_slice(), needle.as_slice());
+                assert_eq!(longest_occurring_prefix(t, n), grown(t, n), "{t:?} / {n:?}");
+            }
+        }
+    }
 }

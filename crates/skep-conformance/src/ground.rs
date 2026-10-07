@@ -57,6 +57,7 @@
 
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::ops::Range;
 
 use serde_json::Value;
 
@@ -66,8 +67,9 @@ use crate::evidence::{
 use crate::fields::{
     aim_doc, arrow_results, as_text, cuts_of, distributed_insert_texts, distribution_targets,
     expect_strings, field, group_word, is_position_marker, locate, normalize, op_name,
-    per_doc_replies, quoted, recorded_content, resolve_position, roster, span_dict, str_field,
-    vcopy_sources, verb_of, vspec_dict, DocAim, Verb, POST_WRITE_KEYS,
+    per_doc_replies, quoted, recorded_content, recorded_count, resolve_position, roster,
+    span_dict, str_field, vcopy_sources, verb_of, vspec_dict, DocAim, Verb, BUILD_BUDGET,
+    POST_WRITE_KEYS,
 };
 use crate::shadow::Shadow;
 use crate::tum::{link_home_docid, parse_dotted, parse_vpos, parse_width, VPoint, VRegion};
@@ -184,12 +186,10 @@ pub fn ground(ops: &[Value]) -> ImpliedSetup {
                 continue;
             }
             let Some(probe) = next_content_probe(ops, 0, &sim.shadow, &dest) else { continue };
-            let b = probe.as_bytes();
-            let (t0, w) = ((dest_ord - 1) as usize, width as usize);
-            if t0 + w > b.len() {
-                continue;
-            }
-            let bytes = b[t0..t0 + w].to_vec();
+            // A region the probe does not hold — ordinal 0, or an end past
+            // the probe's — pins nothing.
+            let Some(held) = held_range(probe.len(), dest_ord, width) else { continue };
+            let bytes = probe.as_bytes()[held].to_vec();
             g.tags.push(format!(
                 "implied-setup:comparison-seed: {src} starts with {:?} (its compare against \
                  {dest} pairs that region at source ordinal 1)",
@@ -315,13 +315,14 @@ fn implied_creates(ops: &[Value]) -> Vec<String> {
                     created.push(s.to_string());
                 }
             });
-            // Prospective creations without recorded ids.
+            // Prospective creations without recorded ids — each amount an
+            // array the golden holds, or a count within the build budget.
             let explicit = field(op, &["results"])
                 .and_then(Value::as_array)
                 .map(|a| a.len() as u64)
                 .or_else(|| op.get("docs").and_then(Value::as_object).map(|m| m.len() as u64));
             created_count += explicit
-                .or_else(|| field(op, &["count"]).and_then(Value::as_u64))
+                .or_else(|| recorded_count(op).ok().flatten())
                 .or_else(|| {
                     field(op, &["targets"]).and_then(Value::as_array).map(|a| a.len() as u64)
                 })
@@ -358,88 +359,103 @@ fn implied_creates(ops: &[Value]) -> Vec<String> {
     out
 }
 
-/// Undo the recorded edits (latest first) from a probed content string back
-/// to the doc's initial content. Every removal is verified byte-for-byte;
-/// any mismatch aborts the inference. Recursive because a delete's undo has
-/// two candidate reinsertion points (the recorded ordinal, and the end for
-/// the seed-shifted append shape) — the candidate that lets the REST of the
-/// chain verify wins; depth is the edit count (single digits).
-fn undo_to_initial(probed: &str, edits: &[Edit]) -> Option<Vec<u8>> {
-    undo_edits(probed.as_bytes().to_vec(), edits)
+/// The byte range `[ord, ord + width)` names in a `len`-byte text,
+/// 1-based: `None` when the text does not hold all of it — an ordinal 0, or
+/// an end past the text's, however large the recorded numbers. The one
+/// reading every recorded region a reconstruction slices goes through.
+fn held_range(len: usize, ord: u64, width: u64) -> Option<Range<usize>> {
+    let start = usize::try_from(ord.checked_sub(1)?).ok()?;
+    let end = start.checked_add(usize::try_from(width).ok()?)?;
+    (end <= len).then_some(start..end)
 }
 
-fn undo_edits(cur: Vec<u8>, edits: &[Edit]) -> Option<Vec<u8>> {
-    let Some((last, rest)) = edits.split_last() else { return Some(cur) };
-    match last {
-        Edit::Ins { at, bytes } => {
-            let n = bytes.len();
-            let start = match at {
-                Some(ord) => (*ord as usize).checked_sub(1)?,
-                None => cur.len().checked_sub(n)?,
-            };
-            if start + n > cur.len() || &cur[start..start + n] != bytes.as_slice() {
-                return None;
+/// Undo the recorded edits (latest first) from a probed content string back
+/// to the doc's initial content. Every removal is verified byte-for-byte;
+/// any mismatch abandons the path it lies on. A delete's undo has two
+/// candidate reinsertion points (the recorded ordinal, and the end for the
+/// seed-shifted append shape), and the candidate that lets the REST of the
+/// chain verify wins: a depth-first search over those choices, on an
+/// explicit stack, so a log's length costs heap and never the thread's
+/// stack. A log holding a write whose effect the walk never knew is refused
+/// before any search — every path through such a write fails, so no
+/// placement of the deletes above it is tried in vain.
+fn undo_to_initial(probed: &str, edits: &[Edit]) -> Option<Vec<u8>> {
+    // A delete whose removed bytes the walk never knew cannot be undone:
+    // reinserting nothing would hand back the post-delete content as the
+    // seed, a world no recorded op built. Nor can a write the walk could not
+    // reproduce at all.
+    if edits.iter().any(|e| matches!(e, Edit::Del { bytes: None, .. } | Edit::Opaque)) {
+        return None;
+    }
+    // Each entry: the edits still to undo, and the content so far.
+    let mut stack: Vec<(&[Edit], Vec<u8>)> = vec![(edits, probed.as_bytes().to_vec())];
+    while let Some((edits, cur)) = stack.pop() {
+        let Some((last, rest)) = edits.split_last() else { return Some(cur) };
+        match last {
+            Edit::Ins { at, bytes } => {
+                let held = match at {
+                    Some(ord) => held_range(cur.len(), *ord, bytes.len() as u64),
+                    None => cur.len().checked_sub(bytes.len()).map(|start| start..cur.len()),
+                };
+                let Some(held) = held.filter(|h| cur[h.clone()] == bytes[..]) else { continue };
+                let mut next = cur;
+                next.drain(held);
+                stack.push((rest, next));
             }
-            let mut next = cur;
-            next.drain(start..start + n);
-            undo_edits(next, rest)
-        }
-        // A delete whose removed bytes the walk never knew cannot be
-        // undone: reinserting nothing would hand back the post-delete
-        // content as the seed, a world no recorded op built. Nor can a
-        // write the walk could not reproduce at all.
-        Edit::Del { bytes: None, .. } | Edit::Opaque => None,
-        Edit::Del { at, bytes: Some(bytes), explicit } => {
-            // Candidate reinsertion points. Explicit (client-sent) position:
-            // the recorded ordinal first — it is authoritative (isolation/
-            // delete_does_not_affect_other_documents "1.3 for 0.5 (CDEFG)"
-            // must reinsert at 3, not the end). Text-located: the end first
-            // (a seed prefix shifts an append-built doc's delete rightward —
-            // the recorded position undercounts by the seed length).
-            let rec = (*at as usize).saturating_sub(1).min(cur.len());
-            let mut cands =
-                if *explicit { vec![rec, cur.len()] } else { vec![cur.len(), rec] };
-            cands.dedup();
-            for k in cands {
-                let mut next = cur.clone();
-                next.splice(k..k, bytes.iter().copied());
-                if let Some(initial) = undo_edits(next, rest) {
-                    return Some(initial);
+            Edit::Del { bytes: None, .. } | Edit::Opaque => {} // refused before the search
+            Edit::Del { at, bytes: Some(bytes), explicit } => {
+                // Candidate reinsertion points. Explicit (client-sent)
+                // position: the recorded ordinal first — it is
+                // authoritative (isolation/delete_does_not_affect_other_
+                // documents "1.3 for 0.5 (CDEFG)" must reinsert at 3, not the
+                // end). Text-located: the end first (a seed prefix shifts an
+                // append-built doc's delete rightward — the recorded position
+                // undercounts by the seed length). Pushed last-first, so the
+                // first is tried first.
+                let rec = (*at as usize).saturating_sub(1).min(cur.len());
+                let mut cands =
+                    if *explicit { vec![rec, cur.len()] } else { vec![cur.len(), rec] };
+                cands.dedup();
+                for k in cands.into_iter().rev() {
+                    let mut next = cur.clone();
+                    next.splice(k..k, bytes.iter().copied());
+                    stack.push((rest, next));
                 }
             }
-            None
-        }
-        Edit::Pivot { a, b, c } => {
-            // pivot(a,b,c) moved [b,c) before [a,b); inverse is
-            // pivot(a, a+(c-b), c). Degenerate cuts (zero, non-monotone,
-            // out of range) were a Shadow::pivot no-op in the forward
-            // sim, so the undo mirrors the no-op rather than underflow
-            // on c - b: udanax ACCEPTED such calls with effects the
-            // shadow does not model (rearrange_semantics/
-            // pivot_v3_inside_source records cuts (2,4,3) succeeding),
-            // and the resulting probe mismatch then aborts inference
-            // honestly at the insert undo. Pivot preserves length, so
-            // cur.len() here is the length the forward call saw.
-            let mut next = cur;
-            if *a > 0 && a <= b && b <= c && *c as usize <= next.len() + 1 {
-                let mut s = scratch(&next);
-                s.pivot("x", *a, a + (c - b), *c);
-                next = s.text_string("x").into_bytes();
+            Edit::Pivot { a, b, c } => {
+                // pivot(a,b,c) moved [b,c) before [a,b); inverse is
+                // pivot(a, a+(c-b), c). Degenerate cuts (zero, non-monotone,
+                // out of range) were a Shadow::pivot no-op in the forward
+                // sim, so the undo mirrors the no-op rather than underflow
+                // on c - b: udanax ACCEPTED such calls with effects the
+                // shadow does not model (rearrange_semantics/
+                // pivot_v3_inside_source records cuts (2,4,3) succeeding),
+                // and the resulting probe mismatch then aborts inference
+                // honestly at the insert undo. Pivot preserves length, so
+                // cur.len() here is the length the forward call saw.
+                let mut next = cur;
+                if *a > 0 && a <= b && b <= c && *c as usize <= next.len() + 1 {
+                    let mut s = scratch(&next);
+                    s.pivot("x", *a, a + (c - b), *c);
+                    next = s.text_string("x").into_bytes();
+                }
+                stack.push((rest, next));
             }
-            undo_edits(next, rest)
-        }
-        Edit::Swap { s1, e1, s2, e2 } => {
-            // Same no-op mirror of Shadow::swap's guard as Pivot above.
-            let mut next = cur;
-            if *s1 > 0 && s1 <= e1 && e1 <= s2 && s2 <= e2 && *e2 as usize <= next.len() + 1 {
-                let (w1, w2) = (e1 - s1, e2 - s2);
-                let mut s = scratch(&next);
-                s.swap("x", *s1, s1 + w2, s2 + w2 - w1, *e2);
-                next = s.text_string("x").into_bytes();
+            Edit::Swap { s1, e1, s2, e2 } => {
+                // Same no-op mirror of Shadow::swap's guard as Pivot above.
+                let mut next = cur;
+                if *s1 > 0 && s1 <= e1 && e1 <= s2 && s2 <= e2 && *e2 as usize <= next.len() + 1
+                {
+                    let (w1, w2) = (e1 - s1, e2 - s2);
+                    let mut s = scratch(&next);
+                    s.swap("x", *s1, s1 + w2, s2 + w2 - w1, *e2);
+                    next = s.text_string("x").into_bytes();
+                }
+                stack.push((rest, next));
             }
-            undo_edits(next, rest)
         }
     }
+    None
 }
 
 fn scratch(bytes: &[u8]) -> Shadow {
@@ -695,8 +711,14 @@ impl Sim {
 
     fn sim_insert_loop(&mut self, op: &Value) {
         let Some(doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
-        let count = field(op, &["count"]).and_then(Value::as_u64).unwrap_or(0);
-        let bytes: Vec<u8> = (0..count).map(|k| b'A' + (k % 26) as u8).collect();
+        // A count past the build budget is an op the play pass refuses, so
+        // its bytes are never built here either; the write udanax made is
+        // unknown to the walk, and no undo crosses it.
+        let Ok(count) = recorded_count(op) else {
+            self.record(&doc, Edit::Opaque);
+            return;
+        };
+        let bytes: Vec<u8> = (0..count.unwrap_or(0)).map(|k| b'A' + (k % 26) as u8).collect();
         let end = self.shadow.text_len(&doc) + 1;
         self.shadow.insert(&doc, end, &bytes);
         self.record(&doc, Edit::Ins { at: None, bytes });
@@ -954,8 +976,10 @@ impl Sim {
             .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
             .unwrap_or_default();
         let group = group_word(op);
-        let count = field(op, &["count"])
-            .and_then(Value::as_u64)
+        // A count past the build budget is an op the play pass refuses:
+        // nothing is created here either.
+        let Ok(count) = recorded_count(op) else { return };
+        let count = count
             .map(|c| c as usize)
             .unwrap_or_else(|| results.len().max(names.len()).max(1));
         let mut created_here: Vec<String> = Vec::new();
@@ -1371,13 +1395,16 @@ impl Sim {
         // 3. Recorded pair landing PAST the append position, matching this
         //    op's own source span: the gap is an unrecorded prefix insert
         //    (content/vcopy_preserves_identity: the copy landed at 9, so 8
-        //    filler bytes precede it; no probe records them, so spaces).
+        //    filler bytes precede it; no probe records them, so spaces). A
+        //    gap past the build budget is filler no comparison could read,
+        //    so it is never built.
         if spec_list.len() == 1 {
             let (s0, o0, w0) = &spec_list[0];
-            if let Some(p) = pairs
-                .iter()
-                .find(|p| p.dest_ord > o && (&p.src, &p.src_ord, &p.width) == (s0, o0, w0))
-            {
+            if let Some(p) = pairs.iter().find(|p| {
+                p.dest_ord > o
+                    && p.dest_ord - o <= BUILD_BUDGET
+                    && (&p.src, &p.src_ord, &p.width) == (s0, o0, w0)
+            }) {
                 let fill = (p.dest_ord - o) as usize;
                 let bytes = match &probe {
                     Some(p) if p.len() >= (o - 1) as usize + fill => {
@@ -1418,7 +1445,9 @@ impl Sim {
                 if end < rprime {
                     if let Some((ls, lo, lw)) = spec_list.last() {
                         let need = (rprime - end) as u64;
-                        let cont = self.shadow.slice(ls, lo + lw, need);
+                        // Saturating: a recorded span at the top of the
+                        // range continues into nothing.
+                        let cont = self.shadow.slice(ls, lo.saturating_add(*lw), need);
                         if cont.len() as u64 == need
                             && cont == r.as_bytes()[end..rprime]
                         {
@@ -1573,7 +1602,9 @@ fn follow_landing_text(ops: &[Value], shadow: &Shadow, doc: &str) -> Option<Stri
 /// ops' source_text/target_text supply the bytes those spans held — each
 /// text is placed at the recorded ordinal whose width equals its length,
 /// gaps filled with spaces. Constructible only when EVERY recorded span
-/// finds a width-matched text (never fabricate).
+/// finds a width-matched text (never fabricate), and every span lies within
+/// reach: an ordinal 0, or an end past the build budget, is a span no seed
+/// can hold, and builds nothing.
 fn endset_anchored_seed(ops: &[Value], shadow: &Shadow, doc: &str) -> Option<Vec<u8>> {
     let mut spans: Vec<(u64, u64)> = Vec::new();
     for op in ops {
@@ -1587,6 +1618,10 @@ fn endset_anchored_seed(ops: &[Value], shadow: &Shadow, doc: &str) -> Option<Vec
                     if docid == doc || shadow.resolve_doc(&docid).as_deref() == Some(doc) {
                         for r in regions {
                             if r.sub == 1 && r.width > 0 {
+                                let last = r.ord.checked_add(r.width - 1)?;
+                                if r.ord == 0 || last > BUILD_BUDGET {
+                                    return None;
+                                }
                                 spans.push((r.ord, r.width));
                             }
                         }
@@ -1711,88 +1746,4 @@ fn result_str(op: &Value) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    /// A delete is undone only with the bytes it is known to have removed,
-    /// reinserted at its pinned ordinal; one whose bytes the walk never
-    /// knew stops the undo instead of handing back the post-delete content
-    /// as the seed.
-    #[test]
-    fn a_delete_is_undone_only_with_the_bytes_it_removed() {
-        let known = [Edit::Del { at: 11, bytes: Some(b"Shared ".to_vec()), explicit: true }];
-        let seed = undo_to_initial("B prefix: content", &known);
-        assert_eq!(seed.as_deref(), Some(&b"B prefix: Shared content"[..]));
-        let unknown = [Edit::Del { at: 11, bytes: None, explicit: true }];
-        assert_eq!(undo_to_initial("B prefix: content", &unknown), None);
-    }
-
-    /// A delete's own description names its removed bytes — a trailing
-    /// parenthetical, else a quoted segment — only at exactly its width.
-    #[test]
-    fn a_described_delete_names_its_bytes_at_its_width() {
-        let quoted = json!({"op": "remove", "span": "1.11 for 0.7 (delete 'Shared ')"});
-        assert_eq!(delete_described_bytes(&quoted, 7), Some(b"Shared ".to_vec()));
-        assert_eq!(delete_described_bytes(&quoted, 8), None);
-        let parenthetical = json!({"op": "delete", "span": "1.3 for 0.5 (CDEFG)"});
-        assert_eq!(delete_described_bytes(&parenthetical, 5), Some(b"CDEFG".to_vec()));
-    }
-
-    /// An insert is undone only where its recorded bytes still stand — at
-    /// the end it appended to, or the ordinal it was placed at; a write the
-    /// walk could not reproduce stops the undo.
-    #[test]
-    fn an_undo_that_does_not_find_the_recorded_bytes_aborts() {
-        let appended = [Edit::Ins { at: None, bytes: b"CD".to_vec() }];
-        assert_eq!(undo_to_initial("ABCD", &appended).as_deref(), Some(&b"AB"[..]));
-        assert_eq!(undo_to_initial("ABXY", &appended), None);
-        let placed = [Edit::Ins { at: Some(2), bytes: b"X".to_vec() }];
-        assert_eq!(undo_to_initial("AXB", &placed).as_deref(), Some(&b"AB"[..]));
-        assert_eq!(undo_to_initial("ABX", &placed), None);
-        let longer = [Edit::Ins { at: None, bytes: b"ABCDE".to_vec() }];
-        assert_eq!(undo_to_initial("AB", &longer), None);
-        assert_eq!(undo_to_initial("AB", &[Edit::Opaque]), None);
-    }
-
-    /// Undoing a pivot or a swap restores the text the shadow rearranged,
-    /// for every cut set over a six-byte text — the degenerate and
-    /// out-of-range cuts included, which rearrange nothing either way.
-    #[test]
-    fn undoing_a_rearrangement_restores_the_text_for_every_cut_set() {
-        const TEXT: &[u8] = b"ABCDEF";
-        let undone = |rearrange: &dyn Fn(&mut Shadow), edit: Edit| {
-            let mut s = scratch(TEXT);
-            rearrange(&mut s);
-            undo_to_initial(&s.text_string("x"), &[edit])
-        };
-        // Every cut in 0..=8: below, inside and past the text's 1..=7.
-        for n in 0..9u64.pow(3) {
-            let (a, b, c) = (n / 81, n / 9 % 9, n % 9);
-            let pivoted = undone(&|s| s.pivot("x", a, b, c), Edit::Pivot { a, b, c });
-            assert_eq!(pivoted.as_deref(), Some(TEXT), "pivot {a},{b},{c}");
-            for d in 0..=8 {
-                let swap = Edit::Swap { s1: a, e1: b, s2: c, e2: d };
-                let swapped = undone(&|s| s.swap("x", a, b, c, d), swap);
-                assert_eq!(swapped.as_deref(), Some(TEXT), "swap {a},{b},{c},{d}");
-            }
-        }
-    }
-
-    /// A version is never seeded: its content at creation is its source's,
-    /// which the recorded create_version provides — however its probe
-    /// disagrees, no document is minted under its address.
-    #[test]
-    fn a_version_is_never_seeded_as_a_document() {
-        let ops = [
-            json!({"op": "create_document", "doc": "source", "result": "1.1.0.1.0.1"}),
-            json!({"op": "insert", "doc": "source", "text": "AB"}),
-            json!({"op": "create_version", "from": "source", "result": "1.1.0.1.0.1.1"}),
-            json!({"op": "retrieve_contents", "doc": "1.1.0.1.0.1.1", "result": ["XY"]}),
-        ];
-        let setup = ground(&ops);
-        assert!(setup.lead_in.is_empty(), "{:?}", setup.lead_in);
-        assert!(setup.tags.is_empty(), "{:?}", setup.tags);
-    }
-}
+mod tests;

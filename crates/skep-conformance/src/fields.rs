@@ -38,7 +38,8 @@ use serde_json::Value;
 
 use crate::shadow::Shadow;
 use crate::tum::{
-    is_link_address, link_home_docid, parse_dotted, parse_vpos, parse_width, VPoint, VRegion,
+    is_golden_address, is_link_address, link_home_docid, parse_dotted, parse_vpos, parse_width,
+    VPoint, VRegion,
 };
 
 // ───────────────────────────── raw field access ────────────────────────────
@@ -383,23 +384,27 @@ fn link_item(v: &Value) -> Option<String> {
 }
 
 /// The bytes a recorded content reply names, its strings joined — `None`
-/// when any string is a golden address or a recording-client python repr
-/// ("<VSpan in … at 0 for 0>", "<SpecSet […]>"), neither of which is ever
-/// content-subspace bytes. Every reader of recorded content as document
-/// text goes through here: round 3 seeded documents/retrieve_vspan_empty's
-/// doc with the 33-byte repr of its own empty vspan when one reader took
-/// the string at face value.
+/// when any string is a golden address ([`is_golden_address`]) or a
+/// recording-client python repr ("<VSpan in … at 0 for 0>", "<SpecSet
+/// […]>"), neither of which is ever content-subspace bytes. Every reader of
+/// recorded content as document text goes through here: round 3 seeded
+/// documents/retrieve_vspan_empty's doc with the 33-byte repr of its own
+/// empty vspan when one reader took the string at face value. Text that
+/// merely looks dotted or bracketed — a version chain's "0123456789.1", a
+/// "<b>" — is text, and is compared.
 pub fn as_text(strings: &[String]) -> Option<String> {
-    let addressed = |s: &String| s.contains('.') && parse_dotted(s).is_some();
-    if strings.iter().any(|s| addressed(s) || is_python_repr(s)) {
+    if strings.iter().any(|s| is_golden_address(s) || is_python_repr(s)) {
         return None;
     }
     Some(strings.concat())
 }
 
-/// A recording-client python `repr` captured verbatim.
+/// A recording-client python `repr` captured verbatim: one of the four
+/// forms client.py renders, which [`parse_python_spec`] reads — never text
+/// that merely sits between angle brackets.
 fn is_python_repr(s: &str) -> bool {
-    s.starts_with('<') && s.ends_with('>')
+    const FORMS: &[&str] = &["<VSpan ", "<VSpec ", "<Span ", "<SpecSet "];
+    s.ends_with('>') && FORMS.iter().any(|form| s.starts_with(form))
 }
 
 /// The keys a content read's recorded answer lives under, in the order they
@@ -528,6 +533,27 @@ pub fn client_side_failure(op: &Value) -> Option<&str> {
 }
 
 // ────────────────────────────── op arguments ───────────────────────────────
+
+/// The most a single recorded NUMBER may make the harness build: bytes for
+/// one document out of no recorded bytes (`insert_loop`'s A–Z cycle, a
+/// pre-pass filler or seed), or documents out of one `count`. It is skep's
+/// delivery budget: every whole-document comparison here is one RETRIEVEV,
+/// which skep refuses past `MAX_DELIVERY_ITEMS` values (M6), so past it the
+/// number orders work no comparison can use, and the op is refused instead
+/// of built.
+pub const BUILD_BUDGET: u64 = skep_retrieval::MAX_DELIVERY_ITEMS as u64;
+
+/// An op's recorded `count`: `Ok(None)` when it records none; an `Err`
+/// naming the count and the budget when it is past [`BUILD_BUDGET`].
+pub fn recorded_count(op: &Value) -> Result<Option<u64>, String> {
+    match field(op, &["count"]).and_then(Value::as_u64) {
+        Some(n) if n > BUILD_BUDGET => Err(format!(
+            "recorded count {n} is past the build budget of {BUILD_BUDGET} (skep's delivery \
+             budget: no comparison could read what it would build)"
+        )),
+        n => Ok(n),
+    }
+}
 
 /// The inserted text: field, strings array, or carried by the op's name
 /// (`insert_1_AAA` = ordinal 1 text AAA; `insert_A` = text A).
@@ -1487,10 +1513,13 @@ pub fn vcopy_sources(
             adaptations.push("whole-extent".into());
             push(&from, VPoint::content(1).region(n));
         } else if let Some(l) = locate(shadow, None, s) {
-            let l = if l.ord + l.width > shadow.text_len(&l.doc) + 1 {
+            // A described region's end, saturating: a recorded ordinal or
+            // width at the top of the range lies outside every extent.
+            let within =
+                |c: &Located| c.ord.saturating_add(c.width) <= shadow.text_len(&c.doc) + 1;
+            let l = if !within(&l) {
                 match shadow.content_docs_except(&dest_ref).iter().find_map(|d| {
-                    locate(shadow, Some(d.as_str()), s)
-                        .filter(|c| c.ord + c.width <= shadow.text_len(&c.doc) + 1)
+                    locate(shadow, Some(d.as_str()), s).filter(within)
                 }) {
                     Some(re) => {
                         adaptations.push("vcopy-source-reaimed".into());

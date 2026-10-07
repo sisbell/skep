@@ -24,7 +24,8 @@ use crate::evidence::{
 };
 use crate::fields::{
     cuts_of, distributed_insert_texts, distribution_targets, expect_strings, expected_failure,
-    field, is_position_marker, resolve_position, str_field, vcopy_sources, verb_of, Verb,
+    field, is_position_marker, recorded_count, resolve_position, str_field, vcopy_sources,
+    verb_of, Verb,
 };
 use crate::outcome::{Disagreement, OpOutcome, Status};
 use crate::tum::{parse_vpos, VPoint};
@@ -129,12 +130,21 @@ pub(super) fn h_insert_loop(
     out: &mut OpOutcome,
     adjustments: &Adjustments,
 ) {
+    // The count is recognized before anything acts on the op: one past the
+    // build budget orders work no comparison can read.
+    let count = match recorded_count(op) {
+        Ok(Some(count)) => count,
+        Ok(None) => {
+            inexpressible(out, "insert_loop without a count".into());
+            return;
+        }
+        Err(past_budget) => {
+            inexpressible(out, past_budget);
+            return;
+        }
+    };
     let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
         inexpressible(out, "insert_loop with no document in scope".into());
-        return;
-    };
-    let Some(count) = field(op, &["count"]).and_then(Value::as_u64) else {
-        inexpressible(out, "insert_loop without a count".into());
         return;
     };
     // The recorded sample (edgecases/many_small_inserts) shows A–Z cycling,

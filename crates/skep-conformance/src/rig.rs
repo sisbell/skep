@@ -1,6 +1,12 @@
 //! The rig: one fresh engine + operation surface per scenario, the session
 //! and account plumbing, and the harness-owned types document.
 //!
+//! Every request reaches skep through one door, [`execute`] — the crate's
+//! only call of `OperationSurface::execute`, which `tests/it/tidy.rs` holds
+//! it to. M10 answers every request it is handed; a panic raised inside the
+//! surface instead leaves the door as an [`EnginePanic`] naming the request,
+//! so the runner reports a failure in skep, never a harness bug.
+//!
 //! Durability choice: `Durability::InMemory`. This instrument compares
 //! OPERATION SEMANTICS, not durability — every scenario runs start-to-finish
 //! in one process with no restart, so the journal would never be read back;
@@ -9,18 +15,59 @@
 //! also needs no temp directory, removing a whole class of environment
 //! failures from a 263-scenario run.
 
+use std::any::Any;
+use std::collections::BTreeMap;
+use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
+
 use skep_address::Address;
 use skep_arrangement::VSpec;
 use skep_content::Val;
 use skep_engine::{Engine, World};
-use skep_febe::{Deposit, Op, OperationSurface, Request, Response, SessionId};
+use skep_febe::{Deposit, Op, OpKind, OperationSurface, Request, Response, SessionId};
 use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
 use skep_links::{Endset, SlotArg};
 use skep_namespace::PrincipalId;
 
-use std::collections::BTreeMap;
-
 use crate::tum::{addr, VPoint};
+
+/// A panic raised inside skep's operation surface while it executed one
+/// request: the payload such a panic resumes with once it leaves the rig's
+/// door, so the runner reports skep, not the harness.
+#[derive(Debug)]
+pub struct EnginePanic {
+    /// The kind of the request skep was executing.
+    pub kind: OpKind,
+    /// The panic's own message ([`panic_message`]).
+    pub message: String,
+}
+
+/// One request through skep's operation surface: the crate's only call of
+/// `OperationSurface::execute`. A panic inside it resumes as an
+/// [`EnginePanic`] naming the request's kind.
+fn execute(febe: &OperationSurface<World>, session: SessionId, op: Op) -> Response {
+    let kind = op.kind();
+    let req = Request::from(op);
+    guard(kind, move || febe.execute(session, req))
+}
+
+/// `f`, with any panic it raises resumed as skep's [`EnginePanic`]. The
+/// surface that panicked is never asked again: the panic unwinds out of the
+/// scenario, whose rig is dropped with it.
+fn guard(kind: OpKind, f: impl FnOnce() -> Response) -> Response {
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(r) => r,
+        Err(p) => resume_unwind(Box::new(EnginePanic { kind, message: panic_message(&*p) })),
+    }
+}
+
+/// A panic payload's message: a `String` or `&str`, else a placeholder.
+pub fn panic_message(payload: &(dyn Any + Send)) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_else(|| "panic with non-string payload".to_string())
+}
 
 /// The content positions the types document holds: one per link-type name
 /// a scenario names (policy `types_document`).
@@ -95,22 +142,24 @@ impl Rig {
         session: SessionId,
         account: &Address,
     ) -> Result<Address, RigError> {
-        let home = match febe.execute(
+        let home = match execute(
+            febe,
             session,
-            Request::from(Op::CreateNewDocument { account: account.clone(), published: None }),
+            Op::CreateNewDocument { account: account.clone(), published: None },
         ) {
             Response::AckAddr { addr, .. } => addr,
             other => return Err(format!("home mint failed: {}", brief(&other))),
         };
-        match febe.execute(
+        match execute(
+            febe,
             session,
-            Request::from(Op::MakeLink {
+            Op::MakeLink {
                 home: home.clone(),
                 from: SlotArg::Addrs(vec![account.clone()]),
                 to: SlotArg::Addrs(vec![]),
                 ty: SlotArg::Addrs(vec![t_grant()]),
                 replaces: None,
-            }),
+            },
         ) {
             Response::AckAddr { .. } => Ok(home),
             other => Err(format!("setup grant failed: {}", brief(&other))),
@@ -131,7 +180,7 @@ impl Rig {
         session: SessionId,
         account: &Address,
     ) -> Result<Address, RigError> {
-        let exec = |op: Op| febe.execute(session, Request::from(op));
+        let exec = |op: Op| execute(febe, session, op);
         let mint = Op::CreateNewDocument { account: account.clone(), published: Some(false) };
         let doc = match exec(mint) {
             Response::AckAddr { addr, .. } => addr,
@@ -164,18 +213,14 @@ impl Rig {
         // Delegate the scenario's working account under node [1] — udanax's
         // DEFAULT_ACCOUNT analog. The α seed "1.1.0.1" ↦ this account is
         // installed by the runner.
-        let prefix = match febe
-            .execute(boot, Request::from(Op::NextAccountPrefix { parent: node_one() }))
-        {
+        let prefix = match execute(&febe, boot, Op::NextAccountPrefix { parent: node_one() }) {
             Response::MaybeAddr { addr: Some(a), .. } => a,
             other => return Err(format!("next-account-prefix failed: {}", brief(&other))),
         };
-        let account = match febe.execute(
+        let account = match execute(
+            &febe,
             boot,
-            Request::from(Op::Delegate {
-                new_prefix: prefix.tumbler().clone(),
-                new_id: PrincipalId(1),
-            }),
+            Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: PrincipalId(1) },
         ) {
             Response::AckAddr { addr, .. } => addr,
             other => return Err(format!("bootstrap delegate failed: {}", brief(&other))),
@@ -202,10 +247,11 @@ impl Rig {
         })
     }
 
-    /// Execute one request under the current session. No idempotency key —
-    /// the harness replays a linear script.
+    /// Execute one request under the current session, through the door
+    /// ([`execute`]). No idempotency key — the harness replays a linear
+    /// script.
     pub fn exec(&self, o: Op) -> Response {
-        self.febe.execute(self.current_session, Request::from(o))
+        execute(&self.febe, self.current_session, o)
     }
 
     /// Create one scenario document: CREATENEWDOCUMENT in the current
@@ -304,19 +350,15 @@ impl Rig {
     /// belongs to the principal this rig delegated it to.
     fn delegate(&mut self, parent: &Address) -> Result<(Address, SessionId), String> {
         let owner_session = self.sessions.get(parent).map(|(s, _)| *s).unwrap_or(self.boot);
-        let prefix = match self.febe.execute(
-            owner_session,
-            Request::from(Op::NextAccountPrefix { parent: parent.clone() }),
-        ) {
+        let next = Op::NextAccountPrefix { parent: parent.clone() };
+        let prefix = match execute(&self.febe, owner_session, next) {
             Response::MaybeAddr { addr: Some(a), .. } => a,
             other => return Err(format!("next-account-prefix: {}", brief(&other))),
         };
         let id = PrincipalId(self.next_principal);
         self.next_principal += 1;
-        let account = match self.febe.execute(
-            owner_session,
-            Request::from(Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: id }),
-        ) {
+        let delegate = Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: id };
+        let account = match execute(&self.febe, owner_session, delegate) {
             Response::AckAddr { addr, .. } => addr,
             other => return Err(format!("delegate: {}", brief(&other))),
         };
@@ -468,5 +510,15 @@ mod tests {
         for scenario in [doc.clone(), element_of(&doc)] {
             assert!(!rig.is_infra_addr(&scenario), "{scenario} is the scenario's own");
         }
+    }
+
+    /// A panic inside the surface leaves the door as skep's own, naming the
+    /// request's kind and carrying the panic's message.
+    #[test]
+    fn a_panic_inside_the_surface_resumes_as_skeps() {
+        let payload = catch_unwind(|| guard(OpKind::Insert, || -> Response { panic!("boom") }))
+            .expect_err("the panic propagates");
+        let panic = payload.downcast::<EnginePanic>().expect("resumed as skep's panic");
+        assert_eq!((panic.kind, panic.message.as_str()), (OpKind::Insert, "boom"));
     }
 }

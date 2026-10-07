@@ -14,6 +14,16 @@
 //! which state that rule.
 
 use std::collections::BTreeMap;
+use std::ops::Range;
+
+/// The bytes `[ord, ord + width)` name in a `len`-byte text: 1-based,
+/// clamped to the text and saturating at both ends, so no recorded ordinal
+/// or width (`u64::MAX` included) panics a read or an edit of the mirror.
+fn byte_range(len: usize, ord: u64, width: u64) -> Range<usize> {
+    let fit = |n: u64| usize::try_from(n).unwrap_or(usize::MAX);
+    let start = fit(ord.saturating_sub(1)).min(len);
+    start..start.saturating_add(fit(width)).min(len)
+}
 
 /// Per-document shadow state, keyed by GOLDEN docid string.
 #[derive(Clone, Debug, Default)]
@@ -309,20 +319,20 @@ impl Shadow {
     }
 
     // ── the edit mirror (pure sequence bookkeeping, matching the recorded
-    //    udanax semantics: 1-based ordinals, half-open ranges) ──
+    //    udanax semantics: 1-based ordinals, half-open ranges, each clamped
+    //    to the text by `byte_range`) ──
 
     pub fn insert(&mut self, golden: &str, ord: u64, bytes: &[u8]) {
         let d = self.docs.entry(golden.to_string()).or_default();
-        let i = (ord.saturating_sub(1) as usize).min(d.text.len());
+        let i = byte_range(d.text.len(), ord, 0).start;
         d.text.splice(i..i, bytes.iter().copied());
         self.last_written = Some(golden.to_string());
     }
 
     pub fn delete(&mut self, golden: &str, ord: u64, width: u64) {
         if let Some(d) = self.docs.get_mut(golden) {
-            let s = (ord.saturating_sub(1) as usize).min(d.text.len());
-            let e = (s + width as usize).min(d.text.len());
-            d.text.drain(s..e);
+            let removed = byte_range(d.text.len(), ord, width);
+            d.text.drain(removed);
             self.last_written = Some(golden.to_string());
         }
     }
@@ -330,11 +340,7 @@ impl Shadow {
     /// Bytes covered by [ord, ord+width) — for vcopy source capture.
     pub fn slice(&self, golden: &str, ord: u64, width: u64) -> Vec<u8> {
         match self.docs.get(golden) {
-            Some(d) => {
-                let s = (ord.saturating_sub(1) as usize).min(d.text.len());
-                let e = (s + width as usize).min(d.text.len());
-                d.text[s..e].to_vec()
-            }
+            Some(d) => d.text[byte_range(d.text.len(), ord, width)].to_vec(),
             None => Vec::new(),
         }
     }
@@ -487,5 +493,21 @@ mod tests {
         assert_eq!(s.resolve_doc("1.1.0.1.0.1.0.2.1"), None);
         assert!(Shadow::is_role_name("version") && Shadow::is_role_name("C"));
         assert!(!Shadow::is_role_name("empty doc") && !Shadow::is_role_name("doc2_notes"));
+    }
+
+    /// The mirror clamps every recorded extreme to its text: a width or an
+    /// ordinal at the top of the range reads, deletes and inserts within
+    /// the text, never past it and never by panicking.
+    #[test]
+    fn the_mirror_clamps_every_recorded_extreme() {
+        let mut s = Shadow::new();
+        s.create_doc(SOURCE, None);
+        s.insert(SOURCE, 1, b"ABC");
+        assert_eq!(s.slice(SOURCE, 2, u64::MAX), b"BC");
+        assert_eq!(s.slice(SOURCE, u64::MAX, 1), b"");
+        s.delete(SOURCE, 2, u64::MAX);
+        assert_eq!(s.text_string(SOURCE), "A");
+        s.insert(SOURCE, u64::MAX, b"X");
+        assert_eq!(s.text_string(SOURCE), "AX");
     }
 }

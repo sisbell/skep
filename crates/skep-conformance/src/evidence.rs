@@ -242,16 +242,28 @@ pub fn insert_pad_width(
 pub fn insert_pos_from_post_state(op: &Value, shadow: &Shadow, doc: &str, text: &str) -> Option<u64> {
     let post = as_text(&expect_strings(field(op, POST_WRITE_KEYS)?)?)?;
     let pre = shadow.text_string(doc);
-    if post.len() != pre.len() + text.len() || text.is_empty() {
+    if text.is_empty() || post == format!("{pre}{text}") {
+        return None; // nothing inserted, or the append shape already explains it
+    }
+    insert_gap(pre.as_bytes(), text.as_bytes(), post.as_bytes())
+}
+
+/// The smallest 1-based ordinal `k + 1` with `post == pre[..k] + text +
+/// pre[k..]` — `None` unless `post` is exactly `text` longer than `pre` —
+/// a byte-level scan, so no char boundary is ever sliced. `k` is pinned
+/// between the two common runs: `post[..k] == pre[..k]` holds exactly up to
+/// their common prefix, and `post[k + |text|..] == pre[k..]` exactly from
+/// where their common suffix begins, so only that window is scanned for
+/// `text`.
+fn insert_gap(pre: &[u8], text: &[u8], post: &[u8]) -> Option<u64> {
+    if post.len() != pre.len() + text.len() {
         return None;
     }
-    if post == format!("{pre}{text}") {
-        return None; // the append shape already explains it
-    }
-    // Byte-level gap scan (no char-boundary slicing risk).
-    let (p, t, q) = (post.as_bytes(), text.as_bytes(), pre.as_bytes());
-    (0..=q.len())
-        .find(|&k| p[..k] == q[..k] && p[k..k + t.len()] == *t && p[k + t.len()..] == q[k..])
+    let prefix = post.iter().zip(pre).take_while(|(x, y)| x == y).count();
+    // At most `pre`'s length: the zip stops at the shorter side.
+    let suffix = post.iter().rev().zip(pre.iter().rev()).take_while(|(x, y)| x == y).count();
+    (pre.len() - suffix..=prefix)
+        .find(|&k| post[k..k + text.len()] == *text)
         .map(|k| k as u64 + 1)
 }
 
@@ -563,22 +575,16 @@ fn post_state_of(all: &[Value], i: usize, shadow: &Shadow, doc: &str) -> Option<
 /// A single contiguous deletion explaining pre → post, as the content
 /// region it removed: the longest common prefix that leaves a matching
 /// suffix. `None` when no single gap explains the difference (the delete
-/// then stays as located and diverges honestly).
+/// then stays as located and diverges honestly). Only the longest common
+/// prefix is tried: a suffix that matches from an earlier start matches
+/// from every later one, so a gap that fails there fails everywhere.
 fn single_gap_diff(pre: &[u8], post: &[u8]) -> Option<VRegion> {
     if post.len() >= pre.len() {
         return None;
     }
     let width = pre.len() - post.len();
-    let mut a = pre.iter().zip(post).take_while(|(x, y)| x == y).count();
-    loop {
-        if pre[a + width..] == post[a..] {
-            return Some(VPoint::content(a as u64 + 1).region(width as u64));
-        }
-        if a == 0 {
-            return None;
-        }
-        a -= 1;
-    }
+    let a = pre.iter().zip(post).take_while(|(x, y)| x == y).count();
+    (pre[a + width..] == post[a..]).then(|| VPoint::content(a as u64 + 1).region(width as u64))
 }
 
 #[cfg(test)]
@@ -684,5 +690,70 @@ mod tests {
         assert!(!version_made_before(&ops, 1), "a failed version made nothing");
         assert!(!version_made_before(&ops, 2), "an op's own version is not before it");
         assert!(version_made_before(&ops, 3));
+    }
+
+    /// Every string over {A, B} up to `max` bytes, shortest first.
+    fn strings(max: usize) -> Vec<Vec<u8>> {
+        let mut all = vec![Vec::new()];
+        for len in 1..=max {
+            for bits in 0..1u32 << len {
+                all.push((0..len).map(|k| if bits >> k & 1 == 0 { b'A' } else { b'B' }).collect());
+            }
+        }
+        all
+    }
+
+    /// The gap diff trying every start, each checked whole — the reference
+    /// the narrowed scan must reproduce.
+    fn gap_diff_every_start(pre: &[u8], post: &[u8]) -> Option<VRegion> {
+        if post.len() >= pre.len() {
+            return None;
+        }
+        let width = pre.len() - post.len();
+        let mut a = pre.iter().zip(post).take_while(|(x, y)| x == y).count();
+        loop {
+            if pre[a + width..] == post[a..] {
+                return Some(VPoint::content(a as u64 + 1).region(width as u64));
+            }
+            if a == 0 {
+                return None;
+            }
+            a -= 1;
+        }
+    }
+
+    /// The insert gap trying every ordinal, each checked whole — the
+    /// reference the narrowed scan must reproduce.
+    fn insert_gap_every_ordinal(pre: &[u8], text: &[u8], post: &[u8]) -> Option<u64> {
+        if post.len() != pre.len() + text.len() {
+            return None;
+        }
+        let (n, q) = (text.len(), pre);
+        (0..=q.len())
+            .find(|&k| post[..k] == q[..k] && post[k..k + n] == *text && post[k + n..] == q[k..])
+            .map(|k| k as u64 + 1)
+    }
+
+    /// The narrowed gap scans answer exactly as the full scans do, over
+    /// every pair of strings on {A, B} short enough to enumerate — single
+    /// deletions and insertions, and every pair no single gap explains.
+    #[test]
+    fn the_narrowed_gap_scans_answer_as_the_full_scans_do() {
+        let short = strings(6);
+        for pre in &short {
+            for post in &short {
+                let (want, got) = (gap_diff_every_start(pre, post), single_gap_diff(pre, post));
+                assert_eq!(got, want, "delete {pre:?} → {post:?}");
+            }
+        }
+        let posts = strings(7);
+        for pre in &strings(5) {
+            for text in strings(2).iter().filter(|t| !t.is_empty()) {
+                for post in &posts {
+                    let want = insert_gap_every_ordinal(pre, text, post);
+                    assert_eq!(insert_gap(pre, text, post), want, "{pre:?} + {text:?} → {post:?}");
+                }
+            }
+        }
     }
 }

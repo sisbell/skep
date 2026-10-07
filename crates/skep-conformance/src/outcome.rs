@@ -203,8 +203,12 @@ pub enum Verdict {
     Allowlisted,
     Divergent,
     Inexpressible,
-    /// The HARNESS itself failed (a panic, or a rig that would not
-    /// bootstrap) — a harness bug, not a finding.
+    /// The scenario could not be played to its end: a panic stopped it —
+    /// the harness's own (a harness bug), or skep's while executing a
+    /// request (its operation surface failing to answer every request it is
+    /// handed, M10's totality) — or the rig would not bootstrap. No
+    /// allowlist entry or ratchet line can admit it; `error` names what
+    /// stopped it and, for a stopped op, which.
     Error,
 }
 
@@ -238,11 +242,14 @@ pub struct ScenarioRecord {
     pub verdict: Verdict,
     pub bijection_size: usize,
     pub ops: Vec<OpOutcome>,
-    /// The first inexpressible op or unadjudicated disagreement, else the
-    /// first adjudicated disagreement; `None` when no op disagreed or was
-    /// inexpressible.
+    /// The op a panic stopped the scenario at, with who panicked; else the
+    /// first inexpressible op or unadjudicated disagreement, else the first
+    /// adjudicated disagreement; `None` when no op disagreed, was
+    /// inexpressible, or was stopped.
     pub first_finding: Option<Finding>,
-    /// Populated only on `Verdict::Error` — the panic payload.
+    /// Populated only on `Verdict::Error`: what stopped the scenario — a
+    /// panic, naming who raised it and, inside an op, which op — or the
+    /// rig's bootstrap failure.
     pub error: Option<String>,
     /// Grounding-pre-pass inferences applied before op 0 (implied creates,
     /// derived initial content, expansion plans) — auditable per scenario.

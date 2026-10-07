@@ -1,0 +1,182 @@
+use serde_json::json;
+
+use super::*;
+
+/// A delete is undone only with the bytes it is known to have removed,
+/// reinserted at its pinned ordinal; one whose bytes the walk never
+/// knew stops the undo instead of handing back the post-delete content
+/// as the seed.
+#[test]
+fn a_delete_is_undone_only_with_the_bytes_it_removed() {
+    let known = [Edit::Del { at: 11, bytes: Some(b"Shared ".to_vec()), explicit: true }];
+    let seed = undo_to_initial("B prefix: content", &known);
+    assert_eq!(seed.as_deref(), Some(&b"B prefix: Shared content"[..]));
+    let unknown = [Edit::Del { at: 11, bytes: None, explicit: true }];
+    assert_eq!(undo_to_initial("B prefix: content", &unknown), None);
+}
+
+/// A delete's own description names its removed bytes — a trailing
+/// parenthetical, else a quoted segment — only at exactly its width.
+#[test]
+fn a_described_delete_names_its_bytes_at_its_width() {
+    let quoted = json!({"op": "remove", "span": "1.11 for 0.7 (delete 'Shared ')"});
+    assert_eq!(delete_described_bytes(&quoted, 7), Some(b"Shared ".to_vec()));
+    assert_eq!(delete_described_bytes(&quoted, 8), None);
+    let parenthetical = json!({"op": "delete", "span": "1.3 for 0.5 (CDEFG)"});
+    assert_eq!(delete_described_bytes(&parenthetical, 5), Some(b"CDEFG".to_vec()));
+}
+
+/// An insert is undone only where its recorded bytes still stand — at
+/// the end it appended to, or the ordinal it was placed at; a write the
+/// walk could not reproduce stops the undo.
+#[test]
+fn an_undo_that_does_not_find_the_recorded_bytes_aborts() {
+    let appended = [Edit::Ins { at: None, bytes: b"CD".to_vec() }];
+    assert_eq!(undo_to_initial("ABCD", &appended).as_deref(), Some(&b"AB"[..]));
+    assert_eq!(undo_to_initial("ABXY", &appended), None);
+    let placed = [Edit::Ins { at: Some(2), bytes: b"X".to_vec() }];
+    assert_eq!(undo_to_initial("AXB", &placed).as_deref(), Some(&b"AB"[..]));
+    assert_eq!(undo_to_initial("ABX", &placed), None);
+    let longer = [Edit::Ins { at: None, bytes: b"ABCDE".to_vec() }];
+    assert_eq!(undo_to_initial("AB", &longer), None);
+    assert_eq!(undo_to_initial("AB", &[Edit::Opaque]), None);
+}
+
+/// Undoing a pivot or a swap restores the text the shadow rearranged,
+/// for every cut set over a six-byte text — the degenerate and
+/// out-of-range cuts included, which rearrange nothing either way.
+#[test]
+fn undoing_a_rearrangement_restores_the_text_for_every_cut_set() {
+    const TEXT: &[u8] = b"ABCDEF";
+    let undone = |rearrange: &dyn Fn(&mut Shadow), edit: Edit| {
+        let mut s = scratch(TEXT);
+        rearrange(&mut s);
+        undo_to_initial(&s.text_string("x"), &[edit])
+    };
+    // Every cut in 0..=8: below, inside and past the text's 1..=7.
+    for n in 0..9u64.pow(3) {
+        let (a, b, c) = (n / 81, n / 9 % 9, n % 9);
+        let pivoted = undone(&|s| s.pivot("x", a, b, c), Edit::Pivot { a, b, c });
+        assert_eq!(pivoted.as_deref(), Some(TEXT), "pivot {a},{b},{c}");
+        for d in 0..=8 {
+            let swap = Edit::Swap { s1: a, e1: b, s2: c, e2: d };
+            let swapped = undone(&|s| s.swap("x", a, b, c, d), swap);
+            assert_eq!(swapped.as_deref(), Some(TEXT), "swap {a},{b},{c},{d}");
+        }
+    }
+}
+
+/// A version is never seeded: its content at creation is its source's,
+/// which the recorded create_version provides — however its probe
+/// disagrees, no document is minted under its address.
+#[test]
+fn a_version_is_never_seeded_as_a_document() {
+    let ops = [
+        json!({"op": "create_document", "doc": "source", "result": "1.1.0.1.0.1"}),
+        json!({"op": "insert", "doc": "source", "text": "AB"}),
+        json!({"op": "create_version", "from": "source", "result": "1.1.0.1.0.1.1"}),
+        json!({"op": "retrieve_contents", "doc": "1.1.0.1.0.1.1", "result": ["XY"]}),
+    ];
+    let setup = ground(&ops);
+    assert!(setup.lead_in.is_empty(), "{:?}", setup.lead_in);
+    assert!(setup.tags.is_empty(), "{:?}", setup.tags);
+}
+
+/// An insert recorded at the last ordinal is held by no text: undoing it
+/// abandons the path, never overflowing past the content's end.
+#[test]
+fn an_insert_recorded_at_the_last_ordinal_undoes_to_nothing() {
+    let placed = [Edit::Ins { at: Some(u64::MAX), bytes: b"XY".to_vec() }];
+    assert_eq!(undo_to_initial("AB", &placed), None);
+}
+
+/// A width at the top of the range, as the corpus's boundary family
+/// would record it next.
+const TOP_WIDTH: &str = "0.18446744073709551615";
+
+/// A recorded comparison pair at the extremes — a destination ordinal 0,
+/// or a width at the top of the range — pins no seed and no cover: the
+/// probe holds no such region.
+#[test]
+fn a_compare_pair_at_the_extremes_seeds_nothing() {
+    let pair = |dest_start: &str, width: &str| {
+        json!({"a": {"start": dest_start, "width": width}, "b": {"start": "1.1", "width": width}})
+    };
+    for shared in [pair("1.0", "0.5"), pair("1.2", TOP_WIDTH)] {
+        let ops = [
+            json!({"op": "create_document", "doc": "target", "result": "1.1.0.1.0.1"}),
+            json!({"op": "insert", "doc": "target", "text": "Hello"}),
+            json!({"op": "create_document", "doc": "src", "result": "1.1.0.1.0.2"}),
+            json!({"op": "retrieve_contents", "doc": "target", "result": ["Hello"]}),
+            json!({"op": "compare_versions", "label": "target_vs_src", "shared": [shared]}),
+        ];
+        let setup = ground(&ops);
+        let seeded = setup.tags.iter().any(|t| t.contains("comparison-seed"));
+        assert!(!seeded, "{:?}", setup.tags);
+        let mut shadow = Shadow::new();
+        shadow.create_doc("1.1.0.1.0.1", Some("target"));
+        shadow.insert("1.1.0.1.0.1", 1, b"Hello");
+        shadow.create_doc("1.1.0.1.0.2", Some("src"));
+        assert!(cover_from_comparisons(&shadow, "1.1.0.1.0.1", "Hello", &ops).is_none());
+    }
+}
+
+/// A recorded endset span out of reach — an end past the build budget,
+/// or an ordinal 0 — builds no seed, however well a link's text fits it.
+#[test]
+fn a_recorded_span_out_of_reach_seeds_nothing() {
+    const DOC: &str = "1.1.0.1.0.1";
+    let seeded = |start: &str, width: &str| {
+        let span = json!({"start": start, "width": width});
+        let ops = [
+            json!({"op": "create_link", "source_text": "Hello"}),
+            json!({"op": "retrieve_endsets", "source": [{"docid": DOC, "span": span}]}),
+        ];
+        endset_anchored_seed(&ops, &Shadow::new(), DOC)
+    };
+    assert_eq!(seeded("1.3", "0.5").as_deref(), Some(&b"  Hello"[..]), "within reach");
+    assert_eq!(seeded("1.1", "0.1099511627776"), None);
+    assert_eq!(seeded("1.0", "0.5"), None);
+}
+
+/// A recorded pair landing a copy past the build budget's reach from the
+/// append position orders filler no comparison could read: no plan
+/// builds it, and the copy runs as recorded.
+#[test]
+fn a_filler_past_the_budget_is_not_built() {
+    let five = |start: &str| json!({"start": start, "width": "0.5"});
+    let source = json!({"docid": "1.1.0.1.0.1", "span": five("1.1")});
+    let ops = [
+        json!({"op": "create_document", "doc": "src", "result": "1.1.0.1.0.1"}),
+        json!({"op": "insert", "doc": "src", "text": "Hello world"}),
+        json!({"op": "create_document", "doc": "dest", "result": "1.1.0.1.0.2"}),
+        json!({"op": "vcopy", "source": source, "to": "dest"}),
+        json!({
+            "op": "compare_versions",
+            "label": "dest_vs_src",
+            "shared": [{"a": five("1.1099511627776"), "b": five("1.1")}],
+        }),
+    ];
+    let setup = ground(&ops);
+    assert!(setup.plans.is_empty(), "{:?}", setup.plans);
+}
+
+/// A log's length costs the undo heap, never stack: a hundred thousand
+/// appended inserts undo to the empty seed.
+#[test]
+fn a_long_edit_log_undoes_without_recursion() {
+    const N: usize = 100_000;
+    let log = vec![Edit::Ins { at: None, bytes: b"A".to_vec() }; N];
+    assert_eq!(undo_to_initial(&"A".repeat(N), &log).as_deref(), Some(&b""[..]));
+}
+
+/// A log holding a write the walk never knew is refused before any
+/// search: forty deletes above it would otherwise try 2^40 placements,
+/// each failing at that write.
+#[test]
+fn a_log_with_an_unknowable_edit_is_refused_before_any_search() {
+    let delete = Edit::Del { at: 1, bytes: Some(b"a".to_vec()), explicit: false };
+    let mut log = vec![Edit::Opaque];
+    log.extend(vec![delete; 40]);
+    assert_eq!(undo_to_initial("x", &log), None);
+}

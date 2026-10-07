@@ -38,7 +38,11 @@
 //! * **One door to skep.** The engine and its operation surface are private
 //!   fields of `rig::Rig`: every request the harness makes goes through
 //!   `OperationSurface::execute` inside a `Rig` method, and nothing else in
-//!   the crate holds either.
+//!   the crate holds either. Each request passes one function, the rig's
+//!   `execute`, the crate's only call of the surface: a panic raised inside
+//!   skep leaves it as `rig::EnginePanic`, naming the request, and `runner`
+//!   reports the scenario stopped by skep at that op — never as a harness
+//!   bug, and never as a finding an allowlist entry could cover.
 //! * **The shadow is golden-side, and has one owner.** Whether a recorded op
 //!   changed the golden-side world is one answer, `evidence::took_effect`,
 //!   which an `evidence::Effect` carries into every change, and in the play
@@ -84,23 +88,25 @@
 //!
 //! The integration binary under `tests/it/` holds the gate, `gate.rs`, the
 //! oracle's own suite, `oracle.rs`, and this map's check, `tidy.rs`. The
-//! gate's three tests: `harness_integrity` — the instrument works: every
-//! golden loads, every op yields one outcome, no scenario panics the
-//! harness, the report is written; `report_is_deterministic` — a replay of
-//! every scenario renders byte-identical records; and `conformance_ratchet`,
-//! where conformance is enforced — a `divergent` or `error` verdict fails
-//! it, as does an `allowlisted` or `inexpressible` verdict on a scenario
-//! `conformance/ratchet.toml` does not freeze there, and a frozen key no
-//! golden carries. The ratchet freezes verdicts, so it reads a scenario
-//! turning `pass` as an improvement; `oracle.rs` holds what it cannot —
-//! hand-built scenarios, played through the real engine, pinning how op
-//! outcomes become a verdict, which agreements the harness may record, and
-//! which references it refuses rather than re-aims. `tidy.rs` holds the
-//! module map below to the code — every file declared, every declaration
-//! with its line, every module naming only itself and the modules above it
-//! — holds every file but `rig.rs` to building no CREATENEWDOCUMENT
-//! request of its own, and holds the play pass to changing the shadow
-//! through its one owner.
+//! gate's three tests over the sweep: `harness_integrity` — the instrument
+//! works: every golden loads, every op yields one outcome, no scenario is
+//! stopped by a panic, skep's or the harness's, the report is written;
+//! `report_is_deterministic` — a replay of every scenario renders
+//! byte-identical records; and `conformance_ratchet`, where conformance is
+//! enforced — a `divergent` or `error` verdict fails it, as does an
+//! `allowlisted` or `inexpressible` verdict on a scenario
+//! `conformance/ratchet.toml` does not freeze there, a frozen key no golden
+//! carries, and a key the file lists twice. The ratchet freezes verdicts,
+//! so it reads a scenario turning `pass` as an improvement; `oracle.rs`
+//! holds what it cannot — hand-built scenarios, played through the real
+//! engine, pinning how op outcomes become a verdict, which agreements the
+//! harness may record, and which references it refuses rather than
+//! re-aims. `tidy.rs` holds the module map below to the code — every file
+//! declared, every declaration with its line, every module naming only
+//! itself and the modules above it — holds `rig.rs`'s door to being the
+//! crate's one call of `OperationSurface::execute`, holds every file but
+//! `rig.rs` to building no CREATENEWDOCUMENT request of its own, and holds
+//! the play pass to changing the shadow through its one owner.
 
 // Golden dotted strings ⇄ skep tumblers, addresses and spans; golden address shapes.
 mod tum;
@@ -108,7 +114,7 @@ mod tum;
 pub mod outcome;
 // The vendored conformance tree, and its golden scenarios loaded as dynamic JSON.
 pub mod loader;
-// allowlist.toml: adjudicated divergences, their classes and declared adjustments; a TOML subset.
+// allowlist.toml: adjudicated divergences, their classes and declared adjustments; TOML-like.
 pub mod allowlist;
 // The per-scenario golden ↔ skep address bijection and its findings.
 mod alpha;

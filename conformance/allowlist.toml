@@ -1,6 +1,10 @@
 # skep conformance allowlist — ADJUDICATED divergences only.
 #
-# Format (restricted TOML subset, parsed by skep-conformance/src/allowlist.rs):
+# Format (TOML-like, NOT TOML — parsed by skep-conformance/src/allowlist.rs):
+# a quoted value is everything between the line's first and last `"`, taken
+# verbatim, with no escapes and no trailing comment, so a TOML reader rejects
+# the signature lines below that hold a rendered value's own `"`s. Each key
+# is set at most once per [[allow]] block.
 #   [[allow]]
 #   scenario = "<category>/<name>"          # the golden's key: its directory
 #       and its name — two goldens can share a name
@@ -13,7 +17,8 @@
 #       applies to any DISAGREED op of the scenario whose rendered expected
 #       value contains the substring (op_index, if also given, must match
 #       too). Survives op-index shifts across harness rounds. Signature
-#       entries classify only — count_delta/width_tolerance never apply.
+#       entries classify only — count_delta/width_tolerance never apply. An
+#       empty substring, which every expected value contains, is refused.
 #
 
 # Retraction-tuple class (D8): adjudicated intended; no golden exercises

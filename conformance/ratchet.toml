@@ -5,7 +5,9 @@
 # Growing [allowlisted] or [inexpressible] requires a ruling in
 # adjudication/decisions.md, by a human.
 # Each scenario is named by its key, "<category>/<name>" — its golden's
-# directory and name; two goldens can share a name.
+# directory and name; two goldens can share a name. A key is listed once:
+# one the file lists twice, in one section or two, fails the gate — a key
+# moved between sections is moved, never copied.
 # [pending] lists scenarios not yet adjudicated — corpus extensions, and
 # scenarios a change newly finds diverging, each recorded (not ruled) in
 # adjudication/decisions.md: exempt from enforcement, reported loudly, to

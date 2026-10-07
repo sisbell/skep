@@ -309,3 +309,59 @@ fn a_whole_document_read_narrows_by_at_most_two_positions() {
     assert!(narrowed.adaptations.iter().any(|a| a == "read-scoped-to-recorded-extent"));
     assert_eq!(record.ops[3].status, Status::Disagreed, "{:?}", record.ops[3]);
 }
+
+/// A number past the build budget orders work no comparison could read: a
+/// loop of 2^40 inserts and 2^40 documents are refused, the budget named,
+/// and the scenario is played to its end — never an allocation or a loop
+/// that could take the whole sweep down with it.
+#[test]
+fn a_number_past_the_build_budget_is_refused_not_built() {
+    let huge = 1u64 << 40;
+    let ops = vec![
+        create("d", "1.1.0.1.0.1"),
+        json!({"op": "insert_loop", "doc": "d", "count": huge}),
+        json!({"op": "create_documents", "count": huge}),
+        retrieve("d", &[]),
+    ];
+    let record = play("past_the_budget", ops);
+    for refused in &record.ops[1..3] {
+        assert_eq!(refused.status, Status::Inexpressible, "{refused:?}");
+        let note = refused.note.as_deref().unwrap_or_default();
+        assert!(note.contains("build budget"), "{note}");
+    }
+    assert_eq!(record.verdict, Verdict::Inexpressible);
+}
+
+/// A recorded width at the top of the range — a delete, a search, a copy
+/// of that span — is answered by skep and judged, never a panic in the
+/// harness: the scenario plays every op to its outcome. These requests
+/// carry spans at the top of the range to skep's operation surface, which
+/// answers them; skepd's codec fuzz corpus is where they would be promoted.
+#[test]
+fn a_recorded_extreme_is_answered_never_panicked() {
+    const TOP: &str = "0.18446744073709551615";
+    let span = |start: &str| json!({"start": start, "width": TOP});
+    let at_top = |start: &str| json!({"docid": "1.1.0.1.0.1", "span": span(start)});
+    let ops = vec![
+        create("d", "1.1.0.1.0.1"),
+        insert("d", "ABC"),
+        json!({"op": "delete", "doc": "d", "span": span("1.2")}),
+        json!({"op": "find_documents", "specset": [at_top("1.1")], "result": []}),
+        json!({"op": "vcopy", "source": at_top("1.2"), "to": "d"}),
+    ];
+    let record = play("extremes", ops);
+    assert_eq!(record.ops.len(), 5, "{:?}", record.error);
+}
+
+/// Document text that happens to be dotted is compared like any other:
+/// a recorded post-state of "9.9" is no address to set aside, and skep's
+/// "2.5" disagrees with it.
+#[test]
+fn a_dotted_text_is_compared_like_any_other() {
+    let ops = vec![
+        create("d", "1.1.0.1.0.1"),
+        json!({"op": "insert", "doc": "d", "text": "2.5", "result": ["9.9"]}),
+    ];
+    let record = play("dotted_text", ops);
+    assert_eq!(record.ops[1].status, Status::Disagreed, "{:?}", record.ops[1]);
+}

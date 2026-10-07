@@ -12,7 +12,9 @@ use super::{
     settle_unaccepted, settle_rejected, Cx,
 };
 use crate::evidence::Effect;
-use crate::fields::{create_name_of, expected_failure, field, group_word, roster, str_field};
+use crate::fields::{
+    create_name_of, expected_failure, field, group_word, recorded_count, roster, str_field,
+};
 use crate::outcome::{Disagreement, OpOutcome, Status};
 use crate::tum::VPoint;
 
@@ -93,8 +95,16 @@ pub(super) fn h_create_documents(cx: &mut Cx, index: usize, op: &Value, out: &mu
             .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
             .unwrap_or_default();
         let group = group_word(op);
-        let count = field(op, &["count"])
-            .and_then(Value::as_u64)
+        // A count past the build budget orders documents no comparison
+        // could read: the op is refused before any is created.
+        let count = match recorded_count(op) {
+            Ok(count) => count,
+            Err(past_budget) => {
+                inexpressible(out, past_budget);
+                return;
+            }
+        };
+        let count = count
             .map(|c| c as usize)
             .unwrap_or_else(|| results.len().max(names.len()).max(1))
             .max(results.len());

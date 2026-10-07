@@ -876,12 +876,15 @@ them, each naming only those above it:
   setting no flag carries.
 - `terminal.rs` `Terminal`, the `Person` over the terminal: every prompt on
   stderr, the sheet as a ruled box, the dismissal's clear, the anchor
-  import's arm asked of the person and never guessed from what was typed;
-  `has_terminal`, the person doors' check; `talk`, the one writer of a
-  line on stderr — the prompts' headings, every command's TALK and its
-  halt; and `answer`, the one reader every prompt goes through, stdin
-  locked for that one line alone — the `Terminal`'s, and those of `bind`,
-  which is no person door: its account paste and its landing question.
+  import's arm asked of the person and never guessed from what was typed —
+  each moment written once, in `moment`, against a `Desk` that says its
+  lines and reads its answers, which the `Terminal` is over the std streams
+  and the module's unit tests over a script; `has_terminal`, the person
+  doors' check; `talk`, the one writer of a line on stderr — the prompts'
+  headings, every command's TALK and its halt; and `answer`, the one
+  reader every prompt goes through, stdin locked for that one line alone —
+  the `Terminal`'s, and those of `bind`, which is no person door: its
+  account paste and its landing question.
 - `commands.rs` what the commands share: DATA's writers (`data`,
   `data_verbatim`), the stops and their exit codes (`Stop` — a usage
   refusal, or a member of the halt family, a person door reached without
@@ -905,7 +908,7 @@ Rules that hold across its files:
   `show`, which drop a write stderr refuses. No std print macro — each
   panics on a write its stream refuses, an exit 101 §2.3 does not have —
   stands in `src/`. `tests/it/tidy.rs` checks it, and `tests/it/cli.rs`
-  runs a command whose stdout has no reader.
+  runs a command whose stdout has no reader, and one whose stderr has none.
 - **A prompt holds stdin for one line.** Every prompt is read through
   `answer`, which locks stdin for that line alone, and the only other
   reads are a `-` argument's, whole, in `read_payload` and
@@ -917,7 +920,9 @@ Rules that hold across its files:
   `--reprint` — each call `person_door` before anything is generated and,
   without one, halt (exit 3) naming the moments a person answers at that
   door; the check is the CLI's, never a walk's (§2.4). `tests/it/cli.rs`
-  and `tests/it/ceremonies.rs` run every door without a terminal.
+  and `tests/it/ceremonies.rs` run every door without a terminal, and
+  `tests/it/ceremonies.rs` runs one under a pseudo-terminal, where it
+  opens only with stdin and stderr both a terminal.
 - **The settings are `args.rs`'s.** Every `SKEP_*` variable is read there
   and nowhere else, which `tests/it/tidy.rs` checks; a session token is
   never an argv value (`session --close -` reads stdin or `SKEP_SESSION`),
@@ -926,8 +931,9 @@ Rules that hold across its files:
   and `main` — its dispatch one arm per `Command`, which the compiler
   holds exhaustive — exits with `exit_code`'s rendering of it, a command
   line it cannot parse and `--help` included; no command picks a
-  renderer or a code. `commands.rs`'s unit test holds each stop to its
-  code.
+  renderer or a code, nor ends the process. `commands.rs`'s unit test
+  holds each stop to its code, and `tests/it/tidy.rs` checks that only
+  `main` exits.
 - **A command takes its own flags.** A flag its row does not name is
   refused, as is a second value of a flag that takes one, so no flag is
   accepted and dropped; an argument that is not UTF-8 text is refused as
@@ -951,7 +957,11 @@ commands and the loop over the hosted claim, and `ceremonies`, the six
 ceremony commands and the enroll hop, each driving the built `skep`
 through argv, stdin and stdout against a daemon spawned in-process; and
 `tidy`, the arrangement above, read off the source. `common` holds the
-spawn and the run, every `SKEP_*` variable scrubbed from it.
+spawn — alone, or behind a tap that keeps what a client put on the wire —
+and the runs, every `SKEP_*` variable and `HOME` scrubbed from them: piped,
+with stdout or stderr closed, from a chosen working directory, or under a
+pseudo-terminal; and `tree`, a directory's state, for the commands that
+write nothing.
 
 ## The name space, `skep-namespace`
 

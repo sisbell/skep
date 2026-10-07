@@ -7,12 +7,16 @@
 //! library's scripted person. The realization here is the std streams'
 //! `isatty` on BOTH stdin and stderr: a wrapper that captures the one or
 //! feeds the other — the wrapper §2.4 names as satisfying every step of the
-//! backup moment with no paper and no person — fails it. Every prompt the
-//! CLI makes is read through `answer`, those a command that is no person
-//! door asks among them, so none reaches stdout. Every line the binary says
-//! on stderr — a statement, a prompt's heading, a command's TALK, a halt —
-//! is written by `talk`, and a prompt's text, the sheet and the clear by
-//! `show`, each dropping a write stderr refuses rather than panic.
+//! backup moment with no paper and no person — fails it. Each moment is
+//! [`moment`]'s, written once against a [`Desk`], where its lines are said
+//! and its answers read: the [`Terminal`] is the desk over the std streams,
+//! and this module's tests drive the same moments from a script. Every
+//! prompt the CLI makes is read through `answer`, those a command that is
+//! no person door asks among them, so none reaches stdout. Every line the
+//! binary says on stderr — a statement, a prompt's heading, a command's
+//! TALK, a halt — is written by `talk`, and a prompt's text, the sheet and
+//! the clear by `show`, each dropping a write stderr refuses rather than
+//! panic.
 
 use std::fmt;
 use std::io::{self, IsTerminal, Write};
@@ -56,39 +60,107 @@ pub fn answer(prompt: &str) -> io::Result<Option<String>> {
     Ok(Some(line.trim_end_matches(['\n', '\r']).to_string()))
 }
 
-/// The terminal person. It holds nothing: every answer is [`answer`]'s.
+/// Where a moment says its lines and reads its answers: the terminal's own
+/// streams at every door ([`Terminal`]), a script in this module's tests.
+trait Desk {
+    /// `prompt` shown, then one answer: the line without its line ending, or
+    /// the person gone — the end of input, or the input unreadable.
+    fn answer(&mut self, prompt: &str) -> Result<String, Abandoned>;
+    /// One line said.
+    fn talk(&mut self, line: &str);
+    /// `text` shown as it stands.
+    fn show(&mut self, text: &str);
+}
+
+/// The terminal person. It holds nothing: every moment is said on stderr
+/// and answered from stdin, through [`talk`], [`show`] and [`answer`].
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Terminal;
 
-/// One answer to a walk's moment, or the person gone — the end of input,
-/// or stdin unreadable.
-fn line(prompt: &str) -> Result<String, Abandoned> {
-    answer(prompt).ok().flatten().ok_or(Abandoned)
+impl Desk for Terminal {
+    fn answer(&mut self, prompt: &str) -> Result<String, Abandoned> {
+        answer(prompt).ok().flatten().ok_or(Abandoned)
+    }
+
+    fn talk(&mut self, line: &str) {
+        talk(line);
+    }
+
+    fn show(&mut self, text: &str) {
+        show(text);
+    }
+}
+
+/// Each moment is [`moment`]'s, on the terminal's own streams.
+impl Person for Terminal {
+    fn say(&mut self, m: Public<Statement>) {
+        moment::say(self, &m.0);
+    }
+
+    fn label(&mut self, m: Public<LabelBox>) -> Result<String, Abandoned> {
+        moment::label(self, m.0)
+    }
+
+    fn ask(&mut self, m: Public<Question>) -> Result<String, Abandoned> {
+        moment::ask(self, &m.0)
+    }
+
+    fn yes_no(&mut self, m: Public<Question>) -> Result<bool, Abandoned> {
+        moment::yes_no(self, &m.0)
+    }
+
+    fn sheet(&mut self, m: Secret<Sheet>) -> Result<(), Abandoned> {
+        moment::sheet(self, &m.0)
+    }
+
+    fn dismiss(&mut self) {
+        moment::dismiss(self);
+    }
+
+    fn retype(&mut self, m: Secret<Retype>) -> Result<Retyped, Abandoned> {
+        moment::retype(self, &m.0)
+    }
+
+    fn destination(&mut self, m: Secret<Destination>) -> Result<PathBuf, Abandoned> {
+        moment::destination(self, &m.0)
+    }
+
+    fn confirm_typed(&mut self, m: Consent<Confirmation>) -> Result<String, Abandoned> {
+        moment::confirm_typed(self, &m.0)
+    }
+
+    fn import(&mut self, m: Secret<Import>) -> Result<Imported, Abandoned> {
+        moment::import(self, &m.0)
+    }
+
+    fn kept_or_placed(&mut self, m: Secret<HandedPath>) -> Result<KeptOrPlaced, Abandoned> {
+        moment::kept_or_placed(self, &m.0)
+    }
 }
 
 /// A path, asked again until one is given; `refusal` says why an empty
 /// line is no answer.
-fn path_line(prompt: &str, refusal: &str) -> Result<PathBuf, Abandoned> {
+fn path_line(desk: &mut impl Desk, prompt: &str, refusal: &str) -> Result<PathBuf, Abandoned> {
     loop {
-        let p = line(prompt)?;
+        let p = desk.answer(prompt)?;
         if !p.trim().is_empty() {
             return Ok(PathBuf::from(p.trim()));
         }
-        talk(refusal);
+        desk.talk(refusal);
     }
 }
 
 /// A seed typed from the print, its whitespace removed — the R42 groups a
 /// print shows — and nothing else judged: the walk's `Seed::from_hex`
 /// decides it and asks again on a wrong one (AUTH-5.41).
-fn seed_line(prompt: &str) -> Result<String, Abandoned> {
-    Ok(line(prompt)?.split_whitespace().collect())
+fn seed_line(desk: &mut impl Desk, prompt: &str) -> Result<String, Abandoned> {
+    Ok(desk.answer(prompt)?.split_whitespace().collect())
 }
 
 /// A fingerprint prefix typed from the print, trimmed — the walk's prefix
 /// test decides it (AUTH-5.39).
-fn prefix_line() -> Result<String, Abandoned> {
-    Ok(line("fingerprint prefix from the print (at least the first 8 hex): ")?.trim().to_string())
+fn prefix_line(desk: &mut impl Desk) -> Result<String, Abandoned> {
+    Ok(desk.answer("fingerprint prefix from the print (at least the first 8 hex): ")?.trim().to_string())
 }
 
 /// The anchor import's three ARMS (`client.md` §4a.2 R1): what the person
@@ -126,75 +198,103 @@ fn boxed(lines: &[String]) -> String {
     out
 }
 
-impl Person for Terminal {
-    fn say(&mut self, m: Public<Statement>) {
-        talk(format_args!("[{}] {}", m.0.rule, m.0.text));
+/// THE MOMENTS, each written once against any [`Desk`]: what a walk's
+/// `Person` call says, and how its answer is read — asked again where an
+/// answer names none of the moment's choices, and abandoned where the desk
+/// answers nothing.
+mod moment {
+    use std::path::PathBuf;
+
+    use skep_client::person::{Abandoned, Confirmation, Destination, HandedPath, Import, Imported, KeptOrPlaced, LabelBox, Question, Retype, Retyped, Sheet, Statement};
+
+    use super::{arm, boxed, path_line, prefix_line, seed_line, Arm, Desk};
+
+    /// A statement, with the rule it renders.
+    pub fn say(desk: &mut impl Desk, s: &Statement) {
+        desk.talk(&format!("[{}] {}", s.rule, s.text));
     }
 
-    fn label(&mut self, m: Public<LabelBox>) -> Result<String, Abandoned> {
-        talk(format_args!("{}:", m.0.title));
-        for s in &m.0.statements {
-            talk(format_args!("  {s}"));
+    /// A name box (AUTH-5.42): its title and its statements said, then the
+    /// name asked — the default offered, and taken where the answer is
+    /// empty. The walk's domain test judges the name (AUTH-1.24).
+    pub fn label(desk: &mut impl Desk, b: LabelBox) -> Result<String, Abandoned> {
+        desk.talk(&format!("{}:", b.title));
+        for s in &b.statements {
+            desk.talk(&format!("  {s}"));
         }
-        let prompt = match &m.0.default {
-            Some(d) => format!("{} [{d}]: ", m.0.title),
-            None => format!("{}: ", m.0.title),
+        let prompt = match &b.default {
+            Some(d) => format!("{} [{d}]: ", b.title),
+            None => format!("{}: ", b.title),
         };
-        let typed = line(&prompt)?;
-        Ok(if typed.is_empty() { m.0.default.unwrap_or_default() } else { typed })
+        let typed = desk.answer(&prompt)?;
+        Ok(if typed.is_empty() { b.default.unwrap_or_default() } else { typed })
     }
 
-    fn ask(&mut self, m: Public<Question>) -> Result<String, Abandoned> {
-        line(&m.0.text)
+    /// A question over public facts: its text the prompt, its answer as
+    /// typed.
+    pub fn ask(desk: &mut impl Desk, q: &Question) -> Result<String, Abandoned> {
+        desk.answer(&q.text)
     }
 
-    fn yes_no(&mut self, m: Public<Question>) -> Result<bool, Abandoned> {
+    /// A yes or a no, asked again until the answer is one.
+    pub fn yes_no(desk: &mut impl Desk, q: &Question) -> Result<bool, Abandoned> {
         loop {
-            let a = line(&format!("{} [y/n]: ", m.0.text))?;
+            let a = desk.answer(&format!("{} [y/n]: ", q.text))?;
             match a.trim().to_ascii_lowercase().as_str() {
                 "y" | "yes" => return Ok(true),
                 "n" | "no" => return Ok(false),
-                _ => talk("answer y or n"),
+                _ => desk.talk("answer y or n"),
             }
         }
     }
 
-    fn sheet(&mut self, m: Secret<Sheet>) -> Result<(), Abandoned> {
+    /// The sheet as a ruled box (§5.2), its field list the library's, held
+    /// until the person answers that it is printed.
+    pub fn sheet(desk: &mut impl Desk, s: &Sheet) -> Result<(), Abandoned> {
         let mut lines = vec!["skep anchor sheet — print this; the seed below is the key".to_string(), String::new()];
-        for (name, value) in m.0.fields.lines() {
+        for (name, value) in s.fields.lines() {
             let mut parts = value.lines();
             lines.push(format!("{name:<12}{}", parts.next().unwrap_or("")));
             for rest in parts {
                 lines.push(format!("{:<12}{rest}", ""));
             }
         }
-        show(&boxed(&lines));
-        line("press return once the sheet is printed: ")?;
+        desk.show(&boxed(&lines));
+        desk.answer("press return once the sheet is printed: ")?;
         Ok(())
     }
 
-    fn dismiss(&mut self) {
-        // Clear the screen and its scrollback (§5.2; §4.2 step 6).
-        show("\x1b[2J\x1b[3J\x1b[H");
+    /// The dismissal: the screen and its scrollback cleared (§5.2; §4.2
+    /// step 6).
+    pub fn dismiss(desk: &mut impl Desk) {
+        desk.show("\x1b[2J\x1b[3J\x1b[H");
     }
 
-    fn retype(&mut self, m: Secret<Retype>) -> Result<Retyped, Abandoned> {
-        talk(&m.0.prompt);
-        let seed_hex = seed_line("seed (64 hex, spaces allowed; empty to decline the re-type): ")?;
+    /// The re-type from the print (AUTH-5.41): the seed, an empty one
+    /// declining the re-type with no prefix asked (§4.2 step 9), then the
+    /// fingerprint prefix — each passed to the walk, which judges them.
+    pub fn retype(desk: &mut impl Desk, r: &Retype) -> Result<Retyped, Abandoned> {
+        desk.talk(&r.prompt);
+        let seed_hex = seed_line(desk, "seed (64 hex, spaces allowed; empty to decline the re-type): ")?;
         if seed_hex.is_empty() {
             return Ok(Retyped::Declined);
         }
-        Ok(Retyped::Typed { seed_hex, fingerprint_prefix: prefix_line()? })
+        Ok(Retyped::Typed { seed_hex, fingerprint_prefix: prefix_line(desk)? })
     }
 
-    fn destination(&mut self, m: Secret<Destination>) -> Result<PathBuf, Abandoned> {
-        talk(&m.0.prompt);
-        path_line("directory: ", "a directory is required; no default is offered")
+    /// One anchor file's destination: a directory, asked again on an empty
+    /// line — no default is offered (§4.2 step 4).
+    pub fn destination(desk: &mut impl Desk, d: &Destination) -> Result<PathBuf, Abandoned> {
+        desk.talk(&d.prompt);
+        path_line(desk, "directory: ", "a directory is required; no default is offered")
     }
 
-    fn confirm_typed(&mut self, m: Consent<Confirmation>) -> Result<String, Abandoned> {
-        talk(&m.0.text);
-        let a = line(&format!("type `{}` to confirm, or `no`: ", m.0.expected))?;
+    /// A typed confirmation, answered with the text typed, trimmed — never
+    /// reduced to a yes or a no, so the walk tells `no` from a wrong row
+    /// (AUTH-5.46).
+    pub fn confirm_typed(desk: &mut impl Desk, c: &Confirmation) -> Result<String, Abandoned> {
+        desk.talk(&c.text);
+        let a = desk.answer(&format!("type `{}` to confirm, or `no`: ", c.expected))?;
         Ok(a.trim().to_string())
     }
 
@@ -204,61 +304,35 @@ impl Person for Terminal {
     /// (its whitespace removed) and prefix (trimmed) go to the walk with
     /// nothing else judged: its `Seed::from_hex` and prefix test judge them
     /// and ask again on a wrong one (AUTH-5.39, AUTH-5.41).
-    fn import(&mut self, m: Secret<Import>) -> Result<Imported, Abandoned> {
-        talk(&m.0.prompt);
+    pub fn import(desk: &mut impl Desk, i: &Import) -> Result<Imported, Abandoned> {
+        desk.talk(&i.prompt);
         loop {
-            match arm(&line("which do you hold: the kept FILE (f), the PRINT (p), or NEITHER (n)? ")?) {
-                Some(Arm::File) => return Ok(Imported::File(path_line("the file's path: ", "a path is required")?)),
+            match arm(&desk.answer("which do you hold: the kept FILE (f), the PRINT (p), or NEITHER (n)? ")?) {
+                Some(Arm::File) => return Ok(Imported::File(path_line(desk, "the file's path: ", "a path is required")?)),
                 Some(Arm::Print) => {
-                    let seed_hex = seed_line("the seed's 64 hex from the print (spaces allowed): ")?;
-                    return Ok(Imported::Typed { seed_hex, fingerprint_prefix: prefix_line()? });
+                    let seed_hex = seed_line(desk, "the seed's 64 hex from the print (spaces allowed): ")?;
+                    return Ok(Imported::Typed { seed_hex, fingerprint_prefix: prefix_line(desk)? });
                 }
                 Some(Arm::Neither) => return Ok(Imported::Neither),
-                None => talk("answer f, p or n"),
+                None => desk.talk("answer f, p or n"),
             }
         }
     }
 
-    fn kept_or_placed(&mut self, m: Secret<HandedPath>) -> Result<KeptOrPlaced, Abandoned> {
-        talk(&m.0.text);
+    /// Kept or placed (AUTH-5.54 step 3's file arm), asked again until the
+    /// answer is one.
+    pub fn kept_or_placed(desk: &mut impl Desk, h: &HandedPath) -> Result<KeptOrPlaced, Abandoned> {
+        desk.talk(&h.text);
         loop {
-            let a = line(&format!("is {} the KEPT artifact (k) or a PLACED copy (p)? ", m.0.path.display()))?;
+            let a = desk.answer(&format!("is {} the KEPT artifact (k) or a PLACED copy (p)? ", h.path.display()))?;
             match a.trim().to_ascii_lowercase().as_str() {
                 "k" | "kept" => return Ok(KeptOrPlaced::Kept),
                 "p" | "placed" => return Ok(KeptOrPlaced::Placed),
-                _ => talk("answer k or p"),
+                _ => desk.talk("answer k or p"),
             }
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Every line of the box is padded to the widest, measured in chars: a
-    /// line holding multi-byte text lines up with one that holds none.
-    #[test]
-    fn the_box_is_ruled_to_the_widest_line() {
-        let b = boxed(&["ab".into(), "abcd".into(), "é—".into()]);
-        let lines: Vec<&str> = b.lines().collect();
-        assert_eq!(lines.len(), 5);
-        assert!(lines[0].starts_with('┌') && lines[4].starts_with('└'));
-        assert!(lines.iter().all(|l| l.chars().count() == lines[0].chars().count()), "{b}");
-        assert_eq!(lines[3], format!("│ é—{} │", " ".repeat(18)), "padded to the 20-char floor");
-    }
-
-    /// The import's arm is the person's answer, never a guess from what was
-    /// typed: a seed, a seed with one character wrong, and a path each name
-    /// no arm and are asked again.
-    #[test]
-    fn the_import_arm_is_the_persons_answer_never_a_guess_from_the_text() {
-        assert_eq!(arm("f"), Some(Arm::File));
-        assert_eq!(arm(" Print "), Some(Arm::Print));
-        assert_eq!(arm("NEITHER"), Some(Arm::Neither));
-        let seed = "0e".repeat(32);
-        assert_eq!(arm(&seed), None, "a seed typed at the question");
-        assert_eq!(arm(&format!("{}O{}", &seed[..10], &seed[11..])), None, "a seed with an O for a 0");
-        assert_eq!(arm("/home/me/anchor-a.skep-key"), None, "a path");
-    }
-}
+mod tests;

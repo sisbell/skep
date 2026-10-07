@@ -400,6 +400,50 @@ mod tests {
         }
     }
 
+    /// THE GRAMMAR from `HELP`'s side: every flag `HELP` shows at a command
+    /// — in its description or its flags line — is one that command's parser
+    /// takes, and every flag it lists for all commands is one each takes; so
+    /// a person following `--help` never meets exit 2 for a flag it showed.
+    #[test]
+    fn every_flag_help_shows_at_a_command_is_one_its_parser_takes() {
+        let takes = |command: Command, flag: &str| match parse(argv(&[command.verb(), flag])) {
+            Ok(_) => true,
+            Err(Usage(text)) if text == format!("{flag} needs a value") => parse(argv(&[command.verb(), flag, "x"])).is_ok(),
+            Err(_) => false,
+        };
+        let flags = |line: &str| -> Vec<String> {
+            line.match_indices("--").map(|(i, _)| line[i..].chars().take_while(|c| *c == '-' || c.is_ascii_lowercase()).collect::<String>()).filter(|f| f.len() > 2).collect()
+        };
+        let (mut shown, mut every, mut at) = (Vec::new(), Vec::new(), None);
+        for line in HELP.lines().take_while(|l| !l.starts_with("exit codes:")) {
+            if let Some(row) = GRAMMAR.iter().find(|r| line.starts_with(&format!("  {} ", r.command)) || line.starts_with(&format!("  {}:", r.command))) {
+                at = Some(row.command);
+            } else if line.starts_with("  --") {
+                at = None;
+                every.extend(flags(line));
+                continue;
+            } else if !line.starts_with("   ") {
+                at = None;
+            }
+            if let Some(command) = at {
+                shown.extend(flags(line).into_iter().map(|f| (command, f)));
+            }
+        }
+        assert!(
+            shown.contains(&(Command::Handoff, "--anchor".to_string())) && shown.contains(&(Command::Session, "--close".to_string())),
+            "the scan reads HELP's command sections: {shown:?}"
+        );
+        assert!(GLOBAL.iter().all(|g| every.iter().any(|e| e == g)) && every.iter().any(|e| e == "--json"), "the scan reads HELP's flags for all commands: {every:?}");
+        for (command, flag) in &shown {
+            assert!(takes(*command, flag), "HELP shows `{flag}` at `{command}`, and its parser refuses it");
+        }
+        for row in &GRAMMAR {
+            for flag in &every {
+                assert!(takes(row.command, flag), "HELP lists `{flag}` for every command, and `{}` refuses it", row.command);
+            }
+        }
+    }
+
     /// Each row is one command's, opened by its own verb: no two rows share
     /// a command, and every row's verb parses to that row's command.
     #[test]

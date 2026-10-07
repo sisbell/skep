@@ -413,6 +413,31 @@ mod tests {
         assert_eq!(date.len(), "yyyy-mm-dd".len(), "{date}");
     }
 
+    /// `civil_date` names every day as the Gregorian calendar counts it —
+    /// the date a permanent byline's default carries (§4.2 step 2) — checked
+    /// over 100 000 days from the epoch, to 2243 (2000's leap day, and 2100's
+    /// and 2200's skipped), at each day's first and last second, against a
+    /// calendar counted day by day.
+    #[test]
+    fn civil_date_names_every_day_as_the_gregorian_calendar_counts_it() {
+        let (mut y, mut m, mut d) = (1970u32, 1u32, 1u32);
+        for day in 0..100_000u64 {
+            let want = format!("{y:04}-{m:02}-{d:02}");
+            assert_eq!(civil_date(day * 86_400), want, "the first second of day {day}");
+            assert_eq!(civil_date(day * 86_400 + 86_399), want, "the last second of day {day}");
+            let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+            let length = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m as usize - 1];
+            d += 1;
+            if d > length {
+                (d, m) = (1, m + 1);
+                if m > 12 {
+                    (m, y) = (1, y + 1);
+                }
+            }
+        }
+        assert_eq!((y, m, d), (2243, 10, 17), "the count reached past 2200: day 100 000 is 2243-10-17");
+    }
+
     /// Every stop answers §2.3's code from the one renderer: a usage refusal
     /// 2, a halt the code its family carries, a store refusal faced as a
     /// halt, a person door without a terminal a halt of the family, 3, and

@@ -41,12 +41,17 @@
 //! named in code in `src/args.rs` alone, so no command reads a setting
 //! around the precedence a flag holds over its variable.
 //!
+//! ONLY `main` ENDS THE PROCESS (§2.3). Every `exit(` and `abort(` under
+//! `src/` sits in `main`, which exits with `exit_code`'s rendering of the
+//! command's answer — so no command picks a code of its own, nor ends the
+//! run before its stop's block is said.
+//!
 //! Each scan asserts that it found what it allows — an edge between
-//! modules, a write in each writer, a touch in each reader, the five
-//! variables in `src/args.rs` — or, where it allows nothing, that it reads
-//! the forms it refuses, so a scan gone blind fails rather than passing a
-//! clean tree. Comments are not code, and neither is anything from an
-//! inline `mod tests {` on.
+//! modules, a write in each writer, a touch in each reader, an end in
+//! `main`, the five variables in `src/args.rs` — or, where it allows
+//! nothing, that it reads the forms it refuses, so a scan gone blind fails
+//! rather than passing a clean tree. Comments are not code, and neither is
+//! anything from an inline `mod tests {` on.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -62,6 +67,10 @@ const STDERR_WRITERS: &[(&str, &str)] = &[("terminal.rs", "has_terminal"), ("ter
 /// The functions that may touch stdin: a file under `src/` and the
 /// column-0 function in it.
 const STDIN_READERS: &[(&str, &str)] = &[("terminal.rs", "has_terminal"), ("terminal.rs", "answer"), ("commands.rs", "read_payload"), ("commands/session.rs", "session")];
+
+/// The functions that may end the process: a file under `src/` and the
+/// column-0 function in it.
+const EXITERS: &[(&str, &str)] = &[("main.rs", "main")];
 
 /// §9 item 21's variables — every one `src/args.rs` reads.
 const VARIABLES: &[&str] = &["SKEP_BOARD", "SKEP_KEY", "SKEP_KEYSTORE", "SKEP_PRINCIPAL", "SKEP_SESSION"];
@@ -169,6 +178,20 @@ fn stdin_is_read_by_answer_and_the_dash_arguments_alone() {
     );
 }
 
+#[test]
+fn the_process_is_ended_by_main_alone() {
+    let samples = [("    std::process::exit(3);", true), ("        Ok(Parsed::Help) => exit(code),", true), ("    process::abort();", true), ("    talk(h.exit_code());", false)];
+    for (sample, ends) in samples {
+        assert_eq!(ends_the_process(sample), ends, "the scan reads the forms it refuses: `{sample}`");
+    }
+    confined(
+        ends_the_process,
+        EXITERS,
+        "ends the process",
+        "only `main` ends the process, with `exit_code`'s rendering of the command's answer (§2.3): answer a `Stop` with `?` instead",
+    );
+}
+
 /// Asserts that every code line under `src/` that `hits` matches sits in
 /// one of `allowed` — a file under `src/` and the column-0 function in it —
 /// and that each of `allowed` holds such a line, so a scan gone blind fails
@@ -253,6 +276,13 @@ fn writes_stderr(code: &str) -> bool {
 /// Whether `code` touches stdin: a `stdin(` handle.
 fn touches_stdin(code: &str) -> bool {
     names(code, "stdin(")
+}
+
+/// Whether `code` ends the process: an `exit(` or an `abort(`, bare or
+/// through a path — never an `exit_code(`, which names the code and ends
+/// nothing.
+fn ends_the_process(code: &str) -> bool {
+    names(code, "exit(") || names(code, "abort(")
 }
 
 /// Whether `code` holds `needle` as a whole word — no identifier character

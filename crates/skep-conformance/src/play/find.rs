@@ -112,7 +112,7 @@ pub(super) fn h_find_links(
     // The search region: vspec array, doc reference, located text — or,
     // when the text/region lives only in DELETED content, the I-coverage
     // captured at delete time (ruling 10, policy `i-coverage-search`).
-    let mut icov_tag = false;
+    let mut i_coverage_search = false;
     let search_sides: Option<SideSpec> = (|| {
         if let Some(v) = field(op, &["search", "specs", "specset", "source_specs"]) {
             if let Some(s) = v.as_str() {
@@ -128,7 +128,7 @@ pub(super) fn h_find_links(
                     return Some(SideSpec::V(vec![l.into_side()]));
                 }
                 let ispans = cx.deletions.locate(s.as_bytes())?;
-                icov_tag = true;
+                i_coverage_search = true;
                 return Some(SideSpec::I(Endset::from_spans(ispans)));
             }
             let arr = v.as_array()?;
@@ -145,7 +145,7 @@ pub(super) fn h_find_links(
                 return Some(SideSpec::V(vec![l.into_side()]));
             }
             let ispans = cx.deletions.locate(t.as_bytes())?;
-            icov_tag = true;
+            i_coverage_search = true;
             return Some(SideSpec::I(Endset::from_spans(ispans)));
         }
         // A doc-valued search field (link_chain's `search_doc: "B"`).
@@ -157,10 +157,13 @@ pub(super) fn h_find_links(
         }
         None
     })();
-    if icov_tag {
+    if i_coverage_search {
         out.adaptations.push("i-coverage-search".into());
     }
-    if str_field(op, &["search_text", "query"]).is_some() && search_sides.is_some() && !icov_tag {
+    if str_field(op, &["search_text", "query"]).is_some()
+        && search_sides.is_some()
+        && !i_coverage_search
+    {
         out.adaptations.push("text-located:search".into());
     }
 
@@ -325,7 +328,7 @@ pub(super) fn h_find_links(
     // — the search the golden aimed at content that still exists as
     // I-history. The clamp flag surfaces as `query-clamped-to-extent`.
     let mut clamped_any = false;
-    let mut icov_any = false;
+    let mut i_coverage_side = false;
     let mut side_to_slot = |cx: &mut Cx, sides: Option<SideSpec>, notes: &mut Vec<String>| -> SlotSpec {
         match sides {
             None => SlotSpec::Any,
@@ -342,15 +345,15 @@ pub(super) fn h_find_links(
                     if spans.is_empty() || cx.shadow.text_len(doc) == 0 {
                         let deleted = cx.deletions.ispans_of(doc);
                         if !deleted.is_empty() {
-                            icov_any = true;
+                            i_coverage_side = true;
                             all.extend(deleted);
                         }
                         continue;
                     }
-                    let (e, n, cl) = cx.image_endset(doc, spans);
-                    notes.extend(n);
-                    clamped_any |= cl;
-                    all.extend(e.spans().cloned());
+                    let (endset, image_notes, clamped) = cx.image_endset(doc, spans);
+                    notes.extend(image_notes);
+                    clamped_any |= clamped;
+                    all.extend(endset.spans().cloned());
                 }
                 let e = Endset::from_spans(all);
                 if e.is_empty() {
@@ -363,7 +366,7 @@ pub(super) fn h_find_links(
     };
     let from = side_to_slot(cx, from_sides, &mut notes);
     let to = side_to_slot(cx, to_sides, &mut notes);
-    if icov_any {
+    if i_coverage_side {
         out.adaptations.push("i-coverage-search".into());
     }
     if clamped_any {
@@ -407,14 +410,14 @@ pub(super) fn h_find_links(
                             }
                         }
                         if !plain.is_empty() {
-                            let (e, n, cl) = cx.image_endset(docid, &plain);
-                            notes.extend(n);
+                            let (endset, image_notes, clamped) = cx.image_endset(docid, &plain);
+                            notes.extend(image_notes);
                             // The from/to clamp tag was already emitted above;
                             // tag a threeset clamp directly.
-                            if cl {
+                            if clamped {
                                 out.adaptations.push("query-clamped-to-extent".into());
                             }
-                            all.extend(e.spans().cloned());
+                            all.extend(endset.spans().cloned());
                         }
                     }
                     let e = Endset::from_spans(all);
@@ -488,11 +491,11 @@ pub(super) fn h_find_links(
         }
     };
     let q = FourSet { home, from, to, ty };
-    let xf = expected_failure(op);
+    let recorded_failure = expected_failure(op);
     let r = cx.rig.exec(Op::FindLinksFtt { q });
     let addrs: Vec<skep_address::Address> = match r {
         Response::Addrs { addrs, .. } => {
-            if !settle_accepted(out, xf) {
+            if !settle_accepted(out, recorded_failure) {
                 return;
             }
             // Harness infrastructure out BEFORE either comparator: the
@@ -502,7 +505,7 @@ pub(super) fn h_find_links(
             addrs.into_iter().filter(|a| !cx.rig.is_infra_addr(a)).collect()
         }
         other => {
-            settle_unaccepted(out, xf, &other);
+            settle_unaccepted(out, recorded_failure, &other);
             return;
         }
     };
@@ -572,9 +575,9 @@ fn bare_find_documents_aim(cx: &mut Cx, op: &Value, out: &mut OpOutcome) -> Opti
 }
 
 pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
-    let xf = expected_failure(op);
+    let recorded_failure = expected_failure(op);
     let mut regions: Vec<RegionSpec> = Vec::new();
-    let mut ground_failed: Option<String> = None;
+    let mut grounding_failure: Option<String> = None;
     // A search text whose live location is gone: FINDDOCSCONTAINING takes
     // V-regions only, so the I-coverage reach re-locates the doc's DELETED
     // bytes in whichever doc still holds the identity live (the
@@ -627,7 +630,7 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                             regions.push(RegionSpec { doc: d, spans: vec![span] });
                         }
                     }
-                    None => ground_failed = Some(format!("search {s:?} not groundable")),
+                    None => grounding_failure = Some(format!("search {s:?} not groundable")),
                 }
             }
         }
@@ -643,7 +646,7 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 regions.push(RegionSpec { doc: d, spans });
             }
             None => {
-                ground_failed = Some(format!(
+                grounding_failure = Some(format!(
                     "query {qt:?} not found in any live document (deleted content is reachable \
                      by I-history, but FINDDOCSCONTAINING takes V-regions)"
                 ))
@@ -695,8 +698,8 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         inexpressible(out, "find_documents with no document in scope".into());
         return;
     }
-    if let Some(reason) = ground_failed {
-        if xf.is_some() {
+    if let Some(reason) = grounding_failure {
+        if recorded_failure.is_some() {
             out.agree("expected-failure");
             out.add_note(format!("{reason}; golden also recorded failure"));
         } else {
@@ -707,13 +710,13 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     let r = cx.rig.exec(Op::FindDocsContaining { regions });
     let addrs = match r {
         Response::Addrs { addrs, .. } => {
-            if !settle_accepted(out, xf) {
+            if !settle_accepted(out, recorded_failure) {
                 return;
             }
             addrs
         }
         other => {
-            settle_unaccepted(out, xf, &other);
+            settle_unaccepted(out, recorded_failure, &other);
             return;
         }
     };
@@ -733,7 +736,7 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     }
 }
 
-pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
+pub(super) fn h_retrieve_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     // Link-space query: the golden's slot vspecs are addressed to the LINK
     // itself ("search": "link address space" — links/link_retrieval_via_
     // endsets). udanax renders link endsets in the link's own V-space; skep
@@ -833,16 +836,16 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         out.never_bound(format!("retrieve_endsets doc {doc} never bound"));
         return;
     };
-    let xf = expected_failure(op);
+    let recorded_failure = expected_failure(op);
     let pairs = match cx.rig.exec(Op::RetrieveEndsets { d, region }) {
         Response::Endsets { pairs, .. } => {
-            if !settle_accepted(out, xf) {
+            if !settle_accepted(out, recorded_failure) {
                 return;
             }
             pairs
         }
         other => {
-            settle_unaccepted(out, xf, &other);
+            settle_unaccepted(out, recorded_failure, &other);
             return;
         }
     };
@@ -891,11 +894,11 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         // Golden side → I-coverage via the live image.
         let mut want_ranges: Vec<(Tumbler, u64, u64)> = Vec::new();
         for (docid, regions) in &want_specs {
-            let (e, notes, _) = cx.image_endset(docid, regions);
+            let (endset, notes, _) = cx.image_endset(docid, regions);
             for n in notes {
                 out.add_note(n);
             }
-            for sp in e.spans() {
+            for sp in endset.spans() {
                 if let Some(r) = elem_range(sp) {
                     let hi = r.hi();
                     want_ranges.push((r.prefix, r.lo, hi));
@@ -905,11 +908,11 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         // Skep side: the recorded endset spans, infrastructure spans (the
         // types doc, the rig homes, ruling 21's grant) excluded.
         let mut got_ranges: Vec<(Tumbler, u64, u64)> = Vec::new();
-        for (i, e) in &pairs {
-            if *i != slot {
+        for (endset_slot, endset) in &pairs {
+            if *endset_slot != slot {
                 continue;
             }
-            for sp in e.spans() {
+            for sp in endset.spans() {
                 if let Ok(a) = skep_address::validate(sp.start().clone()) {
                     if cx.rig.is_infra_addr(&a) {
                         continue;
@@ -942,11 +945,11 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             .flat_map(|(docid, regions)| regions.iter().map(|r| (docid.clone(), r.width)))
             .collect();
         let mut got: Vec<(String, u64)> = Vec::new();
-        for (i, e) in &pairs {
-            if *i != 3 {
+        for (endset_slot, endset) in &pairs {
+            if *endset_slot != 3 {
                 continue;
             }
-            for sp in e.spans() {
+            for sp in endset.spans() {
                 let Ok(a) = skep_address::validate(sp.start().clone()) else { continue };
                 if cx.rig.is_infra_addr(&a) {
                     continue;

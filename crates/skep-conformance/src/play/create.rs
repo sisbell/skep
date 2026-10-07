@@ -8,8 +8,8 @@ use serde_json::Value;
 use skep_febe::Response;
 
 use super::{
-    create_one, inexpressible, joint_absence, plan_failed, refusal, run_plan, settle_accepted,
-    settle_unaccepted, settle_rejected, Cx,
+    ensure_document, inexpressible, joint_absence, plan_failed, refusal, run_plan, settle_accepted,
+    settle_rejected, settle_unaccepted, Cx,
 };
 use crate::evidence::Effect;
 use crate::fields::{
@@ -25,7 +25,7 @@ pub(super) fn h_create_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         Some(Value::Array(a)) => a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
         _ => vec![cx.shadow.synthesize_docid()],
     };
-    let xf = expected_failure(op);
+    let recorded_failure = expected_failure(op);
     let effect = Effect::of(op);
     for (i, golden) in goldens.iter().enumerate() {
         if cx.shadow.knows(golden) {
@@ -38,24 +38,24 @@ pub(super) fn h_create_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         }
         let r = cx.create_document(golden, if i == 0 { name.as_deref() } else { None }, effect);
         if !matches!(r, Response::AckAddr { .. }) {
-            settle_unaccepted(out, xf, &r);
+            settle_unaccepted(out, recorded_failure, &r);
             return;
         }
     }
-    if settle_accepted(out, xf) {
+    if settle_accepted(out, recorded_failure) {
         out.agree("address-binding");
     }
 }
 
 pub(super) fn h_create_documents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
-    let xf = expected_failure(op);
+    let recorded_failure = expected_failure(op);
     let effect = Effect::of(op);
     // The first creation skep refuses settles the op against the failure
     // the golden recorded, once, after every creation the op records was
     // asked for.
     let mut refused: Option<Box<Response>> = None;
     let mut create = |cx: &mut Cx, id: &str, name: Option<&str>| {
-        if let Err(r) = create_one(cx, id, name, effect) {
+        if let Err(r) = ensure_document(cx, id, name, effect) {
             refused.get_or_insert(r);
         }
     };
@@ -145,13 +145,13 @@ pub(super) fn h_create_documents(cx: &mut Cx, index: usize, op: &Value, out: &mu
         }
     }
     if let Some(r) = refused {
-        settle_unaccepted(out, xf, &r);
+        settle_unaccepted(out, recorded_failure, &r);
         return;
     }
     if out.status == Status::Disagreed {
         return;
     }
-    if settle_accepted(out, xf) {
+    if settle_accepted(out, recorded_failure) {
         out.agree("address-binding");
     }
 }
@@ -168,7 +168,7 @@ pub(super) fn h_create_chain(cx: &mut Cx, index: usize, op: &Value, out: &mut Op
     by_id.sort();
     let mut refused: Option<Box<Response>> = None;
     for (id, n) in &by_id {
-        if let Err(r) = create_one(cx, id, Some(n), Effect::of(op)) {
+        if let Err(r) = ensure_document(cx, id, Some(n), Effect::of(op)) {
             refused.get_or_insert(r);
         }
     }
@@ -208,7 +208,7 @@ pub(super) fn h_open_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     let conflict_copy = str_field(op, &["conflict"]).is_some_and(|c| c == "copy")
         || str_field(op, &["copy", "copy_mode"]).is_some_and(|c| c == "conflict_copy");
     let result = str_field(op, &["result"]).map(str::to_string);
-    let xf = expected_failure(op);
+    let recorded_failure = expected_failure(op);
     if conflict_copy {
         out.adaptations.push("open_document:conflict_copy→version".into());
         match cx.create_version(&doc, result.as_deref(), &[], Effect::of(op)) {
@@ -216,11 +216,11 @@ pub(super) fn h_open_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 out.never_bound(format!("open_document(conflict=copy) of never-bound doc {doc}"))
             }
             Ok(Response::AckAddr { .. }) => {
-                if settle_accepted(out, xf) {
+                if settle_accepted(out, recorded_failure) {
                     out.agree("address-binding");
                 }
             }
-            Ok(other) => settle_unaccepted(out, xf, &other),
+            Ok(other) => settle_unaccepted(out, recorded_failure, &other),
         }
         return;
     }
@@ -230,7 +230,7 @@ pub(super) fn h_open_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     // open layer to refuse with. The divergence is real and surfaces raw
     // (policy `open-noop-vs-recorded-failure`) — never absorbed into the
     // no-op.
-    if let Some(err) = xf {
+    if let Some(err) = recorded_failure {
         out.adaptations.push("open-noop-vs-recorded-failure".into());
         let expected = format!("failure: {err:?}");
         let actual =
@@ -278,8 +278,8 @@ pub(super) fn h_create_version(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         Some(Value::Object(o)) => o.get("version").and_then(Value::as_str).map(str::to_string),
         _ => None,
     };
-    let xf = expected_failure(op);
-    if joint_absence(cx, out, xf.as_deref(), &src) {
+    let recorded_failure = expected_failure(op);
+    if joint_absence(cx, out, recorded_failure.as_deref(), &src) {
         return; // green failed versioning a never-created doc (boundary A7)
     }
     // A non-address doc/name/label field names the NEW version.
@@ -288,7 +288,7 @@ pub(super) fn h_create_version(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     match cx.create_version(&src, golden.as_deref(), &names, Effect::of(op)) {
         Err(_) => out.never_bound(format!("version of never-bound doc {src}")),
         Ok(Response::AckAddr { .. }) => {
-            if !settle_accepted(out, xf) {
+            if !settle_accepted(out, recorded_failure) {
                 return;
             }
             if golden.is_some() {
@@ -298,7 +298,7 @@ pub(super) fn h_create_version(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 out.note = Some("create_version with no recorded result to bind".into());
             }
         }
-        Ok(other) => settle_unaccepted(out, xf, &other),
+        Ok(other) => settle_unaccepted(out, recorded_failure, &other),
     }
 }
 
@@ -312,7 +312,7 @@ pub(super) fn h_account(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     };
     // A golden account α already binds is made current again; one seen for
     // the first time is delegated fresh.
-    let switched = match cx.alpha.peek(acct) {
+    let switched = match cx.alpha.peek_exact(acct) {
         Some(a) => cx.rig.switch_to(&a).map(|()| a),
         None => cx.rig.delegate_account(),
     };
@@ -321,9 +321,9 @@ pub(super) fn h_account(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             cx.alpha.bind(acct, &a);
             // Multisession: `account` ops carrying a session field bind (or
             // re-bind) the label to this account (ms_create_race re-binds B).
-            if let Some(sess) = str_field(op, &["session"]) {
-                cx.rig.bind_session_label(sess, &a);
-                out.adaptations.push(format!("session-bind:{sess}"));
+            if let Some(session_label) = str_field(op, &["session"]) {
+                cx.rig.bind_session_label(session_label, &a);
+                out.adaptations.push(format!("session-bind:{session_label}"));
             }
             out.status = Status::NotCompared;
         }
@@ -344,19 +344,19 @@ pub(super) fn h_create_node(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         out.never_bound(format!("create_node under never-bound account {parent_golden}"));
         return;
     };
-    let xf = expected_failure(op);
+    let recorded_failure = expected_failure(op);
     match cx.rig.delegate_under(&parent) {
-        Ok(sub) => {
-            if !settle_accepted(out, xf) {
+        Ok(sub_account) => {
+            if !settle_accepted(out, recorded_failure) {
                 return;
             }
             if let Some(g) = str_field(op, &["result"]) {
-                cx.alpha.bind(g, &sub);
+                cx.alpha.bind(g, &sub_account);
                 out.agree("address-binding");
             } else {
                 out.status = Status::NotCompared;
             }
         }
-        Err(e) => settle_rejected(out, xf, e),
+        Err(e) => settle_rejected(out, recorded_failure, e),
     }
 }

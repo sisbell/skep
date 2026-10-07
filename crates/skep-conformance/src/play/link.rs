@@ -14,8 +14,8 @@ use super::{
 };
 use crate::evidence::Effect;
 use crate::fields::{
-    arrow_results, as_text, expect_strings, expected_failure, field, locate, note_arrow,
-    op_name, parse_python_spec, str_field, verb_of, vspec_dict, DocSpans, Verb,
+    arrow_results, as_text, expected_failure, field, locate, note_arrow, op_name,
+    parse_python_spec, str_field, strings_of, verb_of, vspec_dict, DocSpans, Verb,
 };
 use crate::outcome::{OpOutcome, Status};
 use crate::shadow::ShadowLink;
@@ -52,7 +52,7 @@ fn to_vspecs(cx: &mut Cx, sides: &[DocSpans]) -> Result<Vec<VSpec>, String> {
 /// MakeLink.
 fn endset_evidence(
     cx: &Cx,
-    from_index: usize,
+    index: usize,
     link_golden: &str,
     want_source: bool,
     hint: Option<&str>,
@@ -77,7 +77,7 @@ fn endset_evidence(
             }
         }
         // Content strings → located spans (hint doc first).
-        let ss = expect_strings(v)?;
+        let ss = strings_of(v)?;
         let mut sides: Vec<DocSpans> = Vec::new();
         for s in &ss {
             if s.is_empty() || as_text(std::slice::from_ref(s)).is_none() {
@@ -88,7 +88,7 @@ fn endset_evidence(
         }
         (!sides.is_empty()).then_some(sides)
     };
-    for op in &cx.ops[from_index + 1..] {
+    for op in &cx.ops[index + 1..] {
         let verb = verb_of(op);
         if verb.is_some_and(Verb::writes_content) {
             return None;
@@ -192,7 +192,12 @@ fn endset_evidence(
 /// endset via α, policy
 /// `threeset-content-type`; green's content-span third endsets are
 /// first-class, A8).
-fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Option<String>) {
+fn h_create_link_explicit(
+    cx: &mut Cx,
+    op: &Value,
+    out: &mut OpOutcome,
+    recorded_failure: Option<String>,
+) {
     let golden = str_field(op, &["result", "link_id"]).map(str::to_string);
 
     // FROM / TO: α-translated V-specs; marker spans do not belong here.
@@ -363,7 +368,7 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
     match cx.make_link(&home_golden, [from, to, ty], link, None, Effect::of(op)) {
         Err(_) => out.never_bound(format!("create_link home {home_golden} never bound")),
         Ok(Response::AckAddr { .. }) => {
-            if !settle_accepted(out, xf) {
+            if !settle_accepted(out, recorded_failure) {
                 return;
             }
             if golden.is_some() {
@@ -372,16 +377,16 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
                 out.status = Status::NotCompared;
             }
         }
-        Ok(other) => settle_unaccepted(out, xf, &other),
+        Ok(other) => settle_unaccepted(out, recorded_failure, &other),
     }
 }
 
 pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
-    let xf = expected_failure(op);
+    let recorded_failure = expected_failure(op);
     // The corpus-extension explicit-set shape short-circuits every legacy
     // grounding convention — the recordings carry all arguments.
     if op.get("fromset").is_some() || op.get("toset").is_some() || op.get("threeset").is_some() {
-        h_create_link_explicit(cx, op, out, xf);
+        h_create_link_explicit(cx, op, out, recorded_failure);
         return;
     }
     // Result ids: result/results/link_id fields, or arrow keys ("A->B": link).
@@ -398,7 +403,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
     }
     // Arrow roles carried in a note/comment value ("doc1 -> doc4" —
     // find_links_homedocids_multiple) stand in when no arrow keys exist.
-    let narrow = if arrows.is_empty() { note_arrow(op) } else { None };
+    let arrow_in_note = if arrows.is_empty() { note_arrow(op) } else { None };
 
     // Group endsets for plural creates (star_hub, selective_removal): a
     // from/to string is a GROUP reference when its singular members exist
@@ -424,7 +429,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
     };
 
     let count = goldens.len().max(1);
-    let mut bound = 0usize;
+    let mut made = 0usize;
     for k in 0..count {
         let golden = goldens.get(k).cloned();
         let arrow = arrows.get(k).cloned().or_else(|| {
@@ -445,7 +450,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
         let from_doc_hint: Option<String> = arrow
             .as_ref()
             .and_then(|(f, _, _)| cx.shadow.resolve_doc(f))
-            .or_else(|| narrow.as_ref().and_then(|(f, _)| cx.shadow.resolve_doc(f)))
+            .or_else(|| arrow_in_note.as_ref().and_then(|(f, _)| cx.shadow.resolve_doc(f)))
             .or_else(|| member(cx, &from_group))
             .or_else(|| {
                 if from_group.is_some() {
@@ -456,7 +461,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
         let to_doc_hint: Option<String> = arrow
             .as_ref()
             .and_then(|(_, t, _)| cx.shadow.resolve_doc(t))
-            .or_else(|| narrow.as_ref().and_then(|(_, t)| cx.shadow.resolve_doc(t)))
+            .or_else(|| arrow_in_note.as_ref().and_then(|(_, t)| cx.shadow.resolve_doc(t)))
             .or_else(|| member(cx, &to_group))
             .or_else(|| {
                 if to_group.is_some() {
@@ -737,17 +742,17 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
                 out.never_bound(format!("create_link home {home_golden} never bound"));
                 return;
             }
-            Ok(Response::AckAddr { .. }) => bound += 1,
+            Ok(Response::AckAddr { .. }) => made += 1,
             Ok(other) => {
-                settle_unaccepted(out, xf, &other);
+                settle_unaccepted(out, recorded_failure, &other);
                 return;
             }
         }
     }
-    if !settle_accepted(out, xf) {
+    if !settle_accepted(out, recorded_failure) {
         return;
     }
-    if bound == 0 || goldens.is_empty() {
+    if made == 0 || goldens.is_empty() {
         out.status = Status::NotCompared;
         out.note = Some("create_link with no recorded result to bind".into());
     } else {

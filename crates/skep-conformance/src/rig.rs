@@ -81,13 +81,13 @@ pub struct Rig {
     febe: OperationSurface<World>,
     /// Bootstrap session — all delegations run under it (π₀'s prefix `[1]` is
     /// an ancestor of every prefix we mint).
-    boot: SessionId,
+    bootstrap_session: SessionId,
     /// Per skep-account sessions: account → (session, principal).
     sessions: BTreeMap<Address, (SessionId, PrincipalId)>,
     /// Golden session labels ("A"/"B"/"C") → skep account (a `sessions`
     /// key). Bound by `account` ops carrying a `session` field; ops carrying
     /// `session` route through the label's account session.
-    labels: BTreeMap<String, Address>,
+    session_labels: BTreeMap<String, Address>,
     /// The session scenario ops execute under — always the session of
     /// `current_account`: after construction, [`Rig::make_current`] is the
     /// one writer of the pair.
@@ -208,18 +208,19 @@ impl Rig {
         };
         let engine = Engine::open(cfg).map_err(|e| format!("engine open: {e}"))?;
         let febe = OperationSurface::new(Box::new(engine.stores()));
-        let boot = febe.bootstrap_session();
+        let bootstrap_session = febe.bootstrap_session();
 
         // Delegate the scenario's working account under node [1] — udanax's
         // DEFAULT_ACCOUNT analog. The α seed "1.1.0.1" ↦ this account is
         // installed by the runner.
-        let prefix = match execute(&febe, boot, Op::NextAccountPrefix { parent: node_one() }) {
+        let next = Op::NextAccountPrefix { parent: node_one() };
+        let prefix = match execute(&febe, bootstrap_session, next) {
             Response::MaybeAddr { addr: Some(a), .. } => a,
             other => return Err(format!("next-account-prefix failed: {}", brief(&other))),
         };
         let account = match execute(
             &febe,
-            boot,
+            bootstrap_session,
             Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: PrincipalId(1) },
         ) {
             Response::AckAddr { addr, .. } => addr,
@@ -234,9 +235,9 @@ impl Rig {
         Ok(Rig {
             _engine: engine,
             febe,
-            boot,
+            bootstrap_session,
             sessions: BTreeMap::from([(account.clone(), (session, PrincipalId(1)))]),
-            labels: BTreeMap::new(),
+            session_labels: BTreeMap::new(),
             current_session: session,
             current_account: account.clone(),
             default_account: account,
@@ -311,7 +312,7 @@ impl Rig {
     /// binding, so the shared session is observably identical and the map
     /// stays one-session-per-account.
     pub fn bind_session_label(&mut self, label: &str, account: &Address) {
-        self.labels.insert(label.to_string(), account.clone());
+        self.session_labels.insert(label.to_string(), account.clone());
     }
 
     /// Route the working session/account to a golden session label. An
@@ -319,9 +320,9 @@ impl Rig {
     /// it) binds to the CURRENT account — returns `true` so the caller can
     /// tag the implicit bind.
     pub fn route_session(&mut self, label: &str) -> Result<bool, String> {
-        let implicit = !self.labels.contains_key(label);
+        let implicit = !self.session_labels.contains_key(label);
         let account = self
-            .labels
+            .session_labels
             .entry(label.to_string())
             .or_insert_with(|| self.current_account.clone())
             .clone();
@@ -349,7 +350,8 @@ impl Rig {
     /// Node `[1]` belongs to π₀ (the bootstrap session); a scenario account
     /// belongs to the principal this rig delegated it to.
     fn delegate(&mut self, parent: &Address) -> Result<(Address, SessionId), String> {
-        let owner_session = self.sessions.get(parent).map(|(s, _)| *s).unwrap_or(self.boot);
+        let owner_session =
+            self.sessions.get(parent).map(|(s, _)| *s).unwrap_or(self.bootstrap_session);
         let next = Op::NextAccountPrefix { parent: parent.clone() };
         let prefix = match execute(&self.febe, owner_session, next) {
             Response::MaybeAddr { addr: Some(a), .. } => a,

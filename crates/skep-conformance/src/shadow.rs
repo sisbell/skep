@@ -30,8 +30,8 @@ fn byte_range(len: usize, ord: u64, width: u64) -> Range<usize> {
 struct DocShadow {
     /// Content-subspace bytes, ordinal i ↦ text[i-1].
     text: Vec<u8>,
-    /// Link-subspace occupancy count (links homed here, in creation order).
-    links: u64,
+    /// Link-subspace occupancy: how many links are seated here.
+    link_count: u64,
 }
 
 /// One created link as the harness grounded it: golden id plus both endsets
@@ -243,15 +243,15 @@ impl Shadow {
     }
 
     pub fn link_count(&self, golden: &str) -> u64 {
-        self.docs.get(golden).map(|d| d.links).unwrap_or(0)
+        self.docs.get(golden).map(|d| d.link_count).unwrap_or(0)
     }
 
-    /// Docs in creation order that hold content, excluding `not` — the
+    /// Docs in creation order that hold content, excluding `excluded` — the
     /// "which doc did the script copy from" fallback.
-    pub fn content_docs_except(&self, not: &str) -> Vec<String> {
+    pub fn content_docs_except(&self, excluded: &str) -> Vec<String> {
         self.created
             .iter()
-            .filter(|g| g.as_str() != not && self.text_len(g) > 0)
+            .filter(|g| g.as_str() != excluded && self.text_len(g) > 0)
             .cloned()
             .collect()
     }
@@ -308,7 +308,7 @@ impl Shadow {
 
     /// Case-insensitive locate in ONE doc, returning the matched width (a
     /// description says "after first" for content "First ").
-    pub fn find_text_ci(&self, doc: &str, needle: &str) -> Option<(String, u64, u64)> {
+    pub fn find_text_ignoring_case(&self, doc: &str, needle: &str) -> Option<(String, u64, u64)> {
         let d = self.docs.get(doc)?;
         let hay = String::from_utf8_lossy(&d.text).to_ascii_lowercase();
         let n = needle.to_ascii_lowercase();
@@ -393,11 +393,11 @@ impl Shadow {
     /// to its two unbound version results as "v1"/"v2"); `version` always
     /// names the LATEST version.
     pub fn version(&mut self, src: &str, new_golden: &str) {
-        let (text, links) = match self.docs.get(src) {
-            Some(d) => (d.text.clone(), d.links),
+        let (text, link_count) = match self.docs.get(src) {
+            Some(d) => (d.text.clone(), d.link_count),
             None => (Vec::new(), 0),
         };
-        self.docs.insert(new_golden.to_string(), DocShadow { text, links });
+        self.docs.insert(new_golden.to_string(), DocShadow { text, link_count });
         self.created.push(new_golden.to_string());
         self.version_of.insert(new_golden.to_string(), src.to_string());
         let n = self.version_of.len();
@@ -410,7 +410,7 @@ impl Shadow {
     }
 
     pub fn seat_link(&mut self, home_golden: &str) {
-        self.docs.entry(home_golden.to_string()).or_default().links += 1;
+        self.docs.entry(home_golden.to_string()).or_default().link_count += 1;
     }
 
     /// Record a created link's grounded endsets (play pass and setup steps

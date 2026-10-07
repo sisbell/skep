@@ -17,13 +17,13 @@ use super::{
 };
 use crate::allowlist::Adjustments;
 use crate::compare::{
-    collapsed_subspace_shape, compare_content, compare_count, compare_spansets,
+    compare_content, compare_count, compare_spansets, is_collapsed_subspace_shape,
     COLLAPSED_SUBSPACE_ANALYSIS, VERSION_LINK_CARRYOVER_ANALYSIS,
 };
 use crate::fields::{
-    as_text, expect_spans_raw, expect_strings, expected_failure, field, harvest_spanset,
-    has_observation_fields, locate, op_name, per_doc_replies, position_from_op_name,
-    recorded_content, span_dict, str_field, verb_of, vspec_dict, Verb,
+    as_text, expected_failure, field, has_observation_fields, locate, op_name, per_doc_replies,
+    position_from_op_name, raw_spanset_of, recorded_content, recorded_spanset, span_dict,
+    str_field, strings_of, verb_of, vspec_dict, Verb,
 };
 use crate::outcome::{Disagreement, OpOutcome};
 use crate::tum::{is_link_address, link_home_docid, parse_dotted, parse_vpos, VPoint};
@@ -49,7 +49,7 @@ fn follow_landing_specs(cx: &mut Cx, index: usize, op: &Value) -> Option<Vec<Spe
     if !matches!(verb_of(prev), Some(Verb::FollowLink | Verb::Traverse)) {
         return None;
     }
-    let (docid, spans) = expect_spans_raw(field(prev, &["result"])?)?;
+    let (docid, spans) = raw_spanset_of(field(prev, &["result"])?)?;
     let docid = docid?;
     if spans.is_empty() {
         return None;
@@ -76,15 +76,15 @@ fn deep_span_dict(v: &Value) -> Option<(Vec<u64>, Vec<u64>)> {
     (start.len() > 2 || width.len() > 2).then_some((start, width))
 }
 
-pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
-    let xf = expected_failure(op);
+pub(super) fn h_retrieve_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
+    let recorded_failure = expected_failure(op);
 
     // Multi-doc probe: `docs` map of name → expected strings. An id map
     // (create_documents-shaped) holds addresses, never content: set aside.
     if let Some(map) = op.get("docs").and_then(Value::as_object) {
         let mut tally = Tally::default();
         for (name, exp) in map {
-            let Some(strings) = expect_strings(exp) else { continue };
+            let Some(strings) = strings_of(exp) else { continue };
             if as_text(&strings).is_none() {
                 continue;
             }
@@ -121,7 +121,7 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
                     e.get("doc").and_then(Value::as_str).and_then(|n| cx.shadow.resolve_doc(n))
                 });
             let (Some(docid), Some(strings)) =
-                (docid, e.get("contents").or_else(|| e.get("content")).and_then(expect_strings))
+                (docid, e.get("contents").or_else(|| e.get("content")).and_then(strings_of))
             else {
                 continue;
             };
@@ -293,7 +293,7 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
                 out.adaptations.push("specset-from-description".into());
                 let first = VPoint::content(1).region(n);
                 for docid in &cx.shadow.created {
-                    if let (Some(d), Some(span)) = (cx.alpha.peek(docid), first.span()) {
+                    if let (Some(d), Some(span)) = (cx.alpha.peek_exact(docid), first.span()) {
                         specs.push(Spec { doc: d, span });
                     }
                 }
@@ -461,7 +461,7 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
                         specs.extend(spans.into_iter().map(|span| Spec { doc: d.clone(), span }))
                     }
                     Err(r) => {
-                        settle_unaccepted(out, xf, &r);
+                        settle_unaccepted(out, recorded_failure, &r);
                         return;
                     }
                 },
@@ -487,13 +487,13 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
     } else {
         match cx.rig.exec(Op::RetrieveV { specs }) {
             Response::Delivery { items, .. } => {
-                if !settle_accepted(out, xf) {
+                if !settle_accepted(out, recorded_failure) {
                     return;
                 }
                 items.0
             }
             other => {
-                settle_unaccepted(out, xf, &other);
+                settle_unaccepted(out, recorded_failure, &other);
                 return;
             }
         }
@@ -541,14 +541,14 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
 
 /// A vspan probe, or a vspanset probe when `verb` is
 /// [`Verb::RetrieveVspanset`].
-pub(super) fn h_vspanset(
+pub(super) fn h_retrieve_vspanset(
     cx: &mut Cx,
     op: &Value,
     out: &mut OpOutcome,
     adjustments: &Adjustments,
     verb: Verb,
 ) {
-    let harvested = harvest_spanset(op);
+    let recorded = recorded_spanset(op);
     // A count of a ROLE document's spans names that document (policy
     // `vspan-count-by-role`: ispan_consolidation_bulk's
     // `source_vspan_count`).
@@ -569,7 +569,7 @@ pub(super) fn h_vspanset(
         None => None,
     };
     // The expectation's own docid names the document when the op omits it.
-    let doc = harvested
+    let doc = recorded
         .as_ref()
         .and_then(|(_, d, _)| d.clone())
         .and_then(|d| cx.shadow.resolve_doc(&d))
@@ -587,7 +587,7 @@ pub(super) fn h_vspanset(
     // `poom_empty` records whether udanax's POOM — its V-space arrangement
     // of the document — held anything (policy `poom-empty`).
     let poom_empty = field(op, &["poom_empty"]).and_then(Value::as_bool);
-    let xf = expected_failure(op);
+    let recorded_failure = expected_failure(op);
     let r = if verb == Verb::RetrieveVspanset {
         cx.rig.exec(Op::RetrieveDocVSpanSet { doc: d })
     } else {
@@ -595,13 +595,13 @@ pub(super) fn h_vspanset(
     };
     let set = match r {
         Response::SpanSet { set, .. } => {
-            if !settle_accepted(out, xf) {
+            if !settle_accepted(out, recorded_failure) {
                 return;
             }
             set
         }
         other => {
-            settle_unaccepted(out, xf, &other);
+            settle_unaccepted(out, recorded_failure, &other);
             return;
         }
     };
@@ -625,7 +625,7 @@ pub(super) fn h_vspanset(
         }
         return;
     }
-    let Some((_, _, spans)) = harvested else {
+    let Some((_, _, spans)) = recorded else {
         compared_nothing(out, op, EXTENT_READS);
         return;
     };
@@ -633,7 +633,7 @@ pub(super) fn h_vspanset(
         Ok(()) => out.agree("vspanset"),
         Err(d) => {
             out.disagree("vspanset", d);
-            if collapsed_subspace_shape(&spans) {
+            if is_collapsed_subspace_shape(&spans) {
                 out.note = Some(COLLAPSED_SUBSPACE_ANALYSIS.to_string());
             } else if cx.shadow.version_of.contains_key(&doc)
                 && cx.shadow.link_count(&doc) > 0
@@ -665,7 +665,7 @@ pub(super) fn h_observe(
         || op.get("positions").and_then(Value::as_object).is_some()
         || !per_doc_replies(op, cx.shadow).is_empty()
     {
-        h_contents(cx, index, op, out);
+        h_retrieve_contents(cx, index, op, out);
         return;
     }
     // A probe green FAILED with no observation data recorded
@@ -673,18 +673,18 @@ pub(super) fn h_observe(
     // through validation-free opens). Never-created target → joint absence;
     // a real bound target → issue the vspanset read and reconcile the
     // recorded failure against skep's own answer.
-    let xf = expected_failure(op);
-    if xf.is_some() && !has_observation_fields(op) {
+    let recorded_failure = expected_failure(op);
+    if recorded_failure.is_some() && !has_observation_fields(op) {
         if let Some(docref) = str_field(op, &["doc", "docid"]) {
-            if joint_absence(cx, out, xf.as_deref(), docref) {
+            if joint_absence(cx, out, recorded_failure.as_deref(), docref) {
                 return;
             }
             if let Some(d) = cx.alpha.peek_translate(docref) {
                 match cx.rig.exec(Op::RetrieveDocVSpanSet { doc: d }) {
                     Response::SpanSet { .. } => {
-                        settle_accepted(out, xf);
+                        settle_accepted(out, recorded_failure);
                     }
-                    other => settle_unaccepted(out, xf, &other),
+                    other => settle_unaccepted(out, recorded_failure, &other),
                 }
                 return;
             }

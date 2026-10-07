@@ -273,14 +273,14 @@ use skep_retrieval::{DeliveryItem, Spec};
 use crate::allowlist::Adjustments;
 use crate::alpha::Alpha;
 use crate::compare::{
-    collapsed_subspace_shape, compare_content, compare_spansets, Comparison,
+    compare_content, compare_spansets, is_collapsed_subspace_shape, Comparison,
     COLLAPSED_SUBSPACE_ANALYSIS,
 };
 use crate::deletions::Deletions;
 use crate::evidence::Effect;
 use crate::fields::{
-    aim_doc, as_text, client_side_failure, cuts_of, expect_spans_raw, expect_strings, field,
-    harvest_spanset, locate, normalize, op_name, recorded_content, span_dict, str_field,
+    aim_doc, as_text, client_side_failure, cuts_of, field, locate, normalize, op_name,
+    raw_spanset_of, recorded_content, recorded_spanset, span_dict, str_field, strings_of,
     vspec_dict, CopySource, DocAim, DocSpans, Verb, ANNOTATION_KEYS, POST_WRITE_KEYS,
 };
 use crate::ground::SetupStep;
@@ -304,17 +304,17 @@ mod read;
 // Correspondence: compare_versions against the recorded shared-span pairs.
 mod correspondence;
 
-use correspondence::h_compare;
+use correspondence::h_compare_versions;
 use create::{
     h_account, h_create_chain, h_create_document, h_create_documents, h_create_node,
     h_create_version, h_open_document, h_setup,
 };
-use find::{h_endsets, h_find_documents, h_find_links};
+use find::{h_find_documents, h_find_links, h_retrieve_endsets};
 use follow::{h_follow_link, h_traverse};
 use link::h_create_link;
-use read::{h_contents, h_observe, h_vspanset};
+use read::{h_observe, h_retrieve_contents, h_retrieve_vspanset};
 use write::{
-    h_delete, h_insert, h_insert_loop, h_interior_typing, h_pivot_swap, h_vcopy, Rearrangement,
+    h_delete, h_insert, h_insert_loop, h_interior_typing, h_rearrange, h_vcopy, Rearrangement,
 };
 
 pub struct Cx<'a> {
@@ -375,17 +375,25 @@ fn compared_nothing(out: &mut OpOutcome, op: &Value, reads: &[&str]) {
     }
 }
 
-/// Policy `joint-absence`: the golden recorded a FAILURE (`xf`) against a
-/// document reference that was never created in this scenario (green's OPEN
-/// validates nothing — A7 — so its scripts could aim ops at garbage docids
-/// and fail at first use). The reference has no α-image, so there is
-/// nothing to address on skep either: both systems refuse the object,
-/// compared as agreement. Peek only — α's never-bound finding is
-/// deliberately not emitted, because the absence IS the expected answer
-/// here, not a translation the harness needed and missed. Returns `true`
-/// when the outcome was written.
-fn joint_absence(cx: &Cx, out: &mut OpOutcome, xf: Option<&str>, docref: &str) -> bool {
-    if xf.is_none() || cx.shadow.knows(docref) || cx.alpha.peek_translate(docref).is_some() {
+/// Policy `joint-absence`: the golden recorded a FAILURE
+/// (`recorded_failure`) against a document reference that was never created
+/// in this scenario (green's OPEN validates nothing — A7 — so its scripts
+/// could aim ops at garbage docids and fail at first use). The reference
+/// has no α-image, so there is nothing to address on skep either: both
+/// systems refuse the object, compared as agreement. Peek only — α's
+/// never-bound finding is deliberately not emitted, because the absence IS
+/// the expected answer here, not a translation the harness needed and
+/// missed. Returns `true` when the outcome was written.
+fn joint_absence(
+    cx: &Cx,
+    out: &mut OpOutcome,
+    recorded_failure: Option<&str>,
+    docref: &str,
+) -> bool {
+    if recorded_failure.is_none()
+        || cx.shadow.knows(docref)
+        || cx.alpha.peek_translate(docref).is_some()
+    {
         return false;
     }
     out.adaptations.push("joint-absence".into());
@@ -398,11 +406,11 @@ fn joint_absence(cx: &Cx, out: &mut OpOutcome, xf: Option<&str>, docref: &str) -
 }
 
 /// skep gave the op's success answer, reconciled with the failure the golden
-/// recorded (`xf`, if any). `true` when the golden recorded success too and
-/// the caller goes on to compare; `false` when it recorded a failure, which
-/// is then the op's disagreement.
-fn settle_accepted(out: &mut OpOutcome, xf: Option<String>) -> bool {
-    match xf {
+/// recorded (`recorded_failure`, if any). `true` when the golden recorded
+/// success too and the caller goes on to compare; `false` when it recorded a
+/// failure, which is then the op's disagreement.
+fn settle_accepted(out: &mut OpOutcome, recorded_failure: Option<String>) -> bool {
+    match recorded_failure {
         None => true,
         Some(err) => {
             let expected = format!("failure: {err:?}");
@@ -414,10 +422,11 @@ fn settle_accepted(out: &mut OpOutcome, xf: Option<String>) -> bool {
 }
 
 /// skep refused the op — `refused`, the refusal as the report renders it —
-/// reconciled with the failure the golden recorded (`xf`): agreement when
-/// the golden recorded a failure too, else the op's disagreement.
-fn settle_rejected(out: &mut OpOutcome, xf: Option<String>, refused: String) {
-    match xf {
+/// reconciled with the failure the golden recorded (`recorded_failure`):
+/// agreement when the golden recorded a failure too, else the op's
+/// disagreement.
+fn settle_rejected(out: &mut OpOutcome, recorded_failure: Option<String>, refused: String) {
+    match recorded_failure {
         Some(_) => {
             out.agree("expected-failure");
             out.add_note(format!("both sides failed (skep: {refused})"));
@@ -433,9 +442,9 @@ fn settle_rejected(out: &mut OpOutcome, xf: Option<String>, refused: String) {
 /// [`settle_accepted`]. A refusal is reconciled with the failure the golden
 /// recorded ([`settle_rejected`]); any other answer lies outside skep's
 /// contract and disagrees whatever the golden recorded.
-fn settle_unaccepted(out: &mut OpOutcome, xf: Option<String>, r: &Response) {
+fn settle_unaccepted(out: &mut OpOutcome, recorded_failure: Option<String>, r: &Response) {
     match r {
-        Response::Rejected(_) => settle_rejected(out, xf, refusal(r)),
+        Response::Rejected(_) => settle_rejected(out, recorded_failure, refusal(r)),
         _ => {
             let expected = "the op's success answer".to_string();
             out.disagree("response", Disagreement { expected, actual: refusal(r) });
@@ -525,17 +534,17 @@ impl Tally {
     /// nothing was compared and `out` is `NotCompared`. Notes already on
     /// `out` are kept.
     fn settle(self, out: &mut OpOutcome, comparator: &'static str) {
-        let unaimed =
+        let not_aimed =
             (!self.unaimed.is_empty()).then(|| format!("not aimed: {}", self.unaimed.join("; ")));
         if !self.disagreements.is_empty() {
             let (expected, actual): (Vec<String>, Vec<String>) =
                 self.disagreements.into_iter().map(|d| (d.expected, d.actual)).unzip();
             let (expected, actual) = (expected.join(" | "), actual.join(" | "));
             out.disagree(comparator, Disagreement { expected, actual });
-            if let Some(u) = unaimed {
+            if let Some(u) = not_aimed {
                 out.add_note(u);
             }
-        } else if let Some(u) = unaimed {
+        } else if let Some(u) = not_aimed {
             inexpressible(out, u);
         } else if self.compared > 0 {
             out.agree(comparator);
@@ -607,13 +616,13 @@ impl Cx<'_> {
     /// the world-change methods: inferred setup is golden-side by
     /// construction (`Effect::Inferred`), so it is mirrored whatever skep
     /// answers.
-    pub fn exec_setup_step(&mut self, s: &SetupStep) -> Result<(), String> {
+    pub fn exec_setup_step(&mut self, step: &SetupStep) -> Result<(), String> {
         let refused = |what: String, r: &Response| format!("{what}: {}", refusal(r));
-        match s {
+        match step {
             SetupStep::Insert { doc, bytes } => {
                 let at = VPoint::content(self.shadow.text_len(doc) + 1);
                 match self.insert(doc, at, bytes, Effect::Inferred) {
-                    Err(NeverBound(g)) => Err(format!("setup insert: {g} unbound")),
+                    Err(NeverBound(g)) => Err(format!("setup insert: {g} never bound")),
                     Ok(Response::AckAddr { .. }) => Ok(()),
                     Ok(r) => Err(refused(format!("setup insert into {doc}"), &r)),
                 }
@@ -629,26 +638,27 @@ impl Cx<'_> {
                     Err(
                         CopyNeverBound::Source(NeverBound(g))
                         | CopyNeverBound::Destination(NeverBound(g)),
-                    ) => Err(format!("setup copy: {g} unbound")),
+                    ) => Err(format!("setup copy: {g} never bound")),
                     Ok(Response::Ack { .. }) => Ok(()),
                     Ok(r) => Err(refused(format!("setup copy into {doc}"), &r)),
                 }
             }
             SetupStep::Link { from, to, golden } => {
-                let sides = |cx: &mut Cx, list: &[(String, u64, u64)]| -> Result<Vec<VSpec>, String> {
-                    let mut specs = Vec::new();
-                    for (doc, ord, w) in list {
-                        let sd = cx
-                            .skep_doc(doc)
-                            .ok_or_else(|| format!("setup link: {doc} unbound"))?;
-                        let span = VPoint::content(*ord)
-                            .region(*w)
-                            .span()
-                            .ok_or_else(|| "setup link: empty span".to_string())?;
-                        specs.push(VSpec { source: sd, span });
-                    }
-                    Ok(specs)
-                };
+                let sides =
+                    |cx: &mut Cx, list: &[(String, u64, u64)]| -> Result<Vec<VSpec>, String> {
+                        let mut specs = Vec::new();
+                        for (doc, ord, w) in list {
+                            let sd = cx
+                                .skep_doc(doc)
+                                .ok_or_else(|| format!("setup link: {doc} never bound"))?;
+                            let span = VPoint::content(*ord)
+                                .region(*w)
+                                .span()
+                                .ok_or_else(|| "setup link: empty span".to_string())?;
+                            specs.push(VSpec { source: sd, span });
+                        }
+                        Ok(specs)
+                    };
                 let f = sides(self, from)?;
                 let t = sides(self, to)?;
                 let home_golden = golden
@@ -666,7 +676,7 @@ impl Cx<'_> {
                     .map(|g| ShadowLink { golden: g.clone(), from: from.clone(), to: to.clone() });
                 match self.make_link(&home_golden, [f, t, vec![ty]], link, None, Effect::Inferred)
                 {
-                    Err(NeverBound(h)) => Err(format!("setup link: home {h} unbound")),
+                    Err(NeverBound(h)) => Err(format!("setup link: home {h} never bound")),
                     Ok(Response::AckAddr { .. }) => Ok(()),
                     Ok(r) => Err(refused(format!("setup link in {home_golden}"), &r)),
                 }
@@ -704,11 +714,13 @@ impl Cx<'_> {
     /// refusal; any answer that is not a span set is returned for the caller
     /// to settle.
     fn skep_content_spans(&self, d: &skep_address::Address) -> Result<Vec<Span>, Box<Response>> {
-        let content = Nat::from(1u64);
+        let content_subspace = Nat::from(1u64);
         match self.rig.exec(Op::RetrieveDocVSpanSet { doc: d.clone() }) {
-            Response::SpanSet { set, .. } => {
-                Ok(set.iter().filter(|s| s.start().get(1) == Some(&content)).cloned().collect())
-            }
+            Response::SpanSet { set, .. } => Ok(set
+                .iter()
+                .filter(|s| s.start().get(1) == Some(&content_subspace))
+                .cloned()
+                .collect()),
             r => Err(Box::new(r)),
         }
     }
@@ -756,7 +768,7 @@ impl Cx<'_> {
     /// detection.
     fn image_rows(&self, docid: &str) -> Vec<ImageRow> {
         let whole = VPoint::content(1).region(self.shadow.text_len(docid));
-        let (Some(d), Some(span)) = (self.alpha.peek(docid), whole.span()) else {
+        let (Some(d), Some(span)) = (self.alpha.peek_exact(docid), whole.span()) else {
             return Vec::new();
         };
         let Response::Runs { runs, .. } = self.rig.exec(Op::Image { d, region: vec![span] })
@@ -766,8 +778,8 @@ impl Cx<'_> {
         let mut rows = Vec::new();
         let mut v_ord = 1u64;
         for run in &runs {
-            if let Some(i) = elem_range(&run.iextent()) {
-                rows.push(ImageRow { i, v_ord });
+            if let Some(iextent) = elem_range(&run.iextent()) {
+                rows.push(ImageRow { iextent, v_ord });
             }
             v_ord += u64::try_from(run.width()).unwrap_or(0);
         }
@@ -778,11 +790,11 @@ impl Cx<'_> {
     /// golden (ordinal, width) V-ranges — a run whose I-prefix does not lie
     /// under the doc's own skep address arrived by COPY.
     fn transcluded_regions_golden(&self, docid: &str) -> Vec<(u64, u64)> {
-        let Some(own) = self.alpha.peek(docid) else { return Vec::new() };
+        let Some(own) = self.alpha.peek_exact(docid) else { return Vec::new() };
         self.image_rows(docid)
             .into_iter()
-            .filter(|row| !is_prefix(own.tumbler(), &row.i.prefix))
-            .map(|row| (row.v_ord, row.i.width))
+            .filter(|row| !is_prefix(own.tumbler(), &row.iextent.prefix))
+            .map(|row| (row.v_ord, row.iextent.width))
             .collect()
     }
 }
@@ -826,11 +838,12 @@ impl ElemRange {
     }
 }
 
-/// One row of a golden doc's V→I image, as `Cx::image_rows` lists them: an
-/// element range, and the V-ordinal its first element sits at.
+/// One row of a golden doc's V→I image, as `Cx::image_rows` lists them: its
+/// I-extent, as an element range, and the V-ordinal its first element sits
+/// at.
 #[derive(Clone, Debug)]
 struct ImageRow {
-    i: ElemRange,
+    iextent: ElemRange,
     v_ord: u64,
 }
 
@@ -997,10 +1010,13 @@ impl Cx<'_> {
         region: VRegion,
         effect: Effect,
     ) -> Result<Response, NeverBound> {
-        let content = region.sub == 1;
-        let removed =
-            if content { self.shadow.slice(doc, region.ord, region.width) } else { Vec::new() };
-        if content && self.mirrors(doc, effect) {
+        let in_content_subspace = region.sub == 1;
+        let removed = if in_content_subspace {
+            self.shadow.slice(doc, region.ord, region.width)
+        } else {
+            Vec::new()
+        };
+        if in_content_subspace && self.mirrors(doc, effect) {
             self.shadow.delete(doc, region.ord, region.width);
         }
         let d = self.bound(doc)?;
@@ -1082,7 +1098,7 @@ impl Cx<'_> {
 /// already holds it (an implied create, or a plan's earlier step): then the
 /// name binds and the register moves to it. `Err` is skep's answer to a
 /// creation it did not acknowledge, for the caller to settle.
-fn create_one(
+fn ensure_document(
     cx: &mut Cx,
     id: &str,
     name: Option<&str>,
@@ -1115,7 +1131,7 @@ fn run_plan(cx: &mut Cx, index: usize, out: &mut OpOutcome) -> Option<String> {
         // Copies/inserts target docs the plan may create implicitly.
         if let SetupStep::Copy { doc, .. } | SetupStep::Insert { doc, .. } = step {
             if !cx.shadow.knows(doc) {
-                if let Err(r) = create_one(cx, doc, None, Effect::Inferred) {
+                if let Err(r) = ensure_document(cx, doc, None, Effect::Inferred) {
                     first_failure.get_or_insert(format!("create {doc}: {}", refusal(&r)));
                 }
             }
@@ -1267,21 +1283,20 @@ fn probe_state(
     let mut tally = Tally::default();
 
     // Vspanset-shaped expectation.
-    let harvested = match kind {
-        Probe::Step => op
-            .get("vspanset")
-            .and_then(expect_spans_raw)
-            .map(|(d, s)| ("vspanset".to_string(), d, s)),
-        _ => harvest_spanset(op),
+    let recorded = match kind {
+        Probe::Step => {
+            op.get("vspanset").and_then(raw_spanset_of).map(|(d, s)| ("vspanset".to_string(), d, s))
+        }
+        _ => recorded_spanset(op),
     };
-    if let Some((key, docid, spans)) = harvested {
+    if let Some((key, docid, spans)) = recorded {
         let target =
             docid.and_then(|d| cx.shadow.resolve_doc(&d)).unwrap_or_else(|| doc.to_string());
         match cx.skep_doc(&target) {
             Some(d) => match cx.rig.exec(Op::RetrieveDocVSpanSet { doc: d }) {
                 Response::SpanSet { set, .. } => {
                     let c = compare_spansets(&spans, &set, adjustments, &mut out.adaptations);
-                    if c.is_err() && collapsed_subspace_shape(&spans) {
+                    if c.is_err() && is_collapsed_subspace_shape(&spans) {
                         out.note = Some(COLLAPSED_SUBSPACE_ANALYSIS.to_string());
                     }
                     tally.judge(c, "vspanset ");
@@ -1302,8 +1317,8 @@ fn probe_state(
     // under — an address list or a client repr there is set aside, not
     // compared, and not an unread answer either.
     let (reply_key, strings) = match kind {
-        Probe::Step => (None, field(op, &["contents", "content"]).and_then(expect_strings)),
-        Probe::PostWrite => (None, field(op, POST_WRITE_KEYS).and_then(expect_strings)),
+        Probe::Step => (None, field(op, &["contents", "content"]).and_then(strings_of)),
+        Probe::PostWrite => (None, field(op, POST_WRITE_KEYS).and_then(strings_of)),
         Probe::Bundle => match recorded_content(op, BUNDLE_READS) {
             Some((k, strings)) => (Some(k), Some(strings)),
             None => (None, None),
@@ -1393,16 +1408,16 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, adjustments: &Adjustments) 
     // ops without the field leave the working session untouched, so
     // single-session scenarios are undisturbed.
     if !matches!(verb, Verb::Account | Verb::Connect | Verb::Meta) {
-        if let Some(sess) = str_field(op, &["session"]) {
-            match cx.rig.route_session(sess) {
+        if let Some(session_label) = str_field(op, &["session"]) {
+            match cx.rig.route_session(session_label) {
                 Ok(implicit) => {
-                    out.adaptations.push(format!("session-route:{sess}"));
+                    out.adaptations.push(format!("session-route:{session_label}"));
                     if implicit {
                         out.adaptations.push("session-label-implicit-bind".into());
                     }
                 }
                 Err(e) => {
-                    let expected = format!("op executes under session {sess}");
+                    let expected = format!("op executes under session {session_label}");
                     out.disagree("session", Disagreement { expected, actual: e });
                     return out;
                 }
@@ -1426,12 +1441,12 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, adjustments: &Adjustments) 
         Verb::InteriorTyping => h_interior_typing(cx, op, &mut out, adjustments),
         Verb::Delete | Verb::DeleteAll => h_delete(cx, index, op, &mut out, adjustments, verb),
         Verb::Vcopy => h_vcopy(cx, index, op, &mut out, adjustments),
-        Verb::Pivot => h_pivot_swap(cx, op, &mut out, Rearrangement::Pivot),
-        Verb::Swap => h_pivot_swap(cx, op, &mut out, Rearrangement::Swap),
+        Verb::Pivot => h_rearrange(cx, op, &mut out, Rearrangement::Pivot),
+        Verb::Swap => h_rearrange(cx, op, &mut out, Rearrangement::Swap),
         Verb::Rearrange => {
             let n = cuts_of(op).len();
             match Rearrangement::with_cuts(n) {
-                Some(shape) => h_pivot_swap(cx, op, &mut out, shape),
+                Some(shape) => h_rearrange(cx, op, &mut out, shape),
                 None => inexpressible(
                     &mut out,
                     format!("rearrange needs 3 or 4 cuts, could derive {n}"),
@@ -1444,12 +1459,12 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, adjustments: &Adjustments) 
         Verb::Traverse => h_traverse(cx, op, &mut out, adjustments),
         Verb::FindLinks => h_find_links(cx, op, &mut out, adjustments),
         Verb::FindDocuments => h_find_documents(cx, op, &mut out),
-        Verb::RetrieveContents => h_contents(cx, index, op, &mut out),
+        Verb::RetrieveContents => h_retrieve_contents(cx, index, op, &mut out),
         Verb::RetrieveVspan | Verb::RetrieveVspanset => {
-            h_vspanset(cx, op, &mut out, adjustments, verb)
+            h_retrieve_vspanset(cx, op, &mut out, adjustments, verb)
         }
-        Verb::RetrieveEndsets => h_endsets(cx, op, &mut out),
-        Verb::CompareVersions => h_compare(cx, index, op, &mut out),
+        Verb::RetrieveEndsets => h_retrieve_endsets(cx, op, &mut out),
+        Verb::CompareVersions => h_compare_versions(cx, index, op, &mut out),
         Verb::Account => h_account(cx, op, &mut out),
         Verb::CreateNode => h_create_node(cx, op, &mut out),
         Verb::Connect => {

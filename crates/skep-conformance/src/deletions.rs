@@ -64,7 +64,7 @@ impl Deletions {
                 continue;
             };
             // Walk the record's runs, slicing the [p, p+len) byte window.
-            let (mut off, mut remaining, mut cursor) = (p as u64, needle.len() as u64, Vec::new());
+            let (mut off, mut remaining, mut slices) = (p as u64, needle.len() as u64, Vec::new());
             for sp in &rec.ispans {
                 let w = span_elem_width(sp).unwrap_or(0);
                 if off >= w {
@@ -73,9 +73,9 @@ impl Deletions {
                 }
                 let take = (w - off).min(remaining);
                 if let Some(sub) = subspan(sp, off, take) {
-                    cursor.push(sub);
+                    slices.push(sub);
                 } else {
-                    cursor.clear();
+                    slices.clear();
                     break;
                 }
                 remaining -= take;
@@ -84,8 +84,8 @@ impl Deletions {
                     break;
                 }
             }
-            if remaining == 0 && !cursor.is_empty() {
-                return Some(cursor);
+            if remaining == 0 && !slices.is_empty() {
+                return Some(slices);
             }
         }
         None
@@ -95,13 +95,13 @@ impl Deletions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tum::tum;
+    use crate::tum::tumbler;
 
     /// An element-level run of `w` elements from `start`.
     fn run(start: &[u64], w: u64) -> Span {
         let mut width = vec![0; start.len() - 1];
         width.push(w);
-        Span::new(tum(start), tum(&width)).expect("an element-level run")
+        Span::new(tumbler(start), tumbler(&width)).expect("an element-level run")
     }
 
     /// A needle deleted across two runs slices out of both, exactly as wide

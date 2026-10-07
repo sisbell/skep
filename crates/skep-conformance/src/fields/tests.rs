@@ -104,14 +104,14 @@ fn an_explicit_reference_that_resolves_to_nothing_is_never_the_register() {
 #[test]
 fn only_a_zero_width_recorded_span_is_dropped() {
     let spans = |w: &str| {
-        expect_spans_raw(&json!([{"start": "1.1", "width": w}])).map(|(_, spans)| spans)
+        raw_spanset_of(&json!([{"start": "1.1", "width": w}])).map(|(_, spans)| spans)
     };
     let kept = |w: &str| Some(vec![("1.1".to_string(), w.to_string())]);
     assert_eq!(spans("0.0"), Some(Vec::new()));
     assert_eq!(spans("0.1"), kept("0.1"));
     assert_eq!(spans("0.0.1"), kept("0.0.1"));
     let empty = json!("<VSpan in 1.1.0.1.0.1 at 0 for 0>");
-    assert_eq!(expect_spans_raw(&empty).map(|(_, spans)| spans), Some(Vec::new()));
+    assert_eq!(raw_spanset_of(&empty).map(|(_, spans)| spans), Some(Vec::new()));
 }
 
 /// Neither a golden address nor a recording-client repr is document text,

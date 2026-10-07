@@ -8,10 +8,10 @@ use super::*;
 /// as the seed.
 #[test]
 fn a_delete_is_undone_only_with_the_bytes_it_removed() {
-    let known = [Edit::Del { at: 11, bytes: Some(b"Shared ".to_vec()), explicit: true }];
+    let known = [Edit::Delete { at: 11, bytes: Some(b"Shared ".to_vec()), explicit: true }];
     let seed = undo_to_initial("B prefix: content", &known);
     assert_eq!(seed.as_deref(), Some(&b"B prefix: Shared content"[..]));
-    let unknown = [Edit::Del { at: 11, bytes: None, explicit: true }];
+    let unknown = [Edit::Delete { at: 11, bytes: None, explicit: true }];
     assert_eq!(undo_to_initial("B prefix: content", &unknown), None);
 }
 
@@ -31,13 +31,13 @@ fn a_described_delete_names_its_bytes_at_its_width() {
 /// walk could not reproduce stops the undo.
 #[test]
 fn an_undo_that_does_not_find_the_recorded_bytes_aborts() {
-    let appended = [Edit::Ins { at: None, bytes: b"CD".to_vec() }];
+    let appended = [Edit::Insert { at: None, bytes: b"CD".to_vec() }];
     assert_eq!(undo_to_initial("ABCD", &appended).as_deref(), Some(&b"AB"[..]));
     assert_eq!(undo_to_initial("ABXY", &appended), None);
-    let placed = [Edit::Ins { at: Some(2), bytes: b"X".to_vec() }];
+    let placed = [Edit::Insert { at: Some(2), bytes: b"X".to_vec() }];
     assert_eq!(undo_to_initial("AXB", &placed).as_deref(), Some(&b"AB"[..]));
     assert_eq!(undo_to_initial("ABX", &placed), None);
-    let longer = [Edit::Ins { at: None, bytes: b"ABCDE".to_vec() }];
+    let longer = [Edit::Insert { at: None, bytes: b"ABCDE".to_vec() }];
     assert_eq!(undo_to_initial("AB", &longer), None);
     assert_eq!(undo_to_initial("AB", &[Edit::Opaque]), None);
 }
@@ -79,14 +79,14 @@ fn a_version_is_never_seeded_as_a_document() {
     ];
     let setup = ground(&ops);
     assert!(setup.lead_in.is_empty(), "{:?}", setup.lead_in);
-    assert!(setup.tags.is_empty(), "{:?}", setup.tags);
+    assert!(setup.groundings.is_empty(), "{:?}", setup.groundings);
 }
 
 /// An insert recorded at the last ordinal is held by no text: undoing it
 /// abandons the path, never overflowing past the content's end.
 #[test]
 fn an_insert_recorded_at_the_last_ordinal_undoes_to_nothing() {
-    let placed = [Edit::Ins { at: Some(u64::MAX), bytes: b"XY".to_vec() }];
+    let placed = [Edit::Insert { at: Some(u64::MAX), bytes: b"XY".to_vec() }];
     assert_eq!(undo_to_initial("AB", &placed), None);
 }
 
@@ -111,8 +111,8 @@ fn a_compare_pair_at_the_extremes_seeds_nothing() {
             json!({"op": "compare_versions", "label": "target_vs_src", "shared": [shared]}),
         ];
         let setup = ground(&ops);
-        let seeded = setup.tags.iter().any(|t| t.contains("comparison-seed"));
-        assert!(!seeded, "{:?}", setup.tags);
+        let seeded = setup.groundings.iter().any(|t| t.contains("comparison-seed"));
+        assert!(!seeded, "{:?}", setup.groundings);
         let mut shadow = Shadow::new();
         shadow.create_doc("1.1.0.1.0.1", Some("target"));
         shadow.insert("1.1.0.1.0.1", 1, b"Hello");
@@ -166,7 +166,7 @@ fn a_filler_past_the_budget_is_not_built() {
 #[test]
 fn a_long_edit_log_undoes_without_recursion() {
     const N: usize = 100_000;
-    let log = vec![Edit::Ins { at: None, bytes: b"A".to_vec() }; N];
+    let log = vec![Edit::Insert { at: None, bytes: b"A".to_vec() }; N];
     assert_eq!(undo_to_initial(&"A".repeat(N), &log).as_deref(), Some(&b""[..]));
 }
 
@@ -175,7 +175,7 @@ fn a_long_edit_log_undoes_without_recursion() {
 /// each failing at that write.
 #[test]
 fn a_log_with_an_unknowable_edit_is_refused_before_any_search() {
-    let delete = Edit::Del { at: 1, bytes: Some(b"a".to_vec()), explicit: false };
+    let delete = Edit::Delete { at: 1, bytes: Some(b"a".to_vec()), explicit: false };
     let mut log = vec![Edit::Opaque];
     log.extend(vec![delete; 40]);
     assert_eq!(undo_to_initial("x", &log), None);

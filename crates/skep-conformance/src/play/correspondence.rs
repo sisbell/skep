@@ -266,7 +266,7 @@ fn run_compare_pair(
 /// golden docid, content-subspace (ord, width) windows).
 type Operand = (String, String, Vec<(u64, u64)>);
 
-pub(super) fn h_compare(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
+pub(super) fn h_compare_versions(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
     // Corpus-extension operands (policy `compare-operands-explicit`): two
     // top-level role-keyed vspec-dict fields name the sides and their
     // windows explicitly (ms_version_race `version_a1`/`original`, fanout
@@ -333,11 +333,11 @@ pub(super) fn h_compare(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutco
                     e.get("shared").and_then(Value::as_array).map_or(&[], Vec::as_slice);
                 // Each source is compared as an op of its own and folded in
                 // as one part.
-                let mut sub = OpOutcome::new(out.index, &out.op_name);
+                let mut part = OpOutcome::new(out.index, &out.op_name);
                 let a = CompareSide { doc: &dest, reference: "target", window: None };
                 let b = CompareSide { doc: &src, reference: "source", window: None };
-                run_compare_pair(cx, &mut sub, a, b, RecordedShared::Pairs(shared));
-                tally.absorb(out, sub, &format!("{srcname}: "));
+                run_compare_pair(cx, &mut part, a, b, RecordedShared::Pairs(shared));
+                tally.absorb(out, part, &format!("{srcname}: "));
             }
             tally.settle(out, "correspondence");
             return;

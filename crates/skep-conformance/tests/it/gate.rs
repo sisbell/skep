@@ -145,7 +145,7 @@ fn conformance_ratchet() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../conformance/ratchet.toml");
     let raw = std::fs::read_to_string(&path).expect("ratchet.toml must exist");
-    let Frozen { allowlisted: allow, inexpressible: inexpr, pending } = frozen(&raw);
+    let Frozen { allowlisted, inexpressible, pending } = parse_ratchet(&raw);
 
     let _report = report_guard();
     let out = run_all().expect("sweep must run");
@@ -162,18 +162,18 @@ fn conformance_ratchet() {
         }
         match r.verdict {
             Verdict::Pass => {
-                if allow.contains(&key) || inexpr.contains(&key) {
+                if allowlisted.contains(&key) || inexpressible.contains(&key) {
                     improved.push(key);
                 }
             }
-            Verdict::Allowlisted if allow.contains(&key) => {}
-            Verdict::Inexpressible if inexpr.contains(&key) => {}
+            Verdict::Allowlisted if allowlisted.contains(&key) => {}
+            Verdict::Inexpressible if inexpressible.contains(&key) => {}
             v => violations.push(format!("{key}: {v:?} not permitted by ratchet")),
         }
     }
     let keys: HashSet<ScenarioKey> = out.records.iter().map(|r| r.key()).collect();
     for (section, frozen) in
-        [("allowlisted", &allow), ("inexpressible", &inexpr), ("pending", &pending)]
+        [("allowlisted", &allowlisted), ("inexpressible", &inexpressible), ("pending", &pending)]
     {
         let mut missing: Vec<&ScenarioKey> =
             frozen.iter().filter(|k| !keys.contains(*k)).collect();
@@ -209,7 +209,7 @@ struct Frozen {
 /// `ratchet.toml`'s text, read into its sections — refusing, by the gate's
 /// own failure, a line it does not speak: an unknown section, a line naming
 /// no key, and a key already listed, in its section or another.
-fn frozen(raw: &str) -> Frozen {
+fn parse_ratchet(raw: &str) -> Frozen {
     let mut frozen = Frozen::default();
     let mut section = String::new();
     let mut listed: HashSet<ScenarioKey> = HashSet::new();
@@ -240,5 +240,5 @@ fn frozen(raw: &str) -> Frozen {
 #[test]
 #[should_panic(expected = "ratchet.toml: `cat/a` is listed twice")]
 fn a_key_the_ratchet_lists_twice_is_refused() {
-    frozen("[allowlisted]\nscenario = \"cat/a\"\n\n[pending]\nscenario = \"cat/a\"\n");
+    parse_ratchet("[allowlisted]\nscenario = \"cat/a\"\n\n[pending]\nscenario = \"cat/a\"\n");
 }

@@ -154,9 +154,9 @@ fn stopped_outside_ops(scn: &Scenario, error: String) -> ScenarioRecord {
 /// stopped op both its first finding and its error, naming who panicked
 /// ([`panic_text`]). Nothing after a stop mid-change can be trusted, so the
 /// scenario ends there.
-fn stopped(
+fn stopped_at_op(
     scn: &Scenario,
-    ops: Vec<OpOutcome>,
+    outcomes: Vec<OpOutcome>,
     index: usize,
     op: &Value,
     payload: Box<dyn Any + Send>,
@@ -170,7 +170,7 @@ fn stopped(
         name: scn.name.clone(),
         verdict: Verdict::Error,
         bijection_size,
-        ops,
+        ops: outcomes,
         first_finding: Some(finding),
         error: Some(error),
         groundings,
@@ -190,7 +190,7 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
     // The grounding pre-pass: shadow-only, derives implied setup from the
     // scenario's own recorded evidence (see ground.rs module docs).
     let setup = ground(&scn.operations);
-    let mut groundings = setup.tags.clone();
+    let mut groundings = setup.groundings.clone();
     let mut cx = Cx {
         rig: &mut rig,
         alpha: &mut alpha,
@@ -205,7 +205,7 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
     // here is recorded and the run continues — the affected ops then
     // disagree honestly.
     for docid in &setup.implied_creates {
-        if cx.alpha.peek(docid).is_some() {
+        if cx.alpha.peek_exact(docid).is_some() {
             continue; // already bound (defensive; should not happen)
         }
         let r = cx.create_document(docid, None, Effect::Inferred);
@@ -242,7 +242,7 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
     }
 
     let key = scn.key();
-    let mut ops: Vec<OpOutcome> = Vec::with_capacity(scn.operations.len());
+    let mut outcomes: Vec<OpOutcome> = Vec::with_capacity(scn.operations.len());
     for (i, op) in scn.operations.iter().enumerate() {
         // Everything about op `i` — playing it, folding its findings,
         // judging it — runs under one catch, so a panic anywhere in it stops
@@ -270,20 +270,20 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
             out
         }));
         match judged {
-            Ok(out) => ops.push(out),
+            Ok(out) => outcomes.push(out),
             Err(payload) => {
-                return stopped(scn, ops, i, op, payload, groundings, cx.alpha.len());
+                return stopped_at_op(scn, outcomes, i, op, payload, groundings, cx.alpha.len());
             }
         }
     }
     let bijection_size = cx.alpha.len();
 
-    let any_inexpressible = ops.iter().any(|o| o.status == Status::Inexpressible);
-    let any_raw_divergence = ops.iter().any(OpOutcome::is_unadjudicated);
-    let any_allowlisted = ops.iter().any(|o| o.allowlisted.is_some());
+    let any_inexpressible = outcomes.iter().any(|o| o.status == Status::Inexpressible);
+    let any_unadjudicated = outcomes.iter().any(OpOutcome::is_unadjudicated);
+    let any_allowlisted = outcomes.iter().any(|o| o.allowlisted.is_some());
     let verdict = if any_inexpressible {
         Verdict::Inexpressible
-    } else if any_raw_divergence {
+    } else if any_unadjudicated {
         Verdict::Divergent
     } else if any_allowlisted {
         Verdict::Allowlisted
@@ -296,11 +296,11 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
     // diagnosed off exactly that). Allowlisted disagreements are the
     // fallback only when nothing unadjudicated exists (allowlisted/
     // inexpressible verdicts).
-    let first_finding = ops
+    let first_finding = outcomes
         .iter()
         .find(|o| o.status == Status::Inexpressible || o.is_unadjudicated())
         .or_else(|| {
-            ops.iter().find(|o| matches!(o.status, Status::Disagreed | Status::Inexpressible))
+            outcomes.iter().find(|o| matches!(o.status, Status::Disagreed | Status::Inexpressible))
         })
         .map(|o| Finding { index: o.index, op_name: o.op_name.clone(), detail: o.detail() });
     ScenarioRecord {
@@ -308,7 +308,7 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
         name: scn.name.clone(),
         verdict,
         bijection_size,
-        ops,
+        ops: outcomes,
         first_finding,
         error: None,
         groundings,
@@ -352,8 +352,9 @@ mod tests {
                 json!({"op": "insert"}),
             ],
         };
-        let ops = vec![OpOutcome::new(0, "create_document"), OpOutcome::new(1, "insert")];
-        let record = stopped(&scn, ops, 2, &scn.operations[2], engine_panic(), Vec::new(), 1);
+        let outcomes = vec![OpOutcome::new(0, "create_document"), OpOutcome::new(1, "insert")];
+        let op = &scn.operations[2];
+        let record = stopped_at_op(&scn, outcomes, 2, op, engine_panic(), Vec::new(), 1);
         assert_eq!(record.verdict, Verdict::Error);
         assert_eq!(record.ops.len(), 2);
         let detail = "skep panicked executing Insert: boom";

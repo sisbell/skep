@@ -66,10 +66,9 @@ use crate::evidence::{
 };
 use crate::fields::{
     aim_doc, arrow_results, as_text, cuts_of, distributed_insert_texts, distribution_targets,
-    expect_strings, field, group_word, is_position_marker, locate, normalize, op_name,
-    per_doc_replies, quoted, recorded_content, recorded_count, resolve_position, roster,
-    span_dict, str_field, vcopy_sources, verb_of, vspec_dict, DocAim, Verb, BUILD_BUDGET,
-    POST_WRITE_KEYS,
+    field, group_word, is_position_marker, locate, normalize, op_name, per_doc_replies, quoted,
+    recorded_content, recorded_count, resolve_position, roster, span_dict, str_field, strings_of,
+    vcopy_sources, verb_of, vspec_dict, DocAim, Verb, BUILD_BUDGET, POST_WRITE_KEYS,
 };
 use crate::shadow::Shadow;
 use crate::tum::{link_home_docid, parse_dotted, parse_vpos, parse_width, VPoint, VRegion};
@@ -78,8 +77,8 @@ use crate::tum::{link_home_docid, parse_dotted, parse_vpos, parse_width, VPoint,
 mod cover;
 
 use cover::{
-    comparison_pairs, cover_from_comparisons, cover_with_sources, later_appends_text,
-    later_copy_into, SharedPair,
+    comparison_pairs, cover_from_comparisons, cover_with_sources, has_later_copy_into,
+    later_appends_text, SharedPair,
 };
 
 /// One step of the implied setup, fully concrete: executed against skep by
@@ -110,8 +109,8 @@ pub struct ImpliedSetup {
     /// Per-op expansion for macro forms, keyed by op index. The play pass
     /// executes these verbatim instead of re-deriving.
     pub plans: BTreeMap<usize, Vec<SetupStep>>,
-    /// Every inference made, for the report's `groundings` list.
-    pub tags: Vec<String>,
+    /// Every inference made: the report's `groundings` list.
+    pub groundings: Vec<String>,
 }
 
 /// A recorded edit, kept symbolically so undo works whatever seed is in
@@ -123,7 +122,7 @@ pub struct ImpliedSetup {
 /// "Prefix: " + delete("Findable") world is recoverable only through this.
 #[derive(Clone, Debug)]
 enum Edit {
-    Ins { at: Option<u64>, bytes: Vec<u8> },
+    Insert { at: Option<u64>, bytes: Vec<u8> },
     /// `bytes` = what the delete removed, when the walk knew all of it —
     /// from its own state, or from the op's description of the removed
     /// text; `None` when it knew less than the delete's width, and then the
@@ -131,7 +130,7 @@ enum Edit {
     /// numerically, or read off the recorded post-state), so the undo
     /// reinserts there FIRST; a text-located position tries the end first
     /// (the seed-shift shape).
-    Del { at: u64, bytes: Option<Vec<u8>>, explicit: bool },
+    Delete { at: u64, bytes: Option<Vec<u8>>, explicit: bool },
     Pivot { a: u64, b: u64, c: u64 },
     Swap { s1: u64, e1: u64, s2: u64, e2: u64 },
     /// A content write udanax made that the walk could not reproduce — a
@@ -142,9 +141,10 @@ enum Edit {
 }
 
 pub fn ground(ops: &[Value]) -> ImpliedSetup {
-    let mut g = ImpliedSetup { implied_creates: implied_creates(ops), ..ImpliedSetup::default() };
-    if !g.implied_creates.is_empty() {
-        g.tags.push(format!("implied-create: {}", g.implied_creates.join(", ")));
+    let mut setup =
+        ImpliedSetup { implied_creates: implied_creates(ops), ..ImpliedSetup::default() };
+    if !setup.implied_creates.is_empty() {
+        setup.groundings.push(format!("implied-create: {}", setup.implied_creates.join(", ")));
     }
 
     let mut seeds: BTreeMap<String, Vec<u8>> = BTreeMap::new();
@@ -152,7 +152,7 @@ pub fn ground(ops: &[Value]) -> ImpliedSetup {
     // current seeds and may add at most one newly-inferred seed. Bounded by
     // the number of documents a scenario touches (≤ a handful).
     for _round in 0..8 {
-        let mut sim = Sim::replay(&g.implied_creates, &seeds, ops);
+        let mut sim = Sim::replay(&setup.implied_creates, &seeds, ops);
         let Some((doc, exp)) = sim.failed_probe.take() else { break };
         if seeds.contains_key(&doc) {
             break; // already seeded and still inconsistent — leave honest
@@ -165,7 +165,7 @@ pub fn ground(ops: &[Value]) -> ImpliedSetup {
             break;
         }
         let Some(initial) = undo_to_initial(&exp, sim.log_for(&doc)) else { break };
-        g.tags.push(format!(
+        setup.groundings.push(format!(
             "implied-setup: {doc} starts with {:?} (derived by undoing recorded edits from its \
              first content probe)",
             String::from_utf8_lossy(&initial)
@@ -179,7 +179,7 @@ pub fn ground(ops: &[Value]) -> ImpliedSetup {
     // identity_mixed_sources: two sources never filled on the record, each
     // pinned by its compare against the target).
     {
-        let sim = Sim::replay(&g.implied_creates, &seeds, ops);
+        let sim = Sim::replay(&setup.implied_creates, &seeds, ops);
         for pair in comparison_pairs(ops, &sim.shadow) {
             let SharedPair { dest, dest_ord, src, src_ord, width } = pair;
             if src_ord != 1 || seeds.contains_key(&src) || sim.shadow.text_len(&src) > 0 {
@@ -190,7 +190,7 @@ pub fn ground(ops: &[Value]) -> ImpliedSetup {
             // the probe's — pins nothing.
             let Some(held) = held_range(probe.len(), dest_ord, width) else { continue };
             let bytes = probe.as_bytes()[held].to_vec();
-            g.tags.push(format!(
+            setup.groundings.push(format!(
                 "implied-setup:comparison-seed: {src} starts with {:?} (its compare against \
                  {dest} pairs that region at source ordinal 1)",
                 String::from_utf8_lossy(&bytes)
@@ -204,9 +204,9 @@ pub fn ground(ops: &[Value]) -> ImpliedSetup {
     // scenario records one uniform text, that text IS the evidence of what
     // the script filled such docs with (star_hub); otherwise a loud marker.
     {
-        let sim = Sim::replay(&g.implied_creates, &seeds, ops);
+        let sim = Sim::replay(&setup.implied_creates, &seeds, ops);
         let evidence = uniform_follow_text(ops);
-        for doc in sim.link_participants_empty {
+        for doc in sim.empty_link_participants {
             // Endset-anchored construction first: a later retrieve_endsets
             // recording this doc's endset coordinates, together with the
             // create_links' own source_text/target_text, pins the content
@@ -214,7 +214,7 @@ pub fn ground(ops: &[Value]) -> ImpliedSetup {
             // "second" at 1.16 w 6 — gaps filled with spaces).
             if let Some(seed) = endset_anchored_seed(ops, &sim.shadow, &doc) {
                 if let Entry::Vacant(slot) = seeds.entry(doc.clone()) {
-                    g.tags.push(format!(
+                    setup.groundings.push(format!(
                         "implied-setup:endset-anchored-seed: {doc} starts with {:?} (link texts \
                          placed at the recorded endset ordinals)",
                         String::from_utf8_lossy(&seed)
@@ -232,7 +232,7 @@ pub fn ground(ops: &[Value]) -> ImpliedSetup {
             if let Entry::Vacant(slot) = seeds.entry(doc) {
                 match (&landing, &evidence) {
                     (Some(t), _) => {
-                        g.tags.push(format!(
+                        setup.groundings.push(format!(
                             "implied-setup:placeholder-from-landing: {} participates in a link \
                              while empty; the traverse evidence lands {t:?} there, seeded that",
                             slot.key()
@@ -240,7 +240,7 @@ pub fn ground(ops: &[Value]) -> ImpliedSetup {
                         slot.insert(t.as_bytes().to_vec());
                     }
                     (None, Some(t)) => {
-                        g.tags.push(format!(
+                        setup.groundings.push(format!(
                             "implied-setup:placeholder-from-evidence: {} participates in a link \
                              while empty; every follow expectation records {t:?}, seeded that",
                             slot.key()
@@ -249,7 +249,7 @@ pub fn ground(ops: &[Value]) -> ImpliedSetup {
                     }
                     (None, None) => {
                         let marker = format!("[{}]", slot.key());
-                        g.tags.push(format!(
+                        setup.groundings.push(format!(
                             "implied-setup:placeholder: {} participates in a link while empty \
                              and no recorded probe reveals its content; seeded {marker:?}",
                             slot.key()
@@ -262,20 +262,20 @@ pub fn ground(ops: &[Value]) -> ImpliedSetup {
     }
 
     // Final pass under the settled seeds builds the definitive plans.
-    let sim = Sim::replay(&g.implied_creates, &seeds, ops);
+    let sim = Sim::replay(&setup.implied_creates, &seeds, ops);
     for (i, plan) in &sim.plans {
-        let strategy = sim.plan_notes.get(i).map(|s| format!(" [{s}]")).unwrap_or_default();
-        g.tags.push(format!(
+        let strategy = sim.plan_strategies.get(i).map(|s| format!(" [{s}]")).unwrap_or_default();
+        setup.groundings.push(format!(
             "expansion-plan: op {i} `{}` → {} concrete steps{strategy}",
             op_name(&ops[*i]),
             plan.len()
         ));
     }
-    g.plans = sim.plans;
+    setup.plans = sim.plans;
     for (doc, bytes) in &seeds {
-        g.lead_in.push(SetupStep::Insert { doc: doc.clone(), bytes: bytes.clone() });
+        setup.lead_in.push(SetupStep::Insert { doc: doc.clone(), bytes: bytes.clone() });
     }
-    g
+    setup
 }
 
 /// Dotted docids referenced anywhere but never bound by a create op —
@@ -384,7 +384,7 @@ fn undo_to_initial(probed: &str, edits: &[Edit]) -> Option<Vec<u8>> {
     // reinserting nothing would hand back the post-delete content as the
     // seed, a world no recorded op built. Nor can a write the walk could not
     // reproduce at all.
-    if edits.iter().any(|e| matches!(e, Edit::Del { bytes: None, .. } | Edit::Opaque)) {
+    if edits.iter().any(|e| matches!(e, Edit::Delete { bytes: None, .. } | Edit::Opaque)) {
         return None;
     }
     // Each entry: the edits still to undo, and the content so far.
@@ -392,7 +392,7 @@ fn undo_to_initial(probed: &str, edits: &[Edit]) -> Option<Vec<u8>> {
     while let Some((edits, cur)) = stack.pop() {
         let Some((last, rest)) = edits.split_last() else { return Some(cur) };
         match last {
-            Edit::Ins { at, bytes } => {
+            Edit::Insert { at, bytes } => {
                 let held = match at {
                     Some(ord) => held_range(cur.len(), *ord, bytes.len() as u64),
                     None => cur.len().checked_sub(bytes.len()).map(|start| start..cur.len()),
@@ -402,8 +402,8 @@ fn undo_to_initial(probed: &str, edits: &[Edit]) -> Option<Vec<u8>> {
                 next.drain(held);
                 stack.push((rest, next));
             }
-            Edit::Del { bytes: None, .. } | Edit::Opaque => {} // refused before the search
-            Edit::Del { at, bytes: Some(bytes), explicit } => {
+            Edit::Delete { bytes: None, .. } | Edit::Opaque => {} // refused before the search
+            Edit::Delete { at, bytes: Some(bytes), explicit } => {
                 // Candidate reinsertion points. Explicit (client-sent)
                 // position: the recorded ordinal first — it is
                 // authoritative (isolation/delete_does_not_affect_other_
@@ -474,10 +474,10 @@ struct Sim {
     /// First probe whose expectation disagreed with the shadow this pass.
     failed_probe: Option<(String, String)>,
     /// Docs that were empty while participating in a link op.
-    link_participants_empty: Vec<String>,
+    empty_link_participants: Vec<String>,
     plans: BTreeMap<usize, Vec<SetupStep>>,
-    /// Per-plan policy tag (which reconstruction strategy produced it).
-    plan_notes: BTreeMap<usize, &'static str>,
+    /// The reconstruction strategy that produced each plan.
+    plan_strategies: BTreeMap<usize, &'static str>,
 }
 
 impl Sim {
@@ -486,9 +486,9 @@ impl Sim {
             shadow: Shadow::new(),
             logs: BTreeMap::new(),
             failed_probe: None,
-            link_participants_empty: Vec::new(),
+            empty_link_participants: Vec::new(),
             plans: BTreeMap::new(),
-            plan_notes: BTreeMap::new(),
+            plan_strategies: BTreeMap::new(),
         };
         for d in implied {
             sim.shadow.create_doc(d, None);
@@ -512,19 +512,19 @@ impl Sim {
         sim
     }
 
-    fn apply_step(&mut self, s: &SetupStep) {
+    fn apply_step(&mut self, step: &SetupStep) {
         // Insert/Copy contributions are RECORDED as edits: undo-based seed
         // inference must be able to walk back through plan-built content
         // (link_chain_with_transclusion: the embed plan builds B, a later
         // recorded insert appends, and the probe undo crosses both).
-        match s {
+        match step {
             SetupStep::Insert { doc, bytes } => {
                 if !self.shadow.knows(doc) {
                     self.shadow.create_doc(doc, None);
                 }
                 let end = self.shadow.text_len(doc) + 1;
                 self.shadow.insert(doc, end, bytes);
-                self.record(doc, Edit::Ins { at: None, bytes: bytes.clone() });
+                self.record(doc, Edit::Insert { at: None, bytes: bytes.clone() });
             }
             SetupStep::Copy { doc, src, ord, width } => {
                 let bytes = self.shadow.slice(src, *ord, *width);
@@ -533,7 +533,7 @@ impl Sim {
                 }
                 let end = self.shadow.text_len(doc) + 1;
                 self.shadow.insert(doc, end, &bytes);
-                self.record(doc, Edit::Ins { at: None, bytes });
+                self.record(doc, Edit::Insert { at: None, bytes });
             }
             SetupStep::Link { from, to: _, golden } => {
                 // Home = the golden id's own prefix, else the FROM doc.
@@ -570,10 +570,11 @@ impl Sim {
         self.logs.entry(doc.to_string()).or_default().push(e);
     }
 
-    /// The op's document, read as the play pass reads it (`fields::aim_doc`).
-    /// An explicit reference that resolves to nothing aims at nothing: the
-    /// op changes nothing here, as it executes nothing there.
-    fn doc_ref(&mut self, op: &Value, keys: &[&str]) -> Option<String> {
+    /// The op's document, read as the play pass's `Cx::doc_arg` reads it
+    /// (`fields::aim_doc`). An explicit reference that resolves to nothing
+    /// aims at nothing: the op changes nothing here, as it executes nothing
+    /// there.
+    fn doc_arg(&mut self, op: &Value, keys: &[&str]) -> Option<String> {
         match aim_doc(&mut self.shadow, op, keys) {
             DocAim::Named(d) | DocAim::FromOpName(d) | DocAim::Register(d) => Some(d),
             DocAim::Unresolved(_) => None,
@@ -597,19 +598,19 @@ impl Sim {
     /// branches call check_probes themselves) or in the read fall-through —
     /// never before, or a write's own result expectation would be compared
     /// against the pre-edit state and forge a false seed.
-    fn step(&mut self, i: usize, op: &Value, all: &[Value]) {
+    fn step(&mut self, i: usize, op: &Value, ops: &[Value]) {
         if !took_effect(op) {
             return;
         }
         let name = op_name(op).to_ascii_lowercase();
         match normalize(&name, op) {
-            Some(Verb::CreateChain) => self.sim_create_chain(i, op, all),
-            Some(Verb::CreateDocuments) => self.sim_create_documents(i, op, all),
+            Some(Verb::CreateChain) => self.sim_create_chain(i, op, ops),
+            Some(Verb::CreateDocuments) => self.sim_create_documents(i, op, ops),
             Some(Verb::Setup) => {
-                if let Some(steps) = self.parse_keyed_setup(op, i, all) {
+                if let Some(steps) = self.expand_keyed_setup(op, i, ops) {
                     self.plan(i, steps);
                 } else if let Some(desc) = str_field(op, &["description", "desc"]) {
-                    if let Some(steps) = self.parse_setup_description(desc) {
+                    if let Some(steps) = self.expand_setup_description(desc) {
                         self.plan(i, steps);
                     }
                 }
@@ -619,16 +620,16 @@ impl Sim {
             Some(Verb::CreateVersion) => self.sim_create_version(op),
             Some(Verb::InteriorTyping) => self.sim_interior_typing(op),
             Some(Verb::InsertLoop) => self.sim_insert_loop(op),
-            Some(Verb::Insert) => self.sim_insert(i, op, all),
-            Some(Verb::DeleteAll) => self.sim_delete_all(i, op, all),
-            Some(Verb::Delete) => self.sim_delete(i, op, all),
+            Some(Verb::Insert) => self.sim_insert(i, op, ops),
+            Some(Verb::DeleteAll) => self.sim_delete_all(i, op, ops),
+            Some(Verb::Delete) => self.sim_delete(i, op, ops),
             Some(Verb::Vcopy) if name.starts_with("vcopy_to_multiple") => {
                 self.sim_vcopy_to_multiple(i, op)
             }
             Some(Verb::Vcopy) if name.starts_with("create_and_transclude") => {
                 self.sim_create_and_transclude(i, op)
             }
-            Some(Verb::Vcopy) => self.sim_vcopy(i, op, all, &name),
+            Some(Verb::Vcopy) => self.sim_vcopy(i, op, ops, &name),
             Some(verb @ (Verb::Pivot | Verb::Swap | Verb::Rearrange)) => {
                 self.sim_rearrange(op, verb)
             }
@@ -660,7 +661,7 @@ impl Sim {
 
     fn sim_open_document(&mut self, op: &Value) {
         let conflict_copy = str_field(op, &["conflict"]).is_some_and(|c| c == "copy");
-        if let Some(doc) = self.doc_ref(op, &["doc", "docid", "document"]) {
+        if let Some(doc) = self.doc_arg(op, &["doc", "docid", "document"]) {
             if conflict_copy {
                 if let Some(res) = str_field(op, &["result"]) {
                     self.shadow.version(&doc, res);
@@ -676,7 +677,7 @@ impl Sim {
             .and_then(|s| self.shadow.resolve_doc(s))
             .or_else(|| str_field(op, &["doc"]).and_then(|s| self.shadow.resolve_doc(s)))
             .or_else(|| self.shadow.current());
-        let (Some(src), Some(res)) = (src, result_str(op)) else { return };
+        let (Some(src), Some(res)) = (src, version_result(op)) else { return };
         self.shadow.version(&src, &res);
         for key in ["doc", "name", "label"] {
             if let Some(name) = str_field(op, &[key]) {
@@ -688,7 +689,7 @@ impl Sim {
     }
 
     fn sim_interior_typing(&mut self, op: &Value) {
-        let Some(doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
+        let Some(doc) = self.doc_arg(op, &["doc", "docid"]) else { return };
         if let Some(results) = field(op, &["results"]).and_then(Value::as_array) {
             for r in results {
                 let (Some(ch), Some(pos)) = (
@@ -700,7 +701,8 @@ impl Sim {
                 let at = resolve_position(&self.shadow, &doc, pos).map(|(at, _)| at);
                 if let Some(VPoint { sub: 1, ord }) = at {
                     self.shadow.insert(&doc, ord, ch.as_bytes());
-                    self.record(&doc, Edit::Ins { at: Some(ord), bytes: ch.as_bytes().to_vec() });
+                    let bytes = ch.as_bytes().to_vec();
+                    self.record(&doc, Edit::Insert { at: Some(ord), bytes });
                 } else {
                     self.record(&doc, Edit::Opaque);
                 }
@@ -710,7 +712,7 @@ impl Sim {
     }
 
     fn sim_insert_loop(&mut self, op: &Value) {
-        let Some(doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
+        let Some(doc) = self.doc_arg(op, &["doc", "docid"]) else { return };
         // A count past the build budget is an op the play pass refuses, so
         // its bytes are never built here either; the write udanax made is
         // unknown to the walk, and no undo crosses it.
@@ -721,10 +723,10 @@ impl Sim {
         let bytes: Vec<u8> = (0..count.unwrap_or(0)).map(|k| b'A' + (k % 26) as u8).collect();
         let end = self.shadow.text_len(&doc) + 1;
         self.shadow.insert(&doc, end, &bytes);
-        self.record(&doc, Edit::Ins { at: None, bytes });
+        self.record(&doc, Edit::Insert { at: None, bytes });
     }
 
-    fn sim_insert(&mut self, i: usize, op: &Value, all: &[Value]) {
+    fn sim_insert(&mut self, i: usize, op: &Value, ops: &[Value]) {
         // insert_all + texts: one text per created doc, in creation order
         // (links/link_chain_three_hops fills its four documents through one
         // op) — never a single concatenated insert.
@@ -733,7 +735,7 @@ impl Sim {
             for (d, t) in docs.iter().zip(&texts) {
                 let end = self.shadow.text_len(d) + 1;
                 self.shadow.insert(d, end, t.as_bytes());
-                self.record(d, Edit::Ins { at: None, bytes: t.as_bytes().to_vec() });
+                self.record(d, Edit::Insert { at: None, bytes: t.as_bytes().to_vec() });
             }
             return;
         }
@@ -741,8 +743,8 @@ impl Sim {
         // — is the one reading the play pass applies
         // (`evidence::resolve_insert`). An insert that reading cannot place
         // changes nothing, as it executes nothing in the play pass.
-        let Some(doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
-        let Ok(landing) = resolve_insert(all, i, &self.shadow, &doc, &mut Vec::new()) else {
+        let Some(doc) = self.doc_arg(op, &["doc", "docid"]) else { return };
+        let Ok(landing) = resolve_insert(ops, i, &self.shadow, &doc, &mut Vec::new()) else {
             self.record(&doc, Edit::Opaque);
             return;
         };
@@ -754,30 +756,30 @@ impl Sim {
         }
         self.shadow.insert(&landing.doc, landing.at.ord, &landing.bytes);
         let at = (!landing.appended).then_some(landing.at.ord);
-        self.record(&landing.doc, Edit::Ins { at, bytes: landing.bytes });
+        self.record(&landing.doc, Edit::Insert { at, bytes: landing.bytes });
         self.check_probes(op);
     }
 
-    fn sim_delete_all(&mut self, i: usize, op: &Value, all: &[Value]) {
-        if let Some(doc) = self.doc_ref(op, &["doc", "docid"]) {
-            if delete_is_noop(all, i, &self.shadow, &doc) {
+    fn sim_delete_all(&mut self, i: usize, op: &Value, ops: &[Value]) {
+        if let Some(doc) = self.doc_arg(op, &["doc", "docid"]) {
+            if delete_is_noop(ops, i, &self.shadow, &doc) {
                 return; // recorded post-state shows udanax removed nothing
             }
             let n = self.shadow.text_len(&doc);
             let bytes = self.shadow.slice(&doc, 1, n);
             self.shadow.delete(&doc, 1, n);
-            self.record(&doc, Edit::Del { at: 1, bytes: Some(bytes), explicit: true });
+            self.record(&doc, Edit::Delete { at: 1, bytes: Some(bytes), explicit: true });
         }
     }
 
-    fn sim_delete(&mut self, i: usize, op: &Value, all: &[Value]) {
-        let Some(doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
-        if delete_is_noop(all, i, &self.shadow, &doc) {
+    fn sim_delete(&mut self, i: usize, op: &Value, ops: &[Value]) {
+        let Some(doc) = self.doc_arg(op, &["doc", "docid"]) else { return };
+        if delete_is_noop(ops, i, &self.shadow, &doc) {
             self.check_probes(op);
             return; // recorded post-state shows udanax removed nothing
         }
         if let Some((VRegion { ord, width: w, .. }, how)) =
-            resolve_delete_span(all, i, &self.shadow, &doc)
+            resolve_delete_span(ops, i, &self.shadow, &doc)
         {
             // Bytes removed: the sim slice when it covers the whole width,
             // else the op's own DESCRIPTION of the removed text (the
@@ -792,7 +794,7 @@ impl Sim {
                 delete_described_bytes(op, w)
             };
             self.shadow.delete(&doc, ord, w);
-            self.record(&doc, Edit::Del { at: ord, bytes, explicit: how.position_pinned() });
+            self.record(&doc, Edit::Delete { at: ord, bytes, explicit: how.position_pinned() });
         } else {
             // A content delete this grammar cannot place; a link-subspace
             // delete has no content effect.
@@ -826,7 +828,7 @@ impl Sim {
     /// Pivot (three cuts) or swap (four), as the verb names it; a bare
     /// `rearrange` takes its shape from its cut count.
     fn sim_rearrange(&mut self, op: &Value, verb: Verb) {
-        let Some(doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
+        let Some(doc) = self.doc_arg(op, &["doc", "docid"]) else { return };
         let cuts = cuts_of(op);
         match (verb, cuts.as_slice()) {
             (Verb::Pivot | Verb::Rearrange, &[a, b, c]) => {
@@ -858,8 +860,8 @@ impl Sim {
             }
         }
         for d in participants {
-            if self.shadow.text_len(&d) == 0 && !self.link_participants_empty.contains(&d) {
-                self.link_participants_empty.push(d);
+            if self.shadow.text_len(&d) == 0 && !self.empty_link_participants.contains(&d) {
+                self.empty_link_participants.push(d);
             }
         }
         let results: Vec<String> = match field(op, &["result", "results", "link_id"]) {
@@ -909,14 +911,14 @@ impl Sim {
                 if matches!(k.as_str(), "op" | "comment" | "label" | "note" | "interpretation") {
                     continue;
                 }
-                if let Some((Some(docid), _)) = crate::fields::expect_spans_raw(v) {
+                if let Some((Some(docid), _)) = crate::fields::raw_spanset_of(v) {
                     let d = docid;
                     if self.shadow.knows(&d) {
                         self.shadow.set_current(&d);
                         return;
                     }
                 }
-                if let Some(strings) = expect_strings(v) {
+                if let Some(strings) = strings_of(v) {
                     for s in &strings {
                         if let Some(home) = link_home_docid(s) {
                             if self.shadow.knows(&home) {
@@ -930,7 +932,7 @@ impl Sim {
         }
     }
 
-    fn sim_create_documents(&mut self, i: usize, op: &Value, all: &[Value]) {
+    fn sim_create_documents(&mut self, i: usize, op: &Value, ops: &[Value]) {
         if let Some(map) = op.get("docs").and_then(Value::as_object) {
             let mut by_id: Vec<(String, String)> = map
                 .iter()
@@ -1000,7 +1002,7 @@ impl Sim {
             }
             if let Some(t) = texts.get(k) {
                 self.shadow.insert(&id, 1, t.as_bytes());
-                self.record(&id, Edit::Ins { at: Some(1), bytes: t.as_bytes().to_vec() });
+                self.record(&id, Edit::Insert { at: Some(1), bytes: t.as_bytes().to_vec() });
             } else {
                 created_here.push(id);
             }
@@ -1012,14 +1014,14 @@ impl Sim {
         // (identity_multi_document_sharing expects five docs SHARING).
         let mut steps: Vec<SetupStep> = Vec::new();
         for id in created_here {
-            let Some(expected) = next_content_probe(all, i, &self.shadow, &id) else { continue };
+            let Some(expected) = next_content_probe(ops, i, &self.shadow, &id) else { continue };
             let sources = self.shadow.content_docs_except(&id);
-            let sub = cover_from_comparisons(&self.shadow, &id, &expected, all)
+            let cover = cover_from_comparisons(&self.shadow, &id, &expected, ops)
                 .unwrap_or_else(|| cover_with_sources(&self.shadow, &id, &sources, &expected));
-            for s in &sub {
+            for s in &cover {
                 self.apply_step(s);
             }
-            steps.extend(sub);
+            steps.extend(cover);
         }
         if !steps.is_empty() {
             self.plans.insert(i, steps);
@@ -1030,7 +1032,7 @@ impl Sim {
     /// golden-id order; each doc's content is reconstructed from the next
     /// docs-map probe, with substrings shared with ALREADY-BUILT chain docs
     /// as real copies (transitive identity preserved).
-    fn sim_create_chain(&mut self, i: usize, op: &Value, all: &[Value]) {
+    fn sim_create_chain(&mut self, i: usize, op: &Value, ops: &[Value]) {
         let Some(map) = op.get("docs").and_then(Value::as_object) else { return };
         let mut by_id: Vec<(String, String)> = map
             .iter()
@@ -1047,15 +1049,15 @@ impl Sim {
         let mut steps: Vec<SetupStep> = Vec::new();
         let mut built: Vec<String> = Vec::new();
         for (id, name) in &by_id {
-            let Some(expected) = next_docs_map_probe(all, i, name) else {
+            let Some(expected) = next_docs_map_probe(ops, i, name) else {
                 built.push(id.clone());
                 continue;
             };
-            let sub = cover_with_sources(&self.shadow, id, &built, &expected);
-            for s in &sub {
+            let cover = cover_with_sources(&self.shadow, id, &built, &expected);
+            for s in &cover {
                 self.apply_step(s);
             }
-            steps.extend(sub);
+            steps.extend(cover);
             built.push(id.clone());
         }
         self.plans.insert(i, steps);
@@ -1069,7 +1071,12 @@ impl Sim {
     /// result for the same link id (the golden's own evidence of the exact
     /// endset extent) overrides the spec-derived spans. `None` when the op
     /// carries no `<name>_text` keys (the clause grammar then gets its turn).
-    fn parse_keyed_setup(&mut self, op: &Value, i: usize, all: &[Value]) -> Option<Vec<SetupStep>> {
+    fn expand_keyed_setup(
+        &mut self,
+        op: &Value,
+        i: usize,
+        ops: &[Value],
+    ) -> Option<Vec<SetupStep>> {
         let o = op.as_object()?;
         // Both spellings occur: `<name>_text` (insert_text_check_both_link_
         // positions) and `text_<name>` (createlink_check_text_positions).
@@ -1085,47 +1092,47 @@ impl Sim {
         }
         texts.sort();
         let mut steps: Vec<SetupStep> = Vec::new();
-        let mut probe = self.shadow.clone();
+        let mut trial = self.shadow.clone();
         for (name, text) in &texts {
-            let golden = probe
+            let golden = trial
                 .resolve_doc(name)
-                .filter(|g| probe.knows(g))
-                .unwrap_or_else(|| probe.synthesize_docid());
-            if probe.knows(&golden) {
-                probe.bind_name(name, &golden);
+                .filter(|g| trial.knows(g))
+                .unwrap_or_else(|| trial.synthesize_docid());
+            if trial.knows(&golden) {
+                trial.bind_name(name, &golden);
                 self.shadow.bind_name(name, &golden);
             } else {
-                probe.create_doc(&golden, Some(name));
+                trial.create_doc(&golden, Some(name));
                 self.shadow.create_doc(&golden, Some(name));
             }
-            probe.insert(&golden, 1, text.as_bytes());
+            trial.insert(&golden, 1, text.as_bytes());
             steps.push(SetupStep::Insert { doc: golden, bytes: text.as_bytes().to_vec() });
         }
         if let Some(spec) = str_field(op, &["link", "links"]) {
             if let Some((f, t)) = spec.split_once("->") {
-                let ground = |probe: &Shadow, side: &str| -> Option<(String, u64, u64)> {
+                let ground_side = |shadow: &Shadow, side: &str| -> Option<(String, u64, u64)> {
                     let side = side.trim();
-                    if let Some(l) = locate(probe, None, side) {
+                    if let Some(l) = locate(shadow, None, side) {
                         return Some((l.doc, l.ord, l.width));
                     }
-                    let doc = probe.resolve_doc(side)?;
-                    let n = probe.text_len(&doc);
+                    let doc = shadow.resolve_doc(side)?;
+                    let n = shadow.text_len(&doc);
                     (n > 0).then_some((doc, 1, n))
                 };
                 let golden_link = str_field(op, &["link_id", "result"]).map(str::to_string);
-                if let (Some(mut fs), Some(mut ts)) = (ground(&probe, f), ground(&probe, t)) {
+                let sides = (ground_side(&trial, f), ground_side(&trial, t));
+                if let (Some(mut fs), Some(mut ts)) = sides {
                     // Follow-result evidence: a later op recording this
                     // link's spans pins the side whose doc it names.
                     if let Some(g) = &golden_link {
-                        for later in &all[i + 1..] {
+                        for later in &ops[i + 1..] {
                             let mentions =
                                 str_field(later, &["link", "link_id", "id"]) == Some(g.as_str());
                             if !mentions {
                                 continue;
                             }
                             let Some(v) = field(later, &["result"]) else { continue };
-                            let Some((Some(doc), spans)) = crate::fields::expect_spans_raw(v)
-                            else {
+                            let Some((Some(doc), spans)) = crate::fields::raw_spanset_of(v) else {
                                 continue;
                             };
                             let Some((start, width)) = spans.first() else { continue };
@@ -1156,39 +1163,39 @@ impl Sim {
     /// "C='ABCDEFGHIJ', B=vcopy(C), A=vcopy('DEFGH' from B)" — clauses
     /// resolved IN ORDER against the evolving shadow, so each copy's
     /// (ord, width) is concrete by the time it is emitted.
-    fn parse_setup_description(&mut self, desc: &str) -> Option<Vec<SetupStep>> {
+    fn expand_setup_description(&mut self, desc: &str) -> Option<Vec<SetupStep>> {
         let mut steps = Vec::new();
-        let mut probe = self.shadow.clone();
+        let mut trial = self.shadow.clone();
         for clause in desc.split(',') {
             let clause = clause.trim();
             let (name, rhs) = clause.split_once('=')?;
             let (name, rhs) = (name.trim(), rhs.trim());
-            let doc = probe.resolve_doc(name)?;
+            let doc = trial.resolve_doc(name)?;
             let step = if let Some(q) = rhs.strip_prefix('\'').and_then(|r| r.strip_suffix('\'')) {
                 SetupStep::Insert { doc: doc.clone(), bytes: q.as_bytes().to_vec() }
             } else {
                 let inner = rhs.strip_prefix("vcopy(")?.strip_suffix(')')?;
                 if let Some((text, srcref)) = inner.split_once(" from ") {
                     let text = text.trim().trim_matches('\'');
-                    let src = probe.resolve_doc(srcref.trim())?;
-                    let (_, ord) = probe.find_text(Some(&src), text)?;
+                    let src = trial.resolve_doc(srcref.trim())?;
+                    let (_, ord) = trial.find_text(Some(&src), text)?;
                     SetupStep::Copy { doc: doc.clone(), src, ord, width: text.len() as u64 }
                 } else {
-                    let src = probe.resolve_doc(inner.trim())?;
-                    let n = probe.text_len(&src);
+                    let src = trial.resolve_doc(inner.trim())?;
+                    let n = trial.text_len(&src);
                     SetupStep::Copy { doc: doc.clone(), src, ord: 1, width: n }
                 }
             };
-            // Apply to the probe shadow so later clauses see earlier effects.
+            // Apply to the trial shadow so later clauses see earlier effects.
             match &step {
                 SetupStep::Insert { doc, bytes } => {
-                    let end = probe.text_len(doc) + 1;
-                    probe.insert(doc, end, bytes);
+                    let end = trial.text_len(doc) + 1;
+                    trial.insert(doc, end, bytes);
                 }
                 SetupStep::Copy { doc, src, ord, width } => {
-                    let bytes = probe.slice(src, *ord, *width);
-                    let end = probe.text_len(doc) + 1;
-                    probe.insert(doc, end, &bytes);
+                    let bytes = trial.slice(src, *ord, *width);
+                    let end = trial.text_len(doc) + 1;
+                    trial.insert(doc, end, &bytes);
                 }
                 SetupStep::Link { .. } => {} // clause grammar never emits links
             }
@@ -1211,10 +1218,10 @@ impl Sim {
         for t in targets {
             let Some(id) = t.get("docid").and_then(Value::as_str) else { continue };
             self.shadow.create_doc(id, None);
-            if let Some(exp) = t.get("contents").and_then(expect_strings) {
+            if let Some(exp) = t.get("contents").and_then(strings_of) {
                 let e = exp.join("");
-                let copied_s = String::from_utf8_lossy(&copied).into_owned();
-                if let Some(prefix) = e.strip_suffix(copied_s.as_str()) {
+                let copied_text = String::from_utf8_lossy(&copied).into_owned();
+                if let Some(prefix) = e.strip_suffix(copied_text.as_str()) {
                     if !prefix.is_empty() {
                         steps.push(SetupStep::Insert {
                             doc: id.to_string(),
@@ -1231,7 +1238,7 @@ impl Sim {
         self.plans.insert(i, steps);
     }
 
-    fn sim_vcopy(&mut self, i: usize, op: &Value, all: &[Value], op_name: &str) {
+    fn sim_vcopy(&mut self, i: usize, op: &Value, ops: &[Value], op_name: &str) {
         let to_raw = str_field(op, &["to", "dest", "target", "target_doc"]);
         // Explicit destination only — the register fallback waits until the
         // copied bytes are known, so forward evidence can aim first.
@@ -1252,18 +1259,17 @@ impl Sim {
             || op_name.starts_with("vcopy_all")
             || op_name.starts_with("vcopy_from_both");
         if is_macro {
-            let Some(dest) = explicit_dest.or_else(|| self.doc_ref(op, &["doc", "docid"]))
-            else {
+            let Some(dest) = explicit_dest.or_else(|| self.doc_arg(op, &["doc", "docid"])) else {
                 return;
             };
             let sources: Vec<String> = from_list
                 .map(|names| names.iter().filter_map(|n| self.shadow.resolve_doc(n)).collect())
                 .unwrap_or_else(|| self.shadow.content_docs_except(&dest));
-            let Some(expected) = next_content_probe(all, i, &self.shadow, &dest) else { return };
+            let Some(expected) = next_content_probe(ops, i, &self.shadow, &dest) else { return };
             let existing = self.shadow.text_string(&dest);
             let remainder = expected.strip_prefix(&existing).unwrap_or(&expected).to_string();
             // Recorded comparison pairs pin the exact cover when present.
-            let steps = cover_from_comparisons(&self.shadow, &dest, &remainder, all)
+            let steps = cover_from_comparisons(&self.shadow, &dest, &remainder, ops)
                 .unwrap_or_else(|| {
                     cover_with_sources(&self.shadow, &dest, &sources, &remainder)
                 });
@@ -1294,14 +1300,14 @@ impl Sim {
         // ops. Prefer an evidenced doc other than the source, falling back
         // to the source itself (internal transclusion is real).
         let dest = explicit_dest.or_else(|| {
-            let copied_s = String::from_utf8_lossy(&copied).into_owned();
+            let copied_text = String::from_utf8_lossy(&copied).into_owned();
             let evidenced: Vec<String> = self
                 .shadow
                 .created
                 .iter()
                 .filter(|d| {
-                    next_content_probe(all, i, &self.shadow, d)
-                        .is_some_and(|p| p.contains(&copied_s))
+                    next_content_probe(ops, i, &self.shadow, d)
+                        .is_some_and(|p| p.contains(&copied_text))
                 })
                 .cloned()
                 .collect();
@@ -1310,7 +1316,7 @@ impl Sim {
                 .find(|d| Some(d.as_str()) != first_src.as_deref())
                 .or_else(|| evidenced.first())
                 .cloned()
-                .or_else(|| self.doc_ref(op, &["doc", "docid"]))
+                .or_else(|| self.doc_arg(op, &["doc", "docid"]))
         });
         let Some(dest) = dest else { return };
         let ord = str_field(op, &["address", "at", "position"])
@@ -1326,13 +1332,13 @@ impl Sim {
         // content probes reconstruct it as an expansion plan (round-4
         // prefix-insert cluster: "Copied: ", "Link doc: ", "B prefix: ").
         if at.is_none() {
-            if let Some(plan) = self.vcopy_reconstruction(i, all, &dest, &copied, &spec_list) {
+            if let Some(plan) = self.vcopy_reconstruction(i, ops, &dest, &copied, &spec_list) {
                 self.plan(i, plan);
                 return;
             }
         }
         self.shadow.insert(&dest, o, &copied);
-        self.record(&dest, Edit::Ins { at, bytes: copied });
+        self.record(&dest, Edit::Insert { at, bytes: copied });
         self.check_probes(op);
     }
 
@@ -1343,15 +1349,15 @@ impl Sim {
     fn vcopy_reconstruction(
         &mut self,
         i: usize,
-        all: &[Value],
+        ops: &[Value],
         dest: &str,
         copied: &[u8],
         spec_list: &[(String, u64, u64)],
     ) -> Option<Vec<SetupStep>> {
-        let o = self.shadow.text_len(dest) + 1;
+        let append_ord = self.shadow.text_len(dest) + 1;
         let pairs: Vec<SharedPair> =
-            comparison_pairs(all, &self.shadow).into_iter().filter(|p| p.dest == dest).collect();
-        let probe = next_content_probe(all, i, &self.shadow, dest);
+            comparison_pairs(ops, &self.shadow).into_iter().filter(|p| p.dest == dest).collect();
+        let probe = next_content_probe(ops, i, &self.shadow, dest);
 
         // 1. Full pair-cover of an empty destination's probe (content/
         //    vcopy_multiple_spans: the compare's pairs pin "Copied: " +
@@ -1360,11 +1366,11 @@ impl Sim {
         //    op also builds this destination (a second builder would
         //    double-apply the cover).
         if self.shadow.text_len(dest) == 0 && !pairs.is_empty() {
-            if let Some(p) = &probe {
-                if !later_copy_into(all, i, dest, &self.shadow) {
-                    if let Some(cover) = cover_from_comparisons(&self.shadow, dest, p, all) {
+            if let Some(probed) = &probe {
+                if !has_later_copy_into(ops, i, dest, &self.shadow) {
+                    if let Some(cover) = cover_from_comparisons(&self.shadow, dest, probed, ops) {
                         if cover.iter().any(|s| matches!(s, SetupStep::Copy { .. })) {
-                            self.plan_notes.insert(i, "vcopy-cover-from-comparisons");
+                            self.plan_strategies.insert(i, "vcopy-cover-from-comparisons");
                             return Some(cover);
                         }
                     }
@@ -1377,16 +1383,16 @@ impl Sim {
         //    compare records source ordinal 15 width 12 where the described
         //    text located ordinal 20).
         if spec_list.len() == 1 {
-            if let Some(p) = pairs.iter().find(|p| p.dest_ord == o) {
-                let own = spec_list[0] == (p.src.clone(), p.src_ord, p.width);
-                let bytes = self.shadow.slice(&p.src, p.src_ord, p.width);
-                if !own && bytes.len() as u64 == p.width && p.width > 0 {
-                    self.plan_notes.insert(i, "vcopy-span-from-comparison");
+            if let Some(pair) = pairs.iter().find(|pair| pair.dest_ord == append_ord) {
+                let own = spec_list[0] == (pair.src.clone(), pair.src_ord, pair.width);
+                let bytes = self.shadow.slice(&pair.src, pair.src_ord, pair.width);
+                if !own && bytes.len() as u64 == pair.width && pair.width > 0 {
+                    self.plan_strategies.insert(i, "vcopy-span-from-comparison");
                     return Some(vec![SetupStep::Copy {
                         doc: dest.to_string(),
-                        src: p.src.clone(),
-                        ord: p.src_ord,
-                        width: p.width,
+                        src: pair.src.clone(),
+                        ord: pair.src_ord,
+                        width: pair.width,
                     }]);
                 }
             }
@@ -1400,19 +1406,20 @@ impl Sim {
         //    so it is never built.
         if spec_list.len() == 1 {
             let (s0, o0, w0) = &spec_list[0];
-            if let Some(p) = pairs.iter().find(|p| {
-                p.dest_ord > o
-                    && p.dest_ord - o <= BUILD_BUDGET
-                    && (&p.src, &p.src_ord, &p.width) == (s0, o0, w0)
+            if let Some(pair) = pairs.iter().find(|pair| {
+                pair.dest_ord > append_ord
+                    && pair.dest_ord - append_ord <= BUILD_BUDGET
+                    && (&pair.src, &pair.src_ord, &pair.width) == (s0, o0, w0)
             }) {
-                let fill = (p.dest_ord - o) as usize;
+                let fill = (pair.dest_ord - append_ord) as usize;
+                let start = (append_ord - 1) as usize;
                 let bytes = match &probe {
-                    Some(p) if p.len() >= (o - 1) as usize + fill => {
-                        p.as_bytes()[(o - 1) as usize..(o - 1) as usize + fill].to_vec()
+                    Some(probed) if probed.len() >= start + fill => {
+                        probed.as_bytes()[start..start + fill].to_vec()
                     }
                     _ => vec![b' '; fill],
                 };
-                self.plan_notes.insert(i, "vcopy-prefix-from-comparison");
+                self.plan_strategies.insert(i, "vcopy-prefix-from-comparison");
                 return Some(vec![
                     SetupStep::Insert { doc: dest.to_string(), bytes },
                     SetupStep::Copy {
@@ -1432,25 +1439,23 @@ impl Sim {
         //    exactly the later recorded appends, the copy extends to meet
         //    it if (and only if) the source continues with those very bytes
         //    (links/link_chain_with_transclusion's copied trailing space).
-        let p = probe?;
+        let probed = probe?;
         let c = self.shadow.text_string(dest);
-        let r = p.strip_prefix(c.as_str())?;
-        let copied_s = String::from_utf8_lossy(copied).into_owned();
-        let k = r.find(&copied_s)?;
+        let rest = probed.strip_prefix(c.as_str())?;
+        let copied_text = String::from_utf8_lossy(copied).into_owned();
+        let k = rest.find(&copied_text)?;
         let mut ext = 0u64;
-        if let Some(suffix) = later_appends_text(all, i, dest, &self.shadow) {
-            if r.ends_with(&suffix) {
-                let rprime = r.len() - suffix.len();
-                let end = k + copied_s.len();
-                if end < rprime {
+        if let Some(suffix) = later_appends_text(ops, i, dest, &self.shadow) {
+            if rest.ends_with(&suffix) {
+                let appends_at = rest.len() - suffix.len();
+                let end = k + copied_text.len();
+                if end < appends_at {
                     if let Some((ls, lo, lw)) = spec_list.last() {
-                        let need = (rprime - end) as u64;
+                        let need = (appends_at - end) as u64;
                         // Saturating: a recorded span at the top of the
                         // range continues into nothing.
                         let cont = self.shadow.slice(ls, lo.saturating_add(*lw), need);
-                        if cont.len() as u64 == need
-                            && cont == r.as_bytes()[end..rprime]
-                        {
+                        if cont.len() as u64 == need && cont == rest.as_bytes()[end..appends_at] {
                             ext = need;
                         }
                     }
@@ -1460,12 +1465,12 @@ impl Sim {
         if k == 0 && ext == 0 {
             return None; // direct execution already reproduces the probe
         }
-        self.plan_notes.insert(i, "vcopy-embed-plan");
+        self.plan_strategies.insert(i, "vcopy-embed-plan");
         let mut steps = Vec::new();
         if k > 0 {
             steps.push(SetupStep::Insert {
                 doc: dest.to_string(),
-                bytes: r.as_bytes()[..k].to_vec(),
+                bytes: rest.as_bytes()[..k].to_vec(),
             });
         }
         for (j, (s, so, w)) in spec_list.iter().enumerate() {
@@ -1483,10 +1488,9 @@ impl Sim {
         if let Some(map) = op.get("docs").and_then(Value::as_object) {
             for (name, exp) in map {
                 // create_documents docs-maps hold ID strings, not content.
-                let (Some(doc), Some(text)) = (
-                    self.shadow.resolve_doc(name),
-                    expect_strings(exp).as_deref().and_then(as_text),
-                ) else {
+                let (Some(doc), Some(text)) =
+                    (self.shadow.resolve_doc(name), strings_of(exp).as_deref().and_then(as_text))
+                else {
                     continue;
                 };
                 self.probe(&doc, &text);
@@ -1504,7 +1508,7 @@ impl Sim {
         let name = op_name(op).to_ascii_lowercase();
         let recorded = if verb_of(op).is_some_and(Verb::writes_content) {
             // The play pass's post-write keys: a write's text is its argument.
-            field(op, POST_WRITE_KEYS).and_then(expect_strings)
+            field(op, POST_WRITE_KEYS).and_then(strings_of)
         } else if matches!(verb_of(op), Some(Verb::RetrieveContents | Verb::Observe))
             && (name.starts_with("content")
                 || name.starts_with("retrieve")
@@ -1550,7 +1554,7 @@ impl Sim {
                 return;
             }
         }
-        let Some(doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
+        let Some(doc) = self.doc_arg(op, &["doc", "docid"]) else { return };
         self.probe(&doc, &text);
     }
 
@@ -1586,7 +1590,7 @@ fn follow_landing_text(ops: &[Value], shadow: &Shadow, doc: &str) -> Option<Stri
                     continue;
                 }
                 for k in ["text", "target_text", "content"] {
-                    let text = eo.get(k).and_then(expect_strings).as_deref().and_then(as_text);
+                    let text = eo.get(k).and_then(strings_of).as_deref().and_then(as_text);
                     if let Some(text) = text.filter(|t| !t.is_empty()) {
                         return Some(text);
                     }
@@ -1668,7 +1672,7 @@ fn endset_anchored_seed(ops: &[Value], shadow: &Shadow, doc: &str) -> Option<Vec
 fn uniform_follow_text(ops: &[Value]) -> Option<String> {
     let mut texts: Vec<String> = Vec::new();
     let mut collect = |v: &Value| {
-        for s in expect_strings(v).unwrap_or_default() {
+        for s in strings_of(v).unwrap_or_default() {
             if !s.is_empty() && as_text(std::slice::from_ref(&s)).is_some() {
                 texts.push(s);
             }
@@ -1704,11 +1708,11 @@ fn uniform_follow_text(ops: &[Value]) -> Option<String> {
 }
 
 /// The docs-map probe for a NAMED doc after op `i` (create_chain contents).
-fn next_docs_map_probe(all: &[Value], i: usize, name: &str) -> Option<String> {
-    for op in &all[i + 1..] {
+fn next_docs_map_probe(ops: &[Value], i: usize, name: &str) -> Option<String> {
+    for op in &ops[i + 1..] {
         if let Some(map) = op.get("docs").and_then(Value::as_object) {
             // An id map holds addresses, never content: as_text refuses it.
-            if let Some(s) = map.get(name).and_then(expect_strings).as_deref().and_then(as_text) {
+            if let Some(s) = map.get(name).and_then(strings_of).as_deref().and_then(as_text) {
                 return Some(s);
             }
         }
@@ -1737,7 +1741,7 @@ fn delete_described_bytes(op: &Value, w: u64) -> Option<Vec<u8>> {
     None
 }
 
-fn result_str(op: &Value) -> Option<String> {
+fn version_result(op: &Value) -> Option<String> {
     match field(op, &["result"]) {
         Some(Value::String(s)) => Some(s.clone()),
         Some(Value::Object(o)) => o.get("version").and_then(Value::as_str).map(str::to_string),

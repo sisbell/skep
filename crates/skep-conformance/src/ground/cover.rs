@@ -31,17 +31,17 @@ pub(super) fn cover_with_sources(
     sources: &[String],
     expected: &str,
 ) -> Vec<SetupStep> {
-    let e = expected.as_bytes();
+    let want = expected.as_bytes();
     let texts: Vec<(&String, String)> =
         sources.iter().map(|src| (src, shadow.text_string(src))).collect();
     let mut steps: Vec<SetupStep> = Vec::new();
     let mut filler: Vec<u8> = Vec::new();
     let mut i = 0usize;
-    while i < e.len() {
+    while i < want.len() {
         let mut best: Option<(String, u64, usize)> = None; // (src, ord, len)
         for (src, text) in &texts {
-            if let Some((ord, mut len)) = longest_occurring_prefix(text.as_bytes(), &e[i..]) {
-                while len > MIN_COPY && e[i + len - 1].is_ascii_whitespace() {
+            if let Some((ord, mut len)) = longest_occurring_prefix(text.as_bytes(), &want[i..]) {
+                while len > MIN_COPY && want[i + len - 1].is_ascii_whitespace() {
                     len -= 1;
                 }
                 if best.as_ref().is_none_or(|(_, _, bl)| len > *bl) {
@@ -61,7 +61,7 @@ pub(super) fn cover_with_sources(
                 i += len;
             }
             None => {
-                filler.push(e[i]);
+                filler.push(want[i]);
                 i += 1;
             }
         }
@@ -98,8 +98,8 @@ fn longest_occurring_prefix(text: &[u8], needle: &[u8]) -> Option<(u64, usize)> 
 
 /// Does a later vcopy/copy op (before `dest`'s next content probe) also
 /// build `dest`? Guard for the full pair-cover strategy.
-pub(super) fn later_copy_into(all: &[Value], i: usize, dest: &str, shadow: &Shadow) -> bool {
-    for op in &all[i + 1..] {
+pub(super) fn has_later_copy_into(ops: &[Value], i: usize, dest: &str, shadow: &Shadow) -> bool {
+    for op in &ops[i + 1..] {
         if verb_of(op) != Some(Verb::Vcopy) {
             continue;
         }
@@ -118,13 +118,13 @@ pub(super) fn later_copy_into(all: &[Value], i: usize, dest: &str, shadow: &Shad
 /// derivable append (position args, deletes, rearranges, underivable copy
 /// text) — the caller then skips the copy-extension heuristic.
 pub(super) fn later_appends_text(
-    all: &[Value],
+    ops: &[Value],
     i: usize,
     dest: &str,
     shadow: &Shadow,
 ) -> Option<String> {
     let mut out = String::new();
-    for op in &all[i + 1..] {
+    for op in &ops[i + 1..] {
         if reads_whole_content(op) {
             let target = str_field(op, &["doc", "docid"]).and_then(|s| shadow.resolve_doc(s));
             if target.as_deref() == Some(dest) {
@@ -168,9 +168,9 @@ pub(super) struct SharedPair {
 /// dest is the scenario's target-role doc), and compare ops whose `label`
 /// field is `"<x>_vs_<y>"` and whose top-level `shared` items key the sides
 /// `a`/`b` positionally (identity/identity_mixed_sources).
-pub(super) fn comparison_pairs(all: &[Value], shadow: &Shadow) -> Vec<SharedPair> {
+pub(super) fn comparison_pairs(ops: &[Value], shadow: &Shadow) -> Vec<SharedPair> {
     let mut out: Vec<SharedPair> = Vec::new();
-    for op in all {
+    for op in ops {
         if verb_of(op) != Some(Verb::CompareVersions) {
             continue;
         }
@@ -293,34 +293,34 @@ pub(super) fn cover_from_comparisons(
     shadow: &Shadow,
     dest: &str,
     expected: &str,
-    all: &[Value],
+    ops: &[Value],
 ) -> Option<Vec<SetupStep>> {
     let mut pairs: Vec<SharedPair> =
-        comparison_pairs(all, shadow).into_iter().filter(|p| p.dest == dest).collect();
+        comparison_pairs(ops, shadow).into_iter().filter(|p| p.dest == dest).collect();
     if pairs.is_empty() {
         return None;
     }
     pairs.sort();
-    let e = expected.as_bytes();
+    let want = expected.as_bytes();
     let mut steps: Vec<SetupStep> = Vec::new();
-    let mut at = 0usize; // 0-based cursor into expected
+    let mut cursor = 0usize; // 0-based, into `want`
     for SharedPair { dest_ord, src, src_ord, width, .. } in pairs {
         // Out-of-range evidence — an ordinal 0, an end past the probe's —
         // or a region overlapping the last abandons the evidence path.
-        let landed = held_range(e.len(), dest_ord, width).filter(|r| r.start >= at)?;
+        let landed = held_range(want.len(), dest_ord, width).filter(|r| r.start >= cursor)?;
         let src_bytes = shadow.slice(&src, src_ord, width);
-        if src_bytes != e[landed.clone()] {
+        if src_bytes != want[landed.clone()] {
             return None; // evidence disagrees with the probe text
         }
-        if landed.start > at {
-            let filler = e[at..landed.start].to_vec();
+        if landed.start > cursor {
+            let filler = want[cursor..landed.start].to_vec();
             steps.push(SetupStep::Insert { doc: dest.to_string(), bytes: filler });
         }
         steps.push(SetupStep::Copy { doc: dest.to_string(), src, ord: src_ord, width });
-        at = landed.end;
+        cursor = landed.end;
     }
-    if at < e.len() {
-        steps.push(SetupStep::Insert { doc: dest.to_string(), bytes: e[at..].to_vec() });
+    if cursor < want.len() {
+        steps.push(SetupStep::Insert { doc: dest.to_string(), bytes: want[cursor..].to_vec() });
     }
     Some(steps)
 }

@@ -81,7 +81,7 @@ pub struct Allowlist {
 impl Allowlist {
     /// The adjustments declared for the comparators of (scenario, op index).
     pub fn adjustments(&self, scenario: &ScenarioKey, op_index: usize) -> Adjustments {
-        let entries = self.matching(scenario, op_index);
+        let entries = self.op_entries(scenario, op_index);
         Adjustments {
             width_tolerance: entries.iter().filter_map(|e| e.width_tolerance).max().unwrap_or(0),
             count_delta: entries.iter().filter_map(|e| e.count_delta).next().unwrap_or(0),
@@ -108,7 +108,7 @@ impl Allowlist {
         let mut covering: Option<String> = None;
         if disagreed || adjusted {
             let mut classes: Vec<String> =
-                self.matching(scenario, op_index).iter().map(|e| e.class.clone()).collect();
+                self.op_entries(scenario, op_index).iter().map(|e| e.class.clone()).collect();
             classes.dedup();
             if !classes.is_empty() {
                 covering = Some(classes.join("+"));
@@ -116,7 +116,7 @@ impl Allowlist {
         }
         if disagreed {
             let expected = out.disagreement.as_ref().map(|d| d.expected.as_str());
-            let sig = self.matching_expected(scenario, op_index, expected);
+            let sig = self.signature_entries(scenario, op_index, expected);
             if !sig.is_empty() {
                 let mut classes: Vec<String> = sig.iter().map(|e| e.class.clone()).collect();
                 if let Some(prev) = covering.take() {
@@ -132,7 +132,7 @@ impl Allowlist {
     /// Entries applying to (scenario, op index) BEFORE execution — the
     /// adjustment-capable path. Signature entries (`expected_matches`) are
     /// excluded: they cannot be evaluated until the expected value exists.
-    fn matching(&self, scenario: &ScenarioKey, op_index: usize) -> Vec<&Entry> {
+    fn op_entries(&self, scenario: &ScenarioKey, op_index: usize) -> Vec<&Entry> {
         self.entries
             .iter()
             .filter(|e| {
@@ -146,7 +146,7 @@ impl Allowlist {
     /// Signature entries applying to a DISAGREED op after execution: the
     /// scenario matches, the op index (when given) matches, and the op's
     /// rendered expected value contains the entry's substring.
-    fn matching_expected(
+    fn signature_entries(
         &self,
         scenario: &ScenarioKey,
         op_index: usize,
@@ -265,7 +265,7 @@ pub fn load(path: &Path) -> Result<Allowlist, AllowlistError> {
             v.map(str::to_string).ok_or_else(|| syntax("expected quoted string"))
         };
         let twice = || syntax(&format!("`{k}` set twice in one entry"));
-        let integer = |_| syntax(&format!("{k} must be an integer"));
+        let not_an_integer = |_| syntax(&format!("{k} must be an integer"));
         match k {
             "scenario" => {
                 let key = quoted(v)?
@@ -275,10 +275,12 @@ pub fn load(path: &Path) -> Result<Allowlist, AllowlistError> {
             }
             "class" => set_once(&mut e.class, quoted(v)?, twice)?,
             "rationale" => set_once(&mut e.rationale, quoted(v)?, twice)?,
-            "op_index" => set_once(&mut e.op_index, v.parse().map_err(integer)?, twice)?,
-            "count_delta" => set_once(&mut e.count_delta, v.parse().map_err(integer)?, twice)?,
+            "op_index" => set_once(&mut e.op_index, v.parse().map_err(not_an_integer)?, twice)?,
+            "count_delta" => {
+                set_once(&mut e.count_delta, v.parse().map_err(not_an_integer)?, twice)?
+            }
             "width_tolerance" => {
-                set_once(&mut e.width_tolerance, v.parse().map_err(integer)?, twice)?
+                set_once(&mut e.width_tolerance, v.parse().map_err(not_an_integer)?, twice)?
             }
             "expected_matches" => {
                 let signature = quoted(v)?;

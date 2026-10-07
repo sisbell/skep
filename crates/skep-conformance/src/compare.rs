@@ -63,7 +63,7 @@ pub fn render_segments(segs: &[Segment]) -> String {
 /// Text is literal equality; addresses compare up to the bijection.
 pub fn compare_content(
     expected: &[String],
-    items: &[DeliveryItem],
+    actual: &[DeliveryItem],
     alpha: &mut Alpha,
 ) -> Comparison {
     // Segment the golden side.
@@ -76,7 +76,7 @@ pub fn compare_content(
         }
     }
     // Segment the skep side, addresses kept raw for the binding pass.
-    enum RawSeg {
+    enum RawSegment {
         Text(String),
         Addr(Address),
         // A masked run (lane 3.3, §4): its own segment, matching no golden
@@ -84,19 +84,19 @@ pub fn compare_content(
         // not (the two-account goldens item 6 names).
         Withheld(String),
     }
-    let mut raw: Vec<RawSeg> = Vec::new();
-    for it in items {
+    let mut raw: Vec<RawSegment> = Vec::new();
+    for it in actual {
         match it {
             DeliveryItem::Content(v) => {
                 let s = String::from_utf8_lossy(v.as_bytes()).into_owned();
                 match raw.last_mut() {
-                    Some(RawSeg::Text(t)) => t.push_str(&s),
-                    _ => raw.push(RawSeg::Text(s)),
+                    Some(RawSegment::Text(t)) => t.push_str(&s),
+                    _ => raw.push(RawSegment::Text(s)),
                 }
             }
-            DeliveryItem::Ref(a) => raw.push(RawSeg::Addr(a.clone())),
+            DeliveryItem::Ref(a) => raw.push(RawSegment::Addr(a.clone())),
             DeliveryItem::Withheld { origin, width } => {
-                raw.push(RawSeg::Withheld(format!("«withheld {origin} w{width}»")))
+                raw.push(RawSegment::Withheld(format!("«withheld {origin} w{width}»")))
             }
         }
     }
@@ -105,7 +105,7 @@ pub fn compare_content(
     // (the sanctioned move) — never a raw emission.
     if want.len() == raw.len() {
         for (w, r) in want.iter().zip(&raw) {
-            if let (Segment::Addr(g), RawSeg::Addr(a)) = (w, r) {
+            if let (Segment::Addr(g), RawSegment::Addr(a)) = (w, r) {
                 if alpha.peek_translate(g).is_none() && !alpha.is_bound_skep(a) {
                     alpha.bind(g, a);
                 }
@@ -126,8 +126,8 @@ pub fn compare_content(
     // position 2.1 of a doc whose create_link recorded no result).
     let equal = want.len() == raw.len()
         && want.iter().zip(&raw).all(|(w, r)| match (w, r) {
-            (Segment::Text(a), RawSeg::Text(b)) => a == b,
-            (Segment::Addr(g), RawSeg::Addr(a)) => alpha.peek_translate(g).as_ref() == Some(a),
+            (Segment::Text(a), RawSegment::Text(b)) => a == b,
+            (Segment::Addr(g), RawSegment::Addr(a)) => alpha.peek_translate(g).as_ref() == Some(a),
             _ => false,
         });
     if equal {
@@ -138,9 +138,9 @@ pub fn compare_content(
     let got: Vec<Segment> = raw
         .into_iter()
         .map(|r| match r {
-            RawSeg::Text(t) => Segment::Text(t),
-            RawSeg::Addr(a) => Segment::Addr(alpha.render_skep(&a)),
-            RawSeg::Withheld(m) => Segment::Text(m),
+            RawSegment::Text(t) => Segment::Text(t),
+            RawSegment::Addr(a) => Segment::Addr(alpha.render_skep(&a)),
+            RawSegment::Withheld(m) => Segment::Text(m),
         })
         .collect();
     Err(Disagreement { expected: render_segments(&want), actual: render_segments(&got) })
@@ -163,7 +163,7 @@ pub fn compare_content(
 /// on both sides — component by component, numerically — so `…0.9` pairs
 /// ahead of `…0.10` exactly as the two systems allocated them.
 pub fn compare_addr_sets(
-    expected_golden: &[String],
+    expected: &[String],
     actual: &[Address],
     alpha: &mut Alpha,
     exclude: impl Fn(&Address) -> bool,
@@ -173,13 +173,13 @@ pub fn compare_addr_sets(
     got.sort();
     got.dedup();
 
-    let mut want_goldens: Vec<String> = expected_golden.to_vec();
+    let mut want_goldens: Vec<String> = expected.to_vec();
     want_goldens.sort_by(|a, b| parse_dotted(a).cmp(&parse_dotted(b)).then_with(|| a.cmp(b)));
     want_goldens.dedup();
     // The golden listing one address twice is a recording defect
     // (insert_text_check_both_link_positions's find_links). The set
     // comparison absorbs it; the tag keeps the defect visible.
-    if want_goldens.len() != expected_golden.len() {
+    if want_goldens.len() != expected.len() {
         adaptations.push("golden-duplicate-result".into());
     }
 
@@ -223,7 +223,7 @@ pub fn compare_addr_sets(
 /// (start, width) strings. The expected side is exactly what the recording
 /// client wrote (decoded-tumbler `str()` forms); the actual side is skep's
 /// spans rendered the same dotted way. No reinterpretation: a malformed
-/// recorded shape (see [`collapsed_subspace_shape`]) compares as recorded
+/// recorded shape (see [`is_collapsed_subspace_shape`]) compares as recorded
 /// and diverges honestly. Width tolerance applies ONLY where the allowlist
 /// declares one and both widths parse; start positions are always exact. An
 /// agreement the tolerance made is recorded as [`WIDTH_ADJUSTED`].
@@ -285,7 +285,7 @@ fn widths_within(a: &str, b: &str, tol: u64) -> bool {
 /// harness does NOT normalize them: the cluster is compared raw, this
 /// analysis attached — ruled udanax-malformed-vspanset (decisions.md
 /// ruling 1).
-pub fn collapsed_subspace_shape(expected: &[RawSpan]) -> bool {
+pub fn is_collapsed_subspace_shape(expected: &[RawSpan]) -> bool {
     expected.len() >= 2 && expected.iter().any(|(s, _)| !s.contains('.'))
 }
 
@@ -359,7 +359,7 @@ mod tests {
     use skep_content::Val;
 
     use crate::alpha::FindingKind;
-    use crate::tum::{addr, tum};
+    use crate::tum::{addr, tumbler};
 
     /// One delivered content item per byte, as RetrieveV delivers text.
     fn text(s: &str) -> Vec<DeliveryItem> {
@@ -411,12 +411,12 @@ mod tests {
         let mut fresh = Alpha::new();
         let misaligned = strings(&["1.1.0.1.0.9.0.2.1", "X"]);
         assert!(compare_content(&misaligned, &delivered, &mut fresh).is_err());
-        assert_eq!(fresh.peek("1.1.0.1.0.9.0.2.1"), None);
+        assert_eq!(fresh.peek_exact("1.1.0.1.0.9.0.2.1"), None);
         let found: Vec<FindingKind> = fresh.drain_findings().map(|f| f.kind).collect();
         assert_eq!(found, [FindingKind::NeverBound]);
         let aligned = strings(&["1.1.0.1.0.9.0.2.1"]);
         assert_eq!(compare_content(&aligned, &delivered, &mut fresh), Ok(()));
-        assert_eq!(fresh.peek("1.1.0.1.0.9.0.2.1"), Some(stray));
+        assert_eq!(fresh.peek_exact("1.1.0.1.0.9.0.2.1"), Some(stray));
     }
 
     /// An address set agrees only with exactly skep's answer, harness
@@ -462,7 +462,8 @@ mod tests {
     /// start, and never covers a span the other side lacks.
     #[test]
     fn a_width_tolerance_never_moves_a_start() {
-        let set = SpanSet::singleton(Span::new(tum(&[1, 1]), tum(&[0, 5])).expect("a span"));
+        let set =
+            SpanSet::singleton(Span::new(tumbler(&[1, 1]), tumbler(&[0, 5])).expect("a span"));
         let tolerant = Adjustments { width_tolerance: 1, count_delta: 0 };
         let moved = [("1.2".to_string(), "0.5".to_string())];
         assert!(compare_spansets(&moved, &set, &tolerant, &mut Vec::new()).is_err());
@@ -490,15 +491,16 @@ mod tests {
         );
         assert_eq!(comparison, Ok(()));
         assert_eq!(adaptations, ["alpha-bind-from-result:2"]);
-        assert_eq!(alpha.peek("1.1.0.1.0.9"), Some(eleven));
-        assert_eq!(alpha.peek("1.1.0.1.0.10"), Some(twelve));
+        assert_eq!(alpha.peek_exact("1.1.0.1.0.9"), Some(eleven));
+        assert_eq!(alpha.peek_exact("1.1.0.1.0.10"), Some(twelve));
     }
 
     /// A comparator records an allowlist adjustment only when the
     /// adjustment, not the raw values, made its agreement.
     #[test]
     fn an_adjustment_is_recorded_only_when_it_made_the_agreement() {
-        let set = SpanSet::singleton(Span::new(tum(&[1, 1]), tum(&[0, 5])).expect("a span"));
+        let set =
+            SpanSet::singleton(Span::new(tumbler(&[1, 1]), tumbler(&[0, 5])).expect("a span"));
         let width = Adjustments { width_tolerance: 1, count_delta: 0 };
         let exact = [("1.1".to_string(), "0.5".to_string())];
         let off_by_one = [("1.1".to_string(), "0.4".to_string())];

@@ -22,13 +22,13 @@ pub fn parse_dotted(s: &str) -> Option<Vec<u64>> {
 
 /// Components → `Tumbler`. Panics on empty input — every caller passes a
 /// nonempty literal or a `parse_dotted` result (nonempty by construction).
-pub fn tum(comps: &[u64]) -> Tumbler {
+pub fn tumbler(comps: &[u64]) -> Tumbler {
     Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty component list")
 }
 
 /// Components → validated `Address`. `None` if not T4-valid.
 pub fn addr(comps: &[u64]) -> Option<Address> {
-    validate(tum(comps)).ok()
+    validate(tumbler(comps)).ok()
 }
 
 /// A golden V-position in numbers: subspace (1 content, 2 link) and 1-based
@@ -131,7 +131,7 @@ pub fn is_link_address(s: &str) -> bool {
 /// to be dotted is never mistaken for one.
 pub fn is_golden_address(s: &str) -> bool {
     parse_dotted(s).is_some_and(|comps| {
-        matches!(classify(&tum(&comps)), Class::Account | Class::Document | Class::Element)
+        matches!(classify(&tumbler(&comps)), Class::Account | Class::Document | Class::Element)
     })
 }
 
@@ -150,7 +150,7 @@ pub fn deep_span(start: &[u64], width: &[u64]) -> Option<Span> {
     if start.is_empty() || width.is_empty() || width.iter().all(|&w| w == 0) {
         return None;
     }
-    Span::new(tum(start), tum(width)).ok()
+    Span::new(tumbler(start), tumbler(width)).ok()
 }
 
 /// The final component of `t` as a `u64` — `None` when it does not fit.
@@ -188,7 +188,7 @@ pub fn subspan(s: &Span, off: u64, len: u64) -> Option<Span> {
     *start.last_mut()? += off;
     let mut width = vec![0; s.width().len().saturating_sub(1)];
     width.push(len);
-    Span::new(Tumbler::new(start).ok()?, tum(&width)).ok()
+    Span::new(Tumbler::new(start).ok()?, tumbler(&width)).ok()
 }
 
 #[cfg(test)]

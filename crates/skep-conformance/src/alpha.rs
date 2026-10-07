@@ -143,8 +143,10 @@ impl Alpha {
         validate(lifted).ok()
     }
 
-    /// Peek without recording a finding (used where absence is an answer).
-    pub fn peek(&self, golden: &str) -> Option<Address> {
+    /// The skep address bound to exactly `golden` — no element lift, so a
+    /// golden element under a bound document answers `None` here and `Some`
+    /// from [`Alpha::peek_translate`]; like it, no finding on a miss.
+    pub fn peek_exact(&self, golden: &str) -> Option<Address> {
         self.fwd.get(golden).cloned()
     }
 
@@ -219,9 +221,9 @@ mod tests {
         alpha.bind("1.1.0.1.0.2", &a(&[1, 0, 1, 0, 3]));
         let found: Vec<FindingKind> = alpha.drain_findings().map(|f| f.kind).collect();
         assert_eq!(found, [FindingKind::DoubleBindGolden, FindingKind::DoubleBindSkep]);
-        assert_eq!(alpha.peek("1.1.0.1.0.1"), Some(a(&[1, 0, 1, 0, 3])));
+        assert_eq!(alpha.peek_exact("1.1.0.1.0.1"), Some(a(&[1, 0, 1, 0, 3])));
         assert!(!alpha.is_bound_skep(&a(&[1, 0, 1, 0, 4])));
-        assert_eq!(alpha.peek("1.1.0.1.0.2"), None);
+        assert_eq!(alpha.peek_exact("1.1.0.1.0.2"), None);
         assert_eq!(alpha.render_skep(&a(&[1, 0, 1, 0, 3])), "1.1.0.1.0.1");
     }
 }

@@ -14,7 +14,7 @@ use serde_json::Value;
 use skep_febe::Response;
 
 use super::{
-    create_one, inexpressible, plan_failed, probe_state, refusal, run_plan, settle_accepted,
+    ensure_document, inexpressible, plan_failed, probe_state, refusal, run_plan, settle_accepted,
     settle_unaccepted, CopyNeverBound, Cx, NeverBound, Probe, Tally,
 };
 use crate::allowlist::Adjustments;
@@ -23,8 +23,8 @@ use crate::evidence::{
     delete_is_noop, next_content_probe, resolve_delete_span, resolve_insert, Effect,
 };
 use crate::fields::{
-    cuts_of, distributed_insert_texts, distribution_targets, expect_strings, expected_failure,
-    field, is_position_marker, recorded_count, resolve_position, str_field, vcopy_sources,
+    cuts_of, distributed_insert_texts, distribution_targets, expected_failure, field,
+    is_position_marker, recorded_count, resolve_position, str_field, strings_of, vcopy_sources,
     verb_of, Verb,
 };
 use crate::outcome::{Disagreement, OpOutcome, Status};
@@ -109,18 +109,18 @@ pub(super) fn h_insert(
     if landing.doc != doc {
         cx.shadow.set_current(&landing.doc);
     }
-    let xf = expected_failure(op);
+    let recorded_failure = expected_failure(op);
     let Ok(r) = cx.insert(&landing.doc, landing.at, &landing.bytes, effect) else {
         out.never_bound(format!("insert into never-bound doc {}", landing.doc));
         return;
     };
     match r {
         Response::AckAddr { .. } => {
-            if settle_accepted(out, xf) {
+            if settle_accepted(out, recorded_failure) {
                 probe_state(cx, op, out, adjustments, &landing.doc, Probe::PostWrite);
             }
         }
-        r => settle_unaccepted(out, xf, &r),
+        r => settle_unaccepted(out, recorded_failure, &r),
     }
 }
 
@@ -290,7 +290,7 @@ pub(super) fn h_delete(
         out.note = Some(note);
         return;
     }
-    let xf = expected_failure(op);
+    let recorded_failure = expected_failure(op);
     let region = if verb == Verb::DeleteAll {
         let n = cx.shadow.text_len(&doc);
         if n == 0 {
@@ -316,7 +316,7 @@ pub(super) fn h_delete(
             }
         }
     } else {
-        if xf.is_some() {
+        if recorded_failure.is_some() {
             out.agree("expected-failure");
             out.add_note("delete region not groundable; golden also recorded failure".into());
             return;
@@ -330,11 +330,11 @@ pub(super) fn h_delete(
     };
     match r {
         Response::Ack { .. } => {
-            if settle_accepted(out, xf) {
+            if settle_accepted(out, recorded_failure) {
                 probe_state(cx, op, out, adjustments, &doc, Probe::PostWrite);
             }
         }
-        r => settle_unaccepted(out, xf, &r),
+        r => settle_unaccepted(out, recorded_failure, &r),
     }
 }
 
@@ -357,7 +357,7 @@ pub(super) fn h_vcopy(
             for t in targets {
                 let id = t.as_str().or_else(|| t.get("docid").and_then(Value::as_str));
                 if let Some(id) = id {
-                    if let Err(r) = create_one(cx, id, None, effect) {
+                    if let Err(r) = ensure_document(cx, id, None, effect) {
                         refused.get_or_insert(r);
                     }
                 }
@@ -380,7 +380,7 @@ pub(super) fn h_vcopy(
             for t in targets {
                 let (Some(id), Some(exp)) = (
                     t.get("docid").and_then(Value::as_str),
-                    t.get("contents").and_then(expect_strings),
+                    t.get("contents").and_then(strings_of),
                 ) else {
                     continue;
                 };
@@ -433,14 +433,14 @@ pub(super) fn h_vcopy(
         None => str_field(op, &["doc", "docid"])
             .and_then(|s| cx.shadow.resolve_doc(s))
             .or_else(|| {
-                let copied_s = String::from_utf8_lossy(&copied).into_owned();
+                let copied_text = String::from_utf8_lossy(&copied).into_owned();
                 let evidenced: Vec<String> = cx
                     .shadow
                     .created
                     .iter()
                     .filter(|d| {
                         next_content_probe(cx.ops, index, cx.shadow, d)
-                            .is_some_and(|p| p.contains(&copied_s))
+                            .is_some_and(|p| p.contains(&copied_text))
                     })
                     .cloned()
                     .collect();
@@ -477,7 +477,7 @@ pub(super) fn h_vcopy(
             }
         }
     };
-    let xf = expected_failure(op);
+    let recorded_failure = expected_failure(op);
     let r = match cx.copy(&dest, ord, &sources, effect) {
         Ok(r) => r,
         Err(CopyNeverBound::Destination(_)) => {
@@ -491,16 +491,16 @@ pub(super) fn h_vcopy(
     };
     match r {
         Response::Ack { .. } => {
-            if settle_accepted(out, xf) {
+            if settle_accepted(out, recorded_failure) {
                 probe_state(cx, op, out, adjustments, &dest, Probe::PostWrite);
             }
         }
-        r => settle_unaccepted(out, xf, &r),
+        r => settle_unaccepted(out, recorded_failure, &r),
     }
 }
 
 /// A rearrangement of the given `shape`.
-pub(super) fn h_pivot_swap(cx: &mut Cx, op: &Value, out: &mut OpOutcome, shape: Rearrangement) {
+pub(super) fn h_rearrange(cx: &mut Cx, op: &Value, out: &mut OpOutcome, shape: Rearrangement) {
     let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
         inexpressible(out, "rearrange with no document in scope".into());
         return;
@@ -531,17 +531,17 @@ pub(super) fn h_pivot_swap(cx: &mut Cx, op: &Value, out: &mut OpOutcome, shape: 
         inexpressible(out, format!("rearrange needs {want} cuts, could derive {}", cuts.len()));
         return;
     }
-    let xf = expected_failure(op);
+    let recorded_failure = expected_failure(op);
     let Ok(r) = cx.rearrange(&doc, &cuts, Effect::of(op)) else {
         out.never_bound(format!("rearrange in never-bound doc {doc}"));
         return;
     };
     match r {
         Response::Ack { .. } => {
-            if settle_accepted(out, xf) {
+            if settle_accepted(out, recorded_failure) {
                 out.status = Status::NotCompared;
             }
         }
-        r => settle_unaccepted(out, xf, &r),
+        r => settle_unaccepted(out, recorded_failure, &r),
     }
 }

@@ -77,7 +77,7 @@ pub const ANNOTATION_KEYS: &[&str] = &[
 
 /// `{start, width}` / `{start, end}` span dict → the region it names.
 /// ARGUMENT use only — starts here are always well-formed `sub.ord` (or bare
-/// ordinal) V-positions. Recorded RESULTS go through [`expect_spans_raw`],
+/// ordinal) V-positions. Recorded RESULTS go through [`raw_spanset_of`],
 /// which never reinterprets.
 pub fn span_dict(v: &Value) -> Option<VRegion> {
     let o = v.as_object()?;
@@ -123,7 +123,7 @@ pub fn vspec_dict(v: &Value) -> Option<DocSpans> {
 /// as recorded, not be coerced into a `sub.ord` reading).
 pub type RawSpan = (String, String);
 
-fn raw_from_dict(v: &Value) -> Option<RawSpan> {
+fn raw_span_dict(v: &Value) -> Option<RawSpan> {
     let o = v.as_object()?;
     let start = o.get("start").and_then(Value::as_str)?.to_string();
     if let Some(w) = o.get("width").and_then(Value::as_str) {
@@ -139,7 +139,7 @@ fn raw_from_dict(v: &Value) -> Option<RawSpan> {
 }
 
 /// `"1.1-0.24"` dashed rendering (link_poom/three_links_vspan_growth).
-fn raw_from_dashed(s: &str) -> Option<RawSpan> {
+fn raw_span_dashed(s: &str) -> Option<RawSpan> {
     let (a, b) = s.split_once('-')?;
     let (a, b) = (a.trim(), b.trim());
     parse_dotted(a)?;
@@ -206,15 +206,15 @@ pub fn parse_python_spec(s: &str) -> Option<(Option<String>, Vec<RawSpan>)> {
     Some((doc, spans))
 }
 
-/// Harvest a recorded span-set expectation in any of the goldens' shapes:
-/// vspec dict, array of span dicts, array of dashed strings, array of vspec
-/// dicts (flattened), `{vspans|spans: …}` wrapper, python string. Returns
-/// (optional docid, raw spans). Zero-width spans are DROPPED: a span of
+/// The span set a recorded value holds, kept raw, in any of the goldens'
+/// shapes: vspec dict, array of span dicts, array of dashed strings, array
+/// of vspec dicts (flattened), `{vspans|spans: …}` wrapper, python string.
+/// Returns (optional docid, raw spans). Zero-width spans are DROPPED: a span of
 /// width 0 contains no address (client.py `Span.contains`: start ≤ x <
 /// start+0 is unsatisfiable), so udanax's zero-span rendering of emptiness
 /// (documents/retrieve_vspan_empty: "at 0 for 0") is provably the same
 /// observable as skep's empty span set.
-pub fn expect_spans_raw(v: &Value) -> Option<(Option<String>, Vec<RawSpan>)> {
+pub fn raw_spanset_of(v: &Value) -> Option<(Option<String>, Vec<RawSpan>)> {
     let zero = |w: &str| parse_dotted(w).is_some_and(|c| c.iter().all(|&x| x == 0));
     let clean = |list: Vec<RawSpan>| -> Vec<RawSpan> {
         list.into_iter().filter(|(_, w)| !zero(w)).collect()
@@ -223,15 +223,15 @@ pub fn expect_spans_raw(v: &Value) -> Option<(Option<String>, Vec<RawSpan>)> {
         if arr.is_empty() {
             return Some((None, Vec::new()));
         }
-        if let Some(dicts) = arr.iter().map(raw_from_dict).collect::<Option<Vec<_>>>() {
+        if let Some(dicts) = arr.iter().map(raw_span_dict).collect::<Option<Vec<_>>>() {
             return Some((None, clean(dicts)));
         }
         if let Some(dashed) =
-            arr.iter().map(|x| x.as_str().and_then(raw_from_dashed)).collect::<Option<Vec<_>>>()
+            arr.iter().map(|x| x.as_str().and_then(raw_span_dashed)).collect::<Option<Vec<_>>>()
         {
             return Some((None, clean(dashed)));
         }
-        if let Some(vspecs) = arr.iter().map(vspec_raw).collect::<Option<Vec<_>>>() {
+        if let Some(vspecs) = arr.iter().map(raw_vspec_dict).collect::<Option<Vec<_>>>() {
             let doc = vspecs.first().map(|(d, _)| d.clone());
             let all: Vec<RawSpan> = vspecs.into_iter().flat_map(|(_, s)| s).collect();
             return Some((doc, clean(all)));
@@ -239,18 +239,18 @@ pub fn expect_spans_raw(v: &Value) -> Option<(Option<String>, Vec<RawSpan>)> {
         return None;
     }
     if let Some(o) = v.as_object() {
-        if let Some(rs) = raw_from_dict(v) {
+        if let Some(rs) = raw_span_dict(v) {
             return Some((None, clean(vec![rs])));
         }
-        if let Some((doc, spans)) = vspec_raw(v) {
+        if let Some((doc, spans)) = raw_vspec_dict(v) {
             return Some((Some(doc), clean(spans)));
         }
         for k in ["vspans", "spans"] {
             match o.get(k) {
-                Some(inner @ Value::Object(_)) => return expect_spans_raw(inner),
+                Some(inner @ Value::Object(_)) => return raw_spanset_of(inner),
                 Some(Value::Array(arr)) => {
                     let doc = o.get("docid").and_then(Value::as_str).map(str::to_string);
-                    let dicts: Option<Vec<_>> = arr.iter().map(raw_from_dict).collect();
+                    let dicts: Option<Vec<_>> = arr.iter().map(raw_span_dict).collect();
                     return dicts.map(|d| (doc, clean(d)));
                 }
                 _ => {}
@@ -265,20 +265,21 @@ pub fn expect_spans_raw(v: &Value) -> Option<(Option<String>, Vec<RawSpan>)> {
     None
 }
 
-fn vspec_raw(v: &Value) -> Option<(String, Vec<RawSpan>)> {
+fn raw_vspec_dict(v: &Value) -> Option<(String, Vec<RawSpan>)> {
     let o = v.as_object()?;
     let docid = o.get("docid").and_then(Value::as_str)?.to_string();
     let spans = o.get("spans").and_then(Value::as_array)?;
-    let parsed: Option<Vec<_>> = spans.iter().map(raw_from_dict).collect();
+    let parsed: Option<Vec<_>> = spans.iter().map(raw_span_dict).collect();
     Some((docid, parsed?))
 }
 
-/// Harvest a vspanset expectation from ANY plausible field (the goldens key
-/// them result/before/after/empty_state/after_insert/…): first the standard
-/// keys, then a scan of remaining fields for span-set-shaped values. Shared
-/// by the play pass's probes and the grounding pre-pass (whose insert-width
-/// authority reads the same recorded vspansets).
-pub fn harvest_spanset(op: &Value) -> Option<(String, Option<String>, Vec<RawSpan>)> {
+/// The vspanset an op records, and the key it lives under, from ANY
+/// plausible field (the goldens key them result/before/after/empty_state/
+/// after_insert/…): first the standard keys, then a scan of remaining fields
+/// for span-set-shaped values. Shared by the play pass's probes and the
+/// grounding pre-pass (whose insert-width authority reads the same recorded
+/// vspansets).
+pub fn recorded_spanset(op: &Value) -> Option<(String, Option<String>, Vec<RawSpan>)> {
     const ARG_KEYS: &[&str] = &[
         "op", "doc", "docid", "comment", "label", "note", "interpretation", "search", "specs",
         "specset", "link", "positions", "span", "vspan", "start", "width", "end", "text",
@@ -287,7 +288,7 @@ pub fn harvest_spanset(op: &Value) -> Option<(String, Option<String>, Vec<RawSpa
     ];
     for k in ["result", "vspans", "vspanset", "spans", "before", "after", "expected"] {
         if let Some(v) = op.get(k) {
-            if let Some((doc, spans)) = expect_spans_raw(v) {
+            if let Some((doc, spans)) = raw_spanset_of(v) {
                 return Some((k.to_string(), doc, spans));
             }
         }
@@ -298,7 +299,7 @@ pub fn harvest_spanset(op: &Value) -> Option<(String, Option<String>, Vec<RawSpa
             continue;
         }
         if looks_like_spanset(v) || v.as_str().is_some_and(|s| s.starts_with('<')) {
-            if let Some((doc, spans)) = expect_spans_raw(v) {
+            if let Some((doc, spans)) = raw_spanset_of(v) {
                 return Some((k.clone(), doc, spans));
             }
         }
@@ -315,9 +316,9 @@ pub fn looks_like_spanset(v: &Value) -> bool {
     match v {
         Value::Array(a) => {
             !a.is_empty()
-                && (a.iter().all(|x| raw_from_dict(x).is_some())
-                    || a.iter().all(|x| x.as_str().is_some_and(|s| raw_from_dashed(s).is_some()))
-                    || a.iter().all(|x| vspec_raw(x).is_some()))
+                && (a.iter().all(|x| raw_span_dict(x).is_some())
+                    || a.iter().all(|x| x.as_str().is_some_and(|s| raw_span_dashed(s).is_some()))
+                    || a.iter().all(|x| raw_vspec_dict(x).is_some()))
         }
         Value::Object(o) => o.contains_key("spans") || o.contains_key("vspans"),
         _ => false,
@@ -326,9 +327,9 @@ pub fn looks_like_spanset(v: &Value) -> bool {
 
 // ─────────────────────────── content expectations ──────────────────────────
 
-/// The expected-content field: an array of strings, a bare string, a
-/// stringified python list ("['ACBDEFGH']"), or the `{success, contents}`
-/// object wrapper (edgecases/retrieve_empty_specset). The bare marker
+/// The strings a recorded content value holds: an array of strings, a bare
+/// string, a stringified python list ("['ACBDEFGH']"), or the `{success,
+/// contents}` object wrapper (edgecases/retrieve_empty_specset). The bare marker
 /// `"empty"` under an `expected` key means no content
 /// (delete_all/empty_document_never_filled).
 ///
@@ -340,7 +341,7 @@ pub fn looks_like_spanset(v: &Value) -> bool {
 /// post-insert vspanset (`result: [{start,width}]`, allocation_
 /// independence/all_operations_interleaved op 1) as the EMPTY content
 /// expectation would fabricate a `content []` disagreement.
-pub fn expect_strings(v: &Value) -> Option<Vec<String>> {
+pub fn strings_of(v: &Value) -> Option<Vec<String>> {
     if let Some(arr) = v.as_array() {
         return arr
             .iter()
@@ -350,7 +351,7 @@ pub fn expect_strings(v: &Value) -> Option<Vec<String>> {
     if let Some(o) = v.as_object() {
         for k in ["contents", "content", "strings"] {
             if let Some(inner) = o.get(k) {
-                return expect_strings(inner);
+                return strings_of(inner);
             }
         }
         return None;
@@ -424,7 +425,7 @@ pub const POST_WRITE_KEYS: &[&str] = &["remaining", "result", "expected_contents
 /// `{contents}` wrapper around one); else the op's one string array under a
 /// key outside `reads` and [`ANNOTATION_KEYS`] (rearrange/double_pivot's
 /// `original`, `after_first`); else the first reply key holding a bare
-/// string, in [`expect_strings`]' forms. A bare string never outranks a
+/// string, in [`strings_of`]' forms. A bare string never outranks a
 /// recorded array: `expected` usually holds prose ("Should match original
 /// (ABCDE)") beside the array that is the data. Two or more such unlisted
 /// arrays name no single answer, so the op has none here, and the read that
@@ -432,7 +433,7 @@ pub const POST_WRITE_KEYS: &[&str] = &["remaining", "result", "expected_contents
 pub fn recorded_content(op: &Value, reads: &[&str]) -> Option<(String, Vec<String>)> {
     for k in REPLY_KEYS {
         if let Some(v) = field(op, &[k]).filter(|v| !v.is_string()) {
-            if let Some(strings) = expect_strings(v) {
+            if let Some(strings) = strings_of(v) {
                 return Some((k.to_string(), strings));
             }
         }
@@ -446,7 +447,7 @@ pub fn recorded_content(op: &Value, reads: &[&str]) -> Option<(String, Vec<Strin
                 && !reads.contains(&k.as_str())
                 && !ANNOTATION_KEYS.contains(&k.as_str())
         })
-        .filter_map(|(k, v)| Some((k, expect_strings(v)?)))
+        .filter_map(|(k, v)| Some((k, strings_of(v)?)))
         .collect();
     match unlisted.as_slice() {
         [(k, strings)] => return Some((k.to_string(), strings.clone())),
@@ -455,7 +456,7 @@ pub fn recorded_content(op: &Value, reads: &[&str]) -> Option<(String, Vec<Strin
     }
     REPLY_KEYS.iter().find_map(|k| {
         let v = field(op, &[k]).filter(|v| v.is_string())?;
-        Some((k.to_string(), expect_strings(v)?))
+        Some((k.to_string(), strings_of(v)?))
     })
 }
 
@@ -485,7 +486,7 @@ pub fn per_doc_replies(op: &Value, shadow: &Shadow) -> Vec<(String, String, Vec<
                 && !NOT_DOCS.contains(&k)
         })
         .filter_map(|(k, v)| {
-            let strings = expect_strings(v)?;
+            let strings = strings_of(v)?;
             let named = k.strip_suffix("_contents").or_else(|| k.strip_suffix("_content"));
             let doc = named.and_then(|n| shadow.resolve_doc(n)).or_else(|| shadow.resolve_doc(k))?;
             Some((k.clone(), doc, strings))
@@ -950,7 +951,7 @@ pub fn has_observation_fields(op: &Value) -> bool {
                 return true
             }
             "result" | "before" | "after" | "empty"
-                if expect_strings(v).is_some() || looks_like_spanset(v) =>
+                if strings_of(v).is_some() || looks_like_spanset(v) =>
             {
                 return true;
             }
@@ -1324,7 +1325,7 @@ pub fn resolve_position(
             return content(ord + t.len() as u64, "position-after-text");
         }
         // Case-insensitive fallback: descriptions say "after first" for "First ".
-        if let Some((_, ord, w)) = shadow.find_text_ci(doc, t) {
+        if let Some((_, ord, w)) = shadow.find_text_ignoring_case(doc, t) {
             return content(ord + w, "position-after-text");
         }
     }

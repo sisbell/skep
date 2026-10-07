@@ -15,8 +15,8 @@ use super::{
 use crate::allowlist::Adjustments;
 use crate::compare::{compare_addr_sets, compare_spansets};
 use crate::fields::{
-    expect_spans_raw, expect_strings, expected_failure, field, op_name, parse_python_spec,
-    str_field, vspec_dict, DocSpans, RawSpan,
+    expected_failure, field, op_name, parse_python_spec, raw_spanset_of, str_field, strings_of,
+    vspec_dict, DocSpans, RawSpan,
 };
 use crate::outcome::{Disagreement, OpOutcome};
 use crate::tum::{is_link_address, VPoint};
@@ -150,7 +150,7 @@ pub(super) fn h_follow_link(
     // (subspace/insert_text_check_both_link_positions's bare follow records
     // the TARGET vspec).
     if defaulted {
-        if let Some((Some(docid), spans)) = expect_spans_raw(expected) {
+        if let Some((Some(docid), spans)) = raw_spanset_of(expected) {
             if !spans.is_empty() {
                 if let Some(d) = cx.alpha.peek_translate(&docid) {
                     let nonempty = |cx: &mut Cx, s: usize| -> bool {
@@ -245,7 +245,7 @@ fn follow_compare(
     // Shape 3: strings (endset CONTENT) or the empty list — operator ruling
     // 11 (policy `render-by-identity`): render the RECORDED endset's bytes
     // once per I-span, in span order, never once per projected occurrence.
-    let Some(strings) = expect_strings(expected) else {
+    let Some(strings) = strings_of(expected) else {
         inexpressible(out, "follow_link expectation in an unrecognized shape".into());
         return;
     };
@@ -290,36 +290,36 @@ impl Cx<'_> {
             r => return Err(refusal(&r)),
         };
         // Index every doc's live V→I rows once.
-        let mut world: Vec<(String, Vec<ImageRow>)> = Vec::new();
+        let mut doc_rows: Vec<(String, Vec<ImageRow>)> = Vec::new();
         for docid in &self.shadow.created {
             if self.shadow.text_len(docid) == 0 {
                 continue;
             }
             let rows = self.image_rows(docid);
             if !rows.is_empty() {
-                world.push((docid.clone(), rows));
+                doc_rows.push((docid.clone(), rows));
             }
         }
         let mut notes = Vec::new();
         let mut rendered_bytes: Vec<u8> = Vec::new();
         let mut missing = 0u64;
-        for isp in set.iter() {
-            let Some(range) = elem_range(isp) else {
+        for ispan in set.iter() {
+            let Some(range) = elem_range(ispan) else {
                 notes.push("non-element endset span skipped".into());
                 continue;
             };
             let mut buf: Vec<Option<u8>> = vec![None; range.width as usize];
-            for (docid, rows) in &world {
+            for (docid, rows) in &doc_rows {
                 if buf.iter().all(Option::is_some) {
                     break;
                 }
-                let Some(d) = self.alpha.peek(docid) else { continue };
+                let Some(d) = self.alpha.peek_exact(docid) else { continue };
                 for row in rows {
-                    if row.i.prefix != range.prefix {
+                    if row.iextent.prefix != range.prefix {
                         continue;
                     }
-                    let a = row.i.lo.max(range.lo);
-                    let b = row.i.hi().min(range.hi());
+                    let a = row.iextent.lo.max(range.lo);
+                    let b = row.iextent.hi().min(range.hi());
                     if a >= b {
                         continue;
                     }
@@ -328,7 +328,7 @@ impl Cx<'_> {
                     if buf[off..off + len].iter().all(Option::is_some) {
                         continue;
                     }
-                    let at = VPoint::content(row.v_ord + (a - row.i.lo));
+                    let at = VPoint::content(row.v_ord + (a - row.iextent.lo));
                     let Some(span) = at.region(b - a).span() else { continue };
                     let items = match self
                         .rig
@@ -361,8 +361,8 @@ impl Cx<'_> {
                     }
                 }
             }
-            for slot_byte in &buf {
-                match slot_byte {
+            for cell in &buf {
+                match cell {
                     Some(b) => rendered_bytes.push(*b),
                     None => missing += 1,
                 }
@@ -405,9 +405,9 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, adjustmen
     let default_slot = if name.contains("source") || reverse { 1 } else { 2 };
     out.adaptations.push("traverse-hops-from-world".into());
     let mut tally = Tally::default();
-    // The traversal's current position (a golden doc) and the last link
-    // followed — landing-content entries compare against them.
-    let mut current: Option<String> = None;
+    // Where the traversal stands (a golden doc) and the last link followed —
+    // landing-content entries compare against them.
+    let mut here: Option<String> = None;
     let mut last_followed: Option<String> = None;
     for entry in entries {
         let Some(e) = entry.as_object() else { continue };
@@ -437,7 +437,7 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, adjustmen
         let from_doc = from_tok.as_deref().and_then(|t| cx.shadow.resolve_doc(t));
         let to_doc = to_tok.as_deref().and_then(|t| cx.shadow.resolve_doc(t));
         if let Some(d) = &from_doc {
-            current = Some(d.clone());
+            here = Some(d.clone());
         }
 
         // links_found — a count (u64) or a golden id list — checked with a
@@ -448,16 +448,16 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, adjustmen
                 .and_then(Value::as_str)
                 .and_then(|s| cx.shadow.resolve_doc(s))
                 .or_else(|| from_doc.clone())
-                .or_else(|| current.clone());
-            if let Some(atdoc) = at {
-                let found = find_links_at(cx, &atdoc, reverse);
+                .or_else(|| here.clone());
+            if let Some(at_doc) = at {
+                let found = find_links_at(cx, &at_doc, reverse);
                 if let Some(n) = v.as_u64() {
                     if found.len() as u64 == n {
                         tally.agree();
                     } else {
                         tally.differ(Disagreement {
-                            expected: format!("{atdoc}: {n} links"),
-                            actual: format!("{atdoc}: {}", found.len()),
+                            expected: format!("{at_doc}: {n} links"),
+                            actual: format!("{at_doc}: {}", found.len()),
                         });
                     }
                 } else if let Some(arr) = v.as_array() {
@@ -471,7 +471,7 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, adjustmen
                         |a| rig.is_infra_addr(a),
                         &mut out.adaptations,
                     );
-                    tally.judge(comparison, &format!("{atdoc}: "));
+                    tally.judge(comparison, &format!("{at_doc}: "));
                 }
             }
             // A links_found entry may still carry landing content below.
@@ -523,13 +523,13 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, adjustmen
             // ARRIVING at this entry's doc (preferring the one leaving the
             // previous position), else the last followed link.
             expectation?;
-            let land = from_doc.clone().or_else(|| current.clone())?;
+            let land = from_doc.clone().or_else(|| here.clone())?;
             let inbound = cx.shadow.links_to(&land);
             inbound
                 .iter()
                 .find(|l| {
                     last_followed.as_deref() == Some(l.golden.as_str())
-                        || l.from.iter().any(|(d, _, _)| Some(d) == current.as_ref())
+                        || l.from.iter().any(|(d, _, _)| Some(d) == here.as_ref())
                 })
                 .or_else(|| inbound.first())
                 .map(|l| l.golden.clone())
@@ -552,12 +552,12 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, adjustmen
         let mut hop = OpOutcome::new(out.index, &out.op_name);
         follow_compare(cx, &mut hop, &Adjustments::default(), &link, slot, expected);
         tally.absorb(out, hop, &format!("{link_golden}: "));
-        // Land: the followed link's TO doc becomes the current position.
+        // Land: the followed link's TO doc is where the traversal stands.
         last_followed = Some(link_golden.clone());
         if slot == 2 {
             if let Some(l) = cx.shadow.links.iter().find(|l| l.golden == link_golden) {
                 if let Some((d, _, _)) = l.to.first() {
-                    current = Some(d.clone());
+                    here = Some(d.clone());
                 }
             }
         }

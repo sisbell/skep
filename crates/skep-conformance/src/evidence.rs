@@ -10,9 +10,9 @@
 use serde_json::Value;
 
 use crate::fields::{
-    as_text, client_side_failure, doc_from_op_name, expect_strings, expected_failure, field,
-    insert_text, locate, op_name, reads_whole_content, resolve_position, span_dict, str_field,
-    verb_of, Grounding, Verb, POST_WRITE_KEYS,
+    as_text, client_side_failure, doc_from_op_name, expected_failure, field, insert_text, locate,
+    op_name, reads_whole_content, resolve_position, span_dict, str_field, strings_of, verb_of,
+    Grounding, Verb, POST_WRITE_KEYS,
 };
 use crate::shadow::Shadow;
 use crate::tum::{parse_dotted, parse_vpos, VPoint, VRegion};
@@ -33,8 +33,8 @@ pub fn took_effect(op: &Value) -> bool {
 /// reference to "the version" names, whether or not skep made it too: one
 /// skep refused to make leaves those references ungroundable (rulings 20,
 /// 20a).
-pub fn version_made_before(all: &[Value], i: usize) -> bool {
-    all[..i].iter().any(|op| verb_of(op) == Some(Verb::CreateVersion) && took_effect(op))
+pub fn version_made_before(ops: &[Value], i: usize) -> bool {
+    ops[..i].iter().any(|op| verb_of(op) == Some(Verb::CreateVersion) && took_effect(op))
 }
 
 /// What the recording says of the change an op asks for — the one input to
@@ -71,9 +71,9 @@ impl Effect {
 /// the whole document, docs-map probes, and per-target `targets` entries —
 /// identity/identity_multi_document_sharing records each created target's
 /// content only inside a `targets` array).
-pub fn next_content_probe(all: &[Value], i: usize, shadow: &Shadow, doc: &str) -> Option<String> {
-    let text = |v: &Value| expect_strings(v).as_deref().and_then(as_text);
-    for op in &all[i + 1..] {
+pub fn next_content_probe(ops: &[Value], i: usize, shadow: &Shadow, doc: &str) -> Option<String> {
+    let text = |v: &Value| strings_of(v).as_deref().and_then(as_text);
+    for op in &ops[i + 1..] {
         if let Some(map) = op.get("docs").and_then(Value::as_object) {
             for (name, exp) in map {
                 if shadow.resolve_doc(name).as_deref() == Some(doc) {
@@ -122,17 +122,17 @@ pub fn next_content_probe(all: &[Value], i: usize, shadow: &Shadow, doc: &str) -
 /// the register held the fresh version; the probe pins the original).
 /// Returns the re-aimed doc only when it differs from `current`.
 pub fn insert_aim_from_probe(
-    all: &[Value],
+    ops: &[Value],
     i: usize,
     shadow: &Shadow,
     current: &str,
     len: u64,
 ) -> Option<String> {
-    for op in &all[i + 1..] {
+    for op in &ops[i + 1..] {
         if verb_of(op).is_some_and(Verb::writes_content) {
             return None; // another write intervenes — probe no longer pins this insert
         }
-        let Some((_, docid, spans)) = crate::fields::harvest_spanset(op) else { continue };
+        let Some((_, docid, spans)) = crate::fields::recorded_spanset(op) else { continue };
         let Some(docref) =
             docid.or_else(|| str_field(op, &["doc", "docid"]).map(str::to_string))
         else {
@@ -165,7 +165,7 @@ pub fn insert_aim_from_probe(
 /// padded a ghost space here, fabricating the one byte that made the
 /// version-extent comparison agree; see `VERSION_LINK_CARRYOVER_ANALYSIS`).
 pub fn insert_pad_width(
-    all: &[Value],
+    ops: &[Value],
     i: usize,
     shadow: &Shadow,
     doc: &str,
@@ -173,7 +173,7 @@ pub fn insert_pad_width(
 ) -> Option<u64> {
     let mut aliases: Vec<String> = vec![doc.to_string()];
     let mut links_seen = 0u64;
-    for op in &all[i + 1..] {
+    for op in &ops[i + 1..] {
         let verb = verb_of(op);
         if verb == Some(Verb::CreateLink) {
             links_seen += match field(op, &["result", "results"]) {
@@ -208,7 +208,7 @@ pub fn insert_pad_width(
             }
             continue;
         }
-        let Some((_, docid, spans)) = crate::fields::harvest_spanset(op) else { continue };
+        let Some((_, docid, spans)) = crate::fields::recorded_spanset(op) else { continue };
         let docref = docid
             .or_else(|| str_field(op, &["doc", "docid"]).map(str::to_string));
         let Some(docref) = docref else { continue };
@@ -239,8 +239,13 @@ pub fn insert_pad_width(
 /// first authority (iaddress_allocation/interleaved_insert_delete's
 /// insert_2 "BBB" turns "AA" into "ABBBA"). Returns the 1-based ordinal
 /// only when the append shape does NOT already reproduce the post-state.
-pub fn insert_pos_from_post_state(op: &Value, shadow: &Shadow, doc: &str, text: &str) -> Option<u64> {
-    let post = as_text(&expect_strings(field(op, POST_WRITE_KEYS)?)?)?;
+pub fn insert_position_from_post_state(
+    op: &Value,
+    shadow: &Shadow,
+    doc: &str,
+    text: &str,
+) -> Option<u64> {
+    let post = as_text(&strings_of(field(op, POST_WRITE_KEYS)?)?)?;
     let pre = shadow.text_string(doc);
     if text.is_empty() || post == format!("{pre}{text}") {
         return None; // nothing inserted, or the append shape already explains it
@@ -280,60 +285,60 @@ pub struct InsertLanding {
     pub appended: bool,
 }
 
-/// Insert op `i` of `all`, aimed at golden `doc`, read as both passes read
+/// Insert op `i` of `ops`, aimed at golden `doc`, read as both passes read
 /// it: its text (a field, a strings array, or its name — policy
 /// `args-from-op-name`); a re-aim, when it names no document and the next
 /// recorded vspanset shows another document grew by exactly its text
 /// ([`insert_aim_from_probe`], `insert-aim-from-recorded-vspanset`); its
 /// position — recorded ([`resolve_position`], the grounding policy
-/// tagged), pinned by its own post-state ([`insert_pos_from_post_state`],
+/// tagged), pinned by its own post-state ([`insert_position_from_post_state`],
 /// `insert-position-from-post-state`), else the end (`position-end`); and,
 /// when it appends or lands in an empty document, the pad
 /// [`insert_pad_width`] reads off the recorded vspanset
 /// (`insert-padded-to-recorded-vspanset:+N`). Every policy applied is
-/// pushed to `tags`. `Err` names what cannot be read: a missing text, or a
-/// recorded position this grammar cannot ground.
+/// pushed to `adaptations`. `Err` names what cannot be read: a missing text,
+/// or a recorded position this grammar cannot ground.
 pub fn resolve_insert(
-    all: &[Value],
+    ops: &[Value],
     i: usize,
     shadow: &Shadow,
     doc: &str,
-    tags: &mut Vec<String>,
+    adaptations: &mut Vec<String>,
 ) -> Result<InsertLanding, String> {
-    let op = &all[i];
+    let op = &ops[i];
     let mut text = insert_text(op).ok_or("insert without text")?;
     if str_field(op, &["text"]).is_none() && op_name(op).starts_with("insert_") {
-        tags.push("args-from-op-name".into());
+        adaptations.push("args-from-op-name".into());
     }
     let mut doc = doc.to_string();
     if str_field(op, &["doc", "docid"]).is_none() && doc_from_op_name(op_name(op)).is_none() {
-        if let Some(d2) = insert_aim_from_probe(all, i, shadow, &doc, text.len() as u64) {
-            tags.push("insert-aim-from-recorded-vspanset".into());
-            doc = d2;
+        if let Some(aimed) = insert_aim_from_probe(ops, i, shadow, &doc, text.len() as u64) {
+            adaptations.push("insert-aim-from-recorded-vspanset".into());
+            doc = aimed;
         }
     }
     let (at, appended) = match str_field(op, &["address", "at", "position", "vaddr"]) {
         Some(p) => {
             let (at, how) = resolve_position(shadow, &doc, p)
                 .ok_or_else(|| format!("insert position `{p}` is not groundable"))?;
-            tags.extend(how.map(str::to_string));
+            adaptations.extend(how.map(str::to_string));
             (at, false)
         }
-        None => match insert_pos_from_post_state(op, shadow, &doc, &text) {
+        None => match insert_position_from_post_state(op, shadow, &doc, &text) {
             Some(ord) => {
-                tags.push("insert-position-from-post-state".into());
+                adaptations.push("insert-position-from-post-state".into());
                 (VPoint::content(ord), false)
             }
             None => {
-                tags.push("position-end".into());
+                adaptations.push("position-end".into());
                 (VPoint::content(shadow.text_len(&doc) + 1), true)
             }
         },
     };
     if at.sub == 1 && (appended || shadow.text_len(&doc) == 0) {
         let new_len = shadow.text_len(&doc) + text.len() as u64;
-        if let Some(pad) = insert_pad_width(all, i, shadow, &doc, new_len) {
-            tags.push(format!("insert-padded-to-recorded-vspanset:+{pad}"));
+        if let Some(pad) = insert_pad_width(ops, i, shadow, &doc, new_len) {
+            adaptations.push(format!("insert-padded-to-recorded-vspanset:+{pad}"));
             text.push_str(&" ".repeat(pad as usize));
         }
     }
@@ -345,12 +350,12 @@ pub fn resolve_insert(
 /// links: `remove "entire document"` followed by a retrieve recording the
 /// FULL text — udanax removed nothing, whatever the op's name claims). The
 /// harness then also executes nothing, same family as `client-error:no-op`.
-pub fn delete_is_noop(all: &[Value], i: usize, shadow: &Shadow, doc: &str) -> bool {
+pub fn delete_is_noop(ops: &[Value], i: usize, shadow: &Shadow, doc: &str) -> bool {
     let pre = shadow.text_string(doc);
     if pre.is_empty() {
         return false;
     }
-    post_state_of(all, i, shadow, doc) == Some(pre)
+    post_state_of(ops, i, shadow, doc) == Some(pre)
 }
 
 /// How a delete's region was read, and so what authority its position
@@ -397,7 +402,7 @@ impl DeleteGrounding {
     }
 }
 
-/// Delete op `i` of `all`'s content region in golden `doc`, in any of the
+/// Delete op `i` of `ops`'s content region in golden `doc`, in any of the
 /// goldens' shapes (dict span, decorated span string, text,
 /// start+width/end/count), with the round-3 boundary discipline: a numeric
 /// span (dict, start+width, positional description) is what the client
@@ -408,13 +413,13 @@ impl DeleteGrounding {
 /// post-state the flanked-by-spaces configuration widens by the trailing
 /// space. Returns the region and how it was read.
 pub fn resolve_delete_span(
-    all: &[Value],
+    ops: &[Value],
     i: usize,
     shadow: &Shadow,
     doc: &str,
 ) -> Option<(VRegion, DeleteGrounding)> {
     use DeleteGrounding::{FromOpName, FromPostState, Located, Sent, WidenedBoundary};
-    let op = &all[i];
+    let op = &ops[i];
     let content = |ord: u64, width: u64| VPoint::content(ord).region(width);
     if let Some(region) = field(op, &["span", "vspan"]).and_then(span_dict) {
         return (region.sub == 1).then_some((region, Sent));
@@ -448,7 +453,7 @@ pub fn resolve_delete_span(
         }
     }
     let pre = shadow.text_string(doc);
-    let post = post_state_of(all, i, shadow, doc);
+    let post = post_state_of(ops, i, shadow, doc);
     if let Some(desc) = str_field(op, &["span", "vspan", "text"]) {
         if let Some(l) = locate(shadow, Some(doc), desc) {
             if !l.how.is_text() {
@@ -523,9 +528,9 @@ fn delete_text_from_op_name(op: &Value) -> Option<String> {
 
 /// The doc's recorded content right after op `i`: the op's own post-write
 /// keys, else the next full-content probe with no intervening write.
-fn post_state_of(all: &[Value], i: usize, shadow: &Shadow, doc: &str) -> Option<String> {
-    let op = &all[i];
-    let content = |v: &Value| expect_strings(v).as_deref().and_then(as_text);
+fn post_state_of(ops: &[Value], i: usize, shadow: &Shadow, doc: &str) -> Option<String> {
+    let op = &ops[i];
+    let content = |v: &Value| strings_of(v).as_deref().and_then(as_text);
     // Own keys; "after" only in structured form — a bare string under
     // "after" is a phase name ("link1"), never content.
     let own =
@@ -535,7 +540,7 @@ fn post_state_of(all: &[Value], i: usize, shadow: &Shadow, doc: &str) -> Option<
             return Some(s);
         }
     }
-    for later in &all[i + 1..] {
+    for later in &ops[i + 1..] {
         if verb_of(later).is_some_and(Verb::writes_content) {
             return None;
         }
@@ -637,17 +642,17 @@ mod tests {
         };
 
         let append = [json!({"op": "insert", "doc": DOC, "text": "BBB"}), probe.clone()];
-        let mut tags = Vec::new();
-        let landed = resolve_insert(&append, 0, &shadow, DOC, &mut tags);
+        let mut adaptations = Vec::new();
+        let landed = resolve_insert(&append, 0, &shadow, DOC, &mut adaptations);
         assert_eq!(landed, Ok(landing(3, b"BBB ", true)));
-        assert_eq!(tags, ["position-end", "insert-padded-to-recorded-vspanset:+1"]);
+        assert_eq!(adaptations, ["position-end", "insert-padded-to-recorded-vspanset:+1"]);
 
         let pinned =
             [json!({"op": "insert", "doc": DOC, "text": "BBB", "result": ["ABBBA"]}), probe];
-        let mut tags = Vec::new();
-        let landed = resolve_insert(&pinned, 0, &shadow, DOC, &mut tags);
+        let mut adaptations = Vec::new();
+        let landed = resolve_insert(&pinned, 0, &shadow, DOC, &mut adaptations);
         assert_eq!(landed, Ok(landing(2, b"BBB", false)));
-        assert_eq!(tags, ["insert-position-from-post-state"]);
+        assert_eq!(adaptations, ["insert-position-from-post-state"]);
 
         let lost = json!({"op": "insert", "doc": DOC, "text": "C", "position": "somewhere"});
         let lone = std::slice::from_ref(&lost);
@@ -728,9 +733,11 @@ mod tests {
         if post.len() != pre.len() + text.len() {
             return None;
         }
-        let (n, q) = (text.len(), pre);
-        (0..=q.len())
-            .find(|&k| post[..k] == q[..k] && post[k..k + n] == *text && post[k + n..] == q[k..])
+        let n = text.len();
+        (0..=pre.len())
+            .find(|&k| {
+                post[..k] == pre[..k] && post[k..k + n] == *text && post[k + n..] == pre[k..]
+            })
             .map(|k| k as u64 + 1)
     }
 

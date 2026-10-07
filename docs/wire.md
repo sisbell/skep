@@ -3266,13 +3266,14 @@ The daemon checks the FORM of every member and never its admissibility:
 whose `type` is another kind's is no record of the slot's kind; NO member
 is a JSON number, anywhere in the body; `prefix` and `replaces` parse as
 addresses in their one spelling (no sign, no zero-padded component, the
-whole T4-valid); `origins` is non-empty. Whether an origin is https with a
-routable host is the resolver's check, and whether `replaces` names the
-deposit current at the record's position is the reader's currency rule —
-a later record naming one that is no longer current COMMITS and is inert
-at every reader (REG-1.10, REG-2.24). A body past the cap, 16 KiB with
-its `sig` inside it, is refused before any parse. The two examples, in
-canonical form — 33 and 116 bytes:
+whole T4-valid); `origins` is non-empty; `sig`, where present, is a
+string. Whether an origin is https with a routable host is the resolver's
+check, and whether `replaces` names the deposit current at the record's
+position is the reader's currency rule — a later record naming one that
+is no longer current COMMITS and is inert at every reader (REG-1.10,
+REG-2.24). A body past the cap, 16 KiB with its `sig` inside it, is
+refused before any parse. The two examples, in canonical form — 33 and
+116 bytes:
 
 ```
 {"type":"binding","prefix":"1.5"}

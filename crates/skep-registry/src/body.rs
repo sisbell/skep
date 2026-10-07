@@ -22,7 +22,9 @@
 //! A JSON NUMBER, anywhere in the body; no member stands beside the row's
 //! own, `replaces` and `sig`; the ADDRESS MEMBERS — `prefix` and `replaces`,
 //! the members written in address form — each spell an address in its one
-//! dotted-decimal spelling; `origins` is a non-empty array of strings.
+//! dotted-decimal spelling; `origins` is a non-empty array of strings; and
+//! `sig`, where present, is a string (REG-1.86 (e): "a STRING where signed
+//! ops comes to write one"), the one form [`encode`] writes it in.
 //! Whether an origin is https with a routable host is the resolver's
 //! question; whether an address member is written in the LOCAL FORM of the
 //! board the record is homed on (REG-1.86 (c), (g)) is its writer's — a
@@ -204,7 +206,9 @@ impl Body {
 /// A parsed record: the body and the `sig` member's string as it stands —
 /// present or absent, the empty string included, which is a `sig` and never
 /// `None`. What a verifier reads off a committed atom: `sig` the signature
-/// under trial, [`Record::canonical_sigless`] the bytes it was made over.
+/// under trial, and [`Record::canonical_sigless`] the body its `record`
+/// frame carries — the frame, not these bytes alone, being what the
+/// signature was made over.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Record {
     pub body: Body,
@@ -261,15 +265,19 @@ pub enum ParseRefusal {
     PastCap,
     /// The bytes are no UTF-8 text.
     NotUtf8,
-    /// The text is no JSON value — a trailing non-whitespace byte included,
-    /// and a value nested deeper than [`parse`]'s value stage reads.
+    /// The text is no JSON value — a trailing non-whitespace byte included —
+    /// or one [`parse`]'s value stage declines to read: a value nested deeper
+    /// than it reads, a number too large for a 64-bit float, an escaped
+    /// unpaired surrogate, a byte-order mark ahead of the value.
     NotJson,
     /// A JSON value that is no object.
     NotAnObject,
     /// A JSON number somewhere in the value the parse read (REG-1.86 (d)):
     /// the whole value's range, tested before any member is read. A number
     /// only in an occurrence the value stage did not keep — the earlier of a
-    /// member spelled twice — is answered [`ParseRefusal::NotCanonical`].
+    /// member spelled twice — is answered [`ParseRefusal::NotCanonical`], and
+    /// one too large for a 64-bit float, which the value stage reads as no
+    /// value at all, [`ParseRefusal::NotJson`].
     Number,
     /// The `type` member is absent, no string, or not the string of the
     /// kind the caller named: a record of that kind it is not (REG-1.86 (a)).
@@ -353,12 +361,17 @@ impl std::error::Error for ParseRefusal {}
 /// is `unknown_member`, and `{"type":"binding","replaces":"x"}`
 /// `not_an_address:replaces`.
 ///
-/// THE VALUE STAGE is `serde_json`'s, and it decides two things this parser
-/// adopts as its own: a member spelled twice is read at its LAST occurrence,
-/// so a fault in an earlier one — a number, a wrong `type` — surfaces as
-/// `not_canonical`; and a value nested more than 127 objects and arrays
-/// deep, the body's own object counted, is no JSON. Every other refusal is
-/// this schema's.
+/// THE VALUE STAGE is `serde_json`'s, and where RFC 8259 leaves a parser a
+/// choice (§4, §6, §8.1, §8.2, §9) this parser adopts serde_json's as its
+/// own. A member spelled twice is read at its LAST occurrence, so a fault in
+/// an earlier one — a number, a wrong `type` — surfaces as `not_canonical`.
+/// And serde_json reads no value — `not_json` — from four texts RFC 8259
+/// lets a parser refuse: a value nested more than 127 objects and arrays
+/// deep, the body's own object counted; a number too large for a 64-bit
+/// float (`1e400` — one that rounds to zero, `1e-400`, is read, and is
+/// `number`); an escaped unpaired surrogate (`"\ud800"`); and a byte-order
+/// mark ahead of the value. Past those choices `not_json` is RFC 8259's
+/// grammar, and every other refusal is this schema's.
 pub fn parse(kind: BodyKind, bytes: &[u8]) -> Result<Record, ParseRefusal> {
     if bytes.len() > MAX_REGISTRY_RECORD_BYTES {
         return Err(ParseRefusal::PastCap);

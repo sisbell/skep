@@ -276,9 +276,9 @@ fn the_count_arm_holds_the_kind_rows_to_the_registry_ranges_five_ordinals() {
     assert!(refusal.to_string().starts_with("count:"), "{refusal}");
 }
 
-/// REG-1.32 — the arms run in the stated order: a list faulting on all
-/// three answers disjointness; one faulting on the last two answers
-/// completeness.
+/// REG-1.32 — the arms run in the order `seeding_check`'s doc states: a
+/// list faulting on all three answers disjointness; one faulting on the last
+/// two answers completeness.
 #[test]
 fn the_arms_run_in_order() {
     let mut faulty = without(RowOf::Subtype(Subtype::Disavowal));

@@ -43,16 +43,16 @@ back — is this crate:
   encode(parse(b))`. The parse checks the FORM of every member — `type` the
   kind the caller names, no JSON number anywhere, no member beside the row's
   own, `prefix` and `replaces` addresses in dotted decimal, `origins`
-  non-empty — and never a member's admissibility, which is the resolver's
-  and the reader's. What it checks, the types carry: `prefix` and
-  `replaces` are `Address`es and the origins an `Origins`, never empty, so
-  every body a caller builds encodes to a record the parse admits. A body
-  past `MAX_REGISTRY_RECORD_BYTES` (16 KiB, interim, its `sig` counted
-  inside it; the constant's doc says what the cap is priced against) is
-  refused before any parse. The other five body-bearing rows, subtype
-  rows all and none a kind, stand in the table with their `type` strings
-  and no parser: their schemas are pinned where their own rules land
-  (REG-1.86 (h)).
+  non-empty, `sig` a string where present — and never a member's
+  admissibility, which is the resolver's and the reader's. What it checks,
+  the types carry: `prefix` and `replaces` are `Address`es and the origins
+  an `Origins`, never empty, so every body a caller builds encodes to a
+  record the parse admits, the cap aside. A body past
+  `MAX_REGISTRY_RECORD_BYTES` (16 KiB, interim, its `sig` counted inside it;
+  the constant's doc says what the cap is priced against) is refused before
+  any parse. The other five body-bearing rows, subtype rows all and none a
+  kind, stand in the table with their `type` strings and no parser: their
+  schemas are pinned where their own rules land (REG-1.86 (h)).
 - **The seeding check** (`seeding_check`, `SeedingRefusal`) — three arms over
   the registry's rows and every other commons row a build holds:
   DISJOINTNESS at the subtree grain, COMPLETENESS against the kinds' home,

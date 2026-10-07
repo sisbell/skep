@@ -216,11 +216,13 @@ fn a_refusal_names_the_member_that_faulted() {
 /// number scan, the number scan before `type`, the member set before every
 /// member's form (the row's own, `sig` and `replaces` each by a case of its
 /// own), the members' forms one member at a time (`replaces`, then `sig`,
-/// then the row's own) — and the value stage's two policies the parser
-/// adopts: a member spelled twice read at its last occurrence, and a value
-/// nested past 127 objects and arrays no JSON. None of these is in the
-/// vector set: the set pins what every parser answers, and these pin this
-/// one.
+/// then the row's own) — and the value stage's choices the parser adopts,
+/// where RFC 8259 leaves one: a member spelled twice read at its last
+/// occurrence; and no JSON in a value nested past 127 objects and arrays, a
+/// number too large for a 64-bit float (one that rounds to zero is read, and
+/// is `number`), an escaped unpaired surrogate, or a text opening on a
+/// byte-order mark. None of these is in the vector set: the set pins what
+/// every parser answers, and these pin this one.
 #[test]
 fn a_body_answers_the_first_stage_that_faults() {
     let nested = |arrays: usize| {
@@ -228,7 +230,7 @@ fn a_body_answers_the_first_stage_that_faults() {
         format!(r#"{{"type":"binding","prefix":"1.5","x":{open}{close}}}"#)
     };
     let (deep, too_deep) = (nested(126), nested(127));
-    let cases: [(&str, &str); 13] = [
+    let cases: [(&str, &str); 17] = [
         ("not_an_object", "[15]"),
         ("number", r#"{"type":"endpoint","prefix":15}"#),
         ("unknown_member", r#"{"type":"binding","tier":"root"}"#),
@@ -242,6 +244,10 @@ fn a_body_answers_the_first_stage_that_faults() {
         ("not_json", &too_deep),
         ("unknown_member", r#"{"type":"binding","prefix":"1.5","sig":true,"tier":"root"}"#),
         ("unknown_member", r#"{"type":"binding","prefix":"1.5","replaces":"x","tier":"root"}"#),
+        ("not_json", r#"{"type":"binding","prefix":"1.5","x":1e400}"#),
+        ("number", r#"{"type":"binding","prefix":"1.5","x":1e-400}"#),
+        ("not_json", r#"{"type":"binding","prefix":"1.5","sig":"\ud800"}"#),
+        ("not_json", "\u{feff}{\"type\":\"binding\",\"prefix\":\"1.5\"}"),
     ];
     for (cause, text) in cases {
         let answer = parse(BodyKind::Binding, text.as_bytes()).map_err(|r| r.token());

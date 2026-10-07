@@ -14,7 +14,9 @@ readme = "README.md"
 # `replaces` members must parse as.
 skep-address = { path = "../skep-address" }
 # The one question a body's bytes are asked of a JSON parser — which value
-# they are, under the two policies `parse`'s doc names (a member twice read
-# at its last occurrence, a nesting depth past which no value is read) —
-# with every refusal written here, as the credential records' parser takes it.
+# they are, under the choices RFC 8259 leaves a parser that `parse`'s doc
+# names (a member twice read at its last occurrence; no value past a nesting
+# depth, too large for a 64-bit float, at an escaped unpaired surrogate or
+# behind a byte-order mark) — with every other refusal written here, as the
+# credential records' parser takes it.
 serde_json.workspace = true

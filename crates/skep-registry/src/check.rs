@@ -21,9 +21,8 @@
 //!    ordinals `3.55`–`3.59` — at most five, each a bare ordinal inside the
 //!    range, no two at one ordinal.
 //!
-//! The arms run in that order and the first to fire names the refusal; a
-//! refusal is a genesis that does not complete — the hand that runs the
-//! check writes nothing on `Err`.
+//! The order the arms run in, the refusal that speaks where several hold and
+//! what the hand owes on one are [`seeding_check`]'s contract, stated there.
 
 use std::fmt;
 
@@ -94,20 +93,24 @@ impl std::error::Error for SeedingRefusal {}
 
 /// THE CHECK: `rows`, the registry's rows as a list — [`crate::rows()`] on a
 /// shipped build, a list a suite builds to prove an arm — against `foreign`,
-/// every other commons row the hand can see. `Ok` is a genesis that may
-/// complete; `Err` names the first arm to fire.
+/// every other commons row the hand can see; a pure query over the two
+/// lists, writing nothing. `Ok` is a genesis that may complete. `Err` names
+/// the first arm to fire, and on it THE HAND OWES a genesis that does not
+/// complete: nothing written — no claim, no session and no board record
+/// (REG-1.32).
 ///
 /// WHICH REFUSAL SPEAKS where several hold — the one sentence the operator
-/// repairs the image from (REG-1.33): the arms in the module's order, and
-/// within an arm its first fault in this order. DISJOINTNESS names the first
-/// entry of `foreign`, in its own order, that meets any row, with the first
-/// row of `rows` it meets. COMPLETENESS names the first kind of
-/// [`Kind::ALL`] with no row, and only where every kind has one, the first
-/// subtype of [`Subtype::ALL`] with no row strictly under its kind's — the
-/// FIRST row that kind has in `rows`. THE COUNT names an excess of kind rows
-/// over the range's ordinals ahead of any one row, then the first kind row
-/// of `rows` that is no bare ordinal of the range or stands at one an
-/// earlier kind row took.
+/// repairs the image from (REG-1.33): the arms in their order — DISJOINTNESS
+/// (REG-1.30), then COMPLETENESS (REG-1.29), then THE COUNT (REG-1.25), the
+/// first to fire speaking — and within an arm its first fault in this order.
+/// DISJOINTNESS names the first entry of `foreign`, in its own order, that
+/// meets any row, with the first row of `rows` it meets. COMPLETENESS names
+/// the first kind of [`Kind::ALL`] with no row, and only where every kind has
+/// one, the first subtype of [`Subtype::ALL`] with no row strictly under its
+/// kind's — the FIRST row that kind has in `rows`. THE COUNT names an excess
+/// of kind rows over the range's ordinals ahead of any one row, then the
+/// first kind row of `rows` that is no bare ordinal of the range or stands at
+/// one an earlier kind row took.
 ///
 /// WHAT THE HAND OWES IN `foreign`: REG-1.31's domain, every address in it
 /// read as foreign. A registry row spelled a second time — the insert door's

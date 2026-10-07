@@ -476,11 +476,11 @@ pub fn encode(body: &Body, sig: Option<&str>) -> String {
     out.push('"');
     match body {
         Body::Binding(b) => {
-            push_member_name(Member::Prefix, &mut out);
+            push_member_opening(Member::Prefix, &mut out);
             escape_json_string(&b.prefix.to_string(), &mut out);
         }
         Body::Endpoint(e) => {
-            push_member_name(Member::Origins, &mut out);
+            push_member_opening(Member::Origins, &mut out);
             out.push('[');
             for (i, origin) in e.origins.iter().enumerate() {
                 if i > 0 {
@@ -492,11 +492,11 @@ pub fn encode(body: &Body, sig: Option<&str>) -> String {
         }
     }
     if let Some(replaces) = body.replaces() {
-        push_member_name(Member::Replaces, &mut out);
+        push_member_opening(Member::Replaces, &mut out);
         escape_json_string(&replaces.to_string(), &mut out);
     }
     if let Some(sig) = sig {
-        push_member_name(Member::Sig, &mut out);
+        push_member_opening(Member::Sig, &mut out);
         escape_json_string(sig, &mut out);
     }
     out.push('}');
@@ -507,7 +507,7 @@ pub fn encode(body: &Body, sig: Option<&str>) -> String {
 /// the comma ahead of it and its name as [`Member::name`] spells it, the
 /// name [`parse`] reads the member by — so the two sides of the canonical
 /// rule spell every member alike.
-fn push_member_name(member: Member, out: &mut String) {
+fn push_member_opening(member: Member, out: &mut String) {
     out.push_str(",\"");
     out.push_str(member.name());
     out.push_str("\":");
@@ -609,7 +609,7 @@ mod tests {
     /// address it spells — which form a member takes is its writer's to hold,
     /// and no parse can see it.
     #[test]
-    fn the_parse_reads_an_address_spelling_never_its_local_form() {
+    fn the_parse_cannot_tell_a_local_form_from_a_global_one() {
         for prefix in ["1.3", "1.5.3"] {
             let text = format!(r#"{{"type":"binding","prefix":"{prefix}"}}"#);
             let record = parse(BodyKind::Binding, text.as_bytes()).expect("a binding");
@@ -627,8 +627,8 @@ mod tests {
     #[test]
     fn an_address_member_is_the_address_it_spells_at_any_size() {
         let filling = format!("1.{}", "9".repeat(16_352));
-        let filled = format!(r#"{{"type":"binding","prefix":"{filling}"}}"#);
-        assert_eq!(filled.len(), MAX_REGISTRY_RECORD_BYTES, "the priced body fills the cap");
+        let at_cap = format!(r#"{{"type":"binding","prefix":"{filling}"}}"#);
+        assert_eq!(at_cap.len(), MAX_REGISTRY_RECORD_BYTES, "the priced body fills the cap");
         let prefixes =
             ["1.18446744073709551616".to_owned(), format!("1.{}", "9".repeat(4097)), filling];
         for prefix in prefixes {
@@ -698,11 +698,11 @@ mod tests {
         let signed = encode(&binding("1.5", None), Some(&"ab".repeat(3373)));
         assert!(signed.len() < MAX_REGISTRY_RECORD_BYTES / 2, "{}", signed.len());
         assert!(parse(BodyKind::Binding, signed.as_bytes()).is_ok());
-        let mut past = b"{".to_vec();
-        past.resize(MAX_REGISTRY_RECORD_BYTES + 1, b' ');
-        assert_eq!(parse(BodyKind::Binding, &past), Err(ParseRefusal::PastCap));
-        past.truncate(MAX_REGISTRY_RECORD_BYTES);
-        assert_eq!(parse(BodyKind::Binding, &past), Err(ParseRefusal::NotJson), "at the cap: parsed, and no JSON");
+        let mut padded = b"{".to_vec();
+        padded.resize(MAX_REGISTRY_RECORD_BYTES + 1, b' ');
+        assert_eq!(parse(BodyKind::Binding, &padded), Err(ParseRefusal::PastCap));
+        padded.truncate(MAX_REGISTRY_RECORD_BYTES);
+        assert_eq!(parse(BodyKind::Binding, &padded), Err(ParseRefusal::NotJson), "at the cap: parsed, and no JSON");
         let around_the_sig = encode(&binding("1.5", None), Some("")).len();
         let sig = "a".repeat(MAX_REGISTRY_RECORD_BYTES - around_the_sig);
         let at_cap = encode(&binding("1.5", None), Some(&sig));

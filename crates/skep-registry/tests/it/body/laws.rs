@@ -365,7 +365,7 @@ struct Corpus {
     fragments: Vec<Vec<u8>>,
     /// The values a composed body writes under a name not their own
     /// ([`other_values`]).
-    others: Vec<String>,
+    other_values: Vec<String>,
 }
 
 impl Corpus {
@@ -380,7 +380,7 @@ impl Corpus {
             .filter(|v| v["parse"] == "ok")
             .map(bytes_of)
             .collect();
-        Corpus { sources, fragments: fragments(), others: other_values() }
+        Corpus { sources, fragments: fragments(), other_values: other_values() }
     }
 }
 
@@ -396,8 +396,11 @@ fn composed_body(rng: &mut SplitMix64, corpus: &Corpus) -> Vec<u8> {
     }
     for _ in 0..=rng.below(4) {
         let (name, own) = rng.pick(&OWN_VALUES);
-        let value =
-            if rng.below(4) != 0 { *rng.pick(own) } else { rng.pick(&corpus.others).as_str() };
+        let value = if rng.below(4) != 0 {
+            *rng.pick(own)
+        } else {
+            rng.pick(&corpus.other_values).as_str()
+        };
         members.push(format!(r#""{name}":{value}"#));
     }
     let comma = if rng.below(10) == 0 { ", " } else { "," };
@@ -435,10 +438,10 @@ fn edit(rng: &mut SplitMix64, body: &mut Vec<u8>, corpus: &Corpus) {
             body.splice(end..end, doubled);
         }
         4 => {
-            let other = rng.pick(&corpus.sources);
-            let from = rng.below(other.len());
-            let end = other.len().min(from + 1 + rng.below(32));
-            body.splice(at..at, other[from..end].iter().copied());
+            let source = rng.pick(&corpus.sources);
+            let from = rng.below(source.len());
+            let end = source.len().min(from + 1 + rng.below(32));
+            body.splice(at..at, source[from..end].iter().copied());
         }
         _ => {
             body.insert(0, b'[');

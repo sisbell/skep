@@ -468,9 +468,10 @@ mod tests {
         assert_eq!(registry_range_ordinal(&commons_type(&[60])), None);
         assert_eq!(registry_range_ordinal(&commons_type(&[57, 1])), None);
         assert_eq!(registry_range_ordinal(&commons_type(&[55, 55])), None);
-        let subspace_1 = [1u32, 1, 0, 1, 0, 1, 0, 1, 55].map(Nat::from);
-        let subspace_1 = validate(Tumbler::new(subspace_1).expect("nonempty")).expect("T4-valid");
-        assert_eq!(registry_range_ordinal(&subspace_1), None);
+        let in_subspace_1 = [1u32, 1, 0, 1, 0, 1, 0, 1, 55].map(Nat::from);
+        let in_subspace_1 =
+            validate(Tumbler::new(in_subspace_1).expect("nonempty")).expect("T4-valid");
+        assert_eq!(registry_range_ordinal(&in_subspace_1), None);
     }
 
     /// The row AT an address is answered by equality: every row's own

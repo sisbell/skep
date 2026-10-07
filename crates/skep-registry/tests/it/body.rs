@@ -228,7 +228,7 @@ fn a_body_answers_the_first_stage_that_faults() {
         format!(r#"{{"type":"binding","prefix":"1.5","x":{open}{close}}}"#)
     };
     let (deep, too_deep) = (nested(126), nested(127));
-    let bindings: [(&str, &str); 13] = [
+    let cases: [(&str, &str); 13] = [
         ("not_an_object", "[15]"),
         ("number", r#"{"type":"endpoint","prefix":15}"#),
         ("unknown_member", r#"{"type":"binding","tier":"root"}"#),
@@ -243,12 +243,12 @@ fn a_body_answers_the_first_stage_that_faults() {
         ("unknown_member", r#"{"type":"binding","prefix":"1.5","sig":true,"tier":"root"}"#),
         ("unknown_member", r#"{"type":"binding","prefix":"1.5","replaces":"x","tier":"root"}"#),
     ];
-    for (cause, text) in bindings {
+    for (cause, text) in cases {
         let answer = parse(BodyKind::Binding, text.as_bytes()).map_err(|r| r.token());
         assert_eq!(answer, Err(cause.to_owned()), "{text}");
     }
-    let endpoint = parse(BodyKind::Endpoint, br#"{"type":"endpoint","origins":[],"sig":true}"#);
-    assert_eq!(endpoint.unwrap_err().token(), "not_a_string:sig", "sig before the row's own");
+    let answer = parse(BodyKind::Endpoint, br#"{"type":"endpoint","origins":[],"sig":true}"#);
+    assert_eq!(answer.unwrap_err().token(), "not_a_string:sig", "sig before the row's own");
     let past = vec![0xff_u8; MAX_REGISTRY_RECORD_BYTES + 1];
     assert_eq!(
         parse(BodyKind::Binding, &past),

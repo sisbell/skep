@@ -302,10 +302,11 @@ fn the_arms_run_in_order() {
 /// kind row of the list that is no bare ordinal of the registry range.
 #[test]
 fn within_an_arm_the_first_fault_in_the_stated_order_speaks() {
-    let (inside, under) = (commons_type(&[58, 6]), commons_type(&[55, 1]));
-    for (foreign, registry) in
-        [([&inside, &under], t_policy_link()), ([&under, &inside], t_binding())]
-    {
+    let (under_policy_link, under_binding) = (commons_type(&[58, 6]), commons_type(&[55, 1]));
+    for (foreign, registry) in [
+        ([&under_policy_link, &under_binding], t_policy_link()),
+        ([&under_binding, &under_policy_link], t_binding()),
+    ] {
         let first = SeedingRefusal::Disjointness {
             registry: registry.clone(),
             foreign: foreign[0].clone(),

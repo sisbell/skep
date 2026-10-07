@@ -20,6 +20,8 @@
 //!   the file's record of the ruling, read by people — an entry the harness
 //!   keeps holds what classification uses;
 //! * `count_delta`     (optional) — declared count adjustment (golden+delta);
+//!   two entries over one op declaring different deltas are refused, never
+//!   left to file order to settle;
 //! * `width_tolerance` (optional) — declared span-width tolerance;
 //! * `expected_matches` (optional) — a nonempty substring of the op's
 //!   rendered EXPECTED value. When present the entry applies to any
@@ -34,7 +36,10 @@
 //! hands its comparators the adjustments the op's entries declare; after, a
 //! comparator that agreed only because it used one records so
 //! ([`WIDTH_ADJUSTED`], [`COUNT_ADJUSTED`]), and [`Allowlist::classify`]
-//! names the classes covering the outcome.
+//! names the classes covering the outcome. An entry rules on golden ops: one
+//! whose key no golden carries, or whose `op_index` lies past its scenario's
+//! ops, rules on nothing, and the gate's ratchet refuses it
+//! ([`Allowlist::unanchored`]).
 
 use std::error::Error;
 use std::fmt;
@@ -46,7 +51,8 @@ use crate::outcome::{NotAScenarioKey, OpOutcome, ScenarioKey, Status};
 
 /// The adjustments the allowlist declares for one op's comparators,
 /// resolved before the op runs from its non-signature entries: the widest
-/// width tolerance any of them declares, and the first count delta.
+/// width tolerance any of them declares, and the count delta they declare —
+/// one value, since [`load`] refuses entries over one op declaring two.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Adjustments {
     pub width_tolerance: u64,
@@ -62,9 +68,10 @@ pub const WIDTH_ADJUSTED: &str = "allowlist-adjusted:width";
 pub const COUNT_ADJUSTED: &str = "allowlist-adjusted:count";
 
 /// One adjudicated divergence, as classification uses it: its scenario and
-/// class always present.
+/// class always present, and the line of the file its block opens at.
 #[derive(Clone, Debug)]
 struct Entry {
+    line: usize,
     scenario: ScenarioKey,
     op_index: Option<usize>,
     class: String,
@@ -91,11 +98,13 @@ impl Allowlist {
     /// The class or classes covering one op's outcome, `+`-joined; `None`
     /// when no entry covers it. A disagreement is covered by every entry
     /// matching its op, then by every signature entry its rendered expected
-    /// value matches. An agreement is covered only when one of its
-    /// comparators recorded that a declared adjustment made it — the entry's
-    /// existence IS the adjudicated divergence. Every covering class is
-    /// surfaced, so the ruling behind a verdict is auditable from the report
-    /// alone.
+    /// value matches. An agreement is covered only by the entries whose
+    /// declared adjustment one of its comparators recorded making it — a
+    /// width tolerance ([`WIDTH_ADJUSTED`]) by every entry declaring one, the
+    /// count delta ([`COUNT_ADJUSTED`]) by the first entry declaring one, the
+    /// delta applied — the entry's existence IS the adjudicated divergence. Every
+    /// covering class is surfaced, so the ruling behind a verdict is
+    /// auditable from the report alone.
     pub fn classify(
         &self,
         scenario: &ScenarioKey,
@@ -103,17 +112,23 @@ impl Allowlist {
         out: &OpOutcome,
     ) -> Option<String> {
         let disagreed = out.status == Status::Disagreed;
-        let adjusted = out.status == Status::Agreed
-            && out.adaptations.iter().any(|a| a == WIDTH_ADJUSTED || a == COUNT_ADJUSTED);
-        let mut covering: Option<String> = None;
-        if disagreed || adjusted {
-            let mut classes: Vec<String> =
-                self.op_entries(scenario, op_index).iter().map(|e| e.class.clone()).collect();
-            classes.dedup();
-            if !classes.is_empty() {
-                covering = Some(classes.join("+"));
-            }
-        }
+        let made = |tag: &str| {
+            out.status == Status::Agreed && out.adaptations.iter().any(|a| a == tag)
+        };
+        let (width_made, count_made) = (made(WIDTH_ADJUSTED), made(COUNT_ADJUSTED));
+        let entries = self.op_entries(scenario, op_index);
+        let delta_entry = entries.iter().find(|e| e.count_delta.is_some());
+        let mut classes: Vec<String> = entries
+            .iter()
+            .filter(|e| {
+                disagreed
+                    || (width_made && e.width_tolerance.is_some())
+                    || (count_made && delta_entry.is_some_and(|d| std::ptr::eq(*d, **e)))
+            })
+            .map(|e| e.class.clone())
+            .collect();
+        classes.dedup();
+        let mut covering = (!classes.is_empty()).then(|| classes.join("+"));
         if disagreed {
             let expected = out.disagreement.as_ref().map(|d| d.expected.as_str());
             let sig = self.signature_entries(scenario, op_index, expected);
@@ -127,6 +142,32 @@ impl Allowlist {
             }
         }
         covering
+    }
+
+    /// The entries that rule on no golden op of the `loaded` scenarios —
+    /// each key with its op count — one line each, naming the entry by the
+    /// line its block opens at: an entry whose key no golden carries, or
+    /// whose `op_index` lies past its scenario's ops. Such an entry covers
+    /// nothing, and would cover — with no ruling behind it — a golden that
+    /// later took its key or its op.
+    pub fn unanchored(&self, loaded: &[(ScenarioKey, usize)]) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter_map(|e| {
+                let ops = loaded.iter().find(|(key, _)| *key == e.scenario).map(|(_, n)| *n);
+                match (ops, e.op_index) {
+                    (None, _) => Some(format!(
+                        "allowlist line {}: `{}` — no golden scenario carries the key",
+                        e.line, e.scenario
+                    )),
+                    (Some(n), Some(i)) if i >= n => Some(format!(
+                        "allowlist line {}: `{}` op_index {i} — the scenario has {n} ops",
+                        e.line, e.scenario
+                    )),
+                    _ => None,
+                }
+            })
+            .collect()
     }
 
     /// Entries applying to (scenario, op index) BEFORE execution — the
@@ -178,6 +219,9 @@ pub enum AllowlistError {
     Incomplete { line: usize },
     /// The `scenario` on line `line` names no scenario key.
     NotAKey { line: usize, source: NotAScenarioKey },
+    /// The entry whose block opens at line `line` declares a `count_delta`
+    /// an earlier entry over one of the same ops declares differently.
+    Conflict { line: usize },
 }
 
 impl fmt::Display for AllowlistError {
@@ -195,6 +239,11 @@ impl fmt::Display for AllowlistError {
             AllowlistError::NotAKey { line, .. } => {
                 write!(f, "allowlist line {line}: the scenario is no scenario key")
             }
+            AllowlistError::Conflict { line } => write!(
+                f,
+                "allowlist entry at line {line}: an earlier entry over the same op declares \
+                 another count_delta"
+            ),
         }
     }
 }
@@ -204,15 +253,19 @@ impl Error for AllowlistError {
         match self {
             AllowlistError::Read { source, .. } => Some(source),
             AllowlistError::NotAKey { source, .. } => Some(source),
-            AllowlistError::Syntax { .. } | AllowlistError::Incomplete { .. } => None,
+            AllowlistError::Syntax { .. }
+            | AllowlistError::Incomplete { .. }
+            | AllowlistError::Conflict { .. } => None,
         }
     }
 }
 
-/// An entry as its `[[allow]]` block is read: every key optional until
-/// [`finish`] requires the ones every entry carries.
+/// An entry as its `[[allow]]` block is read, from the line it opens at:
+/// every key optional until [`finish`] requires the ones every entry
+/// carries.
 #[derive(Debug, Default)]
 struct PartialEntry {
+    line: usize,
     scenario: Option<ScenarioKey>,
     op_index: Option<usize>,
     class: Option<String>,
@@ -225,8 +278,10 @@ struct PartialEntry {
 /// Parse the format. Unknown keys are a hard error — an entry that silently
 /// half-applies would be a quiet comparator widening — and so is a key set
 /// twice in one block, whose second value would silently move the entry to
-/// another scenario or its ruling to another op, and an empty signature,
-/// which would cover every disagreement in its scope.
+/// another scenario or its ruling to another op, an empty signature, which
+/// would cover every disagreement in its scope, and two entries over one op
+/// declaring different count deltas, which would leave the delta applied to
+/// the order the file lists them in.
 pub fn load(path: &Path) -> Result<Allowlist, AllowlistError> {
     let raw = match fs::read_to_string(path) {
         Ok(r) => r,
@@ -250,7 +305,7 @@ pub fn load(path: &Path) -> Result<Allowlist, AllowlistError> {
             if let Some(e) = cur.take() {
                 out.entries.push(finish(e, line_no)?);
             }
-            cur = Some(PartialEntry::default());
+            cur = Some(PartialEntry { line: line_no, ..PartialEntry::default() });
             continue;
         }
         let syntax =
@@ -295,7 +350,33 @@ pub fn load(path: &Path) -> Result<Allowlist, AllowlistError> {
     if let Some(e) = cur.take() {
         out.entries.push(finish(e, raw.lines().count() + 1)?);
     }
+    if let Some(line) = conflicting_delta(&out.entries) {
+        return Err(AllowlistError::Conflict { line });
+    }
     Ok(out)
+}
+
+/// The line of the first entry declaring a count delta that an earlier
+/// entry over one of the same ops — of its scenario, with no op index or the
+/// same one — declares differently; signature entries, which never adjust,
+/// aside.
+fn conflicting_delta(entries: &[Entry]) -> Option<usize> {
+    let adjusting = |e: &&Entry| e.expected_matches.is_none();
+    entries.iter().enumerate().filter(|(_, e)| adjusting(e)).find_map(|(k, later)| {
+        let delta = later.count_delta?;
+        let overlaps = |earlier: &&Entry| {
+            earlier.scenario == later.scenario
+                && (earlier.op_index.is_none()
+                    || later.op_index.is_none()
+                    || earlier.op_index == later.op_index)
+        };
+        entries[..k]
+            .iter()
+            .filter(adjusting)
+            .filter(overlaps)
+            .any(|earlier| earlier.count_delta.is_some_and(|d| d != delta))
+            .then_some(later.line)
+    })
 }
 
 /// `value` into the block's `slot` — once: a key set twice in one block is
@@ -325,6 +406,7 @@ fn finish(e: PartialEntry, line: usize) -> Result<Entry, AllowlistError> {
         return Err(AllowlistError::Incomplete { line });
     };
     Ok(Entry {
+        line: e.line,
         scenario,
         op_index: e.op_index,
         class,
@@ -335,141 +417,4 @@ fn finish(e: PartialEntry, line: usize) -> Result<Entry, AllowlistError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::outcome::Disagreement;
-
-    fn key(s: &str) -> ScenarioKey {
-        s.parse().expect("a scenario key")
-    }
-
-    fn outcome(index: usize, status: Status, expected: Option<&str>) -> OpOutcome {
-        let mut o = OpOutcome::new(index, "probe");
-        o.status = status;
-        o.disagreement =
-            expected.map(|e| Disagreement { expected: e.to_string(), actual: "got".into() });
-        o
-    }
-
-    /// A disagreement is covered by the entries matching its op and the
-    /// signature entries its expected value matches — a signature entry's
-    /// op index restricting it too; an agreement only when a comparator
-    /// recorded that a declared adjustment made it. A signature entry
-    /// adjusts nothing, whatever it declares.
-    #[test]
-    fn an_entry_classifies_disagreements_and_only_the_agreements_an_adjustment_made() {
-        let s = key("cat/s");
-        let signature = |op_index: Option<usize>, class: &str| Entry {
-            scenario: s.clone(),
-            op_index,
-            class: class.into(),
-            count_delta: Some(2),
-            width_tolerance: Some(5),
-            expected_matches: Some("(\"0\"".into()),
-        };
-        let tolerated = Entry {
-            scenario: s.clone(),
-            op_index: Some(1),
-            class: "tolerated".into(),
-            count_delta: None,
-            width_tolerance: Some(1),
-            expected_matches: None,
-        };
-        let allow = Allowlist {
-            entries: vec![tolerated, signature(None, "shape"), signature(Some(5), "elsewhere")],
-        };
-        let declared = Adjustments { width_tolerance: 1, count_delta: 0 };
-        assert_eq!(allow.adjustments(&s, 1), declared);
-        assert_eq!(allow.adjustments(&s, 2), Adjustments::default());
-
-        let mut agreed = outcome(1, Status::Agreed, None);
-        assert_eq!(allow.classify(&s, 1, &agreed), None, "no adjustment made this agreement");
-        agreed.adaptations.push(WIDTH_ADJUSTED.into());
-        assert_eq!(allow.classify(&s, 1, &agreed).as_deref(), Some("tolerated"));
-        let mut counted = outcome(1, Status::Agreed, None);
-        counted.adaptations.push(COUNT_ADJUSTED.into());
-        assert_eq!(allow.classify(&s, 1, &counted).as_deref(), Some("tolerated"));
-
-        let shaped = outcome(2, Status::Disagreed, Some("[(\"0\", \"0.1\")]"));
-        assert_eq!(allow.classify(&s, 2, &shaped).as_deref(), Some("shape"));
-        let other = outcome(2, Status::Disagreed, Some("[(\"1.1\", \"0.3\")]"));
-        assert_eq!(allow.classify(&s, 2, &other), None);
-        let both = outcome(1, Status::Disagreed, Some("(\"0\""));
-        assert_eq!(allow.classify(&s, 1, &both).as_deref(), Some("tolerated+shape"));
-        assert_eq!(allow.classify(&key("cat/t"), 1, &both), None, "entries are per scenario");
-    }
-
-    /// An entry names its scenario by key: a bare name — which two goldens
-    /// can share — is refused on the line that wrote it, never left to match
-    /// nothing; and an entry without its class or rationale is incomplete.
-    #[test]
-    fn an_entry_names_its_scenario_by_key() {
-        let dir = std::env::temp_dir().join(format!("skep-allowlist-keys-{}", std::process::id()));
-        fs::create_dir_all(&dir).expect("a scratch directory");
-        let entry = |scenario: &str| {
-            format!("[[allow]]\nscenario = \"{scenario}\"\nclass = \"c\"\nrationale = \"r\"\n")
-        };
-        let path = dir.join("allowlist.toml");
-        fs::write(&path, entry("discovery/find_documents_basic")).expect("an allowlist");
-        let keyed = load(&path).map(|a| a.entries[0].scenario.clone());
-        fs::write(&path, entry("find_documents_basic")).expect("an allowlist");
-        let bare = load(&path).err();
-        fs::write(&path, "[[allow]]\nscenario = \"cat/s\"\nclass = \"c\"\n").expect("an allowlist");
-        let unruled = load(&path).err();
-        fs::remove_dir_all(&dir).expect("the scratch directory is removed");
-        assert_eq!(keyed.ok(), Some(key("discovery/find_documents_basic")));
-        assert!(matches!(bare, Some(AllowlistError::NotAKey { line: 2, .. })), "{bare:?}");
-        assert!(matches!(unruled, Some(AllowlistError::Incomplete { .. })), "{unruled:?}");
-    }
-
-    /// A missing allowlist is the empty one; an allowlist that is there and
-    /// cannot be read is an error, never read as empty.
-    #[test]
-    fn only_a_missing_allowlist_loads_empty() {
-        let dir = std::env::temp_dir().join(format!("skep-allowlist-read-{}", std::process::id()));
-        fs::create_dir_all(&dir).expect("a scratch directory");
-        let missing = load(&dir.join("absent.toml")).map(|a| a.entries.len());
-        let unreadable = load(&dir).err();
-        fs::remove_dir_all(&dir).expect("the scratch directory is removed");
-        assert_eq!(missing.ok(), Some(0));
-        assert!(matches!(unreadable, Some(AllowlistError::Read { .. })), "{unreadable:?}");
-    }
-
-    /// The format refuses what it does not speak, each refusal at its line:
-    /// an unknown key — a misspelled adjustment would otherwise widen a
-    /// comparator unseen — a key outside a block, an unquoted string, a key
-    /// set twice in one block, whose second value would move the ruling,
-    /// and an empty signature, which every expected value contains; an
-    /// empty class leaves its entry incomplete.
-    #[test]
-    fn a_line_outside_the_format_is_refused() {
-        let scratch = format!("skep-allowlist-format-{}", std::process::id());
-        let dir = std::env::temp_dir().join(scratch);
-        fs::create_dir_all(&dir).expect("a scratch directory");
-        let path = dir.join("allowlist.toml");
-        let refusal = |text: &str| {
-            fs::write(&path, text).expect("an allowlist");
-            load(&path).err()
-        };
-        let entry = "[[allow]]\nscenario = \"cat/s\"\nclass = \"c\"\nrationale = \"r\"\n";
-        let misspelled = refusal(&format!("{entry}widht_tolerance = 1\n"));
-        let outside = refusal("class = \"c\"\n");
-        let unquoted = refusal("[[allow]]\nscenario = cat/s\n");
-        let unclassed = refusal("[[allow]]\nscenario = \"cat/s\"\nclass = \"\"\nrationale = \"r\"");
-        let moved = refusal(&format!("{entry}op_index = 2\nop_index = 7\n"));
-        let unsigned = refusal(&format!("{entry}expected_matches = \"\"\n"));
-        fs::remove_dir_all(&dir).expect("the scratch directory is removed");
-        let syntax_at = |line: usize, key: &'static str| {
-            move |e: &AllowlistError| match e {
-                AllowlistError::Syntax { line: l, problem } => *l == line && problem.contains(key),
-                _ => false,
-            }
-        };
-        assert!(misspelled.as_ref().is_some_and(syntax_at(5, "widht_tolerance")), "{misspelled:?}");
-        assert!(matches!(outside, Some(AllowlistError::Syntax { line: 1, .. })), "{outside:?}");
-        assert!(matches!(unquoted, Some(AllowlistError::Syntax { line: 2, .. })), "{unquoted:?}");
-        assert!(matches!(unclassed, Some(AllowlistError::Incomplete { .. })), "{unclassed:?}");
-        assert!(moved.as_ref().is_some_and(syntax_at(6, "op_index")), "{moved:?}");
-        assert!(unsigned.as_ref().is_some_and(syntax_at(5, "expected_matches")), "{unsigned:?}");
-    }
-}
+mod tests;

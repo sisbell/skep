@@ -191,7 +191,7 @@ pub(super) fn h_interior_typing(
         inexpressible(out, "interior_typing without a results list".into());
         return;
     };
-    out.adaptations.push("expansion-plan:interior-typing".into());
+    out.adaptations.push("interior-typing:per-step".into());
     let effect = Effect::of(op);
     let mut tally = Tally::default();
     for r in results {
@@ -202,10 +202,12 @@ pub(super) fn h_interior_typing(
         };
         // A step whose position does not ground loses both its insert and
         // its check — the op cannot be expressed in full.
-        let Some((at @ VPoint { sub: 1, .. }, _)) = resolve_position(cx.shadow, &doc, pos) else {
+        let Some((at @ VPoint { sub: 1, .. }, how)) = resolve_position(cx.shadow, &doc, pos)
+        else {
             tally.unaimed(format!("step '{ch}' at position `{pos}` does not ground"));
             continue;
         };
+        out.adaptations.extend(how.map(|how| how.tag().to_string()));
         let resp = match cx.insert(&doc, at, ch.as_bytes(), effect) {
             Ok(resp) => resp,
             Err(_) => {
@@ -316,12 +318,13 @@ pub(super) fn h_delete(
             }
         }
     } else {
+        // Skep is never asked, so a failure the golden recorded meets no
+        // answer to agree with: the op stays inexpressible either way.
+        let mut reason = String::from("delete without a groundable region");
         if recorded_failure.is_some() {
-            out.agree("expected-failure");
-            out.add_note("delete region not groundable; golden also recorded failure".into());
-            return;
+            reason.push_str("; the golden recorded a failure, but skep was never asked");
         }
-        inexpressible(out, "delete without a groundable region".into());
+        inexpressible(out, reason);
         return;
     };
     let Ok(r) = cx.delete(&doc, region, Effect::of(op)) else {
@@ -436,7 +439,7 @@ pub(super) fn h_vcopy(
                 let copied_text = String::from_utf8_lossy(&copied).into_owned();
                 let evidenced: Vec<String> = cx
                     .shadow
-                    .created
+                    .created()
                     .iter()
                     .filter(|d| {
                         next_content_probe(cx.ops, index, cx.shadow, d)
@@ -462,7 +465,10 @@ pub(super) fn h_vcopy(
     };
     let ord = match str_field(op, &["address", "at", "position"]) {
         Some(p) => match resolve_position(cx.shadow, &dest, p) {
-            Some((VPoint { sub: 1, ord }, _)) => ord,
+            Some((VPoint { sub: 1, ord }, how)) => {
+                out.adaptations.extend(how.map(|how| how.tag().to_string()));
+                ord
+            }
             _ => {
                 inexpressible(out, format!("vcopy position `{p}` is not groundable"));
                 return;
@@ -470,6 +476,7 @@ pub(super) fn h_vcopy(
         },
         None => {
             if to_raw.is_some_and(|s| s.trim().to_ascii_lowercase().starts_with("start")) {
+                out.adaptations.push("position-start".into());
                 1
             } else {
                 out.adaptations.push("position-end".into());

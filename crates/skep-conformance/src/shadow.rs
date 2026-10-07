@@ -81,9 +81,10 @@ pub struct Shadow {
     docs: BTreeMap<String, DocShadow>,
     /// Symbolic name → golden docid ("source" → "1.1.0.1.0.1").
     names: BTreeMap<String, String>,
-    /// Every golden docid the shadow holds, in creation order — the
-    /// "doc1"/"first"/"second" fallbacks count in it.
-    pub created: Vec<String>,
+    /// Every golden docid the shadow holds, once each, in creation order
+    /// ([`Shadow::created`]) — the "doc1"/"first"/"second" fallbacks count in
+    /// it.
+    created: Vec<String>,
     /// The current-document register (see module docs).
     current: Option<String>,
     /// The last document a CONTENT write touched (insert/delete/pivot/swap,
@@ -112,8 +113,18 @@ impl Shadow {
 
     // ── creation & naming ──
 
+    /// Mint document `golden`, empty, named `name` when one is given, and
+    /// point the register at it. A document is minted once: the caller owes
+    /// that the shadow does not hold `golden` yet ([`Shadow::knows`]), and a
+    /// second mint is a harness bug, stopped here — it would list the
+    /// document twice in creation order and advance the synthesized-id
+    /// counter past the play pass's.
     pub fn create_doc(&mut self, golden: &str, name: Option<&str>) {
-        self.docs.entry(golden.to_string()).or_default();
+        assert!(
+            !self.knows(golden),
+            "a document is minted once: the shadow already holds {golden}"
+        );
+        self.docs.insert(golden.to_string(), DocShadow::default());
         self.created.push(golden.to_string());
         self.root_count += 1;
         if let Some(n) = name {
@@ -131,6 +142,8 @@ impl Shadow {
         format!("1.1.0.1.0.{}", self.root_count + 1)
     }
 
+    /// Bind symbolic `name` to golden `golden`. The first binding of a name
+    /// stands: a later one for the same name changes nothing.
     pub fn bind_name(&mut self, name: &str, golden: &str) {
         self.names.entry(name.to_string()).or_insert_with(|| golden.to_string());
     }
@@ -141,7 +154,9 @@ impl Shadow {
         self.current.clone().or_else(|| self.created.last().cloned())
     }
 
-    /// Point the register at a document (any op that names one calls this).
+    /// Point the register at document `golden` when the shadow holds it (any
+    /// op that names a document calls this); for a document it does not
+    /// hold, the register stays where it was.
     pub fn set_current(&mut self, golden: &str) {
         if self.docs.contains_key(golden) {
             self.current = Some(golden.to_string());
@@ -227,8 +242,14 @@ impl Shadow {
             .map(|(_, g)| g.clone())
     }
 
+    /// Does the shadow hold document `golden`?
     pub fn knows(&self, golden: &str) -> bool {
         self.docs.contains_key(golden)
+    }
+
+    /// Every document the shadow holds, once each, in creation order.
+    pub fn created(&self) -> &[String] {
+        &self.created
     }
 
     pub fn text_len(&self, golden: &str) -> u64 {
@@ -320,13 +341,17 @@ impl Shadow {
 
     // ── the edit mirror (pure sequence bookkeeping, matching the recorded
     //    udanax semantics: 1-based ordinals, half-open ranges, each clamped
-    //    to the text by `byte_range`) ──
+    //    to the text by `byte_range`). An edit changes only a document the
+    //    shadow holds: one it does not hold stays unheld, and the edit
+    //    changes nothing. ──
 
+    /// Insert `bytes` before content ordinal `ord` of `golden`.
     pub fn insert(&mut self, golden: &str, ord: u64, bytes: &[u8]) {
-        let d = self.docs.entry(golden.to_string()).or_default();
-        let i = byte_range(d.text.len(), ord, 0).start;
-        d.text.splice(i..i, bytes.iter().copied());
-        self.last_written = Some(golden.to_string());
+        if let Some(d) = self.docs.get_mut(golden) {
+            let i = byte_range(d.text.len(), ord, 0).start;
+            d.text.splice(i..i, bytes.iter().copied());
+            self.last_written = Some(golden.to_string());
+        }
     }
 
     pub fn delete(&mut self, golden: &str, ord: u64, width: u64) {
@@ -391,8 +416,14 @@ impl Shadow {
     /// created in a scenario binds the names `vN`/`versionN` (the recording
     /// scripts' role names — versions/multiple_versions_same_source refers
     /// to its two unbound version results as "v1"/"v2"); `version` always
-    /// names the LATEST version.
+    /// names the LATEST version. A version is a document minted once, as
+    /// [`Shadow::create_doc`]'s are: the caller owes that the shadow does not
+    /// hold `new_golden` yet.
     pub fn version(&mut self, src: &str, new_golden: &str) {
+        assert!(
+            !self.knows(new_golden),
+            "a document is minted once: the shadow already holds {new_golden}"
+        );
         let (text, link_count) = match self.docs.get(src) {
             Some(d) => (d.text.clone(), d.link_count),
             None => (Vec::new(), 0),
@@ -409,8 +440,12 @@ impl Shadow {
         self.current = Some(new_golden.to_string());
     }
 
+    /// Seat one more link in the link subspace of `home_golden`, when the
+    /// shadow holds it; an unheld home stays unheld.
     pub fn seat_link(&mut self, home_golden: &str) {
-        self.docs.entry(home_golden.to_string()).or_default().link_count += 1;
+        if let Some(d) = self.docs.get_mut(home_golden) {
+            d.link_count += 1;
+        }
     }
 
     /// Record a created link's grounded endsets (play pass and setup steps
@@ -509,5 +544,42 @@ mod tests {
         assert_eq!(s.text_string(SOURCE), "A");
         s.insert(SOURCE, u64::MAX, b"X");
         assert_eq!(s.text_string(SOURCE), "AX");
+    }
+
+    /// A document is minted once: a second mint of a document the shadow
+    /// holds is a harness bug, stopped where it is made.
+    #[test]
+    #[should_panic(expected = "a document is minted once: the shadow already holds 1.1.0.1.0.2")]
+    fn a_document_is_minted_once() {
+        two_docs().create_doc(OTHER, None);
+    }
+
+    /// A version is a document minted once too: a version into a document
+    /// the shadow holds is stopped, never laid over it.
+    #[test]
+    #[should_panic(expected = "a document is minted once: the shadow already holds 1.1.0.1.0.2")]
+    fn a_version_is_minted_once() {
+        two_docs().version(SOURCE, OTHER);
+    }
+
+    /// An edit of a document the shadow does not hold changes nothing: the
+    /// document stays unheld and unlisted, holding neither text nor links,
+    /// and the register and the last-written document stay where they were.
+    #[test]
+    fn an_edit_of_an_unheld_document_changes_nothing() {
+        const UNHELD: &str = "1.1.0.1.0.9";
+        let mut s = two_docs();
+        s.insert(SOURCE, 1, b"AB");
+        s.insert(UNHELD, 1, b"XY");
+        s.seat_link(UNHELD);
+        s.delete(UNHELD, 1, 1);
+        s.pivot(UNHELD, 1, 2, 3);
+        s.swap(UNHELD, 1, 2, 2, 3);
+        s.set_current(UNHELD);
+        assert!(!s.knows(UNHELD));
+        assert_eq!(s.created(), [SOURCE, OTHER]);
+        assert_eq!((s.text_len(UNHELD), s.link_count(UNHELD)), (0, 0));
+        assert_eq!(s.current().as_deref(), Some(OTHER));
+        assert_eq!(s.last_written.as_deref(), Some(SOURCE));
     }
 }

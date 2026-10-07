@@ -180,3 +180,47 @@ fn a_log_with_an_unknowable_edit_is_refused_before_any_search() {
     log.extend(vec![delete; 40]);
     assert_eq!(undo_to_initial("x", &log), None);
 }
+
+/// A target an implied create made and `vcopy_to_multiple` then builds is
+/// minted once — listed once in creation order — and built by plan steps
+/// whose edits its log records, so undoing its probed content walks back
+/// to the empty document it was made as.
+#[test]
+fn a_vcopy_target_an_implied_create_made_is_minted_once() {
+    const TARGET: &str = "1.1.0.1.0.2";
+    let ops = [
+        json!({"op": "create_document", "doc": "source", "result": "1.1.0.1.0.1"}),
+        json!({"op": "insert", "doc": "source", "text": "Hello"}),
+        json!({
+            "op": "vcopy_to_multiple",
+            "source_span": {"start": "1.1", "width": "0.5"},
+            "targets": [{"docid": TARGET, "contents": ["Hello"]}],
+        }),
+    ];
+    let setup = ground(&ops);
+    assert_eq!(setup.implied_creates, [TARGET]);
+    let sim = Sim::replay(&setup.implied_creates, &BTreeMap::new(), &ops);
+    assert_eq!(sim.shadow.created().iter().filter(|d| *d == TARGET).count(), 1);
+    assert_eq!(sim.shadow.text_string(TARGET), "Hello");
+    assert_eq!(undo_to_initial("Hello", sim.log_for(TARGET)).as_deref(), Some(&b""[..]));
+}
+
+/// A document the walk never made stays unmade: an edit of it changes
+/// nothing and leaves no log, and a probe of it tests nothing — so no seed
+/// is inferred for it, and the lead-in mints no document the scenario never
+/// created (here, one under a version's address).
+#[test]
+fn a_document_the_walk_never_made_is_never_seeded() {
+    const UNMADE: &str = "1.1.0.1.0.1.7";
+    let ops = [
+        json!({"op": "create_document", "doc": "source", "result": "1.1.0.1.0.1"}),
+        json!({"op": "insert", "doc": UNMADE, "text": "AB"}),
+        json!({"op": "retrieve_contents", "doc": UNMADE, "result": ["XYAB"]}),
+    ];
+    let setup = ground(&ops);
+    assert!(setup.implied_creates.is_empty(), "{:?}", setup.implied_creates);
+    assert!(setup.lead_in.is_empty(), "{:?}", setup.lead_in);
+    let sim = Sim::replay(&setup.implied_creates, &BTreeMap::new(), &ops);
+    assert!(!sim.shadow.knows(UNMADE));
+    assert!(sim.log_for(UNMADE).is_empty());
+}

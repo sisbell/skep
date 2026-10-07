@@ -3,9 +3,10 @@
 //! where every operation is a loose field-bag). Every failure is a hard
 //! loader error ([`LoadError`]) — the goldens are vendored data; a directory
 //! that does not list or a file that does not read or parse means the
-//! vendoring broke, not the systems, and so do two scenarios sharing one key
-//! ([`Scenario::key`]), which no adjudication could tell apart, and a file
-//! placed where the sweep would never play it. [`conformance_dir`] locates
+//! vendoring broke, not the systems, and so do a golden whose name forms no
+//! key ([`Scenario::key`]) and two scenarios sharing one key — neither of
+//! which an adjudication could name — and a file placed where the sweep
+//! would never play it. [`conformance_dir`] locates
 //! the vendored tree the goldens and the allowlist live in.
 
 use std::collections::BTreeSet;
@@ -25,11 +26,19 @@ pub fn conformance_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../conformance")
 }
 
+/// One golden scenario, as [`load_all`] reads it. Its `category` and
+/// `name` are nonempty and slash-free — they form its key
+/// ([`Scenario::key`]) — and a scenario built by hand owes the same.
 #[derive(Clone, Debug)]
 pub struct Scenario {
+    /// The golden's directory under the golden tree.
     pub category: String,
+    /// The golden's `name` field; its file stem when it has none.
     pub name: String,
+    /// The golden's `description` field; empty when it has none, or one
+    /// that is not a string.
     pub description: String,
+    /// The golden's `operations`, each a loose field-bag of dynamic JSON.
     pub operations: Vec<Value>,
 }
 
@@ -53,6 +62,9 @@ pub enum LoadError {
     Parse { path: PathBuf, source: serde_json::Error },
     /// A golden file carries no `operations` array.
     NoOperations { path: PathBuf },
+    /// A golden's `name` is no string, or — its file stem's, when it has
+    /// none — forms no key with its category: empty, or holding a `/`.
+    BadName { path: PathBuf },
     /// Two goldens share one key, which no adjudication could tell apart.
     DuplicateKey(ScenarioKey),
     /// A file the sweep would never play: a golden outside every category,
@@ -70,6 +82,9 @@ impl fmt::Display for LoadError {
             LoadError::NoOperations { path } => {
                 write!(f, "{} has no operations array", path.display())
             }
+            LoadError::BadName { path } => {
+                write!(f, "{} has no name that forms a scenario key", path.display())
+            }
             LoadError::DuplicateKey(key) => {
                 write!(f, "two golden scenarios share the key {key}")
             }
@@ -86,6 +101,7 @@ impl Error for LoadError {
             LoadError::ReadDir { source, .. } | LoadError::Read { source, .. } => Some(source),
             LoadError::Parse { source, .. } => Some(source),
             LoadError::NoOperations { .. }
+            | LoadError::BadName { .. }
             | LoadError::DuplicateKey(_)
             | LoadError::Stray { .. } => None,
         }
@@ -144,13 +160,18 @@ pub fn load_all(golden_dir: &Path) -> Result<Vec<Scenario>, LoadError> {
                 .map_err(|source| LoadError::Read { path: path.clone(), source })?;
             let v: Value = serde_json::from_str(&raw)
                 .map_err(|source| LoadError::Parse { path: path.clone(), source })?;
-            let name = v
-                .get("name")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_else(|| {
+            // The golden's name, else its file stem — either must form a key
+            // with the category, or no adjudication could name the scenario.
+            let name = match v.get("name") {
+                None => {
                     path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
-                });
+                }
+                Some(Value::String(name)) => name.clone(),
+                Some(_) => return Err(LoadError::BadName { path }),
+            };
+            if ScenarioKey::from_parts(&category, &name).is_none() {
+                return Err(LoadError::BadName { path });
+            }
             let description = v
                 .get("description")
                 .and_then(Value::as_str)
@@ -225,6 +246,30 @@ mod tests {
             matches!(&opless, Some(LoadError::NoOperations { path }) if *path == file),
             "{opless:?}"
         );
+    }
+
+    /// A golden whose name forms no key — one holding a `/`, an empty one,
+    /// one that is no string — is refused by its path: no adjudication could
+    /// name the scenario. A golden with no name takes its file stem's.
+    #[test]
+    fn a_golden_whose_name_forms_no_key_is_refused() {
+        let scratch = format!("skep-conformance-names-{}", std::process::id());
+        let root = std::env::temp_dir().join(scratch);
+        let golden = root.join("golden");
+        let file = golden.join("cat").join("a.json");
+        fs::create_dir_all(golden.join("cat")).expect("a category directory");
+        let named = |name: &str| {
+            fs::write(&file, format!(r#"{{{name}"operations": []}}"#)).expect("a golden file");
+            load_all(&golden)
+        };
+        let refused: Vec<bool> = [r#""name": "a/b", "#, r#""name": "", "#, r#""name": 7, "#]
+            .iter()
+            .map(|name| matches!(named(name), Err(LoadError::BadName { path }) if path == file))
+            .collect();
+        let stem = named("").map(|scenarios| scenarios[0].key().to_string());
+        fs::remove_dir_all(&root).expect("the scratch tree is removed");
+        assert_eq!(refused, [true; 3], "a slash, an empty name, a number");
+        assert_eq!(stem.ok().as_deref(), Some("cat/a"));
     }
 
     /// A golden the sweep would never play — outside every category, in a

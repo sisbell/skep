@@ -170,3 +170,36 @@ fn a_description_grounds_at_the_occurrence_and_range_it_names() {
     assert_eq!(at("1.5-1.8"), Some((5, 4, Grounding::Range)));
     assert_eq!(at("by (5-8)"), Some((5, 4, Grounding::Range)));
 }
+
+/// An open forks into a version in either spelling the recordings use, and
+/// in no other.
+#[test]
+fn a_conflict_copy_reads_in_either_spelling() {
+    let open = |mut op: Value| {
+        op["op"] = json!("open_document");
+        is_conflict_copy(&op)
+    };
+    assert!(open(json!({"conflict": "copy"})));
+    assert!(open(json!({"copy_mode": "conflict_copy"})));
+    assert!(open(json!({"copy": "conflict_copy"})));
+    assert!(!open(json!({"mode": "read"})));
+    assert!(!open(json!({"conflict": "fail"})));
+}
+
+/// A create's recorded addresses, in each shape the corpus records them —
+/// an address, a list, an object keyed by the name the op gives its
+/// document — and none where the recording kept no address this reads.
+#[test]
+fn a_create_reads_its_recorded_addresses_in_each_shape() {
+    let read = |op: Value| created_addresses(&op);
+    let addresses = |ids: &[&str]| Some(ids.iter().map(|id| id.to_string()).collect::<Vec<_>>());
+    let one = json!({"op": "create_document", "result": "1.1.0.1.0.1"});
+    assert_eq!(read(one), addresses(&["1.1.0.1.0.1"]));
+    let list = json!({"op": "create_documents", "results": ["1.1.0.1.0.1", "1.1.0.1.0.2"]});
+    assert_eq!(read(list), addresses(&["1.1.0.1.0.1", "1.1.0.1.0.2"]));
+    let keyed = json!({"op": "create_doc2_and_copy", "result": {"doc2": "1.1.0.1.0.2"}});
+    assert_eq!(read(keyed), addresses(&["1.1.0.1.0.2"]));
+    let elsewhere = json!({"op": "create_doc2_and_copy", "result": {"doc3": "1.1.0.1.0.2"}});
+    assert_eq!(read(elsewhere), None);
+    assert_eq!(read(json!({"op": "create_documents", "count": 3})), None);
+}

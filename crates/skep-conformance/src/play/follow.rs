@@ -291,7 +291,7 @@ impl Cx<'_> {
         };
         // Index every doc's live V→I rows once.
         let mut doc_rows: Vec<(String, Vec<ImageRow>)> = Vec::new();
-        for docid in &self.shadow.created {
+        for docid in self.shadow.created() {
             if self.shadow.text_len(docid) == 0 {
                 continue;
             }
@@ -463,14 +463,8 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, adjustmen
                 } else if let Some(arr) = v.as_array() {
                     let want: Vec<String> =
                         arr.iter().filter_map(|x| x.as_str().map(str::to_string)).collect();
-                    let rig = &*cx.rig;
-                    let comparison = compare_addr_sets(
-                        &want,
-                        &found,
-                        cx.alpha,
-                        |a| rig.is_infra_addr(a),
-                        &mut out.adaptations,
-                    );
+                    let comparison =
+                        compare_addr_sets(&want, &found, cx.alpha, &mut out.adaptations);
                     tally.judge(comparison, &format!("{at_doc}: "));
                 }
             }

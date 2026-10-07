@@ -93,7 +93,9 @@ pub fn render_jsonl(records: &[ScenarioRecord]) -> String {
 }
 
 /// Render the records and publish `report.jsonl` and `summary.md` under
-/// `out_dir`, creating it if need be.
+/// `out_dir`, creating it if need be — each file whole or not at all
+/// (`publish`), `report.jsonl` first. On `Err` a file published before
+/// the failure stays published: the report can stand without its summary.
 pub fn write_reports(
     records: &[ScenarioRecord],
     out_dir: &Path,

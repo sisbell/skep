@@ -17,17 +17,18 @@
 //! it reads between modules, so a check gone blind fails rather than passing
 //! a clean tree.
 //!
-//! Three rules no compiler error reports are held the same way. Every
+//! Four rules no compiler error reports are held the same way. Every
 //! request reaches skep through the rig's door, `rig::execute`, which names
 //! a panic raised inside skep as skep's, so exactly one code line under
 //! `src/` calls `OperationSurface::execute`, and it is in `rig.rs`. Every
 //! scenario document is created by `Rig::create_private_document`, so no
 //! code line under `src/` but `rig.rs` builds a CREATENEWDOCUMENT request.
-//! And the play pass changes the golden-side world only through the `Cx`
+//! The play pass changes the golden-side world only through the `Cx`
 //! world-change methods, so no code line in `play/` or `runner.rs` mutates
-//! the shadow's documents or links. Each scan asserts it found the owner's
-//! own lines, so a scan that matches nothing fails rather than passing a
-//! clean tree.
+//! the shadow's documents, names or links. And every adaptation tag the
+//! code can record is named in `play`'s policy catalogue. Each scan asserts
+//! it found the owner's own lines, so a scan that matches nothing fails
+//! rather than passing a clean tree.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -161,9 +162,10 @@ fn only_the_rig_builds_a_create_new_document() {
 /// One rule decides whether a recorded op reaches the shadow — the
 /// recording for content, both worlds for a creation — and it lives in the
 /// `Cx` world-change methods in `play.rs`. A handler or the runner that
-/// edited the shadow's documents or links itself could follow skep's answer
-/// instead, and nothing would refuse it but the goldens drifting: so no code
-/// line in `play/` or `runner.rs` names a shadow mutation.
+/// edited the shadow's documents, names or links itself could follow skep's
+/// answer instead — or name a document no α-image stands behind — and
+/// nothing would refuse it but the goldens drifting: so no code line in
+/// `play/` or `runner.rs` names a shadow mutation.
 #[test]
 fn only_the_world_change_methods_change_the_shadow() {
     const MUTATIONS: &[&str] = &[
@@ -173,6 +175,7 @@ fn only_the_world_change_methods_change_the_shadow() {
         "shadow.swap(",
         "shadow.version(",
         "shadow.create_doc(",
+        "shadow.bind_name(",
         "shadow.seat_link(",
         "shadow.record_link(",
         "shadow.last_link =",
@@ -196,6 +199,276 @@ fn only_the_world_change_methods_change_the_shadow() {
         !owner.is_empty(),
         "the world-change methods mutate the shadow, so a scan that finds nothing there is broken"
     );
+}
+
+/// Every adaptation tag the crate can record is named in `play`'s policy
+/// catalogue: in the head of one of `play.rs`'s `//!` bullets — the text
+/// before its first ` — ` — verbatim, or through a placeholder (a `*`, a
+/// `<…>`, or a final `N` / `+N` after its last `:`). The tags are read where
+/// the code makes them: each string literal an `adaptations.push(…)` or
+/// `adaptations.extend(…)` call holds (a `format!` literal up to its first
+/// `{`, which a placeholder must cover), the value of each `&str` constant
+/// such a call names, and each literal in the body of a `fn tag` — the
+/// grounding enums' tags, which a call records through `.tag()`. A call
+/// recording a tag none of these reads, one held in a variable, is refused:
+/// its tag is one this check cannot read. A known tag of each kind is
+/// asserted found, so a scan gone blind fails rather than passing a clean
+/// tree.
+#[test]
+fn every_adaptation_tag_is_catalogued() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let play = std::fs::read_to_string(src.join("play.rs")).expect("src/play.rs is readable");
+    let catalogue = catalogue_entries(&play);
+    let (tags, unreadable) = recorded_tags(&src);
+    for known in [
+        "client-error:no-op",
+        "expansion-plan:",
+        "text-located:nth-occurrence",
+        "position-after-text",
+        "allowlist-adjusted:width",
+    ] {
+        assert!(
+            tags.iter().any(|t| t.text == known),
+            "the scan found no `{known}`: the forms it reads have moved"
+        );
+    }
+    assert!(
+        catalogue.iter().any(|e| e == "open_document:noop"),
+        "the catalogue's bullets were not read: the doc's shape has moved"
+    );
+    assert!(
+        unreadable.is_empty(),
+        "an adaptation recorded through an expression this check cannot read — record the \
+         tag's literal, a `&str` constant, or a `fn tag` result:\n{}",
+        unreadable.join("\n")
+    );
+    let uncatalogued: Vec<String> = tags
+        .iter()
+        .filter(|t| !catalogue.iter().any(|e| covers(e, t)))
+        .map(|t| format!("{}: `{}`", t.file.display(), t.text))
+        .collect();
+    assert!(
+        uncatalogued.is_empty(),
+        "an adaptation tag no entry of play.rs's catalogue names — add the entry:\n{}",
+        uncatalogued.join("\n")
+    );
+}
+
+/// One adaptation tag the code can record: the file it is made in, its
+/// text, and whether that text is only the fixed head of a `format!`, whose
+/// tail the code supplies.
+struct Tag {
+    file: PathBuf,
+    text: String,
+    head_only: bool,
+}
+
+/// The catalogue's entries: every backticked span in the head of a bullet
+/// of `play.rs`'s module doc — the bullet's text up to its first ` — `.
+fn catalogue_entries(play: &str) -> Vec<String> {
+    let mut bullets: Vec<String> = Vec::new();
+    let mut open = false;
+    for line in play.lines() {
+        let Some(doc) = line.strip_prefix("//!") else {
+            continue;
+        };
+        let doc = doc.strip_prefix(' ').unwrap_or(doc);
+        if let Some(head) = doc.strip_prefix("* ") {
+            bullets.push(head.to_string());
+            open = true;
+        } else if let (true, Some(bullet)) = (open && doc.starts_with("  "), bullets.last_mut()) {
+            bullet.push(' ');
+            bullet.push_str(doc.trim());
+        } else {
+            open = false;
+        }
+    }
+    bullets
+        .iter()
+        .flat_map(|b| {
+            let head = b.split(" — ").next().unwrap_or(b);
+            head.split('`').skip(1).step_by(2).map(str::to_string).collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// Does catalogue entry `entry` name `tag`? Verbatim, or through its
+/// placeholder — a `*` or `<…>`, or a final `N` / `+N` after its last `:` —
+/// when the entry's text before the placeholder begins the tag, and the tag
+/// goes on past it (a `format!` head goes on at run time).
+fn covers(entry: &str, tag: &Tag) -> bool {
+    let fixed = entry.find(['*', '<']).map(|i| &entry[..i]).or_else(|| {
+        let (head, last) = entry.rsplit_once(':')?;
+        matches!(last, "N" | "+N").then_some(&entry[..=head.len()])
+    });
+    match fixed {
+        None => !tag.head_only && tag.text == entry,
+        Some(fixed) => {
+            !fixed.is_empty()
+                && tag.text.starts_with(fixed)
+                && (tag.head_only || tag.text.len() > fixed.len())
+        }
+    }
+}
+
+/// Every adaptation tag `src/`'s shipped code can record (the code before
+/// each file's first `#[cfg(test)]` line, `tests.rs` files aside), and, as
+/// `file: call` lines, every call recording one this scan cannot read.
+fn recorded_tags(src: &Path) -> (Vec<Tag>, Vec<String>) {
+    let mut files = Vec::new();
+    rust_files(src, &mut files);
+    files.retain(|f| f.file_name().is_some_and(|n| n != "tests.rs"));
+    let shipped: Vec<(PathBuf, String)> = files
+        .iter()
+        .map(|f| {
+            let text = std::fs::read_to_string(f).expect("a source file is readable");
+            let code: Vec<&str> = code_lines(shipped_part(&text)).collect();
+            (f.strip_prefix(src).expect("under src").to_path_buf(), code.join("\n"))
+        })
+        .collect();
+    let consts: HashMap<String, String> =
+        shipped.iter().flat_map(|(_, code)| str_consts(code)).collect();
+    let (mut tags, mut unreadable) = (Vec::new(), Vec::new());
+    for (file, code) in &shipped {
+        let mut tag = |text: String, head_only: bool| {
+            tags.push(Tag { file: file.clone(), text, head_only });
+        };
+        for call in adaptation_calls(code) {
+            let literals = literals(call);
+            let named: Vec<&String> = call
+                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .filter_map(|word| consts.get(word))
+                .collect();
+            let read_elsewhere = call.contains(".tag()") || call.contains(".adaptations");
+            if literals.is_empty() && named.is_empty() && !read_elsewhere {
+                unreadable.push(format!("{}: {}", file.display(), call.trim()));
+            }
+            for (text, formatted) in literals {
+                if formatted {
+                    tag(text.split('{').next().unwrap_or_default().to_string(), true);
+                } else {
+                    tag(text, false);
+                }
+            }
+            for value in named {
+                tag(value.clone(), false);
+            }
+        }
+        for body in tag_fn_bodies(code) {
+            for (text, _) in literals(body) {
+                tag(text, false);
+            }
+        }
+    }
+    (tags, unreadable)
+}
+
+/// The part of a source file shipped code lives in: everything before its
+/// first `#[cfg(test)]` line.
+fn shipped_part(text: &str) -> &str {
+    let mut at = 0;
+    for line in text.split_inclusive('\n') {
+        if line.trim_start().starts_with("#[cfg(test)]") {
+            return &text[..at];
+        }
+        at += line.len();
+    }
+    text
+}
+
+/// The argument text of every `push(…)` or `extend(…)` call on an
+/// `adaptations` list in `code`, a method chain split across lines included.
+fn adaptation_calls(code: &str) -> Vec<&str> {
+    let mut calls = Vec::new();
+    for (i, word) in code.match_indices("adaptations") {
+        let rest = code[i + word.len()..].trim_start();
+        let Some(rest) = rest.strip_prefix('.').map(str::trim_start) else {
+            continue;
+        };
+        let Some(rest) = rest.strip_prefix("push").or_else(|| rest.strip_prefix("extend")) else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        if rest.starts_with('(') {
+            let open = code.len() - rest.len();
+            calls.push(&code[open + 1..closing(code, open)]);
+        }
+    }
+    calls
+}
+
+/// The bodies of every `fn tag(` in `code`: the grounding enums' tags.
+fn tag_fn_bodies(code: &str) -> Vec<&str> {
+    code.match_indices("fn tag(")
+        .filter_map(|(i, _)| {
+            let open = i + code[i..].find('{')?;
+            Some(&code[open + 1..closing(code, open)])
+        })
+        .collect()
+}
+
+/// Every `const NAME: &str = "…";` in `code`: its name and its value.
+fn str_consts(code: &str) -> Vec<(String, String)> {
+    code.lines()
+        .filter_map(|line| {
+            let (_, decl) = line.split_once("const ")?;
+            let (name, value) = decl.split_once(": &str = \"")?;
+            Some((name.trim().to_string(), value.strip_suffix("\";")?.to_string()))
+        })
+        .collect()
+}
+
+/// The string literals in `span`, each with whether a `format!(` opens it.
+fn literals(span: &str) -> Vec<(String, bool)> {
+    let bytes = span.as_bytes();
+    let mut found = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'"' {
+            let end = string_end(bytes, i);
+            let formatted = span[..i].trim_end().ends_with("format!(");
+            found.push((span[i + 1..end].to_string(), formatted));
+            i = end;
+        }
+        i += 1;
+    }
+    found
+}
+
+/// The index of the delimiter closing the `(` or `{` at `open` in `code`,
+/// string literals skipped.
+fn closing(code: &str, open: usize) -> usize {
+    let bytes = code.as_bytes();
+    let (opens, closes) = match bytes[open] {
+        b'(' => (b'(', b')'),
+        b'{' => (b'{', b'}'),
+        other => panic!("`{}` opens no delimited span", other as char),
+    };
+    let (mut depth, mut i) = (0usize, open);
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => i = string_end(bytes, i),
+            b if b == opens => depth += 1,
+            b if b == closes => {
+                depth -= 1;
+                if depth == 0 {
+                    return i;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    panic!("a delimiter a source file never closes")
+}
+
+/// The index of the `"` closing the string literal that opens at `start`.
+fn string_end(bytes: &[u8], start: usize) -> usize {
+    let mut i = start + 1;
+    while bytes[i] != b'"' {
+        i += if bytes[i] == b'\\' { 2 } else { 1 };
+    }
+    i
 }
 
 /// The module a line declares — `mod key;`, with or without a visibility —

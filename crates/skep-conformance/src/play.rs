@@ -46,10 +46,16 @@
 //! * `endset-evidence` — a bare link endset recovered from a LATER recorded
 //!   follow/endsets result for the same link, accepted only when no write
 //!   intervenes.
-//! * `text-located:*` / `span-from-description` / `range-from-description`
-//!   / `whole-extent` — decorated-description grounding (fields::locate).
-//! * `position-end` / `position-from-description` / `position-after-text` /
-//!   `position-from-op-name` — position grounding.
+//! * `text-located` / `text-located:*` / `span-from-description` /
+//!   `range-from-description` / `whole-extent` — decorated-description
+//!   grounding (fields::locate); a `text-located:*` tag names the field, or
+//!   the occurrence, the text was located for.
+//! * `position-end` / `position-start` / `position-from-description` /
+//!   `position-after-text` / `position-before-text` / `position-from-op-name`
+//!   — position grounding: a position the recording described ("end",
+//!   "start", "position 6", "after X", "before X") grounded against the
+//!   shadow, the after/before forms by finding the text there; or one the
+//!   op's name carries.
 //! * `doc-from-op-name` / `doc-from-register` — document scope grounding
 //!   (the current-document register mirrors the recording scripts' implicit
 //!   scope).
@@ -57,8 +63,8 @@
 //!   the source-role document when the scenario names one.
 //! * `implied-create:first-touch` — an op needed a document before any
 //!   create; one is created, exactly as the recording script must have.
-//! * `expansion-plan` — the op executed a pre-pass reconstruction plan
-//!   (create_chain / setup / vcopy_multiple / create_and_transclude).
+//! * `expansion-plan:N` — the op executed a pre-pass reconstruction plan of
+//!   N steps (create_chain / setup / vcopy_multiple / create_and_transclude).
 //! * `implicit_last_link` / `default-slot:source` — follow_link without a
 //!   link/end field: the most recent link, the SOURCE end (pinned by
 //!   isolation/insert_text_does_not_affect_links_in_same_document, whose
@@ -87,10 +93,10 @@
 //! * `endset-evidence` (extended) — also refines whole-extent doc-ref
 //!   endsets from later follow results (vspec-shaped or content strings),
 //!   so stored links carry the extents the scripts actually made.
-//! * `allowlist-adjusted:width` / `allowlist-adjusted:count` — a comparator agreed
-//!   only because an allowlist entry's declared width tolerance or count
-//!   delta covered the difference; the runner allowlists such an agreement
-//!   (the entry's existence is the adjudicated divergence).
+//! * `allowlist-adjusted:width` / `allowlist-adjusted:count` — a comparator
+//!   agreed only because an allowlist entry's declared width tolerance or
+//!   count delta covered the difference; the runner allowlists such an
+//!   agreement (the entry's existence is the adjudicated divergence).
 //! * `compare:self` — a compare naming one resolvable document and a second
 //!   reference the recording never uses (the harness's original/version
 //!   default in a one-document scenario, keying no recorded pair) compares
@@ -213,12 +219,46 @@
 //!   `results` map `{"i_j": bool}` records whether positions i and j (1-based
 //!   into the list) share their I-address: each pair compared through the
 //!   positions' live images (internal/internal_transclusion_multiple_copies).
+//! * `args-from-op-name` — an insert recording no `text` field takes its text
+//!   from its op's name (`insert_A` inserts "A"; `insert_1_AAA`, "AAA").
+//! * `insert-position-from-post-state` — a doc-less, position-less insert
+//!   whose own recorded post-state shows its text mid-document lands at the
+//!   single gap that explains that post-state
+//!   (iaddress_allocation/interleaved_insert_delete's insert_2).
+//! * `insert-loop:a-z-cycle` — an `insert_loop` inserts one byte per count,
+//!   cycling A–Z, each appended (edgecases/many_small_inserts' recorded
+//!   sample).
+//! * `interior-typing:per-step` — an `interior_typing` op's `results` list
+//!   plays step by step: each character inserted at its recorded position,
+//!   then compared against that step's own recorded probes.
+//! * `delete_all:empty-noop` — a delete_all of a document already empty
+//!   executes nothing: there is nothing to remove, and skep's DELETE takes
+//!   no zero width (T12).
+//! * `empty-specset` — a NOSPECS (or "empty") spec set is sent as no
+//!   regions: udanax's empty query, asked as recorded.
+//! * `specset-from-description` — a "First N chars from each document" spec
+//!   set reads the first N positions of every document created
+//!   (content/retrieve_multiple_documents).
+//! * `endsets-as-followlink` — a retrieve_endsets addressed to the link's
+//!   own space compares each slot's recorded widths, as a multiset, against
+//!   the widths of the I-spans FOLLOWLINK reports (links/
+//!   link_retrieval_via_endsets): udanax rendered the endsets in the link's
+//!   V-space, skep reports them permanent.
+//! * `compare-window` — a `<ref>_span` field narrows that side of a compare
+//!   to the window it names (compare_partial's "shared (13-18)").
+//! * `docid-synthesized:N` — the recording kept no address for N of the
+//!   documents a create made: each was minted under a golden id the harness
+//!   synthesized (the next root ordinal, `Shadow::synthesize_docid`), bound
+//!   in α but recorded nowhere, so the op compares nothing (address-binding
+//!   agrees only over recorded addresses).
 //!
 //! ## Round-7 policies (the 34-scenario corpus extension)
 //!
 //! * `session-route:<label>` — the op carried a `session` field and executed
 //!   under that label's account session (label→account bound by `account`
 //!   ops; two labels on one account share its session).
+//! * `session-bind:<label>` — an `account` op carrying a `session` field
+//!   binds that label to the account it made current.
 //! * `session-label-implicit-bind` — an op used a session label no `account`
 //!   op had bound; it bound to the then-current account.
 //! * `connect:session` — green's `connect` opens a TCP session; skep
@@ -244,9 +284,10 @@
 //! * `threeset-content-type` — a threeset carrying real content spans
 //!   becomes the link's TYPE endset via α (green's content-span third
 //!   endsets are first-class, A8).
-//! * `set-empty:unconstrained` — an EMPTY `fromset`/`toset`/`threeset` on a
-//!   find_links is the recording client's NOSPECS: no constraint on that
-//!   slot (create_link's empty means empty; the query's empty means any).
+//! * `set-empty:unconstrained:<key>` — an EMPTY `fromset`/`toset`/`threeset`
+//!   (the `<key>`) on a find_links is the recording client's NOSPECS: no
+//!   constraint on that slot (create_link's empty means empty; the query's
+//!   empty means any).
 //! * `compare-operands-explicit` — a compare op's two operands read from its
 //!   own role-keyed vspec-dict fields (ms_version_race's `version_a1`/
 //!   `original`), never from the original/version convention.
@@ -331,7 +372,17 @@ pub struct Cx<'a> {
 
 // ──────────────────────────── small shared bits ────────────────────────────
 
+/// The op, or a part of it, has no expression on skep's surface: `reason`
+/// says why. The caller owes an op not yet disagreed (`OpOutcome`'s
+/// invariant): a part that cannot be aimed beside a disagreement is a
+/// `Tally`'s to settle, which keeps the disagreement and notes the part.
 fn inexpressible(out: &mut OpOutcome, reason: String) {
+    assert!(
+        out.status != Status::Disagreed,
+        "op {} `{}` is disagreed already: a disagreement stands",
+        out.index,
+        out.op_name
+    );
     out.status = Status::Inexpressible;
     // Keep any resolution note already attached (doc_arg's resolves-to-
     // nothing detail) alongside the classification reason.
@@ -867,17 +918,21 @@ fn elem_range(s: &Span) -> Option<ElemRange> {
 // Every change the play pass makes to the golden-side world goes through
 // the methods below, and each follows one rule. The shadow follows the
 // RECORDING; α follows skep. A content write is mirrored into the shadow
-// first — when its `Effect` reaches the shadow (callers pass `Effect::of`
-// the op, or `Effect::Inferred` for the pre-pass's setup) and the shadow
-// holds the document — and then skep is asked through α, so neither skep's
-// answer nor an α miss bends what the shadow holds; a golden reference with
-// no α-image comes back as `NeverBound`, and skep was asked nothing. A
-// CREATION's golden name enters the shadow, bound in α, only when skep made
-// it and its effect reaches the shadow: every name the play pass resolves
-// has an α-image. A creation skep refuses — a version of a private source,
-// PUB-2.9 — therefore leaves its later name-references ungroundable, the
-// class rulings 20 and 20a freeze. `tests/it/tidy.rs` holds every other
-// play-pass file to changing the shadow's world through these methods.
+// first, when its `Effect` reaches the shadow (callers pass `Effect::of` the
+// op, or `Effect::Inferred` for the pre-pass's setup) — the shadow itself
+// changes only a document it holds, an edit of any other changing nothing —
+// and then skep is asked through α, so neither skep's answer nor an α miss
+// bends what the shadow holds; a golden reference with no α-image comes
+// back as `NeverBound`, and skep was asked nothing. A CREATION's golden name
+// enters the shadow, bound in α, only when skep made it and its effect
+// reaches the shadow: every document the play pass resolves, and every name
+// it binds, has an α-image. A document is minted once: a golden id the
+// shadow already holds keeps naming the document it holds, and α's
+// double-bind finding reports the clash. A creation skep refuses — a version
+// of a private source, PUB-2.9 — therefore leaves its later name-references
+// ungroundable, the class rulings 20 and 20a freeze. `tests/it/tidy.rs`
+// holds every other play-pass file to changing the shadow's world through
+// these methods.
 
 /// A golden reference α holds no image for: the request naming it was never
 /// sent to skep.
@@ -894,11 +949,6 @@ enum CopyNeverBound {
 }
 
 impl Cx<'_> {
-    /// Does a write into golden `doc` reach the shadow?
-    fn mirrors(&self, doc: &str, effect: Effect) -> bool {
-        effect.reaches_shadow() && self.shadow.knows(doc)
-    }
-
     /// The skep image of golden `golden`, or the reference as never bound.
     fn bound(&mut self, golden: &str) -> Result<skep_address::Address, NeverBound> {
         self.alpha.translate(golden).ok_or_else(|| NeverBound(golden.to_string()))
@@ -906,7 +956,9 @@ impl Cx<'_> {
 
     /// CREATENEWDOCUMENT for golden `golden`, named `name` when the
     /// recording names it. The document enters the shadow, `golden` bound
-    /// in α, when skep made it and `effect` reaches the shadow.
+    /// in α, when skep made it and `effect` reaches the shadow. The caller
+    /// owes that the shadow does not hold `golden` yet ([`ensure_document`]
+    /// asks first): a document is minted once.
     pub fn create_document(
         &mut self,
         golden: &str,
@@ -922,10 +974,12 @@ impl Cx<'_> {
     }
 
     /// VERSION of golden `src`, recorded as golden `golden` when the
-    /// recording kept the result. The version enters the shadow when skep
-    /// made it and `effect` reaches the shadow: `golden` binds in α, and
-    /// each of `names` — the op's own names for the new version — that is
-    /// no address and names no document yet comes to name it.
+    /// recording kept the result. When skep made it and `effect` reaches the
+    /// shadow, `golden` binds in α; and unless the shadow already holds
+    /// `golden` — another document, which α's double-bind finding then
+    /// reports — the version enters the shadow, each of `names` (the op's
+    /// own names for the new version) that is no address and names no
+    /// document yet coming to name it.
     fn create_version(
         &mut self,
         src: &str,
@@ -938,14 +992,27 @@ impl Cx<'_> {
         let made = effect.reaches_shadow();
         if let (true, Response::AckAddr { addr, .. }, Some(g)) = (made, &r, golden) {
             self.alpha.bind(g, addr);
-            self.shadow.version(src, g);
-            for n in names {
-                if parse_dotted(n).is_none() && self.shadow.resolve_doc(n).is_none() {
-                    self.shadow.bind_name(n, g);
+            if !self.shadow.knows(g) {
+                self.shadow.version(src, g);
+                for n in names {
+                    if parse_dotted(n).is_none() && self.shadow.resolve_doc(n).is_none() {
+                        self.shadow.bind_name(n, g);
+                    }
                 }
             }
         }
         Ok(r)
+    }
+
+    /// Name golden document `golden` `name`, when the shadow holds it; a
+    /// document it does not hold — skep refused it, or the recording says
+    /// udanax never made it — is named nothing, so every name the play pass
+    /// resolves has an α-image. The first binding of a name stands
+    /// (`Shadow::bind_name`).
+    fn name_document(&mut self, golden: &str, name: &str) {
+        if self.shadow.knows(golden) {
+            self.shadow.bind_name(name, golden);
+        }
     }
 
     /// INSERT `bytes` at `at` in golden `doc`, a content-subspace insert
@@ -957,7 +1024,7 @@ impl Cx<'_> {
         bytes: &[u8],
         effect: Effect,
     ) -> Result<Response, NeverBound> {
-        if at.sub == 1 && self.mirrors(doc, effect) {
+        if at.sub == 1 && effect.reaches_shadow() {
             self.shadow.insert(doc, at.ord, bytes);
         }
         let d = self.bound(doc)?;
@@ -979,7 +1046,7 @@ impl Cx<'_> {
         sources: &[CopySource],
         effect: Effect,
     ) -> Result<Response, CopyNeverBound> {
-        if self.mirrors(doc, effect) {
+        if effect.reaches_shadow() {
             let bytes: Vec<u8> = sources
                 .iter()
                 .filter(|s| s.region.sub == 1)
@@ -999,26 +1066,27 @@ impl Cx<'_> {
     }
 
     /// DELETE `region` of golden `doc`, a content-subspace delete mirrored
-    /// first. Just before skep is asked, the doomed region's I-extents are
-    /// imaged — while the arrangement still speaks for them — into the
-    /// scenario's deletion history (ruling 10); an image failure is
-    /// swallowed, and a later I-coverage search over the missing record
-    /// fails to ground, surfacing as its own honest outcome.
+    /// first. The deletion history (ruling 10) is golden-side too: for a
+    /// content-subspace delete whose effect reaches the shadow, just before
+    /// skep is asked, the doomed region's I-extents are imaged — while the
+    /// arrangement still speaks for them — into the scenario's history of
+    /// deleted content; an image failure is swallowed, and a later
+    /// I-coverage search over the missing record fails to ground, surfacing
+    /// as its own honest outcome.
     fn delete(
         &mut self,
         doc: &str,
         region: VRegion,
         effect: Effect,
     ) -> Result<Response, NeverBound> {
-        let in_content_subspace = region.sub == 1;
-        let removed = if in_content_subspace {
-            self.shadow.slice(doc, region.ord, region.width)
+        let mirrored = region.sub == 1 && effect.reaches_shadow();
+        let removed = if mirrored {
+            let removed = self.shadow.slice(doc, region.ord, region.width);
+            self.shadow.delete(doc, region.ord, region.width);
+            removed
         } else {
             Vec::new()
         };
-        if in_content_subspace && self.mirrors(doc, effect) {
-            self.shadow.delete(doc, region.ord, region.width);
-        }
         let d = self.bound(doc)?;
         let imaged = VRegion { width: removed.len() as u64, ..region };
         if let Some(span) = imaged.span() {
@@ -1040,7 +1108,7 @@ impl Cx<'_> {
         cuts: &[u64],
         effect: Effect,
     ) -> Result<Response, NeverBound> {
-        if self.mirrors(doc, effect) {
+        if effect.reaches_shadow() {
             match *cuts {
                 [a, b, c] => self.shadow.pivot(doc, a, b, c),
                 [s1, e1, s2, e2] => self.shadow.swap(doc, s1, e1, s2, e2),
@@ -1094,10 +1162,14 @@ impl Cx<'_> {
 
 // ─────────────────── document creation & expansion plans ───────────────────
 
-/// Create golden document `id` for an op that records it, unless the shadow
-/// already holds it (an implied create, or a plan's earlier step): then the
-/// name binds and the register moves to it. `Err` is skep's answer to a
-/// creation it did not acknowledge, for the caller to settle.
+/// Golden document `id`, for an op that records it: when the shadow already
+/// holds it (an implied create, or a plan's earlier step), `name` names it
+/// and the register moves to it; else skep is asked to create it
+/// ([`Cx::create_document`]). `Ok` when the shadow held it, or skep made it —
+/// whether or not the creation's effect reaches the shadow: one the
+/// recording says udanax never made stays unheld and unnamed, and the
+/// caller settles the op against that recorded failure. `Err` is skep's
+/// answer to a creation it did not acknowledge, for the caller to settle.
 fn ensure_document(
     cx: &mut Cx,
     id: &str,
@@ -1106,7 +1178,7 @@ fn ensure_document(
 ) -> Result<(), Box<Response>> {
     if cx.shadow.knows(id) {
         if let Some(n) = name {
-            cx.shadow.bind_name(n, id);
+            cx.name_document(id, n);
         }
         cx.shadow.set_current(id);
         return Ok(());
@@ -1351,7 +1423,9 @@ fn probe_state(
 // ────────────────────────────── the catalogue ──────────────────────────────
 
 /// Play one golden operation: its name normalized to a verb, executed on
-/// skep, compared. Exactly one `OpOutcome` per op, whatever happens.
+/// skep, compared — its one `OpOutcome`, for every op it plays to an end. A
+/// panic raised while it plays, skep's or the harness's, leaves it instead,
+/// for the runner to stop the scenario at this op.
 pub fn run_op(cx: &mut Cx, index: usize, op: &Value, adjustments: &Adjustments) -> OpOutcome {
     let name = op_name(op).to_string();
     let mut out = OpOutcome::new(index, &name);

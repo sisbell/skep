@@ -13,47 +13,71 @@ use super::{
 };
 use crate::evidence::Effect;
 use crate::fields::{
-    create_name_of, expected_failure, field, group_word, recorded_count, roster, str_field,
+    create_name_of, created_addresses, expected_failure, field, group_word, is_conflict_copy,
+    recorded_count, roster, str_field,
 };
 use crate::outcome::{Disagreement, OpOutcome, Status};
 use crate::tum::VPoint;
 
+/// A creation's end, once skep made every document the op asked for and the
+/// recording reports no failure; `recorded` documents were created at an
+/// address the recording kept, `synthesized` under a golden id the harness
+/// minted (`Shadow::synthesize_docid`, tagged `docid-synthesized:N`) because it
+/// kept none. The op agrees on the address binding only when every document's
+/// address was recorded — each now bound in α to skep's mint, where a
+/// conflicting bind is an α double-bind finding. A synthesized id binds but
+/// compares nothing, and an op that kept no address at all compares nothing
+/// either: both end `NotCompared`.
+fn settle_creation(out: &mut OpOutcome, recorded: usize, synthesized: usize) {
+    if synthesized > 0 {
+        out.adaptations.push(format!("docid-synthesized:{synthesized}"));
+        out.status = Status::NotCompared;
+        let created = recorded + synthesized;
+        out.add_note(format!(
+            "the recording kept no address for {synthesized} of the {created} documents \
+             created; no recorded result to bind"
+        ));
+    } else if recorded == 0 {
+        out.status = Status::NotCompared;
+        out.add_note("no recorded result to bind".into());
+    } else {
+        out.agree("address-binding");
+    }
+}
+
 pub(super) fn h_create_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     let name = create_name_of(op);
-    let goldens: Vec<String> = match field(op, &["result", "results"]) {
-        Some(Value::String(s)) => vec![s.clone()],
-        Some(Value::Array(a)) => a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
-        _ => vec![cx.shadow.synthesize_docid()],
+    let (goldens, synthesized) = match created_addresses(op) {
+        Some(ids) => (ids, 0),
+        None => (vec![cx.shadow.synthesize_docid()], 1),
     };
     let recorded_failure = expected_failure(op);
     let effect = Effect::of(op);
     for (i, golden) in goldens.iter().enumerate() {
-        if cx.shadow.knows(golden) {
-            // The pre-pass's implied create; bind name and move on.
-            if let (0, Some(n)) = (i, &name) {
-                cx.shadow.bind_name(n, golden);
-            }
-            cx.shadow.set_current(golden);
-            continue;
-        }
-        let r = cx.create_document(golden, if i == 0 { name.as_deref() } else { None }, effect);
-        if !matches!(r, Response::AckAddr { .. }) {
+        // The op's name names its first document; one an implied create
+        // already made is named and made current.
+        let name = if i == 0 { name.as_deref() } else { None };
+        if let Err(r) = ensure_document(cx, golden, name, effect) {
             settle_unaccepted(out, recorded_failure, &r);
             return;
         }
     }
     if settle_accepted(out, recorded_failure) {
-        out.agree("address-binding");
+        settle_creation(out, goldens.len() - synthesized, synthesized);
     }
 }
 
 pub(super) fn h_create_documents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
     let recorded_failure = expected_failure(op);
     let effect = Effect::of(op);
-    // The first creation skep refuses settles the op against the failure
-    // the golden recorded, once, after every creation the op records was
-    // asked for.
+    // Every creation the op records is asked for. The first one skep refuses
+    // is then settled, once, against the failure the golden recorded —
+    // unless the op already disagrees (a text insert or a plan step skep
+    // refused): that disagreement stands, the refusal noted beside it.
     let mut refused: Option<Box<Response>> = None;
+    // How many of the documents the op creates are minted under a
+    // synthesized golden id, the recording having kept none.
+    let mut synthesized = 0usize;
     let mut create = |cx: &mut Cx, id: &str, name: Option<&str>| {
         if let Err(r) = ensure_document(cx, id, name, effect) {
             refused.get_or_insert(r);
@@ -72,15 +96,18 @@ pub(super) fn h_create_documents(cx: &mut Cx, index: usize, op: &Value, out: &mu
     // A roster of `<name>: <docid>` fields (doc1/doc2, source1/source2, the
     // `docs` op's A/B/C) — created in name order.
     let named = roster(op);
-    if !by_id.is_empty() {
+    // How many documents the op creates.
+    let created = if !by_id.is_empty() {
         by_id.sort();
         for (id, n) in &by_id {
             create(cx, id, Some(n));
         }
+        by_id.len()
     } else if !named.is_empty() {
         for (n, id) in &named {
             create(cx, id, Some(n));
         }
+        named.len()
     } else {
         let results: Vec<String> = field(op, &["results"])
             .and_then(Value::as_array)
@@ -109,19 +136,25 @@ pub(super) fn h_create_documents(cx: &mut Cx, index: usize, op: &Value, out: &mu
             .unwrap_or_else(|| results.len().max(names.len()).max(1))
             .max(results.len());
         for k in 0..count {
-            let id = results.get(k).cloned().unwrap_or_else(|| cx.shadow.synthesize_docid());
+            let id = match results.get(k) {
+                Some(id) => id.clone(),
+                None => {
+                    synthesized += 1;
+                    cx.shadow.synthesize_docid()
+                }
+            };
             let name =
                 names.get(k).cloned().or_else(|| group.as_ref().map(|t| format!("{t}{}", k + 1)));
             create(cx, &id, name.as_deref());
             if let Some(g) = &group {
                 let singular = g.trim_end_matches('s');
-                cx.shadow.bind_name(&format!("{singular}{}", k + 1), &id);
-                cx.shadow.bind_name(&format!("{singular}_{k}"), &id);
+                cx.name_document(&id, &format!("{singular}{}", k + 1));
+                cx.name_document(&id, &format!("{singular}_{k}"));
             }
             // The recorded text goes in whatever skep answers; a refusal is
             // the op's disagreement unless an earlier one already is. A
-            // document with no α-image was refused at creation, which
-            // settles the op below.
+            // document with no α-image was refused at creation, a refusal
+            // settled below.
             if let Some(t) = texts.get(k) {
                 if let Ok(r) = cx.insert(&id, VPoint::content(1), t.as_bytes(), effect) {
                     let first = out.status != Status::Disagreed;
@@ -143,16 +176,21 @@ pub(super) fn h_create_documents(cx: &mut Cx, index: usize, op: &Value, out: &mu
                 }
             }
         }
-    }
+        count
+    };
     if let Some(r) = refused {
-        settle_unaccepted(out, recorded_failure, &r);
+        if out.status == Status::Disagreed {
+            out.add_note(format!("document creation: {}", refusal(&r)));
+        } else {
+            settle_unaccepted(out, recorded_failure, &r);
+        }
         return;
     }
     if out.status == Status::Disagreed {
         return;
     }
     if settle_accepted(out, recorded_failure) {
-        out.agree("address-binding");
+        settle_creation(out, created - synthesized, synthesized);
     }
 }
 
@@ -205,11 +243,9 @@ pub(super) fn h_open_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         inexpressible(out, "open_document without a resolvable doc".into());
         return;
     };
-    let conflict_copy = str_field(op, &["conflict"]).is_some_and(|c| c == "copy")
-        || str_field(op, &["copy", "copy_mode"]).is_some_and(|c| c == "conflict_copy");
     let result = str_field(op, &["result"]).map(str::to_string);
     let recorded_failure = expected_failure(op);
-    if conflict_copy {
+    if is_conflict_copy(op) {
         out.adaptations.push("open_document:conflict_copy→version".into());
         match cx.create_version(&doc, result.as_deref(), &[], Effect::of(op)) {
             Err(_) => {
@@ -217,7 +253,7 @@ pub(super) fn h_open_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             }
             Ok(Response::AckAddr { .. }) => {
                 if settle_accepted(out, recorded_failure) {
-                    out.agree("address-binding");
+                    settle_creation(out, usize::from(result.is_some()), 0);
                 }
             }
             Ok(other) => settle_unaccepted(out, recorded_failure, &other),
@@ -238,11 +274,14 @@ pub(super) fn h_open_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         out.disagree("expected-failure", Disagreement { expected, actual });
         return;
     }
-    // The open result names the same document — bind the alias so both
-    // spellings translate. Peek, not translate: green's OPEN validates
-    // nothing (A7), so an open of a never-created doc succeeds there and has
-    // no α-image here — that absence is noted, not an α-finding (the later
-    // probe's recorded failure meets it as joint absence).
+    // The open result names the document opened: bound to that document's
+    // α-image, it repeats the binding when it is the same golden address,
+    // and a second golden address for one skep document — which α never
+    // holds — surfaces as a double-bind finding. Peek, not translate:
+    // green's OPEN validates nothing (A7), so an open of a never-created doc
+    // succeeds there and has no α-image here — that absence is noted, not an
+    // α-finding (the later probe's recorded failure meets it as joint
+    // absence).
     if let Some(g) = &result {
         match cx.alpha.peek_translate(&doc) {
             Some(a) => cx.alpha.bind(g, &a),

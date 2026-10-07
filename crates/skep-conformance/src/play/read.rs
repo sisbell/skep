@@ -292,7 +292,7 @@ pub(super) fn h_retrieve_contents(cx: &mut Cx, index: usize, op: &Value, out: &m
             if let Some(n) = n {
                 out.adaptations.push("specset-from-description".into());
                 let first = VPoint::content(1).region(n);
-                for docid in &cx.shadow.created {
+                for docid in cx.shadow.created() {
                     if let (Some(d), Some(span)) = (cx.alpha.peek_exact(docid), first.span()) {
                         specs.push(Spec { doc: d, span });
                     }

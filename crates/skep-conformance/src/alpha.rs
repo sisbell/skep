@@ -102,8 +102,9 @@ impl Alpha {
     /// element lift: golden `docid·0·⟨subspace, ordinal⟩` ↦
     /// `α(docid)·0·⟨subspace, ordinal⟩`, the docid bound to a skep DOCUMENT
     /// (both systems place elements at `doc·0·⟨subspace, ordinal⟩`, so the
-    /// local part carries over structurally). A miss is recorded as an
-    /// `alpha-never-bound` finding.
+    /// local part carries over structurally). A miss of a golden address is
+    /// recorded as an `alpha-never-bound` finding; text that is no dotted
+    /// address — a symbolic name — misses with no finding.
     pub fn translate(&mut self, golden: &str) -> Option<Address> {
         if let Some(a) = self.peek_translate(golden) {
             return Some(a);

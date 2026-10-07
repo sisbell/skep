@@ -498,8 +498,10 @@ pub fn per_doc_replies(op: &Value, shadow: &Shadow) -> Vec<(String, String, Vec<
     replies
 }
 
-/// Did the golden record this op as a failure? (`error` non-null and not the
-/// scripts' placeholder, or an explicit failed status.)
+/// Did the golden record this op as a failure? A `status` of "failed",
+/// "error" or "rejected" says so, and one of "succeeded" says not —
+/// whatever `error` holds; otherwise a non-null `error` other than the
+/// scripts' placeholders ("N/A", "") is the recorded failure.
 pub fn expected_failure(op: &Value) -> Option<String> {
     if let Some(s) = str_field(op, &["status"]) {
         if matches!(s, "failed" | "error" | "rejected") {
@@ -600,7 +602,7 @@ pub fn distributed_insert_texts(op: &Value) -> Option<Vec<String>> {
 /// The n most recently created docs, creation order — the targets an
 /// `insert_all` distributes over (its creates immediately precede it).
 pub fn distribution_targets(shadow: &Shadow, n: usize) -> Vec<String> {
-    let created = &shadow.created;
+    let created = shadow.created();
     let start = created.len().saturating_sub(n);
     created[start..].to_vec()
 }
@@ -633,6 +635,15 @@ pub fn cuts_of(op: &Value) -> Vec<u64> {
         }
     }
     cuts
+}
+
+/// Does this `open_document` ask for udanax's CONFLICT_COPY — a fork of the
+/// opened document into a new version — rather than a plain open? In either
+/// spelling the recordings use: `conflict: "copy"`, or `copy` / `copy_mode:
+/// "conflict_copy"`. The one reading both passes fork an open by.
+pub fn is_conflict_copy(op: &Value) -> bool {
+    str_field(op, &["conflict"]).is_some_and(|c| c == "copy")
+        || str_field(op, &["copy", "copy_mode"]).is_some_and(|c| c == "conflict_copy")
 }
 
 /// A `to`/`dest` value that is a position marker, not a document reference:
@@ -1297,41 +1308,78 @@ pub fn quoted(s: &str) -> Option<String> {
     None
 }
 
-/// A position description → the V-position it names and the grounding
-/// tag, grounded against the shadow when relative. The tag names the policy
-/// that read a described position; an explicit V-position carries none,
-/// being what the client sent. `None` = not a position this grammar speaks.
+/// How a described position grounded: the forms of position a recording
+/// describes rather than sends as a V-position ([`resolve_position`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PositionGrounding {
+    /// "end" / "append": one past the document's content.
+    End,
+    /// "start" / "beginning": the first content position.
+    Start,
+    /// "position N": content ordinal N.
+    Numbered,
+    /// "after X": just past the text X, found in the shadow.
+    AfterText,
+    /// "before X": at the text X, found in the shadow.
+    BeforeText,
+}
+
+impl PositionGrounding {
+    /// The adaptation tag the report records for this grounding.
+    pub fn tag(self) -> &'static str {
+        match self {
+            PositionGrounding::End => "position-end",
+            PositionGrounding::Start => "position-start",
+            PositionGrounding::Numbered => "position-from-description",
+            PositionGrounding::AfterText => "position-after-text",
+            PositionGrounding::BeforeText => "position-before-text",
+        }
+    }
+
+    /// Was the position found by searching the shadow for text — a
+    /// reconstruction — rather than read from a number or the document's
+    /// bounds?
+    pub fn is_text(self) -> bool {
+        matches!(self, PositionGrounding::AfterText | PositionGrounding::BeforeText)
+    }
+}
+
+/// A position description → the V-position it names and how it grounded,
+/// against the shadow when relative; an explicit V-position carries no
+/// grounding, being what the client sent. `None` = not a position this
+/// grammar speaks.
 pub fn resolve_position(
     shadow: &Shadow,
     doc: &str,
     desc: &str,
-) -> Option<(VPoint, Option<&'static str>)> {
+) -> Option<(VPoint, Option<PositionGrounding>)> {
+    use PositionGrounding::{AfterText, BeforeText, End, Numbered, Start};
     let desc = desc.trim();
     if let Some(at) = parse_vpos(desc) {
         return Some((at, None));
     }
-    let content = |ord: u64, tag: &'static str| Some((VPoint::content(ord), Some(tag)));
+    let content = |ord: u64, how: PositionGrounding| Some((VPoint::content(ord), Some(how)));
     match desc {
-        "end" | "append" => return content(shadow.text_len(doc) + 1, "position-end"),
-        "start" | "beginning" => return content(1, "position-start"),
+        "end" | "append" => return content(shadow.text_len(doc) + 1, End),
+        "start" | "beginning" => return content(1, Start),
         _ => {}
     }
     if let Some(n) = desc.strip_prefix("position ").and_then(|x| x.trim().parse::<u64>().ok()) {
-        return content(n, "position-from-description");
+        return content(n, Numbered);
     }
     if let Some(t) = desc.strip_prefix("after ") {
         let t = t.trim();
         if let Some((_, ord)) = shadow.find_text(Some(doc), t) {
-            return content(ord + t.len() as u64, "position-after-text");
+            return content(ord + t.len() as u64, AfterText);
         }
         // Case-insensitive fallback: descriptions say "after first" for "First ".
         if let Some((_, ord, w)) = shadow.find_text_ignoring_case(doc, t) {
-            return content(ord + w, "position-after-text");
+            return content(ord + w, AfterText);
         }
     }
     if let Some(t) = desc.strip_prefix("before ") {
         if let Some((_, ord)) = shadow.find_text(Some(doc), t.trim()) {
-            return content(ord, "position-before-text");
+            return content(ord, BeforeText);
         }
     }
     None
@@ -1384,6 +1432,26 @@ pub fn create_name_of(op: &Value) -> Option<String> {
         return None;
     }
     Some(role.to_string())
+}
+
+/// The addresses a create op's recording kept for the documents it made:
+/// its `result` or `results` — one address, or a list of them — or a
+/// `result` object holding the address under the name the op gives its
+/// document ([`create_name_of`]: `create_doc2_and_copy`'s `result: {doc2:
+/// "1.1.0.1.0.2", …}`, allocation_independence/all_operations_interleaved).
+/// `None` when the recording kept none this grammar reads: the document is
+/// then minted under a golden id the harness synthesizes
+/// (`Shadow::synthesize_docid`). The one reading both passes create by.
+pub fn created_addresses(op: &Value) -> Option<Vec<String>> {
+    match field(op, &["result", "results"])? {
+        Value::String(s) => Some(vec![s.clone()]),
+        Value::Array(a) => Some(a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()),
+        Value::Object(o) => {
+            let id = o.get(&create_name_of(op)?)?.as_str()?;
+            parse_dotted(id).is_some().then(|| vec![id.to_string()])
+        }
+        _ => None,
+    }
 }
 
 /// An arrow spec carried in a note/comment VALUE — `note: "doc1 -> doc4"`

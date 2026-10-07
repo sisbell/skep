@@ -257,6 +257,41 @@ fn joint_absence_holds_only_for_a_document_never_created() {
     assert!(record.ops[2].adaptations.iter().any(|a| a == "joint-absence"));
 }
 
+/// A creation agrees on its address binding only over an address the
+/// recording kept: a document minted under an address the harness
+/// synthesized, the recording having kept none, compares nothing — tagged
+/// with how many were.
+#[test]
+fn a_creation_agrees_only_over_a_recorded_address() {
+    let ops = vec![
+        json!({"op": "create_document", "result": "1.1.0.1.0.1"}),
+        json!({"op": "create_document"}),
+        json!({"op": "create_documents", "count": 2}),
+    ];
+    let record = play("creations", ops);
+    assert_eq!(statuses(&record), [Status::Agreed, Status::NotCompared, Status::NotCompared]);
+    assert!(record.ops[1].adaptations.iter().any(|a| a == "docid-synthesized:1"));
+    assert!(record.ops[2].adaptations.iter().any(|a| a == "docid-synthesized:2"));
+    assert_eq!(record.verdict, Verdict::Pass);
+}
+
+/// A delete whose region the harness cannot ground never reaches skep, so a
+/// failure the golden recorded for it meets no answer: the op is
+/// inexpressible, never an agreement on a refusal skep never gave.
+#[test]
+fn a_failure_skep_was_never_asked_about_is_never_agreed() {
+    let ops = vec![
+        create("d", "1.1.0.1.0.1"),
+        insert("d", "AB"),
+        json!({"op": "delete", "doc": "d", "error": REFUSED}),
+    ];
+    let record = play("unasked_failure", ops);
+    let delete = &record.ops[2];
+    assert_eq!(delete.status, Status::Inexpressible, "{delete:?}");
+    let note = delete.note.as_deref().unwrap_or_default();
+    assert!(note.contains("skep was never asked"), "{note}");
+}
+
 /// A recorded refusal of an open is never absorbed into the open no-op:
 /// skep has no open layer to refuse with, and the divergence stands.
 #[test]

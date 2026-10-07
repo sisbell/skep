@@ -7,6 +7,12 @@
 //! results included), and nothing adjusts a value except under an
 //! adjustment the allowlist declares, threaded in by the caller — and a
 //! comparator whose agreement the adjustment made records that it did.
+//!
+//! One judgement is made without a comparator here: `address-binding`, a
+//! creation's. Its recorded result address binds in α to the address skep
+//! minted; the op agrees when the recording kept an address for every
+//! document it created and each bind holds — a conflicting bind is an α
+//! double-bind finding, which the runner folds in as the op's disagreement.
 
 use std::collections::BTreeSet;
 
@@ -150,9 +156,15 @@ pub fn compare_content(
 
 /// Sets of links or documents. Golden strings are translated through α (a
 /// never-bound expected address is itself a finding recorded by
-/// `Alpha::translate`); skep extras render tagged. `exclude` drops
-/// harness-infrastructure addresses (the types doc) from the skep side —
-/// part of the named `types_document` policy, recorded by the caller.
+/// `Alpha::translate`); skep extras render tagged. The caller owes `actual`
+/// free of harness infrastructure: it filtered skep's answer through
+/// `Rig::is_infra_addr` at receipt, the one place infrastructure is told
+/// apart.
+///
+/// skep's answer is a set: one listing an address twice is no set, and
+/// never agrees — it is reported as delivered, and nothing binds from it.
+/// The golden listing one address twice is a recording defect: compared as
+/// a set, the dedup tagged `golden-duplicate-result`.
 ///
 /// Binding move: when, after matching every already-bound expected address,
 /// the still-unbound goldens and the unmatched skep addresses are EQUAL in
@@ -166,13 +178,8 @@ pub fn compare_addr_sets(
     expected: &[String],
     actual: &[Address],
     alpha: &mut Alpha,
-    exclude: impl Fn(&Address) -> bool,
     adaptations: &mut Vec<String>,
 ) -> Comparison {
-    let mut got: Vec<Address> = actual.iter().filter(|a| !exclude(a)).cloned().collect();
-    got.sort();
-    got.dedup();
-
     let mut want_goldens: Vec<String> = expected.to_vec();
     want_goldens.sort_by(|a, b| parse_dotted(a).cmp(&parse_dotted(b)).then_with(|| a.cmp(b)));
     want_goldens.dedup();
@@ -181,6 +188,16 @@ pub fn compare_addr_sets(
     // comparison absorbs it; the tag keeps the defect visible.
     if want_goldens.len() != expected.len() {
         adaptations.push("golden-duplicate-result".into());
+    }
+
+    let mut got: Vec<Address> = actual.to_vec();
+    got.sort();
+    if got.windows(2).any(|pair| pair[0] == pair[1]) {
+        let delivered: Vec<String> = actual.iter().map(|a| alpha.render_skep(a)).collect();
+        return Err(Disagreement {
+            expected: format!("{want_goldens:?}"),
+            actual: format!("{delivered:?} — an address listed twice, no set"),
+        });
     }
 
     // Peek-translate (no findings yet) to split bound from unbound.
@@ -219,14 +236,15 @@ pub fn compare_addr_sets(
 
 // ── spans / vspansets: structural comparison on RAW recorded strings ───────
 
-/// Structural span comparison: count, ordering, widths — on the RAW
-/// (start, width) strings. The expected side is exactly what the recording
-/// client wrote (decoded-tumbler `str()` forms); the actual side is skep's
-/// spans rendered the same dotted way. No reinterpretation: a malformed
-/// recorded shape (see [`is_collapsed_subspace_shape`]) compares as recorded
-/// and diverges honestly. Width tolerance applies ONLY where the allowlist
-/// declares one and both widths parse; start positions are always exact. An
-/// agreement the tolerance made is recorded as [`WIDTH_ADJUSTED`].
+/// Structural span comparison: count, starts and widths — on the RAW (start,
+/// width) strings, each side sorted first, so the order a side lists its spans
+/// in is not compared. The expected side is exactly what the recording client
+/// wrote (decoded-tumbler `str()` forms); the actual side is skep's spans
+/// rendered the same dotted way. No reinterpretation: a malformed recorded
+/// shape (see [`is_collapsed_subspace_shape`]) compares as recorded and
+/// diverges honestly. Width tolerance applies ONLY where the allowlist declares
+/// one and both widths parse; start positions are always exact. An agreement
+/// the tolerance made is recorded as [`WIDTH_ADJUSTED`].
 pub fn compare_spansets(
     expected: &[RawSpan],
     actual: &SpanSet,
@@ -425,14 +443,16 @@ mod tests {
     /// pair one for one bind nothing and surface as never bound.
     #[test]
     fn an_address_set_agrees_only_with_exactly_skeps_answer() {
+        // The caller's filter at receipt: infrastructure never reaches the
+        // comparator.
         fn sets(
             want: &[&str],
             got: &[Address],
             alpha: &mut Alpha,
             infra: Option<&Address>,
         ) -> Comparison {
-            let exclude = |x: &Address| infra.is_some_and(|i| i == x);
-            compare_addr_sets(&strings(want), got, alpha, exclude, &mut Vec::new())
+            let got: Vec<Address> = got.iter().filter(|x| infra != Some(*x)).cloned().collect();
+            compare_addr_sets(&strings(want), &got, alpha, &mut Vec::new())
         }
         let a = addr(&[1, 0, 1, 0, 3]).expect("valid");
         let b = addr(&[1, 0, 1, 0, 4]).expect("valid");
@@ -456,6 +476,30 @@ mod tests {
         assert_eq!(fresh.len(), 0);
         let found: Vec<FindingKind> = fresh.drain_findings().map(|f| f.kind).collect();
         assert_eq!(found, [FindingKind::NeverBound, FindingKind::NeverBound]);
+    }
+
+    /// skep's answer is a set: one listing an address twice never agrees,
+    /// rendered as delivered, and binds nothing — even where, deduplicated,
+    /// it would match the golden exactly.
+    #[test]
+    fn an_answer_listing_an_address_twice_never_agrees() {
+        let a = addr(&[1, 0, 1, 0, 3]).expect("valid");
+        let mut alpha = Alpha::new();
+        alpha.bind("1.1.0.1.0.1", &a);
+        let twice = [a.clone(), a.clone()];
+        let golden = strings(&["1.1.0.1.0.1"]);
+        let repeated = Disagreement {
+            expected: r#"["1.1.0.1.0.1"]"#.into(),
+            actual: r#"["1.1.0.1.0.1", "1.1.0.1.0.1"] — an address listed twice, no set"#.into(),
+        };
+        let mut adaptations = Vec::new();
+        let comparison = compare_addr_sets(&golden, &twice, &mut alpha, &mut adaptations);
+        assert_eq!(comparison, Err(repeated));
+        let mut fresh = Alpha::new();
+        let unbound = strings(&["1.1.0.1.0.7"]);
+        assert!(compare_addr_sets(&unbound, &twice, &mut fresh, &mut adaptations).is_err());
+        assert_eq!(fresh.len(), 0, "nothing binds from an answer that is no set");
+        assert!(adaptations.is_empty());
     }
 
     /// A declared width tolerance widens widths alone: it never moves a
@@ -482,13 +526,8 @@ mod tests {
             (addr(&[1, 0, 1, 0, 11]).expect("valid"), addr(&[1, 0, 1, 0, 12]).expect("valid"));
         let want = ["1.1.0.1.0.10".to_string(), "1.1.0.1.0.9".to_string()];
         let mut adaptations = Vec::new();
-        let comparison = compare_addr_sets(
-            &want,
-            &[twelve.clone(), eleven.clone()],
-            &mut alpha,
-            |_| false,
-            &mut adaptations,
-        );
+        let comparison =
+            compare_addr_sets(&want, &[twelve.clone(), eleven.clone()], &mut alpha, &mut adaptations);
         assert_eq!(comparison, Ok(()));
         assert_eq!(adaptations, ["alpha-bind-from-result:2"]);
         assert_eq!(alpha.peek_exact("1.1.0.1.0.9"), Some(eleven));

@@ -305,11 +305,15 @@ pub(super) fn h_find_links(
         // else by the register's document's whole current extent. Each aim
         // is tagged as what it is.
         let aim = match cx.shadow.find_named_containing("source") {
-            Some(d) => Some((d, "doc-from-source-role")),
-            None => cx.shadow.current().map(|d| (d, "doc-from-register")),
+            Some(d) => {
+                out.adaptations.push("doc-from-source-role".into());
+                Some(d)
+            }
+            None => cx.shadow.current().inspect(|_| {
+                out.adaptations.push("doc-from-register".into());
+            }),
         };
-        if let Some((d, tag)) = aim {
-            out.adaptations.push(tag.into());
+        if let Some(d) = aim {
             from_sides = Some(SideSpec::V(whole_of(cx, &d)));
         }
     }
@@ -498,10 +502,11 @@ pub(super) fn h_find_links(
             if !settle_accepted(out, recorded_failure) {
                 return;
             }
-            // Harness infrastructure out BEFORE either comparator: the
-            // rig's setup grant (ruling 21) answers every FROM-constrained
-            // or unconstrained query over a rig account's content, and a
-            // count expectation has no α-binding step to drop it in.
+            // Harness infrastructure out at receipt — the one place it is
+            // filtered, before the count or the address-set comparator sees
+            // the answer: the rig's setup grant (ruling 21) answers every
+            // FROM-constrained or unconstrained query over a rig account's
+            // content.
             addrs.into_iter().filter(|a| !cx.rig.is_infra_addr(a)).collect()
         }
         other => {
@@ -549,10 +554,7 @@ pub(super) fn h_find_links(
     };
     let want: Vec<String> =
         expected.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
-    let rig = &*cx.rig;
-    let comparison =
-        compare_addr_sets(&want, &addrs, cx.alpha, |a| rig.is_infra_addr(a), &mut out.adaptations);
-    match comparison {
+    match compare_addr_sets(&want, &addrs, cx.alpha, &mut out.adaptations) {
         Ok(()) => out.agree("address-set"),
         Err(d) => out.disagree("address-set", d),
     }
@@ -699,21 +701,25 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         return;
     }
     if let Some(reason) = grounding_failure {
-        if recorded_failure.is_some() {
-            out.agree("expected-failure");
-            out.add_note(format!("{reason}; golden also recorded failure"));
-        } else {
-            inexpressible(out, format!("find_documents {reason}"));
-        }
+        // Skep is never asked, so a failure the golden recorded meets no
+        // answer to agree with: the op stays inexpressible either way.
+        let asked = match recorded_failure {
+            Some(_) => "; the golden recorded a failure, but skep was never asked",
+            None => "",
+        };
+        inexpressible(out, format!("find_documents {reason}{asked}"));
         return;
     }
     let r = cx.rig.exec(Op::FindDocsContaining { regions });
-    let addrs = match r {
+    let addrs: Vec<skep_address::Address> = match r {
         Response::Addrs { addrs, .. } => {
             if !settle_accepted(out, recorded_failure) {
                 return;
             }
-            addrs
+            // Harness infrastructure out at receipt, the comparator's
+            // precondition: the rig's homes and types document are
+            // documents no golden names.
+            addrs.into_iter().filter(|a| !cx.rig.is_infra_addr(a)).collect()
         }
         other => {
             settle_unaccepted(out, recorded_failure, &other);
@@ -727,10 +733,7 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     };
     let want: Vec<String> =
         expected.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
-    let rig = &*cx.rig;
-    let comparison =
-        compare_addr_sets(&want, &addrs, cx.alpha, |a| rig.is_infra_addr(a), &mut out.adaptations);
-    match comparison {
+    match compare_addr_sets(&want, &addrs, cx.alpha, &mut out.adaptations) {
         Ok(()) => out.agree("address-set"),
         Err(d) => out.disagree("address-set", d),
     }

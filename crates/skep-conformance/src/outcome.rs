@@ -6,19 +6,42 @@ use std::error::Error;
 use std::fmt;
 use std::str::FromStr;
 
-/// A scenario's identity: `category/name`, its golden's directory and its
-/// name. The key the allowlist and the ratchet name a scenario by, and the
-/// one the report prints; a bare name is no identity — the corpus carries
-/// two `find_documents_basic`, one under discovery/ and one under identity/.
-/// Text becomes a key only through [`FromStr`], which refuses anything but
-/// a nonempty category and a nonempty, slash-free name.
+/// A scenario's identity: `category/name`, its golden's directory and its name.
+/// The key the allowlist and the ratchet name a scenario by, and the one the
+/// report prints; a bare name is no identity — the corpus carries two
+/// `find_documents_basic`, one under discovery/ and one under identity/. Both
+/// parts are nonempty and slash-free, whichever way a key is made — from its
+/// parts (`ScenarioKey::from_parts`) or from text ([`FromStr`]) — so every
+/// key's text reads back, through [`FromStr`], as the very same key: a key an
+/// adjudication file can name.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ScenarioKey(String);
 
+/// Can `part` be a key's category or name: nonempty, and slash-free?
+fn is_key_part(part: &str) -> bool {
+    !part.is_empty() && !part.contains('/')
+}
+
 impl ScenarioKey {
-    /// The key of the golden scenario `name` under `category`.
+    /// The key of the golden scenario `name` under `category`, when both are
+    /// nonempty and slash-free; `None` for parts no key is made of.
+    pub(crate) fn from_parts(category: &str, name: &str) -> Option<ScenarioKey> {
+        (is_key_part(category) && is_key_part(name))
+            .then(|| ScenarioKey(format!("{category}/{name}")))
+    }
+
+    /// The key of the golden scenario `name` under `category`. The caller
+    /// owes nonempty, slash-free parts: the loader refuses a golden whose
+    /// name forms no key (`LoadError::BadName`), so a scenario that breaks
+    /// this was built by hand, wrongly, and is stopped here rather than
+    /// carrying a key no adjudication could name.
     pub(crate) fn of(category: &str, name: &str) -> ScenarioKey {
-        ScenarioKey(format!("{category}/{name}"))
+        ScenarioKey::from_parts(category, name).unwrap_or_else(|| {
+            panic!(
+                "a scenario key is a nonempty, slash-free category and name: \
+                 `{category}`, `{name}`"
+            )
+        })
     }
 
     /// The key as text, `category/name`.
@@ -45,14 +68,9 @@ impl FromStr for ScenarioKey {
     type Err = NotAScenarioKey;
 
     fn from_str(s: &str) -> Result<ScenarioKey, NotAScenarioKey> {
-        let keyed = s
-            .split_once('/')
-            .is_some_and(|(cat, name)| !cat.is_empty() && !name.is_empty() && !name.contains('/'));
-        if keyed {
-            Ok(ScenarioKey(s.to_string()))
-        } else {
-            Err(NotAScenarioKey(s.to_string()))
-        }
+        s.split_once('/')
+            .and_then(|(category, name)| ScenarioKey::from_parts(category, name))
+            .ok_or_else(|| NotAScenarioKey(s.to_string()))
     }
 }
 
@@ -83,8 +101,9 @@ pub enum Status {
     /// — the op itself, a part it names, or the answer its recording keeps.
     /// The reason is recorded; never silently skipped.
     Inexpressible,
-    /// Executed and at least one comparison disagreed (or an α-finding
-    /// surfaced on this op).
+    /// At least one comparison disagreed; or the op named a golden address
+    /// α never bound, so its request never reached skep
+    /// ([`OpOutcome::never_bound`]); or an α-finding surfaced on it.
     Disagreed,
 }
 
@@ -111,6 +130,11 @@ pub struct Disagreement {
     pub actual: String,
 }
 
+/// One golden operation's outcome. A disagreement, once recorded, stands:
+/// `disagreement` is set only on an op whose status is
+/// [`Status::Disagreed`], and nothing settles a disagreed op as agreed —
+/// [`OpOutcome::agree`] refuses an op already disagreed or inexpressible.
+/// Code that writes `status` directly owes the same.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpOutcome {
     pub index: usize,
@@ -154,8 +178,17 @@ impl OpOutcome {
         self.status == Status::Disagreed && self.allowlisted.is_none()
     }
 
-    /// The op compared, and `comparator` matched every comparison.
+    /// The op compared, and `comparator` matched every comparison. The
+    /// caller owes an op not yet disagreed or inexpressible: an agreement
+    /// settled over one is a harness bug, stopped here.
     pub fn agree(&mut self, comparator: &'static str) {
+        assert!(
+            !matches!(self.status, Status::Disagreed | Status::Inexpressible),
+            "op {} `{}` is {} already: no comparison settles it as agreed",
+            self.index,
+            self.op_name,
+            self.status.as_str()
+        );
         self.status = Status::Agreed;
         self.comparator = Some(comparator);
     }
@@ -169,8 +202,11 @@ impl OpOutcome {
 
     /// The op names a golden address α never bound — skep never made it, or
     /// nothing the recording did bound it — so nothing reached skep: a
-    /// disagreement the α comparator owns, `note` its evidence beside the
-    /// `alpha-never-bound` finding the runner folds in.
+    /// disagreement the α comparator owns, `note` its evidence. The caller
+    /// owes that its `Alpha::translate` of that address missed on this op,
+    /// which recorded the `alpha-never-bound` finding the runner folds in
+    /// beside the note (a translate of text that is no address misses with
+    /// no finding).
     pub fn never_bound(&mut self, note: String) {
         self.status = Status::Disagreed;
         self.comparator = Some("alpha");
@@ -196,12 +232,30 @@ impl OpOutcome {
     }
 }
 
-/// Exactly one per scenario.
+/// A scenario's verdict: exactly one per scenario, the first of these that
+/// holds, in this order —
+///
+/// 1. [`Verdict::Error`] — the scenario was not played to its end;
+/// 2. [`Verdict::Inexpressible`] — some op is inexpressible, whatever else
+///    disagrees;
+/// 3. [`Verdict::Divergent`] — some op disagrees and no allowlist entry
+///    covers it;
+/// 4. [`Verdict::Allowlisted`] — some op's outcome an allowlist entry covers:
+///    a disagreement, or an agreement a declared adjustment made;
+/// 5. [`Verdict::Pass`] — otherwise.
+///
+/// [`Verdict::of`] folds a played scenario's outcomes by rules 2–5; the
+/// runner records `Error` for a scenario it could not play to its end.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Verdict {
+    /// Nothing disagreed, nothing was inexpressible, no entry was needed.
     Pass,
+    /// Every disagreement, and every agreement an adjustment made, is
+    /// covered by an allowlist entry.
     Allowlisted,
+    /// A disagreement no allowlist entry covers.
     Divergent,
+    /// Some op, or part of one, has no expression on skep's surface.
     Inexpressible,
     /// The scenario could not be played to its end: a panic stopped it —
     /// the harness's own (a harness bug), or skep's while executing a
@@ -213,6 +267,21 @@ pub enum Verdict {
 }
 
 impl Verdict {
+    /// The verdict of a scenario played to its end, `outcomes` its ops'
+    /// outcomes: the first of rules 2–5 of [`Verdict`]'s order that holds.
+    pub fn of(outcomes: &[OpOutcome]) -> Verdict {
+        if outcomes.iter().any(|o| o.status == Status::Inexpressible) {
+            Verdict::Inexpressible
+        } else if outcomes.iter().any(OpOutcome::is_unadjudicated) {
+            Verdict::Divergent
+        } else if outcomes.iter().any(|o| o.allowlisted.is_some()) {
+            Verdict::Allowlisted
+        } else {
+            Verdict::Pass
+        }
+    }
+
+    /// The verdict as the report spells it.
     pub fn as_str(self) -> &'static str {
         match self {
             Verdict::Pass => "pass",
@@ -279,5 +348,62 @@ mod tests {
         for bare in ["find_documents_basic", "/name", "category/", "a/b/c"] {
             assert_eq!(bare.parse::<ScenarioKey>(), Err(NotAScenarioKey(bare.to_string())));
         }
+    }
+
+    /// A key is made only of a nonempty, slash-free category and name, from
+    /// parts as from text — so every key's text reads back as itself.
+    #[test]
+    fn every_key_reads_back_as_itself() {
+        let key = ScenarioKey::from_parts("cat", "name").expect("a key");
+        assert_eq!(key.as_str().parse::<ScenarioKey>(), Ok(key));
+        for (category, name) in [("cat", "a/b"), ("cat", ""), ("", "name"), ("a/b", "c")] {
+            assert_eq!(ScenarioKey::from_parts(category, name), None, "{category:?}, {name:?}");
+        }
+    }
+
+    /// A scenario whose parts form no key is a harness bug, stopped where
+    /// its key is made.
+    #[test]
+    #[should_panic(expected = "a scenario key is a nonempty, slash-free category and name")]
+    fn a_key_of_parts_forming_none_is_refused() {
+        ScenarioKey::of("cat", "a/b");
+    }
+
+    fn outcome(status: Status, allowlisted: Option<&str>) -> OpOutcome {
+        let mut o = OpOutcome::new(0, "op");
+        o.status = status;
+        o.allowlisted = allowlisted.map(str::to_string);
+        o
+    }
+
+    /// A played scenario's verdict is the first of the order's rules that
+    /// holds: inexpressible over every disagreement, an uncovered
+    /// disagreement over every covered one, a covered outcome over a pass.
+    #[test]
+    fn a_verdict_is_the_first_rule_that_holds() {
+        use Status::{Agreed, Disagreed, Inexpressible, NotCompared};
+        let uncovered = outcome(Disagreed, None);
+        let covered = outcome(Disagreed, Some("ruled"));
+        let adjusted = outcome(Agreed, Some("ruled"));
+        let lost = outcome(Inexpressible, None);
+        let played = |ops: &[&OpOutcome]| {
+            Verdict::of(&ops.iter().map(|o| (*o).clone()).collect::<Vec<_>>())
+        };
+        assert_eq!(played(&[&covered, &uncovered, &lost]), Verdict::Inexpressible);
+        assert_eq!(played(&[&covered, &uncovered]), Verdict::Divergent);
+        assert_eq!(played(&[&covered, &outcome(Agreed, None)]), Verdict::Allowlisted);
+        assert_eq!(played(&[&adjusted]), Verdict::Allowlisted);
+        assert_eq!(played(&[&outcome(Agreed, None), &outcome(NotCompared, None)]), Verdict::Pass);
+        assert_eq!(played(&[]), Verdict::Pass);
+    }
+
+    /// A disagreement, once recorded, stands: settling the op as agreed is
+    /// a harness bug, stopped where it is made.
+    #[test]
+    #[should_panic(expected = "op 0 `op` is disagreed already")]
+    fn an_agreement_never_settles_a_disagreed_op() {
+        let mut o = OpOutcome::new(0, "op");
+        o.disagree("content", Disagreement { expected: "A".into(), actual: "B".into() });
+        o.agree("content");
     }
 }

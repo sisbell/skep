@@ -581,3 +581,50 @@ pass as they did, their compares now tagged
 
 **Tally (2026-10-07): 297 scenarios — 0 errors; 166 pass, 79 allowlisted,
 45 inexpressible, 7 pending (1 divergent, 6 inexpressible).**
+
+## 2026-10-07 — CONFORMANCE round 2: the gate's rule, and agreement only over recorded answers
+
+**Recorded, NOT ruled (agent, 2026-10-07):** the ratchet enforces the rule
+its documents state. An `error` verdict fails the gate for every scenario,
+`[pending]` included — a stopped scenario is never admitted; `[pending]`
+exempts every other verdict, reported. An allowlist entry that rules on no
+golden op — its key carried by no golden, or its `op_index` past its
+scenario's ops — fails the gate too; all 163 entries rule on golden ops. Two
+entries over one op declaring different `count_delta`s are refused as the
+file is read, and an adjusted agreement is credited only to the entry whose
+adjustment made it; no entry declares an adjustment.
+
+A creation agrees on its address binding only when the recording kept the
+address of every document it created; a document minted under an address
+the harness synthesized compares nothing (new tag `docid-synthesized:N`). One
+op moves, AGREED → NOT-COMPARED, its verdict unmoved:
+
+- links/search_multiple_links_selective_removal — op 0 (`create_documents
+  count: 3`, which recorded no address).
+
+allocation_independence/all_operations_interleaved op 6
+(`create_doc2_and_copy`) records its address inside its `result` object, under
+the document's name (`doc2`): it is read there, and the op agrees as before.
+
+The harness never agrees with a failure the golden recorded on an op it
+never sent to skep: a delete, or a find_documents, whose region it cannot
+ground is INEXPRESSIBLE whatever the golden recorded. No golden op does this.
+
+Report vocabulary:
+
+- `expansion-plan:interior-typing` is `interior-typing:per-step`
+  (internal/interior_typing_two_characters).
+- A delete whose region the recording described in words ("1.1 length 3",
+  "1.3 for 0.5", a range) carries the description's grounding tag
+  (`span-from-description`, `range-from-description`): 14 ops gain one.
+- A delete, vcopy or interior-typing step whose position the recording
+  described carries the position's tag (`position-end`, `position-start`,
+  `position-from-description`, `position-after-text`,
+  `position-before-text`); no golden op gains one.
+- links_nary/nary_type_content_span op 22 notes "type `jump` has no
+  types-document endset": a type filter now assigns the types document no
+  position, so a filter for a type no link carries finds nothing, noted —
+  the answer it compares is unchanged.
+
+**Tally (2026-10-07): 297 scenarios — 0 errors; 166 pass, 79 allowlisted,
+45 inexpressible, 7 pending (1 divergent, 6 inexpressible).**

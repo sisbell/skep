@@ -8,17 +8,22 @@
 //!   operators through target/conformance/report.jsonl and summary.md.
 //! * `report_is_deterministic` — every scenario replays to byte-identical
 //!   report records, so a re-run is the archive.
-//! * `conformance_ratchet` — conformance, enforced: a `divergent` or `error`
-//!   verdict fails it, as does an `allowlisted` or `inexpressible` verdict on
-//!   a scenario `conformance/ratchet.toml` does not freeze in that section,
-//!   and a frozen key no golden scenario carries; a `[pending]` scenario is
-//!   exempt, and reported while it does not pass. Every scenario is named
-//!   by its key, `category/name` — two goldens can share a name — and named
-//!   once: a key the file lists twice is refused as the file is read, which
-//!   `a_key_the_ratchet_lists_twice_is_refused` holds.
+//! * `conformance_ratchet` — conformance, enforced against
+//!   `conformance/ratchet.toml`: an `error` verdict fails it for every
+//!   scenario, `[pending]` included; a `divergent` verdict fails it unless
+//!   `[pending]` lists the scenario; an `allowlisted` or `inexpressible`
+//!   verdict fails it unless the file freezes the scenario in that section or
+//!   `[pending]`; and a frozen key no golden scenario carries fails it, as
+//!   does an allowlist entry that rules on no golden op. A `[pending]`
+//!   scenario's other verdicts are reported, not enforced. Every scenario is
+//!   named by its key, `category/name` — two goldens can share a name — and
+//!   named once: a key the file lists twice is refused as the file is read,
+//!   which `a_key_the_ratchet_lists_twice_is_refused` holds; the rule itself
+//!   is `an_error_is_never_permitted_and_pending_admits_the_rest`'s.
 
 use std::collections::HashSet;
 
+use skep_conformance::allowlist;
 use skep_conformance::outcome::{ScenarioKey, Verdict};
 use skep_conformance::runner::run_all;
 
@@ -107,7 +112,6 @@ fn harness_integrity() {
 /// twice into rendered JSONL and compared byte for byte.
 #[test]
 fn report_is_deterministic() {
-    use skep_conformance::allowlist;
     use skep_conformance::loader::load_all;
     use skep_conformance::report::render_jsonl;
     use skep_conformance::runner::run_scenarios;
@@ -123,29 +127,39 @@ fn report_is_deterministic() {
     assert_eq!(first, second, "two identical runs must render byte-identical reports");
 }
 
-/// The RATCHET — conformance as an enforced property (frozen 2026-08-15,
-/// adjudication complete: decisions.md rulings 1–15, zero divergent).
+/// The RATCHET — conformance as an enforced property, against the verdicts
+/// `conformance/ratchet.toml` freezes.
 ///
-/// `conformance/ratchet.toml` freezes the expected non-pass set, each
-/// scenario named by its key, once — a line naming no key is refused as the
-/// file is read, and so is a key already listed, in its section or another:
-/// a key copied rather than moved between sections would let it take either
-/// section's verdict, and `[pending]` exempts it from both, so the copy
-/// would widen what the gate permits with no line saying so. This test
-/// FAILS on any scenario that is
-/// `Divergent` or `Error`, on any `Allowlisted`/`Inexpressible` scenario not
-/// in the frozen lists, and on a frozen key no golden scenario carries (a
-/// renamed or removed golden would otherwise leave a line that guards
-/// nothing); it reports (without failing) frozen entries that improved to
-/// `Pass` so the file can be trimmed. Growing the frozen set requires a
-/// human ruling in adjudication/decisions.md — never an edit made to turn
-/// this test green.
+/// The file names each scenario by its key, once — a line naming no key is
+/// refused as the file is read, and so is a key already listed, in its
+/// section or another: a key copied rather than moved between sections would
+/// let it take either section's verdict, and `[pending]` exempts it from
+/// both, so the copy would widen what the gate permits with no line saying
+/// so. Against it, scenario by scenario, this test FAILS on:
+///
+/// * an `Error`, for any scenario, whatever section lists it — `[pending]`
+///   included: a scenario a panic stopped, or whose rig would not bootstrap,
+///   is never admitted;
+/// * a `Divergent`, unless `[pending]` lists the scenario;
+/// * an `Allowlisted` or `Inexpressible`, unless the file freezes the
+///   scenario in that very section or in `[pending]`;
+///
+/// and on a frozen key no golden scenario carries (a renamed or removed
+/// golden would otherwise leave a line that guards nothing), or an allowlist
+/// entry that rules on no golden op (`Allowlist::unanchored`). A `[pending]`
+/// scenario's other verdicts are reported, not enforced, and so is a frozen
+/// scenario that improved to `Pass`, so its line can be trimmed. Growing
+/// `[allowlisted]` or `[inexpressible]` requires a human ruling in
+/// adjudication/decisions.md — never an edit made to turn this test green; a
+/// scenario enters `[pending]` only beside a recorded (not ruled) entry there
+/// naming it — a rule of the ledger, which this test does not check.
 #[test]
 fn conformance_ratchet() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../conformance/ratchet.toml");
-    let raw = std::fs::read_to_string(&path).expect("ratchet.toml must exist");
-    let Frozen { allowlisted, inexpressible, pending } = parse_ratchet(&raw);
+    let conformance = skep_conformance::loader::conformance_dir();
+    let raw =
+        std::fs::read_to_string(conformance.join("ratchet.toml")).expect("ratchet.toml must exist");
+    let frozen = parse_ratchet(&raw);
+    let allow = allowlist::load(&conformance.join("allowlist.toml")).expect("allowlist loads");
 
     let _report = report_guard();
     let out = run_all().expect("sweep must run");
@@ -154,35 +168,29 @@ fn conformance_ratchet() {
     let mut pending_seen = Vec::new();
     for r in &out.records {
         let key = r.key();
-        if pending.contains(&key) {
-            if r.verdict != Verdict::Pass {
-                pending_seen.push(format!("{key}: {:?}", r.verdict));
+        match rule(&frozen, &key, r.verdict) {
+            Ruling::Permitted => {}
+            Ruling::Pending => pending_seen.push(format!("{key}: {:?}", r.verdict)),
+            Ruling::Improved => improved.push(key),
+            Ruling::Violation => {
+                violations.push(format!("{key}: {:?} not permitted by ratchet", r.verdict))
             }
-            continue; // awaiting adjudication — exempt, visible
-        }
-        match r.verdict {
-            Verdict::Pass => {
-                if allowlisted.contains(&key) || inexpressible.contains(&key) {
-                    improved.push(key);
-                }
-            }
-            Verdict::Allowlisted if allowlisted.contains(&key) => {}
-            Verdict::Inexpressible if inexpressible.contains(&key) => {}
-            v => violations.push(format!("{key}: {v:?} not permitted by ratchet")),
         }
     }
     let keys: HashSet<ScenarioKey> = out.records.iter().map(|r| r.key()).collect();
-    for (section, frozen) in
-        [("allowlisted", &allowlisted), ("inexpressible", &inexpressible), ("pending", &pending)]
-    {
+    for (section, listed) in frozen.sections() {
         let mut missing: Vec<&ScenarioKey> =
-            frozen.iter().filter(|k| !keys.contains(*k)).collect();
+            listed.iter().filter(|k| !keys.contains(*k)).collect();
         missing.sort();
         for k in missing {
             violations
                 .push(format!("[{section}] {k}: frozen, but no golden scenario carries the key"));
         }
     }
+    // An allowlist entry that rules on no golden op covers nothing today,
+    // and would cover a golden that later took its key or its op with no
+    // ruling behind it.
+    violations.extend(allow.unanchored(&out.loaded_op_counts));
     if !pending_seen.is_empty() {
         eprintln!("ratchet: {} PENDING scenario(s) need adjudication:\n{}",
                   pending_seen.len(), pending_seen.join("\n"));
@@ -194,7 +202,8 @@ fn conformance_ratchet() {
     assert!(violations.is_empty(),
             "CONFORMANCE RATCHET VIOLATED — a new divergence requires a human ruling \
              (adjudication/decisions.md) before the frozen set may grow, and a frozen \
-             key no golden carries guards nothing until it is corrected:\n{}",
+             key no golden carries, or an allowlist entry ruling on no golden op, \
+             guards nothing until it is corrected:\n{}",
             violations.join("\n"));
 }
 
@@ -204,6 +213,86 @@ struct Frozen {
     allowlisted: HashSet<ScenarioKey>,
     inexpressible: HashSet<ScenarioKey>,
     pending: HashSet<ScenarioKey>,
+}
+
+impl Frozen {
+    /// Each section, named as the file names it.
+    fn sections(&self) -> [(&'static str, &HashSet<ScenarioKey>); 3] {
+        [
+            ("allowlisted", &self.allowlisted),
+            ("inexpressible", &self.inexpressible),
+            ("pending", &self.pending),
+        ]
+    }
+}
+
+/// What the ratchet says of one scenario's verdict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ruling {
+    /// Permitted, and nothing to report.
+    Permitted,
+    /// Permitted and reported: a `[pending]` scenario that does not pass.
+    Pending,
+    /// Permitted and reported: a frozen scenario that improved to `Pass`,
+    /// whose line can be trimmed.
+    Improved,
+    /// Not permitted: the gate fails.
+    Violation,
+}
+
+/// The ratchet's rule for scenario `key`'s `verdict` against `frozen`, in
+/// order: an `Error` is a violation for any scenario, listed or not; a
+/// `[pending]` scenario is otherwise reported unless it passes; a `Pass` is
+/// permitted, reported when the file freezes the scenario; an `Allowlisted`
+/// or `Inexpressible` is permitted only where the file freezes the scenario
+/// in that very section; anything else is a violation.
+fn rule(frozen: &Frozen, key: &ScenarioKey, verdict: Verdict) -> Ruling {
+    if verdict == Verdict::Error {
+        return Ruling::Violation;
+    }
+    if frozen.pending.contains(key) {
+        return if verdict == Verdict::Pass { Ruling::Permitted } else { Ruling::Pending };
+    }
+    let frozen_in = |section: &HashSet<ScenarioKey>| section.contains(key);
+    match verdict {
+        Verdict::Pass if frozen_in(&frozen.allowlisted) || frozen_in(&frozen.inexpressible) => {
+            Ruling::Improved
+        }
+        Verdict::Pass => Ruling::Permitted,
+        Verdict::Allowlisted if frozen_in(&frozen.allowlisted) => Ruling::Permitted,
+        Verdict::Inexpressible if frozen_in(&frozen.inexpressible) => Ruling::Permitted,
+        _ => Ruling::Violation,
+    }
+}
+
+/// An `Error` is never admitted, `[pending]` included; `[pending]` admits
+/// every other verdict, reported; an `Allowlisted` or `Inexpressible`
+/// verdict is admitted only in its own section, a `Divergent` one nowhere
+/// else; and a frozen scenario that passes is reported for trimming.
+#[test]
+fn an_error_is_never_permitted_and_pending_admits_the_rest() {
+    let frozen = parse_ratchet(
+        "[allowlisted]\nscenario = \"cat/a\"\n[inexpressible]\nscenario = \"cat/i\"\n\
+         [pending]\nscenario = \"cat/p\"\n",
+    );
+    let ruled = |key: &str, verdict| rule(&frozen, &key.parse().expect("a key"), verdict);
+    use Ruling::{Improved, Pending, Permitted, Violation};
+    use Verdict::{Allowlisted, Divergent, Error, Inexpressible, Pass};
+    assert_eq!(ruled("cat/p", Error), Violation);
+    assert_eq!(ruled("cat/p", Divergent), Pending);
+    assert_eq!(ruled("cat/p", Inexpressible), Pending);
+    assert_eq!(ruled("cat/p", Pass), Permitted);
+    assert_eq!(ruled("cat/a", Allowlisted), Permitted);
+    assert_eq!(ruled("cat/a", Inexpressible), Violation);
+    assert_eq!(ruled("cat/a", Divergent), Violation);
+    assert_eq!(ruled("cat/a", Error), Violation);
+    assert_eq!(ruled("cat/a", Pass), Improved);
+    assert_eq!(ruled("cat/i", Inexpressible), Permitted);
+    assert_eq!(ruled("cat/i", Allowlisted), Violation);
+    assert_eq!(ruled("cat/i", Pass), Improved);
+    assert_eq!(ruled("cat/u", Pass), Permitted);
+    assert_eq!(ruled("cat/u", Divergent), Violation);
+    assert_eq!(ruled("cat/u", Error), Violation);
 }
 
 /// `ratchet.toml`'s text, read into its sections — refusing, by the gate's

@@ -13,7 +13,7 @@
 //! atomicity/isolation are identical under both modes (M2's contract), and
 //! crash/recovery behavior belongs to the crash harness, not here. In-memory
 //! also needs no temp directory, removing a whole class of environment
-//! failures from a 263-scenario run.
+//! failures from a 297-scenario run.
 
 use std::any::Any;
 use std::collections::BTreeMap;
@@ -387,11 +387,20 @@ impl Rig {
         Some(VSpec { source: self.types_doc.clone(), span: VPoint::content(ord).region(1).span()? })
     }
 
-    /// The I-space endset of one type name — for FTT type filters. Resolved
+    /// The I-space endset of one type name — for FTT type filters — once a
+    /// link has given the name its position ([`Rig::type_vspec`]); resolved
     /// through Op::Image on the types document (the sanctioned V→I surface).
-    pub fn type_endset(&mut self, name: &str) -> Option<Endset> {
-        let vs = self.type_vspec(name)?;
-        match self.exec(Op::Image { d: vs.source.clone(), region: vec![vs.span.clone()] }) {
+    /// A query, it assigns no position: a filter for a name no link carries
+    /// uses up none of the [`TYPES_CAPACITY`] positions the links need, and
+    /// answers `None` — the filter then matches nothing, as it should — and
+    /// so does a name past capacity.
+    pub fn type_endset(&self, name: &str) -> Option<Endset> {
+        let ord = *self.type_ordinals.get(name)?;
+        if ord > TYPES_CAPACITY {
+            return None;
+        }
+        let span = VPoint::content(ord).region(1).span()?;
+        match self.exec(Op::Image { d: self.types_doc.clone(), region: vec![span] }) {
             Response::Runs { runs, .. } if !runs.is_empty() => {
                 Some(Endset::from_spans(runs.iter().map(skep_arrangement::Run::iextent)))
             }
@@ -512,6 +521,21 @@ mod tests {
         for scenario in [doc.clone(), element_of(&doc)] {
             assert!(!rig.is_infra_addr(&scenario), "{scenario} is the scenario's own");
         }
+    }
+
+    /// A type filter is a query: for a name no link carries it finds nothing
+    /// and assigns no position, so the links that come after it still find
+    /// every position of the types document free.
+    #[test]
+    fn a_type_filter_assigns_no_position() {
+        let mut rig = Rig::new().expect("the rig bootstraps");
+        assert!(rig.type_endset("quote").is_none(), "no link carries `quote`");
+        for k in 1..=TYPES_CAPACITY {
+            assert!(rig.type_vspec(&format!("type{k}")).is_some(), "position {k} is free");
+        }
+        assert!(rig.type_vspec("one-too-many").is_none(), "the capacity is spent");
+        assert!(rig.type_endset("type1").is_some(), "a name a link took has its endset");
+        assert!(rig.type_endset("one-too-many").is_none(), "a name past capacity has none");
     }
 
     /// A panic inside the surface leaves the door as skep's own, naming the

@@ -112,8 +112,11 @@ pub fn run_all() -> Result<RunOutput, RunError> {
     Ok(RunOutput { records, jsonl, summary, loaded_op_counts })
 }
 
-/// Play a scenario list without touching the report files — the determinism
-/// test replays a subset through this and byte-compares renderings.
+/// Play each scenario without touching the report files: exactly one record
+/// per scenario, in the order given — a scenario a panic stops, or whose rig
+/// will not bootstrap, is recorded with verdict `error` in its place. The
+/// determinism test replays the whole corpus through this twice and
+/// byte-compares the renderings.
 pub fn run_scenarios(scenarios: &[Scenario], allow: &Allowlist) -> Vec<ScenarioRecord> {
     let mut records = Vec::with_capacity(scenarios.len());
     for scn in scenarios {
@@ -235,9 +238,14 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
             groundings.push(format!("lead-in FAILED: {e}"));
         }
     }
+    // α-findings the setup raised belong to no op: they are recorded among
+    // the groundings, beside the setup that raised them.
+    groundings.extend(cx.alpha.drain_findings().map(|f| {
+        format!("lead-in α-finding: {}: {}", f.kind.as_str(), f.detail)
+    }));
     // The register belongs to the first document the SCENARIO names,
     // not the last lead-in target.
-    if let Some(first) = cx.shadow.created.first().cloned() {
+    if let Some(first) = cx.shadow.created().first().cloned() {
         cx.shadow.set_current(&first);
     }
 
@@ -277,19 +285,7 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
         }
     }
     let bijection_size = cx.alpha.len();
-
-    let any_inexpressible = outcomes.iter().any(|o| o.status == Status::Inexpressible);
-    let any_unadjudicated = outcomes.iter().any(OpOutcome::is_unadjudicated);
-    let any_allowlisted = outcomes.iter().any(|o| o.allowlisted.is_some());
-    let verdict = if any_inexpressible {
-        Verdict::Inexpressible
-    } else if any_unadjudicated {
-        Verdict::Divergent
-    } else if any_allowlisted {
-        Verdict::Allowlisted
-    } else {
-        Verdict::Pass
-    };
+    let verdict = Verdict::of(&outcomes);
     // The summary's divergent list leads with the first UNADJUDICATED
     // disagreement — a first-finding line showing an allowlisted op reads as
     // the scenario's open finding and misdirects (round 6's item 1 was

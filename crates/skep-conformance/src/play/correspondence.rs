@@ -435,7 +435,7 @@ pub(super) fn h_compare_versions(cx: &mut Cx, index: usize, op: &Value, out: &mu
     let side_a = resolve_side(cx, &ref_a, 0);
     let mut side_b = resolve_side(cx, &ref_b, 1);
     if side_b.is_none() && defaulted && !versioned {
-        if let Some(second) = cx.shadow.created.get(1).cloned() {
+        if let Some(second) = cx.shadow.created().get(1).cloned() {
             out.adaptations.push("compare-default:second-document".into());
             side_b = Some(second);
         }

@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::fields::{
     as_text, client_side_failure, doc_from_op_name, expected_failure, field, insert_text, locate,
     op_name, reads_whole_content, resolve_position, span_dict, str_field, strings_of, verb_of,
-    Grounding, Verb, POST_WRITE_KEYS,
+    Grounding, PositionGrounding, Verb, POST_WRITE_KEYS,
 };
 use crate::shadow::Shadow;
 use crate::tum::{parse_dotted, parse_vpos, VPoint, VRegion};
@@ -321,7 +321,7 @@ pub fn resolve_insert(
         Some(p) => {
             let (at, how) = resolve_position(shadow, &doc, p)
                 .ok_or_else(|| format!("insert position `{p}` is not groundable"))?;
-            adaptations.extend(how.map(str::to_string));
+            adaptations.extend(how.map(|how| how.tag().to_string()));
             (at, false)
         }
         None => match insert_position_from_post_state(op, shadow, &doc, &text) {
@@ -362,9 +362,16 @@ pub fn delete_is_noop(ops: &[Value], i: usize, shadow: &Shadow, doc: &str) -> bo
 /// carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeleteGrounding {
-    /// Numbers the recording client sent: a span dict, start + width / end
-    /// / count, a `removed` range, or a numeric description.
+    /// Numbers the recording client sent as numbers: a span dict, a start
+    /// V-position with its width / end / count, or a `removed` range.
     Sent,
+    /// Numbers the recording client sent in words — "1.1 length 3", "1.3
+    /// for 0.5", an ordinal range — read by the description grammar
+    /// ([`Grounding::Span`], [`Grounding::Range`]).
+    Described(Grounding),
+    /// A start the recording described — "end", "position 6", "after X" —
+    /// grounded against the shadow, with its width / end / count sent.
+    DescribedStart(PositionGrounding),
     /// A text description located in the shadow (a reconstruction); the
     /// recorded post-state, where there is one, agrees with it.
     Located(Grounding),
@@ -384,29 +391,40 @@ impl DeleteGrounding {
     pub fn tag(self) -> Option<&'static str> {
         match self {
             DeleteGrounding::Sent => None,
-            DeleteGrounding::Located(g) => Some(g.tag()),
+            DeleteGrounding::Described(g) | DeleteGrounding::Located(g) => Some(g.tag()),
+            DeleteGrounding::DescribedStart(how) => Some(how.tag()),
             DeleteGrounding::FromPostState => Some("delete-span-from-post-state"),
             DeleteGrounding::WidenedBoundary => Some("delete-span-widened-boundary"),
             DeleteGrounding::FromOpName => Some("delete-text-from-op-name"),
         }
     }
 
-    /// Is the region's position pinned — sent, or read off the recorded
-    /// post-state — rather than found by searching the shadow for text? An
-    /// undo reinserts a pinned delete's bytes at its recorded ordinal
-    /// first; a text-found one at the end first (a seed prefix shifts an
-    /// append-built document's text rightward).
+    /// Is the region's position pinned — sent, in numbers or in words, a
+    /// start described by number or by the document's bounds, or read off
+    /// the recorded post-state — rather than found by searching the shadow
+    /// for text? An undo reinserts a pinned delete's bytes at its recorded
+    /// ordinal first; a text-found one at the end first (a seed prefix
+    /// shifts an append-built document's text rightward).
     pub fn position_pinned(self) -> bool {
-        use DeleteGrounding::{FromPostState, Sent, WidenedBoundary};
-        matches!(self, Sent | FromPostState | WidenedBoundary)
+        match self {
+            DeleteGrounding::Sent
+            | DeleteGrounding::Described(_)
+            | DeleteGrounding::FromPostState
+            | DeleteGrounding::WidenedBoundary => true,
+            DeleteGrounding::DescribedStart(how) => !how.is_text(),
+            DeleteGrounding::Located(_) | DeleteGrounding::FromOpName => false,
+        }
     }
 }
 
 /// Delete op `i` of `ops`'s content region in golden `doc`, in any of the
 /// goldens' shapes (dict span, decorated span string, text,
 /// start+width/end/count), with the round-3 boundary discipline: a numeric
-/// span (dict, start+width, positional description) is what the client
-/// sent — authoritative. A TEXT-located span is a reconstruction, and the
+/// span — a dict, a start with its width, end or count, a positional
+/// description — is what the client sent, authoritative, a start it
+/// described ("end", "after X") grounded against the shadow and tagged with
+/// how ([`DeleteGrounding::DescribedStart`]). A TEXT-located span is a
+/// reconstruction, and the
 /// recorded post-state, where present, tells exactly what udanax removed
 /// (the whitespace-diff cluster: recorded deletes took a boundary space the
 /// located text missed) — so the post-state diff overrides it, and absent
@@ -418,29 +436,32 @@ pub fn resolve_delete_span(
     shadow: &Shadow,
     doc: &str,
 ) -> Option<(VRegion, DeleteGrounding)> {
-    use DeleteGrounding::{FromOpName, FromPostState, Located, Sent, WidenedBoundary};
+    use DeleteGrounding::{
+        Described, DescribedStart, FromOpName, FromPostState, Located, Sent, WidenedBoundary,
+    };
     let op = &ops[i];
     let content = |ord: u64, width: u64| VPoint::content(ord).region(width);
     if let Some(region) = field(op, &["span", "vspan"]).and_then(span_dict) {
         return (region.sub == 1).then_some((region, Sent));
     }
     if let Some(start) = str_field(op, &["start", "address", "at"]) {
-        if let Some((at, _)) = resolve_position(shadow, doc, start) {
+        if let Some((at, how)) = resolve_position(shadow, doc, start) {
             if at.sub != 1 {
                 return None;
             }
+            let grounded = how.map_or(Sent, DescribedStart);
             if let Some(w) = str_field(op, &["width"]).and_then(crate::tum::parse_width) {
-                return Some((at.region(w), Sent));
+                return Some((at.region(w), grounded));
             }
             if let Some(e) = str_field(op, &["end"]) {
                 return match parse_dotted(e)?.as_slice() {
-                    [0, w] => Some((at.region(*w), Sent)),
-                    [1, eord] if *eord >= at.ord => Some((at.region(eord - at.ord), Sent)),
+                    [0, w] => Some((at.region(*w), grounded)),
+                    [1, eord] if *eord >= at.ord => Some((at.region(eord - at.ord), grounded)),
                     _ => None,
                 };
             }
             if let Some(n) = field(op, &["count"]).and_then(Value::as_u64) {
-                return Some((at.region(n), Sent));
+                return Some((at.region(n), grounded));
             }
         }
     }
@@ -458,8 +479,8 @@ pub fn resolve_delete_span(
         if let Some(l) = locate(shadow, Some(doc), desc) {
             if !l.how.is_text() {
                 // Numeric-precise description ("1.1 length 3", "1.3 for
-                // 0.5", ranges): keep as sent.
-                return Some((l.region(), Sent));
+                // 0.5", ranges): numbers sent in words, kept as sent.
+                return Some((l.region(), Described(l.how)));
             }
             // A text-located span is a reconstruction; the recorded
             // post-state, where present, tells exactly what udanax removed.
@@ -593,174 +614,4 @@ fn single_gap_diff(pre: &[u8], post: &[u8]) -> Option<VRegion> {
 }
 
 #[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    /// An op changed the golden-side world unless its recording client
-    /// crashed or the recording marks it failed.
-    #[test]
-    fn an_op_takes_effect_unless_the_client_crashed_or_the_recording_says_it_failed() {
-        assert!(took_effect(&json!({"op": "insert", "text": "A"})));
-        assert!(took_effect(&json!({"op": "insert", "text": "A", "error": "N/A"})));
-        assert!(!took_effect(&json!({"op": "create_version", "error": "request failed (?)"})));
-        assert!(!took_effect(&json!({"op": "insert", "status": "failed"})));
-        assert!(!took_effect(&json!({
-            "op": "rearrange",
-            "result": "FAILED: 'XuSession' object has no attribute 'rearrange'",
-        })));
-    }
-
-    /// A change reaches the shadow when the recording made it or the
-    /// pre-pass inferred it — never when the recording says it failed.
-    #[test]
-    fn a_made_or_inferred_change_reaches_the_shadow() {
-        let made = Effect::of(&json!({"op": "insert", "text": "A"}));
-        let failed = Effect::of(&json!({"op": "insert", "status": "failed"}));
-        assert_eq!((made, failed), (Effect::Made, Effect::NotMade));
-        assert!(made.reaches_shadow() && Effect::Inferred.reaches_shadow());
-        assert!(!failed.reaches_shadow());
-    }
-
-    /// The recorded vspanset pads an insert that appends, never one its own
-    /// post-state lands mid-document: there the recorded content, not the
-    /// width, is the authority.
-    #[test]
-    fn only_an_appended_insert_is_padded_to_the_recorded_vspanset() {
-        const DOC: &str = "1.1.0.1.0.1";
-        let mut shadow = Shadow::new();
-        shadow.create_doc(DOC, None);
-        shadow.insert(DOC, 1, b"AA");
-        let probe =
-            json!({"op": "vspanset", "doc": DOC, "result": [{"start": "1.1", "width": "0.6"}]});
-        let landing = |ord: u64, bytes: &[u8], appended: bool| InsertLanding {
-            doc: DOC.into(),
-            at: VPoint::content(ord),
-            bytes: bytes.to_vec(),
-            appended,
-        };
-
-        let append = [json!({"op": "insert", "doc": DOC, "text": "BBB"}), probe.clone()];
-        let mut adaptations = Vec::new();
-        let landed = resolve_insert(&append, 0, &shadow, DOC, &mut adaptations);
-        assert_eq!(landed, Ok(landing(3, b"BBB ", true)));
-        assert_eq!(adaptations, ["position-end", "insert-padded-to-recorded-vspanset:+1"]);
-
-        let pinned =
-            [json!({"op": "insert", "doc": DOC, "text": "BBB", "result": ["ABBBA"]}), probe];
-        let mut adaptations = Vec::new();
-        let landed = resolve_insert(&pinned, 0, &shadow, DOC, &mut adaptations);
-        assert_eq!(landed, Ok(landing(2, b"BBB", false)));
-        assert_eq!(adaptations, ["insert-position-from-post-state"]);
-
-        let lost = json!({"op": "insert", "doc": DOC, "text": "C", "position": "somewhere"});
-        let lone = std::slice::from_ref(&lost);
-        let err = resolve_insert(lone, 0, &shadow, DOC, &mut Vec::new());
-        assert_eq!(err, Err("insert position `somewhere` is not groundable".into()));
-    }
-
-    /// The recorded vspanset pads an appended insert by its surplus — never
-    /// when links seated between them explain it (the version link
-    /// carryover, ruling 15), and never past two elements.
-    #[test]
-    fn a_pad_is_declined_when_links_explain_the_surplus_and_bounded_at_two() {
-        const DOC: &str = "1.1.0.1.0.1";
-        let mut shadow = Shadow::new();
-        shadow.create_doc(DOC, None);
-        let insert = json!({"op": "insert", "doc": DOC, "text": "ABC"});
-        let probe = |w: &str| {
-            json!({"op": "vspanset", "doc": DOC, "result": [{"start": "1.1", "width": w}]})
-        };
-        let link = json!({"op": "create_link", "result": "1.1.0.1.0.1.0.2.1"});
-        let bytes = |ops: &[Value]| {
-            let landed = resolve_insert(ops, 0, &shadow, DOC, &mut Vec::new());
-            landed.map(|l| String::from_utf8_lossy(&l.bytes).into_owned())
-        };
-        assert_eq!(bytes(&[insert.clone(), probe("0.4")]).as_deref(), Ok("ABC "));
-        assert_eq!(bytes(&[insert.clone(), link, probe("0.4")]).as_deref(), Ok("ABC"));
-        assert_eq!(bytes(&[insert, probe("0.6")]).as_deref(), Ok("ABC"));
-    }
-
-    /// A version the recording made is one udanax carried out before the op
-    /// that asks — never one recorded failed, and never the op's own.
-    #[test]
-    fn a_version_was_made_only_by_an_earlier_create_version_that_took_effect() {
-        let ops = [
-            json!({"op": "create_version", "from": "source", "error": "request failed (?)"}),
-            json!({"op": "compare_versions"}),
-            json!({"op": "create_version", "from": "source", "result": "1.1.0.1.0.1.1"}),
-            json!({"op": "compare_versions"}),
-        ];
-        assert!(!version_made_before(&ops, 1), "a failed version made nothing");
-        assert!(!version_made_before(&ops, 2), "an op's own version is not before it");
-        assert!(version_made_before(&ops, 3));
-    }
-
-    /// Every string over {A, B} up to `max` bytes, shortest first.
-    fn strings(max: usize) -> Vec<Vec<u8>> {
-        let mut all = vec![Vec::new()];
-        for len in 1..=max {
-            for bits in 0..1u32 << len {
-                all.push((0..len).map(|k| if bits >> k & 1 == 0 { b'A' } else { b'B' }).collect());
-            }
-        }
-        all
-    }
-
-    /// The gap diff trying every start, each checked whole — the reference
-    /// the narrowed scan must reproduce.
-    fn gap_diff_every_start(pre: &[u8], post: &[u8]) -> Option<VRegion> {
-        if post.len() >= pre.len() {
-            return None;
-        }
-        let width = pre.len() - post.len();
-        let mut a = pre.iter().zip(post).take_while(|(x, y)| x == y).count();
-        loop {
-            if pre[a + width..] == post[a..] {
-                return Some(VPoint::content(a as u64 + 1).region(width as u64));
-            }
-            if a == 0 {
-                return None;
-            }
-            a -= 1;
-        }
-    }
-
-    /// The insert gap trying every ordinal, each checked whole — the
-    /// reference the narrowed scan must reproduce.
-    fn insert_gap_every_ordinal(pre: &[u8], text: &[u8], post: &[u8]) -> Option<u64> {
-        if post.len() != pre.len() + text.len() {
-            return None;
-        }
-        let n = text.len();
-        (0..=pre.len())
-            .find(|&k| {
-                post[..k] == pre[..k] && post[k..k + n] == *text && post[k + n..] == pre[k..]
-            })
-            .map(|k| k as u64 + 1)
-    }
-
-    /// The narrowed gap scans answer exactly as the full scans do, over
-    /// every pair of strings on {A, B} short enough to enumerate — single
-    /// deletions and insertions, and every pair no single gap explains.
-    #[test]
-    fn the_narrowed_gap_scans_answer_as_the_full_scans_do() {
-        let short = strings(6);
-        for pre in &short {
-            for post in &short {
-                let (want, got) = (gap_diff_every_start(pre, post), single_gap_diff(pre, post));
-                assert_eq!(got, want, "delete {pre:?} → {post:?}");
-            }
-        }
-        let posts = strings(7);
-        for pre in &strings(5) {
-            for text in strings(2).iter().filter(|t| !t.is_empty()) {
-                for post in &posts {
-                    let want = insert_gap_every_ordinal(pre, text, post);
-                    assert_eq!(insert_gap(pre, text, post), want, "{pre:?} + {text:?} → {post:?}");
-                }
-            }
-        }
-    }
-}
+mod tests;

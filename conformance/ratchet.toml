@@ -1,6 +1,9 @@
 # skep conformance ratchet — frozen 2026-08-15 after six adjudicated runs.
-# The gate FAILS on: any scenario verdict worse than listed here, any
-# `divergent` or `error` verdict at all, or a listed scenario missing.
+# The gate FAILS on: an `error` verdict, for any scenario, [pending]
+# included; a `divergent` verdict, unless [pending] lists the scenario; an
+# `allowlisted` or `inexpressible` verdict, unless the scenario is frozen
+# in that very section or [pending]; or a listed scenario no golden carries.
+# A [pending] scenario's other verdicts are reported, not enforced.
 # Shrinking this file (scenario becomes pass) is free — trim it.
 # Growing [allowlisted] or [inexpressible] requires a ruling in
 # adjudication/decisions.md, by a human.
@@ -10,9 +13,9 @@
 # moved between sections is moved, never copied.
 # [pending] lists scenarios not yet adjudicated — corpus extensions, and
 # scenarios a change newly finds diverging, each recorded (not ruled) in
-# adjudication/decisions.md: exempt from enforcement, reported loudly, to
-# be dispositioned into the sections above (or to pass) by the next
-# adjudication cycle.
+# adjudication/decisions.md: exempt from every rule but the `error` one,
+# reported loudly, to be dispositioned into the sections above (or to pass)
+# by the next adjudication cycle.
 
 [allowlisted]
 scenario = "boundary/boundary_deep_vaddress_reads"

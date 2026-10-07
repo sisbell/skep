@@ -51,7 +51,9 @@
 //!   Content follows the recording, whatever skep answers; a created
 //!   document, version or link enters the shadow only when skep made it
 //!   too, so a version skep refuses leaves its later name-references
-//!   ungroundable — the class rulings 20 and 20a freeze.
+//!   ungroundable — the class rulings 20 and 20a freeze. In both passes a
+//!   document is minted once (`Shadow::create_doc` stops a second mint),
+//!   and an edit of a document the shadow does not hold changes nothing.
 //! * **Both passes read an op the same way.** The pre-pass and the play
 //!   pass share one grammar for an op's fields (`fields`: the verb an op's
 //!   name reads as, the document an op aims at, an op's arguments, a vcopy's
@@ -64,18 +66,22 @@
 //!   document, each rig account's home and the setup grant it holds, the rig
 //!   accounts, and the grants class address are told apart by one
 //!   predicate, `Rig::is_infra_addr`; an answer that can carry them is
-//!   filtered through it before it is compared or bound into α.
+//!   filtered through it once, at receipt, by the handler that asked —
+//!   before it is compared or bound into α — and `compare`'s comparators
+//!   take an answer so filtered as their precondition.
 //! * **One outcome per op; one place judges.** `play::run_op` returns
-//!   exactly one `OpOutcome` per recorded op, whatever happens, and an op
+//!   exactly one `OpOutcome` per recorded op it plays to an end — a panic
+//!   instead stops the scenario at that op, verdict `error` — and an op
 //!   judged part by part settles through one `Tally` — a part judged as an
 //!   op of its own folds in whole, its adaptations and notes included — so
-//!   `agreed` always means compared and matched. A read ends `not-compared` only when its
-//!   recording kept no answer: one whose recorded answer no reader reaches
-//!   is `inexpressible`, the unread keys named (`play`'s
+//!   `agreed` always means compared and matched. A read ends `not-compared`
+//!   only when its recording kept no answer: one whose recorded answer no
+//!   reader reaches is `inexpressible`, the unread keys named (`play`'s
 //!   `compared_nothing`). Only `runner` drains α's findings and asks the
 //!   allowlist, `Allowlist::classify`, which classes cover an outcome — for
 //!   a scenario named by its key, `category/name` (`outcome::ScenarioKey`),
-//!   the identity every adjudication uses.
+//!   the identity every adjudication uses — and folds the outcomes into one
+//!   verdict by the order `outcome::Verdict` states.
 //! * **Scenario documents are minted private** — `published: Some(false)`
 //!   (PUB-8.16) — by the one method that creates them,
 //!   `Rig::create_private_document`, in the current session's own account.
@@ -87,26 +93,31 @@
 //! ## The gate
 //!
 //! The integration binary under `tests/it/` holds the gate, `gate.rs`, the
-//! oracle's own suite, `oracle.rs`, and this map's check, `tidy.rs`. The
-//! gate's three tests over the sweep: `harness_integrity` — the instrument
-//! works: every golden loads, every op yields one outcome, no scenario is
-//! stopped by a panic, skep's or the harness's, the report is written;
+//! oracle's own suite, `oracle.rs`, and this map's check, `tidy.rs`. The gate's
+//! three tests over the sweep: `harness_integrity` — the instrument works:
+//! every golden loads, every op yields one outcome, no scenario is stopped by a
+//! panic, skep's or the harness's, the report is written;
 //! `report_is_deterministic` — a replay of every scenario renders
 //! byte-identical records; and `conformance_ratchet`, where conformance is
-//! enforced — a `divergent` or `error` verdict fails it, as does an
-//! `allowlisted` or `inexpressible` verdict on a scenario
-//! `conformance/ratchet.toml` does not freeze there, a frozen key no golden
-//! carries, and a key the file lists twice. The ratchet freezes verdicts,
-//! so it reads a scenario turning `pass` as an improvement; `oracle.rs`
-//! holds what it cannot — hand-built scenarios, played through the real
-//! engine, pinning how op outcomes become a verdict, which agreements the
-//! harness may record, and which references it refuses rather than
-//! re-aims. `tidy.rs` holds the module map below to the code — every file
-//! declared, every declaration with its line, every module naming only
-//! itself and the modules above it — holds `rig.rs`'s door to being the
-//! crate's one call of `OperationSurface::execute`, holds every file but
-//! `rig.rs` to building no CREATENEWDOCUMENT request of its own, and holds
-//! the play pass to changing the shadow through its one owner.
+//! enforced against `conformance/ratchet.toml` — an `error` verdict fails it
+//! for every scenario, `[pending]` included; a `divergent` verdict fails it
+//! unless `[pending]` lists the scenario; an `allowlisted` or `inexpressible`
+//! verdict fails it unless the file freezes the scenario in that section or
+//! `[pending]`; and so do a frozen key no golden carries, a key the file lists
+//! twice, and an allowlist entry that rules on no golden op. A `[pending]`
+//! scenario's other verdicts are reported, not enforced, so a green gate admits
+//! every divergent scenario `[pending]` lists. The ratchet freezes verdicts, so
+//! it reads a scenario turning `pass` as an improvement; `oracle.rs` holds what
+//! it cannot — hand-built scenarios, played through the real engine, pinning
+//! how op outcomes become a verdict, which agreements the harness may record,
+//! and which references it refuses rather than re-aims. `tidy.rs` holds the
+//! module map below to the code — every file declared, every declaration with
+//! its line, every module naming only itself and the modules above it — holds
+//! `rig.rs`'s door to being the crate's one call of
+//! `OperationSurface::execute`, holds every file but `rig.rs` to building no
+//! CREATENEWDOCUMENT request of its own, holds the play pass to changing the
+//! shadow through its one owner, and holds every adaptation tag the crate can
+//! record to an entry in `play`'s catalogue.
 
 // Golden dotted strings ⇄ skep tumblers, addresses and spans; golden address shapes.
 mod tum;

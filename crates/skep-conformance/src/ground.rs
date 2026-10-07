@@ -17,7 +17,8 @@
 //!   a delete only with the bytes it is known to have removed, so a wrong
 //!   inference aborts instead of guessing). A version is never seeded: its
 //!   content at creation is its source's, which the recorded create_version
-//!   provides.
+//!   provides. Nor is a document the walk never made: an edit of one
+//!   changes nothing, and a probe of one tests nothing.
 //! * **Expansion plans** — macro ops (`create_chain`, parseable `setup`
 //!   descriptions, `vcopy_multiple`/`vcopy_all`/`vcopy_from_both`,
 //!   `create_and_transclude`) expand to concrete insert+copy step lists,
@@ -65,10 +66,11 @@ use crate::evidence::{
     delete_is_noop, next_content_probe, resolve_delete_span, resolve_insert, took_effect,
 };
 use crate::fields::{
-    aim_doc, arrow_results, as_text, cuts_of, distributed_insert_texts, distribution_targets,
-    field, group_word, is_position_marker, locate, normalize, op_name, per_doc_replies, quoted,
-    recorded_content, recorded_count, resolve_position, roster, span_dict, str_field, strings_of,
-    vcopy_sources, verb_of, vspec_dict, DocAim, Verb, BUILD_BUDGET, POST_WRITE_KEYS,
+    aim_doc, arrow_results, as_text, created_addresses, cuts_of, distributed_insert_texts,
+    distribution_targets, field, group_word, is_conflict_copy, is_position_marker, locate,
+    normalize, op_name, per_doc_replies, quoted, recorded_content, recorded_count,
+    resolve_position, roster, span_dict, str_field, strings_of, vcopy_sources, verb_of, vspec_dict,
+    DocAim, Verb, BUILD_BUDGET, POST_WRITE_KEYS,
 };
 use crate::shadow::Shadow;
 use crate::tum::{link_home_docid, parse_dotted, parse_vpos, parse_width, VPoint, VRegion};
@@ -566,8 +568,13 @@ impl Sim {
         self.logs.get(doc).map(Vec::as_slice).unwrap_or(&[])
     }
 
+    /// Record edit `e` in `doc`'s log — when the shadow holds `doc`. An edit
+    /// of a document the shadow does not hold changes nothing (`Shadow`'s
+    /// edit mirror), so its log stays as empty as its text.
     fn record(&mut self, doc: &str, e: Edit) {
-        self.logs.entry(doc.to_string()).or_default().push(e);
+        if self.shadow.knows(doc) {
+            self.logs.entry(doc.to_string()).or_default().push(e);
+        }
     }
 
     /// The op's document, read as the play pass's `Cx::doc_arg` reads it
@@ -640,13 +647,7 @@ impl Sim {
 
     fn sim_create_document(&mut self, op: &Value) {
         let name = crate::fields::create_name_of(op);
-        let ids: Vec<String> = match field(op, &["result", "results"]) {
-            Some(Value::String(s)) => vec![s.clone()],
-            Some(Value::Array(a)) => {
-                a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
-            }
-            _ => vec![self.shadow.synthesize_docid()],
-        };
+        let ids = created_addresses(op).unwrap_or_else(|| vec![self.shadow.synthesize_docid()]);
         for (k, id) in ids.iter().enumerate() {
             if !self.shadow.knows(id) {
                 self.shadow.create_doc(id, if k == 0 { name.as_deref() } else { None });
@@ -660,10 +661,11 @@ impl Sim {
     }
 
     fn sim_open_document(&mut self, op: &Value) {
-        let conflict_copy = str_field(op, &["conflict"]).is_some_and(|c| c == "copy");
         if let Some(doc) = self.doc_arg(op, &["doc", "docid", "document"]) {
-            if conflict_copy {
-                if let Some(res) = str_field(op, &["result"]) {
+            if is_conflict_copy(op) {
+                // A result the shadow already holds names another document,
+                // which the fork never overwrites.
+                if let Some(res) = str_field(op, &["result"]).filter(|r| !self.shadow.knows(r)) {
                     self.shadow.version(&doc, res);
                 }
             } else {
@@ -678,6 +680,11 @@ impl Sim {
             .or_else(|| str_field(op, &["doc"]).and_then(|s| self.shadow.resolve_doc(s)))
             .or_else(|| self.shadow.current());
         let (Some(src), Some(res)) = (src, version_result(op)) else { return };
+        // A result the shadow already holds names another document: the
+        // version neither overwrites nor renames it.
+        if self.shadow.knows(&res) {
+            return;
+        }
         self.shadow.version(&src, &res);
         for key in ["doc", "name", "label"] {
             if let Some(name) = str_field(op, &[key]) {
@@ -813,7 +820,9 @@ impl Sim {
         if let Some(targets) = field(op, &["targets"]).and_then(Value::as_array) {
             let mut steps = Vec::new();
             for t in targets.iter().filter_map(Value::as_str) {
-                self.shadow.create_doc(t, None);
+                if !self.shadow.knows(t) {
+                    self.shadow.create_doc(t, None);
+                }
                 steps.push(SetupStep::Copy {
                     doc: t.to_string(),
                     src: src.clone(),
@@ -991,7 +1000,16 @@ impl Sim {
                 .get(k)
                 .cloned()
                 .or_else(|| group.as_ref().map(|t| format!("{t}{}", k + 1)));
-            self.shadow.create_doc(&id, name.as_deref());
+            // A document an implied create already made is named and made
+            // current, as the play pass's `ensure_document` does.
+            if self.shadow.knows(&id) {
+                if let Some(n) = &name {
+                    self.shadow.bind_name(n, &id);
+                }
+                self.shadow.set_current(&id);
+            } else {
+                self.shadow.create_doc(&id, name.as_deref());
+            }
             // Alternate spellings the scripts use for group members:
             // singular ("peripheral2" for group "peripherals") and 0-based
             // underscore ("target_0" — identity_multi_document_sharing).
@@ -1214,28 +1232,29 @@ impl Sim {
         let (Some(VRegion { sub: 1, ord, width: w }), Some(src)) = (src_span, src) else { return };
         let copied = self.shadow.slice(&src, ord, w);
         let Some(targets) = field(op, &["targets"]).and_then(Value::as_array) else { return };
+        // Each target is built by plan steps — a prefix its recorded contents
+        // show ahead of the copy, then the copy — which the plan applies as
+        // the play pass executes them, recorded edits included: a target the
+        // shadow does not hold yet is minted by its first step, one an
+        // implied create made is built where it stands.
+        let copied_text = String::from_utf8_lossy(&copied).into_owned();
         let mut steps = Vec::new();
         for t in targets {
             let Some(id) = t.get("docid").and_then(Value::as_str) else { continue };
-            self.shadow.create_doc(id, None);
             if let Some(exp) = t.get("contents").and_then(strings_of) {
                 let e = exp.join("");
-                let copied_text = String::from_utf8_lossy(&copied).into_owned();
                 if let Some(prefix) = e.strip_suffix(copied_text.as_str()) {
                     if !prefix.is_empty() {
                         steps.push(SetupStep::Insert {
                             doc: id.to_string(),
                             bytes: prefix.as_bytes().to_vec(),
                         });
-                        self.shadow.insert(id, 1, prefix.as_bytes());
                     }
                 }
             }
             steps.push(SetupStep::Copy { doc: id.to_string(), src: src.clone(), ord, width: w });
-            let end = self.shadow.text_len(id) + 1;
-            self.shadow.insert(id, end, &copied);
         }
-        self.plans.insert(i, steps);
+        self.plan(i, steps);
     }
 
     fn sim_vcopy(&mut self, i: usize, op: &Value, ops: &[Value], op_name: &str) {
@@ -1303,7 +1322,7 @@ impl Sim {
             let copied_text = String::from_utf8_lossy(&copied).into_owned();
             let evidenced: Vec<String> = self
                 .shadow
-                .created
+                .created()
                 .iter()
                 .filter(|d| {
                     next_content_probe(ops, i, &self.shadow, d)
@@ -1558,7 +1577,16 @@ impl Sim {
         self.probe(&doc, &text);
     }
 
+    /// Note `expected` as `doc`'s probed content: the first probe this pass
+    /// that disagrees with the shadow is the one the next round infers a seed
+    /// from. A probe of a document the shadow does not hold tests nothing —
+    /// the walk infers the setup of documents the scenario makes, and a seed
+    /// for one it never made would mint, in the lead-in, a document no op
+    /// created.
     fn probe(&mut self, doc: &str, expected: &str) {
+        if !self.shadow.knows(doc) {
+            return;
+        }
         if self.shadow.text_string(doc) != expected && self.failed_probe.is_none() {
             self.failed_probe = Some((doc.to_string(), expected.to_string()));
         }

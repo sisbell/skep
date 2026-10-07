@@ -4,7 +4,7 @@
 /// What happened to one golden operation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
-    /// Executed and every comparison agreed.
+    /// Executed, compared, and every comparison agreed.
     Agreed,
     /// Executed; the op carries no expected value to compare (pure writes).
     NotCompared,
@@ -53,6 +53,31 @@ impl OpOutcome {
             actual: None,
             note: None,
             allowlisted: None,
+        }
+    }
+
+    /// A disagreement no allowlist entry covers — the runner's divergent
+    /// verdict, and the summary's listing of what an inexpressible verdict
+    /// would otherwise hide.
+    pub fn is_unadjudicated(&self) -> bool {
+        self.status == Status::Disagreed && self.allowlisted.is_none()
+    }
+
+    /// Append evidence to the op's note, after what it already says.
+    pub fn add_note(&mut self, note: String) {
+        self.note = Some(match self.note.take() {
+            Some(n) => format!("{n}; {note}"),
+            None => note,
+        });
+    }
+
+    /// One line saying what went wrong on this op: expected and actual when
+    /// a comparator rendered both, else the note.
+    pub fn detail(&self) -> String {
+        match (&self.expected, &self.actual, &self.note) {
+            (Some(e), Some(a), _) => format!("expected {e} / actual {a}"),
+            (_, _, Some(n)) => n.clone(),
+            _ => String::from("(no detail)"),
         }
     }
 }

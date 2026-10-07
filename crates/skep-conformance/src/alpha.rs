@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use skep_address::Address;
+use skep_address::{Address, Level};
 
 use crate::tum::{addr_str, parse_dotted};
 
@@ -79,8 +79,8 @@ impl Alpha {
     }
 
     /// Translate a golden address through the map. Exact hit first; else the
-    /// longest bound prefix `p` such that the remainder begins with a zero
-    /// separator — the element/sub-space lift: golden `docid·0·local` ↦
+    /// longest bound DOCUMENT prefix such that the remainder begins with a
+    /// zero separator — the element/sub-space lift: golden `docid·0·local` ↦
     /// `α(docid)·0·local` (both systems place elements at `doc·0·⟨subspace,
     /// ordinal⟩`, so the local part carries over structurally). A miss is
     /// recorded as an `alpha-never-bound` finding.
@@ -106,10 +106,13 @@ impl Alpha {
         }
         let comps = parse_dotted(golden)?;
         // Longest bound docid prefix with a zero separator right after it.
-        // The remainder must be a plausible ⟨subspace, ordinal⟩ local pair —
-        // without that guard, an element of an UNBOUND document would lift
-        // through the bound account prefix into a wrong skep address instead
-        // of surfacing as a never-bound finding.
+        // The remainder must be a plausible ⟨subspace, ordinal⟩ local pair,
+        // and the prefix's image must be a DOCUMENT: a version address
+        // (`account·0·doc·version`) carries the same nonzero pair after its
+        // account, so without the level guard a golden version skep never
+        // minted would lift through the bound account into a document slot
+        // of the rig's own account instead of surfacing as a never-bound
+        // finding.
         for cut in (1..comps.len()).rev() {
             if comps[cut] != 0 {
                 continue;
@@ -120,15 +123,16 @@ impl Alpha {
             }
             let prefix: Vec<String> = comps[..cut].iter().map(|c| c.to_string()).collect();
             let key = prefix.join(".");
-            if let Some(base) = self.fwd.get(&key) {
-                let mut out: Vec<skep_address::Nat> = base.tumbler().iter().cloned().collect();
-                out.push(skep_address::Nat::from(0u64));
-                for c in &comps[cut + 1..] {
-                    out.push(skep_address::Nat::from(*c));
-                }
-                let lifted = skep_address::Tumbler::new(out).ok()?;
-                return skep_address::validate(lifted).ok();
+            let Some(base) = self.fwd.get(&key).filter(|b| b.level() == Level::Document) else {
+                continue;
+            };
+            let mut out: Vec<skep_address::Nat> = base.tumbler().iter().cloned().collect();
+            out.push(skep_address::Nat::from(0u64));
+            for c in local {
+                out.push(skep_address::Nat::from(*c));
             }
+            let lifted = skep_address::Tumbler::new(out).ok()?;
+            return skep_address::validate(lifted).ok();
         }
         None
     }
@@ -144,15 +148,20 @@ impl Alpha {
     }
 
     /// Render a skep address for the report: its golden name when bound,
-    /// else the REVERSE of the element lift — a skep `docid·0·local` whose
-    /// docid is rev-bound renders as `golden(docid)·0·local` (round-5 item:
-    /// a skep-side address must reverse-translate through the bijection
-    /// before it reaches a comparison or the report; only a truly foreign
-    /// address renders `skep:<dotted>`).
+    /// else the REVERSE of the element lift — a skep ELEMENT `docid·0·local`
+    /// whose docid is rev-bound renders as `golden(docid)·0·local` (round-5
+    /// item: a skep-side address must reverse-translate through the
+    /// bijection before it reaches a comparison or the report; only a truly
+    /// foreign address renders `skep:<dotted>`). The reverse runs only from
+    /// an element, the image of the forward lift; a document-level address
+    /// under a bound account is a document no golden names.
     pub fn render_skep(&self, a: &Address) -> String {
         let s = addr_str(a);
         if let Some(g) = self.rev.get(&s) {
             return g.clone();
+        }
+        if a.level() != Level::Element {
+            return format!("skep:{s}");
         }
         let comps: Vec<u64> = a
             .tumbler()
@@ -173,5 +182,36 @@ impl Alpha {
             }
         }
         format!("skep:{s}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tum::addr;
+
+    fn a(comps: &[u64]) -> Address {
+        addr(comps).expect("a valid address")
+    }
+
+    /// The element lift goes through a bound DOCUMENT only. A golden version
+    /// address carries the same ⟨nonzero, nonzero⟩ tail after its account
+    /// that an element carries after its document: it surfaces as
+    /// never-bound instead of lifting into a document slot of the rig's
+    /// account, and the reverse renders such a skep document as foreign.
+    #[test]
+    fn the_element_lift_goes_through_documents_only() {
+        let mut alpha = Alpha::new();
+        alpha.bind("1.1.0.1", &a(&[1, 0, 1]));
+        alpha.bind("1.1.0.1.0.1", &a(&[1, 0, 1, 0, 3]));
+
+        assert_eq!(alpha.translate("1.1.0.1.0.1.0.2.1"), Some(a(&[1, 0, 1, 0, 3, 0, 2, 1])));
+        assert!(alpha.findings.is_empty());
+        assert_eq!(alpha.translate("1.1.0.1.0.1.1"), None, "a never-minted version");
+        assert_eq!(alpha.findings.len(), 1);
+        assert_eq!(alpha.findings[0].class, "alpha-never-bound");
+
+        assert_eq!(alpha.render_skep(&a(&[1, 0, 1, 0, 3, 0, 2, 1])), "1.1.0.1.0.1.0.2.1");
+        assert_eq!(alpha.render_skep(&a(&[1, 0, 1, 0, 1, 1])), "skep:1.0.1.0.1.1");
     }
 }

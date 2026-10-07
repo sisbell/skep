@@ -9,8 +9,9 @@
 //!   byte-identical report records, so a re-run is the archive.
 //! * `conformance_ratchet` — conformance, enforced: a `divergent` or `error`
 //!   verdict fails it, as does an `allowlisted` or `inexpressible` verdict on
-//!   a scenario `conformance/ratchet.toml` does not freeze in that section;
-//!   a `[pending]` scenario is exempt, and reported while it does not pass.
+//!   a scenario `conformance/ratchet.toml` does not freeze in that section,
+//!   and a frozen name no golden scenario carries; a `[pending]` scenario is
+//!   exempt, and reported while it does not pass.
 
 use skep_conformance::outcome::Verdict;
 use skep_conformance::runner::run_all;
@@ -121,9 +122,11 @@ fn report_is_deterministic() {
 ///
 /// `conformance/ratchet.toml` freezes the expected non-pass set. This test
 /// FAILS on any scenario that is `Divergent` or `Error`, on any
-/// `Allowlisted`/`Inexpressible` scenario not in the frozen lists, and it
-/// reports (without failing) frozen entries that improved to `Pass` so the
-/// file can be trimmed. Growing the frozen set requires a human ruling in
+/// `Allowlisted`/`Inexpressible` scenario not in the frozen lists, and on a
+/// frozen name no golden scenario carries (a renamed or removed golden
+/// would otherwise leave a line that guards nothing); it reports (without
+/// failing) frozen entries that improved to `Pass` so the file can be
+/// trimmed. Growing the frozen set requires a human ruling in
 /// adjudication/decisions.md — never an edit made to turn this test green.
 #[test]
 fn conformance_ratchet() {
@@ -174,6 +177,18 @@ fn conformance_ratchet() {
             v => violations.push(format!("{}/{}: {v:?} not permitted by ratchet", r.category, r.name)),
         }
     }
+    let names: HashSet<&str> = out.records.iter().map(|r| r.name.as_str()).collect();
+    for (section, frozen) in
+        [("allowlisted", &allow), ("inexpressible", &inexpr), ("pending", &pending)]
+    {
+        let mut missing: Vec<&String> =
+            frozen.iter().filter(|n| !names.contains(n.as_str())).collect();
+        missing.sort();
+        for n in missing {
+            violations
+                .push(format!("[{section}] {n}: frozen, but no golden scenario carries the name"));
+        }
+    }
     if !pending_seen.is_empty() {
         eprintln!("ratchet: {} PENDING scenario(s) need adjudication:\n{}",
                   pending_seen.len(), pending_seen.join("\n"));
@@ -184,6 +199,7 @@ fn conformance_ratchet() {
     }
     assert!(violations.is_empty(),
             "CONFORMANCE RATCHET VIOLATED — a new divergence requires a human ruling \
-             (adjudication/decisions.md) before the frozen set may grow:\n{}",
+             (adjudication/decisions.md) before the frozen set may grow, and a frozen \
+             name no golden carries guards nothing until it is corrected:\n{}",
             violations.join("\n"));
 }

@@ -1,33 +1,47 @@
 //! Content writes: insert (with its distributed, looped and interior-typing
-//! forms), delete, vcopy, and the rearranges (pivot, swap). Each executes on
-//! skep and mirrors its effect into the shadow whatever skep answered — the
-//! shadow follows the recorded reality, never skep's verdict; the inserts,
-//! deletes and vcopys then compare the post-write state the golden
-//! recorded, where it recorded one.
+//! forms), delete, vcopy, and the rearranges (pivot, swap). Each is carried
+//! out through the `Cx` world-change methods, so the shadow follows the
+//! recorded reality, never skep's verdict; the inserts, deletes and vcopys
+//! then compare the post-write state the golden recorded, where it recorded
+//! one. A write that issues several requests issues every one of them
+//! whatever skep answers an earlier one; the first failure is the op's.
 
 use serde_json::Value;
 
-use skep_address::Nat;
-use skep_arrangement::VSpec;
-use skep_content::Val;
-use skep_febe::{Deposit, Op};
-
 use super::{
-    create_one, inexpressible, probe_state, rejection_code, run_plan, settle_ack, vpos, Cx, Grants,
-    Probe,
+    create_one, inexpressible, probe_state, rejection_code, run_plan, settle_ack, Cx, Probe,
+    Tally,
 };
+use crate::allowlist::Grants;
 use crate::compare::compare_content;
 use crate::evidence::{
     delete_is_noop, insert_aim_from_probe, insert_pad_width, insert_pos_from_post_state,
-    next_content_probe, resolve_delete_span,
+    next_content_probe, resolve_delete_span, took_effect,
 };
 use crate::fields::{
-    self, cuts_of, distributed_insert_texts, distribution_targets, doc_from_label, expect_strings,
-    expected_failure, field, insert_text, is_position_marker, label_of, locate, resolve_position,
-    span_dict, str_field, vspec_dict,
+    cuts_of, distributed_insert_texts, distribution_targets, doc_from_label, expect_strings,
+    expected_failure, field, insert_text, is_position_marker, label_of, resolve_position,
+    str_field, vcopy_sources,
 };
 use crate::outcome::{OpOutcome, Status};
-use crate::tum::{parse_vpos, vspan};
+use crate::tum::parse_vpos;
+
+/// The op's document has no α-image: the α never-bound finding the runner
+/// folds in carries the evidence.
+fn unresolvable(out: &mut OpOutcome, note: String) {
+    out.status = Status::Disagreed;
+    out.comparator = Some("alpha".into());
+    out.note = Some(note);
+}
+
+/// The first refused request of a write that issues several: what the op
+/// expected to succeed, and skep's refusal.
+fn refused(out: &mut OpOutcome, expected: String, code: String) {
+    out.status = Status::Disagreed;
+    out.comparator = Some("rejection".into());
+    out.expected = Some(expected);
+    out.actual = Some(format!("Rejected({code})"));
+}
 
 pub(super) fn h_insert(
     cx: &mut Cx,
@@ -36,31 +50,33 @@ pub(super) fn h_insert(
     out: &mut OpOutcome,
     grants: &Grants,
 ) {
+    let recorded = took_effect(op);
     // insert_all + texts: one text per created doc, creation order (policy
     // `insert-all:distributed`; mirrors the grounding pre-pass exactly).
     if let Some(texts) = distributed_insert_texts(op) {
         out.adaptations.push("insert-all:distributed".into());
         let docs = distribution_targets(cx.shadow, texts.len());
+        let mut failed = false;
         for (docid, t) in docs.iter().zip(&texts) {
-            let Some(d) = cx.skep_doc(docid) else {
-                out.status = Status::Disagreed;
-                out.comparator = Some("alpha".into());
-                out.note = Some(format!("insert_all target {docid} unresolvable"));
-                return;
-            };
             let at = cx.shadow.text_len(docid) + 1;
-            let values: Vec<Val> = t.bytes().map(|b| Val::new(vec![b])).collect();
-            let r = cx.rig.exec(Op::Insert { doc: d, at: vpos(1, at), values, deposit: Deposit::Undeclared });
-            cx.shadow.insert(docid, at, t.as_bytes());
-            if let Some(code) = rejection_code(&r) {
-                out.status = Status::Disagreed;
-                out.comparator = Some("rejection".into());
-                out.expected = Some(format!("insert_all into {docid} succeeds"));
-                out.actual = Some(format!("Rejected({code})"));
-                return;
+            let r = cx.insert(docid, 1, at, t.as_bytes(), recorded);
+            match r {
+                _ if failed => {}
+                Err(_) => {
+                    failed = true;
+                    unresolvable(out, format!("insert_all target {docid} unresolvable"));
+                }
+                Ok(r) => {
+                    if let Some(code) = rejection_code(&r) {
+                        failed = true;
+                        refused(out, format!("insert_all into {docid} succeeds"), code);
+                    }
+                }
             }
         }
-        out.status = Status::NotCompared;
+        if !failed {
+            out.status = Status::NotCompared;
+        }
         return;
     }
     let Some(mut doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
@@ -127,20 +143,11 @@ pub(super) fn h_insert(
             text.push_str(&" ".repeat(pad as usize));
         }
     }
-    let Some(d) = cx.skep_doc(&doc) else {
-        out.status = Status::Disagreed;
-        out.comparator = Some("alpha".into());
-        out.note = Some(format!("insert into unresolvable doc {doc}"));
+    let xf = expected_failure(op);
+    let Ok(r) = cx.insert(&doc, sub, ord, text.as_bytes(), recorded) else {
+        unresolvable(out, format!("insert into unresolvable doc {doc}"));
         return;
     };
-    let xf = expected_failure(op);
-    let values: Vec<Val> = text.bytes().map(|b| Val::new(vec![b])).collect();
-    let r = cx.rig.exec(Op::Insert { doc: d, at: vpos(sub, ord), values, deposit: Deposit::Undeclared });
-    // Shadow mirrors the RECORDED reality regardless of skep's verdict, so
-    // later translations stay grounded in what udanax saw.
-    if sub == 1 {
-        cx.shadow.insert(&doc, ord, text.as_bytes());
-    }
     if !settle_ack(out, xf, rejection_code(&r)) {
         return;
     }
@@ -159,29 +166,27 @@ pub(super) fn h_insert_loop(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants
     // The recorded sample (edgecases/many_small_inserts) shows A–Z cycling,
     // one insert per character, appended.
     out.adaptations.push("insert-loop:a-z-cycle".into());
-    let Some(d) = cx.skep_doc(&doc) else {
-        out.status = Status::Disagreed;
-        out.comparator = Some("alpha".into());
-        out.note = Some(format!("insert_loop into unresolvable doc {doc}"));
-        return;
-    };
+    let recorded = took_effect(op);
+    let mut failed = false;
     for k in 0..count {
         let b = b'A' + (k % 26) as u8;
         let at = cx.shadow.text_len(&doc) + 1;
-        let r = cx.rig.exec(Op::Insert {
-            doc: d.clone(),
-            at: vpos(1, at),
-            values: vec![Val::new(vec![b])],
-            deposit: Deposit::Undeclared,
-        });
-        cx.shadow.insert(&doc, at, &[b]);
-        if let Some(code) = rejection_code(&r) {
-            out.status = Status::Disagreed;
-            out.comparator = Some("rejection".into());
-            out.expected = Some(format!("insert {} of {count} succeeds", k + 1));
-            out.actual = Some(format!("Rejected({code})"));
-            return;
+        match cx.insert(&doc, 1, at, &[b], recorded) {
+            Err(_) => {
+                // No α-image: nothing further reaches skep or the shadow.
+                unresolvable(out, format!("insert_loop into unresolvable doc {doc}"));
+                return;
+            }
+            Ok(r) => {
+                if let (false, Some(code)) = (failed, rejection_code(&r)) {
+                    failed = true;
+                    refused(out, format!("insert {} of {count} succeeds", k + 1), code);
+                }
+            }
         }
+    }
+    if failed {
+        return;
     }
     probe_state(cx, op, out, grants, &doc, Probe::PostWrite);
 }
@@ -196,50 +201,44 @@ pub(super) fn h_interior_typing(cx: &mut Cx, op: &Value, out: &mut OpOutcome, gr
         return;
     };
     out.adaptations.push("expansion-plan:interior-typing".into());
-    let Some(d) = cx.skep_doc(&doc) else {
-        out.status = Status::Disagreed;
-        out.comparator = Some("alpha".into());
-        out.note = Some(format!("interior_typing into unresolvable doc {doc}"));
-        return;
-    };
-    let mut fails: Vec<(String, String)> = Vec::new();
+    let recorded = took_effect(op);
+    let mut tally = Tally::default();
     for r in results {
         let (Some(ch), Some(pos)) =
             (r.get("char").and_then(Value::as_str), r.get("position").and_then(Value::as_str))
         else {
             continue;
         };
-        let Some((1, ord, _)) = resolve_position(cx.shadow, &doc, pos) else { continue };
-        let resp = cx.rig.exec(Op::Insert {
-            doc: d.clone(),
-            at: vpos(1, ord),
-            values: ch.bytes().map(|b| Val::new(vec![b])).collect(),
-            deposit: Deposit::Undeclared,
-        });
-        cx.shadow.insert(&doc, ord, ch.as_bytes());
+        // A step whose position does not ground loses both its insert and
+        // its check — the op cannot be expressed in full.
+        let Some((1, ord, _)) = resolve_position(cx.shadow, &doc, pos) else {
+            tally.unaimed(format!("step '{ch}' at position `{pos}` does not ground"));
+            continue;
+        };
+        let resp = match cx.insert(&doc, 1, ord, ch.as_bytes(), recorded) {
+            Ok(resp) => resp,
+            Err(_) => {
+                unresolvable(out, format!("interior_typing into unresolvable doc {doc}"));
+                return;
+            }
+        };
         if let Some(code) = rejection_code(&resp) {
-            fails.push((format!("insert '{ch}' at {pos}"), format!("Rejected({code})")));
+            tally.differ(format!("insert '{ch}' at {pos}"), format!("Rejected({code})"));
             continue;
         }
         // Per-step probes: vspanset + contents recorded per character.
         let mut step = OpOutcome::new(out.index, &out.label);
         probe_state(cx, r, &mut step, grants, &doc, Probe::Step);
-        if step.status == Status::Disagreed {
-            fails.push((
+        match step.status {
+            Status::Disagreed => tally.differ(
                 format!("step '{ch}': {}", step.expected.unwrap_or_default()),
                 step.actual.unwrap_or_default(),
-            ));
+            ),
+            Status::Agreed => tally.agree(),
+            _ => {}
         }
     }
-    if fails.is_empty() {
-        out.status = Status::Agreed;
-        out.comparator = Some("state-probe".into());
-    } else {
-        out.status = Status::Disagreed;
-        out.comparator = Some("state-probe".into());
-        out.expected = Some(fails.iter().map(|f| f.0.clone()).collect::<Vec<_>>().join(" | "));
-        out.actual = Some(fails.iter().map(|f| f.1.clone()).collect::<Vec<_>>().join(" | "));
-    }
+    tally.settle(out, "state-probe");
 }
 
 pub(super) fn h_delete(
@@ -340,23 +339,10 @@ pub(super) fn h_delete(
         inexpressible(out, "delete without a groundable region".into());
         return;
     };
-    let Some(d) = cx.skep_doc(&doc) else {
-        out.status = Status::Disagreed;
-        out.comparator = Some("alpha".into());
-        out.note = Some(format!("delete in unresolvable doc {doc}"));
+    let Ok(r) = cx.delete(&doc, sub, ord, width, took_effect(op)) else {
+        unresolvable(out, format!("delete in unresolvable doc {doc}"));
         return;
     };
-    // I-coverage capture (ruling 10): image the doomed content region while
-    // the arrangement still speaks for it, so later searches can reach it
-    // through I-history.
-    if sub == 1 {
-        let bytes = cx.shadow.slice(&doc, ord, width);
-        cx.rig.capture_deletion(&doc, &d, ord, bytes);
-    }
-    let r = cx.rig.exec(Op::Delete { doc: d, p: vpos(sub, ord), width: Nat::from(width) });
-    if sub == 1 {
-        cx.shadow.delete(&doc, ord, width);
-    }
     if !settle_ack(out, xf, rejection_code(&r)) {
         return;
     }
@@ -364,6 +350,7 @@ pub(super) fn h_delete(
 }
 
 pub(super) fn h_vcopy(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, grants: &Grants) {
+    let recorded = took_effect(op);
     // Pre-pass expansion plans cover the macro forms (vcopy_multiple /
     // vcopy_all / vcopy_from_both / vcopy_to_multiple / create_and_
     // transclude): fillers as inserts, shared regions as real copies.
@@ -373,7 +360,7 @@ pub(super) fn h_vcopy(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome
             for t in targets {
                 let id = t.as_str().or_else(|| t.get("docid").and_then(Value::as_str));
                 if let Some(id) = id {
-                    create_one(cx, out, id, None);
+                    create_one(cx, out, id, None, recorded);
                 }
             }
         }
@@ -383,7 +370,7 @@ pub(super) fn h_vcopy(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome
         }
         // Per-target contents expectations (vcopy_to_multiple) compare here.
         if let Some(targets) = field(op, &["targets"]).and_then(Value::as_array) {
-            let mut fails: Vec<(String, String)> = Vec::new();
+            let mut tally = Tally::default();
             for t in targets {
                 let (Some(id), Some(exp)) = (
                     t.get("docid").and_then(Value::as_str),
@@ -393,199 +380,34 @@ pub(super) fn h_vcopy(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome
                 };
                 match cx.read_content(id) {
                     Ok(items) => {
-                        if let Err((e, a)) = compare_content(&exp, &items, cx.alpha) {
-                            fails.push((format!("{id}: {e}"), format!("{id}: {a}")));
-                        }
+                        let label = format!("{id}: ");
+                        tally.judge(compare_content(&exp, &items, cx.alpha), &label, &label);
                     }
-                    Err(code) => fails.push((format!("{id}: contents"), format!("{id}: {code}"))),
+                    Err(code) => tally.differ(format!("{id}: contents"), format!("{id}: {code}")),
                 }
             }
-            if !fails.is_empty() {
-                out.status = Status::Disagreed;
-                out.comparator = Some("content".into());
-                out.expected =
-                    Some(fails.iter().map(|f| f.0.clone()).collect::<Vec<_>>().join(" | "));
-                out.actual =
-                    Some(fails.iter().map(|f| f.1.clone()).collect::<Vec<_>>().join(" | "));
-            } else if targets.iter().any(|t| t.get("contents").is_some()) {
-                out.status = Status::Agreed;
-                out.comparator = Some("content".into());
+            if tally.compared > 0 {
+                tally.settle(out, "content");
             }
         }
         return;
     }
 
-    // Source spec(s): explicit vspec dicts, span dicts, located texts. The
-    // corpus extension records a SINGLE vspec dict (`source: {docid, span}`,
-    // fanout/depth recordings) — normalized to a one-item list here.
-    let mut specs: Vec<VSpec> = Vec::new();
-    let mut copied: Vec<u8> = Vec::new();
-    let mut src_doc: Option<String> = None;
-    let spec_items: Option<Vec<&Value>> =
-        match field(op, &["specs", "specset", "source", "sources"]) {
-            Some(Value::Array(a)) => Some(a.iter().collect()),
-            Some(v @ Value::Object(_)) if vspec_dict(v).is_some() => Some(vec![v]),
-            _ => None,
-        };
-    if let Some(arr) = spec_items {
-        for v in arr {
-            if let Some((docid, spans)) = vspec_dict(v) {
-                let Some(sd) = cx.alpha.translate(&docid) else {
-                    out.status = Status::Disagreed;
-                    out.comparator = Some("alpha".into());
-                    out.note = Some(format!("vcopy source doc {docid} unresolvable"));
-                    return;
-                };
-                src_doc.get_or_insert(docid.clone());
-                for (sub, ord, w) in spans {
-                    if let Some(span) = vspan(sub, ord, w) {
-                        if sub == 1 {
-                            copied.extend(cx.shadow.slice(&docid, ord, w));
-                        }
-                        specs.push(VSpec { source: sd.clone(), span });
-                    }
-                }
-            } else if let Some(t) = v.as_str() {
-                match locate(cx.shadow, None, t) {
-                    Some(l) => {
-                        if !vcopy_push_located(cx, out, l, &mut specs, &mut copied, &mut src_doc) {
-                            return;
-                        }
-                    }
-                    None => {
-                        inexpressible(out, format!("vcopy span {t:?} not groundable"));
-                        return;
-                    }
-                }
-            } else {
-                inexpressible(out, "vcopy spec list holds an unrecognized entry".into());
-                return;
-            }
-        }
-    } else if let Some(arr) = field(op, &["spans"]).and_then(Value::as_array) {
-        for v in arr {
-            if let Some((sub, ord, w)) = span_dict(v) {
-                let hint = str_field(op, &["from", "source_doc"])
-                    .and_then(|s| cx.shadow.resolve_doc(s))
-                    .or_else(|| cx.shadow.scoped());
-                let Some(docid) = hint else { continue };
-                let Some(sd) = cx.alpha.translate(&docid) else { continue };
-                if let Some(span) = vspan(sub, ord, w) {
-                    if sub == 1 {
-                        copied.extend(cx.shadow.slice(&docid, ord, w));
-                    }
-                    src_doc.get_or_insert(docid.clone());
-                    specs.push(VSpec { source: sd, span });
-                }
-            } else if let Some(t) = v.as_str() {
-                match locate(cx.shadow, None, t) {
-                    Some(l) => {
-                        if !vcopy_push_located(cx, out, l, &mut specs, &mut copied, &mut src_doc) {
-                            return;
-                        }
-                    }
-                    None => {
-                        inexpressible(out, format!("vcopy span {t:?} not groundable"));
-                        return;
-                    }
-                }
-            }
-        }
-    } else if let Some((1, ord, w)) = field(op, &["source_span", "span"]).and_then(span_dict) {
-        let src = str_field(op, &["from", "source_doc"])
-            .and_then(|s| cx.shadow.resolve_doc(s))
-            .or_else(|| {
-                let dest_hint = str_field(op, &["to", "dest", "target", "target_doc"])
-                    .and_then(|s| cx.shadow.resolve_doc(s))
-                    .unwrap_or_default();
-                cx.shadow.content_docs_except(&dest_hint).first().cloned()
-            });
-        let Some(src) = src else {
-            inexpressible(out, "vcopy source_span with no source document".into());
-            return;
-        };
-        let Some(sd) = cx.alpha.translate(&src) else {
-            out.status = Status::Disagreed;
-            out.comparator = Some("alpha".into());
-            out.note = Some(format!("vcopy source doc {src} unresolvable"));
-            return;
-        };
-        if let Some(span) = vspan(1, ord, w) {
-            copied.extend(cx.shadow.slice(&src, ord, w));
-            src_doc = Some(src);
-            specs.push(VSpec { source: sd, span });
-        }
-    } else if let Some(t) = str_field(op, &["text", "span"]) {
-        let from = str_field(op, &["from", "source_doc"]).and_then(|s| cx.shadow.resolve_doc(s));
-        match locate(cx.shadow, from.as_deref(), t) {
-            Some(l) => {
-                if !vcopy_push_located(cx, out, l, &mut specs, &mut copied, &mut src_doc) {
-                    return;
-                }
-            }
-            None => {
-                inexpressible(out, format!("vcopy text {t:?} not groundable"));
-                return;
-            }
-        }
-    } else if let Some(s) = str_field(op, &["from", "source"]) {
-        if let Some(from) = cx.shadow.resolve_doc(s) {
-            // `from: <doc>` with no span: the whole current extent.
-            let n = cx.shadow.text_len(&from);
-            if let (Some(sd), Some(span)) = (cx.alpha.translate(&from), vspan(1, 1, n)) {
-                out.adaptations.push("whole-extent".into());
-                copied.extend(cx.shadow.slice(&from, 1, n));
-                src_doc = Some(from);
-                specs.push(VSpec { source: sd, span });
-            } else {
-                inexpressible(out, "vcopy from an empty document".into());
-                return;
-            }
-        } else if let Some(l) = locate(cx.shadow, None, s) {
-            // A described region, not a doc ("positions 1-4 (Orig)" —
-            // edgecases/vcopy_to_same_document). A grounding that lands
-            // OUTSIDE its doc's live extent grounded against the wrong doc —
-            // typically the register pointing at the just-created empty
-            // destination — and the script's copy can only have read a doc
-            // that holds the span: re-ground against the content-holding
-            // docs excluding the dest reference (policy
-            // `vcopy-source-reaimed`; internal/ispan_partial_overlap's
-            // `from: "positions 3-7 (CDEFG)"` with `to: "dest"`, confirmed
-            // by the recorded post-state "CDEFG in both"). No valid re-aim
-            // keeps the original grounding and its loud divergence.
-            let l = if l.ord + l.width > cx.shadow.text_len(&l.doc) + 1 {
-                let dest_ref = str_field(op, &["to", "dest", "target", "target_doc"])
-                    .filter(|t| !is_position_marker(t))
-                    .and_then(|t| cx.shadow.resolve_doc(t))
-                    .unwrap_or_default();
-                match cx.shadow.content_docs_except(&dest_ref).iter().find_map(|d| {
-                    locate(cx.shadow, Some(d.as_str()), s)
-                        .filter(|c| c.ord + c.width <= cx.shadow.text_len(&c.doc) + 1)
-                }) {
-                    Some(re) => {
-                        out.adaptations.push("vcopy-source-reaimed".into());
-                        re
-                    }
-                    None => l,
-                }
-            } else {
-                l
-            };
-            if !vcopy_push_located(cx, out, l, &mut specs, &mut copied, &mut src_doc) {
-                return;
-            }
-        } else {
-            inexpressible(out, format!("vcopy from {s:?}: neither a doc nor a groundable region"));
+    // Source regions: the one reading both passes share (policy tags such
+    // as `vcopy-source-reaimed` and the located texts' grounding included).
+    let sources = match vcopy_sources(op, cx.shadow, &mut out.adaptations) {
+        Ok(s) => s,
+        Err(reason) => {
+            inexpressible(out, reason);
             return;
         }
-    } else {
-        inexpressible(out, "vcopy without specs, span or text".into());
-        return;
-    }
-    if specs.is_empty() {
-        inexpressible(out, "vcopy resolved to no source spans".into());
-        return;
-    }
+    };
+    let src_doc = sources.first().map(|s| s.doc.clone());
+    let copied: Vec<u8> = sources
+        .iter()
+        .filter(|s| s.sub == 1)
+        .flat_map(|s| cx.shadow.slice(&s.doc, s.ord, s.width))
+        .collect();
 
     // Destination doc + position. `to` may be a doc reference or the
     // position markers "end"/"start" (destination = the source doc then).
@@ -645,44 +467,22 @@ pub(super) fn h_vcopy(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome
             }
         }
     };
-    let Some(d) = cx.skep_doc(&dest) else {
-        out.status = Status::Disagreed;
-        out.comparator = Some("alpha".into());
-        out.note = Some(format!("vcopy destination {dest} unresolvable"));
-        return;
-    };
     let xf = expected_failure(op);
-    let r = cx.rig.exec(Op::Copy { doc: d, at: vpos(1, ord), specs });
-    cx.shadow.insert(&dest, ord, &copied);
+    let r = match cx.copy(&dest, ord, &sources, recorded) {
+        Ok(r) => r,
+        Err(g) if g == dest && sources.iter().all(|s| s.doc != g) => {
+            unresolvable(out, format!("vcopy destination {dest} unresolvable"));
+            return;
+        }
+        Err(g) => {
+            unresolvable(out, format!("vcopy source doc {g} unresolvable"));
+            return;
+        }
+    };
     if !settle_ack(out, xf, rejection_code(&r)) {
         return;
     }
     probe_state(cx, op, out, grants, &dest, Probe::PostWrite);
-}
-
-/// Push one located vcopy source region: resolve its doc, record the copied
-/// bytes and the V-spec. `false` = unresolvable doc (outcome written).
-fn vcopy_push_located(
-    cx: &mut Cx,
-    out: &mut OpOutcome,
-    l: fields::Located,
-    specs: &mut Vec<VSpec>,
-    copied: &mut Vec<u8>,
-    src_doc: &mut Option<String>,
-) -> bool {
-    let Some(sd) = cx.alpha.translate(&l.doc) else {
-        out.status = Status::Disagreed;
-        out.comparator = Some("alpha".into());
-        out.note = Some(format!("vcopy source doc {} unresolvable", l.doc));
-        return false;
-    };
-    out.adaptations.push(l.how.into());
-    if let Some(span) = vspan(1, l.ord, l.width) {
-        copied.extend(cx.shadow.slice(&l.doc, l.ord, l.width));
-        src_doc.get_or_insert(l.doc.clone());
-        specs.push(VSpec { source: sd, span });
-    }
-    true
 }
 
 pub(super) fn h_pivot_swap(cx: &mut Cx, op: &Value, out: &mut OpOutcome, pivot: bool) {
@@ -716,21 +516,11 @@ pub(super) fn h_pivot_swap(cx: &mut Cx, op: &Value, out: &mut OpOutcome, pivot: 
         inexpressible(out, format!("rearrange needs {want} cuts, could derive {}", cuts.len()));
         return;
     }
-    let Some(d) = cx.skep_doc(&doc) else {
-        out.status = Status::Disagreed;
-        out.comparator = Some("alpha".into());
-        out.note = Some(format!("rearrange in unresolvable doc {doc}"));
+    let xf = expected_failure(op);
+    let Ok(r) = cx.rearrange(&doc, &cuts, took_effect(op)) else {
+        unresolvable(out, format!("rearrange in unresolvable doc {doc}"));
         return;
     };
-    let xf = expected_failure(op);
-    let r = cx
-        .rig
-        .exec(Op::Rearrange { doc: d, cuts: cuts.iter().map(|&c| vpos(1, c)).collect() });
-    if pivot {
-        cx.shadow.pivot(&doc, cuts[0], cuts[1], cuts[2]);
-    } else {
-        cx.shadow.swap(&doc, cuts[0], cuts[1], cuts[2], cuts[3]);
-    }
     if !settle_ack(out, xf, rejection_code(&r)) {
         return;
     }

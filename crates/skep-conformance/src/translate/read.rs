@@ -9,16 +9,17 @@ use skep_febe::{Op, Response};
 use skep_retrieval::{DeliveryItem, Spec};
 
 use super::{
-    has_observation_fields, inexpressible, joint_absence, probe_state, rejection_code, settle_ack,
-    Cx, Grants, Probe,
+    inexpressible, joint_absence, probe_state, rejection_code, settle_ack, Cx, Probe, Tally,
 };
+use crate::allowlist::Grants;
 use crate::compare::{
     collapsed_subspace_shape, compare_content, compare_count, compare_spansets,
     COLLAPSED_SUBSPACE_ANALYSIS, VERSION_LINK_CARRYOVER_ANALYSIS,
 };
 use crate::fields::{
-    expect_spans_raw, expect_strings, expected_failure, field, harvest_spanset, label_of, locate,
-    position_from_label, span_dict, str_field, vspec_dict,
+    expect_spans_raw, expect_strings, expected_failure, field, harvest_spanset,
+    has_observation_fields, label_of, locate, position_from_label, span_dict, str_field,
+    vspec_dict,
 };
 use crate::outcome::{OpOutcome, Status};
 use crate::tum::{is_link_address, link_home_docid, parse_dotted, parse_vpos, vspan};
@@ -73,35 +74,27 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
 
     // Multi-doc probe: `docs` map of name → expected strings.
     if let Some(map) = op.get("docs").and_then(Value::as_object) {
-        let mut fails: Vec<(String, String)> = Vec::new();
+        let mut tally = Tally::default();
         for (name, exp) in map {
-            let (Some(doc), Some(strings)) =
-                (cx.shadow.resolve_doc(name), expect_strings(exp))
-            else {
-                continue;
-            };
+            let Some(strings) = expect_strings(exp) else { continue };
             // An id map (create_documents-shaped), not a content probe.
             if strings.iter().any(|s| s.contains('.') && parse_dotted(s).is_some()) {
                 continue;
             }
+            let Some(doc) = cx.shadow.resolve_doc(name) else {
+                tally.unaimed(format!("docs-map name `{name}` resolves to no document"));
+                continue;
+            };
+            let label = format!("{name}: ");
             match cx.read_content(&doc) {
                 Ok(items) => {
-                    if let Err((e, a)) = compare_content(&strings, &items, cx.alpha) {
-                        fails.push((format!("{name}: {e}"), format!("{name}: {a}")));
-                    }
+                    tally.judge(compare_content(&strings, &items, cx.alpha), &label, &label)
                 }
-                Err(code) => fails.push((format!("{name}: contents"), format!("{name}: {code}"))),
+                Err(code) => tally.differ(format!("{name}: contents"), format!("{name}: {code}")),
             }
         }
         out.adaptations.push("contents:content-subspace".into());
-        out.comparator = Some("content".into());
-        if fails.is_empty() {
-            out.status = Status::Agreed;
-        } else {
-            out.status = Status::Disagreed;
-            out.expected = Some(fails.iter().map(|f| f.0.clone()).collect::<Vec<_>>().join(" | "));
-            out.actual = Some(fails.iter().map(|f| f.1.clone()).collect::<Vec<_>>().join(" | "));
-        }
+        tally.settle(out, "content");
         return;
     }
 
@@ -109,8 +102,7 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
     // identity/identity_multi_document_sharing records every created
     // target's content only here.
     if let Some(entries) = op.get("targets").and_then(Value::as_array) {
-        let mut fails: Vec<(String, String)> = Vec::new();
-        let mut compared = false;
+        let mut tally = Tally::default();
         for e in entries {
             let docid = e
                 .get("docid")
@@ -124,28 +116,19 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
             else {
                 continue;
             };
-            compared = true;
+            let label = format!("{docid}: ");
             match cx.read_content(&docid) {
                 Ok(items) => {
-                    if let Err((exp, act)) = compare_content(&strings, &items, cx.alpha) {
-                        fails.push((format!("{docid}: {exp}"), format!("{docid}: {act}")));
-                    }
+                    tally.judge(compare_content(&strings, &items, cx.alpha), &label, &label)
                 }
-                Err(code) => fails.push((format!("{docid}: contents"), format!("{docid}: {code}"))),
+                Err(code) => {
+                    tally.differ(format!("{docid}: contents"), format!("{docid}: {code}"))
+                }
             }
         }
-        if compared {
+        if tally.compared > 0 {
             out.adaptations.push("contents:content-subspace".into());
-            out.comparator = Some("content".into());
-            if fails.is_empty() {
-                out.status = Status::Agreed;
-            } else {
-                out.status = Status::Disagreed;
-                out.expected =
-                    Some(fails.iter().map(|f| f.0.clone()).collect::<Vec<_>>().join(" | "));
-                out.actual =
-                    Some(fails.iter().map(|f| f.1.clone()).collect::<Vec<_>>().join(" | "));
-            }
+            tally.settle(out, "content");
             return;
         }
     }
@@ -186,13 +169,13 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
             })
             .unwrap_or_default();
         if keyed.len() >= 2 {
-            let mut fails: Vec<(String, String)> = Vec::new();
+            let mut tally = Tally::default();
             for (name, doc, strings) in &keyed {
                 let Some(d) = cx.skep_doc(doc) else {
-                    fails.push((
+                    tally.differ(
                         format!("{name}: contents"),
                         format!("{name}: {doc} unresolvable"),
-                    ));
+                    );
                     continue;
                 };
                 // Reconstructed narrowing: exactly one recorded string,
@@ -221,28 +204,18 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
                 } else {
                     cx.read_content(doc)
                 };
+                let label = format!("{name}: ");
                 match items {
                     Ok(items) => {
-                        if let Err((e, a)) = compare_content(strings, &items, cx.alpha) {
-                            fails.push((format!("{name}: {e}"), format!("{name}: {a}")));
-                        }
+                        tally.judge(compare_content(strings, &items, cx.alpha), &label, &label)
                     }
                     Err(code) => {
-                        fails.push((format!("{name}: contents"), format!("{name}: {code}")))
+                        tally.differ(format!("{name}: contents"), format!("{name}: {code}"))
                     }
                 }
             }
             out.adaptations.push("contents:per-doc-keyed".into());
-            out.comparator = Some("content".into());
-            if fails.is_empty() {
-                out.status = Status::Agreed;
-            } else {
-                out.status = Status::Disagreed;
-                out.expected =
-                    Some(fails.iter().map(|f| f.0.clone()).collect::<Vec<_>>().join(" | "));
-                out.actual =
-                    Some(fails.iter().map(|f| f.1.clone()).collect::<Vec<_>>().join(" | "));
-            }
+            tally.settle(out, "content");
             return;
         }
     }
@@ -259,9 +232,13 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
             out.note = Some(format!("positions probe doc {doc} unresolvable"));
             return;
         };
-        let mut fails: Vec<(String, String)> = Vec::new();
+        let mut tally = Tally::default();
         for (pos, exp) in map {
-            let (Some((sub, ord)), Some(want)) = (parse_vpos(pos), exp.as_str()) else { continue };
+            let Some((sub, ord)) = parse_vpos(pos) else {
+                tally.unaimed(format!("positions key `{pos}` is not a V-position"));
+                continue;
+            };
+            let Some(want) = exp.as_str() else { continue };
             let Some(span) = vspan(sub, ord, 1) else { continue };
             match cx.rig.exec(Op::RetrieveV { specs: vec![Spec { doc: d.clone(), span }] }) {
                 Response::Delivery { items, .. } => {
@@ -270,28 +247,20 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
                     // (bind + element lift) like every delivered address —
                     // never compared as a rendered string.
                     if want.is_empty() && items.0.is_empty() {
+                        tally.agree();
                         continue;
                     }
-                    if let Err((e, a)) =
-                        compare_content(&[want.to_string()], &items.0, cx.alpha)
-                    {
-                        fails.push((format!("{pos}={e}"), format!("{pos}={a}")));
-                    }
+                    let label = format!("{pos}=");
+                    let c = compare_content(&[want.to_string()], &items.0, cx.alpha);
+                    tally.judge(c, &label, &label);
                 }
-                r => fails.push((
+                r => tally.differ(
                     format!("{pos}={want:?}"),
                     format!("{pos}: {}", rejection_code(&r).unwrap_or_else(|| "?".into())),
-                )),
+                ),
             }
         }
-        out.comparator = Some("content-positions".into());
-        if fails.is_empty() {
-            out.status = Status::Agreed;
-        } else {
-            out.status = Status::Disagreed;
-            out.expected = Some(fails.iter().map(|f| f.0.clone()).collect::<Vec<_>>().join(" | "));
-            out.actual = Some(fails.iter().map(|f| f.1.clone()).collect::<Vec<_>>().join(" | "));
-        }
+        tally.settle(out, "content-positions");
         return;
     }
 
@@ -677,7 +646,7 @@ pub(super) fn h_vspanset(
     if let Some(n) = field(op, &["span_count"]).and_then(Value::as_u64) {
         out.comparator = Some("count".into());
         let actual = set.iter().count();
-        match compare_count(n, grants.count_delta, actual) {
+        match compare_count(n, actual, grants, &mut out.adaptations) {
             Ok(()) => out.status = Status::Agreed,
             Err((e, a)) => {
                 out.status = Status::Disagreed;
@@ -693,7 +662,7 @@ pub(super) fn h_vspanset(
         return;
     };
     out.comparator = Some("vspanset".into());
-    match compare_spansets(&spans, &set, grants.width_tolerance) {
+    match compare_spansets(&spans, &set, grants, &mut out.adaptations) {
         Ok(()) => out.status = Status::Agreed,
         Err((e, a)) => {
             out.status = Status::Disagreed;

@@ -6,17 +6,19 @@
 use serde_json::Value;
 
 use skep_arrangement::VSpec;
-use skep_febe::{Op, Response, SlotArg};
+use skep_febe::Response;
 
 use super::{
     inexpressible, marker_type_name, parse_set_spans, rejection_code, settle_ack, side_specs, Cx,
     SetSpan,
 };
+use crate::evidence::took_effect;
 use crate::fields::{
     arrow_results, expect_strings, expected_failure, field, label_of, locate, note_arrow,
     parse_python_spec, str_field, vspec_dict, DocSpans,
 };
 use crate::outcome::{OpOutcome, Status};
+use crate::shadow::ShadowLink;
 use crate::tum::{link_home_docid, parse_dotted, parse_vpos, vspan};
 
 fn to_vspecs(cx: &mut Cx, sides: &[DocSpans]) -> Result<Vec<VSpec>, String> {
@@ -341,15 +343,8 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
         inexpressible(out, "explicit-set create_link with no home".into());
         return;
     };
-    let Some(home) = cx.alpha.translate(&home_golden) else {
-        out.status = Status::Disagreed;
-        out.comparator = Some("alpha".into());
-        out.note = Some(format!("create_link home {home_golden} unresolvable"));
-        return;
-    };
 
-    // Shadow endset triples (content subspace) for the traversal registry —
-    // recorded before the vecs move into the request.
+    // Shadow endset triples (content subspace) for the traversal registry.
     let triples = |v: &Value| -> Vec<(String, u64, u64)> {
         parse_set_spans(v)
             .unwrap_or_default()
@@ -365,33 +360,30 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
             })
             .collect()
     };
-    let from_triples = op.get("fromset").map(triples).unwrap_or_default();
-    let to_triples = op.get("toset").map(triples).unwrap_or_default();
+    let link = golden.as_ref().map(|g| ShadowLink {
+        golden: g.clone(),
+        from: op.get("fromset").map(triples).unwrap_or_default(),
+        to: op.get("toset").map(triples).unwrap_or_default(),
+    });
 
-    match cx.rig.exec(Op::MakeLink {
-        home,
-        from: SlotArg::Resolve(from),
-        to: SlotArg::Resolve(to),
-        ty: SlotArg::Resolve(ty),
-        replaces: None,
-    }) {
-        Response::AckAddr { addr, .. } => {
+    match cx.make_link(&home_golden, [from, to, ty], link, None, took_effect(op)) {
+        Err(_) => {
+            out.status = Status::Disagreed;
+            out.comparator = Some("alpha".into());
+            out.note = Some(format!("create_link home {home_golden} unresolvable"));
+        }
+        Ok(Response::AckAddr { .. }) => {
             if !settle_ack(out, xf, None) {
                 return;
             }
-            cx.shadow.seat_link(&home_golden);
-            cx.shadow.set_current(&home_golden);
-            if let Some(g) = &golden {
-                cx.alpha.bind(g, &addr);
-                cx.shadow.last_link = Some(g.clone());
-                cx.shadow.record_link(g, from_triples, to_triples);
+            if golden.is_some() {
                 out.status = Status::Agreed;
                 out.comparator = Some("address-binding".into());
             } else {
                 out.status = Status::NotCompared;
             }
         }
-        other => {
+        Ok(other) => {
             settle_ack(out, xf, rejection_code(&other));
         }
     }
@@ -738,48 +730,34 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
                 return;
             }
         };
-        let Some(home) = cx.skep_doc(&home_golden) else {
-            out.status = Status::Disagreed;
-            out.comparator = Some("alpha".into());
-            out.note = Some(format!("create_link home {home_golden} unresolvable"));
-            return;
+        // The traversal registry: this link's grounded endsets (content
+        // subspace), for hop resolution from the world.
+        let flat = |sides: &[DocSpans]| -> Vec<(String, u64, u64)> {
+            sides
+                .iter()
+                .flat_map(|(d, spans)| {
+                    spans
+                        .iter()
+                        .filter(|(s, _, _)| *s == 1)
+                        .map(|(_, o, w)| (d.clone(), *o, *w))
+                        .collect::<Vec<_>>()
+                })
+                .collect()
         };
-        let r = cx.rig.exec(Op::MakeLink {
-            home,
-            from: SlotArg::Resolve(from),
-            to: SlotArg::Resolve(to),
-            ty: SlotArg::Resolve(vec![ty]),
-            replaces: None,
+        let link = golden.as_ref().map(|g| ShadowLink {
+            golden: g.clone(),
+            from: flat(&from_sides),
+            to: flat(&to_sides),
         });
-        match r {
-            Response::AckAddr { addr, .. } => {
-                cx.shadow.seat_link(&home_golden);
-                cx.shadow.set_current(&home_golden);
-                if let Some(g) = &golden {
-                    cx.alpha.bind(g, &addr);
-                    cx.shadow.last_link = Some(g.clone());
-                    // The traversal registry: this link's grounded endsets
-                    // (content subspace), for hop resolution from the world.
-                    let flat = |sides: &[DocSpans]| -> Vec<(String, u64, u64)> {
-                        sides
-                            .iter()
-                            .flat_map(|(d, spans)| {
-                                spans
-                                    .iter()
-                                    .filter(|(s, _, _)| *s == 1)
-                                    .map(|(_, o, w)| (d.clone(), *o, *w))
-                                    .collect::<Vec<_>>()
-                            })
-                            .collect()
-                    };
-                    cx.shadow.record_link(g, flat(&from_sides), flat(&to_sides));
-                }
-                if let Some((f, t, rr)) = &arrow {
-                    cx.shadow.arrow_links.insert((f.clone(), t.clone()), rr.clone());
-                }
-                bound += 1;
+        match cx.make_link(&home_golden, [from, to, vec![ty]], link, arrow, took_effect(op)) {
+            Err(_) => {
+                out.status = Status::Disagreed;
+                out.comparator = Some("alpha".into());
+                out.note = Some(format!("create_link home {home_golden} unresolvable"));
+                return;
             }
-            other => {
+            Ok(Response::AckAddr { .. }) => bound += 1,
+            Ok(other) => {
                 settle_ack(out, xf, rejection_code(&other));
                 return;
             }

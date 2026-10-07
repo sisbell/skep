@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde_json::json;
 
 use crate::compare::{COLLAPSED_SUBSPACE_ANALYSIS, VERSION_LINK_CARRYOVER_ANALYSIS};
-use crate::outcome::{ScenarioRecord, Status, Verdict};
+use crate::outcome::{OpOutcome, ScenarioRecord, Status, Verdict};
 
 /// `skep/target/conformance/` — where the report and summary are written.
 pub fn output_dir() -> PathBuf {
@@ -188,6 +188,36 @@ fn render_summary(records: &[ScenarioRecord]) -> String {
         s.push_str("(none)\n");
     }
 
+    // An inexpressible verdict outranks a divergent one, so a scenario frozen
+    // inexpressible can carry disagreements no allowlist entry covers. They
+    // are listed here — the scenario's first one, and how many follow — so
+    // the verdict never keeps them out of the summary.
+    s.push_str("\n## Unadjudicated disagreements under an inexpressible verdict\n\n");
+    let mut any = false;
+    for r in records {
+        if r.verdict != Verdict::Inexpressible {
+            continue;
+        }
+        let raw: Vec<&OpOutcome> = r.ops.iter().filter(|o| o.is_unadjudicated()).collect();
+        let Some(first) = raw.first() else { continue };
+        any = true;
+        let more = match raw.len() {
+            1 => String::new(),
+            n => format!(" (+{} more)", n - 1),
+        };
+        s.push_str(&format!(
+            "- `{}/{}` — op {} `{}`: {}{more}\n",
+            r.category,
+            r.name,
+            first.index,
+            first.label,
+            trunc(&first.detail(), 300)
+        ));
+    }
+    if !any {
+        s.push_str("(none)\n");
+    }
+
     // The standing cluster analyses: each surfaced once, with the affected
     // scenarios listed, so the operators adjudicate a family in one sitting.
     // Notes may carry the analysis alongside other evidence, so the match is
@@ -261,4 +291,71 @@ fn render_summary(records: &[ScenarioRecord]) -> String {
         s.push_str("(none)\n");
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn op(index: usize, status: Status, allowlisted: Option<&str>) -> OpOutcome {
+        let mut o = OpOutcome::new(index, &format!("op{index}"));
+        o.status = status;
+        o.expected = Some(format!("want{index}"));
+        o.actual = Some(format!("got{index}"));
+        o.allowlisted = allowlisted.map(str::to_string);
+        o
+    }
+
+    fn record(name: &str, verdict: Verdict, ops: Vec<OpOutcome>) -> ScenarioRecord {
+        ScenarioRecord {
+            category: "cat".into(),
+            name: name.into(),
+            verdict,
+            bijection_size: 0,
+            ops,
+            first_failure: None,
+            error: None,
+            groundings: Vec::new(),
+        }
+    }
+
+    fn section(summary: &str) -> &str {
+        let head = "## Unadjudicated disagreements under an inexpressible verdict\n\n";
+        let start = summary.find(head).expect("the section is rendered") + head.len();
+        let rest = &summary[start..];
+        &rest[..rest.find("\n## ").unwrap_or(rest.len())]
+    }
+
+    /// An inexpressible verdict cannot keep an uncovered disagreement out of
+    /// the summary: the first one is listed with the count that follows,
+    /// while a covered one, or one under another verdict, is not.
+    #[test]
+    fn an_inexpressible_verdict_never_hides_an_uncovered_disagreement() {
+        let records = vec![
+            record(
+                "hidden",
+                Verdict::Inexpressible,
+                vec![
+                    op(0, Status::Agreed, None),
+                    op(1, Status::Disagreed, Some("ruled")),
+                    op(2, Status::Disagreed, None),
+                    op(3, Status::Inexpressible, None),
+                    op(4, Status::Disagreed, None),
+                ],
+            ),
+            record(
+                "covered",
+                Verdict::Inexpressible,
+                vec![op(0, Status::Disagreed, Some("ruled")), op(1, Status::Inexpressible, None)],
+            ),
+            record("divergent", Verdict::Divergent, vec![op(0, Status::Disagreed, None)]),
+        ];
+        let summary = render_summary(&records);
+        assert_eq!(
+            section(&summary),
+            "- `cat/hidden` — op 2 `op2`: expected want2 / actual got2 (+1 more)\n"
+        );
+        let clean = vec![record("covered", Verdict::Inexpressible, Vec::new())];
+        assert_eq!(section(&render_summary(&clean)), "(none)\n");
+    }
 }

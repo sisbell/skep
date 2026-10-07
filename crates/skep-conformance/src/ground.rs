@@ -43,9 +43,14 @@
 //! pass then reports the disagreement honestly.
 //!
 //! The walk reads each op through the grammar the translator reads it
-//! through (`fields`), and decides what an edit did by the recorded-evidence
-//! policies the translator applies (`evidence`); what this module holds is
-//! the reconstruction alone.
+//! through (`fields`: the verb `normalize` names, which it dispatches on,
+//! and the vcopy sources `vcopy_sources` reads), skips every op udanax
+//! never carried out (`evidence::took_effect`), and decides what an edit did
+//! by the recorded-evidence policies the translator applies (`evidence`);
+//! what this module holds is the reconstruction alone. The corpus
+//! extension records its own setup (MANIFEST-NEW): its `probe` checkpoints
+//! carry no docs map, the one shape of them this walk reads, so nothing is
+//! inferred there.
 
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
@@ -54,12 +59,12 @@ use serde_json::Value;
 
 use crate::evidence::{
     delete_is_noop, insert_aim_from_probe, insert_pad_width, insert_pos_from_post_state,
-    next_content_probe, resolve_delete_span,
+    next_content_probe, resolve_delete_span, took_effect,
 };
 use crate::fields::{
     arrow_results, cuts_of, distributed_insert_texts, distribution_targets, doc_from_label,
     expect_strings, field, group_word, insert_text, is_position_marker, keyed_role, label_of,
-    locate, resolve_position, span_dict, str_field, vspec_dict,
+    locate, normalize, resolve_position, span_dict, str_field, vcopy_sources, vspec_dict, Verb,
 };
 use crate::shadow::Shadow;
 use crate::tum::{link_home_docid, parse_dotted};
@@ -541,303 +546,307 @@ impl Sim {
 
     /// Mirror of the play-pass shadow effects, content only. Any drift
     /// between this and the translator surfaces as an honest divergence.
-    /// Probes run AFTER an op's own edit (write branches call check_probes
-    /// themselves) or in the read fall-through — never before, or a write's
-    /// own result expectation would be compared against the pre-edit state
-    /// and forge a false seed.
+    /// An op udanax never carried out (`evidence::took_effect`) changes
+    /// nothing; the rest dispatch on the verb the translator dispatches on
+    /// (`fields::normalize`), so the two passes cannot disagree about what
+    /// kind of op a label names. Probes run AFTER an op's own edit (write
+    /// branches call check_probes themselves) or in the read fall-through —
+    /// never before, or a write's own result expectation would be compared
+    /// against the pre-edit state and forge a false seed.
     fn step(&mut self, i: usize, op: &Value, all: &[Value]) {
+        if !took_effect(op) {
+            return;
+        }
         let label = label_of(op).to_ascii_lowercase();
-
-        if label.starts_with("create_chain") {
-            self.sim_create_chain(i, op, all);
-            return;
-        }
-        if label.starts_with("create_documents")
-            || label.starts_with("create_sources")
-            || label.starts_with("create_multiple")
-        {
-            self.sim_create_documents(i, op, all);
-            return;
-        }
-        if label == "setup" {
-            if let Some(steps) = self.parse_keyed_setup(op, i, all) {
-                self.plan(i, steps);
-            } else if let Some(desc) = str_field(op, &["description", "desc"]) {
-                if let Some(steps) = self.parse_setup_description(desc) {
+        match normalize(&label, op) {
+            Some(Verb::CreateChain) => self.sim_create_chain(i, op, all),
+            Some(Verb::CreateDocuments) => self.sim_create_documents(i, op, all),
+            Some(Verb::Setup) => {
+                if let Some(steps) = self.parse_keyed_setup(op, i, all) {
                     self.plan(i, steps);
-                }
-            }
-            return;
-        }
-        if label.starts_with("create_doc") || label.starts_with("create_target") {
-            let name = crate::fields::create_name_of(op);
-            let ids: Vec<String> = match field(op, &["result", "results"]) {
-                Some(Value::String(s)) => vec![s.clone()],
-                Some(Value::Array(a)) => {
-                    a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
-                }
-                _ => vec![self.shadow.synthesize_docid()],
-            };
-            for (k, id) in ids.iter().enumerate() {
-                if !self.shadow.knows(id) {
-                    self.shadow.create_doc(id, if k == 0 { name.as_deref() } else { None });
-                } else {
-                    if let Some(n) = &name {
-                        self.shadow.bind_name(n, id);
-                    }
-                    self.shadow.set_current(id);
-                }
-            }
-            return;
-        }
-        if label.starts_with("open_document") {
-            let conflict_copy = str_field(op, &["conflict"]).is_some_and(|c| c == "copy");
-            if let Some(doc) = self.doc_ref(op, &["doc", "docid", "document"]) {
-                if conflict_copy {
-                    if let Some(res) = str_field(op, &["result"]) {
-                        self.shadow.version(&doc, res);
-                    }
-                } else {
-                    self.shadow.set_current(&doc);
-                }
-            }
-            return;
-        }
-        if label.starts_with("create_version") || label.starts_with("version") {
-            let src = str_field(op, &["from", "source", "of", "original"])
-                .and_then(|s| self.shadow.resolve_doc(s))
-                .or_else(|| {
-                    str_field(op, &["doc"]).and_then(|s| self.shadow.resolve_doc(s))
-                })
-                .or_else(|| self.shadow.scoped());
-            let (Some(src), Some(res)) = (src, result_str(op)) else { return };
-            self.shadow.version(&src, &res);
-            for key in ["doc", "name", "label"] {
-                if let Some(name) = str_field(op, &[key]) {
-                    if parse_dotted(name).is_none() && self.shadow.resolve_doc(name).is_none() {
-                        self.shadow.bind_name(name, &res);
+                } else if let Some(desc) = str_field(op, &["description", "desc"]) {
+                    if let Some(steps) = self.parse_setup_description(desc) {
+                        self.plan(i, steps);
                     }
                 }
             }
-            return;
+            Some(Verb::CreateDocument) => self.sim_create_document(op),
+            Some(Verb::OpenDocument) => self.sim_open_document(op),
+            Some(Verb::CreateVersion) => self.sim_create_version(op),
+            Some(Verb::InteriorTyping) => self.sim_interior_typing(op),
+            Some(Verb::InsertLoop) => self.sim_insert_loop(op),
+            Some(Verb::Insert) => self.sim_insert(i, op, all),
+            Some(Verb::DeleteAll) => self.sim_delete_all(i, op, all),
+            Some(Verb::Delete) => self.sim_delete(i, op, all),
+            Some(Verb::Vcopy) if label.starts_with("vcopy_to_multiple") => {
+                self.sim_vcopy_to_multiple(i, op)
+            }
+            Some(Verb::Vcopy) if label.starts_with("create_and_transclude") => {
+                self.sim_create_and_transclude(i, op)
+            }
+            Some(Verb::Vcopy) => self.sim_vcopy(i, op, all, &label),
+            Some(verb @ (Verb::Pivot | Verb::Swap | Verb::Rearrange)) => {
+                self.sim_rearrange(op, verb)
+            }
+            Some(Verb::CreateLink) => self.sim_create_link(op),
+            _ => self.sim_read(op),
         }
-        if label.starts_with("interior_typing") {
-            let Some(doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
-            if let Some(results) = field(op, &["results"]).and_then(Value::as_array) {
-                for r in results {
-                    let (Some(ch), Some(pos)) = (
-                        r.get("char").and_then(Value::as_str),
-                        r.get("position").and_then(Value::as_str),
-                    ) else {
-                        continue;
-                    };
-                    if let Some((1, ord, _)) = resolve_position(&self.shadow, &doc, pos) {
-                        self.shadow.insert(&doc, ord, ch.as_bytes());
-                        self.record(
-                            &doc,
-                            Edit::Ins { at: Some(ord), bytes: ch.as_bytes().to_vec() },
-                        );
-                    }
-                    self.check_probes(r);
+    }
+
+    fn sim_create_document(&mut self, op: &Value) {
+        let name = crate::fields::create_name_of(op);
+        let ids: Vec<String> = match field(op, &["result", "results"]) {
+            Some(Value::String(s)) => vec![s.clone()],
+            Some(Value::Array(a)) => {
+                a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
+            }
+            _ => vec![self.shadow.synthesize_docid()],
+        };
+        for (k, id) in ids.iter().enumerate() {
+            if !self.shadow.knows(id) {
+                self.shadow.create_doc(id, if k == 0 { name.as_deref() } else { None });
+            } else {
+                if let Some(n) = &name {
+                    self.shadow.bind_name(n, id);
                 }
+                self.shadow.set_current(id);
+            }
+        }
+    }
+
+    fn sim_open_document(&mut self, op: &Value) {
+        let conflict_copy = str_field(op, &["conflict"]).is_some_and(|c| c == "copy");
+        if let Some(doc) = self.doc_ref(op, &["doc", "docid", "document"]) {
+            if conflict_copy {
+                if let Some(res) = str_field(op, &["result"]) {
+                    self.shadow.version(&doc, res);
+                }
+            } else {
+                self.shadow.set_current(&doc);
+            }
+        }
+    }
+
+    fn sim_create_version(&mut self, op: &Value) {
+        let src = str_field(op, &["from", "source", "of", "original"])
+            .and_then(|s| self.shadow.resolve_doc(s))
+            .or_else(|| str_field(op, &["doc"]).and_then(|s| self.shadow.resolve_doc(s)))
+            .or_else(|| self.shadow.scoped());
+        let (Some(src), Some(res)) = (src, result_str(op)) else { return };
+        self.shadow.version(&src, &res);
+        for key in ["doc", "name", "label"] {
+            if let Some(name) = str_field(op, &[key]) {
+                if parse_dotted(name).is_none() && self.shadow.resolve_doc(name).is_none() {
+                    self.shadow.bind_name(name, &res);
+                }
+            }
+        }
+    }
+
+    fn sim_interior_typing(&mut self, op: &Value) {
+        let Some(doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
+        if let Some(results) = field(op, &["results"]).and_then(Value::as_array) {
+            for r in results {
+                let (Some(ch), Some(pos)) = (
+                    r.get("char").and_then(Value::as_str),
+                    r.get("position").and_then(Value::as_str),
+                ) else {
+                    continue;
+                };
+                if let Some((1, ord, _)) = resolve_position(&self.shadow, &doc, pos) {
+                    self.shadow.insert(&doc, ord, ch.as_bytes());
+                    self.record(&doc, Edit::Ins { at: Some(ord), bytes: ch.as_bytes().to_vec() });
+                }
+                self.check_probes(r);
+            }
+        }
+    }
+
+    fn sim_insert_loop(&mut self, op: &Value) {
+        let Some(doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
+        let count = field(op, &["count"]).and_then(Value::as_u64).unwrap_or(0);
+        let bytes: Vec<u8> = (0..count).map(|k| b'A' + (k % 26) as u8).collect();
+        let end = self.shadow.text_len(&doc) + 1;
+        self.shadow.insert(&doc, end, &bytes);
+        self.record(&doc, Edit::Ins { at: None, bytes });
+    }
+
+    fn sim_insert(&mut self, i: usize, op: &Value, all: &[Value]) {
+        // insert_all + texts: one text per created doc, in creation order
+        // (links/link_chain_three_hops fills its four documents through one
+        // op) — never a single concatenated insert.
+        if let Some(texts) = distributed_insert_texts(op) {
+            let docs: Vec<String> = distribution_targets(&self.shadow, texts.len());
+            for (d, t) in docs.iter().zip(&texts) {
+                let end = self.shadow.text_len(d) + 1;
+                self.shadow.insert(d, end, t.as_bytes());
+                self.record(d, Edit::Ins { at: None, bytes: t.as_bytes().to_vec() });
             }
             return;
         }
-        if label.starts_with("insert_loop") {
-            let Some(doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
-            let count = field(op, &["count"]).and_then(Value::as_u64).unwrap_or(0);
-            let bytes: Vec<u8> = (0..count).map(|k| b'A' + (k % 26) as u8).collect();
-            let end = self.shadow.text_len(&doc) + 1;
-            self.shadow.insert(&doc, end, &bytes);
-            self.record(&doc, Edit::Ins { at: None, bytes });
-            return;
+        let Some(mut doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
+        let Some(mut text) = insert_text(op) else { return };
+        // Doc-less insert aim: the next recorded vspanset probe names the
+        // doc the script observed changed (content/insert_vspace_mapping:
+        // register held the version, the probe pins the original) — mirror
+        // of the translator's policy.
+        if str_field(op, &["doc", "docid"]).is_none() && doc_from_label(label_of(op)).is_none() {
+            if let Some(d2) = insert_aim_from_probe(all, i, &self.shadow, &doc, &text) {
+                self.shadow.set_current(&d2);
+                doc = d2;
+            }
         }
-        if label.starts_with("insert") || label == "append" {
-            // insert_all + texts: one text per created doc, in creation
-            // order (links/link_chain_three_hops fills its four documents
-            // through one op) — never a single concatenated insert.
-            if let Some(texts) = distributed_insert_texts(op) {
-                let docs: Vec<String> = distribution_targets(&self.shadow, texts.len());
-                for (d, t) in docs.iter().zip(&texts) {
-                    let end = self.shadow.text_len(d) + 1;
-                    self.shadow.insert(d, end, t.as_bytes());
-                    self.record(d, Edit::Ins { at: None, bytes: t.as_bytes().to_vec() });
-                }
-                return;
+        let pos = str_field(op, &["address", "at", "position", "vaddr"]);
+        let (at, ord) = match pos.and_then(|p| resolve_position(&self.shadow, &doc, p)) {
+            Some((1, o, _)) => (Some(o), o),
+            Some(_) => return, // link-subspace insert: no content effect
+            None => match insert_pos_from_post_state(op, &self.shadow, &doc, &text) {
+                // Post-state-pinned position (mirror of the translator's
+                // `insert-position-from-post-state`).
+                Some(o) => (Some(o), o),
+                None => (None, self.shadow.text_len(&doc) + 1),
+            },
+        };
+        // Recorded-vspanset width authority: pad an append-shaped insert
+        // whose doc's next clean vspanset probe records more than the field
+        // text supplies (provenance/createnewversion_text_vs_links 0.34 over
+        // a 33-char text) — mirror of the translator's policy.
+        if at.is_none() || self.shadow.text_len(&doc) == 0 {
+            let new_len = self.shadow.text_len(&doc) + text.len() as u64;
+            if let Some(pad) = insert_pad_width(all, i, &self.shadow, &doc, new_len) {
+                text.push_str(&" ".repeat(pad as usize));
             }
-            let Some(mut doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
-            let Some(mut text) = insert_text(op) else { return };
-            // Doc-less insert aim: the next recorded vspanset probe names
-            // the doc the script observed changed (content/
-            // insert_vspace_mapping: register held the version, the probe
-            // pins the original) — mirror of the translator's policy.
-            if str_field(op, &["doc", "docid"]).is_none()
-                && doc_from_label(label_of(op)).is_none()
-            {
-                if let Some(d2) = insert_aim_from_probe(all, i, &self.shadow, &doc, &text) {
-                    self.shadow.set_current(&d2);
-                    doc = d2;
-                }
-            }
-            let pos = str_field(op, &["address", "at", "position", "vaddr"]);
-            let (at, ord) = match pos.and_then(|p| resolve_position(&self.shadow, &doc, p)) {
-                Some((1, o, _)) => (Some(o), o),
-                Some(_) => return, // link-subspace insert: no content effect
-                None => match insert_pos_from_post_state(op, &self.shadow, &doc, &text) {
-                    // Post-state-pinned position (mirror of the translator's
-                    // `insert-position-from-post-state`).
-                    Some(o) => (Some(o), o),
-                    None => (None, self.shadow.text_len(&doc) + 1),
-                },
-            };
-            // Recorded-vspanset width authority: pad an append-shaped insert
-            // whose doc's next clean vspanset probe records more than the
-            // field text supplies (provenance/createnewversion_text_vs_links
-            // 0.34 over a 33-char text) — mirror of the translator's policy.
-            if at.is_none() || self.shadow.text_len(&doc) == 0 {
-                let new_len = self.shadow.text_len(&doc) + text.len() as u64;
-                if let Some(pad) = insert_pad_width(all, i, &self.shadow, &doc, new_len) {
-                    text.push_str(&" ".repeat(pad as usize));
-                }
-            }
-            self.shadow.insert(&doc, ord, text.as_bytes());
-            self.record(&doc, Edit::Ins { at, bytes: text.into_bytes() });
-            self.check_probes(op);
-            return;
         }
-        if label.starts_with("delete_all") || label.starts_with("remove_all") {
-            if let Some(doc) = self.doc_ref(op, &["doc", "docid"]) {
-                if delete_is_noop(&self.shadow, all, i, &doc) {
-                    return; // recorded post-state shows udanax removed nothing
-                }
-                let n = self.shadow.text_len(&doc);
-                let bytes = self.shadow.slice(&doc, 1, n);
-                self.shadow.delete(&doc, 1, n);
-                self.record(&doc, Edit::Del { at: 1, bytes, explicit: true });
-            }
-            return;
-        }
-        if label.starts_with("delete") || label.starts_with("remove") {
-            let Some(doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
+        self.shadow.insert(&doc, ord, text.as_bytes());
+        self.record(&doc, Edit::Ins { at, bytes: text.into_bytes() });
+        self.check_probes(op);
+    }
+
+    fn sim_delete_all(&mut self, i: usize, op: &Value, all: &[Value]) {
+        if let Some(doc) = self.doc_ref(op, &["doc", "docid"]) {
             if delete_is_noop(&self.shadow, all, i, &doc) {
-                self.check_probes(op);
                 return; // recorded post-state shows udanax removed nothing
             }
-            if let Some((ord, w, how)) = resolve_delete_span(&self.shadow, all, i, &doc, op) {
-                // Bytes removed: the sim slice — unless the op DESCRIBES the
-                // removed text (the "(CDEFG)" parenthetical) and the sim's
-                // state cannot yet cover the width (seed not in place); the
-                // description then feeds the undo the true bytes.
-                let mut bytes = self.shadow.slice(&doc, ord, w);
-                if bytes.len() as u64 != w {
-                    if let Some(d) = delete_described_bytes(op, w) {
-                        bytes = d;
-                    }
-                }
-                let explicit = !matches!(how, "text-located" | "delete-text-from-label");
-                self.shadow.delete(&doc, ord, w);
-                self.record(&doc, Edit::Del { at: ord, bytes, explicit });
-            }
+            let n = self.shadow.text_len(&doc);
+            let bytes = self.shadow.slice(&doc, 1, n);
+            self.shadow.delete(&doc, 1, n);
+            self.record(&doc, Edit::Del { at: 1, bytes, explicit: true });
+        }
+    }
+
+    fn sim_delete(&mut self, i: usize, op: &Value, all: &[Value]) {
+        let Some(doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
+        if delete_is_noop(&self.shadow, all, i, &doc) {
             self.check_probes(op);
-            return;
+            return; // recorded post-state shows udanax removed nothing
         }
-        if label.starts_with("vcopy_to_multiple") {
-            self.sim_vcopy_to_multiple(i, op);
-            return;
-        }
-        if label.starts_with("create_and_transclude") {
-            let src = self.shadow.resolve_doc("source").or_else(|| self.shadow.scoped());
-            let Some(src) = src else { return };
-            let n = self.shadow.text_len(&src);
-            if let Some(targets) = field(op, &["targets"]).and_then(Value::as_array) {
-                let mut steps = Vec::new();
-                for t in targets.iter().filter_map(Value::as_str) {
-                    self.shadow.create_doc(t, None);
-                    steps.push(SetupStep::Copy {
-                        doc: t.to_string(),
-                        src: src.clone(),
-                        ord: 1,
-                        width: n,
-                    });
-                }
-                self.plan(i, steps);
-            }
-            return;
-        }
-        if label.starts_with("vcopy") || label == "copy" {
-            self.sim_vcopy(i, op, all, &label);
-            return;
-        }
-        if label.starts_with("pivot") || (label.starts_with("rearrange") && cuts_of(op).len() == 3)
-        {
-            let Some(doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
-            let cuts = cuts_of(op);
-            if cuts.len() == 3 {
-                self.shadow.pivot(&doc, cuts[0], cuts[1], cuts[2]);
-                self.record(&doc, Edit::Pivot { a: cuts[0], b: cuts[1], c: cuts[2] });
-            }
-            return;
-        }
-        if label.starts_with("swap") || label.starts_with("rearrange") {
-            let Some(doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
-            let cuts = cuts_of(op);
-            if cuts.len() == 4 {
-                self.shadow.swap(&doc, cuts[0], cuts[1], cuts[2], cuts[3]);
-                self.record(&doc, Edit::Swap { s1: cuts[0], e1: cuts[1], s2: cuts[2], e2: cuts[3] });
-            }
-            return;
-        }
-        if label.starts_with("create_link") || label.starts_with("makelink") {
-            let mut participants: Vec<String> = Vec::new();
-            for keys in [&["source", "from"][..], &["target", "to"][..]] {
-                if let Some(s) = str_field(op, keys) {
-                    if let Some(d) = self.shadow.resolve_doc(s) {
-                        participants.push(d);
-                    }
+        if let Some((ord, w, how)) = resolve_delete_span(&self.shadow, all, i, &doc, op) {
+            // Bytes removed: the sim slice — unless the op DESCRIBES the
+            // removed text (the "(CDEFG)" parenthetical) and the sim's state
+            // cannot yet cover the width (seed not in place); the
+            // description then feeds the undo the true bytes.
+            let mut bytes = self.shadow.slice(&doc, ord, w);
+            if bytes.len() as u64 != w {
+                if let Some(d) = delete_described_bytes(op, w) {
+                    bytes = d;
                 }
             }
-            for role in ["source", "target"] {
-                if let Some(d) = self.shadow.resolve_doc(role) {
-                    if !participants.contains(&d) {
-                        participants.push(d);
-                    }
-                }
-            }
-            for d in participants {
-                if self.shadow.text_len(&d) == 0 && !self.link_participants_empty.contains(&d) {
-                    self.link_participants_empty.push(d);
-                }
-            }
-            let results: Vec<String> = match field(op, &["result", "results", "link_id"]) {
-                Some(Value::String(s)) => vec![s.clone()],
-                Some(Value::Array(a)) => {
-                    a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
-                }
-                _ => arrow_results(op).into_iter().map(|(_, _, r)| r).collect(),
-            };
-            for r in &results {
-                if let Some(home) = link_home_docid(r) {
-                    if !self.shadow.knows(&home) {
-                        self.shadow.create_doc(&home, None);
-                    }
-                    self.shadow.seat_link(&home);
-                    // A link's home anchors the scope: the scripts' probes
-                    // and doc-less edits after a create_link target it.
-                    self.shadow.set_current(&home);
-                }
-                self.shadow.last_link = Some(r.clone());
-            }
-            for (f, t, r) in arrow_results(op) {
-                self.shadow.arrow_links.insert((f, t), r);
-            }
-            return;
+            let explicit = !matches!(how, "text-located" | "delete-text-from-label");
+            self.shadow.delete(&doc, ord, w);
+            self.record(&doc, Edit::Del { at: ord, bytes, explicit });
         }
-        // Reads / meta: probe consistency, then register updates from the
-        // doc field or, failing that, from an expectation's own docid / a
-        // link-result's home — the recording scripts' probes anchor the
-        // scope for later doc-less writes (subspace/insert_text_check_link_
-        // positions: the vspanset probe's docid names doc1 right before the
-        // doc-less INSERT).
+        self.check_probes(op);
+    }
+
+    fn sim_create_and_transclude(&mut self, i: usize, op: &Value) {
+        let src = self.shadow.resolve_doc("source").or_else(|| self.shadow.scoped());
+        let Some(src) = src else { return };
+        let n = self.shadow.text_len(&src);
+        if let Some(targets) = field(op, &["targets"]).and_then(Value::as_array) {
+            let mut steps = Vec::new();
+            for t in targets.iter().filter_map(Value::as_str) {
+                self.shadow.create_doc(t, None);
+                steps.push(SetupStep::Copy {
+                    doc: t.to_string(),
+                    src: src.clone(),
+                    ord: 1,
+                    width: n,
+                });
+            }
+            self.plan(i, steps);
+        }
+    }
+
+    /// Pivot (three cuts) or swap (four), as the verb names it; a bare
+    /// `rearrange` takes its shape from its cut count.
+    fn sim_rearrange(&mut self, op: &Value, verb: Verb) {
+        let Some(doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
+        let cuts = cuts_of(op);
+        match (verb, cuts.as_slice()) {
+            (Verb::Pivot | Verb::Rearrange, &[a, b, c]) => {
+                self.shadow.pivot(&doc, a, b, c);
+                self.record(&doc, Edit::Pivot { a, b, c });
+            }
+            (Verb::Swap | Verb::Rearrange, &[s1, e1, s2, e2]) => {
+                self.shadow.swap(&doc, s1, e1, s2, e2);
+                self.record(&doc, Edit::Swap { s1, e1, s2, e2 });
+            }
+            _ => {}
+        }
+    }
+
+    fn sim_create_link(&mut self, op: &Value) {
+        let mut participants: Vec<String> = Vec::new();
+        for keys in [&["source", "from"][..], &["target", "to"][..]] {
+            if let Some(s) = str_field(op, keys) {
+                if let Some(d) = self.shadow.resolve_doc(s) {
+                    participants.push(d);
+                }
+            }
+        }
+        for role in ["source", "target"] {
+            if let Some(d) = self.shadow.resolve_doc(role) {
+                if !participants.contains(&d) {
+                    participants.push(d);
+                }
+            }
+        }
+        for d in participants {
+            if self.shadow.text_len(&d) == 0 && !self.link_participants_empty.contains(&d) {
+                self.link_participants_empty.push(d);
+            }
+        }
+        let results: Vec<String> = match field(op, &["result", "results", "link_id"]) {
+            Some(Value::String(s)) => vec![s.clone()],
+            Some(Value::Array(a)) => {
+                a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
+            }
+            _ => arrow_results(op).into_iter().map(|(_, _, r)| r).collect(),
+        };
+        for r in &results {
+            if let Some(home) = link_home_docid(r) {
+                if !self.shadow.knows(&home) {
+                    self.shadow.create_doc(&home, None);
+                }
+                self.shadow.seat_link(&home);
+                // A link's home anchors the scope: the scripts' probes and
+                // doc-less edits after a create_link target it.
+                self.shadow.set_current(&home);
+            }
+            self.shadow.last_link = Some(r.clone());
+        }
+        for (f, t, r) in arrow_results(op) {
+            self.shadow.arrow_links.insert((f, t), r);
+        }
+    }
+
+    /// Reads / meta: probe consistency, then register updates from the doc
+    /// field or, failing that, from an expectation's own docid / a
+    /// link-result's home — the recording scripts' probes anchor the scope
+    /// for later doc-less writes (subspace/insert_text_check_link_positions:
+    /// the vspanset probe's docid names doc1 right before the doc-less
+    /// INSERT).
+    fn sim_read(&mut self, op: &Value) {
         self.check_probes(op);
         if let Some(s) = str_field(op, &["doc", "docid"]) {
             if let Some(d) = self.shadow.resolve_doc(s) {
@@ -1223,86 +1232,18 @@ impl Sim {
             return;
         }
 
-        // Ordinary vcopy: capture bytes exactly as the translator will,
-        // keeping each contiguous source region as a (doc, ord, width) spec.
-        let mut copied: Vec<u8> = Vec::new();
-        let mut spec_list: Vec<(String, u64, u64)> = Vec::new();
-        if let Some(arr) =
-            field(op, &["specs", "specset", "source", "sources"]).and_then(Value::as_array)
-        {
-            for v in arr {
-                if let Some((docid, spans)) = vspec_dict(v) {
-                    for (sub, ord, w) in spans {
-                        if sub == 1 {
-                            copied.extend(self.shadow.slice(&docid, ord, w));
-                            spec_list.push((docid.clone(), ord, w));
-                        }
-                    }
-                } else if let Some(t) = v.as_str() {
-                    if let Some(l) = locate(&self.shadow, None, t) {
-                        copied.extend(self.shadow.slice(&l.doc, l.ord, l.width));
-                        spec_list.push((l.doc, l.ord, l.width));
-                    }
-                }
-            }
-        } else if let Some(arr) = field(op, &["spans"]).and_then(Value::as_array) {
-            for t in arr.iter().filter_map(Value::as_str) {
-                if let Some(l) = locate(&self.shadow, None, t) {
-                    copied.extend(self.shadow.slice(&l.doc, l.ord, l.width));
-                    spec_list.push((l.doc, l.ord, l.width));
-                }
-            }
-        } else if let Some((1, ord, w)) = field(op, &["source_span", "span"]).and_then(span_dict) {
-            let src = str_field(op, &["from", "source_doc"])
-                .and_then(|s| self.shadow.resolve_doc(s))
-                .or_else(|| {
-                    let hint = explicit_dest.clone().unwrap_or_default();
-                    self.shadow.content_docs_except(&hint).first().cloned()
-                });
-            if let Some(src) = src {
-                copied.extend(self.shadow.slice(&src, ord, w));
-                spec_list.push((src, ord, w));
-            }
-        } else if let Some(t) = str_field(op, &["text", "span"]) {
-            let hint =
-                str_field(op, &["from", "source_doc"]).and_then(|s| self.shadow.resolve_doc(s));
-            if let Some(l) = locate(&self.shadow, hint.as_deref(), t) {
-                copied.extend(self.shadow.slice(&l.doc, l.ord, l.width));
-                spec_list.push((l.doc, l.ord, l.width));
-            }
-        } else if let Some(s) = str_field(op, &["from", "source"]) {
-            if let Some(from) = self.shadow.resolve_doc(s) {
-                // `from: <doc>` with no span: whole current extent (mirrors
-                // the translator's fallback).
-                let n = self.shadow.text_len(&from);
-                copied.extend(self.shadow.slice(&from, 1, n));
-                spec_list.push((from, 1, n));
-            } else if let Some(l) = locate(&self.shadow, None, s) {
-                // A described region, not a doc ("positions 1-4 (Orig)" —
-                // vcopy_to_same_document); mirrors the translator, the
-                // out-of-extent re-aim included (`vcopy-source-reaimed`:
-                // ispan_partial_overlap's register held the empty dest).
-                let l = if l.ord + l.width > self.shadow.text_len(&l.doc) + 1 {
-                    let dest_hint = str_field(op, &["to", "dest", "target", "target_doc"])
-                        .filter(|t| !is_position_marker(t))
-                        .and_then(|t| self.shadow.resolve_doc(t))
-                        .unwrap_or_default();
-                    self.shadow
-                        .content_docs_except(&dest_hint)
-                        .iter()
-                        .find_map(|d| {
-                            locate(&self.shadow, Some(d.as_str()), s).filter(|c| {
-                                c.ord + c.width <= self.shadow.text_len(&c.doc) + 1
-                            })
-                        })
-                        .unwrap_or(l)
-                } else {
-                    l
-                };
-                copied.extend(self.shadow.slice(&l.doc, l.ord, l.width));
-                spec_list.push((l.doc, l.ord, l.width));
-            }
-        }
+        // Ordinary vcopy: the source regions the translator reads, through
+        // the same reading (`fields::vcopy_sources`), each contiguous
+        // content-subspace region kept as a (doc, ord, width) spec. An op
+        // the translator cannot ground copies nothing here either.
+        let Ok(sources) = vcopy_sources(op, &self.shadow, &mut Vec::new()) else { return };
+        let spec_list: Vec<(String, u64, u64)> = sources
+            .into_iter()
+            .filter(|s| s.sub == 1)
+            .map(|s| (s.doc, s.ord, s.width))
+            .collect();
+        let copied: Vec<u8> =
+            spec_list.iter().flat_map(|(d, o, w)| self.shadow.slice(d, *o, *w)).collect();
         if copied.is_empty() {
             return;
         }

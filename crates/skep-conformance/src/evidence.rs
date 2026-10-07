@@ -1,19 +1,31 @@
 //! The recorded-evidence policies both passes apply. Each reads what the
 //! scenario recorded about an op — the op's own post-state, or the next
-//! probe of its document — to decide what the op did: which document a
-//! doc-less insert aimed at, where an insert landed and how wide it was,
-//! whether a delete removed anything and exactly what. The grounding
-//! pre-pass and the translator call the same function, so the two cannot
-//! disagree about what the evidence says; the field grammar both read the
-//! evidence through is `fields`'s.
+//! probe of its document — to decide what the op did: whether udanax made
+//! the change at all, which document a doc-less insert aimed at, where an
+//! insert landed and how wide it was, whether a delete removed anything and
+//! exactly what. The grounding pre-pass and the translator call the same
+//! function, so the two cannot disagree about what the evidence says; the
+//! field grammar both read the evidence through is `fields`'s.
 
 use serde_json::Value;
 
 use crate::fields::{
-    expect_strings, field, label_of, locate, resolve_position, span_dict, str_field,
+    client_side_failure, expect_strings, expected_failure, field, label_of, locate,
+    resolve_position, span_dict, str_field,
 };
 use crate::shadow::Shadow;
 use crate::tum::parse_dotted;
+
+/// Did udanax make the change this op records? Not when the recording
+/// client crashed before the op reached udanax ([`client_side_failure`]),
+/// and not when the recording marks the op failed ([`expected_failure`]).
+/// The one answer to the question both passes ask before an op changes the
+/// golden-side world: the pre-pass applies an op exactly when this says
+/// yes, and the play pass mirrors a write into its shadow, or lets a
+/// creation enter it, exactly when this says yes.
+pub fn took_effect(op: &Value) -> bool {
+    client_side_failure(op).is_none() && expected_failure(op).is_none()
+}
 
 /// The next full-content probe of `doc` after op `i` (doc-field probes,
 /// docs-map probes, and per-target `targets` entries — identity/
@@ -454,5 +466,26 @@ fn single_gap_diff(pre: &[u8], post: &[u8]) -> Option<(u64, u64)> {
             return None;
         }
         a -= 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    /// An op changed the golden-side world unless its recording client
+    /// crashed or the recording marks it failed.
+    #[test]
+    fn an_op_takes_effect_unless_the_client_crashed_or_the_recording_says_it_failed() {
+        assert!(took_effect(&json!({"op": "insert", "text": "A"})));
+        assert!(took_effect(&json!({"op": "insert", "text": "A", "error": "N/A"})));
+        assert!(!took_effect(&json!({"op": "create_version", "error": "request failed (?)"})));
+        assert!(!took_effect(&json!({"op": "insert", "status": "failed"})));
+        assert!(!took_effect(&json!({
+            "op": "rearrange",
+            "result": "FAILED: 'XuSession' object has no attribute 'rearrange'",
+        })));
     }
 }

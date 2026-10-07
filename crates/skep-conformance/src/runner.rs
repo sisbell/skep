@@ -1,7 +1,7 @@
 //! The per-scenario loop: the grounding pre-pass, one fresh engine per
 //! scenario, implied creates + lead-in setup, ops played in order,
-//! α-findings folded into the op they arose on, allowlist grants applied to
-//! disagreements, one verdict per scenario. A harness panic is caught and
+//! α-findings folded into the op they arose on, each outcome judged against
+//! the allowlist, one verdict per scenario. A harness panic is caught and
 //! becomes verdict `error` — a harness bug, never a finding.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -9,13 +9,14 @@ use std::path::PathBuf;
 
 use crate::allowlist::{load as load_allowlist, Allowlist};
 use crate::alpha::Alpha;
+use crate::deletions::Deletions;
 use crate::ground::{ground, SetupStep};
 use crate::harness::Rig;
 use crate::loader::{conformance_dir, load_all, Scenario};
 use crate::outcome::{OpOutcome, ScenarioRecord, Status, Verdict};
 use crate::report::{output_dir, render_table, write_reports};
 use crate::shadow::Shadow;
-use crate::translate::{run_op, Cx, Grants};
+use crate::translate::{run_op, Cx};
 
 /// udanax-green's default account in the golden address space; every
 /// scenario's document addresses live under it. Seeded into α at scenario
@@ -98,6 +99,7 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
     };
     let mut alpha = Alpha::new();
     let mut shadow = Shadow::new();
+    let mut deletions = Deletions::default();
     alpha.bind(GOLDEN_DEFAULT_ACCOUNT, &rig.default_account());
 
     // The grounding pre-pass: shadow-only, derives implied setup from the
@@ -109,21 +111,24 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
     // scenario uses. A failure here is recorded and the run continues — the
     // affected ops then disagree honestly.
     {
-        let mut cx =
-            Cx { rig: &mut rig, alpha: &mut alpha, shadow: &mut shadow, ops: &scn.operations, plans: &grounding.plans };
+        let mut cx = Cx {
+            rig: &mut rig,
+            alpha: &mut alpha,
+            shadow: &mut shadow,
+            deletions: &mut deletions,
+            ops: &scn.operations,
+            plans: &grounding.plans,
+        };
         for docid in &grounding.implied_creates {
             if cx.alpha.peek(docid).is_some() {
                 continue; // already bound (defensive; should not happen)
             }
-            match cx.rig.create_private_document() {
-                skep_febe::Response::AckAddr { addr, .. } => {
-                    cx.alpha.bind(docid, &addr);
-                    cx.shadow.create_doc(docid, None);
-                }
-                r => groundings.push(format!(
+            let r = cx.create_document(docid, None, true);
+            if !matches!(r, skep_febe::Response::AckAddr { .. }) {
+                groundings.push(format!(
                     "implied-create FAILED for {docid}: {}",
                     crate::harness::brief(&r)
-                )),
+                ));
             }
         }
         'lead_in: for step in &grounding.lead_in {
@@ -133,18 +138,13 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
             // match stays total.)
             if let SetupStep::Insert { doc, .. } | SetupStep::Copy { doc, .. } = step {
                 if !cx.shadow.knows(doc) {
-                    match cx.rig.create_private_document() {
-                        skep_febe::Response::AckAddr { addr, .. } => {
-                            cx.alpha.bind(doc, &addr);
-                            cx.shadow.create_doc(doc, None);
-                        }
-                        r => {
-                            groundings.push(format!(
-                                "lead-in create FAILED for {doc}: {}",
-                                crate::harness::brief(&r)
-                            ));
-                            continue 'lead_in;
-                        }
+                    let r = cx.create_document(doc, None, true);
+                    if !matches!(r, skep_febe::Response::AckAddr { .. }) {
+                        groundings.push(format!(
+                            "lead-in create FAILED for {doc}: {}",
+                            crate::harness::brief(&r)
+                        ));
+                        continue 'lead_in;
                     }
                 }
             }
@@ -161,18 +161,13 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
 
     let mut ops: Vec<OpOutcome> = Vec::with_capacity(scn.operations.len());
     for (i, op) in scn.operations.iter().enumerate() {
-        let entries = allow.matching(&scn.name, i);
-        let grants = Grants {
-            width_tolerance: entries.iter().filter_map(|e| e.width_tolerance).max().unwrap_or(0),
-            count_delta: entries.iter().filter_map(|e| e.count_delta).next().unwrap_or(0),
-            classes: entries.iter().map(|e| e.class.clone()).collect(),
-        };
-        let adjusted = grants.width_tolerance != 0 || grants.count_delta != 0;
+        let grants = allow.grants(&scn.name, i);
         let mut out = {
             let mut cx = Cx {
                 rig: &mut rig,
                 alpha: &mut alpha,
                 shadow: &mut shadow,
+                deletions: &mut deletions,
                 ops: &scn.operations,
                 plans: &grounding.plans,
             };
@@ -185,12 +180,7 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
         if !findings.is_empty() {
             let joined = findings.join("; ");
             match out.status {
-                Status::Disagreed | Status::Inexpressible => {
-                    out.note = Some(match out.note.take() {
-                        Some(n) => format!("{n}; {joined}"),
-                        None => joined,
-                    });
-                }
+                Status::Disagreed | Status::Inexpressible => out.add_note(joined),
                 _ => {
                     out.status = Status::Disagreed;
                     out.comparator = Some("alpha".into());
@@ -198,40 +188,14 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
                 }
             }
         }
-        // Allowlist: a disagreement with a matching entry is allowlisted; an
-        // agreement reached only through a declared adjustment is too (the
-        // entry's existence IS the adjudicated divergence). Every matching
-        // entry class is surfaced so the ruling behind the verdict is
-        // auditable from the report alone.
-        let adjudicated =
-            out.status == Status::Disagreed || (out.status == Status::Agreed && adjusted);
-        if adjudicated && !grants.classes.is_empty() {
-            let mut classes = grants.classes.clone();
-            classes.dedup();
-            out.allowlisted = Some(classes.join("+"));
-        }
-        // Signature entries (`expected_matches`): evaluated post-hoc against
-        // the disagreed op's rendered expected value, so an adjudicated
-        // divergence stays granted when harness rounds shift op indices.
-        // Classification only — adjustments never retro-apply.
-        if out.status == Status::Disagreed {
-            let sig = allow.matching_expected(&scn.name, i, out.expected.as_deref());
-            if !sig.is_empty() {
-                let mut classes: Vec<String> =
-                    sig.iter().map(|e| e.class.clone()).collect();
-                if let Some(prev) = out.allowlisted.take() {
-                    classes.insert(0, prev);
-                }
-                classes.dedup();
-                out.allowlisted = Some(classes.join("+"));
-            }
-        }
+        // The allowlist judges the outcome α's findings left: which
+        // adjudicated classes, if any, cover it.
+        out.allowlisted = allow.grant(&scn.name, i, &out);
         ops.push(out);
     }
 
     let any_inexpressible = ops.iter().any(|o| o.status == Status::Inexpressible);
-    let any_raw_divergence =
-        ops.iter().any(|o| o.status == Status::Disagreed && o.allowlisted.is_none());
+    let any_raw_divergence = ops.iter().any(OpOutcome::is_unadjudicated);
     let any_allowlisted = ops.iter().any(|o| o.allowlisted.is_some());
     let verdict = if any_inexpressible {
         Verdict::Inexpressible
@@ -249,21 +213,11 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
     // when nothing unadjudicated exists (allowlisted/inexpressible verdicts).
     let first_failure = ops
         .iter()
-        .find(|o| {
-            o.status == Status::Inexpressible
-                || (o.status == Status::Disagreed && o.allowlisted.is_none())
-        })
+        .find(|o| o.status == Status::Inexpressible || o.is_unadjudicated())
         .or_else(|| {
             ops.iter().find(|o| matches!(o.status, Status::Disagreed | Status::Inexpressible))
         })
-        .map(|o| {
-            let detail = match (&o.expected, &o.actual, &o.note) {
-                (Some(e), Some(a), _) => format!("expected {e} / actual {a}"),
-                (_, _, Some(n)) => n.clone(),
-                _ => String::from("(no detail)"),
-            };
-            (o.index, o.label.clone(), detail)
-        });
+        .map(|o| (o.index, o.label.clone(), o.detail()));
     ScenarioRecord {
         category: scn.category.clone(),
         name: scn.name.clone(),

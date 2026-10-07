@@ -1,9 +1,11 @@
 //! Shared field-bag parsing: the one place golden JSON fields, decorated
 //! descriptions, recorded span shapes, and an op's own arguments are
-//! interpreted. Both the grounding pre-pass and the live translator read
-//! through these helpers, so the two passes cannot drift on what a field
-//! means. What a scenario's recorded evidence says an op DID — where an
-//! insert landed, what a delete removed — is `evidence`'s.
+//! interpreted — the verb a label names (`normalize`) and the regions a
+//! vcopy copies (`vcopy_sources`) included. Both the grounding pre-pass and
+//! the live translator read through these helpers, so the two passes cannot
+//! drift on what a field means. What a scenario's recorded evidence says an
+//! op DID — whether it happened at all, where an insert landed, what a
+//! delete removed — is `evidence`'s.
 //!
 //! Decoration grammar (each form calibrated against named golden files):
 //! * `"end"` / `"start"` / `"position 6"` / `"after First"` — positions
@@ -31,7 +33,7 @@
 use serde_json::Value;
 
 use crate::shadow::Shadow;
-use crate::tum::{link_home_docid, parse_dotted, parse_vpos, parse_width};
+use crate::tum::{is_link_address, link_home_docid, parse_dotted, parse_vpos, parse_width};
 
 // ───────────────────────────── raw field access ────────────────────────────
 
@@ -363,12 +365,22 @@ pub fn expected_failure(op: &Value) -> Option<String> {
     }
 }
 
-/// A recorded `result` string of the form "OPERATION_FAILED: …" marks an op
-/// the RECORDING CLIENT crashed on (e.g. bert/copy_without_write_token_on_
-/// target: python AttributeError) — udanax never executed it, so the harness
-/// executes nothing and compares nothing.
+/// The RECORDING CLIENT crashed before the op reached udanax — a python
+/// `AttributeError` on a session method the client lacks. The corpus records
+/// that crash three ways: a `result` of "OPERATION_FAILED: …"
+/// (bert/copy_without_write_token_on_target), a `result` of "FAILED: …"
+/// naming the missing attribute (internal/insert_rearrange_insert_iaddress_
+/// gap op 2, whose next retrieve shows the text unchanged), and an `error`
+/// naming it (links/insert_text_at_link_subspace op 7). udanax never
+/// executed such an op, so the harness executes nothing and compares
+/// nothing. Returns the recorded message.
 pub fn client_side_failure(op: &Value) -> Option<&str> {
-    str_field(op, &["result"]).filter(|s| s.starts_with("OPERATION_FAILED:"))
+    let missing_attribute = |s: &&str| s.contains("object has no attribute");
+    str_field(op, &["result"])
+        .filter(|s| {
+            s.starts_with("OPERATION_FAILED:") || (s.starts_with("FAILED:") && missing_attribute(s))
+        })
+        .or_else(|| str_field(op, &["error"]).filter(missing_attribute))
 }
 
 /// A recording-client python `repr` captured verbatim ("<VSpan in … at 0 for
@@ -512,6 +524,217 @@ pub fn arrow_results(op: &Value) -> Vec<(String, String, String)> {
         }
     }
     out
+}
+
+// ────────────────────────────────── verbs ──────────────────────────────────
+
+/// The canonical verb an op's label names — the one reading of "what kind
+/// of op is this" both passes dispatch on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verb {
+    CreateDocument,
+    CreateDocuments,
+    CreateChain,
+    Setup,
+    OpenDocument,
+    CloseDocument,
+    Insert,
+    InsertLoop,
+    InteriorTyping,
+    Delete,
+    DeleteAll,
+    Vcopy,
+    Pivot,
+    Swap,
+    Rearrange,
+    CreateVersion,
+    CreateLink,
+    FollowLink,
+    Traverse,
+    FindLinks,
+    FindDocuments,
+    Contents,
+    Vspan,
+    Vspanset,
+    Endsets,
+    Compare,
+    Account,
+    CreateNode,
+    Connect,
+    Observe,
+    Meta,
+}
+
+impl Verb {
+    pub fn name(self) -> &'static str {
+        match self {
+            Verb::CreateDocument => "create_document",
+            Verb::CreateDocuments => "create_documents",
+            Verb::CreateChain => "create_chain",
+            Verb::Setup => "setup",
+            Verb::OpenDocument => "open_document",
+            Verb::CloseDocument => "close_document",
+            Verb::Insert => "insert",
+            Verb::InsertLoop => "insert_loop",
+            Verb::InteriorTyping => "interior_typing",
+            Verb::Delete => "delete",
+            Verb::DeleteAll => "delete_all",
+            Verb::Vcopy => "vcopy",
+            Verb::Pivot => "pivot",
+            Verb::Swap => "swap",
+            Verb::Rearrange => "rearrange",
+            Verb::CreateVersion => "create_version",
+            Verb::CreateLink => "create_link",
+            Verb::FollowLink => "follow_link",
+            Verb::Traverse => "traverse",
+            Verb::FindLinks => "find_links",
+            Verb::FindDocuments => "find_documents",
+            Verb::Contents => "retrieve_contents",
+            Verb::Vspan => "retrieve_vspan",
+            Verb::Vspanset => "retrieve_vspanset",
+            Verb::Endsets => "retrieve_endsets",
+            Verb::Compare => "compare_versions",
+            Verb::Account => "account",
+            Verb::CreateNode => "create_node",
+            Verb::Connect => "connect",
+            Verb::Observe => "observe",
+            Verb::Meta => "meta",
+        }
+    }
+}
+
+/// The meta/diagnostic labels (per the brief): executed nothing, compared
+/// nothing, counted separately — UNLESS the op carries observation data
+/// (a vspanset/contents bundle), in which case it is an [`Verb::Observe`]
+/// probe (internal/interior_typing_two_characters's `initial_state`).
+const META: &[&str] = &[
+    "snapshot", "dump_state", "verify", "setup", "analysis", "note", "summary", "initial_state",
+    "final_state",
+];
+
+/// Longest-matching verb stem, checked in table order (specific before
+/// general — `vspanset` before `vspan`, `delete_all` before `delete`).
+const STEMS: &[(&str, Verb)] = &[
+    ("create_node", Verb::CreateNode),
+    ("create_chain", Verb::CreateChain),
+    ("create_and_transclude", Verb::Vcopy),
+    ("create_documents", Verb::CreateDocuments),
+    ("create_document", Verb::CreateDocument),
+    ("create_doc", Verb::CreateDocument),
+    ("create_sources", Verb::CreateDocuments),
+    ("create_target", Verb::CreateDocument),
+    ("create_multiple_targets", Verb::CreateDocuments),
+    ("open_document", Verb::OpenDocument),
+    ("close_document", Verb::CloseDocument),
+    ("create_version", Verb::CreateVersion),
+    ("version", Verb::CreateVersion),
+    ("create_links", Verb::CreateLink),
+    ("create_link", Verb::CreateLink),
+    ("makelink", Verb::CreateLink),
+    ("interior_typing", Verb::InteriorTyping),
+    ("insert_loop", Verb::InsertLoop),
+    ("insert", Verb::Insert),
+    ("append", Verb::Insert),
+    ("delete_all", Verb::DeleteAll),
+    ("remove_all", Verb::DeleteAll),
+    ("delete", Verb::Delete),
+    ("remove", Verb::Delete),
+    ("vcopy", Verb::Vcopy),
+    ("copy", Verb::Vcopy),
+    ("pivot", Verb::Pivot),
+    ("swap", Verb::Swap),
+    ("rearrange", Verb::Rearrange),
+    ("reverse_traversal", Verb::Traverse),
+    ("traverse", Verb::Traverse),
+    ("follow_links", Verb::Traverse),
+    ("follow_link", Verb::FollowLink),
+    ("find_links", Verb::FindLinks),
+    ("links_", Verb::FindLinks),
+    ("links", Verb::FindLinks),
+    ("find_documents", Verb::FindDocuments),
+    ("find_docs", Verb::FindDocuments),
+    ("docs", Verb::FindDocuments),
+    ("retrieve_vspanset", Verb::Vspanset),
+    ("vspanset", Verb::Vspanset),
+    ("retrieve_vspan", Verb::Vspan),
+    ("vspan", Verb::Vspan),
+    ("retrieve_endsets", Verb::Endsets),
+    ("endsets", Verb::Endsets),
+    ("retrieve_contents", Verb::Contents),
+    ("retrieve", Verb::Contents),
+    ("contents", Verb::Contents),
+    ("content", Verb::Contents),
+    ("text_at", Verb::Contents),
+    ("pos_", Verb::Contents),
+    ("link_at", Verb::Contents),
+    ("full_text", Verb::Contents),
+    ("full_content", Verb::Contents),
+    ("compare", Verb::Compare),
+    ("comparisons", Verb::Compare),
+    ("account", Verb::Account),
+    ("connect", Verb::Connect),
+    // The new-corpus checkpoint op: vspanset+contents bundle, or a bare
+    // failed probe of a never-created doc (error field only).
+    ("probe", Verb::Observe),
+];
+
+/// Does the op carry observation data (a probe bundle)?
+pub fn has_observation_fields(op: &Value) -> bool {
+    let Some(o) = op.as_object() else { return false };
+    for (k, v) in o {
+        match k.as_str() {
+            "vspanset" | "vspans" | "contents" | "content" | "positions" | "docs" | "targets" => {
+                return true
+            }
+            "result" | "before" | "after" | "empty"
+                if expect_strings(v).is_some() || looks_like_spanset(v) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Normalize a label to a canonical verb: meta list (with the
+/// observation-bundle escape), then the stem table, then a field-shape
+/// fallback for pure state-probe labels. `None` ⇒ inexpressible.
+pub fn normalize(label: &str, op: &Value) -> Option<Verb> {
+    let l = label.to_ascii_lowercase();
+    if l == "setup" {
+        return Some(Verb::Setup);
+    }
+    if META.iter().any(|m| l == *m || l.starts_with(&format!("{m}_"))) {
+        return Some(if has_observation_fields(op) { Verb::Observe } else { Verb::Meta });
+    }
+    for (stem, verb) in STEMS {
+        if l.starts_with(stem) {
+            return Some(*verb);
+        }
+    }
+    if !arrow_results(op).is_empty() {
+        return Some(Verb::CreateLink);
+    }
+    // Shape fallback for unknown probe labels.
+    if let Some(res) = op.get("result") {
+        if looks_like_spanset(res) {
+            return Some(Verb::Vspanset);
+        }
+        if let Some(arr) = res.as_array() {
+            if !arr.is_empty() && arr.iter().all(|v| v.as_str().is_some_and(is_link_address))
+            {
+                return Some(Verb::FindLinks);
+            }
+            if arr.iter().all(|v| v.as_str().is_some()) {
+                return Some(Verb::Contents);
+            }
+        }
+    }
+    if has_observation_fields(op) {
+        return Some(Verb::Observe);
+    }
+    None
 }
 
 // ───────────────────────────── decorated forms ─────────────────────────────
@@ -846,4 +1069,181 @@ pub fn note_arrow(op: &Value) -> Option<(String, String)> {
         }
     }
     None
+}
+
+// ────────────────────────────── vcopy sources ──────────────────────────────
+
+/// One region an ordinary vcopy copies: golden document, subspace, 1-based
+/// ordinal, width.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CopySource {
+    pub doc: String,
+    pub sub: u64,
+    pub ord: u64,
+    pub width: u64,
+}
+
+/// An ordinary vcopy's source regions, read from the op's own fields
+/// against the shadow alone — the one reading the play pass executes and
+/// the pre-pass mirrors. In field order:
+///
+/// * a spec list of vspec dicts or located texts, or a single vspec dict
+///   (`source: {docid, span}` — the corpus extension's fanout and depth
+///   recordings);
+/// * a `spans` list of span dicts (in the `from`/`source_doc` doc, else the
+///   register's) or located texts;
+/// * a `source_span`/`span` dict in the `from`/`source_doc` doc, else in the
+///   first content-holding doc other than the destination reference;
+/// * a `text`/`span` description;
+/// * a `from`/`source` document (its whole current extent) or described
+///   region. A description that grounds OUTSIDE its doc's live extent
+///   grounded against the wrong doc — typically the register pointing at
+///   the just-created empty destination — so it re-grounds against the
+///   content-holding docs excluding the destination reference (policy
+///   `vcopy-source-reaimed`; internal/ispan_partial_overlap's `from:
+///   "positions 3-7 (CDEFG)"` with `to: "dest"`, confirmed by the recorded
+///   post-state "CDEFG in both"). With no valid re-aim the original
+///   grounding stands and diverges loudly.
+///
+/// Zero-width regions copy nothing and are dropped. The grounding policies
+/// applied are pushed to `adaptations`; `Err` carries the reason the op is
+/// inexpressible.
+pub fn vcopy_sources(
+    op: &Value,
+    shadow: &Shadow,
+    adaptations: &mut Vec<String>,
+) -> Result<Vec<CopySource>, String> {
+    let mut sources: Vec<CopySource> = Vec::new();
+    let mut push = |doc: &str, sub: u64, ord: u64, width: u64| {
+        if width > 0 {
+            sources.push(CopySource { doc: doc.to_string(), sub, ord, width });
+        }
+    };
+    let dest_ref = str_field(op, &["to", "dest", "target", "target_doc"])
+        .filter(|t| !is_position_marker(t))
+        .and_then(|t| shadow.resolve_doc(t))
+        .unwrap_or_default();
+    let named_source = str_field(op, &["from", "source_doc"]).and_then(|s| shadow.resolve_doc(s));
+    let spec_items: Option<Vec<&Value>> =
+        match field(op, &["specs", "specset", "source", "sources"]) {
+            Some(Value::Array(a)) => Some(a.iter().collect()),
+            Some(v @ Value::Object(_)) if vspec_dict(v).is_some() => Some(vec![v]),
+            _ => None,
+        };
+    if let Some(items) = spec_items {
+        for v in items {
+            if let Some((docid, spans)) = vspec_dict(v) {
+                for (sub, ord, w) in spans {
+                    push(&docid, sub, ord, w);
+                }
+            } else if let Some(t) = v.as_str() {
+                let l = locate(shadow, None, t).ok_or(format!("vcopy span {t:?} not groundable"))?;
+                adaptations.push(l.how.into());
+                push(&l.doc, 1, l.ord, l.width);
+            } else {
+                return Err("vcopy spec list holds an unrecognized entry".into());
+            }
+        }
+    } else if let Some(items) = field(op, &["spans"]).and_then(Value::as_array) {
+        for v in items {
+            if let Some((sub, ord, w)) = span_dict(v) {
+                if let Some(docid) = named_source.clone().or_else(|| shadow.scoped()) {
+                    push(&docid, sub, ord, w);
+                }
+            } else if let Some(t) = v.as_str() {
+                let l = locate(shadow, None, t).ok_or(format!("vcopy span {t:?} not groundable"))?;
+                adaptations.push(l.how.into());
+                push(&l.doc, 1, l.ord, l.width);
+            }
+        }
+    } else if let Some((1, ord, w)) = field(op, &["source_span", "span"]).and_then(span_dict) {
+        let src = named_source
+            .or_else(|| shadow.content_docs_except(&dest_ref).first().cloned())
+            .ok_or("vcopy source_span with no source document")?;
+        push(&src, 1, ord, w);
+    } else if let Some(t) = str_field(op, &["text", "span"]) {
+        let l = locate(shadow, named_source.as_deref(), t)
+            .ok_or(format!("vcopy text {t:?} not groundable"))?;
+        adaptations.push(l.how.into());
+        push(&l.doc, 1, l.ord, l.width);
+    } else if let Some(s) = str_field(op, &["from", "source"]) {
+        if let Some(from) = shadow.resolve_doc(s) {
+            let n = shadow.text_len(&from);
+            if n == 0 {
+                return Err("vcopy from an empty document".into());
+            }
+            adaptations.push("whole-extent".into());
+            push(&from, 1, 1, n);
+        } else if let Some(l) = locate(shadow, None, s) {
+            let l = if l.ord + l.width > shadow.text_len(&l.doc) + 1 {
+                match shadow.content_docs_except(&dest_ref).iter().find_map(|d| {
+                    locate(shadow, Some(d.as_str()), s)
+                        .filter(|c| c.ord + c.width <= shadow.text_len(&c.doc) + 1)
+                }) {
+                    Some(re) => {
+                        adaptations.push("vcopy-source-reaimed".into());
+                        re
+                    }
+                    None => l,
+                }
+            } else {
+                l
+            };
+            adaptations.push(l.how.into());
+            push(&l.doc, 1, l.ord, l.width);
+        } else {
+            return Err(format!("vcopy from {s:?}: neither a doc nor a groundable region"));
+        }
+    } else {
+        return Err("vcopy without specs, span or text".into());
+    }
+    if sources.is_empty() {
+        return Err("vcopy resolved to no source spans".into());
+    }
+    Ok(sources)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    /// The recording client's crash, in each form the corpus records it —
+    /// and nothing else: udanax's own refusals stay recorded failures.
+    #[test]
+    fn a_client_crash_is_recognized_in_each_recorded_form() {
+        let crash = "'XuSession' object has no attribute 'rearrange'";
+        let forms = [
+            json!({"op": "copy", "result": format!("OPERATION_FAILED: {crash}")}),
+            json!({"op": "rearrange", "result": format!("FAILED: {crash}")}),
+            json!({"op": "find_documents_containing", "error": crash, "result": []}),
+        ];
+        for op in &forms {
+            assert!(client_side_failure(op).is_some(), "{op}");
+        }
+        let refused = json!({"op": "open", "error": "request failed (?)"});
+        assert_eq!(client_side_failure(&refused), None);
+        let failed = json!({"op": "x", "result": "FAILED: out of range"});
+        assert_eq!(client_side_failure(&failed), None);
+    }
+
+    /// The one reading of a vcopy's sources, the corpus extension's single
+    /// vspec dict included; an op it cannot read says why.
+    #[test]
+    fn a_single_vspec_dict_is_a_vcopy_source() {
+        let mut shadow = Shadow::new();
+        shadow.create_doc("1.1.0.1.0.1", Some("source"));
+        shadow.insert("1.1.0.1.0.1", 1, b"hello world");
+        let op = json!({
+            "op": "vcopy",
+            "source": {"docid": "1.1.0.1.0.1", "span": {"start": "1.7", "width": "0.5"}},
+        });
+        let source = CopySource { doc: "1.1.0.1.0.1".into(), sub: 1, ord: 7, width: 5 };
+        assert_eq!(vcopy_sources(&op, &shadow, &mut Vec::new()), Ok(vec![source]));
+        assert_eq!(
+            vcopy_sources(&json!({"op": "vcopy"}), &shadow, &mut Vec::new()),
+            Err("vcopy without specs, span or text".into())
+        );
+    }
 }

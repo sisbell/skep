@@ -12,8 +12,9 @@ use skep_retrieval::RegionSpec;
 
 use super::{
     elem_range, inexpressible, marker_type_name, parse_set_spans, rejection_code, settle_ack,
-    side_specs, Cx, Grants, SetSpan,
+    side_specs, Cx, SetSpan, Tally,
 };
+use crate::allowlist::Grants;
 use crate::compare::{compare_addr_sets, compare_count};
 use crate::fields::{expected_failure, field, locate, str_field, vspec_dict, DocSpans};
 use crate::outcome::{OpOutcome, Status};
@@ -76,7 +77,7 @@ pub(super) fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants:
                 if let Some(l) = locate(cx.shadow, None, s) {
                     return Some(SideSpec::V(vec![(l.doc, vec![(1, l.ord, l.width)])]));
                 }
-                let ispans = cx.rig.locate_deleted(s.as_bytes())?;
+                let ispans = cx.deletions.locate(s.as_bytes())?;
                 icov_tag = true;
                 return Some(SideSpec::I(Endset::from_spans(ispans)));
             }
@@ -93,7 +94,7 @@ pub(super) fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants:
             if let Some(l) = locate(cx.shadow, None, t) {
                 return Some(SideSpec::V(vec![(l.doc, vec![(1, l.ord, l.width)])]));
             }
-            let ispans = cx.rig.locate_deleted(t.as_bytes())?;
+            let ispans = cx.deletions.locate(t.as_bytes())?;
             icov_tag = true;
             return Some(SideSpec::I(Endset::from_spans(ispans)));
         }
@@ -261,7 +262,7 @@ pub(super) fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants:
                 let mut all: Vec<skep_address::Span> = Vec::new();
                 for (doc, spans) in &list {
                     if spans.is_empty() || cx.shadow.text_len(doc) == 0 {
-                        let deleted = cx.rig.deleted_ispans_of(doc);
+                        let deleted = cx.deletions.ispans_of(doc);
                         if !deleted.is_empty() {
                             icov_any = true;
                             all.extend(deleted);
@@ -452,7 +453,7 @@ pub(super) fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants:
         });
         if let Some(n) = n {
             out.comparator = Some("count".into());
-            match compare_count(n, grants.count_delta, addrs.len()) {
+            match compare_count(n, addrs.len(), grants, &mut out.adaptations) {
                 Ok(()) => out.status = Status::Agreed,
                 Err((e, a)) => {
                     out.status = Status::Disagreed;
@@ -613,7 +614,7 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             // that still holds the identity live (spanfilade/
             // delete_all_transcluded_content's post-delete find_documents).
             let mut relocated = false;
-            for bytes in cx.rig.deleted_bytes_of(&doc) {
+            for bytes in cx.deletions.bytes_of(&doc) {
                 let needle = String::from_utf8_lossy(&bytes).into_owned();
                 if let Some(r) = relocate(cx, out, &needle) {
                     regions.push(r);
@@ -714,18 +715,14 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             return;
         };
         out.adaptations.push("endsets-as-followlink".into());
-        out.comparator = Some("endsets-follow-widths".into());
-        let mut fails: Vec<(String, String)> = Vec::new();
+        let mut tally = Tally::default();
         for (slot_keys, slot) in
             [(&["from", "source"][..], 1usize), (&["to", "target"][..], 2)]
         {
-            let Some(exp) = field(op, slot_keys).and_then(Value::as_array) else { continue };
-            let mut want: Vec<u64> = Vec::new();
-            for v in exp {
-                if let Some((_, spans)) = vspec_dict(v) {
-                    want.extend(spans.iter().map(|(_, _, w)| *w));
-                }
-            }
+            let Some(exp) = field(op, slot_keys) else { continue };
+            let Some(want_specs) = slot_vspecs(&mut tally, slot, exp) else { continue };
+            let mut want: Vec<u64> =
+                want_specs.iter().flat_map(|(_, spans)| spans.iter().map(|(_, _, w)| *w)).collect();
             let mut got: Vec<u64> = Vec::new();
             match cx.rig.exec(Op::FollowLink { a: link.clone(), slot }) {
                 Response::Follow { result: Ok(set), .. } => {
@@ -738,26 +735,22 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 }
                 Response::Follow { result: Err(_), .. } => {}
                 r => {
-                    fails.push((
+                    tally.differ(
                         format!("slot{slot} widths"),
                         rejection_code(&r).unwrap_or_else(|| "?".into()),
-                    ));
+                    );
                     continue;
                 }
             }
             want.sort();
             got.sort();
-            if want != got {
-                fails.push((format!("slot{slot}:{want:?}"), format!("slot{slot}:{got:?}")));
+            if want == got {
+                tally.agree();
+            } else {
+                tally.differ(format!("slot{slot}:{want:?}"), format!("slot{slot}:{got:?}"));
             }
         }
-        if fails.is_empty() {
-            out.status = Status::Agreed;
-        } else {
-            out.status = Status::Disagreed;
-            out.expected = Some(fails.iter().map(|f| f.0.clone()).collect::<Vec<_>>().join(" | "));
-            out.actual = Some(fails.iter().map(|f| f.1.clone()).collect::<Vec<_>>().join(" | "));
-        }
+        tally.settle(out, "endsets-follow-widths");
         return;
     }
 
@@ -814,7 +807,6 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     // document (policy type_registry), which coverage cannot speak.
     out.adaptations.push("type_registry".into());
     out.adaptations.push("endset-coverage-translated".into());
-    out.comparator = Some("endsets-coverage".into());
     // The corpus extension nests the slot expectations under a `result`
     // object ({from, to, three}); the legacy shape keys them top-level. The
     // `three` slot compares through the same coverage comparator — its
@@ -830,30 +822,24 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         }
         _ => op,
     };
-    let mut fails: Vec<(String, String)> = Vec::new();
+    let mut tally = Tally::default();
     for (slot_keys, slot) in [
         (&["from", "source"][..], 1usize),
         (&["to", "target"][..], 2),
         (&["three"][..], 3),
     ] {
         let Some(exp) = field(exp_root, slot_keys) else { continue };
+        let Some(want_specs) = slot_vspecs(&mut tally, slot, exp) else { continue };
         // Golden side → I-coverage via the live image.
         let mut want_ranges: Vec<(String, u64, u64)> = Vec::new();
-        if let Some(arr) = exp.as_array() {
-            for v in arr {
-                if let Some((docid, spans)) = vspec_dict(v) {
-                    let (e, notes, _) = cx.image_endset(&docid, &spans);
-                    for n in notes {
-                        out.note = Some(match out.note.take() {
-                            Some(prev) => format!("{prev}; {n}"),
-                            None => n,
-                        });
-                    }
-                    for sp in e.spans() {
-                        if let Some(r) = elem_range(sp) {
-                            want_ranges.push((r.0, r.1, r.1 + r.2));
-                        }
-                    }
+        for (docid, spans) in &want_specs {
+            let (e, notes, _) = cx.image_endset(docid, spans);
+            for n in notes {
+                out.add_note(n);
+            }
+            for sp in e.spans() {
+                if let Some(r) = elem_range(sp) {
+                    want_ranges.push((r.0, r.1, r.1 + r.2));
                 }
             }
         }
@@ -877,25 +863,21 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         }
         let want = merge_ranges(want_ranges);
         let got = merge_ranges(got_ranges);
-        if want != got {
-            fails.push((
+        if want == got {
+            tally.agree();
+        } else {
+            tally.differ(
                 format!("slot{slot}:cov{}", render_ranges(&want)),
                 format!("slot{slot}:cov{}", render_ranges(&got)),
-            ));
+            );
         }
     }
     // TYPE slot: (origin doc, width) multiset as before.
-    if let Some(exp) = field(op, &["type"]) {
-        let mut want: Vec<(String, u64)> = Vec::new();
-        if let Some(arr) = exp.as_array() {
-            for v in arr {
-                if let Some((docid, spans)) = vspec_dict(v) {
-                    for (_, _, w) in spans {
-                        want.push((docid.clone(), w));
-                    }
-                }
-            }
-        }
+    if let Some(want_specs) = field(op, &["type"]).and_then(|exp| slot_vspecs(&mut tally, 3, exp)) {
+        let mut want: Vec<(String, u64)> = want_specs
+            .iter()
+            .flat_map(|(docid, spans)| spans.iter().map(|(_, _, w)| (docid.clone(), *w)))
+            .collect();
         let mut got: Vec<(String, u64)> = Vec::new();
         for (i, e) in &pairs {
             if *i != 3 {
@@ -917,17 +899,35 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         }
         want.sort();
         got.sort();
-        if want != got {
-            fails.push((format!("slot3:{want:?}"), format!("slot3:{got:?}")));
+        if want == got {
+            tally.agree();
+        } else {
+            tally.differ(format!("slot3:{want:?}"), format!("slot3:{got:?}"));
         }
     }
-    if fails.is_empty() {
-        out.status = Status::Agreed;
-    } else {
-        out.status = Status::Disagreed;
-        out.expected = Some(fails.iter().map(|f| f.0.clone()).collect::<Vec<_>>().join(" | "));
-        out.actual = Some(fails.iter().map(|f| f.1.clone()).collect::<Vec<_>>().join(" | "));
+    tally.settle(out, "endsets-coverage");
+}
+
+/// One slot's recorded endset, read as vspec dicts. A slot expectation that
+/// is not a list, or an entry that is not a vspec, is a recorded part the
+/// comparison cannot aim at — tallied as such, never dropped; `None` when
+/// nothing of the slot is readable.
+fn slot_vspecs(tally: &mut Tally, slot: usize, exp: &Value) -> Option<Vec<DocSpans>> {
+    let Some(entries) = exp.as_array() else {
+        tally.unaimed(format!("slot{slot} expectation {exp} is not a vspec list"));
+        return None;
+    };
+    let mut specs = Vec::new();
+    for v in entries {
+        match vspec_dict(v) {
+            Some(spec) => specs.push(spec),
+            None => tally.unaimed(format!("slot{slot} entry {v} is not a vspec")),
+        }
     }
+    if specs.is_empty() && !entries.is_empty() {
+        return None;
+    }
+    Some(specs)
 }
 
 /// Sort and merge element ranges (prefix, lo, hi-exclusive) — the coverage

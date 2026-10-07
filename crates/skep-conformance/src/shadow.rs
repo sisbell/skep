@@ -6,10 +6,12 @@
 //! result, an explicit doc field, or an expectation's docid).
 //!
 //! The shadow exists ONLY to translate text-denoted references the goldens
-//! use. It is computed from the RECORDED ops (plus the grounding pre-pass's
-//! inferred setup) — never from skep responses — so translation stays
-//! independent of skep's behavior and a skep divergence cannot bend later
-//! translations.
+//! use. Its content follows the RECORDED ops (plus the grounding pre-pass's
+//! inferred setup) whatever skep answers, so a skep divergence cannot bend
+//! a later translation; a created document, version or link enters it only
+//! when skep made it too, so every name it resolves has an α-image. In the
+//! play pass it changes only through `translate`'s `Cx` world-change
+//! methods, which state that rule.
 
 use std::collections::BTreeMap;
 

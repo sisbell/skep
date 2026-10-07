@@ -27,10 +27,11 @@
 //! through the rig. `translate::run_op` then plays each op in order:
 //! normalized to a canonical verb (or classified inexpressible, the reason
 //! recorded), executed, and judged by `compare`'s comparator for its result
-//! type. `runner` folds each op's α-findings and allowlist entries into its
-//! outcome — a disagreement an adjudicated entry matches is `allowlisted`,
-//! one no entry matches stays `divergent` — and the outcomes into one
-//! verdict per scenario; `report` writes `report.jsonl` and `summary.md`.
+//! type. `runner` folds each op's α-findings into its outcome and asks the
+//! allowlist which adjudicated classes cover it — a disagreement an entry
+//! covers is `allowlisted`, one no entry covers stays `divergent` — and
+//! folds the outcomes into one verdict per scenario; `report` writes
+//! `report.jsonl` and `summary.md`.
 //!
 //! ## What holds across files
 //!
@@ -38,22 +39,31 @@
 //!   fields of `harness::Rig`: every request the harness makes goes through
 //!   `OperationSurface::execute` inside a `Rig` method, and nothing else in
 //!   the crate holds either.
-//! * **The shadow is golden-side.** `shadow` holds what the recorded ops and
-//!   the pre-pass's inferred setup put there, never anything skep answered,
-//!   so a skep divergence cannot bend a later translation.
+//! * **The shadow is golden-side, and has one owner.** Whether a recorded op
+//!   changed the golden-side world is one answer, `evidence::took_effect`,
+//!   and in the play pass the shadow changes only through the `Cx`
+//!   world-change methods in `translate`, which `tests/it/tidy.rs` holds
+//!   every other play-pass file to. Content follows the recording, whatever
+//!   skep answers; a created document, version or link enters the shadow
+//!   only when skep made it too, so a version skep refuses leaves its later
+//!   name-references ungroundable — the class rulings 20 and 20a freeze.
 //! * **Both passes read an op the same way.** The pre-pass and the
-//!   translator share one grammar for an op's fields (`fields`) and one set
-//!   of policies for what its recorded evidence says it did (`evidence`).
-//!   Where `ground`'s simulation restates a handler's effect on the shadow,
-//!   nothing but review keeps the two alike: change them together.
+//!   translator share one grammar for an op's fields (`fields`: the verb a
+//!   label names, an op's arguments, a vcopy's sources) and one set of
+//!   policies for what its recorded evidence says it did (`evidence`).
+//!   `ground`'s simulation still restates each verb's effect on the shadow
+//!   and reads probes its own way; nothing but review keeps those alike:
+//!   change them together.
 //! * **Harness infrastructure never reaches a comparison.** The types
 //!   document, each rig account's home and the setup grant it holds, the rig
 //!   accounts, and the grants class address are told apart by one
 //!   predicate, `Rig::is_infra_addr`; an answer that can carry them is
 //!   filtered through it before it is compared or bound into α.
 //! * **One outcome per op; one place judges.** `translate::run_op` returns
-//!   exactly one `OpOutcome` per recorded op, whatever happens; only
-//!   `runner` drains α's findings and applies the allowlist.
+//!   exactly one `OpOutcome` per recorded op, whatever happens, and an op
+//!   judged part by part settles through one `Tally`, so `agreed` always
+//!   means compared and matched; only `runner` drains α's findings and asks
+//!   the allowlist, `Allowlist::grant`, which classes cover an outcome.
 //! * **Scenario documents are minted private** — `published: Some(false)`
 //!   (PUB-8.16) — by the one method that creates them,
 //!   `Rig::create_private_document`, in the current session's own account.
@@ -72,10 +82,12 @@
 //! records; and `conformance_ratchet`, where conformance is enforced — a
 //! `divergent` or `error` verdict fails it, as does an `allowlisted` or
 //! `inexpressible` verdict on a scenario `conformance/ratchet.toml` does not
-//! freeze there. `tidy.rs` holds the module map below to the code — every
-//! file declared, every declaration with its line, every module naming only
-//! itself and the modules above it — and holds every file but `harness.rs`
-//! to building no CREATENEWDOCUMENT request of its own.
+//! freeze there, and a frozen name no golden carries. `tidy.rs` holds the
+//! module map below to the code — every file declared, every declaration
+//! with its line, every module naming only itself and the modules above it
+//! — holds every file but `harness.rs` to building no CREATENEWDOCUMENT
+//! request of its own, and holds the play pass to changing the shadow
+//! through its one owner.
 
 // Golden dotted strings ⇄ skep tumblers, addresses and spans; golden address shapes.
 mod tum;
@@ -83,12 +95,14 @@ mod tum;
 pub mod outcome;
 // The vendored conformance tree, and its golden scenarios loaded as dynamic JSON.
 pub mod loader;
-// allowlist.toml: adjudicated divergences, in a TOML subset parsed here.
+// allowlist.toml: adjudicated divergences and the grants they make, in a TOML subset parsed here.
 pub mod allowlist;
 // The per-scenario golden ↔ skep address bijection and its findings.
 mod alpha;
 // The golden-side shadow: bytes, names, the current-document register.
 mod shadow;
+// Deleted content's I-history, captured at delete time and keyed by golden document.
+mod deletions;
 // The field-bag grammar both passes read an op through.
 mod fields;
 // The recorded-evidence policies both passes apply.

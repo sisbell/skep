@@ -5,14 +5,16 @@
 //! α-bijection's sanctioned binding move ("when a golden op's result is an
 //! address and skep's response carries one, bind golden→skep" — probe
 //! results included), and nothing adjusts a value except under an explicit
-//! allowlist grant threaded in by the caller.
+//! allowlist grant threaded in by the caller — and a comparator whose
+//! agreement the grant made records that it did.
 
 use skep_address::{Address, SpanSet};
 use skep_retrieval::DeliveryItem;
 
+use crate::allowlist::{Grants, GRANT_COUNT, GRANT_WIDTH};
 use crate::alpha::Alpha;
 use crate::fields::RawSpan;
-use crate::tum::span_strings;
+use crate::tum::{parse_dotted, span_strings};
 
 /// A comparator's answer: agreement, or the disagreement as (expected,
 /// actual), both rendered.
@@ -157,7 +159,9 @@ pub fn compare_content(
 /// number, they are paired in address order and bound — links homed in one
 /// document are allocated in the same subspace order on both sides, so the
 /// positional pairing is structural, and a wrong pairing surfaces later as
-/// an α double-bind finding, never silently.
+/// an α double-bind finding, never silently. Address order is tumbler order
+/// on both sides — component by component, numerically — so `…0.9` pairs
+/// ahead of `…0.10` exactly as the two systems allocated them.
 pub fn compare_addr_sets(
     expected_golden: &[String],
     actual: &[Address],
@@ -166,11 +170,11 @@ pub fn compare_addr_sets(
     adaptations: &mut Vec<String>,
 ) -> Comparison {
     let mut got: Vec<Address> = actual.iter().filter(|a| !exclude(a)).cloned().collect();
-    got.sort_by_key(crate::tum::addr_str);
-    got.dedup_by_key(|a| crate::tum::addr_str(a));
+    got.sort();
+    got.dedup();
 
     let mut want_goldens: Vec<String> = expected_golden.to_vec();
-    want_goldens.sort();
+    want_goldens.sort_by(|a, b| parse_dotted(a).cmp(&parse_dotted(b)).then_with(|| a.cmp(b)));
     want_goldens.dedup();
     // The golden listing one address twice is a recording defect
     // (insert_text_check_both_link_positions's find_links). The set
@@ -231,25 +235,37 @@ pub fn compare_addr_sets(
 /// client wrote (decoded-tumbler `str()` forms); the actual side is skep's
 /// spans rendered the same dotted way. No reinterpretation: a malformed
 /// recorded shape (see [`collapsed_subspace_shape`]) compares as recorded
-/// and diverges honestly. Width tolerance applies ONLY where the caller
-/// passes a granted allowlist tolerance and both widths parse; start
-/// positions are always exact.
+/// and diverges honestly. Width tolerance applies ONLY where the allowlist
+/// grants one and both widths parse; start positions are always exact. An
+/// agreement the tolerance made is recorded as [`GRANT_WIDTH`].
 pub fn compare_spansets(
     expected: &[RawSpan],
     actual: &SpanSet,
-    width_tolerance: u64,
+    grants: &Grants,
+    adaptations: &mut Vec<String>,
 ) -> Comparison {
     let mut want: Vec<RawSpan> = expected.to_vec();
     let mut got: Vec<RawSpan> = actual.iter().map(span_strings).collect();
     want.sort();
     got.sort();
+    let tol = grants.width_tolerance;
+    let mut tolerated = false;
     let ok = want.len() == got.len()
         && want.iter().zip(&got).all(|(w, g)| {
-            w.0 == g.0
-                && (w.1 == g.1
-                    || (width_tolerance > 0 && widths_within(&w.1, &g.1, width_tolerance)))
+            if w.0 != g.0 {
+                return false;
+            }
+            if w.1 == g.1 {
+                return true;
+            }
+            let within = tol > 0 && widths_within(&w.1, &g.1, tol);
+            tolerated |= within;
+            within
         });
     if ok {
+        if tolerated {
+            adaptations.push(GRANT_WIDTH.into());
+        }
         Ok(())
     } else {
         Err((format!("{want:?}"), format!("{got:?}")))
@@ -317,9 +333,21 @@ pub const VERSION_LINK_CARRYOVER_ANALYSIS: &str =
 
 // ── counts: exact modulo declared delta ────────────────────────────────────
 
-pub fn compare_count(expected: u64, delta: i64, actual: usize) -> Comparison {
+/// A recorded count against skep's, exact up to the count delta the
+/// allowlist grants; an agreement the delta made is recorded as
+/// [`GRANT_COUNT`].
+pub fn compare_count(
+    expected: u64,
+    actual: usize,
+    grants: &Grants,
+    adaptations: &mut Vec<String>,
+) -> Comparison {
+    let delta = grants.count_delta;
     let adjusted = expected as i128 + delta as i128;
     if adjusted == actual as i128 {
+        if delta != 0 {
+            adaptations.push(GRANT_COUNT.into());
+        }
         Ok(())
     } else {
         Err((
@@ -345,5 +373,61 @@ pub fn compare_expected_failure(golden_error: &str, skep_rejected: Option<&str>)
             format!("failure: {golden_error:?}"),
             "skep accepted the operation".to_string(),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use skep_address::Span;
+
+    use crate::tum::{addr, tum};
+
+    /// Unbound results pair in tumbler order on both sides: golden
+    /// `…0.9`/`…0.10` bind to skep's `…0.11`/`…0.12` in allocation order,
+    /// where a string sort would cross them.
+    #[test]
+    fn unbound_results_pair_in_tumbler_order() {
+        let mut alpha = Alpha::new();
+        let (eleven, twelve) =
+            (addr(&[1, 0, 1, 0, 11]).expect("valid"), addr(&[1, 0, 1, 0, 12]).expect("valid"));
+        let want = ["1.1.0.1.0.10".to_string(), "1.1.0.1.0.9".to_string()];
+        let mut adaptations = Vec::new();
+        let verdict = compare_addr_sets(
+            &want,
+            &[twelve.clone(), eleven.clone()],
+            &mut alpha,
+            |_| false,
+            &mut adaptations,
+        );
+        assert_eq!(verdict, Ok(()));
+        assert_eq!(adaptations, ["alpha-bind-from-result:2"]);
+        assert_eq!(alpha.peek("1.1.0.1.0.9"), Some(eleven));
+        assert_eq!(alpha.peek("1.1.0.1.0.10"), Some(twelve));
+    }
+
+    /// A comparator records an allowlist grant only when the grant, not the
+    /// raw values, made its agreement.
+    #[test]
+    fn a_grant_is_recorded_only_when_it_made_the_agreement() {
+        let set = SpanSet::singleton(Span::new(tum(&[1, 1]), tum(&[0, 5])).expect("a span"));
+        let width = Grants { width_tolerance: 1, count_delta: 0 };
+        let exact = [("1.1".to_string(), "0.5".to_string())];
+        let off_by_one = [("1.1".to_string(), "0.4".to_string())];
+        let mut adaptations = Vec::new();
+        assert_eq!(compare_spansets(&exact, &set, &width, &mut adaptations), Ok(()));
+        assert!(adaptations.is_empty(), "an exact width used no grant");
+        assert_eq!(compare_spansets(&off_by_one, &set, &width, &mut adaptations), Ok(()));
+        assert_eq!(adaptations, [GRANT_WIDTH]);
+        assert!(compare_spansets(&off_by_one, &set, &Grants::default(), &mut Vec::new()).is_err());
+
+        let delta = Grants { width_tolerance: 0, count_delta: 1 };
+        let mut adaptations = Vec::new();
+        let unadjusted = compare_count(3, 3, &delta, &mut Vec::new());
+        assert_eq!(unadjusted, Err(("3 (+1 allowlisted)".into(), "3".into())));
+        assert_eq!(compare_count(3, 3, &Grants::default(), &mut adaptations), Ok(()));
+        assert!(adaptations.is_empty());
+        assert_eq!(compare_count(3, 4, &delta, &mut adaptations), Ok(()));
+        assert_eq!(adaptations, [GRANT_COUNT]);
     }
 }

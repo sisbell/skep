@@ -9,7 +9,8 @@ use skep_discovery::{FourSet, SlotSpec};
 use skep_febe::{Op, Response};
 use skep_retrieval::{DeliveryItem, Spec};
 
-use super::{elem_range, inexpressible, rejection_code, Cx, Grants, ImageRow};
+use super::{elem_range, inexpressible, rejection_code, Cx, ImageRow, Tally};
+use crate::allowlist::Grants;
 use crate::compare::{compare_addr_sets, compare_spansets};
 use crate::fields::{
     expect_spans_raw, expect_strings, expected_failure, field, label_of, parse_python_spec,
@@ -188,37 +189,29 @@ fn follow_compare(
         expected.as_array().and_then(|arr| arr.iter().map(vspec_dict).collect());
     if let Some(vspecs) = as_vspecs {
         if !vspecs.is_empty() {
-            out.comparator = Some("projection".into());
-            let mut fails: Vec<(String, String)> = Vec::new();
+            let mut tally = Tally::default();
             for (docid, spans) in vspecs {
                 let Some(d) = cx.alpha.translate(&docid) else {
-                    fails.push((format!("{docid}: spans"), format!("{docid}: unresolvable")));
+                    tally.differ(format!("{docid}: spans"), format!("{docid}: unresolvable"));
                     continue;
                 };
                 let want: Vec<RawSpan> = spans
                     .iter()
                     .map(|(s, o, w)| (format!("{s}.{o}"), format!("0.{w}")))
                     .collect();
+                let label = format!("{docid}: ");
                 match project(cx, &d) {
-                    Ok(set) => {
-                        if let Err((e, a)) = compare_spansets(&want, &set, grants.width_tolerance) {
-                            fails.push((format!("{docid}: {e}"), format!("{docid}: {a}")));
-                        }
-                    }
+                    Ok(set) => tally.judge(
+                        compare_spansets(&want, &set, grants, &mut out.adaptations),
+                        &label,
+                        &label,
+                    ),
                     Err(code) => {
-                        fails.push((format!("{docid}: spans"), format!("{docid}: {code}")))
+                        tally.differ(format!("{docid}: spans"), format!("{docid}: {code}"))
                     }
                 }
             }
-            if fails.is_empty() {
-                out.status = Status::Agreed;
-            } else {
-                out.status = Status::Disagreed;
-                out.expected =
-                    Some(fails.iter().map(|f| f.0.clone()).collect::<Vec<_>>().join(" | "));
-                out.actual =
-                    Some(fails.iter().map(|f| f.1.clone()).collect::<Vec<_>>().join(" | "));
-            }
+            tally.settle(out, "projection");
             return;
         }
     }
@@ -232,7 +225,7 @@ fn follow_compare(
                 None => Err("unresolvable".to_string()),
             };
             match projected {
-                Ok(set) => match compare_spansets(&spans, &set, grants.width_tolerance) {
+                Ok(set) => match compare_spansets(&spans, &set, grants, &mut out.adaptations) {
                     Ok(()) => out.status = Status::Agreed,
                     Err((e, a)) => {
                         out.status = Status::Disagreed;
@@ -417,8 +410,7 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &
     let reverse = label.contains("reverse");
     let default_slot = if label.contains("source") || reverse { 1 } else { 2 };
     out.adaptations.push("traverse-hops-from-world".into());
-    let mut fails: Vec<(String, String)> = Vec::new();
-    let mut compared = 0usize;
+    let mut tally = Tally::default();
     // The traversal's current position (a golden doc) and the last link
     // followed — landing-content entries compare against them.
     let mut current: Option<String> = None;
@@ -466,17 +458,17 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &
             if let Some(atdoc) = at {
                 let found = find_links_at(cx, &atdoc, reverse);
                 if let Some(n) = v.as_u64() {
-                    compared += 1;
-                    if found.len() as u64 != n {
-                        fails.push((
+                    if found.len() as u64 == n {
+                        tally.agree();
+                    } else {
+                        tally.differ(
                             format!("{atdoc}: {n} links"),
                             format!("{atdoc}: {}", found.len()),
-                        ));
+                        );
                     }
                 } else if let Some(arr) = v.as_array() {
                     let want: Vec<String> =
                         arr.iter().filter_map(|x| x.as_str().map(str::to_string)).collect();
-                    compared += 1;
                     let rig = &*cx.rig;
                     let mut adaptations = std::mem::take(&mut out.adaptations);
                     let verdict = compare_addr_sets(
@@ -487,9 +479,8 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &
                         &mut adaptations,
                     );
                     out.adaptations = adaptations;
-                    if let Err((exp, act)) = verdict {
-                        fails.push((format!("{atdoc}: {exp}"), format!("{atdoc}: {act}")));
-                    }
+                    let label = format!("{atdoc}: ");
+                    tally.judge(verdict, &label, &label);
                 }
             }
             // A links_found entry may still carry landing content below.
@@ -556,21 +547,26 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &
 
         let Some((slot, expected)) = expectation else { continue };
         let Some(link_golden) = link_golden else {
-            fails.push(("hop link".into(), "no link resolvable for this hop".into()));
+            tally.differ("hop link".into(), "no link resolvable for this hop".into());
             continue;
         };
         let Some(link) = cx.alpha.translate(&link_golden) else {
-            fails.push((link_golden.clone(), "unresolvable link".into()));
+            tally.differ(link_golden.clone(), "unresolvable link".into());
             continue;
         };
         let mut hop = OpOutcome::new(out.index, &out.label);
         follow_compare(cx, &mut hop, &Grants::default(), &link, slot, expected);
-        compared += 1;
-        if hop.status == Status::Disagreed {
-            fails.push((
+        match hop.status {
+            Status::Disagreed => tally.differ(
                 format!("{link_golden}: {}", hop.expected.unwrap_or_default()),
                 hop.actual.unwrap_or_else(|| hop.note.unwrap_or_default()),
-            ));
+            ),
+            Status::Agreed => tally.agree(),
+            Status::Inexpressible => tally.unaimed(format!(
+                "hop over {link_golden}: {}",
+                hop.note.unwrap_or_default()
+            )),
+            _ => {}
         }
         // Land: the followed link's TO doc becomes the current position.
         last_followed = Some(link_golden.clone());
@@ -582,16 +578,10 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &
             }
         }
     }
-    out.comparator = Some("traversal".into());
-    if compared == 0 && fails.is_empty() {
-        out.status = Status::NotCompared;
+    tally.settle(out, "traversal");
+    if out.status == Status::NotCompared {
+        out.comparator = Some("traversal".into());
         out.note = Some("traversal entries carried nothing comparable".into());
-    } else if fails.is_empty() {
-        out.status = Status::Agreed;
-    } else {
-        out.status = Status::Disagreed;
-        out.expected = Some(fails.iter().map(|f| f.0.clone()).collect::<Vec<_>>().join(" | "));
-        out.actual = Some(fails.iter().map(|f| f.1.clone()).collect::<Vec<_>>().join(" | "));
     }
 }
 

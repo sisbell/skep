@@ -9,8 +9,8 @@
 //! also needs no temp directory, removing a whole class of environment
 //! failures from a 263-scenario run.
 
-use skep_address::{Address, Nat, Span};
-use skep_arrangement::{Run, VPos, VSpec};
+use skep_address::{Address, Nat};
+use skep_arrangement::{VPos, VSpec};
 use skep_content::Val;
 use skep_engine::{Engine, World};
 use skep_febe::{Deposit, Op, OperationSurface, Request, Response, SessionId};
@@ -20,18 +20,7 @@ use skep_namespace::PrincipalId;
 
 use std::collections::BTreeMap;
 
-use crate::tum::{addr, span_elem_width, subspan, vspan};
-
-/// One content-subspace deletion, captured at delete time (operator ruling
-/// 10, round-3): the golden doc it left, the bytes removed, and the I-extent
-/// runs those bytes occupied — imaged through `Op::Image` in the same commit
-/// window, while the arrangement still spoke for them. Deleted content stays
-/// findable through these spans (I-history), never by loosening V-queries.
-struct DeletedRegion {
-    doc: String,
-    bytes: Vec<u8>,
-    ispans: Vec<Span>,
-}
+use crate::tum::{addr, vspan};
 
 pub struct Rig {
     // Held so the engine (and its kernel Arc) outlives the command surface;
@@ -68,8 +57,6 @@ pub struct Rig {
     /// infrastructure, like the types document: never bound in the α-map,
     /// excluded from every comparison through [`Rig::is_infra_addr`].
     homes: Vec<Address>,
-    /// Content deletions in execution order (see [`DeletedRegion`]).
-    deleted: Vec<DeletedRegion>,
 }
 
 /// Rig construction failure — an environment/engine problem, surfaced as the
@@ -172,7 +159,6 @@ impl Rig {
             type_ordinals: BTreeMap::new(),
             types_capacity: 8,
             homes: vec![home],
-            deleted: Vec::new(),
         };
         rig.sessions
             .insert(crate::tum::addr_str(&account), (session, PrincipalId(1)));
@@ -378,85 +364,6 @@ impl Rig {
             || self.homes.iter().any(|h| skep_address::is_prefix(h.tumbler(), a.tumbler()))
             || self.sessions.contains_key(&crate::tum::addr_str(a))
             || *a == t_grant()
-    }
-
-    /// Capture a content region's I-extents just before it is deleted
-    /// (ruling 10): image the doomed V-region and remember (bytes, I-runs).
-    /// An image failure is swallowed — the deletion proceeds regardless, and
-    /// a later I-coverage search over the missing record simply fails to
-    /// ground, surfacing as its own honest outcome.
-    pub fn capture_deletion(&mut self, golden_doc: &str, d: &Address, ord: u64, bytes: Vec<u8>) {
-        if bytes.is_empty() {
-            return;
-        }
-        let Some(span) = vspan(1, ord, bytes.len() as u64) else { return };
-        let r = self.exec(Op::Image { d: d.clone(), region: vec![span] });
-        if let Response::Runs { runs, .. } = r {
-            let ispans: Vec<Span> = runs.iter().map(Run::iextent).collect();
-            self.deleted.push(DeletedRegion { doc: golden_doc.to_string(), bytes, ispans });
-        }
-    }
-
-    /// Every captured I-span of a document's deleted content — the
-    /// I-coverage stand-in for a whole-extent query aimed at a doc whose
-    /// current extent no longer holds what the golden searched.
-    pub fn deleted_ispans_of(&self, golden_doc: &str) -> Vec<Span> {
-        self.deleted
-            .iter()
-            .filter(|r| r.doc == golden_doc)
-            .flat_map(|r| r.ispans.iter().cloned())
-            .collect()
-    }
-
-    /// The deleted bytes of a document, latest deletion first — for
-    /// re-locating a doc-aimed search's content in the docs that still hold
-    /// it live.
-    pub fn deleted_bytes_of(&self, golden_doc: &str) -> Vec<Vec<u8>> {
-        self.deleted
-            .iter()
-            .rev()
-            .filter(|r| r.doc == golden_doc)
-            .map(|r| r.bytes.clone())
-            .collect()
-    }
-
-    /// Locate `needle` inside any captured deletion and slice out its exact
-    /// I-spans — the I-history reach for a search whose text no live V-space
-    /// speaks anymore. First (newest-deletion-first) hit wins.
-    pub fn locate_deleted(&self, needle: &[u8]) -> Option<Vec<Span>> {
-        if needle.is_empty() {
-            return None;
-        }
-        for rec in self.deleted.iter().rev() {
-            let Some(p) = rec.bytes.windows(needle.len()).position(|w| w == needle) else {
-                continue;
-            };
-            // Walk the record's runs, slicing the [p, p+len) byte window.
-            let (mut off, mut remaining, mut cursor) = (p as u64, needle.len() as u64, Vec::new());
-            for sp in &rec.ispans {
-                let w = span_elem_width(sp).unwrap_or(0);
-                if off >= w {
-                    off -= w;
-                    continue;
-                }
-                let take = (w - off).min(remaining);
-                if let Some(sub) = subspan(sp, off, take) {
-                    cursor.push(sub);
-                } else {
-                    cursor.clear();
-                    break;
-                }
-                remaining -= take;
-                off = 0;
-                if remaining == 0 {
-                    break;
-                }
-            }
-            if remaining == 0 && !cursor.is_empty() {
-                return Some(cursor);
-            }
-        }
-        None
     }
 }
 

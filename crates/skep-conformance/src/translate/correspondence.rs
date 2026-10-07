@@ -8,7 +8,7 @@ use skep_address::Nat;
 use skep_febe::{Op, Response};
 use skep_retrieval::RegionSpec;
 
-use super::{fail_response, inexpressible, Cx};
+use super::{fail_response, inexpressible, Cx, Tally};
 use crate::fields::{field, locate, span_dict, str_field, vspec_dict};
 use crate::outcome::{OpOutcome, Status};
 use crate::tum::vspan;
@@ -282,33 +282,32 @@ pub(super) fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 inexpressible(out, "comparisons with no destination doc in scope".into());
                 return;
             };
-            let mut fails: Vec<(String, String)> = Vec::new();
+            let mut tally = Tally::default();
             for e in entries {
-                let Some(srcname) = e.get("source").and_then(Value::as_str) else { continue };
-                let Some(src) = cx.shadow.resolve_doc(srcname) else { continue };
+                let Some(srcname) = e.get("source").and_then(Value::as_str) else {
+                    tally.unaimed("a comparison entry names no source".into());
+                    continue;
+                };
+                let Some(src) = cx.shadow.resolve_doc(srcname) else {
+                    tally.unaimed(format!("comparison source `{srcname}` resolves to nothing"));
+                    continue;
+                };
                 let shared: Vec<Value> =
                     e.get("shared").and_then(Value::as_array).cloned().unwrap_or_default();
                 let mut sub = OpOutcome::new(out.index, &out.label);
                 let a = CompareSide { doc: &dest, reference: "target", window: None };
                 let b = CompareSide { doc: &src, reference: "source", window: None };
                 run_compare_pair(cx, &mut sub, a, b, &shared);
-                if sub.status == Status::Disagreed {
-                    fails.push((
+                match sub.status {
+                    Status::Disagreed => tally.differ(
                         format!("{srcname}: {}", sub.expected.unwrap_or_default()),
                         sub.actual.unwrap_or_else(|| sub.note.unwrap_or_default()),
-                    ));
+                    ),
+                    Status::Agreed => tally.agree(),
+                    _ => {}
                 }
             }
-            out.comparator = Some("correspondence".into());
-            if fails.is_empty() {
-                out.status = Status::Agreed;
-            } else {
-                out.status = Status::Disagreed;
-                out.expected =
-                    Some(fails.iter().map(|f| f.0.clone()).collect::<Vec<_>>().join(" | "));
-                out.actual =
-                    Some(fails.iter().map(|f| f.1.clone()).collect::<Vec<_>>().join(" | "));
-            }
+            tally.settle(out, "correspondence");
             return;
         }
     }
@@ -316,7 +315,14 @@ pub(super) fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     // The two documents, as referenced by the golden (names or addresses):
     // explicit fields, then the op's own label when it is a "<x>_vs_<y>"
     // pair (identity_mixed_sources's "target_vs_source1"), then the
-    // original/version convention.
+    // original/version convention — the one pair of references the op
+    // itself does not name.
+    let named_by_op = field(op, &["docs", "documents", "comparing"])
+        .and_then(Value::as_array)
+        .is_some()
+        || (str_field(op, &["doc_a", "doc1", "a"]).is_some()
+            && str_field(op, &["doc_b", "doc2", "b"]).is_some())
+        || str_field(op, &["label"]).is_some_and(|l| l.contains("_vs_"));
     let (ref_a, ref_b): (String, String) = if let Some(docs) =
         field(op, &["docs", "documents", "comparing"]).and_then(Value::as_array)
     {
@@ -366,14 +372,28 @@ pub(super) fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             .resolve_doc(r)
             .or_else(|| docids_in_items.get(idx).cloned().filter(|d| cx.shadow.knows(d)))
     };
+    // A reference the recording uses: one the op names, or one a recorded
+    // shared pair is keyed by (compare_versions_with_different_links keys
+    // its pairs `original`/`version` without naming the documents).
+    let recorded_ref = |r: &str| {
+        named_by_op
+            || shared.iter().any(|item| item.as_object().is_some_and(|o| o.contains_key(r)))
+    };
     let (ga, gb) = match (resolve_side(cx, &ref_a, 0), resolve_side(cx, &ref_b, 1)) {
         (Some(a), Some(b)) => (a, b),
-        // One side resolvable and the items carry no second docid: the
-        // script compared the document WITH ITSELF (internal/
-        // insert_only_baseline's source/dest pairs over one doc).
-        (Some(a), None) | (None, Some(a)) if docids_in_items.iter().all(|d| d == &a) => {
+        // One side resolvable, the other a reference the recording never
+        // uses, and the items carrying no second docid: the script compared
+        // the document WITH ITSELF (internal/insert_only_baseline's
+        // source/dest pairs over one doc). A second reference the recording
+        // does use but the shadow cannot ground — a version skep refused to
+        // mint (ruling 20a) — is no such comparison; the op is inexpressible.
+        (Some(a), None) if !recorded_ref(&ref_b) && docids_in_items.iter().all(|d| d == &a) => {
             out.adaptations.push("compare:self".into());
             (a.clone(), a)
+        }
+        (None, Some(b)) if !recorded_ref(&ref_a) && docids_in_items.iter().all(|d| d == &b) => {
+            out.adaptations.push("compare:self".into());
+            (b.clone(), b)
         }
         _ => {
             inexpressible(out, format!("compare documents `{ref_a}`/`{ref_b}` unresolvable"));

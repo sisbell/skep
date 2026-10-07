@@ -17,11 +17,14 @@
 //! it reads between modules, so a check gone blind fails rather than passing
 //! a clean tree.
 //!
-//! One rule no compiler error reports is held the same way: every scenario
+//! Two rules no compiler error reports are held the same way. Every scenario
 //! document is created by `Rig::create_private_document`, so no code line
-//! under `src/` but `harness.rs` builds a CREATENEWDOCUMENT request. The scan
-//! asserts it found the rig's own, so a scan that matches nothing fails
-//! rather than passing a clean tree.
+//! under `src/` but `harness.rs` builds a CREATENEWDOCUMENT request. And the
+//! play pass changes the golden-side world only through the `Cx`
+//! world-change methods, so no code line in `translate/` or `runner.rs`
+//! mutates the shadow's documents or links. Each scan asserts it found the
+//! owner's own lines, so a scan that matches nothing fails rather than
+//! passing a clean tree.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -133,6 +136,47 @@ fn only_the_rig_builds_a_create_new_document() {
     assert!(
         !rig.is_empty(),
         "the rig's creator builds the request, so a scan that finds nothing there is broken"
+    );
+}
+
+/// One rule decides whether a recorded op reaches the shadow — the
+/// recording for content, both worlds for a creation — and it lives in the
+/// `Cx` world-change methods in `translate.rs`. A handler or the runner that
+/// edited the shadow's documents or links itself could follow skep's verdict
+/// instead, and nothing would refuse it but the goldens drifting: so no code
+/// line in `translate/` or `runner.rs` names a shadow mutation.
+#[test]
+fn only_the_world_change_methods_change_the_shadow() {
+    const MUTATIONS: &[&str] = &[
+        "shadow.insert(",
+        "shadow.delete(",
+        "shadow.pivot(",
+        "shadow.swap(",
+        "shadow.version(",
+        "shadow.create_doc(",
+        "shadow.seat_link(",
+        "shadow.record_link(",
+        "shadow.last_link =",
+        "shadow.arrow_links.insert",
+    ];
+    let play_pass = |file: &Path| {
+        file.starts_with("translate")
+            || ["translate.rs", "runner.rs"].iter().any(|f| file == Path::new(f))
+    };
+    let (owner, elsewhere): (Vec<_>, Vec<_>) =
+        scan(|code| MUTATIONS.iter().any(|m| code.contains(m)))
+            .into_iter()
+            .filter(|(file, _)| play_pass(file))
+            .partition(|(file, _)| file == Path::new("translate.rs"));
+    assert!(
+        elsewhere.is_empty(),
+        "the play pass changes the shadow's documents and links through the `Cx` \
+         world-change methods in `translate.rs` alone:\n{}",
+        render(&elsewhere)
+    );
+    assert!(
+        !owner.is_empty(),
+        "the world-change methods mutate the shadow, so a scan that finds nothing there is broken"
     );
 }
 

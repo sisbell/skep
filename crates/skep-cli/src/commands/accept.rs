@@ -14,27 +14,27 @@ use skep_client::halt::Halt;
 use skep_client::person::{Person, Public, Question};
 
 use super::{data, host_name_and_date, person_door, store_of, Stop};
-use crate::args::{Command, Usage};
+use crate::args::{CommandLine, Usage};
 use crate::terminal::Terminal;
 
-pub fn accept(c: &Command) -> Result<(), Stop> {
+pub fn accept(c: &CommandLine) -> Result<(), Stop> {
     let store = store_of(c)?;
     // `--board` judged before anything: an origin given badly is a usage
     // refusal, never a board asked for again nor one dropped.
-    let given_board = c.board_given()?;
+    let given_origin = c.origin_given()?;
     // `--reprint`: the record from the artifacts' public members — not a
     // person door.
     if c.switch("--reprint") {
-        let key_file = c.key()?;
+        let key_file = c.key_file()?;
         let anchors: Vec<PathBuf> = c.all("--anchor").into_iter().map(PathBuf::from).collect();
-        data(accept_walk::reprint(&store, key_file.as_deref(), &anchors, given_board.as_ref())?);
+        data(accept_walk::reprint(&store, key_file.as_deref(), &anchors, given_origin.as_ref())?);
         return Ok(());
     }
-    person_door("accept")?;
+    person_door("accept", "the name boxes and the backup moment, or on the decline arm its typed confirmation")?;
     let mut person = Terminal;
     // `--board` and `--account` REQUIRED: a run missing either ASKS and
     // generates nothing (AUTH RES-162).
-    let board = match given_board {
+    let board = match given_origin {
         Some(o) => Board::new(o, PlainHttp::new()),
         None => {
             let Ok(text) = person.ask(Public(Question { text: "the board the account is on (a canonical origin, from the giver): ".into() })) else {

@@ -6,10 +6,10 @@ use skep_client::ceremony::enroll::{self as enroll_walk, EnrollOptions};
 use skep_client::dial::plaintext_non_loopback_warning;
 
 use super::{board_of, facts, person_door, principal_or_bound, read_payload, store_of, talk, Stop};
-use crate::args::{Command, Usage};
+use crate::args::{CommandLine, Usage};
 use crate::terminal::Terminal;
 
-pub fn enroll(c: &Command) -> Result<(), Stop> {
+pub fn enroll(c: &CommandLine) -> Result<(), Stop> {
     let board = board_of(c)?;
     let store = store_of(c)?;
     let given = c.principal()?;
@@ -21,7 +21,7 @@ pub fn enroll(c: &Command) -> Result<(), Stop> {
         facts(&e.facts);
         return Ok(());
     }
-    person_door("enroll")?;
+    person_door("enroll", "the fingerprint comparison and its confirmation")?;
     let Some(payload_arg) = c.value("--payload") else { return Err(Usage("--payload <file|-> is required (or --reply <fp-prefix>)".into()).into()) };
     let payload = read_payload(&payload_arg)?;
     if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {

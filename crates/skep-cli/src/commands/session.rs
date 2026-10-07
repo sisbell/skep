@@ -10,9 +10,9 @@ use skep_client::dial::plaintext_non_loopback_warning;
 use skep_client::store::{KeySelector, KeyStore, Purpose};
 
 use super::{board_of, data, principal_or_bound, select_key, store_of, talk, Stop};
-use crate::args::{session_env, Command, Usage};
+use crate::args::{session_env, CommandLine, Usage};
 
-pub fn session(c: &Command) -> Result<(), Stop> {
+pub fn session(c: &CommandLine) -> Result<(), Stop> {
     let board = board_of(c)?;
     if let Some(close) = c.value("--close") {
         // THE TOKEN IS NEVER AN ARGV VALUE (§2.2; AUTH-4.53; §9 item 29).
@@ -40,7 +40,7 @@ pub fn session(c: &Command) -> Result<(), Stop> {
     }
     let store = store_of(c)?;
     let given = c.principal()?;
-    let key_file = c.key()?;
+    let key_file = c.key_file()?;
     let principal = principal_or_bound(given, &store, &board)?;
     let key = select_key(key_file.as_deref(), &store, &board, principal, Purpose::Sign)?;
     let signer = store.signer(&KeySelector::Path(&key.path))?;

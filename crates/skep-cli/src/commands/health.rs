@@ -4,9 +4,9 @@
 use skep_client::derive::Mode;
 
 use super::{board_of, data_verbatim, talk, Stop};
-use crate::args::Command;
+use crate::args::CommandLine;
 
-pub fn health(c: &Command) -> Result<(), Stop> {
+pub fn health(c: &CommandLine) -> Result<(), Stop> {
     let board = board_of(c)?;
     let health = board.health()?;
     // The body VERBATIM — one JSON document already; the CLI never adds a

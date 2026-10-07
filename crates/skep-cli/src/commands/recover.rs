@@ -9,14 +9,14 @@ use skep_client::ceremony::recover::{self as recover_walk, RecoverOptions};
 use skep_client::dial::plaintext_non_loopback_warning;
 
 use super::{board_of, data, facts, host_name_and_date, person_door, principal_or_bound, store_of, talk, Stop};
-use crate::args::Command;
+use crate::args::CommandLine;
 use crate::terminal::Terminal;
 
-pub fn recover(c: &Command) -> Result<(), Stop> {
+pub fn recover(c: &CommandLine) -> Result<(), Stop> {
     let board = board_of(c)?;
     let store = store_of(c)?;
     let given = c.principal()?;
-    person_door("recover")?;
+    person_door("recover", "the kept-or-placed answer, the typed hex and the confirmations")?;
     let principal = principal_or_bound(given, &store, &board)?;
     if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);

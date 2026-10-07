@@ -8,15 +8,15 @@ use skep_client::ceremony::retire::{self as retire_walk, RetireOptions};
 use skep_client::dial::plaintext_non_loopback_warning;
 
 use super::{board_of, data, person_door, principal_or_bound, store_of, talk, Stop};
-use crate::args::{Command, Usage};
+use crate::args::{CommandLine, Usage};
 use crate::terminal::Terminal;
 
-pub fn retire(c: &Command) -> Result<(), Stop> {
+pub fn retire(c: &CommandLine) -> Result<(), Stop> {
     let board = board_of(c)?;
     let store = store_of(c)?;
     let given = c.principal()?;
     let Some(fingerprint_prefix) = c.value("--fingerprint") else { return Err(Usage("--fingerprint <fp-prefix> is required".into()).into()) };
-    person_door("retire")?;
+    person_door("retire", "the preview's typed confirmation")?;
     let principal = principal_or_bound(given, &store, &board)?;
     if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);

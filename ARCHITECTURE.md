@@ -861,17 +861,17 @@ it parses the command line, makes the library call — handing a walk the
 terminal as its `Person` — and renders the answer, DATA on stdout and TALK
 on stderr, with §2.3's exit code. Every ceremony is a library walk; `bind`
 and `keygen` sequence the library's compositions themselves — `bind`
-landing the three facts of an enroll hop or a handoff, `keygen` the
-door-side backup moment and the payload it prints — and so carry their
-own text. Its modules, in the order `src/main.rs` declares them, each
-naming only those above it:
+landing the three facts of an enroll hop, a handoff or a hosted signup,
+`keygen` the door-side backup moment and the payload it prints — and so
+carry their own text. Its modules, in the order `src/main.rs` declares
+them, each naming only those above it:
 
 - `args.rs` the grammar — one row per command, its flags that take one
   value, those that repeat and its switches, beside the flags every
-  command takes — with `HELP`, the text that documents it; and the
-  settings, each read through `Command::setting`, the one place a flag
-  beats its `SKEP_*` variable, with `session_env` the one setting no flag
-  carries.
+  command takes (`GLOBAL`) — with `HELP`, the text that documents it; and
+  `CommandLine`, one parsed command line, its settings each read through
+  `CommandLine::setting`, the one place a flag beats its `SKEP_*`
+  variable, with `session_env` the one setting no flag carries.
 - `terminal.rs` `Terminal`, the `Person` over the terminal: every prompt on
   stderr, the sheet as a ruled box, the dismissal's clear, the anchor
   import's arm asked of the person and never guessed from what was typed;
@@ -881,15 +881,16 @@ naming only those above it:
   paste and its landing question.
 - `commands.rs` what the commands share: the two streams (`data`,
   `data_verbatim`, `talk`), the stops and their exit codes (`Stop` — a
-  usage refusal, a halt, a person door without a terminal — which
-  `exit_code` renders; `person_door`, the doors' check), the plumbing from
-  the flags to a board, a store, a payload, a principal and a key, the
-  three facts' one spelling (`facts`, the lines `bind` reads back from a
-  reply), the outstanding-act line `keygen` and `fingerprint` share, and
-  the whole-set compare from the held set to its halt (`held_set`,
+  usage refusal, or a member of the halt family, a person door reached
+  without a terminal among its halts — which `exit_code` renders;
+  `person_door`, the doors' check), the plumbing from the flags to a
+  board, a store, a payload, a principal and a key, the three facts' one
+  spelling (`facts`, the lines `bind` reads back from a reply), the
+  outstanding-act line `keygen` and `fingerprint` share, and the
+  whole-set compare from the held set to its halt (`held_set`,
   `compare_genesis`). Beneath it, `commands/<name>.rs`, one file per
-  command, each the `pub fn <name>(&Command) -> Result<(), Stop>` that
-  `main` dispatches to.
+  command, each the `pub fn <name>(&CommandLine) -> Result<(), Stop>`
+  that `main` dispatches to.
 
 Rules that hold across its files:
 
@@ -904,10 +905,10 @@ Rules that hold across its files:
 - **A person door checks for a terminal first.** The eight doors —
   `claim`'s notebook arm, `keygen --anchors`, `enroll` without `--reply`,
   `recover`, `retire`, `rotate`, `handoff --payload` and `accept` without
-  `--reprint` — each call `person_door` before anything is generated and
-  answer exit 3 without one; the check is the CLI's, never a walk's (§2.4).
-  `tests/it/cli.rs` and `tests/it/ceremonies.rs` run every door without a
-  terminal.
+  `--reprint` — each call `person_door` before anything is generated and,
+  without one, halt (exit 3) naming the moments a person answers at that
+  door; the check is the CLI's, never a walk's (§2.4). `tests/it/cli.rs`
+  and `tests/it/ceremonies.rs` run every door without a terminal.
 - **The settings are `args.rs`'s.** Every `SKEP_*` variable is read there
   and nowhere else, which `tests/it/tidy.rs` checks; a session token is
   never an argv value (`session --close -` reads stdin or `SKEP_SESSION`),
@@ -920,11 +921,12 @@ Rules that hold across its files:
   refused, as is a second value of a flag that takes one, so no flag is
   accepted and dropped. `args.rs`'s unit tests check it, and that `HELP`
   documents every flag a row names.
-- **A setting refused is never a setting absent.** `Command::principal`,
-  `Command::board_given`, `Command::key` and `session_env` answer `Err`
-  for a value given badly — a variable whose value is not UTF-8 text among
-  them — and `Ok(None)` for one given nowhere; every command returns the
-  `Err` as exit 2 before any read, and only the `None` reaches the store's
+- **A setting refused is never a setting absent.**
+  `CommandLine::principal`, `CommandLine::origin_given`,
+  `CommandLine::key_file` and `session_env` answer `Err` for a value given
+  badly — a variable whose value is not UTF-8 text among them — and
+  `Ok(None)` for one given nowhere; every command returns the `Err` as
+  exit 2 before any read, and only the `None` reaches the store's
   one-binding test, its lookup or a prompt. `tests/it/cli.rs` checks it.
 - **Imports point down.** A module names only the modules `src/main.rs`
   declares above it, and an item by its home module, never through the

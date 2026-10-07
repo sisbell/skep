@@ -9,7 +9,7 @@ use skep_client::store::{Binding, KeyFacts, KeySelector, Purpose, StoreError};
 use skep_identity::{encode_enroll, Enrollment};
 
 use super::{data, store_of, Stop, OUTSTANDING_ACT};
-use crate::args::Command;
+use crate::args::CommandLine;
 
 /// The handoff recipient's clause of the outstanding-act line, its fourth
 /// (§2.2): the payload went to a GIVER who seeds an account with it, and the
@@ -18,9 +18,9 @@ use crate::args::Command;
 const ACCEPT_CLAUSE: &str = "Where this key was made at `skep accept`: the outstanding act is the giver's genesis and their reply, then `skep \
      bind`, and the re-offer is `skep accept --reprint`, never `--payload` here.";
 
-pub fn fingerprint(c: &Command) -> Result<(), Stop> {
+pub fn fingerprint(c: &CommandLine) -> Result<(), Stop> {
     let store = store_of(c)?;
-    let key_file = c.key()?;
+    let key_file = c.key_file()?;
     // An unreadable bindings file halts naming it: read as an empty one, it
     // would list every key UNBOUND and name the wrong act.
     let bindings = store.all_bindings()?;
@@ -81,12 +81,12 @@ pub fn fingerprint(c: &Command) -> Result<(), Stop> {
             // --payload`'s line: the state, the re-print, the hop's and the
             // rotation's acts, `skep claim` where this store binds nothing
             // (§3.5 arm 4's fork), and the handoff recipient's clause.
-            let (state, claim) = if any_binding {
+            let (state, claim_clause) = if any_binding {
                 ("UNBOUND — this key is enrolled at no board this store knows", "")
             } else {
                 ("UNBOUND — no board has been claimed from this store", " Where this store is to claim a board of its own: `skep claim`.")
             };
-            data(format!("{state}: `skep fingerprint --select <fp> --payload` re-prints this key's payload. {OUTSTANDING_ACT}{claim} {ACCEPT_CLAUSE}"));
+            data(format!("{state}: `skep fingerprint --select <fp> --payload` re-prints this key's payload. {OUTSTANDING_ACT}{claim_clause} {ACCEPT_CLAUSE}"));
         }
         if let Some(record) = &record {
             data(record);

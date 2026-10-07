@@ -6,14 +6,14 @@ use skep_client::ceremony::rotate::{self as rotate_walk, RotateOptions};
 use skep_client::dial::plaintext_non_loopback_warning;
 
 use super::{board_of, data, facts, person_door, principal_or_bound, read_payload, store_of, talk, Stop};
-use crate::args::Command;
+use crate::args::CommandLine;
 use crate::terminal::Terminal;
 
-pub fn rotate(c: &Command) -> Result<(), Stop> {
+pub fn rotate(c: &CommandLine) -> Result<(), Stop> {
     let board = board_of(c)?;
     let store = store_of(c)?;
     let given = c.principal()?;
-    person_door("rotate")?;
+    person_door("rotate", "the device-name box and the preview's typed confirmation")?;
     let principal = principal_or_bound(given, &store, &board)?;
     let payload = match c.value("--payload") {
         Some(arg) => Some(read_payload(&arg)?),

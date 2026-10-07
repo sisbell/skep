@@ -20,13 +20,15 @@ use skep_client::store::{KeySelector, KeyStore, Purpose};
 use skep_identity::{encode_enroll, Enrollment};
 
 use super::{data, host_name_and_date, person_door, store_of, talk, Stop, OUTSTANDING_ACT};
-use crate::args::Command;
+use crate::args::CommandLine;
 use crate::terminal::Terminal;
 
 /// AUTH-5.42's statements, rendered whenever a label is fixed — prompt or
-/// flag alike (§2.2 `keygen`), keyed to the venue.
+/// flag alike (§2.2 `keygen`) — the last of them the CONSEQUENCE AT THIS
+/// VENUE, keyed off the form: at the notebook its reader class, at the
+/// door-side form the public thread the byline rides onto.
 fn device_box_statements(door_side: bool) -> Vec<String> {
-    let venue = if door_side {
+    let consequence = if door_side {
         "it rides onto a public thread, approved or denied; and not every write under this byline is yours — the party that operates the board you join can write as you there, visibly and permanently, which every copy that checks signatures will show was not you"
     } else {
         "at this notebook it is readable by anything on the machine"
@@ -35,7 +37,7 @@ fn device_box_statements(door_side: bool) -> Vec<String> {
         "This name is permanent and cannot be edited: fixing a typo costs a keypair.".to_string(),
         "It is a byline: this name appears beside every write you make with this key, forever.".to_string(),
         "It holds the DEVICE's name — never your own and never your organisation's; a display name is a separate, changeable label.".to_string(),
-        venue.to_string(),
+        consequence.to_string(),
     ]
 }
 
@@ -51,11 +53,12 @@ fn custody_line(path: &Path) -> String {
     )
 }
 
-pub fn keygen(c: &Command) -> Result<(), Stop> {
+pub fn keygen(c: &CommandLine) -> Result<(), Stop> {
     let store = store_of(c)?;
-    let anchors = c.switch("--anchors");
-    if anchors {
-        person_door("keygen --anchors")?;
+    // `--anchors`: the DOOR-SIDE form (§2.2), a person door.
+    let door_side = c.switch("--anchors");
+    if door_side {
+        person_door("keygen --anchors", "the door-side backup moment")?;
     }
     let mut person = Terminal;
     // The device-name box: `--label`, or asked; the statements whenever a
@@ -63,14 +66,14 @@ pub fn keygen(c: &Command) -> Result<(), Stop> {
     let label = match c.value("--label") {
         Some(text) => {
             let label = Label::new(&text).map_err(|fault| Halt::face(format!("the label is refused at the box: {fault}"), "AUTH-1.24's domain: non-empty, no line break, at most 128 bytes of UTF-8", "pass a label inside the domain"))?;
-            for s in device_box_statements(anchors) {
+            for s in device_box_statements(door_side) {
                 person.say(Public(Statement { rule: "AUTH-5.42", text: s }));
             }
             label
         }
         None => loop {
             let text = person
-                .label(Public(LabelBox { title: "name this device".into(), statements: device_box_statements(anchors), default: None }))
+                .label(Public(LabelBox { title: "name this device".into(), statements: device_box_statements(door_side), default: None }))
                 .map_err(|_| Halt::face("no device name was given", "the box was abandoned", "run `skep keygen --label <name>`, or answer the box"))?;
             match Label::new(&text) {
                 Ok(l) => break l,
@@ -83,7 +86,7 @@ pub fn keygen(c: &Command) -> Result<(), Stop> {
     let key = store.select(&KeySelector::Path(&path), Purpose::Read)?;
     talk(custody_line(&path));
     let mut entries = Vec::new();
-    if anchors {
+    if door_side {
         // THE DOOR-SIDE FORM (AUTH-5.57 step 2): the backup moment for an
         // anchor pair with no board, statement (a) carrying the operator
         // sentence unconditionally; then the three-key payload for the
@@ -112,10 +115,10 @@ pub fn keygen(c: &Command) -> Result<(), Stop> {
         }
     }
     entries.push(Enrollment::new(key.public.clone(), false, Some(label.as_str().to_string())).expect("a label the box admitted"));
-    if c.switch("--payload") || anchors {
+    if c.switch("--payload") || door_side {
         // The record FIRST (§2.2): one canonical JSON object.
         data(encode_enroll(&entries));
-        if anchors {
+        if door_side {
             talk("this three-key payload serves ONE door, the hosted signup — never the enroll hop, whose `skep enroll` refuses every anchor-flagged entry at the paste");
         } else {
             // A key this command made was never made at `skep accept`, so the

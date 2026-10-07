@@ -3,15 +3,16 @@
 //! command beside `HELP`, the text that documents it: a flag in no row, a
 //! flag of another command's, a missing value and a second value of a flag
 //! that takes one are usage refusals (§2.3's exit 2 — the flag's SHAPE
-//! alone). Every setting is read through `Command::setting`, the one place
-//! a flag beats its environment variable, and its reader answers the
-//! refusal and the absence apart — `Ok(None)` for a setting given nowhere,
-//! `Err` for one given badly, a variable whose value is not UTF-8 text
-//! among them — so no command reads a refused value as an absent one. The
-//! environment names are §9 item 21's: `SKEP_BOARD`, `SKEP_KEYSTORE`,
-//! `SKEP_KEY`, `SKEP_PRINCIPAL`, `SKEP_SESSION` — read here and nowhere else
-//! in the crate, `SKEP_SESSION` by `session_env` alone, the one setting no
-//! flag carries (`tests/it/tidy.rs`).
+//! alone). Every setting is read through `CommandLine::setting`, the one
+//! place a flag beats its environment variable, and its reader — named for
+//! what it answers, an origin, a store's directory, a key file's path, a
+//! principal — answers the refusal and the absence apart: `Ok(None)` for a
+//! setting given nowhere, `Err` for one given badly, a variable whose value
+//! is not UTF-8 text among them, so no command reads a refused value as an
+//! absent one. The environment names are §9 item 21's: `SKEP_BOARD`,
+//! `SKEP_KEYSTORE`, `SKEP_KEY`, `SKEP_PRINCIPAL`, `SKEP_SESSION` — read here
+//! and nowhere else in the crate, `SKEP_SESSION` by `session_env` alone, the
+//! one setting no flag carries (`tests/it/tidy.rs`).
 
 use std::collections::HashMap;
 use std::env::{self, VarError};
@@ -23,27 +24,29 @@ use skep_client::Origin;
 #[derive(Debug)]
 pub struct Usage(pub String);
 
-/// The parse's answer.
+/// The parse's answer: the help, or a command with its line.
 pub enum Parsed {
     Help,
-    Command(Command),
+    Command(CommandLine),
 }
 
-/// One command line: the command, its flags with their values (a flag that
-/// repeats keeps every value, in order), and its switches.
+/// One command line: the command, one of §2.1's thirteen; its flags with
+/// their values (a flag that repeats keeps every value, in order); and its
+/// switches.
 #[derive(Debug, Default)]
-pub struct Command {
+pub struct CommandLine {
     pub command: String,
     values: HashMap<String, Vec<String>>,
     switches: Vec<String>,
 }
 
-/// The flags every command takes (`client.md` §2.2's "All commands"), each
-/// taking one value: the four settings and `--label`. `--json`, the switch
-/// §2.2 declares beside them, is every command's too.
-const SETTINGS: [&str; 5] = ["--board", "--dir", "--key", "--principal", "--label"];
+/// The flags every command takes — `client.md` §2.2's "All commands",
+/// DECLARED globally there — each taking one value: the four settings and
+/// `--label`, a byline and no setting. `--json`, the switch §2.2 declares
+/// beside them, is every command's too.
+const GLOBAL: [&str; 5] = ["--board", "--dir", "--key", "--principal", "--label"];
 
-/// One command's flags beyond [`SETTINGS`].
+/// One command's flags beyond the [`GLOBAL`] ones.
 struct Row {
     command: &'static str,
     /// The flags that take one value.
@@ -91,13 +94,13 @@ usage: skep <command> [flags]
   verify       the pre-check as a command: the origin arm, the key arm, and
                with --payload/--anchor the whole-set compare; exit 0/3
   health       GET /health verbatim on stdout; the derived mode on stderr
-  bind         land the three facts of an enroll hop or a handoff here;
-               a genesis another hand wrote is compared whole (--anchor,
-               or asked), then the account's first signed session runs
-               where one is owed
+  bind         land the three facts of an enroll hop, a handoff or a
+               hosted signup here; a genesis another hand wrote is
+               compared whole (--anchor, or asked), then the account's
+               first signed session runs where one is owed
   enroll       the hop's signed-in half: enroll another device's payload
                from a full session this command opens (a person door);
-               --reply <fp-prefix> re-prints the three facts, no write
+               --reply <fp-prefix> re-derives the three facts, no write
   recover      the recovery ceremony (a person door): import one anchor,
                enroll this store's device key, retire the lost one;
                --stolen the thief copy; --anchor-lost the paper-loss arm
@@ -150,23 +153,23 @@ pub fn parse(mut argv: impl Iterator<Item = String>) -> Result<Parsed, Usage> {
         return Ok(Parsed::Help);
     }
     let Some(row) = GRAMMAR.iter().find(|r| r.command == first) else { return Err(Usage(format!("unknown command `{first}`"))) };
-    let mut cmd = Command { command: first, ..Command::default() };
+    let mut line = CommandLine { command: first, ..CommandLine::default() };
     while let Some(arg) = argv.next() {
         let flag = arg.as_str();
         if flag == "--help" || flag == "-h" {
             return Ok(Parsed::Help);
         }
         if flag == "--json" || row.switches.contains(&flag) {
-            cmd.switches.push(arg);
+            line.switches.push(arg);
             continue;
         }
         let repeats = row.repeated.contains(&flag);
-        if repeats || row.once.contains(&flag) || SETTINGS.contains(&flag) {
+        if repeats || row.once.contains(&flag) || GLOBAL.contains(&flag) {
             let Some(value) = argv.next() else { return Err(Usage(format!("{arg} needs a value"))) };
-            if !repeats && cmd.values.contains_key(&arg) {
+            if !repeats && line.values.contains_key(&arg) {
                 return Err(Usage(format!("`{arg}` is given at most once at `{}`", row.command)));
             }
-            cmd.values.entry(arg).or_default().push(value);
+            line.values.entry(arg).or_default().push(value);
             continue;
         }
         if GRAMMAR.iter().any(|r| r.once.contains(&flag) || r.repeated.contains(&flag) || r.switches.contains(&flag)) {
@@ -174,10 +177,10 @@ pub fn parse(mut argv: impl Iterator<Item = String>) -> Result<Parsed, Usage> {
         }
         return Err(Usage(format!("unknown argument `{arg}`")));
     }
-    Ok(Parsed::Command(cmd))
+    Ok(Parsed::Command(line))
 }
 
-impl Command {
+impl CommandLine {
     /// Whether a switch was given.
     pub fn switch(&self, name: &str) -> bool {
         self.switches.iter().any(|s| s == name)
@@ -206,31 +209,32 @@ impl Command {
         }
     }
 
-    /// `--board` / `SKEP_BOARD` where either is set, a canonical origin —
-    /// anything else is exit 2 before any socket opens (§7; the daemon's
-    /// `NotCanonical` phrase); `None` where neither is set.
-    pub fn board_given(&self) -> Result<Option<Origin>, Usage> {
+    /// `--board` / `SKEP_BOARD` where either is set: the board's origin, a
+    /// canonical one — anything else is exit 2 before any socket opens (§7;
+    /// the daemon's `NotCanonical` phrase); `None` where neither is set.
+    pub fn origin_given(&self) -> Result<Option<Origin>, Usage> {
         let Some(text) = self.setting("--board", "SKEP_BOARD")? else { return Ok(None) };
         text.parse::<Origin>().map(Some).map_err(|e| Usage(format!("--board: '{text}' is {e}")))
     }
 
-    /// `--board` / `SKEP_BOARD`, required: [`Command::board_given`], its
-    /// absence a usage refusal of its own.
-    pub fn board(&self) -> Result<Origin, Usage> {
-        self.board_given()?.ok_or_else(|| Usage("--board (or SKEP_BOARD) is required".into()))
+    /// `--board` / `SKEP_BOARD`, required: [`CommandLine::origin_given`],
+    /// its absence a usage refusal of its own.
+    pub fn origin(&self) -> Result<Origin, Usage> {
+        self.origin_given()?.ok_or_else(|| Usage("--board (or SKEP_BOARD) is required".into()))
     }
 
-    /// `--dir` / `SKEP_KEYSTORE`, else `~/.skep` (§6; §9 item 10).
-    pub fn dir(&self) -> Result<PathBuf, Usage> {
+    /// `--dir` / `SKEP_KEYSTORE`: the key store's directory, else `~/.skep`
+    /// (§6; §9 item 10).
+    pub fn store_dir(&self) -> Result<PathBuf, Usage> {
         match self.setting("--dir", "SKEP_KEYSTORE")? {
             Some(d) => Ok(PathBuf::from(d)),
             None => skep_client::store::default_store_dir().ok_or_else(|| Usage("--dir (or SKEP_KEYSTORE) is required: no home directory to default ~/.skep from".into())),
         }
     }
 
-    /// `--key` / `SKEP_KEY`, a PATH to a key file (AUTH-5.67 (1)); `None`
-    /// where neither is set.
-    pub fn key(&self) -> Result<Option<PathBuf>, Usage> {
+    /// `--key` / `SKEP_KEY`: the PATH of one key file (AUTH-5.67 (1)), never
+    /// a fingerprint or a label (§2.2); `None` where neither is set.
+    pub fn key_file(&self) -> Result<Option<PathBuf>, Usage> {
         Ok(self.setting("--key", "SKEP_KEY")?.map(PathBuf::from))
     }
 
@@ -282,7 +286,7 @@ mod tests {
         assert_eq!(c.command, "claim");
         assert_eq!(c.all("--anchor-out"), ["/a", "/b"]);
         assert!(c.switch("--paper"));
-        assert_eq!(c.board().unwrap().as_str(), "http://127.0.0.1:8642");
+        assert_eq!(c.origin().unwrap().as_str(), "http://127.0.0.1:8642");
         assert!(parse(argv(&["frobnicate"])).is_err(), "an unknown command is refused");
         assert!(parse(argv(&["session", "--board"])).is_err(), "a flag without its value is refused");
         assert!(parse(argv(&["health", "--frob"])).is_err(), "an unknown flag is refused");
@@ -295,11 +299,11 @@ mod tests {
         assert!(c.switch("--payload"), "a switch at keygen");
         let Parsed::Command(c) = parse(argv(&["verify", "--payload", "-", "--board", "HTTP://x", "--principal", "7x"])).unwrap() else { panic!() };
         assert_eq!(c.all("--payload"), ["-"], "a value at verify");
-        assert!(c.board().is_err(), "a non-canonical board is a usage refusal");
-        assert!(c.board_given().is_err(), "a board given badly is refused, never read as one not given");
+        assert!(c.origin().is_err(), "a non-canonical board is a usage refusal");
+        assert!(c.origin_given().is_err(), "a board given badly is refused, never read as one not given");
         assert!(c.principal().is_err(), "a principal given badly is refused, never read as one not given");
         let Parsed::Command(c) = parse(argv(&["accept", "--board", "http://127.0.0.1:8642", "--principal", "7"])).unwrap() else { panic!() };
-        assert_eq!(c.board_given().unwrap().map(|o| o.as_str().to_string()), Some("http://127.0.0.1:8642".to_string()));
+        assert_eq!(c.origin_given().unwrap().map(|o| o.as_str().to_string()), Some("http://127.0.0.1:8642".to_string()));
         assert_eq!(c.principal().unwrap(), Some(7));
     }
 
@@ -324,7 +328,7 @@ mod tests {
         // `--anchor-out`.
         let documented = |flag: &str| HELP.match_indices(flag).any(|(i, _)| !HELP[i + flag.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '-'));
         for row in &GRAMMAR {
-            for &flag in row.once.iter().chain(row.repeated).chain(row.switches).chain(&SETTINGS) {
+            for &flag in row.once.iter().chain(row.repeated).chain(row.switches).chain(&GLOBAL) {
                 assert!(documented(flag), "`{flag}` of `{}` is documented in HELP", row.command);
             }
             assert!(HELP.contains(&format!("\n  {} ", row.command)), "`{}` is listed in HELP", row.command);

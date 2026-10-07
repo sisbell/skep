@@ -9,10 +9,10 @@ use skep_client::dial::plaintext_non_loopback_warning;
 use skep_client::sheet::Facts;
 
 use super::{board_of, data, facts, host_name_and_date, person_door, read_payload, store_of, talk, Stop};
-use crate::args::Command;
+use crate::args::CommandLine;
 use crate::terminal::Terminal;
 
-pub fn claim(c: &Command) -> Result<(), Stop> {
+pub fn claim(c: &CommandLine) -> Result<(), Stop> {
     let board = board_of(c)?;
     let principal = c.principal()?;
     if let Some(payload_arg) = c.value("--hosted") {
@@ -44,7 +44,7 @@ pub fn claim(c: &Command) -> Result<(), Stop> {
         return Ok(());
     }
     // THE NOTEBOOK ARM: a person door.
-    person_door("claim")?;
+    person_door("claim", "the name boxes and the backup moment")?;
     let store = store_of(c)?;
     if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);

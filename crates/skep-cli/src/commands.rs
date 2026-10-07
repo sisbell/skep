@@ -6,11 +6,12 @@
 //! and stderr TALK (`talk`) (§2.4); the stops and §2.3's exit codes
 //! (`Stop`, and `exit_code`, the one place a stop's block and its code are
 //! chosen — `main`'s refusal of a command line it cannot parse among
-//! them; `person_door`, the person doors' check); the plumbing from the
-//! flags to a board, a store, a payload, a principal and a key; the three
-//! facts' one spelling (`facts`); the outstanding-act line `keygen` and
-//! `fingerprint` share (`OUTSTANDING_ACT`); and the whole-set compare, from
-//! the held set to its halt (`held_set`, `compare_genesis`).
+//! them; `person_door`, the person doors' check, whose refusal is a halt
+//! naming the door's own moments); the plumbing from the flags to a board,
+//! a store, a payload, a principal and a key; the three facts' one spelling
+//! (`facts`); the outstanding-act line `keygen` and `fingerprint` share
+//! (`OUTSTANDING_ACT`); and the whole-set compare, from the held set to its
+//! halt (`held_set`, `compare_genesis`).
 //! A halt is one block on stderr: the state, its cause, the one act
 //! (AUTH-5.66; AUTH-5.67's key-file cell naming the path and the state).
 
@@ -54,21 +55,21 @@ use skep_client::sheet::{render_inert, Facts};
 use skep_client::store::{arm4_face, FileStore, KeyFacts, KeySelector, Purpose, StoreError};
 use skep_identity::{Fingerprint, PublicKey};
 
-use crate::args::{Command, Usage, HELP};
+use crate::args::{CommandLine, Usage, HELP};
 use crate::terminal::has_terminal;
 
-/// Why a command stopped short of exit 0 (§2.3). Commands name their stops
-/// with `?`; [`exit_code`] is the one place a stop's stderr block and its
-/// code are chosen together.
+/// Why a command stopped short of exit 0 (§2.3): a usage refusal — the
+/// flag's shape alone — or a member of the halt family (§1.1's `halt` row),
+/// a person door reached without a controlling terminal among its HALT AND
+/// SURFACE members (§2.3's exit-3 row). Commands name their stops with `?`;
+/// [`exit_code`] is the one place a stop's stderr block and its code are
+/// chosen together.
 pub enum Stop {
     /// A usage refusal: exit 2, the help beneath it.
     Usage(Usage),
-    /// A halt: the code it carries — 1 refused, 3 halt and surface, 4
-    /// transport.
+    /// A member of the halt family, with the code it carries: 3 halt and
+    /// surface, 1 the board refused, 4 transport.
     Halt(Halt),
-    /// A person door reached without a controlling terminal, named as the
-    /// refusal names it: exit 3 (§2.4).
-    NoTerminal(&'static str),
 }
 
 impl From<Usage> for Stop {
@@ -97,27 +98,36 @@ pub fn exit_code(outcome: Result<(), Stop>) -> i32 {
         Ok(()) => return 0,
         Err(Stop::Usage(u)) => (format!("{}\n\n{HELP}", u.0), 2),
         Err(Stop::Halt(h)) => (h.to_string(), h.exit_code()),
-        Err(Stop::NoTerminal(door)) => (
-            format!(
-                "`{door}` is a person door and requires a controlling terminal — it reads its prompts from the terminal and refuses \
-                 without one, so a wrapper over stderr and stdin cannot satisfy the backup moment with no paper and no person. A script \
-                 that must drive this walk drives the library's scripted Person in-process."
-            ),
-            3,
-        ),
     };
     talk(format!("skep: {block}"));
     code
 }
 
 /// A person door's check (§2.4: the CLI's, never a walk's), made before
-/// anything is generated; `ARCHITECTURE.md` §The command lists the doors.
-fn person_door(door: &'static str) -> Result<(), Stop> {
+/// anything is generated: `door` the form, `moments` what a person answers
+/// there, in §2.4's and §6's words; `ARCHITECTURE.md` §The command lists the
+/// doors.
+fn person_door(door: &str, moments: &str) -> Result<(), Halt> {
     if has_terminal() {
         Ok(())
     } else {
-        Err(Stop::NoTerminal(door))
+        Err(no_terminal(door, moments))
     }
+}
+
+/// A person door reached without a controlling terminal: HALT AND SURFACE,
+/// §2.3's missing-TTY member, its face naming the moments a person answers
+/// at that door (§2.4; §6 "The terminal") — the backup moment only where it
+/// runs.
+fn no_terminal(door: &str, moments: &str) -> Halt {
+    Halt::face(
+        format!("`{door}` is a person door and requires a controlling terminal"),
+        format!(
+            "what a person answers here — {moments} — is read at the terminal, and stdin and stderr are not both a terminal: a \
+             wrapper that captured one and fed the other would answer it with no person (§2.4)"
+        ),
+        "run it at a terminal; a script that must drive this walk drives the library's scripted Person in-process",
+    )
 }
 
 /// DATA, to stdout.
@@ -141,13 +151,13 @@ fn talk(line: impl AsRef<str>) {
     eprintln!("{}", line.as_ref());
 }
 
-fn board_of(c: &Command) -> Result<Board, Usage> {
-    let origin = c.board()?;
+fn board_of(c: &CommandLine) -> Result<Board, Usage> {
+    let origin = c.origin()?;
     Ok(Board::new(origin, PlainHttp::new()))
 }
 
-fn store_of(c: &Command) -> Result<FileStore, Usage> {
-    Ok(FileStore::open(c.dir()?))
+fn store_of(c: &CommandLine) -> Result<FileStore, Usage> {
+    Ok(FileStore::open(c.store_dir()?))
 }
 
 /// A payload argument: a file, or `-` for stdin.
@@ -160,7 +170,7 @@ fn read_payload(arg: &str) -> Result<Vec<u8>, Halt> {
     std::fs::read(arg).map_err(|e| Halt::face(format!("the payload file {arg} could not be read: {e}"), "AUTH-5.67: a mis-pathed file is a halt naming the path, never a fallback", "check the path"))
 }
 
-/// The principal: the one `given` — `Command::principal`'s answer, its
+/// The principal: the one `given` — `CommandLine::principal`'s answer, its
 /// refusal already returned as exit 2 by the caller, before any read — else
 /// the board's one binding in the store (§3.5's one-binding test).
 fn principal_or_bound(given: Option<u64>, store: &FileStore, board: &Board) -> Result<u64, Halt> {
@@ -175,9 +185,9 @@ fn principal_or_bound(given: Option<u64>, store: &FileStore, board: &Board) -> R
     }
 }
 
-/// The key file `key_file` names — `Command::key`'s answer, its refusal
-/// already returned as exit 2 by the caller — else the store's key for this
-/// board and principal (§3.5's lookup), its public facts judged for
+/// The key file `key_file` names — `CommandLine::key_file`'s answer, its
+/// refusal already returned as exit 2 by the caller — else the store's key
+/// for this board and principal (§3.5's lookup), its public facts judged for
 /// `purpose`: an anchor file refused where the key signs and read where it
 /// does not (§2.2's selection test; P11); its signer the store's
 /// (`KeyStore::signer`); the arm-4 face forked on the claimant.
@@ -292,9 +302,9 @@ fn held_device(device: &KeyFacts) -> Held {
 /// record of the set `walk` reached, entry for entry against `held`; each
 /// LATER act one line of TALK (P27); any difference a halt in AUTH-5.53's
 /// terms naming that set's account, its act the acts by cell (§2.2
-/// `verify`; AUTH-4.56) and then `site`, the site's own last clause; a set
-/// with no genesis record a halt.
-fn compare_genesis(board: &Board, walk: &Walk, own: &[(Fingerprint, PublicKey)], held: &[Held], site: &str) -> Result<(), Halt> {
+/// `verify`; AUTH-4.56) and then `site_clause`, the site's own last clause;
+/// a set with no genesis record a halt.
+fn compare_genesis(board: &Board, walk: &Walk, own: &[(Fingerprint, PublicKey)], held: &[Held], site_clause: &str) -> Result<(), Halt> {
     let records = credential_records(board, &walk.set_account, own)?;
     let Some(whole) = compare_whole_set(&records, &walk.set, held) else {
         return Err(Halt::face(
@@ -309,7 +319,7 @@ fn compare_genesis(board: &Board, walk: &Walk, own: &[(Fingerprint, PublicKey)],
             difference_lines(&whole.differences).join("\n  "),
             format!(
                 "the acts by cell: a planted DEVICE key is retired from this device's own session; a planted ANCHOR only under an anchor of \
-                 your own that survived; the state is PERMANENT where the flags did not — {site}"
+                 your own that survived; the state is PERMANENT where the flags did not — {site_clause}"
             ),
         ));
     }
@@ -364,7 +374,7 @@ mod tests {
 
     /// Every stop answers §2.3's code from the one renderer: a usage refusal
     /// 2, a halt the code its family carries, a store refusal faced as a
-    /// halt, a person door without a terminal 3.
+    /// halt, and a person door without a terminal a halt of the family, 3.
     #[test]
     fn every_stop_is_rendered_with_its_exit_code() {
         assert_eq!(exit_code(Ok(())), 0);
@@ -374,6 +384,18 @@ mod tests {
         assert_eq!(exit_code(Err(Halt::Refused(refused).into())), 1);
         assert_eq!(exit_code(Err(Halt::Dial(skep_client::DialError::Connect("refused".into())).into())), 4);
         assert_eq!(exit_code(Err(StoreError::NotFound { select: "zz".into() }.into())), 3);
-        assert_eq!(exit_code(Err(Stop::NoTerminal("retire"))), 3);
+        assert_eq!(exit_code(Err(no_terminal("retire", "the preview's typed confirmation").into())), 3);
+    }
+
+    /// The person door's refusal is a halt's face — the state, its cause,
+    /// the one act — naming the moments a person answers at that door, and
+    /// the backup moment only where the door runs one.
+    #[test]
+    fn a_person_door_without_a_terminal_is_a_halt_naming_its_own_moments() {
+        let Halt::Halt(face) = no_terminal("retire", "the preview's typed confirmation") else { panic!("a HALT AND SURFACE member") };
+        assert_eq!(face.state, "`retire` is a person door and requires a controlling terminal");
+        assert!(face.cause.contains("what a person answers here — the preview's typed confirmation —"), "{}", face.cause);
+        assert!(!face.cause.contains("backup moment"), "retire runs no backup moment: {}", face.cause);
+        assert!(face.act.contains("scripted Person in-process"), "{}", face.act);
     }
 }

@@ -10,10 +10,10 @@ use skep_client::dial::plaintext_non_loopback_warning;
 use skep_client::sheet::Facts;
 
 use super::{board_of, facts, person_door, principal_or_bound, read_payload, store_of, talk, Stop};
-use crate::args::{Command, Usage};
+use crate::args::{CommandLine, Usage};
 use crate::terminal::Terminal;
 
-pub fn handoff(c: &Command) -> Result<(), Stop> {
+pub fn handoff(c: &CommandLine) -> Result<(), Stop> {
     let board = board_of(c)?;
     let store = store_of(c)?;
     let given = c.principal()?;
@@ -25,7 +25,7 @@ pub fn handoff(c: &Command) -> Result<(), Stop> {
     // The comparison and the confirmation make the `--payload` invocation a
     // person door; beat (a) alone is not one.
     if payload.is_some() {
-        person_door("handoff --payload")?;
+        person_door("handoff --payload", "the fingerprint comparison, the anchor import and the typed confirmation")?;
     }
     let principal = principal_or_bound(given, &store, &board)?;
     if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {

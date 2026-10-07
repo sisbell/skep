@@ -1,9 +1,10 @@
-//! `skep bind` (`client.md` §2.2): the three facts of an enroll hop or a
-//! handoff landed on this device — confirmed against the board, the set
-//! compared whole where another hand wrote the account's first set, the
-//! account's first signed session run where one is owed, the binding line
-//! written. With `keygen`, one of the two commands that sequence the
-//! library's compositions themselves rather than calling a walk.
+//! `skep bind` (`client.md` §2.2): the three facts of an enroll hop, a
+//! handoff or a hosted signup landed on this device — confirmed against the
+//! board, the set compared whole where another hand wrote the account's
+//! first set, the account's first signed session run where one is owed,
+//! the binding line written. With `keygen`, one of the two commands that
+//! sequence the library's compositions themselves rather than calling a
+//! walk.
 
 use skep_client::board::{Board, Scope};
 use skep_client::ceremony::first_session::{first_session, FirstSessionReads};
@@ -15,16 +16,25 @@ use skep_client::sheet::Facts;
 use skep_client::store::{Binding, KeySelector, KeyStore, Purpose};
 
 use super::{board_of, compare_genesis, data, facts, held_device, held_set, read_payload, select_key, store_of, talk, Stop};
-use crate::args::Command;
+use crate::args::CommandLine;
 use crate::terminal::answer;
+
+/// Who printed the reply `bind` lands, and so the one party that can print
+/// it again: the enrolling device at the hop (`skep enroll`, or `skep rotate
+/// --payload`), the giver at a handoff (§4c.2 G6), the host after a hosted
+/// signup (§4.5 H6). Nothing in the reply says which, so a face that sends
+/// the person back for the facts names all three, and the person knows
+/// theirs (P27).
+const REPLY_SENDER: &str = "whoever printed the reply — the enrolling device, the giver at a handoff, or your host after a hosted signup";
 
 /// The three facts, from `--account`/`--principal`/`--board`, or `--payload`
 /// — a reply in the lines `facts` prints (`account …`, `principal …`,
-/// `origin …`), `enroll`'s or `handoff`'s — or, for an account neither
-/// names, a line pasted at the prompt. `given` is `Command::principal`'s
-/// answer; a reply's principal line that is no principal halts, never
-/// standing as one not given.
-fn facts_of(c: &Command, board: &Board, given: Option<u64>) -> Result<(String, u64), Halt> {
+/// `origin …`), as `enroll`, `rotate`, `handoff` and `claim --hosted` print
+/// them — or, for an account neither names, a line pasted at the prompt;
+/// the origin the one this command dials, a reply naming another halting.
+/// `given` is `CommandLine::principal`'s answer; a reply's principal line
+/// that is no principal halts, never standing as one not given.
+fn facts_of(c: &CommandLine, board: &Board, given: Option<u64>) -> Result<Facts, Halt> {
     let mut account = c.value("--account");
     let mut principal = given;
     if let Some(arg) = c.value("--payload") {
@@ -38,8 +48,8 @@ fn facts_of(c: &Command, board: &Board, given: Option<u64>) -> Result<(String, u
                     let n = p.parse().map_err(|_| {
                         Halt::face(
                             format!("the reply's principal line `{p}` is not a principal"),
-                            "a principal is a non-negative integer, as `enroll` prints it",
-                            "re-take the three facts from the enrolling device",
+                            "a principal is a non-negative integer, as the reply prints it",
+                            format!("re-take the three facts from {REPLY_SENDER}"),
                         )
                     })?;
                     principal = Some(n);
@@ -55,7 +65,7 @@ fn facts_of(c: &Command, board: &Board, given: Option<u64>) -> Result<(String, u
     }
     let account = match account {
         Some(a) => a,
-        None => answer("account address (from the enrolling device's reply): ")
+        None => answer("account address (from the reply — the enrolling device's, the giver's at a handoff, or your host's): ")
             .map_err(|e| Halt::face("the account could not be read", e.to_string(), "pass --account"))?
             .unwrap_or_default()
             .trim()
@@ -65,7 +75,7 @@ fn facts_of(c: &Command, board: &Board, given: Option<u64>) -> Result<(String, u
     if account.is_empty() || !skep_client::address::is_address_text(&account) {
         return Err(Halt::face(format!("`{account}` is not an account address"), "an address is dotted decimal", "pass --account <address>"));
     }
-    Ok((account, principal))
+    Ok(Facts { account, principal, origin: board.dialed().clone() })
 }
 
 /// Which landing this is, where no `--anchor` says (§2.2 `bind`): THE PERSON
@@ -84,8 +94,11 @@ enum Landing {
     /// DECLINE arm, or a hosted signup's one-key payload: the genesis is
     /// compared against this device's key alone.
     KeyAlone,
-    /// The input ended before an answer: nobody is there to ask.
-    Unanswered,
+    /// Another hand wrote the first set around this key and the person's
+    /// anchor pair: the genesis is compared against the pair's files and this
+    /// device's key, and the question is asked only where no `--anchor` gave
+    /// the files.
+    Pair,
 }
 
 /// The landing question, each answer with its price where it is wrong.
@@ -105,34 +118,28 @@ const LANDING_AGAIN: &str = "answer hop, alone or pair: ";
 
 /// The landing, asked through the terminal's reader — a pipe answers it as
 /// a terminal does — and asked again until the answer is one of the three;
-/// `pair` is the halt whose act is the files.
-fn landing() -> Result<Landing, Halt> {
+/// `None` where the input ends before an answer, nobody being there to ask.
+fn landing() -> Result<Option<Landing>, Halt> {
     let mut prompt = LANDING_QUESTION;
     loop {
         let Some(line) = answer(prompt).map_err(|e| Halt::face("the landing could not be read", e.to_string(), "answer on stdin, or pass the pair as `--anchor`"))? else {
-            return Ok(Landing::Unanswered);
+            return Ok(None);
         };
         match line.trim().to_ascii_lowercase().as_str() {
-            "hop" => return Ok(Landing::Hop),
-            "alone" => return Ok(Landing::KeyAlone),
-            "pair" => {
-                return Err(Halt::face(
-                    "the anchor pair's files were not given: nothing was compared and nothing written",
-                    "where another hand wrote the first set around this key and an anchor pair, the genesis is compared against the pair's files and this device's key (AUTH-4.58's detection)",
-                    "re-run with `--anchor <a> --anchor <b>`",
-                ))
-            }
+            "hop" => return Ok(Some(Landing::Hop)),
+            "alone" => return Ok(Some(Landing::KeyAlone)),
+            "pair" => return Ok(Some(Landing::Pair)),
             _ => prompt = LANDING_AGAIN,
         }
     }
 }
 
-pub fn bind(c: &Command) -> Result<(), Stop> {
+pub fn bind(c: &CommandLine) -> Result<(), Stop> {
     let board = board_of(c)?;
     let store = store_of(c)?;
     let given = c.principal()?;
-    let key_file = c.key()?;
-    let (account, principal) = facts_of(c, &board, given)?;
+    let key_file = c.key_file()?;
+    let Facts { account, principal, origin } = facts_of(c, &board, given)?;
     // The facts CONFIRMED against the board before anything is written:
     // the origin arm; the principal by the ADDRESS-KEYED read (AUTH-6.37);
     // `principal_prefix(n)` against the pasted account; the key-set compare.
@@ -144,7 +151,7 @@ pub fn bind(c: &Command) -> Result<(), Stop> {
             return Err(Halt::face(
                 format!("the pasted principal {principal} is not the principal seated at {account}"),
                 format!("`effective_owner({account})` where `prefix == {account}` answers {} — the reply came from another board or another principal, which is exactly what an out-of-band channel gets wrong", other.map(|p| p.to_string()).unwrap_or_else(|| "no seat".into())),
-                "re-take the three facts from the enrolling device",
+                format!("re-take the three facts from {REPLY_SENDER}"),
             )
             .into())
         }
@@ -155,7 +162,7 @@ pub fn bind(c: &Command) -> Result<(), Stop> {
             return Err(Halt::face(
                 format!("the pasted account {account} is not `principal_prefix({principal})`"),
                 format!("the board answers {} for that principal", other.unwrap_or_else(|| "null".into())),
-                "re-take the three facts from the enrolling device",
+                format!("re-take the three facts from {REPLY_SENDER}"),
             )
             .into())
         }
@@ -173,9 +180,17 @@ pub fn bind(c: &Command) -> Result<(), Stop> {
     let held = match held_set(&store, None, &c.all("--anchor"), &key)? {
         Some(held) => Some(held),
         None => match landing()? {
-            Landing::KeyAlone => Some(vec![held_device(&key)]),
-            Landing::Hop => None,
-            Landing::Unanswered => {
+            Some(Landing::Hop) => None,
+            Some(Landing::KeyAlone) => Some(vec![held_device(&key)]),
+            Some(Landing::Pair) => {
+                return Err(Halt::face(
+                    "the anchor pair's files were not given: nothing was compared and nothing written",
+                    "where another hand wrote the first set around this key and an anchor pair, the genesis is compared against the pair's files and this device's key (AUTH-4.58's detection)",
+                    "re-run with `--anchor <a> --anchor <b>`",
+                )
+                .into())
+            }
+            None => {
                 talk(
                     "\nno landing was answered before the input ended, so the genesis is not compared whole: this binding confirms \
                      this key's membership alone. Where another hand wrote this account's first set, pass your pair as `--anchor`, \
@@ -216,11 +231,11 @@ pub fn bind(c: &Command) -> Result<(), Stop> {
     } else {
         talk("nothing is owed at this account's first signed session: no session is opened and no record is written");
     }
-    let line = Binding::Enrollment { origin: board.dialed().clone(), principal, account: account.clone(), fingerprint: key.fingerprint };
+    let line = Binding::Enrollment { origin: origin.clone(), principal, account: account.clone(), fingerprint: key.fingerprint };
     if let Err(w) = store.bind(&line) {
         talk(w.to_string());
     }
-    facts(&Facts { account, principal, origin: board.dialed().clone() });
+    facts(&Facts { account, principal, origin });
     if let Some(s) = agent_space {
         data(format!("agent space {s}"));
     }

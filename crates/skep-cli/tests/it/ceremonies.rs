@@ -51,7 +51,9 @@ fn help_lists_thirteen_and_names_none_as_not_in_this_build_and_yes_is_exit_2() {
     assert!(r.err.contains("unknown argument `--yes`"), "{}", r.err);
 }
 
-/// THE TTY: each person door without a controlling terminal is exit 3;
+/// THE TTY: each person door without a controlling terminal is exit 3, a
+/// halt's face naming the moments a person answers at THAT door (§2.4, §6)
+/// — the backup moment only at `accept`, the one door here that runs it;
 /// `accept --reprint`, `enroll --reply` and `handoff` without `--payload`
 /// run without one (they may halt on their state, never on the terminal).
 #[test]
@@ -62,18 +64,24 @@ fn the_person_doors_refuse_without_a_terminal_and_the_three_non_doors_run() {
     let store = dir.path().join("store");
     let payload = dir.path().join("p.json");
     std::fs::write(&payload, "{}").unwrap();
-    let doors: Vec<Vec<&str>> = vec![
-        vec!["enroll", "--board", &board, "--dir", s(&store), "--principal", "1", "--payload", s(&payload)],
-        vec!["recover", "--board", &board, "--dir", s(&store), "--principal", "1"],
-        vec!["retire", "--board", &board, "--dir", s(&store), "--principal", "1", "--fingerprint", "ab"],
-        vec!["rotate", "--board", &board, "--dir", s(&store), "--principal", "1"],
-        vec!["handoff", "--board", &board, "--dir", s(&store), "--principal", "1", "--account", "1.0.1.2", "--payload", s(&payload)],
-        vec!["accept", "--board", &board, "--dir", s(&store), "--account", "1.0.1.2"],
+    let doors: Vec<(Vec<&str>, &str)> = vec![
+        (vec!["enroll", "--board", &board, "--dir", s(&store), "--principal", "1", "--payload", s(&payload)], "the fingerprint comparison and its confirmation"),
+        (vec!["recover", "--board", &board, "--dir", s(&store), "--principal", "1"], "the kept-or-placed answer, the typed hex and the confirmations"),
+        (vec!["retire", "--board", &board, "--dir", s(&store), "--principal", "1", "--fingerprint", "ab"], "the preview's typed confirmation"),
+        (vec!["rotate", "--board", &board, "--dir", s(&store), "--principal", "1"], "the device-name box and the preview's typed confirmation"),
+        (
+            vec!["handoff", "--board", &board, "--dir", s(&store), "--principal", "1", "--account", "1.0.1.2", "--payload", s(&payload)],
+            "the fingerprint comparison, the anchor import and the typed confirmation",
+        ),
+        (vec!["accept", "--board", &board, "--dir", s(&store), "--account", "1.0.1.2"], "the name boxes and the backup moment, or on the decline arm its typed confirmation"),
     ];
-    for args in doors {
+    for (args, moments) in doors {
         let r = skep(&args, &[], None);
         assert_eq!(r.code, 3, "{args:?}: {r:?}");
         assert!(r.err.contains("requires a controlling terminal"), "{args:?}: {}", r.err);
+        assert!(r.err.contains(&format!("\n  cause: what a person answers here — {moments} —")), "the door's own moments: {args:?}: {}", r.err);
+        assert!(r.err.contains("\n  act: run it at a terminal"), "a halt's face: {args:?}: {}", r.err);
+        assert_eq!(r.err.contains("backup moment"), args[0] == "accept", "the backup moment named only where it runs: {args:?}: {}", r.err);
     }
     assert!(!store.exists(), "nothing generated before the check");
     for args in [

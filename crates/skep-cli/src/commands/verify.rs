@@ -8,13 +8,13 @@ use skep_client::derive::{origin_arm, precheck};
 use skep_client::store::Purpose;
 
 use super::{board_of, compare_genesis, data, held_set, principal_or_bound, select_key, store_of, talk, Stop};
-use crate::args::Command;
+use crate::args::CommandLine;
 
-pub fn verify(c: &Command) -> Result<(), Stop> {
+pub fn verify(c: &CommandLine) -> Result<(), Stop> {
     let board = board_of(c)?;
     let store = store_of(c)?;
     let given = c.principal()?;
-    let key_file = c.key()?;
+    let key_file = c.key_file()?;
     let json = c.switch("--json");
     let mut checks: Vec<&str> = Vec::new();
     // (1) THE ORIGIN ARM.

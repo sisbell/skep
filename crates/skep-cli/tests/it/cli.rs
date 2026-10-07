@@ -62,10 +62,12 @@ fn the_person_doors_refuse_without_a_terminal_and_the_rest_run_without_one() {
     let r = skep(&["claim", "--board", &board, "--dir", s(&store)], &[], None);
     assert_eq!(r.code, 3, "{r:?}");
     assert!(r.err.contains("requires a controlling terminal"), "{}", r.err);
+    assert!(r.err.contains("what a person answers here — the name boxes and the backup moment —"), "the door's own moments: {}", r.err);
     assert_eq!(skep(&["health", "--board", &board], &[], None).out.is_empty(), false, "the board was not touched by claim: still unclaimed");
     let r = skep(&["keygen", "--anchors", "--dir", s(&store)], &[], None);
     assert_eq!(r.code, 3, "{r:?}");
     assert!(r.err.contains("requires a controlling terminal"));
+    assert!(r.err.contains("what a person answers here — the door-side backup moment —"), "the door's own moments: {}", r.err);
     assert!(!store.join("keys").exists(), "nothing generated before the check");
     // Plain keygen runs without one.
     let r = skep(&["keygen", "--label", "service key", "--dir", s(&store)], &[], None);
@@ -165,10 +167,17 @@ fn the_loop_through_the_binary() {
     assert_eq!(r.code, 0, "{r:?}");
     assert!(r.err.contains("nothing is owed"), "{}", r.err);
     assert!(!r.out.contains("agent space"));
-    // Wrong facts: confirmed against the board, refused.
+    // Wrong facts: confirmed against the board, refused — the act sending the
+    // person back to whoever printed the reply, here the host's hosted claim
+    // and no enrolling device at all.
     let r = skep(&["bind", "--board", &board, "--dir", s(&store), "--account", "1.0.1", "--principal", "7"], &[], None);
     assert_eq!(r.code, 3, "{r:?}");
     assert!(r.err.contains("not the principal seated at 1.0.1"), "{}", r.err);
+    assert!(
+        r.err.contains("act: re-take the three facts from whoever printed the reply — the enrolling device, the giver at a handoff, or your host after a hosted signup"),
+        "the three landings' senders named: {}",
+        r.err
+    );
 
     // fingerprint: now BOUND.
     let r = skep(&["fingerprint", "--dir", s(&store), "--select", &fp[..8], "--payload"], &[], None);
@@ -453,6 +462,7 @@ fn a_refused_setting_is_never_read_as_an_absent_one() {
     let r = skep(&["bind", "--board", dead, "--dir", s(&store), "--payload", "-"], &[], Some(b"account 1.0.1\nprincipal 7x\n"));
     assert_eq!(r.code, 3, "{r:?}");
     assert!(r.err.contains("the reply's principal line `7x` is not a principal"), "{}", r.err);
+    assert!(r.err.contains("as the reply prints it") && r.err.contains("re-take the three facts from whoever printed the reply"), "{}", r.err);
     // An unreadable bindings file: a halt naming it, never every key UNBOUND.
     let unreadable = dir.path().join("unreadable");
     let r = skep(&["keygen", "--label", "k", "--dir", s(&unreadable)], &[], None);
@@ -552,16 +562,17 @@ fn the_plaintext_warning_and_the_default_store() {
 }
 
 /// `bind`'s paste prompt, where neither `--account` nor a reply names the
-/// account: the prompt rides stderr and the answer is read from stdin, so
-/// stdout carries nothing but data (§2.4). The facts are judged before any
-/// socket opens — a dead board behind them is never dialed.
+/// account: the prompt rides stderr — naming the reply's three senders, one
+/// per landing — and the answer is read from stdin, so stdout carries
+/// nothing but data (§2.4). The facts are judged before any socket opens — a
+/// dead board behind them is never dialed.
 #[test]
 fn bind_asks_for_the_account_on_stderr_and_reads_the_answer_from_stdin() {
     let dir = tempfile::tempdir().unwrap();
     let store = dir.path().join("store");
     let r = skep(&["bind", "--board", "http://127.0.0.1:1", "--dir", s(&store), "--principal", "1"], &[], Some(b"not-an-address\n"));
     assert_eq!(r.code, 3, "a halt on the facts, never transport: {r:?}");
-    assert!(r.err.contains("account address (from the enrolling device's reply): "), "the prompt on stderr: {}", r.err);
+    assert!(r.err.contains("account address (from the reply — the enrolling device's, the giver's at a handoff, or your host's): "), "the prompt on stderr: {}", r.err);
     assert!(r.err.contains("`not-an-address` is not an account address"), "the answer read from stdin: {}", r.err);
     assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
 }

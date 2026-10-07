@@ -73,7 +73,7 @@ impl Daemon {
                 // born-published credential class.
                 match self.history.reconstruct(&self.engine, at) {
                     Ok((_permit, world)) => {
-                        op_answer(key_set_reply(at, key_set_of(&world, world.identity(), &account)))
+                        op_answer(key_set_reply(at, key_set_of(&world, &account)))
                     }
                     Err(e) => refuse_unavailable(e),
                 }

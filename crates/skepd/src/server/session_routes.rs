@@ -3,7 +3,6 @@
 use std::time::Instant;
 
 use serde_json::Value;
-use skep_identity::HasIdentity;
 use skep_namespace::PrincipalId;
 
 use super::actor::Resolved;
@@ -62,7 +61,6 @@ impl Daemon {
             &self.auth.cfg,
             &self.auth.challenges,
             snap.world(),
-            snap.world().identity(),
             body,
             req.peer,
             req.origin.as_deref(),

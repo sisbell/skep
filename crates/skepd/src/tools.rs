@@ -24,12 +24,15 @@
 //! or present and re-hashing to another hash — the re-hash one whole read
 //! per file, skipped by `--no-rehash`; PER ACCOUNT its base (the index's
 //! number) and its pending bytes (its live leases on hashes none of its
-//! cells names, plus its standing uploads' bytes received) and THE VENUE
-//! TOTAL they sum to, the figures the limits record is written against;
-//! the standing uploads and the expired ones by count; the halt marks and
-//! any foreign designation directory. It RECORDS NO READ anywhere (D9) and
-//! writes nothing under `blobs/`. What the engine's open writes to the
-//! directory it is run over — the copy the inventory proves — is the
+//! cells names, plus its standing uploads' bytes received), the UNATTRIBUTED
+//! bytes no account's scope holds (a live lease's or a standing upload's
+//! whose key spells no principal of this build), and THE VENUE TOTAL they
+//! all sum to — the gate's own figure, under the gate's own pending rule
+//! (`MediaGate::counts_as_pending`), which the limits record is written
+//! against; the standing uploads and the expired ones by count; the halt
+//! marks and any foreign designation directory. It RECORDS NO READ anywhere
+//! (D9) and writes nothing under `blobs/`. What the engine's open writes to
+//! the directory it is run over — the copy the inventory proves — is the
 //! kernel's own: the lock file `kernel.lock`, created where absent, and a
 //! torn tail cut off the last segment where a crash left one; no
 //! checkpoint, no commit, no head, no feed sidecar — the daemon's own open
@@ -190,22 +193,25 @@ pub fn inventory(data_dir: &Path, rehash: bool) -> Result<Value, ToolError> {
         }
     }
 
-    // PER ACCOUNT: the base off the index, the pending bytes off the
-    // store's records as the gate counts them — every principal the index
-    // or either log names.
+    // PER ACCOUNT: the base off the index, the pending bytes off the store's
+    // records by the gate's own rule (`MediaGate::counts_as_pending`) — every
+    // principal the index or either log names — and the UNATTRIBUTED bytes, a
+    // live lease's or a standing upload's whose key spells no principal of
+    // this build: in no account's scope, and in the venue's total as the gate
+    // counts it.
     let mut accounts: std::collections::BTreeMap<PrincipalId, (u64, u64)> =
         index.accounts().into_iter().map(|(p, base)| (p, (base, 0))).collect();
+    let mut unattributed = 0u64;
     let (mut standing_uploads, mut expired_uploads, mut orphan_partials, mut asides) = (0usize, 0usize, 0usize, 0usize);
     if let Some(s) = &store {
         for lease in s.leases() {
-            if now >= lease.expires {
+            if now >= lease.expires || !MediaGate::counts_as_pending(&index, lease) {
                 continue;
             }
-            let Some(p) = MediaGate::principal_of_key(&lease.principal) else { continue };
-            if index.names(p, &lease.designation, &lease.hex) {
-                continue;
+            match MediaGate::principal_of_key(&lease.principal) {
+                Some(p) => accounts.entry(p).or_insert((0, 0)).1 += lease.size,
+                None => unattributed = unattributed.saturating_add(lease.size),
             }
-            accounts.entry(p).or_insert((0, 0)).1 += lease.size;
         }
         for record in s.uploads() {
             if now >= record.expires {
@@ -213,8 +219,9 @@ pub fn inventory(data_dir: &Path, rehash: bool) -> Result<Value, ToolError> {
                 continue;
             }
             standing_uploads += 1;
-            if let Some(p) = MediaGate::principal_of_key(&record.principal) {
-                accounts.entry(p).or_insert((0, 0)).1 += record.offset;
+            match MediaGate::principal_of_key(&record.principal) {
+                Some(p) => accounts.entry(p).or_insert((0, 0)).1 += record.offset,
+                None => unattributed = unattributed.saturating_add(record.offset),
             }
         }
         for designation in PINNED_DESIGNATIONS {
@@ -226,7 +233,8 @@ pub fn inventory(data_dir: &Path, rehash: bool) -> Result<Value, ToolError> {
                 .count();
         }
     }
-    let venue_total = accounts.values().fold(0u64, |acc, (b, p)| acc.saturating_add(*b).saturating_add(*p));
+    let venue_total =
+        accounts.values().fold(unattributed, |acc, (b, p)| acc.saturating_add(*b).saturating_add(*p));
     let accounts: Vec<Value> = accounts
         .into_iter()
         .map(|(p, (base, pending))| {
@@ -286,6 +294,7 @@ pub fn inventory(data_dir: &Path, rehash: bool) -> Result<Value, ToolError> {
         ("references", Value::Number((references.len() as u64).into())),
         ("rehashed", Value::Bool(rehash)),
         ("standing_uploads", Value::Number((standing_uploads as u64).into())),
+        ("unattributed", Value::Number(unattributed.into())),
         ("values_walked", Value::Number((report.values as u64).into())),
         ("venue_total", Value::Number(venue_total.into())),
     ]))

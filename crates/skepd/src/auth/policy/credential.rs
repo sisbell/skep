@@ -11,8 +11,8 @@ use skep_address::{checked_inc, ordinal, parent, Address, Nat, Span};
 use skep_febe::Op;
 use skep_identity::{
     canonical_record, parse_record_value, record_bytes, single_address, Effect, Enrolled,
-    Enrollment, Fingerprint, IdentityState, Inert, LinkDeposit, PublicKey, RecordEntry, Verdict,
-    ALG_FNDSA512_PREVIEW_ED25519,
+    Enrollment, Fingerprint, HasIdentity, IdentityState, Inert, LinkDeposit, PublicKey,
+    RecordEntry, Verdict, ALG_FNDSA512_PREVIEW_ED25519,
 };
 use skep_links::SlotArg;
 use skep_namespace::{system_account, HasM3};
@@ -283,13 +283,14 @@ pub(crate) enum RecordSig {
 /// that chose this path reads the same spans through the same
 /// [`addr_spans`]); if reached, this assert fires, the write passes with
 /// no slot (4)–(8), and the caller runs the committed tail like any other,
-/// where the fold's own step reaches the same `NotCredential` verdict and
-/// does not advance — so AUTH-3.19's "no fold feed" holds of the OUTCOME
-/// and not of the CALL, and in a debug build `step_committed`'s assert
-/// fires second.
+/// where the engine's fold hook (AUTH-2.80) reads the same type slot and
+/// folds nothing — so AUTH-3.19's "no fold feed" holds of the OUTCOME and
+/// not of the CALL, and in a debug build `AuthState::commit_tail`'s E4
+/// assert fires second.
 ///
-/// `world` and `identity` MUST be the pair taken under the write guard for
-/// this request; the guard argument is that contract's cheap half.
+/// `world` MUST be the snapshot taken under the write guard for this request
+/// — its key table is that snapshot's own slice; the guard argument is that
+/// contract's cheap half.
 ///
 /// THE ACTOR is narrowed to what the session's OPENING fixed (AUTH-3.16): the
 /// key that established it and, beside it, the scope it declared (AUTH-4.39;
@@ -306,20 +307,16 @@ pub(crate) enum RecordSig {
 /// reach — no configured origin, the local-trust flag, list entry or node
 /// prefix can be read from here, because none of them is an argument — and
 /// no address, content, cone, document or role rides in on either one.
-// Eight arguments, deliberately: each is ONE declared collaborator (AUTH-3.15,
-// AUTH-3.16's narrowing), and bundling them would put a struct between the
-// caller and the list this doc names — the same call `handshake` makes.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn precheck(
     lock: &LockWrite<'_>,
     world: &World,
-    identity: &IdentityState,
     dep: &DepositSpans,
     signer: Option<&Fingerprint>,
     scope: Scope,
     seat: Option<&Address>,
     allow_preview_keys: bool,
 ) -> Result<RecordSig, CredentialRefusal> {
+    let identity = world.identity();
     // THE SYSTEM ACCOUNT TAKES NO CREDENTIAL DEPOSIT (as7-F2; SO-I2 (g)(iv),
     // SO-I4 (c)) — AHEAD of the fold's verdict and on both arms of the
     // board state, so it is the first thing said of such a deposit (P13) and
@@ -481,7 +478,7 @@ pub(crate) fn precheck(
             Effect::Retire { .. } => RecordKind::Retire,
             Effect::Claim { .. } => return Err(CredentialRefusal::Inert(Inert::AlreadyClaimed)),
         };
-        record_grade_check(world, identity, dep, kind, anchor_grade)?;
+        record_grade_check(world, dep, kind, anchor_grade)?;
         Ok(RecordSig::Verified)
     } else {
         // (8) — the pre-claim admission gate's deposit cell, evaluated on
@@ -607,12 +604,11 @@ enum RecordKind {
 /// ceremony's own records go unjudged, `sig` or not, and this function is
 /// reached only from the claimed arm.
 ///
-/// `world` and `identity` MUST be the pair taken under the write guard for
-/// this request, as `precheck`'s are; `dep` the deposit slot (3) classified
+/// `world` MUST be the snapshot taken under the write guard for this
+/// request, as `precheck`'s is; `dep` the deposit slot (3) classified
 /// `Honored`, and `kind` its kind.
 fn record_grade_check(
     world: &World,
-    identity: &IdentityState,
     dep: &DepositSpans,
     kind: RecordKind,
     anchor_grade: bool,
@@ -655,7 +651,6 @@ fn record_grade_check(
     let to = single_address(&dep.to);
     verify_record_sig(
         world,
-        identity,
         RecordTrial {
             home: &dep.home,
             home_account,
@@ -693,11 +688,7 @@ pub(super) struct RecordTrial<'a> {
 /// grade for registry records, 2b) both call, so the two grades verify one
 /// way: the blob, the frame, the candidates, the trial. Each fault is the
 /// `attestation_invalid` cause the caller joins to its own family's code.
-pub(super) fn verify_record_sig(
-    world: &World,
-    identity: &IdentityState,
-    trial: RecordTrial<'_>,
-) -> Result<(), AttestFault> {
+pub(super) fn verify_record_sig(world: &World, trial: RecordTrial<'_>) -> Result<(), AttestFault> {
     // 3 — the blob, width-validated, naming no row (l7-C3).
     let blob = HybridSig::parse(trial.sig).ok_or(AttestFault::Malformed)?;
     let blob = blob.as_bytes();
@@ -716,7 +707,8 @@ pub(super) fn verify_record_sig(
         return Err(AttestFault::BoardUnavailable);
     };
     // 5 — the candidates: the set that opens the home's account, at the
-    // grade the act needs, of the blob's row.
+    // grade the act needs, of the blob's row — off `world`'s own key table.
+    let identity = world.identity();
     let opening = opening_account(identity, trial.home_account);
     let candidates: Vec<&PublicKey> = identity
         .key_set(&opening)
@@ -907,7 +899,6 @@ mod tests {
         use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
 
         use skep_engine::types::{t_claim, t_enroll, t_retire};
-        use skep_identity::HasIdentity;
 
         use crate::auth::CredentialLock;
         use crate::codec::JsonCodec;
@@ -970,14 +961,15 @@ mod tests {
         assert!(board_term(world).is_none(), "the premise: no head writer ran, so no H.1");
         // The slice the World carries, stepped at each of the ceremony's
         // deposits by the engine's own fold hook.
-        let identity = world.identity();
-        assert!(identity.claimant().is_some(), "the premise: the ceremony claimed the board");
+        assert!(
+            world.identity().claimant().is_some(),
+            "the premise: the ceremony claimed the board"
+        );
         let lock = CredentialLock::new();
         assert_eq!(
             precheck(
                 &lock.write(),
                 world,
-                identity,
                 &dep,
                 Some(&Fingerprint::of(&device)),
                 Scope::Full,

@@ -195,10 +195,10 @@ fn resolve_maps_every_lookup_arm_to_its_actor() {
     let febe = OperationSurface::new(Box::new(engine.stores()));
     let snap = engine.kernel().snapshot();
     let world = snap.world();
-    // Genesis: no account holds any key, so no signed binding is live.
-    let identity = IdentityState::genesis();
+    // Genesis: the world's own slice holds no account's key, so no signed
+    // binding is live.
     let cfg = cfg_at(8642, true);
-    let actor_of = |lookup, peer, origin| resolve(&cfg, lookup, peer, origin, world, &identity);
+    let actor_of = |lookup, peer, origin| resolve(&cfg, lookup, peer, origin, world);
 
     assert_eq!(
         actor_of(Lookup::NoToken, Peer::Loopback, None),
@@ -261,7 +261,6 @@ fn an_expired_nonce_is_the_unit_refusal() {
     })
     .expect("in-memory genesis cannot fail");
     let snap = engine.kernel().snapshot();
-    let identity = IdentityState::genesis();
     let cfg = cfg_at(8642, true);
     let challenges = Challenges::new(4);
     let issued = Instant::now();
@@ -280,7 +279,6 @@ fn an_expired_nonce_is_the_unit_refusal() {
         &cfg,
         &challenges,
         snap.world(),
-        &identity,
         body,
         Peer::Loopback,
         None,

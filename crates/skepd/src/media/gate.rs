@@ -482,12 +482,14 @@ impl MediaGate {
         key.parse::<u64>().ok().map(PrincipalId)
     }
 
-    /// Whether a live lease counts in its key's PENDING bytes: not where the
-    /// key's own cells name the hash, which its base already counts
-    /// (M-I6 (b)).
-    fn lease_pending(&self, lease: &Lease) -> bool {
+    /// Whether a live lease counts in its key's PENDING bytes — THE rule, the
+    /// gate's own and the operator's inventory's (`tools::inventory`) alike:
+    /// not where the key's own cells name the hash, which its base already
+    /// counts (M-I6 (b)); and always where the key spells no principal of this
+    /// build, whose bytes no base counts.
+    pub(crate) fn counts_as_pending(index: &CellIndex, lease: &Lease) -> bool {
         match Self::principal_of_key(&lease.principal) {
-            Some(p) => !self.index.names(p, &lease.designation, &lease.hex),
+            Some(p) => !index.names(p, &lease.designation, &lease.hex),
             None => true,
         }
     }
@@ -503,15 +505,17 @@ impl MediaGate {
     /// figure beside the base.
     pub(crate) fn own_pending(&self, principal: PrincipalId, now_ms: u64) -> u64 {
         let key = Self::key(principal);
-        self.store.pending_bytes(&key, now_ms, |l| self.lease_pending(l))
+        self.store.pending_bytes(&key, now_ms, |l| Self::counts_as_pending(&self.index, l))
     }
 
-    /// THE VENUE TOTAL at `now_ms`: the sum of every account's own scope —
-    /// every base and every pending — record-derived.
+    /// THE VENUE TOTAL at `now_ms`: every account's own scope — every base and
+    /// every pending — and the UNATTRIBUTED bytes beside them, a live lease's
+    /// or a standing upload's whose key spells no principal of this build
+    /// ([`MediaGate::counts_as_pending`]): record-derived, the figure the
+    /// operator's inventory reports under the same rule.
     pub(crate) fn venue_total(&self, now_ms: u64) -> u64 {
-        self.index
-            .total_base()
-            .saturating_add(self.store.pending_total(now_ms, |l| self.lease_pending(l)))
+        let pending = self.store.pending_total(now_ms, |l| Self::counts_as_pending(&self.index, l));
+        self.index.total_base().saturating_add(pending)
     }
 
     /// Claim an upload for a stream (clause (5)): `false` where another

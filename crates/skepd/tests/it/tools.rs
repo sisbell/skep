@@ -3,7 +3,8 @@
 //! PULL", "NEITHER OPENS THE STORE AS skepd DOES"; the register M-I5 (d),
 //! M-I5 (e), M-I6 (d), M-I6 (f); DOCTRINE D9; the ruling mt-1): the
 //! INVENTORY over a stopped board — the holes by kind of fault, each
-//! account's base and pending bytes and the venue total, the standing and
+//! account's base and pending bytes, the bytes no account's scope holds and
+//! the venue total, the standing and
 //! expired uploads, the halt marks and a foreign designation directory —
 //! writing nothing under `blobs/` and refused beside a serving daemon at
 //! the kernel's lock; and the PULL — a file a committed cell names restored
@@ -75,7 +76,10 @@ fn accounts_of(v: &Value) -> BTreeMap<u64, (Option<String>, u64, u64)> {
 /// and re-hashing to other bytes are the three holes, each with the cells
 /// naming it; each account's base is the index's number and its pending
 /// bytes its live leases on hashes none of its cells names plus its
-/// standing uploads' bytes, the venue total their sum; the standing and the
+/// standing uploads' bytes; a live lease another build wrote, its key
+/// spelling no principal of this build, is UNATTRIBUTED — in no account's
+/// scope — and the venue total is their sum with the unattributed bytes, the
+/// gate's own figure under the gate's own pending rule; the standing and the
 /// expired uploads by count; a foreign designation directory named; the
 /// re-hash skipped by `--no-rehash` leaves the hash hole unfound; every
 /// file under `blobs/` and every journal segment is left byte for byte and
@@ -122,6 +126,17 @@ fn the_inventory_lists_the_holes_the_accounts_and_the_venue_total_and_writes_not
     fs::write(blake3_dir.join(blob_hex(&a_bytes)), &a_bytes[..2_999]).unwrap();
     fs::write(blake3_dir.join(blob_hex(&d_bytes)), seeded_bytes(6_000, 44)).unwrap();
     fs::create_dir(blobs.join("sha256-tree")).unwrap();
+    // A lease another build wrote, its key spelling no principal of this
+    // build: in no account's scope, and in the venue's total as the gate
+    // counts it.
+    let leases = blobs.join("leases.log");
+    let mut log = fs::read_to_string(&leases).unwrap();
+    log.push_str(&format!(
+        "{{\"designation\":\"blake3\",\"expires\":{},\"hex\":\"{}\",\"key\":\"another-build\",\"size\":1000}}\n",
+        u64::MAX,
+        "ab".repeat(32)
+    ));
+    fs::write(&leases, log).unwrap();
     let before = tree(&blobs);
     // The journal's segments, byte for byte: the engine's open re-cuts the
     // active segment at its own end, which moves its mtime and no byte.
@@ -153,7 +168,12 @@ fn the_inventory_lists_the_holes_the_accounts_and_the_venue_total_and_writes_not
         "the owner: the base a + b, the pending c's lease and the standing upload's five bytes: {v}"
     );
     assert_eq!(accounts.get(&stranger_principal).map(|(_, base, pending)| (*base, *pending)), Some((6_000, 0)), "{v}");
-    assert_eq!(v["venue_total"].as_u64(), Some(7_000 + 5_005 + 6_000), "the sum of every own scope");
+    assert_eq!(
+        v["venue_total"].as_u64(),
+        Some(7_000 + 5_005 + 6_000 + 1_000),
+        "every own scope and the unattributed bytes: the gate's figure"
+    );
+    assert_eq!(v["unattributed"].as_u64(), Some(1_000), "{v}");
     assert_eq!(v["standing_uploads"].as_u64(), Some(1));
     assert_eq!(v["expired_uploads"].as_u64(), Some(1));
     assert_eq!(v["foreign_designations"], serde_json::json!(["sha256-tree"]));

@@ -10,7 +10,8 @@ use rand_core::CryptoRng;
 use serde_json::Value;
 use skep_febe::SessionId;
 use skep_identity::{
-    framed, Fingerprint, IdentityState, KeySet, PublicKey, SESSION_TAG, SESSION_TAG_V2, SIG_ALGS,
+    framed, Fingerprint, HasIdentity, IdentityState, KeySet, PublicKey, SESSION_TAG,
+    SESSION_TAG_V2, SIG_ALGS,
 };
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
 
@@ -428,11 +429,8 @@ pub(crate) fn bare_bind_allowed(
 /// account between it and the set it authenticated against, moves THIS
 /// answer to a set the session's key is not in (the handoff latch,
 /// AUTH-2.71, refuses a genesis naming a key of the set above).
-pub(super) fn key_subject(
-    world: &World,
-    identity: &IdentityState,
-    p: PrincipalId,
-) -> Option<Address> {
+pub(super) fn key_subject(world: &World, p: PrincipalId) -> Option<Address> {
+    let identity = world.identity();
     if p == BOOTSTRAP_PRINCIPAL {
         return identity.claimant().cloned();
     }
@@ -486,13 +484,9 @@ pub(super) fn keyed_above(identity: &IdentityState, a: &Address) -> Option<Addre
 /// THIS ONE's (step 4b; [`resolve`]'s blocked arm): an entry over exactly
 /// `X.1` covers a session as `X.1`, whosever set opened it, and an entry
 /// over `X.1` never reaches a session as `X`.
-fn session_account(
-    world: &World,
-    identity: &IdentityState,
-    p: PrincipalId,
-) -> Option<Address> {
+fn session_account(world: &World, p: PrincipalId) -> Option<Address> {
     if p == BOOTSTRAP_PRINCIPAL {
-        identity.claimant().cloned()
+        world.identity().claimant().cloned()
     } else {
         world.m3().principal_prefix(p).cloned()
     }
@@ -500,9 +494,9 @@ fn session_account(
 
 /// AUTH-4.28 — the pure `Lookup` → `Actor` map at this snapshot. The
 /// CALLER performs the one map lookup and passes the value; `resolve`
-/// takes no store and holds no store guard. `identity` is `world`'s own
-/// slice, `world.identity()`, which every caller hands in off the one
-/// snapshot it took.
+/// takes no store and holds no store guard. The key table it reads is
+/// `world`'s own slice (`HasIdentity`, AUTH-2.60), so the state a binding is
+/// judged by is one committed state by construction.
 ///
 /// A `Found` binding meets THE BLOCK first (AUTH-4.63's second trigger):
 /// where the installed list covers the session's OWN account — step 4b's
@@ -519,21 +513,21 @@ pub(crate) fn resolve(
     peer: Peer,
     origin_hdr: Option<&str>,
     world: &World,
-    identity: &IdentityState,
 ) -> Actor {
+    let identity = world.identity();
     let claimed = identity.claimant().is_some();
     match lookup {
         Lookup::NoToken => Actor::Guest(GuestReason::NoToken),
         Lookup::Unknown => Actor::Guest(GuestReason::Unknown),
         Lookup::Found(binding) => {
-            let blocked = session_account(world, identity, binding.principal)
+            let blocked = session_account(world, binding.principal)
                 .is_some_and(|own| cfg.blocked_prefixes().covers(&own).is_some());
             if blocked {
                 return Actor::Guest(GuestReason::BindingDead);
             }
             match binding.signer {
                 Some(fp) => {
-                    let live = key_subject(world, identity, binding.principal)
+                    let live = key_subject(world, binding.principal)
                         .is_some_and(|a| identity.key_set(&a).contains(&fp));
                     if live {
                         Actor::Principal(binding)
@@ -816,17 +810,20 @@ fn find_signer(set: &KeySet, payload: &[u8], sig: &[u8]) -> Option<Fingerprint> 
 /// so the binding the route opens carries a scope its signer SIGNED, and
 /// never one read off an unverified request. The bare arm answers
 /// `Scope::Full`: it is scope-less, `Full` in shape.
-#[allow(clippy::too_many_arguments)]
+///
+/// The key table every step reads is `world`'s own slice (`HasIdentity`,
+/// AUTH-2.60): the account registry and the set a signature is tried
+/// against are one committed state by construction.
 pub(crate) fn handshake(
     cfg: &AuthConfig,
     challenges: &Challenges,
     world: &World,
-    identity: &IdentityState,
     body: SessionBody,
     peer: Peer,
     origin_hdr: Option<&str>,
     now: Instant,
 ) -> Result<Opened, HandshakeRefusal> {
+    let identity = world.identity();
     let claimed = identity.claimant().is_some();
     match body {
         SessionBody::Bare { principal } => {
@@ -853,7 +850,7 @@ pub(crate) fn handshake(
             // arm — principal 0 on an unclaimed board included — is this
             // one refusal, and a party naming a principal the board does
             // not know is never told a prefix is blocked.
-            let Some(own) = session_account(world, identity, principal) else {
+            let Some(own) = session_account(world, principal) else {
                 return Err(SessionRejected.into());
             };
             // 4b — THE BLOCK: the account KNOWN, no key set read and no
@@ -867,7 +864,7 @@ pub(crate) fn handshake(
             // 5 — the subject's set. The subject is read HERE, behind 4b,
             // because its walk reads key sets; ahead of 4b it would answer
             // nothing 4b needs.
-            let Some(subject) = key_subject(world, identity, principal) else {
+            let Some(subject) = key_subject(world, principal) else {
                 return Err(SessionRejected.into());
             };
             let set = identity.key_set(&subject);

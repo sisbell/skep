@@ -284,21 +284,14 @@ impl AuthState {
 
 // ── the key_set read's identity half (AUTH-6.18–6.20) ────────────────────
 
-/// The key set one `(world, identity)` pair holds for an address, or
-/// `None` when the address is not an account — the ONE account-hood test
+/// The key set `world` holds for an address — its own identity slice's —
+/// or `None` when the address is not an account: the ONE account-hood test
 /// both `/op` (the head snapshot) and `/op-at` (the reconstructed world)
-/// call, so the two routes cannot diverge on it. Both hand the slice the
-/// SAME world carries, so the account-hood and the table stand on one
-/// committed state (AUTH-6.20: "`/op-at` on the reconstructed World, the
-/// slice riding in it"). The rendering is [`crate::codec::key_set_reply`]'s,
-/// where every wire shape this crate emits is rendered.
-pub(crate) fn key_set_of<'a>(
-    world: &World,
-    identity: &'a IdentityState,
-    account: &Address,
-) -> Option<&'a KeySet> {
-    world
-        .m3()
-        .is_registered_account(account)
-        .then(|| identity.key_set(account))
+/// call, so the two routes cannot diverge on it, and the account-hood and
+/// the table stand on one committed state by construction (AUTH-6.20:
+/// "`/op-at` on the reconstructed World, the slice riding in it"). The
+/// rendering is [`crate::codec::key_set_reply`]'s, where every wire shape
+/// this crate emits is rendered.
+pub(crate) fn key_set_of<'a>(world: &'a World, account: &Address) -> Option<&'a KeySet> {
+    world.m3().is_registered_account(account).then(|| world.identity().key_set(account))
 }

@@ -2,9 +2,10 @@
 //! sequences a write takes ([`deposits_credential_link`] and
 //! [`deposits_registry_link`], each read off the op's own type slot before
 //! any lock, the credential route asked first), the refusal vocabularies they
-//! answer in ([`CredentialRefusal`]; the registry's own,
-//! [`RegistryRefusal`]), and — one file per sequence, and one for the check
-//! the plain sequence runs — their ordered producers:
+//! answer in ([`CredentialRefusal`]; the registry's own, [`RegistryRefusal`];
+//! the upload family's, [`UploadRefusal`]), and — one file per sequence, one
+//! for the check the plain sequence runs, and one for the upload family's
+//! gate — their ordered producers:
 //!
 //! - `credential` — the CREDENTIAL sequence's (AUTH-3.37): slots (1)–(2)
 //!   ahead of the credential write lock, the precheck's slots (3)–(8) under
@@ -21,21 +22,27 @@
 //! - `attestation` — THE WRITE-PATH CHECK (signed ops), run behind the plain
 //!   sequence's publish-class gate on a claimed board, whose ADMITTED
 //!   attestation is what the write's commit marker carries, and which asks
-//!   M5's own admission of the shot what a shot it could not read is owed.
+//!   M5's own admission of the shot what a shot it could not read is owed;
+//! - `upload` — the UPLOAD family's admission at the session layer (D12;
+//!   PUB-6.35's I10; M-I6 (b)): no write sequence, the family committing
+//!   nothing to the journal, but the session layer's gate on who may take
+//!   bytes into the blob store at all, kept beside the sequences' gates.
 //!
-//! `addr_spans`, the one spelling of a type slot all four read, lives here,
-//! where each child sees it without a widening.
+//! `addr_spans`, the one spelling of a type slot the sequences and the check
+//! read, lives here, where each child sees it without a widening.
 
 mod attestation;
 mod credential;
 mod plain;
 mod registry;
+mod upload;
 
 pub(crate) use credential::{op_shape_refusal, precheck, DepositSpans, RecordSig};
 pub(crate) use plain::plain_admission;
 pub(crate) use registry::{
     deposits_registry_link, genesis_seeding_check, registry_admission, RegistryRefusal,
 };
+pub(crate) use upload::{upload_admission, UploadRefusal};
 // The registry's record-deposit set: read by this module's children alone,
 // through `super::`, as `record_deposit_kind` is.
 use registry::registry_deposit_kind;

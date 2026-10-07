@@ -24,11 +24,12 @@
 //! once in wire.md §Media.
 //!
 //! THE ORDER OF ONE REQUEST THAT CARRIES BYTES: the session-layer gate
-//! (a guest, an unclaimed board, a node-tier principal: refused before
-//! anything — D12, PUB-6.35's I10, P13); THE UPLOAD SETTING — on a board
-//! whose uploads are CLOSED (`--no-uploads`, echoed on `/health` as
-//! `media.uploads`) the creation and the resume answer `403
-//! upload_refused` with `detail` `uploads_closed` before any body byte,
+//! ([`upload_admission`], the session layer's own: a guest, an unclaimed
+//! board, a node-tier principal, refused before anything — D12, PUB-6.35's
+//! I10, P13); THE UPLOAD SETTING — on a board whose uploads are CLOSED
+//! (`--no-uploads`, echoed on `/health` as `media.uploads`) the creation
+//! and the resume answer `403 upload_refused` with `detail`
+//! `uploads_closed` before any body byte,
 //! the upload kept where one stood, and every read and the termination
 //! are served (`media.md` Op inventory 1, "ONLY ON A BOARD WHOSE UPLOADS
 //! ARE OPEN"; M-I7 (e)); THE READINESS — the creation and the resume read
@@ -110,8 +111,7 @@ use std::time::Duration;
 use serde_json::Value;
 use skep_address::Address;
 use skep_blobs::{BlobError, Finished, HashFunction, Stream, UploadId, UploadRecord};
-use skep_identity::HasIdentity;
-use skep_namespace::{HasM3, PrincipalId};
+use skep_namespace::PrincipalId;
 
 use super::actor::Resolved;
 use super::reply::{
@@ -120,6 +120,7 @@ use super::reply::{
 };
 use super::request::{at_most_once, query_pairs, BodySource, HttpRequest};
 use super::Daemon;
+use crate::auth::policy::{upload_admission, UploadRefusal};
 use crate::auth::session::Actor;
 use crate::codec::{obj, wire_address};
 use crate::media::deposit_read::deposit_read;
@@ -235,21 +236,16 @@ impl Daemon {
         self.media.now_ms()
     }
 
-    /// THE SESSION-LAYER GATE, then THE UPLOAD SETTING, then THE READINESS,
-    /// then THE PERMIT, then the method. The gate (D12; PUB-6.35's I10;
-    /// sweep-5 media-leak `upload-admitted-where-no-op-would-be`): a guest
-    /// is refused; before the claim every act of the upload and the deposit
-    /// read answers `claim_first`; a NODE-TIER principal — principal 0 of
-    /// this node or of a sub-node, which owns no documents — is refused
-    /// before any body byte, so no deposit stands that no account's scope
-    /// counts. The readiness (ms5-R): the creation, the resume and the
-    /// deposit read — the index's three readers at this family — are
-    /// refused `index_rebuilding` until the walk at open completes; the
-    /// progress read and the termination read no base and are served. The
-    /// permit (M-I5 (f); P29, P13): the creation and the resume take one of
-    /// the upload pool's or are refused `upload_busy` — after the three
-    /// refusals above, which spend no permit, and before any byte, record
-    /// or partial; held for the request's life.
+    /// THE SESSION-LAYER GATE ([`upload_admission`], which states its order
+    /// and its reasons), then THE UPLOAD SETTING, then THE READINESS, then
+    /// THE PERMIT, then the method. The readiness (ms5-R): the creation, the
+    /// resume and the deposit read — the index's three readers at this
+    /// family — are refused `index_rebuilding` until the walk at open
+    /// completes; the progress read and the termination read no base and
+    /// are served. The permit (M-I5 (f); P29, P13): the creation and the
+    /// resume take one of the upload pool's or are refused `upload_busy` —
+    /// after the three refusals above, which spend no permit, and before any
+    /// byte, record or partial; held for the request's life.
     fn blob_dispatch(
         &self,
         resolved: &Resolved,
@@ -259,25 +255,15 @@ impl Daemon {
         let Some(target) = blob_path(&req.path) else {
             return refuse(TransportError::NoSuchEndpoint, Some(&req.path));
         };
-        let principal = match &resolved.actor {
-            Actor::Principal(b) => b.principal,
-            Actor::Guest(_) => return refuse_upload("unauthenticated"),
+        // THE SESSION-LAYER GATE (`auth::policy::upload_admission`), off ONE
+        // head snapshot: the claim and the tier are one committed state.
+        let principal = {
+            let snap = self.engine.kernel().snapshot();
+            match upload_admission(snap.world(), &resolved.actor) {
+                Ok(principal) => principal,
+                Err(refusal) => return refuse_upload(&refusal.token()),
+            }
         };
-        // ONE head snapshot for the claim and the tier: the world and the
-        // table it carries are one committed state.
-        let snap = self.engine.kernel().snapshot();
-        if snap.world().identity().claimant().is_none() {
-            return refuse_upload("claim_first");
-        }
-        let account_tier = snap
-            .world()
-            .m3()
-            .principal_prefix(principal)
-            .is_some_and(|p| p.level() == skep_address::Level::Account);
-        drop(snap);
-        if !account_tier {
-            return refuse_upload("node_tier");
-        }
         // THE UPLOAD SETTING: the two acts that take bytes, refused before
         // any body byte on a closed board; the reads and the end served.
         let takes_bytes = matches!(
@@ -540,14 +526,17 @@ impl Daemon {
         let now = self.media.now_ms();
         let resolved = {
             let snap = self.engine.kernel().snapshot();
-            self.resolve_actor(req, snap.world(), snap.world().identity())
+            self.resolve_actor(req, snap.world())
         };
         let same =
             matches!(&resolved.actor, Actor::Principal(b) if MediaGate::key(b.principal) == key);
         if !same {
             drop(stream);
             let _ = store.end_upload(key, &id, now);
-            return with_signal(refuse_upload("unauthenticated"), resolved.closed);
+            return with_signal(
+                refuse_upload(&UploadRefusal::Unauthenticated.token()),
+                resolved.closed,
+            );
         }
         match stream.finish(Duration::from_millis(self.media.limits().lease_interval_ms), now) {
             Ok(finished) => finish_reply(&finished),
@@ -704,7 +693,8 @@ fn finish_reply(f: &Finished) -> Reply {
     )
 }
 
-/// The session-layer gate's refusal, naming which.
+/// `403 upload_refused`, naming which: the session layer's refusal
+/// ([`UploadRefusal::token`]) or the closed setting's `uploads_closed`.
 fn refuse_upload(detail: &str) -> Reply {
     refuse(TransportError::UploadRefused, Some(detail))
 }

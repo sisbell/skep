@@ -134,7 +134,7 @@ impl Daemon {
                 // the credential (AUTH-2.80), and there is no second read to
                 // order.
                 let snap = self.engine.kernel().snapshot();
-                let set = key_set_of(snap.world(), snap.world().identity(), &account);
+                let set = key_set_of(snap.world(), &account);
                 op_answer(key_set_reply(snap.seq(), set))
             }
             Ok(DaemonOp::Febe { request: frame, presented }) => match write_meta(&frame.op) {
@@ -225,13 +225,9 @@ impl Daemon {
             Actor::Guest(_) => return with_signal(self.guest_reply(frame), closed),
         };
         // 3 — the admission's ordered producers.
-        if let Err(r) = registry_admission(
-            &credential_lock,
-            snap.world(),
-            snap.world().identity(),
-            &frame.op,
-            binding.signer.as_ref(),
-        ) {
+        if let Err(r) =
+            registry_admission(&credential_lock, snap.world(), &frame.op, binding.signer.as_ref())
+        {
             // A refused write's TURN (l7-C1), as on every path.
             self.writes.take_turn_after_refusal(&serial);
             return with_signal(registry_refused(meta.kind, &r), closed);
@@ -264,7 +260,7 @@ impl Daemon {
     /// [`Daemon::resolve_at_head`] states.
     fn locked_state(&self, _serial: &SerialGuard<'_>, req: &HttpRequest) -> (Snapshot<World>, Resolved) {
         let snap = self.engine.kernel().snapshot();
-        let resolved = self.resolve_actor(req, snap.world(), snap.world().identity());
+        let resolved = self.resolve_actor(req, snap.world());
         (snap, resolved)
     }
 
@@ -310,7 +306,6 @@ impl Daemon {
         let admitted = match plain_admission(
             &credential_lock,
             snap.world(),
-            snap.world().identity(),
             &frame.op,
             binding.principal,
             binding.signer.as_ref(),
@@ -439,7 +434,6 @@ impl Daemon {
         let record_sig = match crate::auth::policy::precheck(
             &credential_lock,
             snap.world(),
-            snap.world().identity(),
             &dep,
             binding.signer.as_ref(),
             binding.scope,

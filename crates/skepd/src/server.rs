@@ -1,8 +1,9 @@
 //! The process: one long-running server owning one `World`. The daemon is
 //! transport, configuration, and lifetime — every handler is
 //! parse/marshal/dispatch/configure; every decision lives in a store, save
-//! the two the spec gives the daemon — the session layer's gates (`auth/`)
-//! and the published head's cadence (`write_path/head.rs`).
+//! the three the spec gives the daemon — the session layer's gates (`auth/`,
+//! the upload family's among them), the published head's cadence
+//! (`write_path/head.rs`) and the media door (`media/door.rs`).
 //!
 //! Split for testability: [`Daemon`] holds the state and routes
 //! `&HttpRequest → Routed` with no socket anywhere; [`serve`]/[`Skepd`]
@@ -971,7 +972,7 @@ impl Daemon {
     /// at the route level and again under the lock harmless.
     fn resolve_at_head(&self, req: &HttpRequest) -> Resolved {
         let snap = self.engine.kernel().snapshot();
-        self.resolve_actor(req, snap.world(), snap.world().identity())
+        self.resolve_actor(req, snap.world())
     }
 
     /// One token-accepting route (AUTH-4.43): resolve the actor against the

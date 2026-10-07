@@ -14,7 +14,7 @@ use skep_engine::types::{
     IDENTITY_TYPES,
 };
 use skep_febe::Op;
-use skep_identity::{AuditClass, Fingerprint, IdentityState, TargetClass, WriteTypes};
+use skep_identity::{AuditClass, Fingerprint, HasIdentity, TargetClass, WriteTypes};
 use skep_kernel::Attestation;
 use skep_links::{enc, is_replaces_class, HasLinks, SlotArg};
 use skep_namespace::{
@@ -136,7 +136,6 @@ fn write_types() -> &'static WriteTypes {
 fn nullify_refusal(
     _lock: &LockRead<'_>,
     world: &World,
-    identity: &IdentityState,
     op: &Op,
     principal: PrincipalId,
 ) -> Option<CredentialRefusal> {
@@ -145,7 +144,7 @@ fn nullify_refusal(
     let link = world.links().readlink(target)?;
     let class = write_types().target_class(link.type_slot())?;
     let m3 = world.m3();
-    let claimed = identity.claimant().is_some();
+    let claimed = world.identity().claimant().is_some();
     // The class's own token, chosen before entitlement is consulted — the arm
     // carrying a second key of its own is a home-conditional class's (RES-207,
     // `AuditClass::requires_published_home` — today the classification link
@@ -376,28 +375,28 @@ fn published(world: &World, doc: &Address) -> bool {
 /// arm that drops it drops it here — so the admitted value is the presented
 /// one by construction, not by a copy that must match it.
 ///
-/// `world` and `identity` MUST be the pair taken under the read guard for
-/// this request; the guard argument is that contract's cheap half.
+/// `world` MUST be the snapshot taken under the read guard for this request
+/// — the key table it reads is that snapshot's own slice; the guard argument
+/// is that contract's cheap half.
 fn board_state_admission(
     _lock: &LockRead<'_>,
     world: &World,
-    identity: &IdentityState,
     op: &Op,
     principal: PrincipalId,
     signer: Option<&Fingerprint>,
     presented: Option<Attestation>,
 ) -> Result<Option<Attestation>, CredentialRefusal> {
-    if identity.claimant().is_some() {
+    if world.identity().claimant().is_some() {
         // A1: the check runs on a CLAIMED board — every write reaching this
         // arm is ABOVE the claim entry, the claim having committed before
-        // the fold snapshot it reads was taken.
+        // the snapshot it reads was taken.
         if !publish_class(world, op, principal) {
             return Ok(None);
         }
         if signer.is_none() {
             return Err(CredentialRefusal::SignedSessionRequired);
         }
-        attestation_check(world, identity, op, principal, presented)
+        attestation_check(world, op, principal, presented)
     } else {
         // A5: the unclaimed board's span — the `attest` is dropped whole.
         match pre_claim_gate(world, op, principal) {
@@ -660,7 +659,7 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
 /// for anyone else.
 ///
 /// Re-ordering moves no input: all three are pure functions of the same
-/// `(world, identity, op, principal, signer)` under the same guard, and
+/// `(world, op, principal, signer)` under the same guard, and
 /// [`mint_home_refusal`] fires only on `fork`/`version`, so its position
 /// relative to the `nullify` cell is inert either way.
 ///
@@ -673,13 +672,11 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
 /// destination `not_owner` still stands first for everyone else, at
 /// `execute`.
 ///
-/// `world` and `identity` MUST be the pair taken under the read guard for
-/// this request; the guard argument each producer takes is that contract's
-/// cheap half.
+/// `world` MUST be the snapshot taken under the read guard for this request;
+/// the guard argument each producer takes is that contract's cheap half.
 pub(crate) fn plain_admission(
     lock: &LockRead<'_>,
     world: &World,
-    identity: &IdentityState,
     op: &Op,
     principal: PrincipalId,
     signer: Option<&Fingerprint>,
@@ -701,8 +698,8 @@ pub(crate) fn plain_admission(
     // first — `attestation_required` with no `attest`, its signature
     // verified with one — and its class token still speaks last: a session
     // that may not write here is never told what the target link is.
-    let admitted = board_state_admission(lock, world, identity, op, principal, signer, presented)?;
-    if let Some(r) = nullify_refusal(lock, world, identity, op, principal) {
+    let admitted = board_state_admission(lock, world, op, principal, signer, presented)?;
+    if let Some(r) = nullify_refusal(lock, world, op, principal) {
         return Err(r);
     }
     Ok(admitted)

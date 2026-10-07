@@ -62,8 +62,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   this binary, run over a board directory with no server: `skepd
   inventory --data-dir <dir> [--no-rehash]` lists the holes — every
   picture cell whose file is absent, of another length or of other
-  bytes — each account's base and pending bytes and the venue total, the
-  standing and expired uploads, the halt marks and any foreign
+  bytes — each account's base and pending bytes, the bytes whose key names
+  no account, and the venue total they all sum to, the standing and
+  expired uploads, the halt marks and any foreign
   designation directory, recording no read and writing nothing under
   `blobs/`; `skepd pull --data-dir <dir> [--hash <hex>] <file>` restores
   a file a committed cell names by the PUT's own install order, no lease

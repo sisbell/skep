@@ -1,9 +1,9 @@
 //! The codec's MARSHAL side: every shape this crate renders on the
 //! operation channel — M10's `Response`s, the canonical request encoding
 //! `JsonCodec::marshal_request` writes, the daemon's own rejections
-//! (`credential_refused_reply`, the `key_set` row) — and the two name tables
-//! (`op_name`, `code_name`) both directions spell the wire through. Every
-//! object goes through [`obj`](super::obj).
+//! (`credential_refused_reply`, `registry_refused_reply`, the `key_set` row)
+//! — and the two name tables (`op_name`, `code_name`) both directions spell
+//! the wire through. Every object goes through [`obj`](super::obj).
 
 use serde_json::Value;
 use skep_address::{Address, Nat, Span, SpanSet, Tumbler};
@@ -21,10 +21,11 @@ use skep_retrieval::{CorrPair, Deletions, DeliveryItem, Operand, RegionSpec, Spa
 
 use super::{hex_string, obj, to_bytes};
 
-/// A rejection the DAEMON originates (the `credential_refused` family and
-/// the `key_set` row's `not_an_account`), byte-shaped exactly as
-/// [`j_rejection`] marshals M10's: `{"code","disposition","op","resp"}`
-/// plus the optional `detail`. The daemon cannot construct M10's
+/// A rejection the DAEMON originates (the `credential_refused` and
+/// `registry_refused` families, and the `key_set` row's `not_an_account`),
+/// byte-shaped exactly as [`j_rejection`] marshals M10's:
+/// `{"code","disposition","op","resp"}` plus the optional `detail`. The
+/// daemon cannot construct M10's
 /// `Rejection` for codes M10 does not carry (the `RejectCode` delta is out
 /// of this round's upstream reach), so the wire shape is built here — one
 /// shape on the wire either way.
@@ -40,7 +41,8 @@ struct DaemonRejection<'a> {
     /// The refused op's wire name: [`op_name`]'s output, or the daemon's
     /// own name for a row M10 has no `OpKind` for.
     op: &'a str,
-    /// [`code_name`]'s output, or [`CREDENTIAL_REFUSED`].
+    /// [`code_name`]'s output, or a code M10 does not carry
+    /// ([`CREDENTIAL_REFUSED`], [`REGISTRY_REFUSED`]).
     code: &'a str,
     disposition: Disposition,
     detail: Option<String>,
@@ -65,7 +67,7 @@ fn daemon_rejected(r: DaemonRejection<'_>) -> Vec<u8> {
 /// and the transport's own shapes sit on the other side of it).
 ///
 /// `set` is [`crate::auth::key_set_of`]'s answer over the world the
-/// route holds and the identity slice that world carries: `None` is the
+/// route holds, read off that world's own identity slice: `None` is the
 /// not-an-account case and answers the EXISTING code `not_an_account`; a
 /// keyless account answers empty lists. Entries ride in the key set's own
 /// fingerprint order.
@@ -75,8 +77,9 @@ fn daemon_rejected(r: DaemonRejection<'_>) -> Vec<u8> {
 /// (AUTH-2.79) and the caller stamps the answer with that world's own
 /// coordinate — the head snapshot's `seq` on `/op`, the requested position on
 /// `/op-at` — which is what lets a client correlate the answer with
-/// `/changes` and re-read it at `/op-at`. The caller owes handing the slice
-/// of the SAME world it stamps; this function cannot check it.
+/// `/changes` and re-read it at `/op-at`. The caller owes stamping the
+/// position of the world it handed [`crate::auth::key_set_of`]; this
+/// function cannot check it.
 pub(crate) fn key_set_reply(as_of: Seq, set: Option<&KeySet>) -> Vec<u8> {
     let Some(set) = set else {
         // M10's own code, so M10's own advice: the table is asked rather than
@@ -143,6 +146,26 @@ pub(crate) fn credential_refused_reply(
         // (signed ops; the design record §7.3 (iii)): the refusal names its
         // own class, so the family's uniformity is the producers' and not
         // this renderer's.
+        disposition,
+        detail: Some(token),
+    })
+}
+
+/// One REGISTRY-sequence refusal, marshaled (the record grade for registry
+/// records, 2b; wire.md §Registry): the credential family's row under a code
+/// of its own, [`REGISTRY_REFUSED`], so a client tells the two families apart
+/// — `detail` the refusal's one token, `disposition` its own class, `op`
+/// lowered through [`op_name`]. Here for [`credential_refused_reply`]'s
+/// reason: the family's wire shape is rendered where every operation-channel
+/// shape is, through [`daemon_rejected`].
+pub(crate) fn registry_refused_reply(
+    op: OpKind,
+    token: String,
+    disposition: Disposition,
+) -> Vec<u8> {
+    daemon_rejected(DaemonRejection {
+        op: op_name(op),
+        code: REGISTRY_REFUSED,
         disposition,
         detail: Some(token),
     })
@@ -1022,11 +1045,13 @@ fn fault_name(f: SpanFault) -> &'static str {
     }
 }
 
-/// The one rejection code M10 does not carry, and so the one this crate
-/// spells by hand rather than through [`code_name`] (AUTH's new code,
-/// wire.md §Credential refusals). It retires the day `RejectCode` grows a
-/// variant for it.
+/// The rejection codes M10 does not carry, and so the ones this crate spells
+/// by hand rather than through [`code_name`] (wire.md §Credential refusals,
+/// §Registry): AUTH's credential family's, and the registry sequence's. Each
+/// retires the day `RejectCode` grows a variant for it.
 const CREDENTIAL_REFUSED: &str = "credential_refused";
+/// The registry sequence's code — [`CREDENTIAL_REFUSED`]'s sibling.
+const REGISTRY_REFUSED: &str = "registry_refused";
 
 /// snake_case of every `RejectCode` variant — exhaustive, so a new code
 /// cannot ship without a wire name.

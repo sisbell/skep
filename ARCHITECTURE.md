@@ -977,7 +977,8 @@ the store's install — nothing above their own layer.
    the caller re-resolved between chunks and the stream cut by a reset
    where the entitlement lapsed. Beside the routes, `tools.rs` — THE
    OPERATOR's TOOLS: the inventory over a stopped board or a copy (the
-   holes, each account's base and pending bytes, the venue total, the
+   holes, each account's base and pending bytes, the bytes whose key names
+   no account, the venue total under the gate's own pending rule, the
    standing and expired uploads, the halt marks, a foreign designation
    directory; recording no read, writing nothing under `blobs/`) and the
    pull (a file a committed cell names restored by the store's install,
@@ -996,7 +997,9 @@ the store's install — nothing above their own layer.
    records, whose trial is the credential grade's own, and the seeding
    check the open runs ahead of every genesis — and the write-path check
    — the entry signature, whose one exempt `insert` is a signed
-   credential or registry record into a doc 1), the readers of the World's
+   credential or registry record into a doc 1; and beside them
+   `auth/policy/upload.rs`, the session layer's gate on who may take bytes
+   into the blob store at all), the readers of the World's
    identity slice (the key table is the engine's, read off the head
    snapshot each route already holds; the daemon holds no fold of its own),
    signature verification — `skep-signature` is the one crate that links

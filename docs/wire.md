@@ -3157,14 +3157,18 @@ cell's `size` (`length`), or present and re-hashing to another hash
 its `hash`, `size`, `designation` and the `cells` naming it; `accounts`,
 per account its `principal`, its `account` address, its `base` (the
 index's number) and its `pending` bytes (its live leases on hashes none
-of its cells names plus its standing uploads' bytes received), and
-`venue_total`, their sum — the figures the limits record is written
-against; `standing_uploads` and `expired_uploads` by count; `halts`, the
-halt marks, each with `at`, `kind` and `fault`; `foreign_designations`;
-`orphan_partials` and `asides`; `references`, `cells` and
-`values_walked`; `journal`, the `log_position`, the `start_point` and the
-`skipped_checkpoints`; and `rehashed`. It writes nothing under `blobs/`
-and RECORDS NO READ anywhere (D9). `skepd pull --data-dir <dir> [--hash
+of its cells names plus its standing uploads' bytes received);
+`unattributed`, the bytes no account's scope holds — a live lease's or a
+standing upload's whose key spells no principal of this build; and
+`venue_total`, their sum with the unattributed bytes — the gate's own
+figure, under the gate's own pending rule, which the limits record is
+written against; `standing_uploads` and `expired_uploads` by count;
+`halts`, the halt marks, each with `at`, `kind` and `fault`;
+`foreign_designations`; `orphan_partials` and `asides`; `references`,
+`cells` and `values_walked`; `journal`, the `log_position`, the
+`start_point` and the `skipped_checkpoints`; and `rehashed`. It writes
+nothing under `blobs/` and RECORDS NO READ anywhere (D9).
+`skepd pull --data-dir <dir> [--hash
 <hex>] <file>` takes a FILE, hashes it (BLAKE3) and INSTALLS it at
 `blobs/blake3/<hex>` as the PUT's order installs one — the temp file in
 the designation directory, named as a partial is so an open that meets

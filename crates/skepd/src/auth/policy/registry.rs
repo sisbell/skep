@@ -26,9 +26,7 @@ use skep_engine::types::{
     pins_outside_the_registry, t_binding, t_claim, t_endpoint, t_enroll, t_retire,
 };
 use skep_febe::{Disposition, Op};
-use skep_identity::{
-    record_bytes, single_address, Fingerprint, IdentityState, Inert, PayloadError,
-};
+use skep_identity::{record_bytes, single_address, Fingerprint, HasIdentity, Inert, PayloadError};
 use skep_links::SlotArg;
 use skep_namespace::HasM3;
 use skep_registry::{BodyKind, SeedingRefusal};
@@ -156,10 +154,11 @@ pub(crate) fn deposits_registry_link(op: &Op) -> bool {
 
 /// The registry sequence's refusal vocabulary. Every one marshals as
 /// `code: registry_refused, detail: token(), disposition: disposition()`
-/// (`server/reply.rs`'s `registry_refused`) — the credential family's shape
-/// under a code of its own, so a client tells the two families apart; no
-/// token of the credential family is renamed, the tokens this sequence
-/// shares with it are spelled through it.
+/// (`codec/marshal.rs`'s `registry_refused_reply`, through `server/reply.rs`'s
+/// `registry_refused`) — the credential family's shape under a code of its
+/// own, so a client tells the two families apart; no token of the credential
+/// family is renamed, the tokens this sequence shares with it are spelled
+/// through it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RegistryRefusal {
     /// At or below the claim: the only registry rows below the claim are the
@@ -305,17 +304,17 @@ fn deposit_of(op: &Op) -> Option<RegistryDeposit> {
 ///    account's doc 1 refuses here — `1.1.0.1` holds no key set, so
 ///    `attestation_invalid:not_enrolled_at_position` (SO-I2 (g)(iv)).
 ///
-/// `world` and `identity` MUST be the pair taken under the guards for this
-/// request; the guard argument is that contract's cheap half.
+/// `world` MUST be the snapshot taken under the guards for this request —
+/// its key table is that snapshot's own slice; the guard argument is that
+/// contract's cheap half.
 pub(crate) fn registry_admission(
     _lock: &LockRead<'_>,
     world: &World,
-    identity: &IdentityState,
     op: &Op,
     signer: Option<&Fingerprint>,
 ) -> Result<(), RegistryRefusal> {
     // 0 — above the claim, from a signed session.
-    if identity.claimant().is_none() {
+    if world.identity().claimant().is_none() {
         return Err(RegistryRefusal::ClaimFirst);
     }
     if signer.is_none() {
@@ -366,7 +365,6 @@ pub(crate) fn registry_admission(
     let canonical = record.canonical_sigless();
     verify_record_sig(
         world,
-        identity,
         RecordTrial {
             home: &dep.home,
             home_account,

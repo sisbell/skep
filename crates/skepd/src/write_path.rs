@@ -686,7 +686,8 @@ impl FrameMeta {
 }
 
 /// WHICH CONTENT ADDRESSES A WRITE MINTS THAT MAY HOLD A CELL — the cell
-/// index's entry at commit, decided per op by [`write_meta`] off the frame
+/// index's entry at commit, decided per op by [`write_meta`] — every arm
+/// stating it, as it states its documents and its terms — off the frame,
 /// and completed by [`WritePath::record`] off the post-commit snapshot.
 /// Two ops mint content from a request's or a draft's values; every other
 /// mints none, `copy` and `version` sharing identity (the media record's
@@ -822,8 +823,8 @@ impl RowTerms {
 /// The [`FrameMeta`] of a write `Op` — `None` for reads, which is M10's
 /// read/write partition seen from the change feed's side. EXHAUSTIVE with no
 /// `_` arm: a new `Op` fails to compile here until its change-feed entry is
-/// decided — the documents its row names and the terms it carries, each arm
-/// stating both.
+/// decided — the documents its row names, the terms it carries and the
+/// content it may mint a cell at, each arm stating all three.
 ///
 /// OBLIGATION: `Some` for exactly the ops M10 executes as writes. This
 /// table answers a second question — which documents a commit touched — so
@@ -857,13 +858,23 @@ impl RowTerms {
 /// snapshot and run `derived_docs` per write, a full link enumeration of two
 /// worlds on the write path even in a debug build — so the pair of inclusions
 /// above is what a test at the wire asserts instead.
+///
+/// THIRD OBLIGATION, the cell index's: `minting` is the index's entry at
+/// commit, and the admission side of the same question is the media door's
+/// ([`crate::media::door::media_door`], exhaustive over `Op` for the same
+/// reason). An op the door admits a cell through must state its `Minting`
+/// here: a cell this table does not name is entered by nothing until the
+/// next open's walk, so within the uptime it counts in no base, and once its
+/// deposit's lease lapses the pruner — whose absent reference is a
+/// permission to unlink (M-I5 (b)) — takes the file a committed cell names.
 pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
-    let meta = |kind, docs, terms| Some(FrameMeta { kind, docs, terms, minting: Minting::None });
+    let meta = |kind, docs, terms, minting| Some(FrameMeta { kind, docs, terms, minting });
     let one = |a: &Address| AffectedDocs::Named(vec![a.clone()]);
     let absent = RowTerms::Absent;
+    let no_cell = Minting::None;
     let answer = match op {
         Op::CreateNewDocument { .. } => {
-            meta(OpKind::CreateNewDocument, AffectedDocs::Minted, absent)
+            meta(OpKind::CreateNewDocument, AffectedDocs::Minted, absent, no_cell)
         }
         // The seated principal rides from the request; the minted prefix is
         // the ack's (`RowTerms::complete`).
@@ -871,18 +882,19 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
             OpKind::Delegate,
             AffectedDocs::Named(Vec::new()),
             RowTerms::Delegate { new_id: new_id.0 },
+            no_cell,
         ),
         Op::RegisterNode { .. } => {
-            meta(OpKind::RegisterNode, AffectedDocs::Named(Vec::new()), absent)
+            meta(OpKind::RegisterNode, AffectedDocs::Named(Vec::new()), absent, no_cell)
         }
-        Op::Fork { .. } => meta(OpKind::Fork, AffectedDocs::Minted, absent),
+        Op::Fork { .. } => meta(OpKind::Fork, AffectedDocs::Minted, absent, no_cell),
         // The values that may hold a cell, by index — the prefix test ahead
         // of the commit, so the record's entry reads only those.
-        Op::Insert { doc, values, .. } => Some(FrameMeta {
-            kind: OpKind::Insert,
-            docs: one(doc),
-            terms: absent,
-            minting: Minting::Insert {
+        Op::Insert { doc, values, .. } => meta(
+            OpKind::Insert,
+            one(doc),
+            absent,
+            Minting::Insert {
                 naming: values
                     .iter()
                     .enumerate()
@@ -890,26 +902,31 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
                     .map(|(i, _)| i)
                     .collect(),
             },
-        }),
-        Op::Delete { doc, .. } => meta(OpKind::Delete, one(doc), absent),
-        Op::Copy { doc, .. } => meta(OpKind::Copy, one(doc), absent),
-        Op::Rearrange { doc, .. } => meta(OpKind::Rearrange, one(doc), absent),
-        Op::Version { .. } => meta(OpKind::Version, AffectedDocs::Minted, absent),
+        ),
+        Op::Delete { doc, .. } => meta(OpKind::Delete, one(doc), absent, no_cell),
+        // A `copy` shares identity and mints no cell (the media record's §The
+        // publication seam, consequence (b)) — nor does a `version` below: the
+        // door judges neither, and the index enters neither.
+        Op::Copy { doc, .. } => meta(OpKind::Copy, one(doc), absent, no_cell),
+        Op::Rearrange { doc, .. } => meta(OpKind::Rearrange, one(doc), absent, no_cell),
+        Op::Version { .. } => meta(OpKind::Version, AffectedDocs::Minted, absent, no_cell),
         // The shot mints the chain's next member, known only from its ack —
         // the document it advances is the member's own trunk — and
         // re-inserts the draft's values as fresh identity under it.
-        Op::Publish { shot, .. } => Some(FrameMeta {
-            kind: OpKind::Publish,
-            docs: AffectedDocs::Minted,
-            terms: RowTerms::Publish,
-            minting: Minting::Publish {
+        Op::Publish { shot, .. } => meta(
+            OpKind::Publish,
+            AffectedDocs::Minted,
+            RowTerms::Publish,
+            Minting::Publish {
                 reinserted: u64::try_from(&shot.reinserted_values()).unwrap_or(u64::MAX),
             },
-        }),
-        Op::MakeLink { home, .. } => meta(OpKind::MakeLink, one(home), RowTerms::MakeLink),
+        ),
+        Op::MakeLink { home, .. } => {
+            meta(OpKind::MakeLink, one(home), RowTerms::MakeLink, no_cell)
+        }
         // `emit` mints a link too, and its row carries no `link`: r6-2a names
         // `make_link` alone.
-        Op::Emit { home, .. } => meta(OpKind::Emit, one(home), absent),
+        Op::Emit { home, .. } => meta(OpKind::Emit, one(home), absent, no_cell),
         Op::Nullify { home, target } => {
             // The record's home AND the target link's home (PUB-6.46): a
             // retraction lands at its target, so a draft-homed record
@@ -925,9 +942,9 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
                     docs.push(t);
                 }
             }
-            meta(OpKind::Nullify, AffectedDocs::Named(docs), absent)
+            meta(OpKind::Nullify, AffectedDocs::Named(docs), absent, no_cell)
         }
-        Op::AssertSup { home, .. } => meta(OpKind::AssertSup, one(home), absent),
+        Op::AssertSup { home, .. } => meta(OpKind::AssertSup, one(home), absent, no_cell),
         Op::EditLink { d_s, d_a, .. } => {
             // The successor's home leads (wire.md: "both its homes,
             // successor's first"), and the claim's home is appended only
@@ -938,7 +955,7 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
             if d_a != d_s {
                 docs.push(d_a.clone());
             }
-            meta(OpKind::EditLink, AffectedDocs::Named(docs), absent)
+            meta(OpKind::EditLink, AffectedDocs::Named(docs), absent, no_cell)
         }
         Op::NextAccountPrefix { .. }
         | Op::PrincipalPrefix { .. }
@@ -1155,10 +1172,10 @@ mod tests {
         assert!(write_meta(&read).is_none());
     }
 
-    /// The index's entry hint, decided off the frame: an insert names the
-    /// indices of its values that pass the prefix test and nothing of the
-    /// rest; a publish carries the shot's re-inserted count; every other
-    /// write mints no cell.
+    /// The index's entry hint, decided off the frame in each arm: an insert
+    /// names the indices of its values that pass the prefix test and nothing
+    /// of the rest; a publish carries the shot's re-inserted count; a copy and
+    /// a version share identity and mint no cell, as every other write.
     #[test]
     fn each_write_states_which_addresses_may_hold_a_cell() {
         use skep_address::Nat;
@@ -1190,6 +1207,13 @@ mod tests {
         assert!(
             matches!(write_meta(&prose).expect("a write").minting, Minting::Insert { naming } if naming.is_empty())
         );
+        // A `copy` and a `version` share identity: each arm states no cell.
+        let copy =
+            Op::Copy { doc: doc.clone(), at: VPos::content(Nat::from(1u32)), specs: Vec::new() };
+        let version = Op::Version { d_src: doc.clone(), published: None };
+        for op in [copy, version] {
+            assert!(matches!(write_meta(&op).expect("a write").minting, Minting::None));
+        }
         let publish = Op::Publish { doc, shot: Shot { base: None, draft: None, runs: Vec::new() } };
         assert!(matches!(
             write_meta(&publish).expect("a write").minting,

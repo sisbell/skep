@@ -8,8 +8,7 @@ use skep_address::Address;
 use skep_arrangement::{shot_admission, Caller, Deposit};
 use skep_febe::Op;
 use skep_identity::{
-    parse_record_value, CredentialKind, Enrollment, Fingerprint, IdentityState, PublicKey,
-    SigAlgRow,
+    parse_record_value, CredentialKind, Enrollment, Fingerprint, HasIdentity, PublicKey, SigAlgRow,
 };
 use skep_kernel::Attestation;
 use skep_namespace::{system_account, HasM3, PrincipalId};
@@ -27,9 +26,10 @@ use crate::World;
 /// concrete at the placement the owner confirmed 2026-09-25 — BEFORE the
 /// transaction, beside the publish-class gate (wire.md §Credential refusals;
 /// the design record's `publish_gate`) — here `board_state_admission`'s
-/// claimed arm — on the snapshot pair the gates read, which under the
-/// serialization guard IS the transaction's base). Reached for a
-/// publish-class write from a SIGNED session on a CLAIMED board:
+/// claimed arm — on the snapshot the gates read, its key table the
+/// snapshot's own slice, which under the serialization guard IS the
+/// transaction's base). Reached for a publish-class write from a SIGNED
+/// session on a CLAIMED board:
 ///
 /// 1. THE CHECKED SET — [`crate::codec::in_checked_set`]: the ten
 ///    publish-class op kinds — `create_new_document`, `fork`, `version`,
@@ -152,7 +152,6 @@ use crate::World;
 /// over bytes nobody holds.
 pub(super) fn attestation_check(
     world: &World,
-    identity: &IdentityState,
     op: &Op,
     principal: PrincipalId,
     presented: Option<Attestation>,
@@ -224,7 +223,8 @@ pub(super) fn attestation_check(
         return Err(invalid(AttestFault::Malformed));
     }
     let bytes = entry_frame.to_bytes(row.token);
-    let candidates: Vec<&PublicKey> = key_subject(world, identity, principal)
+    let identity = world.identity();
+    let candidates: Vec<&PublicKey> = key_subject(world, principal)
         .map(|subject| {
             identity
                 .key_set(&subject)
@@ -420,7 +420,6 @@ mod tests {
         .expect("in-memory genesis cannot fail");
         let snap = engine.kernel().snapshot();
         let world = snap.world();
-        let identity = IdentityState::genesis();
         let doc1 = addr_of(&[1, 0, 1, 0, 1]);
         let grant_in = |home: Address| Op::MakeLink {
             home,
@@ -435,7 +434,7 @@ mod tests {
             values: vec![Val::new(atom.as_bytes().to_vec())],
             deposit,
         };
-        let check = |op: Op| attestation_check(world, &identity, &op, BOOTSTRAP_PRINCIPAL, None);
+        let check = |op: Op| attestation_check(world, &op, BOOTSTRAP_PRINCIPAL, None);
         let unavailable: Result<Option<Attestation>, CredentialRefusal> =
             Err(CredentialRefusal::AttestationInvalid(AttestFault::BoardUnavailable));
         let enroll = t_enroll().clone();

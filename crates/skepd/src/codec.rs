@@ -37,12 +37,12 @@
 //!   silently failed.
 //!
 //! What `marshal.rs` renders is the OPERATION CHANNEL: M10's `Response`s, the
-//! daemon-originated rejections ([`credential_refused_reply`]), and the
-//! `key_set` row. The transport's own shapes — `/health`, `/session`,
-//! `/challenge`, `/changes` and its entries, the `{"error": …}` bodies,
-//! the commit stream's payload — are built where their state lives, and
-//! reach determinism by going through [`obj`] and [`to_bytes`] rather than
-//! by living here.
+//! daemon-originated rejections ([`credential_refused_reply`],
+//! [`registry_refused_reply`]), and the `key_set` row. The transport's own
+//! shapes — `/health`, `/session`, `/challenge`, `/changes` and its entries,
+//! the `{"error": …}` bodies, the commit stream's payload — are built where
+//! their state lives, and reach determinism by going through [`obj`] and
+//! [`to_bytes`] rather than by living here.
 //!
 //! Parsing strings into `skep-address` values goes through M1's validating
 //! front doors (`Tumbler::new`, `validate`, `Span::new`), so no malformed
@@ -67,7 +67,9 @@ use skep_links::{Endset, View, MAX_SLOT_SPANS};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{RegionSpec, Spec};
 
-pub(crate) use marshal::{credential_refused_reply, j_attest, key_set_reply, op_name};
+pub(crate) use marshal::{
+    credential_refused_reply, j_attest, key_set_reply, op_name, registry_refused_reply,
+};
 use marshal::{j_response, req_pairs};
 
 /// The most elements one wire array may carry, applied at [`p_list`] — so

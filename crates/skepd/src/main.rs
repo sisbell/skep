@@ -145,7 +145,8 @@ port, no session — and write no log line of the daemon's:
                      — the holes (every picture cell whose file is absent,
                      of another length, or — re-hashed, one whole read per
                      file, skipped by --no-rehash — of other bytes), each
-                     account's base and pending bytes and the venue total,
+                     account's base and pending bytes, the bytes whose key
+                     names no account, and the venue total they all sum to,
                      the standing and expired uploads, the halt marks and
                      any foreign designation directory. Recording no read.
                      The journal is opened as the daemon opens it: a

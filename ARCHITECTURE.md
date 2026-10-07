@@ -21,7 +21,7 @@ position in the journal.
 
 ## Code map
 
-The workspace is twenty-three crates under `crates/`. Dependencies point
+The workspace is twenty-four crates under `crates/`. Dependencies point
 downward in the list below: a crate may depend only on crates listed
 above it.
 
@@ -152,6 +152,18 @@ foundation and on the stores above it.
   alone — no engine, no store, and never `skepd`, which never depends on
   it (the daemon's own suite takes it as a dev-dependency, where boards
   are spawned). Its modules and rules: §The resolver.
+- `skep-search` — the search index, a LIBRARY a client embeds (the
+  design's `search.md`; R9b's board-wide search is the reader's own index,
+  the substrate search-free): the document model — one unit per document
+  version's arranged content, delivered in parts and joined, keyed by the
+  bare document address — the tokenizer over UAX #29 word boundaries with
+  the accent, apostrophe and format-control folds, and the inverted index
+  with positions behind one concrete type of one class, with the class
+  check and the ceiling made where a unit enters. Of the skep crates it
+  depends on `skep-address` alone, and beyond it on the two Unicode crates
+  — no engine, no store, and never `skepd`, which never depends on it;
+  the shell links it beside `skep-client`. No feature. Its modules and
+  rules: §The search index.
 - `skep-client` — the library every ACTING client embeds (the design's
   `client.md`): the one outbound dialer, bare and signed sessions behind
   AUTH-5.65's pre-check, the key store, the signing seam over the hybrid
@@ -562,6 +574,85 @@ the unit suites over boards they hold fixed, each beside the code it
 pins, the mirror's suites sharing the fixtures in `mirror/testing.rs`.
 The end-to-end cells and the measurements run in
 `crates/skepd/tests/it/resolve.rs`.
+
+## The search index, `skep-search`
+
+`skep-search` is the reader's own index of a board's text (the design's
+`search.md`): R9b's "query → ranked span hits → jump to the position with
+structure live — implemented client-side over the /changes feed", the
+substrate itself search-free. TEXT AND ADDRESSES IN, HITS OUT — the crate
+parses no wire JSON, dials nothing, holds no token, knows no principal but
+as the class the embedder passes it, and reads and writes no file of its
+own; the FRONTEND's shell embeds it beside `skep-client`, and the shell's
+half — the feed consumer, the directory, the triggers, the bridge call, the
+state event — is `client.md` §4e's. Its modules are declared in
+`src/lib.rs`, each with a line saying what it holds. `unit` — the document
+model (§2.1, §2.4): `Unit`, one document version's arranged content
+delivered in parts under `MAX_DELIVERY_ITEMS` and JOINED, adjacent text
+items becoming one so a character split at a part's edge is whole again;
+the typed delivery `Item`s — `Text`, one `content` item's bytes or a `hex`
+run's, and `Gap`, every item that is not text, at its width — and the item
+table, searched by start ordinal for an occurrence's item; `UnitKey`, the
+bare document address ALONE, so a re-read replaces; the member, the
+position, the kind and the `Class` the unit was read at beside it; the
+head rule `moved_head`, a daughter's row moving no head and an owner's
+`version` row moving it. `token` — the tokenizer (§2.3): UAX #29 word
+boundaries, the fold (NFD, the marks sr-E1 scopes as ITEM 3 amended it,
+the apostrophe variants, the invisible format controls), lowercasing; each
+occurrence's range from the unit's start; the `REVISION` the index
+records. `index` — the inverted index with positions (§1.4, §5.1): the
+sorted dictionary, the postings with ordinals and ranges, the unit records
+with their term lists, the tombstones, the live counts; `Index::new`,
+`prepare`, `merge`, `index`, `compacted`, `install`, `compaction_due`,
+`stats`, `terms`; `IndexError`'s two refusals; `CEILING_BYTES`.
+
+Rules that hold across its files:
+
+- **One class per index** (`search.md` §5.2 D7; §4's invariants (i) and
+  (ii)). An `Index` carries exactly one `Class` from `new` — `Guest` for a
+  published index, `Principal(n)` for `n`'s supplement — and no call
+  changes it; `merge` refuses a unit read at any other class, both classes
+  named. The published index and a supplement, and one principal's
+  supplement and another's, are two values, never one value with a filter
+  column.
+- **Cut once at `merge`** (§1.4, §7.4). The class check and the ceiling are
+  made where a unit enters and nowhere else. Past the ceiling the unit is
+  not indexed and nothing changes — a refused replacement leaves the unit
+  it would have replaced in place — the refusal names the bytes held and
+  the limit with the units beside them, and the offer is counted in
+  `seen`. The ceiling counts LIVE bytes of text, what a rebuild would hold;
+  its figure is an INTERIM PIN at the records tier's own size (§7.3, §7.4;
+  ITEM 2 RULED (d)), confirmed or raised by the budgets lane.
+- **Prepare under no lock, install by one swap** (§5.6). `Index::prepare`
+  takes no index: the tokenizing and the postings' build run outside
+  whatever lock the embedder keeps around the engine, and `merge` takes
+  the write side for the merge alone. `compacted` builds the new postings
+  from one value under the read side and `install` replaces them by one
+  assignment under the write side; the feed thread calls each pair in
+  sequence. The crate holds no lock of its own, and every type that
+  crosses the embedder's lock is `Send + Sync`, asserted in the library.
+- **Nothing of the network, the keys or the board** (§1.3). The
+  dependencies are `skep-address` and the two Unicode crates, and nothing
+  else — NOT `skepd`, NOT `skep-client`, NOT `serde_json`; no feature, no
+  platform call, no target-specific code. The two crates' tables are one
+  Unicode version, which the tokenizer revision names and a test holds.
+- **The surface grows by lane, against these names.** The query, the
+  ranking, the hit, `Pair` and the one read over the keys are the query
+  lane's; `save`, `load`, the `Header` and the file's dispositions are the
+  file lane's; §7's timing tests the budgets lane's; the embedding the
+  shell's. The crate's `README.md` lists them.
+
+Its unit suites sit beside their code: `unit/tests.rs` (the join, the item
+table's binary search, the contiguity refusal, the head rule),
+`token/tests.rs` (the Unicode version pair, the fold's reach and its
+residue, the ranges across a gap and a hex stretch) and `index/tests.rs`
+(the postings' shape, the tombstone and the live counts, compaction and
+its trigger, the ceiling's arithmetic, `seen`). Its integration suite is
+one binary, `tests/it/`: `cases` (§7.2's twenty-two tokenizer cases, each
+with its byte range) and `index` (the write side under the design's fence:
+the class check, one class per index, the ceiling at the real constant,
+replacement, the lock split under an `RwLock` of the test's own, the join
+across the parts' edge, the range across a `Gap` and a `hex` stretch).
 
 ## The client, `skep-client`
 

@@ -80,6 +80,13 @@ cargo check -p skep-util || exit $?
 # verify-only library a client embeds compiles with no signer in it.
 cargo check -p skep-resolve --lib || exit $?
 
+# skep-search, the search index a client embeds: skep-address and the two
+# Unicode crates alone, no feature. The test run below builds it as a
+# member, but only after every check above has passed and inside the one
+# long run; checked alone here, a red in the crate the shell will link
+# fails the gate before any test runs.
+cargo check -p skep-search || exit $?
+
 # skep-client's two halves and the sidecar's binary, none of which the full
 # run below makes: the READING half alone (`acting` off — no signer, no
 # store, no ceremony: what a daemon embedding the dialer would take), the
@@ -102,11 +109,13 @@ cargo nextest run -p skepd --all-features --profile full \
     || exit $?
 
 # Every intra-doc link in skepd, skep-media, skep-signature, skep-resolve,
-# skep-blobs and skep-util resolves — a private item's too, and a link
-# resolves only where its module could name the target in code, so a
-# narrowing that strands a link fails here rather than in a reader's hands.
+# skep-search, skep-blobs and skep-util resolves — a private item's too,
+# and a link resolves only where its module could name the target in code,
+# so a narrowing that strands a link fails here rather than in a reader's
+# hands. skep-search's docs link its three modules' items through the
+# crate root's re-exports, which this build is what holds together.
 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
-    cargo doc -p skepd -p skep-media -p skep-signature -p skep-resolve -p skep-blobs -p skep-util --lib --no-deps --document-private-items --all-features \
+    cargo doc -p skepd -p skep-media -p skep-signature -p skep-resolve -p skep-search -p skep-blobs -p skep-util --lib --no-deps --document-private-items --all-features \
     || exit $?
 
 # --run-ignored all re-admits the #[ignore] timing partition. One test is

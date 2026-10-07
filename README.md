@@ -15,7 +15,7 @@ and exported here as they converge.
 
 ## Workspace
 
-Twenty-three crates; the boundaries are the architecture. Fourteen domain
+Twenty-four crates; the boundaries are the architecture. Fourteen domain
 crates realize the spec's converged designs (the M1–M10 modules, the
 AUTH identity layer, signed ops, the registry and the blob store) and
 encode the composition contract's
@@ -24,8 +24,8 @@ compiler enforces what the design ruled (no store depends on the engine,
 type-only edges stay type-only, nothing depends on the engine but a
 binary). Beneath them, one support crate; above them, the daemon's media
 resource, one assembler, the transport adapters, the verifying registry
-resolver, the client library and the `skep` command; beside them, the
-differential-conformance harness.
+resolver, the search index, the client library and the `skep` command;
+beside them, the differential-conformance harness.
 
 | crate | role |
 |---|---|
@@ -49,6 +49,7 @@ differential-conformance harness.
 | `skepd` | the daemon: HTTP/JSON wire v4, sessions, history, SSE |
 | `skep-mcp` | stdio MCP adapter for agent harnesses |
 | `skep-resolve` | the verifying registry resolver: a library a client embeds (no engine, no store, never `skepd`) |
+| `skep-search` | the search index: a library a client embeds — the document model, the tokenizer, the inverted index with positions (no engine, no store, never `skepd`) |
 | `skep-client` | the library every acting client embeds: the dialer, sessions, the key store, signing, the reader's verifier, the claim ceremony |
 | `skep-cli` | the `skep` command over `skep-client`: keygen, claim, session, fingerprint, verify, health, bind |
 | `skep-conformance` | differential harness vs. `udanax-green` goldens + ratchet |

@@ -1,0 +1,23 @@
+[package]
+name = "skep-search"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "The search index a client embeds (R9b; the design's search.md): the document model — one unit per document version's arranged content, delivered in parts and joined, keyed by the bare document address — the tokenizer over UAX #29 word boundaries with the accent, apostrophe and format-control folds, and the inverted index with positions behind one concrete type: the sorted dictionary, the postings with ordinals and byte ranges, the unit records, the tombstones, the live counts, the class check and the ceiling, both made where a unit enters. A library beside skep-client: no network, no keys, no board, no file of its own; it depends on skep-address and the two Unicode crates alone."
+readme = "README.md"
+
+[dependencies]
+# M1 — the address vocabulary: the bare document address every `UnitKey`
+# is, the member a unit was read at, a withheld run's origin — parsed to the
+# vocabulary's own types and never kept as strings (`search.md` §1.3).
+skep-address = { path = "../skep-address" }
+# UAX #29 word boundaries over each text item (`search.md` §2.3; sx-D1): the
+# segmenter whose tables are Unicode 17.0's, the version the tokenizer
+# revision names.
+unicode-segmentation.workspace = true
+# The fold's decomposition (sx-D16; `search.md` §2.3): NFD before the marks
+# are dropped. Its tables must be the segmenter's Unicode version, which
+# `token`'s suite asserts; the tree it pulls is tinyvec, pure Rust.
+unicode-normalization.workspace = true

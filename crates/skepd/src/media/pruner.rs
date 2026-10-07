@@ -150,12 +150,9 @@ pub(crate) fn pass<G>(gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result
     // (a) THE EXPIRED PARTIALS — the store's own read of expiry, the gate's
     // hold; no reference read, no arm.
     for record in store.expired_uploads(now) {
-        if !gate.claim(record.id) {
-            continue; // a stream holds it: left to that stream's end
-        }
-        let removed = store.expire_upload(&record.id, now);
-        gate.release(record.id);
-        if removed? {
+        // A stream holds it: left to that stream's end.
+        let Some(_hold) = gate.claim(record.id) else { continue };
+        if store.expire_upload(&record.id, now)? {
             report.expired_partials += 1;
         }
     }

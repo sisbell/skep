@@ -1,4 +1,4 @@
-//! `POST /op`: the dispatch, the two write sequences, and the claim flip.
+//! `POST /op`: the dispatch, the three write sequences, and the claim flip.
 
 #[cfg(any(test, feature = "test-hooks"))]
 use std::sync::atomic::Ordering;
@@ -248,10 +248,10 @@ impl Daemon {
     /// — so no commit can intervene between what the gates read and what the
     /// execute they gate runs against.
     ///
-    /// The credential lock is the CALLER's: the two sequences hold
-    /// different guard types (read for the plain path, write for the
-    /// credential path), and holding one is the half this signature cannot
-    /// state.
+    /// The credential lock is the CALLER's: the three sequences hold
+    /// different guard types (the read arm for the plain and registry paths,
+    /// the write arm for the credential path), and holding one is the half
+    /// this signature cannot state.
     ///
     /// A COMMAND: [`Daemon::resolve_actor`]'s death arm retires the binding
     /// a dead or unknown token names, in this daemon's map, in M10 and in

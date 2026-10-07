@@ -1332,9 +1332,9 @@ fn a_staging_draft_its_principal_may_not_read_is_refused_unread_and_never_copied
 }
 
 /// A SHOT'S ENTRY-FRAME BODY IS BOUNDED, at parity with the request-body
-/// cap (`skepd::body_cap("/op")`): the body is measured as the check reads
-/// each value (`PublishBody`, in the layout `entry_body_publish` spells), and
-/// a shot whose runs name one byte more is refused
+/// cap (`skepd::body_cap("POST", "/op")`): the body is measured as the check
+/// reads each value (`PublishBody`, in the layout `entry_body_publish`
+/// spells), and a shot whose runs name one byte more is refused
 /// `attestation_invalid:frame_too_large`, PERMANENT, before the body is built
 /// past the budget — whatever its signature was made over, since a body never
 /// built whole verifies nothing; unattested, (1) answers first and no value
@@ -1348,7 +1348,7 @@ fn a_staging_draft_its_principal_may_not_read_is_refused_unread_and_never_copied
 /// here.
 #[test]
 fn a_shot_body_is_refused_before_it_is_built_past_its_budget() {
-    let budget = skepd::body_cap("/op");
+    let budget = skepd::body_cap("POST", "/op");
     // The body is `be64(placed)`, then — four values copied in, one stretch
     // — the stretch's class byte and `be64(count)`, then a be32 length and
     // the bytes per value, then the base group of thirty-four bytes (the

@@ -201,7 +201,6 @@ fn route_raw(
         origin: None,
         peer: skepd::Peer::Loopback,
         body: body.to_vec(),
-        body_stream: Default::default(),
     };
     match d.route(&req) {
         Routed::Reply(r) => r,

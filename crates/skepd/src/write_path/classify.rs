@@ -242,18 +242,17 @@ fn derived_docs_over(before: &World, after: &World, links: &[Address]) -> Vec<Ad
 /// (one new document, three ops), of a plain `make_link` against an `emit`
 /// or `assert_sup`, of an `edit_link`; a `delegate` under a node that
 /// `register_node` admitted and that no enumeration from the bootstrap and
-/// system nodes reaches (the node registry has no public walk); a `publish`
-/// into a document under such a node, for the same reason. Every member a
-/// witness rules out is ABSENT on the row, as on the recorded one; every
-/// member no witness decides stays `null`.
+/// system nodes reaches (M3 publishes no walk of its principals). Every
+/// member a witness rules out is ABSENT on the row, as on the recorded one;
+/// every member no witness decides stays `null`.
 ///
 /// COST, beside [`derived_docs`]'s: one walk of the board's principal list
 /// at `after` with a frontier read at `before` per account or node, and —
-/// where no principal was seated — one walk of every account's documents
-/// and their version chains with a `latest_version` read at both worlds per
-/// document and member. Paid once per bare boundary at the open that
-/// reconstructs it, never at serve. Reached through [`derived_journal`]
-/// alone, over the links it enumerated.
+/// where no principal was seated — one pass over M3's registered documents
+/// at `after`, versions included, with a registration probe at `before` per
+/// document. Paid once per bare boundary at the open that reconstructs it,
+/// never at serve. Reached through [`derived_journal`] alone, over the
+/// links it enumerated.
 fn derived_terms_over(before: &World, after: &World, links: &[Address]) -> JournalTerms {
     if let Some((prefix, id)) = seated_principal(before, after) {
         return JournalTerms {
@@ -379,43 +378,24 @@ fn seated_principal(before: &World, after: &World) -> Option<(Address, Principal
     None
 }
 
-/// THE VERSION MEMBER THE COMMIT MINTED, if one: every account the
-/// principal walk reaches, its documents by their frontier-encoded chain
-/// (`A·0·k` while registered), each document's version chain and every
-/// member's own daughter chain compared between the worlds by
-/// `latest_version` — the one read of a chain's end M3 publishes. `None`
-/// where no chain the walk reaches grew.
+/// THE VERSION MEMBER THE COMMIT MINTED, if one: the document `after`
+/// registers and `before` does not that is a MEMBER of a chain — its trunk
+/// another document ([`trunk_of`], PUB-2.15) — read off M3's own enumeration
+/// of every registered document, versions included and under every node
+/// (`M3State::documents`). A minted trunk (`create_new_document`, `fork`, a
+/// cross-owner `version`) names no member. Registration is asked of both
+/// worlds per entry, as that enumeration's card advises a reader of a
+/// checkpoint; an entry the map omits answers `None`, never another member.
 fn minted_member(before: &World, after: &World) -> Option<Address> {
-    let a = after.m3();
-    let mut parents = walk_roots(after);
-    // The system account's own documents — the head document `H` among them
-    // — whether or not its seat lies on a frontier the walk reaches.
-    let mut accounts: Vec<Address> = vec![system_account()];
-    let mut i = 0;
-    while i < parents.len() {
-        let parent = parents[i].clone();
-        i += 1;
-        let Some(next) = a.next_account_prefix(&parent) else { continue };
-        for member in chain_members(&next) {
-            if a.is_registered_account(&member) {
-                parents.push(member.clone());
-                accounts.push(member);
-            }
-        }
-    }
-    for account in accounts {
-        let Some(first) = skep_namespace::first_document_address(&account) else { continue };
-        let mut k = Nat::from(1u32);
-        // The account's documents, `A·0·1 ..`, while registered: the chain
-        // is frontier-encoded, so the first unregistered slot ends it.
-        while let Some(doc) = chain_member(&first, &k).filter(|doc| a.is_registered_document(doc)) {
-            if let Some(member) = minted_member_under(before, after, &doc) {
-                return Some(member);
-            }
-            k += Nat::from(1u32);
-        }
-    }
-    None
+    let (b, a) = (before.m3(), after.m3());
+    a.documents()
+        .map(|(doc, _)| doc)
+        .find(|doc| {
+            !b.is_registered_document(doc)
+                && a.is_registered_document(doc)
+                && trunk_of(doc) != **doc
+        })
+        .cloned()
 }
 
 /// Where the principal walk starts: the bootstrap node (principal 0's own
@@ -428,18 +408,6 @@ fn walk_roots(world: &World) -> Vec<Address> {
     roots.push(system_node());
     roots.push(system_account());
     roots
-}
-
-/// The newest member of `doc`'s version chain where `after`'s differs from
-/// `before`'s, else the same question of each member's daughter chain.
-fn minted_member_under(before: &World, after: &World, doc: &Address) -> Option<Address> {
-    let latest = after.m3().latest_version(doc)?;
-    if before.m3().latest_version(doc).as_ref() != Some(&latest) {
-        return Some(latest);
-    }
-    let next = chain_member(&latest, &(next_ordinal(&latest) + Nat::from(1u32)))?;
-    let found = chain_members(&next).find_map(|member| minted_member_under(before, after, &member));
-    found
 }
 
 #[cfg(test)]
@@ -460,5 +428,52 @@ mod tests {
         // question.
         assert_eq!(parse_prefix("1.0").expect("a carrier prefix").to_string(), "1.0");
         assert!(parse_prefix("1.").is_none());
+    }
+
+    /// A VERSION MINTED UNDER A SUB-NODE IS NAMED OFF THE JOURNAL (as7-F3;
+    /// SO-I5 (e)): `register_node` admits `1.9001`, an account is delegated
+    /// beneath it, and that account versions its own published home. The
+    /// commit deposits no link and seats no principal, so its one witness is
+    /// the member it minted — which M3's enumeration of registered documents
+    /// reaches under any node, where a walk of account frontiers from the
+    /// bootstrap and system nodes never would.
+    #[test]
+    fn a_version_minted_under_a_sub_node_is_named_off_the_journal() {
+        use serde_json::json;
+        use skep_febe::{Codec, OperationSurface, Response};
+        use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
+
+        use crate::codec::JsonCodec;
+
+        let engine = skep_engine::Engine::open(KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(0),
+        })
+        .expect("in-memory genesis cannot fail");
+        let febe = OperationSurface::new(Box::new(engine.stores()));
+        let exec = |sid, frame: serde_json::Value| -> String {
+            let req = JsonCodec
+                .parse(frame.to_string().as_bytes())
+                .unwrap_or_else(|e| panic!("{frame}: {:?}", e.detail));
+            match febe.execute(sid, req) {
+                Response::AckAddr { addr, .. } => addr.tumbler().to_string(),
+                other => panic!("{frame}: {}", String::from_utf8_lossy(&JsonCodec.marshal(&other))),
+            }
+        };
+        let boot = febe.bootstrap_session();
+        exec(boot, json!({"op": "register_node", "addr": "1.9001"}));
+        exec(boot, json!({"op": "delegate", "new_prefix": "1.9001.0.1", "new_id": 900}));
+        let sid = febe.open_session(PrincipalId(900));
+        let doc = exec(sid, json!({"op": "create_new_document", "account": "1.9001.0.1"}));
+        let before = engine.kernel().snapshot();
+        let member = exec(sid, json!({"op": "version", "d_src": doc}));
+        let after = engine.kernel().snapshot();
+        assert!(member.starts_with(&format!("{doc}.")), "the premise: a member of {doc}, {member}");
+        assert_eq!(
+            derived_journal(before.world(), after.world()).1,
+            JournalTerms { op: Some("version".into()), terms: None },
+            "a bare row names the version a sub-node's account minted"
+        );
     }
 }

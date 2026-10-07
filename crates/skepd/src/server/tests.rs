@@ -65,7 +65,6 @@ fn the_route_set_agrees_across_preflight_dispatch_and_refusal() {
         origin: None,
         peer: Peer::Loopback,
         body: Vec::new(),
-        body_stream: Default::default(),
     };
     let status = |method: &str, path: &str| match daemon.route(&bare(method, path)) {
         Routed::Reply(r) => r.status,
@@ -125,6 +124,32 @@ fn the_route_set_agrees_across_preflight_dispatch_and_refusal() {
     }
 }
 
+/// `body_cap` is the cap the daemon's own transport applies, for every
+/// method and path, so a caller over its own transport that takes the bound
+/// from here answers what the socket reader answers: the frame routes'
+/// whatever the method, the blob upload's creation and resume at the blob
+/// cap, and every other request — the rest of the blob family's included —
+/// at the small cap.
+#[test]
+fn the_body_cap_is_the_transports_for_every_method_and_path() {
+    let upload = "/blob/upload/0123456789abcdef0123456789abcdef";
+    for (method, path, cap) in [
+        ("POST", "/op", MAX_REQUEST_BODY),
+        ("GET", "/op", MAX_REQUEST_BODY),
+        ("POST", "/op-at", MAX_REQUEST_BODY),
+        ("POST", "/blob/upload", MAX_BLOB_BYTES as usize),
+        ("PATCH", upload, MAX_BLOB_BYTES as usize),
+        ("GET", "/blob/upload", MAX_SMALL_BODY),
+        ("GET", upload, MAX_SMALL_BODY),
+        ("DELETE", upload, MAX_SMALL_BODY),
+        ("OPTIONS", "/blob/upload", MAX_SMALL_BODY),
+        ("GET", "/blob", MAX_SMALL_BODY),
+        ("POST", "/session", MAX_SMALL_BODY),
+    ] {
+        assert_eq!(body_cap(method, path), cap, "{method} {path}");
+    }
+}
+
 /// The guest policy at the route level: an absent token serves reads
 /// and meets M10's own `Unauthenticated` on writes; an unknown token
 /// additionally carries the death signal (AUTH-6.7) — an evicted or
@@ -142,7 +167,6 @@ fn a_guest_reads_and_an_unknown_token_is_signalled() {
             origin: None,
             peer: Peer::Loopback,
             body: body.as_bytes().to_vec(),
-            body_stream: Default::default(),
         }) else {
             panic!("POST /op is not the event stream")
         };
@@ -249,7 +273,6 @@ fn bare_session(daemon: &Daemon, principal: u64) -> String {
         origin: None,
         peer: Peer::Loopback,
         body: format!("{{\"principal\":{principal}}}").into_bytes(),
-        body_stream: Default::default(),
     }) else {
         panic!("POST /session is not the event stream")
     };
@@ -283,7 +306,6 @@ fn only_a_committing_write_announces_and_only_its_own_position() {
         origin: None,
         peer: Peer::Loopback,
         body: body.as_bytes().to_vec(),
-        body_stream: Default::default(),
     }) {
         Routed::Reply(r) => serde_json::from_slice::<Value>(r.bytes()).expect("json"),
         Routed::EventStream => panic!("POST /op is not the event stream"),

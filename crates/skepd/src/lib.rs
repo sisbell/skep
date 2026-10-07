@@ -150,7 +150,7 @@ pub use auth::{AuthOptions, NodePrefix, NotANodePrefix, NotCanonical, Origin, Po
 pub use codec::JsonCodec;
 pub use media::MediaOptions;
 pub use server::{
-    body_cap, serve, Body, BodySlot, Daemon, DaemonError, Fetch, HttpRequest, Peer, Reply, Routed,
+    body_cap, serve, Body, Daemon, DaemonError, Fetch, HttpRequest, Peer, Reply, Routed,
     Skepd, DEFAULT_WORKERS, MIN_WORKERS, UNIVERSAL_HEADERS,
 };
 
@@ -223,7 +223,6 @@ const _: fn() = || {
     assert_send_sync::<Reply>();
     assert_send_sync::<Body>();
     assert_send_sync::<HttpRequest>();
-    assert_send_sync::<BodySlot>();
     assert_send_sync::<Routed<'static>>();
     assert_send_sync::<Fetch<'static>>();
     #[cfg(any(test, feature = "test-hooks"))]

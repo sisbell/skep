@@ -496,8 +496,8 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
     // rather than quiet. The reply gets its own below, which is what keeps a
     // request refused AT its deadline still answerable.
     let deadline = Instant::now() + TRANSFER_DEADLINE;
-    let req = match read_request(&mut stream, peer, deadline) {
-        Ok(Some(r)) => r,
+    let (req, parked) = match read_request(&mut stream, peer, deadline) {
+        Ok(Some(read)) => read,
         // Clean close before any byte (a port probe, shutdown's wake
         // connect): no request, so no reply owed.
         Ok(None) => return,
@@ -511,10 +511,11 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
     // `parking_lot`'s locks do not poison, so a panic under one releases it
     // with the data as it stands, and no structure this daemon guards is
     // mutated across a point that can unwind — the challenge store's map and
-    // queue move together under one lock, and the sidecar appends before it
-    // inserts. What a panic can cost is the tail of one write, on two
-    // cards, and an M10 session, on a third. `WritePath::commit_under` runs
-    // `execute` under the serialization lock, so a panic inside M10 after
+    // queue move together under one lock, the sidecar appends before it
+    // inserts, and an upload's hold is a guard its stream drops as it unwinds
+    // (`media::gate::Hold`). What a panic can cost is the tail of one write,
+    // on two cards, and an M10 session, on a third. `WritePath::commit_under`
+    // runs `execute` under the serialization lock, so a panic inside M10 after
     // its commit leaves that position unrecorded and unannounced; the reopen
     // walk re-covers it as a bare entry, and the next commit's announcement
     // carries the stream past it. A panic after a CREDENTIAL commit costs a
@@ -535,7 +536,7 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
     // token after M10 has minted the session the token would name, so the
     // unwind drops a `SessionId` nothing then presents or closes; `GET
     // /challenge` draws before it touches its store and costs nothing.
-    let routed = match catch_unwind(AssertUnwindSafe(|| daemon.route(&req))) {
+    let routed = match catch_unwind(AssertUnwindSafe(|| daemon.route_parked(&req, parked))) {
         Ok(r) => r,
         Err(_) => Routed::Reply(refuse(TransportError::InternalPanic, None)),
     };

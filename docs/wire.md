@@ -3143,13 +3143,14 @@ reads. Neither opens the store as the daemon does. `skepd inventory
 --data-dir <dir> [--no-rehash]` — over a directory no daemon serves: a
 stopped board, a backup, one moment's copy — opens the journal through
 the engine's ordinary open (a directory a daemon serves is refused at the
-kernel's exclusion lock; a torn tail is cut as every open cuts it, and
-nothing else of the daemon's is written: no checkpoint, no commit, no
-head, no feed sidecar), rebuilds the cell index in memory from the
-replayed world as the daemon's open does, reads the blob store's four
-stores AS THEY STAND — the logs' torn tails cut in memory alone, nothing
-reconciled, compacted, swept, synced or created — and prints ONE JSON
-object to stdout, its members in sorted order: `holes`, every reference
+kernel's exclusion lock; a torn tail is cut and a stray `checkpoint.tmp`
+removed, as every open cuts and removes them, and nothing else of the
+daemon's is written: no checkpoint, no commit, no head, no feed sidecar),
+rebuilds the cell index in memory from the replayed world as the daemon's
+open does, reads the blob store's four stores AS THEY STAND — the logs'
+torn tails cut in memory alone, nothing reconciled, compacted, swept,
+synced or created — and prints ONE JSON object to stdout, its members in
+sorted order: `holes`, every reference
 cell (the picture kind's; a blind cell is never a hole) whose file is
 absent at its hex (`fault` `absent`), present at a length other than the
 cell's `size` (`length`), or present and re-hashing to another hash
@@ -3166,8 +3167,10 @@ written against; `standing_uploads` and `expired_uploads` by count;
 `halts`, the halt marks, each with `at`, `kind` and `fault`;
 `foreign_designations`; `orphan_partials` and `asides`; `references`,
 `cells` and `values_walked`; `journal`, the `log_position`, the
-`start_point` and the `skipped_checkpoints`; and `rehashed`. It writes
-nothing under `blobs/` and RECORDS NO READ anywhere (D9).
+`start_point`, the `skipped_checkpoints` and `stray_checkpoint_removed`
+(the bytes of a half-written checkpoint the open removed, or `null`); and
+`rehashed`. It writes nothing under `blobs/` and RECORDS NO READ
+anywhere (D9).
 `skepd pull --data-dir <dir> [--hash
 <hex>] <file>` takes a FILE, hashes it (BLAKE3) and INSTALLS it at
 `blobs/blake3/<hex>` as the PUT's order installs one — the temp file in

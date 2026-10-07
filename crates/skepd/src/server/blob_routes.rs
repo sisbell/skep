@@ -80,15 +80,15 @@
 //! length (clause (7); M-I5 (c)).
 //!
 //! THE TRANSPORT SEAM. The transport reads the request head and, for the
-//! two body-carrying methods of this family, reads NO body: it leaves a
-//! [`BodySource`] over a clone of the connection's socket in the request's
-//! own slot (`HttpRequest::body_stream`) and returns the head; the router
-//! takes the slot at the head of every routing and hands the source to the
-//! route, which drains the socket one [`BLOB_CHUNK`](crate::limits::BLOB_CHUNK)
-//! at a time into the store. A caller over its own transport — the socket-free router, the
-//! tests — leaves the slot empty, and the route reads the request's own
-//! `body` through the same type. The arm's whole memory is the one buffer
-//! the source holds; nothing here ever holds the body whole.
+//! two body-carrying methods of this family, reads NO body: it hands the
+//! router a [`BodySource`] over a clone of the connection's socket BESIDE
+//! the request, through the daemon's private door (`Daemon::route_parked`),
+//! and the router hands the source to the route, which drains the socket
+//! one [`BLOB_CHUNK`](crate::limits::BLOB_CHUNK) at a time into the store. A
+//! caller over its own transport — the socket-free router, the tests — has
+//! none, and the route reads the request's own `body` through the same
+//! type. The arm's whole memory is the one buffer the source holds; nothing
+//! here ever holds the body whole.
 //!
 //! AND THE FETCH — `GET /blob?i=<address>`, with `HEAD` for the head alone
 //! (`media.md` Op inventory 3; the register M-I2 (a)–(d), (g), M-I3 (b),
@@ -118,7 +118,7 @@ use super::reply::{
     class_varying, refuse, refuse_fetch, refuse_with, with_signal, Fetch, Reply, Routed,
     TransportError,
 };
-use super::request::{at_most_once, query_pairs, BodySource, HttpRequest};
+use super::request::{sole_param, BodySource, HttpRequest};
 use super::Daemon;
 use crate::auth::policy::{upload_admission, UploadRefusal};
 use crate::auth::session::Actor;
@@ -299,13 +299,12 @@ impl Daemon {
         } else {
             None
         };
-        let key = MediaGate::key(principal);
         match (req.method.as_str(), target) {
-            ("POST", BlobPath::Create) => self.blob_create(principal, &key, req, body),
+            ("POST", BlobPath::Create) => self.blob_create(principal, req, body),
             ("GET", BlobPath::Create) => Reply::json(200, deposit_read(&self.media, principal)),
-            ("PATCH", BlobPath::Upload(id)) => self.blob_append(principal, &key, id, req, body),
-            ("GET", BlobPath::Upload(id)) => self.blob_progress(&key, id),
-            ("DELETE", BlobPath::Upload(id)) => self.blob_end(&key, id),
+            ("PATCH", BlobPath::Upload(id)) => self.blob_append(principal, id, req, body),
+            ("GET", BlobPath::Upload(id)) => self.blob_progress(principal, id),
+            ("DELETE", BlobPath::Upload(id)) => self.blob_end(principal, id),
             (_, BlobPath::Malformed) => refuse(
                 TransportError::MalformedBlob,
                 Some("the upload's identifier is 32 lowercase hex characters"),
@@ -327,7 +326,6 @@ impl Daemon {
     fn blob_create(
         &self,
         principal: PrincipalId,
-        key: &str,
         req: &HttpRequest,
         body: &mut BodySource<'_>,
     ) -> Reply {
@@ -363,7 +361,7 @@ impl Daemon {
         }
         let interval = Duration::from_millis(limits.lease_interval_ms);
         let record = match self.media.store().create_upload(
-            key,
+            &MediaGate::key(principal),
             HashFunction::Blake3,
             length,
             interval,
@@ -377,13 +375,10 @@ impl Daemon {
         }
         let id = record.id;
         // Fresh, so no other stream can hold it; held all the same, so the
-        // pruner's re-read and a racing resume meet the hold.
-        self.media.claim(id);
+        // pruner's re-read and a racing resume meet the hold until it drops.
+        let _hold = self.media.claim(id);
         let hex = id.to_hex();
-        let reply =
-            self.stream_body(principal, key, record, 0, req, body, &[("Upload-Id", hex.as_str())]);
-        self.media.release(id);
-        reply
+        self.stream_body(principal, record, req, body, &[("Upload-Id", hex.as_str())])
     }
 
     /// THE RESUME (clauses (3), (5), (6)): the record under the requester's
@@ -394,7 +389,6 @@ impl Daemon {
     fn blob_append(
         &self,
         principal: PrincipalId,
-        key: &str,
         id: UploadId,
         req: &HttpRequest,
         body: &mut BodySource<'_>,
@@ -404,21 +398,21 @@ impl Daemon {
             Err(detail) => return refuse(TransportError::MalformedBlob, Some(&detail)),
         };
         let now = self.media.now_ms();
-        let Some(record) = self.media.store().upload(key, &id, now) else {
+        let Some(record) = self.media.store().upload(&MediaGate::key(principal), &id, now) else {
             return refuse(TransportError::NoUpload, None);
         };
-        if !self.media.claim(id) {
+        let Some(_hold) = self.media.claim(id) else {
             return refuse(TransportError::UploadHeld, Some("another stream holds this upload"));
-        }
-        let reply = self.append_held(principal, key, record, offset, req, body);
-        self.media.release(id);
-        reply
+        };
+        self.append_held(principal, record, offset, req, body)
     }
 
+    /// The resume under its hold: the stated `offset` held to the record's
+    /// own — the one offset [`Daemon::stream_body`] resumes at — then the
+    /// request's bytes against the length and the own scope, then the body.
     fn append_held(
         &self,
         principal: PrincipalId,
-        key: &str,
         record: UploadRecord,
         offset: u64,
         req: &HttpRequest,
@@ -444,37 +438,37 @@ impl Daemon {
         if let Err(scope) = self.media.admit_declared(principal, record.length - offset, now) {
             return refuse_deposit(scope, false, record.offset);
         }
-        self.stream_body(principal, key, record, offset, req, body, &[])
+        self.stream_body(principal, record, req, body, &[])
     }
 
-    /// THE BODY, chunk by chunk: resumed at `offset`, each chunk gated as
-    /// the body is written and then appended; a connection that dies or
-    /// stalls KEEPS the upload at its durable point; a refusal as the body
-    /// is written ENDS it; a body that leaves the upload short of its
-    /// length settles and answers the record; one that reaches it goes on
-    /// to the finish.
-    #[allow(clippy::too_many_arguments)]
+    /// THE BODY, chunk by chunk: resumed at the record's own offset — a
+    /// fresh record's zero at the creation, the stated offset the resume held
+    /// to it — each chunk gated as the body is written and then appended; a
+    /// connection that dies or stalls KEEPS the upload at its durable point;
+    /// a refusal as the body is written ENDS it; a body that leaves the
+    /// upload short of its length settles and answers the record; one that
+    /// reaches it goes on to the finish. The store's records are keyed to
+    /// `principal` ([`MediaGate::key`]).
     fn stream_body(
         &self,
         principal: PrincipalId,
-        key: &str,
         record: UploadRecord,
-        offset: u64,
         req: &HttpRequest,
         body: &mut BodySource<'_>,
         interim: &[(&str, &str)],
     ) -> Reply {
         let store = self.media.store();
+        let key = MediaGate::key(principal);
         let id = record.id;
         let now = self.media.now_ms();
-        let mut stream = match store.resume(key, &id, offset, now) {
+        let mut stream = match store.resume(&key, &id, record.offset, now) {
             Ok(stream) => stream,
             Err(e) => return blob_refusal(e),
         };
         if body.begin(interim).is_err() {
             return refuse(TransportError::MalformedHttp, Some("client went away at 100-continue"));
         }
-        let mut written = offset;
+        let mut written = record.offset;
         loop {
             let chunk = match body.next_chunk() {
                 Ok(Some(c)) => c,
@@ -493,7 +487,7 @@ impl Daemon {
             if let Err(scope) = self.media.admit_bytes(principal, &id, written, n, now) {
                 // REFUSED IS ENDED (clause (6)): nothing kept.
                 drop(stream);
-                let _ = store.end_upload(key, &id, now);
+                let _ = store.end_upload(&key, &id, now);
                 return refuse_deposit(scope, true, written);
             }
             match stream.append(chunk, self.media.now_ms()) {
@@ -509,7 +503,7 @@ impl Daemon {
                 Err(e) => blob_refusal(e),
             };
         }
-        self.blob_finish(key, id, stream, req)
+        self.blob_finish(principal, id, stream, req)
     }
 
     /// THE FINISH (clause (7); M-I5 (a)), under the credential lock's READ
@@ -518,9 +512,16 @@ impl Daemon {
     /// finish that writes it never interleave with a credential write; never
     /// `Serial`, which orders commits and the PUT commits nothing. The
     /// requester is re-resolved against the head under it: a session killed
-    /// mid-transfer is dead at its rename, its upload ended, nothing kept
-    /// (clause (6); M-I2 (g)).
-    fn blob_finish(&self, key: &str, id: UploadId, stream: Stream<'_>, req: &HttpRequest) -> Reply {
+    /// mid-transfer is dead at its rename — its token resolves to an actor
+    /// other than `principal`, the stream's own — its upload ended, nothing
+    /// kept (clause (6); M-I2 (g)).
+    fn blob_finish(
+        &self,
+        principal: PrincipalId,
+        id: UploadId,
+        stream: Stream<'_>,
+        req: &HttpRequest,
+    ) -> Reply {
         let store = self.media.store();
         let _credential_lock = self.auth.credential_lock.read();
         let now = self.media.now_ms();
@@ -528,11 +529,10 @@ impl Daemon {
             let snap = self.engine.kernel().snapshot();
             self.resolve_actor(req, snap.world())
         };
-        let same =
-            matches!(&resolved.actor, Actor::Principal(b) if MediaGate::key(b.principal) == key);
+        let same = matches!(&resolved.actor, Actor::Principal(b) if b.principal == principal);
         if !same {
             drop(stream);
-            let _ = store.end_upload(key, &id, now);
+            let _ = store.end_upload(&MediaGate::key(principal), &id, now);
             return with_signal(
                 refuse_upload(&UploadRefusal::Unauthenticated.token()),
                 resolved.closed,
@@ -546,8 +546,8 @@ impl Daemon {
 
     /// THE PROGRESS: the upload's record under the requester's own key — the
     /// offset a resume continues from.
-    fn blob_progress(&self, key: &str, id: UploadId) -> Reply {
-        match self.media.store().upload(key, &id, self.media.now_ms()) {
+    fn blob_progress(&self, principal: PrincipalId, id: UploadId) -> Reply {
+        match self.media.store().upload(&MediaGate::key(principal), &id, self.media.now_ms()) {
             Some(r) => progress_reply(&r),
             None => refuse(TransportError::NoUpload, None),
         }
@@ -555,16 +555,14 @@ impl Daemon {
 
     /// THE END (clause (6), the termination): claimed as a stream claims
     /// it, then ended — nothing kept; `204`.
-    fn blob_end(&self, key: &str, id: UploadId) -> Reply {
-        if !self.media.claim(id) {
+    fn blob_end(&self, principal: PrincipalId, id: UploadId) -> Reply {
+        let Some(_hold) = self.media.claim(id) else {
             return refuse(TransportError::UploadHeld, Some("another stream holds this upload"));
-        }
-        let reply = match self.media.store().end_upload(key, &id, self.media.now_ms()) {
+        };
+        match self.media.store().end_upload(&MediaGate::key(principal), &id, self.media.now_ms()) {
             Ok(()) => Reply { status: 204, body: None, headers: Vec::new() },
             Err(e) => blob_refusal(e),
-        };
-        self.media.release(id);
-        reply
+        }
     }
 
     /// THE DEFERRED STEP of a replace (the store's `unlink_asides`): the
@@ -597,65 +595,26 @@ impl Daemon {
 
 // ── the queries, the answers, the refusals ───────────────────────────────
 
-/// THE FETCH's query: exactly `i=<address>`, the address in the wire's
-/// dotted-decimal form through the codec's own door (`wire_address`), so a
-/// query string's address and a frame's meet one grammar under one budget.
-/// What the address must NAME — an element position of a document — is the
-/// serve's step 0, not this parse's.
+/// THE FETCH's query: exactly `i=<address>` ([`sole_param`]), the address in
+/// the wire's dotted-decimal form through the codec's own door
+/// (`wire_address`), so a query string's address and a frame's meet one
+/// grammar under one budget. What the address must NAME — an element
+/// position of a document — is the serve's step 0, not this parse's.
 fn fetch_query(query: Option<&str>) -> Result<Address, String> {
-    let query = match query {
-        None | Some("") => return Err("the required parameter is i=<address>".into()),
-        Some(q) => q,
-    };
-    let mut i: Option<Address> = None;
-    for (k, v) in query_pairs(query)? {
-        match k {
-            "i" => {
-                at_most_once(&i, "parameter", "i")?;
-                i = Some(wire_address(v).map_err(|e| format!("i: {e}"))?);
-            }
-            other => return Err(format!("unknown parameter '{other}'")),
-        }
-    }
-    i.ok_or_else(|| "the required parameter is i=<address>".to_string())
+    let i = sole_param(query, "i")?.ok_or("the required parameter is i=<address>")?;
+    wire_address(i).map_err(|e| format!("i: {e}"))
 }
 
-/// The creation's query: exactly `length=<bytes>`.
+/// The creation's query: exactly `length=<bytes>` ([`sole_param`]).
 fn create_query(query: Option<&str>) -> Result<u64, String> {
-    let query = match query {
-        None | Some("") => return Err("the required parameter is length=<bytes>".into()),
-        Some(q) => q,
-    };
-    let mut length: Option<u64> = None;
-    for (k, v) in query_pairs(query)? {
-        match k {
-            "length" => {
-                at_most_once(&length, "parameter", "length")?;
-                length = Some(count(v, "length")?);
-            }
-            other => return Err(format!("unknown parameter '{other}'")),
-        }
-    }
-    length.ok_or_else(|| "the required parameter is length=<bytes>".to_string())
+    let length = sole_param(query, "length")?.ok_or("the required parameter is length=<bytes>")?;
+    count(length, "length")
 }
 
-/// The resume's query: exactly `offset=<bytes>`.
+/// The resume's query: exactly `offset=<bytes>` ([`sole_param`]).
 fn append_query(query: Option<&str>) -> Result<u64, String> {
-    let query = match query {
-        None | Some("") => return Err("the required parameter is offset=<bytes>".into()),
-        Some(q) => q,
-    };
-    let mut offset: Option<u64> = None;
-    for (k, v) in query_pairs(query)? {
-        match k {
-            "offset" => {
-                at_most_once(&offset, "parameter", "offset")?;
-                offset = Some(count(v, "offset")?);
-            }
-            other => return Err(format!("unknown parameter '{other}'")),
-        }
-    }
-    offset.ok_or_else(|| "the required parameter is offset=<bytes>".to_string())
+    let offset = sole_param(query, "offset")?.ok_or("the required parameter is offset=<bytes>")?;
+    count(offset, "offset")
 }
 
 /// A byte count: `1*DIGIT`, in range.

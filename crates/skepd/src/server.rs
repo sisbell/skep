@@ -68,7 +68,7 @@
 //! checkpoints with the world (AUTH-2.79), which every route here reads off
 //! the one head snapshot it already holds, so the world a check reads and
 //! the table it reads are one committed state.
-//! What `server` adds is the two write sequences that call them in their
+//! What `server` adds is the three write sequences that call them in their
 //! pinned order, and the `/session` and `/health` marshals. Tokens are
 //! uptime-scoped; the daemon binds 127.0.0.1 only.
 //!
@@ -114,7 +114,7 @@
 //! serialization guard the write sequences here hold — and then gives the
 //! published head writer its turn, which when the cadence is due writes `H`
 //! under that same guard before `commit_under` returns. What `server` adds
-//! is the frame's parse, its classification, and the two write sequences,
+//! is the frame's parse, its classification, and the three write sequences,
 //! which take `serial_lock` themselves so their gates and the execute they
 //! gate stand on one committed state; the ordering the commit stream and
 //! the change feed below rest on is not a thing a handler here can take
@@ -211,7 +211,7 @@ pub use crate::auth::session::Peer;
 pub use http::UNIVERSAL_HEADERS;
 pub use listen::{serve, Skepd, DEFAULT_WORKERS, MIN_WORKERS};
 pub use reply::{Body, Fetch, Reply, Routed};
-pub use request::{BodySlot, HttpRequest};
+pub use request::HttpRequest;
 
 /// Auto-checkpoint cadence, the commit half: every N commits (M2 evaluates
 /// on-commit; the daemon's checkpoint thread waits on the kernel's due flag,
@@ -268,22 +268,25 @@ fn cadence_bytes_for(newest_checkpoint_len: Option<u64>) -> NonZeroU64 {
 /// [`CHECKPOINT_EVERY_COMMITS`].
 const RETAINED_CHECKPOINTS: usize = 2;
 
-/// The body cap for a path — checked on the declared `Content-Length`
-/// before a byte is read, so a route that cannot use a large body is never
-/// asked to allocate for one. The blob upload's family takes
-/// `MAX_BLOB_BYTES` — the one cap a body never sits whole in memory
-/// under: its two body-carrying methods stream (`server/http.rs`, THE
-/// STREAMING ARM), and the socket reader holds the family's other methods
-/// to the small cap.
+/// The body cap for a request — its method and its path — checked on the
+/// declared `Content-Length` before a byte is read, so a route that cannot
+/// use a large body is never asked to allocate for one: the frame routes,
+/// `/op` and `/op-at`, take `MAX_REQUEST_BODY` whatever the method; the
+/// blob upload's two body-carrying methods — the creation's `POST` and the
+/// resume's `PATCH` — take `MAX_BLOB_BYTES`, a body the daemon's own
+/// transport never holds whole (`server/http.rs`, THE STREAMING ARM) and a
+/// caller over its own transport holds whole if it buffers; every other
+/// request, the rest of the blob family's included, takes `MAX_SMALL_BODY`.
 ///
 /// Public because [`HttpRequest`] names it as a caller's obligation: a
 /// caller building a request for [`Daemon::route`] over a transport of its
 /// own takes the bound from here rather than transcribing it, so a
-/// route-scoped raise moves for them too.
-pub fn body_cap(path: &str) -> usize {
+/// route-scoped raise moves for them too — and the bound it takes is the one
+/// the daemon's own transport applies, for every method and path.
+pub fn body_cap(method: &str, path: &str) -> usize {
     match path {
         "/op" | "/op-at" => MAX_REQUEST_BODY,
-        p if blob_routes::is_blob_path(p) => MAX_BLOB_BYTES as usize,
+        p if blob_routes::streams_body(method, p) => MAX_BLOB_BYTES as usize,
         _ => MAX_SMALL_BODY,
     }
 }
@@ -869,21 +872,31 @@ impl Daemon {
     /// every lock, so a reissue is in force before the request that noticed
     /// it resolves its own actor, `/events` included.
     ///
-    /// THE BLOB UPLOAD's BODY: a request of that family's two body-carrying
-    /// methods arrives from the socket reader with its body in the
-    /// request's own slot rather than in `body` (`server/http.rs`, THE
-    /// STREAMING ARM; `HttpRequest::body_stream`), and this router takes it
-    /// here, at the head of every routing — so a body carried by one
-    /// request is never read by the next, and a request routed twice reads
-    /// its own `body`. A caller over its own transport leaves the slot
-    /// empty, and the route reads the request's own `body` instead.
+    /// THE BLOB UPLOAD's BODY: a caller over its own transport hands the
+    /// family's two body-carrying methods their body in `req.body`, and the
+    /// route reads it through the same source type the daemon's own
+    /// transport streams a socket through (`server/http.rs`, THE STREAMING
+    /// ARM) — that transport's body stays on the socket and reaches the route
+    /// by a door of its own, beside the request and by value
+    /// (`Daemon::route_parked`), so it is read by the one routing it was
+    /// parked for.
     ///
     /// THE BLOB FETCH's ANSWER (wire.md §Media, THE FETCH): `GET /blob?i=`
     /// and `HEAD /blob?i=` admitted are [`Routed::Fetch`] — the whole file,
     /// checked, with the fetch pool's permit the value holds — which the
     /// accept path streams; every refusal of the route is a [`Routed::Reply`].
     pub fn route(&self, req: &HttpRequest) -> Routed<'_> {
-        let parked = req.body_stream.take();
+        self.route_parked(req, None)
+    }
+
+    /// [`Daemon::route`], for the daemon's own transport, with the body that
+    /// transport left on the socket — the blob upload's creation and resume
+    /// (`server/http.rs`, THE STREAMING ARM) — handed in BESIDE the request,
+    /// by value, so it is read by this one routing and by no other. Private:
+    /// a caller over its own transport has no socket to park, and
+    /// [`Daemon::route`] reads the request's own `body` through the same
+    /// source type.
+    fn route_parked(&self, req: &HttpRequest, parked: Option<BodySource<'static>>) -> Routed<'_> {
         self.reissue_blocked_prefixes();
         match (req.method.as_str(), req.path.as_str()) {
             ("GET", "/events") => Routed::EventStream,
@@ -985,7 +998,7 @@ impl Daemon {
     /// [`Reply`], so the accept path runs the same pair by hand
     /// (AUTH-4.44).
     ///
-    /// The two write sequences wrap again, against their own LOCKED
+    /// The three write sequences wrap again, against their own LOCKED
     /// resolution — which can find a death this one did not — and that
     /// double is harmless by construction: [`with_signal`] attaches the
     /// header once however many sites observed the death.

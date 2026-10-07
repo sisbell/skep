@@ -280,6 +280,24 @@ pub(crate) enum Binding {
     Rebuilding,
 }
 
+/// A stream's HOLD on one upload (clause (5)) — what [`MediaGate::claim`]
+/// answers. The upload is released as this drops, on every exit of the
+/// frame that holds it: a return, a `?`, an unwind. No caller ends a hold,
+/// so no stream that is gone leaves one behind — the daemon a caller finds
+/// after it contains a handler's panic (`Daemon::route`'s card) holds no
+/// upload that panic was streaming.
+#[must_use = "a hold dropped at once holds nothing: bind it for the stream's whole span"]
+pub(crate) struct Hold<'a> {
+    held: &'a Mutex<HashSet<UploadId>>,
+    id: UploadId,
+}
+
+impl Drop for Hold<'_> {
+    fn drop(&mut self) {
+        self.held.lock().remove(&self.id);
+    }
+}
+
 /// The daemon's media resource.
 pub(crate) struct MediaGate {
     store: Store,
@@ -297,9 +315,11 @@ pub(crate) struct MediaGate {
     /// chunk. An atomic rather than a lock: one load per read, and a store
     /// that lands whole.
     floor: AtomicU64,
-    /// THE HOLD (clause (5)): the uploads a stream owns right now, in
+    /// THE HOLD (clause (5)): the uploads a stream holds right now, in
     /// skepd's memory and no store — a PUT naming one is refused while it
-    /// is held; the hold ends with the stream's connection.
+    /// is held. Each entry is a [`Hold`]'s, removed as that guard drops, an
+    /// unwind included; `held` is locked inside [`MediaGate::claim`] and
+    /// that drop alone.
     held: Mutex<HashSet<UploadId>>,
     /// THE CELL INDEX — shared with the write path, which enters it at
     /// every commit that mints a cell, and with the walk at open.
@@ -518,15 +538,12 @@ impl MediaGate {
         self.index.total_base().saturating_add(pending)
     }
 
-    /// Claim an upload for a stream (clause (5)): `false` where another
-    /// stream holds it.
-    pub(crate) fn claim(&self, id: UploadId) -> bool {
-        self.held.lock().insert(id)
-    }
-
-    /// Release a stream's hold.
-    pub(crate) fn release(&self, id: UploadId) {
-        self.held.lock().remove(&id);
+    /// Claim an upload for a stream (clause (5)): its [`Hold`], which
+    /// releases the upload as it drops, or `None` where another stream holds
+    /// it.
+    #[must_use = "a hold dropped at once holds nothing"]
+    pub(crate) fn claim(&self, id: UploadId) -> Option<Hold<'_>> {
+        self.held.lock().insert(id).then(|| Hold { held: &self.held, id })
     }
 
     /// THE OWN SCOPE BEFORE THE BODY (M-I6 (e)): would the principal's own

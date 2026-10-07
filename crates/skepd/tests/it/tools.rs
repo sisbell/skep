@@ -84,8 +84,11 @@ fn accounts_of(v: &Value) -> BTreeMap<u64, (Option<String>, u64, u64)> {
 /// re-hash skipped by `--no-rehash` leaves the hash hole unfound; every
 /// file under `blobs/` and every journal segment is left byte for byte and
 /// mtime for mtime as found — the inventory records no read and writes
-/// nothing there; a halt mark the walk finds is listed; and beside a
-/// serving daemon the inventory is refused at the kernel's lock.
+/// nothing there; a stray `checkpoint.tmp` a crash left is removed by the
+/// engine's open, as every open removes one, and reported by its size as
+/// `journal.stray_checkpoint_removed`, an open that found none reporting
+/// `null`; a halt mark the walk finds is listed; and beside a serving
+/// daemon the inventory is refused at the kernel's lock.
 #[test]
 fn the_inventory_lists_the_holes_the_accounts_and_the_venue_total_and_writes_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -149,10 +152,16 @@ fn the_inventory_lists_the_holes_the_accounts_and_the_venue_total_and_writes_not
             .collect()
     };
     let segments_before = segments(dir.path());
+    // A checkpoint a crash left half-written under the kernel's fixed temp
+    // name: the engine's open removes it, as every open does, and says so.
+    let stray = dir.path().join("checkpoint.tmp");
+    fs::write(&stray, [0u8; 37]).unwrap();
 
     let v = tools::inventory(dir.path(), true).expect("the inventory");
     assert_eq!(tree(&blobs), before, "nothing under blobs/ written: every file's bytes and mtime as found");
     assert_eq!(segments(dir.path()), segments_before, "a cleanly closed journal's bytes are read and left as found");
+    assert!(!stray.exists(), "the open removed the stray checkpoint");
+    assert_eq!(v["journal"]["stray_checkpoint_removed"].as_u64(), Some(37), "{v}");
 
     let mut expected_holes = vec![(blob_hex(&a_bytes), "length".to_string()), (blob_hex(&b_bytes), "absent".to_string()), (blob_hex(&d_bytes), "hash".to_string())];
     expected_holes.sort();
@@ -190,6 +199,7 @@ fn the_inventory_lists_the_holes_the_accounts_and_the_venue_total_and_writes_not
     let without_rehash: Vec<(String, String)> = expected_holes.iter().filter(|(_, fault)| fault != "hash").cloned().collect();
     assert_eq!(holes_of(&quick), without_rehash, "{quick}");
     assert_eq!(quick["rehashed"].as_bool(), Some(false));
+    assert!(quick["journal"]["stray_checkpoint_removed"].is_null(), "an open that found none: {quick}");
     assert_eq!(tree(&blobs), before);
 
     // A halt mark, planted as another build's writing: listed.

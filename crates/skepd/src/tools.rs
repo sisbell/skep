@@ -33,10 +33,12 @@
 //! marks and any foreign designation directory. It RECORDS NO READ anywhere
 //! (D9) and writes nothing under `blobs/`. What the engine's open writes to
 //! the directory it is run over — the copy the inventory proves — is the
-//! kernel's own: the lock file `kernel.lock`, created where absent, and a
-//! torn tail cut off the last segment where a crash left one; no
-//! checkpoint, no commit, no head, no feed sidecar — the daemon's own open
-//! is never run.
+//! kernel's own: the lock file `kernel.lock`, created where absent; a torn
+//! tail cut off the last segment where a crash left one; and a stray
+//! `checkpoint.tmp` — a checkpoint a crash or a full volume left
+//! half-written — removed, which the inventory reports as
+//! `journal.stray_checkpoint_removed`; no checkpoint, no commit, no head,
+//! no feed sidecar — the daemon's own open is never run.
 //!
 //! THE PULL ([`pull`]; `skepd pull --data-dir <dir> [--hash <hex>] <file>`):
 //! takes a FILE, hashes it (BLAKE3) and INSTALLS it at
@@ -288,6 +290,13 @@ pub fn inventory(data_dir: &Path, rehash: bool) -> Result<Value, ToolError> {
                     Value::Number((recovery.map_or(0, |r| r.skipped.len()) as u64).into()),
                 ),
                 ("start_point", Value::Number(recovery.map_or(0, |r| r.start_point.0).into())),
+                (
+                    "stray_checkpoint_removed",
+                    engine
+                        .kernel()
+                        .stray_checkpoint_removed()
+                        .map_or(Value::Null, |n| Value::Number(n.into())),
+                ),
             ]),
         ),
         ("orphan_partials", Value::Number((orphan_partials as u64).into())),

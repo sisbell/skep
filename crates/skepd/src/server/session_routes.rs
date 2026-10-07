@@ -7,7 +7,7 @@ use skep_namespace::PrincipalId;
 
 use super::actor::Resolved;
 use super::reply::{refuse, refuse_handshake, Reply, TransportError};
-use super::request::{at_most_once, query_pairs, HttpRequest};
+use super::request::{sole_param, HttpRequest};
 use super::Daemon;
 use crate::auth::session::{
     handshake, parse_session_body, Actor, Opened, SessionBinding, Token, CHALLENGE_TTL_MS,
@@ -123,24 +123,9 @@ impl Daemon {
     }
 }
 
-/// The `/challenge` query: exactly `principal=<non-negative integer>`.
+/// The `/challenge` query: exactly `principal=<non-negative integer>`
+/// ([`sole_param`]).
 fn challenge_principal(query: Option<&str>) -> Result<u64, String> {
-    let query = match query {
-        None | Some("") => return Err("the required parameter is principal=<id>".into()),
-        Some(query) => query,
-    };
-    let mut principal: Option<u64> = None;
-    for (k, v) in query_pairs(query)? {
-        match k {
-            "principal" => {
-                at_most_once(&principal, "parameter", "principal")?;
-                principal = Some(
-                    v.parse()
-                        .map_err(|_| format!("principal: '{v}' is not a non-negative integer"))?,
-                );
-            }
-            other => return Err(format!("unknown parameter '{other}'")),
-        }
-    }
-    principal.ok_or_else(|| String::from("the required parameter is principal=<id>"))
+    let v = sole_param(query, "principal")?.ok_or("the required parameter is principal=<id>")?;
+    v.parse().map_err(|_| format!("principal: '{v}' is not a non-negative integer"))
 }

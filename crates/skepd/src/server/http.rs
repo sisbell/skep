@@ -12,10 +12,10 @@ use super::body_cap;
 use super::reply::{
     reason_phrase, refuse, Fetch, Reply, TransportError, FETCH_CONTENT_TYPE, SESSION_HEADER,
 };
-use super::request::{at_most_once, BodySlot, BodySource, HttpRequest};
+use super::request::{at_most_once, BodySource, HttpRequest};
 use crate::auth::session::Peer;
 use crate::codec::{obj, to_bytes};
-use crate::limits::{BLOB_IDLE_BOUND, MAX_SMALL_BODY};
+use crate::limits::BLOB_IDLE_BOUND;
 
 /// Socket read deadline for one request's head+body: a stalled local
 /// client releases its worker instead of pinning it.
@@ -83,7 +83,7 @@ pub const UNIVERSAL_HEADERS: &[(&str, &str)] = &[
 ];
 
 /// Request-head size cap. Tokens and headers are small; frames ride in the
-/// body, capped separately by the route's [`body_cap`].
+/// body, capped separately by the request's [`body_cap`].
 ///
 /// [`read_request`] scans for the head terminator incrementally, so the work
 /// this bounds is LINEAR in the head — the property a raise must preserve,
@@ -99,7 +99,7 @@ const MAX_REQUEST_HEAD: usize = 64 * 1024;
 pub(super) enum RequestRefusal {
     /// Not the HTTP subset this daemon speaks → `400 malformed_http`.
     Malformed(String),
-    /// The declared `Content-Length` exceeds the route's [`body_cap`] →
+    /// The declared `Content-Length` exceeds the request's [`body_cap`] →
     /// `413 payload_too_large`. Raised before any body byte is read, and
     /// carrying the cap it exceeded so the refusal names the number that
     /// actually bound it rather than the largest one the daemon has.
@@ -134,26 +134,27 @@ pub(super) fn refuse_request(refusal: RequestRefusal) -> Reply {
     }
 }
 
-/// Read one request off the socket. `Ok(None)` = clean close before any
-/// byte; `Err(_)` = the request is refused (the caller answers the
-/// [`RequestRefusal`]'s reply and closes). The subset: one request per
-/// connection, HTTP/1.0 or 1.1, bodies by `Content-Length` (absent =
-/// empty, capped at the route's [`body_cap`]), `Expect: 100-continue`
-/// honored, `Transfer-Encoding` refused.
+/// Read one request off the socket: the request, and — for the blob
+/// upload's two body-carrying methods — the body left on the socket beside
+/// it. `Ok(None)` = clean close before any byte; `Err(_)` = the request is
+/// refused (the caller answers the [`RequestRefusal`]'s reply and closes).
+/// The subset: one request per connection, HTTP/1.0 or 1.1, bodies by
+/// `Content-Length` (absent = empty, capped at the request's [`body_cap`]),
+/// `Expect: 100-continue` honored, `Transfer-Encoding` refused.
 ///
 /// THE STREAMING ARM (`blob_routes`): for the two methods of the blob
 /// upload's path family that carry bytes, the body is NOT read here — a
-/// body of the route's cap would otherwise sit whole in memory, which is
+/// body of the request's cap would otherwise sit whole in memory, which is
 /// what the cap raise alone was priced as unsafe for. The head is read as
-/// for every request, the declared length held to the route's cap, and the
-/// body carried IN THE REQUEST's OWN SLOT (`HttpRequest::body_stream`) as a
-/// [`BodySource`] over a clone of this socket — the bytes that arrived
-/// with the head, the length, and the `100 Continue` the client may be
-/// waiting for, which the route sends with the upload's identifier once it
-/// has decided to invite the body. The socket's read deadline is set to
-/// the idle bound for the body's phase, renewed by any byte; the transfer
-/// bound is the source's own. A method of the family that carries no bytes
-/// reads its body here under the small cap, as every frameless route does.
+/// for every request, the declared length held to the request's cap, and
+/// the body handed back BESIDE the request as a [`BodySource`] over a clone
+/// of this socket — the bytes that arrived with the head, the length, and
+/// the `100 Continue` the client may be waiting for, which the route sends
+/// with the upload's identifier once it has decided to invite the body. The
+/// socket's read deadline is set to the idle bound for the body's phase,
+/// renewed by any byte; the transfer bound is the source's own. A method of
+/// the family that carries no bytes reads its body here under the small
+/// cap, as every frameless route does.
 ///
 /// Each header this daemon READS — `Content-Length`, `Expect`,
 /// `Skepd-Session` and `Origin` — may appear at most once; a repeat is
@@ -171,7 +172,7 @@ pub(super) fn read_request(
     stream: &mut TcpStream,
     peer: Peer,
     deadline: Instant,
-) -> Result<Option<HttpRequest>, RequestRefusal> {
+) -> Result<Option<(HttpRequest, Option<BodySource<'static>>)>, RequestRefusal> {
     // The head, plus whatever early body bytes arrived with it.
     let mut buf: Vec<u8> = Vec::with_capacity(1024);
     // How much of `buf` is known to hold no terminator, so the scan is
@@ -277,33 +278,22 @@ pub(super) fn read_request(
     let declared = content_length.unwrap_or(0);
     // The one unbounded-allocation vector: refuse on the declared length
     // alone, before 100-continue invites the body and before the loop reads
-    // (and allocates) a single byte of it. The cap is the ROUTE's, so a
-    // route that carries no frame is never asked to allocate for one — and
-    // the blob family's cap is its two streaming methods' alone: the rest
-    // of the family reads a body it never looks at under the small cap.
+    // (and allocates) a single byte of it — under the request's own cap
+    // ([`body_cap`], which states it per method and path).
     let streams = blob_routes::streams_body(&method, &path);
-    let cap =
-        if !streams && blob_routes::is_blob_path(&path) { MAX_SMALL_BODY } else { body_cap(&path) };
+    let cap = body_cap(&method, &path);
     if declared > cap {
         return Err(RequestRefusal::BodyTooLarge { declared, cap });
     }
     if streams {
         // THE STREAMING ARM: the body stays on the socket for the route,
-        // carried in the request's own slot.
+        // handed back beside the request.
         body.truncate(declared);
         let clone = stream.try_clone().map_err(|e| format!("socket: {e}"))?;
         clone.set_read_timeout(Some(BLOB_IDLE_BOUND)).map_err(|e| format!("socket: {e}"))?;
         let source = BodySource::parked(clone, body, declared, expects_continue);
-        return Ok(Some(HttpRequest {
-            method,
-            path,
-            query,
-            session_token,
-            origin,
-            peer,
-            body: Vec::new(),
-            body_stream: BodySlot::parked(source),
-        }));
+        let req = HttpRequest { method, path, query, session_token, origin, peer, body: Vec::new() };
+        return Ok(Some((req, Some(source))));
     }
     if expects_continue && body.len() < declared {
         // The client is holding the body until told to send it (curl does
@@ -326,16 +316,7 @@ pub(super) fn read_request(
     // A byte past Content-Length would be a pipelined second request; this
     // connection answers one and closes, so it is dropped unread.
     body.truncate(declared);
-    Ok(Some(HttpRequest {
-        method,
-        path,
-        query,
-        session_token,
-        origin,
-        peer,
-        body,
-        body_stream: BodySlot::none(),
-    }))
+    Ok(Some((HttpRequest { method, path, query, session_token, origin, peer, body }, None)))
 }
 
 fn find_head_end(buf: &[u8]) -> Option<usize> {

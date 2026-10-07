@@ -944,9 +944,10 @@ the store's install — nothing above their own layer.
    `server/http.rs` (the HTTP bytes: the request reader, the reply
    writer, the event framing — and the streaming arm: for the blob
    upload's two body-carrying methods the reader takes the head alone
-   and leaves the body, as a `BodySource` over the connection's socket,
-   in the request's own slot for the router to take). It hands each
-   request to the router and knows nothing of what a request means.
+   and hands the body back beside the request, a `BodySource` over the
+   connection's socket the router's private door takes by value). It
+   hands each request to the router and knows nothing of what a request
+   means.
 2. **The routes** — `server.rs` (`Daemon` and the router) and the handler
    files beneath it, each an `impl Daemon` block: `server/actor.rs` (who
    the caller is), `server/session_routes.rs`, `server/read_routes.rs`,

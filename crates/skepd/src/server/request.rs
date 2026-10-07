@@ -1,13 +1,11 @@
-//! The request a handler reads (`HttpRequest`), the streaming body it may
-//! carry (`BodySource` in its `BodySlot`), and the two rules every read of
-//! its headers and query applies: a query is a parameter list, and a field
-//! appears at most once.
+//! The request a handler reads (`HttpRequest`), the streaming body the
+//! daemon's own transport may hand the router beside it (`BodySource`), and
+//! the two rules every read of its headers and query applies: a query is a
+//! parameter list, and a field appears at most once.
 
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::time::Instant;
-
-use parking_lot::Mutex;
 
 use crate::auth::session::Peer;
 use crate::limits::{BLOB_CHUNK, BLOB_TRANSFER_BOUND};
@@ -28,13 +26,10 @@ use crate::limits::{BLOB_CHUNK, BLOB_TRANSFER_BOUND};
 /// never choosing between the values; `peer` is the transport's own answer
 /// about the remote address of THIS connection; `body` is exactly the
 /// declared `Content-Length` bytes, and at most
-/// [`body_cap`](super::body_cap) of `path` of them; `body_stream` holds the
-/// body the transport left ON THE SOCKET for the blob upload's two
-/// body-carrying methods — a `BodySource` over the connection, the early
-/// bytes that arrived with the head, the declared length and the
-/// `100 Continue` the client may be waiting for — and is EMPTY on every
-/// other request, where `body` is the body: a caller over its own transport
-/// leaves it empty (`Default::default()`), and the route then reads `body`
+/// [`body_cap`](super::body_cap) of its `method` and `path` of them — the
+/// blob upload's creation and resume included, whose body the daemon's own
+/// transport leaves on the socket and routes through a door of its own, and
+/// which a caller over its own transport hands in here, the route reading it
 /// through the same source type.
 ///
 /// Routing re-checks none of them — it cannot tell a caller's mistake from a
@@ -64,8 +59,7 @@ use crate::limits::{BLOB_CHUNK, BLOB_TRANSFER_BOUND};
 /// This is the value a caller BUILDS, one per probe rather than by mutating
 /// a template: every field is a fact about ONE request. Deliberately no
 /// `Default` — an empty method and path are not a request — no `PartialEq`,
-/// nothing here comparing two requests, and no `Clone`: the streaming body
-/// is one socket, which no second request may read, and nothing in the
+/// nothing here comparing two requests, and no `Clone`, since nothing in the
 /// tree clones a request.
 pub struct HttpRequest {
     /// The method token, uppercase ASCII (`GET`, `POST`, `OPTIONS`).
@@ -73,11 +67,13 @@ pub struct HttpRequest {
     /// The request target with any query stripped — `/op`, `/changes`.
     pub path: String,
     /// The raw query string, if the target carried one, without the `?` that
-    /// introduced it. Read by the four routes that take parameters —
-    /// `/challenge` (`principal=`, required), `/chain` (`at=`, required),
-    /// `/changes` (`since=`, required, beside its optional narrowings) and,
-    /// in `observe` builds, `/dump` (`at=`, optional) — each refusing an
-    /// unknown or repeated parameter by name; every other route ignores it.
+    /// introduced it. Read by the routes that take parameters — `/challenge`
+    /// (`principal=`, required), `/chain` (`at=`, required), `/changes`
+    /// (`since=`, required, beside its optional narrowings), the blob fetch
+    /// `/blob` (`i=`, required), the upload's creation (`length=`, required)
+    /// and resume (`offset=`, required) and, in `observe` builds, `/dump`
+    /// (`at=`, optional) — each refusing an unknown or repeated parameter by
+    /// name; every other route ignores it.
     pub query: Option<String>,
     /// The `Skepd-Session` header's value, if present: the opaque token a
     /// session was bound to. Absent or unknown resolves to the guest.
@@ -93,20 +89,16 @@ pub struct HttpRequest {
     /// getting it wrong costs. A transport with no address at all — a Unix
     /// socket — names the variant it means.
     pub peer: Peer,
-    /// The body, exactly `Content-Length` bytes (empty when absent) — and
-    /// empty for a request whose body streams, which `body_stream` carries.
+    /// The body, exactly `Content-Length` bytes (empty when absent) — empty,
+    /// from the daemon's own transport, for the blob upload's creation and
+    /// resume, whose body stays on the socket (`server/http.rs`, THE
+    /// STREAMING ARM).
     pub body: Vec<u8>,
-    /// THE STREAMING BODY, where the transport left one on the socket (the
-    /// blob upload's creation and resume): taken by the router at the head
-    /// of every routing, so a body parked for one request is never read by
-    /// the next. Empty everywhere else — `Default::default()` builds the
-    /// empty slot, and nothing outside the daemon builds a full one.
-    pub body_stream: BodySlot,
 }
 
-/// The body's LENGTH and the token's PRESENCE: the body runs to the route's
-/// [`body_cap`](super::body_cap), and the token names a live session, which is not a thing to
-/// leave in a log line. The streaming body's presence, never its socket.
+/// The body's LENGTH and the token's PRESENCE: the body runs to the
+/// request's [`body_cap`](super::body_cap), and the token names a live
+/// session, which is not a thing to leave in a log line.
 impl std::fmt::Debug for HttpRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HttpRequest")
@@ -117,57 +109,11 @@ impl std::fmt::Debug for HttpRequest {
             .field("origin", &self.origin)
             .field("peer", &self.peer)
             .field("body_len", &self.body.len())
-            .field("body_stream", &self.body_stream)
             .finish()
     }
 }
 
 // ── the streaming body ───────────────────────────────────────────────────
-
-/// THE SLOT a request carries its streaming body in: the transport fills
-/// it for the blob upload's two body-carrying methods, the router takes
-/// it ONCE at the head of every routing. A slot behind a lock so the
-/// router can take the body from a request it holds by reference — the
-/// router's signature is every caller's — and a taken slot is empty from
-/// then on. `Default` is the EMPTY slot, the one every other request
-/// carries and the one a caller over its own transport builds.
-pub struct BodySlot(Mutex<Option<BodySource<'static>>>);
-
-impl Default for BodySlot {
-    fn default() -> BodySlot {
-        BodySlot(Mutex::new(None))
-    }
-}
-
-impl BodySlot {
-    /// The empty slot: the request's body is `body`.
-    pub(super) fn none() -> BodySlot {
-        BodySlot::default()
-    }
-
-    /// A slot holding `source` — the transport's, for a request whose body
-    /// stays on the socket.
-    pub(super) fn parked(source: BodySource<'static>) -> BodySlot {
-        BodySlot(Mutex::new(Some(source)))
-    }
-
-    /// Take the streaming body, leaving the slot empty.
-    pub(super) fn take(&self) -> Option<BodySource<'static>> {
-        self.0.lock().take()
-    }
-
-    /// Whether a streaming body is parked here, untaken.
-    pub fn is_parked(&self) -> bool {
-        self.0.lock().is_some()
-    }
-}
-
-/// The presence, never the socket.
-impl std::fmt::Debug for BodySlot {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(if self.is_parked() { "parked" } else { "none" })
-    }
-}
 
 /// Where a body's bytes come from: the connection's socket (its clone,
 /// owned here), or the request's own bytes.
@@ -341,10 +287,11 @@ impl<'a> BodySource<'a> {
 }
 
 /// A query string as its parameter list — `k=v` pairs split on `&`, shape
-/// checked and nothing else. Every query this daemon reads walks this, so
-/// one discipline covers them all and each parser adds only its own
-/// vocabulary: an unknown or repeated parameter is a named refusal, which
-/// is the wire's never-silent posture applied to queries.
+/// checked and nothing else. Every query this daemon reads walks this — the
+/// one-parameter queries through [`sole_param`] — so one discipline covers
+/// them all and each parser adds only its own vocabulary: an unknown or
+/// repeated parameter is a named refusal, which is the wire's never-silent
+/// posture applied to queries.
 pub(super) fn query_pairs(query: &str) -> Result<Vec<(&str, &str)>, String> {
     query
         .split('&')
@@ -374,15 +321,34 @@ pub(super) fn at_most_once<T>(
     }
 }
 
+/// A query that carries ONE parameter, `name`: its value, or `None` where the
+/// query is absent or empty — the parameter list [`query_pairs`] reads, a
+/// repeat refused through [`at_most_once`] and any other name refused as
+/// unknown, naming the one this route reads. Each caller adds its value's
+/// grammar and, where the parameter is required, its own refusal of `None`.
+pub(super) fn sole_param<'q>(
+    query: Option<&'q str>,
+    name: &str,
+) -> Result<Option<&'q str>, String> {
+    let Some(query) = query.filter(|q| !q.is_empty()) else { return Ok(None) };
+    let mut value = None;
+    for (k, v) in query_pairs(query)? {
+        if k != name {
+            return Err(format!("unknown parameter '{k}'; the one parameter here is {name}"));
+        }
+        at_most_once(&value, "parameter", name)?;
+        value = Some(v);
+    }
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// A request's `Debug` carries the token's PRESENCE and the body's
     /// LENGTH, never either's bytes: the token names a live session, and a
-    /// request's `{:?}` is what a panic or a trace line would carry. The
-    /// streaming body's slot prints its presence alone, and a taken slot
-    /// is empty.
+    /// request's `{:?}` is what a panic or a trace line would carry.
     #[test]
     fn a_requests_debug_carries_no_token_and_no_body() {
         let token = "0123456789abcdef0123456789abcdef";
@@ -395,7 +361,6 @@ mod tests {
             origin: None,
             peer: Peer::Loopback,
             body: body.clone(),
-            body_stream: Default::default(),
         };
         let printed = format!("{req:?}");
         assert!(!printed.contains(token), "the token: {printed}");
@@ -406,18 +371,9 @@ mod tests {
             "the body: {printed}"
         );
         assert!(
-            printed.contains("<token>") && printed.contains("body_len") && printed.contains("body_stream: none"),
+            printed.contains("<token>") && printed.contains("body_len"),
             "presence and length: {printed}"
         );
-        assert!(!req.body_stream.is_parked());
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("a socket to clone");
-        let socket = TcpStream::connect(listener.local_addr().unwrap()).expect("connect");
-        let slot = BodySlot::parked(BodySource::parked(socket, Vec::new(), 3, false));
-        assert!(slot.is_parked());
-        assert_eq!(format!("{slot:?}"), "parked");
-        assert!(slot.take().is_some());
-        assert!(!slot.is_parked(), "taken once");
-        assert!(slot.take().is_none());
     }
 
     /// THE RSS BOUND BY CONSTRUCTION (the investigation §3.4, "memory per
@@ -445,5 +401,21 @@ mod tests {
         assert_eq!(total, body.len());
         assert_eq!(chunks, 11);
         assert_eq!(source.buf.len(), BLOB_CHUNK, "the buffer never grew");
+    }
+
+    /// A one-parameter query: its value, or `None` for an absent or empty
+    /// query; a repeat, any other name and a pair with no `=` are named
+    /// refusals.
+    #[test]
+    fn a_one_parameter_query_has_one_value_or_a_named_refusal() {
+        assert_eq!(sole_param(None, "at"), Ok(None));
+        assert_eq!(sole_param(Some(""), "at"), Ok(None));
+        assert_eq!(sole_param(Some("at=7"), "at"), Ok(Some("7")));
+        assert_eq!(sole_param(Some("at="), "at"), Ok(Some("")), "an empty value is the caller's");
+        let refused = |query: &str| sole_param(Some(query), "at").unwrap_err();
+        assert!(refused("at=1&at=2").contains("duplicate parameter 'at'"));
+        assert!(refused("since=1").contains("unknown parameter 'since'"));
+        assert!(refused("at=1&since=1").contains("unknown parameter 'since'"));
+        assert!(refused("at").contains("malformed parameter"));
     }
 }

@@ -12,7 +12,7 @@ use super::reply::{
     op_answer, refuse, refuse_over_budget, refuse_reclaimed, refuse_unavailable, Reply,
     TransportError,
 };
-use super::request::{at_most_once, query_pairs};
+use super::request::{at_most_once, query_pairs, sole_param};
 use super::Daemon;
 use crate::auth::key_set_of;
 use crate::codec::{check_keys, key_set_reply, obj, DaemonOp};
@@ -363,45 +363,30 @@ fn op_at_envelope(body: &[u8]) -> Result<(Seq, Value), String> {
     Ok((Seq(at), frame))
 }
 
-/// The one-parameter `at=<decimal position>` query two routes read —
-/// `/dump`, where it is optional, and `/chain`, where it is required —
-/// `route` naming the route in the refusal's detail: nothing, or exactly one
-/// `at`.
-fn at_param(query: Option<&str>, route: &str) -> Result<Option<Seq>, String> {
-    let query = match query {
-        None | Some("") => return Ok(None),
-        Some(query) => query,
-    };
-    let mut at: Option<Seq> = None;
-    for (k, v) in query_pairs(query)? {
-        match k {
-            "at" => {
-                at_most_once(&at, "parameter", "at")?;
-                at = Some(Seq(v.parse().map_err(|_| {
-                    format!("at: '{v}' is not a position (a non-negative integer)")
-                })?));
-            }
-            other => {
-                return Err(format!(
-                    "unknown parameter '{other}'; the one {route} parameter is at=<position>"
-                ))
-            }
-        }
-    }
-    Ok(at)
+/// The one-parameter `at=<position>` query two routes read — `/dump`, where
+/// it is optional, and `/chain`, where it is required: [`sole_param`]'s value
+/// as a position.
+fn at_param(query: Option<&str>) -> Result<Option<Seq>, String> {
+    sole_param(query, "at")?
+        .map(|v| {
+            v.parse()
+                .map(Seq)
+                .map_err(|_| format!("at: '{v}' is not a position (a non-negative integer)"))
+        })
+        .transpose()
 }
 
 /// The `/dump` query: nothing, or exactly `at=<decimal position>`.
 #[cfg(feature = "observe")]
 fn dump_at_param(query: Option<&str>) -> Result<Option<Seq>, String> {
-    at_param(query, "/dump")
+    at_param(query)
 }
 
 /// The `/chain` query: exactly `at=<decimal position>`, REQUIRED — the
 /// head's own pair is `/health`'s, so a chain read with no position names
 /// nothing.
 fn chain_at_param(query: Option<&str>) -> Result<Seq, String> {
-    at_param(query, "/chain")?
+    at_param(query)?
         .ok_or_else(|| String::from("missing parameter 'at'; the one /chain parameter is at=<position>"))
 }
 

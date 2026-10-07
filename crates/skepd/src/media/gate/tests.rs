@@ -68,17 +68,35 @@ fn the_default_limit_is_a_share_of_the_capacity_and_an_install_overrides_it_whol
     assert_eq!(MediaGate::principal_of_key(&MediaGate::key(p)), Some(p));
     assert_eq!(MediaGate::principal_of_key("k"), None);
     assert!(gate.startup_line().contains("1.0.1.0.3.1"));
-    // The hold: one stream at a time.
+    // The hold: one stream at a time, released as its guard drops.
     let id = UploadId::parse("0123456789abcdef0123456789abcdef").unwrap();
-    assert!(gate.claim(id));
-    assert!(!gate.claim(id));
-    gate.release(id);
-    assert!(gate.claim(id));
+    let hold = gate.claim(id).expect("a fresh id is claimable");
+    assert!(gate.claim(id).is_none(), "held: a second stream is refused");
+    drop(hold);
+    assert!(gate.claim(id).is_some(), "released with its guard");
     let mut closed = MediaOptions::default();
     closed.uploads = false;
     let gate = MediaGate::open_with(tempfile::tempdir().expect("tempdir").path(), closed).expect("the store opens");
     assert!(!gate.uploads_open());
     assert_eq!(gate.health_object(), serde_json::json!({"uploads": false}));
+}
+
+/// THE HOLD ENDS WITH ITS GUARD, AN UNWIND INCLUDED (clause (5)): a stream
+/// that panics while holding its upload releases it as its frame unwinds,
+/// so the upload answers its next resume and the pruner's next pass, and
+/// not `409 upload_held` for the rest of the uptime — the daemon
+/// `Daemon::route` promises a caller that contains the panic.
+#[test]
+fn a_hold_is_released_by_an_unwind() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gate = MediaGate::open_with(dir.path(), MediaOptions::default()).expect("the store opens");
+    let id = UploadId::parse("0123456789abcdef0123456789abcdef").unwrap();
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _hold = gate.claim(id).expect("a fresh id is claimable");
+        panic!("a stream fails while it holds its upload");
+    }));
+    assert!(unwound.is_err(), "the stream unwound");
+    assert!(gate.claim(id).is_some(), "and its hold went with it");
 }
 
 /// THE GATE AT THE CREATION (M-I6 (b), (f); M-I5 (f); P13): the

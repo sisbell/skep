@@ -20,16 +20,18 @@ use crate::codec::{check_keys, wire_address};
 /// records — four orders of magnitude above a board's plausible list. What
 /// it removes is the unbounded one, which is a path that is NOT a list: a
 /// read-to-end followed by a whole `serde_json::Value` over those bytes, at
-/// the ~20× transient heap this crate prices on [`crate::body_cap`]. It is
-/// paid at [`super::AuthState::open`] before the listener binds, where the open
+/// the ~20× transient heap this crate prices on
+/// [`crate::limits::MAX_REQUEST_BODY`]. It is paid at
+/// [`super::AuthState::open`] before the listener binds, where the open
 /// promises a named refusal rather than a hang; and at every reissue with
 /// the supply's `seen` HELD at the head of routing, so every in-flight
 /// request waits on it, `/health` and `/session` included.
 ///
-/// The number is [`crate::body_cap`]'s own largest admitted input, cited
-/// rather than re-derived: this file carries strictly less per record than a
-/// frame does, so the same ceiling is the same headroom or more.
-const MAX_BLOCKED_SUPPLY_BYTES: usize = 8 * 1024 * 1024;
+/// The number is the frame routes' body cap,
+/// [`crate::limits::MAX_REQUEST_BODY`], cited rather than re-derived: this
+/// file carries strictly less per record than a frame does, so the same
+/// ceiling is the same headroom or more.
+const MAX_BLOCKED_SUPPLY_BYTES: usize = crate::limits::MAX_REQUEST_BODY;
 
 // ── the blocked-prefix list (AUTH-1.44, AUTH-4.36 step 4b, AUTH-4.70) ────
 

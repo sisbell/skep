@@ -69,8 +69,8 @@ use skep_blobs::{HashFunction, Inspection, Store};
 use skep_engine::{Engine, EngineError};
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
 use skep_namespace::{HasM3, PrincipalId};
+use skep_util::json::{obj, parse_lower_hex};
 
-use crate::codec::{obj, parse_lower_hex};
 use crate::media::cell::{DESIGNATION, HASH_BYTES};
 use crate::media::gate::{wall_clock_ms, MediaGate};
 use crate::media::index::{self, CellIndex};

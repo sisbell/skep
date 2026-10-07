@@ -9,6 +9,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
+use skep_util::notice;
 
 use super::blob_routes;
 use super::http::{
@@ -29,7 +30,6 @@ use crate::media::pruner::{Cadence, Wake};
 use crate::media::serve::Progress;
 #[cfg(feature = "test-hooks")]
 use crate::media::serve::STREAM_HOLD;
-use crate::notice;
 use crate::write_path::{CheckpointSignal, StreamStep, Woken};
 
 /// The request worker count `skepd` serves with when the operator names

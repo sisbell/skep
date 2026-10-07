@@ -71,9 +71,9 @@ use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
+use skep_util::json::obj;
 
 use super::super::sidecar::{line_bytes, RewriteFail};
-use crate::codec::obj;
 
 // Each file below is named BESIDE the field its records carry, because this
 // module owns the LINE and would otherwise own only half of what a line is:
@@ -218,7 +218,7 @@ impl LineFile {
         if valid_end < len {
             // Said, never silent: in the attest store the cut can take
             // primary state with it, below the floor.
-            crate::notice::line(format_args!(
+            skep_util::notice::line(format_args!(
                 "{name}: trust ends at byte {valid_end} of {len}; the {} bytes after it are cut",
                 len - valid_end
             ));
@@ -296,7 +296,7 @@ impl LineFile {
     /// field's own card says what the stop buys.
     pub fn append_or_report(&mut self, at: u64, fields: Vec<(&'static str, Value)>) {
         if let Err(e) = self.append(at, fields) {
-            crate::notice::line(format_args!(
+            skep_util::notice::line(format_args!(
                 "{} append failed at position {at}: {e}",
                 self.name
             ));
@@ -437,7 +437,7 @@ impl LineFile {
             }
             Err(e) => {
                 self.stopped = true;
-                crate::notice::line(format_args!(
+                skep_util::notice::line(format_args!(
                     "{} rewrite failed past its rename: {e}; this file takes no further line, so \
                      the next open re-derives from its fence",
                     self.name

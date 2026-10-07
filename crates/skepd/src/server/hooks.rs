@@ -7,6 +7,9 @@ use std::sync::atomic::Ordering;
 
 use skep_engine::{HistoryError, Recovery};
 use skep_kernel::{Attestation, CheckpointHeader, SaltSource, Seq};
+#[cfg(feature = "test-hooks")]
+use skep_util::notice;
+use skep_util::permits::Permit;
 
 use super::{Daemon, DaemonError};
 use crate::auth::AuthOptions;
@@ -14,9 +17,6 @@ use crate::media::index::{Rebuild, WALK_HOLD};
 use crate::media::MediaOptions;
 use crate::media::pruner::PrunePass;
 use crate::media::serve::STREAM_HOLD;
-#[cfg(feature = "test-hooks")]
-use crate::notice;
-use crate::permits::Permit;
 
 impl Daemon {
     /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a

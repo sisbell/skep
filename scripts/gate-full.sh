@@ -52,6 +52,13 @@ cargo check -p skep-blobs --lib || exit $?
 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
     cargo doc -p skep-blobs --lib --no-deps --document-private-items || exit $?
 
+# skep-util, the support crate below skepd and the media crate: `std` and
+# `serde_json` alone, no feature. The test run below builds it as a member,
+# but only after every check above has passed and inside the one long run;
+# checked alone here, a red in the crate every daemon build starts with
+# fails the gate before any test runs.
+cargo check -p skep-util || exit $?
+
 # skep-resolve's library without the signer — every test build turns
 # skep-signature's `sign` on (the crate's own dev-dependency, and in the
 # workspace's builds skep-mcp's dependency, skep-client's default `acting`
@@ -80,12 +87,12 @@ cargo nextest run -p skepd --all-features --profile full \
     -E 'test(/^client::/) | test(/^cors::/) | test(/the_death_signal_rides_exactly_the_documented_routes$/) | test(/the_route_set_agrees_across_preflight_dispatch_and_refusal$/)' \
     || exit $?
 
-# Every intra-doc link in skepd, skep-signature, skep-resolve and skep-blobs
-# resolves — a private item's too, and a link resolves only where its module
-# could name the target in code, so a narrowing that strands a link fails
-# here rather than in a reader's hands.
+# Every intra-doc link in skepd, skep-signature, skep-resolve, skep-blobs
+# and skep-util resolves — a private item's too, and a link resolves only
+# where its module could name the target in code, so a narrowing that
+# strands a link fails here rather than in a reader's hands.
 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
-    cargo doc -p skepd -p skep-signature -p skep-resolve -p skep-blobs --lib --no-deps --document-private-items --all-features \
+    cargo doc -p skepd -p skep-signature -p skep-resolve -p skep-blobs -p skep-util --lib --no-deps --document-private-items --all-features \
     || exit $?
 
 # --run-ignored all re-admits the #[ignore] timing partition. One test is

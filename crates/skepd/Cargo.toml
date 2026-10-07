@@ -82,6 +82,13 @@ skep-registry = { path = "../skep-registry" }
 # and the lease's honest-null answer. It knows no principal, lock or limits
 # record; the daemon's gate (`media/gate.rs`) is what reads those.
 skep-blobs = { path = "../skep-blobs" }
+# THE SUPPORT CRATE below this one and the media crate — the three utilities
+# both take and neither owns: the counting permit pool the four bounded
+# pools are built on (one `Permit` type, the one the pool hooks return), the
+# operator's notice line, and the codec's determinism helpers — the
+# key-sorting `obj` every JSON object goes through, lowercase hex and its
+# exact inverse. It depends on nothing of skep.
+skep-util = { path = "../skep-util" }
 # THE HYBRID ENTRY SIGNATURE's frozen rules (signed ops): `skep-signature` is
 # the one crate that links the signature libraries; skepd calls its verify
 # (AUTH-2.2) — the session verify, the write-path check — and its all-halves
@@ -94,8 +101,8 @@ skep-signature = { path = "../skep-signature" }
 # the `CryptoRng` bound the auth surface's declared signatures carry.
 getrandom = "0.3"
 rand_core = "0.9"
-# JSON frames. The codec builds Values through its own key-sorting obj()
-# helper, so marshal determinism never depends on serde_json's map backend.
+# JSON frames. The codec builds Values through `skep-util`'s key-sorting
+# `obj`, so marshal determinism never depends on serde_json's map backend.
 serde_json.workspace = true
 # No HTTP server dependency, deliberately (wire v4): the daemon speaks a
 # written-out HTTP/1.1 subset over std's TcpListener; server.rs's module doc

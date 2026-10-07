@@ -6,6 +6,7 @@ use serde_json::Value;
 use skep_febe::{consult_read, Response};
 use skep_identity::HasIdentity;
 use skep_kernel::Seq;
+use skep_util::json::obj;
 
 use super::actor::Resolved;
 use super::reply::{
@@ -15,7 +16,7 @@ use super::reply::{
 use super::request::{at_most_once, query_pairs, sole_param};
 use super::Daemon;
 use crate::auth::key_set_of;
-use crate::codec::{check_keys, key_set_reply, obj, DaemonOp};
+use crate::codec::{check_keys, key_set_reply, DaemonOp};
 use crate::limits::{DEFAULT_CHANGES_LIMIT, MAX_CHANGES_LIMIT};
 use crate::write_path::{ChangesAnswer, ChangesQuery, FeedClass};
 
@@ -149,7 +150,7 @@ impl Daemon {
             200,
             obj(vec![
                 ("auth", auth),
-                ("chain_head", Value::String(crate::codec::hex_string(&chain_head))),
+                ("chain_head", Value::String(skep_util::json::hex_string(&chain_head))),
                 ("head_time", head_time),
                 ("log_position", Value::Number(log_position.0.into())),
                 ("media", self.media.health_object()),
@@ -187,7 +188,7 @@ impl Daemon {
                 200,
                 obj(vec![
                     ("at", Value::Number(at.0.into())),
-                    ("chain", Value::String(crate::codec::hex_string(&chain))),
+                    ("chain", Value::String(skep_util::json::hex_string(&chain))),
                 ]),
             ),
             Err(e) => refuse_unavailable(e),

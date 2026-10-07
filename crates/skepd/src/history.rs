@@ -21,7 +21,7 @@
 //! an HTTP status is; `server/reply.rs`'s `refuse_unavailable` is the one
 //! mapping onto the wire's transport errors.
 //!
-//! The budget is a [`Permits`] pool — `crate::permits`, the daemon's one
+//! The budget is a [`Permits`] pool — `skep_util::permits`, the daemon's one
 //! permit mechanism, whose other instance is the class-scan pool.
 
 use std::sync::Arc;
@@ -33,8 +33,7 @@ use skep_engine::{Engine, EngineStores, HistoryError, World};
 use skep_febe::{OperationSurface, Request, Response, SessionId};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, Snapshot};
 use skep_namespace::PrincipalId;
-
-use crate::permits::{Permit, Permits};
+use skep_util::permits::{Permit, Permits};
 
 /// Concurrent historical reconstructions (`Engine::world_at` behind
 /// `/op-at` and `/dump?at`, and the chain read behind `/chain?at`, which

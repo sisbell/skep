@@ -63,8 +63,8 @@ use skep_address::Address;
 use skep_febe::{ReqId, SessionId};
 use skep_identity::{HasIdentity, IdentityState, KeySet};
 use skep_namespace::HasM3;
+use skep_util::json::obj;
 
-use crate::codec::obj;
 use crate::World;
 use memo::CredMemo;
 use session::{Challenges, Sessions};
@@ -205,7 +205,7 @@ impl AuthState {
     /// else it publishes ([`origin::Warning`]'s `Display`,
     /// [`AuthConfig::node_prefix_line`], [`BlockedPrefixes::log_lines`]), and
     /// the one the codec's module doc states for a transport shape: built
-    /// where its state lives, deterministic through [`crate::codec::obj`].
+    /// where its state lives, deterministic through [`skep_util::json::obj`].
     ///
     /// Four members, each published VERBATIM from the function that answers
     /// it, so the published list and the arm's own rule are ONE rule: the

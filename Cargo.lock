@@ -1500,6 +1500,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "skep-util"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "skepd"
 version = "0.1.0"
 dependencies = [
@@ -1525,6 +1532,7 @@ dependencies = [
  "skep-resolve",
  "skep-retrieval",
  "skep-signature",
+ "skep-util",
  "skepd",
  "tempfile",
 ]

@@ -1,5 +1,9 @@
 //! THE LAYERING, CHECKED: `AGENTS.md`'s "skepd is layered; imports point
-//! down", over the six layers `ARCHITECTURE.md` §The daemon draws.
+//! down", over the six layers `ARCHITECTURE.md` §The daemon draws. Two
+//! leaves of the sixth — the permit pool and the operator's notice line —
+//! and the codec's determinism helpers live in `skep-util`, the support
+//! crate below this one: a path into it is a path outside this crate, which
+//! this check reads as it reads any other crate's, and no row names them.
 //!
 //! Every in-crate module a `src/` file names in code — the leading module
 //! segments of each `crate::…`, `super::…` and `self::…` path, a brace
@@ -55,14 +59,13 @@ const LAYERS: &[(&str, u8)] = &[
     ("media::index", 5),
     ("media::pruner", 5),
     ("media::serve", 5),
-    // 6 — the leaves.
+    // 6 — the leaves; `permits` and `notice`, once rows here, are
+    // `skep-util`'s.
     ("codec", 6),
     ("history", 6),
     ("limits", 6),
     ("media::cell", 6),
     ("media::blind", 6),
-    ("notice", 6),
-    ("permits", 6),
     ("serial", 6),
 ];
 

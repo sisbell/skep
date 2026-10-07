@@ -142,12 +142,12 @@ use skep_febe::{Op, Response, Stores};
 use skep_identity::BoardTerm;
 use skep_kernel::Seq;
 use skep_namespace::{head_document, system_account, HasM3, SYSTEM_PRINCIPAL};
+use skep_util::json::{hex_string, parse_lower_hex};
+use skep_util::notice;
 
 use super::feed::Feed;
 use super::sidecar::{wall_clock_millis, CommitMeta};
 use super::{write_meta, WriteMeta, WritePath};
-use crate::codec::{hex_string, parse_lower_hex};
-use crate::notice;
 use crate::serial::SerialGuard;
 
 /// The head record's `format` member — the journal stamp in force (`SKJ4`),

@@ -325,7 +325,7 @@ impl BlockedPrefixes {
             // sharper here than there: this renders from
             // `credential_sequence` under the credential write lock and the
             // serialization lock AFTER the claim has committed
-            // ([`crate::notice`]), so a panic is `500 internal_panic` for a
+            // ([`skep_util::notice`]), so a panic is `500 internal_panic` for a
             // one-time-only write that landed and whose retry meets
             // `already_claimed`. The debug assert is what makes the premise
             // loud where a test can see it.

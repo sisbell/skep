@@ -667,7 +667,7 @@ impl Feed {
             // same, and the twins follow them below.
             Err(RewriteFail::PastRename(_)) => true,
             Err(before) => {
-                crate::notice::line(format_args!(
+                skep_util::notice::line(format_args!(
                     "commits.log compaction below the reclaim floor failed {before}; the file \
                      stands as it was, and the next checkpoint's compaction tries again"
                 ));
@@ -681,7 +681,7 @@ impl Feed {
         let covered = inner.log.entries().keys().next_back().copied().unwrap_or(fence);
         for (name, failed) in inner.rewrite_derived_files(covered) {
             if let RewriteFail::BeforeRename(e) = failed {
-                crate::notice::line(format_args!(
+                skep_util::notice::line(format_args!(
                     "{name} compaction below the reclaim floor failed before its rename: {e}; \
                      the file stands as it was, and the next checkpoint's compaction tries again"
                 ));

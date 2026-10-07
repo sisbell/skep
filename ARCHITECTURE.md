@@ -21,7 +21,7 @@ position in the journal.
 
 ## Code map
 
-The workspace is twenty-one crates under `crates/`. Dependencies point
+The workspace is twenty-two crates under `crates/`. Dependencies point
 downward in the list below: a crate may depend only on crates listed
 above it.
 
@@ -51,6 +51,19 @@ above it.
   injected failure at a step of the finish, and the methods only tests
   call. `scripts/gate-full.sh` builds the library and its docs without it.
   Its modules and rules: §The blob store.
+- `skep-util` — the support crate below the daemon and the media crate:
+  the three utilities both take and neither owns — the counting permit
+  pool behind the daemon's four bounded pools, the operator's notice line
+  (`skepd: ` on every line; §The support crate says why a library spells
+  it), and the JSON determinism helpers — `obj`, the key-sorting object
+  builder every JSON object the daemon emits is built through,
+  `hex_string` and its exact inverse `parse_lower_hex` with `hex_nibble`.
+  It depends on no other skep crate and on `serde_json` alone, so it may
+  stand anywhere in the foundation; it stands last because it holds no
+  part of the world — the crates above it are what a board is made of,
+  and this one is what two crates of the daemon's lean on. No constant
+  lives here: a constant is configuration, not a utility. Its rules: §The
+  support crate.
 
 **The stores** — each owns one slice of the world and depends only on the
 foundation and on the stores above it.
@@ -310,6 +323,52 @@ open and by the trigger, and the pending bytes); each module's doc lists
 its claims. Five unit suites sit beside their code: `store.rs`'s,
 `uploads.rs`'s, `partials/handle.rs`'s, `blobs.rs`'s and `jsonl.rs`'s, the
 last in `jsonl/tests.rs`.
+
+## The support crate, `skep-util`
+
+`skep-util` holds the three utilities `skepd` and `skep-media` both take
+and neither owns, so the media crate's move out of the daemon copies no
+helper and the daemon's four pools keep one permit type. Its modules are
+declared in `src/lib.rs`, each with a line saying what it holds, and the
+crate doc there states the rule of membership and the program-name
+decision. `permits` — the counting permit pool (`Permits`, `Permit`): a
+try-acquire with no queue and no blocking whose guard returns its slot on
+drop, the one mechanism behind the reconstruction budget, the class-scan
+pool, the fetch pool and the upload pool; a permit is a slot of the pool
+that minted it, so no bound can spend another's. `notice` — the operator's
+stream (`line`, `lines`): one line, or one notice of several written as
+one, every line prefixed, the write's result discarded so a lost log pipe
+never fails the work the notice is about. `json` — the determinism
+helpers: `obj`, the key-sorting object builder every JSON object the
+daemon emits is built through, under which the last pair given wins;
+`hex_string`, lowercase hex; `parse_lower_hex` and `hex_nibble`, its
+exact inverse at a fixed width, refusing what `hex_string` never writes.
+
+Rules that hold across its files:
+
+- **Membership.** An item lives here if and only if BOTH `skepd` and
+  `skep-media` take it AND it has no subject of its own. A constant is
+  configuration, not a utility: the limits the two crates share are the
+  media crate's own public numbers and the daemon's stay the daemon's, so
+  none lives here; a helper one crate alone takes lives in that crate.
+- **Nothing of skep below it.** The crate names no store and no engine;
+  it depends on `serde_json` and `std` alone, so it may stand anywhere in
+  the code map's order and any crate may take it.
+- **The program's name.** Every notice line opens `skepd: `, spelled once
+  in `notice.rs` — in a library, by decision. The prefix names the
+  PROCESS a shared stream attributes a line to, and exactly one program
+  writes the operator's stream: the daemon, as the shipped `skepd` binary
+  and as the `Skepd` library an embedder or a suite runs in-process under
+  the same name; `skep-media` is a component of that process and of no
+  other. A name handed in at each call would make the media crate spell
+  the daemon's name or be told it, for no line that would read
+  differently; a name installed once by the binary's `main` would leave
+  every in-process daemon unprefixed. A second program linking this crate
+  makes the name a parameter then, and the call sites' shape stays.
+
+Its unit suites sit beside their code: `json/tests.rs` (the sort and the
+duplicate-key rule) and `notice.rs`'s (the line's bytes, pinned as bytes
+and never through the constant).
 
 ## The registry rows and bodies, `skep-registry`
 
@@ -1008,14 +1067,16 @@ write passes down through them in this order:
 │                    composed order, its pool and stream  │
 │                    · the upload pool, the fetch's twin  │
 ├─────────────────────────────────────────────────────────┤
-│ 6 LEAVES           codec · history · permits · serial · │
-│                    limits · notice · media/cell ·       │
-│                    media/blind                          │
+│ 6 LEAVES           codec · history · serial · limits ·  │
+│                    media/cell · media/blind             │
+│   SKEP-UTIL        permits · notice · json — the support│
+│                    crate below, shared with skep-media  │
 └─────────────────────────────────────────────────────────┘
        │
        ▼
   skep-engine  →  the stores  →  skep-kernel (journal)
   skep-blobs   →  blobs/ (the files, partials, records, leases)
+  skep-util    →  the permit pool, the notice line, the JSON helpers
 
   Imports point DOWN or sideways within a layer. Never up.
 ```
@@ -1195,18 +1256,21 @@ the store's install — nothing above their own layer.
    `server/blob_routes.rs` runs for `GET /blob?i=` and the transport
    streams.
 6. **The leaves** — `codec.rs` with `codec/marshal.rs` (the JSON wire
-   format: parse, and marshal), `history.rs` (reading the world at an
-   earlier position), `permits.rs` (the counting permit the four bounded
-   pools use), `serial.rs` (the write-serialization lock and its guard),
-   `limits.rs` (request body caps, the cell's cap, and the blob route's
-   bounds — the fetch pool's and the upload pool's counts among them),
-   `notice.rs` (the
-   operator's log line), `media/cell.rs` (the picture's reference cell:
-   its schema, its one parser under the canonical rule, its encoder, its
-   designation, and THE ONE CLASSIFICATION of every media kind) and
-   `media/blind.rs` (the blind document's cell: the second kind, a
-   commitment the board holds no byte of a file for). None of these knows
-   anything about the daemon; a leaf imports only leaves.
+   format: parse, and marshal — its key-sorting `obj` and the lowercase
+   hex pair are `skep-util`'s, taken as every other file takes them),
+   `history.rs` (reading the world at an earlier position), `serial.rs`
+   (the write-serialization lock and its guard), `limits.rs` (request body
+   caps, the cell's cap, and the blob route's bounds — the fetch pool's
+   and the upload pool's counts among them), `media/cell.rs` (the
+   picture's reference cell: its schema, its one parser under the
+   canonical rule, its encoder, its designation, and THE ONE
+   CLASSIFICATION of every media kind) and `media/blind.rs` (the blind
+   document's cell: the second kind, a commitment the board holds no byte
+   of a file for). None of these knows anything about the daemon; a leaf
+   imports only leaves — and a leaf in another crate is a leaf: the
+   counting permit the four bounded pools use and the operator's log line
+   are `skep-util`'s `permits` and `notice`, the support crate below this
+   one (§The support crate).
 
 `lib.rs` declares the daemon's modules in layer order, then the fuzz
 harness and the crate's public surface; `main.rs` is the binary — the
@@ -1249,7 +1313,8 @@ imports it.
 - **Inside `skepd`, imports point down.** A module names only modules in
   its own layer or below it, never above: the transport calls the router,
   and nothing below the router calls the transport; a leaf imports only
-  leaves. Code names an in-crate item by its home module, never through
+  leaves, `skep-util`'s among them. Code names an in-crate item by its
+  home module, never through
   the crate root's re-exports. `crates/skepd/tests/it/tidy.rs` checks all
   of it.
 - **One write path.** Every write to the world goes through

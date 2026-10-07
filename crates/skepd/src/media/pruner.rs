@@ -56,11 +56,11 @@ use std::io;
 use std::time::Duration;
 
 use parking_lot::{Condvar, Mutex};
+use skep_util::notice;
 
 use super::cell::DESIGNATION;
 use super::gate::MediaGate;
 use crate::limits::{COMPACTION_MIN_LINES, COMPACTION_TRIGGER};
-use crate::notice;
 
 /// What one pass did — the test hook's answer, and, rendered through its
 /// [`fmt::Display`], the operator's line.

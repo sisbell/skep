@@ -29,9 +29,9 @@
 
 use serde_json::Value;
 use skep_namespace::PrincipalId;
+use skep_util::json::obj;
 
 use super::gate::MediaGate;
-use crate::codec::obj;
 
 /// The read, as its JSON object, off `media_gate`, the media gate whose store
 /// holds the records. The caller has read the index's readiness: the base

@@ -9,6 +9,8 @@ use skep_engine::World;
 use skep_febe::{Codec, Request, Response, SessionId};
 use skep_identity::{HasIdentity, IdentityState};
 use skep_kernel::{Attestation, Snapshot};
+#[cfg(any(test, feature = "test-hooks"))]
+use skep_util::notice;
 
 use super::actor::Resolved;
 use super::reply::{
@@ -27,8 +29,6 @@ use crate::auth::session::Actor;
 use crate::auth::LockWrite;
 use crate::codec::{key_set_reply, DaemonOp};
 use crate::media::door::media_door;
-#[cfg(any(test, feature = "test-hooks"))]
-use crate::notice;
 use crate::serial::SerialGuard;
 use crate::write_path::{write_meta, FrameMeta, Signed};
 

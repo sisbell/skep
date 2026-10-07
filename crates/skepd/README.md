@@ -85,7 +85,10 @@ A library and a binary. The binary runs against a data directory and
 serves a board; the library (`Daemon`, `serve`) is the same daemon for
 an embedder or a test. Everything it serves is the operation surface
 of [skep-febe](../skep-febe) over the world of
-[skep-engine](../skep-engine); how its modules are layered is in
+[skep-engine](../skep-engine); the counting permit its four pools are
+built on, the operator's notice line and the codec's key-sorting `obj`
+are [skep-util](../skep-util)'s, the support crate below it that the
+media crate shares; how its modules are layered is in
 [ARCHITECTURE.md](../../ARCHITECTURE.md).
 
 The daemon verifies signatures and makes none: it calls

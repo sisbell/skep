@@ -100,7 +100,7 @@
 //! op test, the pool, and the admission that takes the permit after the
 //! parse and the session read and before M10 is asked, so a refused request
 //! costs the parse alone and an admitted one holds its slot for the WHOLE
-//! answer. The pool is a second instance of [`crate::permits::Permits`],
+//! answer. The pool is a second instance of [`skep_util::permits::Permits`],
 //! disjoint from the reconstruction pool — a scan spends no reconstruction
 //! permit and a reconstruction spends no scan permit. The bound admits or
 //! refuses a REQUEST (`503 scan_busy`, retry-class, the body naming the op)
@@ -189,6 +189,7 @@ use skep_kernel::{
 };
 #[cfg(feature = "observe")]
 use skep_namespace::PrincipalId;
+use skep_util::notice;
 
 use std::sync::Arc;
 
@@ -200,7 +201,6 @@ use crate::media::gate::MediaGate;
 use crate::media::index;
 use crate::media::serve::FetchPool;
 use crate::media::{MediaOptions, UploadPool};
-use crate::notice;
 use crate::write_path::WritePath;
 use actor::Resolved;
 use reply::{class_varying, refuse, with_signal, TransportError};
@@ -435,7 +435,7 @@ pub struct Daemon {
     history: History,
     /// The class-scan bound behind `/op`'s class-scan-shaped FTT reads (wire
     /// v7.9; PUB-8.36), holding its own shape test and its own pool — a
-    /// second instance of [`crate::permits`]'s mechanism, and so disjoint
+    /// second instance of [`skep_util::permits`]'s mechanism, and so disjoint
     /// from the reconstruction pool `history` holds. Lives in the serving
     /// path and nowhere lower (doctrine D9: the meter is an attribute of a
     /// gate, never of the substrate): M8 and M7 are asked or not asked, and
@@ -452,7 +452,7 @@ pub struct Daemon {
     /// nothing to the journal and takes no `Serial`.
     media: MediaGate,
     /// The fetch pool behind `GET /blob?i=` (wire.md §Media, THE FETCH;
-    /// M-I5 (f)) — the third instance of [`crate::permits`]'s mechanism,
+    /// M-I5 (f)) — the third instance of [`skep_util::permits`]'s mechanism,
     /// disjoint from the reconstruction and class-scan pools by the borrow:
     /// an admitted fetch holds its whole file from the check to the last
     /// byte written, so the pool is the route's memory bound, and its count
@@ -461,7 +461,7 @@ pub struct Daemon {
     fetches: FetchPool,
     /// The upload pool behind the PUT's two body-carrying methods — the
     /// creation and the resume of `/blob/upload` (wire.md §Media, THE
-    /// PERMIT; M-I5 (f)) — the fourth instance of [`crate::permits`]'s
+    /// PERMIT; M-I5 (f)) — the fourth instance of [`skep_util::permits`]'s
     /// mechanism and the fetch pool's twin, disjoint from the three others
     /// by the borrow: an admitted creation or resume holds its worker from
     /// the permit to its finish, so the pool is the family's bound on worker

@@ -106,9 +106,10 @@ use serde_json::Value;
 use skep_address::Address;
 use skep_engine::{Engine, HistoryError, World};
 use skep_kernel::{Attestation, Seq};
+use skep_util::json::obj;
 
 use super::classify::{derived_journal, parse_dotted};
-use crate::codec::{j_attest, obj, to_bytes};
+use crate::codec::{j_attest, to_bytes};
 use crate::serial::SerialGuard;
 
 /// The sidecar's file name inside the data dir (beside the kernel's own
@@ -813,7 +814,7 @@ impl CommitsLog {
             Err(RewriteFail::PastRename(e)) => {
                 self.stopped = true;
                 self.rewritten = true;
-                crate::notice::line(format_args!(
+                skep_util::notice::line(format_args!(
                     "commits.log rewrite failed past its rename: {e}; this file takes no further \
                      line, so the next open re-derives from its fence as bare entries"
                 ));
@@ -895,14 +896,14 @@ impl CommitsLog {
         // which [`CommitsLog::stopped`] is what makes true — the failure
         // stops this file, so the next open's walk starts below the gap
         // instead of above it. The failure is REPORTED through
-        // [`crate::notice`], which states why a notice may not panic.
+        // [`skep_util::notice`], which states why a notice may not panic.
         let line = entry_line(at, &meta);
         if !self.stopped {
             match self.file.write_all(&line) {
                 Ok(()) => self.len += line.len() as u64,
                 Err(e) => {
                     self.stopped = true;
-                    crate::notice::line(format_args!(
+                    skep_util::notice::line(format_args!(
                         "commits.log append failed at position {at}: {e}; this file takes no \
                          further line, so the next open re-derives from {at} as bare entries"
                     ));
@@ -1452,10 +1453,10 @@ fn min_since_line(min_since: u64) -> Vec<u8> {
 /// One line carrying document names this daemon cannot parse — the notice
 /// both halves of the feed's name-parsing share: this file's own
 /// [`demote_malformed_names`] and the derived index's read of the same
-/// names. Written through [`crate::notice`], which owns the stream and
+/// names. Written through [`skep_util::notice`], which owns the stream and
 /// states why a notice may not panic.
 pub(super) fn report_malformed_names(file: &str, at: u64, dropped: usize) {
-    crate::notice::line(format_args!(
+    skep_util::notice::line(format_args!(
         "{file} position {at} carries {dropped} malformed document name(s)"
     ));
 }

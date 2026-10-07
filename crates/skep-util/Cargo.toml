@@ -1,0 +1,17 @@
+[package]
+name = "skep-util"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "The support crate below the daemon and the media crate: the three utilities both take and neither owns — the counting permit pool behind the daemon's bounded pools, the operator's notice line, and the JSON determinism helpers (the key-sorting object builder, lowercase hex and its exact inverse). It holds no constant, names no store and no engine, and depends on serde_json alone."
+readme = "README.md"
+
+[dependencies]
+# The JSON value the determinism helpers build: `json::obj` sorts a `Vec` of
+# pairs into a `serde_json::Map`, so the daemon's canonical output is
+# alphabetical-by-key whatever backs the map, and the last pair given wins
+# by a stable sort rather than by accident. The permit pool and the notice
+# line use `std` alone.
+serde_json.workspace = true

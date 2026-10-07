@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use skep_kernel::Seq;
+use skep_util::json::obj;
 
 use super::blob_routes;
 use super::body_cap;
@@ -14,7 +15,7 @@ use super::reply::{
 };
 use super::request::{at_most_once, BodySource, HttpRequest};
 use crate::auth::session::Peer;
-use crate::codec::{obj, to_bytes};
+use crate::codec::to_bytes;
 use crate::limits::BLOB_IDLE_BOUND;
 
 /// Socket read deadline for one request's head+body: a stalled local

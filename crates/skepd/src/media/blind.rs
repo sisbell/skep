@@ -46,11 +46,11 @@
 //! commons media range's allocation beside the picture's `3.89`.
 
 use serde_json::{Map, Value};
+use skep_util::json::{hex_string, parse_lower_hex};
 
 #[cfg(test)]
 use super::cell;
 use super::cell::{CellRefusal, HASH_BYTES};
-use crate::codec::{hex_string, parse_lower_hex};
 
 /// The blind kind's address — INTERIM, TEST-ONLY: the commons media range's
 /// allocation beside the picture's `3.89` under the ghost document's type

@@ -5,11 +5,12 @@ use serde_json::Value;
 use skep_address::Address;
 use skep_engine::HistoryError;
 use skep_febe::{Codec, FaultSite, OpKind, RejectCode, Rejection, Response};
+use skep_util::json::obj;
 
 use crate::auth::policy::{CredentialRefusal, RegistryRefusal};
 use crate::auth::session::HandshakeRefusal;
 use crate::codec::{
-    credential_refused_reply, obj, op_name, registry_refused_reply, to_bytes, JsonCodec,
+    credential_refused_reply, op_name, registry_refused_reply, to_bytes, JsonCodec,
 };
 use crate::history::Unavailable;
 use crate::media::door::MediaRefusal;

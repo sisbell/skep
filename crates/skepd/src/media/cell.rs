@@ -78,9 +78,9 @@
 use std::fmt::Write as _;
 
 use serde_json::{Map, Value};
+use skep_util::json::{hex_string, parse_lower_hex};
 
 use super::blind::{self, BlindCell};
-use crate::codec::{hex_string, parse_lower_hex};
 use crate::limits::MAX_CELL_BYTES;
 
 /// The cell kind's address — INTERIM, TEST-ONLY: the last ordinal of the

@@ -64,10 +64,10 @@ use skep_content::HasContent;
 use skep_engine::{Engine, World};
 use skep_kernel::Snapshot;
 use skep_namespace::{HasM3, PrincipalId};
+use skep_util::json::hex_string;
+use skep_util::notice;
 
 use super::cell::{self, names_kind_by_prefix, Cell, DESIGNATION};
-use crate::codec::hex_string;
-use crate::notice;
 
 /// A hash as every sidecar keys it: its function's designation and its hex.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]

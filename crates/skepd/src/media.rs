@@ -66,8 +66,9 @@
 //! and every read, the termination, the door's binding and the pruner's
 //! pass are served as before.
 
+use skep_util::permits::{Permit, Permits};
+
 use crate::limits::MAX_CONCURRENT_UPLOADS;
-use crate::permits::{Permit, Permits};
 
 /// The media resource's configuration, as the operator supplies it — the
 /// upload setting, `--no-uploads` (`SKEPD_UPLOADS=false`): `uploads` OPEN
@@ -100,7 +101,7 @@ impl Default for MediaOptions {
     }
 }
 
-/// THE UPLOAD POOL — the fourth instance of [`crate::permits`]'s mechanism
+/// THE UPLOAD POOL — the fourth instance of [`skep_util::permits`]'s mechanism
 /// and the fetch pool's twin ([`serve::FetchPool`]), disjoint from the
 /// reconstruction, class-scan and fetch pools by the borrow: a [`Permit`]
 /// names the pool that issued it, so no upload spends a slot of theirs and

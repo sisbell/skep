@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use serde_json::Value;
 use skep_namespace::PrincipalId;
+use skep_util::json::obj;
 
 use super::actor::Resolved;
 use super::reply::{refuse, refuse_handshake, Reply, TransportError};
@@ -13,7 +14,6 @@ use crate::auth::session::{
     handshake, parse_session_body, Actor, Opened, SessionBinding, Token, CHALLENGE_TTL_MS,
 };
 use crate::auth::OsEntropy;
-use crate::codec::obj;
 
 impl Daemon {
     /// `GET /challenge?principal=N` (AUTH-6.1): issue a nonce for ANY

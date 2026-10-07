@@ -278,26 +278,6 @@ fn negative_and_fractional_numbers_are_not_integers() {
     assert_eq!(p_nat(&n("7")).expect("the lenient integer form").to_string(), "7");
 }
 
-/// Marshal determinism in miniature: obj() sorts, so construction order
-/// cannot leak into bytes.
-#[test]
-fn obj_is_order_insensitive() {
-    let a = obj(vec![("b", Value::from(2u64)), ("a", Value::from(1u64))]);
-    let b = obj(vec![("a", Value::from(1u64)), ("b", Value::from(2u64))]);
-    assert_eq!(to_bytes(&a), to_bytes(&b));
-}
-
-/// The duplicate-key rule [`obj`] states and `refuse_with` leans on: the
-/// LAST pair given wins, which is what lets `refuse_with` append `error`
-/// behind a caller's fields and be sure the field list cannot displace
-/// it.
-#[test]
-fn obj_keeps_the_last_of_duplicate_keys() {
-    let v = obj(vec![("k", Value::from(1u64)), ("a", Value::from(9u64)), ("k", Value::from(2u64))]);
-    assert_eq!(v["k"], Value::from(2u64), "the last pair given wins");
-    assert_eq!(to_bytes(&v), br#"{"a":9,"k":2}"#.to_vec(), "and the keys still sort");
-}
-
 /// THE DOOR splits the presented `attest` from the request: on the
 /// daemon's dispatch path `Request::attest` is EMPTY whatever the frame
 /// carried, and the member rides beside it, unverified, for the check —

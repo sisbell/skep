@@ -95,16 +95,16 @@ use serde_json::Value;
 use skep_blobs::{Lease, LeaseState, Store, UploadId};
 use skep_kernel::MAX_SEGMENT_LEN;
 use skep_namespace::PrincipalId;
+use skep_util::json::{hex_string, obj};
+#[cfg(any(test, feature = "test-hooks"))]
+use skep_util::notice;
 
 use super::cell::{Cell, DESIGNATION};
 use super::index::CellIndex;
 use super::MediaOptions;
-use crate::codec::{hex_string, obj};
 use crate::limits::{
     DEFAULT_LIMIT_FLOOR_BYTES, DEFAULT_LIMIT_SHARE, MAX_BLOB_BYTES, MAX_STANDING_UPLOADS,
 };
-#[cfg(any(test, feature = "test-hooks"))]
-use crate::notice;
 
 /// THE LEASE INTERVAL's DAEMON DEFAULT — seven days, INTERIM: an upload
 /// plus an authoring interval below it, what a venue will hold unreferenced

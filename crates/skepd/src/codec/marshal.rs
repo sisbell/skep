@@ -3,7 +3,7 @@
 //! `JsonCodec::marshal_request` writes, the daemon's own rejections
 //! (`credential_refused_reply`, `registry_refused_reply`, the `key_set` row)
 //! — and the two name tables (`op_name`, `code_name`) both directions spell
-//! the wire through. Every object goes through [`obj`](super::obj).
+//! the wire through. Every object goes through [`obj`].
 
 use serde_json::Value;
 use skep_address::{Address, Nat, Span, SpanSet, Tumbler};
@@ -18,8 +18,9 @@ use skep_identity::{KeySet, SigAlgRow};
 use skep_kernel::{Attestation, Seq};
 use skep_links::{Endset, Invalid, Link, View};
 use skep_retrieval::{CorrPair, Deletions, DeliveryItem, Operand, RegionSpec, SpanFault, Spec};
+use skep_util::json::{hex_string, obj};
 
-use super::{hex_string, obj, to_bytes};
+use super::to_bytes;
 
 /// A rejection the DAEMON originates (the `credential_refused` and
 /// `registry_refused` families, and the `key_set` row's `not_an_account`),

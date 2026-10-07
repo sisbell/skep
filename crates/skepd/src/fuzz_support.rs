@@ -190,7 +190,7 @@ pub fn codec_roundtrip_oracle(frame: &[u8]) -> bool {
 /// `{"hex"}` form they may have come from. Re-exported rather than wrapped:
 /// it IS that function, and the fuzz tier is external to this library, so
 /// this is the path by which it reaches it.
-pub use crate::codec::hex_string as hex;
+pub use skep_util::json::hex_string as hex;
 
 // ── the HTTP oracle ──────────────────────────────────────────────────────
 

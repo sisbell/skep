@@ -1,8 +1,7 @@
 //! The class-scan pool (`MAX_CONCURRENT_CLASS_SCANS`, `ClassScans`, `ScanBusy`, `is_class_scan`).
 
 use skep_febe::Op;
-
-use crate::permits::{Permit, Permits};
+use skep_util::permits::{Permit, Permits};
 
 /// Concurrent CLASS SCANS admitted at `/op` at once (wire v7.9; PUB-8.36,
 /// PUB-8.37): the link-discovery reads [`is_class_scan`] enumerates, each of
@@ -39,7 +38,7 @@ pub(super) const MAX_CONCURRENT_CLASS_SCANS: usize = 2;
 /// later meter has a whole thing to copy rather than five pieces on
 /// [`Daemon`](super::Daemon).
 ///
-/// A second instance of [`crate::permits`]'s mechanism, and disjoint from
+/// A second instance of [`skep_util::permits`]'s mechanism, and disjoint from
 /// the reconstruction pool BY THE BORROW rather than by convention: a
 /// [`Permit`] names the pool that issued it, so no signature here can spend
 /// a reconstruction slot.

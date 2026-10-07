@@ -112,6 +112,7 @@ use serde_json::Value;
 use skep_address::Address;
 use skep_blobs::{BlobError, Finished, HashFunction, Stream, UploadId, UploadRecord};
 use skep_namespace::PrincipalId;
+use skep_util::json::obj;
 
 use super::actor::Resolved;
 use super::reply::{
@@ -122,7 +123,7 @@ use super::request::{sole_param, BodySource, HttpRequest};
 use super::Daemon;
 use crate::auth::policy::{upload_admission, UploadRefusal};
 use crate::auth::session::Actor;
-use crate::codec::{obj, wire_address};
+use crate::codec::wire_address;
 use crate::media::deposit_read::deposit_read;
 use crate::media::gate::{DepositScope, MediaGate};
 use crate::media::pruner::{self, PrunePass};
@@ -575,7 +576,7 @@ impl Daemon {
     /// the next open.
     pub(super) fn retire_asides(&self) {
         if let Err(e) = self.media.store().unlink_asides() {
-            crate::notice::line(format_args!(
+            skep_util::notice::line(format_args!(
                 "blob store: a replaced file's aside could not be unlinked: {e}"
             ));
         }

@@ -68,11 +68,12 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 use skep_engine::Engine;
 use skep_kernel::{Attestation, Seq};
+use skep_util::json::hex_string;
 
 use super::derived::LineFile;
 use super::super::sidecar::CommitsLog;
 use super::AttestStoreFailed;
-use crate::codec::{hex_string, parse_lower_hex_bytes};
+use crate::codec::parse_lower_hex_bytes;
 
 // The file is named BESIDE the fields its records carry, and both beside the
 // line's one writer ([`attest_fields`]) and its one reader
@@ -137,7 +138,7 @@ impl AttestStore {
                 Some(slot) => {
                     served.insert(*at, Arc::new(slot));
                 }
-                None => crate::notice::line(format_args!(
+                None => skep_util::notice::line(format_args!(
                     "{ATTEST_FILE} position {at} carries a slot this daemon cannot read"
                 )),
             }
@@ -165,7 +166,7 @@ impl AttestStore {
         let durable = self.file.append_synced(at, attest_fields(&slot));
         self.served.insert(at, Arc::new(slot));
         durable.map_err(|e| {
-            crate::notice::line(format_args!(
+            skep_util::notice::line(format_args!(
                 "{ATTEST_FILE}: position {at}'s line is not durable ({e}); every later write is \
                  refused until a restart, whose open rebuilds the line from the journal"
             ));

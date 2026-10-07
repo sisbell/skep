@@ -65,16 +65,16 @@ use skep_address::{document_of, Address, Level, Nat};
 use skep_content::Val;
 use skep_engine::World;
 use skep_febe::{ISpan, Op, OperationSurface, Rejection, Request, Response, SessionId};
+use skep_util::json::hex_string;
+use skep_util::permits::{Permit, Permits};
 
 use super::cell::{self, Class, DESIGNATION};
 use super::gate::MediaGate;
-use crate::codec::hex_string;
 use crate::limits::{
     FETCH_RECHECK_BYTES, FETCH_RECHECK_INTERVAL, MAX_BLOB_BYTES, MAX_CONCURRENT_FETCHES,
 };
-use crate::permits::{Permit, Permits};
 
-/// THE FETCH POOL — the third instance of [`crate::permits`]'s mechanism,
+/// THE FETCH POOL — the third instance of [`skep_util::permits`]'s mechanism,
 /// disjoint from the reconstruction pool and the class-scan pool by the
 /// borrow: a [`Permit`] names the pool that issued it, so no fetch spends a
 /// slot of either and neither spends one of these. [`MAX_CONCURRENT_FETCHES`]

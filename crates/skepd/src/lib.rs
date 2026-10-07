@@ -127,12 +127,13 @@ mod write_path;
 // and, a leaf beneath them, the cell's one parser.
 mod media;
 
-// The leaves: none knows anything of the daemon.
+// The leaves: none knows anything of the daemon. Two more leaves — the
+// permit pool the four bounded pools are built on and the operator's notice
+// line — and the codec's determinism helpers are `skep-util`'s, the support
+// crate below this one, shared with the media crate.
 mod codec;
 mod history;
 mod limits;
-mod notice;
-mod permits;
 mod serial;
 
 /// The shared fuzzing harness (hardening H2): the pure oracle and mutation
@@ -209,11 +210,11 @@ pub use skep_registry::SeedingRefusal;
 /// The permit the daemon's four test hooks hand out — one slot of the
 /// reconstruction pool, of the class-scan pool (wire v7.9), of the fetch
 /// pool or of the upload pool (wire.md §Media), the same guard type for all
-/// four. Public only because those hooks' return type must be nameable; not
-/// a stable API.
+/// four — `skep-util`'s, the one type every pool mints. Public only because
+/// those hooks' return type must be nameable; not a stable API.
 #[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
-pub use permits::Permit;
+pub use skep_util::permits::Permit;
 
 /// The auto-traits this crate promises without saying so. A caller running
 /// the server on a thread it owns depends on `Skepd: Send`, and no signature

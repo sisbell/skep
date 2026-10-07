@@ -1,7 +1,7 @@
 use super::*;
 
 /// A refusal is a status AND a name together: the body is built through
-/// the codec's sorting device (byte-deterministic whatever backs
+/// `obj`, the sorting device (byte-deterministic whatever backs
 /// serde_json's map) and the status comes from the same table the name
 /// does, so the wire.md pairing is checked rather than repeated.
 #[test]

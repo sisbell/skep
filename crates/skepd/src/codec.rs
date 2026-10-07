@@ -66,6 +66,7 @@ use skep_kernel::Attestation;
 use skep_links::{Endset, View, MAX_SLOT_SPANS};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{RegionSpec, Spec};
+use skep_util::json::{hex_nibble, obj};
 
 pub(crate) use marshal::{
     credential_refused_reply, j_attest, key_set_reply, op_name, registry_refused_reply,
@@ -400,22 +401,6 @@ fn parse_key_set(v: Value) -> PResult<DaemonOp> {
 /// the change feed measuring a row it then serves — keeps it without a copy.
 pub(crate) fn to_bytes(v: &Value) -> Vec<u8> {
     serde_json::to_vec(v).expect("serializing a serde_json::Value with string keys cannot fail")
-}
-
-/// Build a JSON object with keys sorted — THE determinism device. Every
-/// JSON object this crate emits is constructed through it — wire responses,
-/// transport-error bodies, the commit stream's event payloads, and the
-/// sidecar's own file lines — so canonical output is alphabetical-by-key
-/// under any serde_json map backend. The sort is STABLE, which is what
-/// makes "the last pair given wins" a fact about duplicate keys rather than
-/// an accident of the sort.
-pub(crate) fn obj(mut pairs: Vec<(&'static str, Value)>) -> Value {
-    pairs.sort_by_key(|&(k, _)| k);
-    let mut m = Map::new();
-    for (k, v) in pairs {
-        m.insert(k.to_string(), v);
-    }
-    Value::Object(m)
 }
 
 // ── parse (wire → Request) ──────────────────────────────────────────────
@@ -1242,53 +1227,11 @@ fn p_hex(s: &str) -> PResult<Vec<u8>> {
         .collect()
 }
 
-/// The ASCII hex table, LOWERCASE — the decode side of [`hex_string`], and
-/// the ONE mapping this crate holds from a hex byte to a nibble.
-///
-/// CASE IS POLICY and stays with each parser, which is the whole of what
-/// the three differ by: [`hex_digit`] folds it and names the offending
-/// character; [`parse_lower_hex`] REFUSES it, admitting only what
-/// [`hex_string`] emits — the parse behind the nonce, the session token, the
-/// published head's hashes and the media cells' hashes, so an uppercase nonce
-/// is a syntax fault whose nonce survives rather than a burned credential,
-/// and an uppercase cell hash spells no cell; and the session's signature
-/// parser (`auth::session::parse_case_free_hex`) folds it, the signature
-/// being decoded and never framed. None of them owns the table.
-pub(crate) fn hex_nibble(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        _ => None,
-    }
-}
-
-/// Exactly `N` bytes of LOWERCASE hex, or `None` — [`hex_string`]'s exact
-/// inverse at a fixed width, and the parse of every value this crate reads
-/// back only as its own emitter wrote it: the handshake nonce and the
-/// session token (AUTH-4.15, AUTH-4.17), the published head's hashes, a
-/// picture cell's `hash` and a blind cell's `commitment` (`media/cell.rs`,
-/// `media/blind.rs`: the canonical rule admits only what `encode` writes,
-/// M-I3 (a)), and the hash an operator copies from the inventory's listing
-/// into the pull (`tools::pull`). Each admits only what `hex_string`
-/// produced, so an uppercase value — or a signed pair, which a radix parse
-/// would read — is refused rather than normalized; what the refusal costs is
-/// stated on each caller. The REFUSAL is this function's own, in the byte it
-/// hands [`hex_nibble`].
-pub(crate) fn parse_lower_hex<const N: usize>(s: &str) -> Option<[u8; N]> {
-    if s.len() != N * 2 {
-        return None;
-    }
-    let mut raw = [0u8; N];
-    for (i, chunk) in s.as_bytes().chunks_exact(2).enumerate() {
-        raw[i] = (hex_nibble(chunk[0])? << 4) | hex_nibble(chunk[1])?;
-    }
-    Some(raw)
-}
-
 /// Any whole number of bytes of LOWERCASE hex, or `None` —
-/// [`parse_lower_hex`]'s variable-width twin under the same case policy:
-/// the parse of the attest store's `sig` (`feed-attest.log`), which this
-/// crate reads back only as [`hex_string`] wrote it. An odd length is
+/// [`parse_lower_hex`](skep_util::json::parse_lower_hex)'s variable-width
+/// twin under the same case policy: the parse of the attest store's `sig`
+/// (`feed-attest.log`), which this crate reads back only as
+/// [`hex_string`](skep_util::json::hex_string) wrote it. An odd length is
 /// refused ahead of the pairing, so no trailing half-byte is dropped in
 /// silence.
 pub(crate) fn parse_lower_hex_bytes(s: &str) -> Option<Vec<u8>> {
@@ -1299,21 +1242,6 @@ pub(crate) fn parse_lower_hex_bytes(s: &str) -> Option<Vec<u8>> {
         .chunks_exact(2)
         .map(|pair| Some((hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?))
         .collect()
-}
-
-/// Lowercase hex — the encoding behind `{"hex"}`, `{"atom_hex"}`, and the
-/// fuzz harness's reproduction form, so all three read the same bytes back.
-/// `pub` because `crate::fuzz_support` re-exports it as its `hex`: this
-/// module is private, so that re-export is the only public path to it, and a
-/// build without `test-hooks` has none.
-pub fn hex_string(b: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut s = String::with_capacity(b.len() * 2);
-    for &byte in b {
-        s.push(DIGITS[(byte >> 4) as usize] as char);
-        s.push(DIGITS[(byte & 0x0f) as usize] as char);
-    }
-    s
 }
 
 /// One hex character, case FOLDED — the content forms' policy: `{"hex"}`

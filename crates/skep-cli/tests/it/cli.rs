@@ -3,8 +3,9 @@
 //! non-canonical board, the person doors' terminal check, THE LOOP over the
 //! hosted arm (keygen → claim --hosted → bind → session → verify → health →
 //! fingerprint), the token's custody, the whole-set compare, `bind`'s
-//! landing question, a refused setting never read as an absent one, the
-//! plaintext warning, the default store, `bind`'s paste prompt on stderr.
+//! landing question, a refused setting never read as an absent one, a
+//! variable that is not text refused, the plaintext warning, the default
+//! store, `bind`'s paste prompt on stderr.
 
 use serde_json::Value;
 use skep_client::sheet::{KeyFile, Label, Seed};
@@ -12,7 +13,7 @@ use skep_client::sign::signer_from_seed;
 use skep_identity::{encode_enroll, parse_enroll, Enrollment};
 use skep_signature::HybridSigner;
 
-use crate::common::{origin, s, skep, spawn};
+use crate::common::{origin, s, skep, skep_os, spawn};
 
 const SEVEN: [&str; 7] = ["keygen", "claim", "session", "fingerprint", "verify", "health", "bind"];
 
@@ -285,6 +286,7 @@ fn verify_halts_on_a_planted_key_and_admits_the_honest_genesis_from_anchor_files
     assert_eq!(r.code, 3, "{r:?}");
     assert!(r.err.contains("NOT yours to keep as it stands (AUTH-5.53)"), "{}", r.err);
     assert!(r.err.contains("a key you did not send stands in the genesis") && r.err.contains("planted"), "{}", r.err);
+    assert!(r.err.contains("the acts by cell") && r.err.contains("the state is PERMANENT where the flags did not — or decline the account"), "{}", r.err);
     // Membership alone would pass: the one-key read does.
     let r = skep(&["verify", "--board", &board, "--dir", s(&store), "--principal", "1"], &[], None);
     assert_eq!(r.code, 0, "the one-key read sees nothing: {r:?}");
@@ -321,6 +323,11 @@ fn verify_halts_on_a_planted_key_and_admits_the_honest_genesis_from_anchor_files
     let r = skep(&["bind", "--board", &board, "--dir", s(&store), "--account", "1.0.1", "--principal", "1", "--anchor", s(&pa)], &[], None);
     assert_eq!(r.code, 3, "{r:?}");
     assert!(r.err.contains("NOT yours to keep"), "{}", r.err);
+    assert!(
+        r.err.contains("the acts by cell") && r.err.contains("the state is PERMANENT where the flags did not — the extra key is one the giver's hand can act with"),
+        "bind halts as at verify, the extra key named as the giver's to act with (§2.2): {}",
+        r.err
+    );
     assert!(!r.out.contains("agent space"), "no session, no act");
     let r = skep(&["bind", "--board", &board, "--dir", s(&store), "--account", "1.0.1", "--principal", "1", "--anchor", s(&pa), "--anchor", s(&pb)], &[], None);
     assert_eq!(r.code, 0, "{r:?}");
@@ -454,6 +461,47 @@ fn a_refused_setting_is_never_read_as_an_absent_one() {
     let r = skep(&["fingerprint", "--dir", s(&unreadable)], &[], None);
     assert_eq!(r.code, 3, "{r:?}");
     assert!(r.err.contains("bindings") && !r.out.contains("UNBOUND"), "{r:?}");
+}
+
+/// A VARIABLE THAT IS NOT TEXT IS REFUSED, NEVER READ AS ABSENT (§2.3's exit
+/// 2; `args.rs`'s `env_text`, in the daemon's words): each `SKEP_*` variable
+/// set to bytes that are not UTF-8 is exit 2 naming it, at a command that
+/// reads it — never the default store written in its place, the store's own
+/// keys listed, the store's lone binding standing in, the variable's absence
+/// refused instead, or the token on stdin closed.
+#[cfg(unix)]
+#[test]
+fn a_variable_that_is_not_text_is_refused_never_read_as_absent() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let not_text = OsStr::from_bytes(b"\xff");
+    // SKEP_KEYSTORE at `keygen`: nothing generated under ~/.skep.
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let r = skep_os(&["keygen", "--label", "k"], &[("HOME", home.as_os_str()), ("SKEP_KEYSTORE", not_text)], None);
+    assert_eq!(r.code, 2, "{r:?}");
+    assert!(r.err.contains("SKEP_KEYSTORE: the value is not UTF-8 text"), "{}", r.err);
+    assert!(!home.join(".skep").exists(), "nothing generated in the default store");
+    // The rest, beside a store holding a key and a binding that would stand
+    // in for the principal, with a token on stdin that would be closed.
+    let store = dir.path().join("store");
+    let r = skep(&["keygen", "--label", "k", "--dir", s(&store)], &[], None);
+    assert_eq!(r.code, 0, "{r:?}");
+    let dead = "http://127.0.0.1:1";
+    std::fs::write(store.join("bindings"), format!("{dead} 1 1.0.1 {}\n", r.lines()[0])).unwrap();
+    for (var, args) in [
+        ("SKEP_KEY", vec!["fingerprint", "--dir", s(&store)]),
+        ("SKEP_PRINCIPAL", vec!["verify", "--board", dead, "--dir", s(&store)]),
+        ("SKEP_BOARD", vec!["health"]),
+        ("SKEP_SESSION", vec!["session", "--close", "-", "--board", dead]),
+    ] {
+        let r = skep_os(&args, &[(var, not_text)], Some("ab".repeat(16).as_bytes()));
+        assert_eq!(r.code, 2, "{var}: {r:?}");
+        assert!(r.err.contains(&format!("{var}: the value is not UTF-8 text")), "{var}: {}", r.err);
+        assert!(r.out.is_empty(), "{var}: {}", r.out);
+    }
 }
 
 /// The plaintext non-loopback WARNING rides before any signed session, and

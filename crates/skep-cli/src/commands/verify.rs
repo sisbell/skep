@@ -4,90 +4,40 @@
 //! A pass is exit 0; whatever it finds is a halt, exit 3.
 
 use skep_client::ceremony::handshake::{key_face, Site};
-use skep_client::derive::records::{compare_whole_set, credential_records};
 use skep_client::derive::{origin_arm, precheck};
-use skep_client::halt::Halt;
 use skep_client::store::Purpose;
 
-use super::{board_of, data, difference_lines, halt, held_set, later_line, principal_or_bound, select_key, store_of, talk, usage};
+use super::{board_of, compare_genesis, data, held_set, principal_or_bound, select_key, store_of, talk, Stop};
 use crate::args::Command;
 
-pub fn verify(c: &Command) -> i32 {
-    let board = match board_of(c) {
-        Ok(b) => b,
-        Err(u) => return usage(u),
-    };
-    let store = match store_of(c) {
-        Ok(s) => s,
-        Err(u) => return usage(u),
-    };
-    let given = match c.principal() {
-        Ok(p) => p,
-        Err(u) => return usage(u),
-    };
+pub fn verify(c: &Command) -> Result<(), Stop> {
+    let board = board_of(c)?;
+    let store = store_of(c)?;
+    let given = c.principal()?;
+    let key_file = c.key()?;
     let json = c.switch("--json");
     let mut checks: Vec<&str> = Vec::new();
     // (1) THE ORIGIN ARM.
-    let health = match board.health() {
-        Ok(h) => h,
-        Err(h) => return halt(h),
-    };
-    if let Err(h) = origin_arm(board.signed(), &health) {
-        return halt(h);
-    }
+    let health = board.health()?;
+    origin_arm(board.signed(), &health)?;
     checks.push("origin");
     // (2) THE KEY ARM: `principal_prefix(n)`, then `key_set` at the set the
     // walk reaches, against the selected key.
-    let principal = match principal_or_bound(given, &store, &board) {
-        Ok(p) => p,
-        Err(h) => return halt(h),
-    };
+    let principal = principal_or_bound(given, &store, &board)?;
     // A READ of the key's public facts: `verify` signs nothing.
-    let key = match select_key(c, &store, &board, principal, Purpose::Read) {
-        Ok(k) => k,
-        Err(h) => return halt(h),
-    };
-    let pre = match precheck(&board, principal, &key.fingerprint) {
-        Ok(p) => p,
-        Err(h) => return halt(h),
-    };
+    let key = select_key(key_file.as_deref(), &store, &board, principal, Purpose::Read)?;
+    let pre = precheck(&board, principal, &key.fingerprint)?;
     checks.push("key_set");
     let own = [(key.fingerprint, key.public.clone())];
-    if let Err(h) = key_face(&board, &pre.walk, &key.fingerprint, &own, Site::Session) {
-        return halt(h);
-    }
+    key_face(&board, &pre.walk, &key.fingerprint, &own, Site::Session)?;
     // THE WHOLE-SET COMPARE, where the person holds what this device
     // composed (AUTH-4.58's detection; P25).
-    let mut later_lines = Vec::new();
-    let held = match held_set(&store, c.value("--payload", None).as_deref(), &c.all("--anchor"), &key) {
-        Ok(h) => h,
-        Err(h) => return halt(h),
-    };
-    if let Some(held) = held {
-        checks.push("payload");
-        let records = match credential_records(&board, &pre.walk.set_account, &own) {
-            Ok(r) => r,
-            Err(h) => return halt(h),
-        };
-        match compare_whole_set(&records, &pre.walk.set, &held) {
-            None => return halt(Halt::face("the account has no genesis record to compare against", "the admitted read found no enrollment record naming the account", "this is a board fault, or the account is not the one the facts name")),
-            Some(whole) => {
-                if !whole.differences.is_empty() {
-                    let lines = difference_lines(&whole.differences);
-                    return halt(Halt::face(
-                        format!("this account is NOT yours to keep as it stands (AUTH-5.53): the genesis record of {} differs from what you hold", pre.walk.set_account),
-                        lines.join("\n  "),
-                        "the acts by cell: a planted DEVICE key is retired from this device's own session; a planted ANCHOR only under an anchor of your own that survived; the state is PERMANENT where the flags did not — or decline the account",
-                    ));
-                }
-                later_lines.extend(whole.later.iter().map(later_line));
-            }
+    match held_set(&store, c.value("--payload").as_deref(), &c.all("--anchor"), &key)? {
+        Some(held) => {
+            checks.push("payload");
+            compare_genesis(&board, &pre.walk, &own, &held, "or decline the account")?;
         }
-    } else {
-        talk("the key arm is the one-key read — this key's membership and never the set's: pass --payload or --anchor to compare the genesis record whole");
-    }
-    for l in &later_lines {
-        talk(l);
+        None => talk("the key arm is the one-key read — this key's membership and never the set's: pass --payload or --anchor to compare the genesis record whole"),
     }
     talk("a block is invisible to both reads: a verify that passes can still meet 403 prefix_blocked at the next handshake");
     if json {
@@ -107,5 +57,5 @@ pub fn verify(c: &Command) -> i32 {
             data(format!("opens by reference against {}", pre.walk.set_account));
         }
     }
-    0
+    Ok(())
 }

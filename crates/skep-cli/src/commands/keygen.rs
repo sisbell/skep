@@ -19,9 +19,9 @@ use skep_client::sheet::{group_hex, Label};
 use skep_client::store::{KeySelector, KeyStore, Purpose};
 use skep_identity::{encode_enroll, Enrollment};
 
-use super::{data, halt, host_name_and_date, no_terminal, store_of, talk, usage, OUTSTANDING_ACT};
+use super::{data, host_name_and_date, person_door, store_of, talk, Stop, OUTSTANDING_ACT};
 use crate::args::Command;
-use crate::terminal::{has_terminal, Terminal};
+use crate::terminal::Terminal;
 
 /// AUTH-5.42's statements, rendered whenever a label is fixed — prompt or
 /// flag alike (§2.2 `keygen`), keyed to the venue.
@@ -51,50 +51,36 @@ fn custody_line(path: &Path) -> String {
     )
 }
 
-pub fn keygen(c: &Command) -> i32 {
-    let store = match store_of(c) {
-        Ok(s) => s,
-        Err(u) => return usage(u),
-    };
+pub fn keygen(c: &Command) -> Result<(), Stop> {
+    let store = store_of(c)?;
     let anchors = c.switch("--anchors");
-    if anchors && !has_terminal() {
-        return no_terminal("keygen --anchors");
+    if anchors {
+        person_door("keygen --anchors")?;
     }
-    let mut person = Terminal::new();
+    let mut person = Terminal;
     // The device-name box: `--label`, or asked; the statements whenever a
     // label is fixed; the domain test at the box (P13).
-    let label = match c.value("--label", None) {
-        Some(text) => match Label::new(&text) {
-            Ok(l) => {
-                for s in device_box_statements(anchors) {
-                    person.say(Public(Statement { rule: "AUTH-5.42", text: s }));
-                }
-                l
+    let label = match c.value("--label") {
+        Some(text) => {
+            let label = Label::new(&text).map_err(|fault| Halt::face(format!("the label is refused at the box: {fault}"), "AUTH-1.24's domain: non-empty, no line break, at most 128 bytes of UTF-8", "pass a label inside the domain"))?;
+            for s in device_box_statements(anchors) {
+                person.say(Public(Statement { rule: "AUTH-5.42", text: s }));
             }
-            Err(fault) => return halt(Halt::face(format!("the label is refused at the box: {fault}"), "AUTH-1.24's domain: non-empty, no line break, at most 128 bytes of UTF-8", "pass a label inside the domain")),
-        },
-        None => {
-            loop {
-                let text = match person.label(Public(LabelBox { title: "name this device".into(), statements: device_box_statements(anchors), default: None })) {
-                    Ok(t) => t,
-                    Err(_) => return halt(Halt::face("no device name was given", "the box was abandoned", "run `skep keygen --label <name>`, or answer the box")),
-                };
-                match Label::new(&text) {
-                    Ok(l) => break l,
-                    Err(fault) => person.say(Public(Statement { rule: "AUTH-1.24", text: format!("that name is refused at the box: {fault}") })),
-                }
-            }
+            label
         }
+        None => loop {
+            let text = person
+                .label(Public(LabelBox { title: "name this device".into(), statements: device_box_statements(anchors), default: None }))
+                .map_err(|_| Halt::face("no device name was given", "the box was abandoned", "run `skep keygen --label <name>`, or answer the box"))?;
+            match Label::new(&text) {
+                Ok(l) => break l,
+                Err(fault) => person.say(Public(Statement { rule: "AUTH-1.24", text: format!("that name is refused at the box: {fault}") })),
+            }
+        },
     };
-    let id = match store.generate(Some(label.clone())) {
-        Ok(id) => id,
-        Err(e) => return halt(e.into()),
-    };
+    let id = store.generate(Some(label.clone()))?;
     let path = store.key_path(&id.0);
-    let key = match store.select(&KeySelector::Path(&path), Purpose::Read) {
-        Ok(k) => k,
-        Err(e) => return halt(e.into()),
-    };
+    let key = store.select(&KeySelector::Path(&path), Purpose::Read)?;
     talk(custody_line(&path));
     let mut entries = Vec::new();
     if anchors {
@@ -102,10 +88,12 @@ pub fn keygen(c: &Command) -> i32 {
         // anchor pair with no board, statement (a) carrying the operator
         // sentence unconditionally; then the three-key payload for the
         // hosted signup.
-        let labels: Vec<Label> = match c.all("--anchor-label").iter().map(|l| Label::new(l)).collect::<Result<Vec<_>, _>>() {
-            Ok(ls) => ls,
-            Err(fault) => return halt(Halt::face(format!("an anchor label is refused at the box: {fault}"), "AUTH-1.24's domain", "pass labels inside the domain")),
-        };
+        let labels: Vec<Label> = c
+            .all("--anchor-label")
+            .iter()
+            .map(|l| Label::new(l))
+            .collect::<Result<_, _>>()
+            .map_err(|fault| Halt::face(format!("an anchor label is refused at the box: {fault}"), "AUTH-1.24's domain", "pass labels inside the domain"))?;
         let (host_name, date) = host_name_and_date();
         let opts = BackupOptions {
             labels,
@@ -115,13 +103,10 @@ pub fn keygen(c: &Command) -> i32 {
             host_name,
             date,
         };
-        let outcome = match backup_moment(&mut person, &Venue::DoorSide, &opts) {
-            Ok(o) => o,
-            Err(h) => {
-                talk("this form delegates nothing and leaves no board state behind: any anchor file written names no account and opens nothing, ever — destroy it, or keep it plainly marked dead and never beside a live pair");
-                return halt(h);
-            }
-        };
+        // An abandoned moment's disposition, said ahead of its halt.
+        let outcome = backup_moment(&mut person, &Venue::DoorSide, &opts).inspect_err(|_| {
+            talk("this form delegates nothing and leaves no board state behind: any anchor file written names no account and opens nothing, ever — destroy it, or keep it plainly marked dead and never beside a live pair");
+        })?;
         for a in &outcome.anchors {
             entries.push(Enrollment::new(a.public.clone(), true, Some(a.label.as_str().to_string())).expect("a label the box admitted"));
         }
@@ -141,5 +126,5 @@ pub fn keygen(c: &Command) -> i32 {
     // The fingerprint LAST, flat and grouped — never the bare public key.
     data(key.fingerprint.to_hex());
     data(group_hex(&key.fingerprint.to_hex()));
-    0
+    Ok(())
 }

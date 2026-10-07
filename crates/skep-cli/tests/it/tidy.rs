@@ -20,14 +20,22 @@
 //! the halts take `eprint!`, `eprintln!` and `stderr()`, which the scan does
 //! not count.
 //!
+//! A PROMPT HOLDS STDIN FOR ONE LINE. Every touch of stdin under `src/` — a
+//! `stdin(` handle — sits in one of the [`STDIN_READERS`]: `answer`, the one
+//! reader every prompt goes through, locking stdin for its one line alone;
+//! `has_terminal`, which reads nothing; and the whole reads of a `-`
+//! argument, `read_payload`'s and `session --close -`'s. So no prompt holds
+//! stdin while a payload or a token is read.
+//!
 //! THE SETTINGS ARE `args.rs`'s (§9 item 21). Every `SKEP_*` variable is
 //! named in code in `src/args.rs` alone, so no command reads a setting
 //! around the precedence a flag holds over its variable.
 //!
 //! Each scan asserts that it found what it allows — an edge between
-//! modules, a write in each writer, the five variables in `src/args.rs` —
-//! so a scan gone blind fails rather than passing a clean tree. Comments
-//! are not code, and neither is anything from an inline `mod tests {` on.
+//! modules, a write in each writer, a touch in each reader, the five
+//! variables in `src/args.rs` — so a scan gone blind fails rather than
+//! passing a clean tree. Comments are not code, and neither is anything
+//! from an inline `mod tests {` on.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -35,6 +43,10 @@ use std::path::{Path, PathBuf};
 /// The writers that may write to stdout: a file under `src/` and the
 /// column-0 function in it.
 const STDOUT_WRITERS: &[(&str, &str)] = &[("commands.rs", "data"), ("commands.rs", "data_verbatim"), ("main.rs", "main")];
+
+/// The functions that may touch stdin: a file under `src/` and the
+/// column-0 function in it.
+const STDIN_READERS: &[(&str, &str)] = &[("terminal.rs", "has_terminal"), ("terminal.rs", "answer"), ("commands.rs", "read_payload"), ("commands/session.rs", "session")];
 
 /// §9 item 21's variables — every one `src/args.rs` reads.
 const VARIABLES: &[&str] = &["SKEP_BOARD", "SKEP_KEY", "SKEP_KEYSTORE", "SKEP_PRINCIPAL", "SKEP_SESSION"];
@@ -90,6 +102,31 @@ fn every_module_names_only_itself_and_modules_declared_above_it() {
 
 #[test]
 fn stdout_is_written_by_the_three_writers_alone() {
+    confined(
+        writes_stdout,
+        STDOUT_WRITERS,
+        "writes to stdout",
+        "stdout carries DATA alone (§2.4): write through `data` or `data_verbatim`, and talk through `talk` or the terminal's prompts",
+    );
+}
+
+#[test]
+fn stdin_is_read_by_answer_and_the_dash_arguments_alone() {
+    confined(
+        touches_stdin,
+        STDIN_READERS,
+        "touches stdin",
+        "every prompt is read through `terminal::answer`, which locks stdin for its one line alone, and a `-` argument is read \
+         whole by `read_payload` or `session --close -`",
+    );
+}
+
+/// Asserts that every code line under `src/` that `hits` matches sits in
+/// one of `allowed` — a file under `src/` and the column-0 function in it —
+/// and that each of `allowed` holds such a line, so a scan gone blind fails
+/// rather than passing a clean tree; `does` says what a matched line does,
+/// `rule` what a stray one breaks.
+fn confined(hits: fn(&str) -> bool, allowed: &[(&str, &str)], does: &str, rule: &str) {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = Vec::new();
     rust_files(&src, &mut files);
@@ -104,27 +141,22 @@ fn stdout_is_written_by_the_three_writers_alone() {
             } else if code == "}" {
                 within = None;
             }
-            if !writes_stdout(code) {
+            if !hits(code) {
                 continue;
             }
             match within.as_deref() {
-                Some(f) if STDOUT_WRITERS.contains(&(shown.as_str(), f)) => found.push((shown.clone(), f.to_string())),
-                _ => faults.push(format!("src/{shown}:{n}: `{}` writes to stdout", code.trim())),
+                Some(f) if allowed.contains(&(shown.as_str(), f)) => found.push((shown.clone(), f.to_string())),
+                _ => faults.push(format!("src/{shown}:{n}: `{}` {does}", code.trim())),
             }
         }
     }
-    for (file, f) in STDOUT_WRITERS {
+    for (file, f) in allowed {
         assert!(
             found.iter().any(|(fl, fu)| fl == file && fu == f),
-            "src/{file}: `{f}` writes nothing to stdout that this scan reads: the writer or the forms it reads have moved"
+            "src/{file}: `{f}` {does} nowhere this scan reads: the function or the forms the scan reads have moved"
         );
     }
-    assert!(
-        faults.is_empty(),
-        "stdout carries DATA alone (§2.4): write through `data` or `data_verbatim`, and talk through `talk` or the terminal's \
-         prompts:\n{}",
-        faults.join("\n")
-    );
+    assert!(faults.is_empty(), "{rule}:\n{}", faults.join("\n"));
 }
 
 #[test]
@@ -157,6 +189,11 @@ fn every_skep_variable_is_named_in_args_alone() {
 /// `eprint!` or `eprintln!` it is the tail of — or a `stdout(` handle.
 fn writes_stdout(code: &str) -> bool {
     ["print!", "println!", "stdout("].iter().any(|needle| code.match_indices(needle).any(|(i, _)| !code[..i].ends_with(is_ident_char)))
+}
+
+/// Whether `code` touches stdin: a `stdin(` handle.
+fn touches_stdin(code: &str) -> bool {
+    code.match_indices("stdin(").any(|(i, _)| !code[..i].ends_with(is_ident_char))
 }
 
 /// The function a column-0 `fn` line opens — with or without a visibility —

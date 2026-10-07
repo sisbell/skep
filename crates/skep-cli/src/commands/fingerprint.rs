@@ -8,7 +8,7 @@ use skep_client::sheet::{group_hex, render_inert};
 use skep_client::store::{Binding, KeyFacts, KeySelector, Purpose, StoreError};
 use skep_identity::{encode_enroll, Enrollment};
 
-use super::{data, halt, store_of, usage, OUTSTANDING_ACT};
+use super::{data, store_of, Stop, OUTSTANDING_ACT};
 use crate::args::Command;
 
 /// The handoff recipient's clause of the outstanding-act line, its fourth
@@ -18,42 +18,33 @@ use crate::args::Command;
 const ACCEPT_CLAUSE: &str = "Where this key was made at `skep accept`: the outstanding act is the giver's genesis and their reply, then `skep \
      bind`, and the re-offer is `skep accept --reprint`, never `--payload` here.";
 
-pub fn fingerprint(c: &Command) -> i32 {
-    let store = match store_of(c) {
-        Ok(s) => s,
-        Err(u) => return usage(u),
-    };
+pub fn fingerprint(c: &Command) -> Result<(), Stop> {
+    let store = store_of(c)?;
+    let key_file = c.key()?;
     // An unreadable bindings file halts naming it: read as an empty one, it
     // would list every key UNBOUND and name the wrong act.
-    let bindings = match store.all_bindings() {
-        Ok(b) => b,
-        Err(e) => return halt(e.into()),
-    };
-    let keys: Vec<KeyFacts> = if let Some(path) = c.key() {
-        match store.select(&KeySelector::Path(&path), Purpose::Read) {
-            Ok(k) => vec![k],
-            Err(e) => return halt(e.into()),
-        }
-    } else if let Some(select) = c.value("--select", None) {
+    let bindings = store.all_bindings()?;
+    let keys: Vec<KeyFacts> = if let Some(path) = key_file {
+        vec![store.select(&KeySelector::Path(&path), Purpose::Read)?]
+    } else if let Some(select) = c.value("--select") {
         match store.select(&KeySelector::select(&select), Purpose::Read) {
             Ok(k) => vec![k],
             Err(StoreError::Ambiguous { keys }) => {
                 let list: Vec<String> = keys.iter().map(|k| format!("{} {}", k.fingerprint, k.label.as_deref().map(render_inert).unwrap_or_default())).collect();
-                return halt(Halt::face(format!("`{select}` matches more than one key"), format!("neither a fingerprint prefix nor a label is unique by rule (AUTH-5.3):\n  {}", list.join("\n  ")), "give a longer prefix; never a pick"));
+                return Err(Halt::face(format!("`{select}` matches more than one key"), format!("neither a fingerprint prefix nor a label is unique by rule (AUTH-5.3):\n  {}", list.join("\n  ")), "give a longer prefix; never a pick").into());
             }
-            Err(StoreError::NotFound { select }) => return halt(Halt::face(format!("no key in the store matches `{select}`"), "the store's keys are listed by `skep fingerprint --dir`", "check the selector")),
-            Err(e) => return halt(e.into()),
+            Err(StoreError::NotFound { select }) => return Err(Halt::face(format!("no key in the store matches `{select}`"), "the store's keys are listed by `skep fingerprint --dir`", "check the selector").into()),
+            Err(e) => return Err(e.into()),
         }
     } else {
-        match store.list() {
-            Ok(keys) => keys,
-            Err(e) => return halt(e.into()),
-        }
+        store.list()?
     };
     let any_binding = bindings.iter().any(|b| matches!(b, Binding::Enrollment { .. }));
     let mut json_rows = Vec::new();
     for key in &keys {
         let fp = key.fingerprint;
+        // The key's enrollment record, where `--payload` asks for it.
+        let record = c.switch("--payload").then(|| encode_enroll(&[Enrollment::new(key.public.clone(), key.anchor, key.label.clone()).expect("a stored label is in the domain")]));
         let bound: Vec<String> = bindings
             .iter()
             .filter_map(|b| match b {
@@ -71,7 +62,7 @@ pub fn fingerprint(c: &Command) -> i32 {
                 "path": key.path.display().to_string(),
                 "bindings": bound,
                 "unbound": unbound,
-                "payload": c.switch("--payload").then(|| encode_enroll(&[Enrollment::new(key.public.clone(), key.anchor, key.label.clone()).expect("a stored label is in the domain")])),
+                "payload": record,
             }));
             continue;
         }
@@ -97,12 +88,12 @@ pub fn fingerprint(c: &Command) -> i32 {
             };
             data(format!("{state}: `skep fingerprint --select <fp> --payload` re-prints this key's payload. {OUTSTANDING_ACT}{claim} {ACCEPT_CLAUSE}"));
         }
-        if c.switch("--payload") {
-            data(encode_enroll(&[Enrollment::new(key.public.clone(), key.anchor, key.label.clone()).expect("a stored label is in the domain")]));
+        if let Some(record) = &record {
+            data(record);
         }
     }
     if c.switch("--json") {
         data(serde_json::Value::Array(json_rows).to_string());
     }
-    0
+    Ok(())
 }

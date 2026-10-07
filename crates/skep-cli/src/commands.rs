@@ -1,20 +1,18 @@
 //! THE THIRTEEN COMMANDS, each exactly as `client.md` §2.2 writes it — one
 //! file per command beneath this one, each a `pub fn` that `main`
-//! dispatches to, every walk a library call — and what they share, private
-//! here and so visible to each of them: the two streams, stdout DATA
-//! (`data`, `data_verbatim`) and stderr TALK (`talk`) (§2.4); the refusals
-//! and §2.3's exit codes (`halt`, `usage`, `no_terminal`), `usage` public
-//! for `main`'s refusal of a command line it cannot parse; the plumbing from
-//! the flags to a board, a store, a payload, a principal and a key; the
-//! three facts' one spelling (`facts`); the outstanding-act line `keygen`
-//! and `fingerprint` share (`OUTSTANDING_ACT`); and the whole-set compare's
-//! held set and lines.
+//! dispatches to and that answers `Ok` or the [`Stop`] it came to, every
+//! walk a library call — and what they share, private here and so visible
+//! to each of them: the two streams, stdout DATA (`data`, `data_verbatim`)
+//! and stderr TALK (`talk`) (§2.4); the stops and §2.3's exit codes
+//! (`Stop`, and `exit_code`, the one place a stop's block and its code are
+//! chosen — `main`'s refusal of a command line it cannot parse among
+//! them; `person_door`, the person doors' check); the plumbing from the
+//! flags to a board, a store, a payload, a principal and a key; the three
+//! facts' one spelling (`facts`); the outstanding-act line `keygen` and
+//! `fingerprint` share (`OUTSTANDING_ACT`); and the whole-set compare, from
+//! the held set to its halt (`held_set`, `compare_genesis`).
 //! A halt is one block on stderr: the state, its cause, the one act
 //! (AUTH-5.66; AUTH-5.67's key-file cell naming the path and the state).
-//! THE PERSON DOORS — `claim`'s notebook arm, `keygen --anchors`, `enroll`'s
-//! comparison, `recover`, `retire`, `rotate`, `handoff` with `--payload`,
-//! `accept` without `--reprint` — refuse without a controlling terminal
-//! through the CLI's `Person` (§2.4: the CLI's check, never the walk's).
 
 mod accept;
 mod bind;
@@ -48,15 +46,79 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 
 use skep_client::board::Board;
-use skep_client::derive::records::{Difference, Held};
-use skep_client::derive::Mode;
+use skep_client::derive::records::{compare_whole_set, credential_records, Difference, Held};
+use skep_client::derive::{Mode, Walk};
 use skep_client::dial::PlainHttp;
 use skep_client::halt::Halt;
 use skep_client::sheet::{render_inert, Facts};
 use skep_client::store::{arm4_face, FileStore, KeyFacts, KeySelector, Purpose, StoreError};
-use skep_identity::Fingerprint;
+use skep_identity::{Fingerprint, PublicKey};
 
 use crate::args::{Command, Usage, HELP};
+use crate::terminal::has_terminal;
+
+/// Why a command stopped short of exit 0 (§2.3). Commands name their stops
+/// with `?`; [`exit_code`] is the one place a stop's stderr block and its
+/// code are chosen together.
+pub enum Stop {
+    /// A usage refusal: exit 2, the help beneath it.
+    Usage(Usage),
+    /// A halt: the code it carries — 1 refused, 3 halt and surface, 4
+    /// transport.
+    Halt(Halt),
+    /// A person door reached without a controlling terminal, named as the
+    /// refusal names it: exit 3 (§2.4).
+    NoTerminal(&'static str),
+}
+
+impl From<Usage> for Stop {
+    fn from(u: Usage) -> Stop {
+        Stop::Usage(u)
+    }
+}
+
+impl From<Halt> for Stop {
+    fn from(h: Halt) -> Stop {
+        Stop::Halt(h)
+    }
+}
+
+/// A store refusal, faced as the library faces it (AUTH-5.67).
+impl From<StoreError> for Stop {
+    fn from(e: StoreError) -> Stop {
+        Stop::Halt(e.into())
+    }
+}
+
+/// A command's outcome rendered: 0, or the stop's one block on stderr and
+/// its exit code.
+pub fn exit_code(outcome: Result<(), Stop>) -> i32 {
+    let (block, code) = match outcome {
+        Ok(()) => return 0,
+        Err(Stop::Usage(u)) => (format!("{}\n\n{HELP}", u.0), 2),
+        Err(Stop::Halt(h)) => (h.to_string(), h.exit_code()),
+        Err(Stop::NoTerminal(door)) => (
+            format!(
+                "`{door}` is a person door and requires a controlling terminal — it reads its prompts from the terminal and refuses \
+                 without one, so a wrapper over stderr and stdin cannot satisfy the backup moment with no paper and no person. A script \
+                 that must drive this walk drives the library's scripted Person in-process."
+            ),
+            3,
+        ),
+    };
+    talk(format!("skep: {block}"));
+    code
+}
+
+/// A person door's check (§2.4: the CLI's, never a walk's), made before
+/// anything is generated; `ARCHITECTURE.md` §The command lists the doors.
+fn person_door(door: &'static str) -> Result<(), Stop> {
+    if has_terminal() {
+        Ok(())
+    } else {
+        Err(Stop::NoTerminal(door))
+    }
+}
 
 /// DATA, to stdout.
 fn data(line: impl AsRef<str>) {
@@ -77,29 +139,6 @@ fn data_verbatim(body: &[u8]) {
 /// TALK, to stderr.
 fn talk(line: impl AsRef<str>) {
     eprintln!("{}", line.as_ref());
-}
-
-/// A halt rendered as its one block, its exit code answered.
-fn halt(h: Halt) -> i32 {
-    talk(format!("skep: {h}"));
-    h.exit_code()
-}
-
-/// A usage refusal rendered with the help beneath it (§2.3's exit 2) — a
-/// command's, and `main`'s for a command line it cannot parse.
-pub fn usage(u: Usage) -> i32 {
-    talk(format!("skep: {}\n\n{HELP}", u.0));
-    2
-}
-
-/// The missing-TTY face (§2.4; §2.3's exit 3).
-fn no_terminal(door: &str) -> i32 {
-    talk(format!(
-        "skep: `{door}` is a person door and requires a controlling terminal — it reads its prompts from the terminal and refuses \
-         without one, so a wrapper over stderr and stdin cannot satisfy the backup moment with no paper and no person. A script \
-         that must drive this walk drives the library's scripted Person in-process."
-    ));
-    3
 }
 
 fn board_of(c: &Command) -> Result<Board, Usage> {
@@ -136,14 +175,15 @@ fn principal_or_bound(given: Option<u64>, store: &FileStore, board: &Board) -> R
     }
 }
 
-/// The store's key for this board and principal (§3.5's lookup, `--key`
-/// first), its public facts judged for `purpose` — an anchor file refused
-/// where the key signs and read where it does not (§2.2's selection test;
-/// P11) — its signer the store's (`KeyStore::signer`); the arm-4 face forked
-/// on the claimant.
-fn select_key(c: &Command, store: &FileStore, board: &Board, principal: u64, purpose: Purpose) -> Result<KeyFacts, Halt> {
-    let sel = match c.key() {
-        Some(path) => store.select(&KeySelector::Path(&path), purpose),
+/// The key file `key_file` names — `Command::key`'s answer, its refusal
+/// already returned as exit 2 by the caller — else the store's key for this
+/// board and principal (§3.5's lookup), its public facts judged for
+/// `purpose`: an anchor file refused where the key signs and read where it
+/// does not (§2.2's selection test; P11); its signer the store's
+/// (`KeyStore::signer`); the arm-4 face forked on the claimant.
+fn select_key(key_file: Option<&Path>, store: &FileStore, board: &Board, principal: u64, purpose: Purpose) -> Result<KeyFacts, Halt> {
+    let sel = match key_file {
+        Some(path) => store.select(&KeySelector::Path(path), purpose),
         None => store.select(&KeySelector::Board { origin: board.dialed(), principal: Some(principal) }, purpose),
     };
     match sel {
@@ -247,8 +287,40 @@ fn held_device(device: &KeyFacts) -> Held {
     Held { fingerprint: device.fingerprint, anchor: false, label: device.label.clone() }
 }
 
+/// THE WHOLE-SET COMPARE, run and faced (AUTH-4.58's detection; P25) — at
+/// `verify` and at `bind`, which "halts as at `verify`" (§2.2): the genesis
+/// record of the set `walk` reached, entry for entry against `held`; each
+/// LATER act one line of TALK (P27); any difference a halt in AUTH-5.53's
+/// terms naming that set's account, its act the acts by cell (§2.2
+/// `verify`; AUTH-4.56) and then `site`, the site's own last clause; a set
+/// with no genesis record a halt.
+fn compare_genesis(board: &Board, walk: &Walk, own: &[(Fingerprint, PublicKey)], held: &[Held], site: &str) -> Result<(), Halt> {
+    let records = credential_records(board, &walk.set_account, own)?;
+    let Some(whole) = compare_whole_set(&records, &walk.set, held) else {
+        return Err(Halt::face(
+            "the account has no genesis record to compare against",
+            "the admitted read found no enrollment record naming the account",
+            "this is a board fault, or the account is not the one the facts name",
+        ));
+    };
+    if !whole.differences.is_empty() {
+        return Err(Halt::face(
+            format!("this account is NOT yours to keep as it stands (AUTH-5.53): the genesis record of {} differs from what you hold", walk.set_account),
+            difference_lines(&whole.differences).join("\n  "),
+            format!(
+                "the acts by cell: a planted DEVICE key is retired from this device's own session; a planted ANCHOR only under an anchor of \
+                 your own that survived; the state is PERMANENT where the flags did not — {site}"
+            ),
+        ));
+    }
+    for l in &whole.later {
+        talk(later_line(l));
+    }
+    Ok(())
+}
+
 /// The whole-set compare's differences, one line each in AUTH-5.53's terms —
-/// the face `verify` and `bind` halt with alike.
+/// the cause [`compare_genesis`]'s halt gives.
 fn difference_lines(diffs: &[Difference]) -> Vec<String> {
     diffs
         .iter()
@@ -270,7 +342,7 @@ fn difference_lines(diffs: &[Difference]) -> Vec<String> {
 }
 
 /// A later act the compare reads off the current set beyond the genesis
-/// record, one line of TALK at `verify` and `bind` alike.
+/// record, one line of TALK [`compare_genesis`] says.
 fn later_line(l: &Held) -> String {
     format!("later act: {} anchor={} label={}", l.fingerprint, l.anchor, l.label.as_deref().map(render_inert).unwrap_or_else(|| "(none)".into()))
 }
@@ -288,5 +360,20 @@ mod tests {
         assert!(!host.is_empty() && !host.contains('.') && host == host.to_lowercase(), "{host}");
         assert_eq!(civil_date(0), "1970-01-01");
         assert_eq!(date.len(), "yyyy-mm-dd".len(), "{date}");
+    }
+
+    /// Every stop answers §2.3's code from the one renderer: a usage refusal
+    /// 2, a halt the code its family carries, a store refusal faced as a
+    /// halt, a person door without a terminal 3.
+    #[test]
+    fn every_stop_is_rendered_with_its_exit_code() {
+        assert_eq!(exit_code(Ok(())), 0);
+        assert_eq!(exit_code(Err(Usage("a command is required".into()).into())), 2);
+        assert_eq!(exit_code(Err(Halt::face("state", "cause", "act").into())), 3);
+        let refused = skep_client::Refused { status: 200, code: "credential_refused".into(), detail: None, op: None, body: serde_json::Value::Null };
+        assert_eq!(exit_code(Err(Halt::Refused(refused).into())), 1);
+        assert_eq!(exit_code(Err(Halt::Dial(skep_client::DialError::Connect("refused".into())).into())), 4);
+        assert_eq!(exit_code(Err(StoreError::NotFound { select: "zz".into() }.into())), 3);
+        assert_eq!(exit_code(Err(Stop::NoTerminal("retire"))), 3);
     }
 }

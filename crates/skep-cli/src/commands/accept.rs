@@ -13,60 +13,55 @@ use skep_client::dial::PlainHttp;
 use skep_client::halt::Halt;
 use skep_client::person::{Person, Public, Question};
 
-use super::{data, halt, host_name_and_date, no_terminal, store_of, usage};
+use super::{data, host_name_and_date, person_door, store_of, Stop};
 use crate::args::{Command, Usage};
-use crate::terminal::{has_terminal, Terminal};
+use crate::terminal::Terminal;
 
-pub fn accept(c: &Command) -> i32 {
-    let store = match store_of(c) {
-        Ok(s) => s,
-        Err(u) => return usage(u),
-    };
+pub fn accept(c: &Command) -> Result<(), Stop> {
+    let store = store_of(c)?;
     // `--board` judged before anything: an origin given badly is a usage
     // refusal, never a board asked for again nor one dropped.
-    let given_board = match c.board_given() {
-        Ok(b) => b,
-        Err(u) => return usage(u),
-    };
+    let given_board = c.board_given()?;
     // `--reprint`: the record from the artifacts' public members — not a
     // person door.
     if c.switch("--reprint") {
+        let key_file = c.key()?;
         let anchors: Vec<PathBuf> = c.all("--anchor").into_iter().map(PathBuf::from).collect();
-        return match accept_walk::reprint(&store, c.key().as_deref(), &anchors, given_board.as_ref()) {
-            Err(h) => halt(h),
-            Ok(record) => {
-                data(record);
-                0
-            }
-        };
+        data(accept_walk::reprint(&store, key_file.as_deref(), &anchors, given_board.as_ref())?);
+        return Ok(());
     }
-    if !has_terminal() {
-        return no_terminal("accept");
-    }
-    let mut person = Terminal::new();
+    person_door("accept")?;
+    let mut person = Terminal;
     // `--board` and `--account` REQUIRED: a run missing either ASKS and
     // generates nothing (AUTH RES-162).
     let board = match given_board {
         Some(o) => Board::new(o, PlainHttp::new()),
         None => {
-            let Ok(text) = person.ask(Public(Question { text: "the board the account is on (a canonical origin, from the giver): ".into() })) else { return halt(Halt::face("no board was named", "the beat asks and generates nothing", "re-run with --board")) };
-            match text.trim().parse::<skep_client::Origin>() {
-                Ok(o) => Board::new(o, PlainHttp::new()),
-                Err(e) => return usage(Usage(format!("--board: '{}' is {e}", text.trim()))),
-            }
+            let Ok(text) = person.ask(Public(Question { text: "the board the account is on (a canonical origin, from the giver): ".into() })) else {
+                return Err(Halt::face("no board was named", "the beat asks and generates nothing", "re-run with --board").into());
+            };
+            let origin = text.trim().parse::<skep_client::Origin>().map_err(|e| Usage(format!("--board: '{}' is {e}", text.trim())))?;
+            Board::new(origin, PlainHttp::new())
         }
     };
-    let account = match c.value("--account", None) {
+    let account = match c.value("--account") {
         Some(a) => a,
         None => match person.ask(Public(Question { text: "the address the giver handed you (--account): ".into() })) {
             Ok(a) if !a.trim().is_empty() => a.trim().to_string(),
-            _ => return halt(Halt::face("no address was named", "AUTH RES-162: the beat holds the address before the keys are made, and generates nothing without it", "ask the giver for the address and re-run with --account")),
+            _ => {
+                return Err(Halt::face(
+                    "no address was named",
+                    "AUTH RES-162: the beat holds the address before the keys are made, and generates nothing without it",
+                    "ask the giver for the address and re-run with --account",
+                )
+                .into())
+            }
         },
     };
     let (host_name, date) = host_name_and_date();
     let opts = AcceptOptions {
         account,
-        label: c.value("--label", None),
+        label: c.value("--label"),
         anchor_out: c.all("--anchor-out").into_iter().map(PathBuf::from).collect(),
         paper: c.switch("--paper"),
         no_anchors: c.switch("--no-anchors"),
@@ -74,14 +69,10 @@ pub fn accept(c: &Command) -> i32 {
         host_name,
         date,
     };
-    match accept_walk::accept(&board, &store, &mut person, &opts) {
-        Err(h) => halt(h),
-        Ok(a) => {
-            // The record FIRST (DATA for the giver), then the device key's
-            // fingerprint.
-            data(a.record);
-            data(a.device.to_hex());
-            0
-        }
-    }
+    let accepted = accept_walk::accept(&board, &store, &mut person, &opts)?;
+    // The record FIRST (DATA for the giver), then the device key's
+    // fingerprint.
+    data(accepted.record);
+    data(accepted.device.to_hex());
+    Ok(())
 }

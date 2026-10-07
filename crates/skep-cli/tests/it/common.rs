@@ -4,6 +4,7 @@
 
 #![allow(dead_code)]
 
+use std::ffi::OsStr;
 use std::io::{ErrorKind, Write};
 use std::net::TcpListener;
 use std::path::Path;
@@ -84,6 +85,13 @@ impl Run {
 /// Run `skep` with `args`, the `SKEP_*` environment scrubbed then `envs`
 /// set, `stdin` fed (closed at once where `None`).
 pub fn skep(args: &[&str], envs: &[(&str, &str)], stdin: Option<&[u8]>) -> Run {
+    let envs: Vec<(&str, &OsStr)> = envs.iter().map(|(k, v)| (*k, OsStr::new(*v))).collect();
+    skep_os(args, &envs, stdin)
+}
+
+/// [`skep`], each variable's value whatever the platform carries — bytes
+/// that are not UTF-8 text among them.
+pub fn skep_os(args: &[&str], envs: &[(&str, &OsStr)], stdin: Option<&[u8]>) -> Run {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_skep"));
     cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     for var in ["SKEP_BOARD", "SKEP_KEYSTORE", "SKEP_KEY", "SKEP_PRINCIPAL", "SKEP_SESSION"] {

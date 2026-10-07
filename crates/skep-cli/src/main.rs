@@ -15,14 +15,16 @@
 
 #![forbid(unsafe_code)]
 
-// The vocabulary — the commands, the flags, the switches and `HELP` — and
-// the settings, each flag beating its environment variable.
+// The grammar — each command's flags and switches, one row per command —
+// beside `HELP`, and the settings, each flag beating its environment
+// variable.
 mod args;
-// The `Person` over the terminal: every prompt, the sheet's box, and the
-// controlling-terminal check the person doors make.
+// The `Person` over the terminal: `answer`, the one reader every prompt
+// goes through, the sheet's box, and the controlling-terminal check the
+// person doors make.
 mod terminal;
 // The thirteen commands, one file each beneath it, and what they share: the
-// two streams, the refusals and their exit codes, the three facts' spelling.
+// two streams, the stops and their exit codes, the three facts' spelling.
 mod commands;
 
 use std::process::exit;
@@ -36,9 +38,9 @@ fn main() {
             exit(0);
         }
         Ok(Parsed::Command(c)) => c,
-        Err(u) => exit(commands::usage(u)),
+        Err(u) => exit(commands::exit_code(Err(u.into()))),
     };
-    let code = match parsed.command.as_str() {
+    let outcome = match parsed.command.as_str() {
         "keygen" => commands::keygen(&parsed),
         "claim" => commands::claim(&parsed),
         "session" => commands::session(&parsed),
@@ -52,7 +54,7 @@ fn main() {
         "rotate" => commands::rotate(&parsed),
         "handoff" => commands::handoff(&parsed),
         "accept" => commands::accept(&parsed),
-        other => commands::usage(Usage(format!("unknown command `{other}`"))),
+        other => Err(Usage(format!("unknown command `{other}`")).into()),
     };
-    exit(code);
+    exit(commands::exit_code(outcome));
 }

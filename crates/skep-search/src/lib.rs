@@ -12,7 +12,8 @@
 //! shell's half — the feed consumer, the directory, the triggers, the bridge
 //! call, the state event — is `client.md` §4e's and no part of this crate.
 //!
-//! Three of the design's six modules stand here (§1.2's table):
+//! Four of the design's six modules stand here (§1.2's table), the file's
+//! in three files:
 //!
 //! * [`mod@unit`] — the document model (§2.1, §2.4): [`Unit`], one document
 //!   version's arranged content, delivered in parts and JOINED; [`UnitKey`],
@@ -32,14 +33,25 @@
 //!   revision; the write side — `new`, `prepare`, `merge`, `index`,
 //!   `compacted`, `install` — and `stats`; the class check (§2.1) and THE
 //!   CEILING (§7.4), both made at `merge`.
+//! * The file (§5.1, §5.3, §5.4), in three: [`header`] — the typed
+//!   [`Header`] the embedder composes (`board`, `floor`, the per-range
+//!   records, the newest head's `H.k`), [`Chain`] and [`ChainAt`], and the
+//!   header line's one canonical writer and parser, `v` first;
+//!   [`mod@file`] — the body's layout, the CRC-32C trailer, [`Index::save`] and
+//!   [`Index::load`] with every disposition as [`LoadError`], the migration
+//!   from the stored text tagged by [`Index::migrated_from`], and the
+//!   aside's spelling, [`aside_name`]; [`resume`] — the resume read's
+//!   answers judged as a pure function, [`Resume::judge`] over a
+//!   [`ChainAnswer`] the shell fills.
 //!
 //! What later lanes add, so this surface reads as §1.4 minus them: the
 //! query and the answer — `Query::parse`, the evaluator, `rank`, `hit`,
-//! `Pair`, `keys_by_range` (§3; lane SR-3); the file — `save`, `load`,
-//! `Header`, `LoadError`, the aside and the resume dispositions (§5.1, §5.4;
-//! lane SR-2); §7's timing tests, reported (lane SR-4); the shell's
-//! embedding (`client.md` §4e; lane SH). The crate's `README.md` lists the
-//! same, and `ARCHITECTURE.md` §The search index the rules below.
+//! `Pair`, `keys_by_range` (§3; lane SR-3); §7's timing tests, reported
+//! (lane SR-4); the shell's embedding — the feed consumer, the directory,
+//! the file modes, the lock, the moving aside, the `/health` and `/chain?at`
+//! reads, the state event (`client.md` §4e; lane SH). The crate's
+//! `README.md` lists the same, and `ARCHITECTURE.md` §The search index the
+//! rules below.
 //!
 //! ## Rules that hold across its files
 //!
@@ -62,17 +74,37 @@
 //!   and every type here is `Send + Sync` so it can stand under one.
 //! * **Nothing of the network, the keys or the board** (§1.3): the
 //!   dependencies are `skep-address` and the two Unicode crates, and nothing
-//!   else — NOT `skepd`, NOT `skep-client`, NOT `serde_json`. Plain Rust
-//!   with `std` and no platform call, no feature, no target-specific code.
+//!   else — NOT `skepd`, NOT `skep-client`, NOT `serde_json`: the file's one
+//!   JSON line is written and read by the crate's own bounded code. Plain
+//!   Rust with `std` and no platform call, no feature, no target-specific
+//!   code.
+//! * **One file, one spelling, read whole** (§5.1; PATTERNS P35, P38): an
+//!   index is one versioned file, loaded whole; its header line has the one
+//!   spelling `save` writes and `parse` admits no other, `v` read first; its
+//!   trailer covers the header line and the body, so nothing damaged is
+//!   loaded as written. The file is DERIVED STATE: every refusal is a
+//!   disposition — faced, moved aside, migrated, rebuilt — and never a halt.
+//! * **The crate moves no file and reads no board** (§1.2, §5.4): `save`
+//!   and `load` take the `Write` and `Read` the embedder hands them; the
+//!   rename, the aside and the resume's reads are the shell's, the crate
+//!   spelling the aside's name and judging the resume over values alone.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod file;
+pub mod header;
 pub mod index;
+pub mod resume;
 pub mod token;
 pub mod unit;
 
+pub use file::{aside_name, crc32c, LoadError};
+pub use header::{
+    Chain, ChainAt, Grant, GrantKind, HeadRecord, Header, HeaderError, Parsed, RangeRecord, Refusal,
+};
 pub use index::{Compacted, Index, IndexError, Occurrence, Prepared, Stats, CEILING_BYTES};
+pub use resume::{ChainAnswer, Resume};
 pub use token::{fold, tokenize, Revision, Token, REVISION};
 pub use unit::{moved_head, Class, GapKind, Item, Kind, Unit, UnitError, UnitKey};
 
@@ -94,8 +126,15 @@ const _: fn() = || {
     owed::<Class>();
     owed::<Token>();
     owed::<Revision>();
+    owed::<Header>();
+    owed::<Chain>();
+    owed::<ChainAt>();
+    owed::<Resume>();
+    owed::<ChainAnswer>();
     // Every refusal too: a caller that boxes one meets
     // `Box<dyn Error + Send + Sync>`, which is the crossing form.
     owed::<IndexError>();
     owed::<UnitError>();
+    owed::<HeaderError>();
+    owed::<LoadError>();
 };

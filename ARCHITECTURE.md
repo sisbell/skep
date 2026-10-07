@@ -582,11 +582,12 @@ The end-to-end cells and the measurements run in
 structure live — implemented client-side over the /changes feed", the
 substrate itself search-free. TEXT AND ADDRESSES IN, HITS OUT — the crate
 parses no wire JSON, dials nothing, holds no token, knows no principal but
-as the class the embedder passes it, and reads and writes no file of its
-own; the FRONTEND's shell embeds it beside `skep-client`, and the shell's
-half — the feed consumer, the directory, the triggers, the bridge call, the
-state event — is `client.md` §4e's. Its modules are declared in
-`src/lib.rs`, each with a line saying what it holds. `unit` — the document
+as the class the embedder passes it, and reads and writes no file but
+through the `Read` and `Write` the embedder hands it; the FRONTEND's shell
+embeds it beside `skep-client`, and the shell's half — the feed consumer,
+the directory, the triggers, the bridge call, the state event — is
+`client.md` §4e's. Its modules are declared in `src/lib.rs`, each with a
+line saying what it holds. `unit` — the document
 model (§2.1, §2.4): `Unit`, one document version's arranged content
 delivered in parts under `MAX_DELIVERY_ITEMS` and JOINED, adjacent text
 items becoming one so a character split at a part's edge is whole again;
@@ -604,7 +605,18 @@ records. `index` — the inverted index with positions (§1.4, §5.1): the
 sorted dictionary, the postings with ordinals and ranges, the unit records
 with their term lists, the tombstones, the live counts; `Index::new`,
 `prepare`, `merge`, `index`, `compacted`, `install`, `compaction_due`,
-`stats`, `terms`; `IndexError`'s two refusals; `CEILING_BYTES`.
+`stats`, `terms`; `IndexError`'s refusals; `CEILING_BYTES`. `header` — the
+file's header (§5.1): the typed `Header` the embedder composes — `board`
+(a `Chain`), `floor`, the per-range records with `held` as a `ChainAt`
+pair, the refusals, the bare-row count and a granted range's `Grant`, the
+newest head's `HeadRecord` — and the header line's one canonical writer
+and parser, `encode` and `parse`, `v` first, no JSON crate; `HeaderError`.
+`file` — the body's layout and the CRC-32C trailer (§5.1), `Index::save`
+and `Index::load` with every disposition as `LoadError`, the migration
+from the stored text tagged by `Index::migrated_from`, the aside's
+spelling `aside_name` (§5.4). `resume` — the resume read's answers judged
+as a pure function, `Resume::judge` over the `ChainAnswer` the shell fills
+(§5.4).
 
 Rules that hold across its files:
 
@@ -633,26 +645,50 @@ Rules that hold across its files:
   crosses the embedder's lock is `Send + Sync`, asserted in the library.
 - **Nothing of the network, the keys or the board** (§1.3). The
   dependencies are `skep-address` and the two Unicode crates, and nothing
-  else — NOT `skepd`, NOT `skep-client`, NOT `serde_json`; no feature, no
-  platform call, no target-specific code. The two crates' tables are one
-  Unicode version, which the tokenizer revision names and a test holds.
+  else — NOT `skepd`, NOT `skep-client`, NOT `serde_json`: the file's one
+  JSON line is written and read by the crate's own bounded code; no
+  feature, no platform call, no target-specific code. The two crates'
+  tables are one Unicode version, which the tokenizer revision names and a
+  test holds.
+- **One file, one spelling, read whole** (§5.1; PATTERNS P35, P38). An
+  index is one versioned file, loaded whole. Its header line has the one
+  spelling `save` writes and `parse` admits no other — `v` read first, a
+  `v` above 1 faced as a newer skep's before any other member is judged —
+  and its CRC-32C trailer covers the header line and the body, so nothing
+  damaged is loaded as written. `load` judges in one order: the line, the
+  class against the one expected, the tokenizer, then the body. The file
+  is DERIVED STATE (P22): every refusal is a disposition — a newer `v` or
+  tokenizer faced and the file left, another class's file moved aside, an
+  older tokenizer migrated from the stored text, a damaged file rebuilt —
+  and never a halt.
+- **The crate moves no file and reads no board** (§1.2, §5.4). `save` and
+  `load` take the `Write` and `Read` the embedder hands them; the save's
+  rename, the aside's rename and the resume's `/chain?at` and `H.k` reads
+  are the shell's. The crate spells the aside's name and judges the resume
+  as a pure function over values the shell hands in.
 - **The surface grows by lane, against these names.** The query, the
   ranking, the hit, `Pair` and the one read over the keys are the query
-  lane's; `save`, `load`, the `Header` and the file's dispositions are the
-  file lane's; §7's timing tests the budgets lane's; the embedding the
-  shell's. The crate's `README.md` lists them.
+  lane's; §7's timing tests the budgets lane's; the embedding the shell's.
+  The crate's `README.md` lists them.
 
 Its unit suites sit beside their code: `unit/tests.rs` (the join, the item
 table's binary search, the contiguity refusal, the head rule),
 `token/tests.rs` (the Unicode version pair, the fold's reach and its
-residue, the ranges across a gap and a hex stretch) and `index/tests.rs`
-(the postings' shape, the tombstone and the live counts, compaction and
-its trigger, the ceiling's arithmetic, `seen`). Its integration suite is
-one binary, `tests/it/`: `cases` (§7.2's twenty-two tokenizer cases, each
-with its byte range) and `index` (the write side under the design's fence:
-the class check, one class per index, the ceiling at the real constant,
-replacement, the lock split under an `RwLock` of the test's own, the join
-across the parts' edge, the range across a `Gap` and a `hex` stretch).
+residue, the ranges across a gap and a hex stretch), `index/tests.rs` (the
+postings' shape, the tombstone and the live counts, compaction and its
+trigger, the ceiling's arithmetic, `seen`), `header/tests.rs` (the
+canonical bytes, the one spelling both ways, `v` first, every re-spelling,
+the unknown member), `file/tests.rs` (the CRC-32C check value, the codecs,
+the layout, the round trip, the trailer over the header line, the
+dispositions in `load`'s order, the migration round trip, a damaged body by
+section) and `resume/tests.rs` (one test per arm). Its integration suite
+is one binary, `tests/it/`: `cases` (§7.2's twenty-two tokenizer cases,
+each with its byte range), `index` (the write side under the design's
+fence: the class check, one class per index, the ceiling at the real
+constant, replacement, the lock split under an `RwLock` of the test's own,
+the join across the parts' edge, the range across a `Gap` and a `hex`
+stretch), `file` (§8.3's file dispositions at the public surface, one test
+each) and `resume` (the open's judgment over a loaded header).
 
 ## The client, `skep-client`
 

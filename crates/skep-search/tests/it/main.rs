@@ -6,14 +6,18 @@
 //! (§5.2 D7), the ceiling at the real constant (§7.4), replacement (§5.1),
 //! prepare under no lock and install by one swap (§5.6), the join across the
 //! parts' edge (§2.1) and the range across a `Gap` and a `hex` stretch
-//! (§2.3). Nothing but module declarations and the fixtures they share
-//! belongs here.
+//! (§2.3); `file` — the file's dispositions at the public surface, §8.3's
+//! list one by one (§5.1, §5.4); `resume` — the open's judgment over a
+//! loaded header and the wire's answers (§5.4). Nothing but module
+//! declarations and the fixtures they share belongs here.
 
 mod cases;
+mod file;
 mod index;
+mod resume;
 
 use skep_address::{validate, Address, Nat, Tumbler};
-use skep_search::{Class, Item, Kind, Unit, UnitKey};
+use skep_search::{Chain, ChainAt, Class, Item, Kind, Unit, UnitKey};
 
 /// A T4-valid address from its components.
 pub fn addr(comps: &[u32]) -> Address {
@@ -30,4 +34,14 @@ pub fn key(n: u32) -> UnitKey {
 pub fn text_unit(class: Class, n: u32, bytes: &[u8]) -> Unit {
     let item = Item::Text { start: 1, bytes: bytes.to_vec() };
     Unit::new(key(n), None, Kind::Edition, class, 1, vec![item]).expect("one extent")
+}
+
+/// A chain of one repeated byte.
+pub fn chain(fill: u8) -> Chain {
+    Chain::from_bytes([fill; 32])
+}
+
+/// A `(position, chain)` pair over `chain(fill)`.
+pub fn at(position: u64, fill: u8) -> ChainAt {
+    ChainAt { position, chain: chain(fill) }
 }

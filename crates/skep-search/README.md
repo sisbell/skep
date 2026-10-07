@@ -2,9 +2,10 @@
 
 The search index a client embeds: one unit per document version's arranged
 content, a tokenizer over UAX #29 word boundaries with the accent,
-apostrophe and format-control folds, and an inverted index with positions
-behind one concrete type — the reader's own index of a board's text, built
-from the reader's own reads of the feed, the substrate staying search-free.
+apostrophe and format-control folds, an inverted index with positions
+behind one concrete type, and one versioned file per index with its
+dispositions — the reader's own index of a board's text, built from the
+reader's own reads of the feed, the substrate staying search-free.
 
 Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substrate in the Project Xanadu lineage.
 
@@ -13,8 +14,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 A LIBRARY the frontend's shell embeds beside `skep-client` (the design's
 `search.md` §1.2; R9b, ux-FC2 (1), sx-D1). TEXT AND ADDRESSES IN, HITS OUT:
 it parses no wire JSON, dials nothing, holds no token, knows no principal
-but as the class the embedder passes it, and reads and writes no file of
-its own. Its parts, each under the design rule it realizes:
+but as the class the embedder passes it, and reads and writes no file but
+through the `Read` and `Write` the embedder hands `load` and `save`. Its
+parts, each under the design rule it realizes:
 
 - **The document model**, `unit` (§2.1, §2.4) — `Unit`, one document
   version's arranged content, read over its whole content-subspace extent
@@ -65,17 +67,47 @@ its own. Its parts, each under the design rule it realizes:
   tombstoned units, and `install`, ONE SWAP; `compaction_due`, the trigger
   in dead postings past an eighth of the live; `stats`, the live counts with
   the ceiling and `seen`, the units offered past it; `terms`, the live
-  dictionary in order. `IndexError` names the two refusals.
+  dictionary in order. `IndexError` names the two refusals and a failed
+  save's writer.
+- **The file**, `header`, `file` and `resume` (§5.1, §5.3, §5.4) — ONE
+  VERSIONED FILE PER INDEX, loaded whole. `Header`, the typed header the
+  embedder composes and `load` hands back: `board` (`Chain`, the 64
+  lowercase hex of `H.1`), `floor`, the per-range `RangeRecord`s — `under`,
+  `held` as a `ChainAt` pair, the recorded `Refusal`s, the bare-row count,
+  a granted range's `Grant {kind, issuer}` — and the newest head's
+  `HeadRecord`. The header LINE, one JSON object in the key file's
+  conventions, written by `header::encode` and read by `header::parse`, the
+  one canonical parser: `v` first — a `v` above 1 faced as a newer skep's
+  before any other member is judged — then the line admitted only as its
+  own re-encoding, any other spelling `Damaged`, an unknown member refused
+  by name; no JSON crate. `Index::save`, the whole index to one writer: the
+  line (`kind`, `principal` and `tokenizer` from the `Index` alone), seven
+  length-prefixed body sections (the range records, the head's pair,
+  `seen`, the sorted dictionary, the unit records with their stored text
+  and term lists, the delta-coded postings, the live counts) and a CRC-32C
+  trailer over the header line and the body, computed in-crate.
+  `Index::load(from, expected)`, the whole file from one reader, in order:
+  the line; the class against `expected` — `LoadError::OtherClass`, both
+  named, before the body is read; the tokenizer — `NewerTokenizer`, faced,
+  the body unread; the body under its trailer — `Damaged`, naming what; an
+  older tokenizer revision MIGRATED from the stored text, the result at the
+  running revision and tagged by `Index::migrated_from` so the embedder
+  saves it. `aside_name`, the aside's spelling
+  `<name>.aside.<chain>.<n>`, the shell's rename. `Resume::judge`, the
+  resume read's verdict as a pure function over a `ChainAnswer` the shell
+  fills: `Equal`, `FromTheFloor`, `Diverged`, `BeyondHead`,
+  `DifferentChain`, `Busy`. The crate moves no file and reads no board.
 
 The ceiling (`CEILING_BYTES`, §7.4) is an INTERIM PIN at the records tier's
 own size — §7.3's cut re-measured to the byte, 93,075,924 bytes over 3,598
 files at the design repository's `b17656e9` — the floor ITEM 2 RULED (d)
 fixes, held until lane SR-4 reports M1 and M5 over that tier. Its rules —
 one class per index, cut once at `merge`, prepare under no lock and install
-by one swap, nothing of the network, the keys or the board — are in its
-crate root (`src/lib.rs`) and in the workspace's `ARCHITECTURE.md` §The
-search index. It depends on `skep-address` and the two Unicode crates
-alone: NOT `skepd`, NOT `skep-client`, NOT `serde_json`.
+by one swap, nothing of the network, the keys or the board, one file in one
+spelling read whole, no file moved and no board read — are in its crate
+root (`src/lib.rs`) and in the workspace's `ARCHITECTURE.md` §The search
+index. It depends on `skep-address` and the two Unicode crates alone: NOT
+`skepd`, NOT `skep-client`, NOT `serde_json`.
 
 ## 2. What later lanes add
 
@@ -89,14 +121,14 @@ next lanes land against these names:
   statistics; `hit`, `Hit` and `Answer` with the snippet; `Pair`, the two
   indexes by role; `Index::query`; and THE ONE READ over the keys,
   `keys_by_range`, whose order `UnitKey` already sorts in.
-- **The file** (§5.1, §5.4; lane SR-2) — `Index::save` and `Index::load`,
-  the typed `Header`, `LoadError` and every disposition, the aside, the
-  resume's answers; `seen` and the tombstone set kept in the body.
 - **The budgets, reported** (§7; lane SR-4) — the timing tests over §7.3's
-  corpus, and the ceiling's figure confirmed or raised.
-- **The shell's half** (`client.md` §4e; lane SH) — the feed consumer, the
-  directory, the triggers, the bridge call and the state event, in
-  `skep-client`.
+  corpus, the save and load timed among them, and the ceiling's figure
+  confirmed or raised.
+- **The shell's half** (`client.md` §4e; lane SH) — the feed consumer; the
+  directory, the file modes `0600`/`0700`, the lock, the save's rename and
+  the moving aside under `aside_name`; the `/health` and `/chain?at` reads
+  whose answers `Resume::judge` takes; the save after a migration; the
+  triggers, the bridge call and the state event, in `skep-client`.
 
 ## 3. The crate's suite
 
@@ -105,15 +137,24 @@ table's binary search, the contiguity refusal, the head rule),
 `token/tests.rs` (the Unicode version pair, the fold's reach and residue,
 the ranges across a gap and a hex stretch), `index/tests.rs` (the postings'
 shape, the tombstone and the live counts, compaction and its trigger, the
-ceiling's arithmetic at a small ceiling, `seen`). The integration suite is
-one binary, `tests/it/`: `cases` — §7.2's twenty-two tokenizer cases, each
-asserting its tokens and its byte range — and `index` — the write side
-under the design's fence: the class check, one class per index, the
-ceiling at the real constant, replacement, prepare under no lock and
-install by one swap under an `RwLock` of the test's own, the join of a
-document of twice `MAX_DELIVERY_ITEMS` positions with a character across
-the parts' edge, and the range across a `Gap` and a `hex` stretch with the
-item found by binary search.
+ceiling's arithmetic at a small ceiling, `seen`), `header/tests.rs` (the
+canonical bytes of both kinds, the one spelling both ways, `v` first, every
+re-spelling damaged, the unknown member), `file/tests.rs` (the CRC-32C
+check value, the codecs, the layout, the round trip and the fixed point,
+the trailer over the header line, the newer tokenizer faced with the body
+unread, the class before the body, the migration round trip, a damaged body
+by section, `seen` and the tombstones across a save, the aside, the
+faces), `resume/tests.rs` (one test per arm). The integration suite is one
+binary, `tests/it/`: `cases` — §7.2's twenty-two tokenizer cases, each
+asserting its tokens and its byte range — `index` — the write side under
+the design's fence: the class check, one class per index, the ceiling at
+the real constant, replacement, prepare under no lock and install by one
+swap under an `RwLock` of the test's own, the join of a document of twice
+`MAX_DELIVERY_ITEMS` positions with a character across the parts' edge,
+and the range across a `Gap` and a `hex` stretch with the item found by
+binary search — `file` — §8.3's file dispositions at the public surface,
+one test each, and `load`'s order — and `resume` — the open's judgment over
+a loaded header and the wire's answers.
 
 ## License
 

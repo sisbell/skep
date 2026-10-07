@@ -29,9 +29,9 @@
 //! writer, calls each pair in sequence, so no `merge` lands between a
 //! `compacted` and its `install`. The trigger is counted in DEAD POSTINGS
 //! ([`Index::compaction_due`]; §5.1, §7.1's INTERIM pin). `delete` is no
-//! operation of v1 (§1.4). The one read over the keys, `keys_by_range`, and
-//! the file's `save` and `load` are later lanes' (SR-3, SR-2); the keys sort
-//! in the address order for the first.
+//! operation of v1 (§1.4). The file's `save` and `load` stand in `file`,
+//! over this module's shape; the one read over the keys, `keys_by_range`, is
+//! a later lane's (SR-3), and the keys sort in the address order for it.
 //!
 //! THE CEILING ([`CEILING_BYTES`]; §7.4): v1 scale is counted in BYTES OF
 //! TEXT PER INDEX, the index loaded whole; the crate declares a ceiling on
@@ -42,11 +42,12 @@
 //! beside them; a tombstoned unit's bytes count toward it no longer; the
 //! units offered past it are counted in `seen`, reported by [`Index::stats`]
 //! and listed nowhere, so the embedder's `past the ceiling` state composes
-//! after a restart as before it (lane SR-2 keeps `seen` in the body).
+//! after a restart as before it (`file` keeps `seen` in the body).
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
+use std::io;
 
 use crate::token::{self, Revision, REVISION};
 use crate::unit::{Class, Unit, UnitKey};
@@ -72,11 +73,11 @@ const COMPACTION_TRIGGER_DIVISOR: usize = 8;
 
 /// A unit's id: its index among the unit records. Dense after a compaction,
 /// with holes where tombstones stand before one.
-type UnitId = usize;
+pub(crate) type UnitId = usize;
 
 /// A term's id: its index among the term entries; the dictionary maps the
 /// term's spelling to it.
-type TermId = usize;
+pub(crate) type TermId = usize;
 
 /// One occurrence in a posting (§5.1): the token's ORDINAL in its unit's
 /// sequence — adjacency is a phrase (lane SR-3) — and its RANGE FROM THE
@@ -94,50 +95,52 @@ pub struct Occurrence {
 
 /// One unit's occurrences of one term, in ordinal order.
 #[derive(Debug, Clone)]
-struct Posting {
-    unit: UnitId,
-    occurrences: Vec<Occurrence>,
+pub(crate) struct Posting {
+    pub(crate) unit: UnitId,
+    pub(crate) occurrences: Vec<Occurrence>,
 }
 
 /// One term's postings, in unit-id order, and the LIVE count of units
 /// holding it — df(t) over the live units, and the dictionary's membership:
 /// a term whose live count is zero is no term until compaction drops it.
 #[derive(Debug, Clone, Default)]
-struct TermEntry {
-    postings: Vec<Posting>,
-    live_units: usize,
+pub(crate) struct TermEntry {
+    pub(crate) postings: Vec<Posting>,
+    pub(crate) live_units: usize,
 }
 
 /// A unit record: the unit with its term list and its posting entries
 /// counted, or the tombstone left where it stood — a bare marker, its
 /// postings resident under the dead tally until compaction drops both.
 #[derive(Debug, Clone)]
-enum Record {
+pub(crate) enum Record {
     Live { unit: Unit, terms: Vec<TermId>, entries: usize },
     Dead,
 }
 
 /// The counts `stats` reports, kept live: decremented at a tombstone from the
-/// unit's own term list, never recomputed from the postings.
+/// unit's own term list, never recomputed from the postings — except at
+/// `load`, which recomputes them to check the file's.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct Counts {
-    units: usize,
-    terms: usize,
-    postings: usize,
-    bytes: u64,
-    tombstones: usize,
-    dead_postings: usize,
+pub(crate) struct Counts {
+    pub(crate) units: usize,
+    pub(crate) terms: usize,
+    pub(crate) postings: usize,
+    pub(crate) bytes: u64,
+    pub(crate) tombstones: usize,
+    pub(crate) dead_postings: usize,
 }
 
 /// Everything a compaction rewrites, so `install` replaces it by one
-/// assignment (§5.6).
+/// assignment (§5.6) — and everything the file's body holds of the index
+/// (`file`), which reads and writes these fields.
 #[derive(Debug, Clone, Default)]
-struct Body {
-    dictionary: BTreeMap<String, TermId>,
-    terms: Vec<TermEntry>,
-    units: Vec<Record>,
-    keys: BTreeMap<UnitKey, UnitId>,
-    counts: Counts,
+pub(crate) struct Body {
+    pub(crate) dictionary: BTreeMap<String, TermId>,
+    pub(crate) terms: Vec<TermEntry>,
+    pub(crate) units: Vec<Record>,
+    pub(crate) keys: BTreeMap<UnitKey, UnitId>,
+    pub(crate) counts: Counts,
 }
 
 impl Body {
@@ -174,8 +177,10 @@ impl Body {
     }
 
     /// The add: a fresh id, one posting per term appended in unit-id order,
-    /// the dictionary and the live counts grown.
-    fn add(&mut self, prepared: Prepared) {
+    /// the dictionary and the live counts grown. The key must not be held:
+    /// `merge` tombstones a held key first, and a migration (`file`) adds
+    /// the live units of a file whose keys `load` checked distinct.
+    pub(crate) fn add(&mut self, prepared: Prepared) {
         let id = self.units.len();
         let mut terms = Vec::with_capacity(prepared.postings.len());
         let mut entries = 0usize;
@@ -257,15 +262,19 @@ impl Body {
 /// dictionary, the postings, the unit records, the live counts, and the
 /// tokenizer revision it was made under. The embedder keeps it under a
 /// read-write lock of its own (§5.6): the write side for `merge` and
-/// `install`, the read side for `compacted`, `stats` and the queries later
-/// lanes add; this crate holds no lock.
+/// `install`, the read side for `compacted`, `stats`, `save` and the queries
+/// later lanes add; this crate holds no lock.
 #[derive(Debug, Clone)]
 pub struct Index {
-    class: Class,
-    revision: Revision,
-    ceiling: u64,
-    seen: u64,
-    body: Body,
+    pub(crate) class: Class,
+    pub(crate) revision: Revision,
+    pub(crate) ceiling: u64,
+    pub(crate) seen: u64,
+    pub(crate) body: Body,
+    /// The file's revision where `load` migrated this value from its stored
+    /// text (§5.1); `None` for an index `new` made or loaded at the running
+    /// revision.
+    pub(crate) migrated_from: Option<Revision>,
 }
 
 /// A unit tokenized and its postings built against NO index, under no lock
@@ -366,6 +375,14 @@ pub enum IndexError {
         /// The live units the index holds.
         units: usize,
     },
+    /// §5.1: the writer the embedder handed `save` failed; the file is the
+    /// embedder's `<name>.tmp`, which it does not rename.
+    Write {
+        /// The failure's kind.
+        kind: io::ErrorKind,
+        /// The failure's text.
+        detail: String,
+    },
 }
 
 impl fmt::Display for IndexError {
@@ -382,6 +399,9 @@ impl fmt::Display for IndexError {
                 f,
                 "past the ceiling: the index holds {held} bytes of text in {units} units and its ceiling is {limit} bytes"
             ),
+            IndexError::Write { kind, detail } => {
+                write!(f, "the index could not be written: {detail} ({kind:?})")
+            }
         }
     }
 }
@@ -393,7 +413,14 @@ impl Index {
     /// `Principal(n)` for `n`'s supplement (§1.4, §5.2 D7) — under the
     /// running crate's tokenizer revision and the ceiling.
     pub fn new(class: Class) -> Index {
-        Index { class, revision: REVISION, ceiling: CEILING_BYTES, seen: 0, body: Body::default() }
+        Index {
+            class,
+            revision: REVISION,
+            ceiling: CEILING_BYTES,
+            seen: 0,
+            body: Body::default(),
+            migrated_from: None,
+        }
     }
 
     /// The suite's seam: a fresh index whose ceiling is `ceiling` bytes, so
@@ -409,9 +436,20 @@ impl Index {
     }
 
     /// The tokenizer revision the index's postings were cut under — the
-    /// running crate's, for an index `new` made.
+    /// running crate's, for an index `new` made or `load` migrated.
     pub fn revision(&self) -> Revision {
         self.revision
+    }
+
+    /// THE MIGRATION's tag (§5.1): `Some(older)` where `load` found the file
+    /// cut under an older tokenizer revision and re-indexed every unit from
+    /// its stored text under the running one — the embedder SAVES such an
+    /// index, "under the running crate's revision so the next `load`
+    /// migrates nothing" — and `None` for an index `new` made or loaded at
+    /// the running revision. One shape: the postings are the running
+    /// revision's either way, which `revision` states.
+    pub fn migrated_from(&self) -> Option<Revision> {
+        self.migrated_from
     }
 
     /// The unit tokenized and its postings built against NO index, under no

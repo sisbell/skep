@@ -18,12 +18,11 @@ use serde_json::Value;
 use crate::allowlist::{load as load_allowlist, Allowlist, AllowlistError};
 use crate::alpha::Alpha;
 use crate::deletions::Deletions;
-use crate::evidence::Effect;
 use crate::fields::op_name;
-use crate::ground::{ground, SetupStep};
+use crate::ground::ground;
 use crate::loader::{conformance_dir, load_all, LoadError, Scenario};
 use crate::outcome::{Finding, OpOutcome, ScenarioKey, ScenarioRecord, Status, Verdict};
-use crate::play::{run_op, Cx};
+use crate::play::{run_lead_in, run_op, Cx};
 use crate::report::{output_dir, render_table, write_reports, ReportError, ReportPaths};
 use crate::rig::{panic_message, EnginePanic, Rig};
 use crate::shadow::Shadow;
@@ -204,50 +203,14 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
     };
 
     // Implied creates + lead-in, executed through the same op surface the
-    // scenario uses — inferred setup, golden-side by construction. A failure
-    // here is recorded and the run continues — the affected ops then
-    // disagree honestly.
-    for docid in &setup.implied_creates {
-        if cx.alpha.peek_exact(docid).is_some() {
-            continue; // already bound (defensive; should not happen)
-        }
-        let r = cx.create_document(docid, None, Effect::Inferred);
-        if !matches!(r, skep_febe::Response::AckAddr { .. }) {
-            groundings
-                .push(format!("implied-create FAILED for {docid}: {}", crate::rig::brief(&r)));
-        }
-    }
-    'lead_in: for step in &setup.lead_in {
-        // Lead-in inserts may target docs the scenario creates itself
-        // later only via implied paths; ensure existence first. (Link
-        // steps live in expansion plans, never the lead-in, but the
-        // match stays total.)
-        if let SetupStep::Insert { doc, .. } | SetupStep::Copy { doc, .. } = step {
-            if !cx.shadow.knows(doc) {
-                let r = cx.create_document(doc, None, Effect::Inferred);
-                if !matches!(r, skep_febe::Response::AckAddr { .. }) {
-                    groundings.push(format!(
-                        "lead-in create FAILED for {doc}: {}",
-                        crate::rig::brief(&r)
-                    ));
-                    continue 'lead_in;
-                }
-            }
-        }
-        if let Err(e) = cx.exec_setup_step(step) {
-            groundings.push(format!("lead-in FAILED: {e}"));
-        }
-    }
+    // scenario uses; a part skep did not carry out is recorded among the
+    // groundings, and the run continues.
+    groundings.extend(run_lead_in(&mut cx, &setup));
     // α-findings the setup raised belong to no op: they are recorded among
     // the groundings, beside the setup that raised them.
     groundings.extend(cx.alpha.drain_findings().map(|f| {
         format!("lead-in α-finding: {}: {}", f.kind.as_str(), f.detail)
     }));
-    // The register belongs to the first document the SCENARIO names,
-    // not the last lead-in target.
-    if let Some(first) = cx.shadow.created().first().cloned() {
-        cx.shadow.set_current(&first);
-    }
 
     let key = scn.key();
     let mut outcomes: Vec<OpOutcome> = Vec::with_capacity(scn.operations.len());

@@ -2,6 +2,10 @@
 //! plans, `open_document` (the no-op, and the CONFLICT_COPY fork as a
 //! version), versions, and the account ops: `account` selection and
 //! `create_node` sub-account minting, both as M3 delegation.
+//!
+//! The pre-pass restates these handlers' effects on the shadow in
+//! `ground/sim.rs`, in the `Sim::sim_<verb>` methods named for them: change
+//! the two together.
 
 use serde_json::Value;
 
@@ -14,7 +18,7 @@ use super::{
 use crate::evidence::Effect;
 use crate::fields::{
     create_name_of, created_addresses, expected_failure, field, group_word, is_conflict_copy,
-    recorded_count, roster, str_field,
+    recorded_count, roster, str_field, version_result, version_source,
 };
 use crate::outcome::{Disagreement, OpOutcome, Status};
 use crate::tum::VPoint;
@@ -298,25 +302,14 @@ pub(super) fn h_open_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
 }
 
 pub(super) fn h_create_version(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
-    // Source: an explicit from/source/of that RESOLVES; a `doc` field only
-    // when it resolves to an existing doc (identity_through_rearrange_pivot
-    // uses `doc` for the NEW version's name); else the register.
-    let explicit = str_field(op, &["from", "source", "of", "original"])
-        .and_then(|s| cx.shadow.resolve_doc(s));
-    let via_doc_field = str_field(op, &["doc"]).and_then(|s| cx.shadow.resolve_doc(s));
-    let src = explicit.or(via_doc_field).or_else(|| {
-        out.adaptations.push("doc-from-register".into());
-        cx.shadow.current()
-    });
-    let Some(src) = src else {
+    // The source and the version address the recording kept are the one
+    // reading the grounding pre-pass applies too (`fields::version_source`,
+    // `fields::version_result`).
+    let Some(src) = version_source(op, cx.shadow, &mut out.adaptations) else {
         inexpressible(out, "create_version with no source document".into());
         return;
     };
-    let golden = match field(op, &["result"]) {
-        Some(Value::String(s)) => Some(s.clone()),
-        Some(Value::Object(o)) => o.get("version").and_then(Value::as_str).map(str::to_string),
-        _ => None,
-    };
+    let golden = version_result(op);
     let recorded_failure = expected_failure(op);
     if joint_absence(cx, out, recorded_failure.as_deref(), &src) {
         return; // green failed versioning a never-created doc (boundary A7)

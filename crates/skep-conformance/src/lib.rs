@@ -23,15 +23,15 @@
 //! each inference tagged into the report's `groundings`. A fresh
 //! `rig::Rig` opens an in-memory engine and its operation surface, and
 //! the α-bijection is seeded with udanax's default account, `1.1.0.1`,
-//! bound to the rig's own; the implied creates and the lead-in execute
-//! through the rig. `play::run_op` then plays each op in order:
-//! normalized to a canonical verb (or classified inexpressible, the reason
-//! recorded), executed, and judged by `compare`'s comparator for its result
-//! type. `runner` folds each op's α-findings into its outcome and asks the
-//! allowlist which adjudicated classes cover it — a disagreement an entry
-//! covers is `allowlisted`, one no entry covers stays `divergent` — and
-//! folds the outcomes into one verdict per scenario; `report` writes
-//! `report.jsonl` and `summary.md`.
+//! bound to the rig's own; `play::run_lead_in` carries out the implied
+//! creates and the lead-in through the rig. `play::run_op` then plays each
+//! op in order: normalized to a canonical verb (or classified
+//! inexpressible, the reason recorded), executed, and judged by `compare`'s
+//! comparator for its result type. `runner` folds each op's α-findings into
+//! its outcome and asks the allowlist which adjudicated classes cover it —
+//! a disagreement an entry covers is `allowlisted`, one no entry covers
+//! stays `divergent` — and folds the outcomes into one verdict per
+//! scenario; `report` writes `report.jsonl` and `summary.md`.
 //!
 //! ## What holds across files
 //!
@@ -57,11 +57,13 @@
 //! * **Both passes read an op the same way.** The pre-pass and the play
 //!   pass share one grammar for an op's fields (`fields`: the verb an op's
 //!   name reads as, the document an op aims at, an op's arguments, a vcopy's
-//!   sources, the content a read's recording answers with) and one set of
-//!   policies for what its recorded evidence says it did (`evidence`: where
-//!   an insert lands, what a delete removed). `ground`'s simulation still
+//!   sources, a version's source, a swap's regions, the content a read's
+//!   recording answers with) and one set of policies for what its recorded
+//!   evidence says it did (`evidence`: where an insert or a vcopy lands,
+//!   what a delete removed). The pre-pass's walk, `ground/sim.rs`, still
 //!   restates each verb's effect on the shadow and decides which ops probe
-//!   it; nothing but review keeps those alike: change them together.
+//!   it; nothing but review keeps a `Sim::sim_<verb>` method and the play
+//!   pass's `h_<verb>` handler alike: change them together.
 //! * **Harness infrastructure never reaches a comparison.** The types
 //!   document, each rig account's home and the setup grant it holds, the rig
 //!   accounts, and the grants class address are told apart by one

@@ -15,17 +15,6 @@ fn a_delete_is_undone_only_with_the_bytes_it_removed() {
     assert_eq!(undo_to_initial("B prefix: content", &unknown), None);
 }
 
-/// A delete's own description names its removed bytes — a trailing
-/// parenthetical, else a quoted segment — only at exactly its width.
-#[test]
-fn a_described_delete_names_its_bytes_at_its_width() {
-    let quoted = json!({"op": "remove", "span": "1.11 for 0.7 (delete 'Shared ')"});
-    assert_eq!(delete_described_bytes(&quoted, 7), Some(b"Shared ".to_vec()));
-    assert_eq!(delete_described_bytes(&quoted, 8), None);
-    let parenthetical = json!({"op": "delete", "span": "1.3 for 0.5 (CDEFG)"});
-    assert_eq!(delete_described_bytes(&parenthetical, 5), Some(b"CDEFG".to_vec()));
-}
-
 /// An insert is undone only where its recorded bytes still stand — at
 /// the end it appended to, or the ordinal it was placed at; a write the
 /// walk could not reproduce stops the undo.
@@ -117,7 +106,7 @@ fn a_compare_pair_at_the_extremes_seeds_nothing() {
         shadow.create_doc("1.1.0.1.0.1", Some("target"));
         shadow.insert("1.1.0.1.0.1", 1, b"Hello");
         shadow.create_doc("1.1.0.1.0.2", Some("src"));
-        assert!(cover_from_comparisons(&shadow, "1.1.0.1.0.1", "Hello", &ops).is_none());
+        assert!(cover::cover_from_comparisons(&shadow, "1.1.0.1.0.1", "Hello", &ops).is_none());
     }
 }
 
@@ -223,4 +212,39 @@ fn a_document_the_walk_never_made_is_never_seeded() {
     let sim = Sim::replay(&setup.implied_creates, &BTreeMap::new(), &ops);
     assert!(!sim.shadow.knows(UNMADE));
     assert!(sim.log_for(UNMADE).is_empty());
+}
+
+/// The walk lands a vcopy where the play pass does: a position marker
+/// copies into the first source's document, not the register's, and a
+/// destination that resolves to nothing copies nothing, never re-aimed.
+#[test]
+fn the_walk_lands_a_vcopy_where_the_play_pass_does() {
+    const SOURCE: &str = "1.1.0.1.0.1";
+    const OTHER: &str = "1.1.0.1.0.2";
+    let ops = [
+        json!({"op": "create_document", "doc": "source", "result": SOURCE}),
+        json!({"op": "insert", "doc": "source", "text": "Hello"}),
+        json!({"op": "create_document", "doc": "other", "result": OTHER}),
+        json!({"op": "vcopy", "from": "source", "to": "end"}),
+        json!({"op": "vcopy", "from": "source", "to": "ghost"}),
+    ];
+    let sim = Sim::replay(&[], &BTreeMap::new(), &ops);
+    assert_eq!(sim.shadow.text_string(SOURCE), "HelloHello");
+    assert_eq!(sim.shadow.text_string(OTHER), "");
+}
+
+/// The walk swaps the two texts a swap's `regions` name, as the play pass
+/// does, never leaving the write unknown.
+#[test]
+fn the_walk_swaps_the_regions_a_swap_names() {
+    const DOC: &str = "1.1.0.1.0.1";
+    let ops = [
+        json!({"op": "create_document", "doc": "d", "result": DOC}),
+        json!({"op": "insert", "doc": "d", "text": "AAA middle BBB"}),
+        json!({"op": "swap", "doc": "d", "regions": ["AAA", "BBB"]}),
+    ];
+    let sim = Sim::replay(&[], &BTreeMap::new(), &ops);
+    assert_eq!(sim.shadow.text_string(DOC), "BBB middle AAA");
+    let log = sim.log_for(DOC);
+    assert!(matches!(log, [.., Edit::Swap { s1: 1, e1: 4, s2: 12, e2: 15 }]), "{log:?}");
 }

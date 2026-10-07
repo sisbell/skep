@@ -12,6 +12,19 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   pinned, a scenario is the pin: conformance failures are findings
   against a change, not noise.
 
+## Running it
+
+`cargo test -p skep-conformance` runs the gate (`tests/it/gate.rs`): it
+plays every golden under `conformance/golden/`, writes one record per
+scenario to `target/conformance/report.jsonl` and a summary to
+`target/conformance/summary.md`, and fails on a verdict
+`conformance/ratchet.toml` does not admit (paths from the workspace
+root). Rulings on divergences live in
+`conformance/adjudication/decisions.md`; `conformance/allowlist.toml` and
+the ratchet carry them. What each adaptation tag in the report means:
+`src/play.rs`'s module doc. How the crate is laid out, and the rules that
+hold across its files: `src/lib.rs`.
+
 A test rig for the workspace — not intended for publication to a
 registry.
 

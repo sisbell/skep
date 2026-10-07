@@ -195,3 +195,65 @@ fn a_described_delete_is_tagged_and_pinned_unless_text_found() {
     let described = delete(json!({"span": "1.1 length 3"}));
     assert_eq!(described, (VPoint::content(1).region(3), Some("span-from-description"), true));
 }
+
+/// A vcopy copies into the document its recording names — a position
+/// marker naming the first source's — and a reference that names nothing
+/// is refused, never re-aimed; one naming none aims by the probe that holds
+/// the copied bytes, a document other than the source's preferred, and
+/// otherwise leaves the aim to each pass.
+#[test]
+fn a_vcopy_copies_into_the_document_its_recording_names() {
+    const SOURCE: &str = "1.1.0.1.0.1";
+    const OTHER: &str = "1.1.0.1.0.2";
+    let mut shadow = Shadow::new();
+    shadow.create_doc(SOURCE, Some("source"));
+    shadow.insert(SOURCE, 1, b"Hello");
+    shadow.create_doc(OTHER, Some("other"));
+    let sources = [CopySource { doc: SOURCE.into(), region: VPoint::content(1).region(5) }];
+    let aimed = |ops: &[Value]| {
+        let mut adaptations = Vec::new();
+        let dest = vcopy_destination(ops, 0, &shadow, &sources, &mut adaptations);
+        (dest, adaptations)
+    };
+    let untagged = |dest: Result<Option<String>, String>| (dest, Vec::<String>::new());
+    let marker = [json!({"op": "vcopy", "to": "end of doc"})];
+    assert_eq!(aimed(&marker), untagged(Ok(Some(SOURCE.into()))));
+    assert_eq!(aimed(&[json!({"op": "vcopy", "to": "other"})]), untagged(Ok(Some(OTHER.into()))));
+    let ghost = Err("vcopy destination `ghost` resolves to nothing".to_string());
+    assert_eq!(aimed(&[json!({"op": "vcopy", "to": "ghost"})]), untagged(ghost.clone()));
+    assert_eq!(aimed(&[json!({"op": "vcopy", "doc": "ghost"})]), untagged(ghost));
+
+    let probe = |doc: &str, text: &str| json!({"op": "retrieve", "doc": doc, "result": [text]});
+    let bare = json!({"op": "vcopy"});
+    let evidenced = [bare.clone(), probe("source", "HelloHello"), probe("other", "Hello")];
+    let tagged = (Ok(Some(OTHER.to_string())), vec!["vcopy-dest-from-evidence".to_string()]);
+    assert_eq!(aimed(&evidenced), tagged);
+    assert_eq!(aimed(&[bare]), untagged(Ok(None)));
+}
+
+/// A vcopy lands at the position it records, at ordinal 1 when it copies to
+/// the start, and otherwise at the end, which each pass reads off its own
+/// shadow; a position no content ordinal grounds is refused.
+#[test]
+fn a_vcopy_lands_at_its_recorded_position_or_the_end() {
+    const DOC: &str = "1.1.0.1.0.1";
+    let mut shadow = Shadow::new();
+    shadow.create_doc(DOC, None);
+    shadow.insert(DOC, 1, b"Hello");
+    let landed = |op: Value| {
+        let mut adaptations = Vec::new();
+        let at = vcopy_ordinal(&op, &shadow, DOC, &mut adaptations);
+        (at, adaptations)
+    };
+    let at = |ord: Option<u64>, tags: &[&str]| {
+        (Ok(ord), tags.iter().map(|t| t.to_string()).collect::<Vec<_>>())
+    };
+    assert_eq!(landed(json!({"op": "vcopy", "at": "1.3"})), at(Some(3), &[]));
+    let after = json!({"op": "vcopy", "at": "after He"});
+    assert_eq!(landed(after), at(Some(3), &["position-after-text"]));
+    let start = json!({"op": "vcopy", "to": " Start of doc"});
+    assert_eq!(landed(start), at(Some(1), &["position-start"]));
+    assert_eq!(landed(json!({"op": "vcopy", "to": "end"})), at(None, &["position-end"]));
+    let link_subspace = landed(json!({"op": "vcopy", "at": "2.1"}));
+    assert_eq!(link_subspace.0, Err("vcopy position `2.1` is not groundable".to_string()));
+}

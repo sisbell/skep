@@ -1,18 +1,20 @@
 //! The recorded-evidence policies both passes apply. Each reads what the
 //! scenario recorded about an op — the op's own post-state, or the next
 //! probe of its document — to decide what the op did: whether udanax made
-//! the change at all, which document a doc-less insert aimed at, where an
-//! insert landed and how wide it was, whether a delete removed anything and
-//! exactly what. The grounding pre-pass and the play pass call the same
-//! function, so the two cannot disagree about what the evidence says; the
-//! field grammar both read the evidence through is `fields`'s.
+//! the change at all; where an insert or a vcopy lands — the document a
+//! doc-less one aimed at, the position, how wide an insert was; whether a
+//! delete removed anything and exactly what. The grounding pre-pass and the
+//! play pass call the same function, so the two cannot disagree about what
+//! the evidence says; the field grammar both read the evidence through is
+//! `fields`'s.
 
 use serde_json::Value;
 
 use crate::fields::{
-    as_text, client_side_failure, doc_from_op_name, expected_failure, field, insert_text, locate,
-    op_name, reads_whole_content, resolve_position, span_dict, str_field, strings_of, verb_of,
-    Grounding, PositionGrounding, Verb, POST_WRITE_KEYS,
+    as_text, client_side_failure, doc_from_op_name, expected_failure, field, insert_text,
+    is_position_marker, locate, op_name, reads_whole_content, resolve_position, span_dict,
+    str_field, strings_of, verb_of, CopySource, Grounding, PositionGrounding, Verb,
+    POST_WRITE_KEYS,
 };
 use crate::shadow::Shadow;
 use crate::tum::{parse_dotted, parse_vpos, VPoint, VRegion};
@@ -343,6 +345,96 @@ pub fn resolve_insert(
         }
     }
     Ok(InsertLanding { doc, at, bytes: text.into_bytes(), appended })
+}
+
+/// The document vcopy op `i` of `ops` copies into, its `sources` read by
+/// `fields::vcopy_sources`, as both passes read it: its
+/// `to`/`dest`/`target`/`target_doc` reference — a position marker
+/// ("end", "end of doc") naming the first source's document
+/// (edgecases/vcopy_to_same_document's self-transclusion) — else its
+/// `doc`/`docid` reference; else the document whose next content probe
+/// holds the copied bytes, one other than the first source's preferred
+/// (`vcopy-dest-from-evidence`: endsets/endsets_transcluded_source copies
+/// into a second document the register never pointed at). `Ok(None)` when
+/// nothing names or evidences one: each pass aims by its own `doc_arg`.
+/// `Err` carries a recorded reference that resolves to nothing, which no
+/// pass re-aims.
+pub fn vcopy_destination(
+    ops: &[Value],
+    i: usize,
+    shadow: &Shadow,
+    sources: &[CopySource],
+    adaptations: &mut Vec<String>,
+) -> Result<Option<String>, String> {
+    let op = &ops[i];
+    let first_source = sources.first().map(|s| s.doc.as_str());
+    let named = |r: &str| {
+        let dest = shadow.resolve_doc(r);
+        dest.map(Some).ok_or_else(|| format!("vcopy destination `{r}` resolves to nothing"))
+    };
+    if let Some(r) = str_field(op, &["to", "dest", "target", "target_doc"]) {
+        if is_position_marker(r) {
+            return Ok(first_source.map(str::to_string));
+        }
+        return named(r);
+    }
+    if let Some(r) = str_field(op, &["doc", "docid"]) {
+        return named(r);
+    }
+    let copied: Vec<u8> = sources
+        .iter()
+        .filter(|s| s.region.sub == 1)
+        .flat_map(|s| shadow.slice(&s.doc, s.region.ord, s.region.width))
+        .collect();
+    if copied.is_empty() {
+        return Ok(None); // no bytes, so no probe can hold them
+    }
+    let copied_text = String::from_utf8_lossy(&copied).into_owned();
+    let evidenced: Vec<&String> = shadow
+        .created()
+        .iter()
+        .filter(|d| next_content_probe(ops, i, shadow, d).is_some_and(|p| p.contains(&copied_text)))
+        .collect();
+    let aimed = evidenced
+        .iter()
+        .find(|d| Some(d.as_str()) != first_source)
+        .or_else(|| evidenced.first())
+        .map(|d| d.to_string());
+    if aimed.is_some() {
+        adaptations.push("vcopy-dest-from-evidence".into());
+    }
+    Ok(aimed)
+}
+
+/// The content ordinal vcopy `op` copies to in golden `dest`, as both
+/// passes read it: a recorded `address`/`at`/`position`, grounded against
+/// the shadow and tagged with how ([`resolve_position`]); else a `to`
+/// beginning "start" — ordinal 1 (`position-start`); else `Ok(None)`, the
+/// destination's end (`position-end`), which each pass reads off its own
+/// shadow. `Err` names a recorded position this grammar cannot ground in
+/// the content subspace.
+pub fn vcopy_ordinal(
+    op: &Value,
+    shadow: &Shadow,
+    dest: &str,
+    adaptations: &mut Vec<String>,
+) -> Result<Option<u64>, String> {
+    if let Some(p) = str_field(op, &["address", "at", "position"]) {
+        return match resolve_position(shadow, dest, p) {
+            Some((VPoint { sub: 1, ord }, how)) => {
+                adaptations.extend(how.map(|how| how.tag().to_string()));
+                Ok(Some(ord))
+            }
+            _ => Err(format!("vcopy position `{p}` is not groundable")),
+        };
+    }
+    let to = str_field(op, &["to", "dest", "target", "target_doc"]);
+    if to.is_some_and(|s| s.trim().to_ascii_lowercase().starts_with("start")) {
+        adaptations.push("position-start".into());
+        return Ok(Some(1));
+    }
+    adaptations.push("position-end".into());
+    Ok(None)
 }
 
 /// Was this delete a no-op in udanax? The doc's recorded post-delete content

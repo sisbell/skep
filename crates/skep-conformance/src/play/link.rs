@@ -2,6 +2,10 @@
 //! grounded in evidence order and then by the recording scripts'
 //! conventions, and in the corpus extension's explicit-set shape, whose every
 //! argument is recorded.
+//!
+//! The pre-pass restates these handlers' effects on the shadow in
+//! `ground/sim.rs`, in the `Sim::sim_<verb>` methods named for them: change
+//! the two together.
 
 use serde_json::Value;
 

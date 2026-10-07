@@ -130,31 +130,6 @@ fn neither_an_address_nor_a_client_repr_is_document_text() {
     assert_eq!(text(&["<b>"]).as_deref(), Some("<b>"));
 }
 
-/// A meta-named op that carries an observation — a string array under a
-/// key no annotation holds, a docs map, a reply-shaped result — is a probe;
-/// one that carries none stays meta.
-#[test]
-fn a_meta_named_op_that_carries_an_observation_is_a_probe() {
-    let verb = |op: Value| normalize(op_name(&op), &op);
-    assert_eq!(verb(json!({"op": "snapshot", "A_content": ["X"]})), Some(Verb::Observe));
-    assert_eq!(verb(json!({"op": "dump_state", "docs": {"A": ["X"]}})), Some(Verb::Observe));
-    assert_eq!(verb(json!({"op": "verify", "result": ["X"]})), Some(Verb::Observe));
-    let commented = json!({"op": "snapshot", "comment": "before the delete"});
-    assert_eq!(verb(commented), Some(Verb::Meta));
-    assert_eq!(verb(json!({"op": "summary", "counts": {"links": 2}})), Some(Verb::Meta));
-}
-
-/// The stem table reads in order, so a stem that starts with an earlier one
-/// would never be reached: none is shadowed, and each reads as its own verb.
-#[test]
-fn no_verb_stem_is_shadowed_by_an_earlier_one() {
-    for (i, (stem, verb)) in STEMS.iter().enumerate() {
-        let shadowing = STEMS[..i].iter().find(|(earlier, _)| stem.starts_with(earlier));
-        assert_eq!(shadowing, None, "stem `{stem}` is shadowed");
-        assert_eq!(normalize(stem, &json!({ "op": stem })), Some(*verb), "stem `{stem}`");
-    }
-}
-
 /// A description grounds at the occurrence it selects and the range it
 /// names: "(second)" is the second occurrence, an occurrence that is not
 /// there grounds nowhere, and an explicit range outranks its reminder text.
@@ -202,4 +177,51 @@ fn a_create_reads_its_recorded_addresses_in_each_shape() {
     let elsewhere = json!({"op": "create_doc2_and_copy", "result": {"doc3": "1.1.0.1.0.2"}});
     assert_eq!(read(elsewhere), None);
     assert_eq!(read(json!({"op": "create_documents", "count": 3})), None);
+}
+
+/// A version's source is a reference that resolves — a `doc` naming the new
+/// version resolves to nothing, and the register is the source, tagged —
+/// and its address is the recorded result, bare or under `version`.
+#[test]
+fn a_version_reads_its_source_and_its_recorded_address() {
+    let mut shadow = Shadow::new();
+    shadow.create_doc("1.1.0.1.0.1", Some("source"));
+    shadow.create_doc("1.1.0.1.0.2", Some("other"));
+    let source = |op: Value| {
+        let mut adaptations = Vec::new();
+        let src = version_source(&op, &shadow, &mut adaptations);
+        (src, adaptations)
+    };
+    let named = (Some("1.1.0.1.0.1".to_string()), Vec::<String>::new());
+    assert_eq!(source(json!({"op": "create_version", "from": "source"})), named);
+    assert_eq!(source(json!({"op": "create_version", "doc": "source"})), named);
+    let register = (Some("1.1.0.1.0.2".to_string()), vec!["doc-from-register".to_string()]);
+    assert_eq!(source(json!({"op": "create_version", "doc": "rearranged"})), register);
+    let version =
+        |result: Value| version_result(&json!({"op": "create_version", "result": result}));
+    assert_eq!(version(json!("1.1.0.1.0.1.1")).as_deref(), Some("1.1.0.1.0.1.1"));
+    assert_eq!(version(json!({"version": "1.1.0.1.0.1.2"})).as_deref(), Some("1.1.0.1.0.1.2"));
+    assert_eq!(version_result(&json!({"op": "create_version"})), None);
+}
+
+/// A swap's two region texts name its cuts, the earlier region's first,
+/// whichever order the recording lists them in; a region not found, or a
+/// list that is no pair, names none.
+#[test]
+fn a_swap_reads_its_cuts_off_the_regions_it_names() {
+    const DOC: &str = "1.1.0.1.0.1";
+    let mut shadow = Shadow::new();
+    shadow.create_doc(DOC, None);
+    shadow.insert(DOC, 1, b"AAA middle BBB");
+    let cuts = |regions: Value| {
+        let op = json!({"op": "swap", "regions": regions});
+        let mut adaptations = Vec::new();
+        let cuts = swap_regions(&op, &shadow, DOC, &mut adaptations);
+        (cuts, adaptations)
+    };
+    let found = (Some(vec![1, 4, 12, 15]), vec!["text-located:regions".to_string()]);
+    assert_eq!(cuts(json!(["AAA", "BBB"])), found);
+    assert_eq!(cuts(json!(["BBB", "AAA"])), found);
+    assert_eq!(cuts(json!(["AAA", "CCC"])), (None, Vec::new()));
+    assert_eq!(cuts(json!(["AAA"])), (None, Vec::new()));
 }

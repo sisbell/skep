@@ -15,37 +15,42 @@
 //! outcome helpers — skep's answer settled against the failure the golden
 //! recorded (`settle_accepted`, `settle_unaccepted`), the `Tally` an op
 //! judged part by part settles through, and the end of a read that compared
-//! nothing — document creation and plan execution, endset sides, and the
-//! state probe. Each family's handlers are a child module holding the
-//! helpers no other family uses; a child sees this file's private items and
-//! none of its siblings'.
+//! nothing — document creation, plan execution and the pre-pass's lead-in
+//! (`run_lead_in`), endset sides, and the state probe. Each family's
+//! handlers are a child module holding the helpers no other family uses; a
+//! child sees this file's private items and none of its siblings'.
 //!
 //! ## Adaptation policies (each recorded per-op when applied)
 //!
-//! * `open_document:noop` — skep has no bert/open layer (access control
-//!   descoped); the op's `result` address still binds in the α-map.
-//! * `open_document:conflict_copy→version` — the golden's own recorded
-//!   result (a new sub-address of the source) shows CONFLICT_COPY forked.
-//! * `close_document:noop` — no open layer, nothing to close.
+//! Grouped by the family that records each tag. A tag the dispatch records,
+//! or more than one family does, is under Every family; one a shared reader
+//! in `fields` or `evidence` records is under the family that calls it.
+//!
+//! ### Every family — the dispatch, and what more than one family records
+//!
 //! * `client-error:no-op` — the recording CLIENT crashed before the op
 //!   reached udanax (`fields::client_side_failure`: a result of
 //!   "OPERATION_FAILED: …", a "FAILED: …" result naming a missing session
 //!   attribute, or an error naming one); udanax never executed the op, so
 //!   neither does the harness, and the shadow does not change.
-//! * `types_document` — link-type names denote positions in a
-//!   harness-created types document; udanax encoded them as vspecs into an
-//!   unoccupied link subspace (unresolvable I-space). Type-slot data inside
-//!   the types doc is harness infrastructure, excluded from comparisons.
-//! * `default_type_jump` — create_link without a type: the recording
-//!   scripts' default.
-//! * `default_source_first_word` / `default_target_whole_doc` /
-//!   `default_target_self` — bare create_link endset conventions, evidence
-//!   first (see `endset_evidence`), then the scripts' defaults
-//!   (links/link_retrieval_via_endsets pins first-word; links/follow_link
-//!   pins evidence-target).
-//! * `endset-evidence` — a bare link endset recovered from a LATER recorded
-//!   follow/endsets result for the same link, accepted only when no write
-//!   intervenes.
+//! * `close_document:noop` — no open layer, nothing to close.
+//! * `connect:session` — green's `connect` opens a TCP session; skep
+//!   sessions open at account binding, so the op executes nothing.
+//! * `session-route:<label>` — the op carried a `session` field and executed
+//!   under that label's account session (label→account bound by `account`
+//!   ops; two labels on one account share its session).
+//! * `session-label-implicit-bind` — an op used a session label no `account`
+//!   op had bound; it bound to the then-current account.
+//! * `raw wire request codes` are inexpressible by construction: skep's
+//!   surface is typed `Op`s; unknown-code handling lives in the transport's
+//!   `OpKind::Unparseable`, which a library harness cannot reach.
+//! * `doc-from-op-name` / `doc-from-register` — document scope grounding
+//!   (the current-document register mirrors the recording scripts' implicit
+//!   scope).
+//! * `implied-create:first-touch` — an op needed a document before any
+//!   create; one is created, exactly as the recording script must have.
+//! * `expansion-plan:N` — the op executed a pre-pass reconstruction plan of
+//!   N steps (create_chain / setup / vcopy_multiple / create_and_transclude).
 //! * `text-located` / `text-located:*` / `span-from-description` /
 //!   `range-from-description` / `whole-extent` — decorated-description
 //!   grounding (fields::locate); a `text-located:*` tag names the field, or
@@ -56,15 +61,133 @@
 //!   "start", "position 6", "after X", "before X") grounded against the
 //!   shadow, the after/before forms by finding the text there; or one the
 //!   op's name carries.
-//! * `doc-from-op-name` / `doc-from-register` — document scope grounding
-//!   (the current-document register mirrors the recording scripts' implicit
-//!   scope).
-//! * `doc-from-source-role` — a bare find_links/find_documents searches from
-//!   the source-role document when the scenario names one.
-//! * `implied-create:first-touch` — an op needed a document before any
-//!   create; one is created, exactly as the recording script must have.
-//! * `expansion-plan:N` — the op executed a pre-pass reconstruction plan of
-//!   N steps (create_chain / setup / vcopy_multiple / create_and_transclude).
+//! * `types_document` — link-type names denote positions in a
+//!   harness-created types document; udanax encoded them as vspecs into an
+//!   unoccupied link subspace (unresolvable I-space). Type-slot data inside
+//!   the types doc is harness infrastructure, excluded from comparisons.
+//! * `threeset-marker→types-document` — a threeset span at the udanax
+//!   type-marker local address `1.0.2.X` (client.py's LINK_TYPES encoding)
+//!   denotes the type name (2.2 jump / 2.3 quote / 2.6 footnote / 2.6.2
+//!   margin) the types document holds — the same `types_document` mapping
+//!   the name-based path uses.
+//! * `empty-specset` — a NOSPECS (or "empty") spec set is sent as no
+//!   regions: udanax's empty query, asked as recorded.
+//! * `joint-absence` — the golden recorded a failure against an object that
+//!   was never created (green's OPEN validates nothing, A7); the reference
+//!   has no α-image, so there is nothing to address on skep either — both
+//!   systems refuse, compared as agreement via the expected-failure
+//!   comparator (α's never-bound finding is deliberately not emitted: the
+//!   absence IS the expected answer).
+//! * `allowlist-adjusted:width` / `allowlist-adjusted:count` — a comparator
+//!   agreed only because an allowlist entry's declared width tolerance or
+//!   count delta covered the difference; the runner allowlists such an
+//!   agreement (the entry's existence is the adjudicated divergence).
+//! * `alpha-bind-from-result:N` — N unbound golden result addresses were
+//!   bound to skep response addresses positionally (the α-map's sanctioned
+//!   move; a wrong pairing surfaces later as a double-bind finding).
+//! * `golden-duplicate-result` — the golden's expected list names one
+//!   address twice (a recording defect); compared as a set, the dedup
+//!   tagged so the defect stays visible.
+//!
+//! ### Creation — `create`
+//!
+//! * `open_document:noop` — skep has no bert/open layer (access control
+//!   descoped); the op's `result` address still binds in the α-map.
+//! * `open_document:conflict_copy→version` — the golden's own recorded
+//!   result (a new sub-address of the source) shows CONFLICT_COPY forked.
+//! * `open-noop-vs-recorded-failure` — green REFUSED the open (bert
+//!   enforcement / account gating, manifest A1/A2); skep has no open layer
+//!   to refuse with, so the recorded failure is surfaced as a raw
+//!   divergence, never absorbed into the open no-op.
+//! * `docid-synthesized:N` — the recording kept no address for N of the
+//!   documents a create made: each was minted under a golden id the harness
+//!   synthesized (the next root ordinal, `Shadow::synthesize_docid`), bound
+//!   in α but recorded nowhere, so the op compares nothing (address-binding
+//!   agrees only over recorded addresses).
+//! * `account_as_delegate` / `create_node_as_delegate` — udanax account
+//!   selection / sub-account minting map onto M3 delegation.
+//! * `session-bind:<label>` — an `account` op carrying a `session` field
+//!   binds that label to the account it made current.
+//!
+//! ### Content writes — `write`, through `evidence`'s readings
+//!
+//! * `insert-all:distributed` — an `insert_all` texts array fills one
+//!   created document per text, in creation order.
+//! * `args-from-op-name` — an insert recording no `text` field takes its text
+//!   from its op's name (`insert_A` inserts "A"; `insert_1_AAA`, "AAA").
+//! * `insert-aim-from-recorded-vspanset` — a doc-less insert re-aims at the
+//!   doc whose next recorded vspanset shows the width grew by this insert
+//!   (insert_vspace_mapping: the register held the version snapshot).
+//! * `insert-position-from-post-state` — a doc-less, position-less insert
+//!   whose own recorded post-state shows its text mid-document lands at the
+//!   single gap that explains that post-state
+//!   (iaddress_allocation/interleaved_insert_delete's insert_2).
+//! * `insert-padded-to-recorded-vspanset:+N` — the recorded vspanset width
+//!   is the authority for how much the script inserted; the field text is
+//!   padded (with spaces) to match, never the comparison adjusted. DECLINED
+//!   when links seated between the insert and the probe explain the surplus
+//!   — that is udanax's version link carryover (see
+//!   `VERSION_LINK_CARRYOVER_ANALYSIS`), and padding would fabricate a
+//!   ghost content byte (createnewversion_text_vs_links' own retrieve
+//!   delivers 33 text chars plus the link marker for its recorded 0.34).
+//! * `insert-loop:a-z-cycle` — an `insert_loop` inserts one byte per count,
+//!   cycling A–Z, each appended (edgecases/many_small_inserts' recorded
+//!   sample).
+//! * `interior-typing:per-step` — an `interior_typing` op's `results` list
+//!   plays step by step: each character inserted at its recorded position,
+//!   then compared against that step's own recorded probes.
+//! * `delete-noop-from-post-state` — the recorded post-delete content
+//!   equals the pre-delete content byte-for-byte: udanax removed nothing,
+//!   so neither does the harness (delete_all_with_links' whole-doc remove).
+//! * `delete_all:empty-noop` — a delete_all of a document already empty
+//!   executes nothing: there is nothing to remove, and skep's DELETE takes
+//!   no zero width (T12).
+//! * `delete-span-from-post-state` / `delete-span-widened-boundary` — a
+//!   text-located delete span corrected by the recorded post-delete content
+//!   (diff pins exactly what udanax removed), or widened by the flanking
+//!   space that convention shows the scripts deleted.
+//! * `delete-text-from-op-name` — a bare `delete_A` op's removed text comes
+//!   from its name, post-state-diff first
+//!   (iaddress_allocation/delete_does_not_affect_next_insert).
+//! * `vcopy-source-reaimed` — a from-description that grounded OUTSIDE its
+//!   doc's live extent (the register pointing at the just-created empty
+//!   destination) re-grounds against the content-holding docs excluding the
+//!   destination; the recorded post-state confirms the span
+//!   (internal/ispan_partial_overlap's "positions 3-7 (CDEFG)").
+//! * `vcopy-dest-from-evidence` — a dest-less vcopy aimed at the doc whose
+//!   later probe shows the copied bytes embedded, instead of the register.
+//!
+//! ### Link creation — `link`
+//!
+//! * `default_type_jump` — create_link without a type: the recording
+//!   scripts' default.
+//! * `default_source_first_word` / `default_target_whole_doc` /
+//!   `default_target_self` — bare create_link endset conventions, evidence
+//!   first (see `endset_evidence`), then the scripts' defaults
+//!   (links/link_retrieval_via_endsets pins first-word; links/follow_link
+//!   pins evidence-target).
+//! * `endset-evidence` — a bare link endset recovered from a LATER recorded
+//!   follow/endsets result for the same link — vspec-shaped or content
+//!   strings — accepted only when no write intervenes; it also refines
+//!   whole-extent doc-ref endsets, so stored links carry the extents the
+//!   scripts actually made.
+//! * `endset-from-transcluded-region` — a create_link `on:` field naming
+//!   transcluded content grounds the endset to the home document's
+//!   foreign-origin (copied-in) regions, read from the live V→I image.
+//! * `create_links:repeat` — a plural create repeats one MakeLink per
+//!   recorded result.
+//! * `explicit-empty-endset` — a create_link `fromset`/`toset`/`threeset`
+//!   recorded as an EMPTY list is passed to MakeLink empty (green accepts
+//!   all three, A11); the default-endset conventions never substitute.
+//! * `threeset-content-type` — a threeset carrying real content spans
+//!   becomes the link's TYPE endset via α (green's content-span third
+//!   endsets are first-class, A8).
+//!
+//! ### Following — `follow`
+//!
+//! * `follow_as_projection` — follow_link renders through `Op::Project`
+//!   (I→V into a document); skep's raw FOLLOWLINK returns permanent
+//!   I-spans, which the goldens never speak.
 //! * `implicit_last_link` / `default-slot:source` — follow_link without a
 //!   link/end field: the most recent link, the SOURCE end (pinned by
 //!   isolation/insert_text_does_not_affect_links_in_same_document, whose
@@ -72,9 +195,29 @@
 //! * `slot-from-evidence-doc` — a bare follow whose recorded result names a
 //!   document: the slot whose projection lands in that document is the one
 //!   the script followed (the golden's own result disambiguates the end).
-//! * `follow_as_projection` — follow_link renders through `Op::Project`
-//!   (I→V into a document); skep's raw FOLLOWLINK returns permanent
-//!   I-spans, which the goldens never speak.
+//! * `render-by-identity` — operator ruling 11: a followed endset renders
+//!   bytes once per RECORDED I-span, in span order, from whichever live
+//!   arrangement speaks for each portion — never once per projected
+//!   occurrence (shared content used to render "DEF" as "DEFEFDEF").
+//! * `traverse-hops-from-world` — traversal hop links resolve from the
+//!   shadow's links (every created link's endsets), never by text
+//!   re-search; `links_found` lists compare against a real FindLinksFtt.
+//!
+//! ### The searches — `find`
+//!
+//! * `doc-from-source-role` — a bare find_links/find_documents searches from
+//!   the source-role document when the scenario names one.
+//! * `by-routes-explicit-side` — find_links `by: "target"` routes the
+//!   explicit from-doc into the TO slot: the field named the doc searched
+//!   FROM, `by` named the endset constrained
+//!   (interactions/link_both_endpoints_transcluded op11).
+//! * `set-empty:unconstrained:<key>` — an EMPTY `fromset`/`toset`/`threeset`
+//!   (the `<key>`) on a find_links is the recording client's NOSPECS: no
+//!   constraint on that slot (create_link's empty means empty; the query's
+//!   empty means any).
+//! * `transcluded-region-search` — a find_links `via_transcluded_content`
+//!   query searches exactly the register's document's foreign-origin
+//!   regions.
 //! * `i-coverage-search` — a search aimed at content the shadow knows was
 //!   deleted (or at a doc whose current extent no longer covers the
 //!   recorded region) is built from I-coverage captured at delete time —
@@ -84,19 +227,76 @@
 //!   doc's live extent is intersected with it before imaging (udanax's
 //!   sparse V tolerated fat query spans; the golden's RESULT is still
 //!   compared untouched).
-//! * `delete-span-from-post-state` / `delete-span-widened-boundary` — a
-//!   text-located delete span corrected by the recorded post-delete content
-//!   (diff pins exactly what udanax removed), or widened by the flanking
-//!   space that convention shows the scripts deleted.
-//! * `vcopy-dest-from-evidence` — a dest-less vcopy aimed at the doc whose
-//!   later probe shows the copied bytes embedded, instead of the register.
-//! * `endset-evidence` (extended) — also refines whole-extent doc-ref
-//!   endsets from later follow results (vspec-shaped or content strings),
-//!   so stored links carry the extents the scripts actually made.
-//! * `allowlist-adjusted:width` / `allowlist-adjusted:count` — a comparator
-//!   agreed only because an allowlist entry's declared width tolerance or
-//!   count delta covered the difference; the runner allowlists such an
-//!   agreement (the entry's existence is the adjudicated divergence).
+//! * `endset-coverage-translated` — operator ruling 11: retrieve_endsets
+//!   compares the golden's (docid, V-span) endsets mapped through Image to
+//!   I-coverage against skep's recorded endset spans — coverage equality,
+//!   not coordinate equality (udanax resolved into the query doc's V-space).
+//! * `endsets-bare-result-as-from` — a retrieve_endsets whose `result` is a
+//!   bare vspec list, naming no slot, recorded the FROM endset: each of the
+//!   three recordings of this shape (links/delete_at_root_origin_height_1,
+//!   delete_from_middle_affects_later_links, delete_width_larger_than_
+//!   content) lists its link's source span, never its target.
+//! * `endsets-as-followlink` — a retrieve_endsets addressed to the link's
+//!   own space compares each slot's recorded widths, as a multiset, against
+//!   the widths of the I-spans FOLLOWLINK reports (links/
+//!   link_retrieval_via_endsets): udanax rendered the endsets in the link's
+//!   V-space, skep reports them permanent.
+//!
+//! ### Content reads — `read`
+//!
+//! * `contents:content-subspace` — whole-document retrieves read the
+//!   CONTENT subspace only, matching udanax's retrieve_contents (its
+//!   recorded results never include link-subspace items) — all of it, as
+//!   skep's own extent reports it, never sized from the recording.
+//! * `contents:both-subspaces` — a retrieve whose recorded result lists a
+//!   link address alongside text read the link subspace too, as a second
+//!   RetrieveV, so a refusal of the link side cannot void the content read;
+//!   the link addresses compare through α (the version scenarios'
+//!   whole-document retrieves surfaced the copied link). The reply's shape
+//!   follows the golden.
+//! * `read-scoped-to-recorded-extent` — a whole-document retrieve read only
+//!   as many content positions as the golden's reply carries, when the
+//!   shadow (the recorded reality) holds more — the script's specset was
+//!   narrower than the doc (createnewversion_text_vs_links reads 33 of 34).
+//! * `full-probe-targets-last-write` — a `full_text_*`/`full_content_*`
+//!   probe reads the doc the last CONTENT write touched, never a follow
+//!   landing and never the drifted register
+//!   (subspace/insert_text_check_both_link_positions op7).
+//! * `retrieve-follow-landing` — a doc-less retrieve right after a follow
+//!   whose recorded result names a vspec reads THOSE spans (links/
+//!   follow_link op8 retrieves the link destination, not the register).
+//! * `contents:per-doc-keyed` — `<docname>: [strings]` fields, or
+//!   `<docname>_content: [strings]`, are the recorded per-document replies
+//!   of one retrieve or snapshot (ispan_partial_overlap's `source:/dest:`
+//!   arrays, the `expected` string alongside being prose;
+//!   cross_document_transclusion_isolation's `A_content`/`C_content`).
+//! * `read-span-from-recorded-strings` — a per-doc-keyed reply that is a
+//!   proper substring of the doc's shadow content locates in the SHADOW
+//!   (golden-side data only) and that span is read from skep — the script's
+//!   unrecorded specset reconstructed without consulting skep's answer.
+//! * `specset-from-description` — a "First N chars from each document" spec
+//!   set reads the first N positions of every document created
+//!   (content/retrieve_multiple_documents).
+//! * `deep-vaddress-span` — a span dict at a NESTED local address ("1.1.1")
+//!   is built as an arbitrary-depth tumbler span and asked of skep raw;
+//!   M6's answer — empty (a well-formed nested span resolves to nothing,
+//!   R6) or `MalformedSpan` (ruling 17) — is compared as recorded
+//!   (boundary_deep_vaddress_reads).
+//! * `vspan-count-by-role` — a `<role>_vspan_count` field counts the spans
+//!   of the role document's vspanset (internal/ispan_consolidation_bulk's
+//!   `source_vspan_count`, `dest_vspan_count`).
+//! * `poom-empty` — `poom_empty: true` (false) records that the document's
+//!   POOM — udanax's V-space arrangement — is (is not) empty: compared as
+//!   skep's vspanset being empty (bert/bert_failure_leaves_ispace_
+//!   corruption).
+//!
+//! ### Correspondence — `correspondence`
+//!
+//! * `compare-operands-explicit` — a compare op's two operands read from its
+//!   own role-keyed vspec-dict fields (ms_version_race's `version_a1`/
+//!   `original`), never from the original/version convention.
+//! * `compare-window` — a `<ref>_span` field narrows that side of a compare
+//!   to the window it names (compare_partial's "shared (13-18)").
 //! * `compare:self` — a compare naming one resolvable document and a second
 //!   reference the recording never uses (the harness's original/version
 //!   default in a one-document scenario, keying no recorded pair) compares
@@ -112,193 +312,19 @@
 //!   compared (edgecases/compare_disjoint_documents, internal/
 //!   ispan_partial_overlap). After a version the recording made, the
 //!   default's second document is that version, whether or not skep made it.
-//! * `golden-duplicate-result` — the golden's expected list names one
-//!   address twice (a recording defect); compared as a set, the dedup
-//!   tagged so the defect stays visible.
-//! * `account_as_delegate` / `create_node_as_delegate` — udanax account
-//!   selection / sub-account minting map onto M3 delegation.
-//! * `create_links:repeat` — a plural create repeats one MakeLink per
-//!   recorded result.
-//! * `alpha-bind-from-result:N` — N unbound golden result addresses were
-//!   bound to skep response addresses positionally (the α-map's sanctioned
-//!   move; a wrong pairing surfaces later as a double-bind finding).
-//! * `contents:content-subspace` — whole-document retrieves read the
-//!   CONTENT subspace only, matching udanax's retrieve_contents (its
-//!   recorded results never include link-subspace items) — all of it, as
-//!   skep's own extent reports it, never sized from the recording.
-//! * `contents:both-subspaces` — a retrieve whose recorded result lists a
-//!   link address alongside text read the link subspace too, as a second
-//!   RetrieveV, so a refusal of the link side cannot void the content read;
-//!   the link addresses compare through α (the version scenarios'
-//!   whole-document retrieves surfaced the copied link). The reply's shape
-//!   follows the golden.
-//! * `full-probe-targets-last-write` — a `full_text_*`/`full_content_*`
-//!   probe reads the doc the last CONTENT write touched, never a follow
-//!   landing and never the drifted register
-//!   (subspace/insert_text_check_both_link_positions op7).
-//! * `by-routes-explicit-side` — find_links `by: "target"` routes the
-//!   explicit from-doc into the TO slot: the field named the doc searched
-//!   FROM, `by` named the endset constrained
-//!   (interactions/link_both_endpoints_transcluded op11).
-//! * `delete-text-from-op-name` — a bare `delete_A` op's removed text comes
-//!   from its name, post-state-diff first
-//!   (iaddress_allocation/delete_does_not_affect_next_insert).
-//! * `read-scoped-to-recorded-extent` — a whole-document retrieve read only
-//!   as many content positions as the golden's reply carries, when the
-//!   shadow (the recorded reality) holds more — the script's specset was
-//!   narrower than the doc (createnewversion_text_vs_links reads 33 of 34).
-//! * `retrieve-follow-landing` — a doc-less retrieve right after a follow
-//!   whose recorded result names a vspec reads THOSE spans (links/
-//!   follow_link op8 retrieves the link destination, not the register).
-//! * `render-by-identity` — operator ruling 11: a followed endset renders
-//!   bytes once per RECORDED I-span, in span order, from whichever live
-//!   arrangement speaks for each portion — never once per projected
-//!   occurrence (shared content used to render "DEF" as "DEFEFDEF").
-//! * `endset-coverage-translated` — operator ruling 11: retrieve_endsets
-//!   compares the golden's (docid, V-span) endsets mapped through Image to
-//!   I-coverage against skep's recorded endset spans — coverage equality,
-//!   not coordinate equality (udanax resolved into the query doc's V-space).
-//! * `traverse-hops-from-world` — traversal hop links resolve from the
-//!   shadow's links (every created link's endsets), never by text
-//!   re-search; `links_found` lists compare against a real FindLinksFtt.
-//! * `insert-all:distributed` — an `insert_all` texts array fills one
-//!   created document per text, in creation order.
-//! * `insert-aim-from-recorded-vspanset` — a doc-less insert re-aims at the
-//!   doc whose next recorded vspanset shows the width grew by this insert
-//!   (insert_vspace_mapping: the register held the version snapshot).
-//! * `insert-padded-to-recorded-vspanset:+N` — the recorded vspanset width
-//!   is the authority for how much the script inserted; the field text is
-//!   padded (with spaces) to match, never the comparison adjusted. DECLINED
-//!   when links seated between the insert and the probe explain the surplus
-//!   — that is udanax's version link carryover (see
-//!   `VERSION_LINK_CARRYOVER_ANALYSIS`), and padding would fabricate a
-//!   ghost content byte (createnewversion_text_vs_links' own retrieve
-//!   delivers 33 text chars plus the link marker for its recorded 0.34).
-//! * `vcopy-source-reaimed` — a from-description that grounded OUTSIDE its
-//!   doc's live extent (the register pointing at the just-created empty
-//!   destination) re-grounds against the content-holding docs excluding the
-//!   destination; the recorded post-state confirms the span
-//!   (internal/ispan_partial_overlap's "positions 3-7 (CDEFG)").
-//! * `contents:per-doc-keyed` — `<docname>: [strings]` fields, or
-//!   `<docname>_content: [strings]`, are the recorded per-document replies
-//!   of one retrieve or snapshot (ispan_partial_overlap's `source:/dest:`
-//!   arrays, the `expected` string alongside being prose;
-//!   cross_document_transclusion_isolation's `A_content`/`C_content`).
-//! * `read-span-from-recorded-strings` — a per-doc-keyed reply that is a
-//!   proper substring of the doc's shadow content locates in the SHADOW
-//!   (golden-side data only) and that span is read from skep — the script's
-//!   unrecorded specset reconstructed without consulting skep's answer.
-//! * `delete-noop-from-post-state` — the recorded post-delete content
-//!   equals the pre-delete content byte-for-byte: udanax removed nothing,
-//!   so neither does the harness (delete_all_with_links' whole-doc remove).
-//! * `endset-from-transcluded-region` — a create_link `on:` field naming
-//!   transcluded content grounds the endset to the home document's
-//!   foreign-origin (copied-in) regions, read from the live V→I image.
-//! * `transcluded-region-search` — a find_links `via_transcluded_content`
-//!   query searches exactly the register's document's foreign-origin
-//!   regions.
+//! * `identity-pairs-by-position` — a compare over `positions` with a
+//!   `results` map `{"i_j": bool}` records whether positions i and j (1-based
+//!   into the list) share their I-address: each pair compared through the
+//!   positions' live images (internal/internal_transclusion_multiple_copies).
+//!
+//! ### The pre-pass's reconstructions — `ground`, among the groundings
+//!
 //! * `vcopy-cover-from-comparisons` / `vcopy-embed-plan` /
 //!   `vcopy-span-from-comparison` / `vcopy-prefix-from-comparison` —
 //!   grounding-pre-pass reconstructions of append-shaped vcopys from the
 //!   scenario's own probes and recorded comparison pairs (the round-4
 //!   unrecorded-prefix cluster); surfaced in the groundings list and
 //!   executed as expansion plans.
-//! * `endsets-bare-result-as-from` — a retrieve_endsets whose `result` is a
-//!   bare vspec list, naming no slot, recorded the FROM endset: each of the
-//!   three recordings of this shape (links/delete_at_root_origin_height_1,
-//!   delete_from_middle_affects_later_links, delete_width_larger_than_
-//!   content) lists its link's source span, never its target.
-//! * `vspan-count-by-role` — a `<role>_vspan_count` field counts the spans
-//!   of the role document's vspanset (internal/ispan_consolidation_bulk's
-//!   `source_vspan_count`, `dest_vspan_count`).
-//! * `poom-empty` — `poom_empty: true` (false) records that the document's
-//!   POOM — udanax's V-space arrangement — is (is not) empty: compared as
-//!   skep's vspanset being empty (bert/bert_failure_leaves_ispace_
-//!   corruption).
-//! * `identity-pairs-by-position` — a compare over `positions` with a
-//!   `results` map `{"i_j": bool}` records whether positions i and j (1-based
-//!   into the list) share their I-address: each pair compared through the
-//!   positions' live images (internal/internal_transclusion_multiple_copies).
-//! * `args-from-op-name` — an insert recording no `text` field takes its text
-//!   from its op's name (`insert_A` inserts "A"; `insert_1_AAA`, "AAA").
-//! * `insert-position-from-post-state` — a doc-less, position-less insert
-//!   whose own recorded post-state shows its text mid-document lands at the
-//!   single gap that explains that post-state
-//!   (iaddress_allocation/interleaved_insert_delete's insert_2).
-//! * `insert-loop:a-z-cycle` — an `insert_loop` inserts one byte per count,
-//!   cycling A–Z, each appended (edgecases/many_small_inserts' recorded
-//!   sample).
-//! * `interior-typing:per-step` — an `interior_typing` op's `results` list
-//!   plays step by step: each character inserted at its recorded position,
-//!   then compared against that step's own recorded probes.
-//! * `delete_all:empty-noop` — a delete_all of a document already empty
-//!   executes nothing: there is nothing to remove, and skep's DELETE takes
-//!   no zero width (T12).
-//! * `empty-specset` — a NOSPECS (or "empty") spec set is sent as no
-//!   regions: udanax's empty query, asked as recorded.
-//! * `specset-from-description` — a "First N chars from each document" spec
-//!   set reads the first N positions of every document created
-//!   (content/retrieve_multiple_documents).
-//! * `endsets-as-followlink` — a retrieve_endsets addressed to the link's
-//!   own space compares each slot's recorded widths, as a multiset, against
-//!   the widths of the I-spans FOLLOWLINK reports (links/
-//!   link_retrieval_via_endsets): udanax rendered the endsets in the link's
-//!   V-space, skep reports them permanent.
-//! * `compare-window` — a `<ref>_span` field narrows that side of a compare
-//!   to the window it names (compare_partial's "shared (13-18)").
-//! * `docid-synthesized:N` — the recording kept no address for N of the
-//!   documents a create made: each was minted under a golden id the harness
-//!   synthesized (the next root ordinal, `Shadow::synthesize_docid`), bound
-//!   in α but recorded nowhere, so the op compares nothing (address-binding
-//!   agrees only over recorded addresses).
-//!
-//! ## Round-7 policies (the 34-scenario corpus extension)
-//!
-//! * `session-route:<label>` — the op carried a `session` field and executed
-//!   under that label's account session (label→account bound by `account`
-//!   ops; two labels on one account share its session).
-//! * `session-bind:<label>` — an `account` op carrying a `session` field
-//!   binds that label to the account it made current.
-//! * `session-label-implicit-bind` — an op used a session label no `account`
-//!   op had bound; it bound to the then-current account.
-//! * `connect:session` — green's `connect` opens a TCP session; skep
-//!   sessions open at account binding, so the op executes nothing.
-//! * `open-noop-vs-recorded-failure` — green REFUSED the open (bert
-//!   enforcement / account gating, manifest A1/A2); skep has no open layer
-//!   to refuse with, so the recorded failure is surfaced as a raw
-//!   divergence, never absorbed into the open no-op.
-//! * `joint-absence` — the golden recorded a failure against an object that
-//!   was never created (green's OPEN validates nothing, A7); the reference
-//!   has no α-image, so there is nothing to address on skep either — both
-//!   systems refuse, compared as agreement via the expected-failure
-//!   comparator (α's never-bound finding is deliberately not emitted: the
-//!   absence IS the expected answer).
-//! * `explicit-empty-endset` — a create_link `fromset`/`toset`/`threeset`
-//!   recorded as an EMPTY list is passed to MakeLink empty (green accepts
-//!   all three, A11); the default-endset conventions never substitute.
-//! * `threeset-marker→types-document` — a threeset span at the udanax
-//!   type-marker local address `1.0.2.X` (client.py's LINK_TYPES encoding)
-//!   denotes the type name (2.2 jump / 2.3 quote / 2.6 footnote / 2.6.2
-//!   margin) the types document holds — the same `types_document` mapping
-//!   the name-based path uses.
-//! * `threeset-content-type` — a threeset carrying real content spans
-//!   becomes the link's TYPE endset via α (green's content-span third
-//!   endsets are first-class, A8).
-//! * `set-empty:unconstrained:<key>` — an EMPTY `fromset`/`toset`/`threeset`
-//!   (the `<key>`) on a find_links is the recording client's NOSPECS: no
-//!   constraint on that slot (create_link's empty means empty; the query's
-//!   empty means any).
-//! * `compare-operands-explicit` — a compare op's two operands read from its
-//!   own role-keyed vspec-dict fields (ms_version_race's `version_a1`/
-//!   `original`), never from the original/version convention.
-//! * `deep-vaddress-span` — a span dict at a NESTED local address ("1.1.1")
-//!   is built as an arbitrary-depth tumbler span and asked of skep raw;
-//!   M6's answer — empty (a well-formed nested span resolves to nothing,
-//!   R6) or `MalformedSpan` (ruling 17) — is compared as recorded
-//!   (boundary_deep_vaddress_reads).
-//! * `raw wire request codes` are inexpressible by construction: skep's
-//!   surface is typed `Op`s; unknown-code handling lives in the transport's
-//!   `OpKind::Unparseable`, which a library harness cannot reach.
 
 use std::collections::BTreeMap;
 
@@ -324,8 +350,8 @@ use crate::fields::{
     raw_spanset_of, recorded_content, recorded_spanset, span_dict, str_field, strings_of,
     vspec_dict, CopySource, DocAim, DocSpans, Verb, ANNOTATION_KEYS, POST_WRITE_KEYS,
 };
-use crate::ground::SetupStep;
-use crate::rig::Rig;
+use crate::ground::{ImpliedSetup, SetupStep};
+use crate::rig::{brief, Rig};
 use crate::outcome::{Disagreement, OpOutcome, Status};
 use crate::shadow::{Shadow, ShadowLink};
 use crate::tum::{last_component, link_home_docid, parse_dotted, span_elem_width, VPoint, VRegion};
@@ -667,7 +693,7 @@ impl Cx<'_> {
     /// the world-change methods: inferred setup is golden-side by
     /// construction (`Effect::Inferred`), so it is mirrored whatever skep
     /// answers.
-    pub fn exec_setup_step(&mut self, step: &SetupStep) -> Result<(), String> {
+    fn exec_setup_step(&mut self, step: &SetupStep) -> Result<(), String> {
         let refused = |what: String, r: &Response| format!("{what}: {}", refusal(r));
         match step {
             SetupStep::Insert { doc, bytes } => {
@@ -959,12 +985,7 @@ impl Cx<'_> {
     /// in α, when skep made it and `effect` reaches the shadow. The caller
     /// owes that the shadow does not hold `golden` yet ([`ensure_document`]
     /// asks first): a document is minted once.
-    pub fn create_document(
-        &mut self,
-        golden: &str,
-        name: Option<&str>,
-        effect: Effect,
-    ) -> Response {
+    fn create_document(&mut self, golden: &str, name: Option<&str>, effect: Effect) -> Response {
         let r = self.rig.create_private_document();
         if let (true, Response::AckAddr { addr, .. }) = (effect.reaches_shadow(), &r) {
             self.alpha.bind(golden, addr);
@@ -1219,6 +1240,50 @@ fn run_plan(cx: &mut Cx, index: usize, out: &mut OpOutcome) -> Option<String> {
 fn plan_failed(out: &mut OpOutcome, failure: String) {
     let expected = "reconstructed setup executes".to_string();
     out.disagree("expansion-plan", Disagreement { expected, actual: failure });
+}
+
+/// The pre-pass's implied setup, carried out before op 0 through the
+/// world-change methods — inferred, so golden-side by construction: each
+/// implied create, then each lead-in step, its document created first when
+/// the shadow does not hold it; then the register returns to the first
+/// document the scenario names. Returns a line for each part skep did not
+/// carry out, for the groundings; nothing stops the run, and the ops that
+/// depend on a part that failed then disagree honestly.
+pub fn run_lead_in(cx: &mut Cx, setup: &ImpliedSetup) -> Vec<String> {
+    let mut failures = Vec::new();
+    for docid in &setup.implied_creates {
+        if cx.alpha.peek_exact(docid).is_some() {
+            continue; // already bound (defensive; should not happen)
+        }
+        let r = cx.create_document(docid, None, Effect::Inferred);
+        if !matches!(r, Response::AckAddr { .. }) {
+            failures.push(format!("implied-create FAILED for {docid}: {}", brief(&r)));
+        }
+    }
+    'lead_in: for step in &setup.lead_in {
+        // Lead-in inserts may target docs the scenario creates itself
+        // later only via implied paths; ensure existence first. (Link
+        // steps live in expansion plans, never the lead-in, but the
+        // match stays total.)
+        if let SetupStep::Insert { doc, .. } | SetupStep::Copy { doc, .. } = step {
+            if !cx.shadow.knows(doc) {
+                let r = cx.create_document(doc, None, Effect::Inferred);
+                if !matches!(r, Response::AckAddr { .. }) {
+                    failures.push(format!("lead-in create FAILED for {doc}: {}", brief(&r)));
+                    continue 'lead_in;
+                }
+            }
+        }
+        if let Err(e) = cx.exec_setup_step(step) {
+            failures.push(format!("lead-in FAILED: {e}"));
+        }
+    }
+    // The register belongs to the first document the SCENARIO names,
+    // not the last lead-in target.
+    if let Some(first) = cx.shadow.created().first().cloned() {
+        cx.shadow.set_current(&first);
+    }
+    failures
 }
 
 // ────────────────────────────── endset sides ───────────────────────────────

@@ -8,6 +8,10 @@
 //! Insert answers its success with `AckAddr`; delete, copy and rearrange
 //! with `Ack` — skep-febe's dispatch — and each write tests for exactly its
 //! own.
+//!
+//! The pre-pass restates these handlers' effects on the shadow in
+//! `ground/sim.rs`, in the `Sim::sim_<verb>` methods named for them: change
+//! the two together.
 
 use serde_json::Value;
 
@@ -20,12 +24,12 @@ use super::{
 use crate::allowlist::Adjustments;
 use crate::compare::compare_content;
 use crate::evidence::{
-    delete_is_noop, next_content_probe, resolve_delete_span, resolve_insert, Effect,
+    delete_is_noop, resolve_delete_span, resolve_insert, vcopy_destination, vcopy_ordinal, Effect,
 };
 use crate::fields::{
     cuts_of, distributed_insert_texts, distribution_targets, expected_failure, field,
-    is_position_marker, recorded_count, resolve_position, str_field, strings_of, vcopy_sources,
-    verb_of, Verb,
+    recorded_count, resolve_position, str_field, strings_of, swap_regions, vcopy_sources, verb_of,
+    Verb,
 };
 use crate::outcome::{Disagreement, OpOutcome, Status};
 use crate::tum::{parse_vpos, VPoint};
@@ -414,74 +418,28 @@ pub(super) fn h_vcopy(
             return;
         }
     };
-    let src_doc = sources.first().map(|s| s.doc.clone());
-    let copied: Vec<u8> = sources
-        .iter()
-        .filter(|s| s.region.sub == 1)
-        .flat_map(|s| cx.shadow.slice(&s.doc, s.region.ord, s.region.width))
-        .collect();
-
-    // Destination doc + position. `to` may be a doc reference or the
-    // position markers "end"/"start" (destination = the source doc then).
-    // A dest-less vcopy aims at the doc whose later probe shows the copied
-    // bytes embedded (endsets/endsets_transcluded_source: the script's
-    // second doc, which the register never pointed at), preferring a doc
-    // other than the source; the register serves only evidence-less ops.
-    let to_raw = str_field(op, &["to", "dest", "target", "target_doc"]);
-    let dest: Option<String> = match to_raw {
-        // "end"/"start"/"end of doc" are position markers over the source
-        // doc itself (vcopy_to_same_document's self-transclusion).
-        Some(s) if is_position_marker(s) => src_doc.clone(),
-        Some(s) => cx.shadow.resolve_doc(s),
-        None => str_field(op, &["doc", "docid"])
-            .and_then(|s| cx.shadow.resolve_doc(s))
-            .or_else(|| {
-                let copied_text = String::from_utf8_lossy(&copied).into_owned();
-                let evidenced: Vec<String> = cx
-                    .shadow
-                    .created()
-                    .iter()
-                    .filter(|d| {
-                        next_content_probe(cx.ops, index, cx.shadow, d)
-                            .is_some_and(|p| p.contains(&copied_text))
-                    })
-                    .cloned()
-                    .collect();
-                let pick = evidenced
-                    .iter()
-                    .find(|d| Some(d.as_str()) != src_doc.as_deref())
-                    .or_else(|| evidenced.first())
-                    .cloned();
-                if pick.is_some() {
-                    out.adaptations.push("vcopy-dest-from-evidence".into());
-                }
-                pick
-            })
-            .or_else(|| cx.doc_arg(op, out, &["doc", "docid"])),
+    // Where the copy lands — its destination, then its ordinal there — is
+    // the one reading the grounding pre-pass applies too
+    // (`evidence::vcopy_destination`, `evidence::vcopy_ordinal`); a copy
+    // that names and evidences no document aims by `doc_arg`.
+    let dest = match vcopy_destination(cx.ops, index, cx.shadow, &sources, &mut out.adaptations) {
+        Ok(Some(dest)) => Some(dest),
+        Ok(None) => cx.doc_arg(op, out, &["doc", "docid"]),
+        Err(reason) => {
+            inexpressible(out, reason);
+            return;
+        }
     };
     let Some(dest) = dest else {
         inexpressible(out, "vcopy without a resolvable destination".into());
         return;
     };
-    let ord = match str_field(op, &["address", "at", "position"]) {
-        Some(p) => match resolve_position(cx.shadow, &dest, p) {
-            Some((VPoint { sub: 1, ord }, how)) => {
-                out.adaptations.extend(how.map(|how| how.tag().to_string()));
-                ord
-            }
-            _ => {
-                inexpressible(out, format!("vcopy position `{p}` is not groundable"));
-                return;
-            }
-        },
-        None => {
-            if to_raw.is_some_and(|s| s.trim().to_ascii_lowercase().starts_with("start")) {
-                out.adaptations.push("position-start".into());
-                1
-            } else {
-                out.adaptations.push("position-end".into());
-                cx.shadow.text_len(&dest) + 1
-            }
+    let ord = match vcopy_ordinal(op, cx.shadow, &dest, &mut out.adaptations) {
+        Ok(Some(ord)) => ord,
+        Ok(None) => cx.shadow.text_len(&dest) + 1,
+        Err(reason) => {
+            inexpressible(out, reason);
+            return;
         }
     };
     let recorded_failure = expected_failure(op);
@@ -514,24 +472,9 @@ pub(super) fn h_rearrange(cx: &mut Cx, op: &Value, out: &mut OpOutcome, shape: R
     };
     let mut cuts = cuts_of(op);
     if cuts.is_empty() && shape == Rearrangement::Swap {
-        // Two texts to exchange, located in the shadow.
-        if let Some(regions) = field(op, &["regions"]).and_then(Value::as_array) {
-            let texts: Vec<&str> = regions.iter().filter_map(Value::as_str).collect();
-            if let [ta, tb] = texts[..] {
-                let a = cx.shadow.find_text(Some(&doc), ta);
-                let b = cx.shadow.find_text(Some(&doc), tb);
-                if let (Some((_, s1)), Some((_, s2))) = (a, b) {
-                    out.adaptations.push("text-located:regions".into());
-                    let (w1, w2) = (ta.len() as u64, tb.len() as u64);
-                    let (s1, e1, s2, e2) = if s1 <= s2 {
-                        (s1, s1 + w1, s2, s2 + w2)
-                    } else {
-                        (s2, s2 + w2, s1, s1 + w1)
-                    };
-                    cuts = vec![s1, e1, s2, e2];
-                }
-            }
-        }
+        // Two texts to exchange, located in the shadow — the one reading the
+        // grounding pre-pass applies too (`fields::swap_regions`).
+        cuts = swap_regions(op, cx.shadow, &doc, &mut out.adaptations).unwrap_or_default();
     }
     let want = shape.cuts();
     if cuts.len() != want {

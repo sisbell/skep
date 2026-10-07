@@ -6,33 +6,12 @@
 //! vcopy copies (`vcopy_sources`) included. Both the grounding pre-pass and
 //! the play pass read through these helpers, so the two passes cannot drift
 //! on what a field means. What a scenario's recorded evidence says an op DID —
-//! whether it happened at all, where an insert landed, what a delete
-//! removed — is `evidence`'s.
+//! whether it happened at all, where an insert or a vcopy landed, what a
+//! delete removed — is `evidence`'s.
 //!
-//! Decoration grammar (each form calibrated against named golden files):
-//! * `"end"` / `"start"` / `"position 6"` / `"after First"` — positions
-//!   (internal/insert_only_baseline, versions/version_insert_in_middle,
-//!   discovery/insert_multiple_times_accumulates_docispan).
-//! * `"1.1 length 3"` — span (edgecases/delete_first_char,
-//!   delete_all/delete_all_incrementally).
-//! * `"1.16-1.20"` — a bare inclusive ordinal range (links/delete_at_root_
-//!   origin_height_1).
-//! * `"quick (5-9)"` / `"ABCD (1-4)"` — text with inclusive ordinal range
-//!   (content/retrieve_noncontiguous_spans, edgecases/overlapping_vcopy).
-//! * `"1-char span at 1.1"` — width + position (edgecases/
-//!   link_zero_width_endpoints).
-//! * `"just 'S'"` / `"first occurrence of 'text' (1.10-1.13)"` — quoted text
-//!   (edgecases/vcopy_single_char, internal/internal_transclusion_with_link).
-//! * `"source:here"` — doc-qualified text (versions/version_with_links).
-//! * `"doc1[1.2-1.4]"` — doc-qualified range (subspace/
-//!   insert_text_check_link_positions).
-//! * `"all of B"` / `"all"` / `"full document"` — whole extent (content/
-//!   nested_vcopy, spanfilade/delete_all_transcluded_content,
-//!   links/overlapping_links).
-//! * `"bank (first)"` / `"shared (transcluded)"` — text with a descriptive
-//!   parenthetical, stripped (links/overlapping_links_different_targets,
-//!   endsets/endsets_transcluded_source); `"DEF (from C)"` — the
-//!   parenthetical names the document (identity/identity_partial_transclusion).
+//! Two of its grammars are modules of their own: `verb`, the verb an op's
+//! name reads as, and `description`, a recorded description grounded
+//! against the shadow — each item of both named through this module.
 
 use serde_json::Value;
 
@@ -41,6 +20,16 @@ use crate::tum::{
     is_golden_address, is_link_address, link_home_docid, parse_dotted, parse_vpos, parse_width,
     VPoint, VRegion,
 };
+
+// The verb an op's name reads as: the canonical verbs, the stem table, the meta names.
+mod verb;
+// The description grammar: a recorded position, span, range or text, grounded in the shadow.
+mod description;
+
+pub use description::{
+    locate, ordinal_range, quoted, resolve_position, Grounding, Located, PositionGrounding,
+};
+pub use verb::{has_observation_fields, normalize, reads_whole_content, verb_of, Verb};
 
 // ───────────────────────────── raw field access ────────────────────────────
 
@@ -637,6 +626,26 @@ pub fn cuts_of(op: &Value) -> Vec<u64> {
     cuts
 }
 
+/// The cuts a swap's two `regions` texts name in `doc`, each found in the
+/// shadow, the earlier region's first — tagged `text-located:regions`;
+/// `None` unless both are found (identity/identity_through_rearrange_swap).
+/// The one reading both passes swap a swap that records no cuts by.
+pub fn swap_regions(
+    op: &Value,
+    shadow: &Shadow,
+    doc: &str,
+    adaptations: &mut Vec<String>,
+) -> Option<Vec<u64>> {
+    let regions = field(op, &["regions"]).and_then(Value::as_array)?;
+    let texts: Vec<&str> = regions.iter().filter_map(Value::as_str).collect();
+    let [ta, tb] = texts[..] else { return None };
+    let (_, s1) = shadow.find_text(Some(doc), ta)?;
+    let (_, s2) = shadow.find_text(Some(doc), tb)?;
+    adaptations.push("text-located:regions".into());
+    let (w1, w2) = (ta.len() as u64, tb.len() as u64);
+    Some(if s1 <= s2 { vec![s1, s1 + w1, s2, s2 + w2] } else { vec![s2, s2 + w2, s1, s1 + w1] })
+}
+
 /// Does this `open_document` ask for udanax's CONFLICT_COPY — a fork of the
 /// opened document into a new version — rather than a plain open? In either
 /// spelling the recordings use: `conflict: "copy"`, or `copy` / `copy_mode:
@@ -759,632 +768,6 @@ pub fn arrow_results(op: &Value) -> Vec<(String, String, String)> {
     out
 }
 
-// ────────────────────────────────── verbs ──────────────────────────────────
-
-/// The canonical verb an op's name reads as — the one reading of "what kind
-/// of op is this" both passes dispatch on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Verb {
-    CreateDocument,
-    CreateDocuments,
-    CreateChain,
-    Setup,
-    OpenDocument,
-    CloseDocument,
-    Insert,
-    InsertLoop,
-    InteriorTyping,
-    Delete,
-    DeleteAll,
-    Vcopy,
-    Pivot,
-    Swap,
-    Rearrange,
-    CreateVersion,
-    CreateLink,
-    FollowLink,
-    Traverse,
-    FindLinks,
-    FindDocuments,
-    RetrieveContents,
-    RetrieveVspan,
-    RetrieveVspanset,
-    RetrieveEndsets,
-    CompareVersions,
-    Account,
-    CreateNode,
-    Connect,
-    Observe,
-    Meta,
-}
-
-impl Verb {
-    pub fn name(self) -> &'static str {
-        match self {
-            Verb::CreateDocument => "create_document",
-            Verb::CreateDocuments => "create_documents",
-            Verb::CreateChain => "create_chain",
-            Verb::Setup => "setup",
-            Verb::OpenDocument => "open_document",
-            Verb::CloseDocument => "close_document",
-            Verb::Insert => "insert",
-            Verb::InsertLoop => "insert_loop",
-            Verb::InteriorTyping => "interior_typing",
-            Verb::Delete => "delete",
-            Verb::DeleteAll => "delete_all",
-            Verb::Vcopy => "vcopy",
-            Verb::Pivot => "pivot",
-            Verb::Swap => "swap",
-            Verb::Rearrange => "rearrange",
-            Verb::CreateVersion => "create_version",
-            Verb::CreateLink => "create_link",
-            Verb::FollowLink => "follow_link",
-            Verb::Traverse => "traverse",
-            Verb::FindLinks => "find_links",
-            Verb::FindDocuments => "find_documents",
-            Verb::RetrieveContents => "retrieve_contents",
-            Verb::RetrieveVspan => "retrieve_vspan",
-            Verb::RetrieveVspanset => "retrieve_vspanset",
-            Verb::RetrieveEndsets => "retrieve_endsets",
-            Verb::CompareVersions => "compare_versions",
-            Verb::Account => "account",
-            Verb::CreateNode => "create_node",
-            Verb::Connect => "connect",
-            Verb::Observe => "observe",
-            Verb::Meta => "meta",
-        }
-    }
-
-    /// Does an op of this verb change a document's content subspace?
-    pub fn writes_content(self) -> bool {
-        matches!(
-            self,
-            Verb::Insert
-                | Verb::InsertLoop
-                | Verb::InteriorTyping
-                | Verb::Delete
-                | Verb::DeleteAll
-                | Verb::Vcopy
-                | Verb::Pivot
-                | Verb::Swap
-                | Verb::Rearrange
-        )
-    }
-}
-
-/// The verb an op's own name reads as — [`normalize`] over the op, the one
-/// reading every forward scan asks "what kind of op is this" through.
-pub fn verb_of(op: &Value) -> Option<Verb> {
-    normalize(op_name(op), op)
-}
-
-/// Does this op read a document's whole content: a
-/// [`Verb::RetrieveContents`] read that no span, spec set or position
-/// narrows — by a field, or by its name's own position tokens
-/// ("text_at_1_3", "pos_1_4", "link_at_2_1")? Only such a read testifies to
-/// everything a document holds.
-pub fn reads_whole_content(op: &Value) -> bool {
-    const NARROWING: &[&str] =
-        &["span", "spans", "vspan", "specs", "specset", "positions", "address", "at", "position"];
-    verb_of(op) == Some(Verb::RetrieveContents)
-        && field(op, NARROWING).is_none()
-        && position_from_op_name(op_name(op)).is_none()
-}
-
-/// The meta/diagnostic op names (per the brief): executed nothing, compared
-/// nothing, counted separately — UNLESS the op carries observation data
-/// (a vspanset/contents bundle), in which case it is an [`Verb::Observe`]
-/// probe (internal/interior_typing_two_characters's `initial_state`).
-const META: &[&str] = &[
-    "snapshot", "dump_state", "verify", "setup", "analysis", "note", "summary", "initial_state",
-    "final_state",
-];
-
-/// Longest-matching verb stem, checked in table order (specific before
-/// general — `vspanset` before `vspan`, `delete_all` before `delete`).
-const STEMS: &[(&str, Verb)] = &[
-    ("create_node", Verb::CreateNode),
-    ("create_chain", Verb::CreateChain),
-    ("create_and_transclude", Verb::Vcopy),
-    ("create_documents", Verb::CreateDocuments),
-    ("create_document", Verb::CreateDocument),
-    ("create_doc", Verb::CreateDocument),
-    ("create_sources", Verb::CreateDocuments),
-    ("create_target", Verb::CreateDocument),
-    ("create_multiple_targets", Verb::CreateDocuments),
-    ("open_document", Verb::OpenDocument),
-    ("close_document", Verb::CloseDocument),
-    ("create_version", Verb::CreateVersion),
-    ("version", Verb::CreateVersion),
-    ("create_links", Verb::CreateLink),
-    ("create_link", Verb::CreateLink),
-    ("makelink", Verb::CreateLink),
-    ("interior_typing", Verb::InteriorTyping),
-    ("insert_loop", Verb::InsertLoop),
-    ("insert", Verb::Insert),
-    ("append", Verb::Insert),
-    ("delete_all", Verb::DeleteAll),
-    ("remove_all", Verb::DeleteAll),
-    ("delete", Verb::Delete),
-    ("remove", Verb::Delete),
-    ("vcopy", Verb::Vcopy),
-    ("copy", Verb::Vcopy),
-    ("pivot", Verb::Pivot),
-    ("swap", Verb::Swap),
-    ("rearrange", Verb::Rearrange),
-    ("reverse_traversal", Verb::Traverse),
-    ("traverse", Verb::Traverse),
-    ("follow_links", Verb::Traverse),
-    ("follow_link", Verb::FollowLink),
-    ("find_links", Verb::FindLinks),
-    ("links_", Verb::FindLinks),
-    ("links", Verb::FindLinks),
-    ("find_documents", Verb::FindDocuments),
-    ("find_docs", Verb::FindDocuments),
-    // A roster of the documents a setup made, `{op: "docs", A: id, …}`
-    // (isolation/cross_document_transclusion_isolation) — see `roster`.
-    ("docs", Verb::CreateDocuments),
-    ("retrieve_vspanset", Verb::RetrieveVspanset),
-    ("vspanset", Verb::RetrieveVspanset),
-    ("retrieve_vspan", Verb::RetrieveVspan),
-    ("vspan", Verb::RetrieveVspan),
-    ("retrieve_endsets", Verb::RetrieveEndsets),
-    ("endsets", Verb::RetrieveEndsets),
-    ("retrieve_contents", Verb::RetrieveContents),
-    ("retrieve", Verb::RetrieveContents),
-    ("contents", Verb::RetrieveContents),
-    ("content", Verb::RetrieveContents),
-    ("text_at", Verb::RetrieveContents),
-    ("pos_", Verb::RetrieveContents),
-    ("link_at", Verb::RetrieveContents),
-    ("full_text", Verb::RetrieveContents),
-    ("full_content", Verb::RetrieveContents),
-    ("compare", Verb::CompareVersions),
-    ("comparisons", Verb::CompareVersions),
-    ("account", Verb::Account),
-    ("connect", Verb::Connect),
-    // The new-corpus checkpoint op: vspanset+contents bundle, or a bare
-    // failed probe of a never-created doc (error field only).
-    ("probe", Verb::Observe),
-];
-
-/// Does the op carry observation data (a probe bundle)? A vspanset or
-/// contents field, a docs map, a targets list or a positions map does; so
-/// does a reply-shaped `result`/`before`/`after`/`empty`, and a string array
-/// under any key that is no annotation — a snapshot's `A_content`
-/// (isolation/cross_document_transclusion_isolation) is an observation of
-/// document A, not commentary.
-pub fn has_observation_fields(op: &Value) -> bool {
-    let Some(o) = op.as_object() else { return false };
-    for (k, v) in o {
-        match k.as_str() {
-            "vspanset" | "vspans" | "contents" | "content" | "positions" | "docs" | "targets" => {
-                return true
-            }
-            "result" | "before" | "after" | "empty"
-                if strings_of(v).is_some() || looks_like_spanset(v) =>
-            {
-                return true;
-            }
-            k if !ANNOTATION_KEYS.contains(&k)
-                && v.as_array().is_some_and(|a| a.iter().all(Value::is_string)) =>
-            {
-                return true;
-            }
-            _ => {}
-        }
-    }
-    false
-}
-
-/// Normalize an op's name to a canonical verb: meta list (with the
-/// observation-bundle escape), then the stem table, then a field-shape
-/// fallback for pure state-probe names. `None` ⇒ inexpressible.
-pub fn normalize(op_name: &str, op: &Value) -> Option<Verb> {
-    let l = op_name.to_ascii_lowercase();
-    if l == "setup" {
-        return Some(Verb::Setup);
-    }
-    if META.iter().any(|m| l == *m || l.starts_with(&format!("{m}_"))) {
-        return Some(if has_observation_fields(op) { Verb::Observe } else { Verb::Meta });
-    }
-    for (stem, verb) in STEMS {
-        if l.starts_with(stem) {
-            return Some(*verb);
-        }
-    }
-    if !arrow_results(op).is_empty() {
-        return Some(Verb::CreateLink);
-    }
-    // Shape fallback for unknown probe names.
-    if let Some(res) = op.get("result") {
-        if looks_like_spanset(res) {
-            return Some(Verb::RetrieveVspanset);
-        }
-        if let Some(arr) = res.as_array() {
-            if !arr.is_empty() && arr.iter().all(|v| v.as_str().is_some_and(is_link_address))
-            {
-                return Some(Verb::FindLinks);
-            }
-            if arr.iter().all(|v| v.as_str().is_some()) {
-                return Some(Verb::RetrieveContents);
-            }
-        }
-    }
-    if has_observation_fields(op) {
-        return Some(Verb::Observe);
-    }
-    None
-}
-
-// ───────────────────────────── decorated forms ─────────────────────────────
-
-/// How a description grounded to a region. A TEXT grounding found the
-/// described bytes by searching the shadow — a reconstruction, which
-/// recorded evidence may correct (a delete's post-state diff); every other
-/// grounding is numbers the recording client sent, which stand as sent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Grounding {
-    /// The described text, found verbatim, doc-qualified, or quoted.
-    Text,
-    /// The Nth occurrence of the described text ("bank (second)").
-    NthText,
-    /// A numeric span: "1.1 length 3", "1.3 for 0.5", "1-char span at 1.1".
-    Span,
-    /// An inclusive ordinal range: "1.16-1.20", "positions 1-4",
-    /// "doc1[1.2-1.4]", "quick (5-9)".
-    Range,
-    /// A document's whole current extent: "all", "all of B", "entire …".
-    WholeExtent,
-}
-
-impl Grounding {
-    /// The adaptation tag the report records for this grounding.
-    pub fn tag(self) -> &'static str {
-        match self {
-            Grounding::Text => "text-located",
-            Grounding::NthText => "text-located:nth-occurrence",
-            Grounding::Span => "span-from-description",
-            Grounding::Range => "range-from-description",
-            Grounding::WholeExtent => "whole-extent",
-        }
-    }
-
-    /// Is the region a text reconstruction rather than numbers sent?
-    pub fn is_text(self) -> bool {
-        matches!(self, Grounding::Text | Grounding::NthText)
-    }
-}
-
-/// A located region: golden doc + 1-based content ordinal + width.
-#[derive(Clone, Debug)]
-pub struct Located {
-    pub doc: String,
-    pub ord: u64,
-    pub width: u64,
-    /// How the description grounded.
-    pub how: Grounding,
-}
-
-impl Located {
-    /// The located content-subspace region — a description grounds in the
-    /// content subspace only.
-    pub fn region(&self) -> VRegion {
-        VPoint::content(self.ord).region(self.width)
-    }
-
-    /// The located region as one document side of a spec.
-    pub fn into_side(self) -> DocSpans {
-        let region = self.region();
-        (self.doc, vec![region])
-    }
-}
-
-/// Resolve a decorated span/text description against the shadow. `doc_hint`
-/// narrows the search when the caller knows the document. Never guesses: a
-/// description this grammar cannot ground returns `None` and the caller
-/// classifies the op inexpressible with the text recorded.
-pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Located> {
-    let desc = desc.trim();
-
-    // Plain text, found verbatim — the common case; try before any grammar.
-    if let Some((doc, ord)) = shadow.find_text(doc_hint, desc) {
-        return Some(Located { doc, ord, width: desc.len() as u64, how: Grounding::Text });
-    }
-
-    // "S.O length N" (delete_first_char).
-    if let Some((pos, len)) = desc.split_once(" length ") {
-        if let (Some(VPoint { sub: 1, ord }), Ok(w)) =
-            (parse_vpos(pos.trim()), len.trim().parse::<u64>())
-        {
-            let doc = doc_hint.map(str::to_string).or_else(|| shadow.current())?;
-            return Some(Located { doc, ord, width: w, how: Grounding::Span });
-        }
-    }
-
-    // "1.3 for 0.5 (CDEFG)" — the client's own "S for W" span idiom with an
-    // optional reminder parenthetical (isolation/delete_does_not_affect_
-    // other_documents). Numeric, so it counts as sent, never reconstructed.
-    {
-        let core = desc.split(" (").next().unwrap_or(desc).trim();
-        if let Some((pos, w)) = core.split_once(" for ") {
-            if let (Some(VPoint { sub: 1, ord }), Some(w)) =
-                (parse_vpos(pos.trim()), parse_width(w.trim()))
-            {
-                if w > 0 {
-                    let doc = doc_hint.map(str::to_string).or_else(|| shadow.current())?;
-                    return Some(Located { doc, ord, width: w, how: Grounding::Span });
-                }
-            }
-        }
-    }
-
-    // "1.16-1.20" — a bare inclusive ordinal range (links/delete_at_root_
-    // origin_height_1's create_link `source` and `target`).
-    if let Some((ord, w)) = ordinal_range(desc) {
-        let doc = doc_hint.map(str::to_string).or_else(|| shadow.current())?;
-        return Some(Located { doc, ord, width: w, how: Grounding::Range });
-    }
-
-    // "positions 1-4 (Orig)" — explicit ordinal range with a reminder
-    // parenthetical (edgecases/vcopy_to_same_document's `from`).
-    {
-        let core = desc.split(" (").next().unwrap_or(desc).trim();
-        if let Some(r) =
-            core.strip_prefix("positions ").or_else(|| core.strip_prefix("position "))
-        {
-            if let Some((ord, w)) = ordinal_range(r.trim()) {
-                let doc = doc_hint.map(str::to_string).or_else(|| shadow.current())?;
-                return Some(Located { doc, ord, width: w, how: Grounding::Range });
-            }
-        }
-    }
-
-    // "N-char span at S.O" (link_zero_width_endpoints).
-    if let Some(idx) = desc.find("-char span at ") {
-        let n = desc[..idx].trim().parse::<u64>().ok()?;
-        let ord = parse_vpos(desc[idx + "-char span at ".len()..].trim())?.ord;
-        let doc = doc_hint.map(str::to_string).or_else(|| shadow.current())?;
-        return Some(Located { doc, ord, width: n.max(1), how: Grounding::Span });
-    }
-
-    // "doc[A-B]" bracket range (insert_text_check_link_positions) and the
-    // single-position form "doc1[1.2]" (createlink_check_text_positions) —
-    // one content ordinal, width 1.
-    if let Some((docref, rest)) = desc.split_once('[') {
-        if let Some(range) = rest.strip_suffix(']') {
-            if let Some(doc) = shadow.resolve_doc(docref.trim()) {
-                if let Some((ord, w)) = ordinal_range(range) {
-                    return Some(Located { doc, ord, width: w, how: Grounding::Range });
-                }
-                if let Some(VPoint { sub: 1, ord }) = parse_vpos(range.trim()) {
-                    return Some(Located { doc, ord, width: 1, how: Grounding::Range });
-                }
-            }
-        }
-    }
-
-    // "doc:text" qualified text (version_with_links "source:here").
-    if let Some((docref, text)) = desc.split_once(':') {
-        if let Some(doc) = shadow.resolve_doc(docref.trim()) {
-            let t = text.trim();
-            if let Some((d, ord)) = shadow.find_text(Some(&doc), t) {
-                return Some(Located { doc: d, ord, width: t.len() as u64, how: Grounding::Text });
-            }
-        }
-    }
-
-    // "all of B" / "all" / "full document" / "entire …" — whole extent.
-    let whole = |doc: String| -> Option<Located> {
-        let n = shadow.text_len(&doc);
-        if n == 0 {
-            return None;
-        }
-        Some(Located { doc, ord: 1, width: n, how: Grounding::WholeExtent })
-    };
-    if let Some(rest) = desc.strip_prefix("all of ") {
-        if let Some(doc) = shadow.resolve_doc(rest.trim()) {
-            return whole(doc);
-        }
-    }
-    if desc == "all" || desc == "full document" || desc.starts_with("entire") {
-        let doc = doc_hint.map(str::to_string).or_else(|| shadow.current())?;
-        return whole(doc);
-    }
-
-    // Trailing parenthetical: "text (5-9)" range, "text (from C)" doc
-    // qualifier, "bank (second)" occurrence selector, or descriptive junk
-    // to strip ("shared (transcluded)").
-    if let Some(open) = desc.rfind('(') {
-        if desc.ends_with(')') {
-            let head = desc[..open].trim();
-            let inner = &desc[open + 1..desc.len() - 1];
-            if let Some((ord, w)) = ordinal_range(inner) {
-                let doc = doc_hint
-                    .map(str::to_string)
-                    .or_else(|| shadow.find_text(None, head).map(|(d, _)| d))
-                    .or_else(|| shadow.current())?;
-                // The explicit range is authoritative; the head text is a
-                // reminder (retrieve_noncontiguous_spans "quick (5-9)").
-                return Some(Located { doc, ord, width: w, how: Grounding::Range });
-            }
-            if let Some(docref) = inner.strip_prefix("from ") {
-                if let Some(doc) = shadow.resolve_doc(docref.trim()) {
-                    if let Some((d, ord)) = shadow.find_text(Some(&doc), head) {
-                        return Some(Located {
-                            doc: d,
-                            ord,
-                            width: head.len() as u64,
-                            how: Grounding::Text,
-                        });
-                    }
-                }
-            }
-            // "(first)" / "(second)" / "(first, same span)" — an occurrence
-            // selector, honored, not stripped: round 3 landed every
-            // "bank (second)" on the FIRST occurrence, giving
-            // overlapping_links_different_targets a third overlapping link.
-            if let Some(n) = occurrence_of(inner) {
-                if !head.is_empty() {
-                    if let Some((d, ord)) = shadow.find_text_nth(doc_hint, head, n) {
-                        return Some(Located {
-                            doc: d,
-                            ord,
-                            width: head.len() as u64,
-                            how: Grounding::NthText,
-                        });
-                    }
-                    return None; // selector present but unsatisfiable
-                }
-            }
-            if !head.is_empty() {
-                if let Some((d, ord)) = shadow.find_text(doc_hint, head) {
-                    return Some(Located {
-                        doc: d,
-                        ord,
-                        width: head.len() as u64,
-                        how: Grounding::Text,
-                    });
-                }
-            }
-        }
-    }
-
-    // Quoted text anywhere: "just 'S'", "first occurrence of 'text' (…)".
-    if let Some(q) = quoted(desc) {
-        if let Some((d, ord)) = shadow.find_text(doc_hint, &q) {
-            return Some(Located { doc: d, ord, width: q.len() as u64, how: Grounding::Text });
-        }
-    }
-
-    None
-}
-
-/// An occurrence-selector parenthetical's ordinal: "first" → 1,
-/// "first, same span" → 1, "second" → 2 … `None` for anything else.
-fn occurrence_of(inner: &str) -> Option<u64> {
-    let word = inner.split([',', ' ']).next()?.trim().to_ascii_lowercase();
-    match word.as_str() {
-        "first" => Some(1),
-        "second" => Some(2),
-        "third" => Some(3),
-        "fourth" => Some(4),
-        "fifth" => Some(5),
-        _ => None,
-    }
-}
-
-/// "5-9" or "1.5-1.9" inclusive ordinal range → (start ordinal, width).
-pub fn ordinal_range(s: &str) -> Option<(u64, u64)> {
-    let (a, b) = s.split_once('-')?;
-    let pv = |x: &str| -> Option<u64> {
-        let x = x.trim();
-        match parse_dotted(x)?.as_slice() {
-            [o] => Some(*o),
-            [1, o] => Some(*o),
-            _ => None,
-        }
-    };
-    let (start, end) = (pv(a)?, pv(b)?);
-    if end >= start && start > 0 {
-        Some((start, end - start + 1))
-    } else {
-        None
-    }
-}
-
-/// First 'single'- or "double"-quoted segment.
-pub fn quoted(s: &str) -> Option<String> {
-    for q in ['\'', '"'] {
-        if let Some(i) = s.find(q) {
-            if let Some(j) = s[i + 1..].find(q) {
-                let inner = &s[i + 1..i + 1 + j];
-                if !inner.is_empty() {
-                    return Some(inner.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
-/// How a described position grounded: the forms of position a recording
-/// describes rather than sends as a V-position ([`resolve_position`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PositionGrounding {
-    /// "end" / "append": one past the document's content.
-    End,
-    /// "start" / "beginning": the first content position.
-    Start,
-    /// "position N": content ordinal N.
-    Numbered,
-    /// "after X": just past the text X, found in the shadow.
-    AfterText,
-    /// "before X": at the text X, found in the shadow.
-    BeforeText,
-}
-
-impl PositionGrounding {
-    /// The adaptation tag the report records for this grounding.
-    pub fn tag(self) -> &'static str {
-        match self {
-            PositionGrounding::End => "position-end",
-            PositionGrounding::Start => "position-start",
-            PositionGrounding::Numbered => "position-from-description",
-            PositionGrounding::AfterText => "position-after-text",
-            PositionGrounding::BeforeText => "position-before-text",
-        }
-    }
-
-    /// Was the position found by searching the shadow for text — a
-    /// reconstruction — rather than read from a number or the document's
-    /// bounds?
-    pub fn is_text(self) -> bool {
-        matches!(self, PositionGrounding::AfterText | PositionGrounding::BeforeText)
-    }
-}
-
-/// A position description → the V-position it names and how it grounded,
-/// against the shadow when relative; an explicit V-position carries no
-/// grounding, being what the client sent. `None` = not a position this
-/// grammar speaks.
-pub fn resolve_position(
-    shadow: &Shadow,
-    doc: &str,
-    desc: &str,
-) -> Option<(VPoint, Option<PositionGrounding>)> {
-    use PositionGrounding::{AfterText, BeforeText, End, Numbered, Start};
-    let desc = desc.trim();
-    if let Some(at) = parse_vpos(desc) {
-        return Some((at, None));
-    }
-    let content = |ord: u64, how: PositionGrounding| Some((VPoint::content(ord), Some(how)));
-    match desc {
-        "end" | "append" => return content(shadow.text_len(doc) + 1, End),
-        "start" | "beginning" => return content(1, Start),
-        _ => {}
-    }
-    if let Some(n) = desc.strip_prefix("position ").and_then(|x| x.trim().parse::<u64>().ok()) {
-        return content(n, Numbered);
-    }
-    if let Some(t) = desc.strip_prefix("after ") {
-        let t = t.trim();
-        if let Some((_, ord)) = shadow.find_text(Some(doc), t) {
-            return content(ord + t.len() as u64, AfterText);
-        }
-        // Case-insensitive fallback: descriptions say "after first" for "First ".
-        if let Some((_, ord, w)) = shadow.find_text_ignoring_case(doc, t) {
-            return content(ord + w, AfterText);
-        }
-    }
-    if let Some(t) = desc.strip_prefix("before ") {
-        if let Some((_, ord)) = shadow.find_text(Some(doc), t.trim()) {
-            return content(ord, BeforeText);
-        }
-    }
-    None
-}
-
 /// Positional probes: the first two consecutive numeric `_`-tokens in the
 /// op's name, read as subspace then ordinal ("text_at_1_3_before" → 1.3;
 /// "pos_1_4_after" → 1.4).
@@ -1452,6 +835,36 @@ pub fn created_addresses(op: &Value) -> Option<Vec<String>> {
         }
         _ => None,
     }
+}
+
+/// The address a `create_version`'s recording kept for the version: its
+/// `result`, or a `result` object's `version`.
+pub fn version_result(op: &Value) -> Option<String> {
+    match field(op, &["result"]) {
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(Value::Object(o)) => o.get("version").and_then(Value::as_str).map(str::to_string),
+        _ => None,
+    }
+}
+
+/// The document a `create_version` versions, as both passes read it: a
+/// `from`/`source`/`of`/`original` reference that resolves, else a `doc` one
+/// that does — `doc` usually names the NEW version (identity/
+/// identity_through_rearrange_pivot), so only a resolving one names the
+/// source — else the current-document register, tagged `doc-from-register`.
+/// `None` when no document is in scope.
+pub fn version_source(
+    op: &Value,
+    shadow: &Shadow,
+    adaptations: &mut Vec<String>,
+) -> Option<String> {
+    str_field(op, &["from", "source", "of", "original"])
+        .and_then(|s| shadow.resolve_doc(s))
+        .or_else(|| str_field(op, &["doc"]).and_then(|s| shadow.resolve_doc(s)))
+        .or_else(|| {
+            adaptations.push("doc-from-register".into());
+            shadow.current()
+        })
 }
 
 /// An arrow spec carried in a note/comment VALUE — `note: "doc1 -> doc4"`

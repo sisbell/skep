@@ -3,7 +3,7 @@
 //! pin each shared region exactly, else greedily from the source documents'
 //! text — and the forward scans that decide whether an append-shaped vcopy
 //! needs such a plan at all. Each reads the shadow and the recorded ops,
-//! never the simulation's state.
+//! never the walk's own state (`sim::Sim`).
 
 use serde_json::Value;
 

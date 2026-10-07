@@ -99,9 +99,10 @@ fn the_vector_set_meets_one_answer_at_this_parser() {
             }
         }
     }
-    assert!(admitted >= 12 && refused >= 62, "{admitted} admitted, {refused} refused");
-    // The vectors the lane names, the cap's two sides and the escape table's,
-    // each present by name.
+    assert!(admitted >= 16 && refused >= 63, "{admitted} admitted, {refused} refused");
+    // The vectors the lane names, the cap's two sides, the escape table's,
+    // and the sizes no reader's own bound may refuse and the digits no digit
+    // class may widen, each present by name.
     for required in [
         "binding_canonical",
         "binding_spec_example_spaced",
@@ -127,6 +128,11 @@ fn the_vector_set_meets_one_answer_at_this_parser() {
         "escape_of_the_line_separator",
         "escape_of_del",
         "raw_control_in_a_string",
+        "prefix_component_past_a_machine_word",
+        "prefix_component_past_the_wire_digit_cap",
+        "prefix_of_257_components",
+        "prefix_with_non_ascii_digits",
+        "endpoint_of_257_origins",
     ] {
         assert!(vectors.iter().any(|v| v["name"] == required), "the set names {required}");
     }

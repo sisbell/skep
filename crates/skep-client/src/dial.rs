@@ -24,8 +24,8 @@
 //!
 //! `https://` is the `tls` feature's arm — rustls with the platform verifier
 //! (§9 item 12) — OFF in the library and ON in the `skep` binary; without
-//! the feature an `https` origin is [`DialError::NotHeld`], never dialed in
-//! the clear.
+//! the feature an `https` origin is [`DialError::NotHeld`], refused before
+//! any connection opens and never dialed in the clear.
 
 use std::fmt;
 use std::io::{self, Read, Write};
@@ -367,14 +367,14 @@ impl PlainHttp {
         Ok(stream)
     }
 
-    /// The connection to `origin`: plain TCP for `http://`, TLS over it for
-    /// `https://` where the build holds the arm.
+    /// The connection to `origin`: plain TCP for `http://`; an `https://`
+    /// origin is the `tls` module's whole — TLS over TCP where the build
+    /// holds the arm, refused before any connection opens where it does not.
     fn connect(&self, origin: &Origin, read_timeout: Duration) -> Result<Box<dyn Conn>, DialError> {
-        let tcp = self.tcp(origin, read_timeout)?;
-        if !origin.is_https() {
-            return Ok(Box::new(tcp));
+        if origin.is_https() {
+            return tls::connect(self, origin, read_timeout);
         }
-        tls::wrap(origin, tcp)
+        Ok(Box::new(self.tcp(origin, read_timeout)?))
     }
 
     /// The request head's bytes: the daemon refuses a `Content-Length` with
@@ -575,6 +575,7 @@ mod tls {
     //! which features another crate turned on.
 
     use std::sync::{Arc, OnceLock};
+    use std::time::Duration;
 
     use rustls::pki_types::ServerName;
     use rustls::{ClientConfig, ClientConnection, StreamOwned};
@@ -601,7 +602,9 @@ mod tls {
             .map_err(DialError::Tls)
     }
 
-    pub(super) fn wrap(origin: &Origin, tcp: TcpStream) -> Result<Box<dyn Conn>, DialError> {
+    /// The TCP connection to `origin`, rustls over it.
+    pub(super) fn connect(dialer: &PlainHttp, origin: &Origin, read_timeout: Duration) -> Result<Box<dyn Conn>, DialError> {
+        let tcp = dialer.tcp(origin, read_timeout)?;
         let name = ServerName::try_from(origin.dial_host().to_string())
             .map_err(|e| DialError::Tls(PlainHttp::fail(origin, "server name", e)))?;
         let conn = ClientConnection::new(config()?, name).map_err(|e| DialError::Tls(PlainHttp::fail(origin, "tls", e)))?;
@@ -612,13 +615,14 @@ mod tls {
 #[cfg(not(feature = "tls"))]
 mod tls {
     //! Without the feature an `https` origin is a transport this build does
-    //! not hold — refused by name, never dialed in the clear.
+    //! not hold — refused by name before any connection opens: this arm is
+    //! handed no stream, so it can never dial in the clear.
 
-    use std::net::TcpStream;
+    use std::time::Duration;
 
-    use super::{Conn, DialError, Origin};
+    use super::{Conn, DialError, Origin, PlainHttp};
 
-    pub(super) fn wrap(_origin: &Origin, _tcp: TcpStream) -> Result<Box<dyn Conn>, DialError> {
+    pub(super) fn connect(_dialer: &PlainHttp, _origin: &Origin, _read_timeout: Duration) -> Result<Box<dyn Conn>, DialError> {
         Err(DialError::NotHeld("https".into()))
     }
 }
@@ -761,5 +765,56 @@ mod tests {
         assert!(plaintext_non_loopback_warning(&Origin::parse("http://127.0.0.1:8642").unwrap()).is_none());
         assert!(plaintext_non_loopback_warning(&Origin::parse("https://board.example").unwrap()).is_none());
         assert!(plaintext_non_loopback_warning(&Origin::parse("http://board.example:8642").unwrap()).is_some());
+    }
+
+    /// Without the `tls` arm an `https` origin is refused BY NAME BEFORE ANY
+    /// CONNECTION OPENS: a listening port and a closed one answer the same
+    /// refusal in both forms of the dial, and nothing reaches the listener.
+    #[cfg(not(feature = "tls"))]
+    #[test]
+    fn an_https_origin_without_the_tls_arm_is_refused_before_any_connection() {
+        let listening = TcpListener::bind("127.0.0.1:0").unwrap();
+        listening.set_nonblocking(true).unwrap();
+        let open = listening.local_addr().unwrap().port();
+        let closed = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let https = |port: u16| Origin::parse(&format!("https://127.0.0.1:{port}")).unwrap();
+        let not_held = DialError::NotHeld("https".into());
+        for port in [open, closed] {
+            assert_eq!(PlainHttp::new().exchange(&https(port), &Request::get("/health")).unwrap_err(), not_held, "port {port}");
+        }
+        let head = RequestHead { method: Method::Get, path: "/events".into(), headers: Vec::new(), content_length: None };
+        assert_eq!(PlainHttp::new().stream(&https(open), &head, &mut io::empty(), &mut |_: &Headers| {}).unwrap_err(), not_held);
+        let deadline = std::time::Instant::now() + Duration::from_millis(200);
+        while std::time::Instant::now() < deadline {
+            match listening.accept() {
+                Ok((_, peer)) => panic!("a connection from {peer} reached the listener"),
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => thread::sleep(Duration::from_millis(10)),
+                Err(e) => panic!("accept: {e}"),
+            }
+        }
+    }
+
+    /// With the `tls` arm an `https` origin puts no plaintext on the wire:
+    /// what reaches a plain listener is a TLS record or nothing — never a
+    /// request line, never the session header.
+    #[cfg(feature = "tls")]
+    #[test]
+    fn an_https_origin_puts_no_plaintext_request_on_the_wire() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut got = vec![0u8; 16 * 1024];
+            let n = s.read(&mut got).unwrap_or(0);
+            got.truncate(n);
+            got
+        });
+        let origin = Origin::parse(&format!("https://127.0.0.1:{port}")).unwrap();
+        let req = Request::post("/op", b"{}".to_vec()).header("Skepd-Session", "9f3a6c21d4b8e07a5c1b2d4e6f708192");
+        PlainHttp::new().exchange(&origin, &req).expect_err("no TLS server answers");
+        let got = server.join().unwrap();
+        assert!(!got.windows(8).any(|w| w == b"HTTP/1.1") && !got.windows(13).any(|w| w == b"Skepd-Session"), "plaintext on the wire: {got:?}");
+        assert!(got.first().is_none_or(|b| *b == 0x16), "not a TLS handshake record: {got:?}");
     }
 }

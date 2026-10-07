@@ -261,3 +261,70 @@ fn a_path_inside_the_store_is_recognised() {
     assert!(store.contains_path(&store.root().join("keys").join("x.skep-key")));
     assert!(!store.contains_path(&dir.path().join("elsewhere").join("anchor.skep-key")));
 }
+
+/// §3.4 — the store is recognised under a destination the backup moment is
+/// about to make, its directories created only after the check: several
+/// directories not yet made beneath it, the store reached through a symlink
+/// or by a path relative to the working directory, a store not yet made at
+/// all; and a path beside the store — a sibling whose name begins with the
+/// store's, a `..` out of it — is never inside it.
+#[cfg(unix)]
+#[test]
+fn a_path_under_the_store_through_directories_not_yet_made_is_recognised() {
+    let (dir, store) = store();
+    store.generate(None).unwrap();
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(store.root(), &link).unwrap();
+    // From the working directory up to the root, then down to the store.
+    let up: PathBuf = std::env::current_dir().unwrap().components().skip(1).map(|_| Component::ParentDir).collect();
+    let relative = up.join(store.root().strip_prefix("/").unwrap()).join("keys/new/deeper");
+    for inside in [store.root().join("keys/new/deeper"), link.join("keys/new/anchor.skep-key"), link.join("new/deeper"), relative] {
+        assert!(store.contains_path(&inside), "{} lies inside the store", inside.display());
+    }
+    for beside in [dir.path().join("elsewhere/new/anchor.skep-key"), dir.path().join("store-b/new"), link.join("../elsewhere/new")] {
+        assert!(!store.contains_path(&beside), "{} lies beside the store", beside.display());
+    }
+    let fresh = FileStore::open(dir.path().join("fresh"));
+    assert!(fresh.contains_path(&dir.path().join("fresh/a/b")), "a store not yet made holds what lies under it");
+    assert!(!fresh.contains_path(&dir.path().join("fresher/a")));
+}
+
+/// §3.5 arm 2 — a binding whose key file is gone HALTS naming the key it
+/// binds (AUTH-5.67: never a fallback): the lone device key is never signed
+/// with in its place, whether the principal is named or omitted.
+#[test]
+fn a_binding_whose_key_file_is_gone_halts_and_never_falls_back() {
+    let (_dir, store) = store();
+    let origin = Origin::parse("http://127.0.0.1:8642").unwrap();
+    let bound = store.generate(Some(Label::new("bound").unwrap())).unwrap().0;
+    store.bind(&Binding::Enrollment { origin: origin.clone(), principal: 1, account: "1.0.1".into(), fingerprint: bound }).unwrap();
+    fs::remove_file(store.key_path(&bound)).unwrap();
+    store.generate(Some(Label::new("lone").unwrap())).unwrap();
+    for principal in [Some(1), None] {
+        let sel = KeySelector::Board { origin: &origin, principal };
+        assert!(matches!(store.select(&sel, Purpose::Sign), Err(StoreError::MissingKey { fingerprint, .. }) if fingerprint == bound), "{principal:?}");
+        assert!(matches!(store.signer(&sel), Err(StoreError::MissingKey { fingerprint, .. }) if fingerprint == bound), "{principal:?}");
+    }
+}
+
+/// §2.2's selection test AT EVERY ARM (P11): an anchor file copied into the
+/// store and bound is refused for signing however the lookup reaches it —
+/// by binding, by prefix, by label — at the store's signer as at its
+/// lookup, while a read of its public facts answers them.
+#[test]
+fn an_anchor_is_refused_for_signing_at_every_arm() {
+    let (_dir, store) = store();
+    let origin = Origin::parse("http://127.0.0.1:8642").unwrap();
+    store.generate(Some(Label::new("device").unwrap())).unwrap();
+    let anchor = KeyFile::new(Seed::new([8u8; 32]), true, Some(Label::new("paper-a").unwrap()), None);
+    FileStore::write_once(&store.key_path(&anchor.fingerprint), anchor.to_json().as_bytes()).unwrap();
+    store.bind(&Binding::Enrollment { origin: origin.clone(), principal: 7, account: "1.0.7".into(), fingerprint: anchor.fingerprint }).unwrap();
+    let prefix = anchor.fingerprint.to_hex()[..12].to_string();
+    for sel in [KeySelector::Board { origin: &origin, principal: Some(7) }, KeySelector::Prefix(&prefix), KeySelector::Label("paper-a")] {
+        let refused = |r: Result<(), StoreError>| matches!(r, Err(StoreError::KeyFile { error: KeyFileError::AnchorAtSigningCommand, .. }));
+        assert!(refused(store.select(&sel, Purpose::Sign).map(drop)), "{sel:?} selects the anchor to sign");
+        assert!(refused(store.signer(&sel).map(drop)), "{sel:?} hands out the anchor's signer");
+        let facts = store.select(&sel, Purpose::Read).unwrap_or_else(|e| panic!("{sel:?}: {e}"));
+        assert!(facts.anchor && facts.fingerprint == anchor.fingerprint, "{sel:?}");
+    }
+}

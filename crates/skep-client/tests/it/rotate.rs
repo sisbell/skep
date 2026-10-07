@@ -2,9 +2,9 @@
 //! enrolled, the trail from the OLD enroll link (the genesis link at the
 //! notebook) to the new, the old key retired with no close sent, the binding
 //! appended; a re-run after T3 writes NO second trail; the `--payload` arm;
-//! the box prefilled from the retiring key's label; the reach naming an
-//! account the gesture will not close; a `closed` before T4 faced with the
-//! hand named.
+//! the box prefilled from the retiring key's label; the reach naming every
+//! account of the closure the gesture will not close, at every level; a
+//! `closed` before T4 faced with the hand named.
 
 use skep_client::board::{frames, Answer, KeySetAnswer, Scope, T_SUPERSEDES};
 use skep_client::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome};
@@ -179,4 +179,52 @@ fn a_closed_before_t4_names_the_other_hand() {
     let text = err.to_string();
     assert!(text.contains("retired under this walk") && text.contains("ANOTHER hand (AUTH-5.77)") && text.contains(&other_fp.to_string()) && text.contains("tablet"), "{text}");
     assert!(!person.inner.said("the supersession trail is written"), "halted at the first undone state");
+}
+
+/// THE HEAD INVARIANT's ENUMERATION is a CLOSURE, never one level
+/// (AUTH-5.59's head): the old key co-holds an account handed off beneath
+/// `1.0.1`, and another handed off beneath THAT; both are admitted — the
+/// second through the first's doc 1 — and the reach names each as an
+/// account the gesture will not close. MUTATION: with the enumeration one
+/// level deep, the second is never admitted, and never named.
+#[test]
+fn the_reach_names_every_level_of_the_closure() {
+    let dir = tempfile::tempdir().unwrap();
+    let sd = spawn(&dir.path().join("board"), false);
+    let board = board(sd.port());
+    let store = FileStore::open(dir.path().join("store"));
+    let old_fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let old = key_file(&store, &old_fp).signer();
+    let old_entry = || Enrollment::new(HybridSigner::public_key(&old).clone(), false, Some("the giver's old key".into())).unwrap();
+    let entry = |s: &HybridSigner, label: &str| Enrollment::new(HybridSigner::public_key(s).clone(), false, Some(label.into())).unwrap();
+    let (friend, grandchild) = (HybridSigner::from_seed(1, &[91; 32]).unwrap(), HybridSigner::from_seed(1, &[92; 32]).unwrap());
+    // Level one: `1.0.1.2` handed to the friend, who enrolls the old key.
+    let as_owner = wire_session(&board, 1, &old);
+    wire_delegate(&board, &as_owner, "1.0.1.2", 777).unwrap();
+    board.session_close(&as_owner).unwrap();
+    let anchor = anchor_file(&dir.path().join("anchors"), "a").1.signer();
+    let as_anchor = wire_session(&board, 1, &anchor);
+    wire_enroll(&board, &as_anchor, &anchor, "1.0.1.0.1", "1.0.1.2", &[entry(&friend, "friend")]).expect("level one's genesis");
+    board.session_close(&as_anchor).unwrap();
+    let as_friend = wire_session(&board, 777, &friend);
+    let Answer::Document(_) = board.op(Some(&as_friend), &frames::create_home("1.0.1.2", None)).unwrap() else { panic!() };
+    wire_enroll(&board, &as_friend, &friend, "1.0.1.2.0.1", "1.0.1.2", &[old_entry()]).expect("the old key co-holds level one");
+    // Level two: `1.0.1.2.1` handed on by the friend, the old key enrolled
+    // there too.
+    wire_delegate(&board, &as_friend, "1.0.1.2.1", 888).unwrap();
+    wire_enroll(&board, &as_friend, &friend, "1.0.1.2.0.1", "1.0.1.2.1", &[entry(&grandchild, "grandchild")]).expect("level two's genesis");
+    board.session_close(&as_friend).unwrap();
+    let as_grandchild = wire_session(&board, 888, &grandchild);
+    let Answer::Document(_) = board.op(Some(&as_grandchild), &frames::create_home("1.0.1.2.1", None)).unwrap() else { panic!() };
+    wire_enroll(&board, &as_grandchild, &grandchild, "1.0.1.2.1.0.1", "1.0.1.2.1", &[old_entry()]).expect("the old key co-holds level two");
+    board.session_close(&as_grandchild).unwrap();
+    let mut person = Scripted::new(vec![Script::LabelDefault, Script::Confirm(true)]);
+    rotate(&board, &store, &mut person, &opts(None, None)).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n")));
+    let t = person.transcript.join("\n");
+    assert!(person.said("admitted 1.0.1.2: its honored genesis stands in 1.0.1.0.1"), "{t}");
+    assert!(person.said("admitted 1.0.1.2.1: its honored genesis stands in 1.0.1.2.0.1"), "{t}");
+    for account in ["1.0.1.2", "1.0.1.2.1"] {
+        assert!(person.said(&format!("THE REACH: this gesture will NOT close {account} —")), "{account}:\n{t}");
+    }
 }

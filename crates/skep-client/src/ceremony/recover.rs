@@ -475,6 +475,13 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
             let mut rounds = 0usize;
             loop {
                 for fp in &round_targets {
+                    // One preview and one typed answer per retirement
+                    // (§4a.2 R4): a key this walk already retired — the
+                    // person-class inversion's R4 ahead of R3 — is not
+                    // retired again.
+                    if retired.contains(fp) {
+                        continue;
+                    }
                     retire_one(board, person, &session, &anchor.signer, &reads, set, records, fp, &held, if stolen { PreviewSite::RecoverStolen } else { PreviewSite::RecoverDevice })?;
                     retired.push(*fp);
                     *set = reread(board, &reads.walk.set_account)?;

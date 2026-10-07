@@ -1,24 +1,33 @@
 //! THE HANDOFF DOOR (`client.md` §4c; AUTH-5.90): the giver's beat (a)
 //! idempotent; the recipient's beat with its backup moment in the HANDOFF
-//! venue; `accept`'s halts at an undelegated and a seeded address; the
-//! decline arm; `--reprint`; the giver's genesis homed in X's doc 1 at the
-//! anchor grade; the ownership halt; the depth-2 genesis by reference; G5's
-//! retry; the giver's session as the given account dead; the recipient's
-//! `bind`; the top-level halt; the anchorless line.
+//! venue, at a notebook and at a served board; `accept`'s halts at an
+//! undelegated and a seeded address; the decline arm; `--reprint`; the
+//! giver's genesis homed in X's doc 1 at the anchor grade; the latch's test
+//! client-side first; the ownership halt; the depth-2 genesis by reference;
+//! G5's retry, and a genesis sent again reconciled by containment beside a
+//! second genesis's neither arm; the giver's session as the given account
+//! dead; the giver's and the given account's records read apart; the
+//! recipient's `bind`; the setup act sent not at all where the first child is
+//! another party's; the top-level halt; the anchorless line.
 
-use skep_client::board::{KeySetAnswer, Scope};
-use skep_client::ceremony::accept::{accept, reprint, AcceptOptions};
+use std::path::{Path, PathBuf};
+
+use skep_client::board::{Board, KeySetAnswer, Scope};
+use skep_client::ceremony::accept::{accept, reprint, AcceptOptions, Accepted};
+use skep_client::ceremony::deposit::{deposit, Deposit, DepositHalt, DepositKind, DepositOutcome};
 use skep_client::ceremony::first_session::{document_present, first_session, FirstSessionReads};
 use skep_client::ceremony::handoff::{handoff, Grade, HandoffOptions, HandoffOutcome};
 use skep_client::ceremony::handshake::{handshake, Site};
 use skep_client::derive::records::{credential_records, Hand};
-use skep_client::derive::principal_of;
+use skep_client::derive::{principal_of, KeyDiagnosis};
 use skep_client::person::scripted::{Script, Scripted};
 use skep_client::person::KeptOrPlaced;
+use skep_client::sign::signer_from_seed;
 use skep_client::store::{Binding, FileStore, KeyStore};
+use skep_client::Origin;
 use skep_identity::{encode_enroll, parse_enroll, Enrollment, Fingerprint};
 
-use crate::common::{anchor_file, board, claim, files_in, key_file, keygen, spawn, token_dead, wire_session};
+use crate::common::{anchor_file, board, claim, entry_of, files_in, key_file, keygen, origin_of, recording_board, spawn, token_dead, wire_session, Redirect};
 
 fn give(account: &str, payload: Option<String>, anchor: Option<std::path::PathBuf>) -> HandoffOptions {
     HandoffOptions { principal: 1, account: account.into(), payload: payload.map(|p| format!("{p}\n").into_bytes()), anchor }
@@ -239,4 +248,192 @@ fn a_depth_two_genesis_is_homed_in_the_giving_accounts_doc_one_and_the_decline_a
     assert_eq!((grade, facts.principal), (Grade::Device, principal2));
     assert_eq!(grade.to_string(), "device");
     assert!(!p.said("Handing this off is an anchor act") && !p.said("SECRET kept-or-placed"), "no import at the device grade");
+}
+
+/// A board whose claimant `1.0.1` handed `1.0.1.2` off: beat (a), the
+/// recipient's beat (a phone and two anchors under `ra` and `rb`), and the
+/// giver's anchor-grade genesis under its kept anchor a — the recipient's
+/// store, the principal seated at `1.0.1.2`, and no `skep bind` run.
+struct HandedOff {
+    _daemon: skepd::Skepd,
+    board: Board,
+    anchors: PathBuf,
+    recipient: FileStore,
+    principal: u64,
+    taken: Accepted,
+}
+
+fn handed_off(dir: &Path) -> HandedOff {
+    let daemon = spawn(&dir.join("board"), false);
+    let board = board(daemon.port());
+    let giver = FileStore::open(dir.join("giver"));
+    keygen(&giver, "notebook");
+    let anchors = dir.join("anchors");
+    claim(&board, &giver, &anchors);
+    let HandoffOutcome::Delegated { principal, .. } = handoff(&board, &giver, &mut Scripted::new(vec![]), &give("1.0.1.2", None, None)).unwrap() else { panic!("beat (a)") };
+    let recipient = FileStore::open(dir.join("recipient"));
+    let script = vec![Script::Label("phone".into()), Script::LabelDefault, Script::LabelDefault];
+    let taken = accept(&board, &recipient, &mut Scripted::new(script), &take("1.0.1.2", dir, false)).unwrap();
+    let (kept, _) = anchor_file(&anchors, "a");
+    let mut p = Scripted::new(vec![Script::Confirm(true), Script::Typed("1.0.1.2".into()), Script::KeptOrPlaced(KeptOrPlaced::Kept), Script::YesNo(true)]);
+    let seeded = handoff(&board, &giver, &mut p, &give("1.0.1.2", Some(taken.record.clone()), Some(kept))).unwrap_or_else(|h| panic!("{h}\n{}", p.transcript.join("\n")));
+    assert!(matches!(seeded, HandoffOutcome::Seeded { .. }), "{seeded:?}");
+    HandedOff { _daemon: daemon, board, anchors, recipient, principal, taken }
+}
+
+/// A seeded account's enrolled and retired lists.
+fn set_of(board: &Board, account: &str) -> (Vec<Fingerprint>, Vec<Fingerprint>) {
+    let KeySetAnswer::Set(set) = board.key_set(account).unwrap() else { panic!("{account} is no account") };
+    (set.enrolled.iter().map(|e| e.fingerprint).collect(), set.retired.iter().map(|r| r.fingerprint).collect())
+}
+
+/// G5 = beat (d), AUTH-5.18's CONTAINMENT: the handoff's genesis sent again
+/// — its ack lost — meets `not_genesis_registry` at the latch and is read
+/// against the set: every key of the record stands there, so the act
+/// COMMITTED and this retry is its ack; nothing changes.
+#[test]
+fn a_handoff_genesis_sent_again_is_reconciled_by_containment() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = handed_off(dir.path());
+    let anchor = anchor_file(&h.anchors, "a").1.signer();
+    let before = set_of(&h.board, "1.0.1.2");
+    let token = wire_session(&h.board, 1, &anchor);
+    let again = Deposit { home: "1.0.1.0.1", subject: "1.0.1.2", kind: DepositKind::EnrollVerbatim(h.taken.record.clone()), hand: Some(&anchor), id: "test.genesis-again" };
+    let outcome = deposit(&h.board, &token, &again);
+    h.board.session_close(&token).unwrap();
+    let Ok(DepositOutcome::Committed { reason }) = outcome else { panic!("{outcome:?}") };
+    assert!(reason.contains("not_genesis_registry") && reason.contains("contained"), "{reason}");
+    assert_eq!(set_of(&h.board, "1.0.1.2"), before, "nothing changed");
+}
+
+/// AUTH-5.18's NEITHER arm: a second genesis naming keys the seeded set
+/// holds none of is never the first one's ack — `not_genesis_registry`,
+/// read against the set, is the arm a walk acts on, faced as the account
+/// another key set already holds.
+#[test]
+fn a_second_genesis_of_other_keys_is_the_neither_arm() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = handed_off(dir.path());
+    let anchor = anchor_file(&h.anchors, "a").1.signer();
+    let before = set_of(&h.board, "1.0.1.2");
+    let other = encode_enroll(&[Enrollment::new(signer_from_seed(&[61; 32]).public_key().clone(), false, Some("other".into())).unwrap()]);
+    let token = wire_session(&h.board, 1, &anchor);
+    let second = Deposit { home: "1.0.1.0.1", subject: "1.0.1.2", kind: DepositKind::EnrollVerbatim(other), hand: Some(&anchor), id: "test.genesis-other" };
+    let outcome = deposit(&h.board, &token, &second);
+    h.board.session_close(&token).unwrap();
+    let Err(DepositHalt::NotGenesisRegistry(face)) = outcome else { panic!("{outcome:?}") };
+    assert!(face.to_string().contains("1.0.1.2 already holds a key set and it is not this record's"), "{face}");
+    assert_eq!(set_of(&h.board, "1.0.1.2"), before);
+}
+
+/// AUTH-2.113's residence read is PER SUBJECT: the given account's genesis
+/// is homed in the giver's own doc 1 and lies within the giver's span, yet
+/// the giver's records name none of its keys; and the given account's
+/// records are its genesis alone, never the giver's above it.
+#[test]
+fn the_givers_read_holds_none_of_the_given_accounts_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = handed_off(dir.path());
+    let given: Vec<Fingerprint> = parse_enroll(h.taken.record.as_bytes()).unwrap().iter().map(|e| Fingerprint::of(&e.key)).collect();
+    let giver = credential_records(&h.board, "1.0.1", &[]).unwrap();
+    let named: Vec<Fingerprint> = giver.records.iter().flat_map(|r| r.enrolled.iter().map(|e| Fingerprint::of(&e.key)).chain(r.retired.iter().copied())).collect();
+    assert!(!given.iter().any(|fp| named.contains(fp)), "the giver's read names the given account's keys: {:?}", giver.records.iter().map(|r| &r.link).collect::<Vec<_>>());
+    let recipient = credential_records(&h.board, "1.0.1.2", &[]).unwrap();
+    assert_eq!(recipient.records.iter().map(|r| r.sigless.as_str()).collect::<Vec<_>>(), [h.taken.record.as_str()]);
+}
+
+/// THE LATCH's test, client-side FIRST (AUTH-2.71): a payload naming a key
+/// of the set that opens the subdivision is refused before anything is
+/// compared or written — the board's own latch refuses only at the link,
+/// the atom already inserted into the giver's published doc 1 for good.
+#[test]
+fn a_payload_naming_a_key_of_the_set_above_is_refused_before_anything_is_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let sd = spawn(&dir.path().join("board"), false);
+    let board = board(sd.port());
+    let giver = FileStore::open(dir.path().join("giver"));
+    let giver_fp = keygen(&giver, "notebook");
+    let anchors = dir.path().join("anchors");
+    claim(&board, &giver, &anchors);
+    let HandoffOutcome::Delegated { .. } = handoff(&board, &giver, &mut Scripted::new(vec![]), &give("1.0.1.2", None, None)).unwrap() else { panic!("beat (a)") };
+    let own = encode_enroll(&[entry_of(&key_file(&giver, &giver_fp), "notebook")]);
+    let (kept, _) = anchor_file(&anchors, "a");
+    let before = board.health().unwrap().log_position();
+    // The answers the walk would ask for, every one, were it to go on.
+    let mut p = Scripted::new(vec![Script::Confirm(true), Script::Typed("1.0.1.2".into()), Script::KeptOrPlaced(KeptOrPlaced::Kept), Script::YesNo(true)]);
+    let err = handoff(&board, &giver, &mut p, &give("1.0.1.2", Some(own), Some(kept))).expect_err("the latch");
+    let text = err.to_string();
+    assert_eq!(err.exit_code(), 3, "{text}");
+    assert!(text.contains("already stands in the set that opens 1.0.1.2") && text.contains("use THEIR keys"), "{text}");
+    assert_eq!(board.health().unwrap().log_position(), before, "nothing was written");
+    assert!(!p.said("CONSENT"), "nothing was compared:\n{}", p.transcript.join("\n"));
+}
+
+/// The recipient at a SERVED board (AUTH-5.60 step 4's table): no read
+/// tells a hosted host from the giver's own org, so the beat ASKS (RES-45)
+/// where `--hosted` says neither and renders each answer's operator
+/// sentence; the history statement is the PUBLIC one (AUTH-5.85), never the
+/// notebook's, and the giver is never named as the board's runner.
+#[test]
+fn the_recipient_at_a_served_board_is_asked_who_runs_it_and_told_the_history_is_public() {
+    let dir = tempfile::tempdir().unwrap();
+    let sd = spawn(&dir.path().join("board"), false);
+    let local = board(sd.port());
+    let giver = FileStore::open(dir.path().join("giver"));
+    keygen(&giver, "notebook");
+    claim(&local, &giver, &dir.path().join("anchors"));
+    let HandoffOutcome::Delegated { .. } = handoff(&local, &giver, &mut Scripted::new(vec![]), &give("1.0.1.2", None, None)).unwrap() else { panic!("beat (a)") };
+    let served = Board::new(Origin::parse("https://board.example").unwrap(), Redirect::to(origin_of(sd.port())));
+    let asked = vec![Script::YesNo(true), Script::Label("phone".into()), Script::LabelDefault, Script::LabelDefault];
+    let flagged = vec![Script::Label("tablet".into()), Script::LabelDefault, Script::LabelDefault];
+    for (name, hosted, script, operator) in [
+        ("asked", None, asked, "Whoever runs this board can read what you write here"),
+        ("flagged", Some(false), flagged, "1.0.1's org runs this board"),
+    ] {
+        let out = dir.path().join(name);
+        let mut p = Scripted::new(script);
+        let opts = AcceptOptions { hosted, ..take("1.0.1.2", &out, false) };
+        accept(&served, &FileStore::open(out.join("store")), &mut p, &opts).unwrap_or_else(|h| panic!("{name}: {h}\n{}", p.transcript.join("\n")));
+        let t = p.transcript.join("\n");
+        assert_eq!(p.said("this is a SERVED board"), hosted.is_none(), "{name}: asked only where `--hosted` says neither:\n{t}");
+        assert!(p.said(operator), "{name}:\n{t}");
+        assert!(p.said("is public history") && !p.said("this notebook's history is permanent"), "{name}:\n{t}");
+        assert!(!p.said("1.0.1 runs this board"), "{name}:\n{t}");
+    }
+}
+
+/// P13 in the first signed session (AUTH-5.87; AUTH-5.90 (iii)): where the
+/// agent space `inc(account, 1)` was handed away before the account's first
+/// signed session ran — the recipient of `1.0.1.2` handing `1.0.1.2.1` on
+/// before its own `skep bind` — op (3)'s key stands in neither list of the
+/// set that opens it, and the setup state is sent NOT AT ALL: no
+/// `delegate`, no mint, no session as the agent space.
+#[test]
+fn the_setup_act_is_sent_not_at_all_where_the_first_child_is_another_partys() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = handed_off(dir.path());
+    h.recipient.bind(&Binding::Enrollment { origin: h.board.dialed().clone(), principal: h.principal, account: "1.0.1.2".into(), fingerprint: h.taken.device }).unwrap();
+    let hand_on = |payload: Option<String>, anchor: Option<PathBuf>| HandoffOptions { principal: h.principal, account: "1.0.1.2.1".into(), payload: payload.map(|p| format!("{p}\n").into_bytes()), anchor };
+    let beat_a = handoff(&h.board, &h.recipient, &mut Scripted::new(vec![]), &hand_on(None, None)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(matches!(beat_a, HandoffOutcome::Delegated { .. }), "{beat_a:?}");
+    let third = FileStore::open(dir.path().join("third"));
+    let script = vec![Script::Label("tablet".into()), Script::LabelDefault, Script::LabelDefault];
+    let handed = accept(&h.board, &third, &mut Scripted::new(script), &take("1.0.1.2.1", &dir.path().join("third-papers"), false)).unwrap();
+    let (paper, _) = anchor_file(dir.path(), "ra");
+    let mut p = Scripted::new(vec![Script::Confirm(true), Script::Typed("1.0.1.2.1".into()), Script::KeptOrPlaced(KeptOrPlaced::Kept), Script::YesNo(true)]);
+    let seeded = handoff(&h.board, &h.recipient, &mut p, &hand_on(Some(handed.record), Some(paper))).unwrap_or_else(|e| panic!("{e}\n{}", p.transcript.join("\n")));
+    assert!(matches!(seeded, HandoffOutcome::Seeded { .. }), "{seeded:?}");
+    // The recipient's first signed session, at last.
+    let reads = FirstSessionReads::take(&h.board, "1.0.1.2", &h.taken.device, Some(&h.recipient)).unwrap();
+    assert_eq!(reads.key_opens_agent_space, Some(KeyDiagnosis::Neither));
+    assert!(reads.setup_owed(), "the agent space's home stands nowhere");
+    let device = key_file(&h.recipient, &h.taken.device).signer();
+    let (rb, log) = recording_board(h.board.dialed().clone());
+    let session = handshake(&rb, Scope::Content, &device, h.principal, Site::Tail).unwrap();
+    log.lock().unwrap().clear();
+    let done = first_session(&rb, &reads, &session, &device, Some(&h.recipient)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!((done.setup_skipped, done.minted_home, done.minted_agent_space_home), (Some(KeyDiagnosis::Neither), false, false));
+    let lines = log.lock().unwrap().clone();
+    assert!(!lines.iter().any(|l| l.starts_with("GET /challenge") || l == "POST /op create_new_document" || l == "POST /op delegate"), "{lines:?}");
+    session.close().unwrap();
 }

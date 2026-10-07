@@ -1,8 +1,9 @@
 //! THE CLAIM against the real daemon (`client.md` §4; the build brief §3):
 //! THE LOOP, RESUME BY READING at AUTH-5.56's boundaries, the residue halt
 //! that delegates nothing, the persisted `new_id` read back — or, spent on
-//! another address, replaced — and the unclaimed board's `claim_first` met
-//! by its own face.
+//! another address, replaced — the unclaimed board's `claim_first` met by
+//! its own face, and the two exits for a board this store does not hold: a
+//! stranger's claimed board, and another store's genesis.
 
 use std::path::Path;
 
@@ -20,7 +21,7 @@ use skep_client::store::{Binding, FileStore, KeyStore};
 use skep_identity::{Enrollment, Fingerprint};
 use skep_signature::HybridSigner;
 
-use crate::common::{board, claim, files_in, keygen, opts, spawn};
+use crate::common::{board, claim, claim_script, files_in, keygen, opts, spawn};
 
 fn bare(board: &skep_client::board::Board, principal: u64) -> Token {
     match board.session_open(SessionBody::Bare { principal }).expect("bare session") {
@@ -322,4 +323,48 @@ fn a_delegate_refused_claim_first_meets_its_own_face() {
     assert!(text.contains("the board is unclaimed") && text.contains("re-run `skep claim`"), "{text}");
     assert_eq!(principal_of(&board, "1.0.1.2").unwrap(), None, "nothing was delegated");
     assert_eq!(board.health().unwrap().claimant(), None);
+}
+
+/// §4.3's STRANGER arm: at a board claimed by another store's keys, this
+/// store's walk is a READ and nothing else — no question, no write, no
+/// binding, no anchor directory — answering the claimant, exit 0.
+#[test]
+fn a_claimed_board_no_key_of_this_store_opens_is_a_strangers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), false);
+    let board = board(sd.port());
+    let store_a = FileStore::open(dir.path().join("a"));
+    keygen(&store_a, "notebook");
+    claim(&board, &store_a, &dir.path().join("anchors"));
+    let store_b = FileStore::open(dir.path().join("b"));
+    keygen(&store_b, "stranger");
+    let before = board.health().unwrap().log_position();
+    let anchors_b = dir.path().join("anchors-b");
+    let mut person = Scripted::new(vec![]);
+    let outcome = claim::notebook(&board, &store_b, &mut person, &opts(&anchors_b)).expect("an answer, exit 0");
+    assert_eq!(outcome, ClaimOutcome::Stranger { claimant: "1.0.1".into() });
+    assert_eq!(board.health().unwrap().log_position(), before, "nothing written");
+    assert!(store_b.all_bindings().unwrap().is_empty(), "nothing bound");
+    assert!(!anchors_b.exists(), "no anchor made");
+    assert!(person.transcript.is_empty(), "{:?}", person.transcript);
+}
+
+/// S3/S4's own fork (§4.1; AUTH-5.56 boundary 4): on an unclaimed board whose
+/// genesis ANOTHER store's keys wrote, the walk halts before its backup
+/// moment — no anchor made for a genesis that can never land — delegating
+/// nothing and claiming nothing.
+#[test]
+fn a_genesis_another_store_wrote_halts_the_claim_before_its_backup_moment() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (_sd, board, _store_a, _fp) = genesis_without_its_claim(dir.path());
+    let store_b = FileStore::open(dir.path().join("b"));
+    keygen(&store_b, "stranger");
+    let mut person = Scripted::new(claim_script());
+    let err = claim::notebook(&board, &store_b, &mut person, &opts(&dir.path().join("anchors-b"))).expect_err("another store's genesis");
+    let text = err.to_string();
+    assert_eq!(err.exit_code(), 3, "{text}");
+    assert!(text.contains("already holds a key set and it is not this store's"), "{text}");
+    assert_eq!(board.next_account_prefix("1").unwrap().as_deref(), Some("1.0.2"), "nothing delegated");
+    assert_eq!(board.health().unwrap().claimant(), None, "nothing claimed");
+    assert!(!person.said("name anchor"), "no backup moment:\n{}", person.transcript.join("\n"));
 }

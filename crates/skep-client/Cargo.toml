@@ -66,3 +66,8 @@ skepd = { path = "../skepd", features = ["test-hooks"] }
 tempfile.workspace = true
 # The suite signs attests of its own to judge against the reader's verifier.
 skep-signature = { path = "../skep-signature", features = ["sign"] }
+# The namespace's own principal-depth bound, which `ceremony::enumerate`
+# reproduces and never links: its suite holds the two equal, as `origin`'s
+# vector set holds the daemon's grammar (P5). Already in the graph through
+# skepd.
+skep-namespace = { path = "../skep-namespace" }

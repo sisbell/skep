@@ -28,8 +28,9 @@ use crate::person::Person;
 /// prefix names a delegation path and is capped at 64 components — deeper
 /// is `too_deep` (wire.md §Operations, `delegate`; `skep-namespace/src/
 /// state.rs`'s constant, which this crate does not link, as `origin`
-/// reproduces the daemon's grammar). `next_account_prefix` answers `null`
-/// past it, so the cone's descent is bounded here and there alike.
+/// reproduces the daemon's grammar, and which its suite holds equal to this
+/// one). `next_account_prefix` answers `null` past it, so the cone's descent
+/// is bounded here and there alike.
 pub const MAX_PRINCIPAL_COMPONENTS: usize = 64;
 
 /// One account the closure admits.
@@ -166,9 +167,11 @@ pub fn by_reference_cone(board: &Board, person: &mut dyn Person, roots: &[String
 mod tests {
     use super::*;
 
-    /// The depth bound is the daemon's constant, reproduced.
+    /// The depth bound is the namespace's own constant, reproduced: where the
+    /// namespace moves its bound, this fails, and the cone never stops short
+    /// of a depth the board still delegates at.
     #[test]
-    fn the_depth_bound_is_sixty_four_components() {
-        assert_eq!(MAX_PRINCIPAL_COMPONENTS, 64);
+    fn the_depth_bound_is_the_namespaces_own() {
+        assert_eq!(MAX_PRINCIPAL_COMPONENTS, skep_namespace::MAX_PRINCIPAL_COMPONENTS);
     }
 }

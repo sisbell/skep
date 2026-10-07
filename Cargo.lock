@@ -1263,6 +1263,7 @@ dependencies = [
  "skep-address",
  "skep-client",
  "skep-identity",
+ "skep-namespace",
  "skep-resolve",
  "skep-signature",
  "skepd",

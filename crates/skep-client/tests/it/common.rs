@@ -1,8 +1,9 @@
 //! The fixture: a daemon in-process on an ephemeral port (skepd's own
 //! spawn pattern — the port reserved through the slow open, the rebind race
 //! retried), a `Board` over the one dialer, a recording dialer for the tests
-//! that pin WHAT WAS DIALED AND IN WHAT ORDER, and the scripts the claim
-//! walk's person answers.
+//! that pin WHAT WAS DIALED AND IN WHAT ORDER, a redirecting one for a board
+//! dialed at a served origin, and the scripts the claim walk's person
+//! answers.
 
 #![allow(dead_code)]
 
@@ -117,6 +118,31 @@ pub fn recording_board(origin: Origin) -> (Board, Arc<Mutex<Vec<String>>>) {
     (board, log)
 }
 
+/// THE REDIRECT: every request, in both forms, carried to the daemon at `to`
+/// through the plain arm, whatever origin the board dials — so a board
+/// dialed at a SERVED origin reads the in-process daemon, and a walk meets
+/// the served cell of the A4 table.
+pub struct Redirect {
+    to: Origin,
+    inner: PlainHttp,
+}
+
+impl Redirect {
+    pub fn to(to: Origin) -> Redirect {
+        Redirect { to, inner: PlainHttp::new() }
+    }
+}
+
+impl Dialer for Redirect {
+    fn exchange(&self, _origin: &Origin, req: &Request) -> Result<Response, DialError> {
+        self.inner.exchange(&self.to, req)
+    }
+
+    fn stream(&self, _origin: &Origin, head: &RequestHead, body: &mut dyn Read, on_interim: &mut dyn FnMut(&Headers)) -> Result<StreamedResponse, DialError> {
+        self.inner.stream(&self.to, head, body, on_interim)
+    }
+}
+
 /// One DEVICE key generated into `store` under `label`.
 pub fn keygen(store: &FileStore, label: &str) -> Fingerprint {
     store.generate(Some(Label::new(label).expect("a label in the domain"))).expect("generate").0
@@ -164,11 +190,11 @@ pub fn files_in(dir: &Path) -> Vec<PathBuf> {
 // (`open_signed_session_as`, `hire`, the retire helpers of skepd's suite) run
 // from the test over the board's raw frames — never a client ceremony.
 
-use skep_client::board::{acked_addr, frames, Answer, Opened, Scope, SessionBody, Token, T_ENROLL, T_RETIRE};
+use skep_client::board::{acked_addr, frames, Answer, KeySetAnswer, Opened, Scope, SessionBody, Token, T_ENROLL, T_RETIRE};
 use skep_client::ceremony::deposit::next_content_ordinal;
 use skep_client::person::{Abandoned, Confirmation, Consent, Destination, HandedPath, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
 use skep_client::sheet::KeyFile;
-use skep_client::sign::{session_payload, sig_hex, RecordFrame, Signer};
+use skep_client::sign::{session_payload, sig_hex, signer_from_seed, RecordFrame, Signer};
 use skep_identity::{canonical_record, Enrollment, RecordEntry};
 use skep_signature::HybridSigner;
 
@@ -217,6 +243,16 @@ pub fn wire_retire(board: &Board, token: &Token, hand: &HybridSigner, home: &str
 pub fn wire_delegate(board: &Board, token: &Token, new_prefix: &str, new_id: u64) -> Result<String, String> {
     let Answer::Document(v) = board.op(Some(token), &frames::delegate(new_prefix, new_id, None)).expect("delegate") else { return Err("closed".into()) };
     acked_addr(&v).map(str::to_string).ok_or_else(|| v.to_string())
+}
+
+/// The set at `1.0.1` filled to the enrolled-set cap (16) from `token`'s
+/// session under `hand`: fresh device keys, one record each.
+pub fn fill_to_the_cap(board: &Board, token: &Token, hand: &HybridSigner) {
+    let KeySetAnswer::Set(set) = board.key_set("1.0.1").expect("key_set") else { panic!("1.0.1 is no account") };
+    for k in 20..20 + (16 - set.enrolled.len() as u8) {
+        let filler = Enrollment::new(HybridSigner::public_key(&signer_from_seed(&[k; 32])).clone(), false, Some(format!("filler {k}"))).expect("a label");
+        wire_enroll(board, token, hand, "1.0.1.0.1", "1.0.1", &[filler]).expect("a filler");
+    }
 }
 
 /// Whether `token` is dead: a write under it answers `unauthenticated` with

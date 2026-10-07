@@ -93,4 +93,26 @@ mod tests {
             assert_eq!(Origin::try_from(&theirs).map(|o| o.as_str().to_string()), Ok(text.to_string()));
         }
     }
+
+    /// The transport is this crate's one dialer and adds nothing (P25): the
+    /// resolver's request reaches the dialer at the transport's own origin —
+    /// method, path and body as the resolver framed them, no header added —
+    /// and the dialer's status and body come back as they were answered.
+    #[test]
+    fn the_transport_carries_the_resolvers_request_to_its_own_origin() {
+        use crate::board::fake::Fake;
+        use crate::dial::{Headers, Response};
+        let fake = Fake::new(|_| Response { status: 418, headers: Headers(vec![("X-Board".into(), "registry".into())]), body: b"teapot".to_vec() });
+        let registry = Origin::parse("https://registry.example").unwrap();
+        let transport = DialerTransport::new(fake.clone(), registry.clone());
+        assert_eq!(transport.exchange(Method::Post, "/op", br#"{"op":"health"}"#), Ok((418, b"teapot".to_vec())));
+        assert_eq!(transport.exchange(Method::Get, "/health", b""), Ok((418, b"teapot".to_vec())));
+        let sent = fake.sent.lock().unwrap();
+        let expected = [
+            Request { method: crate::dial::Method::Post, path: "/op".into(), headers: Vec::new(), body: br#"{"op":"health"}"#.to_vec() },
+            Request { method: crate::dial::Method::Get, path: "/health".into(), headers: Vec::new(), body: Vec::new() },
+        ];
+        assert_eq!(sent.iter().map(|(origin, _)| origin).collect::<Vec<_>>(), [&registry, &registry]);
+        assert_eq!(sent.iter().map(|(_, req)| req.clone()).collect::<Vec<_>>(), expected);
+    }
 }

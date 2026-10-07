@@ -563,9 +563,92 @@ fn hand_of(board: &Board, record: &Record, term: Option<BoardTerm>, own: &[(Fing
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
     use skep_signature::HybridSigner;
 
     use super::*;
+    use crate::board::fake::{self, Fake};
+
+    const LINK: &str = "1.0.1.0.1.0.2.7";
+
+    /// A board's history over the committed positions `committed`, the
+    /// genesis at 0 beside them, its retention floor at `floor`, a link
+    /// committed at `p`: `/op-at` answers as the wire does — `410
+    /// history_reclaimed` below the floor, `400 not_a_position` naming the
+    /// nearest position under a gap, and otherwise the discovery, holding
+    /// the link from `p` on.
+    fn history(committed: Vec<u64>, floor: Option<u64>, p: u64) -> Arc<Fake> {
+        Fake::new(move |req| {
+            assert_eq!(req.path, "/op-at", "the bisection reads history alone");
+            let at = serde_json::from_slice::<Value>(&req.body).unwrap()["at"].as_u64().unwrap();
+            if floor.is_some_and(|f| at < f) {
+                return fake::json(410, json!({"error": "history_reclaimed", "floor": floor}));
+            }
+            if at == 0 || committed.contains(&at) {
+                let addrs: Vec<&str> = if at >= p { vec![LINK] } else { Vec::new() };
+                return fake::json(200, json!({"addrs": addrs, "as_of": at, "resp": "addrs"}));
+            }
+            let nearest = committed.iter().copied().filter(|c| *c <= at).max().unwrap_or(0);
+            fake::json(400, json!({"error": "not_a_position", "nearest": nearest}))
+        })
+    }
+
+    /// THE BISECTION (AUTH-5.68) as a law over generated histories — every
+    /// gapless history to 20 positions and two with gaps, every position the
+    /// link commits at, every retention floor or none: the answer is the
+    /// LEAST position at which the discovery returns the link where that lies
+    /// above the floor, and NONE where it lies at or below it — an answer,
+    /// never an exit, and no position asserted (§9 item 50) — in at most
+    /// 2·⌈log₂ head⌉ + 3 reads.
+    #[test]
+    fn the_bisection_finds_the_least_position_and_asserts_none_below_the_floor() {
+        let mut histories: Vec<Vec<u64>> = (1..=20).map(|head| (1..=head).collect()).collect();
+        histories.push(vec![1, 4, 5, 9, 12]);
+        histories.push(vec![2, 3, 7, 8, 15, 16]);
+        let frame = frames::find_links_ftt(T_ENROLL, "1.0.1");
+        let mut cases = 0;
+        for committed in histories {
+            let head = *committed.last().unwrap();
+            let bound = 2 * u64::from(head.next_power_of_two().trailing_zeros()) + 3;
+            for &p in &committed {
+                for floor in std::iter::once(None).chain(committed.iter().copied().map(Some)) {
+                    let fake = history(committed.clone(), floor, p);
+                    let found = position_of(&fake::board(&fake), &frame, LINK, head).expect("an answer, never an exit");
+                    let expected = match floor {
+                        Some(f) if p <= f => (None, Some(f)),
+                        _ => (Some(p), floor),
+                    };
+                    assert_eq!(found, expected, "{committed:?}, the link at {p}, the floor at {floor:?}");
+                    let reads = fake.sent.lock().unwrap().len() as u64;
+                    assert!(reads <= bound, "{reads} reads past {bound}: {committed:?}, the link at {p}, the floor at {floor:?}");
+                    cases += 1;
+                }
+            }
+        }
+        assert!(cases > 3000, "the family holds {cases} cases");
+    }
+
+    /// Below the retention floor neither a record's position nor its hand is
+    /// derivable, and the read ASSERTS NEITHER (§9 item 50), reading neither
+    /// the feed nor the set to try: an unsigned record read position-free,
+    /// and a signed one whose base is unreadable and which no key of this
+    /// store verifies, each answer `Unreadable`.
+    #[test]
+    fn below_the_floor_no_hand_is_asserted_and_no_read_is_made() {
+        let board = fake::board(&Fake::unread());
+        let key = |b: u8| HybridSigner::public_key(&crate::sign::signer_from_seed(&[b; 32])).clone();
+        let own = [(Fingerprint::of(&key(4)), key(4))];
+        let term = Some(BoardTerm { log_position: 12, chain: [7; 32] });
+        let unsigned = enrollment("1.0.1.0.1.0.2.1", vec![Enrollment::new(key(1), true, Some("paper".into())).unwrap()]);
+        let mut signed = enrollment("1.0.1.0.1.0.2.2", vec![Enrollment::new(key(2), false, Some("phone".into())).unwrap()]);
+        signed.sig = Some("ab".repeat(64));
+        for record in [unsigned, signed] {
+            let hand = hand_of(&board, &record, term, &own, None).expect("no read, so no fault");
+            assert!(matches!(hand, Hand::Unreadable(_)), "{}: {hand:?}", record.link);
+        }
+    }
 
     #[test]
     fn addresses_order_by_component() {

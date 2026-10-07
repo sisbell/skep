@@ -20,7 +20,7 @@
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
 use skep_identity::{Fingerprint, PublicKey};
@@ -349,18 +349,12 @@ impl FileStore {
 
     /// §3.4's check: whether `path` lies under this store — where an anchor
     /// file is REFUSED (the backup moment's destination; a later `--anchor`).
+    /// Both are read as the filesystem will resolve them (`resolved`): a
+    /// destination the backup moment is about to create may lie several
+    /// directories deep, or reach the store through a relative path or a
+    /// symlink, and the store itself may not be made yet.
     pub fn contains_path(&self, path: &Path) -> bool {
-        let canon = |p: &Path| fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-        let root = canon(&self.root);
-        let target = match fs::canonicalize(path) {
-            Ok(p) => p,
-            Err(_) => match path.parent() {
-                Some(parent) if parent.as_os_str().is_empty() => canon(Path::new(".")).join(path),
-                Some(parent) => canon(parent).join(path.file_name().unwrap_or_default()),
-                None => path.to_path_buf(),
-            },
-        };
-        target.starts_with(&root)
+        resolved(path).starts_with(resolved(&self.root))
     }
 
     /// The directory `0700`, created once (§3.3); the umask irrelevant. A
@@ -615,6 +609,31 @@ impl FileStore {
         let _ = lock.unlock();
         result.map_err(read_only)
     }
+}
+
+/// `path` as the filesystem will resolve it once its missing directories
+/// are made: absolute against the working directory, its deepest EXISTING
+/// ancestor canonicalized — every symlink and `..` in it resolved — and the
+/// components below that ancestor re-joined lexically, which is exact
+/// because none of them exists yet, so no link lies among them.
+fn resolved(path: &Path) -> PathBuf {
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let components: Vec<Component<'_>> = absolute.components().collect();
+    for split in (1..=components.len()).rev() {
+        let head: PathBuf = components[..split].iter().collect();
+        let Ok(mut out) = fs::canonicalize(&head) else { continue };
+        for component in &components[split..] {
+            match component {
+                Component::ParentDir => {
+                    out.pop();
+                }
+                Component::Normal(name) => out.push(name),
+                Component::CurDir | Component::RootDir | Component::Prefix(_) => {}
+            }
+        }
+        return out;
+    }
+    absolute
 }
 
 impl KeyStore for FileStore {

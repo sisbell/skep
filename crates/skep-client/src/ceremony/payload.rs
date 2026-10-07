@@ -91,3 +91,34 @@ pub fn compare_payload(person: &mut dyn Person, entries: &[Enrollment], door: &s
     }
     Ok(false)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::person::scripted::{Script, Scripted};
+
+    /// THE COMPARISON BEAT's consent (AUTH-5.32; AUTH-4.59; R48): the
+    /// fingerprint's first R42 group, in either case and whatever whitespace
+    /// rides it, consents at once; `no` or nothing declines at once; and a
+    /// row NEAR the group — a hex short, a hex long — never consents: it is
+    /// asked again, three times, then declined.
+    #[test]
+    fn the_comparison_consents_to_the_first_group_and_nothing_near_it() {
+        let key = crate::sign::signer_from_seed(&[14; 32]).public_key().clone();
+        let group = Fingerprint::of(&key).to_hex()[..8].to_string();
+        let entries = [Enrollment::new(key, false, Some("phone".into())).unwrap()];
+        let compare = |answers: Vec<Script>| {
+            let mut person = Scripted::new(answers);
+            let consented = compare_payload(&mut person, &entries, "skep enroll").expect("answered");
+            let asked = person.transcript.iter().filter(|l| l.starts_with("CONSENT confirm")).count();
+            let reasked = person.transcript.iter().filter(|l| l.contains("is not the first group of the fingerprint shown")).count();
+            (consented, asked, reasked)
+        };
+        assert_eq!(compare(vec![Script::Typed(format!("  {} \n", group.to_ascii_uppercase()))]), (true, 1, 0));
+        assert_eq!(compare(vec![Script::Typed(String::new())]), (false, 1, 0));
+        assert_eq!(compare(vec![Script::Confirm(false)]), (false, 1, 0));
+        for near in [group[..7].to_string(), format!("{group}0")] {
+            assert_eq!(compare(vec![Script::Typed(near.clone()); 3]), (false, 3, 3), "`{near}` consented");
+        }
+    }
+}

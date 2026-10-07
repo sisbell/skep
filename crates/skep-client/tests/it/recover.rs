@@ -24,7 +24,7 @@ use skep_client::store::FileStore;
 use skep_identity::{encode_enroll, Enrollment, Fingerprint};
 use skep_signature::HybridSigner;
 
-use crate::common::{anchor_file, board, claim, entry_of, fp_of, key_file, keygen, recording_board, spawn, wire_delegate, wire_enroll, wire_session, Hooked};
+use crate::common::{anchor_file, board, claim, entry_of, fill_to_the_cap, fp_of, key_file, keygen, recording_board, spawn, wire_delegate, wire_enroll, wire_retire, wire_session, Hooked};
 
 fn options(anchor: Option<std::path::PathBuf>, stolen: Option<bool>) -> RecoverOptions {
     RecoverOptions { principal: 1, anchor, lost: vec![], stolen, anchor_lost: false, anchor_out: vec![], paper: false, host_name: "testhost".into(), date: "2026-10-04".into() }
@@ -371,4 +371,70 @@ fn the_stolen_arm_mints_the_recipients_doc_one_ahead_of_its_first_retirement() {
     assert!(document_present(&board, "1.0.1.2.0.1").unwrap());
     let KeySetAnswer::Set(set) = board.key_set("1.0.1.2").unwrap() else { panic!() };
     assert!(set.retired(&taken.device).is_some() && set.enrolled(&fresh).is_some());
+    // RES-174's rider: a party recovering at an account another party gave
+    // them reports to the GIVER as this board's operator — never "no report"
+    // at the giver's notebook.
+    assert!(done.recovery_read.iter().any(|l| l.starts_with("THE REPORT, to 1.0.1 as this board's operator (AUTH RES-174)")), "{:#?}", done.recovery_read);
+    assert!(!done.recovery_read.iter().any(|l| l.contains("NO REPORT")), "{:#?}", done.recovery_read);
+}
+
+/// THE PERSON-CLASS INVERSION (AUTH-5.13; §4a.2 R3): at a FULL set the lost
+/// key is retired ahead of R3 under the same session, then the device key
+/// enrolled — one preview and one typed answer per retirement (§4a.2 R4),
+/// so the lost key is previewed, confirmed and retired ONCE, and the walk's
+/// closing R4 has nothing left to retire. MUTATION: with R4 re-run over
+/// the keys the inversion retired, a second preview asks for an answer the
+/// script does not hold.
+#[test]
+fn a_full_set_retires_the_lost_key_once_ahead_of_r3() {
+    let l = lose_the_device();
+    let board = board_of(&l);
+    let old = l.old.signer();
+    let token = wire_session(&board, 1, &old);
+    fill_to_the_cap(&board, &token, &old);
+    board.session_close(&token).unwrap();
+    let (kept, _) = anchor_file(&l.anchors, "a");
+    let mut person = Scripted::new(vec![Script::YesNo(true), Script::KeptOrPlaced(KeptOrPlaced::Kept), Script::YesNo(true), Script::Confirm(true), Script::Confirm(true)]);
+    let opts = RecoverOptions { lost: vec![l.old_fp.to_hex()], ..options(Some(kept), Some(false)) };
+    let done = recover(&board, &l.store, &mut person, &opts).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n")));
+    let t = person.transcript.join("\n");
+    assert_eq!((done.retired.clone(), done.enrolled.clone()), (vec![l.old_fp], vec![l.new_fp]));
+    assert!(person.said("the set is full"), "{t}");
+    assert_eq!(person.transcript.iter().filter(|line| line.contains("RETIREMENT PREVIEW")).count(), 1, "{t}");
+    let at = |needle: &str| person.transcript.iter().position(|line| line.contains(needle)).unwrap_or_else(|| panic!("{needle} missing:\n{t}"));
+    assert!(at("ENROLLMENT PREVIEW") < at("[AUTH-5.13]") && at("[AUTH-5.13]") < at("RETIREMENT PREVIEW"), "{t}");
+    let KeySetAnswer::Set(set) = board.key_set("1.0.1").unwrap() else { panic!() };
+    assert_eq!(set.enrolled.len(), 16);
+    assert!(set.retired(&l.old_fp).is_some() && set.enrolled(&l.new_fp).is_some());
+}
+
+/// R1's check against the set R0's walk reached (AUTH-5.22; AUTH-5.25
+/// (iii)), made before any `/challenge`: a paper whose key stands RETIRED is
+/// faced with the position and the hand that retired it, read from the
+/// records — ANOTHER hand's (AUTH-5.77) — and the act the other enrolled
+/// anchor leaves; a paper of no key of this account is THE WRONG SHEET.
+#[test]
+fn r1_faces_a_retired_paper_and_another_accounts_paper_before_any_challenge() {
+    let l = lose_the_device();
+    let plain = board_of(&l);
+    let (a_path, a) = anchor_file(&l.anchors, "a");
+    let (_, b) = anchor_file(&l.anchors, "b");
+    let b_signer = b.signer();
+    let token = wire_session(&plain, 1, &b_signer);
+    wire_retire(&plain, &token, &b_signer, "1.0.1.0.1", "1.0.1", &[a.fingerprint]).expect("anchor b retires anchor a");
+    plain.session_close(&token).unwrap();
+    let (board, log) = recording_board(crate::common::origin_of(l.sd.port()));
+    let mut person = Scripted::new(vec![Script::YesNo(true), Script::KeptOrPlaced(KeptOrPlaced::Kept)]);
+    let text = recover(&board, &l.store, &mut person, &options(Some(a_path), Some(false))).expect_err("a retired paper").to_string();
+    assert!(text.contains("a sheet whose key stands RETIRED opens nothing, ever (AUTH-2.98)"), "{text}");
+    assert!(text.contains("retired at position") && text.contains(&b.fingerprint.to_string()) && text.contains("ANOTHER hand (AUTH-5.77)"), "{text}");
+    assert!(text.contains("import your other paper anchor"), "{text}");
+    let stranger = KeyFile::new(Seed::fresh(), true, Some(Label::new("stranger").unwrap()), None);
+    let stranger_path = l.dir.path().join("stranger.skep-key");
+    std::fs::write(&stranger_path, stranger.to_json()).unwrap();
+    let mut person = Scripted::new(vec![Script::YesNo(true), Script::KeptOrPlaced(KeptOrPlaced::Kept)]);
+    let text = recover(&board, &l.store, &mut person, &options(Some(stranger_path), Some(false))).expect_err("another account's paper").to_string();
+    assert!(text.contains("THE WRONG SHEET: this account's records do not list this key") && text.contains("hand in the paper of THIS account"), "{text}");
+    let lines = log.lock().unwrap().clone();
+    assert!(!lines.iter().any(|line| line.starts_with("GET /challenge")), "a nonce spent: {lines:?}");
 }

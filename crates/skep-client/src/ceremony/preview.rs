@@ -271,4 +271,34 @@ mod tests {
         assert!(!person.said("CANNOT BE WRITTEN") && !person.said("THE LAST DEVICE KEY"), "{}", person.transcript.join("\n"));
         assert!(person.said("AUTH-5.59 step 4") && person.said("CONSENT confirm"), "{}", person.transcript.join("\n"));
     }
+
+    /// THE TYPED ANSWER (AUTH-5.46: "the wrong row is the mistake stress
+    /// produces"): the row's first R42 group, in either case and whatever
+    /// whitespace rides it, confirms at once; `no` or nothing declines at
+    /// once; and a row NEAR the group — a hex short, a hex long — never
+    /// confirms: it is asked again, three times, then declined.
+    #[test]
+    fn the_typed_answer_is_the_rows_first_group_and_nothing_near_it() {
+        let (anchor, device) = (signer_from_seed(&[13; 32]).public_key().clone(), signer_from_seed(&[12; 32]).public_key().clone());
+        let (anchor_fp, fp) = (Fingerprint::of(&anchor), Fingerprint::of(&device));
+        let set = KeySet {
+            enrolled: vec![EnrolledKey { fingerprint: anchor_fp, key: anchor, anchor: true }, EnrolledKey { fingerprint: fp, key: device, anchor: false }],
+            ..KeySet::default()
+        };
+        let closure = Closure { accounts: vec![Admitted { account: "1.0.1".into(), set: set.clone(), genesis_home: "1.0.1.0.1".into() }], reads: 1 };
+        let rows = [Row::of(&fp, &set, None, &[fp], Some(&fp), false)];
+        let group = fp.to_hex()[..8].to_string();
+        let answer = |answers: Vec<Script>| {
+            let mut person = Scripted::new(answers);
+            let previewed = preview(&mut person, &Preview { account: "1.0.1", set: &set, rows: &rows, closure: &closure, held: &[fp], site: PreviewSite::Retire, own_board: true });
+            let reasked = person.transcript.iter().filter(|l| l.contains("is not the row this act names")).count();
+            (previewed.expect("answered"), reasked)
+        };
+        assert_eq!(answer(vec![Script::Typed(format!(" {}\n", group.to_ascii_uppercase()))]), (Previewed::Confirmed, 0));
+        assert_eq!(answer(vec![Script::Typed(String::new())]), (Previewed::Declined, 0));
+        assert_eq!(answer(vec![Script::Confirm(false)]), (Previewed::Declined, 0));
+        for near in [group[..7].to_string(), format!("{group}0")] {
+            assert_eq!(answer(vec![Script::Typed(near.clone()); 3]), (Previewed::Declined, 3), "`{near}` confirmed");
+        }
+    }
 }

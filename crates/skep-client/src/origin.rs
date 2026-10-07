@@ -222,6 +222,38 @@ mod tests {
         }
     }
 
+    /// THE AGREEMENT AS A LAW (P5): over every string of a generated family
+    /// — schemes, hosts, ports and tails no person picked, the near misses
+    /// among them — this parse admits exactly what the daemon's admits, and
+    /// each admitted string is its own canonical text.
+    #[test]
+    fn the_two_parses_agree_over_a_generated_family() {
+        let schemes = ["http://", "https://", "HTTP://", "ftp://", ""];
+        let hosts = [
+            "127.0.0.1", "localhost", "[::1]", "example.org", "skep.example", "abc.onion", "xn--bcher-kva.example",
+            "X.org", "x_y", "a b", "[::1", "[]", "",
+        ];
+        let ports = ["", ":", ":0", ":80", ":443", ":8642", ":08642", ":+8642", ":65535", ":65536", ":8642:1", ":-1"];
+        let tails = ["", "/", "?q", "#f", "@y", "/path"];
+        let mut admitted = 0;
+        for scheme in schemes {
+            for host in hosts {
+                for port in ports {
+                    for tail in tails {
+                        let s = format!("{scheme}{host}{port}{tail}");
+                        let ours = Origin::parse(&s);
+                        assert_eq!(ours.is_some(), skepd::Origin::parse(&s).is_some(), "the two parses disagree on {s:?}");
+                        if let Some(o) = ours {
+                            assert_eq!((o.as_str(), o.to_string()), (s.as_str(), s.clone()), "the admitted text is the canonical text");
+                            admitted += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(admitted > 0, "the family admits no string: it tests nothing");
+    }
+
     /// The parts answer what a dial asks: scheme, host (brackets kept for
     /// the `Host` header, shed for the resolver), the port the scheme
     /// defaults, and the loopback test the plaintext warning keys on.

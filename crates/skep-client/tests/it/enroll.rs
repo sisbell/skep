@@ -17,7 +17,7 @@ use skep_client::store::FileStore;
 use skep_identity::{encode_enroll, Enrollment, Fingerprint};
 use skep_signature::HybridSigner;
 
-use crate::common::{board, claim, entry_of, key_file, keygen, spawn};
+use crate::common::{board, claim, entry_of, fill_to_the_cap, key_file, keygen, spawn};
 
 fn opts(payload: &str) -> EnrollOptions {
     EnrollOptions { principal: 1, payload: format!("{payload}\n").into_bytes() }
@@ -126,15 +126,7 @@ fn the_cap_names_the_act_and_a_by_reference_account_halts_in_the_reads() {
     let a = key_file(&store, &fp).signer();
     // Fill the set to the cap (16) from A's full session.
     let full = handshake(&board, Scope::Full, &a, 1, Site::Session).unwrap();
-    let KeySetAnswer::Set(set) = board.key_set("1.0.1").unwrap() else { panic!() };
-    let mut n = set.enrolled.len();
-    let mut k = 20u8;
-    while n < 16 {
-        let s = signer_from_seed(&[k; 32]);
-        deposit(&board, full.token(), &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(vec![Enrollment::new(HybridSigner::public_key(&s).clone(), false, Some(format!("filler {k}"))).unwrap()]), hand: Some(&a), id: &format!("test.fill.{k}") }).expect("filler");
-        n += 1;
-        k += 1;
-    }
+    fill_to_the_cap(&board, full.token(), &a);
     let extra = signer_from_seed(&[99; 32]);
     let over = || DepositKind::Enroll(vec![Enrollment::new(HybridSigner::public_key(&extra).clone(), false, Some("one too many".into())).unwrap()]);
     let at_cap = deposit(&board, full.token(), &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: over(), hand: Some(&a), id: "test.over-cap" });

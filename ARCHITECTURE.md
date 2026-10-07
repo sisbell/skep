@@ -509,7 +509,9 @@ each ceremony:
   arm; `halt.rs` the one error family and its exit codes; `board.rs` the
   wire's endpoints over a dialer, `H.1`'s pair and the one token a refusal
   is dispatched on, `board/frames.rs`, which spells every frame the crate
-  sends, and `board/answers.rs`, which decodes every read answer it reads;
+  sends, and `board/answers.rs`, which decodes every read answer it reads —
+  its unit suite in `board/tests.rs`, and under `cfg(test)`
+  `board/fake.rs`, the fake board the crate's unit suites dial;
   `derive.rs` the pure derivations over board reads — the mode, the
   pre-check, the walk to the set that opens an account, the key diagnosis,
   the `closed` predicate.
@@ -522,8 +524,9 @@ each ceremony:
   and under `test-hooks` `person/scripted.rs`, the scripted person a suite
   drives; `derive/records.rs` the one admitted read of an account's
   credential records, their positions and hands; `verify.rs` the reader's
-  verifier over the signature-filtered set; `resolve.rs` the registry
-  walk's `Transport` over a dialer.
+  verifier over the signature-filtered set, its unit suite in
+  `verify/tests.rs`; `resolve.rs` the registry walk's `Transport` over a
+  dialer.
 - `ceremony.rs` and `ceremony/`, in two layers. The COMPOSITIONS, each the
   one home of its frames, reads and refusals: `handshake.rs` the session
   open, `deposit.rs` the credential write, `first_session.rs` an account's
@@ -582,6 +585,9 @@ Its integration suite is one binary, `tests/it/`: the walks driven through
 the scripted person against a daemon spawned in-process, another hand's
 acts re-driven over the wire (`common::wire_*`) and never by a ceremony;
 `backup`, the moment with no daemon; and `tidy`, the arrangement above.
+Its unit suites pin what a composition sends and what it makes of each
+answer with no daemon, over `board/fake.rs`'s fake board, which answers
+each request by the test's own closure and keeps every request it served.
 
 ## The name space, `skep-namespace`
 

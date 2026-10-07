@@ -277,3 +277,155 @@ fn read_ground(board: &Board, record: &str) -> Option<String> {
     let v = board.guest(&frames::retrieve_v(record, 1, 1)).ok()?;
     answers::first_atom(&v).and_then(|bytes| String::from_utf8(bytes).ok())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    use serde_json::{json, Value};
+    use skep_signature::HybridSigner;
+
+    use super::*;
+    use crate::board::fake::{self, Fake};
+    use crate::board::{EnrolledKey, KeySet, RetiredKey};
+    use crate::dial::Response;
+
+    const TOKEN: &str = "9f3a6c21d4b8e07a5c1b2d4e6f708192";
+
+    fn signer() -> HybridSigner {
+        crate::sign::signer_from_seed(&[21; 32])
+    }
+
+    fn rejected() -> Response {
+        fake::json(401, json!({"error": "session_rejected"}))
+    }
+
+    fn opened() -> Response {
+        fake::json(200, json!({"session": TOKEN}))
+    }
+
+    /// A board at which the pre-check passes for `signer` as principal 1 —
+    /// the origin answered for, `1.0.1` the account, the key enrolled there
+    /// — answering `POST /session` from `sessions` in turn, a third attempt
+    /// a panic, and the takedown record's guest read with `ground`.
+    fn signing_in(signer: &HybridSigner, sessions: Vec<Response>, ground: Value) -> Arc<Fake> {
+        let key = signer.public_key().clone();
+        let origin = fake::origin().as_str().to_string();
+        let sessions = Mutex::new(VecDeque::from(sessions));
+        Fake::new(move |req| match (req.path.as_str(), fake::frame(req)["op"].as_str()) {
+            ("/health", _) => fake::json(200, json!({"auth": {"claimant": "1.0.1", "local_trust": false, "origins": [origin], "signed_origins": [origin]}, "log_position": 9})),
+            ("/op", Some("principal_prefix")) => fake::json(200, json!({"addr": "1.0.1", "as_of": 9, "resp": "addr"})),
+            ("/op", Some("key_set")) => fake::json(
+                200,
+                json!({"as_of": 9, "resp": "key_set", "retired": [], "enrolled": [{"alg": key.alg(), "key": key.to_hex(), "fingerprint": Fingerprint::of(&key).to_hex(), "anchor": false}]}),
+            ),
+            ("/op", Some("retrieve_v")) => fake::json(200, ground.clone()),
+            (path, _) if path.starts_with("/challenge?") => fake::json(200, json!({"nonce": "ab".repeat(32), "principal": 1, "ttl_ms": 60000})),
+            ("/session", _) => sessions.lock().unwrap().pop_front().expect("a third sign-in attempt"),
+            ("/session/close", _) => Response { status: 204, headers: Default::default(), body: Vec::new() },
+            (path, op) => panic!("the handshake sends no {path} {op:?}"),
+        })
+    }
+
+    /// AUTH-5.25: a `401 session_rejected` after a pre-check that passed is
+    /// answered by ONE re-challenge — a fresh nonce, signed again — and the
+    /// session it opens is the one answered.
+    #[test]
+    fn a_rejected_sign_in_is_re_challenged_once_then_opens() {
+        let signer = signer();
+        let fake = signing_in(&signer, vec![rejected(), opened()], Value::Null);
+        let board = fake::board(&fake);
+        let session = handshake(&board, Scope::Content, &signer, 1, Site::Session).expect("the second attempt opens");
+        assert_eq!((session.token().as_str(), session.principal(), session.account()), (TOKEN, 1, "1.0.1"));
+        let log = fake.log();
+        assert_eq!(log.iter().filter(|l| l.starts_with("GET /challenge")).count(), 2, "{log:?}");
+        assert_eq!(log.iter().filter(|l| *l == "POST /session").count(), 2, "{log:?}");
+    }
+
+    /// AUTH-5.25's TERMINAL BUSY ARM: a second `401` in a row after a
+    /// pre-check that passed is transient — "try again", the rule's own act —
+    /// and is never met by a third attempt.
+    #[test]
+    fn a_second_rejection_is_the_terminal_busy_arm() {
+        let signer = signer();
+        let fake = signing_in(&signer, vec![rejected(), rejected()], Value::Null);
+        let halt = handshake(&fake::board(&fake), Scope::Content, &signer, 1, Site::Session).expect_err("busy");
+        let text = halt.to_string();
+        assert!(text.contains("the board did not accept the sign-in") && text.contains("act: try again"), "{text}");
+        assert_eq!(halt.exit_code(), 3);
+        assert_eq!(fake.log().iter().filter(|l| *l == "POST /session").count(), 2);
+    }
+
+    /// AUTH-5.25's blocked arm (AUTH-6.5; RES-65, RES-73): `403
+    /// prefix_blocked` HALTS AND SURFACES the takedown record it names, its
+    /// ground read as a guest at the board that named it — or said
+    /// unreadable — after one challenge and one sign-in: never a retry, never
+    /// "busy".
+    #[test]
+    fn a_blocked_prefix_halts_with_its_record_and_is_never_retried() {
+        let signer = signer();
+        let readable = json!({"as_of": 9, "items": [{"atom": "takedown: the ground"}], "resp": "delivery"});
+        let unreadable = json!({"code": "withheld", "op": "retrieve_v", "resp": "rejected"});
+        for (ground, read) in [(readable, Some("takedown: the ground")), (unreadable, None)] {
+            let blocked = fake::json(403, json!({"error": "prefix_blocked", "record": "1.0.1.0.7.1"}));
+            let fake = signing_in(&signer, vec![blocked], ground);
+            let halt = handshake(&fake::board(&fake), Scope::Content, &signer, 1, Site::Session).expect_err("blocked");
+            let Halt::Blocked(b) = &halt else { panic!("not the block's face: {halt}") };
+            assert_eq!((b.record.as_str(), b.named_by.as_str(), b.ground.as_deref()), ("1.0.1.0.7.1", fake::origin().as_str(), read));
+            assert_eq!(halt.exit_code(), 3);
+            let text = halt.to_string();
+            assert!(!text.contains("try again") && !text.contains("busy"), "{text}");
+            assert!(read.is_some() || text.contains("could not be read"), "{text}");
+            let log = fake.log();
+            assert_eq!(log.iter().filter(|l| l.starts_with("GET /challenge")).count(), 1, "{log:?}");
+            assert_eq!(log.iter().filter(|l| *l == "POST /session").count(), 1, "{log:?}");
+            assert!(log.iter().any(|l| l == "POST /op retrieve_v"), "the ground read as a guest: {log:?}");
+        }
+    }
+
+    /// The key arm's third state AT EACH SITE (`client.md` §2.2 `verify`): a
+    /// key in neither list is faced with its site's own act and no other
+    /// site's, never a retry — made of the walk alone, with no read.
+    #[test]
+    fn a_key_in_neither_list_is_faced_with_its_sites_own_act() {
+        let board = fake::board(&Fake::unread());
+        let other = signer().public_key().clone();
+        let set = KeySet { enrolled: vec![EnrolledKey { fingerprint: Fingerprint::of(&other), key: other, anchor: false }], ..KeySet::default() };
+        let walk = Walk { account: "1.0.1".into(), set_account: "1.0.1".into(), set, visited: vec!["1.0.1".into()] };
+        let fp = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
+        let acts: [(&[Site], &str); 6] = [
+            (&[Site::Session, Site::Tail], "then `skep recover`)"),
+            (&[Site::Recover], "THE WRONG SHEET (AUTH-5.25 (iii))"),
+            (&[Site::Giver], "a handoff is made by a key of the set that opens the account above the subdivision"),
+            (&[Site::Claim], "NO COMMAND IN THIS VERSION PERFORMS IT"),
+            (&[Site::Setup], "sent not at all (P13)"),
+            (&[Site::Hosted], "not yours to keep (AUTH-5.53) — never a re-run"),
+        ];
+        for (sites, act) in acts {
+            for site in sites {
+                let text = key_face(&board, &walk, &fp, &[], *site).expect_err("in neither list").to_string();
+                assert!(text.contains(&format!("{fp} is in neither list of the set at 1.0.1")), "{site:?}: {text}");
+                assert!(text.contains(act), "{site:?} names its own act: {text}");
+                for (_, other_act) in acts.iter().filter(|(others, _)| !others.contains(site)) {
+                    assert!(!text.contains(*other_act), "{site:?} names another site's act, `{other_act}`: {text}");
+                }
+                assert!(!text.contains("try again"), "{site:?}: {text}");
+            }
+        }
+    }
+
+    /// The RETIRED state where the records cannot be read — below the
+    /// floor, the board unreachable — asserts NO hand and no position (§9
+    /// item 50), and is still the retired face, never the read's own fault.
+    #[test]
+    fn a_retired_key_whose_records_cannot_be_read_asserts_no_hand() {
+        let board = fake::board(&Fake::new(|_| fake::json(500, json!({"error": "internal"}))));
+        let fp = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
+        let set = KeySet { retired: vec![RetiredKey { fingerprint: fp, anchor: false }], ..KeySet::default() };
+        let walk = Walk { account: "1.0.1".into(), set_account: "1.0.1".into(), set, visited: vec!["1.0.1".into()] };
+        let text = key_face(&board, &walk, &fp, &[], Site::Session).expect_err("retired").to_string();
+        assert!(text.contains("is retired at account 1.0.1") && text.contains("no hand is asserted"), "{text}");
+        assert!(!text.contains("retired at position"), "{text}");
+    }
+}

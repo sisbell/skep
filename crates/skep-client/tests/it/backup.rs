@@ -2,7 +2,7 @@
 //! file path's read-back FROM THE FILE, the re-run from step 1 when the file
 //! is gone and the act named by venue when the runs run out, the paper path's
 //! re-type and dismissal, the label domain at the box, the one-place
-//! sentence, the store refused as a destination.
+//! sentence, the store refused as a destination however the path reaches it.
 
 use std::path::{Path, PathBuf};
 
@@ -254,4 +254,25 @@ fn one_place_is_said_and_the_store_is_refused_as_a_destination() {
     assert!(person.said("no default is offered"), "SECRET destination prompt");
     assert_eq!(files_in(&outside).len(), 2);
     assert!(Path::new(&outside).is_dir());
+}
+
+/// §3.4 however the destination reaches the store — under directories the
+/// moment is about to make, or through a symlink to it: refused before
+/// anything is made or written there, or anywhere.
+#[cfg(unix)]
+#[test]
+fn the_store_is_refused_as_a_destination_however_the_path_reaches_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("store");
+    std::fs::create_dir_all(store.join("keys")).unwrap();
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&store, &link).unwrap();
+    let elsewhere = dir.path().join("b");
+    for (inside, made) in [(store.join("keys/new/a"), store.join("keys/new")), (link.join("x/y"), store.join("x"))] {
+        let mut person = Scripted::new(vec![Script::LabelDefault, Script::LabelDefault]);
+        let err = backup_moment(&mut person, &Venue::DoorSide, &options(vec![inside.clone(), elsewhere.clone()], false, Some(store.clone()))).expect_err("refused");
+        assert!(err.to_string().contains("lies inside the key store"), "{}: {err}", inside.display());
+        assert!(!made.exists(), "{} was made under the store", made.display());
+    }
+    assert!(files_in(&store.join("keys")).is_empty() && !elsewhere.exists(), "nothing written");
 }

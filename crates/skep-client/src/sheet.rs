@@ -535,6 +535,28 @@ mod tests {
         assert_eq!(render_inert("a\u{202E}b\u{07}"), "a<U+202E>b<U+0007>");
     }
 
+    /// AUTH-5.2, the whole set: every C0 control, DEL and every bidi control
+    /// renders as its code point — 45 characters — and the neighbours at
+    /// each end of each range render as themselves.
+    #[test]
+    fn every_control_and_bidi_control_renders_as_its_code_point() {
+        let inert: Vec<char> = (0x00..=0x1f)
+            .chain([0x7f, 0x061c, 0x200e, 0x200f])
+            .chain(0x202a..=0x202e)
+            .chain(0x2066..=0x2069)
+            .map(|c| char::from_u32(c).expect("a scalar value"))
+            .collect();
+        assert_eq!(inert.len(), 45);
+        for c in &inert {
+            assert_eq!(render_inert(&c.to_string()), format!("<U+{:04X}>", *c as u32), "{:04X}", *c as u32);
+        }
+        for c in [' ', '~', '\u{061b}', '\u{061d}', '\u{200d}', '\u{2010}', '\u{202f}', '\u{2065}', '\u{206a}'] {
+            assert_eq!(render_inert(&c.to_string()), c.to_string(), "{:04X} renders as itself", c as u32);
+        }
+        let all: String = inert.iter().collect();
+        assert!(render_inert(&all).bytes().all(|b| b.is_ascii_graphic()), "{}", render_inert(&all));
+    }
+
     /// AUTH-1.24/1.25 at the box: 128 bytes admitted, 129 refused with the byte
     /// count named (AUTH-2.96's vector row), a newline refused, the empty label
     /// faced (AUTH-5.42).
@@ -617,6 +639,11 @@ mod tests {
         let mut bad_seed = v.clone();
         bad_seed["seed"] = Value::from("00".repeat(32));
         assert_eq!(KeyFile::parse(bad_seed.to_string().as_bytes()).unwrap_err(), KeyFileError::Disagrees);
+        // AUTH-5.39's other half: the seed and the public key agree, and the
+        // `fingerprint` member names another key.
+        let mut other_fingerprint = v.clone();
+        other_fingerprint["fingerprint"] = Value::from(KeyFile::new(Seed::new([9u8; 32]), true, None, None).fingerprint.to_hex());
+        assert_eq!(KeyFile::parse(other_fingerprint.to_string().as_bytes()).unwrap_err(), KeyFileError::Disagrees);
         let mut wrong_type = v.clone();
         wrong_type["anchor"] = Value::from("yes");
         assert_eq!(KeyFile::parse(wrong_type.to_string().as_bytes()).unwrap_err(), KeyFileError::Schema { member: "anchor".into() });

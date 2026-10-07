@@ -3,11 +3,12 @@
 //! with no close sent and the expected end's fork; an anchor prefix refused
 //! ahead of any frame; an ambiguous prefix listed; the LAST-DEVICE line; the
 //! ANCHORLESS account's unwritable preview with no confirmation; the store
-//! unchanged; `no` and a wrong row.
+//! unchanged; `no` and a wrong row; a retirement sent again reconciled; the
+//! redirect from an account that opens by reference.
 
 use skep_client::board::{KeySetAnswer, Scope};
 use skep_client::ceremony::claim::{hosted, HostedOutcome};
-use skep_client::ceremony::deposit::{deposit, Deposit, DepositKind};
+use skep_client::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome};
 use skep_client::ceremony::handshake::{handshake, Site};
 use skep_client::ceremony::retire::{retire, RetireEnd, RetireOptions};
 use skep_client::person::scripted::{Script, Scripted};
@@ -137,4 +138,59 @@ fn the_own_key_fork_names_session_where_another_key_is_held_and_an_anchorless_ac
     assert_eq!(err.exit_code(), 3);
     let KeySetAnswer::Set(set) = board2.key_set("1.0.1").unwrap() else { panic!() };
     assert!(set.enrolled(&lone).is_some(), "nothing written");
+}
+
+/// AUTH-5.17's reconcile at a retirement's resume: a retirement sent again
+/// after its commit — its ack lost — meets `nothing_changed`, read against
+/// the set: the key stands retired, so the act COMMITTED, never "failed".
+#[test]
+fn a_retirement_sent_again_after_its_commit_is_reconciled() {
+    let dir = tempfile::tempdir().unwrap();
+    let sd = spawn(&dir.path().join("board"), false);
+    let board = board(sd.port());
+    let store = FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let a = key_file(&store, &fp).signer();
+    let store_b = FileStore::open(dir.path().join("b"));
+    let fp_b = keygen(&store_b, "phone");
+    let full = handshake(&board, Scope::Full, &a, 1, Site::Session).unwrap();
+    deposit(&board, full.token(), &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(vec![entry_of(&key_file(&store_b, &fp_b), "phone")]), hand: Some(&a), id: "test.enroll-b" }).unwrap();
+    let retire_b = |id: &str| deposit(&board, full.token(), &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Retire(vec![fp_b]), hand: Some(&a), id });
+    let first = retire_b("test.retire-b");
+    assert!(matches!(first, Ok(DepositOutcome::Deposited { .. })), "{first:?}");
+    let again = retire_b("test.retire-b-again");
+    let Ok(DepositOutcome::Committed { reason }) = again else { panic!("{again:?}") };
+    assert!(reason.contains("nothing_changed") && reason.contains("the fingerprints stand retired"), "{reason}");
+    full.close().unwrap();
+    let KeySetAnswer::Set(set) = board.key_set("1.0.1").unwrap() else { panic!() };
+    assert!(set.retired(&fp_b).is_some());
+}
+
+/// The REDIRECT of a retirement at an account that opens by reference
+/// (`not_holder_retirement`'s, AUTH-3.56): named as the agent space, which
+/// holds no set of its own, the walk retires the key at `1.0.1`, where it
+/// stands as that account's own, from a session AS `1.0.1`.
+#[test]
+fn a_retirement_from_an_account_that_opens_by_reference_is_made_at_the_set_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let sd = spawn(&dir.path().join("board"), false);
+    let board = board(sd.port());
+    let store = FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let a = key_file(&store, &fp).signer();
+    let store_b = FileStore::open(dir.path().join("b"));
+    let fp_b = keygen(&store_b, "phone");
+    let full = handshake(&board, Scope::Full, &a, 1, Site::Session).unwrap();
+    deposit(&board, full.token(), &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(vec![entry_of(&key_file(&store_b, &fp_b), "phone")]), hand: Some(&a), id: "test.enroll-b" }).unwrap();
+    full.close().unwrap();
+    let agent_space = store.persisted_new_id(board.dialed(), "1.0.1.1").unwrap().expect("the agent space's line");
+    let mut person = Scripted::new(vec![Script::Confirm(true)]);
+    let done = retire(&board, &store, &mut person, &RetireOptions { principal: agent_space, fingerprint_prefix: fp_b.to_hex()[..8].to_string() })
+        .unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n")));
+    assert_eq!((done.account.as_str(), done.fingerprint, done.end), ("1.0.1", fp_b, RetireEnd::CloseSent));
+    assert!(person.said("`not_holder_retirement`'s redirect"), "{}", person.transcript.join("\n"));
+    let KeySetAnswer::Set(set) = board.key_set("1.0.1").unwrap() else { panic!() };
+    assert!(set.retired(&fp_b).is_some());
 }

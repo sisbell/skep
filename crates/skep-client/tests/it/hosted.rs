@@ -1,7 +1,8 @@
 //! THE HOSTED ARM (`client.md` §4.5) against the real daemon, THE WHOLE-SET
 //! COMPARE against the genesis record it wrote (AUTH-4.58's detection), and
 //! the first-signed-session composition `bind` runs — its two arms selected
-//! by the reads alone.
+//! by the reads alone — and the hosted arm's bare sessions closed where they
+//! outlive the flip.
 
 use skep_client::board::{KeySetAnswer, Scope};
 use skep_client::ceremony::claim::{hosted, HostedOutcome};
@@ -15,7 +16,7 @@ use skep_client::store::{Binding, FileStore};
 use skep_identity::{encode_enroll, Enrollment, Fingerprint};
 use skep_signature::{HybridSigner, TAG_FNDSA512_PREVIEW_ED25519};
 
-use crate::common::{board, keygen, spawn};
+use crate::common::{board, keygen, origin_of, recording_board, spawn};
 
 /// The customer's door-side material: two anchors in memory (as `keygen
 /// --anchors` makes them) and the store's device key.
@@ -189,4 +190,25 @@ fn first_session_owes_the_setup_act_once_and_nothing_after() {
     let reads2 = FirstSessionReads::take(&board, "1.0.1", &fp, Some(&store)).unwrap();
     assert_eq!((reads2.agent_space_principal, reads2.agent_space_home_present, reads2.persisted_new_id), (Some(agent_space_principal), true, Some(agent_space_principal)));
     assert!(!reads2.anything_owed(), "bind's second arm: no session is opened");
+}
+
+/// THE CLOSE IS CONDITIONED ON H0's OWN READ (§4.5): under local trust the
+/// hosted arm's two bare sessions survive the flip, so both are closed once
+/// the claim stands; without it they die at the flip into ENFORCING, and no
+/// close is sent.
+#[test]
+fn the_hosted_arm_closes_its_bare_sessions_where_they_outlive_the_flip() {
+    for (local_trust, closes) in [(true, 2), (false, 0)] {
+        let dir = tempfile::tempdir().unwrap();
+        let sd = spawn(&dir.path().join("board"), local_trust);
+        let (board, log) = recording_board(origin_of(sd.port()));
+        let lone = signer_from_seed(&[17; 32]);
+        let payload = encode_enroll(&[Enrollment::new(HybridSigner::public_key(&lone).clone(), false, Some("lone".into())).unwrap()]);
+        let HostedOutcome::Claimed(_) = hosted(&board, payload.as_bytes(), 1).unwrap() else { panic!("the hosted claim") };
+        let lines = log.lock().unwrap().clone();
+        let claim_link = lines.iter().rposition(|l| l == "POST /op make_link").expect("the claim link");
+        let close_at: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| *l == "POST /session/close").map(|(i, _)| i).collect();
+        assert_eq!(close_at.len(), closes, "local trust {local_trust}: {lines:?}");
+        assert!(close_at.iter().all(|i| *i > claim_link), "closed before the claim stands: {lines:?}");
+    }
 }

@@ -293,4 +293,32 @@ mod tests {
         assert_eq!(stands(KeyDiagnosis::Retired { anchor: true }), "this key stands retired");
         assert_eq!(stands(KeyDiagnosis::Enrolled { anchor: false }), "this key stands enrolled as a device key");
     }
+
+    /// AUTH-5.66's predicate over its whole input — the loaded key enrolled
+    /// as an anchor or as a device key, retired, or in neither list, each
+    /// with the origin this client signs answered for or not: RE-HANDSHAKE
+    /// iff the key stands enrolled and the origin is answered for, the
+    /// ORIGIN STATE wherever it is not, the key BURNED otherwise.
+    #[test]
+    fn the_closed_predicate_re_handshakes_iff_the_key_stands_and_the_origin_answers() {
+        use crate::board::{EnrolledKey, RetiredKey};
+        let signed = Origin::parse("http://127.0.0.1:8642").unwrap();
+        let key = skep_signature::HybridSigner::from_seed(skep_signature::TAG_MLDSA65_ED25519, &[3; 32]).expect("tag 1").public_key().clone();
+        let fp = Fingerprint::of(&key);
+        let enrolled = |anchor| KeySet { enrolled: vec![EnrolledKey { fingerprint: fp, key: key.clone(), anchor }], ..KeySet::default() };
+        let retired = KeySet { retired: vec![RetiredKey { fingerprint: fp, anchor: false }], ..KeySet::default() };
+        for (set, stands) in [(enrolled(true), true), (enrolled(false), true), (retired, false), (KeySet::default(), false)] {
+            let walk = Walk { account: "1.0.1".into(), set_account: "1.0.1".into(), set, visited: vec![] };
+            for listed in [true, false] {
+                let answered: &[&str] = if listed { &["http://127.0.0.1:8642"] } else { &["https://board.example"] };
+                let expected = match (listed, stands) {
+                    (false, _) => ClosedArm::OriginState,
+                    (true, true) => ClosedArm::ReHandshake,
+                    (true, false) => ClosedArm::KeyBurned,
+                };
+                let diagnosis = KeyDiagnosis::of(&walk.set, &fp);
+                assert_eq!(on_closed(&fp, &signed, &health(Some("1.0.1"), false, answered), &walk), expected, "the key {diagnosis}, the origin listed: {listed}");
+            }
+        }
+    }
 }

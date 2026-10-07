@@ -172,3 +172,41 @@ pub fn r0(board: &Board, person: &mut dyn Person, principal: u64, act: Act, own:
     let cell = A4Cell::of(board, &health, &account, &walk)?;
     Ok(Reads { account, walk, set_principal, home, records, cell })
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::board::fake::Fake;
+    use crate::origin::Origin;
+
+    fn health(origins: &[&str]) -> Health {
+        let body = json!({"auth": {"claimant": "1.0.1", "local_trust": false, "origins": origins, "signed_origins": origins}, "log_position": 9});
+        Health { raw: body.to_string().into_bytes(), body }
+    }
+
+    /// AUTH-5.60 step 4's venue, off `/health`'s pair and the origin dialed
+    /// with NO read: a loopback dial with loopback origins alone is the
+    /// loopback-bound notebook, one with a configured non-loopback origin
+    /// beside them the bind-override notebook, and any other dial a SERVED
+    /// board; a notebook is the person's own board, a served board and a
+    /// recipient's never.
+    #[test]
+    fn the_venue_is_a_notebook_only_where_the_board_is_dialed_on_loopback() {
+        let venue = |dialed: &str, origins: &[&str]| A4Cell::venue(&Board::new(Origin::parse(dialed).unwrap(), Fake::unread()), &health(origins));
+        let loopback = ["http://127.0.0.1:8642", "http://localhost:8642", "http://[::1]:8642"];
+        let overridden = [&loopback[..], &["https://board.example"]].concat();
+        for dialed in ["http://127.0.0.1:8642", "http://[::1]:8642"] {
+            assert_eq!(venue(dialed, &loopback), A4Cell::LoopbackNotebook, "{dialed}");
+            assert_eq!(venue(dialed, &overridden), A4Cell::BindOverrideNotebook, "{dialed}");
+        }
+        for dialed in ["https://board.example", "http://10.0.0.7:8642", "http://board.example:8642"] {
+            for origins in [&loopback[..], &overridden[..]] {
+                assert_eq!(venue(dialed, origins), A4Cell::Served, "{dialed} with {origins:?}");
+            }
+        }
+        let cells = [A4Cell::LoopbackNotebook, A4Cell::BindOverrideNotebook, A4Cell::Served, A4Cell::HandoffRecipient { giver: "1.0.1".into() }];
+        assert_eq!(cells.iter().map(A4Cell::own_board).collect::<Vec<_>>(), [true, true, false, false]);
+    }
+}

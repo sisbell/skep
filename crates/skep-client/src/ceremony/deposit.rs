@@ -273,11 +273,11 @@ pub fn deposit(board: &Board, token: &Token, d: &Deposit<'_>) -> Result<DepositO
     // The insert, declared under the record's class type, at the next free
     // content ordinal; `published_target` — this client's own position
     // arithmetic raced — re-reads the ordinal and re-sends ONCE under the
-    // same id (§5.3).
+    // same id (§5.3), and a second `published_target` is the halt below.
     let insert_id = format!("{}.insert", d.id);
     let link_id = format!("{}.link", d.id);
     let mut atom = None;
-    for attempt in 0..2 {
+    for _ in 0..2 {
         let ordinal = ordinal_at(board, Some(token), d.home)?;
         let v = match board.op(Some(token), &frames::insert_atom(d.home, ordinal, &record_text, ty, Some(&insert_id)))? {
             Answer::Closed => return Err(DepositHalt::SessionClosed(closed_face("inserting the record"))),
@@ -289,7 +289,7 @@ pub fn deposit(board: &Board, token: &Token, d: &Deposit<'_>) -> Result<DepositO
         }
         let Some(r) = Rejection::of(&v) else { return Err(shape_face(&v).into()) };
         match r.key() {
-            "published_target" if attempt == 0 => continue,
+            "published_target" => continue,
             _ => return Err(insert_face(&r, &v).into()),
         }
     }
@@ -500,5 +500,130 @@ fn reconcile_or_face(board: &Board, d: &Deposit<'_>, r: &Rejection, v: &Value, w
             "a refusal no state of this walk arms — AUTH-5.66's residue is HALT AND SURFACE, never a retry",
             "nothing further was written; the walk resumes by reading the board",
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::board::fake::{self, Fake};
+
+    const HOME: &str = "1.0.1.0.1";
+    const ATOM: &str = "1.0.1.0.1.0.1.4";
+
+    fn token() -> Token {
+        Token::parse("9f3a6c21d4b8e07a5c1b2d4e6f708192").expect("a token")
+    }
+
+    /// A span set arranging `extent` content positions, from `1.1`.
+    fn span_set(extent: u64) -> Value {
+        let set = if extent == 0 { json!([]) } else { json!([{"start": "1.1", "width": format!("0.{extent}")}]) };
+        json!({"as_of": 9, "resp": "span_set", "set": set})
+    }
+
+    /// A one-item delivery of `text` as a record's composite value.
+    fn delivery(text: &str) -> Value {
+        json!({"as_of": 9, "items": [{"atom": text}], "resp": "delivery"})
+    }
+
+    /// A retirement of one key, at or below the claim — no hand, so no read
+    /// beyond the deposit's own.
+    fn retirement(id: &str) -> Deposit<'_> {
+        Deposit { home: HOME, subject: "1.0.1", kind: DepositKind::Retire(vec![Fingerprint::parse_hex(&"ab".repeat(32)).unwrap()]), hand: None, id }
+    }
+
+    /// A board answering the read-back's reads — the span set at `extent`,
+    /// the `image` with `runs`, `retrieve_v` by the span start asked at —
+    /// save the death signal at the read `closed_at` names.
+    fn reading(extent: u64, runs: Value, bytes_at: fn(&str) -> &'static str, closed_at: Option<&'static str>) -> Arc<Fake> {
+        Fake::new(move |req| {
+            let f = fake::frame(req);
+            let op = f["op"].as_str().unwrap_or("?");
+            if closed_at == Some(op) {
+                return fake::closed();
+            }
+            match op {
+                "retrieve_doc_v_span_set" => fake::json(200, span_set(extent)),
+                "image" => fake::json(200, json!({"as_of": 9, "resp": "runs", "runs": runs.clone()})),
+                "retrieve_v" => fake::json(200, delivery(bytes_at(f["specs"][0]["span"]["start"].as_str().unwrap_or("")))),
+                other => panic!("the read-back sends no `{other}`"),
+            }
+        })
+    }
+
+    /// AUTH-5.5's read-back (AUTH-2.114, AUTH-2.115): the bytes at the
+    /// atom's V-position — its ordinal off the I-map, never off its address
+    /// — are the record written; an atom the arrangement does not hold, or an
+    /// I-map that does not read whole, does not read back, and nothing is
+    /// read past the read that settles it; the death signal on any of its
+    /// three reads is the session's end, never a mismatch.
+    #[test]
+    fn the_read_back_is_the_arranged_bytes_and_nothing_else() {
+        let read = |fake: &Arc<Fake>| read_back(&fake::board(fake), Some(&token()), HOME, ATOM, "REC");
+        // The atom is the THIRD arranged position, its address's last
+        // component 4: its bytes are read at `1.3`.
+        let held = json!([{"i_start": "1.0.1.0.1.0.1.7", "width": "2"}, {"i_start": ATOM, "width": "1"}]);
+        let third: fn(&str) -> &'static str = |start| if start == "1.3" { "REC" } else { "XXX" };
+        let fake = reading(3, held.clone(), third, None);
+        assert_eq!(read(&fake), Ok(true));
+        assert_eq!(fake.log(), ["POST /op retrieve_doc_v_span_set", "POST /op image", "POST /op retrieve_v"]);
+        assert_eq!(read(&reading(3, held.clone(), |_| "XXX", None)), Ok(false), "other bytes there");
+        // An arrangement that does not hold the atom: no `retrieve_v`.
+        let fake = reading(3, json!([{"i_start": "1.0.1.0.1.0.1.7", "width": "3"}]), |_| "REC", None);
+        assert_eq!(read(&fake), Ok(false));
+        assert!(!fake.log().iter().any(|l| l == "POST /op retrieve_v"), "{:?}", fake.log());
+        // A run that does not parse: the map is absent, never shifted onto
+        // the position after it.
+        let broken = json!([{"i_start": "1.0.1.0.1.0.1.7", "width": "x"}, {"i_start": ATOM, "width": "1"}]);
+        assert_eq!(read(&reading(3, broken, |start| if start == "1.1" { "REC" } else { "XXX" }, None)), Ok(false));
+        // No content at all: no `image`.
+        let fake = reading(0, held.clone(), |_| "REC", None);
+        assert_eq!(read(&fake), Ok(false));
+        assert_eq!(fake.log(), ["POST /op retrieve_doc_v_span_set"]);
+        for closed_at in ["retrieve_doc_v_span_set", "image", "retrieve_v"] {
+            assert!(matches!(read(&reading(3, held.clone(), third, Some(closed_at))), Err(DepositHalt::SessionClosed(_))), "the death signal at `{closed_at}`");
+        }
+    }
+
+    /// AUTH-5.5: a record that does not read back is NEVER LINKED — the
+    /// inserted atom stays inert prose in the home — and the deposit halts in
+    /// this client's frame.
+    #[test]
+    fn a_record_that_does_not_read_back_is_never_linked() {
+        let fake = Fake::new(|req| match fake::frame(req)["op"].as_str() {
+            Some("retrieve_doc_v_span_set") => fake::json(200, span_set(4)),
+            Some("insert") => fake::json(200, json!({"addr": ATOM, "at": 10, "resp": "ack_addr"})),
+            Some("image") => fake::json(200, json!({"as_of": 10, "resp": "runs", "runs": [{"i_start": "1.0.1.0.1.0.1.1", "width": "4"}]})),
+            Some("retrieve_v") => fake::json(200, delivery("XXX")),
+            other => panic!("the deposit sends no {other:?} here"),
+        });
+        let err = deposit(&fake::board(&fake), &token(), &retirement("x")).expect_err("no read-back");
+        assert!(matches!(err, DepositHalt::Other(_)), "{err:?}");
+        assert!(err.to_string().contains("the record read back from its address is not the record written"), "{err}");
+        assert!(!fake.log().iter().any(|l| l == "POST /op make_link"), "linked: {:?}", fake.log());
+    }
+
+    /// §5.3: `published_target` at the insert — this client's own position
+    /// arithmetic raced — re-reads the ordinal and re-sends ONCE under the
+    /// same id; a second is a halt in this client's frame, exit 3, never the
+    /// raw refusal.
+    #[test]
+    fn a_second_published_target_halts_in_this_clients_frame() {
+        let fake = Fake::new(|req| match fake::frame(req)["op"].as_str() {
+            Some("retrieve_doc_v_span_set") => fake::json(200, span_set(3)),
+            Some("insert") => fake::json(200, json!({"code": "published_target", "disposition": "reorder", "op": "insert", "resp": "rejected"})),
+            other => panic!("the deposit sends no {other:?} after its insert is refused"),
+        });
+        let halt = Halt::from(deposit(&fake::board(&fake), &token(), &retirement("x")).expect_err("refused twice"));
+        assert_eq!(halt.exit_code(), 3, "{halt}");
+        assert!(halt.to_string().contains("the record's insert was refused twice as an in-place edit"), "{halt}");
+        assert_eq!(fake.log(), ["POST /op retrieve_doc_v_span_set", "POST /op insert", "POST /op retrieve_doc_v_span_set", "POST /op insert"]);
+        let sent = fake.sent.lock().unwrap();
+        let inserts: Vec<Value> = sent.iter().map(|(_, req)| fake::frame(req)).filter(|f| f["op"] == "insert").collect();
+        assert!(inserts.iter().all(|f| f["id"] == "x.insert" && f["at"]["ordinal"] == "4"), "{inserts:?}");
     }
 }

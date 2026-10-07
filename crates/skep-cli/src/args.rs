@@ -2,13 +2,16 @@
 //! `from_env`): every setting is seeded from its environment variable, so a
 //! flag always wins over a variable and the precedence is stated once; a
 //! missing value, an unknown flag and a bad value are usage refusals
-//! (§2.3's exit 2 — the flag's SHAPE alone). The environment names are §9
-//! item 21's: `SKEP_BOARD`, `SKEP_KEYSTORE`, `SKEP_KEY`, `SKEP_PRINCIPAL`,
-//! `SKEP_SESSION` — read here and nowhere else in the crate, `SKEP_SESSION`
-//! by `session_env` alone, the one setting no flag carries
-//! (`tests/it/tidy.rs`). The vocabulary — the commands, the valued flags,
-//! the switches — is spelled once, beside `HELP`, the text that documents
-//! it.
+//! (§2.3's exit 2 — the flag's SHAPE alone). A setting's reader answers the
+//! refusal and the absence apart — `principal` and `board_given` answer
+//! `Ok(None)` for a setting given nowhere and `Err` for one given badly —
+//! so no command reads a refused value as an absent one. The environment
+//! names are §9 item 21's: `SKEP_BOARD`, `SKEP_KEYSTORE`, `SKEP_KEY`,
+//! `SKEP_PRINCIPAL`, `SKEP_SESSION` — read here and nowhere else in the
+//! crate, `SKEP_SESSION` by `session_env` alone, the one setting no flag
+//! carries (`tests/it/tidy.rs`). The vocabulary — the commands, the valued
+//! flags, the switches — is spelled once, beside `HELP`, the text that
+//! documents it.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -72,8 +75,10 @@ usage: skep <command> [flags]
   verify       the pre-check as a command: the origin arm, the key arm, and
                with --payload/--anchor the whole-set compare; exit 0/3
   health       GET /health verbatim on stdout; the derived mode on stderr
-  bind         land the three facts of an enroll hop on this device and
-               run the account's first signed session where one is owed
+  bind         land the three facts of an enroll hop or a handoff here;
+               a genesis another hand wrote is compared whole (--anchor,
+               or asked), then the account's first signed session runs
+               where one is owed
   enroll       the hop's signed-in half: enroll another device's payload
                from a full session this command opens (a person door);
                --reply <fp-prefix> re-prints the three facts, no write
@@ -171,11 +176,18 @@ impl Command {
         env.and_then(|var| std::env::var(var).ok()).filter(|v| !v.is_empty())
     }
 
-    /// `--board` / `SKEP_BOARD`, a canonical origin — anything else is exit
-    /// 2 before any socket opens (§7; the daemon's `NotCanonical` phrase).
+    /// `--board` / `SKEP_BOARD` where either is set, a canonical origin —
+    /// anything else is exit 2 before any socket opens (§7; the daemon's
+    /// `NotCanonical` phrase); `None` where neither is set.
+    pub fn board_given(&self) -> Result<Option<Origin>, Usage> {
+        let Some(text) = self.value("--board", Some("SKEP_BOARD")) else { return Ok(None) };
+        text.parse::<Origin>().map(Some).map_err(|e| Usage(format!("--board: '{text}' is {e}")))
+    }
+
+    /// `--board` / `SKEP_BOARD`, required: [`Command::board_given`], its
+    /// absence a usage refusal of its own.
     pub fn board(&self) -> Result<Origin, Usage> {
-        let text = self.value("--board", Some("SKEP_BOARD")).ok_or_else(|| Usage("--board (or SKEP_BOARD) is required".into()))?;
-        text.parse::<Origin>().map_err(|e| Usage(format!("--board: '{text}' is {e}")))
+        self.board_given()?.ok_or_else(|| Usage("--board (or SKEP_BOARD) is required".into()))
     }
 
     /// `--dir` / `SKEP_KEYSTORE`, else `~/.skep` (§6; §9 item 10).
@@ -232,8 +244,13 @@ mod tests {
         assert!(parse(argv(&["retire", "--yes"])).is_err(), "--yes does not exist: a typed answer, never a flag");
         let Parsed::Command(c) = parse(argv(&["keygen", "--payload"])).unwrap() else { panic!() };
         assert!(c.switch("--payload"), "a switch at keygen");
-        let Parsed::Command(c) = parse(argv(&["verify", "--payload", "-", "--board", "HTTP://x"])).unwrap() else { panic!() };
+        let Parsed::Command(c) = parse(argv(&["verify", "--payload", "-", "--board", "HTTP://x", "--principal", "7x"])).unwrap() else { panic!() };
         assert_eq!(c.all("--payload"), ["-"], "a value at verify");
         assert!(c.board().is_err(), "a non-canonical board is a usage refusal");
+        assert!(c.board_given().is_err(), "a board given badly is refused, never read as one not given");
+        assert!(c.principal().is_err(), "a principal given badly is refused, never read as one not given");
+        let Parsed::Command(c) = parse(argv(&["accept", "--board", "http://127.0.0.1:8642", "--principal", "7"])).unwrap() else { panic!() };
+        assert_eq!(c.board_given().unwrap().map(|o| o.as_str().to_string()), Some("http://127.0.0.1:8642".to_string()));
+        assert_eq!(c.principal().unwrap(), Some(7));
     }
 }

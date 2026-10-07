@@ -22,6 +22,10 @@ pub fn handoff(c: &Command) -> i32 {
         Ok(s) => s,
         Err(u) => return usage(u),
     };
+    let given = match c.principal() {
+        Ok(p) => p,
+        Err(u) => return usage(u),
+    };
     let Some(account) = c.value("--account", None) else { return usage(Usage("--account <address> is required".into())) };
     let payload = match c.value("--payload", None) {
         Some(arg) => match read_payload(&arg) {
@@ -35,7 +39,7 @@ pub fn handoff(c: &Command) -> i32 {
     if payload.is_some() && !has_terminal() {
         return no_terminal("handoff --payload");
     }
-    let principal = match principal_or_bound(c, &store, &board) {
+    let principal = match principal_or_bound(given, &store, &board) {
         Ok(p) => p,
         Err(h) => return halt(h),
     };

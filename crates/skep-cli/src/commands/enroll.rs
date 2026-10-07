@@ -18,7 +18,11 @@ pub fn enroll(c: &Command) -> i32 {
         Ok(s) => s,
         Err(u) => return usage(u),
     };
-    let principal = match principal_or_bound(c, &store, &board) {
+    let given = match c.principal() {
+        Ok(p) => p,
+        Err(u) => return usage(u),
+    };
+    let principal = match principal_or_bound(given, &store, &board) {
         Ok(p) => p,
         Err(h) => return halt(h),
     };
@@ -48,11 +52,11 @@ pub fn enroll(c: &Command) -> i32 {
     match enroll_walk::enroll(&board, &store, &mut person, &EnrollOptions { principal, payload }) {
         Err(h) => halt(h),
         Ok(e) => {
+            // The walk said what it found, a reconciliation among it
+            // (AUTH-5.17), through the person; the warnings are what it
+            // leaves for the command to say.
             for w in &e.warnings {
                 talk(w);
-            }
-            if e.reconciled {
-                talk("reconciled: every key of the payload already stands enrolled (AUTH-5.17) — nothing was written, and the three facts are the reply");
             }
             facts(&e.facts);
             0

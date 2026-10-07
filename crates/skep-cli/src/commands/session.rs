@@ -7,7 +7,7 @@ use std::io::{self, Read};
 use skep_client::board::{Scope, Token};
 use skep_client::ceremony::handshake::{handshake, Site};
 use skep_client::dial::plaintext_non_loopback_warning;
-use skep_client::store::{KeySelector, KeyStore};
+use skep_client::store::{KeySelector, KeyStore, Purpose};
 
 use super::{board_of, data, halt, principal_or_bound, select_key, store_of, talk, usage};
 use crate::args::{session_env, Command, Usage};
@@ -52,11 +52,15 @@ pub fn session(c: &Command) -> i32 {
         Ok(s) => s,
         Err(u) => return usage(u),
     };
-    let principal = match principal_or_bound(c, &store, &board) {
+    let given = match c.principal() {
+        Ok(p) => p,
+        Err(u) => return usage(u),
+    };
+    let principal = match principal_or_bound(given, &store, &board) {
         Ok(p) => p,
         Err(h) => return halt(h),
     };
-    let key = match select_key(c, &store, &board, Some(principal)) {
+    let key = match select_key(c, &store, &board, principal, Purpose::Sign) {
         Ok(k) => k,
         Err(h) => return halt(h),
     };

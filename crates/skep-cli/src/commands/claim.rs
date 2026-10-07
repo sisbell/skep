@@ -37,7 +37,12 @@ pub fn claim(c: &Command) -> i32 {
                 for l in &reply.log {
                     talk(l);
                 }
-                // THE REPLY, DATA on stdout (§4.5 H6).
+                // THE REPLY, DATA on stdout (§4.5 H6): the claimant, the
+                // three facts, the two acts and the setup act's one
+                // sentence. The reply's further strings — the anchorless
+                // sentence among them — have one carrier, the deployment
+                // template's "Your board is live" message (cs6-S2); the
+                // operator's log above keeps the anchorless note.
                 data(format!("claimant {}", reply.claimant));
                 facts(&reply.facts);
                 data(format!(
@@ -47,9 +52,6 @@ pub fn claim(c: &Command) -> i32 {
                     reply.facts.origin, reply.facts.principal
                 ));
                 data("second act: in your first signed session the setup act runs — `skep claim --board <origin> --dir <store>` from that device performs it: creating your account also creates a space for your agents beneath it, and its home");
-                if reply.anchorless {
-                    data("this account holds no anchor: no anchor act on it is ever possible, and the enroll hop from another signed-in device is its one recovery");
-                }
                 0
             }
         };

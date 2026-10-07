@@ -3,18 +3,23 @@
 //! domain — and the custody line written beside its path; `--payload`
 //! prints its enrollment record, and `--anchors`, a person door, runs the
 //! door-side backup moment for the hosted signup's three-key payload
-//! (AUTH-5.57 step 2).
+//! (AUTH-5.57 step 2). With `bind`, one of the two commands that sequence
+//! the library's compositions themselves rather than calling a walk — the
+//! store's `generate`, its lookup, `backup_moment` at the door side,
+//! `encode_enroll` — and so the carrier of this form's own text: the box's
+//! statements by venue, the custody line, the abandonment's disposition and
+//! the one-door line.
 
 use std::path::{Path, PathBuf};
 
 use skep_client::ceremony::backup::{backup_moment, BackupOptions, Venue};
 use skep_client::halt::Halt;
-use skep_client::person::{LabelBox, Person, Public};
+use skep_client::person::{LabelBox, Person, Public, Statement};
 use skep_client::sheet::{group_hex, Label};
 use skep_client::store::{KeySelector, KeyStore, Purpose};
 use skep_identity::{encode_enroll, Enrollment};
 
-use super::{data, halt, host_name_and_date, no_terminal, store_of, talk, usage};
+use super::{data, halt, host_name_and_date, no_terminal, store_of, talk, usage, OUTSTANDING_ACT};
 use crate::args::Command;
 use crate::terminal::{has_terminal, Terminal};
 
@@ -46,15 +51,6 @@ fn custody_line(path: &Path) -> String {
     )
 }
 
-/// `keygen --payload`'s one line of outstanding-act text (AUTH-5.32: the
-/// generating client holds the pending state), conditioned on the walk.
-fn outstanding_act_line() -> &'static str {
-    "this key is not enrolled anywhere yet. Where it ADDS a device: take this payload to a device already signed in, run `skep enroll` \
-     there, and bring its three facts back to `skep bind` here. Where it REPLACES a machine: `skep rotate --payload` there instead, then \
-     `skep bind` here. Where no board has been claimed from this store at all: `skep claim`. Where this key was made for a handoff at \
-     `skep accept`: the outstanding act is the giver's genesis and their reply, then `skep bind`."
-}
-
 pub fn keygen(c: &Command) -> i32 {
     let store = match store_of(c) {
         Ok(s) => s,
@@ -71,7 +67,7 @@ pub fn keygen(c: &Command) -> i32 {
         Some(text) => match Label::new(&text) {
             Ok(l) => {
                 for s in device_box_statements(anchors) {
-                    talk(format!("[AUTH-5.42] {s}"));
+                    person.say(Public(Statement { rule: "AUTH-5.42", text: s }));
                 }
                 l
             }
@@ -85,7 +81,7 @@ pub fn keygen(c: &Command) -> i32 {
                 };
                 match Label::new(&text) {
                     Ok(l) => break l,
-                    Err(fault) => talk(format!("[AUTH-1.24] that name is refused at the box: {fault}")),
+                    Err(fault) => person.say(Public(Statement { rule: "AUTH-1.24", text: format!("that name is refused at the box: {fault}") })),
                 }
             }
         }
@@ -137,7 +133,9 @@ pub fn keygen(c: &Command) -> i32 {
         if anchors {
             talk("this three-key payload serves ONE door, the hosted signup — never the enroll hop, whose `skep enroll` refuses every anchor-flagged entry at the paste");
         } else {
-            talk(outstanding_act_line());
+            // A key this command made was never made at `skep accept`, so the
+            // handoff recipient's clause is `fingerprint`'s alone.
+            talk(format!("this key is not enrolled anywhere yet. {OUTSTANDING_ACT} Where no board has been claimed from this store at all: `skep claim`."));
         }
     }
     // The fingerprint LAST, flat and grouped — never the bare public key.

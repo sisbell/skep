@@ -2,8 +2,9 @@
 //! brief §3): the command table, exit 2 before any socket for a
 //! non-canonical board, the person doors' terminal check, THE LOOP over the
 //! hosted arm (keygen → claim --hosted → bind → session → verify → health →
-//! fingerprint), the token's custody, the whole-set compare, the plaintext
-//! warning, the default store, `bind`'s paste prompt on stderr.
+//! fingerprint), the token's custody, the whole-set compare, `bind`'s
+//! landing question, a refused setting never read as an absent one, the
+//! plaintext warning, the default store, `bind`'s paste prompt on stderr.
 
 use serde_json::Value;
 use skep_client::sheet::{KeyFile, Label, Seed};
@@ -106,13 +107,25 @@ fn the_loop_through_the_binary() {
     assert_eq!(fp.len(), 64);
     assert_eq!(skep_identity::Fingerprint::of(&entries[0].key).to_hex(), fp, "the fingerprint is the payload's key's");
     assert!(r.err.contains("not enrolled anywhere yet") && r.err.contains("skep claim"), "the outstanding-act line: {}", r.err);
+    assert!(r.err.contains("skep rotate --payload"), "the line is conditioned on the walk: {}", r.err);
+    assert!(!r.err.contains("skep accept"), "a key keygen made was never made at `skep accept`: {}", r.err);
     let payload_file = dir.path().join("payload.json");
     std::fs::write(&payload_file, format!("{payload}\n")).unwrap();
 
-    // fingerprint: UNBOUND with the no-board-claimed act.
+    // fingerprint: UNBOUND with the no-board-claimed act — the same
+    // conditioned line, the re-print, the claim and the handoff recipient's
+    // clause beside it.
     let r = skep(&["fingerprint", "--dir", s(&store)], &[], None);
     assert_eq!(r.code, 0, "{r:?}");
     assert!(r.out.contains(&fp) && r.out.contains("label customer notebook") && r.out.contains("UNBOUND — no board has been claimed from this store"), "{}", r.out);
+    assert!(
+        r.out.contains("--select <fp> --payload")
+            && r.out.contains("skep rotate --payload")
+            && r.out.contains("`skep claim`")
+            && r.out.contains("the re-offer is `skep accept --reprint`, never `--payload` here"),
+        "{}",
+        r.out
+    );
 
     // claim --hosted -: the payload on stdin; the reply on stdout.
     let r = skep(&["claim", "--hosted", "-", "--board", &board], &[], Some(payload.as_bytes()));
@@ -123,7 +136,7 @@ fn the_loop_through_the_binary() {
     assert_eq!(out[2], "principal 1");
     assert_eq!(out[3], format!("origin {board}"));
     assert!(r.out.contains("first act:") && r.out.contains("skep verify") && r.out.contains("second act:"), "{}", r.out);
-    assert!(r.out.contains("holds no anchor"), "the anchorless sentence in the reply");
+    assert!(!r.out.contains("holds no anchor"), "the reply carries no anchorless sentence: its one carrier is the deployment template (§4.5 H6, cs6-S2): {}", r.out);
     assert!(r.err.contains("ANCHORLESS PERMANENTLY"), "the operator's log: {}", r.err);
     // Idempotent.
     let r = skep(&["claim", "--hosted", &payload_file.to_string_lossy(), "--board", &board], &[], None);
@@ -139,10 +152,13 @@ fn the_loop_through_the_binary() {
     assert!(r.err.contains("mode ENFORCING") && r.err.contains("signed arm") && r.err.contains(&board), "{}", r.err);
 
     // bind: the three facts confirmed, the first signed session's setup act.
+    // No `--anchor` says which landing this is and the input has ended:
+    // nobody answers, nothing is compared, and the line says so.
     let r = skep(&["bind", "--board", &board, "--dir", s(&store), "--account", "1.0.1", "--principal", "1"], &[], None);
     assert_eq!(r.code, 0, "{r:?}");
     assert!(r.lines().contains(&"agent space 1.0.1.1"), "{}", r.out);
     assert!(r.lines().contains(&"account 1.0.1") && r.lines().contains(&"principal 1"));
+    assert!(r.err.contains("which landing is this?") && r.err.contains("no landing was answered before the input ended"), "{}", r.err);
     // The second arm: nothing owed, no session.
     let r = skep(&["bind", "--board", &board, "--dir", s(&store), "--account", "1.0.1", "--principal", "1"], &[], None);
     assert_eq!(r.code, 0, "{r:?}");
@@ -309,6 +325,135 @@ fn verify_halts_on_a_planted_key_and_admits_the_honest_genesis_from_anchor_files
     let r = skep(&["bind", "--board", &board, "--dir", s(&store), "--account", "1.0.1", "--principal", "1", "--anchor", s(&pa), "--anchor", s(&pb)], &[], None);
     assert_eq!(r.code, 0, "{r:?}");
     assert!(r.lines().contains(&"agent space 1.0.1.1"));
+    // A binding that names an anchor's file: READ at `verify`, which signs
+    // nothing, and refused at `session`, which signs (§2.2's selection
+    // test) — by the store's lookup as by `--key`.
+    let papers = dir.path().join("papers");
+    std::fs::create_dir_all(papers.join("keys")).unwrap();
+    std::fs::copy(&pa, papers.join("keys").join(format!("{}.key", a.fingerprint.to_hex()))).unwrap();
+    std::fs::write(papers.join("bindings"), format!("{board} 1 1.0.1 {}\n", a.fingerprint.to_hex())).unwrap();
+    let r = skep(&["verify", "--board", &board, "--dir", s(&papers)], &[], None);
+    assert_eq!(r.code, 0, "{r:?}");
+    assert!(r.lines().contains(&"account 1.0.1"), "{}", r.out);
+    let r = skep(&["session", "--board", &board, "--dir", s(&papers)], &[], None);
+    assert_eq!(r.code, 3, "{r:?}");
+    assert!(r.err.contains("ANCHOR's file"), "{}", r.err);
+}
+
+/// THE LANDING QUESTION (§2.2 `bind`; P27): where no `--anchor` says which
+/// landing this is, `bind` asks — each answer priced, none proposed — ahead
+/// of any session. Answered `alone` — a handoff's DECLINE arm, a hosted
+/// one-key signup — the genesis is compared against this device's key
+/// alone, so a key written beside it halts the binding; an answer that is
+/// none of the three is asked again; `pair` stops for the files; `hop`
+/// compares nothing, the price its line names.
+#[test]
+fn bind_asks_which_landing_where_no_anchor_says_and_compares_the_decline_arm_whole() {
+    // A genesis another hand wrote around this device's key, and one beside it.
+    let dir = tempfile::tempdir().unwrap();
+    let sd = spawn(&dir.path().join("board"), false);
+    let board = origin(sd.port());
+    let store = dir.path().join("store");
+    let r = skep(&["keygen", "--label", "mine", "--payload", "--dir", s(&store)], &[], None);
+    assert_eq!(r.code, 0, "{r:?}");
+    let mut entries = parse_enroll(r.lines()[0].as_bytes()).unwrap();
+    entries.push(Enrollment::new(HybridSigner::public_key(&signer_from_seed(&[42; 32])).clone(), false, Some("planted".into())).unwrap());
+    let r = skep(&["claim", "--hosted", "-", "--board", &board], &[], Some(encode_enroll(&entries).as_bytes()));
+    assert_eq!(r.code, 0, "{r:?}");
+    let bindings = || std::fs::read_to_string(store.join("bindings")).ok();
+    let before = bindings();
+    let bind = ["bind", "--board", &board, "--dir", s(&store), "--account", "1.0.1", "--principal", "1"];
+    // `pair` without the files: the act is the files, nothing written.
+    let r = skep(&bind, &[], Some(b"pair\n"));
+    assert_eq!(r.code, 3, "{r:?}");
+    assert!(r.err.contains("which landing is this?") && r.err.contains("re-run with `--anchor <a> --anchor <b>`"), "{}", r.err);
+    assert_eq!(bindings(), before, "no binding line written");
+    // THIS KEY ALONE, the DECLINE arm's compare: the key written beside it
+    // halts, ahead of any session and any line.
+    let r = skep(&bind, &[], Some(b"alone\n"));
+    assert_eq!(r.code, 3, "{r:?}");
+    assert!(r.err.contains("NOT yours to keep as it stands (AUTH-5.53)"), "{}", r.err);
+    assert!(r.err.contains("a key you did not send stands in the genesis") && r.err.contains("planted"), "{}", r.err);
+    assert!(r.out.is_empty(), "no facts, no agent space: {}", r.out);
+    assert_eq!(bindings(), before, "no binding line written");
+    // Asked again until the answer is one of the three; `hop` compares
+    // nothing, and the key beside this one stands unseen — the price the
+    // question names for that answer where another hand wrote the set.
+    let r = skep(&bind, &[], Some(b"\nperhaps\nhop\n"));
+    assert_eq!(r.code, 0, "{r:?}");
+    assert_eq!(r.err.matches("answer hop, alone or pair: ").count(), 3, "{}", r.err);
+    assert!(r.lines().contains(&"agent space 1.0.1.1"), "{}", r.out);
+
+    // An honest one-key genesis answered `alone`: compared whole, it passes.
+    let dir = tempfile::tempdir().unwrap();
+    let sd = spawn(&dir.path().join("board"), false);
+    let board = origin(sd.port());
+    let store = dir.path().join("store");
+    let r = skep(&["keygen", "--label", "mine", "--payload", "--dir", s(&store)], &[], None);
+    assert_eq!(r.code, 0, "{r:?}");
+    let payload = r.lines()[0].to_string();
+    let r = skep(&["claim", "--hosted", "-", "--board", &board], &[], Some(payload.as_bytes()));
+    assert_eq!(r.code, 0, "{r:?}");
+    let r = skep(&["bind", "--board", &board, "--dir", s(&store), "--account", "1.0.1", "--principal", "1"], &[], Some(b"alone\n"));
+    assert_eq!(r.code, 0, "{r:?}");
+    assert!(!r.err.contains("no landing was answered"), "{}", r.err);
+    assert!(r.lines().contains(&"agent space 1.0.1.1"), "{}", r.out);
+}
+
+/// A SETTING REFUSED IS NEVER A SETTING ABSENT (§2.3's exit 2; `args.rs`):
+/// a malformed `--principal` or `SKEP_PRINCIPAL` is a usage refusal at every
+/// command that reads one, before any socket opens — the dead board behind
+/// it is never dialed — and the store's lone binding never stands in for
+/// it; a malformed `--board` at `accept` is refused, never asked for again
+/// nor dropped; a reply's principal line that is no principal halts naming
+/// it; an unreadable bindings file halts `fingerprint` rather than listing
+/// every key UNBOUND.
+#[test]
+fn a_refused_setting_is_never_read_as_an_absent_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("store");
+    let dead = "http://127.0.0.1:1";
+    for args in [
+        vec!["session", "--board", dead, "--dir", s(&store), "--principal", "7x"],
+        vec!["verify", "--board", dead, "--dir", s(&store), "--principal", "7x"],
+        vec!["enroll", "--board", dead, "--dir", s(&store), "--principal", "7x", "--reply", "ab"],
+        vec!["recover", "--board", dead, "--dir", s(&store), "--principal", "7x"],
+        vec!["retire", "--board", dead, "--dir", s(&store), "--principal", "7x", "--fingerprint", "ab"],
+        vec!["rotate", "--board", dead, "--dir", s(&store), "--principal", "7x"],
+        vec!["handoff", "--board", dead, "--dir", s(&store), "--principal", "7x", "--account", "1.0.1.2"],
+        vec!["bind", "--board", dead, "--dir", s(&store), "--principal", "7x", "--account", "1.0.1"],
+        vec!["claim", "--board", dead, "--dir", s(&store), "--principal", "7x", "--hosted", "-"],
+    ] {
+        let r = skep(&args, &[], None);
+        assert_eq!(r.code, 2, "{args:?}: {r:?}");
+        assert!(r.err.contains("--principal: '7x' is not a principal"), "{args:?}: {}", r.err);
+    }
+    // The variable is judged as the flag is, beside a binding that would
+    // otherwise stand in for it.
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::write(store.join("bindings"), format!("{dead} 1 1.0.1 {}\n", "ab".repeat(32))).unwrap();
+    let r = skep(&["verify", "--board", dead, "--dir", s(&store)], &[("SKEP_PRINCIPAL", "7x")], None);
+    assert_eq!(r.code, 2, "{r:?}");
+    assert!(r.err.contains("--principal: '7x' is not a principal"), "{}", r.err);
+    // `accept`'s board given badly: refused at `--reprint` and at the beat.
+    for args in [vec!["accept", "--dir", s(&store), "--reprint", "--board", "HTTP://x"], vec!["accept", "--dir", s(&store), "--board", "HTTP://x", "--account", "1.0.1.2"]] {
+        let r = skep(&args, &[], None);
+        assert_eq!(r.code, 2, "{args:?}: {r:?}");
+        assert!(r.err.contains("--board: 'HTTP://x' is not a canonical origin"), "{args:?}: {}", r.err);
+    }
+    // A reply whose principal line is no principal: a halt naming it, before
+    // any socket opens.
+    let r = skep(&["bind", "--board", dead, "--dir", s(&store), "--payload", "-"], &[], Some(b"account 1.0.1\nprincipal 7x\n"));
+    assert_eq!(r.code, 3, "{r:?}");
+    assert!(r.err.contains("the reply's principal line `7x` is not a principal"), "{}", r.err);
+    // An unreadable bindings file: a halt naming it, never every key UNBOUND.
+    let unreadable = dir.path().join("unreadable");
+    let r = skep(&["keygen", "--label", "k", "--dir", s(&unreadable)], &[], None);
+    assert_eq!(r.code, 0, "{r:?}");
+    std::fs::create_dir_all(unreadable.join("bindings")).unwrap();
+    let r = skep(&["fingerprint", "--dir", s(&unreadable)], &[], None);
+    assert_eq!(r.code, 3, "{r:?}");
+    assert!(r.err.contains("bindings") && !r.out.contains("UNBOUND"), "{r:?}");
 }
 
 /// The plaintext non-loopback WARNING rides before any signed session, and

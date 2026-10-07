@@ -2,8 +2,8 @@
 //! parsing in the daemon's style (a flag beats its environment variable),
 //! one file per command, a `Person` over the terminal, stdout DATA and
 //! stderr TALK (§2.4), §2.3's exit codes. Every ceremony is a library walk
-//! with the terminal as its `Person`; `bind` alone sequences the library's
-//! compositions itself.
+//! with the terminal as its `Person`; `bind` and `keygen` sequence the
+//! library's compositions themselves.
 //!
 //! THE THIRTEEN COMMANDS: `keygen`, `claim`, `session`, `fingerprint`,
 //! `verify`, `health`, `bind` — and the ceremonies over 5.1a's seams:
@@ -36,10 +36,7 @@ fn main() {
             exit(0);
         }
         Ok(Parsed::Command(c)) => c,
-        Err(Usage(msg)) => {
-            eprintln!("skep: {msg}\n\n{HELP}");
-            exit(2);
-        }
+        Err(u) => exit(commands::usage(u)),
     };
     let code = match parsed.command.as_str() {
         "keygen" => commands::keygen(&parsed),
@@ -55,10 +52,7 @@ fn main() {
         "rotate" => commands::rotate(&parsed),
         "handoff" => commands::handoff(&parsed),
         "accept" => commands::accept(&parsed),
-        other => {
-            eprintln!("skep: unknown command `{other}`\n\n{HELP}");
-            2
-        }
+        other => commands::usage(Usage(format!("unknown command `{other}`"))),
     };
     exit(code);
 }

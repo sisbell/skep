@@ -18,10 +18,14 @@ pub fn rotate(c: &Command) -> i32 {
         Ok(s) => s,
         Err(u) => return usage(u),
     };
+    let given = match c.principal() {
+        Ok(p) => p,
+        Err(u) => return usage(u),
+    };
     if !has_terminal() {
         return no_terminal("rotate");
     }
-    let principal = match principal_or_bound(c, &store, &board) {
+    let principal = match principal_or_bound(given, &store, &board) {
         Ok(p) => p,
         Err(h) => return halt(h),
     };

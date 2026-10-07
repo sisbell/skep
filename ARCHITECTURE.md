@@ -860,9 +860,11 @@ each request by the test's own closure and keeps every request it served.
 it parses the command line, makes the library call — handing a walk the
 terminal as its `Person` — and renders the answer, DATA on stdout and TALK
 on stderr, with §2.3's exit code. Every ceremony is a library walk; `bind`
-alone sequences the library's compositions itself, landing the three facts
-of an enroll hop or a handoff. Its modules, in the order `src/main.rs`
-declares them, each naming only those above it:
+and `keygen` sequence the library's compositions themselves — `bind`
+landing the three facts of an enroll hop or a handoff, `keygen` the
+door-side backup moment and the payload it prints — and so carry their
+own text. Its modules, in the order `src/main.rs` declares them, each
+naming only those above it:
 
 - `args.rs` the vocabulary — the thirteen command names, the valued flags,
   the switches — beside `HELP`, the text that documents it; and the
@@ -872,15 +874,17 @@ declares them, each naming only those above it:
 - `terminal.rs` `Terminal`, the `Person` over the terminal: every prompt on
   stderr and every answer read from stdin, the sheet as a ruled box, the
   dismissal's clear; `has_terminal`, the person doors' check; and
-  `prompt_line`, the one prompt a command that is no person door asks.
+  `prompt_line`, through which a command that is no person door asks —
+  `bind`'s account paste and its landing question.
 - `commands.rs` what the commands share: the two streams (`data`,
   `data_verbatim`, `talk`), the refusals and their exit codes (`halt`;
-  `usage`, exit 2; `no_terminal`, exit 3), the plumbing from the flags to a
-  board, a store, a payload, a principal and a key, the three facts' one
-  spelling (`facts`, the lines `bind` reads back from a reply), and the
-  whole-set compare's lines. Beneath it, `commands/<name>.rs`, one file per
-  command, each the `pub fn <name>(&Command) -> i32` that `main` dispatches
-  to.
+  `usage`, exit 2, `main`'s too; `no_terminal`, exit 3), the plumbing from
+  the flags to a board, a store, a payload, a principal and a key, the
+  three facts' one spelling (`facts`, the lines `bind` reads back from a
+  reply), the outstanding-act line `keygen` and `fingerprint` share, and
+  the whole-set compare's held set and lines. Beneath it,
+  `commands/<name>.rs`, one file per command, each the
+  `pub fn <name>(&Command) -> i32` that `main` dispatches to.
 
 Rules that hold across its files:
 
@@ -899,7 +903,13 @@ Rules that hold across its files:
   never an argv value (`session --close -` reads stdin or `SKEP_SESSION`),
   which `tests/it/cli.rs` checks.
 - **A command answers its exit code.** It returns 0, or the code `halt`,
-  `usage` or `no_terminal` answers, and `main` exits with it.
+  `usage` or `no_terminal` answers, and `main` exits with it; `main`'s own
+  refusal, a command line it cannot parse, is the same `usage`.
+- **A setting refused is never a setting absent.** `Command::principal`
+  and `Command::board_given` answer `Err` for a value given badly and
+  `Ok(None)` for one given nowhere; every command returns the `Err` as
+  exit 2 before any read, and only the `None` reaches the store's
+  one-binding test or a prompt. `tests/it/cli.rs` checks it.
 - **Imports point down.** A module names only the modules `src/main.rs`
   declares above it, and an item by its home module, never through the
   root; a command file names what the commands share through `super::`.

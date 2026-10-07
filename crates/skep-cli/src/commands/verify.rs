@@ -7,7 +7,7 @@ use skep_client::ceremony::handshake::{key_face, Site};
 use skep_client::derive::records::{compare_whole_set, credential_records};
 use skep_client::derive::{origin_arm, precheck};
 use skep_client::halt::Halt;
-use skep_client::store::{KeySelector, Purpose};
+use skep_client::store::Purpose;
 
 use super::{board_of, data, difference_lines, halt, held_set, later_line, principal_or_bound, select_key, store_of, talk, usage};
 use crate::args::Command;
@@ -19,6 +19,10 @@ pub fn verify(c: &Command) -> i32 {
     };
     let store = match store_of(c) {
         Ok(s) => s,
+        Err(u) => return usage(u),
+    };
+    let given = match c.principal() {
+        Ok(p) => p,
         Err(u) => return usage(u),
     };
     let json = c.switch("--json");
@@ -34,19 +38,14 @@ pub fn verify(c: &Command) -> i32 {
     checks.push("origin");
     // (2) THE KEY ARM: `principal_prefix(n)`, then `key_set` at the set the
     // walk reaches, against the selected key.
-    let principal = match principal_or_bound(c, &store, &board) {
+    let principal = match principal_or_bound(given, &store, &board) {
         Ok(p) => p,
         Err(h) => return halt(h),
     };
-    let key = match c.key() {
-        Some(path) => match store.select(&KeySelector::Path(&path), Purpose::Read) {
-            Ok(k) => k,
-            Err(e) => return halt(e.into()),
-        },
-        None => match select_key(c, &store, &board, Some(principal)) {
-            Ok(k) => k,
-            Err(h) => return halt(h),
-        },
+    // A READ of the key's public facts: `verify` signs nothing.
+    let key = match select_key(c, &store, &board, principal, Purpose::Read) {
+        Ok(k) => k,
+        Err(h) => return halt(h),
     };
     let pre = match precheck(&board, principal, &key.fingerprint) {
         Ok(p) => p,
@@ -60,7 +59,7 @@ pub fn verify(c: &Command) -> i32 {
     // THE WHOLE-SET COMPARE, where the person holds what this device
     // composed (AUTH-4.58's detection; P25).
     let mut later_lines = Vec::new();
-    let held = match held_set(c, &store, Some(&key), true) {
+    let held = match held_set(&store, c.value("--payload", None).as_deref(), &c.all("--anchor"), &key) {
         Ok(h) => h,
         Err(h) => return halt(h),
     };

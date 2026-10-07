@@ -1,9 +1,9 @@
 //! `skep bind` (`client.md` §2.2): the three facts of an enroll hop or a
 //! handoff landed on this device — confirmed against the board, the set
-//! compared whole where the person holds it, the account's first signed
-//! session run where one is owed, the binding line written. The one command
-//! that sequences the library's compositions itself rather than calling a
-//! walk.
+//! compared whole where another hand wrote the account's first set, the
+//! account's first signed session run where one is owed, the binding line
+//! written. With `keygen`, one of the two commands that sequence the
+//! library's compositions themselves rather than calling a walk.
 
 use skep_client::board::{Board, Scope};
 use skep_client::ceremony::first_session::{first_session, FirstSessionReads};
@@ -13,19 +13,21 @@ use skep_client::derive::{origin_arm, principal_of, walk_to_set};
 use skep_client::dial::plaintext_non_loopback_warning;
 use skep_client::halt::Halt;
 use skep_client::sheet::Facts;
-use skep_client::store::{Binding, KeySelector, KeyStore};
+use skep_client::store::{Binding, KeySelector, KeyStore, Purpose};
 
-use super::{board_of, data, difference_lines, facts, halt, held_set, later_line, read_payload, select_key, store_of, talk, usage};
+use super::{board_of, data, difference_lines, facts, halt, held_device, held_set, later_line, read_payload, select_key, store_of, talk, usage};
 use crate::args::Command;
 use crate::terminal::prompt_line;
 
 /// The three facts, from `--account`/`--principal`/`--board`, or `--payload`
 /// — a reply in the lines `facts` prints (`account …`, `principal …`,
 /// `origin …`), `enroll`'s or `handoff`'s — or, for an account neither
-/// names, a line pasted at the prompt.
-fn facts_of(c: &Command, board: &Board) -> Result<(String, u64), Halt> {
+/// names, a line pasted at the prompt. `given` is `Command::principal`'s
+/// answer; a reply's principal line that is no principal halts, never
+/// standing as one not given.
+fn facts_of(c: &Command, board: &Board, given: Option<u64>) -> Result<(String, u64), Halt> {
     let mut account = c.value("--account", None);
-    let mut principal = c.principal().map_err(|u| Halt::face("the principal is malformed", u.0, "pass --principal <n>"))?;
+    let mut principal = given;
     if let Some(arg) = c.value("--payload", None) {
         let bytes = read_payload(&arg)?;
         let text = String::from_utf8_lossy(&bytes).to_string();
@@ -33,7 +35,16 @@ fn facts_of(c: &Command, board: &Board) -> Result<(String, u64), Halt> {
             let mut parts = line.split_whitespace();
             match (parts.next(), parts.next()) {
                 (Some("account"), Some(a)) => account = Some(a.to_string()),
-                (Some("principal"), Some(p)) => principal = p.parse().ok(),
+                (Some("principal"), Some(p)) => {
+                    let n = p.parse().map_err(|_| {
+                        Halt::face(
+                            format!("the reply's principal line `{p}` is not a principal"),
+                            "a principal is a non-negative integer, as `enroll` prints it",
+                            "re-take the three facts from the enrolling device",
+                        )
+                    })?;
+                    principal = Some(n);
+                }
                 (Some("origin"), Some(o)) => {
                     if o != board.dialed().as_str() {
                         return Err(Halt::face(format!("the reply names origin {o} and this command dials {}", board.dialed()), "the reply came from another board", "dial the board the reply names"));
@@ -57,6 +68,66 @@ fn facts_of(c: &Command, board: &Board) -> Result<(String, u64), Halt> {
     Ok((account, principal))
 }
 
+/// Which landing this is, where no `--anchor` says (§2.2 `bind`): THE PERSON
+/// ANSWERS WHAT NO READ CAN (P27). Where another hand wrote this account's
+/// first set — a handoff's genesis, a hosted signup's — that record is the
+/// very one in question and its writer can give it any shape, so nothing on
+/// the board tells such a landing from the enroll hop; and a key `skep
+/// accept` made is a key file like `keygen`'s, recording nothing of the door
+/// that made it. The question states what each answer costs where it is
+/// wrong, and proposes none.
+enum Landing {
+    /// The enroll hop, or a rotation's: another of the person's devices
+    /// enrolled this key, the genesis is theirs, and nothing is compared.
+    Hop,
+    /// Another hand wrote the first set around this key alone — a handoff's
+    /// DECLINE arm, or a hosted signup's one-key payload: the genesis is
+    /// compared against this device's key alone.
+    KeyAlone,
+    /// The input ended before an answer: nobody is there to ask.
+    Unanswered,
+}
+
+/// The landing question, each answer with its price where it is wrong.
+const LANDING_QUESTION: &str = "\
+which landing is this? Nothing on the board or in this store tells the three apart, so the answer is yours (P27):
+  hop    another of your devices enrolled this key (`skep enroll`, or `skep rotate --payload`); answered where another
+         hand wrote this account's first set, nothing is compared, and a key written beside yours stands unseen
+  alone  another hand wrote the first set around this key alone (a handoff whose anchor pair you declined at
+         `skep accept`, or a hosted signup's one-key payload); the genesis is compared against this key, and
+         answered anywhere else it halts on the keys your other device or your pair holds
+  pair   another hand wrote it around this key and your anchor pair; the genesis is compared against the pair's
+         files, so this run stops for them
+answer hop, alone or pair: ";
+
+/// The question again, after an answer that is none of the three.
+const LANDING_AGAIN: &str = "answer hop, alone or pair: ";
+
+/// The landing, asked through the terminal's paste prompt — a pipe answers
+/// it as a terminal does — and asked again until the answer is one of the
+/// three; `pair` is the halt whose act is the files.
+fn landing() -> Result<Landing, Halt> {
+    let mut prompt = LANDING_QUESTION;
+    loop {
+        let line = prompt_line(prompt).map_err(|e| Halt::face("the landing could not be read", e.to_string(), "answer on stdin, or pass the pair as `--anchor`"))?;
+        if line.is_empty() {
+            return Ok(Landing::Unanswered);
+        }
+        match line.trim().to_ascii_lowercase().as_str() {
+            "hop" => return Ok(Landing::Hop),
+            "alone" => return Ok(Landing::KeyAlone),
+            "pair" => {
+                return Err(Halt::face(
+                    "the anchor pair's files were not given: nothing was compared and nothing written",
+                    "where another hand wrote the first set around this key and an anchor pair, the genesis is compared against the pair's files and this device's key (AUTH-4.58's detection)",
+                    "re-run with `--anchor <a> --anchor <b>`",
+                ))
+            }
+            _ => prompt = LANDING_AGAIN,
+        }
+    }
+}
+
 pub fn bind(c: &Command) -> i32 {
     let board = match board_of(c) {
         Ok(b) => b,
@@ -66,7 +137,11 @@ pub fn bind(c: &Command) -> i32 {
         Ok(s) => s,
         Err(u) => return usage(u),
     };
-    let (account, principal) = match facts_of(c, &board) {
+    let given = match c.principal() {
+        Ok(p) => p,
+        Err(u) => return usage(u),
+    };
+    let (account, principal) = match facts_of(c, &board, given) {
         Ok(f) => f,
         Err(h) => return halt(h),
     };
@@ -102,7 +177,7 @@ pub fn bind(c: &Command) -> i32 {
         }
         Err(h) => return halt(h),
     }
-    let key = match select_key(c, &store, &board, Some(principal)) {
+    let key = match select_key(c, &store, &board, principal, Purpose::Sign) {
         Ok(k) => k,
         Err(h) => return halt(h),
     };
@@ -114,13 +189,30 @@ pub fn bind(c: &Command) -> i32 {
     if let Err(h) = key_face(&board, &walk, &key.fingerprint, &own, Site::Tail) {
         return halt(h);
     }
-    // At a HANDOFF LANDING the set is compared WHOLE, ahead of
-    // `first_session` and any session (AUTH-4.58's detection).
-    let records_for_compare = match held_set(c, &store, Some(&key), false) {
-        Ok(h) => h,
+    // Where another hand wrote this account's first set — a HANDOFF LANDING,
+    // a hosted signup's — the set is compared WHOLE, ahead of
+    // `first_session` and any session (AUTH-4.58's detection): against the
+    // anchor files and this device's key, or on the DECLINE arm this
+    // device's key alone — the person asked which landing this is where no
+    // `--anchor` says.
+    let held = match held_set(&store, None, &c.all("--anchor"), &key) {
+        Ok(Some(held)) => Some(held),
+        Ok(None) => match landing() {
+            Ok(Landing::KeyAlone) => Some(vec![held_device(&key)]),
+            Ok(Landing::Hop) => None,
+            Ok(Landing::Unanswered) => {
+                talk(
+                    "\nno landing was answered before the input ended, so the genesis is not compared whole: this binding confirms \
+                     this key's membership alone. Where another hand wrote this account's first set, pass your pair as `--anchor`, \
+                     or, with this key alone, pass the reply as a file and answer `alone` on stdin",
+                );
+                None
+            }
+            Err(h) => return halt(h),
+        },
         Err(h) => return halt(h),
     };
-    if let Some(held) = records_for_compare {
+    if let Some(held) = held {
         let records = match credential_records(&board, &walk.set_account, &own) {
             Ok(r) => r,
             Err(h) => return halt(h),

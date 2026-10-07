@@ -136,6 +136,7 @@ fn the_hop_through_the_binary_and_the_one_binding_test_after_a_claim() {
     // B binds with the facts, then B's session opens.
     let r = skep(&["bind", "--board", &board, "--dir", s(&store_b), "--payload", "-"], &[], Some(reply.as_bytes()));
     assert_eq!(r.code, 0, "{r:?}");
+    assert!(r.err.contains("no landing was answered before the input ended"), "the reply took stdin, so the landing goes unanswered and nothing is compared: {}", r.err);
     let r = skep(&["session", "--board", &board, "--dir", s(&store_b)], &[], None);
     assert_eq!(r.code, 0, "B's session opens with one binding: {r:?}");
     let token = r.out.trim().to_string();

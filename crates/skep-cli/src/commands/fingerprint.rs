@@ -8,15 +8,27 @@ use skep_client::sheet::{group_hex, render_inert};
 use skep_client::store::{Binding, KeyFacts, KeySelector, Purpose, StoreError};
 use skep_identity::{encode_enroll, Enrollment};
 
-use super::{data, halt, store_of, usage};
+use super::{data, halt, store_of, usage, OUTSTANDING_ACT};
 use crate::args::Command;
+
+/// The handoff recipient's clause of the outstanding-act line, its fourth
+/// (§2.2): the payload went to a GIVER who seeds an account with it, and the
+/// three-key record needs the anchor files, which never enter the store
+/// (§3.4) — so its re-offer is `accept --reprint`, never `--payload` here.
+const ACCEPT_CLAUSE: &str = "Where this key was made at `skep accept`: the outstanding act is the giver's genesis and their reply, then `skep \
+     bind`, and the re-offer is `skep accept --reprint`, never `--payload` here.";
 
 pub fn fingerprint(c: &Command) -> i32 {
     let store = match store_of(c) {
         Ok(s) => s,
         Err(u) => return usage(u),
     };
-    let bindings = store.all_bindings().unwrap_or_default();
+    // An unreadable bindings file halts naming it: read as an empty one, it
+    // would list every key UNBOUND and name the wrong act.
+    let bindings = match store.all_bindings() {
+        Ok(b) => b,
+        Err(e) => return halt(e.into()),
+    };
     let keys: Vec<KeyFacts> = if let Some(path) = c.key() {
         match store.select(&KeySelector::Path(&path), Purpose::Read) {
             Ok(k) => vec![k],
@@ -75,12 +87,15 @@ pub fn fingerprint(c: &Command) -> i32 {
         }
         if unbound {
             // THE PENDING STATE (AUTH-5.32), the durable half of `keygen
-            // --payload`'s line, conditioned on the walk.
-            data(if any_binding {
-                "UNBOUND — this key is enrolled at no board this store knows: `skep fingerprint --select <fp> --payload` re-prints its payload; `skep enroll` on a device already signed in (or `skep rotate --payload` there where this key REPLACES a machine), then `skep bind` here; where this key was made at `skep accept`, the outstanding act is the giver's genesis and their reply, then `skep bind`"
+            // --payload`'s line: the state, the re-print, the hop's and the
+            // rotation's acts, `skep claim` where this store binds nothing
+            // (§3.5 arm 4's fork), and the handoff recipient's clause.
+            let (state, claim) = if any_binding {
+                ("UNBOUND — this key is enrolled at no board this store knows", "")
             } else {
-                "UNBOUND — no board has been claimed from this store: the act is `skep claim`; or, for a board another device is signed in on, `skep enroll` there with this key's payload and `skep bind` here"
-            });
+                ("UNBOUND — no board has been claimed from this store", " Where this store is to claim a board of its own: `skep claim`.")
+            };
+            data(format!("{state}: `skep fingerprint --select <fp> --payload` re-prints this key's payload. {OUTSTANDING_ACT}{claim} {ACCEPT_CLAUSE}"));
         }
         if c.switch("--payload") {
             data(encode_enroll(&[Enrollment::new(key.public.clone(), key.anchor, key.label.clone()).expect("a stored label is in the domain")]));

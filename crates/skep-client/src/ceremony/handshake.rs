@@ -16,7 +16,7 @@
 
 use skep_identity::Fingerprint;
 
-use crate::board::{frames, Answer, Board, Closed, Opened, Scope, SessionBody, Token};
+use crate::board::{answers, frames, Answer, Board, Closed, Opened, Scope, SessionBody, Token};
 use crate::derive::records::{credential_records, Hand};
 use crate::derive::{precheck, KeyDiagnosis, PreCheck};
 use crate::halt::{Blocked, Halt};
@@ -243,15 +243,11 @@ pub fn handshake_prechecked<'b>(board: &'b Board, scope: Scope, signer: &dyn Sig
 }
 
 /// The takedown record's text, read AS A GUEST at the board that named it
-/// (RES-73's reading): `retrieve_v` over the version address's first
-/// position — `None` where it does not answer. Best effort: whether its ω
-/// prefix covers this account and its home is that board's doc 1 are stated
-/// in the face as what was and was not read.
+/// (RES-73's reading): the record value at the version address's first
+/// position, off `retrieve_v` — `None` where it does not answer one. Best
+/// effort: whether its ω prefix covers this account and its home is that
+/// board's doc 1 are stated in the face as what was and was not read.
 fn read_ground(board: &Board, record: &str) -> Option<String> {
     let v = board.guest(&frames::retrieve_v(record, 1, 1)).ok()?;
-    if v["resp"].as_str() != Some("delivery") {
-        return None;
-    }
-    let item = v["items"].as_array()?.first()?;
-    item["atom"].as_str().or_else(|| item["content"].as_str()).map(str::to_string)
+    answers::first_atom(&v).and_then(|bytes| String::from_utf8(bytes).ok())
 }

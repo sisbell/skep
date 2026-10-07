@@ -113,13 +113,13 @@ fn statements_s0(person: &mut dyn Person, local_trust: bool) {
 /// not consulted; §3.5's lookup): the binding for (board, N), else the lone
 /// device key, else arm 4's fork — its public facts, and its signer from the
 /// store that holds its seed (§3a).
-fn device_key(store: &FileStore, board: &Board, principal: u64, mode: Mode, local_trust: bool) -> Result<(KeyFacts, Box<dyn Signer>), Halt> {
+fn device_key(store: &FileStore, board: &Board, principal: u64, mode: Mode) -> Result<(KeyFacts, Box<dyn Signer>), Halt> {
     match store.select(&KeySelector::Binding { origin: &board.dialed, principal: Some(principal) }, Purpose::Sign) {
         Ok(key) => {
             let signer = store.signer(&KeySelector::Path(&key.path)).map_err(store_halt)?;
             Ok((key, signer))
         }
-        Err(StoreError::NoSelection { keys }) => Err(arm4_face(store, &keys, mode, local_trust)),
+        Err(StoreError::NoSelection { keys }) => Err(arm4_face(store, &keys, mode)),
         Err(e) => Err(store_halt(e)),
     }
 }
@@ -141,7 +141,7 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
         other => return Err(residue_halt(other)),
     };
     // The device key, from `--dir` alone.
-    let (key, device) = device_key(store, board, principal, mode, local_trust)?;
+    let (key, device) = device_key(store, board, principal, mode)?;
     let device_fp = key.fingerprint;
     let device_public = key.public.clone();
     let device_label = key.label.clone();
@@ -256,7 +256,7 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
     };
     if acked_addr(&v).is_none() {
         let r = Rejection::of(&v).ok_or_else(|| Halt::face("the claim answered a shape this client does not know", v.to_string(), "this is a fault in this client or the board"))?;
-        match r.detail.as_deref().unwrap_or("") {
+        match r.key() {
             "already_claimed" => {
                 // AUTH-5.17: reconcile off the claimant.
                 let h = board.health()?;
@@ -275,7 +275,7 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
     }
     // S5a–S5b: the agent-space act in this session, after the claim commits.
     say(person, "AUTH-5.87", "creating your account also creates a space for your agents beneath it, and its home");
-    let reads = FirstSessionReads::take(board, &account, &device_fp, Some(store), &board.dialed)?;
+    let reads = FirstSessionReads::take(board, &account, &device_fp, Some(store))?;
     let done = first_session(board, &reads, &signed, &*device, Some(store))?;
     let mut warnings = done.warnings.clone();
     // S7 CLOSE the bare sessions (idempotent 204; dead at the flip into
@@ -296,8 +296,8 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
     let display_name = s9_name(person, opts)?;
     // S10 RETAIN: the binding, the close, the three facts.
     let line = Binding::Enrollment { origin: board.dialed.clone(), principal, account: account.clone(), fingerprint: device_fp };
-    if let Err(e) = store.bind(&line) {
-        warnings.push(format!("the store could not be appended ({e}); record this binding line yourself: {}", line.line()));
+    if let Err(w) = store.bind(&line) {
+        warnings.push(w.to_string());
     }
     let _ = signed.close();
     Ok(ClaimOutcome::Ours(Claimed {
@@ -393,7 +393,7 @@ fn tail_or_stranger(board: &Board, store: &FileStore, person: &mut dyn Person, o
     say(person, "§4.3", format!("this board is already yours (claimant {claimant}, principal {principal}); finishing whatever of the tail is unfinished"));
     let session = handshake(board, Scope::Content, &*device, principal, Site::Tail)?;
     say(person, "AUTH-5.87", "creating your account also creates a space for your agents beneath it, and its home");
-    let reads = FirstSessionReads::take(board, &claimant, &fingerprint, Some(store), &board.dialed)?;
+    let reads = FirstSessionReads::take(board, &claimant, &fingerprint, Some(store))?;
     let done = first_session(board, &reads, &session, &*device, Some(store))?;
     let mut warnings = done.warnings.clone();
     let after = board.health()?;
@@ -407,8 +407,8 @@ fn tail_or_stranger(board: &Board, store: &FileStore, person: &mut dyn Person, o
     let line = Binding::Enrollment { origin: board.dialed.clone(), principal, account: claimant.clone(), fingerprint };
     let bound = store.enrollment_for(&board.dialed, principal).map_err(store_halt)?.is_some_and(|(_, fp)| fp == fingerprint);
     if !bound {
-        if let Err(e) = store.bind(&line) {
-            warnings.push(format!("the store could not be appended ({e}); record this binding line yourself: {}", line.line()));
+        if let Err(w) = store.bind(&line) {
+            warnings.push(w.to_string());
         }
     }
     let _ = session.close();

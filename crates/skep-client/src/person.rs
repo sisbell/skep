@@ -57,9 +57,8 @@ pub struct Statement {
     pub text: String,
 }
 
-/// A name box (AUTH-5.42): the box's statements, a default where the box
-/// offers one, and — where the name is already fixed and only SHOWN — the
-/// fixed name.
+/// A name box (AUTH-5.42): the box's statements, and a default where the box
+/// offers one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LabelBox {
     pub title: String,
@@ -129,12 +128,11 @@ pub struct Confirmation {
 /// in, a FILE picked from disk, the 64 hex TYPED from a print with a
 /// fingerprint prefix of at least one R42 group (§9 item 35), or "I hold
 /// NEITHER" — an ANSWER and never an error (AUTH-5.16's no-artifact arm).
+/// The moment is asked only where no `--anchor` named the file, so a file is
+/// always one of its answers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Import {
     pub prompt: String,
-    /// Whether a file may be named at this moment (the flag already named
-    /// one where false).
-    pub file_allowed: bool,
 }
 
 /// The import's answer. Its `Debug` shows a typed seed as `…`.

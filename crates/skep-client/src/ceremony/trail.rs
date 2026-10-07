@@ -15,26 +15,20 @@ use serde_json::json;
 use skep_identity::{entry_body_assert_sup, entry_frame, unit_span, DocTerm, EntrySlot, LinkSlots};
 
 use crate::address::parse_address;
-use crate::board::{acked_addr, frames, Answer, Board, Rejection, T_SUPERSEDES};
+use crate::board::{acked_addr, answers, frames, Answer, Board, Rejection, T_SUPERSEDES};
 use crate::ceremony::enumerate::link_subject;
 use crate::ceremony::handshake::Session;
 use crate::halt::Halt;
 use crate::sign::{sig_hex, Signer};
 
-/// THE RESUME READ: a supersession claim FROM `old` already stands —
-/// `find_links_ftt` over the supersedes type and `old`'s unit span — its
-/// address, else `None`. Where `new` is given the claim must name it as its
-/// `to`.
-pub fn trail_present(board: &Board, old: &str, new: Option<&str>) -> Result<Option<String>, Halt> {
+/// THE RESUME READ: a supersession claim FROM `old` TO `new` already stands —
+/// `find_links_ftt` over the supersedes type and `old`'s unit span, each
+/// claim's `to` read off `read_link` — its address, else `None`.
+pub fn trail_present(board: &Board, old: &str, new: &str) -> Result<Option<String>, Halt> {
     let v = board.guest(&frames::find_links_ftt_from(T_SUPERSEDES, old))?;
-    for claim in v["addrs"].as_array().into_iter().flatten().filter_map(|a| a.as_str()) {
-        match new {
-            None => return Ok(Some(claim.to_string())),
-            Some(n) => {
-                if link_subject(board, claim)?.as_deref() == Some(n) {
-                    return Ok(Some(claim.to_string()));
-                }
-            }
+    for claim in answers::addrs(&v) {
+        if link_subject(board, claim)?.as_deref() == Some(new) {
+            return Ok(Some(claim.to_string()));
         }
     }
     Ok(None)
@@ -76,15 +70,15 @@ pub fn write_trail(board: &Board, session: &Session<'_>, signer: &dyn Signer, ho
     let Some(r) = Rejection::of(&v) else {
         return Err(Halt::face("the trail answered a shape this client does not know", v.to_string(), "this is a fault in this client or the board"));
     };
-    Err(match r.token().as_str() {
+    Err(match r.key() {
         "endpoint_not_resident" | "original_not_resident" => Halt::face(
             "an endpoint of the trail is not a resident link",
             format!("{}: `old` {old} or `new` {new} is no link this session may read (wire.md §Links (writes))", r.token()),
             "this is this client's frame — the old enroll link is the admitted read's and the new one T2's ack; re-run, the walk resumes by reading",
         ),
-        t if t.starts_with("attestation_") => Halt::face(
+        k if k.starts_with("attestation_") => Halt::face(
             "the board judged the trail's attest and refused",
-            format!("{t}: the frame this client composed did not verify under the set that opens the account as of the base, or the board had no head"),
+            format!("{}: the frame this client composed did not verify under the set that opens the account as of the base, or the board had no head", r.token()),
             "this is this client's frame and never your act; `board_unavailable` is a reorder — retry once the head is written",
         ),
         "not_owner" => Halt::face(

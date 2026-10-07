@@ -19,7 +19,8 @@
 //! address is NOT the key) and, where the set holds a second enrolled
 //! anchor, whether the OTHER PAPER is still held (AUTH-5.47's urgency, `skep
 //! recover --anchor-lost` named). The SEED's lifetime is §4a.3's: the caller
-//! holds the signer to the last record signed with it and drops it then.
+//! holds the anchor to the last record signed with it, and the anchor's end —
+//! its close or its drop — takes the seed with it.
 
 use std::path::{Path, PathBuf};
 
@@ -48,7 +49,14 @@ pub enum Whose {
 }
 
 /// The imported anchor: the signer (the SEED, held to §4a.3's bound), its
-/// fingerprint and label, and the artifact's custody.
+/// fingerprint and label, and the artifact's custody — and THE OWNER OF ITS
+/// OWN END. The anchor is dropped when the ceremony it was imported FOR ends
+/// (AUTH-5.54 step 3), and every exit ends that ceremony:
+/// [`ImportedAnchor::dispose`] is the close that tells the person, and an
+/// anchor dropped without it — every halt a walk takes after the import —
+/// still destroys a PLACED copy on the drop, best effort, so the person who
+/// answered "placed" never leaves with a findable paper on the ladder's worst
+/// rung (AUTH-5.40). The seed goes with the anchor.
 pub struct ImportedAnchor {
     pub signer: HybridSigner,
     pub fingerprint: Fingerprint,
@@ -57,6 +65,32 @@ pub struct ImportedAnchor {
     pub file: Option<PathBuf>,
     /// Kept (retained) or placed (destroyed at the close); `Kept` on paper.
     pub custody: Custody,
+    /// The close ran: the drop destroys nothing.
+    ended: bool,
+}
+
+impl ImportedAnchor {
+    /// AUTH-5.54 step 3's mirror at the close: the PLACED copy destroyed, the
+    /// KEPT artifact retained — each said.
+    pub fn dispose(mut self, person: &mut dyn Person) {
+        self.ended = true;
+        match (&self.file, self.custody) {
+            (Some(path), Custody::Placed) => {
+                let gone = std::fs::remove_file(path).is_ok();
+                say(person, "AUTH-5.54 step 3", format!("the placed copy {} is {}", path.display(), if gone { "destroyed" } else { "already gone" }));
+            }
+            (Some(path), Custody::Kept) => say(person, "AUTH-5.54 step 3", format!("the kept artifact {} is retained", path.display())),
+            (None, _) => say(person, "AUTH-5.54 step 3", "the paper stays the kept artifact; nothing of the seed remains in this client"),
+        }
+    }
+}
+
+impl Drop for ImportedAnchor {
+    fn drop(&mut self) {
+        if let (false, Some(path), Custody::Placed) = (self.ended, &self.file, self.custody) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 impl std::fmt::Debug for ImportedAnchor {
@@ -180,18 +214,19 @@ fn retired_sheet(cx: &ImportContext<'_>, fp: &Fingerprint) -> Halt {
 /// THE NO-ARTIFACT FACE (AUTH-5.16's FIRST arm at its neither-paper branch;
 /// `client.md` §4a.2 R1): the state, then the DESTROYED / FINDABLE fork and
 /// the three acts that exist elsewhere, forked by cell; the AGENT form on
-/// "an agent's".
-pub fn no_artifact_face(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<Halt, Halt> {
+/// "an agent's"; the import's own abandonment where the person leaves at the
+/// fork.
+pub fn no_artifact_face(person: &mut dyn Person, cx: &ImportContext<'_>) -> Halt {
     let anchors: Vec<String> = cx.set.enrolled.iter().filter(|e| e.anchor).map(|e| format!("{} ({})", e.fingerprint, cx.records.label_of(&e.fingerprint).map(|l| render_inert(&l)).unwrap_or_default())).collect();
     if cx.whose == Whose::Agent {
-        return Ok(Halt::face(
+        return Halt::face(
             format!("both custody sheets of the agent at {} are unheld", cx.set_account),
             format!(
                 "AUTH-5.16's AGENT form: the two papers are the OWNER's custody pair (AUTH-5.62) and there is no person working on under them — the AGENT keeps working under its working key and the OWNER has lost R39's one roster act; the anchors still enrolled: {}",
                 anchors.join(", ")
             ),
             "the acts that exist are AUTH-5.64's anchorless arm's, none on this account: a fresh hire on a clean host, the old account named as permanent LIVE residue, then the disavowal and the report; the roster act and its fetch channel land with the attendant campaign — this client does not perform them",
-        ));
+        );
     }
     say(
         person,
@@ -201,15 +236,15 @@ pub fn no_artifact_face(person: &mut dyn Person, cx: &ImportContext<'_>) -> Resu
             anchors.join(", ")
         ),
     );
-    let destroyed = person
-        .yes_no(Public(Question { text: "were the papers DESTROYED (yes), or might they be FINDABLE — lost where someone could find them (no)?".into() }))
-        .map_err(|_| abandoned())?;
+    let Ok(destroyed) = person.yes_no(Public(Question { text: "were the papers DESTROYED (yes), or might they be FINDABLE — lost where someone could find them (no)?".into() })) else {
+        return abandoned();
+    };
     if !destroyed {
-        return Ok(Halt::face(
+        return Halt::face(
             "the papers may be FINDABLE: until they are destroyed whoever finds one outranks every device session permanently (AUTH-5.47)",
             "AUTH-5.16's FINDABLE branch",
             "abandon this account and succeed to a fresh one (AUTH-5.72) — no act on this account clears a findable paper",
-        ));
+        );
     }
     let succession = match cx.cell {
         A4Cell::HandoffRecipient { giver } => format!(
@@ -217,13 +252,13 @@ pub fn no_artifact_face(person: &mut dyn Person, cx: &ImportContext<'_>) -> Resu
         ),
         _ => "succeed on this board while this account can still sign the handoff — at the bootstrap tier there is no handoff door (AUTH-5.90's last clause), so what is named is the OPS and not a command: a `delegate` from 0 and the claimant's genesis into the claimant's own doc 1 (AUTH-5.10), no ceremony walking them (AUTH-5.73) — this client does not perform them".to_string(),
     };
-    Ok(Halt::face(
+    Halt::face(
         "the papers were DESTROYED: you work on normally under senior credentials nobody will ever hold — said at the last moment any of the three acts below is cheap, this device key still signing and every act dying with it",
         "AUTH-5.16's DESTROYED branch; AUTH-5.72's boundary line: the successor is a FRESH SIBLING and never a delegate, so the subtree clause reaches nothing the predecessor held — its PUBLISHED documents fork, every DRAFT it holds freezes permanently, every GRANT it issued stands forever (a revocation needs a session nobody will open), and the one exception running the other way is a surviving ANCHORED agent's custody pile, a full read of the predecessor's drafts and a republish path",
         format!(
             "(1) ENROLL A SECOND DEVICE NOW — `skep keygen --payload` there, `skep enroll` here, `skep bind` there; (2) on a notebook COPY THE VOLUME off this machine (AUTH-5.44's line; AUTH-5.60 step 1); (3) {succession}"
         ),
-    ))
+    )
 }
 
 /// THE IMPORT.
@@ -238,7 +273,6 @@ pub fn import_anchor(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<
                         "IMPORT ONE ANCHOR of account {} (principal {}) at {}: the kept FILE, or the 64 hex typed from the PRINT and then its fingerprint's first group (at least 8 hex), or `neither` where both papers are gone",
                         cx.account, cx.principal, cx.board.dialed
                     ),
-                    file_allowed: true,
                 }))
                 .map_err(|_| abandoned())?;
             match answer {
@@ -328,7 +362,7 @@ pub fn import_anchor(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<
             );
         }
     }
-    Ok(ImportOutcome::Anchor(Box::new(ImportedAnchor { fingerprint: fp, label, file, custody, signer })))
+    Ok(ImportOutcome::Anchor(Box::new(ImportedAnchor { fingerprint: fp, label, file, custody, signer, ended: false })))
 }
 
 /// The FILE arm: the path inside the store refused ahead of the question;
@@ -368,17 +402,4 @@ fn import_file(person: &mut dyn Person, cx: &ImportContext<'_>, path: &Path) -> 
     say(person, "AUTH-5.38", format!("the artifact: anchor {} label {}", file.fingerprint, file.label.as_deref().map(render_inert).unwrap_or_else(|| "(none)".into())));
     let signer = file.signer();
     Ok((signer, file.label.clone(), Some(path.to_path_buf()), custody, Some(file.fingerprint)))
-}
-
-/// AUTH-5.54 step 3's mirror at the close: the PLACED copy destroyed, the
-/// KEPT artifact retained.
-pub fn dispose(person: &mut dyn Person, anchor: &ImportedAnchor) {
-    match (&anchor.file, anchor.custody) {
-        (Some(path), Custody::Placed) => {
-            let gone = std::fs::remove_file(path).is_ok();
-            say(person, "AUTH-5.54 step 3", format!("the placed copy {} is {}", path.display(), if gone { "destroyed" } else { "already gone" }));
-        }
-        (Some(path), Custody::Kept) => say(person, "AUTH-5.54 step 3", format!("the kept artifact {} is retained", path.display())),
-        (None, _) => say(person, "AUTH-5.54 step 3", "the paper stays the kept artifact; nothing of the seed remains in this client"),
-    }
 }

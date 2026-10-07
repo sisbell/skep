@@ -15,11 +15,11 @@ use skep_identity::{Enrollment, Fingerprint, PublicKey};
 
 use super::{abandoned, reread, retire_one, row_text, RecoverOptions, Recovered};
 use crate::board::{Board, Scope};
-use crate::ceremony::backup::{backup_moment, reimport_anchor, AnchorArtifact, BackupOptions, Venue};
+use crate::ceremony::backup::{export_pair, reimport_anchor, two_places, AnchorArtifact, BackupOptions};
 use crate::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome};
 use crate::ceremony::first_session::{first_session, FirstSessionReads};
 use crate::ceremony::handshake::{handshake, Site};
-use crate::ceremony::import::{dispose, import_anchor, no_artifact_face, whose_account, ImportContext, ImportOutcome, ImportedAnchor, Whose};
+use crate::ceremony::import::{import_anchor, no_artifact_face, whose_account, ImportContext, ImportOutcome, ImportedAnchor, Whose};
 use crate::ceremony::preview::PreviewSite;
 use crate::ceremony::reads::r0;
 use crate::ceremony::say;
@@ -138,7 +138,7 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
     let cx = ImportContext { board, store, account: &account, principal: opts.principal, set_account: &reads.walk.set_account, set: &reads.walk.set, records: &reads.records, own: &own, anchor_path: opts.anchor.as_deref(), whose, cell: &reads.cell };
     let surviving: ImportedAnchor = match import_anchor(person, &cx)? {
         ImportOutcome::Anchor(a) => *a,
-        ImportOutcome::Neither => return Err(no_artifact_face(person, &cx)?),
+        ImportOutcome::Neither => return Err(no_artifact_face(person, &cx)),
     };
     if surviving.fingerprint == lost_fp {
         return Err(Halt::face("the artifact handed in is the LOST paper's own key", "this arm runs under the SURVIVING paper's session; the lost one holds no session any party but its finder could open", "hand in the surviving paper, or name the lost one with `--lost`"));
@@ -151,12 +151,15 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
     let mut retired: Vec<Fingerprint> = Vec::new();
     let mut enrolled_pair: Vec<Fingerprint> = Vec::new();
     let result = (|| -> Result<(String, Vec<AnchorArtifact>), Halt> {
-        let fs_reads = FirstSessionReads::take(board, &account, &surviving.fingerprint, Some(store), &board.dialed)?;
+        let fs_reads = FirstSessionReads::take(board, &account, &surviving.fingerprint, Some(store))?;
         let mut new_link: Option<String> = None;
         let mut artifacts: Vec<AnchorArtifact> = Vec::new();
         for attempt in 0..3 {
-            // L3: steps 3–5 on the file default; (b) alone re-rendered.
-            let backup = backup_moment(person, &Venue::LossArm { facts: facts.clone() }, &BackupOptions { labels: labels.clone(), destinations: opts.anchor_out.clone(), paper: opts.paper, store: Some(store.root().to_path_buf()), host: opts.host.clone(), date: opts.date.clone() })?;
+            // L3: AUTH-5.54 steps 1–3 CITED — statement (b) alone, then the
+            // pair exported and DROPPED; the boxes are L1's, the re-import L5's.
+            two_places(person, opts.paper);
+            let export = BackupOptions { labels: Vec::new(), destinations: opts.anchor_out.clone(), paper: opts.paper, store: Some(store.root().to_path_buf()), host: opts.host.clone(), date: opts.date.clone() };
+            let backup = export_pair(person, &export, &labels, Some(&facts))?;
             // L4: `first_session` FIRST; then BOTH fresh anchors as ONE record.
             first_session(board, &fs_reads, &session, &surviving.signer, Some(store))?;
             let entries: Vec<Enrollment> = backup.anchors.iter().map(|a| Enrollment::new(a.public.clone(), true, Some(a.label.as_str().to_string())).expect("a label the box admitted")).collect();
@@ -214,7 +217,7 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
         // THE TRAIL between L5 and L6: from the LOST anchor's enroll link to
         // the new pair's, signed by the surviving anchor.
         let old_link = reads.records.records.iter().find(|r| r.kind == Kind::Enroll && r.enrolled.iter().any(|e| Fingerprint::of(&e.key) == lost_fp)).map(|r| r.link.clone()).ok_or_else(|| Halt::face("the lost anchor's enroll link was not found", "the trail's `old` is the address the admitted read returns", "re-run"))?;
-        let trail = match trail_present(board, &old_link, Some(&new_link))? {
+        let trail = match trail_present(board, &old_link, &new_link)? {
             Some(claim) => {
                 say(person, "AUTH-5.59 step 3", format!("the trail already stands at {claim}: resumed by reading"));
                 claim
@@ -255,8 +258,7 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
     })();
     // L7: the close; the end face.
     let _ = session.close();
-    dispose(person, &surviving);
-    drop(surviving.signer);
+    surviving.dispose(person);
     let (trail, artifacts) = result?;
     let noun = if opts.paper { "sheets" } else { "anchor files" };
     say(

@@ -31,7 +31,7 @@ use std::fmt;
 use serde_json::Value;
 use skep_identity::{canonical_record, parse_enroll, Enrollment, Fingerprint};
 
-use crate::board::{acked_addr, frames, Answer, Board, KeySetAnswer, Rejection, Token, T_ENROLL, T_RETIRE};
+use crate::board::{acked_addr, answers, frames, Answer, Board, KeySetAnswer, Rejection, Token, T_ENROLL, T_RETIRE};
 use crate::halt::Halt;
 use crate::sign::{record_frame, sig_hex, Signer};
 
@@ -144,12 +144,7 @@ fn ordinal_at(board: &Board, token: Option<&Token>, doc: &str) -> Result<u64, De
             if let Some(r) = Rejection::of(&v) {
                 return Err(r.refused(&v).into());
             }
-            let width: u64 = v["set"]
-                .as_array()
-                .and_then(|s| s.iter().find(|x| x["start"].as_str() == Some("1.1")))
-                .and_then(|s| s["width"].as_str()?.rsplit('.').next()?.parse().ok())
-                .unwrap_or(0);
-            Ok(width + 1)
+            Ok(answers::content_extent(&v) + 1)
         }
     }
 }
@@ -165,37 +160,22 @@ fn closed_face(during: &str) -> Halt {
 }
 
 /// AUTH-5.5's READ-BACK: the bytes at the atom's address are the record
-/// written — the I→V inversion over `image`, then `retrieve_v` (AUTH-2.114).
-/// The death signal on any of its three reads is the session's end and
-/// never a mismatch.
+/// written — the I→V inversion over `image`, then `retrieve_v` (AUTH-2.114);
+/// an atom the arrangement does not hold, or an I-map that does not read
+/// whole, does not read back (AUTH-2.115). The death signal on any of its
+/// three reads is the session's end and never a mismatch.
 fn read_back(board: &Board, token: Option<&Token>, home: &str, atom: &str, expected: &str) -> Result<bool, DepositHalt> {
     let closed = || DepositHalt::SessionClosed(closed_face("reading the record back"));
     let Answer::Document(set) = board.op(token, &frames::span_set(home))? else { return Err(closed()) };
-    let extent: u64 = set["set"]
-        .as_array()
-        .and_then(|s| s.iter().find(|x| x["start"].as_str() == Some("1.1")))
-        .and_then(|s| s["width"].as_str()?.rsplit('.').next()?.parse().ok())
-        .unwrap_or(0);
+    let extent = answers::content_extent(&set);
     if extent == 0 {
         return Ok(false);
     }
     let Answer::Document(image) = board.op(token, &frames::image(home, 1, extent))? else { return Err(closed()) };
-    let mut ordinal: u64 = 1;
-    let mut found = None;
-    for run in image["runs"].as_array().into_iter().flatten() {
-        let (Some(start), Some(width)) = (run["i_start"].as_str(), run["width"].as_str().and_then(|w| w.parse::<u64>().ok())) else { continue };
-        let Some((prefix, last)) = start.rsplit_once('.') else { continue };
-        let Ok(first) = last.parse::<u64>() else { continue };
-        for k in 0..width {
-            if format!("{prefix}.{}", first + k) == atom {
-                found = Some(ordinal);
-            }
-            ordinal += 1;
-        }
-    }
-    let Some(ordinal) = found else { return Ok(false) };
+    let held = answers::i_map(&image).and_then(|map| map.into_iter().find(|(a, _)| a == atom));
+    let Some((_, ordinal)) = held else { return Ok(false) };
     let Answer::Document(v) = board.op(token, &frames::retrieve_v(home, ordinal, 1))? else { return Err(closed()) };
-    Ok(v["items"].as_array().and_then(|i| i.first()).and_then(|i| i["atom"].as_str()) == Some(expected))
+    Ok(answers::first_atom(&v).as_deref() == Some(expected.as_bytes()))
 }
 
 /// THE COMPOSITION.
@@ -262,7 +242,7 @@ pub fn deposit(board: &Board, token: &Token, d: &Deposit<'_>) -> Result<DepositO
             break;
         }
         let Some(r) = Rejection::of(&v) else { return Err(shape_face(&v).into()) };
-        match r.code.as_str() {
+        match r.key() {
             "published_target" if attempt == 0 => continue,
             _ => return Err(insert_face(&r, &v).into()),
         }
@@ -306,14 +286,13 @@ fn shape_face(v: &Value) -> Halt {
 /// tokens and `not_owner` are this client's frame, never the person's act.
 fn insert_face(r: &Rejection, v: &Value) -> Halt {
     let token = r.token();
-    match r.detail.as_deref().unwrap_or(r.code.as_str()) {
+    match r.key() {
         "record_sig_required" => Halt::face(
             "the record was composed without its `sig` above the claim",
             format!("{token}: a record-kind atom carrying no `sig` is refused at its own insert and lands nowhere"),
             "this is this client's frame and never your act: a record above the claim is composed WITH its hand's `sig`",
         ),
-        "attestation_required" | "attestation_invalid:signature" | "attestation_invalid:not_enrolled_at_position"
-        | "attestation_invalid:malformed" | "attestation_invalid:board_unavailable" => Halt::face(
+        k if k.starts_with("attestation_") => Halt::face(
             "the board judged the record grade and refused",
             format!("{token} at the insert — the frame this client composed did not verify, or the board had no head"),
             "this is this client's frame and never your act; `board_unavailable` is a reorder: retry once the head is written",
@@ -339,9 +318,8 @@ fn insert_face(r: &Rejection, v: &Value) -> Halt {
 fn reconcile_or_face(board: &Board, d: &Deposit<'_>, r: &Rejection, v: &Value, enrolled: &[Enrollment], retired: &[Fingerprint]) -> Result<DepositOutcome, DepositHalt> {
     let other = |h: Halt| -> Result<DepositOutcome, DepositHalt> { Err(DepositHalt::Other(h)) };
     let token = r.token();
-    let detail = r.detail.clone().unwrap_or_default();
     let record_fps: Vec<Fingerprint> = if enrolled.is_empty() { retired.to_vec() } else { enrolled.iter().map(|e| Fingerprint::of(&e.key)).collect() };
-    match detail.as_str() {
+    match r.key() {
         "nothing_changed" => {
             // AUTH-5.17: TWO STATES, read from the records (`key_set`).
             let set = match board.key_set(d.subject)? {
@@ -455,12 +433,12 @@ fn reconcile_or_face(board: &Board, d: &Deposit<'_>, r: &Rejection, v: &Value, e
             format!("{token}: the home, the declaration or the slots this client composed are wrong (never your act)"),
             "this is a fault in this client, not in your keys; nothing was written",
         )),
-        d_ if d_.starts_with("malformed_payload") || d_ == "undecodable_key" => other(Halt::face(
+        k if k.starts_with("malformed_payload") || k == "undecodable_key" => other(Halt::face(
             "the record did not parse at the board",
             format!("{token}: `malformed_payload` names where, `undecodable_key` a key no half of which decodes"),
             "where the record came from another device, re-take it there and never edit it here; where this client composed it, this is its own fault",
         )),
-        d_ if d_.starts_with("attestation_") => other(Halt::face(
+        k if k.starts_with("attestation_") => other(Halt::face(
             "the board judged the record grade and refused",
             format!("{token}: the record's `sig` did not verify under the set that opens the home at the act's grade, or the board had no head"),
             "this is this client's frame and never your act; `board_unavailable` is a reorder: retry once the head is written",

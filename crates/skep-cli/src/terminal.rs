@@ -141,8 +141,7 @@ impl Person for Terminal {
     fn import(&mut self, m: Secret<Import>) -> Result<Imported, Abandoned> {
         eprintln!("{}", m.0.prompt);
         loop {
-            let prompt = if m.0.file_allowed { "anchor (a file path, the 64 hex from the print, or `neither`): " } else { "anchor (the 64 hex from the print, or `neither`): " };
-            let a = self.line(prompt)?;
+            let a = self.line("anchor (a file path, the 64 hex from the print, or `neither`): ")?;
             let text = a.trim();
             if text.is_empty() {
                 eprintln!("an answer is required: a path, the hex, or `neither`");
@@ -155,10 +154,6 @@ impl Person for Terminal {
             if compact.len() == 64 && compact.bytes().all(|b| b.is_ascii_hexdigit()) {
                 let prefix = self.line("fingerprint prefix from the print (at least the first 8 hex): ")?;
                 return Ok(Imported::Typed { seed_hex: compact.to_ascii_lowercase(), fingerprint_prefix: prefix.trim().to_ascii_lowercase() });
-            }
-            if !m.0.file_allowed {
-                eprintln!("a file was already named by the flag; type the hex, or `neither`");
-                continue;
             }
             return Ok(Imported::File(PathBuf::from(text)));
         }

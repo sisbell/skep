@@ -155,7 +155,7 @@ fn first_session_owes_the_setup_act_once_and_nothing_after() {
     let HostedOutcome::Claimed(_) = hosted(&board, encode_enroll(&entries).as_bytes(), 1).unwrap() else { panic!() };
     let signer = device.signer();
 
-    let reads = FirstSessionReads::take(&board, "1.0.1", &fp, Some(&store), &board.dialed).unwrap();
+    let reads = FirstSessionReads::take(&board, "1.0.1", &fp, Some(&store)).unwrap();
     assert!(reads.home_present, "H3 minted the home");
     assert!(reads.set_nonempty);
     assert_eq!(reads.space, "1.0.1.1");
@@ -186,7 +186,7 @@ fn first_session_owes_the_setup_act_once_and_nothing_after() {
     assert!(own.is_empty());
 
     // Nothing owed after.
-    let reads2 = FirstSessionReads::take(&board, "1.0.1", &fp, Some(&store), &board.dialed).unwrap();
+    let reads2 = FirstSessionReads::take(&board, "1.0.1", &fp, Some(&store)).unwrap();
     assert_eq!((reads2.space_seat, reads2.space_home_present, reads2.persisted_new_id), (Some(seat), true, Some(seat)));
     assert!(!reads2.anything_owed(), "bind's second arm: no session is opened");
 }

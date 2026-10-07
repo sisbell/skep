@@ -16,7 +16,7 @@ The reading half, in every build:
 | `address` | the address grammar over the wire's dotted spelling: an account's parent, first child and doc 1, the document an address lies in, the parse into `skep_address`'s `Address` |
 | `dial` | the one outbound `Dialer` and its plain-HTTP arm — one `TcpStream` per request, `Connection: close`, `Content-Length` checked, no redirects, no proxy environment — with a streamed form; `https://` behind the `tls` feature |
 | `halt` | the one error family — `Halt`, `Refused`, `Blocked`, `Dial` — and the exit codes |
-| `board` | `Board { dialed, signed, dialer }`: the wire's endpoints, the token-free registry reads, `H.1`'s pair, every token-bearing dial through one `authed` exchange, the one reader of `Skepd-Session: closed`, every token-free read through `Board::guest`, which halts on that signal; `board::frames`, every frame the crate sends |
+| `board` | `Board { dialed, signed, dialer }`: the wire's endpoints, the token-free registry reads, `H.1`'s pair, every token-bearing dial through one `authed` exchange, the one reader of `Skepd-Session: closed`, every token-free read through `Board::guest`, which halts on that signal; `board::frames`, every frame the crate sends; `Rejection::key`, the one token a refusal is dispatched on |
 | `derive` | the pure derivations over board reads: the mode, AUTH-5.65's pre-check, the three-state key diagnosis at the set AUTH-5.21's walk reaches, the `closed` predicate; behind `acting`, `derive::records`, the one admitted read of an account's credential records |
 
 Behind `acting`:
@@ -25,7 +25,7 @@ Behind `acting`:
 |---|---|
 | `sign` | the `Signer` seam over `skep_signature::HybridSigner`; the session payload under both versioned layouts (AUTH-6.4) and a credential record's `record` frame |
 | `sheet` | the key file's one JSON spelling and its refusals (`KeyFileError`), the byline `Label` and its domain, the `Seed` every secret is born into, the R42 grouping, the sheet's field list |
-| `store` | the `KeyStore` seam and `FileStore`: plain files with modes, the append-only bindings file in its two line forms, the lock — a lookup answering a key's public facts (`KeyFacts`), a stored key signing through `KeyStore::signer` alone; and the halts the store's refusals render as |
+| `store` | the `KeyStore` seam and `FileStore`: plain files with modes, the append-only bindings file in its two line forms, the lock — a lookup answering a key's public facts (`KeyFacts`), a stored key signing through `KeyStore::signer` alone; the halts the store's refusals render as; and `Unappended`, the warning a binding line that cannot be appended answers |
 | `person` | the `Person` seam — SECRET, CONSENT and PUBLIC moments as types, a SECRET payload printing no key material; behind `test-hooks`, `person::scripted`, the scripted person a test drives |
 | `verify` | the reader's verifier: a committed signature judged against the signature-filtered key set as of the entry's base |
 | `resolve` | `skep_resolve::Transport` over this crate's dialer |

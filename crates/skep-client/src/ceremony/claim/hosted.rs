@@ -123,7 +123,7 @@ pub fn hosted(board: &Board, payload: &[u8], principal: u64) -> Result<HostedOut
     };
     if acked_addr(&v).is_none() {
         if let Some(r) = Rejection::of(&v) {
-            match r.detail.as_deref().unwrap_or("") {
+            match r.key() {
                 "already_claimed" => {}
                 "claim_residue" => return Err(Halt::face("this board carries pre-claim residue", "claim_residue at the claim", "a fresh data directory")),
                 _ => return Err(r.refused(&v)),

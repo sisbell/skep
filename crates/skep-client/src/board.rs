@@ -11,9 +11,10 @@
 //! as [`Authed::Closed`] for AUTH-5.66's `closed` arm — THE ONE READER of the
 //! death signal (wire.md §Sessions). A request that presents NO token cannot
 //! meet that signal, and the board settles it once: [`Board::guest`], every
-//! token-free read's door, and the token-free answers of `op_at` and
-//! `changes_key` HALT on it as a fault of the board or the transport, so no
-//! reader of a guest answer decides what a `closed` would mean.
+//! token-free read's door, the token-free answers of `op_at`, and
+//! `changes_key`, which presents no token at all, HALT on it as a fault of
+//! the board or the transport, so no reader of a guest answer decides what a
+//! `closed` would mean.
 //!
 //! The three principal-free registry reads — `principal_prefix`,
 //! `effective_owner`, `key_set` — are `/op` frames carried as methods because
@@ -22,7 +23,8 @@
 //! admitted read cannot be made without them (§1.1). `op` is a general frame
 //! pipe for an embedder; the fence is a statement of SCOPE, kept by what this
 //! crate's own code sends through it — every frame of which [`frames`]
-//! spells. [`Board::board_term`] reads `H.1`'s pair, once per board (D13).
+//! spells, and every read answer of which the child `answers` decodes.
+//! [`Board::board_term`] reads `H.1`'s pair, once per board (D13).
 
 use std::fmt;
 use std::sync::OnceLock;
@@ -34,6 +36,7 @@ use crate::dial::{Dialer, Request, Response};
 use crate::halt::{Halt, Refused};
 use crate::origin::Origin;
 
+pub(crate) mod answers;
 pub mod frames;
 
 /// The three credential type addresses (AUTH-7.1 horn B; wire.md §The claim
@@ -323,13 +326,15 @@ impl fmt::Debug for Board {
     }
 }
 
-/// The wire's response envelopes, decoded (wire.md §Rejections).
+/// A `rejected` document, decoded (wire.md §Rejections). Its parts are read
+/// through [`Rejection::key`], the one token a walk dispatches on, and are
+/// otherwise rendered whole — [`Rejection::token`] for a face,
+/// [`Rejection::refused`] for surfacing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rejection {
-    pub code: String,
-    pub detail: Option<String>,
-    pub op: Option<String>,
-    pub disposition: Option<String>,
+    code: String,
+    detail: Option<String>,
+    op: Option<String>,
 }
 
 impl Rejection {
@@ -342,8 +347,19 @@ impl Rejection {
             code: v["code"].as_str().unwrap_or("?").to_string(),
             detail: v["detail"].as_str().map(str::to_string),
             op: v["op"].as_str().map(str::to_string),
-            disposition: v["disposition"].as_str().map(str::to_string),
         })
+    }
+
+    /// The ONE token a walk dispatches on (wire.md §Rejections: "key client
+    /// behavior on the token, never on prose"): the `detail` of the two
+    /// families that carry a machine token there — `credential_refused`,
+    /// `registry_refused` — and the `code` itself everywhere else, whose
+    /// `detail`, where one rides, is prose.
+    pub fn key(&self) -> &str {
+        match (self.code.as_str(), self.detail.as_deref()) {
+            ("credential_refused" | "registry_refused", Some(d)) => d,
+            (code, _) => code,
+        }
     }
 
     /// The `code:detail` token.
@@ -570,14 +586,15 @@ impl Board {
     }
 
     /// THE ONE `/changes` POINT QUERY (`client.md` §1.1): the `key` of the
-    /// row at `at`, read as a guest — the credential rows live in a
-    /// published doc 1 — for an UNSIGNED record alone (AUTH-6.15).
-    pub fn changes_key(&self, token: Option<&Token>, at: u64) -> Result<ChangeKey, Halt> {
+    /// row at `at`, read as a GUEST — the credential rows live in a
+    /// published doc 1 — for an UNSIGNED record alone (AUTH-6.15). It
+    /// presents no token, so the death signal on its answer is a fault of the
+    /// board or the transport (the module's doc).
+    pub fn changes_key(&self, at: u64) -> Result<ChangeKey, Halt> {
         let since = at.saturating_sub(1);
         let req = Request::get(format!("/changes?since={since}&limit=1"));
-        match self.authed(token, req)? {
-            Authed::Closed(_) if token.is_none() => Err(guest_closed()),
-            Authed::Closed(_) => Ok(ChangeKey::NoEntry),
+        match self.authed(None, req)? {
+            Authed::Closed(_) => Err(guest_closed()),
             Authed::Response(resp) => {
                 let v: Value = serde_json::from_slice(&resp.body).unwrap_or(Value::Null);
                 match resp.status {
@@ -664,13 +681,10 @@ impl Board {
 
     fn read_board_term(&self) -> Result<Option<BoardTerm>, Halt> {
         let v = self.guest(&frames::retrieve_v(HEAD_MEMBER_1, 1, 1))?;
-        if v["resp"].as_str() != Some("delivery") {
-            return Ok(None);
-        }
-        let Some(text) = v["items"].as_array().and_then(|i| i.first()).and_then(|i| i["atom"].as_str()) else {
+        let Some(bytes) = answers::first_atom(&v) else {
             return Ok(None);
         };
-        let rec: Value = match serde_json::from_str(text) {
+        let rec: Value = match serde_json::from_slice(&bytes) {
             Ok(r) => r,
             Err(_) => return Ok(None),
         };
@@ -697,7 +711,7 @@ fn guest_closed() -> Halt {
 /// A `key_set` document decoded (AUTH-6.18), or `not_an_account`.
 fn key_set_of(v: &Value) -> Result<KeySetAnswer, Halt> {
     if let Some(r) = Rejection::of(v) {
-        if r.code == "not_an_account" {
+        if r.key() == "not_an_account" {
             return Ok(KeySetAnswer::NotAnAccount);
         }
         return Err(r.refused(v));
@@ -756,6 +770,20 @@ mod tests {
         assert_eq!(r.token(), "credential_refused:content_session");
     }
 
+    /// wire.md §Rejections: a walk keys on the `detail` of the two families
+    /// that carry a machine token there, and on the `code` everywhere else —
+    /// never on a `detail` that is prose.
+    #[test]
+    fn a_rejection_keys_on_the_one_token_the_wire_dispatches_on() {
+        let key = |v: Value| Rejection::of(&v).expect("a rejection").key().to_string();
+        assert_eq!(key(json!({"code":"credential_refused","detail":"claim_first","disposition":"permanent","op":"delegate","resp":"rejected"})), "claim_first");
+        assert_eq!(key(json!({"code":"credential_refused","detail":"attestation_invalid:signature","disposition":"permanent","op":"insert","resp":"rejected"})), "attestation_invalid:signature");
+        assert_eq!(key(json!({"code":"registry_refused","detail":"registry_form","disposition":"permanent","op":"make_link","resp":"rejected"})), "registry_form");
+        assert_eq!(key(json!({"code":"not_authorized","disposition":"permanent","op":"delegate","resp":"rejected"})), "not_authorized");
+        assert_eq!(key(json!({"code":"malformed","detail":"unknown op 'frobnicate'","disposition":"permanent","op":"unparseable","resp":"rejected"})), "malformed");
+        assert!(Rejection::of(&json!({"resp":"ack","at":3})).is_none());
+    }
+
     /// A board that answers every request with the death signal.
     struct AlwaysClosed;
 
@@ -788,7 +816,7 @@ mod tests {
         fault(board.key_set("1.0.1").unwrap_err());
         fault(board.board_term().unwrap_err());
         fault(board.op_at(None, 3, &frames::key_set("1.0.1")).unwrap_err());
-        fault(board.changes_key(None, 3).unwrap_err());
+        fault(board.changes_key(3).unwrap_err());
         assert_eq!(board.op(Some(&token), &frames::key_set("1.0.1")).unwrap(), Answer::Closed);
         assert_eq!(board.op_at(Some(&token), 3, &frames::key_set("1.0.1")).unwrap(), AtAnswer::Closed);
     }

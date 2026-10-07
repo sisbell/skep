@@ -36,7 +36,7 @@ use crate::ceremony::first_session::{first_session, FirstSessionReads};
 use crate::ceremony::handshake::{handshake, Site};
 use crate::ceremony::payload::{compare_payload, parse_payload, payload_text, refuse_anchor_flagged};
 use crate::ceremony::preview::{declined, preview, Preview, PreviewSite, Previewed, Row};
-use crate::ceremony::reads::{r0, A4Cell, Reads};
+use crate::ceremony::reads::{r0, Reads};
 use crate::ceremony::trail::{trail_present, write_trail};
 use crate::derive::records::{credential_records, Hand, Kind, Records};
 use crate::derive::Mode;
@@ -97,8 +97,7 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     let old_key: KeyFacts = match store.select(&KeySelector::Binding { origin: &board.dialed, principal: Some(opts.principal) }, Purpose::Sign) {
         Ok(key) => key,
         Err(StoreError::NoSelection { keys }) => {
-            let health = board.health()?;
-            return Err(arm4_face(store, &keys, Mode::of(&health), health.local_trust()));
+            return Err(arm4_face(store, &keys, Mode::of(&board.health()?)));
         }
         Err(e) => return Err(store_halt(e)),
     };
@@ -188,8 +187,7 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     // THE PREVIEW over T0's enumeration (no enrollment preview beside it).
     let held: Vec<Fingerprint> = own.iter().map(|(f, _)| *f).collect();
     let rows = [Row::of(&old_fp, &reads.walk.set, Some(&reads.records), &held, Some(&old_fp), false)];
-    let own_board = matches!(reads.cell, A4Cell::LoopbackNotebook | A4Cell::BindOverrideNotebook);
-    match preview(person, &Preview { account: &account, set: &reads.walk.set, rows: &rows, closure: &closure, held: &held, site: PreviewSite::Rotate, own_board })? {
+    match preview(person, &Preview { account: &account, set: &reads.walk.set, rows: &rows, closure: &closure, held: &held, site: PreviewSite::Rotate, own_board: reads.cell.own_board() })? {
         Previewed::Confirmed => {}
         Previewed::Declined => return Err(declined("rotation")),
         Previewed::Unwritable => return Err(Halt::face("the rotation's retire-old would empty the set", "`would_empty` armed", "this is this client's frame")),
@@ -197,7 +195,7 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     // T2: the OLD key's FULL session — closed on every halt below by its own
     // drop, ended at T4 by T4's commit; `first_session` first; the enrollment.
     let session = handshake(board, Scope::Full, &*old, opts.principal, Site::Session)?;
-    let fs_reads = FirstSessionReads::take(board, &account, &old_fp, Some(store), &board.dialed)?;
+    let fs_reads = FirstSessionReads::take(board, &account, &old_fp, Some(store))?;
     if let Err(h) = first_session(board, &fs_reads, &session, &*old, Some(store)) {
         return Err(closed_before_t4(board, &reads, &old_fp, &own, h));
     }
@@ -238,7 +236,7 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         (fp, key, link)
     };
     // T3: THE TRAIL, resumed by reading its presence.
-    let trail = match trail_present(board, &old_link, Some(&new_link))? {
+    let trail = match trail_present(board, &old_link, &new_link)? {
         Some(claim) => {
             say(person, "AUTH-5.59 step 3", format!("the trail already stands at {claim} (from {old_link} to {new_link}): resumed by reading, no second trail is written"));
             claim
@@ -266,10 +264,8 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     let binding_line = match &new_key {
         Some(key) => {
             let line = Binding::Enrollment { origin: board.dialed.clone(), principal: opts.principal, account: account.clone(), fingerprint: key.fingerprint };
-            match store.bind(&line) {
-                Ok(()) => {}
-                Err(StoreError::ReadOnly { line: text, .. }) => warnings.push(format!("the store is read-only; record this binding line yourself: {text}")),
-                Err(e) => return Err(store_halt(e)),
+            if let Err(w) = store.bind(&line) {
+                warnings.push(w.to_string());
             }
             Some(line.line())
         }

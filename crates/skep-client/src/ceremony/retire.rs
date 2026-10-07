@@ -28,7 +28,7 @@ use crate::ceremony::enumerate::head_closure;
 use crate::ceremony::first_session::{first_session, FirstSessionReads};
 use crate::ceremony::handshake::{handshake, Site};
 use crate::ceremony::preview::{declined, preview, Preview, PreviewSite, Previewed, Row};
-use crate::ceremony::reads::{r0, A4Cell};
+use crate::ceremony::reads::r0;
 use crate::halt::Halt;
 use crate::person::Person;
 use crate::sheet::render_inert;
@@ -125,14 +125,13 @@ pub fn retire(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     // halt below by its own drop.
     let session = handshake(board, Scope::Full, &*signer, reads.set_principal, Site::Session)?;
     // `first_session` FIRST.
-    let fs_reads = FirstSessionReads::take(board, &set_account, &key.fingerprint, Some(store), &board.dialed)?;
+    let fs_reads = FirstSessionReads::take(board, &set_account, &key.fingerprint, Some(store))?;
     first_session(board, &fs_reads, &session, &*signer, Some(store))?;
     // The enumeration and the preview.
     let closure = head_closure(board, person, &set_account, &target.fingerprint)?;
     let held: Vec<Fingerprint> = own.iter().map(|(f, _)| *f).collect();
     let rows = [Row::of(&target.fingerprint, &reads.walk.set, Some(&reads.records), &held, Some(&key.fingerprint), false)];
-    let own_board = matches!(reads.cell, A4Cell::LoopbackNotebook | A4Cell::BindOverrideNotebook);
-    let answer = preview(person, &Preview { account: &set_account, set: &reads.walk.set, rows: &rows, closure: &closure, held: &held, site: PreviewSite::Retire, own_board })?;
+    let answer = preview(person, &Preview { account: &set_account, set: &reads.walk.set, rows: &rows, closure: &closure, held: &held, site: PreviewSite::Retire, own_board: reads.cell.own_board() })?;
     match answer {
         Previewed::Confirmed => {}
         Previewed::Declined => return Err(declined("retirement")),

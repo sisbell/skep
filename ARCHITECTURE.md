@@ -507,10 +507,12 @@ each ceremony:
   in, the parse); `hex.rs` (private) lowercase hex; `dial.rs` the one
   outbound `Dialer`, its plain-HTTP arm and, under `tls`, the `https://`
   arm; `halt.rs` the one error family and its exit codes; `board.rs` the
-  wire's endpoints over a dialer, `H.1`'s pair, and `board/frames.rs`,
-  which spells every frame the crate sends; `derive.rs` the pure
-  derivations over board reads — the mode, the pre-check, the walk to the
-  set that opens an account, the key diagnosis, the `closed` predicate.
+  wire's endpoints over a dialer, `H.1`'s pair and the one token a refusal
+  is dispatched on, `board/frames.rs`, which spells every frame the crate
+  sends, and `board/answers.rs`, which decodes every read answer it reads;
+  `derive.rs` the pure derivations over board reads — the mode, the
+  pre-check, the walk to the set that opens an account, the key diagnosis,
+  the `closed` predicate.
 - Under `acting`. `sign.rs` the `Signer` seam and the bytes a signer signs
   (the session payload, a credential record's frame); `sheet.rs` the key
   file's one spelling and its refusals, the byline `Label` and the `Seed`
@@ -541,15 +543,20 @@ Rules that hold across its files:
   the one a `Board` holds, or the one `resolve.rs`'s transport wraps.
   Every token-bearing request but the close rides `Board::authed`, which
   answers the death signal as `Authed::Closed` (P28); `Board::session_close`
-  reads it on its own `204` as the token already dead (AUTH-4.47).
+  reads it on its own `204` as the token already dead (AUTH-4.47). A
+  refusal is dispatched on `Rejection::key` alone — the one token wire.md
+  §Rejections says a client keys on — and every read answer is decoded by
+  `board/answers.rs`.
 - **One home per composition.** Every signed session opens through
   `handshake.rs`, its pre-check's reads ahead of the `/challenge`
   (AUTH-5.65), and owns its end: closed, ended by its own commit, or handed
-  out — and closed on its drop where a halt took none of the three; every
-  credential record is written by `deposit.rs`, which answers the armed arm
-  that stopped it (`DepositHalt`) beside its face; an account's first signed
-  session runs `first_session.rs`'s two states, and every persist-first
-  `delegate` its one form. A walk states only what its site adds.
+  out — and closed on its drop where a halt took none of the three; an
+  imported anchor owns its end the same way, its PLACED copy destroyed at
+  the close or on its drop (AUTH-5.54 step 3); every credential record is
+  written by `deposit.rs`, which answers the armed arm that stopped it
+  (`DepositHalt`) beside its face; an account's first signed session runs
+  `first_session.rs`'s two states, and every persist-first `delegate` its
+  one form. A walk states only what its site adds.
 - **The ceremony is layered.** Nothing outside `ceremony/` names it;
   inside, a walk names compositions and never another walk, and a
   composition names no walk. `tests/it/tidy.rs` checks it.

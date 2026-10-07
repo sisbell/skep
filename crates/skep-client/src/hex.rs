@@ -26,8 +26,6 @@ fn nibble(c: u8) -> Option<u8> {
 
 /// The bytes `s` spells, either case; `None` on an odd length or a non-hex
 /// byte — text of any content off the wire answers `None` and never panics.
-/// Every reader of a variable-length hex is in the acting half.
-#[cfg_attr(not(feature = "acting"), allow(dead_code))]
 pub(crate) fn decode(s: &str) -> Option<Vec<u8>> {
     let digits = s.as_bytes();
     if digits.len() % 2 != 0 {

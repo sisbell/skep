@@ -12,7 +12,9 @@
 //! rewrite of a walk (§1.4). The refusals are the store's own faces
 //! ([`StoreError`], [`KeyFileError`]), never wire tokens, each rendered by
 //! [`store_halt`] as AUTH-5.67's halt naming the path and the state; a
-//! lookup that selects no key is §3.5 arm 4's fork, [`arm4_face`].
+//! lookup that selects no key is §3.5 arm 4's fork, [`arm4_face`]. A binding
+//! line that cannot be appended is no refusal at all: [`Unappended`], the
+//! warning carrying the line (§3.7).
 
 use std::fmt;
 use std::fs::{self, OpenOptions};
@@ -156,9 +158,6 @@ pub enum StoreError {
     Ambiguous { keys: Vec<KeyFacts> },
     /// No key matches a `--select`.
     NotFound { select: String },
-    /// The bindings file could not be appended — a read-only mount; a
-    /// WARNING, never a refusal: the line, for the person to record (§3.7).
-    ReadOnly { path: PathBuf, line: String, error: io::Error },
 }
 
 impl fmt::Display for StoreError {
@@ -172,14 +171,37 @@ impl fmt::Display for StoreError {
             StoreError::NoSelection { keys } => write!(f, "no key selected ({} in the store)", keys.len()),
             StoreError::Ambiguous { keys } => write!(f, "{} keys match", keys.len()),
             StoreError::NotFound { select } => write!(f, "no key in the store matches `{select}`"),
-            StoreError::ReadOnly { path, line, error } => {
-                write!(f, "{}: could not append ({error}); record this line yourself: {line}", path.display())
-            }
         }
     }
 }
 
 impl std::error::Error for StoreError {}
+
+/// THE ONE WAY [`KeyStore::bind`] FAILS: the bindings file could not be
+/// appended — a read-only mount, a missing permission — and the line rides
+/// the failure for the person to record by hand. A WARNING and never a
+/// refusal (§3.7): its `Display` is the warning a walk prints, and no walk
+/// halts on it.
+#[derive(Debug)]
+pub struct Unappended {
+    pub path: PathBuf,
+    pub line: String,
+    pub error: io::Error,
+}
+
+impl fmt::Display for Unappended {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "the bindings file {} could not be appended ({}); record this binding line yourself: {}",
+            self.path.display(),
+            self.error,
+            self.line
+        )
+    }
+}
+
+impl std::error::Error for Unappended {}
 
 /// A store refusal as AUTH-5.67's halt naming the path and the state.
 pub fn store_halt(e: StoreError) -> Halt {
@@ -207,8 +229,9 @@ pub fn store_halt(e: StoreError) -> Halt {
     }
 }
 
-/// §3.5 arm 4's three forks on `claimant`.
-pub fn arm4_face(store: &FileStore, keys: &[KeyFacts], mode: Mode, local_trust: bool) -> Halt {
+/// §3.5 arm 4's three forks on `claimant`, the keyless residue keyed on the
+/// claimed board's mode (AUTH-5.86).
+pub fn arm4_face(store: &FileStore, keys: &[KeyFacts], mode: Mode) -> Halt {
     match (mode, keys.is_empty()) {
         (Mode::Unclaimed, true) => Halt::face(
             format!("the key store {} holds no key, and this board is unclaimed", store.root().display()),
@@ -224,7 +247,7 @@ pub fn arm4_face(store: &FileStore, keys: &[KeyFacts], mode: Mode, local_trust: 
             )
         }
         (_, true) => {
-            let residue = if local_trust {
+            let residue = if mode == Mode::ClaimedPermissive {
                 "in CLAIMED-PERMISSIVE bare sessions still open on loopback and still write drafts, so that board is DRAFT-ONLY FOREVER: every draft stays readable and writable, and material can be carried across by re-authoring before a fresh board is minted"
             } else {
                 "in ENFORCING it is READ-ONLY FOREVER"
@@ -261,8 +284,9 @@ pub trait KeyStore {
     fn signer(&self, sel: &KeySelector<'_>) -> Result<Box<dyn Signer>, StoreError>;
     /// Every binding line for `origin`, in file order (the newest last).
     fn bindings(&self, origin: &Origin) -> Result<Vec<Binding>, StoreError>;
-    /// Append one line under the lock.
-    fn bind(&self, b: &Binding) -> Result<(), StoreError>;
+    /// Append one line under the lock; the one failure is [`Unappended`],
+    /// a warning carrying the line.
+    fn bind(&self, b: &Binding) -> Result<(), Unappended>;
 }
 
 /// The default store on every platform: `~/.skep/` (§6; §9 item 10, RULED —
@@ -323,8 +347,9 @@ impl FileStore {
         target.starts_with(&root)
     }
 
-    /// The directory `0700`, created once (§3.3); the umask irrelevant.
-    fn ensure_dirs(&self) -> Result<(), StoreError> {
+    /// The directory `0700`, created once (§3.3); the umask irrelevant. A
+    /// failure names the directory it could not make.
+    fn ensure_dirs(&self) -> Result<(), (PathBuf, io::Error)> {
         for dir in [self.root.clone(), self.keys_dir()] {
             if dir.is_dir() {
                 continue;
@@ -336,7 +361,7 @@ impl FileStore {
                 use std::os::unix::fs::DirBuilderExt;
                 builder.mode(0o700);
             }
-            builder.create(&dir).map_err(|error| StoreError::Io { path: dir.clone(), error })?;
+            builder.create(&dir).map_err(|error| (dir.clone(), error))?;
         }
         Ok(())
     }
@@ -537,15 +562,12 @@ impl FileStore {
 
     /// Append `line` to the bindings file in ONE `write` under the advisory
     /// lock on `<store>/lock` (§3.7). A failed append — a read-only mount —
-    /// is `ReadOnly`, carrying the line for the person to record.
-    pub fn append_line(&self, line: &str) -> Result<(), StoreError> {
+    /// is [`Unappended`], carrying the line for the person to record.
+    pub fn append_line(&self, line: &str) -> Result<(), Unappended> {
         let path = self.bindings_path();
         let text = format!("{line}\n");
-        let read_only = |error: io::Error| StoreError::ReadOnly { path: path.clone(), line: line.to_string(), error };
-        self.ensure_dirs().map_err(|e| match e {
-            StoreError::Io { error, .. } => read_only(error),
-            other => other,
-        })?;
+        let read_only = |error: io::Error| Unappended { path: path.clone(), line: line.to_string(), error };
+        self.ensure_dirs().map_err(|(_, error)| read_only(error))?;
         let mut lock_opts = OpenOptions::new();
         lock_opts.read(true).write(true).create(true).truncate(false);
         #[cfg(unix)]
@@ -574,7 +596,7 @@ impl FileStore {
 
 impl KeyStore for FileStore {
     fn generate(&self, label: Option<Label>) -> Result<KeyId, StoreError> {
-        self.ensure_dirs()?;
+        self.ensure_dirs().map_err(|(path, error)| StoreError::Io { path, error })?;
         let file = KeyFile::new(Seed::fresh(), false, label.map(|l| l.as_str().to_string()), None);
         let path = self.key_path(&file.fingerprint);
         Self::write_once(&path, file.to_json().as_bytes()).map_err(|error| StoreError::Io { path, error })?;
@@ -597,7 +619,7 @@ impl KeyStore for FileStore {
             .collect())
     }
 
-    fn bind(&self, b: &Binding) -> Result<(), StoreError> {
+    fn bind(&self, b: &Binding) -> Result<(), Unappended> {
         self.append_line(&b.line())
     }
 }

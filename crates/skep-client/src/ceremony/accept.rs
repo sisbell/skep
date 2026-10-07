@@ -130,7 +130,7 @@ pub fn accept(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         return Err(Halt::face(format!("no key set opens {account} or anything above it"), "the walk from the address reached no set", "ask the giver which board the account is on"));
     }
     let giver = walk.set_account.clone();
-    let cell = A4Cell::of(board, &health, &giver, &walk);
+    let cell = A4Cell::of(board, &health, &giver, &walk)?;
     let hosted = match (&cell, opts.hosted) {
         (A4Cell::Served, Some(h)) => h,
         (A4Cell::Served, None) => person.yes_no(Public(Question { text: "this is a SERVED board, and no read tells a HOSTED host from the giver's own org: is the party running it a hosting provider (yes), or the giver's own org (no)?".into() })).map_err(|_| abandoned())?,
@@ -209,7 +209,7 @@ pub fn accept(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         say(person, "AUTH-5.87", "creating your account will also create a space for your agents beneath it, and its home — reserved by your own hand at `skep bind`");
     }
     // AUTH-5.85's statement, scoped by the board's VENUE.
-    let notebook = board.dialed.names_loopback_host() && health.origins().iter().all(|o| crate::origin::Origin::parse(o).is_some_and(|x| x.names_loopback_host()));
+    let notebook = A4Cell::venue(board, &health) == A4Cell::LoopbackNotebook;
     if notebook {
         say(person, "AUTH-5.85", format!("every edit to this page, including what you later remove, is kept — this notebook's history is permanent, and it is local: no mirror holds it and this board can never be made public; the records this page holds (your keys, the grants you issue) stand as records of their own, so removing the text one names does not remove it: the record stays in force, and the version you removed it from remains readable{}", if health.local_trust() { "; and local means the machine this board runs on: while local trust is on, anything running on it can bare-bind as you here — writing as you, and reading every draft you have already written, with no mint at all" } else { "" }));
     } else {

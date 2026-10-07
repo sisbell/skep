@@ -2,7 +2,8 @@
 //! two fresh anchors enrolled as ONE record under the surviving paper, the
 //! trail from the lost anchor's link to the new one, the lost anchor
 //! retired, the surviving one still enrolled, L1's boxes prefilled from the
-//! lost paper's label, L5's failure arm, the end face.
+//! lost paper's label, L5's failure arm, the end face — and the imported
+//! paper's custody and the `closed` face, each at a halt.
 
 use skep_client::board::{frames, Answer, KeySetAnswer, T_SUPERSEDES};
 use skep_client::ceremony::recover::{recover, RecoverOptions};
@@ -10,10 +11,13 @@ use skep_client::ceremony::trail::trail_present;
 use skep_client::derive::records::{credential_records, Kind};
 use skep_client::person::scripted::{Script, Scripted};
 use skep_client::person::Custody;
+use skep_client::sheet::KeyFile;
+use skep_client::sign::signer_from_seed;
 use skep_client::store::FileStore;
-use skep_identity::Fingerprint;
+use skep_identity::{Enrollment, Fingerprint};
+use skep_signature::HybridSigner;
 
-use crate::common::{anchor_file, board, claim, files_in, keygen, spawn, Hooked};
+use crate::common::{anchor_file, board, claim, files_in, key_file, keygen, spawn, wire_enroll, wire_retire, wire_session, Hooked};
 
 fn options(anchor: std::path::PathBuf, lost: &str, out: &std::path::Path) -> RecoverOptions {
     RecoverOptions {
@@ -74,7 +78,7 @@ fn the_loss_arm_enrolls_a_fresh_pair_as_one_record_writes_the_trail_and_retires_
     // L5: each re-imported, probed and wiped.
     assert_eq!(person.transcript.iter().filter(|l| l.contains("a probe session opened and closed")).count(), 2, "{t}");
     // The trail: readable as a link from the lost anchor's enroll link.
-    let claim = trail_present(&board, &lost_link, Some(&pair.link)).unwrap().expect("the trail");
+    let claim = trail_present(&board, &lost_link, &pair.link).unwrap().expect("the trail");
     let Answer::Document(lv) = board.op(None, &frames::read_link(&claim)).unwrap() else { panic!() };
     assert!(lv["link"]["slots"].as_array().is_some(), "{lv}");
     assert!(lv["link"]["slots"][2][0]["start"].as_str() == Some(T_SUPERSEDES), "the supersedes class: {lv}");
@@ -150,4 +154,99 @@ fn a_fresh_anchor_that_does_not_read_back_is_retired_and_the_pair_re_run() {
     assert!(person.inner.said("re-run 1, a fresh pair"), "{t}");
     assert!(person.inner.said("THREE anchors stand enrolled"), "{t}");
     assert!(set.enrolled(&surviving.fingerprint).is_some());
+}
+
+/// AUTH-5.54 step 3: an imported anchor's PLACED copy is destroyed when the
+/// ceremony it was imported for ends — at a halt as at the close. Handed a
+/// placed copy of the LOST paper, the walk halts after the import and ahead
+/// of its session; the copy is gone and the kept file stands.
+/// MUTATION: with no drop on the imported anchor, the copy survives the halt.
+#[test]
+fn a_placed_copy_is_destroyed_where_the_walk_halts_after_the_import() {
+    let dir = tempfile::tempdir().unwrap();
+    let sd = spawn(&dir.path().join("board"), false);
+    let board = board(sd.port());
+    let store = FileStore::open(dir.path().join("store"));
+    keygen(&store, "notebook");
+    let anchors = dir.path().join("anchors");
+    claim(&board, &store, &anchors);
+    let (kept, paper) = anchor_file(&anchors, "a");
+    let placed = dir.path().join("placed.skep-key");
+    std::fs::copy(&kept, &placed).unwrap();
+    // L0 finder: no; L1 two boxes; L2 whose, the custody, the other paper.
+    let script = vec![Script::YesNo(false), Script::LabelDefault, Script::LabelDefault, Script::YesNo(true), Script::Custody(Custody::Placed), Script::YesNo(true)];
+    let mut person = Scripted::new(script);
+    let err = recover(&board, &store, &mut person, &options(placed.clone(), &paper.fingerprint.to_hex()[..8], dir.path())).expect_err("the lost paper's own copy");
+    assert!(err.to_string().contains("the LOST paper's own key"), "{err}");
+    assert!(person.said("SECRET custody of"), "{}", person.transcript.join("\n"));
+    assert!(!placed.exists(), "the placed copy is destroyed at the halt");
+    assert!(kept.is_file(), "the kept artifact stands");
+}
+
+/// AUTH-4.63: a retirement ends a session only where it names the key that
+/// OPENED it, so the `closed` face reads that key alone. On the race arm the
+/// walk retires the LOST paper itself at L6; a finder holding a fresh anchor
+/// then retires the SURVIVING paper under the walk, the race round's deposit
+/// meets `closed`, and the face names the surviving anchor and the finder's
+/// hand — never the lost paper the walk retired itself.
+/// MUTATION: with the face taking the first anchor of R0's set that now
+/// stands retired, it names the lost paper, whose fingerprint sorts first.
+#[test]
+fn the_closed_face_names_the_key_that_opened_the_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let sd = spawn(&dir.path().join("board"), false);
+    let board = board(sd.port());
+    let store = FileStore::open(dir.path().join("store"));
+    let device_fp = keygen(&store, "notebook");
+    let anchors = dir.path().join("anchors");
+    claim(&board, &store, &anchors);
+    // The LOST paper is the one whose fingerprint sorts first.
+    let (mut lost, mut surviving) = (anchor_file(&anchors, "a"), anchor_file(&anchors, "b"));
+    if surviving.1.fingerprint.to_hex() < lost.1.fingerprint.to_hex() {
+        std::mem::swap(&mut lost, &mut surviving);
+    }
+    let (surviving_path, surviving) = surviving;
+    let lost = lost.1;
+    // At L0's statement a device key is enrolled from the store's own
+    // device-key session — unaccounted at L0, so the race round runs.
+    let (early, device, extra) = (crate::common::board(sd.port()), key_file(&store, &device_fp).signer(), signer_from_seed(&[44; 32]));
+    let mut planted = false;
+    // At the race round's confirmation, a finder holding fresh anchor a
+    // retires the surviving paper.
+    let (late, fresh_a, surviving_fp) = (crate::common::board(sd.port()), dir.path().join("fresh-a"), surviving.fingerprint);
+    let script = vec![
+        Script::YesNo(true), // the finder: yes, the race arm
+        Script::LabelDefault,
+        Script::LabelDefault,
+        Script::YesNo(true),
+        Script::Custody(Custody::Kept),
+        Script::YesNo(false),
+        Script::Confirm(true), // L6: the lost paper
+        Script::Confirm(true), // the race round: the extra key
+    ];
+    let mut person = Hooked::new(script);
+    person.on_say = Box::new(move |rule, text| {
+        if rule == "AUTH-5.59 step 1" && text.starts_with("ENROLLED ANCHORS") && !planted {
+            planted = true;
+            let token = wire_session(&early, 1, &device);
+            wire_enroll(&early, &token, &device, "1.0.1.0.1", "1.0.1", &[Enrollment::new(HybridSigner::public_key(&extra).clone(), false, Some("extra".into())).unwrap()]).expect("the extra key");
+            early.session_close(&token).unwrap();
+        }
+    });
+    person.on_confirm = Box::new(move |i, _| {
+        if i == 1 {
+            let fresh = KeyFile::parse(&std::fs::read(&files_in(&fresh_a)[0]).unwrap()).unwrap().signer();
+            let token = wire_session(&late, 1, &fresh);
+            wire_retire(&late, &token, &fresh, "1.0.1.0.1", "1.0.1", &[surviving_fp]).expect("the finder retires the surviving paper");
+        }
+    });
+    let err = recover(&board, &store, &mut person, &options(surviving_path, &lost.fingerprint.to_hex()[..8], dir.path())).expect_err("the session died under the walk");
+    let text = err.to_string();
+    let fresh_fp = anchor_file(dir.path(), "fresh-a").1.fingerprint;
+    assert!(person.inner.said("race round 1"), "{}", person.inner.transcript.join("\n"));
+    assert!(text.contains("the anchor session died under the walk") && text.contains(&surviving.fingerprint.to_string()), "{text}");
+    assert!(text.contains(&fresh_fp.to_string()), "the finder's hand, from the records: {text}");
+    assert!(!text.contains(&lost.fingerprint.to_string()), "never the paper the walk retired itself: {text}");
+    let KeySetAnswer::Set(set) = board.key_set("1.0.1").unwrap() else { panic!() };
+    assert!(set.retired(&lost.fingerprint).is_some() && set.retired(&surviving.fingerprint).is_some());
 }

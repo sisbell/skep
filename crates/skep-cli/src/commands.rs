@@ -342,10 +342,7 @@ fn select_key(c: &Command, store: &FileStore, board: &Board, principal: Option<u
     };
     match sel {
         Ok(key) => Ok(key),
-        Err(StoreError::NoSelection { keys }) => {
-            let health = board.health()?;
-            Err(arm4_face(store, &keys, Mode::of(&health), health.local_trust()))
-        }
+        Err(StoreError::NoSelection { keys }) => Err(arm4_face(store, &keys, Mode::of(&board.health()?))),
         Err(e) => Err(store_halt(e)),
     }
 }
@@ -817,7 +814,7 @@ pub fn bind(c: &Command) -> i32 {
         }
     }
     // THE TWO ARMS, selected by `first_session`'s own reads (§2.2).
-    let reads = match FirstSessionReads::take(&board, &account, &key.fingerprint, Some(&store), &board.dialed) {
+    let reads = match FirstSessionReads::take(&board, &account, &key.fingerprint, Some(&store)) {
         Ok(r) => r,
         Err(h) => return halt(h),
     };
@@ -858,10 +855,8 @@ pub fn bind(c: &Command) -> i32 {
         talk("nothing is owed at this account's first signed session: no session is opened and no record is written");
     }
     let line = Binding::Enrollment { origin: board.dialed.clone(), principal, account: account.clone(), fingerprint: key.fingerprint };
-    match store.bind(&line) {
-        Ok(()) => {}
-        Err(StoreError::ReadOnly { line, .. }) => talk(format!("the store is read-only; record this binding line yourself: {line}")),
-        Err(e) => return halt(store_halt(e)),
+    if let Err(w) = store.bind(&line) {
+        talk(w.to_string());
     }
     data(format!("account {account}"));
     data(format!("principal {principal}"));

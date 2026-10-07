@@ -1,7 +1,8 @@
 //! THE CLAIM against the real daemon (`client.md` §4; the build brief §3):
 //! THE LOOP, RESUME BY READING at AUTH-5.56's boundaries, the residue halt
-//! that delegates nothing, and the persisted `new_id` read back — or, spent
-//! on another address, replaced.
+//! that delegates nothing, the persisted `new_id` read back — or, spent on
+//! another address, replaced — and the unclaimed board's `claim_first` met
+//! by its own face.
 
 use std::path::Path;
 
@@ -9,6 +10,7 @@ use skep_client::board::{acked_addr, frames, Answer, Board, KeySetAnswer, Opened
 use skep_client::ceremony::backup::{backup_moment, BackupOptions, Venue};
 use skep_client::ceremony::claim::{self, ClaimOutcome};
 use skep_client::ceremony::deposit::{deposit, Deposit, DepositKind};
+use skep_client::ceremony::handoff::{handoff, HandoffOptions};
 use skep_client::ceremony::handshake::{handshake, key_face, Site};
 use skep_client::derive::{precheck, principal_of, KeyDiagnosis, Mode};
 use skep_client::person::scripted::{Script, Scripted};
@@ -217,16 +219,14 @@ fn a_claim_interrupted_after_s4_resumes_at_s5_off_key_set() {
     assert_eq!(set.enrolled.len(), 3, "no second genesis");
 }
 
-/// S1–S5 by hand, through the library's own compositions: the claim lands
-/// under the store's one device key, and the tail — the agent space — does
-/// not run.
-fn claimed_without_its_tail(dir: &Path) -> (skepd::Skepd, Board, FileStore, Fingerprint) {
+/// S1–S4 by hand, through the library's own compositions: the genesis lands
+/// under the store's one device key, and the board stays UNCLAIMED.
+fn genesis_without_its_claim(dir: &Path) -> (skepd::Skepd, Board, FileStore, Fingerprint) {
     let sd = spawn(&dir.join("board"), false);
     let board = board(sd.port());
     let store = FileStore::open(dir.join("store"));
     let fp = keygen(&store, "notebook");
     let file = store.load(&store.key_path(&fp)).unwrap();
-    let device = file.signer();
     let boot = bare(&board, 0);
     let Answer::Document(v) = board.op(Some(&boot), &frames::delegate("1.0.1", 1, None)).unwrap() else { panic!() };
     assert_eq!(acked_addr(&v), Some("1.0.1"));
@@ -235,6 +235,15 @@ fn claimed_without_its_tail(dir: &Path) -> (skepd::Skepd, Board, FileStore, Fing
     assert_eq!(acked_addr(&v), Some("1.0.1.0.1"));
     let entries = vec![Enrollment::new(file.public.clone(), false, Some("notebook".into())).unwrap()];
     deposit(&board, &owner, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(entries), hand: None, id: "test.genesis" }).expect("genesis");
+    assert_eq!(board.health().unwrap().claimant(), None);
+    (sd, board, store, fp)
+}
+
+/// S1–S5 by hand: `genesis_without_its_claim`, then the claim under the
+/// store's one device key; the tail — the agent space — does not run.
+fn claimed_without_its_tail(dir: &Path) -> (skepd::Skepd, Board, FileStore, Fingerprint) {
+    let (sd, board, store, fp) = genesis_without_its_claim(dir);
+    let device = store.load(&store.key_path(&fp)).unwrap().signer();
     let signed = handshake(&board, Scope::Full, &device, 1, Site::Claim).expect("the claim's session");
     let Answer::Document(v) = signed.op(&frames::make_link("1.0.1.0.1", &["1.0.1"], &[], T_CLAIM, None)).unwrap() else { panic!() };
     assert!(acked_addr(&v).is_some(), "the claim: {v}");
@@ -286,4 +295,25 @@ fn a_persisted_id_spent_on_another_address_is_replaced_by_a_fresh_one() {
     assert_ne!(seat, 1, "never the spent id");
     assert_eq!(board.principal_prefix(1).unwrap().as_deref(), Some("1.0.1"), "the spent id's own account is untouched");
     assert_eq!(store.persisted_id(&board.dialed, "1.0.1.1").unwrap(), Some(seat), "the fresh id persisted, the newest line");
+}
+
+/// wire.md §Rejections: a walk keys on the token `credential_refused`
+/// carries in its DETAIL. Between its genesis and its claim a board admits a
+/// `delegate` from principal 0 alone (wire.md §Credential refusals' unclaimed
+/// arm), so the handoff's beat (a) there is refused `claim_first` — and
+/// meets the persist-first form's own face, exit 3, nothing delegated.
+/// MUTATION: keyed on the `code`, the arm never fires and the refusal
+/// surfaces raw, exit 1.
+#[test]
+fn a_delegate_refused_claim_first_meets_its_own_face() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (_sd, board, store, _fp) = genesis_without_its_claim(dir.path());
+    let mut person = Scripted::new(vec![]);
+    let opts = HandoffOptions { principal: 1, account: "1.0.1.2".into(), payload: None, anchor: None };
+    let err = handoff(&board, &store, &mut person, &opts).expect_err("the board is unclaimed");
+    let text = err.to_string();
+    assert_eq!(err.exit_code(), 3, "{text}");
+    assert!(text.contains("the board is unclaimed") && text.contains("re-run `skep claim`"), "{text}");
+    assert_eq!(principal_of(&board, "1.0.1.2").unwrap(), None, "nothing was delegated");
+    assert_eq!(board.health().unwrap().claimant(), None);
 }

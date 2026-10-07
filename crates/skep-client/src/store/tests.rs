@@ -206,12 +206,10 @@ fn a_read_only_store_warns_with_the_line() {
     let origin = Origin::parse("http://127.0.0.1:8642").unwrap();
     let fp = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
     let b = Binding::Enrollment { origin, principal: 1, account: "1.0.1".into(), fingerprint: fp };
-    let err = store.bind(&b).unwrap_err();
+    let warning = store.bind(&b).unwrap_err();
     fs::set_permissions(store.root(), fs::Permissions::from_mode(0o700)).unwrap();
-    match err {
-        StoreError::ReadOnly { line, .. } => assert_eq!(line, b.line()),
-        other => panic!("not a warning: {other}"),
-    }
+    assert_eq!(warning.line, b.line());
+    assert!(warning.to_string().ends_with(&format!("record this binding line yourself: {}", b.line())), "{warning}");
 }
 
 /// §3.5 as RULED (2026-10-04) — THE ONE-BINDING TEST ignores the agent

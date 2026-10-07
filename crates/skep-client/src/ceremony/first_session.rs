@@ -44,7 +44,6 @@ use crate::board::{acked_addr, frames, Answer, Board, KeySetAnswer, Rejection, S
 use crate::ceremony::handshake::{handshake, Session, Site};
 use crate::derive::{principal_of, walk_to_set, KeyDiagnosis};
 use crate::halt::Halt;
-use crate::origin::Origin;
 use crate::sign::{fresh_principal_id, Signer};
 use crate::store::{Binding, FileStore, KeyStore};
 
@@ -99,7 +98,7 @@ pub fn document_present(board: &Board, doc: &str) -> Result<bool, Halt> {
     let v = board.guest(&frames::span_set(doc))?;
     match Rejection::of(&v) {
         None => Ok(true),
-        Some(r) if r.code == "doc_not_registered" => Ok(false),
+        Some(r) if r.key() == "doc_not_registered" => Ok(false),
         Some(r) => Err(r.refused(&v)),
     }
 }
@@ -107,7 +106,7 @@ pub fn document_present(board: &Board, doc: &str) -> Result<bool, Halt> {
 impl FirstSessionReads {
     /// Take the reads for `account`, `key` the key op (3)'s session would
     /// open under; `store` where a persisted `new_id` may stand.
-    pub fn take(board: &Board, account: &str, key: &Fingerprint, store: Option<&FileStore>, origin: &Origin) -> Result<FirstSessionReads, Halt> {
+    pub fn take(board: &Board, account: &str, key: &Fingerprint, store: Option<&FileStore>) -> Result<FirstSessionReads, Halt> {
         let home = doc_1_of(account);
         let home_present = document_present(board, &home)?;
         let set_nonempty = match board.key_set(account)? {
@@ -123,7 +122,7 @@ impl FirstSessionReads {
         let space = first_child(account);
         let space_seat = principal_of(board, &space)?;
         let space_home_present = document_present(board, &doc_1_of(&space))?;
-        let persisted_new_id = persisted(store, origin, &space);
+        let persisted_new_id = persisted(board, store, &space);
         let key_opens_space = if set_nonempty {
             // AUTH-4.30 (i): the space opens BY REFERENCE to the set that
             // opens its account — its own set is empty at birth, and before
@@ -170,12 +169,14 @@ pub struct FirstSessionDone {
     pub warnings: Vec<String>,
 }
 
-/// The `new_id` a persist-first line cached for `account` at `origin`,
-/// where the store holds one. The line is a CACHE and never a source
-/// (§4.3): the seat itself is read off the board, so a store whose bindings
-/// cannot be read answers none, and the delegate goes out under a fresh id.
-pub(crate) fn persisted(store: Option<&FileStore>, origin: &Origin, account: &str) -> Option<u64> {
-    store.and_then(|s| s.persisted_id(origin, account).ok().flatten())
+/// The `new_id` a persist-first line cached for `account` at `board`, where
+/// the store holds one — read under the origin the board DIALS, the one
+/// [`delegate_persisted`] writes every such line under. The line is a CACHE
+/// and never a source (§4.3): the seat itself is read off the board, so a
+/// store whose bindings cannot be read answers none, and the delegate goes
+/// out under a fresh id.
+pub(crate) fn persisted(board: &Board, store: Option<&FileStore>, account: &str) -> Option<u64> {
+    store.and_then(|s| s.persisted_id(&board.dialed, account).ok().flatten())
 }
 
 /// THE COMPOSITION over `reads` the caller took ahead of `session`; `key`
@@ -232,7 +233,7 @@ pub fn first_session(
             Answer::Closed => return Err(closed()),
             Answer::Document(v) => match Rejection::of(&v) {
                 None => done.minted_space_home = true,
-                Some(r) if r.code == "not_owner" || r.code == "not_an_account" => {
+                Some(r) if matches!(r.key(), "not_owner" | "not_an_account") => {
                     return Err(Halt::face(
                         format!("the agents' home at {} is not this seat's to mint", reads.space),
                         format!("{}: op (1) did not land as read (AUTH-5.87's own resume)", r.token()),
@@ -264,7 +265,7 @@ pub fn mint_home(board: &Board, reads: &FirstSessionReads, session: &Session<'_>
     };
     match Rejection::of(&v) {
         None => Ok(true),
-        Some(r) if r.detail.as_deref() == Some("mint_home_public") => {
+        Some(r) if r.key() == "mint_home_public" => {
             Err(Halt::face("the home mint was refused as a draft", r.token(), "this client passes `published: true`; this is its own fault"))
         }
         Some(r) => Err(r.refused(&v)),
@@ -349,8 +350,8 @@ pub(crate) fn delegate_persisted(
     let mut persist = |principal: u64| {
         let Some(store) = store else { return };
         let line = Binding::Enrollment { origin: board.dialed.clone(), principal, account: address.to_string(), fingerprint: *key };
-        if let Err(e) = store.bind(&line) {
-            warnings.push(format!("the binding line for {address} could not be written ({e}); record it yourself: {}", line.line()));
+        if let Err(w) = store.bind(&line) {
+            warnings.push(w.to_string());
         }
     };
     let new_id = match persisted {
@@ -379,7 +380,7 @@ pub(crate) fn delegate_persisted(
     let Some(r) = Rejection::of(&v) else {
         return Err(Halt::face("the delegate answered a shape this client does not know", v.to_string(), "this is a fault in this client or the board"));
     };
-    match r.code.as_str() {
+    match r.key() {
         "not_authorized" => match principal_of(board, address)? {
             Some(seat) => {
                 persist(seat);

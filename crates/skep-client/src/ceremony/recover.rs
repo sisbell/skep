@@ -42,14 +42,14 @@ use crate::ceremony::deposit::{deposit, Deposit, DepositHalt, DepositKind, Depos
 use crate::ceremony::enumerate::{by_reference_cone, enroll_links_homed, head_closure};
 use crate::ceremony::first_session::{first_session, mint_home, FirstSessionReads};
 use crate::ceremony::handshake::{handshake, Session, Site};
-use crate::ceremony::import::{dispose, import_anchor, no_artifact_face, whose_account, ImportContext, ImportOutcome, ImportedAnchor, Whose};
+use crate::ceremony::import::{import_anchor, no_artifact_face, whose_account, ImportContext, ImportOutcome, ImportedAnchor, Whose};
 use crate::ceremony::preview::{declined, preview, Preview, PreviewSite, Previewed, Row};
 use crate::ceremony::reads::{r0, A4Cell, Reads};
 use crate::derive::records::{credential_records, Hand, Records};
 use crate::halt::Halt;
 use crate::person::{Confirmation, Consent, Person, Public, Question};
 use crate::sheet::{group_hex, render_inert, Facts};
-use crate::store::{store_halt, Binding, FileStore, KeyFacts, KeyStore, StoreError};
+use crate::store::{store_halt, Binding, FileStore, KeyFacts, KeyStore};
 
 mod loss;
 
@@ -218,51 +218,54 @@ fn targets(person: &mut dyn Person, set: &KeySet, records: &Records, held: &[Fin
 /// ONE retirement under the anchor session: `preview(removed)`, the typed
 /// answer, `DepositKind::Retire` under the anchor's hand.
 #[allow(clippy::too_many_arguments)]
-fn retire_one(board: &Board, person: &mut dyn Person, session: &Session<'_>, hand: &HybridSigner, reads: &Reads, set: &KeySet, records: &Records, fp: &Fingerprint, held: &[Fingerprint], since: bool, site: PreviewSite) -> Result<bool, Halt> {
+fn retire_one(board: &Board, person: &mut dyn Person, session: &Session<'_>, hand: &HybridSigner, reads: &Reads, set: &KeySet, records: &Records, fp: &Fingerprint, held: &[Fingerprint], since: bool, site: PreviewSite) -> Result<(), Halt> {
     let closure = head_closure(board, person, &reads.walk.set_account, fp)?;
     let rows = [Row::of(fp, set, Some(records), held, None, since)];
-    let own_board = matches!(reads.cell, A4Cell::LoopbackNotebook | A4Cell::BindOverrideNotebook);
-    match preview(person, &Preview { account: &reads.walk.set_account, set, rows: &rows, closure: &closure, held, site, own_board })? {
+    match preview(person, &Preview { account: &reads.walk.set_account, set, rows: &rows, closure: &closure, held, site, own_board: reads.cell.own_board() })? {
         Previewed::Confirmed => {}
         Previewed::Declined => return Err(declined("retirement")),
         Previewed::Unwritable => return Err(Halt::face("the retirement would empty the set", "`would_empty` armed: unreachable under an anchor session, the anchor standing enrolled", "this is this client's frame")),
     }
     let id = format!("recover.retire.{}", &fp.to_hex()[..8]);
     match deposit(board, &session.token, &Deposit { home: &reads.home, subject: &reads.walk.set_account, kind: DepositKind::Retire(vec![*fp]), hand: Some(hand), id: &id }) {
-        Ok(DepositOutcome::Deposited { .. }) => Ok(true),
+        Ok(DepositOutcome::Deposited { .. }) => Ok(()),
         Ok(DepositOutcome::Committed { reason }) => {
             say(person, "AUTH-5.17", format!("reconciled: {reason}"));
-            Ok(false)
+            Ok(())
         }
-        Err(DepositHalt::SessionClosed(_)) => Err(closed_arm(board, reads)),
+        Err(DepositHalt::SessionClosed(_)) => Err(closed_arm(board, reads, &session.fingerprint)),
         Err(other) => Err(other.into()),
     }
 }
 
-/// The `closed` path's ONE ARM PER E2 TRIGGER (AUTH-5.27; AUTH-4.63), taken
-/// where a deposit under the anchor session met the death signal
-/// ([`DepositHalt::SessionClosed`]): the anchor retired by another hand
-/// (AUTH-5.77, the hand from the records), the daemon's restart (AUTH-5.31;
-/// its re-open meeting a block is the block's arm), the SEEDED arm arising
-/// only by reference — derived from `key_set`, `/health` and the records,
-/// never a silent re-import.
-fn closed_arm(board: &Board, reads: &Reads) -> Halt {
-    let anchor_fp = reads.walk.set.enrolled.iter().find(|e| e.anchor).map(|e| e.fingerprint);
-    if let (Ok(records), Some(afp)) = (credential_records(board, &reads.walk.set_account, &[]), anchor_fp) {
-        if let Ok(KeySetAnswer::Set(now)) = board.key_set(&reads.walk.set_account) {
-            if let Some(r) = now.retired.iter().find(|r| r.anchor && reads.walk.set.enrolled(&r.fingerprint).is_some()) {
-                let hand = records.retirement_of(&r.fingerprint).and_then(|rec| match (&rec.hand, rec.position) {
+/// The `closed` path's ONE ARM PER E2 TRIGGER (AUTH-5.27), taken where a
+/// deposit under the anchor session met the death signal
+/// ([`DepositHalt::SessionClosed`]). A retirement ends a session only where it
+/// names the key that OPENED it (AUTH-4.63), so the one key this face reads is
+/// `session_key`: retired, it was ANOTHER hand's act, the hand named from the
+/// records (AUTH-5.77) — another anchor standing retired says nothing of this
+/// session, and the loss arm retires the lost paper itself. Otherwise the
+/// daemon's restart (AUTH-5.31; its re-open meeting a block is the block's
+/// arm) — derived from `key_set` and the records, never a silent re-import.
+/// The SEEDED trigger arises only by reference, and is no arm here: both of
+/// this walk's arms run R0 as walks that enroll, which halts a by-reference
+/// account, so the session acts as the account whose set it is.
+fn closed_arm(board: &Board, reads: &Reads, session_key: &Fingerprint) -> Halt {
+    if let Ok(KeySetAnswer::Set(now)) = board.key_set(&reads.walk.set_account) {
+        if now.retired(session_key).is_some() {
+            let hand = credential_records(board, &reads.walk.set_account, &[]).ok().and_then(|records| {
+                let rec = records.retirement_of(session_key)?;
+                match (&rec.hand, rec.position) {
                     (Hand::Key(h), Some(at)) => Some(format!("retired at position {at} by {h} ({})", records.label_of(h).map(|l| render_inert(&l)).unwrap_or_default())),
                     _ => None,
-                });
-                return Halt::face(
-                    format!("the anchor session died under the walk: the anchor {} was retired by ANOTHER hand", r.fingerprint),
-                    hand.unwrap_or_else(|| "the hand and the position were not readable at this board — no hand is asserted (AUTH-5.77's no-hand form)".into()),
-                    "AUTH-5.77: no act on this key opens anything; import another anchor of this account where one stands enrolled",
-                );
-            }
+                }
+            });
+            return Halt::face(
+                format!("the anchor session died under the walk: the anchor {session_key} was retired by ANOTHER hand"),
+                hand.unwrap_or_else(|| "the hand and the position were not readable at this board — no hand is asserted (AUTH-5.77's no-hand form)".into()),
+                "AUTH-5.77: no act on this key opens anything; import another anchor of this account where one stands enrolled",
+            );
         }
-        let _ = afp;
     }
     Halt::face(
         "the anchor session died under the walk",
@@ -415,7 +418,7 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
     let cx = ImportContext { board, store, account: &account, principal: opts.principal, set_account: &reads.walk.set_account, set: &reads.walk.set, records: &reads.records, own: &own, anchor_path: opts.anchor.as_deref(), whose, cell: &reads.cell };
     let anchor: ImportedAnchor = match import_anchor(person, &cx)? {
         ImportOutcome::Anchor(a) => *a,
-        ImportOutcome::Neither => return Err(no_artifact_face(person, &cx)?),
+        ImportOutcome::Neither => return Err(no_artifact_face(person, &cx)),
     };
     // R2: THE ANCHOR SESSION (FULL), the seed held for the records.
     let session = handshake(board, Scope::Full, &anchor.signer, opts.principal, Site::Recover)?;
@@ -423,7 +426,7 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
     let mut retired: Vec<Fingerprint> = Vec::new();
     let mut warnings = Vec::new();
     let result = (|| -> Result<Recovered, Halt> {
-        let fs_reads = FirstSessionReads::take(board, &account, &anchor.fingerprint, Some(store), &board.dialed)?;
+        let fs_reads = FirstSessionReads::take(board, &account, &anchor.fingerprint, Some(store))?;
         // R3's CLASS ANSWER FIRST: an agent's ⇒ the containment act.
         if whose == Whose::Agent {
             say(
@@ -541,7 +544,7 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
                         say(person, "AUTH-5.17", format!("R3 stands: {reason}"));
                     }
                 }
-                Err(DepositHalt::SessionClosed(_)) => return Err(closed_arm(board, &reads)),
+                Err(DepositHalt::SessionClosed(_)) => return Err(closed_arm(board, &reads, &session.fingerprint)),
                 Err(other) => return Err(other.into()),
             }
         }
@@ -556,9 +559,7 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
     })();
     // R5: the mirror's close — the session, and the placed copy destroyed.
     let _ = session.close();
-    dispose(person, &anchor);
-    let seed_gone = anchor.signer;
-    drop(seed_gone);
+    anchor.dispose(person);
     say(person, "AUTH-5.54 step 3", "the anchor session is closed and the imported seed dropped (the Ed25519 half wiped; the ML-DSA half's wipe is open work)");
     let mut done = result?;
     if done.containment {
@@ -566,10 +567,8 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
     }
     // R6: the binding, the three facts, the stolen arm's read and report.
     let line = Binding::Enrollment { origin: board.dialed.clone(), principal: opts.principal, account: account.clone(), fingerprint: device.fingerprint };
-    match store.bind(&line) {
-        Ok(()) => {}
-        Err(StoreError::ReadOnly { line: text, .. }) => done.warnings.push(format!("the store is read-only; record this binding line yourself: {text}")),
-        Err(e) => return Err(store_halt(e)),
+    if let Err(w) = store.bind(&line) {
+        done.warnings.push(w.to_string());
     }
     done.binding_line = Some(line.line());
     if stolen {

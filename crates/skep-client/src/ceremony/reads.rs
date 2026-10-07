@@ -9,8 +9,9 @@
 //! BY REFERENCE ⇒ at a walk that ENROLLS, the halt naming where the act is
 //! made (AUTH-6.37; the twin of `not_holder_retirement`'s redirect,
 //! AUTH-3.56). The A4 cell (AUTH-5.60 step 4's table; AUTH RES-174's rider)
-//! is derived here too, off the pair and the origin dialed, for the report's
-//! and the operator sentence's sake.
+//! is derived here too — the venue off the pair and the origin dialed, the
+//! rider's giver off its own walk — for the report's and the operator
+//! sentence's sake.
 
 use skep_identity::{Fingerprint, PublicKey};
 
@@ -37,24 +38,39 @@ pub enum A4Cell {
 }
 
 impl A4Cell {
-    /// The cell off `/health`'s pair and the origin dialed (§4a.2 R6): a
-    /// loopback dial with only loopback origins configured is the
-    /// loopback-bound notebook; a loopback dial with a configured
-    /// non-loopback origin is the bind-override notebook; any other dial is
-    /// a served board. An account that hangs beneath another account's set
-    /// — a handoff's recipient — takes the rider.
-    pub fn of(board: &Board, health: &Health, account: &str, walk: &Walk) -> A4Cell {
+    /// The cell `account` stands in (§4a.2 R6): an account that hangs beneath
+    /// another account's set — a handoff's recipient — takes RES-174's rider,
+    /// the GIVER read by AUTH-5.21's walk from the account above (a fault of
+    /// that read halts, never a guessed giver); every other account stands in
+    /// its board's [`A4Cell::venue`].
+    pub fn of(board: &Board, health: &Health, account: &str, walk: &Walk) -> Result<A4Cell, Halt> {
         if let Some(parent) = parent_account(account) {
             if !walk.set.is_empty() && walk.set_account == account {
-                let giver = walk_to_set(board, &parent).map(|w| w.set_account).unwrap_or(parent);
-                return A4Cell::HandoffRecipient { giver };
+                let giver = walk_to_set(board, &parent)?.set_account;
+                return Ok(A4Cell::HandoffRecipient { giver });
             }
         }
+        Ok(A4Cell::venue(board, health))
+    }
+
+    /// The board's VENUE, off `/health`'s pair and the origin dialed, no read
+    /// made: a loopback dial with only loopback origins configured is the
+    /// loopback-bound notebook; a loopback dial with a configured
+    /// non-loopback origin is the bind-override notebook; any other dial is a
+    /// served board.
+    pub fn venue(board: &Board, health: &Health) -> A4Cell {
         if board.dialed.names_loopback_host() {
             let overridden = health.origins().iter().any(|o| crate::origin::Origin::parse(o).is_some_and(|x| !x.names_loopback_host()));
             return if overridden { A4Cell::BindOverrideNotebook } else { A4Cell::LoopbackNotebook };
         }
         A4Cell::Served
+    }
+
+    /// The board is the person's own — a notebook, loopback-bound or
+    /// bind-override, whose volume copy is theirs to take; a recipient's
+    /// board is never their own.
+    pub fn own_board(&self) -> bool {
+        matches!(self, A4Cell::LoopbackNotebook | A4Cell::BindOverrideNotebook)
     }
 }
 
@@ -141,6 +157,6 @@ pub fn r0(board: &Board, person: &mut dyn Person, principal: u64, enrolls: bool,
     );
     let records = credential_records(board, &walk.set_account, own)?;
     say(person, "AUTH-5.68 (cost)", format!("read {} credential records at {}", records.records.len(), walk.set_account));
-    let cell = A4Cell::of(board, &health, &account, &walk);
+    let cell = A4Cell::of(board, &health, &account, &walk)?;
     Ok(Reads { account, walk, set_principal, home, records, cell })
 }

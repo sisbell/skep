@@ -31,7 +31,7 @@ use serde_json::Value;
 use skep_identity::{canonical_record, parse_record_value, BoardTerm, Enrollment, Fingerprint, PublicKey};
 
 use crate::address::{document_of, parent_account};
-use crate::board::{frames, AtAnswer, Board, ChangeKey, KeySet, KeySetAnswer, T_CLAIM, T_ENROLL, T_RETIRE};
+use crate::board::{answers, frames, AtAnswer, Board, ChangeKey, KeySet, KeySetAnswer, T_CLAIM, T_ENROLL, T_RETIRE};
 use crate::halt::Halt;
 use crate::sign::record_frame;
 
@@ -40,6 +40,18 @@ use crate::sign::record_frame;
 pub enum Kind {
     Enroll,
     Retire,
+}
+
+impl Kind {
+    /// The record class's type address — the deposit's declaration, its
+    /// link's type and the record frame's `ty` row alike (AUTH-5.4;
+    /// PUB-2.63).
+    pub fn type_address(self) -> &'static str {
+        match self {
+            Kind::Enroll => T_ENROLL,
+            Kind::Retire => T_RETIRE,
+        }
+    }
 }
 
 /// THE HAND that wrote a record, as this read names it.
@@ -215,28 +227,23 @@ pub fn compare_whole_set(records: &Records, current: &KeySet, held: &[Held]) -> 
     Some(WholeSet { differences, later })
 }
 
-/// THE TRIAL: the first candidate under whose own row both halves of `blob`
-/// verify over `frame` (AUTH-4.32's rule, as `skep_signature::verify` holds
-/// it) — the frame re-composed per candidate since `alg` names the signing
-/// key's token.
-pub fn trial<'a>(
-    board: BoardTerm,
-    home_account: &str,
-    home: &str,
-    ty: &str,
-    to: &[&str],
-    sigless: &[u8],
-    blob: &[u8],
-    candidates: impl IntoIterator<Item = (&'a Fingerprint, &'a PublicKey)>,
-) -> Option<Fingerprint> {
-    for (fp, key) in candidates {
-        let row = key.sig_alg_row();
-        let Some(frame) = record_frame(row.token, board, home_account, home, ty, to, sigless) else { return None };
-        if skep_signature::verify(row.tag, key, &frame, blob).is_ok() {
-            return Some(*fp);
+impl Record {
+    /// THE TRIAL: the first candidate under whose own row both halves of
+    /// `blob` verify over this record's `record` frame (AUTH-4.32's rule, as
+    /// `skep_signature::verify` holds it) — the frame composed from the
+    /// record's own home, home account, kind, subject and sig-less body, and
+    /// re-composed per candidate since `alg` names the signing key's token.
+    pub fn signed_by<'a>(&self, term: BoardTerm, blob: &[u8], candidates: impl IntoIterator<Item = (&'a Fingerprint, &'a PublicKey)>) -> Option<Fingerprint> {
+        let to = [self.subject.as_str()];
+        for (fp, key) in candidates {
+            let row = key.sig_alg_row();
+            let frame = record_frame(row.token, term, &self.home_account, &self.home, self.kind.type_address(), &to, self.sigless.as_bytes())?;
+            if skep_signature::verify(row.tag, key, &frame, blob).is_ok() {
+                return Some(*fp);
+            }
         }
+        None
     }
-    None
 }
 
 /// One `/op-at` probe of a link's presence.
@@ -251,7 +258,7 @@ fn probe(board: &Board, at: u64, frame: &Value, link: &str) -> Result<Probe, Hal
     for attempt in 0..8 {
         match board.op_at(None, at, frame)? {
             AtAnswer::Document(v) => {
-                let present = v["addrs"].as_array().is_some_and(|a| a.iter().any(|x| x.as_str() == Some(link)));
+                let present = answers::addrs(&v).contains(&link);
                 return Ok(if present { Probe::Present } else { Probe::Absent });
             }
             AtAnswer::HistoryReclaimed { floor } => return Ok(Probe::Reclaimed { floor }),
@@ -353,51 +360,27 @@ fn set_opening_at(board: &Board, account: &str, at: u64) -> Result<Option<KeySet
 
 /// A home's I→V inversion (AUTH-2.114): every content I-address of the
 /// document, keyed to its V-ordinal, off `retrieve_doc_v_span_set` and
-/// `image`.
+/// `image` — empty where the I-map does not read whole, so the home's
+/// records read as unreadable and never as another position's bytes.
 fn inversion(board: &Board, home: &str) -> Result<HashMap<String, u64>, Halt> {
-    let mut map = HashMap::new();
-    let set = board.guest(&frames::span_set(home))?;
-    let extent: u64 = set["set"]
-        .as_array()
-        .and_then(|s| s.iter().find(|x| x["start"].as_str() == Some("1.1")))
-        .and_then(|s| s["width"].as_str()?.rsplit('.').next()?.parse().ok())
-        .unwrap_or(0);
+    let extent = answers::content_extent(&board.guest(&frames::span_set(home))?);
     if extent == 0 {
-        return Ok(map);
+        return Ok(HashMap::new());
     }
     let image = board.guest(&frames::image(home, 1, extent))?;
-    let mut ordinal: u64 = 1;
-    for run in image["runs"].as_array().into_iter().flatten() {
-        let (Some(start), Some(width)) = (run["i_start"].as_str(), run["width"].as_str().and_then(|w| w.parse::<u64>().ok())) else { continue };
-        let Some((prefix, last)) = start.rsplit_once('.') else { continue };
-        let Ok(first) = last.parse::<u64>() else { continue };
-        for k in 0..width {
-            map.insert(format!("{prefix}.{}", first + k), ordinal);
-            ordinal += 1;
-        }
-    }
-    Ok(map)
+    Ok(answers::i_map(&image).unwrap_or_default().into_iter().collect())
 }
 
 /// The record atom's bytes at `atom` in `home`, through the inversion.
 fn atom_bytes(board: &Board, home: &str, inv: &HashMap<String, u64>, atom: &str) -> Result<Option<Vec<u8>>, Halt> {
     let Some(ordinal) = inv.get(atom) else { return Ok(None) };
-    let v = board.guest(&frames::retrieve_v(home, *ordinal, 1))?;
-    let Some(item) = v["items"].as_array().and_then(|i| i.first()) else { return Ok(None) };
-    if let Some(text) = item["atom"].as_str() {
-        return Ok(Some(text.as_bytes().to_vec()));
-    }
-    if let Some(hex) = item["atom_hex"].as_str() {
-        return Ok(crate::hex::decode(hex));
-    }
-    Ok(None)
+    Ok(answers::first_atom(&board.guest(&frames::retrieve_v(home, *ordinal, 1))?))
 }
 
 /// The deposit's link addresses of `ty` naming `account`, in address order.
 fn links_of(board: &Board, ty: &str, account: &str) -> Result<Vec<String>, Halt> {
     let v = board.guest(&frames::find_links_ftt(ty, account))?;
-    let mut links: Vec<String> =
-        v["addrs"].as_array().into_iter().flatten().filter_map(|a| a.as_str().map(str::to_string)).collect();
+    let mut links: Vec<String> = answers::addrs(&v).into_iter().map(str::to_string).collect();
     links.sort_by(address_order);
     Ok(links)
 }
@@ -425,7 +408,7 @@ pub fn credential_records(board: &Board, account: &str, own: &[(Fingerprint, Pub
         if let Some(claimant) = health.claimant() {
             let frame = frames::find_links_ftt_from(T_CLAIM, claimant);
             let v = board.guest(&frame)?;
-            if let Some(link) = v["addrs"].as_array().and_then(|a| a.first()).and_then(Value::as_str) {
+            if let Some(link) = answers::addrs(&v).first().copied() {
                 let (pos, f) = position_of(board, &frame, link, head)?;
                 claim_entry = pos;
                 floor = floor.or(f);
@@ -436,7 +419,8 @@ pub fn credential_records(board: &Board, account: &str, own: &[(Fingerprint, Pub
     let mut inversions: HashMap<String, HashMap<String, u64>> = HashMap::new();
     let mut owners: HashMap<String, String> = HashMap::new();
     let mut records = Vec::new();
-    for (kind, ty) in [(Kind::Enroll, T_ENROLL), (Kind::Retire, T_RETIRE)] {
+    for kind in [Kind::Enroll, Kind::Retire] {
+        let ty = kind.type_address();
         for link in links_of(board, ty, account)? {
             let Some(home) = document_of(&link) else { continue };
             let lv = board.guest(&frames::read_link(&link))?;
@@ -444,11 +428,10 @@ pub fn credential_records(board: &Board, account: &str, own: &[(Fingerprint, Pub
             // account ABOVE this one (its subtree covering this address)
             // answers too: the record is this account's only where the link's
             // own `to` names it (AUTH-2.113's residence read is per subject).
-            let to = lv["link"]["slots"].as_array().and_then(|s| s.get(1)).and_then(Value::as_array).and_then(|t| t.first()).and_then(|span| span["start"].as_str());
-            if to != Some(account) {
+            if answers::link_to(&lv) != Some(account) {
                 continue;
             }
-            let Some(atom) = lv["link"]["slots"].as_array().and_then(|s| s.first()).and_then(|from| from.as_array()).and_then(|f| f.first()).and_then(|span| span["start"].as_str()) else { continue };
+            let Some(atom) = answers::link_from(&lv) else { continue };
             if !inversions.contains_key(&home) {
                 inversions.insert(home.clone(), inversion(board, &home)?);
             }
@@ -530,17 +513,12 @@ pub fn credential_records(board: &Board, account: &str, own: &[(Fingerprint, Pub
 /// THE HAND of one record: a signed record's by the trial, an unsigned one's
 /// by `/changes.key` at its position; unreadable where the inputs are not.
 fn hand_of(board: &Board, record: &Record, term: Option<BoardTerm>, own: &[(Fingerprint, PublicKey)], base: Option<u64>) -> Result<Hand, Halt> {
-    let ty = match record.kind {
-        Kind::Enroll => T_ENROLL,
-        Kind::Retire => T_RETIRE,
-    };
-    let to = [record.subject.as_str()];
     match &record.sig {
         Some(sig_hex) => {
             let Some(term) = term else { return Ok(Hand::Unreadable("the board has no H.1, so no record frame can be composed".into())) };
             let Some(blob) = crate::hex::decode(sig_hex) else { return Ok(Hand::NoKeyVerifies) };
             // This store's own keys first.
-            if let Some(fp) = trial(term, &record.home_account, &record.home, ty, &to, record.sigless.as_bytes(), &blob, own.iter().map(|(f, k)| (f, k))) {
+            if let Some(fp) = record.signed_by(term, &blob, own.iter().map(|(f, k)| (f, k))) {
                 return Ok(Hand::Key(fp));
             }
             let Some(base) = base else { return Ok(Hand::Unreadable("below the retention floor: the record's base is not readable at this board".into())) };
@@ -549,14 +527,14 @@ fn hand_of(board: &Board, record: &Record, term: Option<BoardTerm>, own: &[(Fing
             };
             let candidates: Vec<(&Fingerprint, &PublicKey)> =
                 set.enrolled.iter().filter(|e| !record.anchor_grade || e.anchor).map(|e| (&e.fingerprint, &e.key)).collect();
-            Ok(match trial(term, &record.home_account, &record.home, ty, &to, record.sigless.as_bytes(), &blob, candidates) {
+            Ok(match record.signed_by(term, &blob, candidates) {
                 Some(fp) => Hand::Key(fp),
                 None => Hand::NoKeyVerifies,
             })
         }
         None => match record.position {
             None => Ok(Hand::Unreadable("below the retention floor: the position does not answer, and the hand with it".into())),
-            Some(p) => Ok(match board.changes_key(None, p)? {
+            Some(p) => Ok(match board.changes_key(p)? {
                 ChangeKey::Key(fp) => Hand::Key(fp),
                 ChangeKey::Bare => Hand::Bare,
                 ChangeKey::System => Hand::System,

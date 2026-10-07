@@ -28,7 +28,7 @@
 
 use skep_identity::{BoardTerm, Fingerprint, PublicKey, SigAlgRow};
 
-use crate::derive::records::{trial, Kind, Records};
+use crate::derive::records::{Kind, Records};
 
 /// One admission of the FILTERED table: a key, from the record that admitted
 /// it, until the record that retired it — positions where known.
@@ -89,10 +89,6 @@ impl FilteredTable {
                 table.inert.push((r.link.clone(), "the `sig` is no hybrid blob's hex".into()));
                 continue;
             };
-            let ty = match r.kind {
-                Kind::Enroll => crate::board::T_ENROLL,
-                Kind::Retire => crate::board::T_RETIRE,
-            };
             // The table as it stands at this record's base — record order
             // being position order where positions are known.
             let candidates: Vec<(Fingerprint, PublicKey)> = table
@@ -101,16 +97,7 @@ impl FilteredTable {
                 .filter(|a| a.until.is_none() && (!r.anchor_grade || a.anchor))
                 .map(|a| (a.fingerprint, a.key.clone()))
                 .collect();
-            let hand = trial(
-                board,
-                &r.home_account,
-                &r.home,
-                ty,
-                &[records.account.as_str()],
-                r.sigless.as_bytes(),
-                &blob,
-                candidates.iter().map(|(f, k)| (f, k)),
-            );
+            let hand = r.signed_by(board, &blob, candidates.iter().map(|(f, k)| (f, k)));
             match hand {
                 None => table.inert.push((r.link.clone(), "signed by no key of this account's filtered set".into())),
                 Some(_) => match r.kind {

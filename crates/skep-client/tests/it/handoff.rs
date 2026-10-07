@@ -143,7 +143,7 @@ fn the_door_delegates_idempotently_the_recipient_accepts_the_giver_seeds_and_bin
     // setup act, `inc(1.0.1.2, 1)` seated.
     let device = key_file(&recipient, &taken.device);
     recipient.bind(&Binding::Enrollment { origin: board.dialed.clone(), principal: seat, account: "1.0.1.2".into(), fingerprint: taken.device }).unwrap();
-    let reads = FirstSessionReads::take(&board, "1.0.1.2", &taken.device, Some(&recipient), &board.dialed).unwrap();
+    let reads = FirstSessionReads::take(&board, "1.0.1.2", &taken.device, Some(&recipient)).unwrap();
     assert!(reads.mint_owed() && reads.setup_owed());
     let session = handshake(&board, Scope::Content, &device.signer(), seat, Site::Tail).unwrap();
     let done = first_session(&board, &reads, &session, &device.signer(), Some(&recipient)).unwrap();
@@ -224,7 +224,7 @@ fn a_depth_two_genesis_is_homed_in_the_giving_accounts_doc_one_and_the_decline_a
     // The hosted cascade runs no agent space: the setup act first (`bind`'s
     // arm), so the next delegable address is the giver's own `1.0.1.2`.
     let lone = key_file(&giver2, &fp2).signer();
-    let reads = FirstSessionReads::take(&board2, "1.0.1", &fp2, Some(&giver2), &board2.dialed).unwrap();
+    let reads = FirstSessionReads::take(&board2, "1.0.1", &fp2, Some(&giver2)).unwrap();
     let setup = handshake(&board2, Scope::Content, &lone, 1, Site::Tail).unwrap();
     first_session(&board2, &reads, &setup, &lone, Some(&giver2)).unwrap();
     setup.close().unwrap();

@@ -14,7 +14,10 @@
 //! AUTH-5.39), AUTH-5.41 where both exist, the keep-the-papers line KEYED
 //! PER SITE (AUTH-5.44; §4.2 step 10) — and ONLY THEN the caller's genesis
 //! (step 6). A file-path read-back that fails RE-RUNS FROM STEP 1 under a
-//! fresh pair, the bad file destroyed (§4.1 S3).
+//! fresh pair, the bad file destroyed (§4.1 S3). Steps 1–3 alone — the
+//! generate, the export and the DROP — are `export_pair`, and statement (b)
+//! alone is `two_places`: the loss arm CITES the order with those two and
+//! inherits nothing else (§4a.6 L3).
 
 use std::path::{Path, PathBuf};
 
@@ -48,12 +51,6 @@ pub enum Venue {
     /// label rides the genesis into the GIVER's doc 1, AUTH-5.42), the line
     /// AUTH-5.44's HANDOFF form verbatim, the org-door artifact line DROPPED.
     Handoff { facts: Facts, operator: String },
-    /// `recover --anchor-lost`'s L3 (`client.md` §4a.6): AUTH-5.54 steps 1–3
-    /// CITED, not inherited — the statements NOT re-rendered save (b) in its
-    /// file-venue form, the boxes answered at L1 (given as `labels`), the
-    /// export and the DROP, and NO read-back here: L5 re-imports each anchor
-    /// from its artifact after L4's enroll ([`reimport_anchor`]).
-    LossArm { facts: Facts },
 }
 
 /// The moment's inputs.
@@ -107,35 +104,20 @@ fn abandoned(e: Abandoned) -> Halt {
 /// this run takes and to the venue.
 fn statements(person: &mut dyn Person, venue: &Venue, paper: bool) {
     let operator = match venue {
-        Venue::Notebook { .. } | Venue::LossArm { .. } => String::new(),
+        Venue::Notebook { .. } => String::new(),
         Venue::DoorSide => " — on the board you are joining another party runs the daemon: it can read what you write there before you publish it and withhold or delay it; anything it writes in your name carries no signature of yours, and the app you install shows it as unsigned; it never learns your keys and can never act as you anywhere else; on that board it can still retire your keys and continue as you, which every copy that checks signatures will show was not you; your way back is a fresh account, and the board is portable (AUTH-5.43's create-org sibling; AUTH-4.54)".to_string(),
         Venue::Handoff { operator, .. } => format!(" — {operator}"),
     };
-    // The LOSS arm re-renders statement (b) ALONE (§4a.6 L3): this person
-    // has just lost an anchor and is one artifact from AUTH-5.16's
-    // both-unheld state, which is the exact loss (b) is about.
-    if !matches!(venue, Venue::LossArm { .. }) {
-        say(
-            person,
-            "AUTH-5.54 (a)",
-            format!(
-                "(a) THIS KEY SET IS THIS IDENTITY AND THERE IS NO RESET: no one holds a re-key power over this account and nothing \
-                 in the protocol restores it to a person who holds none of its keys — there is no reset to ask an operator, host, \
-                 officer or registrar for, the rules giving none of them a channel{operator}."
-            ),
-        );
-    }
-    let b = if paper {
-        "(b) PRINT TWO, KEEP THEM APART: the pair is two papers so that one place that burns, floods or is searched cannot take \
-         both — two papers, kept in two places ONCE THIS IS FINISHED; you will need both here in a moment."
-    } else {
-        "(b) TWO FILES, TWO PLACES YOU CONTROL: the pair is two files so that one place that burns, floods or is searched cannot \
-         take both — two files, in two places you control ONCE THIS IS FINISHED; you will need both here in a moment."
-    };
-    say(person, "AUTH-5.54 (b)", b);
-    if matches!(venue, Venue::LossArm { .. }) {
-        return;
-    }
+    say(
+        person,
+        "AUTH-5.54 (a)",
+        format!(
+            "(a) THIS KEY SET IS THIS IDENTITY AND THERE IS NO RESET: no one holds a re-key power over this account and nothing \
+             in the protocol restores it to a person who holds none of its keys — there is no reset to ask an operator, host, \
+             officer or registrar for, the rules giving none of them a channel{operator}."
+        ),
+    );
+    two_places(person, paper);
     say(
         person,
         "AUTH-5.54 (c)",
@@ -147,12 +129,27 @@ fn statements(person: &mut dyn Person, venue: &Venue, paper: bool) {
     );
 }
 
+/// Statement (b) (AUTH-5.54 (b)), keyed to the path the run takes — said at
+/// the moment's head, and ALONE by the loss arm before each pair it exports
+/// (§4a.6 L3): a person who has just lost an anchor is one artifact from
+/// AUTH-5.16's both-unheld state, which is the exact loss (b) is about.
+pub(crate) fn two_places(person: &mut dyn Person, paper: bool) {
+    let b = if paper {
+        "(b) PRINT TWO, KEEP THEM APART: the pair is two papers so that one place that burns, floods or is searched cannot take \
+         both — two papers, kept in two places ONCE THIS IS FINISHED; you will need both here in a moment."
+    } else {
+        "(b) TWO FILES, TWO PLACES YOU CONTROL: the pair is two files so that one place that burns, floods or is searched cannot \
+         take both — two files, in two places you control ONCE THIS IS FINISHED; you will need both here in a moment."
+    };
+    say(person, "AUTH-5.54 (b)", b);
+}
+
 /// The anchor box (AUTH-5.42's anchor copy): names the SHEET, never where
 /// you keep it; a default DERIVED PER RUN — host, date, a per-run token
 /// (§4.2 step 2); the domain test at the box, re-asked on a refusal.
 fn anchor_box(person: &mut dyn Person, venue: &Venue, which: &str, default: String) -> Result<Label, Halt> {
     let consequence = match venue {
-        Venue::Notebook { .. } | Venue::LossArm { .. } => "at this notebook the name is readable by anything on the machine (AUTH-5.85's reader clause)",
+        Venue::Notebook { .. } => "at this notebook the name is readable by anything on the machine (AUTH-5.85's reader clause)",
         Venue::DoorSide => "at the door this payload serves the name rides onto a public thread, approved or DENIED, forever",
         Venue::Handoff { .. } => "at this door the name rides the genesis record into the GIVER's own doc 1, on a board you may not be able to read, under a byline you can never correct (AUTH-5.42)",
     };
@@ -244,7 +241,7 @@ pub fn backup_moment(person: &mut dyn Person, venue: &Venue, opts: &BackupOption
         labels.push(label);
     }
     let facts = match venue {
-        Venue::Notebook { facts } | Venue::Handoff { facts, .. } | Venue::LossArm { facts } => Some(facts),
+        Venue::Notebook { facts } | Venue::Handoff { facts, .. } => Some(facts),
         Venue::DoorSide => None,
     };
     for attempt in 0..3 {
@@ -254,13 +251,11 @@ pub fn backup_moment(person: &mut dyn Person, venue: &Venue, opts: &BackupOption
         }
     }
     // The command that re-runs the moment is its VENUE's: the claim, the
-    // door-side form, the recipient's beat. The LOSS arm stops at the DROP and
-    // never reads back here (its re-import is L5's), so it never exhausts.
+    // door-side form, the recipient's beat.
     let rerun = match venue {
         Venue::Notebook { .. } => "`skep claim`",
         Venue::DoorSide => "`skep keygen --anchors`",
         Venue::Handoff { .. } => "`skep accept`",
-        Venue::LossArm { .. } => "`skep recover --anchor-lost`",
     };
     Err(Halt::face(
         "the backup moment could not complete",
@@ -269,9 +264,17 @@ pub fn backup_moment(person: &mut dyn Person, venue: &Venue, opts: &BackupOption
     ))
 }
 
-/// Steps 3–10 for one pair; `None` where the file path's read-back failed
-/// and the moment re-runs.
-fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels: &[Label], facts: Option<&Facts>, attempt: usize) -> Result<Option<BackupOutcome>, Halt> {
+/// AUTH-5.54 STEPS 1–3 for one pair — §4.2's steps 3–6: generate the pair,
+/// each seed born in its file's own zeroing value; EXPORT each anchor to its
+/// own destination, the ladder words at its path and the one-place sentence
+/// where both land in one place; the sheets under `--paper`; the DROP; the
+/// paper path's DISMISSAL. Answers the artifacts, each file standing and
+/// read back by nothing yet — a print, under `--paper`, unverified. The
+/// RE-IMPORT is the caller's: the moment's own read-back, or the loss arm's
+/// [`reimport_anchor`] after its enroll, which CITES this order and inherits
+/// nothing else of the moment (§4a.6 L3). `opts.labels`, `host` and `date`
+/// are the boxes' and unread here: `labels` names the pair.
+pub(crate) fn export_pair(person: &mut dyn Person, opts: &BackupOptions, labels: &[Label], facts: Option<&Facts>) -> Result<BackupOutcome, Halt> {
     // Step 3: generate the pair, each seed born in its file's own zeroing
     // value — no copy of it outlives step 5's DROP.
     let mut files: Vec<KeyFile> = labels.iter().map(|l| KeyFile::new(Seed::fresh(), true, Some(l.as_str().to_string()), facts)).collect();
@@ -312,66 +315,61 @@ fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels
     if opts.paper {
         person.dismiss();
     }
-    // THE LOSS ARM stops at the DROP: the re-import is L5's, run from each
-    // artifact AFTER L4's enroll with a probe handshake (AUTH-5.59 step 3),
-    // so the artifacts are answered now, read back by nothing yet.
-    if matches!(venue, Venue::LossArm { .. }) {
-        let anchors = paths
-            .iter()
-            .enumerate()
-            .map(|(i, path)| AnchorArtifact {
-                public: publics[i].0.clone(),
-                fingerprint: publics[i].1,
-                label: labels[i].clone(),
-                file: Some(path.clone()),
-                print_verified: false,
-                print_unverified: opts.paper,
-            })
-            .collect();
-        return Ok(Some(BackupOutcome { anchors, one_place }));
-    }
+    let anchors = paths
+        .into_iter()
+        .zip(publics)
+        .zip(labels)
+        .map(|((path, (public, fingerprint)), label)| AnchorArtifact {
+            public,
+            fingerprint,
+            label: label.clone(),
+            file: Some(path),
+            print_verified: false,
+            print_unverified: opts.paper,
+        })
+        .collect();
+    Ok(BackupOutcome { anchors, one_place })
+}
+
+/// §4.2's steps 3–10 for one pair: [`export_pair`], then the RE-IMPORT, the
+/// offer and the per-site line; `None` where the file path's read-back
+/// failed — every file the pair wrote destroyed — and the moment re-runs.
+fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels: &[Label], facts: Option<&Facts>, attempt: usize) -> Result<Option<BackupOutcome>, Halt> {
+    let BackupOutcome { anchors: exported, one_place } = export_pair(person, opts, labels, facts)?;
     // Steps 7–9: RE-IMPORT, fingerprint first, the client-local verify.
     let mut anchors = Vec::new();
-    for (i, path) in paths.iter().enumerate() {
-        let (public, fp) = &publics[i];
-        let mut print_verified = false;
-        let mut print_unverified = false;
-        let mut from_file = true;
+    for (i, mut artifact) in exported.iter().cloned().enumerate() {
+        let path = artifact.file.clone().expect("an exported anchor's file stands");
         if opts.paper {
-            match retype_from_print(person, &labels[i], i, fp)? {
-                Some(_) => {
-                    print_verified = true;
-                    from_file = false;
-                }
-                None => print_unverified = true,
-            }
+            let passed = retype_from_print(person, &artifact.label, i, &artifact.fingerprint)?.is_some();
+            artifact.print_verified = passed;
+            artifact.print_unverified = !passed;
         }
-        if from_file {
+        if !artifact.print_verified {
             // The file read back from the path it wrote — the disk channel.
-            if read_back_from_file(path, public, fp).is_none() {
+            if read_back_from_file(&path, &artifact.public, &artifact.fingerprint).is_none() {
                 say(person, "§4.1 S3", format!("the anchor file {} did not read back as the key it names; it is destroyed (never a verified artifact) and the moment re-runs (attempt {})", path.display(), attempt + 1));
-                for p in &paths {
-                    let _ = std::fs::remove_file(p);
+                for written in exported.iter().filter_map(|a| a.file.as_ref()) {
+                    let _ = std::fs::remove_file(written);
                 }
                 return Ok(None);
             }
         }
         // Step 9: AUTH-5.41 where BOTH exist and the print passed — offer to
         // destroy the file, never the act unasked.
-        let mut file = Some(path.clone());
-        if print_verified {
+        if artifact.print_verified {
             let destroy = person
-                .yes_no(Public(Question { text: format!("the print of anchor {} passed its re-type and is the KEPT artifact; destroy the file {} and keep the print? (AUTH-5.40)", labels[i], path.display()) }))
+                .yes_no(Public(Question { text: format!("the print of anchor {} passed its re-type and is the KEPT artifact; destroy the file {} and keep the print? (AUTH-5.40)", artifact.label, path.display()) }))
                 .map_err(abandoned)?;
             if destroy {
-                let _ = std::fs::remove_file(path);
-                file = None;
+                let _ = std::fs::remove_file(&path);
+                artifact.file = None;
             }
         }
-        if print_unverified {
-            say(person, "AUTH-5.41", format!("anchor {}: the print is UNVERIFIED and the file {} is the verified artifact; a verified artifact is never destroyed in favor of an unverified one", labels[i], path.display()));
+        if artifact.print_unverified {
+            say(person, "AUTH-5.41", format!("anchor {}: the print is UNVERIFIED and the file {} is the verified artifact; a verified artifact is never destroyed in favor of an unverified one", artifact.label, path.display()));
         }
-        anchors.push(AnchorArtifact { public: public.clone(), fingerprint: *fp, label: labels[i].clone(), file, print_verified, print_unverified });
+        anchors.push(artifact);
     }
     // Step 10: the keep-the-papers line, KEYED PER SITE (AUTH-5.44).
     let noun = if opts.paper { "papers" } else { "anchor files" };
@@ -414,7 +412,6 @@ fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels
                 facts.account
             ),
         ),
-        Venue::LossArm { .. } => {}
     }
     Ok(Some(BackupOutcome { anchors, one_place }))
 }

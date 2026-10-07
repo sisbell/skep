@@ -15,12 +15,11 @@
 //! is said as the walks count it (§4a.2 R6: the accounts walked are counted
 //! on stderr while it runs, through the `Person`).
 
-use serde_json::Value;
 use skep_identity::Fingerprint;
 
 use super::say;
 use crate::address::{doc_1_of, document_of};
-use crate::board::{frames, Board, KeySet, KeySetAnswer, T_ENROLL};
+use crate::board::{answers, frames, Board, KeySet, KeySetAnswer, T_ENROLL};
 use crate::derive::principal_of;
 use crate::halt::Halt;
 use crate::person::Person;
@@ -54,13 +53,7 @@ pub struct Closure {
 /// The `to` slot's first address of a link, off `read_link`.
 pub fn link_subject(board: &Board, link: &str) -> Result<Option<String>, Halt> {
     let lv = board.guest(&frames::read_link(link))?;
-    Ok(lv["link"]["slots"]
-        .as_array()
-        .and_then(|s| s.get(1))
-        .and_then(Value::as_array)
-        .and_then(|to| to.first())
-        .and_then(|span| span["start"].as_str())
-        .map(str::to_string))
+    Ok(answers::link_to(&lv).map(str::to_string))
 }
 
 /// THE ENROLL LINKS homed in `home` — every genesis (and holder enrollment)
@@ -68,7 +61,7 @@ pub fn link_subject(board: &Board, link: &str) -> Result<Option<String>, Halt> {
 pub fn enroll_links_homed(board: &Board, home: &str) -> Result<Vec<(String, String)>, Halt> {
     let v = board.guest(&frames::find_links_ftt_home(T_ENROLL, home))?;
     let mut out = Vec::new();
-    for link in v["addrs"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+    for link in answers::addrs(&v) {
         if document_of(link).as_deref() != Some(home) {
             continue;
         }

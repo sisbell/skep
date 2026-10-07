@@ -66,8 +66,7 @@ pub fn enroll(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     let key = match store.select(&KeySelector::Binding { origin: &board.dialed, principal: Some(opts.principal) }, Purpose::Sign) {
         Ok(key) => key,
         Err(StoreError::NoSelection { keys }) => {
-            let health = board.health()?;
-            return Err(arm4_face(store, &keys, Mode::of(&health), health.local_trust()));
+            return Err(arm4_face(store, &keys, Mode::of(&board.health()?)));
         }
         Err(e) => return Err(store_halt(e)),
     };
@@ -91,7 +90,7 @@ pub fn enroll(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     // THE FULL SESSION this command opens.
     let session = handshake(board, Scope::Full, &*signer, opts.principal, Site::Session)?;
     // `first_session` AHEAD of the insert.
-    let reads = FirstSessionReads::take(board, &account, &key.fingerprint, Some(store), &board.dialed)?;
+    let reads = FirstSessionReads::take(board, &account, &key.fingerprint, Some(store))?;
     let done = first_session(board, &reads, &session, &*signer, Some(store))?;
     let mut warnings = done.warnings.clone();
     if done.minted_home {

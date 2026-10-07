@@ -29,7 +29,10 @@
 //!   every token-bearing dial through ONE `authed` exchange, the one reader
 //!   of `Skepd-Session: closed` (P28), every token-free read through
 //!   `Board::guest`, which halts on that signal, and `H.1`'s pair read once
-//!   per board (D13); its child `frames` spells every frame this crate sends.
+//!   per board (D13); its child `frames` spells every frame this crate
+//!   sends, its child `answers` decodes every read answer the crate reads,
+//!   and `Rejection::key` is the one token a refusal is dispatched on
+//!   (wire.md §Rejections).
 //! * [`derive`](mod@derive) — the pure derivations over board reads: the
 //!   MODE off `/health`'s pair (AUTH-5.86), AUTH-5.65's pre-check, the
 //!   three-state key diagnosis at the set AUTH-5.21's walk reaches
@@ -50,8 +53,9 @@
 //!   the sheet's field list (AUTH-5.38).
 //! * [`store`] — the `KeyStore` seam and `FileStore` (§3), the seed's
 //!   custodian: a lookup answers a key's public facts and a stored key signs
-//!   through `KeyStore::signer` alone (§3a); and the halts the store's
-//!   refusals render as (AUTH-5.67).
+//!   through `KeyStore::signer` alone (§3a); the halts the store's refusals
+//!   render as (AUTH-5.67); and `Unappended`, the warning a binding line
+//!   that cannot be appended answers (§3.7).
 //! * [`person`] — the `Person` seam: the human moments in three classes,
 //!   SECRET, CONSENT and PUBLIC, as types — a SECRET payload printing no key
 //!   material; behind `test-hooks`, `person::scripted`, the scripted person

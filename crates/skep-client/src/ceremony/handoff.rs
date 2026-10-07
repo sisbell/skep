@@ -38,7 +38,7 @@ use crate::ceremony::deposit::{deposit, Deposit, DepositHalt, DepositKind, Depos
 use crate::ceremony::enumerate::by_reference_cone;
 use crate::ceremony::first_session::{delegate_persisted, document_present, persisted, Delegated};
 use crate::ceremony::handshake::{handshake, key_face, Session, Site};
-use crate::ceremony::import::{dispose, import_anchor, ImportContext, ImportOutcome, ImportedAnchor, Whose};
+use crate::ceremony::import::{import_anchor, ImportContext, ImportOutcome, ImportedAnchor, Whose};
 use crate::ceremony::payload::{compare_payload, parse_payload, payload_text};
 use crate::ceremony::reads::A4Cell;
 use crate::derive::records::credential_records;
@@ -112,8 +112,7 @@ fn g0(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &HandoffO
     let key = match store.select(&KeySelector::Binding { origin: &board.dialed, principal: Some(opts.principal) }, Purpose::Sign) {
         Ok(key) => key,
         Err(StoreError::NoSelection { keys }) => {
-            let health = board.health()?;
-            return Err(arm4_face(store, &keys, Mode::of(&health), health.local_trust()));
+            return Err(arm4_face(store, &keys, Mode::of(&board.health()?)));
         }
         Err(e) => return Err(store_halt(e)),
     };
@@ -148,7 +147,7 @@ fn g0(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &HandoffO
     }
     let grade = if walk.set.has_anchor() { Grade::Anchor } else { Grade::Device };
     let health = board.health()?;
-    let cell = A4Cell::of(board, &health, &giver_account, &walk);
+    let cell = A4Cell::of(board, &health, &giver_account, &walk)?;
     say(
         person,
         "AUTH RES-187",
@@ -171,7 +170,7 @@ fn g2(board: &Board, store: &FileStore, person: &mut dyn Person, g: &G0, session
         return Ok((seat, true));
     }
     let mut warnings = Vec::new();
-    let cached = persisted(Some(store), &board.dialed, account);
+    let cached = persisted(board, Some(store), account);
     let outcome = delegate_persisted(board, session, Some(store), cached, account, &g.giver_key.fingerprint, &format!("handoff.delegate.{account}"), &mut warnings);
     for w in warnings {
         say(person, "§4.3", w);
@@ -335,10 +334,9 @@ pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
     })();
     // G6: the mirror's close.
     let _ = session.close();
-    if let Some(a) = &anchor {
-        dispose(person, a);
+    if let Some(a) = anchor {
+        a.dispose(person);
     }
-    drop(anchor);
     let out = result?;
     say(
         person,

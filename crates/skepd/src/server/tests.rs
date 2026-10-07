@@ -493,3 +493,23 @@ fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_emp
         assert!(lines[0].contains(needle), "{needle:?} missing from {:?}", lines[0]);
     }
 }
+
+/// THE CADENCE's BYTE BOUND (jw-R1): a quarter of the newest checkpoint's
+/// size, never below the 24 MiB floor — the bound the media floor's
+/// guarantee rests on (`MediaGate`'s `FLOOR_BYTES` card). No checkpoint yet,
+/// and an empty one, are the floor alone; the crossover is at four times the
+/// floor, one byte of share past it raising the bound; a large board's bound
+/// is its share.
+#[test]
+fn the_cadence_byte_bound_is_a_quarter_of_the_newest_checkpoint_and_never_below_its_floor() {
+    let mib = 1024 * 1024u64;
+    for (newest, bound) in [
+        (None, 24 * mib),
+        (Some(0), 24 * mib),
+        (Some(96 * mib), 24 * mib),
+        (Some(96 * mib + 4), 24 * mib + 1),
+        (Some(400 * mib), 100 * mib),
+    ] {
+        assert_eq!(cadence_bytes_for(newest).get(), bound, "newest checkpoint {newest:?}");
+    }
+}

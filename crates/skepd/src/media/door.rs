@@ -83,6 +83,13 @@
 //!    register M-I5 (b)). A cell the lease arm ADMITS in the rebuild window
 //!    is admitted. The one arm of the armed set that is not PERMANENT.
 //!
+//! EVERY VALUE IS JUDGED (M-I1 (a): the binding is per cell, at every mint):
+//! a write carrying several values naming the kind is answered by the first
+//! refusal any of them earns — in V-order at an `insert`, in placement order
+//! at a shot — the target's arm and the owner's asked once, ahead of every
+//! value's own verdict. A cell admitted beside one refused admits nothing for
+//! it, and the write lands whole or not at all.
+//!
 //! THE KIND COLUMN (`media.md` item 4; the blind-document investigation §5
 //! (i); s6-D3): the arms above are read PER KIND. The picture's cell meets
 //! every arm. THE BLIND DOCUMENT's cell (`media/blind.rs`) meets arms 1, 2
@@ -313,9 +320,11 @@ pub(crate) fn media_door(
 /// caller owns it — PUB-6.36's slot 1 ahead of everything here, as every
 /// producer ahead of the store keeps it, so an unregistered or foreign
 /// `doc` answers the store's own `doc_not_registered` or `not_owner` and is
-/// never told whether it is published. The first value naming the kind, in
-/// V-order, decides; a value that names it not is read and passed over at
-/// the cost of one byte compare.
+/// never told whether it is published. EVERY value naming the kind is
+/// judged (M-I1 (a): the binding is per cell, and a cell bound beside one
+/// that is not binds nothing for it), in V-order, the first refusal
+/// answering; a value that names it not is passed over at the cost of one
+/// byte compare.
 fn insert_arm(
     world: &World,
     doc: &Address,
@@ -327,14 +336,15 @@ fn insert_arm(
     if !(m3.is_registered_document(doc) && Caller::Principal(principal).is_owner(m3, doc)) {
         return None;
     }
-    let named = values.iter().find_map(names_the_kind)?;
+    let mut named = values.iter().filter_map(names_the_kind).peekable();
+    named.peek()?;
     // Arm 1 — the TARGET's refusal first, whatever the value's form and
     // whatever the declaration: M5's own publication read, projected to the
     // document (PUB-2.15), on the registered address the line above found.
     if published_target(m3, doc) {
         return Some(MediaRefusal::PublishedTarget);
     }
-    value_arm(named, media_gate, principal)
+    named.find_map(|named| value_arm(named, media_gate, principal))
 }
 
 /// The `publish` arms (2, 3, 4): read only where M5's own admission of the
@@ -344,8 +354,10 @@ fn insert_arm(
 /// door, in the store's own words, and the door reads no value the caller
 /// may not read. The draft-native runs are walked as the commit will class
 /// them ([`Shot::address_form`], M5's own classing), each position's value
-/// read by `value_at`, the accessor the re-insert reads with; the first
-/// value naming the kind decides. Then the owner test, then the form.
+/// read by `value_at`, the accessor the re-insert reads with; EVERY value
+/// naming the kind is judged (M-I1 (a)) — the owner test once, at the
+/// first, then each value's own verdict in placement order, the first
+/// refusal answering.
 fn publish_arm(
     world: &World,
     doc: &Address,
@@ -379,9 +391,13 @@ fn publish_arm(
     if shot.reinserted_values() > Nat::from(MAX_REINSERTED_VALUES) {
         return None;
     }
+    // Every draft-native value naming the kind is judged (M-I1 (a)): the
+    // owner test once, at the first such value, ahead of every value's own
+    // verdict; then each value in placement order, the first refusal
+    // answering.
     let content = world.content();
-    let mut named = None;
-    'runs: for segment in shot.address_form(doc) {
+    let mut owner_tested = false;
+    for segment in shot.address_form(doc) {
         let PlacedSegment::Value(run) = segment else {
             continue; // a window: a reference, read from nowhere
         };
@@ -393,18 +409,22 @@ fn publish_arm(
         for a in run.addrs() {
             // An address holding no value is the store's `dangling_source`;
             // there is nothing to read.
-            if let Some(found) = content.value_at(a.tumbler()).and_then(names_the_kind) {
-                named = Some(found);
-                break 'runs;
+            let Some(named) = content.value_at(a.tumbler()).and_then(names_the_kind) else {
+                continue;
+            };
+            // Arm 2 — the owner test, ω exact, the same predicate as `doc`'s.
+            if !owner_tested {
+                if !caller.is_owner(world.m3(), &draft) {
+                    return Some(MediaRefusal::NotOwner { draft });
+                }
+                owner_tested = true;
+            }
+            if let Some(refusal) = value_arm(named, media_gate, principal) {
+                return Some(refusal);
             }
         }
     }
-    let named = named?;
-    // Arm 2 — the owner test, ω exact, the same predicate as `doc`'s.
-    if !caller.is_owner(world.m3(), &draft) {
-        return Some(MediaRefusal::NotOwner { draft });
-    }
-    value_arm(named, media_gate, principal)
+    None
 }
 
 #[cfg(test)]

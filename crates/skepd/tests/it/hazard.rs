@@ -51,8 +51,8 @@ use common::{
     acked_addr, acked_at, blob_hex, board_term, cell_of, ceremony_before_the_claim, claim_board,
     claim_frame, claimed, create_frame, device_key, expect_resp, head_position, json, op,
     open_session, open_signed_session, seeded_bytes, spawn_configured, spawn_unclaimed,
-    typed_link_frame, verdict, BLOB_UPLOAD, CLAIMANT_ACCOUNT, CLAIMANT_DOC1, CLAIMANT_PRINCIPAL,
-    HEAD_MEMBER_1, T_ENROLL, T_GRANT,
+    typed_link_frame, verdict, WalkUnheld, BLOB_UPLOAD, CLAIMANT_ACCOUNT, CLAIMANT_DOC1,
+    CLAIMANT_PRINCIPAL, HEAD_MEMBER_1, T_ENROLL, T_GRANT,
 };
 use serde_json::Value;
 use skep_blobs::Step;
@@ -181,6 +181,19 @@ fn await_the_index(d: &Daemon, ctx: &str) {
         );
         thread::sleep(Duration::from_millis(5));
     }
+}
+
+/// [`timed_daemon_open`], then [`await_the_index`], under the walk's fence
+/// ([`WalkUnheld`]) from before the open until the walk completes: the
+/// suite's walk-holding tests are threads of this process under plain
+/// `cargo test`, and the fence keeps their hold off this reopen's walk — so
+/// a `FINDING (wedge…)` from the wait names this daemon's walk and never
+/// another test's hold.
+fn timed_daemon_open_with_the_index(dir: &Path, ctx: &str) -> Daemon {
+    let _unheld = WalkUnheld::take();
+    let d = timed_daemon_open(dir, ctx);
+    await_the_index(&d, ctx);
+    d
 }
 
 /// Route one request through the socket-free router; the event stream is
@@ -1162,8 +1175,7 @@ fn e_blob_trial(trial: u64) -> (usize, usize) {
 
     // Judge: reopen in-process.
     let ctx = format!("E′ trial {trial} (seed 0xB000+{trial}), {} acks", acked.len());
-    let d = timed_daemon_open(&dir, &ctx);
-    await_the_index(&d, &ctx);
+    let d = timed_daemon_open_with_the_index(&dir, &ctx);
     let token = route_session(&d, CLAIMANT_PRINCIPAL);
     let (deposits, uploads) = deposit_read(&d, &token);
     for (hex, bytes) in &acked {
@@ -1341,8 +1353,7 @@ fn h_a_crash_inside_the_blob_finish_reopens_to_what_the_order_promises() {
 
         // THE REOPEN, judged.
         let ctx = format!("H′ {step}");
-        let d = timed_daemon_open(&dir, &ctx);
-        await_the_index(&d, &ctx);
+        let d = timed_daemon_open_with_the_index(&dir, &ctx);
         let token = route_session(&d, CLAIMANT_PRINCIPAL);
         let file = dir.join("blobs").join("blake3").join(&hex);
         let (deposits, uploads) = deposit_read(&d, &token);
@@ -1573,8 +1584,7 @@ fn p_a_crash_inside_the_pruners_pass_reopens_to_an_index_and_a_store_that_agree(
 
     // THE REOPEN, judged.
     let ctx = "P′";
-    let d = timed_daemon_open(&dir, ctx);
-    await_the_index(&d, ctx);
+    let d = timed_daemon_open_with_the_index(&dir, ctx);
     assert_eq!(asides(), 0, "FINDING (P′): the reopen removes the aside the crash left");
     let token = route_session(&d, CLAIMANT_PRINCIPAL);
     let [referenced, lapsed_a, lapsed_b, live] = prune_crash_files();

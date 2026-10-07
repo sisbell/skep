@@ -328,4 +328,41 @@ mod tests {
         assert_eq!(cadence.wait(Duration::from_secs(3600)), Wake::Stop, "stopped stays stopped");
         assert_eq!(PINNED_DESIGNATIONS, ["blake3"]);
     }
+
+    /// THE PASS's (a) and the hold (clause (5)): an expired upload a stream
+    /// still holds is left to that stream's end — its partial and its record
+    /// untouched by the pass — and, the hold released, the next pass retires
+    /// it.
+    #[test]
+    fn an_expired_upload_a_stream_holds_is_left_to_that_streams_end() {
+        use skep_blobs::HashFunction;
+        use skep_namespace::PrincipalId;
+
+        use super::super::index::Rebuild;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let gate = MediaGate::open(dir.path()).expect("the store opens");
+        gate.index().complete(Rebuild {
+            values: 0,
+            cells: 0,
+            halts: 0,
+            walk: Duration::ZERO,
+            parse: Duration::ZERO,
+        });
+        let now = gate.now_ms();
+        let key = MediaGate::key(PrincipalId(1));
+        let interval = Duration::from_millis(1_000);
+        let record = gate
+            .store()
+            .create_upload(&key, HashFunction::Blake3, 10, interval, now)
+            .expect("an upload");
+        gate.advance_clock_ms(2_000);
+        let hold = gate.claim(record.id).expect("a fresh upload is claimable");
+        let pass_now = || pass(&gate, || ()).expect("a pass").expect("the index is ready");
+        assert_eq!(pass_now().expired_partials, 0, "held: left to its stream");
+        assert!(gate.store().expired_uploads(gate.now_ms()).iter().any(|r| r.id == record.id));
+        drop(hold);
+        assert_eq!(pass_now().expired_partials, 1, "released: the next pass retires it");
+        assert!(gate.store().expired_uploads(gate.now_ms()).is_empty(), "…its record with it");
+    }
 }

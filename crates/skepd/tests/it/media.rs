@@ -7,15 +7,15 @@
 //! at the daemon's parser; and every order that stood ahead of the door
 //! stands.
 //!
-//! A DRAFT HOLDING A CELL exists on no board this build serves — every
-//! `insert` of one is refused here — so the shot cells seed one the way a
-//! pre-fence journal holds one: the daemon stopped, the kernel opened on its
-//! own directory, the value written through M5 as the owner's principal with
-//! no daemon between, the daemon respawned on the recovered journal. That is
-//! the board the fence exists for (the record's §The publication seam: "A
-//! CELL COMMITTED BEFORE THE BINDING IS NEVER BOUND"), and the one the
-//! deployment obligation says is never served — here it is served to prove
-//! what the door does with it.
+//! A DRAFT HOLDING AN UNBOUND CELL exists on no board this build serves —
+//! every `insert` of one is refused here — so the shot cells seed one the
+//! way a pre-fence journal holds one: the daemon stopped, the kernel opened
+//! on its own directory, the value written through M5 as the owner's
+//! principal with no daemon between, the daemon respawned on the recovered
+//! journal. That is the board the fence exists for (the record's §The
+//! publication seam: "A CELL COMMITTED BEFORE THE BINDING IS NEVER BOUND"),
+//! and the one the deployment obligation says is never served — here it is
+//! served to prove what the door does with it.
 //!
 //! AND THE CELL INDEX (`media.md` Op inventory 1; the register M-I5 (b),
 //! M-I6 (a); the ruling ms5-R): the readiness refusal at exactly its three
@@ -89,6 +89,19 @@ fn atom_frame(doc: &str, ordinal: u64, atom: Value, deposit: Option<&str>) -> St
 
 fn cell_frame(doc: &str, ordinal: u64, text: &str, deposit: Option<&str>) -> String {
     atom_frame(doc, ordinal, json!({"atom": text}), deposit)
+}
+
+/// An `insert` of SEVERAL composite values — each of `atoms` its own
+/// `{"atom"}` form, in order — into `doc` at `ordinal`.
+fn atoms_frame(doc: &str, ordinal: u64, atoms: &[&str]) -> String {
+    let values: Vec<Value> = atoms.iter().map(|atom| json!({ "atom": atom })).collect();
+    json!({
+        "op": "insert",
+        "doc": doc,
+        "at": {"subspace": "1", "ordinal": ordinal.to_string()},
+        "values": values,
+    })
+    .to_string()
 }
 
 fn address(s: &str) -> Address {
@@ -259,8 +272,8 @@ fn a_cell_inserted_into_a_draft_is_refused_in_p10s_form_and_nothing_commits() {
         let v = op(port, Some(token), &cell_frame(&draft, 1, &unknown_schema_value(), None));
         assert_token(&v, "insert", "unknown_cell_schema");
     }
-    // A cell among prose: the first value naming the kind decides, and the
-    // prose beside it lands nowhere either.
+    // A cell among prose: every value naming the kind is judged, and the
+    // prose beside a refused one lands nowhere either.
     let v = op(
         port,
         Some(&bare),
@@ -350,6 +363,93 @@ fn a_cell_whose_hash_the_caller_deposited_under_its_own_lease_is_admitted() {
     sd.shutdown();
 }
 
+/// M-I1 (a) — EVERY VALUE IS JUDGED AT THE INSERT: the binding is per cell,
+/// at every mint, so an `insert` carrying several values naming the kind is
+/// answered by the first refusal ANY of them earns, in V-order, whatever
+/// stands ahead of it — and a cell admitted beside one refused admits
+/// nothing for it. The caller's own live deposit beside a cell it never
+/// deposited, ahead of it and behind it; beside another principal's
+/// deposit; a blind cell beside an unbound picture; a blind cell beside a
+/// form this board does not read; the caller's own deposit beside one whose
+/// file is gone — each refused by the refused value's own token, and
+/// nothing commits: the head stands, the draft stays empty, no cell enters
+/// the index. The twin — a blind cell beside the caller's own live deposit
+/// — is admitted, and its picture's cell entered at the commit.
+#[test]
+fn every_value_naming_the_kind_is_judged_at_the_insert() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let pictures = [41, 42, 43, 44].map(|seed| seeded_bytes(5_000, seed));
+    let [own, theirs, never, gone] = &pictures;
+    let stranger = seat_stranger(port, 975);
+    put_whole(port, &stranger.session, theirs);
+    put_whole(port, &bare, own);
+    put_whole(port, &bare, gone);
+    std::fs::remove_file(dir.path().join("blobs").join("blake3").join(blob_hex(gone))).expect("the file removed");
+    let [own, theirs, never, gone] = [own, theirs, never, gone].map(|bytes| cell_of(bytes, 5_000));
+    let blind = blind_cell_of(&[0xcd; 32]);
+    let unknown = unknown_schema_value();
+    let draft = owner_draft(port, &bare);
+    let before = head_position(port);
+    for (atoms, token, why) in [
+        ([&own, &never], "unbound_cell", "an admitted cell ahead of one never deposited"),
+        ([&never, &own], "unbound_cell", "and behind it"),
+        ([&own, &theirs], "unbound_cell", "beside another principal's deposit"),
+        ([&blind, &theirs], "unbound_cell", "a blind cell beside an unbound picture"),
+        ([&blind, &unknown], "unknown_cell_schema", "a blind cell beside a form this board does not read"),
+        ([&own, &gone], "lease_lapsed", "beside a deposit whose file is gone"),
+    ] {
+        let atoms = atoms.map(String::as_str);
+        let v = op(port, Some(&bare), &atoms_frame(&draft, 1, &atoms));
+        assert_eq!(verdict(&v), format!("credential_refused:{token}"), "{why}: {v}");
+        assert_token(&v, "insert", token);
+    }
+    assert_eq!(head_position(port), before, "nothing commits");
+    assert_eq!(content_extent(port, Some(&bare), &draft), 0, "the draft stays empty");
+    assert_eq!(sd.daemon().index_counts(), (0, 0, 0), "no cell entered the index");
+    // The twin: every value admitted, the write lands whole.
+    expect_resp(&op(port, Some(&bare), &atoms_frame(&draft, 1, &[blind.as_str(), own.as_str()])), "ack_addr");
+    assert_eq!(content_extent(port, Some(&bare), &draft), 2);
+    assert_eq!(sd.daemon().index_counts(), (1, 1, 0), "the picture's cell entered at the commit; the blind kind makes no entry");
+    sd.shutdown();
+}
+
+/// M-I1 (a) — EVERY VALUE IS JUDGED AT THE SHOT: the owner's shot of a
+/// draft whose re-inserted run holds three of its cells — each admitted at
+/// its own insert, the second's file since gone from under it — is refused
+/// by the second's own token, `lease_lapsed`, though the first is whole: the
+/// owner test once, at the first value naming the kind, then each value in
+/// placement order, the first refusal answering, and nothing commits. The
+/// twin — the run narrowed to its first value — is admitted.
+#[test]
+fn every_value_naming_the_kind_is_judged_at_the_shot() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let pictures = [45, 46, 47].map(|seed| seeded_bytes(5_000, seed));
+    let draft = owner_draft(port, &bare);
+    for (k, bytes) in (1u64..).zip(&pictures) {
+        put_whole(port, &bare, bytes);
+        expect_resp(&op(port, Some(&bare), &cell_frame(&draft, k, &cell_of(bytes, 5_000), None)), "ack_addr");
+    }
+    std::fs::remove_file(dir.path().join("blobs").join("blake3").join(blob_hex(&pictures[1]))).expect("the file removed");
+    let edition = published_edition(port, &signed);
+    let shot_frame =
+        |width: u64| publish_frame(&edition, None, Some(&draft), &[run(&draft, &format!("{draft}.0.1.1"), width)]);
+    let before = head_position(port);
+    assert_token(&op(port, Some(&signed), &shot_frame(3)), "publish", "lease_lapsed");
+    assert_eq!(head_position(port), before, "nothing commits");
+    assert_eq!(content_extent(port, None, &edition), 0, "the edition stays memberless");
+    // The twin: the run's first value alone, its file whole.
+    let m = acked_addr(&op(port, Some(&signed), &shot_frame(1)));
+    assert_eq!(delivery(port, None, &m, 1, 1), json!([{"atom": cell_of(&pictures[0], 5_000)}]));
+    sd.shutdown();
+}
+
 /// ms5-R — THE READINESS REFUSAL REACHES THE INDEX's THREE READERS AND
 /// NOTHING ELSE: with the walk held, the PUT's creation, the resume and
 /// the deposit read answer `503 index_rebuilding`; the progress read and
@@ -362,7 +462,7 @@ fn a_cell_whose_hash_the_caller_deposited_under_its_own_lease_is_admitted() {
 #[test]
 fn the_three_readers_refuse_index_rebuilding_and_nothing_else_does() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn_walk_held(dir.path());
+    let (sd, seam) = spawn_walk_held(dir.path());
     let port = sd.port();
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
     assert!(!sd.daemon().index_is_ready());
@@ -387,7 +487,7 @@ fn the_three_readers_refuse_index_rebuilding_and_nothing_else_does() {
     assert_eq!(st, 200, "/changes is served");
     assert_rebuilding(&op(port, Some(&bare), &cell_frame(&draft, 4, &canonical_cell(), None)), "insert");
     assert!(!sd.daemon().index_is_ready(), "nothing above readied the index");
-    release_the_walk(&sd);
+    release_the_walk(&sd, seam);
     assert!(sd.daemon().index_is_ready());
     let (st, _, body) = blob_deposit_read(port, Some(&bare));
     assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
@@ -406,22 +506,24 @@ fn the_three_readers_refuse_index_rebuilding_and_nothing_else_does() {
 #[test]
 fn the_binding_reads_the_lease_arm_alone_until_the_walk_completes() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let bytes = b"a picture whose lease lapses by the wall clock";
+    let bytes = b"a picture whose lease lapses by the media clock";
     let cell = cell_of(bytes, bytes.len() as u64);
     let d1 = {
         let sd = spawn(dir.path());
         let port = sd.port();
         let bare = open_session(port, CLAIMANT_PRINCIPAL);
-        sd.daemon().install_media_limits(None, None, Some(500), None);
         put_whole(port, &bare, bytes);
         let d1 = owner_draft(port, &bare);
         expect_resp(&op(port, Some(&bare), &cell_frame(&d1, 1, &cell, None)), "ack_addr");
-        std::thread::sleep(Duration::from_millis(700));
         sd.shutdown();
         d1
     };
-    let sd = spawn_walk_held(dir.path());
+    let (sd, seam) = spawn_walk_held(dir.path());
     let port = sd.port();
+    // Eight days on the reopened daemon's media clock: past the seven-day
+    // lease the first uptime's PUT took, inside the thirty-day horizon — the
+    // lease LAPSED, by the clock seam and never by a sleep.
+    sd.daemon().advance_media_clock_ms(LEASE_MS + 24 * 3600 * 1000);
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let d2 = owner_draft(port, &bare);
@@ -438,7 +540,7 @@ fn the_binding_reads_the_lease_arm_alone_until_the_walk_completes() {
     assert_eq!(content_extent(port, Some(&bare), &d2), 0, "nothing permanent landed");
     assert_eq!(content_extent(port, None, &edition), 0);
     assert_eq!(head_position(port), before, "a retry-class refusal commits nothing");
-    release_the_walk(&sd);
+    release_the_walk(&sd, seam);
     assert_eq!(sd.daemon().index_counts(), (1, 1, 0), "the walk found d1's cell");
     assert_eq!(deposits_of(port, &bare), vec![], "no re-PUT: the lease stays lapsed");
     expect_resp(&op(port, Some(&bare), &cell_frame(&d2, 1, &cell, None)), "ack_addr");
@@ -574,13 +676,13 @@ fn a_cell_inserted_during_the_walk_joins_the_one_copy_and_keeps_its_file() {
         assert_eq!(insert_cell(port, &bare, &owner_draft(port, &bare), walked, walked.len() as u64), "ok");
         sd.shutdown();
     }
-    let sd = spawn_walk_held(dir.path());
+    let (sd, seam) = spawn_walk_held(dir.path());
     let port = sd.port();
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
     assert_eq!(sd.daemon().index_counts(), (0, 0, 0), "held: the walk has entered nothing");
     assert_eq!(insert_cell(port, &bare, &owner_draft(port, &bare), during, during.len() as u64), "ok", "admitted off the live lease");
     assert_eq!(sd.daemon().index_counts(), (1, 1, 0), "the commit entered its own cell into the one copy");
-    release_the_walk(&sd);
+    release_the_walk(&sd, seam);
     assert_eq!(sd.daemon().index_counts(), (2, 2, 0), "the walk's entry joined it, nothing installed in its place");
     let usage = json(&blob_deposit_read(port, Some(&bare)).2);
     assert_eq!(usage["base"].as_u64(), Some((walked.len() + during.len()) as u64), "{usage}");
@@ -831,9 +933,12 @@ fn index_rebuild_at_open_scales_with_the_world() {
         }
         // (c) the time from open to the first PUT the gate admits — the
         // spawn that does not wait for the walk, so the clock below runs
-        // from the open's return, the session's open inside it.
+        // from the open's return, the session's open inside it — under the
+        // walk's fence, taken before the clock starts and kept until the
+        // iteration ends, so no other test's hold parks the walk it times.
+        let unheld = WalkUnheld::take();
         let opening = Instant::now();
-        let sd = spawn_not_waiting_for_the_index(dir.path());
+        let sd = spawn_not_waiting_for_the_index(dir.path(), &unheld);
         let open_took = opening.elapsed();
         let after_open = Instant::now();
         let port = sd.port();

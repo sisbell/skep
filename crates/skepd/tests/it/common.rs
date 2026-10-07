@@ -719,6 +719,7 @@ pub fn spawn_with_blocked_prefixes(
         node_prefix,
         None,
         ALLOW_PREVIEW_KEYS_IN_FIXTURES,
+        Walk::Awaited,
     )
 }
 
@@ -735,7 +736,7 @@ pub const ALLOW_PREVIEW_KEYS_IN_FIXTURES: bool = true;
 /// first token), a genesis included. The board is claimed as [`spawn`]'s is;
 /// the ceremony's own keys are tag 1 and meet no refusal.
 pub fn spawn_refusing_preview_keys(dir: &Path) -> Skepd {
-    let sd = spawn_under(dir, true, None, None, None, false);
+    let sd = spawn_under(dir, true, None, None, None, false, Walk::Awaited);
     claim_board(sd.port());
     sd
 }
@@ -745,8 +746,10 @@ pub fn spawn_refusing_preview_keys(dir: &Path) -> Skepd {
 /// transaction — every other spawn here), `Some(seed)` the test seam
 /// (`Daemon::open_seeded`, the seeded stream), which the head suite's
 /// determinism pins need: two daemons over one op sequence write one chain
-/// only under one seed — and the preview-key setting named (AUTH-1.44). The
-/// retry loop below is the same either way.
+/// only under one seed — and the preview-key setting named (AUTH-1.44), and
+/// whether the spawn waits on its index's walk under the walk's fence
+/// ([`Walk`]): every spawn here does but the two that leave the walk to their
+/// caller. The retry loop below is the same either way.
 fn spawn_under(
     dir: &Path,
     local_trust: bool,
@@ -754,9 +757,13 @@ fn spawn_under(
     node_prefix: Option<&str>,
     salt_seed: Option<u64>,
     allow_preview_keys: bool,
+    walk: Walk,
 ) -> Skepd {
     let node_prefix = node_prefix
         .map(|text| text.parse::<NodePrefix>().unwrap_or_else(|e| panic!("'{text}' is {e}")));
+    // THE WALK's FENCE, from before the open until the index is ready
+    // ([`WALK_FENCE`]): no test holding the walk parks this daemon's.
+    let _unheld = (walk == Walk::Awaited).then(WalkUnheld::take);
     // The reservation is held through the slow open, so only the rebind gap
     // races — and under this suite it DOES: every exchange is one
     // connection, a run leaves some thirty thousand sockets in TIME_WAIT
@@ -807,7 +814,9 @@ fn spawn_under(
         match serve(daemon, port, DEFAULT_WORKERS) {
             Ok(sd) => {
                 forget_port(sd.port());
-                wait_for_the_index(&sd);
+                if walk == Walk::Awaited {
+                    wait_for_the_index(&sd);
+                }
                 return sd;
             }
             Err(e) if e.kind() == ErrorKind::AddrInUse => continue,
@@ -822,14 +831,13 @@ fn spawn_under(
 
 /// THE CELL INDEX's WALK AT OPEN runs on a thread of the daemon's, and its
 /// three readers — the PUT's creation and resume, the deposit read — refuse
-/// `index_rebuilding` until it completes (wire.md §Media). Every spawn here
-/// waits for it, bounded, so a suite's first PUT never races the walk; the
-/// suites that drive the walk's window arm the hold first and spawn through
-/// [`spawn_walk_held`], which does not wait.
+/// `index_rebuilding` until it completes (wire.md §Media; ms5-R). Every spawn
+/// here waits for it, bounded, under the walk's fence ([`WALK_FENCE`]), so a
+/// suite's first PUT never races the walk and no other test's hold parks it;
+/// the two spawns that leave the walk to their caller — [`spawn_walk_held`],
+/// which holds it, and [`spawn_not_waiting_for_the_index`], which measures
+/// it — wait, or not, themselves.
 fn wait_for_the_index(sd: &Skepd) {
-    if walk_is_held() {
-        return;
-    }
     let deadline = Instant::now() + Duration::from_secs(60);
     while !sd.daemon().index_is_ready() {
         assert!(Instant::now() < deadline, "the cell index's walk did not complete within 60 s");
@@ -837,43 +845,173 @@ fn wait_for_the_index(sd: &Skepd) {
     }
 }
 
-/// Whether this process has asked its spawns NOT to wait for the index —
-/// the walk's hold armed ([`spawn_walk_held`]) or the open-cost measure's
-/// own clock running ([`spawn_not_waiting_for_the_index`]).
-fn walk_is_held() -> bool {
-    *WALK_HELD.lock().expect("the hold's flag")
+/// Whether a spawn waits on its index's walk under the walk's fence, or
+/// leaves both to its caller.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Walk {
+    /// Take the fence's read side for the open and wait for the index.
+    Awaited,
+    /// The caller holds the fence — the hold's write side, or the measure's
+    /// read side — and the spawn neither takes it nor waits.
+    CallersOwn,
 }
 
-static WALK_HELD: Mutex<bool> = Mutex::new(false);
+/// THE WALK's FENCE. `Daemon::hold_the_index_walk` is PROCESS-WIDE — every
+/// walk started after it parks until the release, whichever daemon it walks
+/// for — and plain `cargo test` runs this suite's tests as THREADS of one
+/// process (nextest gives each its own). So a test HOLDING the walk takes
+/// this fence's write side for as long as it holds ([`WalkSeam`]), and every
+/// spawn that waits on its index, or measures it, holds the read side from
+/// before its open until its walk is past the hold ([`WalkUnheld`]): no
+/// holder parks a walk another test waits on or times, and no holder's
+/// release frees another's. A walk nothing waits on — the operator's tools',
+/// a fixture daemon's that reads no index — may still park behind a hold,
+/// and only finishes later. Task-fair (`parking_lot`), so a holder waiting
+/// for the readers ahead of it is not starved by the readers behind.
+static WALK_FENCE: parking_lot::RwLock<()> = parking_lot::RwLock::new(());
+
+thread_local! {
+    /// Whether THIS thread holds the walk's fence, either side — the guard
+    /// against a nested take, which would wait on the thread's own guard.
+    static HOLDS_THE_FENCE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Mark this thread as holding the walk's fence, refusing a second take: a
+/// test holding the walk, or measuring it, that spawned another waiting
+/// daemon would wait on its own guard, and a deadlock names nothing.
+fn enter_the_fence() {
+    assert!(
+        !HOLDS_THE_FENCE.get(),
+        "this test already holds the walk's fence — a daemon spawned while it holds the walk, \
+         or measures it, would wait on its own guard: release the walk, or end the measure, first"
+    );
+    HOLDS_THE_FENCE.set(true);
+}
+
+/// The walk's fence's READ side ([`WALK_FENCE`]): while this lives, no test
+/// in the process can hold the walk, so a daemon opened under it walks its
+/// index unparked. Taken by every spawn that waits on its index, by the
+/// open-cost measure for its whole clock, and by the hazard suite's reopens.
+#[must_use = "the fence is held only while this lives: bind it for the span of the walk it covers"]
+pub struct WalkUnheld {
+    _fence: parking_lot::RwLockReadGuard<'static, ()>,
+}
+
+impl WalkUnheld {
+    /// Take the read side — waiting for any test that holds the walk to
+    /// release it.
+    pub fn take() -> WalkUnheld {
+        enter_the_fence();
+        WalkUnheld { _fence: WALK_FENCE.read() }
+    }
+}
+
+impl Drop for WalkUnheld {
+    fn drop(&mut self) {
+        HOLDS_THE_FENCE.set(false);
+    }
+}
+
+/// THE WALK HELD, by one test: the fence's WRITE side ([`WALK_FENCE`]) and
+/// the daemon's process-wide hold, taken in that order. [`release_the_walk`]
+/// is its one release; dropped without it — a panicking test — it still
+/// releases the walk before the fence, so a failing holder wedges no other
+/// test's spawn.
+#[must_use = "the walk stays held while this lives: pass it to `release_the_walk`"]
+pub struct WalkSeam {
+    _fence: parking_lot::RwLockWriteGuard<'static, ()>,
+}
+
+impl WalkSeam {
+    fn arm() -> WalkSeam {
+        enter_the_fence();
+        let fence = WALK_FENCE.write();
+        Daemon::hold_the_index_walk();
+        WalkSeam { _fence: fence }
+    }
+}
+
+impl Drop for WalkSeam {
+    fn drop(&mut self) {
+        Daemon::release_the_index_walk();
+        HOLDS_THE_FENCE.set(false);
+    }
+}
 
 /// Spawn a daemon WITH THE CELL INDEX's WALK HELD — armed before the open,
-/// so the daemon serves with its index not ready until
-/// [`release_the_walk`] — and claim its board (the claim is a text write,
-/// served throughout). Readiness is never waited on here.
-pub fn spawn_walk_held(dir: &Path) -> Skepd {
-    *WALK_HELD.lock().expect("the hold's flag") = true;
-    Daemon::hold_the_index_walk();
-    let sd = spawn_configured(dir, true);
+/// under the walk's fence ([`WalkSeam`]), so the daemon serves with its index
+/// not ready until [`release_the_walk`] — and claim its board (the claim is a
+/// text write, served throughout). Readiness is never waited on here.
+pub fn spawn_walk_held(dir: &Path) -> (Skepd, WalkSeam) {
+    let seam = WalkSeam::arm();
+    let sd =
+        spawn_under(dir, true, None, None, None, ALLOW_PREVIEW_KEYS_IN_FIXTURES, Walk::CallersOwn);
     claim_board(sd.port());
-    sd
+    (sd, seam)
 }
 
-/// Release the held walk and wait for `sd`'s index to ready.
-pub fn release_the_walk(sd: &Skepd) {
-    *WALK_HELD.lock().expect("the hold's flag") = false;
+/// Release the held walk, wait for `sd`'s index to ready, and only then
+/// give the fence up: a test arming its own hold before this walk had
+/// re-checked the hold would park it again.
+pub fn release_the_walk(sd: &Skepd, seam: WalkSeam) {
     Daemon::release_the_index_walk();
     wait_for_the_index(sd);
+    drop(seam);
 }
 
 /// [`spawn_configured`] on a board already claimed, returning the moment
 /// the daemon serves and NOT waiting for the index's walk — the open-cost
 /// measure's spawn, whose clock runs from the open's return to the first
-/// PUT the gate admits.
-pub fn spawn_not_waiting_for_the_index(dir: &Path) -> Skepd {
-    *WALK_HELD.lock().expect("the hold's flag") = true;
-    let sd = spawn_configured(dir, true);
-    *WALK_HELD.lock().expect("the hold's flag") = false;
-    sd
+/// PUT the gate admits. Under the walk's fence's read side, which the
+/// caller takes BEFORE its clock starts — so the wait for another test's
+/// hold is no part of the measure — and keeps for the whole clock, so no
+/// test's hold parks the walk it times; the guard argument is that
+/// contract's cheap half.
+pub fn spawn_not_waiting_for_the_index(dir: &Path, _fence: &WalkUnheld) -> Skepd {
+    spawn_under(dir, true, None, None, None, ALLOW_PREVIEW_KEYS_IN_FIXTURES, Walk::CallersOwn)
+}
+
+/// THE FETCH STREAM's FENCE: `Daemon::hold_the_fetch_stream` is
+/// PROCESS-WIDE — every fetch stream parks between its chunks until the
+/// release — so the tests holding it run one at a time ([`StreamSeam`]),
+/// each keeping the fence until its own stream is read past the release, so
+/// the next holder cannot park it again before it re-checks the hold. A test
+/// that does not hold it is only delayed by another's hold: its stream parks
+/// with the rest, and the re-check at the release passes for its live
+/// session.
+static STREAM_FENCE: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+/// THE FETCH STREAM HELD, by one test: the fence ([`STREAM_FENCE`]) and the
+/// daemon's process-wide hold. [`StreamSeam::release`] frees every held
+/// stream and keeps the fence; the drop gives the fence up, releasing first —
+/// a panicking test's included, so a failing holder parks no other test's
+/// stream for good.
+#[must_use = "every fetch stream in the process stays parked until `release`"]
+pub struct StreamSeam {
+    _fence: parking_lot::MutexGuard<'static, ()>,
+}
+
+impl StreamSeam {
+    /// Free every held stream, keeping the fence: the holder reads its own
+    /// stream to its end, then drops the seam.
+    pub fn release(&self) {
+        Daemon::release_the_fetch_stream();
+    }
+}
+
+impl Drop for StreamSeam {
+    fn drop(&mut self) {
+        Daemon::release_the_fetch_stream();
+    }
+}
+
+/// Hold every fetch stream between two of its chunks until
+/// [`StreamSeam::release`] — armed before the request, so the test can kill
+/// the session or revoke the grant WHILE the stream stands (M-I2 (g)).
+pub fn hold_the_fetch_stream() -> StreamSeam {
+    let fence = STREAM_FENCE.lock();
+    Daemon::hold_the_fetch_stream();
+    StreamSeam { _fence: fence }
 }
 
 /// Does this `Daemon::open_with` failure carry a transient journal-directory
@@ -959,7 +1097,15 @@ pub fn spawn(dir: &Path) -> Skepd {
 /// callers; every other suite spawns the production door, whose OS-drawn
 /// salts make every board's chain its own.
 pub fn spawn_seeded(dir: &Path, seed: u64) -> Skepd {
-    let sd = spawn_under(dir, true, None, None, Some(seed), ALLOW_PREVIEW_KEYS_IN_FIXTURES);
+    let sd = spawn_under(
+        dir,
+        true,
+        None,
+        None,
+        Some(seed),
+        ALLOW_PREVIEW_KEYS_IN_FIXTURES,
+        Walk::Awaited,
+    );
     claim_board(sd.port());
     sd
 }
@@ -969,6 +1115,8 @@ pub fn spawn_seeded(dir: &Path, seed: u64) -> Skepd {
 /// fixtures' default; the creation and the resume answer `uploads_closed`
 /// before any body byte, `/health` echoes `media.uploads` false.
 pub fn spawn_uploads_closed(dir: &Path) -> Skepd {
+    // The walk's fence, from before the open until the index is ready.
+    let _unheld = WalkUnheld::take();
     let mut opts = AuthOptions::default();
     opts.allow_preview_keys = ALLOW_PREVIEW_KEYS_IN_FIXTURES;
     let mut media = MediaOptions::default();
@@ -988,6 +1136,8 @@ pub fn spawn_uploads_closed(dir: &Path) -> Skepd {
 /// admits hold every worker but the one that answers (M-I5 (f)). `serve`
 /// re-checks no minimum, so the count is the caller's to justify.
 pub fn spawn_with_workers(dir: &Path, workers: usize) -> Skepd {
+    // The walk's fence, from before the open until the index is ready.
+    let _unheld = WalkUnheld::take();
     let mut opts = AuthOptions::default();
     opts.allow_preview_keys = ALLOW_PREVIEW_KEYS_IN_FIXTURES;
     let daemon = Daemon::open_with(dir, opts).expect("daemon open (genesis or recover)");
@@ -1002,6 +1152,8 @@ pub fn spawn_with_workers(dir: &Path, workers: usize) -> Skepd {
 /// fixtures' preview-key setting is on here as everywhere (AUTH-1.44); every
 /// other option is the default's.
 pub fn spawn_unclaimed(dir: &Path) -> Skepd {
+    // The walk's fence, from before the open until the index is ready.
+    let _unheld = WalkUnheld::take();
     let mut opts = AuthOptions::default();
     opts.allow_preview_keys = ALLOW_PREVIEW_KEYS_IN_FIXTURES;
     let daemon = Daemon::open_with(dir, opts).expect("daemon open (genesis or recover)");

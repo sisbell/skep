@@ -344,7 +344,9 @@ fn a_blind_cell_is_named_and_an_unknown_schema_halts() {
 /// M-I5 (f) — BOUNDED BY A POOL: with every fetch permit held through the
 /// test hook, a fetch of a published picture — past its gate and
 /// classification — is `503 fetch_busy`, retry-class; a permit released, it
-/// is served.
+/// is served. And every step ahead of the permit — the gate, the value, the
+/// classification — answers with the pool drained: a refusal there spends no
+/// permit, so it is told as itself and never as `fetch_busy`.
 #[test]
 fn the_fetch_pool_bounds_the_route() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -363,6 +365,8 @@ fn the_fetch_pool_bounds_the_route() {
         &publish_frame(&edition, None, Some(&draft), &[run(&draft, &i_at(&draft, 1), 1)]),
     ));
     let i = cell_i(port, &owner, &member);
+    // Prose beside the draft's cell, for the classification's own refusal.
+    expect_resp(&insert_text(port, &owner, &draft, 2, "words"), "ack_addr");
     let held: Vec<_> = std::iter::repeat_with(|| sd.daemon().try_hold_fetch_permit())
         .take_while(Option::is_some)
         .flatten()
@@ -380,6 +384,26 @@ fn the_fetch_pool_bounds_the_route() {
         String::from_utf8_lossy(&body)
     );
     assert!(body_json(&body)["detail"].as_str().is_some_and(|d| d.contains("retry")));
+    // Every step ahead of the permit answers with the pool drained: the gate's
+    // refusal, no value, a value that is no cell — none spends a permit.
+    let (st, _, body) = fetch(port, None, &i_at(&draft, 1));
+    assert_eq!(
+        (st, body_json(&body)["code"].as_str()),
+        (403, Some("withheld")),
+        "the gate, the pool drained"
+    );
+    let (st, _, body) = fetch(port, Some(&owner), &i_at(&draft, 99));
+    assert_eq!(
+        (st, body_json(&body)["error"].as_str()),
+        (404, Some("no_value")),
+        "no value, the pool drained"
+    );
+    let (st, _, body) = fetch(port, Some(&owner), &i_at(&draft, 2));
+    assert_eq!(
+        (st, body_json(&body)["error"].as_str()),
+        (404, Some("not_a_cell")),
+        "no cell, the pool drained"
+    );
     drop(held);
     let (st, _, body) = fetch(port, None, &i);
     assert_eq!(st, 200, "a released permit serves: {}", String::from_utf8_lossy(&body));
@@ -405,15 +429,16 @@ fn a_closed_session_cuts_the_stream_at_the_time_interval() {
     let draft = owner_draft(port, &owner);
     assert_eq!(insert_cell(port, &owner, &draft, &bytes, bytes.len() as u64), "ok");
     let i = i_at(&draft, 1);
-    skepd::Daemon::hold_the_fetch_stream();
+    let seam = hold_the_fetch_stream();
     let mut stream = FetchStream::open(port, Some(&owner), &i);
     stream.read_until_body(4096, Duration::from_secs(10));
     // Close the session, move the clock past the time interval, release.
     close_session(port, &owner);
     let interval = fixture()["recheck_interval_ms"].as_u64().unwrap();
     sd.daemon().advance_media_clock_ms(interval + 1);
-    skepd::Daemon::release_the_fetch_stream();
+    seam.release();
     let end = stream.read_to_end();
+    drop(seam);
     let got = stream.body().len();
     assert!(got < bytes.len(), "the whole file was NOT delivered: {got} of {}", bytes.len());
     assert_ne!(end, StreamEnd::Eof, "the stream is cut, not cleanly closed at the full length");
@@ -438,14 +463,15 @@ fn a_closed_session_cuts_the_stream_at_the_byte_interval() {
     let draft = owner_draft(port, &owner);
     assert_eq!(insert_cell(port, &owner, &draft, &bytes, bytes.len() as u64), "ok");
     let i = i_at(&draft, 1);
-    skepd::Daemon::hold_the_fetch_stream();
+    let seam = hold_the_fetch_stream();
     let mut stream = FetchStream::open(port, Some(&owner), &i);
     stream.read_until_body(4096, Duration::from_secs(10));
     // Close the session and release: the clock unmoved, the re-check becomes
     // due only once the byte interval's worth has been written.
     close_session(port, &owner);
-    skepd::Daemon::release_the_fetch_stream();
+    seam.release();
     let end = stream.read_to_end();
+    drop(seam);
     let got = stream.body().len();
     assert!(got < bytes.len(), "the whole file was NOT delivered: {got} of {}", bytes.len());
     assert_ne!(end, StreamEnd::Eof, "the stream is cut, not cleanly closed at the full length");
@@ -455,6 +481,94 @@ fn a_closed_session_cuts_the_stream_at_the_byte_interval() {
         bytes.len()
     );
     println!("byte interval: {got} of {} bytes delivered before the cut ({end:?})", bytes.len());
+    sd.shutdown();
+}
+
+/// M-I2 (g) — THE GATE ARM of the mid-stream re-check: a grant revoked while
+/// its grantee streams the owner's draft ends the stream by a reset at the
+/// next interval, the grantee's session ALIVE — so the requester's own
+/// re-resolution passes it, and only the gate, run again as that session,
+/// can cut it. Its next fetch is the gate's `withheld`, and carries no death
+/// signal.
+#[test]
+fn a_revoked_grant_cuts_the_grantees_stream_its_session_alive() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    // Several chunks, under the byte interval: only the clock makes the
+    // re-check due.
+    let bytes = seeded_bytes(200_000, 19);
+    put_whole(port, &owner, &bytes);
+    let draft = owner_draft(port, &owner);
+    assert_eq!(insert_cell(port, &owner, &draft, &bytes, bytes.len() as u64), "ok");
+    let i = i_at(&draft, 1);
+    let grantee = seat_stranger(port, 973);
+    let grantee_signed =
+        hire(port, &signed, CLAIMANT_DOC1, &grantee.account, 973, &distinct_key(73));
+    let grant = deposit_grant(port, &signed, CLAIMANT_DOC1, &draft, Some(&grantee.account));
+    let seam = hold_the_fetch_stream();
+    let mut stream = FetchStream::open(port, Some(&grantee_signed), &i);
+    stream.read_until_body(4096, Duration::from_secs(10));
+    // Revoke the share, move the clock past the time interval, release.
+    revoke_grant(port, &signed, &grant);
+    let interval = fixture()["recheck_interval_ms"].as_u64().unwrap();
+    sd.daemon().advance_media_clock_ms(interval + 1);
+    seam.release();
+    let end = stream.read_to_end();
+    drop(seam);
+    let got = stream.body().len();
+    assert!(got < bytes.len(), "the whole file was NOT delivered: {got} of {}", bytes.len());
+    assert_ne!(end, StreamEnd::Eof, "the stream is cut, not cleanly closed at the full length");
+    // The session lives: the gate refused, and said nothing of a death.
+    let (st, headers, body) = fetch(port, Some(&grantee_signed), &i);
+    assert_eq!(st, 403, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(body_json(&body)["code"].as_str(), Some("withheld"));
+    assert!(header(&headers, "Skepd-Session").is_none(), "the grantee's session is alive");
+    sd.shutdown();
+}
+
+/// M-I2 (g) — THE REQUESTER ARM of the mid-stream re-check: a PUBLISHED
+/// picture, which the gate admits to every requester the guest included,
+/// streamed by a session closed mid-stream is cut by a reset at the next
+/// interval — the requester's own re-resolution ending it, since the gate,
+/// run again, would admit the guest the dead token resolves to. A guest's
+/// fetch of the same picture is served whole afterwards.
+#[test]
+fn a_dead_requesters_stream_of_a_published_picture_is_cut() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bytes = seeded_bytes(200_000, 23);
+    put_whole(port, &owner, &bytes);
+    let draft = owner_draft(port, &owner);
+    assert_eq!(insert_cell(port, &owner, &draft, &bytes, bytes.len() as u64), "ok");
+    let edition = published_edition(port, &signed);
+    let member = acked_addr(&op(
+        port,
+        Some(&signed),
+        &publish_frame(&edition, None, Some(&draft), &[run(&draft, &i_at(&draft, 1), 1)]),
+    ));
+    let i = cell_i(port, &owner, &member);
+    let seam = hold_the_fetch_stream();
+    let mut stream = FetchStream::open(port, Some(&owner), &i);
+    stream.read_until_body(4096, Duration::from_secs(10));
+    // Close the session, move the clock past the time interval, release.
+    close_session(port, &owner);
+    let interval = fixture()["recheck_interval_ms"].as_u64().unwrap();
+    sd.daemon().advance_media_clock_ms(interval + 1);
+    seam.release();
+    let end = stream.read_to_end();
+    drop(seam);
+    let got = stream.body().len();
+    assert!(got < bytes.len(), "the whole file was NOT delivered: {got} of {}", bytes.len());
+    assert_ne!(end, StreamEnd::Eof, "the stream is cut, not cleanly closed at the full length");
+    // The gate admits the picture to anyone: the cut was the requester's.
+    let (st, _, body) = fetch(port, None, &i);
+    assert_eq!((st, body), (200, bytes), "a guest's fetch is served whole");
     sd.shutdown();
 }
 

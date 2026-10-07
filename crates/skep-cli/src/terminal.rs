@@ -7,7 +7,9 @@
 //! library's scripted person. The realization here is the std streams'
 //! `isatty` on BOTH stdin and stderr: a wrapper that captures the one or
 //! feeds the other — the wrapper §2.4 names as satisfying every step of the
-//! backup moment with no paper and no person — fails it.
+//! backup moment with no paper and no person — fails it. Every prompt the
+//! CLI makes is written here, the one a command that is no person door asks
+//! among them (`prompt_line`), so none reaches stdout.
 
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
@@ -17,6 +19,18 @@ use skep_client::person::{Abandoned, Confirmation, Consent, Destination, HandedP
 /// Whether a controlling terminal stands at both ends of a prompt.
 pub fn has_terminal() -> bool {
     io::stdin().is_terminal() && io::stderr().is_terminal()
+}
+
+/// `prompt` on stderr, then one line read from stdin — a paste a command
+/// that is no person door asks for, terminal or pipe alike (`bind`'s
+/// account, where neither `--account` nor the reply names one). The line
+/// comes back as read; the end of input reads as the empty line.
+pub fn prompt_line(prompt: &str) -> io::Result<String> {
+    eprint!("{prompt}");
+    let _ = io::stderr().flush();
+    let mut line = String::new();
+    io::stdin().read_line(&mut line)?;
+    Ok(line)
 }
 
 /// The terminal person.

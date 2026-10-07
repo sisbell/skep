@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "skep — the command over skep-client: keygen, claim, session, fingerprint, verify, health, bind. Flag parsing by hand, one function per command, a Person over the terminal, stdout DATA and stderr TALK (client.md §1.2, §2)"
+description = "skep — the command over skep-client: the thirteen commands of client.md §2.1, flag parsing by hand, one file per command, a Person over the terminal, stdout DATA and stderr TALK (client.md §1.2, §2)"
 readme = "README.md"
 
 [[bin]]
@@ -23,7 +23,6 @@ tls = ["skep-client/tls"]
 # The library, its acting half on: every command is a library call.
 skep-client = { path = "../skep-client" }
 skep-identity = { path = "../skep-identity" }
-skep-address = { path = "../skep-address" }
 serde_json.workspace = true
 
 [dev-dependencies]

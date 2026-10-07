@@ -183,7 +183,7 @@ foundation and on the stores above it.
   `keygen`, `claim`, `session`, `fingerprint`, `verify`, `health`, `bind`,
   `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`; flag
   parsing by hand, a `Person` over the terminal, stdout data and stderr
-  talk.
+  talk. Its modules and rules: §The command.
 - `skep-conformance` — a differential harness against `udanax-green`'s
   goldens.
 
@@ -853,6 +853,64 @@ acts re-driven over the wire (`common::wire_*`) and never by a ceremony;
 Its unit suites pin what a composition sends and what it makes of each
 answer with no daemon, over `board/fake.rs`'s fake board, which answers
 each request by the test's own closure and keeps every request it served.
+
+## The command, `skep-cli`
+
+`skep-cli` is the `skep` binary over `skep-client` (`client.md` §1.2, §2):
+it parses the command line, makes the library call — handing a walk the
+terminal as its `Person` — and renders the answer, DATA on stdout and TALK
+on stderr, with §2.3's exit code. Every ceremony is a library walk; `bind`
+alone sequences the library's compositions itself, landing the three facts
+of an enroll hop or a handoff. Its modules, in the order `src/main.rs`
+declares them, each naming only those above it:
+
+- `args.rs` the vocabulary — the thirteen command names, the valued flags,
+  the switches — beside `HELP`, the text that documents it; and the
+  settings, each flag beating its `SKEP_*` variable in `Command::value`,
+  the one place that precedence is stated, with `session_env` the one
+  setting no flag carries.
+- `terminal.rs` `Terminal`, the `Person` over the terminal: every prompt on
+  stderr and every answer read from stdin, the sheet as a ruled box, the
+  dismissal's clear; `has_terminal`, the person doors' check; and
+  `prompt_line`, the one prompt a command that is no person door asks.
+- `commands.rs` what the commands share: the two streams (`data`,
+  `data_verbatim`, `talk`), the refusals and their exit codes (`halt`;
+  `usage`, exit 2; `no_terminal`, exit 3), the plumbing from the flags to a
+  board, a store, a payload, a principal and a key, the three facts' one
+  spelling (`facts`, the lines `bind` reads back from a reply), and the
+  whole-set compare's lines. Beneath it, `commands/<name>.rs`, one file per
+  command, each the `pub fn <name>(&Command) -> i32` that `main` dispatches
+  to.
+
+Rules that hold across its files:
+
+- **stdout carries data.** Only `data`, `data_verbatim` and `main`'s
+  `--help` write to stdout; every prompt, warning and halt goes to stderr.
+  `tests/it/tidy.rs` checks it.
+- **A person door checks for a terminal first.** The eight doors —
+  `claim`'s notebook arm, `keygen --anchors`, `enroll` without `--reply`,
+  `recover`, `retire`, `rotate`, `handoff --payload` and `accept` without
+  `--reprint` — each call `has_terminal` before anything is generated and
+  answer exit 3 without one; the check is the CLI's, never a walk's (§2.4).
+  `tests/it/cli.rs` and `tests/it/ceremonies.rs` run every door without a
+  terminal.
+- **The settings are `args.rs`'s.** Every `SKEP_*` variable is read there
+  and nowhere else, which `tests/it/tidy.rs` checks; a session token is
+  never an argv value (`session --close -` reads stdin or `SKEP_SESSION`),
+  which `tests/it/cli.rs` checks.
+- **A command answers its exit code.** It returns 0, or the code `halt`,
+  `usage` or `no_terminal` answers, and `main` exits with it.
+- **Imports point down.** A module names only the modules `src/main.rs`
+  declares above it, and an item by its home module, never through the
+  root; a command file names what the commands share through `super::`.
+  `tests/it/tidy.rs` checks it, and that every file is declared.
+
+Its integration suite is one binary, `tests/it/`: `cli`, the first seven
+commands and the loop over the hosted claim, and `ceremonies`, the six
+ceremony commands and the enroll hop, each driving the built `skep`
+through argv, stdin and stdout against a daemon spawned in-process; and
+`tidy`, the arrangement above, read off the source. `common` holds the
+spawn and the run, every `SKEP_*` variable scrubbed from it.
 
 ## The name space, `skep-namespace`
 
@@ -1612,9 +1670,9 @@ imports it.
   `Skepd-Session: closed` has one reader, the board's authenticated
   exchange; a halt names the state, its cause and the one act (AUTH-5.66),
   and a refusal the client's state machine does not arm is surfaced, never
-  retried. The person doors — the claim's notebook arm and
-  `keygen --anchors` — require a `Person`; the terminal check is the CLI's
-  implementation of that seam, never the walk's.
+  retried. Every person door (§The command lists them) requires a
+  `Person`; the terminal check is the CLI's implementation of that seam,
+  never the walk's.
 - **Inside `skepd`, imports point down.** A module names only modules in
   its own layer or below it, never above: the transport calls the router,
   and nothing below the router calls the transport; a leaf imports only

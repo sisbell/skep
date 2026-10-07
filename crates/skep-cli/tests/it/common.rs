@@ -62,6 +62,11 @@ pub fn origin(port: u16) -> String {
     format!("http://127.0.0.1:{port}")
 }
 
+/// A path as the `&str` an argv takes.
+pub fn s(p: &Path) -> &str {
+    p.to_str().unwrap()
+}
+
 /// One run of the binary: exit code, stdout, stderr.
 #[derive(Debug)]
 pub struct Run {

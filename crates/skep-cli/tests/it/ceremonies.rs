@@ -18,13 +18,9 @@ use skep_client::store::{FileStore, KeyStore};
 use skep_client::Origin;
 use skep_identity::parse_enroll;
 
-use crate::common::{origin, skep, spawn};
+use crate::common::{origin, s, skep, spawn};
 
 const THIRTEEN: [&str; 13] = ["keygen", "claim", "session", "fingerprint", "verify", "health", "bind", "enroll", "recover", "retire", "rotate", "handoff", "accept"];
-
-fn s(p: &Path) -> &str {
-    p.to_str().unwrap()
-}
 
 /// A claimed board through the LIBRARY (the notebook arm is a person door
 /// the binary refuses without a terminal): the store holds the device key,

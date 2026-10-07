@@ -3,9 +3,7 @@
 //! non-canonical board, the person doors' terminal check, THE LOOP over the
 //! hosted arm (keygen → claim --hosted → bind → session → verify → health →
 //! fingerprint), the token's custody, the whole-set compare, the plaintext
-//! warning, the default store.
-
-use std::path::Path;
+//! warning, the default store, `bind`'s paste prompt on stderr.
 
 use serde_json::Value;
 use skep_client::sheet::{KeyFile, Label, Seed};
@@ -13,13 +11,9 @@ use skep_client::sign::signer_from_seed;
 use skep_identity::{encode_enroll, parse_enroll, Enrollment};
 use skep_signature::HybridSigner;
 
-use crate::common::{origin, skep, spawn};
+use crate::common::{origin, s, skep, spawn};
 
 const SEVEN: [&str; 7] = ["keygen", "claim", "session", "fingerprint", "verify", "health", "bind"];
-
-fn s(p: &Path) -> &str {
-    p.to_str().unwrap()
-}
 
 #[test]
 fn help_lists_the_first_seven_and_refuses_the_flag_shapes() {
@@ -362,4 +356,19 @@ fn the_plaintext_warning_and_the_default_store() {
     let r = skep(&["fingerprint", "--dir", s(&two), "--select", "zz"], &[], None);
     assert_eq!(r.code, 3);
     assert!(r.err.contains("no key in the store matches"));
+}
+
+/// `bind`'s paste prompt, where neither `--account` nor a reply names the
+/// account: the prompt rides stderr and the answer is read from stdin, so
+/// stdout carries nothing but data (§2.4). The facts are judged before any
+/// socket opens — a dead board behind them is never dialed.
+#[test]
+fn bind_asks_for_the_account_on_stderr_and_reads_the_answer_from_stdin() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("store");
+    let r = skep(&["bind", "--board", "http://127.0.0.1:1", "--dir", s(&store), "--principal", "1"], &[], Some(b"not-an-address\n"));
+    assert_eq!(r.code, 3, "a halt on the facts, never transport: {r:?}");
+    assert!(r.err.contains("account address (from the enrolling device's reply): "), "the prompt on stderr: {}", r.err);
+    assert!(r.err.contains("`not-an-address` is not an account address"), "the answer read from stdin: {}", r.err);
+    assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
 }

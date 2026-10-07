@@ -419,3 +419,165 @@ here); 166 pass. Twenty rulings and one addendum.**
     withheld answers were the predicate working. Recorded, not ruled: the setup grant is the
     corpus's assumption made explicit, not a skep behavior; a golden that
     ever reads as the GUEST would meet the predicate unaided.
+
+## 2026-10-07 — CONFORMANCE round 2: the oracle reads every recorded answer
+
+**Recorded, NOT ruled (agent, 2026-10-07):** a read the harness plays now
+compares every answer its recording holds, or names the one it cannot
+reach: a read that compares nothing ends INEXPRESSIBLE with the unread
+keys named (`not read: …`), and `not-compared` is left to a read whose
+recording kept no answer. Until now such an answer was silently passed
+over, and a scenario could pass with its answer never checked. Readers
+now reach the shapes no reader did — a vspanset's `poom_empty` and
+`<role>_vspan_count`; find_links' `{success, links}` reply; a compare
+over `positions` with an `"i_j"` identity map; retrieve_endsets'
+`{source, target, type}` SpecSet reply and its bare FROM list; per-
+document `A_content` snapshot replies; a lone recorded array beside a
+prose `expected` (rearrange/double_pivot); a `{link_id}` content item.
+Whole-document reads now ask skep for everything its own extent reports,
+never only as much as the recording says exists, and the grounding
+pre-pass no longer undoes past a delete whose removed bytes it never knew
+(or a write it could not place) — such a seed was the probe it was read
+from. One verdict moves:
+
+- bert/bert_failure_leaves_ispace_corruption — PASS → DIVERGENT at op 3
+  (`retrieve_vspanset`, `poom_empty: true`). Green acked op 2's insert
+  into a READ_ONLY-opened document (`succeeded: true`) and left its POOM
+  empty — the acked-then-dropped write ruling 16
+  (descoped-bert-enforcement) names; skep has no bert layer, so the
+  twelve bytes are arranged and the vspanset holds one span. The scenario
+  passed only because nothing read `poom_empty`. Parked under `[pending]`
+  in ../ratchet.toml — exempt from enforcement, reported on every gate
+  run — for the owner's disposition: ruling 16's class is the one it
+  meets, and its allowlist entry is the owner's to write.
+
+Inside scenarios already frozen inexpressible, ops moved without moving a
+verdict: endsets/endsets_after_source_delete op 4 now disagrees where it
+agreed against a seed equal to its own probe; rearrange/double_pivot op 5
+now disagrees — its recorded `after_first` is read, and the description-
+only pivot before it was never expressible, so skep's document was never
+pivoted — while op 7 agrees against its recorded array where it disagreed
+with the prose beside it; endsets/endsets_after_version op 4 now reads its
+answer and meets the never-bound version skep refused to mint at op 2
+(`Rejected(PrivateSourceVersionless)`, PUB-2.9); the unread replies of
+links/delete_middle_link_check_gap_closure,
+links/multiple_orphaned_links_same_content, provenance/delete_then_recopy
+and rearrange/swap_with_links are named; versions/version_copies_what op 4
+binds its link over a loud placeholder seed, now that the pre-pass, like
+the play pass, leaves its unresolvable `parent` insert unplaced.
+
+Also from this round: ../allowlist.toml and ../ratchet.toml name every
+scenario by its key, `category/name` — the golden's directory and its
+name — because the corpus carries two `find_documents_basic`. The frozen
+`[inexpressible]` line that read `find_documents_basic` is
+`identity/find_documents_basic`; discovery/find_documents_basic passes.
+internal/insert_rearrange_insert_iaddress_gap passes — CONFORMANCE round 1
+read the recording client's three crash forms as one — and its
+`[inexpressible]` line is trimmed under the ratchet's free-shrink rule.
+
+**Tally (2026-10-07): 297 scenarios — 0 errors; 166 pass, 85 allowlisted,
+45 inexpressible, 1 pending (divergent).**
+
+## 2026-10-07 — CONFORMANCE round 2: one word per concept in the report
+
+**Recorded, NOT ruled (agent, 2026-10-07):** the report says one thing per
+word, each word as the corpus means it. No verdict moves; the tally is
+unchanged. What a reader of earlier reports, and of this ledger, meets
+under a new name:
+
+- Adaptation tags. `type_registry` is `types_document` — ruling 21's
+  "`type_registry` exclusion" is the `types_document` exclusion; the
+  harness's types document is no M7 type registry — and
+  `threeset-marker→registry` is `threeset-marker→types-document`.
+  `args-from-label`, `doc-from-label`, `position-from-label` and
+  `delete-text-from-label` are `args-from-op-name`, `doc-from-op-name`,
+  `position-from-op-name` and `delete-text-from-op-name`: they read the
+  golden's `op` field, never its `label` field. `allowlist-grant:width`
+  and `allowlist-grant:count` are `allowlist-adjusted:width` and
+  `allowlist-adjusted:count`: an allowlist entry declares an adjustment,
+  and a grant is PUB's. A bare find_links or find_documents aimed by the
+  scenario's source-role document is tagged `doc-from-source-role`, where
+  it read `doc-from-register`. `empty-as-absent` is gone; it never fired —
+  skep's RETRIEVEV and extent reads answer emptiness with an empty
+  delivery or ⟨⟩ (M6 R6, ASN-0113), never a refusal.
+- Report keys. Each op's `"label"` is `"op"`, the golden's `op` field; a
+  scenario's `"first_failure"` is `"first_finding"`, its op under `"op"`
+  too.
+- Notes. An address α never bound reads "never bound" ("never-bound doc
+  …"); a reference the shadow cannot ground reads "resolves to nothing".
+- The standing analyses name their rulings: the two-subspace vspanset
+  shape, ruling 1 (udanax-malformed-vspanset); version link carryover,
+  ruling 15 (version-link-carryover); delete_all_with_links' downstream
+  link findability, ruling 10 (ruling-10-i-coverage-findability).
+- summary.md's inexpressible section heads "(first inexpressible op)".
+
+**Tally (2026-10-07): 297 scenarios — 0 errors; 166 pass, 85 allowlisted,
+45 inexpressible, 1 pending (divergent).**
+
+## 2026-10-07 — CONFORMANCE round 2: a refused version names nothing
+
+**Recorded, NOT ruled (agent, 2026-10-07):** `version` names the last
+version the scenario made, and nothing before one exists. A version skep
+refuses to make — a private source is versionless, PUB-2.9 — therefore
+leaves every later reference to it ungroundable, the class rulings 20 and
+20a freeze. Until now an unbound `version` resolved to the scenario's
+SECOND DOCUMENT, and find_links and find_documents re-aimed a document
+field that named nothing at the bare search: ops naming a refused version
+were played against some other document — a write landed in it, a read
+read it, a search searched it — and some agreed. Every such op is now
+INEXPRESSIBLE, the reference named ("document reference `version` resolves
+to nothing"). A compare that names no document reads the harness's
+original/version default: after a version the recording made, that
+version — one skep refused leaves the compare inexpressible, never compared
+with the original itself — and, in a scenario whose recording made no
+version, the scenario's first two documents (policy
+`compare-default:second-document`, the pair the version-less scripts
+compared). And the grounding pre-pass never seeds a version: a seed there
+minted a plain document under the version's golden address holding the
+very answer its probe expected. Six verdicts move, each ALLOWLISTED →
+INEXPRESSIBLE:
+
+- content/insert_vspace_mapping — op 9 (`compare_versions`, naming no
+  document) against the version refused at op 4; it compared the original
+  with itself.
+- interactions/link_to_transcluded_then_version — op 8 (the version's
+  contents, read from `source`) and op 10 (`find_links from: version`,
+  which agreed searching `source`), against the version refused at op 6.
+- interactions/version_add_link_check_original — op 5 (`find_links from:
+  version`, which searched `original`), against the version refused at
+  op 2.
+- interactions/version_transcluded_linked_content — op 6 (an insert into
+  the version, written into `doc`), op 9 (the version's contents, which
+  agreed reading `doc`) and op 12 (`find_links from: version`, which agreed
+  searching `doc`), against the version refused at op 5; op 8 now agrees,
+  `doc` no longer carrying the version's suffix.
+- versions/version_preserves_transclusion — op 6 (`compare_versions` of
+  `version` and `source`, which agreed comparing `doc`, the version's
+  source), against the version refused at op 5.
+- versions/version_with_links — op 6 (`find_links doc: version`, which
+  searched `target`), against the version refused at op 5.
+
+Each references a version skep refused under PUB-2.9 — ruling 20a's class —
+and stood allowlisted through ruling 20's or ruling 15's entries, which
+also covered disagreements the re-aim manufactured. Moved from
+`[allowlisted]` to `[pending]` in ../ratchet.toml — exempt from
+enforcement, reported on every gate run — for the owner's disposition:
+ruling 20a's `[inexpressible]` freeze is the one they meet.
+
+Inside scenarios already frozen inexpressible, ops moved without moving a
+verdict: content/compare_multispan_specsets ops 6–7 and
+content/vcopy_from_version op 10 (compares against a refused version) and
+op 7 (its contents); interactions/compare_versions_with_different_links
+op 9 and provenance/createnewversion_text_vs_links op 7 (`find_links from:
+version` — the latter agreed searching the register's document);
+versions/version_copies_what ops 6, 8, 9 and 10 (a search naming the
+unbound `parent`, and the refused version's vspanset, contents and links).
+allocation_independence/all_operations_interleaved no longer seeds its
+version 1.1.0.1.0.1.3 with "AABBB". edgecases/compare_disjoint_documents,
+edgecases/vcopy_single_char, internal/ispan_consolidation_bulk,
+internal/ispan_consolidation_fragmented and internal/ispan_partial_overlap
+pass as they did, their compares now tagged
+`compare-default:second-document`.
+
+**Tally (2026-10-07): 297 scenarios — 0 errors; 166 pass, 79 allowlisted,
+45 inexpressible, 7 pending (1 divergent, 6 inexpressible).**

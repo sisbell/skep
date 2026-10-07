@@ -13,7 +13,7 @@ use skep_client::dial::PlainHttp;
 use skep_client::halt::Halt;
 use skep_client::person::{Person, Public, Question};
 
-use super::{data, host_name_and_date, person_door, store_of, Stop};
+use super::{data, host_name_and_date, person_door, store_of, BoxDefault, Door, Stop};
 use crate::args::{CommandLine, Usage};
 use crate::terminal::Terminal;
 
@@ -26,11 +26,11 @@ pub fn accept(c: &CommandLine) -> Result<(), Stop> {
     // person door.
     if c.switch("--reprint") {
         let key_file = c.key_file()?;
-        let anchors: Vec<PathBuf> = c.all("--anchor").into_iter().map(PathBuf::from).collect();
-        data(accept_walk::reprint(&store, key_file.as_deref(), &anchors, given_origin.as_ref())?);
+        let anchors: Vec<PathBuf> = c.all("--anchor").iter().map(PathBuf::from).collect();
+        data(accept_walk::reprint(&store, key_file.as_deref(), &anchors, given_origin.as_ref())?)?;
         return Ok(());
     }
-    person_door("accept", "the name boxes and the backup moment, or on the decline arm its typed confirmation")?;
+    person_door(Door { form: "accept", moments: "the name boxes and the backup moment, or on the decline arm its typed confirmation" })?;
     let mut person = Terminal;
     // `--board` and `--account` REQUIRED: a run missing either ASKS and
     // generates nothing (AUTH RES-162).
@@ -45,7 +45,7 @@ pub fn accept(c: &CommandLine) -> Result<(), Stop> {
         }
     };
     let account = match c.value("--account") {
-        Some(a) => a,
+        Some(a) => a.to_owned(),
         None => match person.ask(Public(Question { text: "the address the giver handed you (--account): ".into() })) {
             Ok(a) if !a.trim().is_empty() => a.trim().to_string(),
             _ => {
@@ -58,11 +58,11 @@ pub fn accept(c: &CommandLine) -> Result<(), Stop> {
             }
         },
     };
-    let (host_name, date) = host_name_and_date();
+    let BoxDefault { host_name, date } = host_name_and_date();
     let opts = AcceptOptions {
         account,
-        label: c.value("--label"),
-        anchor_out: c.all("--anchor-out").into_iter().map(PathBuf::from).collect(),
+        label: c.value("--label").map(str::to_owned),
+        anchor_out: c.all("--anchor-out").iter().map(PathBuf::from).collect(),
         paper: c.switch("--paper"),
         no_anchors: c.switch("--no-anchors"),
         hosted: None,
@@ -72,7 +72,7 @@ pub fn accept(c: &CommandLine) -> Result<(), Stop> {
     let accepted = accept_walk::accept(&board, &store, &mut person, &opts)?;
     // The record FIRST (DATA for the giver), then the device key's
     // fingerprint.
-    data(accepted.record);
-    data(accepted.device.to_hex());
+    data(accepted.record)?;
+    data(accepted.device.to_hex())?;
     Ok(())
 }

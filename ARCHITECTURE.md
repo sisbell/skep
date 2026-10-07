@@ -866,25 +866,29 @@ landing the three facts of an enroll hop, a handoff or a hosted signup,
 carry their own text. Its modules, in the order `src/main.rs` declares
 them, each naming only those above it:
 
-- `args.rs` the grammar — one row per command, its flags that take one
-  value, those that repeat and its switches, beside the flags every
-  command takes (`GLOBAL`) — with `HELP`, the text that documents it; and
-  `CommandLine`, one parsed command line, its settings each read through
-  `CommandLine::setting`, the one place a flag beats its `SKEP_*`
-  variable, with `session_env` the one setting no flag carries.
+- `args.rs` `Command`, one of the thirteen, the verb `main` dispatches
+  on; the grammar — one row per command, its flags that take one value,
+  those that repeat and its switches, beside the flags every command takes
+  (`GLOBAL`) — with `HELP`, the text that documents it; and `CommandLine`,
+  one parsed command line, its values lent to the commands that read
+  them, its settings each read through `CommandLine::setting`, the one
+  place a flag beats its `SKEP_*` variable, with `session_env` the one
+  setting no flag carries.
 - `terminal.rs` `Terminal`, the `Person` over the terminal: every prompt on
   stderr, the sheet as a ruled box, the dismissal's clear, the anchor
   import's arm asked of the person and never guessed from what was typed;
-  `has_terminal`, the person doors' check; and `answer`, the one reader
-  every prompt goes through, stdin locked for that one line alone — the
-  `Terminal`'s, and those of `bind`, which is no person door: its account
-  paste and its landing question.
-- `commands.rs` what the commands share: the two streams (`data`,
-  `data_verbatim`, `talk`), the stops and their exit codes (`Stop` — a
-  usage refusal, or a member of the halt family, a person door reached
-  without a terminal among its halts — which `exit_code` renders;
-  `person_door`, the doors' check), the plumbing from the flags to a
-  board, a store, a payload, a principal and a key, the three facts' one
+  `has_terminal`, the person doors' check; `talk`, the one writer of a
+  line on stderr — the prompts' headings, every command's TALK and its
+  halt; and `answer`, the one reader every prompt goes through, stdin
+  locked for that one line alone — the `Terminal`'s, and those of `bind`,
+  which is no person door: its account paste and its landing question.
+- `commands.rs` what the commands share: DATA's writers (`data`,
+  `data_verbatim`), the stops and their exit codes (`Stop` — a usage
+  refusal, or a member of the halt family, a person door reached without
+  a terminal among its halts — which `exit_code` renders; `person_door`,
+  the check each `Door` makes; `help`, `--help`'s DATA), the plumbing
+  from the flags to a board, a store, a payload, a principal and a key,
+  the anchor boxes' per-run default (`BoxDefault`), the three facts' one
   spelling (`facts`, the lines `bind` reads back from a reply), the
   outstanding-act line `keygen` and `fingerprint` share, and the
   whole-set compare from the held set to its halt (`held_set`,
@@ -894,9 +898,14 @@ them, each naming only those above it:
 
 Rules that hold across its files:
 
-- **stdout carries data.** Only `data`, `data_verbatim` and `main`'s
-  `--help` write to stdout; every prompt, warning and halt goes to stderr.
-  `tests/it/tidy.rs` checks it.
+- **stdout carries data, and no write panics.** Only `data` and
+  `data_verbatim` write to stdout, `--help`'s text among it, and a write
+  stdout refuses is a halt (exit 3) naming the refusal; every prompt,
+  warning and halt goes to stderr through `talk` or the terminal's
+  `show`, which drop a write stderr refuses. No std print macro — each
+  panics on a write its stream refuses, an exit 101 §2.3 does not have —
+  stands in `src/`. `tests/it/tidy.rs` checks it, and `tests/it/cli.rs`
+  runs a command whose stdout has no reader.
 - **A prompt holds stdin for one line.** Every prompt is read through
   `answer`, which locks stdin for that line alone, and the only other
   reads are a `-` argument's, whole, in `read_payload` and
@@ -914,13 +923,17 @@ Rules that hold across its files:
   never an argv value (`session --close -` reads stdin or `SKEP_SESSION`),
   which `tests/it/cli.rs` checks.
 - **A command answers `Ok` or a `Stop`.** It names every stop with `?`,
-  and `main` exits with `exit_code`'s rendering of it, a command line it
-  cannot parse included; no command picks a renderer or a code.
-  `commands.rs`'s unit test holds each stop to its code.
+  and `main` — its dispatch one arm per `Command`, which the compiler
+  holds exhaustive — exits with `exit_code`'s rendering of it, a command
+  line it cannot parse and `--help` included; no command picks a
+  renderer or a code. `commands.rs`'s unit test holds each stop to its
+  code.
 - **A command takes its own flags.** A flag its row does not name is
   refused, as is a second value of a flag that takes one, so no flag is
-  accepted and dropped. `args.rs`'s unit tests check it, and that `HELP`
-  documents every flag a row names.
+  accepted and dropped; an argument that is not UTF-8 text is refused as
+  a variable's value is, never a panic. `args.rs`'s unit tests check it,
+  and that `HELP` documents every flag a row names; `tests/it/cli.rs`
+  runs the binary on an argument that is not text.
 - **A setting refused is never a setting absent.**
   `CommandLine::principal`, `CommandLine::origin_given`,
   `CommandLine::key_file` and `session_env` answer `Err` for a value given

@@ -4,8 +4,9 @@
 //! hosted arm (keygen → claim --hosted → bind → session → verify → health →
 //! fingerprint), the token's custody, the whole-set compare, `bind`'s
 //! landing question, a refused setting never read as an absent one, a
-//! variable that is not text refused, the plaintext warning, the default
-//! store, `bind`'s paste prompt on stderr.
+//! variable and an argument that are not text refused, a refused stdout a
+//! halt, the plaintext warning, the default store, `bind`'s paste prompt on
+//! stderr.
 
 use serde_json::Value;
 use skep_client::sheet::{KeyFile, Label, Seed};
@@ -13,7 +14,7 @@ use skep_client::sign::signer_from_seed;
 use skep_identity::{encode_enroll, parse_enroll, Enrollment};
 use skep_signature::HybridSigner;
 
-use crate::common::{origin, s, skep, skep_os, spawn};
+use crate::common::{origin, s, skep, skep_os, skep_stdout_closed, spawn};
 
 const SEVEN: [&str; 7] = ["keygen", "claim", "session", "fingerprint", "verify", "health", "bind"];
 
@@ -228,6 +229,11 @@ fn the_loop_through_the_binary() {
     assert!(r.err.is_empty());
     let r = skep(&["session", "--close", "-", "--board", &board], &[], Some(b"not a token"));
     assert_eq!(r.code, 2);
+    // Bytes that are not text are no token, and are named so — never a
+    // read stdin refused.
+    let r = skep(&["session", "--close", "-", "--board", &board], &[], Some(b"\xff\xfe"));
+    assert_eq!(r.code, 2, "{r:?}");
+    assert!(r.err.contains("is not a session token"), "{}", r.err);
 
     // verify: the origin arm, the key arm, the whole-set compare.
     let r = skep(&["verify", "--board", &board, "--dir", s(&store), "--principal", "1", "--payload", s(&payload_file)], &[], None);
@@ -512,6 +518,57 @@ fn a_variable_that_is_not_text_is_refused_never_read_as_absent() {
         assert!(r.err.contains(&format!("{var}: the value is not UTF-8 text")), "{var}: {}", r.err);
         assert!(r.out.is_empty(), "{var}: {}", r.out);
     }
+}
+
+/// AN ARGUMENT THAT IS NOT TEXT IS REFUSED, NEVER A PANIC (§2.3's exit 2;
+/// `args.rs`'s `parse`): a `--dir` whose bytes are not UTF-8 is exit 2
+/// naming the argument, as a variable's value is — never std's panic on
+/// argv read as text, an exit 101 §2.3 does not have — and nothing is
+/// generated.
+#[cfg(unix)]
+#[test]
+fn an_argument_that_is_not_text_is_refused_never_a_panic() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join(OsStr::from_bytes(b"store-\xff"));
+    let r = skep_os(&[OsStr::new("keygen"), OsStr::new("--label"), OsStr::new("k"), OsStr::new("--dir"), store.as_os_str()], &[], None);
+    assert_eq!(r.code, 2, "{r:?}");
+    assert!(r.err.contains("store-\u{fffd}' is not UTF-8 text"), "the argument named: {}", r.err);
+    assert!(!r.err.contains("panicked"), "{}", r.err);
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0, "nothing generated");
+}
+
+/// A DATA WRITE STDOUT REFUSES IS A HALT, NEVER A PANIC (§2.3): with
+/// stdout a pipe whose reader is gone, `--help`, the hosted claim and a
+/// session each meet the refusal at their first DATA line — exit 3 naming
+/// it, its act the read-back, where a print macro's panic is exit 101. The
+/// claim's act stands, and the read-back finds it; the session's token,
+/// refused, is never handed over — its talk is never said.
+#[test]
+fn a_stdout_that_refuses_the_data_is_a_halt_never_a_panic() {
+    let refused = |r: &crate::common::Run| {
+        assert_eq!(r.code, 3, "{r:?}");
+        assert!(r.err.contains("stdout refused this command's data") && r.err.contains("read it back"), "{}", r.err);
+        assert!(!r.err.contains("panicked"), "{}", r.err);
+    };
+    refused(&skep_stdout_closed(&["--help"], b""));
+    let dir = tempfile::tempdir().unwrap();
+    let sd = spawn(&dir.path().join("board"), false);
+    let board = origin(sd.port());
+    let store = dir.path().join("store");
+    let r = skep(&["keygen", "--label", "mine", "--payload", "--dir", s(&store)], &[], None);
+    assert_eq!(r.code, 0, "{r:?}");
+    let (payload, fp) = (r.lines()[0].to_string(), r.lines()[1].to_string());
+    refused(&skep_stdout_closed(&["claim", "--hosted", "-", "--board", &board], payload.as_bytes()));
+    let r = skep(&["claim", "--hosted", "-", "--board", &board], &[], Some(payload.as_bytes()));
+    assert_eq!(r.code, 0, "{r:?}");
+    assert_eq!(r.out.trim(), "claimed by 1.0.1", "the claim committed ahead of the refused write");
+    let key = store.join("keys").join(format!("{fp}.key"));
+    let r = skep_stdout_closed(&["session", "--board", &board, "--dir", s(&store), "--principal", "1", "--key", s(&key)], b"");
+    refused(&r);
+    assert!(!r.err.contains("It is live until"), "the refused token is never handed over: {}", r.err);
 }
 
 /// The plaintext non-loopback WARNING rides before any signed session, and

@@ -2,16 +2,19 @@
 //! file per command beneath this one, each a `pub fn` that `main`
 //! dispatches to and that answers `Ok` or the [`Stop`] it came to, every
 //! walk a library call — and what they share, private here and so visible
-//! to each of them: the two streams, stdout DATA (`data`, `data_verbatim`)
-//! and stderr TALK (`talk`) (§2.4); the stops and §2.3's exit codes
-//! (`Stop`, and `exit_code`, the one place a stop's block and its code are
-//! chosen — `main`'s refusal of a command line it cannot parse among
-//! them; `person_door`, the person doors' check, whose refusal is a halt
-//! naming the door's own moments); the plumbing from the flags to a board,
-//! a store, a payload, a principal and a key; the three facts' one spelling
-//! (`facts`); the outstanding-act line `keygen` and `fingerprint` share
-//! (`OUTSTANDING_ACT`); and the whole-set compare, from the held set to its
-//! halt (`held_set`, `compare_genesis`).
+//! to each of them: the two streams, stdout DATA (`data`, `data_verbatim`,
+//! `--help`'s text among what they carry) and stderr TALK (`talk`, the
+//! terminal's line writer, which the prompts share) (§2.4), a DATA write
+//! stdout refuses a halt and a TALK line stderr refuses dropped, neither a
+//! panic; the stops and §2.3's exit codes (`Stop`, and `exit_code`, the one
+//! place a stop's block and its code are chosen — `main`'s refusal of a
+//! command line it cannot parse among them; `person_door`, the person
+//! doors' check, whose refusal is a halt naming the [`Door`]'s own
+//! moments); the plumbing from the flags to a board, a store, a payload, a
+//! principal and a key; the anchor boxes' per-run default ([`BoxDefault`]);
+//! the three facts' one spelling (`facts`); the outstanding-act line
+//! `keygen` and `fingerprint` share (`OUTSTANDING_ACT`); and the whole-set
+//! compare, from the held set to its halt (`held_set`, `compare_genesis`).
 //! A halt is one block on stderr: the state, its cause, the one act
 //! (AUTH-5.66; AUTH-5.67's key-file cell naming the path and the state).
 
@@ -56,7 +59,7 @@ use skep_client::store::{arm4_face, FileStore, KeyFacts, KeySelector, Purpose, S
 use skep_identity::{Fingerprint, PublicKey};
 
 use crate::args::{CommandLine, Usage, HELP};
-use crate::terminal::has_terminal;
+use crate::terminal::{has_terminal, talk};
 
 /// Why a command stopped short of exit 0 (§2.3): a usage refusal — the
 /// flag's shape alone — or a member of the halt family (§1.1's `halt` row),
@@ -64,6 +67,7 @@ use crate::terminal::has_terminal;
 /// SURFACE members (§2.3's exit-3 row). Commands name their stops with `?`;
 /// [`exit_code`] is the one place a stop's stderr block and its code are
 /// chosen together.
+#[derive(Debug)]
 pub enum Stop {
     /// A usage refusal: exit 2, the help beneath it.
     Usage(Usage),
@@ -96,22 +100,37 @@ impl From<StoreError> for Stop {
 pub fn exit_code(outcome: Result<(), Stop>) -> i32 {
     let (block, code) = match outcome {
         Ok(()) => return 0,
-        Err(Stop::Usage(u)) => (format!("{}\n\n{HELP}", u.0), 2),
+        Err(Stop::Usage(u)) => (format!("{u}\n\n{HELP}"), 2),
         Err(Stop::Halt(h)) => (h.to_string(), h.exit_code()),
     };
     talk(format!("skep: {block}"));
     code
 }
 
+/// `--help`: `HELP` on stdout, the DATA the run asked for — a write stdout
+/// refuses a halt, as every command's is.
+pub fn help() -> Result<(), Stop> {
+    data_verbatim(HELP.as_bytes())?;
+    Ok(())
+}
+
+/// A person door (§2.4; `ARCHITECTURE.md` §The command lists the eight):
+/// its `form`, as a command line spells it, and the `moments` a person
+/// answers there, in §2.4's and §6's words — each named, so neither stands
+/// in the other's place.
+#[derive(Clone, Copy, Debug)]
+struct Door {
+    form: &'static str,
+    moments: &'static str,
+}
+
 /// A person door's check (§2.4: the CLI's, never a walk's), made before
-/// anything is generated: `door` the form, `moments` what a person answers
-/// there, in §2.4's and §6's words; `ARCHITECTURE.md` §The command lists the
-/// doors.
-fn person_door(door: &str, moments: &str) -> Result<(), Halt> {
+/// anything is generated.
+fn person_door(door: Door) -> Result<(), Halt> {
     if has_terminal() {
         Ok(())
     } else {
-        Err(no_terminal(door, moments))
+        Err(no_terminal(door))
     }
 }
 
@@ -119,36 +138,46 @@ fn person_door(door: &str, moments: &str) -> Result<(), Halt> {
 /// §2.3's missing-TTY member, its face naming the moments a person answers
 /// at that door (§2.4; §6 "The terminal") — the backup moment only where it
 /// runs.
-fn no_terminal(door: &str, moments: &str) -> Halt {
+fn no_terminal(door: Door) -> Halt {
     Halt::face(
-        format!("`{door}` is a person door and requires a controlling terminal"),
+        format!("`{}` is a person door and requires a controlling terminal", door.form),
         format!(
-            "what a person answers here — {moments} — is read at the terminal, and stdin and stderr are not both a terminal: a \
-             wrapper that captured one and fed the other would answer it with no person (§2.4)"
+            "what a person answers here — {} — is read at the terminal, and stdin and stderr are not both a terminal: a \
+             wrapper that captured one and fed the other would answer it with no person (§2.4)",
+            door.moments
         ),
         "run it at a terminal; a script that must drive this walk drives the library's scripted Person in-process",
     )
 }
 
-/// DATA, to stdout.
-fn data(line: impl AsRef<str>) {
-    println!("{}", line.as_ref());
+/// DATA, to stdout — one line, flushed. A write stdout refuses — its
+/// reader gone, its disk full — is a halt ([`data_refused`]) and the
+/// command stops there: never a panic, whose exit 101 §2.3 does not have,
+/// and never a pass with the data lost.
+fn data(line: impl AsRef<str>) -> Result<(), Halt> {
+    let mut out = io::stdout().lock();
+    writeln!(out, "{}", line.as_ref()).and_then(|()| out.flush()).map_err(data_refused)
 }
 
 /// DATA, to stdout, as the bytes it came in — a body the CLI passes through
-/// untouched (`health`'s, AUTH-5.86) — ended by a newline where it has none.
-fn data_verbatim(body: &[u8]) {
+/// untouched (`health`'s, AUTH-5.86; `HELP`) — ended by a newline where it
+/// has none; a write stdout refuses a halt, as at [`data`].
+fn data_verbatim(body: &[u8]) -> Result<(), Halt> {
     let mut out = io::stdout().lock();
-    let _ = out.write_all(body);
-    if !body.ends_with(b"\n") {
-        let _ = out.write_all(b"\n");
-    }
-    let _ = out.flush();
+    let end: &[u8] = if body.ends_with(b"\n") { b"" } else { b"\n" };
+    out.write_all(body).and_then(|()| out.write_all(end)).and_then(|()| out.flush()).map_err(data_refused)
 }
 
-/// TALK, to stderr.
-fn talk(line: impl AsRef<str>) {
-    eprintln!("{}", line.as_ref());
+/// The halt a DATA write stdout refused comes to (§2.3's exit 3): what the
+/// command did before the write stands, so its act is the read-back, never
+/// the act again.
+fn data_refused(e: io::Error) -> Halt {
+    Halt::face(
+        "stdout refused this command's data",
+        e.to_string(),
+        "run it again with stdout at a terminal or a file; where it acted on the board or in the store before this write, that act \
+         stands — read it back (`skep fingerprint`, `skep verify`) rather than acting twice",
+    )
 }
 
 fn board_of(c: &CommandLine) -> Result<Board, Usage> {
@@ -203,13 +232,22 @@ fn select_key(key_file: Option<&Path>, store: &FileStore, board: &Board, princip
     }
 }
 
-/// The machine's host name and today's date in UTC — the anchor boxes'
-/// per-run default (§4.2 step 2), which becomes a permanent byline. The name
-/// is the first that answers on §6's three platforms: `COMPUTERNAME`
-/// (Windows), `HOSTNAME` (where a shell exports it), `/etc/hostname` (Linux),
-/// then the `hostname` command's first line (macOS) — cut at its first dot
-/// and lowercased, `this-machine` where none answers.
-fn host_name_and_date() -> (String, String) {
+/// The anchor boxes' per-run default (§4.2 step 2), which becomes a
+/// permanent byline: the machine's host name and today's date, each named,
+/// so neither lands in the other's place.
+#[derive(Debug)]
+struct BoxDefault {
+    host_name: String,
+    date: String,
+}
+
+/// This run's [`BoxDefault`]: the machine's host name and today's date in
+/// UTC. The name is the first that answers on §6's three platforms:
+/// `COMPUTERNAME` (Windows), `HOSTNAME` (where a shell exports it),
+/// `/etc/hostname` (Linux), then the `hostname` command's first line
+/// (macOS) — cut at its first dot and lowercased, `this-machine` where none
+/// answers.
+fn host_name_and_date() -> BoxDefault {
     let host_name = std::env::var("COMPUTERNAME")
         .ok()
         .and_then(first_line)
@@ -219,7 +257,7 @@ fn host_name_and_date() -> (String, String) {
         .unwrap_or_else(|| "this-machine".to_string());
     let host_name = host_name.split('.').next().unwrap_or("this-machine").to_lowercase();
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    (host_name, civil_date(secs))
+    BoxDefault { host_name, date: civil_date(secs) }
 }
 
 /// A host-name source's first line, trimmed; `None` where it is empty.
@@ -245,10 +283,10 @@ fn civil_date(secs: u64) -> String {
 /// The three facts, DATA on stdout — their one spelling, every command's
 /// that prints them, in the lines `bind`'s `facts_of` reads back from a
 /// reply (`account …`, `principal …`, `origin …`).
-fn facts(f: &Facts) {
-    data(format!("account {}", f.account));
-    data(format!("principal {}", f.principal));
-    data(format!("origin {}", f.origin));
+fn facts(f: &Facts) -> Result<(), Halt> {
+    data(format!("account {}", f.account))?;
+    data(format!("principal {}", f.principal))?;
+    data(format!("origin {}", f.origin))
 }
 
 /// The outstanding act of a key enrolled nowhere — AUTH-5.32's pending state
@@ -361,12 +399,15 @@ fn later_line(l: &Held) -> String {
 mod tests {
     use super::*;
 
+    /// `retire`'s door, as `commands/retire.rs` names it.
+    const RETIRE: Door = Door { form: "retire", moments: "the preview's typed confirmation" };
+
     #[test]
     fn the_host_name_is_a_sources_first_line_cut_and_lowercased() {
         assert_eq!(first_line("notebook.local\nsecond\n".into()).as_deref(), Some("notebook.local"));
         assert_eq!(first_line("  \n".into()), None, "an empty source answers nothing, and the next is asked");
         assert_eq!(first_line(String::new()), None);
-        let (host, date) = host_name_and_date();
+        let BoxDefault { host_name: host, date } = host_name_and_date();
         assert!(!host.is_empty() && !host.contains('.') && host == host.to_lowercase(), "{host}");
         assert_eq!(civil_date(0), "1970-01-01");
         assert_eq!(date.len(), "yyyy-mm-dd".len(), "{date}");
@@ -374,7 +415,8 @@ mod tests {
 
     /// Every stop answers §2.3's code from the one renderer: a usage refusal
     /// 2, a halt the code its family carries, a store refusal faced as a
-    /// halt, and a person door without a terminal a halt of the family, 3.
+    /// halt, a person door without a terminal a halt of the family, 3, and
+    /// a DATA write stdout refused a halt, 3.
     #[test]
     fn every_stop_is_rendered_with_its_exit_code() {
         assert_eq!(exit_code(Ok(())), 0);
@@ -384,7 +426,8 @@ mod tests {
         assert_eq!(exit_code(Err(Halt::Refused(refused).into())), 1);
         assert_eq!(exit_code(Err(Halt::Dial(skep_client::DialError::Connect("refused".into())).into())), 4);
         assert_eq!(exit_code(Err(StoreError::NotFound { select: "zz".into() }.into())), 3);
-        assert_eq!(exit_code(Err(no_terminal("retire", "the preview's typed confirmation").into())), 3);
+        assert_eq!(exit_code(Err(no_terminal(RETIRE).into())), 3);
+        assert_eq!(exit_code(Err(data_refused(io::ErrorKind::BrokenPipe.into()).into())), 3);
     }
 
     /// The person door's refusal is a halt's face — the state, its cause,
@@ -392,7 +435,7 @@ mod tests {
     /// the backup moment only where the door runs one.
     #[test]
     fn a_person_door_without_a_terminal_is_a_halt_naming_its_own_moments() {
-        let Halt::Halt(face) = no_terminal("retire", "the preview's typed confirmation") else { panic!("a HALT AND SURFACE member") };
+        let Halt::Halt(face) = no_terminal(RETIRE) else { panic!("a HALT AND SURFACE member") };
         assert_eq!(face.state, "`retire` is a person door and requires a controlling terminal");
         assert!(face.cause.contains("what a person answers here — the preview's typed confirmation —"), "{}", face.cause);
         assert!(!face.cause.contains("backup moment"), "retire runs no backup moment: {}", face.cause);

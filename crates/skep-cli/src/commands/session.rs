@@ -7,6 +7,7 @@ use std::io::{self, Read};
 use skep_client::board::{Scope, Token};
 use skep_client::ceremony::handshake::{handshake, Site};
 use skep_client::dial::plaintext_non_loopback_warning;
+use skep_client::halt::Halt;
 use skep_client::store::{KeySelector, KeyStore, Purpose};
 
 use super::{board_of, data, principal_or_bound, select_key, store_of, talk, Stop};
@@ -19,15 +20,20 @@ pub fn session(c: &CommandLine) -> Result<(), Stop> {
         if close != "-" {
             return Err(Usage("--close takes `-` and reads the token from stdin (or SKEP_SESSION); a token given as a flag value is refused — a command line is world-readable and outlives the run in shell history".into()).into());
         }
-        let token = match session_env()? {
-            Some(t) => t,
+        // The token's bytes, judged whole: bytes that are not text are no
+        // token, and a read stdin refuses is a halt carrying its error —
+        // never a usage refusal, which is the flag's shape alone (§2.3).
+        let bytes = match session_env()? {
+            Some(t) => t.into_bytes(),
             None => {
-                let mut text = String::new();
-                io::stdin().read_to_string(&mut text).map_err(|_| Usage("the token could not be read from stdin".into()))?;
-                text
+                let mut bytes = Vec::new();
+                io::stdin().read_to_end(&mut bytes).map_err(|e| Halt::face("the token could not be read from stdin", e.to_string(), "pipe the token in, or set SKEP_SESSION"))?;
+                bytes
             }
         };
-        let Some(token) = Token::parse(&token) else { return Err(Usage("the token read is not a session token (32 lowercase hex)".into()).into()) };
+        let Some(token) = std::str::from_utf8(&bytes).ok().and_then(Token::parse) else {
+            return Err(Usage("the token read is not a session token (32 lowercase hex)".into()).into());
+        };
         if board.session_close(&token)?.already_dead {
             talk("the token was already dead (the death signal rode the 204): a restart, a retirement, a block, a genesis at the account, or an earlier close ended it");
         }
@@ -44,9 +50,13 @@ pub fn session(c: &CommandLine) -> Result<(), Stop> {
     let principal = principal_or_bound(given, &store, &board)?;
     let key = select_key(key_file.as_deref(), &store, &board, principal, Purpose::Sign)?;
     let signer = store.signer(&KeySelector::Path(&key.path))?;
-    // CONTENT scope only (§9 item 45; RES-63); the token handed out LIVE.
+    // CONTENT scope only (§9 item 45; RES-63); the token handed out LIVE,
+    // written while the session still owns its end: a token stdout refused
+    // is closed by the session's drop, never left live with nobody holding
+    // it. Printed, its end is the holder's.
     let session = handshake(&board, Scope::Content, &*signer, principal, Site::Session)?;
+    data(session.token().as_str())?;
+    session.into_token();
     talk("the token reads, holds its draft visibility and writes content; a credential act under it answers content_session. It is live until `skep session --close -`, the key's retirement, or a daemon restart (AUTH-4.53: a captured token is this principal's content capability for that long)");
-    data(session.into_token().as_str());
     Ok(())
 }

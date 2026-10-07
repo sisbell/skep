@@ -27,7 +27,7 @@ pub fn fingerprint(c: &CommandLine) -> Result<(), Stop> {
     let keys: Vec<KeyFacts> = if let Some(path) = key_file {
         vec![store.select(&KeySelector::Path(&path), Purpose::Read)?]
     } else if let Some(select) = c.value("--select") {
-        match store.select(&KeySelector::select(&select), Purpose::Read) {
+        match store.select(&KeySelector::select(select), Purpose::Read) {
             Ok(k) => vec![k],
             Err(StoreError::Ambiguous { keys }) => {
                 let list: Vec<String> = keys.iter().map(|k| format!("{} {}", k.fingerprint, k.label.as_deref().map(render_inert).unwrap_or_default())).collect();
@@ -66,15 +66,15 @@ pub fn fingerprint(c: &CommandLine) -> Result<(), Stop> {
             }));
             continue;
         }
-        data(format!("{} {}", key.public.alg(), key.public.to_hex()));
-        data(fp.to_hex());
-        data(group_hex(&fp.to_hex()));
-        data(format!("label {}", key.label.as_deref().map(render_inert).unwrap_or_else(|| "(none)".into())));
+        data(format!("{} {}", key.public.alg(), key.public.to_hex()))?;
+        data(fp.to_hex())?;
+        data(group_hex(&fp.to_hex()))?;
+        data(format!("label {}", key.label.as_deref().map(render_inert).unwrap_or_else(|| "(none)".into())))?;
         if key.anchor {
-            data("ANCHOR — a paper's file, never a device key");
+            data("ANCHOR — a paper's file, never a device key")?;
         }
         for b in &bound {
-            data(format!("bound {b}"));
+            data(format!("bound {b}"))?;
         }
         if unbound {
             // THE PENDING STATE (AUTH-5.32), the durable half of `keygen
@@ -86,14 +86,14 @@ pub fn fingerprint(c: &CommandLine) -> Result<(), Stop> {
             } else {
                 ("UNBOUND — no board has been claimed from this store", " Where this store is to claim a board of its own: `skep claim`.")
             };
-            data(format!("{state}: `skep fingerprint --select <fp> --payload` re-prints this key's payload. {OUTSTANDING_ACT}{claim_clause} {ACCEPT_CLAUSE}"));
+            data(format!("{state}: `skep fingerprint --select <fp> --payload` re-prints this key's payload. {OUTSTANDING_ACT}{claim_clause} {ACCEPT_CLAUSE}"))?;
         }
         if let Some(record) = &record {
-            data(record);
+            data(record)?;
         }
     }
     if c.switch("--json") {
-        data(serde_json::Value::Array(json_rows).to_string());
+        data(serde_json::Value::Array(json_rows).to_string())?;
     }
     Ok(())
 }

@@ -35,12 +35,11 @@ const REPLY_SENDER: &str = "whoever printed the reply — the enrolling device, 
 /// `given` is `CommandLine::principal`'s answer; a reply's principal line
 /// that is no principal halts, never standing as one not given.
 fn facts_of(c: &CommandLine, board: &Board, given: Option<u64>) -> Result<Facts, Halt> {
-    let mut account = c.value("--account");
+    let mut account = c.value("--account").map(str::to_owned);
     let mut principal = given;
     if let Some(arg) = c.value("--payload") {
-        let bytes = read_payload(&arg)?;
-        let text = String::from_utf8_lossy(&bytes).to_string();
-        for line in text.lines() {
+        let bytes = read_payload(arg)?;
+        for line in String::from_utf8_lossy(&bytes).lines() {
             let mut parts = line.split_whitespace();
             match (parts.next(), parts.next()) {
                 (Some("account"), Some(a)) => account = Some(a.to_string()),
@@ -86,6 +85,7 @@ fn facts_of(c: &CommandLine, board: &Board, given: Option<u64>) -> Result<Facts,
 /// accept` made is a key file like `keygen`'s, recording nothing of the door
 /// that made it. The question states what each answer costs where it is
 /// wrong, and proposes none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Landing {
     /// The enroll hop, or a rotation's: another of the person's devices
     /// enrolled this key, the genesis is theirs, and nothing is compared.
@@ -177,7 +177,7 @@ pub fn bind(c: &CommandLine) -> Result<(), Stop> {
     // anchor files and this device's key, or on the DECLINE arm this
     // device's key alone — the person asked which landing this is where no
     // `--anchor` says.
-    let held = match held_set(&store, None, &c.all("--anchor"), &key)? {
+    let held = match held_set(&store, None, c.all("--anchor"), &key)? {
         Some(held) => Some(held),
         None => match landing()? {
             Some(Landing::Hop) => None,
@@ -235,9 +235,9 @@ pub fn bind(c: &CommandLine) -> Result<(), Stop> {
     if let Err(w) = store.bind(&line) {
         talk(w.to_string());
     }
-    facts(&Facts { account, principal, origin });
+    facts(&Facts { account, principal, origin })?;
     if let Some(s) = agent_space {
-        data(format!("agent space {s}"));
+        data(format!("agent space {s}"))?;
     }
     Ok(())
 }

@@ -1,41 +1,102 @@
 //! Flag parsing in the daemon's style (`skepd/src/main.rs`'s `parse_args`,
-//! `from_env`). A command line is judged against THE GRAMMAR, one row per
-//! command beside `HELP`, the text that documents it: a flag in no row, a
-//! flag of another command's, a missing value and a second value of a flag
-//! that takes one are usage refusals (§2.3's exit 2 — the flag's SHAPE
-//! alone). Every setting is read through `CommandLine::setting`, the one
-//! place a flag beats its environment variable, and its reader — named for
-//! what it answers, an origin, a store's directory, a key file's path, a
-//! principal — answers the refusal and the absence apart: `Ok(None)` for a
-//! setting given nowhere, `Err` for one given badly, a variable whose value
-//! is not UTF-8 text among them, so no command reads a refused value as an
-//! absent one. The environment names are §9 item 21's: `SKEP_BOARD`,
+//! `from_env`). A command line opens with its [`Command`], one of §2.1's
+//! thirteen, and is judged against THE GRAMMAR, one row per command beside
+//! `HELP`, the text that documents it: a flag in no row, a flag of another
+//! command's, a missing value and a second value of a flag that takes one
+//! are usage refusals (§2.3's exit 2 — the flag's SHAPE alone), and so is
+//! an argument that is not UTF-8 text, refused as a variable's is. Every
+//! setting is read through `CommandLine::setting`, the one place a flag
+//! beats its environment variable, and its reader — named for what it
+//! answers, an origin, a store's directory, a key file's path, a principal
+//! — answers the refusal and the absence apart: `Ok(None)` for a setting
+//! given nowhere, `Err` for one given badly, a variable whose value is not
+//! UTF-8 text among them, so no command reads a refused value as an absent
+//! one. The environment names are §9 item 21's: `SKEP_BOARD`,
 //! `SKEP_KEYSTORE`, `SKEP_KEY`, `SKEP_PRINCIPAL`, `SKEP_SESSION` — read here
 //! and nowhere else in the crate, `SKEP_SESSION` by `session_env` alone, the
 //! one setting no flag carries (`tests/it/tidy.rs`).
 
 use std::collections::HashMap;
 use std::env::{self, VarError};
+use std::ffi::OsString;
+use std::fmt;
 use std::path::PathBuf;
 
 use skep_client::Origin;
 
-/// A usage refusal.
+/// A usage refusal: what is wrong with the command line, one sentence that
+/// §2.3's exit 2 prints above `HELP`.
 #[derive(Debug)]
 pub struct Usage(pub String);
 
+impl fmt::Display for Usage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Usage {}
+
 /// The parse's answer: the help, or a command with its line.
+#[derive(Debug)]
 pub enum Parsed {
     Help,
     Command(CommandLine),
 }
 
-/// One command line: the command, one of §2.1's thirteen; its flags with
-/// their values (a flag that repeats keeps every value, in order); and its
-/// switches.
-#[derive(Debug, Default)]
+/// One of `client.md` §2.1's thirteen commands — the verb a command line
+/// opens with, what THE GRAMMAR's rows are keyed by, and what `main`
+/// dispatches on, one arm each, which the compiler holds exhaustive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Command {
+    Keygen,
+    Claim,
+    Session,
+    Fingerprint,
+    Verify,
+    Health,
+    Bind,
+    Enroll,
+    Recover,
+    Retire,
+    Rotate,
+    Handoff,
+    Accept,
+}
+
+impl Command {
+    /// The verb as a command line spells it.
+    pub fn verb(self) -> &'static str {
+        match self {
+            Command::Keygen => "keygen",
+            Command::Claim => "claim",
+            Command::Session => "session",
+            Command::Fingerprint => "fingerprint",
+            Command::Verify => "verify",
+            Command::Health => "health",
+            Command::Bind => "bind",
+            Command::Enroll => "enroll",
+            Command::Recover => "recover",
+            Command::Retire => "retire",
+            Command::Rotate => "rotate",
+            Command::Handoff => "handoff",
+            Command::Accept => "accept",
+        }
+    }
+}
+
+/// The verb, as every refusal that names the command spells it.
+impl fmt::Display for Command {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.verb())
+    }
+}
+
+/// One command line: the command; its flags with their values (a flag that
+/// repeats keeps every value, in order); and its switches.
+#[derive(Debug)]
 pub struct CommandLine {
-    pub command: String,
+    pub command: Command,
     values: HashMap<String, Vec<String>>,
     switches: Vec<String>,
 }
@@ -48,7 +109,7 @@ const GLOBAL: [&str; 5] = ["--board", "--dir", "--key", "--principal", "--label"
 
 /// One command's flags beyond the [`GLOBAL`] ones.
 struct Row {
-    command: &'static str,
+    command: Command,
     /// The flags that take one value.
     once: &'static [&'static str],
     /// The flags that take a value and REPEAT, every value kept in order.
@@ -63,19 +124,19 @@ struct Row {
 /// `fingerprint`, where it prints. `--yes` is in no row: a retirement's
 /// confirmation is a typed answer at the terminal, never a flag (AUTH-5.46).
 const GRAMMAR: [Row; 13] = [
-    Row { command: "keygen", once: &[], repeated: &["--anchor-label", "--anchor-out"], switches: &["--payload", "--anchors", "--paper"] },
-    Row { command: "claim", once: &["--name", "--hosted"], repeated: &["--anchor-out"], switches: &["--paper"] },
-    Row { command: "session", once: &["--close"], repeated: &[], switches: &[] },
-    Row { command: "fingerprint", once: &["--select"], repeated: &[], switches: &["--payload"] },
-    Row { command: "verify", once: &["--payload"], repeated: &["--anchor"], switches: &[] },
-    Row { command: "health", once: &[], repeated: &[], switches: &[] },
-    Row { command: "bind", once: &["--account", "--payload"], repeated: &["--anchor"], switches: &[] },
-    Row { command: "enroll", once: &["--payload", "--reply"], repeated: &[], switches: &[] },
-    Row { command: "recover", once: &["--anchor"], repeated: &["--lost", "--anchor-out"], switches: &["--stolen", "--anchor-lost", "--paper"] },
-    Row { command: "retire", once: &["--fingerprint"], repeated: &[], switches: &[] },
-    Row { command: "rotate", once: &["--payload"], repeated: &[], switches: &[] },
-    Row { command: "handoff", once: &["--account", "--payload", "--anchor"], repeated: &[], switches: &[] },
-    Row { command: "accept", once: &["--account"], repeated: &["--anchor-out", "--anchor"], switches: &["--paper", "--no-anchors", "--reprint"] },
+    Row { command: Command::Keygen, once: &[], repeated: &["--anchor-label", "--anchor-out"], switches: &["--payload", "--anchors", "--paper"] },
+    Row { command: Command::Claim, once: &["--name", "--hosted"], repeated: &["--anchor-out"], switches: &["--paper"] },
+    Row { command: Command::Session, once: &["--close"], repeated: &[], switches: &[] },
+    Row { command: Command::Fingerprint, once: &["--select"], repeated: &[], switches: &["--payload"] },
+    Row { command: Command::Verify, once: &["--payload"], repeated: &["--anchor"], switches: &[] },
+    Row { command: Command::Health, once: &[], repeated: &[], switches: &[] },
+    Row { command: Command::Bind, once: &["--account", "--payload"], repeated: &["--anchor"], switches: &[] },
+    Row { command: Command::Enroll, once: &["--payload", "--reply"], repeated: &[], switches: &[] },
+    Row { command: Command::Recover, once: &["--anchor"], repeated: &["--lost", "--anchor-out"], switches: &["--stolen", "--anchor-lost", "--paper"] },
+    Row { command: Command::Retire, once: &["--fingerprint"], repeated: &[], switches: &[] },
+    Row { command: Command::Rotate, once: &["--payload"], repeated: &[], switches: &[] },
+    Row { command: Command::Handoff, once: &["--account", "--payload", "--anchor"], repeated: &[], switches: &[] },
+    Row { command: Command::Accept, once: &["--account"], repeated: &["--anchor-out", "--anchor"], switches: &["--paper", "--no-anchors", "--reprint"] },
 ];
 
 /// The help text: the thirteen commands, each as the design writes it, and
@@ -147,14 +208,17 @@ exit codes: 0 done, 1 the board refused, 2 usage, 3 halt and surface,
 a retirement's confirmation is typed at the terminal.
 ";
 
-pub fn parse(mut argv: impl Iterator<Item = String>) -> Result<Parsed, Usage> {
-    let Some(first) = argv.next() else { return Err(Usage("a command is required".into())) };
+/// The command line after the program's name, as the platform carries it:
+/// each argument taken as UTF-8 text, or refused naming it.
+pub fn parse(argv: impl IntoIterator<Item = OsString>) -> Result<Parsed, Usage> {
+    let mut argv = argv.into_iter().map(|arg| arg.into_string().map_err(|arg| Usage(format!("the argument '{}' is not UTF-8 text", arg.to_string_lossy()))));
+    let Some(first) = argv.next().transpose()? else { return Err(Usage("a command is required".into())) };
     if first == "--help" || first == "-h" || first == "help" {
         return Ok(Parsed::Help);
     }
-    let Some(row) = GRAMMAR.iter().find(|r| r.command == first) else { return Err(Usage(format!("unknown command `{first}`"))) };
-    let mut line = CommandLine { command: first, ..CommandLine::default() };
-    while let Some(arg) = argv.next() {
+    let Some(row) = GRAMMAR.iter().find(|r| r.command.verb() == first) else { return Err(Usage(format!("unknown command `{first}`"))) };
+    let mut line = CommandLine { command: row.command, values: HashMap::new(), switches: Vec::new() };
+    while let Some(arg) = argv.next().transpose()? {
         let flag = arg.as_str();
         if flag == "--help" || flag == "-h" {
             return Ok(Parsed::Help);
@@ -165,7 +229,7 @@ pub fn parse(mut argv: impl Iterator<Item = String>) -> Result<Parsed, Usage> {
         }
         let repeats = row.repeated.contains(&flag);
         if repeats || row.once.contains(&flag) || GLOBAL.contains(&flag) {
-            let Some(value) = argv.next() else { return Err(Usage(format!("{arg} needs a value"))) };
+            let Some(value) = argv.next().transpose()? else { return Err(Usage(format!("{arg} needs a value"))) };
             if !repeats && line.values.contains_key(&arg) {
                 return Err(Usage(format!("`{arg}` is given at most once at `{}`", row.command)));
             }
@@ -186,16 +250,17 @@ impl CommandLine {
         self.switches.iter().any(|s| s == name)
     }
 
-    /// Every value a flag that repeats was given, in order.
-    pub fn all(&self, name: &str) -> Vec<String> {
-        self.values.get(name).cloned().unwrap_or_default()
+    /// Every value a flag that repeats was given, in order — lent: a caller
+    /// that keeps them copies them.
+    pub fn all(&self, name: &str) -> &[String] {
+        self.values.get(name).map(Vec::as_slice).unwrap_or_default()
     }
 
     /// The value a flag that takes one was given — the flag alone; a
     /// setting is read through its own reader below, which consults the
-    /// variable.
-    pub fn value(&self, name: &str) -> Option<String> {
-        self.values.get(name).and_then(|v| v.first()).cloned()
+    /// variable. Lent, as [`CommandLine::all`]'s are.
+    pub fn value(&self, name: &str) -> Option<&str> {
+        self.values.get(name).and_then(|v| v.first()).map(String::as_str)
     }
 
     /// A SETTING: the flag's value, else its variable's — a flag beats its
@@ -204,7 +269,7 @@ impl CommandLine {
     /// refused ([`env_text`]), never read as unset.
     fn setting(&self, name: &str, var: &str) -> Result<Option<String>, Usage> {
         match self.value(name) {
-            Some(v) => Ok(Some(v)),
+            Some(v) => Ok(Some(v.to_owned())),
             None => env_text(var),
         }
     }
@@ -269,8 +334,8 @@ fn env_text(var: &str) -> Result<Option<String>, Usage> {
 mod tests {
     use super::*;
 
-    fn argv(a: &[&str]) -> impl Iterator<Item = String> {
-        a.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter()
+    fn argv(a: &[&str]) -> Vec<OsString> {
+        a.iter().copied().map(OsString::from).collect()
     }
 
     fn refusal(a: &[&str]) -> String {
@@ -283,7 +348,7 @@ mod tests {
     #[test]
     fn flags_parse_and_refusals_are_named() {
         let Parsed::Command(c) = parse(argv(&["claim", "--board", "http://127.0.0.1:8642", "--anchor-out", "/a", "--anchor-out", "/b", "--paper"])).unwrap() else { panic!() };
-        assert_eq!(c.command, "claim");
+        assert_eq!(c.command, Command::Claim);
         assert_eq!(c.all("--anchor-out"), ["/a", "/b"]);
         assert!(c.switch("--paper"));
         assert_eq!(c.origin().unwrap().as_str(), "http://127.0.0.1:8642");
@@ -323,7 +388,7 @@ mod tests {
         assert_eq!(c.all("--anchor"), ["/a", "/b"], "--anchor repeats at verify");
         assert!(c.switch("--json"), "--json is every command's");
         let Parsed::Command(c) = parse(argv(&["keygen", "--label", "phone", "--dir", "/s"])).unwrap() else { panic!() };
-        assert_eq!(c.value("--label").as_deref(), Some("phone"), "the settings and --label are every command's");
+        assert_eq!(c.value("--label"), Some("phone"), "the settings and --label are every command's");
         // A flag named whole: `--anchor` in `--anchor <path>`, never in
         // `--anchor-out`.
         let documented = |flag: &str| HELP.match_indices(flag).any(|(i, _)| !HELP[i + flag.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '-'));
@@ -332,6 +397,34 @@ mod tests {
                 assert!(documented(flag), "`{flag}` of `{}` is documented in HELP", row.command);
             }
             assert!(HELP.contains(&format!("\n  {} ", row.command)), "`{}` is listed in HELP", row.command);
+        }
+    }
+
+    /// Each row is one command's, opened by its own verb: no two rows share
+    /// a command, and every row's verb parses to that row's command.
+    #[test]
+    fn each_row_is_one_command_opened_by_its_verb() {
+        let commands: std::collections::HashSet<Command> = GRAMMAR.iter().map(|r| r.command).collect();
+        assert_eq!(commands.len(), GRAMMAR.len(), "no two rows share a command");
+        for row in &GRAMMAR {
+            let Parsed::Command(c) = parse(argv(&[row.command.verb()])).unwrap() else { panic!("`{}` parsed as the help", row.command) };
+            assert_eq!(c.command, row.command);
+        }
+    }
+
+    /// An argument that is not UTF-8 text is refused naming it — as a
+    /// variable's is — wherever it stands: the command, a flag, a value.
+    #[cfg(unix)]
+    #[test]
+    fn an_argument_that_is_not_text_is_refused_naming_it() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let not_text = || OsString::from_vec(b"store-\xff".to_vec());
+        for line in [vec![not_text()], vec!["keygen".into(), not_text()], vec!["keygen".into(), "--dir".into(), not_text()]] {
+            match parse(line) {
+                Err(Usage(text)) => assert_eq!(text, "the argument 'store-\u{fffd}' is not UTF-8 text"),
+                Ok(parsed) => panic!("parsed: {parsed:?}"),
+            }
         }
     }
 }

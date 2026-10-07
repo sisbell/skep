@@ -15,46 +15,43 @@
 
 #![forbid(unsafe_code)]
 
-// The grammar — each command's flags and switches, one row per command —
-// beside `HELP`, and the settings, each flag beating its environment
-// variable.
+// The thirteen `Command`s and the grammar — each command's flags and
+// switches, one row per command — beside `HELP`, and the settings, each
+// flag beating its environment variable.
 mod args;
 // The `Person` over the terminal: `answer`, the one reader every prompt
-// goes through, the sheet's box, and the controlling-terminal check the
-// person doors make.
+// goes through, `talk`, the one writer of a line on stderr, the sheet's
+// box, and the controlling-terminal check the person doors make.
 mod terminal;
-// The thirteen commands, one file each beneath it, and what they share: the
-// two streams, the stops and their exit codes, the three facts' spelling.
+// The thirteen commands, one file each beneath it, and what they share:
+// DATA's writers, the stops and their exit codes, the three facts'
+// spelling.
 mod commands;
 
 use std::process::exit;
 
-use args::{Parsed, Usage, HELP};
+use args::{Command, Parsed};
 
 fn main() {
-    let parsed = match args::parse(std::env::args().skip(1)) {
-        Ok(Parsed::Help) => {
-            print!("{HELP}");
-            exit(0);
-        }
+    let parsed = match args::parse(std::env::args_os().skip(1)) {
+        Ok(Parsed::Help) => exit(commands::exit_code(commands::help())),
         Ok(Parsed::Command(c)) => c,
         Err(u) => exit(commands::exit_code(Err(u.into()))),
     };
-    let outcome = match parsed.command.as_str() {
-        "keygen" => commands::keygen(&parsed),
-        "claim" => commands::claim(&parsed),
-        "session" => commands::session(&parsed),
-        "fingerprint" => commands::fingerprint(&parsed),
-        "verify" => commands::verify(&parsed),
-        "health" => commands::health(&parsed),
-        "bind" => commands::bind(&parsed),
-        "enroll" => commands::enroll(&parsed),
-        "recover" => commands::recover(&parsed),
-        "retire" => commands::retire(&parsed),
-        "rotate" => commands::rotate(&parsed),
-        "handoff" => commands::handoff(&parsed),
-        "accept" => commands::accept(&parsed),
-        other => Err(Usage(format!("unknown command `{other}`")).into()),
+    let outcome = match parsed.command {
+        Command::Keygen => commands::keygen(&parsed),
+        Command::Claim => commands::claim(&parsed),
+        Command::Session => commands::session(&parsed),
+        Command::Fingerprint => commands::fingerprint(&parsed),
+        Command::Verify => commands::verify(&parsed),
+        Command::Health => commands::health(&parsed),
+        Command::Bind => commands::bind(&parsed),
+        Command::Enroll => commands::enroll(&parsed),
+        Command::Recover => commands::recover(&parsed),
+        Command::Retire => commands::retire(&parsed),
+        Command::Rotate => commands::rotate(&parsed),
+        Command::Handoff => commands::handoff(&parsed),
+        Command::Accept => commands::accept(&parsed),
     };
     exit(commands::exit_code(outcome));
 }

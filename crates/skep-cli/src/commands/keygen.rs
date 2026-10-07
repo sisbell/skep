@@ -19,7 +19,7 @@ use skep_client::sheet::{group_hex, Label};
 use skep_client::store::{KeySelector, KeyStore, Purpose};
 use skep_identity::{encode_enroll, Enrollment};
 
-use super::{data, host_name_and_date, person_door, store_of, talk, Stop, OUTSTANDING_ACT};
+use super::{data, host_name_and_date, person_door, store_of, talk, BoxDefault, Door, Stop, OUTSTANDING_ACT};
 use crate::args::CommandLine;
 use crate::terminal::Terminal;
 
@@ -58,14 +58,14 @@ pub fn keygen(c: &CommandLine) -> Result<(), Stop> {
     // `--anchors`: the DOOR-SIDE form (§2.2), a person door.
     let door_side = c.switch("--anchors");
     if door_side {
-        person_door("keygen --anchors", "the door-side backup moment")?;
+        person_door(Door { form: "keygen --anchors", moments: "the door-side backup moment" })?;
     }
     let mut person = Terminal;
     // The device-name box: `--label`, or asked; the statements whenever a
     // label is fixed; the domain test at the box (P13).
     let label = match c.value("--label") {
         Some(text) => {
-            let label = Label::new(&text).map_err(|fault| Halt::face(format!("the label is refused at the box: {fault}"), "AUTH-1.24's domain: non-empty, no line break, at most 128 bytes of UTF-8", "pass a label inside the domain"))?;
+            let label = Label::new(text).map_err(|fault| Halt::face(format!("the label is refused at the box: {fault}"), "AUTH-1.24's domain: non-empty, no line break, at most 128 bytes of UTF-8", "pass a label inside the domain"))?;
             for s in device_box_statements(door_side) {
                 person.say(Public(Statement { rule: "AUTH-5.42", text: s }));
             }
@@ -97,10 +97,10 @@ pub fn keygen(c: &CommandLine) -> Result<(), Stop> {
             .map(|l| Label::new(l))
             .collect::<Result<_, _>>()
             .map_err(|fault| Halt::face(format!("an anchor label is refused at the box: {fault}"), "AUTH-1.24's domain", "pass labels inside the domain"))?;
-        let (host_name, date) = host_name_and_date();
+        let BoxDefault { host_name, date } = host_name_and_date();
         let opts = BackupOptions {
             labels,
-            destinations: c.all("--anchor-out").into_iter().map(PathBuf::from).collect(),
+            destinations: c.all("--anchor-out").iter().map(PathBuf::from).collect(),
             paper: c.switch("--paper"),
             store: Some(store.root().to_path_buf()),
             host_name,
@@ -117,7 +117,7 @@ pub fn keygen(c: &CommandLine) -> Result<(), Stop> {
     entries.push(Enrollment::new(key.public.clone(), false, Some(label.as_str().to_string())).expect("a label the box admitted"));
     if c.switch("--payload") || door_side {
         // The record FIRST (§2.2): one canonical JSON object.
-        data(encode_enroll(&entries));
+        data(encode_enroll(&entries))?;
         if door_side {
             talk("this three-key payload serves ONE door, the hosted signup — never the enroll hop, whose `skep enroll` refuses every anchor-flagged entry at the paste");
         } else {
@@ -127,7 +127,7 @@ pub fn keygen(c: &CommandLine) -> Result<(), Stop> {
         }
     }
     // The fingerprint LAST, flat and grouped — never the bare public key.
-    data(key.fingerprint.to_hex());
-    data(group_hex(&key.fingerprint.to_hex()));
+    data(key.fingerprint.to_hex())?;
+    data(group_hex(&key.fingerprint.to_hex()))?;
     Ok(())
 }

@@ -1,6 +1,7 @@
 //! The fixture: a daemon in-process (skepd's spawn pattern), and the built
 //! `skep` binary run with its environment scrubbed of every `SKEP_*`
-//! variable, stdin fed, stdout and stderr captured.
+//! variable, stdin fed, stdout and stderr captured — or stdout closed, its
+//! reader gone before the run writes.
 
 #![allow(dead_code)]
 
@@ -8,7 +9,7 @@ use std::ffi::OsStr;
 use std::io::{ErrorKind, Write};
 use std::net::TcpListener;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use skepd::{serve, AuthOptions, Daemon, Skepd, DEFAULT_WORKERS};
@@ -89,9 +90,28 @@ pub fn skep(args: &[&str], envs: &[(&str, &str)], stdin: Option<&[u8]>) -> Run {
     skep_os(args, &envs, stdin)
 }
 
-/// [`skep`], each variable's value whatever the platform carries — bytes
-/// that are not UTF-8 text among them.
-pub fn skep_os(args: &[&str], envs: &[(&str, &OsStr)], stdin: Option<&[u8]>) -> Run {
+/// [`skep`], each argument and each variable's value whatever the platform
+/// carries — bytes that are not UTF-8 text among them.
+pub fn skep_os<A: AsRef<OsStr>>(args: &[A], envs: &[(&str, &OsStr)], stdin: Option<&[u8]>) -> Run {
+    let mut child = command(args, envs).spawn().expect("spawn skep");
+    feed(&mut child, stdin);
+    run_of(child.wait_with_output().expect("wait"))
+}
+
+/// [`skep`] with stdout a pipe whose reader is gone before the run starts:
+/// every write the run makes to stdout meets a pipe with no reader, with no
+/// race against the run. `out` is empty — nothing reads it.
+pub fn skep_stdout_closed(args: &[&str], stdin: &[u8]) -> Run {
+    let (reader, writer) = std::io::pipe().expect("a pipe");
+    drop(reader);
+    let mut child = command(args, &[]).stdout(writer).spawn().expect("spawn skep");
+    feed(&mut child, Some(stdin));
+    run_of(child.wait_with_output().expect("wait"))
+}
+
+/// The built `skep` with `args`, the `SKEP_*` environment scrubbed then
+/// `envs` set, its three streams piped.
+fn command<A: AsRef<OsStr>>(args: &[A], envs: &[(&str, &OsStr)]) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_skep"));
     cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     for var in ["SKEP_BOARD", "SKEP_KEYSTORE", "SKEP_KEY", "SKEP_PRINCIPAL", "SKEP_SESSION"] {
@@ -100,14 +120,18 @@ pub fn skep_os(args: &[&str], envs: &[(&str, &OsStr)], stdin: Option<&[u8]>) -> 
     for (k, v) in envs {
         cmd.env(k, v);
     }
-    let mut child = cmd.spawn().expect("spawn skep");
-    {
-        let mut si = child.stdin.take().expect("stdin");
-        if let Some(bytes) = stdin {
-            si.write_all(bytes).expect("feed stdin");
-        }
-        // Dropped here: EOF.
+    cmd
+}
+
+/// `stdin` fed to the run, then closed — EOF; closed at once where `None`.
+fn feed(child: &mut Child, stdin: Option<&[u8]>) {
+    let mut si = child.stdin.take().expect("stdin");
+    if let Some(bytes) = stdin {
+        si.write_all(bytes).expect("feed stdin");
     }
-    let out = child.wait_with_output().expect("wait");
+}
+
+/// A finished run: its exit code and both streams as text.
+fn run_of(out: Output) -> Run {
     Run { code: out.status.code().unwrap_or(-1), out: String::from_utf8_lossy(&out.stdout).to_string(), err: String::from_utf8_lossy(&out.stderr).to_string() }
 }

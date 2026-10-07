@@ -8,7 +8,7 @@ use skep_client::ceremony::claim::{self, ClaimOutcome, HostedOutcome, NotebookOp
 use skep_client::dial::plaintext_non_loopback_warning;
 use skep_client::sheet::Facts;
 
-use super::{board_of, data, facts, host_name_and_date, person_door, read_payload, store_of, talk, Stop};
+use super::{board_of, data, facts, host_name_and_date, person_door, read_payload, store_of, talk, BoxDefault, Door, Stop};
 use crate::args::CommandLine;
 use crate::terminal::Terminal;
 
@@ -17,9 +17,9 @@ pub fn claim(c: &CommandLine) -> Result<(), Stop> {
     let principal = c.principal()?;
     if let Some(payload_arg) = c.value("--hosted") {
         // THE HOSTED ARM (§4.5): no --dir, no person, nothing generated.
-        let payload = read_payload(&payload_arg)?;
+        let payload = read_payload(payload_arg)?;
         match claim::hosted(&board, &payload, principal.unwrap_or(1))? {
-            HostedOutcome::AlreadyClaimed { claimant } => data(format!("claimed by {claimant}")),
+            HostedOutcome::AlreadyClaimed { claimant } => data(format!("claimed by {claimant}"))?,
             HostedOutcome::Claimed(reply) => {
                 for l in &reply.log {
                     talk(l);
@@ -30,46 +30,46 @@ pub fn claim(c: &CommandLine) -> Result<(), Stop> {
                 // sentence among them — have one carrier, the deployment
                 // template's "Your board is live" message (cs6-S2); the
                 // operator's log above keeps the anchorless note.
-                data(format!("claimant {}", reply.claimant));
-                facts(&reply.facts);
+                data(format!("claimant {}", reply.claimant))?;
+                facts(&reply.facts)?;
                 data(format!(
                     "first act: from the device that generated the payload run `skep verify --board {} --principal {} --payload <the record it printed>` \
                      (or `--anchor <a> --anchor <b>`): the genesis record compared entry for entry, fingerprint and anchor flag, against what that \
                      device composed — it confirms the keys on the board, and it cannot tell you the board will open a session for you",
                     reply.facts.origin, reply.facts.principal
-                ));
-                data("second act: in your first signed session the setup act runs — `skep claim --board <origin> --dir <store>` from that device performs it: creating your account also creates a space for your agents beneath it, and its home");
+                ))?;
+                data("second act: in your first signed session the setup act runs — `skep claim --board <origin> --dir <store>` from that device performs it: creating your account also creates a space for your agents beneath it, and its home")?;
             }
         }
         return Ok(());
     }
     // THE NOTEBOOK ARM: a person door.
-    person_door("claim", "the name boxes and the backup moment")?;
+    person_door(Door { form: "claim", moments: "the name boxes and the backup moment" })?;
     let store = store_of(c)?;
     if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);
     }
-    let (host_name, date) = host_name_and_date();
+    let BoxDefault { host_name, date } = host_name_and_date();
     let opts = NotebookOptions {
         principal,
-        display_name: c.value("--name"),
-        anchor_out: c.all("--anchor-out").into_iter().map(PathBuf::from).collect(),
+        display_name: c.value("--name").map(str::to_owned),
+        anchor_out: c.all("--anchor-out").iter().map(PathBuf::from).collect(),
         paper: c.switch("--paper"),
         host_name,
         date,
     };
     match claim::notebook(&board, &store, &mut Terminal, &opts)? {
         ClaimOutcome::Stranger { claimant } => {
-            data(format!("claimed by {claimant}; no key in this store is bound to it — `skep verify` tells you whether one is enrolled"));
+            data(format!("claimed by {claimant}; no key in this store is bound to it — `skep verify` tells you whether one is enrolled"))?;
         }
         ClaimOutcome::Ours(done) => {
             for w in &done.warnings {
                 talk(w);
             }
             talk(format!("this board is yours — account {}, principal {}, key {}", done.account, done.principal, done.fingerprint));
-            facts(&Facts { account: done.account.clone(), principal: done.principal, origin: board.dialed().clone() });
+            facts(&Facts { account: done.account.clone(), principal: done.principal, origin: board.dialed().clone() })?;
             if let Some(space) = &done.agent_space {
-                data(format!("agent space {space}"));
+                data(format!("agent space {space}"))?;
             }
         }
     }

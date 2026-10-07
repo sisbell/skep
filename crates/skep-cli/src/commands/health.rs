@@ -11,7 +11,7 @@ pub fn health(c: &CommandLine) -> Result<(), Stop> {
     let health = board.health()?;
     // The body VERBATIM — one JSON document already; the CLI never adds a
     // `mode` field (AUTH-5.86's negative pin).
-    data_verbatim(&health.raw);
+    data_verbatim(&health.raw)?;
     let mode = Mode::of(&health);
     talk(format!("mode {} (claimant {}, local_trust {}) — derived from the pair, no mode field (AUTH-5.86)", mode.name(), health.claimant().unwrap_or("null"), health.local_trust()));
     talk(format!("bare arm (origins): [{}]", health.origins().join(", ")));

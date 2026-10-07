@@ -12,13 +12,23 @@
 //! module it reaches. A command file names its parent through `super::`,
 //! which is the tree itself and not an edge between modules.
 //!
-//! STDOUT CARRIES DATA (§2.4). Every write to stdout under `src/` — a
-//! `print!` or `println!`, or a `stdout(` handle — sits in one of the
-//! [`STDOUT_WRITERS`]: `data` and `data_verbatim`, which every command's
-//! DATA goes through, and `main`, which prints `--help`. What reaches
-//! stdout is then audited at their call sites alone. TALK, the prompts and
-//! the halts take `eprint!`, `eprintln!` and `stderr()`, which the scan does
-//! not count.
+//! NO WRITE PANICS. std's `print!`, `println!`, `eprint!` and `eprintln!`
+//! panic on a write their stream refuses — a reader gone, a disk full —
+//! and a panic is exit 101, which §2.3 does not have; so none stands under
+//! `src/`, and every write is an `io::Write` call whose failure its writer
+//! answers.
+//!
+//! STDOUT CARRIES DATA (§2.4). Every `stdout(` handle under `src/` sits in
+//! one of the [`STDOUT_WRITERS`]: `data` and `data_verbatim`, which every
+//! command's DATA goes through, `--help`'s text among it, and which answer
+//! a write stdout refuses with a halt. What reaches stdout is then audited
+//! at their call sites alone.
+//!
+//! STDERR CARRIES TALK. Every `stderr(` handle under `src/` sits in one of
+//! the [`STDERR_WRITERS`]: `talk`, the one line writer — every statement,
+//! prompt heading, command's TALK and halt — and `show`, a prompt's text,
+//! the sheet's box and the dismissal's clear, both dropping a write stderr
+//! refuses; and `has_terminal`, which writes nothing.
 //!
 //! A PROMPT HOLDS STDIN FOR ONE LINE. Every touch of stdin under `src/` — a
 //! `stdin(` handle — sits in one of the [`STDIN_READERS`]: `answer`, the one
@@ -33,16 +43,21 @@
 //!
 //! Each scan asserts that it found what it allows — an edge between
 //! modules, a write in each writer, a touch in each reader, the five
-//! variables in `src/args.rs` — so a scan gone blind fails rather than
-//! passing a clean tree. Comments are not code, and neither is anything
-//! from an inline `mod tests {` on.
+//! variables in `src/args.rs` — or, where it allows nothing, that it reads
+//! the forms it refuses, so a scan gone blind fails rather than passing a
+//! clean tree. Comments are not code, and neither is anything from an
+//! inline `mod tests {` on.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// The writers that may write to stdout: a file under `src/` and the
 /// column-0 function in it.
-const STDOUT_WRITERS: &[(&str, &str)] = &[("commands.rs", "data"), ("commands.rs", "data_verbatim"), ("main.rs", "main")];
+const STDOUT_WRITERS: &[(&str, &str)] = &[("commands.rs", "data"), ("commands.rs", "data_verbatim")];
+
+/// The functions that may take a stderr handle: a file under `src/` and
+/// the column-0 function in it.
+const STDERR_WRITERS: &[(&str, &str)] = &[("terminal.rs", "has_terminal"), ("terminal.rs", "talk"), ("terminal.rs", "show")];
 
 /// The functions that may touch stdin: a file under `src/` and the
 /// column-0 function in it.
@@ -101,12 +116,45 @@ fn every_module_names_only_itself_and_modules_declared_above_it() {
 }
 
 #[test]
-fn stdout_is_written_by_the_three_writers_alone() {
+fn no_stream_is_written_by_a_print_macro() {
+    for (sample, prints) in [("    eprintln!(\"{x}\");", true), ("    print!(\"{HELP}\");", true), ("    let _ = writeln!(out, \"{x}\");", false)] {
+        assert_eq!(print_macro(sample), prints, "the scan reads the forms it refuses: `{sample}`");
+    }
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    assert!(!files.is_empty(), "this check read no file under src/");
+    let mut faults = Vec::new();
+    for file in &files {
+        let text = read(file);
+        let shown = file.strip_prefix(&src).expect("under src").display().to_string();
+        faults.extend(code_lines(&text).filter(|(_, code)| print_macro(code)).map(|(n, code)| format!("src/{shown}:{n}: `{}`", code.trim())));
+    }
+    assert!(
+        faults.is_empty(),
+        "a print macro panics on a write its stream refuses, an exit 101 §2.3 does not have: write DATA through `data` or \
+         `data_verbatim` and TALK through `talk`:\n{}",
+        faults.join("\n")
+    );
+}
+
+#[test]
+fn stdout_is_written_by_the_two_writers_alone() {
     confined(
         writes_stdout,
         STDOUT_WRITERS,
         "writes to stdout",
         "stdout carries DATA alone (§2.4): write through `data` or `data_verbatim`, and talk through `talk` or the terminal's prompts",
+    );
+}
+
+#[test]
+fn stderr_is_written_by_talk_and_show_alone() {
+    confined(
+        writes_stderr,
+        STDERR_WRITERS,
+        "takes a stderr handle",
+        "stderr carries TALK through `talk` and the terminal's `show`, each dropping a write stderr refuses rather than panic",
     );
 }
 
@@ -185,15 +233,32 @@ fn every_skep_variable_is_named_in_args_alone() {
     assert!(faults.is_empty(), "the settings are src/args.rs's (§9 item 21):\n{}", faults.join("\n"));
 }
 
-/// Whether `code` writes to stdout: a `print!` or `println!` — never the
-/// `eprint!` or `eprintln!` it is the tail of — or a `stdout(` handle.
+/// Whether `code` names one of std's print macros, each a whole word: an
+/// `eprint!` is never read as the `print!` it ends with.
+fn print_macro(code: &str) -> bool {
+    ["print!", "println!", "eprint!", "eprintln!"].iter().any(|needle| names(code, needle))
+}
+
+/// Whether `code` writes to stdout: a `stdout(` handle, the print macros
+/// being refused outright.
 fn writes_stdout(code: &str) -> bool {
-    ["print!", "println!", "stdout("].iter().any(|needle| code.match_indices(needle).any(|(i, _)| !code[..i].ends_with(is_ident_char)))
+    names(code, "stdout(")
+}
+
+/// Whether `code` writes to stderr: a `stderr(` handle.
+fn writes_stderr(code: &str) -> bool {
+    names(code, "stderr(")
 }
 
 /// Whether `code` touches stdin: a `stdin(` handle.
 fn touches_stdin(code: &str) -> bool {
-    code.match_indices("stdin(").any(|(i, _)| !code[..i].ends_with(is_ident_char))
+    names(code, "stdin(")
+}
+
+/// Whether `code` holds `needle` as a whole word — no identifier character
+/// directly before it.
+fn names(code: &str, needle: &str) -> bool {
+    code.match_indices(needle).any(|(i, _)| !code[..i].ends_with(is_ident_char))
 }
 
 /// The function a column-0 `fn` line opens — with or without a visibility —

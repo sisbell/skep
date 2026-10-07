@@ -34,7 +34,7 @@ use crate::ceremony::reads::A4Cell;
 use crate::derive::records::{Hand, Records};
 use crate::derive::KeyDiagnosis;
 use crate::halt::Halt;
-use crate::person::{Custody, Import, Imported, KeptOrPlaced, Person, Public, Question, Secret};
+use crate::person::{HandedPath, Import, Imported, KeptOrPlaced, Person, Public, Question, Secret};
 use crate::sheet::{render_inert, KeyFile, Seed};
 use crate::sign::Signer;
 use crate::store::FileStore;
@@ -49,9 +49,9 @@ pub enum Whose {
 }
 
 /// The imported anchor: the signer (the SEED, held to §4a.3's bound), its
-/// fingerprint and label, and the artifact's custody — and THE OWNER OF ITS
-/// OWN END. The anchor is dropped when the ceremony it was imported FOR ends
-/// (AUTH-5.54 step 3), and every exit ends that ceremony:
+/// fingerprint and label, and the kept-or-placed answer for its file — and
+/// THE OWNER OF ITS OWN END. The anchor is dropped when the ceremony it was
+/// imported FOR ends (AUTH-5.54 step 3), and every exit ends that ceremony:
 /// [`ImportedAnchor::dispose`] is the close that tells the person, and an
 /// anchor dropped without it — every halt a walk takes after the import —
 /// still destroys a PLACED copy on the drop, best effort, so the person who
@@ -64,7 +64,7 @@ pub struct ImportedAnchor {
     /// The file, where the artifact was one.
     pub file: Option<PathBuf>,
     /// Kept (retained) or placed (destroyed at the close); `Kept` on paper.
-    pub custody: Custody,
+    pub kept_or_placed: KeptOrPlaced,
     /// The close ran: the drop destroys nothing.
     ended: bool,
 }
@@ -74,12 +74,12 @@ impl ImportedAnchor {
     /// KEPT artifact retained — each said.
     pub fn dispose(mut self, person: &mut dyn Person) {
         self.ended = true;
-        match (&self.file, self.custody) {
-            (Some(path), Custody::Placed) => {
+        match (&self.file, self.kept_or_placed) {
+            (Some(path), KeptOrPlaced::Placed) => {
                 let gone = std::fs::remove_file(path).is_ok();
                 say(person, "AUTH-5.54 step 3", format!("the placed copy {} is {}", path.display(), if gone { "destroyed" } else { "already gone" }));
             }
-            (Some(path), Custody::Kept) => say(person, "AUTH-5.54 step 3", format!("the kept artifact {} is retained", path.display())),
+            (Some(path), KeptOrPlaced::Kept) => say(person, "AUTH-5.54 step 3", format!("the kept artifact {} is retained", path.display())),
             (None, _) => say(person, "AUTH-5.54 step 3", "the paper stays the kept artifact; nothing of the seed remains in this client"),
         }
     }
@@ -87,7 +87,7 @@ impl ImportedAnchor {
 
 impl Drop for ImportedAnchor {
     fn drop(&mut self) {
-        if let (false, Some(path), Custody::Placed) = (self.ended, &self.file, self.custody) {
+        if let (false, Some(path), KeptOrPlaced::Placed) = (self.ended, &self.file, self.kept_or_placed) {
             let _ = std::fs::remove_file(path);
         }
     }
@@ -95,20 +95,23 @@ impl Drop for ImportedAnchor {
 
 impl std::fmt::Debug for ImportedAnchor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ImportedAnchor({}, {:?})", self.fingerprint, self.custody)
+        write!(f, "ImportedAnchor({}, {:?})", self.fingerprint, self.kept_or_placed)
     }
 }
 
 /// The import's answer.
 pub enum ImportOutcome {
     Anchor(Box<ImportedAnchor>),
-    /// "I hold neither" — the no-artifact face was rendered.
+    /// "I hold neither" — an ANSWER and never an error (AUTH-5.16's
+    /// no-artifact arm; `client.md` §4a.2 R1); the caller faces it —
+    /// [`no_artifact_face`] at the recovery's arms, its own face at the
+    /// handoff.
     Neither,
 }
 
-/// The FILE arm's answer: the signer, the label, the path, the custody, the
-/// artifact's own fingerprint.
-type FileImport = (HybridSigner, Option<String>, Option<PathBuf>, Custody, Option<Fingerprint>);
+/// The FILE arm's answer: the signer, the label, the path, the kept-or-placed
+/// answer, the artifact's own fingerprint.
+type FileImport = (HybridSigner, Option<String>, Option<PathBuf>, KeptOrPlaced, Option<Fingerprint>);
 
 /// What the import is checked against.
 pub struct ImportContext<'a> {
@@ -264,7 +267,7 @@ pub fn no_artifact_face(person: &mut dyn Person, cx: &ImportContext<'_>) -> Halt
 /// THE IMPORT.
 pub fn import_anchor(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<ImportOutcome, Halt> {
     // The file arm by flag, else the prompt's three answers.
-    let (signer, label, file, custody, artifact_fp): FileImport = match cx.anchor_path {
+    let (signer, label, file, kept_or_placed, artifact_fp): FileImport = match cx.anchor_path {
         Some(path) => import_file(person, cx, path)?,
         None => loop {
             let answer = person
@@ -305,7 +308,7 @@ pub fn import_anchor(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<
                             "name the board and principal the paper carries",
                         ));
                     }
-                    break (signer, cx.records.label_of(&fp), None, Custody::Kept, Some(fp));
+                    break (signer, cx.records.label_of(&fp), None, KeptOrPlaced::Kept, Some(fp));
                 }
             }
         },
@@ -362,7 +365,7 @@ pub fn import_anchor(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<
             );
         }
     }
-    Ok(ImportOutcome::Anchor(Box::new(ImportedAnchor { fingerprint: fp, label, file, custody, signer, ended: false })))
+    Ok(ImportOutcome::Anchor(Box::new(ImportedAnchor { fingerprint: fp, label, file, kept_or_placed, signer, ended: false })))
 }
 
 /// The FILE arm: the path inside the store refused ahead of the question;
@@ -384,8 +387,8 @@ fn import_file(person: &mut dyn Person, cx: &ImportContext<'_>, path: &Path) -> 
             path.display()
         ),
     );
-    let custody = person
-        .custody(Secret(KeptOrPlaced { path: path.to_path_buf(), text: "is this the KEPT artifact (retained), or a PLACED copy (destroyed when this ceremony ends)?".into() }))
+    let kept_or_placed = person
+        .kept_or_placed(Secret(HandedPath { path: path.to_path_buf(), text: "is this the KEPT artifact (retained), or a PLACED copy (destroyed when this ceremony ends)?".into() }))
         .map_err(|_| abandoned())?;
     let bytes = std::fs::read(path).map_err(|e| {
         Halt::face(format!("the anchor file {} is missing, unreadable or mis-pathed: {e}", path.display()), "AUTH-5.67: HALT AND SURFACE naming the path, never a fallback", "check the path")
@@ -401,5 +404,5 @@ fn import_file(person: &mut dyn Person, cx: &ImportContext<'_>, path: &Path) -> 
     compare_facts(&file, cx)?;
     say(person, "AUTH-5.38", format!("the artifact: anchor {} label {}", file.fingerprint, file.label.as_deref().map(render_inert).unwrap_or_else(|| "(none)".into())));
     let signer = file.signer();
-    Ok((signer, file.label.clone(), Some(path.to_path_buf()), custody, Some(file.fingerprint)))
+    Ok((signer, file.label.clone(), Some(path.to_path_buf()), kept_or_placed, Some(file.fingerprint)))
 }

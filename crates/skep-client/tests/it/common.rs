@@ -127,10 +127,10 @@ pub fn keygen(store: &FileStore, label: &str) -> Fingerprint {
 pub fn opts(anchors: &Path) -> NotebookOptions {
     NotebookOptions {
         principal: None,
-        name: Some("a display name".into()),
+        display_name: Some("a display name".into()),
         anchor_out: vec![anchors.join("a"), anchors.join("b")],
         paper: false,
-        host: "testhost".into(),
+        host_name: "testhost".into(),
         date: "2026-10-04".into(),
     }
 }
@@ -166,7 +166,7 @@ pub fn files_in(dir: &Path) -> Vec<PathBuf> {
 
 use skep_client::board::{acked_addr, frames, Answer, Opened, Scope, SessionBody, Token, T_ENROLL, T_RETIRE};
 use skep_client::ceremony::deposit::next_content_ordinal;
-use skep_client::person::{Abandoned, Confirmation, Consent, Custody, Destination, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
+use skep_client::person::{Abandoned, Confirmation, Consent, Destination, HandedPath, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
 use skep_client::sheet::KeyFile;
 use skep_client::sign::{record_frame, session_payload, sig_hex, Signer};
 use skep_identity::{canonical_record, Enrollment, RecordEntry};
@@ -295,8 +295,8 @@ impl Person for Hooked {
     fn import(&mut self, m: Secret<Import>) -> Result<Imported, Abandoned> {
         self.inner.import(m)
     }
-    fn custody(&mut self, m: Secret<KeptOrPlaced>) -> Result<Custody, Abandoned> {
-        self.inner.custody(m)
+    fn kept_or_placed(&mut self, m: Secret<HandedPath>) -> Result<KeptOrPlaced, Abandoned> {
+        self.inner.kept_or_placed(m)
     }
 }
 

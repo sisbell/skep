@@ -32,8 +32,7 @@ use crate::store::{store_halt, FileStore};
 
 /// THE LOSS ARM, L0–L7 (`client.md` §4a.6; AUTH-5.59's LOSS arm; AUTH-5.47).
 pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &RecoverOptions) -> Result<Recovered, Halt> {
-    let keys = store.list().map_err(store_halt)?;
-    let own: Vec<(Fingerprint, PublicKey)> = keys.iter().filter(|k| !k.anchor).map(|k| (k.fingerprint, k.public.clone())).collect();
+    let own: Vec<(Fingerprint, PublicKey)> = store.device_keys().map_err(store_halt)?.iter().map(|k| (k.fingerprint, k.public.clone())).collect();
     let held: Vec<Fingerprint> = own.iter().map(|(f, _)| *f).collect();
     // L0: R0, and the arm's precondition off the flags.
     let reads = r0(board, person, opts.principal, true, &own)?;
@@ -158,7 +157,7 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
             // L3: AUTH-5.54 steps 1–3 CITED — statement (b) alone, then the
             // pair exported and DROPPED; the boxes are L1's, the re-import L5's.
             two_places(person, opts.paper);
-            let export = BackupOptions { labels: Vec::new(), destinations: opts.anchor_out.clone(), paper: opts.paper, store: Some(store.root().to_path_buf()), host: opts.host.clone(), date: opts.date.clone() };
+            let export = BackupOptions { labels: Vec::new(), destinations: opts.anchor_out.clone(), paper: opts.paper, store: Some(store.root().to_path_buf()), host_name: opts.host_name.clone(), date: opts.date.clone() };
             let backup = export_pair(person, &export, &labels, Some(&facts))?;
             // L4: `first_session` FIRST; then BOTH fresh anchors as ONE record.
             first_session(board, &fs_reads, &session, &surviving.signer, Some(store))?;
@@ -269,5 +268,5 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
             artifacts.iter().map(|a| format!("{} ({})", a.fingerprint, a.label)).collect::<Vec<_>>().join(", ")
         ),
     );
-    Ok(Recovered { facts, enrolled: artifacts.iter().map(|a| a.fingerprint).collect(), retired, binding_line: None, containment: false, report: Vec::new(), warnings: Vec::new() })
+    Ok(Recovered { facts, enrolled: artifacts.iter().map(|a| a.fingerprint).collect(), retired, binding_line: None, containment: false, recovery_read: Vec::new(), warnings: Vec::new() })
 }

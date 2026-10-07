@@ -344,8 +344,10 @@ fn escape_json_string(s: &str, out: &mut String) {
 }
 
 impl KeyFile {
-    /// A key file over `seed` under the production kind.
-    pub fn new(seed: Seed, anchor: bool, label: Option<String>, facts: Option<&Facts>) -> KeyFile {
+    /// A key file over `seed` under the production kind, its byline a
+    /// [`Label`] — AUTH-1.24's domain, tested where the label was made, as
+    /// [`KeyFile::parse`] tests a file's `label` member.
+    pub fn new(seed: Seed, anchor: bool, label: Option<Label>, facts: Option<&Facts>) -> KeyFile {
         let signer = crate::sign::signer_from_seed(seed.bytes());
         let public = HybridSigner::public_key(&signer).clone();
         let fingerprint = Fingerprint::of(&public);
@@ -355,7 +357,7 @@ impl KeyFile {
             seed,
             public,
             fingerprint,
-            label: label.filter(|l| !l.is_empty()),
+            label: label.map(|l| l.0),
             account: facts.map(|f| f.account.clone()),
             principal: facts.map(|f| f.principal),
             origin: facts.map(|f| f.origin.clone()),
@@ -541,7 +543,7 @@ mod tests {
         assert_ne!(Seed::fresh().bytes(), Seed::fresh().bytes());
         assert_eq!(Seed::from_hex(&"AB".repeat(32)).map(|s| *s.bytes()), Some([0xab; 32]));
         assert!(Seed::from_hex(&"ab".repeat(31)).is_none() && Seed::from_hex(&"zz".repeat(32)).is_none());
-        let file = KeyFile::new(Seed::new([4u8; 32]), true, Some("paper".into()), None);
+        let file = KeyFile::new(Seed::new([4u8; 32]), true, Some(Label::new("paper").unwrap()), None);
         let printed = format!("{:?}", file.sheet());
         assert!(printed.contains(&file.fingerprint.to_hex()) && printed.contains("seed_grouped: …"), "{printed}");
         assert!(!printed.contains(&file.seed_hex()[..8]), "the seed never prints: {printed}");
@@ -552,7 +554,7 @@ mod tests {
     #[test]
     fn the_key_file_round_trips_and_refuses_by_state() {
         let facts = Facts { account: "1.0.1".into(), principal: 1, origin: Origin::parse("http://127.0.0.1:8642").unwrap() };
-        let file = KeyFile::new(Seed::new([3u8; 32]), true, Some("paper-a".into()), Some(&facts));
+        let file = KeyFile::new(Seed::new([3u8; 32]), true, Some(Label::new("paper-a").unwrap()), Some(&facts));
         let json = file.to_json();
         assert!(json.starts_with("{\"type\":\"skep-key\",\"v\":1,\"anchor\":true,\"alg\":\"mldsa65-ed25519\",\"seed\":\""));
         assert!(json.ends_with("\"origin\":\"http://127.0.0.1:8642\"}\n"));

@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use serde_json::Value;
-use skep_client::sheet::{KeyFile, Seed};
+use skep_client::sheet::{KeyFile, Label, Seed};
 use skep_client::sign::signer_from_seed;
 use skep_identity::{encode_enroll, parse_enroll, Enrollment};
 use skep_signature::HybridSigner;
@@ -237,7 +237,7 @@ fn the_loop_through_the_binary() {
     assert!(r.err.contains("records do not list this key"), "{}", r.err);
     // --key: an anchor file is refused where the key signs (session), read
     // where it does not (fingerprint).
-    let anchor = KeyFile::new(Seed::fresh(), true, Some("paper".into()), None);
+    let anchor = KeyFile::new(Seed::fresh(), true, Some(Label::new("paper").unwrap()), None);
     let anchor_path = dir.path().join("anchor.skep-key");
     std::fs::write(&anchor_path, anchor.to_json()).unwrap();
     let r = skep(&["session", "--board", &board, "--dir", s(&store), "--key", s(&anchor_path), "--principal", "1"], &[], None);
@@ -286,8 +286,8 @@ fn verify_halts_on_a_planted_key_and_admits_the_honest_genesis_from_anchor_files
     let store = dir.path().join("store");
     let r = skep(&["keygen", "--label", "mine", "--payload", "--dir", s(&store)], &[], None);
     let device = parse_enroll(r.lines()[0].as_bytes()).unwrap().remove(0);
-    let a = KeyFile::new(Seed::fresh(), true, Some("paper a".into()), None);
-    let b = KeyFile::new(Seed::fresh(), true, Some("paper b".into()), None);
+    let a = KeyFile::new(Seed::fresh(), true, Some(Label::new("paper a").unwrap()), None);
+    let b = KeyFile::new(Seed::fresh(), true, Some(Label::new("paper b").unwrap()), None);
     let (pa, pb) = (dir.path().join("a.skep-key"), dir.path().join("b.skep-key"));
     std::fs::write(&pa, a.to_json()).unwrap();
     std::fs::write(&pb, b.to_json()).unwrap();

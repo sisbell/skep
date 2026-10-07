@@ -31,17 +31,23 @@ pub use hosted::{hosted, HostedOutcome, HostedReply};
 pub struct NotebookOptions {
     /// `--principal`; RECOMMEND default 1 (§9 item 9).
     pub principal: Option<u64>,
-    /// `--name`, held; the write deferred (S9).
-    pub name: Option<String>,
+    /// `--name`: the DISPLAY NAME (S9) — a changeable label, never the
+    /// device's name `keygen` fixed; held, the write deferred.
+    pub display_name: Option<String>,
     /// `--anchor-out`, once per anchor.
     pub anchor_out: Vec<PathBuf>,
     /// `--paper`.
     pub paper: bool,
-    pub host: String,
+    /// The machine's host name and the date, for the anchor boxes' per-run
+    /// default (§4.2 step 2).
+    pub host_name: String,
     pub date: String,
 }
 
-/// The three facts and what the walk retained (S10).
+/// What the notebook walk answers at S10: the account, its principal and
+/// the device key's fingerprint, and what the walk retained — the binding
+/// line (the origin dialed beside the account and the principal, §3.5), the
+/// agent space, the warnings, the display name held.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Claimed {
     pub account: String,
@@ -114,7 +120,7 @@ fn statements_s0(person: &mut dyn Person, local_trust: bool) {
 /// device key, else arm 4's fork — its public facts, and its signer from the
 /// store that holds its seed (§3a).
 fn device_key(store: &FileStore, board: &Board, principal: u64, mode: Mode) -> Result<(KeyFacts, Box<dyn Signer>), Halt> {
-    match store.select(&KeySelector::Binding { origin: &board.dialed, principal: Some(principal) }, Purpose::Sign) {
+    match store.select(&KeySelector::Board { origin: &board.dialed, principal: Some(principal) }, Purpose::Sign) {
         Ok(key) => {
             let signer = store.signer(&KeySelector::Path(&key.path)).map_err(store_halt)?;
             Ok((key, signer))
@@ -223,7 +229,7 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
                 destinations: opts.anchor_out.clone(),
                 paper: opts.paper,
                 store: Some(store.root().to_path_buf()),
-                host: opts.host.clone(),
+                host_name: opts.host_name.clone(),
                 date: opts.date.clone(),
             },
         )
@@ -304,7 +310,7 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
         account,
         principal,
         fingerprint: device_fp,
-        agent_space: done.space_seat.map(|_| reads.space.clone()),
+        agent_space: done.agent_space_principal.map(|_| reads.agent_space.clone()),
         binding_line: line.line(),
         warnings,
         display_name,
@@ -314,7 +320,7 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
 /// S9: the display name, with its one distinguishing line; the write
 /// deferred in v1 (AUTH-5.55 step 9; RES-62 item 10 pick B).
 fn s9_name(person: &mut dyn Person, opts: &NotebookOptions) -> Result<Option<String>, Halt> {
-    let name = match &opts.name {
+    let display_name = match &opts.display_name {
         Some(n) => Some(n.clone()),
         None => {
             say(person, "AUTH-5.55 step 9", "your display name is a LABEL, changeable later, and never an identity — unlike the device name, which is permanent and the byline on every write that key makes (R44; AUTH-5.3)");
@@ -322,10 +328,10 @@ fn s9_name(person: &mut dyn Person, opts: &NotebookOptions) -> Result<Option<Str
             answer.filter(|n| !n.trim().is_empty())
         }
     };
-    if let Some(n) = &name {
+    if let Some(n) = &display_name {
         say(person, "AUTH-5.55 step 9", format!("display name `{}` collected and HELD: no doc-1 write is made in this version — the write returns when the display-name record's form is pinned", crate::sheet::render_inert(n)));
     }
-    Ok(name)
+    Ok(display_name)
 }
 
 fn foreign_claimant(claimant: &str) -> Halt {
@@ -381,8 +387,8 @@ fn tail_or_stranger(board: &Board, store: &FileStore, person: &mut dyn Person, o
         KeySetAnswer::Set(s) => s,
         KeySetAnswer::NotAnAccount => return Ok(ClaimOutcome::Stranger { claimant }),
     };
-    let keys = store.list().map_err(store_halt)?;
-    let Some(ours) = keys.iter().find(|k| !k.anchor && set.enrolled(&k.fingerprint).is_some()) else {
+    let keys = store.device_keys().map_err(store_halt)?;
+    let Some(ours) = keys.iter().find(|k| set.enrolled(&k.fingerprint).is_some()) else {
         return Ok(ClaimOutcome::Stranger { claimant });
     };
     let Some(principal) = principal_of(board, &claimant)? else {
@@ -416,7 +422,7 @@ fn tail_or_stranger(board: &Board, store: &FileStore, person: &mut dyn Person, o
         account: claimant,
         principal,
         fingerprint,
-        agent_space: done.space_seat.map(|_| reads.space.clone()),
+        agent_space: done.agent_space_principal.map(|_| reads.agent_space.clone()),
         binding_line: line.line(),
         warnings,
         display_name,

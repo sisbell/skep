@@ -75,9 +75,9 @@ pub enum Grade {
 /// What the walk did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HandoffOutcome {
-    /// Beat (a): the subdivision delegated (or found delegated), its address
-    /// and seat.
-    Delegated { account: String, seat: u64, already: bool },
+    /// Beat (a): the subdivision delegated (or found delegated) — its
+    /// address and the principal seated there.
+    Delegated { account: String, principal: u64, already: bool },
     /// Beats (b)–(d): the genesis written; the three facts for the reply.
     Seeded { facts: Facts, grade: Grade, reconciled: bool, warnings: Vec<String> },
 }
@@ -89,8 +89,8 @@ struct G0 {
     giver_key: KeyFacts,
     /// The account the subdivision hangs from.
     giving: String,
-    /// The seat at `--account`, where beat (a) stands done.
-    seat: Option<u64>,
+    /// The principal seated at `--account`, where beat (a) stands done.
+    principal: Option<u64>,
     /// The set that opens `--account` (the walk's terminus) and its anchor
     /// grade.
     set: crate::board::KeySet,
@@ -109,7 +109,7 @@ fn g0(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &HandoffO
             "hand off a SUBDIVISION of your own account (`<your account>.2` and beyond)",
         ));
     };
-    let key = match store.select(&KeySelector::Binding { origin: &board.dialed, principal: Some(opts.principal) }, Purpose::Sign) {
+    let key = match store.select(&KeySelector::Board { origin: &board.dialed, principal: Some(opts.principal) }, Purpose::Sign) {
         Ok(key) => key,
         Err(StoreError::NoSelection { keys }) => {
             return Err(arm4_face(store, &keys, Mode::of(&board.health()?)));
@@ -125,7 +125,7 @@ fn g0(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &HandoffO
     // The set that opens `--account`: AUTH-5.21's walk from it (or from the
     // giving account where the seat is not yet allocated); THE OWNERSHIP
     // TEST is where it TERMINATES.
-    let seat = principal_of(board, &account)?;
+    let principal = principal_of(board, &account)?;
     let own_set = match board.key_set(&account)? {
         KeySetAnswer::Set(s) => s,
         KeySetAnswer::NotAnAccount => Default::default(),
@@ -137,7 +137,7 @@ fn g0(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &HandoffO
             "nothing of yours re-opens it (AUTH-5.90 clause 1); hand off another subdivision",
         ));
     }
-    let walk = walk_to_set(board, if seat.is_some() { &account } else { &giving })?;
+    let walk = walk_to_set(board, if principal.is_some() { &account } else { &giving })?;
     if walk.set_account != giver_account {
         return Err(Halt::face(
             format!("{account} is not yours to give: the set that opens it stands at {}, another party's", walk.set_account),
@@ -156,18 +156,19 @@ fn g0(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &HandoffO
             _ => "THE PRECONDITION: the board must be one the recipient's client can dial — every beat of theirs (the sign-in, the doc-1 mint, the setup act, the reply's use) is a request to this board",
         },
     );
-    Ok(G0 { giver_account, giver_key: key, giving, seat, set: walk.set, set_account: walk.set_account, grade, cell, health })
+    Ok(G0 { giver_account, giver_key: key, giving, principal, set: walk.set, set_account: walk.set_account, grade, cell, health })
 }
 
-/// G2 = beat (a): the delegate under a persisted id — §4.3's persist-first
-/// form, `first_session`'s own (§4c.2 G2: "the same rule, the same form,
-/// not a second one") — idempotent by the seat's read; what is the site's
-/// is the address said on a delegate sent, and the face where the address
-/// is no delegable child.
+/// G2 = beat (a): the delegate under a persisted `new_id` — §4.3's
+/// persist-first form, `first_session`'s own (§4c.2 G2: "the same rule, the
+/// same form, not a second one") — idempotent by the seat's read; what is
+/// the site's is the address said on a delegate sent, and the face where
+/// the address is no delegable child. Answers the principal seated at the
+/// address, and whether beat (a) already stood.
 fn g2(board: &Board, store: &FileStore, person: &mut dyn Person, g: &G0, session: &Session<'_>, account: &str) -> Result<(u64, bool), Halt> {
-    if let Some(seat) = g.seat {
-        say(person, "AUTH-5.90 (a)", format!("beat (a) stands done: {account} is seated (principal {seat}) — found by reading, no second delegate is sent"));
-        return Ok((seat, true));
+    if let Some(principal) = g.principal {
+        say(person, "AUTH-5.90 (a)", format!("beat (a) stands done: {account} is seated (principal {principal}) — found by reading, no second delegate is sent"));
+        return Ok((principal, true));
     }
     let mut warnings = Vec::new();
     let cached = persisted(board, Some(store), account);
@@ -176,12 +177,12 @@ fn g2(board: &Board, store: &FileStore, person: &mut dyn Person, g: &G0, session
         say(person, "§4.3", w);
     }
     match outcome? {
-        Delegated::Committed { id, sent: true } => {
-            say(person, "AUTH-5.90 (a)", format!("beat (a): {account} delegated (principal {id}); hand this ADDRESS to the recipient over the out-of-band channel the keys come back on — they run `skep accept --board {} --account {account}`", board.dialed));
-            Ok((id, false))
+        Delegated::Committed { principal, sent: true } => {
+            say(person, "AUTH-5.90 (a)", format!("beat (a): {account} delegated (principal {principal}); hand this ADDRESS to the recipient over the out-of-band channel the keys come back on — they run `skep accept --board {} --account {account}`", board.dialed));
+            Ok((principal, false))
         }
-        Delegated::Committed { id, sent: false } => Ok((id, true)),
-        Delegated::Seated(seat) => Ok((seat, true)),
+        Delegated::Committed { principal, sent: false } => Ok((principal, true)),
+        Delegated::Seated(principal) => Ok((principal, true)),
         Delegated::NotAuthorized => Err(Halt::face(
             format!("`delegate` of {account} was refused `not_authorized`"),
             "the address is not the next delegable child of its parent (children are contiguous: obtain the address from `next_account_prefix`), or the parent is not yours",
@@ -202,17 +203,17 @@ pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
     let session_principal = if g.giving == g.giver_account { opts.principal } else { principal_of(board, &g.giving)?.ok_or_else(|| Halt::face(format!("{} has no seat", g.giving), "the giving account is unallocated: delegate it first (`skep handoff --account` at that address)", "hand off the giving account's own parent first"))? };
     // FIRST INVOCATION: beat (a) alone, the address printed.
     let Some(payload) = &opts.payload else {
-        if let Some(seat) = g.seat {
-            return Ok(HandoffOutcome::Delegated { account, seat, already: true });
+        if let Some(principal) = g.principal {
+            return Ok(HandoffOutcome::Delegated { account, principal, already: true });
         }
         let session = handshake(board, Scope::Full, &*device, session_principal, Site::Giver)?;
         let out = g2(board, store, person, &g, &session, &account);
         let _ = session.close();
-        let (seat, already) = out?;
-        return Ok(HandoffOutcome::Delegated { account, seat, already });
+        let (principal, already) = out?;
+        return Ok(HandoffOutcome::Delegated { account, principal, already });
     };
     // SECOND INVOCATION: G0 whole.
-    let Some(seat) = g.seat else {
+    let Some(principal) = g.principal else {
         return Err(Halt::face(
             format!("{account} is not yet delegated: beat (a) is still owed"),
             "`effective_owner` answers the seat above, not this address (AUTH-6.37's allocation test)",
@@ -281,7 +282,7 @@ pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
         return Err(Halt::face("the handoff was declined: nothing was written", "the typed answer was not the address", "re-run when ready"));
     }
     // The hand: the giver's ANCHOR where the act is anchor-grade.
-    let own: Vec<(Fingerprint, PublicKey)> = store.list().map_err(store_halt)?.iter().filter(|k| !k.anchor).map(|k| (k.fingerprint, k.public.clone())).collect();
+    let own: Vec<(Fingerprint, PublicKey)> = store.device_keys().map_err(store_halt)?.iter().map(|k| (k.fingerprint, k.public.clone())).collect();
     let anchor: Option<ImportedAnchor> = if g.grade == Grade::Anchor {
         say(person, "AUTH-3.21", "the set that opens this account holds an anchor, so the handoff is ANCHOR-GRADE: your paper anchor is imported for this act alone");
         let records = credential_records(board, &g.set_account, &own)?;
@@ -330,7 +331,7 @@ pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
             }
             Err(other) => return Err(other.into()),
         };
-        Ok(HandoffOutcome::Seeded { facts: Facts { account: account.clone(), principal: seat, origin: board.dialed.clone() }, grade: g.grade, reconciled, warnings: Vec::new() })
+        Ok(HandoffOutcome::Seeded { facts: Facts { account: account.clone(), principal, origin: board.dialed.clone() }, grade: g.grade, reconciled, warnings: Vec::new() })
     })();
     // G6: the mirror's close.
     let _ = session.close();
@@ -342,7 +343,7 @@ pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
         person,
         "AUTH-5.90 (vii)",
         format!(
-            "THE REPLY for the recipient's string (vii): account {account}, principal {seat}, origin {} — they land it with `skep bind`; your own sessions AS {account} and anything beneath it are dead from the genesis's commit (AUTH-4.63), and the act is complete only when the reply stands with them",
+            "THE REPLY for the recipient's string (vii): account {account}, principal {principal}, origin {} — they land it with `skep bind`; your own sessions AS {account} and anything beneath it are dead from the genesis's commit (AUTH-4.63), and the act is complete only when the reply stands with them",
             board.dialed
         ),
     );

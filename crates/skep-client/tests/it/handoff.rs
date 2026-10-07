@@ -14,7 +14,7 @@ use skep_client::ceremony::handshake::{handshake, Site};
 use skep_client::derive::records::{credential_records, Hand};
 use skep_client::derive::principal_of;
 use skep_client::person::scripted::{Script, Scripted};
-use skep_client::person::Custody;
+use skep_client::person::KeptOrPlaced;
 use skep_client::store::{Binding, FileStore, KeyStore};
 use skep_identity::{encode_enroll, parse_enroll, Enrollment, Fingerprint};
 
@@ -25,7 +25,7 @@ fn give(account: &str, payload: Option<String>, anchor: Option<std::path::PathBu
 }
 
 fn take(account: &str, out: &std::path::Path, no_anchors: bool) -> AcceptOptions {
-    AcceptOptions { account: account.into(), label: None, anchor_out: vec![out.join("ra"), out.join("rb")], paper: false, no_anchors, hosted: None, host: "testhost".into(), date: "2026-10-04".into() }
+    AcceptOptions { account: account.into(), label: None, anchor_out: vec![out.join("ra"), out.join("rb")], paper: false, no_anchors, hosted: None, host_name: "testhost".into(), date: "2026-10-04".into() }
 }
 
 #[test]
@@ -43,17 +43,17 @@ fn the_door_delegates_idempotently_the_recipient_accepts_the_giver_seeds_and_bin
     assert!(err.to_string().contains("no handoff and no door"), "{err}");
     // Beat (a): delegate, then again — the address printed again.
     let mut p = Scripted::new(vec![]);
-    let HandoffOutcome::Delegated { account, seat, already } = handoff(&board, &giver, &mut p, &give("1.0.1.2", None, None)).unwrap() else { panic!() };
-    assert!((account.as_str(), already) == ("1.0.1.2", false) && seat >= 2);
-    assert_eq!(principal_of(&board, "1.0.1.2").unwrap(), Some(seat));
+    let HandoffOutcome::Delegated { account, principal, already } = handoff(&board, &giver, &mut p, &give("1.0.1.2", None, None)).unwrap() else { panic!() };
+    assert!((account.as_str(), already) == ("1.0.1.2", false) && principal >= 2);
+    assert_eq!(principal_of(&board, "1.0.1.2").unwrap(), Some(principal));
     let mut p = Scripted::new(vec![]);
-    let HandoffOutcome::Delegated { seat: again, already, .. } = handoff(&board, &giver, &mut p, &give("1.0.1.2", None, None)).unwrap() else { panic!() };
-    assert!(already && again == seat, "no second delegate; the address again");
+    let HandoffOutcome::Delegated { principal: again, already, .. } = handoff(&board, &giver, &mut p, &give("1.0.1.2", None, None)).unwrap() else { panic!() };
+    assert!(already && again == principal, "no second delegate; the address again");
     assert!(p.said("AUTH RES-187"), "the precondition is said ahead of beat (a) on every run:\n{}", p.transcript.join("\n"));
     assert_eq!(board.next_account_prefix("1.0.1").unwrap().as_deref(), Some("1.0.1.3"), "exactly one delegation");
     // The giver's own session AS 1.0.1.2, open before the genesis.
     let giver_key = key_file(&giver, &giver_fp).signer();
-    let as_given = wire_session(&board, seat, &giver_key);
+    let as_given = wire_session(&board, principal, &giver_key);
 
     // THE RECIPIENT'S BEAT.
     let recipient = FileStore::open(dir.path().join("recipient"));
@@ -65,7 +65,7 @@ fn the_door_delegates_idempotently_the_recipient_accepts_the_giver_seeds_and_bin
     let mut p = Scripted::new(vec![Script::Label("phone".into()), Script::LabelDefault, Script::LabelDefault]);
     let taken = accept(&board, &recipient, &mut p, &take("1.0.1.2", dir.path(), false)).unwrap_or_else(|h| panic!("{h}\n{}", p.transcript.join("\n")));
     let t = p.transcript.join("\n");
-    assert_eq!((taken.facts.account.as_str(), taken.facts.principal), ("1.0.1.2", seat));
+    assert_eq!((taken.facts.account.as_str(), taken.facts.principal), ("1.0.1.2", principal));
     assert_eq!(taken.anchors.len(), 2);
     assert!(!taken.declined_pair);
     let entries = parse_enroll(taken.record.as_bytes()).expect("the three-key record");
@@ -86,7 +86,7 @@ fn the_door_delegates_idempotently_the_recipient_accepts_the_giver_seeds_and_bin
     assert!(!p.said("AUTH-5.44 (create-org)"), "the org-door artifact line dropped");
     for which in ["ra", "rb"] {
         let file = anchor_file(dir.path(), which).1;
-        assert_eq!((file.account.as_deref(), file.principal), (Some("1.0.1.2"), Some(seat)), "the artifact carries the recipient's facts");
+        assert_eq!((file.account.as_deref(), file.principal), (Some("1.0.1.2"), Some(principal)), "the artifact carries the recipient's facts");
     }
     // `--reprint` re-composes the same record from the files.
     let paths: Vec<std::path::PathBuf> = ["ra", "rb"].iter().map(|w| files_in(&dir.path().join(w))[0].clone()).collect();
@@ -97,10 +97,10 @@ fn the_door_delegates_idempotently_the_recipient_accepts_the_giver_seeds_and_bin
     // THE GIVER SEEDS — anchor-grade (the set holds anchors): the anchor
     // imported (kept), the comparison, G1's strings, the confirmation.
     let (kept, _) = anchor_file(&anchors, "a");
-    let mut p = Scripted::new(vec![Script::Confirm(true), Script::Typed("1.0.1.2".into()), Script::Custody(Custody::Kept), Script::YesNo(true)]);
+    let mut p = Scripted::new(vec![Script::Confirm(true), Script::Typed("1.0.1.2".into()), Script::KeptOrPlaced(KeptOrPlaced::Kept), Script::YesNo(true)]);
     let HandoffOutcome::Seeded { facts, grade, reconciled, .. } = handoff(&board, &giver, &mut p, &give("1.0.1.2", Some(taken.record.clone()), Some(kept.clone()))).unwrap_or_else(|h| panic!("{h}\n{}", p.transcript.join("\n"))) else { panic!() };
     let t = p.transcript.join("\n");
-    assert_eq!((facts.account.as_str(), facts.principal, grade, reconciled), ("1.0.1.2", seat, Grade::Anchor, false));
+    assert_eq!((facts.account.as_str(), facts.principal, grade, reconciled), ("1.0.1.2", principal, Grade::Anchor, false));
     assert!(p.said("AUTH RES-187") && p.said("LOOPBACK-BOUND notebook"), "{t}");
     assert!(p.said("CONSENT confirm: `skep handoff`"), "G0's comparison:\n{t}");
     for s in ["AUTH-5.90 (i)", "AUTH-5.90 (ii)", "AUTH-5.90 (iii)", "AUTH-5.90 (iv)"] {
@@ -124,7 +124,7 @@ fn the_door_delegates_idempotently_the_recipient_accepts_the_giver_seeds_and_bin
     // The giver's session AS 1.0.1.2 is dead from the commit (AUTH-4.63).
     assert!(token_dead(&board, &as_given), "the giver's session as the given account died at the genesis");
     // G5: a re-sent frame reconciled by containment.
-    let mut p = Scripted::new(vec![Script::Confirm(true), Script::Typed("1.0.1.2".into()), Script::Custody(Custody::Kept), Script::YesNo(true)]);
+    let mut p = Scripted::new(vec![Script::Confirm(true), Script::Typed("1.0.1.2".into()), Script::KeptOrPlaced(KeptOrPlaced::Kept), Script::YesNo(true)]);
     let err = handoff(&board, &giver, &mut p, &give("1.0.1.2", Some(taken.record.clone()), Some(kept.clone()))).expect_err("already another party's");
     assert!(err.to_string().contains("already another party's"), "G0's own read stops a re-run: {err}");
     // A seeded address at `accept`: halt before anything is generated.
@@ -142,13 +142,13 @@ fn the_door_delegates_idempotently_the_recipient_accepts_the_giver_seeds_and_bin
     // THE RECIPIENT's `bind`: the first signed session's doc-1 mint and the
     // setup act, `inc(1.0.1.2, 1)` seated.
     let device = key_file(&recipient, &taken.device);
-    recipient.bind(&Binding::Enrollment { origin: board.dialed.clone(), principal: seat, account: "1.0.1.2".into(), fingerprint: taken.device }).unwrap();
+    recipient.bind(&Binding::Enrollment { origin: board.dialed.clone(), principal, account: "1.0.1.2".into(), fingerprint: taken.device }).unwrap();
     let reads = FirstSessionReads::take(&board, "1.0.1.2", &taken.device, Some(&recipient)).unwrap();
     assert!(reads.mint_owed() && reads.setup_owed());
-    let session = handshake(&board, Scope::Content, &device.signer(), seat, Site::Tail).unwrap();
+    let session = handshake(&board, Scope::Content, &device.signer(), principal, Site::Tail).unwrap();
     let done = first_session(&board, &reads, &session, &device.signer(), Some(&recipient)).unwrap();
     session.close().unwrap();
-    assert!(done.minted_home && done.space_seat.is_some() && done.minted_space_home);
+    assert!(done.minted_home && done.agent_space_principal.is_some() && done.minted_agent_space_home);
     assert!(document_present(&board, "1.0.1.2.0.1").unwrap());
     assert!(principal_of(&board, "1.0.1.2.1").unwrap().is_some(), "inc(X.2, 1) seated");
 }
@@ -171,11 +171,11 @@ fn a_depth_two_genesis_is_homed_in_the_giving_accounts_doc_one_and_the_decline_a
     let mut p = Scripted::new(vec![]);
     let HandoffOutcome::Delegated { .. } = handoff(&board, &giver, &mut p, &give("1.0.1.2", None, None)).unwrap() else { panic!() };
     let mut p = Scripted::new(vec![]);
-    let HandoffOutcome::Delegated { seat: seat3, .. } = handoff(&board, &giver, &mut p, &give("1.0.1.3", None, None)).unwrap() else { panic!() };
+    let HandoffOutcome::Delegated { principal: principal3, .. } = handoff(&board, &giver, &mut p, &give("1.0.1.3", None, None)).unwrap() else { panic!() };
     let mut p = Scripted::new(vec![]);
-    let HandoffOutcome::Delegated { account, seat: seat31, already } = handoff(&board, &giver, &mut p, &give("1.0.1.3.1", None, None)).unwrap_or_else(|h| panic!("{h}")) else { panic!() };
+    let HandoffOutcome::Delegated { account, principal: principal31, already } = handoff(&board, &giver, &mut p, &give("1.0.1.3.1", None, None)).unwrap_or_else(|h| panic!("{h}")) else { panic!() };
     assert!((account.as_str(), already) == ("1.0.1.3.1", false));
-    assert_ne!(seat3, seat31);
+    assert_ne!(principal3, principal31);
     assert!(!document_present(&board, "1.0.1.3.0.1").unwrap(), "the topic's home is not minted at the delegate");
     // The recipient DECLINES the pair: the cost as its confirmation; a
     // one-key record.
@@ -192,12 +192,12 @@ fn a_depth_two_genesis_is_homed_in_the_giving_accounts_doc_one_and_the_decline_a
     // The giver seeds it: beat (b) mints 1.0.1.3's doc 1 from a session AS
     // 1.0.1.3 by reference; G4 homes the genesis there; the anchorless line.
     let (kept, _) = anchor_file(&anchors, "a");
-    let mut p = Scripted::new(vec![Script::Confirm(true), Script::Typed("1.0.1.3.1".into()), Script::Custody(Custody::Placed), Script::YesNo(true)]);
+    let mut p = Scripted::new(vec![Script::Confirm(true), Script::Typed("1.0.1.3.1".into()), Script::KeptOrPlaced(KeptOrPlaced::Placed), Script::YesNo(true)]);
     let placed = dir.path().join("placed.skep-key");
     std::fs::copy(&kept, &placed).unwrap();
     let HandoffOutcome::Seeded { facts, grade, .. } = handoff(&board, &giver, &mut p, &give("1.0.1.3.1", Some(taken.record.clone()), Some(placed.clone()))).unwrap_or_else(|h| panic!("{h}\n{}", p.transcript.join("\n"))) else { panic!() };
     let t = p.transcript.join("\n");
-    assert_eq!((facts.account.as_str(), facts.principal, grade), ("1.0.1.3.1", seat31, Grade::Anchor));
+    assert_eq!((facts.account.as_str(), facts.principal, grade), ("1.0.1.3.1", principal31, Grade::Anchor));
     assert!(p.said("THE ANCHORLESS LINE") && p.said("re-run `skep accept` with an anchor pair"), "{t}");
     assert!(p.said("beat (b) is owed: 1.0.1.3 has no doc 1") && p.said("beat (b): 1.0.1.3.0.1 minted"), "{t}");
     assert!(!placed.is_file(), "the placed copy destroyed at the close");
@@ -209,7 +209,7 @@ fn a_depth_two_genesis_is_homed_in_the_giving_accounts_doc_one_and_the_decline_a
     assert_eq!(set.enrolled.len(), 1);
     // The recipient signs in at the depth-2 account.
     let device = key_file(&recipient, &taken.device);
-    handshake(&board, Scope::Content, &device.signer(), seat31, Site::Tail).expect("the recipient's session").close().unwrap();
+    handshake(&board, Scope::Content, &device.signer(), principal31, Site::Tail).expect("the recipient's session").close().unwrap();
 
     // A DEVICE-GRADE giver: an anchorless hosted account hands off a
     // subdivision with its device key alone.
@@ -229,12 +229,12 @@ fn a_depth_two_genesis_is_homed_in_the_giving_accounts_doc_one_and_the_decline_a
     first_session(&board2, &reads, &setup, &lone, Some(&giver2)).unwrap();
     setup.close().unwrap();
     let mut p = Scripted::new(vec![]);
-    let HandoffOutcome::Delegated { seat: s2, .. } = handoff(&board2, &giver2, &mut p, &give("1.0.1.2", None, None)).unwrap_or_else(|h| panic!("{h}")) else { panic!() };
+    let HandoffOutcome::Delegated { principal: principal2, .. } = handoff(&board2, &giver2, &mut p, &give("1.0.1.2", None, None)).unwrap_or_else(|h| panic!("{h}")) else { panic!() };
     let recipient2 = FileStore::open(dir2.path().join("recipient"));
     let mut p = Scripted::new(vec![Script::Label("r".into()), Script::LabelDefault, Script::LabelDefault]);
     let taken2 = accept(&board2, &recipient2, &mut p, &take("1.0.1.2", dir2.path(), false)).unwrap_or_else(|h| panic!("{h}\n{}", p.transcript.join("\n")));
     let mut p = Scripted::new(vec![Script::Confirm(true), Script::Typed("1.0.1.2".into())]);
     let HandoffOutcome::Seeded { grade, facts, .. } = handoff(&board2, &giver2, &mut p, &give("1.0.1.2", Some(taken2.record.clone()), None)).unwrap_or_else(|h| panic!("{h}\n{}", p.transcript.join("\n"))) else { panic!() };
-    assert_eq!((grade, facts.principal), (Grade::Device, s2));
-    assert!(!p.said("Handing this off is an anchor act") && !p.said("SECRET custody"), "no import at the device grade");
+    assert_eq!((grade, facts.principal), (Grade::Device, principal2));
+    assert!(!p.said("Handing this off is an anchor act") && !p.said("SECRET kept-or-placed"), "no import at the device grade");
 }

@@ -50,7 +50,10 @@ pub struct AcceptOptions {
     /// At a served board: the host is a HOSTED host (`Some(true)`), the
     /// giver's own org (`Some(false)`), or asked (`None`).
     pub hosted: Option<bool>,
-    pub host: String,
+    /// The machine's host name and the date, for the anchor boxes' per-run
+    /// default (§4.2 step 2) — never the party that runs the board, which
+    /// `hosted` answers.
+    pub host_name: String,
     pub date: String,
 }
 
@@ -105,8 +108,8 @@ pub fn accept(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     if mode == Mode::Unclaimed {
         return Err(Halt::face("this board is unclaimed", "no account of a giver's exists here", "ask the giver which board the account is on"));
     }
-    let seat = principal_of(board, &account)?;
-    let Some(seat) = seat else {
+    let principal = principal_of(board, &account)?;
+    let Some(principal) = principal else {
         let above = board.effective_owner(&account)?.map(|o| format!("{} (principal {})", o.prefix, o.principal)).unwrap_or_else(|| "nothing".into());
         return Err(Halt::face(
             format!("{account} is not yet delegated: the giver's beat (a) is still owed"),
@@ -160,10 +163,10 @@ pub fn accept(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
             }
         },
     };
-    let id = store.generate(Some(label.clone())).map_err(store_halt)?;
-    let device = store.select(&KeySelector::Path(&store.key_path(&id.0)), Purpose::Read).map_err(store_halt)?;
-    say(person, "§3a", format!("key file written: {} — the seed rests in this file and the filesystem's modes are its whole protection (0600 under 0700); your anchors are what its loss recovers from", store.key_path(&id.0).display()));
-    let facts = Facts { account: account.clone(), principal: seat, origin: board.dialed.clone() };
+    let key_id = store.generate(Some(label.clone())).map_err(store_halt)?;
+    let device = store.select(&KeySelector::Path(&store.key_path(&key_id.0)), Purpose::Read).map_err(store_halt)?;
+    say(person, "§3a", format!("key file written: {} — the seed rests in this file and the filesystem's modes are its whole protection (0600 under 0700); your anchors are what its loss recovers from", store.key_path(&key_id.0).display()));
+    let facts = Facts { account: account.clone(), principal, origin: board.dialed.clone() };
     let operator = operator_sentence(&cell, &giver, hosted);
     // The pair, or the DECLINE at its site.
     let (anchors, declined_pair) = if opts.no_anchors {
@@ -183,7 +186,7 @@ pub fn accept(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         let out = backup_moment(
             person,
             &Venue::Handoff { facts: facts.clone(), operator: operator.clone() },
-            &BackupOptions { labels: Vec::new(), destinations: opts.anchor_out.clone(), paper: opts.paper, store: Some(store.root().to_path_buf()), host: opts.host.clone(), date: opts.date.clone() },
+            &BackupOptions { labels: Vec::new(), destinations: opts.anchor_out.clone(), paper: opts.paper, store: Some(store.root().to_path_buf()), host_name: opts.host_name.clone(), date: opts.date.clone() },
         )
         .map_err(|h| {
             Halt::face(
@@ -221,7 +224,7 @@ pub fn accept(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         person,
         "AUTH-5.90 (vii)",
         format!(
-            "(vii) the giver will return: \"{keep}: {account}, principal {seat}, {}. Nothing else on this board tells you which account is yours.\" — land it with `skep bind --board {} --dir <store> --account {account} --principal {seat}{}`, which runs this account's FIRST SIGNED SESSION in its pinned order: the doc-1 mint, then the setup act. Until it runs this account has NO DOC 1: the first note written here becomes a DRAFT doc 1 and answers `unpublished` at every later credential act with no clearing act, and every credential write homes its atom in a document the board does not hold — the papers just printed reaching a recovery, a rotation and an enrollment that all land there (AUTH-5.90 (iii)).",
+            "(vii) the giver will return: \"{keep}: {account}, principal {principal}, {}. Nothing else on this board tells you which account is yours.\" — land it with `skep bind --board {} --dir <store> --account {account} --principal {principal}{}`, which runs this account's FIRST SIGNED SESSION in its pinned order: the doc-1 mint, then the setup act. Until it runs this account has NO DOC 1: the first note written here becomes a DRAFT doc 1 and answers `unpublished` at every later credential act with no clearing act, and every credential write homes its atom in a document the board does not hold — the papers just printed reaching a recovery, a rotation and an enrollment that all land there (AUTH-5.90 (iii)).",
             board.dialed,
             board.dialed,
             if declined_pair { String::new() } else { " --anchor <a> --anchor <b>".into() }
@@ -269,8 +272,8 @@ pub fn reprint(store: &FileStore, key: Option<&Path>, anchors: &[PathBuf], board
                     _ => None,
                 })
                 .collect();
-            let keys = store.list().map_err(store_halt)?;
-            let unbound: Vec<_> = keys.iter().filter(|k| !k.anchor && !bound.contains(&k.fingerprint)).collect();
+            let devices = store.device_keys().map_err(store_halt)?;
+            let unbound: Vec<_> = devices.iter().filter(|k| !bound.contains(&k.fingerprint)).collect();
             match unbound.as_slice() {
                 [one] => (*one).clone(),
                 [] => return Err(Halt::face("no unbound device key stands in this store", "the beat's device key is bound at no board until `skep bind` lands the reply", "name the key with `--key <path>`")),

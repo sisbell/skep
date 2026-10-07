@@ -66,7 +66,7 @@ pub struct BackupOptions {
     /// The store, whose paths are refused as destinations (§3.4).
     pub store: Option<PathBuf>,
     /// The machine's host name and the date, for the per-run default.
-    pub host: String,
+    pub host_name: String,
     pub date: String,
 }
 
@@ -145,8 +145,9 @@ pub(crate) fn two_places(person: &mut dyn Person, paper: bool) {
 }
 
 /// The anchor box (AUTH-5.42's anchor copy): names the SHEET, never where
-/// you keep it; a default DERIVED PER RUN — host, date, a per-run token
-/// (§4.2 step 2); the domain test at the box, re-asked on a refusal.
+/// you keep it; a default DERIVED PER RUN — the machine's host name, the
+/// date, a per-run token (§4.2 step 2); the domain test at the box,
+/// re-asked on a refusal.
 fn anchor_box(person: &mut dyn Person, venue: &Venue, which: &str, default: String) -> Result<Label, Halt> {
     let consequence = match venue {
         Venue::Notebook { .. } => "at this notebook the name is readable by anything on the machine (AUTH-5.85's reader clause)",
@@ -236,7 +237,7 @@ pub fn backup_moment(person: &mut dyn Person, venue: &Venue, opts: &BackupOption
                 say(person, "AUTH-5.42", format!("anchor {which} is named `{}`: this names the SHEET and never where you keep it; public forever and uncorrectable", crate::sheet::render_inert(l.as_str())));
                 l.clone()
             }
-            None => anchor_box(person, venue, which, format!("{}-{}-{token}-{which}", opts.host, opts.date))?,
+            None => anchor_box(person, venue, which, format!("{}-{}-{token}-{which}", opts.host_name, opts.date))?,
         };
         labels.push(label);
     }
@@ -272,12 +273,12 @@ pub fn backup_moment(person: &mut dyn Person, venue: &Venue, opts: &BackupOption
 /// read back by nothing yet — a print, under `--paper`, unverified. The
 /// RE-IMPORT is the caller's: the moment's own read-back, or the loss arm's
 /// [`reimport_anchor`] after its enroll, which CITES this order and inherits
-/// nothing else of the moment (§4a.6 L3). `opts.labels`, `host` and `date`
-/// are the boxes' and unread here: `labels` names the pair.
+/// nothing else of the moment (§4a.6 L3). `opts.labels`, `host_name` and
+/// `date` are the boxes' and unread here: `labels` names the pair.
 pub(crate) fn export_pair(person: &mut dyn Person, opts: &BackupOptions, labels: &[Label], facts: Option<&Facts>) -> Result<BackupOutcome, Halt> {
     // Step 3: generate the pair, each seed born in its file's own zeroing
     // value — no copy of it outlives step 5's DROP.
-    let mut files: Vec<KeyFile> = labels.iter().map(|l| KeyFile::new(Seed::fresh(), true, Some(l.as_str().to_string()), facts)).collect();
+    let mut files: Vec<KeyFile> = labels.iter().map(|l| KeyFile::new(Seed::fresh(), true, Some(l.clone()), facts)).collect();
     let publics: Vec<(PublicKey, Fingerprint)> = files.iter().map(|f| (f.public.clone(), f.fingerprint)).collect();
     // Step 4: EXPORT — the file, each to its own destination.
     let mut paths: Vec<PathBuf> = Vec::new();

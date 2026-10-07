@@ -38,19 +38,21 @@ use crate::store::{store_halt, FileStore, KeySelector, KeyStore, Purpose, StoreE
 #[derive(Debug, Clone)]
 pub struct RetireOptions {
     pub principal: u64,
-    /// `--fingerprint <fp-prefix>`.
-    pub fingerprint: String,
+    /// `--fingerprint <fp-prefix>`: a prefix of the fingerprint to retire,
+    /// resolved against the enrolled list.
+    pub fingerprint_prefix: String,
 }
 
 /// How the walk ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RetireEnd {
-    /// Another key's retirement: the session was closed.
-    Closed,
-    /// The session's OWN key was retired: no close sent; the commit ended
-    /// the session; the expected end's fork — another enrolled key of this
-    /// store stands, or none.
-    OwnKey { another_held: bool },
+    /// Another key's retirement: the walk sent the session's close
+    /// (AUTH-4.47).
+    CloseSent,
+    /// The session's OWN key was retired: the commit ended the session
+    /// (AUTH-4.63) and no close was sent; the expected end's fork
+    /// (AUTH-5.28) — another enrolled key of this store stands, or none.
+    EndedByCommit { another_held: bool },
 }
 
 /// What was retired.
@@ -68,7 +70,7 @@ pub struct Retired {
 pub fn retire(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &RetireOptions) -> Result<Retired, Halt> {
     // The store's key for (board, n); the NOTEBOOK-AT-LOSS face where none
     // opens a session here (§4a.1).
-    let key = match store.select(&KeySelector::Binding { origin: &board.dialed, principal: Some(opts.principal) }, Purpose::Sign) {
+    let key = match store.select(&KeySelector::Board { origin: &board.dialed, principal: Some(opts.principal) }, Purpose::Sign) {
         Ok(key) => key,
         Err(StoreError::NoSelection { keys }) => {
             return Err(Halt::face(
@@ -80,7 +82,7 @@ pub fn retire(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         Err(e) => return Err(store_halt(e)),
     };
     let signer = store.signer(&KeySelector::Path(&key.path)).map_err(store_halt)?;
-    let own: Vec<(Fingerprint, skep_identity::PublicKey)> = store.list().map_err(store_halt)?.iter().filter(|k| !k.anchor).map(|k| (k.fingerprint, k.public.clone())).collect();
+    let own: Vec<(Fingerprint, skep_identity::PublicKey)> = store.device_keys().map_err(store_halt)?.iter().map(|k| (k.fingerprint, k.public.clone())).collect();
     // R0's reads; a retirement at a by-reference account is redirected.
     let reads = r0(board, person, opts.principal, false, &own)?;
     if reads.walk.by_reference() {
@@ -92,7 +94,7 @@ pub fn retire(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     }
     let set_account = reads.walk.set_account.clone();
     // The prefix, resolved against the enrolled list WITH LABELS.
-    let prefix = opts.fingerprint.trim().to_ascii_lowercase();
+    let prefix = opts.fingerprint_prefix.trim().to_ascii_lowercase();
     let matches: Vec<_> = reads.walk.set.enrolled.iter().filter(|e| e.fingerprint.to_hex().starts_with(&prefix)).collect();
     let target = match matches.as_slice() {
         [] => {
@@ -170,10 +172,10 @@ pub fn retire(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
                 "this session's own key was retired: the commit ended the session (AUTH-4.63), no close is sent, and the `closed` any later request meets is the EXPECTED END; no enrolled key is held here, so the next act is the keyless face's — `skep keygen`, then `skep recover` with a paper (AUTH-5.32)"
             },
         );
-        RetireEnd::OwnKey { another_held }
+        RetireEnd::EndedByCommit { another_held }
     } else {
         let _ = session.close();
-        RetireEnd::Closed
+        RetireEnd::CloseSent
     };
     Ok(Retired { account: set_account, fingerprint: target.fingerprint, label, end, reconciled })
 }

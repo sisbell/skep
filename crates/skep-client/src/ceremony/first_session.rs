@@ -57,19 +57,21 @@ pub struct FirstSessionReads {
     pub home_present: bool,
     /// The class test: `key_set(account)` itself is non-empty.
     pub set_nonempty: bool,
-    /// `inc(account, 1)`.
-    pub space: String,
-    /// `effective_owner(space).principal` where `prefix == space` — the seat
-    /// allocated, or none.
-    pub space_seat: Option<u64>,
-    /// The agents' home stands at `space.0.1`.
-    pub space_home_present: bool,
-    /// A `new_id` an earlier run persisted for this space, where the store
-    /// holds one.
+    /// `inc(account, 1)` — the AGENT SPACE (AUTH-5.87).
+    pub agent_space: String,
+    /// The principal seated at the agent space where it is a seat
+    /// (`effective_owner`'s `prefix ==` it, AUTH-6.37), else none.
+    pub agent_space_principal: Option<u64>,
+    /// The agent space's home — its doc 1 at `agent_space.0.1` (AUTH-5.87,
+    /// "and its home") — stands.
+    pub agent_space_home_present: bool,
+    /// A `new_id` an earlier run persisted for the agent space, where the
+    /// store holds one.
     pub persisted_new_id: Option<u64>,
-    /// Whether the given key stands enrolled in the set that opens the space
-    /// — op (3)'s pre-check (P13); `None` where the setup state is not owed.
-    pub key_opens_space: Option<KeyDiagnosis>,
+    /// Whether the given key stands enrolled in the set that opens the agent
+    /// space — op (3)'s pre-check (P13); `None` where the setup state is not
+    /// owed.
+    pub key_opens_agent_space: Option<KeyDiagnosis>,
 }
 
 impl FirstSessionReads {
@@ -81,7 +83,7 @@ impl FirstSessionReads {
     /// Whether the setup act is owed: the account holds a set of its own and
     /// either op (1) or op (3) stands undone.
     pub fn setup_owed(&self) -> bool {
-        self.set_nonempty && (self.space_seat.is_none() || !self.space_home_present)
+        self.set_nonempty && (self.agent_space_principal.is_none() || !self.agent_space_home_present)
     }
 
     /// Whether ANY act is owed — `bind`'s selector (§2.2): nothing owed ⇒
@@ -119,17 +121,17 @@ impl FirstSessionReads {
                 ))
             }
         };
-        let space = first_child(account);
-        let space_seat = principal_of(board, &space)?;
-        let space_home_present = document_present(board, &doc_1_of(&space))?;
-        let persisted_new_id = persisted(board, store, &space);
-        let key_opens_space = if set_nonempty {
-            // AUTH-4.30 (i): the space opens BY REFERENCE to the set that
-            // opens its account — its own set is empty at birth, and before
-            // op (1) it is no account at all (`not_an_account`), so the walk
-            // starts at the space once it is seated and at the account
-            // before, reaching the same set either way.
-            let from = if space_seat.is_some() { space.as_str() } else { account };
+        let agent_space = first_child(account);
+        let agent_space_principal = principal_of(board, &agent_space)?;
+        let agent_space_home_present = document_present(board, &doc_1_of(&agent_space))?;
+        let persisted_new_id = persisted(board, store, &agent_space);
+        let key_opens_agent_space = if set_nonempty {
+            // AUTH-4.30 (i): the agent space opens BY REFERENCE to the set
+            // that opens its account — its own set is empty at birth, and
+            // before op (1) it is no account at all (`not_an_account`), so
+            // the walk starts at the agent space once it is seated and at the
+            // account before, reaching the same set either way.
+            let from = if agent_space_principal.is_some() { agent_space.as_str() } else { account };
             let walk = walk_to_set(board, from)?;
             Some(KeyDiagnosis::of(&walk.set, key))
         } else {
@@ -140,11 +142,11 @@ impl FirstSessionReads {
             home,
             home_present,
             set_nonempty,
-            space,
-            space_seat,
-            space_home_present,
+            agent_space,
+            agent_space_principal,
+            agent_space_home_present,
             persisted_new_id,
-            key_opens_space,
+            key_opens_agent_space,
         })
     }
 }
@@ -154,12 +156,13 @@ impl FirstSessionReads {
 pub struct FirstSessionDone {
     /// The home minted here (false where it already stood).
     pub minted_home: bool,
-    /// The agents' home's seat, where the setup act ran or stood done.
-    pub space_seat: Option<u64>,
-    /// The agents' home minted here.
-    pub minted_space_home: bool,
+    /// The principal seated at the agent space, where the setup act ran or
+    /// stood done — op (1).
+    pub agent_space_principal: Option<u64>,
+    /// The agent space's home minted here — op (3).
+    pub minted_agent_space_home: bool,
     /// The setup state was NOT sent: op (3)'s key stands in neither list of
-    /// the set that opens the space (P13), the diagnosis handed back.
+    /// the set that opens the agent space (P13), the diagnosis handed back.
     pub setup_skipped: Option<KeyDiagnosis>,
     /// Op (1) answered `not_authorized` at an account whose first child was
     /// already seeded: the act STOPPED and no agents' home is created
@@ -174,9 +177,9 @@ pub struct FirstSessionDone {
 /// [`delegate_persisted`] writes every such line under. The line is a CACHE
 /// and never a source (§4.3): the seat itself is read off the board, so a
 /// store whose bindings cannot be read answers none, and the delegate goes
-/// out under a fresh id.
+/// out under a fresh `new_id`.
 pub(crate) fn persisted(board: &Board, store: Option<&FileStore>, account: &str) -> Option<u64> {
-    store.and_then(|s| s.persisted_id(&board.dialed, account).ok().flatten())
+    store.and_then(|s| s.persisted_new_id(&board.dialed, account).ok().flatten())
 }
 
 /// THE COMPOSITION over `reads` the caller took ahead of `session`; `key`
@@ -191,8 +194,8 @@ pub fn first_session(
 ) -> Result<FirstSessionDone, Halt> {
     let mut done = FirstSessionDone {
         minted_home: false,
-        space_seat: reads.space_seat,
-        minted_space_home: false,
+        agent_space_principal: reads.agent_space_principal,
+        minted_agent_space_home: false,
         setup_skipped: None,
         setup_stopped_seeded: false,
         warnings: Vec::new(),
@@ -203,39 +206,41 @@ pub fn first_session(
     if !reads.set_nonempty {
         return Ok(done);
     }
-    if reads.space_seat.is_some() && reads.space_home_present {
+    if reads.agent_space_principal.is_some() && reads.agent_space_home_present {
         return Ok(done);
     }
     // Op (3)'s key, settled FIRST (P13): in neither list ⇒ nothing sent.
-    match reads.key_opens_space {
+    match reads.key_opens_agent_space {
         Some(KeyDiagnosis::Enrolled { .. }) => {}
         other => {
             done.setup_skipped = Some(other.unwrap_or(KeyDiagnosis::Neither));
             return Ok(done);
         }
     }
-    // Op (1): the seat — read, resumed, or delegated under a persisted id.
-    let seat = match reads.space_seat {
-        Some(seat) => seat,
-        None => delegate_space(board, reads, session, key, store, &mut done)?,
+    // Op (1): the agent space's principal — read, resumed, or delegated
+    // under a persisted `new_id`.
+    let principal = match reads.agent_space_principal {
+        Some(principal) => principal,
+        None => delegate_agent_space(board, reads, session, key, store, &mut done)?,
     };
     if done.setup_stopped_seeded {
         return Ok(done);
     }
-    done.space_seat = Some(seat);
-    // Op (3): the mint of the space's doc 1 in a session AS the space, the
-    // key opening it by reference; idempotent by reading; closed at the end.
-    if !document_present(board, &doc_1_of(&reads.space))? {
-        let as_space = handshake(board, Scope::Content, key, seat, Site::Setup)?;
-        let outcome = as_space.op(&frames::create_home(&reads.space, Some(&format!("first-session.space-mint.{}", reads.space))));
-        let _ = as_space.close();
+    done.agent_space_principal = Some(principal);
+    // Op (3): the mint of the agent space's home in a session AS the agent
+    // space, the key opening it by reference; idempotent by reading; closed
+    // at the end.
+    if !document_present(board, &doc_1_of(&reads.agent_space))? {
+        let as_agent_space = handshake(board, Scope::Content, key, principal, Site::Setup)?;
+        let outcome = as_agent_space.op(&frames::create_home(&reads.agent_space, Some(&format!("first-session.space-mint.{}", reads.agent_space))));
+        let _ = as_agent_space.close();
         match outcome? {
             Answer::Closed => return Err(closed()),
             Answer::Document(v) => match Rejection::of(&v) {
-                None => done.minted_space_home = true,
+                None => done.minted_agent_space_home = true,
                 Some(r) if matches!(r.key(), "not_owner" | "not_an_account") => {
                     return Err(Halt::face(
-                        format!("the agents' home at {} is not this seat's to mint", reads.space),
+                        format!("the home of the agent space {} is not this session's to mint", reads.agent_space),
                         format!("{}: op (1) did not land as read (AUTH-5.87's own resume)", r.token()),
                         "re-run: S5a's resume reads the seat again",
                     ))
@@ -282,7 +287,7 @@ fn closed() -> Halt {
 
 /// Op (1): `delegate(inc(account, 1), new_id)` by the persist-first form;
 /// what is its own is the SEEDED stop and the no-seat contradiction.
-fn delegate_space(
+fn delegate_agent_space(
     board: &Board,
     reads: &FirstSessionReads,
     session: &Session<'_>,
@@ -290,24 +295,24 @@ fn delegate_space(
     store: Option<&FileStore>,
     done: &mut FirstSessionDone,
 ) -> Result<u64, Halt> {
-    let id = format!("first-session.delegate.{}", reads.space);
-    match delegate_persisted(board, session, store, reads.persisted_new_id, &reads.space, &key.fingerprint(), &id, &mut done.warnings)? {
-        Delegated::Committed { id, .. } => Ok(id),
-        Delegated::Seated(seat) => {
+    let id = format!("first-session.delegate.{}", reads.agent_space);
+    match delegate_persisted(board, session, store, reads.persisted_new_id, &reads.agent_space, &key.fingerprint(), &id, &mut done.warnings)? {
+        Delegated::Committed { principal, .. } => Ok(principal),
+        Delegated::Seated(principal) => {
             // AUTH-5.90 (iii): a first child already SEEDED by another party
             // is a permanent fact — the act stops where its set is not the
             // account's own.
-            match board.key_set(&reads.space)? {
+            match board.key_set(&reads.agent_space)? {
                 KeySetAnswer::Set(s) if !s.enrolled.is_empty() => {
                     done.setup_stopped_seeded = true;
-                    done.space_seat = Some(seat);
+                    done.agent_space_principal = Some(principal);
                 }
                 _ => {}
             }
-            Ok(seat)
+            Ok(principal)
         }
         Delegated::NotAuthorized => Err(Halt::face(
-            format!("`delegate` of {} was refused `not_authorized` and the address has no seat", reads.space),
+            format!("`delegate` of {} was refused `not_authorized` and the address has no seat", reads.agent_space),
             "ω answers the seat above an unallocated address; this contradiction is this client's to report",
             "re-run; the setup act resumes by reading",
         )),
@@ -317,11 +322,13 @@ fn delegate_space(
 /// What the persist-first `delegate` answered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Delegated {
-    /// The `delegate` stands committed under `id`: `sent` by this call, or
-    /// found committed by the persisted id's read-back (AUTH-5.19).
-    Committed { id: u64, sent: bool },
-    /// `not_authorized` at an address ALREADY A SEAT — its principal read off
-    /// `effective_owner` (AUTH-6.37), the persisted line corrected to it.
+    /// The `delegate` stands committed, `principal` the `new_id` it went
+    /// out under: `sent` by this call, or found committed by the persisted
+    /// `new_id`'s read-back (AUTH-5.19).
+    Committed { principal: u64, sent: bool },
+    /// `not_authorized` at an address ALREADY A SEAT — the principal seated
+    /// there read off `effective_owner` (AUTH-6.37), the persisted line
+    /// corrected to it.
     Seated(u64),
     /// `not_authorized` at an address that is no seat: the site faces it.
     NotAuthorized,
@@ -329,19 +336,20 @@ pub(crate) enum Delegated {
 
 /// THE PERSIST-FIRST `delegate` of `address` (§4.3, P4's one named
 /// exception; AUTH-5.20; AUTH-5.19) — the one form of the rule: the
-/// persisted id READ BACK by `principal_prefix` — this address ⇒ committed;
-/// no address ⇒ the delegate never landed, the SAME id sent again; ANOTHER
-/// address ⇒ the id is spent and a FRESH one is minted, never a resume onto
-/// it — a fresh id PERSISTED AS A BINDING LINE BEFORE THE FRAME (`key` the
-/// line's fingerprint; a store that cannot append is a warning carrying the
-/// line, §3.7); `not_authorized` resolved by the seat's own read and never
-/// a re-peek of the frontier (AUTH-5.87); `duplicate_id` faced.
+/// persisted `new_id` READ BACK by `principal_prefix` — this address ⇒
+/// committed; no address ⇒ the delegate never landed, the SAME `new_id` sent
+/// again; ANOTHER address ⇒ the `new_id` is spent and a FRESH one is minted,
+/// never a resume onto it — a fresh `new_id` PERSISTED AS A BINDING LINE
+/// BEFORE THE FRAME (`key` the line's fingerprint; a store that cannot append
+/// is a warning carrying the line, §3.7); `not_authorized` resolved by the
+/// seat's own read and never a re-peek of the frontier (AUTH-5.87);
+/// `duplicate_id` faced. `id` is the frame's AUTH-5.6 per-session id.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn delegate_persisted(
     board: &Board,
     session: &Session<'_>,
     store: Option<&FileStore>,
-    persisted: Option<u64>,
+    persisted_new_id: Option<u64>,
     address: &str,
     key: &Fingerprint,
     id: &str,
@@ -354,9 +362,9 @@ pub(crate) fn delegate_persisted(
             warnings.push(w.to_string());
         }
     };
-    let new_id = match persisted {
+    let new_id = match persisted_new_id {
         Some(spent_or_sent) => match board.principal_prefix(spent_or_sent)? {
-            Some(seated) if seated == address => return Ok(Delegated::Committed { id: spent_or_sent, sent: false }),
+            Some(seated) if seated == address => return Ok(Delegated::Committed { principal: spent_or_sent, sent: false }),
             None => spent_or_sent,
             Some(_) => {
                 let fresh = fresh_principal_id();
@@ -375,16 +383,16 @@ pub(crate) fn delegate_persisted(
         Answer::Document(v) => v,
     };
     if acked_addr(&v).is_some() {
-        return Ok(Delegated::Committed { id: new_id, sent: true });
+        return Ok(Delegated::Committed { principal: new_id, sent: true });
     }
     let Some(r) = Rejection::of(&v) else {
         return Err(Halt::face("the delegate answered a shape this client does not know", v.to_string(), "this is a fault in this client or the board"));
     };
     match r.key() {
         "not_authorized" => match principal_of(board, address)? {
-            Some(seat) => {
-                persist(seat);
-                Ok(Delegated::Seated(seat))
+            Some(principal) => {
+                persist(principal);
+                Ok(Delegated::Seated(principal))
             }
             None => Ok(Delegated::NotAuthorized),
         },

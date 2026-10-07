@@ -13,14 +13,15 @@ use crate::board::{acked_addr, frames, Answer, Board, Opened, Rejection, Session
 use crate::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome};
 use crate::ceremony::first_session::document_present;
 use crate::halt::Halt;
+use crate::sheet::Facts;
 
-/// THE HOSTED ARM's reply (§4.5 H6): DATA for the hosting flow's message.
+/// THE HOSTED ARM's reply (§4.5 H6): DATA for the hosting flow's message —
+/// the claimant and the three facts (AUTH-5.38).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostedReply {
     pub claimant: String,
-    pub account: String,
-    pub principal: u64,
-    pub origin: String,
+    /// The account founded, its principal and the origin dialed.
+    pub facts: Facts,
     /// The operator's log lines — TALK.
     pub log: Vec<String>,
     /// Whether the payload carried no anchor-flagged entry (AUTH-5.16's
@@ -144,7 +145,7 @@ pub fn hosted(board: &Board, payload: &[u8], principal: u64) -> Result<HostedOut
         let _ = board.session_close(&boot);
         let _ = board.session_close(&owner);
     }
-    Ok(HostedOutcome::Claimed(HostedReply { claimant: account.clone(), account, principal, origin: board.dialed.as_str().to_string(), log, anchorless }))
+    Ok(HostedOutcome::Claimed(HostedReply { claimant: account.clone(), facts: Facts { account, principal, origin: board.dialed.clone() }, log, anchorless }))
 }
 
 fn payload_face(why: &str) -> Halt {

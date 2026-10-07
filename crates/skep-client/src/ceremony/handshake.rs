@@ -16,7 +16,7 @@
 
 use skep_identity::Fingerprint;
 
-use crate::board::{answers, frames, Answer, Board, Closed, Opened, Scope, SessionBody, Token};
+use crate::board::{answers, frames, Answer, Board, CloseAnswer, Opened, Scope, SessionBody, Token};
 use crate::derive::records::{credential_records, Hand};
 use crate::derive::{precheck, KeyDiagnosis, PreCheck};
 use crate::halt::{Blocked, Halt};
@@ -53,7 +53,7 @@ impl Session<'_> {
     }
 
     /// `POST /session/close` (AUTH-4.47) — the session's ordinary end.
-    pub fn close(mut self) -> Result<Closed, Halt> {
+    pub fn close(mut self) -> Result<CloseAnswer, Halt> {
         self.ended = true;
         self.board.session_close(&self.token)
     }

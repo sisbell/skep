@@ -17,7 +17,7 @@ use skep_identity::{encode_enroll, Enrollment};
 use crate::common::{board, claim, entry_of, key_file, keygen, recording_board, spawn};
 
 fn opts(prefix: &str) -> RetireOptions {
-    RetireOptions { principal: 1, fingerprint: prefix.into() }
+    RetireOptions { principal: 1, fingerprint_prefix: prefix.into() }
 }
 
 fn store_snapshot(store: &FileStore) -> (usize, usize) {
@@ -65,7 +65,7 @@ fn retire_another_devices_key_then_the_sessions_own_without_a_close() {
     let (rb, log) = recording_board(plain.dialed.clone());
     let mut person = Scripted::new(vec![Script::Confirm(true)]);
     let done = retire(&rb, &store, &mut person, &opts(&fp_b.to_hex()[..8])).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n")));
-    assert_eq!((done.fingerprint, done.label.as_deref(), done.end.clone()), (fp_b, Some("phone"), RetireEnd::Closed));
+    assert_eq!((done.fingerprint, done.label.as_deref(), done.end.clone()), (fp_b, Some("phone"), RetireEnd::CloseSent));
     let t = person.transcript.join("\n");
     assert!(person.said("label: phone"), "{t}");
     for clause in ["AUTH-5.46 (1)", "AUTH-5.46 (2)", "AUTH-5.46 (3)", "AUTH-5.46 (4)"] {
@@ -82,7 +82,7 @@ fn retire_another_devices_key_then_the_sessions_own_without_a_close() {
     let (rb, log) = recording_board(plain.dialed.clone());
     let mut person = Scripted::new(vec![Script::Confirm(true)]);
     let done = retire(&rb, &store, &mut person, &opts(&fp.to_hex()[..8])).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n")));
-    assert_eq!(done.end, RetireEnd::OwnKey { another_held: false });
+    assert_eq!(done.end, RetireEnd::EndedByCommit { another_held: false });
     let t = person.transcript.join("\n");
     assert!(person.said("THE LAST DEVICE KEY") && person.said("skep recover"), "{t}");
     assert!(person.said("this session's own key was retired") && person.said("skep keygen`, then `skep recover`"), "{t}");
@@ -115,7 +115,7 @@ fn the_own_key_fork_names_session_where_another_key_is_held_and_an_anchorless_ac
     full.close().unwrap();
     let mut person = Scripted::new(vec![Script::Confirm(true)]);
     let done = retire(&board, &store, &mut person, &opts(&fp.to_hex()[..8])).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n")));
-    assert_eq!(done.end, RetireEnd::OwnKey { another_held: true });
+    assert_eq!(done.end, RetireEnd::EndedByCommit { another_held: true });
     assert!(person.said("the next act is a sign-in with the key you still hold: `skep session`"), "{}", person.transcript.join("\n"));
     assert!(!person.said("THE LAST DEVICE KEY"), "another device key stands");
 

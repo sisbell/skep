@@ -17,8 +17,8 @@ use skep_client::ceremony::handshake::{handshake, Site};
 use skep_client::ceremony::recover::{recover, RecoverOptions};
 use skep_client::derive::principal_of;
 use skep_client::person::scripted::{Script, Scripted};
-use skep_client::person::Custody;
-use skep_client::sheet::{Facts, KeyFile, Seed};
+use skep_client::person::KeptOrPlaced;
+use skep_client::sheet::{Facts, KeyFile, Label, Seed};
 use skep_client::sign::signer_from_seed;
 use skep_client::store::FileStore;
 use skep_identity::{encode_enroll, Enrollment, Fingerprint};
@@ -27,7 +27,7 @@ use skep_signature::HybridSigner;
 use crate::common::{anchor_file, board, claim, entry_of, fp_of, key_file, keygen, recording_board, spawn, wire_delegate, wire_enroll, wire_session, Hooked};
 
 fn options(anchor: Option<std::path::PathBuf>, stolen: Option<bool>) -> RecoverOptions {
-    RecoverOptions { principal: 1, anchor, lost: vec![], stolen, anchor_lost: false, anchor_out: vec![], paper: false, host: "testhost".into(), date: "2026-10-04".into() }
+    RecoverOptions { principal: 1, anchor, lost: vec![], stolen, anchor_lost: false, anchor_out: vec![], paper: false, host_name: "testhost".into(), date: "2026-10-04".into() }
 }
 
 /// A claimed board with the device key LOST: the old file copied aside,
@@ -64,7 +64,7 @@ fn the_device_recovery_enrolls_the_new_key_retires_the_lost_one_and_resumes_at_r
     let l = lose_the_device();
     let (board, log) = recording_board(crate::common::origin_of(l.sd.port()));
     let (kept, kept_file) = anchor_file(&l.anchors, "a");
-    let script = vec![Script::YesNo(true), Script::Custody(Custody::Kept), Script::YesNo(true), Script::Confirm(true), Script::Confirm(true)];
+    let script = vec![Script::YesNo(true), Script::KeptOrPlaced(KeptOrPlaced::Kept), Script::YesNo(true), Script::Confirm(true), Script::Confirm(true)];
     let mut person = Scripted::new(script);
     let done = recover(&board, &l.store, &mut person, &options(Some(kept.clone()), Some(false))).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n")));
     let lines = log.lock().unwrap().clone();
@@ -77,7 +77,7 @@ fn the_device_recovery_enrolls_the_new_key_retires_the_lost_one_and_resumes_at_r
     assert!(person.said("AUTH-5.68 (cost)"), "{t}");
     // R1: whose account, kept-or-placed, the other paper.
     assert!(person.said("is this account your OWN"), "{t}");
-    assert!(person.said("SECRET custody of") && person.said("PLACED copy is DESTROYED"), "{t}");
+    assert!(person.said("SECRET kept-or-placed") && person.said("PLACED copy is DESTROYED"), "{t}");
     assert!(person.said("is that paper still held?"), "{t}");
     assert!(person.said(&format!("anchor {} ({}) imported: fingerprint first", kept_file.fingerprint, kept_file.label.as_deref().unwrap())), "{t}");
     // R3: the enrollment preview names the account, the artifact's label,
@@ -114,7 +114,7 @@ fn the_device_recovery_enrolls_the_new_key_retires_the_lost_one_and_resumes_at_r
     let anchor = kept_file2.signer();
     let token = wire_session(&board2, 1, &anchor);
     wire_enroll(&board2, &token, &anchor, "1.0.1.0.1", "1.0.1", &[entry_of(&key_file(&l2.store, &l2.new_fp), "notebook again")]).expect("R3 by hand");
-    let mut person = Scripted::new(vec![Script::YesNo(true), Script::Custody(Custody::Kept), Script::YesNo(true), Script::Confirm(true)]);
+    let mut person = Scripted::new(vec![Script::YesNo(true), Script::KeptOrPlaced(KeptOrPlaced::Kept), Script::YesNo(true), Script::Confirm(true)]);
     let done = recover(&board2, &l2.store, &mut person, &options(Some(kept2), Some(false))).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n")));
     assert!(person.said("R3 stands done, read off `key_set`"), "{}", person.transcript.join("\n"));
     assert!(!person.said("ENROLLMENT PREVIEW"), "no second enrollment");
@@ -165,10 +165,10 @@ fn the_import_halts_name_their_state_and_spend_no_nonce() {
     let l = lose_the_device();
     let (board, log) = recording_board(crate::common::origin_of(l.sd.port()));
     // Another board's anchor file.
-    let other = KeyFile::new(Seed::fresh(), true, Some("elsewhere".into()), Some(&Facts { account: "1.0.1".into(), principal: 9, origin: skep_client::Origin::parse("http://127.0.0.1:9").unwrap() }));
+    let other = KeyFile::new(Seed::fresh(), true, Some(Label::new("elsewhere").unwrap()), Some(&Facts { account: "1.0.1".into(), principal: 9, origin: skep_client::Origin::parse("http://127.0.0.1:9").unwrap() }));
     let other_path = l.dir.path().join("other.skep-key");
     std::fs::write(&other_path, other.to_json()).unwrap();
-    let mut person = Scripted::new(vec![Script::YesNo(true), Script::Custody(Custody::Kept)]);
+    let mut person = Scripted::new(vec![Script::YesNo(true), Script::KeptOrPlaced(KeptOrPlaced::Kept)]);
     let err = recover(&board, &l.store, &mut person, &options(Some(other_path), Some(false))).expect_err("the facts disagree");
     assert!(err.to_string().contains("principal 9") && err.to_string().contains("http://127.0.0.1:9") && err.to_string().contains("AUTH-5.22"), "{err}");
     assert!(!log.lock().unwrap().iter().any(|l| l.starts_with("GET /challenge")), "no nonce spent: {:?}", log.lock().unwrap());
@@ -192,7 +192,7 @@ fn the_import_halts_name_their_state_and_spend_no_nonce() {
     let mut person = Scripted::new(vec![Script::YesNo(true)]);
     let err = recover(&board, &l.store, &mut person, &options(Some(inside.clone()), Some(false))).expect_err("inside the store");
     assert!(err.to_string().contains("lies inside the key store"), "{err}");
-    assert!(!person.said("SECRET custody"), "refused ahead of the kept-or-placed question");
+    assert!(!person.said("SECRET kept-or-placed"), "refused ahead of the kept-or-placed question");
     std::fs::remove_file(inside).unwrap();
     // KEYLESS at R0: the two commands in order.
     let empty = FileStore::open(l.dir.path().join("empty"));
@@ -225,8 +225,8 @@ fn an_agents_account_takes_the_containment_act_and_enrolls_nothing() {
     // A hosted account: two custody anchors and a working device key, no
     // agent space (the hosted cascade runs none).
     let working = signer_from_seed(&[31; 32]);
-    let a = KeyFile::new(Seed::fresh(), true, Some("custody a".into()), None);
-    let b = KeyFile::new(Seed::fresh(), true, Some("custody b".into()), None);
+    let a = KeyFile::new(Seed::fresh(), true, Some(Label::new("custody a").unwrap()), None);
+    let b = KeyFile::new(Seed::fresh(), true, Some(Label::new("custody b").unwrap()), None);
     let payload = encode_enroll(&[
         Enrollment::new(a.public.clone(), true, Some("custody a".into())).unwrap(),
         Enrollment::new(b.public.clone(), true, Some("custody b".into())).unwrap(),
@@ -238,7 +238,7 @@ fn an_agents_account_takes_the_containment_act_and_enrolls_nothing() {
     // The owner's store holds a fresh device key of its own.
     let store = FileStore::open(dir.path().join("owner"));
     let own_fp = keygen(&store, "owner laptop");
-    let script = vec![Script::YesNo(false), Script::Custody(Custody::Kept), Script::YesNo(true), Script::YesNo(true), Script::Confirm(true)];
+    let script = vec![Script::YesNo(false), Script::KeptOrPlaced(KeptOrPlaced::Kept), Script::YesNo(true), Script::YesNo(true), Script::Confirm(true)];
     let mut person = Scripted::new(script);
     let done = recover(&board, &store, &mut person, &options(Some(sheet), Some(false))).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n")));
     let t = person.transcript.join("\n");
@@ -251,7 +251,7 @@ fn an_agents_account_takes_the_containment_act_and_enrolls_nothing() {
     assert_eq!(principal_of(&board, "1.0.1.1").unwrap(), None, "inc(A, 1) is NOT delegated: the setup state never ran");
     assert!(store.enrollment_for(&board.dialed, 1).unwrap().is_none(), "no binding appended");
     // Declined: nothing written.
-    let mut person = Scripted::new(vec![Script::YesNo(false), Script::Custody(Custody::Kept), Script::YesNo(true), Script::YesNo(false)]);
+    let mut person = Scripted::new(vec![Script::YesNo(false), Script::KeptOrPlaced(KeptOrPlaced::Kept), Script::YesNo(true), Script::YesNo(false)]);
     let sheet_b = dir.path().join("custody-b.skep-key");
     std::fs::write(&sheet_b, b.to_json()).unwrap();
     let err = recover(&board, &store, &mut person, &options(Some(sheet_b), Some(false))).expect_err("declined");
@@ -289,7 +289,7 @@ fn the_stolen_arm_retires_what_the_thief_enrolls_between_rounds() {
     let planted_fp = fp_of(&planted);
     let thief_key = l.old.signer();
     let thief_board = board_of(&l);
-    let mut person = Hooked::new(vec![Script::YesNo(true), Script::Custody(Custody::Kept), Script::YesNo(true), Script::Confirm(true), Script::Confirm(true), Script::Confirm(true), Script::Answer("1.0.1.2".into())]);
+    let mut person = Hooked::new(vec![Script::YesNo(true), Script::KeptOrPlaced(KeptOrPlaced::Kept), Script::YesNo(true), Script::Confirm(true), Script::Confirm(true), Script::Confirm(true), Script::Answer("1.0.1.2".into())]);
     person.on_confirm = Box::new(move |i, _| {
         if i == 0 {
             let token = wire_session(&thief_board, 1, &thief_key);
@@ -310,12 +310,12 @@ fn the_stolen_arm_retires_what_the_thief_enrolls_between_rounds() {
     assert!(set.retired(&planted_fp).is_some() && set.retired(&l.old_fp).is_some(), "both retired");
     assert!(set.enrolled(&l.new_fp).is_some());
     // The recovery read: the person's own handoff returned and marked; the
-    // thief's delegation stands in the cone; the loopback cell's report.
+    // thief's delegation stands in the cone; the loopback cell's line.
     assert!(person.inner.said("GENESES RETURNED") && person.inner.said("1.0.1.2: genesis written by"), "{t}");
     assert!(person.inner.said("WHICH OF THESE ARE ACTS OF YOUR OWN"), "the witness question (RES-184):\n{t}");
     assert!(person.inner.said("THE BOUNDARY LINE"), "{t}");
-    assert!(done.report.iter().any(|l| l.contains("NO REPORT at a loopback-bound notebook")), "{:?}", done.report);
-    assert!(!done.report.iter().any(|l| l.contains("1.0.1.2 (genesis in")), "the marked handoff is not reported: {:?}", done.report);
+    assert!(done.recovery_read.iter().any(|l| l.contains("NO REPORT at a loopback-bound notebook")), "{:?}", done.recovery_read);
+    assert!(!done.recovery_read.iter().any(|l| l.contains("1.0.1.2 (genesis in")), "the marked handoff is not reported: {:?}", done.recovery_read);
 }
 
 /// THE STOLEN ARM at a handoff's recipient who never ran `skep bind`, so no
@@ -337,13 +337,13 @@ fn the_stolen_arm_mints_the_recipients_doc_one_ahead_of_its_first_retirement() {
     let anchors = dir.path().join("anchors");
     claim(&board, &giver, &anchors);
     let give = |payload: Option<String>, anchor: Option<std::path::PathBuf>| HandoffOptions { principal: 1, account: "1.0.1.2".into(), payload: payload.map(|p| format!("{p}\n").into_bytes()), anchor };
-    let HandoffOutcome::Delegated { seat, .. } = handoff(&board, &giver, &mut Scripted::new(vec![]), &give(None, None)).unwrap() else { panic!("beat (a)") };
+    let HandoffOutcome::Delegated { principal, .. } = handoff(&board, &giver, &mut Scripted::new(vec![]), &give(None, None)).unwrap() else { panic!("beat (a)") };
     let recipient = FileStore::open(dir.path().join("recipient"));
     let papers = dir.path().join("papers");
-    let take = AcceptOptions { account: "1.0.1.2".into(), label: None, anchor_out: vec![papers.join("ra"), papers.join("rb")], paper: false, no_anchors: false, hosted: None, host: "testhost".into(), date: "2026-10-04".into() };
+    let take = AcceptOptions { account: "1.0.1.2".into(), label: None, anchor_out: vec![papers.join("ra"), papers.join("rb")], paper: false, no_anchors: false, hosted: None, host_name: "testhost".into(), date: "2026-10-04".into() };
     let taken = accept(&board, &recipient, &mut Scripted::new(vec![Script::Label("phone".into()), Script::LabelDefault, Script::LabelDefault]), &take).unwrap();
     let (kept, _) = anchor_file(&anchors, "a");
-    let mut p = Scripted::new(vec![Script::Confirm(true), Script::Typed("1.0.1.2".into()), Script::Custody(Custody::Kept), Script::YesNo(true)]);
+    let mut p = Scripted::new(vec![Script::Confirm(true), Script::Typed("1.0.1.2".into()), Script::KeptOrPlaced(KeptOrPlaced::Kept), Script::YesNo(true)]);
     let HandoffOutcome::Seeded { .. } = handoff(&board, &giver, &mut p, &give(Some(taken.record.clone()), Some(kept))).unwrap_or_else(|h| panic!("{h}\n{}", p.transcript.join("\n"))) else { panic!("the genesis") };
     assert!(!document_present(&board, "1.0.1.2.0.1").unwrap(), "no doc 1 at the recipient's account");
     // The recipient's device is stolen: its key gone from the store, a fresh one made.
@@ -353,14 +353,14 @@ fn the_stolen_arm_mints_the_recipients_doc_one_ahead_of_its_first_retirement() {
     let (rb, log) = recording_board(board.dialed.clone());
     let dialed_at_the_choice = Arc::new(Mutex::new(None));
     let (seen, dialed) = (dialed_at_the_choice.clone(), log.clone());
-    let script = vec![Script::YesNo(true), Script::YesNo(true), Script::Custody(Custody::Kept), Script::YesNo(true), Script::Confirm(true), Script::Confirm(true)];
+    let script = vec![Script::YesNo(true), Script::YesNo(true), Script::KeptOrPlaced(KeptOrPlaced::Kept), Script::YesNo(true), Script::Confirm(true), Script::Confirm(true)];
     let mut person = Hooked::new(script);
     person.on_say = Box::new(move |rule, _| {
         if rule == "AUTH-5.60 step 1" {
             *seen.lock().unwrap() = Some(dialed.lock().unwrap().len());
         }
     });
-    let opts = RecoverOptions { principal: seat, anchor: Some(paper), lost: vec![], stolen: None, anchor_lost: false, anchor_out: vec![], paper: false, host: "testhost".into(), date: "2026-10-04".into() };
+    let opts = RecoverOptions { principal, anchor: Some(paper), lost: vec![], stolen: None, anchor_lost: false, anchor_out: vec![], paper: false, host_name: "testhost".into(), date: "2026-10-04".into() };
     let done = recover(&rb, &recipient, &mut person, &opts).unwrap_or_else(|h| panic!("{h}\n{}", person.inner.transcript.join("\n")));
     assert_eq!(*dialed_at_the_choice.lock().unwrap(), Some(0), "LOST or STOLEN is chosen ahead of every read");
     assert_eq!((done.retired.clone(), done.enrolled.clone()), (vec![taken.device], vec![fresh]));

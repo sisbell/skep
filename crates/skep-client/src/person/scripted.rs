@@ -46,8 +46,8 @@ pub enum Script {
     ImportTyped { seed_hex: String, fingerprint_prefix: String },
     /// The import: "I hold neither".
     ImportNeither,
-    /// Kept or placed.
-    Custody(Custody),
+    /// The kept-or-placed answer.
+    KeptOrPlaced(KeptOrPlaced),
     /// The person leaves at this moment.
     Abandon,
 }
@@ -179,10 +179,10 @@ impl Person for Scripted {
         }
     }
 
-    fn custody(&mut self, m: Secret<KeptOrPlaced>) -> Result<Custody, Abandoned> {
-        self.transcript.push(format!("SECRET custody of {}: {}", m.0.path.display(), m.0.text));
-        match self.next("custody")? {
-            Script::Custody(c) => Ok(c),
+    fn kept_or_placed(&mut self, m: Secret<HandedPath>) -> Result<KeptOrPlaced, Abandoned> {
+        self.transcript.push(format!("SECRET kept-or-placed {}: {}", m.0.path.display(), m.0.text));
+        match self.next("kept-or-placed")? {
+            Script::KeptOrPlaced(answer) => Ok(answer),
             other => panic!("the script answered kept-or-placed with {other:?}"),
         }
     }

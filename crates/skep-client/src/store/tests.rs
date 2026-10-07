@@ -40,6 +40,24 @@ fn generate_writes_once_under_the_modes() {
     assert_eq!(file.fingerprint, a.0);
 }
 
+/// §3.4 — the store's DEVICE keys are its key files whose `anchor` member is
+/// false: an anchor file copied into `keys/` is listed by `list` and is never
+/// one of `device_keys`.
+#[test]
+fn the_device_keys_leave_an_anchor_copied_in_out() {
+    let (_dir, store) = store();
+    let a = store.generate(Some(Label::new("notebook").unwrap())).unwrap();
+    let b = store.generate(Some(Label::new("phone").unwrap())).unwrap();
+    let anchor = KeyFile::new(Seed::new([7u8; 32]), true, Some(Label::new("paper-a").unwrap()), None);
+    FileStore::write_once(&store.key_path(&anchor.fingerprint), anchor.to_json().as_bytes()).unwrap();
+    assert_eq!(store.list().unwrap().len(), 3, "the copied anchor is a key file of the store");
+    let mut devices: Vec<Fingerprint> = store.device_keys().unwrap().iter().map(|k| k.fingerprint).collect();
+    let mut expected = vec![a.0, b.0];
+    devices.sort_by_key(Fingerprint::to_hex);
+    expected.sort_by_key(Fingerprint::to_hex);
+    assert_eq!(devices, expected, "the anchor is never this store's own device key");
+}
+
 /// §3.2's refusals from doctored files, each a state beside the path: a `v`
 /// of 2, an unknown member, a seed the fingerprint does not re-derive from,
 /// and an anchor file at a signing selection.
@@ -67,7 +85,7 @@ fn doctored_files_are_refused_by_state() {
     let disagrees = write("disagrees.key", &v);
     assert!(matches!(store.load(&disagrees), Err(StoreError::KeyFile { error: KeyFileError::Disagrees, .. })));
     // An anchor file at `--key` for a signing command.
-    let anchor = KeyFile::new(Seed::new([5u8; 32]), true, Some("paper-a".into()), None);
+    let anchor = KeyFile::new(Seed::new([5u8; 32]), true, Some(Label::new("paper-a").unwrap()), None);
     let anchor_path = dir.path().join("anchor.skep-key");
     FileStore::write_once(&anchor_path, anchor.to_json().as_bytes()).unwrap();
     assert!(matches!(
@@ -86,26 +104,26 @@ fn the_lookup_takes_its_four_arms_in_order() {
     let origin = Origin::parse("http://127.0.0.1:8642").unwrap();
     // Arm 4, the store EMPTY.
     assert!(matches!(
-        store.select(&KeySelector::Binding { origin: &origin, principal: Some(1) }, Purpose::Sign),
+        store.select(&KeySelector::Board { origin: &origin, principal: Some(1) }, Purpose::Sign),
         Err(StoreError::NoSelection { keys }) if keys.is_empty()
     ));
     // Arm 3: exactly one device key.
     let first = store.generate(Some(Label::new("one").unwrap())).unwrap();
-    let sel = store.select(&KeySelector::Binding { origin: &origin, principal: Some(1) }, Purpose::Sign).unwrap();
+    let sel = store.select(&KeySelector::Board { origin: &origin, principal: Some(1) }, Purpose::Sign).unwrap();
     assert_eq!(sel.fingerprint, first.0);
     // Two keys, no binding: arm 4 lists both.
     let second = store.generate(Some(Label::new("two").unwrap())).unwrap();
     assert!(matches!(
-        store.select(&KeySelector::Binding { origin: &origin, principal: Some(1) }, Purpose::Sign),
+        store.select(&KeySelector::Board { origin: &origin, principal: Some(1) }, Purpose::Sign),
         Err(StoreError::NoSelection { keys }) if keys.len() == 2
     ));
     // Arm 2: the binding, and the LAST line wins.
     store.bind(&Binding::Enrollment { origin: origin.clone(), principal: 1, account: "1.0.1".into(), fingerprint: first.0 }).unwrap();
     store.bind(&Binding::Enrollment { origin: origin.clone(), principal: 1, account: "1.0.1".into(), fingerprint: second.0 }).unwrap();
-    let sel = store.select(&KeySelector::Binding { origin: &origin, principal: Some(1) }, Purpose::Sign).unwrap();
+    let sel = store.select(&KeySelector::Board { origin: &origin, principal: Some(1) }, Purpose::Sign).unwrap();
     assert_eq!(sel.fingerprint, second.0, "the newest line wins");
     // `--principal` omitted where the board has exactly one binding.
-    let sel = store.select(&KeySelector::Binding { origin: &origin, principal: None }, Purpose::Sign).unwrap();
+    let sel = store.select(&KeySelector::Board { origin: &origin, principal: None }, Purpose::Sign).unwrap();
     assert_eq!(sel.fingerprint, second.0);
     // Arm 1: a path, no lookup.
     let sel = store.select(&KeySelector::Path(&store.key_path(&first.0)), Purpose::Sign).unwrap();
@@ -131,34 +149,34 @@ fn a_stored_key_signs_through_the_store_and_an_anchor_never_does() {
     let id = store.generate(Some(Label::new("notebook").unwrap())).unwrap();
     store.generate(None).unwrap();
     store.bind(&Binding::Enrollment { origin: origin.clone(), principal: 1, account: "1.0.1".into(), fingerprint: id.0 }).unwrap();
-    let bound = KeySelector::Binding { origin: &origin, principal: Some(1) };
+    let bound = KeySelector::Board { origin: &origin, principal: Some(1) };
     let facts = store.select(&bound, Purpose::Sign).unwrap();
     assert_eq!((facts.fingerprint, facts.label.as_deref(), facts.path.clone()), (id.0, Some("notebook"), store.key_path(&id.0)));
     let signer = store.signer(&bound).unwrap();
     assert_eq!((signer.fingerprint(), signer.public_key()), (facts.fingerprint, facts.public.clone()));
     let blob = signer.sign(b"bytes the library framed");
     assert!(skep_signature::verify(signer.tag(), &facts.public, b"bytes the library framed", &blob).is_ok());
-    let anchor = KeyFile::new(Seed::new([6u8; 32]), true, Some("paper-b".into()), None);
+    let anchor = KeyFile::new(Seed::new([6u8; 32]), true, Some(Label::new("paper-b").unwrap()), None);
     let anchor_path = dir.path().join("anchor.skep-key");
     FileStore::write_once(&anchor_path, anchor.to_json().as_bytes()).unwrap();
     assert!(matches!(store.signer(&KeySelector::Path(&anchor_path)), Err(StoreError::KeyFile { error: KeyFileError::AnchorAtSigningCommand, .. })));
 }
 
 /// §4.3 — the persist-first line read back: the LAST line naming the
-/// account at the board answers its id; another account's or another
+/// account at the board answers its `new_id`; another account's or another
 /// board's lines answer nothing.
 #[test]
-fn the_persisted_id_is_the_last_line_naming_the_account() {
+fn the_persisted_new_id_is_the_last_line_naming_the_account() {
     let (_dir, store) = store();
     let origin = Origin::parse("http://127.0.0.1:8642").unwrap();
     let fp = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
-    assert_eq!(store.persisted_id(&origin, "1.0.1.1").unwrap(), None);
+    assert_eq!(store.persisted_new_id(&origin, "1.0.1.1").unwrap(), None);
     store.bind(&Binding::Enrollment { origin: origin.clone(), principal: 1, account: "1.0.1".into(), fingerprint: fp }).unwrap();
     store.bind(&Binding::Enrollment { origin: origin.clone(), principal: 424_242, account: "1.0.1.1".into(), fingerprint: fp }).unwrap();
     store.bind(&Binding::Enrollment { origin: origin.clone(), principal: 525_252, account: "1.0.1.1".into(), fingerprint: fp }).unwrap();
-    assert_eq!(store.persisted_id(&origin, "1.0.1.1").unwrap(), Some(525_252), "the newest line wins");
-    assert_eq!(store.persisted_id(&origin, "1.0.1.2").unwrap(), None);
-    assert_eq!(store.persisted_id(&Origin::parse("http://127.0.0.1:9").unwrap(), "1.0.1.1").unwrap(), None);
+    assert_eq!(store.persisted_new_id(&origin, "1.0.1.1").unwrap(), Some(525_252), "the newest line wins");
+    assert_eq!(store.persisted_new_id(&origin, "1.0.1.2").unwrap(), None);
+    assert_eq!(store.persisted_new_id(&Origin::parse("http://127.0.0.1:9").unwrap(), "1.0.1.1").unwrap(), None);
 }
 
 /// §3.5 — the two line forms and no third; §3.7 — a final line without

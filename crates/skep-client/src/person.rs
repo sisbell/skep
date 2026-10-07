@@ -155,19 +155,22 @@ impl fmt::Debug for Imported {
     }
 }
 
-/// KEPT OR PLACED (AUTH-5.54 step 3's file arm) — SECRET: whether the
-/// handed path is the KEPT artifact (retained) or a PLACED copy (destroyed
-/// when the ceremony ends); "kept-or-placed is not a filesystem-readable
-/// property of a path", so the person answers what no read can.
+/// THE HANDED PATH, asked KEPT OR PLACED (AUTH-5.54 step 3's file arm;
+/// `client.md` §4a.2 R1) — SECRET: whether the handed path is the KEPT
+/// artifact (retained) or a PLACED copy (destroyed when the ceremony ends);
+/// "kept-or-placed is not a filesystem-readable property of a path", so the
+/// person answers what no read can.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KeptOrPlaced {
+pub struct HandedPath {
     pub path: PathBuf,
     pub text: String,
 }
 
-/// The custody answer.
+/// The kept-or-placed answer (AUTH-5.54 step 3's file arm; `client.md`
+/// §4a.2 R1): the handed path is the KEPT artifact, retained, or a PLACED
+/// copy, destroyed when the ceremony ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Custody {
+pub enum KeptOrPlaced {
     Kept,
     Placed,
 }
@@ -210,8 +213,9 @@ pub trait Person {
     fn confirm_typed(&mut self, m: Consent<Confirmation>) -> Result<String, Abandoned>;
     /// THE ANCHOR IMPORT (SECRET): a file, the typed hex, or neither.
     fn import(&mut self, m: Secret<Import>) -> Result<Imported, Abandoned>;
-    /// KEPT OR PLACED (SECRET): the handed file's custody.
-    fn custody(&mut self, m: Secret<KeptOrPlaced>) -> Result<Custody, Abandoned>;
+    /// KEPT OR PLACED (SECRET): the handed path's kept-or-placed answer —
+    /// the bridge's `keptOrPlaced` (`client.md` §4b.3).
+    fn kept_or_placed(&mut self, m: Secret<HandedPath>) -> Result<KeptOrPlaced, Abandoned>;
 }
 
 #[cfg(test)]

@@ -9,7 +9,7 @@ use skep_client::ceremony::first_session::{document_present, first_session, Firs
 use skep_client::ceremony::handshake::{handshake, Site};
 use skep_client::derive::records::{compare_whole_set, credential_records, Difference, Held};
 use skep_client::derive::principal_of;
-use skep_client::sheet::{KeyFile, Seed};
+use skep_client::sheet::{KeyFile, Label, Seed};
 use skep_client::sign::{signer_from_seed, signer_from_seed_under};
 use skep_client::store::{Binding, FileStore};
 use skep_identity::{encode_enroll, Enrollment, Fingerprint};
@@ -22,8 +22,8 @@ use crate::common::{board, keygen, spawn};
 fn customer_material(store: &FileStore) -> (Vec<Enrollment>, Fingerprint, KeyFile) {
     let fp = keygen(store, "customer notebook");
     let device = store.load(&store.key_path(&fp)).unwrap();
-    let a = KeyFile::new(Seed::fresh(), true, Some("paper a".into()), None);
-    let b = KeyFile::new(Seed::fresh(), true, Some("paper b".into()), None);
+    let a = KeyFile::new(Seed::fresh(), true, Some(Label::new("paper a").unwrap()), None);
+    let b = KeyFile::new(Seed::fresh(), true, Some(Label::new("paper b").unwrap()), None);
     let entries = vec![
         Enrollment::new(a.public.clone(), true, Some("paper a".into())).unwrap(),
         Enrollment::new(b.public.clone(), true, Some("paper b".into())).unwrap(),
@@ -61,7 +61,7 @@ fn the_hosted_arm_claims_from_the_payload_verbatim_and_is_idempotent() {
     // THE CLAIM.
     let out = hosted(&board, payload.as_bytes(), 1).expect("the hosted claim");
     let HostedOutcome::Claimed(reply) = out else { panic!("{out:?}") };
-    assert_eq!((reply.claimant.as_str(), reply.account.as_str(), reply.principal, reply.origin.as_str()), ("1.0.1", "1.0.1", 1, board.dialed.as_str()));
+    assert_eq!((reply.claimant.as_str(), reply.facts.account.as_str(), reply.facts.principal, &reply.facts.origin), ("1.0.1", "1.0.1", 1, &board.dialed));
     assert!(!reply.anchorless);
     assert_eq!(reply.log.iter().filter(|l| l.starts_with("payload entry:")).count(), 3);
     assert_eq!(board.health().unwrap().claimant(), Some("1.0.1"));
@@ -158,35 +158,35 @@ fn first_session_owes_the_setup_act_once_and_nothing_after() {
     let reads = FirstSessionReads::take(&board, "1.0.1", &fp, Some(&store)).unwrap();
     assert!(reads.home_present, "H3 minted the home");
     assert!(reads.set_nonempty);
-    assert_eq!(reads.space, "1.0.1.1");
-    assert_eq!(reads.space_seat, None);
-    assert!(!reads.space_home_present);
+    assert_eq!(reads.agent_space, "1.0.1.1");
+    assert_eq!(reads.agent_space_principal, None);
+    assert!(!reads.agent_space_home_present);
     assert_eq!(reads.persisted_new_id, None);
-    assert!(matches!(reads.key_opens_space, Some(skep_client::derive::KeyDiagnosis::Enrolled { anchor: false })), "{:?}", reads.key_opens_space);
+    assert!(matches!(reads.key_opens_agent_space, Some(skep_client::derive::KeyDiagnosis::Enrolled { anchor: false })), "{:?}", reads.key_opens_agent_space);
     assert!(!reads.mint_owed() && reads.setup_owed() && reads.anything_owed());
 
     let session = handshake(&board, Scope::Content, &signer, 1, Site::Tail).unwrap();
     let done = first_session(&board, &reads, &session, &signer, Some(&store)).expect("the composition");
     session.close().unwrap();
     assert!(!done.minted_home);
-    let seat = done.space_seat.expect("the space is seated");
-    assert!(done.minted_space_home && done.setup_skipped.is_none() && !done.setup_stopped_seeded);
-    assert_eq!(principal_of(&board, "1.0.1.1").unwrap(), Some(seat));
-    assert_eq!(board.principal_prefix(seat).unwrap().as_deref(), Some("1.0.1.1"));
-    assert!(document_present(&board, "1.0.1.1.0.1").unwrap(), "the agents' home");
-    assert!(seat >= 2 && seat <= (1u64 << 53) - 1, "a client-minted id in the domain (AUTH-5.20)");
+    let agent_space_principal = done.agent_space_principal.expect("the agent space is seated");
+    assert!(done.minted_agent_space_home && done.setup_skipped.is_none() && !done.setup_stopped_seeded);
+    assert_eq!(principal_of(&board, "1.0.1.1").unwrap(), Some(agent_space_principal));
+    assert_eq!(board.principal_prefix(agent_space_principal).unwrap().as_deref(), Some("1.0.1.1"));
+    assert!(document_present(&board, "1.0.1.1.0.1").unwrap(), "the agent space's home");
+    assert!(agent_space_principal >= 2 && agent_space_principal <= (1u64 << 53) - 1, "a client-minted new_id in the domain (AUTH-5.20)");
     let persisted = store.all_bindings().unwrap().into_iter().find_map(|b| match b {
         Binding::Enrollment { account, principal, fingerprint, .. } if account == "1.0.1.1" => Some((principal, fingerprint)),
         _ => None,
     });
-    assert_eq!(persisted, Some((seat, fp)), "the persist-first line names the id and the key");
-    // The space opens BY REFERENCE: its own set is empty and the key stands
-    // in the account's.
+    assert_eq!(persisted, Some((agent_space_principal, fp)), "the persist-first line names the new_id and the key");
+    // The agent space opens BY REFERENCE: its own set is empty and the key
+    // stands in the account's.
     let KeySetAnswer::Set(own) = board.key_set("1.0.1.1").unwrap() else { panic!() };
     assert!(own.is_empty());
 
     // Nothing owed after.
     let reads2 = FirstSessionReads::take(&board, "1.0.1", &fp, Some(&store)).unwrap();
-    assert_eq!((reads2.space_seat, reads2.space_home_present, reads2.persisted_new_id), (Some(seat), true, Some(seat)));
+    assert_eq!((reads2.agent_space_principal, reads2.agent_space_home_present, reads2.persisted_new_id), (Some(agent_space_principal), true, Some(agent_space_principal)));
     assert!(!reads2.anything_owed(), "bind's second arm: no session is opened");
 }

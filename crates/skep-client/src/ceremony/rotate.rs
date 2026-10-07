@@ -94,7 +94,7 @@ fn closed_before_t4(board: &Board, reads: &Reads, old: &Fingerprint, own: &[(Fin
 /// THE WALK.
 pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &RotateOptions) -> Result<Rotated, Halt> {
     // The OLD key: the store's binding for (board, n).
-    let old_key: KeyFacts = match store.select(&KeySelector::Binding { origin: &board.dialed, principal: Some(opts.principal) }, Purpose::Sign) {
+    let old_key: KeyFacts = match store.select(&KeySelector::Board { origin: &board.dialed, principal: Some(opts.principal) }, Purpose::Sign) {
         Ok(key) => key,
         Err(StoreError::NoSelection { keys }) => {
             return Err(arm4_face(store, &keys, Mode::of(&board.health()?)));
@@ -103,8 +103,8 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     };
     let old = store.signer(&KeySelector::Path(&old_key.path)).map_err(store_halt)?;
     let old_fp = old_key.fingerprint;
-    let keys = store.list().map_err(store_halt)?;
-    let own: Vec<(Fingerprint, PublicKey)> = keys.iter().filter(|k| !k.anchor).map(|k| (k.fingerprint, k.public.clone())).collect();
+    let devices = store.device_keys().map_err(store_halt)?;
+    let own: Vec<(Fingerprint, PublicKey)> = devices.iter().map(|k| (k.fingerprint, k.public.clone())).collect();
     // The payload arm's parse, at the door.
     let payload = match &opts.payload {
         Some(bytes) => {
@@ -138,9 +138,9 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     }).collect();
     let resumed_new: Option<KeyFacts> = match &payload {
         Some(_) => None,
-        None => keys
+        None => devices
             .iter()
-            .find(|k| !k.anchor && k.fingerprint != old_fp && !bound.contains(&k.fingerprint) && reads.walk.set.enrolled(&k.fingerprint).is_some())
+            .find(|k| k.fingerprint != old_fp && !bound.contains(&k.fingerprint) && reads.walk.set.enrolled(&k.fingerprint).is_some())
             .cloned(),
     };
     let payload_enrolled = payload.as_ref().is_some_and(|(_, e)| reads.walk.set.enrolled(&Fingerprint::of(&e[0].key)).is_some());
@@ -206,10 +206,10 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
             (Some((text, entries)), _, _) => (DepositKind::EnrollVerbatim(text.clone()), None, Fingerprint::of(&entries[0].key)),
             (None, Some(resumed), _) => (DepositKind::Enroll(vec![Enrollment::new(resumed.public.clone(), false, resumed.label.clone()).expect("a stored label")]), Some(resumed.clone()), resumed.fingerprint),
             (None, None, Some(label)) => {
-                let id = store.generate(Some(label.clone())).map_err(store_halt)?;
-                let key = store.select(&KeySelector::Path(&store.key_path(&id.0)), Purpose::Read).map_err(store_halt)?;
+                let key_id = store.generate(Some(label.clone())).map_err(store_halt)?;
+                let key = store.select(&KeySelector::Path(&store.key_path(&key_id.0)), Purpose::Read).map_err(store_halt)?;
                 say(person, "§3a", format!("key file written: {} — the seed rests in this file and the filesystem's modes are its whole protection", key.path.display()));
-                (DepositKind::Enroll(vec![Enrollment::new(key.public.clone(), false, Some(label.as_str().to_string())).expect("a label the box admitted")]), Some(key), id.0)
+                (DepositKind::Enroll(vec![Enrollment::new(key.public.clone(), false, Some(label.as_str().to_string())).expect("a label the box admitted")]), Some(key), key_id.0)
             }
             (None, None, None) => unreachable!("a label stands where no payload and no resumed key do"),
         };

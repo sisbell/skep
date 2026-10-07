@@ -44,9 +44,10 @@ pub struct KeyId(pub Fingerprint);
 pub enum KeySelector<'a> {
     /// `--key <path>` / `SKEP_KEY`: that file, no lookup (arm 1).
     Path(&'a Path),
-    /// A binding for (origin, principal) — arms 2 and 3; `None` for the
+    /// §3.5's (`--board`, `--principal`) pair: arm 2, the last binding for
+    /// it; arm 3, no binding and the lone device key. `None` for the
     /// principal where the board has exactly one binding in the store.
-    Binding { origin: &'a Origin, principal: Option<u64> },
+    Board { origin: &'a Origin, principal: Option<u64> },
     /// A fingerprint prefix, 2–64 characters of `[0-9a-f]`.
     Prefix(&'a str),
     /// A label — not unique by rule (AUTH-5.3).
@@ -408,6 +409,13 @@ impl FileStore {
         paths.iter().map(|p| self.facts_of(p)).collect()
     }
 
+    /// This store's DEVICE keys — every key file whose `anchor` member is
+    /// false, in [`FileStore::list`]'s order; an anchor copied in is never
+    /// "this store's own" (§3.4; AUTH-5.28).
+    pub fn device_keys(&self) -> Result<Vec<KeyFacts>, StoreError> {
+        Ok(self.list()?.into_iter().filter(|k| !k.anchor).collect())
+    }
+
     fn facts_of(&self, path: &Path) -> Result<KeyFacts, StoreError> {
         let file = self.load(path)?;
         Ok(KeyFacts::of(path.to_path_buf(), &file))
@@ -442,9 +450,9 @@ impl FileStore {
 
     /// The `new_id` a persist-first line recorded for `account` at `origin`
     /// — the principal of the LAST enrollment line naming that account —
-    /// where one stands (§4.3; AUTH-5.20): the id an interrupted `delegate`
-    /// was sent under, or was about to be.
-    pub fn persisted_id(&self, origin: &Origin, account: &str) -> Result<Option<u64>, StoreError> {
+    /// where one stands (§4.3; AUTH-5.20): the `new_id` an interrupted
+    /// `delegate` was sent under, or was about to be.
+    pub fn persisted_new_id(&self, origin: &Origin, account: &str) -> Result<Option<u64>, StoreError> {
         Ok(self.all_bindings()?.into_iter().rev().find_map(|b| match b {
             Binding::Enrollment { origin: o, principal, account: a, .. } if &o == origin && a == account => Some(principal),
             _ => None,
@@ -514,7 +522,7 @@ impl FileStore {
         };
         match sel {
             KeySelector::Path(path) => judged(path.to_path_buf()),
-            KeySelector::Binding { origin, principal } => {
+            KeySelector::Board { origin, principal } => {
                 let principal = match principal {
                     Some(p) => Some(*p),
                     None => {
@@ -597,7 +605,7 @@ impl FileStore {
 impl KeyStore for FileStore {
     fn generate(&self, label: Option<Label>) -> Result<KeyId, StoreError> {
         self.ensure_dirs().map_err(|(path, error)| StoreError::Io { path, error })?;
-        let file = KeyFile::new(Seed::fresh(), false, label.map(|l| l.as_str().to_string()), None);
+        let file = KeyFile::new(Seed::fresh(), false, label, None);
         let path = self.key_path(&file.fingerprint);
         Self::write_once(&path, file.to_json().as_bytes()).map_err(|error| StoreError::Io { path, error })?;
         Ok(KeyId(file.fingerprint))

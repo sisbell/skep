@@ -12,7 +12,7 @@
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 
-use skep_client::person::{Abandoned, Confirmation, Consent, Custody, Destination, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
+use skep_client::person::{Abandoned, Confirmation, Consent, Destination, HandedPath, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
 
 /// Whether a controlling terminal stands at both ends of a prompt.
 pub fn has_terminal() -> bool {
@@ -159,13 +159,13 @@ impl Person for Terminal {
         }
     }
 
-    fn custody(&mut self, m: Secret<KeptOrPlaced>) -> Result<Custody, Abandoned> {
+    fn kept_or_placed(&mut self, m: Secret<HandedPath>) -> Result<KeptOrPlaced, Abandoned> {
         eprintln!("{}", m.0.text);
         loop {
             let a = self.line(&format!("is {} the KEPT artifact (k) or a PLACED copy (p)? ", m.0.path.display()))?;
             match a.trim().to_ascii_lowercase().as_str() {
-                "k" | "kept" => return Ok(Custody::Kept),
-                "p" | "placed" => return Ok(Custody::Placed),
+                "k" | "kept" => return Ok(KeptOrPlaced::Kept),
+                "p" | "placed" => return Ok(KeptOrPlaced::Placed),
                 _ => eprintln!("answer k or p"),
             }
         }

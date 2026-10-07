@@ -74,15 +74,17 @@ fn store_of(c: &Command) -> Result<FileStore, Usage> {
     Ok(FileStore::open(c.dir()?))
 }
 
-fn host_and_date() -> (String, String) {
-    let host = std::env::var("HOSTNAME")
+/// The machine's host name and today's date — the anchor boxes' per-run
+/// default (§4.2 step 2).
+fn host_name_and_date() -> (String, String) {
+    let host_name = std::env::var("HOSTNAME")
         .ok()
         .or_else(|| std::fs::read_to_string("/etc/hostname").ok().map(|s| s.trim().to_string()))
         .filter(|h| !h.is_empty())
         .unwrap_or_else(|| "this-machine".to_string());
-    let host = host.split('.').next().unwrap_or("this-machine").to_lowercase();
+    let host_name = host_name.split('.').next().unwrap_or("this-machine").to_lowercase();
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    (host, civil_date(secs))
+    (host_name, civil_date(secs))
 }
 
 /// `yyyy-mm-dd` from unix seconds (Howard Hinnant's civil-from-days).
@@ -195,13 +197,13 @@ pub fn keygen(c: &Command) -> i32 {
             Ok(ls) => ls,
             Err(fault) => return halt(Halt::face(format!("an anchor label is refused at the box: {fault}"), "AUTH-1.24's domain", "pass labels inside the domain")),
         };
-        let (host, date) = host_and_date();
+        let (host_name, date) = host_name_and_date();
         let opts = BackupOptions {
             labels,
             destinations: c.all("--anchor-out").into_iter().map(PathBuf::from).collect(),
             paper: c.switch("--paper"),
             store: Some(store.root().to_path_buf()),
-            host,
+            host_name,
             date,
         };
         let outcome = match backup_moment(&mut person, &Venue::DoorSide, &opts) {
@@ -270,14 +272,12 @@ pub fn claim(c: &Command) -> i32 {
                 }
                 // THE REPLY, DATA on stdout (§4.5 H6).
                 data(format!("claimant {}", reply.claimant));
-                data(format!("account {}", reply.account));
-                data(format!("principal {}", reply.principal));
-                data(format!("origin {}", reply.origin));
+                facts(&reply.facts);
                 data(format!(
                     "first act: from the device that generated the payload run `skep verify --board {} --principal {} --payload <the record it printed>` \
                      (or `--anchor <a> --anchor <b>`): the genesis record compared entry for entry, fingerprint and anchor flag, against what that \
                      device composed — it confirms the keys on the board, and it cannot tell you the board will open a session for you",
-                    reply.origin, reply.principal
+                    reply.facts.origin, reply.facts.principal
                 ));
                 data("second act: in your first signed session the setup act runs — `skep claim --board <origin> --dir <store>` from that device performs it: creating your account also creates a space for your agents beneath it, and its home");
                 if reply.anchorless {
@@ -298,13 +298,13 @@ pub fn claim(c: &Command) -> i32 {
     if let Some(w) = plaintext_non_loopback_warning(&board.dialed) {
         talk(w);
     }
-    let (host, date) = host_and_date();
+    let (host_name, date) = host_name_and_date();
     let opts = NotebookOptions {
         principal,
-        name: c.value("--name", None),
+        display_name: c.value("--name", None),
         anchor_out: c.all("--anchor-out").into_iter().map(PathBuf::from).collect(),
         paper: c.switch("--paper"),
-        host,
+        host_name,
         date,
     };
     let mut person = Terminal::new();
@@ -338,7 +338,7 @@ pub fn claim(c: &Command) -> i32 {
 fn select_key(c: &Command, store: &FileStore, board: &Board, principal: Option<u64>) -> Result<KeyFacts, Halt> {
     let sel = match c.key() {
         Some(path) => store.select(&KeySelector::Path(&path), Purpose::Sign),
-        None => store.select(&KeySelector::Binding { origin: &board.dialed, principal }, Purpose::Sign),
+        None => store.select(&KeySelector::Board { origin: &board.dialed, principal }, Purpose::Sign),
     };
     match sel {
         Ok(key) => Ok(key),
@@ -383,8 +383,8 @@ pub fn session(c: &Command) -> i32 {
         let Some(token) = Token::parse(&token) else { return usage(Usage("the token read is not a session token (32 lowercase hex)".into())) };
         return match board.session_close(&token) {
             Err(h) => halt(h),
-            Ok(closed) => {
-                if closed.already_dead {
+            Ok(answer) => {
+                if answer.already_dead {
                     talk("the token was already dead (the death signal rode the 204): a restart, a retirement, a block, a genesis at the account, or an earlier close ended it");
                 }
                 0
@@ -843,11 +843,11 @@ pub fn bind(c: &Command) -> i32 {
                     talk(format!("the home {} is minted — the empty profile home, born published (AUTH-5.90 (iii); AUTH-5.52)", reads.home));
                 }
                 if done.setup_stopped_seeded {
-                    talk(format!("{} already holds a set of its own: the setup act stops and no agents' home is created (AUTH-5.90 (iii)'s permanent fact)", reads.space));
+                    talk(format!("{} already holds a set of its own: the setup act stops and no agents' home is created (AUTH-5.90 (iii)'s permanent fact)", reads.agent_space));
                 } else if let Some(d) = done.setup_skipped {
-                    talk(format!("the setup act was not sent: this key stands {d:?} in the set that opens {}", reads.space));
-                } else if done.space_seat.is_some() {
-                    agent_space = Some(reads.space.clone());
+                    talk(format!("the setup act was not sent: this key stands {d:?} in the set that opens {}", reads.agent_space));
+                } else if done.agent_space_principal.is_some() {
+                    agent_space = Some(reads.agent_space.clone());
                 }
             }
         }
@@ -959,7 +959,7 @@ pub fn recover(c: &Command) -> i32 {
     }
     // `--key`/`SKEP_KEY` is NOT consulted here: the new device key is the
     // STORE's, as at `claim` (§2.2).
-    let (host, date) = host_and_date();
+    let (host_name, date) = host_name_and_date();
     let opts = RecoverOptions {
         principal,
         anchor: c.all("--anchor").first().map(PathBuf::from),
@@ -968,7 +968,7 @@ pub fn recover(c: &Command) -> i32 {
         anchor_lost: c.switch("--anchor-lost"),
         anchor_out: c.all("--anchor-out").into_iter().map(PathBuf::from).collect(),
         paper: c.switch("--paper"),
-        host,
+        host_name,
         date,
     };
     let mut person = Terminal::new();
@@ -978,8 +978,8 @@ pub fn recover(c: &Command) -> i32 {
             for w in &r.warnings {
                 talk(w);
             }
-            for l in &r.report {
-                talk(format!("[report] {l}"));
+            for l in &r.recovery_read {
+                talk(format!("[recovery read] {l}"));
             }
             if let Some(line) = &r.binding_line {
                 talk(format!("binding: {line}"));
@@ -1007,7 +1007,7 @@ pub fn retire(c: &Command) -> i32 {
         Ok(s) => s,
         Err(u) => return usage(u),
     };
-    let Some(fingerprint) = c.value("--fingerprint", None) else { return usage(Usage("--fingerprint <fp-prefix> is required".into())) };
+    let Some(fingerprint_prefix) = c.value("--fingerprint", None) else { return usage(Usage("--fingerprint <fp-prefix> is required".into())) };
     if !has_terminal() {
         return no_terminal("retire");
     }
@@ -1019,11 +1019,11 @@ pub fn retire(c: &Command) -> i32 {
         talk(w);
     }
     let mut person = Terminal::new();
-    match retire_walk::retire(&board, &store, &mut person, &RetireOptions { principal, fingerprint }) {
+    match retire_walk::retire(&board, &store, &mut person, &RetireOptions { principal, fingerprint_prefix }) {
         Err(h) => halt(h),
         Ok(r) => {
             data(format!("retired {} at {}", r.fingerprint, r.account));
-            if let RetireEnd::OwnKey { another_held } = r.end {
+            if let RetireEnd::EndedByCommit { another_held } = r.end {
                 talk(if another_held { "next: `skep session` with the key you still hold" } else { "next: `skep keygen`, then `skep recover` with a paper" });
             }
             0
@@ -1113,10 +1113,10 @@ pub fn handoff(c: &Command) -> i32 {
     let opts = HandoffOptions { principal, account, payload, anchor: c.all("--anchor").first().map(PathBuf::from) };
     match handoff_walk::handoff(&board, &store, &mut person, &opts) {
         Err(h) => halt(h),
-        Ok(HandoffOutcome::Delegated { account, seat, already }) => {
+        Ok(HandoffOutcome::Delegated { account, principal, already }) => {
             talk(if already { "beat (a) stands done: the address is printed again" } else { "beat (a) done: hand the address to the recipient; they run `skep accept --board <origin> --account <address>` and return their record for `skep handoff --payload`" });
             data(format!("account {account}"));
-            data(format!("principal {seat}"));
+            data(format!("principal {principal}"));
             data(format!("origin {}", board.dialed));
             0
         }
@@ -1177,7 +1177,7 @@ pub fn accept(c: &Command) -> i32 {
     if let Some(w) = plaintext_non_loopback_warning(&board.dialed) {
         talk(w);
     }
-    let (host, date) = host_and_date();
+    let (host_name, date) = host_name_and_date();
     let opts = AcceptOptions {
         account,
         label: c.value("--label", None),
@@ -1185,7 +1185,7 @@ pub fn accept(c: &Command) -> i32 {
         paper: c.switch("--paper"),
         no_anchors: c.switch("--no-anchors"),
         hosted: None,
-        host,
+        host_name,
         date,
     };
     match accept_walk::accept(&board, &store, &mut person, &opts) {

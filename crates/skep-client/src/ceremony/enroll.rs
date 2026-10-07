@@ -63,7 +63,7 @@ pub fn enroll(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     refuse_anchor_flagged(&entries, "skep enroll")?;
     let fps: Vec<Fingerprint> = entries.iter().map(|e| Fingerprint::of(&e.key)).collect();
     // The store's ENROLLED device key for (board, n) — §3.5's lookup.
-    let key = match store.select(&KeySelector::Binding { origin: &board.dialed, principal: Some(opts.principal) }, Purpose::Sign) {
+    let key = match store.select(&KeySelector::Board { origin: &board.dialed, principal: Some(opts.principal) }, Purpose::Sign) {
         Ok(key) => key,
         Err(StoreError::NoSelection { keys }) => {
             return Err(arm4_face(store, &keys, Mode::of(&board.health()?)));

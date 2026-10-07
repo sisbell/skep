@@ -8,14 +8,14 @@ use std::path::{Path, PathBuf};
 
 use skep_client::ceremony::backup::{anchor_file_name, backup_moment, BackupOptions, Venue};
 use skep_client::person::scripted::{Script, Scripted};
-use skep_client::person::{Abandoned, Confirmation, Consent, Custody, Destination, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
+use skep_client::person::{Abandoned, Confirmation, Consent, Destination, HandedPath, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
 use skep_client::sheet::{Facts, KeyFile, Label};
 use skep_client::Origin;
 
 use crate::common::{files_in, Hooked};
 
 fn options(destinations: Vec<PathBuf>, paper: bool, store: Option<PathBuf>) -> BackupOptions {
-    BackupOptions { labels: vec![], destinations, paper, store, host: "testhost".into(), date: "2026-10-04".into() }
+    BackupOptions { labels: vec![], destinations, paper, store, host_name: "testhost".into(), date: "2026-10-04".into() }
 }
 
 fn notebook_venue() -> Venue {
@@ -105,8 +105,8 @@ impl Person for Vanisher {
     fn import(&mut self, m: Secret<Import>) -> Result<Imported, Abandoned> {
         self.inner.import(m)
     }
-    fn custody(&mut self, m: Secret<KeptOrPlaced>) -> Result<Custody, Abandoned> {
-        self.inner.custody(m)
+    fn kept_or_placed(&mut self, m: Secret<HandedPath>) -> Result<KeptOrPlaced, Abandoned> {
+        self.inner.kept_or_placed(m)
     }
 }
 

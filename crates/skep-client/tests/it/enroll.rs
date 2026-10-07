@@ -11,7 +11,7 @@ use skep_client::ceremony::deposit::{deposit, Deposit, DepositHalt, DepositKind}
 use skep_client::ceremony::enroll::{enroll, reply, EnrollOptions};
 use skep_client::ceremony::handshake::{handshake, Site};
 use skep_client::person::scripted::{Script, Scripted};
-use skep_client::sheet::{KeyFile, Seed};
+use skep_client::sheet::{KeyFile, Label, Seed};
 use skep_client::sign::signer_from_seed;
 use skep_client::store::FileStore;
 use skep_identity::{encode_enroll, Enrollment, Fingerprint};
@@ -76,7 +76,7 @@ fn the_hop_enrolls_another_devices_payload_from_a_full_session_and_appends_no_bi
     assert!(person.said("every key of the record stands enrolled"));
 
     // An anchor-flagged payload: refused at the paste, nothing written.
-    let anchor = KeyFile::new(Seed::new([7; 32]), true, Some("paper c".into()), None);
+    let anchor = KeyFile::new(Seed::new([7; 32]), true, Some(Label::new("paper c").unwrap()), None);
     let flagged = encode_enroll(&[Enrollment::new(anchor.public.clone(), true, Some("paper c".into())).unwrap()]);
     let mut person = Scripted::new(vec![]);
     let err = enroll(&board, &store_a, &mut person, &opts(&flagged)).expect_err("refused at the paste");

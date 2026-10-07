@@ -173,10 +173,11 @@ pub enum Opened {
     Blocked { record: String },
 }
 
-/// `POST /session/close`'s answer: `204`, and whether the death signal rode
-/// it — the token was already dead (AUTH-4.47).
+/// `POST /session/close`'s answer (AUTH-4.47): the `204` that answers the
+/// caller's own close — no signal rides a live token's (wire.md §Sessions)
+/// — and whether the death signal rode it, the token already dead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Closed {
+pub struct CloseAnswer {
     pub already_dead: bool,
 }
 
@@ -518,12 +519,12 @@ impl Board {
 
     /// `POST /session/close` (AUTH-4.47): idempotent `204`; the death signal
     /// on it says the token was already dead.
-    pub fn session_close(&self, token: &Token) -> Result<Closed, Halt> {
+    pub fn session_close(&self, token: &Token) -> Result<CloseAnswer, Halt> {
         let resp = self.exchange(&Request::post("/session/close", Vec::new()).header("Skepd-Session", token.as_str()))?;
         if resp.status != 204 {
             return Err(transport_refused(&resp));
         }
-        Ok(Closed { already_dead: resp.session_closed() })
+        Ok(CloseAnswer { already_dead: resp.session_closed() })
     }
 
     /// `POST /op` — one frame in, one response document out (200 whenever

@@ -71,7 +71,9 @@ pub struct RecoverOptions {
     pub anchor_out: Vec<PathBuf>,
     /// `--paper` (the loss arm).
     pub paper: bool,
-    pub host: String,
+    /// The machine's host name and the date, for the fresh anchors' boxes'
+    /// per-run default (the loss arm; §4.2 step 2).
+    pub host_name: String,
     pub date: String,
 }
 
@@ -86,8 +88,10 @@ pub struct Recovered {
     pub binding_line: Option<String>,
     /// The containment act ran (an agent's account): nothing enrolled.
     pub containment: bool,
-    /// The recovery read's lines (the stolen arm).
-    pub report: Vec<String>,
+    /// THE RECOVERY READ's lines (AUTH-5.89; §4a.2 R6), the stolen arm's —
+    /// among them the REPORT per A4 cell, where the cell has one (AUTH-5.60
+    /// step 4).
+    pub recovery_read: Vec<String>,
     pub warnings: Vec<String>,
 }
 
@@ -99,7 +103,7 @@ fn abandoned() -> Halt {
 /// never `--key`), their public facts — the walk enrolls one by its public
 /// key and signs with none; the KEYLESS face where the store holds none.
 fn device_key_for(store: &FileStore) -> Result<Vec<KeyFacts>, Halt> {
-    let devices: Vec<KeyFacts> = store.list().map_err(store_halt)?.into_iter().filter(|k| !k.anchor).collect();
+    let devices = store.device_keys().map_err(store_halt)?;
     if devices.is_empty() {
         return Err(Halt::face(
             format!("the key store {} holds no device key for this walk", store.root().display()),
@@ -322,7 +326,7 @@ fn recovery_read(board: &Board, person: &mut dyn Person, reads: &Reads, stolen: 
             returned.push((subject, w.clone(), line));
         }
     }
-    let mut report = Vec::new();
+    let mut lines = Vec::new();
     if returned.is_empty() {
         say(person, "AUTH-5.89", "the read returned NO genesis beneath the spaces the stolen key could open: nothing was delegated and seeded there");
     } else {
@@ -331,7 +335,7 @@ fn recovery_read(board: &Board, person: &mut dyn Person, reads: &Reads, stolen: 
     // The boundary line (AUTH-5.89, pinned) and R4's residual.
     let boundary = "THE BOUNDARY LINE: accounts the thief DELEGATED remain live under the thief's keys — neither retirable nor removable — surfaced as permanent residue beside what this walk closed, never promised away; accounts of your own the thief SEIZED remain live under the thief's keys with everything you filed there, neither retirable nor re-seedable (I5), surfaced as SEIZED and never as a delegation of the thief's; and a hand enrolling at machine rate can survive R4's rounds — TERMINATION IS NOT GUARANTEED".to_string();
     say(person, "AUTH-5.89", boundary.clone());
-    report.push(boundary);
+    lines.push(boundary);
     let mut marked: Vec<String> = Vec::new();
     if !returned.is_empty() {
         let answer = person
@@ -353,7 +357,7 @@ fn recovery_read(board: &Board, person: &mut dyn Person, reads: &Reads, stolen: 
             "{subject} (genesis in {home}) is not yours: where you delegated it, THIS WAS YOUR SPACE and what was filed in it is theirs now — SEIZED, never a delegation of the thief's; where the thief delegated it, it remains live under the thief's keys; the report is the one instrument over it"
         );
         say(person, "AUTH-5.89 (seized)", line.clone());
-        report.push(line);
+        lines.push(line);
     }
     // THE REPORT PER A4 CELL (AUTH-5.60 step 4; AUTH RES-174).
     let prefixes: Vec<String> = unmarked.iter().map(|(s, _, _)| s.clone()).collect();
@@ -376,8 +380,8 @@ fn recovery_read(board: &Board, person: &mut dyn Person, reads: &Reads, stolen: 
         ),
     };
     say(person, "AUTH-5.60 step 4", cell_line.clone());
-    report.push(cell_line);
-    Ok(report)
+    lines.push(cell_line);
+    Ok(lines)
 }
 
 /// THE WALK.
@@ -455,7 +459,7 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
                 records = credential_records(board, &reads.walk.set_account, &own)?;
             }
             say(person, "AUTH-5.64", format!("contained: {} non-anchor key(s) retired, nothing enrolled; `inc(A, 1)` was not delegated", retired.len()));
-            return Ok(Recovered { facts: Facts { account: account.clone(), principal: opts.principal, origin: board.dialed.clone() }, enrolled: Vec::new(), retired: retired.clone(), binding_line: None, containment: true, report: Vec::new(), warnings: Vec::new() });
+            return Ok(Recovered { facts: Facts { account: account.clone(), principal: opts.principal, origin: board.dialed.clone() }, enrolled: Vec::new(), retired: retired.clone(), binding_line: None, containment: true, recovery_read: Vec::new(), warnings: Vec::new() });
         }
         // The R4 rounds (a closure over the shared state).
         let mut set = reads.walk.set.clone();
@@ -555,7 +559,7 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
             // COMPLETION IS THE READ MADE AFTER R3's ENROLL COMMITS.
             r4(person, &mut set, &mut records, Vec::new(), &mut retired)?;
         }
-        Ok(Recovered { facts: Facts { account: account.clone(), principal: opts.principal, origin: board.dialed.clone() }, enrolled: vec![device.fingerprint], retired: retired.clone(), binding_line: None, containment: false, report: Vec::new(), warnings: warnings.clone() })
+        Ok(Recovered { facts: Facts { account: account.clone(), principal: opts.principal, origin: board.dialed.clone() }, enrolled: vec![device.fingerprint], retired: retired.clone(), binding_line: None, containment: false, recovery_read: Vec::new(), warnings: warnings.clone() })
     })();
     // R5: the mirror's close — the session, and the placed copy destroyed.
     let _ = session.close();
@@ -565,7 +569,7 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
     if done.containment {
         return Ok(done);
     }
-    // R6: the binding, the three facts, the stolen arm's read and report.
+    // R6: the binding, the three facts, the stolen arm's recovery read.
     let line = Binding::Enrollment { origin: board.dialed.clone(), principal: opts.principal, account: account.clone(), fingerprint: device.fingerprint };
     if let Err(w) = store.bind(&line) {
         done.warnings.push(w.to_string());
@@ -573,7 +577,7 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
     done.binding_line = Some(line.line());
     if stolen {
         let stolen_fps: Vec<Fingerprint> = if done.retired.is_empty() { Vec::new() } else { done.retired.clone() };
-        done.report = recovery_read(board, person, &reads, &stolen_fps, &own)?;
+        done.recovery_read = recovery_read(board, person, &reads, &stolen_fps, &own)?;
     }
     say(person, "AUTH-5.28", "THE EXPECTED END: sign in with the new key — `skep session` — never an anchor import");
     Ok(done)
@@ -583,7 +587,7 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
 mod tests {
     use super::*;
     use crate::board::EnrolledKey;
-    use crate::sheet::{KeyFile, Seed};
+    use crate::sheet::{KeyFile, Label, Seed};
 
     fn set(fps: &[(u8, bool)]) -> KeySet {
         let mut s = KeySet::default();
@@ -597,7 +601,7 @@ mod tests {
 
     /// A device key's public facts, as the store's lookup answers them.
     fn facts(seed: u8) -> KeyFacts {
-        let file = KeyFile::new(Seed::new([seed; 32]), false, Some(format!("device {seed}")), None);
+        let file = KeyFile::new(Seed::new([seed; 32]), false, Label::new(&format!("device {seed}")).ok(), None);
         KeyFacts { path: format!("{seed}.key").into(), alg: file.alg.clone(), fingerprint: file.fingerprint, public: file.public.clone(), label: file.label.clone(), anchor: false }
     }
 

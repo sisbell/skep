@@ -87,7 +87,7 @@ fn the_loop_claims_the_board_and_a_second_run_is_the_ours_tail() {
             _ => None,
         })
         .expect("the agent space's binding line");
-    assert_eq!(board.principal_prefix(space_id).unwrap().as_deref(), Some("1.0.1.1"), "the persisted new_id is the seat");
+    assert_eq!(board.principal_prefix(space_id).unwrap().as_deref(), Some("1.0.1.1"), "the persisted new_id is the principal seated at the agent space");
 
     // THE SECOND RUN: the OURS tail — same facts, no backup moment, exit 0.
     let mut again = Scripted::new(vec![]);
@@ -198,7 +198,7 @@ fn a_claim_interrupted_after_s4_resumes_at_s5_off_key_set() {
     let backup = backup_moment(
         &mut p,
         &Venue::Notebook { facts },
-        &BackupOptions { labels: vec![], destinations: vec![anchors.join("a"), anchors.join("b")], paper: false, store: Some(store.root().to_path_buf()), host: "h".into(), date: "d".into() },
+        &BackupOptions { labels: vec![], destinations: vec![anchors.join("a"), anchors.join("b")], paper: false, store: Some(store.root().to_path_buf()), host_name: "h".into(), date: "d".into() },
     )
     .expect("the backup moment");
     let mut entries: Vec<Enrollment> = backup.anchors.iter().map(|a| Enrollment::new(a.public.clone(), true, Some(a.label.as_str().into())).unwrap()).collect();
@@ -276,13 +276,14 @@ fn the_persisted_new_id_is_read_back_and_the_space_is_delegated_under_it() {
     assert!(skep_client::ceremony::first_session::document_present(&board, "1.0.1.1.0.1").unwrap());
 }
 
-/// A persisted id SPENT on another address (§4.3; AUTH-5.20): its read-back
-/// finds it registered to an account that is not this space, so a FRESH id
-/// is minted, persisted ahead of the frame, and seats the space — never a
-/// resume onto the spent id, whose `duplicate_id` would answer every re-run.
-/// MUTATION: with the spent id sent again, the tail halts `duplicate_id`.
+/// A persisted `new_id` SPENT on another address (§4.3; AUTH-5.20): its
+/// read-back finds it registered to an account that is not this space, so a
+/// FRESH `new_id` is minted, persisted ahead of the frame, and seats the
+/// space — never a resume onto the spent one, whose `duplicate_id` would
+/// answer every re-run. MUTATION: with the spent `new_id` sent again, the
+/// tail halts `duplicate_id`.
 #[test]
-fn a_persisted_id_spent_on_another_address_is_replaced_by_a_fresh_one() {
+fn a_persisted_new_id_spent_on_another_address_is_replaced_by_a_fresh_one() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (_sd, board, store, fp) = claimed_without_its_tail(dir.path());
     // The cached line names principal 1 — registered, at 1.0.1.
@@ -291,10 +292,10 @@ fn a_persisted_id_spent_on_another_address_is_replaced_by_a_fresh_one() {
     let outcome = claim::notebook(&board, &store, &mut person, &opts(&dir.path().join("anchors"))).unwrap_or_else(|h| panic!("{h}"));
     let ClaimOutcome::Ours(done) = outcome else { panic!("{outcome:?}") };
     assert_eq!(done.agent_space.as_deref(), Some("1.0.1.1"));
-    let seat = principal_of(&board, "1.0.1.1").unwrap().expect("the space is seated");
-    assert_ne!(seat, 1, "never the spent id");
+    let principal = principal_of(&board, "1.0.1.1").unwrap().expect("the space is seated");
+    assert_ne!(principal, 1, "never the spent new_id");
     assert_eq!(board.principal_prefix(1).unwrap().as_deref(), Some("1.0.1"), "the spent id's own account is untouched");
-    assert_eq!(store.persisted_id(&board.dialed, "1.0.1.1").unwrap(), Some(seat), "the fresh id persisted, the newest line");
+    assert_eq!(store.persisted_new_id(&board.dialed, "1.0.1.1").unwrap(), Some(principal), "the fresh new_id persisted, the newest line");
 }
 
 /// wire.md §Rejections: a walk keys on the token `credential_refused`

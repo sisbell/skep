@@ -34,7 +34,7 @@ fn claim_board(board_origin: &str, store: &Path, anchors: &Path) {
     let store = FileStore::open(store);
     store.generate(Some(Label::new("notebook").unwrap())).unwrap();
     let mut person = Scripted::new(vec![Script::LabelDefault, Script::LabelDefault]);
-    let opts = NotebookOptions { principal: None, name: Some("a name".into()), anchor_out: vec![anchors.join("a"), anchors.join("b")], paper: false, host: "testhost".into(), date: "2026-10-04".into() };
+    let opts = NotebookOptions { principal: None, display_name: Some("a name".into()), anchor_out: vec![anchors.join("a"), anchors.join("b")], paper: false, host_name: "testhost".into(), date: "2026-10-04".into() };
     let ClaimOutcome::Ours(_) = claim::notebook(&board, &store, &mut person, &opts).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n"))) else { panic!("a stranger's board") };
 }
 
@@ -172,8 +172,8 @@ fn handoff_beat_a_prints_the_address_twice_and_reprint_composes_from_the_files()
     let r = skep(&["handoff", "--board", &board, "--dir", s(&store), "--account", "1.0.1.2"], &[], None);
     assert_eq!(r.code, 0, "{r:?}");
     assert_eq!(r.lines()[0], "account 1.0.1.2");
-    let seat = r.lines()[1].to_string();
-    assert!(seat.starts_with("principal "));
+    let principal_line = r.lines()[1].to_string();
+    assert!(principal_line.starts_with("principal "));
     assert!(r.err.contains("beat (a) done"), "{}", r.err);
     // The persist-first line for 1.0.1.2 now stands beside the account's:
     // two accounts at this board, so the omission halts and the principal is
@@ -194,8 +194,8 @@ fn handoff_beat_a_prints_the_address_twice_and_reprint_composes_from_the_files()
     let recipient = dir.path().join("recipient");
     let r = skep(&["keygen", "--label", "tablet", "--dir", s(&recipient)], &[], None);
     assert_eq!(r.code, 0);
-    let a = KeyFile::new(Seed::fresh(), true, Some("sheet a".into()), None);
-    let b = KeyFile::new(Seed::fresh(), true, Some("sheet b".into()), None);
+    let a = KeyFile::new(Seed::fresh(), true, Some(Label::new("sheet a").unwrap()), None);
+    let b = KeyFile::new(Seed::fresh(), true, Some(Label::new("sheet b").unwrap()), None);
     let (pa, pb) = (dir.path().join("a.skep-key"), dir.path().join("b.skep-key"));
     std::fs::write(&pa, a.to_json()).unwrap();
     std::fs::write(&pb, b.to_json()).unwrap();

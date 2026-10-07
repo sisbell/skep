@@ -124,4 +124,14 @@ mod tests {
         assert!(d.ispans_of("other").is_empty());
         assert!(d.ispans_of("doc").starts_with(&[a, b]));
     }
+
+    /// A needle the scenario deleted twice locates in the newer deletion —
+    /// the I-history the latest delete left, never an older copy of it.
+    #[test]
+    fn a_needle_deleted_twice_locates_in_the_newer_deletion() {
+        let mut d = Deletions::default();
+        d.record("doc", b"XAB".to_vec(), vec![run(&[1, 0, 1, 0, 3, 0, 1, 1], 3)]);
+        d.record("doc", b"AB".to_vec(), vec![run(&[1, 0, 1, 0, 3, 0, 1, 7], 2)]);
+        assert_eq!(d.locate(b"AB"), Some(vec![run(&[1, 0, 1, 0, 3, 0, 1, 7], 2)]));
+    }
 }

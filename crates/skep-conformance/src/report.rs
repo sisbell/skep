@@ -321,8 +321,10 @@ fn render_summary(records: &[ScenarioRecord]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
-    use crate::outcome::Disagreement;
+    use crate::outcome::{Disagreement, Finding};
 
     fn op(index: usize, status: Status, allowlisted: Option<&str>) -> OpOutcome {
         let mut o = OpOutcome::new(index, &format!("op{index}"));
@@ -384,5 +386,47 @@ mod tests {
         );
         let clean = vec![record("covered", Verdict::Inexpressible, Vec::new())];
         assert_eq!(section(&render_summary(&clean)), "(none)\n");
+    }
+
+    /// A divergent record with its first finding, as the runner leaves it.
+    fn divergent(name: &str) -> ScenarioRecord {
+        let mut o = op(0, Status::Disagreed, None);
+        o.comparator = Some("content");
+        let finding = Finding { index: 0, op_name: o.op_name.clone(), detail: o.detail() };
+        ScenarioRecord { first_finding: Some(finding), ..record(name, Verdict::Divergent, vec![o]) }
+    }
+
+    /// The report is the harness's product: one JSON record per scenario,
+    /// its verdict, first finding and every op — a disagreement with both
+    /// sides, each under its own key.
+    #[test]
+    fn a_disagreement_reaches_the_report_with_both_sides() {
+        let jsonl = render_jsonl(&[divergent("d")]);
+        assert_eq!(jsonl.lines().count(), 1);
+        let rec: serde_json::Value = serde_json::from_str(jsonl.trim_end()).expect("JSON");
+        assert_eq!(rec["category"], "cat");
+        assert_eq!(rec["scenario"], "d");
+        assert_eq!(rec["verdict"], "divergent");
+        let detail = "expected want0 / actual got0";
+        assert_eq!(rec["first_finding"], json!({"op_index": 0, "op": "op0", "detail": detail}));
+        let disagreed = json!({
+            "index": 0, "op": "op0", "verb": "?", "status": "disagreed", "comparator": "content",
+            "adaptations": [], "expected": "want0", "actual": "got0", "note": null,
+            "allowlisted": null,
+        });
+        assert_eq!(rec["ops"], json!([disagreed]));
+    }
+
+    /// A divergent scenario is counted in its category's row and the total,
+    /// and the summary lists it with its first finding.
+    #[test]
+    fn a_divergent_scenario_is_counted_and_listed_with_its_first_finding() {
+        let records = vec![divergent("d"), record("p", Verdict::Pass, Vec::new())];
+        let table = render_table(&records);
+        assert!(table.contains("| cat | 1 | 0 | 1 | 0 | 0 | 2 |\n"), "{table}");
+        assert!(table.contains("| **all** | 1 | 0 | 1 | 0 | 0 | 2 |\n"), "{table}");
+        let summary = render_summary(&records);
+        let listed = "- `cat/d` — op 0 `op0`: expected want0 / actual got0\n";
+        assert!(summary.contains(listed), "{summary}");
     }
 }

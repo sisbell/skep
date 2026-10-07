@@ -355,9 +355,121 @@ pub fn compare_count(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skep_address::Span;
+    use skep_address::{Nat, Span};
+    use skep_content::Val;
 
+    use crate::alpha::FindingKind;
     use crate::tum::{addr, tum};
+
+    /// One delivered content item per byte, as RetrieveV delivers text.
+    fn text(s: &str) -> Vec<DeliveryItem> {
+        s.bytes().map(|b| DeliveryItem::Content(Val::new(vec![b]))).collect()
+    }
+
+    fn strings(ss: &[&str]) -> Vec<String> {
+        ss.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Content agrees only byte for byte once consecutive text is glued on
+    /// both sides: case, length and a withheld run all disagree — a
+    /// withheld run is its own segment, never glued and never dropped.
+    #[test]
+    fn content_agrees_only_byte_for_byte_once_text_is_glued() {
+        let mut alpha = Alpha::new();
+        let mut cmp = |want: &[&str], got: &[DeliveryItem]| {
+            compare_content(&strings(want), got, &mut alpha)
+        };
+        assert_eq!(cmp(&["AB", "CD"], &text("ABCD")), Ok(()));
+        let crossed = Disagreement { expected: r#"["ABCD"]"#.into(), actual: r#"["ABXD"]"#.into() };
+        assert_eq!(cmp(&["ABCD"], &text("ABXD")), Err(crossed));
+        assert!(cmp(&["ab"], &text("AB")).is_err());
+        assert!(cmp(&["ABCD"], &text("ABC")).is_err());
+        let origin = addr(&[1, 0, 1, 0, 3]).expect("valid");
+        let mut withheld = text("AB");
+        withheld.push(DeliveryItem::Withheld { origin, width: Nat::from(2u64) });
+        withheld.extend(text("CD"));
+        assert!(cmp(&["ABCD"], &withheld).is_err());
+    }
+
+    /// A delivered address compares through α — the image of the golden
+    /// address agrees, any other disagrees — and an unbound golden address
+    /// binds to a delivered one only where the two sequences align one for
+    /// one; otherwise it surfaces as never bound.
+    #[test]
+    fn a_delivered_address_compares_through_the_bijection() {
+        let link = |n: u64| DeliveryItem::Ref(addr(&[1, 0, 1, 0, 3, 0, 2, n]).expect("valid"));
+        let mut alpha = Alpha::new();
+        alpha.bind("1.1.0.1.0.1", &addr(&[1, 0, 1, 0, 3]).expect("valid"));
+        let want = strings(&["AB", "1.1.0.1.0.1.0.2.1"]);
+        let with = |item: DeliveryItem| [text("AB"), vec![item]].concat();
+        assert_eq!(compare_content(&want, &with(link(1)), &mut alpha), Ok(()));
+        assert!(compare_content(&want, &with(link(2)), &mut alpha).is_err());
+        assert_eq!(alpha.drain_findings().count(), 0);
+
+        let stray = addr(&[1, 0, 1, 0, 7, 0, 2, 1]).expect("valid");
+        let delivered = [DeliveryItem::Ref(stray.clone())];
+        let mut fresh = Alpha::new();
+        let misaligned = strings(&["1.1.0.1.0.9.0.2.1", "X"]);
+        assert!(compare_content(&misaligned, &delivered, &mut fresh).is_err());
+        assert_eq!(fresh.peek("1.1.0.1.0.9.0.2.1"), None);
+        let found: Vec<FindingKind> = fresh.drain_findings().map(|f| f.kind).collect();
+        assert_eq!(found, [FindingKind::NeverBound]);
+        let aligned = strings(&["1.1.0.1.0.9.0.2.1"]);
+        assert_eq!(compare_content(&aligned, &delivered, &mut fresh), Ok(()));
+        assert_eq!(fresh.peek("1.1.0.1.0.9.0.2.1"), Some(stray));
+    }
+
+    /// An address set agrees only with exactly skep's answer, harness
+    /// infrastructure excluded: a superset or a subset disagrees, rendered
+    /// in golden terms, and unbound golden addresses with no partners to
+    /// pair one for one bind nothing and surface as never bound.
+    #[test]
+    fn an_address_set_agrees_only_with_exactly_skeps_answer() {
+        fn sets(
+            want: &[&str],
+            got: &[Address],
+            alpha: &mut Alpha,
+            infra: Option<&Address>,
+        ) -> Comparison {
+            let exclude = |x: &Address| infra.is_some_and(|i| i == x);
+            compare_addr_sets(&strings(want), got, alpha, exclude, &mut Vec::new())
+        }
+        let a = addr(&[1, 0, 1, 0, 3]).expect("valid");
+        let b = addr(&[1, 0, 1, 0, 4]).expect("valid");
+        let mut alpha = Alpha::new();
+        alpha.bind("1.1.0.1.0.1", &a);
+        alpha.bind("1.1.0.1.0.2", &b);
+        let both = [a.clone(), b.clone()];
+        let only_a = std::slice::from_ref(&a);
+        assert_eq!(sets(&["1.1.0.1.0.1"], only_a, &mut alpha, None), Ok(()));
+        let superset = Disagreement {
+            expected: r#"["1.1.0.1.0.1"]"#.into(),
+            actual: r#"["1.1.0.1.0.1", "1.1.0.1.0.2"]"#.into(),
+        };
+        assert_eq!(sets(&["1.1.0.1.0.1"], &both, &mut alpha, None), Err(superset));
+        assert!(sets(&["1.1.0.1.0.1", "1.1.0.1.0.2"], only_a, &mut alpha, None).is_err());
+        assert_eq!(sets(&["1.1.0.1.0.1"], &both, &mut alpha, Some(&b)), Ok(()));
+
+        let mut fresh = Alpha::new();
+        let stray = addr(&[1, 0, 1, 0, 9]).expect("valid");
+        assert!(sets(&["1.1.0.1.0.7", "1.1.0.1.0.8"], &[stray], &mut fresh, None).is_err());
+        assert_eq!(fresh.len(), 0);
+        let found: Vec<FindingKind> = fresh.drain_findings().map(|f| f.kind).collect();
+        assert_eq!(found, [FindingKind::NeverBound, FindingKind::NeverBound]);
+    }
+
+    /// A declared width tolerance widens widths alone: it never moves a
+    /// start, and never covers a span the other side lacks.
+    #[test]
+    fn a_width_tolerance_never_moves_a_start() {
+        let set = SpanSet::singleton(Span::new(tum(&[1, 1]), tum(&[0, 5])).expect("a span"));
+        let tolerant = Adjustments { width_tolerance: 1, count_delta: 0 };
+        let moved = [("1.2".to_string(), "0.5".to_string())];
+        assert!(compare_spansets(&moved, &set, &tolerant, &mut Vec::new()).is_err());
+        let span = |start: &str, width: &str| (start.to_string(), width.to_string());
+        let extra = [span("1.1", "0.5"), span("1.7", "0.1")];
+        assert!(compare_spansets(&extra, &set, &tolerant, &mut Vec::new()).is_err());
+    }
 
     /// Unbound results pair in tumbler order on both sides: golden
     /// `…0.9`/`…0.10` bind to skep's `…0.11`/`…0.12` in allocation order,

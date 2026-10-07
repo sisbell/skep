@@ -437,4 +437,36 @@ mod tests {
         rig.current_account = first;
         assert!(!mints(&rig), "a mint naming another principal's account is refused");
     }
+
+    /// `doc`·0·1·1 — the first content element of a document.
+    fn element_of(doc: &Address) -> Address {
+        let local = [0u64, 1, 1].map(skep_address::Nat::from);
+        let comps = doc.tumbler().iter().cloned().chain(local);
+        let tumbler = skep_address::Tumbler::new(comps).expect("a nonempty tumbler");
+        skep_address::validate(tumbler).expect("an element address")
+    }
+
+    /// Harness infrastructure is exactly the rig's own addresses — the
+    /// types document and what it holds, every account's home, every
+    /// account, the grants class — and never a scenario document or
+    /// anything in one: a predicate wider than that would filter skep's
+    /// real answers away before a comparison could see them.
+    #[test]
+    fn infrastructure_is_exactly_the_rigs_own_addresses() {
+        let mut rig = Rig::new().expect("the rig bootstraps");
+        let Response::AckAddr { addr: doc, .. } = rig.create_private_document() else {
+            panic!("a scenario document is minted");
+        };
+        let types = rig.type_vspec("jump").expect("a types-document position").source;
+        let first = rig.default_account().clone();
+        let second = rig.delegate_account().expect("a second account");
+        assert_eq!(rig.homes.len(), 2, "each account carries its home");
+        let (homes, held, grants) = (rig.homes.clone(), element_of(&types), t_grant());
+        for infra in [&types, &held, &homes[0], &homes[1], &first, &second, &grants] {
+            assert!(rig.is_infra_addr(infra), "{infra} is infrastructure");
+        }
+        for scenario in [doc.clone(), element_of(&doc)] {
+            assert!(!rig.is_infra_addr(&scenario), "{scenario} is the scenario's own");
+        }
+    }
 }

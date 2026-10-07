@@ -207,11 +207,13 @@ mod tests {
         assert_eq!(alpha.render_skep(&a(&[1, 0, 1, 0, 1, 1])), "skep:1.0.1.0.1.1");
     }
 
-    /// A conflicting bind on either side is a finding of its own kind, and
-    /// the first binding stands.
+    /// Re-binding the same pair is no finding; a conflicting bind on either
+    /// side is a finding of its own kind, and the first binding stands on
+    /// both sides.
     #[test]
     fn a_double_bind_is_a_finding_and_the_first_binding_stands() {
         let mut alpha = Alpha::new();
+        alpha.bind("1.1.0.1.0.1", &a(&[1, 0, 1, 0, 3]));
         alpha.bind("1.1.0.1.0.1", &a(&[1, 0, 1, 0, 3]));
         alpha.bind("1.1.0.1.0.1", &a(&[1, 0, 1, 0, 4]));
         alpha.bind("1.1.0.1.0.2", &a(&[1, 0, 1, 0, 3]));
@@ -219,5 +221,7 @@ mod tests {
         assert_eq!(found, [FindingKind::DoubleBindGolden, FindingKind::DoubleBindSkep]);
         assert_eq!(alpha.peek("1.1.0.1.0.1"), Some(a(&[1, 0, 1, 0, 3])));
         assert!(!alpha.is_bound_skep(&a(&[1, 0, 1, 0, 4])));
+        assert_eq!(alpha.peek("1.1.0.1.0.2"), None);
+        assert_eq!(alpha.render_skep(&a(&[1, 0, 1, 0, 3])), "1.1.0.1.0.1");
     }
 }

@@ -35,6 +35,37 @@ pub struct ShadowLink {
     pub to: Vec<(String, u64, u64)>,
 }
 
+/// One of the recording scripts' standing role names
+/// ([`Shadow::resolve_doc`]): each names a document by convention, whether
+/// or not a document answers to it yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Role {
+    /// The `n`th document created, 0-based: "source"/"doc1"/A… the first,
+    /// "target"/"doc2"/B… the second, "doc3"/C the third, "doc4"/D the
+    /// fourth.
+    Created(usize),
+    /// "same doc"/"current"/"this"/"self": the current-document register.
+    Register,
+    /// "version"/"copy": the last version created.
+    Version,
+}
+
+impl Role {
+    fn of(r: &str) -> Option<Role> {
+        Some(match r {
+            "source" | "doc" | "doc1" | "original" | "first" | "home" | "A" | "a" => {
+                Role::Created(0)
+            }
+            "target" | "doc2" | "second" | "dest" | "destination" | "B" | "b" => Role::Created(1),
+            "doc3" | "third" | "C" | "c" => Role::Created(2),
+            "doc4" | "fourth" | "D" | "d" => Role::Created(3),
+            "same doc" | "current" | "this" | "self" => Role::Register,
+            "version" | "copy" => Role::Version,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Shadow {
     docs: BTreeMap<String, DocShadow>,
@@ -109,18 +140,20 @@ impl Shadow {
 
     /// Resolve a doc reference: a dotted address passes through (a link
     /// address never does); a symbolic name resolves to the document it is
-    /// bound to, then via the recording scripts' standing conventions:
-    /// "source"/"doc1"/"doc"/"original"/A → first created ("source" and
-    /// "original" prefer a bound name containing the word), "target"/"doc2"/
-    /// B → second ("target" and "dest" likewise), "doc3"/C → third,
-    /// "doc4"/D → fourth, "version" → the last version created, "same doc"/
-    /// "current" → the register. Any other string of two or more characters
-    /// resolves to the first bound name, in name order, that it contains or
-    /// is contained in ([`Shadow::find_named_containing`]): "Bank account"
-    /// resolves to a document named "B". A caller asking whether a string
-    /// names a document at all, rather than a text to locate, therefore hears
-    /// yes for prose that merely shares a bound name's letters. `None` when
-    /// nothing fits — the caller records it.
+    /// bound to, then via the recording scripts' standing role names
+    /// ([`Shadow::is_role_name`]): "source"/"doc1"/"doc"/"original"/A →
+    /// first created ("source" and "original" prefer a bound name containing
+    /// the word), "target"/"doc2"/B → second ("target" and "dest" likewise),
+    /// "doc3"/C → third, "doc4"/D → fourth, "version"/"copy" → the last
+    /// version created (nothing before one is — a version skep refused to
+    /// make leaves its references ungroundable, the class rulings 20 and 20a
+    /// freeze), "same doc"/"current" → the register. Any other string of two
+    /// or more characters resolves to the first bound name, in name order,
+    /// that it contains or is contained in ([`Shadow::find_named_containing`]):
+    /// "Bank account" resolves to a document named "B". A caller asking
+    /// whether a string names a document at all, rather than a text to
+    /// locate, therefore hears yes for prose that merely shares a bound
+    /// name's letters. `None` when nothing fits — the caller records it.
     pub fn resolve_doc(&self, r: &str) -> Option<String> {
         if crate::tum::is_link_address(r) {
             return None; // a link id is never a document reference
@@ -131,29 +164,31 @@ impl Shadow {
         if let Some(g) = self.names.get(r) {
             return Some(g.clone());
         }
-        let nth = |i: usize| self.created.get(i).cloned();
-        // Role names prefer a BOUND name containing the role over the
-        // positional convention: a scenario naming its fourth doc
-        // "shared_target" means THAT doc by "target", not doc #2
-        // (links/search_multiple_links_selective_removal).
-        match r {
-            "source" | "doc" | "doc1" | "original" | "first" | "home" | "A" | "a" => {
-                self.find_named_containing_role(r).or_else(|| nth(0))
+        match Role::of(r) {
+            // Role names prefer a BOUND name containing the role over the
+            // positional convention: a scenario naming its fourth doc
+            // "shared_target" means THAT doc by "target", not doc #2
+            // (links/search_multiple_links_selective_removal).
+            Some(Role::Created(i)) => {
+                self.find_named_containing_role(r).or_else(|| self.created.get(i).cloned())
             }
-            "target" | "doc2" | "second" | "dest" | "destination" | "B" | "b" => {
-                self.find_named_containing_role(r).or_else(|| nth(1))
+            Some(Role::Register) => self.current(),
+            Some(Role::Version) => {
+                self.created.iter().rev().find(|d| self.version_of.contains_key(*d)).cloned()
             }
-            "doc3" | "third" | "C" | "c" => nth(2),
-            "doc4" | "fourth" | "D" | "d" => nth(3),
-            "same doc" | "current" | "this" | "self" => self.current(),
-            "version" | "copy" => self.version_of.keys().last().cloned().or_else(|| nth(1)),
-            _ => {
-                // "sourceN"/"peripheralN" positional group names bound at
-                // group creation; also substring name matches ("target" →
-                // "shared_target") for `by`-clause tokens.
-                self.find_named_containing(r)
-            }
+            // "sourceN"/"peripheralN" positional group names bound at group
+            // creation; also substring name matches ("target" →
+            // "shared_target") for `by`-clause tokens.
+            None => self.find_named_containing(r),
         }
+    }
+
+    /// Is `r` one of the recording scripts' standing role names ("source",
+    /// "doc2", "C", "version", "current"…) — a document reference whether
+    /// or not a document answers to it yet ([`Shadow::resolve_doc`])? Prose
+    /// is none: "empty doc" describes a document, and names none.
+    pub fn is_role_name(r: &str) -> bool {
+        Role::of(r).is_some()
     }
 
     /// Role-containment lookup for the standing role words only ("source",
@@ -403,5 +438,54 @@ impl Shadow {
     /// Links whose TO endset lives in `doc` — creation order.
     pub fn links_to(&self, doc: &str) -> Vec<&ShadowLink> {
         self.links.iter().filter(|l| l.to.iter().any(|(d, _, _)| d == doc)).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SOURCE: &str = "1.1.0.1.0.1";
+    const OTHER: &str = "1.1.0.1.0.2";
+
+    fn two_docs() -> Shadow {
+        let mut s = Shadow::new();
+        s.create_doc(SOURCE, Some("source"));
+        s.create_doc(OTHER, Some("other"));
+        s
+    }
+
+    /// `version` — and `copy`, unbound — names the last version CREATED,
+    /// `…2.10` after `…2.9` whatever their text order, and nothing before
+    /// one exists: never the second document, so a version skep refused to
+    /// make stays ungroundable (rulings 20, 20a).
+    #[test]
+    fn version_names_the_last_version_created_and_nothing_before_one() {
+        let mut s = two_docs();
+        assert_eq!(s.resolve_doc("version"), None, "no version is made yet");
+        assert_eq!(s.resolve_doc("copy"), None);
+        s.version(OTHER, "1.1.0.1.0.2.9");
+        s.version(OTHER, "1.1.0.1.0.2.10");
+        assert_eq!(s.resolve_doc("version").as_deref(), Some("1.1.0.1.0.2.10"));
+        assert_eq!(s.resolve_doc("copy").as_deref(), Some("1.1.0.1.0.2.10"));
+        assert_eq!(s.resolve_doc("v1").as_deref(), Some("1.1.0.1.0.2.9"));
+        assert_eq!(s.resolve_doc("original").as_deref(), Some(OTHER), "the version's source");
+    }
+
+    /// A role word prefers a bound name containing it ("target" →
+    /// `shared_target`), a doc-N word stays positional whatever names
+    /// contain it, an address passes through, and a link address names no
+    /// document. Role words are references; prose is none.
+    #[test]
+    fn a_role_word_prefers_a_bound_name_and_a_link_is_never_a_document() {
+        let mut s = two_docs();
+        s.create_doc("1.1.0.1.0.3", Some("doc2_notes"));
+        s.create_doc("1.1.0.1.0.4", Some("shared_target"));
+        assert_eq!(s.resolve_doc("target").as_deref(), Some("1.1.0.1.0.4"));
+        assert_eq!(s.resolve_doc("doc2").as_deref(), Some(OTHER));
+        assert_eq!(s.resolve_doc("1.1.0.1.0.9").as_deref(), Some("1.1.0.1.0.9"));
+        assert_eq!(s.resolve_doc("1.1.0.1.0.1.0.2.1"), None);
+        assert!(Shadow::is_role_name("version") && Shadow::is_role_name("C"));
+        assert!(!Shadow::is_role_name("empty doc") && !Shadow::is_role_name("doc2_notes"));
     }
 }

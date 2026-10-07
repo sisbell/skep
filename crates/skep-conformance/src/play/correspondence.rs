@@ -12,6 +12,7 @@ use skep_febe::{Op, Response};
 use skep_retrieval::RegionSpec;
 
 use super::{compared_nothing, inexpressible, refusal, Cx, Tally};
+use crate::evidence::version_made_before;
 use crate::fields::{field, locate, span_dict, str_field, vspec_dict};
 use crate::outcome::{Disagreement, OpOutcome};
 use crate::tum::{parse_vpos, VPoint};
@@ -265,7 +266,7 @@ fn run_compare_pair(
 /// golden docid, content-subspace (ord, width) windows).
 type Operand = (String, String, Vec<(u64, u64)>);
 
-pub(super) fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
+pub(super) fn h_compare(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
     // Corpus-extension operands (policy `compare-operands-explicit`): two
     // top-level role-keyed vspec-dict fields name the sides and their
     // windows explicitly (ms_version_race `version_a1`/`original`, fanout
@@ -366,6 +367,7 @@ pub(super) fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         || (str_field(op, &["doc_a", "doc1", "a"]).is_some()
             && str_field(op, &["doc_b", "doc2", "b"]).is_some())
         || str_field(op, &["label"]).is_some_and(|l| l.contains("_vs_"));
+    let mut defaulted = false;
     let (ref_a, ref_b): (String, String) = if let Some(docs) =
         field(op, &["docs", "documents", "comparing"]).and_then(Value::as_array)
     {
@@ -391,8 +393,16 @@ pub(super) fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     {
         (a.to_string(), b.to_string())
     } else {
+        defaulted = true;
         ("original".to_string(), "version".to_string())
     };
+    // The default's version is the one the recording made before this op —
+    // a reference the recording uses, so one skep refused to make names
+    // nothing and leaves the op inexpressible (rulings 20, 20a). A
+    // recording that made none compared the scenario's first two documents
+    // (policy `compare-default:second-document`), or its one document with
+    // itself (`compare:self`).
+    let versioned = defaulted && version_made_before(cx.ops, index);
     // Shared pairs: a bare array, or wrapped in a result object
     // (`result: {shared_span_pairs, shared: […]}` —
     // iaddress_allocation/delete_does_not_affect_next_insert's
@@ -413,14 +423,24 @@ pub(super) fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             .resolve_doc(r)
             .or_else(|| docids_in_items.get(idx).cloned().filter(|d| cx.shadow.knows(d)))
     };
-    // A reference the recording uses: one the op names, or one a recorded
-    // shared pair is keyed by (compare_versions_with_different_links keys
-    // its pairs `original`/`version` without naming the documents).
+    // A reference the recording uses: one the op names, the version the
+    // recording made, or one a recorded shared pair is keyed by
+    // (compare_versions_with_different_links keys its pairs
+    // `original`/`version` without naming the documents).
     let recorded_ref = |r: &str| {
         named_by_op
+            || (versioned && r == ref_b)
             || shared_items.iter().any(|item| item.as_object().is_some_and(|o| o.contains_key(r)))
     };
-    let (ga, gb) = match (resolve_side(cx, &ref_a, 0), resolve_side(cx, &ref_b, 1)) {
+    let side_a = resolve_side(cx, &ref_a, 0);
+    let mut side_b = resolve_side(cx, &ref_b, 1);
+    if side_b.is_none() && defaulted && !versioned {
+        if let Some(second) = cx.shadow.created.get(1).cloned() {
+            out.adaptations.push("compare-default:second-document".into());
+            side_b = Some(second);
+        }
+    }
+    let (ga, gb) = match (side_a, side_b) {
         (Some(a), Some(b)) => (a, b),
         // One side resolvable, the other a reference the recording never
         // uses, and the items carrying no second docid: the script compared
@@ -568,5 +588,24 @@ mod tests {
         let mut out = OpOutcome::new(0, "compare");
         judge_shared(RecordedShared::Pairs(&pairs), &a, &b, &[], &[]).settle(&mut out, "pairs");
         assert_eq!(out.status, Status::Inexpressible);
+    }
+
+    /// A pair skep reports between documents other than the two compared
+    /// disagrees, even beside an answer that matches the recording.
+    #[test]
+    fn a_pair_between_other_documents_is_a_disagreement() {
+        let (a, b) = (side("1.1.0.1.0.1", "original"), side("1.1.0.1.0.2", "version"));
+        let pairs = [serde_json::json!({
+            "original": {"start": "1.1", "width": "0.5"},
+            "version": {"start": "1.3", "width": "0.5"},
+        })];
+        let judged = |foreign: &[String]| {
+            let mut out = OpOutcome::new(0, "compare");
+            judge_shared(RecordedShared::Pairs(&pairs), &a, &b, &[(1, 3, 5)], foreign)
+                .settle(&mut out, "pairs");
+            out.status
+        };
+        assert_eq!(judged(&[]), Status::Agreed);
+        assert_eq!(judged(&["(1.0.1.0.7,1.0.1.0.8)".to_string()]), Status::Disagreed);
     }
 }

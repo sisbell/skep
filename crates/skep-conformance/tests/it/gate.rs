@@ -5,8 +5,8 @@
 //!   report and summary are written. It judges no verdict: the verdicts are
 //!   the sweep's *product*, and they reach the operators through
 //!   target/conformance/report.jsonl and summary.md.
-//! * `report_is_deterministic` — a slice of the scenarios replays to
-//!   byte-identical report records, so a re-run is the archive.
+//! * `report_is_deterministic` — every scenario replays to byte-identical
+//!   report records, so a re-run is the archive.
 //! * `conformance_ratchet` — conformance, enforced: a `divergent` or `error`
 //!   verdict fails it, as does an `allowlisted` or `inexpressible` verdict on
 //!   a scenario `conformance/ratchet.toml` does not freeze in that section,
@@ -95,8 +95,8 @@ fn harness_integrity() {
 
 /// Determinism: the same scenarios replay to byte-identical report records.
 /// The no-archival policy for reports rests on this — a re-run IS the
-/// archive. A representative slice (every 10th scenario, ≥ one per run) is
-/// played twice into rendered JSONL and compared byte for byte.
+/// archive — so it holds for every scenario: the whole corpus is played
+/// twice into rendered JSONL and compared byte for byte.
 #[test]
 fn report_is_deterministic() {
     use skep_conformance::allowlist;
@@ -109,10 +109,9 @@ fn report_is_deterministic() {
     let scenarios = load_all(&golden).expect("goldens load");
     let allow = allowlist::load(&allow_path).expect("allowlist loads");
 
-    let subset: Vec<_> = scenarios.into_iter().step_by(10).collect();
-    assert!(!subset.is_empty());
-    let first = render_jsonl(&run_scenarios(&subset, &allow));
-    let second = render_jsonl(&run_scenarios(&subset, &allow));
+    assert!(!scenarios.is_empty());
+    let first = render_jsonl(&run_scenarios(&scenarios, &allow));
+    let second = render_jsonl(&run_scenarios(&scenarios, &allow));
     assert_eq!(first, second, "two identical runs must render byte-identical reports");
 }
 

@@ -93,11 +93,19 @@
 //!   (the entry's existence is the adjudicated divergence).
 //! * `compare:self` — a compare naming one resolvable document and a second
 //!   reference the recording never uses (the harness's original/version
-//!   default, keying no recorded pair) compares that document with itself,
-//!   as internal/insert_only_baseline's script did. A second reference the
-//!   recording does use — a `docs` pair, `doc_a`/`doc_b`, a `<x>_vs_<y>`
-//!   `label` field, or a shared-pair key — that the shadow cannot ground
-//!   leaves the op inexpressible instead.
+//!   default in a one-document scenario, keying no recorded pair) compares
+//!   that document with itself, as internal/insert_only_baseline's script
+//!   did. A second reference the recording does use — a `docs` pair,
+//!   `doc_a`/`doc_b`, a `<x>_vs_<y>` `label` field, a shared-pair key, or
+//!   the default's version when the recording made one — that the shadow
+//!   cannot ground leaves the op inexpressible instead: a version skep
+//!   refused to make names nothing (rulings 20, 20a).
+//! * `compare-default:second-document` — a compare that names no document,
+//!   in a scenario whose recording made no version, compares the scenario's
+//!   first two documents created: the pair the version-less scripts
+//!   compared (edgecases/compare_disjoint_documents, internal/
+//!   ispan_partial_overlap). After a version the recording made, the
+//!   default's second document is that version, whether or not skep made it.
 //! * `golden-duplicate-result` — the golden's expected list names one
 //!   address twice (a recording defect); compared as a set, the dedup
 //!   tagged so the defect stays visible.
@@ -1434,7 +1442,7 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, adjustments: &Adjustments) 
             h_vspanset(cx, op, &mut out, adjustments, verb)
         }
         Verb::RetrieveEndsets => h_endsets(cx, op, &mut out),
-        Verb::CompareVersions => h_compare(cx, op, &mut out),
+        Verb::CompareVersions => h_compare(cx, index, op, &mut out),
         Verb::Account => h_account(cx, op, &mut out),
         Verb::CreateNode => h_create_node(cx, op, &mut out),
         Verb::Connect => {
@@ -1570,6 +1578,24 @@ mod tests {
         settle_unaccepted(&mut out, None, &rejected);
         assert_eq!(out.status, Status::Disagreed);
         assert_eq!(actual(out).as_deref(), Some("Rejected(OutOfBounds)"));
+    }
+
+    /// An acceptance meets a recorded failure as a disagreement — the
+    /// caller compares nothing — and only a recording of success lets the
+    /// caller go on to compare, nothing judged yet.
+    #[test]
+    fn an_acceptance_meets_a_recorded_failure_as_a_disagreement() {
+        let mut out = OpOutcome::new(0, "insert");
+        assert!(!settle_accepted(&mut out, Some("request failed (?)".into())));
+        assert_eq!(out.status, Status::Disagreed);
+        let accepted = Disagreement {
+            expected: "failure: \"request failed (?)\"".into(),
+            actual: "skep accepted the operation".into(),
+        };
+        assert_eq!(out.disagreement, Some(accepted));
+        let mut out = OpOutcome::new(0, "insert");
+        assert!(settle_accepted(&mut out, None));
+        assert_eq!(out.status, Status::NotCompared);
     }
 
     /// A rearrangement's shape is its cut count, both ways.

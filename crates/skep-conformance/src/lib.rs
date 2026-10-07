@@ -82,15 +82,20 @@
 //!
 //! ## The gate
 //!
-//! The integration binary under `tests/it/` holds the gate, `gate.rs`, and
-//! this map's check, `tidy.rs`. The gate's three tests:
-//! `harness_integrity` — the instrument works: every golden loads, every op
-//! yields one outcome, no scenario panics the harness, the report is
-//! written; `report_is_deterministic` — a replay renders byte-identical
-//! records; and `conformance_ratchet`, where conformance is enforced — a
-//! `divergent` or `error` verdict fails it, as does an `allowlisted` or
-//! `inexpressible` verdict on a scenario `conformance/ratchet.toml` does not
-//! freeze there, and a frozen key no golden carries. `tidy.rs` holds the
+//! The integration binary under `tests/it/` holds the gate, `gate.rs`, the
+//! oracle's own suite, `oracle.rs`, and this map's check, `tidy.rs`. The
+//! gate's three tests: `harness_integrity` — the instrument works: every
+//! golden loads, every op yields one outcome, no scenario panics the
+//! harness, the report is written; `report_is_deterministic` — a replay of
+//! every scenario renders byte-identical records; and `conformance_ratchet`,
+//! where conformance is enforced — a `divergent` or `error` verdict fails
+//! it, as does an `allowlisted` or `inexpressible` verdict on a scenario
+//! `conformance/ratchet.toml` does not freeze there, and a frozen key no
+//! golden carries. The ratchet freezes verdicts, so it reads a scenario
+//! turning `pass` as an improvement; `oracle.rs` holds what it cannot —
+//! hand-built scenarios, played through the real engine, pinning how op
+//! outcomes become a verdict, which agreements the harness may record, and
+//! which references it refuses rather than re-aims. `tidy.rs` holds the
 //! module map below to the code — every file declared, every declaration
 //! with its line, every module naming only itself and the modules above it
 //! — holds every file but `rig.rs` to building no CREATENEWDOCUMENT

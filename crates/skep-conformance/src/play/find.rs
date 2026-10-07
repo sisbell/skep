@@ -21,6 +21,7 @@ use crate::fields::{
     expected_failure, field, locate, parse_python_spec, str_field, vspec_dict, DocSpans,
 };
 use crate::outcome::{Disagreement, OpOutcome};
+use crate::shadow::Shadow;
 use crate::tum::{is_link_address, last_component, parse_vpos, parse_width, VPoint, VRegion};
 
 /// The arguments a find_links carries: the query's slots — search region,
@@ -65,6 +66,19 @@ pub(super) fn h_find_links(
     adjustments: &Adjustments,
 ) {
     let mut notes: Vec<String> = Vec::new();
+
+    // A document field names a document. One that resolves to nothing — a
+    // version skep refused to make, whose name never entered the shadow
+    // (rulings 20, 20a) — leaves the search no document to aim at; it is
+    // never re-aimed at the bare search.
+    for keys in [&["doc", "docid"][..], &["search_doc", "search_document"][..]] {
+        if let Some(s) = str_field(op, keys) {
+            if cx.shadow.resolve_doc(s).is_none() {
+                inexpressible(out, format!("find_links document `{s}` resolves to nothing"));
+                return;
+            }
+        }
+    }
 
     // `by` routing (find_links_by_target, search_by_both_endpoints…):
     // tokens split on AND; "target…" constrains TO, "source…" FROM; a token
@@ -150,10 +164,22 @@ pub(super) fn h_find_links(
         out.adaptations.push("text-located:search".into());
     }
 
-    // Explicit from/to fields (doc names or vspec arrays).
-    let explicit_side = |cx: &mut Cx, out: &mut OpOutcome, keys: &[&str]| -> Option<Vec<DocSpans>> {
-        let v = field(op, keys)?;
-        side_specs(cx, out, v).ok()
+    // Explicit from/to fields (doc names or vspec arrays). A role name the
+    // shadow cannot ground ("version" after skep refused the version) is a
+    // document reference that names nothing: the op is refused, never
+    // re-aimed at the bare search. Any other side that does not ground —
+    // an empty document, prose no grammar reads — leaves its slot open.
+    let explicit_side = |cx: &mut Cx,
+                         out: &mut OpOutcome,
+                         keys: &[&str]|
+     -> Result<Option<Vec<DocSpans>>, String> {
+        let Some(v) = field(op, keys) else { return Ok(None) };
+        if let Some(s) = v.as_str() {
+            if Shadow::is_role_name(s) && cx.shadow.resolve_doc(s).is_none() {
+                return Err(format!("document reference `{s}` resolves to nothing"));
+            }
+        }
+        Ok(side_specs(cx, out, v).ok())
     };
 
     let whole_of = |cx: &Cx, d: &str| -> Vec<DocSpans> {
@@ -193,7 +219,21 @@ pub(super) fn h_find_links(
         }
     }
 
-    if let Some(s) = explicit_side(cx, out, &["from", "source", "sources"]) {
+    let (from_side, to_side) = match (
+        explicit_side(cx, out, &["from", "source", "sources"]),
+        explicit_side(cx, out, &["to", "target", "targets"]),
+    ) {
+        (Ok(from), Ok(to)) => (from, to),
+        (Err(e), _) => {
+            inexpressible(out, format!("find_links from: {e}"));
+            return;
+        }
+        (_, Err(e)) => {
+            inexpressible(out, format!("find_links to: {e}"));
+            return;
+        }
+    };
+    if let Some(s) = from_side {
         // `by: "target"` routes the explicit doc into the TO slot: the
         // client's `from` field named the doc it searched FROM, `by` named
         // WHICH endset it constrained (interactions/link_both_endpoints_
@@ -207,7 +247,7 @@ pub(super) fn h_find_links(
             from_sides = Some(SideSpec::V(s));
         }
     }
-    if let Some(s) = explicit_side(cx, out, &["to", "target", "targets"]) {
+    if let Some(s) = to_side {
         to_sides = Some(SideSpec::V(s));
     }
     if let Some(search) = search_sides {
@@ -622,12 +662,15 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 ))
             }
         }
-    } else if let Some(sd) = str_field(op, &["search_from", "search_doc", "search_document"])
-        .and_then(|s| cx.shadow.resolve_doc(s))
-    {
+    } else if let Some(s) = str_field(op, &["search_from", "search_doc", "search_document"]) {
         // A search_from field names the DOC whose content is the query
         // (discovery/insert_vs_append_docispan names its docs "insert" and
-        // "append").
+        // "append"). One that resolves to nothing — a version skep refused
+        // to make (rulings 20, 20a) — leaves nothing to search.
+        let Some(sd) = cx.shadow.resolve_doc(s) else {
+            inexpressible(out, format!("find_documents search document `{s}` resolves to nothing"));
+            return;
+        };
         cx.shadow.set_current(&sd);
         let n = cx.shadow.text_len(&sd);
         let whole = VPoint::content(1).region(n);
@@ -659,6 +702,11 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             let spans = VPoint::content(1).region(n).span().into_iter().collect();
             regions.push(RegionSpec { doc: d, spans });
         }
+    } else {
+        // Nothing to search: a `doc` field that resolves to nothing (its
+        // note names the reference), never an empty search in its place.
+        inexpressible(out, "find_documents with no document in scope".into());
+        return;
     }
     if let Some(reason) = ground_failed {
         if xf.is_some() {

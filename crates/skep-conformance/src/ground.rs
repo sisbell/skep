@@ -15,7 +15,9 @@
 //!   recorded edits from the doc's first full-content probe (each undo step
 //!   verifies the removed bytes equal the recorded insert/copy, and undoes
 //!   a delete only with the bytes it is known to have removed, so a wrong
-//!   inference aborts instead of guessing).
+//!   inference aborts instead of guessing). A version is never seeded: its
+//!   content at creation is its source's, which the recorded create_version
+//!   provides.
 //! * **Expansion plans** — macro ops (`create_chain`, parseable `setup`
 //!   descriptions, `vcopy_multiple`/`vcopy_all`/`vcopy_from_both`,
 //!   `create_and_transclude`) expand to concrete insert+copy step lists,
@@ -152,6 +154,13 @@ pub fn ground(ops: &[Value]) -> ImpliedSetup {
         let Some((doc, exp)) = sim.failed_probe.take() else { break };
         if seeds.contains_key(&doc) {
             break; // already seeded and still inconsistent — leave honest
+        }
+        // A version's content at creation is its source's, which the
+        // recorded create_version provides: nothing precedes it to seed. A
+        // seed here would mint a plain document under the version's golden
+        // address holding the very answer its probe expects.
+        if sim.shadow.version_of.contains_key(&doc) {
+            break;
         }
         let Some(initial) = undo_to_initial(&exp, sim.log_for(&doc)) else { break };
         g.tags.push(format!(
@@ -1729,5 +1738,61 @@ mod tests {
         assert_eq!(delete_described_bytes(&quoted, 8), None);
         let parenthetical = json!({"op": "delete", "span": "1.3 for 0.5 (CDEFG)"});
         assert_eq!(delete_described_bytes(&parenthetical, 5), Some(b"CDEFG".to_vec()));
+    }
+
+    /// An insert is undone only where its recorded bytes still stand — at
+    /// the end it appended to, or the ordinal it was placed at; a write the
+    /// walk could not reproduce stops the undo.
+    #[test]
+    fn an_undo_that_does_not_find_the_recorded_bytes_aborts() {
+        let appended = [Edit::Ins { at: None, bytes: b"CD".to_vec() }];
+        assert_eq!(undo_to_initial("ABCD", &appended).as_deref(), Some(&b"AB"[..]));
+        assert_eq!(undo_to_initial("ABXY", &appended), None);
+        let placed = [Edit::Ins { at: Some(2), bytes: b"X".to_vec() }];
+        assert_eq!(undo_to_initial("AXB", &placed).as_deref(), Some(&b"AB"[..]));
+        assert_eq!(undo_to_initial("ABX", &placed), None);
+        let longer = [Edit::Ins { at: None, bytes: b"ABCDE".to_vec() }];
+        assert_eq!(undo_to_initial("AB", &longer), None);
+        assert_eq!(undo_to_initial("AB", &[Edit::Opaque]), None);
+    }
+
+    /// Undoing a pivot or a swap restores the text the shadow rearranged,
+    /// for every cut set over a six-byte text — the degenerate and
+    /// out-of-range cuts included, which rearrange nothing either way.
+    #[test]
+    fn undoing_a_rearrangement_restores_the_text_for_every_cut_set() {
+        const TEXT: &[u8] = b"ABCDEF";
+        let undone = |rearrange: &dyn Fn(&mut Shadow), edit: Edit| {
+            let mut s = scratch(TEXT);
+            rearrange(&mut s);
+            undo_to_initial(&s.text_string("x"), &[edit])
+        };
+        // Every cut in 0..=8: below, inside and past the text's 1..=7.
+        for n in 0..9u64.pow(3) {
+            let (a, b, c) = (n / 81, n / 9 % 9, n % 9);
+            let pivoted = undone(&|s| s.pivot("x", a, b, c), Edit::Pivot { a, b, c });
+            assert_eq!(pivoted.as_deref(), Some(TEXT), "pivot {a},{b},{c}");
+            for d in 0..=8 {
+                let swap = Edit::Swap { s1: a, e1: b, s2: c, e2: d };
+                let swapped = undone(&|s| s.swap("x", a, b, c, d), swap);
+                assert_eq!(swapped.as_deref(), Some(TEXT), "swap {a},{b},{c},{d}");
+            }
+        }
+    }
+
+    /// A version is never seeded: its content at creation is its source's,
+    /// which the recorded create_version provides — however its probe
+    /// disagrees, no document is minted under its address.
+    #[test]
+    fn a_version_is_never_seeded_as_a_document() {
+        let ops = [
+            json!({"op": "create_document", "doc": "source", "result": "1.1.0.1.0.1"}),
+            json!({"op": "insert", "doc": "source", "text": "AB"}),
+            json!({"op": "create_version", "from": "source", "result": "1.1.0.1.0.1.1"}),
+            json!({"op": "retrieve_contents", "doc": "1.1.0.1.0.1.1", "result": ["XY"]}),
+        ];
+        let setup = ground(&ops);
+        assert!(setup.lead_in.is_empty(), "{:?}", setup.lead_in);
+        assert!(setup.tags.is_empty(), "{:?}", setup.tags);
     }
 }

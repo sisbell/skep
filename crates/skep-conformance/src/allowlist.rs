@@ -325,39 +325,43 @@ mod tests {
     }
 
     /// A disagreement is covered by the entries matching its op and the
-    /// signature entries its expected value matches; an agreement only when
-    /// a comparator recorded that a declared adjustment made it.
+    /// signature entries its expected value matches — a signature entry's
+    /// op index restricting it too; an agreement only when a comparator
+    /// recorded that a declared adjustment made it. A signature entry
+    /// adjusts nothing, whatever it declares.
     #[test]
     fn an_entry_classifies_disagreements_and_only_the_agreements_an_adjustment_made() {
         let s = key("cat/s");
-        let allow = Allowlist {
-            entries: vec![
-                Entry {
-                    scenario: s.clone(),
-                    op_index: Some(1),
-                    class: "tolerated".into(),
-                    count_delta: None,
-                    width_tolerance: Some(1),
-                    expected_matches: None,
-                },
-                Entry {
-                    scenario: s.clone(),
-                    op_index: None,
-                    class: "shape".into(),
-                    count_delta: None,
-                    width_tolerance: None,
-                    expected_matches: Some("(\"0\"".into()),
-                },
-            ],
+        let signature = |op_index: Option<usize>, class: &str| Entry {
+            scenario: s.clone(),
+            op_index,
+            class: class.into(),
+            count_delta: Some(2),
+            width_tolerance: Some(5),
+            expected_matches: Some("(\"0\"".into()),
         };
-        assert_eq!(allow.adjustments(&s, 1).width_tolerance, 1);
-        let unadjusted = allow.adjustments(&s, 2).width_tolerance;
-        assert_eq!(unadjusted, 0, "a signature entry adjusts nothing");
+        let tolerated = Entry {
+            scenario: s.clone(),
+            op_index: Some(1),
+            class: "tolerated".into(),
+            count_delta: None,
+            width_tolerance: Some(1),
+            expected_matches: None,
+        };
+        let allow = Allowlist {
+            entries: vec![tolerated, signature(None, "shape"), signature(Some(5), "elsewhere")],
+        };
+        let declared = Adjustments { width_tolerance: 1, count_delta: 0 };
+        assert_eq!(allow.adjustments(&s, 1), declared);
+        assert_eq!(allow.adjustments(&s, 2), Adjustments::default());
 
         let mut agreed = outcome(1, Status::Agreed, None);
         assert_eq!(allow.classify(&s, 1, &agreed), None, "no adjustment made this agreement");
         agreed.adaptations.push(WIDTH_ADJUSTED.into());
         assert_eq!(allow.classify(&s, 1, &agreed).as_deref(), Some("tolerated"));
+        let mut counted = outcome(1, Status::Agreed, None);
+        counted.adaptations.push(COUNT_ADJUSTED.into());
+        assert_eq!(allow.classify(&s, 1, &counted).as_deref(), Some("tolerated"));
 
         let shaped = outcome(2, Status::Disagreed, Some("[(\"0\", \"0.1\")]"));
         assert_eq!(allow.classify(&s, 2, &shaped).as_deref(), Some("shape"));
@@ -402,5 +406,35 @@ mod tests {
         fs::remove_dir_all(&dir).expect("the scratch directory is removed");
         assert_eq!(missing.ok(), Some(0));
         assert!(matches!(unreadable, Some(AllowlistError::Read { .. })), "{unreadable:?}");
+    }
+
+    /// The subset refuses what it does not speak, each refusal at its line:
+    /// an unknown key — a misspelled adjustment would otherwise widen a
+    /// comparator unseen — a key outside a block, an unquoted string; an
+    /// empty class leaves its entry incomplete.
+    #[test]
+    fn a_line_outside_the_subset_is_refused() {
+        let scratch = format!("skep-allowlist-subset-{}", std::process::id());
+        let dir = std::env::temp_dir().join(scratch);
+        fs::create_dir_all(&dir).expect("a scratch directory");
+        let path = dir.join("allowlist.toml");
+        let refusal = |text: &str| {
+            fs::write(&path, text).expect("an allowlist");
+            load(&path).err()
+        };
+        let entry = "[[allow]]\nscenario = \"cat/s\"\nclass = \"c\"\nrationale = \"r\"\n";
+        let misspelled = refusal(&format!("{entry}widht_tolerance = 1\n"));
+        let outside = refusal("class = \"c\"\n");
+        let unquoted = refusal("[[allow]]\nscenario = cat/s\n");
+        let unclassed = refusal("[[allow]]\nscenario = \"cat/s\"\nclass = \"\"\nrationale = \"r\"");
+        fs::remove_dir_all(&dir).expect("the scratch directory is removed");
+        let named = |p: &str| p.contains("widht_tolerance");
+        let at_line_5 = |e: &AllowlistError| {
+            matches!(e, AllowlistError::Syntax { line: 5, problem } if named(problem))
+        };
+        assert!(misspelled.as_ref().is_some_and(at_line_5), "{misspelled:?}");
+        assert!(matches!(outside, Some(AllowlistError::Syntax { line: 1, .. })), "{outside:?}");
+        assert!(matches!(unquoted, Some(AllowlistError::Syntax { line: 2, .. })), "{unquoted:?}");
+        assert!(matches!(unclassed, Some(AllowlistError::Incomplete { .. })), "{unclassed:?}");
     }
 }

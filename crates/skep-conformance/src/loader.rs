@@ -169,4 +169,27 @@ mod tests {
             "{refused:?}"
         );
     }
+
+    /// A golden that is not JSON, or carries no operations, is the vendoring
+    /// broken: refused by its path, never skipped.
+    #[test]
+    fn a_golden_that_does_not_read_is_refused() {
+        let scratch = format!("skep-conformance-unread-{}", std::process::id());
+        let root = std::env::temp_dir().join(scratch);
+        let file = root.join("golden").join("cat").join("a.json");
+        fs::create_dir_all(root.join("golden").join("cat")).expect("a category directory");
+        fs::write(&file, "{not json").expect("a golden file");
+        let unparsed = load_all(&root.join("golden")).err();
+        fs::write(&file, r#"{"name": "a"}"#).expect("a golden file");
+        let opless = load_all(&root.join("golden")).err();
+        fs::remove_dir_all(&root).expect("the scratch tree is removed");
+        assert!(
+            matches!(&unparsed, Some(LoadError::Parse { path, .. }) if *path == file),
+            "{unparsed:?}"
+        );
+        assert!(
+            matches!(&opless, Some(LoadError::NoOperations { path }) if *path == file),
+            "{opless:?}"
+        );
+    }
 }

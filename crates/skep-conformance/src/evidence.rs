@@ -28,6 +28,15 @@ pub fn took_effect(op: &Value) -> bool {
     client_side_failure(op).is_none() && expected_failure(op).is_none()
 }
 
+/// Did the recording make a version before op `i` — a `create_version`
+/// udanax carried out ([`took_effect`])? Such a version is what a later
+/// reference to "the version" names, whether or not skep made it too: one
+/// skep refused to make leaves those references ungroundable (rulings 20,
+/// 20a).
+pub fn version_made_before(all: &[Value], i: usize) -> bool {
+    all[..i].iter().any(|op| verb_of(op) == Some(Verb::CreateVersion) && took_effect(op))
+}
+
 /// What the recording says of the change an op asks for — the one input to
 /// the shadow's mirror rule (`play`'s world-change methods).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -638,5 +647,42 @@ mod tests {
         let lone = std::slice::from_ref(&lost);
         let err = resolve_insert(lone, 0, &shadow, DOC, &mut Vec::new());
         assert_eq!(err, Err("insert position `somewhere` is not groundable".into()));
+    }
+
+    /// The recorded vspanset pads an appended insert by its surplus — never
+    /// when links seated between them explain it (the version link
+    /// carryover, ruling 15), and never past two elements.
+    #[test]
+    fn a_pad_is_declined_when_links_explain_the_surplus_and_bounded_at_two() {
+        const DOC: &str = "1.1.0.1.0.1";
+        let mut shadow = Shadow::new();
+        shadow.create_doc(DOC, None);
+        let insert = json!({"op": "insert", "doc": DOC, "text": "ABC"});
+        let probe = |w: &str| {
+            json!({"op": "vspanset", "doc": DOC, "result": [{"start": "1.1", "width": w}]})
+        };
+        let link = json!({"op": "create_link", "result": "1.1.0.1.0.1.0.2.1"});
+        let bytes = |ops: &[Value]| {
+            let landed = resolve_insert(ops, 0, &shadow, DOC, &mut Vec::new());
+            landed.map(|l| String::from_utf8_lossy(&l.bytes).into_owned())
+        };
+        assert_eq!(bytes(&[insert.clone(), probe("0.4")]).as_deref(), Ok("ABC "));
+        assert_eq!(bytes(&[insert.clone(), link, probe("0.4")]).as_deref(), Ok("ABC"));
+        assert_eq!(bytes(&[insert, probe("0.6")]).as_deref(), Ok("ABC"));
+    }
+
+    /// A version the recording made is one udanax carried out before the op
+    /// that asks — never one recorded failed, and never the op's own.
+    #[test]
+    fn a_version_was_made_only_by_an_earlier_create_version_that_took_effect() {
+        let ops = [
+            json!({"op": "create_version", "from": "source", "error": "request failed (?)"}),
+            json!({"op": "compare_versions"}),
+            json!({"op": "create_version", "from": "source", "result": "1.1.0.1.0.1.1"}),
+            json!({"op": "compare_versions"}),
+        ];
+        assert!(!version_made_before(&ops, 1), "a failed version made nothing");
+        assert!(!version_made_before(&ops, 2), "an op's own version is not before it");
+        assert!(version_made_before(&ops, 3));
     }
 }

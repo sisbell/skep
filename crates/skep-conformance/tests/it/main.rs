@@ -3,4 +3,5 @@
 //! instead of once per file. Nothing but module declarations belongs here.
 
 mod gate;
+mod oracle;
 mod tidy;
